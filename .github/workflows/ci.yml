@@ -1,0 +1,101 @@
+name: HorPlus CI Pipeline
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  frontend-quality:
+    name: Frontend Quality Gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Install Frontend Dependencies
+        run: npm ci
+
+      - name: Frontend Type Check & Lint
+        run: npm run lint
+
+      - name: Frontend Build
+        run: npm run build
+
+  backend-quality:
+    name: Backend Quality Gate & Integration Tests
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: horplus_test
+          POSTGRES_USER: horplus_test
+          POSTGRES_PASSWORD: horplus_test_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Backend Dependencies
+        run: |
+          cd server
+          npm ci
+
+      - name: Validate Prisma Schema
+        run: |
+          cd server
+          npm run prisma:validate
+          npm run prisma:generate
+
+      - name: Backend Type Check
+        run: |
+          cd server
+          npm run lint
+
+      - name: Run Backend Tests
+        env:
+          NODE_ENV: test
+          PORT: 3000
+          DATABASE_URL: postgresql://horplus_test:horplus_test_password@localhost:5432/horplus_test?schema=public
+          REDIS_URL: redis://localhost:6379
+          LOG_LEVEL: fatal
+          CORS_ORIGINS: http://localhost:5173
+        run: |
+          cd server
+          npm run test
+
+      - name: Build Backend TypeScript
+        run: |
+          cd server
+          npm run build

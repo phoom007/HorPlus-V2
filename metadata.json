@@ -1,0 +1,6 @@
+{
+  "name": "HorPlus",
+  "description": "ระบบบริหารจัดการหอพักและห้องเช่าระดับพรีเมียม (HorPlus Version 2) พร้อม Public Portal, Owner Workspace และ Tenant Mobile Portal",
+  "requestFramePermissions": ["clipboard-read", "clipboard-write"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

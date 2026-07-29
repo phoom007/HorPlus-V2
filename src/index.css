@@ -1,0 +1,106 @@
+@import url('https://fonts.googleapis.com/css2?family=Prompt:wght@300;400;500;600;700&family=Sarabun:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;500;600&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Prompt", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+.font-sarabun {
+  font-family: 'Sarabun', 'Prompt', sans-serif;
+}
+
+/* Custom scrollbars and styling */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* Hide scrollbar for clean app shell on mobile view */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Remove number input spin buttons / arrows for clean empty numeric input boxes */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+@keyframes vibrant-flash-shake {
+  0% {
+    background-color: #fbbf24 !important; /* bg-amber-400 */
+    border-color: #d97706 !important; /* border-amber-600 */
+    color: #78350f !important;
+    box-shadow: 0 0 12px rgba(245, 158, 11, 0.8), 0 0 0 4px rgba(245, 158, 11, 0.5) !important;
+    transform: scale(1.08) translateX(0);
+  }
+  15% { transform: scale(1.08) translateX(-4px) rotate(-1.5deg); }
+  30% { transform: scale(1.08) translateX(4px) rotate(1.5deg); }
+  45% { transform: scale(1.08) translateX(-3px) rotate(-1deg); }
+  60% { transform: scale(1.08) translateX(3px) rotate(1deg); }
+  75% {
+    background-color: #fef3c7 !important; /* bg-amber-100 */
+    border-color: #fbbf24 !important;
+    box-shadow: 0 0 6px rgba(245, 158, 11, 0.4), 0 0 0 2px rgba(245, 158, 11, 0.2) !important;
+    transform: scale(1.04) translateX(0);
+  }
+  100% {
+    transform: scale(1) translateX(0);
+  }
+}
+
+.animate-vibrant-flash {
+  animation: vibrant-flash-shake 1.2s cubic-bezier(0.25, 1, 0.5, 1) forwards !important;
+  z-index: 10 !important;
+  position: relative !important;
+}
+
+/* Print styles for window.print() */
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  .printable-area, .printable-area * {
+    visibility: visible;
+  }
+  .printable-area {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    background: white !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    box-shadow: none !important;
+    border: none !important;
+    z-index: 99999;
+  }
+  .print\:hidden {
+    display: none !important;
+  }
+}
+
