@@ -18,3 +18,30 @@ coverage/
 /blob-report/
 /playwright/.cache/
 /playwright/.auth/
+
+# ----------------------------------------------------------------------
+# Wave 1D Recovery Fast-Track Artifacts
+# ----------------------------------------------------------------------
+backups/
+scratch/
+scripts/
+docs/execution-reports/
+docs/graphify-validation/
+docs/production-blueprint/
+graphify-out/
+e2e-tests/
+tests/
+server/assets/
+*.log
+*.txt
+*.patch
+*.ps1
+*.py
+*.cjs
+*.js
+!server/fix-ts-ignore.js
+!server/fix-ts.js
+query.sql
+start
+test-Checkslip.jpg
+untracked.list
