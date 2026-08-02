@@ -102,7 +102,7 @@ export function createMaintenanceRouter(maintenanceService: MaintenanceService =
   router.post('/:requestId/assign', async (req: Request, res: Response) => {
     try {
       const { actor, dormitoryId } = getContext(req);
-      const { assignedMemberId, sendLineNotification } = req.body;
+      const { assignedMemberId } = req.body;
 
       if (!assignedMemberId) {
         return res.status(400).json({ error: { code: 'INVALID_INPUT', message: 'Missing assignedMemberId' } });
@@ -112,8 +112,7 @@ export function createMaintenanceRouter(maintenanceService: MaintenanceService =
         dormitoryId,
         requestId: req.params.requestId,
         assignedMemberId,
-        assignedByUserId: actor?.userId || 'system',
-        sendLineNotification: !!sendLineNotification
+        assignedByUserId: actor?.userId || 'system'
       });
 
       res.json(result);
@@ -126,7 +125,7 @@ export function createMaintenanceRouter(maintenanceService: MaintenanceService =
   router.post('/:requestId/status', async (req: Request, res: Response) => {
     try {
       const { actor, dormitoryId } = getContext(req);
-      const { status, note, sendLineNotification } = req.body;
+      const { status, note } = req.body;
 
       if (!status) {
         return res.status(400).json({ error: { code: 'INVALID_INPUT', message: 'Missing status' } });
@@ -141,8 +140,7 @@ export function createMaintenanceRouter(maintenanceService: MaintenanceService =
         note,
         actorType,
         actorUserId: actor?.userId || undefined,
-        actorRoleCode: actor?.roleCode || undefined,
-        sendLineNotification: actor?.roleCode === 'TECH' ? false : !!sendLineNotification
+        actorRoleCode: actor?.roleCode || undefined
       });
 
       res.json(updated);
@@ -155,7 +153,7 @@ export function createMaintenanceRouter(maintenanceService: MaintenanceService =
   router.post('/:requestId/close', async (req: Request, res: Response) => {
     try {
       const { actor, dormitoryId } = getContext(req);
-      const { note, sendLineNotification } = req.body;
+      const { note } = req.body;
 
       if (actor?.roleCode === 'TECH') {
         return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'TECH role is not permitted to close maintenance requests' } });
@@ -168,8 +166,7 @@ export function createMaintenanceRouter(maintenanceService: MaintenanceService =
         note,
         actorType: actor?.roleCode === 'MANAGER' ? 'manager' : 'owner',
         actorUserId: actor?.userId || undefined,
-        actorRoleCode: actor?.roleCode || undefined,
-        sendLineNotification: !!sendLineNotification
+        actorRoleCode: actor?.roleCode || undefined
       });
 
       res.json(updated);
@@ -196,8 +193,7 @@ export function createMaintenanceRouter(maintenanceService: MaintenanceService =
         reopenReason: reason,
         actorType: actor?.roleCode === 'MANAGER' ? 'manager' : 'owner',
         actorUserId: actor?.userId || undefined,
-        actorRoleCode: actor?.roleCode || undefined,
-        sendLineNotification: false
+        actorRoleCode: actor?.roleCode || undefined
       });
 
       res.json(updated);
@@ -219,8 +215,7 @@ export function createMaintenanceRouter(maintenanceService: MaintenanceService =
         cancellationReason: reason || 'Cancelled by staff',
         actorType: actor?.roleCode === 'MANAGER' ? 'manager' : 'owner',
         actorUserId: actor?.userId || undefined,
-        actorRoleCode: actor?.roleCode || undefined,
-        sendLineNotification: false
+        actorRoleCode: actor?.roleCode || undefined
       });
 
       res.json(updated);

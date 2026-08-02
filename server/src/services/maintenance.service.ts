@@ -6,9 +6,9 @@ import {
   MaintenanceStatus,
   MaintenanceFilterQuery
 } from '../db/repositories/maintenance.repository.js';
-import { LineRepository, lineRepository } from '../db/repositories/line.repository.js';
 import { IMembershipRepository, InMemoryMembershipRepository } from '../db/repositories/membership.repository.js';
 import { InMemoryRoomRepository } from '../db/repositories/room.repository.js';
+import { InMemoryTenantRepository } from '../db/repositories/tenant.repository.js';
 import { NotificationService } from './notification.service.js';
 
 export interface CreateMaintenanceInput {
@@ -31,7 +31,6 @@ export interface AssignMaintenanceInput {
   requestId: string;
   assignedMemberId: string;
   assignedByUserId: string;
-  sendLineNotification?: boolean;
 }
 
 export interface UpdateMaintenanceStatusInput {
@@ -43,7 +42,6 @@ export interface UpdateMaintenanceStatusInput {
   actorUserId?: string;
   actorTenantId?: string;
   actorRoleCode?: string;
-  sendLineNotification?: boolean;
   reopenReason?: string;
   cancellationReason?: string;
 }
@@ -51,9 +49,9 @@ export interface UpdateMaintenanceStatusInput {
 export class MaintenanceService {
   constructor(
     private maintenanceRepo: InMemoryMaintenanceRepository = new InMemoryMaintenanceRepository(),
-    private membershipRepo: IMembershipRepository = new InMemoryMembershipRepository(),
     private roomRepo: InMemoryRoomRepository = new InMemoryRoomRepository(),
-    private lineRepo: LineRepository = lineRepository,
+    private tenantRepo: InMemoryTenantRepository = new InMemoryTenantRepository(),
+    private membershipRepo: IMembershipRepository = new InMemoryMembershipRepository(),
     private notificationService: NotificationService = new NotificationService()
   ) {}
 
@@ -276,16 +274,12 @@ export class MaintenanceService {
       throw new Error('INVALID_MEMBER: Assigned member does not belong to this dormitory');
     }
 
-    // Get staff LINE identity if bound
-    const roleAssignments = await this.lineRepo.listRoleAssignments(input.dormitoryId);
-    const staffRoleAssignment = roleAssignments.find((r: any) => r.dormitoryMemberId === input.assignedMemberId && r.status === 'active');
-
     // Create assignment record
     const assignment = await this.maintenanceRepo.createAssignment({
       dormitoryId: input.dormitoryId,
       maintenanceRequestId: input.requestId,
       assignedMemberId: input.assignedMemberId,
-      assignedLineIdentityId: staffRoleAssignment?.lineIdentityId || null,
+      assignedLineIdentityId: null,
       assignedByUserId: input.assignedByUserId,
       assignedAt: new Date()
     });
@@ -327,20 +321,7 @@ export class MaintenanceService {
       metadata: { requestId: req.id, requestNumber: req.requestNumber }
     });
 
-    // Check single checkbox LINE notification to tech
-    if (input.sendLineNotification && staffRoleAssignment?.lineIdentityId) {
-      await this.notificationService.evaluateAndSendLineNotification({
-        dormitoryId: input.dormitoryId,
-        category: 'MAINTENANCE_ASSIGNED',
-        actionSendLineCheckbox: true,
-        recipientLineIdentityId: staffRoleAssignment.lineIdentityId,
-        templateParams: {
-          requestNumber: req.requestNumber,
-          title: req.title,
-          roomNumber: room?.roomNumber || req.roomId
-        }
-      });
-    }
+
 
     return { request: updated, assignment };
   }
@@ -404,26 +385,7 @@ export class MaintenanceService {
       metadata: { requestId: req.id, status: input.status }
     });
 
-    // Send LINE Notification to Tenant if enabled and permitted (TECH role cannot force LINE send)
-    if (input.actorRoleCode !== 'TECH' && input.sendLineNotification) {
-      const binding = await this.lineRepo.getTenantBindingForTenant(input.dormitoryId, req.tenantId);
-      if (binding) {
-        await this.notificationService.evaluateAndSendLineNotification({
-          dormitoryId: input.dormitoryId,
-          category: 'MAINTENANCE_STATUS_UPDATED',
-          actionSendLineCheckbox: true,
-          actorRoleCode: input.actorRoleCode,
-          recipientLineIdentityId: binding.lineIdentityId,
-          recipientTenantId: req.tenantId,
-          templateParams: {
-            requestNumber: req.requestNumber,
-            title: req.title,
-            roomNumber: room?.roomNumber || req.roomId,
-            status: input.status
-          }
-        });
-      }
-    }
+
 
     return updated!;
   }

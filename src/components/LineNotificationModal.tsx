@@ -11,7 +11,7 @@ import {
 import { Modal, formatBaht } from './GlobalComponents';
 import { Bill, Tenant, Room, Contract } from '../types';
 import { formatCycleThaiShort, getContracts, getDormitory, getDormitoryRatesForCycle, getStored, setStored } from '../data/mockData';
-import { consumeLineQuota } from '../utils/lineQuota';
+
 import { tempMeterRowsCache, MeterRowState } from '../pages/owner/meters';
 
 export const LineIcon: React.FC<{ className?: string }> = ({ className = "w-5 h-5" }) => (
@@ -365,7 +365,7 @@ export const LineNotificationModal: React.FC<LineNotificationModalProps> = ({
         onSaveBills(updatedBills);
       }
 
-      consumeLineQuota(selectedCycle, selectedTenantIdsForLine.length);
+
       setLineNotifyMap(newMap);
       setIsSendingLine(false);
 

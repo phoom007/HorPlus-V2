@@ -108,36 +108,6 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
 
   const minCycle = '2026-01'; // Oldest month of system usage
 
-  const [testingLine, setTestingLine] = useState(false);
-  const [lineStatusMsg, setLineStatusMsg] = useState<{ type: 'success' | 'error'; msg: string } | null>(null);
-
-  useEffect(() => {
-    // Fetch initial LINE settings
-    const fetchLineSettings = async () => {
-      try {
-        const csrfMatch = document.cookie.match(/horplus_csrf=([^;]+)/);
-        const csrfToken = csrfMatch ? decodeURIComponent(csrfMatch[1]) : '';
-        const res = await fetch('/api/v1/integrations/line', {
-          headers: { 'X-CSRF-Token': csrfToken }
-        });
-        if (res.ok) {
-          const result = await res.json();
-          if (result.data) {
-            const data = result.data;
-            let webhookStatus = 'pending';
-            // Simple heuristic for webhook status
-            if (data.status === 'connected') webhookStatus = 'verified';
-            if (data.status === 'token_error') webhookStatus = 'failed';
-            
-          }
-        }
-      } catch (err) {
-        console.error('Failed to fetch LINE settings', err);
-      }
-    };
-    fetchLineSettings();
-  }, []);
-
 
   const [isResetConfirmOpen, setIsResetConfirmOpen] = useState(false);
   const [resetSuccessNotice, setResetSuccessNotice] = useState(false);

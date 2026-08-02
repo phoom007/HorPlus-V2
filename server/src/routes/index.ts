@@ -17,12 +17,7 @@ import { createOccupancyRouter } from './occupancy.routes.js';
 import { createBillingCycleRouter } from './billing-cycle.routes.js';
 import { createMeterRouter } from './meter.routes.js';
 import { createBillingRouter } from './billing.routes.js';
-import { lineIntegrationRouter } from './line-integration.routes.js';
-import { staffRoleRouter } from './staff-role.routes.js';
 import { moveOutRouter } from './move-out.routes.js';
-import { liffSessionRouter } from './liff-session.routes.js';
-import { lineQuotaRouter } from './line-quota.routes.js';
-import { createTenantPortalRouter } from './tenant-portal.routes.js';
 import { createMaintenanceRouter } from './maintenance.routes.js';
 import { createAnnouncementRouter } from './announcement.routes.js';
 import { createNotificationRouter, createTenantNotificationRouter } from './notification.routes.js';
@@ -123,17 +118,12 @@ export function createApiRouter(deps: AppApiDependencies | AuthenticationService
       router.use('/bills', createBillingRouter(fullDeps.authService, fullDeps.billingService));
     }
 
-    // LINE OA, Staff Role, Tenant Registration & LIFF Session routes
-    router.use('/', lineIntegrationRouter);
-    router.use('/', staffRoleRouter);
+    // Move-out and other non-LINE features
     router.use('/', moveOutRouter);
-    router.use('/', liffSessionRouter);
-    router.use('/', lineQuotaRouter);
     router.use('/maintenance-requests', createMaintenanceRouter());
     router.use('/announcements', createAnnouncementRouter());
     router.use('/notifications', createNotificationRouter());
     router.use('/tenant/notifications', createTenantNotificationRouter());
-    router.use('/tenant', createTenantPortalRouter());
   }
 
   return router;

@@ -1,16 +1,13 @@
 import { Request, Response, NextFunction } from 'express';
-import { liffSessionService } from '../services/liff-session.service.js';
+
 
 export interface AuthenticatedActor {
-  actorType: 'google_owner' | 'line_staff' | 'line_tenant' | 'line_registration';
+  actorType: 'google_owner';
   sessionId: string;
   userId?: string;
-  lineIdentityId?: string;
-  lineUserId?: string;
   dormitoryId: string;
   dormitoryMemberId?: string;
-  roleCode?: 'OWNER' | 'MANAGER' | 'TECH';
-  tenantLineBindingId?: string;
+  roleCode?: 'OWNER' | 'MANAGER' | 'TECH' | 'STAFF';
   tenantId?: string;
   contractId?: string;
   roomId?: string;
@@ -28,34 +25,7 @@ declare global {
 
 export function extractUnifiedActor() {
   return (req: Request, _res: Response, next: NextFunction) => {
-    // 1. Check LINE session cookie or header
-    const lineSessionId = req.cookies?.['horplus_line_session'] || (req.headers['x-line-session-id'] as string);
-    if (lineSessionId) {
-      const lineSession = liffSessionService.getSession(lineSessionId);
-      if (lineSession) {
-        let actorType: 'line_staff' | 'line_tenant' | 'line_registration' = 'line_registration';
-        if (lineSession.accessType === 'staff') actorType = 'line_staff';
-        else if (lineSession.accessType === 'tenant') actorType = 'line_tenant';
-
-        req.actor = {
-          actorType,
-          sessionId: lineSession.sessionId,
-          lineIdentityId: lineSession.lineIdentityId,
-          lineUserId: lineSession.lineUserId,
-          dormitoryId: lineSession.dormitoryId,
-          roleCode: lineSession.roleCode as any,
-          tenantId: lineSession.tenantId || undefined,
-          contractId: lineSession.contractId || undefined,
-          roomId: lineSession.roomId || undefined,
-          displayName: lineSession.displayName,
-          pictureUrl: lineSession.pictureUrl || undefined
-        };
-        req.dormitoryId = lineSession.dormitoryId;
-        return next();
-      }
-    }
-
-    // 2. Check Google Owner Session
+    // 1. Check Google Owner Session
     if (req.auth?.userId) {
       req.actor = {
         actorType: 'google_owner',
@@ -104,29 +74,13 @@ export function requireGoogleOwnerSession() {
   };
 }
 
-export function requireLineStaffSession() {
+export function requireStaffSession() {
   return (req: Request, res: Response, next: NextFunction) => {
-    if (!req.actor || (req.actor.actorType !== 'line_staff' && req.actor.actorType !== 'google_owner')) {
+    if (!req.actor || req.actor.actorType !== 'google_owner') {
       return res.status(403).json({
         error: {
           code: 'STAFF_SESSION_REQUIRED',
           message: 'สิทธิ์นี้สำหรับเจ้าของหรือพนักงานหอพักเท่านั้น',
-          requestId: req.requestId || 'req-unknown',
-          timestamp: new Date().toISOString()
-        }
-      });
-    }
-    next();
-  };
-}
-
-export function requireTenantLineSession() {
-  return (req: Request, res: Response, next: NextFunction) => {
-    if (!req.actor || req.actor.actorType !== 'line_tenant' || !req.actor.tenantId) {
-      return res.status(403).json({
-        error: {
-          code: 'TENANT_BINDING_REQUIRED',
-          message: 'ต้องผูกบัญชีผู้เช่าที่ได้รับอนุมัติแล้วเท่านั้น',
           requestId: req.requestId || 'req-unknown',
           timestamp: new Date().toISOString()
         }

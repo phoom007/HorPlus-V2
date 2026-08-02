@@ -136,45 +136,6 @@ export function createOnboardingRouter(
     });
   });
 
-  // POST /api/v1/onboarding/test-line
-  router.post('/test-line', requireSession, async (req: Request, res: Response) => {
-    if (!verifyCsrfToken(req, res)) return;
-
-    const { channelId, channelSecret, channelAccessToken } = req.body || {};
-    if (!channelId || !channelSecret) {
-      return res.status(400).json({
-        error: {
-          code: 'INVALID_INPUT',
-          message: 'กรุณากรอก LINE Channel ID และ Channel Secret ให้ครบถ้วน',
-          fieldErrors: null,
-          requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
-          timestamp: new Date().toISOString(),
-        },
-      });
-    }
-
-    try {
-      const { lineIntegrationService } = await import('../services/line-integration.service.js');
-      const token = await lineIntegrationService.requestTemporaryAccessToken(channelId, channelSecret);
-      const fetchRes = await fetch('https://api.line.me/v2/bot/info', {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      if (!fetchRes.ok) throw new Error('UNAUTHORIZED');
-      const info = await fetchRes.json() as any;
-      res.json({ data: { success: true, displayName: info.displayName, pictureUrl: info.pictureUrl } });
-    } catch (err: any) {
-      res.status(400).json({
-        error: {
-          code: 'LINE_TEST_FAILED',
-          message: err.message || 'ไม่สามารถเชื่อมต่อ LINE OA ได้ กรุณาตรวจสอบ Channel ID และ Channel Secret',
-          fieldErrors: null,
-          requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
-          timestamp: new Date().toISOString(),
-        },
-      });
-    }
-  });
-
   // POST /api/v1/onboarding/complete
   router.post('/complete', requireSession, async (req: Request, res: Response) => {
     if (!verifyCsrfToken(req, res)) return;
@@ -217,7 +178,6 @@ export function createOnboardingRouter(
         billing: parsed.data.billing,
         buildings: parsed.data.buildings,
         rooms: parsed.data.rooms,
-        lineOA: parsed.data.lineOA,
         planCode: parsed.data.planCode,
         promoCode: parsed.data.promoCode,
       });

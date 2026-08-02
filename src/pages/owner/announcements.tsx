@@ -308,14 +308,6 @@ export const OwnerAnnouncements: React.FC<OwnerAnnouncementsProps> = ({
       const updated = [newAnnouncement, ...unpinnedAnnouncements];
       onSaveAnnouncements(updated);
       
-      // Consume 1 LINE Push Quota for broadcasting announcement
-      try {
-        const { consumeLineQuota } = require('../../utils/lineQuota');
-        consumeLineQuota('2026-07', 1);
-      } catch (e) {
-        // ignore
-      }
-
       onAddLog(
         'สร้างประกาศข่าวสารใหม่',
         `ประกาศเรื่อง "${title}" ส่งไปยังเป้าหมาย ${finalTarget} โดย ${finalAuthor}`,

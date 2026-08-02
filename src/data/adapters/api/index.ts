@@ -17,7 +17,7 @@ import {
   AnnouncementDataSource,
   NotificationDataSource,
   AuditDataSource,
-  LineOaDataSource,
+
   StaffRoleDataSource,
   TenantRegistrationDataSource,
   OccupancyDataSource,
@@ -620,52 +620,7 @@ export class ApiAuditAdapter implements AuditDataSource {
   }
 }
 
-export class ApiLineOaAdapter implements LineOaDataSource {
-  async getSettings(): Promise<DataResult<any>> {
-    try {
-      const data = await httpRequest<any>('GET', '/integrations/line');
-      return { success: true, data };
-    } catch (err: any) {
-      return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message } };
-    }
-  }
 
-  async saveSettings(params: { messagingChannelId: string; channelSecret: string; lineLoginChannelId?: string; liffId?: string; liffEndpointUrl?: string }): Promise<DataResult<any>> {
-    try {
-      const data = await httpRequest<any>('PUT', '/integrations/line', params);
-      return { success: true, data };
-    } catch (err: any) {
-      return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message } };
-    }
-  }
-
-  async testConnection(): Promise<DataResult<any>> {
-    try {
-      const data = await httpRequest<any>('POST', '/integrations/line/test');
-      return { success: true, data };
-    } catch (err: any) {
-      return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message } };
-    }
-  }
-
-  async disconnect(): Promise<DataResult<any>> {
-    try {
-      const data = await httpRequest<any>('POST', '/integrations/line/disconnect');
-      return { success: true, data };
-    } catch (err: any) {
-      return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message } };
-    }
-  }
-
-  async getMessageQuota(): Promise<DataResult<any>> {
-    try {
-      const data = await httpRequest<any>('GET', '/line/message-quota');
-      return { success: true, data };
-    } catch (err: any) {
-      return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message } };
-    }
-  }
-}
 
 export class ApiStaffRoleAdapter implements StaffRoleDataSource {
   async getFollowers(params?: { friendStatus?: string; search?: string }): Promise<DataResult<any[]>> {
@@ -681,7 +636,7 @@ export class ApiStaffRoleAdapter implements StaffRoleDataSource {
     }
   }
 
-  async assignRole(params: { followerId: string; roleCode: 'OWNER' | 'MANAGER' | 'TECH'; sendLineNotification?: boolean }): Promise<DataResult<any>> {
+  async assignRole(params: { followerId: string; roleCode: 'OWNER' | 'MANAGER' | 'TECH' }): Promise<DataResult<any>> {
     try {
       const data = await httpRequest<any>('POST', '/staff-role-assignments', params);
       return { success: true, data };
@@ -737,7 +692,7 @@ export class ApiTenantRegistrationAdapter implements TenantRegistrationDataSourc
     }
   }
 
-  async approveRequest(params: { requestId: string; tenantId: string; contractId: string; sendLineNotification?: boolean }): Promise<DataResult<any>> {
+  async approveRequest(params: { requestId: string; tenantId: string; contractId: string }): Promise<DataResult<any>> {
     try {
       const data = await httpRequest<any>('POST', `/tenant-registration-requests/${params.requestId}/approve`, params);
       return { success: true, data };
@@ -808,7 +763,7 @@ export class ApiDataProvider implements HorPlusDataProvider {
   public announcements = new ApiAnnouncementAdapter();
   public notifications = new ApiNotificationAdapter();
   public audit = new ApiAuditAdapter();
-  public lineOa = new ApiLineOaAdapter();
+
   public staffRoles = new ApiStaffRoleAdapter();
   public tenantRegistrations = new ApiTenantRegistrationAdapter();
   public occupancies = new ApiOccupancyAdapter();

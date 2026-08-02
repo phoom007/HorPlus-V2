@@ -36,7 +36,7 @@ import {
 } from '../../data/mockData';
 import { Room, Bill, BillItem, Tenant, Contract, BillStatus, calculateRoomRentForCycle } from '../../types';
 import { formatBaht, Modal } from '../../components/GlobalComponents';
-import { consumeLineQuota } from '../../utils/lineQuota';
+
 import { LineNotificationModal } from '../../components/LineNotificationModal';
 
 interface OwnerMetersProps {

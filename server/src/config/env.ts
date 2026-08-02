@@ -75,10 +75,6 @@ export function validateEnv(rawEnv: Record<string, string | undefined> = process
     throw new Error("Production CORS origins cannot include wildcard '*'");
   }
 
-  if (parsed.data.NODE_ENV === 'production' && (process.env.ALLOW_TEST_LIFF_ADAPTER === 'true' || process.env.USE_MOCK_LIFF === 'true')) {
-    throw new Error("PRODUCTION_SECURITY_VIOLATION: Test LIFF identity verifier adapter cannot be enabled in NODE_ENV=production");
-  }
-
   if (parsed.data.E2E_TEST_MODE) {
     if (parsed.data.NODE_ENV !== 'test') {
       throw new Error("E2E_TEST_MODE is true but NODE_ENV is not test.");

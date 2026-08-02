@@ -129,18 +129,15 @@ export function createAnnouncementRouter(announcementService: AnnouncementServic
   router.post('/:id/publish', async (req: Request, res: Response) => {
     try {
       const { actor, dormitoryId } = getContext(req);
-      const { sendLineNotification } = req.body;
-
       const published = await announcementService.publishAnnouncement({
         dormitoryId,
         announcementId: req.params.id,
-        sendLineNotification: !!sendLineNotification,
         publishedByUserId: actor?.userId || undefined
       });
 
       res.json(published);
     } catch (err: any) {
-      res.status(err.message.includes('LINE_MESSAGE_QUOTA_INSUFFICIENT') || err.message.includes('ANNOUNCEMENT_ALREADY_PUBLISHED') ? 400 : 500)
+      res.status(err.message.includes('ANNOUNCEMENT_ALREADY_PUBLISHED') ? 400 : 500)
         .json({ error: { message: err.message } });
     }
   });
@@ -149,7 +146,7 @@ export function createAnnouncementRouter(announcementService: AnnouncementServic
   router.post('/:id/schedule', async (req: Request, res: Response) => {
     try {
       const { actor, dormitoryId } = getContext(req);
-      const { scheduledAt, sendLineNotification } = req.body;
+      const { scheduledAt } = req.body;
 
       if (!scheduledAt) {
         return res.status(400).json({ error: { code: 'INVALID_INPUT', message: 'scheduledAt is required' } });
@@ -159,7 +156,6 @@ export function createAnnouncementRouter(announcementService: AnnouncementServic
         dormitoryId,
         announcementId: req.params.id,
         scheduledAt: new Date(scheduledAt),
-        sendLineNotification: !!sendLineNotification,
         scheduledByUserId: actor?.userId || undefined
       });
 

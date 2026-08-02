@@ -38,8 +38,7 @@ export const PricingPage: React.FC = () => {
         'สูงสุด 10 ห้องพัก',
         'จัดการผังห้องและสัญญาเช่า',
         'จดมิเตอร์และออกบิลประจำเดือน',
-        'Tenant Mobile Portal',
-        'LINE Quota 300 ครั้ง/เดือน'
+        'Tenant Mobile Portal'
       ]
     },
     {

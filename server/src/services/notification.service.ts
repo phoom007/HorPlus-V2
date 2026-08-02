@@ -1,7 +1,4 @@
 import { InMemoryNotificationRepository, InAppNotificationEntity } from '../db/repositories/notification.repository.js';
-import { LineRepository, lineRepository } from '../db/repositories/line.repository.js';
-import { LineQuotaService } from './line-quota.service.js';
-import { LineMessagingProvider, MockLineMessagingProvider } from './line-provider.interface.js';
 
 export interface NotificationPreferenceInput {
   notifyRoleAssignment?: boolean;
@@ -23,30 +20,10 @@ export type EventNotificationCategory =
   | 'MAINTENANCE_STATUS_UPDATED'
   | 'ANNOUNCEMENT_PUBLISHED';
 
-export interface EvaluateLineNotificationInput {
-  dormitoryId: string;
-  category: EventNotificationCategory;
-  actionSendLineCheckbox?: boolean;
-  actorRoleCode?: string;
-  recipientLineIdentityId?: string;
-  recipientTenantId?: string;
-  templateParams: Record<string, string>;
-  idempotencyKey?: string;
-}
-
-export interface LineNotificationDecision {
-  shouldSendLine: boolean;
-  reason: string;
-  quotaUsed: number;
-  outboxId?: string;
-}
 
 export class NotificationService {
   constructor(
-    private notificationRepo: InMemoryNotificationRepository = new InMemoryNotificationRepository(),
-    private lineRepo: LineRepository = lineRepository,
-    private quotaService: LineQuotaService = new LineQuotaService(lineRepo),
-    private messagingProvider: LineMessagingProvider = new MockLineMessagingProvider()
+    private notificationRepo: InMemoryNotificationRepository = new InMemoryNotificationRepository()
   ) {}
 
   public getNotificationRepository(): InMemoryNotificationRepository {
@@ -88,126 +65,25 @@ export class NotificationService {
 
   // --- Notification Preferences (Owner Controlled) ---
   public async getPreferences(dormitoryId: string) {
-    let pref = await this.lineRepo.getNotificationPreferences(dormitoryId);
-    if (!pref) {
-      pref = await this.lineRepo.upsertNotificationPreferences({
-        dormitoryId,
-        notifyRoleAssignment: true,
-        notifyTenantApproval: true,
-        notifyBillCreated: true,
-        notifyPaymentApproved: true,
-        notifyPaymentRejected: true,
-        notifyMaintenanceUpdate: true,
-        notifyAnnouncement: true
-      });
-    }
-    return pref;
+    return {
+      notifyRoleAssignment: true,
+      notifyTenantApproval: true,
+      notifyBillCreated: true,
+      notifyPaymentApproved: true,
+      notifyPaymentRejected: true,
+      notifyMaintenanceUpdate: true,
+      notifyAnnouncement: true
+    };
   }
 
   public async updatePreferences(dormitoryId: string, actorRoleCode: string, input: NotificationPreferenceInput) {
     if (actorRoleCode !== 'OWNER') {
       throw new Error('FORBIDDEN: Only OWNER can update notification preferences');
     }
-
-    return this.lineRepo.upsertNotificationPreferences({
-      dormitoryId,
-      ...input
-    });
+    // Preferences update logic disabled for Release 1 without LINE
+    return input;
   }
 
-  // --- Quota Warning ---
-  public async checkAndTriggerQuotaLowWarning(dormitoryId: string) {
-    const status = await this.quotaService.getQuotaStatus(dormitoryId);
-    if (status.remaining <= 50) {
-      let bodyText = `ขณะนี้โควตาข้อความ LINE คงเหลือ ${status.remaining} ข้อความ`;
-      if (status.remaining === 0) {
-        bodyText = `โควตาข้อความ LINE ประจำเดือนนี้หมดแล้ว (${status.used}/${status.limit} ข้อความ)`;
-      }
-
-      await this.createInAppNotification({
-        dormitoryId,
-        targetType: 'staff',
-        targetRoleCode: 'OWNER',
-        category: 'QUOTA_WARNING',
-        title: 'เตือนโควตาข้อความ LINE',
-        body: bodyText,
-        metadata: { remaining: status.remaining, limit: status.limit, used: status.used }
-      });
-    }
-  }
-
-  // --- Central Line Notification Decision & Delivery Engine ---
-  public async evaluateAndSendLineNotification(input: EvaluateLineNotificationInput): Promise<LineNotificationDecision> {
-    const { dormitoryId, category, actionSendLineCheckbox, actorRoleCode, recipientLineIdentityId, templateParams, idempotencyKey } = input;
-
-    // 1. If action-level checkbox explicitly false (or undefined for actions requiring it), do NOT send LINE
-    if (actionSendLineCheckbox === false) {
-      return { shouldSendLine: false, reason: 'Action checkbox sendLineNotification is disabled', quotaUsed: 0 };
-    }
-
-    // TECH cannot send LINE notifications on status update
-    if (actorRoleCode === 'TECH' && category === 'MAINTENANCE_STATUS_UPDATED') {
-      return { shouldSendLine: false, reason: 'TECH role is not permitted to trigger LINE notifications', quotaUsed: 0 };
-    }
-
-    // 2. Check Owner System Preferences
-    const prefs = await this.getPreferences(dormitoryId);
-    const prefEnabled = this.isCategoryEnabledInPreferences(category, prefs);
-    if (!prefEnabled) {
-      return { shouldSendLine: false, reason: 'Category is disabled in owner notification preferences', quotaUsed: 0 };
-    }
-
-    // 3. Check Active LINE Integration
-    const integration = await this.lineRepo.getIntegrationByDormitory(dormitoryId);
-    if (!integration || integration.status !== 'connected') {
-      return { shouldSendLine: false, reason: 'LINE OA Integration is disconnected or not set up', quotaUsed: 0 };
-    }
-
-    // 4. Check Recipient LINE Identity & Friend Status
-    if (!recipientLineIdentityId) {
-      return { shouldSendLine: false, reason: 'Recipient has no linked LINE identity', quotaUsed: 0 };
-    }
-
-    const follower = await this.lineRepo.getFollowerByIdentity(dormitoryId, recipientLineIdentityId);
-    if (!follower || follower.friendStatus !== 'following') {
-      return { shouldSendLine: false, reason: 'Recipient is not an active follower of the LINE OA', quotaUsed: 0 };
-    }
-
-    // 5. Check Quota Remaining
-    const quotaStatus = await this.quotaService.getQuotaStatus(dormitoryId);
-    if (quotaStatus.remaining < 1) {
-      await this.checkAndTriggerQuotaLowWarning(dormitoryId);
-      return { shouldSendLine: false, reason: 'LINE_MESSAGE_QUOTA_INSUFFICIENT', quotaUsed: 0 };
-    }
-
-    // 6. Template Text Generation
-    const textMessage = this.generateTextMessage(category, templateParams);
-
-    if (!this.messagingProvider) {
-      return { shouldSendLine: false, reason: 'Messaging provider not configured', quotaUsed: 0 };
-    }
-
-    // 7. Send Message via Provider & Deduct Quota
-    try {
-      const sendResult = await this.messagingProvider.pushMessage!({
-        channelSecretEncrypted: integration.channelSecretEncrypted,
-        toLineUserId: follower.identity.lineUserId,
-        messages: [{ type: 'text', text: textMessage }]
-      });
-
-      if (sendResult.success) {
-        // Record quota usage
-        await this.quotaService.consumeQuota(dormitoryId, recipientLineIdentityId, category, sendResult.providerMessageId || `msg_${Date.now()}`);
-        await this.checkAndTriggerQuotaLowWarning(dormitoryId);
-
-        return { shouldSendLine: true, reason: 'Successfully sent LINE notification', quotaUsed: 1 };
-      } else {
-        return { shouldSendLine: false, reason: `LINE provider delivery failed: ${sendResult.errorMessage}`, quotaUsed: 0 };
-      }
-    } catch (err: any) {
-      return { shouldSendLine: false, reason: `LINE delivery error: ${err.message}`, quotaUsed: 0 };
-    }
-  }
 
   private isCategoryEnabledInPreferences(category: EventNotificationCategory, prefs: any): boolean {
     switch (category) {

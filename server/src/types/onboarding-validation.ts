@@ -70,23 +70,12 @@ export const OnboardingRoomInputSchema = z.object({
   status: z.enum(['vacant', 'occupied', 'reserved', 'maintenance']).default('vacant'),
 }).strict();
 
-export const OnboardingLineOAInputSchema = z.object({
-  skipped: z.boolean().optional(),
-  messagingChannelId: z.string().trim().optional().nullable(),
-  channelSecret: z.string().trim().optional().nullable(),
-  channelAccessToken: z.string().trim().optional().nullable(),
-  lineLoginChannelId: z.string().trim().optional().nullable(),
-  liffId: z.string().trim().optional().nullable(),
-  liffEndpointUrl: z.string().trim().optional().nullable(),
-}).optional().nullable();
-
 export const CompleteOnboardingInputSchema = z.object({
   dormitory: OnboardingDormitoryInputSchema,
   billing: OnboardingBillingInputSchema.optional(),
   payment: OnboardingPaymentInputSchema.optional(),
   buildings: z.array(OnboardingBuildingInputSchema).optional(),
   rooms: z.array(OnboardingRoomInputSchema).optional(),
-  lineOA: OnboardingLineOAInputSchema,
   planCode: z.string().trim().min(1, 'กรุณาเลือกแพ็กเกจ'),
   promoCode: z.string().trim().optional(),
   idempotencyKey: z.string().optional(),

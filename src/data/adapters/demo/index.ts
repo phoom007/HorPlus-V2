@@ -17,7 +17,7 @@ import {
   AnnouncementDataSource,
   NotificationDataSource,
   AuditDataSource,
-  LineOaDataSource,
+
   StaffRoleDataSource,
   TenantRegistrationDataSource,
   DataResult
@@ -392,71 +392,7 @@ export class DemoAuditAdapter implements AuditDataSource {
   }
 }
 
-export class DemoLineOaAdapter implements LineOaDataSource {
-  async getSettings(): Promise<DataResult<any>> {
-    return {
-      success: true,
-      data: {
-        id: 'line-demo-001',
-        connected: true,
-        status: 'connected',
-        messagingChannelId: '2001234567',
-        channelSecretMasked: 'th••••••••••••99',
-        lineLoginChannelId: '2001234568',
-        liffId: '2001234568-demo',
-        liffEndpointUrl: 'https://liff.line.me/2001234568-demo',
-        webhookUrl: 'https://demo.horplus.com/api/v1/webhooks/line/wh_demo_key',
-        webhookPublicKey: 'wh_demo_key',
-        botDisplayName: 'หอพัก HorPlus OA (Demo)',
-        botPictureUrl: 'https://api.dicebear.com/7.x/bottts/svg?seed=horplus_demo',
-        lastConnectionCheckAt: new Date().toISOString(),
-        lastWebhookReceivedAt: new Date().toISOString()
-      }
-    };
-  }
 
-  async saveSettings(params: any): Promise<DataResult<any>> {
-    return {
-      success: true,
-      data: {
-        ...params,
-        connected: true,
-        status: 'connected',
-        channelSecretMasked: 'th••••••••••••99',
-        webhookUrl: 'https://demo.horplus.com/api/v1/webhooks/line/wh_demo_key'
-      }
-    };
-  }
-
-  async testConnection(): Promise<DataResult<any>> {
-    return {
-      success: true,
-      data: {
-        success: true,
-        message: 'เชื่อมต่อ LINE OA สำเร็จและพร้อมใช้งาน',
-        botDisplayName: 'หอพัก HorPlus OA (Demo)',
-        botPictureUrl: 'https://api.dicebear.com/7.x/bottts/svg?seed=horplus_demo'
-      }
-    };
-  }
-
-  async disconnect(): Promise<DataResult<any>> {
-    return { success: true, data: { success: true } };
-  }
-
-  async getMessageQuota(): Promise<DataResult<any>> {
-    return {
-      success: true,
-      data: {
-        limit: 300,
-        used: 12,
-        remaining: 288,
-        year: new Date().getFullYear(),
-        month: new Date().getMonth() + 1
-      }
-    };
-  }
-}
 
 export class DemoStaffRoleAdapter implements StaffRoleDataSource {
   async getFollowers(): Promise<DataResult<any[]>> {
@@ -495,7 +431,7 @@ export class DemoStaffRoleAdapter implements StaffRoleDataSource {
         assignmentId: `role-assign-${Date.now()}`,
         roleCode: params.roleCode,
         displayName: 'สมชาย ใจดี',
-        notificationSent: !!params.sendLineNotification,
+
         notificationError: null
       }
     };
@@ -573,7 +509,7 @@ export class DemoTenantRegistrationAdapter implements TenantRegistrationDataSour
         requestId: params.requestId,
         status: 'approved',
         hasPendingPayment: true,
-        notificationSent: !!params.sendLineNotification,
+
         notificationError: null
       }
     };
@@ -600,7 +536,7 @@ export class DemoDataProvider implements HorPlusDataProvider {
   public announcements = new DemoAnnouncementAdapter();
   public notifications = new DemoNotificationAdapter();
   public audit = new DemoAuditAdapter();
-  public lineOa = new DemoLineOaAdapter();
+
   public staffRoles = new DemoStaffRoleAdapter();
   public tenantRegistrations = new DemoTenantRegistrationAdapter();
 }

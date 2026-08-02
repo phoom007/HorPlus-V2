@@ -320,13 +320,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
 
       ownerSignatureUrl: '',
 
-      // 6. LINE OA
-      lineOA: {
-        skipped: false,
-        channelId: '1657889900',
-        channelSecret: 'e4d8f9c2a1b3c4d5e6f7a8b9c0d1e2f3',
-        isConnected: true
-      }
+
     };
 
     try {
@@ -351,8 +345,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
           utilities: { ...defaultData.utilities, ...(parsed.utilities || {}) },
           deposits: { ...defaultData.deposits, ...(parsed.deposits || {}) },
           paymentAccount: { ...defaultData.paymentAccount, ...(parsed.paymentAccount || {}) },
-          petPolicy: { ...defaultData.petPolicy, ...(parsed.petPolicy || {}) },
-          lineOA: { ...defaultData.lineOA, ...(parsed.lineOA || {}) }
+          petPolicy: { ...defaultData.petPolicy, ...(parsed.petPolicy || {}) }
         };
       }
     } catch {}
@@ -361,10 +354,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
   };
 
   const [formData, setFormData] = useState(getInitialForm());
-  const [testingLine, setTestingLine] = useState(false);
-  const [lineStatusMsg, setLineStatusMsg] = useState<{ type: 'success' | 'error'; msg: string } | null>(
-    formData.lineOA.isConnected ? { type: 'success', msg: 'เชื่อมต่อกับ LINE Official Account สำเร็จ (พร้อมใช้งาน)' } : null
-  );
+
 
   // Signature Canvas Drawing
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -418,63 +408,6 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
     setFormData(prev => ({ ...prev, ownerSignatureUrl: '' }));
   };
 
-  const handleTestLineConnection = async () => {
-    setTestingLine(true);
-    setLineStatusMsg(null);
-    if (!formData.lineOA.channelId || !formData.lineOA.channelSecret) {
-      setTestingLine(false);
-      setLineStatusMsg({ type: 'error', msg: 'กรุณากรอก Channel ID และ Channel Secret ให้ครบถ้วน' });
-      return;
-    }
-
-    try {
-      const testRes = await fetch('/api/v1/integrations/line/test', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          messagingChannelId: formData.lineOA.channelId,
-          channelSecret: formData.lineOA.channelSecret
-        })
-      });
-
-      const result = await testRes.json().catch(() => null);
-      setTestingLine(false);
-
-      if (testRes.ok && result?.success) {
-        setFormData(prev => ({
-          ...prev,
-          lineOA: {
-            ...prev.lineOA,
-            isConnected: true,
-            botDisplayName: result.data?.botDisplayName || result.data?.botPictureUrl ? result.data?.botDisplayName : prev.lineOA.botDisplayName,
-            botPictureUrl: result.data?.botPictureUrl || prev.lineOA.botPictureUrl
-          }
-        }));
-        setLineStatusMsg({
-          type: 'success',
-          msg: 'ตรวจสอบข้อมูล LINE OA สำเร็จ (Webhook และ LIFF ยังไม่ได้รับการยืนยัน)'
-        });
-      } else {
-        // Fallback for in-memory draft testing if API is unreachable / mock mode
-        if (formData.lineOA.channelId.length >= 6 && formData.lineOA.channelSecret.length >= 10) {
-          setFormData(prev => ({ ...prev, lineOA: { ...prev.lineOA, isConnected: true } }));
-          setLineStatusMsg({ type: 'success', msg: 'ตรวจสอบข้อมูล LINE OA สำเร็จ (Webhook และ LIFF ยังไม่ได้รับการยืนยัน)' });
-        } else {
-          setFormData(prev => ({ ...prev, lineOA: { ...prev.lineOA, isConnected: false } }));
-          setLineStatusMsg({ type: 'error', msg: result?.error?.message || 'ไม่สามารถตรวจสอบสถานะ LINE OA ได้ กรุณาเช็ค Channel ID และ Channel Secret' });
-        }
-      }
-    } catch {
-      setTestingLine(false);
-      if (formData.lineOA.channelId.length >= 6 && formData.lineOA.channelSecret.length >= 10) {
-        setFormData(prev => ({ ...prev, lineOA: { ...prev.lineOA, isConnected: true } }));
-        setLineStatusMsg({ type: 'success', msg: 'ตรวจสอบข้อมูล LINE OA สำเร็จ (Webhook และ LIFF ยังไม่ได้รับการยืนยัน)' });
-      } else {
-        setFormData(prev => ({ ...prev, lineOA: { ...prev.lineOA, isConnected: false } }));
-        setLineStatusMsg({ type: 'error', msg: 'กรุณากรอก Channel ID และ Channel Secret ให้ครบถ้วน' });
-      }
-    }
-  };
 
   const handleAddBuilding = () => {
     const newBuilding = {

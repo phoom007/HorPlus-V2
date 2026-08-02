@@ -12,11 +12,8 @@ import { InMemoryTenantRepository } from '../db/repositories/tenant.repository.j
 import { InMemoryContractRepository } from '../db/repositories/contract.repository.js';
 import { InMemoryRoomRepository } from '../db/repositories/room.repository.js';
 import { InMemoryBuildingRepository } from '../db/repositories/building.repository.js';
-import { LineRepository, lineRepository } from '../db/repositories/line.repository.js';
 import { parseRoomIdentifier } from '../utils/normalization.js';
-import { LineQuotaService } from './line-quota.service.js';
 import { NotificationService } from './notification.service.js';
-import { LineMessagingProvider, MockLineMessagingProvider } from './line-provider.interface.js';
 
 export interface CreateAnnouncementInput {
   dormitoryId: string;
@@ -39,18 +36,12 @@ export interface AnnouncementPreviewResult {
   announcementId: string;
   totalRecipients: number;
   inAppRecipients: number;
-  lineEligibleRecipients: number;
-  lineIneligibleRecipients: number;
-  requiredQuota: number;
-  remainingQuota: number;
-  hasSufficientQuota: boolean;
-  eligibleTenants: { tenantId: string; name: string; roomNumber: string; hasLineBinding: boolean }[];
+  eligibleTenants: { tenantId: string; name: string; roomNumber: string }[];
 }
 
 export interface PublishAnnouncementInput {
   dormitoryId: string;
   announcementId: string;
-  sendLineNotification?: boolean;
   publishedByUserId?: string;
 }
 
@@ -58,7 +49,6 @@ export interface ScheduleAnnouncementInput {
   dormitoryId: string;
   announcementId: string;
   scheduledAt: Date;
-  sendLineNotification?: boolean;
   scheduledByUserId?: string;
 }
 
@@ -67,16 +57,13 @@ export class AnnouncementRecipientResolver {
     private tenantRepo: InMemoryTenantRepository = new InMemoryTenantRepository(),
     private contractRepo: InMemoryContractRepository = new InMemoryContractRepository(),
     private roomRepo: InMemoryRoomRepository = new InMemoryRoomRepository(),
-    private buildingRepo: InMemoryBuildingRepository = new InMemoryBuildingRepository(),
-    private lineRepo: LineRepository = lineRepository
+    private buildingRepo: InMemoryBuildingRepository = new InMemoryBuildingRepository()
   ) {}
 
   public async resolveRecipients(dormitoryId: string, audiences: AnnouncementAudienceEntity[]) {
     // Find all active tenants in dormitory
     const activeTenantsRes = await this.tenantRepo.findAll(dormitoryId);
     const activeTenants = activeTenantsRes.items || activeTenantsRes;
-    const tenantBindings = await this.lineRepo.listTenantBindingsForDormitory(dormitoryId);
-    const lineBindingMap = new Map(tenantBindings.map((b: any) => [b.tenantId, b]));
 
     const activeContracts = await this.contractRepo.findAll(dormitoryId, { status: 'active' });
     const tenantRoomMap = new Map();
@@ -139,24 +126,13 @@ export class AnnouncementRecipientResolver {
       const tenant = activeTenants.find(t => t.id === tenantId);
       if (!tenant) continue;
 
-      const binding = lineBindingMap.get(tenantId);
       const roomId = tenantRoomMap.get(tenantId);
       const room = roomId ? roomMap.get(roomId) : null;
-
-      let isLineEligible = false;
-      if (binding && (binding as any).status === 'active') {
-        const follower = await this.lineRepo.getFollowerByIdentity(dormitoryId, (binding as any).lineIdentityId);
-        if (follower && follower.friendStatus === 'following') {
-          isLineEligible = true;
-        }
-      }
 
       resolved.push({
         tenantId,
         tenant,
-        binding,
-        roomNumber: room?.roomNumber || '-',
-        isLineEligible
+        roomNumber: room?.roomNumber || '-'
       });
     }
 
@@ -168,10 +144,7 @@ export class AnnouncementService {
   constructor(
     private announcementRepo: InMemoryAnnouncementRepository = new InMemoryAnnouncementRepository(),
     private recipientResolver: AnnouncementRecipientResolver = new AnnouncementRecipientResolver(),
-    private lineRepo: LineRepository = lineRepository,
-    private quotaService: LineQuotaService = new LineQuotaService(lineRepo),
-    private notificationService: NotificationService = new NotificationService(),
-    private messagingProvider: LineMessagingProvider = new MockLineMessagingProvider()
+    private notificationService: NotificationService = new NotificationService()
   ) {}
 
   public getRepository(): InMemoryAnnouncementRepository {
@@ -232,33 +205,21 @@ export class AnnouncementService {
     const resolved = await this.recipientResolver.resolveRecipients(dormitoryId, audiences);
 
     const totalRecipients = resolved.length;
-    const lineEligible = resolved.filter(r => r.isLineEligible);
-    const lineIneligibleRecipients = totalRecipients - lineEligible.length;
-
-    const quotaStatus = await this.quotaService.getQuotaStatus(dormitoryId);
-    const requiredQuota = lineEligible.length;
-    const hasSufficientQuota = quotaStatus.remaining >= requiredQuota;
 
     return {
       announcementId,
       totalRecipients,
       inAppRecipients: totalRecipients,
-      lineEligibleRecipients: lineEligible.length,
-      lineIneligibleRecipients,
-      requiredQuota,
-      remainingQuota: quotaStatus.remaining,
-      hasSufficientQuota,
       eligibleTenants: resolved.map(r => ({
         tenantId: r.tenantId,
         name: `${r.tenant.firstName} ${r.tenant.lastName}`.trim(),
-        roomNumber: r.roomNumber,
-        hasLineBinding: r.isLineEligible
+        roomNumber: r.roomNumber
       }))
     };
   }
 
   public async publishAnnouncement(input: PublishAnnouncementInput): Promise<AnnouncementEntity> {
-    const { dormitoryId, announcementId, sendLineNotification, publishedByUserId } = input;
+    const { dormitoryId, announcementId, publishedByUserId } = input;
     const announcement = await this.announcementRepo.findById(dormitoryId, announcementId);
     if (!announcement) throw new Error('RESOURCE_NOT_FOUND: Announcement not found');
 
@@ -268,17 +229,6 @@ export class AnnouncementService {
 
     const audiences = await this.announcementRepo.getAudiences(dormitoryId, announcementId);
     const resolved = await this.recipientResolver.resolveRecipients(dormitoryId, audiences);
-
-    const lineEligible = resolved.filter(r => r.isLineEligible);
-
-    // If sendLineNotification = true, check quota sufficiency
-    if (sendLineNotification) {
-      const quotaStatus = await this.quotaService.getQuotaStatus(dormitoryId);
-      const required = lineEligible.length;
-      if (quotaStatus.remaining < required) {
-        throw new Error(`LINE_MESSAGE_QUOTA_INSUFFICIENT: Required ${required} messages but only ${quotaStatus.remaining} quota remaining`);
-      }
-    }
 
     const now = new Date();
     const updated = await this.announcementRepo.updateAnnouncement(dormitoryId, announcementId, {
@@ -290,9 +240,7 @@ export class AnnouncementService {
     // Create Recipient Records
     const recipientsData = resolved.map(r => ({
       tenantId: r.tenantId,
-      tenantLineBindingId: (r.binding as any)?.id || null,
-      lineIdentityId: (r.binding as any)?.lineIdentityId || null,
-      deliveryStatus: (sendLineNotification && r.isLineEligible) ? ('line_sent' as const) : ('in_app_only' as const)
+      deliveryStatus: 'in_app_only' as const
     }));
     await this.announcementRepo.setRecipients(dormitoryId, announcementId, recipientsData.map(r => ({ ...r, dormitoryId, announcementId })));
 
@@ -309,29 +257,7 @@ export class AnnouncementService {
       });
     }
 
-    // Send LINE Messages to LINE Eligible Tenants if sendLineNotification = true
-    if (sendLineNotification && lineEligible.length > 0) {
-      const integration = await this.lineRepo.getIntegrationByDormitory(dormitoryId);
-      if (integration && integration.status === 'connected') {
-        const textMsg = `📢 ประกาศจากหอพัก: ${announcement.title}\n${announcement.summary || announcement.content}`;
 
-        for (const r of lineEligible) {
-          const follower = await this.lineRepo.getFollowerByIdentity(dormitoryId, (r.binding as any)?.lineIdentityId);
-          if (follower) {
-            const result = await this.messagingProvider.sendDirectNotification({
-              accessToken: integration.channelSecretEncrypted || 'mock_token',
-              recipientLineUserId: follower.identity.lineUserId,
-              messages: [{ type: 'text', text: textMsg }]
-            });
-
-            if (result.success) {
-              await this.quotaService.consumeQuota(dormitoryId, (r.binding as any)?.lineIdentityId, 'ANNOUNCEMENT_PUBLISHED', result.providerMessageId || `ann_${Date.now()}`);
-            }
-          }
-        }
-        await this.notificationService.checkAndTriggerQuotaLowWarning(dormitoryId);
-      }
-    }
 
     return updated!;
   }
@@ -391,33 +317,11 @@ export class AnnouncementService {
       try {
         await this.publishAnnouncement({
           dormitoryId: ann.dormitoryId,
-          announcementId: ann.id,
-          sendLineNotification: true
+          announcementId: ann.id
         });
         count++;
       } catch (err: any) {
-        // Fall back to in-app only if LINE quota fails
-        try {
-          await this.publishAnnouncement({
-            dormitoryId: ann.dormitoryId,
-            announcementId: ann.id,
-            sendLineNotification: false
-          });
-          count++;
-
-          // Alert staff about scheduled LINE failure
-          await this.notificationService.createInAppNotification({
-            dormitoryId: ann.dormitoryId,
-            targetType: 'staff',
-            targetRoleCode: 'OWNER',
-            category: 'SCHEDULED_ANNOUNCEMENT_LINE_FAILURE',
-            title: 'การส่งประกาศตั้งเวลาผ่าน LINE ล้มเหลว',
-            body: `ประกาศ "${ann.title}" ถูกเผยแพร่ในแอปแล้ว แต่ส่ง LINE ล้มเหลวเนื่องจากโควตาไม่พอ`,
-            metadata: { announcementId: ann.id }
-          });
-        } catch (innerErr) {
-          // ignore
-        }
+        // ignore or log
       }
     }
 
@@ -426,7 +330,6 @@ export class AnnouncementService {
 
   // --- Tenant Operations ---
   public async getTenantAnnouncements(dormitoryId: string, tenantId: string) {
-    const binding = await this.lineRepo.getTenantBindingForTenant(dormitoryId, tenantId);
     const audiences = await this.announcementRepo.getAudiences(dormitoryId, '');
 
     // Get all published announcements for dormitory

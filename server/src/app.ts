@@ -221,13 +221,8 @@ export function createApp(optionsOrAuth?: CreateAppOptions | AuthenticationServi
     })
   );
 
-  // Body & Cookie Parsing (Capture rawBody for exact Webhook HMAC-SHA256 signature verification)
-  app.use(express.json({
-    limit: env.BODY_LIMIT,
-    verify: (req: any, _res: Response, buf: Buffer) => {
-      req.rawBody = buf;
-    }
-  }));
+  // Body & Cookie Parsing
+  app.use(express.json({ limit: env.BODY_LIMIT }));
   app.use(express.urlencoded({ extended: true, limit: env.BODY_LIMIT }));
   app.use(cookieParserMiddleware);
 

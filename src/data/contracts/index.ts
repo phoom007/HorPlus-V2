@@ -145,17 +145,9 @@ export interface AuditDataSource {
   addLog(userId: string, action: string, details: string, entityType: string, entityId: string): Promise<DataResult<AuditLog>>;
 }
 
-export interface LineOaDataSource {
-  getSettings(): Promise<DataResult<any>>;
-  saveSettings(params: { messagingChannelId: string; channelSecret: string; lineLoginChannelId?: string; liffId?: string; liffEndpointUrl?: string }): Promise<DataResult<any>>;
-  testConnection(): Promise<DataResult<any>>;
-  disconnect(): Promise<DataResult<any>>;
-  getMessageQuota(): Promise<DataResult<any>>;
-}
-
 export interface StaffRoleDataSource {
   getFollowers(params?: { friendStatus?: string; search?: string }): Promise<DataResult<any[]>>;
-  assignRole(params: { followerId: string; roleCode: 'OWNER' | 'MANAGER' | 'TECH'; sendLineNotification?: boolean }): Promise<DataResult<any>>;
+  assignRole(params: { followerId: string; roleCode: 'OWNER' | 'MANAGER' | 'TECH' }): Promise<DataResult<any>>;
   revokeRole(assignmentId: string, reason?: string): Promise<DataResult<any>>;
 }
 
@@ -164,7 +156,7 @@ export interface TenantRegistrationDataSource {
   submitRegistration(params: { requestedRoomId: string; firstName: string; lastName: string; phone: string; note?: string }): Promise<DataResult<any>>;
   getRegistrationStatus(): Promise<DataResult<any>>;
   listRequests(): Promise<DataResult<any[]>>;
-  approveRequest(params: { requestId: string; tenantId: string; contractId: string; sendLineNotification?: boolean }): Promise<DataResult<any>>;
+  approveRequest(params: { requestId: string; tenantId: string; contractId: string }): Promise<DataResult<any>>;
   rejectRequest(requestId: string, reason: string): Promise<DataResult<any>>;
 }
 
@@ -188,7 +180,7 @@ export interface HorPlusDataProvider {
   announcements: AnnouncementDataSource;
   notifications: NotificationDataSource;
   audit: AuditDataSource;
-  lineOa?: LineOaDataSource;
+
   staffRoles?: StaffRoleDataSource;
   tenantRegistrations?: TenantRegistrationDataSource;
   occupancies?: OccupancyDataSource;

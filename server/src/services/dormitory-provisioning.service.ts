@@ -68,15 +68,7 @@ export interface CompleteOwnerOnboardingParams {
     initialElectricityReading?: number;
     status?: string;
   }[];
-  lineOA?: {
-    skipped?: boolean;
-    messagingChannelId?: string | null;
-    channelSecret?: string | null;
-    channelAccessToken?: string | null;
-    lineLoginChannelId?: string | null;
-    liffId?: string | null;
-    liffEndpointUrl?: string | null;
-  } | null;
+
   planCode: string;
   promoCode?: string;
   requestId?: string;
@@ -134,7 +126,7 @@ export class DormitoryProvisioningService {
   }
 
   public async completeOwnerOnboarding(params: CompleteOwnerOnboardingParams): Promise<any> {
-    const { userId, idempotencyKey, requestId, planCode, promoCode, dormitory, billing, buildings, rooms, lineOA } = params;
+    const { userId, idempotencyKey, requestId, planCode, promoCode, dormitory, billing, buildings, rooms } = params;
 
     if (!idempotencyKey || !idempotencyKey.trim()) {
       const err: any = new Error('IDEMPOTENCY_KEY_REQUIRED: กรุณาระบุ X-Idempotency-Key สำหรับการสร้างหอพัก');
@@ -497,44 +489,7 @@ export class DormitoryProvisioningService {
           }
         }
 
-        // Persist LINE OA Integration Mapping with High-Entropy Webhook Public Key
-        let createdLineIntegration = null;
-        if (lineOA && !lineOA.skipped) {
-          const channelIdToSave = lineOA.messagingChannelId || '2006789012';
-          const channelSecretToSave = lineOA.channelSecret || '1234567890abcdef1234567890abcdef';
-          const channelAccessTokenToSave = lineOA.channelAccessToken || null;
-          const rawPublicKey = `wh_${crypto.randomBytes(32).toString('base64url')}`;
-          const keyHash = crypto.createHash('sha256').update(rawPublicKey).digest('hex');
-          const encryptedSecret = this.sensitiveFieldService.encrypt(channelSecretToSave).ciphertext;
-          const encryptedToken = channelAccessTokenToSave ? this.sensitiveFieldService.encrypt(channelAccessTokenToSave).ciphertext : null;
 
-          if (tx.lineOaIntegration) {
-            createdLineIntegration = await tx.lineOaIntegration.upsert({
-              where: { dormitory_messaging_channel_unique: { dormitoryId: createdDorm.id, messagingChannelId: channelIdToSave } },
-              update: {
-                channelSecretEncrypted: encryptedSecret,
-                lineLoginChannelId: lineOA.lineLoginChannelId || null,
-                liffId: lineOA.liffId || null,
-                liffEndpointUrl: lineOA.liffEndpointUrl || null,
-                status: 'connected',
-                connectedAt: new Date(),
-                lastConnectionCheckAt: new Date()
-              },
-              create: {
-                dormitoryId: createdDorm.id,
-                messagingChannelId: channelIdToSave,
-                channelSecretEncrypted: encryptedSecret,
-                lineLoginChannelId: lineOA.lineLoginChannelId || null,
-                liffId: lineOA.liffId || null,
-                liffEndpointUrl: lineOA.liffEndpointUrl || null,
-                webhookPublicKey: rawPublicKey,
-                webhookKeyHash: keyHash,
-                status: 'connected',
-                connectedAt: new Date()
-              }
-            });
-          }
-        }
 
         // Delete Onboarding Draft
         await this.draftRepo.deleteByUserId(userId);
