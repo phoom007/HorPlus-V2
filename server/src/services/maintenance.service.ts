@@ -279,7 +279,6 @@ export class MaintenanceService {
       dormitoryId: input.dormitoryId,
       maintenanceRequestId: input.requestId,
       assignedMemberId: input.assignedMemberId,
-      assignedLineIdentityId: null,
       assignedByUserId: input.assignedByUserId,
       assignedAt: new Date()
     });

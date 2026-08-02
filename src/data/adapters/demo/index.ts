@@ -46,7 +46,6 @@ import {
   Contract,
   MeterReading,
   Bill,
-  PaymentEvidence,
   Receipt,
   MaintenanceRequest,
   Announcement,
@@ -288,20 +287,9 @@ export class DemoBillingAdapter implements BillingDataSource {
   }
 }
 
-export class DemoPaymentAdapter implements PaymentDataSource {
-  async getAllSlips(): Promise<any[]> { return []; }
-  async getSlipByBillId(billId: string): Promise<any | null> { return null; }
-  async submitSlip(billId: string, slipImage: string, senderName: string, amount: number, transferDateTime: string, memo?: string): Promise<any> { return { success: false, error: { code: 'UNSUPPORTED' }}; }
-  async approvePayment(billId: string, actorUserId?: string): Promise<any> { return { success: false, error: { code: 'UNSUPPORTED' }}; }
-  async rejectPayment(billId: string, reason: string, actorUserId?: string): Promise<any> { return { success: false, error: { code: 'UNSUPPORTED' }}; }
-}
+export class DemoPaymentAdapter implements PaymentDataSource {}
 
-export class DemoReceiptAdapter implements ReceiptDataSource {
-  async getAll(): Promise<any[]> { return []; }
-  async getById(id: string): Promise<any | null> { return null; }
-  async getByBillId(billId: string): Promise<any | null> { return null; }
-  async getByTenantId(tenantId: string): Promise<any[]> { return []; }
-}
+export class DemoReceiptAdapter implements ReceiptDataSource {}
 
 export class DemoMaintenanceAdapter implements MaintenanceDataSource {
   async getAll(): Promise<MaintenanceRequest[]> {

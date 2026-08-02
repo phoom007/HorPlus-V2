@@ -63,7 +63,6 @@ export interface MaintenanceAssignmentEntity {
   dormitoryId: string;
   maintenanceRequestId: string;
   assignedMemberId: string;
-  assignedLineIdentityId?: string | null;
   status: 'assigned' | 'accepted' | 'completed' | 'revoked';
   assignedByUserId: string;
   assignedAt: Date;
@@ -280,7 +279,6 @@ export class InMemoryMaintenanceRepository {
       dormitoryId: data.dormitoryId,
       maintenanceRequestId: data.maintenanceRequestId,
       assignedMemberId: data.assignedMemberId,
-      assignedLineIdentityId: data.assignedLineIdentityId || null,
       status: 'assigned',
       assignedByUserId: data.assignedByUserId,
       assignedAt: data.assignedAt || now,

@@ -43,8 +43,6 @@ export interface AnnouncementRecipientEntity {
   dormitoryId: string;
   announcementId: string;
   tenantId: string;
-  tenantLineBindingId?: string | null;
-  lineIdentityId?: string | null;
   deliveryStatus: AnnouncementDeliveryStatus;
   readAt?: Date | null;
   createdAt: Date;
@@ -192,8 +190,6 @@ export class InMemoryAnnouncementRepository {
         dormitoryId,
         announcementId,
         tenantId: rec.tenantId,
-        tenantLineBindingId: rec.tenantLineBindingId || null,
-        lineIdentityId: rec.lineIdentityId || null,
         deliveryStatus: rec.deliveryStatus,
         readAt: rec.readAt || null,
         createdAt: now,

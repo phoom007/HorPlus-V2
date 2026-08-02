@@ -50,7 +50,6 @@ import { OccupancyService } from './services/occupancy.service.js';
 import { BillingCycleService } from './services/billing-cycle.service.js';
 import { MeterService } from './services/meter.service.js';
 import { BillingService } from './services/billing.service.js';
-import { InMemoryPaymentEvidenceStorage } from './services/storage-provider.service.js';
 import { auditService } from './services/audit.service.js';
 
 export interface CreateAppOptions {
@@ -109,8 +108,7 @@ export function createApp(optionsOrAuth?: CreateAppOptions | AuthenticationServi
   const billRepo = useInMemoryRepos ? new InMemoryBillRepository() : new PrismaBillRepository(prisma!);
 
   // Storage & Verification Providers
-  const storageProvider = new InMemoryPaymentEvidenceStorage();
-  const verificationProvider = process.env.NODE_ENV === 'production'
+    const verificationProvider = process.env.NODE_ENV === 'production'
 
   // Services
   const sensitiveFieldService = new SensitiveFieldService(env.FIELD_ENCRYPTION_KEY, env.FIELD_ENCRYPTION_KEY_VERSION);

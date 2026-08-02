@@ -3,7 +3,6 @@ import { getPrismaClient } from '../db/prisma.js';
 // LINE/LIFF authentication is removed. Tenant portal is temporarily unavailable.
 import { roomBillingStateService } from '../services/room-billing-state.service.js';
 import { InMemoryBillRepository } from '../db/repositories/bill.repository.js';
-import { InMemoryPaymentEvidenceStorage } from '../services/storage-provider.service.js';
 import { AuditService } from '../services/audit.service.js';
 import { MaintenanceService } from '../services/maintenance.service.js';
 import { AnnouncementService } from '../services/announcement.service.js';
@@ -15,8 +14,7 @@ export function createTenantPortalRouter(): Router {
 
   const auditService = new AuditService();
   const billRepo = new InMemoryBillRepository();
-  const storageProvider = new InMemoryPaymentEvidenceStorage();
-  
+
 
 
   const maintenanceService = new MaintenanceService();

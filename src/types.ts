@@ -226,20 +226,6 @@ export interface Bill {
   updatedAt: string;
 }
 
-export interface PaymentEvidence {
-  id: string;
-  billId: string;
-  slipImage: string; // base64 representation of slip or placeholder url
-  senderName: string;
-  amount: number;
-  transferDateTime: string;
-  memo?: string;
-  status: 'pending' | 'approved' | 'rejected';
-  rejectReason?: string;
-  verifiedAt?: string;
-  verifiedBy?: string;
-  createdAt: string;
-}
 
 export interface Receipt {
   id: string;

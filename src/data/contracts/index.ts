@@ -11,7 +11,6 @@ import {
   Contract,
   MeterReading,
   Bill,
-  PaymentEvidence,
   Receipt,
   MaintenanceRequest,
   Announcement,
@@ -105,20 +104,9 @@ export interface BillingDataSource {
   updateBillStatus(billId: string, status: Bill['status'], actorUserId?: string): Promise<DataResult<Bill>>;
 }
 
-export interface PaymentDataSource {
-  getAllSlips(): Promise<PaymentEvidence[]>;
-  getSlipByBillId(billId: string): Promise<PaymentEvidence | null>;
-  submitSlip(billId: string, slipImage: string, senderName: string, amount: number, transferDateTime: string, memo?: string): Promise<DataResult<PaymentEvidence>>;
-  approvePayment(billId: string, actorUserId?: string): Promise<DataResult<Receipt>>;
-  rejectPayment(billId: string, reason: string, actorUserId?: string): Promise<DataResult<boolean>>;
-}
+export interface PaymentDataSource {}
 
-export interface ReceiptDataSource {
-  getAll(): Promise<Receipt[]>;
-  getById(id: string): Promise<Receipt | null>;
-  getByBillId(billId: string): Promise<Receipt | null>;
-  getByTenantId(tenantId: string): Promise<Receipt[]>;
-}
+export interface ReceiptDataSource {}
 
 export interface MaintenanceDataSource {
   getAll(): Promise<MaintenanceRequest[]>;

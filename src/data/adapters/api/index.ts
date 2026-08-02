@@ -34,7 +34,6 @@ import {
   Contract,
   MeterReading,
   Bill,
-  PaymentEvidence,
   Receipt,
   MaintenanceRequest,
   Announcement,
@@ -388,119 +387,9 @@ export class ApiBillingAdapter implements BillingDataSource {
   }
 }
 
-export class ApiPaymentAdapter implements PaymentDataSource {
-  async getAllSlips(): Promise<PaymentEvidence[]> {
-    return httpRequest<PaymentEvidence[]>('GET', '/payments/slips');
-  }
+export class ApiPaymentAdapter implements PaymentDataSource {}
 
-  async getSlipByBillId(billId: string): Promise<PaymentEvidence | null> {
-    try {
-      return await httpRequest<PaymentEvidence>('GET', `/payments/slips/bill/${billId}`);
-    } catch (err: any) {
-      if (err instanceof HttpClientError && err.domainError.code === 'RESOURCE_NOT_FOUND') return null;
-      throw err;
-    }
-  }
-
-  async submitSlip(billId: string, slipImage: string, senderName: string, amount: number, transferDateTime: string, memo?: string): Promise<DataResult<PaymentEvidence>> {
-    try {
-      const data = await httpRequest<PaymentEvidence>('POST', `/payments/slips/bill/${billId}`, {
-        slipImage,
-        senderName,
-        amount,
-        transferDateTime,
-        memo
-      }, {
-        idempotencyKey: `slip_submit_${billId}`
-      });
-      return { success: true, data };
-    } catch (err: any) {
-      return {
-        success: false,
-        error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message }
-      };
-    }
-  }
-
-  async approvePayment(billId: string): Promise<DataResult<Receipt>> {
-    try {
-      const data = await httpRequest<Receipt>('POST', `/payments/approve/bill/${billId}`, {}, {
-        idempotencyKey: `payment_approve_${billId}`
-      });
-      return { success: true, data };
-    } catch (err: any) {
-      return {
-        success: false,
-        error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message }
-      };
-    }
-  }
-
-  async rejectPayment(billId: string, reason: string): Promise<DataResult<boolean>> {
-    try {
-      await httpRequest('POST', `/payments/reject/bill/${billId}`, { reason });
-      return { success: true, data: true };
-    } catch (err: any) {
-      return {
-        success: false,
-        error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message }
-      };
-    }
-  }
-
-  async submitManualPayment(params: { billId: string; method: string; amount: number; paidAt?: string; note?: string; approveImmediately?: boolean }): Promise<DataResult<any>> {
-    try {
-      const data = await httpRequest<any>('POST', '/payments/manual', params);
-      return { success: true, data };
-    } catch (err: any) {
-      return {
-        success: false,
-        error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message }
-      };
-    }
-  }
-
-  async getSummary(cycleId?: string): Promise<DataResult<any>> {
-    try {
-      const url = cycleId ? `/payments/summary?cycleId=${cycleId}` : '/payments/summary';
-      const data = await httpRequest<any>('GET', url);
-      return { success: true, data };
-    } catch (err: any) {
-      return {
-        success: false,
-        error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message }
-      };
-    }
-  }
-}
-
-export class ApiReceiptAdapter implements ReceiptDataSource {
-  async getAll(): Promise<Receipt[]> {
-    return httpRequest<Receipt[]>('GET', '/receipts');
-  }
-
-  async getById(id: string): Promise<Receipt | null> {
-    try {
-      return await httpRequest<Receipt>('GET', `/receipts/${id}`);
-    } catch (err: any) {
-      if (err instanceof HttpClientError && err.domainError.code === 'RESOURCE_NOT_FOUND') return null;
-      throw err;
-    }
-  }
-
-  async getByBillId(billId: string): Promise<Receipt | null> {
-    try {
-      return await httpRequest<Receipt>('GET', `/receipts/bill/${billId}`);
-    } catch (err: any) {
-      if (err instanceof HttpClientError && err.domainError.code === 'RESOURCE_NOT_FOUND') return null;
-      throw err;
-    }
-  }
-
-  async getByTenantId(tenantId: string): Promise<Receipt[]> {
-    return httpRequest<Receipt[]>('GET', `/receipts/tenant/${tenantId}`);
-  }
-}
+export class ApiReceiptAdapter implements ReceiptDataSource {}
 
 export class ApiMaintenanceAdapter implements MaintenanceDataSource {
   async getAll(): Promise<MaintenanceRequest[]> {
