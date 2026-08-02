@@ -51,7 +51,7 @@ import { OwnerReports } from './owner/reports';
 import { OwnerUsers } from './owner/users';
 import { OwnerSettings } from './owner/settings';
 import { OwnerRegister } from './owner/register';
-import { LineQuotaBadge } from '../components/LineQuotaBadge';
+
 
 interface SlidableNotificationItemProps {
   notif: {

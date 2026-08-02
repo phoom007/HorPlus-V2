@@ -22,7 +22,7 @@ import { TermsPage } from './pages/public/TermsPage';
 import { PrivacyPage } from './pages/public/PrivacyPage';
 
 import { OwnerLoginPage } from './pages/auth/OwnerLoginPage';
-import { TenantRegistrationPage } from './pages/tenant/TenantRegistrationPage';
+
 import { OnboardingWizard } from './pages/onboarding/OnboardingWizard';
 
 import { DemoPortal } from './pages/demo';
@@ -238,27 +238,7 @@ export default function App() {
         />
         <Route path="/tenant/login" element={<Navigate to="/demo" replace />} />
 
-        {/* Tenant Registration via LIFF */}
-        <Route
-          path="/liff/tenant/register"
-          element={
-            <TenantRegistrationPage
-              onLoginSuccess={(tenant) => {
-                setTenantDemoSession(tenant);
-              }}
-            />
-          }
-        />
-        <Route
-          path="/tenant/register"
-          element={
-            <TenantRegistrationPage
-              onLoginSuccess={(tenant) => {
-                setTenantDemoSession(tenant);
-              }}
-            />
-          }
-        />
+
 
         {/* Owner Onboarding Redirect to Owner Register */}
         <Route path="/onboarding/*" element={<Navigate to="/owner/register" replace />} />

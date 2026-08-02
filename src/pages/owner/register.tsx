@@ -40,7 +40,6 @@ import {
   Megaphone,
   MessageSquare
 } from 'lucide-react';
-import { LineIntegrationForm, LineOaData } from '../../components/owner/LineIntegrationForm';
 import { 
   saveDormitory, 
   saveBuildings, 
@@ -730,18 +729,6 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
       }
     }
 
-    if (stepNum === 6) {
-      const { lineOA } = formData;
-      if (!lineOA.skipped) {
-        if (!lineOA.channelId || !lineOA.channelId.trim()) {
-          return { valid: false, error: 'กรุณากรอก "LINE Channel ID"' };
-        }
-        if (!lineOA.channelSecret || !lineOA.channelSecret.trim()) {
-          return { valid: false, error: 'กรุณากรอก "LINE Channel Secret"' };
-        }
-      }
-    }
-
     return { valid: true };
   };
 
@@ -752,7 +739,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
       return;
     }
     setValidationError(null);
-    setCurrentStep(prev => Math.min(prev + 1, 6));
+    setCurrentStep(prev => Math.min(prev + 1, 5));
   };
 
   const handleStepClick = (stepNum: number) => {
@@ -931,7 +918,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
     { num: 3, title: 'ค่าเช่า & ค่าน้ำไฟ', sub: 'อัตราบริการ' },
     { num: 4, title: 'มัดจำ & บัญชี', sub: 'ประกัน & ธนาคาร' },
     { num: 5, title: 'กฎ & สัญญา', sub: 'ระเบียบ & ลายเซ็น' },
-    { num: 6, title: 'เชื่อมต่อ LINE OA', sub: 'Channel ID & Secret' }
+
   ];
 
   return (
@@ -2313,51 +2300,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
         </div>
       )}
 
-      {/* STEP 6: LINE OA Integration */}
-      {currentStep === 6 && (
-        <div className="bg-white p-4 sm:p-8 rounded-3xl border border-slate-100 shadow-xs space-y-6 animate-in fade-in duration-200">
-          <LineIntegrationForm
-            value={{
-              ...formData.lineOA,
-              webhookStatus: 'pending'
-            }}
-            onChange={(val) => setFormData({ ...formData, lineOA: val as any })}
-            onTestConnection={handleTestLineConnection}
-            testingLine={testingLine}
-            lineStatusMsg={lineStatusMsg}
-            mode="register"
-          />
 
-          {/* Registration Summary Card */}
-          <div className="bg-slate-50 p-4 sm:p-5 rounded-3xl border border-slate-200 space-y-3">
-            <h4 className="text-xs font-black text-slate-800 uppercase tracking-wide flex items-center gap-1.5">
-              <CheckCircle2 className="w-4 h-4 text-blue-600" /> สรุปข้อมูลหอพักพร้อมเปิดใช้งาน
-            </h4>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-              <div className="bg-white p-3 rounded-2xl border border-slate-100">
-                <span className="text-[10px] text-slate-400 font-bold block">ชื่อหอพัก</span>
-                <span className="font-extrabold text-slate-800 truncate block">{formData.dormName}</span>
-              </div>
-              <div className="bg-white p-3 rounded-2xl border border-slate-100">
-                <span className="text-[10px] text-slate-400 font-bold block">จำนวนอาคาร</span>
-                <span className="font-extrabold text-blue-600 block">{formData.buildings.length} อาคาร</span>
-              </div>
-              <div className="bg-white p-3 rounded-2xl border border-slate-100">
-                <span className="text-[10px] text-slate-400 font-bold block">รวมจำนวนห้องพัก</span>
-                <span className="font-extrabold text-slate-800 block">
-                  {formData.buildings.reduce((sum, b) => sum + getGeneratedRooms(b).length, 0)} ห้อง
-                </span>
-              </div>
-              <div className="bg-white p-3 rounded-2xl border border-slate-100">
-                <span className="text-[10px] text-slate-400 font-bold block">สถานะ LINE OA</span>
-                <span className="font-extrabold text-emerald-600 block font-bold">
-                  {formData.lineOA.skipped ? 'ยังไม่ได้เชื่อมต่อ — สามารถตั้งค่าได้ภายหลัง' : formData.lineOA.isConnected ? 'ตรวจสอบแล้ว (Webhook/LIFF รอยืนยัน)' : 'ยังไม่ระบุ'}
-                </span>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Bottom Step Control Actions */}
       <div className="space-y-3">
@@ -2390,7 +2333,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
           </button>
 
           <div className="flex items-center gap-2">
-            {currentStep < 6 ? (
+            {currentStep < 5 ? (
               <button
                 onClick={handleNextStep}
                 className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-2xl text-xs font-black transition-all flex items-center gap-2 shadow-md cursor-pointer"
@@ -2401,19 +2344,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
             ) : (
               <div className="flex items-center gap-2">
                 <button
-                  onClick={() => {
-                    setFormData({ ...formData, lineOA: { ...formData.lineOA, skipped: true } });
-                    handleSaveRegistration();
-                  }}
-                  className="px-5 sm:px-6 py-2.5 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-2xl text-xs sm:text-xs font-black transition-all cursor-pointer whitespace-nowrap"
-                >
-                  ข้ามไปก่อนและเปิดใช้งานหอพัก
-                </button>
-                <button
-                  onClick={() => {
-                    setFormData({ ...formData, lineOA: { ...formData.lineOA, skipped: false } });
-                    handleSaveRegistration();
-                  }}
+                  onClick={handleSaveRegistration}
                   className="px-5 sm:px-6 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl text-xs sm:text-xs font-black transition-all flex items-center gap-2 shadow-lg cursor-pointer whitespace-nowrap"
                 >
                   <Save className="w-4 h-4 shrink-0" />

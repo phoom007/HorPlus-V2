@@ -29,7 +29,6 @@ import {
 } from '../../data/mockData';
 import { ConfirmDialog, SignaturePad } from '../../components/GlobalComponents';
 
-import { LineIntegrationForm, LineOaData } from '../../components/owner/LineIntegrationForm';
 
 import { Dormitory, CycleRates } from '../../types';
 
@@ -109,13 +108,6 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
 
   const minCycle = '2026-01'; // Oldest month of system usage
 
-  const [lineOA, setLineOA] = useState<LineOaData>({
-    channelId: '',
-    channelSecret: '',
-    channelAccessToken: '',
-    isConnected: false,
-    webhookStatus: 'pending'
-  });
   const [testingLine, setTestingLine] = useState(false);
   const [lineStatusMsg, setLineStatusMsg] = useState<{ type: 'success' | 'error'; msg: string } | null>(null);
 
@@ -136,17 +128,7 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
             // Simple heuristic for webhook status
             if (data.status === 'connected') webhookStatus = 'verified';
             if (data.status === 'token_error') webhookStatus = 'failed';
-            setLineOA({
-              channelId: data.messagingChannelId || '',
-              channelSecret: data.channelSecretEncrypted ? '••••••••' : '',
-              channelAccessToken: data.channelAccessTokenEncrypted ? '••••••••' : '',
-              isConnected: data.status === 'connected',
-              botDisplayName: data.botDisplayName,
-              botPictureUrl: data.botPictureUrl,
-              webhookUrl: data.webhookPublicKey ? `${window.location.origin}/api/v1/webhooks/line/${data.webhookPublicKey}` : '',
-              liffId: data.liffId || '',
-              webhookStatus: webhookStatus as any
-            });
+            
           }
         }
       } catch (err) {
@@ -156,59 +138,6 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
     fetchLineSettings();
   }, []);
 
-  const handleTestLineConnection = async () => {
-    if (!lineOA.channelId || (!lineOA.channelSecret && !lineOA.channelAccessToken)) {
-      setLineStatusMsg({ type: 'error', msg: 'กรุณากรอก Channel ID และ Channel Secret / Access Token ให้ครบถ้วน' });
-      return;
-    }
-    setTestingLine(true);
-    setLineStatusMsg(null);
-
-    try {
-      const csrfMatch = document.cookie.match(/horplus_csrf=([^;]+)/);
-      const csrfToken = csrfMatch ? decodeURIComponent(csrfMatch[1]) : '';
-
-      // First save the credentials
-      await fetch('/api/v1/integrations/line', {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-CSRF-Token': csrfToken
-        },
-        body: JSON.stringify({
-          messagingChannelId: lineOA.channelId,
-          channelSecret: lineOA.channelSecret,
-          channelAccessToken: lineOA.channelAccessToken,
-          liffId: lineOA.liffId
-        })
-      });
-
-      // Then test connection
-      const res = await fetch('/api/v1/integrations/line/test', {
-        method: 'POST',
-        headers: { 'X-CSRF-Token': csrfToken }
-      });
-      const data = await res.json();
-      if (data.success) {
-        setLineStatusMsg({ type: 'success', msg: data.data?.message || 'การเชื่อมต่อสำเร็จ Webhook รอการ Verify จากฝั่ง LINE' });
-        setLineOA(prev => ({
-          ...prev,
-          isConnected: true,
-          botDisplayName: data.data?.botDisplayName || prev.botDisplayName,
-          botPictureUrl: data.data?.botPictureUrl || prev.botPictureUrl,
-          webhookStatus: 'pending' // Still pending until real webhook ping
-        }));
-      } else {
-        setLineStatusMsg({ type: 'error', msg: data.message || 'ไม่สามารถเชื่อมต่อได้ ตรวจสอบ Access Token' });
-        setLineOA(prev => ({ ...prev, isConnected: false }));
-      }
-    } catch (err) {
-      setLineStatusMsg({ type: 'error', msg: 'เกิดข้อผิดพลาดในการเชื่อมต่อ' });
-      setLineOA(prev => ({ ...prev, isConnected: false }));
-    } finally {
-      setTestingLine(false);
-    }
-  };
 
   const [isResetConfirmOpen, setIsResetConfirmOpen] = useState(false);
   const [resetSuccessNotice, setResetSuccessNotice] = useState(false);
