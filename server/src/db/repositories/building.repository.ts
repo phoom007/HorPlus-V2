@@ -7,6 +7,7 @@ export interface BuildingEntity {
   description?: string | null;
   status: string; // active, inactive, archived
   displayOrder: number;
+  numberingPattern?: string | null;
   createdAt: Date;
   updatedAt: Date;
   deletedAt?: Date | null;
@@ -20,6 +21,7 @@ export interface CreateBuildingData {
   description?: string | null;
   status?: string;
   displayOrder?: number;
+  numberingPattern?: string | null;
 }
 
 export interface BuildingFilterQuery {
@@ -36,9 +38,9 @@ export interface IBuildingRepository {
   findByName(dormitoryId: string, name: string): Promise<BuildingEntity | null>;
   findByCode(dormitoryId: string, code: string): Promise<BuildingEntity | null>;
   findAll(dormitoryId: string, filter?: BuildingFilterQuery): Promise<{ items: BuildingEntity[]; total: number }>;
-  create(dormitoryId: string, data: CreateBuildingData): Promise<BuildingEntity>;
-  update(id: string, dormitoryId: string, data: Partial<BuildingEntity>): Promise<BuildingEntity | null>;
-  archive(id: string, dormitoryId: string): Promise<BuildingEntity | null>;
+  create(dormitoryId: string, data: CreateBuildingData, tx?: any): Promise<BuildingEntity>;
+  update(id: string, dormitoryId: string, data: Partial<BuildingEntity>, tx?: any): Promise<BuildingEntity | null>;
+  archive(id: string, dormitoryId: string, tx?: any): Promise<BuildingEntity | null>;
 }
 
 export class InMemoryBuildingRepository implements IBuildingRepository {
@@ -105,7 +107,7 @@ export class InMemoryBuildingRepository implements IBuildingRepository {
     return { items, total };
   }
 
-  public async create(dormitoryId: string, data: CreateBuildingData): Promise<BuildingEntity> {
+  public async create(dormitoryId: string, data: CreateBuildingData, tx?: any): Promise<BuildingEntity> {
     const now = new Date();
     const id = data.id || `bldg-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
     const building: BuildingEntity = {
@@ -117,6 +119,7 @@ export class InMemoryBuildingRepository implements IBuildingRepository {
       description: data.description || null,
       status: data.status || 'active',
       displayOrder: data.displayOrder ?? 0,
+      numberingPattern: data.numberingPattern || null,
       createdAt: now,
       updatedAt: now,
     };
@@ -124,7 +127,7 @@ export class InMemoryBuildingRepository implements IBuildingRepository {
     return building;
   }
 
-  public async update(id: string, dormitoryId: string, data: Partial<BuildingEntity>): Promise<BuildingEntity | null> {
+  public async update(id: string, dormitoryId: string, data: Partial<BuildingEntity>, tx?: any): Promise<BuildingEntity | null> {
     const b = await this.findById(id, dormitoryId);
     if (!b) return null;
     const updated: BuildingEntity = {
@@ -136,7 +139,105 @@ export class InMemoryBuildingRepository implements IBuildingRepository {
     return updated;
   }
 
-  public async archive(id: string, dormitoryId: string): Promise<BuildingEntity | null> {
-    return this.update(id, dormitoryId, { status: 'archived', deletedAt: new Date() });
+  public async archive(id: string, dormitoryId: string, tx?: any): Promise<BuildingEntity | null> {
+    return this.update(id, dormitoryId, { status: 'archived', deletedAt: new Date() }, tx);
   }
 }
+
+export class PrismaBuildingRepository implements IBuildingRepository {
+  constructor(private prisma: any) {}
+
+  private getClient(tx?: any) {
+    return tx || this.prisma;
+  }
+
+  public async findById(id: string, dormitoryId?: string): Promise<BuildingEntity | null> {
+    const where: any = { id, deletedAt: null };
+    if (dormitoryId) {
+      where.dormitoryId = dormitoryId;
+    }
+    return this.prisma.building.findFirst({ where });
+  }
+
+  public async findByName(dormitoryId: string, name: string): Promise<BuildingEntity | null> {
+    return this.prisma.building.findFirst({
+      where: {
+        dormitoryId,
+        name: { equals: name, mode: 'insensitive' },
+        deletedAt: null,
+      },
+    });
+  }
+
+  public async findByCode(dormitoryId: string, code: string): Promise<BuildingEntity | null> {
+    return this.prisma.building.findFirst({
+      where: {
+        dormitoryId,
+        code: { equals: code, mode: 'insensitive' },
+        deletedAt: null,
+      },
+    });
+  }
+
+  public async findAll(dormitoryId: string, filter: BuildingFilterQuery = {}): Promise<{ items: BuildingEntity[]; total: number }> {
+    const where: any = {
+      dormitoryId,
+      deletedAt: null,
+      status: filter.status || { not: 'archived' },
+    };
+
+    if (filter.search) {
+      where.OR = [
+        { name: { contains: filter.search, mode: 'insensitive' } },
+        { code: { contains: filter.search, mode: 'insensitive' } },
+      ];
+    }
+
+    const page = filter.page && filter.page > 0 ? filter.page : 1;
+    const pageSize = filter.pageSize && filter.pageSize > 0 ? filter.pageSize : 20;
+    const skip = (page - 1) * pageSize;
+
+    const orderBy: any = {};
+    const sortBy = filter.sortBy || 'displayOrder';
+    orderBy[sortBy] = filter.sortDirection || 'asc';
+
+    const [items, total] = await Promise.all([
+      this.prisma.building.findMany({ where, skip, take: pageSize, orderBy }),
+      this.prisma.building.count({ where }),
+    ]);
+
+    return { items, total };
+  }
+
+  public async create(dormitoryId: string, data: CreateBuildingData, tx?: any): Promise<BuildingEntity> {
+    const client = this.getClient(tx);
+    return client.building.create({
+      data: {
+        id: data.id,
+        dormitoryId,
+        name: data.name,
+        code: data.code || null,
+        floorCount: data.floorCount || 1,
+        description: data.description || null,
+        status: data.status || 'active',
+        displayOrder: data.displayOrder ?? 0,
+        numberingPattern: data.numberingPattern || null,
+      },
+    });
+  }
+
+  public async update(id: string, dormitoryId: string, data: Partial<BuildingEntity>, tx?: any): Promise<BuildingEntity | null> {
+    const client = this.getClient(tx);
+    const existing = await client.building.findFirst({ where: { id, dormitoryId, deletedAt: null } });
+    if (!existing) return null;
+    return client.building.update({
+      where: { id },
+      data,
+    });
+  }
+
+  public async archive(id: string, dormitoryId: string, tx?: any): Promise<BuildingEntity | null> {
+    return this.update(id, dormitoryId, { status: 'archived', deletedAt: new Date() }, tx);
+  }
+}
+

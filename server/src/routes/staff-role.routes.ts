@@ -51,7 +51,6 @@ staffRoleRouter.post(
         res.status(400).json({ success: false, error: { code: 'INVALID_INPUT', message: 'followerId and roleCode are required' } });
         return;
       }
-
       const assignedByUserId = req.user?.id || req.auth?.userId || 'user-001';
       const result = await staffRoleAssignmentService.assignRole({
         dormitoryId: dormId,

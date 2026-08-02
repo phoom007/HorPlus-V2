@@ -7,9 +7,9 @@ import {
   MaintenanceFilterQuery
 } from '../db/repositories/maintenance.repository.js';
 import { LineRepository, lineRepository } from '../db/repositories/line.repository.js';
-import { InMemoryMembershipRepository } from '../db/repositories/membership.repository.js';
+import { IMembershipRepository, InMemoryMembershipRepository } from '../db/repositories/membership.repository.js';
 import { InMemoryRoomRepository } from '../db/repositories/room.repository.js';
-import { NotificationService } from './notification.service.ts';
+import { NotificationService } from './notification.service.js';
 
 export interface CreateMaintenanceInput {
   dormitoryId: string;
@@ -51,7 +51,7 @@ export interface UpdateMaintenanceStatusInput {
 export class MaintenanceService {
   constructor(
     private maintenanceRepo: InMemoryMaintenanceRepository = new InMemoryMaintenanceRepository(),
-    private membershipRepo: InMemoryMembershipRepository = new InMemoryMembershipRepository(),
+    private membershipRepo: IMembershipRepository = new InMemoryMembershipRepository(),
     private roomRepo: InMemoryRoomRepository = new InMemoryRoomRepository(),
     private lineRepo: LineRepository = lineRepository,
     private notificationService: NotificationService = new NotificationService()
@@ -278,7 +278,7 @@ export class MaintenanceService {
 
     // Get staff LINE identity if bound
     const roleAssignments = await this.lineRepo.listRoleAssignments(input.dormitoryId);
-    const staffRoleAssignment = roleAssignments.find(r => r.dormitoryMemberId === input.assignedMemberId && r.status === 'active');
+    const staffRoleAssignment = roleAssignments.find((r: any) => r.dormitoryMemberId === input.assignedMemberId && r.status === 'active');
 
     // Create assignment record
     const assignment = await this.maintenanceRepo.createAssignment({

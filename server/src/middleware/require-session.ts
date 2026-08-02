@@ -12,12 +12,16 @@ export interface AuthenticatedAuthContext {
   user: UserEntity;
   session: SessionEntity;
   memberships: DormitoryMemberEntity[];
+  dormitoryId?: string;
+  role?: string;
 }
 
 declare global {
   namespace Express {
     interface Request {
       auth?: AuthenticatedAuthContext;
+      user?: UserEntity;
+      dormitoryId?: string;
       cookies?: Record<string, string>;
     }
   }
@@ -46,6 +50,7 @@ export function createRequireSessionMiddleware(authService: AuthenticationServic
       const validated = await authService.validateSession(sessionCookie, requestId);
 
       if (!validated) {
+        console.error('Session invalid for cookie:', sessionCookie);
         return res.status(401).json({
           error: {
             code: 'SESSION_INVALID',
@@ -57,6 +62,8 @@ export function createRequireSessionMiddleware(authService: AuthenticationServic
         });
       }
 
+      console.log('require-session: memberships length =', validated.memberships.length, 'dormId =', validated.memberships[0]?.dormitoryId);
+      
       req.auth = {
         userId: validated.user.id,
         sessionId: validated.rawSessionId,
@@ -64,10 +71,12 @@ export function createRequireSessionMiddleware(authService: AuthenticationServic
         user: validated.user,
         session: validated.session,
         memberships: validated.memberships,
+        dormitoryId: validated.memberships[0]?.dormitoryId,
       };
 
       next();
     } catch (err: any) {
+      console.error('Session validation error:', err);
       return res.status(401).json({
         error: {
           code: 'SESSION_REQUIRED',

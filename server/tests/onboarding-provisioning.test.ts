@@ -13,24 +13,24 @@ describe('Onboarding & Provisioning API (TASK 011)', () => {
     const res = await request(app).get('/api/v1/public/plans');
     expect(res.status).toBe(200);
     expect(res.body.data).toBeDefined();
-    expect(res.body.data.length).toBe(6);
+    expect(res.body.data.length).toBe(2);
 
     const codes = res.body.data.map((p: any) => p.code);
-    expect(codes).toEqual(['FREE', 'MICRO', 'SMALL', 'MEDIUM', 'LARGE', 'ENTERPRISE']);
+    expect(codes).toEqual(['FREE', 'PAID']);
 
     const freePlan = res.body.data.find((p: any) => p.code === 'FREE');
     expect(freePlan.monthlyPrice).toBe('0.00');
     expect(freePlan.roomLimit).toBe(10);
 
-    const enterprisePlan = res.body.data.find((p: any) => p.code === 'ENTERPRISE');
-    expect(enterprisePlan.monthlyPrice).toBe('2999.00');
-    expect(enterprisePlan.roomLimit).toBeNull();
+    const paidPlan = res.body.data.find((p: any) => p.code === 'PAID');
+    expect(paidPlan.monthlyPrice).toBe('189.00');
+    expect(paidPlan.roomLimit).toBe(150);
   });
 
   it('POST /api/v1/onboarding/promo/validate validates HORPLUS promo code', async () => {
     // Perform mock login first using valid mock token
     const authRes = await request(app).post('/api/v1/auth/google').send({
-      idToken: 'mock_owner_001',
+      idToken: `mock_onboard_owner_${Date.now()}_${Math.random()}`,
     });
     expect(authRes.status).toBe(200);
     const cookies = authRes.headers['set-cookie'];
@@ -97,7 +97,7 @@ describe('Onboarding & Provisioning API (TASK 011)', () => {
 
   it('POST /api/v1/onboarding/complete provisions dormitory and handles idempotency + FREE limit', async () => {
     const authRes = await request(app).post('/api/v1/auth/google').send({
-      idToken: 'mock_owner_003',
+      idToken: `mock_onboard_owner_complete_${Date.now()}_${Math.random()}`,
     });
     expect(authRes.status).toBe(200);
     const cookies = authRes.headers['set-cookie'];
@@ -161,7 +161,7 @@ describe('Onboarding & Provisioning API (TASK 011)', () => {
       .set('Cookie', cookies)
       .set('X-CSRF-Token', csrfToken)
       .set('X-Idempotency-Key', idempotencyKey)
-      .send({ ...payload, planCode: 'MICRO' });
+      .send({ ...payload, planCode: 'PAID' });
 
     expect(conflictRes.status).toBe(409);
     expect(conflictRes.body.error.code).toBe('IDEMPOTENCY_KEY_REUSED');
@@ -180,4 +180,5 @@ describe('Onboarding & Provisioning API (TASK 011)', () => {
     expect(secondFreeRes.status).toBe(409);
     expect(secondFreeRes.body.error.code).toBe('FREE_DORMITORY_LIMIT_REACHED');
   });
+
 });

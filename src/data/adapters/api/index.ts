@@ -20,6 +20,7 @@ import {
   LineOaDataSource,
   StaffRoleDataSource,
   TenantRegistrationDataSource,
+  OccupancyDataSource,
   DataResult
 } from '../../contracts';
 
@@ -79,6 +80,30 @@ export class ApiDormitoryAdapter implements DormitoryDataSource {
     try {
       const data = await httpRequest<Building>('POST', '/buildings', buildingData);
       return { success: true, data };
+    } catch (err: any) {
+      return {
+        success: false,
+        error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message }
+      };
+    }
+  }
+
+  async updateBuilding(building: Building): Promise<DataResult<Building>> {
+    try {
+      const data = await httpRequest<Building>('PUT', `/buildings/${building.id}`, building);
+      return { success: true, data };
+    } catch (err: any) {
+      return {
+        success: false,
+        error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message }
+      };
+    }
+  }
+
+  async deleteBuilding(buildingId: string): Promise<DataResult<boolean>> {
+    try {
+      await httpRequest('DELETE', `/buildings/${buildingId}`);
+      return { success: true, data: true };
     } catch (err: any) {
       return {
         success: false,
@@ -731,6 +756,45 @@ export class ApiTenantRegistrationAdapter implements TenantRegistrationDataSourc
   }
 }
 
+export class ApiOccupancyAdapter implements OccupancyDataSource {
+  async getSummary(): Promise<DataResult<any>> {
+    try {
+      const data = await httpRequest<any>('GET', '/occupancy/summary');
+      return { success: true, data };
+    } catch (err: any) {
+      return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message } };
+    }
+  }
+
+  async getFloorPlan(buildingId?: string): Promise<DataResult<any>> {
+    try {
+      const url = buildingId ? `/occupancy/floor-plan?buildingId=${buildingId}` : '/occupancy/floor-plan';
+      const data = await httpRequest<any>('GET', url);
+      return { success: true, data };
+    } catch (err: any) {
+      return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message } };
+    }
+  }
+
+  async moveOut(occupancyId: string, moveOutDate: string): Promise<DataResult<any>> {
+    try {
+      const data = await httpRequest<any>('POST', `/occupancies/${occupancyId}/move-out`, { moveOutDate });
+      return { success: true, data };
+    } catch (err: any) {
+      return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message } };
+    }
+  }
+
+  async transferRoom(occupancyId: string, targetRoomId: string, transferDate: string): Promise<DataResult<any>> {
+    try {
+      const data = await httpRequest<any>('POST', `/occupancies/${occupancyId}/transfer`, { targetRoomId, transferDate });
+      return { success: true, data };
+    } catch (err: any) {
+      return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message } };
+    }
+  }
+}
+
 export class ApiDataProvider implements HorPlusDataProvider {
   public dormitories = new ApiDormitoryAdapter();
   public rooms = new ApiRoomAdapter();
@@ -747,4 +811,5 @@ export class ApiDataProvider implements HorPlusDataProvider {
   public lineOa = new ApiLineOaAdapter();
   public staffRoles = new ApiStaffRoleAdapter();
   public tenantRegistrations = new ApiTenantRegistrationAdapter();
+  public occupancies = new ApiOccupancyAdapter();
 }

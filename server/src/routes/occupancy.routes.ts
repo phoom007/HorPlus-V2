@@ -50,5 +50,43 @@ export function createOccupancyRouter(
     }
   });
 
+  // POST /api/v1/occupancies/:id/move-out
+  router.post('/:id/move-out', requireSession, async (req: Request, res: Response) => {
+    try {
+      const dormId = getDormitoryId(req);
+      const occupancyId = req.params.id;
+      const { moveOutDate } = req.body;
+      const userId = req.auth?.userId;
+
+      if (!userId) {
+        return res.status(401).json({ error: { code: 'UNAUTHORIZED', message: 'Unauthorized' } });
+      }
+      
+      const result = await occupancyService.moveOut(dormId, occupancyId, moveOutDate, userId);
+      res.json({ data: result });
+    } catch (err) {
+      handleServiceError(res, err, req);
+    }
+  });
+
+  // POST /api/v1/occupancies/:id/transfer
+  router.post('/:id/transfer', requireSession, async (req: Request, res: Response) => {
+    try {
+      const dormId = getDormitoryId(req);
+      const occupancyId = req.params.id;
+      const { targetRoomId, transferDate } = req.body;
+      const userId = req.auth?.userId;
+
+      if (!userId) {
+        return res.status(401).json({ error: { code: 'UNAUTHORIZED', message: 'Unauthorized' } });
+      }
+
+      const result = await occupancyService.transferRoom(dormId, occupancyId, targetRoomId, transferDate, userId);
+      res.json({ data: result });
+    } catch (err) {
+      handleServiceError(res, err, req);
+    }
+  });
+
   return router;
 }

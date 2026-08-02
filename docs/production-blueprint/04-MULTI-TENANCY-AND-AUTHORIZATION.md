@@ -1,3 +1,7 @@
+> [!WARNING]
+> **[STATUS: SUPERSEDED_IN_PART]**
+> Some or all rules in this document may be superseded. Always refer to **[21-CURRENT-PRODUCT-RULE-LOCK.md](./21-CURRENT-PRODUCT-RULE-LOCK.md)** as the absolute source of truth.
+
 # 04. Multi-tenancy and Authorization
 
 ## 1. Tenant Boundary
@@ -84,4 +88,5 @@ RLS อย่างเดียวไม่พอ Service ต้องตรว�
 - คนที่ 11 ถูกปฏิเสธแบบ atomic
 - revoke role มีผลกับ session/LIFF revalidation
 - connection pool ไม่ทำ RLS context รั่ว
+
 

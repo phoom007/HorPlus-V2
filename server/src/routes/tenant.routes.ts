@@ -100,8 +100,7 @@ export function createTenantRouter(
           },
         });
       }
-
-      const tenant = await tenantService.createTenant(dormId, parsed.data, req.auth?.userId);
+      const tenant = await tenantService.createTenant(dormId, parsed.data as any, req.auth?.userId);
       res.status(201).json({ data: tenant });
     } catch (err) {
       handleServiceError(res, err, req);
@@ -125,8 +124,7 @@ export function createTenantRouter(
           },
         });
       }
-
-      const tenant = await tenantService.updateTenant(req.params.id, dormId, parsed.data, req.auth?.userId);
+      const tenant = await tenantService.updateTenant(req.params.id, dormId, parsed.data as any, req.auth?.userId);
       res.json({ data: tenant });
     } catch (err) {
       handleServiceError(res, err, req);
@@ -148,26 +146,12 @@ export function createTenantRouter(
   // POST /api/v1/tenants/:id/co-occupants
   router.post('/:id/co-occupants', requireSession, async (req: Request, res: Response) => {
     if (!verifyCsrf(req, res)) return;
-    try {
-      const dormId = getDormitoryId(req);
-      const parsed = CreateCoOccupantSchema.safeParse(req.body);
-      if (!parsed.success) {
-        return res.status(400).json({
-          error: {
-            code: 'VALIDATION_ERROR',
-            message: 'ข้อมูลผู้พักร่วมไม่ถูกต้อง',
-            fieldErrors: parsed.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })),
-            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
-            timestamp: new Date().toISOString(),
-          },
-        });
+    return res.status(403).json({
+      error: {
+        code: 'DEFERRED_BY_PRODUCT_POLICY',
+        message: 'การเพิ่มหรือแก้ไขผู้พักร่วมถูกจัดการโดยผู้เช่าหลักเท่านั้น'
       }
-
-      const coOccupant = await tenantService.addCoOccupant(dormId, req.params.id, parsed.data);
-      res.status(201).json({ data: coOccupant });
-    } catch (err) {
-      handleServiceError(res, err, req);
-    }
+    });
   });
 
   // POST /api/v1/tenants/:id/emergency-contacts

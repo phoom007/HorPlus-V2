@@ -539,7 +539,7 @@ export const createInitialBills = (): Bill[] => {
       // 5 checking slips and 5 rejected slips for current month
       if (isCurrentMonth) {
         if ([1, 2, 3, 4, 5].includes(cIdx)) {
-          status = 'checking'; // 5 rooms waiting for slip verification (A102, A103, A104, A105, A202)
+          status = 'checking'; // 5 rooms waiting for approval (A102, A103, A104, A105, A202)
         } else if ([6, 8, 11, 12, 13].includes(cIdx)) {
           status = 'rejected'; // 5 rooms with rejected slips
         } else if ([9, 10, 14].includes(cIdx)) {

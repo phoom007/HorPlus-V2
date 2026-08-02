@@ -1,3 +1,7 @@
+> [!WARNING]
+> **[STATUS: SUPERSEDED_IN_PART]**
+> Some or all rules in this document may be superseded. Always refer to **[21-CURRENT-PRODUCT-RULE-LOCK.md](./21-CURRENT-PRODUCT-RULE-LOCK.md)** as the absolute source of truth.
+
 # 06. Subscription, Trial and Entitlement
 
 ## 1. Offers
@@ -100,4 +104,5 @@ Restricted:
 - promo จำกัด 100 แบบ atomic
 - entitlement ข้ามหอไม่รั่ว
 - client ปลอม paid/roomLimit ไม่ผ่าน
+
 

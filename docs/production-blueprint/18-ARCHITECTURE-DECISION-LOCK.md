@@ -1,3 +1,7 @@
+> [!WARNING]
+> **[STATUS: SUPERSEDED]**
+> This document is entirely superseded. Always refer to **[21-CURRENT-PRODUCT-RULE-LOCK.md](./21-CURRENT-PRODUCT-RULE-LOCK.md)** as the absolute source of truth.
+
 # 18. Architecture Decision Lock
 
 นี่คือ checklist สั้นที่ agent ต้องตรวจทุกงาน
@@ -29,7 +33,7 @@
 - 3 roles only
 - total 10 staff accounts/dorm
 - room belongs to building
-- unique room per building
+- unique room per dormitory
 - per-dorm LINE OA
 - Free 10 rooms/30 sends
 - Paid 150 rooms/300 sends
@@ -66,4 +70,5 @@ PR/agent output ต้องถูก reject หาก:
 - Tenant เห็น Draft
 - Tech เห็น Finance
 - เชื่อ client amount/role/dormitory
+
 

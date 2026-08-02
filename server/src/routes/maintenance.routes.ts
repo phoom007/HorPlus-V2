@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { MaintenanceService } from '../services/maintenance.service.ts';
+import { MaintenanceService } from '../services/maintenance.service.js';
 import { extractUnifiedActor } from '../middleware/unified-actor.middleware.js';
 
 export function createMaintenanceRouter(maintenanceService: MaintenanceService = new MaintenanceService()): Router {

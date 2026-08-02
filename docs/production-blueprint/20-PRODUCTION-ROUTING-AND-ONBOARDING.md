@@ -1,3 +1,7 @@
+> [!WARNING]
+> **[STATUS: SUPERSEDED_IN_PART]**
+> Some or all rules in this document may be superseded. Always refer to **[21-CURRENT-PRODUCT-RULE-LOCK.md](./21-CURRENT-PRODUCT-RULE-LOCK.md)** as the absolute source of truth.
+
 # 20. Production Routing and Onboarding
 
 ## 1. Route Zones
@@ -86,4 +90,5 @@ follow OA → LIFF → choose available room
 - optional LINE connection มี just-in-time guard
 - route guard refresh/deep link ทำงาน
 - demo session/data ไม่ปะปน production API
+
 

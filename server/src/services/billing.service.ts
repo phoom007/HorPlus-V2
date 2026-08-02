@@ -11,6 +11,7 @@ import { IContractRepository } from '../db/repositories/contract.repository.js';
 import { IRoomRepository } from '../db/repositories/room.repository.js';
 import { ITenantRepository } from '../db/repositories/tenant.repository.js';
 import { AuditService } from './audit.service.js';
+import { toDecimal, addDecimals, mulDecimals, formatDecimal, subDecimals, compareDecimals, isZeroDecimal } from '../utils/decimal-math.util.js';
 
 export interface GenerateBillDto {
   billingCycleId: string;
@@ -79,10 +80,10 @@ export class BillingService {
     }
 
     const rateSnapshot = await this.billingCycleRepo.findRateSnapshot(billingCycleId, dormitoryId);
-    const waterRate = Number(rateSnapshot?.waterRate || '18.00');
-    const elecRate = Number(rateSnapshot?.electricityRate || '7.00');
-    const commonFee = Number(rateSnapshot?.commonFee || '0.00');
-    const internetFee = Number(rateSnapshot?.internetFee || '0.00');
+    const waterRate = toDecimal(rateSnapshot?.waterRate || '18.00');
+    const elecRate = toDecimal(rateSnapshot?.electricityRate || '7.00');
+    const commonFee = toDecimal(rateSnapshot?.commonFee || '0.00');
+    const internetFee = toDecimal(rateSnapshot?.internetFee || '0.00');
 
     // Find active contract for room
     const activeContracts = await this.contractRepo.findActiveContractsForRoom(dormitoryId, roomId);
@@ -108,84 +109,84 @@ export class BillingService {
       'electricity'
     );
 
-    const waterUsage = Number(waterReading?.usageUnits || '0.00');
-    const elecUsage = Number(elecReading?.usageUnits || '0.00');
+    const waterUsage = toDecimal(waterReading?.usageUnits || '0.00');
+    const elecUsage = toDecimal(elecReading?.usageUnits || '0.00');
 
-    const waterAmount = (waterUsage * waterRate).toFixed(2);
-    const elecAmount = (elecUsage * elecRate).toFixed(2);
-    const rentAmount = Number(contract.rentAmount).toFixed(2);
+    const waterAmount = mulDecimals(waterUsage, waterRate);
+    const elecAmount = mulDecimals(elecUsage, elecRate);
+    const rentAmount = toDecimal(contract.rentAmount);
 
     const items: Array<{ type: string; description: string; quantity: string; unitPrice: string; amount: string }> = [
       {
         type: 'rent',
         description: 'ค่าเช่าห้องพัก',
         quantity: '1.00',
-        unitPrice: rentAmount,
-        amount: rentAmount,
+        unitPrice: formatDecimal(rentAmount),
+        amount: formatDecimal(rentAmount),
       },
     ];
 
-    if (waterUsage > 0 || waterRate > 0) {
+    if (!isZeroDecimal(waterUsage) || !isZeroDecimal(waterRate)) {
       items.push({
         type: 'water',
-        description: `ค่าน้ำประปา (${waterUsage} หน่วย)`,
-        quantity: waterUsage.toFixed(2),
-        unitPrice: waterRate.toFixed(2),
-        amount: waterAmount,
+        description: `ค่าน้ำประปา (${formatDecimal(waterUsage)} หน่วย)`,
+        quantity: formatDecimal(waterUsage),
+        unitPrice: formatDecimal(waterRate),
+        amount: formatDecimal(waterAmount),
       });
     }
 
-    if (elecUsage > 0 || elecRate > 0) {
+    if (!isZeroDecimal(elecUsage) || !isZeroDecimal(elecRate)) {
       items.push({
         type: 'electricity',
-        description: `ค่าไฟฟ้า (${elecUsage} หน่วย)`,
-        quantity: elecUsage.toFixed(2),
-        unitPrice: elecRate.toFixed(2),
-        amount: elecAmount,
+        description: `ค่าไฟฟ้า (${formatDecimal(elecUsage)} หน่วย)`,
+        quantity: formatDecimal(elecUsage),
+        unitPrice: formatDecimal(elecRate),
+        amount: formatDecimal(elecAmount),
       });
     }
 
-    if (commonFee > 0) {
+    if (!isZeroDecimal(commonFee)) {
       items.push({
         type: 'common_fee',
         description: 'ค่าส่วนกลาง',
         quantity: '1.00',
-        unitPrice: commonFee.toFixed(2),
-        amount: commonFee.toFixed(2),
+        unitPrice: formatDecimal(commonFee),
+        amount: formatDecimal(commonFee),
       });
     }
 
-    if (internetFee > 0) {
+    if (!isZeroDecimal(internetFee)) {
       items.push({
         type: 'internet',
         description: 'ค่าบริการอินเทอร์เน็ต',
         quantity: '1.00',
-        unitPrice: internetFee.toFixed(2),
-        amount: internetFee.toFixed(2),
+        unitPrice: formatDecimal(internetFee),
+        amount: formatDecimal(internetFee),
       });
     }
 
-    let subtotal = 0;
+    let subtotal = toDecimal('0.00');
     for (const item of items) {
-      subtotal += Number(item.amount);
+      subtotal = addDecimals(subtotal, item.amount);
     }
 
     return {
       contractId: contract.id,
       roomId,
       tenantId: contract.tenantId,
-      rentAmount,
-      waterUsage: waterUsage.toFixed(2),
-      waterRate: waterRate.toFixed(2),
-      waterAmount,
-      electricityUsage: elecUsage.toFixed(2),
-      electricityRate: elecRate.toFixed(2),
-      electricityAmount: elecAmount,
-      commonFee: commonFee.toFixed(2),
-      internetFee: internetFee.toFixed(2),
-      subtotal: subtotal.toFixed(2),
+      rentAmount: formatDecimal(rentAmount),
+      waterUsage: formatDecimal(waterUsage),
+      waterRate: formatDecimal(waterRate),
+      waterAmount: formatDecimal(waterAmount),
+      electricityUsage: formatDecimal(elecUsage),
+      electricityRate: formatDecimal(elecRate),
+      electricityAmount: formatDecimal(elecAmount),
+      commonFee: formatDecimal(commonFee),
+      internetFee: formatDecimal(internetFee),
+      subtotal: formatDecimal(subtotal),
       discountAmount: '0.00',
-      totalAmount: subtotal.toFixed(2),
+      totalAmount: formatDecimal(subtotal),
       items,
     };
   }
@@ -194,33 +195,35 @@ export class BillingService {
     dormitoryId: string,
     data: GenerateBillDto,
     userId?: string
-  ): Promise<{ bill: BillEntity; items: BillItemEntity[] }> {
-    const cycle = await this.billingCycleRepo.findById(data.billingCycleId, dormitoryId);
-    if (!cycle) {
-      const err = new Error('BILLING_CYCLE_NOT_FOUND');
-      (err as any).statusCode = 404;
-      (err as any).code = 'BILLING_CYCLE_NOT_FOUND';
-      throw err;
-    }
+  ): Promise<{ bill: BillEntity; items: BillItemEntity[]; created: boolean }> {
+    return this.billRepo.withTransaction(async (tx) => {
+      await this.billRepo.executeRawLock(data.roomId, tx);
 
-    if (cycle.status === 'locked' || cycle.status === 'completed') {
-      const err = new Error('BILLING_CYCLE_LOCKED');
-      (err as any).statusCode = 400;
-      (err as any).code = 'BILLING_CYCLE_LOCKED';
-      throw err;
-    }
+      const cycle = await this.billingCycleRepo.findById(data.billingCycleId, dormitoryId);
+      if (!cycle) {
+        const err = new Error('BILLING_CYCLE_NOT_FOUND');
+        (err as any).statusCode = 404;
+        (err as any).code = 'BILLING_CYCLE_NOT_FOUND';
+        throw err;
+      }
 
-    const existingBill = await this.billRepo.findByCycleAndContract(
-      dormitoryId,
-      data.billingCycleId,
-      data.contractId
-    );
-    if (existingBill) {
-      const err = new Error('BILL_ALREADY_EXISTS_FOR_CONTRACT');
-      (err as any).statusCode = 409;
-      (err as any).code = 'BILL_ALREADY_EXISTS_FOR_CONTRACT';
-      throw err;
-    }
+      if (cycle.status === 'locked' || cycle.status === 'completed') {
+        const err = new Error('BILLING_CYCLE_LOCKED');
+        (err as any).statusCode = 400;
+        (err as any).code = 'BILLING_CYCLE_LOCKED';
+        throw err;
+      }
+
+      const existingBill = await this.billRepo.findByCycleAndContract(
+        dormitoryId,
+        data.billingCycleId,
+        data.contractId,
+        tx
+      );
+      if (existingBill) {
+        const items = await this.billRepo.getBillItems(existingBill.id, dormitoryId, tx);
+        return { bill: existingBill, items, created: false };
+      }
 
     const preview = await this.generateBillPreview(dormitoryId, data.billingCycleId, data.roomId);
     const rateSnapshot = await this.billingCycleRepo.findRateSnapshot(data.billingCycleId, dormitoryId);
@@ -247,13 +250,14 @@ export class BillingService {
       });
     }
 
-    let subtotalNum = 0;
+    let subtotalDec = toDecimal('0.00');
     for (const item of billItems) {
-      subtotalNum += Number(item.amount);
+      subtotalDec = addDecimals(subtotalDec, item.amount);
     }
 
-    const discountNum = Number(data.discountAmount || '0.00');
-    const totalNum = Math.max(0, subtotalNum - discountNum);
+    const discountDec = toDecimal(data.discountAmount || '0.00');
+    const rawTotal = subDecimals(subtotalDec, discountDec);
+    const totalDec = compareDecimals(rawTotal, '0.00') < 0 ? toDecimal('0.00') : rawTotal;
 
     const billingDate = data.billingDate ? new Date(data.billingDate) : new Date(cycle.billingDate);
     const dueDate = data.dueDate ? new Date(data.dueDate) : new Date(cycle.dueDate);
@@ -262,39 +266,64 @@ export class BillingService {
     const billSeq = (countRes.total + 1).toString().padStart(4, '0');
     const billNumber = `INV-${cycle.cycleCode}-${billSeq}`;
 
-    const { bill, items } = await this.billRepo.create(
-      dormitoryId,
-      {
-        billingCycleId: data.billingCycleId,
-        contractId: data.contractId,
-        roomId: data.roomId,
-        tenantId: data.tenantId,
-        billNumber,
-        status: 'unpaid',
-        billingDate,
-        dueDate,
-        subtotal: subtotalNum.toFixed(2),
-        discountAmount: discountNum.toFixed(2),
-        totalAmount: totalNum.toFixed(2),
-        outstandingAmount: totalNum.toFixed(2),
-        rateSnapshotId: rateSnapshot?.id,
-        generatedByUserId: userId,
-      },
-      billItems
-    );
+      let createdData;
+      try {
+        createdData = await this.billRepo.create(
+          dormitoryId,
+          {
+            billingCycleId: data.billingCycleId,
+            contractId: data.contractId,
+            roomId: data.roomId,
+            tenantId: data.tenantId,
+            billNumber,
+            status: 'unpaid',
+            billingDate,
+            dueDate,
+            subtotal: formatDecimal(subtotalDec),
+            discountAmount: formatDecimal(discountDec),
+            totalAmount: formatDecimal(totalDec),
+            outstandingAmount: formatDecimal(totalDec),
+            rateSnapshotId: rateSnapshot?.id,
+            generatedByUserId: userId,
+          },
+          billItems,
+          tx
+        );
+      } catch (err: any) {
+        if (err.code === 'P2002') {
+          const doubleCheckExisting = await this.billRepo.findByCycleAndContract(
+            dormitoryId,
+            data.billingCycleId,
+            data.contractId,
+            tx
+          );
+          if (doubleCheckExisting) {
+            const items = await this.billRepo.getBillItems(doubleCheckExisting.id, dormitoryId, tx);
+            return { bill: doubleCheckExisting, items, created: false };
+          }
+          const e = new Error('BILL_ALREADY_EXISTS_FOR_CONTRACT');
+          (e as any).statusCode = 409;
+          (e as any).code = 'BILL_ALREADY_EXISTS_FOR_CONTRACT';
+          throw e;
+        }
+        throw err;
+      }
 
-    if (this.auditService) {
-      await this.auditService.log({
-        dormitoryId,
-        actorUserId: userId || 'system',
-        action: 'bill.generate',
-        resourceType: 'bill',
-        resourceId: bill.id,
-        payload: { billNumber, totalAmount: bill.totalAmount },
-      });
-    }
+      const { bill, items } = createdData;
 
-    return { bill, items };
+      if (this.auditService) {
+        await this.auditService.log({
+          dormitoryId,
+          actorUserId: userId || 'system',
+          action: 'bill.generate',
+          resourceType: 'bill',
+          resourceId: bill.id,
+          details: { billNumber, cycle: cycle.cycleCode },
+        });
+      }
+
+      return { bill, items, created: true };
+    });
   }
 
   public async bulkGenerateBills(
@@ -436,7 +465,7 @@ export class BillingService {
         action: 'bill.cancel',
         resourceType: 'bill',
         resourceId: id,
-        payload: { reason },
+        details: { reason },
       });
     }
 

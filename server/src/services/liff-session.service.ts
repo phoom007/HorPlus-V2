@@ -2,7 +2,8 @@ import crypto from 'crypto';
 import { LineRepository, lineRepository } from '../db/repositories/line.repository.js';
 import {
   LiffIdentityVerifier,
-  MockLiffIdentityVerifier
+  MockLiffIdentityVerifier,
+  ProductionLiffIdentityVerifierSkeleton
 } from './line-provider.interface.js';
 
 export interface WorkspaceItem {
@@ -41,7 +42,9 @@ const LINE_SESSIONS = new Map<string, LineSessionData>();
 export class LiffSessionService {
   constructor(
     private repo: LineRepository = lineRepository,
-    private liffVerifier: LiffIdentityVerifier = new MockLiffIdentityVerifier()
+    private liffVerifier: LiffIdentityVerifier = process.env.NODE_ENV === 'production'
+      ? new ProductionLiffIdentityVerifierSkeleton()
+      : new MockLiffIdentityVerifier()
   ) {}
 
   async exchangeIdToken(params: {
@@ -51,11 +54,8 @@ export class LiffSessionService {
     const verified = await this.liffVerifier.verifyIdentityToken({ idToken: params.idToken });
 
     // Upsert line identity
-    const identity = await this.repo.upsertLineIdentity({
-      lineUserId: verified.lineUserId,
-      displayName: verified.displayName,
-      pictureUrl: verified.pictureUrl
-    });
+    const identity = await this.repo.upsertLineIdentity(verified.lineUserId, { displayName: verified.displayName, pictureUrl: verified.pictureUrl
+     });
 
     const dormitoryId = params.dormitoryId;
 

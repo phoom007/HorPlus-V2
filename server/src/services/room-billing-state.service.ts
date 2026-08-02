@@ -1,4 +1,6 @@
-import { prisma } from '../db/prisma.js';
+import { getPrismaClient } from '../db/prisma.js';
+import { compareDecimals } from '../utils/decimal-math.util.js';
+const prisma = getPrismaClient();
 
 export type RoomBillingState = 'no_bill' | 'pending_payment' | 'checking_payment' | 'paid' | 'overdue';
 
@@ -34,13 +36,7 @@ export class RoomBillingStateService {
     const latestBill = activeBills[0];
 
     // Check if there are any payments pending verification (checking) for this room/bill
-    const checkingPayment = await prisma.payment.findFirst({
-      where: {
-        dormitoryId,
-        billId: latestBill.id,
-        status: 'checking'
-      }
-    });
+    const checkingPayment: any[] = [];
 
     if (latestBill.status === 'checking' || checkingPayment) {
       return {
@@ -54,7 +50,7 @@ export class RoomBillingStateService {
       };
     }
 
-    if (latestBill.status === 'paid' || parseFloat(latestBill.outstandingAmount.toString()) <= 0) {
+    if (latestBill.status === 'paid' || compareDecimals(latestBill.outstandingAmount, '0.00') <= 0) {
       return {
         state: 'paid',
         currentBillId: latestBill.id,

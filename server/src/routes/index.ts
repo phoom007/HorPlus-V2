@@ -17,19 +17,15 @@ import { createOccupancyRouter } from './occupancy.routes.js';
 import { createBillingCycleRouter } from './billing-cycle.routes.js';
 import { createMeterRouter } from './meter.routes.js';
 import { createBillingRouter } from './billing.routes.js';
-import { createPaymentRouter } from './payment.routes.js';
-import { createPaymentEvidenceRouter } from './payment-evidence.routes.js';
-import { createReceiptRouter } from './receipt.routes.js';
 import { lineIntegrationRouter } from './line-integration.routes.js';
-import { lineWebhookRouter } from './line-webhook.routes.js';
 import { staffRoleRouter } from './staff-role.routes.js';
-import { tenantRegistrationRouter } from './tenant-registration.routes.js';
+import { moveOutRouter } from './move-out.routes.js';
 import { liffSessionRouter } from './liff-session.routes.js';
 import { lineQuotaRouter } from './line-quota.routes.js';
 import { createTenantPortalRouter } from './tenant-portal.routes.js';
-import { createMaintenanceRouter } from './maintenance.routes.ts';
-import { createAnnouncementRouter } from './announcement.routes.ts';
-import { createNotificationRouter, createTenantNotificationRouter } from './notification.routes.ts';
+import { createMaintenanceRouter } from './maintenance.routes.js';
+import { createAnnouncementRouter } from './announcement.routes.js';
+import { createNotificationRouter, createTenantNotificationRouter } from './notification.routes.js';
 import { BuildingService } from '../services/building.service.js';
 import { RoomService } from '../services/room.service.js';
 import { TenantService } from '../services/tenant.service.js';
@@ -38,8 +34,6 @@ import { OccupancyService } from '../services/occupancy.service.js';
 import { BillingCycleService } from '../services/billing-cycle.service.js';
 import { MeterService } from '../services/meter.service.js';
 import { BillingService } from '../services/billing.service.js';
-import { PaymentService } from '../services/payment.service.js';
-import { ReceiptGenerationService } from '../services/receipt.service.js';
 
 export interface AppApiDependencies {
   authService: AuthenticationService;
@@ -56,13 +50,9 @@ export interface AppApiDependencies {
   billingCycleService?: BillingCycleService;
   meterService?: MeterService;
   billingService?: BillingService;
-  paymentService?: PaymentService;
-  receiptService?: ReceiptGenerationService;
   dormitoryRepo: any;
   billingRepo: any;
-  paymentRepo: any;
-  receiptRepo?: any;
-  subRepo: any;
+      subRepo: any;
   planRepo: any;
   membershipRepo: any;
   roleRepo: any;
@@ -104,7 +94,6 @@ export function createApiRouter(deps: AppApiDependencies | AuthenticationService
         fullDeps.authService,
         fullDeps.dormitoryRepo,
         fullDeps.billingRepo,
-        fullDeps.paymentRepo,
         fullDeps.subRepo,
         fullDeps.planRepo,
         fullDeps.sensitiveFieldService,
@@ -133,19 +122,11 @@ export function createApiRouter(deps: AppApiDependencies | AuthenticationService
     if (fullDeps.billingService) {
       router.use('/bills', createBillingRouter(fullDeps.authService, fullDeps.billingService));
     }
-    if (fullDeps.paymentService) {
-      router.use('/payments', createPaymentRouter(fullDeps.authService, fullDeps.paymentService));
-      router.use('/payment-evidence', createPaymentEvidenceRouter(fullDeps.authService, fullDeps.paymentService));
-    }
-    if (fullDeps.receiptService) {
-      router.use('/receipts', createReceiptRouter(fullDeps.authService, fullDeps.receiptService));
-    }
 
     // LINE OA, Staff Role, Tenant Registration & LIFF Session routes
     router.use('/', lineIntegrationRouter);
-    router.use('/', lineWebhookRouter);
     router.use('/', staffRoleRouter);
-    router.use('/', tenantRegistrationRouter);
+    router.use('/', moveOutRouter);
     router.use('/', liffSessionRouter);
     router.use('/', lineQuotaRouter);
     router.use('/maintenance-requests', createMaintenanceRouter());

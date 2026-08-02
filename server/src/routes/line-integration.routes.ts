@@ -27,12 +27,10 @@ lineIntegrationRouter.put(
     try {
       const dormId = req.dormitoryId || 'dorm-001';
       const { messagingChannelId, channelSecret, lineLoginChannelId, liffId, liffEndpointUrl } = req.body;
-
       if (!messagingChannelId || !channelSecret) {
         res.status(400).json({ success: false, error: { code: 'INVALID_INPUT', message: 'messagingChannelId and channelSecret are required' } });
         return;
       }
-
       const userId = req.user?.id || req.auth?.userId;
       const updated = await lineIntegrationService.saveIntegrationSettings({
         dormitoryId: dormId,
@@ -58,7 +56,8 @@ lineIntegrationRouter.post(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const dormId = req.dormitoryId || 'dorm-001';
-      const result = await lineIntegrationService.testConnection(dormId);
+      const { channelSecret } = req.body || {};
+      const result = await lineIntegrationService.testConnection(dormId, channelSecret);
       res.json({ success: result.success, data: result });
     } catch (err) {
       next(err);

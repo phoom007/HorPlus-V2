@@ -1,3 +1,5 @@
+import { PrismaClient } from '@prisma/client';
+
 export interface SessionEntity {
   id: string;
   userId: string;
@@ -100,3 +102,104 @@ export class InMemorySessionRepository implements ISessionRepository {
     }
   }
 }
+
+export class PrismaSessionRepository implements ISessionRepository {
+  private prisma: PrismaClient;
+
+  constructor(prisma: PrismaClient) {
+    this.prisma = prisma;
+  }
+
+  private mapToEntity(model: any): SessionEntity {
+    return {
+      id: model.id,
+      userId: model.userId,
+      sessionIdHash: model.sessionIdHash,
+      tokenVersion: model.tokenVersion,
+      status: model.status as any,
+      expiresAt: model.expiresAt,
+      lastSeenAt: model.lastSeenAt,
+      revokedAt: model.revokedAt,
+      revokedReason: model.revokedReason,
+      userAgentHash: model.userAgentHash,
+      ipMetadata: model.ipMetadata,
+      createdAt: model.createdAt,
+      updatedAt: model.updatedAt,
+    };
+  }
+
+  public async createSession(data: CreateSessionData): Promise<SessionEntity> {
+    const session = await this.prisma.session.create({
+      data: {
+        userId: data.userId,
+        sessionIdHash: data.sessionIdHash,
+        expiresAt: data.expiresAt,
+        userAgentHash: data.userAgentHash,
+        ipMetadata: data.ipMetadata,
+        tokenVersion: data.tokenVersion || 1,
+        status: 'active',
+      },
+    });
+    return this.mapToEntity(session);
+  }
+
+  public async findBySessionIdHash(hash: string): Promise<SessionEntity | null> {
+    const session = await this.prisma.session.findUnique({
+      where: { sessionIdHash: hash },
+    });
+    
+    if (session) {
+      if (session.expiresAt < new Date() && session.status === 'active') {
+        const updated = await this.prisma.session.update({
+          where: { id: session.id },
+          data: { status: 'expired' },
+        });
+        return this.mapToEntity(updated);
+      }
+      return this.mapToEntity(session);
+    }
+    
+    return null;
+  }
+
+  public async revokeSession(id: string, reason = 'LOGOUT'): Promise<SessionEntity | null> {
+    try {
+      const updated = await this.prisma.session.update({
+        where: { id },
+        data: {
+          status: 'revoked',
+          revokedAt: new Date(),
+          revokedReason: reason,
+        },
+      });
+      return this.mapToEntity(updated);
+    } catch {
+      return null;
+    }
+  }
+
+  public async revokeAllUserSessions(userId: string, reason = 'LOGOUT_ALL'): Promise<number> {
+    const result = await this.prisma.session.updateMany({
+      where: {
+        userId,
+        status: 'active',
+      },
+      data: {
+        status: 'revoked',
+        revokedAt: new Date(),
+        revokedReason: reason,
+      },
+    });
+    return result.count;
+  }
+
+  public async updateLastSeen(id: string): Promise<void> {
+    try {
+      await this.prisma.session.update({
+        where: { id },
+        data: { lastSeenAt: new Date() },
+      });
+    } catch {}
+  }
+}
+

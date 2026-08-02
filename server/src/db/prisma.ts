@@ -5,7 +5,10 @@ let prismaInstance: PrismaClient | null = null;
 
 export function getPrismaClient(): PrismaClient {
   if (!prismaInstance) {
-    const dbUrl = process.env.DATABASE_URL;
+    const dbUrl = process.env.DATABASE_URL || '';
+    if (process.env.NODE_ENV === 'test' && dbUrl.includes('/horplus_pilot?')) {
+      throw new Error('Test environment must not connect to the Pilot database (horplus_pilot)');
+    }
     prismaInstance = new PrismaClient({
       datasources: {
         db: {
@@ -40,3 +43,8 @@ export async function disconnectPrisma(): Promise<void> {
     logger.info('Prisma client disconnected gracefully');
   }
 }
+
+// Note: Use getPrismaClient() instead of importing `prisma` directly.
+// Eager instantiation at module-load time causes failures when DATABASE_URL
+// is not yet available (e.g., before dotenv/config runs).
+

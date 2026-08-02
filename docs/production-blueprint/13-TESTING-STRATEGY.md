@@ -1,3 +1,7 @@
+> [!NOTE]
+> **[STATUS: CURRENT]**
+> Refer to **[21-CURRENT-PRODUCT-RULE-LOCK.md](./21-CURRENT-PRODUCT-RULE-LOCK.md)** for absolute precedence.
+
 # 13. Testing Strategy
 
 ## 1. Test Pyramid
@@ -109,4 +113,5 @@ Staging required:
 - race test สำหรับ slot/quota/promo/bill/payment/receipt
 - external test ที่ไม่ได้รันระบุ `EXTERNAL VERIFICATION REQUIRED`
 - test data ไม่ใช้ production PII/secret
+
 

@@ -1,3 +1,7 @@
+> [!NOTE]
+> **[STATUS: CURRENT]**
+> Refer to **[21-CURRENT-PRODUCT-RULE-LOCK.md](./21-CURRENT-PRODUCT-RULE-LOCK.md)** for absolute precedence.
+
 # 17. Risk Register
 
 | ID | Risk | Severity | Mitigation / Gate |
@@ -28,4 +32,5 @@
 - Critical open risk = no release
 - High risk requires verified mitigation or explicit owner-approved temporary control
 - Accepted risk ต้องมี owner, reason, expiry/review date
+
 

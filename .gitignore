@@ -4,9 +4,17 @@ dist/
 coverage/
 .DS_Store
 *.log
-.env*
-!.env.example
-.vite/
-.cache/
 .env
 .env.*
+!.env.example
+!.env.staging.example
+!.env.production.example
+.vite/
+.cache/
+
+# Playwright
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+/playwright/.auth/

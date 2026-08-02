@@ -93,9 +93,9 @@ export function createBillingRouter(
           },
         });
       }
-
       const result = await billingService.generateBill(dormId, parsed.data, req.auth?.userId);
-      res.status(201).json({ data: result });
+      const status = result.created ? 201 : 200;
+      res.status(status).json({ data: { bill: result.bill, items: result.items } });
     } catch (err) {
       handleServiceError(res, err, req);
     }

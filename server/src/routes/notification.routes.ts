@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { NotificationService } from '../services/notification.service.ts';
+import { NotificationService } from '../services/notification.service.js';
 import { extractUnifiedActor } from '../middleware/unified-actor.middleware.js';
 
 export function createNotificationRouter(notificationService: NotificationService = new NotificationService()): Router {

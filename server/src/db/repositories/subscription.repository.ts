@@ -1,3 +1,5 @@
+import { PrismaClient } from '@prisma/client';
+
 export interface PlatformSubscriptionEntity {
   id: string;
   dormitoryId: string;
@@ -44,7 +46,7 @@ export class InMemorySubscriptionRepository implements ISubscriptionRepository {
     this.subs.set('dorm-001', {
       id: 'sub-demo-001',
       dormitoryId: 'dorm-001',
-      planId: 'plan-free',
+      planId: '00000000-0000-0000-0000-000000000001',
       status: 'trialing',
       billingInterval: 'monthly',
       trialStartedAt: now,
@@ -93,5 +95,72 @@ export class InMemorySubscriptionRepository implements ISubscriptionRepository {
       }
     }
     return null;
+  }
+}
+
+export class PrismaSubscriptionRepository implements ISubscriptionRepository {
+  private prisma: PrismaClient;
+
+  constructor(prisma: PrismaClient) {
+    this.prisma = prisma;
+  }
+
+  private mapToEntity(model: any): PlatformSubscriptionEntity {
+    return {
+      id: model.id,
+      dormitoryId: model.dormitoryId,
+      planId: model.planId,
+      status: model.status as any,
+      billingInterval: model.billingInterval,
+      trialStartedAt: model.trialStartedAt,
+      trialEndsAt: model.trialEndsAt,
+      currentPeriodStartedAt: model.currentPeriodStartedAt,
+      currentPeriodEndsAt: model.currentPeriodEndsAt,
+      cancelAtPeriodEnd: model.cancelAtPeriodEnd,
+      createdAt: model.createdAt,
+      updatedAt: model.updatedAt,
+    };
+  }
+
+  public async findByDormitoryId(dormitoryId: string): Promise<PlatformSubscriptionEntity | null> {
+    const sub = await this.prisma.platformSubscription.findFirst({
+      where: { dormitoryId },
+      orderBy: { createdAt: 'desc' },
+    });
+    return sub ? this.mapToEntity(sub) : null;
+  }
+
+  public async create(data: CreateSubscriptionData): Promise<PlatformSubscriptionEntity> {
+    const sub = await this.prisma.platformSubscription.create({
+      data: {
+        dormitoryId: data.dormitoryId,
+        planId: data.planId,
+        status: data.status || 'trialing',
+        billingInterval: data.billingInterval || 'monthly',
+        trialStartedAt: data.trialStartedAt,
+        trialEndsAt: data.trialEndsAt,
+        currentPeriodStartedAt: data.currentPeriodStartedAt,
+        currentPeriodEndsAt: data.currentPeriodEndsAt,
+        cancelAtPeriodEnd: data.cancelAtPeriodEnd ?? false,
+      },
+    });
+    return this.mapToEntity(sub);
+  }
+
+  public async update(id: string, data: Partial<PlatformSubscriptionEntity>): Promise<PlatformSubscriptionEntity | null> {
+    const sub = await this.prisma.platformSubscription.update({
+      where: { id },
+      data: {
+        ...(data.planId && { planId: data.planId }),
+        ...(data.status && { status: data.status }),
+        ...(data.billingInterval && { billingInterval: data.billingInterval }),
+        ...(data.trialStartedAt !== undefined && { trialStartedAt: data.trialStartedAt }),
+        ...(data.trialEndsAt !== undefined && { trialEndsAt: data.trialEndsAt }),
+        ...(data.currentPeriodStartedAt !== undefined && { currentPeriodStartedAt: data.currentPeriodStartedAt }),
+        ...(data.currentPeriodEndsAt !== undefined && { currentPeriodEndsAt: data.currentPeriodEndsAt }),
+        ...(data.cancelAtPeriodEnd !== undefined && { cancelAtPeriodEnd: data.cancelAtPeriodEnd }),
+      },
+    });
+    return sub ? this.mapToEntity(sub) : null;
   }
 }

@@ -1,3 +1,7 @@
+> [!WARNING]
+> **[STATUS: SUPERSEDED_IN_PART]**
+> Some or all rules in this document may be superseded. Always refer to **[21-CURRENT-PRODUCT-RULE-LOCK.md](./21-CURRENT-PRODUCT-RULE-LOCK.md)** as the absolute source of truth.
+
 # 09. API Contracts
 
 Base path: `/api/v1`
@@ -137,4 +141,5 @@ same key+different payload → 409
 - unknown privileged fields ถูก reject
 - list pagination/filter bounded
 - cross-dorm resource IDs ไม่เปิดข้อมูล
+
 

@@ -17,7 +17,7 @@ export class PromoService {
     this.promoRepo = promoRepo;
   }
 
-  public async validatePromo(code: string | undefined): Promise<PromoValidationResult> {
+  public async validatePromo(code: string | undefined, dormitoryId?: string): Promise<PromoValidationResult> {
     const standardTrialDays = 30;
 
     if (!code || !code.trim()) {
@@ -90,8 +90,22 @@ export class PromoService {
       };
     }
 
+    if (dormitoryId) {
+      const existingRedemption = await this.promoRepo.findRedemption(promo.id, dormitoryId);
+      if (existingRedemption) {
+        return {
+          valid: false,
+          code: normalizedCode,
+          standardTrialDays,
+          bonusTrialDays: 0,
+          totalTrialDays: standardTrialDays,
+          message: 'รหัสโปรโมชันนี้ถูกใช้งานไปแล้วกับหอพักนี้',
+        };
+      }
+    }
+
     const bonusTrialDays = promo.trialBonusDays || 0;
-    const totalTrialDays = standardTrialDays + bonusTrialDays;
+    const totalTrialDays = Math.min(90, standardTrialDays + bonusTrialDays);
 
     return {
       valid: true,

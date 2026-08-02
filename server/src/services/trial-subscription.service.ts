@@ -1,26 +1,27 @@
+import { calculateInitialTrialEnd, calculateMaximumTrialEnd } from '../utils/calendar-date.util.js';
+
 export interface TrialCalculationResult {
   trialStartedAt: Date;
   trialEndsAt: Date;
-  standardTrialDays: number;
-  bonusTrialDays: number;
-  totalTrialDays: number;
+  trialMonths: number;
 }
 
 export class TrialSubscriptionService {
-  public static calculateTrialDates(bonusDays = 0, baseDate: Date = new Date()): TrialCalculationResult {
-    const standardTrialDays = 30;
-    const bonusTrialDays = Math.max(0, bonusDays);
-    const totalTrialDays = standardTrialDays + bonusTrialDays;
-
+  /**
+   * Calculates trial start and end dates using calendar-month semantics.
+   * Initial Trial: 1 calendar month.
+   * With HORPLUS / Bonus: Capped at maximum 3 calendar months from original trialStartedAt.
+   */
+  public static calculateTrialDates(hasBonusPromo = false, baseDate: Date = new Date()): TrialCalculationResult {
     const trialStartedAt = new Date(baseDate.getTime());
-    const trialEndsAt = new Date(baseDate.getTime() + totalTrialDays * 24 * 60 * 60 * 1000);
+    const trialEndsAt = hasBonusPromo
+      ? calculateMaximumTrialEnd(trialStartedAt)
+      : calculateInitialTrialEnd(trialStartedAt);
 
     return {
       trialStartedAt,
       trialEndsAt,
-      standardTrialDays,
-      bonusTrialDays,
-      totalTrialDays,
+      trialMonths: hasBonusPromo ? 3 : 1,
     };
   }
 }

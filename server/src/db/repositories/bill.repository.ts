@@ -1,10 +1,12 @@
+import { PrismaClient } from '@prisma/client';
+
 export interface BillEntity {
   id: string;
   dormitoryId: string;
   billingCycleId: string;
-  contractId: string;
+  contractId?: string | null;
   roomId: string;
-  tenantId: string;
+  tenantId?: string | null;
   billNumber: string;
   status: string; // draft, unpaid, partially_paid, paid, overdue, cancelled
   billingDate: Date;
@@ -61,9 +63,9 @@ export interface BillStatusHistoryEntity {
 export interface CreateBillData {
   id?: string;
   billingCycleId: string;
-  contractId: string;
+  contractId?: string | null;
   roomId: string;
-  tenantId: string;
+  tenantId?: string | null;
   billNumber?: string;
   status?: string;
   billingDate: Date;
@@ -110,15 +112,18 @@ export interface BillFilterQuery {
 
 export interface IBillRepository {
   findById(id: string, dormitoryId?: string): Promise<BillEntity | null>;
-  findByNumber(dormitoryId: string, billNumber: string): Promise<BillEntity | null>;
-  findByCycleAndContract(dormitoryId: string, billingCycleId: string, contractId: string): Promise<BillEntity | null>;
-  findAll(dormitoryId: string, filter?: BillFilterQuery): Promise<{ items: BillEntity[]; total: number }>;
-  create(dormitoryId: string, data: CreateBillData, items: CreateBillItemData[]): Promise<{ bill: BillEntity; items: BillItemEntity[] }>;
-  update(id: string, dormitoryId: string, data: Partial<BillEntity>, expectedVersion?: number): Promise<BillEntity | null>;
-  getBillItems(billId: string, dormitoryId?: string): Promise<BillItemEntity[]>;
+  findByNumber(dormitoryId: string, billNumber: string, tx?: any): Promise<BillEntity | null>;
+  findByCycleAndContract(dormitoryId: string, billingCycleId: string, contractId: string, tx?: any): Promise<BillEntity | null>;
+  findByCycleAndRoom(dormitoryId: string, billingCycleId: string, roomId: string, tx?: any): Promise<BillEntity | null>;
+  findAll(dormitoryId: string, filter?: BillFilterQuery, tx?: any): Promise<{ items: BillEntity[]; total: number }>;
+  create(dormitoryId: string, data: CreateBillData, items: CreateBillItemData[], tx?: any): Promise<{ bill: BillEntity; items: BillItemEntity[] }>;
+  update(id: string, dormitoryId: string, data: Partial<BillEntity>, expectedVersion?: number, tx?: any): Promise<BillEntity | null>;
+  getBillItems(billId: string, dormitoryId?: string, tx?: any): Promise<BillItemEntity[]>;
   addStatusHistory(dormitoryId: string, billId: string, fromStatus: string | null, toStatus: string, reason?: string, changedByUserId?: string, metadata?: any): Promise<BillStatusHistoryEntity>;
   findStatusHistories(billId: string, dormitoryId?: string): Promise<BillStatusHistoryEntity[]>;
   getSummary(dormitoryId: string, billingCycleId?: string): Promise<{ totalBills: number; totalAmount: string; paidAmount: string; outstandingAmount: string; statusCounts: Record<string, number> }>;
+  withTransaction<T>(fn: (tx: any) => Promise<T>): Promise<T>;
+  executeRawLock(roomId: string, tx: any): Promise<void>;
 }
 
 export class InMemoryBillRepository implements IBillRepository {
@@ -145,14 +150,21 @@ export class InMemoryBillRepository implements IBillRepository {
   public async findByCycleAndContract(
     dormitoryId: string,
     billingCycleId: string,
-    contractId: string
+    contractId: string,
+    tx?: any
   ): Promise<BillEntity | null> {
-    for (const b of this.bills.values()) {
-      if (b.dormitoryId === dormitoryId && b.billingCycleId === billingCycleId && b.contractId === contractId && b.status !== 'cancelled') {
-        return b;
-      }
-    }
-    return null;
+    const list = Array.from(this.bills.values());
+    return list.find((b) => b.dormitoryId === dormitoryId && b.billingCycleId === billingCycleId && b.contractId === contractId && b.status !== 'cancelled' && b.status !== 'void') || null;
+  }
+
+  public async findByCycleAndRoom(
+    dormitoryId: string,
+    billingCycleId: string,
+    roomId: string,
+    tx?: any
+  ): Promise<BillEntity | null> {
+    const list = Array.from(this.bills.values());
+    return list.find((b) => b.dormitoryId === dormitoryId && b.billingCycleId === billingCycleId && b.roomId === roomId && b.status !== 'cancelled' && b.status !== 'void') || null;
   }
 
   public async findAll(dormitoryId: string, filter: BillFilterQuery = {}): Promise<{ items: BillEntity[]; total: number }> {
@@ -253,7 +265,7 @@ export class InMemoryBillRepository implements IBillRepository {
     this.bills.set(id, bill);
     this.items.set(id, createdItems);
 
-    await this.addStatusHistory(dormitoryId, id, null, bill.status, 'Bill generated', data.generatedByUserId);
+    await this.addStatusHistory(dormitoryId, id, null, bill.status, 'Bill generated', data.generatedByUserId || undefined);
 
     return { bill, items: createdItems };
   }
@@ -283,7 +295,16 @@ export class InMemoryBillRepository implements IBillRepository {
     return updated;
   }
 
-  public async getBillItems(billId: string, dormitoryId?: string): Promise<BillItemEntity[]> {
+  public async updateStatus(
+    id: string,
+    dormitoryId: string,
+    status: string,
+    expectedVersion?: number
+  ): Promise<BillEntity | null> {
+    return this.update(id, dormitoryId, { status }, expectedVersion);
+  }
+
+  public async getBillItems(billId: string, dormitoryId?: string, tx?: any): Promise<BillItemEntity[]> {
     const list = this.items.get(billId) || [];
     if (dormitoryId) {
       return list.filter((i) => i.dormitoryId === dormitoryId);
@@ -364,5 +385,360 @@ export class InMemoryBillRepository implements IBillRepository {
       outstandingAmount: outstandingAmount.toFixed(2),
       statusCounts,
     };
+  }
+
+  public async withTransaction<T>(fn: (tx: any) => Promise<T>): Promise<T> {
+    return fn(null);
+  }
+
+  public async executeRawLock(roomId: string, tx: any): Promise<void> {
+    return;
+  }
+}
+
+export class PrismaBillRepository implements IBillRepository {
+  constructor(private prisma: PrismaClient) {}
+
+  private getClient(tx?: any): PrismaClient {
+    return tx || this.prisma;
+  }
+
+  private mapBillToEntity(model: any): BillEntity {
+    const fmt = (val: any) => (val !== undefined && val !== null ? Number(val.toString()).toFixed(2) : '0.00');
+    return {
+      id: model.id,
+      dormitoryId: model.dormitoryId,
+      billingCycleId: model.billingCycleId,
+      contractId: model.contractId,
+      roomId: model.roomId,
+      tenantId: model.tenantId,
+      billNumber: model.billNumber,
+      status: model.status,
+      billingDate: model.billingDate,
+      dueDate: model.dueDate,
+      subtotal: fmt(model.subtotal),
+      discountAmount: fmt(model.discountAmount),
+      fineAmount: fmt(model.fineAmount),
+      totalAmount: fmt(model.totalAmount),
+      paidAmount: fmt(model.paidAmount),
+      outstandingAmount: fmt(model.outstandingAmount),
+      currency: model.currency || 'THB',
+      rateSnapshotId: model.rateSnapshotId || null,
+      generatedByUserId: model.generatedByUserId || null,
+      generatedAt: model.generatedAt,
+      cancelledAt: model.cancelledAt || null,
+      cancelledByUserId: model.cancelledByUserId || null,
+      cancellationReason: model.cancellationReason || null,
+      version: model.version,
+      createdAt: model.createdAt,
+      updatedAt: model.updatedAt,
+    };
+  }
+
+  private mapItemToEntity(model: any): BillItemEntity {
+    const fmt = (val: any) => (val !== undefined && val !== null ? Number(val.toString()).toFixed(2) : '0.00');
+    return {
+      id: model.id,
+      dormitoryId: model.dormitoryId,
+      billId: model.billId,
+      type: model.type,
+      code: model.code || null,
+      description: model.description,
+      quantity: fmt(model.quantity),
+      unit: model.unit || null,
+      unitPrice: fmt(model.unitPrice),
+      amount: fmt(model.amount),
+      sourceType: model.sourceType || null,
+      sourceId: model.sourceId || null,
+      displayOrder: model.displayOrder,
+      metadata: model.metadata || null,
+      createdAt: model.createdAt,
+    };
+  }
+
+  public async create(
+    dormitoryId: string,
+    data: CreateBillData,
+    items: CreateBillItemData[],
+    tx?: any
+  ): Promise<{ bill: BillEntity; items: BillItemEntity[] }> {
+    const client = this.getClient(tx);
+    const isUuid = (str?: string | null) => !!str && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
+    const createdBill = await client.bill.create({
+      data: {
+        id: data.id,
+        dormitoryId,
+        billingCycleId: data.billingCycleId,
+        contractId: isUuid(data.contractId) ? data.contractId : null,
+        roomId: data.roomId,
+        tenantId: isUuid(data.tenantId) ? data.tenantId : null,
+        billNumber: data.billNumber || `BILL-${Date.now()}`,
+        status: data.status || 'unpaid',
+        billingDate: new Date(data.billingDate),
+        dueDate: new Date(data.dueDate),
+        subtotal: data.subtotal,
+        discountAmount: data.discountAmount || '0.00',
+        fineAmount: data.fineAmount || '0.00',
+        totalAmount: data.totalAmount,
+        paidAmount: data.paidAmount || '0.00',
+        outstandingAmount: data.outstandingAmount || data.totalAmount,
+        currency: data.currency || 'THB',
+        rateSnapshotId: isUuid(data.rateSnapshotId) ? data.rateSnapshotId : null,
+        generatedByUserId: isUuid(data.generatedByUserId) ? data.generatedByUserId : null,
+      },
+    });
+
+    const createdItems: BillItemEntity[] = [];
+    for (const i of items) {
+      const item = await client.billItem.create({
+        data: {
+          id: i.id,
+          dormitoryId,
+          billId: createdBill.id,
+          type: i.type,
+          code: i.code || null,
+          description: i.description,
+          quantity: i.quantity || '1.00',
+          unit: i.unit || null,
+          unitPrice: i.unitPrice,
+          amount: i.amount,
+          sourceType: i.sourceType || null,
+          sourceId: i.sourceId || null,
+          displayOrder: i.displayOrder || 0,
+          metadata: i.metadata || null,
+        },
+      });
+      createdItems.push(this.mapItemToEntity(item));
+    }
+
+    return { bill: this.mapBillToEntity(createdBill), items: createdItems };
+  }
+
+  public async findById(id: string, dormitoryId: string): Promise<BillEntity | null> {
+    const isUuid = (str?: string | null) => !!str && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
+    if (!isUuid(id)) return null;
+    const bill = await this.prisma.bill.findFirst({
+      where: { id, dormitoryId },
+    });
+    return bill ? this.mapBillToEntity(bill) : null;
+  }
+
+  public async findByNumber(dormitoryId: string, billNumber: string): Promise<BillEntity | null> {
+    const bill = await this.prisma.bill.findFirst({
+      where: { dormitoryId, billNumber },
+    });
+    return bill ? this.mapBillToEntity(bill) : null;
+  }
+
+  public async findByCycleAndContract(
+    dormitoryId: string,
+    billingCycleId: string,
+    contractId: string,
+    tx?: any
+  ): Promise<BillEntity | null> {
+    const client = this.getClient(tx);
+    const bill = await client.bill.findFirst({
+      where: { 
+        dormitoryId, 
+        billingCycleId, 
+        contractId,
+        status: { notIn: ['cancelled', 'void'] }
+      },
+    });
+    return bill ? this.mapBillToEntity(bill) : null;
+  }
+
+  public async findByCycleAndRoom(
+    dormitoryId: string,
+    billingCycleId: string,
+    roomId: string,
+    tx?: any
+  ): Promise<BillEntity | null> {
+    const client = this.getClient(tx);
+    const bill = await client.bill.findFirst({
+      where: { 
+        dormitoryId, 
+        billingCycleId, 
+        roomId,
+        status: { notIn: ['cancelled', 'void'] }
+      },
+    });
+    return bill ? this.mapBillToEntity(bill) : null;
+  }
+
+  public async findAll(
+    dormitoryId: string,
+    filter: BillFilterQuery = {}
+  ): Promise<{ items: BillEntity[]; total: number }> {
+    const where: any = { dormitoryId };
+    if (filter.billingCycleId) where.billingCycleId = filter.billingCycleId;
+    if (filter.contractId) where.contractId = filter.contractId;
+    if (filter.roomId) where.roomId = filter.roomId;
+    if (filter.tenantId) where.tenantId = filter.tenantId;
+    if (filter.status) where.status = filter.status;
+
+    const page = filter.page || 1;
+    const pageSize = filter.pageSize || 50;
+    const skip = (page - 1) * pageSize;
+
+    const [bills, total] = await Promise.all([
+      this.prisma.bill.findMany({
+        where,
+        skip,
+        take: pageSize,
+        orderBy: { createdAt: 'desc' },
+      }),
+      this.prisma.bill.count({ where }),
+    ]);
+
+    return { items: bills.map((b) => this.mapBillToEntity(b)), total };
+  }
+
+  public async update(
+    id: string,
+    dormitoryId: string,
+    data: Partial<BillEntity>,
+    expectedVersion?: number,
+    tx?: any
+  ): Promise<BillEntity | null> {
+    const client = this.getClient(tx);
+    const existing = await this.findById(id, dormitoryId);
+    if (!existing) return null;
+    if (expectedVersion !== undefined && existing.version !== expectedVersion) {
+      const err = new Error('RESOURCE_VERSION_CONFLICT');
+      (err as any).code = 'RESOURCE_VERSION_CONFLICT';
+      throw err;
+    }
+
+    const updateData: any = {};
+    if (data.status !== undefined) updateData.status = data.status;
+    if (data.fineAmount !== undefined) updateData.fineAmount = data.fineAmount;
+    if (data.discountAmount !== undefined) updateData.discountAmount = data.discountAmount;
+    if (data.totalAmount !== undefined) updateData.totalAmount = data.totalAmount;
+    if (data.paidAmount !== undefined) updateData.paidAmount = data.paidAmount;
+    if (data.outstandingAmount !== undefined) updateData.outstandingAmount = data.outstandingAmount;
+    if (data.cancelledAt !== undefined) updateData.cancelledAt = data.cancelledAt;
+    if (data.cancelledByUserId !== undefined) updateData.cancelledByUserId = data.cancelledByUserId;
+    if (data.cancellationReason !== undefined) updateData.cancellationReason = data.cancellationReason;
+
+    const updated = await client.bill.update({
+      where: { id },
+      data: { ...updateData, version: { increment: 1 } },
+    });
+
+    return this.mapBillToEntity(updated);
+  }
+
+  public async getBillItems(billId: string, dormitoryId: string, tx?: any): Promise<BillItemEntity[]> {
+    const client = tx || this.prisma;
+    const items = await client.billItem.findMany({
+      where: { billId, dormitoryId },
+      orderBy: { displayOrder: 'asc' },
+    });
+    return items.map((i: any) => this.mapItemToEntity(i));
+  }
+
+  public async addStatusHistory(
+    dormitoryId: string,
+    billId: string,
+    fromStatus: string | null,
+    toStatus: string,
+    reason?: string,
+    changedByUserId?: string,
+    metadata?: any
+  ): Promise<BillStatusHistoryEntity> {
+    const history = await this.prisma.billStatusHistory.create({
+      data: {
+        dormitoryId,
+        billId,
+        fromStatus: fromStatus || null,
+        toStatus,
+        reason: reason || null,
+        changedByUserId: changedByUserId || null,
+        metadata: metadata || null,
+      },
+    });
+
+    return {
+      id: history.id,
+      dormitoryId: history.dormitoryId,
+      billId: history.billId,
+      fromStatus: history.fromStatus || null,
+      toStatus: history.toStatus,
+      reason: history.reason || null,
+      changedByUserId: history.changedByUserId || null,
+      effectiveAt: history.effectiveAt,
+      metadata: history.metadata,
+      createdAt: history.createdAt,
+    };
+  }
+
+  public async findStatusHistories(billId: string, dormitoryId?: string): Promise<BillStatusHistoryEntity[]> {
+    const where: any = { billId };
+    if (dormitoryId) where.dormitoryId = dormitoryId;
+    const histories = await this.prisma.billStatusHistory.findMany({
+      where,
+      orderBy: { createdAt: 'asc' },
+    });
+    return histories.map((h) => ({
+      id: h.id,
+      dormitoryId: h.dormitoryId,
+      billId: h.billId,
+      fromStatus: h.fromStatus || null,
+      toStatus: h.toStatus,
+      reason: h.reason || null,
+      changedByUserId: h.changedByUserId || null,
+      effectiveAt: h.effectiveAt,
+      metadata: h.metadata,
+      createdAt: h.createdAt,
+    }));
+  }
+
+  public async getSummary(
+    dormitoryId: string,
+    billingCycleId?: string
+  ): Promise<{
+    totalBills: number;
+    totalAmount: string;
+    paidAmount: string;
+    outstandingAmount: string;
+    statusCounts: Record<string, number>;
+  }> {
+    const where: any = { dormitoryId };
+    if (billingCycleId) where.billingCycleId = billingCycleId;
+
+    const bills = await this.prisma.bill.findMany({ where });
+
+    let totalAmount = new (require('@prisma/client').Prisma.Decimal)('0.00');
+    let paidAmount = new (require('@prisma/client').Prisma.Decimal)('0.00');
+    let outstandingAmount = new (require('@prisma/client').Prisma.Decimal)('0.00');
+    const statusCounts: Record<string, number> = {};
+
+    for (const b of bills) {
+      statusCounts[b.status] = (statusCounts[b.status] || 0) + 1;
+      if (b.status !== 'cancelled') {
+        totalAmount = totalAmount.add(b.totalAmount);
+        paidAmount = paidAmount.add(b.paidAmount);
+        outstandingAmount = outstandingAmount.add(b.outstandingAmount);
+      }
+    }
+
+    return {
+      totalBills: bills.length,
+      totalAmount: totalAmount.toFixed(2),
+      paidAmount: paidAmount.toFixed(2),
+      outstandingAmount: outstandingAmount.toFixed(2),
+      statusCounts,
+    };
+  }
+
+  public async withTransaction<T>(fn: (tx: any) => Promise<T>): Promise<T> {
+    return this.prisma.$transaction(fn, { timeout: 10000 });
+  }
+
+  public async executeRawLock(roomId: string, tx: any): Promise<void> {
+    if (tx && tx.$queryRawUnsafe) {
+       await tx.$queryRawUnsafe(`SELECT 1 FROM "rooms" WHERE id = $1::uuid FOR UPDATE`, roomId);
+    }
   }
 }

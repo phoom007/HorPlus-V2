@@ -30,8 +30,8 @@ import {
   contractRepository,
   meterRepository,
   billingRepository,
-  paymentRepository,
-  receiptRepository,
+  
+  
   maintenanceRepository,
   announcementRepository,
   notificationRepository,
@@ -81,6 +81,16 @@ export class DemoDormitoryAdapter implements DormitoryDataSource {
     };
     dormitoryRepository.addBuilding(building);
     return { success: true, data: building };
+  }
+
+  async updateBuilding(building: Building): Promise<DataResult<Building>> {
+    dormitoryRepository.updateBuilding?.(building);
+    return { success: true, data: building };
+  }
+
+  async deleteBuilding(buildingId: string): Promise<DataResult<boolean>> {
+    dormitoryRepository.deleteBuilding?.(buildingId);
+    return { success: true, data: true };
   }
 }
 
@@ -279,70 +289,18 @@ export class DemoBillingAdapter implements BillingDataSource {
 }
 
 export class DemoPaymentAdapter implements PaymentDataSource {
-  async getAllSlips(): Promise<PaymentEvidence[]> {
-    return paymentRepository.getAll();
-  }
-
-  async getSlipByBillId(billId: string): Promise<PaymentEvidence | null> {
-    return paymentRepository.getByBillId(billId) || null;
-  }
-
-  async submitSlip(billId: string, slipImage: string, senderName: string, amount: number, transferDateTime: string, memo?: string): Promise<DataResult<PaymentEvidence>> {
-    const res = paymentRepository.submitSlip(billId, slipImage, senderName, amount, transferDateTime, memo);
-    if (res.success && res.payment) {
-      return { success: true, data: res.payment };
-    }
-    return {
-      success: false,
-      message: res.message,
-      error: { code: 'DUPLICATE_SLIP', message: res.message || 'ไม่สามารถส่งหลักฐานการชำระเงินได้' }
-    };
-  }
-
-  async approvePayment(billId: string, actorUserId?: string): Promise<DataResult<Receipt>> {
-    const res = paymentRepository.approvePayment(billId, actorUserId);
-    if (res.success && res.receiptNumber) {
-      const receipt = receiptRepository.getByBillId(billId);
-      if (receipt) return { success: true, data: receipt };
-    }
-    return {
-      success: false,
-      message: res.message,
-      error: { code: 'PAYMENT_ALREADY_PROCESSED', message: res.message || 'อนุมัติการชำระเงินไม่สำเร็จ' }
-    };
-  }
-
-  async rejectPayment(billId: string, reason: string, actorUserId?: string): Promise<DataResult<boolean>> {
-    const res = paymentRepository.rejectPayment(billId, reason, actorUserId);
-    if (res.success) {
-      return { success: true, data: true };
-    }
-    return {
-      success: false,
-      message: res.message,
-      error: { code: 'VALIDATION_ERROR', message: res.message || 'ปฏิเสธการชำระเงินไม่สำเร็จ' }
-    };
-  }
+  async getAllSlips(): Promise<any[]> { return []; }
+  async getSlipByBillId(billId: string): Promise<any | null> { return null; }
+  async submitSlip(billId: string, slipImage: string, senderName: string, amount: number, transferDateTime: string, memo?: string): Promise<any> { return { success: false, error: { code: 'UNSUPPORTED' }}; }
+  async approvePayment(billId: string, actorUserId?: string): Promise<any> { return { success: false, error: { code: 'UNSUPPORTED' }}; }
+  async rejectPayment(billId: string, reason: string, actorUserId?: string): Promise<any> { return { success: false, error: { code: 'UNSUPPORTED' }}; }
 }
 
 export class DemoReceiptAdapter implements ReceiptDataSource {
-  async getAll(): Promise<Receipt[]> {
-    return receiptRepository.getAll();
-  }
-
-  async getById(id: string): Promise<Receipt | null> {
-    return receiptRepository.getById(id) || null;
-  }
-
-  async getByBillId(billId: string): Promise<Receipt | null> {
-    return receiptRepository.getByBillId(billId) || null;
-  }
-
-  async getByTenantId(tenantId: string): Promise<Receipt[]> {
-    const bills = billingRepository.getByTenantId(tenantId);
-    const billIds = new Set(bills.map(b => b.id));
-    return receiptRepository.getAll().filter(r => billIds.has(r.billId));
-  }
+  async getAll(): Promise<any[]> { return []; }
+  async getById(id: string): Promise<any | null> { return null; }
+  async getByBillId(billId: string): Promise<any | null> { return null; }
+  async getByTenantId(tenantId: string): Promise<any[]> { return []; }
 }
 
 export class DemoMaintenanceAdapter implements MaintenanceDataSource {

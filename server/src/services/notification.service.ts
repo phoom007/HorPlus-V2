@@ -183,9 +183,13 @@ export class NotificationService {
     // 6. Template Text Generation
     const textMessage = this.generateTextMessage(category, templateParams);
 
+    if (!this.messagingProvider) {
+      return { shouldSendLine: false, reason: 'Messaging provider not configured', quotaUsed: 0 };
+    }
+
     // 7. Send Message via Provider & Deduct Quota
     try {
-      const sendResult = await this.messagingProvider.pushMessage({
+      const sendResult = await this.messagingProvider.pushMessage!({
         channelSecretEncrypted: integration.channelSecretEncrypted,
         toLineUserId: follower.identity.lineUserId,
         messages: [{ type: 'text', text: textMessage }]
@@ -193,7 +197,7 @@ export class NotificationService {
 
       if (sendResult.success) {
         // Record quota usage
-        await this.quotaService.consumeQuota(dormitoryId, recipientLineIdentityId, category, sendResult.messageId || `msg_${Date.now()}`);
+        await this.quotaService.consumeQuota(dormitoryId, recipientLineIdentityId, category, sendResult.providerMessageId || `msg_${Date.now()}`);
         await this.checkAndTriggerQuotaLowWarning(dormitoryId);
 
         return { shouldSendLine: true, reason: 'Successfully sent LINE notification', quotaUsed: 1 };

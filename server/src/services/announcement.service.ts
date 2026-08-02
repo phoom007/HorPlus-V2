@@ -13,8 +13,9 @@ import { InMemoryContractRepository } from '../db/repositories/contract.reposito
 import { InMemoryRoomRepository } from '../db/repositories/room.repository.js';
 import { InMemoryBuildingRepository } from '../db/repositories/building.repository.js';
 import { LineRepository, lineRepository } from '../db/repositories/line.repository.js';
+import { parseRoomIdentifier } from '../utils/normalization.js';
 import { LineQuotaService } from './line-quota.service.js';
-import { NotificationService } from './notification.service.ts';
+import { NotificationService } from './notification.service.js';
 import { LineMessagingProvider, MockLineMessagingProvider } from './line-provider.interface.js';
 
 export interface CreateAnnouncementInput {
@@ -75,7 +76,7 @@ export class AnnouncementRecipientResolver {
     const activeTenantsRes = await this.tenantRepo.findAll(dormitoryId);
     const activeTenants = activeTenantsRes.items || activeTenantsRes;
     const tenantBindings = await this.lineRepo.listTenantBindingsForDormitory(dormitoryId);
-    const lineBindingMap = new Map(tenantBindings.map(b => [b.tenantId, b]));
+    const lineBindingMap = new Map(tenantBindings.map((b: any) => [b.tenantId, b]));
 
     const activeContracts = await this.contractRepo.findAll(dormitoryId, { status: 'active' });
     const tenantRoomMap = new Map();
@@ -86,7 +87,10 @@ export class AnnouncementRecipientResolver {
 
     const roomsRes = await this.roomRepo.findAll(dormitoryId);
     const rooms = roomsRes.items || roomsRes;
-    const roomMap = new Map(rooms.map(r => [r.id, r]));
+    const roomMap = new Map(rooms.map((r: any) => [r.id, r]));
+
+    const buildingsRes = await this.buildingRepo.findAll(dormitoryId);
+    const buildings = buildingsRes.items || buildingsRes;
 
     let targetTenantIds = new Set<string>();
 
@@ -105,8 +109,15 @@ export class AnnouncementRecipientResolver {
         for (const t of activeTenants) {
           const roomId = tenantRoomMap.get(t.id);
           const room = roomId ? roomMap.get(roomId) : null;
-          if (room && room.buildingId === aud.buildingId && String(room.floor) === String(aud.floor)) {
-            targetTenantIds.add(t.id);
+          if (room && room.buildingId === aud.buildingId) {
+            const b = buildings.find((bld: any) => bld.id === aud.buildingId);
+            const bConfig = b ? { code: b.code, numberingPattern: b.numberingPattern, floorCount: b.floorCount } : { code: null, numberingPattern: null, floorCount: 1 };
+            const parsed = parseRoomIdentifier(bConfig as any, room.roomNumber);
+            if (aud.floor !== undefined) {
+              if (parsed.isValid && String(parsed.derivedFloor) === String(aud.floor)) {
+                targetTenantIds.add(t.id);
+              }
+            }
           }
         }
       } else if (aud.targetType === 'room' && aud.roomId) {
@@ -133,8 +144,8 @@ export class AnnouncementRecipientResolver {
       const room = roomId ? roomMap.get(roomId) : null;
 
       let isLineEligible = false;
-      if (binding && binding.status === 'active') {
-        const follower = await this.lineRepo.getFollowerByIdentity(dormitoryId, binding.lineIdentityId);
+      if (binding && (binding as any).status === 'active') {
+        const follower = await this.lineRepo.getFollowerByIdentity(dormitoryId, (binding as any).lineIdentityId);
         if (follower && follower.friendStatus === 'following') {
           isLineEligible = true;
         }
@@ -181,9 +192,9 @@ export class AnnouncementService {
     });
 
     if (input.audiences && input.audiences.length > 0) {
-      await this.announcementRepo.setAudiences(input.dormitoryId, announcement.id, input.audiences);
+      await this.announcementRepo.setAudiences(input.dormitoryId, announcement.id, input.audiences.map(a => ({ ...a, dormitoryId: input.dormitoryId, announcementId: announcement.id })));
     } else {
-      await this.announcementRepo.setAudiences(input.dormitoryId, announcement.id, [{ targetType: 'all_tenants' }]);
+      await this.announcementRepo.setAudiences(input.dormitoryId, announcement.id, [{ targetType: 'all_tenants', dormitoryId: input.dormitoryId, announcementId: announcement.id }]);
     }
 
     return announcement;
@@ -207,7 +218,7 @@ export class AnnouncementService {
     });
 
     if (updates.audiences) {
-      await this.announcementRepo.setAudiences(dormitoryId, id, updates.audiences);
+      await this.announcementRepo.setAudiences(dormitoryId, id, updates.audiences.map(a => ({ ...a, dormitoryId, announcementId: id })));
     }
 
     return updated;
@@ -279,12 +290,11 @@ export class AnnouncementService {
     // Create Recipient Records
     const recipientsData = resolved.map(r => ({
       tenantId: r.tenantId,
-      tenantLineBindingId: r.binding?.id || null,
-      lineIdentityId: r.binding?.lineIdentityId || null,
+      tenantLineBindingId: (r.binding as any)?.id || null,
+      lineIdentityId: (r.binding as any)?.lineIdentityId || null,
       deliveryStatus: (sendLineNotification && r.isLineEligible) ? ('line_sent' as const) : ('in_app_only' as const)
     }));
-
-    await this.announcementRepo.setRecipients(dormitoryId, announcementId, recipientsData);
+    await this.announcementRepo.setRecipients(dormitoryId, announcementId, recipientsData.map(r => ({ ...r, dormitoryId, announcementId })));
 
     // Create In-App Notifications for ALL target tenants
     for (const r of resolved) {
@@ -306,7 +316,7 @@ export class AnnouncementService {
         const textMsg = `📢 ประกาศจากหอพัก: ${announcement.title}\n${announcement.summary || announcement.content}`;
 
         for (const r of lineEligible) {
-          const follower = await this.lineRepo.getFollowerByIdentity(dormitoryId, r.binding!.lineIdentityId);
+          const follower = await this.lineRepo.getFollowerByIdentity(dormitoryId, (r.binding as any)?.lineIdentityId);
           if (follower) {
             const result = await this.messagingProvider.sendDirectNotification({
               accessToken: integration.channelSecretEncrypted || 'mock_token',
@@ -315,7 +325,7 @@ export class AnnouncementService {
             });
 
             if (result.success) {
-              await this.quotaService.consumeQuota(dormitoryId, r.binding!.lineIdentityId, 'ANNOUNCEMENT_PUBLISHED', result.providerMessageId || `ann_${Date.now()}`);
+              await this.quotaService.consumeQuota(dormitoryId, (r.binding as any)?.lineIdentityId, 'ANNOUNCEMENT_PUBLISHED', result.providerMessageId || `ann_${Date.now()}`);
             }
           }
         }

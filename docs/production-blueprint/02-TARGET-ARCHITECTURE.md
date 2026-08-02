@@ -1,3 +1,7 @@
+> [!NOTE]
+> **[STATUS: CURRENT]**
+> Refer to **[21-CURRENT-PRODUCT-RULE-LOCK.md](./21-CURRENT-PRODUCT-RULE-LOCK.md)** for absolute precedence.
+
 # 02. Target Architecture
 
 ## 1. Topology
@@ -84,4 +88,5 @@ Route
 - RLS context ไม่รั่วข้าม pooled connection
 - Retry ภายนอกไม่ทำรายการซ้ำ
 - รองรับเพิ่ม capacity โดยไม่เปลี่ยน data ownership ต่อหอ
+
 

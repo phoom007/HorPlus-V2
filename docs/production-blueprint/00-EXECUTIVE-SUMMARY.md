@@ -1,3 +1,7 @@
+> [!WARNING]
+> **[STATUS: SUPERSEDED_IN_PART]**
+> Some or all rules in this document may be superseded. Always refer to **[21-CURRENT-PRODUCT-RULE-LOCK.md](./21-CURRENT-PRODUCT-RULE-LOCK.md)** as the absolute source of truth.
+
 # 00. Executive Summary
 
 HorPlus-Version 2 คือระบบจัดการหอพักแบบ Multi-tenant ที่รองรับงานตั้งแต่ลงทะเบียนหอพัก อาคาร ห้อง ผู้เช่า สัญญา มิเตอร์ บิล การชำระ ใบเสร็จ LINE OA/LIFF แจ้งซ่อม ประกาศ ไปจนถึงสิทธิ์บุคลากร
@@ -78,4 +82,5 @@ flowchart TD
 - Tenant ไม่เห็น Draft/Voided/ข้อมูลคนก่อน
 - Owner/Manager ทำ Finance ได้; Tech ไม่เห็น Finance
 - Current code gaps ถูกแก้ผ่าน Migration และไม่ใช้การเปลี่ยนเอกสารย้อนตามโค้ด
+
 

@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { AnnouncementService } from '../services/announcement.service.ts';
+import { AnnouncementService } from '../services/announcement.service.js';
 import { extractUnifiedActor } from '../middleware/unified-actor.middleware.js';
 
 export function createAnnouncementRouter(announcementService: AnnouncementService = new AnnouncementService()): Router {
@@ -52,7 +52,7 @@ export function createAnnouncementRouter(announcementService: AnnouncementServic
         content,
         priority,
         isPinned,
-        createdByUserId: actor?.userId || null,
+        createdByUserId: actor?.userId || undefined,
         audiences: audiences || [{ targetType: 'all_tenants' }]
       });
 

@@ -1,3 +1,5 @@
+import { randomUUID } from 'crypto';
+
 export interface BillingCycleEntity {
   id: string;
   dormitoryId: string;
@@ -155,7 +157,7 @@ export class InMemoryBillingCycleRepository implements IBillingCycleRepository {
 
   public async create(dormitoryId: string, data: CreateBillingCycleData): Promise<BillingCycleEntity> {
     const now = new Date();
-    const id = data.id || `cycle-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+    const id = data.id || randomUUID();
     const cycle: BillingCycleEntity = {
       id,
       dormitoryId,
@@ -202,7 +204,7 @@ export class InMemoryBillingCycleRepository implements IBillingCycleRepository {
 
   public async createRateSnapshot(dormitoryId: string, data: CreateRateSnapshotData): Promise<BillingRateSnapshotEntity> {
     const now = new Date();
-    const id = data.id || `snapshot-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+    const id = data.id || randomUUID();
     const snapshot: BillingRateSnapshotEntity = {
       id,
       dormitoryId,
@@ -227,5 +229,176 @@ export class InMemoryBillingCycleRepository implements IBillingCycleRepository {
     if (!s) return null;
     if (dormitoryId && s.dormitoryId !== dormitoryId) return null;
     return s;
+  }
+}
+
+import { PrismaClient } from '@prisma/client';
+
+export class PrismaBillingCycleRepository implements IBillingCycleRepository {
+  private prisma: PrismaClient;
+
+  constructor(prisma: PrismaClient) {
+    this.prisma = prisma;
+  }
+
+  private mapCycleToEntity(c: any): BillingCycleEntity {
+    return {
+      id: c.id,
+      dormitoryId: c.dormitoryId,
+      cycleCode: c.cycleCode,
+      name: c.name,
+      periodStart: c.periodStart,
+      periodEnd: c.periodEnd,
+      billingDate: c.billingDate,
+      dueDate: c.dueDate,
+      status: c.status,
+      createdByUserId: c.createdByUserId,
+      version: c.version,
+      createdAt: c.createdAt,
+      updatedAt: c.updatedAt,
+    };
+  }
+
+  private mapSnapshotToEntity(s: any): BillingRateSnapshotEntity {
+    const fmt = (val: any, dflt: string) => (val !== undefined && val !== null ? Number(val.toString()).toFixed(2) : dflt);
+    return {
+      id: s.id,
+      dormitoryId: s.dormitoryId,
+      billingCycleId: s.billingCycleId,
+      waterBillingType: s.waterBillingType,
+      waterRate: fmt(s.waterRate, '18.00'),
+      electricityBillingType: s.electricityBillingType,
+      electricityRate: fmt(s.electricityRate, '7.00'),
+      commonFee: fmt(s.commonFee, '0.00'),
+      internetFee: fmt(s.internetFee, '0.00'),
+      lateFeeType: s.lateFeeType,
+      lateFeeValue: fmt(s.lateFeeValue, '50.00'),
+      currency: s.currency,
+      createdAt: s.createdAt,
+    };
+  }
+
+  public async findById(id: string, dormitoryId?: string): Promise<BillingCycleEntity | null> {
+    const isUuid = (str?: string | null) => !!str && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
+    if (!isUuid(id)) return null;
+    const where: any = { id };
+    if (dormitoryId) where.dormitoryId = dormitoryId;
+    const c = await this.prisma.billingCycle.findFirst({ where });
+    return c ? this.mapCycleToEntity(c) : null;
+  }
+
+  public async findByCode(dormitoryId: string, cycleCode: string): Promise<BillingCycleEntity | null> {
+    const c = await this.prisma.billingCycle.findFirst({ where: { dormitoryId, cycleCode } });
+    return c ? this.mapCycleToEntity(c) : null;
+  }
+
+  public async findOverlapping(
+    dormitoryId: string,
+    periodStart: Date,
+    periodEnd: Date,
+    excludeId?: string
+  ): Promise<BillingCycleEntity[]> {
+    const pStart = new Date(periodStart);
+    const pEnd = new Date(periodEnd);
+    const where: any = {
+      dormitoryId,
+      periodStart: { lte: pEnd },
+      periodEnd: { gte: pStart },
+    };
+    if (excludeId) where.id = { not: excludeId };
+
+    const cycles = await this.prisma.billingCycle.findMany({ where });
+    return cycles.map((c) => this.mapCycleToEntity(c));
+  }
+
+  public async findAll(
+    dormitoryId: string,
+    filter: BillingCycleFilterQuery = {}
+  ): Promise<{ items: BillingCycleEntity[]; total: number }> {
+    const where: any = { dormitoryId };
+    if (filter.status) where.status = filter.status;
+    const page = filter.page || 1;
+    const pageSize = filter.pageSize || 20;
+    const skip = (page - 1) * pageSize;
+
+    const [items, total] = await Promise.all([
+      this.prisma.billingCycle.findMany({ where, skip, take: pageSize, orderBy: { periodStart: 'desc' } }),
+      this.prisma.billingCycle.count({ where }),
+    ]);
+
+    return { items: items.map((c) => this.mapCycleToEntity(c)), total };
+  }
+
+  public async create(dormitoryId: string, data: CreateBillingCycleData): Promise<BillingCycleEntity> {
+    const isUuid = (str?: string | null) => !!str && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
+    const c = await this.prisma.billingCycle.create({
+      data: {
+        dormitoryId,
+        cycleCode: data.cycleCode,
+        name: data.name,
+        periodStart: new Date(data.periodStart),
+        periodEnd: new Date(data.periodEnd),
+        billingDate: new Date(data.billingDate),
+        dueDate: new Date(data.dueDate),
+        status: data.status || 'draft',
+        createdByUserId: isUuid(data.createdByUserId) ? data.createdByUserId : null,
+      },
+    });
+    return this.mapCycleToEntity(c);
+  }
+
+  public async update(
+    id: string,
+    dormitoryId: string,
+    data: Partial<BillingCycleEntity>,
+    expectedVersion?: number
+  ): Promise<BillingCycleEntity | null> {
+    const existing = await this.findById(id, dormitoryId);
+    if (!existing) return null;
+    if (expectedVersion !== undefined && existing.version !== expectedVersion) {
+      const err = new Error('RESOURCE_VERSION_CONFLICT');
+      (err as any).code = 'RESOURCE_VERSION_CONFLICT';
+      throw err;
+    }
+
+    const c = await this.prisma.billingCycle.update({
+      where: { id },
+      data: {
+        name: data.name,
+        status: data.status,
+        periodStart: data.periodStart ? new Date(data.periodStart) : undefined,
+        periodEnd: data.periodEnd ? new Date(data.periodEnd) : undefined,
+        billingDate: data.billingDate ? new Date(data.billingDate) : undefined,
+        dueDate: data.dueDate ? new Date(data.dueDate) : undefined,
+        version: { increment: 1 },
+      },
+    });
+    return this.mapCycleToEntity(c);
+  }
+
+  public async createRateSnapshot(dormitoryId: string, data: CreateRateSnapshotData): Promise<BillingRateSnapshotEntity> {
+    const s = await this.prisma.billingRateSnapshot.create({
+      data: {
+        dormitoryId,
+        billingCycleId: data.billingCycleId,
+        waterBillingType: data.waterBillingType || 'per_unit',
+        waterRate: data.waterRate || '18.00',
+        electricityBillingType: data.electricityBillingType || 'per_unit',
+        electricityRate: data.electricityRate || '7.00',
+        commonFee: data.commonFee || '0.00',
+        internetFee: data.internetFee || '0.00',
+        lateFeeType: data.lateFeeType || 'fixed',
+        lateFeeValue: data.lateFeeValue || '50.00',
+        currency: data.currency || 'THB',
+      },
+    });
+    return this.mapSnapshotToEntity(s);
+  }
+
+  public async findRateSnapshot(billingCycleId: string, dormitoryId?: string): Promise<BillingRateSnapshotEntity | null> {
+    const where: any = { billingCycleId };
+    if (dormitoryId) where.dormitoryId = dormitoryId;
+    const s = await this.prisma.billingRateSnapshot.findFirst({ where });
+    return s ? this.mapSnapshotToEntity(s) : null;
   }
 }

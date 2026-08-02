@@ -22,7 +22,7 @@ import { TermsPage } from './pages/public/TermsPage';
 import { PrivacyPage } from './pages/public/PrivacyPage';
 
 import { OwnerLoginPage } from './pages/auth/OwnerLoginPage';
-import { TenantInvitePage } from './pages/tenant/TenantInvitePage';
+import { TenantRegistrationPage } from './pages/tenant/TenantRegistrationPage';
 import { OnboardingWizard } from './pages/onboarding/OnboardingWizard';
 
 import { DemoPortal } from './pages/demo';
@@ -36,23 +36,27 @@ import {
   setTenantDemoSession
 } from './demo/demoSession';
 
-import { OwnerAuthGuard, TenantAuthGuard } from './router/guards';
-import { seedDatabase } from './data/mockData';
+import { OwnerAuthGuard, TenantAuthGuard, AuthContext } from './router/guards';
+
 import { User, Tenant } from './types';
 import { ShieldAlert, Copy } from 'lucide-react';
 
-// Wrapper for Protected Owner Workspace
 const OwnerWorkspaceContainer: React.FC = () => {
   const navigate = useNavigate();
-  const session = getDemoSession();
+  const session = React.useContext(AuthContext);
 
   if (!session || session.userType !== 'owner' || !session.user) {
     return <Navigate to="/auth/owner" replace />;
   }
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    localStorage.removeItem('selected_dormitory_id');
+    sessionStorage.removeItem('active_dormitory_selected_for_session');
     clearDemoSession();
-    navigate('/');
+    try {
+      await fetch('/api/v1/auth/logout', { method: 'POST', credentials: 'include' });
+    } catch {}
+    navigate('/auth/owner');
   };
 
   return <OwnerWorkspace user={session.user} onLogout={handleLogout} />;
@@ -90,7 +94,6 @@ const DemoPortalContainer: React.FC = () => {
   };
 
   const handleResetDatabase = () => {
-    seedDatabase(true);
     clearDemoSession();
     navigate('/demo');
   };
@@ -110,7 +113,6 @@ export default function App() {
 
   // Initial seed check & token verification
   useEffect(() => {
-    seedDatabase(false);
 
     // Check for SaaS token in query string
     const urlParams = new URLSearchParams(window.location.search);
@@ -236,11 +238,21 @@ export default function App() {
         />
         <Route path="/tenant/login" element={<Navigate to="/demo" replace />} />
 
-        {/* Tenant Invitation Token Route */}
+        {/* Tenant Registration via LIFF */}
         <Route
-          path="/tenant/invite/:token"
+          path="/liff/tenant/register"
           element={
-            <TenantInvitePage
+            <TenantRegistrationPage
+              onLoginSuccess={(tenant) => {
+                setTenantDemoSession(tenant);
+              }}
+            />
+          }
+        />
+        <Route
+          path="/tenant/register"
+          element={
+            <TenantRegistrationPage
               onLoginSuccess={(tenant) => {
                 setTenantDemoSession(tenant);
               }}

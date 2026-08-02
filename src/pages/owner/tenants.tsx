@@ -23,7 +23,8 @@ import {
   Dog,
   Check,
   Copy,
-  QrCode
+  QrCode,
+  CheckCircle
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
@@ -35,6 +36,7 @@ import {
 } from '../../components/GlobalComponents';
 import { Tenant, Room, CoOccupant, EmergencyContact, Contract, Bill, BillItem, BLOCKING_CONTRACT_STATUSES } from '../../types';
 import { getDormitory } from '../../data/mockData';
+import { getDataProvider } from '../../data/dataProvider';
 import { convertImageToWebP, UPLOAD_DROPZONE_TEXT } from '../../utils/imageUtils';
 
 interface OwnerTenantsProps {
@@ -100,6 +102,8 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
 
   // Lease termination states
   const [isTerminateOpen, setIsTerminateOpen] = useState(false);
+  const [isTransferOpen, setIsTransferOpen] = useState(false);
+  const [transferTargetRoom, setTransferTargetRoom] = useState('');
   const [isSuccessAnimating, setIsSuccessAnimating] = useState(false);
   const [terminateReason, setTerminateReason] = useState<'early' | 'normal' | 'prepare_vacant'>('normal');
   const [refundDeposit, setRefundDeposit] = useState(true);
@@ -318,10 +322,30 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
     }
   };
 
-  const handleConfirmTerminate = () => {
+  const handleConfirmTerminate = async () => {
     if (!selectedTenant) return;
 
+    setErrorText(null);
     setIsSuccessAnimating(true);
+    
+    const tenantId = selectedTenant.id;
+    const room = rooms.find(r => r.currentTenantId === tenantId);
+    
+    if (room) {
+      try {
+        const moveOutDate = additionalNote?.match(/\d{4}-\d{2}-\d{2}/)?.[0] || new Date().toISOString().split('T')[0];
+        const res = await getDataProvider().occupancies!.moveOut(room.id, moveOutDate);
+        if (!res.success) {
+          setErrorText(res.error?.message || 'Failed to process move-out');
+          setIsSuccessAnimating(false);
+          return;
+        }
+      } catch (err: any) {
+        setErrorText(err.message || 'Error occurred during move-out');
+        setIsSuccessAnimating(false);
+        return;
+      }
+    }
 
     setTimeout(() => {
       const tenantId = selectedTenant.id;
@@ -438,6 +462,80 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
       setIsSuccessAnimating(false);
       setIsTerminateOpen(false);
       setSelectedTenant(null);
+    }, 1200);
+  };
+
+  const handleConfirmTransfer = async () => {
+    if (!selectedTenant || !transferTargetRoom) return;
+    
+    setErrorText(null);
+    setIsSuccessAnimating(true);
+    
+    const tenantId = selectedTenant.id;
+    const currentRoom = rooms.find(r => r.currentTenantId === tenantId);
+    
+    if (currentRoom) {
+      try {
+        const transferDate = additionalNote?.match(/\d{4}-\d{2}-\d{2}/)?.[0] || new Date().toISOString().split('T')[0];
+        const res = await getDataProvider().occupancies!.transferRoom(currentRoom.id, transferTargetRoom, transferDate);
+        if (!res.success) {
+          setErrorText(res.error?.message || 'Failed to process room transfer');
+          setIsSuccessAnimating(false);
+          return;
+        }
+      } catch (err: any) {
+        setErrorText(err.message || 'Error occurred during room transfer');
+        setIsSuccessAnimating(false);
+        return;
+      }
+    }
+
+    setTimeout(() => {
+      const tenantId = selectedTenant.id;
+      const tenantName = selectedTenant.name;
+      const oldRoom = rooms.find(r => r.currentTenantId === tenantId);
+      const newRoom = rooms.find(r => r.id === transferTargetRoom);
+      
+      if (!oldRoom || !newRoom) {
+        setIsSuccessAnimating(false);
+        setIsTransferOpen(false);
+        return;
+      }
+
+      // Update rooms
+      const updatedRooms = rooms.map(r => {
+        if (r.id === oldRoom.id) {
+          return { ...r, status: 'vacant' as const, currentTenantId: undefined, updatedAt: new Date().toISOString() };
+        }
+        if (r.id === newRoom.id) {
+          return { ...r, status: 'occupied' as const, currentTenantId: tenantId, currentContractId: oldRoom.currentContractId, updatedAt: new Date().toISOString() };
+        }
+        return r;
+      });
+
+      // Update contracts
+      let updatedContracts = [...(contracts || [])];
+      if (oldRoom.currentContractId) {
+        updatedContracts = updatedContracts.map(c => {
+          if (c.id === oldRoom.currentContractId) {
+            return { ...c, roomId: newRoom.id, updatedAt: new Date().toISOString(), terms: `${c.terms || ''}\n[ระบบนิติ] ย้ายห้องพักจากห้อง ${oldRoom.roomNumber} ไปยังห้อง ${newRoom.roomNumber} เมื่อ ${new Date().toLocaleDateString('th-TH')}${additionalNote ? ` / หมายเหตุ: ${additionalNote}` : ''}` };
+          }
+          return c;
+        });
+      }
+
+      onSaveRooms(updatedRooms);
+      if (onSaveContracts) {
+        onSaveContracts(updatedContracts);
+      }
+
+      const detailLog = `ผู้เช่าย้ายห้องจาก ${oldRoom.roomNumber} ไปยัง ${newRoom.roomNumber}${additionalNote ? ` (หมายเหตุ: ${additionalNote})` : ''}`;
+      onAddLog('ย้ายห้องพัก', detailLog, 'Tenant', tenantId);
+
+      setIsSuccessAnimating(false);
+      setIsTransferOpen(false);
+      setTransferTargetRoom('');
+      setAdditionalNote('');
     }, 1200);
   };
 
@@ -778,6 +876,21 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                   <button
                     disabled={!isRecent2Cycles}
                     onClick={() => {
+                      setTransferTargetRoom('');
+                      setIsTransferOpen(true);
+                    }}
+                    className={`px-2.5 py-1.5 font-bold text-[10px] rounded-xl transition-all shrink-0 border ${
+                      isRecent2Cycles
+                        ? 'bg-amber-50 border-amber-100 hover:bg-amber-100 text-amber-700 cursor-pointer'
+                        : 'bg-gray-100 border-gray-200 text-gray-400 cursor-not-allowed'
+                    }`}
+                    title={isRecent2Cycles ? 'ย้ายห้องพัก' : 'สามารถทำการย้ายห้องได้เฉพาะ 2 งวดล่าสุดเท่านั้น'}
+                  >
+                    ย้ายห้อง
+                  </button>
+                  <button
+                    disabled={!isRecent2Cycles}
+                    onClick={() => {
                       setTerminateReason('normal');
                       setRefundDeposit(true);
                       setDamageFee('0');
@@ -812,7 +925,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                     profileTab === 'history' ? 'border-indigo-600 text-indigo-600 font-semibold' : 'border-transparent text-gray-400 hover:text-slate-600'
                   }`}
                 >
-                  ประวัติผู้พักอาศัยร่วม
+                  ประวัติการเช่าและผู้พักร่วม
                 </button>
               </div>
 
@@ -990,9 +1103,21 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                                   </p>
                                 </div>
                               </div>
-                              <span className="text-[9px] font-bold text-indigo-700 bg-indigo-50 border border-indigo-100 px-2 py-0.5 rounded-md shrink-0 flex items-center gap-0.5 group-hover:bg-indigo-100 transition-colors">
-                                เปิดดูสัญญา &rarr;
-                              </span>
+                              <div className="flex items-center gap-1.5 shrink-0">
+                                <a
+                                  href={`/api/v1/contracts/${con.id}/pdf`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  onClick={(e) => e.stopPropagation()}
+                                  className="text-[9px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md hover:bg-emerald-100 transition-colors flex items-center gap-1"
+                                >
+                                  <span>ดาวน์โหลด PDF</span>
+                                  <span className="text-[10px]">📥</span>
+                                </a>
+                                <span className="text-[9px] font-bold text-indigo-700 bg-indigo-50 border border-indigo-100 px-2 py-0.5 rounded-md flex items-center gap-0.5 group-hover:bg-indigo-100 transition-colors">
+                                  เปิดดูสัญญา &rarr;
+                                </span>
+                              </div>
                             </div>
                           );
                         });
@@ -1005,22 +1130,45 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
 
 
                 {profileTab === 'history' && (
-                  <div className="space-y-4">
-                    <h4 className="text-xs font-bold text-slate-800">ผู้พักอาศัยร่วมประสงค์ขอแจ้งบันทึก ({selectedTenant.coOccupants.length} คน)</h4>
-                     {selectedTenant.coOccupants.map((co, index) => (
-                      <div key={co.id} className="p-3.5 bg-slate-50 border border-gray-100 rounded-2xl flex justify-between items-center text-xs gap-3">
-                        <div className="min-w-0">
-                          <p className="font-bold text-slate-800 truncate">{co.name}</p>
-                          <p className="text-[10px] text-gray-400 mt-1">เบอร์โทรศัพท์: {formatPhone(co.phone)}</p>
+                  <div className="space-y-6">
+                    <div className="space-y-4">
+                      <h4 className="text-xs font-bold text-slate-800">ประวัติการเข้าพัก (Occupancy History)</h4>
+                      {selectedTenant.rentalHistory && selectedTenant.rentalHistory.length > 0 ? (
+                        <div className="space-y-2">
+                          {selectedTenant.rentalHistory.map((roomId, idx) => {
+                            const pastRoom = rooms.find(r => r.id === roomId);
+                            return (
+                              <div key={idx} className="p-3 bg-white border border-gray-200 rounded-xl flex items-center justify-between text-xs">
+                                <div>
+                                  <span className="font-bold text-slate-700">ห้อง {pastRoom ? pastRoom.roomNumber : 'ไม่ทราบหมายเลขห้อง'}</span>
+                                </div>
+                                <span className="text-[10px] text-gray-400 bg-gray-50 px-2 py-1 rounded">ประวัติการเช่า</span>
+                              </div>
+                            );
+                          })}
                         </div>
-                        <span className="text-[9px] text-slate-400 font-bold bg-white px-2 py-1 rounded-lg border border-gray-100 shrink-0 whitespace-nowrap">
-                          คนที่ {index + 1}
-                        </span>
-                      </div>
-                    ))}
-                    {selectedTenant.coOccupants.length === 0 && (
-                      <p className="text-center py-12 text-xs text-gray-400">พักอาศัยเพียงท่านเดียว (ไม่มีประวัติแจ้งผู้พักร่วม)</p>
-                    )}
+                      ) : (
+                        <p className="text-center py-4 text-[11px] text-gray-400 border border-dashed border-gray-200 rounded-xl bg-slate-50">ไม่มีประวัติการเช่าห้องอื่นเพิ่มเติม</p>
+                      )}
+                    </div>
+
+                    <div className="space-y-4 pt-4 border-t border-gray-100">
+                      <h4 className="text-xs font-bold text-slate-800">ผู้พักอาศัยร่วมประสงค์ขอแจ้งบันทึก ({selectedTenant.coOccupants.length} คน)</h4>
+                       {selectedTenant.coOccupants.map((co, index) => (
+                        <div key={co.id} className="p-3.5 bg-slate-50 border border-gray-100 rounded-2xl flex justify-between items-center text-xs gap-3">
+                          <div className="min-w-0">
+                            <p className="font-bold text-slate-800 truncate">{co.name}</p>
+                            <p className="text-[10px] text-gray-400 mt-1">เบอร์โทรศัพท์: {formatPhone(co.phone)}</p>
+                          </div>
+                          <span className="text-[9px] text-slate-400 font-bold bg-white px-2 py-1 rounded-lg border border-gray-100 shrink-0 whitespace-nowrap">
+                            คนที่ {index + 1}
+                          </span>
+                        </div>
+                      ))}
+                      {selectedTenant.coOccupants.length === 0 && (
+                        <p className="text-center py-12 text-xs text-gray-400">พักอาศัยเพียงท่านเดียว (ไม่มีประวัติแจ้งผู้พักร่วม)</p>
+                      )}
+                    </div>
                   </div>
                 )}
 
@@ -1670,6 +1818,48 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                   </div>
                 </div>
 
+                {/* Move-Out Request Details & Actual End Date Confirmation */}
+                {(() => {
+                  const stored = typeof window !== 'undefined' ? localStorage.getItem(`tenant_moveout_request_${selectedTenant.id}`) : null;
+                  const reqInfo = stored ? JSON.parse(stored) : null;
+
+                  return (
+                    <div className="p-3 bg-amber-50/70 border border-amber-200 rounded-2xl space-y-2 text-xs">
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold text-amber-900">คำขอแจ้งย้ายออกของผู้เช่า (ถ้ามี)</span>
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 font-bold">
+                          {reqInfo ? 'มีคำขอรอยืนยัน' : 'ไม่มีคำขอแจ้งย้ายออก'}
+                        </span>
+                      </div>
+                      {reqInfo && (
+                        <div className="space-y-1 text-slate-700">
+                          <p><strong>วันที่ผู้เช่าประสงค์ย้ายออก:</strong> {reqInfo.desiredDate || reqInfo.intendedMoveOutDate}</p>
+                          {reqInfo.reason && <p><strong>เหตุผล:</strong> {reqInfo.reason}</p>}
+                          {reqInfo.bankInfo && (
+                            <p><strong>บัญชีรับคืนเงินมัดจำ (Masked):</strong> {reqInfo.bankInfo} {reqInfo.accountInfo ? reqInfo.accountInfo.slice(0, 3) + '***' + reqInfo.accountInfo.slice(-3) : ''}</p>
+                          )}
+                        </div>
+                      )}
+
+                      <div className="pt-2 border-t border-amber-200/60">
+                        <label className="block text-[11px] font-bold text-slate-800 mb-1" htmlFor="actualEndDateInput">
+                          วันที่สิ้นสุดการเช่าจริง (Actual Tenancy End Date) *
+                        </label>
+                        <input
+                          id="actualEndDateInput"
+                          type="date"
+                          value={additionalNote?.match(/\d{4}-\d{2}-\d{2}/)?.[0] || new Date().toISOString().split('T')[0]}
+                          onChange={(e) => setAdditionalNote(`วันที่สิ้นสุดจริง: ${e.target.value}`)}
+                          className="w-full px-3 py-1.5 text-xs border border-slate-300 rounded-xl bg-white text-slate-900 font-semibold"
+                        />
+                        <p className="text-[10px] text-slate-500 mt-1">
+                          * วันที่ย้ายออกจริงแยกต่างหากจากวันที่ผู้เช่าแจ้งประสงค์ ยืนยันแล้วสัญญาและการพักอาศัยจะสิ้นสุดลงทันที
+                        </p>
+                      </div>
+                    </div>
+                  );
+                })()}
+
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 pt-1.5">
                   <div
                     onClick={() => setRefundDeposit(!refundDeposit)}
@@ -1734,6 +1924,91 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                     className="px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs rounded-xl cursor-pointer shadow-sm transition-all"
                   >
                     ยืนยันการเลิกเช่าคืนห้องพัก
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </Modal>
+      )}
+
+      {/* Transfer Room Modal */}
+      {selectedTenant && (
+        <Modal
+          isOpen={isTransferOpen}
+          onClose={() => !isSuccessAnimating && setIsTransferOpen(false)}
+          title={`ย้ายห้องพักผู้เช่า - ห้อง ${getRoomNumber(selectedTenant.id)}`}
+          size="md"
+        >
+          <div className="space-y-4">
+            {errorText && (
+              <div className="p-3 bg-red-50 border border-red-200 text-red-700 text-xs rounded-xl flex items-center gap-2">
+                <AlertCircle className="w-4 h-4" />
+                {errorText}
+              </div>
+            )}
+            {isSuccessAnimating ? (
+              <div className="py-8 flex flex-col items-center justify-center animate-in fade-in zoom-in duration-300">
+                <div className="w-16 h-16 bg-amber-100 rounded-full flex items-center justify-center mb-4 text-amber-600">
+                  <CheckCircle className="w-10 h-10" />
+                </div>
+                <h3 className="text-base font-bold text-slate-800">ดำเนินการย้ายห้องพักสำเร็จ</h3>
+                <p className="text-xs text-gray-500 mt-1 text-center max-w-xs">ระบบได้บันทึกการย้ายห้องพักเรียบร้อยแล้ว</p>
+              </div>
+            ) : (
+              <>
+                <div className="space-y-3 p-4 bg-amber-50/70 border border-amber-200 rounded-2xl">
+                  <h4 className="font-bold text-amber-900 text-xs">ข้อมูลการย้ายห้อง</h4>
+                  <div className="space-y-2">
+                    <label className="block text-[11px] font-bold text-slate-700">เลือกห้องปลายทาง (แสดงเฉพาะห้องว่าง)</label>
+                    <select
+                      value={transferTargetRoom}
+                      onChange={(e) => setTransferTargetRoom(e.target.value)}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-xl bg-white text-slate-800 font-semibold text-xs"
+                    >
+                      <option value="">-- กรุณาเลือกห้องว่างปลายทาง --</option>
+                      {rooms.filter(r => r.status === 'vacant').map(r => (
+                        <option key={r.id} value={r.id}>ห้อง {r.roomNumber} (ค่าเช่า: {formatBaht(r.monthlyRent)})</option>
+                      ))}
+                    </select>
+                  </div>
+                  
+                  <div className="space-y-2 pt-2 border-t border-amber-200/60">
+                    <label className="block text-[11px] font-bold text-slate-700">วันที่ย้ายห้อง</label>
+                    <input
+                      type="date"
+                      value={additionalNote?.match(/\d{4}-\d{2}-\d{2}/)?.[0] || new Date().toISOString().split('T')[0]}
+                      onChange={(e) => setAdditionalNote(`วันที่ย้าย: ${e.target.value}`)}
+                      className="w-full px-3 py-1.5 text-xs border border-slate-300 rounded-xl bg-white text-slate-900 font-semibold"
+                    />
+                  </div>
+                  
+                  <div className="space-y-2 pt-2 border-t border-amber-200/60">
+                    <label className="block text-[11px] font-bold text-slate-700">หมายเหตุเพิ่มเติม</label>
+                    <textarea
+                      value={additionalNote}
+                      onChange={(e) => setAdditionalNote(e.target.value)}
+                      className="w-full px-3 py-2 text-xs border border-slate-300 rounded-xl bg-white text-slate-800 h-16 resize-none"
+                      placeholder="เช่น ระบุการย้ายมัดจำ..."
+                    />
+                  </div>
+                </div>
+
+                <div className="pt-3 border-t border-gray-100 flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsTransferOpen(false)}
+                    className="px-4 py-2 border border-gray-200 bg-white hover:bg-slate-50 text-slate-600 rounded-xl text-xs font-semibold cursor-pointer"
+                  >
+                    ยกเลิก
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleConfirmTransfer}
+                    disabled={!transferTargetRoom}
+                    className="px-5 py-2 bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs rounded-xl cursor-pointer shadow-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    ยืนยันการย้ายห้อง
                   </button>
                 </div>
               </>

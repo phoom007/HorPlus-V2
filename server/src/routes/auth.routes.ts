@@ -130,6 +130,50 @@ export function createAuthRouter(authService: AuthenticationService): Router {
     }
   });
 
+  // POST /api/v1/auth/e2e-login (TEST ONLY)
+  router.post('/e2e-login', async (req: Request, res: Response, next) => {
+    try {
+      if (env.NODE_ENV !== 'test' || !env.E2E_TEST_MODE) {
+        return res.status(404).json({ error: 'Not Found' });
+      }
+
+      const { userId } = req.body;
+      if (!userId || typeof userId !== 'string') {
+        return res.status(400).json({ error: 'userId is required for E2E login' });
+      }
+
+      // Mock google login internal
+      const authResult = await authService.authenticateTestUser(userId);
+
+      res.cookie(env.SESSION_COOKIE_NAME, authResult.sessionToken, {
+        httpOnly: true,
+        secure: isProd,
+        sameSite: sameSite,
+        path: '/',
+        maxAge: env.SESSION_TTL_SECONDS * 1000,
+      });
+
+      res.cookie(env.CSRF_COOKIE_NAME, authResult.csrfToken, {
+        httpOnly: false,
+        secure: isProd,
+        sameSite: sameSite,
+        path: '/',
+        maxAge: env.SESSION_TTL_SECONDS * 1000,
+      });
+
+      return res.status(200).json({
+        data: {
+          user: authResult.user,
+          memberships: authResult.memberships,
+          onboardingRequired: authResult.onboardingRequired,
+          csrfToken: authResult.csrfToken,
+        },
+      });
+    } catch (err: any) {
+      next(err);
+    }
+  });
+
   // POST /api/v1/auth/logout-all
   router.post('/logout-all', authRateLimiter, requireSession, csrfMiddleware, async (req: Request, res: Response, next) => {
     try {

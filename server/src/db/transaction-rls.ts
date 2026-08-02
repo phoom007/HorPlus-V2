@@ -39,7 +39,7 @@ export async function withDormitoryTransaction<T>(
   };
 
   if (typeof prismaOrTx.$transaction === 'function') {
-    return prismaOrTx.$transaction(runInsideTx);
+    return prismaOrTx.$transaction(runInsideTx, { maxWait: 15000, timeout: 20000 });
   }
 
   // If already inside a transaction or mock object
@@ -67,7 +67,7 @@ export async function withUserProvisioningTransaction<T>(
   };
 
   if (typeof prismaOrTx.$transaction === 'function') {
-    return prismaOrTx.$transaction(runInsideTx);
+    return prismaOrTx.$transaction(runInsideTx, { maxWait: 15000, timeout: 20000 });
   }
 
   return runInsideTx(prismaOrTx);

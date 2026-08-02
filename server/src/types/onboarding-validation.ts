@@ -2,15 +2,15 @@ import { z } from 'zod';
 
 export const OnboardingDormitoryInputSchema = z.object({
   name: z.string().trim().min(1, 'กรุณาระบุชื่อหอพัก').max(255, 'ชื่อหอพักยาวเกินไป'),
-  type: z.string().trim().optional().default('apartment'),
-  addressLine1: z.string().trim().optional(),
-  addressLine2: z.string().trim().optional(),
-  subdistrict: z.string().trim().optional(),
-  district: z.string().trim().optional(),
-  province: z.string().trim().optional(),
-  postalCode: z.string().trim().optional(),
-  phone: z.string().trim().optional(),
-  email: z.string().trim().email('อีเมลหอพักไม่ถูกต้อง').optional().or(z.literal('')),
+  type: z.string().trim().optional().nullable().default('apartment'),
+  addressLine1: z.string().trim().optional().nullable(),
+  addressLine2: z.string().trim().optional().nullable(),
+  subdistrict: z.string().trim().optional().nullable(),
+  district: z.string().trim().optional().nullable(),
+  province: z.string().trim().optional().nullable(),
+  postalCode: z.string().trim().optional().nullable(),
+  phone: z.string().trim().optional().nullable(),
+  email: z.string().trim().email('อีเมลหอพักไม่ถูกต้อง').optional().nullable().or(z.literal('')),
   estimatedBuildingCount: z.coerce.number().int().min(1, 'จำนวนอาคารต้องอย่างน้อย 1').max(100).default(1),
   estimatedRoomCount: z.coerce.number().int().min(1, 'จำนวนห้องต้องอย่างน้อย 1').max(10000).default(10),
 }).strict();
@@ -38,13 +38,61 @@ export const OnboardingPaymentInputSchema = z.object({
   bankAccountNumber: z.string().trim().optional().nullable(),
 }).strict();
 
+export const BuildingSchema = z.object({
+  name: z.string().min(1, 'Building name is required').max(255),
+  code: z.string().max(100).optional().nullable(),
+  floorCount: z.number().int().min(1, 'Minimum 1 floor').default(1),
+  roomsPerFloor: z.number().int().min(0).optional().nullable(),
+  numberingPattern: z.string().max(100).optional().nullable(),
+  description: z.string().optional().nullable(),
+}).strict();
+
+export const OnboardingBuildingInputSchema = z.object({
+  id: z.string().trim().min(1),
+  name: z.string().trim().min(1, 'กรุณาระบุชื่ออาคาร').max(255),
+  code: z.string().max(100).optional().nullable(),
+  floorsCount: z.coerce.number().int().min(1, 'จำนวนชั้นต้องอย่างน้อย 1').max(200).default(1),
+  roomsPerFloor: z.coerce.number().int().min(0).optional().nullable(),
+  numberingPattern: z.string().max(100).optional().nullable(),
+  description: z.string().trim().optional().nullable(),
+}).strict();
+
+export const OnboardingRoomInputSchema = z.object({
+  buildingId: z.string().trim().min(1, 'ต้องระบุอาคาร'),
+  roomNumber: z.string().trim().min(1, 'กรุณาระบุหมายเลขห้อง').max(100),
+  floor: z.coerce.number().int().min(0).default(1),
+  monthlyRent: z.coerce.number().min(0).default(0),
+  depositAmount: z.coerce.number().min(0).default(0),
+  parkingFee: z.coerce.number().min(0).default(0),
+  maximumOccupants: z.coerce.number().int().min(1).default(2),
+  initialWaterReading: z.coerce.number().min(0).default(0),
+  initialElectricityReading: z.coerce.number().min(0).default(0),
+  status: z.enum(['vacant', 'occupied', 'reserved', 'maintenance']).default('vacant'),
+}).strict();
+
+export const OnboardingLineOAInputSchema = z.object({
+  skipped: z.boolean().optional(),
+  messagingChannelId: z.string().trim().optional().nullable(),
+  channelSecret: z.string().trim().optional().nullable(),
+  channelAccessToken: z.string().trim().optional().nullable(),
+  lineLoginChannelId: z.string().trim().optional().nullable(),
+  liffId: z.string().trim().optional().nullable(),
+  liffEndpointUrl: z.string().trim().optional().nullable(),
+}).optional().nullable();
+
 export const CompleteOnboardingInputSchema = z.object({
   dormitory: OnboardingDormitoryInputSchema,
   billing: OnboardingBillingInputSchema.optional(),
   payment: OnboardingPaymentInputSchema.optional(),
+  buildings: z.array(OnboardingBuildingInputSchema).optional(),
+  rooms: z.array(OnboardingRoomInputSchema).optional(),
+  lineOA: OnboardingLineOAInputSchema,
   planCode: z.string().trim().min(1, 'กรุณาเลือกแพ็กเกจ'),
   promoCode: z.string().trim().optional(),
-}).strict();
+  idempotencyKey: z.string().optional(),
+  marketingSource: z.string().optional(),
+  termsAccepted: z.boolean().optional(),
+});
 
 export const OnboardingDraftInputSchema = z.object({
   currentStep: z.string().trim().min(1, 'กรุณาระบุขั้นตอนปัจจุบัน').default('dormitory'),

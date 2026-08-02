@@ -64,7 +64,7 @@ export class TenantService {
         action: 'TENANT_CREATED',
         source: 'tenant',
         reason: `Created tenant ${tenant.displayName}`,
-        metadata: { dormitoryId, tenantId: tenant.id },
+        ipMetadata: { dormitoryId, tenantId: tenant.id },
       });
     }
 
@@ -118,7 +118,7 @@ export class TenantService {
         action: 'TENANT_UPDATED',
         source: 'tenant',
         reason: `Updated tenant ${updated.displayName}`,
-        metadata: { dormitoryId, tenantId: id },
+        ipMetadata: { dormitoryId, tenantId: id },
       });
     }
 
@@ -149,7 +149,7 @@ export class TenantService {
         action: 'TENANT_ARCHIVED',
         source: 'tenant',
         reason: `Archived tenant ${archived.displayName}`,
-        metadata: { dormitoryId, tenantId: id },
+        ipMetadata: { dormitoryId, tenantId: id },
       });
     }
 

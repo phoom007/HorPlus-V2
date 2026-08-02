@@ -1,3 +1,7 @@
+> [!NOTE]
+> **[STATUS: CURRENT]**
+> Refer to **[21-CURRENT-PRODUCT-RULE-LOCK.md](./21-CURRENT-PRODUCT-RULE-LOCK.md)** for absolute precedence.
+
 # 11. Audit Log and Observability
 
 ## 1. Audit vs Application Log
@@ -77,4 +81,5 @@ HTTP → DB transaction → outbox → worker → provider callback ต้อง
 - log redaction test ผ่าน
 - alert test ใช้ synthetic event ได้
 - retry สร้าง audit business event ครั้งเดียวหรือมี retry metadata ไม่สร้างผลลัพธ์ซ้ำ
+
 

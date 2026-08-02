@@ -106,12 +106,13 @@ describe('TASK 010 — Security & Session Cryptography Tests', () => {
       .post('/api/v1/auth/google')
       .send({ idToken: 'expired-token', intent: 'owner' });
 
-    expect(expiredRes.status).toBe(500); // Caught by global error handler
+    expect(expiredRes.status).toBe(400); // Handled by GoogleAuthError (400 Bad Request)
 
     const unverifiedRes = await supertest(app)
       .post('/api/v1/auth/google')
       .send({ idToken: 'unverified-email-token', intent: 'owner' });
 
-    expect(unverifiedRes.status).toBe(500);
+    expect(unverifiedRes.status).toBe(400);
   });
 });
+

@@ -1,3 +1,5 @@
+import { PrismaClient } from '@prisma/client';
+
 export interface RolePermissions {
   [module: string]: string[];
 }
@@ -147,3 +149,81 @@ export class InMemoryRoleRepository implements IRoleRepository {
     return Array.from(this.roles.values()).filter((r) => r.isSystem);
   }
 }
+
+export class PrismaRoleRepository implements IRoleRepository {
+  private prisma: PrismaClient;
+
+  constructor(prisma: PrismaClient) {
+    this.prisma = prisma;
+  }
+
+  private mapToEntity(model: any): RoleEntity {
+    return {
+      id: model.id,
+      dormitoryId: model.dormitoryId,
+      code: model.code,
+      name: model.name,
+      permissions: typeof model.permissions === 'string' ? JSON.parse(model.permissions) : model.permissions,
+      isSystem: model.isSystem,
+      createdAt: model.createdAt,
+      updatedAt: model.updatedAt,
+    };
+  }
+
+  public async findById(id: string): Promise<RoleEntity | null> {
+    const role = await this.prisma.role.findUnique({
+      where: { id },
+    });
+    return role ? this.mapToEntity(role) : null;
+  }
+
+  public async findByCode(code: string, dormitoryId?: string): Promise<RoleEntity | null> {
+    const role = await this.prisma.role.findFirst({
+      where: {
+        code,
+        OR: [
+          { isSystem: true },
+          { dormitoryId: dormitoryId || null },
+        ],
+      },
+    });
+    return role ? this.mapToEntity(role) : null;
+  }
+
+  public async findByDormitoryAndCode(dormitoryId: string, code: string): Promise<RoleEntity | null> {
+    const role = await this.prisma.role.findFirst({
+      where: {
+        code,
+        OR: [
+          { isSystem: true },
+          { dormitoryId },
+        ],
+      },
+    });
+    return role ? this.mapToEntity(role) : null;
+  }
+
+  public async createSystemRole(dormitoryId: string, code: string, name: string, permissions: RolePermissions): Promise<RoleEntity> {
+    const existing = await this.findByCode(code, dormitoryId);
+    if (existing) return existing;
+
+    const role = await this.prisma.role.create({
+      data: {
+        dormitoryId,
+        code,
+        name,
+        permissions: permissions as any,
+        isSystem: true,
+      },
+    });
+    return this.mapToEntity(role);
+  }
+
+  public async getSystemRoles(): Promise<RoleEntity[]> {
+    const roles = await this.prisma.role.findMany({
+      where: { isSystem: true },
+    });
+    return roles.map(r => this.mapToEntity(r));
+  }
+}
+

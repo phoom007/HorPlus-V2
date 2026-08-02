@@ -9,6 +9,7 @@ import {
   MockLiffIdentityVerifier
 } from './line-provider.interface.js';
 import { auditService } from './audit.service.js';
+import { getRedisClient } from '../db/redis.js';
 
 export class LineIntegrationService {
   constructor(
@@ -62,7 +63,7 @@ export class LineIntegrationService {
     }
 
     const rawSecret = this.decryptSecret(integration.channelSecretEncrypted);
-    const host = process.env.PUBLIC_APP_URL || 'https://api.horplus.com';
+    const host = (process.env.PUBLIC_APP_ORIGIN || process.env.PUBLIC_APP_URL || process.env.APP_URL || 'https://desktop-sgg6vot.tail359964.ts.net').replace(/\/+$/, '');
     const webhookUrl = `${host}/api/v1/webhooks/line/${integration.webhookPublicKey}`;
 
     return {
@@ -73,11 +74,11 @@ export class LineIntegrationService {
       channelSecretMasked: this.maskSecret(rawSecret),
       lineLoginChannelId: integration.lineLoginChannelId,
       liffId: integration.liffId,
-      liffEndpointUrl: integration.liffEndpointUrl,
+      liffEndpointUrl: integration.liffId ? `https://liff.line.me/${integration.liffId}` : null,
       webhookUrl,
       webhookPublicKey: integration.webhookPublicKey,
-      botDisplayName: integration.botDisplayName || 'หอพัก HorPlus OA',
-      botPictureUrl: integration.botPictureUrl || 'https://api.dicebear.com/7.x/bottts/svg?seed=horplus_oa',
+      botDisplayName: integration.botDisplayName || null,
+      botPictureUrl: integration.botPictureUrl || null,
       lastConnectionCheckAt: integration.lastConnectionCheckAt,
       lastWebhookReceivedAt: integration.lastWebhookReceivedAt
     };
@@ -93,7 +94,6 @@ export class LineIntegrationService {
     userId?: string;
   }) {
     let secretToEncrypt = params.channelSecret;
-    // If user didn't change masked secret, keep existing secret
     if (params.channelSecret.includes('••••')) {
       const existing = await this.repo.getIntegrationByDormitory(params.dormitoryId);
       if (existing) {
@@ -103,13 +103,37 @@ export class LineIntegrationService {
 
     const encryptedSecret = this.encryptSecret(secretToEncrypt);
 
-    // Get Bot Info
     let botInfo = { botUserId: 'U_bot_default', displayName: 'หอพัก HorPlus OA', pictureUrl: 'https://api.dicebear.com/7.x/bottts/svg?seed=horplus_oa' };
+    
+    const existing = await this.repo.getIntegrationByDormitory(params.dormitoryId);
+    if (existing) {
+      botInfo = {
+        botUserId: existing.botUserId || botInfo.botUserId,
+        displayName: existing.botDisplayName || botInfo.displayName,
+        pictureUrl: existing.botPictureUrl || botInfo.pictureUrl
+      };
+    }
+
     try {
-      const token = await this.tokenProvider.getAccessToken('temp_id', params.messagingChannelId, secretToEncrypt);
-      botInfo = await this.messagingProvider.getBotInfo(token.accessToken);
-    } catch {
-      // Mock fallback
+      if (secretToEncrypt) {
+        const token = await this.requestTemporaryAccessToken(params.messagingChannelId, secretToEncrypt);
+        const response = await fetch('https://api.line.me/v2/bot/info', {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (response.ok) {
+          const fetchedInfo = await response.json() as any;
+          botInfo = {
+            botUserId: fetchedInfo.basicId || botInfo.botUserId,
+            displayName: fetchedInfo.displayName || botInfo.displayName,
+            pictureUrl: fetchedInfo.pictureUrl || botInfo.pictureUrl
+          };
+        } else if (response.status === 401) {
+          const redis = getRedisClient();
+          await redis.del(`line_token:${params.messagingChannelId}`).catch(() => {});
+        }
+      }
+    } catch (err) {
+      console.error('Failed to fetch bot info during save:', err);
     }
 
     const integration = await this.repo.upsertIntegration({
@@ -141,33 +165,91 @@ export class LineIntegrationService {
     return this.getIntegrationSettings(params.dormitoryId);
   }
 
-  async testConnection(dormitoryId: string) {
+  async requestTemporaryAccessToken(channelId: string, channelSecret: string): Promise<string> {
+    const redis = getRedisClient();
+    const cacheKey = `line_token:${channelId}`;
+    
+    try {
+      const cachedToken = await redis.get(cacheKey);
+      if (cachedToken) return cachedToken;
+    } catch (err) {
+      console.warn('Redis error while getting cached token, proceeding to issue new one:', err);
+    }
+
+    const params = new URLSearchParams();
+    params.append('grant_type', 'client_credentials');
+    params.append('client_id', channelId);
+    params.append('client_secret', channelSecret);
+
+    const response = await fetch('https://api.line.me/oauth2/v3/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: params.toString()
+    });
+
+    if (!response.ok) {
+      console.error('Failed to issue LINE access token', await response.text());
+      throw new Error('FAILED_TO_ISSUE_TOKEN');
+    }
+
+    const data = await response.json() as any;
+    const token = data.access_token;
+    const expiresIn = data.expires_in;
+
+    try {
+      const ttl = Math.max(0, expiresIn - 3600); // 1 hour buffer
+      if (ttl > 0) {
+        await redis.setex(cacheKey, ttl, token);
+      }
+    } catch (err) {
+      console.warn('Redis error while saving issued token:', err);
+    }
+
+    return token;
+  }
+
+  async testConnection(dormitoryId: string, providedSecret?: string) {
     const integration = await this.repo.getIntegrationByDormitory(dormitoryId);
     if (!integration) {
       throw new Error('NO_LINE_INTEGRATION_FOUND');
     }
 
-    const secret = this.decryptSecret(integration.channelSecretEncrypted);
+    const secret = providedSecret || this.decryptSecret(integration.channelSecretEncrypted);
     try {
-      const token = await this.tokenProvider.getAccessToken(integration.id, integration.messagingChannelId, secret);
-      const botInfo = await this.messagingProvider.getBotInfo(token.accessToken);
+      const accessToken = await this.requestTemporaryAccessToken(integration.messagingChannelId, secret);
+
+      const response = await fetch('https://api.line.me/v2/bot/info', {
+        headers: { 'Authorization': `Bearer ${accessToken}` }
+      });
+      
+      if (!response.ok) {
+        if (response.status === 401) {
+          const redis = getRedisClient();
+          await redis.del(`line_token:${integration.messagingChannelId}`).catch(() => {});
+        }
+        throw new Error('UNAUTHORIZED');
+      }
+      
+      const info = await response.json() as any;
+      const botUserId = info.basicId || info.userId;
 
       await this.repo.upsertIntegration({
         dormitoryId,
         messagingChannelId: integration.messagingChannelId,
-        channelSecretEncrypted: integration.channelSecretEncrypted,
-        botUserId: botInfo.botUserId,
-        botDisplayName: botInfo.displayName,
-        botPictureUrl: botInfo.pictureUrl,
+        channelSecretEncrypted: this.encryptSecret(secret),
+        botUserId: botUserId,
+        botDisplayName: info.displayName,
+        botPictureUrl: info.pictureUrl,
         status: 'connected',
         lastConnectionCheckAt: new Date()
       });
 
       return {
         success: true,
-        message: 'เชื่อมต่อ LINE OA สำเร็จและพร้อมใช้งาน',
-        botDisplayName: botInfo.displayName,
-        botPictureUrl: botInfo.pictureUrl
+        displayName: info.displayName,
+        pictureUrl: info.pictureUrl,
+        basicId: botUserId,
+        status: 'connected'
       };
     } catch (err: any) {
       await this.repo.updateIntegrationStatus(integration.id, 'token_error');
@@ -203,8 +285,7 @@ export class LineIntegrationService {
     const verified = await this.liffVerifier.verifyIdentityToken({ idToken: params.liffIdToken });
 
     // Upsert line identity
-    const identity = await this.repo.upsertLineIdentity({
-      lineUserId: verified.lineUserId,
+    const identity = await this.repo.upsertLineIdentity(verified.lineUserId, {
       displayName: verified.displayName,
       pictureUrl: verified.pictureUrl
     });

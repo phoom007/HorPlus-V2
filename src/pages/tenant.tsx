@@ -63,21 +63,7 @@ import {
   Modal,
   PrintView
 } from '../components/GlobalComponents';
-import {
-  getRooms,
-  saveRooms,
-  getTenants,
-  saveTenants,
-  getBills,
-  saveBills,
-  getContracts,
-  getMaintenance,
-  saveMaintenance,
-  getAnnouncements,
-  getDormitory,
-  addAuditLog,
-  getBuildings
-} from '../data/mockData';
+
 import { Tenant, Room, Bill, Contract, MaintenanceRequest as RepairRequest, Announcement, Dormitory, BillItem, Building, formatItemDescription } from '../types';
 
 const getBankBadgeInfo = (bankName: string) => {
@@ -280,6 +266,8 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
     category: string;
     fileName: string;
     content: string;
+    docType?: string;
+    docId?: string;
   } | null>(null);
 
   // Notifications modal state
@@ -307,15 +295,15 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
     }
   }, [toast?.visible]);
 
-  const dormInfo = getDormitory();
+  const dormInfo: any = {};
 
   const refreshData = () => {
-    setRooms(getRooms());
-    setBills(getBills());
-    setContracts(getContracts());
-    setRepairs(getMaintenance() as any);
-    setAnnouncements(getAnnouncements());
-    setBuildings(getBuildings());
+    setRooms([]);
+    setBills([]);
+    setContracts([]);
+    setRepairs([] as any);
+    setAnnouncements([]);
+    setBuildings([]);
   };
 
   useEffect(() => {
@@ -361,12 +349,12 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
     setLocalTenant(updatedTenant);
     
     // Persist to localStorage
-    const allTenants = getTenants();
+    const allTenants = [];
     const updatedTenantsList = allTenants.map(t => t.id === localTenant.id ? updatedTenant : t);
-    saveTenants(updatedTenantsList);
+    console.log(updatedTenantsList);
     
     // Log audit
-    addAuditLog(localTenant.id, 'ผู้เช่าอัปเดตผู้พักร่วม', `ผู้เช่าเพิ่มผู้พักอาศัยร่วมใหม่: ${newCo.name}`, 'Tenant', localTenant.id);
+    
 
     setNewCoName('');
     setNewCoPhone('');
@@ -385,12 +373,12 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
     setLocalTenant(updatedTenant);
     
     // Persist to localStorage
-    const allTenants = getTenants();
+    const allTenants = [];
     const updatedTenantsList = allTenants.map(t => t.id === localTenant.id ? updatedTenant : t);
-    saveTenants(updatedTenantsList);
+    console.log(updatedTenantsList);
     
     // Log audit
-    addAuditLog(localTenant.id, 'ผู้เช่าอัปเดตผู้พักร่วม', `ผู้เช่าลบผู้พักอาศัยร่วม: ${coName}`, 'Tenant', localTenant.id);
+    
 
     setDeleteConfirmCoId(null);
 
@@ -519,7 +507,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
   const totalNotificationsCount = unreadBills.length + activeRepairs.length + urgentAnnouncements.length;
 
   // Handler for confirm move-out
-  const handleConfirmMoveOut = () => {
+  const handleConfirmMoveOut = async () => {
     if (!moveOutDate) {
       showToast('error', 'กรุณาระบุวันที่', 'โปรดเลือกวันที่ประสงค์จะย้ายออก');
       return;
@@ -535,12 +523,29 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
       createdAt: new Date().toISOString(),
       status: 'pending'
     };
+
+    try {
+      await fetch('/api/v1/tenant-move-out-requests', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          dormitoryId: tenant.dormitoryId,
+          tenantId: tenant.id,
+          roomId: tenantRoom?.id || '',
+          intendedMoveOutDate: moveOutDate,
+          reason: moveOutReason
+        })
+      });
+    } catch (err) {
+      // Fallback for offline demo mode
+    }
+
     setMoveOutRequest(newReq);
     try {
       localStorage.setItem(`tenant_moveout_request_${tenant.id}`, JSON.stringify(newReq));
     } catch {}
     setIsMoveOutModalOpen(false);
-    showToast('success', 'ส่งคำร้องเรียบร้อยแล้ว', 'แจ้งเลิกเช่าเรียบร้อยแล้ว หอพักจะติดต่อกลับโดยเร็ว');
+    showToast('success', 'ส่งคำขอแจ้งย้ายออกเรียบร้อยแล้ว', 'การเช่าจะยังไม่สิ้นสุดจนกว่าเจ้าของหอพักจะดำเนินการยืนยัน');
   };
 
   // Handler for cancel move-out request
@@ -553,8 +558,19 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
   };
 
   // Handler for actual document downloading
-  const handleDownloadDoc = (title: string, fileName: string, contentText: string) => {
+  const handleDownloadDoc = (title: string, fileName: string, contentText: string, docType?: string, docId?: string) => {
     try {
+      if (docType === 'contract') {
+        window.open('/api/v1/tenant-portal/contract/pdf', '_blank');
+        showToast('success', 'ดาวน์โหลดสำเร็จ', `กำลังดาวน์โหลดเอกสาร ${title} (PDF)...`);
+        return;
+      }
+      if (docType === 'receipt' && docId) {
+        window.open(`/api/v1/tenant-portal/receipts/${docId}/pdf`, '_blank');
+        showToast('success', 'ดาวน์โหลดสำเร็จ', `กำลังดาวน์โหลดเอกสาร ${title} (PDF)...`);
+        return;
+      }
+
       const blob = new Blob([contentText], { type: 'text/plain;charset=utf-8' });
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
@@ -765,8 +781,8 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
       paidAt: new Date().toISOString()
     } : b);
 
-    saveBills(updatedBills);
-    addAuditLog(tenant.id, 'ผู้เช่าแจ้งโอนเงิน', `ผู้เช่า ${tenant.name} อัปโหลดหลักฐานสลิปแจ้งยอดชำระห้อง ${tenantRoom?.roomNumber || 'A-001'}`, 'Bill', activeUnpaidBill.id);
+    console.log(updatedBills);
+    
     
     refreshData();
     setSubView(null);
@@ -796,8 +812,8 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
     };
 
     const updatedRepairs = [newRequest, ...repairs];
-    saveMaintenance(updatedRepairs as any);
-    addAuditLog(tenant.id, 'ผู้เช่าส่งเรื่องซ่อม', `ผู้เช่าส่งคำขอซ่อมแซมเรื่อง "${repairTitle}" ในห้องพัก`, 'RepairRequest', newId);
+    console.log(updatedRepairs as any);
+    
 
     refreshData();
     setIsNewRepairOpen(false);
@@ -2081,14 +2097,14 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                                   subtitle: 'PDF • สัญญาเช่าฉบับสมบูรณ์.pdf',
                                   category: 'สัญญาเช่า',
                                   fileName: `สัญญาเช่า_${con.contractNumber}.txt`,
-                                  content: `=== เอกสารสัญญาเช่าห้องพัก ===\nเลขที่สัญญา: ${con.contractNumber}\nผู้เช่า: คุณ ${tenant.name}\nห้องพัก: ${tenantRoom?.roomNumber || 'A-101'}\nระยะเวลาสัญญา: ${formatToBeFullDate(con.startDate)} ถึง ${formatToBeFullDate(con.endDate)}\nอัตราค่าเช่า: ${con.monthlyRent.toLocaleString('th-TH')} บาท/เดือน\nเงินประกัน: ${con.depositAmount.toLocaleString('th-TH')} บาท\nลงนามโดย: ${tenant.name} (ผู้เช่า) และ ${getDormitory().name} (ผู้ให้เช่า)\nวันที่ออกเอกสาร: ${formatToBeFullDate(con.startDate)}`
+                                  content: `=== เอกสารสัญญาเช่าห้องพัก ===\nเลขที่สัญญา: ${con.contractNumber}\nผู้เช่า: คุณ ${tenant.name}\nห้องพัก: ${tenantRoom?.roomNumber || 'A-101'}\nระยะเวลาสัญญา: ${formatToBeFullDate(con.startDate)} ถึง ${formatToBeFullDate(con.endDate)}\nอัตราค่าเช่า: ${con.monthlyRent.toLocaleString('th-TH')} บาท/เดือน\nเงินประกัน: ${con.depositAmount.toLocaleString('th-TH')} บาท\nลงนามโดย: ${tenant.name} (ผู้เช่า) และ �;ѡ (ผู้ให้เช่า)\nวันที่ออกเอกสาร: ${formatToBeFullDate(con.startDate)}`
                                 },
                                 {
                                   title: 'กฎระเบียบและข้อบังคับอาคารพักอาศัย',
                                   subtitle: 'PDF • ระเบียบการพักอาศัย.pdf',
                                   category: 'ข้อบังคับอาคาร',
                                   fileName: 'กฎระเบียบและข้อบังคับอาคาร.txt',
-                                  content: `=== กฎระเบียบและข้อบังคับการเข้าพักอาศัย ===\nหอพัก: ${getDormitory().name}\n1. ห้ามส่งเสียงดังยามวิกาลหลังเวลา 22:00 น.\n2. การรักษาความสะอาดบริเวณทางเดินส่วนกลาง\n3. ห้ามสูบบุหรี่ภายในห้องพักและพื้นที่ส่วนกลาง\n4. การนำสัตว์เลี้ยงเข้าพักต้องได้รับอนุญาตตามเงื่อนไขของหอพักเท่านั้น\n5. ห้ามดัดแปลง ต่อเติม หรือเจาะผนังอาคารโดยไม่ได้รับอนุมัติ`
+                                  content: `=== กฎระเบียบและข้อบังคับการเข้าพักอาศัย ===\nหอพัก: �;ѡ\n1. ห้ามส่งเสียงดังยามวิกาลหลังเวลา 22:00 น.\n2. การรักษาความสะอาดบริเวณทางเดินส่วนกลาง\n3. ห้ามสูบบุหรี่ภายในห้องพักและพื้นที่ส่วนกลาง\n4. การนำสัตว์เลี้ยงเข้าพักต้องได้รับอนุญาตตามเงื่อนไขของหอพักเท่านั้น\n5. ห้ามดัดแปลง ต่อเติม หรือเจาะผนังอาคารโดยไม่ได้รับอนุมัติ`
                                 },
                                 {
                                   title: 'เอกสารสำเนาบัตรประจำตัวประชาชนผู้เช่า',
@@ -2505,7 +2521,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
               </button>
               <button
                 type="button"
-                onClick={() => handleDownloadDoc(selectedDocModal.title, selectedDocModal.fileName, selectedDocModal.content)}
+                onClick={() => handleDownloadDoc(selectedDocModal.title, selectedDocModal.fileName, selectedDocModal.content, selectedDocModal.docType, selectedDocModal.docId)}
                 className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-extrabold shadow-xs transition-all flex items-center gap-1.5 cursor-pointer"
               >
                 <Download className="w-4 h-4 stroke-[2]" />
@@ -2688,3 +2704,4 @@ const ClockIcon = (props: React.SVGProps<SVGSVGElement>) => (
     <polyline points="12 6 12 12 16 14" />
   </svg>
 );
+

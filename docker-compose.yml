@@ -3,35 +3,60 @@ version: '3.8'
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: horplus-postgres
+    container_name: horplus_postgres
+    restart: always
     environment:
-      POSTGRES_DB: horplus
       POSTGRES_USER: horplus
       POSTGRES_PASSWORD: horplus_dev_password
+      POSTGRES_DB: horplus
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U horplus -d horplus"]
-      interval: 5s
+      interval: 10s
       timeout: 5s
       retries: 5
-    restart: unless-stopped
 
   redis:
     image: redis:7-alpine
-    container_name: horplus-redis
+    container_name: horplus_redis
+    restart: always
     ports:
       - "6379:6379"
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD-SHELL", "redis-cli ping | grep PONG"]
-      interval: 5s
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
       timeout: 5s
       retries: 5
-    restart: unless-stopped
+
+  api:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: horplus_api
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: postgresql://horplus:horplus_dev_password@postgres:5432/horplus?schema=public
+      REDIS_URL: redis://redis:6379
+      LOG_LEVEL: info
+      CORS_ORIGINS: http://localhost:5173
+      SESSION_ENCRYPTION_KEY: prod_session_secret_key_32_chars_long_0001
+      CSRF_SIGNING_KEY: prod_csrf_signing_key_16_chars_min
+      FIELD_ENCRYPTION_KEY: prod_field_encryption_key_32_chars_long_0001
+      GOOGLE_CLIENT_ID: horplus-prod-google-client-id.apps.googleusercontent.com
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
 volumes:
   postgres_data:

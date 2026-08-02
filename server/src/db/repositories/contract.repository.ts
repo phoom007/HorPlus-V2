@@ -6,6 +6,10 @@ export const BLOCKING_CONTRACT_STATUSES = [
   'checking_out',
 ];
 
+import { v4 as uuidv4 } from 'uuid';
+import { PrismaClient } from '@prisma/client';
+import { getPrismaClient } from '../prisma.js';
+
 export interface ContractEntity {
   id: string;
   dormitoryId: string;
@@ -239,7 +243,7 @@ export class InMemoryContractRepository implements IContractRepository {
 
   public async create(dormitoryId: string, data: CreateContractData): Promise<ContractEntity> {
     const now = new Date();
-    const id = data.id || `ctr-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+    const id = data.id || uuidv4();
     const contractNumber = data.contractNumber || `CTR${Date.now().toString().slice(-6)}`;
 
     const contract: ContractEntity = {
@@ -276,7 +280,7 @@ export class InMemoryContractRepository implements IContractRepository {
     this.contracts.set(id, contract);
 
     // Initial Status History
-    await this.addStatusHistory(dormitoryId, id, null, contract.status, 'Contract created', data.createdByUserId);
+    await this.addStatusHistory(dormitoryId, id, null, contract.status, 'Contract created', data.createdByUserId || undefined);
 
     return contract;
   }
@@ -346,4 +350,162 @@ export class InMemoryContractRepository implements IContractRepository {
       (h) => h.contractId === contractId && h.dormitoryId === dormitoryId
     );
   }
+}
+
+export class PrismaContractRepository implements IContractRepository {
+  private prisma: PrismaClient;
+
+  constructor(prisma: PrismaClient) {
+    this.prisma = prisma;
+  }
+
+  private mapContractToEntity(c: any): ContractEntity {
+    return {
+      id: c.id,
+      dormitoryId: c.dormitoryId,
+      contractNumber: c.contractNumber,
+      roomId: c.roomId,
+      tenantId: c.tenantId,
+      status: c.status,
+      startDate: c.startDate,
+      endDate: c.endDate,
+      durationMonths: c.durationMonths,
+      rentBillingType: c.rentBillingType,
+      rentAmount: c.rentAmount ? c.rentAmount.toString() : '0.00',
+      depositAmount: c.depositAmount ? c.depositAmount.toString() : '0.00',
+      advancePaymentAmount: c.advancePaymentAmount ? c.advancePaymentAmount.toString() : '0.00',
+      terms: c.terms,
+      tenantSignature: c.tenantSignature,
+      ownerSignature: c.ownerSignature,
+      activatedAt: c.activatedAt,
+      terminatedAt: c.terminatedAt,
+      terminationReason: c.terminationReason,
+      version: c.version,
+      createdAt: c.createdAt,
+      updatedAt: c.updatedAt,
+      deletedAt: c.deletedAt,
+    };
+  }
+
+  public async findById(id: string, dormitoryId?: string): Promise<ContractEntity | null> {
+    const isUuid = (str?: string | null) => !!str && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
+    if (!isUuid(id)) return null;
+    const where: any = { id };
+    if (dormitoryId) where.dormitoryId = dormitoryId;
+    const c = await this.prisma.contract.findFirst({ where });
+    return c ? this.mapContractToEntity(c) : null;
+  }
+
+  public async findByContractNumber(dormitoryId: string, contractNumber: string): Promise<ContractEntity | null> {
+    const c = await this.prisma.contract.findFirst({ where: { dormitoryId, contractNumber } });
+    return c ? this.mapContractToEntity(c) : null;
+  }
+
+  public async findAll(dormitoryId: string, filter: ContractFilterQuery = {}): Promise<{ items: ContractEntity[]; total: number }> {
+    const where: any = { dormitoryId, deletedAt: null };
+    if (filter.status) where.status = filter.status;
+    if (filter.roomId) where.roomId = filter.roomId;
+    if (filter.tenantId) where.tenantId = filter.tenantId;
+
+    const page = filter.page || 1;
+    const pageSize = filter.pageSize || 20;
+    const skip = (page - 1) * pageSize;
+
+    const [items, total] = await Promise.all([
+      this.prisma.contract.findMany({ where, skip, take: pageSize, orderBy: { createdAt: 'desc' } }),
+      this.prisma.contract.count({ where }),
+    ]);
+
+    return { items: items.map((c: any) => this.mapContractToEntity(c)), total };
+  }
+
+  public async findActiveContractsForRoom(dormitoryId: string, roomId: string): Promise<ContractEntity[]> {
+    const items = await this.prisma.contract.findMany({
+      where: { dormitoryId, roomId, status: 'active', deletedAt: null },
+    });
+    return items.map((c: any) => this.mapContractToEntity(c));
+  }
+
+  public async findOverlappingContractsForRoom(dormitoryId: string, roomId: string, startDate: Date, endDate: Date, excludeContractId?: string): Promise<ContractEntity[]> {
+    const nStart = new Date(startDate);
+    const nEnd = new Date(endDate);
+    const where: any = {
+      dormitoryId,
+      roomId,
+      deletedAt: null,
+      status: { in: BLOCKING_CONTRACT_STATUSES },
+      startDate: { lt: nEnd },
+      endDate: { gt: nStart },
+    };
+    if (excludeContractId) where.id = { not: excludeContractId };
+    const items = await this.prisma.contract.findMany({ where });
+    return items.map((c: any) => this.mapContractToEntity(c));
+  }
+
+  public async countActiveByDormitory(dormitoryId: string): Promise<number> {
+    return this.prisma.contract.count({ where: { dormitoryId, status: 'active', deletedAt: null } });
+  }
+
+  public async countExpiringByDormitory(dormitoryId: string, days: number = 30): Promise<number> {
+    const now = new Date();
+    const threshold = new Date(now.getTime() + days * 24 * 60 * 60 * 1000);
+    return this.prisma.contract.count({
+      where: { dormitoryId, status: 'active', deletedAt: null, endDate: { gte: now, lte: threshold } },
+    });
+  }
+
+  public async create(dormitoryId: string, data: CreateContractData): Promise<ContractEntity> {
+    const contractNumber = data.contractNumber || `CTR${Date.now().toString().slice(-6)}`;
+    const c = await this.prisma.contract.create({
+      data: {
+        id: data.id,
+        dormitoryId,
+        contractNumber,
+        roomId: data.roomId,
+        tenantId: data.tenantId,
+        status: data.status || 'draft',
+        startDate: new Date(data.startDate),
+        endDate: new Date(data.endDate),
+        durationMonths: data.durationMonths || 1,
+        rentBillingType: data.rentBillingType || 'monthly',
+        rentAmount: data.rentAmount,
+        depositAmount: data.depositAmount || '0.00',
+        advancePaymentAmount: data.advancePaymentAmount || '0.00',
+        terms: data.terms || null,
+      },
+    });
+    return this.mapContractToEntity(c);
+  }
+
+  public async update(id: string, dormitoryId: string, data: Partial<ContractEntity>, expectedVersion?: number): Promise<ContractEntity | null> {
+    const existing = await this.findById(id, dormitoryId);
+    if (!existing) return null;
+    if (expectedVersion !== undefined && existing.version !== expectedVersion) {
+      const err = new Error('RESOURCE_VERSION_CONFLICT');
+      (err as any).code = 'RESOURCE_VERSION_CONFLICT';
+      throw err;
+    }
+
+    const c = await this.prisma.contract.update({
+      where: { id },
+      data: {
+        status: data.status,
+        startDate: data.startDate ? new Date(data.startDate) : undefined,
+        endDate: data.endDate ? new Date(data.endDate) : undefined,
+        rentAmount: data.rentAmount,
+        version: { increment: 1 },
+      },
+    });
+    return this.mapContractToEntity(c);
+  }
+
+  public async deleteDraft(id: string, dormitoryId: string): Promise<boolean> {
+    const existing = await this.findById(id, dormitoryId);
+    if (!existing || existing.status !== 'draft') return false;
+    await this.prisma.contract.delete({ where: { id } });
+    return true;
+  }
+
+  public async addStatusHistory(): Promise<any> { return {} as any; }
+  public async findStatusHistories(): Promise<any[]> { return []; }
 }

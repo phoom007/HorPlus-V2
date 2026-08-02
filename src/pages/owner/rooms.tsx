@@ -25,6 +25,7 @@ import {
   Modal,
   ConfirmDialog
 } from '../../components/GlobalComponents';
+import { getDataProvider } from '../../data/dataProvider';
 import { Room, Building, RoomStatus, Tenant, Contract, Bill, BLOCKING_CONTRACT_STATUSES } from '../../types';
 
 interface OwnerRoomsProps {
@@ -34,6 +35,7 @@ interface OwnerRoomsProps {
   bills?: Bill[];
   buildings: Building[];
   onSaveRooms: (rooms: Room[]) => void;
+  onSaveBuildings?: (buildings: Building[]) => void;
   onAddLog: (action: string, details: string, type: string, id: string) => void;
   onNavigate: (tab: string, param?: string) => void;
   initialRoomId?: string;
@@ -85,11 +87,13 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
   bills = [],
   buildings,
   onSaveRooms,
+  onSaveBuildings,
   onAddLog,
   onNavigate,
   initialRoomId,
   onClearInitialRoomId
 }) => {
+  const DataProvider = getDataProvider();
   const [viewMode, setViewMode] = useState<'grid' | 'list' | 'floor'>('grid');
   const [selectedBuilding, setSelectedBuilding] = useState<string>('all');
   const [selectedStatus, setSelectedStatus] = useState<string>('all');
@@ -119,6 +123,92 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [isToastFading, setIsToastFading] = useState(false);
 
+  const [activeSubTab, setActiveSubTab] = useState<'rooms'|'buildings'>('rooms');
+  
+  // Building UI State
+  const [isBuildingModalOpen, setIsBuildingModalOpen] = useState(false);
+  const [editingBuilding, setEditingBuilding] = useState<Building | null>(null);
+  const [buildingName, setBuildingName] = useState('');
+  const [buildingCode, setBuildingCode] = useState('');
+  const [buildingFloorsCount, setBuildingFloorCount] = useState<number>(1);
+  const [buildingDescription, setBuildingNotes] = useState('');
+  const [deleteBuildingConfirmData, setDeleteBuildingConfirmData] = useState<{ id: string, name: string } | null>(null);
+
+  const handleOpenBuildingModal = (bld: Building | null = null) => {
+    setErrorText(null);
+    if (bld) {
+      setEditingBuilding(bld);
+      setBuildingName(bld.name);
+      setBuildingCode('');
+      setBuildingFloorCount(bld.floorsCount || 1);
+      setBuildingNotes(bld.description || '');
+    } else {
+      setEditingBuilding(null);
+      setBuildingName('');
+      setBuildingCode('');
+      setBuildingFloorCount(1);
+      setBuildingNotes('');
+    }
+    setIsBuildingModalOpen(true);
+  };
+
+  const handleSaveBuilding = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!buildingName.trim()) {
+      setErrorText('กรุณากรอกชื่ออาคาร');
+      return;
+    }
+
+    try {
+      if (editingBuilding) {
+        const res = await DataProvider.dormitories.updateBuilding({
+          ...editingBuilding,
+          name: buildingName,
+          floorsCount: buildingFloorsCount,
+          description: buildingDescription
+        });
+        if (!res.success) throw new Error(res.error?.message || 'Failed to update building');
+        onAddLog('แก้ไขอาคาร', `แก้ไขอาคาร ${buildingName}`, 'Building', editingBuilding.id);
+      } else {
+        const res = await DataProvider.dormitories.addBuilding({
+          name: buildingName,
+          floorsCount: buildingFloorsCount,
+          description: buildingDescription,
+          status: 'active'
+        } as any);
+        if (!res.success) throw new Error(res.error?.message || 'Failed to create building');
+        onAddLog('เพิ่มอาคาร', `เพิ่มอาคาร ${buildingName}`, 'Building', res.data?.id || 'unknown');
+      }
+
+      const refreshData = await DataProvider.dormitories.getBuildings();
+      if (onSaveBuildings) onSaveBuildings(refreshData);
+
+      setIsBuildingModalOpen(false);
+      setToastMessage(`บันทึกอาคาร "${buildingName}" เรียบร้อยแล้ว`);
+    } catch (err: any) {
+      setErrorText(err.message || 'เกิดข้อผิดพลาดในการบันทึกอาคาร');
+    }
+  };
+
+  const executeDeleteBuilding = async () => {
+    if (!deleteBuildingConfirmData) return;
+    try {
+      const res = await DataProvider.dormitories.deleteBuilding(deleteBuildingConfirmData.id);
+      if (!res.success) throw new Error(res.error?.message || 'Failed to delete building');
+      onAddLog('ลบอาคาร', `ลบอาคาร ${deleteBuildingConfirmData.name}`, 'Building', deleteBuildingConfirmData.id);
+      
+      const refreshData = await DataProvider.dormitories.getBuildings();
+      if (onSaveBuildings) onSaveBuildings(refreshData);
+
+      setDeleteBuildingConfirmData(null);
+      setToastMessage(`ลบอาคาร "${deleteBuildingConfirmData.name}" เรียบร้อยแล้ว`);
+    } catch (err: any) {
+      setDeleteBuildingConfirmData(null);
+      alert(err.message || 'เกิดข้อผิดพลาดในการลบอาคาร');
+    }
+  };
+
+
   useEffect(() => {
     if (toastMessage) {
       setIsToastFading(false);
@@ -144,7 +234,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
       setEditingRoom(room);
       setRoomNumber(room.roomNumber);
       setBuildingId(room.buildingId || '');
-      setFloor(room.floor);
+      setFloor(room.derivedFloor || 1);
       setMonthlyRent(room.monthlyRent || 0);
       setTermRent(room.termRent || (room.monthlyRent ? room.monthlyRent * 4 : 18000));
       setDailyRent(room.dailyRent || 500);
@@ -186,7 +276,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
     }
   }, [initialRoomId, rooms]);
 
-  const handleSave = (e: React.FormEvent) => {
+  const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorText(null);
 
@@ -223,63 +313,53 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
     const digitsOnly = roomNumber.replace(/\D/g, '');
     const calculatedFloor = Number(floor) || (digitsOnly ? (parseInt(digitsOnly.charAt(0)) || 1) : 1);
 
-    let updatedRooms = [...rooms];
-    if (editingRoom) {
-      // Update
-      updatedRooms = rooms.map(r => r.id === editingRoom.id ? {
-        ...r,
-        roomNumber: roomNumber.trim(),
-        buildingId: buildingId || r.buildingId,
-        floor: calculatedFloor,
-        monthlyRent: Number(monthlyRent),
-        termRent: Number(termRent) || undefined,
-        dailyRent: Number(dailyRent) || undefined,
-        rentCycle,
-        depositAmount: Number(depositAmount),
-        depositStatus,
-        maxOccupants: Number(maxOccupants),
-        status: roomStatus,
-        initialWaterMeter: Number(initialWaterMeter) || r.initialWaterMeter || 0,
-        initialElectricMeter: Number(initialElectricMeter) || r.initialElectricMeter || 0,
-        notes,
-        updatedAt: new Date().toISOString()
-      } : r);
+    const payload = {
+      roomNumber: roomNumber.trim(),
+      buildingId: buildingId || undefined,
+      floor: calculatedFloor,
+      monthlyRent: String(monthlyRent),
+      termRent: termRent ? String(termRent) : undefined,
+      dailyRent: dailyRent ? String(dailyRent) : undefined,
+      rentCycle,
+      depositAmount: String(depositAmount),
+      depositStatus,
+      maximumOccupants: Number(maxOccupants),
+      status: roomStatus,
+      initialWaterReading: String(initialWaterMeter || 0),
+      initialElectricityReading: String(initialElectricMeter || 0),
+      notes
+    };
 
-      onAddLog('แก้ไขห้องพัก', `แก้ไขรายละเอียดห้อง ${roomNumber}`, 'Room', editingRoom.id);
-    } else {
-      // Create
-      const newId = `room-${Date.now()}`;
-      const newRoom: Room = {
-        id: newId,
-        roomNumber: roomNumber.trim(),
-        buildingId: buildingId || undefined,
-        floor: calculatedFloor,
-        monthlyRent: Number(monthlyRent),
-        termRent: Number(termRent) || undefined,
-        dailyRent: Number(dailyRent) || undefined,
-        rentCycle,
-        depositAmount: Number(depositAmount),
-        depositStatus,
-        maxOccupants: Number(maxOccupants),
-        initialWaterMeter: Number(initialWaterMeter) || 0,
-        initialElectricMeter: Number(initialElectricMeter) || 0,
-        status: roomStatus,
-        notes,
-        images: ['https://images.unsplash.com/photo-1522771739844-6a9f6d5f14af?w=400'],
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      };
-      updatedRooms.push(newRoom);
-      onAddLog('เพิ่มห้องพักใหม่', `สร้างเลขห้อง ${roomNumber} ใหม่ในระบบ`, 'Room', newId);
+    let errorMessage = 'เกิดข้อผิดพลาดในการบันทึกห้อง';
+    try {
+      if (editingRoom) {
+        const res = await DataProvider.rooms.updateRoom({ ...editingRoom, ...payload } as any);
+        if (!res.success) {
+          if (res.error?.code === 'ROOM_LIMIT_EXCEEDED') throw new Error(res.error.message || 'จำนวนห้องพักเกินโควต้าแพ็กเกจ');
+          throw new Error(res.error?.message || errorMessage);
+        }
+        onAddLog('แก้ไขห้องพัก', `แก้ไขรายละเอียดห้อง ${roomNumber}`, 'Room', editingRoom.id);
+      } else {
+        const res = await DataProvider.rooms.addRoom(payload as any);
+        if (!res.success) {
+          if (res.error?.code === 'ROOM_LIMIT_EXCEEDED') throw new Error(res.error.message || 'จำนวนห้องพักเกินโควต้าแพ็กเกจ');
+          throw new Error(res.error?.message || errorMessage);
+        }
+        onAddLog('เพิ่มห้องพักใหม่', `สร้างเลขห้อง ${roomNumber} ใหม่ในระบบ`, 'Room', res.data?.id || 'unknown');
+      }
+
+      const refreshData = await DataProvider.rooms.getAll();
+      onSaveRooms(refreshData);
+
+      const savedRoomNumber = roomNumber.trim();
+      setIsModalOpen(false);
+      setToastMessage(`เลขห้อง "${savedRoomNumber}" นี้ได้รับการบันทึกในระบบแล้ว`);
+      setTimeout(() => {
+        setToastMessage(null);
+      }, 3500);
+    } catch (err: any) {
+      setErrorText(err.message || errorMessage);
     }
-
-    const savedRoomNumber = roomNumber.trim();
-    onSaveRooms(updatedRooms);
-    setIsModalOpen(false);
-    setToastMessage(`เลขห้อง "${savedRoomNumber}" นี้ได้รับการบันทึกในระบบแล้ว`);
-    setTimeout(() => {
-      setToastMessage(null);
-    }, 3500);
   };
 
   const handleDeleteFromModal = (roomId: string, roomNum: string) => {
@@ -325,22 +405,32 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
     });
   };
 
-  const executeDeleteRoom = () => {
+  const executeDeleteRoom = async () => {
     if (!deleteConfirmData) return;
     const { roomId, roomNum } = deleteConfirmData;
-    const updated = rooms.filter(r => r.id !== roomId && r.roomNumber !== roomNum);
-    onSaveRooms(updated);
-    onAddLog('ลบห้องพัก', `ลบห้องเลขที่ ${roomNum} ออกจากระบบถาวร`, 'Room', roomId);
-    setIsModalOpen(false);
-    setEditingRoom(null);
-    setDeleteConfirmData(null);
-    setToastMessage(`ลบห้องพัก "${roomNum}" ออกจากระบบเรียบร้อยแล้ว`);
-    setTimeout(() => {
-      setToastMessage(null);
-    }, 3500);
+    
+    try {
+      const res = await DataProvider.rooms.deleteRoom(roomId);
+      if (!res.success) throw new Error(res.error?.message || 'Failed to delete room');
+      
+      onAddLog('ลบห้องพัก', `ลบห้องเลขที่ ${roomNum} ออกจากระบบถาวร`, 'Room', roomId);
+      
+      const refreshData = await DataProvider.rooms.getAll();
+      onSaveRooms(refreshData);
+      
+      setIsModalOpen(false);
+      setEditingRoom(null);
+      setDeleteConfirmData(null);
+      setToastMessage(`ลบห้องพัก "${roomNum}" ออกจากระบบเรียบร้อยแล้ว`);
+      setTimeout(() => {
+        setToastMessage(null);
+      }, 3500);
+    } catch (err: any) {
+      alert(err.message || 'เกิดข้อผิดพลาดในการลบห้อง');
+    }
   };
 
-  const handleQuickStatusChange = (roomId: string, newStatus: RoomStatus, e?: React.MouseEvent) => {
+  const handleQuickStatusChange = async (roomId: string, newStatus: RoomStatus, e?: React.MouseEvent) => {
     e?.stopPropagation();
     const targetRoom = rooms.find(r => r.id === roomId);
     if (!targetRoom) return;
@@ -358,14 +448,22 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
       }
     }
 
-    const updated = rooms.map(r => r.id === roomId ? {
-      ...r,
-      status: newStatus,
-      depositStatus: newStatus === 'occupied' ? (r.depositStatus || 'paid') : r.depositStatus,
-      updatedAt: new Date().toISOString()
-    } : r);
-    onSaveRooms(updated);
-    onAddLog('เปลี่ยนสถานะห้องพัก', `เปลี่ยนสถานะห้อง ${targetRoom.roomNumber} เป็น ${ROOM_STATUS_CONFIG[newStatus]?.label}`, 'Room', roomId);
+    try {
+      const payload = {
+        id: targetRoom.id,
+        status: newStatus,
+        depositStatus: newStatus === 'occupied' ? (targetRoom.depositStatus || 'paid') : targetRoom.depositStatus,
+      };
+      const res = await DataProvider.rooms.updateRoom(payload as any);
+      if (!res.success) throw new Error(res.error?.message || 'Failed to update room status');
+      
+      onAddLog('เปลี่ยนสถานะห้องพัก', `เปลี่ยนสถานะห้อง ${targetRoom.roomNumber} เป็น ${ROOM_STATUS_CONFIG[newStatus]?.label}`, 'Room', roomId);
+      
+      const refreshData = await DataProvider.rooms.getAll();
+      onSaveRooms(refreshData);
+    } catch (err: any) {
+      alert(err.message || 'เกิดข้อผิดพลาดในการเปลี่ยนสถานะห้อง');
+    }
   };
 
   // Filter Logic
@@ -489,6 +587,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
             return (
               <div
                 key={room.id}
+                data-testid="room-card"
                 className={`rounded-3xl border shadow-2xs hover:shadow-md transition-all duration-300 overflow-hidden flex flex-col justify-between ${statusCfg.bg} ${statusCfg.border}`}
               >
                 <div className="p-5 space-y-3.5">
@@ -496,7 +595,9 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                   <div className="flex justify-between items-start">
                     <div>
                       <h4 className="text-xl font-black text-slate-900 tracking-tight">{room.roomNumber}</h4>
-                      <p className="text-[11px] text-gray-500 font-semibold mt-0.5">{bldName} &bull; ชั้น {room.floor}</p>
+                      <p className="text-[11px] text-gray-500 font-semibold mt-0.5">
+                        {bldName} &bull; {room.derivedFloor ? `ชั้น ${room.derivedFloor}` : <span className="text-red-500">[Error]</span>}
+                      </p>
                     </div>
                     <span className={`px-2.5 py-1 rounded-full text-xs font-black border shadow-2xs ${statusCfg.badgeBg} ${statusCfg.badgeText} ${statusCfg.border}`}>
                       {statusCfg.label}
@@ -608,7 +709,9 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                   return (
                     <tr key={room.id} className="hover:bg-slate-50/60 transition-colors">
                       <td className="p-4 font-black text-slate-900 text-sm">{room.roomNumber}</td>
-                      <td className="p-4 text-gray-600 font-semibold">{bldName} (ชั้น {room.floor})</td>
+                      <td className="p-4 text-gray-600 font-semibold">
+                        {bldName} {room.derivedFloor ? `(ชั้น ${room.derivedFloor})` : <span className="text-red-500">([Error])</span>}
+                      </td>
                       <td className="p-4 font-bold text-slate-800">
                         {currentTenant ? (
                           <div className="flex items-center gap-1.5 text-indigo-700">
@@ -665,7 +768,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
       {viewMode === 'floor' && (
         <div className="space-y-6">
           {buildings.map((bld) => {
-            const floors = Array.from({ length: bld.floorsCount }, (_, i) => bld.floorsCount - i);
+            const floors = Array.from(new Set(rooms.filter(r => r.buildingId === bld.id).map(r => r.derivedFloor))).sort((a, b) => (b === null ? -1 : a === null ? 1 : Number(b) - Number(a)));
             return (
               <div key={bld.id} className="bg-white p-6 rounded-3xl border border-gray-100 shadow-xs space-y-4">
                 <div className="flex items-center justify-between border-b border-gray-100 pb-3">
@@ -674,13 +777,13 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                 
                 <div className="space-y-4">
                   {floors.map((fl) => {
-                    const floorRooms = rooms.filter(r => r.buildingId === bld.id && r.floor === fl);
+                    const floorRooms = rooms.filter(r => r.buildingId === bld.id && r.derivedFloor === fl);
                     if (floorRooms.length === 0) return null; // Skip floors that have no rooms
 
                     return (
                       <div key={fl} className="flex flex-col sm:flex-row gap-4 items-start sm:items-center py-3 border-b border-dashed border-gray-100">
                         <div className="w-16 shrink-0 text-xs font-black text-indigo-600 bg-indigo-50 border border-indigo-100 py-2 px-3 rounded-xl text-center">
-                          ชั้น {fl}
+                          {fl ? `ชั้น ${fl}` : <span className="text-red-500 font-semibold text-[10px]">Error</span>}
                         </div>
                         
                         <div className="flex flex-wrap gap-2.5 flex-1">
@@ -742,6 +845,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                 <label className="block text-xs font-bold text-slate-700">เลขที่ห้องพัก *</label>
                 <input
                   type="text"
+                  name="roomNumber"
                   required
                   value={roomNumber}
                   onChange={(e) => setRoomNumber(e.target.value)}

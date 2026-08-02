@@ -1,3 +1,5 @@
+import { PrismaClient } from '@prisma/client';
+
 export interface DormitoryMemberEntity {
   id: string;
   userId: string;
@@ -23,6 +25,7 @@ export interface CreateMembershipData {
 }
 
 export interface IMembershipRepository {
+  findById(id: string): Promise<DormitoryMemberEntity | null>;
   findByUserId(userId: string): Promise<DormitoryMemberEntity[]>;
   findByUserAndDormitory(userId: string, dormitoryId: string): Promise<DormitoryMemberEntity | null>;
   addMembership(data: CreateMembershipData): Promise<DormitoryMemberEntity>;
@@ -52,6 +55,11 @@ export class InMemoryMembershipRepository implements IMembershipRepository {
     });
   }
 
+  public async findById(id: string): Promise<DormitoryMemberEntity | null> {
+    const mem = this.members.get(id);
+    return mem && mem.status !== 'revoked' ? mem : null;
+  }
+
   public async findByUserId(userId: string): Promise<DormitoryMemberEntity[]> {
     const list: DormitoryMemberEntity[] = [];
     for (const m of this.members.values()) {
@@ -61,6 +69,7 @@ export class InMemoryMembershipRepository implements IMembershipRepository {
     }
     return list;
   }
+
 
   public async findByUserAndDormitory(userId: string, dormitoryId: string): Promise<DormitoryMemberEntity | null> {
     for (const m of this.members.values()) {
@@ -101,3 +110,102 @@ export class InMemoryMembershipRepository implements IMembershipRepository {
     return mem;
   }
 }
+
+export class PrismaMembershipRepository implements IMembershipRepository {
+  private prisma: PrismaClient;
+
+  constructor(prisma: PrismaClient) {
+    this.prisma = prisma;
+  }
+
+  private mapToEntity(model: any): DormitoryMemberEntity {
+    return {
+      id: model.id,
+      userId: model.userId,
+      dormitoryId: model.dormitoryId,
+      dormitoryName: model.dormitory?.name,
+      roleId: model.roleId,
+      roleCode: model.role?.code,
+      status: model.status as any,
+      invitedAt: model.invitedAt,
+      acceptedAt: model.acceptedAt,
+      suspendedAt: model.suspendedAt,
+      createdAt: model.createdAt,
+      updatedAt: model.updatedAt,
+    };
+  }
+
+  public async findById(id: string): Promise<DormitoryMemberEntity | null> {
+    const membership = await this.prisma.dormitoryMember.findUnique({
+      where: { id },
+      include: {
+        dormitory: true,
+        role: true,
+      },
+    });
+    return membership && membership.status !== 'revoked' ? this.mapToEntity(membership) : null;
+  }
+
+  public async findByUserId(userId: string): Promise<DormitoryMemberEntity[]> {
+    const memberships = await this.prisma.dormitoryMember.findMany({
+      where: { userId, status: { not: 'revoked' } },
+      include: {
+        dormitory: true,
+        role: true,
+      },
+    });
+    return memberships.map(m => this.mapToEntity(m));
+  }
+
+  public async findByUserAndDormitory(userId: string, dormitoryId: string): Promise<DormitoryMemberEntity | null> {
+    const membership = await this.prisma.dormitoryMember.findFirst({
+      where: { userId, dormitoryId, status: { not: 'revoked' } },
+      include: {
+        dormitory: true,
+        role: true,
+      },
+    });
+    return membership ? this.mapToEntity(membership) : null;
+  }
+
+  public async addMembership(data: CreateMembershipData): Promise<DormitoryMemberEntity> {
+    const existing = await this.findByUserAndDormitory(data.userId, data.dormitoryId);
+    if (existing) return existing;
+
+    const membership = await this.prisma.dormitoryMember.create({
+      data: {
+        userId: data.userId,
+        dormitoryId: data.dormitoryId,
+        roleId: data.roleId,
+        status: data.status || 'active',
+        acceptedAt: (data.status === undefined || data.status === 'active') ? new Date() : null,
+      },
+      include: {
+        dormitory: true,
+        role: true,
+      },
+    });
+
+    return this.mapToEntity(membership);
+  }
+
+  public async updateStatus(id: string, status: DormitoryMemberEntity['status']): Promise<DormitoryMemberEntity | null> {
+    try {
+      const updated = await this.prisma.dormitoryMember.update({
+        where: { id },
+        data: {
+          status,
+          suspendedAt: status === 'suspended' ? new Date() : undefined,
+        },
+        include: {
+          dormitory: true,
+          role: true,
+        },
+      });
+      return this.mapToEntity(updated);
+    } catch {
+      return null;
+    }
+  }
+}
+

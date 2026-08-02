@@ -1,3 +1,7 @@
+> [!WARNING]
+> **[STATUS: SUPERSEDED_IN_PART]**
+> Some or all rules in this document may be superseded. Always refer to **[21-CURRENT-PRODUCT-RULE-LOCK.md](./21-CURRENT-PRODUCT-RULE-LOCK.md)** as the absolute source of truth.
+
 # 05. Authentication, Session and Security
 
 ## 1. Identity Flows
@@ -82,4 +86,5 @@ Rate limit ไม่แทน quota และต้องไม่ทำให�
 - secret ไม่อยู่ใน frontend bundle/repo/log
 - role revoke/recovery ทำ session เดิมใช้ต่อไม่ได้
 - Tenant ไม่มี Google auth route เป็นทางเข้า production
+
 

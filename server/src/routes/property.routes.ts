@@ -41,6 +41,7 @@ export function createPropertyRouter(
   };
 
   const handleServiceError = (res: Response, err: any, req: Request) => {
+    console.error('PROPERTY SERVICE ERROR:', err);
     const statusCode = err.statusCode || err.status || 500;
     res.status(statusCode).json({
       error: {
@@ -102,7 +103,6 @@ export function createPropertyRouter(
           },
         });
       }
-
       const building = await buildingService.createBuilding(dormId, parsed.data, req.auth?.userId);
       res.status(201).json({ data: building });
     } catch (err) {
@@ -228,8 +228,7 @@ export function createPropertyRouter(
           },
         });
       }
-
-      const room = await roomService.createRoom(dormId, parsed.data, req.auth?.userId);
+      const room = await roomService.createRoom(dormId, parsed.data as any, req.auth?.userId);
       res.status(201).json({ data: room });
     } catch (err) {
       handleServiceError(res, err, req);

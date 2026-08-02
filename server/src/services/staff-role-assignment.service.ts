@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import { LineRepository, lineRepository } from '../db/repositories/line.repository.js';
 import { lineQuotaService, LineQuotaService } from './line-quota.service.js';
 import {
@@ -18,7 +19,7 @@ export class StaffRoleAssignmentService {
 
   private decryptSecret(encrypted: string): string {
     try {
-      const crypto = require('crypto');
+      // ...
       const decipher = crypto.createDecipheriv('aes-256-cbc', Buffer.from('12345678901234567890123456789012'), Buffer.from('1234567890123456'));
       let decrypted = decipher.update(encrypted, 'hex', 'utf8');
       decrypted += decipher.final('utf8');
@@ -29,9 +30,9 @@ export class StaffRoleAssignmentService {
   }
 
   async listFollowers(dormitoryId: string, params?: { friendStatus?: string; search?: string }) {
-    const followers = await this.repo.getFollowers(dormitoryId, params);
+    const followers = await this.repo.getFollowers(dormitoryId);
     const assignments = await this.repo.listRoleAssignments(dormitoryId);
-    const assignmentMap = new Map(assignments.map(a => [a.lineIdentityId, a]));
+    const assignmentMap = new Map(assignments.map((a: any) => [a.lineIdentityId, a]));
 
     return followers.map(f => {
       const currentRole = assignmentMap.get(f.lineIdentityId);
@@ -42,9 +43,9 @@ export class StaffRoleAssignmentService {
         pictureUrl: f.identity.pictureUrl || `https://api.dicebear.com/7.x/avataaars/svg?seed=${f.lineIdentityId}`,
         friendStatus: f.friendStatus,
         followedAt: f.followedAt,
-        roleCode: currentRole ? currentRole.roleCode : null,
-        roleStatus: currentRole ? currentRole.status : 'unassigned',
-        roleAssignmentId: currentRole ? currentRole.id : null
+        roleCode: currentRole ? (<any>currentRole).roleCode : undefined,
+        status: currentRole ? (<any>currentRole).status : 'unassigned',
+        roleAssignmentId: currentRole ? (<any>currentRole).id : undefined
       };
     });
   }
@@ -128,15 +129,15 @@ export class StaffRoleAssignmentService {
             });
 
             if (sendRes.success) {
-              await this.repo.markDeliverySuccess(delivery.id, sendRes.providerMessageId, true);
+              await this.repo.markDeliverySuccess(delivery.id, { providerMessageId: sendRes.providerMessageId });
               await this.quotaService.consumeQuotaOnSuccess(params.dormitoryId);
               notificationSent = true;
             } else {
-              await this.repo.markDeliveryFailed(delivery.id, sendRes.errorCode || 'SEND_FAILED', sendRes.errorMessage || 'Failed');
+              await this.repo.markDeliveryFailed(delivery.id, { code: sendRes.errorCode || 'SEND_FAILED', message: sendRes.errorMessage || 'Failed' });
               notificationError = sendRes.errorMessage;
             }
           } catch (err: any) {
-            await this.repo.markDeliveryFailed(delivery.id, 'DISPATCH_ERROR', err.message);
+            await this.repo.markDeliveryFailed(delivery.id, { code: 'DISPATCH_ERROR', message: err.message });
             notificationError = err.message;
           }
         }
@@ -159,7 +160,7 @@ export class StaffRoleAssignmentService {
     revokedByUserId: string;
     reason?: string;
   }) {
-    const revoked = await this.repo.revokeRoleAssignment(params.assignmentId, params.revokedByUserId, params.reason);
+    const revoked = await this.repo.revokeRoleAssignment(params.assignmentId, params.revokedByUserId);
     await auditService.record({
       dormitoryId: params.dormitoryId,
       actorUserId: params.revokedByUserId,

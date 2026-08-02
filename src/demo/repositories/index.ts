@@ -9,8 +9,6 @@ export * from './tenantRepository';
 export * from './contractRepository';
 export * from './meterRepository';
 export * from './billingRepository';
-export * from './paymentRepository';
-export * from './receiptRepository';
 export * from './maintenanceRepository';
 export * from './announcementRepository';
 export * from './notificationRepository';

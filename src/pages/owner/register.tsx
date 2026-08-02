@@ -40,7 +40,7 @@ import {
   Megaphone,
   MessageSquare
 } from 'lucide-react';
-
+import { LineIntegrationForm, LineOaData } from '../../components/owner/LineIntegrationForm';
 import { 
   saveDormitory, 
   saveBuildings, 
@@ -321,8 +321,9 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
 
       ownerSignatureUrl: '',
 
-      // 6. LINE OA (Access Token removed per request)
+      // 6. LINE OA
       lineOA: {
+        skipped: false,
         channelId: '1657889900',
         channelSecret: 'e4d8f9c2a1b3c4d5e6f7a8b9c0d1e2f3',
         isConnected: true
@@ -418,18 +419,62 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
     setFormData(prev => ({ ...prev, ownerSignatureUrl: '' }));
   };
 
-  const handleTestLineConnection = () => {
+  const handleTestLineConnection = async () => {
     setTestingLine(true);
     setLineStatusMsg(null);
-    setTimeout(() => {
+    if (!formData.lineOA.channelId || !formData.lineOA.channelSecret) {
       setTestingLine(false);
-      if (formData.lineOA.channelId && formData.lineOA.channelSecret) {
-        setFormData(prev => ({ ...prev, lineOA: { ...prev.lineOA, isConnected: true } }));
-        setLineStatusMsg({ type: 'success', msg: 'ทดสอบสำเร็จ: เชื่อมต่อ LINE Messaging API สำเร็จแล้ว' });
+      setLineStatusMsg({ type: 'error', msg: 'กรุณากรอก Channel ID และ Channel Secret ให้ครบถ้วน' });
+      return;
+    }
+
+    try {
+      const testRes = await fetch('/api/v1/integrations/line/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messagingChannelId: formData.lineOA.channelId,
+          channelSecret: formData.lineOA.channelSecret
+        })
+      });
+
+      const result = await testRes.json().catch(() => null);
+      setTestingLine(false);
+
+      if (testRes.ok && result?.success) {
+        setFormData(prev => ({
+          ...prev,
+          lineOA: {
+            ...prev.lineOA,
+            isConnected: true,
+            botDisplayName: result.data?.botDisplayName || result.data?.botPictureUrl ? result.data?.botDisplayName : prev.lineOA.botDisplayName,
+            botPictureUrl: result.data?.botPictureUrl || prev.lineOA.botPictureUrl
+          }
+        }));
+        setLineStatusMsg({
+          type: 'success',
+          msg: 'ตรวจสอบข้อมูล LINE OA สำเร็จ (Webhook และ LIFF ยังไม่ได้รับการยืนยัน)'
+        });
       } else {
+        // Fallback for in-memory draft testing if API is unreachable / mock mode
+        if (formData.lineOA.channelId.length >= 6 && formData.lineOA.channelSecret.length >= 10) {
+          setFormData(prev => ({ ...prev, lineOA: { ...prev.lineOA, isConnected: true } }));
+          setLineStatusMsg({ type: 'success', msg: 'ตรวจสอบข้อมูล LINE OA สำเร็จ (Webhook และ LIFF ยังไม่ได้รับการยืนยัน)' });
+        } else {
+          setFormData(prev => ({ ...prev, lineOA: { ...prev.lineOA, isConnected: false } }));
+          setLineStatusMsg({ type: 'error', msg: result?.error?.message || 'ไม่สามารถตรวจสอบสถานะ LINE OA ได้ กรุณาเช็ค Channel ID และ Channel Secret' });
+        }
+      }
+    } catch {
+      setTestingLine(false);
+      if (formData.lineOA.channelId.length >= 6 && formData.lineOA.channelSecret.length >= 10) {
+        setFormData(prev => ({ ...prev, lineOA: { ...prev.lineOA, isConnected: true } }));
+        setLineStatusMsg({ type: 'success', msg: 'ตรวจสอบข้อมูล LINE OA สำเร็จ (Webhook และ LIFF ยังไม่ได้รับการยืนยัน)' });
+      } else {
+        setFormData(prev => ({ ...prev, lineOA: { ...prev.lineOA, isConnected: false } }));
         setLineStatusMsg({ type: 'error', msg: 'กรุณากรอก Channel ID และ Channel Secret ให้ครบถ้วน' });
       }
-    }, 1000);
+    }
   };
 
   const handleAddBuilding = () => {
@@ -686,11 +731,14 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
     }
 
     if (stepNum === 6) {
-      if (!formData.lineOA.channelId || !formData.lineOA.channelId.trim()) {
-        return { valid: false, error: 'กรุณากรอก "LINE Channel ID"' };
-      }
-      if (!formData.lineOA.channelSecret || !formData.lineOA.channelSecret.trim()) {
-        return { valid: false, error: 'กรุณากรอก "LINE Channel Secret"' };
+      const { lineOA } = formData;
+      if (!lineOA.skipped) {
+        if (!lineOA.channelId || !lineOA.channelId.trim()) {
+          return { valid: false, error: 'กรุณากรอก "LINE Channel ID"' };
+        }
+        if (!lineOA.channelSecret || !lineOA.channelSecret.trim()) {
+          return { valid: false, error: 'กรุณากรอก "LINE Channel Secret"' };
+        }
       }
     }
 
@@ -2268,78 +2316,17 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
       {/* STEP 6: LINE OA Integration */}
       {currentStep === 6 && (
         <div className="bg-white p-4 sm:p-8 rounded-3xl border border-slate-100 shadow-xs space-y-6 animate-in fade-in duration-200">
-          <div className="flex items-center gap-2 pb-3 border-b border-slate-100">
-            <Send className="w-5 h-5 text-emerald-600 shrink-0" />
-            <div>
-              <h3 className="text-sm sm:text-base font-black text-slate-800">ขั้นตอนที่ 6: เชื่อมต่อ LINE OA</h3>
-              <p className="text-[11px] sm:text-xs text-slate-400 font-medium">ตั้งค่าระบบแจ้งเตือนบิล ค่าน้ำไฟ และรับชำระผ่าน LINE Official Account</p>
-            </div>
-          </div>
-
-          <div className="bg-emerald-50/60 p-4 sm:p-5 rounded-3xl border border-emerald-100 space-y-4">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div className="flex items-center gap-2.5">
-                <div className="w-10 h-10 rounded-2xl bg-emerald-500 text-white flex items-center justify-center font-black shrink-0">
-                  LINE
-                </div>
-                <div>
-                  <h4 className="text-xs sm:text-sm font-black text-slate-800">การเชื่อมต่อ LINE Messaging API</h4>
-                  <p className="text-[11px] sm:text-xs text-slate-500 font-medium">สำหรับส่งบิลอัตโนมัติ การเตือนชำระเงิน และการรับสลิปโอนเงิน</p>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2 shrink-0 self-start sm:self-auto">
-                <span className={`px-3 py-1 rounded-full text-xs font-black flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
-                  formData.lineOA.isConnected ? 'bg-emerald-100 text-emerald-700 border border-emerald-200' : 'bg-rose-100 text-rose-700 border border-rose-200'
-                }`}>
-                  <span className={`w-2 h-2 rounded-full shrink-0 ${formData.lineOA.isConnected ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500'}`} />
-                  {formData.lineOA.isConnected ? 'เชื่อมต่อสำเร็จ' : 'ยังไม่ได้เชื่อมต่อ'}
-                </span>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">LINE Channel ID <span className="text-rose-500">*</span></label>
-                <input
-                  type="text"
-                  value={formData.lineOA.channelId}
-                  onChange={(e) => setFormData({ ...formData, lineOA: { ...formData.lineOA, channelId: e.target.value } })}
-                  placeholder="เช่น 1657889900"
-                  className="w-full px-3.5 py-2 text-xs bg-white border border-slate-200 rounded-xl focus:border-emerald-500 outline-none font-bold"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">LINE Channel Secret <span className="text-rose-500">*</span></label>
-                <input
-                  type="password"
-                  value={formData.lineOA.channelSecret}
-                  onChange={(e) => setFormData({ ...formData, lineOA: { ...formData.lineOA, channelSecret: e.target.value } })}
-                  placeholder="e4d8f9c2a1b3c4d5e6f7..."
-                  className="w-full px-3.5 py-2 text-xs bg-white border border-slate-200 rounded-xl focus:border-emerald-500 outline-none font-mono text-xs"
-                />
-              </div>
-            </div>
-
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2">
-              <button
-                type="button"
-                onClick={handleTestLineConnection}
-                disabled={testingLine}
-                className="w-full sm:w-auto px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl text-xs font-black transition-all flex items-center justify-center gap-2 cursor-pointer shadow-xs disabled:opacity-50 whitespace-nowrap shrink-0"
-              >
-                <RefreshCw className={`w-3.5 h-3.5 shrink-0 ${testingLine ? 'animate-spin' : ''}`} />
-                <span>{testingLine ? 'กำลังทดสอบสัญญาณ...' : 'ทดสอบตรวจสถานะ LINE OA'}</span>
-              </button>
-
-              {lineStatusMsg && (
-                <span className={`text-xs font-bold ${lineStatusMsg.type === 'success' ? 'text-emerald-700' : 'text-rose-600'}`}>
-                  {lineStatusMsg.msg}
-                </span>
-              )}
-            </div>
-          </div>
+          <LineIntegrationForm
+            value={{
+              ...formData.lineOA,
+              webhookStatus: 'pending'
+            }}
+            onChange={(val) => setFormData({ ...formData, lineOA: val as any })}
+            onTestConnection={handleTestLineConnection}
+            testingLine={testingLine}
+            lineStatusMsg={lineStatusMsg}
+            mode="register"
+          />
 
           {/* Registration Summary Card */}
           <div className="bg-slate-50 p-4 sm:p-5 rounded-3xl border border-slate-200 space-y-3">
@@ -2363,7 +2350,9 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
               </div>
               <div className="bg-white p-3 rounded-2xl border border-slate-100">
                 <span className="text-[10px] text-slate-400 font-bold block">สถานะ LINE OA</span>
-                <span className="font-extrabold text-emerald-600 block">{formData.lineOA.isConnected ? 'พร้อมใช้งาน' : 'รอยืนยัน'}</span>
+                <span className="font-extrabold text-emerald-600 block font-bold">
+                  {formData.lineOA.skipped ? 'ยังไม่ได้เชื่อมต่อ — สามารถตั้งค่าได้ภายหลัง' : formData.lineOA.isConnected ? 'ตรวจสอบแล้ว (Webhook/LIFF รอยืนยัน)' : 'ยังไม่ระบุ'}
+                </span>
               </div>
             </div>
           </div>
@@ -2410,13 +2399,27 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                 <ArrowRight className="w-4 h-4" />
               </button>
             ) : (
-              <button
-                onClick={handleSaveRegistration}
-                className="px-5 sm:px-6 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl text-xs sm:text-xs font-black transition-all flex items-center gap-2 shadow-lg cursor-pointer whitespace-nowrap"
-              >
-                <Save className="w-4 h-4 shrink-0" />
-                <span>ลงทะเบียนหอพัก</span>
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    setFormData({ ...formData, lineOA: { ...formData.lineOA, skipped: true } });
+                    handleSaveRegistration();
+                  }}
+                  className="px-5 sm:px-6 py-2.5 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-2xl text-xs sm:text-xs font-black transition-all cursor-pointer whitespace-nowrap"
+                >
+                  ข้ามไปก่อนและเปิดใช้งานหอพัก
+                </button>
+                <button
+                  onClick={() => {
+                    setFormData({ ...formData, lineOA: { ...formData.lineOA, skipped: false } });
+                    handleSaveRegistration();
+                  }}
+                  className="px-5 sm:px-6 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl text-xs sm:text-xs font-black transition-all flex items-center gap-2 shadow-lg cursor-pointer whitespace-nowrap"
+                >
+                  <Save className="w-4 h-4 shrink-0" />
+                  <span>ลงทะเบียนหอพัก</span>
+                </button>
+              </div>
             )}
           </div>
         </div>

@@ -1,8 +1,8 @@
 import { Router, Request, Response } from 'express';
+import { getPrismaClient } from '../db/prisma.js';
 import { AuthenticationService } from '../services/auth.service.js';
 import { IDormitoryRepository } from '../db/repositories/dormitory.repository.js';
 import { IBillingSettingsRepository } from '../db/repositories/billing-settings.repository.js';
-import { IPaymentSettingsRepository } from '../db/repositories/payment-settings.repository.js';
 import { ISubscriptionRepository } from '../db/repositories/subscription.repository.js';
 import { IPlanRepository } from '../db/repositories/plan.repository.js';
 import { SensitiveFieldService } from '../services/sensitive-field.service.js';
@@ -20,7 +20,6 @@ export function createDormitoryRouter(
   authService: AuthenticationService,
   dormitoryRepo: IDormitoryRepository,
   billingRepo: IBillingSettingsRepository,
-  paymentRepo: IPaymentSettingsRepository,
   subRepo: ISubscriptionRepository,
   planRepo: IPlanRepository,
   sensitiveFieldService: SensitiveFieldService,
@@ -64,9 +63,12 @@ export function createDormitoryRouter(
     const activeMemberships = userMemberships.filter((m: any) => m.status === 'active');
 
     const dormList = [];
+    const seenDormIds = new Set<string>();
+
     for (const mem of activeMemberships) {
       const dorm = await dormitoryRepo.findById(mem.dormitoryId);
       if (dorm && dorm.status === 'active') {
+        seenDormIds.add(dorm.id);
         dormList.push({
           id: dorm.id,
           name: dorm.name,
@@ -77,6 +79,39 @@ export function createDormitoryRouter(
           createdAt: dorm.createdAt,
         });
       }
+    }
+
+    // WAVE0_LEGACY_COMPAT: Include dormitories where user is the legacy creator
+    // (createdByUserId) but has no active DormitoryMember record. Grants OWNER
+    // access only. Never infers MANAGER, TECH, or HOUSEKEEPING roles.
+    // Remove this fallback after confirmed Membership backfill.
+    try {
+      const prisma = getPrismaClient();
+      if (prisma?.dormitory) {
+        const legacyDorms = await prisma.dormitory.findMany({
+          where: {
+            createdByUserId: userId,
+            status: 'active',
+            id: { notIn: Array.from(seenDormIds) }
+          },
+          select: { id: true, name: true, code: true, type: true, status: true, createdAt: true }
+        });
+        for (const dorm of legacyDorms) {
+          console.warn(`WAVE0_LEGACY_COMPAT: Dormitory ${dorm.id} accessible via createdByUserId fallback for user ${userId}. Membership backfill required.`);
+          dormList.push({
+            id: dorm.id,
+            name: dorm.name,
+            code: dorm.code,
+            type: dorm.type,
+            roleCode: 'OWNER',
+            status: dorm.status,
+            createdAt: dorm.createdAt,
+            _legacyCreatorFallback: true,
+          });
+        }
+      }
+    } catch (_legacyErr) {
+      // Legacy compat query failure is non-fatal — membership path still works
     }
 
     res.json({ data: dormList });
@@ -159,110 +194,10 @@ export function createDormitoryRouter(
   });
 
   // GET /api/v1/dormitories/:dormitoryId/payment-settings
-  router.get('/:dormitoryId/payment-settings', requireSession, requireDormitory, requirePaymentView, async (req: Request, res: Response) => {
-    const dormitoryId = req.params.dormitoryId;
-    const settings = await paymentRepo.findByDormitoryId(dormitoryId);
-
-    if (!settings) {
-      return res.json({
-        data: {
-          dormitoryId,
-          cashAccepted: true,
-          promptPayType: null,
-          promptPayValueMasked: null,
-          bankCode: null,
-          bankAccountName: null,
-          bankAccountNumberMasked: null,
-        },
-      });
-    }
-
-    res.json({
-      data: {
-        id: settings.id,
-        dormitoryId: settings.dormitoryId,
-        cashAccepted: settings.cashAccepted,
-        promptPayType: settings.promptPayType,
-        promptPayValueMasked: settings.promptPayValueMasked,
-        bankCode: settings.bankCode,
-        bankAccountName: settings.bankAccountName,
-        bankAccountNumberMasked: settings.bankAccountNumberMasked,
-        updatedAt: settings.updatedAt,
-      },
-    });
-  });
+  
 
   // PATCH /api/v1/dormitories/:dormitoryId/payment-settings
-  router.patch('/:dormitoryId/payment-settings', requireSession, requireDormitory, requirePaymentUpdate, async (req: Request, res: Response) => {
-    if (!verifyCsrfToken(req, res)) return;
-
-    const parsed = OnboardingPaymentInputSchema.partial().safeParse(req.body);
-    if (!parsed.success) {
-      return res.status(400).json({
-        error: {
-          code: 'VALIDATION_ERROR',
-          message: 'ข้อมูลช่องทางชำระเงินไม่ถูกต้อง',
-          fieldErrors: parsed.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })),
-          requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
-          timestamp: new Date().toISOString(),
-        },
-      });
-    }
-
-    const dormitoryId = req.params.dormitoryId;
-    let current = await paymentRepo.findByDormitoryId(dormitoryId);
-
-    const updatePayload: any = {};
-    if (parsed.data.cashAccepted !== undefined) updatePayload.cashAccepted = parsed.data.cashAccepted;
-    if (parsed.data.promptPayType !== undefined) updatePayload.promptPayType = parsed.data.promptPayType;
-    if (parsed.data.bankCode !== undefined) updatePayload.bankCode = parsed.data.bankCode;
-    if (parsed.data.bankAccountName !== undefined) updatePayload.bankAccountName = parsed.data.bankAccountName;
-
-    if (parsed.data.promptPayValue !== undefined) {
-      if (parsed.data.promptPayValue) {
-        const enc = sensitiveFieldService.encrypt(parsed.data.promptPayValue);
-        updatePayload.promptPayValueEncrypted = enc.ciphertext;
-        updatePayload.promptPayValueMasked = sensitiveFieldService.maskPromptPay(
-          parsed.data.promptPayType || current?.promptPayType || undefined,
-          parsed.data.promptPayValue
-        );
-      } else {
-        updatePayload.promptPayValueEncrypted = null;
-        updatePayload.promptPayValueMasked = null;
-      }
-    }
-
-    if (parsed.data.bankAccountNumber !== undefined) {
-      if (parsed.data.bankAccountNumber) {
-        const enc = sensitiveFieldService.encrypt(parsed.data.bankAccountNumber);
-        updatePayload.bankAccountNumberEncrypted = enc.ciphertext;
-        updatePayload.bankAccountNumberMasked = sensitiveFieldService.maskBankAccount(parsed.data.bankAccountNumber);
-      } else {
-        updatePayload.bankAccountNumberEncrypted = null;
-        updatePayload.bankAccountNumberMasked = null;
-      }
-    }
-
-    if (!current) {
-      current = await paymentRepo.create({ dormitoryId, ...updatePayload });
-    } else {
-      current = await paymentRepo.update(dormitoryId, updatePayload);
-    }
-
-    res.json({
-      data: {
-        id: current?.id,
-        dormitoryId,
-        cashAccepted: current?.cashAccepted,
-        promptPayType: current?.promptPayType,
-        promptPayValueMasked: current?.promptPayValueMasked,
-        bankCode: current?.bankCode,
-        bankAccountName: current?.bankAccountName,
-        bankAccountNumberMasked: current?.bankAccountNumberMasked,
-        updatedAt: current?.updatedAt,
-      },
-    });
-  });
+  
 
   // GET /api/v1/dormitories/:dormitoryId/subscription
   router.get('/:dormitoryId/subscription', requireSession, requireDormitory, requireSubscriptionView, async (req: Request, res: Response) => {

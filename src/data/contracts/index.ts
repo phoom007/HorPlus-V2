@@ -56,6 +56,8 @@ export interface DormitoryDataSource {
   update(dormitory: Dormitory, actorUserId?: string): Promise<DataResult<Dormitory>>;
   getBuildings(): Promise<Building[]>;
   addBuilding(building: Omit<Building, 'id' | 'createdAt' | 'updatedAt'>, actorUserId?: string): Promise<DataResult<Building>>;
+  updateBuilding(building: Building, actorUserId?: string): Promise<DataResult<Building>>;
+  deleteBuilding(buildingId: string, actorUserId?: string): Promise<DataResult<boolean>>;
 }
 
 export interface RoomDataSource {
@@ -166,6 +168,13 @@ export interface TenantRegistrationDataSource {
   rejectRequest(requestId: string, reason: string): Promise<DataResult<any>>;
 }
 
+export interface OccupancyDataSource {
+  getSummary(): Promise<DataResult<any>>;
+  getFloorPlan(buildingId?: string): Promise<DataResult<any>>;
+  moveOut(occupancyId: string, moveOutDate: string): Promise<DataResult<any>>;
+  transferRoom(occupancyId: string, targetRoomId: string, transferDate: string): Promise<DataResult<any>>;
+}
+
 export interface HorPlusDataProvider {
   dormitories: DormitoryDataSource;
   rooms: RoomDataSource;
@@ -182,4 +191,5 @@ export interface HorPlusDataProvider {
   lineOa?: LineOaDataSource;
   staffRoles?: StaffRoleDataSource;
   tenantRegistrations?: TenantRegistrationDataSource;
+  occupancies?: OccupancyDataSource;
 }

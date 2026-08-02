@@ -22,11 +22,10 @@ export interface HealthStatus {
 }
 
 export interface ReadinessStatus {
-  status: 'READY' | 'NOT_READY';
-  dependencies: {
-    database: 'UP' | 'DOWN';
-    redis: 'UP' | 'DOWN';
-  };
+  status: 'UP' | 'DOWN' | 'DEGRADED';
+  database: 'UP' | 'DOWN';
+  redis: 'UP' | 'DOWN';
+  repositoryMode: 'PRISMA_POSTGRESQL' | 'IN_MEMORY';
   timestamp: string;
 }
 
@@ -61,11 +60,10 @@ export async function checkReadiness(): Promise<{ isReady: boolean; data: Readin
   return {
     isReady,
     data: {
-      status: isReady ? 'READY' : 'NOT_READY',
-      dependencies: {
-        database: isDbUp ? 'UP' : 'DOWN',
-        redis: isRedisUp ? 'UP' : 'DOWN',
-      },
+      status: isReady ? 'UP' : 'DOWN',
+      database: isDbUp ? 'UP' : 'DOWN',
+      redis: isRedisUp ? 'UP' : 'DOWN',
+      repositoryMode: process.env.REPOSITORY_MODE === 'in-memory' ? 'IN_MEMORY' : 'PRISMA_POSTGRESQL',
       timestamp: new Date().toISOString(),
     },
   };

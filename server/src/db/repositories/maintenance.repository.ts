@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { addDecimals, formatDecimal } from '../../utils/decimal-math.util.js';
 const uuidv4 = () => crypto.randomUUID();
 
 export type MaintenanceCategory =
@@ -411,7 +412,7 @@ export class InMemoryMaintenanceRepository {
     const material = data.materialCost !== undefined ? data.materialCost : (existingIndex !== -1 ? this.costs[existingIndex].materialCost : '0.00');
     const other = data.otherCost !== undefined ? data.otherCost : (existingIndex !== -1 ? this.costs[existingIndex].otherCost : '0.00');
 
-    const total = (parseFloat(labor) + parseFloat(material) + parseFloat(other)).toFixed(2);
+    const total = formatDecimal(addDecimals(labor, material, other));
     const now = new Date();
 
     if (existingIndex !== -1) {

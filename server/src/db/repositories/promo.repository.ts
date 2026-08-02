@@ -47,8 +47,8 @@ export class InMemoryPromoRepository implements IPromoRepository {
 
   private seedData(): void {
     const now = new Date();
-    this.promoCodes.set('promo-horplus', {
-      id: 'promo-horplus',
+    this.promoCodes.set('11111111-1111-1111-1111-111111111111', {
+      id: '11111111-1111-1111-1111-111111111111',
       code: 'HORPLUS',
       codeNormalized: 'HORPLUS',
       status: 'active',

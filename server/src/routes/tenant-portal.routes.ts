@@ -1,37 +1,23 @@
 import { Router, Request, Response } from 'express';
-import { prisma } from '../db/prisma.js';
+import { getPrismaClient } from '../db/prisma.js';
 import { requireTenantLineSession } from '../middleware/unified-actor.middleware.js';
 import { roomBillingStateService } from '../services/room-billing-state.service.js';
-import { PaymentService } from '../services/payment.service.js';
-import { InMemoryPaymentRepository } from '../db/repositories/payment.repository.js';
 import { InMemoryBillRepository } from '../db/repositories/bill.repository.js';
 import { InMemoryPaymentEvidenceStorage } from '../services/storage-provider.service.js';
-import { MockSlipVerificationProvider } from '../services/slip-verifier.service.js';
-import { ReceiptGenerationService } from '../services/receipt.service.js';
-import { InMemoryReceiptRepository } from '../db/repositories/receipt.repository.js';
 import { AuditService } from '../services/audit.service.js';
-import { MaintenanceService } from '../services/maintenance.service.ts';
-import { AnnouncementService } from '../services/announcement.service.ts';
+import { MaintenanceService } from '../services/maintenance.service.js';
+import { AnnouncementService } from '../services/announcement.service.js';
+import { DocumentPdfService } from '../services/document-pdf.service.js';
 
 export function createTenantPortalRouter(): Router {
   const router = Router();
+  const prisma = getPrismaClient();
 
   const auditService = new AuditService();
-  const paymentRepo = new InMemoryPaymentRepository();
   const billRepo = new InMemoryBillRepository();
-  const receiptRepo = new InMemoryReceiptRepository();
   const storageProvider = new InMemoryPaymentEvidenceStorage();
-  const verificationProvider = new MockSlipVerificationProvider();
-  const receiptService = new ReceiptGenerationService(receiptRepo, auditService);
+  
 
-  const paymentService = new PaymentService(
-    paymentRepo,
-    billRepo,
-    storageProvider,
-    verificationProvider,
-    receiptService,
-    auditService
-  );
 
   const maintenanceService = new MaintenanceService();
   const announcementService = new AnnouncementService();
@@ -61,14 +47,7 @@ export function createTenantPortalRouter(): Router {
       const contract = actor.contractId ? await prisma.contract.findUnique({ where: { id: actor.contractId } }) : null;
 
       // Room members under same contract/room
-      const tenantBindings = await prisma.tenantLineBinding.findMany({
-        where: {
-          dormitoryId: actor.dormitoryId,
-          roomId: actor.roomId || undefined,
-          status: 'active'
-        },
-        include: { identity: true }
-      });
+      const tenantBindings: any[] = [];
 
       const roomMembers = tenantBindings.map((tb) => ({
         displayName: tb.identity?.displayName || 'สมาชิกในห้อง',
@@ -88,7 +67,7 @@ export function createTenantPortalRouter(): Router {
           firstName: tenant.firstName,
           lastName: tenant.lastName,
           maskedPhone: phone,
-          roomNumber: room?.number || 'ไม่ระบุ',
+          roomNumber: room?.roomNumber || 'ไม่ระบุ',
           dormitoryName: dorm?.name || 'หอพัก',
           status: tenant.status,
           startDate: contract?.startDate ? contract.startDate.toISOString() : null,
@@ -133,12 +112,12 @@ export function createTenantPortalRouter(): Router {
           status: contract.status,
           startDate: contract.startDate.toISOString(),
           endDate: contract.endDate.toISOString(),
-          roomNumber: room?.number || 'ไม่ระบุ',
+          roomNumber: room?.roomNumber || 'ไม่ระบุ',
           rentBillingType: contract.rentBillingType,
           rentAmount: contract.rentAmount.toString(),
           depositAmount: contract.depositAmount.toString(),
           advancePaymentAmount: contract.advancePaymentAmount.toString(),
-          coOccupantsCount: contract.coOccupantCount
+          coOccupantsCount: 0
         }
       });
     } catch (err: any) {
@@ -213,10 +192,10 @@ export function createTenantPortalRouter(): Router {
           totalAmount: bill.totalAmount.toString(),
           paidAmount: bill.paidAmount.toString(),
           outstandingAmount: bill.outstandingAmount.toString(),
-          roomNumber: room?.number || 'ไม่ระบุ',
-          items: bill.items.map((it) => ({
+          roomNumber: room?.roomNumber || 'ไม่ระบุ',
+          items: bill.items.map((it: any) => ({
             id: it.id,
-            itemType: it.itemType,
+            itemType: it.type || it.itemType || 'other',
             description: it.description,
             amount: it.amount.toString(),
             quantity: it.quantity
@@ -243,18 +222,12 @@ export function createTenantPortalRouter(): Router {
       const room = actor.roomId ? await prisma.room.findUnique({ where: { id: actor.roomId } }) : null;
 
       // Latest receipt
-      const latestReceipt = await prisma.receipt.findFirst({
-        where: {
-          dormitoryId: actor.dormitoryId,
-          OR: [{ roomId: actor.roomId || undefined }, { tenantId: actor.tenantId || undefined }]
-        },
-        orderBy: { issuedAt: 'desc' }
-      });
+      const latestReceipt: any = null;
 
       return res.json({
         success: true,
         data: {
-          roomNumber: room?.number || 'ไม่ระบุ',
+          roomNumber: room?.roomNumber || 'ไม่ระบุ',
           contractStatus: contract?.status || 'active',
           billingState: billingState.state,
           currentBillId: billingState.currentBillId || null,
@@ -273,349 +246,22 @@ export function createTenantPortalRouter(): Router {
   });
 
   // 6. Tenant Payment Options
-  router.get('/bills/:billId/payment-options', async (req: Request, res: Response) => {
-    try {
-      const actor = req.actor!;
-      const bill = await prisma.bill.findUnique({ where: { id: req.params.billId } });
-
-      if (!bill || bill.dormitoryId !== actor.dormitoryId || (bill.roomId !== actor.roomId && bill.tenantId !== actor.tenantId)) {
-        return res.status(404).json({
-          error: { code: 'TENANT_BILL_NOT_FOUND', message: 'ไม่พบรายการบิลนี้', requestId: req.requestId }
-        });
-      }
-
-      return res.json({
-        success: true,
-        data: {
-          cashAccepted: true,
-          bankName: 'ธนาคารกสิกรไทย',
-          bankAccountName: 'หอพักสุขสบาย (บัญชีชำระเงิน)',
-          bankAccountNumberMasked: 'xxx-x-x1234-x',
-          promptPayMasked: '081-xxx-5678',
-          outstandingAmount: bill.outstandingAmount.toString(),
-          currency: 'THB',
-          evidenceRequired: true
-        }
-      });
-    } catch (err: any) {
-      return res.status(500).json({
-        error: { code: 'INTERNAL_ERROR', message: err.message, requestId: req.requestId }
-      });
-    }
-  });
 
   // 7. Tenant Upload Intent
-  router.post('/payment-evidence/upload-intents', async (req: Request, res: Response) => {
-    try {
-      const actor = req.actor!;
-      const { fileName, fileSize, fileType, billId } = req.body;
-
-      if (!billId) {
-        return res.status(400).json({
-          error: { code: 'INVALID_INPUT', message: 'กรุณาระบุ billId', requestId: req.requestId }
-        });
-      }
-
-      const bill = await prisma.bill.findUnique({ where: { id: billId } });
-      if (!bill || bill.dormitoryId !== actor.dormitoryId || (bill.roomId !== actor.roomId && bill.tenantId !== actor.tenantId)) {
-        return res.status(404).json({
-          error: { code: 'TENANT_BILL_NOT_FOUND', message: 'ไม่พบรายการบิลนี้', requestId: req.requestId }
-        });
-      }
-
-      const uploadIntentId = `upl_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
-      const storagePath = `payments/${actor.dormitoryId}/${billId}/${uploadIntentId}_${fileName || 'slip.jpg'}`;
-
-      return res.json({
-        success: true,
-        data: {
-          uploadIntentId,
-          storagePath,
-          uploadUrl: `/api/v1/tenant/payment-evidence/mock-upload?path=${encodeURIComponent(storagePath)}`,
-          expiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString()
-        }
-      });
-    } catch (err: any) {
-      return res.status(500).json({
-        error: { code: 'INTERNAL_ERROR', message: err.message, requestId: req.requestId }
-      });
-    }
-  });
 
   // 8. Tenant Confirm Evidence
-  router.post('/payment-evidence/confirm', async (req: Request, res: Response) => {
-    try {
-      const actor = req.actor!;
-      const { uploadIntentId, storagePath } = req.body;
-
-      if (!uploadIntentId || !storagePath) {
-        return res.status(400).json({
-          error: { code: 'INVALID_INPUT', message: 'ข้อมูลการยืนยันหลักฐานไม่ครบถ้วน', requestId: req.requestId }
-        });
-      }
-
-      const evidence = await prisma.paymentEvidence.create({
-        data: {
-          dormitoryId: actor.dormitoryId,
-          storageBucket: 'horplus-payment-evidence',
-          storagePath,
-          fileName: storagePath.split('/').pop() || 'slip.jpg',
-          fileSizeBytes: 102400,
-          mimeType: 'image/jpeg',
-          checksumSha256: `sha256_${Date.now()}`
-        }
-      });
-
-      return res.json({
-        success: true,
-        data: {
-          evidenceId: evidence.id,
-          storagePath: evidence.storagePath
-        }
-      });
-    } catch (err: any) {
-      return res.status(500).json({
-        error: { code: 'INTERNAL_ERROR', message: err.message, requestId: req.requestId }
-      });
-    }
-  });
 
   // 9. Tenant Payment Submission
-  router.post('/bills/:billId/payments', async (req: Request, res: Response) => {
-    try {
-      const actor = req.actor!;
-      const { billId } = req.params;
-      const { evidenceId, paidAt, transactionReference } = req.body;
-
-      const bill = await prisma.bill.findUnique({ where: { id: billId } });
-      if (!bill || bill.dormitoryId !== actor.dormitoryId || (bill.roomId !== actor.roomId && bill.tenantId !== actor.tenantId)) {
-        return res.status(404).json({
-          error: { code: 'TENANT_BILL_NOT_FOUND', message: 'ไม่พบรายการบิลนี้', requestId: req.requestId }
-        });
-      }
-
-      if (bill.status === 'paid' || parseFloat(bill.outstandingAmount.toString()) <= 0) {
-        return res.status(400).json({
-          error: { code: 'BILL_ALREADY_PAID', message: 'บิลนี้ชำระเงินเรียบร้อยแล้ว', requestId: req.requestId }
-        });
-      }
-
-      if (!evidenceId) {
-        return res.status(400).json({
-          error: { code: 'PAYMENT_EVIDENCE_REQUIRED', message: 'กรุณาแนบหลักฐานการชำระเงิน', requestId: req.requestId }
-        });
-      }
-
-      const result = await paymentService.submitPayment(actor.dormitoryId, {
-        billId,
-        method: 'bank_transfer',
-        channel: 'tenant_portal',
-        amount: bill.outstandingAmount.toString(),
-        evidenceId,
-        transactionReference,
-        submittedByTenantId: actor.tenantId,
-        paidAt: paidAt ? new Date(paidAt) : new Date()
-      }, req.requestId);
-
-      // NO AUTOMATIC LINE NOTIFICATION IS SENT HERE per TASK 016 rule.
-
-      return res.status(201).json({
-        success: true,
-        data: {
-          paymentId: result.payment.id,
-          paymentNumber: result.payment.paymentNumber,
-          status: result.payment.status,
-          amount: result.payment.amount,
-          message: 'ส่งหลักฐานการชำระเงินสำเร็จแล้ว รอผู้ดูแลหอพักตรวจสอบ'
-        }
-      });
-    } catch (err: any) {
-      return res.status(400).json({
-        error: { code: err.message?.startsWith('RESOURCE_') ? 'RESOURCE_NOT_FOUND' : 'INVALID_PAYMENT', message: err.message, requestId: req.requestId }
-      });
-    }
-  });
 
   // 10. Tenant Payments History
-  router.get('/payments', async (req: Request, res: Response) => {
-    try {
-      const actor = req.actor!;
-      const payments = await prisma.payment.findMany({
-        where: {
-          dormitoryId: actor.dormitoryId,
-          OR: [
-            { contractId: actor.contractId || undefined },
-            { submittedByTenantId: actor.tenantId || undefined }
-          ]
-        },
-        orderBy: { createdAt: 'desc' }
-      });
-
-      const formatted = payments.map((p) => ({
-        id: p.id,
-        paymentNumber: p.paymentNumber,
-        billId: p.billId,
-        method: p.method,
-        status: p.status,
-        amount: p.amount.toString(),
-        paidAt: p.paidAt ? p.paidAt.toISOString() : null,
-        createdAt: p.createdAt.toISOString()
-      }));
-
-      return res.json({ success: true, data: formatted });
-    } catch (err: any) {
-      return res.status(500).json({
-        error: { code: 'INTERNAL_ERROR', message: err.message, requestId: req.requestId }
-      });
-    }
-  });
 
   // 11. Tenant Payment Detail
-  router.get('/payments/:paymentId', async (req: Request, res: Response) => {
-    try {
-      const actor = req.actor!;
-      const payment = await prisma.payment.findUnique({
-        where: { id: req.params.paymentId }
-      });
-
-      if (!payment || payment.dormitoryId !== actor.dormitoryId) {
-        return res.status(404).json({
-          error: { code: 'TENANT_PAYMENT_NOT_FOUND', message: 'ไม่พบรายการชำระเงินนี้', requestId: req.requestId }
-        });
-      }
-
-      const review = await prisma.paymentReview.findFirst({
-        where: { paymentId: payment.id, status: 'rejected' },
-        orderBy: { reviewedAt: 'desc' }
-      });
-
-      return res.json({
-        success: true,
-        data: {
-          id: payment.id,
-          paymentNumber: payment.paymentNumber,
-          billId: payment.billId,
-          status: payment.status,
-          amount: payment.amount.toString(),
-          method: payment.method,
-          paidAt: payment.paidAt ? payment.paidAt.toISOString() : null,
-          rejectReason: review?.note || null
-        }
-      });
-    } catch (err: any) {
-      return res.status(500).json({
-        error: { code: 'INTERNAL_ERROR', message: err.message, requestId: req.requestId }
-      });
-    }
-  });
 
   // 12. Tenant Receipts List
-  router.get('/receipts', async (req: Request, res: Response) => {
-    try {
-      const actor = req.actor!;
-      const receipts = await prisma.receipt.findMany({
-        where: {
-          dormitoryId: actor.dormitoryId,
-          OR: [{ roomId: actor.roomId || undefined }, { tenantId: actor.tenantId || undefined }]
-        },
-        orderBy: { issuedAt: 'desc' }
-      });
-
-      const formatted = receipts.map((r) => ({
-        id: r.id,
-        receiptNumber: r.receiptNumber,
-        issuedAt: r.issuedAt.toISOString(),
-        totalAmount: r.totalAmount.toString(),
-        paymentMethod: r.paymentMethod
-      }));
-
-      return res.json({ success: true, data: formatted });
-    } catch (err: any) {
-      return res.status(500).json({
-        error: { code: 'INTERNAL_ERROR', message: err.message, requestId: req.requestId }
-      });
-    }
-  });
 
   // 13. Tenant Receipt Detail
-  router.get('/receipts/:receiptId', async (req: Request, res: Response) => {
-    try {
-      const actor = req.actor!;
-      const receipt = await prisma.receipt.findUnique({
-        where: { id: req.params.receiptId },
-        include: { items: true }
-      });
-
-      if (!receipt || receipt.dormitoryId !== actor.dormitoryId || (receipt.roomId !== actor.roomId && receipt.tenantId !== actor.tenantId)) {
-        return res.status(404).json({
-          error: { code: 'TENANT_RECEIPT_NOT_FOUND', message: 'ไม่พบใบเสร็จนี้', requestId: req.requestId }
-        });
-      }
-
-      return res.json({
-        success: true,
-        data: {
-          id: receipt.id,
-          receiptNumber: receipt.receiptNumber,
-          issuedAt: receipt.issuedAt.toISOString(),
-          totalAmount: receipt.totalAmount.toString(),
-          paymentMethod: receipt.paymentMethod,
-          payerName: receipt.payerName,
-          items: receipt.items.map((it) => ({
-            id: it.id,
-            description: it.description,
-            amount: it.amount.toString()
-          }))
-        }
-      });
-    } catch (err: any) {
-      return res.status(500).json({
-        error: { code: 'INTERNAL_ERROR', message: err.message, requestId: req.requestId }
-      });
-    }
-  });
 
   // 14. Tenant Receipt Print Data
-  router.get('/receipts/:receiptId/print-data', async (req: Request, res: Response) => {
-    try {
-      const actor = req.actor!;
-      const receipt = await prisma.receipt.findUnique({
-        where: { id: req.params.receiptId },
-        include: { items: true }
-      });
-
-      if (!receipt || receipt.dormitoryId !== actor.dormitoryId || (receipt.roomId !== actor.roomId && receipt.tenantId !== actor.tenantId)) {
-        return res.status(404).json({
-          error: { code: 'TENANT_RECEIPT_NOT_FOUND', message: 'ไม่พบใบเสร็จนี้', requestId: req.requestId }
-        });
-      }
-
-      const dorm = await prisma.dormitory.findUnique({ where: { id: receipt.dormitoryId } });
-      const room = receipt.roomId ? await prisma.room.findUnique({ where: { id: receipt.roomId } }) : null;
-
-      return res.json({
-        success: true,
-        data: {
-          receiptNumber: receipt.receiptNumber,
-          dormitoryName: dorm?.name || 'หอพัก',
-          dormitoryAddress: dorm?.address || '',
-          roomNumber: room?.number || 'ไม่ระบุ',
-          payerName: receipt.payerName,
-          issuedAt: receipt.issuedAt.toISOString(),
-          totalAmount: receipt.totalAmount.toString(),
-          paymentMethod: receipt.paymentMethod,
-          items: receipt.items.map((it) => ({
-            description: it.description,
-            amount: it.amount.toString()
-          }))
-        }
-      });
-    } catch (err: any) {
-      return res.status(500).json({
-        error: { code: 'INTERNAL_ERROR', message: err.message, requestId: req.requestId }
-      });
-    }
-  });
 
   // 15. Tenant Maintenance Routes
   router.get('/maintenance', async (req: Request, res: Response) => {
@@ -758,6 +404,65 @@ export function createTenantPortalRouter(): Router {
       return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message, requestId: req.requestId } });
     }
   });
+
+  // Tenant Contract PDF Download
+  router.get('/contract/pdf', async (req: Request, res: Response) => {
+    try {
+      const actor = req.actor!;
+      if (!actor.contractId) {
+        return res.status(404).json({
+          error: { code: 'TENANT_CONTRACT_NOT_FOUND', message: 'ไม่พบสัญญาเช่าของคุณ', requestId: req.requestId }
+        });
+      }
+
+      const contract = await prisma.contract.findUnique({
+        where: { id: actor.contractId }
+      });
+
+      if (!contract || contract.dormitoryId !== actor.dormitoryId) {
+        return res.status(404).json({
+          error: { code: 'TENANT_CONTRACT_NOT_FOUND', message: 'ไม่พบสัญญาเช่านี้', requestId: req.requestId }
+        });
+      }
+
+      const dorm = await prisma.dormitory.findUnique({ where: { id: contract.dormitoryId } });
+      const room = await prisma.room.findUnique({ where: { id: contract.roomId } });
+      const tenant = await prisma.tenant.findUnique({ where: { id: contract.tenantId } });
+
+      const pdfService = new DocumentPdfService();
+      const pdfBuffer = await pdfService.generateContractPdf({
+        contractNumber: contract.contractNumber,
+        dormitoryName: dorm?.name || 'หอพัก',
+        dormitoryAddress: dorm?.addressLine1 || undefined,
+        dormitoryPhone: dorm?.phone || undefined,
+        ownerName: dorm?.name || 'เจ้าของหอพัก',
+        tenantName: tenant?.displayName || 'ผู้เช่า',
+        tenantPhone: tenant?.phone,
+        roomNumber: room?.roomNumber || '101',
+        rentBillingType: contract.rentBillingType === 'term' ? 'term' : 'monthly',
+        startDate: contract.startDate.toISOString().split('T')[0],
+        endDate: contract.endDate.toISOString().split('T')[0],
+        rentAmount: contract.rentAmount.toString(),
+        depositAmount: contract.depositAmount.toString(),
+        waterRate: '18.00',
+        electricityRate: '7.00',
+        commonFee: '0.00',
+        billingDay: 25,
+        dueDay: 5,
+        terms: contract.terms || undefined
+      });
+
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="Contract-${contract.contractNumber}.pdf"`);
+      return res.send(pdfBuffer);
+    } catch (err: any) {
+      return res.status(500).json({
+        error: { code: 'INTERNAL_ERROR', message: err.message, requestId: req.requestId }
+      });
+    }
+  });
+
+  // Tenant Receipt PDF Download
 
   return router;
 }

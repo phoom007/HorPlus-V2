@@ -486,13 +486,15 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
 
   const getWaterCost = (row: MeterRowState) => {
     const mode = cycleRates.waterBillingMode || 'unit';
-    const rate = cycleRates.waterUnitRate || 18;
-    const units = row.isReplaced ? row.waterCurr : Math.max(0, row.waterCurr - row.waterPrev);
+    const rate = Number(cycleRates.waterUnitRate) || 18;
+    const wCurr = Number(row.waterCurr) || 0;
+    const wPrev = Number(row.waterPrev) || 0;
+    const units = row.isReplaced ? wCurr : Math.max(0, wCurr - wPrev);
     
     if (mode === 'unit') {
       return units * rate;
     } else if (mode === 'person') {
-      return (row.peopleCount || 1) * rate;
+      return (Number(row.peopleCount) || 1) * rate;
     } else { // 'room'
       return rate;
     }
@@ -500,13 +502,15 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
 
   const getElectricCost = (row: MeterRowState) => {
     const mode = cycleRates.electricBillingMode || 'unit';
-    const rate = cycleRates.electricUnitRate || 7;
-    const units = row.isReplaced ? row.elecCurr : Math.max(0, row.elecCurr - row.elecPrev);
+    const rate = Number(cycleRates.electricUnitRate) || 7;
+    const eCurr = Number(row.elecCurr) || 0;
+    const ePrev = Number(row.elecPrev) || 0;
+    const units = row.isReplaced ? eCurr : Math.max(0, eCurr - ePrev);
     
     if (mode === 'unit') {
       return units * rate;
     } else if (mode === 'person') {
-      return (row.peopleCount || 1) * rate;
+      return (Number(row.peopleCount) || 1) * rate;
     } else { // 'room'
       return rate;
     }
@@ -612,8 +616,16 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       const cachedRow = cached?.find(c => c.roomId === r.id);
       
       const prevCycleData = getPrevCycleNewReadings(r.id);
-      const waterPrev = cachedRow?.waterPrev ?? (prevCycleData ? prevCycleData.waterCurr : r.initialWaterMeter);
-      const elecPrev = cachedRow?.elecPrev ?? (prevCycleData ? prevCycleData.elecCurr : r.initialElectricMeter);
+      const rawWaterBaseline = r.initialWaterMeter ?? (r as any).initialWaterReading ?? 0;
+      const rawElecBaseline = r.initialElectricMeter ?? (r as any).initialElectricityReading ?? 0;
+
+      const rawWaterPrev = cachedRow?.waterPrev ?? (prevCycleData ? prevCycleData.waterCurr : rawWaterBaseline);
+      const parsedWaterPrev = typeof rawWaterPrev === 'number' ? rawWaterPrev : Number(rawWaterPrev);
+      const waterPrev = isNaN(parsedWaterPrev) ? 0 : Math.round(parsedWaterPrev);
+
+      const rawElecPrev = cachedRow?.elecPrev ?? (prevCycleData ? prevCycleData.elecCurr : rawElecBaseline);
+      const parsedElecPrev = typeof rawElecPrev === 'number' ? rawElecPrev : Number(rawElecPrev);
+      const elecPrev = isNaN(parsedElecPrev) ? 0 : Math.round(parsedElecPrev);
       
       // Match existing bill structures if present
       let waterCurr = waterPrev + 8;

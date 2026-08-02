@@ -84,6 +84,20 @@ export function createContractRouter(
     }
   });
 
+  // GET /api/v1/contracts/:id/pdf
+  router.get('/:id/pdf', requireSession, async (req: Request, res: Response) => {
+    try {
+      const dormId = getDormitoryId(req);
+      const pdfBuffer = await contractService.getContractPdf(req.params.id, dormId);
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="Contract-${req.params.id}.pdf"`);
+      res.send(pdfBuffer);
+    } catch (err) {
+      console.error('CONTRACT PDF ERROR:', err);
+      handleServiceError(res, err, req);
+    }
+  });
+
   // POST /api/v1/contracts
   router.post('/', requireSession, async (req: Request, res: Response) => {
     if (!verifyCsrf(req, res)) return;
@@ -101,9 +115,14 @@ export function createContractRouter(
           },
         });
       }
-
-      const contract = await contractService.createContract(dormId, parsed.data, req.auth?.userId);
-      res.status(201).json({ data: contract });
+      const contract = await contractService.createContract(dormId, {
+        ...parsed.data,
+        startDate: new Date(parsed.data.startDate),
+        endDate: new Date(parsed.data.endDate),
+      }, req.auth?.userId);
+      const isIdempotent = (contract as any)._isIdempotent;
+      delete (contract as any)._isIdempotent;
+      res.status(isIdempotent ? 200 : 201).json({ data: contract });
     } catch (err) {
       handleServiceError(res, err, req);
     }
@@ -151,13 +170,44 @@ export function createContractRouter(
           },
         });
       }
-
       const contract = await contractService.extendContract(req.params.id, dormId, parsed.data, req.auth?.userId);
       res.json({ data: contract });
     } catch (err) {
       handleServiceError(res, err, req);
     }
   });
+
+  // POST /api/v1/contracts/:id/renew
+  router.post('/:id/renew', requireSession, async (req: Request, res: Response) => {
+    if (!verifyCsrf(req, res)) return;
+    try {
+      const dormId = getDormitoryId(req);
+      // Validating using basic required fields for the new successor contract
+      if (!req.body.startDate || !req.body.endDate || req.body.rentAmount === undefined) {
+        return res.status(400).json({
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'ข้อมูลการสร้างสัญญาต่อเนื่องไม่ถูกต้อง',
+            fieldErrors: null,
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+      const contract = await contractService.renewContract(req.params.id, dormId, {
+        startDate: req.body.startDate,
+        endDate: req.body.endDate,
+        rentAmount: req.body.rentAmount,
+        durationMonths: req.body.durationMonths
+      }, req.auth?.userId);
+      const isIdempotent = (contract as any)._isIdempotent;
+      delete (contract as any)._isIdempotent;
+      res.status(isIdempotent ? 200 : 201).json({ data: contract });
+    } catch (err) {
+      handleServiceError(res, err, req);
+    }
+  });
+
 
   // POST /api/v1/contracts/:id/terminate
   router.post('/:id/terminate', requireSession, async (req: Request, res: Response) => {
@@ -176,7 +226,6 @@ export function createContractRouter(
           },
         });
       }
-
       const contract = await contractService.terminateContract(req.params.id, dormId, parsed.data, req.auth?.userId);
       res.json({ data: contract });
     } catch (err) {

@@ -1,3 +1,7 @@
+> [!NOTE]
+> **[STATUS: CURRENT]**
+> Refer to **[21-CURRENT-PRODUCT-RULE-LOCK.md](./21-CURRENT-PRODUCT-RULE-LOCK.md)** for absolute precedence.
+
 # 03. Domain and Data Model
 
 เอกสารนี้เป็น Target Model โค้ดปัจจุบันอาจยังไม่ครบ ต้องใช้ migration ตาม `12-DATA-MIGRATION-PLAN.md`
@@ -50,7 +54,7 @@ erDiagram
 
 - `building_id NOT NULL`
 - `normalized_room_number`
-- unique `(building_id, normalized_room_number)`
+- unique `(dormitory_id, normalized_room_number)`
 - status: `VACANT | RESERVED | OCCUPIED | MAINTENANCE`
 - rent mode: `MONTHLY | TERM | DAILY`
 - default price fields เป็นค่า operational ปัจจุบัน แต่สัญญาต้อง snapshot
@@ -188,4 +192,5 @@ Free entitlement = 10 rooms/30 messages. ห้ามเก็บราคา Pa
 - paid bill/receipt/history ไม่ถูก hard delete
 - Tenant/Platform payment ไม่มี foreign key หรือ service ใช้ปะปนกัน
 - schema/migration/RLS/test ใช้ enum/status ชุดเดียวกับเอกสาร
+
 

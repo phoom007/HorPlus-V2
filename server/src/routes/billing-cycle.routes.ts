@@ -37,6 +37,7 @@ export function createBillingCycleRouter(
   };
 
   const handleServiceError = (res: Response, err: any, req: Request) => {
+    console.error('BILLING CYCLE SERVICE ERROR:', err);
     const statusCode = err.statusCode || err.status || 500;
     res.status(statusCode).json({
       error: {
@@ -99,7 +100,6 @@ export function createBillingCycleRouter(
           },
         });
       }
-
       const result = await billingCycleService.createBillingCycle(dormId, parsed.data, req.auth?.userId);
       res.status(201).json({ data: result });
     } catch (err) {

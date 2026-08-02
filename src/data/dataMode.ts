@@ -5,7 +5,7 @@
 
 export type DataMode = 'demo' | 'api';
 
-let activeDataMode: DataMode = ((import.meta as any).env?.VITE_DATA_MODE as DataMode) || 'demo';
+let activeDataMode: DataMode = ((import.meta as any).env?.VITE_DATA_MODE as DataMode) || ((import.meta as any).env?.PROD ? 'api' : 'demo');
 
 export function getDataMode(): DataMode {
   return activeDataMode;

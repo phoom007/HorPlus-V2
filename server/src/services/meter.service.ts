@@ -7,6 +7,7 @@ import {
 } from '../db/repositories/meter.repository.js';
 import { IBillingCycleRepository } from '../db/repositories/billing-cycle.repository.js';
 import { IRoomRepository } from '../db/repositories/room.repository.js';
+import { IBillRepository } from '../db/repositories/bill.repository.js';
 import { AuditService } from './audit.service.js';
 
 export interface CreateMeterDeviceDto {
@@ -47,6 +48,7 @@ export class MeterService {
     private meterRepo: IMeterRepository,
     private billingCycleRepo: IBillingCycleRepository,
     private roomRepo: IRoomRepository,
+    private billRepo?: IBillRepository,
     private auditService?: AuditService
   ) {}
 
@@ -87,7 +89,7 @@ export class MeterService {
         action: 'meter_device.create',
         resourceType: 'meter_device',
         resourceId: device.id,
-        payload: { roomId: data.roomId, type: data.type, meterNumber: data.meterNumber },
+        details: { roomId: data.roomId, type: data.type, meterNumber: data.meterNumber },
       });
     }
 
@@ -162,7 +164,7 @@ export class MeterService {
         action: 'meter_device.replace',
         resourceType: 'meter_device',
         resourceId: newDevice.id,
-        payload: { oldDeviceId: oldDevice.id, newDeviceId: newDevice.id, reason: data.reason },
+        details: { oldDeviceId: oldDevice.id, newDeviceId: newDevice.id, reason: data.reason },
       });
     }
 
@@ -192,91 +194,118 @@ export class MeterService {
 
     const createdReadings: MeterReadingEntity[] = [];
 
-    for (const item of data.readings) {
-      const prevVal = Number(item.previousReading);
-      const currVal = Number(item.currentReading);
-
-      if (currVal < prevVal) {
-        const err = new Error(`CURRENT_READING_LESS_THAN_PREVIOUS`);
-        (err as any).statusCode = 400;
-        (err as any).code = 'INVALID_METER_READING';
-        (err as any).message = `ค่ามิเตอร์ปัจจุบัน (${currVal}) ต้องไม่น้อยกว่าค่ามิเตอร์เดิม (${prevVal})`;
-        throw err;
+    return this.meterRepo.withTransaction(async (tx) => {
+      // Sort rooms to avoid deadlocks
+      const sortedRooms = [...new Set(data.readings.map((r) => r.roomId))].sort();
+      for (const roomId of sortedRooms) {
+        await this.meterRepo.executeRawLock(roomId, tx);
       }
 
-      let device = item.meterDeviceId
-        ? await this.meterRepo.findDeviceById(item.meterDeviceId, dormitoryId)
-        : await this.meterRepo.findDeviceByRoomAndType(dormitoryId, item.roomId, item.meterType);
+      for (const item of data.readings) {
+        if (this.billRepo) {
+          const activeBill = await this.billRepo.findByCycleAndRoom(dormitoryId, data.billingCycleId, item.roomId);
+          if (activeBill && activeBill.status !== 'cancelled' && activeBill.status !== 'void') {
+            const err = new Error('METER_MODIFICATION_BLOCKED_BY_BILL');
+            (err as any).statusCode = 400;
+            (err as any).code = 'METER_MODIFICATION_BLOCKED_BY_BILL';
+            (err as any).message = 'ไม่สามารถแก้ไขค่ามิเตอร์ได้เนื่องจากมีการออกบิลแล้ว';
+            throw err;
+          }
+        }
 
-      if (!device) {
-        // Auto-create active device if missing
-        device = await this.meterRepo.createDevice(dormitoryId, {
-          roomId: item.roomId,
-          type: item.meterType,
-          meterNumber: `${item.meterType.toUpperCase()}-${item.roomId.slice(-4)}`,
-          initialReading: item.previousReading,
-        });
-      }
+        const prevVal = Number(item.previousReading);
+        const currVal = Number(item.currentReading);
 
-      const usageUnits = (currVal - prevVal).toFixed(2);
+        if (isNaN(prevVal) || isNaN(currVal) || prevVal < 0 || currVal < 0) {
+          const err = new Error(`INVALID_METER_READING_VALUE`);
+          (err as any).statusCode = 400;
+          (err as any).code = 'INVALID_METER_READING';
+          (err as any).message = `ค่ามิเตอร์ต้องเป็นตัวเลขที่มากกว่าหรือเท่ากับ 0`;
+          throw err;
+        }
 
-      const existingReading = await this.meterRepo.findReadingByCycleRoomAndType(
-        dormitoryId,
-        data.billingCycleId,
-        item.roomId,
-        item.meterType
-      );
+        if (currVal < prevVal) {
+          const err = new Error(`CURRENT_READING_LESS_THAN_PREVIOUS`);
+          (err as any).statusCode = 400;
+          (err as any).code = 'INVALID_METER_READING';
+          (err as any).message = `ค่ามิเตอร์ปัจจุบัน (${currVal}) ต้องไม่น้อยกว่าค่ามิเตอร์เดิม (${prevVal})`;
+          throw err;
+        }
 
-      let reading: MeterReadingEntity;
-      if (existingReading) {
-        const updated = await this.meterRepo.updateReading(
-          existingReading.id,
+        let device = item.meterDeviceId
+          ? await this.meterRepo.findDeviceById(item.meterDeviceId, dormitoryId, tx)
+          : await this.meterRepo.findDeviceByRoomAndType(dormitoryId, item.roomId, item.meterType, tx);
+
+        if (!device) {
+          // Auto-create active device if missing
+          device = await this.meterRepo.createDevice(dormitoryId, {
+            roomId: item.roomId,
+            type: item.meterType,
+            meterNumber: `${item.meterType.toUpperCase()}-${item.roomId.slice(-4)}`,
+            initialReading: item.previousReading,
+          }, tx);
+        }
+
+        const usageUnits = (currVal - prevVal).toFixed(2);
+
+        const existingReading = await this.meterRepo.findReadingByCycleRoomAndType(
           dormitoryId,
-          {
+          data.billingCycleId,
+          item.roomId,
+          item.meterType,
+          tx
+        );
+
+        let reading: MeterReadingEntity;
+        if (existingReading) {
+          const updated = await this.meterRepo.updateReading(
+            existingReading.id,
+            dormitoryId,
+            {
+              previousReading: item.previousReading,
+              currentReading: item.currentReading,
+              usageUnits,
+              readAt: item.readAt ? new Date(item.readAt) : new Date(),
+              readByUserId: userId,
+              notes: item.notes,
+            },
+            existingReading.version,
+            tx
+          );
+          reading = updated!;
+        } else {
+          reading = await this.meterRepo.createReading(dormitoryId, {
+            billingCycleId: data.billingCycleId,
+            roomId: item.roomId,
+            meterDeviceId: device.id,
+            meterType: item.meterType,
             previousReading: item.previousReading,
             currentReading: item.currentReading,
             usageUnits,
             readAt: item.readAt ? new Date(item.readAt) : new Date(),
             readByUserId: userId,
+            status: 'draft',
             notes: item.notes,
-          },
-          existingReading.version
-        );
-        reading = updated!;
-      } else {
-        reading = await this.meterRepo.createReading(dormitoryId, {
-          billingCycleId: data.billingCycleId,
-          roomId: item.roomId,
-          meterDeviceId: device.id,
-          meterType: item.meterType,
-          previousReading: item.previousReading,
-          currentReading: item.currentReading,
-          usageUnits,
-          readAt: item.readAt ? new Date(item.readAt) : new Date(),
-          readByUserId: userId,
-          status: 'draft',
-          notes: item.notes,
+          }, tx);
+        }
+        createdReadings.push(reading);
+      }
+      return createdReadings;
+    }).then(async (readings) => {
+      if (this.auditService) {
+        await this.auditService.log({
+          dormitoryId,
+          actorUserId: userId || 'system',
+          action: 'meter_reading.bulk_submit',
+          resourceType: 'billing_cycle',
+          resourceId: data.billingCycleId,
+          details: { count: readings.length },
         });
       }
+      return readings;
+    });
 
-      // Update current reading on device
-      await this.meterRepo.updateDevice(device.id, dormitoryId, { currentReading: item.currentReading });
 
-      createdReadings.push(reading);
-    }
-
-    if (this.auditService) {
-      await this.auditService.log({
-        dormitoryId,
-        actorUserId: userId || 'system',
-        action: 'meter_reading.bulk_submit',
-        resourceType: 'billing_cycle',
-        resourceId: data.billingCycleId,
-        payload: { count: createdReadings.length },
-      });
-    }
-
-    return createdReadings;
   }
 
   public async getMeterReadings(
@@ -302,12 +331,33 @@ export class MeterService {
       throw err;
     }
 
+    if (this.billRepo) {
+      const activeBill = await this.billRepo.findByCycleAndRoom(dormitoryId, reading.billingCycleId, reading.roomId);
+      if (activeBill && activeBill.status !== 'cancelled' && activeBill.status !== 'void') {
+        const err = new Error('METER_MODIFICATION_BLOCKED_BY_BILL');
+        (err as any).statusCode = 400;
+        (err as any).code = 'METER_MODIFICATION_BLOCKED_BY_BILL';
+        (err as any).message = 'ไม่สามารถแก้ไขค่ามิเตอร์ได้เนื่องจากมีการออกบิลแล้ว';
+        throw err;
+      }
+    }
+
     const prevVal = Number(reading.previousReading);
     const currVal = Number(currentReading);
+
+    if (isNaN(prevVal) || isNaN(currVal) || prevVal < 0 || currVal < 0) {
+      const err = new Error('INVALID_METER_READING_VALUE');
+      (err as any).statusCode = 400;
+      (err as any).code = 'INVALID_METER_READING';
+      (err as any).message = `ค่ามิเตอร์ต้องเป็นตัวเลขที่มากกว่าหรือเท่ากับ 0`;
+      throw err;
+    }
+
     if (currVal < prevVal) {
       const err = new Error('INVALID_METER_READING');
       (err as any).statusCode = 400;
       (err as any).code = 'INVALID_METER_READING';
+      (err as any).message = `ค่ามิเตอร์ปัจจุบัน (${currVal}) ต้องไม่น้อยกว่าค่ามิเตอร์เดิม (${prevVal})`;
       throw err;
     }
 
@@ -337,7 +387,7 @@ export class MeterService {
         action: 'meter_reading.update',
         resourceType: 'meter_reading',
         resourceId: id,
-        payload: { currentReading, usageUnits },
+        details: { currentReading, usageUnits },
       });
     }
 

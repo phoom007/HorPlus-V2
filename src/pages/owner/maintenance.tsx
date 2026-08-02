@@ -579,17 +579,19 @@ export const OwnerMaintenance: React.FC<OwnerMaintenanceProps> = ({
                       {Array.from(new Set(rooms.map(r => r.buildingId).filter((id): id is string => !!id))).map((bldId: string) => {
                         const bldName = bldId === 'bld-a' ? 'อาคาร A (วิวเขา)' : bldId === 'bld-b' ? 'อาคาร B' : `อาคาร ${bldId.replace('bld-', '').toUpperCase()}`;
                         const bldRooms = rooms.filter(r => r.buildingId === bldId);
-                        const floors = Array.from(new Set(bldRooms.map(r => r.floor))).sort((a, b) => Number(a) - Number(b));
+                        const floors = Array.from(new Set(bldRooms.map(r => r.derivedFloor))).sort((a, b) => (b === null ? -1 : a === null ? 1 : Number(a) - Number(b)));
 
                         return (
                           <div key={bldId} className="space-y-1.5 border-b border-slate-200 pb-2.5 last:border-0 last:pb-0">
                             <span className="text-[10px] font-black text-indigo-600 block">{bldName}</span>
 
                             {floors.map(fl => {
-                              const floorRooms = bldRooms.filter(r => r.floor === fl).sort((a, b) => a.roomNumber.localeCompare(b.roomNumber));
+                              const floorRooms = bldRooms.filter(r => r.derivedFloor === fl).sort((a, b) => a.roomNumber.localeCompare(b.roomNumber));
                               return (
                                 <div key={fl} className="flex items-start gap-2">
-                                  <span className="text-[9px] font-bold text-slate-400 bg-slate-200 px-1.5 py-0.5 rounded shrink-0 mt-0.5">ชั้น {fl}</span>
+                                  <span className="text-[9px] font-bold text-slate-400 bg-slate-200 px-1.5 py-0.5 rounded shrink-0 mt-0.5">
+                                    {fl ? `ชั้น ${fl}` : <span className="text-red-500">Error</span>}
+                                  </span>
                                   <div className="flex flex-wrap gap-1">
                                     {floorRooms.map(room => {
                                       const isSelected = roomId === room.id;

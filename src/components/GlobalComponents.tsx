@@ -847,59 +847,37 @@ export const PrintView: React.FC<PrintViewProps> = ({ children, title = 'พิ�
   const contentRef = React.useRef<HTMLDivElement>(null);
 
   const handlePrint = () => {
-    if (contentRef.current) {
-      try {
-        const printWindow = window.open('', '_blank', 'width=850,height=950');
-        if (printWindow) {
-          printWindow.document.write(`
-            <!DOCTYPE html>
-            <html>
-              <head>
-                <title>${title}</title>
-                <link rel="preconnect" href="https://fonts.googleapis.com">
-                <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-                <link href="https://fonts.googleapis.com/css2?family=Prompt:wght@300;400;500;600;700&family=Sarabun:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-                <script src="https://cdn.tailwindcss.com"></script>
-                <style>
-                  body {
-                    font-family: 'Prompt', 'Sarabun', sans-serif;
-                    background-color: white;
-                    color: #0f172a;
-                    padding: 32px;
-                    margin: 0;
-                  }
-                  @media print {
-                    body { padding: 0; }
-                    .no-print { display: none !important; }
-                  }
-                </style>
-              </head>
-              <body>
-                <div class="no-print" style="margin-bottom: 24px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #e2e8f0; padding-bottom: 12px;">
-                  <span style="font-size: 14px; font-weight: bold; color: #475569;">${title}</span>
-                  <button onclick="window.print()" style="padding: 8px 18px; background-color: #4f46e5; color: white; border: none; border-radius: 10px; font-weight: bold; font-size: 12px; cursor: pointer;">
-                    🖨️ พิมพ์เอกสารนี้
-                  </button>
-                </div>
-                <div>
-                  ${contentRef.current.innerHTML}
-                </div>
-                <script>
-                  setTimeout(() => {
-                    window.print();
-                  }, 400);
-                </script>
-              </body>
-            </html>
-          `);
-          printWindow.document.close();
-          return;
+    // Add temporary print styles to ensure only the printable area is visible
+    const style = document.createElement('style');
+    style.innerHTML = `
+      @media print {
+        body * {
+          visibility: hidden;
         }
-      } catch (e) {
-        console.error('Popup window print error:', e);
+        .printable-area, .printable-area * {
+          visibility: visible;
+        }
+        .printable-area {
+          position: absolute;
+          left: 0;
+          top: 0;
+          width: 100%;
+          margin: 0 !important;
+          padding: 0 !important;
+          box-shadow: none !important;
+        }
+        @page { size: A4; margin: 1cm; }
       }
-    }
+    `;
+    document.head.appendChild(style);
+    
+    // Trigger browser print
     window.print();
+    
+    // Clean up
+    setTimeout(() => {
+      document.head.removeChild(style);
+    }, 1000);
   };
 
   return (
@@ -911,7 +889,7 @@ export const PrintView: React.FC<PrintViewProps> = ({ children, title = 'พิ�
           onClick={handlePrint}
           className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white font-extrabold text-xs rounded-xl shadow-xs transition-all flex items-center gap-1.5 cursor-pointer"
         >
-          <FileText className="w-4 h-4" />
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>
           {title}
         </button>
       </div>

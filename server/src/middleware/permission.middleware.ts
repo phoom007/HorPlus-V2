@@ -10,7 +10,7 @@ export function requirePermission(permissionString: string) {
   return (req: Request, res: Response, next: NextFunction) => {
     // If user is OWNER or active role allows it, proceed
     const dormCtx = req.dormitoryContext;
-    if (req.user?.role === 'OWNER' || req.auth?.role === 'OWNER' || (dormCtx && dormCtx.roleCode === 'OWNER')) {
+    if (req.auth?.role === 'OWNER' || (dormCtx && dormCtx.roleCode === 'OWNER')) {
       return next();
     }
 

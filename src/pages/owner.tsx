@@ -33,24 +33,7 @@ import {
   Trash2,
   Gauge
 } from 'lucide-react';
-import {
-  getRooms,
-  saveRooms,
-  getTenants,
-  saveTenants,
-  getBills,
-  saveBills,
-  getContracts,
-  saveContracts,
-  getMaintenance,
-  saveMaintenance,
-  getAnnouncements,
-  saveAnnouncements,
-  getAuditLogs,
-  addAuditLog,
-  getDormitory,
-  getBuildings
-} from '../data/mockData';
+
 import { User, Room, Tenant, Bill, Contract, MaintenanceRequest, Announcement, AuditLog, Building } from '../types';
 
 // Import sub-modules
@@ -59,7 +42,9 @@ import { OwnerRooms } from './owner/rooms';
 import { OwnerTenants } from './owner/tenants';
 import { OwnerContracts } from './owner/contracts';
 import { OwnerMeters } from './owner/meters';
-import { OwnerPayments } from './owner/payments';
+
+import { AuthContext } from '../router/guards';
+import { normalizeRole } from '../utils/role';
 import { OwnerMaintenance } from './owner/maintenance';
 import { OwnerAnnouncements } from './owner/announcements';
 import { OwnerReports } from './owner/reports';
@@ -156,17 +141,20 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
   user,
   onLogout
 }) => {
-  const location = useLocation();
+  const { userType, user: sessionUser, onboardingRequired } = React.useContext(AuthContext) || {};
   const navigate = useNavigate();
 
   const pathSegment = location.pathname.split('/')[2] || 'dashboard';
-  const [activeTab, setActiveTab] = useState(pathSegment);
+  const [activeTab, setActiveTab] = useState(onboardingRequired ? 'register' : pathSegment);
 
   useEffect(() => {
-    if (pathSegment && pathSegment !== activeTab) {
+    if (onboardingRequired && pathSegment !== 'register') {
+      navigate('/owner/register', { replace: true });
+      setActiveTab('register');
+    } else if (!onboardingRequired && pathSegment && pathSegment !== activeTab) {
       setActiveTab(pathSegment);
     }
-  }, [pathSegment]);
+  }, [pathSegment, onboardingRequired, navigate, activeTab]);
 
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -452,7 +440,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
   }, []);
 
   // Settings incomplete check
-  const dormInfo = getDormitory();
+  const dormInfo: any = {};
   const isSettingsIncomplete = !dormInfo?.promptPayName?.trim() ||
     !dormInfo?.taxId?.trim() ||
     !dormInfo?.promptPayNumber?.trim() ||
@@ -563,15 +551,70 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
   };
 
   // Load centralized data
-  const refreshAllData = () => {
-    setRooms(getRooms());
-    setTenants(getTenants());
-    setBills(getBills());
-    setContracts(getContracts());
-    setRepairs(getMaintenance());
-    setAnnouncements(getAnnouncements());
-    setAuditLogs(getAuditLogs());
-    setBuildings(getBuildings());
+  const refreshAllData = async () => {
+    let isApiConnected = false;
+    const reqHeaders: Record<string, string> = {};
+    const savedId = localStorage.getItem('selected_dormitory_id');
+    if (savedId && savedId !== 'dorm-1' && savedId !== 'dorm-001') {
+      reqHeaders['x-dormitory-id'] = savedId;
+    }
+
+    try {
+      const res = await fetch('/api/v1/properties/rooms', { headers: reqHeaders });
+      if (res.ok) {
+        isApiConnected = true;
+        const data = await res.json();
+        setRooms(data.data || []);
+      } else {
+        setRooms([]);
+      }
+    } catch {
+      setRooms([]);
+    }
+
+    try {
+      const bRes = await fetch('/api/v1/properties/buildings', { headers: reqHeaders });
+      if (bRes.ok) {
+        const bData = await bRes.json();
+        setBuildings(bData.data || []);
+      } else {
+        setBuildings([]);
+      }
+    } catch {
+      setBuildings([]);
+    }
+
+    if (isApiConnected) {
+      try {
+        const [tRes, bRes, cRes, mRes, aRes] = await Promise.all([
+          fetch('/api/v1/tenants', { headers: reqHeaders }).then(r => r.ok ? r.json() : null),
+          fetch('/api/v1/bills', { headers: reqHeaders }).then(r => r.ok ? r.json() : null),
+          fetch('/api/v1/contracts', { headers: reqHeaders }).then(r => r.ok ? r.json() : null),
+          fetch('/api/v1/maintenance', { headers: reqHeaders }).then(r => r.ok ? r.json() : null),
+          fetch('/api/v1/announcements', { headers: reqHeaders }).then(r => r.ok ? r.json() : null),
+        ]);
+        setTenants(tRes?.data || []);
+        setBills(bRes?.data || []);
+        setContracts(cRes?.data || []);
+        setRepairs(mRes?.data || []);
+        setAnnouncements(aRes?.data || []);
+        setAuditLogs([]);
+      } catch {
+        setTenants([]);
+        setBills([]);
+        setContracts([]);
+        setRepairs([]);
+        setAnnouncements([]);
+        setAuditLogs([]);
+      }
+    } else {
+      setTenants([]);
+      setBills([]);
+      setContracts([]);
+      setRepairs([]);
+      setAnnouncements([]);
+      setAuditLogs([]);
+    }
   };
 
   useEffect(() => {
@@ -602,38 +645,42 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
   }, []);
 
   const handleAddLog = (action: string, details: string, type: string, id: string) => {
-    addAuditLog(user.id, action, details, type, id);
-    setAuditLogs(getAuditLogs());
+    
+    setAuditLogs([]);
   };
 
   // State saving handlers
   const handleSaveRooms = (newRooms: Room[]) => {
-    saveRooms(newRooms);
+    
     setRooms(newRooms);
   };
 
+  const handleSaveBuildings = (newBuildings: Building[]) => {
+    setBuildings(newBuildings);
+  };
+
   const handleSaveTenants = (newTenants: Tenant[]) => {
-    saveTenants(newTenants);
+    
     setTenants(newTenants);
   };
 
   const handleSaveBills = (newBills: Bill[]) => {
-    saveBills(newBills);
+    
     setBills(newBills);
   };
 
   const handleSaveContracts = (newContracts: Contract[]) => {
-    saveContracts(newContracts);
+    
     setContracts(newContracts);
   };
 
   const handleSaveRepairs = (newRepairs: any[]) => {
-    saveMaintenance(newRepairs);
+    
     setRepairs(newRepairs);
   };
 
   const handleSaveAnnouncements = (newAnnouncements: Announcement[]) => {
-    saveAnnouncements(newAnnouncements);
+    
     setAnnouncements(newAnnouncements);
   };
 
@@ -653,16 +700,41 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
     { id: 'settings', label: 'ตั้งค่า', icon: Settings, roles: ['owner'] }
   ];
 
-  // Filter menu items based on active user role
-  const userRole = (user as any).role || (
-    user.roleId === 'role-owner' ? 'owner' : 
-    user.roleId === 'role-manager' ? 'manager' :
-    user.roleId === 'role-finance' ? 'manager' :
-    user.roleId === 'role-staff' ? 'staff' :
-    user.roleId === 'role-tech' ? 'staff' : 'staff'
-  );
+  // Dynamic Active Dormitory Context Resolution
+  const authCtx = React.useContext(AuthContext) || {};
+  const memberships: any[] = authCtx.memberships || authCtx.user?.memberships || [];
+  
+  // Resolve selected dormitory ID dynamically from authorized memberships
+  const savedDormId = sessionStorage.getItem('active_dormitory_selected_for_session') || localStorage.getItem('selected_dormitory_id');
+  const activeMemberships = memberships.filter((m: any) => m.status === 'active' || !m.status);
+  
+  const validDormId = activeMemberships.find((m: any) => m.dormitoryId === savedDormId)?.dormitoryId 
+    || activeMemberships[0]?.dormitoryId 
+    || authCtx.dormitoryId;
 
-  const allowedMenuItems = menuItems.filter(item => item.roles.includes(userRole));
+  // Ensure invalid placeholder defaults are cleared
+  const activeDormitoryId = (validDormId && validDormId !== 'dorm-1' && validDormId !== 'dorm-001')
+    ? validDormId
+    : (activeMemberships[0]?.dormitoryId || validDormId);
+
+  useEffect(() => {
+    if (activeDormitoryId && activeDormitoryId !== 'dorm-1' && activeDormitoryId !== 'dorm-001') {
+      localStorage.setItem('selected_dormitory_id', activeDormitoryId);
+    }
+  }, [activeDormitoryId]);
+
+  // Find membership for active dormitory
+  const activeMembership = activeMemberships.find((m: any) => m.dormitoryId === activeDormitoryId) || activeMemberships[0];
+
+  // Authoritative Role Normalization (Fail-Closed: returns null if unmapped)
+  const rawRole = activeMembership?.roleCode || activeMembership?.role || authCtx.user?.roleCode || authCtx.user?.role || user?.roleId || user?.role || (onboardingRequired && authCtx.userType === 'owner' ? 'OWNER' : undefined);
+  const userRole = normalizeRole(rawRole);
+
+  // Fail-closed menu filtering: empty list if role is unmapped/unresolved
+  let allowedMenuItems = userRole ? menuItems.filter(item => item.roles.includes(userRole)) : [];
+  if (!onboardingRequired) {
+    allowedMenuItems = allowedMenuItems.filter(item => item.id !== 'register');
+  }
 
   // Determine current component to render
   const renderSubView = () => {
@@ -701,6 +773,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
             bills={bills}
             buildings={buildings}
             onSaveRooms={handleSaveRooms}
+            onSaveBuildings={handleSaveBuildings}
             onAddLog={handleAddLog}
             onNavigate={(tab) => setActiveTab(tab)}
             initialRoomId={initialRoomId}
@@ -773,16 +846,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
           />
         );
       case 'payments':
-        return (
-          <OwnerPayments
-            bills={bills}
-            tenants={tenants}
-            rooms={rooms}
-            onSaveBills={handleSaveBills}
-            onAddLog={handleAddLog}
-            selectedCycle={selectedCycle}
-          />
-        );
+        return null;
       case 'maintenance':
         return (
           <OwnerMaintenance
@@ -872,8 +936,9 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
               <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider px-2">MAIN MENU</div>
 
               {/* Navigation links */}
-              <nav className="space-y-1">
+              <nav className="flex-1 space-y-1 p-3 overflow-y-auto custom-scrollbar-thin">
                 {allowedMenuItems.map((item) => {
+                  const isDisabled = onboardingRequired && item.id !== 'register';
                   const Icon = item.icon;
                   const isActive = activeTab === item.id;
                   const hasItemBadge = (
@@ -887,18 +952,22 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
                   return (
                     <button
                       key={item.id}
-                      onClick={() => handleTabChange(item.id)}
+                      onClick={() => { if (!isDisabled) handleTabChange(item.id) }}
+                      title={isDisabled ? 'กรุณาลงทะเบียนหอพักให้เสร็จก่อนใช้งานเมนูนี้' : ''}
+                      disabled={isDisabled}
                       className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-bold transition-all ${
                         isActive 
                           ? 'bg-[#2b64f6] text-white shadow-md shadow-blue-500/20' 
-                          : 'hover:bg-slate-50 hover:text-slate-900 text-slate-500'
+                          : isDisabled
+                            ? 'text-slate-300 cursor-not-allowed opacity-60'
+                            : 'hover:bg-slate-50 hover:text-slate-900 text-slate-500'
                       }`}
                     >
                       <div className="flex items-center gap-2.5">
                         <Icon className={`w-4 h-4 ${isActive ? 'text-white' : 'text-slate-400'}`} />
                         <span>{item.label}</span>
                       </div>
-                      {hasItemBadge && (
+                      {hasItemBadge && !isDisabled && (
                         <span className="w-2 h-2 rounded-full bg-rose-500 animate-pulse shrink-0" />
                       )}
                     </button>
@@ -949,6 +1018,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
           {/* Navigation links */}
           <nav className="space-y-1">
             {allowedMenuItems.map((item) => {
+              const isDisabled = onboardingRequired && item.id !== 'register';
               const Icon = item.icon;
               const isActive = activeTab === item.id;
               const hasItemBadge = (
@@ -962,18 +1032,22 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
               return (
                 <button
                   key={item.id}
-                  onClick={() => handleTabChange(item.id)}
+                  onClick={() => { if (!isDisabled) handleTabChange(item.id) }}
+                  title={isDisabled ? 'กรุณาลงทะเบียนหอพักให้เสร็จก่อนใช้งานเมนูนี้' : ''}
+                  disabled={isDisabled}
                   className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-semibold transition-all ${
                     isActive 
                       ? 'bg-blue-600 text-white shadow-md shadow-blue-600/20' 
-                      : 'hover:bg-slate-50 hover:text-slate-900 text-slate-500'
+                      : isDisabled
+                        ? 'text-slate-300 cursor-not-allowed opacity-60'
+                        : 'hover:bg-slate-50 hover:text-slate-900 text-slate-500'
                   }`}
                 >
                   <div className="flex items-center gap-2.5">
                     <Icon className={`w-4 h-4 ${isActive ? 'text-white' : 'text-slate-400'}`} />
                     <span>{item.label}</span>
                   </div>
-                  {hasItemBadge && (
+                  {hasItemBadge && !isDisabled && (
                     <span className="w-2 h-2 rounded-full bg-rose-500 animate-pulse shrink-0" />
                   )}
                 </button>
@@ -1005,11 +1079,11 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
 
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-        {/* Prototype Disclosure Banner */}
+        {/* Pilot Disclosure Banner */}
         <div className="bg-amber-500/10 border-b border-amber-200/50 px-4 py-1.5 text-center text-[11px] font-medium text-amber-900 flex items-center justify-center gap-2 shrink-0">
           <Sparkles className="w-3.5 h-3.5 text-amber-600 shrink-0" />
           <span>
-            <strong>เวอร์ชันสาธิต (Prototype)</strong> — ข้อมูลจัดเก็บใน Browser และจำลองระบบชำระเงิน (ไม่มีการตัดเงินจริง)
+            <strong>ระบบทดลองใช้งาน HorPlus Pilot</strong> — เซิร์ฟเวอร์นี้ต้องมีผู้ดูแลเปิด Docker Desktop หลัง Windows Restart | SlipOK Live ยังไม่เปิดใช้งาน
           </span>
         </div>
 
@@ -1045,7 +1119,6 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
 
             {/* Mobile Actions Right Side on XS screen (< sm) */}
             <div className="flex items-center gap-1.5 sm:hidden relative shrink-0">
-              <LineQuotaBadge selectedCycle={selectedCycle} hideLabelText={true} />
 
               <div className="relative">
                 <button
@@ -1262,7 +1335,6 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
           {/* Right Block: Desktop & Tablet Action Bar (>= sm) */}
           <div className="hidden sm:flex items-center gap-2 shrink-0">
             {/* LINE Push Quota Badge (Compact) */}
-            <LineQuotaBadge selectedCycle={selectedCycle} hideLabelText={true} />
 
             {/* Search Icon Button (like mobile view, opens popup dropdown) */}
             <div className="relative">
@@ -1446,3 +1518,4 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
     </div>
   );
 };
+

@@ -1,3 +1,5 @@
+import { PrismaClient } from '@prisma/client';
+
 export interface MeterDeviceEntity {
   id: string;
   dormitoryId: string;
@@ -105,23 +107,26 @@ export interface MeterReadingFilterQuery {
 
 export interface IMeterRepository {
   // Meter Devices
-  findDeviceById(id: string, dormitoryId?: string): Promise<MeterDeviceEntity | null>;
-  findDeviceByRoomAndType(dormitoryId: string, roomId: string, type: string): Promise<MeterDeviceEntity | null>;
+  findDeviceById(id: string, dormitoryId?: string, tx?: any): Promise<MeterDeviceEntity | null>;
+  findDeviceByRoomAndType(dormitoryId: string, roomId: string, type: string, tx?: any): Promise<MeterDeviceEntity | null>;
   listDevicesByRoom(dormitoryId: string, roomId: string): Promise<MeterDeviceEntity[]>;
-  createDevice(dormitoryId: string, data: CreateMeterDeviceData): Promise<MeterDeviceEntity>;
-  updateDevice(id: string, dormitoryId: string, data: Partial<MeterDeviceEntity>, expectedVersion?: number): Promise<MeterDeviceEntity | null>;
+  createDevice(dormitoryId: string, data: CreateMeterDeviceData, tx?: any): Promise<MeterDeviceEntity>;
+  updateDevice(id: string, dormitoryId: string, data: Partial<MeterDeviceEntity>, expectedVersion?: number, tx?: any): Promise<MeterDeviceEntity | null>;
 
   // Meter Readings
-  findReadingById(id: string, dormitoryId?: string): Promise<MeterReadingEntity | null>;
-  findReadingByCycleRoomAndType(dormitoryId: string, billingCycleId: string, roomId: string, meterType: string): Promise<MeterReadingEntity | null>;
+  findReadingById(id: string, dormitoryId?: string, tx?: any): Promise<MeterReadingEntity | null>;
+  findReadingByCycleRoomAndType(dormitoryId: string, billingCycleId: string, roomId: string, meterType: string, tx?: any): Promise<MeterReadingEntity | null>;
   findLatestPreviousReading(dormitoryId: string, roomId: string, meterType: string, beforeCycleId?: string): Promise<MeterReadingEntity | null>;
   listReadings(dormitoryId: string, filter?: MeterReadingFilterQuery): Promise<{ items: MeterReadingEntity[]; total: number }>;
-  createReading(dormitoryId: string, data: CreateMeterReadingData): Promise<MeterReadingEntity>;
-  updateReading(id: string, dormitoryId: string, data: Partial<MeterReadingEntity>, expectedVersion?: number): Promise<MeterReadingEntity | null>;
+  createReading(dormitoryId: string, data: CreateMeterReadingData, tx?: any): Promise<MeterReadingEntity>;
+  updateReading(id: string, dormitoryId: string, data: Partial<MeterReadingEntity>, expectedVersion?: number, tx?: any): Promise<MeterReadingEntity | null>;
 
   // Meter Replacements
   createReplacement(dormitoryId: string, data: CreateMeterReplacementData): Promise<MeterReplacementEntity>;
   listReplacementsByRoom(dormitoryId: string, roomId: string): Promise<MeterReplacementEntity[]>;
+
+  withTransaction<T>(fn: (tx: any) => Promise<T>): Promise<T>;
+  executeRawLock(roomId: string, tx: any): Promise<void>;
 }
 
 export class InMemoryMeterRepository implements IMeterRepository {
@@ -211,7 +216,8 @@ export class InMemoryMeterRepository implements IMeterRepository {
     dormitoryId: string,
     billingCycleId: string,
     roomId: string,
-    meterType: string
+    meterType: string,
+    tx?: any
   ): Promise<MeterReadingEntity | null> {
     for (const r of this.readings.values()) {
       if (
@@ -352,5 +358,300 @@ export class InMemoryMeterRepository implements IMeterRepository {
     return Array.from(this.replacements.values()).filter(
       (r) => r.dormitoryId === dormitoryId && r.roomId === roomId
     );
+  }
+
+  public async withTransaction<T>(fn: (tx: any) => Promise<T>): Promise<T> {
+    return fn(null);
+  }
+
+  public async executeRawLock(roomId: string, tx: any): Promise<void> {
+    return;
+  }
+}
+
+export class PrismaMeterRepository implements IMeterRepository {
+  constructor(private prisma: PrismaClient) {}
+
+  private getClient(tx?: any): PrismaClient {
+    return tx || this.prisma;
+  }
+
+  private mapDeviceToEntity(model: any): MeterDeviceEntity {
+    return {
+      id: model.id,
+      dormitoryId: model.dormitoryId,
+      roomId: model.roomId,
+      type: model.type,
+      meterNumber: model.meterNumber,
+      status: model.status,
+      installedAt: model.installedAt,
+      removedAt: model.removedAt || null,
+      initialReading: model.initialReading ? model.initialReading.toString() : '0.00',
+      currentReading: model.currentReading ? model.currentReading.toString() : '0.00',
+      version: model.version,
+      createdAt: model.createdAt,
+      updatedAt: model.updatedAt,
+      deletedAt: model.deletedAt || null,
+    };
+  }
+
+  private mapReadingToEntity(model: any): MeterReadingEntity {
+    const fmt = (val: any) => (val !== undefined && val !== null ? Number(val.toString()).toFixed(2) : '0.00');
+    return {
+      id: model.id,
+      dormitoryId: model.dormitoryId,
+      billingCycleId: model.billingCycleId,
+      roomId: model.roomId,
+      meterDeviceId: model.meterDeviceId,
+      meterType: model.meterType,
+      previousReading: fmt(model.previousReading),
+      currentReading: fmt(model.currentReading),
+      usageUnits: fmt(model.usageUnits),
+      isReplacement: model.isReplacement || false,
+      replacementId: model.replacementId || null,
+      readAt: model.readAt,
+      readByUserId: model.readByUserId || null,
+      status: model.status,
+      notes: model.notes || null,
+      version: model.version,
+      createdAt: model.createdAt,
+      updatedAt: model.updatedAt,
+    };
+  }
+
+  public async createDevice(dormitoryId: string, data: CreateMeterDeviceData, tx?: any): Promise<MeterDeviceEntity> {
+    const client = this.getClient(tx);
+    const device = await client.meterDevice.create({
+      data: {
+        id: data.id,
+        dormitoryId,
+        roomId: data.roomId,
+        type: data.type,
+        meterNumber: data.meterNumber,
+        status: data.status || 'active',
+        installedAt: data.installedAt || new Date(),
+        initialReading: data.initialReading || '0.00',
+        currentReading: data.currentReading || data.initialReading || '0.00',
+      },
+    });
+    return this.mapDeviceToEntity(device);
+  }
+
+  public async findDeviceById(id: string, dormitoryId: string, tx?: any): Promise<MeterDeviceEntity | null> {
+    const client = this.getClient(tx);
+    const device = await client.meterDevice.findFirst({
+      where: { id, dormitoryId, deletedAt: null },
+    });
+    return device ? this.mapDeviceToEntity(device) : null;
+  }
+
+  public async findDeviceByRoomAndType(dormitoryId: string, roomId: string, type: string, tx?: any): Promise<MeterDeviceEntity | null> {
+    const client = this.getClient(tx);
+    const device = await client.meterDevice.findFirst({
+      where: { dormitoryId, roomId, type, status: 'active', deletedAt: null },
+    });
+    return device ? this.mapDeviceToEntity(device) : null;
+  }
+
+  public async listDevicesByRoom(dormitoryId: string, roomId: string): Promise<MeterDeviceEntity[]> {
+    const devices = await this.prisma.meterDevice.findMany({
+      where: { dormitoryId, roomId, deletedAt: null },
+    });
+    return devices.map((d) => this.mapDeviceToEntity(d));
+  }
+
+  public async updateDevice(
+    id: string,
+    dormitoryId: string,
+    data: Partial<MeterDeviceEntity>,
+    expectedVersion?: number,
+    tx?: any
+  ): Promise<MeterDeviceEntity | null> {
+    const client = this.getClient(tx);
+    const existing = await this.findDeviceById(id, dormitoryId, tx);
+    if (!existing) return null;
+    if (expectedVersion !== undefined && existing.version !== expectedVersion) {
+      const err = new Error('RESOURCE_VERSION_CONFLICT');
+      (err as any).code = 'RESOURCE_VERSION_CONFLICT';
+      throw err;
+    }
+
+    const device = await client.meterDevice.update({
+      where: { id },
+      data: {
+        status: data.status,
+        currentReading: data.currentReading,
+        removedAt: data.removedAt ? new Date(data.removedAt) : undefined,
+        version: { increment: 1 },
+      },
+    });
+    return this.mapDeviceToEntity(device);
+  }
+
+  public async createReading(dormitoryId: string, data: CreateMeterReadingData, tx?: any): Promise<MeterReadingEntity> {
+    const client = this.getClient(tx);
+    const isUuid = (str?: string | null) => !!str && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
+    const reading = await client.meterReading.create({
+      data: {
+        id: data.id,
+        dormitoryId,
+        billingCycleId: data.billingCycleId,
+        roomId: data.roomId,
+        meterDeviceId: data.meterDeviceId,
+        meterType: data.meterType,
+        previousReading: data.previousReading,
+        currentReading: data.currentReading,
+        usageUnits: data.usageUnits,
+        isReplacement: data.isReplacement || false,
+        replacementId: data.replacementId || null,
+        readAt: data.readAt || new Date(),
+        readByUserId: isUuid(data.readByUserId) ? data.readByUserId : null,
+        status: data.status || 'draft',
+        notes: data.notes || null,
+      },
+    });
+
+    // Update current reading on meter device
+    await client.meterDevice.update({
+      where: { id: data.meterDeviceId },
+      data: { currentReading: data.currentReading },
+    });
+
+    return this.mapReadingToEntity(reading);
+  }
+
+  public async findReadingById(id: string, dormitoryId: string, tx?: any): Promise<MeterReadingEntity | null> {
+    const client = this.getClient(tx);
+    const reading = await client.meterReading.findFirst({
+      where: { id, dormitoryId },
+    });
+    return reading ? this.mapReadingToEntity(reading) : null;
+  }
+
+  public async findReadingByCycleRoomAndType(dormitoryId: string, billingCycleId: string, roomId: string, meterType: string, tx?: any): Promise<MeterReadingEntity | null> {
+    const client = this.getClient(tx);
+    const reading = await client.meterReading.findFirst({
+      where: { dormitoryId, billingCycleId, roomId, meterType },
+    });
+    return reading ? this.mapReadingToEntity(reading) : null;
+  }
+
+  public async listReadingsByCycle(dormitoryId: string, billingCycleId: string): Promise<MeterReadingEntity[]> {
+    const readings = await this.prisma.meterReading.findMany({
+      where: { dormitoryId, billingCycleId },
+    });
+    return readings.map((r) => this.mapReadingToEntity(r));
+  }
+
+  public async executeRawLock(roomId: string, tx: any): Promise<void> {
+    if (tx && tx.$queryRawUnsafe) {
+       await tx.$queryRawUnsafe(`SELECT 1 FROM "rooms" WHERE id = $1::uuid FOR UPDATE`, roomId);
+    }
+  }
+
+  public async updateReading(id: string, dormitoryId: string, data: Partial<MeterReadingEntity>, expectedVersion?: number, tx?: any): Promise<MeterReadingEntity | null> {
+    const client = this.getClient(tx);
+    const existing = await this.findReadingById(id, dormitoryId, tx);
+    if (!existing) return null;
+    if (expectedVersion !== undefined && existing.version !== expectedVersion) {
+      const err = new Error('RESOURCE_VERSION_CONFLICT');
+      (err as any).code = 'RESOURCE_VERSION_CONFLICT';
+      throw err;
+    }
+
+    const updateData: any = {};
+    if (data.currentReading !== undefined) updateData.currentReading = data.currentReading;
+    if (data.previousReading !== undefined) updateData.previousReading = data.previousReading;
+    if (data.usageUnits !== undefined) updateData.usageUnits = data.usageUnits;
+    if (data.status !== undefined) updateData.status = data.status;
+    if (data.notes !== undefined) updateData.notes = data.notes;
+
+    const updated = await client.meterReading.update({
+      where: { id },
+      data: { ...updateData, version: { increment: 1 } },
+    });
+
+    if (data.currentReading !== undefined) {
+      await client.meterDevice.update({
+        where: { id: existing.meterDeviceId },
+        data: { currentReading: data.currentReading },
+      });
+    }
+
+    return this.mapReadingToEntity(updated);
+  }
+
+  public async createReplacement(dormitoryId: string, data: CreateMeterReplacementData): Promise<MeterReplacementEntity> {
+    const isUuid = (str?: string | null) => !!str && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
+    const replacement = await this.prisma.meterReplacement.create({
+      data: {
+        id: data.id,
+        dormitoryId,
+        roomId: data.roomId,
+        meterType: data.meterType,
+        oldMeterDeviceId: data.oldMeterDeviceId,
+        newMeterDeviceId: data.newMeterDeviceId,
+        oldMeterFinalReading: data.oldMeterFinalReading,
+        newMeterInitialReading: data.newMeterInitialReading,
+        replacementDate: data.replacementDate || new Date(),
+        reason: data.reason || null,
+        createdByUserId: isUuid(data.createdByUserId) ? data.createdByUserId : null,
+      },
+    });
+
+    return {
+      id: replacement.id,
+      dormitoryId: replacement.dormitoryId,
+      roomId: replacement.roomId,
+      meterType: replacement.meterType,
+      oldMeterDeviceId: replacement.oldMeterDeviceId,
+      newMeterDeviceId: replacement.newMeterDeviceId,
+      oldMeterFinalReading: replacement.oldMeterFinalReading.toString(),
+      newMeterInitialReading: replacement.newMeterInitialReading.toString(),
+      replacementDate: replacement.replacementDate,
+      reason: replacement.reason || null,
+      createdByUserId: replacement.createdByUserId || null,
+      createdAt: replacement.createdAt,
+    };
+  }
+
+  public async listReplacementsByRoom(dormitoryId: string, roomId: string): Promise<MeterReplacementEntity[]> {
+    const replacements = await this.prisma.meterReplacement.findMany({
+      where: { dormitoryId, roomId },
+    });
+    return replacements.map((r) => ({
+      id: r.id,
+      dormitoryId: r.dormitoryId,
+      roomId: r.roomId,
+      meterType: r.meterType,
+      oldMeterDeviceId: r.oldMeterDeviceId,
+      newMeterDeviceId: r.newMeterDeviceId,
+      oldMeterFinalReading: r.oldMeterFinalReading.toString(),
+      newMeterInitialReading: r.newMeterInitialReading.toString(),
+      replacementDate: r.replacementDate,
+      reason: r.reason || null,
+      createdByUserId: r.createdByUserId || null,
+      createdAt: r.createdAt,
+    }));
+  }
+
+  public async findLatestPreviousReading(dormitoryId: string, roomId: string, meterType: string, beforeCycleId?: string): Promise<MeterReadingEntity | null> {
+    const reading = await this.prisma.meterReading.findFirst({
+      where: { dormitoryId, roomId, meterType },
+      orderBy: { createdAt: 'desc' }
+    });
+    return reading ? this.mapReadingToEntity(reading) : null;
+  }
+
+  public async listReadings(dormitoryId: string, filter?: any): Promise<{ items: MeterReadingEntity[]; total: number }> {
+    const readings = await this.prisma.meterReading.findMany({
+      where: { dormitoryId, ...(filter?.roomId ? { roomId: filter.roomId } : {}) },
+      orderBy: { createdAt: 'desc' }
+    });
+    return { items: readings.map((r) => this.mapReadingToEntity(r)), total: readings.length };
+  }
+
+  public async withTransaction<T>(fn: (tx: any) => Promise<T>): Promise<T> {
+    return this.prisma.$transaction(fn, { timeout: 10000 });
   }
 }

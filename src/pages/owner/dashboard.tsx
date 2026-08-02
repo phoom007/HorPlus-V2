@@ -893,7 +893,7 @@ export const OwnerDashboard: React.FC<OwnerDashboardProps> = ({
         {/* Header & Status Filter Badges */}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pb-1">
           <div>
-            <h3 className="text-sm sm:text-base font-black text-slate-800">สถานะห้องพักจริงในตึก</h3>
+            <h3 className="text-sm sm:text-base font-black text-slate-800" data-testid="total-rooms-count">สถานะห้องพักจริงในตึก ({totalRooms} ห้อง)</h3>
             <p className="text-[10px] sm:text-xs text-slate-400 mt-0.5 font-medium">
               ตรวจสอบการเข้าใช้ แผนผังห้องว่าง ยอดคนพัก และสัญญาเช่าอาคาร
             </p>
@@ -1000,7 +1000,7 @@ export const OwnerDashboard: React.FC<OwnerDashboardProps> = ({
 
                 <div className="flex items-center justify-between mt-1">
                   <span className="text-[10px] text-slate-400 font-semibold">
-                    ชั้น {room.floor}
+                    {room.derivedFloor ? `ชั้น ${room.derivedFloor}` : <span className="text-red-500 font-semibold">[Data Integrity Error]</span>}
                   </span>
                   {room.status === 'occupied' && (
                     meterBillStatus === 'paid' ? (

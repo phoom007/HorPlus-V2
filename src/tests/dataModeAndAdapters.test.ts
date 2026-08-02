@@ -24,18 +24,22 @@ describe('Data Mode & Adapter Integration Suite', () => {
     vi.restoreAllMocks();
   });
 
-  describe('Data Mode Provider Switcher', () => {
-    it('should default to demo data mode', () => {
-      expect(getDataMode()).toBe('demo');
-      const provider = getDataProvider();
-      expect(provider).toBeInstanceOf(DemoDataProvider);
-    });
-
-    it('should switch to api data mode when set', () => {
-      setDataMode('api');
-      expect(getDataMode()).toBe('api');
+  describe('Data Mode Provider Constraints', () => {
+    it('should always return ApiDataProvider to prevent production demo fallback', () => {
       const provider = getDataProvider();
       expect(provider).toBeInstanceOf(ApiDataProvider);
+    });
+
+    it('should not fallback to DemoDataProvider even if data mode is set to demo', () => {
+      setDataMode('demo');
+      expect(getDataMode()).toBe('demo');
+      const provider = getDataProvider();
+      expect(provider).toBeInstanceOf(ApiDataProvider);
+    });
+
+    it('should require explicit instantiation for DemoDataProvider in safe test environments', () => {
+      const demoProvider = new DemoDataProvider();
+      expect(demoProvider).toBeInstanceOf(DemoDataProvider);
     });
   });
 

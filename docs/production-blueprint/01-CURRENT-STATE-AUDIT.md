@@ -1,3 +1,7 @@
+> [!NOTE]
+> **[STATUS: HISTORICAL_REFERENCE]**
+> This document is retained for historical purposes. Refer to **[21-CURRENT-PRODUCT-RULE-LOCK.md](./21-CURRENT-PRODUCT-RULE-LOCK.md)** for absolute precedence.
+
 # 01. Current State Audit
 
 วันที่ตรวจ: 25 กรกฎาคม 2026  
@@ -39,7 +43,7 @@ Prisma มี model สำหรับ Identity, Dormitory, Subscription, Buildi
 | P0 | Backend test ล้ม 4/92: Maintenance cost format, Announcement quota method 2 เคส และ quota warning notification | แก้ contract และให้ test 92/92 ผ่าน |
 | P0 | `Role.code` comment ยังมี FINANCE/STAFF | เหลือ OWNER/MANAGER/TECH และ data migration |
 | P0 | `Room.buildingId` nullable | ต้อง required หลัง backfill |
-| P0 | Unique room เป็น `(dormitoryId, roomNumber)` | ต้องเป็น `(buildingId, normalizedRoomNumber)` |
+| P0 | Unique room เป็น `(dormitoryId, roomNumber)` | เปลี่ยนเป็น `(dormitoryId, normalizedRoomNumber)` |
 | P0 | `PlatformPlan.monthlyPrice` สื่อราคาต่อเดือน | ใช้ package duration + total VAT-inclusive price |
 | P0 | Default LINE quota ใน schema = 300 ทุก plan | Free 30, Paid 300 |
 | P0 | Migration ยังไม่ครอบคลุม Billing/LINE models | สร้าง migration และทดสอบ RLS จริง |
@@ -121,3 +125,4 @@ integration + RLS + concurrency tests
 - Gap ทุก P0 ถูกสร้างเป็นงานใน Roadmap
 - ไม่มีการถือว่า model ใน Prisma เท่ากับ migration ที่ deploy แล้ว
 - ไม่มีการย้าย Public/SEO มาแทรกก่อน Core
+

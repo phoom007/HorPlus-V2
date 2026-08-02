@@ -1,19 +1,22 @@
+import { AppError } from '../types/index.js';
+
 export interface VerifiedGoogleIdentity {
   sub: string;
+  googleSubjectId?: string;
   email: string;
-  emailVerified: boolean;
   name: string;
   avatarUrl?: string;
-  iss: string;
-  aud: string;
-  exp: number;
+  emailVerified: boolean;
+  iss?: string;
+  aud?: string;
+  exp?: number;
 }
 
-export class GoogleAuthError extends Error {
+export class GoogleAuthError extends AppError {
   public code: string;
 
   constructor(code: string, message: string) {
-    super(message);
+    super(message, 400, code);
     this.name = 'GoogleAuthError';
     this.code = code;
   }

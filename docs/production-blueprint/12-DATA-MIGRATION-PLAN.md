@@ -1,3 +1,7 @@
+> [!NOTE]
+> **[STATUS: DRAFT]**
+> Refer to **[21-CURRENT-PRODUCT-RULE-LOCK.md](./21-CURRENT-PRODUCT-RULE-LOCK.md)** for absolute precedence.
+
 # 12. Data Migration Plan
 
 ใช้ Expand → Backfill → Verify → Enforce → Contract และห้ามแก้ production schema ด้วย `db push`
@@ -33,7 +37,7 @@
 4. report duplicate ภายใน building
 5. Owner ต้อง resolve duplicate ก่อน unique constraint
 6. set `building_id NOT NULL`
-7. เปลี่ยน unique เป็น `(building_id, normalized_room_number)`
+7. เปลี่ยน unique เป็น `(dormitory_id, normalized_room_number)`
 
 ## Phase M3 — Package Model
 
@@ -92,4 +96,5 @@
 - counts/totals before-after reconcile
 - app version N และ N+1 ทำงานใน expand window
 - backup restore drill ผ่านก่อน enforce destructive constraint
+
 

@@ -1,3 +1,7 @@
+> [!NOTE]
+> **[STATUS: HISTORICAL_REFERENCE]**
+> This document is retained for historical purposes. Refer to **[21-CURRENT-PRODUCT-RULE-LOCK.md](./21-CURRENT-PRODUCT-RULE-LOCK.md)** for absolute precedence.
+
 # 19. Blueprint Consistency Audit
 
 สถานะเริ่มต้นของเอกสารชุดนี้: **ALIGNED**
@@ -8,7 +12,7 @@
 |---|---|---|
 | Roles | OWNER/MANAGER/TECH | 03,04,05,16,18,20 |
 | Staff limit | total 10/dorm | Requirements,03,04,09,13 |
-| Room key | building required; unique/building | 03,09,12,13 |
+| Room key | building required; unique/dormitory | 03,09,12,13 |
 | Free | 1 dorm,10 rooms,30 LINE | 06,08,16 |
 | Paid | max150,300 LINE | 06,08,16 |
 | Price | duration total incl VAT | 06,07,16 |
@@ -57,3 +61,4 @@ ZIP validation ควร scan คำต่อไปนี้และตรว�
 - matrix valuesตรงทุกไฟล์
 - consolidated copy generated จากไฟล์ชุดเดียว
 - file list อยู่ใน `FILE-MANIFEST.md` และรายงาน SHA-256 ของ ZIP ตอนส่งมอบ
+

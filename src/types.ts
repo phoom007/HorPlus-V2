@@ -80,8 +80,9 @@ export type RoomStatus = 'vacant' | 'occupied' | 'reserved' | 'maintenance';
 export interface Room {
   id: string;
   roomNumber: string; // e.g., "101"
-  buildingId?: string; // Some rooms may not have buildingId (unspecified)
+  buildingId?: string | null; // Some rooms may not have buildingId (unspecified)
   floor: number;
+  derivedFloor?: number;
   monthlyRent: number;
   termRent?: number; // Rent per term (รายเทอม)
   dailyRent?: number; // Rent per day (รายวัน)

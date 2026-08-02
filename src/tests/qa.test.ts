@@ -13,8 +13,7 @@ if (typeof localStorage === 'undefined') {
 }
 import { contractRepository } from '../demo/repositories/contractRepository';
 import { billingRepository } from '../demo/repositories/billingRepository';
-import { paymentRepository } from '../demo/repositories/paymentRepository';
-import { receiptRepository } from '../demo/repositories/receiptRepository';
+
 import { roomRepository } from '../demo/repositories/roomRepository';
 import { tenantRepository } from '../demo/repositories/tenantRepository';
 import { auditRepository } from '../demo/repositories/auditRepository';
@@ -95,36 +94,7 @@ describe('QA Verification Suite — Repositories & Business Logic', () => {
     });
   });
 
-  describe('Payment Repository & Receipt Idempotency', () => {
-    it('should create a receipt idempotently when approving payment', () => {
-      const pendingBill = getBills().find(b => b.status === 'checking' || b.status === 'pending');
-      if (!pendingBill) return;
-
-      const approveRes1 = paymentRepository.approvePayment(pendingBill.id, 'user-owner');
-      expect(approveRes1.success).toBe(true);
-
-      const receipt1 = receiptRepository.getByBillId(pendingBill.id);
-      expect(receipt1).toBeDefined();
-
-      // Second approval call should be idempotent and return the same receipt
-      const approveRes2 = paymentRepository.approvePayment(pendingBill.id, 'user-owner');
-      expect(approveRes2.success).toBe(true);
-
-      const receiptsForBill = receiptRepository.getAll().filter(r => r.billId === pendingBill.id);
-      expect(receiptsForBill.length).toBe(1);
-    });
-
-    it('should require rejectReason when rejecting payment', () => {
-      const pendingBill = getBills().find(b => b.status === 'checking' || b.status === 'pending');
-      if (!pendingBill) return;
-
-      const rejectWithoutReason = paymentRepository.rejectPayment(pendingBill.id, '', 'user-owner');
-      expect(rejectWithoutReason.success).toBe(false);
-
-      const rejectWithReason = paymentRepository.rejectPayment(pendingBill.id, 'สลิปไม่ชัดเจน', 'user-owner');
-      expect(rejectWithReason.success).toBe(true);
-    });
-  });
+  
 
   describe('Audit Repository & Operation Logging', () => {
     it('should record audit logs for critical actions', () => {

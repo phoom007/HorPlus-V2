@@ -36,11 +36,10 @@ describe('Health Checks & Metrics API', () => {
 
       expect(response.status).toBe(200);
       expect(response.body).toEqual({
-        status: 'READY',
-        dependencies: {
-          database: 'UP',
-          redis: 'UP',
-        },
+        status: 'UP',
+        repositoryMode: expect.any(String),
+        database: 'UP',
+        redis: 'UP',
         timestamp: expect.any(String),
       });
     });
@@ -53,11 +52,10 @@ describe('Health Checks & Metrics API', () => {
 
       expect(response.status).toBe(503);
       expect(response.body).toEqual({
-        status: 'NOT_READY',
-        dependencies: {
-          database: 'DOWN',
-          redis: 'UP',
-        },
+        status: 'DOWN',
+        repositoryMode: expect.any(String),
+        database: 'DOWN',
+        redis: 'UP',
         timestamp: expect.any(String),
       });
     });
@@ -70,11 +68,10 @@ describe('Health Checks & Metrics API', () => {
 
       expect(response.status).toBe(503);
       expect(response.body).toEqual({
-        status: 'NOT_READY',
-        dependencies: {
-          database: 'UP',
-          redis: 'DOWN',
-        },
+        status: 'DOWN',
+        repositoryMode: expect.any(String),
+        database: 'UP',
+        redis: 'DOWN',
         timestamp: expect.any(String),
       });
     });
@@ -87,11 +84,10 @@ describe('Health Checks & Metrics API', () => {
 
       expect(response.status).toBe(503);
       expect(response.body).toEqual({
-        status: 'NOT_READY',
-        dependencies: {
-          database: 'DOWN',
-          redis: 'DOWN',
-        },
+        status: 'DOWN',
+        repositoryMode: expect.any(String),
+        database: 'DOWN',
+        redis: 'DOWN',
         timestamp: expect.any(String),
       });
     });

@@ -6,12 +6,13 @@ export const CreateBuildingSchema = z.object({
   floorCount: z.number().int().min(1, 'จำนวนชั้นต้องมากกว่า 0').default(1),
   description: z.string().optional().nullable(),
   displayOrder: z.number().int().default(0),
+  numberingPattern: z.string().optional().nullable(),
 });
 
 export const UpdateBuildingSchema = CreateBuildingSchema.partial();
 
 export const CreateRoomSchema = z.object({
-  buildingId: z.string().min(1).optional().nullable(),
+  buildingId: z.string().min(1, 'ต้องระบุอาคาร'),
   roomNumber: z.string().min(1, 'เลขห้องจำเป็นต้องระบุ').max(100),
   floor: z.number().int().min(1, 'ชั้นต้องมากกว่า 0').default(1),
   roomType: z.string().default('standard'),

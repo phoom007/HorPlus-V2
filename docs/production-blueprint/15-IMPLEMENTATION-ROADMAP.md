@@ -1,3 +1,7 @@
+> [!WARNING]
+> **[STATUS: SUPERSEDED]**
+> This document is entirely superseded. Always refer to **[21-CURRENT-PRODUCT-RULE-LOCK.md](./21-CURRENT-PRODUCT-RULE-LOCK.md)** as the absolute source of truth.
+
 # 15. Implementation Roadmap
 
 ทำตามลำดับนี้ ห้ามเริ่ม Public Dormitory/SEO ก่อน Gate 10 ผ่าน
@@ -23,7 +27,7 @@
 
 - migration parity กับ Prisma
 - role normalization
-- building required/unique room per building
+- building required/unique room per dormitory
 - duration package model
 - deposit/installment/bill states
 
@@ -156,3 +160,4 @@
 ## Task Handoff Rule
 
 แต่ละ Gate แยก PR/agent task ได้ แต่ห้ามประกาศผ่านโดยดู UI อย่างเดียว ต้องอ้าง command/test/evidence และ mark สิ่งที่รันไม่ได้
+

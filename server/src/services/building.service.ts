@@ -59,7 +59,27 @@ export class BuildingService {
   }
 
   public async updateBuilding(id: string, dormitoryId: string, data: Partial<BuildingEntity>, actorUserId?: string) {
-    await this.getBuildingById(id, dormitoryId);
+    const existingBuilding = await this.getBuildingById(id, dormitoryId);
+
+    const fieldsProtectingParsing = [
+      'code',
+      'numberingPattern',
+      'floorCount'
+    ];
+
+    const isParsingFieldChanged = fieldsProtectingParsing.some(field => 
+      (data as any)[field] !== undefined && (data as any)[field] !== (existingBuilding as any)[field]
+    );
+
+    if (isParsingFieldChanged) {
+      const roomCount = await this.roomRepo.countActiveByBuilding(dormitoryId, id);
+      if (roomCount > 0) {
+        const err = new Error('ไม่สามารถเปลี่ยนการตั้งค่ารหัสและรูปแบบของอาคารได้เนื่องจากมีห้องพักในอาคารนี้แล้ว');
+        (err as any).code = 'BUILDING_HAS_ROOMS';
+        (err as any).statusCode = 409;
+        throw err;
+      }
+    }
 
     if (data.name) {
       const existingName = await this.buildingRepo.findByName(dormitoryId, data.name);

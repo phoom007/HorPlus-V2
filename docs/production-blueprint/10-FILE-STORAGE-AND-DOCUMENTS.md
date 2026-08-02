@@ -1,3 +1,7 @@
+> [!NOTE]
+> **[STATUS: CURRENT]**
+> Refer to **[21-CURRENT-PRODUCT-RULE-LOCK.md](./21-CURRENT-PRODUCT-RULE-LOCK.md)** for absolute precedence.
+
 # 10. File Storage and Documents
 
 ## 1. File Classes
@@ -67,4 +71,5 @@ Tenant canvas signature ต้องเก็บ:
 - cross-dorm file denied
 - signature verify hash/document version ได้
 - unconfirmed upload cleanup ไม่ลบไฟล์ที่ถูก attach แล้ว
+
 

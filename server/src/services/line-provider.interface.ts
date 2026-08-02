@@ -71,6 +71,7 @@ export interface LineMessagingProvider {
   sendReply(input: SendReplyInput): Promise<LineDeliveryResult>;
   sendDirectNotification(input: SendDirectNotificationInput): Promise<LineDeliveryResult>;
   getBotInfo(accessToken: string): Promise<LineBotInfo>;
+  pushMessage?(input: any): Promise<LineDeliveryResult>;
 }
 
 export interface LiffIdentityVerifier {
@@ -142,6 +143,10 @@ export class MockLineMessagingProvider implements LineMessagingProvider {
       return { success: false, errorCode: 'MOCK_SEND_FAILED', errorMessage: 'Mock sending failed' };
     }
     return { success: true, providerMessageId: `msg_direct_${Date.now()}` };
+  }
+
+  async pushMessage(_input: any): Promise<LineDeliveryResult> {
+    return this.sendDirectNotification(_input as any);
   }
 
   async getBotInfo(_accessToken: string): Promise<LineBotInfo> {
@@ -219,6 +224,10 @@ export class ProductionLineMessagingProviderSkeleton implements LineMessagingPro
 
   async sendDirectNotification(_input: SendDirectNotificationInput): Promise<LineDeliveryResult> {
     throw new Error('EXTERNAL_VERIFICATION_REQUIRED: Production LINE Push Notification client requires live LINE Messaging API.');
+  }
+
+  async pushMessage(_input: any): Promise<LineDeliveryResult> {
+    return this.sendDirectNotification(_input as any);
   }
 
   async getBotInfo(_accessToken: string): Promise<LineBotInfo> {

@@ -44,7 +44,7 @@ export class OnboardingService {
     let freeOwnedCount = 0;
     for (const mem of ownerMemberships) {
       const dorm = await this.dormitoryRepo.findById(mem.dormitoryId);
-      if (dorm && dorm.createdByUserId === userId && dorm.status === 'active') {
+      if (dorm && dorm.status === 'active') {
         const sub = await this.subscriptionRepo.findByDormitoryId(dorm.id);
         if (sub) {
           const plan = await this.planRepo.findById(sub.planId);

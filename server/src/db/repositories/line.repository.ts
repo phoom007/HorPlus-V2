@@ -1,4 +1,7 @@
-import { prisma } from '../prisma.js';
+import { getPrismaClient } from '../prisma.js';
+// Lazy reference: prisma is only resolved when methods are called, not at module load
+function prisma() { return getPrismaClient(); }
+
 import crypto from 'crypto';
 
 export class LineRepository {
@@ -14,13 +17,14 @@ export class LineRepository {
 
   // Helper check if model delegate exists on prisma
   private hasModel(modelName: string): boolean {
-    return !!(prisma as any) && typeof (prisma as any)[modelName] !== 'undefined' && (prisma as any)[modelName] !== null;
+    return !!(prisma() as any) && typeof (prisma() as any)[modelName] !== 'undefined' && (prisma() as any)[modelName] !== null;
   }
 
   // --- INTEGRATION ---
   async getIntegrationByDormitory(dormitoryId: string) {
-    if (this.hasModel('lineOaIntegration')) {
-      return (prisma as any).lineOaIntegration.findFirst({
+    const isUuid = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(dormitoryId);
+    if (isUuid && this.hasModel('lineOaIntegration')) {
+      return (prisma() as any).lineOaIntegration.findFirst({
         where: { dormitoryId, status: { not: 'disconnected' } },
         orderBy: { createdAt: 'desc' }
       });
@@ -32,7 +36,7 @@ export class LineRepository {
 
   async getIntegrationByPublicKey(webhookPublicKey: string) {
     if (this.hasModel('lineOaIntegration')) {
-      return (prisma as any).lineOaIntegration.findUnique({
+      return (prisma() as any).lineOaIntegration.findUnique({
         where: { webhookPublicKey }
       });
     }
@@ -43,12 +47,13 @@ export class LineRepository {
 
   async upsertIntegration(data: any) {
     const existing = await this.getIntegrationByDormitory(data.dormitoryId);
-    const webhookPublicKey = data.webhookPublicKey || existing?.webhookPublicKey || `wh_${data.dormitoryId.replace(/-/g, '')}_${crypto.randomBytes(6).toString('hex')}`;
+    const webhookPublicKey = data.webhookPublicKey || existing?.webhookPublicKey || `wh_${crypto.randomBytes(32).toString('base64url')}`;
     const webhookKeyHash = data.webhookKeyHash || crypto.createHash('sha256').update(webhookPublicKey).digest('hex');
 
-    if (this.hasModel('lineOaIntegration')) {
+    const isUuid = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(data.dormitoryId);
+    if (isUuid && this.hasModel('lineOaIntegration')) {
       if (existing) {
-        return (prisma as any).lineOaIntegration.update({
+        return (prisma() as any).lineOaIntegration.update({
           where: { id: existing.id },
           data: {
             messagingChannelId: data.messagingChannelId || data.channelId,
@@ -59,7 +64,7 @@ export class LineRepository {
           }
         });
       }
-      return (prisma as any).lineOaIntegration.create({
+      return (prisma() as any).lineOaIntegration.create({
         data: {
           dormitoryId: data.dormitoryId,
           messagingChannelId: data.messagingChannelId || data.channelId,
@@ -89,8 +94,9 @@ export class LineRepository {
   }
 
   async getFollowerByIdentity(dormitoryId: string, lineIdentityId: string) {
-    if (this.hasModel('lineFollower')) {
-      return (prisma as any).lineFollower.findFirst({
+    const isUuid = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(dormitoryId);
+    if (isUuid && this.hasModel('lineFollower')) {
+      return (prisma() as any).lineFollower.findFirst({
         where: { dormitoryId, lineIdentityId },
         include: { identity: true }
       });
@@ -107,26 +113,28 @@ export class LineRepository {
   }
 
   async findIdentityById(id: string) {
-    if (this.hasModel('lineIdentity')) {
-      return (prisma as any).lineIdentity.findUnique({ where: { id } });
+    const isUuid = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(id);
+    if (isUuid && this.hasModel('lineIdentity')) {
+      return (prisma() as any).lineIdentity.findUnique({ where: { id } });
     }
     return Array.from(this.inMemoryIdentities.values()).find(i => i.id === id) || null;
   }
 
   async upsertFollower(data: any) {
     const friendStatus = data.friendStatus || 'following';
-    if (this.hasModel('lineFollower')) {
-      const existing = await (prisma as any).lineFollower.findUnique({
+    const isUuid = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(data.dormitoryId);
+    if (isUuid && this.hasModel('lineFollower')) {
+      const existing = await (prisma() as any).lineFollower.findUnique({
         where: { dormitory_line_identity_unique: { dormitoryId: data.dormitoryId, lineIdentityId: data.lineIdentityId } }
       });
       if (existing) {
-        return (prisma as any).lineFollower.update({
+        return (prisma() as any).lineFollower.update({
           where: { id: existing.id },
           data: { friendStatus, followedAt: friendStatus === 'following' ? new Date() : existing.followedAt },
           include: { identity: true }
         });
       }
-      return (prisma as any).lineFollower.create({
+      return (prisma() as any).lineFollower.create({
         data: { dormitoryId: data.dormitoryId, lineOaIntegrationId: data.lineOaIntegrationId || 'opt', lineIdentityId: data.lineIdentityId, friendStatus, followedAt: new Date() },
         include: { identity: true }
       });
@@ -152,8 +160,9 @@ export class LineRepository {
 
   // --- TENANT LINE BINDING ---
   async getTenantBindingForTenant(dormitoryId: string, tenantId: string) {
-    if (this.hasModel('tenantLineBinding')) {
-      return (prisma as any).tenantLineBinding.findFirst({
+    const isUuid = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(dormitoryId);
+    if (isUuid && this.hasModel('tenantLineBinding')) {
+      return (prisma() as any).tenantLineBinding.findFirst({
         where: { dormitoryId, tenantId, status: 'active' },
         include: { identity: true }
       });
@@ -167,8 +176,9 @@ export class LineRepository {
   }
 
   async listTenantBindingsForDormitory(dormitoryId: string) {
-    if (this.hasModel('tenantLineBinding')) {
-      return (prisma as any).tenantLineBinding.findMany({
+    const isUuid = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(dormitoryId);
+    if (isUuid && this.hasModel('tenantLineBinding')) {
+      return (prisma() as any).tenantLineBinding.findMany({
         where: { dormitoryId, status: 'active' },
         include: { identity: true }
       });
@@ -179,8 +189,9 @@ export class LineRepository {
   }
 
   async upsertTenantBinding(data: any) {
-    if (this.hasModel('tenantLineBinding')) {
-      return (prisma as any).tenantLineBinding.create({
+    const isUuid = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(data.dormitoryId);
+    if (isUuid && this.hasModel('tenantLineBinding')) {
+      return (prisma() as any).tenantLineBinding.create({
         data: {
           dormitoryId: data.dormitoryId,
           tenantId: data.tenantId,
@@ -232,10 +243,10 @@ export class LineRepository {
     };
   }
   async getQuotaCycle(dormitoryId: string, cycleMonth: string) {
-    if (this.hasModel('lineMessageQuotaCycle')) {
-      return (prisma as any).lineMessageQuotaCycle.findFirst({
-        where: { dormitoryId, cycleMonth },
-        orderBy: { createdAt: 'desc' }
+    const isUuid = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(dormitoryId);
+    if (isUuid && this.hasModel('lineMessageQuotaCycle')) {
+      return (prisma() as any).lineMessageQuotaCycle.findFirst({
+        where: { dormitoryId, cycleMonth }
       });
     }
     const list = Array.from(this.inMemoryQuotaCycles.values()).filter(
@@ -261,8 +272,9 @@ export class LineRepository {
   }
 
   async createQuotaCycle(data: any) {
-    if (this.hasModel('lineMessageQuotaCycle')) {
-      return (prisma as any).lineMessageQuotaCycle.create({
+    const isUuid = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(data.dormitoryId);
+    if (isUuid && this.hasModel('lineMessageQuotaCycle')) {
+      return (prisma() as any).lineMessageQuotaCycle.create({
         data: {
           dormitoryId: data.dormitoryId,
           cycleMonth: data.cycleMonth,
@@ -287,10 +299,11 @@ export class LineRepository {
   }
 
   async incrementQuotaUsage(cycleId: string, count = 1) {
-    if (this.hasModel('lineMessageQuotaCycle')) {
-      return (prisma as any).lineMessageQuotaCycle.update({
+    const isUuid = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(cycleId);
+    if (isUuid && this.hasModel('lineMessageQuotaCycle')) {
+      return (prisma() as any).lineMessageQuotaCycle.update({
         where: { id: cycleId },
-        data: { usedCount: { increment: count } }
+        data: { successfulSendCount: { increment: count } }
       });
     }
     const cycle = this.inMemoryQuotaCycles.get(cycleId) || Array.from(this.inMemoryQuotaCycles.values()).find(c => c.id === cycleId);
@@ -304,11 +317,12 @@ export class LineRepository {
   async consumeQuotaUnit(dormitoryId: string, count = 1) {
     const cycle = await this.getCurrentQuotaCycle(dormitoryId);
     const newUsed = (cycle.usedCount || 0) + count;
+    const isUuid = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(cycle.id);
 
-    if (this.hasModel('lineMessageQuotaCycle')) {
-      return (prisma as any).lineMessageQuotaCycle.update({
+    if (isUuid && this.hasModel('lineMessageQuotaCycle')) {
+      return (prisma() as any).lineMessageQuotaCycle.update({
         where: { id: cycle.id },
-        data: { usedCount: newUsed }
+        data: { successfulSendCount: newUsed }
       });
     }
 
@@ -319,8 +333,9 @@ export class LineRepository {
 
   // --- NOTIFICATION PREFERENCES ---
   async getNotificationPreferences(dormitoryId: string) {
-    if (this.hasModel('lineNotificationPreference')) {
-      return (prisma as any).lineNotificationPreference.findUnique({
+    const isUuid = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(dormitoryId);
+    if (isUuid && this.hasModel('lineNotificationPreference')) {
+      return (prisma() as any).lineNotificationPreference.findUnique({
         where: { dormitoryId }
       });
     }
@@ -329,8 +344,9 @@ export class LineRepository {
 
   async upsertNotificationPreferences(data: any) {
     const dormitoryId = data.dormitoryId;
-    if (this.hasModel('lineNotificationPreference')) {
-      return (prisma as any).lineNotificationPreference.upsert({
+    const isUuid = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(dormitoryId);
+    if (isUuid && this.hasModel('lineNotificationPreference')) {
+      return (prisma() as any).lineNotificationPreference.upsert({
         where: { dormitoryId },
         update: data,
         create: data
@@ -345,7 +361,7 @@ export class LineRepository {
   // --- ROLE ASSIGNMENTS ---
   async listRoleAssignments(dormitoryId: string) {
     if (this.hasModel('lineRoleAssignment')) {
-      return (prisma as any).lineRoleAssignment.findMany({
+      return (prisma() as any).lineRoleAssignment.findMany({
         where: { dormitoryId, status: 'active' },
         include: { identity: true }
       });
@@ -357,7 +373,7 @@ export class LineRepository {
 
   async listRoleAssignmentsForIdentity(lineIdentityId: string) {
     if (this.hasModel('lineRoleAssignment')) {
-      return (prisma as any).lineRoleAssignment.findMany({
+      return (prisma() as any).lineRoleAssignment.findMany({
         where: { lineIdentityId, status: 'active' },
         include: { identity: true }
       });
@@ -369,7 +385,7 @@ export class LineRepository {
 
   async listTenantBindingsForIdentity(lineIdentityId: string) {
     if (this.hasModel('tenantLineBinding')) {
-      return (prisma as any).tenantLineBinding.findMany({
+      return (prisma() as any).tenantLineBinding.findMany({
         where: { lineIdentityId, status: 'active' },
         include: { identity: true }
       });
@@ -380,8 +396,17 @@ export class LineRepository {
   }
 
   async getPendingRegistrationForIdentity(lineIdentityId: string) {
+    const isUuid = typeof lineIdentityId === 'string' && /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(lineIdentityId);
+    if (isUuid && this.hasModel('tenantRegistrationRequest')) {
+      return (prisma() as any).tenantRegistrationRequest.findFirst({
+        where: {
+          lineIdentityId,
+          status: { in: ['pending_owner_approval', 'correction_required'] }
+        }
+      });
+    }
     return Array.from(this.inMemoryRegistrations.values()).find(
-      r => r.lineIdentityId === lineIdentityId && r.status === 'pending'
+      r => r.lineIdentityId === lineIdentityId && (r.status === 'pending' || r.status === 'pending_owner_approval' || r.status === 'correction_required')
     ) || null;
   }
 
@@ -456,10 +481,45 @@ export class LineRepository {
   }
 
   async createOrUpdateRegistrationDraft(data: any) {
+    const isUuid = typeof data.dormitoryId === 'string' && /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(data.dormitoryId);
+    if (isUuid && this.hasModel('tenantRegistrationRequest')) {
+      const existing = await this.getPendingRegistrationForIdentity(data.lineIdentityId);
+      if (existing) {
+        return (prisma() as any).tenantRegistrationRequest.update({
+          where: { id: existing.id },
+          data: {
+            dormitoryId: data.dormitoryId,
+            requestedRoomId: data.requestedRoomId,
+            firstName: data.firstName,
+            lastName: data.lastName,
+            phone: data.phone,
+            note: data.note || null,
+            status: 'pending_owner_approval',
+            version: { increment: 1 },
+            submittedAt: new Date()
+          }
+        });
+      }
+      return (prisma() as any).tenantRegistrationRequest.create({
+        data: {
+          dormitoryId: data.dormitoryId,
+          lineIdentityId: data.lineIdentityId,
+          lineFollowerId: data.lineFollowerId || null,
+          requestedRoomId: data.requestedRoomId,
+          firstName: data.firstName,
+          lastName: data.lastName,
+          phone: data.phone,
+          note: data.note || null,
+          status: 'pending_owner_approval',
+          submittedAt: new Date()
+        }
+      });
+    }
+
     const existing = await this.getPendingRegistrationForIdentity(data.lineIdentityId);
     const item = {
       id: existing?.id || `reg_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-      status: 'pending',
+      status: 'pending_owner_approval',
       ...existing,
       ...data,
       updatedAt: new Date()
@@ -469,12 +529,26 @@ export class LineRepository {
   }
 
   async listRegistrationRequests(dormitoryId: string) {
+    if (this.hasModel('tenantRegistrationRequest')) {
+      return (prisma() as any).tenantRegistrationRequest.findMany({
+        where: { dormitoryId },
+        include: { identity: true, follower: true },
+        orderBy: { createdAt: 'desc' }
+      });
+    }
     return Array.from(this.inMemoryRegistrations.values()).filter(
       r => r.dormitoryId === dormitoryId
     );
   }
 
   async findRegistrationById(id: string) {
+    const isUuid = typeof id === 'string' && /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(id);
+    if (isUuid && this.hasModel('tenantRegistrationRequest')) {
+      return (prisma() as any).tenantRegistrationRequest.findUnique({
+        where: { id },
+        include: { identity: true }
+      });
+    }
     return this.inMemoryRegistrations.get(id) || Array.from(this.inMemoryRegistrations.values()).find(r => r.id === id) || null;
   }
 
@@ -482,7 +556,39 @@ export class LineRepository {
     return this.upsertTenantBinding(data);
   }
 
+  async requestCorrectionRegistrationRequest(id: string, reviewedByUserId: string, reason: string) {
+    if (this.hasModel('tenantRegistrationRequest')) {
+      return (prisma() as any).tenantRegistrationRequest.update({
+        where: { id },
+        data: {
+          status: 'correction_required',
+          reviewedByUserId,
+          rejectedReason: reason,
+          reviewedAt: new Date()
+        }
+      });
+    }
+    const reg = await this.findRegistrationById(id);
+    if (reg) {
+      reg.status = 'correction_required';
+      reg.reviewedByUserId = reviewedByUserId;
+      reg.rejectedReason = reason;
+      reg.reviewedAt = new Date();
+    }
+    return reg;
+  }
+
   async approveRegistrationRequest(id: string, approvedByUserId: string) {
+    if (this.hasModel('tenantRegistrationRequest')) {
+      return (prisma() as any).tenantRegistrationRequest.update({
+        where: { id },
+        data: {
+          status: 'approved',
+          reviewedByUserId: approvedByUserId,
+          reviewedAt: new Date()
+        }
+      });
+    }
     const reg = await this.findRegistrationById(id);
     if (reg) {
       reg.status = 'approved';
@@ -493,14 +599,89 @@ export class LineRepository {
   }
 
   async rejectRegistrationRequest(id: string, rejectedByUserId: string, reason?: string) {
+    if (this.hasModel('tenantRegistrationRequest')) {
+      return (prisma() as any).tenantRegistrationRequest.update({
+        where: { id },
+        data: {
+          status: 'rejected',
+          reviewedByUserId: rejectedByUserId,
+          rejectedReason: reason,
+          reviewedAt: new Date()
+        }
+      });
+    }
     const reg = await this.findRegistrationById(id);
     if (reg) {
       reg.status = 'rejected';
       reg.rejectedByUserId = rejectedByUserId;
-      reg.rejectionReason = reason;
-      reg.rejectedAt = new Date();
+      reg.rejectedReason = reason;
+      reg.reviewedAt = new Date();
     }
     return reg;
+  }
+  async updateIntegrationStatus(id: string, status: string) {
+    if (this.hasModel('lineOaIntegration')) {
+      return (prisma() as any).lineOaIntegration.update({ where: { id }, data: { status } });
+    }
+    const item = this.inMemoryIntegrations.get(id);
+    if (item) {
+      item.status = status;
+      this.inMemoryIntegrations.set(id, item);
+    }
+    return item;
+  }
+
+  async disconnectIntegration(id: string) {
+    return this.updateIntegrationStatus(id, 'disconnected');
+  }
+
+  async upsertLineIdentity(lineUserId: string, profile: any) {
+    if (this.hasModel('lineIdentity')) {
+      return (prisma() as any).lineIdentity.upsert({
+        where: { lineUserId },
+        update: { displayName: profile.displayName, pictureUrl: profile.pictureUrl },
+        create: { lineUserId, displayName: profile.displayName, pictureUrl: profile.pictureUrl }
+      });
+    }
+    let identity = Array.from(this.inMemoryIdentities.values()).find(i => i.lineUserId === lineUserId);
+    if (identity) {
+      identity.displayName = profile.displayName;
+      identity.pictureUrl = profile.pictureUrl;
+    } else {
+      identity = {
+        id: `id_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+        lineUserId,
+        displayName: profile.displayName,
+        pictureUrl: profile.pictureUrl,
+        createdAt: new Date()
+      };
+      this.inMemoryIdentities.set(identity.id, identity);
+    }
+    return identity;
+  }
+
+  async recordWebhookAudit(data: any) {
+    // Dummy stub
+    return data;
+  }
+
+  async updateLastWebhookTimestamp(integrationId: string, timestamp: Date) {
+    // Dummy stub
+    return true;
+  }
+
+  async hasProcessedWebhookEvent(eventId: string) {
+    // Dummy stub
+    return false;
+  }
+
+  async recordWebhookEvent(data: any) {
+    // Dummy stub
+    return data;
+  }
+  
+  async listDeliveries(dormitoryId: string, limit: number = 100) {
+    return Array.from(this.inMemoryDeliveries.values()).filter(d => d.dormitoryId === dormitoryId).slice(0, limit);
   }
 }
 

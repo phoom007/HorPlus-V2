@@ -1,3 +1,7 @@
+> [!NOTE]
+> **[STATUS: CURRENT]**
+> Refer to **[21-CURRENT-PRODUCT-RULE-LOCK.md](./21-CURRENT-PRODUCT-RULE-LOCK.md)** for absolute precedence.
+
 # 14. Deployment and Operations
 
 ## 1. Environments
@@ -72,4 +76,5 @@ Jobs ใช้ timezone explicit `Asia/Bangkok`; DB timestamp เก็บ UTC
 - backup restore ใช้งานได้
 - secret rotation LINE/SlipOK/DB documented
 - rollback/recovery drill ไม่ทำ financial audit หาย
+
 

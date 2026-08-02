@@ -17,13 +17,16 @@
     "prisma:migrate:deploy": "prisma migrate deploy"
   },
   "dependencies": {
-    "@prisma/client": "5.22.0",
+    "@fontsource/noto-sans-thai": "^5.3.0",
+    "@pdf-lib/fontkit": "^1.1.1",
+    "@prisma/client": "^5.22.0",
     "cors": "2.8.5",
     "decimal.js": "10.5.0",
     "dotenv": "16.4.7",
     "express": "4.21.2",
     "helmet": "8.0.0",
     "ioredis": "5.4.2",
+    "pdf-lib": "^1.17.1",
     "pino": "9.6.0",
     "uuid": "11.0.5",
     "zod": "3.24.1"
@@ -35,7 +38,7 @@
     "@types/supertest": "6.0.2",
     "@types/uuid": "10.0.0",
     "pino-pretty": "13.0.0",
-    "prisma": "5.22.0",
+    "prisma": "^5.22.0",
     "supertest": "7.0.0",
     "tsx": "4.19.2",
     "typescript": "5.8.2",

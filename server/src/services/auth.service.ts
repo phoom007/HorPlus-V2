@@ -172,7 +172,64 @@ export class AuthenticationService {
       expiresAt,
     };
   }
+  public async authenticateTestUser(userId: string): Promise<AuthResult> {
+    if (this.env.NODE_ENV !== 'test' || !this.env.E2E_TEST_MODE) {
+      throw new Error('Test authentication is disabled');
+    }
 
+    const user = await this.userRepo.findById(userId);
+    if (!user) {
+      throw new Error('Test user not found');
+    }
+    if (user.status === 'suspended') {
+      throw new Error('USER_SUSPENDED: บัญชีผู้ใช้งานถูกระงับการใช้งาน');
+    }
+
+    const sessionId = crypto.randomUUID();
+    const sessionIdHash = SessionTokenService.hashSessionId(sessionId);
+    const ttlSeconds = this.env.SESSION_TTL_SECONDS;
+    const expiresAt = new Date(Date.now() + ttlSeconds * 1000);
+
+    await this.sessionRepo.createSession({
+      userId: user.id,
+      sessionIdHash,
+      expiresAt,
+      userAgentHash: 'e2e-test-agent-hash',
+      ipMetadata: '127.0.0.1',
+      tokenVersion: 1,
+    });
+
+    const sessionToken = this.sessionTokenService.encryptToken(
+      { sub: user.id, sid: sessionId, type: 'session', version: 1 },
+      ttlSeconds
+    );
+    const csrfToken = this.csrfService.generateCsrfToken(sessionId);
+
+    const memberships = await this.membershipRepo.findByUserId(user.id);
+    const activeMemberships = memberships.filter((m) => m.status === 'active');
+    const onboardingRequired = activeMemberships.length === 0;
+
+    return {
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        avatarUrl: user.avatarUrl,
+      },
+      memberships: memberships.map((m) => ({
+        id: m.id,
+        dormitoryId: m.dormitoryId,
+        dormitoryName: m.dormitoryName,
+        roleCode: m.roleCode || 'OWNER',
+        status: m.status,
+      })),
+      onboardingRequired,
+      sessionToken,
+      csrfToken,
+      sessionId,
+      expiresAt,
+    };
+  }
   public async validateSession(
     sessionToken: string,
     requestId?: string
@@ -183,16 +240,18 @@ export class AuthenticationService {
     memberships: DormitoryMemberEntity[];
   } | null> {
     const payload = this.sessionTokenService.decryptToken(sessionToken);
-    if (!payload) return null;
+    if (!payload) { console.error('validateSession: decryptToken failed'); return null; }
 
     const hash = SessionTokenService.hashSessionId(payload.sid);
     const session = await this.sessionRepo.findBySessionIdHash(hash);
 
-    if (!session || session.status !== 'active') return null;
-    if (session.expiresAt < new Date()) return null;
+    if (!session) { console.error('validateSession: session not found for hash', hash); return null; }
+    if (session.status !== 'active') { console.error('validateSession: session not active'); return null; }
+    if (session.expiresAt < new Date()) { console.error('validateSession: session expired'); return null; }
 
     const user = await this.userRepo.findById(payload.sub);
-    if (!user || user.status !== 'active') return null;
+    if (!user) { console.error('validateSession: user not found'); return null; }
+    if (user.status !== 'active') { console.error('validateSession: user not active'); return null; }
 
     // Non-blocking lastSeenAt update
     this.sessionRepo.updateLastSeen(session.id).catch(() => {});

@@ -63,7 +63,7 @@ export function extractUnifiedActor() {
         userId: req.auth.userId,
         dormitoryId: req.dormitoryId || 'dorm-001',
         roleCode: 'OWNER',
-        displayName: req.auth.user.displayName
+        displayName: req.auth.user.name
       };
       return next();
     }

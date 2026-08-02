@@ -39,6 +39,7 @@ export function createMeterRouter(
   };
 
   const handleServiceError = (res: Response, err: any, req: Request) => {
+    console.error('METER SERVICE ERROR:', err);
     const statusCode = err.statusCode || err.status || 500;
     res.status(statusCode).json({
       error: {
@@ -68,7 +69,6 @@ export function createMeterRouter(
           },
         });
       }
-
       const device = await meterService.createMeterDevice(dormId, parsed.data, req.auth?.userId);
       res.status(201).json({ data: device });
     } catch (err) {
@@ -104,7 +104,6 @@ export function createMeterRouter(
           },
         });
       }
-
       const result = await meterService.replaceMeterDevice(dormId, parsed.data, req.auth?.userId);
       res.json({ data: result });
     } catch (err) {
@@ -129,7 +128,6 @@ export function createMeterRouter(
           },
         });
       }
-
       const readings = await meterService.submitBulkReadings(dormId, parsed.data, req.auth?.userId);
       res.json({ data: readings, count: readings.length });
     } catch (err) {

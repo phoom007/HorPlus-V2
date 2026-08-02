@@ -85,7 +85,7 @@ export class BillingCycleService {
         action: 'billing_cycle.create',
         resourceType: 'billing_cycle',
         resourceId: cycle.id,
-        payload: { cycleCode: cycle.cycleCode, name: cycle.name },
+        details: { cycleCode: cycle.cycleCode, name: cycle.name },
       });
     }
 
@@ -151,7 +151,7 @@ export class BillingCycleService {
         action: 'billing_cycle.update',
         resourceType: 'billing_cycle',
         resourceId: id,
-        payload: { updateData },
+        details: { updateData },
       });
     }
 
@@ -180,7 +180,7 @@ export class BillingCycleService {
         action: 'billing_cycle.lock',
         resourceType: 'billing_cycle',
         resourceId: id,
-        payload: { status: 'locked' },
+        details: { status: 'locked' },
       });
     }
 

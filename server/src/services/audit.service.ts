@@ -3,13 +3,18 @@ import { logger } from '../config/logger.js';
 export interface AuditLogParams {
   requestId?: string;
   userId?: string;
+  actorUserId?: string;
   action: string;
   source?: string;
-  ipMetadata?: string;
+  ipMetadata?: any;
   userAgent?: string;
   reason?: string;
   severity?: 'info' | 'warn' | 'error';
   details?: Record<string, unknown>;
+  dormitoryId?: string;
+  resourceType?: string;
+  resourceId?: string;
+  metadata?: any;
 }
 
 export class AuditService {

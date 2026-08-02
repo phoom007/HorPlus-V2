@@ -1,3 +1,5 @@
+import { v4 as uuidv4 } from 'uuid';
+
 export interface PlatformPlanEntity {
   id: string;
   code: string;
@@ -5,7 +7,7 @@ export interface PlatformPlanEntity {
   monthlyPrice: string; // Decimal string
   currency: string;
   vatIncluded: boolean;
-  roomLimit: number | null; // null for ENTERPRISE
+  roomLimit: number | null; // null for ENTERPRISE legacy if unconstrained, but now 150 for legacy paid
   messageQuotaMonthly: number;
   isActive: boolean;
   displayOrder: number;
@@ -32,59 +34,71 @@ export const SYSTEM_PLANS_SEED: Omit<PlatformPlanEntity, 'id' | 'createdAt' | 'u
     displayOrder: 1,
   },
   {
-    code: 'MICRO',
-    name: 'Micro Plan',
+    code: 'PAID',
+    name: 'Paid Plan',
     monthlyPrice: '189.00',
     currency: 'THB',
     vatIncluded: true,
-    roomLimit: 25,
+    roomLimit: 150,
     messageQuotaMonthly: 300,
     isActive: true,
     displayOrder: 2,
   },
+  // Legacy plans (retained for backward compatibility, marked inactive for new active plan list)
+  {
+    code: 'MICRO',
+    name: 'Micro Plan (Legacy)',
+    monthlyPrice: '189.00',
+    currency: 'THB',
+    vatIncluded: true,
+    roomLimit: 150,
+    messageQuotaMonthly: 300,
+    isActive: false,
+    displayOrder: 99,
+  },
   {
     code: 'SMALL',
-    name: 'Small Plan',
+    name: 'Small Plan (Legacy)',
     monthlyPrice: '529.00',
     currency: 'THB',
     vatIncluded: true,
-    roomLimit: 50,
+    roomLimit: 150,
     messageQuotaMonthly: 300,
-    isActive: true,
-    displayOrder: 3,
+    isActive: false,
+    displayOrder: 100,
   },
   {
     code: 'MEDIUM',
-    name: 'Medium Plan',
+    name: 'Medium Plan (Legacy)',
     monthlyPrice: '999.00',
     currency: 'THB',
     vatIncluded: true,
-    roomLimit: 100,
+    roomLimit: 150,
     messageQuotaMonthly: 300,
-    isActive: true,
-    displayOrder: 4,
+    isActive: false,
+    displayOrder: 101,
   },
   {
     code: 'LARGE',
-    name: 'Large Plan',
+    name: 'Large Plan (Legacy)',
     monthlyPrice: '1799.00',
     currency: 'THB',
     vatIncluded: true,
-    roomLimit: 200,
+    roomLimit: 150,
     messageQuotaMonthly: 300,
-    isActive: true,
-    displayOrder: 5,
+    isActive: false,
+    displayOrder: 102,
   },
   {
     code: 'ENTERPRISE',
-    name: 'Enterprise Plan',
+    name: 'Enterprise Plan (Legacy)',
     monthlyPrice: '2999.00',
     currency: 'THB',
     vatIncluded: true,
-    roomLimit: null, // Unlimited
+    roomLimit: 150,
     messageQuotaMonthly: 300,
-    isActive: true,
-    displayOrder: 6,
+    isActive: false,
+    displayOrder: 103,
   },
 ];
 
@@ -98,7 +112,16 @@ export class InMemoryPlanRepository implements IPlanRepository {
   private seedData(): void {
     const now = new Date();
     SYSTEM_PLANS_SEED.forEach((item) => {
-      const id = `plan-${item.code.toLowerCase()}`;
+      let id;
+      if (item.code === 'FREE') id = '00000000-0000-0000-0000-000000000001';
+      else if (item.code === 'PAID') id = '00000000-0000-0000-0000-000000000002';
+      else if (item.code === 'MICRO') id = '00000000-0000-0000-0000-000000000003';
+      else if (item.code === 'SMALL') id = '00000000-0000-0000-0000-000000000004';
+      else if (item.code === 'MEDIUM') id = '00000000-0000-0000-0000-000000000005';
+      else if (item.code === 'LARGE') id = '00000000-0000-0000-0000-000000000006';
+      else if (item.code === 'ENTERPRISE') id = '00000000-0000-0000-0000-000000000007';
+      else id = uuidv4();
+      
       this.plans.set(id, {
         ...item,
         id,

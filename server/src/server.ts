@@ -1,9 +1,10 @@
+import 'dotenv/config';
 import http from 'http';
 import { createApp } from './app.js';
 import { validateEnv, redactSecrets } from './config/env.js';
 import { logger } from './config/logger.js';
 import { disconnectPrisma, checkDatabaseConnection } from './db/prisma.js';
-import { disconnectRedis, checkRedisConnection } from './db/redis.js';
+import { disconnectRedis, checkRedisConnection, connectRedis } from './db/redis.js';
 
 async function startServer() {
   let env;
@@ -15,9 +16,12 @@ async function startServer() {
     process.exit(1);
   }
 
+
+
   logger.info({ config: redactSecrets(env as Record<string, unknown>) }, 'Environment validated successfully. Starting HorPlus API server...');
 
   // Pre-flight connection checks (non-blocking log warning if down on boot)
+  await connectRedis().catch(() => { /* handled by checkRedisConnection failure log */ });
   const [dbOk, redisOk] = await Promise.all([
     checkDatabaseConnection(),
     checkRedisConnection(),
@@ -33,8 +37,24 @@ async function startServer() {
   const app = createApp();
   const server = http.createServer(app);
 
-  server.listen(env.PORT, '0.0.0.0', () => {
-    logger.info({ port: env.PORT, environment: env.NODE_ENV }, `HorPlus API server listening on 0.0.0.0:${env.PORT}`);
+  const host = process.env.HOST || '0.0.0.0';
+  server.listen(env.PORT, host, () => {
+    logger.info({ port: env.PORT, host, environment: env.NODE_ENV }, `HorPlus API server listening on ${host}:${env.PORT}`);
+  });
+
+  server.on('error', async (err: NodeJS.ErrnoException) => {
+    if (err.code === 'EADDRINUSE') {
+      logger.error(`Fatal: Port ${env.PORT} is already in use. Please ensure no other backend instance is running.`);
+      try {
+        await disconnectPrisma();
+        await disconnectRedis();
+      } catch (cleanupErr) {
+        logger.error({ err: cleanupErr }, 'Error during EADDRINUSE cleanup.');
+      }
+      process.exit(1);
+    } else {
+      logger.error({ err }, 'Server encountered an unexpected error.');
+    }
   });
 
   let isShuttingDown = false;

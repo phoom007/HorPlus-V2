@@ -12,6 +12,7 @@ const envSchema = z.object({
   SHUTDOWN_TIMEOUT_MS: z.coerce.number().int().default(10000),
 
   // Auth & Session Configuration
+  E2E_TEST_MODE: z.preprocess((val) => val === 'true' || val === true, z.boolean()).default(false),
   GOOGLE_CLIENT_ID: z.string().default('horplus-test-google-client-id'),
   SESSION_ENCRYPTION_KEY: z.string().min(32, 'SESSION_ENCRYPTION_KEY must be at least 32 characters').default('0123456789abcdef0123456789abcdef'),
   SESSION_TTL_SECONDS: z.coerce.number().int().default(86400),
@@ -38,6 +39,7 @@ export type EnvConfig = {
   BODY_LIMIT: string;
   SHUTDOWN_TIMEOUT_MS: number;
 
+  E2E_TEST_MODE: boolean;
   GOOGLE_CLIENT_ID: string;
   SESSION_ENCRYPTION_KEY: string;
   SESSION_TTL_SECONDS: number;
@@ -73,6 +75,26 @@ export function validateEnv(rawEnv: Record<string, string | undefined> = process
     throw new Error("Production CORS origins cannot include wildcard '*'");
   }
 
+  if (parsed.data.NODE_ENV === 'production' && (process.env.ALLOW_TEST_LIFF_ADAPTER === 'true' || process.env.USE_MOCK_LIFF === 'true')) {
+    throw new Error("PRODUCTION_SECURITY_VIOLATION: Test LIFF identity verifier adapter cannot be enabled in NODE_ENV=production");
+  }
+
+  if (parsed.data.E2E_TEST_MODE) {
+    if (parsed.data.NODE_ENV !== 'test') {
+      throw new Error("E2E_TEST_MODE is true but NODE_ENV is not test.");
+    }
+    try {
+      const dbUrl = new URL(parsed.data.DATABASE_URL);
+      const dbName = dbUrl.pathname.replace(/^\//, '');
+      if (dbName !== 'horplus_test' && dbName !== 'horplus_e2e') {
+        throw new Error(`E2E_TEST_MODE is true but connected to unauthorized database '${dbName}'. Allowed: 'horplus_test', 'horplus_e2e'`);
+      }
+    } catch (err: any) {
+      if (err.message.includes('unauthorized database')) throw err;
+      throw new Error("Invalid DATABASE_URL format.");
+    }
+  }
+
   return {
     NODE_ENV: parsed.data.NODE_ENV,
     PORT: parsed.data.PORT,
@@ -84,6 +106,7 @@ export function validateEnv(rawEnv: Record<string, string | undefined> = process
     BODY_LIMIT: parsed.data.BODY_LIMIT,
     SHUTDOWN_TIMEOUT_MS: parsed.data.SHUTDOWN_TIMEOUT_MS,
 
+    E2E_TEST_MODE: parsed.data.E2E_TEST_MODE,
     GOOGLE_CLIENT_ID: parsed.data.GOOGLE_CLIENT_ID,
     SESSION_ENCRYPTION_KEY: parsed.data.SESSION_ENCRYPTION_KEY,
     SESSION_TTL_SECONDS: parsed.data.SESSION_TTL_SECONDS,
