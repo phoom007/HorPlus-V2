@@ -66,9 +66,8 @@ export interface PendingContractSubmission {
   durationMonths: number;
   rentAmount: number;
   depositAmount: number;
-  depositStatus?: 'paid' | 'unpaid';
+  depositStatus: 'unpaid' | 'paid' | 'returned';
   depositType?: 'refundable' | 'deduct_rent';
-  advancePaymentAmount: number;
   terms: string;
   tenantSignature: string;
   submittedAt: string;
@@ -96,7 +95,6 @@ const INITIAL_PENDING_SUBMISSIONS: PendingContractSubmission[] = [
     depositAmount: 11000,
     depositStatus: 'paid',
     depositType: 'refundable',
-    advancePaymentAmount: 11000,
     terms: '1. ผู้เช่าตกลงชำระค่าเช่าภายในวันที่ 5 ของทุกเดือน หากช้าปรับวันละ 100 บาท\n2. ห้ามเลี้ยงสัตว์เลี้ยงทุกชนิดภายในห้องพัก\n3. ห้ามส่งเสียงดังรบกวนหลังเวลา 22:00 น.',
     tenantSignature: 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="160" height="60"><path d="M10,40 Q40,10 70,45 T140,20 Q150,30 130,50" stroke="%231e3a8a" stroke-width="2.5" fill="none"/></svg>',
     submittedAt: '2026-07-24T14:30:00.000Z',
@@ -120,7 +118,6 @@ const INITIAL_PENDING_SUBMISSIONS: PendingContractSubmission[] = [
     depositAmount: 9600,
     depositStatus: 'paid',
     depositType: 'refundable',
-    advancePaymentAmount: 9600,
     terms: '1. ตกลงชำระค่าเช่าทุกวันที่ 1 ของเดือน\n2. เงินประกันได้รับคืนเต็มจำนวนเมื่อย้ายออกตามสัญญา\n3. ห้ามเจาะตอกผนังหรือแก้ไขโครงสร้างห้อง',
     tenantSignature: 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="160" height="60"><path d="M15,35 Q50,5 90,40 T150,25" stroke="%230f766e" stroke-width="2.5" fill="none"/></svg>',
     submittedAt: '2026-07-24T16:45:00.000Z',
@@ -144,7 +141,6 @@ const INITIAL_PENDING_SUBMISSIONS: PendingContractSubmission[] = [
     depositAmount: 12000,
     depositStatus: 'paid',
     depositType: 'refundable',
-    advancePaymentAmount: 12000,
     terms: '1. ชำระค่าเช่าตรงเวลาภายในวันที่ 5 ของเดือน\n2. สิทธิ์จอดรถยนต์ 1 คัน (ทะเบียน กข-9999)\n3. ห้ามสูบบุหรี่ภายในห้องพักและบริเวณระเบียง',
     tenantSignature: 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="160" height="60"><path d="M12,45 C35,10 65,50 110,20 C130,10 145,35 155,25" stroke="%234338ca" stroke-width="2.5" fill="none"/></svg>',
     submittedAt: '2026-07-25T01:15:00.000Z',
@@ -214,7 +210,7 @@ export const OwnerContracts: React.FC<OwnerContractsProps> = ({
   const [pendingStartDate, setPendingStartDate] = useState<string>('');
   const [pendingEndDate, setPendingEndDate] = useState<string>('');
   const [pendingDuration, setPendingDuration] = useState<number>(6);
-  const [pendingDepositStatus, setPendingDepositStatus] = useState<'paid' | 'unpaid'>('paid');
+  const [pendingDepositStatus, setPendingDepositStatus] = useState<'paid' | 'unpaid' | 'returned'>('paid');
   const [pendingDepositType, setPendingDepositType] = useState<'refundable' | 'deduct_rent'>('refundable');
   const [pendingTerms, setPendingTerms] = useState<string>('');
 
@@ -255,7 +251,7 @@ export const OwnerContracts: React.FC<OwnerContractsProps> = ({
       setPendingStartDate(selectedPending.startDate);
       setPendingDuration(selectedPending.durationMonths);
       setPendingEndDate(selectedPending.endDate || calculateEndDate(selectedPending.startDate, selectedPending.durationMonths));
-      setPendingDepositStatus(selectedPending.depositStatus || 'paid');
+      setPendingDepositStatus(selectedPending.depositStatus);
       setPendingDepositType(selectedPending.depositType || 'refundable');
       setPendingTerms(selectedPending.terms);
       setEditNotice('');
@@ -320,9 +316,8 @@ export const OwnerContracts: React.FC<OwnerContractsProps> = ({
       durationMonths: finalDuration,
       rentAmount: finalRent,
       depositAmount: finalDeposit,
-      depositStatus: pendingDepositStatus,
+      depositStatus: 'paid',
       depositType: pendingDepositType,
-      advancePaymentAmount: sub.advancePaymentAmount,
       terms: finalTerms,
       tenantSignature: sub.tenantSignature,
       ownerSignature: 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="100" height="40"><path d="M10,25 Q40,5 60,30 T90,20" stroke="blue" stroke-width="2" fill="none"/></svg>',
@@ -532,8 +527,8 @@ export const OwnerContracts: React.FC<OwnerContractsProps> = ({
       endDate: calculatedEnd,
       durationMonths,
       rentAmount: selectedRoom.monthlyRent,
-      depositAmount: selectedRoom.depositAmount,
-      advancePaymentAmount: selectedRoom.monthlyRent * 2,
+      depositAmount: selectedRoom.monthlyRent * 2,
+      depositStatus: 'unpaid',
       terms: '1. ผู้เช่าตกลงชำระค่าเช่าภายในวันที่ 5 ของทุกเดือน หากช้าปรับวันละ 100 บาท\n2. ห้ามเลี้ยงสัตว์เลี้ยงชนิดที่ส่งเสียงดังหรือก่อให้เกิดกลิ่นรบกวนอาคาร\n3. เงินประกันความเสียหายจะได้รับคืนเต็มจำนวนภายใน 15 วันนับจากวันที่ย้ายออกโดยไม่มีสิ่งของชำรุด',
       tenantSignature: tenantSig,
       ownerSignature: 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="100" height="40"><path d="M10,25 Q40,5 60,30 T90,20" stroke="blue" stroke-width="2" fill="none"/></svg>',

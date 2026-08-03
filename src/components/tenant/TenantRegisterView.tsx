@@ -502,7 +502,6 @@ export const TenantRegisterView: React.FC<TenantRegisterViewProps> = ({
       depositAmount: Number(depositAmount),
       depositStatus: depositStatus,
       depositType: 'refundable',
-      advancePaymentAmount: Number(rentAmount),
       terms: `สัญญาเช่าห้อง ${targetRoom?.roomNumber || ''} แบบ ${rentPlan === 'monthly' ? 'รายเดือน' : rentPlan === 'term' ? 'รายเทอม' : 'รายวัน'}${isInstallment ? ` (แบ่งชำระ ${installmentMonths} งวด)` : ''}`,
       tenantSignature: signatureDataUrl,
       status: 'active',

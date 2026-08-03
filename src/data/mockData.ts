@@ -455,7 +455,7 @@ export const createInitialContracts = (): Contract[] => {
         durationMonths: duration,
         rentAmount: room.monthlyRent,
         depositAmount: room.depositAmount,
-        advancePaymentAmount: room.monthlyRent,
+        
         terms: '1. ห้ามเลี้ยงสัตว์ส่งเสียงดัง (ยกเว้นสัตว์เลี้ยงที่ระบุใบคำขอ)\n2. ห้ามดัดแปลงห้องพัก\n3. จ่ายค่าเช่าภายในวันที่ 5 ของทุกเดือน หากเกินกำหนดมีค่าปรับวันละ 100 บาท',
         tenantSignature: 'MOCK_SIGNATURE_DATA',
         ownerSignature: 'MOCK_OWNER_SIGNATURE_DATA',

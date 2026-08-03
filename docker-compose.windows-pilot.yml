@@ -9,7 +9,40 @@ services:
     ports:
       - "5455:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-horplus}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-horplus} -d ${POSTGRES_DB:-horplus_wave1d_fasttrack_test}"]
       interval: 5s
       timeout: 5s
       retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: always
+    ports:
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: postgresql://horplus:password@db:5432/horplus_wave1d_fasttrack_test?schema=public
+      REDIS_URL: redis://redis:6379
+      LOG_LEVEL: info
+      SESSION_ENCRYPTION_KEY: prod_session_secret_key_32_chars_long_0001
+      CSRF_SIGNING_KEY: prod_csrf_signing_key_16_chars_min
+      FIELD_ENCRYPTION_KEY: prod_field_encryption_key_32_chars_long_0001
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy

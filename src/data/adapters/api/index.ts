@@ -12,7 +12,6 @@ import {
   MeterDataSource,
   BillingDataSource,
   PaymentDataSource,
-  ReceiptDataSource,
   MaintenanceDataSource,
   AnnouncementDataSource,
   NotificationDataSource,
@@ -34,7 +33,6 @@ import {
   Contract,
   MeterReading,
   Bill,
-  Receipt,
   MaintenanceRequest,
   Announcement,
   Notification,
@@ -389,7 +387,7 @@ export class ApiBillingAdapter implements BillingDataSource {
 
 export class ApiPaymentAdapter implements PaymentDataSource {}
 
-export class ApiReceiptAdapter implements ReceiptDataSource {}
+
 
 export class ApiMaintenanceAdapter implements MaintenanceDataSource {
   async getAll(): Promise<MaintenanceRequest[]> {
@@ -646,8 +644,6 @@ export class ApiDataProvider implements HorPlusDataProvider {
   public contracts = new ApiContractAdapter();
   public meters = new ApiMeterAdapter();
   public billing = new ApiBillingAdapter();
-  public payments = new ApiPaymentAdapter();
-  public receipts = new ApiReceiptAdapter();
   public maintenance = new ApiMaintenanceAdapter();
   public announcements = new ApiAnnouncementAdapter();
   public notifications = new ApiNotificationAdapter();

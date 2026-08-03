@@ -11,7 +11,6 @@ import {
   Contract,
   MeterReading,
   Bill,
-  Receipt,
   MaintenanceRequest,
   Announcement,
   Notification,
@@ -106,7 +105,7 @@ export interface BillingDataSource {
 
 export interface PaymentDataSource {}
 
-export interface ReceiptDataSource {}
+
 
 export interface MaintenanceDataSource {
   getAll(): Promise<MaintenanceRequest[]>;
@@ -162,8 +161,6 @@ export interface HorPlusDataProvider {
   contracts: ContractDataSource;
   meters: MeterDataSource;
   billing: BillingDataSource;
-  payments: PaymentDataSource;
-  receipts: ReceiptDataSource;
   maintenance: MaintenanceDataSource;
   announcements: AnnouncementDataSource;
   notifications: NotificationDataSource;

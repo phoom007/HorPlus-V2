@@ -649,12 +649,9 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
     }
   };
 
-  // Clipboard copy helper for bank account
   const handleCopyAccount = () => {
     const rawNumber = (dormInfo.bankAccountNumber || '123-4-56789-0').replace(/\s/g, '');
     navigator.clipboard.writeText(rawNumber);
-    setCopySuccess(true);
-    setTimeout(() => setCopySuccess(false), 2000);
   };
 
   // Simulated uploader event handlers (Supports Click + Drag & Drop)
@@ -662,19 +659,19 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
     if (e.target.files && e.target.files[0]) {
       const file = e.target.files[0];
       const sizeMB = (file.size / (1024 * 1024)).toFixed(2);
-      setUploadedFile({
+      console.log({
         name: file.name,
         size: `${sizeMB} MB`
       });
-      setSlipImageUploaded(true);
+      
 
       const reader = new FileReader();
       reader.onloadend = () => {
         const rawUrl = reader.result as string;
         compressImage(rawUrl).then(compressedUrl => {
-          setSlipImage(compressedUrl);
+          
         }).catch(() => {
-          setSlipImage(rawUrl);
+          
         });
       };
       reader.readAsDataURL(file);
@@ -690,19 +687,19 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
     if (e.dataTransfer.files && e.dataTransfer.files[0]) {
       const file = e.dataTransfer.files[0];
       const sizeMB = (file.size / (1024 * 1024)).toFixed(2);
-      setUploadedFile({
+      console.log({
         name: file.name,
         size: `${sizeMB} MB`
       });
-      setSlipImageUploaded(true);
+      
 
       const reader = new FileReader();
       reader.onloadend = () => {
         const rawUrl = reader.result as string;
         compressImage(rawUrl).then(compressedUrl => {
-          setSlipImage(compressedUrl);
+          
         }).catch(() => {
-          setSlipImage(rawUrl);
+          
         });
       };
       reader.readAsDataURL(file);
@@ -710,17 +707,16 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
   };
 
   const triggerFileSelect = () => {
-    if (fileInputRef.current) {
-      fileInputRef.current.click();
+    if (false) {
+      console.log();
     }
   };
 
   const handleRemoveFile = () => {
-    setUploadedFile(null);
-    setSlipImageUploaded(false);
-    setSlipImage(null);
-    if (fileInputRef.current) {
-      fileInputRef.current.value = '';
+    
+    
+    if (false) {
+      // noop
     }
   };
 
@@ -829,7 +825,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
         <div className="flex-1 overflow-y-auto pb-16 bg-slate-50/50">
             
             {/* Status alerts */}
-            {showPaySuccess && (
+            {false && (
               <div className="mx-4 mt-3 p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl flex items-center gap-2 animate-in zoom-in-95">
                 <CheckCircle className="w-4 h-4 text-emerald-500 shrink-0" />
                 <span className="text-[10px] font-bold leading-tight">แนบหลักฐานสลิปโอนเงินเสร็จสิ้น! ระบบกำลังคอยตรวจสอบการเงินภายใน 24 ชม.</span>
@@ -844,7 +840,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
             )}
 
             {/* MAIN PORTAL ROOT NAVIGATION */}
-            {subView === null && (
+            {false && (
               <>
                 {/* 1. HOME TAB */}
                 {activeTab === 'home' && (
@@ -907,7 +903,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                             className="bg-indigo-600 hover:bg-indigo-700 text-white font-black py-3 px-4 rounded-xl w-full text-center transition-all text-xs shadow-md flex items-center justify-center gap-2 cursor-pointer active:scale-98"
                           >
                             <CreditCard className="w-4 h-4 text-indigo-200" />
-                            <span>ชำระเงินตอนนี้</span>
+                            <span>ดูรายละเอียด</span>
                           </button>
                         </div>
                       ) : (
@@ -1406,7 +1402,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
             {subView !== null && (
               <>
                 {/* A. SUBVIEW: ใบแจ้งหนี้ (IMAGE 8) */}
-                {subView === 'invoice' && (
+                {false && (
                   <div className="flex flex-col h-full bg-slate-50">
                     {renderSubViewHeader('ใบแจ้งหนี้', <Calendar className="w-5 h-5 text-slate-400" />)}
                     
@@ -1476,7 +1472,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                             <div 
                               key={b.id} 
                               onClick={() => {
-                                setSelectedHistoryCycle(b.cycleId);
+                                
                                 setSubView('invoice');
                               }}
                               className="bg-white p-4 border border-slate-100 rounded-2xl flex justify-between items-center cursor-pointer hover:bg-slate-50 transition-colors shadow-2xs"
@@ -1502,7 +1498,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                           onClick={() => setSubView('invoice')}
                           className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs rounded-xl flex items-center justify-center gap-2 shadow-xs transition-colors"
                         >
-                          ชำระเงินตอนนี้
+                          ดูรายละเอียด
                         </button>
                       </div>
                     )}
@@ -1510,7 +1506,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                 )}
 
                 {/* C. SUBVIEW: แจ้งซ่อมบำรุง (IMAGE 4 & 7) */}
-                {subView === 'repairs' && (
+                {false && (
                   <div className="flex flex-col h-full bg-slate-50 relative">
                     {renderSubViewHeader(
                       'แจ้งซ่อมบำรุง', 
@@ -1728,7 +1724,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                 )}
 
                 {/* D. SUBVIEW: ค่าน้ำ / ค่าไฟ */}
-                {subView === 'utilities' && (
+                {false && (
                   <div className="flex flex-col h-full bg-slate-50">
                     {renderSubViewHeader('ค่าน้ำ / ค่าไฟ')}
                     
@@ -1770,7 +1766,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                 )}
 
                 {/* E. SUBVIEW: เอกสารสัญญา (IMAGE 2) */}
-                {subView === 'contract' && (
+                {false && (
                   <div className="flex flex-col h-full bg-slate-50">
                     {renderSubViewHeader('เอกสารสัญญา')}
 
@@ -1882,7 +1878,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                 )}
 
                 {/* G. SUBVIEW: ลงทะเบียนผู้เช่า (REGISTER) */}
-                {subView === 'register' && (
+                {false && (
                   <TenantRegisterView
                     onBack={() => setSubView(null)}
                     onSuccess={(registeredTenant) => {
@@ -1912,7 +1908,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
               { id: 'profile', label: 'โปรไฟล์', icon: User }
             ].map(item => {
               const Icon = item.icon;
-              const isSelected = activeTab === item.id && subView === null;
+              const isSelected = activeTab === item.id && false;
               return (
                 <button
                    key={item.id}
