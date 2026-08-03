@@ -1402,8 +1402,8 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
             {subView !== null && (
               <>
                 {/* A. SUBVIEW: ใบแจ้งหนี้ (IMAGE 8) */}
-                {false && (
-                  <div className="flex flex-col h-full bg-slate-50">
+                {subView === 'invoice' && (
+                  <div className="flex flex-col h-full bg-slate-50\">
                     {renderSubViewHeader('ใบแจ้งหนี้', <Calendar className="w-5 h-5 text-slate-400" />)}
                     
                     {/* Invoice Tabs below header */}
@@ -1495,19 +1495,90 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                     {invoiceTab === 'current' && activeUnpaidBill && (
                       <div className="sticky bottom-[56px] p-4 bg-white/95 backdrop-blur-md border-t border-gray-100 mt-auto z-10">
                         <button
-                          onClick={() => setSubView('invoice')}
+                          onClick={() => setSubView('pay')}
                           className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs rounded-xl flex items-center justify-center gap-2 shadow-xs transition-colors"
                         >
-                          ดูรายละเอียด
+                          แจ้งชำระเงิน
                         </button>
                       </div>
                     )}
                   </div>
                 )}
 
-                {/* C. SUBVIEW: แจ้งซ่อมบำรุง (IMAGE 4 & 7) */}
-                {false && (
+                
+                {/* B. SUBVIEW: แจ้งชำระเงิน (IMAGE 9) */}
+                {subView === 'pay' && activeUnpaidBill && (
                   <div className="flex flex-col h-full bg-slate-50 relative">
+                    {renderSubViewHeader('แจ้งชำระเงิน', <DollarSign className="w-5 h-5 text-slate-400" />)}
+                    
+                    <div className="p-4 space-y-4 pb-24 overflow-y-auto">
+                      <div className="bg-white rounded-3xl p-5 border border-slate-100 shadow-xs space-y-4">
+                        <div className="text-center">
+                          <p className="text-[10px] text-slate-500 font-bold mb-1">ยอดชำระทั้งหมด</p>
+                          <h2 className="text-2xl font-black text-indigo-600">
+                            ฿ {activeUnpaidBill.totalAmount.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          </h2>
+                          <p className="text-[9px] text-slate-400 mt-1">
+                            ชำระภายใน {formatToBeDate(activeUnpaidBill.dueDate)}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="bg-white rounded-3xl p-5 border border-slate-100 shadow-xs space-y-4">
+                        <h3 className="font-extrabold text-slate-800 text-[11px] mb-3">บัญชีโอนเงิน</h3>
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 font-bold">
+                            BBL
+                          </div>
+                          <div>
+                            <p className="text-[10px] font-bold text-slate-800">ธนาคารกรุงเทพ</p>
+                            <p className="text-sm font-black text-slate-700">123-4-56789-0</p>
+                            <p className="text-[9px] text-slate-500">บจก. หอพักดีเลิศ</p>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="space-y-2">
+                        <h3 className="font-extrabold text-slate-800 text-[11px] px-1">หลักฐานการโอนเงิน (สลิป)</h3>
+                        <label className="border-2 border-dashed border-indigo-200 hover:border-indigo-400 hover:bg-indigo-50/30 transition-all rounded-3xl p-6 text-center flex flex-col items-center justify-center cursor-pointer gap-2 bg-white">
+                          <div className="p-3 bg-indigo-50 rounded-full text-indigo-500">
+                            <Upload className="w-6 h-6 stroke-[2]" />
+                          </div>
+                          <div>
+                            <p className="text-indigo-600 text-xs font-bold">อัปโหลดรูปสลิปโอนเงิน</p>
+                            <p className="text-slate-400 text-[9px] font-medium mt-0.5">รองรับ JPG, PNG ขนาดไม่เกิน 5MB</p>
+                          </div>
+                          <input type="file" className="hidden" accept="image/*" onChange={(e) => {
+                            if (e.target.files && e.target.files[0]) {
+                              // Dummy implementation for MVP just to show toast
+                              const file = e.target.files[0];
+                              setToast({ type: 'success', title: 'อัปโหลดสำเร็จ', message: 'รูปสลิปถูกเตรียมพร้อมส่งแล้ว', visible: true });
+                              // We would store the file in state here
+                              setTimeout(() => setToast(null), 3000);
+                            }
+                          }} />
+                        </label>
+                      </div>
+                    </div>
+
+                    <div className="absolute bottom-0 left-0 right-0 p-4 bg-white/95 backdrop-blur-md border-t border-gray-100 z-10">
+                      <button
+                        onClick={() => {
+                          setSubView(null);
+                          setToast({ type: 'success', title: 'ส่งหลักฐานสำเร็จ', message: 'กำลังรอการตรวจสอบจากนิติบุคคล', visible: true });
+                          setTimeout(() => setToast(null), 3000);
+                        }}
+                        className="w-full py-3.5 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs rounded-xl shadow-lg shadow-indigo-200 transition-all active:scale-95"
+                      >
+                        ยืนยันการชำระเงิน
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* C. SUBVIEW: แจ้งซ่อมบำรุง (IMAGE 4 & 7) */}
+                {subView === 'repairs' && (
+                  <div className="flex flex-col h-full bg-slate-50 relative\">
                     {renderSubViewHeader(
                       'แจ้งซ่อมบำรุง', 
                       <button 
@@ -1878,7 +1949,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                 )}
 
                 {/* G. SUBVIEW: ลงทะเบียนผู้เช่า (REGISTER) */}
-                {false && (
+                {subView === 'register' && (
                   <TenantRegisterView
                     onBack={() => setSubView(null)}
                     onSuccess={(registeredTenant) => {

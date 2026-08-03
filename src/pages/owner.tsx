@@ -846,7 +846,8 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
           />
         );
       case 'payments':
-        return null;
+          return <PaymentsOwnerView bills={bills} rooms={rooms} dormitoryId={dormitoryId} onUpdateBills={fetchData} />;
+
       case 'maintenance':
         return (
           <OwnerMaintenance

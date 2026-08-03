@@ -20,6 +20,8 @@ import { createBillingRouter } from './billing.routes.js';
 import { moveOutRouter } from './move-out.routes.js';
 import { createMaintenanceRouter } from './maintenance.routes.js';
 import { createAnnouncementRouter } from './announcement.routes.js';
+import { createPaymentRouter } from './payment.routes.js';
+import { createReceiptRouter } from './receipt.routes.js';
 import { createNotificationRouter, createTenantNotificationRouter } from './notification.routes.js';
 import { BuildingService } from '../services/building.service.js';
 import { RoomService } from '../services/room.service.js';
@@ -122,6 +124,8 @@ export function createApiRouter(deps: AppApiDependencies | AuthenticationService
     router.use('/', moveOutRouter);
     router.use('/maintenance-requests', createMaintenanceRouter());
     router.use('/announcements', createAnnouncementRouter());
+    router.use('/payments', createPaymentRouter());
+    router.use('/receipts', createReceiptRouter());
     router.use('/notifications', createNotificationRouter());
     router.use('/tenant/notifications', createTenantNotificationRouter());
   }
