@@ -158,7 +158,6 @@ export interface Contract {
   depositAmount: number;
   depositStatus?: 'paid' | 'unpaid';
   depositType?: 'refundable' | 'deduct_rent';
-  advancePaymentAmount: number;
   terms: string;
   tenantSignature?: string; // Base64 signature image
   ownerSignature?: string; // Base64 signature image
@@ -227,17 +226,7 @@ export interface Bill {
 }
 
 
-export interface Receipt {
-  id: string;
-  receiptNumber: string;
-  billId: string;
-  paymentId: string;
-  paymentMethod: 'promptpay' | 'cash';
-  totalAmount: number;
-  paidAt: string;
-  receiverName: string;
-  createdAt: string;
-}
+
 
 export type MaintenanceStatus = 'submitted' | 'accepted' | 'more_info' | 'scheduled' | 'inprogress' | 'waiting_parts' | 'completed' | 'cancelled';
 export type MaintenanceUrgency = 'low' | 'medium' | 'high' | 'emergency';

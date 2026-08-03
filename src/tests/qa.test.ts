@@ -59,7 +59,6 @@ describe('QA Verification Suite — Repositories & Business Logic', () => {
         durationMonths: 6,
         rentAmount: 4500,
         depositAmount: 9000,
-        advancePaymentAmount: 4500,
         terms: 'Standard terms',
         status: 'active'
       });

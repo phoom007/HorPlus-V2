@@ -75,7 +75,6 @@ export const OwnerReports: React.FC<OwnerReportsProps> = ({
   const [selectedYear, setSelectedYear] = useState('2026');
   const [selectedBuilding, setSelectedBuilding] = useState('all');
   const [selectedCycleState, setSelectedCycleState] = useState<string>(propSelectedCycle || '2026-07');
-  const [showPaymentRooms, setShowPaymentRooms] = useState<'paid' | 'unpaid' | null>(null);
   const [showCsvPopover, setShowCsvPopover] = useState(false);
 
   const selectedCycle = selectedCycleState || propSelectedCycle || '2026-07';
@@ -458,154 +457,79 @@ export const OwnerReports: React.FC<OwnerReportsProps> = ({
         <div className="lg:col-span-2 bg-white p-6 rounded-3xl border border-slate-100 shadow-sm relative overflow-hidden transition-all duration-300 min-h-[360px] flex flex-col justify-between">
           
           {/* Requirement 2: Overlay replacement inside card when clicking 'ชำระแล้ว' / 'ยังไม่ชำระ' */}
-          {showPaymentRooms ? (
-            <div className="space-y-4 animate-in fade-in duration-200">
-              <div className="flex justify-between items-center pb-3 border-b border-slate-100">
-                <div className="flex items-center gap-2">
-                  <div className={`p-2 rounded-xl ${showPaymentRooms === 'paid' ? 'bg-blue-50 text-blue-600' : 'bg-rose-50 text-rose-600'}`}>
-                    {showPaymentRooms === 'paid' ? <CheckCircle className="w-5 h-5" /> : <AlertTriangle className="w-5 h-5" />}
-                  </div>
-                  <div>
-                    <h4 className={`text-sm font-black ${showPaymentRooms === 'paid' ? 'text-blue-700' : 'text-rose-700'}`}>
-                      {showPaymentRooms === 'paid' ? `รายการห้องที่ชำระเงินแล้ว (${paidBillsRooms.length} ห้อง)` : `รายการห้องที่ยังไม่ได้ชำระเงิน (${unpaidBillsRooms.length} ห้อง)`}
-                    </h4>
-                    <p className="text-[10px] text-slate-400 font-medium">
-                      งวดประจำเดือน {displayMonthTh} {displayYearTh} • รวม {formatBaht(showPaymentRooms === 'paid' ? totalRevenueThisMonth : totalUnpaidThisMonth)}
-                    </p>
-                  </div>
-                </div>
-
-                {/* Close Button X on top right */}
-                <button 
-                  onClick={() => setShowPaymentRooms(null)}
-                  className="p-2 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-xl transition-all cursor-pointer font-black flex items-center gap-1 text-xs"
-                  title="ปิดหน้าต่างย่อย กลับสู่หน้าสรุปเดิม"
-                >
-                  <span className="text-[10px] font-bold">ปิด</span>
-                  <X className="w-4 h-4 text-slate-600" />
-                </button>
-              </div>
-
-              {/* Room Badges Grid (View-only) */}
-              <div className="grid grid-cols-3 sm:grid-cols-5 md:grid-cols-6 lg:grid-cols-8 gap-2 max-h-[220px] overflow-y-auto pr-1">
-                {(showPaymentRooms === 'paid' ? paidBillsRooms : unpaidBillsRooms).map((item, idx) => (
-                  <div
-                    key={idx}
-                    className={`p-2 text-center text-xs font-black rounded-2xl select-none transition-all flex flex-col items-center justify-center border shadow-2xs ${
-                      showPaymentRooms === 'paid'
-                        ? 'bg-blue-50 text-blue-800 border-blue-200'
-                        : 'bg-rose-50 text-rose-800 border-rose-200'
-                    }`}
-                  >
-                    <span className="text-xs font-black">ห้อง {item.roomNumber}</span>
-                    <span className="text-[10px] opacity-90 font-bold">฿{item.amount.toLocaleString()}</span>
-                  </div>
-                ))}
-                {(showPaymentRooms === 'paid' ? paidBillsRooms : unpaidBillsRooms).length === 0 && (
-                  <div className="col-span-full text-center py-8 text-xs text-slate-400 font-bold">
-                    ไม่มีรายการห้องพักในหมวดนี้ในเดือน {displayMonthTh} {displayYearTh.slice(-2)}
-                  </div>
-                )}
-              </div>
-
-              <div className="pt-2 text-[10px] text-slate-400 font-medium flex justify-between items-center border-t border-slate-100">
-                <span>แสดงรายการห้องพักในหมวด{showPaymentRooms === 'paid' ? 'ชำระแล้ว' : 'ยังไม่ชำระ'} (รวม {(showPaymentRooms === 'paid' ? paidBillsRooms : unpaidBillsRooms).length} ห้อง)</span>
-                <button
-                  onClick={() => setShowPaymentRooms(null)}
-                  className="text-blue-600 hover:underline font-bold cursor-pointer"
-                >
-                  กลับสู่หน้าสรุป
-                </button>
-              </div>
+          <div className="space-y-4">
+            <div className="absolute right-4 top-4 w-10 h-10 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center font-black text-lg">
+              ฿
             </div>
-          ) : (
-            /* Normal Collection View */
-            <div className="space-y-4">
-              <div className="absolute right-4 top-4 w-10 h-10 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center font-black text-lg">
-                ฿
-              </div>
 
-              <div className="flex items-center gap-2">
-                <p className="text-xs font-bold text-slate-400">ยอดรวมจัดเก็บทั้งหมด (รอบ {displayMonthTh} {displayYearTh})</p>
-                {selectedBuilding !== 'all' && (
-                  <span className="px-2 py-0.5 bg-blue-50 text-blue-600 text-[10px] font-black rounded-lg border border-blue-100">
-                    {buildingOptions.find(b => b.id === selectedBuilding)?.name || selectedBuilding}
-                  </span>
-                )}
-              </div>
-              
-              <div className="mt-1 flex flex-col sm:flex-row sm:items-baseline gap-2">
-                <span className="text-2xl xs:text-3xl sm:text-4xl font-black text-blue-600 tracking-tight whitespace-nowrap">
-                  {formatBaht(totalBilledThisMonth)}
+            <div className="flex items-center gap-2">
+              <p className="text-xs font-bold text-slate-400">ยอดรวมจัดเก็บทั้งหมด (รอบ {displayMonthTh} {displayYearTh})</p>
+              {selectedBuilding !== 'all' && (
+                <span className="px-2 py-0.5 bg-blue-50 text-blue-600 text-[10px] font-black rounded-lg border border-blue-100">
+                  {buildingOptions.find(b => b.id === selectedBuilding)?.name || selectedBuilding}
                 </span>
-                {totalOverdueAmount > 0 && (
-                  <span className="text-xs font-bold text-rose-500 whitespace-nowrap">
-                    (มียอดค้างชำระรวม {formatBaht(totalOverdueAmount)})
-                  </span>
-                )}
+              )}
+            </div>
+            
+            <div className="mt-1 flex flex-col sm:flex-row sm:items-baseline gap-2">
+              <span className="text-2xl xs:text-3xl sm:text-4xl font-black text-blue-600 tracking-tight whitespace-nowrap">
+                {formatBaht(totalBilledThisMonth)}
+              </span>
+              {totalOverdueAmount > 0 && (
+                <span className="text-xs font-bold text-rose-500 whitespace-nowrap">
+                  (มียอดค้างชำระรวม {formatBaht(totalOverdueAmount)})
+                </span>
+              )}
+            </div>
+
+            {/* Separator */}
+            <div className="my-4 border-t border-slate-100/80" />
+
+            {/* สถานะรับชำระเงิน */}
+            <div>
+              <p className="text-xs font-bold text-slate-400 mb-3">สถานะการรับชำระเงินในรอบนี้</p>
+              
+              <div className="grid grid-cols-2 gap-3 sm:gap-4">
+                <div className="space-y-1 rounded-2xl p-3 border shadow-2xs min-w-0 bg-white border-slate-100">
+                  <div className="flex items-center gap-1.5 text-xs font-bold text-slate-500">
+                    <CheckCircle className="w-4 h-4 text-blue-600 shrink-0" />
+                    <span className="truncate">ชำระแล้ว</span>
+                  </div>
+                  <p className="text-sm xs:text-base sm:text-lg font-black text-slate-800 whitespace-nowrap truncate">
+                    {formatBaht(totalRevenueThisMonth)}
+                  </p>
+                  <p className="text-[10px] text-slate-400 font-semibold truncate">
+                    {paidBills.length} ห้อง ({paidPercent}%)
+                  </p>
+                </div>
+
+                <div className="space-y-1 rounded-2xl p-3 border shadow-2xs min-w-0 bg-white border-slate-100">
+                  <div className="flex items-center gap-1.5 text-xs font-bold text-slate-500">
+                    <AlertTriangle className="w-4 h-4 text-rose-500 shrink-0" />
+                    <span className="truncate">ยังไม่ชำระ</span>
+                  </div>
+                  <p className="text-sm xs:text-base sm:text-lg font-black text-slate-800 whitespace-nowrap truncate">
+                    {formatBaht(totalUnpaidThisMonth)}
+                  </p>
+                  <p className="text-[10px] text-slate-400 font-semibold truncate">
+                    {unpaidBills.length} ห้อง ({unpaidPercent}%)
+                  </p>
+                </div>
               </div>
 
-              {/* Separator */}
-              <div className="my-4 border-t border-slate-100/80" />
-
-              {/* สถานะรับชำระเงิน */}
-              <div>
-                <p className="text-xs font-bold text-slate-400 mb-3">สถานะการรับชำระเงินในรอบนี้</p>
-                
-                <div className="grid grid-cols-2 gap-3 sm:gap-4">
-                  <button
-                    onClick={() => setShowPaymentRooms('paid')}
-                    className="space-y-1 text-left cursor-pointer rounded-2xl p-3 border transition-all active:scale-[0.98] group shadow-2xs min-w-0 bg-white border-slate-100 hover:bg-blue-50/70 hover:border-blue-300"
-                    title={`ชำระแล้ว ${formatBaht(totalRevenueThisMonth)} - คลิกเพื่อเปิดดูรายชื่อห้องทับกล่องนี้`}
-                  >
-                    <div className="flex items-center gap-1.5 text-xs font-bold text-slate-500 group-hover:text-blue-600 transition-colors">
-                      <CheckCircle className="w-4 h-4 text-blue-600 shrink-0" />
-                      <span className="truncate">ชำระแล้ว</span>
-                    </div>
-                    <p className="text-sm xs:text-base sm:text-lg font-black text-slate-800 whitespace-nowrap truncate">
-                      {formatBaht(totalRevenueThisMonth)}
-                    </p>
-                    <p className="text-[10px] text-slate-400 font-semibold group-hover:text-slate-500 truncate">
-                      {paidBills.length} ห้อง ({paidPercent}%)
-                    </p>
-                  </button>
-
-                  <button
-                    onClick={() => setShowPaymentRooms('unpaid')}
-                    className="space-y-1 text-left cursor-pointer rounded-2xl p-3 border transition-all active:scale-[0.98] group shadow-2xs min-w-0 bg-white border-slate-100 hover:bg-rose-50/70 hover:border-rose-300"
-                    title={`ยังไม่ชำระ ${formatBaht(totalUnpaidThisMonth)} - คลิกเพื่อเปิดดูรายชื่อห้องทับกล่องนี้`}
-                  >
-                    <div className="flex items-center gap-1.5 text-xs font-bold text-slate-500 group-hover:text-rose-600 transition-colors">
-                      <AlertTriangle className="w-4 h-4 text-rose-500 shrink-0" />
-                      <span className="truncate">ยังไม่ชำระ</span>
-                    </div>
-                    <p className="text-sm xs:text-base sm:text-lg font-black text-slate-800 whitespace-nowrap truncate">
-                      {formatBaht(totalUnpaidThisMonth)}
-                    </p>
-                    <p className="text-[10px] text-slate-400 font-semibold group-hover:text-slate-500 truncate">
-                      {unpaidBills.length} ห้อง ({unpaidPercent}%)
-                    </p>
-                  </button>
-                </div>
-
-                {/* Combined Progress Bar */}
-                <div className="mt-4 w-full h-3 bg-rose-100 rounded-full overflow-hidden flex cursor-pointer">
-                  <button 
-                    onClick={() => setShowPaymentRooms('paid')}
-                    className="bg-blue-600 h-full transition-all duration-500 cursor-pointer hover:brightness-105" 
-                    style={{ width: `${paidPercent}%` }}
-                    title={`ชำระแล้ว ${paidPercent}%`}
-                  />
-                  <button 
-                    onClick={() => setShowPaymentRooms('unpaid')}
-                    className="bg-rose-500 h-full transition-all duration-500 cursor-pointer hover:brightness-105" 
-                    style={{ width: `${unpaidPercent}%` }}
-                    title={`ยังไม่ชำระ ${unpaidPercent}%`}
-                  />
-                </div>
+              {/* Combined Progress Bar */}
+              <div className="mt-4 w-full h-3 bg-rose-100 rounded-full overflow-hidden flex">
+                <div 
+                  className="bg-blue-600 h-full" 
+                  style={{ width: `${paidPercent}%` }}
+                />
+                <div 
+                  className="bg-rose-500 h-full" 
+                  style={{ width: `${unpaidPercent}%` }}
+                />
               </div>
             </div>
-          )}
+          </div>
 
           {/* 6 Stat Cards in 2x3 grid */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-6">

@@ -458,16 +458,6 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
   const [invoiceTab, setInvoiceTab] = useState<'current' | 'history'>('current');
   const [expandedInvoice, setExpandedInvoice] = useState<boolean>(true);
 
-  // Payment / Slip Upload states
-  const [bankName, setBankName] = useState('ธนาคารกสิกรไทย');
-  const [transferTime, setTransferTime] = useState('16:29');
-  const [slipImageUploaded, setSlipImageUploaded] = useState(false);
-  const [uploadedFile, setUploadedFile] = useState<{ name: string; size: string } | null>(null);
-  const [slipImage, setSlipImage] = useState<string | null>(null);
-  const [showPaySuccess, setShowPaySuccess] = useState(false);
-  const [copySuccess, setCopySuccess] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
   // Repair Request states
   const [repairTab, setRepairTab] = useState<'mine' | 'history'>('mine');
   const [isNewRepairOpen, setIsNewRepairOpen] = useState(false);
@@ -477,12 +467,6 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
   const [repairImage, setRepairImage] = useState<string | null>(null);
   const [repairImageName, setRepairImageName] = useState<string | null>(null);
   const repairFileInputRef = useRef<HTMLInputElement>(null);
-
-  // Payment History states
-  const uniqueCycles: string[] = Array.from(new Set(tenantBills.filter(b => b.status === 'paid').map(b => b.cycleId)))
-    .sort((a, b) => b.localeCompare(a));
-  const [selectedHistoryCycle, setSelectedHistoryCycle] = useState<string>('all');
-  const [expandedReceiptId, setExpandedReceiptId] = useState<string | null>(null);
 
   // Helper for Announcement Role Display
   const getAuthorRoleName = (rawAuthor?: string) => {
@@ -769,28 +753,6 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
   };
 
   // Submit payment evidence
-  const handleConfirmPayment = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!activeUnpaidBill) return;
-
-    const updatedBills = bills.map(b => b.id === activeUnpaidBill.id ? {
-      ...b,
-      status: 'checking' as const,
-      paymentMethod: 'promptpay' as const,
-      slipImage: slipImage || undefined,
-      paidAt: new Date().toISOString()
-    } : b);
-
-    console.log(updatedBills);
-    
-    
-    refreshData();
-    setSubView(null);
-    setShowPaySuccess(true);
-    handleRemoveFile();
-    setTimeout(() => setShowPaySuccess(false), 4000);
-  };
-
   // Submit new repair request
   const handleCreateRepair = (e: React.FormEvent) => {
     e.preventDefault();
@@ -941,7 +903,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
 
                           <button
                             type="button"
-                            onClick={() => setSubView('pay')}
+                            onClick={() => setSubView('invoice')}
                             className="bg-indigo-600 hover:bg-indigo-700 text-white font-black py-3 px-4 rounded-xl w-full text-center transition-all text-xs shadow-md flex items-center justify-center gap-2 cursor-pointer active:scale-98"
                           >
                             <CreditCard className="w-4 h-4 text-indigo-200" />
@@ -998,7 +960,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
 
                         {/* 2. ชำระค่าเช่า */}
                         <div 
-                          onClick={() => setSubView('pay')}
+                          onClick={() => setSubView('invoice')}
                           className="bg-white rounded-2xl border border-slate-100/80 p-3.5 flex flex-col items-center justify-center text-center gap-2 hover:bg-slate-50 transition-all cursor-pointer shadow-2xs"
                         >
                           <div className="bg-emerald-50 text-emerald-600 p-2 rounded-xl">
@@ -1042,7 +1004,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
 
                         {/* 6. ประวัติการชำระ */}
                         <div 
-                          onClick={() => setSubView('history')}
+                          onClick={() => setSubView('invoice')}
                           className="bg-white rounded-2xl border border-slate-100/80 p-3.5 flex flex-col items-center justify-center text-center gap-2 hover:bg-slate-50 transition-all cursor-pointer shadow-2xs"
                         >
                           <div className="bg-slate-100 text-slate-600 p-2 rounded-xl">
@@ -1316,30 +1278,14 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                           </div>
 
                           <div className="shrink-0">
-                            {b.status === 'pending' || b.status === 'overdue' || b.status === 'rejected' ? (
                               <button
                                 type="button"
-                                onClick={() => {
-                                  setSubView('pay');
-                                }}
-                                className="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-[10px] rounded-xl shadow-xs transition-all flex items-center gap-1 cursor-pointer active:scale-95"
+                                onClick={() => setSubView('invoice')}
+                                className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold text-[9px] rounded-lg transition-colors cursor-pointer"
                               >
-                                <CreditCard className="w-3.5 h-3.5" />
-                                <span>ชำระเงินตอนนี้</span>
+                                <FileText className="w-3.5 h-3.5 inline mr-1" />
+                                รายละเอียด
                               </button>
-                            ) : b.status === 'paid' ? (
-                              <button
-                                onClick={() => {
-                                  setSelectedHistoryCycle(b.cycleId);
-                                  setSubView('history');
-                                }}
-                                className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold text-[9px] rounded-lg transition-colors"
-                              >
-                                ประวัติจ่าย
-                              </button>
-                            ) : (
-                              <span className="text-[9px] text-slate-400 font-bold">รอตรวจ</span>
-                            )}
                           </div>
                         </div>
                       ))}
@@ -1531,7 +1477,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                               key={b.id} 
                               onClick={() => {
                                 setSelectedHistoryCycle(b.cycleId);
-                                setSubView('history');
+                                setSubView('invoice');
                               }}
                               className="bg-white p-4 border border-slate-100 rounded-2xl flex justify-between items-center cursor-pointer hover:bg-slate-50 transition-colors shadow-2xs"
                             >
@@ -1553,232 +1499,13 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                     {invoiceTab === 'current' && activeUnpaidBill && (
                       <div className="sticky bottom-[56px] p-4 bg-white/95 backdrop-blur-md border-t border-gray-100 mt-auto z-10">
                         <button
-                          onClick={() => setSubView('pay')}
+                          onClick={() => setSubView('invoice')}
                           className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs rounded-xl flex items-center justify-center gap-2 shadow-xs transition-colors"
                         >
                           ชำระเงินตอนนี้
                         </button>
                       </div>
                     )}
-                  </div>
-                )}
-
-                {/* B. SUBVIEW: ชำระค่าเช่า (IMAGE 5 & 6) */}
-                {subView === 'pay' && (
-                  <div className="flex flex-col min-h-full bg-slate-50 pb-20">
-                    {renderSubViewHeader(
-                      'ชำระค่าเช่า', 
-                      <div className="relative">
-                        <Bell className="w-4 h-4 text-slate-400" />
-                        <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-rose-500 rounded-full text-[6px] text-white flex items-center justify-center font-bold">2</span>
-                      </div>
-                    )}
-
-                    <form onSubmit={handleConfirmPayment} className="p-4 space-y-4 pb-16">
-                      
-                      {/* Unpaid Card Section (Top of Image 6) */}
-                      <div className="bg-white p-5 rounded-3xl border border-slate-100 shadow-xs flex justify-between items-center">
-                        <div className="space-y-1">
-                          <span className="text-[10px] text-slate-500 font-bold block">ยอดที่ยังไม่ชำระ</span>
-                          <h2 className="text-xl font-black text-slate-900 tracking-tight leading-none">
-                            ฿ {activeUnpaidAmount.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                          </h2>
-                          <span className="text-[9px] text-slate-400 block mt-2">
-                            {activeUnpaidBill ? `กำหนดชำระ: ${formatToBeDate(activeUnpaidBill.dueDate)}` : 'ไม่มีประวัติค้างชำระ'}
-                          </span>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => setSubView('invoice')}
-                          className="px-3 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 rounded-full font-black text-[9px] transition-all cursor-pointer"
-                        >
-                          รายละเอียด
-                        </button>
-                      </div>
-
-                      {/* Transfer Bank account details (Placed directly below 'ยอดที่ยังไม่ชำระ') */}
-                      <div>
-                        <h4 className="text-[10px] font-black text-slate-900 mb-2 px-1">โอนเงินเข้าบัญชี</h4>
-                        <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-2xs flex justify-between items-center gap-3">
-                          <div className="flex items-center gap-3">
-                            {/* Visual Dynamic Bank Logo Block */}
-                            {(() => {
-                              const bankInfo = getBankBadgeInfo(dormInfo.bankName || 'กสิกรไทย (KBank)');
-                              return (
-                                <>
-                                  <div className={`w-10 h-10 rounded-full ${bankInfo.bg} flex flex-col items-center justify-center font-black text-[8px] leading-tight shrink-0 shadow-xs border`}>
-                                    <span className="scale-90 font-bold uppercase">{bankInfo.label}</span>
-                                  </div>
-                                  <div className="space-y-0.5 leading-normal">
-                                    <h5 className="font-extrabold text-slate-800 text-[11px]">{bankInfo.name}</h5>
-                                    <p className="font-black text-slate-900 text-xs">{dormInfo.bankAccountNumber || '123-4-56789-0'}</p>
-                                    <p className="text-[9px] text-slate-400">{dormInfo.bankAccountName || dormInfo.promptPayName || dormInfo.name}</p>
-                                  </div>
-                                </>
-                              );
-                            })()}
-                          </div>
-                          
-                          <button
-                            type="button"
-                            onClick={handleCopyAccount}
-                            className={`p-2.5 rounded-xl border transition-all cursor-pointer ${
-                              copySuccess 
-                                ? 'bg-emerald-50 border-emerald-200 text-emerald-600' 
-                                : 'bg-slate-50 hover:bg-slate-100 border-slate-100 text-slate-600'
-                            }`}
-                            title="คัดลอกเลขบัญชี"
-                          >
-                            <Copy className="w-4 h-4 stroke-[2]" />
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* Real PromptPay QR Code Box */}
-                      <div className="bg-white p-5 rounded-3xl border border-indigo-100/90 shadow-xs space-y-3.5 animate-in fade-in duration-200">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-2">
-                            <div className="w-7 h-7 rounded-xl bg-indigo-600 text-white flex items-center justify-center font-black text-xs shadow-2xs">
-                              <QrCode className="w-4 h-4" />
-                            </div>
-                            <div>
-                              <h4 className="font-extrabold text-slate-900 text-xs">สแกนชำระด้วย PromptPay</h4>
-                              <p className="text-[9px] text-slate-400 font-medium">สแกนผ่านแอป Mobile Banking ได้ทุกธนาคาร</p>
-                            </div>
-                          </div>
-                          <span className="px-2.5 py-0.5 bg-indigo-50 text-indigo-700 border border-indigo-200/80 font-black text-[9px] rounded-full">
-                            พร้อมเพย์
-                          </span>
-                        </div>
-
-                        {dormInfo.promptPayNumber ? (
-                          <div className="flex flex-col sm:flex-row items-center gap-4 bg-slate-50/90 p-4 rounded-2xl border border-slate-100">
-                            <div className="bg-white p-3 rounded-2xl border border-slate-200/80 shadow-xs shrink-0 flex flex-col items-center">
-                              <img
-                                src={getPromptPayQrUrl(dormInfo.promptPayNumber, activeUnpaidAmount)}
-                                alt={`PromptPay QR Code ${dormInfo.promptPayNumber}`}
-                                className="w-40 h-40 object-contain rounded-lg"
-                                onError={(e) => {
-                                  const clean = (dormInfo.promptPayNumber || '').replace(/[^0-9]/g, '');
-                                  (e.target as HTMLImageElement).src = `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=PROMPTPAY:${clean}`;
-                                }}
-                              />
-                              <span className="text-[9px] font-bold text-slate-400 mt-1.5 tracking-wider uppercase">PromptPay QR</span>
-                            </div>
-
-                            <div className="space-y-2.5 text-center sm:text-left flex-1 min-w-0">
-                              <div>
-                                <span className="text-[9px] text-slate-400 font-bold block">ชื่อบัญชีรับเงิน (เจ้าของหอพัก)</span>
-                                <span className="font-black text-slate-900 text-xs truncate block">
-                                  {dormInfo.promptPayName || dormInfo.name || 'เจ้าของหอพัก'}
-                                </span>
-                              </div>
-
-                              <div>
-                                <span className="text-[9px] text-slate-400 font-bold block">หมายเลขพร้อมเพย์</span>
-                                <span className="font-black text-indigo-600 text-sm tracking-wider block">
-                                  {dormInfo.promptPayNumber}
-                                </span>
-                              </div>
-
-                              <div>
-                                <span className="text-[9px] text-slate-400 font-bold block">ยอดเงินที่ต้องชำระ</span>
-                                <span className="font-black text-emerald-600 text-base block">
-                                  ฿ {activeUnpaidAmount.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                                </span>
-                              </div>
-                            </div>
-                          </div>
-                        ) : (
-                          <div className="p-4 bg-amber-50 border border-amber-200 rounded-2xl text-amber-800 text-xs text-center font-extrabold">
-                            เจ้าของหอพักยังไม่ได้ระบุหมายเลข PromptPay ในระบบ
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Rejection Alert Notice */}
-                      {activeUnpaidBill && activeUnpaidBill.status === 'rejected' && (
-                        <div className="bg-rose-50 border border-rose-200 p-4 rounded-2xl text-rose-800 text-xs space-y-1 animate-in fade-in duration-200">
-                          <p className="font-extrabold flex items-center gap-1 text-rose-800">
-                            <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
-                            หลักฐานชำระเงินรอบล่าสุดถูกปฏิเสธ
-                          </p>
-                          <p className="text-[10px] text-rose-700 font-semibold leading-relaxed pl-5">
-                            เหตุผล: {activeUnpaidBill.rejectReason || 'สลิปไม่ถูกต้อง หรือไม่พบยอดเงินโอน'}
-                          </p>
-                          <p className="text-[9px] text-rose-500 font-medium pl-5">
-                            * กรุณาอัปโหลดรูปภาพสลิปที่ถูกต้องใหม่อีกครั้งด้านล่าง
-                          </p>
-                        </div>
-                      )}
-
-                      {/* Slip upload drag & drop zone */}
-                      <div>
-                        <h4 className="text-[10px] font-black text-slate-900 mb-2 px-1">แนบสลิปการโอนเงิน</h4>
-                        
-                        <input
-                          type="file"
-                          ref={fileInputRef}
-                          onChange={handleFileChange}
-                          accept="image/*"
-                          className="hidden"
-                        />
-
-                        {uploadedFile === null ? (
-                          <div 
-                            onDragOver={handleDragOver}
-                            onDrop={handleDrop}
-                            onClick={triggerFileSelect}
-                            className="bg-slate-50 border-2 border-dashed border-slate-200 hover:border-indigo-400 hover:bg-slate-100/30 transition-all rounded-3xl p-6 text-center flex flex-col items-center justify-center cursor-pointer gap-2"
-                          >
-                            <div className="p-3 bg-indigo-50 text-indigo-600 rounded-full mb-1">
-                              <Upload className="w-5 h-5 stroke-[2.2]" />
-                            </div>
-                            <span className="text-indigo-600 font-extrabold text-[11px]">อัปโหลดสลิปที่นี่</span>
-                            <span className="text-[8px] text-slate-400">รองรับไฟล์ JPG, PNG ขนาดไม่เกิน 10MB</span>
-                            <button
-                              type="button"
-                              className="mt-2.5 px-4 py-1.5 bg-indigo-600 text-white font-black text-[9px] rounded-xl"
-                            >
-                              เลือกไฟล์จากเครื่อง
-                            </button>
-                          </div>
-                        ) : (
-                          /* Selected file thumbnail */
-                          <div className="bg-white p-3 border border-slate-100 rounded-2xl flex items-center justify-between gap-3 shadow-2xs">
-                            <div className="flex items-center gap-3 min-w-0">
-                              <div className="w-10 h-10 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center font-bold text-xs shrink-0">
-                                IMG
-                              </div>
-                              <div className="min-w-0">
-                                <p className="text-slate-800 font-bold truncate text-[10px]">{uploadedFile.name}</p>
-                                <p className="text-slate-400 text-[8px]">{uploadedFile.size}</p>
-                              </div>
-                            </div>
-                            <button
-                              type="button"
-                              onClick={handleRemoveFile}
-                              className="bg-rose-600 hover:bg-rose-700 text-white px-3 py-1 rounded-full text-xs font-bold transition-all cursor-pointer shadow-md active:scale-95 shrink-0"
-                              aria-label="ล้างรูปภาพ"
-                            >
-                              ล้างรูปภาพ
-                            </button>
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Sticky/bottom submit button */}
-                      <div className="pt-3">
-                        <button
-                          type="submit"
-                          disabled={!slipImageUploaded}
-                          className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs rounded-xl disabled:opacity-40 transition-colors shadow-sm"
-                        >
-                          ส่งหลักฐานการชำระเงิน
-                        </button>
-                      </div>
-
-                    </form>
                   </div>
                 )}
 
@@ -2097,14 +1824,14 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                                   subtitle: 'PDF • สัญญาเช่าฉบับสมบูรณ์.pdf',
                                   category: 'สัญญาเช่า',
                                   fileName: `สัญญาเช่า_${con.contractNumber}.txt`,
-                                  content: `=== เอกสารสัญญาเช่าห้องพัก ===\nเลขที่สัญญา: ${con.contractNumber}\nผู้เช่า: คุณ ${tenant.name}\nห้องพัก: ${tenantRoom?.roomNumber || 'A-101'}\nระยะเวลาสัญญา: ${formatToBeFullDate(con.startDate)} ถึง ${formatToBeFullDate(con.endDate)}\nอัตราค่าเช่า: ${con.monthlyRent.toLocaleString('th-TH')} บาท/เดือน\nเงินประกัน: ${con.depositAmount.toLocaleString('th-TH')} บาท\nลงนามโดย: ${tenant.name} (ผู้เช่า) และ �;ѡ (ผู้ให้เช่า)\nวันที่ออกเอกสาร: ${formatToBeFullDate(con.startDate)}`
+                                  content: `=== เอกสารสัญญาเช่าห้องพัก ===\nเลขที่สัญญา: ${con.contractNumber}\nผู้เช่า: คุณ ${tenant.name}\nห้องพัก: ${tenantRoom?.roomNumber || 'A-101'}\nระยะเวลาสัญญา: ${formatToBeFullDate(con.startDate)} ถึง ${formatToBeFullDate(con.endDate)}\nอัตราค่าเช่า: ${con.monthlyRent.toLocaleString('th-TH')} บาท/เดือน\nเงินประกัน: ${con.depositAmount.toLocaleString('th-TH')} บาท\nลงนามโดย: ${tenant.name} (ผู้เช่า) และ �;ѡ (ผู้ให้เช่า)\nวันที่ออกเอกสาร: ${formatToBeFullDate(con.startDate)}`
                                 },
                                 {
                                   title: 'กฎระเบียบและข้อบังคับอาคารพักอาศัย',
                                   subtitle: 'PDF • ระเบียบการพักอาศัย.pdf',
                                   category: 'ข้อบังคับอาคาร',
                                   fileName: 'กฎระเบียบและข้อบังคับอาคาร.txt',
-                                  content: `=== กฎระเบียบและข้อบังคับการเข้าพักอาศัย ===\nหอพัก: �;ѡ\n1. ห้ามส่งเสียงดังยามวิกาลหลังเวลา 22:00 น.\n2. การรักษาความสะอาดบริเวณทางเดินส่วนกลาง\n3. ห้ามสูบบุหรี่ภายในห้องพักและพื้นที่ส่วนกลาง\n4. การนำสัตว์เลี้ยงเข้าพักต้องได้รับอนุญาตตามเงื่อนไขของหอพักเท่านั้น\n5. ห้ามดัดแปลง ต่อเติม หรือเจาะผนังอาคารโดยไม่ได้รับอนุมัติ`
+                                  content: `=== กฎระเบียบและข้อบังคับการเข้าพักอาศัย ===\nหอพัก: �;ѡ\n1. ห้ามส่งเสียงดังยามวิกาลหลังเวลา 22:00 น.\n2. การรักษาความสะอาดบริเวณทางเดินส่วนกลาง\n3. ห้ามสูบบุหรี่ภายในห้องพักและพื้นที่ส่วนกลาง\n4. การนำสัตว์เลี้ยงเข้าพักต้องได้รับอนุญาตตามเงื่อนไขของหอพักเท่านั้น\n5. ห้ามดัดแปลง ต่อเติม หรือเจาะผนังอาคารโดยไม่ได้รับอนุมัติ`
                                 },
                                 {
                                   title: 'เอกสารสำเนาบัตรประจำตัวประชาชนผู้เช่า',
@@ -2154,92 +1881,6 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                   </div>
                 )}
 
-                {/* F. SUBVIEW: ประวัติการชำระ (IMAGE 3) */}
-                {subView === 'history' && (
-                  <div className="flex flex-col h-full bg-slate-50">
-                    {renderSubViewHeader('ประวัติการชำระ')}
-
-                    <div className="p-4 space-y-4">
-                      {/* Custom dropdown selector card */}
-                      <div className="space-y-1.5 text-left">
-                        <label className="block text-slate-500 font-bold text-[9px] px-1">เลือกเดือนที่ต้องการดู</label>
-                        <div className="relative">
-                          <select
-                            value={selectedHistoryCycle}
-                            onChange={(e) => {
-                              setSelectedHistoryCycle(e.target.value);
-                              setExpandedReceiptId(null);
-                            }}
-                            className="w-full px-4 py-3 bg-white border border-slate-100 rounded-2xl text-slate-800 font-black focus:outline-none focus:border-indigo-500 appearance-none shadow-2xs cursor-pointer"
-                          >
-                            <option value="all">ทั้งหมด (ทุกงวดชำระ)</option>
-                            {uniqueCycles.map((cy) => (
-                              <option key={cy} value={cy}>
-                                {formatThaiCycle(cy)}
-                              </option>
-                            ))}
-                          </select>
-                          <div className="absolute inset-y-0 right-4 flex items-center pointer-events-none text-slate-400">
-                            <ChevronRight className="w-4 h-4 rotate-90" />
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Receipt expansion card */}
-                      <div className="space-y-3">
-                        {tenantBills
-                          .filter(b => b.status === 'paid' && (selectedHistoryCycle === 'all' || b.cycleId === selectedHistoryCycle))
-                          .sort((a, b) => b.cycleId.localeCompare(a.cycleId))
-                          .map((b) => {
-                            const isExpanded = expandedReceiptId === b.id || expandedReceiptId === null;
-                            return (
-                              <div key={b.id} className="bg-white border border-slate-100 rounded-3xl p-4.5 shadow-xs space-y-3.5">
-                                <div 
-                                  onClick={() => setExpandedReceiptId(expandedReceiptId === b.id ? '' : b.id)}
-                                  className="flex justify-between items-center cursor-pointer"
-                                >
-                                  <div className="flex items-center gap-3">
-                                    <div className="w-9 h-9 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center font-bold">
-                                      <Check className="w-4 h-4 stroke-[3]" />
-                                    </div>
-                                    <div className="space-y-1 leading-normal">
-                                      <h5 className="font-extrabold text-slate-900 text-[11px]">ชำระเงินสำเร็จ</h5>
-                                      <p className="text-[8px] text-slate-400">
-                                        {b.paidAt ? formatToBeFullDate(b.paidAt) : formatToBeFullDate(b.updatedAt)} 16:29
-                                      </p>
-                                    </div>
-                                  </div>
-                                  <div className="flex items-center gap-2">
-                                    <span className="font-black text-indigo-600 text-xs">฿ {b.totalAmount.toLocaleString('th-TH')}</span>
-                                    <ChevronRight className={`w-4 h-4 text-slate-400 transition-transform ${isExpanded ? 'rotate-270' : 'rotate-90'}`} />
-                                  </div>
-                                </div>
-
-                                {/* Expanded item list (Image 3) */}
-                                {isExpanded && (
-                                  <div className="border-t border-slate-100 pt-3.5 space-y-2.5 text-[10px] text-slate-600">
-                                    <span className="font-bold text-slate-400 block pb-1 text-[8px] uppercase tracking-wide">รายการในบิล</span>
-                                    
-                                    {b.items.map((item) => (
-                                      <div key={item.id} className="flex justify-between items-center">
-                                        <span>{formatItemDescription(item.description)}</span>
-                                        <span className="font-extrabold text-slate-800">฿ {item.amount.toLocaleString('th-TH')}</span>
-                                      </div>
-                                    ))}
-                                  </div>
-                                )}
-                              </div>
-                            );
-                          })}
-
-                        {tenantBills.filter(b => b.status === 'paid' && (selectedHistoryCycle === 'all' || b.cycleId === selectedHistoryCycle)).length === 0 && (
-                          <p className="text-center py-10 text-slate-400">ไม่พบประวัติการชำระเสร็จสมบูรณ์ในรอบเดือนที่เลือก</p>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                )}
-
                 {/* G. SUBVIEW: ลงทะเบียนผู้เช่า (REGISTER) */}
                 {subView === 'register' && (
                   <TenantRegisterView
@@ -2267,7 +1908,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
             {[
               { id: 'home', label: 'หน้าหลัก', icon: Home },
               { id: 'announcements', label: 'ประกาศ', icon: Bell },
-              { id: 'payments_tab', label: 'การชำระเงิน', icon: FileCheck2 },
+              { id: 'payments_tab', label: 'บิล', icon: FileText },
               { id: 'profile', label: 'โปรไฟล์', icon: User }
             ].map(item => {
               const Icon = item.icon;
@@ -2560,7 +2201,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                 <button
                   onClick={() => {
                     setIsNotificationModalOpen(false);
-                    setSubView('pay');
+                    setSubView('invoice');
                   }}
                   className="px-2.5 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-[9px] font-extrabold transition-all shrink-0 cursor-pointer"
                 >
