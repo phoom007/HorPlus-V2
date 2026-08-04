@@ -3,17 +3,18 @@ import { PrismaClient } from '@prisma/client';
 import { PaymentService } from '../src/services/payment.service.js';
 import { LocalStorageProvider } from '../src/services/local-storage.service.js';
 import { CleanupService } from '../src/services/cleanup.service.js';
+import { IdempotencyService } from '../src/services/idempotency.service.js';
 import crypto from 'crypto';
 import path from 'path';
-import fs from 'fs';
+import { Decimal } from 'decimal.js';
 
 const prisma = new PrismaClient();
 
 describe('Wave 1E - Tenant Payments, Manual Review, Receipts & Evidence Lifecycle', () => {
-  const storageDir = path.join(process.cwd(), 'tmp-test-storage');
-  const storage = new LocalStorageProvider(storageDir);
-  const paymentService = new PaymentService(prisma, storage);
+  const storage = new LocalStorageProvider();
+  const paymentService = new PaymentService(prisma);
   const cleanupService = new CleanupService(prisma, storage);
+  const idempotencyService = new IdempotencyService(prisma);
 
   let dormId: string;
   let ownerUserId: string;
@@ -27,7 +28,8 @@ describe('Wave 1E - Tenant Payments, Manual Review, Receipts & Evidence Lifecycl
     dormId = crypto.randomUUID();
     ownerUserId = crypto.randomUUID();
     tenantUserId = crypto.randomUUID();
-    const timestamp = Date.now() + Math.floor(Math.random() * 10000);
+    const timestamp = Date.now() + Math.floor(Math.random() * 100000);
+
     // 1. Create Dormitory & Users
     await prisma.dormitory.create({
       data: {
@@ -71,8 +73,8 @@ describe('Wave 1E - Tenant Payments, Manual Review, Receipts & Evidence Lifecycl
       data: {
         dormitoryId: dormId,
         buildingId: building.id,
-        roomNumber: '101',
-        normalizedRoomNumber: '101',
+        roomNumber: 'A101',
+        normalizedRoomNumber: 'A101',
         floor: 1,
         monthlyRent: 4500
       }
@@ -128,7 +130,7 @@ describe('Wave 1E - Tenant Payments, Manual Review, Receipts & Evidence Lifecycl
     billId = bill.id;
   });
 
-  async function createTestBill(roomNo: string) {
+  async function createTestBill(roomNo: string, initialStatus: string = 'PENDING') {
     const room = await prisma.room.create({
       data: {
         dormitoryId: dormId,
@@ -148,8 +150,8 @@ describe('Wave 1E - Tenant Payments, Manual Review, Receipts & Evidence Lifecycl
         roomId: room.id,
         billingDate: new Date(),
         dueDate: new Date(Date.now() + 7 * 86400000),
-        billNumber: `BILL-${roomNo}-${Date.now()}`,
-        status: 'PENDING',
+        billNumber: `BILL-${roomNo}-${Date.now()}-${Math.floor(Math.random()*1000)}`,
+        status: initialStatus,
         totalAmount: 5200.00,
         items: {
           create: [
@@ -182,14 +184,13 @@ describe('Wave 1E - Tenant Payments, Manual Review, Receipts & Evidence Lifecycl
     expect(intent.expiresAt.getTime()).toBeGreaterThan(Date.now());
   });
 
-  it('2. Slip Submission: saves file, calculates SHA-256 hash, creates payment in PENDING review', async () => {
+  it('2. Slip Submission: saves file, calculates SHA-256 hash, creates payment in PENDING review and tracks previousStatus', async () => {
     const slipBuffer = crypto.randomBytes(64);
     const slipHash = crypto.createHash('sha256').update(slipBuffer).digest('hex');
-    const storageKey = `slips/${dormId}/${billId}-${Date.now()}.jpg`;
+    const storageKey = `payments/${dormId}/${billId}/${Date.now()}.jpg`;
 
     await storage.saveFile(storageKey, slipBuffer);
 
-    // Create and mark intent UPLOADED
     const intent = await prisma.paymentUploadIntent.create({
       data: {
         authenticatedUserId: tenantUserId,
@@ -224,61 +225,59 @@ describe('Wave 1E - Tenant Payments, Manual Review, Receipts & Evidence Lifecycl
 
     const bill = await prisma.bill.findUnique({ where: { id: billId } });
     expect(bill?.status).toBe('UNDER_REVIEW');
+    expect(bill?.previousStatus).toBe('PENDING');
   });
 
-  it('3. Duplicate Evidence Check: blocks duplicate SHA-256 hash usage globally across bills', async () => {
-    const t3Bill = await createTestBill('T3-Room');
+  it('3. Duplicate Evidence Check: concurrent uploads of identical hash trigger unique constraint conflict', async () => {
+    const t3Bill1 = await createTestBill('T3-1');
+    const t3Bill2 = await createTestBill('T3-2');
     const slipBuffer = crypto.randomBytes(64);
     const slipHash = crypto.createHash('sha256').update(slipBuffer).digest('hex');
-    const storageKey = `slips/${dormId}/dup-test-${Date.now()}.jpg`;
-    await storage.saveFile(storageKey, slipBuffer);
 
     const intent1 = await prisma.paymentUploadIntent.create({
       data: {
         authenticatedUserId: tenantUserId,
         tenantId: tenantId,
         dormitoryId: dormId,
-        billId: t3Bill.id,
+        billId: t3Bill1.id,
         expectedMimeType: 'image/jpeg',
         expectedSize: slipBuffer.length,
         verifiedMimeType: 'image/jpeg',
         verifiedSize: slipBuffer.length,
-        objectKey: storageKey,
+        objectKey: `payments/${dormId}/${t3Bill1.id}/intent1.jpg`,
         sha256: slipHash,
         expiresAt: new Date(Date.now() + 15 * 60 * 1000),
         status: 'UPLOADED'
       }
     });
+    expect(intent1.id).toBeDefined();
 
-    // First submission succeeds
-    await paymentService.submitSlip({
-      dormitoryId: dormId,
-      billId: t3Bill.id,
-      tenantId: tenantId,
-      amount: '5200.00',
-      paymentDate: new Date(),
-      intentId: intent1.id,
-      idempotencyKey: `idemp-dup-1-${Date.now()}`,
-      actorUserId: tenantUserId
-    });
-
-    // Check duplicate detection in database
-    const existing = await prisma.payment.findFirst({
-      where: {
-        fileHash: slipHash,
-        status: { in: ['PENDING', 'UNDER_REVIEW', 'APPROVED'] }
-      }
-    });
-
-    expect(existing).toBeDefined();
-    expect(existing?.fileHash).toBe(slipHash);
+    // Second upload with same sha256 to active intent must fail unique index
+    await expect(
+      prisma.paymentUploadIntent.create({
+        data: {
+          authenticatedUserId: tenantUserId,
+          tenantId: tenantId,
+          dormitoryId: dormId,
+          billId: t3Bill2.id,
+          expectedMimeType: 'image/jpeg',
+          expectedSize: slipBuffer.length,
+          verifiedMimeType: 'image/jpeg',
+          verifiedSize: slipBuffer.length,
+          objectKey: `payments/${dormId}/${t3Bill2.id}/intent2.jpg`,
+          sha256: slipHash,
+          expiresAt: new Date(Date.now() + 15 * 60 * 1000),
+          status: 'UPLOADED'
+        }
+      })
+    ).rejects.toThrow();
   });
 
-  it('4. Owner Manual Approval: transitions payment to APPROVED, generates immutable Receipt with REC-YYYYMM-XXXX sequence', async () => {
-    const t4Bill = await createTestBill('T4-Room');
+  it('4. Owner Manual Approval: marks Bill PAID, sets paidAt/paidAmount, generates locked Receipt RC-{YYYYMM}-{ROOM}-{SEQ}', async () => {
+    const t4Bill = await createTestBill('B202');
     const slipBuffer = crypto.randomBytes(64);
     const slipHash = crypto.createHash('sha256').update(slipBuffer).digest('hex');
-    const storageKey = `slips/${dormId}/approve-test-${Date.now()}.jpg`;
+    const storageKey = `payments/${dormId}/${t4Bill.id}/approve-test-${Date.now()}.jpg`;
     await storage.saveFile(storageKey, slipBuffer);
 
     const intent = await prisma.paymentUploadIntent.create({
@@ -317,30 +316,33 @@ describe('Wave 1E - Tenant Payments, Manual Review, Receipts & Evidence Lifecycl
     expect(approvedPayment.status).toBe('APPROVED');
     expect(approvedPayment.reviewedByUserId).toBe(ownerUserId);
 
-    // Verify Bill is marked PAID
+    // Verify Bill is marked PAID with authoritative paidAt and paidAmount
     const bill = await prisma.bill.findUnique({ where: { id: t4Bill.id } });
     expect(bill?.status).toBe('PAID');
+    expect(bill?.paidAt).toBeDefined();
+    expect(bill?.paidAmount.toString()).toBe('5200');
+    expect(bill?.outstandingAmount.toString()).toBe('0');
 
-    // Verify Receipt was generated
+    // Verify Receipt was generated with locked format RC-YYYYMM-ROOM-SEQ
     const receipt = await prisma.receipt.findUnique({ where: { paymentId: payment.id } });
     expect(receipt).toBeDefined();
-    expect(receipt?.receiptNumber).toMatch(/^REC-\d{6}-\d{4}$/);
+    expect(receipt?.receiptNumber).toMatch(/^RC-\d{6}-B202-\d{4}$/);
     expect(receipt?.isVoided).toBe(false);
 
     // Verify Authoritative Snapshot Data
     const snapshot = receipt?.snapshotData as any;
     expect(snapshot.dormitoryName).toBe('HorPlus Test Living');
     expect(snapshot.tenantName).toBe('Somchai Jaidee');
-    expect(snapshot.roomNumber).toBe('T4-Room');
+    expect(snapshot.roomNumber).toBe('B202');
     expect(snapshot.total).toBe('5200');
     expect(snapshot.items.length).toBe(3);
   });
 
-  it('5. Owner Rejection: requires reason, marks payment REJECTED, and returns bill to PENDING', async () => {
-    const t5Bill = await createTestBill('T5-Room');
+  it('5. Owner Rejection: restores pre-review status (e.g. PENDING), records reason and audit history', async () => {
+    const t5Bill = await createTestBill('102', 'PENDING');
     const slipBuffer = crypto.randomBytes(64);
     const slipHash = crypto.createHash('sha256').update(slipBuffer).digest('hex');
-    const storageKey = `slips/${dormId}/reject-test-${Date.now()}.jpg`;
+    const storageKey = `payments/${dormId}/${t5Bill.id}/reject-test-${Date.now()}.jpg`;
     await storage.saveFile(storageKey, slipBuffer);
 
     const intent = await prisma.paymentUploadIntent.create({
@@ -381,96 +383,56 @@ describe('Wave 1E - Tenant Payments, Manual Review, Receipts & Evidence Lifecycl
     expect(rejectedPayment.rejectedReason).toBe('ยอดเงินในสลิปไม่ตรงกับยอดบิล');
 
     const bill = await prisma.bill.findUnique({ where: { id: t5Bill.id } });
-    expect(bill?.status).toBe('ISSUED');
+    expect(bill?.status).toBe('PENDING'); // Restored pre-review status!
+    expect(bill?.paidAt).toBeNull();
+    expect(bill?.paidAmount.toString()).toBe('0');
   });
 
-  it('6. Cash Payment: records cash payment and issues receipt directly in single transaction', async () => {
-    const cashRoom = await prisma.room.create({
-      data: {
-        dormitoryId: dormId,
-        buildingId: buildingId,
-        roomNumber: '102',
-        normalizedRoomNumber: '102',
-        floor: 1,
-        monthlyRent: 4500
-      }
-    });
+  it('6. Cash Payment & Idempotency: exact-once execution and deterministic replay', async () => {
+    const cashBill = await createTestBill('103');
+    const idempKey = `idemp-cash-key-${Date.now()}`;
 
-    const existingBill = await prisma.bill.findUnique({ where: { id: billId } });
-    const cashBill = await prisma.bill.create({
-      data: {
-        dormitoryId: dormId,
-        billingCycleId: existingBill!.billingCycleId,
-        tenantId: tenantId,
-        roomId: cashRoom.id,
-        billingDate: new Date(),
-        dueDate: new Date(Date.now() + 7 * 86400000),
-        billNumber: `BILL-CASH-${Date.now()}`,
-        status: 'PENDING',
-        totalAmount: 4500.00,
-        items: {
-          create: [
-            { dormitoryId: dormId, type: 'RENT', description: 'Room Rent', amount: 4500.00, quantity: 1 }
-          ]
-        }
-      }
-    });
-
-    const payment = await paymentService.recordCash({
+    // First run: executes mutation
+    const payment1 = await paymentService.recordCash({
       dormitoryId: dormId,
       billId: cashBill.id,
-      amount: '4500.00',
-      idempotencyKey: `idemp-cash-${Date.now()}`,
+      amount: '5200.00',
+      idempotencyKey: idempKey,
       userId: ownerUserId
     });
 
-    expect(payment.status).toBe('APPROVED');
-    expect(payment.method).toBe('CASH');
+    expect(payment1.status).toBe('APPROVED');
+    expect(payment1.method).toBe('CASH');
 
-    const updatedBill = await prisma.bill.findUnique({ where: { id: cashBill.id } });
-    expect(updatedBill?.status).toBe('PAID');
-
-    const receipt = await prisma.receipt.findUnique({ where: { paymentId: payment.id } });
-    expect(receipt).toBeDefined();
-    expect((receipt?.snapshotData as any).paymentMethod).toBe('CASH');
-  });
-
-  it('7. Payment Reversal: voids receipt, records reversalReason, and restores bill to PENDING', async () => {
-    const revRoom = await prisma.room.create({
-      data: {
-        dormitoryId: dormId,
-        buildingId: buildingId,
-        roomNumber: '103',
-        normalizedRoomNumber: '103',
-        floor: 1,
-        monthlyRent: 4500
-      }
-    });
-
-    const existingBill = await prisma.bill.findUnique({ where: { id: billId } });
-    const cashBill = await prisma.bill.create({
-      data: {
-        dormitoryId: dormId,
-        billingCycleId: existingBill!.billingCycleId,
-        tenantId: tenantId,
-        roomId: revRoom.id,
-        billingDate: new Date(),
-        dueDate: new Date(Date.now() + 7 * 86400000),
-        billNumber: `BILL-REV-${Date.now()}`,
-        status: 'PENDING',
-        totalAmount: 4500.00,
-        items: {
-          create: [
-            { dormitoryId: dormId, type: 'RENT', description: 'Room Rent', amount: 4500.00, quantity: 1 }
-          ]
-        }
-      }
-    });
-
-    const payment = await paymentService.recordCash({
+    // Second run with same key & payload: replays cached result without re-executing
+    const payment2 = await paymentService.recordCash({
       dormitoryId: dormId,
       billId: cashBill.id,
-      amount: '4500.00',
+      amount: '5200.00',
+      idempotencyKey: idempKey,
+      userId: ownerUserId
+    });
+
+    expect(payment2.id).toBe(payment1.id);
+
+    // Third run with same key & DIFFERENT payload: throws IDEMPOTENCY_MISMATCH
+    await expect(
+      paymentService.recordCash({
+        dormitoryId: dormId,
+        billId: cashBill.id,
+        amount: '9999.00',
+        idempotencyKey: idempKey,
+        userId: ownerUserId
+      })
+    ).rejects.toThrow('IDEMPOTENCY_MISMATCH');
+  });
+
+  it('7. Payment Reversal: voids receipt, clears paidAt, and restores pre-payment status', async () => {
+    const revBill = await createTestBill('104', 'PENDING');
+    const payment = await paymentService.recordCash({
+      dormitoryId: dormId,
+      billId: revBill.id,
+      amount: '5200.00',
       idempotencyKey: `idemp-rev-${Date.now()}`,
       userId: ownerUserId
     });
@@ -488,16 +450,60 @@ describe('Wave 1E - Tenant Payments, Manual Review, Receipts & Evidence Lifecycl
     expect(receipt?.isVoided).toBe(true);
     expect(receipt?.voidReason).toBe('บันทึกยอดเงินสดผิดห้อง');
 
-    const bill = await prisma.bill.findUnique({ where: { id: cashBill.id } });
-    expect(bill?.status).toBe('ISSUED');
+    const bill = await prisma.bill.findUnique({ where: { id: revBill.id } });
+    expect(bill?.status).toBe('PENDING');
+    expect(bill?.paidAt).toBeNull();
+    expect(bill?.paidAmount.toString()).toBe('0');
   });
 
-  it('8. Cleanup Service: safely deletes expired upload intents and physical orphan files', async () => {
-    const orphanKey = `slips/${dormId}/orphan-${Date.now()}.jpg`;
-    await storage.saveFile(orphanKey, Buffer.from('orphan-data'));
-    expect(await storage.fileExists(orphanKey)).toBe(true);
+  it('8. Time-Controlled Cleanup Lifecycle: respects 15m TTL, 24h grace orphan purge, 7d consumed purge', async () => {
+    const now = new Date();
 
-    const expiredIntent = await prisma.paymentUploadIntent.create({
+    // 8a: Active intent (< 15m) -> should NOT be touched
+    const activeIntent = await prisma.paymentUploadIntent.create({
+      data: {
+        authenticatedUserId: tenantUserId,
+        tenantId: tenantId,
+        dormitoryId: dormId,
+        billId: billId,
+        expectedMimeType: 'image/jpeg',
+        expiresAt: new Date(now.getTime() + 10 * 60 * 1000),
+        status: 'CREATED'
+      }
+    });
+
+    // 8b: Expired intent (> 15m, < 24h) -> should be marked EXPIRED, but NOT deleted
+    const expiredRecentIntent = await prisma.paymentUploadIntent.create({
+      data: {
+        authenticatedUserId: tenantUserId,
+        tenantId: tenantId,
+        dormitoryId: dormId,
+        billId: billId,
+        expectedMimeType: 'image/jpeg',
+        expiresAt: new Date(now.getTime() - 20 * 60 * 1000), // expired 20m ago
+        status: 'CREATED'
+      }
+    });
+
+    // 8c: Expired orphan (> 24h) -> should be physically deleted and DB row deleted
+    const orphanKey = `payments/${dormId}/${billId}/orphan-${Date.now()}.jpg`;
+    await storage.saveFile(orphanKey, Buffer.from('orphan-test-data'));
+
+    const oldOrphanIntent = await prisma.paymentUploadIntent.create({
+      data: {
+        authenticatedUserId: tenantUserId,
+        tenantId: tenantId,
+        dormitoryId: dormId,
+        billId: billId,
+        expectedMimeType: 'image/jpeg',
+        expiresAt: new Date(now.getTime() - 25 * 60 * 60 * 1000), // expired 25h ago
+        objectKey: orphanKey,
+        status: 'EXPIRED'
+      }
+    });
+
+    // 8d: Consumed intent (> 7d) -> metadata purged, but payment/file preserved
+    const consumedOldIntent = await prisma.paymentUploadIntent.create({
       data: {
         authenticatedUserId: tenantUserId,
         tenantId: tenantId,
@@ -505,17 +511,38 @@ describe('Wave 1E - Tenant Payments, Manual Review, Receipts & Evidence Lifecycl
         billId: billId,
         expectedMimeType: 'image/jpeg',
         expectedSize: 5000,
-        expiresAt: new Date(Date.now() - 3600 * 1000), // Expired 1 hour ago
-        objectKey: orphanKey,
-        status: 'UPLOADED'
+        verifiedMimeType: 'image/jpeg',
+        verifiedSize: 5000,
+        objectKey: `payments/${dormId}/${billId}/old-consumed.jpg`,
+        sha256: crypto.randomBytes(32).toString('hex'),
+        expiresAt: new Date(now.getTime() - 10 * 24 * 60 * 60 * 1000),
+        consumedAt: new Date(now.getTime() - 8 * 24 * 60 * 60 * 1000),
+        status: 'CONSUMED'
       }
     });
 
-    const cleanedCount = await cleanupService.runCleanup();
-    expect(cleanedCount).toBeGreaterThanOrEqual(1);
+    // Run cleanup
+    const result = await cleanupService.runCleanup(now);
 
-    const intentAfter = await prisma.paymentUploadIntent.findUnique({ where: { id: expiredIntent.id } });
-    expect(intentAfter).toBeNull();
+    expect(result.expiredMarked).toBeGreaterThanOrEqual(1);
+    expect(result.orphansDeleted).toBeGreaterThanOrEqual(1);
+    expect(result.consumedMetadataPurged).toBeGreaterThanOrEqual(1);
+
+    // Active intent is untouched
+    const checkActive = await prisma.paymentUploadIntent.findUnique({ where: { id: activeIntent.id } });
+    expect(checkActive?.status).toBe('CREATED');
+
+    // Recent expired is marked EXPIRED, not deleted
+    const checkRecent = await prisma.paymentUploadIntent.findUnique({ where: { id: expiredRecentIntent.id } });
+    expect(checkRecent?.status).toBe('EXPIRED');
+
+    // Old orphan is deleted from DB and disk
+    const checkOrphan = await prisma.paymentUploadIntent.findUnique({ where: { id: oldOrphanIntent.id } });
+    expect(checkOrphan).toBeNull();
     expect(await storage.fileExists(orphanKey)).toBe(false);
+
+    // Old consumed intent metadata is deleted
+    const checkConsumed = await prisma.paymentUploadIntent.findUnique({ where: { id: consumedOldIntent.id } });
+    expect(checkConsumed).toBeNull();
   });
 });

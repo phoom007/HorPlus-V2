@@ -33,8 +33,9 @@ model User {
   updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
   deletedAt       DateTime? @map("deleted_at") @db.Timestamptz()
 
-  memberships DormitoryMember[]
-  sessions    Session[]
+  memberships          DormitoryMember[]
+  sessions             Session[]
+  paymentUploadIntents PaymentUploadIntent[]
 
   @@map("users")
 }
@@ -87,6 +88,7 @@ model Dormitory {
   Payment                    Payment[]
   Receipt                    Receipt[]
   ReceiptSequence            ReceiptSequence[]
+  paymentUploadIntents       PaymentUploadIntent[]
 
   @@map("dormitories")
 }
@@ -369,15 +371,16 @@ model Tenant {
   updatedAt           DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
   deletedAt           DateTime? @map("deleted_at") @db.Timestamptz()
 
-  dormitory         Dormitory                @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
-  coOccupants       TenantCoOccupant[]
-  emergencyContacts TenantEmergencyContact[]
-  vehicles          TenantVehicle[]
-  contracts         Contract[]
-  bills             Bill[]
-  occupancies       Occupancy[]
-  moveOutRequests   TenantMoveOutRequest[]
-  Payment           Payment[]
+  dormitory            Dormitory              @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
+  coOccupants          TenantCoOccupant[]
+  emergencyContacts    TenantEmergencyContact[]
+  vehicles             TenantVehicle[]
+  contracts            Contract[]
+  bills                Bill[]
+  occupancies          Occupancy[]
+  moveOutRequests      TenantMoveOutRequest[]
+  Payment              Payment[]
+  paymentUploadIntents PaymentUploadIntent[]
 
   @@unique([dormitoryId, tenantNumber], name: "dormitory_tenant_number_unique")
   @@map("tenants")
@@ -640,6 +643,8 @@ model Bill {
   totalAmount        Decimal   @default(0.00) @map("total_amount") @db.Decimal(12, 2)
   paidAmount         Decimal   @default(0.00) @map("paid_amount") @db.Decimal(12, 2)
   outstandingAmount  Decimal   @default(0.00) @map("outstanding_amount") @db.Decimal(12, 2)
+  paidAt             DateTime? @map("paid_at") @db.Timestamptz()
+  previousStatus     String?   @map("previous_status") @db.VarChar(50)
   currency           String    @default("THB") @db.VarChar(10)
   rateSnapshotId     String?   @map("rate_snapshot_id") @db.Uuid
   generatedByUserId  String?   @map("generated_by_user_id") @db.Uuid
@@ -651,16 +656,17 @@ model Bill {
   createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz()
   updatedAt          DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
 
-  dormitory       Dormitory            @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
-  billingCycle    BillingCycle         @relation(fields: [billingCycleId], references: [id], onDelete: Cascade)
-  contract        Contract?            @relation(fields: [contractId], references: [id], onDelete: Restrict)
-  room            Room                 @relation(fields: [roomId], references: [id], onDelete: Restrict)
-  tenant          Tenant?              @relation(fields: [tenantId], references: [id], onDelete: Restrict)
-  rateSnapshot    BillingRateSnapshot? @relation(fields: [rateSnapshotId], references: [id], onDelete: SetNull)
-  items           BillItem[]
-  statusHistories BillStatusHistory[]
-  Payment         Payment[]
-  Receipt         Receipt[]
+  dormitory            Dormitory             @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
+  billingCycle         BillingCycle          @relation(fields: [billingCycleId], references: [id], onDelete: Cascade)
+  contract             Contract?             @relation(fields: [contractId], references: [id], onDelete: Restrict)
+  room                 Room                  @relation(fields: [roomId], references: [id], onDelete: Restrict)
+  tenant               Tenant?               @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  rateSnapshot         BillingRateSnapshot?  @relation(fields: [rateSnapshotId], references: [id], onDelete: SetNull)
+  items                BillItem[]
+  statusHistories      BillStatusHistory[]
+  Payment              Payment[]
+  Receipt              Receipt[]
+  paymentUploadIntents PaymentUploadIntent[]
 
   @@unique([dormitoryId, billNumber], name: "dormitory_bill_number_unique")
   @@map("bills")
@@ -876,24 +882,33 @@ model ReceiptSequence {
 
 
 model PaymentUploadIntent {
-  id                  String   @id @default(uuid()) @db.Uuid
-  authenticatedUserId String   @map("authenticated_user_id") @db.Uuid
-  tenantId            String   @map("tenant_id") @db.Uuid
-  dormitoryId         String   @map("dormitory_id") @db.Uuid
-  billId              String   @map("bill_id") @db.Uuid
-  status              String   @default("CREATED") @db.VarChar(50)
-  expiresAt           DateTime @map("expires_at") @db.Timestamptz()
-  expectedMimeType    String?  @map("expected_mime_type") @db.VarChar(100)
-  expectedSize        Int?     @map("expected_size")
-  verifiedMimeType    String?  @map("verified_mime_type") @db.VarChar(100)
-  verifiedSize        Int?     @map("verified_size")
-  objectKey           String?  @map("object_key") @db.Text
-  sha256              String?  @map("sha256") @db.VarChar(255)
+  id                  String    @id @default(uuid()) @db.Uuid
+  authenticatedUserId String    @map("authenticated_user_id") @db.Uuid
+  tenantId            String    @map("tenant_id") @db.Uuid
+  dormitoryId         String    @map("dormitory_id") @db.Uuid
+  billId              String    @map("bill_id") @db.Uuid
+  status              String    @default("CREATED") @db.VarChar(50)
+  expiresAt           DateTime  @map("expires_at") @db.Timestamptz()
+  expectedMimeType    String?   @map("expected_mime_type") @db.VarChar(100)
+  expectedSize        Int?      @map("expected_size")
+  verifiedMimeType    String?   @map("verified_mime_type") @db.VarChar(100)
+  verifiedSize        Int?      @map("verified_size")
+  objectKey           String?   @map("object_key") @db.Text
+  sha256              String?   @map("sha256") @db.VarChar(255)
   uploadedAt          DateTime? @map("uploaded_at") @db.Timestamptz()
   consumedAt          DateTime? @map("consumed_at") @db.Timestamptz()
-  createdAt           DateTime @default(now()) @map("created_at") @db.Timestamptz()
-  updatedAt           DateTime @updatedAt @map("updated_at") @db.Timestamptz()
+  createdAt           DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt           DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
 
+  authenticatedUser User      @relation(fields: [authenticatedUserId], references: [id], onDelete: Restrict)
+  tenant            Tenant    @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  dormitory         Dormitory @relation(fields: [dormitoryId], references: [id], onDelete: Restrict)
+  bill              Bill      @relation(fields: [billId], references: [id], onDelete: Restrict)
+
+  @@index([authenticatedUserId], name: "idx_intent_actor")
+  @@index([tenantId], name: "idx_intent_tenant")
+  @@index([dormitoryId], name: "idx_intent_dormitory")
+  @@index([billId], name: "idx_intent_bill")
   @@index([status, expiresAt], name: "idx_intent_status_expires")
   @@map("payment_upload_intents")
 }

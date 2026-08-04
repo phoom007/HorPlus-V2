@@ -12,7 +12,9 @@ export function createReceiptRouter(authService: AuthenticationService) {
   // Helper to ensure tenant authorization
   const ensureTenant = async (req: Request, res: Response, dormitoryId: string) => {
     const auth = (req as any).auth;
-    const membership = auth.memberships.find((m: any) => m.dormitoryId === dormitoryId && m.role === 'tenant');
+    const membership = auth.memberships.find((m: any) => 
+      m.dormitoryId === dormitoryId && (m.role === 'tenant' || m.roleCode?.toLowerCase() === 'tenant' || m.roleId === 'role-tenant')
+    );
     if (!membership) return null;
     const tenant = await prisma.tenant.findFirst({ where: { linkedUserId: auth.userId, dormitoryId } });
     return tenant;
@@ -21,7 +23,13 @@ export function createReceiptRouter(authService: AuthenticationService) {
   // Helper to ensure owner/manager authorization
   const ensureOwnerOrManager = (req: Request, res: Response, dormitoryId: string) => {
     const auth = (req as any).auth;
-    return auth.memberships.find((m: any) => m.dormitoryId === dormitoryId && (m.role === 'owner' || m.role === 'manager'));
+    return auth.memberships.find((m: any) => 
+      m.dormitoryId === dormitoryId && (
+        m.role === 'owner' || m.role === 'manager' ||
+        m.roleCode?.toLowerCase() === 'owner' || m.roleCode?.toLowerCase() === 'manager' ||
+        m.roleId === 'role-owner' || m.roleId === 'role-manager'
+      )
+    );
   };
 
   router.get('/:receiptId', requireAuth, async (req, res) => {

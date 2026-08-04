@@ -22,6 +22,7 @@ import { createMaintenanceRouter } from './maintenance.routes.js';
 import { createAnnouncementRouter } from './announcement.routes.js';
 import { createPaymentRouter } from './payment.routes.js';
 import { createReceiptRouter } from './receipt.routes.js';
+import { healthRouter } from './health.routes.js';
 import { createNotificationRouter, createTenantNotificationRouter } from './notification.routes.js';
 import { BuildingService } from '../services/building.service.js';
 import { RoomService } from '../services/room.service.js';
@@ -69,6 +70,8 @@ export function createApiRouter(deps: AppApiDependencies | AuthenticationService
       status: 'foundation',
     });
   });
+
+  router.use('/health', healthRouter);
 
   router.use('/auth', createAuthRouter(authService));
   router.use('/', createUserRouter(authService));

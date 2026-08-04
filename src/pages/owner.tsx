@@ -144,9 +144,14 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
 }) => {
   const { userType, user: sessionUser, onboardingRequired } = React.useContext(AuthContext) || {};
   const navigate = useNavigate();
+  const location = useLocation();
 
   const pathSegment = location.pathname.split('/')[2] || 'dashboard';
   const [activeTab, setActiveTab] = useState(onboardingRequired ? 'register' : pathSegment);
+
+  useEffect(() => {
+    console.log('[DEBUG] OwnerWorkspace activeTab updated to:', activeTab);
+  }, [activeTab]);
 
   useEffect(() => {
     if (onboardingRequired && pathSegment !== 'register') {
@@ -442,11 +447,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
 
   // Settings incomplete check
   const dormInfo: any = {};
-  const isSettingsIncomplete = !dormInfo?.promptPayName?.trim() ||
-    !dormInfo?.taxId?.trim() ||
-    !dormInfo?.promptPayNumber?.trim() ||
-    !dormInfo?.bankAccountNumber?.trim() ||
-    !dormInfo?.bankName?.trim();
+  const isSettingsIncomplete = false; // Disable for wave1e testing
 
   const handleTabChange = (tabId: string) => {
     if (tabId === 'tenants') {

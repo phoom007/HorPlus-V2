@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Bill, Room } from '../../types';
 import { formatBaht } from '../../components/GlobalComponents';
 import { CheckCircle, XCircle, FileText, Image as ImageIcon, RotateCcw, AlertCircle, Loader2 } from 'lucide-react';
@@ -7,7 +7,7 @@ interface PaymentRecord {
   id: string;
   dormitoryId: string;
   billId: string;
-  tenantId: string;
+  tenantId?: string;
   method: 'BANK_TRANSFER' | 'CASH' | 'PROMPTPAY';
   amount: number | string;
   status: 'PENDING' | 'UNDER_REVIEW' | 'APPROVED' | 'REJECTED' | 'REVERSED';
@@ -22,6 +22,7 @@ interface PaymentRecord {
     id: string;
     billNumber: string;
     totalAmount: number | string;
+    status: string;
     room?: { roomNumber: string };
     tenant?: { name: string; displayName?: string };
   };
@@ -50,7 +51,7 @@ export function PaymentsOwnerView({
   const [payments, setPayments] = useState<PaymentRecord[]>([]);
   const [bills, setBills] = useState<Bill[]>(initialBills);
   const [loading, setLoading] = useState(false);
-  const [actionLoading, setActionLoading] = useState(false);
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
@@ -63,20 +64,40 @@ export function PaymentsOwnerView({
   const [reverseReason, setReverseReason] = useState('');
   const [evidenceBlobUrl, setEvidenceBlobUrl] = useState<string | null>(null);
 
+  // Stable Idempotency Keys map (operationId -> idempotencyKey)
+  const idempotencyKeysRef = useRef<Record<string, string>>({});
+
+  const getIdempotencyKey = (opId: string): string => {
+    if (!idempotencyKeysRef.current[opId]) {
+      idempotencyKeysRef.current[opId] = crypto.randomUUID();
+    }
+    return idempotencyKeysRef.current[opId];
+  };
+
+  const clearIdempotencyKey = (opId: string) => {
+    delete idempotencyKeysRef.current[opId];
+  };
+
   const fetchPaymentsAndBills = useCallback(async () => {
+    console.log('[DEBUG] fetchPaymentsAndBills called with dormitoryId:', dormitoryId);
+    if (!dormitoryId) return;
+    
     setLoading(true);
     setError(null);
     try {
-      // 1. Fetch Payments from API
+      // 1. Fetch authoritative payments from API
       const pRes = await fetch(`/api/v1/payments?dormitoryId=${dormitoryId}`, {
         headers: { 'Accept': 'application/json' }
       });
       if (pRes.ok) {
         const pData = await pRes.json();
         setPayments(Array.isArray(pData) ? pData : (pData.data || []));
+      } else {
+        const errData = await pRes.json().catch(() => ({}));
+        setError(errData.error || 'ไม่สามารถโหลดข้อมูลการชำระเงินได้');
       }
 
-      // 2. Fetch Bills from API
+      // 2. Fetch authoritative bills from API
       const bRes = await fetch(`/api/v1/bills?dormitoryId=${dormitoryId}`, {
         headers: { 'Accept': 'application/json' }
       });
@@ -86,12 +107,14 @@ export function PaymentsOwnerView({
       }
     } catch (err: any) {
       console.error('Failed to load payments data:', err);
+      setError('เกิดข้อผิดพลาดในการเชื่อมต่อเซิร์ฟเวอร์');
     } finally {
       setLoading(false);
     }
   }, [dormitoryId, initialBills]);
 
   useEffect(() => {
+    console.log('[DEBUG] PaymentsOwnerView useEffect mounting');
     fetchPaymentsAndBills();
   }, [fetchPaymentsAndBills]);
 
@@ -101,60 +124,70 @@ export function PaymentsOwnerView({
   };
 
   const getCsrfToken = () => {
-    const match = document.cookie.match(/csrf-token=([^;]+)/);
+    const match = document.cookie.match(/(?:csrf-token|horplus_csrf)=([^;]+)/);
     return match ? decodeURIComponent(match[1]) : '';
   };
 
-  // 1. Approve Payment
+  // 1. Approve Payment (Server-confirmed only, stable idempotency key)
   const handleApprove = async (paymentId: string) => {
-    setActionLoading(true);
+    const opKey = `approve-${paymentId}`;
+    const idempKey = getIdempotencyKey(opKey);
+    setActionLoading(paymentId);
     setError(null);
+
     try {
       const res = await fetch(`/api/v1/payments/${paymentId}/approve`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-csrf-token': getCsrfToken()
+          'x-csrf-token': getCsrfToken(),
+          'x-idempotency-key': idempKey
         }
       });
+
       if (!res.ok) {
-        const billId = paymentId.startsWith('mock-pay-') ? paymentId.replace('mock-pay-', '') : paymentId;
-        setBills(prev => prev.map(b => b.id === billId ? { ...b, status: 'paid' as any } : b));
-      } else {
-        showToast('อนุมัติการชำระเงินและออกใบเสร็จรับเงินเรียบร้อยแล้ว');
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || `การอนุมัติล้มเหลว (HTTP ${res.status})`);
       }
+
+      clearIdempotencyKey(opKey);
+      showToast('อนุมัติการชำระเงินและออกใบเสร็จรับเงินเรียบร้อยแล้ว');
       await fetchPaymentsAndBills();
       if (onUpdateBills) onUpdateBills();
     } catch (err: any) {
-      const billId = paymentId.startsWith('mock-pay-') ? paymentId.replace('mock-pay-', '') : paymentId;
-      setBills(prev => prev.map(b => b.id === billId ? { ...b, status: 'paid' as any } : b));
-      await fetchPaymentsAndBills();
-      if (onUpdateBills) onUpdateBills();
+      setError(err.message || 'เกิดข้อผิดพลาดในการอนุมัติ');
     } finally {
-      setActionLoading(false);
+      setActionLoading(null);
     }
   };
 
-  // 2. Reject Payment
+  // 2. Reject Payment (Server-confirmed only, stable idempotency key)
   const handleReject = async () => {
     if (!selectedPayment || !rejectReason.trim()) return;
-    setActionLoading(true);
+    const paymentId = selectedPayment.id;
+    const opKey = `reject-${paymentId}`;
+    const idempKey = getIdempotencyKey(opKey);
+    setActionLoading(paymentId);
     setError(null);
+
     try {
-      const res = await fetch(`/api/v1/payments/${selectedPayment.id}/reject`, {
+      const res = await fetch(`/api/v1/payments/${paymentId}/reject`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-csrf-token': getCsrfToken()
+          'x-csrf-token': getCsrfToken(),
+          'x-idempotency-key': idempKey
         },
         body: JSON.stringify({ reason: rejectReason.trim() })
       });
+
       if (!res.ok) {
-        const billId = selectedPayment.id.startsWith('mock-pay-') ? selectedPayment.id.replace('mock-pay-', '') : selectedPayment.billId;
-        setBills(prev => prev.map(b => b.id === billId ? { ...b, status: 'pending' as any } : b));
-      } else {
-        showToast('ปฏิเสธการชำระเงินเรียบร้อยแล้ว');
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || `การปฏิเสธล้มเหลว (HTTP ${res.status})`);
       }
+
+      clearIdempotencyKey(opKey);
+      showToast('ปฏิเสธการชำระเงินเรียบร้อยแล้ว');
       setRejectModalOpen(false);
       setSelectedPayment(null);
       setRejectReason('');
@@ -163,20 +196,24 @@ export function PaymentsOwnerView({
     } catch (err: any) {
       setError(err.message || 'เกิดข้อผิดพลาดในการปฏิเสธ');
     } finally {
-      setActionLoading(false);
+      setActionLoading(null);
     }
   };
 
-  // 3. Record Cash
+  // 3. Record Cash (Server-confirmed only, stable idempotency key)
   const handleRecordCash = async (bill: Bill) => {
-    setActionLoading(true);
+    const opKey = `cash-${bill.id}`;
+    const idempKey = getIdempotencyKey(opKey);
+    setActionLoading(bill.id);
     setError(null);
+
     try {
       const res = await fetch('/api/v1/payments/cash', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-csrf-token': getCsrfToken()
+          'x-csrf-token': getCsrfToken(),
+          'x-idempotency-key': idempKey
         },
         body: JSON.stringify({
           dormitoryId,
@@ -184,38 +221,49 @@ export function PaymentsOwnerView({
           amount: String(bill.totalAmount)
         })
       });
+
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.error || 'Failed to record cash');
+        throw new Error(errData.error || `บันทึกรับเงินสดล้มเหลว (HTTP ${res.status})`);
       }
+
+      clearIdempotencyKey(opKey);
       showToast('บันทึกรับเงินสดและออกใบเสร็จรับเงินสำเร็จ');
       await fetchPaymentsAndBills();
       if (onUpdateBills) onUpdateBills();
     } catch (err: any) {
       setError(err.message || 'เกิดข้อผิดพลาดในการบันทึกเงินสด');
     } finally {
-      setActionLoading(false);
+      setActionLoading(null);
     }
   };
 
-  // 4. Reverse Payment
+  // 4. Reverse Payment (Server-confirmed only, stable idempotency key)
   const handleReverse = async () => {
     if (!selectedPayment || !reverseReason.trim()) return;
-    setActionLoading(true);
+    const paymentId = selectedPayment.id;
+    const opKey = `reverse-${paymentId}`;
+    const idempKey = getIdempotencyKey(opKey);
+    setActionLoading(paymentId);
     setError(null);
+
     try {
-      const res = await fetch(`/api/v1/payments/${selectedPayment.id}/reverse`, {
+      const res = await fetch(`/api/v1/payments/${paymentId}/reverse`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-csrf-token': getCsrfToken()
+          'x-csrf-token': getCsrfToken(),
+          'x-idempotency-key': idempKey
         },
         body: JSON.stringify({ reason: reverseReason.trim() })
       });
+
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.error || 'Failed to reverse payment');
+        throw new Error(errData.error || `การย้อนกลับรายการล้มเหลว (HTTP ${res.status})`);
       }
+
+      clearIdempotencyKey(opKey);
       showToast('ย้อนกลับรายการชำระเงินและยกเลิกใบเสร็จเรียบร้อยแล้ว');
       setReverseModalOpen(false);
       setSelectedPayment(null);
@@ -225,7 +273,7 @@ export function PaymentsOwnerView({
     } catch (err: any) {
       setError(err.message || 'เกิดข้อผิดพลาดในการย้อนกลับรายการ');
     } finally {
-      setActionLoading(false);
+      setActionLoading(null);
     }
   };
 
@@ -245,29 +293,13 @@ export function PaymentsOwnerView({
     }
   };
 
-  // Computed data
-  const checkingPayments = [
-    ...payments.filter(p => p.status === 'PENDING' || p.status === 'UNDER_REVIEW' || (p.status as any) === 'checking'),
-    ...bills
-      .filter(b => (b.status === 'checking' || b.status === 'under_review' || (b.status as any) === 'UNDER_REVIEW') && !payments.some(p => p.billId === b.id))
-      .map(b => ({
-        id: `mock-pay-${b.id}`,
-        billId: b.id,
-        dormitoryId: b.dormitoryId || dormitoryId,
-        amount: b.totalAmount,
-        status: 'PENDING',
-        paymentDate: b.createdAt || new Date().toISOString(),
-        method: 'PROMPTPAY',
-        evidenceUrl: (b as any).evidenceUrl || '/mock-slip.jpg',
-        bill: {
-          id: b.id,
-          billNumber: b.billNumber,
-          room: { roomNumber: '101' },
-          tenant: { name: 'สมชาย รักดี' }
-        }
-      }))
-  ];
-  const unpaidBills = bills.filter(b => b.status === 'pending' || b.status === 'overdue' || b.status === 'draft' || b.status === 'issued');
+  // Only render authoritative records from backend
+  const checkingPayments = payments.filter(p => p.status === 'PENDING' || p.status === 'UNDER_REVIEW');
+  const unpaidBills = bills.filter(b => {
+    const s = (b.status || '').toLowerCase();
+    const hasActivePayment = payments.some(p => p.billId === b.id && ['PENDING', 'UNDER_REVIEW', 'APPROVED'].includes(p.status));
+    return (s === 'pending' || s === 'overdue' || s === 'issued' || s === 'published') && !hasActivePayment;
+  });
   const paidPayments = payments.filter(p => p.status === 'APPROVED');
 
   return (
@@ -366,14 +398,14 @@ export function PaymentsOwnerView({
                             </button>
                           )}
                           <button
-                            disabled={actionLoading}
+                            disabled={actionLoading !== null}
                             onClick={() => handleApprove(p.id)}
                             className="flex-1 md:flex-none bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2.5 rounded-xl text-xs font-black shadow-xs transition-all active:scale-95 disabled:opacity-50"
                           >
-                            อนุมัติ
+                            {actionLoading === p.id ? 'กำลังอนุมัติ...' : 'อนุมัติ'}
                           </button>
                           <button
-                            disabled={actionLoading}
+                            disabled={actionLoading !== null}
                             onClick={() => { setSelectedPayment(p); setRejectModalOpen(true); }}
                             className="flex-1 md:flex-none bg-rose-100 hover:bg-rose-200 text-rose-700 px-4 py-2.5 rounded-xl text-xs font-bold transition-all active:scale-95 disabled:opacity-50"
                           >
@@ -406,11 +438,11 @@ export function PaymentsOwnerView({
                           </p>
                         </div>
                         <button
-                          disabled={actionLoading}
+                          disabled={actionLoading !== null}
                           onClick={() => handleRecordCash(bill)}
                           className="bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2.5 rounded-xl text-xs font-black shadow-xs transition-all active:scale-95 disabled:opacity-50"
                         >
-                          รับเงินสด
+                          {actionLoading === bill.id ? 'กำลังบันทึก...' : 'รับเงินสด'}
                         </button>
                       </div>
                     ))}
@@ -461,7 +493,7 @@ export function PaymentsOwnerView({
                             </a>
                           )}
                           <button
-                            disabled={actionLoading}
+                            disabled={actionLoading !== null}
                             onClick={() => { setSelectedPayment(p); setReverseModalOpen(true); }}
                             className="flex items-center gap-1 bg-slate-100 hover:bg-rose-50 hover:text-rose-700 text-slate-600 px-3.5 py-2 rounded-xl text-xs font-bold transition-all disabled:opacity-50"
                           >
@@ -506,7 +538,7 @@ export function PaymentsOwnerView({
               </button>
               <button
                 type="button"
-                disabled={!rejectReason.trim() || actionLoading}
+                disabled={!rejectReason.trim() || actionLoading !== null}
                 onClick={handleReject}
                 className="px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white text-xs font-black rounded-xl transition-all disabled:opacity-50 shadow-xs"
               >
@@ -545,7 +577,7 @@ export function PaymentsOwnerView({
               </button>
               <button
                 type="button"
-                disabled={!reverseReason.trim() || actionLoading}
+                disabled={!reverseReason.trim() || actionLoading !== null}
                 onClick={handleReverse}
                 className="px-5 py-2 bg-amber-600 hover:bg-amber-700 text-white text-xs font-black rounded-xl transition-all disabled:opacity-50 shadow-xs"
               >

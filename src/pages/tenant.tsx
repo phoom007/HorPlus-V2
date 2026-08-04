@@ -555,7 +555,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
         return;
       }
       if (docType === 'receipt' && docId) {
-        window.open(`/api/v1/tenant-portal/receipts/${docId}/pdf`, '_blank');
+        window.open(`/api/v1/receipts/${docId}/html`, '_blank');
         showToast('success', 'ดาวน์โหลดสำเร็จ', `กำลังดาวน์โหลดเอกสาร ${title} (PDF)...`);
         return;
       }
@@ -659,72 +659,6 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
     navigator.clipboard.writeText(rawNumber);
   };
 
-  // Simulated uploader event handlers (Supports Click + Drag & Drop)
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      const file = e.target.files[0];
-      const sizeMB = (file.size / (1024 * 1024)).toFixed(2);
-      console.log({
-        name: file.name,
-        size: `${sizeMB} MB`
-      });
-      
-
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        const rawUrl = reader.result as string;
-        compressImage(rawUrl).then(compressedUrl => {
-          
-        }).catch(() => {
-          
-        });
-      };
-      reader.readAsDataURL(file);
-    }
-  };
-
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-  };
-
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      const file = e.dataTransfer.files[0];
-      const sizeMB = (file.size / (1024 * 1024)).toFixed(2);
-      console.log({
-        name: file.name,
-        size: `${sizeMB} MB`
-      });
-      
-
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        const rawUrl = reader.result as string;
-        compressImage(rawUrl).then(compressedUrl => {
-          
-        }).catch(() => {
-          
-        });
-      };
-      reader.readAsDataURL(file);
-    }
-  };
-
-  const triggerFileSelect = () => {
-    if (false) {
-      console.log();
-    }
-  };
-
-  const handleRemoveFile = () => {
-    
-    
-    if (false) {
-      // noop
-    }
-  };
-
   const handleRepairFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
@@ -815,15 +749,20 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
   );
 
   const getCsrfToken = () => {
-    const match = document.cookie.match(/csrf-token=([^;]+)/);
+    const match = document.cookie.match(/(?:csrf-token|horplus_csrf)=([^;]+)/);
     return match ? decodeURIComponent(match[1]) : (window as any).__CSRF_TOKEN || '';
   };
 
   const handleSubmitPaymentSlip = async () => {
-    if (!slipFile || !activeUnpaidBill) return;
+    console.log('handleSubmitPaymentSlip ENTRY:', { hasSlipFile: !!slipFile, slipFileName: slipFile?.name, hasActiveUnpaidBill: !!activeUnpaidBill, activeUnpaidBillId: activeUnpaidBill?.id });
+    if (!slipFile || !activeUnpaidBill) {
+      console.warn('Early return from handleSubmitPaymentSlip because:', { slipFile: !!slipFile, activeUnpaidBill: !!activeUnpaidBill });
+      return;
+    }
     setIsSubmittingSlip(true);
     try {
       const csrf = getCsrfToken();
+      console.log('handleSubmitPaymentSlip: localTenant.dormitoryId:', localTenant.dormitoryId, 'billId:', activeUnpaidBill.id, 'file:', slipFile.name, slipFile.type, slipFile.size, 'csrf:', csrf);
       const intentRes = await fetch('/api/v1/payments/slip/intent', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-csrf-token': csrf },
@@ -837,9 +776,11 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
       });
       if (!intentRes.ok) {
         const errText = await intentRes.text();
+        console.error('Intent request failed:', intentRes.status, errText);
         throw new Error(errText);
       }
       const intent = await intentRes.json();
+      console.log('Intent created successfully:', intent);
 
       const formData = new FormData();
       formData.append('file', slipFile);
@@ -850,8 +791,10 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
       });
       if (!uploadRes.ok) {
         const errText = await uploadRes.text();
+        console.error('Upload request failed:', uploadRes.status, errText);
         throw new Error(errText);
       }
+      console.log('File uploaded successfully');
 
       const submitRes = await fetch('/api/v1/payments/slip/submit', {
         method: 'POST',
@@ -870,8 +813,10 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
       });
       if (!submitRes.ok) {
         const errText = await submitRes.text();
+        console.error('Submit request failed:', submitRes.status, errText);
         throw new Error(errText);
       }
+      console.log('Payment submitted successfully');
 
       setSubView(null);
       setSlipFile(null);
@@ -879,6 +824,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
       setTimeout(() => setToast(null), 4000);
       refreshData();
     } catch(err: any) {
+      console.error('Catch error in handleSubmitPaymentSlip:', err);
       let msg = err.message || '';
       if (msg.includes('DUPLICATE_PAYMENT_EVIDENCE')) {
         msg = 'รูปสลิปนี้เคยถูกส่งเข้าระบบแล้ว (ห้ามใช้สลิปซ้ำ)';
