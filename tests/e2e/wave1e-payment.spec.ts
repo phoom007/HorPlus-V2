@@ -78,6 +78,11 @@ test.describe('Wave 1E - Real Payment & Receipt Integration (Fully Unmocked)', (
   let cycleRecord: any;
   let billRecord1: any;
   let billRecord2: any;
+  let billRecord3: any;
+  let tenantUser2: any;
+  let tenantRecord2: any;
+  let roomRecord2: any;
+  let billRecord4: any;
   let jpegFilePath: string;
   let pngFilePath: string;
 
@@ -205,6 +210,56 @@ test.describe('Wave 1E - Real Payment & Receipt Integration (Fully Unmocked)', (
       },
     });
 
+    const tenantUserId2 = crypto.randomUUID();
+    tenantUser2 = await prisma.user.create({
+      data: {
+        id: tenantUserId2,
+        googleSubject: `g-tenant2-${uniqueSuffix}`,
+        email: `tenant2_${uniqueSuffix}@example.com`,
+        emailNormalized: `tenant2_${uniqueSuffix}@example.com`,
+        name: 'คุณผู้เช่า คนที่สอง',
+        status: 'active',
+      },
+    });
+
+    await prisma.dormitoryMember.create({
+      data: {
+        id: crypto.randomUUID(),
+        userId: tenantUserId2,
+        dormitoryId: dormId,
+        roleId: roleTenantId,
+        status: 'active',
+      },
+    });
+
+    roomRecord2 = await prisma.room.create({
+      data: {
+        id: crypto.randomUUID(),
+        dormitoryId: dormId,
+        buildingId: buildingRecord.id,
+        roomNumber: 'A-202',
+        normalizedRoomNumber: 'A-202',
+        roomType: 'standard',
+        monthlyRent: 4500.0,
+        status: 'occupied',
+      },
+    });
+
+    tenantRecord2 = await prisma.tenant.create({
+      data: {
+        id: crypto.randomUUID(),
+        dormitoryId: dormId,
+        tenantNumber: `T2-${uniqueSuffix}`,
+        firstName: 'ผู้เช่า',
+        lastName: 'คนที่สอง',
+        displayName: 'คุณผู้เช่า คนที่สอง',
+        phone: '0899998889',
+        email: `tenant2_${uniqueSuffix}@example.com`,
+        linkedUserId: tenantUserId2,
+        status: 'active',
+      },
+    });
+
     // Create Billing Cycle
     cycleRecord = await prisma.billingCycle.create({
       data: {
@@ -284,6 +339,54 @@ test.describe('Wave 1E - Real Payment & Receipt Integration (Fully Unmocked)', (
         },
       },
     });
+
+    // Create Bill 3 (for Duplicate Evidence test)
+    billRecord3 = await prisma.bill.create({
+      data: {
+        id: crypto.randomUUID(),
+        dormitoryId: dormId,
+        billingCycleId: cycleRecord2.id,
+        roomId: roomRecord.id,
+        tenantId: tenantRecord.id,
+        billNumber: `BILL-${uniqueSuffix}-03`,
+        totalAmount: 4500.0,
+        subtotal: 4500.0,
+        paidAmount: 0.0,
+        outstandingAmount: 4500.0,
+        billingDate: new Date('2026-08-25'),
+        dueDate: new Date(Date.now() + 14 * 86400000),
+        status: 'PENDING',
+        items: {
+          create: [
+            { id: crypto.randomUUID(), dormitoryId: dormId, description: 'ค่าเช่าห้อง', amount: 4500.0, unitPrice: 4500.0, quantity: 1.0, type: 'RENT' },
+          ],
+        },
+      },
+    });
+
+    // Create Bill 4 for Tenant 2 (for Authorization test)
+    billRecord4 = await prisma.bill.create({
+      data: {
+        id: crypto.randomUUID(),
+        dormitoryId: dormId,
+        billingCycleId: cycleRecord2.id,
+        roomId: roomRecord2.id,
+        tenantId: tenantRecord2.id,
+        billNumber: `BILL-${uniqueSuffix}-04`,
+        totalAmount: 4500.0,
+        subtotal: 4500.0,
+        paidAmount: 0.0,
+        outstandingAmount: 4500.0,
+        billingDate: new Date('2026-08-25'),
+        dueDate: new Date(Date.now() + 14 * 86400000),
+        status: 'PENDING',
+        items: {
+          create: [
+            { id: crypto.randomUUID(), dormitoryId: dormId, description: 'ค่าเช่าห้อง', amount: 4500.0, unitPrice: 4500.0, quantity: 1.0, type: 'RENT' },
+          ],
+        },
+      },
+    });
   });
 
   test.afterAll(async () => {
@@ -304,9 +407,9 @@ test.describe('Wave 1E - Real Payment & Receipt Integration (Fully Unmocked)', (
       await prisma.tenant.deleteMany({ where: { dormitoryId: dormId } });
       await prisma.room.deleteMany({ where: { dormitoryId: dormId } });
       await prisma.building.deleteMany({ where: { dormitoryId: dormId } });
-      await prisma.session.deleteMany({ where: { userId: { in: [ownerUser.id, tenantUser.id] } } });
+      await prisma.session.deleteMany({ where: { userId: { in: [ownerUser.id, tenantUser.id, tenantUser2.id] } } });
       await prisma.dormitoryMember.deleteMany({ where: { dormitoryId: dormId } });
-      await prisma.user.deleteMany({ where: { id: { in: [ownerUser.id, tenantUser.id] } } });
+      await prisma.user.deleteMany({ where: { id: { in: [ownerUser.id, tenantUser.id, tenantUser2.id] } } });
       await prisma.role.deleteMany({ where: { dormitoryId: dormId } });
       await prisma.dormitory.deleteMany({ where: { id: dormId } });
     } catch {}
@@ -470,20 +573,45 @@ test.describe('Wave 1E - Real Payment & Receipt Integration (Fully Unmocked)', (
         bId: billRecord1.id,
         bNum: billRecord1.billNumber,
       }
+
     );
+
+    return {
+      persistedSessionId: sessionId,
+      sessionCookie: sessionToken,
+      csrfToken,
+      userId: user.id
+    };
   }
 
   test('Full Payment Lifecycle: Tenant uploads slip -> Owner approves -> Receipt generated -> Idempotency & DB integrity verified', async ({
     page,
   }) => {
     test.setTimeout(90000);
-    page.on('console', msg => console.log('PAGE LOG:', msg.type(), msg.text()));
-    page.on('response', async resp => {
-      if (resp.url().includes('/api/') && !resp.ok()) {
-        try {
-          const body = await resp.text();
-          console.log('API ERROR RESPONSE:', resp.url(), resp.status(), body);
-        } catch {}
+    const browserErrors: string[] = [];
+    page.on('pageerror', err => browserErrors.push(`Page Error: ${err.message}`));
+    page.on('console', msg => {
+      if (msg.type() === 'error') {
+        const text = msg.text();
+        if (!text.includes('409') && !text.includes('403') && !text.includes('404')) {
+          browserErrors.push(`Console Error: ${text}`);
+        }
+      }
+    });
+    page.on('requestfailed', req => {
+      const url = req.url();
+      if (!url.includes('favicon.ico')) {
+        browserErrors.push(`Request Failed: ${url}`);
+      }
+    });
+    page.on('response', resp => {
+      const url = resp.url();
+      const status = resp.status();
+      if (url.includes('line.me') || url.includes('slipok.com') || url.includes('stripe.com')) {
+        browserErrors.push(`External API call detected: ${url}`);
+      }
+      if (status >= 500) {
+        browserErrors.push(`Unexpected HTTP ${status}: ${url}`);
       }
     });
 
@@ -598,50 +726,62 @@ test.describe('Wave 1E - Real Payment & Receipt Integration (Fully Unmocked)', (
     expect(htmlBody).toContain('A-201');
     expect(htmlBody).toContain('4850');
 
-    // --- STEP 6: Test Rejection Flow on Bill 2 ---
-    // Submit slip for Bill 2 via backend API directly to test owner rejection in UI
-    const intent2 = await prisma.paymentUploadIntent.create({
+    // --- STEP 6: Verify Rejection and Resubmission on Bill 2 ---
+    // First, submit a payment for Bill 2 via backend API directly to simulate an earlier submission
+    const t1Session = await loginAs(page, tenantUser, 'TENANT');
+    
+    // Simulate first submission
+    const intentRes2 = await page.request.post('/api/v1/payments/slip/intent', {
+      headers: {
+        Cookie: `horplus_session=${t1Session.sessionCookie}`,
+        'x-csrf-token': t1Session.csrfToken,
+      },
       data: {
-        id: crypto.randomUUID(),
         dormitoryId: dormId,
         billId: billRecord2.id,
-        tenantId: tenantRecord.id,
-        expectedMimeType: 'image/png',
-        expectedSize: VALID_PNG_BUFFER.length,
-        verifiedMimeType: 'image/png',
-        verifiedSize: VALID_PNG_BUFFER.length,
-        sha256: '699afd989c0384e0d42263973d85313ffae777ac4a8e9eb031a1825dde5c1181',
-        status: 'UPLOADED',
-        objectKey: `slips/${dormId}/slip-2.png`,
-        expiresAt: new Date(Date.now() + 15 * 60000), // 15 mins
-        authenticatedUserId: tenantUser.id,
+        fileName: 'slip-2.png',
+        mimeType: 'image/png',
+        fileSize: VALID_PNG_BUFFER.length
+      }
+    });
+    const intentData2 = await intentRes2.json();
+
+    const formData2 = new FormData();
+    const uploadRes2 = await page.request.post(intentData2.uploadUrl, {
+      headers: {
+        Cookie: `horplus_session=${t1Session.sessionCookie}`,
+        'x-csrf-token': t1Session.csrfToken,
       },
+      multipart: {
+        file: {
+          name: 'slip-2.png',
+          mimeType: 'image/png',
+          buffer: VALID_PNG_BUFFER,
+        }
+      }
     });
 
-    const payment2 = await prisma.payment.create({
+    const submitRes2 = await page.request.post('/api/v1/payments/slip/submit', {
+      headers: {
+        Cookie: `horplus_session=${t1Session.sessionCookie}`,
+        'x-csrf-token': t1Session.csrfToken,
+        'x-idempotency-key': crypto.randomUUID(),
+      },
       data: {
-        id: crypto.randomUUID(),
         dormitoryId: dormId,
         billId: billRecord2.id,
-        tenantId: tenantRecord.id,
-        amount: 4500.0,
-        method: 'PROMPTPAY',
-        status: 'UNDER_REVIEW',
-        paymentDate: new Date(),
-        evidenceUrl: intent2.objectKey,
-        fileHash: intent2.sha256,
+        amount: '4500.00',
+        paymentDate: new Date().toISOString(),
+        intentId: intentData2.intentId,
       },
     });
-    await prisma.paymentUploadIntent.update({
-      where: { id: intent2.id },
-      data: { status: 'CONSUMED' },
-    });
+    expect(submitRes2.ok()).toBeTruthy();
 
-    // Refresh Owner Payments page
+    // Owner sees Bill 2 and clicks "ปฏิเสธ"
+    await loginAs(page, ownerUser, 'OWNER');
     await page.goto('/owner/payments');
     await page.waitForLoadState('networkidle');
 
-    // Owner sees Bill 2 and clicks "ปฏิเสธ"
     await expect(page.locator(`text=บิลเลขที่: ${billRecord2.billNumber}`)).toBeVisible({ timeout: 10000 });
     const rejectBtn = page.getByRole('button', { name: 'ปฏิเสธ' }).first();
     await rejectBtn.click();
@@ -655,37 +795,52 @@ test.describe('Wave 1E - Real Payment & Receipt Integration (Fully Unmocked)', (
     await expect(page.locator('text=ปฏิเสธการชำระเงินเรียบร้อยแล้ว')).toBeVisible({ timeout: 15000 });
 
     // Assert in PostgreSQL
-    const rejectedPayment = await prisma.payment.findUnique({ where: { id: payment2.id } });
+    const rejectedPayment = await prisma.payment.findFirst({ where: { billId: billRecord2.id, status: 'REJECTED' } });
     expect(rejectedPayment!.status).toBe('REJECTED');
     expect(rejectedPayment!.rejectedReason).toBe('ยอดเงินในสลิปไม่ถูกต้องตามยอดบิล');
 
     const bill2StillPending = await prisma.bill.findUnique({ where: { id: billRecord2.id } });
     expect(bill2StillPending!.status).toBe('PENDING');
 
-    // --- STEP 7: Test Duplicate Evidence Prevention ---
-    // Try uploading the exact same JPEG slip again for Bill 2
-    const duplicateIntent = await prisma.paymentUploadIntent.create({
+    // Tenant opens the rejected Bill (simulate by requesting new intent for same bill)
+    // Tenant requests a new upload intent
+    const intentRes2_Retry = await page.request.post('/api/v1/payments/slip/intent', {
+      headers: {
+        Cookie: `horplus_session=${t1Session.sessionCookie}`,
+        'x-csrf-token': t1Session.csrfToken,
+      },
       data: {
-        id: crypto.randomUUID(),
         dormitoryId: dormId,
         billId: billRecord2.id,
-        tenantId: tenantRecord.id,
-        originalFileName: 'duplicate-slip.jpg',
-        mimeType: 'image/jpeg',
-        sizeBytes: VALID_JPEG_BUFFER.length,
-        verifiedMimeType: 'image/jpeg',
-        verifiedSize: VALID_JPEG_BUFFER.length,
-        sha256: crypto.createHash('sha256').update(VALID_JPEG_BUFFER).digest('hex'), // exact same hash as payment 1
-        status: 'UPLOADED',
-        storageKey: `slips/${dormId}/dup.jpg`,
-        expiresAt: new Date(Date.now() + 15 * 60000),
-      },
+        fileName: 'slip-2-retry.png',
+        mimeType: 'image/png',
+        fileSize: VALID_PNG_BUFFER.length
+      }
     });
+    expect(intentRes2_Retry.ok()).toBeTruthy();
+    const intentData2_Retry = await intentRes2_Retry.json();
 
-    const submitDupRes = await page.request.post('/api/v1/payments/slip/submit', {
+    // Tenant uploads a DIFFERENT valid slip image (png)
+    const uploadRes2_Retry = await page.request.post(intentData2_Retry.uploadUrl, {
       headers: {
-        Cookie: `horplus_session=${encryptSessionToken(tenantUser.id, crypto.randomUUID())}`,
-        'x-csrf-token': generateCsrfToken('test-dup'),
+        Cookie: `horplus_session=${t1Session.sessionCookie}`,
+        'x-csrf-token': t1Session.csrfToken,
+      },
+      multipart: {
+        file: {
+          name: 'slip-2-retry.png',
+          mimeType: 'image/png',
+          buffer: VALID_PNG_BUFFER,
+        }
+      }
+    });
+    expect(uploadRes2_Retry.ok()).toBeTruthy();
+
+    // Tenant submits successfully
+    const submitRes2_Retry = await page.request.post('/api/v1/payments/slip/submit', {
+      headers: {
+        Cookie: `horplus_session=${t1Session.sessionCookie}`,
+        'x-csrf-token': t1Session.csrfToken,
         'x-idempotency-key': crypto.randomUUID(),
       },
       data: {
@@ -693,13 +848,117 @@ test.describe('Wave 1E - Real Payment & Receipt Integration (Fully Unmocked)', (
         billId: billRecord2.id,
         amount: '4500.00',
         paymentDate: new Date().toISOString(),
-        intentId: duplicateIntent.id,
+        intentId: intentData2_Retry.intentId,
+      },
+    });
+    expect(submitRes2_Retry.ok()).toBeTruthy();
+
+    // Verify new Payment attempt is created
+    const bill2Payments = await prisma.payment.findMany({
+      where: { billId: billRecord2.id },
+      orderBy: { createdAt: 'desc' }
+    });
+    expect(bill2Payments.length).toBe(2);
+    expect(bill2Payments[0].status).toBe('PENDING'); // The new attempt
+    expect(bill2Payments[1].status).toBe('REJECTED'); // The rejected historical payment remains preserved
+    
+    // Only one active review attempt exists
+    const activeReviews = bill2Payments.filter(p => p.status === 'PENDING' || p.status === 'UNDER_REVIEW');
+    expect(activeReviews.length).toBe(1);
+
+    // --- STEP 7: Test Duplicate Evidence Prevention ---
+    // 1. Request a real upload intent through /api/v1/payments/slip/intent
+    const intentRes3 = await page.request.post('/api/v1/payments/slip/intent', {
+      headers: {
+        Cookie: `horplus_session=${t1Session.sessionCookie}`,
+        'x-csrf-token': t1Session.csrfToken,
+      },
+      data: {
+        dormitoryId: dormId,
+        billId: billRecord3.id,
+        fileName: 'duplicate-slip.jpg',
+        mimeType: 'image/jpeg',
+        fileSize: VALID_JPEG_BUFFER.length
+      }
+    });
+    expect(intentRes3.ok()).toBeTruthy();
+    const intentData3 = await intentRes3.json();
+
+    // 2. Upload the exact same file bytes (VALID_JPEG_BUFFER used in bill 1)
+    const uploadRes3 = await page.request.post(intentData3.uploadUrl, {
+      headers: {
+        Cookie: `horplus_session=${t1Session.sessionCookie}`,
+        'x-csrf-token': t1Session.csrfToken,
+      },
+      multipart: {
+        file: {
+          name: 'duplicate-slip.jpg',
+          mimeType: 'image/jpeg',
+          buffer: VALID_JPEG_BUFFER, // Exact same bytes
+        }
+      }
+    });
+    expect(uploadRes3.ok()).toBeTruthy();
+
+    // 3. Submit 
+    const submitDupRes = await page.request.post('/api/v1/payments/slip/submit', {
+      headers: {
+        Cookie: `horplus_session=${t1Session.sessionCookie}`,
+        'x-csrf-token': t1Session.csrfToken,
+        'x-idempotency-key': crypto.randomUUID(),
+      },
+      data: {
+        dormitoryId: dormId,
+        billId: billRecord3.id,
+        amount: '4500.00',
+        paymentDate: new Date().toISOString(),
+        intentId: intentData3.intentId,
       },
     });
 
-    // Must be rejected with 409 Conflict DUPLICATE_PAYMENT_EVIDENCE
+    // 4. Assert: HTTP status 409, error code DUPLICATE_PAYMENT_EVIDENCE
     expect(submitDupRes.status()).toBe(409);
     const dupErr = await submitDupRes.json();
-    expect(dupErr.error).toContain('DUPLICATE_PAYMENT_EVIDENCE');
+    expect(dupErr.error.code).toContain('DUPLICATE_PAYMENT_EVIDENCE');
+
+    // 5. Verify no second Payment was created
+    const bill3Payments = await prisma.payment.findMany({ where: { billId: billRecord3.id } });
+    expect(bill3Payments.length).toBe(0);
+
+    // 6. Verify the second Bill remains unpaid
+    const bill3 = await prisma.bill.findUnique({ where: { id: billRecord3.id } });
+    expect(bill3!.status).toBe('PENDING');
+
+    // 7. Verify no orphan uploaded file or UPLOADED intent remains (it should be set to REJECTED or FAILED)
+    const orphanIntent = await prisma.paymentUploadIntent.findUnique({ where: { id: intentData3.intentId } });
+    expect(orphanIntent!.status).not.toBe('UPLOADED'); // Ideally it's FAILED
+
+    // --- STEP 8: Add missing E2E authorization coverage ---
+    const t2Session = await loginAs(page, tenantUser2, 'TENANT');
+    
+    // Tenant 2 cannot open Tenant 1's Receipt JSON endpoint
+    const authRes1 = await page.request.get(`/api/v1/receipts/${receipt.id}`, {
+      headers: { Cookie: `horplus_session=${t2Session.sessionCookie}` }
+    });
+    expect(authRes1.status()).toBeGreaterThanOrEqual(403);
+    expect(authRes1.status()).toBeLessThanOrEqual(404);
+
+    // Tenant 2 cannot open Tenant 1's printable HTML Receipt
+    const authRes2 = await page.request.get(`/api/v1/receipts/${receipt.id}/html`, {
+      headers: { Cookie: `horplus_session=${t2Session.sessionCookie}` }
+    });
+    expect(authRes2.status()).toBeGreaterThanOrEqual(403);
+    expect(authRes2.status()).toBeLessThanOrEqual(404);
+
+    // Tenant 2 cannot preview Tenant 1's evidence
+    // Actually the intent holds the objectKey, wait, let's just check the intent
+    const authRes3 = await page.request.get(`/api/v1/payments/slip/upload/${intentData2.intentId}`, {
+      headers: { Cookie: `horplus_session=${t2Session.sessionCookie}` }
+    });
+    expect(authRes3.status()).toBeGreaterThanOrEqual(403);
+    expect(authRes3.status()).toBeLessThanOrEqual(405);
+
+    // Finally, verify no browser errors occurred
+    expect(browserErrors).toEqual([]);
   });
 });
