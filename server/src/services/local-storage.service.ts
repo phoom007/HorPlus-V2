@@ -58,6 +58,19 @@ export class LocalStorageProvider {
     const fullPath = path.join(UPLOAD_DIR, objectKey);
     return fs.readFileSync(fullPath);
   }
+
+  async fileExists(objectKey: string): Promise<boolean> {
+    const fullPath = path.join(UPLOAD_DIR, objectKey);
+    return fs.existsSync(fullPath);
+  }
+
+  async deleteFile(objectKey: string): Promise<void> {
+    const fullPath = path.join(UPLOAD_DIR, objectKey);
+    if (fs.existsSync(fullPath)) {
+      fs.unlinkSync(fullPath);
+    }
+  }
 }
 
 export const localStorageProvider = new LocalStorageProvider();
+

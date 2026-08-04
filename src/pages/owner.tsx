@@ -51,6 +51,7 @@ import { OwnerReports } from './owner/reports';
 import { OwnerUsers } from './owner/users';
 import { OwnerSettings } from './owner/settings';
 import { OwnerRegister } from './owner/register';
+import { PaymentsOwnerView } from './owner/payments';
 
 
 interface SlidableNotificationItemProps {
@@ -846,7 +847,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
           />
         );
       case 'payments':
-          return <PaymentsOwnerView bills={bills} rooms={rooms} dormitoryId={dormitoryId} onUpdateBills={fetchData} />;
+        return <PaymentsOwnerView bills={bills} rooms={rooms} dormitoryId={activeDormitoryId} onUpdateBills={refreshAllData} />;
 
       case 'maintenance':
         return (

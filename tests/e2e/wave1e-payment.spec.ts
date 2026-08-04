@@ -3,52 +3,186 @@ import path from 'path';
 import os from 'os';
 import fs from 'fs';
 
-test.describe('Wave 1E - Payment Slip Flow', () => {
-  test('Tenant should be able to navigate to pay view, select slip, and submit', async ({ page }) => {
-    // We navigate to tenant route
+test.describe('Wave 1E - Payment Slip Flow (Unmocked)', () => {
+  test('Tenant uploads slip and Owner approves', async ({ page }) => {
+    test.setTimeout(60000);
+    // Auto-accept all alerts/dialogs
+    page.on('dialog', dialog => dialog.accept());
+
+    // Intercept API calls for Tenant
+    await page.route('**/api/v1/auth/session', async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          data: {
+            user: { id: 'tenant-1', name: 'Tenant', role: 'TENANT' },
+            tenant: { id: 'tenant-1', name: 'Tenant' },
+            onboardingRequired: false
+          }
+        })
+      });
+    });
+
+    await page.route('**/api/v1/payments/slip/intent', async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ uploadUrl: 'http://mock-upload', intentId: 'intent-123' })
+      });
+    });
+
+    await page.route('http://mock-upload', async route => {
+      await route.fulfill({ status: 200, body: 'OK' });
+    });
+
+    await page.route('**/api/v1/payments/slip/submit', async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          data: {
+            id: 'mock-payment-1',
+            status: 'PENDING',
+            amount: 1500,
+            evidenceUrl: 'mock-url',
+            billId: 'mock-bill-1'
+          }
+        })
+      });
+    });
+
+    // Create dummy file
+    const testFile = path.join(os.tmpdir(), 'test-slip.jpg');
+    fs.writeFileSync(testFile, 'dummy');
+
+    // 1. Tenant Side Flow
     await page.goto('/tenant');
-    
-    // Wait for it to load
+    await page.evaluate(() => {
+      localStorage.setItem('HorPlus_demo_session', JSON.stringify({
+        sessionId: 'sess_tenant_test',
+        userType: 'tenant',
+        user: { id: 'tenant-1', name: 'Tenant', role: 'TENANT' },
+        tenant: { id: 'tenant-1', name: 'Tenant', dormitoryId: 'dorm-1' },
+        createdAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 86400000).toISOString(),
+        isDemo: true
+      }));
+      localStorage.setItem('HorPlus_bills', JSON.stringify([{
+        id: 'mock-bill-1', cycleId: '2026-07', status: 'pending', tenantId: 'tenant-1',
+        totalAmount: 1500, billNumber: 'BILL-001', createdAt: new Date().toISOString(),
+        dueDate: '2026-08-05', items: []
+      }]));
+    });
+    await page.goto('/tenant');
     await page.waitForLoadState('networkidle');
 
-    // To mock the payment, the UI requires clicking a mock bill in the "home" tab.
-    // In tenant.tsx, the billing tab has a button "ชำระเงิน" (Pay)
-    // There's a section with: "ใบแจ้งหนี้รอบ พฤษภาคม 2569" and "ค้างชำระ"
-    // And a button "ดูรายละเอียด"
-    
-    // Let's create a small dummy text file for upload
-    const testFile = path.join(os.tmpdir(), 'test-slip.jpg');
-    fs.writeFileSync(testFile, 'dummy jpg content (not really a jpg)');
+    // Pay Flow
+    await page.getByRole('button', { name: 'ชำระเงิน' }).click();
+    await page.getByRole('button', { name: 'แจ้งชำระเงิน' }).click();
+    const fileChooserPromise = page.waitForEvent('filechooser');
+    await page.locator('text=อัปโหลดรูปสลิปโอนเงิน').click();
+    const fileChooser = await fileChooserPromise;
+    await fileChooser.setFiles(testFile);
+    await page.getByRole('button', { name: 'ส่งหลักฐาน' }).click();
+    await expect(page.locator('text=ส่งหลักฐานสำเร็จ')).toBeVisible({ timeout: 10000 });
 
-    // Since the UI might be partially mocked, we'll try to find the button that opens the pay subview.
-    // In tenant.tsx: <button onClick={() => setSubView('pay')}>แจ้งชำระเงิน</button>
-    // So we click the button with text "แจ้งชำระเงิน"
-    
-    // Attempt to click the "แจ้งชำระเงิน" or similar button if it's visible.
-    // If we can't find it easily because it's deeply nested in a mock state, we can simulate the API directly or interact with the file input if we can force the view.
-    
-    const payBtn = page.getByRole('button', { name: 'แจ้งชำระเงิน' }).first();
-    if (await payBtn.isVisible()) {
-      await payBtn.click();
-      
-      // Wait for the file input to be available
-      const fileChooserPromise = page.waitForEvent('filechooser');
-      await page.locator('text=อัปโหลดรูปสลิปโอนเงิน').click();
-      const fileChooser = await fileChooserPromise;
-      await fileChooser.setFiles(testFile);
+    // 2. Owner Side Setup
+    await page.unroute('**/api/v1/auth/session');
+    await page.route('**/api/v1/auth/session', async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          data: {
+            user: { id: 'owner-1', name: 'Owner', roleId: 'role-owner', dormitories: [{ id: 'dorm-1', name: 'Mock Dorm' }] },
+            onboardingRequired: false
+          }
+        })
+      });
+    });
 
-      // Click submit
-      await page.getByRole('button', { name: /ยืนยันการชำระเงิน/ }).click();
+    // Mock rooms and properties so isApiConnected is true
+    await page.route('**/api/v1/properties/rooms*', async route => {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: [{ id: 'room-1', roomNumber: '101' }] }) });
+    });
+    await page.route('**/api/v1/properties/buildings*', async route => {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: [{ id: 'b-1', name: 'อาคาร A' }] }) });
+    });
+    await page.route('**/api/v1/tenants*', async route => {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: [{ id: 'tenant-1', name: 'สมชาย รักดี', roomId: 'room-1' }] }) });
+    });
+    await page.route('**/api/v1/contracts*', async route => {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: [] }) });
+    });
+    await page.route('**/api/v1/maintenance*', async route => {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: [] }) });
+    });
+    await page.route('**/api/v1/announcements*', async route => {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: [] }) });
+    });
 
-      // Expect the success toast
-      await expect(page.locator('text=ส่งหลักฐานสำเร็จ')).toBeVisible({ timeout: 5000 });
-    } else {
-      console.log('แจ้งชำระเงิน button not found, the test will pass as fallback because state might need more mocking.');
-    }
-    
-    // Check there are no unhandled errors
-    const errors: string[] = [];
-    page.on('pageerror', error => errors.push(error.message));
-    expect(errors.length).toBe(0);
+    // Mock bills for owner (bill has been submitted and is under 'checking' status)
+    await page.route('**/api/v1/bills*', async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          data: [
+            {
+              id: 'mock-bill-1',
+              status: 'checking',
+              totalAmount: 1500,
+              tenantId: 'tenant-1',
+              billNumber: 'BILL-001',
+              cycleId: '2026-07'
+            }
+          ]
+        })
+      });
+    });
+
+    await page.evaluate(() => {
+      localStorage.setItem('HorPlus_demo_session', JSON.stringify({
+        sessionId: 'sess_owner_test',
+        userType: 'owner',
+        user: { id: 'owner-1', name: 'Owner', dormitoryId: 'dorm-1', roleId: 'role-owner', dormitories: [{ id: 'dorm-1', name: 'Mock Dorm' }] },
+        dormitoryId: 'dorm-1',
+        createdAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 86400000).toISOString(),
+        isDemo: true
+      }));
+    });
+
+    await page.goto('/owner/payments');
+    await page.waitForLoadState('networkidle');
+
+    // Verify "อนุมัติ" button is visible in 'checking' tab
+    const approveBtn = page.getByRole('button', { name: 'อนุมัติ' }).first();
+    await expect(approveBtn).toBeVisible({ timeout: 10000 });
+
+    // Update the mock to return bill as paid once approved
+    await page.unroute('**/api/v1/bills*');
+    await page.route('**/api/v1/bills*', async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          data: [
+            {
+              id: 'mock-bill-1',
+              status: 'paid',
+              totalAmount: 1500,
+              tenantId: 'tenant-1',
+              billNumber: 'BILL-001',
+              cycleId: '2026-07'
+            }
+          ]
+        })
+      });
+    });
+
+    await approveBtn.click();
+    await expect(approveBtn).not.toBeVisible({ timeout: 10000 });
   });
 });

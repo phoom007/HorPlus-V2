@@ -59,12 +59,40 @@ export function createPaymentRouter(authService: AuthenticationService) {
         fileSize: z.number()
       });
       const data = schema.parse(req.body);
-      
-      const intent = await localStorageProvider.createUploadIntent({
-        dormitoryId,
-        ...data,
+
+      // Verify bill belongs to tenant
+      const bill = await prisma.bill.findUnique({ where: { id: data.billId } });
+      if (!bill || bill.tenantId !== tenant.id || bill.dormitoryId !== dormitoryId) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+
+      if (bill.status === 'PAID') {
+        return res.status(400).json({ error: 'ALREADY_PAID' });
+      }
+
+      const activePayment = await prisma.payment.findFirst({
+        where: { billId: bill.id, status: { in: ['PENDING', 'UNDER_REVIEW', 'APPROVED'] } }
       });
-      res.json(intent);
+      if (activePayment) {
+        return res.status(400).json({ error: 'ACTIVE_REVIEW_EXISTS' });
+      }
+
+      // Create PaymentUploadIntent in DB
+      const expiresAt = new Date(Date.now() + 15 * 60 * 1000);
+      const intent = await prisma.paymentUploadIntent.create({
+        data: {
+          authenticatedUserId: auth.userId,
+          tenantId: tenant.id,
+          dormitoryId: dormitoryId,
+          billId: data.billId,
+          expectedMimeType: data.mimeType,
+          expectedSize: data.fileSize,
+          expiresAt: expiresAt,
+          status: 'CREATED'
+        }
+      });
+      
+      res.json({ intentId: intent.id, uploadUrl: `/api/v1/payments/slip/upload/${intent.id}`, expiresAt });
     } catch (err: any) {
       res.status(400).json({ error: err.message });
     }
@@ -220,14 +248,24 @@ export function createPaymentRouter(authService: AuthenticationService) {
     try {
       if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
       
+      const auth = (req as any).auth;
+      const intentId = req.params.intentId;
+      const intent = await prisma.paymentUploadIntent.findUnique({ where: { id: intentId } });
+      
+      if (!intent) return res.status(404).json({ error: 'Intent not found' });
+      if (intent.status !== 'CREATED') return res.status(409).json({ error: 'Intent already consumed or uploaded' });
+      if (intent.expiresAt < new Date()) return res.status(400).json({ error: 'Intent expired' });
+      if (intent.authenticatedUserId !== auth.userId) return res.status(403).json({ error: 'Forbidden' });
+
       const buffer = req.file.buffer;
       
       // Validate Magic Bytes
-      const hex = buffer.toString('hex', 0, 4).toUpperCase();
+      const hex = buffer.toString('hex', 0, 12).toUpperCase();
       let isValidMagic = false;
-      if (hex.startsWith('FFD8FF')) isValidMagic = true; // JPEG
-      else if (hex.startsWith('89504E47')) isValidMagic = true; // PNG
-      else if (hex.startsWith('52494646')) isValidMagic = true; // WEBP (RIFF)
+      let extension = '.jpg';
+      if (hex.startsWith('FFD8FF')) { isValidMagic = true; extension = '.jpg'; }
+      else if (hex.startsWith('89504E47')) { isValidMagic = true; extension = '.png'; }
+      else if (hex.startsWith('52494646') && hex.includes('57454250')) { isValidMagic = true; extension = '.webp'; } // RIFF ... WEBP
 
       if (!isValidMagic) {
         return res.status(400).json({ error: 'INVALID_FILE_TYPE' });
@@ -236,23 +274,81 @@ export function createPaymentRouter(authService: AuthenticationService) {
       // Calculate server SHA-256
       const fileHash = crypto.createHash('sha256').update(buffer).digest('hex');
 
-      // Check if duplicate globally
-      const duplicate = await prisma.payment.findUnique({
-        where: { fileHash }
+      // Check if duplicate globally (in payments or active/consumed upload intents)
+      const duplicateIntent = await prisma.paymentUploadIntent.findFirst({
+        where: { sha256: fileHash, status: { in: ['UPLOADED', 'CONSUMED'] } }
       });
-      if (duplicate) {
+      const duplicatePayment = await prisma.payment.findFirst({
+        where: { fileHash: fileHash }
+      });
+      if (duplicateIntent || duplicatePayment) {
         return res.status(409).json({ error: 'DUPLICATE_PAYMENT_EVIDENCE' });
       }
 
       // Generate random object key
-      const objectKey = `payments/${req.params.intentId}_${crypto.randomBytes(8).toString('hex')}.jpg`;
+      const objectKey = `payments/${intent.dormitoryId}/${intent.billId}/${intent.id}_${crypto.randomBytes(8).toString('hex')}${extension}`;
       
-      await localStorageProvider.saveFile(objectKey, buffer);
+      try {
+        await localStorageProvider.saveFile(objectKey, buffer);
+        
+        await prisma.paymentUploadIntent.update({
+          where: { id: intent.id },
+          data: {
+            status: 'UPLOADED',
+            verifiedMimeType: req.file.mimetype,
+            verifiedSize: req.file.size,
+            objectKey,
+            sha256: fileHash,
+            uploadedAt: new Date()
+          }
+        });
+      } catch (err) {
+        // Orphan file rollback
+        try {
+          await localStorageProvider.deleteFile(objectKey);
+        } catch (delErr) {}
+        throw err;
+      }
       
       res.json({ success: true, objectKey, fileHash });
     } catch(err: any) {
       if (err.message === 'INVALID_MIME_TYPE') return res.status(400).json({ error: err.message });
       res.status(400).json({ error: err.message });
+    }
+  });
+
+  // Owner: Get payment evidence (preview)
+  router.get('/:paymentId/evidence', requireAuth, async (req, res) => {
+    try {
+      const auth = (req as any).auth;
+      const payment = await prisma.payment.findUnique({ where: { id: req.params.paymentId } });
+      if (!payment) return res.status(404).json({ error: 'Payment not found' });
+
+      const isOwner = ensureOwnerOrManager(req, res, payment.dormitoryId);
+      let authorized = false;
+      if (isOwner) {
+        authorized = true;
+      } else {
+        const tenant = await ensureTenant(req, res, payment.dormitoryId);
+        if (tenant && payment.tenantId === tenant.id) {
+          authorized = true;
+        }
+      }
+
+      if (!authorized) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+
+      if (!payment.evidenceUrl) {
+        return res.status(404).json({ error: 'Evidence not found' });
+      }
+
+      const fileBuffer = await localStorageProvider.getFile(payment.evidenceUrl);
+      const ext = payment.evidenceUrl.endsWith('.png') ? 'image/png' : payment.evidenceUrl.endsWith('.webp') ? 'image/webp' : 'image/jpeg';
+      res.setHeader('Content-Type', ext);
+      res.send(fileBuffer);
+    } catch (err: any) {
+      res.status(404).json({ error: err.message });
     }
   });
 
@@ -269,7 +365,8 @@ export function createPaymentRouter(authService: AuthenticationService) {
         where: { dormitoryId },
         include: {
           bill: { include: { tenant: true, room: true } },
-          receipt: true
+          receipt: true,
+          statusHistories: { orderBy: { effectiveAt: 'desc' } }
         },
         orderBy: { createdAt: 'desc' }
       });
@@ -281,3 +378,4 @@ export function createPaymentRouter(authService: AuthenticationService) {
 
   return router;
 }
+

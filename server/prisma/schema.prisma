@@ -873,3 +873,27 @@ model ReceiptSequence {
   @@unique([dormitoryId, yearMonth], name: "dormitory_receipt_seq_unique")
   @@map("receipt_sequences")
 }
+
+
+model PaymentUploadIntent {
+  id                  String   @id @default(uuid()) @db.Uuid
+  authenticatedUserId String   @map("authenticated_user_id") @db.Uuid
+  tenantId            String   @map("tenant_id") @db.Uuid
+  dormitoryId         String   @map("dormitory_id") @db.Uuid
+  billId              String   @map("bill_id") @db.Uuid
+  status              String   @default("CREATED") @db.VarChar(50)
+  expiresAt           DateTime @map("expires_at") @db.Timestamptz()
+  expectedMimeType    String?  @map("expected_mime_type") @db.VarChar(100)
+  expectedSize        Int?     @map("expected_size")
+  verifiedMimeType    String?  @map("verified_mime_type") @db.VarChar(100)
+  verifiedSize        Int?     @map("verified_size")
+  objectKey           String?  @map("object_key") @db.Text
+  sha256              String?  @map("sha256") @db.VarChar(255)
+  uploadedAt          DateTime? @map("uploaded_at") @db.Timestamptz()
+  consumedAt          DateTime? @map("consumed_at") @db.Timestamptz()
+  createdAt           DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt           DateTime @updatedAt @map("updated_at") @db.Timestamptz()
+
+  @@index([status, expiresAt], name: "idx_intent_status_expires")
+  @@map("payment_upload_intents")
+}

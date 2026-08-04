@@ -65,6 +65,7 @@ import {
 } from '../components/GlobalComponents';
 
 import { Tenant, Room, Bill, Contract, MaintenanceRequest as RepairRequest, Announcement, Dormitory, BillItem, Building, formatItemDescription } from '../types';
+import { getRooms, getBills, getContracts, getMaintenance, getAnnouncements, getBuildings } from '../data/mockData';
 
 const getBankBadgeInfo = (bankName: string) => {
   const name = bankName || 'กสิกรไทย (KBank)';
@@ -300,12 +301,12 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
   const dormInfo: any = {};
 
   const refreshData = () => {
-    setRooms([]);
-    setBills([]);
-    setContracts([]);
-    setRepairs([] as any);
-    setAnnouncements([]);
-    setBuildings([]);
+    setRooms(getRooms());
+    setBills(getBills());
+    setContracts(getContracts());
+    setRepairs(getMaintenance() as any);
+    setAnnouncements(getAnnouncements());
+    setBuildings(getBuildings());
   };
 
   useEffect(() => {
@@ -392,7 +393,9 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
   const tenantRoom = rooms.find(r => r.currentTenantId === tenant.id);
   const tenantBills = [...bills]
     .filter(b => b.tenantId === tenant.id && b.status !== 'draft')
-    .sort((a, b) => b.cycleId.localeCompare(a.cycleId) || b.createdAt.localeCompare(a.createdAt));
+    .sort((a, b) => b.cycleId.localeCompare(a.cycleId) || b.createdAt.localeCompare(a.createdAt)); 
+ console.log('BILLS RAW IN LOCALSTORAGE:', localStorage.getItem('HorPlus_bills'));
+  console.log('bills.length', bills.length, 'tenantBills.length', tenantBills.length, 'tenant.id', tenant.id);
   const tenantRepairs = repairs.filter(r => r.roomId === tenantRoom?.id || r.tenantId === tenant.id);
   const tenantContracts = contracts.filter(c => c.tenantId === tenant.id);
   
@@ -811,18 +814,90 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
     </div>
   );
 
+  const getCsrfToken = () => {
+    const match = document.cookie.match(/csrf-token=([^;]+)/);
+    return match ? decodeURIComponent(match[1]) : (window as any).__CSRF_TOKEN || '';
+  };
+
+  const handleSubmitPaymentSlip = async () => {
+    if (!slipFile || !activeUnpaidBill) return;
+    setIsSubmittingSlip(true);
+    try {
+      const csrf = getCsrfToken();
+      const intentRes = await fetch('/api/v1/payments/slip/intent', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-csrf-token': csrf },
+        body: JSON.stringify({
+          dormitoryId: localTenant.dormitoryId,
+          billId: activeUnpaidBill.id,
+          fileName: slipFile.name,
+          mimeType: slipFile.type || 'image/jpeg',
+          fileSize: slipFile.size
+        })
+      });
+      if (!intentRes.ok) {
+        const errText = await intentRes.text();
+        throw new Error(errText);
+      }
+      const intent = await intentRes.json();
+
+      const formData = new FormData();
+      formData.append('file', slipFile);
+      const uploadRes = await fetch(intent.uploadUrl, {
+        method: 'POST',
+        headers: { 'x-csrf-token': csrf },
+        body: formData
+      });
+      if (!uploadRes.ok) {
+        const errText = await uploadRes.text();
+        throw new Error(errText);
+      }
+
+      const submitRes = await fetch('/api/v1/payments/slip/submit', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-csrf-token': csrf,
+          'x-idempotency-key': crypto.randomUUID()
+        },
+        body: JSON.stringify({
+          dormitoryId: localTenant.dormitoryId,
+          billId: activeUnpaidBill.id,
+          amount: activeUnpaidBill.totalAmount.toString(),
+          paymentDate: new Date().toISOString(),
+          intentId: intent.intentId
+        })
+      });
+      if (!submitRes.ok) {
+        const errText = await submitRes.text();
+        throw new Error(errText);
+      }
+
+      setSubView(null);
+      setSlipFile(null);
+      setToast({ type: 'success', title: 'ส่งหลักฐานสำเร็จ', message: 'กำลังรอการตรวจสอบจากเจ้าของหอพัก', visible: true });
+      setTimeout(() => setToast(null), 4000);
+      refreshData();
+    } catch(err: any) {
+      let msg = err.message || '';
+      if (msg.includes('DUPLICATE_PAYMENT_EVIDENCE')) {
+        msg = 'รูปสลิปนี้เคยถูกส่งเข้าระบบแล้ว (ห้ามใช้สลิปซ้ำ)';
+      } else if (msg.includes('ACTIVE_REVIEW_EXISTS')) {
+        msg = 'มีรายการชำระเงินที่อยู่ระหว่างการตรวจสอบอยู่แล้ว';
+      }
+      setToast({ type: 'error', title: 'ไม่สามารถส่งหลักฐานได้', message: msg, visible: true });
+      setTimeout(() => setToast(null), 4000);
+    } finally {
+      setIsSubmittingSlip(false);
+    }
+  };
+
   return (
     <div className="h-screen w-full bg-slate-100 flex justify-center overflow-hidden">
       
       {/* Main Container */}
       <div className="bg-slate-50 w-full max-w-md h-full flex flex-col font-sans text-xs relative select-none shadow-md border-x border-slate-200">
         
-        {/* Prototype Disclosure Banner */}
-        <div className="bg-amber-500/10 border-b border-amber-200/50 px-3 py-1.5 text-center text-[10px] font-medium text-amber-900 flex items-center justify-center gap-1.5 shrink-0">
-          <Sparkles className="w-3 h-3 text-amber-600 shrink-0" />
-          <span><strong>เวอร์ชันสาธิต (Prototype)</strong> — ข้อมูลใน Browser และสลิปจำลอง</span>
-        </div>
-
         {/* Main scrollable body area */}
         <div className="flex-1 overflow-y-auto pb-16 bg-slate-50/50">
             
@@ -842,7 +917,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
             )}
 
             {/* MAIN PORTAL ROOT NAVIGATION */}
-            {false && (
+            {subView === null && (
               <>
                 {/* 1. HOME TAB */}
                 {activeTab === 'home' && (
@@ -905,7 +980,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                             className="bg-indigo-600 hover:bg-indigo-700 text-white font-black py-3 px-4 rounded-xl w-full text-center transition-all text-xs shadow-md flex items-center justify-center gap-2 cursor-pointer active:scale-98"
                           >
                             <CreditCard className="w-4 h-4 text-indigo-200" />
-                            <span>ดูรายละเอียด</span>
+                            <span>ชำระเงิน</span>
                           </button>
                         </div>
                       ) : (
@@ -1405,7 +1480,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
               <>
                 {/* A. SUBVIEW: ใบแจ้งหนี้ (IMAGE 8) */}
                 {subView === 'invoice' && (
-                  <div className="flex flex-col h-full bg-slate-50\">
+                  <div className="flex flex-col h-full bg-slate-50">
                     {renderSubViewHeader('ใบแจ้งหนี้', <Calendar className="w-5 h-5 text-slate-400" />)}
                     
                     {/* Invoice Tabs below header */}
@@ -1552,10 +1627,9 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                           </div>
                           <input type="file" className="hidden" accept="image/*" onChange={(e) => {
                             if (e.target.files && e.target.files[0]) {
-                              // Dummy implementation for MVP just to show toast
                               const file = e.target.files[0];
+                              setSlipFile(file);
                               setToast({ type: 'success', title: 'อัปโหลดสำเร็จ', message: 'รูปสลิปถูกเตรียมพร้อมส่งแล้ว', visible: true });
-                              // We would store the file in state here
                               setTimeout(() => setToast(null), 3000);
                             }
                           }} />
@@ -1569,7 +1643,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
     disabled={!slipFile || isSubmittingSlip}
     className={`w-full py-3.5 text-white font-black text-xs rounded-xl shadow-lg transition-all active:scale-95 ${(!slipFile || isSubmittingSlip) ? 'bg-indigo-400 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-700 shadow-indigo-200'}`}
   >
-    {isSubmittingSlip ? 'กำลังส่งข้อมูล...' : 'ยืนยันการชำระเงิน'}
+    {isSubmittingSlip ? 'กำลังส่งข้อมูล...' : 'ส่งหลักฐาน'}
   </button>
                     </div>
                   </div>
@@ -1577,7 +1651,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
 
                 {/* C. SUBVIEW: แจ้งซ่อมบำรุง (IMAGE 4 & 7) */}
                 {subView === 'repairs' && (
-                  <div className="flex flex-col h-full bg-slate-50 relative\">
+                  <div className="flex flex-col h-full bg-slate-50 relative">
                     {renderSubViewHeader(
                       'แจ้งซ่อมบำรุง', 
                       <button 

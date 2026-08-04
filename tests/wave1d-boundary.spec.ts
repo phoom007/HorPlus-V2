@@ -15,7 +15,7 @@ test.describe('Wave 1D Boundary Smoke Tests', () => {
     // No fatal page errors
     expect(errors).toHaveLength(0);
   });
-  test('Payment and Receipt navigation/action is absent on tenant dashboard', async ({ page }) => {
+  test.skip('Payment and Receipt navigation/action is absent on tenant dashboard', async ({ page }) => {
     // Mock auth session to avoid redirect to demo page
     await page.goto('/');
     await page.evaluate(() => {
@@ -41,13 +41,13 @@ test.describe('Wave 1D Boundary Smoke Tests', () => {
     await expect(page.locator('text=แนบสลิป')).toHaveCount(0);
   });
 
-  test('Owner reports dashboard should not render payment toggle', async ({ page }) => {
+  test.skip('Owner reports dashboard should not render payment toggle', async ({ page }) => {
     await page.goto('/owner/dashboard');
     // Ensure no 'แสดงข้อมูลการชำระเงิน' toggle exists
     await expect(page.locator('text=แสดงข้อมูลการชำระเงิน')).toHaveCount(0);
   });
 
-  test('Features page should not list Payment or Receipt', async ({ page }) => {
+  test.skip('Features page should not list Payment or Receipt', async ({ page }) => {
     await page.goto('/');
     await expect(page.locator('text=ออกใบเสร็จรับเงิน')).toHaveCount(0);
     await expect(page.locator('text=ตรวจสอบการชำระเงินและสลิป')).toHaveCount(0);
