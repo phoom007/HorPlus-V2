@@ -239,6 +239,8 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
   const [coOccupantsError, setCoOccupantsError] = useState('');
   const [deleteConfirmCoId, setDeleteConfirmCoId] = useState<string | null>(null);
   const [toast, setToast] = useState<{ type: 'success' | 'error'; title: string; message: string; visible: boolean } | null>(null);
+  const [slipFile, setSlipFile] = useState<File | null>(null);
+  const [isSubmittingSlip, setIsSubmittingSlip] = useState(false);
 
   // Move-out request state
   const [isMoveOutModalOpen, setIsMoveOutModalOpen] = useState(false);
@@ -1545,8 +1547,8 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                             <Upload className="w-6 h-6 stroke-[2]" />
                           </div>
                           <div>
-                            <p className="text-indigo-600 text-xs font-bold">อัปโหลดรูปสลิปโอนเงิน</p>
-                            <p className="text-slate-400 text-[9px] font-medium mt-0.5">รองรับ JPG, PNG ขนาดไม่เกิน 5MB</p>
+                            <p className="text-indigo-600 text-xs font-bold">{slipFile ? slipFile.name : 'อัปโหลดรูปสลิปโอนเงิน'}</p>
+  <p className="text-slate-400 text-[9px] font-medium mt-0.5">{slipFile ? 'คลิกเพื่อเปลี่ยนไฟล์' : 'รองรับ JPG, PNG ขนาดไม่เกิน 5MB'}</p>
                           </div>
                           <input type="file" className="hidden" accept="image/*" onChange={(e) => {
                             if (e.target.files && e.target.files[0]) {
@@ -1563,15 +1565,12 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
 
                     <div className="absolute bottom-0 left-0 right-0 p-4 bg-white/95 backdrop-blur-md border-t border-gray-100 z-10">
                       <button
-                        onClick={() => {
-                          setSubView(null);
-                          setToast({ type: 'success', title: 'ส่งหลักฐานสำเร็จ', message: 'กำลังรอการตรวจสอบจากนิติบุคคล', visible: true });
-                          setTimeout(() => setToast(null), 3000);
-                        }}
-                        className="w-full py-3.5 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs rounded-xl shadow-lg shadow-indigo-200 transition-all active:scale-95"
-                      >
-                        ยืนยันการชำระเงิน
-                      </button>
+    onClick={handleSubmitPaymentSlip}
+    disabled={!slipFile || isSubmittingSlip}
+    className={`w-full py-3.5 text-white font-black text-xs rounded-xl shadow-lg transition-all active:scale-95 ${(!slipFile || isSubmittingSlip) ? 'bg-indigo-400 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-700 shadow-indigo-200'}`}
+  >
+    {isSubmittingSlip ? 'กำลังส่งข้อมูล...' : 'ยืนยันการชำระเงิน'}
+  </button>
                     </div>
                   </div>
                 )}

@@ -5,8 +5,9 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider          = "postgresql"
+  url               = env("DATABASE_URL")
+  shadowDatabaseUrl = env("SHADOW_DATABASE_URL")
 }
 
 // Foundation metadata table for initial migration baseline
@@ -810,8 +811,8 @@ model Payment {
   createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz()
   updatedAt        DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
 
-  dormitory       Dormitory              @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
-  bill            Bill                   @relation(fields: [billId], references: [id], onDelete: Cascade)
+  dormitory       Dormitory              @relation(fields: [dormitoryId], references: [id], onDelete: Restrict)
+  bill            Bill                   @relation(fields: [billId], references: [id], onDelete: Restrict)
   tenant          Tenant?                @relation(fields: [tenantId], references: [id], onDelete: Restrict)
   statusHistories PaymentStatusHistory[]
   receipt         Receipt?
@@ -831,7 +832,7 @@ model PaymentStatusHistory {
   effectiveAt     DateTime @default(now()) @map("effective_at") @db.Timestamptz()
   createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz()
 
-  payment Payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  payment Payment @relation(fields: [paymentId], references: [id], onDelete: Restrict)
 
   @@map("payment_status_histories")
 }
@@ -852,9 +853,9 @@ model Receipt {
   createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz()
   updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
 
-  dormitory Dormitory @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
+  dormitory Dormitory @relation(fields: [dormitoryId], references: [id], onDelete: Restrict)
   payment   Payment   @relation(fields: [paymentId], references: [id], onDelete: Restrict)
-  bill      Bill      @relation(fields: [billId], references: [id], onDelete: Cascade)
+  bill      Bill      @relation(fields: [billId], references: [id], onDelete: Restrict)
 
   @@unique([dormitoryId, receiptNumber], name: "dormitory_receipt_number_unique")
   @@map("receipts")
@@ -867,7 +868,7 @@ model ReceiptSequence {
   lastValue   Int      @default(0) @map("last_value")
   updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz()
 
-  dormitory Dormitory @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
+  dormitory Dormitory @relation(fields: [dormitoryId], references: [id], onDelete: Restrict)
 
   @@unique([dormitoryId, yearMonth], name: "dormitory_receipt_seq_unique")
   @@map("receipt_sequences")

@@ -124,8 +124,8 @@ export function createApiRouter(deps: AppApiDependencies | AuthenticationService
     router.use('/', moveOutRouter);
     router.use('/maintenance-requests', createMaintenanceRouter());
     router.use('/announcements', createAnnouncementRouter());
-    router.use('/payments', createPaymentRouter());
-    router.use('/receipts', createReceiptRouter());
+    router.use('/payments', createPaymentRouter(fullDeps.authService));
+    router.use('/receipts', createReceiptRouter(fullDeps.authService));
     router.use('/notifications', createNotificationRouter());
     router.use('/tenant/notifications', createTenantNotificationRouter());
   }
