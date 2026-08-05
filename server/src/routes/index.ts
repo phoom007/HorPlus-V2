@@ -25,6 +25,8 @@ import { createReceiptRouter } from './receipt.routes.js';
 import { healthRouter } from './health.routes.js';
 import { createNotificationRouter, createTenantNotificationRouter } from './notification.routes.js';
 import { createTenantPortalRouter } from './tenant-portal.routes.js';
+import { createSubscriptionRouter } from './subscription.routes.js';
+import { requireDormitoryWriteEntitlement } from '../middleware/entitlement.js';
 import { BuildingService } from '../services/building.service.js';
 import { RoomService } from '../services/room.service.js';
 import { TenantService } from '../services/tenant.service.js';
@@ -75,6 +77,7 @@ export function createApiRouter(deps: AppApiDependencies | AuthenticationService
   router.use('/health', healthRouter);
 
   router.use('/auth', createAuthRouter(authService));
+  router.use('/subscription', createSubscriptionRouter(authService));
   router.use('/', createUserRouter(authService));
 
   if (isDeps) {
@@ -89,6 +92,9 @@ export function createApiRouter(deps: AppApiDependencies | AuthenticationService
         fullDeps.provisioningService
       )
     );
+
+    // Apply entitlement write gate for business resource mutations
+    router.use(requireDormitoryWriteEntitlement);
     router.use(
       '/dormitories',
       createDormitoryRouter(

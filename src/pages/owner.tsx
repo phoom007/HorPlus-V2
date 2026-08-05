@@ -31,7 +31,8 @@ import {
   Search,
   Droplet,
   Trash2,
-  Gauge
+  Gauge,
+  CreditCard
 } from 'lucide-react';
 
 import { User, Room, Tenant, Bill, Contract, MaintenanceRequest, Announcement, AuditLog, Building } from '../types';
@@ -52,6 +53,7 @@ import { OwnerUsers } from './owner/users';
 import { OwnerSettings } from './owner/settings';
 import { OwnerRegister } from './owner/register';
 import { PaymentsOwnerView } from './owner/payments';
+import { SubscriptionPage } from './owner/subscription';
 
 
 interface SlidableNotificationItemProps {
@@ -698,8 +700,9 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
     { id: 'maintenance', label: 'งานแจ้งซ่อม', icon: Wrench, roles: ['owner', 'manager', 'staff'] },
     { id: 'announcements', label: 'ประชาสัมพันธ์', icon: Megaphone, roles: ['owner', 'manager'] },
     { id: 'reports', label: 'รายงานสถิติ', icon: BarChart4, roles: ['owner', 'manager'] },
-    { id: 'users', label: 'สิทธิ์และพนักงาน', icon: ShieldCheck, roles: ['owner'] },
-    { id: 'settings', label: 'ตั้งค่า', icon: Settings, roles: ['owner'] }
+    { id: 'users', label: 'จัดการผู้ใช้งาน', icon: ShieldCheck, roles: ['owner'] },
+    { id: 'subscription', label: 'Subscription / แพ็กเกจ', icon: CreditCard, roles: ['owner'] },
+    { id: 'settings', label: 'ตั้งค่าระบบ', icon: Settings, roles: ['owner'] }
   ];
 
   // Dynamic Active Dormitory Context Resolution
@@ -888,6 +891,8 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
         );
       case 'users':
         return <OwnerUsers onAddLog={handleAddLog} />;
+      case 'subscription':
+        return <SubscriptionPage dormitoryId={validDormId} />;
       case 'settings':
         return (
           <OwnerSettings

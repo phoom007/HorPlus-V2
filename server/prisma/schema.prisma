@@ -89,6 +89,8 @@ model Dormitory {
   Receipt                    Receipt[]
   ReceiptSequence            ReceiptSequence[]
   paymentUploadIntents       PaymentUploadIntent[]
+  dormitorySubscription      DormitorySubscription?
+  promoRedemptions           PromoRedemption[]
 
   @@map("dormitories")
 }
@@ -912,3 +914,135 @@ model PaymentUploadIntent {
   @@index([status, expiresAt], name: "idx_intent_status_expires")
   @@map("payment_upload_intents")
 }
+
+// ----------------------------------------------------------------------
+// Wave 1F Subscription & Entitlement Models
+// ----------------------------------------------------------------------
+
+enum SubscriptionPlanType {
+  FREE
+  PAID
+}
+
+enum DormitorySubscriptionStatus {
+  TRIAL
+  ACTIVE
+  EXPIRED
+  CANCELLED
+}
+
+model SubscriptionPlan {
+  id        String               @id @default(uuid()) @db.Uuid
+  code      String               @unique @db.VarChar(50)
+  name      String               @db.VarChar(100)
+  type      SubscriptionPlanType @default(FREE)
+  roomLimit Int                  @map("room_limit")
+  enabled   Boolean              @default(true)
+  createdAt DateTime             @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt DateTime             @updatedAt @map("updated_at") @db.Timestamptz()
+
+  packages               SubscriptionPackage[]
+  dormitorySubscriptions DormitorySubscription[]
+
+  @@map("subscription_plans")
+}
+
+model SubscriptionPackage {
+  id             String   @id @default(uuid()) @db.Uuid
+  planId         String   @map("plan_id") @db.Uuid
+  durationMonths Int      @map("duration_months")
+  price          Decimal? @db.Decimal(12, 2)
+  currency       String   @default("THB") @db.VarChar(10)
+  enabled        Boolean  @default(true)
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz()
+
+  plan SubscriptionPlan @relation(fields: [planId], references: [id], onDelete: Restrict)
+
+  @@unique([planId, durationMonths], name: "plan_duration_unique")
+  @@map("subscription_packages")
+}
+
+model DormitorySubscription {
+  id              String                      @id @default(uuid()) @db.Uuid
+  dormitoryId     String                      @unique @map("dormitory_id") @db.Uuid
+  planId          String                      @map("plan_id") @db.Uuid
+  status          DormitorySubscriptionStatus @default(TRIAL)
+  startedAt       DateTime                    @default(now()) @map("started_at") @db.Timestamptz()
+  expiresAt       DateTime                    @map("expires_at") @db.Timestamptz()
+  trialStartedAt  DateTime?                   @map("trial_started_at") @db.Timestamptz()
+  trialExpiresAt  DateTime?                   @map("trial_expires_at") @db.Timestamptz()
+  promoExtendedAt DateTime?                   @map("promo_extended_at") @db.Timestamptz()
+  cancelledAt     DateTime?                   @map("cancelled_at") @db.Timestamptz()
+  createdAt       DateTime                    @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt       DateTime                    @updatedAt @map("updated_at") @db.Timestamptz()
+
+  dormitory        Dormitory                  @relation(fields: [dormitoryId], references: [id], onDelete: Restrict)
+  plan             SubscriptionPlan           @relation(fields: [planId], references: [id], onDelete: Restrict)
+  statusHistories  SubscriptionStatusHistory[]
+  promoRedemptions PromoRedemption[]
+
+  @@index([dormitoryId])
+  @@index([expiresAt])
+  @@index([status])
+  @@map("dormitory_subscriptions")
+}
+
+model SubscriptionStatusHistory {
+  id             String                       @id @default(uuid()) @db.Uuid
+  subscriptionId String                       @map("subscription_id") @db.Uuid
+  dormitoryId    String                       @map("dormitory_id") @db.Uuid
+  previousStatus DormitorySubscriptionStatus? @map("previous_status")
+  newStatus      DormitorySubscriptionStatus  @map("new_status")
+  previousPlanId String?                      @map("previous_plan_id") @db.Uuid
+  newPlanId      String                       @map("new_plan_id") @db.Uuid
+  effectiveAt    DateTime                     @default(now()) @map("effective_at") @db.Timestamptz()
+  actorId        String?                      @map("actor_id") @db.Uuid
+  reason         String                       @db.VarChar(255)
+  metadata       Json?
+  createdAt      DateTime                     @default(now()) @map("created_at") @db.Timestamptz()
+
+  subscription DormitorySubscription @relation(fields: [subscriptionId], references: [id], onDelete: Restrict)
+
+  @@index([subscriptionId])
+  @@index([dormitoryId])
+  @@map("subscription_status_histories")
+}
+
+model PromoCode {
+  id                             String    @id @default(uuid()) @db.Uuid
+  code                           String    @unique @db.VarChar(50)
+  normalizedCode                 String    @unique @map("normalized_code") @db.VarChar(50)
+  extensionDays                  Int       @default(60) @map("extension_days")
+  enabled                        Boolean   @default(true)
+  startsAt                       DateTime? @map("starts_at") @db.Timestamptz()
+  endsAt                         DateTime? @map("ends_at") @db.Timestamptz()
+  maximumRedemptionsPerDormitory Int       @default(1) @map("maximum_redemptions_per_dormitory")
+  createdAt                      DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt                      DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
+
+  redemptions PromoRedemption[]
+
+  @@map("promo_codes")
+}
+
+model PromoRedemption {
+  id                String   @id @default(uuid()) @db.Uuid
+  promoCodeId       String   @map("promo_code_id") @db.Uuid
+  dormitoryId       String   @map("dormitory_id") @db.Uuid
+  subscriptionId    String   @map("subscription_id") @db.Uuid
+  redeemedBy        String   @map("redeemed_by") @db.Uuid
+  previousExpiresAt DateTime @map("previous_expires_at") @db.Timestamptz()
+  newExpiresAt      DateTime @map("new_expires_at") @db.Timestamptz()
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  promoCode    PromoCode             @relation(fields: [promoCodeId], references: [id], onDelete: Restrict)
+  subscription DormitorySubscription @relation(fields: [subscriptionId], references: [id], onDelete: Restrict)
+  dormitory    Dormitory             @relation(fields: [dormitoryId], references: [id], onDelete: Restrict)
+
+  @@unique([promoCodeId, dormitoryId], name: "promo_dormitory_unique")
+  @@index([dormitoryId])
+  @@index([subscriptionId])
+  @@map("promo_redemptions")
+}
+

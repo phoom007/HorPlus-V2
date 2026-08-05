@@ -50,6 +50,7 @@ import { OccupancyService } from './services/occupancy.service.js';
 import { BillingCycleService } from './services/billing-cycle.service.js';
 import { MeterService } from './services/meter.service.js';
 import { BillingService } from './services/billing.service.js';
+import { subscriptionEntitlementService } from './services/subscription-entitlement.service.js';
 import { auditService } from './services/audit.service.js';
 
 export interface CreateAppOptions {
@@ -84,6 +85,7 @@ export function createApp(optionsOrAuth?: CreateAppOptions | AuthenticationServi
     console.warn('Property repository mode: IN_MEMORY (This must not be seen in production or browser tests)');
   } else {
     console.log('Property repository mode: PRISMA_POSTGRESQL');
+    subscriptionEntitlementService.ensureSeeded().catch(() => {});
   }
 
   // Repositories

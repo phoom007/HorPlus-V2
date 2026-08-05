@@ -63,6 +63,13 @@ export class RoomService {
   public async checkRoomLimit(dormitoryId: string, tx?: any): Promise<void> {
     const entitlement = await this.entitlementService.resolveDormitoryEntitlement(dormitoryId);
 
+    if (entitlement.isReadOnly) {
+      const err = new Error('Dormitory subscription has expired. Operations are restricted to read-only mode.');
+      (err as any).code = 'SUBSCRIPTION_READ_ONLY';
+      (err as any).statusCode = 403;
+      throw err;
+    }
+
     let currentCount: number;
     if (tx && typeof tx.room?.count === 'function') {
       currentCount = await tx.room.count({
@@ -73,8 +80,8 @@ export class RoomService {
     }
 
     if (currentCount >= entitlement.roomLimit) {
-      const err = new Error(`จำนวนห้องพักเกินโควต้าแพ็กเกจ (${entitlement.roomLimit} ห้อง)`);
-      (err as any).code = 'ROOM_LIMIT_EXCEEDED';
+      const err = new Error(`Maximum room limit reached for active subscription plan (${entitlement.roomLimit} rooms)`);
+      (err as any).code = 'ROOM_LIMIT_REACHED';
       (err as any).statusCode = 409;
       throw err;
     }

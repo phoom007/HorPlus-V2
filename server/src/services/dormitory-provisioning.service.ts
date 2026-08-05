@@ -12,6 +12,7 @@ import { IRoomRepository } from '../db/repositories/room.repository.js';
 import { SensitiveFieldService } from './sensitive-field.service.js';
 import { PromoService } from './promo.service.js';
 import { TrialSubscriptionService } from './trial-subscription.service.js';
+import { subscriptionEntitlementService } from './subscription-entitlement.service.js';
 import { AuditService } from './audit.service.js';
 import { withUserProvisioningTransaction } from '../db/transaction-rls.js';
 import { parseRoomIdentifier } from '../utils/normalization.js';
@@ -127,6 +128,8 @@ export class DormitoryProvisioningService {
 
   public async completeOwnerOnboarding(params: CompleteOwnerOnboardingParams): Promise<any> {
     const { userId, idempotencyKey, requestId, planCode, promoCode, dormitory, billing, buildings, rooms } = params;
+
+    await subscriptionEntitlementService.assertDormitoryCreationAllowed(userId);
 
     if (!idempotencyKey || !idempotencyKey.trim()) {
       const err: any = new Error('IDEMPOTENCY_KEY_REQUIRED: กรุณาระบุ X-Idempotency-Key สำหรับการสร้างหอพัก');
@@ -452,6 +455,9 @@ export class DormitoryProvisioningService {
           currentPeriodEndsAt: trialCalc.trialEndsAt,
         };
         const createdSub = tx.dormitory ? await tx.platformSubscription.create({ data: subData }) : await this.subRepo.create(subData as any);
+        if (tx.dormitorySubscription) {
+          await subscriptionEntitlementService.provisionInitialTrial(createdDorm.id, tx);
+        }
 
         // Record Promo Redemption if applied
         let promoRedemption = null;
