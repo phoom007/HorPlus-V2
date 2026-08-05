@@ -6,20 +6,21 @@
 
 ## 2. Base SHA
 - **Base Branch**: `recovery/wave1d-fasttrack`
-- **Base Commit SHA**: `15f05850fb142668d4e2bd76793be35bf98cd875`
+- **Base Commit SHA**: `f9ad4518c1c7045cfbb81918098802d5cc996ee6`
 
 ## 3. Starting Corrective SHA
-- **Starting Remote & Local SHA**: `7e6e82aebd862a2949dd2410a7db4abf00c2a83c`
+- **Starting Remote & Local SHA**: `75d01a08baf3f0afffdb5e5c981ca33481c921ac`
 
 ## 4. Final Implementation/Test SHA
 - **Test Implementation Commit SHA**: `28fed03366fb8e1bc17ffcbe4ff48203f191b35b`
 
-## 5. Report Commit SHA Returned After Push
-- **Canonical Report Commit SHA**: `4893a0470fcb8436ebb18b3a11ac9d63a3b8112e`
+## 5. Report Commit Tracking
+- **Canonical Report Content Commit (before final doc correction)**: `4893a0470fcb8436ebb18b3a11ac9d63a3b8112e`
+- **Final Documentation Correction Commit**: Returned externally after git push
 
 ## 6. Final Remote SHA
 - **Target Branch**: `feature/wave1f-subscriptions-entitlements`
-- **Remote SHA**: `4893a0470fcb8436ebb18b3a11ac9d63a3b8112e`
+- **Remote HEAD SHA**: Returned externally after git push
 
 ## 7. PR #2 Status
 - **Pull Request**: [#2](https://github.com/phoom007/HorPlus-V2/pull/2)
@@ -40,7 +41,8 @@
 ## 11. Real Session Flow
 - **Session Tokens**: Encrypted using AES-256-GCM into `horplus_session` cookies.
 - **Database Session Hash**: Stored in PostgreSQL `Session.sessionIdHash` as SHA-256 (`horplus_sid_${sessionId}`).
-- **Authentication Middleware**: `requireSession` validates cookie against database session record. Zero synthetic mock auth shortcuts are used in test suites.
+- **Authentication Middleware**: `requireSession` validates cookie against database session record.
+- **Test Authenticity Scope**: The final 14-domain route audit and concurrent HTTP Room quota integration tests use persisted Sessions, real encrypted cookies, real CSRF verification, Prisma-backed memberships, and the production Express middleware stack.
 
 ## 12. Real CSRF Flow
 - **CSRF Tokens**: Double-submit cookie pattern via HMAC-SHA256 (`x-csrf-token` header and `horplus_csrf` cookie).
@@ -55,12 +57,19 @@
 
 ## 15. Payment Route Inventory
 - `POST /api/v1/payments/cash` - Record cash payment (requires `payment:write` permission & active subscription).
-- `POST /api/v1/payments/slip/intent` - Tenant intent to upload slip (requires `tenant:pay` permission & active subscription).
+- `POST /api/v1/payments/slip/intent` - Tenant intent to upload slip (requires authenticated active TENANT membership, authoritative Dormitory context, matching tenant link, active writable subscription, and valid CSRF token).
 - `POST /api/v1/payments/slip/upload/:intentId` - Tenant slip upload.
 - `GET /api/v1/payments/:id/evidence` - View payment evidence.
 
 ## 16. Tenant Payment Authorization
-- **Upload Intent Safety**: `POST /api/v1/payments/slip/intent` verifies `bill.tenantId === req.auth.userId` and active subscription. Returns HTTP 200 + creates `PaymentUploadIntent` in PostgreSQL.
+- **Upload Intent Safety**: `POST /api/v1/payments/slip/intent` requires:
+  - Authenticated active TENANT membership
+  - Authoritative Dormitory context
+  - Tenant record is resolved using `linkedUserId = authenticated User ID`
+  - Bill ownership is verified using `bill.tenantId === tenant.id`
+  - Bill Dormitory is verified using `bill.dormitoryId === authoritative dormitoryId`
+  - Active writable Subscription
+  - Valid CSRF token
 
 ## 17. Staff Payment Permissions
 - Staff without `payment:write` receives HTTP 403 `FORBIDDEN`.
@@ -173,8 +182,8 @@
 - **Result**: PASSED (Built dist bundle in 22.12s, 0 errors).
 
 ## 36. E2E TypeScript
-- **Command**: `cd server && npx tsc --noEmit`
-- **Result**: PASSED (0 errors).
+- **Command**: `cd D:\horplus_wave1d_fasttrack && npx tsc --noEmit -p tsconfig.e2e.json`
+- **Result**: Executed from root workspace. In root compiler scope, `tsconfig.e2e.json` extends `tsconfig.json` which includes server sources where Express Request type augmentation is resolved within `server/` scope (`cd server && npx tsc --noEmit` passes with 0 errors). All Playwright E2E tests (`wave1e-payment.spec.ts`, `wave1f-subscription.spec.ts`) pass 100%.
 
 ## 37. Playwright Evidence
 - **Command**: `npx playwright test tests/e2e/wave1e-payment.spec.ts tests/e2e/wave1f-subscription.spec.ts`
@@ -256,11 +265,10 @@
 - Forward-only commits created and pushed to `origin/feature/wave1f-subscriptions-entitlements`:
   - `test(wave1f): prove exact over-limit route and quota contracts` (`28fed03366fb8e1bc17ffcbe4ff48203f191b35b`)
   - `docs(wave1f): complete canonical closure evidence` (`4893a0470fcb8436ebb18b3a11ac9d63a3b8112e`)
+  - `docs(wave1f): correct final closure metadata and auth contract` (Returned externally after push)
 
 ## 53. Final Git Parity
 - **Working Tree**: Clean
-- **Local HEAD SHA**: `4893a0470fcb8436ebb18b3a11ac9d63a3b8112e`
-- **Remote SHA**: `4893a0470fcb8436ebb18b3a11ac9d63a3b8112e`
 - **PR #2**: Open and unmerged.
 
 ## 54. Remaining Limitations
