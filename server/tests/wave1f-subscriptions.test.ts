@@ -1118,12 +1118,20 @@ describe('Wave 1F - Authorization, Permission, Package & Idempotency Corrective 
           .send({ roomNumber: 'RMF11', buildingId: bld!.id, floor: 1, monthlyRent: '3000' }),
       ]);
 
-      if (res1.status !== 201 && res1.status !== 409) {
-        console.log('CONCURRENT RES1 DEBUG:', res1.status, res1.body);
-      }
+      const responses = [res1, res2];
+      const successResponse = responses.find((response) => response.status === 201);
+      const rejectedResponse = responses.find((response) => response.status === 409);
 
-      const statuses = [res1.status, res2.status].sort();
-      expect(statuses).toEqual([201, 409]);
+      expect(responses.filter((r) => r.status === 201).length).toBe(1);
+      expect(responses.filter((r) => r.status === 409).length).toBe(1);
+
+      expect(successResponse).toBeDefined();
+      expect(successResponse!.status).toBe(201);
+      expect(successResponse!.body.data || successResponse!.body.roomNumber || successResponse!.body.id).toBeDefined();
+
+      expect(rejectedResponse).toBeDefined();
+      expect(rejectedResponse!.status).toBe(409);
+      expect(rejectedResponse!.body.errorCode || rejectedResponse!.body.error?.code).toBe('ROOM_LIMIT_REACHED');
 
       const activeCount = await prisma.room.count({ where: { dormitoryId: concDormId, deletedAt: null } });
       expect(activeCount).toBe(10);
@@ -1157,8 +1165,20 @@ describe('Wave 1F - Authorization, Permission, Package & Idempotency Corrective 
           .send({ roomNumber: 'RMP151', buildingId: bld!.id, floor: 1, monthlyRent: '3000' }),
       ]);
 
-      const statuses = [res1.status, res2.status].sort();
-      expect(statuses).toEqual([201, 409]);
+      const responses = [res1, res2];
+      const successResponse = responses.find((response) => response.status === 201);
+      const rejectedResponse = responses.find((response) => response.status === 409);
+
+      expect(responses.filter((r) => r.status === 201).length).toBe(1);
+      expect(responses.filter((r) => r.status === 409).length).toBe(1);
+
+      expect(successResponse).toBeDefined();
+      expect(successResponse!.status).toBe(201);
+      expect(successResponse!.body.data || successResponse!.body.roomNumber || successResponse!.body.id).toBeDefined();
+
+      expect(rejectedResponse).toBeDefined();
+      expect(rejectedResponse!.status).toBe(409);
+      expect(rejectedResponse!.body.errorCode || rejectedResponse!.body.error?.code).toBe('ROOM_LIMIT_REACHED');
 
       const activeCount = await prisma.room.count({ where: { dormitoryId: concDormId, deletedAt: null } });
       expect(activeCount).toBe(150);

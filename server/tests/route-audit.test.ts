@@ -379,14 +379,15 @@ describe('Wave 1F - Real-Session 14-Domain Route Audit Matrix', () => {
           .send(targetBody);
         expect(anonRes.status).toBe(401);
 
-        // 2. Limited staff without write permission -> 403 FORBIDDEN
+        // 2. Limited staff without write permission -> exact 403 FORBIDDEN or PERMISSION_DENIED
         const forbiddenRes = await (request(app) as any)[spec.method](targetPath)
           .set('Cookie', [`horplus_session=${limitedSessionCookie}`, `horplus_csrf=${limitedCsrfToken}`])
           .set('x-csrf-token', limitedCsrfToken)
           .set('x-dormitory-id', dormId)
           .send(targetBody);
         expect(forbiddenRes.status).toBe(403);
-        expect(forbiddenRes.body.error?.code || forbiddenRes.body.errorCode || forbiddenRes.body.code).toMatch(/FORBIDDEN|PERMISSION_DENIED|CSRF/);
+        const forbiddenCode = forbiddenRes.body.error?.code || forbiddenRes.body.errorCode || forbiddenRes.body.code;
+        expect(['FORBIDDEN', 'PERMISSION_DENIED']).toContain(forbiddenCode);
 
         // 3. Owner + Expired Subscription -> 403 SUBSCRIPTION_READ_ONLY
         await prisma.dormitorySubscription.update({
@@ -410,12 +411,45 @@ describe('Wave 1F - Real-Session 14-Domain Route Audit Matrix', () => {
           .set('x-dormitory-id', dormId);
         expect(expiredGetRes.status).toBe(200);
 
-        // 5. Restore Active Subscription & test Owner mutation -> Exact Expected Status & Code
+        // 5. Owner + Active Free Subscription + Over-Limit (> 10 active rooms) -> 403 SUBSCRIPTION_READ_ONLY
         await prisma.dormitorySubscription.update({
           where: { dormitoryId: dormId },
           data: { status: 'ACTIVE', expiresAt: new Date(Date.now() + 30 * 86400 * 1000) },
         });
 
+        const extraRoomsData = Array.from({ length: 11 }, (_, i) => ({
+          dormitoryId: dormId,
+          buildingId: buildingId,
+          roomNumber: `OVR-${i + 1}`,
+          normalizedRoomNumber: `ovr-${i + 1}`,
+          floor: 1,
+          monthlyRent: 3000,
+          status: 'vacant',
+        }));
+        await prisma.room.createMany({ data: extraRoomsData });
+
+        const overLimitRes = await (request(app) as any)[spec.method](targetPath)
+          .set('Cookie', [`horplus_session=${ownerSessionCookie}`, `horplus_csrf=${ownerCsrfToken}`])
+          .set('x-csrf-token', ownerCsrfToken)
+          .set('x-dormitory-id', dormId)
+          .send(targetBody);
+        expect(overLimitRes.status).toBe(403);
+        expect(overLimitRes.body.errorCode || overLimitRes.body.error?.code).toBe('SUBSCRIPTION_READ_ONLY');
+
+        // Authorized GET while Over-Limit -> 200 OK
+        const overLimitGetRes = await request(app)
+          .get(targetGetPath)
+          .set('Cookie', [`horplus_session=${ownerSessionCookie}`, `horplus_csrf=${ownerCsrfToken}`])
+          .set('x-csrf-token', ownerCsrfToken)
+          .set('x-dormitory-id', dormId);
+        expect(overLimitGetRes.status).toBe(200);
+
+        // Clean up extra over-limit rooms to restore compliant room count for active phase
+        await prisma.room.deleteMany({
+          where: { dormitoryId: dormId, roomNumber: { startsWith: 'OVR-' } },
+        });
+
+        // 6. Active Subscription & Compliant Limit -> Owner Mutation Returns Exact Expected Status & Code
         const activeRes = await (request(app) as any)[spec.method](targetPath)
           .set('Cookie', [`horplus_session=${ownerSessionCookie}`, `horplus_csrf=${ownerCsrfToken}`])
           .set('x-csrf-token', ownerCsrfToken)
@@ -426,6 +460,29 @@ describe('Wave 1F - Real-Session 14-Domain Route Audit Matrix', () => {
           expect(activeRes.body.errorCode || activeRes.body.error?.code || activeRes.body.code).toBe(spec.expectedCode);
         }
       });
+    });
+  });
+
+  describe('CSRF Validation Safety', () => {
+    it('Valid Session + missing/invalid CSRF token -> exact 403 CSRF_INVALID rejection', async () => {
+      const resMissing = await request(app)
+        .post('/api/v1/properties/buildings')
+        .set('Cookie', [`horplus_session=${ownerSessionCookie}`]) // No horplus_csrf cookie & no x-csrf-token header
+        .set('x-dormitory-id', dormId)
+        .send({ name: 'CSRF Missing Test' });
+
+      expect(resMissing.status).toBe(403);
+      expect(resMissing.body.error?.code || resMissing.body.errorCode).toBe('CSRF_INVALID');
+
+      const resInvalid = await request(app)
+        .post('/api/v1/properties/buildings')
+        .set('Cookie', [`horplus_session=${ownerSessionCookie}`])
+        .set('x-csrf-token', 'invalid-csrf-token')
+        .set('x-dormitory-id', dormId)
+        .send({ name: 'CSRF Invalid Test' });
+
+      expect(resInvalid.status).toBe(403);
+      expect(resInvalid.body.error?.code || resInvalid.body.errorCode).toBe('CSRF_INVALID');
     });
   });
 
