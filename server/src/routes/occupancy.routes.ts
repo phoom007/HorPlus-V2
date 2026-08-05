@@ -2,6 +2,8 @@ import { Router, Request, Response } from 'express';
 import { AuthenticationService } from '../services/auth.service.js';
 import { OccupancyService } from '../services/occupancy.service.js';
 import { createRequireSessionMiddleware } from '../middleware/require-session.js';
+import { requireDormitoryPermission } from '../middleware/permission.js';
+import { requireDormitoryWriteEntitlement } from '../middleware/entitlement.js';
 
 export function createOccupancyRouter(
   authService: AuthenticationService,
@@ -9,6 +11,11 @@ export function createOccupancyRouter(
 ): Router {
   const router = Router();
   const requireSession = createRequireSessionMiddleware(authService);
+
+  const mutationGuard = (permission: string) => [
+    requireDormitoryPermission(permission),
+    requireDormitoryWriteEntitlement,
+  ];
 
   const getDormitoryId = (req: Request): string => {
     return (req.headers['x-dormitory-id'] as string) || req.auth?.dormitoryId || 'dorm-001';
@@ -28,7 +35,7 @@ export function createOccupancyRouter(
   };
 
   // GET /api/v1/occupancy/summary
-  router.get('/summary', requireSession, async (req: Request, res: Response) => {
+  router.get('/summary', async (req: Request, res: Response) => {
     try {
       const dormId = getDormitoryId(req);
       const summary = await occupancyService.getOccupancySummary(dormId);
@@ -39,7 +46,7 @@ export function createOccupancyRouter(
   });
 
   // GET /api/v1/occupancy/floor-plan
-  router.get('/floor-plan', requireSession, async (req: Request, res: Response) => {
+  router.get('/floor-plan', async (req: Request, res: Response) => {
     try {
       const dormId = getDormitoryId(req);
       const buildingId = req.query.buildingId as string;
@@ -51,7 +58,7 @@ export function createOccupancyRouter(
   });
 
   // POST /api/v1/occupancies/:id/move-out
-  router.post('/:id/move-out', requireSession, async (req: Request, res: Response) => {
+  router.post('/:id/move-out', mutationGuard('occupancy:write'), async (req: Request, res: Response) => {
     try {
       const dormId = getDormitoryId(req);
       const occupancyId = req.params.id;
@@ -61,7 +68,7 @@ export function createOccupancyRouter(
       if (!userId) {
         return res.status(401).json({ error: { code: 'UNAUTHORIZED', message: 'Unauthorized' } });
       }
-      
+
       const result = await occupancyService.moveOut(dormId, occupancyId, moveOutDate, userId);
       res.json({ data: result });
     } catch (err) {
@@ -70,7 +77,7 @@ export function createOccupancyRouter(
   });
 
   // POST /api/v1/occupancies/:id/transfer
-  router.post('/:id/transfer', requireSession, async (req: Request, res: Response) => {
+  router.post('/:id/transfer', mutationGuard('occupancy:write'), async (req: Request, res: Response) => {
     try {
       const dormId = getDormitoryId(req);
       const occupancyId = req.params.id;

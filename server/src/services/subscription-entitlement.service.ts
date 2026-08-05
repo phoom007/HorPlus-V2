@@ -169,31 +169,35 @@ export class SubscriptionEntitlementService {
       const expiresAt = new Date(dorm.createdAt.getTime() + 30 * 24 * 60 * 60 * 1000);
       const status = expiresAt.getTime() > now.getTime() ? 'TRIAL' : 'EXPIRED';
 
-      const sub = await db.dormitorySubscription.create({
-        data: {
-          dormitoryId: dorm.id,
-          planId: freePlan.id,
-          status,
-          startedAt: dorm.createdAt,
-          expiresAt,
-          trialStartedAt: dorm.createdAt,
-          trialExpiresAt: expiresAt,
-        },
-      });
+      try {
+        const sub = await db.dormitorySubscription.create({
+          data: {
+            dormitoryId: dorm.id,
+            planId: freePlan.id,
+            status,
+            startedAt: dorm.createdAt,
+            expiresAt,
+            trialStartedAt: dorm.createdAt,
+            trialExpiresAt: expiresAt,
+          },
+        });
 
-      await db.subscriptionStatusHistory.create({
-        data: {
-          subscriptionId: sub.id,
-          dormitoryId: dorm.id,
-          previousPlanId: freePlan.id,
-          newPlanId: freePlan.id,
-          previousStatus: null,
-          newStatus: status,
-          reason: 'EXISTING_DORMITORY_BACKFILL_30_DAY_TRIAL',
-        },
-      });
-
-      count++;
+        await db.subscriptionStatusHistory.create({
+          data: {
+            subscriptionId: sub.id,
+            dormitoryId: dorm.id,
+            previousPlanId: freePlan.id,
+            newPlanId: freePlan.id,
+            previousStatus: null,
+            newStatus: status,
+            reason: 'EXISTING_DORMITORY_BACKFILL_30_DAY_TRIAL',
+          },
+        });
+        count++;
+      } catch (err: any) {
+        // Skip if concurrently created
+        if (err.code !== 'P2002') throw err;
+      }
     }
 
     return count;
@@ -204,18 +208,10 @@ export class SubscriptionEntitlementService {
    */
   async getCurrentSubscription(dormitoryId: string, txClient?: any): Promise<any> {
     const db = txClient || this.db;
-    let sub = await db.dormitorySubscription.findUnique({
+    const sub = await db.dormitorySubscription.findUnique({
       where: { dormitoryId },
       include: { plan: true },
     });
-
-    if (!sub) {
-      await this.provisionInitialTrial(dormitoryId, db);
-      sub = await db.dormitorySubscription.findUnique({
-        where: { dormitoryId },
-        include: { plan: true },
-      });
-    }
 
     if (!sub) {
       throw new AppError('No subscription found for this dormitory.', 404, 'SUBSCRIPTION_NOT_FOUND');
@@ -373,7 +369,7 @@ export class SubscriptionEntitlementService {
     }
 
     return await this.db.$transaction(async (tx) => {
-      const payloadHash = `redeem:${params.dormitoryId}:${normalizedCode}`;
+      const payloadHash = `redeem:${params.userId}:${params.dormitoryId}:${normalizedCode}`;
       const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
 
       const existingRecord = await tx.idempotencyKey.findUnique({
@@ -390,9 +386,20 @@ export class SubscriptionEntitlementService {
         if (existingRecord.requestHash !== payloadHash) {
           throw new AppError('Idempotency key payload mismatch.', 409, 'IDEMPOTENCY_MISMATCH');
         }
-        // Return original stored response, not current subscription state
-        return existingRecord.responseBody;
+        return {
+          status: existingRecord.responseStatus,
+          body: existingRecord.responseBody,
+        };
       }
+
+      const updatedSub = await executeRedeem(tx);
+      const entitlements = await this.getEffectiveEntitlements(params.dormitoryId, now, tx);
+
+      const responseBody = {
+        message: 'Promo code redeemed successfully',
+        data: updatedSub,
+        entitlements,
+      };
 
       await tx.idempotencyKey.create({
         data: {
@@ -401,27 +408,15 @@ export class SubscriptionEntitlementService {
           idempotencyKey: params.idempotencyKey,
           requestHash: payloadHash,
           responseStatus: 200,
-          responseBody: {},
+          responseBody: JSON.parse(JSON.stringify(responseBody)),
           expiresAt,
         },
       });
 
-      const result = await executeRedeem(tx);
-
-      await tx.idempotencyKey.update({
-        where: {
-          user_operation_idempotency_unique: {
-            userId: params.userId,
-            operation: 'PROMO_REDEEM',
-            idempotencyKey: params.idempotencyKey,
-          },
-        },
-        data: {
-          responseBody: JSON.parse(JSON.stringify(result)),
-        },
-      });
-
-      return result;
+      return {
+        status: 200,
+        body: responseBody,
+      };
     });
   }
 
@@ -601,7 +596,7 @@ export class SubscriptionEntitlementService {
         include: { plan: true },
       });
 
-      await tx.subscriptionStatusHistory.create({
+      const historyRecord = await tx.subscriptionStatusHistory.create({
         data: {
           subscriptionId: currentSub.id,
           dormitoryId: params.dormitoryId,
@@ -621,7 +616,18 @@ export class SubscriptionEntitlementService {
         },
       });
 
-      return updatedSub;
+      const snapshot = {
+        subscription: updatedSub,
+        packageId: pkg.id,
+        durationMonths: params.durationMonths,
+        price: Number(pkg.price),
+        currency: pkg.currency,
+        effectiveStart: baseStart,
+        newExpiry: newExpiresAt,
+        historyId: historyRecord.id,
+      };
+
+      return snapshot;
     };
 
     if (params.txClient) {
@@ -629,7 +635,12 @@ export class SubscriptionEntitlementService {
     }
 
     return await this.db.$transaction(async (tx) => {
-      const payloadHash = `activate:${params.dormitoryId}:${params.durationMonths}:${params.actorId}`;
+      // Load pkg to construct payloadHash with package ID
+      const paidPlan = await tx.subscriptionPlan.findUnique({ where: { code: 'PAID' } });
+      const pkg = paidPlan ? await tx.subscriptionPackage.findFirst({ where: { planId: paidPlan.id, durationMonths: params.durationMonths } }) : null;
+      const pkgId = pkg?.id || 'unknown';
+
+      const payloadHash = `activate:${params.actorId}:${params.dormitoryId}:${params.durationMonths}:${pkgId}:${params.reason}`;
       const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
 
       const existing = await tx.idempotencyKey.findUnique({
@@ -646,9 +657,13 @@ export class SubscriptionEntitlementService {
         if (existing.requestHash !== payloadHash) {
           throw new AppError('Idempotency key payload mismatch.', 409, 'IDEMPOTENCY_MISMATCH');
         }
-        // Return original stored response, not current subscription state
-        return existing.responseBody;
+        return {
+          status: existing.responseStatus,
+          body: existing.responseBody,
+        };
       }
+
+      const snapshot = await executeActivation(tx);
 
       await tx.idempotencyKey.create({
         data: {
@@ -657,28 +672,15 @@ export class SubscriptionEntitlementService {
           idempotencyKey: params.idempotencyKey,
           requestHash: payloadHash,
           responseStatus: 200,
-          responseBody: {},
+          responseBody: JSON.parse(JSON.stringify(snapshot)),
           expiresAt,
         },
       });
 
-      const result = await executeActivation(tx);
-
-      await tx.idempotencyKey.update({
-        where: {
-          user_operation_idempotency_unique: {
-            userId: params.actorId,
-            operation: 'OPERATIONAL_ACTIVATION',
-            idempotencyKey: params.idempotencyKey,
-          },
-        },
-        data: {
-          responseStatus: 200,
-          responseBody: JSON.parse(JSON.stringify(result)),
-        },
-      });
-
-      return result;
+      return {
+        status: 200,
+        body: snapshot,
+      };
     });
   }
 }

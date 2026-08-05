@@ -98,7 +98,7 @@
     7. `20260805140000_wave1f_subscription_fk_corrective`
   - Result: Exit Code 0, 7/7 applied successfully.
 - Full Vitest backend test suite executed against audited database:
-  - Result: 15 test files passed (15/15), 100 tests passed (100/100).
+  - Result: 15 test files passed (15/15), 105 tests passed (105/105).
 
 ---
 
@@ -111,7 +111,7 @@
   - Operational route absence (HTTP 404 `ROUTE_NOT_FOUND`)
   - Expired subscription read-only mode (HTTP 403 `SUBSCRIPTION_READ_ONLY`)
   - Promo code HORPLUS redemption & idempotency replay
-  - Result: 1/1 passed cleanly in 20.3s.
+  - Result: 1/1 passed cleanly in 27.4s.
 
 ---
 
@@ -119,9 +119,9 @@
 
 | Verification Gate | Target | Result | Evidence |
 | :--- | :--- | :--- | :--- |
-| TypeScript Compiler | Server & E2E | PASSED | 0 errors |
-| Backend Vitest | `server/tests/` | PASSED | 15 files, 100/100 tests passed |
-| Express Route Audit | `server/tests/route-audit.test.ts` | PASSED | 100% routes audited, op activation 404 |
-| Zero-State Migration Audit | Port 5455 PostgreSQL | PASSED | 7 migrations applied cleanly, 100/100 tests pass |
-| Playwright E2E | `tests/e2e/wave1f-subscription.spec.ts` | PASSED | 1/1 passed (20.3s) |
+| TypeScript Compiler | Server & E2E | PASSED | 0 errors (`npx tsc --noEmit`) |
+| Backend Vitest | `server/tests/` | PASSED | 15 files, 105/105 tests passed |
+| Express Route Audit | `server/tests/route-audit.test.ts` | PASSED | Supertest matrix audited, op activation 404 |
+| Zero-State Migration Audit | Port 5455 PostgreSQL | PASSED | 7 migrations applied cleanly, 105/105 tests pass |
+| Playwright E2E | `tests/e2e/wave1f-subscription.spec.ts` | PASSED | 1/1 passed (27.4s) |
 | Git Working Tree | Working Copy | CLEAN | Working tree clean, published history intact |

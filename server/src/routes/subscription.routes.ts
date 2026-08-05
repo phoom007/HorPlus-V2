@@ -80,19 +80,14 @@ export function createSubscriptionRouter(authService?: AuthenticationService): R
       }
 
       const parsed = promoRedeemSchema.parse(req.body);
-      const subscription = await subscriptionEntitlementService.redeemPromoCode({
+      const result = await subscriptionEntitlementService.redeemPromoCode({
         dormitoryId: context.dormitoryId,
         code: parsed.code,
         userId: context.userId,
         idempotencyKey,
       });
 
-      const entitlements = await subscriptionEntitlementService.getEffectiveEntitlements(context.dormitoryId);
-      return res.json({
-        message: 'Promo code redeemed successfully',
-        data: subscription,
-        entitlements,
-      });
+      return res.status(result.status).json(result.body);
     } catch (err) {
       next(err);
     }

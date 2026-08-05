@@ -1,11 +1,18 @@
 import { Router, Request, Response } from 'express';
 import { MaintenanceService } from '../services/maintenance.service.js';
 import { extractUnifiedActor } from '../middleware/unified-actor.middleware.js';
+import { requireDormitoryPermission } from '../middleware/permission.js';
+import { requireDormitoryWriteEntitlement } from '../middleware/entitlement.js';
 
 export function createMaintenanceRouter(maintenanceService: MaintenanceService = new MaintenanceService()): Router {
   const router = Router();
 
   router.use(extractUnifiedActor);
+
+  const mutationGuard = (permission: string) => [
+    requireDormitoryPermission(permission),
+    requireDormitoryWriteEntitlement,
+  ];
 
   // Helper to extract actor & dormitoryId
   const getContext = (req: Request) => {
@@ -42,7 +49,7 @@ export function createMaintenanceRouter(maintenanceService: MaintenanceService =
   });
 
   // POST /api/v1/maintenance-requests (Created by Staff on behalf of tenant)
-  router.post('/', async (req: Request, res: Response) => {
+  router.post('/', mutationGuard('maintenance:write'), async (req: Request, res: Response) => {
     try {
       const { actor, dormitoryId } = getContext(req);
       const { tenantId, roomId, category, title, description, priority, preferredDate, preferredTimeRange } = req.body;
@@ -88,7 +95,7 @@ export function createMaintenanceRouter(maintenanceService: MaintenanceService =
   });
 
   // POST /api/v1/maintenance-requests/:requestId/acknowledge
-  router.post('/:requestId/acknowledge', async (req: Request, res: Response) => {
+  router.post('/:requestId/acknowledge', mutationGuard('maintenance:write'), async (req: Request, res: Response) => {
     try {
       const { actor, dormitoryId } = getContext(req);
       const updated = await maintenanceService.acknowledgeRequest(dormitoryId, req.params.requestId, actor?.userId || 'system');
@@ -99,7 +106,7 @@ export function createMaintenanceRouter(maintenanceService: MaintenanceService =
   });
 
   // POST /api/v1/maintenance-requests/:requestId/assign
-  router.post('/:requestId/assign', async (req: Request, res: Response) => {
+  router.post('/:requestId/assign', mutationGuard('maintenance:write'), async (req: Request, res: Response) => {
     try {
       const { actor, dormitoryId } = getContext(req);
       const { assignedMemberId } = req.body;
@@ -122,7 +129,7 @@ export function createMaintenanceRouter(maintenanceService: MaintenanceService =
   });
 
   // POST /api/v1/maintenance-requests/:requestId/status
-  router.post('/:requestId/status', async (req: Request, res: Response) => {
+  router.post('/:requestId/status', mutationGuard('maintenance:write'), async (req: Request, res: Response) => {
     try {
       const { actor, dormitoryId } = getContext(req);
       const { status, note } = req.body;
@@ -150,7 +157,7 @@ export function createMaintenanceRouter(maintenanceService: MaintenanceService =
   });
 
   // POST /api/v1/maintenance-requests/:requestId/close
-  router.post('/:requestId/close', async (req: Request, res: Response) => {
+  router.post('/:requestId/close', mutationGuard('maintenance:write'), async (req: Request, res: Response) => {
     try {
       const { actor, dormitoryId } = getContext(req);
       const { note } = req.body;
@@ -176,7 +183,7 @@ export function createMaintenanceRouter(maintenanceService: MaintenanceService =
   });
 
   // POST /api/v1/maintenance-requests/:requestId/reopen
-  router.post('/:requestId/reopen', async (req: Request, res: Response) => {
+  router.post('/:requestId/reopen', mutationGuard('maintenance:write'), async (req: Request, res: Response) => {
     try {
       const { actor, dormitoryId } = getContext(req);
       const { reason } = req.body;
@@ -203,7 +210,7 @@ export function createMaintenanceRouter(maintenanceService: MaintenanceService =
   });
 
   // POST /api/v1/maintenance-requests/:requestId/cancel
-  router.post('/:requestId/cancel', async (req: Request, res: Response) => {
+  router.post('/:requestId/cancel', mutationGuard('maintenance:write'), async (req: Request, res: Response) => {
     try {
       const { actor, dormitoryId } = getContext(req);
       const { reason } = req.body;
@@ -225,7 +232,7 @@ export function createMaintenanceRouter(maintenanceService: MaintenanceService =
   });
 
   // POST /api/v1/maintenance-requests/:requestId/comments
-  router.post('/:requestId/comments', async (req: Request, res: Response) => {
+  router.post('/:requestId/comments', mutationGuard('maintenance:write'), async (req: Request, res: Response) => {
     try {
       const { actor, dormitoryId } = getContext(req);
       const { message, visibility } = req.body;
@@ -260,7 +267,7 @@ export function createMaintenanceRouter(maintenanceService: MaintenanceService =
   });
 
   // PATCH /api/v1/maintenance-requests/:requestId/cost
-  router.patch('/:requestId/cost', async (req: Request, res: Response) => {
+  router.patch('/:requestId/cost', mutationGuard('maintenance:write'), async (req: Request, res: Response) => {
     try {
       const { actor, dormitoryId } = getContext(req);
       const { laborCost, materialCost, otherCost, note } = req.body;

@@ -9,6 +9,7 @@ import { SensitiveFieldService } from '../services/sensitive-field.service.js';
 import { createRequireSessionMiddleware } from '../middleware/require-session.js';
 import { createRequireDormitoryContextMiddleware } from '../middleware/require-dormitory.js';
 import { createRequirePermissionMiddleware } from '../middleware/require-permission.js';
+import { requireDormitoryWriteEntitlement } from '../middleware/entitlement.js';
 import { permissionService } from '../services/permission.service.js';
 import {
   UpdateDormitoryInputSchema,
@@ -82,9 +83,6 @@ export function createDormitoryRouter(
     }
 
     // WAVE0_LEGACY_COMPAT: Include dormitories where user is the legacy creator
-    // (createdByUserId) but has no active DormitoryMember record. Grants OWNER
-    // access only. Never infers MANAGER, TECH, or HOUSEKEEPING roles.
-    // Remove this fallback after confirmed Membership backfill.
     try {
       const prisma = getPrismaClient();
       if (prisma?.dormitory) {
@@ -111,7 +109,6 @@ export function createDormitoryRouter(
         }
       }
     } catch (_legacyErr) {
-      // Legacy compat query failure is non-fatal — membership path still works
     }
 
     res.json({ data: dormList });
@@ -137,7 +134,7 @@ export function createDormitoryRouter(
   });
 
   // PATCH /api/v1/dormitories/:dormitoryId - Update
-  router.patch('/:dormitoryId', requireSession, requireDormitory, requireDormitoryUpdate, async (req: Request, res: Response) => {
+  router.patch('/:dormitoryId', requireSession, requireDormitory, requireDormitoryUpdate, requireDormitoryWriteEntitlement, async (req: Request, res: Response) => {
     if (!verifyCsrfToken(req, res)) return;
 
     const parsed = UpdateDormitoryInputSchema.safeParse(req.body);
@@ -167,7 +164,7 @@ export function createDormitoryRouter(
   });
 
   // PATCH /api/v1/dormitories/:dormitoryId/billing-settings
-  router.patch('/:dormitoryId/billing-settings', requireSession, requireDormitory, requireBillingUpdate, async (req: Request, res: Response) => {
+  router.patch('/:dormitoryId/billing-settings', requireSession, requireDormitory, requireBillingUpdate, requireDormitoryWriteEntitlement, async (req: Request, res: Response) => {
     if (!verifyCsrfToken(req, res)) return;
 
     const parsed = OnboardingBillingInputSchema.partial().safeParse(req.body);
@@ -192,12 +189,6 @@ export function createDormitoryRouter(
     const updated = await billingRepo.update(dormitoryId, parsed.data as any);
     res.json({ data: updated });
   });
-
-  // GET /api/v1/dormitories/:dormitoryId/payment-settings
-  
-
-  // PATCH /api/v1/dormitories/:dormitoryId/payment-settings
-  
 
   // GET /api/v1/dormitories/:dormitoryId/subscription
   router.get('/:dormitoryId/subscription', requireSession, requireDormitory, requireSubscriptionView, async (req: Request, res: Response) => {
@@ -234,7 +225,7 @@ export function createDormitoryRouter(
               monthlyPrice: plan.monthlyPrice,
               currency: plan.currency,
               vatIncluded: plan.vatIncluded,
-              roomLimit: plan.roomLimit, // null for ENTERPRISE
+              roomLimit: plan.roomLimit,
               messageQuotaMonthly: plan.messageQuotaMonthly,
             }
           : null,

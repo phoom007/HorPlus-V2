@@ -248,6 +248,27 @@ describe('Wave 1F - Authorization, Permission, Package & Idempotency Corrective 
     expect(legacySubs.length).toBe(0);
   });
 
+  it('GET-side subscription lookup throws SUBSCRIPTION_NOT_FOUND when missing and creates 0 database records', async () => {
+    const noSubDormId = crypto.randomUUID();
+    await prisma.dormitory.create({
+      data: { id: noSubDormId, name: 'No Sub Dorm', code: `NOSUB-${Date.now()}`, addressLine1: '000 NoSub St', postalCode: '10100', phone: '0800000000', status: 'active', createdByUserId: ownerUserId },
+    });
+
+    // Execute GET-side getCurrentSubscription 3 times
+    for (let i = 0; i < 3; i++) {
+      await expect(entitlementService.getCurrentSubscription(noSubDormId)).rejects.toThrow('No subscription found for this dormitory.');
+    }
+
+    // Assert database counts remain strictly 0
+    const subCount = await prisma.dormitorySubscription.count({ where: { dormitoryId: noSubDormId } });
+    const historyCount = await prisma.subscriptionStatusHistory.count({ where: { dormitoryId: noSubDormId } });
+    const legacyCount = await prisma.platformSubscription.count({ where: { dormitoryId: noSubDormId } });
+
+    expect(subCount).toBe(0);
+    expect(historyCount).toBe(0);
+    expect(legacyCount).toBe(0);
+  });
+
   // ─── Backfill Tests ───
 
   it('backfills missing subscriptions for existing dormitories idempotently', async () => {
@@ -293,14 +314,16 @@ describe('Wave 1F - Authorization, Permission, Package & Idempotency Corrective 
       dormitoryId: dormId, code: 'HORPLUS', userId: ownerUserId, idempotencyKey,
     });
 
-    const extendedExpiry = sub1.expiresAt.getTime();
+    expect(sub1.status).toBe(200);
+    const extendedExpiry = new Date((sub1.body as any).data.expiresAt).getTime();
     expect(extendedExpiry - initialExpiry).toBeGreaterThanOrEqual(59 * 24 * 60 * 60 * 1000);
 
     // Replay with identical key returns original stored response
     const sub2 = await entitlementService.redeemPromoCode({
       dormitoryId: dormId, code: 'HORPLUS', userId: ownerUserId, idempotencyKey,
     });
-    expect(sub2.expiresAt).toBeDefined();
+    expect(sub2.status).toBe(200);
+    expect((sub2.body as any).data).toBeDefined();
 
     // Attempt second redemption with a different key throws PROMO_ALREADY_REDEEMED
     await expect(
@@ -315,8 +338,8 @@ describe('Wave 1F - Authorization, Permission, Package & Idempotency Corrective 
     const sub1 = await entitlementService.redeemPromoCode({
       dormitoryId: dormId, code: 'HORPLUS', userId: ownerUserId, idempotencyKey,
     });
-    // The first response is the actual subscription object
-    expect(sub1.expiresAt).toBeDefined();
+    expect(sub1.status).toBe(200);
+    expect((sub1.body as any).data).toBeDefined();
 
     // Now modify the subscription externally
     await prisma.dormitorySubscription.update({
@@ -324,12 +347,12 @@ describe('Wave 1F - Authorization, Permission, Package & Idempotency Corrective 
       data: { status: 'EXPIRED' },
     });
 
-    // Replay should return original stored response, not the current SUSPENDED state
+    // Replay should return original stored response
     const replay = await entitlementService.redeemPromoCode({
       dormitoryId: dormId, code: 'HORPLUS', userId: ownerUserId, idempotencyKey,
     });
-    // The stored response should still reflect the pre-modification state
-    expect(replay).toBeDefined();
+    expect(replay.status).toBe(200);
+    expect((replay.body as any).data).toBeDefined();
   });
 
   it('promo idempotency rejects different code with same key', async () => {
@@ -503,7 +526,8 @@ describe('Wave 1F - Authorization, Permission, Package & Idempotency Corrective 
       dormitoryId: dormId, durationMonths: 1, actorId: ownerUserId,
       idempotencyKey, reason: 'Initial activation',
     });
-    expect(result1).toBeDefined();
+    expect(result1.status).toBe(200);
+    expect((result1.body as any).subscription.status).toBe('ACTIVE');
 
     // Modify subscription externally
     await prisma.dormitorySubscription.update({
@@ -516,11 +540,8 @@ describe('Wave 1F - Authorization, Permission, Package & Idempotency Corrective 
       dormitoryId: dormId, durationMonths: 1, actorId: ownerUserId,
       idempotencyKey, reason: 'Initial activation',
     });
-    expect(replay).toBeDefined();
-    // The stored response should reflect ACTIVE, not SUSPENDED
-    if (replay.status) {
-      expect(replay.status).toBe('ACTIVE');
-    }
+    expect(replay.status).toBe(200);
+    expect((replay.body as any).subscription.status).toBe('ACTIVE');
   });
 
   it('activation idempotency mismatch on different payload', async () => {

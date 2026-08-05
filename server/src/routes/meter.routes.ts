@@ -2,6 +2,8 @@ import { Router, Request, Response } from 'express';
 import { AuthenticationService } from '../services/auth.service.js';
 import { MeterService } from '../services/meter.service.js';
 import { createRequireSessionMiddleware } from '../middleware/require-session.js';
+import { requireDormitoryPermission } from '../middleware/permission.js';
+import { requireDormitoryWriteEntitlement } from '../middleware/entitlement.js';
 import {
   CreateMeterDeviceSchema,
   ReplaceMeterSchema,
@@ -15,6 +17,11 @@ export function createMeterRouter(
 ): Router {
   const router = Router();
   const requireSession = createRequireSessionMiddleware(authService);
+
+  const mutationGuard = (permission: string) => [
+    requireDormitoryPermission(permission),
+    requireDormitoryWriteEntitlement,
+  ];
 
   const getDormitoryId = (req: Request): string => {
     return (req.headers['x-dormitory-id'] as string) || req.auth?.dormitoryId || 'dorm-001';
@@ -53,7 +60,7 @@ export function createMeterRouter(
   };
 
   // POST /api/v1/meters/devices
-  router.post('/devices', requireSession, async (req: Request, res: Response) => {
+  router.post('/devices', mutationGuard('meter:write'), async (req: Request, res: Response) => {
     if (!verifyCsrf(req, res)) return;
     try {
       const dormId = getDormitoryId(req);
@@ -77,7 +84,7 @@ export function createMeterRouter(
   });
 
   // GET /api/v1/meters/devices/room/:roomId
-  router.get('/devices/room/:roomId', requireSession, async (req: Request, res: Response) => {
+  router.get('/devices/room/:roomId', async (req: Request, res: Response) => {
     try {
       const dormId = getDormitoryId(req);
       const devices = await meterService.getMeterDevicesByRoom(dormId, req.params.roomId);
@@ -88,7 +95,7 @@ export function createMeterRouter(
   });
 
   // POST /api/v1/meters/replace
-  router.post('/replace', requireSession, async (req: Request, res: Response) => {
+  router.post('/replace', mutationGuard('meter:write'), async (req: Request, res: Response) => {
     if (!verifyCsrf(req, res)) return;
     try {
       const dormId = getDormitoryId(req);
@@ -112,7 +119,7 @@ export function createMeterRouter(
   });
 
   // POST /api/v1/meters/readings/bulk
-  router.post('/readings/bulk', requireSession, async (req: Request, res: Response) => {
+  router.post('/readings/bulk', mutationGuard('meter:write'), async (req: Request, res: Response) => {
     if (!verifyCsrf(req, res)) return;
     try {
       const dormId = getDormitoryId(req);
@@ -136,7 +143,7 @@ export function createMeterRouter(
   });
 
   // GET /api/v1/meters/readings
-  router.get('/readings', requireSession, async (req: Request, res: Response) => {
+  router.get('/readings', async (req: Request, res: Response) => {
     try {
       const dormId = getDormitoryId(req);
       const query = {
@@ -158,7 +165,7 @@ export function createMeterRouter(
   });
 
   // PUT /api/v1/meters/readings/:id
-  router.put('/readings/:id', requireSession, async (req: Request, res: Response) => {
+  router.put('/readings/:id', mutationGuard('meter:write'), async (req: Request, res: Response) => {
     if (!verifyCsrf(req, res)) return;
     try {
       const dormId = getDormitoryId(req);

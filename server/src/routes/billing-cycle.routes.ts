@@ -2,6 +2,8 @@ import { Router, Request, Response } from 'express';
 import { AuthenticationService } from '../services/auth.service.js';
 import { BillingCycleService } from '../services/billing-cycle.service.js';
 import { createRequireSessionMiddleware } from '../middleware/require-session.js';
+import { requireDormitoryPermission } from '../middleware/permission.js';
+import { requireDormitoryWriteEntitlement } from '../middleware/entitlement.js';
 import {
   CreateBillingCycleSchema,
   UpdateBillingCycleSchema,
@@ -13,6 +15,11 @@ export function createBillingCycleRouter(
 ): Router {
   const router = Router();
   const requireSession = createRequireSessionMiddleware(authService);
+
+  const mutationGuard = (permission: string) => [
+    requireDormitoryPermission(permission),
+    requireDormitoryWriteEntitlement,
+  ];
 
   const getDormitoryId = (req: Request): string => {
     return (req.headers['x-dormitory-id'] as string) || req.auth?.dormitoryId || 'dorm-001';
@@ -51,7 +58,7 @@ export function createBillingCycleRouter(
   };
 
   // GET /api/v1/billing-cycles
-  router.get('/', requireSession, async (req: Request, res: Response) => {
+  router.get('/', async (req: Request, res: Response) => {
     try {
       const dormId = getDormitoryId(req);
       const query = {
@@ -73,7 +80,7 @@ export function createBillingCycleRouter(
   });
 
   // GET /api/v1/billing-cycles/:id
-  router.get('/:id', requireSession, async (req: Request, res: Response) => {
+  router.get('/:id', async (req: Request, res: Response) => {
     try {
       const dormId = getDormitoryId(req);
       const result = await billingCycleService.getBillingCycleById(req.params.id, dormId);
@@ -84,7 +91,7 @@ export function createBillingCycleRouter(
   });
 
   // POST /api/v1/billing-cycles
-  router.post('/', requireSession, async (req: Request, res: Response) => {
+  router.post('/', mutationGuard('billing:write'), async (req: Request, res: Response) => {
     if (!verifyCsrf(req, res)) return;
     try {
       const dormId = getDormitoryId(req);
@@ -108,7 +115,7 @@ export function createBillingCycleRouter(
   });
 
   // PUT /api/v1/billing-cycles/:id
-  router.put('/:id', requireSession, async (req: Request, res: Response) => {
+  router.put('/:id', mutationGuard('billing:write'), async (req: Request, res: Response) => {
     if (!verifyCsrf(req, res)) return;
     try {
       const dormId = getDormitoryId(req);
@@ -133,7 +140,7 @@ export function createBillingCycleRouter(
   });
 
   // POST /api/v1/billing-cycles/:id/lock
-  router.post('/:id/lock', requireSession, async (req: Request, res: Response) => {
+  router.post('/:id/lock', mutationGuard('billing:write'), async (req: Request, res: Response) => {
     if (!verifyCsrf(req, res)) return;
     try {
       const dormId = getDormitoryId(req);

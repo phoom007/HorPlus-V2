@@ -3,6 +3,8 @@ import { AuthenticationService } from '../services/auth.service.js';
 import { BuildingService } from '../services/building.service.js';
 import { RoomService } from '../services/room.service.js';
 import { createRequireSessionMiddleware } from '../middleware/require-session.js';
+import { requireDormitoryPermission } from '../middleware/permission.js';
+import { requireDormitoryWriteEntitlement } from '../middleware/entitlement.js';
 import {
   CreateBuildingSchema,
   UpdateBuildingSchema,
@@ -19,6 +21,11 @@ export function createPropertyRouter(
 ): Router {
   const router = Router();
   const requireSession = createRequireSessionMiddleware(authService);
+
+  const mutationGuard = (permission: string) => [
+    requireDormitoryPermission(permission),
+    requireDormitoryWriteEntitlement,
+  ];
 
   const getDormitoryId = (req: Request): string => {
     const context = resolveAuthoritativeDormitoryContext(req);
@@ -60,7 +67,7 @@ export function createPropertyRouter(
   // --- BUILDINGS ---
 
   // GET /api/v1/properties/buildings
-  router.get('/buildings', requireSession, async (req: Request, res: Response) => {
+  router.get('/buildings', async (req: Request, res: Response) => {
     try {
       const dormId = getDormitoryId(req);
       const query = {
@@ -79,7 +86,7 @@ export function createPropertyRouter(
   });
 
   // GET /api/v1/properties/buildings/:id
-  router.get('/buildings/:id', requireSession, async (req: Request, res: Response) => {
+  router.get('/buildings/:id', async (req: Request, res: Response) => {
     try {
       const dormId = getDormitoryId(req);
       const building = await buildingService.getBuildingById(req.params.id, dormId);
@@ -90,7 +97,7 @@ export function createPropertyRouter(
   });
 
   // POST /api/v1/properties/buildings
-  router.post('/buildings', requireSession, async (req: Request, res: Response) => {
+  router.post('/buildings', mutationGuard('building:write'), async (req: Request, res: Response) => {
     if (!verifyCsrf(req, res)) return;
     try {
       const dormId = getDormitoryId(req);
@@ -114,7 +121,7 @@ export function createPropertyRouter(
   });
 
   // PUT /api/v1/properties/buildings/:id
-  router.put('/buildings/:id', requireSession, async (req: Request, res: Response) => {
+  router.put('/buildings/:id', mutationGuard('building:write'), async (req: Request, res: Response) => {
     if (!verifyCsrf(req, res)) return;
     try {
       const dormId = getDormitoryId(req);
@@ -139,7 +146,7 @@ export function createPropertyRouter(
   });
 
   // DELETE /api/v1/properties/buildings/:id
-  router.delete('/buildings/:id', requireSession, async (req: Request, res: Response) => {
+  router.delete('/buildings/:id', mutationGuard('building:write'), async (req: Request, res: Response) => {
     if (!verifyCsrf(req, res)) return;
     try {
       const dormId = getDormitoryId(req);
@@ -153,7 +160,7 @@ export function createPropertyRouter(
   // --- ROOMS ---
 
   // GET /api/v1/properties/rooms/available
-  router.get('/rooms/available', requireSession, async (req: Request, res: Response) => {
+  router.get('/rooms/available', async (req: Request, res: Response) => {
     try {
       const dormId = getDormitoryId(req);
       const { startDate, endDate, buildingId } = req.query;
@@ -182,7 +189,7 @@ export function createPropertyRouter(
   });
 
   // GET /api/v1/properties/rooms
-  router.get('/rooms', requireSession, async (req: Request, res: Response) => {
+  router.get('/rooms', async (req: Request, res: Response) => {
     try {
       const dormId = getDormitoryId(req);
       const query = {
@@ -204,7 +211,7 @@ export function createPropertyRouter(
   });
 
   // GET /api/v1/properties/rooms/:id
-  router.get('/rooms/:id', requireSession, async (req: Request, res: Response) => {
+  router.get('/rooms/:id', async (req: Request, res: Response) => {
     try {
       const dormId = getDormitoryId(req);
       const room = await roomService.getRoomById(req.params.id, dormId);
@@ -215,7 +222,7 @@ export function createPropertyRouter(
   });
 
   // POST /api/v1/properties/rooms
-  router.post('/rooms', requireSession, async (req: Request, res: Response) => {
+  router.post('/rooms', mutationGuard('room:write'), async (req: Request, res: Response) => {
     if (!verifyCsrf(req, res)) return;
     try {
       const dormId = getDormitoryId(req);
@@ -239,7 +246,7 @@ export function createPropertyRouter(
   });
 
   // PUT /api/v1/properties/rooms/:id
-  router.put('/rooms/:id', requireSession, async (req: Request, res: Response) => {
+  router.put('/rooms/:id', mutationGuard('room:write'), async (req: Request, res: Response) => {
     if (!verifyCsrf(req, res)) return;
     try {
       const dormId = getDormitoryId(req);
@@ -265,7 +272,7 @@ export function createPropertyRouter(
   });
 
   // DELETE /api/v1/properties/rooms/:id
-  router.delete('/rooms/:id', requireSession, async (req: Request, res: Response) => {
+  router.delete('/rooms/:id', mutationGuard('room:write'), async (req: Request, res: Response) => {
     if (!verifyCsrf(req, res)) return;
     try {
       const dormId = getDormitoryId(req);

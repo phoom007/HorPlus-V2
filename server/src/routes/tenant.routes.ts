@@ -2,6 +2,8 @@ import { Router, Request, Response } from 'express';
 import { AuthenticationService } from '../services/auth.service.js';
 import { TenantService } from '../services/tenant.service.js';
 import { createRequireSessionMiddleware } from '../middleware/require-session.js';
+import { requireDormitoryPermission } from '../middleware/permission.js';
+import { requireDormitoryWriteEntitlement } from '../middleware/entitlement.js';
 import {
   CreateTenantSchema,
   UpdateTenantSchema,
@@ -16,6 +18,11 @@ export function createTenantRouter(
 ): Router {
   const router = Router();
   const requireSession = createRequireSessionMiddleware(authService);
+
+  const mutationGuard = (permission: string) => [
+    requireDormitoryPermission(permission),
+    requireDormitoryWriteEntitlement,
+  ];
 
   const getDormitoryId = (req: Request): string => {
     return (req.headers['x-dormitory-id'] as string) || req.auth?.dormitoryId || 'dorm-001';
@@ -53,7 +60,7 @@ export function createTenantRouter(
   };
 
   // GET /api/v1/tenants
-  router.get('/', requireSession, async (req: Request, res: Response) => {
+  router.get('/', async (req: Request, res: Response) => {
     try {
       const dormId = getDormitoryId(req);
       const query = {
@@ -73,7 +80,7 @@ export function createTenantRouter(
   });
 
   // GET /api/v1/tenants/:id
-  router.get('/:id', requireSession, async (req: Request, res: Response) => {
+  router.get('/:id', async (req: Request, res: Response) => {
     try {
       const dormId = getDormitoryId(req);
       const tenantDetails = await tenantService.getTenantDetails(req.params.id, dormId);
@@ -84,7 +91,7 @@ export function createTenantRouter(
   });
 
   // POST /api/v1/tenants
-  router.post('/', requireSession, async (req: Request, res: Response) => {
+  router.post('/', mutationGuard('tenant:write'), async (req: Request, res: Response) => {
     if (!verifyCsrf(req, res)) return;
     try {
       const dormId = getDormitoryId(req);
@@ -108,7 +115,7 @@ export function createTenantRouter(
   });
 
   // PUT /api/v1/tenants/:id
-  router.put('/:id', requireSession, async (req: Request, res: Response) => {
+  router.put('/:id', mutationGuard('tenant:write'), async (req: Request, res: Response) => {
     if (!verifyCsrf(req, res)) return;
     try {
       const dormId = getDormitoryId(req);
@@ -132,7 +139,7 @@ export function createTenantRouter(
   });
 
   // DELETE /api/v1/tenants/:id
-  router.delete('/:id', requireSession, async (req: Request, res: Response) => {
+  router.delete('/:id', mutationGuard('tenant:write'), async (req: Request, res: Response) => {
     if (!verifyCsrf(req, res)) return;
     try {
       const dormId = getDormitoryId(req);
@@ -144,7 +151,7 @@ export function createTenantRouter(
   });
 
   // POST /api/v1/tenants/:id/co-occupants
-  router.post('/:id/co-occupants', requireSession, async (req: Request, res: Response) => {
+  router.post('/:id/co-occupants', mutationGuard('tenant:write'), async (req: Request, res: Response) => {
     if (!verifyCsrf(req, res)) return;
     return res.status(403).json({
       error: {
@@ -155,7 +162,7 @@ export function createTenantRouter(
   });
 
   // POST /api/v1/tenants/:id/emergency-contacts
-  router.post('/:id/emergency-contacts', requireSession, async (req: Request, res: Response) => {
+  router.post('/:id/emergency-contacts', mutationGuard('tenant:write'), async (req: Request, res: Response) => {
     if (!verifyCsrf(req, res)) return;
     try {
       const dormId = getDormitoryId(req);
@@ -180,7 +187,7 @@ export function createTenantRouter(
   });
 
   // POST /api/v1/tenants/:id/vehicles
-  router.post('/:id/vehicles', requireSession, async (req: Request, res: Response) => {
+  router.post('/:id/vehicles', mutationGuard('tenant:write'), async (req: Request, res: Response) => {
     if (!verifyCsrf(req, res)) return;
     try {
       const dormId = getDormitoryId(req);
