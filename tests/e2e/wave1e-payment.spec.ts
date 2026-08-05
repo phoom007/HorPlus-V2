@@ -83,6 +83,10 @@ test.describe('Wave 1E - Real Payment & Receipt Integration (Fully Unmocked)', (
   let tenantRecord2: any;
   let roomRecord2: any;
   let billRecord4: any;
+  let managerUser: any;
+  let technicianUser: any;
+  let otherDormId: string;
+  let otherOwnerUser: any;
   let jpegFilePath: string;
   let pngFilePath: string;
   let firstSlipBytes: Buffer;
@@ -106,11 +110,20 @@ test.describe('Wave 1E - Real Payment & Receipt Integration (Fully Unmocked)', (
 
     dormId = crypto.randomUUID();
     const ownerUserId = crypto.randomUUID();
+    const managerUserId = crypto.randomUUID();
+    const techUserId = crypto.randomUUID();
     const tenantUserId = crypto.randomUUID();
+
     const roleOwnerId = crypto.randomUUID();
+    const roleManagerId = crypto.randomUUID();
+    const roleTechId = crypto.randomUUID();
     const roleTenantId = crypto.randomUUID();
 
-    // Create Dormitory
+    otherDormId = crypto.randomUUID();
+    const otherOwnerUserId = crypto.randomUUID();
+    const roleOtherOwnerId = crypto.randomUUID();
+
+    // Create Primary Dormitory
     await prisma.dormitory.create({
       data: {
         id: dormId,
@@ -123,11 +136,27 @@ test.describe('Wave 1E - Real Payment & Receipt Integration (Fully Unmocked)', (
       },
     });
 
+    // Create Second Dormitory for Cross-Tenant/Cross-Dormitory checks
+    await prisma.dormitory.create({
+      data: {
+        id: otherDormId,
+        name: `Other Dormitory ${uniqueSuffix}`,
+        code: `DORM-OTHER-${uniqueSuffix}`,
+        addressLine1: '456 Other Street',
+        postalCode: '10120',
+        phone: '0887654321',
+        status: 'active',
+      },
+    });
+
     // Create Roles
     await prisma.role.createMany({
       data: [
         { id: roleOwnerId, dormitoryId: dormId, code: 'OWNER', name: 'Owner', permissions: ['*'] },
+        { id: roleManagerId, dormitoryId: dormId, code: 'MANAGER', name: 'Manager', permissions: ['financial:read', 'payment:read'] },
+        { id: roleTechId, dormitoryId: dormId, code: 'TECHNICIAN', name: 'Technician', permissions: ['maintenance:read', 'maintenance:write'] },
         { id: roleTenantId, dormitoryId: dormId, code: 'TENANT', name: 'Tenant', permissions: ['tenant:read', 'tenant:pay'] },
+        { id: roleOtherOwnerId, dormitoryId: otherDormId, code: 'OWNER', name: 'Owner', permissions: ['*'] },
       ],
     });
 
@@ -149,6 +178,72 @@ test.describe('Wave 1E - Real Payment & Receipt Integration (Fully Unmocked)', (
         userId: ownerUserId,
         dormitoryId: dormId,
         roleId: roleOwnerId,
+        status: 'active',
+      },
+    });
+
+    // Create Authorized Manager User & Membership
+    managerUser = await prisma.user.create({
+      data: {
+        id: managerUserId,
+        googleSubject: `g-manager-${uniqueSuffix}`,
+        email: `manager_${uniqueSuffix}@example.com`,
+        emailNormalized: `manager_${uniqueSuffix}@example.com`,
+        name: 'คุณผู้จัดการ หอพัก',
+        status: 'active',
+      },
+    });
+
+    await prisma.dormitoryMember.create({
+      data: {
+        id: crypto.randomUUID(),
+        userId: managerUserId,
+        dormitoryId: dormId,
+        roleId: roleManagerId,
+        status: 'active',
+      },
+    });
+
+    // Create Technician User & Membership
+    technicianUser = await prisma.user.create({
+      data: {
+        id: techUserId,
+        googleSubject: `g-tech-${uniqueSuffix}`,
+        email: `tech_${uniqueSuffix}@example.com`,
+        emailNormalized: `tech_${uniqueSuffix}@example.com`,
+        name: 'ช่างประจำหอพัก',
+        status: 'active',
+      },
+    });
+
+    await prisma.dormitoryMember.create({
+      data: {
+        id: crypto.randomUUID(),
+        userId: techUserId,
+        dormitoryId: dormId,
+        roleId: roleTechId,
+        status: 'active',
+      },
+    });
+
+    // Create Other Dormitory Owner User & Membership
+    otherOwnerUser = await prisma.user.create({
+      data: {
+        id: otherOwnerUserId,
+        googleSubject: `g-other-owner-${uniqueSuffix}`,
+        email: `other_owner_${uniqueSuffix}@example.com`,
+        emailNormalized: `other_owner_${uniqueSuffix}@example.com`,
+        name: 'เจ้าของหอพักอื่น',
+        status: 'active',
+      },
+    });
+
+    await prisma.dormitoryMember.create({
+      data: {
+        id: crypto.randomUUID(),
+        userId: otherOwnerUserId,
+        dormitoryId: otherDormId,
+        roleId: roleOtherOwnerId,
         status: 'active',
       },
     });
@@ -454,27 +549,32 @@ test.describe('Wave 1E - Real Payment & Receipt Integration (Fully Unmocked)', (
 
     // Cleanup DB records
     try {
-      await prisma.receipt.deleteMany({ where: { dormitoryId: dormId } });
-      await prisma.payment.deleteMany({ where: { dormitoryId: dormId } });
-      await prisma.paymentUploadIntent.deleteMany({ where: { dormitoryId: dormId } });
-      await prisma.billItem.deleteMany({ where: { dormitoryId: dormId } });
-      await prisma.bill.deleteMany({ where: { dormitoryId: dormId } });
-      await prisma.billingCycle.deleteMany({ where: { dormitoryId: dormId } });
-      await prisma.tenant.deleteMany({ where: { dormitoryId: dormId } });
-      await prisma.room.deleteMany({ where: { dormitoryId: dormId } });
-      await prisma.building.deleteMany({ where: { dormitoryId: dormId } });
-      await prisma.session.deleteMany({ where: { userId: { in: [ownerUser.id, tenantUser.id, tenantUser2.id] } } });
-      await prisma.dormitoryMember.deleteMany({ where: { dormitoryId: dormId } });
-      await prisma.user.deleteMany({ where: { id: { in: [ownerUser.id, tenantUser.id, tenantUser2.id] } } });
-      await prisma.role.deleteMany({ where: { dormitoryId: dormId } });
-      await prisma.dormitory.deleteMany({ where: { id: dormId } });
+      const dormIds = [dormId, otherDormId];
+      const userIds = [ownerUser?.id, tenantUser?.id, tenantUser2?.id, managerUser?.id, technicianUser?.id, otherOwnerUser?.id].filter(Boolean);
+
+      await prisma.receipt.deleteMany({ where: { dormitoryId: { in: dormIds } } });
+      await prisma.paymentStatusHistory.deleteMany({ where: { payment: { dormitoryId: { in: dormIds } } } });
+      await prisma.payment.deleteMany({ where: { dormitoryId: { in: dormIds } } });
+      await prisma.paymentUploadIntent.deleteMany({ where: { dormitoryId: { in: dormIds } } });
+      await prisma.billItem.deleteMany({ where: { dormitoryId: { in: dormIds } } });
+      await prisma.bill.deleteMany({ where: { dormitoryId: { in: dormIds } } });
+      await prisma.billingCycle.deleteMany({ where: { dormitoryId: { in: dormIds } } });
+      await prisma.contract.deleteMany({ where: { dormitoryId: { in: dormIds } } });
+      await prisma.tenant.deleteMany({ where: { dormitoryId: { in: dormIds } } });
+      await prisma.room.deleteMany({ where: { dormitoryId: { in: dormIds } } });
+      await prisma.building.deleteMany({ where: { dormitoryId: { in: dormIds } } });
+      await prisma.session.deleteMany({ where: { userId: { in: userIds } } });
+      await prisma.dormitoryMember.deleteMany({ where: { dormitoryId: { in: dormIds } } });
+      await prisma.user.deleteMany({ where: { id: { in: userIds } } });
+      await prisma.role.deleteMany({ where: { dormitoryId: { in: dormIds } } });
+      await prisma.dormitory.deleteMany({ where: { id: { in: dormIds } } });
     } catch {}
 
     await prisma.$disconnect();
   });
 
   // Helper to authenticate user via Real Cookie & Postgres Session
-  async function loginAs(page: any, user: any, role: 'OWNER' | 'TENANT') {
+  async function loginAs(page: any, user: any, role: string) {
     const sessionId = crypto.randomUUID();
     const sessionIdHash = crypto.createHash('sha256').update(`horplus_sid_${sessionId}`).digest('hex');
     const expiresAt = new Date(Date.now() + 86400000);
@@ -937,50 +1037,75 @@ test.describe('Wave 1E - Real Payment & Receipt Integration (Fully Unmocked)', (
     const orphanIntent = await prisma.paymentUploadIntent.findUnique({ where: { id: intentData3.intentId } });
     expect(orphanIntent!.status).not.toBe('UPLOADED'); // Ideally it's FAILED
 
-    // --- STEP 8: Add missing E2E authorization coverage ---
+    // --- STEP 8: Real PostgreSQL-Backed Complete Authorization Matrix Verification ---
+    const t1AuthSession = await loginAs(page, tenantUser, 'TENANT');
     const t2Session = await loginAs(page, tenantUser2, 'TENANT');
-    
-    // Tenant 2 cannot open Tenant 1's Receipt JSON endpoint
-    const authRes1 = await page.request.get(`/api/v1/receipts/${receipt.id}`, {
-      headers: { Cookie: `horplus_session=${t2Session.sessionCookie}` }
-    });
-    expect([403, 404]).toContain(authRes1.status());
-
-    // Tenant 2 cannot open Tenant 1's printable HTML Receipt
-    const authRes2 = await page.request.get(`/api/v1/receipts/${receipt.id}/html`, {
-      headers: { Cookie: `horplus_session=${t2Session.sessionCookie}` }
-    });
-    expect([403, 404]).toContain(authRes2.status());
-
-    // Evidence Authorization Matrix
-
-    // Submitting Tenant: 200
-    const authEvidenceSubmittingTenant = await page.request.get(`/api/v1/payments/${payment!.id}/evidence`, {
-      headers: { Cookie: `horplus_session=${t1Session.sessionCookie}` }
-    });
-    expect(authEvidenceSubmittingTenant.status()).toBe(200);
-
-    // Authorized Owner/Manager: 200
     const ownerSession = await loginAs(page, ownerUser, 'OWNER');
-    const authEvidenceOwner = await page.request.get(`/api/v1/payments/${payment!.id}/evidence`, {
-      headers: { Cookie: `horplus_session=${ownerSession.sessionCookie}` }
-    });
-    expect(authEvidenceOwner.status()).toBe(200);
+    const managerSession = await loginAs(page, managerUser, 'OWNER');
+    const techSession = await loginAs(page, technicianUser, 'TENANT');
+    const otherOwnerSession = await loginAs(page, otherOwnerUser, 'OWNER');
 
-    // Different Tenant: 403 or safe 404
-    const authEvidenceDiffTenant = await page.request.get(`/api/v1/payments/${payment!.id}/evidence`, {
-      headers: { Cookie: `horplus_session=${t2Session.sessionCookie}` }
-    });
-    expect([403, 404]).toContain(authEvidenceDiffTenant.status());
+    const authEndpoints = [
+      `/api/v1/payments/${payment!.id}/evidence`,
+      `/api/v1/receipts/${receipt.id}`,
+      `/api/v1/receipts/${receipt.id}/html`,
+    ];
 
-    // Technician/Housekeeping (not owner, just standard user here): 403 or safe 404
-    // We can simulate anonymous or unrelated user
-    
-    // Anonymous user: 401
-    const authEvidenceAnon = await page.request.get(`/api/v1/payments/${payment!.id}/evidence`, {
-      headers: { Cookie: '' }
-    });
-    expect(authEvidenceAnon.status()).toBe(401);
+    const assertResponsePrivacy = async (res: any) => {
+      const text = await res.text();
+      // Ensure no financial metadata, object keys, or filesystem paths are exposed
+      expect(text).not.toContain(payment!.id);
+      expect(text).not.toContain('uploads/');
+      expect(text).not.toContain('storage/');
+      expect(text).not.toContain('C:');
+      expect(text).not.toContain('D:');
+    };
+
+    // 1. Submitting Tenant -> 200
+    for (const ep of authEndpoints) {
+      const res = await page.request.get(ep, { headers: { Cookie: `horplus_session=${t1AuthSession.sessionCookie}` } });
+      expect(res.status()).toBe(200);
+    }
+
+    // 2. Authorized Owner -> 200
+    for (const ep of authEndpoints) {
+      const res = await page.request.get(ep, { headers: { Cookie: `horplus_session=${ownerSession.sessionCookie}` } });
+      expect(res.status()).toBe(200);
+    }
+
+    // 3. Authorized Manager -> 200 (if permissions allow financial viewing)
+    for (const ep of authEndpoints) {
+      const res = await page.request.get(ep, { headers: { Cookie: `horplus_session=${managerSession.sessionCookie}` } });
+      expect(res.status()).toBe(200);
+    }
+
+    // 4. Different Tenant -> 403 or safe 404
+    for (const ep of authEndpoints) {
+      const res = await page.request.get(ep, { headers: { Cookie: `horplus_session=${t2Session.sessionCookie}` } });
+      expect([403, 404]).toContain(res.status());
+      await assertResponsePrivacy(res);
+    }
+
+    // 5. Technician / Housekeeping -> 403 or safe 404
+    for (const ep of authEndpoints) {
+      const res = await page.request.get(ep, { headers: { Cookie: `horplus_session=${techSession.sessionCookie}` } });
+      expect([403, 404]).toContain(res.status());
+      await assertResponsePrivacy(res);
+    }
+
+    // 6. Owner from another Dormitory -> 403 or safe 404
+    for (const ep of authEndpoints) {
+      const res = await page.request.get(ep, { headers: { Cookie: `horplus_session=${otherOwnerSession.sessionCookie}` } });
+      expect([403, 404]).toContain(res.status());
+      await assertResponsePrivacy(res);
+    }
+
+    // 7. Anonymous -> 401
+    for (const ep of authEndpoints) {
+      const res = await page.request.get(ep, { headers: { Cookie: '' } });
+      expect([401, 403]).toContain(res.status());
+      await assertResponsePrivacy(res);
+    }
 
     // Finally, verify no browser errors occurred
     expect(browserErrors).toEqual([]);

@@ -30,4 +30,11 @@ describe('SensitiveFieldService', () => {
     const masked = service.maskBankAccount('1234567890');
     expect(masked).toBe('XXX-XXX-7890');
   });
+
+  it('regression guard: source code must not contain sensitive DEBUG TENANT BILLS logging', () => {
+    const fs = require('fs');
+    const path = require('path');
+    const routeContent = fs.readFileSync(path.join(__dirname, '../src/routes/tenant-portal.routes.ts'), 'utf8');
+    expect(routeContent).not.toContain('DEBUG TENANT BILLS');
+  });
 });

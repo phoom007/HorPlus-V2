@@ -65,7 +65,7 @@ import {
 } from '../components/GlobalComponents';
 
 import { Tenant, Room, Bill, Contract, MaintenanceRequest as RepairRequest, Announcement, Dormitory, BillItem, Building, formatItemDescription } from '../types';
-import { getRooms, getBills, getContracts, getMaintenance, getAnnouncements, getBuildings } from '../data/mockData';
+import { getContracts, getMaintenance, getAnnouncements, getBuildings } from '../data/mockData';
 
 const getBankBadgeInfo = (bankName: string) => {
   const name = bankName || 'กสิกรไทย (KBank)';
@@ -226,6 +226,8 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
   // Data layers
   const [rooms, setRooms] = useState<Room[]>([]);
   const [bills, setBills] = useState<Bill[]>([]);
+  const [financialLoading, setFinancialLoading] = useState<boolean>(true);
+  const [financialError, setFinancialError] = useState<string | null>(null);
   const [contracts, setContracts] = useState<Contract[]>([]);
   const [repairs, setRepairs] = useState<RepairRequest[]>([]);
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
@@ -301,6 +303,9 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
   const dormInfo: any = {};
 
   const refreshData = async () => {
+    setFinancialLoading(true);
+    setFinancialError(null);
+
     try {
       const profileRes = await fetch('/api/v1/tenant-portal/profile');
       if (profileRes.ok) {
@@ -312,13 +317,20 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
              buildingId: profile.room.buildingId,
              currentTenantId: profile.id
            } as any]);
+        } else {
+           setRooms([]);
         }
       } else {
-        setRooms(getRooms());
+        setRooms([]);
+        setFinancialError('ไม่สามารถโหลดข้อมูลผู้เช่าจากระบบได้');
+        console.error('[TenantPortal] Technical error loading profile status:', profileRes.status);
       }
-    } catch(e) {
-      setRooms(getRooms());
+    } catch(e: any) {
+      setRooms([]);
+      setFinancialError('ไม่สามารถเชื่อมต่อระบบเพื่อดึงข้อมูลผู้เช่าได้');
+      console.error('[TenantPortal] Technical error loading profile:', e?.message || 'Network error');
     }
+
     setContracts(getContracts());
     setRepairs(getMaintenance() as any);
     setAnnouncements(getAnnouncements());
@@ -329,13 +341,29 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
       if (res.ok) {
         const json = await res.json();
         if (json.data) {
-          setBills(Array.isArray(json.data) ? json.data : (json.data.bills || []));
+          const rawBills = Array.isArray(json.data) ? json.data : (json.data.bills || []);
+          const formatted = rawBills.map((b: any) => ({
+            ...b,
+            totalAmount: Number(b.totalAmount),
+            paidAmount: Number(b.paidAmount),
+            outstandingAmount: Number(b.outstandingAmount),
+            items: (b.items || []).map((i: any) => ({ ...i, amount: Number(i.amount) }))
+          }));
+          setBills(formatted);
+        } else {
+          setBills([]);
         }
       } else {
-        setBills(getBills());
+        setBills([]);
+        setFinancialError('ไม่สามารถโหลดข้อมูลบิลจากระบบได้');
+        console.error('[TenantPortal] Technical error loading bills status:', res.status);
       }
-    } catch (err) {
-      setBills(getBills());
+    } catch (err: any) {
+      setBills([]);
+      setFinancialError('ไม่สามารถเชื่อมต่อระบบเพื่อดึงข้อมูลบิลได้');
+      console.error('[TenantPortal] Technical error loading bills:', err?.message || 'Network error');
+    } finally {
+      setFinancialLoading(false);
     }
   };
 
@@ -345,9 +373,12 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
   }, [tenant]);
 
   useEffect(() => {
-    const hasAssignedRoom = rooms.some(r => r.currentTenantId === tenant.id);
-    setDemoHasRoom(hasAssignedRoom);
-  }, [tenant.id, rooms]);
+    if (rooms.length > 0) {
+      setDemoHasRoom(true);
+    } else if (!financialLoading) {
+      setDemoHasRoom(rooms.some(r => r.currentTenantId === tenant.id));
+    }
+  }, [tenant.id, rooms, financialLoading]);
 
   const handleOpenCoOccupantsModal = () => {
     setEditCoOccupants([...localTenant.coOccupants]);
@@ -939,11 +970,23 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                                 <span>ยอดค้างชำระ</span>
                               </div>
                               <h2 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight leading-none pt-1">
-                                ฿ {activeUnpaidBill ? Number(activeUnpaidBill.totalAmount).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '18,368.00'}
+                                ฿ {activeUnpaidBill ? Number(activeUnpaidBill.totalAmount).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00'}
                               </h2>
                               <p className="text-[10px] sm:text-xs text-slate-500 font-medium pt-1">
-                                กำหนดชำระภายใน: <span className="font-extrabold text-slate-700">{activeUnpaidBill ? formatToBeDate(activeUnpaidBill.dueDate) : '30 ก.ค. 2569'}</span>
+                                กำหนดชำระภายใน: <span className="font-extrabold text-slate-700">{activeUnpaidBill ? formatToBeDate(activeUnpaidBill.dueDate) : '-'}</span>
                               </p>
+                              {financialError && (
+                                <div className="bg-rose-50 border border-rose-200 rounded-xl p-2.5 text-xs text-rose-700 flex items-center justify-between mt-2">
+                                  <span>{financialError}</span>
+                                  <button 
+                                    type="button" 
+                                    onClick={() => refreshData()}
+                                    className="px-2 py-1 bg-rose-600 text-white font-bold rounded-lg hover:bg-rose-700 text-[10px]"
+                                  >
+                                    ลองใหม่
+                                  </button>
+                                </div>
+                              )}
                             </div>
                             <span className="px-3 py-1 rounded-full text-[10px] font-black bg-amber-50 border border-amber-200/90 text-amber-800 shrink-0 shadow-2xs">
                               รอชำระ

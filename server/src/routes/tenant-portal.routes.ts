@@ -87,7 +87,7 @@ export function createTenantPortalRouter(authService?: AuthenticationService): R
         dormitory: dorm ? {
           id: dorm.id,
           name: dorm.name,
-          logoUrl: dorm.logoUrl
+          logoUrl: (dorm as any).logoUrl || null
         } : null,
         room: room ? {
           id: room.id,
@@ -218,9 +218,9 @@ export function createTenantPortalRouter(authService?: AuthenticationService): R
         totalAmount: b.totalAmount.toString(),
         paidAmount: b.paidAmount.toString(),
         outstandingAmount: b.outstandingAmount.toString(),
-        items: b.items.map(item => ({
+        items: b.items.map((item: any) => ({
           id: item.id,
-          type: item.itemType,
+          type: item.itemType || item.type,
           description: item.description,
           amount: item.amount.toString(),
           meterStart: item.meterStart,
@@ -230,7 +230,6 @@ export function createTenantPortalRouter(authService?: AuthenticationService): R
         }))
       }));
 
-      console.log('DEBUG TENANT BILLS:', JSON.stringify(formatted, null, 2));
       return res.status(200).json({ data: formatted });
     } catch (err: any) {
       return res.status(500).json({
