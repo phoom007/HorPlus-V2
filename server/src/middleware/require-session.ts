@@ -22,6 +22,7 @@ declare global {
       auth?: AuthenticatedAuthContext;
       user?: UserEntity;
       dormitoryId?: string;
+      requestId?: string;
       cookies?: Record<string, string>;
     }
   }

@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
+import { resolveAuthoritativeDormitoryContext } from './dormitory-context.js';
 import { subscriptionEntitlementService } from '../services/subscription-entitlement.service.js';
 
 export async function requireDormitoryWriteEntitlement(req: Request, res: Response, next: NextFunction) {
@@ -7,14 +8,14 @@ export async function requireDormitoryWriteEntitlement(req: Request, res: Respon
     return next();
   }
 
-  const dormitoryId = (req.headers['x-dormitory-id'] as string) || (req as any).sessionData?.dormitoryId || (req as any).auth?.dormitoryId;
-
-  if (!dormitoryId) {
+  // If request is unauthenticated, let downstream router / session middleware handle auth or 404
+  if (!req.auth || !req.auth.user) {
     return next();
   }
 
   try {
-    await subscriptionEntitlementService.assertDormitoryWritable(dormitoryId);
+    const context = resolveAuthoritativeDormitoryContext(req);
+    await subscriptionEntitlementService.assertDormitoryWritable(context.dormitoryId);
     next();
   } catch (err) {
     next(err);

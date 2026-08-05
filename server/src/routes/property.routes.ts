@@ -10,6 +10,8 @@ import {
   UpdateRoomSchema,
 } from '../schemas/property-tenant-contract.schemas.js';
 
+import { resolveAuthoritativeDormitoryContext } from '../middleware/dormitory-context.js';
+
 export function createPropertyRouter(
   authService: AuthenticationService,
   buildingService: BuildingService,
@@ -19,7 +21,8 @@ export function createPropertyRouter(
   const requireSession = createRequireSessionMiddleware(authService);
 
   const getDormitoryId = (req: Request): string => {
-    return (req.headers['x-dormitory-id'] as string) || req.auth?.dormitoryId || 'dorm-001';
+    const context = resolveAuthoritativeDormitoryContext(req);
+    return context.dormitoryId;
   };
 
   const verifyCsrf = (req: Request, res: Response): boolean => {
@@ -45,8 +48,8 @@ export function createPropertyRouter(
     const statusCode = err.statusCode || err.status || 500;
     res.status(statusCode).json({
       error: {
-        code: err.code || 'PROPERTY_OPERATION_FAILED',
-        message: err.message || 'เกิดข้อผิดพลาดในการดำเนินการจัดการอสังหาริมทรัพย์',
+        code: err.errorCode || err.code || 'PROPERTY_OPERATION_FAILED',
+        message: err.message || 'Operation failed',
         fieldErrors: err.fieldErrors || null,
         requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
         timestamp: new Date().toISOString(),
@@ -254,7 +257,7 @@ export function createPropertyRouter(
       }
 
       const { version, ...updatePayload } = parsed.data;
-      const room = await roomService.updateRoom(req.params.id, dormId, updatePayload, version, req.auth?.userId);
+      const room = await roomService.updateRoom(req.params.id, updatePayload, dormId, req.auth?.userId);
       res.json({ data: room });
     } catch (err) {
       handleServiceError(res, err, req);

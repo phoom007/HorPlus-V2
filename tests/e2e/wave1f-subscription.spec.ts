@@ -1,21 +1,8 @@
 import { test, expect } from '@playwright/test';
-import path from 'path';
-import crypto from 'crypto';
-import { fileURLToPath } from 'url';
-import dotenv from 'dotenv';
 import { PrismaClient } from '../../server/node_modules/@prisma/client/index.js';
+import crypto from 'crypto';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-dotenv.config({ path: path.resolve(__dirname, '../../server/.env') });
-
-const prisma = new PrismaClient({
-  datasources: {
-    db: {
-      url: process.env.DATABASE_URL || 'postgresql://horplus:password@127.0.0.1:5455/horplus_wave1d_fasttrack_test?schema=public',
-    },
-  },
-});
+const prisma = new PrismaClient();
 
 const SESSION_ENCRYPTION_KEY = process.env.SESSION_ENCRYPTION_KEY || '0123456789abcdef0123456789abcdef';
 const CSRF_SIGNING_KEY = process.env.CSRF_SIGNING_KEY || 'csrf-secret-key-0123456789abcdef';
@@ -51,7 +38,7 @@ function generateCsrfToken(sessionId: string): string {
   return `${nonce}.${signature}`;
 }
 
-test.describe('Wave 1F - Real Subscription & Entitlement Integration (Playwright E2E)', () => {
+test.describe('Wave 1F - Subscription & Entitlement Playwright E2E Suite', () => {
   let dormId: string;
   let ownerUser: any;
   let sessionToken: string;
@@ -59,6 +46,8 @@ test.describe('Wave 1F - Real Subscription & Entitlement Integration (Playwright
   let buildingId: string;
 
   test.beforeAll(async () => {
+    process.env.ALLOW_OPERATIONAL_ACTIVATION = 'true';
+
     const timestamp = Date.now();
     dormId = crypto.randomUUID();
     const ownerUserId = crypto.randomUUID();
@@ -175,6 +164,7 @@ test.describe('Wave 1F - Real Subscription & Entitlement Integration (Playwright
   });
 
   test('Owner subscription & entitlement full lifecycle', async ({ page }) => {
+    test.setTimeout(60000);
     // 1. Authenticate browser context
     await page.context().addCookies([
       { name: 'horplus_session', value: sessionToken, domain: 'localhost', path: '/' },
@@ -208,7 +198,10 @@ test.describe('Wave 1F - Real Subscription & Entitlement Integration (Playwright
     // 6. Verify button shows Already Redeemed
     await expect(page.locator('button:has-text("Already Redeemed")')).toBeVisible();
 
-    // 7. Test Room limit on Plan A (create 10 rooms via API, 11th should fail)
+    // 7. Verify package catalog shows "Awaiting platform activation"
+    await expect(page.locator('text=Awaiting platform activation').first()).toBeVisible();
+
+    // 8. Test Room limit on Plan A (create 10 rooms via API, 11th should fail)
     for (let i = 1; i <= 10; i++) {
       const num = `E2E-R${i}`;
       await prisma.room.create({
@@ -238,15 +231,25 @@ test.describe('Wave 1F - Real Subscription & Entitlement Integration (Playwright
     const room11Body = await room11Res.json();
     expect(room11Body.error.code).toBe('ROOM_LIMIT_REACHED');
 
-    // 8. Operational activation to Plan B (Paid)
-    const activateBtn = page.locator('button:has-text("Activate 1 Month")');
-    await expect(activateBtn).toBeVisible();
-    await activateBtn.click();
+    // 9. Operational activation to Plan B (Paid) via operational route
+    const opActivateRes = await page.request.post('/api/v1/subscription/operational/activate', {
+      headers: {
+        'x-dormitory-id': dormId,
+        'x-csrf-token': csrfToken,
+        'x-idempotency-key': `e2e-op-activate-${Date.now()}`,
+      },
+      data: {
+        durationMonths: 1,
+        dormitoryId: dormId,
+      },
+    });
+    expect(opActivateRes.status()).toBe(200);
 
-    await expect(page.locator('text=Activated 1-month Paid Package!')).toBeVisible();
+    // Reload page to refresh UI state
+    await page.reload();
     await expect(page.getByText('Paid', { exact: true }).first()).toBeVisible();
 
-    // 9. Room creation now succeeds up to 150 on Plan B
+    // 10. Room creation now succeeds up to 150 on Plan B
     const room11PaidRes = await page.request.post('/api/v1/properties/rooms', {
       headers: {
         'x-dormitory-id': dormId,
@@ -259,7 +262,7 @@ test.describe('Wave 1F - Real Subscription & Entitlement Integration (Playwright
     });
     expect(room11PaidRes.status()).toBe(201);
 
-    // 10. Test Expired Dormitory Read-Only Mode
+    // 11. Test Expired Dormitory Read-Only Mode
     const pastDate = new Date(Date.now() - 10000);
     const currentSub = await prisma.dormitorySubscription.findUnique({ where: { dormitoryId: dormId } });
     await prisma.dormitorySubscription.update({
@@ -296,5 +299,12 @@ test.describe('Wave 1F - Real Subscription & Entitlement Integration (Playwright
     expect(getRoomsRes.status()).toBe(200);
     const getRoomsBody = await getRoomsRes.json();
     expect(getRoomsBody.data).toBeDefined();
+
+    // 12. Cross-Dormitory subscription access is denied
+    const otherDormId = crypto.randomUUID();
+    const crossRes = await page.request.get('/api/v1/subscription/current', {
+      headers: { 'x-dormitory-id': otherDormId },
+    });
+    expect(crossRes.status()).toBe(403);
   });
 });

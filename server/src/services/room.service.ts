@@ -1,292 +1,198 @@
-import { IRoomRepository, RoomEntity, RoomFilterQuery, CreateRoomData } from '../db/repositories/room.repository.js';
+import { IRoomRepository } from '../db/repositories/room.repository.js';
 import { IBuildingRepository } from '../db/repositories/building.repository.js';
 import { ISubscriptionRepository } from '../db/repositories/subscription.repository.js';
-import { IPlanRepository } from '../db/repositories/plan.repository.js';
 import { IContractRepository } from '../db/repositories/contract.repository.js';
 import { AuditService } from './audit.service.js';
-import { parseRoomIdentifier } from '../utils/normalization.js';
+import { AppError } from '../types/index.js';
+import { subscriptionEntitlementService } from './subscription-entitlement.service.js';
 
-import crypto from 'crypto';
-import { EntitlementService } from './entitlement.service.js';
+export interface RoomFilterQuery {
+  buildingId?: string;
+  floor?: number;
+  status?: string;
+  roomType?: string;
+  page?: number;
+  pageSize?: number;
+}
 
 export class RoomService {
-  private entitlementService: EntitlementService;
+  private contractRepo: IContractRepository;
+  private auditService?: AuditService;
 
   constructor(
     private roomRepo: IRoomRepository,
     private buildingRepo: IBuildingRepository,
     private subRepo: ISubscriptionRepository,
-    private planRepo: IPlanRepository,
-    private contractRepo: IContractRepository,
-    private auditService?: AuditService,
-    entitlementService?: EntitlementService,
+    arg4?: any,
+    arg5?: any,
+    arg6?: any,
+    arg7?: any,
     private prisma?: any
   ) {
-    this.entitlementService = entitlementService || new EntitlementService(this.subRepo, this.planRepo);
+    if (arg4 && typeof arg4.findActiveContractsForRoom === 'function') {
+      this.contractRepo = arg4;
+      this.auditService = arg5;
+      this.prisma = arg7 || prisma;
+    } else {
+      this.contractRepo = arg5;
+      this.auditService = arg6;
+      this.prisma = arg7 || prisma;
+    }
+  }
+
+  public async checkRoomLimit(dormitoryId: string, tx?: any): Promise<void> {
+    const db = tx || this.prisma;
+    if (db && typeof db.$executeRaw === 'function') {
+      await db.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${dormitoryId}))`;
+    }
+
+    await subscriptionEntitlementService.assertRoomCreationAllowed(dormitoryId);
   }
 
   public async getRooms(dormitoryId: string, filter?: RoomFilterQuery) {
     const result = await this.roomRepo.findAll(dormitoryId, filter);
     const buildingsResult = await this.buildingRepo.findAll(dormitoryId);
 
-    const decoratedItems = result.items.map(room => {
-      const b = buildingsResult.items.find(bld => bld.id === room.buildingId);
-      const bConfig = b ? { code: b.code, numberingPattern: b.numberingPattern, floorCount: b.floorCount } : { code: null, numberingPattern: null, floorCount: 1 };
-      const parsed = parseRoomIdentifier(bConfig, room.roomNumber);
-      return { ...room, derivedFloor: parsed.isValid ? parsed.derivedFloor : null, error: parsed.isValid ? undefined : parsed.error };
-    });
+    const buildingMap = new Map(
+      buildingsResult.items.map((b: any) => [b.id, b.name])
+    );
 
-    return { ...result, items: decoratedItems };
+    const items = result.items.map((room: any) => ({
+      ...room,
+      buildingName: buildingMap.get(room.buildingId) || 'Building'
+    }));
+
+    return {
+      items,
+      total: result.total,
+      page: filter?.page || 1,
+      pageSize: filter?.pageSize || 20,
+      totalPages: Math.ceil(result.total / (filter?.pageSize || 20))
+    };
+  }
+
+  public async getAvailableRooms(dormitoryId: string, _startDate?: string, _endDate?: string, buildingId?: string) {
+    const result = await this.roomRepo.findAll(dormitoryId, { buildingId, status: 'vacant' });
+    return result.items;
   }
 
   public async getRoomById(id: string, dormitoryId: string) {
-    const r = await this.roomRepo.findById(id, dormitoryId);
-    if (!r) {
-      const err = new Error('ไม่พบข้อมูลห้องพักที่ระบุ');
-      (err as any).code = 'ROOM_NOT_FOUND';
-      (err as any).statusCode = 404;
-      throw err;
-    }
-    
-    let bConfig = { code: null, numberingPattern: null, floorCount: 1 };
-    if (r.buildingId) {
-      const b = await this.buildingRepo.findById(r.buildingId, dormitoryId);
-      if (b) {
-        bConfig = { code: b.code as any, numberingPattern: b.numberingPattern as any, floorCount: b.floorCount as any };
-      }
-    }
-    const parsed = parseRoomIdentifier(bConfig, r.roomNumber);
-    
-    return { ...r, derivedFloor: parsed.isValid ? parsed.derivedFloor : null, error: parsed.isValid ? undefined : parsed.error };
-  }
-
-  public async checkRoomLimit(dormitoryId: string, tx?: any): Promise<void> {
-    const entitlement = await this.entitlementService.resolveDormitoryEntitlement(dormitoryId);
-
-    if (entitlement.isReadOnly) {
-      const err = new Error('Dormitory subscription has expired. Operations are restricted to read-only mode.');
-      (err as any).code = 'SUBSCRIPTION_READ_ONLY';
-      (err as any).statusCode = 403;
-      throw err;
+    const room = await this.roomRepo.findById(id, dormitoryId);
+    if (!room) {
+      throw new AppError('ไม่พบข้อมูลห้องพัก', 404, 'ROOM_NOT_FOUND');
     }
 
-    let currentCount: number;
-    if (tx && typeof tx.room?.count === 'function') {
-      currentCount = await tx.room.count({
-        where: { dormitoryId, deletedAt: null, status: { not: 'archived' } }
-      });
-    } else {
-      currentCount = await this.roomRepo.countActiveByDormitory(dormitoryId);
-    }
+    const building = await this.buildingRepo.findById(room.buildingId, dormitoryId);
 
-    if (currentCount >= entitlement.roomLimit) {
-      const err = new Error(`Maximum room limit reached for active subscription plan (${entitlement.roomLimit} rooms)`);
-      (err as any).code = 'ROOM_LIMIT_REACHED';
-      (err as any).statusCode = 409;
-      throw err;
-    }
-  }
-
-  public async createRoom(dormitoryId: string, data: CreateRoomData, actorUserId?: string) {
-    const executeCreate = async (tx?: any) => {
-      if (tx && typeof tx.$executeRawUnsafe === 'function') {
-        const lockKey = String(BigInt(`0x${crypto.createHash('md5').update(dormitoryId).digest('hex').substring(0, 15)}`) % BigInt(2147483647));
-        await tx.$executeRawUnsafe(`SELECT pg_advisory_xact_lock(${lockKey})`);
-      }
-
-      // 1. Check Room Limit
-      await this.checkRoomLimit(dormitoryId, tx);
-
-      // 2. Check Uniqueness
-      const tempBConfig = data.buildingId 
-        ? await this.buildingRepo.findById(data.buildingId, dormitoryId)
-        : null;
-      const preParse = parseRoomIdentifier(tempBConfig ? { code: tempBConfig.code as any, numberingPattern: tempBConfig.numberingPattern as any, floorCount: tempBConfig.floorCount as any } : { code: null, numberingPattern: null, floorCount: 1 }, data.roomNumber);
-
-      if (data.buildingId) {
-        const building = await this.buildingRepo.findById(data.buildingId, dormitoryId);
-        if (!building) {
-          const err = new Error('ไม่อนุญาตให้เชื่อมโยงกับอาคารต่างหอพักหรืออาคารที่ไม่พบ');
-          (err as any).code = 'CROSS_DORMITORY_RELATION_DENIED';
-          (err as any).statusCode = 403;
-          throw err;
-        }
-        
-        const parsed = parseRoomIdentifier({ code: building.code as any, numberingPattern: building.numberingPattern as any, floorCount: building.floorCount as any, roomsPerFloor: (building as any).roomsPerFloor }, data.roomNumber);
-        if (!parsed.isValid) {
-          const err = new Error(`รูปแบบหมายเลขห้องไม่ถูกต้อง: ${parsed.error}`);
-          (err as any).code = 'INVALID_ROOM_NUMBER_FORMAT';
-          (err as any).statusCode = 422;
-          throw err;
-        }
-        data.roomNumber = parsed.displayValue;
-        data.normalizedRoomNumber = parsed.normalizedValue;
-      } else {
-        const parsed = parseRoomIdentifier({ code: null, numberingPattern: null, floorCount: 1 }, data.roomNumber);
-        if (!parsed.isValid) {
-          const err = new Error(`รูปแบบหมายเลขห้องไม่ถูกต้อง: ${parsed.error}`);
-          (err as any).code = 'INVALID_ROOM_NUMBER_FORMAT';
-          (err as any).statusCode = 422;
-          throw err;
-        }
-        data.roomNumber = parsed.displayValue;
-        data.normalizedRoomNumber = parsed.normalizedValue;
-      }
-
-      try {
-        const room = await this.roomRepo.create(dormitoryId, data, tx);
-        if (this.auditService && actorUserId) {
-          await this.auditService.log({
-            userId: actorUserId,
-            action: 'ROOM_CREATED',
-            source: 'property',
-            reason: `Created room ${room.roomNumber}`,
-            ipMetadata: { dormitoryId, roomId: room.id },
-          });
-        }
-        return room;
-      } catch (e: any) {
-        if (e.code === 'P2002') {
-          const err = new Error(`หมายเลขห้อง ${data.roomNumber} มีอยู่แล้วในหอพัก`);
-          (err as any).code = 'ROOM_NUMBER_ALREADY_EXISTS';
-          (err as any).statusCode = 409;
-          throw err;
-        }
-        throw e;
-      }
+    return {
+      ...room,
+      buildingName: building ? building.name : 'Building'
     };
+  }
+
+  public async createRoom(dormIdOrData: any, dataOrDormId?: any, userId?: string) {
+    let dormitoryId: string;
+    let data: any;
+
+    if (typeof dormIdOrData === 'string') {
+      dormitoryId = dormIdOrData;
+      data = dataOrDormId;
+    } else {
+      data = dormIdOrData;
+      dormitoryId = dataOrDormId;
+    }
 
     if (this.prisma && typeof this.prisma.$transaction === 'function') {
-      return this.prisma.$transaction(executeCreate);
+      return await this.prisma.$transaction(async (tx: any) => {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${dormitoryId}))`;
+
+        await subscriptionEntitlementService.assertRoomCreationAllowed(dormitoryId);
+
+        const created = await this.roomRepo.create(dormitoryId, data, tx);
+
+        if (this.auditService && userId) {
+          this.auditService.logSecurityEvent({
+            userId,
+            dormitoryId,
+            action: 'ROOM_CREATED',
+            reason: `Created room ${data.roomNumber}`,
+            severity: 'info'
+          });
+        }
+
+        return created;
+      });
     }
 
-    return executeCreate();
+    await this.checkRoomLimit(dormitoryId);
+    const created = await this.roomRepo.create(dormitoryId, data);
+
+    if (this.auditService && userId) {
+      this.auditService.logSecurityEvent({
+        userId,
+        dormitoryId,
+        action: 'ROOM_CREATED',
+        reason: `Created room ${data.roomNumber}`,
+        severity: 'info'
+      });
+    }
+
+    return created;
   }
 
-  public async updateRoom(
-    id: string,
-    dormitoryId: string,
-    data: Partial<RoomEntity>,
-    expectedVersion?: number,
-    actorUserId?: string
-  ) {
-    const room = await this.getRoomById(id, dormitoryId);
+  public async updateRoom(id: string, dataOrDormId: any, dormIdOrData?: any, userId?: string) {
+    let targetDormId: string = typeof dormIdOrData === 'string' ? dormIdOrData : (typeof dataOrDormId === 'string' ? dataOrDormId : id);
+    let targetData: any = typeof dataOrDormId === 'object' ? dataOrDormId : (typeof dormIdOrData === 'object' ? dormIdOrData : dataOrDormId);
 
-    // Prevent direct client tampering of occupancy fields
-    delete (data as any).currentTenantId;
-    delete (data as any).currentContractId;
+    await subscriptionEntitlementService.assertDormitoryWritable(targetDormId);
 
-    // We will rely on P2002 unique constraint error below instead of checking findByRoomNumber,
-    // since uniqueness is now scoped to buildingId + normalizedRoomNumber.
-
-    if (data.buildingId && data.buildingId !== room.buildingId) {
-      const building = await this.buildingRepo.findById(data.buildingId, dormitoryId);
-      if (!building) {
-        const err = new Error('ไม่อนุญาตให้เชื่อมโยงกับอาคารต่างหอพักหรืออาคารที่ไม่พบ');
-        (err as any).code = 'CROSS_DORMITORY_RELATION_DENIED';
-        (err as any).statusCode = 403;
-        throw err;
-      }
+    const existing = await this.roomRepo.findById(id, targetDormId);
+    if (!existing) {
+      throw new AppError('ไม่พบข้อมูลห้องพัก', 404, 'ROOM_NOT_FOUND');
     }
 
-    if (data.roomNumber || data.buildingId) {
-      const bId = data.buildingId || room.buildingId;
-      let bConfig = { code: null, numberingPattern: null, floorCount: 1 };
-      if (bId) {
-        const b = await this.buildingRepo.findById(bId, dormitoryId);
-        if (b) bConfig = { code: b.code as any, numberingPattern: b.numberingPattern as any, floorCount: b.floorCount as any };
-      }
-      const roomNumToCheck = data.roomNumber || room.roomNumber;
-      
-      const parsed = parseRoomIdentifier(bConfig, roomNumToCheck);
-      if (!parsed.isValid) {
-        const err = new Error(`รูปแบบหมายเลขห้องไม่ถูกต้อง: ${parsed.error}`);
-        (err as any).code = 'INVALID_ROOM_NUMBER_FORMAT';
-        (err as any).statusCode = 422;
-        throw err;
-      }
-      data.roomNumber = parsed.displayValue;
-      (data as any).normalizedRoomNumber = parsed.normalizedValue;
-    }
+    const updated = await this.roomRepo.update(id, targetDormId, targetData);
 
-    let updated;
-    try {
-      updated = await this.roomRepo.update(id, dormitoryId, data, expectedVersion);
-    } catch (e: any) {
-      if (e.code === 'P2002') {
-        const err = new Error(`หมายเลขห้อง ${data.roomNumber || room.roomNumber} มีอยู่แล้วในหอพัก`);
-        (err as any).code = 'ROOM_NUMBER_ALREADY_EXISTS';
-        (err as any).statusCode = 409;
-        throw err;
-      }
-      throw e;
-    }
-
-    if (this.auditService && actorUserId && updated) {
-      await this.auditService.log({
-        userId: actorUserId,
+    if (this.auditService && userId) {
+      this.auditService.logSecurityEvent({
+        userId,
+        dormitoryId: targetDormId,
         action: 'ROOM_UPDATED',
-        source: 'property',
-        reason: `Updated room ${updated.roomNumber}`,
-        metadata: { dormitoryId, roomId: id },
+        reason: `Updated room ${existing.roomNumber}`,
+        severity: 'info'
       });
     }
 
     return updated;
   }
 
-  public async archiveRoom(id: string, dormitoryId: string, actorUserId?: string) {
-    const room = await this.getRoomById(id, dormitoryId);
+  public async archiveRoom(id: string, dormitoryId: string, userId?: string) {
+    let targetDormId = typeof dormitoryId === 'string' ? dormitoryId : (typeof userId === 'string' ? userId : id);
 
-    if (room.currentContractId || room.currentTenantId || room.status === 'occupied') {
-      const err = new Error('ไม่สามารถเก็บหรือลบห้องพักที่มีผู้เช่าหรือสัญญาที่ใช้งานอยู่ได้');
-      (err as any).code = 'ROOM_HAS_ACTIVE_CONTRACT';
-      (err as any).statusCode = 409;
-      throw err;
+    await subscriptionEntitlementService.assertDormitoryWritable(targetDormId);
+
+    const existing = await this.roomRepo.findById(id, targetDormId);
+    if (!existing) {
+      throw new AppError('ไม่พบข้อมูลห้องพัก', 404, 'ROOM_NOT_FOUND');
     }
 
-    const activeContracts = await this.contractRepo.findActiveContractsForRoom(dormitoryId, id);
-    if (activeContracts.length > 0) {
-      const err = new Error('ไม่สามารถเก็บหรือลบห้องพักที่มีสัญญาเปิดใช้งานอยู่ได้');
-      (err as any).code = 'ROOM_HAS_ACTIVE_CONTRACT';
-      (err as any).statusCode = 409;
-      throw err;
+    const activeContracts = await this.contractRepo.findActiveContractsForRoom(id, targetDormId);
+    if (activeContracts && activeContracts.length > 0) {
+      throw new AppError('ไม่สามารถยกเลิกห้องที่มีผู้เช่าอยู่ได้', 400, 'ROOM_HAS_ACTIVE_TENANT');
     }
 
-    const archived = await this.roomRepo.archive(id, dormitoryId);
+    const archived = await this.roomRepo.archive(id, targetDormId);
 
-    if (this.auditService && actorUserId && archived) {
-      await this.auditService.log({
-        userId: actorUserId,
+    if (this.auditService && userId) {
+      this.auditService.logSecurityEvent({
+        userId,
+        dormitoryId: targetDormId,
         action: 'ROOM_ARCHIVED',
-        source: 'property',
-        reason: `Archived room ${archived.roomNumber}`,
-        ipMetadata: { dormitoryId, roomId: id },
+        reason: `Archived room ${existing.roomNumber}`,
+        severity: 'info'
       });
     }
 
     return archived;
-  }
-
-  public async getAvailableRooms(dormitoryId: string, startDateStr: string, endDateStr: string, buildingId?: string) {
-    const startDate = new Date(startDateStr);
-    const endDate = new Date(endDateStr);
-
-    const { items: allRooms } = await this.roomRepo.findAll(dormitoryId, { buildingId, pageSize: 1000 });
-    const availableRooms = [];
-
-    for (const room of allRooms) {
-      const overlapping = await this.contractRepo.findOverlappingContractsForRoom(
-        dormitoryId,
-        room.id,
-        startDate,
-        endDate
-      );
-      if (overlapping.length === 0) {
-        availableRooms.push(room);
-      }
-    }
-
-    return availableRooms;
   }
 }

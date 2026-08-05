@@ -1,124 +1,185 @@
-# Wave 1F: Subscriptions and Entitlements Execution Report
+# Execution Report: Wave 1F Subscription & Entitlement Corrective Pass
 
-## Executive Summary
-This document records the complete implementation, database migration, automated testing, browser verification, and security posture of **Wave 1F: Subscriptions and Entitlements** for HorPlus-V2.
-
-Wave 1F establishes authoritative multi-tenant subscription management, trial provisioning, promo code redemption (`HORPLUS`), quota enforcement (room limit & dormitory limit), and automatic expired-dormitory `READ_ONLY` mode.
-
----
-
-## 1. Git & Branching Audit
-* **Merged Base SHA (Wave 1E PR #1)**: `14db61f6e87ef121a87b04699dfd19bba85e345a`
-* **Target Integration Branch**: `recovery/wave1d-fasttrack`
-* **Wave 1F Feature Branch**: `feature/wave1f-subscriptions-entitlements`
-* **Pull Request**: Submitted against `recovery/wave1d-fasttrack`
+## 1. Executive Verdict
+- **Status**: PASSED (100% COMPLETE & VERIFIED)
+- **Pull Request**: [#2](https://github.com/phoom007/HorPlus-V2/pull/2) (Unmerged, Open)
+- **Branch**: `feature/wave1f-subscriptions-entitlements`
+- **Target Base**: `recovery/wave1d-fasttrack`
+- **Result**: All corrective requirements, authorization boundaries, persistent idempotency rules, PostgreSQL advisory locks, schema migrations, backend tests, frontend builds, Playwright E2E scenarios, Docker builds, and health endpoints passed cleanly without errors.
 
 ---
 
-## 2. Database & Migration DDL Summary
-* **Migration Name**: `20260805130000_wave1f_subscriptions_entitlements`
-* **Execution Status**: Applied idempotently via `npx prisma migrate deploy` on PostgreSQL 15 (`127.0.0.1:5455`).
-* **Enums Added**:
-  - `SubscriptionPlanType`: `FREE`, `PAID`
-  - `DormitorySubscriptionStatus`: `TRIAL`, `ACTIVE`, `SUSPENDED`, `EXPIRED`, `CANCELLED`
-* **Tables Added**:
-  - `subscription_plans`: Plan definitions (`FREE` limit 10, `PAID` limit 150)
-  - `subscription_packages`: Package options per plan (1, 3, 6, 12, 24 months)
-  - `dormitory_subscriptions`: 1-to-1 dormitory active subscription lifecycle
-  - `subscription_status_histories`: Immutable audit trail for all plan transitions
-  - `promo_codes`: Promo code configuration (`HORPLUS`, 60 days extension)
-  - `promo_redemptions`: Idempotent 1-time redemption per dormitory (`UNIQUE(promo_code_id, dormitory_id)`)
-* **Database Check Constraints**:
-  - `chk_sub_plan_room_limit_pos`: `room_limit > 0`
-  - `chk_sub_pkg_duration_months`: `duration_months IN (1, 3, 6, 12, 24)`
-  - `chk_promo_code_extension_days_pos`: `extension_days > 0`
-  - `chk_promo_redemption_dates`: `new_expires_at > previous_expires_at`
+## 2. Base & Branch Context
+- **Wave 1E Merged Base SHA**: `14db61f6e87ef121a87b04699dfd19bba85e345a`
+- **Wave 1F Starting Feature SHA**: `18f0241e4cd74da7df677fce96537d834e85c929`
+- **Repository Path**: `D:\horplus_wave1d_fasttrack`
 
 ---
 
-## 3. Financial Decision Log
-> [!IMPORTANT]
-> **Priced vs. Disabled Packages**:
-> - **1 Month Package**: Enabled at 189.00 THB. Operational activation supported.
-> - **3, 6, 12, 24 Months Packages**: Preserved in database with `price = NULL` and `enabled = false` as unpriced disabled packages until explicit Product Owner pricing decisions are provided. Attempting to activate unpriced packages safely returns `PACKAGE_DISABLED` (400).
+## 3. Scope & Exclusions
+- **Included**:
+  - Authoritative single domain: `DormitorySubscription` and `SubscriptionEntitlementService`.
+  - Authoritative `resolveAuthoritativeDormitoryContext` middleware blocking header/query/body tampering and cross-tenant access.
+  - Automatic 30-day trial provisioning for new dormitories in atomic creation transactions.
+  - Existing-dormitory trial backfill with history tracking.
+  - Promo code `HORPLUS` (+60 days extension, max 1 per dorm, active trial only) with persistent `X-Idempotency-Key` handling.
+  - Room quota enforcement (Plan A / Free / Trial: 10 rooms; Plan B / Paid: 150 rooms; Owner quota: 10 dormitories).
+  - Atomic room creation concurrency protection using PostgreSQL advisory locks (`pg_advisory_xact_lock`).
+  - Strict over-limit & expired read-only mode (`isReadOnly = true`, HTTP 403 `SUBSCRIPTION_READ_ONLY`) preserving historical data visibility.
+  - Package catalog (1 month = 189 THB enabled; 3, 6, 12, 24 months unpriced & disabled).
+  - Insecure public paid activation endpoint removed; internal operational paid activation implemented with persistent idempotency and extension from `max(expiresAt, now)`.
+  - Schema forward migration `20260805140000_wave1f_subscription_fk_corrective` adding `ON DELETE RESTRICT` foreign keys and audit indexes.
+- **Excluded**:
+  - Payment gateway processing (Stripe / Omise / Opn).
+  - LINE OA / LIFF / SlipOK integration.
+  - Production / Pilot external payment webhooks.
+  - Wave 1G features.
 
 ---
 
-## 4. Business Rules & Entitlement Matrix
-* **Plan Rules**:
-  - **Plan A (Free/Trial)**: Max 10 rooms per Dormitory. Automatic 30-day trial created upon dormitory provisioning.
-  - **Plan B (Paid)**: Max 150 rooms per Dormitory. 1-month duration = 189 THB.
-* **Promo Code `HORPLUS`**:
-  - Adds +60 days trial extension (total 90-day trial).
-  - Restricted to active Trial status dormitories only.
-  - Strictly 1 redemption per dormitory max.
-* **Quotas**:
-  - **Owner Quota**: Maximum 10 dormitories per Owner account. 11th creation attempt returns `DORMITORY_LIMIT_REACHED` (409).
-* **Read-Only Mode**:
-  - Triggered immediately when `expiresAt <= now`.
-  - All GET/read endpoints remain 100% accessible.
-  - All POST/PUT/PATCH/DELETE business mutation endpoints return `SUBSCRIPTION_READ_ONLY` (403).
+## 4. Authoritative Subscription Domain Decision
+- `DormitorySubscription` and `SubscriptionEntitlementService` are established as the **sole authoritative source of truth** for all subscription status, room limits, and read-only decisions.
+- Legacy tables (`PlatformSubscription`, `PlatformPlan`, `PlatformPromoCode`, `PlatformPromoRedemption`) are preserved only as dormant historical data.
+- Modifying legacy tables cannot alter effective entitlement.
+- **Future Cleanup Path**: Deprecate legacy tables in Wave 2 with zero-downtime table drop migrations after all legacy readers are fully decommissioned.
 
 ---
 
-## 5. API Endpoint Matrix
+## 5. Schema & Migrations Evidence
+- **Applied Migrations**:
+  1. `20260805130000_wave1f_subscriptions_entitlements`: Tables `subscription_plans`, `subscription_packages`, `dormitory_subscriptions`, `subscription_status_histories`, `promo_codes`, `promo_redemptions`.
+  2. `20260805140000_wave1f_subscription_fk_corrective`: Added `ON DELETE RESTRICT` foreign key constraints:
+     - `subscription_status_histories.dormitory_id` -> `dormitories(id)`
+     - `subscription_status_histories.previous_plan_id` -> `subscription_plans(id)`
+     - `subscription_status_histories.new_plan_id` -> `subscription_plans(id)`
+     - `subscription_status_histories.actor_id` -> `users(id)`
+     - `promo_redemptions.redeemed_by` -> `users(id)`
+     - Indexes: `idx_sub_hist_actor_id`, `idx_promo_redemption_redeemed_by`.
 
-| Method | Endpoint | Auth Required | Description | Status Codes |
+### Command: `npx prisma migrate status`
+- **Working Directory**: `D:\horplus_wave1d_fasttrack\server`
+- **Exit Code**: 0
+- **Output**:
+  ```text
+  Database schema is up to date!
+  7 migrations found in prisma/migrations
+  ```
+
+---
+
+## 6. Authoritative Dormitory Context & Security Matrix
+
+### Resolution Rules
+`resolveAuthoritativeDormitoryContext(req)` resolves dormitory context server-side by validating the authenticated session, filtering active `DormitoryMember` records, and verifying the requested context against active user memberships.
+- Header `x-dormitory-id` or query/body parameters are treated strictly as unverified requested selectors.
+- Cross-dormitory header tampering throws HTTP 403 `FORBIDDEN`.
+- Unauthenticated requests throw HTTP 401 `UNAUTHORIZED`.
+- Fallbacks to static IDs like `dorm-001` are strictly prohibited and eliminated.
+
+### Authorization Matrix Verification
+| Actor Role | Subscription Read | Promo Redeem | Mutation Business API | Expected Result |
 | :--- | :--- | :--- | :--- | :--- |
-| `GET` | `/api/v1/subscription/current` | Yes | Get active subscription details | 200, 400, 401 |
-| `GET` | `/api/v1/subscription/entitlements` | Yes | Get calculated entitlements & room usage | 200, 400, 401 |
-| `GET` | `/api/v1/subscription/plans` | Yes | Get purchasable package catalog | 200, 401 |
-| `POST` | `/api/v1/subscription/promo/redeem` | Yes + CSRF | Redeem `HORPLUS` promo code | 200, 400, 401, 404, 409 |
-| `POST` | `/api/v1/subscription/activate` | Yes + CSRF | Operational test package activation | 200, 400, 401, 409 |
+| Anonymous | Blocked (401) | Blocked (401) | Blocked (401) | 401 UNAUTHORIZED |
+| Owner | Allowed (200) | Allowed (200) | Allowed (200/201) | Permitted |
+| Manager | Allowed (200) | Allowed (200) | Allowed by role | Permitted |
+| Technician / Housekeeping | Allowed (200) | Blocked (403) | Blocked (403) | 403 FORBIDDEN |
+| Non-Member / Cross-Dorm Owner | Blocked (403) | Blocked (403) | Blocked (403) | 403 FORBIDDEN |
+| Header Tamperer | Blocked (403) | Blocked (403) | Blocked (403) | 403 FORBIDDEN |
 
 ---
 
-## 6. Test Suite Matrix
-
-### Automated Backend Test Suite (`server/tests/wave1f-subscriptions.test.ts`)
-* **Total Tests**: 10 passed
-* **Coverage**:
-  - Initial 30-day trial provisioning
-  - `HORPLUS` promo code single redemption & trial extension (+60 days)
-  - Duplicate promo code denial (409)
-  - Invalid/expired promo code denial (400/404)
-  - Free/Trial 10-room quota assertion (409)
-  - Concurrency safety at room quota boundary
-  - Read-only mutation block when expired (403)
-  - 1-Month Paid package activation & 150-room limit extension
-  - Unpriced package activation denial (400)
-  - Owner 10-dormitory quota assertion (409)
-  - Idempotent legacy dormitory backfill
-
-### End-to-End Playwright Suite (`tests/e2e/wave1f-subscription.spec.ts`)
-* **Total Specs Passed**: 6/6 E2E spec files passed (100%)
-* **Scenarios Verified**:
-  - Real browser context & PostgreSQL session authentication
-  - Direct navigation to `/owner/subscription` UI tab
-  - UI display of 30-day Trial status & 10-room meter
-  - UI promo redemption of `HORPLUS` with instant +60 day extension
-  - UI disabled promo form showing "Already Redeemed" after redemption
-  - API enforcement of 10-room limit on Plan A (409 `ROOM_LIMIT_REACHED`)
-  - Operational activation of 1-Month Paid package (Plan B, 150 rooms)
-  - Successful room creation after Plan B activation
-  - Read-Only mode banner displayed when subscription is expired
-  - Business mutation blocked with `SUBSCRIPTION_READ_ONLY` (403) while GET read access remains functional
+## 7. New Dormitory Provisioning & Backfill
+- **New Dormitory Provisioning**: Provisions 1 30-day Trial in `DormitorySubscription` and 1 `SubscriptionStatusHistory` record (`reason = INITIAL_PROVISIONING_30_DAY_TRIAL`) inside the same atomic database transaction as dormitory creation.
+- **Existing-Dormitory Backfill**: `subscriptionEntitlementService.backfillExistingDormitories()` backfills all unprovisioned dormitories idempotently with trial subscriptions and status history records (`reason = EXISTING_DORMITORY_BACKFILL_30_DAY_TRIAL`).
+- **Read Operation Safety**: `getCurrentSubscription(dormitoryId)` throws HTTP 404 `SUBSCRIPTION_NOT_FOUND` if a subscription does not exist. It never provisions subscriptions as a GET side-effect.
 
 ---
 
-## 7. Verification Artifacts & Builds
-* **Prisma Schema Validation**: Validated (`npx prisma validate`)
-* **Prisma Client Generation**: Clean (`npx prisma generate`)
-* **Prisma Migration Status**: Database up to date (`npx prisma migrate status`)
-* **Backend TypeScript Lint & Build**: Passed with 0 errors (`npm run lint`, `npm run build` in `server/`)
-* **Frontend TypeScript Lint & Build**: Passed with 0 errors (`npm run lint`, `npm run build` in root)
-* **Docker Compose Pilot Build**: Successfully built `horplus_wave1d_fasttrack-api:latest` (`docker compose -f docker-compose.windows-pilot.yml build`)
-* **Health Endpoint Check**:
-  - `/health/liveness`: UP (HTTP 200)
-  - `/health/readiness`: Database UP (HTTP 200)
-  - `/health/metrics`: HTTP 200
+## 8. Promo Code & Idempotency Rules
+- **Promo Code `HORPLUS`**: Extends trial by +60 days (total 90 days).
+- **Persistent Idempotency**: `POST /api/v1/subscription/promo/redeem` enforces header `X-Idempotency-Key`.
+  - Same key + payload -> Replays cached completed response without duplicating trial extension.
+  - Same key + payload mismatch -> Returns HTTP 409 `IDEMPOTENCY_MISMATCH`.
+  - Second redemption with new key -> Returns HTTP 409 `PROMO_ALREADY_REDEEMED`.
+  - Expired trial -> Returns HTTP 403 `SUBSCRIPTION_READ_ONLY`.
 
 ---
 
-## 8. Conclusion
-Wave 1F Subscriptions and Entitlements implementation is fully closed, tested, verified, and ready for PR merge.
+## 9. Room Limits & PostgreSQL Concurrency Locks
+- **Quota Limits**: Free/Trial Plan = 10 rooms; Paid Plan = 150 rooms; Owner quota = 10 dormitories max.
+- **Concurrent Creation Protection**: `RoomService.createRoom` acquires PostgreSQL transaction lock (`SELECT pg_advisory_xact_lock(hashtext(dormitoryId))`) inside an atomic transaction.
+- **Verified Boundary Results**:
+  - **Free Boundary (9 existing rooms + 2 concurrent creations)**: Exactly 1 creation succeeded (room 10), exactly 1 returned HTTP 409 `ROOM_LIMIT_REACHED`. Final count = 10.
+  - **Paid Boundary (149 existing rooms + 2 concurrent creations)**: Exactly 1 creation succeeded (room 150), exactly 1 returned HTTP 409 `ROOM_LIMIT_REACHED`. Final count = 150.
+
+---
+
+## 10. Operational Paid Activation Safety
+- Removed public `POST /api/v1/subscription/activate` endpoint and UI "Activate 1 Month" button from Owner Portal.
+- Owner Portal displays "Awaiting platform activation" for purchasable packages.
+- Operational activation implemented via internal service `subscriptionEntitlementService.activatePaidSubscriptionOperational`:
+  - Restricted to environments where `process.env.ALLOW_OPERATIONAL_ACTIVATION === 'true'` or dev/test mode. Blocked with HTTP 403 `OPERATIONAL_ACTIVATION_DISABLED` in production.
+  - Calculates renewal expiry from `max(currentExpiresAt, now)` to ensure subscriptions are never shortened.
+  - Uses persistent idempotency keys.
+
+---
+
+## 11. Over-Limit & Expired Read-Only Behavior
+- When `roomCount > roomLimit` or `expiresAt <= now`:
+  - `isReadOnly` is set to `true`.
+  - All GET/read endpoints remain 100% accessible.
+  - Historical rooms, buildings, contracts, and tenant data are preserved without deletion or archiving.
+  - Business mutations (POST/PUT/PATCH/DELETE) are blocked with HTTP 403 `SUBSCRIPTION_READ_ONLY`.
+  - Entitlement reason explicitly identifies `ROOM_LIMIT_EXCEEDED` or `SUBSCRIPTION_EXPIRED`.
+
+---
+
+## 12. Verification & Verification Commands
+
+### Backend Verification (`server/`)
+- **Lint (`npm run lint`)**: Exit code 0 (0 errors).
+- **TypeScript (`npx tsc --noEmit`)**: Exit code 0 (0 errors).
+- **Build (`npm run build`)**: Exit code 0.
+- **Vitest Unit/Integration Suite (`npm test`)**:
+  - **Command**: `npm test`
+  - **Working Directory**: `D:\horplus_wave1d_fasttrack\server`
+  - **Exit Code**: 0
+  - **Results**: 14 test files passed (14/14), 76 individual tests passed (76/76), 0 failed.
+- **Prisma Validate & Status**:
+  - `npx prisma validate`: Schema is valid 🚀
+  - `npx prisma migrate status`: Database schema is up to date!
+
+### Frontend & E2E Verification (Root)
+- **Lint (`npm run lint`)**: Exit code 0 (0 errors).
+- **TypeScript (`npx tsc --noEmit`)**: Exit code 0 (0 errors).
+- **Build (`npm run build`)**: Exit code 0 (Vite built 2704 modules transformed).
+- **Playwright Suite (`npx playwright test`)**:
+  - **Command**: `npx playwright test`
+  - **Working Directory**: `D:\horplus_wave1d_fasttrack`
+  - **Exit Code**: 0
+  - **Results**: 6 tests passed (6/6), 0 failed. Includes complete Wave 1F Subscription lifecycle E2E spec.
+
+### Docker & Health Checks
+- **Docker Compose Pilot Config**: `docker compose -f docker-compose.windows-pilot.yml config` (Exit code 0).
+- **Docker Compose Pilot Build**: `docker compose -f docker-compose.windows-pilot.yml build` (Exit code 0).
+- **Health Check Endpoints**:
+  - `GET /health/liveness`: 200 OK (`{"status":"UP","timestamp":"..."}`)
+  - `GET /health/readiness`: 200 OK (`{"status":"UP","checks":{...}}`)
+  - `GET /health/metrics`: 200 OK
+
+---
+
+## 13. Commits and PR #2 Status
+- Forward-only corrective commits pushed to `feature/wave1f-subscriptions-entitlements`:
+  - `fix(wave1f): enforce subscription authorization boundaries`
+  - `fix(wave1f): unify entitlement source and activation safety`
+  - `test(wave1f): prove concurrent room and promo limits`
+  - `docs(wave1f): finalize subscription closure evidence`
+- **Local SHA**: Matches Remote `origin/feature/wave1f-subscriptions-entitlements`
+- **PR #2**: Open & unmerged against `recovery/wave1d-fasttrack`.
+
+---
+
+## 14. Final Verdict
+
+WAVE 1F SUBSCRIPTIONS AND ENTITLEMENTS: PASSED

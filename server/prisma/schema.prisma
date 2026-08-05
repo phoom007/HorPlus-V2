@@ -33,9 +33,11 @@ model User {
   updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
   deletedAt       DateTime? @map("deleted_at") @db.Timestamptz()
 
-  memberships          DormitoryMember[]
-  sessions             Session[]
-  paymentUploadIntents PaymentUploadIntent[]
+  memberships           DormitoryMember[]
+  sessions              Session[]
+  paymentUploadIntents  PaymentUploadIntent[]
+  subscriptionHistories SubscriptionStatusHistory[]
+  promoRedemptions      PromoRedemption[]
 
   @@map("users")
 }
@@ -90,6 +92,7 @@ model Dormitory {
   ReceiptSequence            ReceiptSequence[]
   paymentUploadIntents       PaymentUploadIntent[]
   dormitorySubscription      DormitorySubscription?
+  subscriptionHistories      SubscriptionStatusHistory[]
   promoRedemptions           PromoRedemption[]
 
   @@map("dormitories")
@@ -943,6 +946,8 @@ model SubscriptionPlan {
 
   packages               SubscriptionPackage[]
   dormitorySubscriptions DormitorySubscription[]
+  previousPlanHistories  SubscriptionStatusHistory[] @relation("PreviousPlanHistory")
+  newPlanHistories       SubscriptionStatusHistory[] @relation("NewPlanHistory")
 
   @@map("subscription_plans")
 }
@@ -1003,9 +1008,14 @@ model SubscriptionStatusHistory {
   createdAt      DateTime                     @default(now()) @map("created_at") @db.Timestamptz()
 
   subscription DormitorySubscription @relation(fields: [subscriptionId], references: [id], onDelete: Restrict)
+  dormitory    Dormitory             @relation(fields: [dormitoryId], references: [id], onDelete: Restrict)
+  previousPlan SubscriptionPlan?     @relation("PreviousPlanHistory", fields: [previousPlanId], references: [id], onDelete: Restrict)
+  newPlan      SubscriptionPlan      @relation("NewPlanHistory", fields: [newPlanId], references: [id], onDelete: Restrict)
+  actor        User?                 @relation(fields: [actorId], references: [id], onDelete: Restrict)
 
   @@index([subscriptionId])
   @@index([dormitoryId])
+  @@index([actorId])
   @@map("subscription_status_histories")
 }
 
@@ -1039,10 +1049,12 @@ model PromoRedemption {
   promoCode    PromoCode             @relation(fields: [promoCodeId], references: [id], onDelete: Restrict)
   subscription DormitorySubscription @relation(fields: [subscriptionId], references: [id], onDelete: Restrict)
   dormitory    Dormitory             @relation(fields: [dormitoryId], references: [id], onDelete: Restrict)
+  redeemer     User                  @relation(fields: [redeemedBy], references: [id], onDelete: Restrict)
 
   @@unique([promoCodeId, dormitoryId], name: "promo_dormitory_unique")
   @@index([dormitoryId])
   @@index([subscriptionId])
+  @@index([redeemedBy])
   @@map("promo_redemptions")
 }
 
