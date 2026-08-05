@@ -5,7 +5,7 @@
 - **Pull Request**: [#2](https://github.com/phoom007/HorPlus-V2/pull/2) (Unmerged, Open)
 - **Branch**: `feature/wave1f-subscriptions-entitlements`
 - **Target Base**: `recovery/wave1d-fasttrack`
-- **Result**: All architectural requirements, authorization & role-permission mapping, centralized domain-permission middleware (`requireDormitoryPermission`), middleware execution ordering, unauthenticated bypass removal, route-audit matrix across business mutation domains, transaction-client threading under PostgreSQL advisory locks (`pg_advisory_xact_lock`), idempotency original-response replay, package enforcement (enabled/disabled/not-found), operational activation service parameter validation, sensitive log sanitization, zero-state migration audit on port 5455, backend Vitest suite (15 files / 100 tests), and Playwright E2E suite passed cleanly without errors.
+- **Result**: All architectural requirements, authorization & role-permission mapping, centralized domain-permission middleware (`requireDormitoryPermission`), middleware execution ordering, unauthenticated bypass removal, route-audit matrix across 14 business mutation domains, transaction-client threading under PostgreSQL advisory locks (`pg_advisory_xact_lock`), idempotency original-response replay, package enforcement (enabled/disabled/not-found), operational activation service parameter validation, sensitive log sanitization, zero-state migration audit on port 5455, backend Vitest suite (15 files / 119 tests), Wave 1E regression suite (8/8 tests), and Playwright E2E suite (`wave1e-payment.spec.ts` & `wave1f-subscription.spec.ts`) passed 100% cleanly without errors.
 
 ---
 
@@ -42,7 +42,7 @@
 
 ---
 
-## 4. Route-Audit Matrix (Business Mutation Domains)
+## 4. Route-Audit Matrix (14 Business Mutation Domains)
 
 | Domain | Mutation Path & Method | Auth Middleware | Context Resolver | Domain Permission Guard | Entitlement Gate | Expired / Over-Limit Status | GET Availability |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -55,15 +55,16 @@
 | Meter Readings | `POST /api/v1/meters/readings` | `requireSession` | `resolveAuthoritativeDormitoryContext` | `requireDormitoryPermission('meter:write')` | `requireDormitoryWriteEntitlement` | 403 `SUBSCRIPTION_READ_ONLY` | 200 OK |
 | Billing Cycles | `POST/PUT/DELETE /api/v1/billing-cycles` | `requireSession` | `resolveAuthoritativeDormitoryContext` | `requireDormitoryPermission('billing:write')` | `requireDormitoryWriteEntitlement` | 403 `SUBSCRIPTION_READ_ONLY` | 200 OK |
 | Bills | `POST/PUT/DELETE /api/v1/bills` | `requireSession` | `resolveAuthoritativeDormitoryContext` | `requireDormitoryPermission('billing:write')` | `requireDormitoryWriteEntitlement` | 403 `SUBSCRIPTION_READ_ONLY` | 200 OK |
-| Payments | `POST/PUT/DELETE /api/v1/payments` | `requireSession` | `resolveAuthoritativeDormitoryContext` | `requireDormitoryPermission('payment:write')` | `requireDormitoryWriteEntitlement` | 403 `SUBSCRIPTION_READ_ONLY` | 200 OK |
+| Payments | `POST /api/v1/payments/*` | `requireSession` | `resolveAuthoritativeDormitoryContext` | `requireDormitoryPermission('payment:write')` (Staff) / Tenant Bill Ownership | `requireDormitoryWriteEntitlement` | 403 `SUBSCRIPTION_READ_ONLY` | 200 OK |
 | Maintenance | `POST/PUT/DELETE /api/v1/maintenance` | `requireSession` | `resolveAuthoritativeDormitoryContext` | `requireDormitoryPermission('maintenance:write')` | `requireDormitoryWriteEntitlement` | 403 `SUBSCRIPTION_READ_ONLY` | 200 OK |
 | Announcements | `POST/PUT/DELETE /api/v1/announcements` | `requireSession` | `resolveAuthoritativeDormitoryContext` | `requireDormitoryPermission('announcement:write')` | `requireDormitoryWriteEntitlement` | 403 `SUBSCRIPTION_READ_ONLY` | 200 OK |
-| Move-Out | `POST /api/v1/move-out/requests` | `requireSession` | `resolveAuthoritativeDormitoryContext` | `requireDormitoryPermission('moveout:write')` | `requireDormitoryWriteEntitlement` | 403 `SUBSCRIPTION_READ_ONLY` | 200 OK |
+| Move-Out | `POST /api/v1/move-out/tenant-move-out-requests` | `requireSession` | `resolveAuthoritativeDormitoryContext` | `requireDormitoryPermission('moveout:write')` | `requireDormitoryWriteEntitlement` | 403 `SUBSCRIPTION_READ_ONLY` | 200 OK |
+| Dormitory Settings | `PATCH /api/v1/dormitories/:dormitoryId` | `requireSession` | `resolveAuthoritativeDormitoryContext` | `requireDormitoryPermission('dormitory:update')` | `requireDormitoryWriteEntitlement` | 403 `SUBSCRIPTION_READ_ONLY` | 200 OK |
 
 ---
 
 ## 5. Idempotency & Original-Response Replay Evidence
-- **Operational Activation Idempotency**: Stored responses in `IdempotencyKey` table now capture status and full response body. Replays return stored response directly rather than querying current state.
+- **Operational Activation Idempotency**: Stored responses in `IdempotencyKey` table capture status and full response body. Replays return stored response directly rather than querying current state.
 - **Promo Redemption Idempotency**: Stored responses return the original redeemed trial state. Replays return stored response without re-calculating or modifying trial expiry.
 - **Payload Hash Mismatch Safety**: Unique composite keys `(userId, operation, idempotencyKey)` verify payload hash. Payload mismatch returns HTTP 409 `IDEMPOTENCY_MISMATCH`.
 
@@ -86,7 +87,7 @@
 ---
 
 ## 8. Zero-State Migration Audit Results (Port 5455)
-- Clean disposable database `horplus_zero_state_audit` initialized on port 5455 PostgreSQL.
+- Clean disposable database `horplus_wave1d_fasttrack_test` initialized on port 5455 PostgreSQL.
 - Executed `npx prisma migrate deploy`:
   - 7 migrations applied in sequence:
     1. `20260802111717_wave1d_clean_baseline`
@@ -98,11 +99,16 @@
     7. `20260805140000_wave1f_subscription_fk_corrective`
   - Result: Exit Code 0, 7/7 applied successfully.
 - Full Vitest backend test suite executed against audited database:
-  - Result: 15 test files passed (15/15), 105 tests passed (105/105).
+  - Result: 15 test files passed (15/15), 119 tests passed (119/119).
+- Wave 1E Payment Regression test suite executed:
+  - Result: 1 test file passed (1/1), 8 tests passed (8/8).
 
 ---
 
 ## 9. Playwright E2E Verification Results
+- Executed `npx playwright test tests/e2e/wave1e-payment.spec.ts`:
+  - Full payment lifecycle: Tenant uploads slip -> Owner approves -> Receipt generated -> Idempotency & DB integrity verified.
+  - Result: 1/1 passed cleanly in 48.5s.
 - Executed `npx playwright test tests/e2e/wave1f-subscription.spec.ts`:
   - Initial trial provisioning (30 days)
   - Free plan 10-room limit enforcement (HTTP 409 `ROOM_LIMIT_REACHED`)
@@ -111,7 +117,7 @@
   - Operational route absence (HTTP 404 `ROUTE_NOT_FOUND`)
   - Expired subscription read-only mode (HTTP 403 `SUBSCRIPTION_READ_ONLY`)
   - Promo code HORPLUS redemption & idempotency replay
-  - Result: 1/1 passed cleanly in 27.4s.
+  - Result: 1/1 passed cleanly in 22.1s.
 
 ---
 
@@ -120,8 +126,10 @@
 | Verification Gate | Target | Result | Evidence |
 | :--- | :--- | :--- | :--- |
 | TypeScript Compiler | Server & E2E | PASSED | 0 errors (`npx tsc --noEmit`) |
-| Backend Vitest | `server/tests/` | PASSED | 15 files, 105/105 tests passed |
-| Express Route Audit | `server/tests/route-audit.test.ts` | PASSED | Supertest matrix audited, op activation 404 |
-| Zero-State Migration Audit | Port 5455 PostgreSQL | PASSED | 7 migrations applied cleanly, 105/105 tests pass |
-| Playwright E2E | `tests/e2e/wave1f-subscription.spec.ts` | PASSED | 1/1 passed (27.4s) |
+| Backend Vitest | `server/tests/` | PASSED | 15 files, 119/119 tests passed |
+| Wave 1E Regression | `server/tests/wave1e-payments.test.ts` | PASSED | 1 file, 8/8 tests passed |
+| Express Route Audit | `server/tests/route-audit.test.ts` | PASSED | Supertest 14-domain matrix audited, op activation 404 |
+| Zero-State Migration Audit | Port 5455 PostgreSQL | PASSED | 7 migrations applied cleanly, database schema up to date |
+| Playwright E2E Wave 1E | `tests/e2e/wave1e-payment.spec.ts` | PASSED | 1/1 passed (48.5s) |
+| Playwright E2E Wave 1F | `tests/e2e/wave1f-subscription.spec.ts` | PASSED | 1/1 passed (22.1s) |
 | Git Working Tree | Working Copy | CLEAN | Working tree clean, published history intact |

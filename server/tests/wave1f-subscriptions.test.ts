@@ -1,4 +1,6 @@
-import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
+import express, { Request, Response, NextFunction } from 'express';
+import request from 'supertest';
 import { PrismaClient } from '@prisma/client';
 import { subscriptionEntitlementService, addCalendarMonths } from '../src/services/subscription-entitlement.service.js';
 import { RoomService } from '../src/services/room.service.js';
@@ -7,6 +9,23 @@ import { PrismaBuildingRepository } from '../src/db/repositories/building.reposi
 import { PrismaSubscriptionRepository } from '../src/db/repositories/subscription.repository.js';
 import { PrismaContractRepository } from '../src/db/repositories/contract.repository.js';
 import { PrismaMembershipRepository } from '../src/db/repositories/membership.repository.js';
+import { PrismaDormitoryRepository } from '../src/db/repositories/dormitory.repository.js';
+import { InMemoryBillingSettingsRepository } from '../src/db/repositories/billing-settings.repository.js';
+import { PrismaBillingSettingsRepository } from '../src/db/repositories/billing-settings.repository.js';
+import { PrismaSubscriptionPlanRepository } from '../src/db/repositories/plan.repository.js';
+import { InMemoryPromoRepository, PrismaPromoRepository } from '../src/db/repositories/promo.repository.js';
+import { PrismaRoleRepository } from '../src/db/repositories/role.repository.js';
+import { InMemoryOnboardingDraftRepository } from '../src/db/repositories/onboarding-draft.repository.js';
+import { PrismaOnboardingDraftRepository } from '../src/db/repositories/onboarding-draft.repository.js';
+import { InMemoryIdempotencyRepository, PrismaIdempotencyRepository } from '../src/db/repositories/idempotency.repository.js';
+import { DormitoryProvisioningService } from '../src/services/dormitory-provisioning.service.js';
+import { SensitiveFieldService } from '../src/services/sensitive-field.service.js';
+import { PromoService } from '../src/services/promo.service.js';
+import { AuditService } from '../src/services/audit.service.js';
+import { localStorageProvider } from '../src/services/local-storage.service.js';
+import { createPaymentRouter } from '../src/routes/payment.routes.js';
+import { createApiRouter } from '../src/routes/index.js';
+import { globalErrorHandler } from '../src/middleware/error-handler.js';
 import { resolveAuthoritativeDormitoryContext, normalizeRolePermissions } from '../src/middleware/dormitory-context.js';
 import { requireDormitoryPermission, resolveDormitoryContextMiddleware } from '../src/middleware/permission.js';
 import { requireDormitoryWriteEntitlement } from '../src/middleware/entitlement.js';
@@ -46,9 +65,9 @@ describe('Wave 1F - Authorization, Permission, Package & Idempotency Corrective 
 
     await prisma.user.createMany({
       data: [
-        { id: ownerUserId, googleSubject: `sub-owner-${timestamp}`, email: `owner-${timestamp}@test.com`, emailNormalized: `owner-${timestamp}@test.com`, name: 'Owner User' },
-        { id: managerUserId, googleSubject: `sub-mgr-${timestamp}`, email: `mgr-${timestamp}@test.com`, emailNormalized: `mgr-${timestamp}@test.com`, name: 'Manager User' },
-        { id: techUserId, googleSubject: `sub-tech-${timestamp}`, email: `tech-${timestamp}@test.com`, emailNormalized: `tech-${timestamp}@test.com`, name: 'Technician User' },
+        { id: ownerUserId, googleSubject: `sub-owner-${crypto.randomUUID()}`, email: `owner-${crypto.randomUUID()}@test.com`, emailNormalized: `owner-${crypto.randomUUID()}@test.com`, name: 'Owner User' },
+        { id: managerUserId, googleSubject: `sub-mgr-${crypto.randomUUID()}`, email: `mgr-${crypto.randomUUID()}@test.com`, emailNormalized: `mgr-${crypto.randomUUID()}@test.com`, name: 'Manager User' },
+        { id: techUserId, googleSubject: `sub-tech-${crypto.randomUUID()}`, email: `tech-${crypto.randomUUID()}@test.com`, emailNormalized: `tech-${crypto.randomUUID()}@test.com`, name: 'Technician User' },
       ],
     });
 
@@ -612,5 +631,481 @@ describe('Wave 1F - Authorization, Permission, Package & Idempotency Corrective 
     const content = fs.readFileSync(authServicePath, 'utf-8');
     // Should not contain the dangerous fallback
     expect(content).not.toContain("roleCode: m.roleCode || 'OWNER'");
+  });
+
+  // ─── Payment Mutation Permission & Entitlement Integration Tests ───
+  describe('Payment Mutation & Read-Only Entitlement Integration Matrix', () => {
+    let tenantUserId: string;
+    let tenantRoleId: string;
+    let tenantId: string;
+    let billId: string;
+    let paymentId: string;
+    let intentId: string;
+    let managerPermissions: any = {};
+    let app: express.Application;
+
+    beforeEach(async () => {
+      managerPermissions = {};
+      tenantUserId = crypto.randomUUID();
+      const timestamp = Date.now();
+
+      await prisma.user.create({
+        data: { id: tenantUserId, googleSubject: `sub-t-${timestamp}`, email: `t-${timestamp}@test.com`, emailNormalized: `t-${timestamp}@test.com`, name: 'Tenant User' },
+      });
+
+      const tenantRole = await prisma.role.create({
+        data: { dormitoryId: dormId, name: 'Tenant', code: 'TENANT', permissions: { payment: ['read'] } },
+      });
+      tenantRoleId = tenantRole.id;
+
+      await prisma.dormitoryMember.create({
+        data: { userId: tenantUserId, dormitoryId: dormId, roleId: tenantRole.id, status: 'active' },
+      });
+
+      const room = await prisma.room.create({
+        data: { dormitoryId: dormId, buildingId, roomNumber: `PAY-R-${timestamp}`, floor: 1, status: 'occupied' },
+      });
+
+      const tenantRec = await prisma.tenant.create({
+        data: { dormitoryId: dormId, tenantNumber: `TNT-${timestamp}`, displayName: 'Payment Tenant', firstName: 'Payment', lastName: 'Tenant', phone: '0899998888', linkedUserId: tenantUserId, status: 'active' },
+      });
+      tenantId = tenantRec.id;
+
+      const cycle = await prisma.billingCycle.create({
+        data: {
+          dormitoryId: dormId,
+          cycleCode: `CYC-${timestamp}`,
+          name: 'Aug 2026',
+          periodStart: new Date(),
+          periodEnd: new Date(),
+          billingDate: new Date(),
+          dueDate: new Date(),
+        },
+      });
+
+      const bill = await prisma.bill.create({
+        data: { dormitoryId: dormId, billingCycleId: cycle.id, billNumber: `BILL-${timestamp}`, tenantId, roomId: room.id, totalAmount: 5000, status: 'UNPAID', billingDate: new Date(), dueDate: new Date() },
+      });
+      billId = bill.id;
+
+      const payment = await prisma.payment.create({
+        data: { dormitoryId: dormId, billId, tenantId, amount: 5000, method: 'SLIP', status: 'PENDING', paymentDate: new Date(), evidenceUrl: 'payments/test/slip.jpg' },
+      });
+      paymentId = payment.id;
+
+      const intent = await prisma.paymentUploadIntent.create({
+        data: { authenticatedUserId: tenantUserId, tenantId, dormitoryId: dormId, billId, expectedMimeType: 'image/jpeg', expectedSize: 1024, expiresAt: new Date(Date.now() + 15 * 60 * 1000), status: 'CREATED' },
+      });
+      intentId = intent.id;
+
+      app = express();
+      app.use(express.json());
+
+      const mockAuthService: any = {
+        requireAuth: () => (req: Request, res: Response, next: NextFunction) => {
+          const userIdHeader = (req.headers['x-user-id'] as string) || ownerUserId;
+          let roleId = ownerRoleId;
+          let roleCode = 'OWNER';
+          let rolePermissions: any = { '*': ['*'] };
+          if (userIdHeader === managerUserId) {
+            roleId = managerRoleId;
+            roleCode = 'MANAGER';
+            rolePermissions = managerPermissions;
+          } else if (userIdHeader === techUserId) {
+            roleId = techRoleId;
+            roleCode = 'TECHNICIAN';
+            rolePermissions = {};
+          } else if (userIdHeader === tenantUserId) {
+            roleId = tenantRoleId;
+            roleCode = 'TENANT';
+            rolePermissions = {};
+          }
+
+          req.auth = {
+            userId: userIdHeader,
+            user: { id: userIdHeader, name: 'Test User', email: `${userIdHeader}@test.com` },
+            sessionId: `sess-${userIdHeader}`,
+            memberships: [
+              { id: `mem-${userIdHeader}`, dormitoryId: dormId, userId: userIdHeader, status: 'active', roleId, roleCode, rolePermissions },
+            ],
+          };
+          next();
+        },
+        verifyCsrf: () => true,
+      };
+
+      app.use('/api/v1/payments', createPaymentRouter(mockAuthService));
+      app.use(globalErrorHandler);
+    });
+
+    it('Tenant + active Subscription allows upload intent when bill belongs to Tenant', async () => {
+      const timestamp = Date.now();
+      const freshRoom = await prisma.room.create({
+        data: { dormitoryId: dormId, buildingId, roomNumber: `PAY-INTENT-${timestamp}`, normalizedRoomNumber: `payintent${timestamp}`, floor: 1, status: 'occupied' },
+      });
+      const freshBill = await prisma.bill.create({
+        data: {
+          dormitoryId: dormId,
+          billingCycleId: (await prisma.billingCycle.findFirst({ where: { dormitoryId: dormId } }))!.id,
+          billNumber: `BILL-INTENT-${timestamp}`,
+          tenantId,
+          roomId: freshRoom.id,
+          totalAmount: 3000,
+          status: 'UNPAID',
+          billingDate: new Date(),
+          dueDate: new Date(),
+        },
+      });
+
+      const res = await request(app)
+        .post('/api/v1/payments/slip/intent')
+        .set('x-user-id', tenantUserId)
+        .set('x-dormitory-id', dormId)
+        .set('x-csrf-token', 'valid-csrf')
+        .send({ billId: freshBill.id, fileName: 'slip.jpg', mimeType: 'image/jpeg', fileSize: 1024 });
+
+      expect(res.status).toBe(200);
+      expect(res.body.intentId).toBeDefined();
+    });
+
+    it('Tenant + expired Subscription returns 403 SUBSCRIPTION_READ_ONLY', async () => {
+      await prisma.dormitorySubscription.updateMany({
+        where: { dormitoryId: dormId },
+        data: { status: 'EXPIRED', expiresAt: new Date(Date.now() - 24 * 60 * 60 * 1000) },
+      });
+
+      const res = await request(app)
+        .post('/api/v1/payments/slip/intent')
+        .set('x-user-id', tenantUserId)
+        .set('x-dormitory-id', dormId)
+        .set('x-csrf-token', 'valid-csrf')
+        .send({ billId, fileName: 'slip.jpg', mimeType: 'image/jpeg', fileSize: 1024 });
+
+      expect(res.status).toBe(403);
+      expect(res.body.error?.code).toBe('SUBSCRIPTION_READ_ONLY');
+    });
+
+    it('Owner + payment:write + active Subscription allows cash recording', async () => {
+      const timestamp = Date.now();
+      const freshRoom = await prisma.room.create({
+        data: { dormitoryId: dormId, buildingId, roomNumber: `PAY-CASH-${timestamp}`, normalizedRoomNumber: `paycash${timestamp}`, floor: 1, status: 'occupied' },
+      });
+      const freshBill = await prisma.bill.create({
+        data: {
+          dormitoryId: dormId,
+          billingCycleId: (await prisma.billingCycle.findFirst({ where: { dormitoryId: dormId } }))!.id,
+          billNumber: `BILL-CASH-${timestamp}`,
+          tenantId,
+          roomId: freshRoom.id,
+          totalAmount: 5000,
+          status: 'UNPAID',
+          billingDate: new Date(),
+          dueDate: new Date(),
+        },
+      });
+
+      const res = await request(app)
+        .post('/api/v1/payments/cash')
+        .set('x-user-id', ownerUserId)
+        .set('x-dormitory-id', dormId)
+        .set('x-csrf-token', 'valid-csrf')
+        .send({ billId: freshBill.id, amount: '5000' });
+
+      expect(res.status).toBe(200);
+    });
+
+    it('Manager without payment:write is denied with 403 FORBIDDEN', async () => {
+      const res = await request(app)
+        .post('/api/v1/payments/cash')
+        .set('x-user-id', managerUserId)
+        .set('x-dormitory-id', dormId)
+        .set('x-csrf-token', 'valid-csrf')
+        .send({ billId, amount: '5000' });
+
+      expect(res.status).toBe(403);
+      expect(res.body.error?.code).toBe('FORBIDDEN');
+    });
+
+    it('Manager with payment:write + expired Subscription returns 403 SUBSCRIPTION_READ_ONLY', async () => {
+      await prisma.role.update({
+        where: { id: managerRoleId },
+        data: { permissions: { payment: ['read', 'write'] } },
+      });
+      managerPermissions = { payment: ['read', 'write'] };
+
+      await prisma.dormitorySubscription.updateMany({
+        where: { dormitoryId: dormId },
+        data: { status: 'EXPIRED', expiresAt: new Date(Date.now() - 24 * 60 * 60 * 1000) },
+      });
+
+      const res = await request(app)
+        .post('/api/v1/payments/cash')
+        .set('x-user-id', managerUserId)
+        .set('x-dormitory-id', dormId)
+        .set('x-csrf-token', 'valid-csrf')
+        .send({ billId, amount: '5000' });
+
+      expect(res.status).toBe(403);
+      expect(res.body.error?.code).toBe('SUBSCRIPTION_READ_ONLY');
+    });
+
+    it('Technician without payment:write returns 403 FORBIDDEN', async () => {
+      const res = await request(app)
+        .post('/api/v1/payments/cash')
+        .set('x-user-id', techUserId)
+        .set('x-dormitory-id', dormId)
+        .set('x-csrf-token', 'valid-csrf')
+        .send({ billId, amount: '5000' });
+
+      expect(res.status).toBe(403);
+      expect(res.body.error?.code).toBe('FORBIDDEN');
+    });
+
+    it('Cross-Dormitory Payment access is denied with 403', async () => {
+      const res = await request(app)
+        .post(`/api/v1/payments/${paymentId}/approve`)
+        .set('x-user-id', ownerUserId)
+        .set('x-dormitory-id', otherDormId)
+        .set('x-csrf-token', 'valid-csrf');
+
+      expect(res.status).toBe(403);
+    });
+
+    it('Historical evidence GET remains readable when subscription is expired', async () => {
+      await prisma.dormitorySubscription.updateMany({
+        where: { dormitoryId: dormId },
+        data: { status: 'EXPIRED', expiresAt: new Date(Date.now() - 24 * 60 * 60 * 1000) },
+      });
+
+      const getFileSpy = vi.spyOn(localStorageProvider, 'getFile').mockResolvedValue(Buffer.from('fake-image-bytes'));
+
+      const res = await request(app)
+        .get(`/api/v1/payments/${paymentId}/evidence`)
+        .set('x-user-id', ownerUserId)
+        .set('x-dormitory-id', dormId);
+
+      getFileSpy.mockRestore();
+
+      expect(res.status).toBe(200);
+      expect(res.headers['content-type']).toContain('image/jpeg');
+    });
+  });
+
+  // ─── Real Onboarding Transaction & Rollback Proof ───
+  describe('Real Onboarding Transaction & Rollback Proof', () => {
+    it('proves real onboarding transaction creates exact required records', async () => {
+      const timestamp = Date.now();
+      const onboardingUserId = crypto.randomUUID();
+
+      await prisma.user.create({
+        data: { id: onboardingUserId, googleSubject: `sub-onb-${timestamp}`, email: `onb-${timestamp}@test.com`, emailNormalized: `onb-${timestamp}@test.com`, name: 'Onboarding User' },
+      });
+
+      const draftRepo = new InMemoryOnboardingDraftRepository();
+      const dormitoryRepo = new PrismaDormitoryRepository(prisma);
+      const billingRepo = new InMemoryBillingSettingsRepository();
+      const planRepo = new PrismaSubscriptionPlanRepository(prisma);
+      const subRepo = new PrismaSubscriptionRepository(prisma);
+      const promoRepo = new InMemoryPromoRepository();
+      const membershipRepo = new PrismaMembershipRepository(prisma);
+      const roleRepo = new PrismaRoleRepository(prisma);
+      const idempotencyRepo = new InMemoryIdempotencyRepository();
+      const buildingRepo = new PrismaBuildingRepository(prisma);
+      const roomRepo = new PrismaRoomRepository(prisma);
+      const sensitiveFieldService = new SensitiveFieldService('0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef');
+      const promoService = new PromoService(promoRepo, subRepo);
+      const auditService = new AuditService();
+
+      const provisioningService = new DormitoryProvisioningService(
+        dormitoryRepo, billingRepo as any, planRepo, subRepo, promoRepo,
+        membershipRepo, roleRepo, draftRepo, idempotencyRepo as any,
+        buildingRepo, roomRepo, sensitiveFieldService, promoService,
+        auditService, prisma
+      );
+
+      const result = await provisioningService.completeOwnerOnboarding({
+        userId: onboardingUserId,
+        idempotencyKey: `onb-idem-${timestamp}`,
+        planCode: 'FREE',
+        dormitory: { name: `Onboard Dorm ${timestamp}`, code: `ONB-${timestamp}`, addressLine1: '123 Onb St', postalCode: '10100', phone: '0812345678' },
+        billing: { bankName: 'Kasikorn', accountName: 'Onboard User', accountNumber: '1234567890' },
+      });
+
+      expect(result.dormitory?.id).toBeDefined();
+
+      const newDorms = await prisma.dormitory.findMany({ where: { createdByUserId: onboardingUserId } });
+      expect(newDorms.length).toBe(1);
+
+      const newMembers = await prisma.dormitoryMember.findMany({ where: { userId: onboardingUserId, dormitoryId: result.dormitory.id } });
+      expect(newMembers.length).toBe(1);
+
+      const newSubs = await prisma.dormitorySubscription.findMany({ where: { dormitoryId: result.dormitory.id } });
+      expect(newSubs.length).toBe(1);
+
+      const newHistories = await prisma.subscriptionStatusHistory.findMany({ where: { dormitoryId: result.dormitory.id } });
+      expect(newHistories.length).toBe(1);
+
+      const platformSubs = await (prisma as any).platformSubscription?.findMany({ where: { dormitoryId: result.dormitory.id } }) || [];
+      expect(platformSubs.length).toBe(0);
+    });
+
+    it('proves onboarding transaction rolls back cleanly on inner repository failure', async () => {
+      const timestamp = Date.now();
+      const rollbackUserId = crypto.randomUUID();
+
+      await prisma.user.create({
+        data: { id: rollbackUserId, googleSubject: `sub-roll-${timestamp}`, email: `roll-${timestamp}@test.com`, emailNormalized: `roll-${timestamp}@test.com`, name: 'Rollback User' },
+      });
+
+      const initialDorms = await prisma.dormitory.count();
+      const initialMembers = await prisma.dormitoryMember.count();
+      const initialSubs = await prisma.dormitorySubscription.count();
+
+      const spy = vi.spyOn(subscriptionEntitlementService, 'provisionInitialTrial').mockRejectedValueOnce(new Error('INTENTIONAL_PROVISIONING_FAILURE'));
+
+      const provisioningService = new DormitoryProvisioningService(
+        new PrismaDormitoryRepository(prisma),
+        new InMemoryBillingSettingsRepository() as any,
+        new PrismaSubscriptionPlanRepository(prisma),
+        new PrismaSubscriptionRepository(prisma),
+        new InMemoryPromoRepository(),
+        new PrismaMembershipRepository(prisma),
+        new PrismaRoleRepository(prisma),
+        new InMemoryOnboardingDraftRepository(),
+        new InMemoryIdempotencyRepository() as any,
+        new PrismaBuildingRepository(prisma),
+        new PrismaRoomRepository(prisma),
+        new SensitiveFieldService('0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'),
+        new PromoService(new InMemoryPromoRepository(), new PrismaSubscriptionRepository(prisma)),
+        new AuditService(),
+        prisma
+      );
+
+      await expect(
+        provisioningService.completeOwnerOnboarding({
+          userId: rollbackUserId,
+          idempotencyKey: `roll-idem-${timestamp}`,
+          planCode: 'FREE',
+          dormitory: { name: `Rollback Dorm ${timestamp}`, code: `ROLL-${timestamp}`, addressLine1: '123 Roll St', postalCode: '10100', phone: '0812345678' },
+          billing: { bankName: 'Kasikorn', accountName: 'Rollback User', accountNumber: '1234567890' },
+        })
+      ).rejects.toThrow();
+
+      spy.mockRestore();
+
+      expect(await prisma.dormitory.count()).toBe(initialDorms);
+      expect(await prisma.dormitoryMember.count()).toBe(initialMembers);
+      expect(await prisma.dormitorySubscription.count()).toBe(initialSubs);
+    });
+  });
+
+  // ─── True Concurrent HTTP Room Quota Tests ───
+  describe('True Concurrent HTTP Room Quota Tests', () => {
+    let app: express.Application;
+    let concDormId: string;
+    let concOwnerId: string;
+
+    beforeEach(async () => {
+      const timestamp = Date.now();
+      concDormId = crypto.randomUUID();
+      concOwnerId = crypto.randomUUID();
+
+      await prisma.user.create({
+        data: { id: concOwnerId, googleSubject: `sub-conc-${timestamp}`, email: `conc-${timestamp}@test.com`, emailNormalized: `conc-${timestamp}@test.com`, name: 'Conc User' },
+      });
+
+      await prisma.dormitory.create({
+        data: { id: concDormId, name: `Conc Dorm ${timestamp}`, code: `CONC-${timestamp}`, addressLine1: '123 Conc St', postalCode: '10100', phone: '0812345678', status: 'active', createdByUserId: concOwnerId },
+      });
+
+      const role = await prisma.role.create({
+        data: { dormitoryId: concDormId, name: 'Owner', code: 'OWNER', permissions: { '*': ['*'] } },
+      });
+
+      await prisma.dormitoryMember.create({
+        data: { userId: concOwnerId, dormitoryId: concDormId, roleId: role.id, status: 'active' },
+      });
+
+      await entitlementService.provisionInitialTrial(concDormId);
+
+      await prisma.building.create({ data: { dormitoryId: concDormId, name: 'Conc Building' } });
+
+      app = express();
+      app.use(express.json());
+
+      const mockAuthService: any = {
+        requireAuth: () => (req: Request, res: Response, next: NextFunction) => {
+          req.auth = {
+            userId: concOwnerId,
+            user: { id: concOwnerId, name: 'Conc Owner', email: 'conc@test.com' },
+            sessionId: 'sess-conc',
+            memberships: [{ id: 'mem-conc', dormitoryId: concDormId, userId: concOwnerId, status: 'active', roleId: role.id, roleCode: 'OWNER' }],
+          };
+          next();
+        },
+        verifyCsrf: () => true,
+      };
+
+      const roomRepo = new PrismaRoomRepository(prisma);
+      const buildingRepo = new PrismaBuildingRepository(prisma);
+      const subRepo = new PrismaSubscriptionRepository(prisma);
+      const planRepo = new PrismaSubscriptionPlanRepository(prisma);
+      const contractRepo = new PrismaContractRepository(prisma);
+      const auditService = new AuditService();
+      const roomService = new RoomService(roomRepo, buildingRepo, subRepo, planRepo, contractRepo, auditService, entitlementService, prisma);
+
+      app.use('/api/v1', createApiRouter({
+        authService: mockAuthService,
+        onboardingService: {} as any, planService: {} as any, promoService: {} as any, provisioningService: {} as any, sensitiveFieldService: {} as any,
+        buildingService: {} as any, roomService, tenantService: {} as any, contractService: {} as any, occupancyService: {} as any, billingCycleService: {} as any, meterService: {} as any, billingService: {} as any,
+        dormitoryRepo: {} as any, billingRepo: {} as any, subRepo, planRepo: {} as any, membershipRepo: {} as any, roleRepo: {} as any,
+      }));
+      app.use(globalErrorHandler);
+    });
+
+    it('proves concurrent HTTP room creation on Free boundary under PG transaction lock', async () => {
+      const bld = await prisma.building.findFirst({ where: { dormitoryId: concDormId } });
+      for (let i = 1; i <= 9; i++) {
+        await prisma.room.create({
+          data: { dormitoryId: concDormId, buildingId: bld!.id, roomNumber: `RMF${i}`, normalizedRoomNumber: `rmf${i}`, floor: 1, status: 'vacant' },
+        });
+      }
+
+      const [res1, res2] = await Promise.all([
+        request(app).post('/api/v1/properties/rooms').set('x-user-id', concOwnerId).set('x-dormitory-id', concDormId).set('x-csrf-token', 'valid').send({ roomNumber: 'RMF10', buildingId: bld!.id, floor: 1, baseRent: 3000 }),
+        request(app).post('/api/v1/properties/rooms').set('x-user-id', concOwnerId).set('x-dormitory-id', concDormId).set('x-csrf-token', 'valid').send({ roomNumber: 'RMF11', buildingId: bld!.id, floor: 1, baseRent: 3000 }),
+      ]);
+
+      const statuses = [res1.status, res2.status].sort();
+      expect(statuses).toEqual([201, 409]);
+
+      const activeCount = await prisma.room.count({ where: { dormitoryId: concDormId, deletedAt: null } });
+      expect(activeCount).toBe(10);
+    });
+
+    it('proves concurrent HTTP room creation on Paid boundary under PG transaction lock', async () => {
+      process.env.ALLOW_OPERATIONAL_ACTIVATION = 'true';
+      await entitlementService.activatePaidSubscriptionOperational({
+        dormitoryId: concDormId, durationMonths: 1, actorId: concOwnerId,
+        idempotencyKey: `act-conc-${Date.now()}`, reason: 'Concurrent test paid',
+      });
+
+      const bld = await prisma.building.findFirst({ where: { dormitoryId: concDormId } });
+      const roomData = Array.from({ length: 149 }, (_, i) => ({
+        dormitoryId: concDormId, buildingId: bld!.id, roomNumber: `RMP${i + 1}`, normalizedRoomNumber: `rmp${i + 1}`, floor: 1, status: 'vacant',
+      }));
+      await prisma.room.createMany({ data: roomData });
+
+      const [res1, res2] = await Promise.all([
+        request(app).post('/api/v1/properties/rooms').set('x-user-id', concOwnerId).set('x-dormitory-id', concDormId).set('x-csrf-token', 'valid').send({ roomNumber: 'RMP150', buildingId: bld!.id, floor: 1, baseRent: 3000 }),
+        request(app).post('/api/v1/properties/rooms').set('x-user-id', concOwnerId).set('x-dormitory-id', concDormId).set('x-csrf-token', 'valid').send({ roomNumber: 'RMP151', buildingId: bld!.id, floor: 1, baseRent: 3000 }),
+      ]);
+
+      const statuses = [res1.status, res2.status].sort();
+      expect(statuses).toEqual([201, 409]);
+
+      const activeCount = await prisma.room.count({ where: { dormitoryId: concDormId, deletedAt: null } });
+      expect(activeCount).toBe(150);
+    });
   });
 });

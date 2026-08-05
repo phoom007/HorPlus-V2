@@ -4,6 +4,9 @@ import { paymentService } from '../services/payment.service.js';
 import { localStorageProvider } from '../services/local-storage.service.js';
 import { AuthenticationService } from '../services/auth.service.js';
 import { createCsrfMiddleware } from '../middleware/csrf.js';
+import { requireDormitoryPermission } from '../middleware/permission.js';
+import { requireDormitoryWriteEntitlement } from '../middleware/entitlement.js';
+import { resolveAuthoritativeDormitoryContext } from '../middleware/dormitory-context.js';
 import { PrismaClient } from '@prisma/client';
 import multer from 'multer';
 import crypto from 'crypto';
@@ -123,10 +126,11 @@ export function createPaymentRouter(authService: AuthenticationService) {
   };
 
   // Tenant: create upload intent
-  router.post('/slip/intent', requireAuth, requireCsrf, async (req, res) => {
+  router.post('/slip/intent', requireAuth, requireDormitoryWriteEntitlement, requireCsrf, async (req, res) => {
     try {
       const auth = (req as any).auth;
-      const dormitoryId = req.body.dormitoryId || auth.dormitoryId;
+      const context = resolveAuthoritativeDormitoryContext(req);
+      const dormitoryId = context.dormitoryId;
       if (!dormitoryId) return res.status(400).json({ error: 'Missing dormitoryId' });
 
       const tenant = await ensureTenant(req, res, dormitoryId);
@@ -183,16 +187,18 @@ export function createPaymentRouter(authService: AuthenticationService) {
   });
 
   // Secure multipart upload
-  router.post('/slip/upload/:intentId', requireAuth, requireCsrf, upload.single('file'), async (req, res) => {
+  router.post('/slip/upload/:intentId', requireAuth, requireDormitoryWriteEntitlement, requireCsrf, upload.single('file'), async (req, res) => {
     let objectKey: string | null = null;
     try {
       if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
 
       const auth = (req as any).auth;
+      const context = resolveAuthoritativeDormitoryContext(req);
+      const dormitoryId = context.dormitoryId;
       const intentId = req.params.intentId;
       const intent = await prisma.paymentUploadIntent.findUnique({ where: { id: intentId } });
 
-      if (!intent) return res.status(404).json({ error: 'Intent not found' });
+      if (!intent || intent.dormitoryId !== dormitoryId) return res.status(404).json({ error: 'Intent not found' });
       if (intent.status !== 'CREATED') return res.status(409).json({ error: 'Intent already consumed or uploaded' });
       if (intent.expiresAt < new Date()) return res.status(400).json({ error: 'Intent expired' });
       if (intent.authenticatedUserId !== auth.userId) return res.status(403).json({ error: 'Forbidden' });
@@ -266,10 +272,11 @@ export function createPaymentRouter(authService: AuthenticationService) {
   });
 
   // Tenant: confirm upload and submit payment
-  router.post('/slip/submit', requireAuth, requireCsrf, async (req, res) => {
+  router.post('/slip/submit', requireAuth, requireDormitoryWriteEntitlement, requireCsrf, async (req, res) => {
     try {
       const auth = (req as any).auth;
-      const dormitoryId = req.body.dormitoryId || auth.dormitoryId;
+      const context = resolveAuthoritativeDormitoryContext(req);
+      const dormitoryId = context.dormitoryId;
       if (!dormitoryId) return res.status(400).json({ error: 'Missing dormitoryId' });
 
       const tenant = await ensureTenant(req, res, dormitoryId);
@@ -312,10 +319,11 @@ export function createPaymentRouter(authService: AuthenticationService) {
   });
 
   // Owner: Record Cash
-  router.post('/cash', requireAuth, requireCsrf, async (req, res) => {
+  router.post('/cash', requireAuth, requireDormitoryPermission('payment:write'), requireDormitoryWriteEntitlement, requireCsrf, async (req, res) => {
     try {
       const auth = (req as any).auth;
-      const dormitoryId = req.body.dormitoryId || auth.dormitoryId;
+      const context = resolveAuthoritativeDormitoryContext(req);
+      const dormitoryId = context.dormitoryId;
 
       if (!ensureOwnerOrManager(req, res, dormitoryId)) {
         return res.status(403).json({ error: 'Forbidden' });
@@ -326,6 +334,11 @@ export function createPaymentRouter(authService: AuthenticationService) {
         amount: z.string()
       });
       const data = schema.parse(req.body);
+
+      const bill = await prisma.bill.findUnique({ where: { id: data.billId } });
+      if (!bill || bill.dormitoryId !== dormitoryId) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
 
       const idempotencyKey = (req.headers['x-idempotency-key'] || req.headers['idempotency-key']) as string | undefined;
 
@@ -349,13 +362,16 @@ export function createPaymentRouter(authService: AuthenticationService) {
   });
 
   // Owner: Approve
-  router.post('/:paymentId/approve', requireAuth, requireCsrf, async (req, res) => {
+  router.post('/:paymentId/approve', requireAuth, requireDormitoryPermission('payment:write'), requireDormitoryWriteEntitlement, requireCsrf, async (req, res) => {
     try {
       const auth = (req as any).auth;
+      const context = resolveAuthoritativeDormitoryContext(req);
+      const dormitoryId = context.dormitoryId;
+
       const paymentRecord = await prisma.payment.findUnique({ where: { id: req.params.paymentId } });
       if (!paymentRecord) return res.status(404).json({ error: 'Not found' });
+      if (paymentRecord.dormitoryId !== dormitoryId) return res.status(403).json({ error: 'Forbidden' });
 
-      const dormitoryId = paymentRecord.dormitoryId;
       if (!ensureOwnerOrManager(req, res, dormitoryId)) {
         return res.status(403).json({ error: 'Forbidden' });
       }
@@ -382,13 +398,16 @@ export function createPaymentRouter(authService: AuthenticationService) {
   });
 
   // Owner: Reject
-  router.post('/:paymentId/reject', requireAuth, requireCsrf, async (req, res) => {
+  router.post('/:paymentId/reject', requireAuth, requireDormitoryPermission('payment:write'), requireDormitoryWriteEntitlement, requireCsrf, async (req, res) => {
     try {
       const auth = (req as any).auth;
+      const context = resolveAuthoritativeDormitoryContext(req);
+      const dormitoryId = context.dormitoryId;
+
       const paymentRecord = await prisma.payment.findUnique({ where: { id: req.params.paymentId } });
       if (!paymentRecord) return res.status(404).json({ error: 'Not found' });
+      if (paymentRecord.dormitoryId !== dormitoryId) return res.status(403).json({ error: 'Forbidden' });
 
-      const dormitoryId = paymentRecord.dormitoryId;
       if (!ensureOwnerOrManager(req, res, dormitoryId)) {
         return res.status(403).json({ error: 'Forbidden' });
       }
@@ -419,13 +438,16 @@ export function createPaymentRouter(authService: AuthenticationService) {
   });
 
   // Owner: Reverse
-  router.post('/:paymentId/reverse', requireAuth, requireCsrf, async (req, res) => {
+  router.post('/:paymentId/reverse', requireAuth, requireDormitoryPermission('payment:write'), requireDormitoryWriteEntitlement, requireCsrf, async (req, res) => {
     try {
       const auth = (req as any).auth;
+      const context = resolveAuthoritativeDormitoryContext(req);
+      const dormitoryId = context.dormitoryId;
+
       const paymentRecord = await prisma.payment.findUnique({ where: { id: req.params.paymentId } });
       if (!paymentRecord) return res.status(404).json({ error: 'Not found' });
+      if (paymentRecord.dormitoryId !== dormitoryId) return res.status(403).json({ error: 'Forbidden' });
 
-      const dormitoryId = paymentRecord.dormitoryId;
       const isOwner = auth?.memberships?.find((m: any) => {
         const code = (m.roleCode || m.role || m.roleId || '').toLowerCase();
         return m.dormitoryId === dormitoryId && code.includes('owner');
@@ -463,8 +485,12 @@ export function createPaymentRouter(authService: AuthenticationService) {
   router.get('/:paymentId/evidence', requireAuth, async (req, res) => {
     try {
       const auth = (req as any).auth;
+      const context = resolveAuthoritativeDormitoryContext(req);
+      const dormitoryId = context.dormitoryId;
+
       const payment = await prisma.payment.findUnique({ where: { id: req.params.paymentId } });
       if (!payment) return res.status(404).json({ error: 'Payment not found' });
+      if (payment.dormitoryId !== dormitoryId) return res.status(403).json({ error: 'Forbidden' });
 
       const isOwner = ensureOwnerOrManager(req, res, payment.dormitoryId);
       let authorized = false;
@@ -503,10 +529,8 @@ export function createPaymentRouter(authService: AuthenticationService) {
   router.get('/', requireAuth, async (req, res) => {
     try {
       const auth = (req as any).auth;
-      let dormitoryId = req.query.dormitoryId as string;
-      if (!dormitoryId || dormitoryId === 'undefined') {
-        dormitoryId = auth.dormitoryId;
-      }
+      const context = resolveAuthoritativeDormitoryContext(req);
+      const dormitoryId = context.dormitoryId;
       
       if (!ensureOwnerOrManager(req, res, dormitoryId)) {
         return res.status(403).json({ error: 'Forbidden' });

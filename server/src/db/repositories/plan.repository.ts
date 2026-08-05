@@ -151,3 +151,40 @@ export class InMemoryPlanRepository implements IPlanRepository {
     return this.plans.get(id) || null;
   }
 }
+
+export class PrismaSubscriptionPlanRepository implements IPlanRepository {
+  constructor(private db: any) {}
+
+  public async findAllActive(): Promise<PlatformPlanEntity[]> {
+    const list = await this.db.subscriptionPlan.findMany({
+      where: { isActive: true },
+      orderBy: { displayOrder: 'asc' },
+    });
+    return list.map((p: any) => ({
+      ...p,
+      monthlyPrice: p.monthlyPrice ? p.monthlyPrice.toString() : '0.00',
+    }));
+  }
+
+  public async findByCode(code: string): Promise<PlatformPlanEntity | null> {
+    const p = await this.db.subscriptionPlan.findUnique({
+      where: { code: code.trim().toUpperCase() },
+    });
+    if (!p) return null;
+    return {
+      ...p,
+      monthlyPrice: p.monthlyPrice ? p.monthlyPrice.toString() : '0.00',
+    };
+  }
+
+  public async findById(id: string): Promise<PlatformPlanEntity | null> {
+    const p = await this.db.subscriptionPlan.findUnique({
+      where: { id },
+    });
+    if (!p) return null;
+    return {
+      ...p,
+      monthlyPrice: p.monthlyPrice ? p.monthlyPrice.toString() : '0.00',
+    };
+  }
+}

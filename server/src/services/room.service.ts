@@ -18,6 +18,7 @@ export interface RoomFilterQuery {
 export class RoomService {
   private contractRepo: IContractRepository;
   private auditService?: AuditService;
+  private prisma?: any;
 
   constructor(
     private roomRepo: IRoomRepository,
@@ -27,17 +28,18 @@ export class RoomService {
     arg5?: any,
     arg6?: any,
     arg7?: any,
-    private prisma?: any
+    prisma?: any
   ) {
     if (arg4 && typeof arg4.findActiveContractsForRoom === 'function') {
       this.contractRepo = arg4;
       this.auditService = arg5;
-      this.prisma = arg7 || prisma;
     } else {
       this.contractRepo = arg5;
       this.auditService = arg6;
-      this.prisma = arg7 || prisma;
     }
+
+    const detectedPrisma = [arg4, arg5, arg6, arg7, prisma].find((x) => x && typeof x.$transaction === 'function');
+    this.prisma = detectedPrisma || prisma;
   }
 
   public async checkRoomLimit(dormitoryId: string, tx?: any): Promise<void> {

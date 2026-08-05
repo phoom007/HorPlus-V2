@@ -13,16 +13,20 @@ import { resolveAuthoritativeDormitoryContext } from './dormitory-context.js';
 export function requireDormitoryPermission(requiredPermission: string) {
   return (req: Request, res: Response, next: NextFunction) => {
     try {
-      const context = (req as any).dormitoryContext;
+      let context = (req as any).dormitoryContext;
       if (!context) {
-        return res.status(403).json({
-          error: {
-            code: 'FORBIDDEN',
-            message: 'Dormitory context not resolved.',
-            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
-            timestamp: new Date().toISOString(),
-          },
-        });
+        try {
+          context = resolveAuthoritativeDormitoryContext(req);
+        } catch {
+          return res.status(403).json({
+            error: {
+              code: 'FORBIDDEN',
+              message: 'Dormitory context not resolved.',
+              requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+              timestamp: new Date().toISOString(),
+            },
+          });
+        }
       }
 
       const { roleCode, permissions } = context;
