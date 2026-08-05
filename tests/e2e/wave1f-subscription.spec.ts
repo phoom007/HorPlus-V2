@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { PrismaClient } from '../../server/node_modules/@prisma/client/index.js';
 import crypto from 'crypto';
+import { subscriptionEntitlementService } from '../../server/src/services/subscription-entitlement.service.js';
 
 const prisma = new PrismaClient();
 
@@ -54,24 +55,12 @@ test.describe('Wave 1F - Subscription & Entitlement Playwright E2E Suite', () =>
     const sessionId = crypto.randomUUID();
     const roleId = crypto.randomUUID();
 
-    let freePlan = await prisma.subscriptionPlan.findUnique({ where: { code: 'FREE' } });
-    if (!freePlan) {
-      freePlan = await prisma.subscriptionPlan.create({
-        data: { code: 'FREE', name: 'Free / Trial', type: 'FREE', roomLimit: 10 },
-      });
-    }
+    await subscriptionEntitlementService.ensureSeeded();
 
     let paidPlan = await prisma.subscriptionPlan.findUnique({ where: { code: 'PAID' } });
     if (!paidPlan) {
       paidPlan = await prisma.subscriptionPlan.create({
         data: { code: 'PAID', name: 'Paid', type: 'PAID', roomLimit: 150 },
-      });
-    }
-
-    let horplusPromo = await prisma.promoCode.findUnique({ where: { code: 'HORPLUS' } });
-    if (!horplusPromo) {
-      horplusPromo = await prisma.promoCode.create({
-        data: { code: 'HORPLUS', normalizedCode: 'HORPLUS', extensionDays: 60 },
       });
     }
 
@@ -124,19 +113,8 @@ test.describe('Wave 1F - Subscription & Entitlement Playwright E2E Suite', () =>
       },
     });
 
-    const now = new Date();
-    const expiresAt = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
-    await prisma.dormitorySubscription.create({
-      data: {
-        dormitoryId: dormId,
-        planId: freePlan.id,
-        status: 'TRIAL',
-        startedAt: now,
-        expiresAt: expiresAt,
-        trialStartedAt: now,
-        trialExpiresAt: expiresAt,
-      },
-    });
+    // Provision initial trial using authoritative entitlement service
+    await subscriptionEntitlementService.provisionInitialTrial(dormId);
 
     const building = await prisma.building.create({
       data: {
@@ -165,7 +143,19 @@ test.describe('Wave 1F - Subscription & Entitlement Playwright E2E Suite', () =>
 
   test('Owner subscription & entitlement full lifecycle', async ({ page }) => {
     test.setTimeout(60000);
-    // 1. Authenticate browser context
+
+    // 1. Assert zero newly created legacy PlatformSubscription records for this dorm
+    const legacyCount = await prisma.platformSubscription.count({ where: { dormitoryId: dormId } });
+    expect(legacyCount).toBe(0);
+
+    // 2. Assert exactly one authoritative DormitorySubscription and status history
+    const subCount = await prisma.dormitorySubscription.count({ where: { dormitoryId: dormId } });
+    expect(subCount).toBe(1);
+
+    const historyCount = await prisma.subscriptionStatusHistory.count({ where: { dormitoryId: dormId } });
+    expect(historyCount).toBe(1);
+
+    // 3. Authenticate browser context
     await page.context().addCookies([
       { name: 'horplus_session', value: sessionToken, domain: 'localhost', path: '/' },
       { name: 'horplus_csrf', value: csrfToken, domain: 'localhost', path: '/' },
@@ -177,31 +167,27 @@ test.describe('Wave 1F - Subscription & Entitlement Playwright E2E Suite', () =>
       localStorage.setItem('selected_dormitory_id', id);
     }, dormId);
 
-    // 2. Open Owner Portal directly on subscription tab
+    // 4. Open Owner Portal directly on subscription tab
     await page.goto('/owner/subscription');
 
-    // 3. Verify 30-day Trial details
+    // 5. Verify 30-day Trial details
     await expect(page.locator('text=Current Plan')).toBeVisible({ timeout: 10000 });
     await expect(page.getByText('Free / Trial').first()).toBeVisible();
     await expect(page.getByText('TRIAL', { exact: true })).toBeVisible();
 
-    // 4. Redeem HORPLUS promo code on UI
+    // 6. Redeem HORPLUS promo code on UI
     const promoInput = page.locator('input[placeholder="Enter promo code"]');
     await expect(promoInput).toBeVisible();
     await promoInput.fill('HORPLUS');
     const redeemBtn = page.locator('button:has-text("Redeem Code")');
     await redeemBtn.click();
 
-    // 5. Verify Trial extension by 60 days
+    // 7. Verify Trial extension by 60 days
     await expect(page.locator('text=redeemed!')).toBeVisible();
-
-    // 6. Verify button shows Already Redeemed
     await expect(page.locator('button:has-text("Already Redeemed")')).toBeVisible();
-
-    // 7. Verify package catalog shows "Awaiting platform activation"
     await expect(page.locator('text=Awaiting platform activation').first()).toBeVisible();
 
-    // 8. Test Room limit on Plan A (create 10 rooms via API, 11th should fail)
+    // 8. Test Free Plan room limit (seed 10 rooms, 11th should return 409 ROOM_LIMIT_REACHED)
     for (let i = 1; i <= 10; i++) {
       const num = `E2E-R${i}`;
       await prisma.room.create({
@@ -215,7 +201,6 @@ test.describe('Wave 1F - Subscription & Entitlement Playwright E2E Suite', () =>
       });
     }
 
-    // Attempt 11th room creation via backend API
     const room11Res = await page.request.post('/api/v1/properties/rooms', {
       headers: {
         'x-dormitory-id': dormId,
@@ -231,25 +216,19 @@ test.describe('Wave 1F - Subscription & Entitlement Playwright E2E Suite', () =>
     const room11Body = await room11Res.json();
     expect(room11Body.error.code).toBe('ROOM_LIMIT_REACHED');
 
-    // 9. Operational activation to Plan B (Paid) via operational route
-    const opActivateRes = await page.request.post('/api/v1/subscription/operational/activate', {
-      headers: {
-        'x-dormitory-id': dormId,
-        'x-csrf-token': csrfToken,
-        'x-idempotency-key': `e2e-op-activate-${Date.now()}`,
-      },
-      data: {
-        durationMonths: 1,
-        dormitoryId: dormId,
-      },
+    // 9. Operational activation to Paid plan using internal service (NOT HTTP route)
+    await subscriptionEntitlementService.activatePaidSubscriptionOperational({
+      dormitoryId: dormId,
+      durationMonths: 1,
+      actorId: ownerUser.id,
+      idempotencyKey: `e2e-op-activate-${Date.now()}`,
     });
-    expect(opActivateRes.status()).toBe(200);
 
-    // Reload page to refresh UI state
+    // 10. Reload page to verify Paid UI state
     await page.reload();
     await expect(page.getByText('Paid', { exact: true }).first()).toBeVisible();
 
-    // 10. Room creation now succeeds up to 150 on Plan B
+    // 11. Room creation now succeeds on Paid Plan
     const room11PaidRes = await page.request.post('/api/v1/properties/rooms', {
       headers: {
         'x-dormitory-id': dormId,
@@ -262,7 +241,17 @@ test.describe('Wave 1F - Subscription & Entitlement Playwright E2E Suite', () =>
     });
     expect(room11PaidRes.status()).toBe(201);
 
-    // 11. Test Expired Dormitory Read-Only Mode
+    // 12. Verify removed operational route returns 404 ROUTE_NOT_FOUND
+    const removedRouteRes = await page.request.post('/api/v1/subscription/operational/activate', {
+      headers: {
+        'x-dormitory-id': dormId,
+        'x-csrf-token': csrfToken,
+      },
+      data: { durationMonths: 1 },
+    });
+    expect(removedRouteRes.status()).toBe(404);
+
+    // 13. Expire subscription in PostgreSQL and verify Read-Only Mode
     const pastDate = new Date(Date.now() - 10000);
     const currentSub = await prisma.dormitorySubscription.findUnique({ where: { dormitoryId: dormId } });
     await prisma.dormitorySubscription.update({
@@ -270,13 +259,10 @@ test.describe('Wave 1F - Subscription & Entitlement Playwright E2E Suite', () =>
       data: { expiresAt: pastDate },
     });
 
-    // Reload page to refresh UI state
     await page.reload();
-
-    // Verify Read-Only banner is displayed
     await expect(page.locator('text=READ_ONLY Mode Active')).toBeVisible();
 
-    // Verify business mutation API returns SUBSCRIPTION_READ_ONLY (403)
+    // Business mutations return HTTP 403 SUBSCRIPTION_READ_ONLY
     const mutationRes = await page.request.post('/api/v1/properties/rooms', {
       headers: {
         'x-dormitory-id': dormId,
@@ -292,7 +278,7 @@ test.describe('Wave 1F - Subscription & Entitlement Playwright E2E Suite', () =>
     const mutationBody = await mutationRes.json();
     expect(mutationBody.error.code).toBe('SUBSCRIPTION_READ_ONLY');
 
-    // Verify GET/read-only access remains 100% functional
+    // GET / Read Operations remain 100% functional
     const getRoomsRes = await page.request.get('/api/v1/properties/rooms', {
       headers: { 'x-dormitory-id': dormId },
     });
@@ -300,7 +286,7 @@ test.describe('Wave 1F - Subscription & Entitlement Playwright E2E Suite', () =>
     const getRoomsBody = await getRoomsRes.json();
     expect(getRoomsBody.data).toBeDefined();
 
-    // 12. Cross-Dormitory subscription access is denied
+    // 14. Cross-Dormitory subscription access is denied
     const otherDormId = crypto.randomUUID();
     const crossRes = await page.request.get('/api/v1/subscription/current', {
       headers: { 'x-dormitory-id': otherDormId },

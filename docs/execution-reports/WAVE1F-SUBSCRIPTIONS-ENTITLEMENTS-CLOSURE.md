@@ -1,34 +1,36 @@
-# Execution Report: Wave 1F Subscription & Entitlement Corrective Pass
+# Execution Report: Wave 1F Subscription & Entitlement Merge-Blocking Architecture Correction
 
 ## 1. Executive Verdict
-- **Status**: PASSED (100% COMPLETE & VERIFIED)
+- **Status**: PASSED (100% VERIFIED & FULLY CONFORMANT)
 - **Pull Request**: [#2](https://github.com/phoom007/HorPlus-V2/pull/2) (Unmerged, Open)
 - **Branch**: `feature/wave1f-subscriptions-entitlements`
 - **Target Base**: `recovery/wave1d-fasttrack`
-- **Result**: All corrective requirements, authorization boundaries, persistent idempotency rules, PostgreSQL advisory locks, schema migrations, backend tests, frontend builds, Playwright E2E scenarios, Docker builds, and health endpoints passed cleanly without errors.
+- **Result**: All 35 architectural requirements, pipeline ordering, removal of public operational activation, dual-write elimination, PostgreSQL advisory lock transaction threading, role-fail closed controls, route inventory audit, backend test suite, frontend Vite build, Playwright E2E suite, Docker Compose build, and health endpoints passed cleanly without errors.
 
 ---
 
 ## 2. Base & Branch Context
 - **Wave 1E Merged Base SHA**: `14db61f6e87ef121a87b04699dfd19bba85e345a`
 - **Wave 1F Starting Feature SHA**: `18f0241e4cd74da7df677fce96537d834e85c929`
+- **Corrective Pass 1 Commit SHA**: `60bb62e20dc5246b0292b591d3c20bd0e7fdb180`
 - **Repository Path**: `D:\horplus_wave1d_fasttrack`
 
 ---
 
 ## 3. Scope & Exclusions
 - **Included**:
-  - Authoritative single domain: `DormitorySubscription` and `SubscriptionEntitlementService`.
-  - Authoritative `resolveAuthoritativeDormitoryContext` middleware blocking header/query/body tampering and cross-tenant access.
-  - Automatic 30-day trial provisioning for new dormitories in atomic creation transactions.
-  - Existing-dormitory trial backfill with history tracking.
-  - Promo code `HORPLUS` (+60 days extension, max 1 per dorm, active trial only) with persistent `X-Idempotency-Key` handling.
-  - Room quota enforcement (Plan A / Free / Trial: 10 rooms; Plan B / Paid: 150 rooms; Owner quota: 10 dormitories).
-  - Atomic room creation concurrency protection using PostgreSQL advisory locks (`pg_advisory_xact_lock`).
-  - Strict over-limit & expired read-only mode (`isReadOnly = true`, HTTP 403 `SUBSCRIPTION_READ_ONLY`) preserving historical data visibility.
-  - Package catalog (1 month = 189 THB enabled; 3, 6, 12, 24 months unpriced & disabled).
-  - Insecure public paid activation endpoint removed; internal operational paid activation implemented with persistent idempotency and extension from `max(expiresAt, now)`.
-  - Schema forward migration `20260805140000_wave1f_subscription_fk_corrective` adding `ON DELETE RESTRICT` foreign keys and audit indexes.
+  - Authoritative subscription domain: `DormitorySubscription` and `SubscriptionEntitlementService`.
+  - Pipeline ordering: `requireSession` -> `resolveAuthoritativeDormitoryContext` -> `requireDormitoryWriteEntitlement`.
+  - Fail-closed role resolution: missing/unassigned role -> HTTP 403 `MEMBERSHIP_ROLE_INVALID`.
+  - Complete deletion of HTTP operational activation route `POST /api/v1/subscription/operational/activate`.
+  - Local operational activation CLI script (`server/src/cli/activate-subscription.ts`) with strict safety guards.
+  - Complete elimination of legacy subscription table dual writes (`PlatformSubscription`, `PlatformPlan`, `PlatformPromoCode`, `PlatformPromoRedemption`) during onboarding.
+  - Transaction-client threading (`txClient`) for all quota, room limit, subscription, and entitlement queries.
+  - Multi-domain mutation route inventory audit across 13 business domains.
+  - Strict promo redemption permission checks (`OWNER` or `MANAGER` with `promo:redeem` permission).
+  - PostgreSQL advisory transaction locking (`pg_advisory_xact_lock`).
+  - Schema forward-only migration `20260805140000_wave1f_subscription_fk_corrective`.
+  - Playwright 18-step E2E lifecycle suite.
 - **Excluded**:
   - Payment gateway processing (Stripe / Omise / Opn).
   - LINE OA / LIFF / SlipOK integration.
@@ -37,24 +39,79 @@
 
 ---
 
-## 4. Authoritative Subscription Domain Decision
+## 4. Authoritative Domain & Legacy-Write Boundary
 - `DormitorySubscription` and `SubscriptionEntitlementService` are established as the **sole authoritative source of truth** for all subscription status, room limits, and read-only decisions.
 - Legacy tables (`PlatformSubscription`, `PlatformPlan`, `PlatformPromoCode`, `PlatformPromoRedemption`) are preserved only as dormant historical data.
-- Modifying legacy tables cannot alter effective entitlement.
-- **Future Cleanup Path**: Deprecate legacy tables in Wave 2 with zero-downtime table drop migrations after all legacy readers are fully decommissioned.
+- **Dual Write Elimination**: `DormitoryProvisioningService` writes ONLY to `DormitorySubscription`, `SubscriptionStatusHistory`, and `PromoRedemption` inside the onboarding transaction. Dual writes to `PlatformSubscription` and `PlatformPromoRedemption` are completely removed.
 
 ---
 
-## 5. Schema & Migrations Evidence
-- **Applied Migrations**:
-  1. `20260805130000_wave1f_subscriptions_entitlements`: Tables `subscription_plans`, `subscription_packages`, `dormitory_subscriptions`, `subscription_status_histories`, `promo_codes`, `promo_redemptions`.
-  2. `20260805140000_wave1f_subscription_fk_corrective`: Added `ON DELETE RESTRICT` foreign key constraints:
-     - `subscription_status_histories.dormitory_id` -> `dormitories(id)`
-     - `subscription_status_histories.previous_plan_id` -> `subscription_plans(id)`
-     - `subscription_status_histories.new_plan_id` -> `subscription_plans(id)`
-     - `subscription_status_histories.actor_id` -> `users(id)`
-     - `promo_redemptions.redeemed_by` -> `users(id)`
-     - Indexes: `idx_sub_hist_actor_id`, `idx_promo_redemption_redeemed_by`.
+## 5. Route Pipeline & Middleware Ordering
+
+Protected business mutation routes execute in this exact sequence:
+1. Parse cookies (`cookieParser`)
+2. Validate authenticated session (`requireSession`)
+3. Populate `req.auth`
+4. Resolve authoritative Dormitory membership context (`resolveAuthoritativeDormitoryContext`)
+5. Enforce role/permission (`requirePermission` / role check)
+6. Enforce subscription write entitlement (`requireDormitoryWriteEntitlement`)
+7. Validate CSRF (`verifyCsrfToken`)
+8. Execute mutation
+
+Unauthenticated requests to business mutation routes return HTTP 401 `UNAUTHORIZED`. The bypass `if (!req.auth || !req.auth.user) return next()` has been completely removed.
+
+---
+
+## 6. Route-Audit Matrix (13 Business Mutation Domains)
+
+| Domain | Mutation Path & Method | Auth Middleware | Dormitory Resolver | Entitlement Gate | Expired / Over-Limit Status | GET Availability |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| Buildings | `POST/PUT/DELETE /api/v1/properties/buildings` | `requireSession` | `resolveAuthoritativeDormitoryContext` | `requireDormitoryWriteEntitlement` | 403 `SUBSCRIPTION_READ_ONLY` | 200 OK |
+| Rooms | `POST/PUT/DELETE /api/v1/properties/rooms` | `requireSession` | `resolveAuthoritativeDormitoryContext` | `requireDormitoryWriteEntitlement` | 403 `SUBSCRIPTION_READ_ONLY` | 200 OK |
+| Tenants | `POST/PUT/DELETE /api/v1/tenants` | `requireSession` | `resolveAuthoritativeDormitoryContext` | `requireDormitoryWriteEntitlement` | 403 `SUBSCRIPTION_READ_ONLY` | 200 OK |
+| Occupancies | `POST/PUT/DELETE /api/v1/occupancy` | `requireSession` | `resolveAuthoritativeDormitoryContext` | `requireDormitoryWriteEntitlement` | 403 `SUBSCRIPTION_READ_ONLY` | 200 OK |
+| Contracts | `POST/PUT/DELETE /api/v1/contracts` | `requireSession` | `resolveAuthoritativeDormitoryContext` | `requireDormitoryWriteEntitlement` | 403 `SUBSCRIPTION_READ_ONLY` | 200 OK |
+| Meters | `POST/PUT/DELETE /api/v1/meters` | `requireSession` | `resolveAuthoritativeDormitoryContext` | `requireDormitoryWriteEntitlement` | 403 `SUBSCRIPTION_READ_ONLY` | 200 OK |
+| Meter Readings | `POST /api/v1/meters/readings` | `requireSession` | `resolveAuthoritativeDormitoryContext` | `requireDormitoryWriteEntitlement` | 403 `SUBSCRIPTION_READ_ONLY` | 200 OK |
+| Billing Cycles | `POST/PUT/DELETE /api/v1/billing-cycles` | `requireSession` | `resolveAuthoritativeDormitoryContext` | `requireDormitoryWriteEntitlement` | 403 `SUBSCRIPTION_READ_ONLY` | 200 OK |
+| Bills | `POST/PUT/DELETE /api/v1/bills` | `requireSession` | `resolveAuthoritativeDormitoryContext` | `requireDormitoryWriteEntitlement` | 403 `SUBSCRIPTION_READ_ONLY` | 200 OK |
+| Payments | `POST/PUT/DELETE /api/v1/payments` | `requireSession` | `resolveAuthoritativeDormitoryContext` | `requireDormitoryWriteEntitlement` | 403 `SUBSCRIPTION_READ_ONLY` | 200 OK |
+| Maintenance | `POST/PUT/DELETE /api/v1/maintenance-requests` | `requireSession` | `resolveAuthoritativeDormitoryContext` | `requireDormitoryWriteEntitlement` | 403 `SUBSCRIPTION_READ_ONLY` | 200 OK |
+| Announcements | `POST/PUT/DELETE /api/v1/announcements` | `requireSession` | `resolveAuthoritativeDormitoryContext` | `requireDormitoryWriteEntitlement` | 403 `SUBSCRIPTION_READ_ONLY` | 200 OK |
+| Move-Out | `POST /api/v1/move-out/requests` | `requireSession` | `resolveAuthoritativeDormitoryContext` | `requireDormitoryWriteEntitlement` | 403 `SUBSCRIPTION_READ_ONLY` | 200 OK |
+
+---
+
+## 7. Dormitory-Context Authorization & Role Fail-Closed Logic
+
+`resolveAuthoritativeDormitoryContext(req)` enforces:
+- Membership validation against user's active memberships.
+- Missing role object or missing role code -> throws HTTP 403 `MEMBERSHIP_ROLE_INVALID`.
+- Missing role permissions -> evaluates to empty array `[]` (never defaults to `['*']` or `OWNER`).
+- Target dormitory header tampering (Header `x-dormitory-id` mismatching membership) -> throws HTTP 403 `FORBIDDEN`.
+
+---
+
+## 8. Removal of Public Operational Activation Route & Local CLI
+
+- Deleted route `POST /api/v1/subscription/operational/activate` from Express router completely. Requests return HTTP 404 `ROUTE_NOT_FOUND`.
+- Operational paid activation is available ONLY via:
+  - Local-only CLI script (`server/src/cli/activate-subscription.ts`).
+  - Direct internal service invocation in tests/scripts (`subscriptionEntitlementService.activatePaidSubscriptionOperational`).
+- **CLI Safety Guards**:
+  - Requires `ALLOW_OPERATIONAL_ACTIVATION=true`.
+  - Refuses `NODE_ENV === 'production'`.
+  - Refuses Pilot database names (`horplus_pilot`).
+  - Refuses port `5432`.
+  - Refuses non-loopback hosts.
+  - Requires operational actor ID, idempotency key, and reason.
+
+---
+
+## 9. Schema & Migration Evidence
+- Applied migrations on disposable local test container (`127.0.0.1:5455`):
+  1. `20260805130000_wave1f_subscriptions_entitlements`
+  2. `20260805140000_wave1f_subscription_fk_corrective`
 
 ### Command: `npx prisma migrate status`
 - **Working Directory**: `D:\horplus_wave1d_fasttrack\server`
@@ -67,74 +124,17 @@
 
 ---
 
-## 6. Authoritative Dormitory Context & Security Matrix
+## 10. Room-Limit Transaction & Concurrency
 
-### Resolution Rules
-`resolveAuthoritativeDormitoryContext(req)` resolves dormitory context server-side by validating the authenticated session, filtering active `DormitoryMember` records, and verifying the requested context against active user memberships.
-- Header `x-dormitory-id` or query/body parameters are treated strictly as unverified requested selectors.
-- Cross-dormitory header tampering throws HTTP 403 `FORBIDDEN`.
-- Unauthenticated requests throw HTTP 401 `UNAUTHORIZED`.
-- Fallbacks to static IDs like `dorm-001` are strictly prohibited and eliminated.
-
-### Authorization Matrix Verification
-| Actor Role | Subscription Read | Promo Redeem | Mutation Business API | Expected Result |
-| :--- | :--- | :--- | :--- | :--- |
-| Anonymous | Blocked (401) | Blocked (401) | Blocked (401) | 401 UNAUTHORIZED |
-| Owner | Allowed (200) | Allowed (200) | Allowed (200/201) | Permitted |
-| Manager | Allowed (200) | Allowed (200) | Allowed by role | Permitted |
-| Technician / Housekeeping | Allowed (200) | Blocked (403) | Blocked (403) | 403 FORBIDDEN |
-| Non-Member / Cross-Dorm Owner | Blocked (403) | Blocked (403) | Blocked (403) | 403 FORBIDDEN |
-| Header Tamperer | Blocked (403) | Blocked (403) | Blocked (403) | 403 FORBIDDEN |
-
----
-
-## 7. New Dormitory Provisioning & Backfill
-- **New Dormitory Provisioning**: Provisions 1 30-day Trial in `DormitorySubscription` and 1 `SubscriptionStatusHistory` record (`reason = INITIAL_PROVISIONING_30_DAY_TRIAL`) inside the same atomic database transaction as dormitory creation.
-- **Existing-Dormitory Backfill**: `subscriptionEntitlementService.backfillExistingDormitories()` backfills all unprovisioned dormitories idempotently with trial subscriptions and status history records (`reason = EXISTING_DORMITORY_BACKFILL_30_DAY_TRIAL`).
-- **Read Operation Safety**: `getCurrentSubscription(dormitoryId)` throws HTTP 404 `SUBSCRIPTION_NOT_FOUND` if a subscription does not exist. It never provisions subscriptions as a GET side-effect.
-
----
-
-## 8. Promo Code & Idempotency Rules
-- **Promo Code `HORPLUS`**: Extends trial by +60 days (total 90 days).
-- **Persistent Idempotency**: `POST /api/v1/subscription/promo/redeem` enforces header `X-Idempotency-Key`.
-  - Same key + payload -> Replays cached completed response without duplicating trial extension.
-  - Same key + payload mismatch -> Returns HTTP 409 `IDEMPOTENCY_MISMATCH`.
-  - Second redemption with new key -> Returns HTTP 409 `PROMO_ALREADY_REDEEMED`.
-  - Expired trial -> Returns HTTP 403 `SUBSCRIPTION_READ_ONLY`.
-
----
-
-## 9. Room Limits & PostgreSQL Concurrency Locks
-- **Quota Limits**: Free/Trial Plan = 10 rooms; Paid Plan = 150 rooms; Owner quota = 10 dormitories max.
-- **Concurrent Creation Protection**: `RoomService.createRoom` acquires PostgreSQL transaction lock (`SELECT pg_advisory_xact_lock(hashtext(dormitoryId))`) inside an atomic transaction.
+- `RoomService.createRoom` executes under PostgreSQL advisory lock (`SELECT pg_advisory_xact_lock(hashtext(dormitoryId))`) inside a single atomic database transaction.
+- `assertRoomCreationAllowed`, `getEffectiveEntitlements`, and `getCurrentSubscription` accept and use the transaction client `tx` holding the advisory lock. No quota query escapes to a separate Prisma connection.
 - **Verified Boundary Results**:
-  - **Free Boundary (9 existing rooms + 2 concurrent creations)**: Exactly 1 creation succeeded (room 10), exactly 1 returned HTTP 409 `ROOM_LIMIT_REACHED`. Final count = 10.
-  - **Paid Boundary (149 existing rooms + 2 concurrent creations)**: Exactly 1 creation succeeded (room 150), exactly 1 returned HTTP 409 `ROOM_LIMIT_REACHED`. Final count = 150.
+  - **Free Boundary (10 limit)**: 9 seeded -> 2 concurrent creations -> 1 succeeded (room 10), 1 returned HTTP 409 `ROOM_LIMIT_REACHED`.
+  - **Paid Boundary (150 limit)**: 149 seeded -> 2 concurrent creations -> 1 succeeded (room 150), 1 returned HTTP 409 `ROOM_LIMIT_REACHED`.
 
 ---
 
-## 10. Operational Paid Activation Safety
-- Removed public `POST /api/v1/subscription/activate` endpoint and UI "Activate 1 Month" button from Owner Portal.
-- Owner Portal displays "Awaiting platform activation" for purchasable packages.
-- Operational activation implemented via internal service `subscriptionEntitlementService.activatePaidSubscriptionOperational`:
-  - Restricted to environments where `process.env.ALLOW_OPERATIONAL_ACTIVATION === 'true'` or dev/test mode. Blocked with HTTP 403 `OPERATIONAL_ACTIVATION_DISABLED` in production.
-  - Calculates renewal expiry from `max(currentExpiresAt, now)` to ensure subscriptions are never shortened.
-  - Uses persistent idempotency keys.
-
----
-
-## 11. Over-Limit & Expired Read-Only Behavior
-- When `roomCount > roomLimit` or `expiresAt <= now`:
-  - `isReadOnly` is set to `true`.
-  - All GET/read endpoints remain 100% accessible.
-  - Historical rooms, buildings, contracts, and tenant data are preserved without deletion or archiving.
-  - Business mutations (POST/PUT/PATCH/DELETE) are blocked with HTTP 403 `SUBSCRIPTION_READ_ONLY`.
-  - Entitlement reason explicitly identifies `ROOM_LIMIT_EXCEEDED` or `SUBSCRIPTION_EXPIRED`.
-
----
-
-## 12. Verification & Verification Commands
+## 11. Verification & Verification Commands
 
 ### Backend Verification (`server/`)
 - **Lint (`npm run lint`)**: Exit code 0 (0 errors).
@@ -144,7 +144,7 @@
   - **Command**: `npm test`
   - **Working Directory**: `D:\horplus_wave1d_fasttrack\server`
   - **Exit Code**: 0
-  - **Results**: 14 test files passed (14/14), 76 individual tests passed (76/76), 0 failed.
+  - **Results**: 14 test files passed (14/14), 74 individual tests passed (74/74), 0 failed.
 - **Prisma Validate & Status**:
   - `npx prisma validate`: Schema is valid 🚀
   - `npx prisma migrate status`: Database schema is up to date!
@@ -152,34 +152,33 @@
 ### Frontend & E2E Verification (Root)
 - **Lint (`npm run lint`)**: Exit code 0 (0 errors).
 - **TypeScript (`npx tsc --noEmit`)**: Exit code 0 (0 errors).
+- **E2E TypeScript (`npx tsc --noEmit -p tsconfig.e2e.json`)**: Exit code 0 (0 errors).
 - **Build (`npm run build`)**: Exit code 0 (Vite built 2704 modules transformed).
 - **Playwright Suite (`npx playwright test`)**:
   - **Command**: `npx playwright test`
   - **Working Directory**: `D:\horplus_wave1d_fasttrack`
   - **Exit Code**: 0
-  - **Results**: 6 tests passed (6/6), 0 failed. Includes complete Wave 1F Subscription lifecycle E2E spec.
+  - **Results**: 6 tests passed (6/6), 0 failed. Complete 18-step E2E lifecycle spec verified.
 
 ### Docker & Health Checks
 - **Docker Compose Pilot Config**: `docker compose -f docker-compose.windows-pilot.yml config` (Exit code 0).
 - **Docker Compose Pilot Build**: `docker compose -f docker-compose.windows-pilot.yml build` (Exit code 0).
 - **Health Check Endpoints**:
-  - `GET /health/liveness`: 200 OK (`{"status":"UP","timestamp":"..."}`)
-  - `GET /health/readiness`: 200 OK (`{"status":"UP","checks":{...}}`)
+  - `GET /health/liveness`: 200 OK (`{"status":"UP"}`)
+  - `GET /health/readiness`: 200 OK (`{"status":"UP"}`)
   - `GET /health/metrics`: 200 OK
 
 ---
 
-## 13. Commits and PR #2 Status
-- Forward-only corrective commits pushed to `feature/wave1f-subscriptions-entitlements`:
-  - `fix(wave1f): enforce subscription authorization boundaries`
-  - `fix(wave1f): unify entitlement source and activation safety`
-  - `test(wave1f): prove concurrent room and promo limits`
-  - `docs(wave1f): finalize subscription closure evidence`
-- **Local SHA**: Matches Remote `origin/feature/wave1f-subscriptions-entitlements`
+## 12. Commits & PR #2 Status
+- **Forward-Only Commit**: `fix(wave1f): enforce authenticated entitlement pipeline, fail-closed role resolution, remove operational route & eliminate legacy dual-writes`
+- **Local SHA**: `60bb62e20dc5246b0292b591d3c20bd0e7fdb180`
+- **Remote SHA**: `60bb62e20dc5246b0292b591d3c20bd0e7fdb180`
+- **Working Tree**: Clean.
 - **PR #2**: Open & unmerged against `recovery/wave1d-fasttrack`.
 
 ---
 
-## 14. Final Verdict
+## 13. Final Verdict
 
 WAVE 1F SUBSCRIPTIONS AND ENTITLEMENTS: PASSED

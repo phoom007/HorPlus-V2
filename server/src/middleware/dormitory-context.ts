@@ -8,7 +8,7 @@ export interface AuthoritativeDormitoryContext {
   roleCode: string;
   userId: string;
   memberId?: string;
-  permissions?: string[];
+  permissions: string[];
 }
 
 export function resolveAuthoritativeDormitoryContext(req: Request): AuthoritativeDormitoryContext {
@@ -42,7 +42,22 @@ export function resolveAuthoritativeDormitoryContext(req: Request): Authoritativ
     }
   }
 
-  const roleCode = (targetMembership.roleCode || targetMembership.roleId || 'OWNER').toUpperCase();
+  // Fail closed on role resolution
+  const roleObj = (targetMembership as any).role;
+  const rawRoleCode = targetMembership.roleCode || roleObj?.code;
+
+  if (!rawRoleCode && !roleObj) {
+    throw new AppError('Dormitory membership role is invalid or unassigned.', 403, 'MEMBERSHIP_ROLE_INVALID');
+  }
+
+  const roleCode = String(rawRoleCode || '').toUpperCase();
+  if (!roleCode) {
+    throw new AppError('Dormitory membership role code is invalid.', 403, 'MEMBERSHIP_ROLE_INVALID');
+  }
+
+  const permissions: string[] = Array.isArray(roleObj?.permissions)
+    ? roleObj.permissions
+    : (Array.isArray((targetMembership as any).permissions) ? (targetMembership as any).permissions : []);
 
   const context: AuthoritativeDormitoryContext = {
     dormitoryId: targetMembership.dormitoryId,
@@ -50,7 +65,7 @@ export function resolveAuthoritativeDormitoryContext(req: Request): Authoritativ
     roleCode,
     userId: auth.userId,
     memberId: targetMembership.id,
-    permissions: (targetMembership as any)?.role?.permissions || ['*'],
+    permissions,
   };
 
   (req as any).dormitoryContext = context;

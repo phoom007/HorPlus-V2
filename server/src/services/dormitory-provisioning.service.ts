@@ -209,10 +209,8 @@ export class DormitoryProvisioningService {
                 { createdByUserId: userId }
               ],
               status: 'active',
-              subscriptions: {
-                some: {
-                  plan: { code: 'FREE' },
-                }
+              dormitorySubscription: {
+                plan: { code: 'FREE' }
               }
             }
           });
@@ -421,81 +419,64 @@ export class DormitoryProvisioningService {
           ? await tx.dormitoryMember.create({ data: { userId, dormitoryId: createdDorm.id, roleId: ownerRole.id, status: 'active' } }) 
           : await this.membershipRepo.addMembership(membershipData as any);
 
-        // Calculate Trial Subscription using Calendar Month semantics
-        const trialCalc = TrialSubscriptionService.calculateTrialDates(promoResult.valid);
-
-        let realPlanId = plan.id;
-        if (tx.platformPlan) {
-          let dbPlan = await tx.platformPlan.findUnique({ where: { id: plan.id } });
-          if (!dbPlan) {
-            dbPlan = await tx.platformPlan.findFirst({ where: { code: plan.code } });
-          }
-          if (!dbPlan) {
-            dbPlan = await tx.platformPlan.create({
-              data: {
-                id: plan.id,
-                code: plan.code,
-                name: plan.name || (plan.code === 'FREE' ? 'Free Plan' : 'Paid Plan'),
-                roomLimit: plan.roomLimit || (plan.code === 'FREE' ? 10 : 150),
-                monthlyPrice: plan.monthlyPrice || 0,
-              }
-            });
-          }
-          realPlanId = dbPlan.id;
-        }
-
-        const subData = {
-          dormitoryId: createdDorm.id,
-          planId: realPlanId,
-          status: plan.code === 'FREE' ? 'active' : 'trialing',
-          billingInterval: 'monthly',
-          trialStartedAt: trialCalc.trialStartedAt,
-          trialEndsAt: trialCalc.trialEndsAt,
-          currentPeriodStartedAt: trialCalc.trialStartedAt,
-          currentPeriodEndsAt: trialCalc.trialEndsAt,
-        };
-        const createdSub = tx.dormitory ? await tx.platformSubscription.create({ data: subData }) : await this.subRepo.create(subData as any);
+        // Provision Authoritative Wave 1F Subscription inside tx
+        let createdSub: any = null;
         if (tx.dormitorySubscription) {
-          await subscriptionEntitlementService.provisionInitialTrial(createdDorm.id, tx);
-        }
-
-        // Record Promo Redemption if applied
-        let promoRedemption = null;
-        if (promoResult.valid && promoResult.promoCodeEntity) {
-          let realPromoCodeId = promoResult.promoCodeEntity.id;
-          if (tx.platformPromoCode) {
-            let dbPromo = await tx.platformPromoCode.findFirst({
-              where: { codeNormalized: promoResult.promoCodeEntity.codeNormalized }
-            });
-            if (!dbPromo) {
-              dbPromo = await tx.platformPromoCode.create({
-                data: {
-                  id: promoResult.promoCodeEntity.id,
-                  code: promoResult.promoCodeEntity.code,
-                  codeNormalized: promoResult.promoCodeEntity.codeNormalized,
-                  trialBonusDays: promoResult.bonusTrialDays,
-                  status: 'active'
-                }
-              });
-            }
-            realPromoCodeId = dbPromo.id;
-          }
-
-          const promoData = {
-            promoCodeId: realPromoCodeId,
+          createdSub = await subscriptionEntitlementService.provisionInitialTrial(createdDorm.id, tx);
+        } else {
+          createdSub = await this.subRepo.create({
             dormitoryId: createdDorm.id,
-            userId,
-            subscriptionId: createdSub.id,
-            bonusDays: promoResult.bonusTrialDays,
-          };
-          if (tx.dormitory) {
-            promoRedemption = await tx.platformPromoRedemption.create({ data: promoData });
-          } else {
-            promoRedemption = await this.promoRepo.createRedemption(promoData);
-          }
+            planId: plan.id,
+            status: 'trialing',
+            startedAt: new Date(),
+            expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+          } as any);
         }
 
+        // Record Promo Redemption if HORPLUS applied during onboarding
+        let promoRedemption: any = null;
+        if (promoResult.valid && promoResult.code === 'HORPLUS' && tx.promoRedemption) {
+          const promoCodeEntity = await tx.promoCode.findUnique({ where: { code: 'HORPLUS' } });
+          if (promoCodeEntity) {
+            const extensionMs = 60 * 24 * 60 * 60 * 1000;
+            const baseTrialExpiresAt = createdSub.trialExpiresAt || createdSub.expiresAt;
+            const newTrialExpiresAt = new Date(baseTrialExpiresAt.getTime() + extensionMs);
+            const newExpiresAt = new Date(createdSub.expiresAt.getTime() + extensionMs);
 
+            createdSub = await tx.dormitorySubscription.update({
+              where: { id: createdSub.id },
+              data: {
+                trialExpiresAt: newTrialExpiresAt,
+                expiresAt: newExpiresAt,
+              },
+              include: { plan: true },
+            });
+
+            promoRedemption = await tx.promoRedemption.create({
+              data: {
+                promoCodeId: promoCodeEntity.id,
+                dormitoryId: createdDorm.id,
+                subscriptionId: createdSub.id,
+                redeemedBy: userId,
+                previousExpiresAt: baseTrialExpiresAt,
+                newExpiresAt,
+              },
+            });
+
+            await tx.subscriptionStatusHistory.create({
+              data: {
+                subscriptionId: createdSub.id,
+                dormitoryId: createdDorm.id,
+                previousPlanId: createdSub.planId,
+                newPlanId: createdSub.planId,
+                previousStatus: 'TRIAL',
+                newStatus: 'TRIAL',
+                actorId: userId,
+                reason: 'PROMO_HORPLUS_REDEEMED_ONBOARDING',
+              },
+            });
+          }
+        }
 
         // Delete Onboarding Draft
         await this.draftRepo.deleteByUserId(userId);
@@ -506,7 +487,7 @@ export class DormitoryProvisioningService {
           userId,
           dormitoryId: createdDorm.id,
           action: 'DORMITORY_PROVISIONED',
-          reason: `Owner onboarding completed. Created dormitory ${createdDorm.name} with plan ${plan.code} and trial ending ${trialCalc.trialEndsAt.toISOString()}`,
+          reason: `Owner onboarding completed. Created dormitory ${createdDorm.name} with plan ${plan.code} and trial ending ${(createdSub.expiresAt || new Date()).toISOString()}`,
           severity: 'info',
         });
 
@@ -531,16 +512,16 @@ export class DormitoryProvisioningService {
             planCode: plan.code,
             planName: plan.name,
             status: createdSub.status,
-            trialStartedAt: createdSub.trialStartedAt,
-            trialEndsAt: createdSub.trialEndsAt,
+            trialStartedAt: createdSub.trialStartedAt || createdSub.startedAt,
+            trialEndsAt: createdSub.trialExpiresAt || createdSub.expiresAt,
             roomLimit: plan.roomLimit,
             messageQuotaMonthly: plan.messageQuotaMonthly,
           },
           promo: {
             applied: promoResult.valid,
             code: promoResult.valid ? promoResult.code : null,
-            bonusDays: promoResult.valid ? promoResult.bonusTrialDays : 0,
-            totalTrialMonths: trialCalc.trialMonths,
+            bonusDays: promoResult.valid ? 60 : 0,
+            totalTrialMonths: promoResult.valid ? 3 : 1,
           },
           onboardingRequired: false,
         };

@@ -1,73 +1,78 @@
 import { PrismaClient } from '@prisma/client';
-import { getPrismaClient } from '../db/prisma.js';
 import { AppError } from '../types/index.js';
-import crypto from 'crypto';
+
+export interface EffectiveEntitlements {
+  dormitoryId: string;
+  plan: {
+    code: string;
+    name: string;
+    type: string;
+    roomLimit: number;
+  };
+  status: 'TRIAL' | 'ACTIVE' | 'EXPIRED' | 'SUSPENDED';
+  isActive: boolean;
+  isReadOnly: boolean;
+  isOverLimit: boolean;
+  roomCount: number;
+  roomLimit: number;
+  remainingRooms: number;
+  expiresAt: Date;
+  startedAt?: Date;
+  trialStartedAt?: Date;
+  trialExpiresAt?: Date;
+  promoRedeemed: boolean;
+  reason?: string;
+}
 
 export class SubscriptionEntitlementService {
-  private customPrisma?: PrismaClient;
+  private db: PrismaClient;
 
-  constructor(customPrisma?: PrismaClient) {
-    this.customPrisma = customPrisma;
-  }
-
-  private get db(): PrismaClient {
-    return this.customPrisma || getPrismaClient();
+  constructor(prisma?: PrismaClient) {
+    this.db = prisma || new PrismaClient();
   }
 
   /**
-   * Seed plans, packages, and promo code if not already present
+   * Seed standard plans and packages idempotently if missing
    */
   async ensureSeeded(txClient?: any): Promise<void> {
     const db = txClient || this.db;
-    if (!db || typeof db.subscriptionPlan?.findUnique !== 'function') return;
-
-    // 1. FREE Plan (room limit 10)
-    let freePlan = await db.subscriptionPlan.findUnique({ where: { code: 'FREE' } });
+    const freePlan = await db.subscriptionPlan.findUnique({ where: { code: 'FREE' } });
     if (!freePlan) {
-      freePlan = await db.subscriptionPlan.create({
+      await db.subscriptionPlan.create({
         data: {
           code: 'FREE',
           name: 'Free / Trial',
           type: 'FREE',
           roomLimit: 10,
-          enabled: true,
         },
       });
     }
 
-    // 2. PAID Plan (room limit 150)
-    let paidPlan = await db.subscriptionPlan.findUnique({ where: { code: 'PAID' } });
+    const paidPlan = await db.subscriptionPlan.findUnique({ where: { code: 'PAID' } });
     if (!paidPlan) {
-      paidPlan = await db.subscriptionPlan.create({
+      const createdPaid = await db.subscriptionPlan.create({
         data: {
           code: 'PAID',
           name: 'Paid',
           type: 'PAID',
           roomLimit: 150,
-          enabled: true,
         },
       });
-    }
 
-    // 3. Subscription Packages for PAID plan
-    const packagesToSeed = [
-      { durationMonths: 1, price: 189.00, enabled: true },
-      { durationMonths: 3, price: null, enabled: false },
-      { durationMonths: 6, price: null, enabled: false },
-      { durationMonths: 12, price: null, enabled: false },
-      { durationMonths: 24, price: null, enabled: false },
-    ];
+      const packages = [
+        { durationMonths: 1, price: 189.00, enabled: true },
+        { durationMonths: 3, price: 0.00, enabled: false },
+        { durationMonths: 6, price: 0.00, enabled: false },
+        { durationMonths: 12, price: 0.00, enabled: false },
+        { durationMonths: 24, price: 0.00, enabled: false },
+      ];
 
-    for (const pkg of packagesToSeed) {
-      const existing = await db.subscriptionPackage.findFirst({
-        where: { planId: paidPlan.id, durationMonths: pkg.durationMonths },
-      });
-      if (!existing) {
+      for (const pkg of packages) {
         await db.subscriptionPackage.create({
           data: {
-            planId: paidPlan.id,
+            planId: createdPaid.id,
             durationMonths: pkg.durationMonths,
-            price: pkg.price !== null ? pkg.price : undefined,
+            price: pkg.price,
             currency: 'THB',
             enabled: pkg.enabled,
           },
@@ -75,84 +80,20 @@ export class SubscriptionEntitlementService {
       }
     }
 
-    // 4. Promo Code HORPLUS (+60 days, max 1 redemption per dorm)
-    const existingPromo = await db.promoCode.findUnique({ where: { code: 'HORPLUS' } });
-    if (!existingPromo) {
+    const promo = await db.promoCode.findUnique({ where: { code: 'HORPLUS' } });
+    if (!promo) {
       await db.promoCode.create({
         data: {
           code: 'HORPLUS',
           normalizedCode: 'HORPLUS',
           extensionDays: 60,
-          enabled: true,
-          maximumRedemptionsPerDormitory: 1,
         },
       });
     }
   }
 
   /**
-   * Idempotently backfill 30-day Trial subscriptions for all existing dormitories without a subscription.
-   * Creates DormitorySubscription AND SubscriptionStatusHistory with reason EXISTING_DORMITORY_BACKFILL_30_DAY_TRIAL.
-   */
-  async backfillExistingDormitories(): Promise<{ backfilledCount: number }> {
-    await this.ensureSeeded();
-
-    const freePlan = await this.db.subscriptionPlan.findUnique({ where: { code: 'FREE' } });
-    if (!freePlan) throw new Error('FREE plan not seeded');
-
-    const dormitories = await this.db.dormitory.findMany({
-      where: {
-        dormitorySubscription: null,
-      },
-    });
-
-    if (dormitories.length === 0) return { backfilledCount: 0 };
-
-    const runTimestamp = new Date();
-    const expiresAt = new Date(runTimestamp.getTime() + 30 * 24 * 60 * 60 * 1000);
-    let count = 0;
-
-    for (const dorm of dormitories) {
-      await this.db.$transaction(async (tx) => {
-        const existingSub = await tx.dormitorySubscription.findUnique({
-          where: { dormitoryId: dorm.id },
-        });
-        if (existingSub) return;
-
-        const sub = await tx.dormitorySubscription.create({
-          data: {
-            dormitoryId: dorm.id,
-            planId: freePlan.id,
-            status: 'TRIAL',
-            startedAt: runTimestamp,
-            expiresAt: expiresAt,
-            trialStartedAt: runTimestamp,
-            trialExpiresAt: expiresAt,
-          },
-        });
-
-        await tx.subscriptionStatusHistory.create({
-          data: {
-            subscriptionId: sub.id,
-            dormitoryId: dorm.id,
-            previousStatus: null,
-            newStatus: 'TRIAL',
-            previousPlanId: null,
-            newPlanId: freePlan.id,
-            effectiveAt: runTimestamp,
-            reason: 'EXISTING_DORMITORY_BACKFILL_30_DAY_TRIAL',
-          },
-        });
-
-        count++;
-      });
-    }
-
-    return { backfilledCount: count };
-  }
-
-  /**
-   * Provision a 30-day Trial subscription for a newly created dormitory (atomic within creation transaction).
+   * Provision a 30-day Trial subscription for a new dormitory inside transaction
    */
   async provisionInitialTrial(dormitoryId: string, txClient?: any, now: Date = new Date()): Promise<any> {
     const db = txClient || this.db;
@@ -182,11 +123,10 @@ export class SubscriptionEntitlementService {
       data: {
         subscriptionId: sub.id,
         dormitoryId,
+        previousPlanId: freePlan.id,
+        newPlanId: freePlan.id,
         previousStatus: null,
         newStatus: 'TRIAL',
-        previousPlanId: null,
-        newPlanId: freePlan.id,
-        effectiveAt: now,
         reason: 'INITIAL_PROVISIONING_30_DAY_TRIAL',
       },
     });
@@ -195,8 +135,60 @@ export class SubscriptionEntitlementService {
   }
 
   /**
-   * Get current subscription for a dormitory.
-   * Throws SUBSCRIPTION_NOT_FOUND (404) if missing. Does NOT provision as a GET side-effect.
+   * Backfill missing subscriptions for existing dormitories
+   */
+  async backfillExistingDormitories(txClient?: any): Promise<number> {
+    const db = txClient || this.db;
+    await this.ensureSeeded(db);
+
+    const dormitoriesWithoutSub = await db.dormitory.findMany({
+      where: {
+        dormitorySubscription: null,
+      },
+      select: { id: true, createdAt: true },
+    });
+
+    let count = 0;
+    const freePlan = await db.subscriptionPlan.findUnique({ where: { code: 'FREE' } });
+    if (!freePlan) return 0;
+
+    for (const dorm of dormitoriesWithoutSub) {
+      const now = new Date();
+      const expiresAt = new Date(dorm.createdAt.getTime() + 30 * 24 * 60 * 60 * 1000);
+      const status = expiresAt.getTime() > now.getTime() ? 'TRIAL' : 'EXPIRED';
+
+      const sub = await db.dormitorySubscription.create({
+        data: {
+          dormitoryId: dorm.id,
+          planId: freePlan.id,
+          status,
+          startedAt: dorm.createdAt,
+          expiresAt,
+          trialStartedAt: dorm.createdAt,
+          trialExpiresAt: expiresAt,
+        },
+      });
+
+      await db.subscriptionStatusHistory.create({
+        data: {
+          subscriptionId: sub.id,
+          dormitoryId: dorm.id,
+          previousPlanId: freePlan.id,
+          newPlanId: freePlan.id,
+          previousStatus: null,
+          newStatus: status,
+          reason: 'EXISTING_DORMITORY_BACKFILL_30_DAY_TRIAL',
+        },
+      });
+
+      count++;
+    }
+
+    return count;
+  }
+
+  /**
+   * Get current raw subscription for a dormitory. Throws 404 if missing.
    */
   async getCurrentSubscription(dormitoryId: string, txClient?: any): Promise<any> {
     const db = txClient || this.db;
@@ -206,28 +198,27 @@ export class SubscriptionEntitlementService {
     });
 
     if (!sub) {
-      throw new AppError('Dormitory subscription not found.', 404, 'SUBSCRIPTION_NOT_FOUND');
+      throw new AppError('No subscription found for this dormitory.', 404, 'SUBSCRIPTION_NOT_FOUND');
     }
 
     return sub;
   }
 
   /**
-   * Calculate effective entitlement details at request time.
-   * isOverLimit = roomCount > roomLimit
-   * isReadOnly = subscriptionInactive OR isOverLimit
+   * Calculate effective entitlement details using txClient connection
    */
-  async getEffectiveEntitlements(dormitoryId: string, now: Date = new Date()): Promise<any> {
-    await this.ensureSeeded();
-    const sub = await this.getCurrentSubscription(dormitoryId);
+  async getEffectiveEntitlements(dormitoryId: string, now: Date = new Date(), txClient?: any): Promise<EffectiveEntitlements> {
+    const db = txClient || this.db;
+    await this.ensureSeeded(db);
+    const sub = await this.getCurrentSubscription(dormitoryId, db);
 
     const isExpired = sub.expiresAt.getTime() <= now.getTime();
-    let effectiveStatus = sub.status;
+    let effectiveStatus: 'TRIAL' | 'ACTIVE' | 'EXPIRED' | 'SUSPENDED' = sub.status;
     if (isExpired && (sub.status === 'TRIAL' || sub.status === 'ACTIVE')) {
       effectiveStatus = 'EXPIRED';
     }
 
-    const roomCount = await this.db.room.count({
+    const roomCount = await db.room.count({
       where: {
         dormitoryId,
         status: { not: 'archived' },
@@ -241,50 +232,209 @@ export class SubscriptionEntitlementService {
 
     const remainingRooms = Math.max(0, roomLimit - roomCount);
 
-    const promoRedemption = await this.db.promoRedemption.findFirst({
+    const promoRedemption = await db.promoRedemption.findFirst({
       where: { dormitoryId },
     });
 
-    let reason = 'Subscription active';
+    let reason: string | undefined;
     if (isExpired) {
       reason = 'SUBSCRIPTION_EXPIRED: Dormitory subscription has expired.';
     } else if (isOverLimit) {
       reason = `ROOM_LIMIT_EXCEEDED: Room count (${roomCount}) exceeds plan limit (${roomLimit}).`;
+    } else if (sub.status === 'SUSPENDED') {
+      reason = 'SUBSCRIPTION_SUSPENDED: Dormitory subscription is suspended.';
     }
 
     return {
       dormitoryId,
-      subscriptionId: sub.id,
       plan: {
-        id: sub.plan.id,
         code: sub.plan.code,
         name: sub.plan.name,
         type: sub.plan.type,
         roomLimit: sub.plan.roomLimit,
       },
       status: effectiveStatus,
-      rawStatus: sub.status,
       isActive,
       isReadOnly,
       isOverLimit,
-      roomLimit,
       roomCount,
+      roomLimit,
       remainingRooms,
-      startedAt: sub.startedAt,
       expiresAt: sub.expiresAt,
-      trialStartedAt: sub.trialStartedAt,
-      trialExpiresAt: sub.trialExpiresAt,
-      promoExtendedAt: sub.promoExtendedAt,
+      startedAt: sub.startedAt,
+      trialStartedAt: sub.trialStartedAt || undefined,
+      trialExpiresAt: sub.trialExpiresAt || undefined,
       promoRedeemed: !!promoRedemption,
       reason,
     };
   }
 
   /**
-   * Assert dormitory writable (throws HTTP 403 SUBSCRIPTION_READ_ONLY if expired or over limit)
+   * Redeem promo code HORPLUS inside transaction
    */
-  async assertDormitoryWritable(dormitoryId: string, now: Date = new Date()): Promise<void> {
-    const entitlement = await this.getEffectiveEntitlements(dormitoryId, now);
+  async redeemPromoCode(params: {
+    dormitoryId: string;
+    code: string;
+    userId: string;
+    idempotencyKey: string;
+    txClient?: any;
+    now?: Date;
+  }): Promise<any> {
+    const now = params.now || new Date();
+    const normalizedCode = params.code.trim().toUpperCase();
+
+    if (normalizedCode !== 'HORPLUS') {
+      throw new AppError('Invalid promo code.', 404, 'PROMO_CODE_INVALID');
+    }
+
+    const executeRedeem = async (tx: any) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${params.dormitoryId}))`;
+
+      const entitlements = await this.getEffectiveEntitlements(params.dormitoryId, now, tx);
+      if (entitlements.isReadOnly || entitlements.status === 'EXPIRED') {
+        throw new AppError('Cannot redeem promo code for an expired or read-only subscription.', 403, 'SUBSCRIPTION_READ_ONLY');
+      }
+
+      if (entitlements.promoRedeemed) {
+        throw new AppError('Promo code HORPLUS has already been redeemed for this dormitory.', 409, 'PROMO_ALREADY_REDEEMED');
+      }
+
+      const promoCodeEntity = await tx.promoCode.findUnique({
+        where: { code: 'HORPLUS' },
+      });
+      if (!promoCodeEntity) {
+        throw new AppError('Promo code definition missing.', 404, 'PROMO_CODE_NOT_FOUND');
+      }
+
+      const currentSub = await this.getCurrentSubscription(params.dormitoryId, tx);
+
+      const extensionMs = promoCodeEntity.extensionDays * 24 * 60 * 60 * 1000;
+      const newTrialExpiresAt = new Date((currentSub.trialExpiresAt || currentSub.expiresAt).getTime() + extensionMs);
+      const newExpiresAt = new Date(currentSub.expiresAt.getTime() + extensionMs);
+
+      const updatedSub = await tx.dormitorySubscription.update({
+        where: { id: currentSub.id },
+        data: {
+          expiresAt: newExpiresAt,
+          trialExpiresAt: newTrialExpiresAt,
+        },
+        include: { plan: true },
+      });
+
+      await tx.promoRedemption.create({
+        data: {
+          promoCodeId: promoCodeEntity.id,
+          dormitoryId: params.dormitoryId,
+          subscriptionId: currentSub.id,
+          redeemedBy: params.userId,
+          previousExpiresAt: currentSub.expiresAt,
+          newExpiresAt,
+        },
+      });
+
+      await tx.subscriptionStatusHistory.create({
+        data: {
+          subscriptionId: currentSub.id,
+          dormitoryId: params.dormitoryId,
+          previousPlanId: currentSub.planId,
+          newPlanId: currentSub.planId,
+          previousStatus: currentSub.status,
+          newStatus: currentSub.status,
+          actorId: params.userId,
+          reason: `PROMO_REDEEMED: ${promoCodeEntity.code} (+${promoCodeEntity.extensionDays} days)`,
+        },
+      });
+
+      return updatedSub;
+    };
+
+    if (params.txClient) {
+      return await executeRedeem(params.txClient);
+    }
+
+    return await this.db.$transaction(async (tx) => {
+      const payloadHash = `redeem:${params.dormitoryId}:${normalizedCode}`;
+      const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+
+      // Check existing idempotency key BEFORE creating to avoid aborting the PostgreSQL transaction block
+      const existingRecord = await tx.idempotencyKey.findUnique({
+        where: {
+          user_operation_idempotency_unique: {
+            userId: params.userId,
+            operation: 'PROMO_REDEEM',
+            idempotencyKey: params.idempotencyKey,
+          },
+        },
+      });
+
+      if (existingRecord) {
+        if (existingRecord.requestHash !== payloadHash) {
+          throw new AppError('Idempotency key payload mismatch.', 409, 'IDEMPOTENCY_MISMATCH');
+        }
+        const currentSub = await this.getCurrentSubscription(params.dormitoryId, tx);
+        return currentSub;
+      }
+
+      await tx.idempotencyKey.create({
+        data: {
+          userId: params.userId,
+          operation: 'PROMO_REDEEM',
+          idempotencyKey: params.idempotencyKey,
+          requestHash: payloadHash,
+          responseStatus: 200,
+          responseBody: {},
+          expiresAt,
+        },
+      });
+
+      const result = await executeRedeem(tx);
+
+      await tx.idempotencyKey.update({
+        where: {
+          user_operation_idempotency_unique: {
+            userId: params.userId,
+            operation: 'PROMO_REDEEM',
+            idempotencyKey: params.idempotencyKey,
+          },
+        },
+        data: {
+          responseBody: JSON.parse(JSON.stringify(result)),
+        },
+      });
+
+      return result;
+    });
+  }
+
+  /**
+   * Get available package options
+   */
+  async getAvailablePackages(txClient?: any): Promise<any[]> {
+    const db = txClient || this.db;
+    await this.ensureSeeded(db);
+    const packages = await db.subscriptionPackage.findMany({
+      include: { plan: true },
+      orderBy: { durationMonths: 'asc' },
+    });
+
+    return packages.map((pkg: any) => ({
+      id: pkg.id,
+      planCode: pkg.plan.code,
+      planName: pkg.plan.name,
+      durationMonths: pkg.durationMonths,
+      price: Number(pkg.price),
+      currency: pkg.currency,
+      enabled: pkg.enabled,
+      roomLimit: pkg.plan.roomLimit,
+    }));
+  }
+
+  /**
+   * Assert writable entitlement using txClient
+   */
+  async assertDormitoryWritable(dormitoryId: string, now: Date = new Date(), txClient?: any): Promise<void> {
+    const db = txClient || this.db;
+    const entitlement = await this.getEffectiveEntitlements(dormitoryId, now, db);
     if (entitlement.isReadOnly) {
       throw new AppError(
         `Dormitory operation restricted to read-only mode. Reason: ${entitlement.reason}`,
@@ -295,11 +445,12 @@ export class SubscriptionEntitlementService {
   }
 
   /**
-   * Assert room creation allowed under PostgreSQL transaction lock.
+   * Assert room creation allowed under transaction client txClient
    */
-  async assertRoomCreationAllowed(dormitoryId: string, now: Date = new Date()): Promise<void> {
-    await this.assertDormitoryWritable(dormitoryId, now);
-    const entitlement = await this.getEffectiveEntitlements(dormitoryId, now);
+  async assertRoomCreationAllowed(dormitoryId: string, now: Date = new Date(), txClient?: any): Promise<void> {
+    const db = txClient || this.db;
+    await this.assertDormitoryWritable(dormitoryId, now, db);
+    const entitlement = await this.getEffectiveEntitlements(dormitoryId, now, db);
 
     if (entitlement.roomCount >= entitlement.roomLimit) {
       throw new AppError(
@@ -313,8 +464,9 @@ export class SubscriptionEntitlementService {
   /**
    * Assert owner dormitory limit (max 10 dormitories per owner)
    */
-  async assertDormitoryCreationAllowed(ownerUserId: string): Promise<void> {
-    const ownedCount = await this.db.dormitoryMember.count({
+  async assertDormitoryCreationAllowed(ownerUserId: string, txClient?: any): Promise<void> {
+    const db = txClient || this.db;
+    const ownedCount = await db.dormitoryMember.count({
       where: {
         userId: ownerUserId,
         role: { code: 'OWNER' },
@@ -328,173 +480,7 @@ export class SubscriptionEntitlementService {
   }
 
   /**
-   * Redeem HORPLUS promo code with persistent idempotency and PG locking.
-   */
-  async redeemPromoCode(params: {
-    dormitoryId: string;
-    code: string;
-    userId: string;
-    idempotencyKey: string;
-    now?: Date;
-  }): Promise<any> {
-    const now = params.now || new Date();
-    const normalizedCode = params.code.trim().toUpperCase();
-
-    if (!params.idempotencyKey) {
-      throw new AppError('X-Idempotency-Key header is required for promo code redemption.', 400, 'IDEMPOTENCY_KEY_REQUIRED');
-    }
-
-    await this.ensureSeeded();
-
-    const requestHash = crypto
-      .createHash('sha256')
-      .update(`${params.userId}:${params.dormitoryId}:${normalizedCode}`)
-      .digest('hex');
-
-    const operation = 'PROMO_REDEEM';
-
-    // 1. Check persistent idempotency key
-    const existingKey = await this.db.idempotencyKey.findUnique({
-      where: {
-        user_operation_idempotency_unique: {
-          userId: params.userId,
-          operation,
-          idempotencyKey: params.idempotencyKey,
-        },
-      },
-    });
-
-    if (existingKey) {
-      if (existingKey.requestHash !== requestHash) {
-        throw new AppError('Idempotency key payload mismatch.', 409, 'IDEMPOTENCY_MISMATCH');
-      }
-      if (existingKey.status === 'completed' && existingKey.responseBody) {
-        return existingKey.responseBody;
-      }
-    }
-
-    // 2. Perform atomic redemption transaction under PG advisory lock
-    return await this.db.$transaction(async (tx) => {
-      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${params.dormitoryId}))`;
-
-      let sub = await tx.dormitorySubscription.findUnique({
-        where: { dormitoryId: params.dormitoryId },
-        include: { plan: true },
-      });
-
-      if (!sub) {
-        throw new AppError('Dormitory subscription not found.', 404, 'SUBSCRIPTION_NOT_FOUND');
-      }
-
-      if (sub.expiresAt.getTime() <= now.getTime()) {
-        throw new AppError('Dormitory subscription has expired. Operations are restricted to read-only mode.', 403, 'SUBSCRIPTION_READ_ONLY');
-      }
-
-      if (sub.status !== 'TRIAL') {
-        throw new AppError('Promo code HORPLUS can only be redeemed during an active Trial subscription.', 400, 'PROMO_NOT_ELIGIBLE');
-      }
-
-      const promo = await tx.promoCode.findFirst({
-        where: { normalizedCode, enabled: true },
-      });
-
-      if (!promo) {
-        throw new AppError('Invalid or unsupported promo code.', 404, 'PROMO_INVALID');
-      }
-
-      const existingRedemption = await tx.promoRedemption.findUnique({
-        where: {
-          promo_dormitory_unique: {
-            promoCodeId: promo.id,
-            dormitoryId: params.dormitoryId,
-          },
-        },
-      });
-
-      if (existingRedemption) {
-        throw new AppError('Promo code HORPLUS has already been redeemed for this dormitory.', 409, 'PROMO_ALREADY_REDEEMED');
-      }
-
-      const previousExpiresAt = sub.expiresAt;
-      const extensionMs = promo.extensionDays * 24 * 60 * 60 * 1000;
-      const newExpiresAt = new Date(previousExpiresAt.getTime() + extensionMs);
-      const newTrialExpiresAt = sub.trialExpiresAt
-        ? new Date(sub.trialExpiresAt.getTime() + extensionMs)
-        : newExpiresAt;
-
-      const updatedSub = await tx.dormitorySubscription.update({
-        where: { id: sub.id },
-        data: {
-          expiresAt: newExpiresAt,
-          trialExpiresAt: newTrialExpiresAt,
-          promoExtendedAt: now,
-        },
-        include: { plan: true },
-      });
-
-      await tx.promoRedemption.create({
-        data: {
-          promoCodeId: promo.id,
-          dormitoryId: params.dormitoryId,
-          subscriptionId: sub.id,
-          redeemedBy: params.userId,
-          previousExpiresAt,
-          newExpiresAt,
-        },
-      });
-
-      await tx.subscriptionStatusHistory.create({
-        data: {
-          subscriptionId: sub.id,
-          dormitoryId: params.dormitoryId,
-          previousStatus: sub.status,
-          newStatus: sub.status,
-          previousPlanId: sub.planId,
-          newPlanId: sub.planId,
-          effectiveAt: now,
-          actorId: params.userId,
-          reason: `PROMO_REDEMPTION_${promo.code}`,
-          metadata: {
-            promoCode: promo.code,
-            extensionDays: promo.extensionDays,
-            previousExpiresAt: previousExpiresAt.toISOString(),
-            newExpiresAt: newExpiresAt.toISOString(),
-          },
-        },
-      });
-
-      await tx.idempotencyKey.upsert({
-        where: {
-          user_operation_idempotency_unique: {
-            userId: params.userId,
-            operation,
-            idempotencyKey: params.idempotencyKey,
-          },
-        },
-        create: {
-          userId: params.userId,
-          operation,
-          idempotencyKey: params.idempotencyKey,
-          requestHash,
-          status: 'completed',
-          responseStatus: 200,
-          responseBody: updatedSub as any,
-          expiresAt: new Date(now.getTime() + 86400 * 1000),
-        },
-        update: {
-          status: 'completed',
-          responseStatus: 200,
-          responseBody: updatedSub as any,
-        },
-      });
-
-      return updatedSub;
-    });
-  }
-
-  /**
-   * Authoritative Operational Paid Subscription Activation (Internal/Test/CLI only).
-   * Restricted by env check: NODE_ENV === 'test' || ALLOW_OPERATIONAL_ACTIVATION === 'true'.
+   * Operational paid subscription activation (Internal / CLI / Test only)
    */
   async activatePaidSubscriptionOperational(params: {
     dormitoryId: string;
@@ -502,78 +488,40 @@ export class SubscriptionEntitlementService {
     actorId?: string;
     idempotencyKey?: string;
     reason?: string;
+    txClient?: any;
     now?: Date;
   }): Promise<any> {
-    const isTestMode = process.env.NODE_ENV === 'test' || process.env.NODE_ENV === 'development' || process.env.ALLOW_OPERATIONAL_ACTIVATION === 'true';
-    if (!isTestMode) {
-      throw new AppError('Operational activation is disabled in this environment.', 403, 'OPERATIONAL_ACTIVATION_DISABLED');
+    const dbUrl = process.env.DATABASE_URL || '';
+    const isProduction = process.env.NODE_ENV === 'production';
+    const isPilot = dbUrl.includes('horplus_pilot') || dbUrl.includes(':5432');
+    const isNonLoopback = !dbUrl.includes('127.0.0.1') && !dbUrl.includes('localhost');
+
+    if (isProduction || isPilot || isNonLoopback) {
+      throw new AppError('Operational activation is strictly prohibited in production, pilot, or non-loopback environments.', 403, 'OPERATIONAL_ACTIVATION_PROHIBITED');
+    }
+
+    if (process.env.ALLOW_OPERATIONAL_ACTIVATION !== 'true' && process.env.NODE_ENV !== 'test') {
+      throw new AppError('Operational activation is disabled (ALLOW_OPERATIONAL_ACTIVATION !== true).', 403, 'OPERATIONAL_ACTIVATION_DISABLED');
     }
 
     const now = params.now || new Date();
-    await this.ensureSeeded();
 
-    const allowedDurations = [1, 3, 6, 12, 24];
-    if (!allowedDurations.includes(params.durationMonths)) {
-      throw new AppError('Duration months must be one of 1, 3, 6, 12, or 24.', 400, 'VALIDATION_ERROR');
-    }
+    const executeActivation = async (tx: any) => {
+      await this.ensureSeeded(tx);
 
-    const paidPlan = await this.db.subscriptionPlan.findUnique({ where: { code: 'PAID' } });
-    if (!paidPlan) throw new AppError('PAID plan configuration missing.', 500, 'INTERNAL_ERROR');
-
-    const pkg = await this.db.subscriptionPackage.findFirst({
-      where: { planId: paidPlan.id, durationMonths: params.durationMonths },
-    });
-
-    if (!pkg || !pkg.enabled || pkg.price === null) {
-      throw new AppError('Selected package duration is disabled or unpriced.', 400, 'PACKAGE_DISABLED');
-    }
-
-    const actorId = params.actorId || '00000000-0000-0000-0000-000000000000';
-    const keyString = params.idempotencyKey || `op-activate-${params.dormitoryId}-${params.durationMonths}-${now.getTime()}`;
-    const operation = 'OPERATIONAL_ACTIVATION';
-
-    const requestHash = crypto
-      .createHash('sha256')
-      .update(`${params.dormitoryId}:${params.durationMonths}`)
-      .digest('hex');
-
-    const existingKey = await this.db.idempotencyKey.findUnique({
-      where: {
-        user_operation_idempotency_unique: {
-          userId: actorId,
-          operation,
-          idempotencyKey: keyString,
-        },
-      },
-    });
-
-    if (existingKey) {
-      if (existingKey.requestHash !== requestHash) {
-        throw new AppError('Idempotency key payload mismatch.', 409, 'IDEMPOTENCY_MISMATCH');
-      }
-      if (existingKey.status === 'completed' && existingKey.responseBody) {
-        return existingKey.responseBody;
-      }
-    }
-
-    return await this.db.$transaction(async (tx) => {
-      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${params.dormitoryId}))`;
-
-      const currentSub = await tx.dormitorySubscription.findUnique({
-        where: { dormitoryId: params.dormitoryId },
-      });
-
-      if (!currentSub) {
-        throw new AppError('Dormitory subscription not found.', 404, 'SUBSCRIPTION_NOT_FOUND');
+      const allowedDurations = [1, 3, 6, 12, 24];
+      if (!allowedDurations.includes(params.durationMonths)) {
+        throw new AppError('Duration months must be one of 1, 3, 6, 12, or 24.', 400, 'VALIDATION_ERROR');
       }
 
-      const baseDate = currentSub.expiresAt.getTime() > now.getTime() ? currentSub.expiresAt : now;
-      const newExpiresAt = new Date(baseDate);
-      newExpiresAt.setMonth(newExpiresAt.getMonth() + params.durationMonths);
+      const paidPlan = await tx.subscriptionPlan.findUnique({ where: { code: 'PAID' } });
+      if (!paidPlan) throw new AppError('PAID plan not seeded.', 500, 'PLAN_NOT_FOUND');
 
-      if (newExpiresAt.getTime() <= currentSub.expiresAt.getTime()) {
-        throw new AppError('Activation cannot shorten an existing valid subscription.', 400, 'INVALID_SUBSCRIPTION_EXTENSION');
-      }
+      const currentSub = await this.getCurrentSubscription(params.dormitoryId, tx);
+
+      const baseStart = currentSub.expiresAt.getTime() > now.getTime() ? currentSub.expiresAt : now;
+      const durationMs = params.durationMonths * 30 * 24 * 60 * 60 * 1000;
+      const newExpiresAt = new Date(baseStart.getTime() + durationMs);
 
       const updatedSub = await tx.dormitorySubscription.update({
         where: { id: currentSub.id },
@@ -589,72 +537,76 @@ export class SubscriptionEntitlementService {
         data: {
           subscriptionId: currentSub.id,
           dormitoryId: params.dormitoryId,
-          previousStatus: currentSub.status,
-          newStatus: 'ACTIVE',
           previousPlanId: currentSub.planId,
           newPlanId: paidPlan.id,
-          effectiveAt: now,
+          previousStatus: currentSub.status,
+          newStatus: 'ACTIVE',
           actorId: params.actorId || null,
-          reason: params.reason || `OPERATIONAL_PAID_ACTIVATION_${params.durationMonths}_MONTHS`,
-          metadata: {
-            durationMonths: params.durationMonths,
-            price: pkg.price ? pkg.price.toString() : '0',
-            currency: pkg.currency,
-            previousExpiresAt: currentSub.expiresAt.toISOString(),
-            newExpiresAt: newExpiresAt.toISOString(),
-          },
-        },
-      });
-
-      await tx.idempotencyKey.upsert({
-        where: {
-          user_operation_idempotency_unique: {
-            userId: actorId,
-            operation,
-            idempotencyKey: keyString,
-          },
-        },
-        create: {
-          userId: actorId,
-          operation,
-          idempotencyKey: keyString,
-          requestHash,
-          status: 'completed',
-          responseStatus: 200,
-          responseBody: updatedSub as any,
-          expiresAt: new Date(now.getTime() + 86400 * 1000),
-        },
-        update: {
-          status: 'completed',
-          responseStatus: 200,
-          responseBody: updatedSub as any,
+          reason: params.reason || `OPERATIONAL_PAID_ACTIVATION: ${params.durationMonths} month(s)`,
         },
       });
 
       return updatedSub;
+    };
+
+    if (params.txClient) {
+      return await executeActivation(params.txClient);
+    }
+
+    return await this.db.$transaction(async (tx) => {
+      if (params.idempotencyKey && params.actorId) {
+        const payloadHash = `activate:${params.dormitoryId}:${params.durationMonths}`;
+        const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+
+        const existing = await tx.idempotencyKey.findUnique({
+          where: {
+            user_operation_idempotency_unique: {
+              userId: params.actorId,
+              operation: 'OPERATIONAL_ACTIVATION',
+              idempotencyKey: params.idempotencyKey,
+            },
+          },
+        });
+
+        if (existing) {
+          if (existing.requestHash !== payloadHash) {
+            throw new AppError('Idempotency key payload mismatch.', 409, 'IDEMPOTENCY_MISMATCH');
+          }
+          return await this.getCurrentSubscription(params.dormitoryId, tx);
+        }
+
+        await tx.idempotencyKey.create({
+          data: {
+            userId: params.actorId,
+            operation: 'OPERATIONAL_ACTIVATION',
+            idempotencyKey: params.idempotencyKey,
+            requestHash: payloadHash,
+            responseStatus: 200,
+            responseBody: {},
+            expiresAt,
+          },
+        });
+
+        const result = await executeActivation(tx);
+
+        await tx.idempotencyKey.update({
+          where: {
+            user_operation_idempotency_unique: {
+              userId: params.actorId,
+              operation: 'OPERATIONAL_ACTIVATION',
+              idempotencyKey: params.idempotencyKey,
+            },
+          },
+          data: {
+            responseBody: JSON.parse(JSON.stringify(result)),
+          },
+        });
+
+        return result;
+      }
+
+      return await executeActivation(tx);
     });
-  }
-
-  /**
-   * Get available purchasable packages
-   */
-  async getAvailablePackages(): Promise<any[]> {
-    await this.ensureSeeded();
-    const paidPlan = await this.db.subscriptionPlan.findUnique({ where: { code: 'PAID' } });
-    if (!paidPlan) return [];
-
-    const packages = await this.db.subscriptionPackage.findMany({
-      where: { planId: paidPlan.id },
-      orderBy: { durationMonths: 'asc' },
-    });
-
-    return packages.map((pkg) => ({
-      id: pkg.id,
-      durationMonths: pkg.durationMonths,
-      price: pkg.price ? Number(pkg.price) : null,
-      currency: pkg.currency,
-      enabled: pkg.enabled && pkg.price !== null,
-    }));
   }
 }
 

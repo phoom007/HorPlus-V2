@@ -40,7 +40,7 @@ export class EntitlementService {
       roomLimit: details.roomLimit,
       active: details.isActive,
       isReadOnly: details.isReadOnly,
-      startsAt: details.startedAt,
+      startsAt: details.startedAt || details.expiresAt,
       expiresAt: details.expiresAt,
       source: `plan:${details.plan.code}`,
     };

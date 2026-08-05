@@ -10,12 +10,6 @@ const promoRedeemSchema = z.object({
   code: z.string().min(1, 'Promo code is required'),
 });
 
-const activatePackageSchema = z.object({
-  durationMonths: z.number().int().positive(),
-  dormitoryId: z.string().optional(),
-  reason: z.string().optional(),
-});
-
 export function createSubscriptionRouter(authService?: AuthenticationService): Router {
   const router = Router();
   const csrfMiddleware = authService
@@ -71,8 +65,14 @@ export function createSubscriptionRouter(authService?: AuthenticationService): R
     try {
       const context = resolveAuthoritativeDormitoryContext(req);
 
-      if (!['OWNER', 'MANAGER'].includes(context.roleCode)) {
-        throw new AppError('Only dormitory Owners or Managers can redeem promo codes.', 403, 'FORBIDDEN');
+      const isOwner = context.roleCode === 'OWNER';
+      const isManager = context.roleCode === 'MANAGER';
+      const hasPromoPermission = (context.permissions || []).some((p) =>
+        ['*', 'subscription:write', 'subscription:*', 'promo:redeem'].includes(p)
+      );
+
+      if (!isOwner && (!isManager || !hasPromoPermission)) {
+        throw new AppError('Only dormitory Owners or Managers with promo permissions can redeem promo codes.', 403, 'FORBIDDEN');
       }
 
       const idempotencyKey = (req.headers['x-idempotency-key'] as string) || (req.headers['idempotency-key'] as string);
@@ -91,34 +91,6 @@ export function createSubscriptionRouter(authService?: AuthenticationService): R
       const entitlements = await subscriptionEntitlementService.getEffectiveEntitlements(context.dormitoryId);
       return res.json({
         message: 'Promo code redeemed successfully',
-        data: subscription,
-        entitlements,
-      });
-    } catch (err) {
-      next(err);
-    }
-  });
-
-  // POST /api/v1/subscription/operational/activate (Operational/CLI/Test internal activation only)
-  router.post('/operational/activate', csrfMiddleware, async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const context = resolveAuthoritativeDormitoryContext(req);
-      const idempotencyKey = (req.headers['x-idempotency-key'] as string) || (req.headers['idempotency-key'] as string);
-      const parsed = activatePackageSchema.parse(req.body);
-
-      const targetDormId = parsed.dormitoryId || context.dormitoryId;
-
-      const subscription = await subscriptionEntitlementService.activatePaidSubscriptionOperational({
-        dormitoryId: targetDormId,
-        durationMonths: parsed.durationMonths,
-        actorId: context.userId,
-        idempotencyKey,
-        reason: parsed.reason,
-      });
-
-      const entitlements = await subscriptionEntitlementService.getEffectiveEntitlements(targetDormId);
-      return res.json({
-        message: `Operational paid package for ${parsed.durationMonths} month(s) activated successfully`,
         data: subscription,
         entitlements,
       });
