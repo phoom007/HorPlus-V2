@@ -22,6 +22,7 @@ declare global {
       auth?: AuthenticatedAuthContext;
       user?: UserEntity;
       dormitoryId?: string;
+      requestId?: string;
       cookies?: Record<string, string>;
     }
   }
@@ -50,7 +51,7 @@ export function createRequireSessionMiddleware(authService: AuthenticationServic
       const validated = await authService.validateSession(sessionCookie, requestId);
 
       if (!validated) {
-        console.error('Session invalid for cookie:', sessionCookie);
+        console.warn('require-session: session validation failed', { requestId, category: 'SESSION_INVALID' });
         return res.status(401).json({
           error: {
             code: 'SESSION_INVALID',
@@ -62,7 +63,7 @@ export function createRequireSessionMiddleware(authService: AuthenticationServic
         });
       }
 
-      console.log('require-session: memberships length =', validated.memberships.length, 'dormId =', validated.memberships[0]?.dormitoryId);
+
       
       req.auth = {
         userId: validated.user.id,
@@ -76,7 +77,7 @@ export function createRequireSessionMiddleware(authService: AuthenticationServic
 
       next();
     } catch (err: any) {
-      console.error('Session validation error:', err);
+      console.warn('require-session: validation error', { requestId, category: 'SESSION_VALIDATION_ERROR' });
       return res.status(401).json({
         error: {
           code: 'SESSION_REQUIRED',

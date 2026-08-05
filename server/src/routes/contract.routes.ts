@@ -2,6 +2,8 @@ import { Router, Request, Response } from 'express';
 import { AuthenticationService } from '../services/auth.service.js';
 import { ContractService } from '../services/contract.service.js';
 import { createRequireSessionMiddleware } from '../middleware/require-session.js';
+import { requireDormitoryPermission } from '../middleware/permission.js';
+import { requireDormitoryWriteEntitlement } from '../middleware/entitlement.js';
 import {
   CreateContractSchema,
   ActivateContractSchema,
@@ -15,6 +17,11 @@ export function createContractRouter(
 ): Router {
   const router = Router();
   const requireSession = createRequireSessionMiddleware(authService);
+
+  const mutationGuard = (permission: string) => [
+    requireDormitoryPermission(permission),
+    requireDormitoryWriteEntitlement,
+  ];
 
   const getDormitoryId = (req: Request): string => {
     return (req.headers['x-dormitory-id'] as string) || req.auth?.dormitoryId || 'dorm-001';
@@ -52,7 +59,7 @@ export function createContractRouter(
   };
 
   // GET /api/v1/contracts
-  router.get('/', requireSession, async (req: Request, res: Response) => {
+  router.get('/', async (req: Request, res: Response) => {
     try {
       const dormId = getDormitoryId(req);
       const query = {
@@ -74,7 +81,7 @@ export function createContractRouter(
   });
 
   // GET /api/v1/contracts/:id
-  router.get('/:id', requireSession, async (req: Request, res: Response) => {
+  router.get('/:id', async (req: Request, res: Response) => {
     try {
       const dormId = getDormitoryId(req);
       const contract = await contractService.getContractById(req.params.id, dormId);
@@ -85,7 +92,7 @@ export function createContractRouter(
   });
 
   // GET /api/v1/contracts/:id/pdf
-  router.get('/:id/pdf', requireSession, async (req: Request, res: Response) => {
+  router.get('/:id/pdf', async (req: Request, res: Response) => {
     try {
       const dormId = getDormitoryId(req);
       const pdfBuffer = await contractService.getContractPdf(req.params.id, dormId);
@@ -99,7 +106,7 @@ export function createContractRouter(
   });
 
   // POST /api/v1/contracts
-  router.post('/', requireSession, async (req: Request, res: Response) => {
+  router.post('/', mutationGuard('contract:write'), async (req: Request, res: Response) => {
     if (!verifyCsrf(req, res)) return;
     try {
       const dormId = getDormitoryId(req);
@@ -129,7 +136,7 @@ export function createContractRouter(
   });
 
   // POST /api/v1/contracts/:id/activate
-  router.post('/:id/activate', requireSession, async (req: Request, res: Response) => {
+  router.post('/:id/activate', mutationGuard('contract:write'), async (req: Request, res: Response) => {
     if (!verifyCsrf(req, res)) return;
     try {
       const dormId = getDormitoryId(req);
@@ -154,7 +161,7 @@ export function createContractRouter(
   });
 
   // POST /api/v1/contracts/:id/extend
-  router.post('/:id/extend', requireSession, async (req: Request, res: Response) => {
+  router.post('/:id/extend', mutationGuard('contract:write'), async (req: Request, res: Response) => {
     if (!verifyCsrf(req, res)) return;
     try {
       const dormId = getDormitoryId(req);
@@ -178,11 +185,10 @@ export function createContractRouter(
   });
 
   // POST /api/v1/contracts/:id/renew
-  router.post('/:id/renew', requireSession, async (req: Request, res: Response) => {
+  router.post('/:id/renew', mutationGuard('contract:write'), async (req: Request, res: Response) => {
     if (!verifyCsrf(req, res)) return;
     try {
       const dormId = getDormitoryId(req);
-      // Validating using basic required fields for the new successor contract
       if (!req.body.startDate || !req.body.endDate || req.body.rentAmount === undefined) {
         return res.status(400).json({
           error: {
@@ -208,9 +214,8 @@ export function createContractRouter(
     }
   });
 
-
   // POST /api/v1/contracts/:id/terminate
-  router.post('/:id/terminate', requireSession, async (req: Request, res: Response) => {
+  router.post('/:id/terminate', mutationGuard('contract:write'), async (req: Request, res: Response) => {
     if (!verifyCsrf(req, res)) return;
     try {
       const dormId = getDormitoryId(req);
@@ -234,7 +239,7 @@ export function createContractRouter(
   });
 
   // DELETE /api/v1/contracts/:id
-  router.delete('/:id', requireSession, async (req: Request, res: Response) => {
+  router.delete('/:id', mutationGuard('contract:write'), async (req: Request, res: Response) => {
     if (!verifyCsrf(req, res)) return;
     try {
       const dormId = getDormitoryId(req);

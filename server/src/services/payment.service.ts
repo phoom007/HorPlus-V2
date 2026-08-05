@@ -156,7 +156,9 @@ export class PaymentService {
           if (bill.status === 'PAID') throw new Error('ALREADY_PAID');
 
           Decimal.set({ rounding: Decimal.ROUND_HALF_UP });
-          const totalAmount = bill.items.reduce((sum, item) => sum.plus(new Decimal(item.amount)), new Decimal(0));
+          const totalAmount = bill.items.length > 0
+            ? bill.items.reduce((sum, item) => sum.plus(new Decimal(item.amount)), new Decimal(0))
+            : new Decimal(bill.totalAmount);
           const submitAmount = new Decimal(input.amount);
           if (!totalAmount.equals(submitAmount)) throw new Error('UNSUPPORTED_AMOUNT');
 

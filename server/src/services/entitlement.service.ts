@@ -1,5 +1,4 @@
-import { ISubscriptionRepository } from '../db/repositories/subscription.repository.js';
-import { IPlanRepository } from '../db/repositories/plan.repository.js';
+import { subscriptionEntitlementService, SubscriptionEntitlementService } from './subscription-entitlement.service.js';
 
 export type EntitlementType = 'FREE' | 'PAID' | 'TRIAL';
 
@@ -7,6 +6,7 @@ export interface DormitoryEntitlement {
   type: EntitlementType;
   roomLimit: number;
   active: boolean;
+  isReadOnly: boolean;
   startsAt?: Date | null;
   expiresAt?: Date | null;
   source: string;
@@ -15,96 +15,36 @@ export interface DormitoryEntitlement {
 export const ENTITLEMENT_ROOM_LIMITS = {
   FREE: 10,
   PAID: 150,
-  TRIAL: 150,
+  TRIAL: 10,
 } as const;
 
 export class EntitlementService {
-  constructor(
-    private subRepo: ISubscriptionRepository,
-    private planRepo: IPlanRepository
-  ) {}
+  private entService: SubscriptionEntitlementService;
+
+  constructor(entServiceOrSubRepo?: any, _planRepo?: any) {
+    if (entServiceOrSubRepo && typeof entServiceOrSubRepo.getEffectiveEntitlements === 'function') {
+      this.entService = entServiceOrSubRepo;
+    } else {
+      this.entService = subscriptionEntitlementService;
+    }
+  }
 
   public async resolveDormitoryEntitlement(
     dormitoryId: string,
     now: Date = new Date()
   ): Promise<DormitoryEntitlement> {
-    const sub = await this.subRepo.findByDormitoryId(dormitoryId);
-    if (!sub) {
-      return {
-        type: 'FREE',
-        roomLimit: ENTITLEMENT_ROOM_LIMITS.FREE,
-        active: true,
-        source: 'default:FREE',
-      };
-    }
+    const details = await this.entService.getEffectiveEntitlements(dormitoryId, now);
 
-    const plan = await this.planRepo.findById(sub.planId);
-    const planCode = plan ? plan.code.toUpperCase() : '';
-
-    // Legacy plan codes compatibility mapping
-    const isPaidCode = ['PAID', 'MICRO', 'SMALL', 'MEDIUM', 'LARGE', 'ENTERPRISE', 'PRO', 'BASIC', 'STANDARD'].includes(planCode);
-
-    if (planCode === 'FREE') {
-      return {
-        type: 'FREE',
-        roomLimit: ENTITLEMENT_ROOM_LIMITS.FREE,
-        active: true,
-        startsAt: sub.trialStartedAt || sub.currentPeriodStartedAt,
-        expiresAt: sub.trialEndsAt || sub.currentPeriodEndsAt,
-        source: 'plan:FREE',
-      };
-    }
-
-    if (sub.status === 'trialing') {
-      if (sub.trialEndsAt && sub.trialEndsAt < now) {
-        // Expired trial falls back to FREE entitlement
-        return {
-          type: 'FREE',
-          roomLimit: ENTITLEMENT_ROOM_LIMITS.FREE,
-          active: true,
-          startsAt: sub.trialStartedAt,
-          expiresAt: sub.trialEndsAt,
-          source: 'expired_trial:FREE_fallback',
-        };
-      }
-      return {
-        type: 'TRIAL',
-        roomLimit: ENTITLEMENT_ROOM_LIMITS.TRIAL,
-        active: true,
-        startsAt: sub.trialStartedAt,
-        expiresAt: sub.trialEndsAt,
-        source: `trial:${planCode || 'TRIAL'}`,
-      };
-    }
-
-    if (sub.status === 'active' && (isPaidCode || planCode === 'PAID')) {
-      return {
-        type: 'PAID',
-        roomLimit: ENTITLEMENT_ROOM_LIMITS.PAID,
-        active: true,
-        startsAt: sub.currentPeriodStartedAt,
-        expiresAt: sub.currentPeriodEndsAt,
-        source: `subscription:${planCode}`,
-      };
-    }
-
-    if (sub.status === 'expired' || sub.status === 'cancelled' || sub.status === 'suspended' || sub.status === 'past_due') {
-      return {
-        type: 'FREE',
-        roomLimit: ENTITLEMENT_ROOM_LIMITS.FREE,
-        active: true,
-        startsAt: sub.currentPeriodStartedAt,
-        expiresAt: sub.currentPeriodEndsAt,
-        source: `inactive_status:${sub.status}:FREE_fallback`,
-      };
-    }
-
-    // Default fallback if plan is FREE or unmapped
     return {
-      type: 'FREE',
-      roomLimit: ENTITLEMENT_ROOM_LIMITS.FREE,
-      active: true,
-      source: `plan:${planCode || 'FREE'}`,
+      type: details.plan.code === 'PAID' ? 'PAID' : (details.status === 'TRIAL' ? 'TRIAL' : 'FREE'),
+      roomLimit: details.roomLimit,
+      active: details.isActive,
+      isReadOnly: details.isReadOnly,
+      startsAt: details.startedAt || details.expiresAt,
+      expiresAt: details.expiresAt,
+      source: `plan:${details.plan.code}`,
     };
   }
 }
+
+export const entitlementService = new EntitlementService();

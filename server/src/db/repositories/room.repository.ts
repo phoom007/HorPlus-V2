@@ -342,7 +342,7 @@ export class PrismaRoomRepository implements IRoomRepository {
           dormitoryId,
           buildingId: data.buildingId!,
           roomNumber: data.roomNumber,
-          normalizedRoomNumber: data.normalizedRoomNumber,
+          normalizedRoomNumber: data.normalizedRoomNumber || data.roomNumber.toLowerCase().replace(/[^a-z0-9]/g, '') || data.roomNumber.toLowerCase(),
           floor: data.floor,
           roomType: data.roomType || 'standard',
           status: data.status || 'vacant',

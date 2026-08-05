@@ -25,6 +25,8 @@ import { createReceiptRouter } from './receipt.routes.js';
 import { healthRouter } from './health.routes.js';
 import { createNotificationRouter, createTenantNotificationRouter } from './notification.routes.js';
 import { createTenantPortalRouter } from './tenant-portal.routes.js';
+import { createSubscriptionRouter } from './subscription.routes.js';
+import { resolveDormitoryContextMiddleware } from '../middleware/permission.js';
 import { BuildingService } from '../services/building.service.js';
 import { RoomService } from '../services/room.service.js';
 import { TenantService } from '../services/tenant.service.js';
@@ -51,7 +53,7 @@ export interface AppApiDependencies {
   billingService?: BillingService;
   dormitoryRepo: any;
   billingRepo: any;
-      subRepo: any;
+  subRepo: any;
   planRepo: any;
   membershipRepo: any;
   roleRepo: any;
@@ -60,7 +62,6 @@ export interface AppApiDependencies {
 export function createApiRouter(deps: AppApiDependencies | AuthenticationService): Router {
   const router = Router();
 
-  // Support backwards compatibility if only authService passed
   const isDeps = typeof (deps as any).authService !== 'undefined';
   const authService = isDeps ? (deps as AppApiDependencies).authService : (deps as AuthenticationService);
 
@@ -75,6 +76,7 @@ export function createApiRouter(deps: AppApiDependencies | AuthenticationService
   router.use('/health', healthRouter);
 
   router.use('/auth', createAuthRouter(authService));
+  router.use('/subscription', createSubscriptionRouter(authService));
   router.use('/', createUserRouter(authService));
 
   if (isDeps) {
@@ -89,8 +91,15 @@ export function createApiRouter(deps: AppApiDependencies | AuthenticationService
         fullDeps.provisioningService
       )
     );
+
+    // Authenticated base stack for business domains: requireSession → resolveDormitoryContextMiddleware
+    // Route-level mutation guards inside each domain subrouter enforce specific write permission + write entitlement
+    const requireSession = authService.requireAuth();
+    const authContextStack = [requireSession, resolveDormitoryContextMiddleware];
+
     router.use(
       '/dormitories',
+      authContextStack,
       createDormitoryRouter(
         fullDeps.authService,
         fullDeps.dormitoryRepo,
@@ -103,36 +112,36 @@ export function createApiRouter(deps: AppApiDependencies | AuthenticationService
       )
     );
     if (fullDeps.buildingService && fullDeps.roomService) {
-      router.use('/properties', createPropertyRouter(fullDeps.authService, fullDeps.buildingService, fullDeps.roomService));
+      router.use('/properties', authContextStack, createPropertyRouter(fullDeps.authService, fullDeps.buildingService, fullDeps.roomService));
     }
     if (fullDeps.tenantService) {
-      router.use('/tenants', createTenantRouter(fullDeps.authService, fullDeps.tenantService));
+      router.use('/tenants', authContextStack, createTenantRouter(fullDeps.authService, fullDeps.tenantService));
     }
     if (fullDeps.contractService) {
-      router.use('/contracts', createContractRouter(fullDeps.authService, fullDeps.contractService));
+      router.use('/contracts', authContextStack, createContractRouter(fullDeps.authService, fullDeps.contractService));
     }
     if (fullDeps.occupancyService) {
-      router.use('/occupancy', createOccupancyRouter(fullDeps.authService, fullDeps.occupancyService));
+      router.use('/occupancy', authContextStack, createOccupancyRouter(fullDeps.authService, fullDeps.occupancyService));
     }
     if (fullDeps.billingCycleService) {
-      router.use('/billing-cycles', createBillingCycleRouter(fullDeps.authService, fullDeps.billingCycleService));
+      router.use('/billing-cycles', authContextStack, createBillingCycleRouter(fullDeps.authService, fullDeps.billingCycleService));
     }
     if (fullDeps.meterService) {
-      router.use('/meters', createMeterRouter(fullDeps.authService, fullDeps.meterService));
+      router.use('/meters', authContextStack, createMeterRouter(fullDeps.authService, fullDeps.meterService));
     }
     if (fullDeps.billingService) {
-      router.use('/bills', createBillingRouter(fullDeps.authService, fullDeps.billingService));
+      router.use('/bills', authContextStack, createBillingRouter(fullDeps.authService, fullDeps.billingService));
     }
 
-    // Move-out and other non-LINE features
-    router.use('/', moveOutRouter);
-    router.use('/maintenance-requests', createMaintenanceRouter());
-    router.use('/announcements', createAnnouncementRouter());
-    router.use('/payments', createPaymentRouter(fullDeps.authService));
-    router.use('/receipts', createReceiptRouter(fullDeps.authService));
-    router.use('/notifications', createNotificationRouter());
-    router.use('/tenant/notifications', createTenantNotificationRouter());
-    router.use('/tenant-portal', createTenantPortalRouter(fullDeps.authService));
+    router.use('/move-out', authContextStack, moveOutRouter);
+    router.use('/maintenance-requests', authContextStack, createMaintenanceRouter());
+    router.use('/maintenance', authContextStack, createMaintenanceRouter());
+    router.use('/announcements', authContextStack, createAnnouncementRouter());
+    router.use('/payments', authContextStack, createPaymentRouter(fullDeps.authService));
+    router.use('/receipts', authContextStack, createReceiptRouter(fullDeps.authService));
+    router.use('/notifications', authContextStack, createNotificationRouter());
+    router.use('/tenant/notifications', authContextStack, createTenantNotificationRouter());
+    router.use('/tenant-portal', authContextStack, createTenantPortalRouter(fullDeps.authService));
   }
 
   return router;

@@ -34,6 +34,9 @@ COPY --from=builder /app/prisma ./prisma
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/assets ./assets
 
+# Security: Create upload directories and set permissions for non-root user
+RUN mkdir -p /app/uploads/private /app/uploads/public && chown -R node:node /app
+
 # Security: Run as non-root user
 USER node
 

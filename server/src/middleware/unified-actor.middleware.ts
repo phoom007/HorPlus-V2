@@ -23,23 +23,26 @@ declare global {
   }
 }
 
-export function extractUnifiedActor() {
-  return (req: Request, _res: Response, next: NextFunction) => {
-    // 1. Check Google Owner Session
-    if (req.auth?.userId) {
-      req.actor = {
-        actorType: 'google_owner',
-        sessionId: req.auth.sessionId,
-        userId: req.auth.userId,
-        dormitoryId: req.dormitoryId || 'dorm-001',
-        roleCode: 'OWNER',
-        displayName: req.auth.user.name
-      };
-      return next();
-    }
-
-    next();
-  };
+export function extractUnifiedActor(req?: any, _res?: any, next?: any): any {
+  if (typeof req === 'function' || (!req && typeof _res === 'function')) {
+    return (r: Request, s: Response, n: NextFunction) => extractUnifiedActor(r, s, n);
+  }
+  if (!req || typeof req !== 'object') {
+    return (r: Request, s: Response, n: NextFunction) => extractUnifiedActor(r, s, n);
+  }
+  if (req && req.auth && req.auth.userId) {
+    req.actor = {
+      actorType: 'google_owner',
+      sessionId: req.auth.sessionId,
+      userId: req.auth.userId,
+      dormitoryId: req.dormitoryId || (req.headers && (req.headers['x-dormitory-id'] as string)) || 'dorm-001',
+      roleCode: 'OWNER',
+      displayName: req.auth.user?.name
+    };
+  }
+  if (typeof next === 'function') {
+    return next();
+  }
 }
 
 export function requireAnyAuthenticatedActor() {

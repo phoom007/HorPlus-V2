@@ -1,11 +1,18 @@
 import { Router, Request, Response } from 'express';
 import { AnnouncementService } from '../services/announcement.service.js';
 import { extractUnifiedActor } from '../middleware/unified-actor.middleware.js';
+import { requireDormitoryPermission } from '../middleware/permission.js';
+import { requireDormitoryWriteEntitlement } from '../middleware/entitlement.js';
 
 export function createAnnouncementRouter(announcementService: AnnouncementService = new AnnouncementService()): Router {
   const router = Router();
 
   router.use(extractUnifiedActor);
+
+  const mutationGuard = (permission: string) => [
+    requireDormitoryPermission(permission),
+    requireDormitoryWriteEntitlement,
+  ];
 
   const getContext = (req: Request) => {
     const actor = req.actor;
@@ -36,7 +43,7 @@ export function createAnnouncementRouter(announcementService: AnnouncementServic
   });
 
   // POST /api/v1/announcements (Create Draft)
-  router.post('/', async (req: Request, res: Response) => {
+  router.post('/', mutationGuard('announcement:write'), async (req: Request, res: Response) => {
     try {
       const { actor, dormitoryId } = getContext(req);
       const { title, summary, content, priority, isPinned, audiences } = req.body;
@@ -80,7 +87,7 @@ export function createAnnouncementRouter(announcementService: AnnouncementServic
   });
 
   // PATCH /api/v1/announcements/:id
-  router.patch('/:id', async (req: Request, res: Response) => {
+  router.patch('/:id', mutationGuard('announcement:write'), async (req: Request, res: Response) => {
     try {
       const { actor, dormitoryId } = getContext(req);
       const updated = await announcementService.updateAnnouncement(dormitoryId, req.params.id, {
@@ -99,7 +106,7 @@ export function createAnnouncementRouter(announcementService: AnnouncementServic
   });
 
   // DELETE /api/v1/announcements/:id
-  router.delete('/:id', async (req: Request, res: Response) => {
+  router.delete('/:id', mutationGuard('announcement:write'), async (req: Request, res: Response) => {
     try {
       const { dormitoryId } = getContext(req);
       const deleted = await announcementService.getRepository().deleteAnnouncement(dormitoryId, req.params.id);
@@ -126,7 +133,7 @@ export function createAnnouncementRouter(announcementService: AnnouncementServic
   });
 
   // POST /api/v1/announcements/:id/publish
-  router.post('/:id/publish', async (req: Request, res: Response) => {
+  router.post('/:id/publish', mutationGuard('announcement:write'), async (req: Request, res: Response) => {
     try {
       const { actor, dormitoryId } = getContext(req);
       const published = await announcementService.publishAnnouncement({
@@ -143,7 +150,7 @@ export function createAnnouncementRouter(announcementService: AnnouncementServic
   });
 
   // POST /api/v1/announcements/:id/schedule
-  router.post('/:id/schedule', async (req: Request, res: Response) => {
+  router.post('/:id/schedule', mutationGuard('announcement:write'), async (req: Request, res: Response) => {
     try {
       const { actor, dormitoryId } = getContext(req);
       const { scheduledAt } = req.body;
@@ -166,7 +173,7 @@ export function createAnnouncementRouter(announcementService: AnnouncementServic
   });
 
   // POST /api/v1/announcements/:id/cancel-schedule
-  router.post('/:id/cancel-schedule', async (req: Request, res: Response) => {
+  router.post('/:id/cancel-schedule', mutationGuard('announcement:write'), async (req: Request, res: Response) => {
     try {
       const { dormitoryId } = getContext(req);
       const cancelled = await announcementService.cancelSchedule(dormitoryId, req.params.id);
@@ -177,7 +184,7 @@ export function createAnnouncementRouter(announcementService: AnnouncementServic
   });
 
   // POST /api/v1/announcements/:id/archive
-  router.post('/:id/archive', async (req: Request, res: Response) => {
+  router.post('/:id/archive', mutationGuard('announcement:write'), async (req: Request, res: Response) => {
     try {
       const { dormitoryId } = getContext(req);
       const archived = await announcementService.archiveAnnouncement(dormitoryId, req.params.id);

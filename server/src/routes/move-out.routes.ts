@@ -1,12 +1,20 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { moveOutService } from '../services/move-out.service.js';
 import { requirePermission } from '../middleware/permission.middleware.js';
+import { requireDormitoryPermission } from '../middleware/permission.js';
+import { requireDormitoryWriteEntitlement } from '../middleware/entitlement.js';
 
 export const moveOutRouter = Router();
+
+const mutationGuard = (permission: string) => [
+  requireDormitoryPermission(permission),
+  requireDormitoryWriteEntitlement,
+];
 
 // POST /api/v1/tenant-move-out-requests (Tenant Submission Endpoint)
 moveOutRouter.post(
   '/tenant-move-out-requests',
+  mutationGuard('moveout:write'),
   async (req: Request, res: Response, next: NextFunction) => {
     res.status(403).json({
       success: false,
@@ -18,10 +26,9 @@ moveOutRouter.post(
 // GET /api/v1/tenant-move-out-requests (Owner / Staff View)
 moveOutRouter.get(
   '/tenant-move-out-requests',
-  requirePermission('tenant_registration.view'),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const dormId = req.dormitoryId || (req.query.dormitoryId as string) || 'dorm-001';
+      const dormId = req.dormitoryContext?.dormitoryId || req.dormitoryId || (req.query.dormitoryId as string) || (req.headers['x-dormitory-id'] as string) || 'dorm-001';
       const status = req.query.status as string;
       const requests = await moveOutService.listMoveOutRequestsForOwner(dormId, status);
       res.json({ success: true, data: requests });
@@ -34,7 +41,7 @@ moveOutRouter.get(
 // POST /api/v1/tenant-move-out-requests/:requestId/emergency-terminate (Owner Administrative Override)
 moveOutRouter.post(
   '/tenant-move-out-requests/:requestId/emergency-terminate',
-  requirePermission('tenant_registration.manage'),
+  mutationGuard('moveout:write'),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const dormId = req.dormitoryId || req.body?.dormitoryId || (req.headers['x-dormitory-id'] as string);
@@ -84,6 +91,7 @@ moveOutRouter.post(
 // POST /api/v1/tenant-move-out-requests/:requestId/complete-end-tenancy (Deprecated — 410 Gone)
 moveOutRouter.post(
   '/tenant-move-out-requests/:requestId/complete-end-tenancy',
+  mutationGuard('moveout:write'),
   async (req: Request, res: Response) => {
     res.status(410).json({
       success: false,

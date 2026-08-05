@@ -3,12 +3,16 @@ import { AuthenticationService } from '../services/auth.service.js';
 import { BuildingService } from '../services/building.service.js';
 import { RoomService } from '../services/room.service.js';
 import { createRequireSessionMiddleware } from '../middleware/require-session.js';
+import { requireDormitoryPermission } from '../middleware/permission.js';
+import { requireDormitoryWriteEntitlement } from '../middleware/entitlement.js';
 import {
   CreateBuildingSchema,
   UpdateBuildingSchema,
   CreateRoomSchema,
   UpdateRoomSchema,
 } from '../schemas/property-tenant-contract.schemas.js';
+
+import { resolveAuthoritativeDormitoryContext } from '../middleware/dormitory-context.js';
 
 export function createPropertyRouter(
   authService: AuthenticationService,
@@ -18,8 +22,14 @@ export function createPropertyRouter(
   const router = Router();
   const requireSession = createRequireSessionMiddleware(authService);
 
+  const mutationGuard = (permission: string) => [
+    requireDormitoryPermission(permission),
+    requireDormitoryWriteEntitlement,
+  ];
+
   const getDormitoryId = (req: Request): string => {
-    return (req.headers['x-dormitory-id'] as string) || req.auth?.dormitoryId || 'dorm-001';
+    const context = resolveAuthoritativeDormitoryContext(req);
+    return context.dormitoryId;
   };
 
   const verifyCsrf = (req: Request, res: Response): boolean => {
@@ -45,8 +55,8 @@ export function createPropertyRouter(
     const statusCode = err.statusCode || err.status || 500;
     res.status(statusCode).json({
       error: {
-        code: err.code || 'PROPERTY_OPERATION_FAILED',
-        message: err.message || 'เกิดข้อผิดพลาดในการดำเนินการจัดการอสังหาริมทรัพย์',
+        code: err.errorCode || err.code || 'PROPERTY_OPERATION_FAILED',
+        message: err.message || 'Operation failed',
         fieldErrors: err.fieldErrors || null,
         requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
         timestamp: new Date().toISOString(),
@@ -57,7 +67,7 @@ export function createPropertyRouter(
   // --- BUILDINGS ---
 
   // GET /api/v1/properties/buildings
-  router.get('/buildings', requireSession, async (req: Request, res: Response) => {
+  router.get('/buildings', async (req: Request, res: Response) => {
     try {
       const dormId = getDormitoryId(req);
       const query = {
@@ -76,7 +86,7 @@ export function createPropertyRouter(
   });
 
   // GET /api/v1/properties/buildings/:id
-  router.get('/buildings/:id', requireSession, async (req: Request, res: Response) => {
+  router.get('/buildings/:id', async (req: Request, res: Response) => {
     try {
       const dormId = getDormitoryId(req);
       const building = await buildingService.getBuildingById(req.params.id, dormId);
@@ -87,7 +97,7 @@ export function createPropertyRouter(
   });
 
   // POST /api/v1/properties/buildings
-  router.post('/buildings', requireSession, async (req: Request, res: Response) => {
+  router.post('/buildings', mutationGuard('building:write'), async (req: Request, res: Response) => {
     if (!verifyCsrf(req, res)) return;
     try {
       const dormId = getDormitoryId(req);
@@ -111,7 +121,7 @@ export function createPropertyRouter(
   });
 
   // PUT /api/v1/properties/buildings/:id
-  router.put('/buildings/:id', requireSession, async (req: Request, res: Response) => {
+  router.put('/buildings/:id', mutationGuard('building:write'), async (req: Request, res: Response) => {
     if (!verifyCsrf(req, res)) return;
     try {
       const dormId = getDormitoryId(req);
@@ -136,7 +146,7 @@ export function createPropertyRouter(
   });
 
   // DELETE /api/v1/properties/buildings/:id
-  router.delete('/buildings/:id', requireSession, async (req: Request, res: Response) => {
+  router.delete('/buildings/:id', mutationGuard('building:write'), async (req: Request, res: Response) => {
     if (!verifyCsrf(req, res)) return;
     try {
       const dormId = getDormitoryId(req);
@@ -150,7 +160,7 @@ export function createPropertyRouter(
   // --- ROOMS ---
 
   // GET /api/v1/properties/rooms/available
-  router.get('/rooms/available', requireSession, async (req: Request, res: Response) => {
+  router.get('/rooms/available', async (req: Request, res: Response) => {
     try {
       const dormId = getDormitoryId(req);
       const { startDate, endDate, buildingId } = req.query;
@@ -179,7 +189,7 @@ export function createPropertyRouter(
   });
 
   // GET /api/v1/properties/rooms
-  router.get('/rooms', requireSession, async (req: Request, res: Response) => {
+  router.get('/rooms', async (req: Request, res: Response) => {
     try {
       const dormId = getDormitoryId(req);
       const query = {
@@ -201,7 +211,7 @@ export function createPropertyRouter(
   });
 
   // GET /api/v1/properties/rooms/:id
-  router.get('/rooms/:id', requireSession, async (req: Request, res: Response) => {
+  router.get('/rooms/:id', async (req: Request, res: Response) => {
     try {
       const dormId = getDormitoryId(req);
       const room = await roomService.getRoomById(req.params.id, dormId);
@@ -212,7 +222,7 @@ export function createPropertyRouter(
   });
 
   // POST /api/v1/properties/rooms
-  router.post('/rooms', requireSession, async (req: Request, res: Response) => {
+  router.post('/rooms', mutationGuard('room:write'), async (req: Request, res: Response) => {
     if (!verifyCsrf(req, res)) return;
     try {
       const dormId = getDormitoryId(req);
@@ -236,7 +246,7 @@ export function createPropertyRouter(
   });
 
   // PUT /api/v1/properties/rooms/:id
-  router.put('/rooms/:id', requireSession, async (req: Request, res: Response) => {
+  router.put('/rooms/:id', mutationGuard('room:write'), async (req: Request, res: Response) => {
     if (!verifyCsrf(req, res)) return;
     try {
       const dormId = getDormitoryId(req);
@@ -254,7 +264,7 @@ export function createPropertyRouter(
       }
 
       const { version, ...updatePayload } = parsed.data;
-      const room = await roomService.updateRoom(req.params.id, dormId, updatePayload, version, req.auth?.userId);
+      const room = await roomService.updateRoom(req.params.id, updatePayload, dormId, req.auth?.userId);
       res.json({ data: room });
     } catch (err) {
       handleServiceError(res, err, req);
@@ -262,7 +272,7 @@ export function createPropertyRouter(
   });
 
   // DELETE /api/v1/properties/rooms/:id
-  router.delete('/rooms/:id', requireSession, async (req: Request, res: Response) => {
+  router.delete('/rooms/:id', mutationGuard('room:write'), async (req: Request, res: Response) => {
     if (!verifyCsrf(req, res)) return;
     try {
       const dormId = getDormitoryId(req);

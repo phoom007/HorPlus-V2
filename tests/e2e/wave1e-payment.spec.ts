@@ -7,6 +7,7 @@ import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { PrismaClient } from '../../server/node_modules/@prisma/client/index.js';
 import { localStorageProvider } from '../../server/src/services/local-storage.service.js';
+import { subscriptionEntitlementService } from '../../server/src/services/subscription-entitlement.service.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -137,7 +138,6 @@ test.describe('Wave 1E - Real Payment & Receipt Integration (Fully Unmocked)', (
       },
     });
 
-    // Create Second Dormitory for Cross-Tenant/Cross-Dormitory checks
     await prisma.dormitory.create({
       data: {
         id: otherDormId,
@@ -149,6 +149,11 @@ test.describe('Wave 1E - Real Payment & Receipt Integration (Fully Unmocked)', (
         status: 'active',
       },
     });
+
+    // Provision trial subscriptions for E2E dormitories
+    await subscriptionEntitlementService.ensureSeeded();
+    await subscriptionEntitlementService.provisionInitialTrial(dormId);
+    await subscriptionEntitlementService.provisionInitialTrial(otherDormId);
 
     // Create Roles
     await prisma.role.createMany({
