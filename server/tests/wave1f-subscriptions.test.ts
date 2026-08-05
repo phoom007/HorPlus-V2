@@ -30,9 +30,41 @@ import { resolveAuthoritativeDormitoryContext, normalizeRolePermissions } from '
 import { requireDormitoryPermission, resolveDormitoryContextMiddleware } from '../src/middleware/permission.js';
 import { requireDormitoryWriteEntitlement } from '../src/middleware/entitlement.js';
 import { runOperationalActivationCli } from '../src/cli/activate-subscription.js';
+import { createApp } from '../src/app.js';
+import { CsrfService } from '../src/services/csrf.service.js';
+import { getEnv } from '../src/config/env.js';
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
+
+const SESSION_ENCRYPTION_KEY = process.env.SESSION_ENCRYPTION_KEY || '0123456789abcdef0123456789abcdef';
+const CSRF_SIGNING_KEY = process.env.CSRF_SIGNING_KEY || 'csrf-secret-key-0123456789abcdef';
+const getSecretKey = (secret: string) => crypto.createHash('sha256').update(secret).digest();
+
+function encryptSessionToken(userId: string, sessionId: string, ttlSeconds = 86400): string {
+  const nowSec = Math.floor(Date.now() / 1000);
+  const payload = {
+    sub: userId,
+    sid: sessionId,
+    type: 'session',
+    iat: nowSec,
+    exp: nowSec + ttlSeconds,
+    jti: crypto.randomUUID(),
+    version: 1,
+  };
+
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', getSecretKey(SESSION_ENCRYPTION_KEY), iv);
+  const encrypted = Buffer.concat([cipher.update(JSON.stringify(payload), 'utf8'), cipher.final()]);
+  const authTag = cipher.getAuthTag();
+
+  return `${iv.toString('base64url')}.${encrypted.toString('base64url')}.${authTag.toString('base64url')}`;
+}
+
+function generateCsrfToken(sessionId: string): string {
+  const csrfService = new CsrfService(getEnv().CSRF_SIGNING_KEY);
+  return csrfService.generateCsrfToken(sessionId);
+}
 
 const prisma = new PrismaClient();
 const membershipRepo = new PrismaMembershipRepository(prisma);
@@ -1018,11 +1050,15 @@ describe('Wave 1F - Authorization, Permission, Package & Idempotency Corrective 
     let app: express.Application;
     let concDormId: string;
     let concOwnerId: string;
+    let concOwnerSid: string;
+    let concSessionCookie: string;
+    let concCsrfToken: string;
 
     beforeEach(async () => {
-      const timestamp = Date.now();
+      const timestamp = Date.now() + Math.floor(Math.random() * 10000);
       concDormId = crypto.randomUUID();
       concOwnerId = crypto.randomUUID();
+      concOwnerSid = crypto.randomUUID();
 
       await prisma.user.create({
         data: { id: concOwnerId, googleSubject: `sub-conc-${timestamp}`, email: `conc-${timestamp}@test.com`, emailNormalized: `conc-${timestamp}@test.com`, name: 'Conc User' },
@@ -1040,41 +1076,23 @@ describe('Wave 1F - Authorization, Permission, Package & Idempotency Corrective 
         data: { userId: concOwnerId, dormitoryId: concDormId, roleId: role.id, status: 'active' },
       });
 
+      await prisma.session.create({
+        data: {
+          id: concOwnerSid,
+          userId: concOwnerId,
+          sessionIdHash: crypto.createHash('sha256').update(`horplus_sid_${concOwnerSid}`).digest('hex'),
+          expiresAt: new Date(Date.now() + 86400000),
+        },
+      });
+
       await entitlementService.provisionInitialTrial(concDormId);
 
       await prisma.building.create({ data: { dormitoryId: concDormId, name: 'Conc Building' } });
 
-      app = express();
-      app.use(express.json());
+      concSessionCookie = encryptSessionToken(concOwnerId, concOwnerSid);
+      concCsrfToken = generateCsrfToken(concOwnerSid);
 
-      const mockAuthService: any = {
-        requireAuth: () => (req: Request, res: Response, next: NextFunction) => {
-          req.auth = {
-            userId: concOwnerId,
-            user: { id: concOwnerId, name: 'Conc Owner', email: 'conc@test.com' },
-            sessionId: 'sess-conc',
-            memberships: [{ id: 'mem-conc', dormitoryId: concDormId, userId: concOwnerId, status: 'active', roleId: role.id, roleCode: 'OWNER' }],
-          };
-          next();
-        },
-        verifyCsrf: () => true,
-      };
-
-      const roomRepo = new PrismaRoomRepository(prisma);
-      const buildingRepo = new PrismaBuildingRepository(prisma);
-      const subRepo = new PrismaSubscriptionRepository(prisma);
-      const planRepo = new PrismaSubscriptionPlanRepository(prisma);
-      const contractRepo = new PrismaContractRepository(prisma);
-      const auditService = new AuditService();
-      const roomService = new RoomService(roomRepo, buildingRepo, subRepo, planRepo, contractRepo, auditService, entitlementService, prisma);
-
-      app.use('/api/v1', createApiRouter({
-        authService: mockAuthService,
-        onboardingService: {} as any, planService: {} as any, promoService: {} as any, provisioningService: {} as any, sensitiveFieldService: {} as any,
-        buildingService: {} as any, roomService, tenantService: {} as any, contractService: {} as any, occupancyService: {} as any, billingCycleService: {} as any, meterService: {} as any, billingService: {} as any,
-        dormitoryRepo: {} as any, billingRepo: {} as any, subRepo, planRepo: {} as any, membershipRepo: {} as any, roleRepo: {} as any,
-      }));
-      app.use(globalErrorHandler);
+      app = createApp({ forcePrisma: true });
     });
 
     it('proves concurrent HTTP room creation on Free boundary under PG transaction lock', async () => {
@@ -1086,9 +1104,23 @@ describe('Wave 1F - Authorization, Permission, Package & Idempotency Corrective 
       }
 
       const [res1, res2] = await Promise.all([
-        request(app).post('/api/v1/properties/rooms').set('x-user-id', concOwnerId).set('x-dormitory-id', concDormId).set('x-csrf-token', 'valid').send({ roomNumber: 'RMF10', buildingId: bld!.id, floor: 1, baseRent: 3000 }),
-        request(app).post('/api/v1/properties/rooms').set('x-user-id', concOwnerId).set('x-dormitory-id', concDormId).set('x-csrf-token', 'valid').send({ roomNumber: 'RMF11', buildingId: bld!.id, floor: 1, baseRent: 3000 }),
+        request(app)
+          .post('/api/v1/properties/rooms')
+          .set('Cookie', [`horplus_session=${concSessionCookie}`, `horplus_csrf=${concCsrfToken}`])
+          .set('x-csrf-token', concCsrfToken)
+          .set('x-dormitory-id', concDormId)
+          .send({ roomNumber: 'RMF10', buildingId: bld!.id, floor: 1, monthlyRent: '3000' }),
+        request(app)
+          .post('/api/v1/properties/rooms')
+          .set('Cookie', [`horplus_session=${concSessionCookie}`, `horplus_csrf=${concCsrfToken}`])
+          .set('x-csrf-token', concCsrfToken)
+          .set('x-dormitory-id', concDormId)
+          .send({ roomNumber: 'RMF11', buildingId: bld!.id, floor: 1, monthlyRent: '3000' }),
       ]);
+
+      if (res1.status !== 201 && res1.status !== 409) {
+        console.log('CONCURRENT RES1 DEBUG:', res1.status, res1.body);
+      }
 
       const statuses = [res1.status, res2.status].sort();
       expect(statuses).toEqual([201, 409]);
@@ -1111,8 +1143,18 @@ describe('Wave 1F - Authorization, Permission, Package & Idempotency Corrective 
       await prisma.room.createMany({ data: roomData });
 
       const [res1, res2] = await Promise.all([
-        request(app).post('/api/v1/properties/rooms').set('x-user-id', concOwnerId).set('x-dormitory-id', concDormId).set('x-csrf-token', 'valid').send({ roomNumber: 'RMP150', buildingId: bld!.id, floor: 1, baseRent: 3000 }),
-        request(app).post('/api/v1/properties/rooms').set('x-user-id', concOwnerId).set('x-dormitory-id', concDormId).set('x-csrf-token', 'valid').send({ roomNumber: 'RMP151', buildingId: bld!.id, floor: 1, baseRent: 3000 }),
+        request(app)
+          .post('/api/v1/properties/rooms')
+          .set('Cookie', [`horplus_session=${concSessionCookie}`, `horplus_csrf=${concCsrfToken}`])
+          .set('x-csrf-token', concCsrfToken)
+          .set('x-dormitory-id', concDormId)
+          .send({ roomNumber: 'RMP150', buildingId: bld!.id, floor: 1, monthlyRent: '3000' }),
+        request(app)
+          .post('/api/v1/properties/rooms')
+          .set('Cookie', [`horplus_session=${concSessionCookie}`, `horplus_csrf=${concCsrfToken}`])
+          .set('x-csrf-token', concCsrfToken)
+          .set('x-dormitory-id', concDormId)
+          .send({ roomNumber: 'RMP151', buildingId: bld!.id, floor: 1, monthlyRent: '3000' }),
       ]);
 
       const statuses = [res1.status, res2.status].sort();

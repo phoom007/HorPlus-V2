@@ -50,6 +50,7 @@ describe('Wave 1F - Real-Session 14-Domain Route Audit Matrix', () => {
   let ownerUserId: string;
   let limitedUserId: string;
   let managerUserId: string;
+  let managerWithPayUserId: string;
   let tenantUserId: string;
 
   let ownerSessionCookie: string;
@@ -58,12 +59,15 @@ describe('Wave 1F - Real-Session 14-Domain Route Audit Matrix', () => {
   let limitedCsrfToken: string;
   let managerSessionCookie: string;
   let managerCsrfToken: string;
+  let managerWithPaySessionCookie: string;
+  let managerWithPayCsrfToken: string;
   let tenantSessionCookie: string;
   let tenantCsrfToken: string;
 
   let buildingId: string;
   let roomId: string;
   let tenantRecordId: string;
+  let cycleId: string;
   let billId: string;
 
   beforeAll(async () => {
@@ -78,6 +82,7 @@ describe('Wave 1F - Real-Session 14-Domain Route Audit Matrix', () => {
     ownerUserId = crypto.randomUUID();
     limitedUserId = crypto.randomUUID();
     managerUserId = crypto.randomUUID();
+    managerWithPayUserId = crypto.randomUUID();
     tenantUserId = crypto.randomUUID();
 
     // Create users in PostgreSQL
@@ -86,6 +91,7 @@ describe('Wave 1F - Real-Session 14-Domain Route Audit Matrix', () => {
         { id: ownerUserId, googleSubject: `g-owner-${timestamp}`, email: `owner-${timestamp}@audit.com`, emailNormalized: `owner-${timestamp}@audit.com`, name: 'Owner User' },
         { id: limitedUserId, googleSubject: `g-limited-${timestamp}`, email: `limited-${timestamp}@audit.com`, emailNormalized: `limited-${timestamp}@audit.com`, name: 'Limited User' },
         { id: managerUserId, googleSubject: `g-manager-${timestamp}`, email: `manager-${timestamp}@audit.com`, emailNormalized: `manager-${timestamp}@audit.com`, name: 'Manager User' },
+        { id: managerWithPayUserId, googleSubject: `g-mgrpay-${timestamp}`, email: `mgrpay-${timestamp}@audit.com`, emailNormalized: `mgrpay-${timestamp}@audit.com`, name: 'Manager Pay User' },
         { id: tenantUserId, googleSubject: `g-tenant-${timestamp}`, email: `tenant-${timestamp}@audit.com`, emailNormalized: `tenant-${timestamp}@audit.com`, name: 'Tenant User' },
       ],
     });
@@ -121,6 +127,15 @@ describe('Wave 1F - Real-Session 14-Domain Route Audit Matrix', () => {
       },
     });
 
+    const managerWithPayRole = await prisma.role.create({
+      data: {
+        dormitoryId: dormId,
+        code: 'MANAGER_WRITE',
+        name: 'Manager Pay',
+        permissions: ['payment:write', 'payment:read'],
+      },
+    });
+
     const tenantRole = await prisma.role.create({
       data: {
         dormitoryId: dormId,
@@ -136,6 +151,7 @@ describe('Wave 1F - Real-Session 14-Domain Route Audit Matrix', () => {
         { dormitoryId: dormId, userId: ownerUserId, roleId: ownerRole.id, status: 'active' },
         { dormitoryId: dormId, userId: limitedUserId, roleId: limitedRole.id, status: 'active' },
         { dormitoryId: dormId, userId: managerUserId, roleId: managerRole.id, status: 'active' },
+        { dormitoryId: dormId, userId: managerWithPayUserId, roleId: managerWithPayRole.id, status: 'active' },
         { dormitoryId: dormId, userId: tenantUserId, roleId: tenantRole.id, status: 'active' },
       ],
     });
@@ -148,6 +164,7 @@ describe('Wave 1F - Real-Session 14-Domain Route Audit Matrix', () => {
     const ownerSid = crypto.randomUUID();
     const limitedSid = crypto.randomUUID();
     const managerSid = crypto.randomUUID();
+    const managerWithPaySid = crypto.randomUUID();
     const tenantSid = crypto.randomUUID();
 
     const expiresAt = new Date(Date.now() + 86400 * 1000);
@@ -157,6 +174,7 @@ describe('Wave 1F - Real-Session 14-Domain Route Audit Matrix', () => {
         { id: ownerSid, userId: ownerUserId, sessionIdHash: crypto.createHash('sha256').update(`horplus_sid_${ownerSid}`).digest('hex'), expiresAt },
         { id: limitedSid, userId: limitedUserId, sessionIdHash: crypto.createHash('sha256').update(`horplus_sid_${limitedSid}`).digest('hex'), expiresAt },
         { id: managerSid, userId: managerUserId, sessionIdHash: crypto.createHash('sha256').update(`horplus_sid_${managerSid}`).digest('hex'), expiresAt },
+        { id: managerWithPaySid, userId: managerWithPayUserId, sessionIdHash: crypto.createHash('sha256').update(`horplus_sid_${managerWithPaySid}`).digest('hex'), expiresAt },
         { id: tenantSid, userId: tenantUserId, sessionIdHash: crypto.createHash('sha256').update(`horplus_sid_${tenantSid}`).digest('hex'), expiresAt },
       ],
     });
@@ -169,6 +187,9 @@ describe('Wave 1F - Real-Session 14-Domain Route Audit Matrix', () => {
 
     managerSessionCookie = encryptSessionToken(managerUserId, managerSid);
     managerCsrfToken = generateCsrfToken(managerSid);
+
+    managerWithPaySessionCookie = encryptSessionToken(managerWithPayUserId, managerWithPaySid);
+    managerWithPayCsrfToken = generateCsrfToken(managerWithPaySid);
 
     tenantSessionCookie = encryptSessionToken(tenantUserId, tenantSid);
     tenantCsrfToken = generateCsrfToken(tenantSid);
@@ -201,6 +222,7 @@ describe('Wave 1F - Real-Session 14-Domain Route Audit Matrix', () => {
         status: 'published',
       },
     });
+    cycleId = cycle.id;
 
     const bill = await prisma.bill.create({
       data: {
@@ -222,20 +244,119 @@ describe('Wave 1F - Real-Session 14-Domain Route Audit Matrix', () => {
   });
 
   const domainSpecs = [
-    { name: 'Buildings', method: 'post', path: '/api/v1/properties/buildings', body: { name: 'Building B' }, getPath: '/api/v1/properties/buildings' },
-    { name: 'Rooms', method: 'post', path: '/api/v1/properties/rooms', body: { roomNumber: '102', buildingId: '', floor: 1, baseRent: 3000 }, getPath: '/api/v1/properties/rooms' },
-    { name: 'Tenants', method: 'post', path: '/api/v1/tenants', body: { firstName: 'New', lastName: 'Tenant', idCardNumber: '9999999999999' }, getPath: '/api/v1/tenants' },
-    { name: 'Occupancies', method: 'post', path: '/api/v1/occupancy/occ-dummy/move-out', body: {}, getPath: '/api/v1/occupancy/summary' },
-    { name: 'Contracts', method: 'post', path: '/api/v1/contracts', body: { tenantId: '', roomId: '', startDate: '2026-01-01', endDate: '2026-12-31', depositAmount: 5000, monthlyRent: 3000 }, getPath: '/api/v1/contracts' },
-    { name: 'Meters', method: 'post', path: '/api/v1/meters/devices', body: { roomId: '', type: 'electricity', serialNumber: 'SN123' }, getPath: '/api/v1/meters/readings' },
-    { name: 'Meter readings', method: 'post', path: '/api/v1/meters/readings/bulk', body: { readings: [] }, getPath: '/api/v1/meters/readings' },
-    { name: 'Billing cycles', method: 'post', path: '/api/v1/billing-cycles', body: { month: 8, year: 2026, startDate: '2026-08-01', endDate: '2026-08-31', dueDate: '2026-09-05' }, getPath: '/api/v1/billing-cycles' },
-    { name: 'Bills', method: 'post', path: '/api/v1/bills/generate', body: { billingCycleId: crypto.randomUUID() }, getPath: '/api/v1/bills' },
-    { name: 'Payments', method: 'post', path: '/api/v1/payments/cash', body: { billId: '', totalAmount: 3000 }, getPath: '/api/v1/payments' },
-    { name: 'Maintenance', method: 'post', path: '/api/v1/maintenance', body: { roomId: '', title: 'Pipe leak', description: 'Leaking pipe' }, getPath: '/api/v1/maintenance' },
-    { name: 'Announcements', method: 'post', path: '/api/v1/announcements', body: { title: 'Notice', content: 'Cleaning day' }, getPath: '/api/v1/announcements' },
-    { name: 'Move-out', method: 'post', path: '/api/v1/move-out/tenant-move-out-requests', body: { moveOutDate: '2026-08-31', reason: 'Moving' }, getPath: '/api/v1/move-out/tenant-move-out-requests' },
-    { name: 'Dormitory settings', method: 'patch', path: '/api/v1/dormitories/PLACEHOLDER_DORM_ID', body: { name: 'Updated Name' }, getPath: '/api/v1/dormitories/PLACEHOLDER_DORM_ID' },
+    {
+      name: 'Buildings',
+      method: 'post',
+      path: '/api/v1/properties/buildings',
+      body: { name: 'Building B' },
+      getPath: '/api/v1/properties/buildings',
+      expectedStatus: 201,
+    },
+    {
+      name: 'Rooms',
+      method: 'post',
+      path: '/api/v1/properties/rooms',
+      body: { roomNumber: 'B102', buildingId: 'PLACEHOLDER_BUILDING_ID', floor: 1, monthlyRent: '3000' },
+      getPath: '/api/v1/properties/rooms',
+      expectedStatus: 201,
+    },
+    {
+      name: 'Tenants',
+      method: 'post',
+      path: '/api/v1/tenants',
+      body: { firstName: 'New2', lastName: 'Tenant2', phone: '0898765432' },
+      getPath: '/api/v1/tenants',
+      expectedStatus: 201,
+    },
+    {
+      name: 'Occupancies',
+      method: 'post',
+      path: '/api/v1/occupancy/occ-dummy/move-out',
+      body: {},
+      getPath: '/api/v1/occupancy/summary',
+      expectedStatus: 400,
+    },
+    {
+      name: 'Contracts',
+      method: 'post',
+      path: '/api/v1/contracts',
+      body: { tenantId: 'PLACEHOLDER_TENANT_ID', roomId: 'PLACEHOLDER_ROOM_ID', startDate: '2026-01-01', endDate: '2026-12-31', rentAmount: '3000', depositAmount: '5000' },
+      getPath: '/api/v1/contracts',
+      expectedStatus: 201,
+    },
+    {
+      name: 'Meters',
+      method: 'post',
+      path: '/api/v1/meters/devices',
+      body: { roomId: 'PLACEHOLDER_ROOM_ID', type: 'electricity', meterNumber: 'SN123' },
+      getPath: '/api/v1/meters/readings',
+      expectedStatus: 201,
+    },
+    {
+      name: 'Meter readings',
+      method: 'post',
+      path: '/api/v1/meters/readings/bulk',
+      body: { billingCycleId: 'PLACEHOLDER_CYCLE_ID', readings: [{ roomId: 'PLACEHOLDER_ROOM_ID', meterType: 'electricity', previousReading: '0.00', currentReading: '120.00' }] },
+      getPath: '/api/v1/meters/readings',
+      expectedStatus: 400,
+    },
+    {
+      name: 'Billing cycles',
+      method: 'post',
+      path: '/api/v1/billing-cycles',
+      body: { cycleCode: 'CYC-10', name: 'October 2026', periodStart: '2026-10-01', periodEnd: '2026-10-31', billingDate: '2026-10-25', dueDate: '2026-11-05' },
+      getPath: '/api/v1/billing-cycles',
+      expectedStatus: 201,
+    },
+    {
+      name: 'Bills',
+      method: 'post',
+      path: '/api/v1/bills/generate',
+      body: { billingCycleId: 'PLACEHOLDER_CYCLE_ID' },
+      getPath: '/api/v1/bills',
+      expectedStatus: 400,
+    },
+    {
+      name: 'Payments',
+      method: 'post',
+      path: '/api/v1/payments/cash',
+      body: { billId: 'PLACEHOLDER_BILL_ID', amount: '3000' },
+      getPath: '/api/v1/payments',
+      expectedStatus: 200,
+    },
+    {
+      name: 'Maintenance',
+      method: 'post',
+      path: '/api/v1/maintenance-requests',
+      body: { tenantId: 'PLACEHOLDER_TENANT_ID', roomId: 'PLACEHOLDER_ROOM_ID', category: 'general', title: 'Pipe leak', description: 'Leaking pipe' },
+      getPath: '/api/v1/maintenance-requests',
+      expectedStatus: 201,
+    },
+    {
+      name: 'Announcements',
+      method: 'post',
+      path: '/api/v1/announcements',
+      body: { title: 'Notice', content: 'Cleaning day' },
+      getPath: '/api/v1/announcements',
+      expectedStatus: 201,
+    },
+    {
+      name: 'Move-out',
+      method: 'post',
+      path: '/api/v1/move-out/tenant-move-out-requests',
+      body: { moveOutDate: '2026-08-31', reason: 'Moving' },
+      getPath: '/api/v1/move-out/tenant-move-out-requests',
+      expectedStatus: 403,
+      expectedCode: 'DEFERRED_BY_PRODUCT_POLICY',
+    },
+    {
+      name: 'Dormitory settings',
+      method: 'patch',
+      path: '/api/v1/dormitories/PLACEHOLDER_DORM_ID',
+      body: { name: 'Updated Name' },
+      getPath: '/api/v1/dormitories/PLACEHOLDER_DORM_ID',
+      expectedStatus: 200,
+    },
   ];
 
   describe('14 Business Domains Matrix', () => {
@@ -244,10 +365,18 @@ describe('Wave 1F - Real-Session 14-Domain Route Audit Matrix', () => {
         const targetPath = spec.path.replace('PLACEHOLDER_DORM_ID', dormId);
         const targetGetPath = spec.getPath.replace('PLACEHOLDER_DORM_ID', dormId);
 
+        const bodyStr = JSON.stringify(spec.body)
+          .replace(/PLACEHOLDER_BUILDING_ID/g, buildingId)
+          .replace(/PLACEHOLDER_ROOM_ID/g, roomId)
+          .replace(/PLACEHOLDER_TENANT_ID/g, tenantRecordId)
+          .replace(/PLACEHOLDER_CYCLE_ID/g, cycleId)
+          .replace(/PLACEHOLDER_BILL_ID/g, billId);
+        const targetBody = JSON.parse(bodyStr);
+
         // 1. Anonymous -> 401
         const anonRes = await (request(app) as any)[spec.method](targetPath)
           .set('x-dormitory-id', dormId)
-          .send(spec.body);
+          .send(targetBody);
         expect(anonRes.status).toBe(401);
 
         // 2. Limited staff without write permission -> 403 FORBIDDEN
@@ -255,9 +384,9 @@ describe('Wave 1F - Real-Session 14-Domain Route Audit Matrix', () => {
           .set('Cookie', [`horplus_session=${limitedSessionCookie}`, `horplus_csrf=${limitedCsrfToken}`])
           .set('x-csrf-token', limitedCsrfToken)
           .set('x-dormitory-id', dormId)
-          .send(spec.body);
+          .send(targetBody);
         expect(forbiddenRes.status).toBe(403);
-        expect(forbiddenRes.body.error?.code || forbiddenRes.body.code).toMatch(/FORBIDDEN|PERMISSION_DENIED|CSRF/);
+        expect(forbiddenRes.body.error?.code || forbiddenRes.body.errorCode || forbiddenRes.body.code).toMatch(/FORBIDDEN|PERMISSION_DENIED|CSRF/);
 
         // 3. Owner + Expired Subscription -> 403 SUBSCRIPTION_READ_ONLY
         await prisma.dormitorySubscription.update({
@@ -269,7 +398,7 @@ describe('Wave 1F - Real-Session 14-Domain Route Audit Matrix', () => {
           .set('Cookie', [`horplus_session=${ownerSessionCookie}`, `horplus_csrf=${ownerCsrfToken}`])
           .set('x-csrf-token', ownerCsrfToken)
           .set('x-dormitory-id', dormId)
-          .send(spec.body);
+          .send(targetBody);
         expect(expiredRes.status).toBe(403);
         expect(expiredRes.body.errorCode || expiredRes.body.error?.code).toBe('SUBSCRIPTION_READ_ONLY');
 
@@ -281,7 +410,7 @@ describe('Wave 1F - Real-Session 14-Domain Route Audit Matrix', () => {
           .set('x-dormitory-id', dormId);
         expect(expiredGetRes.status).toBe(200);
 
-        // 5. Restore Active Subscription & test Owner mutation -> Reaches Handler (200, 201, or 400 validation error, NEVER 500!)
+        // 5. Restore Active Subscription & test Owner mutation -> Exact Expected Status & Code
         await prisma.dormitorySubscription.update({
           where: { dormitoryId: dormId },
           data: { status: 'ACTIVE', expiresAt: new Date(Date.now() + 30 * 86400 * 1000) },
@@ -291,25 +420,31 @@ describe('Wave 1F - Real-Session 14-Domain Route Audit Matrix', () => {
           .set('Cookie', [`horplus_session=${ownerSessionCookie}`, `horplus_csrf=${ownerCsrfToken}`])
           .set('x-csrf-token', ownerCsrfToken)
           .set('x-dormitory-id', dormId)
-          .send(spec.body);
-        expect([200, 201, 400, 403, 404, 409]).toContain(activeRes.status);
-        expect(activeRes.status).not.toBe(500);
+          .send(targetBody);
+        expect(activeRes.status).toBe(spec.expectedStatus);
+        if (spec.expectedCode) {
+          expect(activeRes.body.errorCode || activeRes.body.error?.code || activeRes.body.code).toBe(spec.expectedCode);
+        }
       });
     });
   });
 
   describe('Payment Domain Specific Cases', () => {
-    it('Tenant upload intent with active Subscription -> Reaches Handler (200/201/400)', async () => {
+    it('Tenant upload intent with active Subscription -> exact 200 and DB record created', async () => {
       const res = await request(app)
         .post('/api/v1/payments/slip/intent')
         .set('Cookie', [`horplus_session=${tenantSessionCookie}`, `horplus_csrf=${tenantCsrfToken}`])
         .set('x-csrf-token', tenantCsrfToken)
         .set('x-dormitory-id', dormId)
-        .send({ billId });
+        .send({ billId, fileName: 'slip.png', mimeType: 'image/png', fileSize: 102400 });
 
-      expect([200, 201, 400, 404]).toContain(res.status);
-      expect(res.status).not.toBe(500);
-      expect(res.status).not.toBe(403);
+      expect(res.status).toBe(200);
+      const createdIntent = await prisma.paymentUploadIntent.findFirst({
+        where: { billId, tenantId: tenantRecordId },
+      });
+      expect(createdIntent).toBeDefined();
+      expect(createdIntent?.authenticatedUserId).toBe(tenantUserId);
+      expect(createdIntent?.dormitoryId).toBe(dormId);
     });
 
     it('Tenant upload intent with expired Subscription -> 403 SUBSCRIPTION_READ_ONLY', async () => {
@@ -323,7 +458,7 @@ describe('Wave 1F - Real-Session 14-Domain Route Audit Matrix', () => {
         .set('Cookie', [`horplus_session=${tenantSessionCookie}`, `horplus_csrf=${tenantCsrfToken}`])
         .set('x-csrf-token', tenantCsrfToken)
         .set('x-dormitory-id', dormId)
-        .send({ billId });
+        .send({ billId, fileName: 'slip.png', mimeType: 'image/png', fileSize: 102400 });
 
       expect(res.status).toBe(403);
       expect(res.body.errorCode || res.body.error?.code).toBe('SUBSCRIPTION_READ_ONLY');
@@ -335,9 +470,43 @@ describe('Wave 1F - Real-Session 14-Domain Route Audit Matrix', () => {
         .set('Cookie', [`horplus_session=${managerSessionCookie}`, `horplus_csrf=${managerCsrfToken}`])
         .set('x-csrf-token', managerCsrfToken)
         .set('x-dormitory-id', dormId)
+        .send({ billId, amount: '3000' });
+
+      expect(res.status).toBe(403);
+      expect(res.body.errorCode || res.body.error?.code || res.body.code).toBe('FORBIDDEN');
+    });
+
+    it('Manager with payment:write + active Subscription -> exact 200', async () => {
+      await prisma.dormitorySubscription.update({
+        where: { dormitoryId: dormId },
+        data: { status: 'ACTIVE', expiresAt: new Date(Date.now() + 30 * 86400 * 1000) },
+      });
+
+      const res = await request(app)
+        .post('/api/v1/payments/cash')
+        .set('Cookie', [`horplus_session=${managerWithPaySessionCookie}`, `horplus_csrf=${managerWithPayCsrfToken}`])
+        .set('x-csrf-token', managerWithPayCsrfToken)
+        .set('x-dormitory-id', dormId)
+        .send({ billId, amount: '3000' });
+
+      expect(res.status).toBe(200);
+    });
+
+    it('Manager with payment:write + expired Subscription -> exact 403 SUBSCRIPTION_READ_ONLY', async () => {
+      await prisma.dormitorySubscription.update({
+        where: { dormitoryId: dormId },
+        data: { status: 'EXPIRED', expiresAt: new Date(Date.now() - 86400 * 1000) },
+      });
+
+      const res = await request(app)
+        .post('/api/v1/payments/cash')
+        .set('Cookie', [`horplus_session=${managerWithPaySessionCookie}`, `horplus_csrf=${managerWithPayCsrfToken}`])
+        .set('x-csrf-token', managerWithPayCsrfToken)
+        .set('x-dormitory-id', dormId)
         .send({ billId, totalAmount: 3000 });
 
       expect(res.status).toBe(403);
+      expect(res.body.errorCode || res.body.error?.code).toBe('SUBSCRIPTION_READ_ONLY');
     });
 
     it('Cross-Dormitory Bill/Payment denial -> 403 FORBIDDEN', async () => {

@@ -123,8 +123,26 @@ describe('Wave 1F - Owner Onboarding Transaction & Atomicity Rollback Proof', ()
   it('proves atomic PostgreSQL rollback on transaction dependency failure', async () => {
     const timestamp = Date.now();
 
-    const initialDormCount = await prisma.dormitory.count({ where: { createdByUserId: userId } });
-    const initialMemberCount = await prisma.dormitoryMember.count({ where: { userId } });
+    async function getEntityCountsForUser(uId: string) {
+      const dorms = await prisma.dormitory.findMany({ where: { createdByUserId: uId }, select: { id: true } });
+      const dormIds = dorms.map((d) => d.id);
+      const subs = await prisma.dormitorySubscription.findMany({ where: { dormitoryId: { in: dormIds } }, select: { id: true } });
+      const subIds = subs.map((s) => s.id);
+
+      return {
+        dormitory: dorms.length,
+        dormitoryMember: await prisma.dormitoryMember.count({ where: { userId: uId } }),
+        dormitorySubscription: subs.length,
+        subscriptionStatusHistory: await prisma.subscriptionStatusHistory.count({ where: { subscriptionId: { in: subIds } } }),
+        platformSubscription: await prisma.platformSubscription.count({ where: { dormitoryId: { in: dormIds } } }),
+        platformPromoCode: await prisma.platformPromoCode.count({ where: { code: `PROMO-${uId}` } }),
+        building: await prisma.building.count({ where: { dormitoryId: { in: dormIds } } }),
+        room: await prisma.room.count({ where: { dormitoryId: { in: dormIds } } }),
+      };
+    }
+
+    // 1. Capture BEFORE counts for ALL 8 entities in PostgreSQL
+    const initialCounts = await getEntityCountsForUser(userId);
 
     const service = new DormitoryProvisioningService(
       new PrismaDormitoryRepository(prisma),
@@ -144,7 +162,7 @@ describe('Wave 1F - Owner Onboarding Transaction & Atomicity Rollback Proof', ()
       prisma
     );
 
-    // Inject a controlled dependency failure inside the transaction
+    // Inject a controlled dependency failure inside the transaction boundary
     const spy = vi.spyOn(subscriptionEntitlementService, 'provisionInitialTrial').mockImplementationOnce(async () => {
       throw new Error('SIMULATED_TRANSACTION_FAILURE: Subscription creation failed inside transaction');
     });
@@ -161,16 +179,21 @@ describe('Wave 1F - Owner Onboarding Transaction & Atomicity Rollback Proof', ()
           postalCode: '10220',
           estimatedRoomCount: 5,
         },
+        buildings: [
+          { id: 'temp-bld-rollback', name: 'Building Fail', floorsCount: 1 },
+        ],
+        rooms: [
+          { buildingId: 'temp-bld-rollback', roomNumber: '999', floor: 1, monthlyRent: 3000 },
+        ],
       })
     ).rejects.toThrow('SIMULATED_TRANSACTION_FAILURE');
 
     spy.mockRestore();
 
-    // Verify 100% UNCHANGED entity counts for this user after atomic PostgreSQL rollback
-    const finalDormCount = await prisma.dormitory.count({ where: { createdByUserId: userId } });
-    const finalMemberCount = await prisma.dormitoryMember.count({ where: { userId } });
+    // 2. Capture AFTER counts for ALL 8 entities in PostgreSQL
+    const finalCounts = await getEntityCountsForUser(userId);
 
-    expect(finalDormCount).toBe(initialDormCount); // 0 === 0
-    expect(finalMemberCount).toBe(initialMemberCount); // 0 === 0
+    // 3. Require EVERY count to remain 100% UNCHANGED after atomic PostgreSQL rollback
+    expect(finalCounts).toEqual(initialCounts);
   });
 });
