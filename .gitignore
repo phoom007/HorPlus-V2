@@ -29,8 +29,9 @@ docs/execution-reports/
 docs/graphify-validation/
 docs/production-blueprint/
 graphify-out/
-e2e-tests/
-tests/
+# tests/
+!server/tests/
+!tests/
 server/assets/
 *.log
 *.txt
@@ -45,3 +46,4 @@ query.sql
 start
 test-Checkslip.jpg
 untracked.list
+server/uploads/

@@ -65,6 +65,7 @@ import {
 } from '../components/GlobalComponents';
 
 import { Tenant, Room, Bill, Contract, MaintenanceRequest as RepairRequest, Announcement, Dormitory, BillItem, Building, formatItemDescription } from '../types';
+import { getContracts, getMaintenance, getAnnouncements, getBuildings } from '../data/mockData';
 
 const getBankBadgeInfo = (bankName: string) => {
   const name = bankName || 'กสิกรไทย (KBank)';
@@ -225,6 +226,8 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
   // Data layers
   const [rooms, setRooms] = useState<Room[]>([]);
   const [bills, setBills] = useState<Bill[]>([]);
+  const [financialLoading, setFinancialLoading] = useState<boolean>(true);
+  const [financialError, setFinancialError] = useState<string | null>(null);
   const [contracts, setContracts] = useState<Contract[]>([]);
   const [repairs, setRepairs] = useState<RepairRequest[]>([]);
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
@@ -239,6 +242,8 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
   const [coOccupantsError, setCoOccupantsError] = useState('');
   const [deleteConfirmCoId, setDeleteConfirmCoId] = useState<string | null>(null);
   const [toast, setToast] = useState<{ type: 'success' | 'error'; title: string; message: string; visible: boolean } | null>(null);
+  const [slipFile, setSlipFile] = useState<File | null>(null);
+  const [isSubmittingSlip, setIsSubmittingSlip] = useState(false);
 
   // Move-out request state
   const [isMoveOutModalOpen, setIsMoveOutModalOpen] = useState(false);
@@ -297,13 +302,69 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
 
   const dormInfo: any = {};
 
-  const refreshData = () => {
-    setRooms([]);
-    setBills([]);
-    setContracts([]);
-    setRepairs([] as any);
-    setAnnouncements([]);
-    setBuildings([]);
+  const refreshData = async () => {
+    setFinancialLoading(true);
+    setFinancialError(null);
+
+    try {
+      const profileRes = await fetch('/api/v1/tenant-portal/profile');
+      if (profileRes.ok) {
+        const profile = await profileRes.json();
+        if (profile.room) {
+           setRooms([{
+             id: profile.room.id,
+             roomNumber: profile.room.roomNumber,
+             buildingId: profile.room.buildingId,
+             currentTenantId: profile.id
+           } as any]);
+        } else {
+           setRooms([]);
+        }
+      } else {
+        setRooms([]);
+        setFinancialError('ไม่สามารถโหลดข้อมูลผู้เช่าจากระบบได้');
+        console.error('[TenantPortal] Technical error loading profile status:', profileRes.status);
+      }
+    } catch(e: any) {
+      setRooms([]);
+      setFinancialError('ไม่สามารถเชื่อมต่อระบบเพื่อดึงข้อมูลผู้เช่าได้');
+      console.error('[TenantPortal] Technical error loading profile:', e?.message || 'Network error');
+    }
+
+    setContracts(getContracts());
+    setRepairs(getMaintenance() as any);
+    setAnnouncements(getAnnouncements());
+    setBuildings(getBuildings());
+
+    try {
+      const res = await fetch('/api/v1/tenant-portal/bills');
+      if (res.ok) {
+        const json = await res.json();
+        if (json.data) {
+          const rawBills = Array.isArray(json.data) ? json.data : (json.data.bills || []);
+          const formatted = rawBills.map((b: any) => ({
+            ...b,
+            totalAmount: Number(b.totalAmount),
+            paidAmount: Number(b.paidAmount),
+            outstandingAmount: Number(b.outstandingAmount),
+            items: (b.items || []).map((i: any) => ({ ...i, amount: Number(i.amount) }))
+          }));
+          setBills(formatted);
+        } else {
+          setBills([]);
+        }
+      } else {
+        setBills([]);
+        setFinancialError('ไม่สามารถโหลดข้อมูลบิลจากระบบได้');
+        console.error('[TenantPortal] Technical error loading bills status:', res.status);
+      }
+    } catch (err: any) {
+      setBills([]);
+      setFinancialError('ไม่สามารถเชื่อมต่อระบบเพื่อดึงข้อมูลบิลได้');
+      console.error('[TenantPortal] Technical error loading bills:', err?.message || 'Network error');
+    } finally {
+      setFinancialLoading(false);
+    }
   };
 
   useEffect(() => {
@@ -312,9 +373,12 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
   }, [tenant]);
 
   useEffect(() => {
-    const hasAssignedRoom = rooms.some(r => r.currentTenantId === tenant.id);
-    setDemoHasRoom(hasAssignedRoom);
-  }, [tenant.id, rooms]);
+    if (rooms.length > 0) {
+      setDemoHasRoom(true);
+    } else if (!financialLoading) {
+      setDemoHasRoom(rooms.some(r => r.currentTenantId === tenant.id));
+    }
+  }, [tenant.id, rooms, financialLoading]);
 
   const handleOpenCoOccupantsModal = () => {
     setEditCoOccupants([...localTenant.coOccupants]);
@@ -390,7 +454,9 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
   const tenantRoom = rooms.find(r => r.currentTenantId === tenant.id);
   const tenantBills = [...bills]
     .filter(b => b.tenantId === tenant.id && b.status !== 'draft')
-    .sort((a, b) => b.cycleId.localeCompare(a.cycleId) || b.createdAt.localeCompare(a.createdAt));
+    .sort((a, b) => b.cycleId.localeCompare(a.cycleId) || b.createdAt.localeCompare(a.createdAt)); 
+ console.log('BILLS RAW IN LOCALSTORAGE:', localStorage.getItem('HorPlus_bills'));
+  console.log('bills.length', bills.length, 'tenantBills.length', tenantBills.length, 'tenant.id', tenant.id);
   const tenantRepairs = repairs.filter(r => r.roomId === tenantRoom?.id || r.tenantId === tenant.id);
   const tenantContracts = contracts.filter(c => c.tenantId === tenant.id);
   
@@ -451,7 +517,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
   });
 
   // Active Unpaid Bill
-  const activeUnpaidBill = tenantBills.find(b => b.status === 'pending' || b.status === 'overdue' || b.status === 'rejected');
+  const activeUnpaidBill = tenantBills.find(b => ['pending', 'overdue', 'rejected', 'PENDING', 'OVERDUE', 'REJECTED'].includes(b.status));
   const activeUnpaidAmount = activeUnpaidBill ? activeUnpaidBill.totalAmount : 0;
 
   // Invoice Details sub-view states
@@ -550,7 +616,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
         return;
       }
       if (docType === 'receipt' && docId) {
-        window.open(`/api/v1/tenant-portal/receipts/${docId}/pdf`, '_blank');
+        window.open(`/api/v1/receipts/${docId}/html`, '_blank');
         showToast('success', 'ดาวน์โหลดสำเร็จ', `กำลังดาวน์โหลดเอกสาร ${title} (PDF)...`);
         return;
       }
@@ -654,72 +720,6 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
     navigator.clipboard.writeText(rawNumber);
   };
 
-  // Simulated uploader event handlers (Supports Click + Drag & Drop)
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      const file = e.target.files[0];
-      const sizeMB = (file.size / (1024 * 1024)).toFixed(2);
-      console.log({
-        name: file.name,
-        size: `${sizeMB} MB`
-      });
-      
-
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        const rawUrl = reader.result as string;
-        compressImage(rawUrl).then(compressedUrl => {
-          
-        }).catch(() => {
-          
-        });
-      };
-      reader.readAsDataURL(file);
-    }
-  };
-
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-  };
-
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      const file = e.dataTransfer.files[0];
-      const sizeMB = (file.size / (1024 * 1024)).toFixed(2);
-      console.log({
-        name: file.name,
-        size: `${sizeMB} MB`
-      });
-      
-
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        const rawUrl = reader.result as string;
-        compressImage(rawUrl).then(compressedUrl => {
-          
-        }).catch(() => {
-          
-        });
-      };
-      reader.readAsDataURL(file);
-    }
-  };
-
-  const triggerFileSelect = () => {
-    if (false) {
-      console.log();
-    }
-  };
-
-  const handleRemoveFile = () => {
-    
-    
-    if (false) {
-      // noop
-    }
-  };
-
   const handleRepairFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
@@ -809,18 +809,102 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
     </div>
   );
 
+  const getCsrfToken = () => {
+    const match = document.cookie.match(/(?:csrf-token|horplus_csrf)=([^;]+)/);
+    return match ? decodeURIComponent(match[1]) : (window as any).__CSRF_TOKEN || '';
+  };
+
+  const handleSubmitPaymentSlip = async () => {
+    console.log('handleSubmitPaymentSlip ENTRY:', { hasSlipFile: !!slipFile, slipFileName: slipFile?.name, hasActiveUnpaidBill: !!activeUnpaidBill, activeUnpaidBillId: activeUnpaidBill?.id });
+    if (!slipFile || !activeUnpaidBill) {
+      console.warn('Early return from handleSubmitPaymentSlip because:', { slipFile: !!slipFile, activeUnpaidBill: !!activeUnpaidBill });
+      return;
+    }
+    setIsSubmittingSlip(true);
+    try {
+      const csrf = getCsrfToken();
+      console.log('handleSubmitPaymentSlip: localTenant.dormitoryId:', localTenant.dormitoryId, 'billId:', activeUnpaidBill.id, 'file:', slipFile.name, slipFile.type, slipFile.size, 'csrf:', csrf);
+      const intentRes = await fetch('/api/v1/payments/slip/intent', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-csrf-token': csrf },
+        body: JSON.stringify({
+          dormitoryId: localTenant.dormitoryId,
+          billId: activeUnpaidBill.id,
+          fileName: slipFile.name,
+          mimeType: slipFile.type || 'image/jpeg',
+          fileSize: slipFile.size
+        })
+      });
+      if (!intentRes.ok) {
+        const errText = await intentRes.text();
+        console.error('Intent request failed:', intentRes.status, errText);
+        throw new Error(errText);
+      }
+      const intent = await intentRes.json();
+      console.log('Intent created successfully:', intent);
+
+      const formData = new FormData();
+      formData.append('file', slipFile);
+      const uploadRes = await fetch(intent.uploadUrl, {
+        method: 'POST',
+        headers: { 'x-csrf-token': csrf },
+        body: formData
+      });
+      if (!uploadRes.ok) {
+        const errText = await uploadRes.text();
+        console.error('Upload request failed:', uploadRes.status, errText);
+        throw new Error(errText);
+      }
+      console.log('File uploaded successfully');
+
+      const submitRes = await fetch('/api/v1/payments/slip/submit', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-csrf-token': csrf,
+          'x-idempotency-key': crypto.randomUUID()
+        },
+        body: JSON.stringify({
+          dormitoryId: localTenant.dormitoryId,
+          billId: activeUnpaidBill.id,
+          amount: activeUnpaidBill.totalAmount.toString(),
+          paymentDate: new Date().toISOString(),
+          intentId: intent.intentId
+        })
+      });
+      if (!submitRes.ok) {
+        const errText = await submitRes.text();
+        console.error('Submit request failed:', submitRes.status, errText);
+        throw new Error(errText);
+      }
+      console.log('Payment submitted successfully');
+
+      setSubView(null);
+      setSlipFile(null);
+      setToast({ type: 'success', title: 'ส่งหลักฐานสำเร็จ', message: 'กำลังรอการตรวจสอบจากเจ้าของหอพัก', visible: true });
+      setTimeout(() => setToast(null), 4000);
+      refreshData();
+    } catch(err: any) {
+      console.error('Catch error in handleSubmitPaymentSlip:', err);
+      let msg = err.message || '';
+      if (msg.includes('DUPLICATE_PAYMENT_EVIDENCE')) {
+        msg = 'รูปสลิปนี้เคยถูกส่งเข้าระบบแล้ว (ห้ามใช้สลิปซ้ำ)';
+      } else if (msg.includes('ACTIVE_REVIEW_EXISTS')) {
+        msg = 'มีรายการชำระเงินที่อยู่ระหว่างการตรวจสอบอยู่แล้ว';
+      }
+      setToast({ type: 'error', title: 'ไม่สามารถส่งหลักฐานได้', message: msg, visible: true });
+      setTimeout(() => setToast(null), 4000);
+    } finally {
+      setIsSubmittingSlip(false);
+    }
+  };
+
   return (
     <div className="h-screen w-full bg-slate-100 flex justify-center overflow-hidden">
       
       {/* Main Container */}
       <div className="bg-slate-50 w-full max-w-md h-full flex flex-col font-sans text-xs relative select-none shadow-md border-x border-slate-200">
         
-        {/* Prototype Disclosure Banner */}
-        <div className="bg-amber-500/10 border-b border-amber-200/50 px-3 py-1.5 text-center text-[10px] font-medium text-amber-900 flex items-center justify-center gap-1.5 shrink-0">
-          <Sparkles className="w-3 h-3 text-amber-600 shrink-0" />
-          <span><strong>เวอร์ชันสาธิต (Prototype)</strong> — ข้อมูลใน Browser และสลิปจำลอง</span>
-        </div>
-
         {/* Main scrollable body area */}
         <div className="flex-1 overflow-y-auto pb-16 bg-slate-50/50">
             
@@ -840,7 +924,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
             )}
 
             {/* MAIN PORTAL ROOT NAVIGATION */}
-            {false && (
+            {subView === null && (
               <>
                 {/* 1. HOME TAB */}
                 {activeTab === 'home' && (
@@ -886,11 +970,23 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                                 <span>ยอดค้างชำระ</span>
                               </div>
                               <h2 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight leading-none pt-1">
-                                ฿ {activeUnpaidBill ? activeUnpaidBill.totalAmount.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '18,368.00'}
+                                ฿ {activeUnpaidBill ? Number(activeUnpaidBill.totalAmount).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00'}
                               </h2>
                               <p className="text-[10px] sm:text-xs text-slate-500 font-medium pt-1">
-                                กำหนดชำระภายใน: <span className="font-extrabold text-slate-700">{activeUnpaidBill ? formatToBeDate(activeUnpaidBill.dueDate) : '30 ก.ค. 2569'}</span>
+                                กำหนดชำระภายใน: <span className="font-extrabold text-slate-700">{activeUnpaidBill ? formatToBeDate(activeUnpaidBill.dueDate) : '-'}</span>
                               </p>
+                              {financialError && (
+                                <div className="bg-rose-50 border border-rose-200 rounded-xl p-2.5 text-xs text-rose-700 flex items-center justify-between mt-2">
+                                  <span>{financialError}</span>
+                                  <button 
+                                    type="button" 
+                                    onClick={() => refreshData()}
+                                    className="px-2 py-1 bg-rose-600 text-white font-bold rounded-lg hover:bg-rose-700 text-[10px]"
+                                  >
+                                    ลองใหม่
+                                  </button>
+                                </div>
+                              )}
                             </div>
                             <span className="px-3 py-1 rounded-full text-[10px] font-black bg-amber-50 border border-amber-200/90 text-amber-800 shrink-0 shadow-2xs">
                               รอชำระ
@@ -903,7 +999,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                             className="bg-indigo-600 hover:bg-indigo-700 text-white font-black py-3 px-4 rounded-xl w-full text-center transition-all text-xs shadow-md flex items-center justify-center gap-2 cursor-pointer active:scale-98"
                           >
                             <CreditCard className="w-4 h-4 text-indigo-200" />
-                            <span>ดูรายละเอียด</span>
+                            <span>ชำระเงิน</span>
                           </button>
                         </div>
                       ) : (
@@ -1271,6 +1367,11 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                             <div className="mt-2.5">
                               <StatusBadge status={b.status} type="bill" />
                             </div>
+                            {b.Payment && b.Payment.find((p: any) => p.status === 'REJECTED') && (
+                              <div className="mt-2 text-[9px] text-red-600 font-bold p-2 bg-red-50 rounded-lg border border-red-100">
+                                แจ้งปฏิเสธ: {b.Payment.find((p: any) => p.status === 'REJECTED')?.rejectedReason || 'โปรดตรวจสอบข้อมูลการชำระเงินและแจ้งโอนใหม่'}
+                              </div>
+                            )}
                           </div>
 
                           <div className="shrink-0">
@@ -1402,7 +1503,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
             {subView !== null && (
               <>
                 {/* A. SUBVIEW: ใบแจ้งหนี้ (IMAGE 8) */}
-                {false && (
+                {subView === 'invoice' && (
                   <div className="flex flex-col h-full bg-slate-50">
                     {renderSubViewHeader('ใบแจ้งหนี้', <Calendar className="w-5 h-5 text-slate-400" />)}
                     
@@ -1435,7 +1536,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                               <div>
                                 <span className="text-[9px] text-slate-400 font-bold block">ค่าใช้จ่ายเดือน {formatToBeFullDate(activeUnpaidBill.createdAt)}</span>
                                 <h2 className="text-xl font-black text-slate-900 mt-1 leading-none">
-                                  ฿ {activeUnpaidBill.totalAmount.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                  ฿ {Number(activeUnpaidBill.totalAmount).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                                 </h2>
                                 <span className="text-[9px] text-slate-400 block mt-2">กำหนดชำระ: {formatToBeDate(activeUnpaidBill.dueDate)}</span>
                               </div>
@@ -1455,7 +1556,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                               
                               <div className="border-t border-slate-100 pt-3 flex justify-between items-center text-[11px] font-black text-indigo-600">
                                 <span>ยอดรวมทั้งสิ้น</span>
-                                <span>฿ {activeUnpaidBill.totalAmount.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                <span>฿ {Number(activeUnpaidBill.totalAmount).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                               </div>
                             </div>
                           </div>
@@ -1495,18 +1596,90 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                     {invoiceTab === 'current' && activeUnpaidBill && (
                       <div className="sticky bottom-[56px] p-4 bg-white/95 backdrop-blur-md border-t border-gray-100 mt-auto z-10">
                         <button
-                          onClick={() => setSubView('invoice')}
+                          type="button"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            console.log('notifyPayBtn CLICKED, setting subView to payment');
+                            setSubView('payment');
+                          }}
                           className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs rounded-xl flex items-center justify-center gap-2 shadow-xs transition-colors"
                         >
-                          ดูรายละเอียด
+                          แจ้งชำระเงิน
                         </button>
                       </div>
                     )}
                   </div>
                 )}
 
+                
+                {/* B. SUBVIEW: แจ้งชำระเงิน (IMAGE 9) */}
+                {subView === 'payment' && activeUnpaidBill && (
+                  <div className="flex flex-col h-full bg-slate-50 relative">
+                    {renderSubViewHeader('แจ้งชำระเงิน', <DollarSign className="w-5 h-5 text-slate-400" />)}
+                    
+                    <div className="p-4 space-y-4 pb-24 overflow-y-auto">
+                      <div className="bg-white rounded-3xl p-5 border border-slate-100 shadow-xs space-y-4">
+                        <div className="text-center">
+                          <p className="text-[10px] text-slate-500 font-bold mb-1">ยอดชำระทั้งหมด</p>
+                          <h2 className="text-2xl font-black text-indigo-600">
+                            ฿ {Number(activeUnpaidBill.totalAmount).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          </h2>
+                          <p className="text-[9px] text-slate-400 mt-1">
+                            ชำระภายใน {formatToBeDate(activeUnpaidBill.dueDate)}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="bg-white rounded-3xl p-5 border border-slate-100 shadow-xs space-y-4">
+                        <h3 className="font-extrabold text-slate-800 text-[11px] mb-3">บัญชีโอนเงิน</h3>
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 font-bold">
+                            BBL
+                          </div>
+                          <div>
+                            <p className="text-[10px] font-bold text-slate-800">ธนาคารกรุงเทพ</p>
+                            <p className="text-sm font-black text-slate-700">123-4-56789-0</p>
+                            <p className="text-[9px] text-slate-500">บจก. หอพักดีเลิศ</p>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="space-y-2">
+                        <h3 className="font-extrabold text-slate-800 text-[11px] px-1">หลักฐานการโอนเงิน (สลิป)</h3>
+                        <label className="border-2 border-dashed border-indigo-200 hover:border-indigo-400 hover:bg-indigo-50/30 transition-all rounded-3xl p-6 text-center flex flex-col items-center justify-center cursor-pointer gap-2 bg-white">
+                          <div className="p-3 bg-indigo-50 rounded-full text-indigo-500">
+                            <Upload className="w-6 h-6 stroke-[2]" />
+                          </div>
+                          <div>
+                            <p className="text-indigo-600 text-xs font-bold">{slipFile ? slipFile.name : 'อัปโหลดรูปสลิปโอนเงิน'}</p>
+  <p className="text-slate-400 text-[9px] font-medium mt-0.5">{slipFile ? 'คลิกเพื่อเปลี่ยนไฟล์' : 'รองรับ JPG, PNG ขนาดไม่เกิน 5MB'}</p>
+                          </div>
+                          <input type="file" className="hidden" accept="image/*" onChange={(e) => {
+                            if (e.target.files && e.target.files[0]) {
+                              const file = e.target.files[0];
+                              setSlipFile(file);
+                              setToast({ type: 'success', title: 'อัปโหลดสำเร็จ', message: 'รูปสลิปถูกเตรียมพร้อมส่งแล้ว', visible: true });
+                              setTimeout(() => setToast(null), 3000);
+                            }
+                          }} />
+                        </label>
+                      </div>
+                    </div>
+
+                    <div className="absolute bottom-0 left-0 right-0 p-4 bg-white/95 backdrop-blur-md border-t border-gray-100 z-10">
+                      <button
+    onClick={handleSubmitPaymentSlip}
+    disabled={!slipFile || isSubmittingSlip}
+    className={`w-full py-3.5 text-white font-black text-xs rounded-xl shadow-lg transition-all active:scale-95 ${(!slipFile || isSubmittingSlip) ? 'bg-indigo-400 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-700 shadow-indigo-200'}`}
+  >
+    {isSubmittingSlip ? 'กำลังส่งข้อมูล...' : 'ส่งหลักฐาน'}
+  </button>
+                    </div>
+                  </div>
+                )}
+
                 {/* C. SUBVIEW: แจ้งซ่อมบำรุง (IMAGE 4 & 7) */}
-                {false && (
+                {subView === 'repairs' && (
                   <div className="flex flex-col h-full bg-slate-50 relative">
                     {renderSubViewHeader(
                       'แจ้งซ่อมบำรุง', 
@@ -1878,7 +2051,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                 )}
 
                 {/* G. SUBVIEW: ลงทะเบียนผู้เช่า (REGISTER) */}
-                {false && (
+                {subView === 'register' && (
                   <TenantRegisterView
                     onBack={() => setSubView(null)}
                     onSuccess={(registeredTenant) => {

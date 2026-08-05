@@ -20,7 +20,11 @@ import { createBillingRouter } from './billing.routes.js';
 import { moveOutRouter } from './move-out.routes.js';
 import { createMaintenanceRouter } from './maintenance.routes.js';
 import { createAnnouncementRouter } from './announcement.routes.js';
+import { createPaymentRouter } from './payment.routes.js';
+import { createReceiptRouter } from './receipt.routes.js';
+import { healthRouter } from './health.routes.js';
 import { createNotificationRouter, createTenantNotificationRouter } from './notification.routes.js';
+import { createTenantPortalRouter } from './tenant-portal.routes.js';
 import { BuildingService } from '../services/building.service.js';
 import { RoomService } from '../services/room.service.js';
 import { TenantService } from '../services/tenant.service.js';
@@ -67,6 +71,8 @@ export function createApiRouter(deps: AppApiDependencies | AuthenticationService
       status: 'foundation',
     });
   });
+
+  router.use('/health', healthRouter);
 
   router.use('/auth', createAuthRouter(authService));
   router.use('/', createUserRouter(authService));
@@ -122,8 +128,11 @@ export function createApiRouter(deps: AppApiDependencies | AuthenticationService
     router.use('/', moveOutRouter);
     router.use('/maintenance-requests', createMaintenanceRouter());
     router.use('/announcements', createAnnouncementRouter());
+    router.use('/payments', createPaymentRouter(fullDeps.authService));
+    router.use('/receipts', createReceiptRouter(fullDeps.authService));
     router.use('/notifications', createNotificationRouter());
     router.use('/tenant/notifications', createTenantNotificationRouter());
+    router.use('/tenant-portal', createTenantPortalRouter(fullDeps.authService));
   }
 
   return router;

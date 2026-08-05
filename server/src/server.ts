@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import http from 'http';
+import { cleanupService } from './services/cleanup.service.js';
 import { createApp } from './app.js';
 import { validateEnv, redactSecrets } from './config/env.js';
 import { logger } from './config/logger.js';
@@ -38,6 +39,9 @@ async function startServer() {
   const server = http.createServer(app);
 
   const host = process.env.HOST || '0.0.0.0';
+  // Start cleanup service
+  cleanupService.startHourly();
+
   server.listen(env.PORT, host, () => {
     logger.info({ port: env.PORT, host, environment: env.NODE_ENV }, `HorPlus API server listening on ${host}:${env.PORT}`);
   });

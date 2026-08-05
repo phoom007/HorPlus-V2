@@ -5,8 +5,9 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider          = "postgresql"
+  url               = env("DATABASE_URL")
+  shadowDatabaseUrl = env("SHADOW_DATABASE_URL")
 }
 
 // Foundation metadata table for initial migration baseline
@@ -32,8 +33,9 @@ model User {
   updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
   deletedAt       DateTime? @map("deleted_at") @db.Timestamptz()
 
-  memberships DormitoryMember[]
-  sessions    Session[]
+  memberships          DormitoryMember[]
+  sessions             Session[]
+  paymentUploadIntents PaymentUploadIntent[]
 
   @@map("users")
 }
@@ -83,6 +85,10 @@ model Dormitory {
   tenantRegistrationRequests TenantRegistrationRequest[]
   occupancies                Occupancy[]
   moveOutRequests            TenantMoveOutRequest[]
+  Payment                    Payment[]
+  Receipt                    Receipt[]
+  ReceiptSequence            ReceiptSequence[]
+  paymentUploadIntents       PaymentUploadIntent[]
 
   @@map("dormitories")
 }
@@ -365,14 +371,16 @@ model Tenant {
   updatedAt           DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
   deletedAt           DateTime? @map("deleted_at") @db.Timestamptz()
 
-  dormitory         Dormitory                @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
-  coOccupants       TenantCoOccupant[]
-  emergencyContacts TenantEmergencyContact[]
-  vehicles          TenantVehicle[]
-  contracts         Contract[]
-  bills             Bill[]
-  occupancies       Occupancy[]
-  moveOutRequests   TenantMoveOutRequest[]
+  dormitory            Dormitory              @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
+  coOccupants          TenantCoOccupant[]
+  emergencyContacts    TenantEmergencyContact[]
+  vehicles             TenantVehicle[]
+  contracts            Contract[]
+  bills                Bill[]
+  occupancies          Occupancy[]
+  moveOutRequests      TenantMoveOutRequest[]
+  Payment              Payment[]
+  paymentUploadIntents PaymentUploadIntent[]
 
   @@unique([dormitoryId, tenantNumber], name: "dormitory_tenant_number_unique")
   @@map("tenants")
@@ -635,6 +643,8 @@ model Bill {
   totalAmount        Decimal   @default(0.00) @map("total_amount") @db.Decimal(12, 2)
   paidAmount         Decimal   @default(0.00) @map("paid_amount") @db.Decimal(12, 2)
   outstandingAmount  Decimal   @default(0.00) @map("outstanding_amount") @db.Decimal(12, 2)
+  paidAt             DateTime? @map("paid_at") @db.Timestamptz()
+  previousStatus     String?   @map("previous_status") @db.VarChar(50)
   currency           String    @default("THB") @db.VarChar(10)
   rateSnapshotId     String?   @map("rate_snapshot_id") @db.Uuid
   generatedByUserId  String?   @map("generated_by_user_id") @db.Uuid
@@ -646,14 +656,17 @@ model Bill {
   createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz()
   updatedAt          DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
 
-  dormitory       Dormitory            @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
-  billingCycle    BillingCycle         @relation(fields: [billingCycleId], references: [id], onDelete: Cascade)
-  contract        Contract?            @relation(fields: [contractId], references: [id], onDelete: Restrict)
-  room            Room                 @relation(fields: [roomId], references: [id], onDelete: Restrict)
-  tenant          Tenant?              @relation(fields: [tenantId], references: [id], onDelete: Restrict)
-  rateSnapshot    BillingRateSnapshot? @relation(fields: [rateSnapshotId], references: [id], onDelete: SetNull)
-  items           BillItem[]
-  statusHistories BillStatusHistory[]
+  dormitory            Dormitory             @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
+  billingCycle         BillingCycle          @relation(fields: [billingCycleId], references: [id], onDelete: Cascade)
+  contract             Contract?             @relation(fields: [contractId], references: [id], onDelete: Restrict)
+  room                 Room                  @relation(fields: [roomId], references: [id], onDelete: Restrict)
+  tenant               Tenant?               @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  rateSnapshot         BillingRateSnapshot?  @relation(fields: [rateSnapshotId], references: [id], onDelete: SetNull)
+  items                BillItem[]
+  statusHistories      BillStatusHistory[]
+  Payment              Payment[]
+  Receipt              Receipt[]
+  paymentUploadIntents PaymentUploadIntent[]
 
   @@unique([dormitoryId, billNumber], name: "dormitory_bill_number_unique")
   @@map("bills")
@@ -780,4 +793,122 @@ model TenantMoveOutRequest {
   room      Room      @relation(fields: [roomId], references: [id], onDelete: Cascade)
 
   @@map("tenant_move_out_requests")
+}
+
+model Payment {
+  id               String    @id @default(uuid()) @db.Uuid
+  dormitoryId      String    @map("dormitory_id") @db.Uuid
+  billId           String    @map("bill_id") @db.Uuid
+  tenantId         String?   @map("tenant_id") @db.Uuid
+  method           String    @db.VarChar(50)
+  amount           Decimal   @db.Decimal(12, 2)
+  status           String    @default("PENDING") @db.VarChar(50)
+  paymentDate      DateTime  @map("payment_date") @db.Timestamptz()
+  evidenceUrl      String?   @map("evidence_url") @db.Text
+  fileHash         String?   @unique @map("file_hash") @db.VarChar(255)
+  reviewedByUserId String?   @map("reviewed_by_user_id") @db.Uuid
+  reviewedAt       DateTime? @map("reviewed_at") @db.Timestamptz()
+  rejectedReason   String?   @map("rejected_reason") @db.Text
+  reversedByUserId String?   @map("reversed_by_user_id") @db.Uuid
+  reversedAt       DateTime? @map("reversed_at") @db.Timestamptz()
+  reversalReason   String?   @map("reversal_reason") @db.Text
+  metadata         Json?
+  idempotencyKey   String?   @map("idempotency_key") @db.VarChar(100)
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt        DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
+
+  dormitory       Dormitory              @relation(fields: [dormitoryId], references: [id], onDelete: Restrict)
+  bill            Bill                   @relation(fields: [billId], references: [id], onDelete: Restrict)
+  tenant          Tenant?                @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  statusHistories PaymentStatusHistory[]
+  receipt         Receipt?
+
+  @@unique([idempotencyKey], name: "payment_idempotency_key_unique")
+  @@map("payments")
+}
+
+model PaymentStatusHistory {
+  id              String   @id @default(uuid()) @db.Uuid
+  dormitoryId     String   @map("dormitory_id") @db.Uuid
+  paymentId       String   @map("payment_id") @db.Uuid
+  fromStatus      String?  @map("from_status") @db.VarChar(50)
+  toStatus        String   @map("to_status") @db.VarChar(50)
+  reason          String?  @db.Text
+  changedByUserId String?  @map("changed_by_user_id") @db.Uuid
+  effectiveAt     DateTime @default(now()) @map("effective_at") @db.Timestamptz()
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  payment Payment @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+
+  @@map("payment_status_histories")
+}
+
+model Receipt {
+  id             String    @id @default(uuid()) @db.Uuid
+  dormitoryId    String    @map("dormitory_id") @db.Uuid
+  paymentId      String    @unique @map("payment_id") @db.Uuid
+  billId         String    @map("bill_id") @db.Uuid
+  receiptNumber  String    @map("receipt_number") @db.VarChar(100)
+  snapshotData   Json      @map("snapshot_data")
+  isVoided       Boolean   @default(false) @map("is_voided")
+  voidedAt       DateTime? @map("voided_at") @db.Timestamptz()
+  voidedByUserId String?   @map("voided_by_user_id") @db.Uuid
+  voidReason     String?   @map("void_reason") @db.Text
+  issuedAt       DateTime  @default(now()) @map("issued_at") @db.Timestamptz()
+  issuedByUserId String?   @map("issued_by_user_id") @db.Uuid
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
+
+  dormitory Dormitory @relation(fields: [dormitoryId], references: [id], onDelete: Restrict)
+  payment   Payment   @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  bill      Bill      @relation(fields: [billId], references: [id], onDelete: Restrict)
+
+  @@unique([dormitoryId, receiptNumber], name: "dormitory_receipt_number_unique")
+  @@map("receipts")
+}
+
+model ReceiptSequence {
+  id          String   @id @default(uuid()) @db.Uuid
+  dormitoryId String   @map("dormitory_id") @db.Uuid
+  yearMonth   String   @map("year_month") @db.VarChar(6)
+  lastValue   Int      @default(0) @map("last_value")
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz()
+
+  dormitory Dormitory @relation(fields: [dormitoryId], references: [id], onDelete: Restrict)
+
+  @@unique([dormitoryId, yearMonth], name: "dormitory_receipt_seq_unique")
+  @@map("receipt_sequences")
+}
+
+
+model PaymentUploadIntent {
+  id                  String    @id @default(uuid()) @db.Uuid
+  authenticatedUserId String    @map("authenticated_user_id") @db.Uuid
+  tenantId            String    @map("tenant_id") @db.Uuid
+  dormitoryId         String    @map("dormitory_id") @db.Uuid
+  billId              String    @map("bill_id") @db.Uuid
+  status              String    @default("CREATED") @db.VarChar(50)
+  expiresAt           DateTime  @map("expires_at") @db.Timestamptz()
+  expectedMimeType    String?   @map("expected_mime_type") @db.VarChar(100)
+  expectedSize        Int?      @map("expected_size")
+  verifiedMimeType    String?   @map("verified_mime_type") @db.VarChar(100)
+  verifiedSize        Int?      @map("verified_size")
+  objectKey           String?   @map("object_key") @db.Text
+  sha256              String?   @map("sha256") @db.VarChar(255)
+  uploadedAt          DateTime? @map("uploaded_at") @db.Timestamptz()
+  consumedAt          DateTime? @map("consumed_at") @db.Timestamptz()
+  createdAt           DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt           DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
+
+  authenticatedUser User      @relation(fields: [authenticatedUserId], references: [id], onDelete: Restrict)
+  tenant            Tenant    @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  dormitory         Dormitory @relation(fields: [dormitoryId], references: [id], onDelete: Restrict)
+  bill              Bill      @relation(fields: [billId], references: [id], onDelete: Restrict)
+
+  @@index([authenticatedUserId], name: "idx_intent_actor")
+  @@index([tenantId], name: "idx_intent_tenant")
+  @@index([dormitoryId], name: "idx_intent_dormitory")
+  @@index([billId], name: "idx_intent_bill")
+  @@index([status, expiresAt], name: "idx_intent_status_expires")
+  @@map("payment_upload_intents")
 }

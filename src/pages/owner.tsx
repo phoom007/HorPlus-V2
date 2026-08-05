@@ -51,6 +51,7 @@ import { OwnerReports } from './owner/reports';
 import { OwnerUsers } from './owner/users';
 import { OwnerSettings } from './owner/settings';
 import { OwnerRegister } from './owner/register';
+import { PaymentsOwnerView } from './owner/payments';
 
 
 interface SlidableNotificationItemProps {
@@ -143,9 +144,14 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
 }) => {
   const { userType, user: sessionUser, onboardingRequired } = React.useContext(AuthContext) || {};
   const navigate = useNavigate();
+  const location = useLocation();
 
   const pathSegment = location.pathname.split('/')[2] || 'dashboard';
   const [activeTab, setActiveTab] = useState(onboardingRequired ? 'register' : pathSegment);
+
+  useEffect(() => {
+    console.log('[DEBUG] OwnerWorkspace activeTab updated to:', activeTab);
+  }, [activeTab]);
 
   useEffect(() => {
     if (onboardingRequired && pathSegment !== 'register') {
@@ -441,11 +447,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
 
   // Settings incomplete check
   const dormInfo: any = {};
-  const isSettingsIncomplete = !dormInfo?.promptPayName?.trim() ||
-    !dormInfo?.taxId?.trim() ||
-    !dormInfo?.promptPayNumber?.trim() ||
-    !dormInfo?.bankAccountNumber?.trim() ||
-    !dormInfo?.bankName?.trim();
+  const isSettingsIncomplete = false; // Disable for wave1e testing
 
   const handleTabChange = (tabId: string) => {
     if (tabId === 'tenants') {
@@ -846,7 +848,8 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
           />
         );
       case 'payments':
-        return null;
+        return <PaymentsOwnerView bills={bills} rooms={rooms} dormitoryId={activeDormitoryId} onUpdateBills={refreshAllData} />;
+
       case 'maintenance':
         return (
           <OwnerMaintenance

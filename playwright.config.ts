@@ -60,10 +60,21 @@ export default defineConfig({
     //   use: { ...devices['Desktop Chrome'], channel: 'chrome' },
     // },
 
-  /* Run your local dev server before starting the tests */
-  webServer: {
-    command: 'npm run dev',
-    url: 'http://localhost:5173',
-    reuseExistingServer: !process.env.CI,
-  },
+  /* Run your local backend API and frontend dev servers before starting the tests */
+  webServer: [
+    {
+      command: 'npm run dev',
+      cwd: './server',
+      url: 'http://127.0.0.1:3001/health/liveness',
+      reuseExistingServer: !process.env.CI,
+      timeout: 45000,
+      stdout: 'pipe',
+    },
+    {
+      command: 'npm run dev',
+      url: 'http://127.0.0.1:5173',
+      reuseExistingServer: !process.env.CI,
+      timeout: 45000,
+    },
+  ],
 });
