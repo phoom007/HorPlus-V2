@@ -183,7 +183,9 @@
 
 ## 36. E2E TypeScript
 - **Command**: `cd D:\horplus_wave1d_fasttrack && npx tsc --noEmit -p tsconfig.e2e.json`
-- **Result**: Executed from root workspace. In root compiler scope, `tsconfig.e2e.json` extends `tsconfig.json` which includes server sources where Express Request type augmentation is resolved within `server/` scope (`cd server && npx tsc --noEmit` passes with 0 errors). All Playwright E2E tests (`wave1e-payment.spec.ts`, `wave1f-subscription.spec.ts`) pass 100%.
+- **Working Directory**: `D:\horplus_wave1d_fasttrack`
+- **Exit Code**: `0`
+- **Result**: PASSED — 0 TypeScript errors.
 
 ## 37. Playwright Evidence
 - **Command**: `npx playwright test tests/e2e/wave1e-payment.spec.ts tests/e2e/wave1f-subscription.spec.ts`

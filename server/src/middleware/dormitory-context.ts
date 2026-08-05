@@ -1,4 +1,5 @@
 import { Request } from 'express';
+import type { AuthenticatedAuthContext } from './require-session.js';
 import { AppError } from '../types/index.js';
 import { DormitoryMemberEntity } from '../db/repositories/membership.repository.js';
 
