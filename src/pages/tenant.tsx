@@ -300,13 +300,43 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
 
   const dormInfo: any = {};
 
-  const refreshData = () => {
-    setRooms(getRooms());
-    setBills(getBills());
+  const refreshData = async () => {
+    try {
+      const profileRes = await fetch('/api/v1/tenant-portal/profile');
+      if (profileRes.ok) {
+        const profile = await profileRes.json();
+        if (profile.room) {
+           setRooms([{
+             id: profile.room.id,
+             roomNumber: profile.room.roomNumber,
+             buildingId: profile.room.buildingId,
+             currentTenantId: profile.id
+           } as any]);
+        }
+      } else {
+        setRooms(getRooms());
+      }
+    } catch(e) {
+      setRooms(getRooms());
+    }
     setContracts(getContracts());
     setRepairs(getMaintenance() as any);
     setAnnouncements(getAnnouncements());
     setBuildings(getBuildings());
+
+    try {
+      const res = await fetch('/api/v1/tenant-portal/bills');
+      if (res.ok) {
+        const json = await res.json();
+        if (json.data) {
+          setBills(Array.isArray(json.data) ? json.data : (json.data.bills || []));
+        }
+      } else {
+        setBills(getBills());
+      }
+    } catch (err) {
+      setBills(getBills());
+    }
   };
 
   useEffect(() => {
@@ -456,7 +486,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
   });
 
   // Active Unpaid Bill
-  const activeUnpaidBill = tenantBills.find(b => b.status === 'pending' || b.status === 'overdue' || b.status === 'rejected');
+  const activeUnpaidBill = tenantBills.find(b => ['pending', 'overdue', 'rejected', 'PENDING', 'OVERDUE', 'REJECTED'].includes(b.status));
   const activeUnpaidAmount = activeUnpaidBill ? activeUnpaidBill.totalAmount : 0;
 
   // Invoice Details sub-view states
@@ -909,7 +939,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                                 <span>ยอดค้างชำระ</span>
                               </div>
                               <h2 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight leading-none pt-1">
-                                ฿ {activeUnpaidBill ? activeUnpaidBill.totalAmount.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '18,368.00'}
+                                ฿ {activeUnpaidBill ? Number(activeUnpaidBill.totalAmount).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '18,368.00'}
                               </h2>
                               <p className="text-[10px] sm:text-xs text-slate-500 font-medium pt-1">
                                 กำหนดชำระภายใน: <span className="font-extrabold text-slate-700">{activeUnpaidBill ? formatToBeDate(activeUnpaidBill.dueDate) : '30 ก.ค. 2569'}</span>
@@ -1294,6 +1324,11 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                             <div className="mt-2.5">
                               <StatusBadge status={b.status} type="bill" />
                             </div>
+                            {b.Payment && b.Payment.find((p: any) => p.status === 'REJECTED') && (
+                              <div className="mt-2 text-[9px] text-red-600 font-bold p-2 bg-red-50 rounded-lg border border-red-100">
+                                แจ้งปฏิเสธ: {b.Payment.find((p: any) => p.status === 'REJECTED')?.rejectedReason || 'โปรดตรวจสอบข้อมูลการชำระเงินและแจ้งโอนใหม่'}
+                              </div>
+                            )}
                           </div>
 
                           <div className="shrink-0">
@@ -1458,7 +1493,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                               <div>
                                 <span className="text-[9px] text-slate-400 font-bold block">ค่าใช้จ่ายเดือน {formatToBeFullDate(activeUnpaidBill.createdAt)}</span>
                                 <h2 className="text-xl font-black text-slate-900 mt-1 leading-none">
-                                  ฿ {activeUnpaidBill.totalAmount.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                  ฿ {Number(activeUnpaidBill.totalAmount).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                                 </h2>
                                 <span className="text-[9px] text-slate-400 block mt-2">กำหนดชำระ: {formatToBeDate(activeUnpaidBill.dueDate)}</span>
                               </div>
@@ -1478,7 +1513,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                               
                               <div className="border-t border-slate-100 pt-3 flex justify-between items-center text-[11px] font-black text-indigo-600">
                                 <span>ยอดรวมทั้งสิ้น</span>
-                                <span>฿ {activeUnpaidBill.totalAmount.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                <span>฿ {Number(activeUnpaidBill.totalAmount).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                               </div>
                             </div>
                           </div>
@@ -1518,7 +1553,12 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                     {invoiceTab === 'current' && activeUnpaidBill && (
                       <div className="sticky bottom-[56px] p-4 bg-white/95 backdrop-blur-md border-t border-gray-100 mt-auto z-10">
                         <button
-                          onClick={() => setSubView('pay')}
+                          type="button"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            console.log('notifyPayBtn CLICKED, setting subView to payment');
+                            setSubView('payment');
+                          }}
                           className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs rounded-xl flex items-center justify-center gap-2 shadow-xs transition-colors"
                         >
                           แจ้งชำระเงิน
@@ -1530,7 +1570,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
 
                 
                 {/* B. SUBVIEW: แจ้งชำระเงิน (IMAGE 9) */}
-                {subView === 'pay' && activeUnpaidBill && (
+                {subView === 'payment' && activeUnpaidBill && (
                   <div className="flex flex-col h-full bg-slate-50 relative">
                     {renderSubViewHeader('แจ้งชำระเงิน', <DollarSign className="w-5 h-5 text-slate-400" />)}
                     
@@ -1539,7 +1579,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                         <div className="text-center">
                           <p className="text-[10px] text-slate-500 font-bold mb-1">ยอดชำระทั้งหมด</p>
                           <h2 className="text-2xl font-black text-indigo-600">
-                            ฿ {activeUnpaidBill.totalAmount.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            ฿ {Number(activeUnpaidBill.totalAmount).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                           </h2>
                           <p className="text-[9px] text-slate-400 mt-1">
                             ชำระภายใน {formatToBeDate(activeUnpaidBill.dueDate)}

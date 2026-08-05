@@ -85,12 +85,17 @@ test.describe('Wave 1E - Real Payment & Receipt Integration (Fully Unmocked)', (
   let billRecord4: any;
   let jpegFilePath: string;
   let pngFilePath: string;
+  let firstSlipBytes: Buffer;
 
   test.beforeEach(async () => {
     // Write valid image fixtures to temp directory with random bytes per retry
     jpegFilePath = path.join(os.tmpdir(), `test-valid-slip-${Date.now()}-${Math.random()}.jpg`);
     pngFilePath = path.join(os.tmpdir(), `test-valid-slip-2-${Date.now()}-${Math.random()}.png`);
-    fs.writeFileSync(jpegFilePath, Buffer.concat([VALID_JPEG_BUFFER, crypto.randomBytes(16)]));
+    firstSlipBytes = Buffer.concat([
+      VALID_JPEG_BUFFER,
+      crypto.randomBytes(16),
+    ]);
+    fs.writeFileSync(jpegFilePath, firstSlipBytes);
     fs.writeFileSync(pngFilePath, Buffer.concat([VALID_PNG_BUFFER, crypto.randomBytes(16)]));
   });
 
@@ -210,6 +215,23 @@ test.describe('Wave 1E - Real Payment & Receipt Integration (Fully Unmocked)', (
       },
     });
 
+    const contractRecord = await prisma.contract.create({
+      data: {
+        id: crypto.randomUUID(),
+        dormitoryId: dormId,
+        tenantId: tenantRecord.id,
+        roomId: roomRecord.id,
+        contractNumber: `CT-${uniqueSuffix}`,
+        status: 'active',
+        startDate: new Date('2026-07-01'),
+        endDate: new Date('2027-06-30'),
+        rentAmount: 4500.0,
+        depositAmount: 5000.0,
+        advancePaymentAmount: 4500.0,
+        rentBillingType: 'monthly'
+      }
+    });
+
     const tenantUserId2 = crypto.randomUUID();
     tenantUser2 = await prisma.user.create({
       data: {
@@ -260,10 +282,27 @@ test.describe('Wave 1E - Real Payment & Receipt Integration (Fully Unmocked)', (
       },
     });
 
+    const contractRecord2 = await prisma.contract.create({
+      data: {
+        id: crypto.randomUUID(),
+        dormitoryId: dormId,
+        tenantId: tenantRecord2.id,
+        roomId: roomRecord2.id,
+        contractNumber: `CT2-${uniqueSuffix}`,
+        status: 'active',
+        startDate: new Date('2026-08-01'),
+        endDate: new Date('2027-07-31'),
+        rentAmount: 4500.0,
+        depositAmount: 5000.0,
+        advancePaymentAmount: 4500.0,
+        rentBillingType: 'monthly'
+      }
+    });
+
     // Create Billing Cycle
     cycleRecord = await prisma.billingCycle.create({
       data: {
-        id: crypto.randomUUID(),
+        id: `ffffffff-0000-4000-8000-${crypto.randomUUID().slice(24)}`,
         dormitoryId: dormId,
         cycleCode: `CYCLE-${uniqueSuffix}`,
         name: 'รอบบิล กรกฎาคม 2026',
@@ -304,7 +343,7 @@ test.describe('Wave 1E - Real Payment & Receipt Integration (Fully Unmocked)', (
     // Create Billing Cycle 2 (for Bill 2)
     const cycleRecord2 = await prisma.billingCycle.create({
       data: {
-        id: crypto.randomUUID(),
+        id: `eeeeeeee-0000-4000-8000-${crypto.randomUUID().slice(24)}`,
         dormitoryId: dormId,
         cycleCode: `CYCLE-${uniqueSuffix}-08`,
         name: 'รอบบิล สิงหาคม 2026',
@@ -325,6 +364,7 @@ test.describe('Wave 1E - Real Payment & Receipt Integration (Fully Unmocked)', (
         roomId: roomRecord.id,
         tenantId: tenantRecord.id,
         billNumber: `BILL-${uniqueSuffix}-02`,
+        createdAt: new Date(Date.now() - 5000),
         totalAmount: 4500.0,
         subtotal: 4500.0,
         paidAmount: 0.0,
@@ -340,15 +380,31 @@ test.describe('Wave 1E - Real Payment & Receipt Integration (Fully Unmocked)', (
       },
     });
 
+    // Create Billing Cycle 3 (for Bill 3)
+    const cycleRecord3 = await prisma.billingCycle.create({
+      data: {
+        id: `dddddddd-0000-4000-8000-${crypto.randomUUID().slice(24)}`,
+        dormitoryId: dormId,
+        cycleCode: `CYCLE-${uniqueSuffix}-09`,
+        name: 'รอบบิล กันยายน 2026',
+        periodStart: new Date('2026-09-01'),
+        periodEnd: new Date('2026-09-30'),
+        billingDate: new Date('2026-09-25'),
+        dueDate: new Date('2026-10-05'),
+        status: 'open',
+      },
+    });
+
     // Create Bill 3 (for Duplicate Evidence test)
     billRecord3 = await prisma.bill.create({
       data: {
         id: crypto.randomUUID(),
         dormitoryId: dormId,
-        billingCycleId: cycleRecord2.id,
+        billingCycleId: cycleRecord3.id,
         roomId: roomRecord.id,
         tenantId: tenantRecord.id,
         billNumber: `BILL-${uniqueSuffix}-03`,
+        createdAt: new Date(Date.now() - 10000),
         totalAmount: 4500.0,
         subtotal: 4500.0,
         paidAmount: 0.0,
@@ -495,46 +551,6 @@ test.describe('Wave 1E - Real Payment & Receipt Integration (Fully Unmocked)', (
           roomId: rId,
         };
 
-        const roomObj = {
-          id: rId,
-          dormitoryId: dId,
-          buildingId: 'bld-1',
-          roomNumber: 'A-201',
-          floor: 2,
-          roomType: 'standard',
-          status: 'occupied',
-          monthlyRent: 4500,
-          currentTenantId: tId,
-          depositAmount: 5000,
-          maxOccupants: 2,
-          initialWaterMeter: 100,
-          initialElectricMeter: 200,
-          images: [],
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        };
-
-        const billObj = {
-          id: bId,
-          dormitoryId: dId,
-          tenantId: tId,
-          roomId: rId,
-          billNumber: bNum,
-          cycleId: '2026-07',
-          billingDate: '2026-07-25',
-          dueDate: new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0],
-          subtotal: 4850,
-          totalAmount: 4850,
-          paidAmount: 0,
-          status: 'pending',
-          createdAt: '2026-07-25T00:00:00.000Z',
-          items: [
-            { id: 'i-1', description: 'ค่าเช่าห้อง', amount: 4500, type: 'RENT' },
-            { id: 'i-2', description: 'ค่าน้ำประปา', amount: 150, type: 'WATER' },
-            { id: 'i-3', description: 'ค่าไฟฟ้า', amount: 200, type: 'ELECTRICITY' },
-          ],
-        };
-
         localStorage.setItem(
           'HorPlus_demo_session',
           JSON.stringify({
@@ -557,10 +573,6 @@ test.describe('Wave 1E - Real Payment & Receipt Integration (Fully Unmocked)', (
 
         sessionStorage.setItem('active_dormitory_selected_for_session', dId);
         localStorage.setItem('selected_dormitory_id', dId);
-        localStorage.setItem(`HorPlus_demo_rooms_${dId}`, JSON.stringify([roomObj]));
-        localStorage.setItem('HorPlus_rooms', JSON.stringify([roomObj]));
-        localStorage.setItem(`HorPlus_demo_bills_${dId}`, JSON.stringify([billObj]));
-        localStorage.setItem('HorPlus_bills', JSON.stringify([billObj]));
       },
       {
         userId: user.id,
@@ -593,14 +605,16 @@ test.describe('Wave 1E - Real Payment & Receipt Integration (Fully Unmocked)', (
     page.on('console', msg => {
       if (msg.type() === 'error') {
         const text = msg.text();
-        if (!text.includes('409') && !text.includes('403') && !text.includes('404')) {
+        if ((text.includes('/maintenance') && text.includes('404')) || text.includes('the server responded with a status of 404 (Not Found)')) {
+          // Ignore maintenance route expected 404
+        } else {
           browserErrors.push(`Console Error: ${text}`);
         }
       }
     });
     page.on('requestfailed', req => {
       const url = req.url();
-      if (!url.includes('favicon.ico')) {
+      if (!url.includes('favicon.ico') && !url.includes('/maintenance')) {
         browserErrors.push(`Request Failed: ${url}`);
       }
     });
@@ -618,7 +632,7 @@ test.describe('Wave 1E - Real Payment & Receipt Integration (Fully Unmocked)', (
     // --- STEP 1: Tenant logs in and uploads valid slip ---
     await loginAs(page, tenantUser, 'TENANT');
     await page.goto('/tenant');
-    await page.waitForLoadState('networkidle');
+    // await page.waitForLoadState('networkidle');
 
     // Click "ชำระเงิน"
     const payBtn = page.getByRole('button', { name: 'ชำระเงิน' }).first();
@@ -647,11 +661,16 @@ test.describe('Wave 1E - Real Payment & Receipt Integration (Fully Unmocked)', (
       where: { billId: billRecord1.id }
     });
 
+    const expectedHash = crypto
+      .createHash('sha256')
+      .update(firstSlipBytes)
+      .digest('hex');
+
     expect(payment).not.toBeNull();
     expect(payment!.status).toBe('PENDING');
     expect(payment!.method).toBe('BANK_TRANSFER');
     expect(payment!.amount.toNumber()).toBe(4850.0);
-    expect(payment!.fileHash).toBeTruthy();
+    expect(payment!.fileHash).toBe(expectedHash);
     
     // Find the consumed intent manually
     const intent = await prisma.paymentUploadIntent.findFirst({
@@ -659,6 +678,7 @@ test.describe('Wave 1E - Real Payment & Receipt Integration (Fully Unmocked)', (
     });
     expect(intent).not.toBeNull();
     expect(intent!.status).toBe('CONSUMED');
+    expect(intent!.sha256).toBe(expectedHash);
 
     // --- STEP 3: Owner logs in and reviews payment ---
     await loginAs(page, ownerUser, 'OWNER');
@@ -741,7 +761,7 @@ test.describe('Wave 1E - Real Payment & Receipt Integration (Fully Unmocked)', (
         billId: billRecord2.id,
         fileName: 'slip-2.png',
         mimeType: 'image/png',
-        fileSize: VALID_PNG_BUFFER.length
+        fileSize: VALID_PNG_BUFFER.length + 16
       }
     });
     const intentData2 = await intentRes2.json();
@@ -756,7 +776,7 @@ test.describe('Wave 1E - Real Payment & Receipt Integration (Fully Unmocked)', (
         file: {
           name: 'slip-2.png',
           mimeType: 'image/png',
-          buffer: VALID_PNG_BUFFER,
+          buffer: Buffer.concat([VALID_PNG_BUFFER, crypto.randomBytes(16)]),
         }
       }
     });
@@ -780,7 +800,7 @@ test.describe('Wave 1E - Real Payment & Receipt Integration (Fully Unmocked)', (
     // Owner sees Bill 2 and clicks "ปฏิเสธ"
     await loginAs(page, ownerUser, 'OWNER');
     await page.goto('/owner/payments');
-    await page.waitForLoadState('networkidle');
+    // await page.waitForLoadState('networkidle');
 
     await expect(page.locator(`text=บิลเลขที่: ${billRecord2.billNumber}`)).toBeVisible({ timeout: 10000 });
     const rejectBtn = page.getByRole('button', { name: 'ปฏิเสธ' }).first();
@@ -804,6 +824,9 @@ test.describe('Wave 1E - Real Payment & Receipt Integration (Fully Unmocked)', (
 
     // Tenant opens the rejected Bill (simulate by requesting new intent for same bill)
     // Tenant requests a new upload intent
+    // Tenant uploads a DIFFERENT valid slip image (png)
+    const retryBuffer = Buffer.concat([VALID_PNG_BUFFER, crypto.randomBytes(16)]);
+
     const intentRes2_Retry = await page.request.post('/api/v1/payments/slip/intent', {
       headers: {
         Cookie: `horplus_session=${t1Session.sessionCookie}`,
@@ -814,13 +837,12 @@ test.describe('Wave 1E - Real Payment & Receipt Integration (Fully Unmocked)', (
         billId: billRecord2.id,
         fileName: 'slip-2-retry.png',
         mimeType: 'image/png',
-        fileSize: VALID_PNG_BUFFER.length
+        fileSize: retryBuffer.length
       }
     });
     expect(intentRes2_Retry.ok()).toBeTruthy();
     const intentData2_Retry = await intentRes2_Retry.json();
 
-    // Tenant uploads a DIFFERENT valid slip image (png)
     const uploadRes2_Retry = await page.request.post(intentData2_Retry.uploadUrl, {
       headers: {
         Cookie: `horplus_session=${t1Session.sessionCookie}`,
@@ -830,7 +852,7 @@ test.describe('Wave 1E - Real Payment & Receipt Integration (Fully Unmocked)', (
         file: {
           name: 'slip-2-retry.png',
           mimeType: 'image/png',
-          buffer: VALID_PNG_BUFFER,
+          buffer: retryBuffer,
         }
       }
     });
@@ -868,6 +890,8 @@ test.describe('Wave 1E - Real Payment & Receipt Integration (Fully Unmocked)', (
 
     // --- STEP 7: Test Duplicate Evidence Prevention ---
     // 1. Request a real upload intent through /api/v1/payments/slip/intent
+    const duplicateBuffer = firstSlipBytes;
+    
     const intentRes3 = await page.request.post('/api/v1/payments/slip/intent', {
       headers: {
         Cookie: `horplus_session=${t1Session.sessionCookie}`,
@@ -878,13 +902,13 @@ test.describe('Wave 1E - Real Payment & Receipt Integration (Fully Unmocked)', (
         billId: billRecord3.id,
         fileName: 'duplicate-slip.jpg',
         mimeType: 'image/jpeg',
-        fileSize: VALID_JPEG_BUFFER.length
+        fileSize: duplicateBuffer.length
       }
     });
     expect(intentRes3.ok()).toBeTruthy();
     const intentData3 = await intentRes3.json();
 
-    // 2. Upload the exact same file bytes (VALID_JPEG_BUFFER used in bill 1)
+    // 2. Upload the exact same file bytes (firstSlipBytes used in bill 1)
     const uploadRes3 = await page.request.post(intentData3.uploadUrl, {
       headers: {
         Cookie: `horplus_session=${t1Session.sessionCookie}`,
@@ -894,34 +918,14 @@ test.describe('Wave 1E - Real Payment & Receipt Integration (Fully Unmocked)', (
         file: {
           name: 'duplicate-slip.jpg',
           mimeType: 'image/jpeg',
-          buffer: VALID_JPEG_BUFFER, // Exact same bytes
+          buffer: duplicateBuffer, // Exact same bytes used in bill 1
         }
       }
     });
-    expect(uploadRes3.ok()).toBeTruthy();
+    expect(uploadRes3.status()).toBe(409);
+    const uploadDupData = await uploadRes3.json();
+    expect(uploadDupData.error).toBe('DUPLICATE_PAYMENT_EVIDENCE');
 
-    // 3. Submit 
-    const submitDupRes = await page.request.post('/api/v1/payments/slip/submit', {
-      headers: {
-        Cookie: `horplus_session=${t1Session.sessionCookie}`,
-        'x-csrf-token': t1Session.csrfToken,
-        'x-idempotency-key': crypto.randomUUID(),
-      },
-      data: {
-        dormitoryId: dormId,
-        billId: billRecord3.id,
-        amount: '4500.00',
-        paymentDate: new Date().toISOString(),
-        intentId: intentData3.intentId,
-      },
-    });
-
-    // 4. Assert: HTTP status 409, error code DUPLICATE_PAYMENT_EVIDENCE
-    expect(submitDupRes.status()).toBe(409);
-    const dupErr = await submitDupRes.json();
-    expect(dupErr.error.code).toContain('DUPLICATE_PAYMENT_EVIDENCE');
-
-    // 5. Verify no second Payment was created
     const bill3Payments = await prisma.payment.findMany({ where: { billId: billRecord3.id } });
     expect(bill3Payments.length).toBe(0);
 
@@ -940,23 +944,43 @@ test.describe('Wave 1E - Real Payment & Receipt Integration (Fully Unmocked)', (
     const authRes1 = await page.request.get(`/api/v1/receipts/${receipt.id}`, {
       headers: { Cookie: `horplus_session=${t2Session.sessionCookie}` }
     });
-    expect(authRes1.status()).toBeGreaterThanOrEqual(403);
-    expect(authRes1.status()).toBeLessThanOrEqual(404);
+    expect([403, 404]).toContain(authRes1.status());
 
     // Tenant 2 cannot open Tenant 1's printable HTML Receipt
     const authRes2 = await page.request.get(`/api/v1/receipts/${receipt.id}/html`, {
       headers: { Cookie: `horplus_session=${t2Session.sessionCookie}` }
     });
-    expect(authRes2.status()).toBeGreaterThanOrEqual(403);
-    expect(authRes2.status()).toBeLessThanOrEqual(404);
+    expect([403, 404]).toContain(authRes2.status());
 
-    // Tenant 2 cannot preview Tenant 1's evidence
-    // Actually the intent holds the objectKey, wait, let's just check the intent
-    const authRes3 = await page.request.get(`/api/v1/payments/slip/upload/${intentData2.intentId}`, {
+    // Evidence Authorization Matrix
+
+    // Submitting Tenant: 200
+    const authEvidenceSubmittingTenant = await page.request.get(`/api/v1/payments/${payment!.id}/evidence`, {
+      headers: { Cookie: `horplus_session=${t1Session.sessionCookie}` }
+    });
+    expect(authEvidenceSubmittingTenant.status()).toBe(200);
+
+    // Authorized Owner/Manager: 200
+    const ownerSession = await loginAs(page, ownerUser, 'OWNER');
+    const authEvidenceOwner = await page.request.get(`/api/v1/payments/${payment!.id}/evidence`, {
+      headers: { Cookie: `horplus_session=${ownerSession.sessionCookie}` }
+    });
+    expect(authEvidenceOwner.status()).toBe(200);
+
+    // Different Tenant: 403 or safe 404
+    const authEvidenceDiffTenant = await page.request.get(`/api/v1/payments/${payment!.id}/evidence`, {
       headers: { Cookie: `horplus_session=${t2Session.sessionCookie}` }
     });
-    expect(authRes3.status()).toBeGreaterThanOrEqual(403);
-    expect(authRes3.status()).toBeLessThanOrEqual(405);
+    expect([403, 404]).toContain(authEvidenceDiffTenant.status());
+
+    // Technician/Housekeeping (not owner, just standard user here): 403 or safe 404
+    // We can simulate anonymous or unrelated user
+    
+    // Anonymous user: 401
+    const authEvidenceAnon = await page.request.get(`/api/v1/payments/${payment!.id}/evidence`, {
+      headers: { Cookie: '' }
+    });
+    expect(authEvidenceAnon.status()).toBe(401);
 
     // Finally, verify no browser errors occurred
     expect(browserErrors).toEqual([]);

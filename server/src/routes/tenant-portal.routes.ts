@@ -8,28 +8,40 @@ import { MaintenanceService } from '../services/maintenance.service.js';
 import { AnnouncementService } from '../services/announcement.service.js';
 import { DocumentPdfService } from '../services/document-pdf.service.js';
 
-export function createTenantPortalRouter(): Router {
+import { AuthenticationService } from '../services/auth.service.js';
+
+export function createTenantPortalRouter(authService?: AuthenticationService): Router {
   const router = Router();
   const prisma = getPrismaClient();
 
   const auditService = new AuditService();
   const billRepo = new InMemoryBillRepository();
 
-
-
   const maintenanceService = new MaintenanceService();
   const announcementService = new AnnouncementService();
 
-  router.use((req, res, next) => {
-    res.status(503).json({ error: { code: 'SERVICE_UNAVAILABLE', message: 'Tenant portal is temporarily disabled in this release.' } });
-  });
+  if (authService) {
+    router.use(authService.requireAuth());
+  }
 
   // 1. Tenant Profile & Room Members
   router.get('/profile', async (req: Request, res: Response) => {
     try {
-      const actor = req.actor!;
-      const tenant = await prisma.tenant.findUnique({
-        where: { id: actor.tenantId! }
+      if (!req.auth?.userId) {
+         return res.status(401).json({ error: { code: 'UNAUTHORIZED', message: 'Not logged in' } });
+      }
+
+      // Check tenant membership
+      const tenantMembership = await prisma.dormitoryMember.findFirst({
+        where: { userId: req.auth.userId, role: { code: 'TENANT' } }
+      });
+
+      if (!tenantMembership) {
+        return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'Not a tenant' } });
+      }
+
+      const tenant = await prisma.tenant.findFirst({
+         where: { linkedUserId: req.auth.userId, dormitoryId: tenantMembership.dormitoryId }
       });
 
       if (!tenant) {
@@ -42,9 +54,12 @@ export function createTenantPortalRouter(): Router {
         });
       }
 
-      const room = actor.roomId ? await prisma.room.findUnique({ where: { id: actor.roomId } }) : null;
-      const dorm = await prisma.dormitory.findUnique({ where: { id: actor.dormitoryId } });
-      const contract = actor.contractId ? await prisma.contract.findUnique({ where: { id: actor.contractId } }) : null;
+      const contract = await prisma.contract.findFirst({
+        where: { tenantId: tenant.id, status: 'active' }
+      });
+
+      const room = contract && contract.roomId ? await prisma.room.findUnique({ where: { id: contract.roomId } }) : null;
+      const dorm = await prisma.dormitory.findUnique({ where: { id: tenantMembership.dormitoryId } });
 
       // Room members under same contract/room
       const tenantBindings: any[] = [];
@@ -52,28 +67,48 @@ export function createTenantPortalRouter(): Router {
       const roomMembers = tenantBindings.map((tb) => ({
         displayName: tb.identity?.displayName || 'สมาชิกในห้อง',
         pictureUrl: tb.identity?.pictureUrl || null,
-        memberType: tb.tenantId === actor.tenantId ? 'ผู้เช่าหลัก' : 'ผู้พักร่วม'
+        memberType: tb.tenantId === tenant.id ? 'ผู้เช่าหลัก' : 'ผู้พักร่วม'
       }));
 
       // Mask sensitive phone
       const phone = tenant.phone ? `${tenant.phone.slice(0, 3)}***${tenant.phone.slice(-4)}` : null;
 
-      return res.json({
-        success: true,
-        data: {
-          id: tenant.id,
-          displayName: actor.displayName || `${tenant.firstName} ${tenant.lastName}`,
-          pictureUrl: actor.pictureUrl || null,
-          firstName: tenant.firstName,
-          lastName: tenant.lastName,
-          maskedPhone: phone,
+      res.json({
+        id: tenant.id,
+        tenantNumber: tenant.tenantNumber,
+        firstName: tenant.firstName,
+        lastName: tenant.lastName,
+        displayName: tenant.displayName,
+        phone,
+        email: tenant.email,
+        status: tenant.status,
+        pictureUrl: tenant.photoUrl || null,
+        nationalIdMasked: tenant.nationalIdMasked || null,
+        dormitory: dorm ? {
+          id: dorm.id,
+          name: dorm.name,
+          logoUrl: dorm.logoUrl
+        } : null,
+        room: room ? {
+          id: room.id,
+          roomNumber: room.roomNumber,
+          roomType: room.roomType,
+          buildingId: room.buildingId
+        } : null,
+        roomMembers,
+        activeContract: contract ? {
+          id: contract.id,
+          contractNumber: contract.contractNumber,
+          status: contract.status,
+          startDate: contract.startDate.toISOString(),
+          endDate: contract.endDate.toISOString(),
           roomNumber: room?.roomNumber || 'ไม่ระบุ',
-          dormitoryName: dorm?.name || 'หอพัก',
-          status: tenant.status,
-          startDate: contract?.startDate ? contract.startDate.toISOString() : null,
-          endDate: contract?.endDate ? contract.endDate.toISOString() : null,
-          roomMembers
-        }
+          rentBillingType: contract.rentBillingType,
+          rentAmount: contract.rentAmount.toString(),
+          depositAmount: contract.depositAmount.toString(),
+          advancePaymentAmount: contract.advancePaymentAmount.toString(),
+          coOccupantsCount: 0
+        } : null
       });
     } catch (err: any) {
       return res.status(500).json({
@@ -130,33 +165,73 @@ export function createTenantPortalRouter(): Router {
   // 3. Tenant Bills List
   router.get('/bills', async (req: Request, res: Response) => {
     try {
-      const actor = req.actor!;
+      if (!req.auth?.userId) {
+         return res.status(401).json({ error: { code: 'UNAUTHORIZED', message: 'Not logged in' } });
+      }
+
+      const tenantMembership = await prisma.dormitoryMember.findFirst({
+        where: { userId: req.auth.userId, role: { code: 'TENANT' } }
+      });
+
+      if (!tenantMembership) {
+        return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'Not a tenant' } });
+      }
+
+      const tenant = await prisma.tenant.findFirst({
+         where: { linkedUserId: req.auth.userId, dormitoryId: tenantMembership.dormitoryId }
+      });
+
+      if (!tenant) {
+        return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Tenant not found' } });
+      }
+
+      const contract = await prisma.contract.findFirst({
+        where: { tenantId: tenant.id, status: 'active' }
+      });
+
       const bills = await prisma.bill.findMany({
         where: {
-          dormitoryId: actor.dormitoryId,
+          dormitoryId: tenantMembership.dormitoryId,
           OR: [
-            { roomId: actor.roomId || undefined },
-            { tenantId: actor.tenantId || undefined },
-            { contractId: actor.contractId || undefined }
+            { roomId: contract?.roomId || undefined },
+            { tenantId: tenant.id },
+            { contractId: contract?.id || undefined }
           ],
           status: { not: 'cancelled' }
         },
-        orderBy: { createdAt: 'desc' }
+        orderBy: { createdAt: 'desc' },
+        include: {
+          items: true
+        }
       });
 
       const formatted = bills.map((b) => ({
         id: b.id,
+        tenantId: b.tenantId,
         billNumber: b.billNumber,
         billingCycleId: b.billingCycleId,
+        cycleId: b.billingCycleId,
         billingDate: b.billingDate.toISOString(),
         dueDate: b.dueDate ? b.dueDate.toISOString() : null,
+        createdAt: b.createdAt.toISOString(),
         status: b.status,
         totalAmount: b.totalAmount.toString(),
         paidAmount: b.paidAmount.toString(),
-        outstandingAmount: b.outstandingAmount.toString()
+        outstandingAmount: b.outstandingAmount.toString(),
+        items: b.items.map(item => ({
+          id: item.id,
+          type: item.itemType,
+          description: item.description,
+          amount: item.amount.toString(),
+          meterStart: item.meterStart,
+          meterEnd: item.meterEnd,
+          unitUsed: item.unitUsed,
+          unitPrice: item.unitPrice ? item.unitPrice.toString() : null
+        }))
       }));
 
-      return res.json({ success: true, data: formatted });
+      console.log('DEBUG TENANT BILLS:', JSON.stringify(formatted, null, 2));
+      return res.status(200).json({ data: formatted });
     } catch (err: any) {
       return res.status(500).json({
         error: { code: 'INTERNAL_ERROR', message: err.message, requestId: req.requestId }
