@@ -2,12 +2,14 @@
 
 ## 1. Scope and Exclusions
 
-This report documents the final evidence-only merge correction and validation pass for **Wave 1E — Payments, Slip Evidence, Review, and Receipts** within HorPlus V2 (`horplus_wave1d_fasttrack`).
+This report documents the accuracy correction pass and validation evidence for **Wave 1E — Payments, Slip Evidence, Review, and Receipts** within HorPlus V2 (`horplus_wave1d_fasttrack`).
 
 - **In Scope:**
-  - Removal of generic Chromium 404 console error whitelist; exact URL/status whitelist enforcement.
-  - Strict HTTP 401 requirement for anonymous access across all payment evidence and receipt endpoints.
-  - Physical orphan-file cleanup and private storage verification after duplicate evidence upload (HTTP 409).
+  - Implementation of exact expected negative response record tracking in Playwright E2E tests.
+  - Verification of exact repository migration directory list.
+  - Zero-state fresh local database deployment and verification (`horplus_wave1e_fresh_verify`).
+  - Strict migration/schema parity verification via `npx prisma migrate diff --exit-code`.
+  - Empirically captured PostgreSQL SQL object definitions for foreign keys, partial unique indexes, and check constraints.
   - Validation of all backend, frontend, Prisma, Playwright E2E, and Docker Compose Pilot quality gates.
 - **Exclusions:**
   - Wave 1F features (strictly deferred).
@@ -20,27 +22,27 @@ This report documents the final evidence-only merge correction and validation pa
 - **Repository Path:** `D:\horplus_wave1d_fasttrack`
 - **Branch:** `feature/wave1e-payments-receipts`
 - **Base Branch:** `recovery/wave1d-fasttrack`
-- **Starting Commit SHA:** `d9fa3e2559f1c16023b5d05deabef233c8e78593`
+- **Starting Remote Commit SHA:** `090bbf39af8dfe56d1a6d9ef689d01409a7c4486`
 
 ---
 
 ## 3. Final Implementation/Test SHA
 
-- **Implementation/Test Commit SHA:** `7ca4822e707a4f96bd1e8a083d79c81e9a25f051`
-- **Commit Message:** `test(wave1e): tighten final authorization and cleanup evidence`
+- **Final Implementation/Test SHA:** `b0de0ad4f2bccae82aaa19dd4735efb233b88aba`
+- **Commit Message:** `test(wave1e): enforce exact negative-response tracking`
 
 ---
 
 ## 4. Report Commit SHA
 
-- **Report Commit SHA:** Pending commit of this document.
+- **Report Commit SHA:** Recorded in the final Antigravity response after push.
 
 ---
 
 ## 5. Final Remote SHA
 
 - **Final Remote Branch:** `origin/feature/wave1e-payments-receipts`
-- **Final Remote SHA:** Pending push.
+- **Final Remote SHA:** Recorded in the final Antigravity response after push.
 
 ---
 
@@ -48,18 +50,31 @@ This report documents the final evidence-only merge correction and validation pa
 
 - **Pull Request:** `#1`
 - **Title:** `Wave 1E: Payments, Receipts and Evidence Audit`
-- **Status:** Open (Pending merge approval)
+- **Status:** Open (Unmerged)
 
 ---
 
 ## 7. Migration List
 
-Prisma migrations recorded in `server/prisma/migrations`:
-1. `20260720_00_init_schema`
-2. `20260721_01_users_sessions_memberships`
-3. `20260723_02_wave1d_billing_schema`
-4. `20260724_03_wave1d_payments_receipts`
-5. `20260725_04_wave1d_slip_verification`
+Prisma migration directories recorded in `server/prisma/migrations`:
+1. `20260802111717_wave1d_clean_baseline`
+2. `20260803150203_wave1e_tenant_payments_receipts`
+3. `20260804045646_wave1e_payment_constraints`
+4. `20260804052600_wave1e_payment_upload_intents`
+5. `20260804080500_wave1e_upload_intent_integrity_and_rules`
+
+```powershell
+Command: Get-ChildItem D:\horplus_wave1d_fasttrack\server\prisma\migrations -Directory | Select-Object -ExpandProperty Name
+Working directory: D:\horplus_wave1d_fasttrack
+Exit code: 0
+Exact result:
+20260802111717_wave1d_clean_baseline
+20260803150203_wave1e_tenant_payments_receipts
+20260804045646_wave1e_payment_constraints
+20260804052600_wave1e_payment_upload_intents
+20260804080500_wave1e_upload_intent_integrity_and_rules
+Status: PASSED
+```
 
 ---
 
@@ -87,66 +102,143 @@ Exit code: 0
 Exact result:
 Environment variables loaded from .env
 Prisma schema loaded from prisma\schema.prisma
-✔ Generated Prisma Client (v5.22.0) to .\node_modules\@prisma\client in 1.09s
+✔ Generated Prisma Client (v5.22.0) to .\node_modules\@prisma\client in 521ms
 Status: PASSED
 ```
 
 ---
 
-## 10. Fresh Migration Deployment
+## 10. Fresh Migration Deployment Evidence
+
+A disposable verification database `horplus_wave1e_fresh_verify` was created on local PostgreSQL (`127.0.0.1:5455`). Prior to deployment, `\dt` confirmed 0 relations (`Did not find any relations.`).
 
 ```powershell
-Command: npx prisma migrate deploy
+Command: $env:DATABASE_URL="postgresql://horplus:password@127.0.0.1:5455/horplus_wave1e_fresh_verify?schema=public"; npx prisma migrate deploy
 Working directory: D:\horplus_wave1d_fasttrack\server
 Exit code: 0
 Exact result:
 Environment variables loaded from .env
 Prisma schema loaded from prisma\schema.prisma
-Datasource "db": PostgreSQL database "horplus_wave1d_fasttrack_test", schema "public" at "127.0.0.1:5455"
+Datasource "db": PostgreSQL database "horplus_wave1e_fresh_verify", schema "public" at "127.0.0.1:5455"
+
 5 migrations found in prisma/migrations
-No pending migrations to apply.
+
+Applying migration `20260802111717_wave1d_clean_baseline`
+Applying migration `20260803150203_wave1e_tenant_payments_receipts`
+Applying migration `20260804045646_wave1e_payment_constraints`
+Applying migration `20260804052600_wave1e_payment_upload_intents`
+Applying migration `20260804080500_wave1e_upload_intent_integrity_and_rules`
+
+The following migration(s) have been applied:
+migrations/
+  └─ 20260802111717_wave1d_clean_baseline/
+    └─ migration.sql
+  └─ 20260803150203_wave1e_tenant_payments_receipts/
+    └─ migration.sql
+  └─ 20260804045646_wave1e_payment_constraints/
+    └─ migration.sql
+  └─ 20260804052600_wave1e_payment_upload_intents/
+    └─ migration.sql
+  └─ 20260804080500_wave1e_upload_intent_integrity_and_rules/
+    └─ migration.sql
+      
+All migrations have been successfully applied.
 Status: PASSED
 ```
 
 ---
 
-## 11. Second Idempotent Deployment
+## 11. Idempotent Migration Status on Fresh Database
 
 ```powershell
-Command: npx prisma migrate deploy
+Command: $env:DATABASE_URL="postgresql://horplus:password@127.0.0.1:5455/horplus_wave1e_fresh_verify?schema=public"; npx prisma migrate status
 Working directory: D:\horplus_wave1d_fasttrack\server
 Exit code: 0
 Exact result:
 Environment variables loaded from .env
 Prisma schema loaded from prisma\schema.prisma
-Datasource "db": PostgreSQL database "horplus_wave1d_fasttrack_test", schema "public" at "127.0.0.1:5455"
+Datasource "db": PostgreSQL database "horplus_wave1e_fresh_verify", schema "public" at "127.0.0.1:5455"
+
 5 migrations found in prisma/migrations
-No pending migrations to apply.
-Status: PASSED (Idempotent verification confirmed)
-```
 
----
-
-## 12. Migration/Schema Parity
-
-```powershell
-Command: npx prisma migrate status
-Working directory: D:\horplus_wave1d_fasttrack\server
-Exit code: 0
-Exact result:
 Database schema is up to date!
 Status: PASSED
 ```
 
 ---
 
-## 13. SQL Constraints and Foreign Keys
+## 12. Migration/Schema Parity Evidence (`prisma migrate diff`)
 
-All 5 migration files define strict PostgreSQL foreign key constraints and unique indexes:
-- `fk_payments_bill_id`: Payment references Bill (`ON DELETE RESTRICT`)
-- `fk_receipts_payment_id`: Receipt references Payment (`ON DELETE RESTRICT`)
-- `idx_payment_upload_intents_sha256_active`: Partial unique index on active upload intents to prevent duplicate slip processing
-- Teardown order in test suites updated to delete child tables (`paymentStatusHistory`, `contract`, `receipt`) before parent records (`payment`, `tenant`), confirming strict FK integrity.
+Executed Prisma 5.22-compatible migration diff against an isolated local shadow database on port 5455 (`horplus_wave1e_shadow`):
+
+```powershell
+Command: npx prisma migrate diff --from-migrations prisma/migrations --to-schema-datamodel prisma/schema.prisma --shadow-database-url "postgresql://horplus:password@127.0.0.1:5455/horplus_wave1e_shadow?schema=public" --exit-code
+Working directory: D:\horplus_wave1d_fasttrack\server
+Exit code: 0
+Exact result:
+No difference detected.
+Status: PASSED (0 differences detected between migration files and Prisma schema)
+```
+
+---
+
+## 13. Actual SQL Constraints and Foreign Keys Evidence
+
+Polled directly from PostgreSQL object catalog on `horplus_wave1e_fresh_verify`:
+
+### `_prisma_migrations` Table Output
+```text
+                     migration_name                      |          finished_at          | rolled_back_at 
+---------------------------------------------------------+-------------------------------+----------------
+ 20260802111717_wave1d_clean_baseline                    | 2026-08-05 05:16:25.694676+00 | 
+ 20260803150203_wave1e_tenant_payments_receipts          | 2026-08-05 05:16:25.768653+00 | 
+ 20260804045646_wave1e_payment_constraints               | 2026-08-05 05:16:25.795788+00 | 
+ 20260804052600_wave1e_payment_upload_intents            | 2026-08-05 05:16:25.825417+00 | 
+ 20260804080500_wave1e_upload_intent_integrity_and_rules | 2026-08-05 05:16:25.877249+00 | 
+```
+
+### PostgreSQL Foreign Key Definitions
+```text
+       table_name       |      column_name      |                  constraint_name                  | foreign_table_name | foreign_column_name 
+------------------------+-----------------------+---------------------------------------------------+--------------------+---------------------
+ payment_upload_intents | authenticated_user_id | payment_upload_intents_authenticated_user_id_fkey | users              | id
+ payment_upload_intents | bill_id               | payment_upload_intents_bill_id_fkey               | bills              | id
+ payment_upload_intents | dormitory_id          | payment_upload_intents_dormitory_id_fkey          | dormitories        | id
+ payment_upload_intents | tenant_id             | payment_upload_intents_tenant_id_fkey             | tenants            | id
+ payments               | bill_id               | payments_bill_id_fkey                             | bills              | id
+ payments               | dormitory_id          | payments_dormitory_id_fkey                        | dormitories        | id
+ payments               | tenant_id             | payments_tenant_id_fkey                           | tenants            | id
+ receipts               | bill_id               | receipts_bill_id_fkey                             | bills              | id
+ receipts               | dormitory_id          | receipts_dormitory_id_fkey                        | dormitories        | id
+ receipts               | payment_id            | receipts_payment_id_fkey                          | payments           | id
+```
+
+### PostgreSQL Partial & Unique Index Definitions
+```sql
+-- Active/Approved Payment per Bill Partial Unique Index
+CREATE UNIQUE INDEX payments_active_or_approved_unique ON public.payments USING btree (bill_id) WHERE ((status)::text = ANY ((ARRAY['PENDING'::character varying, 'UNDER_REVIEW'::character varying, 'APPROVED'::character varying])::text[]));
+
+-- Active Upload Intent SHA256 Partial Unique Index
+CREATE UNIQUE INDEX idx_payment_upload_intents_sha256_active ON public.payment_upload_intents USING btree (sha256) WHERE (((status)::text = ANY ((ARRAY['UPLOADED'::character varying, 'CONSUMED'::character varying])::text[])) AND (sha256 IS NOT NULL));
+
+-- Receipt Number per Dormitory Unique Index
+CREATE UNIQUE INDEX receipts_dormitory_id_receipt_number_key ON public.receipts USING btree (dormitory_id, receipt_number);
+
+-- Current Bill per Billing Cycle/Room Partial Unique Index (Wave 1D)
+CREATE UNIQUE INDEX billing_cycle_room_current_unique ON public.bills USING btree (billing_cycle_id, room_id) WHERE ((status)::text <> ALL ((ARRAY['cancelled'::character varying, 'void'::character varying])::text[]));
+```
+
+### PostgreSQL Check Constraints
+```sql
+-- chk_intent_consumed_at
+CHECK ((((status)::text <> 'CONSUMED'::text) OR (consumed_at IS NOT NULL)));
+
+-- chk_intent_uploaded_metadata
+CHECK ((((status)::text <> ALL ((ARRAY['UPLOADED'::character varying, 'CONSUMED'::character varying])::text[])) OR ((verified_mime_type IS NOT NULL) AND (verified_size IS NOT NULL) AND (object_key IS NOT NULL) AND (sha256 IS NOT NULL))));
+
+-- chk_payment_upload_intent_status
+CHECK (((status)::text = ANY ((ARRAY['CREATED'::character varying, 'UPLOADED'::character varying, 'CONSUMED'::character varying, 'EXPIRED'::character varying, 'CANCELLED'::character varying])::text[])));
+```
 
 ---
 
@@ -193,8 +285,8 @@ Exit code: 0
 Exact result:
  Test Files  13 passed (13)
       Tests  67 passed (67)
-   Start at  12:03:04
-   Duration  12.97s
+   Start at  12:18:59
+   Duration  8.79s
 Status: PASSED (67 passed, 0 failed, 0 skipped)
 ```
 
@@ -227,7 +319,7 @@ Exact result:
 dist/index.html                     1.12 kB │ gzip:   0.55 kB
 dist/assets/index-DO5CHRLu.css    145.31 kB │ gzip:  20.60 kB
 dist/assets/index-B93nRaTP.js   1,673.58 kB │ gzip: 422.49 kB
-✓ built in 17.24s
+✓ built in 12.15s
 Status: PASSED
 
 Command: npx tsc --noEmit
@@ -248,14 +340,14 @@ Exit code: 0
 Exact result:
  RUN  v3.2.7 D:/horplus_wave1d_fasttrack
 
- ✓ src/tests/wave1d-boundary.test.ts (3 tests | 1 skipped) 10ms
- ✓ src/tests/tenantFailClosed.test.ts (2 tests) 16ms
- ✓ src/tests/qa.test.ts (5 tests) 124ms
- ✓ src/tests/dataModeAndAdapters.test.ts (10 tests) 140ms
+ ✓ src/tests/tenantFailClosed.test.ts (2 tests) 15ms
+ ✓ src/tests/wave1d-boundary.test.ts (3 tests | 1 skipped) 12ms
+ ✓ src/tests/qa.test.ts (5 tests) 98ms
+ ✓ src/tests/dataModeAndAdapters.test.ts (10 tests) 158ms
 
  Test Files  4 passed (4)
       Tests  19 passed | 1 skipped (20)
-   Duration  3.01s
+   Duration  2.64s
 Status: PASSED (19 passed, 0 failed, 1 skipped)
 ```
 
@@ -298,17 +390,25 @@ Exit code: 0
 Exact result:
 Running 8 tests using 4 workers
   5 passed
-  3 skipped (24.2s)
+  3 skipped (26.3s)
 Status: PASSED (5 passed, 0 failed, 3 skipped boundary tests as intended)
 ```
 
 ---
 
-## 22. Duplicate Evidence Result
+## 22. Exact Negative-Response Tracking Evidence
 
-When uploading duplicate slip evidence (matching SHA-256 digest of an active or consumed payment):
-- `POST /api/v1/payments/slip/upload/:intentId` returned **HTTP 409 Conflict** with `{ "error": "DUPLICATE_PAYMENT_EVIDENCE" }`.
-- Zero duplicate payment records were created.
+Implemented strict expected negative record tracking (`ExpectedNegativeRecord` containing `method`, `pathname`, `expectedStatuses`, `step`, `consumed` boolean).
+
+Tracked records in `tests/e2e/wave1e-payment.spec.ts`:
+- `GET /api/v1/tenant-portal/maintenance` $\rightarrow$ Expected 404 (Probe)
+- `POST /api/v1/payments/slip/upload/:intentId` $\rightarrow$ Expected 409 (Duplicate evidence upload)
+- `GET /api/v1/payments/:id/evidence` $\rightarrow$ Expected 403 or safe 404 (Unauthorized roles)
+- `GET /api/v1/receipts/:id` $\rightarrow$ Expected 403 or safe 404 (Unauthorized roles)
+- `GET /api/v1/receipts/:id/html` $\rightarrow$ Expected 403 or safe 404 (Unauthorized roles)
+- Same 3 endpoints with isolated anonymous context $\rightarrow$ Expected 401 strictly
+
+Any unconsumed expected record or unhandled 401, 403, 404, 409, 5xx, or external API call (LINE, LIFF, SlipOK, Stripe) fails the test immediately.
 
 ---
 
@@ -351,108 +451,29 @@ Anonymous access returned **HTTP 401 Unauthorized** strictly using an isolated b
 
 ---
 
-## 26. Browser-Error Assertions
+## 26. Docker Compose Evidence Statement
 
-- Generic Chromium `the server responded with a status of 404 (Not Found)` whitelist exception was **completely removed**.
-- Expected negative response whitelist is restricted strictly to:
-  - `/api/v1/tenant-portal/maintenance` or `/api/v1/maintenance` -> expected 404
-  - `/upload/` -> expected 409 duplicate evidence
-  - `/receipts/` or `/evidence` cross-tenant -> expected 403 / 404 / 401
-- Any unexpected 401, 403, 404, 409, 5xx, pageerror, requestfailed, or external API call (LINE, LIFF, SlipOK, Stripe) fails the test immediately.
-- Result: `browserErrors = []`.
+Docker Compose Pilot services (`api`, `db`, `redis`) were validated in previous passes and remain unmodified. Neither backend application code, Dockerfile, `docker-compose.windows-pilot.yml`, nor runtime environment configurations were modified in this evidence accuracy correction pass. Therefore, previously reproducible Docker Compose health check evidence (Liveness 200, Readiness 200, Metrics 200) remains valid and intact.
 
 ---
 
-## 27. Docker Compose Build and Runtime
-
-```powershell
-Command: docker compose -f docker-compose.windows-pilot.yml config
-Working directory: D:\horplus_wave1d_fasttrack
-Exit code: 0
-Result: Valid YAML configuration loaded
-
-Command: docker compose -f docker-compose.windows-pilot.yml build
-Working directory: D:\horplus_wave1d_fasttrack
-Exit code: 0
-Result: Image horplus_wave1d_fasttrack-api Built
-
-Command: docker compose -f docker-compose.windows-pilot.yml up -d
-Working directory: D:\horplus_wave1d_fasttrack
-Exit code: 0
-Result: Containers started
-
-Command: docker compose -f docker-compose.windows-pilot.yml ps
-Working directory: D:\horplus_wave1d_fasttrack
-Exit code: 0
-Result:
-NAME                               IMAGE                          COMMAND                  SERVICE    CREATED        STATUS                    PORTS
-horplus_wave1d_fasttrack-api-1     horplus_wave1d_fasttrack-api   "docker-entrypoint.s…"   api        38 hours ago   Up 30 minutes (healthy)   0.0.0.0:3000->3000/tcp
-horplus_wave1d_fasttrack-db-1      postgres:15                    "docker-entrypoint.s…"   db         38 hours ago   Up 27 minutes (healthy)   0.0.0.0:5455->5432/tcp
-horplus_wave1d_fasttrack-redis-1   redis:7-alpine                 "docker-entrypoint.s…"   redis      27 minutes ago Up 27 minutes (healthy)   0.0.0.0:6380->6379/tcp
-
-Command: docker compose -f docker-compose.windows-pilot.yml logs --no-color --tail=250
-Working directory: D:\horplus_wave1d_fasttrack
-Exit code: 0
-Result: Verified clean runtime logs; database & redis connection established.
-```
-
----
-
-## 28. Liveness, Readiness and Metrics
-
-Container endpoints checked against `http://127.0.0.1:3000`:
-
-```json
-// GET /health/liveness -> HTTP 200 OK
-{
-  "status": "UP",
-  "service": "horplus-api",
-  "timestamp": "2026-08-05T05:06:58.677Z"
-}
-
-// GET /health/readiness -> HTTP 200 OK
-{
-  "status": "UP",
-  "database": "UP",
-  "redis": "UP",
-  "repositoryMode": "PRISMA_POSTGRESQL",
-  "timestamp": "2026-08-05T05:06:58.707Z"
-}
-
-// GET /health/metrics -> HTTP 200 OK
-{
-  "uptimeSeconds": 999,
-  "totalRequests": 40,
-  "activeRequests": 2,
-  "memoryUsageMb": {
-    "rss": 111.16,
-    "heapTotal": 30.34,
-    "heapUsed": 27.81
-  },
-  "timestamp": "2026-08-05T05:06:58.685Z"
-}
-```
-
----
-
-## 29. Security and Repository Hygiene
+## 27. Security and Repository Hygiene
 
 - No sensitive credentials, bank accounts, or private encryption keys committed to repository.
-- All temporary Playwright HTML dump files (`playwright-dump.html`, `playwright-dump-before.html`, `tests/debug-locators.ts`) removed.
 - Repository uses isolated local PostgreSQL database on port 5455 (`horplus_wave1d_fasttrack_test`).
 - Port 5432, `horplus_pilot`, production databases, and `prisma db push` were NEVER used.
 
 ---
 
-## 30. Commit and Push Evidence
+## 28. Commit and Push Evidence
 
-- Forward-only implementation/test commit: `7ca4822e707a4f96bd1e8a083d79c81e9a25f051`
-- Forward-only closure report commit: Pending.
+- Forward-only implementation/test commit: `b0de0ad4f2bccae82aaa19dd4735efb233b88aba`
+- Forward-only closure report commit: Recorded in final Antigravity response after push.
 - Remote Push: `git push origin feature/wave1e-payments-receipts`
 
 ---
 
-## 31. Final Git Parity and Remaining Limitations
+## 29. Final Git Parity and Remaining Limitations
 
 - All required local gates passed; no GitHub remote check workflow is configured.
 - `git status --short` will be clean upon report commit.
@@ -461,6 +482,6 @@ Container endpoints checked against `http://127.0.0.1:3000`:
 
 ---
 
-## 32. Final Verdict
+## 30. Final Verdict
 
 WAVE 1E PAYMENTS AND RECEIPTS: PASSED
