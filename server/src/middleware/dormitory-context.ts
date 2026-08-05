@@ -89,7 +89,7 @@ export function resolveAuthoritativeDormitoryContext(req: Request): Authoritativ
     throw new AppError('Dormitory membership role code is invalid.', 403, 'MEMBERSHIP_ROLE_INVALID');
   }
 
-  const rawPerms = roleObj?.permissions ?? (targetMembership as any).permissions;
+  const rawPerms = targetMembership.rolePermissions ?? roleObj?.permissions ?? (targetMembership as any).permissions;
   const permissions = normalizeRolePermissions(rawPerms);
 
   const context: AuthoritativeDormitoryContext = {

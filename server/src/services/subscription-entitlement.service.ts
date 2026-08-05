@@ -390,8 +390,8 @@ export class SubscriptionEntitlementService {
         if (existingRecord.requestHash !== payloadHash) {
           throw new AppError('Idempotency key payload mismatch.', 409, 'IDEMPOTENCY_MISMATCH');
         }
-        const currentSub = await this.getCurrentSubscription(params.dormitoryId, tx);
-        return currentSub;
+        // Return original stored response, not current subscription state
+        return existingRecord.responseBody;
       }
 
       await tx.idempotencyKey.create({
@@ -504,12 +504,29 @@ export class SubscriptionEntitlementService {
   async activatePaidSubscriptionOperational(params: {
     dormitoryId: string;
     durationMonths: number;
-    actorId?: string;
-    idempotencyKey?: string;
-    reason?: string;
+    actorId: string;
+    idempotencyKey: string;
+    reason: string;
     txClient?: any;
     now?: Date;
   }): Promise<any> {
+    // Validate required params at service boundary
+    if (!params.actorId || !params.actorId.trim()) {
+      throw new AppError('actorId is required for operational activation.', 400, 'VALIDATION_ERROR');
+    }
+    if (!params.idempotencyKey || !params.idempotencyKey.trim()) {
+      throw new AppError('idempotencyKey is required for operational activation.', 400, 'VALIDATION_ERROR');
+    }
+    if (params.idempotencyKey.length > 255) {
+      throw new AppError('idempotencyKey exceeds maximum length (255).', 400, 'VALIDATION_ERROR');
+    }
+    if (!params.reason || !params.reason.trim()) {
+      throw new AppError('reason is required for operational activation.', 400, 'VALIDATION_ERROR');
+    }
+    if (params.reason.length > 1000) {
+      throw new AppError('reason exceeds maximum length (1000).', 400, 'VALIDATION_ERROR');
+    }
+
     const dbUrl = process.env.DATABASE_URL || '';
     if (!dbUrl) {
       throw new AppError('DATABASE_URL environment variable is missing.', 500, 'ENV_MISSING');
@@ -542,13 +559,32 @@ export class SubscriptionEntitlementService {
     const executeActivation = async (tx: any) => {
       await this.ensureSeeded(tx);
 
-      const allowedDurations = [1, 3, 6, 12, 24];
-      if (!allowedDurations.includes(params.durationMonths)) {
-        throw new AppError('Duration months must be one of 1, 3, 6, 12, or 24.', 400, 'VALIDATION_ERROR');
-      }
-
+      // Load and validate SubscriptionPackage
       const paidPlan = await tx.subscriptionPlan.findUnique({ where: { code: 'PAID' } });
       if (!paidPlan) throw new AppError('PAID plan not seeded.', 500, 'PLAN_NOT_FOUND');
+
+      const pkg = await tx.subscriptionPackage.findFirst({
+        where: {
+          planId: paidPlan.id,
+          durationMonths: params.durationMonths,
+        },
+      });
+
+      if (!pkg) {
+        throw new AppError(`No subscription package found for PAID plan with ${params.durationMonths} month(s).`, 404, 'PACKAGE_NOT_FOUND');
+      }
+      if (!pkg.enabled) {
+        throw new AppError(`Subscription package for ${params.durationMonths} month(s) is disabled.`, 403, 'PACKAGE_DISABLED');
+      }
+      if (pkg.price === null || pkg.price === undefined) {
+        throw new AppError(`Subscription package for ${params.durationMonths} month(s) has no confirmed price.`, 400, 'PACKAGE_PRICE_NOT_CONFIGURED');
+      }
+      if (Number(pkg.price) < 0) {
+        throw new AppError(`Subscription package price is invalid.`, 400, 'PACKAGE_PRICE_NOT_CONFIGURED');
+      }
+      if (pkg.currency !== 'THB') {
+        throw new AppError(`Subscription package currency must be THB, got ${pkg.currency}.`, 400, 'PACKAGE_CURRENCY_INVALID');
+      }
 
       const currentSub = await this.getCurrentSubscription(params.dormitoryId, tx);
 
@@ -573,8 +609,15 @@ export class SubscriptionEntitlementService {
           newPlanId: paidPlan.id,
           previousStatus: currentSub.status,
           newStatus: 'ACTIVE',
-          actorId: params.actorId || null,
-          reason: params.reason || `OPERATIONAL_PAID_ACTIVATION: ${params.durationMonths} month(s)`,
+          actorId: params.actorId,
+          reason: params.reason,
+          metadata: {
+            packageId: pkg.id,
+            durationMonths: params.durationMonths,
+            price: Number(pkg.price),
+            currency: pkg.currency,
+            idempotencyKey: params.idempotencyKey,
+          },
         },
       });
 
@@ -586,58 +629,56 @@ export class SubscriptionEntitlementService {
     }
 
     return await this.db.$transaction(async (tx) => {
-      if (params.idempotencyKey && params.actorId) {
-        const payloadHash = `activate:${params.dormitoryId}:${params.durationMonths}`;
-        const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+      const payloadHash = `activate:${params.dormitoryId}:${params.durationMonths}:${params.actorId}`;
+      const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
 
-        const existing = await tx.idempotencyKey.findUnique({
-          where: {
-            user_operation_idempotency_unique: {
-              userId: params.actorId,
-              operation: 'OPERATIONAL_ACTIVATION',
-              idempotencyKey: params.idempotencyKey,
-            },
-          },
-        });
-
-        if (existing) {
-          if (existing.requestHash !== payloadHash) {
-            throw new AppError('Idempotency key payload mismatch.', 409, 'IDEMPOTENCY_MISMATCH');
-          }
-          return await this.getCurrentSubscription(params.dormitoryId, tx);
-        }
-
-        await tx.idempotencyKey.create({
-          data: {
+      const existing = await tx.idempotencyKey.findUnique({
+        where: {
+          user_operation_idempotency_unique: {
             userId: params.actorId,
             operation: 'OPERATIONAL_ACTIVATION',
             idempotencyKey: params.idempotencyKey,
-            requestHash: payloadHash,
-            responseStatus: 200,
-            responseBody: {},
-            expiresAt,
           },
-        });
+        },
+      });
 
-        const result = await executeActivation(tx);
-
-        await tx.idempotencyKey.update({
-          where: {
-            user_operation_idempotency_unique: {
-              userId: params.actorId,
-              operation: 'OPERATIONAL_ACTIVATION',
-              idempotencyKey: params.idempotencyKey,
-            },
-          },
-          data: {
-            responseBody: JSON.parse(JSON.stringify(result)),
-          },
-        });
-
-        return result;
+      if (existing) {
+        if (existing.requestHash !== payloadHash) {
+          throw new AppError('Idempotency key payload mismatch.', 409, 'IDEMPOTENCY_MISMATCH');
+        }
+        // Return original stored response, not current subscription state
+        return existing.responseBody;
       }
 
-      return await executeActivation(tx);
+      await tx.idempotencyKey.create({
+        data: {
+          userId: params.actorId,
+          operation: 'OPERATIONAL_ACTIVATION',
+          idempotencyKey: params.idempotencyKey,
+          requestHash: payloadHash,
+          responseStatus: 200,
+          responseBody: {},
+          expiresAt,
+        },
+      });
+
+      const result = await executeActivation(tx);
+
+      await tx.idempotencyKey.update({
+        where: {
+          user_operation_idempotency_unique: {
+            userId: params.actorId,
+            operation: 'OPERATIONAL_ACTIVATION',
+            idempotencyKey: params.idempotencyKey,
+          },
+        },
+        data: {
+          responseStatus: 200,
+          responseBody: JSON.parse(JSON.stringify(result)),
+        },
+      });
+
+      return result;
     });
   }
 }

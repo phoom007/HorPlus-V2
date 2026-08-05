@@ -222,6 +222,7 @@ test.describe('Wave 1F - Subscription & Entitlement Playwright E2E Suite', () =>
       durationMonths: 1,
       actorId: ownerUser.id,
       idempotencyKey: `e2e-op-activate-${Date.now()}`,
+      reason: 'E2E test paid activation',
     });
 
     // 10. Verify Paid entitlements via API

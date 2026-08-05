@@ -7,6 +7,7 @@ export interface DormitoryMemberEntity {
   dormitoryName?: string;
   roleId: string;
   roleCode?: string;
+  rolePermissions?: unknown;
   status: 'invited' | 'active' | 'suspended' | 'revoked';
   invitedAt?: Date | null;
   acceptedAt?: Date | null;
@@ -48,6 +49,7 @@ export class InMemoryMembershipRepository implements IMembershipRepository {
       dormitoryName: 'HorPlus Grand Residence',
       roleId: 'role-owner',
       roleCode: 'OWNER',
+      rolePermissions: { '*': ['*'] },
       status: 'active',
       acceptedAt: new Date(),
       createdAt: new Date(),
@@ -91,7 +93,8 @@ export class InMemoryMembershipRepository implements IMembershipRepository {
       dormitoryId: data.dormitoryId,
       dormitoryName: data.dormitoryName || 'HorPlus Dormitory',
       roleId: data.roleId,
-      roleCode: data.roleCode || 'OWNER',
+      roleCode: data.roleCode,
+      rolePermissions: (data as any).rolePermissions,
       status: data.status || 'active',
       acceptedAt: data.status === 'active' ? now : null,
       createdAt: now,
@@ -126,6 +129,7 @@ export class PrismaMembershipRepository implements IMembershipRepository {
       dormitoryName: model.dormitory?.name,
       roleId: model.roleId,
       roleCode: model.role?.code,
+      rolePermissions: model.role?.permissions,
       status: model.status as any,
       invitedAt: model.invitedAt,
       acceptedAt: model.acceptedAt,

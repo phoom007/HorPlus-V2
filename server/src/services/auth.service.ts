@@ -162,7 +162,7 @@ export class AuthenticationService {
         id: m.id,
         dormitoryId: m.dormitoryId,
         dormitoryName: m.dormitoryName,
-        roleCode: m.roleCode || 'OWNER',
+        roleCode: m.roleCode || '',
         status: m.status,
       })),
       onboardingRequired,
@@ -220,7 +220,7 @@ export class AuthenticationService {
         id: m.id,
         dormitoryId: m.dormitoryId,
         dormitoryName: m.dormitoryName,
-        roleCode: m.roleCode || 'OWNER',
+        roleCode: m.roleCode || '',
         status: m.status,
       })),
       onboardingRequired,
@@ -240,18 +240,18 @@ export class AuthenticationService {
     memberships: DormitoryMemberEntity[];
   } | null> {
     const payload = this.sessionTokenService.decryptToken(sessionToken);
-    if (!payload) { console.error('validateSession: decryptToken failed'); return null; }
+    if (!payload) { return null; }
 
     const hash = SessionTokenService.hashSessionId(payload.sid);
     const session = await this.sessionRepo.findBySessionIdHash(hash);
 
-    if (!session) { console.error('validateSession: session not found for hash', hash); return null; }
-    if (session.status !== 'active') { console.error('validateSession: session not active'); return null; }
-    if (session.expiresAt < new Date()) { console.error('validateSession: session expired'); return null; }
+    if (!session) { return null; }
+    if (session.status !== 'active') { return null; }
+    if (session.expiresAt < new Date()) { return null; }
 
     const user = await this.userRepo.findById(payload.sub);
-    if (!user) { console.error('validateSession: user not found'); return null; }
-    if (user.status !== 'active') { console.error('validateSession: user not active'); return null; }
+    if (!user) { return null; }
+    if (user.status !== 'active') { return null; }
 
     // Non-blocking lastSeenAt update
     this.sessionRepo.updateLastSeen(session.id).catch(() => {});
