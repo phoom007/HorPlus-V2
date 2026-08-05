@@ -46,7 +46,7 @@ export class RoomService {
       await db.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${dormitoryId}))`;
     }
 
-    await subscriptionEntitlementService.assertRoomCreationAllowed(dormitoryId);
+    await subscriptionEntitlementService.assertRoomCreationAllowed(dormitoryId, new Date(), tx);
   }
 
   public async getRooms(dormitoryId: string, filter?: RoomFilterQuery) {
@@ -106,7 +106,7 @@ export class RoomService {
       return await this.prisma.$transaction(async (tx: any) => {
         await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${dormitoryId}))`;
 
-        await subscriptionEntitlementService.assertRoomCreationAllowed(dormitoryId);
+        await subscriptionEntitlementService.assertRoomCreationAllowed(dormitoryId, new Date(), tx);
 
         const created = await this.roomRepo.create(dormitoryId, data, tx);
 

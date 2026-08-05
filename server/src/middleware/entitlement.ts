@@ -8,11 +8,6 @@ export async function requireDormitoryWriteEntitlement(req: Request, res: Respon
     return next();
   }
 
-  // If request is unauthenticated, let downstream router / session middleware handle auth or 404
-  if (!req.auth || !req.auth.user) {
-    return next();
-  }
-
   try {
     const context = resolveAuthoritativeDormitoryContext(req);
     await subscriptionEntitlementService.assertDormitoryWritable(context.dormitoryId);

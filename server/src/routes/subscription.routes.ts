@@ -52,7 +52,6 @@ export function createSubscriptionRouter(authService?: AuthenticationService): R
   // GET /api/v1/subscription/plans
   router.get('/plans', async (req: Request, res: Response, next: NextFunction) => {
     try {
-      resolveAuthoritativeDormitoryContext(req);
       const availablePackages = await subscriptionEntitlementService.getAvailablePackages();
       return res.json({ data: availablePackages });
     } catch (err) {

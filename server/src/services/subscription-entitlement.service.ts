@@ -1,5 +1,17 @@
 import { PrismaClient } from '@prisma/client';
 import { AppError } from '../types/index.js';
+import { normalizeRolePermissions } from '../middleware/dormitory-context.js';
+
+export function addCalendarMonths(startDate: Date, months: number): Date {
+  const target = new Date(startDate.getTime());
+  const originalDay = target.getDate();
+  target.setMonth(target.getMonth() + months);
+
+  if (target.getDate() !== originalDay) {
+    target.setDate(0);
+  }
+  return target;
+}
 
 export interface EffectiveEntitlements {
   dormitoryId: string;
@@ -192,10 +204,18 @@ export class SubscriptionEntitlementService {
    */
   async getCurrentSubscription(dormitoryId: string, txClient?: any): Promise<any> {
     const db = txClient || this.db;
-    const sub = await db.dormitorySubscription.findUnique({
+    let sub = await db.dormitorySubscription.findUnique({
       where: { dormitoryId },
       include: { plan: true },
     });
+
+    if (!sub) {
+      await this.provisionInitialTrial(dormitoryId, db);
+      sub = await db.dormitorySubscription.findUnique({
+        where: { dormitoryId },
+        include: { plan: true },
+      });
+    }
 
     if (!sub) {
       throw new AppError('No subscription found for this dormitory.', 404, 'SUBSCRIPTION_NOT_FOUND');
@@ -356,7 +376,6 @@ export class SubscriptionEntitlementService {
       const payloadHash = `redeem:${params.dormitoryId}:${normalizedCode}`;
       const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
 
-      // Check existing idempotency key BEFORE creating to avoid aborting the PostgreSQL transaction block
       const existingRecord = await tx.idempotencyKey.findUnique({
         where: {
           user_operation_idempotency_unique: {
@@ -492,15 +511,29 @@ export class SubscriptionEntitlementService {
     now?: Date;
   }): Promise<any> {
     const dbUrl = process.env.DATABASE_URL || '';
-    const isProduction = process.env.NODE_ENV === 'production';
-    const isPilot = dbUrl.includes('horplus_pilot') || dbUrl.includes(':5432');
-    const isNonLoopback = !dbUrl.includes('127.0.0.1') && !dbUrl.includes('localhost');
-
-    if (isProduction || isPilot || isNonLoopback) {
-      throw new AppError('Operational activation is strictly prohibited in production, pilot, or non-loopback environments.', 403, 'OPERATIONAL_ACTIVATION_PROHIBITED');
+    if (!dbUrl) {
+      throw new AppError('DATABASE_URL environment variable is missing.', 500, 'ENV_MISSING');
     }
 
-    if (process.env.ALLOW_OPERATIONAL_ACTIVATION !== 'true' && process.env.NODE_ENV !== 'test') {
+    try {
+      const parsedUrl = new URL(dbUrl);
+      const host = parsedUrl.hostname;
+      const port = parsedUrl.port;
+      const dbName = parsedUrl.pathname.replace(/^\//, '');
+
+      const isProduction = process.env.NODE_ENV === 'production';
+      const isPilot = dbName.includes('horplus_pilot') || port === '5432';
+      const isLoopback = host === '127.0.0.1' || host === 'localhost';
+
+      if (isProduction || isPilot || !isLoopback) {
+        throw new AppError('Operational activation is strictly prohibited in production, pilot, or non-loopback environments.', 403, 'OPERATIONAL_ACTIVATION_PROHIBITED');
+      }
+    } catch (err: any) {
+      if (err instanceof AppError) throw err;
+      throw new AppError('Operational activation environment URL parsing failed.', 403, 'OPERATIONAL_ACTIVATION_PROHIBITED');
+    }
+
+    if (process.env.ALLOW_OPERATIONAL_ACTIVATION !== 'true') {
       throw new AppError('Operational activation is disabled (ALLOW_OPERATIONAL_ACTIVATION !== true).', 403, 'OPERATIONAL_ACTIVATION_DISABLED');
     }
 
@@ -520,8 +553,7 @@ export class SubscriptionEntitlementService {
       const currentSub = await this.getCurrentSubscription(params.dormitoryId, tx);
 
       const baseStart = currentSub.expiresAt.getTime() > now.getTime() ? currentSub.expiresAt : now;
-      const durationMs = params.durationMonths * 30 * 24 * 60 * 60 * 1000;
-      const newExpiresAt = new Date(baseStart.getTime() + durationMs);
+      const newExpiresAt = addCalendarMonths(baseStart, params.durationMonths);
 
       const updatedSub = await tx.dormitorySubscription.update({
         where: { id: currentSub.id },

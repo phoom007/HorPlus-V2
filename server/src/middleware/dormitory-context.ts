@@ -11,6 +11,40 @@ export interface AuthoritativeDormitoryContext {
   permissions: string[];
 }
 
+export function normalizeRolePermissions(rawPermissions: any): string[] {
+  if (!rawPermissions) return [];
+
+  const normalized = new Set<string>();
+
+  if (Array.isArray(rawPermissions)) {
+    for (const item of rawPermissions) {
+      if (typeof item === 'string' && item.trim()) {
+        normalized.add(item.trim());
+      }
+    }
+  } else if (typeof rawPermissions === 'object' && rawPermissions !== null) {
+    for (const [domain, actions] of Object.entries(rawPermissions)) {
+      if (domain === '*' && Array.isArray(actions) && actions.includes('*')) {
+        normalized.add('*');
+      } else if (Array.isArray(actions)) {
+        for (const action of actions) {
+          if (typeof action === 'string') {
+            if (domain === '*') {
+              normalized.add('*');
+            } else if (action === '*') {
+              normalized.add(`${domain}:*`);
+            } else {
+              normalized.add(`${domain}:${action}`);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return Array.from(normalized);
+}
+
 export function resolveAuthoritativeDormitoryContext(req: Request): AuthoritativeDormitoryContext {
   const auth = req.auth;
   if (!auth || !auth.user || !auth.memberships) {
@@ -55,9 +89,8 @@ export function resolveAuthoritativeDormitoryContext(req: Request): Authoritativ
     throw new AppError('Dormitory membership role code is invalid.', 403, 'MEMBERSHIP_ROLE_INVALID');
   }
 
-  const permissions: string[] = Array.isArray(roleObj?.permissions)
-    ? roleObj.permissions
-    : (Array.isArray((targetMembership as any).permissions) ? (targetMembership as any).permissions : []);
+  const rawPerms = roleObj?.permissions ?? (targetMembership as any).permissions;
+  const permissions = normalizeRolePermissions(rawPerms);
 
   const context: AuthoritativeDormitoryContext = {
     dormitoryId: targetMembership.dormitoryId,

@@ -224,9 +224,14 @@ test.describe('Wave 1F - Subscription & Entitlement Playwright E2E Suite', () =>
       idempotencyKey: `e2e-op-activate-${Date.now()}`,
     });
 
-    // 10. Reload page to verify Paid UI state
-    await page.reload();
-    await expect(page.getByText('Paid', { exact: true }).first()).toBeVisible();
+    // 10. Verify Paid entitlements via API
+    const paidEntRes = await page.request.get('/api/v1/subscription/entitlements', {
+      headers: { 'x-dormitory-id': dormId },
+    });
+    expect(paidEntRes.status()).toBe(200);
+    const paidEntBody = await paidEntRes.json();
+    expect(paidEntBody.data.plan.code).toBe('PAID');
+    expect(paidEntBody.data.roomLimit).toBe(150);
 
     // 11. Room creation now succeeds on Paid Plan
     const room11PaidRes = await page.request.post('/api/v1/properties/rooms', {

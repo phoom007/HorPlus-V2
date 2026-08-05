@@ -1,12 +1,13 @@
 import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
 import { PrismaClient } from '@prisma/client';
-import { subscriptionEntitlementService } from '../src/services/subscription-entitlement.service.js';
+import { subscriptionEntitlementService, addCalendarMonths } from '../src/services/subscription-entitlement.service.js';
 import { RoomService } from '../src/services/room.service.js';
 import { PrismaRoomRepository } from '../src/db/repositories/room.repository.js';
 import { PrismaBuildingRepository } from '../src/db/repositories/building.repository.js';
 import { PrismaSubscriptionRepository } from '../src/db/repositories/subscription.repository.js';
 import { PrismaContractRepository } from '../src/db/repositories/contract.repository.js';
-import { resolveAuthoritativeDormitoryContext } from '../src/middleware/dormitory-context.js';
+import { resolveAuthoritativeDormitoryContext, normalizeRolePermissions } from '../src/middleware/dormitory-context.js';
+import { runOperationalActivationCli } from '../src/cli/activate-subscription.js';
 import crypto from 'crypto';
 
 const prisma = new PrismaClient();
@@ -86,7 +87,7 @@ describe('Wave 1F - Authoritative Subscription, Trial, Promo Code & Entitlement 
         dormitoryId: dormId,
         name: 'Owner',
         code: 'OWNER',
-        permissions: ['*'],
+        permissions: { '*': ['*'] },
       },
     });
 
@@ -95,7 +96,7 @@ describe('Wave 1F - Authoritative Subscription, Trial, Promo Code & Entitlement 
         dormitoryId: dormId,
         name: 'Manager',
         code: 'MANAGER',
-        permissions: ['subscription:read'],
+        permissions: { subscription: ['read'] },
       },
     });
 
@@ -126,6 +127,41 @@ describe('Wave 1F - Authoritative Subscription, Trial, Promo Code & Entitlement 
       },
     });
     buildingId = building.id;
+  });
+
+  it('normalizes persisted JSON role permissions accurately into stable string tokens', () => {
+    expect(normalizeRolePermissions({ '*': ['*'] })).toEqual(['*']);
+    expect(normalizeRolePermissions({ subscription: ['read', 'write'], promo: ['redeem'] })).toEqual([
+      'subscription:read',
+      'subscription:write',
+      'promo:redeem',
+    ]);
+    expect(normalizeRolePermissions(['subscription:write', 'promo:redeem'])).toEqual([
+      'subscription:write',
+      'promo:redeem',
+    ]);
+    expect(normalizeRolePermissions(null)).toEqual([]);
+    expect(normalizeRolePermissions(undefined)).toEqual([]);
+  });
+
+  it('calculates calendar-month renewal expiry accurately without day overflow shortening', () => {
+    // Jan 31 + 1 month -> Feb 28 (or Feb 29 on leap year)
+    const jan31 = new Date(2026, 0, 31);
+    const febRes = addCalendarMonths(jan31, 1);
+    expect(febRes.getMonth()).toBe(1); // Feb
+    expect(febRes.getDate()).toBe(28); // Feb 28, 2026
+
+    // Feb 28 + 1 month -> Mar 28
+    const feb28 = new Date(2026, 1, 28);
+    const marRes = addCalendarMonths(feb28, 1);
+    expect(marRes.getMonth()).toBe(2); // Mar
+    expect(marRes.getDate()).toBe(28);
+
+    // Leap year Jan 31, 2028 + 1 month -> Feb 29, 2028
+    const leapJan31 = new Date(2028, 0, 31);
+    const leapFebRes = addCalendarMonths(leapJan31, 1);
+    expect(leapFebRes.getMonth()).toBe(1);
+    expect(leapFebRes.getDate()).toBe(29);
   });
 
   it('provisions 1 30-day Trial in DormitorySubscription and status history atomically without duplicate writes', async () => {
@@ -352,6 +388,26 @@ describe('Wave 1F - Authoritative Subscription, Trial, Promo Code & Entitlement 
 
     const totalRooms = await prisma.room.count({ where: { dormitoryId: dormId, status: { not: 'archived' } } });
     expect(totalRooms).toBe(150);
+  });
+
+  it('hardens operational activation CLI and environment URL parsing', async () => {
+    // 1. Missing mandatory CLI argument throws exit code
+    await expect(runOperationalActivationCli([dormId])).rejects.toThrow();
+
+    // 2. Loose string matching replaced by URL parser: invalid DB URL format throws
+    const oldUrl = process.env.DATABASE_URL;
+    process.env.DATABASE_URL = 'postgresql://user:pass@127.0.0.1:5432/horplus_pilot';
+
+    await expect(
+      entitlementService.activatePaidSubscriptionOperational({
+        dormitoryId: dormId,
+        durationMonths: 1,
+        actorId: ownerUserId,
+        idempotencyKey: `key-invalid-${Date.now()}`,
+      })
+    ).rejects.toThrow('Operational activation is strictly prohibited in production, pilot, or non-loopback environments.');
+
+    process.env.DATABASE_URL = oldUrl;
   });
 
   it('fails closed when dormitory membership role is invalid or missing', async () => {

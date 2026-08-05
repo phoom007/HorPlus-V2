@@ -2,13 +2,20 @@ import { subscriptionEntitlementService } from '../services/subscription-entitle
 
 export async function runOperationalActivationCli(argv: string[] = process.argv.slice(2)) {
   const dormId = argv[0];
-  const durationMonths = parseInt(argv[1] || '1', 10);
-  const actorId = argv[2] || 'cli-operator';
-  const idempotencyKey = argv[3] || `cli-activate-${Date.now()}`;
-  const reason = argv[4] || 'CLI operational activation';
+  const durationMonthsStr = argv[1];
+  const actorId = argv[2];
+  const idempotencyKey = argv[3];
+  const reason = argv[4];
 
-  if (!dormId) {
-    console.error('Usage: npx tsx src/cli/activate-subscription.ts <dormitoryId> [durationMonths] [actorId] [idempotencyKey] [reason]');
+  if (!dormId || !durationMonthsStr || !actorId || !idempotencyKey || !reason) {
+    console.error('ERROR: All parameters are required.');
+    console.error('Usage: npx tsx src/cli/activate-subscription.ts <dormitoryId> <durationMonths> <actorId> <idempotencyKey> <reason>');
+    process.exit(1);
+  }
+
+  const durationMonths = parseInt(durationMonthsStr, 10);
+  if (isNaN(durationMonths) || durationMonths <= 0) {
+    console.error('ERROR: durationMonths must be a positive integer.');
     process.exit(1);
   }
 

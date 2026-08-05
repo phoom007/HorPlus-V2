@@ -53,7 +53,7 @@ export interface AppApiDependencies {
   billingService?: BillingService;
   dormitoryRepo: any;
   billingRepo: any;
-      subRepo: any;
+  subRepo: any;
   planRepo: any;
   membershipRepo: any;
   roleRepo: any;
@@ -62,7 +62,6 @@ export interface AppApiDependencies {
 export function createApiRouter(deps: AppApiDependencies | AuthenticationService): Router {
   const router = Router();
 
-  // Support backwards compatibility if only authService passed
   const isDeps = typeof (deps as any).authService !== 'undefined';
   const authService = isDeps ? (deps as AppApiDependencies).authService : (deps as AuthenticationService);
 
@@ -93,10 +92,12 @@ export function createApiRouter(deps: AppApiDependencies | AuthenticationService
       )
     );
 
-    // Apply entitlement write gate for business resource mutations
-    router.use(requireDormitoryWriteEntitlement);
+    // Business Router Middleware Stack (requireSession -> requireDormitoryWriteEntitlement)
+    const bizAuthStack = [authService.requireAuth(), requireDormitoryWriteEntitlement];
+
     router.use(
       '/dormitories',
+      bizAuthStack,
       createDormitoryRouter(
         fullDeps.authService,
         fullDeps.dormitoryRepo,
@@ -109,36 +110,36 @@ export function createApiRouter(deps: AppApiDependencies | AuthenticationService
       )
     );
     if (fullDeps.buildingService && fullDeps.roomService) {
-      router.use('/properties', createPropertyRouter(fullDeps.authService, fullDeps.buildingService, fullDeps.roomService));
+      router.use('/properties', bizAuthStack, createPropertyRouter(fullDeps.authService, fullDeps.buildingService, fullDeps.roomService));
     }
     if (fullDeps.tenantService) {
-      router.use('/tenants', createTenantRouter(fullDeps.authService, fullDeps.tenantService));
+      router.use('/tenants', bizAuthStack, createTenantRouter(fullDeps.authService, fullDeps.tenantService));
     }
     if (fullDeps.contractService) {
-      router.use('/contracts', createContractRouter(fullDeps.authService, fullDeps.contractService));
+      router.use('/contracts', bizAuthStack, createContractRouter(fullDeps.authService, fullDeps.contractService));
     }
     if (fullDeps.occupancyService) {
-      router.use('/occupancy', createOccupancyRouter(fullDeps.authService, fullDeps.occupancyService));
+      router.use('/occupancy', bizAuthStack, createOccupancyRouter(fullDeps.authService, fullDeps.occupancyService));
     }
     if (fullDeps.billingCycleService) {
-      router.use('/billing-cycles', createBillingCycleRouter(fullDeps.authService, fullDeps.billingCycleService));
+      router.use('/billing-cycles', bizAuthStack, createBillingCycleRouter(fullDeps.authService, fullDeps.billingCycleService));
     }
     if (fullDeps.meterService) {
-      router.use('/meters', createMeterRouter(fullDeps.authService, fullDeps.meterService));
+      router.use('/meters', bizAuthStack, createMeterRouter(fullDeps.authService, fullDeps.meterService));
     }
     if (fullDeps.billingService) {
-      router.use('/bills', createBillingRouter(fullDeps.authService, fullDeps.billingService));
+      router.use('/bills', bizAuthStack, createBillingRouter(fullDeps.authService, fullDeps.billingService));
     }
 
-    // Move-out and other non-LINE features
-    router.use('/', moveOutRouter);
-    router.use('/maintenance-requests', createMaintenanceRouter());
-    router.use('/announcements', createAnnouncementRouter());
-    router.use('/payments', createPaymentRouter(fullDeps.authService));
-    router.use('/receipts', createReceiptRouter(fullDeps.authService));
-    router.use('/notifications', createNotificationRouter());
-    router.use('/tenant/notifications', createTenantNotificationRouter());
-    router.use('/tenant-portal', createTenantPortalRouter(fullDeps.authService));
+    router.use('/move-out', bizAuthStack, moveOutRouter);
+    router.use('/maintenance-requests', bizAuthStack, createMaintenanceRouter());
+    router.use('/maintenance', bizAuthStack, createMaintenanceRouter());
+    router.use('/announcements', bizAuthStack, createAnnouncementRouter());
+    router.use('/payments', bizAuthStack, createPaymentRouter(fullDeps.authService));
+    router.use('/receipts', bizAuthStack, createReceiptRouter(fullDeps.authService));
+    router.use('/notifications', bizAuthStack, createNotificationRouter());
+    router.use('/tenant/notifications', bizAuthStack, createTenantNotificationRouter());
+    router.use('/tenant-portal', bizAuthStack, createTenantPortalRouter(fullDeps.authService));
   }
 
   return router;
