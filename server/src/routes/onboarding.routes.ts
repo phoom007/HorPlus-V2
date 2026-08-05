@@ -23,7 +23,6 @@ export function createOnboardingRouter(
   const verifyCsrfToken = (req: Request, res: Response): boolean => {
     const csrfToken = (req.headers['x-csrf-token'] as string) || req.cookies?.[getCsrfCookieName()];
     const sessionId = req.auth?.sessionId;
-    console.log('verifyCsrfToken Debug:', { csrfToken, sessionId, auth: req.auth });
     if (!sessionId || !authService.verifyCsrf(csrfToken, sessionId)) {
       res.status(403).json({
         error: {

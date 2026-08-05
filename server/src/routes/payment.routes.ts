@@ -7,6 +7,7 @@ import { createCsrfMiddleware } from '../middleware/csrf.js';
 import { requireDormitoryPermission } from '../middleware/permission.js';
 import { requireDormitoryWriteEntitlement } from '../middleware/entitlement.js';
 import { resolveAuthoritativeDormitoryContext } from '../middleware/dormitory-context.js';
+import { logger } from '../config/logger.js';
 import { PrismaClient } from '@prisma/client';
 import multer from 'multer';
 import crypto from 'crypto';
@@ -120,7 +121,10 @@ export function createPaymentRouter(authService: AuthenticationService) {
       return m.dormitoryId === dormitoryId && (code.includes('owner') || code.includes('manager') || code.includes('admin'));
     });
     if (!isOk) {
-      console.log('ensureOwnerOrManager FAILED!', 'dormitoryId:', dormitoryId, 'memberships:', JSON.stringify(auth?.memberships));
+      logger.warn('payment authorization denied', {
+        requestId: (req as any).id,
+        category: 'PAYMENT_AUTHORIZATION_DENIED',
+      });
     }
     return isOk;
   };

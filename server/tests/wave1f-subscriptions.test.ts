@@ -626,6 +626,20 @@ describe('Wave 1F - Authorization, Permission, Package & Idempotency Corrective 
     expect(content).not.toContain('validateSession: user not active');
   });
 
+  it('payment and onboarding routes do not contain sensitive authorization logging', () => {
+    const paymentRoutesPath = path.resolve(__dirname, '../src/routes/payment.routes.ts');
+    const onboardingRoutesPath = path.resolve(__dirname, '../src/routes/onboarding.routes.ts');
+
+    const paymentContent = fs.readFileSync(paymentRoutesPath, 'utf-8');
+    const onboardingContent = fs.readFileSync(onboardingRoutesPath, 'utf-8');
+
+    expect(paymentContent).not.toContain('ensureOwnerOrManager FAILED!');
+    expect(paymentContent).not.toContain('JSON.stringify(auth?.memberships)');
+    expect(paymentContent).not.toContain('JSON.stringify(auth.memberships)');
+
+    expect(onboardingContent).not.toContain('verifyCsrfToken Debug:');
+  });
+
   it('no source file logs roleCode fallback to OWNER', () => {
     const authServicePath = path.resolve(__dirname, '../src/services/auth.service.ts');
     const content = fs.readFileSync(authServicePath, 'utf-8');

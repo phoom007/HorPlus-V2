@@ -28,7 +28,7 @@ moveOutRouter.get(
   '/tenant-move-out-requests',
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const dormId = req.dormitoryId || (req.query.dormitoryId as string) || 'dorm-001';
+      const dormId = req.dormitoryContext?.dormitoryId || req.dormitoryId || (req.query.dormitoryId as string) || (req.headers['x-dormitory-id'] as string) || 'dorm-001';
       const status = req.query.status as string;
       const requests = await moveOutService.listMoveOutRequestsForOwner(dormId, status);
       res.json({ success: true, data: requests });
