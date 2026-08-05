@@ -703,25 +703,62 @@ test.describe('Wave 1E - Real Payment & Receipt Integration (Fully Unmocked)', (
   }) => {
     test.setTimeout(90000);
     const browserErrors: string[] = [];
+
+    interface ExpectedNegativeRecord {
+      method: string;
+      pathname: string;
+      expectedStatuses: number[];
+      step: string;
+      consumed: boolean;
+    }
+
+    const expectedNegativeRecords: ExpectedNegativeRecord[] = [];
+
+    const registerExpectedNegative = (
+      method: string,
+      pathname: string,
+      expectedStatuses: number | number[],
+      step: string
+    ) => {
+      expectedNegativeRecords.push({
+        method: method.toUpperCase(),
+        pathname,
+        expectedStatuses: Array.isArray(expectedStatuses) ? expectedStatuses : [expectedStatuses],
+        step,
+        consumed: false,
+      });
+    };
+
+    const consumeExpectedNegative = (
+      method: string,
+      pathname: string,
+      actualStatus: number
+    ) => {
+      const match = expectedNegativeRecords.find(
+        rec =>
+          rec.method === method.toUpperCase() &&
+          rec.pathname === pathname &&
+          rec.expectedStatuses.includes(actualStatus) &&
+          (!rec.consumed || rec.step.includes('Maintenance Probe'))
+      );
+      if (match) {
+        match.consumed = true;
+        return true;
+      }
+      return false;
+    };
+
+    // Pre-register optional probe endpoints
+    registerExpectedNegative('GET', '/api/v1/tenant-portal/maintenance', 404, 'Maintenance Probe');
+    registerExpectedNegative('GET', '/api/v1/maintenance', 404, 'Maintenance Probe');
+
     page.on('pageerror', err => browserErrors.push(`Page Error: ${err.message}`));
     page.on('console', msg => {
       if (msg.type() === 'error') {
         const text = msg.text();
-        const isExpectedNetworkStatus =
-          text.includes('Failed to load resource: the server responded with a status of 404') ||
-          text.includes('Failed to load resource: the server responded with a status of 403') ||
-          text.includes('Failed to load resource: the server responded with a status of 409') ||
-          text.includes('Failed to load resource: the server responded with a status of 401');
-
-        const isExpectedRoutePattern =
-          text.includes('/maintenance') ||
-          text.includes('/upload/') ||
-          text.includes('/receipts/') ||
-          text.includes('/evidence') ||
-          text.includes('/payments/');
-
-        if (isExpectedRoutePattern || isExpectedNetworkStatus) {
-          // Whitelisted expected negative HTTP responses from intentional test interactions
+        const isChromiumResourceError = text.includes('Failed to load resource: the server responded with a status of');
+        if (isChromiumResourceError) {
+          // Network errors are strictly validated via response listener and exact expectedNegativeRecords matching
         } else {
           browserErrors.push(`Console Error: ${text}`);
         }
@@ -734,13 +771,19 @@ test.describe('Wave 1E - Real Payment & Receipt Integration (Fully Unmocked)', (
       }
     });
     page.on('response', resp => {
-      const url = resp.url();
+      const url = new URL(resp.url());
       const status = resp.status();
-      if (url.includes('line.me') || url.includes('slipok.com') || url.includes('stripe.com')) {
-        browserErrors.push(`External API call detected: ${url}`);
+      const method = resp.request().method().toUpperCase();
+      const pathname = url.pathname;
+
+      if (url.hostname.includes('line.me') || url.hostname.includes('slipok.com') || url.hostname.includes('stripe.com')) {
+        browserErrors.push(`External API call detected: ${resp.url()}`);
       }
-      if (status >= 500) {
-        browserErrors.push(`Unexpected HTTP ${status}: ${url}`);
+      if (status >= 400) {
+        const consumed = consumeExpectedNegative(method, pathname, status);
+        if (!consumed) {
+          browserErrors.push(`Unexpected HTTP ${status} ${method} ${pathname}`);
+        }
       }
     });
 
@@ -1024,6 +1067,8 @@ test.describe('Wave 1E - Real Payment & Receipt Integration (Fully Unmocked)', (
     const intentData3 = await intentRes3.json();
 
     // 2. Upload the exact same file bytes (firstSlipBytes used in bill 1)
+    const dupUploadPath = `/api/v1/payments/slip/upload/${intentData3.intentId}`;
+    registerExpectedNegative('POST', dupUploadPath, 409, 'STEP 7 Duplicate Evidence Upload');
     const uploadRes3 = await page.request.post(intentData3.uploadUrl, {
       headers: {
         Cookie: `horplus_session=${t1Session.sessionCookie}`,
@@ -1037,6 +1082,7 @@ test.describe('Wave 1E - Real Payment & Receipt Integration (Fully Unmocked)', (
         }
       }
     });
+    consumeExpectedNegative('POST', dupUploadPath, uploadRes3.status());
     expect(uploadRes3.status()).toBe(409);
     const uploadDupData = await uploadRes3.json();
     expect(uploadDupData.error).toBe('DUPLICATE_PAYMENT_EVIDENCE');
@@ -1111,21 +1157,27 @@ test.describe('Wave 1E - Real Payment & Receipt Integration (Fully Unmocked)', (
 
     // 4. Different Tenant -> 403 or safe 404
     for (const ep of authEndpoints) {
+      registerExpectedNegative('GET', ep, [403, 404], 'STEP 8 Different Tenant Authorization');
       const res = await page.request.get(ep, { headers: { Cookie: `horplus_session=${t2Session.sessionCookie}` } });
+      consumeExpectedNegative('GET', ep, res.status());
       expect([403, 404]).toContain(res.status());
       await assertResponsePrivacy(res);
     }
 
     // 5. Technician / Housekeeping -> 403 or safe 404
     for (const ep of authEndpoints) {
+      registerExpectedNegative('GET', ep, [403, 404], 'STEP 8 Technician Authorization');
       const res = await page.request.get(ep, { headers: { Cookie: `horplus_session=${techSession.sessionCookie}` } });
+      consumeExpectedNegative('GET', ep, res.status());
       expect([403, 404]).toContain(res.status());
       await assertResponsePrivacy(res);
     }
 
     // 6. Owner from another Dormitory -> 403 or safe 404
     for (const ep of authEndpoints) {
+      registerExpectedNegative('GET', ep, [403, 404], 'STEP 8 Other Owner Authorization');
       const res = await page.request.get(ep, { headers: { Cookie: `horplus_session=${otherOwnerSession.sessionCookie}` } });
+      consumeExpectedNegative('GET', ep, res.status());
       expect([403, 404]).toContain(res.status());
       await assertResponsePrivacy(res);
     }
@@ -1133,13 +1185,19 @@ test.describe('Wave 1E - Real Payment & Receipt Integration (Fully Unmocked)', (
     // 7. Anonymous -> HTTP 401 strictly
     const anonBrowserContext = await page.context().browser()!.newContext();
     for (const ep of authEndpoints) {
+      registerExpectedNegative('GET', ep, 401, 'STEP 8 Anonymous Authorization');
       const res = await anonBrowserContext.request.get(ep);
+      consumeExpectedNegative('GET', ep, res.status());
       expect(res.status()).toBe(401);
       await assertResponsePrivacy(res);
     }
     await anonBrowserContext.close();
 
-    // Finally, verify no browser errors occurred
+    // Verify all registered expected negative records (except optional probes) were actually consumed
+    const unconsumedExpected = expectedNegativeRecords.filter(r => !r.consumed && !r.step.includes('Maintenance Probe'));
+    expect(unconsumedExpected).toEqual([]);
+
+    // Finally, verify no unexpected browser errors or unhandled HTTP errors occurred
     expect(browserErrors).toEqual([]);
   });
 });
