@@ -15,11 +15,11 @@
 - **Test Implementation Commit SHA**: `28fed03366fb8e1bc17ffcbe4ff48203f191b35b`
 
 ## 5. Report Commit SHA Returned After Push
-- **Canonical Report Commit SHA**: `5329afe555a464d645e9078e20f9dde84eca209c`
+- **Canonical Report Commit SHA**: `4893a0470fcb8436ebb18b3a11ac9d63a3b8112e`
 
 ## 6. Final Remote SHA
 - **Target Branch**: `feature/wave1f-subscriptions-entitlements`
-- **Remote SHA**: `5329afe555a464d645e9078e20f9dde84eca209c`
+- **Remote SHA**: `4893a0470fcb8436ebb18b3a11ac9d63a3b8112e`
 
 ## 7. PR #2 Status
 - **Pull Request**: [#2](https://github.com/phoom007/HorPlus-V2/pull/2)
@@ -255,12 +255,12 @@
 ## 52. Commit and Push Evidence
 - Forward-only commits created and pushed to `origin/feature/wave1f-subscriptions-entitlements`:
   - `test(wave1f): prove exact over-limit route and quota contracts` (`28fed03366fb8e1bc17ffcbe4ff48203f191b35b`)
-  - `docs(wave1f): complete canonical closure evidence` (`5329afe555a464d645e9078e20f9dde84eca209c`)
+  - `docs(wave1f): complete canonical closure evidence` (`4893a0470fcb8436ebb18b3a11ac9d63a3b8112e`)
 
 ## 53. Final Git Parity
 - **Working Tree**: Clean
-- **Local HEAD SHA**: `5329afe555a464d645e9078e20f9dde84eca209c`
-- **Remote SHA**: `5329afe555a464d645e9078e20f9dde84eca209c`
+- **Local HEAD SHA**: `4893a0470fcb8436ebb18b3a11ac9d63a3b8112e`
+- **Remote SHA**: `4893a0470fcb8436ebb18b3a11ac9d63a3b8112e`
 - **PR #2**: Open and unmerged.
 
 ## 54. Remaining Limitations
