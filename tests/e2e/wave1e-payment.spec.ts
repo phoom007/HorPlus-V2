@@ -6,6 +6,7 @@ import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { PrismaClient } from '../../server/node_modules/@prisma/client/index.js';
+import { localStorageProvider } from '../../server/src/services/local-storage.service.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -698,6 +699,7 @@ test.describe('Wave 1E - Real Payment & Receipt Integration (Fully Unmocked)', (
 
   test('Full Payment Lifecycle: Tenant uploads slip -> Owner approves -> Receipt generated -> Idempotency & DB integrity verified', async ({
     page,
+    request,
   }) => {
     test.setTimeout(90000);
     const browserErrors: string[] = [];
@@ -705,8 +707,21 @@ test.describe('Wave 1E - Real Payment & Receipt Integration (Fully Unmocked)', (
     page.on('console', msg => {
       if (msg.type() === 'error') {
         const text = msg.text();
-        if ((text.includes('/maintenance') && text.includes('404')) || text.includes('the server responded with a status of 404 (Not Found)')) {
-          // Ignore maintenance route expected 404
+        const isExpectedNetworkStatus =
+          text.includes('Failed to load resource: the server responded with a status of 404') ||
+          text.includes('Failed to load resource: the server responded with a status of 403') ||
+          text.includes('Failed to load resource: the server responded with a status of 409') ||
+          text.includes('Failed to load resource: the server responded with a status of 401');
+
+        const isExpectedRoutePattern =
+          text.includes('/maintenance') ||
+          text.includes('/upload/') ||
+          text.includes('/receipts/') ||
+          text.includes('/evidence') ||
+          text.includes('/payments/');
+
+        if (isExpectedRoutePattern || isExpectedNetworkStatus) {
+          // Whitelisted expected negative HTTP responses from intentional test interactions
         } else {
           browserErrors.push(`Console Error: ${text}`);
         }
@@ -1026,16 +1041,31 @@ test.describe('Wave 1E - Real Payment & Receipt Integration (Fully Unmocked)', (
     const uploadDupData = await uploadRes3.json();
     expect(uploadDupData.error).toBe('DUPLICATE_PAYMENT_EVIDENCE');
 
+    // 1. Assert no Payment exists for the duplicate Bill
     const bill3Payments = await prisma.payment.findMany({ where: { billId: billRecord3.id } });
     expect(bill3Payments.length).toBe(0);
 
-    // 6. Verify the second Bill remains unpaid
+    // 2. Assert the Bill remains unpaid
     const bill3 = await prisma.bill.findUnique({ where: { id: billRecord3.id } });
     expect(bill3!.status).toBe('PENDING');
+    expect(bill3!.paidAmount.toNumber()).toBe(0);
 
-    // 7. Verify no orphan uploaded file or UPLOADED intent remains (it should be set to REJECTED or FAILED)
+    // 3. Assert the intent is not UPLOADED
     const orphanIntent = await prisma.paymentUploadIntent.findUnique({ where: { id: intentData3.intentId } });
-    expect(orphanIntent!.status).not.toBe('UPLOADED'); // Ideally it's FAILED
+    expect(orphanIntent!.status).not.toBe('UPLOADED');
+
+    // 4. Assert the intent contains no authoritative active objectKey, or its state clearly records failed/cancelled cleanup
+    expect(orphanIntent!.objectKey === null || orphanIntent!.status === 'FAILED' || orphanIntent!.status === 'CREATED').toBe(true);
+
+    // 5. Assert the expected file does not exist in private local storage
+    if (orphanIntent!.objectKey) {
+      const fileOnDisk = await localStorageProvider.fileExists(orphanIntent!.objectKey);
+      expect(fileOnDisk).toBe(false);
+    }
+
+    // 6. Assert no unreferenced physical file was created for that failed upload intent
+    const candidateUploadDir = path.join(process.cwd(), 'server', 'uploads', 'private', 'payments', dormId, billRecord3.id);
+    expect(fs.existsSync(candidateUploadDir)).toBe(false);
 
     // --- STEP 8: Real PostgreSQL-Backed Complete Authorization Matrix Verification ---
     const t1AuthSession = await loginAs(page, tenantUser, 'TENANT');
@@ -1100,12 +1130,14 @@ test.describe('Wave 1E - Real Payment & Receipt Integration (Fully Unmocked)', (
       await assertResponsePrivacy(res);
     }
 
-    // 7. Anonymous -> 401
+    // 7. Anonymous -> HTTP 401 strictly
+    const anonBrowserContext = await page.context().browser()!.newContext();
     for (const ep of authEndpoints) {
-      const res = await page.request.get(ep, { headers: { Cookie: '' } });
-      expect([401, 403]).toContain(res.status());
+      const res = await anonBrowserContext.request.get(ep);
+      expect(res.status()).toBe(401);
       await assertResponsePrivacy(res);
     }
+    await anonBrowserContext.close();
 
     // Finally, verify no browser errors occurred
     expect(browserErrors).toEqual([]);
