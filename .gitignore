@@ -27,6 +27,9 @@ scratch/
 scripts/
 !server/src/scripts/
 docs/execution-reports/
+!docs/execution-reports/*.md
+!docs/execution-reports/evidence/
+!docs/execution-reports/evidence/*.md
 docs/graphify-validation/
 docs/production-blueprint/
 graphify-out/

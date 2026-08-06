@@ -28,6 +28,8 @@ import {
   getDormitoryRatesForCycle,
   seedDatabase
 } from '../../data/mockData';
+
+// Legacy mock-storage persistence is retained ONLY for Dormitory profile fields (dormitory name, address, contact phone, taxId, bank accounts) outside the Wave 1G model-backed Property Defaults and Billing Settings.
 import { ConfirmDialog, SignaturePad } from '../../components/GlobalComponents';
 import { getDataProvider } from '../../data/dataProvider';
 import { PropagationPreviewModal } from '../../components/PropagationPreviewModal';
@@ -148,7 +150,7 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
     fetchDormitoryDefaults();
   }, []);
 
-  const handleOpenPropagationPreview = async (changes: Record<string, any>) => {
+  const handleOpenPropagationPreview = async (changes: { property?: Record<string, any>; billing?: Record<string, any> }) => {
     if (!DataProvider.properties) return;
     setPropagationChanges(changes);
     setPreviewLoading(true);
@@ -179,7 +181,10 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
       const res = await DataProvider.properties.applyPropagation({
         scope: 'DORMITORY',
         changes: propagationChanges,
-        expectedVersion: propertyVersion,
+        expectedVersions: {
+          property: propertyVersion,
+          billing: billingVersion,
+        },
         idempotencyKey: `idem-${Date.now()}`
       });
       if (!res.success) {
@@ -187,14 +192,14 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
           setVersionConflictState({
             isOpen: true,
             entityName: 'การส่งต่อค่าเริ่มต้น (Propagation)',
-            currentVersion: (res.error?.details as any)?.currentVersion || propertyVersion + 1
+            currentVersion: (res.error?.details as any)?.currentVersion || Math.max(propertyVersion, billingVersion) + 1
           });
           setIsPreviewOpen(false);
           return;
         }
         throw new Error(res.error?.message || 'Failed to apply propagation');
       }
-      onAddLog('ส่งต่อค่าเริ่มต้น', `ส่งต่อค่า ${Object.keys(propagationChanges).join(', ')} ไปยังห้องพักเรียบร้อยแล้ว`, 'Dormitory', dorm.id);
+      onAddLog('ส่งต่อค่าเริ่มต้น', `ส่งต่อค่าไปยังห้องพักเรียบร้อยแล้ว`, 'Dormitory', dorm.id);
       setIsPreviewOpen(false);
       await fetchDormitoryDefaults();
       onRefreshData();
@@ -888,8 +893,7 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                       setSaveStatus('typing');
                     }}
                     onBlur={(e) => {
-                      handleRateBlur('waterUnitRate', Number(e.target.value));
-                      handleSaveBackendDormitoryDefaults(undefined, { waterUnitRate: Number(e.target.value) });
+                      handleSaveBackendDormitoryDefaults(undefined, { waterRate: Number(e.target.value) });
                     }}
                     className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-bold focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs"
                     data-testid="input-water-unit-rate"
@@ -901,7 +905,6 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                   <select
                     value={currentRates.waterBillingMode}
                     onChange={(e) => {
-                      handleRateSelectChange('waterBillingMode', e.target.value as any);
                       handleSaveBackendDormitoryDefaults(undefined, { waterBillingType: e.target.value });
                     }}
                     className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-medium focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs"
@@ -928,7 +931,7 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                       setLocalElectricUnitRate(e.target.value);
                       setSaveStatus('typing');
                     }}
-                    onBlur={(e) => handleRateBlur('electricUnitRate', Number(e.target.value))}
+                    onBlur={(e) => handleSaveBackendDormitoryDefaults(undefined, { electricityRate: Number(e.target.value) })}
                     className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-bold focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs"
                   />
                 </div>
@@ -937,7 +940,7 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                   <label className="block font-semibold text-slate-700">รูปแบบค่าไฟฟ้า</label>
                   <select
                     value={currentRates.electricBillingMode}
-                    onChange={(e) => handleRateSelectChange('electricBillingMode', e.target.value as any)}
+                    onChange={(e) => handleSaveBackendDormitoryDefaults(undefined, { electricityBillingType: e.target.value })}
                     className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-medium focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs"
                   >
                     <option value="unit">บาท/หน่วย</option>
@@ -963,18 +966,18 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                       setLocalCommonFee(e.target.value);
                       setSaveStatus('typing');
                     }}
-                    onBlur={(e) => handleRateBlur('commonFee', Number(e.target.value))}
+                    onBlur={(e) => handleSaveBackendDormitoryDefaults(undefined, { commonFee: Number(e.target.value) })}
                     placeholder={currentRates.commonFeeMode === 'free' ? 'ฟรี' : '0'}
                     className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-bold focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs disabled:opacity-50 disabled:bg-slate-100"
                   />
                 </div>
 
                 <div className="space-y-1">
-                  <label className="block font-semibold text-slate-700">รูปแบบค่าส่วนกลาง</label>
+                  <label className="block font-semibold text-slate-700">รูปแบบค่าส่วนกลาง ( legacy-only UI )</label>
                   <select
                     value={currentRates.commonFeeMode}
-                    onChange={(e) => handleRateSelectChange('commonFeeMode', e.target.value as any)}
-                    className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-medium focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs cursor-pointer"
+                    disabled
+                    className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-slate-100 text-slate-500 font-medium outline-none text-xs cursor-not-allowed"
                   >
                     <option value="free">ไม่คิดค่าบริการ (ฟรี)</option>
                     <option value="room">บาท/ห้อง</option>
@@ -999,18 +1002,18 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                       setLocalInternetFee(e.target.value);
                       setSaveStatus('typing');
                     }}
-                    onBlur={(e) => handleRateBlur('internetFee', Number(e.target.value))}
+                    onBlur={(e) => handleSaveBackendDormitoryDefaults(undefined, { internetFee: Number(e.target.value) })}
                     placeholder={currentRates.internetFeeMode === 'free' ? 'ฟรี' : '0'}
                     className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-bold focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs disabled:opacity-50 disabled:bg-slate-100"
                   />
                 </div>
 
                 <div className="space-y-1">
-                  <label className="block font-semibold text-slate-700">รูปแบบค่าอินเทอร์เน็ต</label>
+                  <label className="block font-semibold text-slate-700">รูปแบบค่าอินเทอร์เน็ต ( legacy-only UI )</label>
                   <select
                     value={currentRates.internetFeeMode}
-                    onChange={(e) => handleRateSelectChange('internetFeeMode', e.target.value as any)}
-                    className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-medium focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs cursor-pointer"
+                    disabled
+                    className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-slate-100 text-slate-500 font-medium outline-none text-xs cursor-not-allowed"
                   >
                     <option value="free">ไม่คิดค่าบริการ (ฟรี)</option>
                     <option value="room">บาท/ห้อง</option>
@@ -1035,24 +1038,18 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                       setLocalParkingFee(e.target.value);
                       setSaveStatus('typing');
                     }}
-                    onBlur={(e) => {
-                      handleRateBlur('parkingFee', Number(e.target.value));
-                      handleGlobalFieldBlur('parkingFee', Number(e.target.value));
-                    }}
+                    onBlur={(e) => handleSaveBackendDormitoryDefaults({ defaultParkingFee: Number(e.target.value) }, undefined)}
                     placeholder={currentRates.parkingFeeMode === 'free' ? 'ฟรี' : '0'}
                     className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-bold focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs disabled:opacity-50 disabled:bg-slate-100"
                   />
                 </div>
 
                 <div className="space-y-1">
-                  <label className="block font-semibold text-slate-700">รูปแบบค่าจอดรถ</label>
+                  <label className="block font-semibold text-slate-700">รูปแบบค่าจอดรถ ( legacy-only UI )</label>
                   <select
                     value={currentRates.parkingFeeMode || 'room'}
-                    onChange={(e) => {
-                      handleRateSelectChange('parkingFeeMode', e.target.value as any);
-                      handleGlobalFieldBlur('parkingFeeMode', e.target.value);
-                    }}
-                    className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-medium focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs cursor-pointer"
+                    disabled
+                    className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-slate-100 text-slate-500 font-medium outline-none text-xs cursor-not-allowed"
                   >
                     <option value="free">ไม่คิดค่าบริการ (ฟรี)</option>
                     <option value="room">บาท/ห้อง</option>
@@ -1077,10 +1074,7 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                       setLocalLateFee(e.target.value);
                       setSaveStatus('typing');
                     }}
-                    onBlur={(e) => {
-                      handleRateBlur('lateFeeDaily', Number(e.target.value));
-                      handleGlobalFieldBlur('lateFeeDaily', Number(e.target.value));
-                    }}
+                    onBlur={(e) => handleSaveBackendDormitoryDefaults(undefined, { lateFeeValue: Number(e.target.value) })}
                     placeholder={currentRates.lateFeeType === 'free' ? 'ฟรี' : '0'}
                     className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-bold focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs disabled:opacity-50 disabled:bg-slate-100"
                   />
@@ -1090,10 +1084,7 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                   <label className="block font-semibold text-slate-700">รูปแบบค่าปรับเกินกำหนด</label>
                   <select
                     value={currentRates.lateFeeType || dorm.lateFeeType || 'per_day'}
-                    onChange={(e) => {
-                      handleRateSelectChange('lateFeeType', e.target.value as any);
-                      handleGlobalFieldBlur('lateFeeType', e.target.value);
-                    }}
+                    onChange={(e) => handleSaveBackendDormitoryDefaults(undefined, { lateFeeType: e.target.value })}
                     className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-medium focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs cursor-pointer"
                   >
                     <option value="free">ไม่คิดค่าปรับ (ฟรี)</option>
@@ -1108,10 +1099,14 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                 <button
                   type="button"
                   onClick={() => handleOpenPropagationPreview({
-                    monthlyRent: Number(propertyMonthlyRent),
-                    depositAmount: Number(propertyDepositAmount),
-                    waterUnitRate: Number(localWaterUnitRate),
-                    electricUnitRate: Number(localElectricUnitRate)
+                    property: {
+                      defaultMonthlyRent: Number(propertyMonthlyRent),
+                      defaultDeposit: Number(propertyDepositAmount)
+                    },
+                    billing: {
+                      waterRate: Number(localWaterUnitRate),
+                      electricityRate: Number(localElectricUnitRate)
+                    }
                   })}
                   className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs rounded-xl shadow-xs transition-all cursor-pointer flex items-center gap-2"
                 >
