@@ -431,7 +431,19 @@ describe('Wave 1F - Authorization, Permission, Package & Idempotency Corrective 
 
   it('enforces over-limit read-only behavior across multiple domain mutation guards', async () => {
     for (let i = 1; i <= 11; i++) {
-      await prisma.room.create({ data: { dormitoryId: dormId, buildingId, roomNumber: `RM-OVER-${i}`, normalizedRoomNumber: `RM-OVER-${i}`, floor: 1 } });
+      await prisma.room.create({
+        data: {
+          dormitoryId: dormId,
+          buildingId,
+          roomNumber: `RM-OVER-${i}`,
+          normalizedRoomNumber: `rm-over-${i}`,
+          roomType: 'standard',
+          monthlyRent: '0.00',
+          depositAmount: '0.00',
+          parkingFee: '0.00',
+          floor: 1,
+        },
+      });
     }
 
     const entitlements = await entitlementService.getEffectiveEntitlements(dormId);
@@ -447,7 +459,19 @@ describe('Wave 1F - Authorization, Permission, Package & Idempotency Corrective 
 
   it('proves real concurrent room creation on Free boundary under PG transaction lock', async () => {
     for (let i = 1; i <= 9; i++) {
-      await prisma.room.create({ data: { dormitoryId: dormId, buildingId, roomNumber: `FREE-C-${i}`, normalizedRoomNumber: `FREE-C-${i}`, floor: 1 } });
+      await prisma.room.create({
+        data: {
+          dormitoryId: dormId,
+          buildingId,
+          roomNumber: `FREE-C-${i}`,
+          normalizedRoomNumber: `free-c-${i}`,
+          roomType: 'standard',
+          monthlyRent: '0.00',
+          depositAmount: '0.00',
+          parkingFee: '0.00',
+          floor: 1,
+        },
+      });
     }
 
     const roomService = new RoomService(
@@ -480,7 +504,19 @@ describe('Wave 1F - Authorization, Permission, Package & Idempotency Corrective 
     });
 
     for (let i = 1; i <= 149; i++) {
-      await prisma.room.create({ data: { dormitoryId: dormId, buildingId, roomNumber: `PAID-C-${i}`, normalizedRoomNumber: `PAID-C-${i}`, floor: 1 } });
+      await prisma.room.create({
+        data: {
+          dormitoryId: dormId,
+          buildingId,
+          roomNumber: `PAID-C-${i}`,
+          normalizedRoomNumber: `paid-c-${i}`,
+          roomType: 'standard',
+          monthlyRent: '0.00',
+          depositAmount: '0.00',
+          parkingFee: '0.00',
+          floor: 1,
+        },
+      });
     }
 
     const roomService = new RoomService(
@@ -709,7 +745,18 @@ describe('Wave 1F - Authorization, Permission, Package & Idempotency Corrective 
       });
 
       const room = await prisma.room.create({
-        data: { dormitoryId: dormId, buildingId, roomNumber: `PAY-R-${timestamp}`, floor: 1, status: 'occupied' },
+        data: {
+          dormitoryId: dormId,
+          buildingId,
+          roomNumber: `PAY-R-${timestamp}`,
+          normalizedRoomNumber: `pay-r-${timestamp}`,
+          roomType: 'standard',
+          monthlyRent: '0.00',
+          depositAmount: '0.00',
+          parkingFee: '0.00',
+          floor: 1,
+          status: 'occupied',
+        },
       });
 
       const tenantRec = await prisma.tenant.create({
@@ -787,7 +834,18 @@ describe('Wave 1F - Authorization, Permission, Package & Idempotency Corrective 
     it('Tenant + active Subscription allows upload intent when bill belongs to Tenant', async () => {
       const timestamp = Date.now();
       const freshRoom = await prisma.room.create({
-        data: { dormitoryId: dormId, buildingId, roomNumber: `PAY-INTENT-${timestamp}`, normalizedRoomNumber: `payintent${timestamp}`, floor: 1, status: 'occupied' },
+        data: {
+          dormitoryId: dormId,
+          buildingId,
+          roomNumber: `PAY-INTENT-${timestamp}`,
+          normalizedRoomNumber: `payintent${timestamp}`,
+          roomType: 'standard',
+          monthlyRent: '0.00',
+          depositAmount: '0.00',
+          parkingFee: '0.00',
+          floor: 1,
+          status: 'occupied',
+        },
       });
       const freshBill = await prisma.bill.create({
         data: {
@@ -834,7 +892,18 @@ describe('Wave 1F - Authorization, Permission, Package & Idempotency Corrective 
     it('Owner + payment:write + active Subscription allows cash recording', async () => {
       const timestamp = Date.now();
       const freshRoom = await prisma.room.create({
-        data: { dormitoryId: dormId, buildingId, roomNumber: `PAY-CASH-${timestamp}`, normalizedRoomNumber: `paycash${timestamp}`, floor: 1, status: 'occupied' },
+        data: {
+          dormitoryId: dormId,
+          buildingId,
+          roomNumber: `PAY-CASH-${timestamp}`,
+          normalizedRoomNumber: `paycash${timestamp}`,
+          roomType: 'standard',
+          monthlyRent: '0.00',
+          depositAmount: '0.00',
+          parkingFee: '0.00',
+          floor: 1,
+          status: 'occupied',
+        },
       });
       const freshBill = await prisma.bill.create({
         data: {
@@ -1099,7 +1168,18 @@ describe('Wave 1F - Authorization, Permission, Package & Idempotency Corrective 
       const bld = await prisma.building.findFirst({ where: { dormitoryId: concDormId } });
       for (let i = 1; i <= 9; i++) {
         await prisma.room.create({
-          data: { dormitoryId: concDormId, buildingId: bld!.id, roomNumber: `RMF${i}`, normalizedRoomNumber: `rmf${i}`, floor: 1, status: 'vacant' },
+          data: {
+            dormitoryId: concDormId,
+            buildingId: bld!.id,
+            roomNumber: `RMF${i}`,
+            normalizedRoomNumber: `rmf${i}`,
+            roomType: 'standard',
+            monthlyRent: '0.00',
+            depositAmount: '0.00',
+            parkingFee: '0.00',
+            floor: 1,
+            status: 'vacant',
+          },
         });
       }
 
@@ -1146,7 +1226,16 @@ describe('Wave 1F - Authorization, Permission, Package & Idempotency Corrective 
 
       const bld = await prisma.building.findFirst({ where: { dormitoryId: concDormId } });
       const roomData = Array.from({ length: 149 }, (_, i) => ({
-        dormitoryId: concDormId, buildingId: bld!.id, roomNumber: `RMP${i + 1}`, normalizedRoomNumber: `rmp${i + 1}`, floor: 1, status: 'vacant',
+        dormitoryId: concDormId,
+        buildingId: bld!.id,
+        roomNumber: `RMP${i + 1}`,
+        normalizedRoomNumber: `rmp${i + 1}`,
+        roomType: 'standard',
+        monthlyRent: '0.00',
+        depositAmount: '0.00',
+        parkingFee: '0.00',
+        floor: 1,
+        status: 'vacant',
       }));
       await prisma.room.createMany({ data: roomData });
 

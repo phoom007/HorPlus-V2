@@ -74,10 +74,13 @@ describe('Wave 1E - Tenant Payments, Manual Review, Receipts & Evidence Lifecycl
         dormitoryId: dormId,
         buildingId: building.id,
         roomNumber: 'A101',
-        normalizedRoomNumber: 'A101',
+        normalizedRoomNumber: 'a101',
+        roomType: 'standard',
+        depositAmount: '0.00',
+        parkingFee: '0.00',
         floor: 1,
-        monthlyRent: 4500
-      }
+        monthlyRent: '4500.00',
+      },
     });
     roomId = room.id;
 
@@ -136,10 +139,13 @@ describe('Wave 1E - Tenant Payments, Manual Review, Receipts & Evidence Lifecycl
         dormitoryId: dormId,
         buildingId: buildingId,
         roomNumber: roomNo,
-        normalizedRoomNumber: roomNo,
+        normalizedRoomNumber: roomNo.toLowerCase(),
+        roomType: 'standard',
+        depositAmount: '0.00',
+        parkingFee: '0.00',
         floor: 1,
-        monthlyRent: 4500
-      }
+        monthlyRent: '4500.00',
+      },
     });
 
     return await prisma.bill.create({

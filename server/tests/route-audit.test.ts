@@ -201,7 +201,18 @@ describe('Wave 1F - Real-Session 14-Domain Route Audit Matrix', () => {
     buildingId = bld.id;
 
     const rm = await prisma.room.create({
-      data: { dormitoryId: dormId, buildingId: bld.id, roomNumber: '101', normalizedRoomNumber: '101', floor: 1, monthlyRent: 3000, status: 'vacant' },
+      data: {
+        dormitoryId: dormId,
+        buildingId: bld.id,
+        roomNumber: '101',
+        normalizedRoomNumber: '101',
+        roomType: 'standard',
+        depositAmount: '0.00',
+        parkingFee: '0.00',
+        floor: 1,
+        monthlyRent: '3000.00',
+        status: 'vacant',
+      },
     });
     roomId = rm.id;
 
@@ -422,8 +433,11 @@ describe('Wave 1F - Real-Session 14-Domain Route Audit Matrix', () => {
           buildingId: buildingId,
           roomNumber: `OVR-${i + 1}`,
           normalizedRoomNumber: `ovr-${i + 1}`,
+          roomType: 'standard',
+          depositAmount: '0.00',
+          parkingFee: '0.00',
           floor: 1,
-          monthlyRent: 3000,
+          monthlyRent: '3000.00',
           status: 'vacant',
         }));
         await prisma.room.createMany({ data: extraRoomsData });
