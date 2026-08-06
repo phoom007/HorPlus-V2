@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import { getPrismaClient } from '../db/prisma.js';
 import { AppError } from '../types/index.js';
 
@@ -220,12 +221,49 @@ export class DefaultsService {
    */
   public async previewDefaultPropagation(
     dormitoryId: string,
-    scope: 'DORMITORY' | 'BUILDING',
-    scopeId?: string,
-    proposedChanges: Record<string, any> = {},
+    payload: {
+      scope: 'DORMITORY' | 'BUILDING';
+      scopeId?: string;
+      changes: {
+        property?: Record<string, any>;
+        billing?: Record<string, any>;
+        [key: string]: any;
+      };
+    },
     txClient?: any
   ) {
     const prisma = txClient || getPrismaClient();
+    const scope = payload.scope;
+    const scopeId = payload.scopeId;
+
+    let expectedVersions: { property?: number; billing?: number } | undefined = undefined;
+    let expectedVersion: number | undefined = undefined;
+
+    let proposedChanges: Record<string, any> = {};
+
+    if (scope === 'DORMITORY') {
+      const dormProp = await prisma.dormitoryPropertyDefaults.findUnique({ where: { dormitoryId } });
+      const dormBill = await prisma.dormitoryBillingSettings.findUnique({ where: { dormitoryId } });
+
+      expectedVersions = {
+        property: dormProp?.version || 1,
+        billing: dormBill?.version || 1,
+      };
+
+      if (payload.changes.property) {
+        Object.assign(proposedChanges, payload.changes.property);
+      }
+      if (payload.changes.billing) {
+        Object.assign(proposedChanges, payload.changes.billing);
+      }
+    } else if (scope === 'BUILDING' && scopeId) {
+      const bld = await prisma.building.findFirst({ where: { id: scopeId, dormitoryId } });
+      if (!bld) {
+        throw new AppError('ไม่พบข้อมูลอาคารที่ระบุ', 404, 'BUILDING_NOT_FOUND');
+      }
+      expectedVersion = bld.version;
+      proposedChanges = payload.changes || {};
+    }
 
     let rooms: any[] = [];
     if (scope === 'BUILDING' && scopeId) {
@@ -269,7 +307,6 @@ export class DefaultsService {
         skippedProtectedContractCount++;
       }
 
-      // Resolve effective values for current room state
       const effectiveBefore = await this.resolveEffectiveRoomDefaults(
         dormitoryId,
         room.buildingId,
@@ -278,7 +315,6 @@ export class DefaultsService {
       );
 
       for (const [key, value] of Object.entries(proposedChanges)) {
-        // Map property schema field name to room property name if applicable
         const fieldName = key.startsWith('default')
           ? key.replace(/^default/, '').charAt(0).toLowerCase() + key.replace(/^default/, '').slice(1)
           : key;
@@ -287,7 +323,6 @@ export class DefaultsService {
         const oldVal = beforeResult.value;
         const sourceBefore = beforeResult.source;
 
-        // Field-level override check: Has the room set an explicit override for this exact field?
         const isFieldOverriddenAtRoom = (room as any)[fieldName] !== undefined && (room as any)[fieldName] !== null;
 
         let eligible = true;
@@ -327,6 +362,8 @@ export class DefaultsService {
     return {
       scope,
       scopeId: scopeId || null,
+      expectedVersions: scope === 'DORMITORY' ? expectedVersions : undefined,
+      expectedVersion: scope === 'BUILDING' ? expectedVersion : undefined,
       candidateRoomCount: totalCandidateRooms,
       eligibleRoomCount: eligibleCount,
       eligibleFieldChangeCount,
@@ -343,20 +380,127 @@ export class DefaultsService {
   }
 
   /**
+   * Directly update Dormitory defaults (Property and/or Billing) with optimistic concurrency & transactional audit log
+   */
+  public async updateDormitoryDefaults(
+    dormitoryId: string,
+    payload: {
+      property?: { changes: Record<string, any>; expectedVersion: number };
+      billing?: { changes: Record<string, any>; expectedVersion: number };
+    },
+    actorUserId: string,
+    requestId?: string
+  ) {
+    const prisma = getPrismaClient();
+
+    return await prisma.$transaction(async (tx: any) => {
+      const currentProp = await tx.dormitoryPropertyDefaults.findUnique({ where: { dormitoryId } });
+      const currentBill = await tx.dormitoryBillingSettings.findUnique({ where: { dormitoryId } });
+
+      if (payload.property && !currentProp) {
+        throw new AppError('ไม่พบข้อมูลการตั้งค่าเริ่มต้นของหอพัก', 404, 'DORMITORY_NOT_FOUND');
+      }
+      if (payload.billing && !currentBill) {
+        throw new AppError('ไม่พบข้อมูลการคิดเงินของหอพัก', 404, 'DORMITORY_NOT_FOUND');
+      }
+
+      // Validate versions before any mutation
+      if (payload.property && currentProp) {
+        if (currentProp.version !== payload.property.expectedVersion) {
+          const err: any = new AppError('ข้อมูลถูกแก้ไขโดยผู้อื่น กรุณาโหลดข้อมูลใหม่', 409, 'VERSION_CONFLICT');
+          err.currentVersion = currentProp.version;
+          throw err;
+        }
+      }
+      if (payload.billing && currentBill) {
+        if (currentBill.version !== payload.billing.expectedVersion) {
+          const err: any = new AppError('ข้อมูลการคิดเงินถูกแก้ไขโดยผู้อื่น กรุณาโหลดข้อมูลใหม่', 409, 'VERSION_CONFLICT');
+          err.currentVersion = currentBill.version;
+          throw err;
+        }
+      }
+
+      let updatedProperty: any = null;
+      let updatedBilling: any = null;
+
+      if (payload.property && currentProp) {
+        const updateRes = await tx.dormitoryPropertyDefaults.updateMany({
+          where: { dormitoryId, version: payload.property.expectedVersion },
+          data: { ...payload.property.changes, version: { increment: 1 } },
+        });
+        if (updateRes.count === 0) {
+          const freshProp = await tx.dormitoryPropertyDefaults.findUnique({ where: { dormitoryId } });
+          const err: any = new AppError('ข้อมูลถูกแก้ไขโดยผู้อื่น กรุณาโหลดข้อมูลใหม่', 409, 'VERSION_CONFLICT');
+          err.currentVersion = freshProp?.version || currentProp.version;
+          throw err;
+        }
+        updatedProperty = await tx.dormitoryPropertyDefaults.findUnique({ where: { dormitoryId } });
+      } else if (currentProp) {
+        updatedProperty = currentProp;
+      }
+
+      if (payload.billing && currentBill) {
+        const updateRes = await tx.dormitoryBillingSettings.updateMany({
+          where: { dormitoryId, version: payload.billing.expectedVersion },
+          data: { ...payload.billing.changes, version: { increment: 1 } },
+        });
+        if (updateRes.count === 0) {
+          const freshBill = await tx.dormitoryBillingSettings.findUnique({ where: { dormitoryId } });
+          const err: any = new AppError('ข้อมูลการคิดเงินถูกแก้ไขโดยผู้อื่น กรุณาโหลดข้อมูลใหม่', 409, 'VERSION_CONFLICT');
+          err.currentVersion = freshBill?.version || currentBill.version;
+          throw err;
+        }
+        updatedBilling = await tx.dormitoryBillingSettings.findUnique({ where: { dormitoryId } });
+      } else if (currentBill) {
+        updatedBilling = currentBill;
+      }
+
+      const auditLog = await tx.auditLog.create({
+        data: {
+          dormitoryId,
+          actorUserId,
+          entityType: 'DORMITORY_DEFAULTS',
+          entityId: dormitoryId,
+          action: 'UPDATE_DORMITORY_DEFAULTS',
+          beforeValues: {
+            property: currentProp ? { ...currentProp } : null,
+            billing: currentBill ? { ...currentBill } : null,
+          },
+          afterValues: {
+            property: updatedProperty ? { ...updatedProperty } : null,
+            billing: updatedBilling ? { ...updatedBilling } : null,
+          },
+          reason: `Updated dormitory defaults (property expected: ${payload.property?.expectedVersion ?? 'N/A'}, billing expected: ${payload.billing?.expectedVersion ?? 'N/A'})`,
+          requestId: requestId || null,
+        },
+      });
+
+      return {
+        property: updatedProperty,
+        billing: updatedBilling,
+        auditLogId: auditLog.id,
+      };
+    });
+  }
+
+  /**
    * Bulk apply defaults propagation with advisory lock and idempotency key
    */
   public async applyDefaultPropagation(
     dormitoryId: string,
-    scope: 'DORMITORY' | 'BUILDING',
-    scopeId: string | undefined,
-    changes: Record<string, any>,
-    expectedVersion: number | undefined,
-    idempotencyKey: string,
-    actorUserId: string
+    payload: any,
+    actorUserId: string,
+    requestId?: string
   ) {
     const prisma = getPrismaClient();
 
-    // Canonical JSON stringification for key matching
+    const scope = payload.scope;
+    const scopeId = payload.scopeId;
+    const changes = payload.changes;
+    const expectedVersions = payload.expectedVersions;
+    const expectedVersion = payload.expectedVersion;
+    const idempotencyKey = payload.idempotencyKey;
+
     const canonicalizeJson = (obj: any): string => {
       if (obj === null || typeof obj !== 'object') return JSON.stringify(obj);
       if (Array.isArray(obj)) return '[' + obj.map(canonicalizeJson).join(',') + ']';
@@ -364,9 +508,16 @@ export class DefaultsService {
       return '{' + keys.map((k) => `${JSON.stringify(k)}:${canonicalizeJson(obj[k])}`).join(',') + '}';
     };
 
-    const requestHash = canonicalizeJson({ dormitoryId, scope, scopeId, changes, expectedVersion });
+    const rawRequestHash = canonicalizeJson({
+      dormitoryId,
+      scope,
+      scopeId: scopeId || null,
+      changes,
+      expectedVersions: scope === 'DORMITORY' ? expectedVersions : null,
+      expectedVersion: scope === 'BUILDING' ? expectedVersion : null,
+    });
+    const requestHash = crypto.createHash('sha256').update(rawRequestHash).digest('hex');
 
-    // 1. Idempotency Check using IdempotencyKey model
     const existingKey = await prisma.idempotencyKey.findFirst({
       where: {
         userId: actorUserId,
@@ -386,117 +537,79 @@ export class DefaultsService {
       return existingKey.responseBody;
     }
 
-    // 2. Transaction with PostgreSQL Advisory Lock
     const result = await prisma.$transaction(async (tx: any) => {
-      // Lock dormitory using PostgreSQL advisory lock
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${dormitoryId}))`;
 
-      // Normalize frontend field names and split into property vs billing buckets
-      const propertyFieldMap: Record<string, string> = {
-        monthlyRent: 'defaultMonthlyRent',
-        termRent: 'defaultTermRent',
-        dailyRent: 'defaultDailyRent',
-        depositAmount: 'defaultDeposit',
-        deposit: 'defaultDeposit',
-        advancePaymentAmount: 'defaultAdvancePayment',
-        advancePayment: 'defaultAdvancePayment',
-        parkingFee: 'defaultParkingFee',
-        maximumOccupants: 'defaultMaxOccupants',
-        maxOccupants: 'defaultMaxOccupants',
-        roomType: 'defaultRoomType',
-        terms: 'defaultTerms',
-        defaultMonthlyRent: 'defaultMonthlyRent',
-        defaultTermRent: 'defaultTermRent',
-        defaultDailyRent: 'defaultDailyRent',
-        defaultDeposit: 'defaultDeposit',
-        defaultAdvancePayment: 'defaultAdvancePayment',
-        defaultParkingFee: 'defaultParkingFee',
-        defaultMaxOccupants: 'defaultMaxOccupants',
-        defaultRoomType: 'defaultRoomType',
-        defaultTerms: 'defaultTerms',
-      };
+      let beforeProperty: any = null;
+      let afterProperty: any = null;
+      let beforeBilling: any = null;
+      let afterBilling: any = null;
+      let beforeBuilding: any = null;
+      let afterBuilding: any = null;
 
-      const billingFieldMap: Record<string, string> = {
-        waterUnitRate: 'waterRate',
-        waterRate: 'waterRate',
-        electricUnitRate: 'electricityRate',
-        electricRate: 'electricityRate',
-        electricityRate: 'electricityRate',
-        waterBillingType: 'waterBillingType',
-        waterBillingMode: 'waterBillingType',
-        electricityBillingType: 'electricityBillingType',
-        electricBillingType: 'electricityBillingType',
-        electricBillingMode: 'electricityBillingType',
-        commonFee: 'commonFee',
-        internetFee: 'internetFee',
-        lateFeeType: 'lateFeeType',
-        lateFeeValue: 'lateFeeValue',
-        rentBillingType: 'rentBillingType',
-        billingDay: 'billingDay',
-        dueDay: 'dueDay',
-      };
-
-      const normalizedPropertyChanges: Record<string, any> = {};
-      const normalizedBillingChanges: Record<string, any> = {};
-
-      for (const [k, v] of Object.entries(changes)) {
-        if (propertyFieldMap[k]) {
-          normalizedPropertyChanges[propertyFieldMap[k]] = v;
-        } else if (billingFieldMap[k]) {
-          normalizedBillingChanges[billingFieldMap[k]] = v;
-        }
-        // Unknown fields are silently ignored for safety
-      }
-
-      // Verify scope version and apply updates
       if (scope === 'DORMITORY') {
-        // Apply property defaults changes if any
-        if (Object.keys(normalizedPropertyChanges).length > 0) {
+        if (changes.property && expectedVersions?.property) {
           const currentDefaults = await tx.dormitoryPropertyDefaults.findUnique({
             where: { dormitoryId },
           });
 
-          if (expectedVersion !== undefined && currentDefaults && currentDefaults.version !== expectedVersion) {
+          if (!currentDefaults) {
+            throw new AppError('ไม่พบข้อมูลการตั้งค่าเริ่มต้นของหอพัก', 404, 'DORMITORY_NOT_FOUND');
+          }
+
+          if (currentDefaults.version !== expectedVersions.property) {
             const err: any = new AppError('ข้อมูลถูกแก้ไขโดยผู้อื่น กรุณาโหลดข้อมูลใหม่', 409, 'VERSION_CONFLICT');
             err.currentVersion = currentDefaults.version;
             throw err;
           }
 
-          if (currentDefaults) {
-            const updateRes = await tx.dormitoryPropertyDefaults.updateMany({
-              where: { dormitoryId, version: expectedVersion ?? currentDefaults.version },
-              data: { ...normalizedPropertyChanges, version: { increment: 1 } },
-            });
+          beforeProperty = { ...currentDefaults };
 
-            if (updateRes.count === 0) {
-              const safeCurrent = await tx.dormitoryPropertyDefaults.findUnique({ where: { dormitoryId } });
-              const err: any = new AppError('ข้อมูลถูกแก้ไขโดยผู้อื่น กรุณาโหลดข้อมูลใหม่', 409, 'VERSION_CONFLICT');
-              err.currentVersion = safeCurrent?.version || 1;
-              throw err;
-            }
-          } else {
-            await tx.dormitoryPropertyDefaults.create({
-              data: { dormitoryId, ...normalizedPropertyChanges, version: 1 },
-            });
+          const updateRes = await tx.dormitoryPropertyDefaults.updateMany({
+            where: { dormitoryId, version: expectedVersions.property },
+            data: { ...changes.property, version: { increment: 1 } },
+          });
+
+          if (updateRes.count === 0) {
+            const safeCurrent = await tx.dormitoryPropertyDefaults.findUnique({ where: { dormitoryId } });
+            const err: any = new AppError('ข้อมูลถูกแก้ไขโดยผู้อื่น กรุณาโหลดข้อมูลใหม่', 409, 'VERSION_CONFLICT');
+            err.currentVersion = safeCurrent?.version || 1;
+            throw err;
           }
+
+          afterProperty = await tx.dormitoryPropertyDefaults.findUnique({ where: { dormitoryId } });
         }
 
-        // Apply billing settings changes if any
-        if (Object.keys(normalizedBillingChanges).length > 0) {
+        if (changes.billing && expectedVersions?.billing) {
           const currentBilling = await tx.dormitoryBillingSettings.findUnique({
             where: { dormitoryId },
           });
 
-          if (currentBilling) {
-            await tx.dormitoryBillingSettings.updateMany({
-              where: { dormitoryId },
-              data: { ...normalizedBillingChanges },
-            });
-          } else {
-            await tx.dormitoryBillingSettings.create({
-              data: { dormitoryId, ...normalizedBillingChanges },
-            });
+          if (!currentBilling) {
+            throw new AppError('ไม่พบข้อมูลการคิดเงินของหอพัก', 404, 'DORMITORY_NOT_FOUND');
           }
+
+          if (currentBilling.version !== expectedVersions.billing) {
+            const err: any = new AppError('ข้อมูลการคิดเงินถูกแก้ไขโดยผู้อื่น กรุณาโหลดข้อมูลใหม่', 409, 'VERSION_CONFLICT');
+            err.currentVersion = currentBilling.version;
+            throw err;
+          }
+
+          beforeBilling = { ...currentBilling };
+
+          const updateRes = await tx.dormitoryBillingSettings.updateMany({
+            where: { dormitoryId, version: expectedVersions.billing },
+            data: { ...changes.billing, version: { increment: 1 } },
+          });
+
+          if (updateRes.count === 0) {
+            const safeCurrent = await tx.dormitoryBillingSettings.findUnique({ where: { dormitoryId } });
+            const err: any = new AppError('ข้อมูลการคิดเงินถูกแก้ไขโดยผู้อื่น กรุณาโหลดข้อมูลใหม่', 409, 'VERSION_CONFLICT');
+            err.currentVersion = safeCurrent?.version || 1;
+            throw err;
+          }
+
+          afterBilling = await tx.dormitoryBillingSettings.findUnique({ where: { dormitoryId } });
         }
       } else if (scope === 'BUILDING' && scopeId) {
         const currentBld = await tx.building.findFirst({
@@ -513,7 +626,8 @@ export class DefaultsService {
           throw err;
         }
 
-        // Building overrides use raw field names (no default prefix)
+        beforeBuilding = { ...currentBld };
+
         const updateRes = await tx.building.updateMany({
           where: { id: scopeId, dormitoryId, version: expectedVersion ?? currentBld.version },
           data: { ...changes, version: { increment: 1 } },
@@ -525,11 +639,12 @@ export class DefaultsService {
           err.currentVersion = safeCurrent?.version || 1;
           throw err;
         }
+
+        afterBuilding = await tx.building.findFirst({ where: { id: scopeId, dormitoryId } });
       }
 
-      const preview = await this.previewDefaultPropagation(dormitoryId, scope, scopeId, changes, tx);
+      const preview = await this.previewDefaultPropagation(dormitoryId, payload, tx);
 
-      // Audit log entry for bulk apply
       const auditLog = await tx.auditLog.create({
         data: {
           dormitoryId,
@@ -537,10 +652,11 @@ export class DefaultsService {
           entityType: scope === 'BUILDING' ? 'BUILDING' : 'PROPERTY_DEFAULTS',
           entityId: scopeId || dormitoryId,
           action: 'BULK_DEFAULT_APPLY',
-          beforeValues: null,
-          afterValues: changes,
+          beforeValues: scope === 'BUILDING' ? beforeBuilding : { property: beforeProperty, billing: beforeBilling },
+          afterValues: scope === 'BUILDING' ? afterBuilding : { property: afterProperty, billing: afterBilling },
           reason: `Applied bulk default propagation to ${scope}`,
           idempotencyKey,
+          requestId: requestId || null,
         },
       });
 
@@ -557,7 +673,6 @@ export class DefaultsService {
         appliedAt: new Date().toISOString(),
       };
 
-      // Record Idempotency Key
       await tx.idempotencyKey.create({
         data: {
           userId: actorUserId,
@@ -567,7 +682,7 @@ export class DefaultsService {
           status: 'completed',
           responseStatus: 200,
           responseBody: responsePayload,
-          expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24h expiration
+          expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
         },
       });
 

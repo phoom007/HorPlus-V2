@@ -165,8 +165,8 @@ export interface PropertyDataSource {
   updateRoomIdentity(roomId: string, changes: { roomNumber?: string; buildingId?: string; floor?: number; roomType?: string; rentCycle?: string; status?: string; maximumOccupants?: number; notes?: string }, expectedVersion: number): Promise<DataResult<Room>>;
   archiveRoom(roomId: string, expectedVersion: number): Promise<DataResult<boolean>>;
   clearRoomOverride(roomId: string, field: string, expectedVersion: number): Promise<DataResult<Room>>;
-  previewPropagation(payload: { scope: 'DORMITORY' | 'BUILDING'; scopeId?: string; changes: Record<string, any> }): Promise<DataResult<any>>;
-  applyPropagation(payload: { scope: 'DORMITORY' | 'BUILDING'; scopeId?: string; changes: Record<string, any>; expectedVersion: number; idempotencyKey: string }): Promise<DataResult<any>>;
+  previewPropagation(payload: { scope: 'DORMITORY' | 'BUILDING'; scopeId?: string; changes: { property?: Record<string, any>; billing?: Record<string, any>; [key: string]: any } }): Promise<DataResult<any>>;
+  applyPropagation(payload: { scope: 'DORMITORY' | 'BUILDING'; scopeId?: string; changes: { property?: Record<string, any>; billing?: Record<string, any>; [key: string]: any }; expectedVersions?: { property?: number; billing?: number }; expectedVersion?: number; idempotencyKey: string }): Promise<DataResult<any>>;
   queryAvailability(params: { startDate: string; endDate: string; buildingId?: string }): Promise<DataResult<Room[]>>;
   getContractSnapshot(contractId: string): Promise<DataResult<any>>;
   createContract(payload: any): Promise<DataResult<Contract>>;

@@ -550,6 +550,11 @@ export interface FieldEffectItem {
 export interface PropagationPreviewResult {
   scope: 'DORMITORY' | 'BUILDING';
   scopeId?: string | null;
+  expectedVersions?: {
+    property?: number;
+    billing?: number;
+  };
+  expectedVersion?: number;
   candidateRoomCount: number;
   eligibleRoomCount: number;
   eligibleFieldChangeCount: number;

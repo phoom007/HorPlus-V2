@@ -691,7 +691,73 @@ export class ApiPropertyAdapter implements PropertyDataSource {
     billing?: { changes: Record<string, any>; expectedVersion: number };
   }): Promise<DataResult<any>> {
     try {
-      const response = await httpRequest<any>('PUT', '/properties/dormitory/defaults', payload);
+      const canonicalPropertyMap: Record<string, string> = {
+        monthlyRent: 'defaultMonthlyRent',
+        defaultMonthlyRent: 'defaultMonthlyRent',
+        termRent: 'defaultTermRent',
+        defaultTermRent: 'defaultTermRent',
+        dailyRent: 'defaultDailyRent',
+        defaultDailyRent: 'defaultDailyRent',
+        depositAmount: 'defaultDeposit',
+        deposit: 'defaultDeposit',
+        defaultDeposit: 'defaultDeposit',
+        advancePaymentAmount: 'defaultAdvancePayment',
+        advancePayment: 'defaultAdvancePayment',
+        defaultAdvancePayment: 'defaultAdvancePayment',
+        parkingFee: 'defaultParkingFee',
+        defaultParkingFee: 'defaultParkingFee',
+        maximumOccupants: 'defaultMaxOccupants',
+        maxOccupants: 'defaultMaxOccupants',
+        defaultMaxOccupants: 'defaultMaxOccupants',
+        roomType: 'defaultRoomType',
+        defaultRoomType: 'defaultRoomType',
+        terms: 'defaultTerms',
+        defaultTerms: 'defaultTerms',
+      };
+
+      const canonicalBillingMap: Record<string, string> = {
+        waterUnitRate: 'waterRate',
+        waterRate: 'waterRate',
+        electricUnitRate: 'electricityRate',
+        electricRate: 'electricityRate',
+        electricityRate: 'electricityRate',
+        waterBillingMode: 'waterBillingType',
+        waterBillingType: 'waterBillingType',
+        electricBillingMode: 'electricityBillingType',
+        electricBillingType: 'electricityBillingType',
+        electricityBillingType: 'electricityBillingType',
+        commonFee: 'commonFee',
+        internetFee: 'internetFee',
+        rentBillingType: 'rentBillingType',
+        billingDay: 'billingDay',
+        dueDay: 'dueDay',
+        lateFeeType: 'lateFeeType',
+        lateFeeValue: 'lateFeeValue',
+      };
+
+      const cleanPayload: any = {};
+      if (payload.property) {
+        const cleanChanges: Record<string, any> = {};
+        for (const [k, v] of Object.entries(payload.property.changes)) {
+          cleanChanges[canonicalPropertyMap[k] || k] = v;
+        }
+        cleanPayload.property = {
+          changes: cleanChanges,
+          expectedVersion: payload.property.expectedVersion,
+        };
+      }
+      if (payload.billing) {
+        const cleanChanges: Record<string, any> = {};
+        for (const [k, v] of Object.entries(payload.billing.changes)) {
+          cleanChanges[canonicalBillingMap[k] || k] = v;
+        }
+        cleanPayload.billing = {
+          changes: cleanChanges,
+          expectedVersion: payload.billing.expectedVersion,
+        };
+      }
+
+      const response = await httpRequest<any>('PUT', '/properties/dormitory/defaults', cleanPayload);
       const result = response?.data || response;
       return { success: true, data: result };
     } catch (err: any) {
@@ -771,9 +837,53 @@ export class ApiPropertyAdapter implements PropertyDataSource {
     }
   }
 
-  async previewPropagation(payload: { scope: 'DORMITORY' | 'BUILDING'; scopeId?: string; changes: Record<string, any> }): Promise<DataResult<any>> {
+  async previewPropagation(payload: any): Promise<DataResult<any>> {
     try {
-      const response = await httpRequest<any>('POST', '/properties/defaults/preview', payload);
+      const canonicalPropertyMap: Record<string, string> = {
+        monthlyRent: 'defaultMonthlyRent',
+        termRent: 'defaultTermRent',
+        dailyRent: 'defaultDailyRent',
+        depositAmount: 'defaultDeposit',
+        deposit: 'defaultDeposit',
+        advancePaymentAmount: 'defaultAdvancePayment',
+        advancePayment: 'defaultAdvancePayment',
+        parkingFee: 'defaultParkingFee',
+        maximumOccupants: 'defaultMaxOccupants',
+        maxOccupants: 'defaultMaxOccupants',
+        roomType: 'defaultRoomType',
+        terms: 'defaultTerms',
+      };
+
+      const canonicalBillingMap: Record<string, string> = {
+        waterUnitRate: 'waterRate',
+        electricUnitRate: 'electricityRate',
+        waterBillingMode: 'waterBillingType',
+        electricBillingMode: 'electricityBillingType',
+      };
+
+      const cleanPayload: any = { scope: payload.scope };
+      if (payload.scopeId) cleanPayload.scopeId = payload.scopeId;
+
+      if (payload.scope === 'DORMITORY') {
+        const changesObj: any = {};
+        if (payload.changes?.property) {
+          changesObj.property = {};
+          for (const [k, v] of Object.entries(payload.changes.property)) {
+            changesObj.property[canonicalPropertyMap[k] || k] = v;
+          }
+        }
+        if (payload.changes?.billing) {
+          changesObj.billing = {};
+          for (const [k, v] of Object.entries(payload.changes.billing)) {
+            changesObj.billing[canonicalBillingMap[k] || k] = v;
+          }
+        }
+        cleanPayload.changes = changesObj;
+      } else {
+        cleanPayload.changes = payload.changes;
+      }
+
+      const response = await httpRequest<any>('POST', '/properties/defaults/preview', cleanPayload);
       const preview = response?.data || response;
       return { success: true, data: preview };
     } catch (err: any) {
@@ -781,9 +891,55 @@ export class ApiPropertyAdapter implements PropertyDataSource {
     }
   }
 
-  async applyPropagation(payload: { scope: 'DORMITORY' | 'BUILDING'; scopeId?: string; changes: Record<string, any>; expectedVersion: number; idempotencyKey: string }): Promise<DataResult<any>> {
+  async applyPropagation(payload: any): Promise<DataResult<any>> {
     try {
-      const data = await httpRequest<any>('POST', '/properties/defaults/apply', payload);
+      const canonicalPropertyMap: Record<string, string> = {
+        monthlyRent: 'defaultMonthlyRent',
+        termRent: 'defaultTermRent',
+        dailyRent: 'defaultDailyRent',
+        depositAmount: 'defaultDeposit',
+        deposit: 'defaultDeposit',
+        advancePaymentAmount: 'defaultAdvancePayment',
+        advancePayment: 'defaultAdvancePayment',
+        parkingFee: 'defaultParkingFee',
+        maximumOccupants: 'defaultMaxOccupants',
+        maxOccupants: 'defaultMaxOccupants',
+        roomType: 'defaultRoomType',
+        terms: 'defaultTerms',
+      };
+
+      const canonicalBillingMap: Record<string, string> = {
+        waterUnitRate: 'waterRate',
+        electricUnitRate: 'electricityRate',
+        waterBillingMode: 'waterBillingType',
+        electricBillingMode: 'electricityBillingType',
+      };
+
+      const cleanPayload: any = { scope: payload.scope, idempotencyKey: payload.idempotencyKey };
+      if (payload.scopeId) cleanPayload.scopeId = payload.scopeId;
+      if (payload.expectedVersions) cleanPayload.expectedVersions = payload.expectedVersions;
+      if (payload.expectedVersion) cleanPayload.expectedVersion = payload.expectedVersion;
+
+      if (payload.scope === 'DORMITORY') {
+        const changesObj: any = {};
+        if (payload.changes?.property) {
+          changesObj.property = {};
+          for (const [k, v] of Object.entries(payload.changes.property)) {
+            changesObj.property[canonicalPropertyMap[k] || k] = v;
+          }
+        }
+        if (payload.changes?.billing) {
+          changesObj.billing = {};
+          for (const [k, v] of Object.entries(payload.changes.billing)) {
+            changesObj.billing[canonicalBillingMap[k] || k] = v;
+          }
+        }
+        cleanPayload.changes = changesObj;
+      } else {
+        cleanPayload.changes = payload.changes;
+      }
+
+      const data = await httpRequest<any>('POST', '/properties/defaults/apply', cleanPayload);
       return { success: true, data };
     } catch (err: any) {
       return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message } };
