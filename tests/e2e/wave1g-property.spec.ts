@@ -248,6 +248,7 @@ test.describe('Wave 1G Playwright Lifecycle Test — Property, Room Defaults & S
         'x-dormitory-id': dormId,
         'x-csrf-token': csrfToken,
       },
+      data: { expectedVersion: 1 },
     });
     expect(badClearRes.status()).toBe(400);
 

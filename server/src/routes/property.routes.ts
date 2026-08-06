@@ -625,6 +625,18 @@ export function createPropertyRouter(
     try {
       const dormId = getDormitoryId(req);
       const fieldName = req.params.field;
+      const expectedVersion = req.body?.expectedVersion;
+      if (!expectedVersion || typeof expectedVersion !== 'number') {
+        return res.status(400).json({
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'ต้องระบุ expectedVersion สำหรับการล้างค่าคอนฟิก',
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+
       const { validateClearOverrideField } = await import('../schemas/property-tenant-contract.schemas.js');
       if (!validateClearOverrideField(fieldName)) {
         return res.status(400).json({
@@ -637,7 +649,7 @@ export function createPropertyRouter(
         });
       }
 
-      const clearPayload: Record<string, null> = {};
+      const clearPayload: Record<string, any> = { expectedVersion };
       clearPayload[fieldName] = null;
       const updated = await buildingService.updateBuilding(req.params.id, dormId, clearPayload as any, req.auth?.userId);
       if (!updated) {
@@ -701,6 +713,18 @@ export function createPropertyRouter(
     try {
       const dormId = getDormitoryId(req);
       const fieldName = req.params.field;
+      const expectedVersion = req.body?.expectedVersion;
+      if (!expectedVersion || typeof expectedVersion !== 'number') {
+        return res.status(400).json({
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'ต้องระบุ expectedVersion สำหรับการล้างค่าคอนฟิก',
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+
       const { validateClearOverrideField } = await import('../schemas/property-tenant-contract.schemas.js');
       if (!validateClearOverrideField(fieldName)) {
         return res.status(400).json({
@@ -713,7 +737,7 @@ export function createPropertyRouter(
         });
       }
 
-      const clearPayload: Record<string, null> = {};
+      const clearPayload: Record<string, any> = { expectedVersion };
       clearPayload[fieldName] = null;
       const updated = await roomService.updateRoom(req.params.id, clearPayload, dormId, req.auth?.userId);
       if (!updated) {

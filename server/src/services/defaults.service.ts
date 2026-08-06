@@ -321,9 +321,17 @@ export class DefaultsService {
       }
     }
 
+    const eligibleFieldChangeCount = fieldEffects.filter((f) => f.eligible).length;
+    const skippedFieldChangeCount = fieldEffects.filter((f) => !f.eligible).length;
+
     return {
       scope,
       scopeId: scopeId || null,
+      candidateRoomCount: totalCandidateRooms,
+      eligibleRoomCount: eligibleCount,
+      eligibleFieldChangeCount,
+      skippedRoomCount: totalCandidateRooms - eligibleCount,
+      skippedFieldChangeCount,
       totalCandidateRooms,
       eligibleRooms: eligibleCount,
       skippedOverrideRooms: skippedOverrideCount,
