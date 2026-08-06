@@ -11,6 +11,7 @@ import { BLOCKING_CONTRACT_STATUSES } from '../../services/blocking-contract-pol
 import { getPrismaClient } from '../../db/prisma.js';
 
 describe('Wave 1G — Strict Defaults, Propagation & Concurrency Integration Tests', () => {
+  const prisma = getPrismaClient();
   describe('1. UpdateDormitoryDefaultsRequestSchema Strict Rules', () => {
     it('accepts property-only defaults update', () => {
       const payload = {
@@ -166,7 +167,6 @@ describe('Wave 1G — Strict Defaults, Propagation & Concurrency Integration Tes
   });
 
   describe('4. Real PostgreSQL Defaults & Concurrency Tests', () => {
-    const prisma = getPrismaClient();
     let testDormId: string;
     let testUserId: string;
 
@@ -344,7 +344,9 @@ describe('Wave 1G — Strict Defaults, Propagation & Concurrency Integration Tes
 
     it('proves no-op propagation returns noOp: true without version increment or AuditLog', async () => {
       const propBefore = await prisma.dormitoryPropertyDefaults.findUnique({ where: { dormitoryId: testDormId } });
-      const currentVer = propBefore?.version || 3;
+      const billBefore = await prisma.dormitoryBillingSettings.findUnique({ where: { dormitoryId: testDormId } });
+      const currentPropVer = propBefore?.version || 3;
+      const currentBillVer = billBefore?.version || 2;
       const currentRent = Number(propBefore?.defaultMonthlyRent || 4900);
 
       const noOpRes = await defaultsService.applyDefaultPropagation(
@@ -354,19 +356,339 @@ describe('Wave 1G — Strict Defaults, Propagation & Concurrency Integration Tes
           changes: {
             property: { defaultMonthlyRent: currentRent },
           },
-          expectedVersions: { property: currentVer, billing: 2 },
+          expectedVersions: { property: currentPropVer, billing: currentBillVer },
           idempotencyKey: `noop-test-${Date.now()}`,
         },
         testUserId
       );
 
       expect(noOpRes.noOp).toBe(true);
+      expect(noOpRes.scopeUpdates.property.updated).toBe(false);
+      expect(noOpRes.scopeUpdates.billing.updated).toBe(false);
       expect(noOpRes.appliedRoomCount).toBe(0);
       expect(noOpRes.appliedFieldChangeCount).toBe(0);
       expect(noOpRes.auditLogId).toBeNull();
 
       const propAfter = await prisma.dormitoryPropertyDefaults.findUnique({ where: { dormitoryId: testDormId } });
-      expect(propAfter?.version).toBe(currentVer);
+      expect(propAfter?.version).toBe(currentPropVer);
+    });
+
+    it('proves identical Billing value no-op returns noOp: true without version increment', async () => {
+      const billBefore = await prisma.dormitoryBillingSettings.findUnique({ where: { dormitoryId: testDormId } });
+      const propBefore = await prisma.dormitoryPropertyDefaults.findUnique({ where: { dormitoryId: testDormId } });
+      const currentBillVer = billBefore?.version || 1;
+      const currentPropVer = propBefore?.version || 1;
+      const currentWaterRate = Number(billBefore?.waterRate || 20);
+
+      const res = await defaultsService.applyDefaultPropagation(
+        testDormId,
+        {
+          scope: 'DORMITORY',
+          changes: {
+            billing: { waterRate: currentWaterRate },
+          },
+          expectedVersions: { property: currentPropVer, billing: currentBillVer },
+          idempotencyKey: `bill-noop-${Date.now()}`,
+        },
+        testUserId
+      );
+
+      expect(res.noOp).toBe(true);
+      expect(res.scopeUpdates.billing.updated).toBe(false);
+      expect(res.auditLogId).toBeNull();
+
+      const billAfter = await prisma.dormitoryBillingSettings.findUnique({ where: { dormitoryId: testDormId } });
+      expect(billAfter?.version).toBe(currentBillVer);
+    });
+
+    it('proves direct updateDormitoryDefaults identical-value returns noOp: true without version increment or AuditLog', async () => {
+      const propBefore = await prisma.dormitoryPropertyDefaults.findUnique({ where: { dormitoryId: testDormId } });
+      const billBefore = await prisma.dormitoryBillingSettings.findUnique({ where: { dormitoryId: testDormId } });
+      const currentPropVer = propBefore?.version || 1;
+      const currentBillVer = billBefore?.version || 1;
+
+      const currentRent = Number(propBefore?.defaultMonthlyRent || 4900);
+      const currentWater = Number(billBefore?.waterRate || 20);
+
+      const res = await defaultsService.updateDormitoryDefaults(
+        testDormId,
+        {
+          property: { changes: { defaultMonthlyRent: currentRent }, expectedVersion: currentPropVer },
+          billing: { changes: { waterRate: currentWater }, expectedVersion: currentBillVer },
+        },
+        testUserId
+      );
+
+      expect(res.noOp).toBe(true);
+      expect(res.auditLogId).toBeNull();
+
+      const propAfter = await prisma.dormitoryPropertyDefaults.findUnique({ where: { dormitoryId: testDormId } });
+      const billAfter = await prisma.dormitoryBillingSettings.findUnique({ where: { dormitoryId: testDormId } });
+      expect(propAfter?.version).toBe(currentPropVer);
+      expect(billAfter?.version).toBe(currentBillVer);
+    });
+
+    it('proves changed default with ALL rooms explicitly overridden updates default, increments version, writes AuditLog, with zero applied rooms', async () => {
+      // Create isolated test dormitory and building
+      const dorm = await prisma.dormitory.create({
+        data: { name: `Override Dorm ${Date.now()}` },
+      });
+      const prop = await prisma.dormitoryPropertyDefaults.create({
+        data: { dormitoryId: dorm.id, defaultMonthlyRent: new Prisma.Decimal(9400), version: 1 },
+      });
+      await prisma.dormitoryBillingSettings.create({
+        data: { dormitoryId: dorm.id, waterRate: new Prisma.Decimal(20), electricityRate: new Prisma.Decimal(8), version: 1 },
+      });
+      const bld = await prisma.building.create({
+        data: { dormitoryId: dorm.id, name: 'Bld 1', code: `B1-${Date.now()}` },
+      });
+
+      // Create 2 rooms with explicit room overrides (monthlyRent = 5000)
+      await prisma.room.create({
+        data: { dormitoryId: dorm.id, buildingId: bld.id, roomNumber: 'RM-OVR1', normalizedRoomNumber: 'RM-OVR1', roomType: 'standard', monthlyRent: new Prisma.Decimal(5000) },
+      });
+      await prisma.room.create({
+        data: { dormitoryId: dorm.id, buildingId: bld.id, roomNumber: 'RM-OVR2', normalizedRoomNumber: 'RM-OVR2', roomType: 'standard', monthlyRent: new Prisma.Decimal(6000) },
+      });
+
+      const applyRes = await defaultsService.applyDefaultPropagation(
+        dorm.id,
+        {
+          scope: 'DORMITORY',
+          changes: {
+            property: { defaultMonthlyRent: 9500 },
+          },
+          expectedVersions: { property: 1, billing: 1 },
+          idempotencyKey: `ovr-all-${Date.now()}`,
+        },
+        testUserId
+      );
+
+      expect(applyRes.noOp).toBe(false);
+      expect(applyRes.scopeUpdates.property.updated).toBe(true);
+      expect(applyRes.scopeUpdates.property.oldVersion).toBe(1);
+      expect(applyRes.scopeUpdates.property.newVersion).toBe(2);
+      expect(applyRes.appliedRoomCount).toBe(0);
+      expect(applyRes.appliedFieldChangeCount).toBe(0);
+      expect(applyRes.skippedRoomCount).toBe(2);
+      expect(applyRes.auditLogId).not.toBeNull();
+
+      const freshProp = await prisma.dormitoryPropertyDefaults.findUnique({ where: { dormitoryId: dorm.id } });
+      expect(freshProp?.version).toBe(2);
+      expect(Number(freshProp?.defaultMonthlyRent)).toBe(9500);
+    });
+
+    it('proves changed default with protected rooms across ALL five blocking contract statuses updates default, increments version, and skips protected rooms', async () => {
+      const statuses = BLOCKING_CONTRACT_STATUSES;
+      expect(statuses).toEqual(['active', 'approved', 'expiring_soon', 'waiting_extension', 'checking_out']);
+
+      const dorm = await prisma.dormitory.create({
+        data: { name: `Status Dorm ${Date.now()}` },
+      });
+      await prisma.dormitoryPropertyDefaults.create({
+        data: { dormitoryId: dorm.id, defaultMonthlyRent: new Prisma.Decimal(9400), version: 1 },
+      });
+      await prisma.dormitoryBillingSettings.create({
+        data: { dormitoryId: dorm.id, waterRate: new Prisma.Decimal(20), electricityRate: new Prisma.Decimal(8), version: 1 },
+      });
+      const bld = await prisma.building.create({
+        data: { dormitoryId: dorm.id, name: 'Bld 1', code: `B2-${Date.now()}` },
+      });
+
+      // Create a tenant
+      const tenant = await prisma.tenant.create({
+        data: { dormitoryId: dorm.id, firstName: 'Test', lastName: 'Tenant', displayName: 'Test Tenant', phone: '0812345678', tenantNumber: `TNT-${Date.now()}` },
+      });
+
+      // Create 5 rooms, each with a contract in one of the 5 blocking statuses
+      let ver = 1;
+      for (let i = 0; i < statuses.length; i++) {
+        const st = statuses[i];
+        const rm = await prisma.room.create({
+          data: { dormitoryId: dorm.id, buildingId: bld.id, roomNumber: `RM-ST-${i}`, normalizedRoomNumber: `RM-ST-${i}`, roomType: 'standard', monthlyRent: null },
+        });
+        await prisma.contract.create({
+          data: {
+            dormitoryId: dorm.id,
+            roomId: rm.id,
+            tenantId: tenant.id,
+            contractNumber: `CTR-ST-${i}-${Date.now()}`,
+            rentAmount: new Prisma.Decimal(4000),
+            depositAmount: new Prisma.Decimal(8000),
+            startDate: new Date(),
+            endDate: new Date(Date.now() + 30 * 86400000),
+            status: st as any,
+          },
+        });
+      }
+
+      const applyRes = await defaultsService.applyDefaultPropagation(
+        dorm.id,
+        {
+          scope: 'DORMITORY',
+          changes: {
+            property: { defaultMonthlyRent: 9600 },
+          },
+          expectedVersions: { property: ver, billing: 1 },
+          idempotencyKey: `status-all-${Date.now()}`,
+        },
+        testUserId
+      );
+
+      expect(applyRes.noOp).toBe(false);
+      expect(applyRes.scopeUpdates.property.updated).toBe(true);
+      expect(applyRes.scopeUpdates.property.newVersion).toBe(2);
+      expect(applyRes.appliedRoomCount).toBe(0);
+      expect(applyRes.skippedRoomCount).toBe(5);
+      expect(applyRes.fieldEffects.every((e: any) => e.skipReason === 'PROTECTED_CONTRACT')).toBe(true);
+
+      const freshProp = await prisma.dormitoryPropertyDefaults.findUnique({ where: { dormitoryId: dorm.id } });
+      expect(Number(freshProp?.defaultMonthlyRent)).toBe(9600);
+      expect(freshProp?.version).toBe(2);
+    });
+
+    it('proves mixed Property unchanged + Billing changed updates Billing ONLY, increments Billing version ONLY, and records Billing changes in AuditLog', async () => {
+      const dorm = await prisma.dormitory.create({
+        data: { name: `Mixed Dorm ${Date.now()}` },
+      });
+      await prisma.dormitoryPropertyDefaults.create({
+        data: { dormitoryId: dorm.id, defaultMonthlyRent: new Prisma.Decimal(9400), version: 1 },
+      });
+      await prisma.dormitoryBillingSettings.create({
+        data: { dormitoryId: dorm.id, waterRate: new Prisma.Decimal(20), electricityRate: new Prisma.Decimal(8), version: 1 },
+      });
+
+      const applyRes = await defaultsService.applyDefaultPropagation(
+        dorm.id,
+        {
+          scope: 'DORMITORY',
+          changes: {
+            property: { defaultMonthlyRent: 9400 }, // unchanged
+            billing: { waterRate: 25 }, // changed
+          },
+          expectedVersions: { property: 1, billing: 1 },
+          idempotencyKey: `mixed-${Date.now()}`,
+        },
+        testUserId
+      );
+
+      expect(applyRes.noOp).toBe(false);
+      expect(applyRes.scopeUpdates.property.updated).toBe(false);
+      expect(applyRes.scopeUpdates.property.newVersion).toBe(1);
+      expect(applyRes.scopeUpdates.billing.updated).toBe(true);
+      expect(applyRes.scopeUpdates.billing.newVersion).toBe(2);
+      expect(applyRes.scopeUpdates.billing.changedFields).toEqual(['waterRate']);
+
+      const propAfter = await prisma.dormitoryPropertyDefaults.findUnique({ where: { dormitoryId: dorm.id } });
+      const billAfter = await prisma.dormitoryBillingSettings.findUnique({ where: { dormitoryId: dorm.id } });
+      expect(propAfter?.version).toBe(1);
+      expect(billAfter?.version).toBe(2);
+      expect(Number(billAfter?.waterRate)).toBe(25);
+
+      const audit = await prisma.auditLog.findUnique({ where: { id: applyRes.auditLogId } });
+      expect(audit?.beforeValues).not.toHaveProperty('property');
+      expect((audit?.beforeValues as any)?.billing).toBeDefined();
+    });
+
+    it('proves mixed Billing unchanged + Property changed updates Property ONLY, increments Property version ONLY, and records Property changes in AuditLog', async () => {
+      const dorm = await prisma.dormitory.create({
+        data: { name: `Mixed Prop Dorm ${Date.now()}` },
+      });
+      await prisma.dormitoryPropertyDefaults.create({
+        data: { dormitoryId: dorm.id, defaultMonthlyRent: new Prisma.Decimal(9400), version: 1 },
+      });
+      await prisma.dormitoryBillingSettings.create({
+        data: { dormitoryId: dorm.id, waterRate: new Prisma.Decimal(20), electricityRate: new Prisma.Decimal(8), version: 1 },
+      });
+
+      const applyRes = await defaultsService.applyDefaultPropagation(
+        dorm.id,
+        {
+          scope: 'DORMITORY',
+          changes: {
+            property: { defaultMonthlyRent: 9800 }, // changed
+            billing: { waterRate: 20 }, // unchanged
+          },
+          expectedVersions: { property: 1, billing: 1 },
+          idempotencyKey: `mixed-prop-${Date.now()}`,
+        },
+        testUserId
+      );
+
+      expect(applyRes.noOp).toBe(false);
+      expect(applyRes.scopeUpdates.property.updated).toBe(true);
+      expect(applyRes.scopeUpdates.property.newVersion).toBe(2);
+      expect(applyRes.scopeUpdates.billing.updated).toBe(false);
+      expect(applyRes.scopeUpdates.billing.newVersion).toBe(1);
+
+      const propAfter = await prisma.dormitoryPropertyDefaults.findUnique({ where: { dormitoryId: dorm.id } });
+      const billAfter = await prisma.dormitoryBillingSettings.findUnique({ where: { dormitoryId: dorm.id } });
+      expect(propAfter?.version).toBe(2);
+      expect(billAfter?.version).toBe(1);
+
+      const audit = await prisma.auditLog.findUnique({ where: { id: applyRes.auditLogId } });
+      expect(audit?.beforeValues).toHaveProperty('property');
+      expect((audit?.beforeValues as any)?.billing).toBeUndefined();
+    });
+
+    it('proves stale version on an otherwise no-op request throws VERSION_CONFLICT (HTTP 409)', async () => {
+      const propBefore = await prisma.dormitoryPropertyDefaults.findUnique({ where: { dormitoryId: testDormId } });
+      const currentVer = propBefore?.version || 1;
+      const currentRent = Number(propBefore?.defaultMonthlyRent || 4900);
+      const staleVer = currentVer + 99;
+
+      await expect(
+        defaultsService.applyDefaultPropagation(
+          testDormId,
+          {
+            scope: 'DORMITORY',
+            changes: {
+              property: { defaultMonthlyRent: currentRent }, // value equals stored value
+            },
+            expectedVersions: { property: staleVer, billing: 1 },
+            idempotencyKey: `stale-noop-${Date.now()}`,
+          },
+          testUserId
+        )
+      ).rejects.toThrow('ข้อมูลถูกแก้ไขโดยผู้อื่น กรุณาโหลดข้อมูลใหม่');
+    });
+
+    it('proves idempotent replay of changed-default/zero-Room-effect command returns identical response, exactly 1 version increment, 1 AuditLog, and 1 IdempotencyKey', async () => {
+      const dorm = await prisma.dormitory.create({
+        data: { name: `Idem Zero Room ${Date.now()}` },
+      });
+      await prisma.dormitoryPropertyDefaults.create({
+        data: { dormitoryId: dorm.id, defaultMonthlyRent: new Prisma.Decimal(9400), version: 1 },
+      });
+      await prisma.dormitoryBillingSettings.create({
+        data: { dormitoryId: dorm.id, waterRate: new Prisma.Decimal(20), electricityRate: new Prisma.Decimal(8), version: 1 },
+      });
+
+      const idempotencyKey = `idem-zero-rm-${Date.now()}`;
+      const payload = {
+        scope: 'DORMITORY',
+        changes: {
+          property: { defaultMonthlyRent: 9900 },
+        },
+        expectedVersions: { property: 1, billing: 1 },
+        idempotencyKey,
+      };
+
+      const firstRes = await defaultsService.applyDefaultPropagation(dorm.id, payload, testUserId);
+      expect(firstRes.noOp).toBe(false);
+      expect(firstRes.scopeUpdates.property.newVersion).toBe(2);
+
+      const replayRes = await defaultsService.applyDefaultPropagation(dorm.id, payload, testUserId);
+      expect(replayRes).toEqual(firstRes);
+
+      const propAfter = await prisma.dormitoryPropertyDefaults.findUnique({ where: { dormitoryId: dorm.id } });
+      expect(propAfter?.version).toBe(2); // Only 1 version increment
+
+      const auditCount = await prisma.auditLog.count({ where: { dormitoryId: dorm.id, action: 'BULK_DEFAULT_APPLY' } });
+      expect(auditCount).toBe(1); // Only 1 AuditLog
+
+      const keyCount = await prisma.idempotencyKey.count({ where: { userId: testUserId, idempotencyKey } });
+      expect(keyCount).toBe(1); // Only 1 IdempotencyKey record
     });
   });
 });

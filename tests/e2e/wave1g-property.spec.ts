@@ -767,6 +767,89 @@ test.describe.serial('Wave 1G Real Playwright Lifecycle — Property, Room Defau
     await expect(roomC101CardCommitted.getByTestId('badge-dormitory')).toHaveText('ใช้ค่าจากหอพัก');
     await expect(roomC101CardCommitted.getByText('9,400')).toBeVisible({ timeout: 10000 });
 
+    // Part C: Changed Default with Zero Eligible Rooms Scenario (Requirement 7)
+    // 1. Ensure all current rooms have explicit room overrides or protected contracts
+    const allRoomsRes = await apiContext.get('/api/v1/properties/rooms');
+    const allRoomsData = (await allRoomsRes.json()).data;
+    const allRooms = Array.isArray(allRoomsData) ? allRoomsData : allRoomsData.items || [];
+    let overriddenRoomId: string | null = null;
+
+    for (const rm of allRooms) {
+      if (rm.snapshotLocked || rm.activeContractSnapshotId || rm.currentContractId) {
+        continue;
+      }
+      if (rm.rawOverrides?.monthlyRent === null || rm.rawOverrides?.monthlyRent === undefined) {
+        // Fetch full room to get current version
+        const roomDetailRes = await apiContext.get(`/api/v1/properties/rooms/${rm.id}`);
+        const roomDetail = (await roomDetailRes.json()).data;
+        const curVer = roomDetail.version || rm.version || 1;
+
+        // Set explicit room override via production PUT endpoint
+        const setOvrRes = await apiContext.put(`/api/v1/properties/rooms/${rm.id}`, {
+          data: { monthlyRent: '8800', expectedVersion: curVer },
+        });
+        expect(setOvrRes.status()).toBe(200);
+        overriddenRoomId = rm.id;
+      } else {
+        overriddenRoomId = rm.id;
+      }
+    }
+
+    // 2. Fetch current dormitory defaults to confirm rent = 9,400
+    const curDefaultsRes = await apiContext.get('/api/v1/properties/dormitory/defaults');
+    expect(curDefaultsRes.status()).toBe(200);
+    const curDefaultsData = (await curDefaultsRes.json()).data;
+    const propVerBefore = curDefaultsData.property.version;
+    const billVerBefore = curDefaultsData.billing.version;
+    expect(Number(curDefaultsData.property.defaultMonthlyRent)).toBe(9400);
+
+    // 3. Send Apply API proposing defaultMonthlyRent = 9,600 (when all rooms are overridden/protected)
+    const zeroEligibleApplyRes = await apiContext.post('/api/v1/properties/defaults/apply', {
+      data: {
+        scope: 'DORMITORY',
+        changes: {
+          property: { defaultMonthlyRent: 9600 },
+        },
+        expectedVersions: {
+          property: propVerBefore,
+          billing: billVerBefore,
+        },
+        idempotencyKey: `zero-eligible-idem-${Date.now()}`,
+      },
+    });
+    expect(zeroEligibleApplyRes.status()).toBe(200);
+    const zeroEligibleApply = (await zeroEligibleApplyRes.json()).data;
+
+    expect(zeroEligibleApply.noOp).toBe(false);
+    expect(zeroEligibleApply.appliedRoomCount).toBe(0);
+    expect(zeroEligibleApply.appliedFieldChangeCount).toBe(0);
+    expect(zeroEligibleApply.scopeUpdates.property.updated).toBe(true);
+    expect(zeroEligibleApply.scopeUpdates.property.oldVersion).toBe(propVerBefore);
+    expect(zeroEligibleApply.scopeUpdates.property.newVersion).toBe(propVerBefore + 1);
+
+    // 4. Verify default record is updated to 9,600 with incremented version
+    const updatedDefaultsRes = await apiContext.get('/api/v1/properties/dormitory/defaults');
+    const updatedDefaultsData = (await updatedDefaultsRes.json()).data;
+    expect(Number(updatedDefaultsData.property.defaultMonthlyRent)).toBe(9600);
+    expect(updatedDefaultsData.property.version).toBe(propVerBefore + 1);
+
+    // 5. Clear one Room override through production endpoint
+    expect(overriddenRoomId).not.toBeNull();
+    const fetchOvrRoomRes = await apiContext.get(`/api/v1/properties/rooms/${overriddenRoomId}`);
+    const ovrRoomVer = (await fetchOvrRoomRes.json()).data.version;
+
+    const clearRoomOvrRes = await apiContext.delete(`/api/v1/properties/rooms/${overriddenRoomId}/defaults/monthlyRent`, {
+      data: { expectedVersion: ovrRoomVer },
+    });
+    expect(clearRoomOvrRes.status()).toBe(200);
+
+    // 6. Assert room now inherits newly committed default 9,600 from DORMITORY
+    const authRoomRes = await apiContext.get(`/api/v1/properties/rooms/${overriddenRoomId}`);
+    expect(authRoomRes.status()).toBe(200);
+    const authRoom = (await authRoomRes.json()).data;
+    expect(Number(authRoom.currentEffectiveValues.monthlyRent)).toBe(9600);
+    expect(authRoom.currentFieldSources.monthlyRent).toBe('DORMITORY');
+
     // ============================================================
     // SECTION 6: Inheriting Room D101 Snapshot Separation Proof
     // ============================================================
@@ -798,7 +881,7 @@ test.describe.serial('Wave 1G Real Playwright Lifecycle — Property, Room Defau
     expect(authD101PreRes.status()).toBe(200);
     const authD101Pre = (await authD101PreRes.json()).data;
     expect(authD101Pre.rawOverrides.monthlyRent).toBeNull();
-    expect(Number(authD101Pre.currentEffectiveValues.monthlyRent)).toBe(9400);
+    expect(Number(authD101Pre.currentEffectiveValues.monthlyRent)).toBe(9600);
 
     // 4. Create Tenant "วิชัย สุขใจ" via production API
     const createTenantRes = await apiContext.post('/api/v1/tenants', {
