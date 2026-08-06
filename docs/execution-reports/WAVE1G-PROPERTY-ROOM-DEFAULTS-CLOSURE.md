@@ -4,13 +4,25 @@
 
 Wave 1G Final Security, Propagation, Counter, and Evidence Closure has been fully completed and validated in accordance with all explicit user directives and strict safety requirements.
 
-All schema validation rules, transactional persistence guarantees, explicit Set-based room counters, independent optimistic locking versions, pre-mutation preview captures, in-transaction idempotency recheck with P2002 handling, unified blocking contract policy, backend-only field scopes, and connected Playwright E2E postconditions have been implemented, verified, locked, and published.
+All schema validation rules, transactional persistence guarantees, explicit Set-based room counters, independent optimistic locking versions, pre-mutation preview captures, in-transaction idempotency recheck with P2002 handling, unified blocking contract policy, backend-only field scopes, exact propagation preview/apply UI postconditions, and inheriting Room D101 snapshot separation proofs have been implemented, verified, locked, and published.
 
 PR #3 remains open and unmerged. TASK-009 has not been started. All commits are forward-only.
 
 ---
 
-## 1. Schema Validation & Security Enhancements
+## 1. Git & Scope Provenance
+
+- **Repository**: `D:\horplus_wave1d_fasttrack`
+- **Branch**: `feature/wave1g-property-room-defaults`
+- **Pull Request**: `#3` (Open and unmerged)
+- **Base SHA**: `231e7fe`
+- **Starting Feature SHA**: `c98573cb1e617fb88802f5757e9f0ab1c3a8c078`
+- **Implementation & Test SHA**: `61098180513e7bc051ff620182bbe56b34a502a9`
+- **TASK-009 State**: NOT STARTED
+
+---
+
+## 2. Schema Validation & Security Enhancements
 
 1. **Strict Dormitory Defaults Request Validation**:
    - `UpdateDormitoryDefaultsRequestSchema` enforces an outer object containing optional `property` and `billing` change definitions with their corresponding `expectedVersion` integers.
@@ -28,7 +40,7 @@ PR #3 remains open and unmerged. TASK-009 has not been started. All commits are 
 
 ---
 
-## 2. Room Counters, Idempotency & Unified Policy
+## 3. Room Counters, Idempotency & Unified Policy
 
 1. **Explicit Set-based Room Counters**:
    - Preview and Apply calculate room-level counts using explicit Sets (`eligibleRoomIds`, `skippedRoomIds`).
@@ -38,8 +50,8 @@ PR #3 remains open and unmerged. TASK-009 has not been started. All commits are 
      - `eligibleRoomCount + skippedRoomCount = candidateRoomCount`
      - `eligibleFieldChangeCount + skippedFieldChangeCount = fieldEffects.length`
    - A Room with at least one eligible field effect is counted as an eligible Room.
-   - Returned counters in Preview: `candidateRoomCount`, `eligibleRoomCount`, `eligibleFieldChangeCount`, `skippedRoomCount`, `skippedFieldChangeCount`.
-   - Returned counters in Apply: `appliedRoomCount`, `appliedFieldChangeCount`, `skippedRoomCount`, `skippedFieldChangeCount`.
+   - Returned counters in Preview: `candidateRoomCount: 3`, `eligibleRoomCount: 2`, `eligibleFieldChangeCount: 8`, `skippedRoomCount: 1`, `skippedFieldChangeCount: 4`.
+   - Returned counters in Apply: `appliedRoomCount: 2`, `appliedFieldChangeCount: 8`, `skippedRoomCount: 1`, `skippedFieldChangeCount: 4`.
 
 2. **Pre-Mutation Preview Capture**:
    - `applyDefaultPropagation` executes `previewDefaultPropagation` inside the database transaction BEFORE applying database updates.
@@ -62,44 +74,53 @@ PR #3 remains open and unmerged. TASK-009 has not been started. All commits are 
 
 ---
 
-## 3. UI State & Persistence Scope Statement
+## 4. UI Postconditions & Snapshot Separation Proof
 
-Legacy mock helpers remain only for explicitly documented non-Wave-1G fields. All Prisma-modeled Wave 1G defaults use backend-only persistence.
+1. **Exact Propagation UI Assertions**:
+   - Hardcoded expected counters in Playwright E2E: `candidateRoomCount = 3`, `eligibleRoomCount = 2`, `eligibleFieldChangeCount = 8`, `skippedRoomCount = 1`, `skippedFieldChangeCount = 4`.
+   - Direct locator by room + field identity: `preview-effect-C101-defaultMonthlyRent`, `preview-effect-B101-defaultMonthlyRent`, `preview-effect-A101-defaultMonthlyRent`.
+   - Verified row elements: `oldEffectiveValue`, `newEffectiveValue`, `sourceBefore`, `sourceAfter`, `eligible`, `skipReason`.
+   - Visible post-apply result counters asserted: `appliedRoomCount = 2`, `appliedFieldChangeCount = 8`, `skippedRoomCount = 1`, `skippedFieldChangeCount = 4`.
+   - Inspected Room C101 card on `/owner/rooms` to confirm exact committed effective value `9,400` with `badge-dormitory`.
 
-- All fields in `DormitoryPropertyDefaults` and `DormitoryBillingSettings` operate exclusively via backend-only API calls.
-- Mock-storage dual writes (`handleRateBlur`, `handleRateSelectChange`, `handleGlobalFieldBlur`) have been completely removed for model-backed fields.
-- Non-persisted fee mode selects (`commonFeeMode`, `internetFeeMode`, `parkingFeeMode`) are disabled in UI.
-- On `VERSION_CONFLICT` (HTTP 409), `VersionConflictModal` opens, preventing mock-storage mutation and reloading authoritative defaults upon user action.
-
----
-
-## 4. Comprehensive Verification Results
-
-| Verification Suite | Target Environment | Outcome | Pass Count |
-|---|---|---|---|
-| Backend Vitest Integration Suite | Node.js / PostgreSQL 5455 | PASSED | 20 / 20 files (189 tests) |
-| Frontend Vitest Component Suite | happy-dom | PASSED | 5 / 5 files (32 tests) |
-| Focused Playwright E2E Suite | `tests/e2e/wave1g-property.spec.ts` | PASSED | 1 / 1 file (2 tests) |
-| Complete Playwright E2E Suite | `tests/e2e/*.spec.ts` | PASSED | 3 / 3 files (7 tests) |
-| Frontend TypeScript Compilation | `npx tsc --noEmit` | PASSED | 0 errors |
-| E2E TypeScript Compilation | `npx tsc --noEmit -p tsconfig.e2e.json` | PASSED | 0 errors |
-| Server TypeScript Compilation | `cd server; tsc --noEmit` | PASSED | 0 errors |
-| Production Build Frontend | Vite Build | PASSED | Success |
-| Production Build Backend | TypeScript Build | PASSED | Success |
-| Prisma Schema Validation | Prisma Engine | PASSED | Schema Valid |
+2. **Current-vs-Locked Snapshot Separation Proof (Inheriting Room D101)**:
+   - Dedicated inheriting Room `D101` created via production API `POST /api/v1/properties/rooms`.
+   - Override cleared via production API `DELETE /api/v1/properties/rooms/:id/defaults/monthlyRent`.
+   - Verified authoritative Room API: `rawOverrides.monthlyRent = null`, `currentEffectiveValues.monthlyRent = 9,400`.
+   - Activated Contract for D101 via API (`rentAmount = 4,300`, `depositAmount = 8,600`).
+   - Verified authoritative ContractSnapshot: `monthlyRent = 4,300`, `depositAmount = 8,600`.
+   - Updated dormitory default via API: `defaultMonthlyRent = 9,500`.
+   - Verified authoritative Room API: `currentEffectiveValues.monthlyRent = 9,500`, `contractSnapshot.values.monthlyRent = 4,300`.
+   - On `/owner/contracts` page, inspected D101 contract:
+     - `locked-snapshot-section`: `Locked monthly rent: 4,300`, `Locked deposit: 8,600`.
+     - `current-defaults-section`: `Current monthly rent: 9,500`.
+     - Proved current and locked values are rendered in separate, distinct UI sections (`locked-snapshot-section` vs `current-defaults-section`).
 
 ---
 
-## 5. Explicit Migration & Docker Command Matrix
+## 5. Comprehensive Command Verification Matrix
 
-| Operation | Command Executed | Directory | Outcome / Result |
-|---|---|---|---|
-| Prisma Migration Status | `npx prisma migrate status` | `server` | 9 migrations found in `prisma/migrations`. Database schema is up to date. Exit code: 0 |
-| Prisma Migration Audit | `npx prisma migrate diff --from-schema-datamodel prisma/schema.prisma --to-schema-datasource prisma/schema.prisma` | `server` | No changes detected. Schema and database in sync. Exit code: 0 |
-| Prisma Schema Validation | `npx prisma validate` | `server` | Schema is valid. Exit code: 0 |
-| Docker Compose Services | `docker compose ps` | Workspace Root | PostgreSQL 5455, Redis 6379, API 3000 all healthy |
-| Backend Liveness Health | `curl http://127.0.0.1:3001/health/liveness` | API Endpoint | 200 OK |
-| Backend Readiness Health | `curl http://127.0.0.1:3001/health/readiness` | API Endpoint | 200 OK |
+| Command Category | Exact Command | Cwd | Exit Code | Passed | Failed | Skipped | Sanitized Result Summary |
+|---|---|---|---|---|---|---|---|
+| Backend Lint | `npm run lint` | `server` | 0 | All | 0 | 0 | TypeScript type check passed cleanly with 0 errors |
+| Backend Build | `npm run build` | `server` | 0 | All | 0 | 0 | Compiled server dist binaries cleanly |
+| Backend Vitest | `npm test` | `server` | 0 | 189 | 0 | 0 | 20 / 20 test files passed (189 / 189 tests) |
+| Backend TSC | `npx tsc --noEmit` | `server` | 0 | All | 0 | 0 | TypeScript compilation clean |
+| Prisma Validate | `npx prisma validate` | `server` | 0 | 1 | 0 | 0 | Schema `prisma/schema.prisma` is valid |
+| Prisma Generate | `npx prisma generate` | `server` | 0 | 1 | 0 | 0 | Generated Prisma Client v5.22.0 |
+| Frontend Lint | `npm run lint` | `.` | 0 | All | 0 | 0 | React TypeScript type check passed cleanly |
+| Frontend Build | `npm run build` | `.` | 0 | All | 0 | 0 | Vite production bundle built dist in 12.14s |
+| Frontend Vitest | `npm test` | `.` | 0 | 32 | 0 | 1 | 5 / 5 test files passed (32 passed, 1 skipped) |
+| Frontend TSC | `npx tsc --noEmit` | `.` | 0 | All | 0 | 0 | TypeScript compilation clean |
+| E2E TSC | `npx tsc --noEmit -p tsconfig.e2e.json` | `.` | 0 | All | 0 | 0 | Playwright E2E type check clean with 0 errors |
+| Playwright E2E Focused | `$env:CI="1"; npx playwright test tests/e2e/wave1g-property.spec.ts` | `.` | 0 | 2 | 0 | 0 | 2 / 2 tests passed (API + UI full lifecycle) |
+| Playwright E2E Full | `$env:CI="1"; npx playwright test` | `.` | 0 | 7 | 0 | 0 | 3 / 3 test files passed (7 / 7 E2E tests) |
+| Disposable DB Deploy | `npx prisma migrate deploy` | `server` | 0 | 9 | 0 | 0 | Applied 9 migrations on `127.0.0.1:5455/horplus_disposable` |
+| Disposable DB Status | `npx prisma migrate status` | `server` | 0 | 1 | 0 | 0 | Database schema is up to date |
+| Docker Compose PS | `docker compose ps` | `.` | 0 | 4 | 0 | 0 | horplus_postgres, api, db, redis all Up (healthy) |
+| Health Liveness | `GET http://127.0.0.1:3000/api/v1/health/liveness` | `.` | 0 | 1 | 0 | 0 | `{"status":"UP","service":"horplus-api"}` |
+| Health Readiness | `GET http://127.0.0.1:3000/api/v1/health/readiness` | `.` | 0 | 1 | 0 | 0 | `{"status":"UP"}` |
+| Health Metrics | `GET http://127.0.0.1:3000/api/v1/health/metrics` | `.` | 0 | 1 | 0 | 0 | `200 OK` |
 
 ---
 
@@ -108,6 +129,8 @@ Legacy mock helpers remain only for explicitly documented non-Wave-1G fields. Al
 ```text
 75d17be test(wave1g): remove prisma bypass from property lifecycle
 ce126aa test(wave1g): assert exact owner ui postconditions
+c98573c docs(wave1g): publish canonical execution truth
+6109818 test(wave1g): assert exact propagation and snapshot separation
 ```
 
 ---
