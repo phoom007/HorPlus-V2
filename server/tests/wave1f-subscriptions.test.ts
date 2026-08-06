@@ -1067,14 +1067,12 @@ describe('Wave 1F - Authorization, Permission, Package & Idempotency Corrective 
     it('proves onboarding transaction rolls back cleanly on inner repository failure', async () => {
       const timestamp = Date.now();
       const rollbackUserId = crypto.randomUUID();
+      const rollbackDormCode = `ROLL-${timestamp}`;
+      const rollbackIdempotencyKey = `roll-idem-${timestamp}`;
 
       await prisma.user.create({
         data: { id: rollbackUserId, googleSubject: `sub-roll-${timestamp}`, email: `roll-${timestamp}@test.com`, emailNormalized: `roll-${timestamp}@test.com`, name: 'Rollback User' },
       });
-
-      const initialDorms = await prisma.dormitory.count();
-      const initialMembers = await prisma.dormitoryMember.count();
-      const initialSubs = await prisma.dormitorySubscription.count();
 
       const spy = vi.spyOn(subscriptionEntitlementService, 'provisionInitialTrial').mockRejectedValueOnce(new Error('INTENTIONAL_PROVISIONING_FAILURE'));
 
@@ -1099,18 +1097,36 @@ describe('Wave 1F - Authorization, Permission, Package & Idempotency Corrective 
       await expect(
         provisioningService.completeOwnerOnboarding({
           userId: rollbackUserId,
-          idempotencyKey: `roll-idem-${timestamp}`,
+          idempotencyKey: rollbackIdempotencyKey,
           planCode: 'FREE',
-          dormitory: { name: `Rollback Dorm ${timestamp}`, code: `ROLL-${timestamp}`, addressLine1: '123 Roll St', postalCode: '10100', phone: '0812345678' },
+          dormitory: { name: `Rollback Dorm ${timestamp}`, code: rollbackDormCode, addressLine1: '123 Roll St', postalCode: '10100', phone: '0812345678' },
           billing: { bankName: 'Kasikorn', accountName: 'Rollback User', accountNumber: '1234567890' },
         })
       ).rejects.toThrow();
 
       spy.mockRestore();
 
-      expect(await prisma.dormitory.count()).toBe(initialDorms);
-      expect(await prisma.dormitoryMember.count()).toBe(initialMembers);
-      expect(await prisma.dormitorySubscription.count()).toBe(initialSubs);
+      // Requirement 7: Assert no records exist by record identity
+      const dorm = await prisma.dormitory.findFirst({ where: { code: rollbackDormCode } });
+      expect(dorm).toBeNull();
+
+      const member = await prisma.dormitoryMember.findFirst({ where: { userId: rollbackUserId } });
+      expect(member).toBeNull();
+
+      const sub = dorm ? await prisma.dormitorySubscription.findFirst({ where: { dormitoryId: (dorm as any).id } }) : null;
+      expect(sub).toBeNull();
+
+      const subHistory = dorm ? await prisma.subscriptionStatusHistory.findFirst({ where: { dormitoryId: (dorm as any).id } }) : null;
+      expect(subHistory).toBeNull();
+
+      const bld = dorm ? await prisma.building.findFirst({ where: { dormitoryId: (dorm as any).id } }) : null;
+      expect(bld).toBeNull();
+
+      const rm = dorm ? await prisma.room.findFirst({ where: { dormitoryId: (dorm as any).id } }) : null;
+      expect(rm).toBeNull();
+
+      const idem = await prisma.idempotencyKey.findFirst({ where: { idempotencyKey: rollbackIdempotencyKey } });
+      expect(idem).toBeNull();
     });
   });
 

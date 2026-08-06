@@ -551,7 +551,7 @@ export class DefaultsService {
       roomType: room.roomType || null,
     };
 
-    const effectiveValues = {
+    const currentEffectiveValues = {
       monthlyRent: effective.monthlyRent.value,
       termRent: effective.termRent.value,
       dailyRent: effective.dailyRent.value,
@@ -569,23 +569,44 @@ export class DefaultsService {
       roomType: effective.roomType.value,
     };
 
-    const fieldSources = {
-      monthlyRent: snapshotLocked ? 'CONTRACT_SNAPSHOT' : effective.monthlyRent.source,
-      termRent: snapshotLocked ? 'CONTRACT_SNAPSHOT' : effective.termRent.source,
-      dailyRent: snapshotLocked ? 'CONTRACT_SNAPSHOT' : effective.dailyRent.source,
-      depositAmount: snapshotLocked ? 'CONTRACT_SNAPSHOT' : effective.depositAmount.source,
-      advancePaymentAmount: snapshotLocked ? 'CONTRACT_SNAPSHOT' : effective.advancePaymentAmount.source,
-      parkingFee: snapshotLocked ? 'CONTRACT_SNAPSHOT' : effective.parkingFee.source,
-      waterRate: snapshotLocked ? 'CONTRACT_SNAPSHOT' : effective.waterRate.source,
-      electricityRate: snapshotLocked ? 'CONTRACT_SNAPSHOT' : effective.electricityRate.source,
-      commonFee: snapshotLocked ? 'CONTRACT_SNAPSHOT' : effective.commonFee.source,
-      internetFee: snapshotLocked ? 'CONTRACT_SNAPSHOT' : effective.internetFee.source,
-      waterBillingType: snapshotLocked ? 'CONTRACT_SNAPSHOT' : effective.waterBillingType.source,
-      electricityBillingType: snapshotLocked ? 'CONTRACT_SNAPSHOT' : effective.electricityBillingType.source,
-      rentBillingType: snapshotLocked ? 'CONTRACT_SNAPSHOT' : effective.rentBillingType.source,
-      maximumOccupants: snapshotLocked ? 'CONTRACT_SNAPSHOT' : effective.maximumOccupants.source,
-      roomType: snapshotLocked ? 'CONTRACT_SNAPSHOT' : effective.roomType.source,
+    const currentFieldSources = {
+      monthlyRent: effective.monthlyRent.source,
+      termRent: effective.termRent.source,
+      dailyRent: effective.dailyRent.source,
+      depositAmount: effective.depositAmount.source,
+      advancePaymentAmount: effective.advancePaymentAmount.source,
+      parkingFee: effective.parkingFee.source,
+      waterRate: effective.waterRate.source,
+      electricityRate: effective.electricityRate.source,
+      commonFee: effective.commonFee.source,
+      internetFee: effective.internetFee.source,
+      waterBillingType: effective.waterBillingType.source,
+      electricityBillingType: effective.electricityBillingType.source,
+      rentBillingType: effective.rentBillingType.source,
+      maximumOccupants: effective.maximumOccupants.source,
+      roomType: effective.roomType.source,
     };
+
+    const contractSnapshot = activeContract?.snapshot ? {
+      snapshotId: activeContract.snapshot.id,
+      contractId: activeContract.id,
+      lockedAt: activeContract.snapshot.lockedAt,
+      lockedByUserId: activeContract.snapshot.lockedByUserId,
+      values: {
+        monthlyRent: Number(activeContract.snapshot.resolvedRent),
+        depositAmount: Number(activeContract.snapshot.resolvedDeposit),
+        advancePaymentAmount: Number(activeContract.snapshot.resolvedAdvancePayment),
+        waterRate: Number(activeContract.snapshot.resolvedWaterRate),
+        electricityRate: Number(activeContract.snapshot.resolvedElectricityRate),
+        commonFee: Number(activeContract.snapshot.resolvedCommonFee),
+        internetFee: Number(activeContract.snapshot.resolvedInternetFee),
+        parkingFee: Number(activeContract.snapshot.resolvedParkingFee),
+        waterBillingType: activeContract.snapshot.waterBillingType,
+        electricityBillingType: activeContract.snapshot.electricityBillingType,
+        rentBillingType: activeContract.snapshot.rentBillingType,
+      },
+      sourceVersions: activeContract.snapshot.sourceVersions,
+    } : null;
 
     return {
       id: room.id,
@@ -597,11 +618,15 @@ export class DefaultsService {
       status: room.status,
       version: room.version,
       rawOverrides,
-      effectiveValues,
-      fieldSources,
+      currentEffectiveValues,
+      effectiveValues: currentEffectiveValues,
+      currentFieldSources,
+      fieldSources: currentFieldSources,
+      currentSourceVersions: effective.sourceVersions,
       sourceVersions: effective.sourceVersions,
       snapshotLocked,
       activeContractSnapshotId,
+      contractSnapshot,
       updatedAt: room.updatedAt,
       floor: room.floor,
       rentCycle: room.rentCycle,

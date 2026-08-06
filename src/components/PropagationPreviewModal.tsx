@@ -38,13 +38,13 @@ export const PropagationPreviewModal: React.FC<PropagationPreviewModalProps> = (
           <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
             <div className="bg-gray-50 p-3 rounded-lg border border-gray-200 text-center">
               <div className="text-xs text-gray-500 font-medium">ห้องทั้งหมด</div>
-              <div className="text-lg font-bold text-gray-800" data-testid="candidate-room-count">
+              <div className="text-lg font-bold text-gray-800" data-testid="counter-candidate">
                 {previewData.candidateRoomCount}
               </div>
             </div>
             <div className="bg-emerald-50 p-3 rounded-lg border border-emerald-200 text-center">
               <div className="text-xs text-emerald-600 font-medium">ห้องที่ปรับปรุง</div>
-              <div className="text-lg font-bold text-emerald-700" data-testid="eligible-room-count">
+              <div className="text-lg font-bold text-emerald-700" data-testid="counter-eligible">
                 {previewData.eligibleRoomCount}
               </div>
             </div>
@@ -56,7 +56,7 @@ export const PropagationPreviewModal: React.FC<PropagationPreviewModalProps> = (
             </div>
             <div className="bg-amber-50 p-3 rounded-lg border border-amber-200 text-center">
               <div className="text-xs text-amber-600 font-medium">ห้องที่ข้าม</div>
-              <div className="text-lg font-bold text-amber-700" data-testid="skipped-room-count">
+              <div className="text-lg font-bold text-amber-700" data-testid="counter-skipped">
                 {previewData.skippedRoomCount}
               </div>
             </div>
@@ -129,7 +129,7 @@ export const PropagationPreviewModal: React.FC<PropagationPreviewModalProps> = (
             onClick={onConfirm}
             disabled={isLoading || previewData.eligibleFieldChangeCount === 0}
             className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-md text-sm font-medium transition-colors disabled:opacity-50 flex items-center"
-            data-testid="btn-confirm-propagation"
+            data-testid="btn-confirm-apply"
           >
             {isLoading ? 'กำลังนำไปใช้...' : 'ยืนยันและนำไปใช้'}
           </button>

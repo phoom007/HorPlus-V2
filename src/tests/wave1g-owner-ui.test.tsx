@@ -1,73 +1,94 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import React from 'react';
+import { render, screen, cleanup } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { SourceBadge } from '../components/PropertyBadges';
 import { VersionConflictModal } from '../components/VersionConflictModal';
 import { PropagationPreviewModal } from '../components/PropagationPreviewModal';
 import { PropagationPreviewResult } from '../types';
 
 describe('Wave 1G — Owner Property UI Component & Integration Tests', () => {
+  beforeEach(() => {
+    cleanup();
+  });
+
   describe('1. Backend-Driven Metadata Source Badges', () => {
     it('renders "ใช้ค่าจากหอพัก" badge when source is DORMITORY', () => {
-      const badge = SourceBadge({ source: 'DORMITORY' });
-      expect(badge.props.children).toBe('ใช้ค่าจากหอพัก');
-      expect(badge.props['data-testid']).toBe('badge-dormitory');
+      render(<SourceBadge source="DORMITORY" />);
+      const badge = screen.getByTestId('badge-dormitory');
+      expect(badge).toBeDefined();
+      expect(badge.textContent).toBe('ใช้ค่าจากหอพัก');
     });
 
     it('renders "ใช้ค่าจากอาคาร" badge when source is BUILDING', () => {
-      const badge = SourceBadge({ source: 'BUILDING' });
-      expect(badge.props.children).toBe('ใช้ค่าจากอาคาร');
-      expect(badge.props['data-testid']).toBe('badge-building');
+      render(<SourceBadge source="BUILDING" />);
+      const badge = screen.getByTestId('badge-building');
+      expect(badge).toBeDefined();
+      expect(badge.textContent).toBe('ใช้ค่าจากอาคาร');
     });
 
     it('renders "กำหนดเฉพาะห้อง" badge when source is ROOM', () => {
-      const badge = SourceBadge({ source: 'ROOM' });
-      expect(badge.props.children).toBe('กำหนดเฉพาะห้อง');
-      expect(badge.props['data-testid']).toBe('badge-room');
+      render(<SourceBadge source="ROOM" />);
+      const badge = screen.getByTestId('badge-room');
+      expect(badge).toBeDefined();
+      expect(badge.textContent).toBe('กำหนดเฉพาะห้อง');
     });
 
-    it('renders "มีสัญญาที่ล็อกค่าแล้ว" badge when source is CONTRACT_SNAPSHOT or isLocked is true', () => {
-      const badgeSnapshot = SourceBadge({ source: 'CONTRACT_SNAPSHOT' });
-      expect(badgeSnapshot.props.children).toBe('มีสัญญาที่ล็อกค่าแล้ว');
-      expect(badgeSnapshot.props['data-testid']).toBe('badge-locked');
-
-      const badgeLockedFlag = SourceBadge({ isLocked: true });
-      expect(badgeLockedFlag.props.children).toBe('มีสัญญาที่ล็อกค่าแล้ว');
-      expect(badgeLockedFlag.props['data-testid']).toBe('badge-locked');
+    it('renders "มีสัญญาที่ล็อกค่าแล้ว" badge when isLocked is true', () => {
+      render(<SourceBadge isLocked={true} />);
+      const badge = screen.getByTestId('badge-locked');
+      expect(badge).toBeDefined();
+      expect(badge.textContent).toBe('มีสัญญาที่ล็อกค่าแล้ว');
     });
   });
 
   describe('2. VERSION_CONFLICT Modal UX', () => {
     it('does not render when isOpen is false', () => {
-      const modal = VersionConflictModal({
-        isOpen: false,
-        onReload: () => {},
-        onCancel: () => {},
-        onRetry: () => {},
-      });
-      expect(modal).toBeNull();
+      const { container } = render(
+        <VersionConflictModal
+          isOpen={false}
+          onReload={() => {}}
+          onCancel={() => {}}
+          onRetry={() => {}}
+        />
+      );
+      expect(container.firstChild).toBeNull();
     });
 
-    it('renders Thai 409 conflict message and action buttons when open', () => {
+    it('renders Thai 409 conflict message and action buttons when open, triggers onReload click', async () => {
+      const user = userEvent.setup();
       const onReload = vi.fn();
       const onCancel = vi.fn();
       const onRetry = vi.fn();
 
-      const modal = VersionConflictModal({
-        isOpen: true,
-        currentVersion: 3,
-        onReload,
-        onCancel,
-        onRetry,
-      });
+      render(
+        <VersionConflictModal
+          isOpen={true}
+          currentVersion={3}
+          onReload={onReload}
+          onCancel={onCancel}
+          onRetry={onRetry}
+        />
+      );
 
-      expect(modal).not.toBeNull();
-      const containerProps = modal?.props;
-      expect(containerProps['data-testid']).toBe('version-conflict-modal');
+      const modal = screen.getByTestId('version-conflict-modal');
+      expect(modal).toBeDefined();
+      expect(screen.getByText(/ตรวจพบการแก้ไขข้อมูลซ้ำซ้อน/i)).toBeDefined();
+
+      const reloadBtn = screen.getByTestId('btn-reload-latest');
+      expect(reloadBtn).toBeDefined();
+      await user.click(reloadBtn);
+
+      expect(onReload).toHaveBeenCalledTimes(1);
     });
   });
 
   describe('3. Propagation Preview & Counter Modal', () => {
-    it('renders exact summary counters and row effects', () => {
+    it('renders exact summary counters and row effects and triggers confirm', async () => {
+      const user = userEvent.setup();
+      const onConfirm = vi.fn();
+      const onCancel = vi.fn();
+
       const previewData: PropagationPreviewResult = {
         scope: 'DORMITORY',
         candidateRoomCount: 10,
@@ -100,15 +121,25 @@ describe('Wave 1G — Owner Property UI Component & Integration Tests', () => {
         ],
       };
 
-      const modal = PropagationPreviewModal({
-        isOpen: true,
-        previewData,
-        onConfirm: () => {},
-        onCancel: () => {},
-      });
+      render(
+        <PropagationPreviewModal
+          isOpen={true}
+          previewData={previewData}
+          onConfirm={onConfirm}
+          onCancel={onCancel}
+        />
+      );
 
-      expect(modal).not.toBeNull();
-      expect(modal?.props['data-testid']).toBe('propagation-preview-modal');
+      const modal = screen.getByTestId('propagation-preview-modal');
+      expect(modal).toBeDefined();
+      expect(screen.getByTestId('counter-candidate').textContent?.trim()).toBe('10');
+      expect(screen.getByTestId('counter-eligible').textContent?.trim()).toBe('8');
+      expect(screen.getByTestId('counter-skipped').textContent?.trim()).toBe('2');
+
+      const confirmBtn = screen.getByTestId('btn-confirm-apply');
+      await user.click(confirmBtn);
+
+      expect(onConfirm).toHaveBeenCalledTimes(1);
     });
   });
 

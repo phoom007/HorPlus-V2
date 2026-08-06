@@ -147,6 +147,28 @@ export interface TenantRegistrationDataSource {
   rejectRequest(requestId: string, reason: string): Promise<DataResult<any>>;
 }
 
+export interface PropertyDataSource {
+  getAuthoritativeRooms(params?: Record<string, any>): Promise<DataResult<{ items: Room[]; pagination: any }>>;
+  getAuthoritativeRoom(id: string): Promise<DataResult<Room>>;
+  getAuthoritativeBuildings(): Promise<DataResult<Building[]>>;
+  getAuthoritativeBuilding(id: string): Promise<DataResult<Building>>;
+  getDormitoryDefaults(): Promise<DataResult<{ property: any; billing: any }>>;
+  updateDormitoryDefaults(payload: {
+    property?: { changes: Record<string, any>; expectedVersion: number };
+    billing?: { changes: Record<string, any>; expectedVersion: number };
+  }): Promise<DataResult<any>>;
+  setBuildingDefaults(buildingId: string, changes: Record<string, any>, expectedVersion: number): Promise<DataResult<Building>>;
+  clearBuildingOverride(buildingId: string, field: string, expectedVersion: number): Promise<DataResult<Building>>;
+  setRoomDefaults(roomId: string, changes: Record<string, any>, expectedVersion: number): Promise<DataResult<Room>>;
+  clearRoomOverride(roomId: string, field: string, expectedVersion: number): Promise<DataResult<Room>>;
+  previewPropagation(payload: { scope: 'DORMITORY' | 'BUILDING'; scopeId?: string; changes: Record<string, any> }): Promise<DataResult<any>>;
+  applyPropagation(payload: { scope: 'DORMITORY' | 'BUILDING'; scopeId?: string; changes: Record<string, any>; expectedVersion: number; idempotencyKey: string }): Promise<DataResult<any>>;
+  queryAvailability(params: { startDate: string; endDate: string; buildingId?: string }): Promise<DataResult<Room[]>>;
+  getContractSnapshot(contractId: string): Promise<DataResult<any>>;
+  createContract(payload: any): Promise<DataResult<Contract>>;
+  activateContract(contractId: string, payload?: { ownerSignature?: string; tenantSignature?: string }): Promise<DataResult<Contract>>;
+}
+
 export interface OccupancyDataSource {
   getSummary(): Promise<DataResult<any>>;
   getFloorPlan(buildingId?: string): Promise<DataResult<any>>;
@@ -165,6 +187,7 @@ export interface HorPlusDataProvider {
   announcements: AnnouncementDataSource;
   notifications: NotificationDataSource;
   audit: AuditDataSource;
+  properties?: PropertyDataSource;
 
   staffRoles?: StaffRoleDataSource;
   tenantRegistrations?: TenantRegistrationDataSource;

@@ -395,51 +395,40 @@ export function createPropertyRouter(
       const { getPrismaClient } = await import('../db/prisma.js');
       const prisma = getPrismaClient();
 
-      const { billing, property, expectedVersion } = req.body;
-      const { UpdateDormitoryPropertyDefaultsSchema, UpdateDormitoryBillingDefaultsSchema } = await import('../schemas/property-tenant-contract.schemas.js');
+      const body = req.body;
+      let propFields: any = null;
+      let propExpVer: number | undefined = undefined;
+      let billFields: any = null;
+      let billExpVer: number | undefined = undefined;
 
-      let parsedProp = property;
-      let parsedBill = billing;
-
-      if (property) {
-        const propParse = UpdateDormitoryPropertyDefaultsSchema.safeParse(property);
-        if (!propParse.success) {
-          return res.status(400).json({
-            error: {
-              code: 'DEFAULT_FIELD_NOT_ALLOWED',
-              message: 'ฟิลด์ข้อมูลการตั้งค่าไม่ถูกต้องหรือมีฟิลด์ที่ไม่ได้รับอนุญาต',
-              fieldErrors: propParse.error.flatten().fieldErrors,
-              requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
-              timestamp: new Date().toISOString(),
-            },
-          });
+      if (body.property) {
+        if (body.property.changes) {
+          propFields = body.property.changes;
+          propExpVer = body.property.expectedVersion;
+        } else {
+          const { expectedVersion: pVer, ...pRest } = body.property;
+          propFields = pRest;
+          propExpVer = body.expectedVersion ?? pVer;
         }
-        parsedProp = propParse.data;
       }
 
-      if (billing) {
-        const billParse = UpdateDormitoryBillingDefaultsSchema.safeParse(billing);
-        if (!billParse.success) {
-          return res.status(400).json({
-            error: {
-              code: 'DEFAULT_FIELD_NOT_ALLOWED',
-              message: 'ฟิลด์ข้อมูลการตั้งค่าบิลไม่ถูกต้องหรือมีฟิลด์ที่ไม่ได้รับอนุญาต',
-              fieldErrors: billParse.error.flatten().fieldErrors,
-              requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
-              timestamp: new Date().toISOString(),
-            },
-          });
+      if (body.billing) {
+        if (body.billing.changes) {
+          billFields = body.billing.changes;
+          billExpVer = body.billing.expectedVersion;
+        } else {
+          const { expectedVersion: bVer, ...bRest } = body.billing;
+          billFields = bRest;
+          billExpVer = body.expectedVersion ?? bVer;
         }
-        parsedBill = billParse.data;
       }
 
       const result = await prisma.$transaction(async (tx: any) => {
         let updatedProperty = null;
         let updatedBilling = null;
 
-        if (parsedProp) {
-          const { expectedVersion: propExpVer, ...propFields } = parsedProp;
-          const targetVer = expectedVersion ?? propExpVer;
+        if (propFields) {
+          const targetVer = propExpVer;
 
           const currentProp = await tx.dormitoryPropertyDefaults.findUnique({ where: { dormitoryId: dormId } });
           if (targetVer !== undefined && currentProp && currentProp.version !== targetVer) {
@@ -471,9 +460,8 @@ export function createPropertyRouter(
           }
         }
 
-        if (parsedBill) {
-          const { expectedVersion: billExpVer, ...billFields } = parsedBill;
-          const targetVer = expectedVersion ?? billExpVer;
+        if (billFields) {
+          const targetVer = billExpVer;
 
           const currentBill = await tx.dormitoryBillingSettings.findUnique({ where: { dormitoryId: dormId } });
           if (targetVer !== undefined && currentBill && currentBill.version !== targetVer) {

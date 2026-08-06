@@ -27,6 +27,8 @@ import {
 } from '../../components/GlobalComponents';
 import { getDataProvider } from '../../data/dataProvider';
 import { Room, Building, RoomStatus, Tenant, Contract, Bill, BLOCKING_CONTRACT_STATUSES } from '../../types';
+import { SourceBadge } from '../../components/PropertyBadges';
+import { VersionConflictModal } from '../../components/VersionConflictModal';
 
 interface OwnerRoomsProps {
   rooms: Room[];

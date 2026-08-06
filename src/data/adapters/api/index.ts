@@ -16,6 +16,7 @@ import {
   AnnouncementDataSource,
   NotificationDataSource,
   AuditDataSource,
+  PropertyDataSource,
 
   StaffRoleDataSource,
   TenantRegistrationDataSource,
@@ -637,6 +638,157 @@ export class ApiOccupancyAdapter implements OccupancyDataSource {
   }
 }
 
+export class ApiPropertyAdapter implements PropertyDataSource {
+  async getAuthoritativeRooms(params?: Record<string, any>): Promise<DataResult<{ items: Room[]; pagination: any }>> {
+    try {
+      const queryStr = params ? '?' + new URLSearchParams(params).toString() : '';
+      const data = await httpRequest<any>('GET', `/properties/rooms${queryStr}`);
+      return { success: true, data };
+    } catch (err: any) {
+      return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message } };
+    }
+  }
+
+  async getAuthoritativeRoom(id: string): Promise<DataResult<Room>> {
+    try {
+      const data = await httpRequest<Room>('GET', `/properties/rooms/${id}`);
+      return { success: true, data };
+    } catch (err: any) {
+      return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message } };
+    }
+  }
+
+  async getAuthoritativeBuildings(): Promise<DataResult<Building[]>> {
+    try {
+      const data = await httpRequest<Building[]>('GET', '/properties/buildings');
+      return { success: true, data };
+    } catch (err: any) {
+      return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message } };
+    }
+  }
+
+  async getAuthoritativeBuilding(id: string): Promise<DataResult<Building>> {
+    try {
+      const data = await httpRequest<Building>('GET', `/properties/buildings/${id}`);
+      return { success: true, data };
+    } catch (err: any) {
+      return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message } };
+    }
+  }
+
+  async getDormitoryDefaults(): Promise<DataResult<{ property: any; billing: any }>> {
+    try {
+      const data = await httpRequest<any>('GET', '/properties/dormitory/defaults');
+      return { success: true, data };
+    } catch (err: any) {
+      return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message } };
+    }
+  }
+
+  async updateDormitoryDefaults(payload: {
+    property?: { changes: Record<string, any>; expectedVersion: number };
+    billing?: { changes: Record<string, any>; expectedVersion: number };
+  }): Promise<DataResult<any>> {
+    try {
+      const data = await httpRequest<any>('PUT', '/properties/dormitory/defaults', payload);
+      return { success: true, data };
+    } catch (err: any) {
+      return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message } };
+    }
+  }
+
+  async setBuildingDefaults(buildingId: string, changes: Record<string, any>, expectedVersion: number): Promise<DataResult<Building>> {
+    try {
+      const data = await httpRequest<Building>('PUT', `/properties/buildings/${buildingId}/defaults`, { ...changes, expectedVersion });
+      return { success: true, data };
+    } catch (err: any) {
+      return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message } };
+    }
+  }
+
+  async clearBuildingOverride(buildingId: string, field: string, expectedVersion: number): Promise<DataResult<Building>> {
+    try {
+      const data = await httpRequest<Building>('DELETE', `/properties/buildings/${buildingId}/defaults/${field}`, { expectedVersion });
+      return { success: true, data };
+    } catch (err: any) {
+      return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message } };
+    }
+  }
+
+  async setRoomDefaults(roomId: string, changes: Record<string, any>, expectedVersion: number): Promise<DataResult<Room>> {
+    try {
+      const data = await httpRequest<Room>('PUT', `/properties/rooms/${roomId}/defaults`, { ...changes, expectedVersion });
+      return { success: true, data };
+    } catch (err: any) {
+      return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message } };
+    }
+  }
+
+  async clearRoomOverride(roomId: string, field: string, expectedVersion: number): Promise<DataResult<Room>> {
+    try {
+      const data = await httpRequest<Room>('DELETE', `/properties/rooms/${roomId}/defaults/${field}`, { expectedVersion });
+      return { success: true, data };
+    } catch (err: any) {
+      return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message } };
+    }
+  }
+
+  async previewPropagation(payload: { scope: 'DORMITORY' | 'BUILDING'; scopeId?: string; changes: Record<string, any> }): Promise<DataResult<any>> {
+    try {
+      const data = await httpRequest<any>('POST', '/properties/defaults/preview', payload);
+      return { success: true, data };
+    } catch (err: any) {
+      return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message } };
+    }
+  }
+
+  async applyPropagation(payload: { scope: 'DORMITORY' | 'BUILDING'; scopeId?: string; changes: Record<string, any>; expectedVersion: number; idempotencyKey: string }): Promise<DataResult<any>> {
+    try {
+      const data = await httpRequest<any>('POST', '/properties/defaults/apply', payload);
+      return { success: true, data };
+    } catch (err: any) {
+      return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message } };
+    }
+  }
+
+  async queryAvailability(params: { startDate: string; endDate: string; buildingId?: string }): Promise<DataResult<Room[]>> {
+    try {
+      const queryStr = '?' + new URLSearchParams(params as any).toString();
+      const data = await httpRequest<Room[]>('GET', `/properties/rooms/available${queryStr}`);
+      return { success: true, data };
+    } catch (err: any) {
+      return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message } };
+    }
+  }
+
+  async getContractSnapshot(contractId: string): Promise<DataResult<any>> {
+    try {
+      const data = await httpRequest<any>('GET', `/properties/contracts/${contractId}/snapshot`);
+      return { success: true, data };
+    } catch (err: any) {
+      return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message } };
+    }
+  }
+
+  async createContract(payload: any): Promise<DataResult<Contract>> {
+    try {
+      const data = await httpRequest<Contract>('POST', '/contracts', payload);
+      return { success: true, data };
+    } catch (err: any) {
+      return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message } };
+    }
+  }
+
+  async activateContract(contractId: string, payload?: { ownerSignature?: string; tenantSignature?: string }): Promise<DataResult<Contract>> {
+    try {
+      const data = await httpRequest<Contract>('POST', `/contracts/${contractId}/activate`, payload || {});
+      return { success: true, data };
+    } catch (err: any) {
+      return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message } };
+    }
+  }
+}
+
 export class ApiDataProvider implements HorPlusDataProvider {
   public dormitories = new ApiDormitoryAdapter();
   public rooms = new ApiRoomAdapter();
@@ -648,6 +800,7 @@ export class ApiDataProvider implements HorPlusDataProvider {
   public announcements = new ApiAnnouncementAdapter();
   public notifications = new ApiNotificationAdapter();
   public audit = new ApiAuditAdapter();
+  public properties = new ApiPropertyAdapter();
 
   public staffRoles = new ApiStaffRoleAdapter();
   public tenantRegistrations = new ApiTenantRegistrationAdapter();
