@@ -150,12 +150,11 @@ ALTER TABLE "dormitory_property_defaults" ADD CONSTRAINT "chk_prop_def_max_occ" 
 INSERT INTO "dormitory_property_defaults" ("dormitory_id", "default_monthly_rent", "default_deposit", "default_advance_payment", "default_parking_fee", "default_max_occupants", "default_room_type")
 SELECT
     d."id",
-    COALESCE(bs."default_rent", 0.00),
-    COALESCE(bs."default_deposit", 0.00),
-    COALESCE(bs."default_advance", 0.00),
-    COALESCE(bs."parking_fee", 0.00),
-    COALESCE(bs."max_occupants", 2),
+    0.00,
+    0.00,
+    0.00,
+    0.00,
+    2,
     'standard'
 FROM "dormitories" d
-LEFT JOIN "dormitory_billing_settings" bs ON bs."dormitory_id" = d."id"
 ON CONFLICT ("dormitory_id") DO NOTHING;

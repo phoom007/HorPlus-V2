@@ -138,7 +138,15 @@ export function createPropertyRouter(
         });
       }
 
-      const building = await buildingService.updateBuilding(req.params.id, dormId, parsed.data, req.auth?.userId);
+      const { expectedVersion, ...changes } = parsed.data;
+      const building = await buildingService.updateBuilding({
+        buildingId: req.params.id,
+        dormitoryId: dormId,
+        changes,
+        expectedVersion,
+        actorUserId: req.auth?.userId,
+        requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+      });
       res.json({ data: building });
     } catch (err) {
       handleServiceError(res, err, req);
@@ -164,12 +172,13 @@ export function createPropertyRouter(
         });
       }
 
-      const building = await buildingService.archiveBuilding(
-        req.params.id,
-        dormId,
-        parsed.data.expectedVersion,
-        req.auth?.userId
-      );
+      const building = await buildingService.archiveBuilding({
+        buildingId: req.params.id,
+        dormitoryId: dormId,
+        expectedVersion: parsed.data.expectedVersion,
+        actorUserId: req.auth?.userId,
+        requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+      });
       res.json({ data: { success: true, message: 'เก็บข้อมูลอาคารเรียบร้อยแล้ว', building } });
     } catch (err) {
       handleServiceError(res, err, req);
@@ -301,7 +310,15 @@ export function createPropertyRouter(
         });
       }
 
-      const room = await roomService.updateRoom(req.params.id, parsed.data, dormId, req.auth?.userId);
+      const { expectedVersion, ...changes } = parsed.data;
+      const room = await roomService.updateRoom({
+        roomId: req.params.id,
+        dormitoryId: dormId,
+        changes,
+        expectedVersion,
+        actorUserId: req.auth?.userId,
+        requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+      });
       res.json({ data: room });
     } catch (err) {
       handleServiceError(res, err, req);
@@ -327,12 +344,13 @@ export function createPropertyRouter(
         });
       }
 
-      const room = await roomService.archiveRoom(
-        req.params.id,
-        dormId,
-        parsed.data.expectedVersion,
-        req.auth?.userId
-      );
+      const room = await roomService.archiveRoom({
+        roomId: req.params.id,
+        dormitoryId: dormId,
+        expectedVersion: parsed.data.expectedVersion,
+        actorUserId: req.auth?.userId,
+        requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+      });
       res.json({ data: { success: true, message: 'เก็บข้อมูลห้องพักเรียบร้อยแล้ว', room } });
     } catch (err) {
       handleServiceError(res, err, req);
@@ -639,7 +657,15 @@ export function createPropertyRouter(
         });
       }
 
-      const updated = await buildingService.updateBuilding(req.params.id, dormId, parsed.data as any, req.auth?.userId);
+      const { expectedVersion, ...changes } = parsed.data;
+      const updated = await buildingService.updateBuilding({
+        buildingId: req.params.id,
+        dormitoryId: dormId,
+        changes,
+        expectedVersion,
+        actorUserId: req.auth?.userId,
+        requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+      });
       if (!updated) {
         return res.status(404).json({ error: { code: 'BUILDING_NOT_FOUND', message: 'ไม่พบข้อมูลอาคาร' } });
       }
@@ -686,9 +712,16 @@ export function createPropertyRouter(
         });
       }
 
-      const clearPayload: Record<string, any> = { expectedVersion };
-      clearPayload[fieldName] = null;
-      const updated = await buildingService.updateBuilding(req.params.id, dormId, clearPayload as any, req.auth?.userId);
+      const clearChanges: Record<string, any> = {};
+      clearChanges[fieldName] = null;
+      const updated = await buildingService.updateBuilding({
+        buildingId: req.params.id,
+        dormitoryId: dormId,
+        changes: clearChanges,
+        expectedVersion,
+        actorUserId: req.auth?.userId,
+        requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+      });
       if (!updated) {
         return res.status(404).json({ error: { code: 'BUILDING_NOT_FOUND', message: 'ไม่พบข้อมูลอาคาร' } });
       }
@@ -725,7 +758,15 @@ export function createPropertyRouter(
         });
       }
 
-      const updated = await roomService.updateRoom(req.params.id, parsed.data, dormId, req.auth?.userId);
+      const { expectedVersion, ...changes } = parsed.data;
+      const updated = await roomService.updateRoom({
+        roomId: req.params.id,
+        dormitoryId: dormId,
+        changes,
+        expectedVersion,
+        actorUserId: req.auth?.userId,
+        requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+      });
       if (!updated) {
         return res.status(404).json({ error: { code: 'ROOM_NOT_FOUND', message: 'ไม่พบข้อมูลห้องพัก' } });
       }
@@ -774,9 +815,16 @@ export function createPropertyRouter(
         });
       }
 
-      const clearPayload: Record<string, any> = { expectedVersion };
-      clearPayload[fieldName] = null;
-      const updated = await roomService.updateRoom(req.params.id, clearPayload, dormId, req.auth?.userId);
+      const clearChanges: Record<string, any> = {};
+      clearChanges[fieldName] = null;
+      const updated = await roomService.updateRoom({
+        roomId: req.params.id,
+        dormitoryId: dormId,
+        changes: clearChanges,
+        expectedVersion,
+        actorUserId: req.auth?.userId,
+        requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+      });
       if (!updated) {
         return res.status(404).json({ error: { code: 'ROOM_NOT_FOUND', message: 'ไม่พบข้อมูลห้องพัก' } });
       }

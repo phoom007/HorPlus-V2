@@ -114,34 +114,8 @@ export class BuildingService {
     return result;
   }
 
-  public async updateBuilding(
-    arg1: string | UpdateBuildingCommand,
-    arg2?: string,
-    arg3?: Record<string, any>,
-    arg4?: string,
-    txClient?: any
-  ) {
-    let id: string;
-    let dormitoryId: string;
-    let changes: Record<string, any>;
-    let expectedVersion: number;
-    let actorUserId: string | undefined;
-
-    if (typeof arg1 === 'object') {
-      id = arg1.buildingId;
-      dormitoryId = arg1.dormitoryId;
-      changes = arg1.changes;
-      expectedVersion = arg1.expectedVersion;
-      actorUserId = arg1.actorUserId;
-    } else {
-      id = arg1;
-      dormitoryId = arg2!;
-      const data = arg3 || {};
-      const { expectedVersion: expVer, version: clientVer, ...cleanChanges } = data;
-      expectedVersion = expVer !== undefined ? expVer : clientVer;
-      changes = cleanChanges;
-      actorUserId = arg4;
-    }
+  public async updateBuilding(command: UpdateBuildingCommand, txClient?: any) {
+    const { buildingId: id, dormitoryId, changes, expectedVersion, actorUserId } = command;
 
     if (expectedVersion === undefined || typeof expectedVersion !== 'number') {
       const err = new Error('ต้องระบุ expectedVersion สำหรับการแก้ไขข้อมูลอาคาร');
@@ -265,35 +239,14 @@ export class BuildingService {
     return result;
   }
 
-  public async archiveBuilding(
-    arg1: string | ArchiveBuildingCommand,
-    arg2?: string,
-    arg3?: number | string,
-    arg4?: string,
-    txClient?: any
-  ) {
-    let id: string;
-    let dormitoryId: string;
-    let expectedVersion: number;
-    let actorUserId: string | undefined;
+  public async archiveBuilding(command: ArchiveBuildingCommand, txClient?: any) {
+    const { buildingId: id, dormitoryId, expectedVersion, actorUserId } = command;
 
-    if (typeof arg1 === 'object') {
-      id = arg1.buildingId;
-      dormitoryId = arg1.dormitoryId;
-      expectedVersion = arg1.expectedVersion;
-      actorUserId = arg1.actorUserId;
-    } else {
-      id = arg1;
-      dormitoryId = arg2!;
-      if (typeof arg3 === 'number') {
-        expectedVersion = arg3;
-        actorUserId = arg4;
-      } else {
-        const err = new Error('ต้องระบุ expectedVersion สำหรับการจัดเก็บอาคาร');
-        (err as any).code = 'VALIDATION_ERROR';
-        (err as any).statusCode = 400;
-        throw err;
-      }
+    if (expectedVersion === undefined || typeof expectedVersion !== 'number') {
+      const err = new Error('ต้องระบุ expectedVersion สำหรับการจัดเก็บอาคาร');
+      (err as any).code = 'VALIDATION_ERROR';
+      (err as any).statusCode = 400;
+      throw err;
     }
 
     const { getPrismaClient } = await import('../db/prisma.js');

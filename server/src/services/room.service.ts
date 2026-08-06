@@ -239,34 +239,8 @@ export class RoomService {
     }
   }
 
-  public async updateRoom(
-    arg1: string | UpdateRoomCommand,
-    arg2?: any,
-    arg3?: any,
-    arg4?: string,
-    txClient?: any
-  ) {
-    let id: string;
-    let targetDormId: string;
-    let changes: Record<string, any>;
-    let expectedVersion: number;
-    let userId: string | undefined;
-
-    if (typeof arg1 === 'object') {
-      id = arg1.roomId;
-      targetDormId = arg1.dormitoryId;
-      changes = arg1.changes;
-      expectedVersion = arg1.expectedVersion;
-      userId = arg1.actorUserId;
-    } else {
-      id = arg1;
-      targetDormId = typeof arg3 === 'string' ? arg3 : (typeof arg2 === 'string' ? arg2 : id);
-      const dataObj = typeof arg2 === 'object' ? arg2 : (typeof arg3 === 'object' ? arg3 : arg2) || {};
-      const { expectedVersion: expVer, version: clientVer, ...cleanChanges } = dataObj;
-      expectedVersion = expVer !== undefined ? expVer : clientVer;
-      changes = cleanChanges;
-      userId = arg4;
-    }
+  public async updateRoom(command: UpdateRoomCommand, txClient?: any) {
+    const { roomId: id, dormitoryId: targetDormId, changes, expectedVersion, actorUserId: userId } = command;
 
     if (expectedVersion === undefined || typeof expectedVersion !== 'number') {
       throw new AppError('ต้องระบุ expectedVersion สำหรับการแก้ไขข้อมูลห้องพัก', 400, 'VALIDATION_ERROR');
@@ -383,32 +357,11 @@ export class RoomService {
     }
   }
 
-  public async archiveRoom(
-    arg1: string | ArchiveRoomCommand,
-    arg2?: string,
-    arg3?: number | string,
-    arg4?: string,
-    txClient?: any
-  ) {
-    let id: string;
-    let targetDormId: string;
-    let expectedVersion: number;
-    let effectiveUserId: string | undefined;
+  public async archiveRoom(command: ArchiveRoomCommand, txClient?: any) {
+    const { roomId: id, dormitoryId: targetDormId, expectedVersion, actorUserId: effectiveUserId } = command;
 
-    if (typeof arg1 === 'object') {
-      id = arg1.roomId;
-      targetDormId = arg1.dormitoryId;
-      expectedVersion = arg1.expectedVersion;
-      effectiveUserId = arg1.actorUserId;
-    } else {
-      id = arg1;
-      targetDormId = typeof arg2 === 'string' ? arg2 : id;
-      if (typeof arg3 === 'number') {
-        expectedVersion = arg3;
-        effectiveUserId = arg4;
-      } else {
-        throw new AppError('ต้องระบุ expectedVersion สำหรับการจัดเก็บห้องพัก', 400, 'VALIDATION_ERROR');
-      }
+    if (expectedVersion === undefined || typeof expectedVersion !== 'number') {
+      throw new AppError('ต้องระบุ expectedVersion สำหรับการจัดเก็บห้องพัก', 400, 'VALIDATION_ERROR');
     }
 
     await subscriptionEntitlementService.assertDormitoryWritable(targetDormId);
