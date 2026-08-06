@@ -391,34 +391,112 @@ export class DefaultsService {
       // Lock dormitory using PostgreSQL advisory lock
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${dormitoryId}))`;
 
+      // Normalize frontend field names and split into property vs billing buckets
+      const propertyFieldMap: Record<string, string> = {
+        monthlyRent: 'defaultMonthlyRent',
+        termRent: 'defaultTermRent',
+        dailyRent: 'defaultDailyRent',
+        depositAmount: 'defaultDeposit',
+        deposit: 'defaultDeposit',
+        advancePaymentAmount: 'defaultAdvancePayment',
+        advancePayment: 'defaultAdvancePayment',
+        parkingFee: 'defaultParkingFee',
+        maximumOccupants: 'defaultMaxOccupants',
+        maxOccupants: 'defaultMaxOccupants',
+        roomType: 'defaultRoomType',
+        terms: 'defaultTerms',
+        defaultMonthlyRent: 'defaultMonthlyRent',
+        defaultTermRent: 'defaultTermRent',
+        defaultDailyRent: 'defaultDailyRent',
+        defaultDeposit: 'defaultDeposit',
+        defaultAdvancePayment: 'defaultAdvancePayment',
+        defaultParkingFee: 'defaultParkingFee',
+        defaultMaxOccupants: 'defaultMaxOccupants',
+        defaultRoomType: 'defaultRoomType',
+        defaultTerms: 'defaultTerms',
+      };
+
+      const billingFieldMap: Record<string, string> = {
+        waterUnitRate: 'waterRate',
+        waterRate: 'waterRate',
+        electricUnitRate: 'electricityRate',
+        electricRate: 'electricityRate',
+        electricityRate: 'electricityRate',
+        waterBillingType: 'waterBillingType',
+        waterBillingMode: 'waterBillingType',
+        electricityBillingType: 'electricityBillingType',
+        electricBillingType: 'electricityBillingType',
+        electricBillingMode: 'electricityBillingType',
+        commonFee: 'commonFee',
+        internetFee: 'internetFee',
+        lateFeeType: 'lateFeeType',
+        lateFeeValue: 'lateFeeValue',
+        rentBillingType: 'rentBillingType',
+        billingDay: 'billingDay',
+        dueDay: 'dueDay',
+      };
+
+      const normalizedPropertyChanges: Record<string, any> = {};
+      const normalizedBillingChanges: Record<string, any> = {};
+
+      for (const [k, v] of Object.entries(changes)) {
+        if (propertyFieldMap[k]) {
+          normalizedPropertyChanges[propertyFieldMap[k]] = v;
+        } else if (billingFieldMap[k]) {
+          normalizedBillingChanges[billingFieldMap[k]] = v;
+        }
+        // Unknown fields are silently ignored for safety
+      }
+
       // Verify scope version and apply updates
       if (scope === 'DORMITORY') {
-        const currentDefaults = await tx.dormitoryPropertyDefaults.findUnique({
-          where: { dormitoryId },
-        });
-
-        if (expectedVersion !== undefined && currentDefaults && currentDefaults.version !== expectedVersion) {
-          const err: any = new AppError('ข้อมูลถูกแก้ไขโดยผู้อื่น กรุณาโหลดข้อมูลใหม่', 409, 'VERSION_CONFLICT');
-          err.currentVersion = currentDefaults.version;
-          throw err;
-        }
-
-        if (currentDefaults) {
-          const updateRes = await tx.dormitoryPropertyDefaults.updateMany({
-            where: { dormitoryId, version: expectedVersion ?? currentDefaults.version },
-            data: { ...changes, version: { increment: 1 } },
+        // Apply property defaults changes if any
+        if (Object.keys(normalizedPropertyChanges).length > 0) {
+          const currentDefaults = await tx.dormitoryPropertyDefaults.findUnique({
+            where: { dormitoryId },
           });
 
-          if (updateRes.count === 0) {
-            const safeCurrent = await tx.dormitoryPropertyDefaults.findUnique({ where: { dormitoryId } });
+          if (expectedVersion !== undefined && currentDefaults && currentDefaults.version !== expectedVersion) {
             const err: any = new AppError('ข้อมูลถูกแก้ไขโดยผู้อื่น กรุณาโหลดข้อมูลใหม่', 409, 'VERSION_CONFLICT');
-            err.currentVersion = safeCurrent?.version || 1;
+            err.currentVersion = currentDefaults.version;
             throw err;
           }
-        } else {
-          await tx.dormitoryPropertyDefaults.create({
-            data: { dormitoryId, ...changes, version: 1 },
+
+          if (currentDefaults) {
+            const updateRes = await tx.dormitoryPropertyDefaults.updateMany({
+              where: { dormitoryId, version: expectedVersion ?? currentDefaults.version },
+              data: { ...normalizedPropertyChanges, version: { increment: 1 } },
+            });
+
+            if (updateRes.count === 0) {
+              const safeCurrent = await tx.dormitoryPropertyDefaults.findUnique({ where: { dormitoryId } });
+              const err: any = new AppError('ข้อมูลถูกแก้ไขโดยผู้อื่น กรุณาโหลดข้อมูลใหม่', 409, 'VERSION_CONFLICT');
+              err.currentVersion = safeCurrent?.version || 1;
+              throw err;
+            }
+          } else {
+            await tx.dormitoryPropertyDefaults.create({
+              data: { dormitoryId, ...normalizedPropertyChanges, version: 1 },
+            });
+          }
+        }
+
+        // Apply billing settings changes if any
+        if (Object.keys(normalizedBillingChanges).length > 0) {
+          const currentBilling = await tx.dormitoryBillingSettings.findUnique({
+            where: { dormitoryId },
           });
+
+          if (currentBilling) {
+            await tx.dormitoryBillingSettings.updateMany({
+              where: { dormitoryId },
+              data: { ...normalizedBillingChanges },
+            });
+          } else {
+            await tx.dormitoryBillingSettings.create({
+              data: { dormitoryId, ...normalizedBillingChanges },
+            });
+          }
         }
       } else if (scope === 'BUILDING' && scopeId) {
         const currentBld = await tx.building.findFirst({
@@ -435,6 +513,7 @@ export class DefaultsService {
           throw err;
         }
 
+        // Building overrides use raw field names (no default prefix)
         const updateRes = await tx.building.updateMany({
           where: { id: scopeId, dormitoryId, version: expectedVersion ?? currentBld.version },
           data: { ...changes, version: { increment: 1 } },

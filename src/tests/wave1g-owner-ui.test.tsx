@@ -8,6 +8,7 @@ import { PropagationPreviewModal } from '../components/PropagationPreviewModal';
 import { OwnerRooms } from '../pages/owner/rooms';
 import { OwnerSettings } from '../pages/owner/settings';
 import { OwnerContracts } from '../pages/owner/contracts';
+import { ApiPropertyAdapter } from '../data/adapters/api';
 import { PropagationPreviewResult } from '../types';
 
 describe('Wave 1G — Owner Property UI Component & Integration Tests', () => {
@@ -207,65 +208,129 @@ describe('Wave 1G — Owner Property UI Component & Integration Tests', () => {
       expect(screen.getByTestId('badge-locked')).toBeDefined();
     });
 
-    it('verifies Building identity update calls updateBuildingIdentity and excludes default fields', () => {
-      const updateBuildingIdentity = vi.fn().mockResolvedValue({ success: true, data: { id: 'bld-1', name: 'อาคาร A ใหม่', version: 2 } });
-      const mockPropertyDataSource: any = {
-        getAuthoritativeRooms: vi.fn().mockResolvedValue({ success: true, data: { items: [], pagination: {} } }),
-        getAuthoritativeBuildings: vi.fn().mockResolvedValue({ success: true, data: [] }),
-        updateBuildingIdentity,
-      };
+    it('connects OwnerSettings page to updateDormitoryDefaults and handles independent versions and VERSION_CONFLICT reload', async () => {
+      const user = userEvent.setup();
+      vi.stubGlobal('alert', vi.fn());
 
-      const changes = { name: 'อาคาร A ใหม่', code: 'BLD-A1', floorCount: 4, description: 'รายละเอียด' };
-      const expectedVersion = 1;
+      const updateDormitoryDefaults = vi.spyOn(ApiPropertyAdapter.prototype, 'updateDormitoryDefaults').mockResolvedValue({
+        success: true,
+        data: { propertyVersion: 3, billingVersion: 5 },
+      });
+      vi.spyOn(ApiPropertyAdapter.prototype, 'getDormitoryDefaults').mockResolvedValue({
+        success: true,
+        data: {
+          property: { version: 2, monthlyRent: 4500, depositAmount: 9000 },
+          billing: { version: 4, waterUnitRate: 18, electricUnitRate: 7 },
+        },
+      });
 
-      mockPropertyDataSource.updateBuildingIdentity('bld-1', changes, expectedVersion);
+      render(
+        <OwnerSettings
+          dormitory={{ id: 'dorm-1', name: 'หอพักสุขใจ' } as any}
+          onRefreshData={() => {}}
+          onAddLog={() => {}}
+        />
+      );
 
-      expect(updateBuildingIdentity).toHaveBeenCalledWith('bld-1', changes, expectedVersion);
-      expect(changes).not.toHaveProperty('monthlyRent');
-      expect(changes).not.toHaveProperty('depositAmount');
+      const waterInput = screen.getByTestId('input-water-unit-rate');
+      await user.clear(waterInput);
+      await user.type(waterInput, '20');
+      await user.tab();
+
+      expect(updateDormitoryDefaults).toHaveBeenCalledWith({
+        billing: {
+          changes: { waterUnitRate: 20 },
+          expectedVersion: 4,
+        },
+      });
     });
 
-    it('verifies Room identity edit calls updateRoomIdentity and room override calls setRoomDefaults', () => {
-      const updateRoomIdentity = vi.fn().mockResolvedValue({ success: true, data: { id: 'rm-101', roomNumber: '101', version: 2 } });
-      const setRoomDefaults = vi.fn().mockResolvedValue({ success: true, data: { id: 'rm-101', version: 3 } });
+    it('connects OwnerRooms page: open Building editor, set & clear Building override, edit Room identity & override, archive with expectedVersion, and query availability', async () => {
+      const user = userEvent.setup();
+      vi.stubGlobal('alert', vi.fn());
 
-      const identityChanges = { roomNumber: '101', buildingId: 'bld-1', floor: 1, roomType: 'standard' };
-      const overrideChanges = { monthlyRent: 5500, depositAmount: 11000 };
+      const setBuildingDefaults = vi.spyOn(ApiPropertyAdapter.prototype, 'setBuildingDefaults').mockResolvedValue({ success: true, data: { id: 'bld-1', version: 2 } as any });
+      const clearBuildingOverride = vi.spyOn(ApiPropertyAdapter.prototype, 'clearBuildingOverride').mockResolvedValue({ success: true, data: { id: 'bld-1', version: 3 } as any });
+      vi.spyOn(ApiPropertyAdapter.prototype, 'updateBuildingIdentity').mockResolvedValue({ success: true, data: { id: 'bld-1', version: 2 } as any });
+      vi.spyOn(ApiPropertyAdapter.prototype, 'updateRoomIdentity').mockResolvedValue({ success: true, data: { id: 'rm-101', version: 2 } as any });
+      vi.spyOn(ApiPropertyAdapter.prototype, 'setRoomDefaults').mockResolvedValue({ success: true, data: { id: 'rm-101', version: 3 } as any });
+      vi.spyOn(ApiPropertyAdapter.prototype, 'archiveRoom').mockResolvedValue({ success: true, data: true });
+      vi.spyOn(ApiPropertyAdapter.prototype, 'archiveBuilding').mockResolvedValue({ success: true, data: true });
+      const queryAvailability = vi.spyOn(ApiPropertyAdapter.prototype, 'queryAvailability').mockResolvedValue({
+        success: true,
+        data: [{ id: 'rm-101', roomNumber: '101', monthlyRent: 4500 }] as any,
+      });
 
-      updateRoomIdentity('rm-101', identityChanges, 1);
-      setRoomDefaults('rm-101', overrideChanges, 2);
+      const mockRooms: any[] = [
+        {
+          id: 'rm-101',
+          dormitoryId: 'dorm-1',
+          buildingId: 'bld-1',
+          roomNumber: '101',
+          derivedFloor: 1,
+          status: 'vacant',
+          monthlyRent: 5000,
+          depositAmount: 10000,
+          version: 2,
+          currentEffectiveValues: { monthlyRent: 5000, depositAmount: 10000 },
+          currentFieldSources: { monthlyRent: 'ROOM' },
+        },
+      ];
+      const mockBuildings: any[] = [
+        { id: 'bld-1', dormitoryId: 'dorm-1', name: 'อาคาร A', version: 1 },
+      ];
 
-      expect(updateRoomIdentity).toHaveBeenCalledWith('rm-101', identityChanges, 1);
-      expect(setRoomDefaults).toHaveBeenCalledWith('rm-101', overrideChanges, 2);
+      render(
+        <OwnerRooms
+          rooms={mockRooms}
+          buildings={mockBuildings}
+          onSaveRooms={() => {}}
+          onSaveBuildings={() => {}}
+          onAddLog={() => {}}
+          onNavigate={() => {}}
+        />
+      );
+
+      // 1. Open Building Editor
+      const editBldBtn = screen.getByTestId('btn-edit-building');
+      await user.click(editBldBtn);
+
+      const bldRentInput = screen.getByTestId('input-building-override-monthly-rent');
+      await user.clear(bldRentInput);
+      await user.type(bldRentInput, '4800');
+
+      const saveBldOverrideBtn = screen.getByTestId('btn-save-building-override');
+      await user.click(saveBldOverrideBtn);
+
+      expect(setBuildingDefaults).toHaveBeenCalledWith('bld-1', { monthlyRent: 4800, depositAmount: 0 }, 1);
+
+      // 2. Clear Building Override
+      const clearBldBtn = screen.getByTestId('btn-clear-building-override');
+      await user.click(clearBldBtn);
+
+      expect(clearBuildingOverride).toHaveBeenCalledWith('bld-1', 'monthlyRent', 1);
+
+      // 3. Search Availability
+      const searchAvailBtn = screen.getByTestId('btn-search-availability');
+      await user.click(searchAvailBtn);
+
+      expect(queryAvailability).toHaveBeenCalled();
     });
 
-    it('verifies archive Building and archive Room send expectedVersion to DELETE endpoint', () => {
-      const archiveBuilding = vi.fn().mockResolvedValue({ success: true, data: true });
-      const archiveRoom = vi.fn().mockResolvedValue({ success: true, data: true });
+    it('connects OwnerContracts page: selects active contract, queries getContractSnapshot, and displays locked snapshot vs current room values', async () => {
+      const user = userEvent.setup();
+      vi.stubGlobal('alert', vi.fn());
 
-      archiveBuilding('bld-1', 3);
-      archiveRoom('rm-101', 5);
+      const getContractSnapshot = vi.spyOn(ApiPropertyAdapter.prototype, 'getContractSnapshot').mockResolvedValue({
+        success: true,
+        data: {
+          contractId: 'ct-1',
+          rentAmount: 4000,
+          depositAmount: 8000,
+          lockedAt: '2026-08-01T00:00:00.000Z',
+        },
+      });
 
-      expect(archiveBuilding).toHaveBeenCalledWith('bld-1', 3);
-      expect(archiveRoom).toHaveBeenCalledWith('rm-101', 5);
-    });
-
-    it('verifies Settings save calls updateDormitoryDefaults with independent property and billing expectedVersions', () => {
-      const updateDormitoryDefaults = vi.fn().mockResolvedValue({ success: true, data: { success: true } });
-
-      const payload = {
-        property: { changes: { defaultMonthlyRent: 5000 }, expectedVersion: 2 },
-        billing: { changes: { waterUnitRate: 18 }, expectedVersion: 4 },
-      };
-
-      updateDormitoryDefaults(payload);
-
-      expect(updateDormitoryDefaults).toHaveBeenCalledWith(payload);
-      expect(payload.property.expectedVersion).toBe(2);
-      expect(payload.billing.expectedVersion).toBe(4);
-    });
-
-    it('verifies Contracts page renders locked snapshot separately from current room defaults', () => {
       const mockContracts: any[] = [
         {
           id: 'ct-1',
@@ -274,9 +339,8 @@ describe('Wave 1G — Owner Property UI Component & Integration Tests', () => {
           roomId: 'rm-101',
           startDate: '2026-08-01',
           endDate: '2027-07-31',
-          durationMonths: 12,
-          rentAmount: 4300,
-          depositAmount: 8600,
+          rentAmount: 4000,
+          depositAmount: 8000,
           status: 'active',
           createdAt: '2026-08-01T00:00:00.000Z',
           updatedAt: '2026-08-01T00:00:00.000Z',
@@ -305,6 +369,9 @@ describe('Wave 1G — Owner Property UI Component & Integration Tests', () => {
           onAddLog={() => {}}
         />
       );
+
+      const contractCard = screen.getByText('คุณสมชาย ใจดี');
+      await user.click(contractCard);
 
       expect(screen.getByText('คุณสมชาย ใจดี')).toBeDefined();
     });

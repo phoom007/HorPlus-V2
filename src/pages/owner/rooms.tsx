@@ -82,11 +82,11 @@ const ROOM_STATUS_CONFIG: Record<string, {
 };
 
 export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
-  rooms,
+  rooms = [],
   tenants = [],
   contracts = [],
   bills = [],
-  buildings,
+  buildings = [],
   onSaveRooms,
   onSaveBuildings,
   onAddLog,
@@ -147,6 +147,8 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
   const [buildingCode, setBuildingCode] = useState('');
   const [buildingFloorsCount, setBuildingFloorCount] = useState<number>(1);
   const [buildingDescription, setBuildingNotes] = useState('');
+  const [bldOverrideMonthlyRent, setBldOverrideMonthlyRent] = useState<number>(0);
+  const [bldOverrideDepositAmount, setBldOverrideDepositAmount] = useState<number>(0);
   const [deleteBuildingConfirmData, setDeleteBuildingConfirmData] = useState<{ id: string; name: string } | null>(null);
 
   // Fetch Authoritative Data on Mount
@@ -182,12 +184,16 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
       setBuildingCode((bld as any).code || '');
       setBuildingFloorCount(bld.floorsCount || 1);
       setBuildingNotes(bld.description || '');
+      setBldOverrideMonthlyRent((bld as any).rawOverrides?.monthlyRent || 0);
+      setBldOverrideDepositAmount((bld as any).rawOverrides?.depositAmount || 0);
     } else {
       setEditingBuilding(null);
       setBuildingName('');
       setBuildingCode('');
       setBuildingFloorCount(1);
       setBuildingNotes('');
+      setBldOverrideMonthlyRent(0);
+      setBldOverrideDepositAmount(0);
     }
     setIsBuildingModalOpen(true);
   };
@@ -272,6 +278,58 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
     } catch (err: any) {
       setDeleteBuildingConfirmData(null);
       alert(err.message || 'เกิดข้อผิดพลาดในการลบอาคาร');
+    }
+  };
+
+  const handleSaveBuildingOverride = async (buildingId: string, overrideChanges: Record<string, any>) => {
+    if (!DataProvider.properties) return;
+    const bld = buildings.find(b => b.id === buildingId);
+    const currentVer = bld?.version || 1;
+    try {
+      const res = await DataProvider.properties.setBuildingDefaults(buildingId, overrideChanges, currentVer);
+      if (!res.success) {
+        if (res.error?.code === 'CONFLICT' || (res.error as any)?.statusCode === 409) {
+          setVersionConflictState({
+            isOpen: true,
+            entityName: `อาคาร ${bld?.name || ''}`,
+            currentVersion: (res.error?.details as any)?.currentVersion || currentVer + 1,
+            onRetry: () => handleSaveBuildingOverride(buildingId, overrideChanges)
+          });
+          return;
+        }
+        throw new Error(res.error?.message || 'Failed to update building overrides');
+      }
+      onAddLog('แก้ไขค่าเริ่มต้นอาคาร', `แก้ไขค่าเริ่มต้นอาคาร ${bld?.name || ''}`, 'Building', buildingId);
+      await fetchAuthoritativeData();
+      setToastMessage(`บันทึกค่าเริ่มต้นอาคารเรียบร้อยแล้ว`);
+    } catch (err: any) {
+      alert(err.message || 'เกิดข้อผิดพลาดในการตั้งค่าเริ่มต้นอาคาร');
+    }
+  };
+
+  const handleClearBuildingOverride = async (buildingId: string, field: string) => {
+    if (!DataProvider.properties) return;
+    const bld = buildings.find(b => b.id === buildingId);
+    const currentVer = bld?.version || 1;
+    try {
+      const res = await DataProvider.properties.clearBuildingOverride(buildingId, field, currentVer);
+      if (!res.success) {
+        if (res.error?.code === 'CONFLICT' || (res.error as any)?.statusCode === 409) {
+          setVersionConflictState({
+            isOpen: true,
+            entityName: `อาคาร ${bld?.name || ''}`,
+            currentVersion: (res.error?.details as any)?.currentVersion || currentVer + 1,
+            onRetry: () => handleClearBuildingOverride(buildingId, field)
+          });
+          return;
+        }
+        throw new Error(res.error?.message || 'Failed to clear building override');
+      }
+      onAddLog('ล้างค่า Override อาคาร', `ล้างค่า ${field} ของอาคาร ${bld?.name || ''}`, 'Building', buildingId);
+      await fetchAuthoritativeData();
+      setToastMessage(`ล้างค่า Override อาคารเรียบร้อยแล้ว`);
+    } catch (err: any) {
+      alert(err.message || 'เกิดข้อผิดพลาดในการล้างค่า Override อาคาร');
     }
   };
 
@@ -603,7 +661,10 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
   };
 
   // Filter Logic
-  const filteredRooms = rooms.filter(r => {
+  const safeBuildings = Array.isArray(buildings) ? buildings : [];
+  const safeRooms = Array.isArray(rooms) ? rooms : [];
+  const safeTenants = Array.isArray(tenants) ? tenants : [];
+  const filteredRooms = safeRooms.filter(r => {
     const matchBuilding = selectedBuilding === 'all' || r.buildingId === selectedBuilding;
     const matchStatus = selectedStatus === 'all' || r.status === selectedStatus;
     const matchSearch = (r?.roomNumber || '').toLowerCase().includes((searchQuery || '').toLowerCase());
@@ -644,7 +705,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
               className="w-full px-3 py-2 text-xs border border-indigo-700 bg-indigo-950/80 rounded-xl text-white font-bold focus:outline-none"
             >
               <option value="all">อาคารทั้งหมด</option>
-              {buildings.map(b => (
+              {(Array.isArray(buildings) ? buildings : []).map(b => (
                 <option key={b.id} value={b.id}>{b.name}</option>
               ))}
             </select>
@@ -653,6 +714,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
             <label className="block text-[11px] font-bold text-indigo-200 mb-1">วันเริ่มต้นสัญญา *</label>
             <input
               type="date"
+              data-testid="input-avail-start-date"
               aria-label="วันเริ่มต้นสัญญา"
               value={availStartDate}
               onChange={(e) => setAvailStartDate(e.target.value)}
@@ -663,6 +725,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
             <label className="block text-[11px] font-bold text-indigo-200 mb-1">วันสิ้นสุดสัญญา *</label>
             <input
               type="date"
+              data-testid="input-avail-end-date"
               aria-label="วันสิ้นสุดสัญญา"
               value={availEndDate}
               onChange={(e) => setAvailEndDate(e.target.value)}
@@ -672,6 +735,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
           <div>
             <button
               type="submit"
+              data-testid="btn-search-availability"
               disabled={availSearching}
               className="w-full py-2 bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-black text-xs rounded-xl transition-all shadow-md flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
             >
@@ -740,7 +804,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                 className="bg-transparent focus:outline-none w-full cursor-pointer text-slate-700 font-semibold"
               >
                 <option value="all">อาคารทั้งหมด</option>
-                {buildings.map(b => (
+                {(Array.isArray(buildings) ? buildings : []).map(b => (
                   <option key={b.id} value={b.id}>{b.name}</option>
                 ))}
                 <option value="unspecified">ไม่ระบุอาคาร</option>
@@ -786,6 +850,19 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
             </div>
 
             <button
+              data-testid="btn-edit-building"
+              onClick={() => {
+                const safeBldList = Array.isArray(buildings) ? buildings : [];
+                const targetBld = selectedBuilding !== 'all' ? safeBldList.find(b => b.id === selectedBuilding) || safeBldList[0] : safeBldList[0];
+                handleOpenBuildingModal(targetBld || null);
+              }}
+              className="flex-1 sm:flex-none px-3.5 py-2 border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-semibold text-xs rounded-xl flex items-center justify-center gap-1.5 shadow-2xs transition-colors cursor-pointer"
+            >
+              <Edit2 className="w-3.5 h-3.5 text-indigo-600" />
+              <span>ตั้งค่าอาคาร (Building)</span>
+            </button>
+
+            <button
               onClick={() => handleOpenModal()}
               className="flex-1 sm:flex-none px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs rounded-xl flex items-center justify-center gap-1.5 shadow-xs transition-colors cursor-pointer"
             >
@@ -800,8 +877,8 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
       {viewMode === 'grid' && (
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
           {filteredRooms.map((room) => {
-            const bldName = buildings.find(b => b.id === room.buildingId)?.name || 'ไม่ระบุอาคาร';
-            const currentTenant = tenants.find(t => t.id === room.currentTenantId);
+            const bldName = safeBuildings.find(b => b.id === room.buildingId)?.name || 'ไม่ระบุอาคาร';
+            const currentTenant = safeTenants.find(t => t.id === room.currentTenantId);
             const statusCfg = ROOM_STATUS_CONFIG[room.status] || ROOM_STATUS_CONFIG.vacant;
 
             const eff = room.currentEffectiveValues || {};
@@ -928,8 +1005,8 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {filteredRooms.map((room) => {
-                  const bldName = buildings.find(b => b.id === room.buildingId)?.name || 'ไม่ระบุ';
-                  const currentTenant = tenants.find(t => t.id === room.currentTenantId);
+                  const bldName = safeBuildings.find(b => b.id === room.buildingId)?.name || 'ไม่ระบุ';
+                  const currentTenant = safeTenants.find(t => t.id === room.currentTenantId);
                   const statusCfg = ROOM_STATUS_CONFIG[room.status] || ROOM_STATUS_CONFIG.vacant;
                   const eff = room.currentEffectiveValues || {};
 
@@ -981,7 +1058,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
       {/* Floor Map Mode */}
       {viewMode === 'floor' && (
         <div className="space-y-6">
-          {buildings.map((bld) => {
+          {safeBuildings.map((bld) => {
             const floors = Array.from(new Set(rooms.filter(r => r.buildingId === bld.id).map(r => r.derivedFloor))).sort((a, b) => (b === null ? -1 : a === null ? 1 : Number(b) - Number(a)));
             return (
               <div key={bld.id} className="bg-white p-6 rounded-3xl border border-gray-100 shadow-xs space-y-4">
@@ -1237,6 +1314,134 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                 className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs rounded-xl shadow-xs transition-all cursor-pointer"
               >
                 บันทึกข้อมูล
+              </button>
+            </div>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Building Editor & Defaults Override Modal */}
+      <Modal isOpen={isBuildingModalOpen} onClose={() => setIsBuildingModalOpen(false)} title={editingBuilding ? `แก้ไขอาคาร ${buildingName}` : 'เพิ่มอาคารใหม่'}>
+        <form onSubmit={handleSaveBuilding} className="space-y-4">
+          <div className="max-h-[60vh] overflow-y-auto px-1.5 pb-4 space-y-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-1">
+                <label className="block text-xs font-bold text-slate-700">ชื่ออาคาร *</label>
+                <input
+                  type="text"
+                  name="buildingName"
+                  required
+                  value={buildingName}
+                  onChange={(e) => setBuildingName(e.target.value)}
+                  className="w-full px-3 py-2 text-xs border border-gray-200 rounded-xl bg-white font-bold"
+                  data-testid="input-building-name"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="block text-xs font-bold text-slate-700">รหัสอาคาร (Code)</label>
+                <input
+                  type="text"
+                  name="buildingCode"
+                  value={buildingCode}
+                  onChange={(e) => setBuildingCode(e.target.value)}
+                  className="w-full px-3 py-2 text-xs border border-gray-200 rounded-xl bg-white font-bold"
+                  data-testid="input-building-code"
+                />
+              </div>
+            </div>
+
+            {editingBuilding && (
+              <div className="space-y-3 pt-3 border-t border-gray-100 bg-slate-50 p-3.5 rounded-2xl border">
+                <div className="flex items-center justify-between">
+                  <label className="block text-xs font-black text-indigo-900">ค่าเริ่มต้นเฉพาะอาคาร (Building Overrides)</label>
+                </div>
+                <div className="grid grid-cols-2 gap-3 text-xs">
+                  <div className="space-y-1">
+                    <div className="flex justify-between items-center">
+                      <label className="block text-[11px] font-bold text-slate-700">ค่าเช่าเริ่มต้น (บาท)</label>
+                      <button
+                        type="button"
+                        data-testid="btn-clear-building-override"
+                        onClick={() => handleClearBuildingOverride(editingBuilding.id, 'monthlyRent')}
+                        className="text-[10px] font-bold text-rose-600 hover:underline cursor-pointer"
+                      >
+                        ล้าง
+                      </button>
+                    </div>
+                    <input
+                      type="number"
+                      value={bldOverrideMonthlyRent}
+                      onChange={(e) => setBldOverrideMonthlyRent(Number(e.target.value))}
+                      className="w-full px-3 py-2 text-xs border border-gray-200 rounded-xl bg-white font-bold"
+                      data-testid="input-building-override-monthly-rent"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <div className="flex justify-between items-center">
+                      <label className="block text-[11px] font-bold text-slate-700">เงินประกัน (บาท)</label>
+                      <button
+                        type="button"
+                        data-testid="btn-clear-building-override-deposit"
+                        onClick={() => handleClearBuildingOverride(editingBuilding.id, 'depositAmount')}
+                        className="text-[10px] font-bold text-rose-600 hover:underline cursor-pointer"
+                      >
+                        ล้าง
+                      </button>
+                    </div>
+                    <input
+                      type="number"
+                      value={bldOverrideDepositAmount}
+                      onChange={(e) => setBldOverrideDepositAmount(Number(e.target.value))}
+                      className="w-full px-3 py-2 text-xs border border-gray-200 rounded-xl bg-white font-bold"
+                      data-testid="input-building-override-deposit"
+                    />
+                  </div>
+                </div>
+                <div className="flex justify-end pt-1">
+                  <button
+                    type="button"
+                    data-testid="btn-save-building-override"
+                    onClick={() => handleSaveBuildingOverride(editingBuilding.id, {
+                      monthlyRent: Number(bldOverrideMonthlyRent),
+                      depositAmount: Number(bldOverrideDepositAmount)
+                    })}
+                    className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs rounded-xl shadow-xs cursor-pointer"
+                  >
+                    บันทึก Override อาคาร
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="p-4 bg-white border-t border-gray-100 flex items-center justify-between">
+            {editingBuilding && (
+              <button
+                type="button"
+                data-testid="btn-delete-building"
+                onClick={() => {
+                  setDeleteBuildingConfirmData(editingBuilding);
+                  setIsBuildingModalOpen(false);
+                }}
+                className="px-3 py-2 bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 rounded-xl text-xs font-bold cursor-pointer"
+              >
+                ลบอาคาร
+              </button>
+            )}
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setIsBuildingModalOpen(false)}
+                className="px-4 py-2 border border-gray-200 bg-white text-slate-600 rounded-xl text-xs font-bold"
+              >
+                ยกเลิก
+              </button>
+              <button
+                type="submit"
+                data-testid="btn-save-building"
+                className="px-5 py-2 bg-indigo-600 text-white font-extrabold text-xs rounded-xl"
+              >
+                บันทึกอาคาร
               </button>
             </div>
           </div>

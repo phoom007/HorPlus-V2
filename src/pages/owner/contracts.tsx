@@ -196,7 +196,7 @@ export const OwnerContracts: React.FC<OwnerContractsProps> = ({
   onBackToTenants
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
-  const [cycleFilter, setCycleFilter] = useState<'cycle' | 'all'>('cycle');
+  const [cycleFilter, setCycleFilter] = useState<'cycle' | 'all'>('all');
   const DataProvider = getDataProvider();
   const [selectedContract, setSelectedContract] = useState<Contract | null>(null);
   const [snapshotData, setSnapshotData] = useState<any>(null);
@@ -604,14 +604,21 @@ export const OwnerContracts: React.FC<OwnerContractsProps> = ({
   };
 
   const getTenantName = (tId: string, contract?: Contract) => {
+    const resolveName = (t: any) => {
+      if (!t) return null;
+      return t.name || t.displayName || `${t.firstName || ''} ${t.lastName || ''}`.trim() || null;
+    };
+
     if (contract && cycleFilter === 'cycle' && selectedCycle && bills && bills.length > 0) {
       const cycleBill = bills.find(b => b.cycleId === selectedCycle && (b.roomId === contract.roomId || b.tenantId === contract.tenantId));
       if (cycleBill && cycleBill.tenantId) {
         const cycleTenant = tenants.find(t => t.id === cycleBill.tenantId);
-        if (cycleTenant) return cycleTenant.name;
+        const resolved = resolveName(cycleTenant);
+        if (resolved) return resolved;
       }
     }
-    return tenants.find(t => t.id === tId)?.name || 'ไม่พบข้อมูลผู้เช่า';
+    const found = tenants.find(t => t.id === tId);
+    return resolveName(found) || 'ไม่พบข้อมูลผู้เช่า';
   };
 
   const getRoomNum = (rId: string) => rooms.find(r => r.id === rId)?.roomNumber || '-';

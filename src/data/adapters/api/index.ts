@@ -678,8 +678,9 @@ export class ApiPropertyAdapter implements PropertyDataSource {
 
   async getDormitoryDefaults(): Promise<DataResult<{ property: any; billing: any }>> {
     try {
-      const data = await httpRequest<any>('GET', '/properties/dormitory/defaults');
-      return { success: true, data };
+      const response = await httpRequest<any>('GET', '/properties/dormitory/defaults');
+      const defaults = response?.data || response;
+      return { success: true, data: defaults };
     } catch (err: any) {
       return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message } };
     }
@@ -690,8 +691,9 @@ export class ApiPropertyAdapter implements PropertyDataSource {
     billing?: { changes: Record<string, any>; expectedVersion: number };
   }): Promise<DataResult<any>> {
     try {
-      const data = await httpRequest<any>('PUT', '/properties/dormitory/defaults', payload);
-      return { success: true, data };
+      const response = await httpRequest<any>('PUT', '/properties/dormitory/defaults', payload);
+      const result = response?.data || response;
+      return { success: true, data: result };
     } catch (err: any) {
       return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message } };
     }
@@ -771,8 +773,9 @@ export class ApiPropertyAdapter implements PropertyDataSource {
 
   async previewPropagation(payload: { scope: 'DORMITORY' | 'BUILDING'; scopeId?: string; changes: Record<string, any> }): Promise<DataResult<any>> {
     try {
-      const data = await httpRequest<any>('POST', '/properties/defaults/preview', payload);
-      return { success: true, data };
+      const response = await httpRequest<any>('POST', '/properties/defaults/preview', payload);
+      const preview = response?.data || response;
+      return { success: true, data: preview };
     } catch (err: any) {
       return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message } };
     }
@@ -789,7 +792,14 @@ export class ApiPropertyAdapter implements PropertyDataSource {
 
   async queryAvailability(params: { startDate: string; endDate: string; buildingId?: string }): Promise<DataResult<Room[]>> {
     try {
-      const queryStr = '?' + new URLSearchParams(params as any).toString();
+      const cleanParams: Record<string, string> = {
+        startDate: params.startDate,
+        endDate: params.endDate
+      };
+      if (params.buildingId && params.buildingId !== 'undefined' && params.buildingId !== 'all') {
+        cleanParams.buildingId = params.buildingId;
+      }
+      const queryStr = '?' + new URLSearchParams(cleanParams).toString();
       const data = await httpRequest<Room[]>('GET', `/properties/rooms/available${queryStr}`);
       return { success: true, data };
     } catch (err: any) {

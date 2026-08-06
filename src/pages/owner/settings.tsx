@@ -831,8 +831,49 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                 </div>
               </div>
 
-              {/* Water Settings */}
+              {/* Property Default Rent & Deposit Settings */}
               <div className="grid grid-cols-2 gap-4 text-xs pt-1">
+                <div className="space-y-1">
+                  <label className="block font-semibold text-slate-700 flex items-center gap-1.5">
+                    <DollarSign className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                    ค่าเช่าเริ่มต้นหอพัก (บาท) *
+                  </label>
+                  <input
+                    type="number"
+                    required
+                    value={propertyMonthlyRent}
+                    onChange={(e) => {
+                      setPropertyMonthlyRent(Number(e.target.value));
+                      setSaveStatus('typing');
+                    }}
+                    onBlur={(e) => handleSaveBackendDormitoryDefaults({ defaultMonthlyRent: Number(e.target.value) }, undefined)}
+                    className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-bold focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs"
+                    data-testid="input-default-monthly-rent"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="block font-semibold text-slate-700 flex items-center gap-1.5">
+                    <DollarSign className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                    เงินประกันเริ่มต้นหอพัก (บาท) *
+                  </label>
+                  <input
+                    type="number"
+                    required
+                    value={propertyDepositAmount}
+                    onChange={(e) => {
+                      setPropertyDepositAmount(Number(e.target.value));
+                      setSaveStatus('typing');
+                    }}
+                    onBlur={(e) => handleSaveBackendDormitoryDefaults({ defaultDeposit: Number(e.target.value) }, undefined)}
+                    className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-bold focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs"
+                    data-testid="input-default-deposit"
+                  />
+                </div>
+              </div>
+
+              {/* Water Settings */}
+              <div className="grid grid-cols-2 gap-4 text-xs">
                 <div className="space-y-1">
                   <label className="block font-semibold text-slate-700 flex items-center gap-1.5">
                     <Droplet className="w-3.5 h-3.5 text-blue-500 shrink-0" />
@@ -846,8 +887,12 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                       setLocalWaterUnitRate(e.target.value);
                       setSaveStatus('typing');
                     }}
-                    onBlur={(e) => handleRateBlur('waterUnitRate', Number(e.target.value))}
+                    onBlur={(e) => {
+                      handleRateBlur('waterUnitRate', Number(e.target.value));
+                      handleSaveBackendDormitoryDefaults(undefined, { waterUnitRate: Number(e.target.value) });
+                    }}
                     className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-bold focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs"
+                    data-testid="input-water-unit-rate"
                   />
                 </div>
 
@@ -855,7 +900,10 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                   <label className="block font-semibold text-slate-700">รูปแบบค่าน้ำประปา</label>
                   <select
                     value={currentRates.waterBillingMode}
-                    onChange={(e) => handleRateSelectChange('waterBillingMode', e.target.value as any)}
+                    onChange={(e) => {
+                      handleRateSelectChange('waterBillingMode', e.target.value as any);
+                      handleSaveBackendDormitoryDefaults(undefined, { waterBillingType: e.target.value });
+                    }}
                     className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-medium focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs"
                   >
                     <option value="unit">บาท/หน่วย</option>

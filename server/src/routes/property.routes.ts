@@ -413,13 +413,17 @@ export function createPropertyRouter(
       }
 
       if (body.billing) {
-        if (body.billing.changes) {
-          billFields = body.billing.changes;
-          billExpVer = body.billing.expectedVersion;
-        } else {
-          const { expectedVersion: bVer, ...bRest } = body.billing;
-          billFields = bRest;
-          billExpVer = body.expectedVersion ?? bVer;
+        let rawBilling = body.billing.changes || body.billing;
+        const { expectedVersion: bVer, ...bRest } = rawBilling;
+        billExpVer = body.billing.expectedVersion ?? bVer;
+
+        billFields = {};
+        for (const [k, v] of Object.entries(bRest)) {
+          if (k === 'waterUnitRate' || k === 'waterRate') billFields.waterRate = v;
+          else if (k === 'electricUnitRate' || k === 'electricityRate' || k === 'electricRate') billFields.electricityRate = v;
+          else if (k === 'waterBillingType' || k === 'waterBillingMode') billFields.waterBillingType = v;
+          else if (k === 'electricityBillingType' || k === 'electricBillingType' || k === 'electricBillingMode') billFields.electricityBillingType = v;
+          else billFields[k] = v;
         }
       }
 

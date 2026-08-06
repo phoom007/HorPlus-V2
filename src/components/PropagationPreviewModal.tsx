@@ -84,7 +84,7 @@ export const PropagationPreviewModal: React.FC<PropagationPreviewModalProps> = (
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
-                  {previewData.fieldEffects.map((item, idx) => (
+                  {(previewData.fieldEffects || []).map((item, idx) => (
                     <tr key={idx} className={item.eligible ? 'hover:bg-gray-50' : 'bg-amber-50/40 hover:bg-amber-50/70'} data-testid={`preview-row-${idx}`}>
                       <td className="p-2.5 font-medium text-gray-900">{item.roomNumber}</td>
                       <td className="p-2.5 text-gray-600">{item.field}</td>
