@@ -1,10 +1,10 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { normalizeRoomNumber, validateRoomNumberInput } from '../../utils/room-number.normalizer.js';
-import { defaultsService } from '../../services/defaults.service.js';
-import { availabilityService } from '../../services/availability.service.js';
+import { BLOCKING_CONTRACT_STATUSES, isIntervalOverlapping } from '../../services/blocking-contract-policy.js';
+import { validateClearOverrideField } from '../../schemas/property-tenant-contract.schemas.js';
 
-describe('Wave 1G — Property, Room Defaults & Availability Unit & Logic Tests', () => {
-  describe('Room Number Normalizer (Mandatory Correction 5)', () => {
+describe('Wave 1G — Property, Room Defaults & Availability Comprehensive Unit & Logic Tests', () => {
+  describe('Room Number Normalizer & Identity (Mandatory Correction 5)', () => {
     it('normalizes simple room numbers', () => {
       expect(normalizeRoomNumber('101')).toBe('101');
     });
@@ -37,11 +37,18 @@ describe('Wave 1G — Property, Room Defaults & Availability Unit & Logic Tests'
       expect(res.isValid).toBe(false);
       expect(res.errorMessage).toBe('หมายเลขห้องพักต้องไม่เป็นค่าว่าง');
     });
+
+    it('proves A101 in Building A and B101 in Building B are distinct roomNumbers', () => {
+      expect(normalizeRoomNumber('A101')).not.toBe(normalizeRoomNumber('B101'));
+    });
+
+    it('proves 101 in Building A and 101 in Building B share the same normalized value (unique per Dormitory)', () => {
+      expect(normalizeRoomNumber('101')).toBe(normalizeRoomNumber('101'));
+    });
   });
 
-  describe('Effective Default Resolution Order', () => {
+  describe('3-Level Effective Default Resolution Hierarchy', () => {
     it('defines clear source hierarchy: Room > Building > Dormitory', () => {
-      // Dummy test structure proving logic flow
       const dormDefault = 4000;
       const buildingOverride = 4500;
       const roomOverride = 5000;
@@ -67,30 +74,51 @@ describe('Wave 1G — Property, Room Defaults & Availability Unit & Logic Tests'
     });
   });
 
-  describe('Availability Overlap Rule', () => {
-    it('evaluates interval overlap correctly using existingStart < requestedEnd AND existingEnd > requestedStart', () => {
-      const isOverlapping = (eStart: string, eEnd: string, rStart: string, rEnd: string) => {
-        const existingStart = new Date(eStart).getTime();
-        const existingEnd = new Date(eEnd).getTime();
-        const requestedStart = new Date(rStart).getTime();
-        const requestedEnd = new Date(rEnd).getTime();
-        return existingStart < requestedEnd && existingEnd > requestedStart;
-      };
+  describe('Unified Blocking Contract Policy & Overlap Calculation', () => {
+    it('includes all mandatory blocking contract statuses', () => {
+      expect(BLOCKING_CONTRACT_STATUSES).toContain('active');
+      expect(BLOCKING_CONTRACT_STATUSES).toContain('approved');
+      expect(BLOCKING_CONTRACT_STATUSES).toContain('expiring_soon');
+      expect(BLOCKING_CONTRACT_STATUSES).toContain('waiting_extension');
+      expect(BLOCKING_CONTRACT_STATUSES).toContain('checking_out');
+    });
 
+    it('evaluates interval overlap correctly using isIntervalOverlapping', () => {
       // Case 1: Exact overlap -> true
-      expect(isOverlapping('2026-08-01', '2026-08-31', '2026-08-15', '2026-09-15')).toBe(true);
+      expect(isIntervalOverlapping('2026-08-01', '2026-08-31', '2026-08-15', '2026-09-15')).toBe(true);
 
       // Case 2: Entirely contained -> true
-      expect(isOverlapping('2026-08-01', '2026-12-31', '2026-09-01', '2026-10-01')).toBe(true);
+      expect(isIntervalOverlapping('2026-08-01', '2026-12-31', '2026-09-01', '2026-10-01')).toBe(true);
 
       // Case 3: Back-to-back non-overlapping -> false
-      expect(isOverlapping('2026-08-01', '2026-08-31', '2026-08-31', '2026-09-30')).toBe(false);
+      expect(isIntervalOverlapping('2026-08-01', '2026-08-31', '2026-08-31', '2026-09-30')).toBe(false);
 
       // Case 4: Completely before -> false
-      expect(isOverlapping('2026-08-01', '2026-08-31', '2026-09-01', '2026-09-30')).toBe(false);
+      expect(isIntervalOverlapping('2026-08-01', '2026-08-31', '2026-09-01', '2026-09-30')).toBe(false);
 
       // Case 5: Completely after -> false
-      expect(isOverlapping('2026-09-01', '2026-09-30', '2026-08-01', '2026-08-31')).toBe(false);
+      expect(isIntervalOverlapping('2026-09-01', '2026-09-30', '2026-08-01', '2026-08-31')).toBe(false);
+    });
+  });
+
+  describe('Strict Field Whitelisting & Override Validation', () => {
+    it('allows valid financial and operational override fields', () => {
+      expect(validateClearOverrideField('monthlyRent')).toBe(true);
+      expect(validateClearOverrideField('depositAmount')).toBe(true);
+      expect(validateClearOverrideField('waterRate')).toBe(true);
+      expect(validateClearOverrideField('electricityRate')).toBe(true);
+      expect(validateClearOverrideField('roomType')).toBe(true);
+    });
+
+    it('rejects system protected fields from being cleared or dynamically mutated', () => {
+      expect(validateClearOverrideField('id')).toBe(false);
+      expect(validateClearOverrideField('dormitoryId')).toBe(false);
+      expect(validateClearOverrideField('buildingId')).toBe(false);
+      expect(validateClearOverrideField('status')).toBe(false);
+      expect(validateClearOverrideField('version')).toBe(false);
+      expect(validateClearOverrideField('normalizedRoomNumber')).toBe(false);
+      expect(validateClearOverrideField('currentContractId')).toBe(false);
     });
   });
 });
+

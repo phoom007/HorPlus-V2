@@ -1,5 +1,6 @@
 import { getPrismaClient } from '../db/prisma.js';
 import { AppError } from '../types/index.js';
+import { BLOCKING_CONTRACT_STATUSES } from './blocking-contract-policy.js';
 
 export interface RoomAvailabilityOptions {
   dormitoryId: string;
@@ -56,12 +57,11 @@ export class AvailabilityService {
     });
 
     // 2. Query all overlapping blocking contracts for this dormitory
-    // Blocking statuses: active, approved, expiring_soon, waiting_extension, checking_out
     const blockingContracts = await prisma.contract.findMany({
       where: {
         dormitoryId,
         deletedAt: null,
-        status: { in: ['active', 'approved', 'expiring_soon', 'waiting_extension', 'checking_out'] },
+        status: { in: [...BLOCKING_CONTRACT_STATUSES] },
         startDate: { lt: end },
         endDate: { gt: start },
       },

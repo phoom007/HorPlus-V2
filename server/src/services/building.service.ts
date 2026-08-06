@@ -111,6 +111,24 @@ export class BuildingService {
 
     const updated = await this.buildingRepo.update(id, dormitoryId, data);
 
+    const { getPrismaClient } = await import('../db/prisma.js');
+    const prisma = getPrismaClient();
+
+    if (updated) {
+      await prisma.auditLog.create({
+        data: {
+          dormitoryId,
+          actorUserId: actorUserId || 'system',
+          entityType: 'BUILDING',
+          entityId: id,
+          action: 'BUILDING_UPDATED',
+          beforeValues: existingBuilding as any,
+          afterValues: updated as any,
+          reason: `Updated building ${updated.name}`,
+        },
+      });
+    }
+
     if (this.auditService && actorUserId && updated) {
       await this.auditService.log({
         userId: actorUserId,
@@ -125,7 +143,7 @@ export class BuildingService {
   }
 
   public async archiveBuilding(id: string, dormitoryId: string, actorUserId?: string) {
-    await this.getBuildingById(id, dormitoryId);
+    const existingBuilding = await this.getBuildingById(id, dormitoryId);
 
     const activeRooms = await this.roomRepo.countActiveByBuilding(dormitoryId, id);
     if (activeRooms > 0) {
@@ -136,6 +154,24 @@ export class BuildingService {
     }
 
     const archived = await this.buildingRepo.archive(id, dormitoryId);
+
+    const { getPrismaClient } = await import('../db/prisma.js');
+    const prisma = getPrismaClient();
+
+    if (archived) {
+      await prisma.auditLog.create({
+        data: {
+          dormitoryId,
+          actorUserId: actorUserId || 'system',
+          entityType: 'BUILDING',
+          entityId: id,
+          action: 'BUILDING_ARCHIVED',
+          beforeValues: existingBuilding as any,
+          afterValues: archived as any,
+          reason: `Archived building ${archived.name}`,
+        },
+      });
+    }
 
     if (this.auditService && actorUserId && archived) {
       await this.auditService.log({

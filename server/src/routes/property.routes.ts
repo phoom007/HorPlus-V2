@@ -391,7 +391,7 @@ export function createPropertyRouter(
     if (!verifyCsrf(req, res)) return;
     try {
       const dormId = getDormitoryId(req);
-      const { scope, scopeId, changes, idempotencyKey } = req.body;
+      const { scope, scopeId, changes, expectedVersion, idempotencyKey } = req.body;
 
       if (!idempotencyKey) {
         return res.status(400).json({
@@ -411,6 +411,7 @@ export function createPropertyRouter(
         scope || 'DORMITORY',
         scopeId,
         changes || {},
+        expectedVersion,
         idempotencyKey,
         req.auth?.userId || 'unknown-user'
       );
@@ -513,6 +514,18 @@ export function createPropertyRouter(
     try {
       const dormId = getDormitoryId(req);
       const fieldName = req.params.field;
+      const { validateClearOverrideField } = await import('../schemas/property-tenant-contract.schemas.js');
+      if (!validateClearOverrideField(fieldName)) {
+        return res.status(400).json({
+          error: {
+            code: 'DEFAULT_FIELD_NOT_ALLOWED',
+            message: `ฟิลด์ "${fieldName}" ไม่ได้รับอนุญาตให้ล้างค่าหรือแก้ไข`,
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+
       const clearPayload: Record<string, null> = {};
       clearPayload[fieldName] = null;
       const updated = await buildingService.updateBuilding(req.params.id, dormId, clearPayload as any, req.auth?.userId);
@@ -542,10 +555,12 @@ export function createPropertyRouter(
       if (!updated) {
         return res.status(404).json({ error: { code: 'ROOM_NOT_FOUND', message: 'ไม่พบข้อมูลห้องพัก' } });
       }
+      const { defaultsService } = await import('../services/defaults.service.js');
+      const effective = await defaultsService.resolveEffectiveRoomDefaults(dormId, updated.buildingId, updated.id);
       res.json({
         data: {
           roomId: updated.id,
-          effectiveValues: updated,
+          effectiveValues: effective,
           version: (updated as any).version,
           updatedAt: (updated as any).updatedAt,
         },
@@ -561,17 +576,32 @@ export function createPropertyRouter(
     try {
       const dormId = getDormitoryId(req);
       const fieldName = req.params.field;
+      const { validateClearOverrideField } = await import('../schemas/property-tenant-contract.schemas.js');
+      if (!validateClearOverrideField(fieldName)) {
+        return res.status(400).json({
+          error: {
+            code: 'DEFAULT_FIELD_NOT_ALLOWED',
+            message: `ฟิลด์ "${fieldName}" ไม่ได้รับอนุญาตให้ล้างค่าหรือแก้ไข`,
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+
       const clearPayload: Record<string, null> = {};
       clearPayload[fieldName] = null;
       const updated = await roomService.updateRoom(req.params.id, clearPayload, dormId, req.auth?.userId);
       if (!updated) {
         return res.status(404).json({ error: { code: 'ROOM_NOT_FOUND', message: 'ไม่พบข้อมูลห้องพัก' } });
       }
+      const { defaultsService } = await import('../services/defaults.service.js');
+      const effective = await defaultsService.resolveEffectiveRoomDefaults(dormId, updated.buildingId, updated.id);
       res.json({
         data: {
           success: true,
           clearedField: fieldName,
           roomId: updated.id,
+          effectiveValues: effective,
           version: (updated as any).version,
           updatedAt: (updated as any).updatedAt,
         },

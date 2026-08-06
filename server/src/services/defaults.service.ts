@@ -221,20 +221,22 @@ export class DefaultsService {
   public async previewDefaultPropagation(
     dormitoryId: string,
     scope: 'DORMITORY' | 'BUILDING',
-    scopeId?: string
+    scopeId?: string,
+    proposedChanges: Record<string, any> = {},
+    txClient?: any
   ) {
-    const prisma = getPrismaClient();
+    const prisma = txClient || getPrismaClient();
 
-    let rooms = [];
+    let rooms: any[] = [];
     if (scope === 'BUILDING' && scopeId) {
       rooms = await prisma.room.findMany({
         where: { dormitoryId, buildingId: scopeId },
-        include: { contracts: { where: { status: 'active' } } },
+        include: { contracts: { where: { status: { in: ['active', 'approved'] } } } },
       });
     } else {
       rooms = await prisma.room.findMany({
         where: { dormitoryId },
-        include: { contracts: { where: { status: 'active' } } },
+        include: { contracts: { where: { status: { in: ['active', 'approved'] } } } },
       });
     }
 
@@ -243,6 +245,14 @@ export class DefaultsService {
     let skippedOverrideCount = 0;
     let skippedProtectedContractCount = 0;
     let skippedArchivedCount = 0;
+
+    const fieldEffects: Array<{
+      field: string;
+      oldEffectiveValue: any;
+      newEffectiveValue: any;
+      sourceBefore: string;
+      sourceAfter: string;
+    }> = [];
 
     for (const room of rooms) {
       if (room.status === 'archived' || room.deletedAt) {
@@ -269,6 +279,17 @@ export class DefaultsService {
       }
     }
 
+    // Calculate per-field proposed changes if proposedChanges supplied
+    for (const [key, value] of Object.entries(proposedChanges)) {
+      fieldEffects.push({
+        field: key,
+        oldEffectiveValue: null,
+        newEffectiveValue: value,
+        sourceBefore: scope,
+        sourceAfter: scope,
+      });
+    }
+
     return {
       scope,
       scopeId: scopeId || null,
@@ -277,6 +298,8 @@ export class DefaultsService {
       skippedOverrideRooms: skippedOverrideCount,
       skippedProtectedContractRooms: skippedProtectedContractCount,
       skippedArchivedRooms: skippedArchivedCount,
+      proposedChanges,
+      fieldEffects,
     };
   }
 
@@ -288,13 +311,23 @@ export class DefaultsService {
     scope: 'DORMITORY' | 'BUILDING',
     scopeId: string | undefined,
     changes: Record<string, any>,
+    expectedVersion: number | undefined,
     idempotencyKey: string,
     actorUserId: string
   ) {
     const prisma = getPrismaClient();
 
+    // Canonical JSON stringification for key matching
+    const canonicalizeJson = (obj: any): string => {
+      if (obj === null || typeof obj !== 'object') return JSON.stringify(obj);
+      if (Array.isArray(obj)) return '[' + obj.map(canonicalizeJson).join(',') + ']';
+      const keys = Object.keys(obj).sort();
+      return '{' + keys.map((k) => `${JSON.stringify(k)}:${canonicalizeJson(obj[k])}`).join(',') + '}';
+    };
+
+    const requestHash = canonicalizeJson({ dormitoryId, scope, scopeId, changes });
+
     // 1. Idempotency Check using IdempotencyKey model
-    const requestHash = JSON.stringify({ dormitoryId, scope, scopeId, changes });
     const existingKey = await prisma.idempotencyKey.findFirst({
       where: {
         userId: actorUserId,
@@ -319,14 +352,71 @@ export class DefaultsService {
       // Lock dormitory using PostgreSQL advisory lock
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${dormitoryId}))`;
 
-      const preview = await this.previewDefaultPropagation(dormitoryId, scope, scopeId);
+      // Verify scope version and apply updates
+      if (scope === 'DORMITORY') {
+        const currentDefaults = await tx.dormitoryPropertyDefaults.findUnique({
+          where: { dormitoryId },
+        });
+
+        if (expectedVersion !== undefined && currentDefaults && currentDefaults.version !== expectedVersion) {
+          const err: any = new AppError('ข้อมูลถูกแก้ไขโดยผู้อื่น กรุณาโหลดข้อมูลใหม่', 409, 'VERSION_CONFLICT');
+          err.currentVersion = currentDefaults.version;
+          throw err;
+        }
+
+        if (currentDefaults) {
+          const updateRes = await tx.dormitoryPropertyDefaults.updateMany({
+            where: { dormitoryId, version: expectedVersion ?? currentDefaults.version },
+            data: { ...changes, version: { increment: 1 } },
+          });
+
+          if (updateRes.count === 0) {
+            const safeCurrent = await tx.dormitoryPropertyDefaults.findUnique({ where: { dormitoryId } });
+            const err: any = new AppError('ข้อมูลถูกแก้ไขโดยผู้อื่น กรุณาโหลดข้อมูลใหม่', 409, 'VERSION_CONFLICT');
+            err.currentVersion = safeCurrent?.version || 1;
+            throw err;
+          }
+        } else {
+          await tx.dormitoryPropertyDefaults.create({
+            data: { dormitoryId, ...changes, version: 1 },
+          });
+        }
+      } else if (scope === 'BUILDING' && scopeId) {
+        const currentBld = await tx.building.findFirst({
+          where: { id: scopeId, dormitoryId },
+        });
+
+        if (!currentBld) {
+          throw new AppError('ไม่พบข้อมูลอาคารที่ระบุ', 404, 'BUILDING_NOT_FOUND');
+        }
+
+        if (expectedVersion !== undefined && currentBld.version !== expectedVersion) {
+          const err: any = new AppError('ข้อมูลอาคารถูกแก้ไขโดยผู้อื่น กรุณาโหลดข้อมูลใหม่', 409, 'VERSION_CONFLICT');
+          err.currentVersion = currentBld.version;
+          throw err;
+        }
+
+        const updateRes = await tx.building.updateMany({
+          where: { id: scopeId, dormitoryId, version: expectedVersion ?? currentBld.version },
+          data: { ...changes, version: { increment: 1 } },
+        });
+
+        if (updateRes.count === 0) {
+          const safeCurrent = await tx.building.findFirst({ where: { id: scopeId, dormitoryId } });
+          const err: any = new AppError('ข้อมูลอาคารถูกแก้ไขโดยผู้อื่น กรุณาโหลดข้อมูลใหม่', 409, 'VERSION_CONFLICT');
+          err.currentVersion = safeCurrent?.version || 1;
+          throw err;
+        }
+      }
+
+      const preview = await this.previewDefaultPropagation(dormitoryId, scope, scopeId, changes, tx);
 
       // Audit log entry for bulk apply
       const auditLog = await tx.auditLog.create({
         data: {
           dormitoryId,
           actorUserId,
-          entityType: 'PROPERTY_DEFAULTS',
+          entityType: scope === 'BUILDING' ? 'BUILDING' : 'PROPERTY_DEFAULTS',
           entityId: scopeId || dormitoryId,
           action: 'BULK_DEFAULT_APPLY',
           beforeValues: null,
@@ -344,6 +434,7 @@ export class DefaultsService {
         skippedOverrideRooms: preview.skippedOverrideRooms,
         skippedProtectedContractRooms: preview.skippedProtectedContractRooms,
         skippedArchivedRooms: preview.skippedArchivedRooms,
+        fieldEffects: preview.fieldEffects,
         auditLogId: auditLog.id,
         appliedAt: new Date().toISOString(),
       };
@@ -370,3 +461,4 @@ export class DefaultsService {
 }
 
 export const defaultsService = new DefaultsService();
+

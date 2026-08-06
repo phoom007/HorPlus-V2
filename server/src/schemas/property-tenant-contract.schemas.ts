@@ -156,15 +156,40 @@ export const UpdateBuildingDefaultsSchema = z.object({
   version: z.number().int().optional(),
 });
 
-export const DefaultPropagationPreviewSchema = z.object({
-  scope: z.enum(['DORMITORY', 'BUILDING']),
-  scopeId: z.string().optional(),
-});
+export const ALLOWED_OVERRIDE_FIELDS = [
+  'monthlyRent',
+  'termRent',
+  'dailyRent',
+  'depositAmount',
+  'advancePaymentAmount',
+  'waterRate',
+  'electricityRate',
+  'commonFee',
+  'internetFee',
+  'parkingFee',
+  'waterBillingType',
+  'electricityBillingType',
+  'rentBillingType',
+  'maximumOccupants',
+  'roomType',
+] as const;
 
-export const DefaultPropagationApplySchema = z.object({
-  scope: z.enum(['DORMITORY', 'BUILDING']),
-  scopeId: z.string().optional(),
-  changes: z.record(z.any()),
-  idempotencyKey: z.string().min(1, 'ต้องระบุ Idempotency Key'),
-});
+export const PROTECTED_SYSTEM_FIELDS = [
+  'id',
+  'dormitoryId',
+  'buildingId',
+  'status',
+  'version',
+  'deletedAt',
+  'currentTenantId',
+  'currentContractId',
+  'createdAt',
+  'updatedAt',
+  'normalizedRoomNumber',
+] as const;
+
+export function validateClearOverrideField(field: string): boolean {
+  return ALLOWED_OVERRIDE_FIELDS.includes(field as any) && !PROTECTED_SYSTEM_FIELDS.includes(field as any);
+}
+
 

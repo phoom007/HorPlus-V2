@@ -239,13 +239,14 @@ export class ContractService {
         }
 
         // 3. Recheck interval availability
+        const { BLOCKING_CONTRACT_STATUSES } = await import('./blocking-contract-policy.js');
         const overlapping = await tx.contract.findMany({
           where: {
             dormitoryId,
             roomId: contract.roomId,
             id: { not: id },
             deletedAt: null,
-            status: { in: ['active', 'expiring_soon', 'checking_out'] },
+            status: { in: [...BLOCKING_CONTRACT_STATUSES] },
             startDate: { lt: contract.endDate },
             endDate: { gt: contract.startDate },
           },

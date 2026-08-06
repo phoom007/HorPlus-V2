@@ -258,6 +258,19 @@ export class RoomService {
 
     const updated = await this.roomRepo.update(id, targetDormId, updatePayload);
 
+    await prisma.auditLog.create({
+      data: {
+        dormitoryId: targetDormId,
+        actorUserId: userId || 'system',
+        entityType: 'ROOM',
+        entityId: id,
+        action: 'ROOM_UPDATED',
+        beforeValues: existing as any,
+        afterValues: updated as any,
+        reason: `Updated room ${existing.roomNumber}`,
+      },
+    });
+
     if (this.auditService && userId) {
       this.auditService.logSecurityEvent({
         userId,
@@ -287,6 +300,22 @@ export class RoomService {
     }
 
     const archived = await this.roomRepo.archive(id, targetDormId);
+
+    const { getPrismaClient } = await import('../db/prisma.js');
+    const prisma = getPrismaClient();
+
+    await prisma.auditLog.create({
+      data: {
+        dormitoryId: targetDormId,
+        actorUserId: userId || 'system',
+        entityType: 'ROOM',
+        entityId: id,
+        action: 'ROOM_ARCHIVED',
+        beforeValues: existing as any,
+        afterValues: archived as any,
+        reason: `Archived room ${existing.roomNumber}`,
+      },
+    });
 
     if (this.auditService && userId) {
       this.auditService.logSecurityEvent({
