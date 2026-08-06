@@ -392,113 +392,33 @@ export function createPropertyRouter(
     if (!verifyCsrf(req, res)) return;
     try {
       const dormId = getDormitoryId(req);
-      const { getPrismaClient } = await import('../db/prisma.js');
-      const prisma = getPrismaClient();
+      const { UpdateDormitoryDefaultsRequestSchema } = await import('../schemas/property-tenant-contract.schemas.js');
+      const parsed = UpdateDormitoryDefaultsRequestSchema.safeParse(req.body);
 
-      const body = req.body;
-      let propFields: any = null;
-      let propExpVer: number | undefined = undefined;
-      let billFields: any = null;
-      let billExpVer: number | undefined = undefined;
-
-      if (body.property) {
-        if (body.property.changes) {
-          propFields = body.property.changes;
-          propExpVer = body.property.expectedVersion;
-        } else {
-          const { expectedVersion: pVer, ...pRest } = body.property;
-          propFields = pRest;
-          propExpVer = body.expectedVersion ?? pVer;
-        }
+      if (!parsed.success) {
+        const hasUnrecognized = parsed.error.issues.some((i: any) => i.code === 'unrecognized_keys');
+        const code = hasUnrecognized ? 'DEFAULT_FIELD_NOT_ALLOWED' : 'VALIDATION_ERROR';
+        const message = hasUnrecognized
+          ? 'มีฟิลด์ที่ไม่ได้รับอนุญาตในการตั้งค่าหอพัก'
+          : 'ข้อมูลการตั้งค่าหอพักไม่ถูกต้อง';
+        return res.status(400).json({
+          error: {
+            code,
+            message,
+            fieldErrors: parsed.error.flatten().fieldErrors,
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
       }
 
-      if (body.billing) {
-        let rawBilling = body.billing.changes || body.billing;
-        const { expectedVersion: bVer, ...bRest } = rawBilling;
-        billExpVer = body.billing.expectedVersion ?? bVer;
-
-        billFields = {};
-        for (const [k, v] of Object.entries(bRest)) {
-          if (k === 'waterUnitRate' || k === 'waterRate') billFields.waterRate = v;
-          else if (k === 'electricUnitRate' || k === 'electricityRate' || k === 'electricRate') billFields.electricityRate = v;
-          else if (k === 'waterBillingType' || k === 'waterBillingMode') billFields.waterBillingType = v;
-          else if (k === 'electricityBillingType' || k === 'electricBillingType' || k === 'electricBillingMode') billFields.electricityBillingType = v;
-          else billFields[k] = v;
-        }
-      }
-
-      const result = await prisma.$transaction(async (tx: any) => {
-        let updatedProperty = null;
-        let updatedBilling = null;
-
-        if (propFields) {
-          const targetVer = propExpVer;
-
-          const currentProp = await tx.dormitoryPropertyDefaults.findUnique({ where: { dormitoryId: dormId } });
-          if (targetVer !== undefined && currentProp && currentProp.version !== targetVer) {
-            const err: any = new Error('ข้อมูลถูกแก้ไขโดยผู้อื่น กรุณาโหลดข้อมูลใหม่');
-            err.code = 'VERSION_CONFLICT';
-            err.statusCode = 409;
-            err.currentVersion = currentProp.version;
-            throw err;
-          }
-
-          if (currentProp) {
-            const updateRes = await tx.dormitoryPropertyDefaults.updateMany({
-              where: { dormitoryId: dormId, version: targetVer ?? currentProp.version },
-              data: { ...propFields, version: { increment: 1 } },
-            });
-            if (updateRes.count === 0) {
-              const safeCurrent = await tx.dormitoryPropertyDefaults.findUnique({ where: { dormitoryId: dormId } });
-              const err: any = new Error('ข้อมูลถูกแก้ไขโดยผู้อื่น กรุณาโหลดข้อมูลใหม่');
-              err.code = 'VERSION_CONFLICT';
-              err.statusCode = 409;
-              err.currentVersion = safeCurrent?.version || 1;
-              throw err;
-            }
-            updatedProperty = await tx.dormitoryPropertyDefaults.findUnique({ where: { dormitoryId: dormId } });
-          } else {
-            updatedProperty = await tx.dormitoryPropertyDefaults.create({
-              data: { dormitoryId: dormId, ...propFields, version: 1 },
-            });
-          }
-        }
-
-        if (billFields) {
-          const targetVer = billExpVer;
-
-          const currentBill = await tx.dormitoryBillingSettings.findUnique({ where: { dormitoryId: dormId } });
-          if (targetVer !== undefined && currentBill && currentBill.version !== targetVer) {
-            const err: any = new Error('ข้อมูลการคิดเงินถูกแก้ไขโดยผู้อื่น กรุณาโหลดข้อมูลใหม่');
-            err.code = 'VERSION_CONFLICT';
-            err.statusCode = 409;
-            err.currentVersion = currentBill.version;
-            throw err;
-          }
-
-          if (currentBill) {
-            const updateRes = await tx.dormitoryBillingSettings.updateMany({
-              where: { dormitoryId: dormId, version: targetVer ?? currentBill.version },
-              data: { ...billFields, version: { increment: 1 } },
-            });
-            if (updateRes.count === 0) {
-              const safeCurrent = await tx.dormitoryBillingSettings.findUnique({ where: { dormitoryId: dormId } });
-              const err: any = new Error('ข้อมูลการคิดเงินถูกแก้ไขโดยผู้อื่น กรุณาโหลดข้อมูลใหม่');
-              err.code = 'VERSION_CONFLICT';
-              err.statusCode = 409;
-              err.currentVersion = safeCurrent?.version || 1;
-              throw err;
-            }
-            updatedBilling = await tx.dormitoryBillingSettings.findUnique({ where: { dormitoryId: dormId } });
-          } else {
-            updatedBilling = await tx.dormitoryBillingSettings.create({
-              data: { dormitoryId: dormId, ...billFields, version: 1 },
-            });
-          }
-        }
-
-        return { billing: updatedBilling, property: updatedProperty };
-      });
+      const { defaultsService } = await import('../services/defaults.service.js');
+      const result = await defaultsService.updateDormitoryDefaults(
+        dormId,
+        parsed.data,
+        req.auth?.userId || 'unknown-user',
+        (req.headers['x-request-id'] as string) || undefined
+      );
 
       res.json({ data: result });
     } catch (err) {
@@ -512,11 +432,17 @@ export function createPropertyRouter(
       const dormId = getDormitoryId(req);
       const { DefaultPropagationPreviewSchema } = await import('../schemas/property-tenant-contract.schemas.js');
       const parsed = DefaultPropagationPreviewSchema.safeParse(req.body);
+
       if (!parsed.success) {
+        const hasUnrecognized = parsed.error.issues.some((i: any) => i.code === 'unrecognized_keys');
+        const code = hasUnrecognized ? 'DEFAULT_FIELD_NOT_ALLOWED' : 'VALIDATION_ERROR';
+        const message = hasUnrecognized
+          ? 'ฟิลด์ข้อมูลการพรีวิวไม่ถูกต้องหรือมีฟิลด์ที่ไม่ได้รับอนุญาต'
+          : 'ข้อมูลการแสดงตัวอย่างไม่ถูกต้อง';
         return res.status(400).json({
           error: {
-            code: 'DEFAULT_FIELD_NOT_ALLOWED',
-            message: 'ฟิลด์ข้อมูลการพรีวิวไม่ถูกต้องหรือมีฟิลด์ที่ไม่ได้รับอนุญาต',
+            code,
+            message,
             fieldErrors: parsed.error.flatten().fieldErrors,
             requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
             timestamp: new Date().toISOString(),
@@ -524,15 +450,8 @@ export function createPropertyRouter(
         });
       }
 
-      const { scope, scopeId, changes } = parsed.data;
       const { defaultsService } = await import('../services/defaults.service.js');
-
-      const preview = await defaultsService.previewDefaultPropagation(
-        dormId,
-        scope || 'DORMITORY',
-        scopeId,
-        changes || {}
-      );
+      const preview = await defaultsService.previewDefaultPropagation(dormId, parsed.data);
 
       res.json({ data: preview });
     } catch (err) {
@@ -547,11 +466,17 @@ export function createPropertyRouter(
       const dormId = getDormitoryId(req);
       const { DefaultPropagationApplySchema } = await import('../schemas/property-tenant-contract.schemas.js');
       const parsed = DefaultPropagationApplySchema.safeParse(req.body);
+
       if (!parsed.success) {
+        const hasUnrecognized = parsed.error.issues.some((i: any) => i.code === 'unrecognized_keys');
+        const code = hasUnrecognized ? 'DEFAULT_FIELD_NOT_ALLOWED' : 'VALIDATION_ERROR';
+        const message = hasUnrecognized
+          ? 'ข้อมูลการปรับปรุงข้อมูลแบบกลุ่มไม่ถูกต้องหรือมีฟิลด์ที่ไม่ได้รับอนุญาต'
+          : 'ข้อมูลการส่งต่อค่าไม่ถูกต้อง';
         return res.status(400).json({
           error: {
-            code: 'DEFAULT_FIELD_NOT_ALLOWED',
-            message: 'ข้อมูลการปรับปรุงข้อมูลแบบกลุ่มไม่ถูกต้องหรือมีฟิลด์ที่ไม่ได้รับอนุญาต',
+            code,
+            message,
             fieldErrors: parsed.error.flatten().fieldErrors,
             requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
             timestamp: new Date().toISOString(),
@@ -559,17 +484,12 @@ export function createPropertyRouter(
         });
       }
 
-      const { scope, scopeId, changes, expectedVersion, idempotencyKey } = parsed.data;
-
       const { defaultsService } = await import('../services/defaults.service.js');
       const result = await defaultsService.applyDefaultPropagation(
         dormId,
-        scope || 'DORMITORY',
-        scopeId,
-        changes || {},
-        expectedVersion,
-        idempotencyKey,
-        req.auth?.userId || 'unknown-user'
+        parsed.data,
+        req.auth?.userId || 'unknown-user',
+        (req.headers['x-request-id'] as string) || undefined
       );
 
       res.json({ data: result });
