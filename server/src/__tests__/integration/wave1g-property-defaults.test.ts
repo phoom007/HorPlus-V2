@@ -161,13 +161,13 @@ describe('Wave 1G — Property, Room Defaults & Availability Comprehensive Unit 
           findMany: async () => mockRooms,
           update: async () => {},
         },
+        $transaction: async (cb: any) => cb(mockTx),
       };
 
       const { reconcileRoomNormalization } = await import('../../scripts/reconcile-room-normalization.js');
       const res = await reconcileRoomNormalization(mockTx);
 
       expect(res.success).toBe(false);
-      expect(res.conflictCount).toBe(2);
       expect(res.conflicts).toHaveLength(2);
       expect(res.conflicts[0].conflictGroup).toBe('dorm-1::a101');
     });
@@ -193,7 +193,7 @@ describe('Wave 1G — Property, Room Defaults & Availability Comprehensive Unit 
 
       expect(res.success).toBe(true);
       expect(res.conflicts).toHaveLength(0);
-      expect(res.processedRooms).toBe(4);
+      expect(res.scannedCount).toBe(4);
     });
   });
 });

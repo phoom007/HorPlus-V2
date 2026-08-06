@@ -141,55 +141,119 @@ describe('Wave 1G — Property Runtime Real PostgreSQL Concurrency, Rollback & R
     });
   });
 
-  describe('3. Building & Room AuditLog Transactional Rollback', () => {
-    it('rolls back Building mutation when AuditLog fails inside transaction', async () => {
-      const bld = await buildingService.createBuilding(dormId, { name: `Bld Rollback ${Date.now()}` }, userId);
+  describe('3. Production-Service AuditLog Rollback', () => {
+    /**
+     * Creates a wrapped Prisma transaction client where tx.auditLog.create
+     * throws SIMULATED_AUDITLOG_FAILURE, but all other delegates operate
+     * against the real Prisma transaction.
+     */
+    function wrapTxWithFailingAuditLog(realTx: any): any {
+      return new Proxy(realTx, {
+        get(target, prop) {
+          if (prop === 'auditLog') {
+            return new Proxy(target.auditLog, {
+              get(auditTarget, auditProp) {
+                if (auditProp === 'create') {
+                  return async () => {
+                    throw new Error('SIMULATED_AUDITLOG_FAILURE');
+                  };
+                }
+                return auditTarget[auditProp];
+              },
+            });
+          }
+          return target[prop];
+        },
+      });
+    }
+
+    it('rolls back Building mutation when production BuildingService.updateBuilding hits AuditLog failure', async () => {
+      const bld = await buildingService.createBuilding(dormId, {
+        name: `Bld SvcRollback ${Date.now()}`,
+      }, userId);
+
       const initialVersion = bld.version;
+      const initialDesc = bld.description;
 
-      const runFailTx = async () => {
-        await prisma.$transaction(async (tx: any) => {
-          await tx.building.updateMany({
-            where: { id: bld.id, dormitoryId: dormId, version: initialVersion },
-            data: { description: 'Mutated inside TX', version: { increment: 1 } },
-          });
+      // Count audit logs before the failed attempt
+      const auditBefore = await prisma.auditLog.count({
+        where: { entityId: bld.id, action: 'BUILDING_UPDATED' },
+      });
 
-          throw new Error('SIMULATED_BUILDING_AUDIT_FAILURE');
-        });
-      };
+      // Call the real BuildingService.updateBuilding inside a transaction,
+      // passing a wrapped tx client that fails on auditLog.create
+      const failedUpdate = prisma.$transaction(async (tx: any) => {
+        const wrappedTx = wrapTxWithFailingAuditLog(tx);
+        return buildingService.updateBuilding({
+          buildingId: bld.id,
+          dormitoryId: dormId,
+          changes: { description: 'SHOULD_BE_ROLLED_BACK' },
+          expectedVersion: initialVersion,
+          actorUserId: userId,
+        }, wrappedTx);
+      });
 
-      await expect(runFailTx()).rejects.toThrow('SIMULATED_BUILDING_AUDIT_FAILURE');
+      await expect(failedUpdate).rejects.toThrow('SIMULATED_AUDITLOG_FAILURE');
 
+      // Assert: Building values unchanged
       const afterBld = await prisma.building.findUnique({ where: { id: bld.id } });
-      expect(afterBld?.description).not.toBe('Mutated inside TX');
+      expect(afterBld?.description).toBe(initialDesc);
+
+      // Assert: Building version unchanged
       expect(afterBld?.version).toBe(initialVersion);
+
+      // Assert: No BUILDING_UPDATED AuditLog committed
+      const auditAfter = await prisma.auditLog.count({
+        where: { entityId: bld.id, action: 'BUILDING_UPDATED' },
+      });
+      expect(auditAfter).toBe(auditBefore);
     });
 
-    it('rolls back Room mutation when AuditLog fails inside transaction', async () => {
-      const bld = await buildingService.createBuilding(dormId, { name: `Bld Rm Rollback ${Date.now()}` }, userId);
+    it('rolls back Room mutation when production RoomService.updateRoom hits AuditLog failure', async () => {
+      const bld = await buildingService.createBuilding(dormId, {
+        name: `Bld RmSvcRollback ${Date.now()}`,
+      }, userId);
       const rm = await roomService.createRoom(dormId, {
         buildingId: bld.id,
-        roomNumber: `RR-${Math.floor(Math.random() * 10000)}`,
+        roomNumber: `RSR-${Math.floor(Math.random() * 10000)}`,
         monthlyRent: '3000.00',
       }, userId);
 
       const initialVersion = rm.version;
+      const initialRent = rm.monthlyRent.toString();
 
-      const runFailTx = async () => {
-        await prisma.$transaction(async (tx: any) => {
-          await tx.room.updateMany({
-            where: { id: rm.id, dormitoryId: dormId, version: initialVersion },
-            data: { monthlyRent: '9999.00', version: { increment: 1 } },
-          });
+      // Count audit logs before the failed attempt
+      const auditBefore = await prisma.auditLog.count({
+        where: { entityId: rm.id, action: 'ROOM_UPDATED' },
+      });
 
-          throw new Error('SIMULATED_ROOM_AUDIT_FAILURE');
-        });
-      };
+      // Call the real RoomService.updateRoom inside a transaction,
+      // passing a wrapped tx client that fails on auditLog.create
+      const failedUpdate = prisma.$transaction(async (tx: any) => {
+        const wrappedTx = wrapTxWithFailingAuditLog(tx);
+        return roomService.updateRoom({
+          roomId: rm.id,
+          dormitoryId: dormId,
+          changes: { monthlyRent: '9999.00' },
+          expectedVersion: initialVersion,
+          actorUserId: userId,
+        }, wrappedTx);
+      });
 
-      await expect(runFailTx()).rejects.toThrow('SIMULATED_ROOM_AUDIT_FAILURE');
+      await expect(failedUpdate).rejects.toThrow('SIMULATED_AUDITLOG_FAILURE');
 
+      // Assert: Room values unchanged
       const afterRm = await prisma.room.findUnique({ where: { id: rm.id } });
-      expect(afterRm?.monthlyRent.toString()).toBe('3000');
+      expect(afterRm?.monthlyRent.toString()).toBe(initialRent);
+
+      // Assert: Room version unchanged
       expect(afterRm?.version).toBe(initialVersion);
+
+      // Assert: No ROOM_UPDATED AuditLog committed
+      const auditAfter = await prisma.auditLog.count({
+        where: { entityId: rm.id, action: 'ROOM_UPDATED' },
+      });
+      expect(auditAfter).toBe(auditBefore);
     });
   });
 
