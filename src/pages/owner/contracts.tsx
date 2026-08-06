@@ -1421,7 +1421,7 @@ export const OwnerContracts: React.FC<OwnerContractsProps> = ({
 
                     <div className="grid grid-cols-2 gap-4 text-xs">
                       {/* Left: Locked Contract Snapshot Values */}
-                      <div className="bg-white p-3 rounded-xl border border-emerald-200 space-y-1.5">
+                      <div className="bg-white p-3 rounded-xl border border-emerald-200 space-y-1.5" data-testid="locked-snapshot-section">
                         <div className="font-bold text-emerald-800 text-[11px] flex items-center gap-1">
                           🔒 ค่าที่ล็อกไว้ในสัญญา (Locked Snapshot)
                         </div>
@@ -1431,11 +1431,11 @@ export const OwnerContracts: React.FC<OwnerContractsProps> = ({
                         <div className="space-y-1 pt-1">
                           <div className="flex justify-between">
                             <span className="text-slate-500">ค่าเช่าล็อก:</span>
-                            <span className="font-extrabold text-slate-900">{formatBaht(snapshotData?.rentAmount ?? selectedContract.rentAmount)}</span>
+                            <span className="font-extrabold text-slate-900" data-testid="locked-rent-value">{formatBaht(snapshotData?.rentAmount ?? selectedContract.rentAmount)}</span>
                           </div>
                           <div className="flex justify-between">
                             <span className="text-slate-500">เงินประกันล็อก:</span>
-                            <span className="font-extrabold text-slate-900">{formatBaht(snapshotData?.depositAmount ?? selectedContract.depositAmount)}</span>
+                            <span className="font-extrabold text-slate-900" data-testid="locked-deposit-value">{formatBaht(snapshotData?.depositAmount ?? selectedContract.depositAmount)}</span>
                           </div>
                           {snapshotData?.waterUnitRate !== undefined && (
                             <div className="flex justify-between">
@@ -1453,7 +1453,7 @@ export const OwnerContracts: React.FC<OwnerContractsProps> = ({
                       </div>
 
                       {/* Right: Current Room Effective Values */}
-                      <div className="bg-white p-3 rounded-xl border border-indigo-200 space-y-1.5">
+                      <div className="bg-white p-3 rounded-xl border border-indigo-200 space-y-1.5" data-testid="current-defaults-section">
                         <div className="font-bold text-indigo-800 text-[11px] flex items-center gap-1">
                           🏠 ค่าห้องปัจจุบัน (Current Room Defaults)
                         </div>
@@ -1468,11 +1468,11 @@ export const OwnerContracts: React.FC<OwnerContractsProps> = ({
                               <>
                                 <div className="flex justify-between">
                                   <span className="text-slate-500">ค่าเช่าปัจจุบัน:</span>
-                                  <span className="font-extrabold text-slate-900">{formatBaht(eff.monthlyRent ?? room?.monthlyRent ?? selectedContract.rentAmount)}</span>
+                                  <span className="font-extrabold text-slate-900" data-testid="current-rent-value">{formatBaht(eff.monthlyRent ?? room?.monthlyRent ?? selectedContract.rentAmount)}</span>
                                 </div>
                                 <div className="flex justify-between">
                                   <span className="text-slate-500">เงินประกันปัจจุบัน:</span>
-                                  <span className="font-extrabold text-slate-900">{formatBaht(eff.depositAmount ?? room?.depositAmount ?? selectedContract.depositAmount)}</span>
+                                  <span className="font-extrabold text-slate-900" data-testid="current-deposit-value">{formatBaht(eff.depositAmount ?? room?.depositAmount ?? selectedContract.depositAmount)}</span>
                                 </div>
                               </>
                             );

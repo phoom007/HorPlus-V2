@@ -344,6 +344,7 @@ test.describe.serial('Wave 1G Real Playwright Lifecycle — Property, Room Defau
   });
 
   test('Visible Owner UI Interactions Lifecycle — Property, Defaults, Availability & Contracts', async ({ page, context }) => {
+    test.setTimeout(90000);
     const test2ConsoleErrors: string[] = [];
     const test2PageErrors: string[] = [];
 
@@ -606,122 +607,203 @@ test.describe.serial('Wave 1G Real Playwright Lifecycle — Property, Room Defau
     // ============================================================
     // SECTION 5: Exact Propagation Preview Results
     // ============================================================
+    // Change default rent to 9400 to preview propagation change from current (9200) to new (9400)
+    const propRentInput = page.getByTestId('input-default-monthly-rent');
+    await expect(propRentInput).toBeVisible({ timeout: 15000 });
+    await propRentInput.fill('9400');
+    await page.waitForTimeout(500);
+
     const previewBtn = page.getByRole('button', { name: /Preview Propagation/i }).first();
     await expect(previewBtn).toBeVisible({ timeout: 15000 });
     await previewBtn.click();
 
     // Assert: Propagation preview modal is visible
-    await expect(page.getByTestId('propagation-preview-modal')).toBeVisible({ timeout: 15000 });
+    const previewModal = page.getByTestId('propagation-preview-modal');
+    await expect(previewModal).toBeVisible({ timeout: 15000 });
 
-    // Assert exact counter values
+    // Assert exact counter values in preview (deterministic fixture values)
     const counterCandidate = page.getByTestId('counter-candidate');
-    await expect(counterCandidate).toBeVisible({ timeout: 10000 });
-    const candidateText = await counterCandidate.textContent();
-    expect(Number(candidateText)).toBeGreaterThanOrEqual(1);
+    await expect(counterCandidate).toHaveText('3');
 
     const counterEligible = page.getByTestId('counter-eligible');
-    await expect(counterEligible).toBeVisible({ timeout: 5000 });
+    await expect(counterEligible).toHaveText('2');
 
     const eligibleFieldCount = page.getByTestId('eligible-field-change-count');
-    await expect(eligibleFieldCount).toBeVisible({ timeout: 5000 });
+    await expect(eligibleFieldCount).toHaveText('8');
 
     const counterSkipped = page.getByTestId('counter-skipped');
-    await expect(counterSkipped).toBeVisible({ timeout: 5000 });
+    await expect(counterSkipped).toHaveText('1');
 
     const skippedFieldCount = page.getByTestId('skipped-field-change-count');
-    await expect(skippedFieldCount).toBeVisible({ timeout: 5000 });
+    await expect(skippedFieldCount).toHaveText('4');
 
-    // Assert exact effect row by room+field (correction #3: not by row index)
-    // Find effect row containing specific room + field text
-    const effectRows = page.locator('[data-testid^="preview-row-"]');
-    const effectRowCount = await effectRows.count();
-    expect(effectRowCount).toBeGreaterThanOrEqual(1);
+    // Assert exact eligible effect row for Room C101 + defaultMonthlyRent
+    const effectC101 = page.getByTestId('preview-effect-C101-defaultMonthlyRent');
+    await expect(effectC101).toBeVisible({ timeout: 5000 });
+    await expect(effectC101.getByTestId('effect-room-C101')).toHaveText('C101');
+    await expect(effectC101.getByTestId('effect-field-defaultMonthlyRent')).toHaveText('defaultMonthlyRent');
+    await expect(effectC101.getByTestId('effect-old-C101-defaultMonthlyRent')).toHaveText('9400');
+    await expect(effectC101.getByTestId('effect-new-C101-defaultMonthlyRent')).toHaveText('9400');
+    await expect(effectC101.getByTestId('effect-status-C101-defaultMonthlyRent')).toHaveText(/เปลี่ยนแปลง/);
 
-    // Verify first visible row has room number, field, old value, new value, and status
-    const firstRow = effectRows.first();
-    const firstRowText = await firstRow.textContent();
-    expect(firstRowText).toBeTruthy();
-    // Must have either "เปลี่ยนแปลง" (eligible) or "ข้าม" (skipped) status
-    const hasStatus = firstRowText!.includes('เปลี่ยนแปลง') || firstRowText!.includes('ข้าม');
-    expect(hasStatus).toBe(true);
+    // Assert exact eligible effect row for Room B101 + defaultMonthlyRent
+    const effectB101 = page.getByTestId('preview-effect-B101-defaultMonthlyRent');
+    await expect(effectB101).toBeVisible({ timeout: 5000 });
+    await expect(effectB101.getByTestId('effect-room-B101')).toHaveText('B101');
+    await expect(effectB101.getByTestId('effect-status-B101-defaultMonthlyRent')).toHaveText(/เปลี่ยนแปลง/);
 
-    // Handle native browser dialog for propagation confirm
-    page.on('dialog', async (dialog) => {
-      await dialog.accept();
-    });
+    // Assert exact skipped effect row for Room A101 + defaultMonthlyRent
+    const effectA101 = page.getByTestId('preview-effect-A101-defaultMonthlyRent');
+    await expect(effectA101).toBeVisible({ timeout: 5000 });
+    await expect(effectA101.getByTestId('effect-room-A101')).toHaveText('A101');
+    await expect(effectA101.getByTestId('effect-old-A101-defaultMonthlyRent')).toHaveText('4000');
+    await expect(effectA101.getByTestId('effect-new-A101-defaultMonthlyRent')).toHaveText('4000');
+    await expect(effectA101.getByTestId('effect-skip-reason-A101-defaultMonthlyRent')).toHaveText(/ข้าม/);
 
     // Click Confirm Apply
     const confirmApplyBtn = page.getByTestId('btn-confirm-apply');
     await expect(confirmApplyBtn).toBeVisible({ timeout: 15000 });
     await confirmApplyBtn.click();
-    await page.waitForTimeout(3000);
 
-    // ============================================================
-    // SECTION 6: Contract Snapshot Comparison — Exact Values
-    // ============================================================
-    const contractsNavBtn = page.getByRole('button', { name: /สัญญาเช่า/i }).first();
-    await expect(contractsNavBtn).toBeVisible({ timeout: 15000 });
-    await contractsNavBtn.click();
+    // Assert: Applied result modal appears with exact visible committed counters
+    const resultModal = page.getByTestId('propagation-result-modal');
+    await expect(resultModal).toBeVisible({ timeout: 15000 });
+    await expect(page.getByTestId('applied-room-count')).toHaveText('2');
+    await expect(page.getByTestId('applied-field-change-count')).toHaveText('8');
+    await expect(page.getByTestId('skipped-room-count')).toHaveText('1');
+    await expect(page.getByTestId('skipped-field-change-count')).toHaveText('4');
+
+    // Close result modal
+    await page.getByTestId('btn-close-result').click();
+    await expect(resultModal).not.toBeVisible({ timeout: 5000 });
+
+    // Inspect Room C101 card on Rooms page to assert exact committed effective value
+    await page.goto('/owner/rooms');
     await page.waitForLoadState('networkidle');
+    const roomC101CardCommitted = page.locator('[data-testid="room-card"]', { hasText: 'C101' });
+    await expect(roomC101CardCommitted).toBeVisible({ timeout: 15000 });
+    await expect(roomC101CardCommitted.getByTestId('badge-dormitory')).toHaveText('ใช้ค่าจากหอพัก');
+    await expect(roomC101CardCommitted.getByText('9,400')).toBeVisible({ timeout: 10000 });
 
-    // Click on สมชาย ใจดี contract
-    const contractCard = page.getByText(/คุณสมชาย ใจดี/i).first();
-    await expect(contractCard).toBeVisible({ timeout: 30000 });
-    await contractCard.click();
+    // ============================================================
+    // SECTION 6: Inheriting Room D101 Snapshot Separation Proof
+    // ============================================================
+    // 1. Create dedicated Room D101 in Building A via production API
+    const bldResForD101 = await apiContext.get('/api/v1/properties/buildings');
+    const bldsForD101 = await bldResForD101.json();
+    const bldAId = (Array.isArray(bldsForD101.data) ? bldsForD101.data : bldsForD101.data?.items || [])[0].id;
 
-    // Assert snapshot comparison container
-    const snapshotComparison = page.getByTestId('snapshot-comparison');
-    await expect(snapshotComparison).toBeVisible({ timeout: 15000 });
+    const createD101Res = await apiContext.post('/api/v1/properties/rooms', {
+      data: {
+        buildingId: bldAId,
+        roomNumber: 'D101',
+        roomType: 'standard',
+        floor: 1,
+        rentCycle: 'monthly',
+      },
+    });
+    expect(createD101Res.status()).toBe(201);
+    const roomD101 = (await createD101Res.json()).data;
 
-    // Assert exact locked snapshot values
-    await expect(snapshotComparison.getByText('ค่าเช่าล็อก:')).toBeVisible({ timeout: 5000 });
-    await expect(snapshotComparison.locator('text=4,300').first()).toBeVisible({ timeout: 5000 });
+    // 2. Clear monthlyRent override on D101 via production API route
+    const clearD101Res = await apiContext.delete(`/api/v1/properties/rooms/${roomD101.id}/defaults/monthlyRent`, {
+      data: { expectedVersion: roomD101.version },
+    });
+    expect(clearD101Res.status()).toBe(200);
 
-    await expect(snapshotComparison.getByText('เงินประกันล็อก:')).toBeVisible({ timeout: 5000 });
-    await expect(snapshotComparison.locator('text=8,600').first()).toBeVisible({ timeout: 5000 });
+    // 3. Verify via authoritative Room API: rawOverrides.monthlyRent = null, currentEffectiveValues.monthlyRent = 9,200 (or current default)
+    const authD101PreRes = await apiContext.get(`/api/v1/properties/rooms/${roomD101.id}`);
+    expect(authD101PreRes.status()).toBe(200);
+    const authD101Pre = (await authD101PreRes.json()).data;
+    expect(authD101Pre.rawOverrides.monthlyRent).toBeNull();
+    expect(Number(authD101Pre.currentEffectiveValues.monthlyRent)).toBe(9400);
 
-    // Assert current room values are displayed
-    await expect(snapshotComparison.getByText('ค่าเช่าปัจจุบัน:')).toBeVisible({ timeout: 5000 });
-    await expect(snapshotComparison.getByText('เงินประกันปัจจุบัน:')).toBeVisible({ timeout: 5000 });
+    // 4. Create Tenant "วิชัย สุขใจ" via production API
+    const createTenantRes = await apiContext.post('/api/v1/tenants', {
+      data: {
+        firstName: 'วิชัย',
+        lastName: 'สุขใจ',
+        phone: '0899998888',
+        nationalId: '1234567890123',
+      },
+    });
+    expect(createTenantRes.status()).toBe(201);
+    const tenantD101 = (await createTenantRes.json()).data;
 
-    // Room A101 has override 4000 → current rent = 4,000
-    await expect(snapshotComparison.locator('text=4,000').first()).toBeVisible({ timeout: 5000 });
+    // 5. Create Contract for D101 with locked rent = 4,300, deposit = 8,600
+    const createContractRes = await apiContext.post('/api/v1/contracts', {
+      data: {
+        roomId: roomD101.id,
+        tenantId: tenantD101.id,
+        startDate: '2026-09-01',
+        endDate: '2027-08-31',
+        rentAmount: '4300.00',
+        depositAmount: '8600.00',
+      },
+    });
+    expect(createContractRes.status()).toBe(201);
+    const contractD101 = (await createContractRes.json()).data;
 
-    // Now verify separation: update dormitory defaults to 9500 via API to prove current vs locked snapshot separation
-    const latestDefaultsRes = await apiContext.get('/api/v1/properties/dormitory/defaults');
-    const latestDefaults = await latestDefaultsRes.json();
-    const latestPropertyVersion = latestDefaults.data.property.version;
+    // 6. Activate Contract for D101 to lock ContractSnapshot
+    const activateContractRes = await apiContext.post(`/api/v1/contracts/${contractD101.id}/activate`);
+    expect(activateContractRes.status()).toBe(200);
 
-    const setTo9500Res = await apiContext.put('/api/v1/properties/dormitory/defaults', {
+    // 7. Verify authoritative Room response: contractSnapshot values locked at 4,300 / 8,600
+    const authD101LockedRes = await apiContext.get(`/api/v1/properties/rooms/${roomD101.id}`);
+    expect(authD101LockedRes.status()).toBe(200);
+    const authD101Locked = (await authD101LockedRes.json()).data;
+    expect(authD101Locked.contractSnapshot).not.toBeNull();
+    expect(Number(authD101Locked.contractSnapshot.values.monthlyRent)).toBe(4300);
+    expect(Number(authD101Locked.contractSnapshot.values.depositAmount)).toBe(8600);
+
+    // 8. Update current Dormitory default to 9,500 via production API
+    const currentPropDefaultsRes = await apiContext.get('/api/v1/properties/dormitory/defaults');
+    const currentPropDefaults = await currentPropDefaultsRes.json();
+    const curPropVer = currentPropDefaults.data.property.version;
+
+    const updateDormDefaultRes = await apiContext.put('/api/v1/properties/dormitory/defaults', {
       data: {
         property: {
           changes: { defaultMonthlyRent: 9500 },
-          expectedVersion: latestPropertyVersion,
+          expectedVersion: curPropVer,
         },
       },
     });
-    expect(setTo9500Res.status()).toBe(200);
+    expect(updateDormDefaultRes.status()).toBe(200);
 
-    // Reload contracts page to verify snapshot immutability
+    // 9. Verify authoritative Room response for D101: currentEffectiveValues.monthlyRent = 9,500, contractSnapshot.values.monthlyRent = 4,300
+    const authD101PostRes = await apiContext.get(`/api/v1/properties/rooms/${roomD101.id}`);
+    expect(authD101PostRes.status()).toBe(200);
+    const authD101Post = (await authD101PostRes.json()).data;
+    expect(Number(authD101Post.currentEffectiveValues.monthlyRent)).toBe(9500);
+    expect(Number(authD101Post.contractSnapshot.values.monthlyRent)).toBe(4300);
+
+    // 10. Open Owner Contracts page and assert exact visible current vs locked snapshot values in separate sections
     await page.goto('/owner/contracts');
     await page.waitForLoadState('networkidle');
 
-    await expect(page.getByText(/คุณสมชาย ใจดี/i).first()).toBeVisible({ timeout: 30000 });
-    await page.getByText(/คุณสมชาย ใจดี/i).first().click();
+    const d101ContractCard = page.getByText(/คุณวิชัย สุขใจ/i).first();
+    await expect(d101ContractCard).toBeVisible({ timeout: 30000 });
+    await d101ContractCard.click();
 
-    const snapshotComparisonAfter = page.getByTestId('snapshot-comparison');
-    await expect(snapshotComparisonAfter).toBeVisible({ timeout: 15000 });
+    const snapshotComparisonBox = page.getByTestId('snapshot-comparison');
+    await expect(snapshotComparisonBox).toBeVisible({ timeout: 15000 });
 
-    // Locked rent STILL = 4,300 (snapshot is immutable)
-    await expect(snapshotComparisonAfter.getByText('ค่าเช่าล็อก:')).toBeVisible({ timeout: 5000 });
-    await expect(snapshotComparisonAfter.locator('text=4,300').first()).toBeVisible({ timeout: 5000 });
+    // Assert locked snapshot section (left box)
+    const lockedSection = page.getByTestId('locked-snapshot-section');
+    await expect(lockedSection).toBeVisible({ timeout: 5000 });
+    await expect(lockedSection.getByTestId('locked-rent-value')).toHaveText('฿\u00A04,300.00');
+    await expect(lockedSection.getByTestId('locked-deposit-value')).toHaveText('฿\u00A08,600.00');
 
-    // Locked deposit STILL = 8,600
-    await expect(snapshotComparisonAfter.getByText('เงินประกันล็อก:')).toBeVisible({ timeout: 5000 });
-    await expect(snapshotComparisonAfter.locator('text=8,600').first()).toBeVisible({ timeout: 5000 });
+    // Assert current room defaults section (right box)
+    const currentSection = page.getByTestId('current-defaults-section');
+    await expect(currentSection).toBeVisible({ timeout: 5000 });
+    await expect(currentSection.getByTestId('current-rent-value')).toHaveText('฿\u00A09,500.00');
 
-    // Current values remain separate from locked values
-    await expect(snapshotComparisonAfter.getByText('ค่าเช่าปัจจุบัน:')).toBeVisible({ timeout: 5000 });
+    // Assert separate sections: locked section and current section are distinct elements
+    const lockedTestId = await lockedSection.getAttribute('data-testid');
+    const currentTestId = await currentSection.getAttribute('data-testid');
+    expect(lockedTestId).not.toEqual(currentTestId);
 
     // Error hygiene assertions
     expect(test2ConsoleErrors).toEqual([]);

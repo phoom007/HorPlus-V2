@@ -85,11 +85,11 @@ export const PropagationPreviewModal: React.FC<PropagationPreviewModalProps> = (
                 </thead>
                 <tbody className="divide-y divide-gray-100">
                   {(previewData.fieldEffects || []).map((item, idx) => (
-                    <tr key={idx} className={item.eligible ? 'hover:bg-gray-50' : 'bg-amber-50/40 hover:bg-amber-50/70'} data-testid={`preview-row-${idx}`}>
-                      <td className="p-2.5 font-medium text-gray-900">{item.roomNumber}</td>
-                      <td className="p-2.5 text-gray-600">{item.field}</td>
-                      <td className="p-2.5 text-gray-500">{String(item.oldEffectiveValue ?? '-')}</td>
-                      <td className="p-2.5 font-semibold text-gray-800">{String(item.newEffectiveValue ?? '-')}</td>
+                    <tr key={idx} className={item.eligible ? 'hover:bg-gray-50' : 'bg-amber-50/40 hover:bg-amber-50/70'} data-testid={`preview-effect-${item.roomNumber}-${item.field}`}>
+                      <td className="p-2.5 font-medium text-gray-900" data-testid={`effect-room-${item.roomNumber}`}>{item.roomNumber}</td>
+                      <td className="p-2.5 text-gray-600" data-testid={`effect-field-${item.field}`}>{item.field}</td>
+                      <td className="p-2.5 text-gray-500" data-testid={`effect-old-${item.roomNumber}-${item.field}`}>{String(item.oldEffectiveValue ?? '-')}</td>
+                      <td className="p-2.5 font-semibold text-gray-800" data-testid={`effect-new-${item.roomNumber}-${item.field}`}>{String(item.newEffectiveValue ?? '-')}</td>
                       <td className="p-2.5">
                         <div className="flex items-center space-x-1">
                           <SourceBadge source={item.sourceBefore} />
@@ -99,11 +99,11 @@ export const PropagationPreviewModal: React.FC<PropagationPreviewModalProps> = (
                       </td>
                       <td className="p-2.5">
                         {item.eligible ? (
-                          <span className="inline-flex items-center text-emerald-700 font-medium">
+                          <span className="inline-flex items-center text-emerald-700 font-medium" data-testid={`effect-status-${item.roomNumber}-${item.field}`}>
                             <CheckCircle2 className="w-3.5 h-3.5 mr-1" /> เปลี่ยนแปลง
                           </span>
                         ) : (
-                          <span className="inline-flex items-center text-amber-700 font-medium" title={item.skipReason}>
+                          <span className="inline-flex items-center text-amber-700 font-medium" title={item.skipReason} data-testid={`effect-skip-reason-${item.roomNumber}-${item.field}`}>
                             <XCircle className="w-3.5 h-3.5 mr-1" /> ข้าม ({item.skipReason === 'EXPLICIT_ROOM_OVERRIDE' ? 'มีค่าเฉพาะห้อง' : 'มีสัญญาที่ล็อกค่า'})
                           </span>
                         )}

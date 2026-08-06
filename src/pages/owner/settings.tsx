@@ -174,6 +174,8 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
     }
   };
 
+  const [applyResultState, setApplyResultState] = useState<any>(null);
+
   const handleConfirmPropagation = async () => {
     if (!DataProvider.properties) return;
     setPreviewLoading(true);
@@ -201,9 +203,9 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
       }
       onAddLog('ส่งต่อค่าเริ่มต้น', `ส่งต่อค่าไปยังห้องพักเรียบร้อยแล้ว`, 'Dormitory', dorm.id);
       setIsPreviewOpen(false);
+      setApplyResultState(res.data?.data || res.data);
       await fetchDormitoryDefaults();
       onRefreshData();
-      alert('ส่งต่อค่าเริ่มต้นไปยังห้องพักเรียบร้อยแล้ว');
     } catch (err: any) {
       alert(err.message || 'เกิดข้อผิดพลาดในการส่งต่อค่า');
     } finally {
@@ -1128,6 +1130,49 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
         onCancel={() => setIsPreviewOpen(false)}
         isLoading={previewLoading}
       />
+
+      {applyResultState && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" data-testid="propagation-result-modal">
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6 border border-emerald-200 space-y-4">
+            <h3 className="text-lg font-bold text-gray-900">ผลการส่งต่อค่าเริ่มต้น</h3>
+            <div className="grid grid-cols-2 gap-3 text-xs">
+              <div className="bg-emerald-50 p-3 rounded-lg border border-emerald-200 text-center">
+                <div className="text-xs text-emerald-600 font-medium">ห้องที่ปรับปรุง</div>
+                <div className="text-lg font-bold text-emerald-700" data-testid="applied-room-count">
+                  {applyResultState.appliedRoomCount}
+                </div>
+              </div>
+              <div className="bg-blue-50 p-3 rounded-lg border border-blue-200 text-center">
+                <div className="text-xs text-blue-600 font-medium">รายการที่เปลี่ยน</div>
+                <div className="text-lg font-bold text-blue-700" data-testid="applied-field-change-count">
+                  {applyResultState.appliedFieldChangeCount}
+                </div>
+              </div>
+              <div className="bg-amber-50 p-3 rounded-lg border border-amber-200 text-center">
+                <div className="text-xs text-amber-600 font-medium">ห้องที่ข้าม</div>
+                <div className="text-lg font-bold text-amber-700" data-testid="skipped-room-count">
+                  {applyResultState.skippedRoomCount}
+                </div>
+              </div>
+              <div className="bg-rose-50 p-3 rounded-lg border border-rose-200 text-center">
+                <div className="text-xs text-rose-600 font-medium">รายการที่ข้าม</div>
+                <div className="text-lg font-bold text-rose-700" data-testid="skipped-field-change-count">
+                  {applyResultState.skippedFieldChangeCount}
+                </div>
+              </div>
+            </div>
+            <div className="pt-2 flex justify-end">
+              <button
+                onClick={() => setApplyResultState(null)}
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-md text-sm font-medium transition-colors cursor-pointer"
+                data-testid="btn-close-result"
+              >
+                ตกลง
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {versionConflictState && (
         <VersionConflictModal
