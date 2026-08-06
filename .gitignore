@@ -25,6 +25,7 @@ coverage/
 backups/
 scratch/
 scripts/
+!server/src/scripts/
 docs/execution-reports/
 docs/graphify-validation/
 docs/production-blueprint/
