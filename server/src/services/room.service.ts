@@ -92,7 +92,7 @@ export class RoomService {
     };
   }
 
-  public async createRoom(dormIdOrData: any, dataOrDormId?: any, userId?: string) {
+  public async createRoom(dormIdOrData: any, dataOrDormId?: any, userId?: string, txClient?: any) {
     let dormitoryId: string;
     let data: any;
 
@@ -106,7 +106,6 @@ export class RoomService {
 
     const { normalizeRoomNumber, validateRoomNumberInput } = await import('../utils/room-number.normalizer.js');
     const { getPrismaClient } = await import('../db/prisma.js');
-    const prisma = getPrismaClient();
 
     const validation = validateRoomNumberInput(data.roomNumber);
     if (!validation.isValid) {
@@ -115,65 +114,96 @@ export class RoomService {
 
     const normalizedRoomNumber = validation.normalized;
 
-    // Check Building exists and is not archived
-    const building = await prisma.building.findFirst({
-      where: { id: data.buildingId, dormitoryId },
-    });
-    if (!building) {
-      throw new AppError('ไม่พบข้อมูลอาคารที่ระบุ', 404, 'BUILDING_NOT_FOUND');
-    }
+    const runInTx = async (tx: any) => {
+      // Check Building exists and is not archived
+      const building = await tx.building.findFirst({
+        where: { id: data.buildingId, dormitoryId, deletedAt: null },
+      });
+      if (!building) {
+        throw new AppError('ไม่พบข้อมูลอาคารที่ระบุ', 404, 'BUILDING_NOT_FOUND');
+      }
 
-    if (building.status === 'archived' || building.deletedAt) {
-      throw new AppError('ไม่สามารถเพิ่มห้องพักในอาคารที่ถูกจัดเก็บแล้วได้', 400, 'BUILDING_ARCHIVED');
-    }
+      if (building.status === 'archived') {
+        throw new AppError('ไม่สามารถเพิ่มห้องพักในอาคารที่ถูกจัดเก็บแล้วได้', 400, 'BUILDING_ARCHIVED');
+      }
 
-    // Check Dormitory-scoped Duplicate Room
-    const existingRoom = await prisma.room.findFirst({
-      where: {
-        dormitoryId,
+      // Check Dormitory-scoped Duplicate Room
+      const existingRoom = await tx.room.findFirst({
+        where: {
+          dormitoryId,
+          normalizedRoomNumber,
+          deletedAt: null,
+        },
+      });
+
+      if (existingRoom) {
+        throw new AppError(
+          `หมายเลขห้องพัก "${data.roomNumber}" มีอยู่แล้วในหอพักนี้`,
+          409,
+          'ROOM_NUMBER_ALREADY_EXISTS'
+        );
+      }
+
+      if (typeof tx.$executeRaw === 'function') {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${dormitoryId}))`;
+      }
+
+      await subscriptionEntitlementService.assertRoomCreationAllowed(dormitoryId, new Date(), tx);
+
+      const roomPayload = {
+        ...data,
         normalizedRoomNumber,
-        deletedAt: null,
-      },
-    });
+        version: 1,
+      };
 
-    if (existingRoom) {
-      throw new AppError(
-        `หมายเลขห้องพัก "${data.roomNumber}" มีอยู่แล้วในหอพักนี้`,
-        409,
-        'ROOM_NUMBER_ALREADY_EXISTS'
-      );
-    }
+      const created = await tx.room.create({
+        data: {
+          dormitoryId,
+          buildingId: data.buildingId,
+          roomNumber: data.roomNumber,
+          normalizedRoomNumber,
+          floor: data.floor || 1,
+          roomType: data.roomType || 'standard',
+          rentCycle: data.rentCycle || 'monthly',
+          monthlyRent: data.monthlyRent || '0.00',
+          termRent: data.termRent || null,
+          dailyRent: data.dailyRent || null,
+          depositAmount: data.depositAmount || '0.00',
+          parkingFee: data.parkingFee || '0.00',
+          maximumOccupants: data.maximumOccupants || 2,
+          waterMeterNumber: data.waterMeterNumber || null,
+          electricityMeterNumber: data.electricityMeterNumber || null,
+          initialWaterReading: data.initialWaterReading || '0.00',
+          initialElectricityReading: data.initialElectricityReading || '0.00',
+          amenities: data.amenities || [],
+          images: data.images || [],
+          notes: data.notes || null,
+          version: 1,
+        },
+      });
 
-    const roomPayload = {
-      ...data,
-      normalizedRoomNumber,
+      await tx.auditLog.create({
+        data: {
+          dormitoryId,
+          actorUserId: userId || null,
+          entityType: 'ROOM',
+          entityId: created.id,
+          action: 'ROOM_CREATED',
+          beforeValues: null,
+          afterValues: created as any,
+          reason: `Created room ${data.roomNumber}`,
+        },
+      });
+
+      return created;
     };
 
     try {
-      if (this.prisma && typeof this.prisma.$transaction === 'function') {
-        return await this.prisma.$transaction(async (tx: any) => {
-          await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${dormitoryId}))`;
-
-          await subscriptionEntitlementService.assertRoomCreationAllowed(dormitoryId, new Date(), tx);
-
-          const created = await this.roomRepo.create(dormitoryId, roomPayload, tx);
-
-          if (this.auditService && userId) {
-            this.auditService.logSecurityEvent({
-              userId,
-              dormitoryId,
-              action: 'ROOM_CREATED',
-              reason: `Created room ${data.roomNumber}`,
-              severity: 'info',
-            });
-          }
-
-          return created;
-        });
+      if (txClient) {
+        return await runInTx(txClient);
       }
-
-      await this.checkRoomLimit(dormitoryId);
-      const created = await this.roomRepo.create(dormitoryId, roomPayload);
+      const prisma = getPrismaClient();
+      const created = await prisma.$transaction(runInTx);
 
       if (this.auditService && userId) {
         this.auditService.logSecurityEvent({
@@ -198,132 +228,217 @@ export class RoomService {
     }
   }
 
-  public async updateRoom(id: string, dataOrDormId: any, dormIdOrData?: any, userId?: string) {
+  public async updateRoom(id: string, dataOrDormId: any, dormIdOrData?: any, userId?: string, txClient?: any) {
     let targetDormId: string = typeof dormIdOrData === 'string' ? dormIdOrData : (typeof dataOrDormId === 'string' ? dataOrDormId : id);
     let targetData: any = typeof dataOrDormId === 'object' ? dataOrDormId : (typeof dormIdOrData === 'object' ? dormIdOrData : dataOrDormId);
 
     await subscriptionEntitlementService.assertDormitoryWritable(targetDormId);
 
+    const { expectedVersion, version: clientVer, ...changes } = targetData;
+    const targetVersion = expectedVersion !== undefined ? expectedVersion : clientVer;
+
     const { getPrismaClient } = await import('../db/prisma.js');
-    const prisma = getPrismaClient();
 
-    const existing = await prisma.room.findFirst({
-      where: { id, dormitoryId: targetDormId },
-    });
+    const runInTx = async (tx: any) => {
+      const existing = await tx.room.findFirst({
+        where: { id, dormitoryId: targetDormId, deletedAt: null },
+      });
 
-    if (!existing) {
-      throw new AppError('ไม่พบข้อมูลห้องพัก', 404, 'ROOM_NOT_FOUND');
-    }
-
-    if (targetData.version !== undefined && existing.version !== targetData.version) {
-      const err: any = new AppError('ข้อมูลห้องพักถูกแก้ไขโดยผู้อื่น กรุณาโหลดข้อมูลใหม่', 409, 'VERSION_CONFLICT');
-      (err as any).currentVersion = existing.version;
-      throw err;
-    }
-
-    let normalizedRoomNumber = existing.normalizedRoomNumber;
-    if (targetData.roomNumber) {
-      const { validateRoomNumberInput } = await import('../utils/room-number.normalizer.js');
-      const validation = validateRoomNumberInput(targetData.roomNumber);
-      if (!validation.isValid) {
-        throw new AppError(validation.errorMessage || 'หมายเลขห้องพักไม่ถูกต้อง', 400, 'VALIDATION_ERROR');
+      if (!existing) {
+        throw new AppError('ไม่พบข้อมูลห้องพัก', 404, 'ROOM_NOT_FOUND');
       }
-      normalizedRoomNumber = validation.normalized;
 
-      if (normalizedRoomNumber !== existing.normalizedRoomNumber) {
-        const duplicate = await prisma.room.findFirst({
-          where: {
-            dormitoryId: targetDormId,
-            normalizedRoomNumber,
-            id: { not: id },
-            deletedAt: null,
-          },
-        });
-        if (duplicate) {
-          throw new AppError(
-            `หมายเลขห้องพัก "${targetData.roomNumber}" มีอยู่แล้วในหอพักนี้`,
-            409,
-            'ROOM_NUMBER_ALREADY_EXISTS'
-          );
+      if (targetVersion !== undefined && existing.version !== targetVersion) {
+        const err: any = new AppError('ข้อมูลห้องพักถูกแก้ไขโดยผู้อื่น กรุณาโหลดข้อมูลใหม่', 409, 'VERSION_CONFLICT');
+        (err as any).currentVersion = existing.version;
+        throw err;
+      }
+
+      let normalizedRoomNumber = existing.normalizedRoomNumber;
+      if (changes.roomNumber) {
+        const { validateRoomNumberInput } = await import('../utils/room-number.normalizer.js');
+        const validation = validateRoomNumberInput(changes.roomNumber);
+        if (!validation.isValid) {
+          throw new AppError(validation.errorMessage || 'หมายเลขห้องพักไม่ถูกต้อง', 400, 'VALIDATION_ERROR');
+        }
+        normalizedRoomNumber = validation.normalized;
+
+        if (normalizedRoomNumber !== existing.normalizedRoomNumber) {
+          const duplicate = await tx.room.findFirst({
+            where: {
+              dormitoryId: targetDormId,
+              normalizedRoomNumber,
+              id: { not: id },
+              deletedAt: null,
+            },
+          });
+          if (duplicate) {
+            throw new AppError(
+              `หมายเลขห้องพัก "${changes.roomNumber}" มีอยู่แล้วในหอพักนี้`,
+              409,
+              'ROOM_NUMBER_ALREADY_EXISTS'
+            );
+          }
         }
       }
-    }
 
-    const { version, ...updateFields } = targetData;
-    const updatePayload = {
-      ...updateFields,
-      normalizedRoomNumber,
-      version: existing.version + 1,
+      const updateRes = await tx.room.updateMany({
+        where: { id, dormitoryId: targetDormId, deletedAt: null, version: targetVersion ?? existing.version },
+        data: {
+          ...changes,
+          normalizedRoomNumber,
+          version: { increment: 1 },
+        },
+      });
+
+      if (updateRes.count === 0) {
+        const safeCurrent = await tx.room.findUnique({ where: { id } });
+        const err: any = new AppError('ข้อมูลห้องพักถูกแก้ไขโดยผู้อื่น กรุณาโหลดข้อมูลใหม่', 409, 'VERSION_CONFLICT');
+        err.currentVersion = safeCurrent?.version || 1;
+        throw err;
+      }
+
+      const updated = await tx.room.findUnique({ where: { id } });
+
+      await tx.auditLog.create({
+        data: {
+          dormitoryId: targetDormId,
+          actorUserId: userId || null,
+          entityType: 'ROOM',
+          entityId: id,
+          action: 'ROOM_UPDATED',
+          beforeValues: existing as any,
+          afterValues: updated as any,
+          reason: `Updated room ${existing.roomNumber}`,
+        },
+      });
+
+      return updated;
     };
 
-    const updated = await this.roomRepo.update(id, targetDormId, updatePayload);
+    try {
+      if (txClient) {
+        return await runInTx(txClient);
+      }
+      const prisma = getPrismaClient();
+      const updated = await prisma.$transaction(runInTx);
 
-    await prisma.auditLog.create({
-      data: {
-        dormitoryId: targetDormId,
-        actorUserId: userId || null,
-        entityType: 'ROOM',
-        entityId: id,
-        action: 'ROOM_UPDATED',
-        beforeValues: existing as any,
-        afterValues: updated as any,
-        reason: `Updated room ${existing.roomNumber}`,
-      },
-    });
+      if (this.auditService && userId) {
+        this.auditService.logSecurityEvent({
+          userId,
+          dormitoryId: targetDormId,
+          action: 'ROOM_UPDATED',
+          reason: `Updated room ${updated.roomNumber}`,
+          severity: 'info',
+        });
+      }
 
-    if (this.auditService && userId) {
-      this.auditService.logSecurityEvent({
-        userId,
-        dormitoryId: targetDormId,
-        action: 'ROOM_UPDATED',
-        reason: `Updated room ${existing.roomNumber}`,
-        severity: 'info',
-      });
+      return updated;
+    } catch (err: any) {
+      if (err.code === 'P2002') {
+        throw new AppError(
+          `หมายเลขห้องพัก "${changes.roomNumber || ''}" มีอยู่แล้วในหอพักนี้`,
+          409,
+          'ROOM_NUMBER_ALREADY_EXISTS'
+        );
+      }
+      throw err;
     }
-
-    return updated;
   }
 
-  public async archiveRoom(id: string, dormitoryId: string, userId?: string) {
+  public async archiveRoom(
+    id: string,
+    dormitoryId: string,
+    expectedVersionOrUser?: number | string,
+    userId?: string,
+    txClient?: any
+  ) {
     let targetDormId = typeof dormitoryId === 'string' ? dormitoryId : (typeof userId === 'string' ? userId : id);
+    let targetVersion: number | undefined = undefined;
+    let effectiveUserId: string | undefined = userId;
+
+    if (typeof expectedVersionOrUser === 'number') {
+      targetVersion = expectedVersionOrUser;
+    } else if (typeof expectedVersionOrUser === 'string') {
+      effectiveUserId = expectedVersionOrUser;
+    }
 
     await subscriptionEntitlementService.assertDormitoryWritable(targetDormId);
 
-    const existing = await this.roomRepo.findById(id, targetDormId);
-    if (!existing) {
-      throw new AppError('ไม่พบข้อมูลห้องพัก', 404, 'ROOM_NOT_FOUND');
-    }
-
-    const activeContracts = await this.contractRepo.findActiveContractsForRoom(id, targetDormId);
-    if (activeContracts && activeContracts.length > 0) {
-      throw new AppError('ไม่สามารถยกเลิกห้องที่มีผู้เช่าอยู่ได้', 400, 'ROOM_HAS_ACTIVE_TENANT');
-    }
-
-    const archived = await this.roomRepo.archive(id, targetDormId);
-
     const { getPrismaClient } = await import('../db/prisma.js');
+
+    const runInTx = async (tx: any) => {
+      const existing = await tx.room.findFirst({
+        where: { id, dormitoryId: targetDormId, deletedAt: null },
+      });
+      if (!existing) {
+        throw new AppError('ไม่พบข้อมูลห้องพัก', 404, 'ROOM_NOT_FOUND');
+      }
+
+      if (targetVersion !== undefined && existing.version !== targetVersion) {
+        const err: any = new AppError('ข้อมูลห้องพักถูกแก้ไขโดยผู้อื่น กรุณาโหลดข้อมูลใหม่', 409, 'VERSION_CONFLICT');
+        err.currentVersion = existing.version;
+        throw err;
+      }
+
+      const activeContracts = await tx.contract.findMany({
+        where: {
+          roomId: id,
+          dormitoryId: targetDormId,
+          status: { in: ['active', 'approved', 'expiring_soon', 'waiting_extension', 'checking_out'] },
+        },
+      });
+
+      if (activeContracts && activeContracts.length > 0) {
+        throw new AppError('ไม่สามารถยกเลิกห้องที่มีผู้เช่าอยู่ได้', 400, 'ROOM_HAS_ACTIVE_TENANT');
+      }
+
+      const updateRes = await tx.room.updateMany({
+        where: { id, dormitoryId: targetDormId, deletedAt: null, version: targetVersion ?? existing.version },
+        data: {
+          deletedAt: new Date(),
+          version: { increment: 1 },
+        },
+      });
+
+      if (updateRes.count === 0) {
+        const safeCurrent = await tx.room.findUnique({ where: { id } });
+        const err: any = new AppError('ข้อมูลห้องพักถูกแก้ไขโดยผู้อื่น กรุณาโหลดข้อมูลใหม่', 409, 'VERSION_CONFLICT');
+        err.currentVersion = safeCurrent?.version || 1;
+        throw err;
+      }
+
+      const archived = await tx.room.findUnique({ where: { id } });
+
+      await tx.auditLog.create({
+        data: {
+          dormitoryId: targetDormId,
+          actorUserId: effectiveUserId || null,
+          entityType: 'ROOM',
+          entityId: id,
+          action: 'ROOM_ARCHIVED',
+          beforeValues: existing as any,
+          afterValues: archived as any,
+          reason: `Archived room ${existing.roomNumber}`,
+        },
+      });
+
+      return archived;
+    };
+
+    if (txClient) {
+      return await runInTx(txClient);
+    }
     const prisma = getPrismaClient();
+    const archived = await prisma.$transaction(runInTx);
 
-    await prisma.auditLog.create({
-      data: {
-        dormitoryId: targetDormId,
-        actorUserId: userId || null,
-        entityType: 'ROOM',
-        entityId: id,
-        action: 'ROOM_ARCHIVED',
-        beforeValues: existing as any,
-        afterValues: archived as any,
-        reason: `Archived room ${existing.roomNumber}`,
-      },
-    });
-
-    if (this.auditService && userId) {
+    if (this.auditService && effectiveUserId) {
       this.auditService.logSecurityEvent({
-        userId,
+        userId: effectiveUserId,
         dormitoryId: targetDormId,
         action: 'ROOM_ARCHIVED',
-        reason: `Archived room ${existing.roomNumber}`,
-        severity: 'info'
+        reason: `Archived room ${archived.roomNumber}`,
+        severity: 'info',
       });
     }
 

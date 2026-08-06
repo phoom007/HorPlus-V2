@@ -24,165 +24,301 @@ export class BuildingService {
     return b;
   }
 
-  public async createBuilding(dormitoryId: string, data: CreateBuildingData, actorUserId?: string) {
-    const existingName = await this.buildingRepo.findByName(dormitoryId, data.name);
-    if (existingName) {
-      const err = new Error('ชื่ออาคารนี้มีอยู่แล้วในระบบ');
-      (err as any).code = 'BUILDING_NAME_ALREADY_EXISTS';
-      (err as any).statusCode = 409;
-      throw err;
-    }
-
-    if (data.code) {
-      const existingCode = await this.buildingRepo.findByCode(dormitoryId, data.code);
-      if (existingCode) {
-        const err = new Error('รหัสอาคารนี้มีอยู่แล้วในระบบ');
-        (err as any).code = 'BUILDING_CODE_ALREADY_EXISTS';
+  public async createBuilding(dormitoryId: string, data: CreateBuildingData, actorUserId?: string, txClient?: any) {
+    const { getPrismaClient } = await import('../db/prisma.js');
+    const runInTx = async (tx: any) => {
+      const existingName = await tx.building.findFirst({
+        where: { dormitoryId, name: data.name, deletedAt: null },
+      });
+      if (existingName) {
+        const err = new Error('ชื่ออาคารนี้มีอยู่แล้วในระบบ');
+        (err as any).code = 'BUILDING_NAME_ALREADY_EXISTS';
         (err as any).statusCode = 409;
         throw err;
       }
-    }
 
-    const building = await this.buildingRepo.create(dormitoryId, data);
+      if (data.code) {
+        const existingCode = await tx.building.findFirst({
+          where: { dormitoryId, code: data.code, deletedAt: null },
+        });
+        if (existingCode) {
+          const err = new Error('รหัสอาคารนี้มีอยู่แล้วในระบบ');
+          (err as any).code = 'BUILDING_CODE_ALREADY_EXISTS';
+          (err as any).statusCode = 409;
+          throw err;
+        }
+      }
+
+      const building = await tx.building.create({
+        data: {
+          dormitoryId,
+          name: data.name,
+          code: data.code || null,
+          floorCount: data.floorCount || 1,
+          description: data.description || null,
+          displayOrder: data.displayOrder || 0,
+          numberingPattern: data.numberingPattern || null,
+          version: 1,
+        },
+      });
+
+      await tx.auditLog.create({
+        data: {
+          dormitoryId,
+          actorUserId: actorUserId || null,
+          entityType: 'BUILDING',
+          entityId: building.id,
+          action: 'BUILDING_CREATED',
+          beforeValues: null,
+          afterValues: building as any,
+          reason: `Created building ${building.name}`,
+        },
+      });
+
+      return building;
+    };
+
+    if (txClient) {
+      return runInTx(txClient);
+    }
+    const prisma = getPrismaClient();
+    const result = await prisma.$transaction(runInTx);
 
     if (this.auditService && actorUserId) {
       await this.auditService.log({
         userId: actorUserId,
         action: 'BUILDING_CREATED',
         source: 'property',
-        reason: `Created building ${building.name}`,
-        metadata: { dormitoryId, buildingId: building.id },
+        reason: `Created building ${result.name}`,
+        metadata: { dormitoryId, buildingId: result.id },
       });
     }
 
-    return building;
+    return result;
   }
 
-  public async updateBuilding(id: string, dormitoryId: string, data: Partial<BuildingEntity> & { version?: number }, actorUserId?: string) {
-    const existingBuilding = await this.getBuildingById(id, dormitoryId);
-
-    if (data.version !== undefined && (existingBuilding as any).version !== data.version) {
-      const err = new Error('ข้อมูลอาคารถูกแก้ไขโดยผู้อื่น กรุณาโหลดข้อมูลใหม่');
-      (err as any).code = 'VERSION_CONFLICT';
-      (err as any).statusCode = 409;
-      (err as any).currentVersion = (existingBuilding as any).version;
-      throw err;
-    }
-
-    const fieldsProtectingParsing = [
-      'code',
-      'numberingPattern',
-      'floorCount'
-    ];
-
-    const isParsingFieldChanged = fieldsProtectingParsing.some(field => 
-      (data as any)[field] !== undefined && (data as any)[field] !== (existingBuilding as any)[field]
-    );
-
-    if (isParsingFieldChanged) {
-      const roomCount = await this.roomRepo.countActiveByBuilding(dormitoryId, id);
-      if (roomCount > 0) {
-        const err = new Error('ไม่สามารถเปลี่ยนการตั้งค่ารหัสและรูปแบบของอาคารได้เนื่องจากมีห้องพักในอาคารนี้แล้ว');
-        (err as any).code = 'BUILDING_HAS_ROOMS';
-        (err as any).statusCode = 409;
-        throw err;
-      }
-    }
-
-    if (data.name) {
-      const existingName = await this.buildingRepo.findByName(dormitoryId, data.name);
-      if (existingName && existingName.id !== id) {
-        const err = new Error('ชื่ออาคารนี้มีอยู่แล้วในระบบ');
-        (err as any).code = 'BUILDING_NAME_ALREADY_EXISTS';
-        (err as any).statusCode = 409;
-        throw err;
-      }
-    }
-
-    if (data.code) {
-      const existingCode = await this.buildingRepo.findByCode(dormitoryId, data.code);
-      if (existingCode && existingCode.id !== id) {
-        const err = new Error('รหัสอาคารนี้มีอยู่แล้วในระบบ');
-        (err as any).code = 'BUILDING_CODE_ALREADY_EXISTS';
-        (err as any).statusCode = 409;
-        throw err;
-      }
-    }
-
-    const updated = await this.buildingRepo.update(id, dormitoryId, data);
+  public async updateBuilding(
+    id: string,
+    dormitoryId: string,
+    data: Record<string, any>,
+    actorUserId?: string,
+    txClient?: any
+  ) {
+    const { expectedVersion, ...changes } = data;
+    const targetVersion = expectedVersion !== undefined ? expectedVersion : (data as any).version;
 
     const { getPrismaClient } = await import('../db/prisma.js');
-    const prisma = getPrismaClient();
+    const runInTx = async (tx: any) => {
+      const existing = await tx.building.findFirst({
+        where: { id, dormitoryId, deletedAt: null },
+      });
+      if (!existing) {
+        const err = new Error('ไม่พบข้อมูลอาคาร');
+        (err as any).code = 'BUILDING_NOT_FOUND';
+        (err as any).statusCode = 404;
+        throw err;
+      }
 
-    if (updated) {
-      await prisma.auditLog.create({
+      if (targetVersion !== undefined && existing.version !== targetVersion) {
+        const err = new Error('ข้อมูลอาคารถูกแก้ไขโดยผู้อื่น กรุณาโหลดข้อมูลใหม่');
+        (err as any).code = 'VERSION_CONFLICT';
+        (err as any).statusCode = 409;
+        (err as any).currentVersion = existing.version;
+        throw err;
+      }
+
+      const fieldsProtectingParsing = ['code', 'numberingPattern', 'floorCount'];
+      const isParsingFieldChanged = fieldsProtectingParsing.some(
+        (field) => changes[field] !== undefined && changes[field] !== existing[field]
+      );
+
+      if (isParsingFieldChanged) {
+        const roomCount = await tx.room.count({
+          where: { dormitoryId, buildingId: id, deletedAt: null },
+        });
+        if (roomCount > 0) {
+          const err = new Error('ไม่สามารถเปลี่ยนการตั้งค่ารหัสและรูปแบบของอาคารได้เนื่องจากมีห้องพักในอาคารนี้แล้ว');
+          (err as any).code = 'BUILDING_HAS_ROOMS';
+          (err as any).statusCode = 409;
+          throw err;
+        }
+      }
+
+      if (changes.name) {
+        const existingName = await tx.building.findFirst({
+          where: { dormitoryId, name: changes.name, deletedAt: null, NOT: { id } },
+        });
+        if (existingName) {
+          const err = new Error('ชื่ออาคารนี้มีอยู่แล้วในระบบ');
+          (err as any).code = 'BUILDING_NAME_ALREADY_EXISTS';
+          (err as any).statusCode = 409;
+          throw err;
+        }
+      }
+
+      if (changes.code) {
+        const existingCode = await tx.building.findFirst({
+          where: { dormitoryId, code: changes.code, deletedAt: null, NOT: { id } },
+        });
+        if (existingCode) {
+          const err = new Error('รหัสอาคารนี้มีอยู่แล้วในระบบ');
+          (err as any).code = 'BUILDING_CODE_ALREADY_EXISTS';
+          (err as any).statusCode = 409;
+          throw err;
+        }
+      }
+
+      const updateRes = await tx.building.updateMany({
+        where: { id, dormitoryId, deletedAt: null, version: targetVersion ?? existing.version },
+        data: {
+          ...changes,
+          version: { increment: 1 },
+        },
+      });
+
+      if (updateRes.count === 0) {
+        const safeCurrent = await tx.building.findUnique({ where: { id } });
+        const err = new Error('ข้อมูลอาคารถูกแก้ไขโดยผู้อื่น กรุณาโหลดข้อมูลใหม่');
+        (err as any).code = 'VERSION_CONFLICT';
+        (err as any).statusCode = 409;
+        (err as any).currentVersion = safeCurrent?.version || 1;
+        throw err;
+      }
+
+      const updated = await tx.building.findUnique({ where: { id } });
+
+      await tx.auditLog.create({
         data: {
           dormitoryId,
           actorUserId: actorUserId || null,
           entityType: 'BUILDING',
           entityId: id,
           action: 'BUILDING_UPDATED',
-          beforeValues: existingBuilding as any,
+          beforeValues: existing as any,
           afterValues: updated as any,
-          reason: `Updated building ${updated.name}`,
+          reason: `Updated building ${updated?.name}`,
         },
       });
-    }
 
-    if (this.auditService && actorUserId && updated) {
+      return updated;
+    };
+
+    if (txClient) {
+      return runInTx(txClient);
+    }
+    const prisma = getPrismaClient();
+    const result = await prisma.$transaction(runInTx);
+
+    if (this.auditService && actorUserId && result) {
       await this.auditService.log({
         userId: actorUserId,
         action: 'BUILDING_UPDATED',
         source: 'property',
-        reason: `Updated building ${updated.name}`,
+        reason: `Updated building ${result.name}`,
         metadata: { dormitoryId, buildingId: id },
       });
     }
 
-    return updated;
+    return result;
   }
 
-  public async archiveBuilding(id: string, dormitoryId: string, actorUserId?: string) {
-    const existingBuilding = await this.getBuildingById(id, dormitoryId);
+  public async archiveBuilding(
+    id: string,
+    dormitoryId: string,
+    expectedVersionOrUser?: number | string,
+    actorUserId?: string,
+    txClient?: any
+  ) {
+    let targetVersion: number | undefined = undefined;
+    let effectiveUserId: string | undefined = actorUserId;
 
-    const activeRooms = await this.roomRepo.countActiveByBuilding(dormitoryId, id);
-    if (activeRooms > 0) {
-      const err = new Error('ไม่สามารถลบหรือเก็บอาคารที่มีห้องพักเปิดใช้งานอยู่ได้');
-      (err as any).code = 'BUILDING_HAS_ACTIVE_ROOMS';
-      (err as any).statusCode = 409;
-      throw err;
+    if (typeof expectedVersionOrUser === 'number') {
+      targetVersion = expectedVersionOrUser;
+    } else if (typeof expectedVersionOrUser === 'string') {
+      effectiveUserId = expectedVersionOrUser;
     }
 
-    const archived = await this.buildingRepo.archive(id, dormitoryId);
-
     const { getPrismaClient } = await import('../db/prisma.js');
-    const prisma = getPrismaClient();
+    const runInTx = async (tx: any) => {
+      const existing = await tx.building.findFirst({
+        where: { id, dormitoryId, deletedAt: null },
+      });
+      if (!existing) {
+        const err = new Error('ไม่พบข้อมูลอาคาร');
+        (err as any).code = 'BUILDING_NOT_FOUND';
+        (err as any).statusCode = 404;
+        throw err;
+      }
 
-    if (archived) {
-      await prisma.auditLog.create({
+      if (targetVersion !== undefined && existing.version !== targetVersion) {
+        const err = new Error('ข้อมูลอาคารถูกแก้ไขโดยผู้อื่น กรุณาโหลดข้อมูลใหม่');
+        (err as any).code = 'VERSION_CONFLICT';
+        (err as any).statusCode = 409;
+        (err as any).currentVersion = existing.version;
+        throw err;
+      }
+
+      const activeRooms = await tx.room.count({
+        where: { dormitoryId, buildingId: id, deletedAt: null },
+      });
+      if (activeRooms > 0) {
+        const err = new Error('ไม่สามารถลบหรือเก็บอาคารที่มีห้องพักเปิดใช้งานอยู่ได้');
+        (err as any).code = 'BUILDING_HAS_ACTIVE_ROOMS';
+        (err as any).statusCode = 409;
+        throw err;
+      }
+
+      const updateRes = await tx.building.updateMany({
+        where: { id, dormitoryId, deletedAt: null, version: targetVersion ?? existing.version },
+        data: {
+          deletedAt: new Date(),
+          version: { increment: 1 },
+        },
+      });
+
+      if (updateRes.count === 0) {
+        const safeCurrent = await tx.building.findUnique({ where: { id } });
+        const err = new Error('ข้อมูลอาคารถูกแก้ไขโดยผู้อื่น กรุณาโหลดข้อมูลใหม่');
+        (err as any).code = 'VERSION_CONFLICT';
+        (err as any).statusCode = 409;
+        (err as any).currentVersion = safeCurrent?.version || 1;
+        throw err;
+      }
+
+      const archived = await tx.building.findUnique({ where: { id } });
+
+      await tx.auditLog.create({
         data: {
           dormitoryId,
-          actorUserId: actorUserId || null,
+          actorUserId: effectiveUserId || null,
           entityType: 'BUILDING',
           entityId: id,
           action: 'BUILDING_ARCHIVED',
-          beforeValues: existingBuilding as any,
+          beforeValues: existing as any,
           afterValues: archived as any,
-          reason: `Archived building ${archived.name}`,
+          reason: `Archived building ${existing.name}`,
         },
       });
-    }
 
-    if (this.auditService && actorUserId && archived) {
+      return archived;
+    };
+
+    if (txClient) {
+      return runInTx(txClient);
+    }
+    const prisma = getPrismaClient();
+    const result = await prisma.$transaction(runInTx);
+
+    if (this.auditService && effectiveUserId && result) {
       await this.auditService.log({
-        userId: actorUserId,
+        userId: effectiveUserId,
         action: 'BUILDING_ARCHIVED',
         source: 'property',
-        reason: `Archived building ${archived.name}`,
+        reason: `Archived building ${result.name}`,
         metadata: { dormitoryId, buildingId: id },
       });
     }
 
-    return archived;
+    return result;
   }
 }
