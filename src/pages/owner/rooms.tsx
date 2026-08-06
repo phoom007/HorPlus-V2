@@ -611,6 +611,10 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                         <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300">
                           กำหนดเฉพาะห้อง
                         </span>
+                      ) : (buildings.find(b => b.id === room.buildingId) as any)?.monthlyRent !== undefined && (buildings.find(b => b.id === room.buildingId) as any)?.monthlyRent !== null ? (
+                        <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-indigo-100 text-indigo-800 border border-indigo-300">
+                          ใช้ค่าจากอาคาร
+                        </span>
                       ) : (
                         <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-sky-100 text-sky-800 border border-sky-300">
                           ใช้ค่าจากหอพัก

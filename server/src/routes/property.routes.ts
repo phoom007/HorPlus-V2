@@ -450,5 +450,136 @@ export function createPropertyRouter(
     }
   });
 
+  // GET /api/v1/properties/buildings/:id/defaults
+  router.get('/buildings/:id/defaults', async (req: Request, res: Response) => {
+    try {
+      const dormId = getDormitoryId(req);
+      const building = await buildingService.getBuildingById(req.params.id, dormId);
+      res.json({
+        data: {
+          buildingId: building.id,
+          name: (building as any).name,
+          overrides: {
+            monthlyRent: (building as any).monthlyRent,
+            termRent: (building as any).termRent,
+            dailyRent: (building as any).dailyRent,
+            depositAmount: (building as any).depositAmount,
+            advancePaymentAmount: (building as any).advancePaymentAmount,
+            waterRate: (building as any).waterRate,
+            electricityRate: (building as any).electricityRate,
+            commonFee: (building as any).commonFee,
+            internetFee: (building as any).internetFee,
+            parkingFee: (building as any).parkingFee,
+            waterBillingType: (building as any).waterBillingType,
+            electricityBillingType: (building as any).electricityBillingType,
+            rentBillingType: (building as any).rentBillingType,
+            maximumOccupants: (building as any).maximumOccupants,
+            roomType: (building as any).roomType,
+          },
+          version: (building as any).version || 1,
+          updatedAt: (building as any).updatedAt,
+        },
+      });
+    } catch (err) {
+      handleServiceError(res, err, req);
+    }
+  });
+
+  // PUT /api/v1/properties/buildings/:id/defaults
+  router.put('/buildings/:id/defaults', mutationGuard('building:write'), async (req: Request, res: Response) => {
+    if (!verifyCsrf(req, res)) return;
+    try {
+      const dormId = getDormitoryId(req);
+      const updated = await buildingService.updateBuilding(req.params.id, dormId, req.body, req.auth?.userId);
+      if (!updated) {
+        return res.status(404).json({ error: { code: 'BUILDING_NOT_FOUND', message: 'ไม่พบข้อมูลอาคาร' } });
+      }
+      res.json({
+        data: {
+          buildingId: updated.id,
+          effectiveValues: updated,
+          version: (updated as any).version,
+          updatedAt: (updated as any).updatedAt,
+        },
+      });
+    } catch (err) {
+      handleServiceError(res, err, req);
+    }
+  });
+
+  // DELETE /api/v1/properties/buildings/:id/defaults/:field
+  router.delete('/buildings/:id/defaults/:field', mutationGuard('building:write'), async (req: Request, res: Response) => {
+    if (!verifyCsrf(req, res)) return;
+    try {
+      const dormId = getDormitoryId(req);
+      const fieldName = req.params.field;
+      const clearPayload: Record<string, null> = {};
+      clearPayload[fieldName] = null;
+      const updated = await buildingService.updateBuilding(req.params.id, dormId, clearPayload as any, req.auth?.userId);
+      if (!updated) {
+        return res.status(404).json({ error: { code: 'BUILDING_NOT_FOUND', message: 'ไม่พบข้อมูลอาคาร' } });
+      }
+      res.json({
+        data: {
+          success: true,
+          clearedField: fieldName,
+          buildingId: updated.id,
+          version: (updated as any).version,
+          updatedAt: (updated as any).updatedAt,
+        },
+      });
+    } catch (err) {
+      handleServiceError(res, err, req);
+    }
+  });
+
+  // PUT /api/v1/properties/rooms/:id/defaults
+  router.put('/rooms/:id/defaults', mutationGuard('room:write'), async (req: Request, res: Response) => {
+    if (!verifyCsrf(req, res)) return;
+    try {
+      const dormId = getDormitoryId(req);
+      const updated = await roomService.updateRoom(req.params.id, req.body, dormId, req.auth?.userId);
+      if (!updated) {
+        return res.status(404).json({ error: { code: 'ROOM_NOT_FOUND', message: 'ไม่พบข้อมูลห้องพัก' } });
+      }
+      res.json({
+        data: {
+          roomId: updated.id,
+          effectiveValues: updated,
+          version: (updated as any).version,
+          updatedAt: (updated as any).updatedAt,
+        },
+      });
+    } catch (err) {
+      handleServiceError(res, err, req);
+    }
+  });
+
+  // DELETE /api/v1/properties/rooms/:id/defaults/:field
+  router.delete('/rooms/:id/defaults/:field', mutationGuard('room:write'), async (req: Request, res: Response) => {
+    if (!verifyCsrf(req, res)) return;
+    try {
+      const dormId = getDormitoryId(req);
+      const fieldName = req.params.field;
+      const clearPayload: Record<string, null> = {};
+      clearPayload[fieldName] = null;
+      const updated = await roomService.updateRoom(req.params.id, clearPayload, dormId, req.auth?.userId);
+      if (!updated) {
+        return res.status(404).json({ error: { code: 'ROOM_NOT_FOUND', message: 'ไม่พบข้อมูลห้องพัก' } });
+      }
+      res.json({
+        data: {
+          success: true,
+          clearedField: fieldName,
+          roomId: updated.id,
+          version: (updated as any).version,
+          updatedAt: (updated as any).updatedAt,
+        },
+      });
+    } catch (err) {
+      handleServiceError(res, err, req);
+    }
+  });
+
   return router;
 }
