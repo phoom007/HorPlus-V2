@@ -120,5 +120,36 @@ describe('Wave 1G — Property, Room Defaults & Availability Comprehensive Unit 
       expect(validateClearOverrideField('currentContractId')).toBe(false);
     });
   });
+
+  describe('Atomic Optimistic Concurrency & Transactional Audit Contracts', () => {
+    it('requires expectedVersion on mutation schemas', async () => {
+      const { UpdateBuildingSchema, UpdateRoomSchema, ArchiveBuildingSchema, ArchiveRoomSchema } = await import('../../schemas/property-tenant-contract.schemas.js');
+
+      // Test missing expectedVersion fails validation
+      expect(UpdateBuildingSchema.safeParse({ name: 'Building A' }).success).toBe(false);
+      expect(UpdateRoomSchema.safeParse({ roomNumber: '101' }).success).toBe(false);
+      expect(ArchiveBuildingSchema.safeParse({}).success).toBe(false);
+      expect(ArchiveRoomSchema.safeParse({}).success).toBe(false);
+
+      // Test valid expectedVersion passes validation
+      expect(UpdateBuildingSchema.safeParse({ name: 'Building A', expectedVersion: 1 }).success).toBe(true);
+      expect(UpdateRoomSchema.safeParse({ roomNumber: '101', expectedVersion: 1 }).success).toBe(true);
+      expect(ArchiveBuildingSchema.safeParse({ expectedVersion: 1 }).success).toBe(true);
+      expect(ArchiveRoomSchema.safeParse({ expectedVersion: 1 }).success).toBe(true);
+    });
+
+    it('proves reconciliation script enforces loopback host and port 5455 safety guards', async () => {
+      const { reconcileRoomNormalization } = await import('../../scripts/reconcile-room-normalization.js');
+
+      // Test database safety guard throws error if non-5455 or non-loopback
+      const prevUrl = process.env.DATABASE_URL;
+      process.env.DATABASE_URL = 'postgresql://user:pass@remotehost:5432/production_db';
+
+      await expect(reconcileRoomNormalization()).rejects.toThrow('Safety guard: reconciliation script can only run against loopback database on port 5455.');
+
+      process.env.DATABASE_URL = prevUrl;
+    });
+  });
 });
+
 
