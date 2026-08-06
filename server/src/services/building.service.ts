@@ -2,6 +2,23 @@ import { IBuildingRepository, BuildingEntity, BuildingFilterQuery, CreateBuildin
 import { IRoomRepository } from '../db/repositories/room.repository.js';
 import { AuditService } from './audit.service.js';
 
+export interface UpdateBuildingCommand {
+  buildingId: string;
+  dormitoryId: string;
+  changes: Record<string, any>;
+  expectedVersion: number;
+  actorUserId?: string;
+  requestId?: string;
+}
+
+export interface ArchiveBuildingCommand {
+  buildingId: string;
+  dormitoryId: string;
+  expectedVersion: number;
+  actorUserId?: string;
+  requestId?: string;
+}
+
 export class BuildingService {
   constructor(
     private buildingRepo: IBuildingRepository,
@@ -98,14 +115,40 @@ export class BuildingService {
   }
 
   public async updateBuilding(
-    id: string,
-    dormitoryId: string,
-    data: Record<string, any>,
-    actorUserId?: string,
+    arg1: string | UpdateBuildingCommand,
+    arg2?: string,
+    arg3?: Record<string, any>,
+    arg4?: string,
     txClient?: any
   ) {
-    const { expectedVersion, ...changes } = data;
-    const targetVersion = expectedVersion !== undefined ? expectedVersion : (data as any).version;
+    let id: string;
+    let dormitoryId: string;
+    let changes: Record<string, any>;
+    let expectedVersion: number;
+    let actorUserId: string | undefined;
+
+    if (typeof arg1 === 'object') {
+      id = arg1.buildingId;
+      dormitoryId = arg1.dormitoryId;
+      changes = arg1.changes;
+      expectedVersion = arg1.expectedVersion;
+      actorUserId = arg1.actorUserId;
+    } else {
+      id = arg1;
+      dormitoryId = arg2!;
+      const data = arg3 || {};
+      const { expectedVersion: expVer, version: clientVer, ...cleanChanges } = data;
+      expectedVersion = expVer !== undefined ? expVer : clientVer;
+      changes = cleanChanges;
+      actorUserId = arg4;
+    }
+
+    if (expectedVersion === undefined || typeof expectedVersion !== 'number') {
+      const err = new Error('ต้องระบุ expectedVersion สำหรับการแก้ไขข้อมูลอาคาร');
+      (err as any).code = 'VALIDATION_ERROR';
+      (err as any).statusCode = 400;
+      throw err;
+    }
 
     const { getPrismaClient } = await import('../db/prisma.js');
     const runInTx = async (tx: any) => {
@@ -119,7 +162,7 @@ export class BuildingService {
         throw err;
       }
 
-      if (targetVersion !== undefined && existing.version !== targetVersion) {
+      if (existing.version !== expectedVersion) {
         const err = new Error('ข้อมูลอาคารถูกแก้ไขโดยผู้อื่น กรุณาโหลดข้อมูลใหม่');
         (err as any).code = 'VERSION_CONFLICT';
         (err as any).statusCode = 409;
@@ -169,7 +212,7 @@ export class BuildingService {
       }
 
       const updateRes = await tx.building.updateMany({
-        where: { id, dormitoryId, deletedAt: null, version: targetVersion ?? existing.version },
+        where: { id, dormitoryId, deletedAt: null, version: expectedVersion },
         data: {
           ...changes,
           version: { increment: 1 },
@@ -223,19 +266,34 @@ export class BuildingService {
   }
 
   public async archiveBuilding(
-    id: string,
-    dormitoryId: string,
-    expectedVersionOrUser?: number | string,
-    actorUserId?: string,
+    arg1: string | ArchiveBuildingCommand,
+    arg2?: string,
+    arg3?: number | string,
+    arg4?: string,
     txClient?: any
   ) {
-    let targetVersion: number | undefined = undefined;
-    let effectiveUserId: string | undefined = actorUserId;
+    let id: string;
+    let dormitoryId: string;
+    let expectedVersion: number;
+    let actorUserId: string | undefined;
 
-    if (typeof expectedVersionOrUser === 'number') {
-      targetVersion = expectedVersionOrUser;
-    } else if (typeof expectedVersionOrUser === 'string') {
-      effectiveUserId = expectedVersionOrUser;
+    if (typeof arg1 === 'object') {
+      id = arg1.buildingId;
+      dormitoryId = arg1.dormitoryId;
+      expectedVersion = arg1.expectedVersion;
+      actorUserId = arg1.actorUserId;
+    } else {
+      id = arg1;
+      dormitoryId = arg2!;
+      if (typeof arg3 === 'number') {
+        expectedVersion = arg3;
+        actorUserId = arg4;
+      } else {
+        const err = new Error('ต้องระบุ expectedVersion สำหรับการจัดเก็บอาคาร');
+        (err as any).code = 'VALIDATION_ERROR';
+        (err as any).statusCode = 400;
+        throw err;
+      }
     }
 
     const { getPrismaClient } = await import('../db/prisma.js');
@@ -250,7 +308,7 @@ export class BuildingService {
         throw err;
       }
 
-      if (targetVersion !== undefined && existing.version !== targetVersion) {
+      if (existing.version !== expectedVersion) {
         const err = new Error('ข้อมูลอาคารถูกแก้ไขโดยผู้อื่น กรุณาโหลดข้อมูลใหม่');
         (err as any).code = 'VERSION_CONFLICT';
         (err as any).statusCode = 409;
@@ -269,7 +327,7 @@ export class BuildingService {
       }
 
       const updateRes = await tx.building.updateMany({
-        where: { id, dormitoryId, deletedAt: null, version: targetVersion ?? existing.version },
+        where: { id, dormitoryId, deletedAt: null, version: expectedVersion },
         data: {
           deletedAt: new Date(),
           version: { increment: 1 },
@@ -290,7 +348,7 @@ export class BuildingService {
       await tx.auditLog.create({
         data: {
           dormitoryId,
-          actorUserId: effectiveUserId || null,
+          actorUserId: actorUserId || null,
           entityType: 'BUILDING',
           entityId: id,
           action: 'BUILDING_ARCHIVED',
@@ -309,9 +367,9 @@ export class BuildingService {
     const prisma = getPrismaClient();
     const result = await prisma.$transaction(runInTx);
 
-    if (this.auditService && effectiveUserId && result) {
+    if (this.auditService && actorUserId && result) {
       await this.auditService.log({
-        userId: effectiveUserId,
+        userId: actorUserId,
         action: 'BUILDING_ARCHIVED',
         source: 'property',
         reason: `Archived building ${result.name}`,

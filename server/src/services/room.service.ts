@@ -15,6 +15,23 @@ export interface RoomFilterQuery {
   pageSize?: number;
 }
 
+export interface UpdateRoomCommand {
+  roomId: string;
+  dormitoryId: string;
+  changes: Record<string, any>;
+  expectedVersion: number;
+  actorUserId?: string;
+  requestId?: string;
+}
+
+export interface ArchiveRoomCommand {
+  roomId: string;
+  dormitoryId: string;
+  expectedVersion: number;
+  actorUserId?: string;
+  requestId?: string;
+}
+
 export class RoomService {
   private contractRepo: IContractRepository;
   private auditService?: AuditService;
@@ -150,12 +167,6 @@ export class RoomService {
 
       await subscriptionEntitlementService.assertRoomCreationAllowed(dormitoryId, new Date(), tx);
 
-      const roomPayload = {
-        ...data,
-        normalizedRoomNumber,
-        version: 1,
-      };
-
       const created = await tx.room.create({
         data: {
           dormitoryId,
@@ -206,7 +217,7 @@ export class RoomService {
       const created = await prisma.$transaction(runInTx);
 
       if (this.auditService && userId) {
-        this.auditService.logSecurityEvent({
+        await this.auditService.logSecurityEvent({
           userId,
           dormitoryId,
           action: 'ROOM_CREATED',
@@ -228,14 +239,40 @@ export class RoomService {
     }
   }
 
-  public async updateRoom(id: string, dataOrDormId: any, dormIdOrData?: any, userId?: string, txClient?: any) {
-    let targetDormId: string = typeof dormIdOrData === 'string' ? dormIdOrData : (typeof dataOrDormId === 'string' ? dataOrDormId : id);
-    let targetData: any = typeof dataOrDormId === 'object' ? dataOrDormId : (typeof dormIdOrData === 'object' ? dormIdOrData : dataOrDormId);
+  public async updateRoom(
+    arg1: string | UpdateRoomCommand,
+    arg2?: any,
+    arg3?: any,
+    arg4?: string,
+    txClient?: any
+  ) {
+    let id: string;
+    let targetDormId: string;
+    let changes: Record<string, any>;
+    let expectedVersion: number;
+    let userId: string | undefined;
+
+    if (typeof arg1 === 'object') {
+      id = arg1.roomId;
+      targetDormId = arg1.dormitoryId;
+      changes = arg1.changes;
+      expectedVersion = arg1.expectedVersion;
+      userId = arg1.actorUserId;
+    } else {
+      id = arg1;
+      targetDormId = typeof arg3 === 'string' ? arg3 : (typeof arg2 === 'string' ? arg2 : id);
+      const dataObj = typeof arg2 === 'object' ? arg2 : (typeof arg3 === 'object' ? arg3 : arg2) || {};
+      const { expectedVersion: expVer, version: clientVer, ...cleanChanges } = dataObj;
+      expectedVersion = expVer !== undefined ? expVer : clientVer;
+      changes = cleanChanges;
+      userId = arg4;
+    }
+
+    if (expectedVersion === undefined || typeof expectedVersion !== 'number') {
+      throw new AppError('ต้องระบุ expectedVersion สำหรับการแก้ไขข้อมูลห้องพัก', 400, 'VALIDATION_ERROR');
+    }
 
     await subscriptionEntitlementService.assertDormitoryWritable(targetDormId);
-
-    const { expectedVersion, version: clientVer, ...changes } = targetData;
-    const targetVersion = expectedVersion !== undefined ? expectedVersion : clientVer;
 
     const { getPrismaClient } = await import('../db/prisma.js');
 
@@ -248,9 +285,9 @@ export class RoomService {
         throw new AppError('ไม่พบข้อมูลห้องพัก', 404, 'ROOM_NOT_FOUND');
       }
 
-      if (targetVersion !== undefined && existing.version !== targetVersion) {
+      if (existing.version !== expectedVersion) {
         const err: any = new AppError('ข้อมูลห้องพักถูกแก้ไขโดยผู้อื่น กรุณาโหลดข้อมูลใหม่', 409, 'VERSION_CONFLICT');
-        (err as any).currentVersion = existing.version;
+        err.currentVersion = existing.version;
         throw err;
       }
 
@@ -283,7 +320,7 @@ export class RoomService {
       }
 
       const updateRes = await tx.room.updateMany({
-        where: { id, dormitoryId: targetDormId, deletedAt: null, version: targetVersion ?? existing.version },
+        where: { id, dormitoryId: targetDormId, deletedAt: null, version: expectedVersion },
         data: {
           ...changes,
           normalizedRoomNumber,
@@ -324,7 +361,7 @@ export class RoomService {
       const updated = await prisma.$transaction(runInTx);
 
       if (this.auditService && userId) {
-        this.auditService.logSecurityEvent({
+        await this.auditService.logSecurityEvent({
           userId,
           dormitoryId: targetDormId,
           action: 'ROOM_UPDATED',
@@ -347,20 +384,31 @@ export class RoomService {
   }
 
   public async archiveRoom(
-    id: string,
-    dormitoryId: string,
-    expectedVersionOrUser?: number | string,
-    userId?: string,
+    arg1: string | ArchiveRoomCommand,
+    arg2?: string,
+    arg3?: number | string,
+    arg4?: string,
     txClient?: any
   ) {
-    let targetDormId = typeof dormitoryId === 'string' ? dormitoryId : (typeof userId === 'string' ? userId : id);
-    let targetVersion: number | undefined = undefined;
-    let effectiveUserId: string | undefined = userId;
+    let id: string;
+    let targetDormId: string;
+    let expectedVersion: number;
+    let effectiveUserId: string | undefined;
 
-    if (typeof expectedVersionOrUser === 'number') {
-      targetVersion = expectedVersionOrUser;
-    } else if (typeof expectedVersionOrUser === 'string') {
-      effectiveUserId = expectedVersionOrUser;
+    if (typeof arg1 === 'object') {
+      id = arg1.roomId;
+      targetDormId = arg1.dormitoryId;
+      expectedVersion = arg1.expectedVersion;
+      effectiveUserId = arg1.actorUserId;
+    } else {
+      id = arg1;
+      targetDormId = typeof arg2 === 'string' ? arg2 : id;
+      if (typeof arg3 === 'number') {
+        expectedVersion = arg3;
+        effectiveUserId = arg4;
+      } else {
+        throw new AppError('ต้องระบุ expectedVersion สำหรับการจัดเก็บห้องพัก', 400, 'VALIDATION_ERROR');
+      }
     }
 
     await subscriptionEntitlementService.assertDormitoryWritable(targetDormId);
@@ -375,7 +423,7 @@ export class RoomService {
         throw new AppError('ไม่พบข้อมูลห้องพัก', 404, 'ROOM_NOT_FOUND');
       }
 
-      if (targetVersion !== undefined && existing.version !== targetVersion) {
+      if (existing.version !== expectedVersion) {
         const err: any = new AppError('ข้อมูลห้องพักถูกแก้ไขโดยผู้อื่น กรุณาโหลดข้อมูลใหม่', 409, 'VERSION_CONFLICT');
         err.currentVersion = existing.version;
         throw err;
@@ -394,7 +442,7 @@ export class RoomService {
       }
 
       const updateRes = await tx.room.updateMany({
-        where: { id, dormitoryId: targetDormId, deletedAt: null, version: targetVersion ?? existing.version },
+        where: { id, dormitoryId: targetDormId, deletedAt: null, version: expectedVersion },
         data: {
           deletedAt: new Date(),
           version: { increment: 1 },
@@ -433,7 +481,7 @@ export class RoomService {
     const archived = await prisma.$transaction(runInTx);
 
     if (this.auditService && effectiveUserId) {
-      this.auditService.logSecurityEvent({
+      await this.auditService.logSecurityEvent({
         userId: effectiveUserId,
         dormitoryId: targetDormId,
         action: 'ROOM_ARCHIVED',
