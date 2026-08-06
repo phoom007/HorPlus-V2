@@ -20,6 +20,29 @@ export function valuesEquivalent(val1: any, val2: any): boolean {
   return str1.trim() === str2.trim();
 }
 
+export function pickChangedFields(
+  currentRecord: Record<string, any> | null | undefined,
+  proposedChanges: Record<string, any> | null | undefined
+): { changedFields: string[]; changedValues: Record<string, any> } {
+  const changedFields: string[] = [];
+  const changedValues: Record<string, any> = {};
+
+  if (!currentRecord || !proposedChanges) {
+    return { changedFields, changedValues };
+  }
+
+  for (const [key, newValue] of Object.entries(proposedChanges)) {
+    if (newValue === undefined) continue;
+    const oldValue = (currentRecord as any)[key];
+    if (!valuesEquivalent(oldValue, newValue)) {
+      changedFields.push(key);
+      changedValues[key] = newValue;
+    }
+  }
+
+  return { changedFields, changedValues };
+}
+
 export interface EffectiveValueResult<T> {
   value: T;
   source: 'DORMITORY' | 'BUILDING' | 'ROOM';
@@ -379,6 +402,50 @@ export class DefaultsService {
       }
     }
 
+    let propDiff = { changedFields: [] as string[], changedValues: {} as Record<string, any> };
+    let billDiff = { changedFields: [] as string[], changedValues: {} as Record<string, any> };
+    let bldDiff = { changedFields: [] as string[], changedValues: {} as Record<string, any> };
+
+    const dormProp = scope === 'DORMITORY' ? await prisma.dormitoryPropertyDefaults.findUnique({ where: { dormitoryId } }) : null;
+    const dormBill = scope === 'DORMITORY' ? await prisma.dormitoryBillingSettings.findUnique({ where: { dormitoryId } }) : null;
+    const currentBld = scope === 'BUILDING' && scopeId ? await prisma.building.findFirst({ where: { id: scopeId, dormitoryId } }) : null;
+
+    if (scope === 'DORMITORY') {
+      if (payload.changes.property) {
+        propDiff = pickChangedFields(dormProp, payload.changes.property);
+      }
+      if (payload.changes.billing) {
+        billDiff = pickChangedFields(dormBill, payload.changes.billing);
+      }
+    } else if (scope === 'BUILDING' && currentBld) {
+      bldDiff = pickChangedFields(currentBld, payload.changes);
+    }
+
+    const isScopeNoOp = scope === 'DORMITORY'
+      ? (propDiff.changedFields.length === 0 && billDiff.changedFields.length === 0)
+      : (bldDiff.changedFields.length === 0);
+
+    const scopeUpdates = {
+      property: {
+        updated: propDiff.changedFields.length > 0,
+        changedFields: propDiff.changedFields,
+        oldVersion: dormProp?.version,
+        newVersion: propDiff.changedFields.length > 0 ? (dormProp?.version || 1) + 1 : dormProp?.version,
+      },
+      billing: {
+        updated: billDiff.changedFields.length > 0,
+        changedFields: billDiff.changedFields,
+        oldVersion: dormBill?.version,
+        newVersion: billDiff.changedFields.length > 0 ? (dormBill?.version || 1) + 1 : dormBill?.version,
+      },
+      building: {
+        updated: scope === 'BUILDING' && bldDiff.changedFields.length > 0,
+        changedFields: scope === 'BUILDING' ? bldDiff.changedFields : [],
+        oldVersion: currentBld?.version,
+        newVersion: scope === 'BUILDING' && bldDiff.changedFields.length > 0 ? (currentBld?.version || 1) + 1 : currentBld?.version,
+      },
+    };
+
     for (const room of rooms) {
       if (eligibleRoomIds.has(room.id)) {
         continue;
@@ -393,6 +460,8 @@ export class DefaultsService {
     return {
       scope,
       scopeId: scopeId || null,
+      noOp: isScopeNoOp,
+      scopeUpdates,
       expectedVersions: scope === 'DORMITORY' ? expectedVersions : undefined,
       expectedVersion: scope === 'BUILDING' ? expectedVersion : undefined,
       candidateRoomCount,
@@ -450,13 +519,28 @@ export class DefaultsService {
         }
       }
 
-      let updatedProperty: any = null;
-      let updatedBilling: any = null;
+      const propDiff = pickChangedFields(currentProp, payload.property?.changes);
+      const billDiff = pickChangedFields(currentBill, payload.billing?.changes);
 
-      if (payload.property && currentProp) {
+      const hasPropChange = propDiff.changedFields.length > 0;
+      const hasBillChange = billDiff.changedFields.length > 0;
+
+      if (!hasPropChange && !hasBillChange) {
+        return {
+          property: currentProp,
+          billing: currentBill,
+          auditLogId: null,
+          noOp: true,
+        };
+      }
+
+      let updatedProperty: any = currentProp;
+      let updatedBilling: any = currentBill;
+
+      if (hasPropChange && payload.property && currentProp) {
         const updateRes = await tx.dormitoryPropertyDefaults.updateMany({
           where: { dormitoryId, version: payload.property.expectedVersion },
-          data: { ...payload.property.changes, version: { increment: 1 } },
+          data: { ...propDiff.changedValues, version: { increment: 1 } },
         });
         if (updateRes.count === 0) {
           const freshProp = await tx.dormitoryPropertyDefaults.findUnique({ where: { dormitoryId } });
@@ -465,14 +549,12 @@ export class DefaultsService {
           throw err;
         }
         updatedProperty = await tx.dormitoryPropertyDefaults.findUnique({ where: { dormitoryId } });
-      } else if (currentProp) {
-        updatedProperty = currentProp;
       }
 
-      if (payload.billing && currentBill) {
+      if (hasBillChange && payload.billing && currentBill) {
         const updateRes = await tx.dormitoryBillingSettings.updateMany({
           where: { dormitoryId, version: payload.billing.expectedVersion },
-          data: { ...payload.billing.changes, version: { increment: 1 } },
+          data: { ...billDiff.changedValues, version: { increment: 1 } },
         });
         if (updateRes.count === 0) {
           const freshBill = await tx.dormitoryBillingSettings.findUnique({ where: { dormitoryId } });
@@ -481,8 +563,17 @@ export class DefaultsService {
           throw err;
         }
         updatedBilling = await tx.dormitoryBillingSettings.findUnique({ where: { dormitoryId } });
-      } else if (currentBill) {
-        updatedBilling = currentBill;
+      }
+
+      const beforeValues: Record<string, any> = {};
+      const afterValues: Record<string, any> = {};
+      if (hasPropChange) {
+        beforeValues.property = currentProp ? { ...currentProp } : null;
+        afterValues.property = updatedProperty ? { ...updatedProperty } : null;
+      }
+      if (hasBillChange) {
+        beforeValues.billing = currentBill ? { ...currentBill } : null;
+        afterValues.billing = updatedBilling ? { ...updatedBilling } : null;
       }
 
       const auditLog = await tx.auditLog.create({
@@ -492,14 +583,8 @@ export class DefaultsService {
           entityType: 'DORMITORY_DEFAULTS',
           entityId: dormitoryId,
           action: 'UPDATE_DORMITORY_DEFAULTS',
-          beforeValues: {
-            property: currentProp ? { ...currentProp } : null,
-            billing: currentBill ? { ...currentBill } : null,
-          },
-          afterValues: {
-            property: updatedProperty ? { ...updatedProperty } : null,
-            billing: updatedBilling ? { ...updatedBilling } : null,
-          },
+          beforeValues,
+          afterValues,
           reason: `Updated dormitory defaults (property expected: ${payload.property?.expectedVersion ?? 'N/A'}, billing expected: ${payload.billing?.expectedVersion ?? 'N/A'})`,
           requestId: requestId || null,
         },
@@ -509,6 +594,7 @@ export class DefaultsService {
         property: updatedProperty,
         billing: updatedBilling,
         auditLogId: auditLog.id,
+        noOp: false,
       };
     });
   }
@@ -654,16 +740,44 @@ export class DefaultsService {
       // Compute authoritative PRE-MUTATION preview inside transaction BEFORE updating DB
       const preview = await this.previewDefaultPropagation(dormitoryId, payload, tx);
 
-      if (preview.eligibleFieldChangeCount === 0) {
-        const curProp = await tx.dormitoryPropertyDefaults.findUnique({ where: { dormitoryId } });
-        const curBill = await tx.dormitoryBillingSettings.findUnique({ where: { dormitoryId } });
-        const curBld = scopeId ? await tx.building.findFirst({ where: { id: scopeId, dormitoryId } }) : null;
+      const propDiff = scope === 'DORMITORY' && changes.property ? pickChangedFields(beforeProperty, changes.property) : { changedFields: [], changedValues: {} };
+      const billDiff = scope === 'DORMITORY' && changes.billing ? pickChangedFields(beforeBilling, changes.billing) : { changedFields: [], changedValues: {} };
+      const bldDiff = scope === 'BUILDING' ? pickChangedFields(beforeBuilding, changes) : { changedFields: [], changedValues: {} };
+
+      const isScopeNoOp = scope === 'DORMITORY'
+        ? (propDiff.changedFields.length === 0 && billDiff.changedFields.length === 0)
+        : (bldDiff.changedFields.length === 0);
+
+      if (isScopeNoOp) {
+        const curProp = scope === 'DORMITORY' ? (beforeProperty || await tx.dormitoryPropertyDefaults.findUnique({ where: { dormitoryId } })) : null;
+        const curBill = scope === 'DORMITORY' ? (beforeBilling || await tx.dormitoryBillingSettings.findUnique({ where: { dormitoryId } })) : null;
+        const curBld = scope === 'BUILDING' && scopeId ? (beforeBuilding || await tx.building.findFirst({ where: { id: scopeId, dormitoryId } })) : null;
 
         const noOpPayload = {
           success: true,
           noOp: true,
           scope,
           scopeId: scopeId || null,
+          scopeUpdates: {
+            property: {
+              updated: false,
+              changedFields: [],
+              oldVersion: curProp?.version,
+              newVersion: curProp?.version,
+            },
+            billing: {
+              updated: false,
+              changedFields: [],
+              oldVersion: curBill?.version,
+              newVersion: curBill?.version,
+            },
+            building: {
+              updated: false,
+              changedFields: [],
+              oldVersion: curBld?.version,
+              newVersion: curBld?.version,
+            },
+          },
           appliedRoomCount: 0,
           appliedFieldChangeCount: 0,
           skippedRoomCount: preview.skippedRoomCount,
@@ -718,12 +832,12 @@ export class DefaultsService {
         return noOpPayload;
       }
 
-      // Perform guarded updates after pre-mutation preview is captured
+      // Perform guarded updates ONLY for models that have effective scope changes
       if (scope === 'DORMITORY') {
-        if (changes.property && expectedVersions?.property) {
+        if (propDiff.changedFields.length > 0 && expectedVersions?.property) {
           const updateRes = await tx.dormitoryPropertyDefaults.updateMany({
             where: { dormitoryId, version: expectedVersions.property },
-            data: { ...changes.property, version: { increment: 1 } },
+            data: { ...propDiff.changedValues, version: { increment: 1 } },
           });
 
           if (updateRes.count === 0) {
@@ -734,12 +848,14 @@ export class DefaultsService {
           }
 
           afterProperty = await tx.dormitoryPropertyDefaults.findUnique({ where: { dormitoryId } });
+        } else {
+          afterProperty = beforeProperty;
         }
 
-        if (changes.billing && expectedVersions?.billing) {
+        if (billDiff.changedFields.length > 0 && expectedVersions?.billing) {
           const updateRes = await tx.dormitoryBillingSettings.updateMany({
             where: { dormitoryId, version: expectedVersions.billing },
-            data: { ...changes.billing, version: { increment: 1 } },
+            data: { ...billDiff.changedValues, version: { increment: 1 } },
           });
 
           if (updateRes.count === 0) {
@@ -750,21 +866,43 @@ export class DefaultsService {
           }
 
           afterBilling = await tx.dormitoryBillingSettings.findUnique({ where: { dormitoryId } });
+        } else {
+          afterBilling = beforeBilling;
         }
       } else if (scope === 'BUILDING' && scopeId) {
-        const updateRes = await tx.building.updateMany({
-          where: { id: scopeId, dormitoryId, version: expectedVersion ?? beforeBuilding.version },
-          data: { ...changes, version: { increment: 1 } },
-        });
+        if (bldDiff.changedFields.length > 0) {
+          const updateRes = await tx.building.updateMany({
+            where: { id: scopeId, dormitoryId, version: expectedVersion ?? beforeBuilding.version },
+            data: { ...bldDiff.changedValues, version: { increment: 1 } },
+          });
 
-        if (updateRes.count === 0) {
-          const safeCurrent = await tx.building.findFirst({ where: { id: scopeId, dormitoryId } });
-          const err: any = new AppError('ข้อมูลอาคารถูกแก้ไขโดยผู้อื่น กรุณาโหลดข้อมูลใหม่', 409, 'VERSION_CONFLICT');
-          err.currentVersion = safeCurrent?.version || 1;
-          throw err;
+          if (updateRes.count === 0) {
+            const safeCurrent = await tx.building.findFirst({ where: { id: scopeId, dormitoryId } });
+            const err: any = new AppError('ข้อมูลอาคารถูกแก้ไขโดยผู้อื่น กรุณาโหลดข้อมูลใหม่', 409, 'VERSION_CONFLICT');
+            err.currentVersion = safeCurrent?.version || 1;
+            throw err;
+          }
+
+          afterBuilding = await tx.building.findFirst({ where: { id: scopeId, dormitoryId } });
+        } else {
+          afterBuilding = beforeBuilding;
         }
+      }
 
-        afterBuilding = await tx.building.findFirst({ where: { id: scopeId, dormitoryId } });
+      const beforeValues: Record<string, any> = {};
+      const afterValues: Record<string, any> = {};
+      if (scope === 'DORMITORY') {
+        if (propDiff.changedFields.length > 0) {
+          beforeValues.property = beforeProperty;
+          afterValues.property = afterProperty;
+        }
+        if (billDiff.changedFields.length > 0) {
+          beforeValues.billing = beforeBilling;
+          afterValues.billing = afterBilling;
+        }
+      } else if (scope === 'BUILDING') {
+        beforeValues.building = beforeBuilding;
+        afterValues.building = afterBuilding;
       }
 
       const auditLog = await tx.auditLog.create({
@@ -774,8 +912,8 @@ export class DefaultsService {
           entityType: scope === 'BUILDING' ? 'BUILDING' : 'PROPERTY_DEFAULTS',
           entityId: scopeId || dormitoryId,
           action: 'BULK_DEFAULT_APPLY',
-          beforeValues: scope === 'BUILDING' ? beforeBuilding : { property: beforeProperty, billing: beforeBilling },
-          afterValues: scope === 'BUILDING' ? afterBuilding : { property: afterProperty, billing: afterBilling },
+          beforeValues,
+          afterValues,
           reason: `Applied bulk default propagation to ${scope}`,
           idempotencyKey,
           requestId: requestId || null,
@@ -784,8 +922,29 @@ export class DefaultsService {
 
       const responsePayload = {
         success: true,
+        noOp: false,
         scope,
         scopeId: scopeId || null,
+        scopeUpdates: {
+          property: {
+            updated: propDiff.changedFields.length > 0,
+            changedFields: propDiff.changedFields,
+            oldVersion: beforeProperty?.version,
+            newVersion: afterProperty?.version,
+          },
+          billing: {
+            updated: billDiff.changedFields.length > 0,
+            changedFields: billDiff.changedFields,
+            oldVersion: beforeBilling?.version,
+            newVersion: afterBilling?.version,
+          },
+          building: {
+            updated: scope === 'BUILDING' && bldDiff.changedFields.length > 0,
+            changedFields: scope === 'BUILDING' ? bldDiff.changedFields : [],
+            oldVersion: beforeBuilding?.version,
+            newVersion: afterBuilding?.version,
+          },
+        },
         appliedRoomCount: preview.eligibleRoomCount,
         appliedFieldChangeCount: preview.eligibleFieldChangeCount,
         skippedRoomCount: preview.skippedRoomCount,
