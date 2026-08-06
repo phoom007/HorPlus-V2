@@ -261,7 +261,7 @@ export class RoomService {
     await prisma.auditLog.create({
       data: {
         dormitoryId: targetDormId,
-        actorUserId: userId || 'system',
+        actorUserId: userId || null,
         entityType: 'ROOM',
         entityId: id,
         action: 'ROOM_UPDATED',
@@ -307,7 +307,7 @@ export class RoomService {
     await prisma.auditLog.create({
       data: {
         dormitoryId: targetDormId,
-        actorUserId: userId || 'system',
+        actorUserId: userId || null,
         entityType: 'ROOM',
         entityId: id,
         action: 'ROOM_ARCHIVED',

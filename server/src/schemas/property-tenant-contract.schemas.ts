@@ -134,8 +134,19 @@ export const UpdateDormitoryPropertyDefaultsSchema = z.object({
   defaultMaxOccupants: z.number().int().min(1).optional(),
   defaultRoomType: z.string().optional(),
   defaultTerms: z.string().optional().nullable(),
-  version: z.number().int().optional(),
-});
+  expectedVersion: z.number().int().optional(),
+}).strict();
+
+export const UpdateDormitoryBillingDefaultsSchema = z.object({
+  waterRate: z.union([z.number(), z.string()]).optional(),
+  electricityRate: z.union([z.number(), z.string()]).optional(),
+  commonFee: z.union([z.number(), z.string()]).optional(),
+  internetFee: z.union([z.number(), z.string()]).optional(),
+  waterBillingType: z.string().optional(),
+  electricityBillingType: z.string().optional(),
+  rentBillingType: z.string().optional(),
+  expectedVersion: z.number().int().optional(),
+}).strict();
 
 export const UpdateBuildingDefaultsSchema = z.object({
   monthlyRent: z.union([z.number(), z.string()]).optional().nullable(),
@@ -153,8 +164,48 @@ export const UpdateBuildingDefaultsSchema = z.object({
   rentBillingType: z.string().optional().nullable(),
   maximumOccupants: z.number().int().optional().nullable(),
   roomType: z.string().optional().nullable(),
-  version: z.number().int().optional(),
-});
+  expectedVersion: z.number().int().optional(),
+}).strict();
+
+export const UpdateRoomDefaultsSchema = z.object({
+  monthlyRent: z.union([z.number(), z.string()]).optional().nullable(),
+  termRent: z.union([z.number(), z.string()]).optional().nullable(),
+  dailyRent: z.union([z.number(), z.string()]).optional().nullable(),
+  depositAmount: z.union([z.number(), z.string()]).optional().nullable(),
+  advancePaymentAmount: z.union([z.number(), z.string()]).optional().nullable(),
+  waterRate: z.union([z.number(), z.string()]).optional().nullable(),
+  electricityRate: z.union([z.number(), z.string()]).optional().nullable(),
+  commonFee: z.union([z.number(), z.string()]).optional().nullable(),
+  internetFee: z.union([z.number(), z.string()]).optional().nullable(),
+  parkingFee: z.union([z.number(), z.string()]).optional().nullable(),
+  waterBillingType: z.string().optional().nullable(),
+  electricityBillingType: z.string().optional().nullable(),
+  rentBillingType: z.string().optional().nullable(),
+  maximumOccupants: z.number().int().optional().nullable(),
+  roomType: z.string().optional().nullable(),
+  expectedVersion: z.number().int().optional(),
+}).strict();
+
+export const DefaultPropagationPreviewSchema = z.object({
+  scope: z.enum(['DORMITORY', 'BUILDING']),
+  scopeId: z.string().optional(),
+  changes: z.record(z.any()).optional(),
+}).strict();
+
+export const DefaultPropagationApplySchema = z.object({
+  scope: z.enum(['DORMITORY', 'BUILDING']),
+  scopeId: z.string().optional(),
+  changes: z.record(z.any()),
+  expectedVersion: z.number().int().optional(),
+  idempotencyKey: z.string().min(1, 'ต้องระบุ Idempotency Key'),
+}).strict();
+
+export const AvailabilityQuerySchema = z.object({
+  startDate: z.string(),
+  endDate: z.string(),
+  buildingId: z.string().optional(),
+  roomId: z.string().optional(),
+}).strict();
 
 export const ALLOWED_OVERRIDE_FIELDS = [
   'monthlyRent',

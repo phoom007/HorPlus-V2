@@ -329,33 +329,113 @@ export function createPropertyRouter(
       const prisma = getPrismaClient();
 
       const { billing, property, expectedVersion } = req.body;
+      const { UpdateDormitoryPropertyDefaultsSchema, UpdateDormitoryBillingDefaultsSchema } = await import('../schemas/property-tenant-contract.schemas.js');
+
+      let parsedProp = property;
+      let parsedBill = billing;
+
+      if (property) {
+        const propParse = UpdateDormitoryPropertyDefaultsSchema.safeParse(property);
+        if (!propParse.success) {
+          return res.status(400).json({
+            error: {
+              code: 'DEFAULT_FIELD_NOT_ALLOWED',
+              message: 'ฟิลด์ข้อมูลการตั้งค่าไม่ถูกต้องหรือมีฟิลด์ที่ไม่ได้รับอนุญาต',
+              fieldErrors: propParse.error.flatten().fieldErrors,
+              requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+              timestamp: new Date().toISOString(),
+            },
+          });
+        }
+        parsedProp = propParse.data;
+      }
+
+      if (billing) {
+        const billParse = UpdateDormitoryBillingDefaultsSchema.safeParse(billing);
+        if (!billParse.success) {
+          return res.status(400).json({
+            error: {
+              code: 'DEFAULT_FIELD_NOT_ALLOWED',
+              message: 'ฟิลด์ข้อมูลการตั้งค่าบิลไม่ถูกต้องหรือมีฟิลด์ที่ไม่ได้รับอนุญาต',
+              fieldErrors: billParse.error.flatten().fieldErrors,
+              requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+              timestamp: new Date().toISOString(),
+            },
+          });
+        }
+        parsedBill = billParse.data;
+      }
 
       const result = await prisma.$transaction(async (tx: any) => {
         let updatedProperty = null;
         let updatedBilling = null;
 
-        if (property) {
+        if (parsedProp) {
+          const { expectedVersion: propExpVer, ...propFields } = parsedProp;
+          const targetVer = expectedVersion ?? propExpVer;
+
           const currentProp = await tx.dormitoryPropertyDefaults.findUnique({ where: { dormitoryId: dormId } });
-          if (expectedVersion !== undefined && currentProp && currentProp.version !== expectedVersion) {
+          if (targetVer !== undefined && currentProp && currentProp.version !== targetVer) {
             const err: any = new Error('ข้อมูลถูกแก้ไขโดยผู้อื่น กรุณาโหลดข้อมูลใหม่');
             err.code = 'VERSION_CONFLICT';
             err.statusCode = 409;
+            err.currentVersion = currentProp.version;
             throw err;
           }
 
-          updatedProperty = await tx.dormitoryPropertyDefaults.upsert({
-            where: { dormitoryId: dormId },
-            create: { dormitoryId: dormId, ...property },
-            update: { ...property, version: { increment: 1 } },
-          });
+          if (currentProp) {
+            const updateRes = await tx.dormitoryPropertyDefaults.updateMany({
+              where: { dormitoryId: dormId, version: targetVer ?? currentProp.version },
+              data: { ...propFields, version: { increment: 1 } },
+            });
+            if (updateRes.count === 0) {
+              const safeCurrent = await tx.dormitoryPropertyDefaults.findUnique({ where: { dormitoryId: dormId } });
+              const err: any = new Error('ข้อมูลถูกแก้ไขโดยผู้อื่น กรุณาโหลดข้อมูลใหม่');
+              err.code = 'VERSION_CONFLICT';
+              err.statusCode = 409;
+              err.currentVersion = safeCurrent?.version || 1;
+              throw err;
+            }
+            updatedProperty = await tx.dormitoryPropertyDefaults.findUnique({ where: { dormitoryId: dormId } });
+          } else {
+            updatedProperty = await tx.dormitoryPropertyDefaults.create({
+              data: { dormitoryId: dormId, ...propFields, version: 1 },
+            });
+          }
         }
 
-        if (billing) {
-          updatedBilling = await tx.dormitoryBillingSettings.upsert({
-            where: { dormitoryId: dormId },
-            create: { dormitoryId: dormId, ...billing },
-            update: { ...billing, version: { increment: 1 } },
-          });
+        if (parsedBill) {
+          const { expectedVersion: billExpVer, ...billFields } = parsedBill;
+          const targetVer = expectedVersion ?? billExpVer;
+
+          const currentBill = await tx.dormitoryBillingSettings.findUnique({ where: { dormitoryId: dormId } });
+          if (targetVer !== undefined && currentBill && currentBill.version !== targetVer) {
+            const err: any = new Error('ข้อมูลการคิดเงินถูกแก้ไขโดยผู้อื่น กรุณาโหลดข้อมูลใหม่');
+            err.code = 'VERSION_CONFLICT';
+            err.statusCode = 409;
+            err.currentVersion = currentBill.version;
+            throw err;
+          }
+
+          if (currentBill) {
+            const updateRes = await tx.dormitoryBillingSettings.updateMany({
+              where: { dormitoryId: dormId, version: targetVer ?? currentBill.version },
+              data: { ...billFields, version: { increment: 1 } },
+            });
+            if (updateRes.count === 0) {
+              const safeCurrent = await tx.dormitoryBillingSettings.findUnique({ where: { dormitoryId: dormId } });
+              const err: any = new Error('ข้อมูลการคิดเงินถูกแก้ไขโดยผู้อื่น กรุณาโหลดข้อมูลใหม่');
+              err.code = 'VERSION_CONFLICT';
+              err.statusCode = 409;
+              err.currentVersion = safeCurrent?.version || 1;
+              throw err;
+            }
+            updatedBilling = await tx.dormitoryBillingSettings.findUnique({ where: { dormitoryId: dormId } });
+          } else {
+            updatedBilling = await tx.dormitoryBillingSettings.create({
+              data: { dormitoryId: dormId, ...billFields, version: 1 },
+            });
+          }
         }
 
         return { billing: updatedBilling, property: updatedProperty };
@@ -371,13 +451,28 @@ export function createPropertyRouter(
   router.post('/defaults/preview', async (req: Request, res: Response) => {
     try {
       const dormId = getDormitoryId(req);
-      const { scope, scopeId } = req.body;
+      const { DefaultPropagationPreviewSchema } = await import('../schemas/property-tenant-contract.schemas.js');
+      const parsed = DefaultPropagationPreviewSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({
+          error: {
+            code: 'DEFAULT_FIELD_NOT_ALLOWED',
+            message: 'ฟิลด์ข้อมูลการพรีวิวไม่ถูกต้องหรือมีฟิลด์ที่ไม่ได้รับอนุญาต',
+            fieldErrors: parsed.error.flatten().fieldErrors,
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+
+      const { scope, scopeId, changes } = parsed.data;
       const { defaultsService } = await import('../services/defaults.service.js');
 
       const preview = await defaultsService.previewDefaultPropagation(
         dormId,
         scope || 'DORMITORY',
-        scopeId
+        scopeId,
+        changes || {}
       );
 
       res.json({ data: preview });
@@ -391,19 +486,21 @@ export function createPropertyRouter(
     if (!verifyCsrf(req, res)) return;
     try {
       const dormId = getDormitoryId(req);
-      const { scope, scopeId, changes, expectedVersion, idempotencyKey } = req.body;
-
-      if (!idempotencyKey) {
+      const { DefaultPropagationApplySchema } = await import('../schemas/property-tenant-contract.schemas.js');
+      const parsed = DefaultPropagationApplySchema.safeParse(req.body);
+      if (!parsed.success) {
         return res.status(400).json({
           error: {
-            code: 'VALIDATION_ERROR',
-            message: 'ต้องระบุ idempotencyKey สำหรับการปรับปรุงข้อมูลแบบกลุ่ม',
-            fieldErrors: null,
+            code: 'DEFAULT_FIELD_NOT_ALLOWED',
+            message: 'ข้อมูลการปรับปรุงข้อมูลแบบกลุ่มไม่ถูกต้องหรือมีฟิลด์ที่ไม่ได้รับอนุญาต',
+            fieldErrors: parsed.error.flatten().fieldErrors,
             requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
             timestamp: new Date().toISOString(),
           },
         });
       }
+
+      const { scope, scopeId, changes, expectedVersion, idempotencyKey } = parsed.data;
 
       const { defaultsService } = await import('../services/defaults.service.js');
       const result = await defaultsService.applyDefaultPropagation(
@@ -491,7 +588,21 @@ export function createPropertyRouter(
     if (!verifyCsrf(req, res)) return;
     try {
       const dormId = getDormitoryId(req);
-      const updated = await buildingService.updateBuilding(req.params.id, dormId, req.body, req.auth?.userId);
+      const { UpdateBuildingDefaultsSchema } = await import('../schemas/property-tenant-contract.schemas.js');
+      const parsed = UpdateBuildingDefaultsSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({
+          error: {
+            code: 'DEFAULT_FIELD_NOT_ALLOWED',
+            message: 'ฟิลด์ข้อมูลการตั้งค่าอาคารไม่ถูกต้องหรือมีฟิลด์ที่ไม่ได้รับอนุญาต',
+            fieldErrors: parsed.error.flatten().fieldErrors,
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+
+      const updated = await buildingService.updateBuilding(req.params.id, dormId, parsed.data as any, req.auth?.userId);
       if (!updated) {
         return res.status(404).json({ error: { code: 'BUILDING_NOT_FOUND', message: 'ไม่พบข้อมูลอาคาร' } });
       }
@@ -551,7 +662,21 @@ export function createPropertyRouter(
     if (!verifyCsrf(req, res)) return;
     try {
       const dormId = getDormitoryId(req);
-      const updated = await roomService.updateRoom(req.params.id, req.body, dormId, req.auth?.userId);
+      const { UpdateRoomDefaultsSchema } = await import('../schemas/property-tenant-contract.schemas.js');
+      const parsed = UpdateRoomDefaultsSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({
+          error: {
+            code: 'DEFAULT_FIELD_NOT_ALLOWED',
+            message: 'ฟิลด์ข้อมูลการตั้งค่าห้องพักไม่ถูกต้องหรือมีฟิลด์ที่ไม่ได้รับอนุญาต',
+            fieldErrors: parsed.error.flatten().fieldErrors,
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+
+      const updated = await roomService.updateRoom(req.params.id, parsed.data, dormId, req.auth?.userId);
       if (!updated) {
         return res.status(404).json({ error: { code: 'ROOM_NOT_FOUND', message: 'ไม่พบข้อมูลห้องพัก' } });
       }

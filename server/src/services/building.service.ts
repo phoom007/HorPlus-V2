@@ -118,7 +118,7 @@ export class BuildingService {
       await prisma.auditLog.create({
         data: {
           dormitoryId,
-          actorUserId: actorUserId || 'system',
+          actorUserId: actorUserId || null,
           entityType: 'BUILDING',
           entityId: id,
           action: 'BUILDING_UPDATED',
@@ -162,7 +162,7 @@ export class BuildingService {
       await prisma.auditLog.create({
         data: {
           dormitoryId,
-          actorUserId: actorUserId || 'system',
+          actorUserId: actorUserId || null,
           entityType: 'BUILDING',
           entityId: id,
           action: 'BUILDING_ARCHIVED',
