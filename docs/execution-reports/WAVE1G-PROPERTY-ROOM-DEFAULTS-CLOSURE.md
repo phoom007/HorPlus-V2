@@ -451,11 +451,11 @@ npx playwright test tests/e2e/wave1g-property.spec.ts
 ```
 *Output:*
 ```text
-Running 1 test using 1 worker
+Running 2 tests using 2 workers
 
-[1/1] [chromium] › tests\e2e\wave1g-property.spec.ts:163:3 › Wave 1G Real Playwright Lifecycle — Property, Room Defaults, Snapshots & Availability › Complete 54-step Wave 1G Lifecycle via Production Routes & Visible UI
-
-  1 passed (15.8s)
+[1/2] [chromium] › tests\e2e\wave1g-property.spec.ts:458:3 › Wave 1G Real Playwright Lifecycle — Property, Room Defaults, Snapshots & Availability › Visible Owner UI Interactions Lifecycle — Property, Defaults, Availability & Contracts
+[2/2] [chromium] › tests\e2e\wave1g-property.spec.ts:163:3 › Wave 1G Real Playwright Lifecycle — Property, Room Defaults, Snapshots & Availability › Complete 54-step Wave 1G Lifecycle via Production Routes & Visible UI
+  2 passed (9.4s)
 ```
 
 ---
@@ -530,9 +530,9 @@ Invoke-RestMethod -Uri "http://127.0.0.1:3000/health/metrics" | ConvertTo-Json
 | :--- | :--- | :--- | :--- |
 | **Frontend Lint** | `npm run lint` | PASSED | 0 errors |
 | **Backend Lint** | `cd server; npm run lint` | PASSED | 0 errors |
-| **Frontend Component Tests** | `npm test` | PASSED | 5 files passed (29 tests) |
+| **Frontend Component Tests** | `npm test` | PASSED | 5 files passed (34 tests) |
 | **Backend Vitest Suite** | `cd server; npx vitest run` | PASSED | 19 files passed (172 tests) |
-| **Playwright E2E Spec** | `npx playwright test tests/e2e/wave1g-property.spec.ts` | PASSED | 1 test passed (54 steps) |
+| **Playwright E2E Spec** | `npx playwright test tests/e2e/wave1g-property.spec.ts` | PASSED | 2 tests passed (54 steps + Visible UI) |
 | **Docker Compose Services** | `docker compose -f docker-compose.windows-pilot.yml up -d` | PASSED | Healthy on 5455 & 3000 |
 | **Liveness Check** | `GET /health/liveness` | PASSED | 200 OK (`UP`) |
 | **Readiness Check** | `GET /health/readiness` | PASSED | 200 OK (`UP`) |

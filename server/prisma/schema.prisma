@@ -396,7 +396,7 @@ model Room {
   occupancies       Occupancy[]
   moveOutRequests   TenantMoveOutRequest[]
 
-  @@unique([dormitoryId, normalizedRoomNumber], name: "dormitory_normalized_room_number_unique")
+  @@unique([dormitoryId, normalizedRoomNumber], map: "dormitory_normalized_room_number_unique")
   @@map("rooms")
 }
 

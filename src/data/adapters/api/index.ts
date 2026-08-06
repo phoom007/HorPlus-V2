@@ -706,6 +706,24 @@ export class ApiPropertyAdapter implements PropertyDataSource {
     }
   }
 
+  async updateBuildingIdentity(buildingId: string, changes: { name?: string; code?: string; floorCount?: number; description?: string; displayOrder?: number; numberingPattern?: string }, expectedVersion: number): Promise<DataResult<Building>> {
+    try {
+      const data = await httpRequest<Building>('PUT', `/properties/buildings/${buildingId}`, { ...changes, expectedVersion });
+      return { success: true, data };
+    } catch (err: any) {
+      return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message } };
+    }
+  }
+
+  async archiveBuilding(buildingId: string, expectedVersion: number): Promise<DataResult<boolean>> {
+    try {
+      await httpRequest<any>('DELETE', `/properties/buildings/${buildingId}`, { expectedVersion });
+      return { success: true, data: true };
+    } catch (err: any) {
+      return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message } };
+    }
+  }
+
   async clearBuildingOverride(buildingId: string, field: string, expectedVersion: number): Promise<DataResult<Building>> {
     try {
       const data = await httpRequest<Building>('DELETE', `/properties/buildings/${buildingId}/defaults/${field}`, { expectedVersion });
@@ -719,6 +737,24 @@ export class ApiPropertyAdapter implements PropertyDataSource {
     try {
       const data = await httpRequest<Room>('PUT', `/properties/rooms/${roomId}/defaults`, { ...changes, expectedVersion });
       return { success: true, data };
+    } catch (err: any) {
+      return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message } };
+    }
+  }
+
+  async updateRoomIdentity(roomId: string, changes: { roomNumber?: string; buildingId?: string; floor?: number; roomType?: string; rentCycle?: string; status?: string; maximumOccupants?: number; notes?: string }, expectedVersion: number): Promise<DataResult<Room>> {
+    try {
+      const data = await httpRequest<Room>('PUT', `/properties/rooms/${roomId}`, { ...changes, expectedVersion });
+      return { success: true, data };
+    } catch (err: any) {
+      return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message } };
+    }
+  }
+
+  async archiveRoom(roomId: string, expectedVersion: number): Promise<DataResult<boolean>> {
+    try {
+      await httpRequest<any>('DELETE', `/properties/rooms/${roomId}`, { expectedVersion });
+      return { success: true, data: true };
     } catch (err: any) {
       return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message } };
     }

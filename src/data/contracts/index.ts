@@ -158,8 +158,12 @@ export interface PropertyDataSource {
     billing?: { changes: Record<string, any>; expectedVersion: number };
   }): Promise<DataResult<any>>;
   setBuildingDefaults(buildingId: string, changes: Record<string, any>, expectedVersion: number): Promise<DataResult<Building>>;
+  updateBuildingIdentity(buildingId: string, changes: { name?: string; code?: string; floorCount?: number; description?: string; displayOrder?: number; numberingPattern?: string }, expectedVersion: number): Promise<DataResult<Building>>;
+  archiveBuilding(buildingId: string, expectedVersion: number): Promise<DataResult<boolean>>;
   clearBuildingOverride(buildingId: string, field: string, expectedVersion: number): Promise<DataResult<Building>>;
   setRoomDefaults(roomId: string, changes: Record<string, any>, expectedVersion: number): Promise<DataResult<Room>>;
+  updateRoomIdentity(roomId: string, changes: { roomNumber?: string; buildingId?: string; floor?: number; roomType?: string; rentCycle?: string; status?: string; maximumOccupants?: number; notes?: string }, expectedVersion: number): Promise<DataResult<Room>>;
+  archiveRoom(roomId: string, expectedVersion: number): Promise<DataResult<boolean>>;
   clearRoomOverride(roomId: string, field: string, expectedVersion: number): Promise<DataResult<Room>>;
   previewPropagation(payload: { scope: 'DORMITORY' | 'BUILDING'; scopeId?: string; changes: Record<string, any> }): Promise<DataResult<any>>;
   applyPropagation(payload: { scope: 'DORMITORY' | 'BUILDING'; scopeId?: string; changes: Record<string, any>; expectedVersion: number; idempotencyKey: string }): Promise<DataResult<any>>;

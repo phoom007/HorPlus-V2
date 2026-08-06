@@ -67,7 +67,7 @@ export default defineConfig({
       command: 'npm run dev',
       cwd: './server',
       url: 'http://127.0.0.1:3001/health/liveness',
-      reuseExistingServer: false,
+      reuseExistingServer: !process.env.CI,
       timeout: 45000,
       stdout: 'pipe',
       env: {
@@ -78,7 +78,7 @@ export default defineConfig({
     {
       command: 'npm run dev',
       url: 'http://127.0.0.1:5173',
-      reuseExistingServer: false,
+      reuseExistingServer: !process.env.CI,
       timeout: 45000,
     },
   ],

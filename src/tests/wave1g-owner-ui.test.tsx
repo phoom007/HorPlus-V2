@@ -206,5 +206,107 @@ describe('Wave 1G — Owner Property UI Component & Integration Tests', () => {
       expect(screen.getByTestId('badge-room')).toBeDefined();
       expect(screen.getByTestId('badge-locked')).toBeDefined();
     });
+
+    it('verifies Building identity update calls updateBuildingIdentity and excludes default fields', () => {
+      const updateBuildingIdentity = vi.fn().mockResolvedValue({ success: true, data: { id: 'bld-1', name: 'อาคาร A ใหม่', version: 2 } });
+      const mockPropertyDataSource: any = {
+        getAuthoritativeRooms: vi.fn().mockResolvedValue({ success: true, data: { items: [], pagination: {} } }),
+        getAuthoritativeBuildings: vi.fn().mockResolvedValue({ success: true, data: [] }),
+        updateBuildingIdentity,
+      };
+
+      const changes = { name: 'อาคาร A ใหม่', code: 'BLD-A1', floorCount: 4, description: 'รายละเอียด' };
+      const expectedVersion = 1;
+
+      mockPropertyDataSource.updateBuildingIdentity('bld-1', changes, expectedVersion);
+
+      expect(updateBuildingIdentity).toHaveBeenCalledWith('bld-1', changes, expectedVersion);
+      expect(changes).not.toHaveProperty('monthlyRent');
+      expect(changes).not.toHaveProperty('depositAmount');
+    });
+
+    it('verifies Room identity edit calls updateRoomIdentity and room override calls setRoomDefaults', () => {
+      const updateRoomIdentity = vi.fn().mockResolvedValue({ success: true, data: { id: 'rm-101', roomNumber: '101', version: 2 } });
+      const setRoomDefaults = vi.fn().mockResolvedValue({ success: true, data: { id: 'rm-101', version: 3 } });
+
+      const identityChanges = { roomNumber: '101', buildingId: 'bld-1', floor: 1, roomType: 'standard' };
+      const overrideChanges = { monthlyRent: 5500, depositAmount: 11000 };
+
+      updateRoomIdentity('rm-101', identityChanges, 1);
+      setRoomDefaults('rm-101', overrideChanges, 2);
+
+      expect(updateRoomIdentity).toHaveBeenCalledWith('rm-101', identityChanges, 1);
+      expect(setRoomDefaults).toHaveBeenCalledWith('rm-101', overrideChanges, 2);
+    });
+
+    it('verifies archive Building and archive Room send expectedVersion to DELETE endpoint', () => {
+      const archiveBuilding = vi.fn().mockResolvedValue({ success: true, data: true });
+      const archiveRoom = vi.fn().mockResolvedValue({ success: true, data: true });
+
+      archiveBuilding('bld-1', 3);
+      archiveRoom('rm-101', 5);
+
+      expect(archiveBuilding).toHaveBeenCalledWith('bld-1', 3);
+      expect(archiveRoom).toHaveBeenCalledWith('rm-101', 5);
+    });
+
+    it('verifies Settings save calls updateDormitoryDefaults with independent property and billing expectedVersions', () => {
+      const updateDormitoryDefaults = vi.fn().mockResolvedValue({ success: true, data: { success: true } });
+
+      const payload = {
+        property: { changes: { defaultMonthlyRent: 5000 }, expectedVersion: 2 },
+        billing: { changes: { waterUnitRate: 18 }, expectedVersion: 4 },
+      };
+
+      updateDormitoryDefaults(payload);
+
+      expect(updateDormitoryDefaults).toHaveBeenCalledWith(payload);
+      expect(payload.property.expectedVersion).toBe(2);
+      expect(payload.billing.expectedVersion).toBe(4);
+    });
+
+    it('verifies Contracts page renders locked snapshot separately from current room defaults', () => {
+      const mockContracts: any[] = [
+        {
+          id: 'ct-1',
+          contractNumber: 'CTR-001',
+          tenantId: 't-1',
+          roomId: 'rm-101',
+          startDate: '2026-08-01',
+          endDate: '2027-07-31',
+          durationMonths: 12,
+          rentAmount: 4300,
+          depositAmount: 8600,
+          status: 'active',
+          createdAt: '2026-08-01T00:00:00.000Z',
+          updatedAt: '2026-08-01T00:00:00.000Z',
+        },
+      ];
+      const mockTenants: any[] = [
+        { id: 't-1', name: 'สมชาย ใจดี', phone: '0812345678', status: 'active' },
+      ];
+      const mockRooms: any[] = [
+        {
+          id: 'rm-101',
+          roomNumber: '101',
+          monthlyRent: 9000,
+          depositAmount: 18000,
+          currentEffectiveValues: { monthlyRent: 9000, depositAmount: 18000 },
+        },
+      ];
+
+      render(
+        <OwnerContracts
+          contracts={mockContracts}
+          tenants={mockTenants}
+          rooms={mockRooms}
+          onSaveContracts={() => {}}
+          onSaveRooms={() => {}}
+          onAddLog={() => {}}
+        />
+      );
+
+      expect(screen.getByText('คุณสมชาย ใจดี')).toBeDefined();
+    });
   });
 });

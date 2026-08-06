@@ -206,6 +206,57 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
     }
   };
 
+  const handleSaveBackendDormitoryDefaults = async (
+    propChanges?: Record<string, any>,
+    billingChanges?: Record<string, any>
+  ) => {
+    if (!DataProvider.properties) return;
+    setSaveStatus('saving');
+    try {
+      const payload: any = {};
+      if (propChanges && Object.keys(propChanges).length > 0) {
+        payload.property = {
+          changes: propChanges,
+          expectedVersion: propertyVersion
+        };
+      }
+      if (billingChanges && Object.keys(billingChanges).length > 0) {
+        payload.billing = {
+          changes: billingChanges,
+          expectedVersion: billingVersion
+        };
+      }
+
+      if (Object.keys(payload).length === 0) {
+        setSaveStatus('idle');
+        return;
+      }
+
+      const res = await DataProvider.properties.updateDormitoryDefaults(payload);
+      if (!res.success) {
+        if (res.error?.code === 'CONFLICT' || (res.error as any)?.statusCode === 409) {
+          const conflictVer = (res.error?.details as any)?.currentVersion || Math.max(propertyVersion, billingVersion) + 1;
+          setVersionConflictState({
+            isOpen: true,
+            entityName: 'การตั้งค่าหอพัก (Dormitory Defaults)',
+            currentVersion: conflictVer,
+            onRetry: () => fetchDormitoryDefaults()
+          });
+          setSaveStatus('idle');
+          return;
+        }
+        throw new Error(res.error?.message || 'Failed to update dormitory defaults');
+      }
+
+      await fetchDormitoryDefaults();
+      setSaveStatus('saved');
+      setTimeout(() => setSaveStatus('idle'), 2000);
+    } catch (err: any) {
+      console.error('Error saving backend dormitory defaults:', err);
+      setSaveStatus('idle');
+    }
+  };
+
   const minCycle = '2026-01'; // Oldest month of system usage
 
 

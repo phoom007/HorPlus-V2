@@ -201,14 +201,14 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
 
     try {
       if (editingBuilding && DataProvider.properties) {
-        const allowedChanges = {
+        const identityChanges = {
           name: buildingName.trim(),
           code: buildingCode.trim() || undefined,
-          floorsCount: buildingFloorsCount,
+          floorCount: buildingFloorsCount,
           description: buildingDescription
         };
         const currentVer = editingBuilding.version || 1;
-        const res = await DataProvider.properties.setBuildingDefaults(editingBuilding.id, allowedChanges, currentVer);
+        const res = await DataProvider.properties.updateBuildingIdentity(editingBuilding.id, identityChanges, currentVer);
 
         if (!res.success) {
           if (res.error?.code === 'CONFLICT' || (res.error as any)?.statusCode === 409) {
@@ -220,7 +220,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
             });
             return;
           }
-          throw new Error(res.error?.message || 'Failed to update building');
+          throw new Error(res.error?.message || 'Failed to update building identity');
         }
         onAddLog('แก้ไขอาคาร', `แก้ไขอาคาร ${buildingName}`, 'Building', editingBuilding.id);
       } else {
@@ -245,8 +245,25 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
   const executeDeleteBuilding = async () => {
     if (!deleteBuildingConfirmData) return;
     try {
-      const res = await DataProvider.dormitories.deleteBuilding(deleteBuildingConfirmData.id);
-      if (!res.success) throw new Error(res.error?.message || 'Failed to delete building');
+      const currentVer = deleteBuildingConfirmData.version || 1;
+      let res: any;
+      if (DataProvider.properties) {
+        res = await DataProvider.properties.archiveBuilding(deleteBuildingConfirmData.id, currentVer);
+      } else {
+        res = await DataProvider.dormitories.deleteBuilding(deleteBuildingConfirmData.id);
+      }
+      if (!res.success) {
+        if (res.error?.code === 'CONFLICT' || (res.error as any)?.statusCode === 409) {
+          setVersionConflictState({
+            isOpen: true,
+            entityName: `อาคาร ${deleteBuildingConfirmData.name}`,
+            currentVersion: (res.error?.details as any)?.currentVersion || currentVer + 1
+          });
+          setDeleteBuildingConfirmData(null);
+          return;
+        }
+        throw new Error(res.error?.message || 'Failed to delete building');
+      }
       onAddLog('ลบอาคาร', `ลบอาคาร ${deleteBuildingConfirmData.name}`, 'Building', deleteBuildingConfirmData.id);
 
       await fetchAuthoritativeData();
@@ -355,28 +372,60 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
     let errorMessage = 'เกิดข้อผิดพลาดในการบันทึกห้อง';
     try {
       if (editingRoom && DataProvider.properties) {
-        const currentVer = editingRoom.version || 1;
-        const allowedChanges = {
+        let currentVer = (editingRoom as any).version || 1;
+        const identityChanges = {
           roomNumber: roomNumber.trim(),
           buildingId: buildingId || undefined,
+          floor: Number(floor) || 1,
+          roomType: (editingRoom as any).roomType || 'standard',
+          rentCycle,
+          status: roomStatus,
+          maximumOccupants: Number(maxOccupants),
+          notes
+        };
+
+        const overrideChanges = {
           monthlyRent: Number(monthlyRent),
           depositAmount: Number(depositAmount)
         };
 
-        const res = await DataProvider.properties.setRoomDefaults(editingRoom.id, allowedChanges, currentVer);
-        if (!res.success) {
-          if (res.error?.code === 'CONFLICT' || (res.error as any)?.statusCode === 409) {
+        // 1. Update identity fields via updateRoomIdentity
+        const identityRes = await DataProvider.properties.updateRoomIdentity(editingRoom.id, identityChanges, currentVer);
+        if (!identityRes.success) {
+          if (identityRes.error?.code === 'CONFLICT' || (identityRes.error as any)?.statusCode === 409) {
             setVersionConflictState({
               isOpen: true,
               entityName: `ห้อง ${roomNumber}`,
-              currentVersion: (res.error?.details as any)?.currentVersion || currentVer + 1,
+              currentVersion: (identityRes.error?.details as any)?.currentVersion || currentVer + 1,
               onRetry: () => handleSave(e)
             });
             return;
           }
-          if (res.error?.code === 'ROOM_LIMIT_EXCEEDED') throw new Error(res.error.message || 'จำนวนห้องพักเกินโควต้าแพ็กเกจ');
-          throw new Error(res.error?.message || errorMessage);
+          if (identityRes.error?.code === 'ROOM_LIMIT_EXCEEDED') throw new Error(identityRes.error.message || 'จำนวนห้องพักเกินโควต้าแพ็กเกจ');
+          throw new Error(identityRes.error?.message || errorMessage);
         }
+
+        if ((identityRes.data as any)?.version) {
+          currentVer = (identityRes.data as any).version;
+        } else {
+          currentVer += 1;
+        }
+
+        // 2. Update default overrides via setRoomDefaults
+        const overrideRes = await DataProvider.properties.setRoomDefaults(editingRoom.id, overrideChanges, currentVer);
+        if (!overrideRes.success) {
+          if (overrideRes.error?.code === 'CONFLICT' || (overrideRes.error as any)?.statusCode === 409) {
+            setVersionConflictState({
+              isOpen: true,
+              entityName: `ห้อง ${roomNumber}`,
+              currentVersion: (overrideRes.error?.details as any)?.currentVersion || currentVer + 1,
+              onRetry: () => handleSave(e)
+            });
+            return;
+          }
+          throw new Error(overrideRes.error?.message || errorMessage);
+        }
+
         onAddLog('แก้ไขห้องพัก', `แก้ไขรายละเอียดห้อง ${roomNumber}`, 'Room', editingRoom.id);
       } else {
         const payload = {
@@ -479,8 +528,26 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
     if (!deleteConfirmData) return;
     const { roomId, roomNum } = deleteConfirmData;
     try {
-      const res = await DataProvider.rooms.deleteRoom(roomId);
-      if (!res.success) throw new Error(res.error?.message || 'Failed to delete room');
+      const targetRoom = rooms.find(r => r.id === roomId);
+      const currentVer = targetRoom?.version || 1;
+      let res: any;
+      if (DataProvider.properties) {
+        res = await DataProvider.properties.archiveRoom(roomId, currentVer);
+      } else {
+        res = await DataProvider.rooms.deleteRoom(roomId);
+      }
+      if (!res.success) {
+        if (res.error?.code === 'CONFLICT' || (res.error as any)?.statusCode === 409) {
+          setVersionConflictState({
+            isOpen: true,
+            entityName: `ห้อง ${roomNum}`,
+            currentVersion: (res.error?.details as any)?.currentVersion || currentVer + 1
+          });
+          setDeleteConfirmData(null);
+          return;
+        }
+        throw new Error(res.error?.message || 'Failed to delete room');
+      }
 
       onAddLog('ลบห้องพัก', `ลบห้องเลขที่ ${roomNum} ออกจากระบบถาวร`, 'Room', roomId);
 
