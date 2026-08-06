@@ -150,7 +150,26 @@ export function createPropertyRouter(
     if (!verifyCsrf(req, res)) return;
     try {
       const dormId = getDormitoryId(req);
-      const building = await buildingService.archiveBuilding(req.params.id, dormId, req.auth?.userId);
+      const { ArchiveBuildingSchema } = await import('../schemas/property-tenant-contract.schemas.js');
+      const parsed = ArchiveBuildingSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'ต้องระบุ expectedVersion สำหรับการจัดเก็บอาคาร',
+            fieldErrors: parsed.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })),
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+
+      const building = await buildingService.archiveBuilding(
+        req.params.id,
+        dormId,
+        parsed.data.expectedVersion,
+        req.auth?.userId
+      );
       res.json({ data: { success: true, message: 'เก็บข้อมูลอาคารเรียบร้อยแล้ว', building } });
     } catch (err) {
       handleServiceError(res, err, req);
@@ -282,8 +301,7 @@ export function createPropertyRouter(
         });
       }
 
-      const { version, ...updatePayload } = parsed.data;
-      const room = await roomService.updateRoom(req.params.id, updatePayload, dormId, req.auth?.userId);
+      const room = await roomService.updateRoom(req.params.id, parsed.data, dormId, req.auth?.userId);
       res.json({ data: room });
     } catch (err) {
       handleServiceError(res, err, req);
@@ -295,7 +313,26 @@ export function createPropertyRouter(
     if (!verifyCsrf(req, res)) return;
     try {
       const dormId = getDormitoryId(req);
-      const room = await roomService.archiveRoom(req.params.id, dormId, req.auth?.userId);
+      const { ArchiveRoomSchema } = await import('../schemas/property-tenant-contract.schemas.js');
+      const parsed = ArchiveRoomSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'ต้องระบุ expectedVersion สำหรับการจัดเก็บห้องพัก',
+            fieldErrors: parsed.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })),
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+
+      const room = await roomService.archiveRoom(
+        req.params.id,
+        dormId,
+        parsed.data.expectedVersion,
+        req.auth?.userId
+      );
       res.json({ data: { success: true, message: 'เก็บข้อมูลห้องพักเรียบร้อยแล้ว', room } });
     } catch (err) {
       handleServiceError(res, err, req);

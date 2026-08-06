@@ -9,7 +9,9 @@ export const CreateBuildingSchema = z.object({
   numberingPattern: z.string().optional().nullable(),
 });
 
-export const UpdateBuildingSchema = CreateBuildingSchema.partial();
+export const UpdateBuildingSchema = CreateBuildingSchema.partial().extend({
+  expectedVersion: z.number().int().min(1, 'ต้องระบุ expectedVersion ที่ถูกต้อง'),
+}).strict();
 
 export const CreateRoomSchema = z.object({
   buildingId: z.string().min(1, 'ต้องระบุอาคาร'),
@@ -33,8 +35,24 @@ export const CreateRoomSchema = z.object({
 });
 
 export const UpdateRoomSchema = CreateRoomSchema.partial().extend({
-  version: z.number().int().optional(),
-});
+  expectedVersion: z.number().int().min(1, 'ต้องระบุ expectedVersion ที่ถูกต้อง'),
+}).strict();
+
+export const ArchiveBuildingSchema = z.object({
+  expectedVersion: z.number().int().min(1, 'ต้องระบุ expectedVersion ที่ถูกต้อง'),
+}).strict();
+
+export const ArchiveRoomSchema = z.object({
+  expectedVersion: z.number().int().min(1, 'ต้องระบุ expectedVersion ที่ถูกต้อง'),
+}).strict();
+
+export const ClearBuildingOverrideSchema = z.object({
+  expectedVersion: z.number().int().min(1, 'ต้องระบุ expectedVersion ที่ถูกต้อง'),
+}).strict();
+
+export const ClearRoomOverrideSchema = z.object({
+  expectedVersion: z.number().int().min(1, 'ต้องระบุ expectedVersion ที่ถูกต้อง'),
+}).strict();
 
 export const CreateTenantSchema = z.object({
   firstName: z.string().min(1, 'ชื่อจำเป็นต้องระบุ').max(255),
