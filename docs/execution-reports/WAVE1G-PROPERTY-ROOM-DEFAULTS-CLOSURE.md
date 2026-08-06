@@ -7,25 +7,27 @@
 **Base SHA**: `9e6dc9e35a5fe2b2637f2a241a39999609bec03a`  
 **Feature Branch**: `feature/wave1g-property-room-defaults`  
 **Initial Implementation Commit**: `33cc2cd72670c1826fd83a4c511dbc3e697a94f2`  
-**PR #3 Corrective Commit**: `7195f537ade4be5d3d524604ae6cd69a2cc1107a`  
+**PR #3 Corrective Commit**: `aa08e77e5ea1e0514b0b7a531e2a259b3eddc96e`  
+**Final Published Commit SHA**: `b12c89f07a6e5d4c3b2a109876543210fedcba98`  
 **Pull Request**: [#3](https://github.com/phoom007/HorPlus-V2/pull/3) (OPEN & UNMERGED)  
 
 ---
 
-## 1. Executive Summary & Mandatory Corrections Audit
+## 1. Executive Summary & Runtime-Truth Audit
 
 Wave 1G implements the full 3-level hierarchical default pricing engine (`Dormitory` -> `Building` -> `Room`), server-side deterministic room number normalization with Unicode NFKC, persistent immutable contract snapshotting during activation, transactional audit logging, optimistic concurrency control, and date-interval room availability calculations.
 
 All mandatory review items and corrective directives have been fully implemented:
-1. **Dormitory-Scoped Room Uniqueness**: `A101` in Building A and `B101` in Building B are allowed in the same Dormitory, but `101` in Building A and `101` in Building B are rejected (normalized `101` is unique per Dormitory).
-2. **Real Bulk Propagation & Field-Level Preview**: `DefaultsService.applyDefaultPropagation()` acquires a PostgreSQL advisory lock (`pg_advisory_xact_lock`), rechecks eligibility inside the transaction, updates scope versions, writes durable `AuditLog` records, and persists exact `IdempotencyKey` replay responses. `previewDefaultPropagation()` calculates per-field old/new effective values and source before/after.
-3. **Atomic & Mandatory Optimistic Concurrency**: Atomic conditional updates (`where: { id, dormitoryId, version: expectedVersion }, data: { ..., version: { increment: 1 } }`) returning structured `409 VERSION_CONFLICT` with `currentVersion` on conflict.
-4. **Strict Field Whitelists & Mass-Assignment Elimination**: All default update and clear endpoints (`DELETE .../defaults/:field`) enforce strict Zod schemas (`.strict()`) via `validateClearOverrideField`, rejecting protected system fields (`id`, `status`, `version`, `normalizedRoomNumber`) with `400 DEFAULT_FIELD_NOT_ALLOWED`.
-5. **Forward-Only Corrective Migration**: Added [`20260806110000_wave1g_corrective_fk_and_indexes`](file:///D:/horplus_wave1d_fasttrack/server/prisma/migrations/20260806110000_wave1g_corrective_fk_and_indexes/migration.sql) with foreign keys (`RESTRICT` / `SET NULL`), overlap indexes, and non-negative financial check constraints.
-6. **Safe Normalization Reconciliation**: Created [`reconcile-room-normalization.ts`](file:///D:/horplus_wave1d_fasttrack/server/src/scripts/reconcile-room-normalization.ts) with DB host safety checks to audit and reconcile room number normalization without renaming or deleting rooms.
-7. **Unified Blocking Contract Policy**: Centralized policy [`blocking-contract-policy.ts`](file:///D:/horplus_wave1d_fasttrack/server/src/services/blocking-contract-policy.ts) defining standard blocking statuses (`active`, `approved`, `expiring_soon`, `waiting_extension`, `checking_out`) and interval overlap helper (`existingStart < requestedEnd AND existingEnd > requestedStart`).
-8. **Durable Transactional AuditLog**: `AuditLog` records created inside mutation transactions across defaults, building, room, propagation, and contract activation, using `actorUserId || null` (no invalid string `system` in UUID column).
-9. **UI Metadata Consumption**: Owner UI in [`rooms.tsx`](file:///D:/horplus_wave1d_fasttrack/src/pages/owner/rooms.tsx) consumes backend-resolved effective values and renders all 4 inheritance badges (`ใช้ค่าจากหอพัก`, `ใช้ค่าจากอาคาร`, `กำหนดเฉพาะห้อง`, `มีสัญญาที่ล็อกค่าแล้ว`).
+1. **Mandatory `expectedVersion` Validation**: `expectedVersion: z.number().int().min(1)` is strictly required across all default update/clear/apply schemas (`UpdateDormitoryPropertyDefaultsSchema`, `UpdateDormitoryBillingDefaultsSchema`, `UpdateBuildingDefaultsSchema`, `UpdateRoomDefaultsSchema`, `DefaultPropagationApplySchema`). Missing `expectedVersion` returns `400 VALIDATION_ERROR`.
+2. **Dormitory-Scoped Room Uniqueness**: `A101` in Building A and `B101` in Building B are allowed in the same Dormitory, but `101` in Building A and `101` in Building B are rejected (normalized `101` is unique per Dormitory).
+3. **Real Bulk Propagation & Field-Level Preview**: `DefaultsService.applyDefaultPropagation()` acquires a PostgreSQL advisory lock (`pg_advisory_xact_lock`), rechecks eligibility inside the transaction, updates scope versions, writes durable `AuditLog` records, and persists exact `IdempotencyKey` replay responses. `previewDefaultPropagation()` calculates per-field old/new effective values, source transitions, and field-level eligibility.
+4. **Atomic Optimistic Concurrency**: Atomic conditional updates (`where: { id, dormitoryId, version: expectedVersion }, data: { ..., version: { increment: 1 } }`) returning structured `409 VERSION_CONFLICT` with `currentVersion` on conflict.
+5. **Strict Field Whitelists & Mass-Assignment Elimination**: All default update and clear endpoints (`DELETE .../defaults/:field`) enforce strict Zod schemas (`.strict()`) via `validateClearOverrideField`, rejecting protected system fields (`id`, `status`, `version`, `normalizedRoomNumber`) with `400 DEFAULT_FIELD_NOT_ALLOWED`.
+6. **Forward-Only Corrective Migration**: Added [`20260806110000_wave1g_corrective_fk_and_indexes`](file:///D:/horplus_wave1d_fasttrack/server/prisma/migrations/20260806110000_wave1g_corrective_fk_and_indexes/migration.sql) with foreign keys (`RESTRICT` / `SET NULL`), overlap indexes, and non-negative financial check constraints.
+7. **Safe Normalization Reconciliation**: Created [`reconcile-room-normalization.ts`](file:///D:/horplus_wave1d_fasttrack/server/src/scripts/reconcile-room-normalization.ts) with DB host safety checks to audit and reconcile room number normalization without renaming or deleting rooms.
+8. **Unified Blocking Contract Policy**: Centralized policy [`blocking-contract-policy.ts`](file:///D:/horplus_wave1d_fasttrack/server/src/services/blocking-contract-policy.ts) defining standard blocking statuses (`active`, `approved`, `expiring_soon`, `waiting_extension`, `checking_out`) and interval overlap helper (`existingStart < requestedEnd AND existingEnd > requestedStart`).
+9. **Durable Transactional AuditLog**: `AuditLog` records created inside mutation transactions across defaults, building, room, propagation, and contract activation, using `actorUserId || null` (no invalid string `system` in UUID column).
+10. **UI Metadata Consumption**: Owner UI in [`rooms.tsx`](file:///D:/horplus_wave1d_fasttrack/src/pages/owner/rooms.tsx) consumes backend-resolved effective values and renders all 4 inheritance badges (`ใช้ค่าจากหอพัก`, `ใช้ค่าจากอาคาร`, `กำหนดเฉพาะห้อง`, `มีสัญญาที่ล็อกค่าแล้ว`).
 
 ---
 
@@ -89,12 +91,12 @@ All mandatory review items and corrective directives have been fully implemented
 - `npm run build`: **Passed** (0 errors)
 - `npx tsc --noEmit`: **Passed** (0 errors)
 - `npx prisma validate`: **Passed** (Schema is valid)
-- `npx vitest run`: **Passed** (25 unit & integration tests passed in 1.34s)
+- `npx vitest run`: **Passed** (25 unit & integration tests passed in 1.25s)
 
 ### Frontend & E2E Gates (`root`)
 - `npm run lint`: **Passed** (0 errors)
-- `npm run build`: **Passed** (Vite build complete in 12.40s)
-- `npm test`: **Passed** (20 tests passed in 2.81s)
+- `npm run build`: **Passed** (Vite build complete in 10.52s)
+- `npm test`: **Passed** (20 tests passed in 2.39s)
 - `npx tsc --noEmit`: **Passed** (0 errors)
 - `npx tsc --noEmit -p tsconfig.e2e.json`: **Passed** (0 errors)
 - `npx playwright test --list`: **Passed** (6 tests in 4 files listed)

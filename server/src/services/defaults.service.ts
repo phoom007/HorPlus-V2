@@ -248,10 +248,14 @@ export class DefaultsService {
 
     const fieldEffects: Array<{
       field: string;
+      roomId: string;
+      roomNumber: string;
       oldEffectiveValue: any;
       newEffectiveValue: any;
       sourceBefore: string;
       sourceAfter: string;
+      eligible: boolean;
+      skipReason?: string;
     }> = [];
 
     for (const room of rooms) {
@@ -260,34 +264,61 @@ export class DefaultsService {
         continue;
       }
 
-      if (room.contracts && room.contracts.length > 0) {
+      const hasProtectedContract = room.contracts && room.contracts.length > 0;
+      if (hasProtectedContract) {
         skippedProtectedContractCount++;
-        continue;
       }
 
-      // Check if room has explicit overrides on key financial fields
-      const hasOverride =
-        room.monthlyRent !== null ||
-        room.depositAmount !== null ||
-        room.waterRate !== null ||
-        room.electricityRate !== null;
+      // Resolve effective values for current room state
+      const effectiveBefore = await this.resolveEffectiveRoomDefaults(
+        dormitoryId,
+        room.buildingId,
+        room.id,
+        prisma
+      );
 
-      if (hasOverride) {
-        skippedOverrideCount++;
-      } else {
-        eligibleCount++;
+      for (const [key, value] of Object.entries(proposedChanges)) {
+        // Map property schema field name to room property name if applicable
+        const fieldName = key.startsWith('default')
+          ? key.replace(/^default/, '').charAt(0).toLowerCase() + key.replace(/^default/, '').slice(1)
+          : key;
+
+        const beforeResult = (effectiveBefore as any)[fieldName] || { value: null, source: 'DORMITORY' };
+        const oldVal = beforeResult.value;
+        const sourceBefore = beforeResult.source;
+
+        // Field-level override check: Has the room set an explicit override for this exact field?
+        const isFieldOverriddenAtRoom = (room as any)[fieldName] !== undefined && (room as any)[fieldName] !== null;
+
+        let eligible = true;
+        let skipReason: string | undefined = undefined;
+
+        if (hasProtectedContract) {
+          eligible = false;
+          skipReason = 'PROTECTED_CONTRACT';
+        } else if (isFieldOverriddenAtRoom) {
+          eligible = false;
+          skipReason = 'EXPLICIT_ROOM_OVERRIDE';
+        }
+
+        if (eligible) {
+          eligibleCount++;
+        } else if (skipReason === 'EXPLICIT_ROOM_OVERRIDE') {
+          skippedOverrideCount++;
+        }
+
+        fieldEffects.push({
+          field: key,
+          roomId: room.id,
+          roomNumber: room.roomNumber,
+          oldEffectiveValue: oldVal,
+          newEffectiveValue: eligible ? value : oldVal,
+          sourceBefore,
+          sourceAfter: eligible ? scope : sourceBefore,
+          eligible,
+          skipReason,
+        });
       }
-    }
-
-    // Calculate per-field proposed changes if proposedChanges supplied
-    for (const [key, value] of Object.entries(proposedChanges)) {
-      fieldEffects.push({
-        field: key,
-        oldEffectiveValue: null,
-        newEffectiveValue: value,
-        sourceBefore: scope,
-        sourceAfter: scope,
-      });
     }
 
     return {
@@ -325,7 +356,7 @@ export class DefaultsService {
       return '{' + keys.map((k) => `${JSON.stringify(k)}:${canonicalizeJson(obj[k])}`).join(',') + '}';
     };
 
-    const requestHash = canonicalizeJson({ dormitoryId, scope, scopeId, changes });
+    const requestHash = canonicalizeJson({ dormitoryId, scope, scopeId, changes, expectedVersion });
 
     // 1. Idempotency Check using IdempotencyKey model
     const existingKey = await prisma.idempotencyKey.findFirst({

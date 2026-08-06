@@ -134,7 +134,7 @@ export const UpdateDormitoryPropertyDefaultsSchema = z.object({
   defaultMaxOccupants: z.number().int().min(1).optional(),
   defaultRoomType: z.string().optional(),
   defaultTerms: z.string().optional().nullable(),
-  expectedVersion: z.number().int().optional(),
+  expectedVersion: z.number().int().min(1, 'ต้องระบุ expectedVersion ที่ถูกต้อง'),
 }).strict();
 
 export const UpdateDormitoryBillingDefaultsSchema = z.object({
@@ -145,7 +145,7 @@ export const UpdateDormitoryBillingDefaultsSchema = z.object({
   waterBillingType: z.string().optional(),
   electricityBillingType: z.string().optional(),
   rentBillingType: z.string().optional(),
-  expectedVersion: z.number().int().optional(),
+  expectedVersion: z.number().int().min(1, 'ต้องระบุ expectedVersion ที่ถูกต้อง'),
 }).strict();
 
 export const UpdateBuildingDefaultsSchema = z.object({
@@ -164,7 +164,7 @@ export const UpdateBuildingDefaultsSchema = z.object({
   rentBillingType: z.string().optional().nullable(),
   maximumOccupants: z.number().int().optional().nullable(),
   roomType: z.string().optional().nullable(),
-  expectedVersion: z.number().int().optional(),
+  expectedVersion: z.number().int().min(1, 'ต้องระบุ expectedVersion ที่ถูกต้อง'),
 }).strict();
 
 export const UpdateRoomDefaultsSchema = z.object({
@@ -183,7 +183,7 @@ export const UpdateRoomDefaultsSchema = z.object({
   rentBillingType: z.string().optional().nullable(),
   maximumOccupants: z.number().int().optional().nullable(),
   roomType: z.string().optional().nullable(),
-  expectedVersion: z.number().int().optional(),
+  expectedVersion: z.number().int().min(1, 'ต้องระบุ expectedVersion ที่ถูกต้อง'),
 }).strict();
 
 export const DefaultPropagationPreviewSchema = z.object({
@@ -196,7 +196,7 @@ export const DefaultPropagationApplySchema = z.object({
   scope: z.enum(['DORMITORY', 'BUILDING']),
   scopeId: z.string().optional(),
   changes: z.record(z.any()),
-  expectedVersion: z.number().int().optional(),
+  expectedVersion: z.number().int().min(1, 'ต้องระบุ expectedVersion ที่ถูกต้อง'),
   idempotencyKey: z.string().min(1, 'ต้องระบุ Idempotency Key'),
 }).strict();
 

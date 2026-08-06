@@ -254,7 +254,7 @@ test.describe('Wave 1G Playwright Lifecycle Test — Property, Room Defaults & S
     // 9. Test Propagation preview
     const prevRes = await page.request.post('http://127.0.0.1:3000/api/v1/properties/defaults/preview', {
       headers: { 'x-dormitory-id': dormId },
-      data: { scope: 'DORMITORY', proposedChanges: { defaultMonthlyRent: 4200 } },
+      data: { scope: 'DORMITORY', changes: { defaultMonthlyRent: 4200 } },
     });
     expect(prevRes.status()).toBe(200);
 
@@ -268,6 +268,7 @@ test.describe('Wave 1G Playwright Lifecycle Test — Property, Room Defaults & S
       data: {
         scope: 'DORMITORY',
         changes: { defaultMonthlyRent: 4200 },
+        expectedVersion: 1,
         idempotencyKey: applyIdemKey,
       },
     });
@@ -282,6 +283,7 @@ test.describe('Wave 1G Playwright Lifecycle Test — Property, Room Defaults & S
       data: {
         scope: 'DORMITORY',
         changes: { defaultMonthlyRent: 4200 },
+        expectedVersion: 1,
         idempotencyKey: applyIdemKey,
       },
     });
@@ -296,6 +298,7 @@ test.describe('Wave 1G Playwright Lifecycle Test — Property, Room Defaults & S
       data: {
         scope: 'DORMITORY',
         changes: { defaultMonthlyRent: 9999 },
+        expectedVersion: 1,
         idempotencyKey: applyIdemKey,
       },
     });
