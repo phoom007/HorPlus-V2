@@ -18,6 +18,7 @@ export const CreateRoomSchema = z.object({
   roomNumber: z.string().min(1, 'เลขห้องจำเป็นต้องระบุ').max(100),
   floor: z.number().int().min(1, 'ชั้นต้องมากกว่า 0').default(1),
   roomType: z.string().default('standard'),
+  status: z.enum(['vacant', 'occupied', 'reserved', 'maintenance']).default('vacant'),
   rentCycle: z.enum(['monthly', 'term', 'daily']).default('monthly'),
   monthlyRent: z.string().regex(/^\d+(\.\d{1,2})?$/, 'จำนวนเงินไม่ถูกต้อง').default('0.00'),
   termRent: z.string().regex(/^\d+(\.\d{1,2})?$/).optional().nullable(),

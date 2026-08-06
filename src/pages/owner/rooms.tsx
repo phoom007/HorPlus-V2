@@ -157,14 +157,17 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
       if (DataProvider.properties) {
         const roomsRes = await DataProvider.properties.getAuthoritativeRooms();
         if (roomsRes.success && roomsRes.data) {
-          const fetchedItems = Array.isArray(roomsRes.data) ? roomsRes.data : roomsRes.data.items || [];
+          const rawData = roomsRes.data as any;
+          const fetchedItems = Array.isArray(rawData) ? rawData : (rawData.items || rawData.data || []);
           if (fetchedItems.length > 0) {
             onSaveRooms(fetchedItems);
           }
         }
         const bldRes = await DataProvider.properties.getAuthoritativeBuildings();
         if (bldRes.success && bldRes.data && onSaveBuildings) {
-          onSaveBuildings(bldRes.data);
+          const rawBld = bldRes.data as any;
+          const fetchedBld = Array.isArray(rawBld) ? rawBld : (rawBld.data || rawBld.items || []);
+          onSaveBuildings(fetchedBld);
         }
       }
     } catch (err) {

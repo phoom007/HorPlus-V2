@@ -3,20 +3,26 @@ import { AlertTriangle, RefreshCw, X, RotateCcw } from 'lucide-react';
 
 interface VersionConflictModalProps {
   isOpen: boolean;
+  entityName?: string;
   currentVersion?: number;
+  latestVersion?: number;
+  staleVersion?: number;
   onReload: () => void;
   onCancel: () => void;
-  onRetry: () => void;
+  onRetry?: () => void;
 }
 
 export const VersionConflictModal: React.FC<VersionConflictModalProps> = ({
   isOpen,
+  entityName,
   currentVersion,
+  latestVersion,
   onReload,
   onCancel,
   onRetry,
 }) => {
   if (!isOpen) return null;
+  const effectiveVersion = currentVersion ?? latestVersion;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" data-testid="version-conflict-modal">
@@ -24,9 +30,9 @@ export const VersionConflictModal: React.FC<VersionConflictModalProps> = ({
         <div className="flex items-center space-x-3 text-amber-600 mb-4">
           <AlertTriangle className="w-8 h-8 flex-shrink-0" />
           <div>
-            <h3 className="text-lg font-semibold text-gray-900">ตรวจพบการแก้ไขข้อมูลซ้ำซ้อน</h3>
+            <h3 className="text-lg font-semibold text-gray-900">ตรวจพบการแก้ไขข้อมูลซ้ำซ้อน {entityName ? `(${entityName})` : ''}</h3>
             <p className="text-xs text-gray-500">
-              {currentVersion ? `เวอร์ชันปัจจุบันในระบบคือ v${currentVersion}` : 'ข้อมูลถูกแก้ไขโดยผู้อื่นในขณะที่คุณกำลังทำรายการ'}
+              {effectiveVersion ? `เวอร์ชันปัจจุบันในระบบคือ v${effectiveVersion}` : 'ข้อมูลถูกแก้ไขโดยผู้อื่นในขณะที่คุณกำลังทำรายการ'}
             </p>
           </div>
         </div>
