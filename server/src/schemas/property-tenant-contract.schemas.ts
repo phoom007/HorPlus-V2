@@ -123,3 +123,48 @@ export const TerminateContractSchema = z.object({
   nextRoomStatus: z.enum(['vacant', 'maintenance']).default('vacant'),
   version: z.number().int().optional(),
 });
+
+export const UpdateDormitoryPropertyDefaultsSchema = z.object({
+  defaultMonthlyRent: z.union([z.number(), z.string()]).optional(),
+  defaultTermRent: z.union([z.number(), z.string()]).optional().nullable(),
+  defaultDailyRent: z.union([z.number(), z.string()]).optional().nullable(),
+  defaultDeposit: z.union([z.number(), z.string()]).optional(),
+  defaultAdvancePayment: z.union([z.number(), z.string()]).optional(),
+  defaultParkingFee: z.union([z.number(), z.string()]).optional(),
+  defaultMaxOccupants: z.number().int().min(1).optional(),
+  defaultRoomType: z.string().optional(),
+  defaultTerms: z.string().optional().nullable(),
+  version: z.number().int().optional(),
+});
+
+export const UpdateBuildingDefaultsSchema = z.object({
+  monthlyRent: z.union([z.number(), z.string()]).optional().nullable(),
+  termRent: z.union([z.number(), z.string()]).optional().nullable(),
+  dailyRent: z.union([z.number(), z.string()]).optional().nullable(),
+  depositAmount: z.union([z.number(), z.string()]).optional().nullable(),
+  advancePaymentAmount: z.union([z.number(), z.string()]).optional().nullable(),
+  waterRate: z.union([z.number(), z.string()]).optional().nullable(),
+  electricityRate: z.union([z.number(), z.string()]).optional().nullable(),
+  commonFee: z.union([z.number(), z.string()]).optional().nullable(),
+  internetFee: z.union([z.number(), z.string()]).optional().nullable(),
+  parkingFee: z.union([z.number(), z.string()]).optional().nullable(),
+  waterBillingType: z.string().optional().nullable(),
+  electricityBillingType: z.string().optional().nullable(),
+  rentBillingType: z.string().optional().nullable(),
+  maximumOccupants: z.number().int().optional().nullable(),
+  roomType: z.string().optional().nullable(),
+  version: z.number().int().optional(),
+});
+
+export const DefaultPropagationPreviewSchema = z.object({
+  scope: z.enum(['DORMITORY', 'BUILDING']),
+  scopeId: z.string().optional(),
+});
+
+export const DefaultPropagationApplySchema = z.object({
+  scope: z.enum(['DORMITORY', 'BUILDING']),
+  scopeId: z.string().optional(),
+  changes: z.record(z.any()),
+  idempotencyKey: z.string().min(1, 'ต้องระบุ Idempotency Key'),
+});
+

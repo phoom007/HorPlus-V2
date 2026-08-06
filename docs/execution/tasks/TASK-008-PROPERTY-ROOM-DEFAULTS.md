@@ -11,17 +11,17 @@ Prerequisite: TASK-007 PASS
 ## ขั้นตอน
 
 1. บังคับทุก room มี building
-2. unique normalized room number ต่อ building
+2. unique normalized room number ต่อ Dormitory (Dormitory-scoped uniqueness per PO Decision 5 Aug 2026)
 3. ไหล default ค่าเช่า/บริการ/มัดจำจาก Dormitory → Building → Room
 4. เปลี่ยน default มีผลเฉพาะห้องที่ไม่มี Active Contract
-5. สร้าง Contract snapshot ณ เวลาอนุมัติ
+5. สร้าง Contract snapshot ณ เวลาเปิดใช้งานสัญญา (activateContract)
 6. เพิ่ม optimistic concurrency/version check ในแก้ข้อมูล
 7. แสดง error ภาษาไทยเมื่อ duplicate/invalid
 
 ## Tests
 
-- duplicate room ใน building เดียวกัน
-- same room number ต่าง building
+- duplicate room ในหอพักเดียวกัน (ทั้งอาคารเดียวกันและต่างอาคาร) -> rejected
+- same room number ต่างหอพัก -> allowed
 - default propagation และ override
 - change default ไม่เปลี่ยน active contract
 - concurrent edit/retry

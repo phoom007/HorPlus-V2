@@ -176,12 +176,14 @@ export function createPropertyRouter(
         });
       }
 
-      const availableRooms = await roomService.getAvailableRooms(
-        dormId,
-        startDate as string,
-        endDate as string,
-        buildingId as string
-      );
+      const { availabilityService } = await import('../services/availability.service.js');
+      const availableRooms = await availabilityService.getAvailableRooms({
+        dormitoryId: dormId,
+        startDate: startDate as string,
+        endDate: endDate as string,
+        buildingId: buildingId as string,
+      });
+
       res.json({ data: availableRooms });
     } catch (err) {
       handleServiceError(res, err, req);
@@ -205,6 +207,23 @@ export function createPropertyRouter(
       };
       const result = await roomService.getRooms(dormId, query);
       res.json({ data: result.items, pagination: { total: result.total, page: query.page, pageSize: query.pageSize } });
+    } catch (err) {
+      handleServiceError(res, err, req);
+    }
+  });
+
+  // GET /api/v1/properties/rooms/:id/effective-defaults
+  router.get('/rooms/:id/effective-defaults', async (req: Request, res: Response) => {
+    try {
+      const dormId = getDormitoryId(req);
+      const room = await roomService.getRoomById(req.params.id, dormId);
+      const { defaultsService } = await import('../services/defaults.service.js');
+      const effective = await defaultsService.resolveEffectiveRoomDefaults(
+        dormId,
+        room.buildingId,
+        req.params.id
+      );
+      res.json({ data: effective });
     } catch (err) {
       handleServiceError(res, err, req);
     }
@@ -278,6 +297,154 @@ export function createPropertyRouter(
       const dormId = getDormitoryId(req);
       const room = await roomService.archiveRoom(req.params.id, dormId, req.auth?.userId);
       res.json({ data: { success: true, message: 'เก็บข้อมูลห้องพักเรียบร้อยแล้ว', room } });
+    } catch (err) {
+      handleServiceError(res, err, req);
+    }
+  });
+
+  // --- DORMITORY DEFAULTS & PROPAGATION ---
+
+  // GET /api/v1/properties/dormitory/defaults
+  router.get('/dormitory/defaults', async (req: Request, res: Response) => {
+    try {
+      const dormId = getDormitoryId(req);
+      const { getPrismaClient } = await import('../db/prisma.js');
+      const prisma = getPrismaClient();
+
+      const billing = await prisma.dormitoryBillingSettings.findUnique({ where: { dormitoryId: dormId } });
+      const property = await prisma.dormitoryPropertyDefaults.findUnique({ where: { dormitoryId: dormId } });
+
+      res.json({ data: { billing, property } });
+    } catch (err) {
+      handleServiceError(res, err, req);
+    }
+  });
+
+  // PUT /api/v1/properties/dormitory/defaults
+  router.put('/dormitory/defaults', mutationGuard('settings:write'), async (req: Request, res: Response) => {
+    if (!verifyCsrf(req, res)) return;
+    try {
+      const dormId = getDormitoryId(req);
+      const { getPrismaClient } = await import('../db/prisma.js');
+      const prisma = getPrismaClient();
+
+      const { billing, property, expectedVersion } = req.body;
+
+      const result = await prisma.$transaction(async (tx: any) => {
+        let updatedProperty = null;
+        let updatedBilling = null;
+
+        if (property) {
+          const currentProp = await tx.dormitoryPropertyDefaults.findUnique({ where: { dormitoryId: dormId } });
+          if (expectedVersion !== undefined && currentProp && currentProp.version !== expectedVersion) {
+            const err: any = new Error('ข้อมูลถูกแก้ไขโดยผู้อื่น กรุณาโหลดข้อมูลใหม่');
+            err.code = 'VERSION_CONFLICT';
+            err.statusCode = 409;
+            throw err;
+          }
+
+          updatedProperty = await tx.dormitoryPropertyDefaults.upsert({
+            where: { dormitoryId: dormId },
+            create: { dormitoryId: dormId, ...property },
+            update: { ...property, version: { increment: 1 } },
+          });
+        }
+
+        if (billing) {
+          updatedBilling = await tx.dormitoryBillingSettings.upsert({
+            where: { dormitoryId: dormId },
+            create: { dormitoryId: dormId, ...billing },
+            update: { ...billing, version: { increment: 1 } },
+          });
+        }
+
+        return { billing: updatedBilling, property: updatedProperty };
+      });
+
+      res.json({ data: result });
+    } catch (err) {
+      handleServiceError(res, err, req);
+    }
+  });
+
+  // POST /api/v1/properties/defaults/preview
+  router.post('/defaults/preview', async (req: Request, res: Response) => {
+    try {
+      const dormId = getDormitoryId(req);
+      const { scope, scopeId } = req.body;
+      const { defaultsService } = await import('../services/defaults.service.js');
+
+      const preview = await defaultsService.previewDefaultPropagation(
+        dormId,
+        scope || 'DORMITORY',
+        scopeId
+      );
+
+      res.json({ data: preview });
+    } catch (err) {
+      handleServiceError(res, err, req);
+    }
+  });
+
+  // POST /api/v1/properties/defaults/apply
+  router.post('/defaults/apply', mutationGuard('settings:write'), async (req: Request, res: Response) => {
+    if (!verifyCsrf(req, res)) return;
+    try {
+      const dormId = getDormitoryId(req);
+      const { scope, scopeId, changes, idempotencyKey } = req.body;
+
+      if (!idempotencyKey) {
+        return res.status(400).json({
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'ต้องระบุ idempotencyKey สำหรับการปรับปรุงข้อมูลแบบกลุ่ม',
+            fieldErrors: null,
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+
+      const { defaultsService } = await import('../services/defaults.service.js');
+      const result = await defaultsService.applyDefaultPropagation(
+        dormId,
+        scope || 'DORMITORY',
+        scopeId,
+        changes || {},
+        idempotencyKey,
+        req.auth?.userId || 'unknown-user'
+      );
+
+      res.json({ data: result });
+    } catch (err) {
+      handleServiceError(res, err, req);
+    }
+  });
+
+  // GET /api/v1/properties/contracts/:id/snapshot
+  router.get('/contracts/:id/snapshot', async (req: Request, res: Response) => {
+    try {
+      const dormId = getDormitoryId(req);
+      const { getPrismaClient } = await import('../db/prisma.js');
+      const prisma = getPrismaClient();
+
+      const snapshot = await prisma.contractSnapshot.findFirst({
+        where: { contractId: req.params.id, dormitoryId: dormId },
+      });
+
+      if (!snapshot) {
+        return res.status(404).json({
+          error: {
+            code: 'SNAPSHOT_NOT_FOUND',
+            message: 'ไม่พบข้อมูล Snapshot ของสัญญาที่ระบุ',
+            fieldErrors: null,
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+
+      res.json({ data: snapshot });
     } catch (err) {
       handleServiceError(res, err, req);
     }

@@ -58,8 +58,16 @@ export class BuildingService {
     return building;
   }
 
-  public async updateBuilding(id: string, dormitoryId: string, data: Partial<BuildingEntity>, actorUserId?: string) {
+  public async updateBuilding(id: string, dormitoryId: string, data: Partial<BuildingEntity> & { version?: number }, actorUserId?: string) {
     const existingBuilding = await this.getBuildingById(id, dormitoryId);
+
+    if (data.version !== undefined && (existingBuilding as any).version !== data.version) {
+      const err = new Error('ข้อมูลอาคารถูกแก้ไขโดยผู้อื่น กรุณาโหลดข้อมูลใหม่');
+      (err as any).code = 'VERSION_CONFLICT';
+      (err as any).statusCode = 409;
+      (err as any).currentVersion = (existingBuilding as any).version;
+      throw err;
+    }
 
     const fieldsProtectingParsing = [
       'code',

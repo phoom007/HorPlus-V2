@@ -591,7 +591,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                 className={`rounded-3xl border shadow-2xs hover:shadow-md transition-all duration-300 overflow-hidden flex flex-col justify-between ${statusCfg.bg} ${statusCfg.border}`}
               >
                 <div className="p-5 space-y-3.5">
-                  {/* Top Row: Room number & Status badge */}
+                  {/* Top Row: Room number, Status badge & Inheritance Source badge */}
                   <div className="flex justify-between items-start">
                     <div>
                       <h4 className="text-xl font-black text-slate-900 tracking-tight">{room.roomNumber}</h4>
@@ -599,9 +599,24 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                         {bldName} &bull; {room.derivedFloor ? `ชั้น ${room.derivedFloor}` : <span className="text-red-500">[Error]</span>}
                       </p>
                     </div>
-                    <span className={`px-2.5 py-1 rounded-full text-xs font-black border shadow-2xs ${statusCfg.badgeBg} ${statusCfg.badgeText} ${statusCfg.border}`}>
-                      {statusCfg.label}
-                    </span>
+                    <div className="flex flex-col items-end gap-1">
+                      <span className={`px-2.5 py-1 rounded-full text-xs font-black border shadow-2xs ${statusCfg.badgeBg} ${statusCfg.badgeText} ${statusCfg.border}`}>
+                        {statusCfg.label}
+                      </span>
+                      {room.currentContractId ? (
+                        <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
+                          มีสัญญาที่ล็อกค่าแล้ว
+                        </span>
+                      ) : room.monthlyRent !== undefined && room.monthlyRent !== null ? (
+                        <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300">
+                          กำหนดเฉพาะห้อง
+                        </span>
+                      ) : (
+                        <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-sky-100 text-sky-800 border border-sky-300">
+                          ใช้ค่าจากหอพัก
+                        </span>
+                      )}
+                    </div>
                   </div>
 
                   {/* Combined Tenant & Rates Container */}
