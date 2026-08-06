@@ -300,21 +300,29 @@ test.describe('Wave 1G Real Playwright Lifecycle — Property, Room Defaults, Sn
     expect(roomClearFetchRes.status()).toBe(200);
     expect((await roomClearFetchRes.json()).data.currentFieldSources.monthlyRent).toBe('DORMITORY');
 
-    // 19-21. Propagation preview
+    // 19-21. Propagation preview (Strict nested contract)
     const prevRes = await apiContext.post('/api/v1/properties/defaults/preview', {
-      data: { scope: 'DORMITORY', changes: { defaultMonthlyRent: 4300 } },
+      data: {
+        scope: 'DORMITORY',
+        changes: {
+          property: { defaultMonthlyRent: 4300 },
+        },
+      },
     });
     expect(prevRes.status()).toBe(200);
     const prevBody = await prevRes.json();
     expect(prevBody.data.candidateRoomCount).toBeGreaterThanOrEqual(2);
+    expect(prevBody.data.expectedVersions.property).toBeGreaterThanOrEqual(1);
 
     // 22-25. Apply propagation with Idempotency Key & Replay
     const applyKey = `e2e-idem-${Date.now()}`;
     const applyRes = await apiContext.post('/api/v1/properties/defaults/apply', {
       data: {
         scope: 'DORMITORY',
-        changes: { defaultMonthlyRent: 4300 },
-        expectedVersion: 1,
+        changes: {
+          property: { defaultMonthlyRent: 4300 },
+        },
+        expectedVersions: { property: 1 },
         idempotencyKey: applyKey,
       },
     });
@@ -326,8 +334,10 @@ test.describe('Wave 1G Real Playwright Lifecycle — Property, Room Defaults, Sn
     const replayRes = await apiContext.post('/api/v1/properties/defaults/apply', {
       data: {
         scope: 'DORMITORY',
-        changes: { defaultMonthlyRent: 4300 },
-        expectedVersion: 1,
+        changes: {
+          property: { defaultMonthlyRent: 4300 },
+        },
+        expectedVersions: { property: 1 },
         idempotencyKey: applyKey,
       },
     });
@@ -337,8 +347,10 @@ test.describe('Wave 1G Real Playwright Lifecycle — Property, Room Defaults, Sn
     const mismatchRes = await apiContext.post('/api/v1/properties/defaults/apply', {
       data: {
         scope: 'DORMITORY',
-        changes: { defaultMonthlyRent: 9999 },
-        expectedVersion: 1,
+        changes: {
+          property: { defaultMonthlyRent: 9999 },
+        },
+        expectedVersions: { property: 1 },
         idempotencyKey: applyKey,
       },
     });
@@ -463,8 +475,18 @@ test.describe('Wave 1G Real Playwright Lifecycle — Property, Room Defaults, Sn
   });
 
   test('Visible Owner UI Interactions Lifecycle — Property, Defaults, Availability & Contracts', async ({ page, context }) => {
-    page.on('console', msg => console.log('TEST 2 BROWSER CONSOLE:', msg.type(), msg.text()));
-    page.on('pageerror', err => console.log('TEST 2 PAGE UNHANDLED ERROR:', err));
+    const test2ConsoleErrors: string[] = [];
+    const test2PageErrors: string[] = [];
+
+    page.on('console', msg => {
+      if (msg.type() === 'error') {
+        const text = msg.text();
+        if (!text.includes('net::ERR_FAILED') && !text.includes('ERR_ABORTED') && !text.includes('net::ERR_INVALID_URL')) {
+          test2ConsoleErrors.push(text);
+        }
+      }
+    });
+    page.on('pageerror', err => test2PageErrors.push(err.message));
 
     // Restore active subscription for Test 2 UI interactions
     await prisma.dormitorySubscription.update({
@@ -520,7 +542,7 @@ test.describe('Wave 1G Real Playwright Lifecycle — Property, Room Defaults, Sn
     await clearBldBtn.click();
     await page.keyboard.press('Escape');
 
-    // 5. Navigate to Settings page & Save Dormitory Default
+    // 5. Navigate to Settings page & Save Dormitory Defaults
     await page.goto('/owner/settings');
     await page.waitForLoadState('networkidle');
 
@@ -528,6 +550,14 @@ test.describe('Wave 1G Real Playwright Lifecycle — Property, Room Defaults, Sn
     await expect(waterInput).toBeVisible({ timeout: 15000 });
     await waterInput.fill('22');
     await waterInput.blur();
+
+    const conflictModal = page.getByTestId('version-conflict-modal');
+    if (await conflictModal.isVisible()) {
+      await page.getByTestId('btn-reload-latest').click();
+      await page.waitForTimeout(500);
+      await waterInput.fill('22');
+      await waterInput.blur();
+    }
 
     // 6. Trigger Propagation Preview Modal & Confirm Apply
     const previewBtn = page.getByRole('button', { name: /แสดงตัวอย่างการส่งต่อค่า/i }).first();
@@ -539,15 +569,18 @@ test.describe('Wave 1G Real Playwright Lifecycle — Property, Room Defaults, Sn
 
     const confirmApplyBtn = page.getByTestId('btn-confirm-apply');
     await expect(confirmApplyBtn).toBeVisible({ timeout: 15000 });
-    // Dismiss any native alert dialogs that appear after apply
+
     page.on('dialog', async (dialog) => {
       await dialog.accept();
     });
 
     await confirmApplyBtn.click();
-
-    // Wait for the propagation to complete and alert to be dismissed
     await page.waitForTimeout(2000);
+
+    if (await conflictModal.isVisible()) {
+      await page.getByTestId('btn-reload-latest').click();
+      await page.waitForTimeout(500);
+    }
 
     // 7. Navigate to Contracts page via sidebar & Assert Locked Snapshot Comparison
     const contractsNavBtn = page.getByRole('button', { name: /สัญญาเช่า/i }).first();
@@ -560,5 +593,9 @@ test.describe('Wave 1G Real Playwright Lifecycle — Property, Room Defaults, Sn
     await contractCard.click();
 
     await expect(page.getByTestId('snapshot-comparison')).toBeVisible({ timeout: 15000 });
+
+    // Requirement 7: Error hygiene assertions
+    expect(test2ConsoleErrors).toEqual([]);
+    expect(test2PageErrors).toEqual([]);
   });
 });

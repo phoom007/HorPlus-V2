@@ -239,7 +239,7 @@ describe('Wave 1G — Owner Property UI Component & Integration Tests', () => {
 
       expect(updateDormitoryDefaults).toHaveBeenCalledWith({
         billing: {
-          changes: { waterUnitRate: 20 },
+          changes: { waterRate: 20 },
           expectedVersion: 4,
         },
       });
