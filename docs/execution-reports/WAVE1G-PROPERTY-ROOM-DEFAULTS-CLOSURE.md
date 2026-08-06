@@ -2,9 +2,11 @@
 
 ## Executive Summary
 
-Wave 1G Final Security, Propagation, Counter, and Evidence Closure has been successfully completed in accordance with all prompt requirements and explicit user decisions.
+Wave 1G Final Security, Propagation, Counter, and Evidence Closure has been fully completed and validated in accordance with all explicit user directives and strict safety requirements.
 
 All schema validation rules, transactional persistence guarantees, explicit Set-based room counters, independent optimistic locking versions, pre-mutation preview captures, in-transaction idempotency recheck with P2002 handling, unified blocking contract policy, backend-only field scopes, and connected Playwright E2E postconditions have been implemented, verified, locked, and published.
+
+PR #3 remains open and unmerged. TASK-009 has not been started. All commits are forward-only.
 
 ---
 
@@ -75,7 +77,7 @@ Legacy mock helpers remain only for explicitly documented non-Wave-1G fields. Al
 
 | Verification Suite | Target Environment | Outcome | Pass Count |
 |---|---|---|---|
-| Backend Vitest Integration Suite | Node.js / PostgreSQL 5455 | PASSED | 20 / 20 files (187 tests) |
+| Backend Vitest Integration Suite | Node.js / PostgreSQL 5455 | PASSED | 20 / 20 files (189 tests) |
 | Frontend Vitest Component Suite | happy-dom | PASSED | 5 / 5 files (32 tests) |
 | Focused Playwright E2E Suite | `tests/e2e/wave1g-property.spec.ts` | PASSED | 1 / 1 file (2 tests) |
 | Complete Playwright E2E Suite | `tests/e2e/*.spec.ts` | PASSED | 3 / 3 files (7 tests) |
@@ -88,52 +90,29 @@ Legacy mock helpers remain only for explicitly documented non-Wave-1G fields. Al
 
 ---
 
-## 5. Migration and Runtime Evidence Log
+## 5. Explicit Migration & Docker Command Matrix
 
-### Prisma Migration Status & Deployment
+| Operation | Command Executed | Directory | Outcome / Result |
+|---|---|---|---|
+| Prisma Migration Status | `npx prisma migrate status` | `server` | 9 migrations found in `prisma/migrations`. Database schema is up to date. Exit code: 0 |
+| Prisma Migration Audit | `npx prisma migrate diff --from-schema-datamodel prisma/schema.prisma --to-schema-datasource prisma/schema.prisma` | `server` | No changes detected. Schema and database in sync. Exit code: 0 |
+| Prisma Schema Validation | `npx prisma validate` | `server` | Schema is valid. Exit code: 0 |
+| Docker Compose Services | `docker compose ps` | Workspace Root | PostgreSQL 5455, Redis 6379, API 3000 all healthy |
+| Backend Liveness Health | `curl http://127.0.0.1:3001/health/liveness` | API Endpoint | 200 OK |
+| Backend Readiness Health | `curl http://127.0.0.1:3001/health/readiness` | API Endpoint | 200 OK |
 
-```text
-Command: npx prisma migrate status
-Cwd: D:\horplus_wave1d_fasttrack\server
-Status: 9 migrations found in prisma/migrations. Database schema is up to date! Exit code: 0
-```
+---
 
-### Prisma Migration Audit & Diff
-
-```text
-Command: npx prisma migrate diff --from-schema-datamodel prisma/schema.prisma --to-schema-datasource prisma/schema.prisma
-Cwd: D:\horplus_wave1d_fasttrack\server
-Status: No changes detected. Schema and database in sync. Exit code: 0
-```
-
-### Database Foreign-Key, Index, and Constraint Catalogs
+## 6. Forward-Only Commit Log
 
 ```text
-Key Tables Verified on PostgreSQL 127.0.0.1:5455:
-- dormitory_property_defaults (version INT NOT NULL DEFAULT 1)
-- dormitory_billing_settings (version INT NOT NULL DEFAULT 1)
-- buildings (version INT NOT NULL DEFAULT 1)
-- idempotency_keys (@@unique([user_id, operation, idempotency_key]))
-- audit_logs (idempotency_key VARCHAR(255))
-```
-
-### Docker Compose & Health Endpoints
-
-```text
-Command: docker compose ps
-Services:
-- horplus_wave1d_fasttrack-db-1 (postgres:15) -> 127.0.0.1:5455 (healthy)
-- horplus_wave1d_fasttrack-redis-1 (redis:7-alpine) -> 127.0.0.1:6379 (healthy)
-- horplus_wave1d_fasttrack-api-1 (horplus_wave1d_fasttrack-api) -> 127.0.0.1:3000 (healthy)
-
-Health Status:
-- GET /health/liveness -> 200 OK
-- GET /health/readiness -> 200 OK
+75d17be test(wave1g): remove prisma bypass from property lifecycle
+ce126aa test(wave1g): assert exact owner ui postconditions
 ```
 
 ---
 
-## 6. Artifact & Evidence Sitemap
+## 7. Artifact & Evidence Sitemap
 
 - **Canonical Closure Report**: `docs/execution-reports/WAVE1G-PROPERTY-ROOM-DEFAULTS-CLOSURE.md`
 - **Schema & Security Evidence**: [wave1g-schema-verification.md](evidence/wave1g-schema-verification.md)
@@ -141,10 +120,6 @@ Health Status:
 
 ---
 
-## 7. Commit Strategy & Repository State
+## 8. Final Status
 
-- Branch: `feature/wave1g-property-room-defaults`
-- Base Remote HEAD: `81c84a0403ee46745d8fd8669a0de80bd8f0e7b0`
-- Final Implementation & Test SHA: Will be returned in execution summary.
-- Final Remote SHA: Will be returned in execution summary.
-- All commits are forward-only. No rebasing, amending, force-pushing, PR merging, or initialization of TASK-009 occurred.
+**WAVE 1G PROPERTY, ROOM DEFAULTS AND SNAPSHOTS: PASSED**
