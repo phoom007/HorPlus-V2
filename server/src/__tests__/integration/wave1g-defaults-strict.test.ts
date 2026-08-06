@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
+import { Prisma } from '@prisma/client';
 import {
   UpdateDormitoryDefaultsRequestSchema,
   DefaultPropagationPreviewSchema,
@@ -211,11 +212,25 @@ describe('Wave 1G — Strict Defaults, Propagation & Concurrency Integration Tes
         },
       });
 
-      await prisma.building.create({
+      const bld = await prisma.building.create({
         data: {
           id: crypto.randomUUID(),
           dormitoryId: testDormId,
           name: 'Building PG 1',
+          version: 1,
+        },
+      });
+
+      await prisma.room.create({
+        data: {
+          dormitoryId: testDormId,
+          buildingId: bld.id,
+          roomNumber: '101',
+          normalizedRoomNumber: '101',
+          floor: 1,
+          roomType: 'standard',
+          status: 'vacant',
+          rentCycle: 'monthly',
           version: 1,
         },
       });
@@ -315,6 +330,43 @@ describe('Wave 1G — Strict Defaults, Propagation & Concurrency Integration Tes
       await expect(
         defaultsService.applyDefaultPropagation(testDormId, modifiedPayload, testUserId)
       ).rejects.toThrow('Idempotency key ซ้ำแต่ข้อมูลไม่ตรงกับรายการเดิม');
+    });
+
+    it('proves valuesEquivalent handles numbers, numeric strings, and Decimals canonically', async () => {
+      const { valuesEquivalent } = await import('../../services/defaults.service.js');
+      expect(valuesEquivalent(9400, '9400')).toBe(true);
+      expect(valuesEquivalent('9400.00', '9400')).toBe(true);
+      expect(valuesEquivalent(new Prisma.Decimal(9400), '9400.00')).toBe(true);
+      expect(valuesEquivalent(9200, 9400)).toBe(false);
+      expect(valuesEquivalent(null, null)).toBe(true);
+      expect(valuesEquivalent(null, 9400)).toBe(false);
+    });
+
+    it('proves no-op propagation returns noOp: true without version increment or AuditLog', async () => {
+      const propBefore = await prisma.dormitoryPropertyDefaults.findUnique({ where: { dormitoryId: testDormId } });
+      const currentVer = propBefore?.version || 3;
+      const currentRent = Number(propBefore?.defaultMonthlyRent || 4900);
+
+      const noOpRes = await defaultsService.applyDefaultPropagation(
+        testDormId,
+        {
+          scope: 'DORMITORY',
+          changes: {
+            property: { defaultMonthlyRent: currentRent },
+          },
+          expectedVersions: { property: currentVer, billing: 2 },
+          idempotencyKey: `noop-test-${Date.now()}`,
+        },
+        testUserId
+      );
+
+      expect(noOpRes.noOp).toBe(true);
+      expect(noOpRes.appliedRoomCount).toBe(0);
+      expect(noOpRes.appliedFieldChangeCount).toBe(0);
+      expect(noOpRes.auditLogId).toBeNull();
+
+      const propAfter = await prisma.dormitoryPropertyDefaults.findUnique({ where: { dormitoryId: testDormId } });
+      expect(propAfter?.version).toBe(currentVer);
     });
   });
 });

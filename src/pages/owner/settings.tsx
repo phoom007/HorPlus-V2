@@ -116,7 +116,16 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
   const [propertyMonthlyRent, setPropertyMonthlyRent] = useState<number>(4500);
   const [propertyDepositAmount, setPropertyDepositAmount] = useState<number>(9000);
 
+  const currentRates = getDormitoryRatesForCycle(dorm, selectedCycle);
+  const [localWaterUnitRate, setLocalWaterUnitRate] = useState<string | number>(currentRates.waterUnitRate);
+  const [localElectricUnitRate, setLocalElectricUnitRate] = useState<string | number>(currentRates.electricUnitRate);
+  const [localCommonFee, setLocalCommonFee] = useState<string | number>(currentRates.commonFee);
+  const [localInternetFee, setLocalInternetFee] = useState<string | number>(currentRates.internetFee);
+  const [localParkingFee, setLocalParkingFee] = useState<string | number>(currentRates.parkingFee ?? 100);
+  const [localLateFee, setLocalLateFee] = useState<string | number>(currentRates.lateFeeDaily ?? dorm.lateFeeDaily ?? 100);
+
   // Propagation Preview & Conflict state
+  const isPropagationPreviewOpeningRef = useRef(false);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
   const [previewData, setPreviewData] = useState<any>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -128,19 +137,42 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
     onRetry?: () => void;
   } | null>(null);
 
+  const [initialValues, setInitialValues] = useState<{
+    propertyMonthlyRent?: number;
+    propertyDeposit?: number;
+    waterRate?: number;
+    electricityRate?: number;
+  }>({});
+
   const fetchDormitoryDefaults = async () => {
     try {
       if (DataProvider.properties) {
         const res = await DataProvider.properties.getDormitoryDefaults();
         if (res.success && res.data) {
+          const initObj: any = {};
           if (res.data.property) {
             setPropertyVersion(res.data.property.version || 1);
-            if (res.data.property.monthlyRent !== undefined) setPropertyMonthlyRent(res.data.property.monthlyRent);
-            if (res.data.property.depositAmount !== undefined) setPropertyDepositAmount(res.data.property.depositAmount);
+            const rentVal = res.data.property.defaultMonthlyRent !== undefined ? res.data.property.defaultMonthlyRent : res.data.property.monthlyRent;
+            if (rentVal !== undefined) {
+              setPropertyMonthlyRent(rentVal);
+              initObj.propertyMonthlyRent = Number(rentVal);
+            }
+            const depVal = res.data.property.defaultDeposit !== undefined ? res.data.property.defaultDeposit : res.data.property.depositAmount;
+            if (depVal !== undefined) {
+              setPropertyDepositAmount(depVal);
+              initObj.propertyDeposit = Number(depVal);
+            }
           }
           if (res.data.billing) {
             setBillingVersion(res.data.billing.version || 1);
+            if (res.data.billing.waterRate !== undefined) {
+              initObj.waterRate = Number(res.data.billing.waterRate);
+            }
+            if (res.data.billing.electricityRate !== undefined) {
+              initObj.electricityRate = Number(res.data.billing.electricityRate);
+            }
           }
+          setInitialValues(initObj);
         }
       }
     } catch (err) {}
@@ -150,8 +182,46 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
     fetchDormitoryDefaults();
   }, []);
 
+  const getDirtyChanges = () => {
+    const prop: Record<string, number> = {};
+    const bill: Record<string, number> = {};
+
+    const curRent = Number(propertyMonthlyRent);
+    const initRent = initialValues.propertyMonthlyRent ?? Number(dorm?.settings?.defaultMonthlyRent || 0);
+    if (!isNaN(curRent) && initialValues.propertyMonthlyRent !== undefined && curRent !== initRent) {
+      prop.defaultMonthlyRent = curRent;
+    }
+
+    const curDep = Number(propertyDepositAmount);
+    const initDep = initialValues.propertyDeposit ?? Number(dorm?.settings?.defaultDeposit || 0);
+    if (!isNaN(curDep) && initialValues.propertyDeposit !== undefined && curDep !== initDep) {
+      prop.defaultDeposit = curDep;
+    }
+
+    const curWater = Number(localWaterUnitRate);
+    const initWater = initialValues.waterRate ?? Number(dorm?.billingSettings?.waterRate || 0);
+    if (!isNaN(curWater) && initialValues.waterRate !== undefined && curWater !== initWater) {
+      bill.waterRate = curWater;
+    }
+
+    const curElectric = Number(localElectricUnitRate);
+    const initElectric = initialValues.electricityRate ?? Number(dorm?.billingSettings?.electricityRate || 0);
+    if (!isNaN(curElectric) && initialValues.electricityRate !== undefined && curElectric !== initElectric) {
+      bill.electricityRate = curElectric;
+    }
+
+    const result: { property?: Record<string, number>; billing?: Record<string, number> } = {};
+    if (Object.keys(prop).length > 0) result.property = prop;
+    if (Object.keys(bill).length > 0) result.billing = bill;
+    return result;
+  };
+
+  const dirtyChanges = getDirtyChanges();
+  const hasDirtyFields = Object.keys(dirtyChanges).length > 0;
+
   const handleOpenPropagationPreview = async (changes: { property?: Record<string, any>; billing?: Record<string, any> }) => {
     if (!DataProvider.properties) return;
+    isPropagationPreviewOpeningRef.current = true;
     setPropagationChanges(changes);
     setPreviewLoading(true);
     setIsPreviewOpen(true);
@@ -171,6 +241,9 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
       setIsPreviewOpen(false);
     } finally {
       setPreviewLoading(false);
+      setTimeout(() => {
+        isPropagationPreviewOpeningRef.current = false;
+      }, 1000);
     }
   };
 
@@ -217,7 +290,7 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
     propChanges?: Record<string, any>,
     billingChanges?: Record<string, any>
   ) => {
-    if (!DataProvider.properties) return;
+    if (!DataProvider.properties || isPropagationPreviewOpeningRef.current || isPreviewOpen) return;
     setSaveStatus('saving');
     try {
       const payload: any = {};
@@ -334,15 +407,7 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
     setLocalBankAccountName(dorm.bankAccountName || dorm.promptPayName || '');
   }, [dorm.id, dorm.name, dorm.address, dorm.taxId, dorm.phone, dorm.promptPayNumber, dorm.promptPayName, dorm.bankName, dorm.bankAccountNumber, dorm.bankAccountName]);
 
-  // Resolve currently active values for inputs depending on chosen cycle
-  const currentRates = getDormitoryRatesForCycle(dorm, selectedCycle);
 
-  const [localWaterUnitRate, setLocalWaterUnitRate] = useState<string | number>(currentRates.waterUnitRate);
-  const [localElectricUnitRate, setLocalElectricUnitRate] = useState<string | number>(currentRates.electricUnitRate);
-  const [localCommonFee, setLocalCommonFee] = useState<string | number>(currentRates.commonFee);
-  const [localInternetFee, setLocalInternetFee] = useState<string | number>(currentRates.internetFee);
-  const [localParkingFee, setLocalParkingFee] = useState<string | number>(currentRates.parkingFee ?? 100);
-  const [localLateFee, setLocalLateFee] = useState<string | number>(currentRates.lateFeeDaily ?? dorm.lateFeeDaily ?? 100);
 
   useEffect(() => {
     setLocalWaterUnitRate(currentRates.waterUnitRate);
@@ -1100,17 +1165,12 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
               <div className="pt-4 border-t border-slate-100 flex justify-end">
                 <button
                   type="button"
-                  onClick={() => handleOpenPropagationPreview({
-                    property: {
-                      defaultMonthlyRent: Number(propertyMonthlyRent),
-                      defaultDeposit: Number(propertyDepositAmount)
-                    },
-                    billing: {
-                      waterRate: Number(localWaterUnitRate),
-                      electricityRate: Number(localElectricUnitRate)
-                    }
-                  })}
-                  className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs rounded-xl shadow-xs transition-all cursor-pointer flex items-center gap-2"
+                  disabled={!hasDirtyFields}
+                  onMouseDown={() => { isPropagationPreviewOpeningRef.current = true; }}
+                  onClick={() => handleOpenPropagationPreview(dirtyChanges)}
+                  className={`px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs rounded-xl shadow-xs transition-all flex items-center gap-2 ${
+                    !hasDirtyFields ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'
+                  }`}
                 >
                   <Layers className="w-4 h-4" />
                   <span>แสดงตัวอย่างการส่งต่อค่า (Preview Propagation)</span>

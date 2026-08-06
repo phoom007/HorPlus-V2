@@ -3,6 +3,23 @@ import { getPrismaClient } from '../db/prisma.js';
 import { AppError } from '../types/index.js';
 import { BLOCKING_CONTRACT_STATUSES } from './blocking-contract-policy.js';
 
+export function valuesEquivalent(val1: any, val2: any): boolean {
+  if (val1 === val2) return true;
+  if (val1 === null || val1 === undefined || val2 === null || val2 === undefined) {
+    return val1 === val2;
+  }
+  const str1 = typeof val1 === 'object' && val1 !== null && typeof val1.toString === 'function' ? val1.toString() : String(val1);
+  const str2 = typeof val2 === 'object' && val2 !== null && typeof val2.toString === 'function' ? val2.toString() : String(val2);
+  if (str1 === str2) return true;
+
+  const n1 = Number(str1);
+  const n2 = Number(str2);
+  if (!isNaN(n1) && !isNaN(n2)) {
+    return Math.abs(n1 - n2) < 0.000001;
+  }
+  return str1.trim() === str2.trim();
+}
+
 export interface EffectiveValueResult<T> {
   value: T;
   source: 'DORMITORY' | 'BUILDING' | 'ROOM';
@@ -334,6 +351,9 @@ export class DefaultsService {
         } else if (isFieldOverriddenAtRoom) {
           eligible = false;
           skipReason = 'EXPLICIT_ROOM_OVERRIDE';
+        } else if (valuesEquivalent(oldVal, value)) {
+          eligible = false;
+          skipReason = 'NO_EFFECTIVE_CHANGE';
         }
 
         if (eligible) {
@@ -633,6 +653,70 @@ export class DefaultsService {
 
       // Compute authoritative PRE-MUTATION preview inside transaction BEFORE updating DB
       const preview = await this.previewDefaultPropagation(dormitoryId, payload, tx);
+
+      if (preview.eligibleFieldChangeCount === 0) {
+        const curProp = await tx.dormitoryPropertyDefaults.findUnique({ where: { dormitoryId } });
+        const curBill = await tx.dormitoryBillingSettings.findUnique({ where: { dormitoryId } });
+        const curBld = scopeId ? await tx.building.findFirst({ where: { id: scopeId, dormitoryId } }) : null;
+
+        const noOpPayload = {
+          success: true,
+          noOp: true,
+          scope,
+          scopeId: scopeId || null,
+          appliedRoomCount: 0,
+          appliedFieldChangeCount: 0,
+          skippedRoomCount: preview.skippedRoomCount,
+          skippedFieldChangeCount: preview.skippedFieldChangeCount,
+
+          appliedRooms: 0,
+          totalCandidateRooms: preview.candidateRoomCount,
+          eligibleRooms: 0,
+
+          versions: {
+            property: curProp?.version ?? expectedVersions?.property,
+            billing: curBill?.version ?? expectedVersions?.billing,
+            building: curBld?.version ?? expectedVersion,
+          },
+          fieldEffects: preview.fieldEffects,
+          auditLogId: null,
+          appliedAt: new Date().toISOString(),
+        };
+
+        try {
+          await tx.idempotencyKey.create({
+            data: {
+              userId: actorUserId,
+              operation: 'BULK_DEFAULT_APPLY',
+              idempotencyKey,
+              requestHash,
+              status: 'completed',
+              responseStatus: 200,
+              responseBody: noOpPayload,
+              expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+            },
+          });
+        } catch (err: any) {
+          if (err?.code === 'P2002') {
+            const reloadedKey = await tx.idempotencyKey.findFirst({
+              where: {
+                userId: actorUserId,
+                operation: 'BULK_DEFAULT_APPLY',
+                idempotencyKey,
+              },
+            });
+            if (reloadedKey) {
+              if (reloadedKey.requestHash !== requestHash) {
+                throw new AppError('Idempotency key ซ้ำแต่ข้อมูลไม่ตรงกับรายการเดิม', 409, 'IDEMPOTENCY_MISMATCH');
+              }
+              return reloadedKey.responseBody;
+            }
+          }
+          throw err;
+        }
+
+        return noOpPayload;
+      }
 
       // Perform guarded updates after pre-mutation preview is captured
       if (scope === 'DORMITORY') {

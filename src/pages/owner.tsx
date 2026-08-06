@@ -960,6 +960,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
                   return (
                     <button
                       key={item.id}
+                      data-testid={`nav-item-${item.id}`}
                       onClick={() => { if (!isDisabled) handleTabChange(item.id) }}
                       title={isDisabled ? 'กรุณาลงทะเบียนหอพักให้เสร็จก่อนใช้งานเมนูนี้' : ''}
                       disabled={isDisabled}
@@ -1040,6 +1041,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
               return (
                 <button
                   key={item.id}
+                  data-testid={`nav-item-${item.id}`}
                   onClick={() => { if (!isDisabled) handleTabChange(item.id) }}
                   title={isDisabled ? 'กรุณาลงทะเบียนหอพักให้เสร็จก่อนใช้งานเมนูนี้' : ''}
                   disabled={isDisabled}
