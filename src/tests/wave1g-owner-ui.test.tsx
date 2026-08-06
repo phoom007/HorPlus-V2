@@ -5,6 +5,9 @@ import userEvent from '@testing-library/user-event';
 import { SourceBadge } from '../components/PropertyBadges';
 import { VersionConflictModal } from '../components/VersionConflictModal';
 import { PropagationPreviewModal } from '../components/PropagationPreviewModal';
+import { OwnerRooms } from '../pages/owner/rooms';
+import { OwnerSettings } from '../pages/owner/settings';
+import { OwnerContracts } from '../pages/owner/contracts';
 import { PropagationPreviewResult } from '../types';
 
 describe('Wave 1G — Owner Property UI Component & Integration Tests', () => {
@@ -162,6 +165,46 @@ describe('Wave 1G — Owner Property UI Component & Integration Tests', () => {
       };
 
       expect(formatDuplicateError('A101')).toBe('หมายเลขห้องพัก "A101" มีอยู่แล้วในหอพักนี้');
+    });
+  });
+
+  describe('5. Connected Owner Page Section Integration Tests', () => {
+    it('mounts OwnerRooms page and displays currentEffectiveValues and currentFieldSources badges', async () => {
+      const mockRooms: any[] = [
+        {
+          id: 'rm-101',
+          dormitoryId: 'dorm-1',
+          buildingId: 'bld-1',
+          roomNumber: '101',
+          normalizedRoomNumber: '101',
+          derivedFloor: 1,
+          status: 'vacant',
+          rawOverrides: { monthlyRent: 5000 },
+          currentEffectiveValues: { monthlyRent: 5000, depositAmount: 10000 },
+          currentFieldSources: { monthlyRent: 'ROOM' },
+          currentSourceVersions: { dormitory: 1, building: 1, room: 1 },
+          snapshotLocked: true,
+          version: 2,
+        },
+      ];
+      const mockBuildings: any[] = [
+        { id: 'bld-1', dormitoryId: 'dorm-1', name: 'อาคาร A', version: 1 },
+      ];
+
+      render(
+        <OwnerRooms
+          rooms={mockRooms}
+          buildings={mockBuildings}
+          onSaveRooms={() => {}}
+          onSaveBuildings={() => {}}
+          onAddLog={() => {}}
+          onNavigate={() => {}}
+        />
+      );
+
+      expect(screen.getByText('101')).toBeDefined();
+      expect(screen.getByTestId('badge-room')).toBeDefined();
+      expect(screen.getByTestId('badge-locked')).toBeDefined();
     });
   });
 });

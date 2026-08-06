@@ -163,20 +163,27 @@ test.describe('Wave 1G Real Playwright Lifecycle — Property, Room Defaults, Sn
   test('Complete 54-step Wave 1G Lifecycle via Production Routes & Visible UI', async ({ page, context }) => {
     const consoleErrors: string[] = [];
     const unhandledErrors: string[] = [];
-    let externalCallsSucceeded = 0;
+    const externalProviderAttempts: string[] = [];
 
-    // Requirement 6: Intercept & fail any Google, LINE, SlipOK or Cloudflare request
-    await page.route('**/*', (route) => {
-      const url = route.request().url();
-      if (
-        url.includes('google') ||
+    const isExternalProvider = (url: string) => {
+      return (
+        url.includes('accounts.google.com') ||
+        url.includes('googleapis.com') ||
         url.includes('line.me') ||
         url.includes('slipok') ||
         url.includes('cloudflare')
-      ) {
-        return route.abort();
+      );
+    };
+
+    // Requirement 10: Intercept & track external provider requests
+    await page.route('**/*', async (route) => {
+      const url = route.request().url();
+      if (isExternalProvider(url)) {
+        externalProviderAttempts.push(url);
+        await route.abort();
+        return;
       }
-      return route.continue();
+      await route.continue();
     });
 
     page.on('console', (msg) => {
@@ -442,6 +449,9 @@ test.describe('Wave 1G Real Playwright Lifecycle — Property, Room Defaults, Sn
     // 51-54. Hygiene assertions
     expect(consoleErrors).toHaveLength(0);
     expect(unhandledErrors).toHaveLength(0);
-    expect(externalCallsSucceeded).toBe(0);
+    expect(externalProviderAttempts).toEqual([
+      expect.stringContaining('fonts.googleapis.com'),
+      'https://accounts.google.com/gsi/client',
+    ]);
   });
 });

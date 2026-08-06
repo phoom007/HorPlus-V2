@@ -49,6 +49,7 @@ import {
 } from '../../components/GlobalComponents';
 import { Contract, Tenant, Room, Bill, BillItem, BLOCKING_CONTRACT_STATUSES } from '../../types';
 import { getDormitory } from '../../data/mockData';
+import { getDataProvider } from '../../data/dataProvider';
 
 export interface PendingContractSubmission {
   id: string;
@@ -196,8 +197,24 @@ export const OwnerContracts: React.FC<OwnerContractsProps> = ({
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [cycleFilter, setCycleFilter] = useState<'cycle' | 'all'>('cycle');
+  const DataProvider = getDataProvider();
   const [selectedContract, setSelectedContract] = useState<Contract | null>(null);
+  const [snapshotData, setSnapshotData] = useState<any>(null);
   const [isCreating, setIsCreating] = useState(false);
+
+  React.useEffect(() => {
+    if (selectedContract && DataProvider.properties) {
+      DataProvider.properties.getContractSnapshot(selectedContract.id).then(res => {
+        if (res.success && res.data) {
+          setSnapshotData(res.data);
+        } else {
+          setSnapshotData(null);
+        }
+      }).catch(() => setSnapshotData(null));
+    } else {
+      setSnapshotData(null);
+    }
+  }, [selectedContract?.id]);
 
   // Pending Contract Approvals State
   const [pendingSubmissions, setPendingSubmissions] = useState<PendingContractSubmission[]>(getPendingContractSubmissions);
@@ -1383,10 +1400,83 @@ export const OwnerContracts: React.FC<OwnerContractsProps> = ({
                     <span className="font-extrabold text-slate-900"> คุณ{getTenantName(selectedContract.tenantId, selectedContract)} (ผู้เช่า)</span> อีกฝ่ายหนึ่ง โดยมีใจความดังเงื่อนไขต่อไปนี้:
                   </p>
 
-                  <div className="bg-slate-50 p-4 border border-slate-100 rounded-2xl space-y-2.5">
-                    <p>&bull; <span className="font-bold">ห้องพักตกลงเช่า:</span> ผู้เช่าตกลงเช่าห้องพักหมายเลข <span className="font-extrabold text-blue-600">ห้อง {getRoomNum(selectedContract.roomId)}</span> ของอาคาร</p>
-                    <p>&bull; <span className="font-bold">ระยะเวลาสัญญาเช่า:</span> กำหนดเช่าอาศัย <span className="font-bold">{selectedContract.durationMonths} เดือน</span> เริ่มต้นตั้งแต่วันที่ <span className="font-bold">{formatThaiDate(selectedContract.startDate)}</span> ถึง วันที่ <span className="font-bold">{formatThaiDate(selectedContract.endDate)}</span></p>
-                    <p>&bull; <span className="font-bold">ค่าเช่าและเงินประกัน:</span> อัตราค่าบริการเช่าเดือนละ <span className="font-bold text-slate-900">{formatBaht(selectedContract.rentAmount)}</span> พร้อมกับระบุเงินประกันความเสียหายแรกเข้าจำนวน <span className="font-bold">{formatBaht(selectedContract.depositAmount)}</span></p>
+                  {/* Requirement 6: Separate ContractSnapshot vs Current Room/Default Values */}
+                  <div className="bg-slate-50 p-4 border border-slate-200 rounded-2xl space-y-3" data-testid="snapshot-comparison">
+                    <div className="flex items-center justify-between border-b border-slate-200 pb-2">
+                      <span className="font-black text-slate-900 text-xs flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+                        เปรียบเทียบค่าในสัญญาล็อก (Contract Snapshot) กับค่าห้องปัจจุบัน (Current Room Defaults)
+                      </span>
+                      <span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 rounded text-[10px] font-bold">
+                        Snapshot Locked
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4 text-xs">
+                      {/* Left: Locked Contract Snapshot Values */}
+                      <div className="bg-white p-3 rounded-xl border border-emerald-200 space-y-1.5">
+                        <div className="font-bold text-emerald-800 text-[11px] flex items-center gap-1">
+                          🔒 ค่าที่ล็อกไว้ในสัญญา (Locked Snapshot)
+                        </div>
+                        <div className="text-[10px] text-slate-400">
+                          ล็อกเมื่อ: {snapshotData?.lockedAt ? formatThaiDate(snapshotData.lockedAt.split('T')[0]) : formatThaiDate(selectedContract.startDate)}
+                        </div>
+                        <div className="space-y-1 pt-1">
+                          <div className="flex justify-between">
+                            <span className="text-slate-500">ค่าเช่าล็อก:</span>
+                            <span className="font-extrabold text-slate-900">{formatBaht(snapshotData?.rentAmount ?? selectedContract.rentAmount)}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-slate-500">เงินประกันล็อก:</span>
+                            <span className="font-extrabold text-slate-900">{formatBaht(snapshotData?.depositAmount ?? selectedContract.depositAmount)}</span>
+                          </div>
+                          {snapshotData?.waterUnitRate !== undefined && (
+                            <div className="flex justify-between">
+                              <span className="text-slate-500">ค่าน้ำล็อก:</span>
+                              <span className="font-bold text-slate-800">{snapshotData.waterUnitRate} บาท/หน่วย</span>
+                            </div>
+                          )}
+                          {snapshotData?.electricUnitRate !== undefined && (
+                            <div className="flex justify-between">
+                              <span className="text-slate-500">ค่าไฟล็อก:</span>
+                              <span className="font-bold text-slate-800">{snapshotData.electricUnitRate} บาท/หน่วย</span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Right: Current Room Effective Values */}
+                      <div className="bg-white p-3 rounded-xl border border-indigo-200 space-y-1.5">
+                        <div className="font-bold text-indigo-800 text-[11px] flex items-center gap-1">
+                          🏠 ค่าห้องปัจจุบัน (Current Room Defaults)
+                        </div>
+                        <div className="text-[10px] text-slate-400">
+                          อัปเดตล่าสุด: ปัจจุบัน
+                        </div>
+                        <div className="space-y-1 pt-1">
+                          {(() => {
+                            const room = rooms.find(r => r.id === selectedContract.roomId || r.roomNumber === selectedContract.roomId);
+                            const eff = room?.currentEffectiveValues || {};
+                            return (
+                              <>
+                                <div className="flex justify-between">
+                                  <span className="text-slate-500">ค่าเช่าปัจจุบัน:</span>
+                                  <span className="font-extrabold text-slate-900">{formatBaht(eff.monthlyRent ?? room?.monthlyRent ?? selectedContract.rentAmount)}</span>
+                                </div>
+                                <div className="flex justify-between">
+                                  <span className="text-slate-500">เงินประกันปัจจุบัน:</span>
+                                  <span className="font-extrabold text-slate-900">{formatBaht(eff.depositAmount ?? room?.depositAmount ?? selectedContract.depositAmount)}</span>
+                                </div>
+                              </>
+                            );
+                          })()}
+                        </div>
+                      </div>
+                    </div>
+
+                    <p className="text-[10px] text-slate-500 italic pt-1">
+                      * หมายเหตุ: การเปลี่ยนอัตราค่าเช่าหรือค่าบริการของห้องพักในภายหลัง จะ **ไม่มีผล** ต่อค่าในสัญญาเช่าฉบับที่ล็อกไว้นี้
+                    </p>
                   </div>
 
                   <div className="space-y-1">

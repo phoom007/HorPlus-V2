@@ -19,7 +19,8 @@ import {
   RotateCw,
   SlidersHorizontal,
   PenTool,
-  CheckCircle2
+  CheckCircle2,
+  Layers
 } from 'lucide-react';
 import {
   getDormitory,
@@ -28,7 +29,9 @@ import {
   seedDatabase
 } from '../../data/mockData';
 import { ConfirmDialog, SignaturePad } from '../../components/GlobalComponents';
-
+import { getDataProvider } from '../../data/dataProvider';
+import { PropagationPreviewModal } from '../../components/PropagationPreviewModal';
+import { VersionConflictModal } from '../../components/VersionConflictModal';
 
 import { Dormitory, CycleRates } from '../../types';
 
@@ -104,7 +107,104 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
   const [dorm, setDorm] = useState<Dormitory>(getDormitory());
   const [selectedCycle, setSelectedCycle] = useState<string>('2026-07');
   const [isCycleModalOpen, setIsCycleModalOpen] = useState(false);
-  const [tempYear, setTempYear] = useState(2026);
+  const [tempYear, setTempYear] = useState<number>(2026);
+  const DataProvider = getDataProvider();
+  const [propertyVersion, setPropertyVersion] = useState<number>(1);
+  const [billingVersion, setBillingVersion] = useState<number>(1);
+  const [propertyMonthlyRent, setPropertyMonthlyRent] = useState<number>(4500);
+  const [propertyDepositAmount, setPropertyDepositAmount] = useState<number>(9000);
+
+  // Propagation Preview & Conflict state
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
+  const [previewData, setPreviewData] = useState<any>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [propagationChanges, setPropagationChanges] = useState<Record<string, any>>({});
+  const [versionConflictState, setVersionConflictState] = useState<{
+    isOpen: boolean;
+    entityName: string;
+    currentVersion: number;
+    onRetry?: () => void;
+  } | null>(null);
+
+  const fetchDormitoryDefaults = async () => {
+    try {
+      if (DataProvider.properties) {
+        const res = await DataProvider.properties.getDormitoryDefaults();
+        if (res.success && res.data) {
+          if (res.data.property) {
+            setPropertyVersion(res.data.property.version || 1);
+            if (res.data.property.monthlyRent !== undefined) setPropertyMonthlyRent(res.data.property.monthlyRent);
+            if (res.data.property.depositAmount !== undefined) setPropertyDepositAmount(res.data.property.depositAmount);
+          }
+          if (res.data.billing) {
+            setBillingVersion(res.data.billing.version || 1);
+          }
+        }
+      }
+    } catch (err) {}
+  };
+
+  useEffect(() => {
+    fetchDormitoryDefaults();
+  }, []);
+
+  const handleOpenPropagationPreview = async (changes: Record<string, any>) => {
+    if (!DataProvider.properties) return;
+    setPropagationChanges(changes);
+    setPreviewLoading(true);
+    setIsPreviewOpen(true);
+    try {
+      const res = await DataProvider.properties.previewPropagation({
+        scope: 'DORMITORY',
+        changes
+      });
+      if (res.success && res.data) {
+        setPreviewData(res.data);
+      } else {
+        alert(res.error?.message || 'ไม่สามารถพรีวิวการส่งต่อค่าได้');
+        setIsPreviewOpen(false);
+      }
+    } catch (err: any) {
+      alert(err.message || 'เกิดข้อผิดพลาดในการพรีวิว');
+      setIsPreviewOpen(false);
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
+
+  const handleConfirmPropagation = async () => {
+    if (!DataProvider.properties) return;
+    setPreviewLoading(true);
+    try {
+      const res = await DataProvider.properties.applyPropagation({
+        scope: 'DORMITORY',
+        changes: propagationChanges,
+        expectedVersion: propertyVersion,
+        idempotencyKey: `idem-${Date.now()}`
+      });
+      if (!res.success) {
+        if (res.error?.code === 'CONFLICT' || (res.error as any)?.statusCode === 409) {
+          setVersionConflictState({
+            isOpen: true,
+            entityName: 'การส่งต่อค่าเริ่มต้น (Propagation)',
+            currentVersion: (res.error?.details as any)?.currentVersion || propertyVersion + 1
+          });
+          setIsPreviewOpen(false);
+          return;
+        }
+        throw new Error(res.error?.message || 'Failed to apply propagation');
+      }
+      onAddLog('ส่งต่อค่าเริ่มต้น', `ส่งต่อค่า ${Object.keys(propagationChanges).join(', ')} ไปยังห้องพักเรียบร้อยแล้ว`, 'Dormitory', dorm.id);
+      setIsPreviewOpen(false);
+      await fetchDormitoryDefaults();
+      onRefreshData();
+      alert('ส่งต่อค่าเริ่มต้นไปยังห้องพักเรียบร้อยแล้ว');
+    } catch (err: any) {
+      alert(err.message || 'เกิดข้อผิดพลาดในการส่งต่อค่า');
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
 
   const minCycle = '2026-01'; // Oldest month of system usage
 
@@ -904,14 +1004,51 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                 </div>
               </div>
 
+              {/* Propagation Preview Action Button (Requirement 5) */}
+              <div className="pt-4 border-t border-slate-100 flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => handleOpenPropagationPreview({
+                    monthlyRent: Number(propertyMonthlyRent),
+                    depositAmount: Number(propertyDepositAmount),
+                    waterUnitRate: Number(localWaterUnitRate),
+                    electricUnitRate: Number(localElectricUnitRate)
+                  })}
+                  className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs rounded-xl shadow-xs transition-all cursor-pointer flex items-center gap-2"
+                >
+                  <Layers className="w-4 h-4" />
+                  <span>แสดงตัวอย่างการส่งต่อค่า (Preview Propagation)</span>
+                </button>
+              </div>
+
             </div>
 
           </div>
         </div>
       </div>
 
+      <PropagationPreviewModal
+        isOpen={isPreviewOpen}
+        previewData={previewData}
+        onConfirm={handleConfirmPropagation}
+        onCancel={() => setIsPreviewOpen(false)}
+        isLoading={previewLoading}
+      />
 
-
+      {versionConflictState && (
+        <VersionConflictModal
+          isOpen={versionConflictState.isOpen}
+          entityName={versionConflictState.entityName}
+          staleVersion={versionConflictState.currentVersion - 1}
+          latestVersion={versionConflictState.currentVersion}
+          onReload={async () => {
+            await fetchDormitoryDefaults();
+            setVersionConflictState(null);
+          }}
+          onCancel={() => setVersionConflictState(null)}
+          onRetry={versionConflictState.onRetry}
+        />
+      )}
 
       <ConfirmDialog
         isOpen={isResetConfirmOpen}
