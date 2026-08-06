@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import { getPrismaClient } from '../db/prisma.js';
 import { AppError } from '../types/index.js';
+import { BLOCKING_CONTRACT_STATUSES } from './blocking-contract-policy.js';
 
 export interface EffectiveValueResult<T> {
   value: T;
@@ -266,23 +267,26 @@ export class DefaultsService {
     }
 
     let rooms: any[] = [];
-    if (scope === 'BUILDING' && scopeId) {
-      rooms = await prisma.room.findMany({
-        where: { dormitoryId, buildingId: scopeId },
-        include: { contracts: { where: { status: { in: ['active', 'approved'] } } } },
-      });
-    } else {
-      rooms = await prisma.room.findMany({
-        where: { dormitoryId },
-        include: { contracts: { where: { status: { in: ['active', 'approved'] } } } },
-      });
-    }
+    const roomWhere = scope === 'BUILDING' && scopeId
+      ? { dormitoryId, buildingId: scopeId }
+      : { dormitoryId };
 
-    const totalCandidateRooms = rooms.length;
-    let eligibleCount = 0;
-    let skippedOverrideCount = 0;
-    let skippedProtectedContractCount = 0;
-    let skippedArchivedCount = 0;
+    rooms = await prisma.room.findMany({
+      where: roomWhere,
+      include: {
+        contracts: {
+          where: {
+            status: { in: BLOCKING_CONTRACT_STATUSES as any },
+          },
+        },
+      },
+    });
+
+    const eligibleRoomIds = new Set<string>();
+    const skippedRoomIds = new Set<string>();
+
+    let eligibleFieldChangeCount = 0;
+    let skippedFieldChangeCount = 0;
 
     const fieldEffects: Array<{
       field: string;
@@ -297,15 +301,8 @@ export class DefaultsService {
     }> = [];
 
     for (const room of rooms) {
-      if (room.status === 'archived' || room.deletedAt) {
-        skippedArchivedCount++;
-        continue;
-      }
-
+      const isArchived = room.status === 'archived' || !!room.deletedAt;
       const hasProtectedContract = room.contracts && room.contracts.length > 0;
-      if (hasProtectedContract) {
-        skippedProtectedContractCount++;
-      }
 
       const effectiveBefore = await this.resolveEffectiveRoomDefaults(
         dormitoryId,
@@ -328,7 +325,10 @@ export class DefaultsService {
         let eligible = true;
         let skipReason: string | undefined = undefined;
 
-        if (hasProtectedContract) {
+        if (isArchived) {
+          eligible = false;
+          skipReason = 'ROOM_ARCHIVED';
+        } else if (hasProtectedContract) {
           eligible = false;
           skipReason = 'PROTECTED_CONTRACT';
         } else if (isFieldOverriddenAtRoom) {
@@ -337,10 +337,13 @@ export class DefaultsService {
         }
 
         if (eligible) {
-          eligibleCount++;
-        } else if (skipReason === 'EXPLICIT_ROOM_OVERRIDE') {
-          skippedOverrideCount++;
+          eligibleFieldChangeCount++;
+          eligibleRoomIds.add(room.id);
+        } else {
+          skippedFieldChangeCount++;
         }
+
+        const sourceAfter = eligible ? scope : sourceBefore;
 
         fieldEffects.push({
           field: key,
@@ -349,31 +352,38 @@ export class DefaultsService {
           oldEffectiveValue: oldVal,
           newEffectiveValue: eligible ? value : oldVal,
           sourceBefore,
-          sourceAfter: eligible ? scope : sourceBefore,
+          sourceAfter,
           eligible,
           skipReason,
         });
       }
     }
 
-    const eligibleFieldChangeCount = fieldEffects.filter((f) => f.eligible).length;
-    const skippedFieldChangeCount = fieldEffects.filter((f) => !f.eligible).length;
+    for (const room of rooms) {
+      if (eligibleRoomIds.has(room.id)) {
+        continue;
+      }
+      skippedRoomIds.add(room.id);
+    }
+
+    const candidateRoomCount = rooms.length;
+    const eligibleRoomCount = eligibleRoomIds.size;
+    const skippedRoomCount = skippedRoomIds.size;
 
     return {
       scope,
       scopeId: scopeId || null,
       expectedVersions: scope === 'DORMITORY' ? expectedVersions : undefined,
       expectedVersion: scope === 'BUILDING' ? expectedVersion : undefined,
-      candidateRoomCount: totalCandidateRooms,
-      eligibleRoomCount: eligibleCount,
+      candidateRoomCount,
+      eligibleRoomCount,
       eligibleFieldChangeCount,
-      skippedRoomCount: totalCandidateRooms - eligibleCount,
+      skippedRoomCount,
       skippedFieldChangeCount,
-      totalCandidateRooms,
-      eligibleRooms: eligibleCount,
-      skippedOverrideRooms: skippedOverrideCount,
-      skippedProtectedContractRooms: skippedProtectedContractCount,
-      skippedArchivedRooms: skippedArchivedCount,
+
+      // Backwards-compatibility aliases:
+      totalCandidateRooms: candidateRoomCount,
+      eligibleRooms: eligibleRoomCount,
       proposedChanges,
       fieldEffects,
     };
@@ -540,6 +550,26 @@ export class DefaultsService {
     const result = await prisma.$transaction(async (tx: any) => {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${dormitoryId}))`;
 
+      // Recheck idempotency key inside transaction under advisory lock
+      const inTxExistingKey = await tx.idempotencyKey.findFirst({
+        where: {
+          userId: actorUserId,
+          operation: 'BULK_DEFAULT_APPLY',
+          idempotencyKey,
+        },
+      });
+
+      if (inTxExistingKey) {
+        if (inTxExistingKey.requestHash !== requestHash) {
+          throw new AppError(
+            'Idempotency key ซ้ำแต่ข้อมูลไม่ตรงกับรายการเดิม',
+            409,
+            'IDEMPOTENCY_MISMATCH'
+          );
+        }
+        return inTxExistingKey.responseBody;
+      }
+
       let beforeProperty: any = null;
       let afterProperty: any = null;
       let beforeBilling: any = null;
@@ -564,20 +594,6 @@ export class DefaultsService {
           }
 
           beforeProperty = { ...currentDefaults };
-
-          const updateRes = await tx.dormitoryPropertyDefaults.updateMany({
-            where: { dormitoryId, version: expectedVersions.property },
-            data: { ...changes.property, version: { increment: 1 } },
-          });
-
-          if (updateRes.count === 0) {
-            const safeCurrent = await tx.dormitoryPropertyDefaults.findUnique({ where: { dormitoryId } });
-            const err: any = new AppError('ข้อมูลถูกแก้ไขโดยผู้อื่น กรุณาโหลดข้อมูลใหม่', 409, 'VERSION_CONFLICT');
-            err.currentVersion = safeCurrent?.version || 1;
-            throw err;
-          }
-
-          afterProperty = await tx.dormitoryPropertyDefaults.findUnique({ where: { dormitoryId } });
         }
 
         if (changes.billing && expectedVersions?.billing) {
@@ -596,20 +612,6 @@ export class DefaultsService {
           }
 
           beforeBilling = { ...currentBilling };
-
-          const updateRes = await tx.dormitoryBillingSettings.updateMany({
-            where: { dormitoryId, version: expectedVersions.billing },
-            data: { ...changes.billing, version: { increment: 1 } },
-          });
-
-          if (updateRes.count === 0) {
-            const safeCurrent = await tx.dormitoryBillingSettings.findUnique({ where: { dormitoryId } });
-            const err: any = new AppError('ข้อมูลการคิดเงินถูกแก้ไขโดยผู้อื่น กรุณาโหลดข้อมูลใหม่', 409, 'VERSION_CONFLICT');
-            err.currentVersion = safeCurrent?.version || 1;
-            throw err;
-          }
-
-          afterBilling = await tx.dormitoryBillingSettings.findUnique({ where: { dormitoryId } });
         }
       } else if (scope === 'BUILDING' && scopeId) {
         const currentBld = await tx.building.findFirst({
@@ -627,9 +629,47 @@ export class DefaultsService {
         }
 
         beforeBuilding = { ...currentBld };
+      }
 
+      // Compute authoritative PRE-MUTATION preview inside transaction BEFORE updating DB
+      const preview = await this.previewDefaultPropagation(dormitoryId, payload, tx);
+
+      // Perform guarded updates after pre-mutation preview is captured
+      if (scope === 'DORMITORY') {
+        if (changes.property && expectedVersions?.property) {
+          const updateRes = await tx.dormitoryPropertyDefaults.updateMany({
+            where: { dormitoryId, version: expectedVersions.property },
+            data: { ...changes.property, version: { increment: 1 } },
+          });
+
+          if (updateRes.count === 0) {
+            const safeCurrent = await tx.dormitoryPropertyDefaults.findUnique({ where: { dormitoryId } });
+            const err: any = new AppError('ข้อมูลถูกแก้ไขโดยผู้อื่น กรุณาโหลดข้อมูลใหม่', 409, 'VERSION_CONFLICT');
+            err.currentVersion = safeCurrent?.version || 1;
+            throw err;
+          }
+
+          afterProperty = await tx.dormitoryPropertyDefaults.findUnique({ where: { dormitoryId } });
+        }
+
+        if (changes.billing && expectedVersions?.billing) {
+          const updateRes = await tx.dormitoryBillingSettings.updateMany({
+            where: { dormitoryId, version: expectedVersions.billing },
+            data: { ...changes.billing, version: { increment: 1 } },
+          });
+
+          if (updateRes.count === 0) {
+            const safeCurrent = await tx.dormitoryBillingSettings.findUnique({ where: { dormitoryId } });
+            const err: any = new AppError('ข้อมูลการคิดเงินถูกแก้ไขโดยผู้อื่น กรุณาโหลดข้อมูลใหม่', 409, 'VERSION_CONFLICT');
+            err.currentVersion = safeCurrent?.version || 1;
+            throw err;
+          }
+
+          afterBilling = await tx.dormitoryBillingSettings.findUnique({ where: { dormitoryId } });
+        }
+      } else if (scope === 'BUILDING' && scopeId) {
         const updateRes = await tx.building.updateMany({
-          where: { id: scopeId, dormitoryId, version: expectedVersion ?? currentBld.version },
+          where: { id: scopeId, dormitoryId, version: expectedVersion ?? beforeBuilding.version },
           data: { ...changes, version: { increment: 1 } },
         });
 
@@ -642,8 +682,6 @@ export class DefaultsService {
 
         afterBuilding = await tx.building.findFirst({ where: { id: scopeId, dormitoryId } });
       }
-
-      const preview = await this.previewDefaultPropagation(dormitoryId, payload, tx);
 
       const auditLog = await tx.auditLog.create({
         data: {
@@ -664,27 +702,57 @@ export class DefaultsService {
         success: true,
         scope,
         scopeId: scopeId || null,
-        appliedRooms: preview.eligibleRooms,
-        skippedOverrideRooms: preview.skippedOverrideRooms,
-        skippedProtectedContractRooms: preview.skippedProtectedContractRooms,
-        skippedArchivedRooms: preview.skippedArchivedRooms,
+        appliedRoomCount: preview.eligibleRoomCount,
+        appliedFieldChangeCount: preview.eligibleFieldChangeCount,
+        skippedRoomCount: preview.skippedRoomCount,
+        skippedFieldChangeCount: preview.skippedFieldChangeCount,
+
+        // Backwards compatibility alias fields:
+        appliedRooms: preview.eligibleRoomCount,
+        totalCandidateRooms: preview.candidateRoomCount,
+        eligibleRooms: preview.eligibleRoomCount,
+
+        versions: {
+          property: afterProperty?.version ?? expectedVersions?.property,
+          billing: afterBilling?.version ?? expectedVersions?.billing,
+          building: afterBuilding?.version ?? expectedVersion,
+        },
         fieldEffects: preview.fieldEffects,
         auditLogId: auditLog.id,
         appliedAt: new Date().toISOString(),
       };
 
-      await tx.idempotencyKey.create({
-        data: {
-          userId: actorUserId,
-          operation: 'BULK_DEFAULT_APPLY',
-          idempotencyKey,
-          requestHash,
-          status: 'completed',
-          responseStatus: 200,
-          responseBody: responsePayload,
-          expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
-        },
-      });
+      try {
+        await tx.idempotencyKey.create({
+          data: {
+            userId: actorUserId,
+            operation: 'BULK_DEFAULT_APPLY',
+            idempotencyKey,
+            requestHash,
+            status: 'completed',
+            responseStatus: 200,
+            responseBody: responsePayload,
+            expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+          },
+        });
+      } catch (err: any) {
+        if (err?.code === 'P2002') {
+          const reloadedKey = await tx.idempotencyKey.findFirst({
+            where: {
+              userId: actorUserId,
+              operation: 'BULK_DEFAULT_APPLY',
+              idempotencyKey,
+            },
+          });
+          if (reloadedKey) {
+            if (reloadedKey.requestHash !== requestHash) {
+              throw new AppError('Idempotency key ซ้ำแต่ข้อมูลไม่ตรงกับรายการเดิม', 409, 'IDEMPOTENCY_MISMATCH');
+            }
+            return reloadedKey.responseBody;
+          }
+        }
+        throw err;
+      }
 
       return responsePayload;
     });

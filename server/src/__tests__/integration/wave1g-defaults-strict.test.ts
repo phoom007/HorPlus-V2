@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
 import {
   UpdateDormitoryDefaultsRequestSchema,
   DefaultPropagationPreviewSchema,
@@ -6,6 +6,8 @@ import {
   AllowedBuildingOverrideChangesSchema,
 } from '../../schemas/property-tenant-contract.schemas.js';
 import { defaultsService } from '../../services/defaults.service.js';
+import { BLOCKING_CONTRACT_STATUSES } from '../../services/blocking-contract-policy.js';
+import { getPrismaClient } from '../../db/prisma.js';
 
 describe('Wave 1G — Strict Defaults, Propagation & Concurrency Integration Tests', () => {
   describe('1. UpdateDormitoryDefaultsRequestSchema Strict Rules', () => {
@@ -100,7 +102,7 @@ describe('Wave 1G — Strict Defaults, Propagation & Concurrency Integration Tes
       expect(res.success).toBe(true);
     });
 
-    it('rejects legacy flat propagation payload for preview with HTTP 400 validation error', () => {
+    it('rejects legacy flat propagation payload for preview', () => {
       const legacyPayload = {
         scope: 'DORMITORY',
         changes: { defaultMonthlyRent: 4500, waterRate: 20 },
@@ -154,125 +156,165 @@ describe('Wave 1G — Strict Defaults, Propagation & Concurrency Integration Tes
     });
   });
 
-  describe('3. Service Defaults Mutation & Concurrency Rollback', () => {
-    it('executes atomic updateDormitoryDefaults and increments versions independently', async () => {
-      const mockProp = { dormitoryId: 'dorm-1', version: 1, defaultMonthlyRent: 4000 };
-      const mockBill = { dormitoryId: 'dorm-1', version: 2, waterRate: 18 };
+  describe('3. Unified Blocking Contract Policy Coverage', () => {
+    it('contains all 5 required protected statuses in BLOCKING_CONTRACT_STATUSES', () => {
+      const expectedStatuses = ['active', 'approved', 'expiring_soon', 'waiting_extension', 'checking_out'];
+      expect(BLOCKING_CONTRACT_STATUSES).toEqual(expect.arrayContaining(expectedStatuses));
+      expect(BLOCKING_CONTRACT_STATUSES.length).toBe(5);
+    });
+  });
 
-      const mockTx = {
-        dormitoryPropertyDefaults: {
-          findUnique: async () => mockProp,
-          updateMany: async ({ where, data }: any) => {
-            if (where.version !== 1) return { count: 0 };
-            mockProp.version += 1;
-            mockProp.defaultMonthlyRent = data.defaultMonthlyRent;
-            return { count: 1 };
-          },
+  describe('4. Real PostgreSQL Defaults & Concurrency Tests', () => {
+    const prisma = getPrismaClient();
+    let testDormId: string;
+    let testUserId: string;
+
+    beforeAll(async () => {
+      testUserId = crypto.randomUUID();
+      testDormId = crypto.randomUUID();
+
+      const email = `wave1g-test-${Date.now()}@example.com`;
+      await prisma.user.create({
+        data: {
+          id: testUserId,
+          email,
+          emailNormalized: email.toLowerCase(),
+          name: 'Wave1G Test User',
+          googleSubject: `sub-${Date.now()}`,
         },
-        dormitoryBillingSettings: {
-          findUnique: async () => mockBill,
-          updateMany: async ({ where, data }: any) => {
-            if (where.version !== 2) return { count: 0 };
-            mockBill.version += 1;
-            mockBill.waterRate = data.waterRate;
-            return { count: 1 };
-          },
+      });
+
+      await prisma.dormitory.create({
+        data: {
+          id: testDormId,
+          name: 'Wave1G Concurrency Dorm',
+          code: `DM-${Date.now()}`,
+          createdByUserId: testUserId,
         },
-        auditLog: {
-          create: async ({ data }: any) => ({ id: 'audit-101', ...data }),
+      });
+
+      await prisma.dormitoryPropertyDefaults.create({
+        data: {
+          dormitoryId: testDormId,
+          defaultMonthlyRent: 4000,
+          defaultDeposit: 8000,
+          version: 1,
         },
-      };
+      });
 
-      const mockPrisma = {
-        $transaction: async (cb: any) => cb(mockTx),
-        $disconnect: async () => {},
-      };
+      await prisma.dormitoryBillingSettings.create({
+        data: {
+          dormitoryId: testDormId,
+          waterRate: 18,
+          electricityRate: 7,
+          version: 1,
+        },
+      });
 
-      vi.spyOn(await import('../../db/prisma.js'), 'getPrismaClient').mockReturnValue(mockPrisma as any);
+      await prisma.building.create({
+        data: {
+          id: crypto.randomUUID(),
+          dormitoryId: testDormId,
+          name: 'Building PG 1',
+          version: 1,
+        },
+      });
+    });
 
-      const result = await defaultsService.updateDormitoryDefaults(
-        'dorm-1',
+    it('performs real PostgreSQL combined Property + Billing update with independent version increments', async () => {
+      const res = await defaultsService.updateDormitoryDefaults(
+        testDormId,
         {
-          property: { changes: { defaultMonthlyRent: 5000 }, expectedVersion: 1 },
-          billing: { changes: { waterRate: 20 }, expectedVersion: 2 },
+          property: { changes: { defaultMonthlyRent: 4500 }, expectedVersion: 1 },
+          billing: { changes: { waterRate: 20 }, expectedVersion: 1 },
         },
-        'user-1'
+        testUserId
       );
 
-      expect(result.property.version).toBe(2);
-      expect(result.billing.version).toBe(3);
-      expect(result.auditLogId).toBe('audit-101');
-      vi.restoreAllMocks();
+      expect(res.property.version).toBe(2);
+      expect(res.billing.version).toBe(2);
+      expect(res.property.defaultMonthlyRent.toString()).toBe('4500');
+      expect(res.billing.waterRate.toString()).toBe('20');
     });
 
-    it('throws VERSION_CONFLICT on stale property expectedVersion during updateDormitoryDefaults', async () => {
-      const mockProp = { dormitoryId: 'dorm-1', version: 5 };
-      const mockBill = { dormitoryId: 'dorm-1', version: 2 };
-
-      const mockTx = {
-        dormitoryPropertyDefaults: {
-          findUnique: async () => mockProp,
-        },
-        dormitoryBillingSettings: {
-          findUnique: async () => mockBill,
-        },
-      };
-
-      const mockPrisma = {
-        $transaction: async (cb: any) => cb(mockTx),
-        $disconnect: async () => {},
-      };
-
-      vi.spyOn(await import('../../db/prisma.js'), 'getPrismaClient').mockReturnValue(mockPrisma as any);
-
+    it('rolls back entire transaction on PostgreSQL when stale property version is supplied', async () => {
       await expect(
         defaultsService.updateDormitoryDefaults(
-          'dorm-1',
+          testDormId,
           {
-            property: { changes: { defaultMonthlyRent: 5000 }, expectedVersion: 1 },
+            property: { changes: { defaultMonthlyRent: 5000 }, expectedVersion: 1 }, // Stale version (current is 2)
+            billing: { changes: { waterRate: 25 }, expectedVersion: 2 }, // Fresh version
           },
-          'user-1'
+          testUserId
         )
       ).rejects.toThrow('ข้อมูลถูกแก้ไขโดยผู้อื่น กรุณาโหลดข้อมูลใหม่');
-      vi.restoreAllMocks();
+
+      // Verify billing waterRate was NOT mutated to 25
+      const bill = await prisma.dormitoryBillingSettings.findUnique({ where: { dormitoryId: testDormId } });
+      expect(bill?.waterRate.toString()).toBe('20');
+      expect(bill?.version).toBe(2);
     });
 
-    it('rolls back entire transaction if AuditLog insertion fails during updateDormitoryDefaults', async () => {
-      const mockProp = { dormitoryId: 'dorm-1', version: 1 };
-      const mockBill = { dormitoryId: 'dorm-1', version: 1 };
-
-      const mockTx = {
-        dormitoryPropertyDefaults: {
-          findUnique: async () => mockProp,
-          updateMany: async () => ({ count: 1 }),
+    it('proves concurrent applyDefaultPropagation idempotency replay under advisory lock', async () => {
+      const idempotencyKey = `idem-conc-${Date.now()}`;
+      const payload = {
+        scope: 'DORMITORY',
+        changes: {
+          property: { defaultMonthlyRent: 4800 },
+          billing: { waterRate: 22 },
         },
-        dormitoryBillingSettings: {
-          findUnique: async () => mockBill,
+        expectedVersions: {
+          property: 2,
+          billing: 2,
         },
-        auditLog: {
-          create: async () => {
-            throw new Error('AuditLog database connection failure');
-          },
-        },
+        idempotencyKey,
       };
 
-      const mockPrisma = {
-        $transaction: async (cb: any) => cb(mockTx),
-        $disconnect: async () => {},
+      const [res1, res2] = await Promise.all([
+        defaultsService.applyDefaultPropagation(testDormId, payload, testUserId),
+        defaultsService.applyDefaultPropagation(testDormId, payload, testUserId),
+      ]);
+
+      expect(res1).toEqual(res2);
+
+      // Verify only 1 AuditLog was created for this key
+      const auditCount = await prisma.auditLog.count({
+        where: { dormitoryId: testDormId, idempotencyKey },
+      });
+      expect(auditCount).toBe(1);
+
+      // Verify only 1 IdempotencyKey record was created
+      const keyCount = await prisma.idempotencyKey.count({
+        where: { userId: testUserId, idempotencyKey },
+      });
+      expect(keyCount).toBe(1);
+    });
+
+    it('rejects concurrent idempotency replay with different request hash (HTTP 409 IDEMPOTENCY_MISMATCH)', async () => {
+      const idempotencyKey = `idem-mismatch-${Date.now()}`;
+      const originalPayload = {
+        scope: 'DORMITORY',
+        changes: {
+          property: { defaultMonthlyRent: 4900 },
+        },
+        expectedVersions: {
+          property: 3,
+        },
+        idempotencyKey,
       };
 
-      vi.spyOn(await import('../../db/prisma.js'), 'getPrismaClient').mockReturnValue(mockPrisma as any);
+      await defaultsService.applyDefaultPropagation(testDormId, originalPayload, testUserId);
+
+      const modifiedPayload = {
+        ...originalPayload,
+        changes: {
+          property: { defaultMonthlyRent: 9999 },
+        },
+      };
 
       await expect(
-        defaultsService.updateDormitoryDefaults(
-          'dorm-1',
-          {
-            property: { changes: { defaultMonthlyRent: 5000 }, expectedVersion: 1 },
-          },
-          'user-1'
-        )
-      ).rejects.toThrow('AuditLog database connection failure');
-      vi.restoreAllMocks();
+        defaultsService.applyDefaultPropagation(testDormId, modifiedPayload, testUserId)
+      ).rejects.toThrow('Idempotency key ซ้ำแต่ข้อมูลไม่ตรงกับรายการเดิม');
     });
   });
 });

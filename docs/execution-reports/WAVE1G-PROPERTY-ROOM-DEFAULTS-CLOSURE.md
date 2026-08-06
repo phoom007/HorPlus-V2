@@ -1,10 +1,10 @@
-# Wave 1G — Final Security, Propagation and Evidence Closure Report
+# Wave 1G — Final Security, Propagation, Counter, and Evidence Closure Report
 
 ## Executive Summary
 
-Wave 1G Final Security, Propagation and Evidence Closure has been successfully completed in accordance with all prompt requirements and explicit user decisions.
+Wave 1G Final Security, Propagation, Counter, and Evidence Closure has been successfully completed in accordance with all prompt requirements and explicit user decisions.
 
-All schema validation rules, transactional persistence guarantees, independent optimistic locking versions, discriminated propagation schemas, backend-only field scopes, and connected Playwright E2E postconditions have been implemented, verified, and locked.
+All schema validation rules, transactional persistence guarantees, explicit Set-based room counters, independent optimistic locking versions, pre-mutation preview captures, in-transaction idempotency recheck with P2002 handling, unified blocking contract policy, backend-only field scopes, and connected Playwright E2E postconditions have been implemented, verified, locked, and published.
 
 ---
 
@@ -26,31 +26,48 @@ All schema validation rules, transactional persistence guarantees, independent o
 
 ---
 
-## 2. Transactional Command Patterns & Versioning
+## 2. Room Counters, Idempotency & Unified Policy
 
-1. **Atomic Dormitory Defaults Updates (`updateDormitoryDefaults`)**:
-   - Executes Property Defaults update, Billing Settings update, and `AuditLog` creation inside a single `prisma.$transaction`.
-   - Concurrency version checks (`version = expectedVersion`) are evaluated upfront and updated atomically (`version = expectedVersion + 1`).
-   - Any failure in Property update, Billing update, or AuditLog creation rolls back the entire transaction.
+1. **Explicit Set-based Room Counters**:
+   - Preview and Apply calculate room-level counts using explicit Sets (`eligibleRoomIds`, `skippedRoomIds`).
+   - Invariants strictly enforced:
+     - `0 <= eligibleRoomCount <= candidateRoomCount`
+     - `0 <= skippedRoomCount <= candidateRoomCount`
+     - `eligibleRoomCount + skippedRoomCount = candidateRoomCount`
+     - `eligibleFieldChangeCount + skippedFieldChangeCount = fieldEffects.length`
+   - A Room with at least one eligible field effect is counted as an eligible Room.
+   - Returned counters in Preview: `candidateRoomCount`, `eligibleRoomCount`, `eligibleFieldChangeCount`, `skippedRoomCount`, `skippedFieldChangeCount`.
+   - Returned counters in Apply: `appliedRoomCount`, `appliedFieldChangeCount`, `skippedRoomCount`, `skippedFieldChangeCount`.
 
-2. **Atomic Propagation (`applyDefaultPropagation`)**:
-   - Acquires PostgreSQL advisory transaction lock `pg_advisory_xact_lock(hashtext(dormitoryId))`.
-   - Increments property and billing default versions independently.
-   - Computes deterministic SHA-256 request hash fitting `VarChar(255)` for idempotency key storage.
-   - Persists `IdempotencyKey` record atomically within the transaction.
+2. **Pre-Mutation Preview Capture**:
+   - `applyDefaultPropagation` executes `previewDefaultPropagation` inside the database transaction BEFORE applying database updates.
+   - Ensures `oldEffectiveValue`, `newEffectiveValue`, `sourceBefore`, and `sourceAfter` accurately reflect pre-mutation and post-mutation inheritance state.
+
+3. **In-Transaction Advisory Locking & Idempotency Replay**:
+   - `applyDefaultPropagation` acquires `pg_advisory_xact_lock(hashtext(dormitoryId))` and performs an in-transaction idempotency key lookup.
+   - Identical idempotency request hash returns stored completed response payload without duplicate mutations or AuditLogs.
+   - Idempotency key mismatch returns HTTP 409 `IDEMPOTENCY_MISMATCH`.
+   - Catches defensive Prisma `P2002` duplicate key failure and reloads completed response safely.
+
+4. **Unified Blocking Contract Policy**:
+   - Propagation Preview and Apply use `BLOCKING_CONTRACT_STATUSES` from `server/src/services/blocking-contract-policy.ts`:
+     - `active`
+     - `approved`
+     - `expiring_soon`
+     - `waiting_extension`
+     - `checking_out`
+   - Rooms with active contracts in any of these 5 statuses skip default propagation with `skipReason: 'PROTECTED_CONTRACT'`.
 
 ---
 
-## 3. UI State & Persistence Scope
+## 3. UI State & Persistence Scope Statement
 
-1. **Backend-Only Persistence Scope**:
-   - All fields in `DormitoryPropertyDefaults` and `DormitoryBillingSettings` operate exclusively via backend-only API calls.
-   - Mock-storage dual writes (`handleRateBlur`, `handleRateSelectChange`, `handleGlobalFieldBlur`) have been completely removed.
-   - Non-persisted mode selects (`commonFeeMode`, `internetFeeMode`, `parkingFeeMode`) are disabled in UI to prevent misleading persistence claims.
+Legacy mock helpers remain only for explicitly documented non-Wave-1G fields. All Prisma-modeled Wave 1G defaults use backend-only persistence.
 
-2. **Optimistic Concurrency & Version Conflict Modal**:
-   - Upon API save success, visible form values and expected versions are synchronized with authoritative backend response data.
-   - On `VERSION_CONFLICT` (HTTP 409), `VersionConflictModal` opens, preventing mock-storage mutation and reloading authoritative defaults upon user action.
+- All fields in `DormitoryPropertyDefaults` and `DormitoryBillingSettings` operate exclusively via backend-only API calls.
+- Mock-storage dual writes (`handleRateBlur`, `handleRateSelectChange`, `handleGlobalFieldBlur`) have been completely removed for model-backed fields.
+- Non-persisted fee mode selects (`commonFeeMode`, `internetFeeMode`, `parkingFeeMode`) are disabled in UI.
+- On `VERSION_CONFLICT` (HTTP 409), `VersionConflictModal` opens, preventing mock-storage mutation and reloading authoritative defaults upon user action.
 
 ---
 
@@ -60,9 +77,10 @@ All schema validation rules, transactional persistence guarantees, independent o
 |---|---|---|---|
 | Backend Vitest Integration Suite | Node.js / PostgreSQL 5455 | PASSED | 20 / 20 files (187 tests) |
 | Frontend Vitest Component Suite | happy-dom | PASSED | 5 / 5 files (32 tests) |
-| Playwright E2E Test Suite | Chromium / Real API | PASSED | 1 / 1 file (2 lifecycle tests) |
-| Frontend TypeScript Compilation | `tsc --noEmit` | PASSED | 0 errors |
-| E2E TypeScript Compilation | `tsc --noEmit -p tsconfig.e2e.json` | PASSED | 0 errors |
+| Focused Playwright E2E Suite | `tests/e2e/wave1g-property.spec.ts` | PASSED | 1 / 1 file (2 tests) |
+| Complete Playwright E2E Suite | `tests/e2e/*.spec.ts` | PASSED | 3 / 3 files (7 tests) |
+| Frontend TypeScript Compilation | `npx tsc --noEmit` | PASSED | 0 errors |
+| E2E TypeScript Compilation | `npx tsc --noEmit -p tsconfig.e2e.json` | PASSED | 0 errors |
 | Server TypeScript Compilation | `cd server; tsc --noEmit` | PASSED | 0 errors |
 | Production Build Frontend | Vite Build | PASSED | Success |
 | Production Build Backend | TypeScript Build | PASSED | Success |
@@ -70,16 +88,63 @@ All schema validation rules, transactional persistence guarantees, independent o
 
 ---
 
-## 5. Artifact & Evidence Sitemap
+## 5. Migration and Runtime Evidence Log
 
-- **Canonical Closure Report**: `docs/execution-reports/WAVE1G-PROPERTY-ROOM-DEFAULTS-CLOSURE.md`
-- **Schema & Security Evidence**: [wave1g-schema-verification.md](file:///D:/horplus_wave1d_fasttrack/docs/execution-reports/evidence/wave1g-schema-verification.md)
-- **Test Verification Summary**: [wave1g-test-verification.md](file:///D:/horplus_wave1d_fasttrack/docs/execution-reports/evidence/wave1g-test-verification.md)
+### Prisma Migration Status & Deployment
+
+```text
+Command: npx prisma migrate status
+Cwd: D:\horplus_wave1d_fasttrack\server
+Status: 9 migrations found in prisma/migrations. Database schema is up to date! Exit code: 0
+```
+
+### Prisma Migration Audit & Diff
+
+```text
+Command: npx prisma migrate diff --from-schema-datamodel prisma/schema.prisma --to-schema-datasource prisma/schema.prisma
+Cwd: D:\horplus_wave1d_fasttrack\server
+Status: No changes detected. Schema and database in sync. Exit code: 0
+```
+
+### Database Foreign-Key, Index, and Constraint Catalogs
+
+```text
+Key Tables Verified on PostgreSQL 127.0.0.1:5455:
+- dormitory_property_defaults (version INT NOT NULL DEFAULT 1)
+- dormitory_billing_settings (version INT NOT NULL DEFAULT 1)
+- buildings (version INT NOT NULL DEFAULT 1)
+- idempotency_keys (@@unique([user_id, operation, idempotency_key]))
+- audit_logs (idempotency_key VARCHAR(255))
+```
+
+### Docker Compose & Health Endpoints
+
+```text
+Command: docker compose ps
+Services:
+- horplus_wave1d_fasttrack-db-1 (postgres:15) -> 127.0.0.1:5455 (healthy)
+- horplus_wave1d_fasttrack-redis-1 (redis:7-alpine) -> 127.0.0.1:6379 (healthy)
+- horplus_wave1d_fasttrack-api-1 (horplus_wave1d_fasttrack-api) -> 127.0.0.1:3000 (healthy)
+
+Health Status:
+- GET /health/liveness -> 200 OK
+- GET /health/readiness -> 200 OK
+```
 
 ---
 
-## 6. Commit Strategy & Repository State
+## 6. Artifact & Evidence Sitemap
+
+- **Canonical Closure Report**: `docs/execution-reports/WAVE1G-PROPERTY-ROOM-DEFAULTS-CLOSURE.md`
+- **Schema & Security Evidence**: [wave1g-schema-verification.md](evidence/wave1g-schema-verification.md)
+- **Test Verification Summary**: [wave1g-test-verification.md](evidence/wave1g-test-verification.md)
+
+---
+
+## 7. Commit Strategy & Repository State
 
 - Branch: `feature/wave1g-property-room-defaults`
-- Base Remote HEAD: `f3c8507280888dc76922b6ab591d0ab555d9d15c`
+- Base Remote HEAD: `81c84a0403ee46745d8fd8669a0de80bd8f0e7b0`
+- Final Implementation & Test SHA: Will be returned in execution summary.
+- Final Remote SHA: Will be returned in execution summary.
 - All commits are forward-only. No rebasing, amending, force-pushing, PR merging, or initialization of TASK-009 occurred.
