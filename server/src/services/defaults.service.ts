@@ -497,6 +497,241 @@ export class DefaultsService {
 
     return result;
   }
+
+  /**
+   * Builds server-authoritative Room response object including effective values,
+   * field sources (DORMITORY, BUILDING, ROOM, CONTRACT_SNAPSHOT), and snapshot locking metadata.
+   */
+  public async buildAuthoritativeRoomResponse(
+    dormitoryId: string,
+    room: any,
+    txClient?: any
+  ) {
+    const prisma = txClient || getPrismaClient();
+
+    const building = await prisma.building.findFirst({
+      where: { id: room.buildingId, dormitoryId },
+    });
+
+    const effective = await this.resolveEffectiveRoomDefaults(
+      dormitoryId,
+      room.buildingId,
+      room.id,
+      prisma
+    );
+
+    const activeContract = await prisma.contract.findFirst({
+      where: {
+        roomId: room.id,
+        dormitoryId,
+        status: { in: ['active', 'approved', 'expiring_soon', 'waiting_extension', 'checking_out'] },
+        deletedAt: null,
+      },
+      include: { snapshot: true },
+    });
+
+    const snapshotLocked = !!(activeContract && activeContract.snapshot);
+    const activeContractSnapshotId = activeContract?.snapshot?.id || null;
+
+    const rawOverrides = {
+      monthlyRent: room.monthlyRent !== null && room.monthlyRent !== undefined ? String(room.monthlyRent) : null,
+      termRent: room.termRent !== null && room.termRent !== undefined ? String(room.termRent) : null,
+      dailyRent: room.dailyRent !== null && room.dailyRent !== undefined ? String(room.dailyRent) : null,
+      depositAmount: room.depositAmount !== null && room.depositAmount !== undefined ? String(room.depositAmount) : null,
+      advancePaymentAmount: room.advancePaymentAmount !== null && room.advancePaymentAmount !== undefined ? String(room.advancePaymentAmount) : null,
+      parkingFee: room.parkingFee !== null && room.parkingFee !== undefined ? String(room.parkingFee) : null,
+      waterRate: room.waterRate !== null && room.waterRate !== undefined ? String(room.waterRate) : null,
+      electricityRate: room.electricityRate !== null && room.electricityRate !== undefined ? String(room.electricityRate) : null,
+      commonFee: room.commonFee !== null && room.commonFee !== undefined ? String(room.commonFee) : null,
+      internetFee: room.internetFee !== null && room.internetFee !== undefined ? String(room.internetFee) : null,
+      waterBillingType: room.waterBillingType || null,
+      electricityBillingType: room.electricityBillingType || null,
+      rentBillingType: room.rentBillingType || null,
+      maximumOccupants: room.maximumOccupants || null,
+      roomType: room.roomType || null,
+    };
+
+    const effectiveValues = {
+      monthlyRent: effective.monthlyRent.value,
+      termRent: effective.termRent.value,
+      dailyRent: effective.dailyRent.value,
+      depositAmount: effective.depositAmount.value,
+      advancePaymentAmount: effective.advancePaymentAmount.value,
+      parkingFee: effective.parkingFee.value,
+      waterRate: effective.waterRate.value,
+      electricityRate: effective.electricityRate.value,
+      commonFee: effective.commonFee.value,
+      internetFee: effective.internetFee.value,
+      waterBillingType: effective.waterBillingType.value,
+      electricityBillingType: effective.electricityBillingType.value,
+      rentBillingType: effective.rentBillingType.value,
+      maximumOccupants: effective.maximumOccupants.value,
+      roomType: effective.roomType.value,
+    };
+
+    const fieldSources = {
+      monthlyRent: snapshotLocked ? 'CONTRACT_SNAPSHOT' : effective.monthlyRent.source,
+      termRent: snapshotLocked ? 'CONTRACT_SNAPSHOT' : effective.termRent.source,
+      dailyRent: snapshotLocked ? 'CONTRACT_SNAPSHOT' : effective.dailyRent.source,
+      depositAmount: snapshotLocked ? 'CONTRACT_SNAPSHOT' : effective.depositAmount.source,
+      advancePaymentAmount: snapshotLocked ? 'CONTRACT_SNAPSHOT' : effective.advancePaymentAmount.source,
+      parkingFee: snapshotLocked ? 'CONTRACT_SNAPSHOT' : effective.parkingFee.source,
+      waterRate: snapshotLocked ? 'CONTRACT_SNAPSHOT' : effective.waterRate.source,
+      electricityRate: snapshotLocked ? 'CONTRACT_SNAPSHOT' : effective.electricityRate.source,
+      commonFee: snapshotLocked ? 'CONTRACT_SNAPSHOT' : effective.commonFee.source,
+      internetFee: snapshotLocked ? 'CONTRACT_SNAPSHOT' : effective.internetFee.source,
+      waterBillingType: snapshotLocked ? 'CONTRACT_SNAPSHOT' : effective.waterBillingType.source,
+      electricityBillingType: snapshotLocked ? 'CONTRACT_SNAPSHOT' : effective.electricityBillingType.source,
+      rentBillingType: snapshotLocked ? 'CONTRACT_SNAPSHOT' : effective.rentBillingType.source,
+      maximumOccupants: snapshotLocked ? 'CONTRACT_SNAPSHOT' : effective.maximumOccupants.source,
+      roomType: snapshotLocked ? 'CONTRACT_SNAPSHOT' : effective.roomType.source,
+    };
+
+    return {
+      id: room.id,
+      dormitoryId: room.dormitoryId,
+      buildingId: room.buildingId,
+      buildingName: building ? building.name : (room.buildingName || 'Building'),
+      roomNumber: room.roomNumber,
+      normalizedRoomNumber: room.normalizedRoomNumber,
+      status: room.status,
+      version: room.version,
+      rawOverrides,
+      effectiveValues,
+      fieldSources,
+      sourceVersions: effective.sourceVersions,
+      snapshotLocked,
+      activeContractSnapshotId,
+      updatedAt: room.updatedAt,
+      floor: room.floor,
+      rentCycle: room.rentCycle,
+      waterMeterNumber: room.waterMeterNumber,
+      electricityMeterNumber: room.electricityMeterNumber,
+      initialWaterReading: room.initialWaterReading,
+      initialElectricityReading: room.initialElectricityReading,
+      amenities: room.amenities,
+      images: room.images,
+      notes: room.notes,
+      currentTenantId: room.currentTenantId,
+      currentContractId: room.currentContractId,
+      createdAt: room.createdAt,
+    };
+  }
+
+  /**
+   * Builds server-authoritative Building response object including effective defaults
+   * and field sources.
+   */
+  public async buildAuthoritativeBuildingResponse(
+    dormitoryId: string,
+    building: any,
+    txClient?: any
+  ) {
+    const prisma = txClient || getPrismaClient();
+
+    const billingSettings = await prisma.dormitoryBillingSettings.findUnique({
+      where: { dormitoryId },
+    });
+    const propertyDefaults = await prisma.dormitoryPropertyDefaults.findUnique({
+      where: { dormitoryId },
+    });
+
+    const rawOverrides = {
+      monthlyRent: building.monthlyRent !== null && building.monthlyRent !== undefined ? String(building.monthlyRent) : null,
+      termRent: building.termRent !== null && building.termRent !== undefined ? String(building.termRent) : null,
+      dailyRent: building.dailyRent !== null && building.dailyRent !== undefined ? String(building.dailyRent) : null,
+      depositAmount: building.depositAmount !== null && building.depositAmount !== undefined ? String(building.depositAmount) : null,
+      advancePaymentAmount: building.advancePaymentAmount !== null && building.advancePaymentAmount !== undefined ? String(building.advancePaymentAmount) : null,
+      parkingFee: building.parkingFee !== null && building.parkingFee !== undefined ? String(building.parkingFee) : null,
+      waterRate: building.waterRate !== null && building.waterRate !== undefined ? String(building.waterRate) : null,
+      electricityRate: building.electricityRate !== null && building.electricityRate !== undefined ? String(building.electricityRate) : null,
+      commonFee: building.commonFee !== null && building.commonFee !== undefined ? String(building.commonFee) : null,
+      internetFee: building.internetFee !== null && building.internetFee !== undefined ? String(building.internetFee) : null,
+      waterBillingType: building.waterBillingType || null,
+      electricityBillingType: building.electricityBillingType || null,
+      rentBillingType: building.rentBillingType || null,
+      maximumOccupants: building.maximumOccupants || null,
+      roomType: building.roomType || null,
+    };
+
+    const resolveBldField = <T>(bldVal: any, dormVal: any, parseFn: (v: any) => T = (v) => Number(v) as any) => {
+      if (bldVal !== null && bldVal !== undefined) {
+        return { value: parseFn(bldVal), source: 'BUILDING' as const };
+      }
+      return { value: parseFn(dormVal), source: 'DORMITORY' as const };
+    };
+
+    const monthlyRentRes = resolveBldField(building.monthlyRent, propertyDefaults?.defaultMonthlyRent || 0);
+    const termRentRes = resolveBldField(building.termRent, propertyDefaults?.defaultTermRent || null, (v) => (v ? Number(v) : null));
+    const dailyRentRes = resolveBldField(building.dailyRent, propertyDefaults?.defaultDailyRent || null, (v) => (v ? Number(v) : null));
+    const depositRes = resolveBldField(building.depositAmount, propertyDefaults?.defaultDeposit || 0);
+    const advanceRes = resolveBldField(building.advancePaymentAmount, propertyDefaults?.defaultAdvancePayment || 0);
+    const parkingRes = resolveBldField(building.parkingFee, propertyDefaults?.defaultParkingFee || 0);
+    const waterRateRes = resolveBldField(building.waterRate, billingSettings?.waterRate || 0);
+    const elecRateRes = resolveBldField(building.electricityRate, billingSettings?.electricityRate || 0);
+    const commonFeeRes = resolveBldField(building.commonFee, billingSettings?.commonFee || 0);
+    const internetFeeRes = resolveBldField(building.internetFee, billingSettings?.internetFee || 0);
+    const waterBillingTypeRes = resolveBldField(building.waterBillingType, billingSettings?.waterBillingType || 'per_unit', (v) => String(v));
+    const elecBillingTypeRes = resolveBldField(building.electricityBillingType, billingSettings?.electricityBillingType || 'per_unit', (v) => String(v));
+    const rentBillingTypeRes = resolveBldField(building.rentBillingType, billingSettings?.rentBillingType || 'monthly', (v) => String(v));
+    const maxOccupantsRes = resolveBldField(building.maximumOccupants, propertyDefaults?.defaultMaxOccupants || 2, (v) => Number(v));
+    const roomTypeRes = resolveBldField(building.roomType, propertyDefaults?.defaultRoomType || 'standard', (v) => String(v));
+
+    const effectiveDefaults = {
+      monthlyRent: monthlyRentRes.value,
+      termRent: termRentRes.value,
+      dailyRent: dailyRentRes.value,
+      depositAmount: depositRes.value,
+      advancePaymentAmount: advanceRes.value,
+      parkingFee: parkingRes.value,
+      waterRate: waterRateRes.value,
+      electricityRate: elecRateRes.value,
+      commonFee: commonFeeRes.value,
+      internetFee: internetFeeRes.value,
+      waterBillingType: waterBillingTypeRes.value,
+      electricityBillingType: elecBillingTypeRes.value,
+      rentBillingType: rentBillingTypeRes.value,
+      maximumOccupants: maxOccupantsRes.value,
+      roomType: roomTypeRes.value,
+    };
+
+    const fieldSources = {
+      monthlyRent: monthlyRentRes.source,
+      termRent: termRentRes.source,
+      dailyRent: dailyRentRes.source,
+      depositAmount: depositRes.source,
+      advancePaymentAmount: advanceRes.source,
+      parkingFee: parkingRes.source,
+      waterRate: waterRateRes.source,
+      electricityRate: elecRateRes.source,
+      commonFee: commonFeeRes.source,
+      internetFee: internetFeeRes.source,
+      waterBillingType: waterBillingTypeRes.source,
+      electricityBillingType: elecBillingTypeRes.source,
+      rentBillingType: rentBillingTypeRes.source,
+      maximumOccupants: maxOccupantsRes.source,
+      roomType: roomTypeRes.source,
+    };
+
+    return {
+      id: building.id,
+      dormitoryId: building.dormitoryId,
+      name: building.name,
+      code: building.code,
+      floorCount: building.floorCount,
+      roomsPerFloor: building.roomsPerFloor,
+      numberingPattern: building.numberingPattern,
+      description: building.description,
+      status: building.status,
+      displayOrder: building.displayOrder,
+      version: building.version,
+      rawOverrides,
+      effectiveDefaults,
+      fieldSources,
+      updatedAt: building.updatedAt,
+      createdAt: building.createdAt,
+    };
+  }
 }
 
 export const defaultsService = new DefaultsService();

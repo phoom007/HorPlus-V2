@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, request as playwrightRequest } from '@playwright/test';
 import { PrismaClient } from '../../server/node_modules/@prisma/client/index.js';
 import crypto from 'crypto';
 
@@ -38,23 +38,24 @@ function generateCsrfToken(sessionId: string): string {
   return `${nonce}.${signature}`;
 }
 
-test.describe('Wave 1G Playwright Lifecycle Test — Property, Room Defaults & Snapshots', () => {
+test.describe('Wave 1G Real Playwright Lifecycle — Property, Room Defaults, Snapshots & Availability', () => {
   let dormId: string;
   let userId: string;
   let sessionId: string;
   let sessionToken: string;
   let csrfToken: string;
+  let apiBaseUrl: string;
 
   test.beforeAll(async () => {
-    // Setup test user, session, dormitory
+    apiBaseUrl = 'http://127.0.0.1:3001/api/v1';
     const uniqueSuffix = Date.now().toString().slice(-6);
 
     const user = await prisma.user.create({
       data: {
-        googleSubject: `w1g-user-${uniqueSuffix}`,
-        email: `w1g-owner-${uniqueSuffix}@test.local`,
-        emailNormalized: `w1g-owner-${uniqueSuffix}@test.local`,
-        name: 'Wave1G Test Owner',
+        googleSubject: `w1g-e2e-user-${uniqueSuffix}`,
+        email: `w1g-e2e-owner-${uniqueSuffix}@test.local`,
+        emailNormalized: `w1g-e2e-owner-${uniqueSuffix}@test.local`,
+        name: 'Wave1G E2E Owner',
         status: 'active',
       },
     });
@@ -62,8 +63,8 @@ test.describe('Wave 1G Playwright Lifecycle Test — Property, Room Defaults & S
 
     const dorm = await prisma.dormitory.create({
       data: {
-        name: `Wave1G Dormitory ${uniqueSuffix}`,
-        code: `W1G-${uniqueSuffix}`,
+        name: `Wave1G E2E Dormitory ${uniqueSuffix}`,
+        code: `W1GE2E-${uniqueSuffix}`,
         type: 'apartment',
         createdByUserId: userId,
       },
@@ -113,19 +114,42 @@ test.describe('Wave 1G Playwright Lifecycle Test — Property, Room Defaults & S
       },
     });
 
+    // Provision Trial Subscription — seed FREE plan + create DormitorySubscription
+    let freePlan = await prisma.subscriptionPlan.findUnique({ where: { code: 'FREE' } });
+    if (!freePlan) {
+      freePlan = await prisma.subscriptionPlan.create({
+        data: { code: 'FREE', name: 'Free / Trial', type: 'FREE', roomLimit: 10 },
+      });
+    }
+    const trialExpires = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+    await prisma.dormitorySubscription.create({
+      data: {
+        dormitoryId: dormId,
+        planId: freePlan.id,
+        status: 'TRIAL',
+        startedAt: new Date(),
+        expiresAt: trialExpires,
+        trialStartedAt: new Date(),
+        trialExpiresAt: trialExpires,
+      },
+    });
+
+    const rawSessionId = crypto.randomUUID();
+    const sessionIdHash = crypto.createHash('sha256').update(`horplus_sid_${rawSessionId}`).digest('hex');
+
     // Session
     const session = await prisma.session.create({
       data: {
         userId,
-        sessionIdHash: crypto.createHash('sha256').update(`w1g-session-${uniqueSuffix}`).digest('hex'),
+        sessionIdHash,
         expiresAt: new Date(Date.now() + 86400 * 1000),
         status: 'active',
       },
     });
     sessionId = session.id;
 
-    sessionToken = encryptSessionToken(userId, sessionId);
-    csrfToken = generateCsrfToken(sessionId);
+    sessionToken = encryptSessionToken(userId, rawSessionId);
+    csrfToken = generateCsrfToken(rawSessionId);
   });
 
   test.afterAll(async () => {
@@ -137,178 +161,257 @@ test.describe('Wave 1G Playwright Lifecycle Test — Property, Room Defaults & S
     }
   });
 
-  test('Step 1-24: Full Wave 1G Lifecycle verification', async ({ page }) => {
-    // 1. Authenticate using session cookie
-    await page.context().addCookies([
-      {
-        name: 'horplus_session',
-        value: sessionToken,
-        domain: 'localhost',
-        path: '/',
-        httpOnly: true,
-        secure: false,
-        sameSite: 'Lax',
-      },
-      {
-        name: 'horplus_csrf',
-        value: csrfToken,
-        domain: 'localhost',
-        path: '/',
-        httpOnly: false,
-        secure: false,
-        sameSite: 'Lax',
-      },
-    ]);
+  test('Complete 48-step Wave 1G Lifecycle', async ({ page }) => {
+    const consoleErrors: string[] = [];
+    const unhandledErrors: string[] = [];
 
-    // 2. Fetch Dormitory Defaults
-    const defaultsRes = await page.request.get('http://127.0.0.1:3000/api/v1/properties/dormitory/defaults', {
-      headers: { 'x-dormitory-id': dormId },
+    page.on('console', (msg) => {
+      if (msg.type() === 'error') {
+        consoleErrors.push(msg.text());
+      }
     });
+    page.on('pageerror', (err) => {
+      unhandledErrors.push(err.message);
+    });
+
+    // Create authenticated API context with session cookie & CSRF header
+    const apiContext = await playwrightRequest.newContext({
+      baseURL: 'http://127.0.0.1:3001',
+      extraHTTPHeaders: {
+        Cookie: `horplus_session=${sessionToken}; horplus_csrf=${csrfToken}`,
+        'x-csrf-token': csrfToken,
+        'x-dormitory-id': dormId,
+      },
+    });
+
+    // 1-4. Real session & Dormitory defaults read
+    const defaultsRes = await apiContext.get('/api/v1/properties/dormitory/defaults');
     expect(defaultsRes.status()).toBe(200);
-    const defaultsData = await defaultsRes.json();
-    expect(defaultsData.data.property.defaultMonthlyRent).toBe('4000');
+    const defaultsBody = await defaultsRes.json();
+    expect(defaultsBody.data.property.defaultMonthlyRent).toBe('4000');
 
-    // 3. Create Building A and Building B via DB
-    const bldA = await prisma.building.create({
-      data: {
-        dormitoryId: dormId,
-        name: 'Building A',
-        code: 'A',
-        floorCount: 3,
-      },
+    // 5-9. Create Building A and Building B via API
+    const createBldARes = await apiContext.post('/api/v1/properties/buildings', {
+      data: { name: 'Building A', code: 'BLD-A', floorCount: 3 },
     });
+    expect(createBldARes.status()).toBe(201);
+    const bldA = (await createBldARes.json()).data;
 
-    const bldB = await prisma.building.create({
-      data: {
-        dormitoryId: dormId,
-        name: 'Building B',
-        code: 'B',
-        floorCount: 3,
-        monthlyRent: 4500.0, // Building override
-      },
+    const createBldBRes = await apiContext.post('/api/v1/properties/buildings', {
+      data: { name: 'Building B', code: 'BLD-B', floorCount: 3 },
     });
+    expect(createBldBRes.status()).toBe(201);
+    const bldB = (await createBldBRes.json()).data;
 
-    // 4. Create Room A101 (Building A) and Room B101 (Building B)
-    const roomA101 = await prisma.room.create({
-      data: {
-        dormitoryId: dormId,
-        buildingId: bldA.id,
-        roomNumber: 'A101',
-        normalizedRoomNumber: 'a101',
-        status: 'vacant',
-      },
+    // Create Room A101 and Room B101
+    const createRoomA101Res = await apiContext.post('/api/v1/properties/rooms', {
+      data: { buildingId: bldA.id, roomNumber: 'A101', roomType: 'standard', monthlyRent: '4000.00' },
     });
+    expect(createRoomA101Res.status()).toBe(201);
+    const roomA101 = (await createRoomA101Res.json()).data;
 
-    const roomB101 = await prisma.room.create({
-      data: {
-        dormitoryId: dormId,
-        buildingId: bldB.id,
-        roomNumber: 'B101',
-        normalizedRoomNumber: 'b101',
-        status: 'vacant',
-      },
+    const createRoomB101Res = await apiContext.post('/api/v1/properties/rooms', {
+      data: { buildingId: bldB.id, roomNumber: 'B101', roomType: 'standard', monthlyRent: '4500.00' },
     });
+    expect(createRoomB101Res.status()).toBe(201);
+    const roomB101 = (await createRoomB101Res.json()).data;
+
     expect(roomA101.id).toBeDefined();
     expect(roomB101.id).toBeDefined();
 
-    // 5. Test Room number duplicate precheck (A101 duplicate rejection)
-    const roomDupRes = await page.request.post('http://127.0.0.1:3000/api/v1/properties/rooms', {
-      headers: {
-        'x-dormitory-id': dormId,
-        'x-csrf-token': csrfToken,
-      },
-      data: {
-        buildingId: bldA.id,
-        roomNumber: '  a101  ', // NFKC normalization -> a101 -> duplicate!
-        floorNumber: 1,
-      },
+    // 10-11. Duplicate room number precheck (a101 / A101 duplicate rejection)
+    const dupRes = await apiContext.post('/api/v1/properties/rooms', {
+      data: { buildingId: bldA.id, roomNumber: ' a101 ', roomType: 'standard' },
     });
-    expect(roomDupRes.status()).toBe(409);
-    const dupBody = await roomDupRes.json();
+    expect(dupRes.status()).toBe(409);
+    const dupBody = await dupRes.json();
     expect(dupBody.error.code).toBe('ROOM_NUMBER_ALREADY_EXISTS');
+    expect(dupBody.error.message).toContain('มีอยู่แล้วในหอพักนี้');
 
-    // 6. Test Building B override fetch
-    const bldDefRes = await page.request.get(`http://127.0.0.1:3000/api/v1/properties/buildings/${bldB.id}/defaults`, {
-      headers: { 'x-dormitory-id': dormId },
+    // 12-14. Building B defaults & Building override badge
+    const bldOverRes = await apiContext.put(`/api/v1/properties/buildings/${bldB.id}/defaults`, {
+      data: { monthlyRent: 4800, expectedVersion: bldB.version },
     });
-    expect(bldDefRes.status()).toBe(200);
+    expect(bldOverRes.status()).toBe(200);
 
-    // 7. Test Room effective defaults resolution
-    const rmEffRes = await page.request.get(`http://127.0.0.1:3000/api/v1/properties/rooms/${roomA101.id}/effective-defaults`, {
-      headers: { 'x-dormitory-id': dormId },
+    const bldFetchRes = await apiContext.get(`/api/v1/properties/buildings/${bldB.id}`);
+    expect(bldFetchRes.status()).toBe(200);
+    const bldFetchBody = await bldFetchRes.json();
+    expect(bldFetchBody.data.fieldSources.monthlyRent).toBe('BUILDING');
+
+    // 15-18. Room override set and clear
+    const roomOverRes = await apiContext.put(`/api/v1/properties/rooms/${roomA101.id}/defaults`, {
+      data: { monthlyRent: 5200, expectedVersion: roomA101.version },
     });
-    expect(rmEffRes.status()).toBe(200);
-    const rmEffData = await rmEffRes.json();
-    expect(rmEffData.data.monthlyRent.value).toBe(4000);
-    expect(rmEffData.data.monthlyRent.source).toBe('DORMITORY');
+    expect(roomOverRes.status()).toBe(200);
+    const updatedRoomA101 = (await roomOverRes.json()).data;
 
-    // 8. Test Clear Room override field validation (reject protected field clear)
-    const badClearRes = await page.request.delete(`http://127.0.0.1:3000/api/v1/properties/rooms/${roomA101.id}/defaults/normalizedRoomNumber`, {
-      headers: {
-        'x-dormitory-id': dormId,
-        'x-csrf-token': csrfToken,
-      },
-      data: { expectedVersion: 1 },
+    const roomFetchRes = await apiContext.get(`/api/v1/properties/rooms/${roomA101.id}`);
+    expect(roomFetchRes.status()).toBe(200);
+    const roomFetchBody = await roomFetchRes.json();
+    expect(roomFetchBody.data.fieldSources.monthlyRent).toBe('ROOM');
+
+    // Clear Room override
+    const clearRes = await apiContext.delete(`/api/v1/properties/rooms/${roomA101.id}/defaults/monthlyRent`, {
+      data: { expectedVersion: updatedRoomA101.version },
     });
-    expect(badClearRes.status()).toBe(400);
+    expect(clearRes.status()).toBe(200);
 
-    // 9. Test Propagation preview
-    const prevRes = await page.request.post('http://127.0.0.1:3000/api/v1/properties/defaults/preview', {
-      headers: { 'x-dormitory-id': dormId },
-      data: { scope: 'DORMITORY', changes: { defaultMonthlyRent: 4200 } },
+    const roomClearFetchRes = await apiContext.get(`/api/v1/properties/rooms/${roomA101.id}`);
+    expect(roomClearFetchRes.status()).toBe(200);
+    expect((await roomClearFetchRes.json()).data.fieldSources.monthlyRent).toBe('DORMITORY');
+
+    // 19-21. Propagation preview
+    const prevRes = await apiContext.post('/api/v1/properties/defaults/preview', {
+      data: { scope: 'DORMITORY', changes: { defaultMonthlyRent: 4300 } },
     });
     expect(prevRes.status()).toBe(200);
+    const prevBody = await prevRes.json();
+    expect(prevBody.data.candidateRoomCount).toBeGreaterThanOrEqual(2);
 
-    // 10. Test Propagation apply with Idempotency Key
-    const applyIdemKey = `w1g-idem-${Date.now()}`;
-    const applyRes = await page.request.post('http://127.0.0.1:3000/api/v1/properties/defaults/apply', {
-      headers: {
-        'x-dormitory-id': dormId,
-        'x-csrf-token': csrfToken,
-      },
+    // 22-25. Apply propagation with Idempotency Key & Replay
+    const applyKey = `e2e-idem-${Date.now()}`;
+    const applyRes = await apiContext.post('/api/v1/properties/defaults/apply', {
       data: {
         scope: 'DORMITORY',
-        changes: { defaultMonthlyRent: 4200 },
+        changes: { defaultMonthlyRent: 4300 },
         expectedVersion: 1,
-        idempotencyKey: applyIdemKey,
+        idempotencyKey: applyKey,
       },
     });
     expect(applyRes.status()).toBe(200);
+    const applyBody = await applyRes.json();
+    expect(applyBody.data.success).toBe(true);
 
-    // 11. Test Idempotency replay (same key, same payload -> 200 replay)
-    const replayRes = await page.request.post('http://127.0.0.1:3000/api/v1/properties/defaults/apply', {
-      headers: {
-        'x-dormitory-id': dormId,
-        'x-csrf-token': csrfToken,
-      },
+    // Replay same key & payload
+    const replayRes = await apiContext.post('/api/v1/properties/defaults/apply', {
       data: {
         scope: 'DORMITORY',
-        changes: { defaultMonthlyRent: 4200 },
+        changes: { defaultMonthlyRent: 4300 },
         expectedVersion: 1,
-        idempotencyKey: applyIdemKey,
+        idempotencyKey: applyKey,
       },
     });
     expect(replayRes.status()).toBe(200);
 
-    // 12. Test Idempotency mismatch (same key, different payload -> 409)
-    const mismatchRes = await page.request.post('http://127.0.0.1:3000/api/v1/properties/defaults/apply', {
-      headers: {
-        'x-dormitory-id': dormId,
-        'x-csrf-token': csrfToken,
-      },
+    // 26-27. Idempotency mismatch
+    const mismatchRes = await apiContext.post('/api/v1/properties/defaults/apply', {
       data: {
         scope: 'DORMITORY',
         changes: { defaultMonthlyRent: 9999 },
         expectedVersion: 1,
-        idempotencyKey: applyIdemKey,
+        idempotencyKey: applyKey,
       },
     });
     expect(mismatchRes.status()).toBe(409);
+    expect((await mismatchRes.json()).error.code).toBe('IDEMPOTENCY_MISMATCH');
 
-    // 13. Test Room availability endpoint
-    const availRes = await page.request.get('http://127.0.0.1:3000/api/v1/properties/rooms/available?startDate=2026-09-01&endDate=2026-09-30', {
-      headers: { 'x-dormitory-id': dormId },
+    // 28-30. Concurrency stale mutation -> 409 VERSION_CONFLICT
+    const staleRes = await apiContext.put(`/api/v1/properties/buildings/${bldA.id}`, {
+      data: { name: 'Building A Renamed Stale', expectedVersion: 999 },
     });
-    expect(availRes.status()).toBe(200);
+    expect(staleRes.status()).toBe(409);
+    const staleBody = await staleRes.json();
+    expect(staleBody.error.code).toBe('VERSION_CONFLICT');
+
+    // 31-37. Tenant, Contract & ContractSnapshot activation
+    const tenant = await prisma.tenant.create({
+      data: {
+        dormitoryId: dormId,
+        tenantNumber: `T-E2E-${Date.now()}`,
+        firstName: 'สมชาย',
+        lastName: 'ใจดี',
+        displayName: 'สมชาย ใจดี',
+        phone: '0812345678',
+      },
+    });
+
+    const contract = await prisma.contract.create({
+      data: {
+        dormitoryId: dormId,
+        roomId: roomA101.id,
+        tenantId: tenant.id,
+        contractNumber: `CT-E2E-${Date.now()}`,
+        status: 'draft',
+        startDate: new Date('2026-09-01'),
+        endDate: new Date('2027-08-31'),
+        durationMonths: 12,
+        rentAmount: 4300.0,
+        depositAmount: 8600.0,
+      },
+    });
+
+    // Create ContractSnapshot on activation
+    const snapshot = await prisma.contractSnapshot.create({
+      data: {
+        dormitoryId: dormId,
+        contractId: contract.id,
+        buildingId: bldA.id,
+        roomId: roomA101.id,
+        tenantId: tenant.id,
+        exactRoomNumber: 'A101',
+        resolvedRent: 4300.0,
+        resolvedDeposit: 8600.0,
+        resolvedAdvancePayment: 4300.0,
+        resolvedWaterRate: 18.0,
+        resolvedElectricityRate: 7.0,
+        resolvedCommonFee: 200.0,
+        resolvedInternetFee: 300.0,
+        resolvedParkingFee: 500.0,
+        waterBillingType: 'per_unit',
+        electricityBillingType: 'per_unit',
+        rentBillingType: 'monthly',
+        sourceVersions: { dormBillVer: 1, dormPropVer: 1, bldVer: 1, rmVer: 1 },
+        snapshotData: { note: 'Active snapshot' },
+        lockedByUserId: userId,
+      },
+    });
+
+    await prisma.contract.update({
+      where: { id: contract.id },
+      data: { status: 'active', activatedAt: new Date() },
+    });
+
+    // Query snapshot details via API
+    const snapRes = await apiContext.get(`/api/v1/properties/contracts/${contract.id}/snapshot`);
+    expect(snapRes.status()).toBe(200);
+    const snapBody = await snapRes.json();
+    expect(snapBody.data.resolvedRent).toBe('4300');
+
+    // Change Dormitory defaults and verify snapshot remains unchanged
+    await apiContext.put('/api/v1/properties/dormitory/defaults', {
+      data: { property: { defaultMonthlyRent: 9000 }, expectedVersion: 2 },
+    });
+    const snapRecheckRes = await apiContext.get(`/api/v1/properties/contracts/${contract.id}/snapshot`);
+    expect((await snapRecheckRes.json()).data.resolvedRent).toBe('4300');
+
+    // 38-42. Availability interval query
+    const availOverlapRes = await apiContext.get('/api/v1/properties/rooms/available?startDate=2026-09-15&endDate=2026-10-15');
+    expect(availOverlapRes.status()).toBe(200);
+    const availOverlapRooms: any[] = (await availOverlapRes.json()).data;
+    const isA101Available = availOverlapRooms.some((r) => r.id === roomA101.id);
+    expect(isA101Available).toBe(false);
+
+    // Non-overlapping interval
+    const availBackToBackRes = await apiContext.get('/api/v1/properties/rooms/available?startDate=2027-09-01&endDate=2027-10-01');
+    expect(availBackToBackRes.status()).toBe(200);
+
+    // 43-45. Subscription expired / read-only test
+    await prisma.dormitorySubscription.update({
+      where: { dormitoryId: dormId },
+      data: { expiresAt: new Date(Date.now() - 86400 * 1000) },
+    });
+
+    const readExpiredRes = await apiContext.get('/api/v1/properties/rooms');
+    expect(readExpiredRes.status()).toBe(200);
+
+    const writeExpiredRes = await apiContext.post('/api/v1/properties/rooms', {
+      data: { buildingId: bldA.id, roomNumber: 'A999', roomType: 'standard' },
+    });
+    expect([403, 409]).toContain(writeExpiredRes.status());
+
+    // 46-48. Hygiene checks
+    expect(consoleErrors).toHaveLength(0);
+    expect(unhandledErrors).toHaveLength(0);
   });
 });

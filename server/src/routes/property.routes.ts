@@ -79,7 +79,11 @@ export function createPropertyRouter(
         sortDirection: req.query.sortDirection as 'asc' | 'desc',
       };
       const result = await buildingService.getBuildings(dormId, query);
-      res.json({ data: result.items, pagination: { total: result.total, page: query.page, pageSize: query.pageSize } });
+      const { defaultsService } = await import('../services/defaults.service.js');
+      const enrichedItems = await Promise.all(
+        result.items.map((b) => defaultsService.buildAuthoritativeBuildingResponse(dormId, b))
+      );
+      res.json({ data: enrichedItems, pagination: { total: result.total, page: query.page, pageSize: query.pageSize } });
     } catch (err) {
       handleServiceError(res, err, req);
     }
@@ -90,7 +94,9 @@ export function createPropertyRouter(
     try {
       const dormId = getDormitoryId(req);
       const building = await buildingService.getBuildingById(req.params.id, dormId);
-      res.json({ data: building });
+      const { defaultsService } = await import('../services/defaults.service.js');
+      const enriched = await defaultsService.buildAuthoritativeBuildingResponse(dormId, building);
+      res.json({ data: enriched });
     } catch (err) {
       handleServiceError(res, err, req);
     }
@@ -234,7 +240,11 @@ export function createPropertyRouter(
         sortDirection: req.query.sortDirection as 'asc' | 'desc',
       };
       const result = await roomService.getRooms(dormId, query);
-      res.json({ data: result.items, pagination: { total: result.total, page: query.page, pageSize: query.pageSize } });
+      const { defaultsService } = await import('../services/defaults.service.js');
+      const enrichedItems = await Promise.all(
+        result.items.map((room) => defaultsService.buildAuthoritativeRoomResponse(dormId, room))
+      );
+      res.json({ data: enrichedItems, pagination: { total: result.total, page: query.page, pageSize: query.pageSize } });
     } catch (err) {
       handleServiceError(res, err, req);
     }
@@ -262,7 +272,9 @@ export function createPropertyRouter(
     try {
       const dormId = getDormitoryId(req);
       const room = await roomService.getRoomById(req.params.id, dormId);
-      res.json({ data: room });
+      const { defaultsService } = await import('../services/defaults.service.js');
+      const enriched = await defaultsService.buildAuthoritativeRoomResponse(dormId, room);
+      res.json({ data: enriched });
     } catch (err) {
       handleServiceError(res, err, req);
     }
@@ -597,7 +609,31 @@ export function createPropertyRouter(
         });
       }
 
-      res.json({ data: snapshot });
+      const formattedSnapshot = {
+        contractId: snapshot.contractId,
+        snapshotId: snapshot.id,
+        roomId: snapshot.roomId,
+        buildingId: snapshot.buildingId,
+        tenantId: snapshot.tenantId,
+        exactRoomNumber: snapshot.exactRoomNumber,
+        resolvedRent: String(snapshot.resolvedRent),
+        resolvedDeposit: String(snapshot.resolvedDeposit),
+        resolvedAdvancePayment: String(snapshot.resolvedAdvancePayment),
+        resolvedWaterRate: String(snapshot.resolvedWaterRate),
+        resolvedElectricityRate: String(snapshot.resolvedElectricityRate),
+        resolvedCommonFee: String(snapshot.resolvedCommonFee),
+        resolvedInternetFee: String(snapshot.resolvedInternetFee),
+        resolvedParkingFee: String(snapshot.resolvedParkingFee),
+        waterBillingType: snapshot.waterBillingType,
+        electricityBillingType: snapshot.electricityBillingType,
+        rentBillingType: snapshot.rentBillingType,
+        sourceVersions: snapshot.sourceVersions,
+        snapshotLockedAt: snapshot.lockedAt,
+        lockedByUserId: snapshot.lockedByUserId,
+        snapshotData: snapshot.snapshotData,
+      };
+
+      res.json({ data: formattedSnapshot });
     } catch (err) {
       handleServiceError(res, err, req);
     }
