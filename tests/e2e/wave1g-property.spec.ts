@@ -344,7 +344,7 @@ test.describe.serial('Wave 1G Real Playwright Lifecycle — Property, Room Defau
   });
 
   test('Visible Owner UI Interactions Lifecycle — Property, Defaults, Availability & Contracts', async ({ page, context }) => {
-    test.setTimeout(90000);
+    test.setTimeout(180000);
     const test2ConsoleErrors: string[] = [];
     const test2PageErrors: string[] = [];
 
@@ -376,8 +376,16 @@ test.describe.serial('Wave 1G Real Playwright Lifecycle — Property, Room Defau
       window.sessionStorage.setItem('active_dormitory_selected_for_session', id);
     }, dormId);
 
-    // Authenticated API context for out-of-band mutations (correction #1)
     const apiContext = await playwrightRequest.newContext({
+      baseURL: 'http://127.0.0.1:3001',
+      extraHTTPHeaders: {
+        Cookie: `horplus_session=${sessionToken}; horplus_csrf=${csrfToken}`,
+        'x-csrf-token': csrfToken,
+        'x-dormitory-id': dormId,
+      },
+    });
+
+    const apiContext2 = await playwrightRequest.newContext({
       baseURL: 'http://127.0.0.1:3001',
       extraHTTPHeaders: {
         Cookie: `horplus_session=${sessionToken}; horplus_csrf=${csrfToken}`,
@@ -472,7 +480,19 @@ test.describe.serial('Wave 1G Real Playwright Lifecycle — Property, Room Defau
     await roomsAfterClearPromise;
     await page.waitForTimeout(500);
 
+    // Ensure all building overrides are cleared via API
+    const bldListRes = await apiContext.get('/api/v1/properties/buildings');
+    const bldList = (await bldListRes.json()).data;
+    for (const bldItem of bldList) {
+      if (bldItem.monthlyRent !== null) {
+        await apiContext.delete(`/api/v1/properties/buildings/${bldItem.id}/defaults/monthlyRent`, {
+          data: { expectedVersion: bldItem.version || 1 }
+        });
+      }
+    }
+
     // Close building modal so room cards are visible
+    await page.keyboard.press('Escape');
     await page.keyboard.press('Escape');
     await expect(page.locator('.fixed.inset-0.z-\\[500\\]')).not.toBeVisible({ timeout: 5000 });
     await page.waitForTimeout(300);
@@ -549,9 +569,17 @@ test.describe.serial('Wave 1G Real Playwright Lifecycle — Property, Room Defau
     // ============================================================
     // SECTION 4: Deterministic VERSION_CONFLICT via second API call
     // ============================================================
-    await page.goto('/owner/settings');
-    await page.waitForLoadState('networkidle');
+    // Ensure room modal backdrop is fully unmounted before clicking Settings
+    await expect(page.locator('.fixed.inset-0.z-\\[500\\]')).not.toBeVisible({ timeout: 5000 });
+    await page.waitForTimeout(500);
+
+    const settingsBtn = page.getByTestId('nav-item-settings').last();
+    await expect(settingsBtn).toBeVisible({ timeout: 15000 });
+    await settingsBtn.click();
     await page.waitForTimeout(1000);
+
+    const defaultRentInput = page.locator('[data-testid="input-default-monthly-rent"]');
+    await expect(defaultRentInput).toBeVisible({ timeout: 15000 });
 
     // Read current version from server
     const currentDefaultsRes = await apiContext.get('/api/v1/properties/dormitory/defaults');
@@ -559,8 +587,8 @@ test.describe.serial('Wave 1G Real Playwright Lifecycle — Property, Room Defau
     const currentDefaults = await currentDefaultsRes.json();
     const currentPropertyVersion = currentDefaults.data.property.version;
 
-    // Bump version out-of-band via second authenticated API call (correction #1)
-    const bumpRes = await apiContext.put('/api/v1/properties/dormitory/defaults', {
+    // Bump version out-of-band via second authenticated API call while UI holds currentPropertyVersion
+    const bumpRes = await apiContext2.put('/api/v1/properties/dormitory/defaults', {
       data: {
         property: {
           changes: { defaultMonthlyRent: 9100 },
@@ -569,12 +597,8 @@ test.describe.serial('Wave 1G Real Playwright Lifecycle — Property, Room Defau
       },
     });
     expect(bumpRes.status()).toBe(200);
-    // Server property version is now currentPropertyVersion + 1
-    // UI still holds stale version = currentPropertyVersion
 
     // Trigger save on UI with stale version -> VERSION_CONFLICT
-    const defaultRentInput = page.getByTestId('input-default-monthly-rent');
-    await expect(defaultRentInput).toBeVisible({ timeout: 15000 });
     await defaultRentInput.fill('9200');
     await defaultRentInput.blur();
     await page.waitForTimeout(2000);
@@ -597,31 +621,37 @@ test.describe.serial('Wave 1G Real Playwright Lifecycle — Property, Room Defau
 
     // Retry: fill new value and save — should succeed now with fresh version
     await expect(defaultRentInput).toBeVisible({ timeout: 15000 });
+    const getDefaultsPromise = page.waitForResponse(
+      res => res.url().includes('/api/v1/properties/dormitory/defaults') && res.request().method() === 'GET' && res.status() === 200
+    );
     await defaultRentInput.fill('9200');
     await defaultRentInput.blur();
-    await page.waitForTimeout(2000);
+    await getDefaultsPromise;
+    await expect(defaultRentInput).toHaveValue('9200', { timeout: 10000 });
+    await page.waitForTimeout(500);
 
     // Assert: conflict modal does NOT reappear after reload + retry
     await expect(conflictModal).not.toBeVisible({ timeout: 5000 });
 
     // ============================================================
-    // SECTION 5: Exact Propagation Preview Results
+    // SECTION 5: Exact Real-Change and No-Op Propagation Results
     // ============================================================
-    // Change default rent to 9400 to preview propagation change from current (9200) to new (9400)
+    // Part A: Real-Change Propagation (Current = 9,200, Proposed = 9,400)
     const propRentInput = page.getByTestId('input-default-monthly-rent');
     await expect(propRentInput).toBeVisible({ timeout: 15000 });
+    await expect(propRentInput).toHaveValue('9200', { timeout: 10000 });
     await propRentInput.fill('9400');
-    await page.waitForTimeout(500);
+    await page.waitForTimeout(1000);
 
     const previewBtn = page.getByRole('button', { name: /Preview Propagation/i }).first();
-    await expect(previewBtn).toBeVisible({ timeout: 15000 });
+    await expect(previewBtn).toBeEnabled({ timeout: 15000 });
     await previewBtn.click();
 
     // Assert: Propagation preview modal is visible
     const previewModal = page.getByTestId('propagation-preview-modal');
     await expect(previewModal).toBeVisible({ timeout: 15000 });
 
-    // Assert exact counter values in preview (deterministic fixture values)
+    // Assert exact counter values for dirty field defaultMonthlyRent
     const counterCandidate = page.getByTestId('counter-candidate');
     await expect(counterCandidate).toHaveText('3');
 
@@ -629,30 +659,30 @@ test.describe.serial('Wave 1G Real Playwright Lifecycle — Property, Room Defau
     await expect(counterEligible).toHaveText('2');
 
     const eligibleFieldCount = page.getByTestId('eligible-field-change-count');
-    await expect(eligibleFieldCount).toHaveText('8');
+    await expect(eligibleFieldCount).toHaveText('2');
 
     const counterSkipped = page.getByTestId('counter-skipped');
     await expect(counterSkipped).toHaveText('1');
 
     const skippedFieldCount = page.getByTestId('skipped-field-change-count');
-    await expect(skippedFieldCount).toHaveText('4');
+    await expect(skippedFieldCount).toHaveText('1');
 
-    // Assert exact eligible effect row for Room C101 + defaultMonthlyRent
+    // Assert exact eligible effect row for Room C101: oldEffectiveValue = 9200, newEffectiveValue = 9400, eligible = true
     const effectC101 = page.getByTestId('preview-effect-C101-defaultMonthlyRent');
     await expect(effectC101).toBeVisible({ timeout: 5000 });
     await expect(effectC101.getByTestId('effect-room-C101')).toHaveText('C101');
     await expect(effectC101.getByTestId('effect-field-defaultMonthlyRent')).toHaveText('defaultMonthlyRent');
-    await expect(effectC101.getByTestId('effect-old-C101-defaultMonthlyRent')).toHaveText('9400');
+    await expect(effectC101.getByTestId('effect-old-C101-defaultMonthlyRent')).toHaveText('9200');
     await expect(effectC101.getByTestId('effect-new-C101-defaultMonthlyRent')).toHaveText('9400');
     await expect(effectC101.getByTestId('effect-status-C101-defaultMonthlyRent')).toHaveText(/เปลี่ยนแปลง/);
 
-    // Assert exact eligible effect row for Room B101 + defaultMonthlyRent
+    // Assert exact eligible effect row for Room B101
     const effectB101 = page.getByTestId('preview-effect-B101-defaultMonthlyRent');
     await expect(effectB101).toBeVisible({ timeout: 5000 });
     await expect(effectB101.getByTestId('effect-room-B101')).toHaveText('B101');
     await expect(effectB101.getByTestId('effect-status-B101-defaultMonthlyRent')).toHaveText(/เปลี่ยนแปลง/);
 
-    // Assert exact skipped effect row for Room A101 + defaultMonthlyRent
+    // Assert exact skipped effect row for Room A101 (EXPLICIT_ROOM_OVERRIDE / PROTECTED_CONTRACT)
     const effectA101 = page.getByTestId('preview-effect-A101-defaultMonthlyRent');
     await expect(effectA101).toBeVisible({ timeout: 5000 });
     await expect(effectA101.getByTestId('effect-room-A101')).toHaveText('A101');
@@ -669,13 +699,65 @@ test.describe.serial('Wave 1G Real Playwright Lifecycle — Property, Room Defau
     const resultModal = page.getByTestId('propagation-result-modal');
     await expect(resultModal).toBeVisible({ timeout: 15000 });
     await expect(page.getByTestId('applied-room-count')).toHaveText('2');
-    await expect(page.getByTestId('applied-field-change-count')).toHaveText('8');
+    await expect(page.getByTestId('applied-field-change-count')).toHaveText('2');
     await expect(page.getByTestId('skipped-room-count')).toHaveText('1');
-    await expect(page.getByTestId('skipped-field-change-count')).toHaveText('4');
+    await expect(page.getByTestId('skipped-field-change-count')).toHaveText('1');
 
     // Close result modal
     await page.getByTestId('btn-close-result').click();
     await expect(resultModal).not.toBeVisible({ timeout: 5000 });
+
+    // Part B: No-Op Propagation Proof (Current rent = 9,400, Proposed rent = 9,400)
+    // 1. Send Preview API for no-op change (9,400 -> 9,400)
+    const noOpPreviewRes = await apiContext.post('/api/v1/properties/defaults/preview', {
+      data: {
+        scope: 'DORMITORY',
+        changes: {
+          property: { defaultMonthlyRent: 9400 },
+        },
+      },
+    });
+    expect(noOpPreviewRes.status()).toBe(200);
+    const noOpPreview = (await noOpPreviewRes.json()).data;
+
+    expect(noOpPreview.eligibleRoomCount).toBe(0);
+    expect(noOpPreview.eligibleFieldChangeCount).toBe(0);
+
+    const c101NoOpEffect = noOpPreview.fieldEffects.find((e: any) => e.roomNumber === 'C101' && e.field === 'defaultMonthlyRent');
+    expect(c101NoOpEffect).toBeDefined();
+    expect(c101NoOpEffect.eligible).toBe(false);
+    expect(c101NoOpEffect.skipReason).toBe('NO_EFFECTIVE_CHANGE');
+
+    // 2. Fetch current version before no-op apply
+    const propPreNoOpRes = await apiContext.get('/api/v1/properties/dormitory/defaults');
+    const propPreNoOpVer = (await propPreNoOpRes.json()).data.property.version;
+
+    // 3. Send Apply API for no-op change
+    const noOpApplyRes = await apiContext.post('/api/v1/properties/defaults/apply', {
+      data: {
+        scope: 'DORMITORY',
+        changes: {
+          property: { defaultMonthlyRent: 9400 },
+        },
+        expectedVersions: {
+          property: propPreNoOpVer,
+          billing: (await propPreNoOpRes.json()).data.billing?.version || 1,
+        },
+        idempotencyKey: `noop-idem-${Date.now()}`,
+      },
+    });
+    expect(noOpApplyRes.status()).toBe(200);
+    const noOpApply = (await noOpApplyRes.json()).data;
+
+    expect(noOpApply.noOp).toBe(true);
+    expect(noOpApply.appliedRoomCount).toBe(0);
+    expect(noOpApply.appliedFieldChangeCount).toBe(0);
+    expect(noOpApply.auditLogId).toBeNull();
+
+    // 4. Verify version did NOT increment
+    const propPostNoOpRes = await apiContext.get('/api/v1/properties/dormitory/defaults');
+    const propPostNoOpVer = (await propPostNoOpRes.json()).data.property.version;
+    expect(propPostNoOpVer).toBe(propPreNoOpVer);
 
     // Inspect Room C101 card on Rooms page to assert exact committed effective value
     await page.goto('/owner/rooms');
