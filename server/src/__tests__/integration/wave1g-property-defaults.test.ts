@@ -149,6 +149,52 @@ describe('Wave 1G — Property, Room Defaults & Availability Comprehensive Unit 
 
       process.env.DATABASE_URL = prevUrl;
     });
+
+    it('proves reconciliation function returns non-zero conflict report when duplicates exist', async () => {
+      const mockRooms = [
+        { id: 'rm-1', dormitoryId: 'dorm-1', buildingId: 'bld-1', roomNumber: 'A101', normalizedRoomNumber: 'a101' },
+        { id: 'rm-2', dormitoryId: 'dorm-1', buildingId: 'bld-2', roomNumber: 'a101', normalizedRoomNumber: 'a101' },
+      ];
+
+      const mockTx = {
+        room: {
+          findMany: async () => mockRooms,
+          update: async () => {},
+        },
+      };
+
+      const { reconcileRoomNormalization } = await import('../../scripts/reconcile-room-normalization.js');
+      const res = await reconcileRoomNormalization(mockTx);
+
+      expect(res.success).toBe(false);
+      expect(res.conflictCount).toBe(2);
+      expect(res.conflicts).toHaveLength(2);
+      expect(res.conflicts[0].conflictGroup).toBe('dorm-1::a101');
+    });
+
+    it('proves reconciliation function succeeds when no normalized duplicates exist', async () => {
+      const mockRooms = [
+        { id: 'rm-1', dormitoryId: 'dorm-1', buildingId: 'bld-1', roomNumber: 'A101', normalizedRoomNumber: 'a101' },
+        { id: 'rm-2', dormitoryId: 'dorm-1', buildingId: 'bld-1', roomNumber: 'B101', normalizedRoomNumber: 'b101' },
+        { id: 'rm-3', dormitoryId: 'dorm-1', buildingId: 'bld-1', roomNumber: ' B   201 ', normalizedRoomNumber: 'b 201' },
+        { id: 'rm-4', dormitoryId: 'dorm-1', buildingId: 'bld-1', roomNumber: '1/1', normalizedRoomNumber: '1/1' },
+      ];
+
+      const mockTx = {
+        room: {
+          findMany: async () => mockRooms,
+          update: async () => {},
+        },
+        $transaction: async (cb: any) => cb(mockTx),
+      };
+
+      const { reconcileRoomNormalization } = await import('../../scripts/reconcile-room-normalization.js');
+      const res = await reconcileRoomNormalization(mockTx);
+
+      expect(res.success).toBe(true);
+      expect(res.conflicts).toHaveLength(0);
+      expect(res.processedRooms).toBe(4);
+    });
   });
 });
 
