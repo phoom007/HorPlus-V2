@@ -9,7 +9,7 @@ services:
       HORPLUS_APP_DB_USER: ${HORPLUS_APP_DB_USER:-horplus_app}
       HORPLUS_APP_DB_PASSWORD: ${HORPLUS_APP_DB_PASSWORD:-password}
     volumes:
-      - ./docker/init-db.sh:/docker-entrypoint-initdb.d/01_init_runtime_role.sh
+      - ./docker/bootstrap-runtime-role.sh:/docker-entrypoint-initdb.d/01_bootstrap_runtime_role.sh
     ports:
       - "5455:5432"
     healthcheck:

@@ -13,7 +13,7 @@ services:
       HORPLUS_APP_DB_PASSWORD: ${HORPLUS_APP_DB_PASSWORD:-horplus_dev_password}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./docker/init-db.sh:/docker-entrypoint-initdb.d/01_init_runtime_role.sh
+      - ./docker/bootstrap-runtime-role.sh:/docker-entrypoint-initdb.d/01_bootstrap_runtime_role.sh
     ports:
       - "5432:5432"
     healthcheck:

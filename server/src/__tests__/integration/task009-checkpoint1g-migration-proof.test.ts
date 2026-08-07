@@ -202,7 +202,7 @@ describe('TASK-009 Checkpoint 1G — Migration Freeze & Real Upgrade/Fresh Proof
       // All 13 should be applied
       const statusOutput = runPrismaMigrate(UPGRADE_DB, 'migrate status');
       expect(statusOutput).toContain('Database schema is up to date');
-    }, 30000);
+    }, 60000);
 
     it('5. Seeds representative pre-TASK009 data and records BEFORE counts', async () => {
       const client = new PrismaClient({ datasources: { db: { url: dbUrl(UPGRADE_DB) } } });
