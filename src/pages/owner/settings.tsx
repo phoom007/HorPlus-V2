@@ -20,7 +20,8 @@ import {
   SlidersHorizontal,
   PenTool,
   CheckCircle2,
-  Layers
+  Layers,
+  Copy
 } from 'lucide-react';
 import {
   getDormitory,
