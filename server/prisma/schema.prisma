@@ -172,7 +172,7 @@ model DormitoryMember {
   dormitoryId      String    @map("dormitory_id") @db.Uuid
   roleId           String    @map("role_id") @db.Uuid
   status           String    @default("active") @db.VarChar(50) // invited, active, suspended, revoked
-  membershipOrigin String    @default("GOOGLE_BOOTSTRAP") @map("membership_origin") @db.VarChar(50) // GOOGLE_BOOTSTRAP, ACCESS_GRANT
+  membershipOrigin String    @default("LEGACY_MEMBER") @map("membership_origin") @db.VarChar(50) // GOOGLE_BOOTSTRAP, LEGACY_MEMBER, MANUAL_GRANT
   invitedAt        DateTime? @map("invited_at") @db.Timestamptz()
   acceptedAt       DateTime? @map("accepted_at") @db.Timestamptz()
   suspendedAt      DateTime? @map("suspended_at") @db.Timestamptz()
