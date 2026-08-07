@@ -79,8 +79,11 @@ export class LineFriendService {
    * Get decrypted actual LINE userId internally for server-side push adapter
    */
   async getActualLineUserId(lineFriendId: string): Promise<string | null> {
-    const friend = await this.prisma.dormitoryLineFriend.findUnique({
-      where: { id: lineFriendId }
+    const friend = await this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT set_config('app.bypass_rls', 'true', true)`;
+      return await tx.dormitoryLineFriend.findUnique({
+        where: { id: lineFriendId }
+      });
     });
     if (!friend || !friend.lineUserIdEncrypted) return null;
     try {
