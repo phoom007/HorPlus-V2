@@ -26,6 +26,9 @@ import { healthRouter } from './health.routes.js';
 import { createNotificationRouter, createTenantNotificationRouter } from './notification.routes.js';
 import { createTenantPortalRouter } from './tenant-portal.routes.js';
 import { createSubscriptionRouter } from './subscription.routes.js';
+import { createStaffRoutes } from './staff.routes.js';
+import { createLineOaRoutes } from './line-oa.routes.js';
+import { getPrismaClient } from '../db/prisma.js';
 import { resolveDormitoryContextMiddleware } from '../middleware/permission.js';
 import { BuildingService } from '../services/building.service.js';
 import { RoomService } from '../services/room.service.js';
@@ -78,6 +81,10 @@ export function createApiRouter(deps: AppApiDependencies | AuthenticationService
   router.use('/auth', createAuthRouter(authService));
   router.use('/subscription', createSubscriptionRouter(authService));
   router.use('/', createUserRouter(authService));
+
+  const prisma = getPrismaClient();
+  router.use('/', createStaffRoutes(prisma));
+  router.use('/', createLineOaRoutes(prisma));
 
   if (isDeps) {
     const fullDeps = deps as AppApiDependencies;

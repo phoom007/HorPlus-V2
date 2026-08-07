@@ -9,6 +9,7 @@ import { ISessionRepository, SessionEntity } from '../db/repositories/session.re
 import { IMembershipRepository, DormitoryMemberEntity } from '../db/repositories/membership.repository.js';
 import { IRoleRepository } from '../db/repositories/role.repository.js';
 import { createRequireSessionMiddleware } from '../middleware/require-session.js';
+import { getPrismaClient } from '../db/prisma.js';
 
 export interface AuthResult {
   user: {
@@ -248,6 +249,56 @@ export class AuthenticationService {
     if (!session) { return null; }
     if (session.status !== 'active') { return null; }
     if (session.expiresAt < new Date()) { return null; }
+
+    // Dynamic resolution for ACCESS_GRANT sessions (Task-009 Final Product Model)
+    if (session.principalType === 'ACCESS_GRANT' || session.accessGrantId) {
+      const prisma = getPrismaClient();
+      const grant = await prisma.dormitoryAccessGrant.findUnique({
+        where: { id: session.accessGrantId! },
+        include: { lineFriend: true, dormitory: true }
+      });
+
+      if (!grant || grant.status !== 'ACTIVE') {
+        return null; // Deny immediately if access grant is revoked or deleted
+      }
+
+      const roleObj = await this.roleRepo.findByCode(grant.roleCode);
+      const permissions = roleObj?.permissions || (grant.roleCode === 'OWNER' ? ['*'] : []);
+
+      const mockUser: UserEntity = {
+        id: `ag_user_${grant.id}`,
+        email: `grant.${grant.tokenPrefix || grant.id}@horplus.local`,
+        emailNormalized: `grant.${grant.tokenPrefix || grant.id}@horplus.local`,
+        name: grant.lineFriend.displayName,
+        avatarUrl: grant.lineFriend.pictureUrl,
+        status: 'active',
+        googleSubject: `ag_sub_${grant.id}`,
+        createdAt: grant.createdAt,
+        updatedAt: grant.updatedAt
+      };
+
+      const syntheticMembership: DormitoryMemberEntity = {
+        id: `mem_${grant.id}`,
+        dormitoryId: grant.dormitoryId,
+        dormitoryName: grant.dormitory.name,
+        userId: mockUser.id,
+        roleId: roleObj?.id || `role-${grant.roleCode.toLowerCase()}`,
+        roleCode: grant.roleCode, // DYNAMIC current role code resolved from DB on every request!
+        rolePermissions: permissions,
+        status: 'active',
+        createdAt: grant.createdAt,
+        updatedAt: grant.updatedAt
+      };
+
+      this.sessionRepo.updateLastSeen(session.id).catch(() => {});
+
+      return {
+        user: mockUser,
+        session,
+        rawSessionId: payload.sid,
+        memberships: [syntheticMembership]
+      };
+    }
 
     const user = await this.userRepo.findById(payload.sub);
     if (!user) { return null; }

@@ -2,7 +2,9 @@ import { PrismaClient } from '@prisma/client';
 
 export interface SessionEntity {
   id: string;
-  userId: string;
+  userId?: string | null;
+  principalType?: string;
+  accessGrantId?: string | null;
   sessionIdHash: string;
   tokenVersion: number;
   status: 'active' | 'revoked' | 'expired';
@@ -114,6 +116,8 @@ export class PrismaSessionRepository implements ISessionRepository {
     return {
       id: model.id,
       userId: model.userId,
+      principalType: model.principalType,
+      accessGrantId: model.accessGrantId,
       sessionIdHash: model.sessionIdHash,
       tokenVersion: model.tokenVersion,
       status: model.status as any,

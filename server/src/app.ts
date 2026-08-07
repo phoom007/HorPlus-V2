@@ -221,6 +221,9 @@ export function createApp(optionsOrAuth?: CreateAppOptions | AuthenticationServi
     })
   );
 
+  // Raw Body Parsing for LINE Webhook Signature Verification
+  app.use('/api/v1/line/webhook', express.raw({ type: 'application/json' }));
+
   // Body & Cookie Parsing
   app.use(express.json({ limit: env.BODY_LIMIT }));
   app.use(express.urlencoded({ extended: true, limit: env.BODY_LIMIT }));
