@@ -1,5 +1,5 @@
 /**
- * Per-Dormitory LINE OA Configuration & Webhook Service
+ * Per-Dormitory LINE OA Configuration & Webhook Service (SECURITY DEFINER Resolver & Concurrency Dedupe)
  * @license Apache-2.0
  */
 
@@ -28,41 +28,45 @@ export class LineOaService {
    * Get LINE OA connection status (Secrets REDACTED)
    */
   async getDormitoryLineConfig(dormitoryId: string, baseUrl = 'https://app.horplus.com') {
-    const config = await this.prisma.dormitoryLineConfig.findUnique({
-      where: { dormitoryId }
-    });
+    return await this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormitoryId}, true)`;
 
-    if (!config) {
-      return {
-        connected: false,
-        hasChannelSecret: false,
-        hasAccessToken: false,
-        lineOaId: null,
-        channelId: null,
-        lastVerifiedAt: null,
-        webhookUrl: null
-      };
-    }
+      const config = await tx.dormitoryLineConfig.findUnique({
+        where: { dormitoryId }
+      });
 
-    let webhookUrl: string | null = null;
-    if (config.webhookKeyEncrypted) {
-      try {
-        const rawKey = decryptText(config.webhookKeyEncrypted);
-        webhookUrl = `${baseUrl}/api/v1/line/webhook/${rawKey}`;
-      } catch (err) {
-        webhookUrl = null;
+      if (!config) {
+        return {
+          connected: false,
+          hasChannelSecret: false,
+          hasAccessToken: false,
+          lineOaId: null,
+          channelId: null,
+          lastVerifiedAt: null,
+          webhookUrl: null
+        };
       }
-    }
 
-    return {
-      connected: config.isConnected,
-      hasChannelSecret: !!config.channelSecretEncrypted,
-      hasAccessToken: !!config.channelAccessTokenEncrypted,
-      lineOaId: config.lineOaId,
-      channelId: config.channelId,
-      lastVerifiedAt: config.lastVerifiedAt,
-      webhookUrl
-    };
+      let webhookUrl: string | null = null;
+      if (config.webhookKeyEncrypted) {
+        try {
+          const rawKey = decryptText(config.webhookKeyEncrypted);
+          webhookUrl = `${baseUrl}/api/v1/line/webhook/${rawKey}`;
+        } catch (err) {
+          webhookUrl = null;
+        }
+      }
+
+      return {
+        connected: config.isConnected,
+        hasChannelSecret: !!config.channelSecretEncrypted,
+        hasAccessToken: !!config.channelAccessTokenEncrypted,
+        lineOaId: config.lineOaId,
+        channelId: config.channelId,
+        lastVerifiedAt: config.lastVerifiedAt,
+        webhookUrl
+      };
+    });
   }
 
   /**
@@ -77,158 +81,225 @@ export class LineOaService {
       channelAccessToken?: string;
     }
   ) {
-    const existing = await this.prisma.dormitoryLineConfig.findUnique({
-      where: { dormitoryId }
-    });
+    return await this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormitoryId}, true)`;
 
-    let webhookKeyHash = existing?.webhookKeyHash;
-    let webhookKeyEncrypted = existing?.webhookKeyEncrypted;
+      const existing = await tx.dormitoryLineConfig.findUnique({
+        where: { dormitoryId }
+      });
 
-    if (!webhookKeyHash) {
-      const opaque = generateOpaqueWebhookKey();
-      webhookKeyHash = opaque.keyHash;
-      webhookKeyEncrypted = opaque.keyEncrypted;
-    }
+      let webhookKeyHash = existing?.webhookKeyHash;
+      let webhookKeyEncrypted = existing?.webhookKeyEncrypted;
 
-    const channelSecretEncrypted = data.channelSecret
-      ? encryptText(data.channelSecret)
-      : existing?.channelSecretEncrypted;
-
-    const channelAccessTokenEncrypted = data.channelAccessToken
-      ? encryptText(data.channelAccessToken)
-      : existing?.channelAccessTokenEncrypted;
-
-    const hasCredentials = !!(channelSecretEncrypted && channelAccessTokenEncrypted);
-    let verifiedSuccess = false;
-
-    if (hasCredentials) {
-      const secret = data.channelSecret || (existing?.channelSecretEncrypted ? decryptText(existing.channelSecretEncrypted) : undefined);
-      const token = data.channelAccessToken || (existing?.channelAccessTokenEncrypted ? decryptText(existing.channelAccessTokenEncrypted) : undefined);
-
-      verifiedSuccess = await this.lineAdapter.verifyCredentials({ channelSecret: secret, channelAccessToken: token });
-      if (!verifiedSuccess) {
-        throw new AppError('LINE OA credential verification failed. Please check Channel Secret and Access Token.', 400, 'LINE_VERIFICATION_FAILED');
+      if (!webhookKeyHash) {
+        const opaque = generateOpaqueWebhookKey();
+        webhookKeyHash = opaque.keyHash;
+        webhookKeyEncrypted = opaque.keyEncrypted;
       }
-    }
 
-    const isConnected = hasCredentials && verifiedSuccess;
+      const channelSecretEncrypted = data.channelSecret
+        ? encryptText(data.channelSecret)
+        : existing?.channelSecretEncrypted;
 
-    const updated = await this.prisma.dormitoryLineConfig.upsert({
-      where: { dormitoryId },
-      update: {
-        lineOaId: data.lineOaId ?? existing?.lineOaId,
-        channelId: data.channelId ?? existing?.channelId,
-        channelSecretEncrypted,
-        channelAccessTokenEncrypted,
-        webhookKeyHash: webhookKeyHash!,
-        webhookKeyEncrypted: webhookKeyEncrypted!,
-        isConnected,
-        lastVerifiedAt: isConnected ? new Date() : existing?.lastVerifiedAt
-      },
-      create: {
-        dormitoryId,
-        lineOaId: data.lineOaId,
-        channelId: data.channelId,
-        channelSecretEncrypted,
-        channelAccessTokenEncrypted,
-        webhookKeyHash: webhookKeyHash!,
-        webhookKeyEncrypted: webhookKeyEncrypted!,
-        isConnected,
-        lastVerifiedAt: isConnected ? new Date() : null
-      }
-    });
+      const channelAccessTokenEncrypted = data.channelAccessToken
+        ? encryptText(data.channelAccessToken)
+        : existing?.channelAccessTokenEncrypted;
 
-    await this.prisma.auditLog.create({
-      data: {
-        dormitoryId,
-        action: 'LINE_OA_CONFIG_UPDATED',
-        entityType: 'DormitoryLineConfig',
-        entityId: updated.id,
-        afterValues: {
-          lineOaId: updated.lineOaId,
-          channelId: updated.channelId,
-          hasChannelSecret: !!updated.channelSecretEncrypted,
-          hasAccessToken: !!updated.channelAccessTokenEncrypted,
-          isConnected: updated.isConnected
+      const hasCredentials = !!(channelSecretEncrypted && channelAccessTokenEncrypted);
+      let verifiedSuccess = false;
+
+      if (hasCredentials) {
+        const secret = data.channelSecret || (existing?.channelSecretEncrypted ? decryptText(existing.channelSecretEncrypted) : undefined);
+        const token = data.channelAccessToken || (existing?.channelAccessTokenEncrypted ? decryptText(existing.channelAccessTokenEncrypted) : undefined);
+
+        verifiedSuccess = await this.lineAdapter.verifyCredentials({ channelSecret: secret, channelAccessToken: token });
+        if (!verifiedSuccess) {
+          throw new AppError('LINE OA credential verification failed. Please check Channel Secret and Access Token.', 400, 'LINE_VERIFICATION_FAILED');
         }
       }
-    });
 
-    return this.getDormitoryLineConfig(dormitoryId);
+      const isConnected = hasCredentials && verifiedSuccess;
+
+      const updated = await tx.dormitoryLineConfig.upsert({
+        where: { dormitoryId },
+        update: {
+          lineOaId: data.lineOaId ?? existing?.lineOaId,
+          channelId: data.channelId ?? existing?.channelId,
+          channelSecretEncrypted,
+          channelAccessTokenEncrypted,
+          webhookKeyHash: webhookKeyHash!,
+          webhookKeyEncrypted: webhookKeyEncrypted!,
+          isConnected,
+          lastVerifiedAt: isConnected ? new Date() : existing?.lastVerifiedAt
+        },
+        create: {
+          dormitoryId,
+          lineOaId: data.lineOaId,
+          channelId: data.channelId,
+          channelSecretEncrypted,
+          channelAccessTokenEncrypted,
+          webhookKeyHash: webhookKeyHash!,
+          webhookKeyEncrypted: webhookKeyEncrypted!,
+          isConnected,
+          lastVerifiedAt: isConnected ? new Date() : null
+        }
+      });
+
+      await tx.auditLog.create({
+        data: {
+          dormitoryId,
+          action: 'LINE_OA_CONFIG_UPDATED',
+          entityType: 'DormitoryLineConfig',
+          entityId: updated.id,
+          afterValues: {
+            lineOaId: updated.lineOaId,
+            channelId: updated.channelId,
+            hasChannelSecret: !!updated.channelSecretEncrypted,
+            hasAccessToken: !!updated.channelAccessTokenEncrypted,
+            isConnected: updated.isConnected
+          }
+        }
+      });
+
+      let webhookUrl: string | null = null;
+      if (updated.webhookKeyEncrypted) {
+        try {
+          const rawKey = decryptText(updated.webhookKeyEncrypted);
+          webhookUrl = `https://app.horplus.com/api/v1/line/webhook/${rawKey}`;
+        } catch (err) {
+          webhookUrl = null;
+        }
+      }
+
+      return {
+        connected: updated.isConnected,
+        hasChannelSecret: !!updated.channelSecretEncrypted,
+        hasAccessToken: !!updated.channelAccessTokenEncrypted,
+        lineOaId: updated.lineOaId,
+        channelId: updated.channelId,
+        lastVerifiedAt: updated.lastVerifiedAt,
+        webhookUrl
+      };
+    });
   }
 
   /**
    * Disconnect LINE OA
    */
   async disconnectLineConfig(dormitoryId: string) {
-    const existing = await this.prisma.dormitoryLineConfig.findUnique({
-      where: { dormitoryId }
-    });
+    return await this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormitoryId}, true)`;
 
-    if (!existing) {
-      return this.getDormitoryLineConfig(dormitoryId);
-    }
+      const existing = await tx.dormitoryLineConfig.findUnique({
+        where: { dormitoryId }
+      });
 
-    await this.prisma.dormitoryLineConfig.update({
-      where: { dormitoryId },
-      data: { isConnected: false }
-    });
-
-    await this.prisma.auditLog.create({
-      data: {
-        dormitoryId,
-        action: 'LINE_OA_DISCONNECTED',
-        entityType: 'DormitoryLineConfig',
-        entityId: existing.id,
-        afterValues: { isConnected: false }
+      if (!existing) {
+        return {
+          connected: false,
+          hasChannelSecret: false,
+          hasAccessToken: false,
+          lineOaId: null,
+          channelId: null,
+          lastVerifiedAt: null,
+          webhookUrl: null
+        };
       }
-    });
 
-    return this.getDormitoryLineConfig(dormitoryId);
+      await tx.dormitoryLineConfig.update({
+        where: { dormitoryId },
+        data: { isConnected: false }
+      });
+
+      await tx.auditLog.create({
+        data: {
+          dormitoryId,
+          action: 'LINE_OA_DISCONNECTED',
+          entityType: 'DormitoryLineConfig',
+          entityId: existing.id,
+          afterValues: { isConnected: false }
+        }
+      });
+
+      return {
+        connected: false,
+        hasChannelSecret: !!existing.channelSecretEncrypted,
+        hasAccessToken: !!existing.channelAccessTokenEncrypted,
+        lineOaId: existing.lineOaId,
+        channelId: existing.channelId,
+        lastVerifiedAt: existing.lastVerifiedAt,
+        webhookUrl: null
+      };
+    });
   }
 
   /**
    * Rotate Webhook Key
    */
   async rotateWebhookKey(dormitoryId: string) {
-    const opaque = generateOpaqueWebhookKey();
+    return await this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormitoryId}, true)`;
 
-    const updated = await this.prisma.dormitoryLineConfig.update({
-      where: { dormitoryId },
-      data: {
-        webhookKeyHash: opaque.keyHash,
-        webhookKeyEncrypted: opaque.keyEncrypted
+      const opaque = generateOpaqueWebhookKey();
+
+      const updated = await tx.dormitoryLineConfig.update({
+        where: { dormitoryId },
+        data: {
+          webhookKeyHash: opaque.keyHash,
+          webhookKeyEncrypted: opaque.keyEncrypted
+        }
+      });
+
+      await tx.auditLog.create({
+        data: {
+          dormitoryId,
+          action: 'LINE_OA_WEBHOOK_KEY_ROTATED',
+          entityType: 'DormitoryLineConfig',
+          entityId: updated.id,
+          afterValues: { rotated: true }
+        }
+      });
+
+      let webhookUrl: string | null = null;
+      if (updated.webhookKeyEncrypted) {
+        try {
+          const rawKey = decryptText(updated.webhookKeyEncrypted);
+          webhookUrl = `https://app.horplus.com/api/v1/line/webhook/${rawKey}`;
+        } catch {
+          webhookUrl = null;
+        }
       }
-    });
 
-    await this.prisma.auditLog.create({
-      data: {
-        dormitoryId,
-        action: 'LINE_OA_WEBHOOK_KEY_ROTATED',
-        entityType: 'DormitoryLineConfig',
-        entityId: updated.id,
-        afterValues: { rotated: true }
-      }
+      return {
+        connected: updated.isConnected,
+        hasChannelSecret: !!updated.channelSecretEncrypted,
+        hasAccessToken: !!updated.channelAccessTokenEncrypted,
+        lineOaId: updated.lineOaId,
+        channelId: updated.channelId,
+        lastVerifiedAt: updated.lastVerifiedAt,
+        webhookUrl
+      };
     });
-
-    return this.getDormitoryLineConfig(dormitoryId);
   }
 
   /**
-   * Process raw LINE Webhook payload with signature verification & deduplication
+   * Process raw LINE Webhook payload via SECURITY DEFINER resolver, RLS context & dedupe concurrency
    */
   async processWebhookEvent(rawKey: string, bodyBuffer: Buffer, signatureHeader: string) {
     const keyHash = hashToken(rawKey);
 
-    const config = await this.prisma.dormitoryLineConfig.findUnique({
-      where: { webhookKeyHash: keyHash }
-    });
+    // Call narrow SECURITY DEFINER resolver function (fixed search_path)
+    const configs = await this.prisma.$queryRaw<any[]>`
+      SELECT id, dormitory_id, channel_secret_encrypted, is_connected
+      FROM public.resolve_line_webhook_config(${keyHash})
+    `;
 
-    if (!config || !config.channelSecretEncrypted) {
+    if (!configs || configs.length === 0 || !configs[0].channel_secret_encrypted) {
       throw new AppError('LINE webhook endpoint configuration not found', 404, 'WEBHOOK_CONFIG_NOT_FOUND');
     }
 
-    const channelSecret = decryptText(config.channelSecretEncrypted);
+    const resolvedConfig = configs[0];
+    const channelSecret = decryptText(resolvedConfig.channel_secret_encrypted);
 
     // Signature Verification
     const isValid = verifyLineSignature(bodyBuffer, channelSecret, signatureHeader);
@@ -250,68 +321,73 @@ export class LineOaService {
     for (const event of events) {
       const eventId = event.webhookEventId || event.eventId || `${event.type}_${event.timestamp}_${event.source?.userId}`;
 
-      // Deduplication check
-      const existingReceipt = await this.prisma.lineWebhookEventReceipt.findUnique({
-        where: { webhookEventId: eventId }
-      });
+      // Deduplication check via database transaction with RLS context
+      try {
+        await this.prisma.$transaction(async (tx) => {
+          await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${resolvedConfig.dormitory_id}, true)`;
 
-      if (existingReceipt) {
-        deduplicatedCount++;
-        continue;
+          const receipt = await tx.lineWebhookEventReceipt.create({
+            data: {
+              dormitoryId: resolvedConfig.dormitory_id,
+              webhookEventId: eventId,
+              eventType: event.type || 'unknown',
+              status: 'processing',
+              receivedAt: new Date(),
+              processedAt: null
+            }
+          });
+
+          const lineUserId = event.source?.userId;
+          if (lineUserId) {
+            let profile = await this.lineAdapter.getProfile(lineUserId).catch(() => null);
+            const displayName = profile?.displayName || `LINE User (${lineUserId.slice(-4)})`;
+            const pictureUrl = profile?.pictureUrl || null;
+
+            if (event.type === 'follow') {
+              await this.friendService.upsertFriendFromWebhook(
+                resolvedConfig.dormitory_id,
+                lineUserId,
+                displayName,
+                pictureUrl,
+                'FOLLOWING'
+              );
+            } else if (event.type === 'unfollow') {
+              await this.friendService.upsertFriendFromWebhook(
+                resolvedConfig.dormitory_id,
+                lineUserId,
+                displayName,
+                pictureUrl,
+                'UNFOLLOWED'
+              );
+            } else if (event.type === 'message' || event.type === 'postback') {
+              await this.friendService.upsertFriendFromWebhook(
+                resolvedConfig.dormitory_id,
+                lineUserId,
+                displayName,
+                pictureUrl,
+                'FOLLOWING'
+              );
+            }
+          }
+
+          // Mark receipt completed
+          await tx.lineWebhookEventReceipt.update({
+            where: { id: receipt.id },
+            data: {
+              status: 'processed',
+              processedAt: new Date()
+            }
+          });
+        });
+
+        processedCount++;
+      } catch (err: any) {
+        if (err.code === 'P2002' || err.message?.includes('unique constraint')) {
+          deduplicatedCount++;
+          continue;
+        }
+        throw err;
       }
-
-      // Record receipt initial state: receivedAt = now(), processedAt = NULL
-      const receipt = await this.prisma.lineWebhookEventReceipt.create({
-        data: {
-          dormitoryId: config.dormitoryId,
-          webhookEventId: eventId,
-          eventType: event.type || 'unknown',
-          status: 'processing',
-          receivedAt: new Date(),
-          processedAt: null
-        }
-      });
-
-      // Handle Event Types
-      const lineUserId = event.source?.userId;
-      if (lineUserId) {
-        if (event.type === 'follow') {
-          await this.friendService.upsertFriendFromWebhook(
-            config.dormitoryId,
-            lineUserId,
-            'LINE Follower',
-            undefined,
-            'FOLLOWING'
-          );
-        } else if (event.type === 'unfollow') {
-          await this.friendService.upsertFriendFromWebhook(
-            config.dormitoryId,
-            lineUserId,
-            'LINE Follower',
-            undefined,
-            'UNFOLLOWED'
-          );
-        } else if (event.type === 'message' || event.type === 'postback') {
-          await this.friendService.upsertFriendFromWebhook(
-            config.dormitoryId,
-            lineUserId,
-            'LINE User',
-            undefined,
-            'FOLLOWING'
-          );
-        }
-      }
-
-      // Mark receipt completed: status = 'processed', processedAt = now()
-      await this.prisma.lineWebhookEventReceipt.update({
-        where: { id: receipt.id },
-        data: {
-          status: 'processed',
-          processedAt: new Date()
-        }
-      });
-
-      processedCount++;
     }
 
     return {
