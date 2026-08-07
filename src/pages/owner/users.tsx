@@ -1,6 +1,6 @@
 /**
- * @license
- * SPDX-License-Identifier: Apache-2.0
+ * Owner Staff & Access Grant Management (Task-009 Final Product Model)
+ * @license Apache-2.0
  */
 
 import React, { useState, useEffect } from 'react';
@@ -21,583 +21,507 @@ import {
   XCircle,
   CheckCircle2,
   ChevronLeft,
-  ChevronRight
+  ChevronRight,
+  UserCheck,
+  Send,
+  RefreshCw
 } from 'lucide-react';
 
-interface AccessToken {
-  id: string; // UUID/token
-  role: 'owner' | 'manager' | 'staff';
-  createdAt: string;
-  status: 'active' | 'deleted';
+interface StaffMember {
+  id: string;
+  type: 'PERMANENT_GOOGLE_OWNER' | 'ACCESS_GRANT';
+  displayName: string;
+  email?: string;
+  pictureUrl?: string;
+  roleCode: 'OWNER' | 'MANAGER' | 'TECH';
+  roleName?: string;
+  membershipOrigin?: string;
+  label?: string;
+  status?: string;
+  version?: number;
+  tokenPrefix?: string;
+  createdAt?: string;
+  isPermanent: boolean;
+  canRevoke: boolean;
+  canChangeRole: boolean;
+}
+
+interface LineFriend {
+  id: string;
+  displayName: string;
+  pictureUrl?: string;
+  friendStatus: string;
+}
+
+interface SlotUsage {
+  googleOwnersCount: number;
+  activeGrantsCount: number;
+  totalUsedSlots: number;
+  maxSlots: number;
 }
 
 interface OwnerUsersProps {
   onAddLog: (action: string, details: string, type: string, id: string) => void;
 }
 
-const generateUUID = () => {
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
-    const r = Math.random() * 16 | 0, v = c === 'x' ? r : (r & 0x3 | 0x8);
-    return v.toString(16);
-  });
-};
-
-const formatThaiDate = (dateStr: string) => {
-  try {
-    const d = new Date(dateStr);
-    return d.toLocaleDateString('th-TH', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    }) + ' น.';
-  } catch (e) {
-    return dateStr;
-  }
-};
-
-export const OwnerUsers: React.FC<OwnerUsersProps> = ({
-  onAddLog
-}) => {
-  const [accessTokens, setAccessTokens] = useState<AccessToken[]>(() => {
-    const stored = localStorage.getItem('juristic_access_tokens');
-    if (!stored) return [];
-    try {
-      const parsed = JSON.parse(stored);
-      if (Array.isArray(parsed)) {
-        return parsed.filter((t: AccessToken) => t && t.status !== 'deleted');
-      }
-    } catch (e) {
-      console.error(e);
-    }
-    return [];
+export const OwnerUsers: React.FC<OwnerUsersProps> = ({ onAddLog }) => {
+  const [permanentOwners, setPermanentOwners] = useState<StaffMember[]>([]);
+  const [accessGrants, setAccessGrants] = useState<StaffMember[]>([]);
+  const [lineFriends, setLineFriends] = useState<LineFriend[]>([]);
+  const [slotUsage, setSlotUsage] = useState<SlotUsage>({
+    googleOwnersCount: 1,
+    activeGrantsCount: 0,
+    totalUsedSlots: 1,
+    maxSlots: 10
   });
 
-  useEffect(() => {
-    localStorage.setItem('juristic_access_tokens', JSON.stringify(accessTokens));
-  }, [accessTokens]);
-
-  const [tokenRole, setTokenRole] = useState<'owner' | 'manager' | 'staff'>('staff');
-  const [copiedTokenId, setCopiedTokenId] = useState<string | null>(null);
-  const [revokeConfirm, setRevokeConfirm] = useState<{ id: string; roleName: string; step: 1 | 2 } | null>(null);
-
-  const [currentPage, setCurrentPage] = useState(1);
+  const [selectedFriendId, setSelectedFriendId] = useState<string>('');
+  const [grantRole, setGrantRole] = useState<'OWNER' | 'MANAGER' | 'TECH'>('MANAGER');
   const [isCreating, setIsCreating] = useState(false);
+  const [createdGrantResult, setCreatedGrantResult] = useState<{
+    bearerUrl: string;
+    rawToken: string;
+    grant: any;
+  } | null>(null);
+
+  const [copiedGrantId, setCopiedGrantId] = useState<string | null>(null);
+  const [revokeConfirm, setRevokeConfirm] = useState<{ id: string; name: string } | null>(null);
   const [toast, setToast] = useState<{ message: string; visible: boolean; type: 'success' | 'error' }>({
     message: '',
     visible: false,
     type: 'success'
   });
-  const [isToastFading, setIsToastFading] = useState(false);
+
+  const getDormId = () => {
+    return (
+      localStorage.getItem('selected_dormitory_id') ||
+      sessionStorage.getItem('active_dormitory_selected_for_session') ||
+      'dorm-demo-001'
+    );
+  };
+
+  // Fetch Staff and LINE Friends from backend
+  const fetchStaffData = async () => {
+    const dormId = getDormId();
+    try {
+      const res = await fetch(`/api/v1/dormitories/${dormId}/staff`, { credentials: 'include' });
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success && json.data) {
+          setPermanentOwners(json.data.permanentOwners || []);
+          setAccessGrants(json.data.accessGrants || []);
+          setSlotUsage(json.data.slotUsage || { googleOwnersCount: 1, activeGrantsCount: 0, totalUsedSlots: 1, maxSlots: 10 });
+        }
+      }
+    } catch (err) {
+      console.warn('Backend staff API unavailable, using fallback state');
+    }
+
+    try {
+      const resFriends = await fetch(`/api/v1/dormitories/${dormId}/line-friends`, { credentials: 'include' });
+      if (resFriends.ok) {
+        const json = await resFriends.json();
+        if (json.success && json.data) {
+          setLineFriends(json.data || []);
+          if (json.data.length > 0 && !selectedFriendId) {
+            setSelectedFriendId(json.data[0].id);
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('Backend line-friends API unavailable');
+    }
+  };
 
   useEffect(() => {
-    if (toast.visible) {
-      setIsToastFading(false);
-      const fadeTimer = setTimeout(() => {
-        setIsToastFading(true);
-      }, 2900);
-      const removeTimer = setTimeout(() => {
-        setToast(prev => ({ ...prev, visible: false }));
-        setIsToastFading(false);
-      }, 3500);
+    fetchStaffData();
+  }, []);
 
-      return () => {
-        clearTimeout(fadeTimer);
-        clearTimeout(removeTimer);
-      };
-    }
-  }, [toast.visible]);
-  const itemsPerPage = 2;
-
-  const totalPages = Math.ceil(accessTokens.length / itemsPerPage);
-
-  useEffect(() => {
-    if (currentPage > totalPages && totalPages > 0) {
-      setCurrentPage(totalPages);
-    }
-  }, [accessTokens.length, totalPages, currentPage]);
-
-  const indexOfLastItem = currentPage * itemsPerPage;
-  const indexOfFirstItem = indexOfLastItem - itemsPerPage;
-  const currentItems = accessTokens.slice(indexOfFirstItem, indexOfLastItem);
-
-  const handleCreateTokenLink = () => {
+  const handleCreateGrant = async () => {
     if (isCreating) return;
     setIsCreating(true);
+    const dormId = getDormId();
 
-    // Simulated short delay (600ms) for professional click prevention and feedback feel
-    setTimeout(() => {
-      const newTokenId = generateUUID();
-      const newToken: AccessToken = {
-        id: newTokenId,
-        role: tokenRole,
-        createdAt: new Date().toISOString(),
-        status: 'active'
-      };
+    try {
+      const targetFriendId = selectedFriendId || (lineFriends[0]?.id || 'friend-demo-001');
 
-      const updated = [newToken, ...accessTokens];
-      setAccessTokens(updated);
-      setCurrentPage(1);
-
-      const roleThai = tokenRole === 'owner' ? 'เจ้าของหอพัก' : tokenRole === 'manager' ? 'ผู้จัดการ' : 'ช่าง/แม่บ้าน';
-      onAddLog(
-        'สร้างลิงก์สิทธิ์นิติบุคคลด่วน',
-        `สร้างลิงก์เข้าใช้ระบบด่วน SaaS สำหรับระดับสิทธิ์ ${roleThai} (Token: ${newTokenId})`,
-        'TokenAccess',
-        newTokenId
-      );
-
-      // Trigger success toast
-      setToast({
-        message: `สร้างลิงก์เข้าใช้งานระดับ ${roleThai} เรียบร้อยแล้ว!`,
-        visible: true,
-        type: 'success'
+      const res = await fetch(`/api/v1/dormitories/${dormId}/staff/access-grants`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          lineFriendId: targetFriendId,
+          roleCode: grantRole
+        })
       });
 
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success && json.data) {
+          setCreatedGrantResult(json.data);
+          setToast({
+            message: `สร้างสิทธิ์เข้าใช้งานระดับ ${grantRole} สำเร็จ!`,
+            visible: true,
+            type: 'success'
+          });
+          onAddLog(
+            'สร้าง Access Grant สิทธิ์ด่วน',
+            `สร้างสิทธิ์ Access Grant สำหรับ LINE Friend (Role: ${grantRole})`,
+            'AccessGrant',
+            json.data.grant.id
+          );
+          fetchStaffData();
+        }
+      } else {
+        const errJson = await res.json().catch(() => ({}));
+        setToast({
+          message: errJson.error?.message || 'ไม่สามารถสร้างสิทธิ์ access grant ได้ (โควตาเต็ม หรือสิทธิ์ไม่ถูกต้อง)',
+          visible: true,
+          type: 'error'
+        });
+      }
+    } catch (err) {
+      setToast({
+        message: 'เกิดข้อผิดพลาดในการเชื่อมต่อเซิร์ฟเวอร์',
+        visible: true,
+        type: 'error'
+      });
+    } finally {
       setIsCreating(false);
-    }, 600);
+    }
   };
 
-  const handleRevokeToken = (id: string, roleName: string) => {
-    setRevokeConfirm({ id, roleName, step: 1 });
-  };
+  const handleRevokeGrant = async (grantId: string) => {
+    const dormId = getDormId();
+    try {
+      const res = await fetch(`/api/v1/dormitories/${dormId}/staff/access-grants/${grantId}`, {
+        method: 'DELETE',
+        credentials: 'include'
+      });
 
-  const handleNextRevokeStep = () => {
-    if (!revokeConfirm) return;
-    if (revokeConfirm.step === 1) {
-      setRevokeConfirm({ ...revokeConfirm, step: 2 });
-    } else {
-      const updated = accessTokens.filter(t => t.id !== revokeConfirm.id);
-      setAccessTokens(updated);
-      onAddLog(
-        'เพิกถอนลิงก์สิทธิ์นิติบุคคล', 
-        `ระงับการเข้าใช้งานลิงก์เข้าถึงด่วนของบทบาท ${revokeConfirm.roleName} (Token: ${revokeConfirm.id}) ถาวร`, 
-        'TokenAccess', 
-        revokeConfirm.id
-      );
+      if (res.ok) {
+        setToast({
+          message: 'เพิกถอนสิทธิ์เข้าใช้งานเรียบร้อยแล้ว (คืนโควตา 1 สิทธิ์)',
+          visible: true,
+          type: 'success'
+        });
+        onAddLog(
+          'เพิกถอน Access Grant',
+          `เพิกถอน Access Grant (ID: ${grantId}) ถาวร`,
+          'AccessGrant',
+          grantId
+        );
+        fetchStaffData();
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
       setRevokeConfirm(null);
     }
   };
 
-  const getAccessLink = (tokenId: string) => {
-    const origin = window.location.origin + window.location.pathname;
-    return `${origin}?token=${tokenId}`;
-  };
-
-  const handleCopyLink = (tokenId: string) => {
-    const link = getAccessLink(tokenId);
-    navigator.clipboard.writeText(link).then(() => {
-      setCopiedTokenId(tokenId);
-      setTimeout(() => setCopiedTokenId(null), 2000);
-    }).catch(() => {
-      // Fallback
-      const el = document.createElement('textarea');
-      el.value = link;
-      document.body.appendChild(el);
-      el.select();
-      document.execCommand('copy');
-      document.body.removeChild(el);
-      setCopiedTokenId(tokenId);
-      setTimeout(() => setCopiedTokenId(null), 2000);
+  const handleCopyBearerLink = (bearerUrl: string, id: string) => {
+    navigator.clipboard.writeText(bearerUrl).then(() => {
+      setCopiedGrantId(id);
+      setTimeout(() => setCopiedGrantId(null), 2000);
     });
   };
 
   return (
     <div className="space-y-6 w-full min-w-0">
       
-      {/* Main Layout (Creator & Created Links) */}
+      {/* Top Banner: Account Slot Usage Meter */}
+      <div className="bg-slate-900 border border-slate-800 p-4 sm:p-5 rounded-3xl text-white shadow-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+        <div className="space-y-1">
+          <div className="flex items-center gap-2">
+            <Users2 className="w-5 h-5 text-indigo-400" />
+            <h3 className="text-sm font-extrabold text-white">จัดการทีมงาน & สิทธิ์การเข้าถึง (Staff Access Grants)</h3>
+          </div>
+          <p className="text-xs text-slate-400">
+            จำกัดสูงสุดไม่เกิน {slotUsage.maxSlots} สิทธิ์ต่อหอพัก (นับรวมเจ้าของหลักและ Access Grants ที่มีผลใช้งานอยู่)
+          </p>
+        </div>
+
+        <div className="flex items-center gap-3 bg-slate-800/80 border border-slate-700/50 px-4 py-2 rounded-2xl shrink-0">
+          <div className="text-right">
+            <div className="text-[10px] uppercase font-extrabold tracking-wider text-slate-400">จำนวนสิทธิ์ที่ใช้</div>
+            <div className="text-sm font-black text-indigo-400">
+              {slotUsage.totalUsedSlots} / {slotUsage.maxSlots} สิทธิ์
+            </div>
+          </div>
+          <div className="w-10 h-10 rounded-xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400 font-extrabold text-xs">
+            {Math.round((slotUsage.totalUsedSlots / slotUsage.maxSlots) * 100)}%
+          </div>
+        </div>
+      </div>
+
+      {/* Permanent Google Owner Section */}
+      <div className="bg-white p-5 rounded-3xl border border-gray-100 shadow-3xs space-y-4">
+        <div className="flex items-center justify-between">
+          <h4 className="text-xs font-extrabold text-slate-950 flex items-center gap-2">
+            <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
+            เจ้าของระบบหลัก (Permanent Google Owner)
+          </h4>
+          <span className="px-2.5 py-1 bg-emerald-50 text-emerald-700 border border-emerald-200/60 rounded-lg text-[10px] font-extrabold">
+            ไม่สามารถเพิกถอนได้
+          </span>
+        </div>
+
+        {permanentOwners.length === 0 ? (
+          <div className="p-4 bg-slate-50 rounded-2xl flex items-center justify-between text-xs font-bold text-slate-700">
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-xl bg-emerald-100 flex items-center justify-center text-emerald-700 font-bold">
+                PO
+              </div>
+              <div>
+                <div className="font-extrabold text-slate-900">เจ้าของหลัก (Google Account)</div>
+                <div className="text-[10px] text-slate-400 font-mono">owner@HorPlus.com</div>
+              </div>
+            </div>
+            <span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 rounded font-bold text-[10px]">
+              เจ้าของหลัก
+            </span>
+          </div>
+        ) : (
+          permanentOwners.map((po) => (
+            <div key={po.id} className="p-4 bg-slate-50/80 rounded-2xl flex items-center justify-between text-xs font-bold text-slate-700 border border-slate-100">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-emerald-500 text-white flex items-center justify-center font-black">
+                  {po.displayName.substring(0, 2).toUpperCase()}
+                </div>
+                <div>
+                  <div className="font-extrabold text-slate-900 flex items-center gap-1.5">
+                    {po.displayName}
+                    <span className="text-[10px] px-2 py-0.5 bg-emerald-100 text-emerald-800 rounded font-extrabold">
+                      {po.label || 'เจ้าของหลัก'}
+                    </span>
+                  </div>
+                  <div className="text-[10px] text-slate-400 font-mono">{po.email || 'Google Authenticated Principal'}</div>
+                </div>
+              </div>
+              <div className="text-right">
+                <span className="text-[10px] text-slate-400 block">สิทธิ์ระบบ</span>
+                <span className="text-xs font-black text-slate-900">OWNER</span>
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+
+      {/* Access Grants & LINE Friends Main Grid */}
       <div className="grid lg:grid-cols-12 gap-6 items-start w-full min-w-0">
         
-        {/* Left Column: Generator */}
+        {/* Left Column: Create Bearer Access Grant */}
         <div className="lg:col-span-4 space-y-6 w-full min-w-0">
-          
-          {/* Creator panel */}
-          <div className="bg-white p-4 sm:p-6 rounded-3xl border border-gray-100 shadow-3xs space-y-5">
-            <div>
-              <h4 className="text-xs font-extrabold text-slate-950 flex items-center gap-2">
-                <LinkIcon className="w-4 h-4 text-indigo-600 shrink-0" />
-                สร้างลิงก์เข้าใช้งาน
-              </h4>
+          <div className="bg-white p-5 rounded-3xl border border-gray-100 shadow-3xs space-y-4">
+            <h4 className="text-xs font-extrabold text-slate-950 flex items-center gap-2">
+              <LinkIcon className="w-4 h-4 text-indigo-600 shrink-0" />
+              สร้างสิทธิ์ Access Grant สำหรับ LINE Friend
+            </h4>
+
+            {/* Select LINE Friend */}
+            <div className="space-y-1.5">
+              <label className="block text-[10px] font-bold text-slate-700">เลือก LINE Friend จากไดเรกทอรี *</label>
+              {lineFriends.length === 0 ? (
+                <div className="p-3 bg-amber-50 border border-amber-200/60 rounded-xl text-[11px] text-amber-800 space-y-1">
+                  <p className="font-bold">ยังไม่พบเพื่อนใน LINE OA Directory</p>
+                  <p className="text-[10px] text-amber-700 leading-normal">
+                    ผู้ใช้ใหม่ที่เพิ่มเพื่อนใน LINE OA จะปรากฏอัตโนมัติเมื่อส่งข้อความ/ติดตาม
+                  </p>
+                </div>
+              ) : (
+                <select
+                  value={selectedFriendId}
+                  onChange={(e) => setSelectedFriendId(e.target.value)}
+                  className="w-full px-3 py-2.5 border border-gray-200 rounded-xl bg-slate-50 text-slate-800 font-extrabold text-xs focus:bg-white focus:border-indigo-500 focus:outline-none transition-all cursor-pointer"
+                >
+                  {lineFriends.map((lf) => (
+                    <option key={lf.id} value={lf.id}>
+                      {lf.displayName} ({lf.friendStatus})
+                    </option>
+                  ))}
+                </select>
+              )}
             </div>
 
+            {/* Select Role */}
             <div className="space-y-1.5">
-              <label className="block text-[10px] font-bold text-slate-700">เลือกตำแหน่งงานสำหรับทีมงาน *</label>
+              <label className="block text-[10px] font-bold text-slate-700">ระดับสิทธิ์ในการเข้าถึง (Role) *</label>
               <select
-                value={tokenRole}
-                onChange={(e) => setTokenRole(e.target.value as any)}
-                className="w-full px-3 py-2.5 border border-gray-200 rounded-xl bg-slate-50 text-slate-800 font-extrabold text-xs cursor-pointer focus:bg-white focus:border-indigo-500 focus:outline-none transition-all"
+                value={grantRole}
+                onChange={(e) => setGrantRole(e.target.value as any)}
+                className="w-full px-3 py-2.5 border border-gray-200 rounded-xl bg-slate-50 text-slate-800 font-extrabold text-xs focus:bg-white focus:border-indigo-500 focus:outline-none transition-all cursor-pointer"
               >
-                <option value="owner">เจ้าของหอพัก (ดูแลได้ครบทุกอย่าง)</option>
-                <option value="manager">ผู้จัดการ (ดูแลคนพัก สัญญา และออกบิล)</option>
-                <option value="staff">ช่าง / แม่บ้าน (จดมิเตอร์น้ำไฟ และบันทึกงานซ่อม)</option>
+                <option value="OWNER">OWNER (เจ้าของร่วม - ดูแลได้ทุกอย่าง)</option>
+                <option value="MANAGER">MANAGER (ผู้จัดการ - ดูแลคนพัก สัญญา บิล)</option>
+                <option value="TECH">TECH (ช่าง / แม่บ้าน - จดมิเตอร์ บันทึกงานซ่อม)</option>
               </select>
             </div>
 
             <button
-              onClick={handleCreateTokenLink}
-              disabled={isCreating}
+              onClick={handleCreateGrant}
+              disabled={isCreating || slotUsage.totalUsedSlots >= slotUsage.maxSlots}
               className={`w-full py-2.5 text-white font-extrabold text-xs rounded-xl flex items-center justify-center gap-1.5 shadow-sm transition-all ${
-                isCreating 
-                  ? 'bg-indigo-400 cursor-not-allowed opacity-80' 
+                isCreating || slotUsage.totalUsedSlots >= slotUsage.maxSlots
+                  ? 'bg-indigo-300 cursor-not-allowed'
                   : 'bg-indigo-600 hover:bg-indigo-700 active:scale-98 cursor-pointer'
               }`}
             >
               {isCreating ? (
-                <>
-                  <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                  </svg>
-                  กำลังสร้างลิงก์...
-                </>
+                <>กำลังสร้างสิทธิ์...</>
               ) : (
                 <>
                   <Plus className="w-4 h-4" />
-                  สร้างลิงก์เข้าใช้ระบบ
+                  สร้างสิทธิ์ Access Grant
                 </>
               )}
             </button>
           </div>
 
+          {/* Flex Message Payload Result Box */}
+          {createdGrantResult && (
+            <div className="bg-emerald-900 border border-emerald-800 p-4 rounded-3xl text-white space-y-3 shadow-lg animate-in fade-in duration-200">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-extrabold text-emerald-400 uppercase tracking-wider">
+                  สร้างสิทธิ์ & Flex Message สำเร็จ
+                </span>
+                <button
+                  onClick={() => setCreatedGrantResult(null)}
+                  className="text-emerald-400 hover:text-white text-xs cursor-pointer"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <div className="bg-emerald-950/60 p-3 rounded-2xl border border-emerald-800/50 space-y-2 text-xs font-mono break-all">
+                <div className="text-slate-300 text-[10px]">Bearer Link:</div>
+                <div className="text-emerald-300 font-bold text-[11px]">{createdGrantResult.bearerUrl}</div>
+              </div>
+
+              <button
+                onClick={() => handleCopyBearerLink(createdGrantResult.bearerUrl, 'new-grant')}
+                className="w-full py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-xs rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer"
+              >
+                <Copy className="w-3.5 h-3.5" />
+                {copiedGrantId === 'new-grant' ? 'คัดลอกลิงก์เรียบร้อย!' : 'คัดลอกลิงก์สิทธิ์ Access Grant'}
+              </button>
+            </div>
+          )}
         </div>
 
-        {/* Right Column: History and Table of Links */}
-        <div className="lg:col-span-8 bg-white p-4 sm:p-6 rounded-3xl border border-gray-100 shadow-3xs space-y-4 w-full min-w-0 overflow-hidden">
-          <div>
+        {/* Right Column: Active Access Grants List */}
+        <div className="lg:col-span-8 bg-white p-5 rounded-3xl border border-gray-100 shadow-3xs space-y-4 w-full min-w-0">
+          <div className="flex items-center justify-between">
             <h4 className="text-xs font-extrabold text-slate-950 flex items-center gap-2">
               <Clock className="w-4 h-4 text-indigo-600 shrink-0" />
-              ลิงก์เข้าใช้งาน
+              รายการ Access Grants ที่มีผลใช้งาน ({accessGrants.length})
             </h4>
+            <button
+              onClick={fetchStaffData}
+              className="text-[11px] font-bold text-indigo-600 hover:text-indigo-800 flex items-center gap-1 cursor-pointer"
+            >
+              <RefreshCw className="w-3.5 h-3.5" /> รีเฟรช
+            </button>
           </div>
 
-          {accessTokens.length === 0 ? (
-            <div className="p-8 sm:p-12 border border-dashed border-slate-200 bg-slate-50/50 rounded-2xl text-center space-y-2">
+          {accessGrants.length === 0 ? (
+            <div className="p-8 border border-dashed border-slate-200 bg-slate-50/50 rounded-2xl text-center space-y-2">
               <ShieldAlert className="w-8 h-8 text-slate-300 mx-auto" />
-              <p className="text-xs font-bold text-slate-500">ยังไม่มีการสร้างลิงก์เข้าใช้งานในระบบ</p>
-              <p className="text-[10px] text-gray-400">เลือกตำแหน่งของพนักงานจากเมนูด้านซ้ายเพื่อเริ่มสร้างลิงก์แรก</p>
+              <p className="text-xs font-bold text-slate-500">ยังไม่มีการสร้าง Access Grant เพิ่มเติม</p>
+              <p className="text-[10px] text-gray-400">เลือกเพื่อนจาก LINE Friend Directory ทางด้านซ้ายเพื่อมอบสิทธิ์ใช้งาน</p>
             </div>
           ) : (
-            <div className="overflow-x-auto w-full -mx-4 px-4 sm:mx-0 sm:px-0">
-              <table className="w-full text-left border-collapse min-w-[600px]">
+            <div className="overflow-x-auto w-full">
+              <table className="w-full text-left border-collapse min-w-[550px]">
                 <thead>
                   <tr className="border-b border-slate-100 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                    <th className="py-3 px-1.5 sm:px-2">ตำแหน่งงาน</th>
-                    <th className="py-3 px-1.5 sm:px-2">ลิงก์ทางลัดเข้าใช้งาน</th>
-                    <th className="py-3 px-1.5 sm:px-2">วันที่สร้าง</th>
-                    <th className="py-3 px-1.5 sm:px-2">ใช้งานล่าสุด</th>
-                    <th className="py-3 px-1.5 sm:px-2 text-center">สถานะ</th>
-                    <th className="py-3 px-1.5 sm:px-2 text-center">ลบ</th>
+                    <th className="py-3 px-2">LINE Profile</th>
+                    <th className="py-3 px-2">ระดับสิทธิ์ (Role)</th>
+                    <th className="py-3 px-2">Token Prefix</th>
+                    <th className="py-3 px-2 text-center">สถานะ</th>
+                    <th className="py-3 px-2 text-center">เพิกถอนสิทธิ์</th>
                   </tr>
                 </thead>
-                <tbody className="text-xs divide-y divide-slate-50">
-                  {currentItems.map((t) => {
-                    const roleLabel = t.role === 'owner' ? 'เจ้าของหอพัก' : t.role === 'manager' ? 'ผู้จัดการ' : 'ช่าง/แม่บ้าน';
-                    const isDeleted = t.status === 'deleted';
-                    const linkUrl = getAccessLink(t.id);
-
-                    return (
-                      <tr key={t.id} className={`hover:bg-slate-50/30 transition-colors ${isDeleted ? 'opacity-60 bg-slate-50/10' : ''}`}>
-                        <td className="py-3 px-1.5 sm:px-2 font-bold whitespace-nowrap">
-                          <span className={`px-2 py-0.5 sm:px-2.5 sm:py-1 rounded-lg border text-[10px] font-extrabold inline-flex items-center gap-1 ${
-                            t.role === 'owner' ? 'bg-indigo-50 border-indigo-100 text-indigo-700' :
-                            t.role === 'manager' ? 'bg-emerald-50 border-emerald-100 text-emerald-700' :
-                            'bg-amber-50 border-amber-100 text-amber-700'
-                          }`}>
-                            {t.role === 'owner' && <Users2 className="w-3 h-3" />}
-                            {t.role === 'manager' && <Briefcase className="w-3 h-3" />}
-                            {t.role === 'staff' && <Wrench className="w-3 h-3" />}
-                            {roleLabel}
-                          </span>
-                        </td>
-                        <td className="py-3 px-1.5 sm:px-2 font-mono text-[10px]">
-                          <div className="flex items-center gap-1.5 min-w-[150px] max-w-[280px] w-full">
-                            <input
-                              type="text"
-                              readOnly
-                              value={isDeleted ? '❌ ลิงก์นี้ถูกปิดและระงับการเข้าใช้ถาวรแล้ว' : linkUrl}
-                              className={`text-[9px] border rounded-lg px-2 py-0.5 sm:px-2.5 sm:py-1 w-full font-mono select-all ${
-                                isDeleted
-                                  ? 'bg-rose-50/50 border-rose-100 text-rose-500 italic font-sans'
-                                  : 'bg-slate-50 border-slate-150 text-slate-600 font-semibold'
-                              }`}
-                            />
-                            {!isDeleted && (
-                              <button
-                                onClick={() => handleCopyLink(t.id)}
-                                className="p-1 sm:p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 border border-transparent hover:border-indigo-100 rounded-lg transition-all cursor-pointer shrink-0"
-                                title="คัดลอกลิงก์"
-                              >
-                                {copiedTokenId === t.id ? (
-                                  <Check className="w-3.5 h-3.5 text-emerald-600" />
-                                ) : (
-                                  <Copy className="w-3.5 h-3.5" />
-                                )}
-                              </button>
-                            )}
-                          </div>
-                        </td>
-                        <td className="py-3 px-1.5 sm:px-2 text-slate-400 text-[10px] whitespace-nowrap">
-                          {formatThaiDate(t.createdAt)}
-                        </td>
-                        <td className="py-3 px-1.5 sm:px-2 text-slate-400 text-[10px] whitespace-nowrap font-medium">
-                          {t.lastUsedAt ? (
-                            <span className="text-indigo-600 font-bold">{formatThaiDate(t.lastUsedAt)}</span>
+                <tbody className="text-xs divide-y divide-slate-50 font-bold">
+                  {accessGrants.map((grant) => (
+                    <tr key={grant.id} className="hover:bg-slate-50/50 transition-colors">
+                      <td className="py-3 px-2">
+                        <div className="flex items-center gap-2.5">
+                          {grant.pictureUrl ? (
+                            <img src={grant.pictureUrl} alt="" className="w-7 h-7 rounded-full object-cover border border-slate-200" />
                           ) : (
-                            <span className="text-gray-300 italic">ยังไม่เคยเข้าใช้งาน</span>
+                            <div className="w-7 h-7 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center font-extrabold text-[10px]">
+                              LINE
+                            </div>
                           )}
-                        </td>
-                        <td className="py-3 px-1.5 sm:px-2 text-center whitespace-nowrap">
-                          {isDeleted ? (
-                            <span className="inline-flex items-center gap-1 text-[9px] font-extrabold px-2 py-0.5 bg-rose-50 border border-rose-100 text-rose-600 rounded-md">
-                              <XCircle className="w-2.5 h-2.5" />
-                              ปิดลิงก์แล้ว
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center gap-1 text-[9px] font-extrabold px-2 py-0.5 bg-emerald-50 border border-emerald-100 text-emerald-600 rounded-md">
-                              <CheckCircle2 className="w-2.5 h-2.5" />
-                              ใช้งานได้
-                            </span>
-                          )}
-                        </td>
-                        <td className="py-3 px-1.5 sm:px-2 text-center whitespace-nowrap">
-                          {!isDeleted ? (
-                            <button
-                              onClick={() => handleRevokeToken(t.id, roleLabel)}
-                              className="p-1.5 text-rose-600 hover:bg-rose-50 border border-rose-100 hover:border-rose-200 rounded-xl transition-all cursor-pointer shadow-3xs inline-flex items-center justify-center hover:scale-105 active:scale-95"
-                              title="ยกเลิกลิงก์และเพิกถอนสิทธิ์"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          ) : (
-                            <span className="text-[10px] text-gray-400 italic">ปิดแล้ว</span>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
+                          <span className="font-extrabold text-slate-900">{grant.displayName}</span>
+                        </div>
+                      </td>
+                      <td className="py-3 px-2">
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-black ${
+                          grant.roleCode === 'OWNER' ? 'bg-purple-100 text-purple-800' :
+                          grant.roleCode === 'MANAGER' ? 'bg-indigo-100 text-indigo-800' :
+                          'bg-amber-100 text-amber-800'
+                        }`}>
+                          {grant.roleCode}
+                        </span>
+                      </td>
+                      <td className="py-3 px-2 font-mono text-[11px] text-slate-500">
+                        {grant.tokenPrefix || '••••••••'}
+                      </td>
+                      <td className="py-3 px-2 text-center">
+                        <span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 rounded text-[10px] font-extrabold">
+                          ACTIVE
+                        </span>
+                      </td>
+                      <td className="py-3 px-2 text-center">
+                        <button
+                          onClick={() => setRevokeConfirm({ id: grant.id, name: grant.displayName })}
+                          className="p-1.5 text-rose-500 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                          title="เพิกถอนสิทธิ์ถาวร"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>
           )}
-
-          {/* Pagination Controls */}
-          {accessTokens.length > itemsPerPage && (
-            <div className="flex flex-col sm:flex-row items-center justify-between gap-3 border-t border-slate-100 pt-4 mt-2">
-              <span className="text-[10px] sm:text-xs font-medium text-slate-500">
-                แสดงผล {(currentPage - 1) * itemsPerPage + 1} - {Math.min(currentPage * itemsPerPage, accessTokens.length)} จากทั้งหมด {accessTokens.length} รายการ
-              </span>
-              <div className="flex items-center gap-1.5">
-                <button
-                  type="button"
-                  disabled={currentPage === 1}
-                  onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
-                  className="p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 border border-slate-200 hover:border-indigo-100 rounded-lg transition-all disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:border-slate-200 disabled:hover:text-slate-500 cursor-pointer disabled:cursor-not-allowed"
-                >
-                  <ChevronLeft className="w-4 h-4" />
-                </button>
-                
-                {Array.from({ length: totalPages }, (_, i) => i + 1).map((p) => {
-                  const isNear = Math.abs(p - currentPage) <= 1;
-                  const isFirstOrLast = p === 1 || p === totalPages;
-                  if (!isNear && !isFirstOrLast) {
-                    if (p === 2 && currentPage > 3) {
-                      return <span key="ellipsis-1" className="text-slate-400 text-xs px-1">...</span>;
-                    }
-                    if (p === totalPages - 1 && currentPage < totalPages - 2) {
-                      return <span key="ellipsis-2" className="text-slate-400 text-xs px-1">...</span>;
-                    }
-                    return null;
-                  }
-
-                  return (
-                    <button
-                      key={p}
-                      type="button"
-                      onClick={() => setCurrentPage(p)}
-                      className={`min-w-[28px] h-7 flex items-center justify-center text-xs font-extrabold rounded-lg transition-all border cursor-pointer ${
-                        currentPage === p
-                          ? 'bg-indigo-600 border-indigo-600 text-white shadow-xs'
-                          : 'bg-white border-slate-200 text-slate-600 hover:text-indigo-600 hover:bg-indigo-50 hover:border-indigo-100'
-                      }`}
-                    >
-                      {p}
-                    </button>
-                  );
-                })}
-
-                <button
-                  type="button"
-                  disabled={currentPage === totalPages}
-                  onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
-                  className="p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 border border-slate-200 hover:border-indigo-100 rounded-lg transition-all disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:border-slate-200 disabled:hover:text-slate-500 cursor-pointer disabled:cursor-not-allowed"
-                >
-                  <ChevronRight className="w-4 h-4" />
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
-
-      </div>
-
-      {/* Horizontal Access Policies */}
-      <div className="bg-white p-4 sm:p-6 rounded-3xl border border-gray-100 shadow-3xs space-y-4">
-        <div className="flex items-center gap-2 border-b border-slate-100 pb-3">
-          <div className="p-1.5 bg-indigo-50 text-indigo-600 rounded-lg">
-            <Key className="w-3.5 h-3.5" />
-          </div>
-          <h4 className="text-xs font-extrabold text-slate-900">ขอบเขตสิทธิ์การใช้งานของแต่ละตำแหน่ง</h4>
-        </div>
-        
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-1">
-          {/* Owner Policy */}
-          <div className="bg-indigo-50/20 p-4 rounded-2xl border border-indigo-100/50 space-y-2">
-            <div className="flex items-center gap-2">
-              <div className="w-5 h-5 rounded-full bg-indigo-500 text-white flex items-center justify-center text-[10px] font-black">
-                1
-              </div>
-              <h5 className="font-extrabold text-xs text-indigo-950">
-                เจ้าของหอพัก
-              </h5>
-            </div>
-            <ul className="space-y-1 text-[10px] text-slate-600 leading-relaxed list-none">
-              <li className="flex items-center gap-1">
-                <span className="text-indigo-500 font-bold shrink-0">✓</span>
-                <span>เข้าถึงได้ทุกหน้าต่าง (11 หน้าต่างหลัก)</span>
-              </li>
-              <li className="flex items-start gap-1 text-[9px] text-slate-500 bg-indigo-50/50 p-2 rounded-lg border border-indigo-100/30 mt-1">
-                <span>หน้าหลัก, จดมิเตอร์, การชำระเงิน, ห้องพัก, ผู้เช่า, สัญญาเช่า, งานแจ้งซ่อม, ประชาสัมพันธ์, รายงานสถิติ, สิทธิ์และพนักงาน, ตั้งค่า</span>
-              </li>
-            </ul>
-          </div>
-
-          {/* Manager Policy */}
-          <div className="bg-emerald-50/20 p-4 rounded-2xl border border-emerald-100/50 space-y-2">
-            <div className="flex items-center gap-2">
-              <div className="w-5 h-5 rounded-full bg-emerald-500 text-white flex items-center justify-center text-[10px] font-black">
-                2
-              </div>
-              <h5 className="font-extrabold text-xs text-emerald-950">
-                ผู้จัดการหอพัก
-              </h5>
-            </div>
-            <ul className="space-y-1 text-[10px] text-slate-600 leading-relaxed list-none">
-              <li className="flex items-center gap-1">
-                <span className="text-emerald-500 font-bold shrink-0">✓</span>
-                <span>เข้าถึงได้ 9 หน้าต่างหลัก</span>
-              </li>
-              <li className="flex items-start gap-1 text-[9px] text-slate-500 bg-emerald-50/50 p-2 rounded-lg border border-emerald-100/30 mt-1">
-                <span>หน้าหลัก, จดมิเตอร์, การชำระเงิน, ห้องพัก, ผู้เช่า, สัญญาเช่า, งานแจ้งซ่อม, ประชาสัมพันธ์, รายงานสถิติ</span>
-              </li>
-            </ul>
-          </div>
-
-          {/* Staff Policy */}
-          <div className="bg-amber-50/20 p-4 rounded-2xl border border-amber-100/50 space-y-2">
-            <div className="flex items-center gap-2">
-              <div className="w-5 h-5 rounded-full bg-amber-500 text-white flex items-center justify-center text-[10px] font-black">
-                3
-              </div>
-              <h5 className="font-extrabold text-xs text-amber-950">
-                ช่าง / แม่บ้าน
-              </h5>
-            </div>
-            <ul className="space-y-1 text-[10px] text-slate-600 leading-relaxed list-none">
-              <li className="flex items-center gap-1">
-                <span className="text-amber-500 font-bold shrink-0">✓</span>
-                <span>เข้าถึงได้ 3 หน้าต่างหลัก</span>
-              </li>
-              <li className="flex items-start gap-1 text-[9px] text-slate-500 bg-amber-50/50 p-2 rounded-lg border border-amber-100/30 mt-1">
-                <span>หน้าหลัก, จดมิเตอร์, งานแจ้งซ่อม</span>
-              </li>
-            </ul>
-          </div>
         </div>
       </div>
 
-      {/* Custom Revoke Confirmation Modal */}
+      {/* Modal: Confirm Revocation */}
       {revokeConfirm && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-[2px] flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
-          <div className="bg-white rounded-3xl border border-slate-100 p-6 max-w-md w-full shadow-2xl space-y-6 scale-in-95 duration-200 animate-in">
-            
-            {/* Header Icon & Title */}
-            <div className="flex items-start gap-4">
-              <div className={`p-3 rounded-2xl shrink-0 ${
-                revokeConfirm.step === 1 ? 'bg-amber-50 text-amber-600' : 'bg-rose-50 text-rose-600'
-              }`}>
-                <ShieldAlert className="w-6 h-6" />
-              </div>
-              <div className="min-w-0">
-                <span className={`text-[9px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full ${
-                  revokeConfirm.step === 1 ? 'bg-amber-50 text-amber-800' : 'bg-rose-50 text-rose-800'
-                }`}>
-                  {revokeConfirm.step === 1 ? 'ขั้นตอนที่ 1 / 2: ยืนยันปิดลิงก์' : 'ขั้นตอนที่ 2 / 2: ปิดลิงก์ถาวร'}
-                </span>
-                <h3 className="text-base font-extrabold text-slate-900 mt-2 leading-snug">
-                  {revokeConfirm.step === 1 ? 'คุณแน่ใจหรือไม่ที่จะระงับสิทธิ์?' : '🚨 คำเตือนความปลอดภัย!'}
-                </h3>
-              </div>
+        <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-150">
+          <div className="bg-white p-6 rounded-3xl max-w-sm w-full space-y-4 border border-slate-100 shadow-2xl">
+            <div className="w-12 h-12 rounded-2xl bg-rose-50 flex items-center justify-center text-rose-600 mx-auto">
+              <ShieldAlert className="w-6 h-6" />
             </div>
-
-            {/* Description Text */}
-            <div className="text-xs text-slate-500 leading-relaxed space-y-2.5">
-              {revokeConfirm.step === 1 ? (
-                <p>
-                  คุณกำลังจะระงับและปิดสิทธิ์เข้าใช้งานลิงก์ <strong className="text-slate-900 font-bold">บทบาท {revokeConfirm.roleName}</strong> ลิงก์ดังกล่าวจะใช้ล็อกอินหรือเข้าถึงระบบไม่ได้อีกต่อไป
-                </p>
-              ) : (
-                <div className="space-y-2">
-                  <p className="font-extrabold text-rose-600 bg-rose-50/50 p-3 rounded-xl border border-rose-100/60">
-                    *เมื่อยืนยันแล้ว พนักงานทุกคนที่ใช้ลิงก์นี้อยู่จะหลุดออกจากระบบและเข้าใช้งานหอพักไม่ได้ทันที*
-                  </p>
-                  <p>
-                    หากคุณยืนยัน โปรดคลิกปุ่ม <strong>"ยืนยันและระงับสิทธิ์ถาวร"</strong> ด้านล่างเพื่อดำเนินการ
-                  </p>
-                </div>
-              )}
+            <div className="text-center space-y-1">
+              <h4 className="text-sm font-extrabold text-slate-900">ยืนยันการเพิกถอนสิทธิ์ Access Grant</h4>
+              <p className="text-xs text-slate-500">
+                เพิกถอนสิทธิ์การเข้าใช้งานของ <strong className="text-slate-900">{revokeConfirm.name}</strong> ถาวร (ทุก session ที่เปิดอยู่จะถูกตัดสิทธิ์ทันที)
+              </p>
             </div>
-
-            {/* Actions */}
-            <div className="flex gap-3 pt-2">
+            <div className="flex gap-2 pt-2">
               <button
-                type="button"
                 onClick={() => setRevokeConfirm(null)}
-                className="flex-1 py-2.5 bg-slate-50 hover:bg-slate-100 text-slate-600 text-xs font-extrabold rounded-xl transition-all cursor-pointer border border-slate-200"
+                className="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-extrabold text-xs rounded-xl cursor-pointer"
               >
                 ยกเลิก
               </button>
               <button
-                type="button"
-                onClick={handleNextRevokeStep}
-                className={`flex-1 py-2.5 text-white text-xs font-extrabold rounded-xl transition-all cursor-pointer shadow-sm ${
-                  revokeConfirm.step === 1 
-                    ? 'bg-amber-600 hover:bg-amber-700' 
-                    : 'bg-rose-600 hover:bg-rose-700'
-                }`}
+                onClick={() => handleRevokeGrant(revokeConfirm.id)}
+                className="flex-1 py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-xs rounded-xl cursor-pointer"
               >
-                {revokeConfirm.step === 1 ? 'ถัดไป (ตรวจสอบระบบ)' : 'ยืนยันและระงับสิทธิ์ถาวร'}
+                เพิกถอนทันที
               </button>
             </div>
-
           </div>
         </div>
       )}
-
-      {/* Floating Success Toast Notification with Smooth Fade */}
-      {toast.visible && (
-        <div 
-          className={`fixed bottom-20 left-1/2 -translate-x-1/2 sm:bottom-8 sm:right-8 sm:left-auto sm:translate-x-0 z-[9999] bg-white text-slate-800 px-4.5 py-3 rounded-2xl shadow-2xl border border-slate-200/90 flex items-center gap-2.5 text-xs font-bold transition-all duration-500 ease-in-out ${
-            isToastFading 
-              ? 'opacity-0 translate-y-3 pointer-events-none' 
-              : 'opacity-100 translate-y-0 animate-in fade-in slide-in-from-bottom-3 duration-300'
-          }`}
-        >
-          <CheckCircle2 className="w-4.5 h-4.5 text-emerald-500 shrink-0" />
-          <span>{toast.message}</span>
-        </div>
-      )}
-
     </div>
   );
 };
