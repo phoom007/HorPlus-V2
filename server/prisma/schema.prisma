@@ -94,6 +94,9 @@ model Dormitory {
   dormitorySubscription      DormitorySubscription?
   subscriptionHistories      SubscriptionStatusHistory[]
   promoRedemptions           PromoRedemption[]
+  propertyDefaults           DormitoryPropertyDefaults?
+  contractSnapshots          ContractSnapshot[]
+  auditLogs                  AuditLog[]
 
   @@map("dormitories")
 }
@@ -112,12 +115,34 @@ model DormitoryBillingSettings {
   lateFeeType            String   @default("fixed") @map("late_fee_type") @db.VarChar(50)
   lateFeeValue           Decimal  @default(50.00) @map("late_fee_value") @db.Decimal(12, 2)
   rentBillingType        String   @default("monthly") @map("rent_billing_type") @db.VarChar(50)
+  version                Int      @default(1)
   createdAt              DateTime @default(now()) @map("created_at") @db.Timestamptz()
   updatedAt              DateTime @updatedAt @map("updated_at") @db.Timestamptz()
 
   dormitory Dormitory @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
 
   @@map("dormitory_billing_settings")
+}
+
+model DormitoryPropertyDefaults {
+  id                    String   @id @default(uuid()) @db.Uuid
+  dormitoryId           String   @unique @map("dormitory_id") @db.Uuid
+  defaultMonthlyRent    Decimal  @default(0.00) @map("default_monthly_rent") @db.Decimal(12, 2)
+  defaultTermRent       Decimal? @map("default_term_rent") @db.Decimal(12, 2)
+  defaultDailyRent      Decimal? @map("default_daily_rent") @db.Decimal(12, 2)
+  defaultDeposit        Decimal  @default(0.00) @map("default_deposit") @db.Decimal(12, 2)
+  defaultAdvancePayment Decimal  @default(0.00) @map("default_advance_payment") @db.Decimal(12, 2)
+  defaultParkingFee     Decimal  @default(0.00) @map("default_parking_fee") @db.Decimal(12, 2)
+  defaultMaxOccupants   Int      @default(2) @map("default_max_occupants")
+  defaultRoomType       String   @default("standard") @map("default_room_type") @db.VarChar(100)
+  defaultTerms          String?  @map("default_terms") @db.Text
+  version               Int      @default(1)
+  createdAt             DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt             DateTime @updatedAt @map("updated_at") @db.Timestamptz()
+
+  dormitory Dormitory @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
+
+  @@map("dormitory_property_defaults")
 }
 
 model Role {
@@ -284,19 +309,35 @@ model IdempotencyKey {
 }
 
 model Building {
-  id               String    @id @default(uuid()) @db.Uuid
-  dormitoryId      String    @map("dormitory_id") @db.Uuid
-  name             String    @db.VarChar(255)
-  code             String?   @db.VarChar(100)
-  floorCount       Int       @default(1) @map("floor_count")
-  roomsPerFloor    Int?      @map("rooms_per_floor")
-  numberingPattern String?   @map("numbering_pattern") @db.VarChar(100)
-  description      String?   @db.Text
-  status           String    @default("active") @db.VarChar(50)
-  displayOrder     Int       @default(0) @map("display_order")
-  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz()
-  updatedAt        DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
-  deletedAt        DateTime? @map("deleted_at") @db.Timestamptz()
+  id                     String    @id @default(uuid()) @db.Uuid
+  dormitoryId            String    @map("dormitory_id") @db.Uuid
+  name                   String    @db.VarChar(255)
+  code                   String?   @db.VarChar(100)
+  floorCount             Int       @default(1) @map("floor_count")
+  roomsPerFloor          Int?      @map("rooms_per_floor")
+  numberingPattern       String?   @map("numbering_pattern") @db.VarChar(100)
+  description            String?   @db.Text
+  status                 String    @default("active") @db.VarChar(50)
+  displayOrder           Int       @default(0) @map("display_order")
+  monthlyRent            Decimal?  @map("monthly_rent") @db.Decimal(12, 2)
+  termRent               Decimal?  @map("term_rent") @db.Decimal(12, 2)
+  dailyRent              Decimal?  @map("daily_rent") @db.Decimal(12, 2)
+  depositAmount          Decimal?  @map("deposit_amount") @db.Decimal(12, 2)
+  advancePaymentAmount   Decimal?  @map("advance_payment_amount") @db.Decimal(12, 2)
+  waterRate              Decimal?  @map("water_rate") @db.Decimal(12, 2)
+  electricityRate        Decimal?  @map("electricity_rate") @db.Decimal(12, 2)
+  commonFee              Decimal?  @map("common_fee") @db.Decimal(12, 2)
+  internetFee            Decimal?  @map("internet_fee") @db.Decimal(12, 2)
+  parkingFee             Decimal?  @map("parking_fee") @db.Decimal(12, 2)
+  waterBillingType       String?   @map("water_billing_type") @db.VarChar(50)
+  electricityBillingType String?   @map("electricity_billing_type") @db.VarChar(50)
+  rentBillingType        String?   @map("rent_billing_type") @db.VarChar(50)
+  maximumOccupants       Int?      @map("maximum_occupants")
+  roomType               String?   @map("room_type") @db.VarChar(100)
+  version                Int       @default(1)
+  createdAt              DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt              DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
+  deletedAt              DateTime? @map("deleted_at") @db.Timestamptz()
 
   dormitory Dormitory @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
   rooms     Room[]
@@ -312,18 +353,26 @@ model Room {
   buildingId                String    @map("building_id") @db.Uuid
   building                  Building  @relation(fields: [buildingId], references: [id], onDelete: Cascade)
   roomNumber                String    @map("room_number") @db.VarChar(100)
-  normalizedRoomNumber      String    @default("") @map("normalized_room_number") @db.VarChar(100)
+  normalizedRoomNumber      String    @map("normalized_room_number") @db.VarChar(100)
   /// @deprecated Do not use. Floor grouping is now derived dynamically from Building.numberingPattern and Room.roomNumber.
   floor                     Int       @default(1)
-  roomType                  String    @default("standard") @map("room_type") @db.VarChar(100)
+  roomType                  String?   @map("room_type") @db.VarChar(100)
   status                    String    @default("vacant") @db.VarChar(50)
   rentCycle                 String    @default("monthly") @map("rent_cycle") @db.VarChar(50)
-  monthlyRent               Decimal   @default(0.00) @map("monthly_rent") @db.Decimal(12, 2)
+  monthlyRent               Decimal?  @map("monthly_rent") @db.Decimal(12, 2)
   termRent                  Decimal?  @map("term_rent") @db.Decimal(12, 2)
   dailyRent                 Decimal?  @map("daily_rent") @db.Decimal(12, 2)
-  depositAmount             Decimal   @default(0.00) @map("deposit_amount") @db.Decimal(12, 2)
-  parkingFee                Decimal   @default(0.00) @map("parking_fee") @db.Decimal(12, 2)
-  maximumOccupants          Int       @default(2) @map("maximum_occupants")
+  depositAmount             Decimal?  @map("deposit_amount") @db.Decimal(12, 2)
+  advancePaymentAmount      Decimal?  @map("advance_payment_amount") @db.Decimal(12, 2)
+  waterRate                 Decimal?  @map("water_rate") @db.Decimal(12, 2)
+  electricityRate           Decimal?  @map("electricity_rate") @db.Decimal(12, 2)
+  commonFee                 Decimal?  @map("common_fee") @db.Decimal(12, 2)
+  internetFee               Decimal?  @map("internet_fee") @db.Decimal(12, 2)
+  parkingFee                Decimal?  @map("parking_fee") @db.Decimal(12, 2)
+  waterBillingType          String?   @map("water_billing_type") @db.VarChar(50)
+  electricityBillingType    String?   @map("electricity_billing_type") @db.VarChar(50)
+  rentBillingType           String?   @map("rent_billing_type") @db.VarChar(50)
+  maximumOccupants          Int?      @map("maximum_occupants")
   waterMeterNumber          String?   @map("water_meter_number") @db.VarChar(100)
   electricityMeterNumber    String?   @map("electricity_meter_number") @db.VarChar(100)
   initialWaterReading       Decimal   @default(0.00) @map("initial_water_reading") @db.Decimal(12, 2)
@@ -347,8 +396,7 @@ model Room {
   occupancies       Occupancy[]
   moveOutRequests   TenantMoveOutRequest[]
 
-  // @@unique([dormitoryId, roomNumber], name: "dormitory_room_number_unique") // Deprecated
-  @@unique([dormitoryId, normalizedRoomNumber], name: "dormitory_normalized_room_number_unique")
+  @@unique([dormitoryId, normalizedRoomNumber], map: "dormitory_normalized_room_number_unique")
   @@map("rooms")
 }
 
@@ -488,6 +536,7 @@ model Contract {
   statusHistory ContractStatusHistory[]
   bills         Bill[]
   occupancies   Occupancy[]
+  snapshot      ContractSnapshot?
 
   @@unique([dormitoryId, contractNumber], name: "dormitory_contract_number_unique")
   @@map("contracts")
@@ -508,6 +557,65 @@ model ContractStatusHistory {
   contract Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
 
   @@map("contract_status_histories")
+}
+
+model ContractSnapshot {
+  id                      String   @id @default(uuid()) @db.Uuid
+  dormitoryId             String   @map("dormitory_id") @db.Uuid
+  contractId              String   @unique @map("contract_id") @db.Uuid
+  buildingId              String   @map("building_id") @db.Uuid
+  roomId                  String   @map("room_id") @db.Uuid
+  tenantId                String   @map("tenant_id") @db.Uuid
+  exactRoomNumber         String   @map("exact_room_number") @db.VarChar(100)
+  resolvedRent            Decimal  @map("resolved_rent") @db.Decimal(12, 2)
+  resolvedDeposit         Decimal  @map("resolved_deposit") @db.Decimal(12, 2)
+  resolvedAdvancePayment  Decimal  @default(0.00) @map("resolved_advance_payment") @db.Decimal(12, 2)
+  resolvedWaterRate       Decimal  @default(0.00) @map("resolved_water_rate") @db.Decimal(12, 2)
+  resolvedElectricityRate Decimal  @default(0.00) @map("resolved_electricity_rate") @db.Decimal(12, 2)
+  resolvedCommonFee       Decimal  @default(0.00) @map("resolved_common_fee") @db.Decimal(12, 2)
+  resolvedInternetFee     Decimal  @default(0.00) @map("resolved_internet_fee") @db.Decimal(12, 2)
+  resolvedParkingFee      Decimal  @default(0.00) @map("resolved_parking_fee") @db.Decimal(12, 2)
+  waterBillingType        String   @default("per_unit") @map("water_billing_type") @db.VarChar(50)
+  electricityBillingType  String   @default("per_unit") @map("electricity_billing_type") @db.VarChar(50)
+  rentBillingType         String   @default("monthly") @map("rent_billing_type") @db.VarChar(50)
+  installmentConfig       Json?    @map("installment_config")
+  termsVersion            String?  @map("terms_version") @db.VarChar(100)
+  sourceVersions          Json     @map("source_versions")
+  snapshotData            Json     @map("snapshot_data")
+  lockedAt                DateTime @default(now()) @map("locked_at") @db.Timestamptz()
+  lockedByUserId          String?  @map("locked_by_user_id") @db.Uuid
+  createdAt               DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  contract  Contract  @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  dormitory Dormitory @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
+
+  @@map("contract_snapshots")
+}
+
+model AuditLog {
+  id             String   @id @default(uuid()) @db.Uuid
+  dormitoryId    String   @map("dormitory_id") @db.Uuid
+  actorUserId    String?  @map("actor_user_id") @db.Uuid
+  entityType     String   @map("entity_type") @db.VarChar(100)
+  entityId       String   @map("entity_id") @db.VarChar(255)
+  action         String   @db.VarChar(100)
+  beforeValues   Json?    @map("before_values")
+  afterValues    Json?    @map("after_values")
+  changedFields  Json?    @map("changed_fields")
+  reason         String?  @db.Text
+  requestId      String?  @map("request_id") @db.VarChar(255)
+  versionBefore  Int?     @map("version_before")
+  versionAfter   Int?     @map("version_after")
+  idempotencyKey String?  @map("idempotency_key") @db.VarChar(255)
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  dormitory Dormitory @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
+
+  @@index([dormitoryId])
+  @@index([entityType, entityId])
+  @@index([actorUserId])
+  @@index([createdAt])
+  @@map("audit_logs")
 }
 
 model BillingCycle {

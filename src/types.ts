@@ -470,3 +470,95 @@ export const formatItemDescription = (desc: string): string => {
 
   return str;
 };
+
+export type FieldSource = 'DORMITORY' | 'BUILDING' | 'ROOM' | 'CONTRACT_SNAPSHOT';
+
+export interface RoomFieldSources {
+  monthlyRent?: FieldSource;
+  termRent?: FieldSource;
+  dailyRent?: FieldSource;
+  depositAmount?: FieldSource;
+  advancePaymentAmount?: FieldSource;
+  parkingFee?: FieldSource;
+  waterRate?: FieldSource;
+  electricityRate?: FieldSource;
+  commonFee?: FieldSource;
+  internetFee?: FieldSource;
+  waterBillingType?: FieldSource;
+  electricityBillingType?: FieldSource;
+  rentBillingType?: FieldSource;
+  maximumOccupants?: FieldSource;
+  roomType?: FieldSource;
+  [key: string]: FieldSource | undefined;
+}
+
+export interface EffectiveValues {
+  monthlyRent: number;
+  termRent?: number | null;
+  dailyRent?: number | null;
+  depositAmount: number;
+  advancePaymentAmount: number;
+  parkingFee: number;
+  waterRate: number;
+  electricityRate: number;
+  commonFee: number;
+  internetFee: number;
+  waterBillingType: string;
+  electricityBillingType: string;
+  rentBillingType: string;
+  maximumOccupants: number;
+  roomType: string;
+  [key: string]: any;
+}
+
+export interface ContractSnapshotData {
+  contractId: string;
+  snapshotId: string;
+  roomId: string;
+  buildingId: string;
+  tenantId: string;
+  exactRoomNumber: string;
+  resolvedRent: string | number;
+  resolvedDeposit: string | number;
+  resolvedAdvancePayment: string | number;
+  resolvedWaterRate: string | number;
+  resolvedElectricityRate: string | number;
+  resolvedCommonFee: string | number;
+  resolvedInternetFee: string | number;
+  resolvedParkingFee: string | number;
+  waterBillingType: string;
+  electricityBillingType: string;
+  rentBillingType: string;
+  sourceVersions: Record<string, number>;
+  snapshotLockedAt: string;
+  lockedByUserId?: string | null;
+  snapshotData?: any;
+}
+
+export interface FieldEffectItem {
+  field: string;
+  roomId: string;
+  roomNumber: string;
+  oldEffectiveValue: any;
+  newEffectiveValue: any;
+  sourceBefore: string;
+  sourceAfter: string;
+  eligible: boolean;
+  skipReason?: string;
+}
+
+export interface PropagationPreviewResult {
+  scope: 'DORMITORY' | 'BUILDING';
+  scopeId?: string | null;
+  expectedVersions?: {
+    property?: number;
+    billing?: number;
+  };
+  expectedVersion?: number;
+  candidateRoomCount: number;
+  eligibleRoomCount: number;
+  eligibleFieldChangeCount: number;
+  skippedRoomCount: number;
+  skippedFieldChangeCount: number;
+  fieldEffects: FieldEffectItem[];
+}

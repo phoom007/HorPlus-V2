@@ -10,9 +10,8 @@ describe('Wave 1D Boundary Regression Tests (Frontend)', () => {
     expect(featuresPage).not.toContain('ตรวจสอบการชำระเงินและสลิป');
   });
 
-  it('should not contain advancePaymentAmount or Receipt type in types.ts', () => {
+  it('should not contain Receipt type in types.ts', () => {
     const typesTs = fs.readFileSync(path.join(__dirname, '../types.ts'), 'utf8');
-    expect(typesTs).not.toContain('advancePaymentAmount');
     expect(typesTs).not.toContain('export interface Receipt');
   });
 

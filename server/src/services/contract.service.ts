@@ -197,12 +197,17 @@ export class ContractService {
   ) {
     const contract = await this.getContractById(id, dormitoryId);
 
-    // Idempotency check: if already active, just return it
+    // Idempotency check: if already active, check if snapshot exists, return existing
     if (contract.status === 'active') {
-      return contract;
+      const prisma = getPrismaClient();
+      const existingSnapshot = await prisma.contractSnapshot.findUnique({ where: { contractId: id } });
+      return {
+        ...contract,
+        snapshot: existingSnapshot,
+      };
     }
 
-    if (!['draft', 'pending_signature'].includes(contract.status)) {
+    if (!['draft', 'pending_signature', 'approved'].includes(contract.status)) {
       const err = new Error(`ไม่สามารถเปิดใช้งานสัญญาที่อยู่ในสถานะ ${contract.status} ได้`);
       (err as any).code = 'INVALID_CONTRACT_STATUS_TRANSITION';
       (err as any).statusCode = 400;
@@ -210,20 +215,87 @@ export class ContractService {
     }
 
     const prisma = getPrismaClient();
-    
+
+    // Import defaultsService dynamically to avoid circular dependencies
+    const { defaultsService } = await import('./defaults.service.js');
+
     // Check if we can use transactions
     if (this.contractRepo.constructor.name === 'PrismaContractRepository') {
-      const updated = await prisma.$transaction(async (tx) => {
-        // Lock the room
+      const updated = await prisma.$transaction(async (tx: any) => {
+        // 1. Lock the room and fetch room data
         await tx.$executeRaw`SELECT id FROM rooms WHERE id = ${contract.roomId}::uuid FOR UPDATE`;
-        
-        // Double check status inside transaction
-        const currentContract = await tx.contract.findFirst({ where: { id } });
+        const room = await tx.room.findFirst({ where: { id: contract.roomId } });
+        if (!room) {
+          throw new Error('ไม่พบห้องพักที่ระบุในสัญญา');
+        }
+
+        // 2. Double check status inside transaction
+        const currentContract = await tx.contract.findFirst({
+          where: { id },
+          include: { snapshot: true },
+        });
         if (currentContract?.status === 'active') {
           return currentContract;
         }
 
+        // 3. Recheck interval availability
+        const { BLOCKING_CONTRACT_STATUSES } = await import('./blocking-contract-policy.js');
+        const overlapping = await tx.contract.findMany({
+          where: {
+            dormitoryId,
+            roomId: contract.roomId,
+            id: { not: id },
+            deletedAt: null,
+            status: { in: [...BLOCKING_CONTRACT_STATUSES] },
+            startDate: { lt: contract.endDate },
+            endDate: { gt: contract.startDate },
+          },
+        });
+        if (overlapping.length > 0) {
+          const err = new Error('ช่วงเวลาสัญญาซ้อนทับกับสัญญาเดิมที่เปิดใช้งานอยู่');
+          (err as any).code = 'CONTRACT_OVERLAP';
+          (err as any).statusCode = 409;
+          throw err;
+        }
+
+        // 4. Resolve effective Room defaults
+        const resolvedDefaults = await defaultsService.resolveEffectiveRoomDefaults(
+          dormitoryId,
+          room.buildingId,
+          contract.roomId,
+          tx
+        );
+
         const now = new Date();
+
+        // 5. Create ContractSnapshot atomically
+        const snapshot = await tx.contractSnapshot.create({
+          data: {
+            dormitoryId,
+            contractId: id,
+            buildingId: room.buildingId,
+            roomId: contract.roomId,
+            tenantId: contract.tenantId,
+            exactRoomNumber: room.roomNumber,
+            resolvedRent: contract.rentAmount || resolvedDefaults.monthlyRent.value,
+            resolvedDeposit: contract.depositAmount || resolvedDefaults.depositAmount.value,
+            resolvedAdvancePayment: contract.advancePaymentAmount || resolvedDefaults.advancePaymentAmount.value,
+            resolvedWaterRate: resolvedDefaults.waterRate.value,
+            resolvedElectricityRate: resolvedDefaults.electricityRate.value,
+            resolvedCommonFee: resolvedDefaults.commonFee.value,
+            resolvedInternetFee: resolvedDefaults.internetFee.value,
+            resolvedParkingFee: resolvedDefaults.parkingFee.value,
+            waterBillingType: resolvedDefaults.waterBillingType.value,
+            electricityBillingType: resolvedDefaults.electricityBillingType.value,
+            rentBillingType: resolvedDefaults.rentBillingType.value,
+            sourceVersions: resolvedDefaults.sourceVersions,
+            snapshotData: resolvedDefaults as any,
+            lockedAt: now,
+            lockedByUserId: actorUserId,
+          },
+        });
+
+        // 6. Update Contract to active
         const updatedContract = await tx.contract.update({
           where: { id },
           data: {
@@ -234,58 +306,65 @@ export class ContractService {
             signedByTenantAt: payload.tenantSignature ? now : contract.signedByTenantAt,
             activatedAt: now,
             updatedByUserId: actorUserId,
-            version: { increment: 1 }
-          }
+            version: { increment: 1 },
+          },
         });
 
-        // Sync Room status & pointers
+        // 7. Sync Room status & pointers
         await tx.room.update({
           where: { id: contract.roomId },
           data: {
             status: 'occupied',
             currentTenantId: contract.tenantId,
             currentContractId: contract.id,
-          }
+          },
         });
 
-        // Sync Tenant status
+        // 8. Sync Tenant status
         await tx.tenant.update({
           where: { id: contract.tenantId },
           data: {
             status: 'active',
-          }
+          },
         });
 
-        // Add history (raw insert for simplicity inside tx)
+        // 9. Create ContractStatusHistory
         await tx.contractStatusHistory.create({
           data: {
             dormitoryId,
             contractId: id,
             fromStatus: contract.status,
             toStatus: 'active',
-            reason: 'Contract activated & tenant moved in',
+            reason: 'Contract activated & immutable snapshot locked',
             changedByUserId: actorUserId,
             effectiveAt: now,
-          }
+          },
+        });
+
+        // 10. Create persistent AuditLog entry
+        await tx.auditLog.create({
+          data: {
+            dormitoryId,
+            actorUserId,
+            entityType: 'CONTRACT',
+            entityId: id,
+            action: 'CONTRACT_ACTIVATED',
+            beforeValues: { status: contract.status },
+            afterValues: { status: 'active', snapshotId: snapshot.id },
+            reason: `Activated contract ${updatedContract.contractNumber} and locked pricing snapshot`,
+            versionBefore: contract.version,
+            versionAfter: updatedContract.version,
+          },
         });
 
         return {
           ...updatedContract,
           rentAmount: updatedContract.rentAmount ? updatedContract.rentAmount.toString() : '0.00',
           depositAmount: updatedContract.depositAmount ? updatedContract.depositAmount.toString() : '0.00',
-          advancePaymentAmount: updatedContract.advancePaymentAmount ? updatedContract.advancePaymentAmount.toString() : '0.00'
+          advancePaymentAmount: updatedContract.advancePaymentAmount ? updatedContract.advancePaymentAmount.toString() : '0.00',
+          snapshot,
         };
       });
-
-      if (this.auditService && actorUserId && updated) {
-        await this.auditService.log({
-          userId: actorUserId,
-          action: 'CONTRACT_ACTIVATED',
-          source: 'contract',
-          reason: `Activated contract ${updated.contractNumber}`,
-          ipMetadata: { dormitoryId, contractId: id, roomId: contract.roomId, tenantId: contract.tenantId },
-        });
-      }
 
       return updated;
     }

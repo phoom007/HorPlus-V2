@@ -8,6 +8,7 @@ export interface TenantEntity {
   firstName: string;
   lastName?: string | null;
   displayName: string;
+  name?: string;
   phone: string;
   email?: string | null;
   nationalIdEncrypted?: string | null;
@@ -402,6 +403,7 @@ export class PrismaTenantRepository implements ITenantRepository {
       firstName: t.firstName,
       lastName: t.lastName,
       displayName: t.displayName,
+      name: t.displayName || `${t.firstName || ''} ${t.lastName || ''}`.trim(),
       phone: t.phone,
       email: t.email,
       nationalIdEncrypted: t.nationalIdEncrypted,

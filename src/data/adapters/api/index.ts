@@ -16,6 +16,7 @@ import {
   AnnouncementDataSource,
   NotificationDataSource,
   AuditDataSource,
+  PropertyDataSource,
 
   StaffRoleDataSource,
   TenantRegistrationDataSource,
@@ -637,6 +638,359 @@ export class ApiOccupancyAdapter implements OccupancyDataSource {
   }
 }
 
+export class ApiPropertyAdapter implements PropertyDataSource {
+  async getAuthoritativeRooms(params?: Record<string, any>): Promise<DataResult<{ items: Room[]; pagination: any }>> {
+    try {
+      const queryStr = params ? '?' + new URLSearchParams(params).toString() : '';
+      const data = await httpRequest<any>('GET', `/properties/rooms${queryStr}`);
+      return { success: true, data };
+    } catch (err: any) {
+      return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message } };
+    }
+  }
+
+  async getAuthoritativeRoom(id: string): Promise<DataResult<Room>> {
+    try {
+      const data = await httpRequest<Room>('GET', `/properties/rooms/${id}`);
+      return { success: true, data };
+    } catch (err: any) {
+      return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message } };
+    }
+  }
+
+  async getAuthoritativeBuildings(): Promise<DataResult<Building[]>> {
+    try {
+      const data = await httpRequest<Building[]>('GET', '/properties/buildings');
+      return { success: true, data };
+    } catch (err: any) {
+      return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message } };
+    }
+  }
+
+  async getAuthoritativeBuilding(id: string): Promise<DataResult<Building>> {
+    try {
+      const data = await httpRequest<Building>('GET', `/properties/buildings/${id}`);
+      return { success: true, data };
+    } catch (err: any) {
+      return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message } };
+    }
+  }
+
+  async getDormitoryDefaults(): Promise<DataResult<{ property: any; billing: any }>> {
+    try {
+      const response = await httpRequest<any>('GET', '/properties/dormitory/defaults');
+      const defaults = response?.data || response;
+      return { success: true, data: defaults };
+    } catch (err: any) {
+      return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message } };
+    }
+  }
+
+  async updateDormitoryDefaults(payload: {
+    property?: { changes: Record<string, any>; expectedVersion: number };
+    billing?: { changes: Record<string, any>; expectedVersion: number };
+  }): Promise<DataResult<any>> {
+    try {
+      const canonicalPropertyMap: Record<string, string> = {
+        monthlyRent: 'defaultMonthlyRent',
+        defaultMonthlyRent: 'defaultMonthlyRent',
+        termRent: 'defaultTermRent',
+        defaultTermRent: 'defaultTermRent',
+        dailyRent: 'defaultDailyRent',
+        defaultDailyRent: 'defaultDailyRent',
+        depositAmount: 'defaultDeposit',
+        deposit: 'defaultDeposit',
+        defaultDeposit: 'defaultDeposit',
+        advancePaymentAmount: 'defaultAdvancePayment',
+        advancePayment: 'defaultAdvancePayment',
+        defaultAdvancePayment: 'defaultAdvancePayment',
+        parkingFee: 'defaultParkingFee',
+        defaultParkingFee: 'defaultParkingFee',
+        maximumOccupants: 'defaultMaxOccupants',
+        maxOccupants: 'defaultMaxOccupants',
+        defaultMaxOccupants: 'defaultMaxOccupants',
+        roomType: 'defaultRoomType',
+        defaultRoomType: 'defaultRoomType',
+        terms: 'defaultTerms',
+        defaultTerms: 'defaultTerms',
+      };
+
+      const canonicalBillingMap: Record<string, string> = {
+        waterUnitRate: 'waterRate',
+        waterRate: 'waterRate',
+        electricUnitRate: 'electricityRate',
+        electricRate: 'electricityRate',
+        electricityRate: 'electricityRate',
+        waterBillingMode: 'waterBillingType',
+        waterBillingType: 'waterBillingType',
+        electricBillingMode: 'electricityBillingType',
+        electricBillingType: 'electricityBillingType',
+        electricityBillingType: 'electricityBillingType',
+        commonFee: 'commonFee',
+        internetFee: 'internetFee',
+        rentBillingType: 'rentBillingType',
+        billingDay: 'billingDay',
+        dueDay: 'dueDay',
+        lateFeeType: 'lateFeeType',
+        lateFeeValue: 'lateFeeValue',
+      };
+
+      const cleanPayload: any = {};
+      if (payload.property) {
+        const cleanChanges: Record<string, any> = {};
+        for (const [k, v] of Object.entries(payload.property.changes)) {
+          cleanChanges[canonicalPropertyMap[k] || k] = v;
+        }
+        cleanPayload.property = {
+          changes: cleanChanges,
+          expectedVersion: payload.property.expectedVersion,
+        };
+      }
+      if (payload.billing) {
+        const cleanChanges: Record<string, any> = {};
+        for (const [k, v] of Object.entries(payload.billing.changes)) {
+          cleanChanges[canonicalBillingMap[k] || k] = v;
+        }
+        cleanPayload.billing = {
+          changes: cleanChanges,
+          expectedVersion: payload.billing.expectedVersion,
+        };
+      }
+
+      const response = await httpRequest<any>('PUT', '/properties/dormitory/defaults', cleanPayload);
+      const result = response?.data || response;
+      return { success: true, data: result };
+    } catch (err: any) {
+      return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message } };
+    }
+  }
+
+  async setBuildingDefaults(buildingId: string, changes: Record<string, any>, expectedVersion: number): Promise<DataResult<Building>> {
+    try {
+      const data = await httpRequest<Building>('PUT', `/properties/buildings/${buildingId}/defaults`, { ...changes, expectedVersion });
+      return { success: true, data };
+    } catch (err: any) {
+      return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message } };
+    }
+  }
+
+  async updateBuildingIdentity(buildingId: string, changes: { name?: string; code?: string; floorCount?: number; description?: string; displayOrder?: number; numberingPattern?: string }, expectedVersion: number): Promise<DataResult<Building>> {
+    try {
+      const data = await httpRequest<Building>('PUT', `/properties/buildings/${buildingId}`, { ...changes, expectedVersion });
+      return { success: true, data };
+    } catch (err: any) {
+      return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message } };
+    }
+  }
+
+  async archiveBuilding(buildingId: string, expectedVersion: number): Promise<DataResult<boolean>> {
+    try {
+      await httpRequest<any>('DELETE', `/properties/buildings/${buildingId}`, { expectedVersion });
+      return { success: true, data: true };
+    } catch (err: any) {
+      return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message } };
+    }
+  }
+
+  async clearBuildingOverride(buildingId: string, field: string, expectedVersion: number): Promise<DataResult<Building>> {
+    try {
+      const data = await httpRequest<Building>('DELETE', `/properties/buildings/${buildingId}/defaults/${field}`, { expectedVersion });
+      return { success: true, data };
+    } catch (err: any) {
+      return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message } };
+    }
+  }
+
+  async setRoomDefaults(roomId: string, changes: Record<string, any>, expectedVersion: number): Promise<DataResult<Room>> {
+    try {
+      const data = await httpRequest<Room>('PUT', `/properties/rooms/${roomId}/defaults`, { ...changes, expectedVersion });
+      return { success: true, data };
+    } catch (err: any) {
+      return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message } };
+    }
+  }
+
+  async updateRoomIdentity(roomId: string, changes: { roomNumber?: string; buildingId?: string; floor?: number; roomType?: string; rentCycle?: string; status?: string; maximumOccupants?: number; notes?: string }, expectedVersion: number): Promise<DataResult<Room>> {
+    try {
+      const data = await httpRequest<Room>('PUT', `/properties/rooms/${roomId}`, { ...changes, expectedVersion });
+      return { success: true, data };
+    } catch (err: any) {
+      return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message } };
+    }
+  }
+
+  async archiveRoom(roomId: string, expectedVersion: number): Promise<DataResult<boolean>> {
+    try {
+      await httpRequest<any>('DELETE', `/properties/rooms/${roomId}`, { expectedVersion });
+      return { success: true, data: true };
+    } catch (err: any) {
+      return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message } };
+    }
+  }
+
+  async clearRoomOverride(roomId: string, field: string, expectedVersion: number): Promise<DataResult<Room>> {
+    try {
+      const data = await httpRequest<Room>('DELETE', `/properties/rooms/${roomId}/defaults/${field}`, { expectedVersion });
+      return { success: true, data };
+    } catch (err: any) {
+      return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message } };
+    }
+  }
+
+  async previewPropagation(payload: any): Promise<DataResult<any>> {
+    try {
+      const canonicalPropertyMap: Record<string, string> = {
+        monthlyRent: 'defaultMonthlyRent',
+        termRent: 'defaultTermRent',
+        dailyRent: 'defaultDailyRent',
+        depositAmount: 'defaultDeposit',
+        deposit: 'defaultDeposit',
+        advancePaymentAmount: 'defaultAdvancePayment',
+        advancePayment: 'defaultAdvancePayment',
+        parkingFee: 'defaultParkingFee',
+        maximumOccupants: 'defaultMaxOccupants',
+        maxOccupants: 'defaultMaxOccupants',
+        roomType: 'defaultRoomType',
+        terms: 'defaultTerms',
+      };
+
+      const canonicalBillingMap: Record<string, string> = {
+        waterUnitRate: 'waterRate',
+        electricUnitRate: 'electricityRate',
+        waterBillingMode: 'waterBillingType',
+        electricBillingMode: 'electricityBillingType',
+      };
+
+      const cleanPayload: any = { scope: payload.scope };
+      if (payload.scopeId) cleanPayload.scopeId = payload.scopeId;
+
+      if (payload.scope === 'DORMITORY') {
+        const changesObj: any = {};
+        if (payload.changes?.property) {
+          changesObj.property = {};
+          for (const [k, v] of Object.entries(payload.changes.property)) {
+            changesObj.property[canonicalPropertyMap[k] || k] = v;
+          }
+        }
+        if (payload.changes?.billing) {
+          changesObj.billing = {};
+          for (const [k, v] of Object.entries(payload.changes.billing)) {
+            changesObj.billing[canonicalBillingMap[k] || k] = v;
+          }
+        }
+        cleanPayload.changes = changesObj;
+      } else {
+        cleanPayload.changes = payload.changes;
+      }
+
+      const response = await httpRequest<any>('POST', '/properties/defaults/preview', cleanPayload);
+      const preview = response?.data || response;
+      return { success: true, data: preview };
+    } catch (err: any) {
+      return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message } };
+    }
+  }
+
+  async applyPropagation(payload: any): Promise<DataResult<any>> {
+    try {
+      const canonicalPropertyMap: Record<string, string> = {
+        monthlyRent: 'defaultMonthlyRent',
+        termRent: 'defaultTermRent',
+        dailyRent: 'defaultDailyRent',
+        depositAmount: 'defaultDeposit',
+        deposit: 'defaultDeposit',
+        advancePaymentAmount: 'defaultAdvancePayment',
+        advancePayment: 'defaultAdvancePayment',
+        parkingFee: 'defaultParkingFee',
+        maximumOccupants: 'defaultMaxOccupants',
+        maxOccupants: 'defaultMaxOccupants',
+        roomType: 'defaultRoomType',
+        terms: 'defaultTerms',
+      };
+
+      const canonicalBillingMap: Record<string, string> = {
+        waterUnitRate: 'waterRate',
+        electricUnitRate: 'electricityRate',
+        waterBillingMode: 'waterBillingType',
+        electricBillingMode: 'electricityBillingType',
+      };
+
+      const cleanPayload: any = { scope: payload.scope, idempotencyKey: payload.idempotencyKey };
+      if (payload.scopeId) cleanPayload.scopeId = payload.scopeId;
+      if (payload.expectedVersions) cleanPayload.expectedVersions = payload.expectedVersions;
+      if (payload.expectedVersion) cleanPayload.expectedVersion = payload.expectedVersion;
+
+      if (payload.scope === 'DORMITORY') {
+        const changesObj: any = {};
+        if (payload.changes?.property) {
+          changesObj.property = {};
+          for (const [k, v] of Object.entries(payload.changes.property)) {
+            changesObj.property[canonicalPropertyMap[k] || k] = v;
+          }
+        }
+        if (payload.changes?.billing) {
+          changesObj.billing = {};
+          for (const [k, v] of Object.entries(payload.changes.billing)) {
+            changesObj.billing[canonicalBillingMap[k] || k] = v;
+          }
+        }
+        cleanPayload.changes = changesObj;
+      } else {
+        cleanPayload.changes = payload.changes;
+      }
+
+      const data = await httpRequest<any>('POST', '/properties/defaults/apply', cleanPayload);
+      return { success: true, data };
+    } catch (err: any) {
+      return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message } };
+    }
+  }
+
+  async queryAvailability(params: { startDate: string; endDate: string; buildingId?: string }): Promise<DataResult<Room[]>> {
+    try {
+      const cleanParams: Record<string, string> = {
+        startDate: params.startDate,
+        endDate: params.endDate
+      };
+      if (params.buildingId && params.buildingId !== 'undefined' && params.buildingId !== 'all') {
+        cleanParams.buildingId = params.buildingId;
+      }
+      const queryStr = '?' + new URLSearchParams(cleanParams).toString();
+      const data = await httpRequest<Room[]>('GET', `/properties/rooms/available${queryStr}`);
+      return { success: true, data };
+    } catch (err: any) {
+      return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message } };
+    }
+  }
+
+  async getContractSnapshot(contractId: string): Promise<DataResult<any>> {
+    try {
+      const data = await httpRequest<any>('GET', `/properties/contracts/${contractId}/snapshot`);
+      return { success: true, data };
+    } catch (err: any) {
+      return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message } };
+    }
+  }
+
+  async createContract(payload: any): Promise<DataResult<Contract>> {
+    try {
+      const data = await httpRequest<Contract>('POST', '/contracts', payload);
+      return { success: true, data };
+    } catch (err: any) {
+      return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message } };
+    }
+  }
+
+  async activateContract(contractId: string, payload?: { ownerSignature?: string; tenantSignature?: string }): Promise<DataResult<Contract>> {
+    try {
+      const data = await httpRequest<Contract>('POST', `/contracts/${contractId}/activate`, payload || {});
+      return { success: true, data };
+    } catch (err: any) {
+      return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message } };
+    }
+  }
+}
+
 export class ApiDataProvider implements HorPlusDataProvider {
   public dormitories = new ApiDormitoryAdapter();
   public rooms = new ApiRoomAdapter();
@@ -648,6 +1002,7 @@ export class ApiDataProvider implements HorPlusDataProvider {
   public announcements = new ApiAnnouncementAdapter();
   public notifications = new ApiNotificationAdapter();
   public audit = new ApiAuditAdapter();
+  public properties = new ApiPropertyAdapter();
 
   public staffRoles = new ApiStaffRoleAdapter();
   public tenantRegistrations = new ApiTenantRegistrationAdapter();

@@ -8,11 +8,11 @@ export interface RoomEntity {
   roomType: string;
   status: string; // vacant, reserved, occupied, maintenance, inactive, archived
   rentCycle: string; // monthly, term, daily
-  monthlyRent: string; // Decimal string e.g. "5000.00"
+  monthlyRent?: string | null; // Decimal string e.g. "5000.00" or null if inheriting
   termRent?: string | null;
   dailyRent?: string | null;
-  depositAmount: string;
-  parkingFee: string;
+  depositAmount?: string | null;
+  parkingFee?: string | null;
   maximumOccupants: number;
   waterMeterNumber?: string | null;
   electricityMeterNumber?: string | null;
@@ -408,16 +408,17 @@ export class PrismaRoomRepository implements IRoomRepository {
   }
 
   private mapToEntity(prismaRoom: any): RoomEntity {
-    const fmt = (val: any) => (val !== undefined && val !== null ? Number(val.toString()).toFixed(2) : '0.00');
+    const fmtNullable = (val: any) => (val !== undefined && val !== null ? Number(val.toString()).toFixed(2) : null);
+    const fmtDefaultZero = (val: any) => (val !== undefined && val !== null ? Number(val.toString()).toFixed(2) : '0.00');
     return {
       ...prismaRoom,
-      monthlyRent: fmt(prismaRoom.monthlyRent),
-      termRent: prismaRoom.termRent ? fmt(prismaRoom.termRent) : null,
-      dailyRent: prismaRoom.dailyRent ? fmt(prismaRoom.dailyRent) : null,
-      depositAmount: fmt(prismaRoom.depositAmount),
-      parkingFee: fmt(prismaRoom.parkingFee),
-      initialWaterReading: fmt(prismaRoom.initialWaterReading),
-      initialElectricityReading: fmt(prismaRoom.initialElectricityReading),
+      monthlyRent: fmtNullable(prismaRoom.monthlyRent),
+      termRent: fmtNullable(prismaRoom.termRent),
+      dailyRent: fmtNullable(prismaRoom.dailyRent),
+      depositAmount: fmtNullable(prismaRoom.depositAmount),
+      parkingFee: fmtNullable(prismaRoom.parkingFee),
+      initialWaterReading: fmtDefaultZero(prismaRoom.initialWaterReading),
+      initialElectricityReading: fmtDefaultZero(prismaRoom.initialElectricityReading),
     };
   }
 }

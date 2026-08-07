@@ -98,7 +98,7 @@ Restricted Mode อนุญาตให้ Owner/Manager ดูข้อมู�
 ## 4. Building, Room and Price Defaults
 
 - ทุกห้องต้องสังกัด Building
-- `roomNumber` ซ้ำได้ต่าง Building แต่ซ้ำใน Building เดียวกันไม่ได้
+- `normalizedRoomNumber` ต้องซ้ำไม่ได้ภายในหอพักเดียวกัน (Dormitory-scoped uniqueness) สามารถซ้ำต่างหอพักได้ (Product Owner Decision Note - 5 สิงหาคม 2026)
 - ค่าเริ่มต้นไหล `Dormitory → Building → Room`
 - Owner แก้ค่าเฉพาะ Building/Room ได้
 - เมื่อเปลี่ยนค่า Default ภายหลัง ให้ปรับเฉพาะห้องที่ยังไม่มีสัญญา Active

@@ -9,19 +9,22 @@ export const CreateBuildingSchema = z.object({
   numberingPattern: z.string().optional().nullable(),
 });
 
-export const UpdateBuildingSchema = CreateBuildingSchema.partial();
+export const UpdateBuildingSchema = CreateBuildingSchema.partial().extend({
+  expectedVersion: z.number().int().min(1, 'ต้องระบุ expectedVersion ที่ถูกต้อง'),
+}).strict();
 
 export const CreateRoomSchema = z.object({
   buildingId: z.string().min(1, 'ต้องระบุอาคาร'),
   roomNumber: z.string().min(1, 'เลขห้องจำเป็นต้องระบุ').max(100),
   floor: z.number().int().min(1, 'ชั้นต้องมากกว่า 0').default(1),
   roomType: z.string().default('standard'),
+  status: z.enum(['vacant', 'occupied', 'reserved', 'maintenance']).default('vacant'),
   rentCycle: z.enum(['monthly', 'term', 'daily']).default('monthly'),
-  monthlyRent: z.string().regex(/^\d+(\.\d{1,2})?$/, 'จำนวนเงินไม่ถูกต้อง').default('0.00'),
+  monthlyRent: z.string().regex(/^\d+(\.\d{1,2})?$/, 'จำนวนเงินไม่ถูกต้อง').optional().nullable(),
   termRent: z.string().regex(/^\d+(\.\d{1,2})?$/).optional().nullable(),
   dailyRent: z.string().regex(/^\d+(\.\d{1,2})?$/).optional().nullable(),
-  depositAmount: z.string().regex(/^\d+(\.\d{1,2})?$/).default('0.00'),
-  parkingFee: z.string().regex(/^\d+(\.\d{1,2})?$/).default('0.00'),
+  depositAmount: z.string().regex(/^\d+(\.\d{1,2})?$/).optional().nullable(),
+  parkingFee: z.string().regex(/^\d+(\.\d{1,2})?$/).optional().nullable(),
   maximumOccupants: z.number().int().min(1).default(2),
   waterMeterNumber: z.string().optional().nullable(),
   electricityMeterNumber: z.string().optional().nullable(),
@@ -33,8 +36,24 @@ export const CreateRoomSchema = z.object({
 });
 
 export const UpdateRoomSchema = CreateRoomSchema.partial().extend({
-  version: z.number().int().optional(),
-});
+  expectedVersion: z.number().int().min(1, 'ต้องระบุ expectedVersion ที่ถูกต้อง'),
+}).strict();
+
+export const ArchiveBuildingSchema = z.object({
+  expectedVersion: z.number().int().min(1, 'ต้องระบุ expectedVersion ที่ถูกต้อง'),
+}).strict();
+
+export const ArchiveRoomSchema = z.object({
+  expectedVersion: z.number().int().min(1, 'ต้องระบุ expectedVersion ที่ถูกต้อง'),
+}).strict();
+
+export const ClearBuildingOverrideSchema = z.object({
+  expectedVersion: z.number().int().min(1, 'ต้องระบุ expectedVersion ที่ถูกต้อง'),
+}).strict();
+
+export const ClearRoomOverrideSchema = z.object({
+  expectedVersion: z.number().int().min(1, 'ต้องระบุ expectedVersion ที่ถูกต้อง'),
+}).strict();
 
 export const CreateTenantSchema = z.object({
   firstName: z.string().min(1, 'ชื่อจำเป็นต้องระบุ').max(255),
@@ -123,3 +142,191 @@ export const TerminateContractSchema = z.object({
   nextRoomStatus: z.enum(['vacant', 'maintenance']).default('vacant'),
   version: z.number().int().optional(),
 });
+
+export const UpdateDormitoryPropertyChangesSchema = z.object({
+  defaultMonthlyRent: z.union([z.number(), z.string()]).optional(),
+  defaultTermRent: z.union([z.number(), z.string()]).optional().nullable(),
+  defaultDailyRent: z.union([z.number(), z.string()]).optional().nullable(),
+  defaultDeposit: z.union([z.number(), z.string()]).optional(),
+  defaultAdvancePayment: z.union([z.number(), z.string()]).optional(),
+  defaultParkingFee: z.union([z.number(), z.string()]).optional(),
+  defaultMaxOccupants: z.number().int().min(1).optional(),
+  defaultRoomType: z.string().optional(),
+  defaultTerms: z.string().optional().nullable(),
+}).strict();
+
+export const UpdateDormitoryBillingChangesSchema = z.object({
+  waterRate: z.union([z.number(), z.string()]).optional(),
+  electricityRate: z.union([z.number(), z.string()]).optional(),
+  commonFee: z.union([z.number(), z.string()]).optional(),
+  internetFee: z.union([z.number(), z.string()]).optional(),
+  waterBillingType: z.string().optional(),
+  electricityBillingType: z.string().optional(),
+  rentBillingType: z.string().optional(),
+  billingDay: z.number().int().min(1).max(31).optional(),
+  dueDay: z.number().int().min(1).max(31).optional(),
+  lateFeeType: z.string().optional(),
+  lateFeeValue: z.union([z.number(), z.string()]).optional(),
+}).strict();
+
+export const UpdateDormitoryDefaultsRequestSchema = z.object({
+  property: z.object({
+    changes: UpdateDormitoryPropertyChangesSchema,
+    expectedVersion: z.number().int().min(1, 'ต้องระบุ expectedVersion ที่ถูกต้อง'),
+  }).strict().optional(),
+  billing: z.object({
+    changes: UpdateDormitoryBillingChangesSchema,
+    expectedVersion: z.number().int().min(1, 'ต้องระบุ expectedVersion ที่ถูกต้อง'),
+  }).strict().optional(),
+}).strict().refine(
+  value => !!(value.property || value.billing),
+  'ต้องระบุ property หรือ billing อย่างน้อยหนึ่งรายการ',
+);
+
+export const AllowedPropertyPropagationChangesSchema = z.object({
+  defaultMonthlyRent: z.union([z.number(), z.string()]).optional(),
+  defaultTermRent: z.union([z.number(), z.string()]).optional().nullable(),
+  defaultDailyRent: z.union([z.number(), z.string()]).optional().nullable(),
+  defaultDeposit: z.union([z.number(), z.string()]).optional(),
+  defaultAdvancePayment: z.union([z.number(), z.string()]).optional(),
+  defaultParkingFee: z.union([z.number(), z.string()]).optional(),
+  defaultMaxOccupants: z.number().int().min(1).optional(),
+  defaultRoomType: z.string().optional(),
+  defaultTerms: z.string().optional().nullable(),
+}).strict();
+
+export const AllowedBillingPropagationChangesSchema = z.object({
+  waterRate: z.union([z.number(), z.string()]).optional(),
+  electricityRate: z.union([z.number(), z.string()]).optional(),
+  commonFee: z.union([z.number(), z.string()]).optional(),
+  internetFee: z.union([z.number(), z.string()]).optional(),
+  waterBillingType: z.string().optional(),
+  electricityBillingType: z.string().optional(),
+  rentBillingType: z.string().optional(),
+  lateFeeType: z.string().optional(),
+  lateFeeValue: z.union([z.number(), z.string()]).optional(),
+  billingDay: z.number().int().min(1).max(31).optional(),
+  dueDay: z.number().int().min(1).max(31).optional(),
+}).strict();
+
+export const AllowedBuildingOverrideChangesSchema = z.object({
+  monthlyRent: z.union([z.number(), z.string()]).optional().nullable(),
+  termRent: z.union([z.number(), z.string()]).optional().nullable(),
+  dailyRent: z.union([z.number(), z.string()]).optional().nullable(),
+  depositAmount: z.union([z.number(), z.string()]).optional().nullable(),
+  advancePaymentAmount: z.union([z.number(), z.string()]).optional().nullable(),
+  waterRate: z.union([z.number(), z.string()]).optional().nullable(),
+  electricityRate: z.union([z.number(), z.string()]).optional().nullable(),
+  commonFee: z.union([z.number(), z.string()]).optional().nullable(),
+  internetFee: z.union([z.number(), z.string()]).optional().nullable(),
+  parkingFee: z.union([z.number(), z.string()]).optional().nullable(),
+  waterBillingType: z.string().optional().nullable(),
+  electricityBillingType: z.string().optional().nullable(),
+  rentBillingType: z.string().optional().nullable(),
+  maximumOccupants: z.number().int().optional().nullable(),
+  roomType: z.string().optional().nullable(),
+}).strict();
+
+export const UpdateBuildingDefaultsSchema = AllowedBuildingOverrideChangesSchema.extend({
+  expectedVersion: z.number().int().min(1, 'ต้องระบุ expectedVersion ที่ถูกต้อง'),
+}).strict();
+
+export const UpdateRoomDefaultsSchema = AllowedBuildingOverrideChangesSchema.extend({
+  expectedVersion: z.number().int().min(1, 'ต้องระบุ expectedVersion ที่ถูกต้อง'),
+}).strict();
+
+const DormitoryPropagationPreviewSchema = z.object({
+  scope: z.literal('DORMITORY'),
+  changes: z.object({
+    property: AllowedPropertyPropagationChangesSchema.optional(),
+    billing: AllowedBillingPropagationChangesSchema.optional(),
+  }).strict().refine(c => !!(c.property || c.billing), 'ต้องระบุ property หรือ billing ใน changes'),
+}).strict();
+
+const BuildingPropagationPreviewSchema = z.object({
+  scope: z.literal('BUILDING'),
+  scopeId: z.string().min(1, 'ต้องระบุ scopeId สำหรับ building scope'),
+  changes: AllowedBuildingOverrideChangesSchema,
+}).strict();
+
+export const DefaultPropagationPreviewSchema = z.discriminatedUnion('scope', [
+  DormitoryPropagationPreviewSchema,
+  BuildingPropagationPreviewSchema,
+]);
+
+const DormitoryPropagationApplySchema = z.object({
+  scope: z.literal('DORMITORY'),
+  changes: z.object({
+    property: AllowedPropertyPropagationChangesSchema.optional(),
+    billing: AllowedBillingPropagationChangesSchema.optional(),
+  }).strict().refine(c => !!(c.property || c.billing), 'ต้องระบุ property หรือ billing ใน changes'),
+  expectedVersions: z.object({
+    property: z.number().int().min(1).optional(),
+    billing: z.number().int().min(1).optional(),
+  }).strict().refine(v => !!(v.property || v.billing), 'ต้องระบุ expectedVersions'),
+  idempotencyKey: z.string().min(1, 'ต้องระบุ Idempotency Key'),
+}).strict();
+
+const BuildingPropagationApplySchema = z.object({
+  scope: z.literal('BUILDING'),
+  scopeId: z.string().min(1, 'ต้องระบุ scopeId สำหรับ building scope'),
+  changes: AllowedBuildingOverrideChangesSchema,
+  expectedVersion: z.number().int().min(1, 'ต้องระบุ expectedVersion ที่ถูกต้อง'),
+  idempotencyKey: z.string().min(1, 'ต้องระบุ Idempotency Key'),
+}).strict();
+
+export const DefaultPropagationApplySchema = z.discriminatedUnion('scope', [
+  DormitoryPropagationApplySchema,
+  BuildingPropagationApplySchema,
+]).refine(data => {
+  if (data.scope === 'DORMITORY') {
+    if (data.changes.property && !data.expectedVersions?.property) return false;
+    if (data.changes.billing && !data.expectedVersions?.billing) return false;
+  }
+  return true;
+}, 'Property/Billing changes require corresponding expectedVersions');
+
+export const AvailabilityQuerySchema = z.object({
+  startDate: z.string(),
+  endDate: z.string(),
+  buildingId: z.string().optional(),
+  roomId: z.string().optional(),
+}).strict();
+
+export const ALLOWED_OVERRIDE_FIELDS = [
+  'monthlyRent',
+  'termRent',
+  'dailyRent',
+  'depositAmount',
+  'advancePaymentAmount',
+  'waterRate',
+  'electricityRate',
+  'commonFee',
+  'internetFee',
+  'parkingFee',
+  'waterBillingType',
+  'electricityBillingType',
+  'rentBillingType',
+  'maximumOccupants',
+  'roomType',
+] as const;
+
+export const PROTECTED_SYSTEM_FIELDS = [
+  'id',
+  'dormitoryId',
+  'buildingId',
+  'status',
+  'version',
+  'deletedAt',
+  'currentTenantId',
+  'currentContractId',
+  'createdAt',
+  'updatedAt',
+  'normalizedRoomNumber',
+] as const;
+
+export function validateClearOverrideField(field: string): boolean {
+  return ALLOWED_OVERRIDE_FIELDS.includes(field as any) && !PROTECTED_SYSTEM_FIELDS.includes(field as any);
+}
+
+
