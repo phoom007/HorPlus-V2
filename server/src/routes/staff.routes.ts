@@ -9,19 +9,21 @@ import { AccessGrantService } from '../services/access-grant.service.js';
 import { LineFriendService } from '../services/line-friend.service.js';
 import { requireDormitoryPermission } from '../middleware/permission.js';
 import { AppError } from '../types/index.js';
+import { getEnv } from '../config/env.js';
 
-export function createStaffRoutes(prisma: PrismaClient) {
+export function createStaffRoutes(prisma: PrismaClient): Router {
   const router = Router();
   const grantService = new AccessGrantService(prisma);
   const friendService = new LineFriendService(prisma);
 
   // --------------------------------------------------------------------------
-  // Public Bearer Access Grant Redemption Endpoint
+  // PUBLIC BEARER REDEMPTION
   // --------------------------------------------------------------------------
 
   /**
    * POST /api/v1/staff-access/redeem
    * Request body: { token: "<raw 256-bit bearer token>" }
+   * Places canonical encrypted session token in HttpOnly SESSION_COOKIE_NAME
    */
   router.post('/staff-access/redeem', async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -34,9 +36,10 @@ export function createStaffRoutes(prisma: PrismaClient) {
       const ipMetadata = req.ip || undefined;
 
       const result = await grantService.redeemAccessGrant(token, userAgentHash, ipMetadata);
+      const env = getEnv();
 
-      // Set HttpOnly session cookie
-      res.cookie('horplus_session', result.rawSessionId, {
+      // Set canonical HttpOnly session cookie
+      res.cookie(env.SESSION_COOKIE_NAME, result.sessionToken, {
         httpOnly: true,
         secure: process.env.NODE_ENV === 'production',
         sameSite: 'lax',
@@ -49,7 +52,9 @@ export function createStaffRoutes(prisma: PrismaClient) {
 
       return res.status(200).json({
         success: true,
-        data: result
+        data: {
+          grant: result.grant
+        }
       });
     } catch (err) {
       next(err);
@@ -57,20 +62,21 @@ export function createStaffRoutes(prisma: PrismaClient) {
   });
 
   // --------------------------------------------------------------------------
-  // OWNER-Only Staff & Access Grant Management Routes
+  // AUTHENTICATED OWNER STAFF MANAGEMENT API
   // --------------------------------------------------------------------------
 
   /**
-   * GET /api/v1/dormitories/:dormId/staff
-   * List staff members, active access grants, and slot usage
+   * GET /api/v1/properties/:id/staff
+   * List staff members, permanent Google owners, active grants, and slot meter
    */
   router.get(
-    '/dormitories/:dormId/staff',
-    requireDormitoryPermission('staff:manage'),
+    '/properties/:id/staff',
+    requireDormitoryPermission('staff:read'),
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        const dormId = req.params.dormId;
-        const staff = await grantService.listDormitoryStaff(dormId);
+        const dormitoryId = req.params.id;
+        const staff = await grantService.listDormitoryStaff(dormitoryId);
+        res.setHeader('Cache-Control', 'no-store');
         return res.status(200).json({
           success: true,
           data: staff
@@ -82,16 +88,17 @@ export function createStaffRoutes(prisma: PrismaClient) {
   );
 
   /**
-   * GET /api/v1/dormitories/:dormId/line-friends
-   * List LINE Friend Directory for selecting grant recipient
+   * GET /api/v1/properties/:id/line-friends
+   * List sanitized LINE friend directory for dormitory (NO identity hashes/encrypted blobs)
    */
   router.get(
-    '/dormitories/:dormId/line-friends',
-    requireDormitoryPermission('staff:manage'),
+    '/properties/:id/line-friends',
+    requireDormitoryPermission('staff:read'),
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        const dormId = req.params.dormId;
-        const friends = await friendService.getFriendsByDormitory(dormId);
+        const dormitoryId = req.params.id;
+        const friends = await friendService.getFriendsByDormitory(dormitoryId);
+        res.setHeader('Cache-Control', 'no-store');
         return res.status(200).json({
           success: true,
           data: friends
@@ -103,32 +110,31 @@ export function createStaffRoutes(prisma: PrismaClient) {
   );
 
   /**
-   * POST /api/v1/dormitories/:dormId/staff/access-grants
-   * Create a revocable bearer Access Grant for a LINE friend
-   * Body: { lineFriendId: string, roleCode: 'OWNER'|'MANAGER'|'TECH' }
+   * POST /api/v1/properties/:id/access-grants
+   * Issue new Access Grant link to a LINE Friend
    */
   router.post(
-    '/dormitories/:dormId/staff/access-grants',
-    requireDormitoryPermission('staff:manage'),
+    '/properties/:id/access-grants',
+    requireDormitoryPermission('staff:write'),
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        const dormId = req.params.dormId;
+        const dormitoryId = req.params.id;
         const { lineFriendId, roleCode } = req.body;
 
         if (!lineFriendId || !roleCode) {
-          throw new AppError('lineFriendId and roleCode are required', 400, 'INVALID_PAYLOAD');
+          throw new AppError('lineFriendId and roleCode are required', 400, 'MISSING_FIELDS');
         }
 
-        const authUser = (req as any).auth?.user;
-        const principalId = authUser ? `usr_${authUser.id}` : 'principal_owner';
+        const createdByPrincipal = req.user ? `usr_${req.user.id}` : 'usr_owner';
 
         const result = await grantService.createAccessGrant(
-          dormId,
+          dormitoryId,
           lineFriendId,
           roleCode,
-          principalId
+          createdByPrincipal
         );
 
+        res.setHeader('Cache-Control', 'no-store');
         return res.status(201).json({
           success: true,
           data: result
@@ -140,32 +146,31 @@ export function createStaffRoutes(prisma: PrismaClient) {
   );
 
   /**
-   * PATCH /api/v1/dormitories/:dormId/staff/access-grants/:grantId
-   * Change Role of an active Access Grant (Takes effect immediately)
-   * Body: { roleCode: 'OWNER'|'MANAGER'|'TECH' }
+   * PATCH /api/v1/properties/:id/access-grants/:grantId/role
+   * Change Role of an active Access Grant
    */
   router.patch(
-    '/dormitories/:dormId/staff/access-grants/:grantId',
-    requireDormitoryPermission('staff:manage'),
+    '/properties/:id/access-grants/:grantId/role',
+    requireDormitoryPermission('staff:write'),
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        const { dormId, grantId } = req.params;
+        const { id: dormitoryId, grantId } = req.params;
         const { roleCode } = req.body;
 
         if (!roleCode) {
-          throw new AppError('roleCode is required', 400, 'INVALID_PAYLOAD');
+          throw new AppError('roleCode is required', 400, 'MISSING_ROLE_CODE');
         }
 
-        const authUser = (req as any).auth?.user;
-        const principalId = authUser ? `usr_${authUser.id}` : 'principal_owner';
+        const updatedByPrincipal = req.user ? `usr_${req.user.id}` : 'usr_owner';
 
         const updated = await grantService.changeGrantRole(
-          dormId,
+          dormitoryId,
           grantId,
           roleCode,
-          principalId
+          updatedByPrincipal
         );
 
+        res.setHeader('Cache-Control', 'no-store');
         return res.status(200).json({
           success: true,
           data: updated
@@ -177,27 +182,30 @@ export function createStaffRoutes(prisma: PrismaClient) {
   );
 
   /**
-   * DELETE /api/v1/dormitories/:dormId/staff/access-grants/:grantId
-   * Revoke an Access Grant (Releases 1 slot immediately & revokes all active sessions)
+   * DELETE /api/v1/properties/:id/access-grants/:grantId
+   * Revoke Access Grant immediately
    */
   router.delete(
-    '/dormitories/:dormId/staff/access-grants/:grantId',
-    requireDormitoryPermission('staff:manage'),
+    '/properties/:id/access-grants/:grantId',
+    requireDormitoryPermission('staff:write'),
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        const { dormId, grantId } = req.params;
-        const authUser = (req as any).auth?.user;
-        const principalId = authUser ? `usr_${authUser.id}` : 'principal_owner';
+        const { id: dormitoryId, grantId } = req.params;
+        const revokedByPrincipal = req.user ? `usr_${req.user.id}` : 'usr_owner';
 
         const revoked = await grantService.revokeAccessGrant(
-          dormId,
+          dormitoryId,
           grantId,
-          principalId
+          revokedByPrincipal
         );
 
+        res.setHeader('Cache-Control', 'no-store');
         return res.status(200).json({
           success: true,
-          data: revoked
+          data: {
+            revoked: true,
+            grantId: revoked.id
+          }
         });
       } catch (err) {
         next(err);

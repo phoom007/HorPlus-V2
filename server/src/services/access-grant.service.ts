@@ -3,10 +3,14 @@
  * @license Apache-2.0
  */
 
+import crypto from 'crypto';
 import { PrismaClient } from '@prisma/client';
 import { generateGrantToken, hashToken } from '../utils/crypto-encryption.js';
 import { AppError } from '../types/index.js';
 import { LinePlatformAdapter, MockLinePlatformAdapter } from './line-platform-adapter.js';
+import { LineFriendService } from './line-friend.service.js';
+import { SessionTokenService } from './session-token.service.js';
+import { getEnv } from '../config/env.js';
 
 const UUID_REGEX = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
@@ -18,13 +22,20 @@ function parseActorUserId(principal: string): string | null {
 
 export class AccessGrantService {
   private lineAdapter: LinePlatformAdapter;
+  private friendService: LineFriendService;
+  private sessionTokenService: SessionTokenService;
 
   constructor(private prisma: PrismaClient, adapter?: LinePlatformAdapter) {
     this.lineAdapter = adapter || new MockLinePlatformAdapter();
+    this.friendService = new LineFriendService(prisma);
+    const env = getEnv();
+    this.sessionTokenService = new SessionTokenService(env.SESSION_ENCRYPTION_KEY);
   }
 
   /**
    * Get total slot usage for a dormitory
+   * Strictly counts ONLY true permanent Google Owners (membershipOrigin = GOOGLE_BOOTSTRAP & role = OWNER)
+   * plus ACTIVE Access Grants.
    */
   async getSlotUsage(dormitoryId: string, tx?: any) {
     const db = tx || this.prisma;
@@ -32,6 +43,8 @@ export class AccessGrantService {
     const googleOwnersCount = await db.dormitoryMember.count({
       where: {
         dormitoryId,
+        membershipOrigin: 'GOOGLE_BOOTSTRAP',
+        role: { code: 'OWNER' },
         status: 'active'
       }
     });
@@ -165,21 +178,35 @@ export class AccessGrantService {
         }
       };
 
-      // Server-side push message submission attempt via adapter
-      const pushResult = await this.lineAdapter.pushMessage(friend.id, flexMessage).catch(() => ({ success: false }));
+      // Server-side push attempt using actual decrypted LINE userId
+      const actualLineUserId = await this.friendService.getActualLineUserId(friend.id);
+      let pushed = false;
+
+      if (actualLineUserId) {
+        const pushResult = await this.lineAdapter.pushMessage(actualLineUserId, flexMessage).catch(() => ({ success: false }));
+        if (pushResult.success) {
+          pushed = true;
+          // Increment push quota usage
+          await tx.dormitory.update({
+            where: { id: dormitoryId },
+            data: { updatedAt: new Date() }
+          });
+        }
+      }
 
       return {
         grant,
         rawToken,
         bearerUrl,
         flexMessage,
-        pushed: pushResult.success
+        pushed,
+        deliveryStatus: pushed ? 'sent' : 'failed'
       };
     });
   }
 
   /**
-   * Redeem bearer raw token and issue HttpOnly session
+   * Redeem bearer raw token and issue canonical SessionToken
    */
   async redeemAccessGrant(rawToken: string, userAgentHash?: string, ipMetadata?: string) {
     if (!rawToken) {
@@ -200,9 +227,10 @@ export class AccessGrantService {
       throw new AppError('Access grant link has been revoked or is invalid', 401, 'ACCESS_GRANT_REVOKED');
     }
 
-    // Create session for access grant principal
-    const rawSessionId = 'ag_' + Math.random().toString(36).substring(2) + Date.now().toString(36);
-    const sessionIdHash = hashToken(rawSessionId);
+    // Canonical session ID generation using crypto.randomUUID()
+    const sessionId = crypto.randomUUID();
+    const sessionIdHash = SessionTokenService.hashSessionId(sessionId);
+    const ttlSeconds = 30 * 24 * 60 * 60; // 30 days
 
     const session = await this.prisma.session.create({
       data: {
@@ -212,15 +240,20 @@ export class AccessGrantService {
         sessionIdHash,
         tokenVersion: grant.version,
         status: 'active',
-        expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days
+        expiresAt: new Date(Date.now() + ttlSeconds * 1000),
         userAgentHash,
         ipMetadata
       }
     });
 
+    // Create encrypted session token via SessionTokenService
+    const sessionToken = this.sessionTokenService.encryptToken(
+      { sub: `ag_${grant.id}`, sid: sessionId, type: 'session', version: grant.version },
+      ttlSeconds
+    );
+
     return {
-      rawSessionId,
-      session,
+      sessionToken,
       grant: {
         id: grant.id,
         dormitoryId: grant.dormitoryId,
@@ -335,6 +368,7 @@ export class AccessGrantService {
 
   /**
    * List all staff members and access grants for a dormitory
+   * Strictly separates Permanent Google Owners from legacy/non-owner members.
    */
   async listDormitoryStaff(dormitoryId: string) {
     const members = await this.prisma.dormitoryMember.findMany({
@@ -353,19 +387,37 @@ export class AccessGrantService {
       orderBy: { createdAt: 'desc' }
     });
 
-    const googleOwners = members.map((m) => ({
-      id: m.id,
-      type: 'PERMANENT_GOOGLE_OWNER',
-      displayName: m.user.name || m.user.email || 'Owner',
-      email: m.user.email,
-      roleCode: m.role.code,
-      roleName: m.role.name,
-      membershipOrigin: m.membershipOrigin,
-      label: 'เจ้าของหลัก',
-      isPermanent: true,
-      canRevoke: false,
-      canChangeRole: false
-    }));
+    const googleOwners = members
+      .filter((m) => m.membershipOrigin === 'GOOGLE_BOOTSTRAP' && m.role.code === 'OWNER')
+      .map((m) => ({
+        id: m.id,
+        type: 'PERMANENT_GOOGLE_OWNER',
+        displayName: m.user.name || m.user.email || 'Owner',
+        email: m.user.email,
+        roleCode: m.role.code,
+        roleName: m.role.name,
+        membershipOrigin: m.membershipOrigin,
+        label: 'เจ้าของหลัก',
+        isPermanent: true,
+        canRevoke: false,
+        canChangeRole: false
+      }));
+
+    const legacyMembers = members
+      .filter((m) => m.membershipOrigin !== 'GOOGLE_BOOTSTRAP' || m.role.code !== 'OWNER')
+      .map((m) => ({
+        id: m.id,
+        type: 'LEGACY_MEMBER',
+        displayName: m.user.name || m.user.email || 'Staff Member',
+        email: m.user.email,
+        roleCode: m.role.code,
+        roleName: m.role.name,
+        membershipOrigin: m.membershipOrigin,
+        label: m.role.name || 'พนักงาน',
+        isPermanent: false,
+        canRevoke: true,
+        canChangeRole: true
+      }));
 
     const grants = activeGrants.map((g) => ({
       id: g.id,
@@ -387,6 +439,7 @@ export class AccessGrantService {
 
     return {
       permanentOwners: googleOwners,
+      legacyMembers,
       accessGrants: grants,
       slotUsage
     };
