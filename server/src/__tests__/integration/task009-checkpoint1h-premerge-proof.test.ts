@@ -8,10 +8,11 @@
  * 4. Existing-cluster bootstrap idempotency & unsafe-role fail-closed correction
  * 5. Self-contained temporary base audit worktree creation and cleanup (`2cbc3bd5c8e6626ed0ba79ee1a2b6b5049e43acf`)
  * 6. Real Wave-1G base to TASK-009 upgrade proof with data preservation & owner/manager origin migration
- * 7. Fresh final database deployment proof (13/13 migrations applied from scratch, exit code 0 against schema)
- * 8. Real database datamodel diff fault-injection proof (detects database drift with exit code 2 & column detection)
- * 9. Real database datamodel diff negative semantic proof (detects datamodel drift with exit code 2 & column detection)
- * 10. Resolver catalog, PUBLIC execute denial, and six-table RLS security posture preservation
+ * 7. Fresh final database deployment proof (13/13 migrations applied from scratch)
+ * 8. Strict --to-schema-datamodel diff assertions
+ * 9. Real database datamodel diff fault-injection proof (detects database drift with exit code 2 & column detection)
+ * 10. Real database datamodel diff negative semantic proof (detects datamodel drift with exit code 2 & column detection)
+ * 11. Resolver catalog, PUBLIC execute denial, and six-table RLS security posture preservation
  *
  * @license Apache-2.0
  */
@@ -81,15 +82,14 @@ function runPrismaCommand(dbName: string, command: string, customSchemaPath?: st
 /**
  * Real database-vs-Prisma-datamodel diff runner with explicit exit code capture.
  * Uses shell-safe argument array via execFileSync with npx.cmd (or npx on Linux).
- * Targets --from-url <DATABASE_URL> [targetType] prisma/schema.prisma --exit-code.
+ * Targets --from-url <DATABASE_URL> --to-schema-datamodel schemaPath --exit-code.
  * Returns { exitCode, output }:
  *   0 = empty diff (schema matches datamodel)
  *   2 = non-empty diff (schema drift detected)
  */
 function runPrismaDiffDbVsDatamodel(
   dbUrlVal: string,
-  schemaPath: string = 'prisma/schema.prisma',
-  targetType: '--to-schema-datasource' | '--to-schema-datamodel' = '--to-schema-datasource'
+  schemaPath: string = 'prisma/schema.prisma'
 ): { exitCode: number; output: string } {
   const npxCmd = process.platform === 'win32' ? 'npx.cmd' : 'npx';
   try {
@@ -101,7 +101,7 @@ function runPrismaDiffDbVsDatamodel(
         'diff',
         '--from-url',
         dbUrlVal,
-        targetType,
+        '--to-schema-datamodel',
         schemaPath,
         '--exit-code',
       ],
@@ -115,7 +115,7 @@ function runPrismaDiffDbVsDatamodel(
     return { exitCode: 0, output };
   } catch (err: any) {
     if (err.status !== undefined && err.status !== null) {
-      return { exitCode: err.status, output: err.stdout || err.message || '' };
+      return { exitCode: err.status, output: err.stdout || err.stderr || err.message || '' };
     }
     throw err;
   }
@@ -194,6 +194,18 @@ describe('TASK-009 Checkpoint 1I — Hermetic Pre-Merge Migration & Bootstrap Pr
 
     await masterPrisma.$disconnect();
     await mainAdminPrisma.$disconnect();
+  });
+
+  // =========================================================================
+  // SECTION 0: Source-Level Target Regression Proof
+  // =========================================================================
+  describe('Source-Level Target Regression Proof', () => {
+    it('0. Source code assertion: proves test file does NOT contain forbidden datasource option and DOES contain --to-schema-datamodel', () => {
+      const fileContent = fs.readFileSync(__filename, 'utf-8');
+      const forbiddenStr = ['--', 'to', 'schema', 'datasource'].join('-');
+      expect(fileContent).not.toContain(forbiddenStr);
+      expect(fileContent).toContain('--to-schema-datamodel');
+    });
   });
 
   // =========================================================================
@@ -575,7 +587,7 @@ describe('TASK-009 Checkpoint 1I — Hermetic Pre-Merge Migration & Bootstrap Pr
         );
         fs.writeFileSync(tempSchemaPath, modifiedSchema, 'utf-8');
 
-        const diffRes = runPrismaDiffDbVsDatamodel(dbUrl(FRESH_DEPLOY_DB), 'prisma/schema.temp.prisma', '--to-schema-datamodel');
+        const diffRes = runPrismaDiffDbVsDatamodel(dbUrl(FRESH_DEPLOY_DB), 'prisma/schema.temp.prisma');
         expect(diffRes.exitCode).toBe(2);
         expect(diffRes.output).toContain('temp_datamodel_drift_probe');
       } finally {
