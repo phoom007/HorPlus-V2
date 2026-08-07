@@ -1,19 +1,21 @@
 /**
- * Revocable Bearer Access Grant Service (Task-009 Two-Phase Model)
- * Phase A: Atomic grant creation (no LINE API calls inside transaction)
- * Phase B: Delivery with quota reservation and LINE retry key
+ * Revocable Bearer Access Grant Service (Task-009 Checkpoint 1C)
+ * Phase A: Atomic grant creation with raw token encryption
+ * Phase B: Delivery with atomic quota reservation & LinePushDeliveryAttempt
+ * Bearer redemption via narrow SECURITY DEFINER token resolver & CSRF token issuance.
  * @license Apache-2.0
  */
 
 import crypto from 'crypto';
 import { PrismaClient } from '@prisma/client';
-import { generateGrantToken, hashToken } from '../utils/crypto-encryption.js';
+import { generateGrantToken, hashToken, encryptText, decryptText } from '../utils/crypto-encryption.js';
 import { AppError } from '../types/index.js';
 import { LinePlatformAdapter, MockLinePlatformAdapter, LinePushResult } from './line-platform-adapter.js';
 import { LineFriendService } from './line-friend.service.js';
 import { SessionTokenService } from './session-token.service.js';
 import { LinePushUsageService } from './line-push-usage.service.js';
 import { LineOaService } from './line-oa.service.js';
+import { createLinePlatformAdapter } from './line-adapter-factory.js';
 import { getEnv } from '../config/env.js';
 
 const UUID_REGEX = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
@@ -32,7 +34,15 @@ export class AccessGrantService {
   private lineOaService: LineOaService;
 
   constructor(private prisma: PrismaClient, adapter?: LinePlatformAdapter) {
-    this.lineAdapter = adapter || new MockLinePlatformAdapter();
+    if (!adapter) {
+      if (process.env.NODE_ENV === 'test') {
+        this.lineAdapter = new MockLinePlatformAdapter();
+      } else {
+        this.lineAdapter = createLinePlatformAdapter();
+      }
+    } else {
+      this.lineAdapter = adapter;
+    }
     this.friendService = new LineFriendService(prisma);
     const env = getEnv();
     this.sessionTokenService = new SessionTokenService(env.SESSION_ENCRYPTION_KEY);
@@ -68,8 +78,8 @@ export class AccessGrantService {
   }
 
   /**
-   * PHASE A: Create Access Grant atomically. No LINE API calls.
-   * Returns committed grant + raw token. Caller must invoke deliverAccessGrant() after.
+   * PHASE A: Create Access Grant atomically. No LINE API calls inside transaction.
+   * Stores encrypted raw token for Copy Link and Retry delivery.
    */
   async createAccessGrant(
     dormitoryId: string,
@@ -111,8 +121,9 @@ export class AccessGrantService {
         throw new AppError('Target LINE friend already has an active access grant in this dormitory', 409, 'ACTIVE_GRANT_EXISTS');
       }
 
-      // 5. Generate 256-bit bearer token & hash
+      // 5. Generate bearer token, hash, and AES encrypted bearer secret
       const { rawToken, tokenHash, tokenPrefix } = generateGrantToken();
+      const tokenEncrypted = encryptText(rawToken);
 
       // 6. Create DormitoryAccessGrant record
       const grant = await tx.dormitoryAccessGrant.create({
@@ -121,6 +132,7 @@ export class AccessGrantService {
           lineFriendId,
           roleCode,
           tokenHash,
+          tokenEncrypted,
           tokenPrefix,
           status: 'ACTIVE',
           version: 1,
@@ -158,10 +170,13 @@ export class AccessGrantService {
     });
 
     // PHASE B: Attempt delivery outside the grant transaction
-    const delivery = await this.deliverAccessGrant(grantResult.grant.id, dormitoryId).catch(() => ({
-      deliveryStatus: 'failed' as const,
-      pushed: false
-    }));
+    const delivery = await this.deliverAccessGrant(grantResult.grant.id, dormitoryId, grantResult.rawToken).catch((err) => {
+      console.error('DELIVERY ERROR:', err);
+      return {
+        deliveryStatus: 'failed' as const,
+        pushed: false
+      };
+    });
 
     return {
       ...grantResult,
@@ -171,14 +186,38 @@ export class AccessGrantService {
   }
 
   /**
-   * PHASE B: Deliver Access Grant via LINE Push.
-   * 1. Reserve quota slot
-   * 2. Create delivery attempt with LINE retry key
-   * 3. Call LINE Push API
-   * 4. Finalize quota based on result
+   * Get recoverable Owner-authorized bearer Copy Link URL
    */
-  async deliverAccessGrant(grantId: string, dormitoryId: string): Promise<{ pushed: boolean; deliveryStatus: string }> {
-    // 1. Load grant and friend
+  async getGrantCopyLink(dormitoryId: string, grantId: string): Promise<{ url: string; rawToken: string }> {
+    const grant = await this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormitoryId}, true)`;
+      return await tx.dormitoryAccessGrant.findFirst({
+        where: { id: grantId, dormitoryId, status: 'ACTIVE' }
+      });
+    });
+
+    if (!grant || !grant.tokenEncrypted) {
+      throw new AppError('Active access grant not found', 404, 'ACCESS_GRANT_NOT_FOUND');
+    }
+
+    const rawToken = decryptText(grant.tokenEncrypted);
+    const baseUrl = process.env.PUBLIC_APP_URL || 'https://app.horplus.com';
+    return {
+      url: `${baseUrl}/staff-access#${rawToken}`,
+      rawToken
+    };
+  }
+
+  /**
+   * PHASE B: Deliver Access Grant via LINE Push.
+   * Atomic quota reservation + LinePushDeliveryAttempt creation in one transaction.
+   */
+  async deliverAccessGrant(
+    grantId: string,
+    dormitoryId: string,
+    rawTokenOverride?: string
+  ): Promise<{ pushed: boolean; deliveryStatus: string }> {
+    // 1. Load grant under RLS context
     const grant = await this.prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormitoryId}, true)`;
       return await tx.dormitoryAccessGrant.findFirst({
@@ -186,144 +225,72 @@ export class AccessGrantService {
         include: { lineFriend: true, dormitory: true }
       });
     });
+
     if (!grant) {
       return { pushed: false, deliveryStatus: 'failed' };
     }
 
-    // 2. Resolve actual LINE userId
+    // 2. Recover raw token
+    let rawToken = rawTokenOverride;
+    if (!rawToken && grant.tokenEncrypted) {
+      try {
+        rawToken = decryptText(grant.tokenEncrypted);
+      } catch {
+        rawToken = undefined;
+      }
+    }
+
+    if (!rawToken) {
+      await this.updateDeliveryStatus(grantId, 'failed', 'NO_RAW_TOKEN', dormitoryId);
+      return { pushed: false, deliveryStatus: 'failed' };
+    }
+
+    // 3. Resolve actual LINE userId
     const actualLineUserId = await this.friendService.getActualLineUserId(grant.lineFriendId);
     if (!actualLineUserId) {
-      await this.updateDeliveryStatus(grantId, 'failed', 'NO_LINE_USER_ID');
+      await this.updateDeliveryStatus(grantId, 'failed', 'NO_LINE_USER_ID', dormitoryId);
       return { pushed: false, deliveryStatus: 'failed' };
     }
 
-    // 3. Resolve per-dormitory access token
+    // 4. Resolve per-dormitory access token
     const accessToken = await this.lineOaService.resolveAccessToken(dormitoryId);
     if (!accessToken) {
-      await this.updateDeliveryStatus(grantId, 'failed', 'NO_ACCESS_TOKEN');
+      await this.updateDeliveryStatus(grantId, 'failed', 'NO_ACCESS_TOKEN', dormitoryId);
       return { pushed: false, deliveryStatus: 'failed' };
     }
 
-    // 4. Reserve quota
-    let periodKey: string;
+    // 5. Reserve quota & create attempt in ONE atomic transaction
+    let attemptRes: { attemptId: string; lineRetryKey: string; periodKey: string };
     try {
-      const reservation = await this.pushUsageService.reserveQuotaSlot(dormitoryId);
-      periodKey = reservation.periodKey;
+      attemptRes = await this.pushUsageService.reserveQuotaAndCreateAttempt(dormitoryId, grantId);
     } catch (err: any) {
       if (err.errorCode === 'QUOTA_EXHAUSTED') {
-        await this.updateDeliveryStatus(grantId, 'quota_exhausted', 'QUOTA_EXHAUSTED');
+        await this.updateDeliveryStatus(grantId, 'quota_exhausted', 'QUOTA_EXHAUSTED', dormitoryId);
         return { pushed: false, deliveryStatus: 'quota_exhausted' };
       }
       throw err;
     }
 
-    // 5. Generate LINE retry key and persist delivery attempt BEFORE calling LINE
-    const lineRetryKey = crypto.randomUUID();
-    const attempt = await this.prisma.$transaction(async (tx) => {
-      await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormitoryId}, true)`;
-      return await tx.linePushDeliveryAttempt.create({
-        data: {
-          dormitoryId,
-          accessGrantId: grantId,
-          lineRetryKey,
-          status: 'RESERVED',
-          attemptedAt: new Date()
-        }
-      });
-    });
-
-    // 6. Build flex message
+    // 6. Build flex message with exact bearer URL fragment #<rawToken>
     const baseUrl = process.env.PUBLIC_APP_URL || 'https://app.horplus.com';
-    const flexMessage = this.buildFlexMessage(grant.dormitory.name, grant.roleCode, baseUrl, grant.tokenHash);
+    const flexMessage = this.buildFlexMessage(grant.dormitory.name, grant.roleCode, baseUrl, rawToken);
 
     // 7. Call LINE Push API (OUTSIDE any database transaction)
     const pushResult: LinePushResult = await this.lineAdapter.pushMessage(
       actualLineUserId,
       flexMessage,
       accessToken,
-      lineRetryKey
+      attemptRes.lineRetryKey
     );
 
-    // 8. Finalize based on result
-    return await this.finalizeDelivery(grantId, dormitoryId, periodKey, attempt.id, pushResult);
-  }
-
-  /**
-   * Finalize delivery attempt and quota based on LINE Push result.
-   * Idempotent: checks if attempt is already finalized.
-   */
-  private async finalizeDelivery(
-    grantId: string,
-    dormitoryId: string,
-    periodKey: string,
-    attemptId: string,
-    result: LinePushResult
-  ): Promise<{ pushed: boolean; deliveryStatus: string }> {
-    switch (result.outcome) {
-      case 'ACCEPTED':
-      case 'ALREADY_ACCEPTED': {
-        // Convert reservation to success
-        await this.pushUsageService.finalizeSuccess(dormitoryId, periodKey);
-        await this.prisma.$transaction(async (tx) => {
-          await tx.$executeRaw`SELECT set_config('app.bypass_rls', 'true', true)`;
-          await tx.linePushDeliveryAttempt.update({
-            where: { id: attemptId },
-            data: {
-              status: result.outcome === 'ACCEPTED' ? 'SENT' : 'ALREADY_ACCEPTED',
-              lineMessageId: result.messageId,
-              finalizedAt: new Date()
-            }
-          });
-        });
-        await this.updateDeliveryStatus(grantId, 'sent', null);
-        return { pushed: true, deliveryStatus: 'sent' };
-      }
-
-      case 'DEFINITIVE_FAILURE': {
-        // Release reservation
-        await this.pushUsageService.releaseReservation(dormitoryId, periodKey);
-        await this.prisma.$transaction(async (tx) => {
-          await tx.$executeRaw`SELECT set_config('app.bypass_rls', 'true', true)`;
-          await tx.linePushDeliveryAttempt.update({
-            where: { id: attemptId },
-            data: {
-              status: 'FAILED',
-              errorCode: result.errorCode,
-              finalizedAt: new Date()
-            }
-          });
-        });
-        await this.updateDeliveryStatus(grantId, 'failed', result.errorCode);
-        return { pushed: false, deliveryStatus: 'failed' };
-      }
-
-      case 'RETRYABLE_UNKNOWN': {
-        // Keep reservation, mark retry pending
-        await this.prisma.$transaction(async (tx) => {
-          await tx.$executeRaw`SELECT set_config('app.bypass_rls', 'true', true)`;
-          await tx.linePushDeliveryAttempt.update({
-            where: { id: attemptId },
-            data: {
-              status: 'RETRY_PENDING',
-              errorCode: result.errorCode
-            }
-          });
-        });
-        await this.updateDeliveryStatus(grantId, 'retry_pending', result.errorCode);
-        return { pushed: false, deliveryStatus: 'retry_pending' };
-      }
-
-      default:
-        return { pushed: false, deliveryStatus: 'failed' };
-    }
+    // 8. Finalize delivery attempt atomically & idempotently
+    return await this.pushUsageService.finalizeDeliveryAttempt(attemptRes.attemptId, dormitoryId, grantId, pushResult);
   }
 
   /**
    * Retry delivery for a grant.
-   * Allowed for: FAILED, QUOTA_EXHAUSTED, RETRY_PENDING.
-   * Not allowed for: SENT.
-   * For RETRY_PENDING: reuses same LINE retry key.
-   * For FAILED/QUOTA_EXHAUSTED: creates new delivery attempt.
+   * Reuses existing attempt for RETRY_PENDING if within 24h.
+   * If > 24h, marks attempt EXPIRED and returns retry_window_expired.
    */
   async retryDelivery(grantId: string, dormitoryId: string): Promise<{ pushed: boolean; deliveryStatus: string }> {
     const grant = await this.prisma.$transaction(async (tx) => {
@@ -332,6 +299,7 @@ export class AccessGrantService {
         where: { id: grantId, dormitoryId, status: 'ACTIVE' }
       });
     });
+
     if (!grant) {
       throw new AppError('Active access grant not found', 404, 'ACCESS_GRANT_NOT_FOUND');
     }
@@ -341,7 +309,7 @@ export class AccessGrantService {
       throw new AppError('Grant has already been delivered successfully', 400, 'ALREADY_DELIVERED');
     }
 
-    // For RETRY_PENDING, find the pending attempt and reuse its retry key
+    // For RETRY_PENDING, check if attempt is within 24h lifetime
     if (currentStatus === 'retry_pending') {
       const pendingAttempt = await this.prisma.$transaction(async (tx) => {
         await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormitoryId}, true)`;
@@ -352,16 +320,26 @@ export class AccessGrantService {
       });
 
       if (pendingAttempt) {
+        const now = new Date();
+        const isExpired = pendingAttempt.retryKeyExpiresAt
+          ? now > pendingAttempt.retryKeyExpiresAt
+          : (now.getTime() - pendingAttempt.createdAt.getTime()) > 24 * 60 * 60 * 1000;
+
+        if (isExpired) {
+          await this.pushUsageService.markAttemptExpired(pendingAttempt.id, dormitoryId, grantId, pendingAttempt.periodKey);
+          return { pushed: false, deliveryStatus: 'retry_window_expired' };
+        }
+
         return await this.retryWithExistingAttempt(grantId, dormitoryId, pendingAttempt);
       }
     }
 
-    // For FAILED or QUOTA_EXHAUSTED: new delivery attempt
+    // For FAILED, QUOTA_EXHAUSTED, or RETRY_WINDOW_EXPIRED: create new delivery attempt
     return await this.deliverAccessGrant(grantId, dormitoryId);
   }
 
   /**
-   * Retry using an existing delivery attempt's LINE retry key.
+   * Retry using an existing delivery attempt's LINE retry key within 24h.
    */
   private async retryWithExistingAttempt(
     grantId: string,
@@ -375,7 +353,11 @@ export class AccessGrantService {
         include: { lineFriend: true, dormitory: true }
       });
     });
+
     if (!grant) return { pushed: false, deliveryStatus: 'failed' };
+
+    const rawToken = grant.tokenEncrypted ? decryptText(grant.tokenEncrypted) : null;
+    if (!rawToken) return { pushed: false, deliveryStatus: 'failed' };
 
     const actualLineUserId = await this.friendService.getActualLineUserId(grant.lineFriendId);
     if (!actualLineUserId) return { pushed: false, deliveryStatus: 'failed' };
@@ -383,15 +365,8 @@ export class AccessGrantService {
     const accessToken = await this.lineOaService.resolveAccessToken(dormitoryId);
     if (!accessToken) return { pushed: false, deliveryStatus: 'failed' };
 
-    // Derive periodKey from dormitory timezone
-    const dorm = await this.prisma.dormitory.findUnique({
-      where: { id: dormitoryId },
-      select: { timezone: true }
-    });
-    const periodKey = this.pushUsageService.getCurrentPeriodKey(dorm?.timezone || 'Asia/Bangkok');
-
     const baseUrl = process.env.PUBLIC_APP_URL || 'https://app.horplus.com';
-    const flexMessage = this.buildFlexMessage(grant.dormitory.name, grant.roleCode, baseUrl, grant.tokenHash);
+    const flexMessage = this.buildFlexMessage(grant.dormitory.name, grant.roleCode, baseUrl, rawToken);
 
     // Reuse the SAME LINE retry key
     const pushResult = await this.lineAdapter.pushMessage(
@@ -401,10 +376,10 @@ export class AccessGrantService {
       attempt.lineRetryKey
     );
 
-    return await this.finalizeDelivery(grantId, dormitoryId, periodKey, attempt.id, pushResult);
+    return await this.pushUsageService.finalizeDeliveryAttempt(attempt.id, dormitoryId, grantId, pushResult);
   }
 
-  private buildFlexMessage(dormitoryName: string, roleCode: string, baseUrl: string, tokenHash: string) {
+  private buildFlexMessage(dormitoryName: string, roleCode: string, baseUrl: string, rawToken: string) {
     return {
       type: 'flex',
       altText: `คุณได้รับสิทธิ์เข้าใช้งาน ${dormitoryName}`,
@@ -425,7 +400,7 @@ export class AccessGrantService {
               action: {
                 type: 'uri',
                 label: 'เปิด HorPlus',
-                uri: `${baseUrl}/staff-access`
+                uri: `${baseUrl}/staff-access#${rawToken}`
               }
             }
           ]
@@ -434,9 +409,9 @@ export class AccessGrantService {
     };
   }
 
-  private async updateDeliveryStatus(grantId: string, status: string, errorCode: string | null) {
+  private async updateDeliveryStatus(grantId: string, status: string, errorCode: string | null, dormitoryId: string) {
     await this.prisma.$transaction(async (tx) => {
-      await tx.$executeRaw`SELECT set_config('app.bypass_rls', 'true', true)`;
+      await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormitoryId}, true)`;
       await tx.dormitoryAccessGrant.update({
         where: { id: grantId },
         data: {
@@ -450,7 +425,7 @@ export class AccessGrantService {
   }
 
   /**
-   * Redeem bearer raw token and issue canonical SessionToken
+   * Redeem bearer raw token via narrow SECURITY DEFINER resolver & issue SessionToken + CSRF
    */
   async redeemAccessGrant(rawToken: string, userAgentHash?: string, ipMetadata?: string) {
     if (!rawToken) {
@@ -459,10 +434,22 @@ export class AccessGrantService {
 
     const tokenHash = hashToken(rawToken);
 
+    // 1. Narrow SECURITY DEFINER lookup (returns grant_id and dormitory_id ONLY)
+    const rows = await this.prisma.$queryRaw<any[]>`
+      SELECT grant_id, dormitory_id FROM public.resolve_access_grant_token(${tokenHash})
+    `;
+
+    if (!rows || rows.length === 0) {
+      throw new AppError('Access grant link has been revoked or is invalid', 401, 'ACCESS_GRANT_REVOKED');
+    }
+
+    const { grant_id: grantId, dormitory_id: dormitoryId } = rows[0];
+
+    // 2. Read full grant under normal RLS context
     const grant = await this.prisma.$transaction(async (tx) => {
-      await tx.$executeRaw`SELECT set_config('app.bypass_rls', 'true', true)`;
-      return await tx.dormitoryAccessGrant.findUnique({
-        where: { tokenHash },
+      await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormitoryId}, true)`;
+      return await tx.dormitoryAccessGrant.findFirst({
+        where: { id: grantId, status: 'ACTIVE' },
         include: { dormitory: true, lineFriend: true }
       });
     });
@@ -471,13 +458,14 @@ export class AccessGrantService {
       throw new AppError('Access grant link has been revoked or is invalid', 401, 'ACCESS_GRANT_REVOKED');
     }
 
+    // 3. Create Session with dormitoryId set
     const sessionId = crypto.randomUUID();
     const sessionIdHash = SessionTokenService.hashSessionId(sessionId);
     const ttlSeconds = 30 * 24 * 60 * 60; // 30 days
 
     const session = await this.prisma.session.create({
       data: {
-        userId: null,
+        userId: undefined,
         principalType: 'ACCESS_GRANT',
         accessGrantId: grant.id,
         sessionIdHash,
@@ -494,8 +482,12 @@ export class AccessGrantService {
       ttlSeconds
     );
 
+    // 4. Generate CSRF token for the session
+    const csrfToken = SessionTokenService.hashSessionId(`csrf_${sessionId}`);
+
     return {
       sessionToken,
+      csrfToken,
       grant: {
         id: grant.id,
         dormitoryId: grant.dormitoryId,
@@ -609,76 +601,80 @@ export class AccessGrantService {
    * List all staff members and access grants for a dormitory
    */
   async listDormitoryStaff(dormitoryId: string) {
-    const members = await this.prisma.dormitoryMember.findMany({
-      where: { dormitoryId, status: 'active' },
-      include: { user: true, role: true }
-    });
+    return await this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormitoryId}, true)`;
 
-    const activeGrants = await this.prisma.dormitoryAccessGrant.findMany({
-      where: { dormitoryId, status: 'ACTIVE' },
-      include: { lineFriend: true },
-      orderBy: { createdAt: 'desc' }
-    });
+      const members = await tx.dormitoryMember.findMany({
+        where: { dormitoryId, status: 'active' },
+        include: { user: true, role: true }
+      });
 
-    const googleOwners = members
-      .filter((m) => m.membershipOrigin === 'GOOGLE_BOOTSTRAP' && m.role.code === 'OWNER')
-      .map((m) => ({
-        id: m.id,
-        type: 'PERMANENT_GOOGLE_OWNER',
-        displayName: m.user.name || m.user.email || 'Owner',
-        email: m.user.email,
-        roleCode: m.role.code,
-        roleName: m.role.name,
-        membershipOrigin: m.membershipOrigin,
-        label: 'เจ้าของหลัก',
-        isPermanent: true,
-        canRevoke: false,
-        canChangeRole: false
-      }));
+      const activeGrants = await tx.dormitoryAccessGrant.findMany({
+        where: { dormitoryId, status: 'ACTIVE' },
+        include: { lineFriend: true },
+        orderBy: { createdAt: 'desc' }
+      });
 
-    const legacyMembers = members
-      .filter((m) => m.membershipOrigin !== 'GOOGLE_BOOTSTRAP' || m.role.code !== 'OWNER')
-      .map((m) => ({
-        id: m.id,
-        type: 'LEGACY_MEMBER',
-        displayName: m.user.name || m.user.email || 'Staff Member',
-        email: m.user.email,
-        roleCode: m.role.code,
-        roleName: m.role.name,
-        membershipOrigin: m.membershipOrigin,
-        label: m.role.name || 'พนักงาน',
+      const googleOwners = members
+        .filter((m) => m.membershipOrigin === 'GOOGLE_BOOTSTRAP' && m.role.code === 'OWNER')
+        .map((m) => ({
+          id: m.id,
+          type: 'PERMANENT_GOOGLE_OWNER',
+          displayName: m.user.name || m.user.email || 'Owner',
+          email: m.user.email,
+          roleCode: m.role.code,
+          roleName: m.role.name,
+          membershipOrigin: m.membershipOrigin,
+          label: 'เจ้าของหลัก',
+          isPermanent: true,
+          canRevoke: false,
+          canChangeRole: false
+        }));
+
+      const legacyMembers = members
+        .filter((m) => m.membershipOrigin !== 'GOOGLE_BOOTSTRAP' || m.role.code !== 'OWNER')
+        .map((m) => ({
+          id: m.id,
+          type: 'LEGACY_MEMBER',
+          displayName: m.user.name || m.user.email || 'Staff Member',
+          email: m.user.email,
+          roleCode: m.role.code,
+          roleName: m.role.name,
+          membershipOrigin: m.membershipOrigin,
+          label: m.role.name || 'พนักงาน',
+          isPermanent: false,
+          canRevoke: true,
+          canChangeRole: true
+        }));
+
+      const grants = activeGrants.map((g) => ({
+        id: g.id,
+        type: 'ACCESS_GRANT',
+        lineFriendId: g.lineFriendId,
+        displayName: g.lineFriend.displayName,
+        pictureUrl: g.lineFriend.pictureUrl,
+        roleCode: g.roleCode,
+        status: g.status,
+        version: g.version,
+        tokenPrefix: g.tokenPrefix,
+        createdAt: g.createdAt,
+        lastDeliveryStatus: g.lastDeliveryStatus,
         isPermanent: false,
         canRevoke: true,
         canChangeRole: true
       }));
 
-    const grants = activeGrants.map((g) => ({
-      id: g.id,
-      type: 'ACCESS_GRANT',
-      lineFriendId: g.lineFriendId,
-      displayName: g.lineFriend.displayName,
-      pictureUrl: g.lineFriend.pictureUrl,
-      roleCode: g.roleCode,
-      status: g.status,
-      version: g.version,
-      tokenPrefix: g.tokenPrefix,
-      createdAt: g.createdAt,
-      lastDeliveryStatus: g.lastDeliveryStatus,
-      isPermanent: false,
-      canRevoke: true,
-      canChangeRole: true
-    }));
+      const slotUsage = await this.getSlotUsage(dormitoryId, tx);
+      const quotaStatus = await this.pushUsageService.getQuotaStatus(dormitoryId);
 
-    const slotUsage = await this.getSlotUsage(dormitoryId);
-    const quotaStatus = await this.pushUsageService.getQuotaStatus(dormitoryId);
-
-    return {
-      permanentOwners: googleOwners,
-      legacyMembers,
-      accessGrants: grants,
-      slotUsage,
-      pushQuota: quotaStatus
-    };
+      return {
+        permanentOwners: googleOwners,
+        legacyMembers,
+        accessGrants: grants,
+        slotUsage,
+        pushQuota: quotaStatus
+      };
+    });
   }
 
   private hashStringToInteger(str: string): number {

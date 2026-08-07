@@ -1202,11 +1202,12 @@ model DormitoryAccessGrant {
   id                 String    @id @default(uuid()) @db.Uuid
   dormitoryId        String    @map("dormitory_id") @db.Uuid
   lineFriendId       String    @map("line_friend_id") @db.Uuid
-  roleCode           String    @map("role_code") @db.VarChar(50) // OWNER, MANAGER, TECH
   tokenHash          String    @unique @map("token_hash") @db.VarChar(255)
+  tokenEncrypted     String?   @map("token_encrypted") @db.Text
   tokenPrefix        String?   @map("token_prefix") @db.VarChar(20)
-  status             String    @default("ACTIVE") @db.VarChar(50) // ACTIVE, REVOKED
+  roleCode           String    @map("role_code") @db.VarChar(20)
   version            Int       @default(1)
+  status             String    @default("ACTIVE") @db.VarChar(20)
   createdByPrincipal String    @map("created_by_principal") @db.VarChar(255)
   revokedByPrincipal String?   @map("revoked_by_principal") @db.VarChar(255)
   revokedAt          DateTime? @map("revoked_at") @db.Timestamptz()
@@ -1279,17 +1280,20 @@ model LinePushUsage {
 }
 
 model LinePushDeliveryAttempt {
-  id            String    @id @default(uuid()) @db.Uuid
-  dormitoryId   String    @map("dormitory_id") @db.Uuid
-  accessGrantId String    @map("access_grant_id") @db.Uuid
-  lineRetryKey  String    @map("line_retry_key") @db.VarChar(36)
-  status        String    @default("RESERVED") @db.VarChar(50)
-  lineMessageId String?   @map("line_message_id") @db.VarChar(255)
-  errorCode     String?   @map("error_code") @db.VarChar(100)
-  attemptedAt   DateTime? @map("attempted_at") @db.Timestamptz()
-  finalizedAt   DateTime? @map("finalized_at") @db.Timestamptz()
-  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz()
-  updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
+  id                String    @id @default(uuid()) @db.Uuid
+  dormitoryId       String    @map("dormitory_id") @db.Uuid
+  accessGrantId     String    @map("access_grant_id") @db.Uuid
+  periodKey         String    @map("period_key") @db.VarChar(30)
+  lineRetryKey      String    @map("line_retry_key") @db.VarChar(36)
+  status            String    @default("RESERVED") @db.VarChar(50)
+  lineMessageId     String?   @map("line_message_id") @db.VarChar(255)
+  errorCode         String?   @map("error_code") @db.VarChar(100)
+  attemptedAt       DateTime? @map("attempted_at") @db.Timestamptz()
+  finalizedAt       DateTime? @map("finalized_at") @db.Timestamptz()
+  retryKeyCreatedAt DateTime  @default(now()) @map("retry_key_created_at") @db.Timestamptz()
+  retryKeyExpiresAt DateTime? @map("retry_key_expires_at") @db.Timestamptz()
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt         DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
 
   dormitory   Dormitory            @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
   accessGrant DormitoryAccessGrant @relation(fields: [accessGrantId], references: [id], onDelete: Cascade)

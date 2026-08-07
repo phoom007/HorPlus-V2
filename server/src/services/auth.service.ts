@@ -253,8 +253,23 @@ export class AuthenticationService {
     // Dynamic resolution for ACCESS_GRANT sessions (Task-009 Final Product Model)
     if (session.principalType === 'ACCESS_GRANT' || session.accessGrantId) {
       const prisma = getPrismaClient();
+
+      let targetDormitoryId = (session as any).dormitoryId;
+      if (!targetDormitoryId && session.accessGrantId) {
+        const rows = await prisma.$queryRaw<any[]>`
+          SELECT dormitory_id FROM public.resolve_access_grant_by_id(${session.accessGrantId}::uuid)
+        `.catch(() => []);
+        if (rows && rows.length > 0) {
+          targetDormitoryId = rows[0].dormitory_id;
+        }
+      }
+
+      if (!targetDormitoryId) {
+        return null;
+      }
+
       const grant = await prisma.$transaction(async (tx) => {
-        await tx.$executeRaw`SELECT set_config('app.bypass_rls', 'true', true)`;
+        await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${targetDormitoryId}, true)`;
         return await tx.dormitoryAccessGrant.findUnique({
           where: { id: session.accessGrantId! },
           include: { lineFriend: true, dormitory: true }

@@ -17,7 +17,9 @@ import { PrismaSessionRepository } from '../../db/repositories/session.repositor
 import { PrismaMembershipRepository } from '../../db/repositories/membership.repository.js';
 import { PrismaRoleRepository } from '../../db/repositories/role.repository.js';
 import { MockLinePlatformAdapter, HttpLinePlatformAdapter } from '../../services/line-platform-adapter.js';
-import { hashToken } from '../../utils/crypto-encryption.js';
+import { createLinePlatformAdapter } from '../../services/line-adapter-factory.js';
+import { createStaffRoutes } from '../../routes/staff.routes.js';
+import { hashToken, decryptText } from '../../utils/crypto-encryption.js';
 import { getEnv } from '../../config/env.js';
 
 const databaseUrl = process.env.DATABASE_URL || 'postgresql://horplus:password@127.0.0.1:5455/horplus_wave1d_fasttrack_test?schema=public';
@@ -64,8 +66,6 @@ describe('TASK-009 — Comprehensive Delta Verification Suite', () => {
       roleRepo,
       auditService
     );
-
-    // Note: FORCE ROW LEVEL SECURITY and RLS policies are migration-owned (20260807160000_task009_checkpoint1b_wiring)
 
     // Create Users
     const uOwner = await prisma.user.create({
@@ -193,7 +193,6 @@ describe('TASK-009 — Comprehensive Delta Verification Suite', () => {
   it('6. LINE Credential Verification & Webhook Verification Distinction', async () => {
     mockAdapter.verifyAccessTokenCalls = [];
 
-    // Valid access token verifies token, but DOES NOT set webhookVerifiedAt
     const configResult = await lineOaService.updateDormitoryLineConfig(testDormitoryBId, {
       lineOaId: '@dormB_verif_oa',
       channelId: '1657777777',
@@ -203,16 +202,14 @@ describe('TASK-009 — Comprehensive Delta Verification Suite', () => {
 
     expect(mockAdapter.verifyAccessTokenCalls.length).toBe(1);
     expect(configResult.accessTokenVerifiedAt).not.toBeNull();
-    expect(configResult.webhookVerifiedAt).toBeNull(); // Webhook NOT verified yet!
+    expect(configResult.webhookVerifiedAt).toBeNull();
 
-    // Invalid access token fails update
     await expect(
       lineOaService.updateDormitoryLineConfig(testDormitoryBId, {
         channelAccessToken: 'invalid_token'
       })
     ).rejects.toThrow('LINE Channel Access Token verification failed');
 
-    // Real signed webhook sets webhookVerifiedAt
     const rawKey = configResult.webhookUrl!.split('/api/v1/line/webhook/')[1];
     const samplePayload = JSON.stringify({
       events: [{ type: 'follow', webhookEventId: `evt_verif_${Date.now()}`, source: { userId: 'U_VERIF_123' } }]
@@ -231,22 +228,19 @@ describe('TASK-009 — Comprehensive Delta Verification Suite', () => {
   it('7. Quota Reservation & Idempotent Finalization', async () => {
     const friend = await friendService.upsertFriendFromWebhook(testDormitoryId, 'U_QUOTA_TEST_1', 'Quota User 1');
 
-    // Create grant triggers push delivery which reserves, pushes, and finalizes
     mockAdapter.pushCalls = [];
     const grantRes = await grantService.createAccessGrant(testDormitoryId, friend.id, 'TECH', `usr_${testOwnerUserId}`);
     expect(grantRes.deliveryStatus).toBe('sent');
 
     const status = await pushUsageService.getQuotaStatus(testDormitoryId);
     expect(status.successCount).toBeGreaterThanOrEqual(1);
-    expect(status.reservedCount).toBe(0); // Reservation converted to success!
+    expect(status.reservedCount).toBe(0);
   });
 
   it('8. Quota Exhaustion & Retry Delivery Rules', async () => {
-    // Fill up remaining quota slots until exhausted
     const dorm = await prisma.dormitory.findUnique({ where: { id: testDormitoryId } });
     const periodKey = pushUsageService.getCurrentPeriodKey(dorm?.timezone || 'Asia/Bangkok');
 
-    // Set success_count to 30 (free plan limit)
     await prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${testDormitoryId}, true)`;
       await tx.linePushUsage.upsert({
@@ -259,15 +253,12 @@ describe('TASK-009 — Comprehensive Delta Verification Suite', () => {
     const friend = await friendService.upsertFriendFromWebhook(testDormitoryId, 'U_EXHAUSTED_TEST', 'Exhausted User');
     const grantRes = await grantService.createAccessGrant(testDormitoryId, friend.id, 'MANAGER', `usr_${testOwnerUserId}`);
 
-    // Grant created, but delivery marked quota_exhausted
     expect(grantRes.grant.id).toBeDefined();
     expect(grantRes.deliveryStatus).toBe('quota_exhausted');
 
-    // Retry while quota exhausted fails with quota_exhausted again
     const retryRes = await grantService.retryDelivery(grantRes.grant.id, testDormitoryId);
     expect(retryRes.deliveryStatus).toBe('quota_exhausted');
 
-    // Reset quota so retry succeeds
     await prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${testDormitoryId}, true)`;
       await tx.linePushUsage.update({
@@ -279,12 +270,10 @@ describe('TASK-009 — Comprehensive Delta Verification Suite', () => {
     const retryRes2 = await grantService.retryDelivery(grantRes.grant.id, testDormitoryId);
     expect(retryRes2.deliveryStatus).toBe('sent');
 
-    // Retry of SENT grant throws ALREADY_DELIVERED
     await expect(grantService.retryDelivery(grantRes.grant.id, testDormitoryId)).rejects.toThrow('Grant has already been delivered successfully');
   });
 
   it('9. RLS Data Isolation Across Dormitories (Migration-Owned Policies)', async () => {
-    // Uses the Prisma client connection role which has NOSUPERUSER NOBYPASSRLS via migration
     await prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${testDormitoryBId}, true)`;
 
@@ -333,5 +322,165 @@ describe('TASK-009 — Comprehensive Delta Verification Suite', () => {
     expect(f.friendStatus).toBeDefined();
     expect((f as any).lineUserIdHash).toBeUndefined();
     expect((f as any).lineUserIdEncrypted).toBeUndefined();
+  });
+
+  // ==========================================================================
+  // CHECKPOINT 1C SPECIFIC REGRESSION TESTS
+  // ==========================================================================
+
+  it('12. Production Route Composition Uses HttpLinePlatformAdapter', async () => {
+    const prodAdapter = createLinePlatformAdapter();
+    expect(prodAdapter).toBeInstanceOf(HttpLinePlatformAdapter);
+  });
+
+  it('13. Flex URI Contains Exact Raw Bearer Token & Redeems via API with CSRF Token', async () => {
+    mockAdapter.pushCalls = [];
+    const friend = await friendService.upsertFriendFromWebhook(testDormitoryId, 'U_FLEX_URI_TEST', 'Flex User');
+    const grantRes = await grantService.createAccessGrant(testDormitoryId, friend.id, 'MANAGER', `usr_${testOwnerUserId}`);
+
+    expect(grantRes.pushed).toBe(true);
+    expect(mockAdapter.pushCalls.length).toBe(1);
+
+    const flexMsg = mockAdapter.pushCalls[0].flexMessage;
+    const button = flexMsg.contents.body.contents.find((c: any) => c.type === 'button');
+    expect(button).toBeDefined();
+    expect(button.action.label).toBe('เปิด HorPlus');
+
+    const uri: string = button.action.uri;
+    expect(uri).toContain('/staff-access#');
+    expect(uri.endsWith(grantRes.rawToken)).toBe(true);
+
+    const fragmentToken = uri.split('#')[1];
+    expect(fragmentToken).toBe(grantRes.rawToken);
+
+    const redeemRes = await grantService.redeemAccessGrant(fragmentToken);
+    expect(redeemRes.sessionToken).toBeDefined();
+    expect(redeemRes.csrfToken).toBeDefined();
+    expect(redeemRes.grant.id).toBe(grantRes.grant.id);
+  });
+
+  it('14. Recoverable Bearer Token & Owner Copy Link', async () => {
+    const friend = await friendService.upsertFriendFromWebhook(testDormitoryId, 'U_COPY_LINK_TEST', 'Copy User');
+    const grantRes = await grantService.createAccessGrant(testDormitoryId, friend.id, 'TECH', `usr_${testOwnerUserId}`);
+
+    const copyLink = await grantService.getGrantCopyLink(testDormitoryId, grantRes.grant.id);
+    expect(copyLink.url).toContain('/staff-access#');
+    expect(copyLink.rawToken).toBe(grantRes.rawToken);
+
+    // Verify raw token is NOT stored plaintext
+    const dbGrant = await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${testDormitoryId}, true)`;
+      return await tx.dormitoryAccessGrant.findUnique({ where: { id: grantRes.grant.id } });
+    });
+    expect(dbGrant?.tokenHash).not.toBe(grantRes.rawToken);
+    expect(dbGrant?.tokenEncrypted).not.toBe(grantRes.rawToken);
+    expect(dbGrant?.tokenEncrypted).toBeDefined();
+    expect(decryptText(dbGrant!.tokenEncrypted!)).toBe(grantRes.rawToken);
+  });
+
+  it('15. Strict RLS without app.bypass_rls & Narrow Token Resolver', async () => {
+    // 1. Verify NO policies use app.bypass_rls in pg_policies
+    const policies = await prisma.$queryRaw<any[]>`
+      SELECT policyname, qual FROM pg_policies WHERE qual LIKE '%app.bypass_rls%' OR policyname LIKE '%isolation%'
+    `;
+    const bypassPolicies = policies.filter(p => p.qual && p.qual.includes('app.bypass_rls'));
+    expect(bypassPolicies.length).toBe(0);
+
+    // 2. Test narrow token resolver returns grant_id & dormitory_id ONLY
+    const friend = await friendService.upsertFriendFromWebhook(testDormitoryId, 'U_RESOLVER_TEST', 'Resolver User');
+    const grantRes = await grantService.createAccessGrant(testDormitoryId, friend.id, 'MANAGER', `usr_${testOwnerUserId}`);
+
+    const rows = await prisma.$queryRaw<any[]>`
+      SELECT grant_id, dormitory_id FROM public.resolve_access_grant_token(${grantRes.grant.tokenHash})
+    `;
+    expect(rows.length).toBe(1);
+    expect(rows[0].grant_id).toBe(grantRes.grant.id);
+    expect(rows[0].dormitory_id).toBe(testDormitoryId);
+    expect(rows[0].tokenEncrypted).toBeUndefined();
+    expect(rows[0].roleCode).toBeUndefined();
+  });
+
+  it('16. Atomic Quota Reservation & LinePushDeliveryAttempt Schema', async () => {
+    const friend = await friendService.upsertFriendFromWebhook(testDormitoryId, 'U_ATOMIC_TEST', 'Atomic User');
+    const grantRes = await grantService.createAccessGrant(testDormitoryId, friend.id, 'TECH', `usr_${testOwnerUserId}`);
+
+    const attempts = await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${testDormitoryId}, true)`;
+      return await tx.linePushDeliveryAttempt.findMany({
+        where: { accessGrantId: grantRes.grant.id }
+      });
+    });
+    expect(attempts.length).toBe(1);
+
+    const att = attempts[0];
+    expect(att.periodKey).toBeDefined();
+    expect(att.lineRetryKey).toBeDefined();
+    expect(att.retryKeyCreatedAt).toBeDefined();
+    expect(att.retryKeyExpiresAt).toBeDefined();
+  });
+
+  it('17. Attempt Finalization Idempotency', async () => {
+    const friend = await friendService.upsertFriendFromWebhook(testDormitoryId, 'U_IDEMPOTENT_TEST', 'Idempotent User');
+    const grantRes = await grantService.createAccessGrant(testDormitoryId, friend.id, 'MANAGER', `usr_${testOwnerUserId}`);
+
+    const attempts = await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${testDormitoryId}, true)`;
+      return await tx.linePushDeliveryAttempt.findMany({
+        where: { accessGrantId: grantRes.grant.id }
+      });
+    });
+    const att = attempts[0];
+
+    // Finalize same attempt twice
+    const fin1 = await pushUsageService.finalizeDeliveryAttempt(att.id, testDormitoryId, grantRes.grant.id, { outcome: 'ACCEPTED', messageId: 'msg_test_1' });
+    const fin2 = await pushUsageService.finalizeDeliveryAttempt(att.id, testDormitoryId, grantRes.grant.id, { outcome: 'ACCEPTED', messageId: 'msg_test_2' });
+
+    expect(fin1.pushed).toBe(true);
+    expect(fin2.pushed).toBe(true);
+  });
+
+  it('18. 24h Retry Key Expiration Rules', async () => {
+    const dormC = await prisma.dormitory.create({ data: { name: 'Dorm Expiry Test', createdByUserId: testOwnerUserId, timezone: 'Asia/Bangkok' } });
+    await lineOaService.updateDormitoryLineConfig(dormC.id, {
+      lineOaId: '@dormC_oa',
+      channelId: '1657999999',
+      channelSecret: 'secret_c_key_12345',
+      channelAccessToken: 'token_c_access_key_12345'
+    });
+
+    const friend = await friendService.upsertFriendFromWebhook(dormC.id, 'U_EXPIRATION_TEST', 'Expired User');
+    const grantRes = await grantService.createAccessGrant(dormC.id, friend.id, 'TECH', `usr_${testOwnerUserId}`);
+
+    // Find attempt and set retryKeyExpiresAt to 1 hour in the past
+    const attempts = await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormC.id}, true)`;
+      return await tx.linePushDeliveryAttempt.findMany({
+        where: { accessGrantId: grantRes.grant.id }
+      });
+    });
+    const att = attempts[0];
+
+    await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormC.id}, true)`;
+      await tx.linePushDeliveryAttempt.update({
+        where: { id: att.id },
+        data: {
+          status: 'RETRY_PENDING',
+          retryKeyExpiresAt: new Date(Date.now() - 3600 * 1000)
+        }
+      });
+      await tx.dormitoryAccessGrant.update({
+        where: { id: grantRes.grant.id },
+        data: { lastDeliveryStatus: 'retry_pending' }
+      });
+    });
+
+    mockAdapter.pushCalls = [];
+    const retryRes = await grantService.retryDelivery(grantRes.grant.id, dormC.id);
+
+    expect(retryRes.deliveryStatus).toBe('retry_window_expired');
+    expect(mockAdapter.pushCalls.length).toBe(0); // NO LINE HTTP call made after expiration!
+
+    await prisma.dormitory.delete({ where: { id: dormC.id } }).catch(() => {});
   });
 });

@@ -17,13 +17,23 @@ import { AppError } from '../types/index.js';
 import { LineFriendService } from './line-friend.service.js';
 import { LinePlatformAdapter, MockLinePlatformAdapter } from './line-platform-adapter.js';
 
+import { createLinePlatformAdapter } from './line-adapter-factory.js';
+
 export class LineOaService {
   private friendService: LineFriendService;
   private lineAdapter: LinePlatformAdapter;
 
   constructor(private prisma: PrismaClient, adapter?: LinePlatformAdapter) {
     this.friendService = new LineFriendService(prisma);
-    this.lineAdapter = adapter || new MockLinePlatformAdapter();
+    if (!adapter) {
+      if (process.env.NODE_ENV === 'test') {
+        this.lineAdapter = new MockLinePlatformAdapter();
+      } else {
+        this.lineAdapter = createLinePlatformAdapter();
+      }
+    } else {
+      this.lineAdapter = adapter;
+    }
   }
 
   /**

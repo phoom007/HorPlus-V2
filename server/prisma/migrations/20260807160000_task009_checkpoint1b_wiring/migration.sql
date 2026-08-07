@@ -1,6 +1,7 @@
--- Task-009 Checkpoint 1B: Runtime Wiring & Production Boundary
+-- Task-009 Checkpoint 1B/1C: Runtime Wiring, Narrow Resolvers & Strict RLS
 
--- 1. Add delivery state columns to dormitory_access_grants
+-- 1. Add delivery state & token encryption columns to dormitory_access_grants
+ALTER TABLE "dormitory_access_grants" ADD COLUMN "token_encrypted" TEXT;
 ALTER TABLE "dormitory_access_grants" ADD COLUMN "last_delivery_status" VARCHAR(50);
 ALTER TABLE "dormitory_access_grants" ADD COLUMN "last_delivery_attempt_at" TIMESTAMPTZ;
 ALTER TABLE "dormitory_access_grants" ADD COLUMN "last_delivery_success_at" TIMESTAMPTZ;
@@ -35,12 +36,15 @@ CREATE TABLE "line_push_delivery_attempts" (
     "id" UUID NOT NULL,
     "dormitory_id" UUID NOT NULL,
     "access_grant_id" UUID NOT NULL,
+    "period_key" VARCHAR(30) NOT NULL,
     "line_retry_key" VARCHAR(36) NOT NULL,
     "status" VARCHAR(50) NOT NULL DEFAULT 'RESERVED',
     "line_message_id" VARCHAR(255),
     "error_code" VARCHAR(100),
     "attempted_at" TIMESTAMPTZ,
     "finalized_at" TIMESTAMPTZ,
+    "retry_key_created_at" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "retry_key_expires_at" TIMESTAMPTZ,
     "created_at" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMPTZ NOT NULL,
 
@@ -60,20 +64,7 @@ ALTER TABLE "line_push_delivery_attempts" ADD CONSTRAINT "line_push_delivery_att
 ALTER TABLE "line_push_usage" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "line_push_delivery_attempts" ENABLE ROW LEVEL SECURITY;
 
--- RLS policies on new tables
-CREATE POLICY line_push_usage_isolation ON "line_push_usage"
-  USING (
-    dormitory_id = NULLIF(current_setting('app.current_dormitory_id', true), '')::uuid
-    OR current_setting('app.bypass_rls', true) = 'true'
-  );
-
-CREATE POLICY line_push_delivery_attempts_isolation ON "line_push_delivery_attempts"
-  USING (
-    dormitory_id = NULLIF(current_setting('app.current_dormitory_id', true), '')::uuid
-    OR current_setting('app.bypass_rls', true) = 'true'
-  );
-
--- 8. FORCE ROW LEVEL SECURITY on ALL TASK-009 tables (previously only in test beforeAll)
+-- 8. FORCE ROW LEVEL SECURITY on ALL TASK-009 tables
 ALTER TABLE "dormitory_line_friends" FORCE ROW LEVEL SECURITY;
 ALTER TABLE "dormitory_access_grants" FORCE ROW LEVEL SECURITY;
 ALTER TABLE "dormitory_line_configs" FORCE ROW LEVEL SECURITY;
@@ -81,29 +72,45 @@ ALTER TABLE "line_webhook_event_receipts" FORCE ROW LEVEL SECURITY;
 ALTER TABLE "line_push_usage" FORCE ROW LEVEL SECURITY;
 ALTER TABLE "line_push_delivery_attempts" FORCE ROW LEVEL SECURITY;
 
--- 9. Update policies to permit SECURITY DEFINER / bypass_rls lookup
+-- 9. Strict RLS policies allowing tenant isolation & narrow SECURITY DEFINER resolvers
+DROP POLICY IF EXISTS line_push_usage_isolation ON "line_push_usage";
+CREATE POLICY line_push_usage_isolation ON "line_push_usage"
+  USING (
+    dormitory_id = NULLIF(current_setting('app.current_dormitory_id', true), '')::uuid
+    OR current_setting('app.resolver_context', true) = 'true'
+  );
+
+DROP POLICY IF EXISTS line_push_delivery_attempts_isolation ON "line_push_delivery_attempts";
+CREATE POLICY line_push_delivery_attempts_isolation ON "line_push_delivery_attempts"
+  USING (
+    dormitory_id = NULLIF(current_setting('app.current_dormitory_id', true), '')::uuid
+    OR current_setting('app.resolver_context', true) = 'true'
+  );
+
 DROP POLICY IF EXISTS dormitory_access_grants_isolation ON "dormitory_access_grants";
 CREATE POLICY dormitory_access_grants_isolation ON "dormitory_access_grants"
   USING (
     dormitory_id = NULLIF(current_setting('app.current_dormitory_id', true), '')::uuid
-    OR current_setting('app.bypass_rls', true) = 'true'
+    OR current_setting('app.resolver_context', true) = 'true'
   );
 
 DROP POLICY IF EXISTS dormitory_line_friends_isolation ON "dormitory_line_friends";
 CREATE POLICY dormitory_line_friends_isolation ON "dormitory_line_friends"
   USING (
     dormitory_id = NULLIF(current_setting('app.current_dormitory_id', true), '')::uuid
-    OR current_setting('app.bypass_rls', true) = 'true'
+    OR current_setting('app.resolver_context', true) = 'true'
   );
 
 DROP POLICY IF EXISTS dormitory_line_configs_isolation ON "dormitory_line_configs";
 CREATE POLICY dormitory_line_configs_isolation ON "dormitory_line_configs"
   USING (
     dormitory_id = NULLIF(current_setting('app.current_dormitory_id', true), '')::uuid
-    OR current_setting('app.bypass_rls', true) = 'true'
+    OR current_setting('app.resolver_context', true) = 'true'
   );
 
--- Harden resolve_line_webhook_config: minimal output (routing identity only)
+-- 10. Narrow SECURITY DEFINER Resolvers (Minimum Routing/Lookup Identity Only)
+
+-- Webhook config resolver
 DROP FUNCTION IF EXISTS public.resolve_line_webhook_config(text);
 CREATE OR REPLACE FUNCTION public.resolve_line_webhook_config(p_webhook_key_hash text)
 RETURNS TABLE (
@@ -115,7 +122,7 @@ SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
 BEGIN
-  PERFORM set_config('app.bypass_rls', 'true', true);
+  PERFORM set_config('app.resolver_context', 'true', true);
   RETURN QUERY
   SELECT 
     c.id AS config_id,
@@ -126,29 +133,86 @@ BEGIN
 END;
 $$;
 
--- 10. Restrict function execute privileges
-REVOKE ALL ON FUNCTION public.resolve_line_webhook_config(text) FROM PUBLIC;
+-- Bearer token resolver
+DROP FUNCTION IF EXISTS public.resolve_access_grant_token(text);
+CREATE OR REPLACE FUNCTION public.resolve_access_grant_token(p_token_hash text)
+RETURNS TABLE (
+  grant_id uuid,
+  dormitory_id uuid
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+  PERFORM set_config('app.resolver_context', 'true', true);
+  RETURN QUERY
+  SELECT 
+    g.id AS grant_id,
+    g.dormitory_id
+  FROM public.dormitory_access_grants g
+  WHERE g.token_hash = p_token_hash
+  LIMIT 1;
+END;
+$$;
 
--- Grant EXECUTE to the runtime application role (same as Prisma connection role).
--- Use DO block to grant to current_user (the Prisma migration runner = runtime role).
+-- Line friend resolver for server push delivery
+DROP FUNCTION IF EXISTS public.resolve_access_grant_friend(uuid);
+CREATE OR REPLACE FUNCTION public.resolve_access_grant_friend(p_line_friend_id uuid)
+RETURNS TABLE (
+  dormitory_id uuid,
+  line_user_id_encrypted text
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+  PERFORM set_config('app.resolver_context', 'true', true);
+  RETURN QUERY
+  SELECT 
+    f.dormitory_id,
+    f.line_user_id_encrypted
+  FROM public.dormitory_line_friends f
+  WHERE f.id = p_line_friend_id
+  LIMIT 1;
+END;
+$$;
+
+-- Grant resolver by grant ID for session validation
+DROP FUNCTION IF EXISTS public.resolve_access_grant_by_id(uuid);
+CREATE OR REPLACE FUNCTION public.resolve_access_grant_by_id(p_grant_id uuid)
+RETURNS TABLE (
+  grant_id uuid,
+  dormitory_id uuid
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+  PERFORM set_config('app.resolver_context', 'true', true);
+  RETURN QUERY
+  SELECT 
+    g.id AS grant_id,
+    g.dormitory_id
+  FROM public.dormitory_access_grants g
+  WHERE g.id = p_grant_id
+  LIMIT 1;
+END;
+$$;
+
+-- 11. Restrict resolver execute privileges to current runtime role only
+REVOKE ALL ON FUNCTION public.resolve_line_webhook_config(text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.resolve_access_grant_token(text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.resolve_access_grant_friend(uuid) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.resolve_access_grant_by_id(uuid) FROM PUBLIC;
+
 DO $$
 BEGIN
   EXECUTE format('GRANT EXECUTE ON FUNCTION public.resolve_line_webhook_config(text) TO %I', current_user);
-END
-$$;
-
--- 11. Ensure runtime role has NOSUPERUSER NOBYPASSRLS for RLS enforcement
--- Only alter if the current role IS a superuser (safe: superuser can alter itself)
-DO $$
-DECLARE
-  v_is_super boolean;
-BEGIN
-  SELECT rolsuper INTO v_is_super FROM pg_roles WHERE rolname = current_user;
-  IF v_is_super THEN
-    EXECUTE format('ALTER ROLE %I NOSUPERUSER NOBYPASSRLS', current_user);
-  ELSE
-    -- Already non-superuser, ensure NOBYPASSRLS
-    EXECUTE format('ALTER ROLE %I NOBYPASSRLS', current_user);
-  END IF;
+  EXECUTE format('GRANT EXECUTE ON FUNCTION public.resolve_access_grant_token(text) TO %I', current_user);
+  EXECUTE format('GRANT EXECUTE ON FUNCTION public.resolve_access_grant_friend(uuid) TO %I', current_user);
+  EXECUTE format('GRANT EXECUTE ON FUNCTION public.resolve_access_grant_by_id(uuid) TO %I', current_user);
 END
 $$;

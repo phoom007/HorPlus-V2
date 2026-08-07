@@ -38,6 +38,8 @@ import { OccupancyService } from '../services/occupancy.service.js';
 import { BillingCycleService } from '../services/billing-cycle.service.js';
 import { MeterService } from '../services/meter.service.js';
 import { BillingService } from '../services/billing.service.js';
+import { LinePlatformAdapter } from '../services/line-platform-adapter.js';
+import { createLinePlatformAdapter } from '../services/line-adapter-factory.js';
 
 export interface AppApiDependencies {
   authService: AuthenticationService;
@@ -54,6 +56,7 @@ export interface AppApiDependencies {
   billingCycleService?: BillingCycleService;
   meterService?: MeterService;
   billingService?: BillingService;
+  lineAdapter?: LinePlatformAdapter;
   dormitoryRepo: any;
   billingRepo: any;
   subRepo: any;
@@ -84,9 +87,13 @@ export function createApiRouter(deps: AppApiDependencies | AuthenticationService
 
   const prisma = getPrismaClient();
 
-  // TASK-009: Public routes (no session required)
-  const staffRoutes = createStaffRoutes(prisma, isDeps ? (deps as AppApiDependencies).authService : undefined);
-  const lineOaRoutes = createLineOaRoutes(prisma, isDeps ? (deps as AppApiDependencies).authService : undefined);
+  // TASK-009: Application LINE adapter composition root
+  const lineAdapter = isDeps && (deps as AppApiDependencies).lineAdapter
+    ? (deps as AppApiDependencies).lineAdapter!
+    : createLinePlatformAdapter();
+
+  const staffRoutes = createStaffRoutes(prisma, isDeps ? (deps as AppApiDependencies).authService : undefined, lineAdapter);
+  const lineOaRoutes = createLineOaRoutes(prisma, isDeps ? (deps as AppApiDependencies).authService : undefined, lineAdapter);
   router.use('/', staffRoutes.publicRouter);
   router.use('/', lineOaRoutes.publicRouter);
 

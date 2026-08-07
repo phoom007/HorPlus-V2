@@ -1,7 +1,7 @@
 /**
- * Staff & Access Grant Routes (Task-009 — Canonical Auth Stack)
- * Public: bearer redemption
- * Protected: staff management, grant CRUD, retry-delivery
+ * Staff & Access Grant Routes (Task-009 Checkpoint 1C)
+ * Public: bearer redemption & CSRF credential issuance
+ * Protected: staff management, grant CRUD, copy link, retry-delivery
  * @license Apache-2.0
  */
 
@@ -10,16 +10,21 @@ import { PrismaClient } from '@prisma/client';
 import { AccessGrantService } from '../services/access-grant.service.js';
 import { LineFriendService } from '../services/line-friend.service.js';
 import { AuthenticationService } from '../services/auth.service.js';
+import { LinePlatformAdapter } from '../services/line-platform-adapter.js';
 import { requireDormitoryPermission } from '../middleware/permission.js';
 import { requireDormitoryWriteEntitlement } from '../middleware/entitlement.js';
 import { resolveAuthoritativeDormitoryContext } from '../middleware/dormitory-context.js';
 import { AppError } from '../types/index.js';
 import { getEnv } from '../config/env.js';
 
-export function createStaffRoutes(prisma: PrismaClient, authService?: AuthenticationService) {
+export function createStaffRoutes(
+  prisma: PrismaClient,
+  authService?: AuthenticationService,
+  lineAdapter?: LinePlatformAdapter
+) {
   const publicRouter = Router();
   const protectedRouter = Router();
-  const grantService = new AccessGrantService(prisma);
+  const grantService = new AccessGrantService(prisma, lineAdapter);
   const friendService = new LineFriendService(prisma);
 
   const requireSession = authService
@@ -40,7 +45,10 @@ export function createStaffRoutes(prisma: PrismaClient, authService?: Authentica
   // ---------- CSRF helper ----------
   const verifyCsrf = (req: Request, res: Response): boolean => {
     if (!authService) return true;
-    const csrfToken = (req.headers['x-csrf-token'] as string) || req.cookies?.['horplus_csrf'];
+    const env = getEnv();
+    const csrfHeaderName = 'x-csrf-token';
+    const csrfCookieName = env.CSRF_COOKIE_NAME || 'horplus_csrf';
+    const csrfToken = (req.headers[csrfHeaderName] as string) || req.cookies?.[csrfCookieName];
     const sessionId = req.auth?.sessionId;
     if (!sessionId || !authService.verifyCsrf(csrfToken, sessionId)) {
       res.status(403).json({
@@ -57,10 +65,27 @@ export function createStaffRoutes(prisma: PrismaClient, authService?: Authentica
     return true;
   };
 
-  // ---------- Dormitory context resolver ----------
+  // ---------- Dormitory context resolver & route mismatch validator ----------
   const getDormitoryId = (req: Request): string => {
     const context = (req as any).dormitoryContext || resolveAuthoritativeDormitoryContext(req);
     return context.dormitoryId;
+  };
+
+  const verifyDormitoryMatch = (req: Request, res: Response, next: NextFunction) => {
+    const routeDormId = req.params.id || req.params.dormId || req.params.dormitoryId;
+    const authDormId = getDormitoryId(req);
+    if (routeDormId && authDormId && routeDormId !== authDormId) {
+      return res.status(403).json({
+        error: {
+          code: 'DORMITORY_MISMATCH',
+          message: 'Target dormitory ID does not match authenticated dormitory context',
+          fieldErrors: null,
+          requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+          timestamp: new Date().toISOString(),
+        },
+      });
+    }
+    next();
   };
 
   // ==========================================================================
@@ -75,7 +100,7 @@ export function createStaffRoutes(prisma: PrismaClient, authService?: Authentica
     try {
       const { token } = req.body;
       if (!token) {
-        throw new AppError('Bearer access token is required', 400, 'MISSING_TOKEN');
+        throw new AppError('Bearer access token is required', 400, 'MISSING_BEARER_TOKEN');
       }
 
       const userAgentHash = req.headers['user-agent'] ? String(req.headers['user-agent']) : undefined;
@@ -84,12 +109,22 @@ export function createStaffRoutes(prisma: PrismaClient, authService?: Authentica
       const result = await grantService.redeemAccessGrant(token, userAgentHash, ipMetadata);
       const env = getEnv();
 
+      // Issue Session Cookie
       res.cookie(env.SESSION_COOKIE_NAME, result.sessionToken, {
         httpOnly: true,
         secure: process.env.NODE_ENV === 'production',
         sameSite: 'lax',
         path: '/',
-        maxAge: 30 * 24 * 60 * 60 * 1000
+        maxAge: 30 * 24 * 60 * 60 * 1000,
+      });
+
+      // Issue Canonical CSRF Cookie
+      res.cookie(env.CSRF_COOKIE_NAME, result.csrfToken, {
+        httpOnly: false,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        path: '/',
+        maxAge: 30 * 24 * 60 * 60 * 1000,
       });
 
       res.setHeader('Cache-Control', 'no-store');
@@ -97,7 +132,11 @@ export function createStaffRoutes(prisma: PrismaClient, authService?: Authentica
 
       return res.status(200).json({
         success: true,
-        data: { grant: result.grant }
+        data: {
+          sessionToken: result.sessionToken,
+          csrfToken: result.csrfToken,
+          grant: result.grant,
+        },
       });
     } catch (err) {
       next(err);
@@ -114,6 +153,7 @@ export function createStaffRoutes(prisma: PrismaClient, authService?: Authentica
   protectedRouter.get(
     '/properties/:id/staff',
     ...authGuard('staff:read'),
+    verifyDormitoryMatch,
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         const dormitoryId = getDormitoryId(req);
@@ -132,6 +172,7 @@ export function createStaffRoutes(prisma: PrismaClient, authService?: Authentica
   protectedRouter.get(
     '/properties/:id/line-friends',
     ...authGuard('staff:read'),
+    verifyDormitoryMatch,
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         const dormitoryId = getDormitoryId(req);
@@ -145,11 +186,32 @@ export function createStaffRoutes(prisma: PrismaClient, authService?: Authentica
   );
 
   /**
+   * GET /api/v1/properties/:id/access-grants/:grantId/copy-link
+   */
+  protectedRouter.get(
+    '/properties/:id/access-grants/:grantId/copy-link',
+    ...authGuard('staff:read'),
+    verifyDormitoryMatch,
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const dormitoryId = getDormitoryId(req);
+        const { grantId } = req.params;
+        const copyLink = await grantService.getGrantCopyLink(dormitoryId, grantId);
+        res.setHeader('Cache-Control', 'no-store');
+        return res.status(200).json({ success: true, data: copyLink });
+      } catch (err) {
+        next(err);
+      }
+    }
+  );
+
+  /**
    * POST /api/v1/properties/:id/access-grants
    */
   protectedRouter.post(
     '/properties/:id/access-grants',
     ...mutationGuard('staff:write'),
+    verifyDormitoryMatch,
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         if (!verifyCsrf(req, res)) return;
@@ -180,6 +242,7 @@ export function createStaffRoutes(prisma: PrismaClient, authService?: Authentica
   protectedRouter.patch(
     '/properties/:id/access-grants/:grantId/role',
     ...mutationGuard('staff:write'),
+    verifyDormitoryMatch,
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         if (!verifyCsrf(req, res)) return;
@@ -211,6 +274,7 @@ export function createStaffRoutes(prisma: PrismaClient, authService?: Authentica
   protectedRouter.delete(
     '/properties/:id/access-grants/:grantId',
     ...mutationGuard('staff:write'),
+    verifyDormitoryMatch,
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         if (!verifyCsrf(req, res)) return;
@@ -239,6 +303,7 @@ export function createStaffRoutes(prisma: PrismaClient, authService?: Authentica
   protectedRouter.post(
     '/properties/:id/access-grants/:grantId/retry-delivery',
     ...mutationGuard('staff:write'),
+    verifyDormitoryMatch,
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         if (!verifyCsrf(req, res)) return;
