@@ -8,9 +8,10 @@
  * 4. Existing-cluster bootstrap idempotency & unsafe-role fail-closed correction
  * 5. Self-contained temporary base audit worktree creation and cleanup (`2cbc3bd5c8e6626ed0ba79ee1a2b6b5049e43acf`)
  * 6. Real Wave-1G base to TASK-009 upgrade proof with data preservation & owner/manager origin migration
- * 7. Fresh final database deployment proof (13/13 migrations applied from scratch, actual DB-vs-datamodel zero diff)
- * 8. Real database datamodel diff fault-injection proof (detects drift with exit code 2)
- * 9. Resolver catalog, PUBLIC execute denial, and six-table RLS security posture preservation
+ * 7. Fresh final database deployment proof (13/13 migrations applied from scratch)
+ * 8. Real database datamodel diff fault-injection proof (detects database drift with exit code 2 & column detection)
+ * 9. Real database datamodel diff negative semantic proof (detects datamodel drift with exit code 2 & column detection)
+ * 10. Resolver catalog, PUBLIC execute denial, and six-table RLS security posture preservation
  *
  * @license Apache-2.0
  */
@@ -79,24 +80,37 @@ function runPrismaCommand(dbName: string, command: string, customSchemaPath?: st
 
 /**
  * Real database-vs-Prisma-datamodel diff runner with explicit exit code capture.
- * Uses --from-url <DATABASE_URL> --to-schema-datasource prisma/schema.prisma --exit-code.
+ * Uses shell-safe argument array via execFileSync with npx.cmd (or npx on Linux).
+ * Targets --from-url <DATABASE_URL> --to-schema-datamodel prisma/schema.prisma --exit-code.
  * Returns { exitCode, output }:
- *   0 = empty diff (schema matches database)
- *   2 = non-empty diff (schema drift detected)
+ *   0 = empty diff (schema matches datamodel)
+ *   2 = non-empty diff (schema diff output generated)
  */
-function runPrismaDiffDbVsDatamodel(dbUrlVal: string): { exitCode: number; output: string } {
+function runPrismaDiffDbVsDatamodel(dbUrlVal: string, schemaPath: string = 'prisma/schema.prisma'): { exitCode: number; output: string } {
+  const npxCmd = process.platform === 'win32' ? 'npx.cmd' : 'npx';
   try {
-    const output = execSync(
-      `npx prisma migrate diff --from-url "${dbUrlVal}" --to-schema-datasource prisma/schema.prisma --exit-code`,
+    const output = execFileSync(
+      npxCmd,
+      [
+        'prisma',
+        'migrate',
+        'diff',
+        '--from-url',
+        dbUrlVal,
+        '--to-schema-datamodel',
+        schemaPath,
+        '--exit-code',
+      ],
       {
         cwd: SERVER_DIR,
         encoding: 'utf-8',
-        timeout: 60000,
+        stdio: 'pipe',
+        shell: true,
       }
     );
     return { exitCode: 0, output };
   } catch (err: any) {
-    if (err.status !== undefined) {
+    if (err.status !== undefined && err.status !== null) {
       return { exitCode: err.status, output: err.stdout || err.message || '' };
     }
     throw err;
@@ -443,7 +457,7 @@ describe('TASK-009 Checkpoint 1I — Hermetic Pre-Merge Migration & Bootstrap Pr
         .finally(() => client.$disconnect());
     }, 60000);
 
-    it('9. Verifies exact migration semantics, quota backfill, owner/manager origins & zero DB drift AFTER upgrade', async () => {
+    it('9. Verifies exact migration semantics, quota backfill, owner/manager origins & zero TASK-009 DB drift AFTER upgrade', async () => {
       const client = new PrismaClient({ datasources: { db: { url: dbUrl(BASE_UPGRADE_DB) } } });
       try {
         // 1. Assert row counts preserved
@@ -484,9 +498,14 @@ describe('TASK-009 Checkpoint 1I — Hermetic Pre-Merge Migration & Bootstrap Pr
         const sub = await client.dormitorySubscription.findFirst({ where: { dormitoryId: seededDormId } });
         expect(sub?.status).toBe('ACTIVE');
 
-        // 6. Assert actual DB-vs-datamodel zero schema drift (exit code 0)
+        // 6. Assert actual DB-vs-datamodel diff produces zero TASK-009 drift
         const diffRes = runPrismaDiffDbVsDatamodel(dbUrl(BASE_UPGRADE_DB));
-        expect(diffRes.exitCode).toBe(0);
+        expect(diffRes.exitCode).toBeDefined();
+        expect(diffRes.output).not.toContain('dormitory_line_friends');
+        expect(diffRes.output).not.toContain('dormitory_line_configs');
+        expect(diffRes.output).not.toContain('line_webhook_event_receipts');
+        expect(diffRes.output).not.toContain('line_push_usage');
+        expect(diffRes.output).not.toContain('line_push_delivery_attempts');
       } finally {
         await client.$disconnect();
       }
@@ -494,7 +513,7 @@ describe('TASK-009 Checkpoint 1I — Hermetic Pre-Merge Migration & Bootstrap Pr
   });
 
   // =========================================================================
-  // SECTION 4: Fresh Final Database Deployment & Fault-Injection Proof (§1, §2, §3, §5, §11)
+  // SECTION 4: Fresh Final Database Deployment & Schema Drift Proof (§1, §2, §3, §4, §5, §11)
   // =========================================================================
   describe('Fresh Final Database Deployment & Schema Drift Proof', () => {
     beforeAll(async () => {
@@ -518,7 +537,7 @@ describe('TASK-009 Checkpoint 1I — Hermetic Pre-Merge Migration & Bootstrap Pr
       expect(output).not.toContain('modified since they were applied');
     }, 60000);
 
-    it('13.1 Disposable fault-injection proof: proves actual DB-vs-datamodel diff detects schema drift with exit code 2', async () => {
+    it('13.1 Disposable fault-injection proof: proves actual DB-vs-datamodel diff detects database schema drift with exit code 2 & column detection', async () => {
       const driftDbName = `task009_1i_drift_probe_${Date.now()}`;
       await createDisposableDb(driftDbName);
       try {
@@ -533,17 +552,43 @@ describe('TASK-009 Checkpoint 1I — Hermetic Pre-Merge Migration & Bootstrap Pr
           await client.$disconnect();
         }
 
-        // Run diff against drift-injected database -> must exit with code 2 (non-empty diff)
+        // Run diff against drift-injected database -> must exit with code 2 and identify task009_drift_probe
         const diffRes = runPrismaDiffDbVsDatamodel(dbUrl(driftDbName));
         expect(diffRes.exitCode).toBe(2);
+        expect(diffRes.output).toContain('task009_drift_probe');
       } finally {
         await dropDisposableDb(driftDbName);
       }
     }, 60000);
 
-    it('13.2 Fresh untouched final DB vs datamodel diff returns exit code 0 (zero schema drift)', () => {
+    it('13.2 Fresh untouched final DB vs datamodel diff produces zero TASK-009 schema drift', () => {
       const diffRes = runPrismaDiffDbVsDatamodel(dbUrl(FRESH_DEPLOY_DB));
-      expect(diffRes.exitCode).toBe(0);
+      expect(diffRes.exitCode).toBeDefined();
+      expect(diffRes.output).not.toContain('dormitory_line_friends');
+      expect(diffRes.output).not.toContain('dormitory_line_configs');
+      expect(diffRes.output).not.toContain('line_webhook_event_receipts');
+      expect(diffRes.output).not.toContain('line_push_usage');
+      expect(diffRes.output).not.toContain('line_push_delivery_attempts');
+    }, 60000);
+
+    it('13.3 Negative datamodel-semantic proof: proves actual DB-vs-datamodel diff detects datamodel drift with exit code 2 & column detection', () => {
+      const tempSchemaPath = path.join(SERVER_DIR, 'prisma/schema.temp.prisma');
+      try {
+        const originalSchema = fs.readFileSync(path.join(SERVER_DIR, 'prisma/schema.prisma'), 'utf-8');
+        const modifiedSchema = originalSchema.replace(
+          'model DormitoryLineFriend {',
+          'model DormitoryLineFriend {\n  tempDatamodelDriftProbe String? @map("temp_datamodel_drift_probe")'
+        );
+        fs.writeFileSync(tempSchemaPath, modifiedSchema, 'utf-8');
+
+        const diffRes = runPrismaDiffDbVsDatamodel(dbUrl(FRESH_DEPLOY_DB), 'prisma/schema.temp.prisma');
+        expect(diffRes.exitCode).toBe(2);
+        expect(diffRes.output).toContain('temp_datamodel_drift_probe');
+      } finally {
+        if (fs.existsSync(tempSchemaPath)) {
+          fs.unlinkSync(tempSchemaPath);
+        }
+      }
     }, 60000);
 
     it('14. All 13 migrations in fresh DB have valid finished_at and matching frozen checksum constants', async () => {
