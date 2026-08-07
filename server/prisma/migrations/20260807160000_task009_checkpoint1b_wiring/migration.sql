@@ -1,25 +1,25 @@
--- Task-009 Checkpoint 1B/1C: Runtime Wiring, Narrow Resolvers & Strict RLS
+-- Task-009 Checkpoint 1D: Security Closure, Resolver Ownership & Strict Tenant Isolation
 
 -- 1. Add delivery state & token encryption columns to dormitory_access_grants
-ALTER TABLE "dormitory_access_grants" ADD COLUMN "token_encrypted" TEXT;
-ALTER TABLE "dormitory_access_grants" ADD COLUMN "last_delivery_status" VARCHAR(50);
-ALTER TABLE "dormitory_access_grants" ADD COLUMN "last_delivery_attempt_at" TIMESTAMPTZ;
-ALTER TABLE "dormitory_access_grants" ADD COLUMN "last_delivery_success_at" TIMESTAMPTZ;
-ALTER TABLE "dormitory_access_grants" ADD COLUMN "last_delivery_error_code" VARCHAR(100);
+ALTER TABLE "dormitory_access_grants" ADD COLUMN IF NOT EXISTS "token_encrypted" TEXT;
+ALTER TABLE "dormitory_access_grants" ADD COLUMN IF NOT EXISTS "last_delivery_status" VARCHAR(50);
+ALTER TABLE "dormitory_access_grants" ADD COLUMN IF NOT EXISTS "last_delivery_attempt_at" TIMESTAMPTZ;
+ALTER TABLE "dormitory_access_grants" ADD COLUMN IF NOT EXISTS "last_delivery_success_at" TIMESTAMPTZ;
+ALTER TABLE "dormitory_access_grants" ADD COLUMN IF NOT EXISTS "last_delivery_error_code" VARCHAR(100);
 
 -- 2. Add verification timestamps to dormitory_line_configs
-ALTER TABLE "dormitory_line_configs" ADD COLUMN "access_token_verified_at" TIMESTAMPTZ;
-ALTER TABLE "dormitory_line_configs" ADD COLUMN "webhook_verified_at" TIMESTAMPTZ;
+ALTER TABLE "dormitory_line_configs" ADD COLUMN IF NOT EXISTS "access_token_verified_at" TIMESTAMPTZ;
+ALTER TABLE "dormitory_line_configs" ADD COLUMN IF NOT EXISTS "webhook_verified_at" TIMESTAMPTZ;
 
 -- 3. Add message quota to subscription_plans
-ALTER TABLE "subscription_plans" ADD COLUMN "message_quota_monthly" INTEGER NOT NULL DEFAULT 30;
+ALTER TABLE "subscription_plans" ADD COLUMN IF NOT EXISTS "message_quota_monthly" INTEGER NOT NULL DEFAULT 30;
 
 -- Backfill quota: FREE=30, PAID=300
 UPDATE "subscription_plans" SET "message_quota_monthly" = 30 WHERE "type" = 'FREE';
 UPDATE "subscription_plans" SET "message_quota_monthly" = 300 WHERE "type" = 'PAID';
 
 -- 4. Create line_push_usage table
-CREATE TABLE "line_push_usage" (
+CREATE TABLE IF NOT EXISTS "line_push_usage" (
     "id" UUID NOT NULL,
     "dormitory_id" UUID NOT NULL,
     "period_key" VARCHAR(30) NOT NULL,
@@ -32,7 +32,7 @@ CREATE TABLE "line_push_usage" (
 );
 
 -- 5. Create line_push_delivery_attempts table
-CREATE TABLE "line_push_delivery_attempts" (
+CREATE TABLE IF NOT EXISTS "line_push_delivery_attempts" (
     "id" UUID NOT NULL,
     "dormitory_id" UUID NOT NULL,
     "access_grant_id" UUID NOT NULL,
@@ -52,63 +52,56 @@ CREATE TABLE "line_push_delivery_attempts" (
 );
 
 -- 6. Indexes and constraints
-CREATE UNIQUE INDEX "dormitory_push_period_unique" ON "line_push_usage"("dormitory_id", "period_key");
-CREATE INDEX "line_push_delivery_attempts_access_grant_id_idx" ON "line_push_delivery_attempts"("access_grant_id");
+CREATE UNIQUE INDEX IF NOT EXISTS "dormitory_push_period_unique" ON "line_push_usage"("dormitory_id", "period_key");
+CREATE INDEX IF NOT EXISTS "line_push_delivery_attempts_access_grant_id_idx" ON "line_push_delivery_attempts"("access_grant_id");
 
 -- Foreign keys
-ALTER TABLE "line_push_usage" ADD CONSTRAINT "line_push_usage_dormitory_id_fkey" FOREIGN KEY ("dormitory_id") REFERENCES "dormitories"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-ALTER TABLE "line_push_delivery_attempts" ADD CONSTRAINT "line_push_delivery_attempts_dormitory_id_fkey" FOREIGN KEY ("dormitory_id") REFERENCES "dormitories"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-ALTER TABLE "line_push_delivery_attempts" ADD CONSTRAINT "line_push_delivery_attempts_access_grant_id_fkey" FOREIGN KEY ("access_grant_id") REFERENCES "dormitory_access_grants"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'line_push_usage_dormitory_id_fkey') THEN
+        ALTER TABLE "line_push_usage" ADD CONSTRAINT "line_push_usage_dormitory_id_fkey" FOREIGN KEY ("dormitory_id") REFERENCES "dormitories"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'line_push_delivery_attempts_dormitory_id_fkey') THEN
+        ALTER TABLE "line_push_delivery_attempts" ADD CONSTRAINT "line_push_delivery_attempts_dormitory_id_fkey" FOREIGN KEY ("dormitory_id") REFERENCES "dormitories"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'line_push_delivery_attempts_access_grant_id_fkey') THEN
+        ALTER TABLE "line_push_delivery_attempts" ADD CONSTRAINT "line_push_delivery_attempts_access_grant_id_fkey" FOREIGN KEY ("access_grant_id") REFERENCES "dormitory_access_grants"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+    END IF;
+END $$;
 
--- 7. Enable RLS on new tables
+-- 7. Enable RLS on all TASK-009 tables
+ALTER TABLE "dormitory_line_friends" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "dormitory_access_grants" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "dormitory_line_configs" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "line_webhook_event_receipts" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "line_push_usage" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "line_push_delivery_attempts" ENABLE ROW LEVEL SECURITY;
 
--- 8. FORCE ROW LEVEL SECURITY on ALL TASK-009 tables
-ALTER TABLE "dormitory_line_friends" FORCE ROW LEVEL SECURITY;
-ALTER TABLE "dormitory_access_grants" FORCE ROW LEVEL SECURITY;
-ALTER TABLE "dormitory_line_configs" FORCE ROW LEVEL SECURITY;
-ALTER TABLE "line_webhook_event_receipts" FORCE ROW LEVEL SECURITY;
-ALTER TABLE "line_push_usage" FORCE ROW LEVEL SECURITY;
-ALTER TABLE "line_push_delivery_attempts" FORCE ROW LEVEL SECURITY;
-
--- 9. Strict RLS policies allowing tenant isolation & narrow SECURITY DEFINER resolvers
+-- 8. Pure tenant isolation RLS policies depending ONLY on app.current_dormitory_id (NO GUC bypass)
 DROP POLICY IF EXISTS line_push_usage_isolation ON "line_push_usage";
 CREATE POLICY line_push_usage_isolation ON "line_push_usage"
-  USING (
-    dormitory_id = NULLIF(current_setting('app.current_dormitory_id', true), '')::uuid
-    OR current_setting('app.resolver_context', true) = 'true'
-  );
+  USING (dormitory_id = NULLIF(current_setting('app.current_dormitory_id', true), '')::uuid);
 
 DROP POLICY IF EXISTS line_push_delivery_attempts_isolation ON "line_push_delivery_attempts";
 CREATE POLICY line_push_delivery_attempts_isolation ON "line_push_delivery_attempts"
-  USING (
-    dormitory_id = NULLIF(current_setting('app.current_dormitory_id', true), '')::uuid
-    OR current_setting('app.resolver_context', true) = 'true'
-  );
+  USING (dormitory_id = NULLIF(current_setting('app.current_dormitory_id', true), '')::uuid);
 
 DROP POLICY IF EXISTS dormitory_access_grants_isolation ON "dormitory_access_grants";
 CREATE POLICY dormitory_access_grants_isolation ON "dormitory_access_grants"
-  USING (
-    dormitory_id = NULLIF(current_setting('app.current_dormitory_id', true), '')::uuid
-    OR current_setting('app.resolver_context', true) = 'true'
-  );
+  USING (dormitory_id = NULLIF(current_setting('app.current_dormitory_id', true), '')::uuid);
 
 DROP POLICY IF EXISTS dormitory_line_friends_isolation ON "dormitory_line_friends";
 CREATE POLICY dormitory_line_friends_isolation ON "dormitory_line_friends"
-  USING (
-    dormitory_id = NULLIF(current_setting('app.current_dormitory_id', true), '')::uuid
-    OR current_setting('app.resolver_context', true) = 'true'
-  );
+  USING (dormitory_id = NULLIF(current_setting('app.current_dormitory_id', true), '')::uuid);
 
 DROP POLICY IF EXISTS dormitory_line_configs_isolation ON "dormitory_line_configs";
 CREATE POLICY dormitory_line_configs_isolation ON "dormitory_line_configs"
-  USING (
-    dormitory_id = NULLIF(current_setting('app.current_dormitory_id', true), '')::uuid
-    OR current_setting('app.resolver_context', true) = 'true'
-  );
+  USING (dormitory_id = NULLIF(current_setting('app.current_dormitory_id', true), '')::uuid);
 
--- 10. Narrow SECURITY DEFINER Resolvers (Minimum Routing/Lookup Identity Only)
+DROP POLICY IF EXISTS line_webhook_event_receipts_isolation ON "line_webhook_event_receipts";
+CREATE POLICY line_webhook_event_receipts_isolation ON "line_webhook_event_receipts"
+  USING (dormitory_id = NULLIF(current_setting('app.current_dormitory_id', true), '')::uuid);
+
+-- 9. Narrow SECURITY DEFINER Resolvers (Minimal Returned Identifiers, Fixed search_path)
 
 -- Webhook config resolver
 DROP FUNCTION IF EXISTS public.resolve_line_webhook_config(text);
@@ -122,7 +115,6 @@ SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
 BEGIN
-  PERFORM set_config('app.resolver_context', 'true', true);
   RETURN QUERY
   SELECT 
     c.id AS config_id,
@@ -145,36 +137,12 @@ SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
 BEGIN
-  PERFORM set_config('app.resolver_context', 'true', true);
   RETURN QUERY
   SELECT 
     g.id AS grant_id,
     g.dormitory_id
   FROM public.dormitory_access_grants g
   WHERE g.token_hash = p_token_hash
-  LIMIT 1;
-END;
-$$;
-
--- Line friend resolver for server push delivery
-DROP FUNCTION IF EXISTS public.resolve_access_grant_friend(uuid);
-CREATE OR REPLACE FUNCTION public.resolve_access_grant_friend(p_line_friend_id uuid)
-RETURNS TABLE (
-  dormitory_id uuid,
-  line_user_id_encrypted text
-)
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = public, pg_temp
-AS $$
-BEGIN
-  PERFORM set_config('app.resolver_context', 'true', true);
-  RETURN QUERY
-  SELECT 
-    f.dormitory_id,
-    f.line_user_id_encrypted
-  FROM public.dormitory_line_friends f
-  WHERE f.id = p_line_friend_id
   LIMIT 1;
 END;
 $$;
@@ -191,7 +159,6 @@ SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
 BEGIN
-  PERFORM set_config('app.resolver_context', 'true', true);
   RETURN QUERY
   SELECT 
     g.id AS grant_id,
@@ -202,17 +169,19 @@ BEGIN
 END;
 $$;
 
--- 11. Restrict resolver execute privileges to current runtime role only
+-- Delete old resolve_access_grant_friend function (identity material must not be exposed)
+DROP FUNCTION IF EXISTS public.resolve_access_grant_friend(uuid);
+
+-- 10. Restrict resolver execute privileges (REVOKE FROM PUBLIC, GRANT TO API RUNTIME ROLE)
 REVOKE ALL ON FUNCTION public.resolve_line_webhook_config(text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.resolve_access_grant_token(text) FROM PUBLIC;
-REVOKE ALL ON FUNCTION public.resolve_access_grant_friend(uuid) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.resolve_access_grant_by_id(uuid) FROM PUBLIC;
 
 DO $$
 BEGIN
-  EXECUTE format('GRANT EXECUTE ON FUNCTION public.resolve_line_webhook_config(text) TO %I', current_user);
-  EXECUTE format('GRANT EXECUTE ON FUNCTION public.resolve_access_grant_token(text) TO %I', current_user);
-  EXECUTE format('GRANT EXECUTE ON FUNCTION public.resolve_access_grant_friend(uuid) TO %I', current_user);
-  EXECUTE format('GRANT EXECUTE ON FUNCTION public.resolve_access_grant_by_id(uuid) TO %I', current_user);
-END
-$$;
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'horplus') THEN
+    GRANT EXECUTE ON FUNCTION public.resolve_line_webhook_config(text) TO horplus;
+    GRANT EXECUTE ON FUNCTION public.resolve_access_grant_token(text) TO horplus;
+    GRANT EXECUTE ON FUNCTION public.resolve_access_grant_by_id(uuid) TO horplus;
+  END IF;
+END $$;

@@ -131,9 +131,22 @@ export class HttpLinePlatformAdapter implements LinePlatformAdapter {
         return { outcome: 'ACCEPTED', messageId: body.sentMessages?.[0]?.id };
       }
 
-      // 409 with same retry key = already accepted (idempotent replay)
+      // 409 Conflict handling: require x-line-accepted-request-id header for ALREADY_ACCEPTED
       if (res.status === 409) {
-        return { outcome: 'ALREADY_ACCEPTED' };
+        const acceptedRequestId = res.headers.get('x-line-accepted-request-id');
+        if (acceptedRequestId) {
+          const body = await res.json().catch(() => ({})) as any;
+          return {
+            outcome: 'ALREADY_ACCEPTED',
+            messageId: body.sentMessages?.[0]?.id || acceptedRequestId,
+          };
+        }
+        // Fail closed if accepted request ID header is missing
+        return {
+          outcome: 'DEFINITIVE_FAILURE',
+          errorCode: 'HTTP_409_UNACCEPTED_RETRY',
+          safeMessage: 'LINE API returned 409 without accepted request ID evidence',
+        };
       }
 
       // 4xx (non-409) = definitive failure
@@ -171,6 +184,10 @@ export class MockLinePlatformAdapter implements LinePlatformAdapter {
   public profileCalls: Array<{ lineUserId: string; accessToken: string }> = [];
   public verifyAccessTokenCalls: Array<{ accessToken: string }> = [];
 
+  public mockPushResult?: LinePushResult;
+  public simulate409WithAcceptedId = false;
+  public simulate409WithoutAcceptedId = false;
+
   async verifyAccessToken(channelAccessToken: string): Promise<{ verified: boolean; botInfo?: LineBotInfo }> {
     this.verifyAccessTokenCalls.push({ accessToken: channelAccessToken });
     if (!channelAccessToken || channelAccessToken === 'invalid_token' || channelAccessToken.length < 8) {
@@ -207,6 +224,15 @@ export class MockLinePlatformAdapter implements LinePlatformAdapter {
       return { outcome: 'DEFINITIVE_FAILURE', errorCode: 'MISSING_PARAMS', safeMessage: 'Missing required parameters' };
     }
     this.pushCalls.push({ toLineUserId, flexMessage, retryKey });
+    if (this.mockPushResult) {
+      return this.mockPushResult;
+    }
+    if (this.simulate409WithAcceptedId) {
+      return { outcome: 'ALREADY_ACCEPTED', messageId: `msg_accepted_${retryKey}` };
+    }
+    if (this.simulate409WithoutAcceptedId) {
+      return { outcome: 'DEFINITIVE_FAILURE', errorCode: 'HTTP_409_UNACCEPTED_RETRY', safeMessage: 'LINE API returned 409 without accepted request ID evidence' };
+    }
     return { outcome: 'ACCEPTED', messageId: `msg_${Date.now()}_${Math.random().toString(36).substring(2, 7)}` };
   }
 }

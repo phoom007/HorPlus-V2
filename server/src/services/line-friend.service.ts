@@ -78,16 +78,20 @@ export class LineFriendService {
   /**
    * Get decrypted actual LINE userId internally for server-side push adapter
    */
-  async getActualLineUserId(lineFriendId: string): Promise<string | null> {
-    const rows = await this.prisma.$queryRaw<any[]>`
-      SELECT line_user_id_encrypted FROM public.resolve_access_grant_friend(${lineFriendId}::uuid)
-    `;
-    if (!rows || rows.length === 0 || !rows[0].line_user_id_encrypted) return null;
-    try {
-      return decryptText(rows[0].line_user_id_encrypted);
-    } catch {
-      return null;
-    }
+  async getActualLineUserId(dormitoryId: string, lineFriendId: string): Promise<string | null> {
+    return await this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormitoryId}, true)`;
+      const friend = await tx.dormitoryLineFriend.findFirst({
+        where: { id: lineFriendId, dormitoryId },
+        select: { lineUserIdEncrypted: true }
+      });
+      if (!friend || !friend.lineUserIdEncrypted) return null;
+      try {
+        return decryptText(friend.lineUserIdEncrypted);
+      } catch {
+        return null;
+      }
+    });
   }
 
   /**

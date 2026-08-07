@@ -311,12 +311,47 @@ export class LinePushUsageService {
   }
 
   /**
-   * Release reservation for a RETRY_PENDING attempt whose 24h retry window expired.
+   * Release reservation for an expired attempt atomically and idempotently.
+   * Concurrent or repeat calls release at most ONE quota reservation.
    */
-  async markAttemptExpired(attemptId: string, dormitoryId: string, accessGrantId: string, periodKey: string): Promise<void> {
+  async markAttemptExpired(
+    attemptId: string,
+    dormitoryId: string,
+    accessGrantId: string,
+    periodKey: string
+  ): Promise<void> {
     await this.prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormitoryId}, true)`;
 
+      // 1. SELECT exact attempt FOR UPDATE
+      const attempts = await tx.$queryRaw<any[]>`
+        SELECT "id", "status"
+        FROM "line_push_delivery_attempts"
+        WHERE "id" = ${attemptId}::uuid AND "dormitory_id" = ${dormitoryId}::uuid
+        FOR UPDATE
+      `;
+
+      if (!attempts || attempts.length === 0) return;
+
+      const attempt = attempts[0];
+
+      // If attempt is already in terminal status, return immediately without touching quota
+      if (['SENT', 'ALREADY_ACCEPTED', 'FAILED', 'EXPIRED', 'RETRY_WINDOW_EXPIRED'].includes(attempt.status)) {
+        return;
+      }
+
+      if (attempt.status !== 'RETRY_PENDING' && attempt.status !== 'RESERVED') {
+        return;
+      }
+
+      // 2. SELECT exact LinePushUsage row FOR UPDATE
+      const usageRows = await tx.$queryRaw<any[]>`
+        SELECT "id" FROM "line_push_usage"
+        WHERE "dormitory_id" = ${dormitoryId}::uuid AND "period_key" = ${periodKey}
+        FOR UPDATE
+      `;
+
+      // 3. Update attempt status
       await tx.linePushDeliveryAttempt.update({
         where: { id: attemptId },
         data: {
@@ -326,12 +361,7 @@ export class LinePushUsageService {
         },
       });
 
-      const usageRows = await tx.$queryRaw<any[]>`
-        SELECT "id" FROM "line_push_usage"
-        WHERE "dormitory_id" = ${dormitoryId}::uuid AND "period_key" = ${periodKey}
-        FOR UPDATE
-      `;
-
+      // 4. Decrement reservedCount by exactly 1
       if (usageRows && usageRows.length > 0) {
         await tx.$executeRaw`
           UPDATE "line_push_usage"
@@ -341,6 +371,7 @@ export class LinePushUsageService {
         `;
       }
 
+      // 5. Update Grant delivery summary
       await tx.dormitoryAccessGrant.update({
         where: { id: accessGrantId },
         data: {

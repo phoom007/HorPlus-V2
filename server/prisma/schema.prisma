@@ -1275,7 +1275,7 @@ model LinePushUsage {
 
   dormitory Dormitory @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
 
-  @@unique([dormitoryId, periodKey], name: "dormitory_push_period_unique")
+  @@unique([dormitoryId, periodKey], name: "dormitory_push_period_unique", map: "dormitory_push_period_unique")
   @@map("line_push_usage")
 }
 

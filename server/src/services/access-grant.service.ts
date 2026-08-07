@@ -246,7 +246,7 @@ export class AccessGrantService {
     }
 
     // 3. Resolve actual LINE userId
-    const actualLineUserId = await this.friendService.getActualLineUserId(grant.lineFriendId);
+    const actualLineUserId = await this.friendService.getActualLineUserId(dormitoryId, grant.lineFriendId);
     if (!actualLineUserId) {
       await this.updateDeliveryStatus(grantId, 'failed', 'NO_LINE_USER_ID', dormitoryId);
       return { pushed: false, deliveryStatus: 'failed' };
@@ -359,7 +359,7 @@ export class AccessGrantService {
     const rawToken = grant.tokenEncrypted ? decryptText(grant.tokenEncrypted) : null;
     if (!rawToken) return { pushed: false, deliveryStatus: 'failed' };
 
-    const actualLineUserId = await this.friendService.getActualLineUserId(grant.lineFriendId);
+    const actualLineUserId = await this.friendService.getActualLineUserId(dormitoryId, grant.lineFriendId);
     if (!actualLineUserId) return { pushed: false, deliveryStatus: 'failed' };
 
     const accessToken = await this.lineOaService.resolveAccessToken(dormitoryId);

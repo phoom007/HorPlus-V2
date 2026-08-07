@@ -1,7 +1,7 @@
 /**
- * LINE OA Administration & Webhook Routes (Task-009 Checkpoint 1C)
+ * LINE OA Administration & Webhook Routes (Task-009 Checkpoint 1D)
  * Public: webhook ingestion (opaque key + signature verification)
- * Protected: OA config management
+ * Protected: OA config management (OWNER-only)
  * @license Apache-2.0
  */
 
@@ -13,7 +13,7 @@ import { LinePlatformAdapter } from '../services/line-platform-adapter.js';
 import { requireDormitoryPermission } from '../middleware/permission.js';
 import { requireDormitoryWriteEntitlement } from '../middleware/entitlement.js';
 import { resolveAuthoritativeDormitoryContext } from '../middleware/dormitory-context.js';
-import { getEnv } from '../config/env.js';
+import { createCsrfMiddleware } from '../middleware/csrf.js';
 
 export function createLineOaRoutes(
   prisma: PrismaClient,
@@ -28,39 +28,9 @@ export function createLineOaRoutes(
     ? authService.requireAuth()
     : (_req: Request, _res: Response, next: NextFunction) => next();
 
-  const authGuard = (permission: string) => [
-    requireSession,
-    requireDormitoryPermission(permission),
-  ];
-
-  const mutationGuard = (permission: string) => [
-    requireSession,
-    requireDormitoryPermission(permission),
-    requireDormitoryWriteEntitlement,
-  ];
-
-  // ---------- CSRF helper ----------
-  const verifyCsrf = (req: Request, res: Response): boolean => {
-    if (!authService) return true;
-    const env = getEnv();
-    const csrfHeaderName = 'x-csrf-token';
-    const csrfCookieName = env.CSRF_COOKIE_NAME || 'horplus_csrf';
-    const csrfToken = (req.headers[csrfHeaderName] as string) || req.cookies?.[csrfCookieName];
-    const sessionId = req.auth?.sessionId;
-    if (!sessionId || !authService.verifyCsrf(csrfToken, sessionId)) {
-      res.status(403).json({
-        error: {
-          code: 'CSRF_INVALID',
-          message: 'CSRF Token ไม่ถูกต้องหรือหมดอายุแล้ว',
-          fieldErrors: null,
-          requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
-          timestamp: new Date().toISOString(),
-        },
-      });
-      return false;
-    }
-    return true;
-  };
+  const csrfMiddleware = authService
+    ? createCsrfMiddleware(authService)
+    : (_req: Request, _res: Response, next: NextFunction) => next();
 
   const getDormitoryId = (req: Request): string => {
     const context = (req as any).dormitoryContext || resolveAuthoritativeDormitoryContext(req);
@@ -83,6 +53,43 @@ export function createLineOaRoutes(
     }
     next();
   };
+
+  const requireOwnerRole = (req: Request, res: Response, next: NextFunction) => {
+    const context = (req as any).dormitoryContext || (req.auth as any);
+    const roleCode = context?.roleCode || context?.role || context?.memberships?.[0]?.roleCode;
+    const permissions: string[] = context?.permissions || context?.memberships?.[0]?.permissions || context?.memberships?.[0]?.role?.permissions || [];
+    const isOwner = roleCode === 'OWNER' || permissions.includes('*') || permissions.includes('line_oa:manage');
+    if (!isOwner) {
+      return res.status(403).json({
+        error: {
+          code: 'FORBIDDEN',
+          message: 'การจัดการ LINE OA อนุญาตเฉพาะเจ้าของหอพักเท่านั้น (OWNER role required)',
+          fieldErrors: null,
+          requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+          timestamp: new Date().toISOString(),
+        },
+      });
+    }
+    next();
+  };
+
+  const authGuard = (permission: string) => [
+    requireSession,
+    resolveAuthoritativeDormitoryContext,
+    requireDormitoryPermission(permission),
+    verifyDormitoryMatch,
+    requireOwnerRole,
+  ];
+
+  const mutationGuard = (permission: string) => [
+    requireSession,
+    resolveAuthoritativeDormitoryContext,
+    requireDormitoryPermission(permission),
+    requireDormitoryWriteEntitlement,
+    csrfMiddleware,
+    verifyDormitoryMatch,
+    requireOwnerRole,
+  ];
 
   // ==========================================================================
   // PUBLIC WEBHOOK (no session required — opaque key + HMAC signature)
@@ -111,13 +118,12 @@ export function createLineOaRoutes(
   );
 
   // ==========================================================================
-  // PROTECTED LINE OA CONFIG
+  // PROTECTED LINE OA CONFIG (OWNER-only)
   // ==========================================================================
 
   protectedRouter.get(
     '/dormitories/:dormId/line-oa/config',
     ...authGuard('line_oa:manage'),
-    verifyDormitoryMatch,
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         const dormId = getDormitoryId(req);
@@ -133,13 +139,39 @@ export function createLineOaRoutes(
   protectedRouter.put(
     '/dormitories/:dormId/line-oa/config',
     ...mutationGuard('line_oa:manage'),
-    verifyDormitoryMatch,
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        if (!verifyCsrf(req, res)) return;
         const dormId = getDormitoryId(req);
         const updated = await lineOaService.updateDormitoryLineConfig(dormId, req.body);
         return res.status(200).json({ success: true, data: updated });
+      } catch (err) {
+        next(err);
+      }
+    }
+  );
+
+  protectedRouter.post(
+    '/dormitories/:dormId/line-oa/rotate-webhook',
+    ...mutationGuard('line_oa:manage'),
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const dormId = getDormitoryId(req);
+        const updated = await lineOaService.rotateWebhookKey(dormId);
+        return res.status(200).json({ success: true, data: updated });
+      } catch (err) {
+        next(err);
+      }
+    }
+  );
+
+  protectedRouter.delete(
+    '/dormitories/:dormId/line-oa/disconnect',
+    ...mutationGuard('line_oa:manage'),
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const dormId = getDormitoryId(req);
+        const disconnected = await lineOaService.disconnectLineConfig(dormId);
+        return res.status(200).json({ success: true, data: disconnected });
       } catch (err) {
         next(err);
       }

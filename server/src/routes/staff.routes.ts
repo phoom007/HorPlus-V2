@@ -1,7 +1,7 @@
 /**
- * Staff & Access Grant Routes (Task-009 Checkpoint 1C)
+ * Staff & Access Grant Routes (Task-009 Checkpoint 1D)
  * Public: bearer redemption & CSRF credential issuance
- * Protected: staff management, grant CRUD, copy link, retry-delivery
+ * Protected: staff management, grant CRUD, copy link, retry-delivery (OWNER-only)
  * @license Apache-2.0
  */
 
@@ -14,6 +14,7 @@ import { LinePlatformAdapter } from '../services/line-platform-adapter.js';
 import { requireDormitoryPermission } from '../middleware/permission.js';
 import { requireDormitoryWriteEntitlement } from '../middleware/entitlement.js';
 import { resolveAuthoritativeDormitoryContext } from '../middleware/dormitory-context.js';
+import { createCsrfMiddleware } from '../middleware/csrf.js';
 import { AppError } from '../types/index.js';
 import { getEnv } from '../config/env.js';
 
@@ -31,41 +32,10 @@ export function createStaffRoutes(
     ? authService.requireAuth()
     : (_req: Request, _res: Response, next: NextFunction) => next();
 
-  const authGuard = (permission: string) => [
-    requireSession,
-    requireDormitoryPermission(permission),
-  ];
+  const csrfMiddleware = authService
+    ? createCsrfMiddleware(authService)
+    : (_req: Request, _res: Response, next: NextFunction) => next();
 
-  const mutationGuard = (permission: string) => [
-    requireSession,
-    requireDormitoryPermission(permission),
-    requireDormitoryWriteEntitlement,
-  ];
-
-  // ---------- CSRF helper ----------
-  const verifyCsrf = (req: Request, res: Response): boolean => {
-    if (!authService) return true;
-    const env = getEnv();
-    const csrfHeaderName = 'x-csrf-token';
-    const csrfCookieName = env.CSRF_COOKIE_NAME || 'horplus_csrf';
-    const csrfToken = (req.headers[csrfHeaderName] as string) || req.cookies?.[csrfCookieName];
-    const sessionId = req.auth?.sessionId;
-    if (!sessionId || !authService.verifyCsrf(csrfToken, sessionId)) {
-      res.status(403).json({
-        error: {
-          code: 'CSRF_INVALID',
-          message: 'CSRF Token ไม่ถูกต้องหรือหมดอายุแล้ว',
-          fieldErrors: null,
-          requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
-          timestamp: new Date().toISOString(),
-        },
-      });
-      return false;
-    }
-    return true;
-  };
-
-  // ---------- Dormitory context resolver & route mismatch validator ----------
   const getDormitoryId = (req: Request): string => {
     const context = (req as any).dormitoryContext || resolveAuthoritativeDormitoryContext(req);
     return context.dormitoryId;
@@ -88,6 +58,43 @@ export function createStaffRoutes(
     next();
   };
 
+  const requireOwnerRole = (req: Request, res: Response, next: NextFunction) => {
+    const context = (req as any).dormitoryContext || (req.auth as any);
+    const roleCode = context?.roleCode || context?.role || context?.memberships?.[0]?.roleCode;
+    const permissions: string[] = context?.permissions || context?.memberships?.[0]?.permissions || context?.memberships?.[0]?.role?.permissions || [];
+    const isOwner = roleCode === 'OWNER' || permissions.includes('*') || permissions.includes('staff:manage');
+    if (!isOwner) {
+      return res.status(403).json({
+        error: {
+          code: 'FORBIDDEN',
+          message: 'การจัดการพนักงานและ LINE OA อนุญาตเฉพาะเจ้าของหอพักเท่านั้น (OWNER role required)',
+          fieldErrors: null,
+          requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+          timestamp: new Date().toISOString(),
+        },
+      });
+    }
+    next();
+  };
+
+  const authGuard = (permission: string) => [
+    requireSession,
+    resolveAuthoritativeDormitoryContext,
+    requireDormitoryPermission(permission),
+    verifyDormitoryMatch,
+    requireOwnerRole,
+  ];
+
+  const mutationGuard = (permission: string) => [
+    requireSession,
+    resolveAuthoritativeDormitoryContext,
+    requireDormitoryPermission(permission),
+    requireDormitoryWriteEntitlement,
+    csrfMiddleware,
+    verifyDormitoryMatch,
+    requireOwnerRole,
+  ];
+
   // ==========================================================================
   // PUBLIC BEARER REDEMPTION (no session required)
   // ==========================================================================
@@ -109,33 +116,33 @@ export function createStaffRoutes(
       const result = await grantService.redeemAccessGrant(token, userAgentHash, ipMetadata);
       const env = getEnv();
 
-      // Issue Session Cookie
+      // Issue Session Cookie as HttpOnly
       res.cookie(env.SESSION_COOKIE_NAME, result.sessionToken, {
         httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax',
+        secure: env.COOKIE_SECURE ?? (process.env.NODE_ENV === 'production'),
+        sameSite: env.COOKIE_SAME_SITE || 'lax',
         path: '/',
-        maxAge: 30 * 24 * 60 * 60 * 1000,
+        maxAge: env.SESSION_TTL_SECONDS * 1000,
       });
 
       // Issue Canonical CSRF Cookie
       res.cookie(env.CSRF_COOKIE_NAME, result.csrfToken, {
         httpOnly: false,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax',
+        secure: env.COOKIE_SECURE ?? (process.env.NODE_ENV === 'production'),
+        sameSite: env.COOKIE_SAME_SITE || 'lax',
         path: '/',
-        maxAge: 30 * 24 * 60 * 60 * 1000,
+        maxAge: env.SESSION_TTL_SECONDS * 1000,
       });
 
       res.setHeader('Cache-Control', 'no-store');
       res.setHeader('Referrer-Policy', 'no-referrer');
 
+      // Return ONLY safe grant display profile & csrfToken (NO sessionToken or rawSessionId in JSON)
       return res.status(200).json({
         success: true,
         data: {
-          sessionToken: result.sessionToken,
-          csrfToken: result.csrfToken,
           grant: result.grant,
+          csrfToken: result.csrfToken,
         },
       });
     } catch (err) {
@@ -144,7 +151,7 @@ export function createStaffRoutes(
   });
 
   // ==========================================================================
-  // PROTECTED STAFF MANAGEMENT API
+  // PROTECTED STAFF MANAGEMENT API (OWNER-only)
   // ==========================================================================
 
   /**
@@ -153,7 +160,6 @@ export function createStaffRoutes(
   protectedRouter.get(
     '/properties/:id/staff',
     ...authGuard('staff:read'),
-    verifyDormitoryMatch,
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         const dormitoryId = getDormitoryId(req);
@@ -172,7 +178,6 @@ export function createStaffRoutes(
   protectedRouter.get(
     '/properties/:id/line-friends',
     ...authGuard('staff:read'),
-    verifyDormitoryMatch,
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         const dormitoryId = getDormitoryId(req);
@@ -191,7 +196,6 @@ export function createStaffRoutes(
   protectedRouter.get(
     '/properties/:id/access-grants/:grantId/copy-link',
     ...authGuard('staff:read'),
-    verifyDormitoryMatch,
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         const dormitoryId = getDormitoryId(req);
@@ -211,10 +215,8 @@ export function createStaffRoutes(
   protectedRouter.post(
     '/properties/:id/access-grants',
     ...mutationGuard('staff:write'),
-    verifyDormitoryMatch,
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        if (!verifyCsrf(req, res)) return;
         const dormitoryId = getDormitoryId(req);
         const { lineFriendId, roleCode } = req.body;
 
@@ -242,10 +244,8 @@ export function createStaffRoutes(
   protectedRouter.patch(
     '/properties/:id/access-grants/:grantId/role',
     ...mutationGuard('staff:write'),
-    verifyDormitoryMatch,
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        if (!verifyCsrf(req, res)) return;
         const dormitoryId = getDormitoryId(req);
         const { grantId } = req.params;
         const { roleCode } = req.body;
@@ -274,10 +274,8 @@ export function createStaffRoutes(
   protectedRouter.delete(
     '/properties/:id/access-grants/:grantId',
     ...mutationGuard('staff:write'),
-    verifyDormitoryMatch,
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        if (!verifyCsrf(req, res)) return;
         const dormitoryId = getDormitoryId(req);
         const { grantId } = req.params;
         const revokedByPrincipal = req.auth ? `usr_${req.auth.userId}` : 'usr_owner';
@@ -303,10 +301,8 @@ export function createStaffRoutes(
   protectedRouter.post(
     '/properties/:id/access-grants/:grantId/retry-delivery',
     ...mutationGuard('staff:write'),
-    verifyDormitoryMatch,
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        if (!verifyCsrf(req, res)) return;
         const dormitoryId = getDormitoryId(req);
         const { grantId } = req.params;
 
