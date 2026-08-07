@@ -1,5 +1,7 @@
 /**
- * Per-Dormitory LINE OA Configuration & Webhook Service (SECURITY DEFINER Resolver & Concurrency Dedupe)
+ * Per-Dormitory LINE OA Configuration & Webhook Service
+ * SECURITY DEFINER resolver returns minimal routing identity.
+ * Full config read under RLS after context is set.
  * @license Apache-2.0
  */
 
@@ -42,7 +44,8 @@ export class LineOaService {
           hasAccessToken: false,
           lineOaId: null,
           channelId: null,
-          lastVerifiedAt: null,
+          accessTokenVerifiedAt: null,
+          webhookVerifiedAt: null,
           webhookUrl: null
         };
       }
@@ -63,14 +66,17 @@ export class LineOaService {
         hasAccessToken: !!config.channelAccessTokenEncrypted,
         lineOaId: config.lineOaId,
         channelId: config.channelId,
-        lastVerifiedAt: config.lastVerifiedAt,
+        accessTokenVerifiedAt: config.accessTokenVerifiedAt,
+        webhookVerifiedAt: config.webhookVerifiedAt,
         webhookUrl
       };
     });
   }
 
   /**
-   * Update or configure LINE OA credentials (Encrypted at rest & Verified via LineAdapter)
+   * Update or configure LINE OA credentials (Encrypted at rest)
+   * Access token verified via GET /v2/bot/info.
+   * webhookVerifiedAt is NOT set here — only set when a real webhook passes HMAC.
    */
   async updateDormitoryLineConfig(
     dormitoryId: string,
@@ -105,20 +111,23 @@ export class LineOaService {
         ? encryptText(data.channelAccessToken)
         : existing?.channelAccessTokenEncrypted;
 
-      const hasCredentials = !!(channelSecretEncrypted && channelAccessTokenEncrypted);
-      let verifiedSuccess = false;
-
-      if (hasCredentials) {
-        const secret = data.channelSecret || (existing?.channelSecretEncrypted ? decryptText(existing.channelSecretEncrypted) : undefined);
-        const token = data.channelAccessToken || (existing?.channelAccessTokenEncrypted ? decryptText(existing.channelAccessTokenEncrypted) : undefined);
-
-        verifiedSuccess = await this.lineAdapter.verifyCredentials({ channelSecret: secret, channelAccessToken: token });
-        if (!verifiedSuccess) {
-          throw new AppError('LINE OA credential verification failed. Please check Channel Secret and Access Token.', 400, 'LINE_VERIFICATION_FAILED');
+      // Verify access token via GET /v2/bot/info if a new token is provided
+      let accessTokenVerifiedAt = existing?.accessTokenVerifiedAt || null;
+      if (data.channelAccessToken) {
+        const verifyResult = await this.lineAdapter.verifyAccessToken(data.channelAccessToken);
+        if (!verifyResult.verified) {
+          throw new AppError(
+            'LINE Channel Access Token verification failed. GET /v2/bot/info returned non-OK.',
+            400,
+            'LINE_ACCESS_TOKEN_VERIFICATION_FAILED'
+          );
         }
+        accessTokenVerifiedAt = new Date();
       }
 
-      const isConnected = hasCredentials && verifiedSuccess;
+      const hasCredentials = !!(channelSecretEncrypted && channelAccessTokenEncrypted);
+      // isConnected = has both credentials AND access token is verified
+      const isConnected = hasCredentials && !!accessTokenVerifiedAt;
 
       const updated = await tx.dormitoryLineConfig.upsert({
         where: { dormitoryId },
@@ -130,7 +139,8 @@ export class LineOaService {
           webhookKeyHash: webhookKeyHash!,
           webhookKeyEncrypted: webhookKeyEncrypted!,
           isConnected,
-          lastVerifiedAt: isConnected ? new Date() : existing?.lastVerifiedAt
+          accessTokenVerifiedAt,
+          // webhookVerifiedAt is NOT touched here — only set on real webhook HMAC pass
         },
         create: {
           dormitoryId,
@@ -141,7 +151,8 @@ export class LineOaService {
           webhookKeyHash: webhookKeyHash!,
           webhookKeyEncrypted: webhookKeyEncrypted!,
           isConnected,
-          lastVerifiedAt: isConnected ? new Date() : null
+          accessTokenVerifiedAt,
+          webhookVerifiedAt: null,
         }
       });
 
@@ -156,7 +167,8 @@ export class LineOaService {
             channelId: updated.channelId,
             hasChannelSecret: !!updated.channelSecretEncrypted,
             hasAccessToken: !!updated.channelAccessTokenEncrypted,
-            isConnected: updated.isConnected
+            isConnected: updated.isConnected,
+            accessTokenVerified: !!updated.accessTokenVerifiedAt
           }
         }
       });
@@ -177,7 +189,8 @@ export class LineOaService {
         hasAccessToken: !!updated.channelAccessTokenEncrypted,
         lineOaId: updated.lineOaId,
         channelId: updated.channelId,
-        lastVerifiedAt: updated.lastVerifiedAt,
+        accessTokenVerifiedAt: updated.accessTokenVerifiedAt,
+        webhookVerifiedAt: updated.webhookVerifiedAt,
         webhookUrl
       };
     });
@@ -201,7 +214,8 @@ export class LineOaService {
           hasAccessToken: false,
           lineOaId: null,
           channelId: null,
-          lastVerifiedAt: null,
+          accessTokenVerifiedAt: null,
+          webhookVerifiedAt: null,
           webhookUrl: null
         };
       }
@@ -227,7 +241,8 @@ export class LineOaService {
         hasAccessToken: !!existing.channelAccessTokenEncrypted,
         lineOaId: existing.lineOaId,
         channelId: existing.channelId,
-        lastVerifiedAt: existing.lastVerifiedAt,
+        accessTokenVerifiedAt: existing.accessTokenVerifiedAt,
+        webhookVerifiedAt: existing.webhookVerifiedAt,
         webhookUrl: null
       };
     });
@@ -246,7 +261,9 @@ export class LineOaService {
         where: { dormitoryId },
         data: {
           webhookKeyHash: opaque.keyHash,
-          webhookKeyEncrypted: opaque.keyEncrypted
+          webhookKeyEncrypted: opaque.keyEncrypted,
+          // Rotating webhook key invalidates webhook verification
+          webhookVerifiedAt: null
         }
       });
 
@@ -276,59 +293,118 @@ export class LineOaService {
         hasAccessToken: !!updated.channelAccessTokenEncrypted,
         lineOaId: updated.lineOaId,
         channelId: updated.channelId,
-        lastVerifiedAt: updated.lastVerifiedAt,
+        accessTokenVerifiedAt: updated.accessTokenVerifiedAt,
+        webhookVerifiedAt: updated.webhookVerifiedAt,
         webhookUrl
       };
     });
   }
 
   /**
-   * Process raw LINE Webhook payload via SECURITY DEFINER resolver, RLS context & dedupe concurrency
+   * Resolve per-dormitory decrypted Channel Access Token (internal use for push/profile).
+   * NEVER expose or log the returned value.
+   */
+  async resolveAccessToken(dormitoryId: string): Promise<string | null> {
+    return await this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormitoryId}, true)`;
+      const config = await tx.dormitoryLineConfig.findUnique({
+        where: { dormitoryId },
+        select: { channelAccessTokenEncrypted: true, isConnected: true }
+      });
+      if (!config || !config.isConnected || !config.channelAccessTokenEncrypted) return null;
+      try {
+        return decryptText(config.channelAccessTokenEncrypted);
+      } catch {
+        return null;
+      }
+    });
+  }
+
+  /**
+   * Process raw LINE Webhook payload.
+   * Flow: hash key -> minimal SECURITY DEFINER lookup -> set RLS context ->
+   *       read full config under RLS -> verify HMAC -> process events.
    */
   async processWebhookEvent(rawKey: string, bodyBuffer: Buffer, signatureHeader: string) {
     const keyHash = hashToken(rawKey);
 
-    // Call narrow SECURITY DEFINER resolver function (fixed search_path)
+    // 1. Narrow SECURITY DEFINER lookup — returns ONLY routing identity
     const configs = await this.prisma.$queryRaw<any[]>`
-      SELECT id, dormitory_id, channel_secret_encrypted, is_connected
+      SELECT config_id, dormitory_id
       FROM public.resolve_line_webhook_config(${keyHash})
     `;
 
-    if (!configs || configs.length === 0 || !configs[0].channel_secret_encrypted) {
+    if (!configs || configs.length === 0) {
       throw new AppError('LINE webhook endpoint configuration not found', 404, 'WEBHOOK_CONFIG_NOT_FOUND');
     }
 
-    const resolvedConfig = configs[0];
-    const channelSecret = decryptText(resolvedConfig.channel_secret_encrypted);
+    const resolvedDormitoryId = configs[0].dormitory_id as string;
 
-    // Signature Verification
-    const isValid = verifyLineSignature(bodyBuffer, channelSecret, signatureHeader);
-    if (!isValid) {
-      throw new AppError('Invalid x-line-signature header', 401, 'INVALID_SIGNATURE');
-    }
+    // 2. Begin transaction with RLS context to read full config
+    return await this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${resolvedDormitoryId}, true)`;
 
-    let payload: any = {};
-    try {
-      payload = JSON.parse(bodyBuffer.toString('utf8'));
-    } catch (err) {
-      throw new AppError('Failed to parse webhook JSON body', 400, 'INVALID_JSON_BODY');
-    }
+      // 3. Read full config under normal RLS
+      const fullConfig = await tx.dormitoryLineConfig.findUnique({
+        where: { dormitoryId: resolvedDormitoryId },
+        select: {
+          channelSecretEncrypted: true,
+          channelAccessTokenEncrypted: true,
+          isConnected: true,
+          webhookVerifiedAt: true,
+          id: true
+        }
+      });
 
-    const events = payload.events || [];
-    let processedCount = 0;
-    let deduplicatedCount = 0;
+      if (!fullConfig || !fullConfig.channelSecretEncrypted) {
+        throw new AppError('LINE webhook config credentials not found', 404, 'WEBHOOK_CONFIG_NOT_FOUND');
+      }
 
-    for (const event of events) {
-      const eventId = event.webhookEventId || event.eventId || `${event.type}_${event.timestamp}_${event.source?.userId}`;
+      // 4. Decrypt channel secret and verify HMAC signature
+      const channelSecret = decryptText(fullConfig.channelSecretEncrypted);
+      const isValid = verifyLineSignature(bodyBuffer, channelSecret, signatureHeader);
+      if (!isValid) {
+        throw new AppError('Invalid x-line-signature header', 401, 'INVALID_SIGNATURE');
+      }
 
-      // Deduplication check via database transaction with RLS context
+      // 5. Set webhookVerifiedAt on first successful HMAC verification
+      if (!fullConfig.webhookVerifiedAt) {
+        await tx.dormitoryLineConfig.update({
+          where: { dormitoryId: resolvedDormitoryId },
+          data: { webhookVerifiedAt: new Date() }
+        });
+      }
+
+      // 6. Decrypt access token for profile lookups
+      let accessToken: string | null = null;
+      if (fullConfig.channelAccessTokenEncrypted) {
+        try {
+          accessToken = decryptText(fullConfig.channelAccessTokenEncrypted);
+        } catch {
+          accessToken = null;
+        }
+      }
+
+      // 7. Parse payload
+      let payload: any = {};
       try {
-        await this.prisma.$transaction(async (tx) => {
-          await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${resolvedConfig.dormitory_id}, true)`;
+        payload = JSON.parse(bodyBuffer.toString('utf8'));
+      } catch (err) {
+        throw new AppError('Failed to parse webhook JSON body', 400, 'INVALID_JSON_BODY');
+      }
 
+      const events = payload.events || [];
+      let processedCount = 0;
+      let deduplicatedCount = 0;
+
+      for (const event of events) {
+        const eventId = event.webhookEventId || event.eventId || `${event.type}_${event.timestamp}_${event.source?.userId}`;
+
+        try {
+          // Deduplicate via unique constraint on webhook_event_id
           const receipt = await tx.lineWebhookEventReceipt.create({
             data: {
-              dormitoryId: resolvedConfig.dormitory_id,
+              dormitoryId: resolvedDormitoryId,
               webhookEventId: eventId,
               eventType: event.type || 'unknown',
               status: 'processing',
@@ -338,62 +414,42 @@ export class LineOaService {
           });
 
           const lineUserId = event.source?.userId;
-          if (lineUserId) {
-            let profile = await this.lineAdapter.getProfile(lineUserId).catch(() => null);
+          if (lineUserId && accessToken) {
+            let profile = await this.lineAdapter.getProfile(lineUserId, accessToken).catch(() => null);
             const displayName = profile?.displayName || `LINE User (${lineUserId.slice(-4)})`;
             const pictureUrl = profile?.pictureUrl || null;
 
             if (event.type === 'follow') {
               await this.friendService.upsertFriendFromWebhook(
-                resolvedConfig.dormitory_id,
-                lineUserId,
-                displayName,
-                pictureUrl,
-                'FOLLOWING'
+                resolvedDormitoryId, lineUserId, displayName, pictureUrl, 'FOLLOWING'
               );
             } else if (event.type === 'unfollow') {
               await this.friendService.upsertFriendFromWebhook(
-                resolvedConfig.dormitory_id,
-                lineUserId,
-                displayName,
-                pictureUrl,
-                'UNFOLLOWED'
+                resolvedDormitoryId, lineUserId, displayName, pictureUrl, 'UNFOLLOWED'
               );
             } else if (event.type === 'message' || event.type === 'postback') {
               await this.friendService.upsertFriendFromWebhook(
-                resolvedConfig.dormitory_id,
-                lineUserId,
-                displayName,
-                pictureUrl,
-                'FOLLOWING'
+                resolvedDormitoryId, lineUserId, displayName, pictureUrl, 'FOLLOWING'
               );
             }
           }
 
-          // Mark receipt completed
           await tx.lineWebhookEventReceipt.update({
             where: { id: receipt.id },
-            data: {
-              status: 'processed',
-              processedAt: new Date()
-            }
+            data: { status: 'processed', processedAt: new Date() }
           });
-        });
 
-        processedCount++;
-      } catch (err: any) {
-        if (err.code === 'P2002' || err.message?.includes('unique constraint')) {
-          deduplicatedCount++;
-          continue;
+          processedCount++;
+        } catch (err: any) {
+          if (err.code === 'P2002' || err.message?.includes('unique constraint')) {
+            deduplicatedCount++;
+            continue;
+          }
+          throw err;
         }
-        throw err;
       }
-    }
 
-    return {
-      success: true,
-      processedCount,
-      deduplicatedCount
-    };
+      return { success: true, processedCount, deduplicatedCount };
+    });
   }
 }

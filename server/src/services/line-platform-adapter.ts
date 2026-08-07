@@ -1,5 +1,5 @@
 /**
- * LINE Platform Adapter (Task-009 Verification, Profile & Push Interface)
+ * LINE Platform Adapter (Task-009 — Verification, Profile & Push Interface)
  * @license Apache-2.0
  */
 
@@ -8,42 +8,205 @@ export interface LineUserProfile {
   pictureUrl?: string | null;
 }
 
-export interface LinePlatformAdapter {
-  verifyCredentials(credentials: { channelSecret?: string; channelAccessToken?: string }): Promise<boolean>;
-  getProfile(lineUserId: string, accessToken?: string): Promise<LineUserProfile | null>;
-  pushMessage(toLineUserId: string, flexMessage: any, accessToken?: string): Promise<{ success: boolean; messageId?: string }>;
+/** Discriminated push result for idempotent delivery finalization */
+export type LinePushResult =
+  | { outcome: 'ACCEPTED'; messageId?: string }
+  | { outcome: 'ALREADY_ACCEPTED'; messageId?: string }
+  | { outcome: 'DEFINITIVE_FAILURE'; errorCode: string; safeMessage: string }
+  | { outcome: 'RETRYABLE_UNKNOWN'; errorCode: string; safeMessage: string };
+
+export interface LineBotInfo {
+  userId: string;
+  basicId: string;
+  displayName: string;
+  chatMode: string;
 }
 
-export class MockLinePlatformAdapter implements LinePlatformAdapter {
-  public pushCalls: Array<{ toLineUserId: string; flexMessage: any }> = [];
+export interface LinePlatformAdapter {
+  /**
+   * Verify Channel Access Token by calling GET /v2/bot/info.
+   * Does NOT verify Channel Secret (webhook verification does that).
+   */
+  verifyAccessToken(channelAccessToken: string): Promise<{ verified: boolean; botInfo?: LineBotInfo }>;
 
-  async verifyCredentials(credentials: { channelSecret?: string; channelAccessToken?: string }): Promise<boolean> {
-    if (!credentials.channelSecret || !credentials.channelAccessToken) {
-      return false;
+  /** Fetch LINE user profile via GET /v2/bot/profile/{userId} */
+  getProfile(lineUserId: string, accessToken: string): Promise<LineUserProfile | null>;
+
+  /**
+   * Push a message via POST /v2/bot/message/push.
+   * Requires X-Line-Retry-Key header for idempotent delivery.
+   */
+  pushMessage(
+    toLineUserId: string,
+    flexMessage: any,
+    accessToken: string,
+    retryKey: string
+  ): Promise<LinePushResult>;
+}
+
+/**
+ * Production HTTP adapter calling real LINE Messaging API endpoints.
+ * Never logs Channel Secret, Access Token, raw LINE User ID, or bearer tokens.
+ */
+export class HttpLinePlatformAdapter implements LinePlatformAdapter {
+  private readonly baseUrl = 'https://api.line.me';
+
+  async verifyAccessToken(channelAccessToken: string): Promise<{ verified: boolean; botInfo?: LineBotInfo }> {
+    try {
+      const res = await fetch(`${this.baseUrl}/v2/bot/info`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${channelAccessToken}`,
+        },
+      });
+
+      if (!res.ok) {
+        console.warn('LINE verifyAccessToken: non-OK status', { status: res.status });
+        return { verified: false };
+      }
+
+      const body = await res.json() as any;
+      return {
+        verified: true,
+        botInfo: {
+          userId: body.userId || '',
+          basicId: body.basicId || '',
+          displayName: body.displayName || '',
+          chatMode: body.chatMode || '',
+        },
+      };
+    } catch (err: any) {
+      console.warn('LINE verifyAccessToken: network error', { errorCode: err.code || 'UNKNOWN' });
+      return { verified: false };
     }
-    if (credentials.channelSecret === 'invalid_secret' || credentials.channelAccessToken === 'invalid_token') {
-      return false;
-    }
-    return credentials.channelSecret.length >= 8 && credentials.channelAccessToken.length >= 8;
   }
 
-  async getProfile(lineUserId: string, accessToken?: string): Promise<LineUserProfile | null> {
+  async getProfile(lineUserId: string, accessToken: string): Promise<LineUserProfile | null> {
+    try {
+      const res = await fetch(`${this.baseUrl}/v2/bot/profile/${lineUserId}`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+        },
+      });
+
+      if (!res.ok) {
+        console.warn('LINE getProfile: non-OK status', { status: res.status });
+        return null;
+      }
+
+      const body = await res.json() as any;
+      return {
+        displayName: body.displayName || 'LINE User',
+        pictureUrl: body.pictureUrl || null,
+      };
+    } catch (err: any) {
+      console.warn('LINE getProfile: network error', { errorCode: err.code || 'UNKNOWN' });
+      return null;
+    }
+  }
+
+  async pushMessage(
+    toLineUserId: string,
+    flexMessage: any,
+    accessToken: string,
+    retryKey: string
+  ): Promise<LinePushResult> {
+    try {
+      const res = await fetch(`${this.baseUrl}/v2/bot/message/push`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${accessToken}`,
+          'X-Line-Retry-Key': retryKey,
+        },
+        body: JSON.stringify({
+          to: toLineUserId,
+          messages: [flexMessage],
+        }),
+      });
+
+      if (res.ok) {
+        const body = await res.json().catch(() => ({})) as any;
+        return { outcome: 'ACCEPTED', messageId: body.sentMessages?.[0]?.id };
+      }
+
+      // 409 with same retry key = already accepted (idempotent replay)
+      if (res.status === 409) {
+        return { outcome: 'ALREADY_ACCEPTED' };
+      }
+
+      // 4xx (non-409) = definitive failure
+      if (res.status >= 400 && res.status < 500) {
+        return {
+          outcome: 'DEFINITIVE_FAILURE',
+          errorCode: `HTTP_${res.status}`,
+          safeMessage: `LINE API returned ${res.status}`,
+        };
+      }
+
+      // 5xx = retryable
+      return {
+        outcome: 'RETRYABLE_UNKNOWN',
+        errorCode: `HTTP_${res.status}`,
+        safeMessage: `LINE API returned ${res.status}`,
+      };
+    } catch (err: any) {
+      // Network timeout / DNS failure = retryable unknown
+      return {
+        outcome: 'RETRYABLE_UNKNOWN',
+        errorCode: err.code || 'NETWORK_ERROR',
+        safeMessage: 'Network error contacting LINE API',
+      };
+    }
+  }
+}
+
+/**
+ * Test-only mock adapter. Never used in production/dev/staging.
+ * Must be explicitly injected in test constructors.
+ */
+export class MockLinePlatformAdapter implements LinePlatformAdapter {
+  public pushCalls: Array<{ toLineUserId: string; flexMessage: any; retryKey: string }> = [];
+  public profileCalls: Array<{ lineUserId: string; accessToken: string }> = [];
+  public verifyAccessTokenCalls: Array<{ accessToken: string }> = [];
+
+  async verifyAccessToken(channelAccessToken: string): Promise<{ verified: boolean; botInfo?: LineBotInfo }> {
+    this.verifyAccessTokenCalls.push({ accessToken: channelAccessToken });
+    if (!channelAccessToken || channelAccessToken === 'invalid_token' || channelAccessToken.length < 8) {
+      return { verified: false };
+    }
+    return {
+      verified: true,
+      botInfo: {
+        userId: 'U_BOT_MOCK',
+        basicId: '@mock_bot',
+        displayName: 'Mock Bot',
+        chatMode: 'chat',
+      },
+    };
+  }
+
+  async getProfile(lineUserId: string, accessToken: string): Promise<LineUserProfile | null> {
+    this.profileCalls.push({ lineUserId, accessToken });
     if (!lineUserId) return null;
     const suffix = lineUserId.slice(-4);
     return {
       displayName: `LINE User (${suffix})`,
-      pictureUrl: `https://profile.line-scdn.net/mock_${suffix}.png`
+      pictureUrl: `https://profile.line-scdn.net/mock_${suffix}.png`,
     };
   }
 
-  async pushMessage(toLineUserId: string, flexMessage: any, accessToken?: string): Promise<{ success: boolean; messageId?: string }> {
+  async pushMessage(
+    toLineUserId: string,
+    flexMessage: any,
+    accessToken: string,
+    retryKey: string
+  ): Promise<LinePushResult> {
     if (!toLineUserId || !flexMessage) {
-      return { success: false };
+      return { outcome: 'DEFINITIVE_FAILURE', errorCode: 'MISSING_PARAMS', safeMessage: 'Missing required parameters' };
     }
-    this.pushCalls.push({ toLineUserId, flexMessage });
-    return {
-      success: true,
-      messageId: `msg_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`
-    };
+    this.pushCalls.push({ toLineUserId, flexMessage, retryKey });
+    return { outcome: 'ACCEPTED', messageId: `msg_${Date.now()}_${Math.random().toString(36).substring(2, 7)}` };
   }
 }
