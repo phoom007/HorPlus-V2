@@ -92,8 +92,8 @@ export function createApiRouter(deps: AppApiDependencies | AuthenticationService
     ? (deps as AppApiDependencies).lineAdapter!
     : createLinePlatformAdapter();
 
-  const staffRoutes = createStaffRoutes(prisma, isDeps ? (deps as AppApiDependencies).authService : undefined, lineAdapter);
-  const lineOaRoutes = createLineOaRoutes(prisma, isDeps ? (deps as AppApiDependencies).authService : undefined, lineAdapter);
+  const staffRoutes = createStaffRoutes(prisma, authService, lineAdapter);
+  const lineOaRoutes = createLineOaRoutes(prisma, authService, lineAdapter);
   router.use('/', staffRoutes.publicRouter);
   router.use('/', lineOaRoutes.publicRouter);
 

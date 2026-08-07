@@ -1,5 +1,5 @@
 /**
- * Staff & Access Grant Routes (Task-009 Checkpoint 1D)
+ * Staff & Access Grant Routes (Task-009 Checkpoint 1E)
  * Public: bearer redemption & CSRF credential issuance
  * Protected: staff management, grant CRUD, copy link, retry-delivery (OWNER-only)
  * @license Apache-2.0
@@ -20,21 +20,20 @@ import { getEnv } from '../config/env.js';
 
 export function createStaffRoutes(
   prisma: PrismaClient,
-  authService?: AuthenticationService,
+  authService: AuthenticationService,
   lineAdapter?: LinePlatformAdapter
 ) {
+  if (!authService) {
+    throw new Error('AuthenticationService is required for protected staff routes construction');
+  }
+
   const publicRouter = Router();
   const protectedRouter = Router();
   const grantService = new AccessGrantService(prisma, lineAdapter);
   const friendService = new LineFriendService(prisma);
 
-  const requireSession = authService
-    ? authService.requireAuth()
-    : (_req: Request, _res: Response, next: NextFunction) => next();
-
-  const csrfMiddleware = authService
-    ? createCsrfMiddleware(authService)
-    : (_req: Request, _res: Response, next: NextFunction) => next();
+  const requireSession = authService.requireAuth();
+  const csrfMiddleware = createCsrfMiddleware(authService);
 
   const getDormitoryId = (req: Request): string => {
     const context = (req as any).dormitoryContext || resolveAuthoritativeDormitoryContext(req);
@@ -61,9 +60,7 @@ export function createStaffRoutes(
   const requireOwnerRole = (req: Request, res: Response, next: NextFunction) => {
     const context = (req as any).dormitoryContext || (req.auth as any);
     const roleCode = context?.roleCode || context?.role || context?.memberships?.[0]?.roleCode;
-    const permissions: string[] = context?.permissions || context?.memberships?.[0]?.permissions || context?.memberships?.[0]?.role?.permissions || [];
-    const isOwner = roleCode === 'OWNER' || permissions.includes('*') || permissions.includes('staff:manage');
-    if (!isOwner) {
+    if (roleCode !== 'OWNER') {
       return res.status(403).json({
         error: {
           code: 'FORBIDDEN',

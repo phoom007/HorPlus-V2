@@ -44,7 +44,8 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3000
-      DATABASE_URL: postgresql://horplus:horplus_dev_password@postgres:5432/horplus?schema=public
+      DATABASE_URL: postgresql://horplus_app:horplus_dev_password@postgres:5432/horplus?schema=public
+      DIRECT_URL: postgresql://horplus:horplus_dev_password@postgres:5432/horplus?schema=public
       REDIS_URL: redis://redis:6379
       LOG_LEVEL: info
       CORS_ORIGINS: http://localhost:5173

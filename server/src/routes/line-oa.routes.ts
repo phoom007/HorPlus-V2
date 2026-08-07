@@ -1,5 +1,5 @@
 /**
- * LINE OA Administration & Webhook Routes (Task-009 Checkpoint 1D)
+ * LINE OA Administration & Webhook Routes (Task-009 Checkpoint 1E)
  * Public: webhook ingestion (opaque key + signature verification)
  * Protected: OA config management (OWNER-only)
  * @license Apache-2.0
@@ -17,20 +17,19 @@ import { createCsrfMiddleware } from '../middleware/csrf.js';
 
 export function createLineOaRoutes(
   prisma: PrismaClient,
-  authService?: AuthenticationService,
+  authService: AuthenticationService,
   lineAdapter?: LinePlatformAdapter
 ) {
+  if (!authService) {
+    throw new Error('AuthenticationService is required for protected LINE OA routes construction');
+  }
+
   const publicRouter = Router();
   const protectedRouter = Router();
   const lineOaService = new LineOaService(prisma, lineAdapter);
 
-  const requireSession = authService
-    ? authService.requireAuth()
-    : (_req: Request, _res: Response, next: NextFunction) => next();
-
-  const csrfMiddleware = authService
-    ? createCsrfMiddleware(authService)
-    : (_req: Request, _res: Response, next: NextFunction) => next();
+  const requireSession = authService.requireAuth();
+  const csrfMiddleware = createCsrfMiddleware(authService);
 
   const getDormitoryId = (req: Request): string => {
     const context = (req as any).dormitoryContext || resolveAuthoritativeDormitoryContext(req);
@@ -57,9 +56,7 @@ export function createLineOaRoutes(
   const requireOwnerRole = (req: Request, res: Response, next: NextFunction) => {
     const context = (req as any).dormitoryContext || (req.auth as any);
     const roleCode = context?.roleCode || context?.role || context?.memberships?.[0]?.roleCode;
-    const permissions: string[] = context?.permissions || context?.memberships?.[0]?.permissions || context?.memberships?.[0]?.role?.permissions || [];
-    const isOwner = roleCode === 'OWNER' || permissions.includes('*') || permissions.includes('line_oa:manage');
-    if (!isOwner) {
+    if (roleCode !== 'OWNER') {
       return res.status(403).json({
         error: {
           code: 'FORBIDDEN',

@@ -1,4 +1,4 @@
--- Task-009 Checkpoint 1D: Security Closure, Resolver Ownership & Strict Tenant Isolation
+-- Task-009 Checkpoint 1E: Database Role Separation, True RLS & Security Boundaries
 
 -- 1. Add delivery state & token encryption columns to dormitory_access_grants
 ALTER TABLE "dormitory_access_grants" ADD COLUMN IF NOT EXISTS "token_encrypted" TEXT;
@@ -68,7 +68,25 @@ DO $$ BEGIN
     END IF;
 END $$;
 
--- 7. Enable RLS on all TASK-009 tables
+-- 7. Provision API Runtime Role (horplus_app)
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'horplus_app') THEN
+    CREATE ROLE horplus_app WITH LOGIN PASSWORD 'password' NOSUPERUSER NOBYPASSRLS;
+  ELSE
+    ALTER ROLE horplus_app WITH LOGIN PASSWORD 'password' NOSUPERUSER NOBYPASSRLS;
+  END IF;
+END $$;
+
+-- Grant schema access & DML privileges to runtime role
+GRANT USAGE ON SCHEMA public TO horplus_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO horplus_app;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO horplus_app;
+
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO horplus_app;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO horplus_app;
+
+-- 8. Enable RLS on all TASK-009 tables (FORCE RLS NOT REQUIRED because runtime role is not table owner)
 ALTER TABLE "dormitory_line_friends" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "dormitory_access_grants" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "dormitory_line_configs" ENABLE ROW LEVEL SECURITY;
@@ -76,7 +94,7 @@ ALTER TABLE "line_webhook_event_receipts" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "line_push_usage" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "line_push_delivery_attempts" ENABLE ROW LEVEL SECURITY;
 
--- 8. Pure tenant isolation RLS policies depending ONLY on app.current_dormitory_id (NO GUC bypass)
+-- 9. Pure tenant isolation RLS policies depending ONLY on app.current_dormitory_id (NO GUC bypass)
 DROP POLICY IF EXISTS line_push_usage_isolation ON "line_push_usage";
 CREATE POLICY line_push_usage_isolation ON "line_push_usage"
   USING (dormitory_id = NULLIF(current_setting('app.current_dormitory_id', true), '')::uuid);
@@ -101,7 +119,7 @@ DROP POLICY IF EXISTS line_webhook_event_receipts_isolation ON "line_webhook_eve
 CREATE POLICY line_webhook_event_receipts_isolation ON "line_webhook_event_receipts"
   USING (dormitory_id = NULLIF(current_setting('app.current_dormitory_id', true), '')::uuid);
 
--- 9. Narrow SECURITY DEFINER Resolvers (Minimal Returned Identifiers, Fixed search_path)
+-- 10. Narrow SECURITY DEFINER Resolvers (Minimal Returned Identifiers, Fixed search_path)
 
 -- Webhook config resolver
 DROP FUNCTION IF EXISTS public.resolve_line_webhook_config(text);
@@ -172,16 +190,15 @@ $$;
 -- Delete old resolve_access_grant_friend function (identity material must not be exposed)
 DROP FUNCTION IF EXISTS public.resolve_access_grant_friend(uuid);
 
--- 10. Restrict resolver execute privileges (REVOKE FROM PUBLIC, GRANT TO API RUNTIME ROLE)
+-- 11. Restrict resolver execute privileges (REVOKE FROM PUBLIC, GRANT TO API RUNTIME ROLE)
 REVOKE ALL ON FUNCTION public.resolve_line_webhook_config(text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.resolve_access_grant_token(text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.resolve_access_grant_by_id(uuid) FROM PUBLIC;
 
-DO $$
-BEGIN
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'horplus') THEN
-    GRANT EXECUTE ON FUNCTION public.resolve_line_webhook_config(text) TO horplus;
-    GRANT EXECUTE ON FUNCTION public.resolve_access_grant_token(text) TO horplus;
-    GRANT EXECUTE ON FUNCTION public.resolve_access_grant_by_id(uuid) TO horplus;
-  END IF;
-END $$;
+GRANT EXECUTE ON FUNCTION public.resolve_line_webhook_config(text) TO horplus_app;
+GRANT EXECUTE ON FUNCTION public.resolve_access_grant_token(text) TO horplus_app;
+GRANT EXECUTE ON FUNCTION public.resolve_access_grant_by_id(uuid) TO horplus_app;
+
+GRANT EXECUTE ON FUNCTION public.resolve_line_webhook_config(text) TO horplus;
+GRANT EXECUTE ON FUNCTION public.resolve_access_grant_token(text) TO horplus;
+GRANT EXECUTE ON FUNCTION public.resolve_access_grant_by_id(uuid) TO horplus;

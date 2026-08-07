@@ -35,7 +35,8 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3000
-      DATABASE_URL: postgresql://horplus:password@db:5432/horplus_wave1d_fasttrack_test?schema=public
+      DATABASE_URL: postgresql://horplus_app:password@db:5432/horplus_wave1d_fasttrack_test?schema=public
+      DIRECT_URL: postgresql://horplus:password@db:5432/horplus_wave1d_fasttrack_test?schema=public
       REDIS_URL: redis://redis:6379
       LOG_LEVEL: info
       SESSION_ENCRYPTION_KEY: prod_session_secret_key_32_chars_long_0001
