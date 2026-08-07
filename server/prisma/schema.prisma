@@ -101,6 +101,8 @@ model Dormitory {
   accessGrants               DormitoryAccessGrant[]
   lineConfig                 DormitoryLineConfig?
   lineWebhookReceipts        LineWebhookEventReceipt[]
+  linePushUsage              LinePushUsage[]
+  linePushDeliveryAttempts   LinePushDeliveryAttempt[]
 
   @@map("dormitories")
 }
@@ -1056,6 +1058,7 @@ model SubscriptionPlan {
   name      String               @db.VarChar(100)
   type      SubscriptionPlanType @default(FREE)
   roomLimit Int                  @map("room_limit")
+  messageQuotaMonthly Int @default(30) @map("message_quota_monthly")
   enabled   Boolean              @default(true)
   createdAt DateTime             @default(now()) @map("created_at") @db.Timestamptz()
   updatedAt DateTime             @updatedAt @map("updated_at") @db.Timestamptz()
@@ -1208,12 +1211,17 @@ model DormitoryAccessGrant {
   revokedByPrincipal String?   @map("revoked_by_principal") @db.VarChar(255)
   revokedAt          DateTime? @map("revoked_at") @db.Timestamptz()
   lastRoleChangedAt  DateTime? @map("last_role_changed_at") @db.Timestamptz()
+  lastDeliveryStatus    String?   @map("last_delivery_status") @db.VarChar(50)
+  lastDeliveryAttemptAt DateTime? @map("last_delivery_attempt_at") @db.Timestamptz()
+  lastDeliverySuccessAt DateTime? @map("last_delivery_success_at") @db.Timestamptz()
+  lastDeliveryErrorCode String?   @map("last_delivery_error_code") @db.VarChar(100)
   createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz()
   updatedAt          DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
 
   dormitory  Dormitory           @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
   lineFriend DormitoryLineFriend @relation(fields: [lineFriendId], references: [id], onDelete: Cascade)
   sessions   Session[]
+  deliveryAttempts LinePushDeliveryAttempt[]
 
   @@index([dormitoryId, status])
   @@map("dormitory_access_grants")
@@ -1231,6 +1239,8 @@ model DormitoryLineConfig {
   webhookKeyEncrypted         String?   @map("webhook_key_encrypted") @db.Text
   isConnected                 Boolean   @default(false) @map("is_connected")
   lastVerifiedAt              DateTime? @map("last_verified_at") @db.Timestamptz()
+  accessTokenVerifiedAt DateTime? @map("access_token_verified_at") @db.Timestamptz()
+  webhookVerifiedAt     DateTime? @map("webhook_verified_at") @db.Timestamptz()
   createdAt                   DateTime  @default(now()) @map("created_at") @db.Timestamptz()
   updatedAt                   DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
 
@@ -1253,3 +1263,37 @@ model LineWebhookEventReceipt {
   @@map("line_webhook_event_receipts")
 }
 
+model LinePushUsage {
+  id            String   @id @default(uuid()) @db.Uuid
+  dormitoryId   String   @map("dormitory_id") @db.Uuid
+  periodKey     String   @map("period_key") @db.VarChar(30)
+  successCount  Int      @default(0) @map("success_count")
+  reservedCount Int      @default(0) @map("reserved_count")
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz()
+
+  dormitory Dormitory @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
+
+  @@unique([dormitoryId, periodKey], name: "dormitory_push_period_unique")
+  @@map("line_push_usage")
+}
+
+model LinePushDeliveryAttempt {
+  id            String    @id @default(uuid()) @db.Uuid
+  dormitoryId   String    @map("dormitory_id") @db.Uuid
+  accessGrantId String    @map("access_grant_id") @db.Uuid
+  lineRetryKey  String    @map("line_retry_key") @db.VarChar(36)
+  status        String    @default("RESERVED") @db.VarChar(50)
+  lineMessageId String?   @map("line_message_id") @db.VarChar(255)
+  errorCode     String?   @map("error_code") @db.VarChar(100)
+  attemptedAt   DateTime? @map("attempted_at") @db.Timestamptz()
+  finalizedAt   DateTime? @map("finalized_at") @db.Timestamptz()
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
+
+  dormitory   Dormitory            @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
+  accessGrant DormitoryAccessGrant @relation(fields: [accessGrantId], references: [id], onDelete: Cascade)
+
+  @@index([accessGrantId])
+  @@map("line_push_delivery_attempts")
+}
