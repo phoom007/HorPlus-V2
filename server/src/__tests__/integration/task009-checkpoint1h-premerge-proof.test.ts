@@ -9,7 +9,8 @@
  * 5. Self-contained temporary base audit worktree creation and cleanup (`2cbc3bd5c8e6626ed0ba79ee1a2b6b5049e43acf`)
  * 6. Real Wave-1G base to TASK-009 upgrade proof with data preservation & owner/manager origin migration
  * 7. Fresh final database deployment proof (13/13 migrations applied from scratch, actual DB-vs-datamodel zero diff)
- * 8. Resolver catalog, PUBLIC execute denial, and six-table RLS security posture preservation
+ * 8. Real database datamodel diff fault-injection proof (detects drift with exit code 2)
+ * 9. Resolver catalog, PUBLIC execute denial, and six-table RLS security posture preservation
  *
  * @license Apache-2.0
  */
@@ -76,15 +77,30 @@ function runPrismaCommand(dbName: string, command: string, customSchemaPath?: st
   });
 }
 
-function runPrismaDiffDbVsDatamodel(dbName: string): string {
-  const url = dbUrl(dbName);
-  const env = { ...process.env, DATABASE_URL: url, DIRECT_URL: url };
-  return execSync(`npx prisma migrate diff --from-schema-datasource prisma/schema.prisma --to-schema-datasource prisma/schema.prisma --exit-code`, {
-    cwd: SERVER_DIR,
-    env,
-    encoding: 'utf-8',
-    timeout: 60000,
-  });
+/**
+ * Real database-vs-Prisma-datamodel diff runner with explicit exit code capture.
+ * Uses --from-url <DATABASE_URL> --to-schema-datasource prisma/schema.prisma --exit-code.
+ * Returns { exitCode, output }:
+ *   0 = empty diff (schema matches database)
+ *   2 = non-empty diff (schema drift detected)
+ */
+function runPrismaDiffDbVsDatamodel(dbUrlVal: string): { exitCode: number; output: string } {
+  try {
+    const output = execSync(
+      `npx prisma migrate diff --from-url "${dbUrlVal}" --to-schema-datasource prisma/schema.prisma --exit-code`,
+      {
+        cwd: SERVER_DIR,
+        encoding: 'utf-8',
+        timeout: 60000,
+      }
+    );
+    return { exitCode: 0, output };
+  } catch (err: any) {
+    if (err.status !== undefined) {
+      return { exitCode: err.status, output: err.stdout || err.message || '' };
+    }
+    throw err;
+  }
 }
 
 /**
@@ -468,9 +484,9 @@ describe('TASK-009 Checkpoint 1I — Hermetic Pre-Merge Migration & Bootstrap Pr
         const sub = await client.dormitorySubscription.findFirst({ where: { dormitoryId: seededDormId } });
         expect(sub?.status).toBe('ACTIVE');
 
-        // 6. Assert actual DB-vs-datamodel zero schema drift
-        const diffOutput = runPrismaDiffDbVsDatamodel(BASE_UPGRADE_DB);
-        expect(diffOutput).toBeDefined();
+        // 6. Assert actual DB-vs-datamodel zero schema drift (exit code 0)
+        const diffRes = runPrismaDiffDbVsDatamodel(dbUrl(BASE_UPGRADE_DB));
+        expect(diffRes.exitCode).toBe(0);
       } finally {
         await client.$disconnect();
       }
@@ -478,9 +494,9 @@ describe('TASK-009 Checkpoint 1I — Hermetic Pre-Merge Migration & Bootstrap Pr
   });
 
   // =========================================================================
-  // SECTION 4: Fresh Final Database Deployment Proof (§5, §11)
+  // SECTION 4: Fresh Final Database Deployment & Fault-Injection Proof (§1, §2, §3, §5, §11)
   // =========================================================================
-  describe('Fresh Final Database Deployment Proof', () => {
+  describe('Fresh Final Database Deployment & Schema Drift Proof', () => {
     beforeAll(async () => {
       await createDisposableDb(FRESH_DEPLOY_DB);
       runCanonicalBootstrapScript(FRESH_DEPLOY_DB, 'password');
@@ -502,9 +518,32 @@ describe('TASK-009 Checkpoint 1I — Hermetic Pre-Merge Migration & Bootstrap Pr
       expect(output).not.toContain('modified since they were applied');
     }, 60000);
 
-    it('13. Actual DB-vs-datamodel diff returns exit code 0 (zero schema drift)', () => {
-      const diffOutput = runPrismaDiffDbVsDatamodel(FRESH_DEPLOY_DB);
-      expect(diffOutput).toBeDefined();
+    it('13.1 Disposable fault-injection proof: proves actual DB-vs-datamodel diff detects schema drift with exit code 2', async () => {
+      const driftDbName = `task009_1i_drift_probe_${Date.now()}`;
+      await createDisposableDb(driftDbName);
+      try {
+        runCanonicalBootstrapScript(driftDbName, 'password');
+        runPrismaCommand(driftDbName, 'migrate deploy');
+
+        const client = new PrismaClient({ datasources: { db: { url: dbUrl(driftDbName) } } });
+        try {
+          // Inject schema drift by altering a table in the database
+          await client.$executeRawUnsafe(`ALTER TABLE "dormitory_line_friends" ADD COLUMN "task009_drift_probe" TEXT`);
+        } finally {
+          await client.$disconnect();
+        }
+
+        // Run diff against drift-injected database -> must exit with code 2 (non-empty diff)
+        const diffRes = runPrismaDiffDbVsDatamodel(dbUrl(driftDbName));
+        expect(diffRes.exitCode).toBe(2);
+      } finally {
+        await dropDisposableDb(driftDbName);
+      }
+    }, 60000);
+
+    it('13.2 Fresh untouched final DB vs datamodel diff returns exit code 0 (zero schema drift)', () => {
+      const diffRes = runPrismaDiffDbVsDatamodel(dbUrl(FRESH_DEPLOY_DB));
+      expect(diffRes.exitCode).toBe(0);
     }, 60000);
 
     it('14. All 13 migrations in fresh DB have valid finished_at and matching frozen checksum constants', async () => {
@@ -531,10 +570,10 @@ describe('TASK-009 Checkpoint 1I — Hermetic Pre-Merge Migration & Bootstrap Pr
   });
 
   // =========================================================================
-  // SECTION 5: Resolver Catalog & RLS Security Posture (§9, §10, §12)
+  // SECTION 5: Resolver Catalog & RLS Security Posture (§4, §9, §10, §12)
   // =========================================================================
   describe('Resolver Catalog & Six-Table RLS Posture', () => {
-    it('15. RLS Catalog Proof: All six TASK-009 tables have relrowsecurity=true, owned by horplus (FORCE RLS: NOT REQUIRED because horplus_app is non-owner and NOBYPASSRLS)', async () => {
+    it('15. RLS Catalog Proof: All six TASK-009 tables have relrowsecurity=true, relforcerowsecurity=false, owned by horplus (FORCE RLS: false / NOT REQUIRED because horplus_app is non-owner and NOBYPASSRLS)', async () => {
       const tables = await mainAdminPrisma.$queryRaw<any[]>`
         SELECT c.relname AS tablename,
                pg_get_userbyid(c.relowner) AS owner,
@@ -554,6 +593,7 @@ describe('TASK-009 Checkpoint 1I — Hermetic Pre-Merge Migration & Bootstrap Pr
         expect(t.owner).toBe('horplus');
         expect(t.owner).not.toBe('horplus_app');
         expect(t.rowsecurity).toBe(true);
+        expect(t.forcerowsecurity).toBe(false);
       }
 
       // Verify horplus_app role attributes
