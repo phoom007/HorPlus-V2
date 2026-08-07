@@ -1206,9 +1206,9 @@ model DormitoryAccessGrant {
   tokenHash          String    @unique @map("token_hash") @db.VarChar(255)
   tokenEncrypted     String?   @map("token_encrypted") @db.Text
   tokenPrefix        String?   @map("token_prefix") @db.VarChar(20)
-  roleCode           String    @map("role_code") @db.VarChar(20)
+  roleCode           String    @map("role_code") @db.VarChar(50)
   version            Int       @default(1)
-  status             String    @default("ACTIVE") @db.VarChar(20)
+  status             String    @default("ACTIVE") @db.VarChar(50)
   createdByPrincipal String    @map("created_by_principal") @db.VarChar(255)
   revokedByPrincipal String?   @map("revoked_by_principal") @db.VarChar(255)
   revokedAt          DateTime? @map("revoked_at") @db.Timestamptz()

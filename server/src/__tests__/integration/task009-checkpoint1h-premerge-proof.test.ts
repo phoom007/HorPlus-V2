@@ -9,7 +9,7 @@
  * 5. Self-contained temporary base audit worktree creation and cleanup (`2cbc3bd5c8e6626ed0ba79ee1a2b6b5049e43acf`)
  * 6. Real Wave-1G base to TASK-009 upgrade proof with data preservation & owner/manager origin migration
  * 7. Fresh final database deployment proof (13/13 migrations applied from scratch)
- * 8. Strict --to-schema-datamodel diff assertions
+ * 8. Accepted-base differential schema drift proof (proves TASK-009 introduces ZERO new schema drift over base)
  * 9. Real database datamodel diff fault-injection proof (detects database drift with exit code 2 & column detection)
  * 10. Real database datamodel diff negative semantic proof (detects datamodel drift with exit code 2 & column detection)
  * 11. Resolver catalog, PUBLIC execute denial, and six-table RLS security posture preservation
@@ -40,6 +40,30 @@ export const EXPECTED_TASK009_MIGRATION_SHA256 = {
   '20260807180000_task009_runtime_role_rls_grants': '9b1ab9b83dff8927382f970bd9a48d4067c33fbbdda833968ff447e10e8085fa',
 } as const;
 
+export const TASK009_OWNED_TABLES = [
+  'dormitory_line_friends',
+  'dormitory_access_grants',
+  'dormitory_line_configs',
+  'line_webhook_event_receipts',
+  'line_push_usage',
+  'line_push_delivery_attempts',
+];
+
+export const TASK009_OWNED_FIELDS = [
+  'membership_origin',
+  'principal_type',
+  'access_grant_id',
+  'message_quota_monthly',
+  'role_code',
+  'status',
+  'last_delivery_status',
+  'last_delivery_attempt_at',
+  'last_delivery_success_at',
+  'last_delivery_error_code',
+  'access_token_verified_at',
+  'webhook_verified_at',
+];
+
 // Disposable database names for real isolation
 const BASE_UPGRADE_DB = `task009_1i_base_upgrade_${Date.now()}`;
 const FRESH_DEPLOY_DB = `task009_1i_fresh_deploy_${Date.now()}`;
@@ -48,6 +72,7 @@ const APP_ROLE = 'horplus_app';
 const SPECIAL_PASSWORD = `test_p@ss'w0rd $pecial_${Date.now()}`;
 
 let tempBaseWorktreeDir: string | null = null;
+let baselineSchemaDriftOutput: string = '';
 
 // Master connection to 'postgres' database
 const masterPrisma = new PrismaClient({
@@ -119,6 +144,48 @@ function runPrismaDiffDbVsDatamodel(
     }
     throw err;
   }
+}
+
+/**
+ * Parse migrate diff output into normalized change blocks.
+ */
+function parseDiffBlocks(output: string): string[] {
+  if (!output || !output.trim()) return [];
+  return output
+    .split(/\[\*\] Changed the /)
+    .map((b) => b.trim())
+    .filter((b) => b.length > 0);
+}
+
+/**
+ * Extract TASK-009 owned drift entries from diff output.
+ */
+function findTask009OwnedDrift(output: string): string[] {
+  const blocks = parseDiffBlocks(output);
+  const matches: string[] = [];
+
+  for (const block of blocks) {
+    for (const table of TASK009_OWNED_TABLES) {
+      if (block.startsWith(`\`${table}\` table`)) {
+        matches.push(block);
+      }
+    }
+    for (const field of TASK009_OWNED_FIELDS) {
+      if (block.includes(`(${field})`) || block.includes(`\`${field}\``)) {
+        matches.push(block);
+      }
+    }
+  }
+  return Array.from(new Set(matches));
+}
+
+/**
+ * Identify new drift entries in final output that are NOT in baseline output.
+ */
+function findNewUnclassifiedDrift(finalOutput: string, baseOutput: string): string[] {
+  const baseBlocks = new Set(parseDiffBlocks(baseOutput));
+  const finalBlocks = parseDiffBlocks(finalOutput);
+  return finalBlocks.filter((b) => !baseBlocks.has(b));
 }
 
 /**
@@ -197,14 +264,20 @@ describe('TASK-009 Checkpoint 1I — Hermetic Pre-Merge Migration & Bootstrap Pr
   });
 
   // =========================================================================
-  // SECTION 0: Source-Level Target Regression Proof
+  // SECTION 0: Source-Level Target & Regression Proof
   // =========================================================================
-  describe('Source-Level Target Regression Proof', () => {
+  describe('Source-Level Target & Regression Proof', () => {
     it('0. Source code assertion: proves test file does NOT contain forbidden datasource option and DOES contain --to-schema-datamodel', () => {
       const fileContent = fs.readFileSync(__filename, 'utf-8');
       const forbiddenStr = ['--', 'to', 'schema', 'datasource'].join('-');
       expect(fileContent).not.toContain(forbiddenStr);
       expect(fileContent).toContain('--to-schema-datamodel');
+    });
+
+    it('0.1 Schema regression proof: proves DormitoryAccessGrant roleCode and status are declared as @db.VarChar(50)', () => {
+      const schemaContent = fs.readFileSync(path.join(SERVER_DIR, 'prisma/schema.prisma'), 'utf-8');
+      expect(schemaContent).toMatch(/model DormitoryAccessGrant\s*\{[\s\S]*?roleCode\s+String\s+@map\("role_code"\)\s+@db\.VarChar\(50\)/);
+      expect(schemaContent).toMatch(/model DormitoryAccessGrant\s*\{[\s\S]*?status\s+String\s+@default\("ACTIVE"\)\s+@db\.VarChar\(50\)/);
     });
   });
 
@@ -312,9 +385,9 @@ describe('TASK-009 Checkpoint 1I — Hermetic Pre-Merge Migration & Bootstrap Pr
   });
 
   // =========================================================================
-  // SECTION 3: Real Wave-1G Base Database Upgrade Proof (§1, §7, §8)
+  // SECTION 3: Real Wave-1G Base Database Upgrade & Differential Schema Proof (§1, §7, §8)
   // =========================================================================
-  describe('Real Wave-1G Base Database Upgrade Proof', () => {
+  describe('Real Wave-1G Base Database Upgrade & Differential Schema Proof', () => {
     let beforeCounts: Record<string, number> = {};
     const seededOwnerUserId = crypto.randomUUID();
     const seededManagerUserId = crypto.randomUUID();
@@ -326,7 +399,7 @@ describe('TASK-009 Checkpoint 1I — Hermetic Pre-Merge Migration & Bootstrap Pr
       await createDisposableDb(BASE_UPGRADE_DB);
     });
 
-    it('6. Applies ONLY base Wave-1G migrations (2cbc3bd) from temporary self-contained base worktree', () => {
+    it('6. Applies ONLY base Wave-1G migrations (2cbc3bd) from temporary self-contained base worktree & records baseline schema drift', () => {
       expect(tempBaseWorktreeDir).not.toBeNull();
       expect(fs.existsSync(tempBaseWorktreeDir!)).toBe(true);
 
@@ -335,6 +408,10 @@ describe('TASK-009 Checkpoint 1I — Hermetic Pre-Merge Migration & Bootstrap Pr
 
       const output = runPrismaCommand(BASE_UPGRADE_DB, 'migrate deploy', baseSchemaPath);
       expect(output).toContain('migration');
+
+      // Record BASELINE_SCHEMA_DRIFT
+      const baseDiffRes = runPrismaDiffDbVsDatamodel(dbUrl(BASE_UPGRADE_DB), baseSchemaPath);
+      baselineSchemaDriftOutput = baseDiffRes.output;
 
       const client = new PrismaClient({ datasources: { db: { url: dbUrl(BASE_UPGRADE_DB) } } });
       return client.$queryRaw<any[]>`SELECT migration_name FROM _prisma_migrations ORDER BY started_at`
@@ -473,7 +550,7 @@ describe('TASK-009 Checkpoint 1I — Hermetic Pre-Merge Migration & Bootstrap Pr
         .finally(() => client.$disconnect());
     }, 60000);
 
-    it('9. Verifies exact migration semantics, quota backfill, owner/manager origins & zero DB drift AFTER upgrade', async () => {
+    it('9. Verifies exact migration semantics, quota backfill, owner/manager origins & ZERO TASK-009 schema drift AFTER upgrade', async () => {
       const client = new PrismaClient({ datasources: { db: { url: dbUrl(BASE_UPGRADE_DB) } } });
       try {
         // 1. Assert row counts preserved
@@ -514,9 +591,16 @@ describe('TASK-009 Checkpoint 1I — Hermetic Pre-Merge Migration & Bootstrap Pr
         const sub = await client.dormitorySubscription.findFirst({ where: { dormitoryId: seededDormId } });
         expect(sub?.status).toBe('ACTIVE');
 
-        // 6. Assert actual DB-vs-datamodel zero schema drift (exit code 0)
-        const diffRes = runPrismaDiffDbVsDatamodel(dbUrl(BASE_UPGRADE_DB));
-        expect(diffRes.exitCode).toBe(0);
+        // 6. Differential schema drift assertions
+        const finalDiffRes = runPrismaDiffDbVsDatamodel(dbUrl(BASE_UPGRADE_DB));
+
+        // 6A. Assert ZERO TASK-009 owned drift entries
+        const task009OwnedDrift = findTask009OwnedDrift(finalDiffRes.output);
+        expect(task009OwnedDrift).toEqual([]);
+
+        // 6B. Assert ZERO new unclassified drift entries over baseline
+        const newUnclassifiedDrift = findNewUnclassifiedDrift(finalDiffRes.output, baselineSchemaDriftOutput);
+        expect(newUnclassifiedDrift).toEqual([]);
       } finally {
         await client.$disconnect();
       }
@@ -524,9 +608,9 @@ describe('TASK-009 Checkpoint 1I — Hermetic Pre-Merge Migration & Bootstrap Pr
   });
 
   // =========================================================================
-  // SECTION 4: Fresh Final Database Deployment & Schema Drift Proof (§1, §2, §3, §4, §5, §11)
+  // SECTION 4: Fresh Final Database Deployment & Differential Schema Drift Proof (§1, §2, §3, §4, §5, §11)
   // =========================================================================
-  describe('Fresh Final Database Deployment & Schema Drift Proof', () => {
+  describe('Fresh Final Database Deployment & Differential Schema Drift Proof', () => {
     beforeAll(async () => {
       await createDisposableDb(FRESH_DEPLOY_DB);
       runCanonicalBootstrapScript(FRESH_DEPLOY_DB, 'password');
@@ -567,14 +651,24 @@ describe('TASK-009 Checkpoint 1I — Hermetic Pre-Merge Migration & Bootstrap Pr
         const diffRes = runPrismaDiffDbVsDatamodel(dbUrl(driftDbName));
         expect(diffRes.exitCode).toBe(2);
         expect(diffRes.output).toContain('task009_drift_probe');
+
+        const task009Drift = findTask009OwnedDrift(diffRes.output);
+        expect(task009Drift.length).toBeGreaterThan(0);
       } finally {
         await dropDisposableDb(driftDbName);
       }
     }, 60000);
 
-    it('13.2 Fresh untouched final DB vs datamodel diff produces exit code 0 (zero schema drift)', () => {
+    it('13.2 Fresh untouched final DB vs datamodel diff produces ZERO TASK-009 schema drift and ZERO new unclassified drift', () => {
       const diffRes = runPrismaDiffDbVsDatamodel(dbUrl(FRESH_DEPLOY_DB));
-      expect(diffRes.exitCode).toBe(0);
+
+      // 1. Assert ZERO TASK-009 owned drift
+      const task009OwnedDrift = findTask009OwnedDrift(diffRes.output);
+      expect(task009OwnedDrift).toEqual([]);
+
+      // 2. Assert ZERO new unclassified drift over baseline
+      const newUnclassifiedDrift = findNewUnclassifiedDrift(diffRes.output, baselineSchemaDriftOutput);
+      expect(newUnclassifiedDrift).toEqual([]);
     }, 60000);
 
     it('13.3 Negative datamodel-semantic proof: proves actual DB-vs-datamodel diff detects datamodel drift with exit code 2 & column detection', () => {
@@ -590,6 +684,9 @@ describe('TASK-009 Checkpoint 1I — Hermetic Pre-Merge Migration & Bootstrap Pr
         const diffRes = runPrismaDiffDbVsDatamodel(dbUrl(FRESH_DEPLOY_DB), 'prisma/schema.temp.prisma');
         expect(diffRes.exitCode).toBe(2);
         expect(diffRes.output).toContain('temp_datamodel_drift_probe');
+
+        const newDrift = findNewUnclassifiedDrift(diffRes.output, baselineSchemaDriftOutput);
+        expect(newDrift.some((b) => b.includes('temp_datamodel_drift_probe'))).toBe(true);
       } finally {
         if (fs.existsSync(tempSchemaPath)) {
           fs.unlinkSync(tempSchemaPath);
