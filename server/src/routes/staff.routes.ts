@@ -1,5 +1,7 @@
 /**
- * Staff & Access Grant Routes (Task-009 Final Product Model)
+ * Staff & Access Grant Routes (Task-009 — Canonical Auth Stack)
+ * Public: bearer redemption
+ * Protected: staff management, grant CRUD, retry-delivery
  * @license Apache-2.0
  */
 
@@ -7,25 +9,69 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { AccessGrantService } from '../services/access-grant.service.js';
 import { LineFriendService } from '../services/line-friend.service.js';
+import { AuthenticationService } from '../services/auth.service.js';
 import { requireDormitoryPermission } from '../middleware/permission.js';
+import { requireDormitoryWriteEntitlement } from '../middleware/entitlement.js';
+import { resolveAuthoritativeDormitoryContext } from '../middleware/dormitory-context.js';
 import { AppError } from '../types/index.js';
 import { getEnv } from '../config/env.js';
 
-export function createStaffRoutes(prisma: PrismaClient): Router {
-  const router = Router();
+export function createStaffRoutes(prisma: PrismaClient, authService?: AuthenticationService) {
+  const publicRouter = Router();
+  const protectedRouter = Router();
   const grantService = new AccessGrantService(prisma);
   const friendService = new LineFriendService(prisma);
 
-  // --------------------------------------------------------------------------
-  // PUBLIC BEARER REDEMPTION
-  // --------------------------------------------------------------------------
+  const requireSession = authService
+    ? authService.requireAuth()
+    : (_req: Request, _res: Response, next: NextFunction) => next();
+
+  const authGuard = (permission: string) => [
+    requireSession,
+    requireDormitoryPermission(permission),
+  ];
+
+  const mutationGuard = (permission: string) => [
+    requireSession,
+    requireDormitoryPermission(permission),
+    requireDormitoryWriteEntitlement,
+  ];
+
+  // ---------- CSRF helper ----------
+  const verifyCsrf = (req: Request, res: Response): boolean => {
+    if (!authService) return true;
+    const csrfToken = (req.headers['x-csrf-token'] as string) || req.cookies?.['horplus_csrf'];
+    const sessionId = req.auth?.sessionId;
+    if (!sessionId || !authService.verifyCsrf(csrfToken, sessionId)) {
+      res.status(403).json({
+        error: {
+          code: 'CSRF_INVALID',
+          message: 'CSRF Token ไม่ถูกต้องหรือหมดอายุแล้ว',
+          fieldErrors: null,
+          requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+          timestamp: new Date().toISOString(),
+        },
+      });
+      return false;
+    }
+    return true;
+  };
+
+  // ---------- Dormitory context resolver ----------
+  const getDormitoryId = (req: Request): string => {
+    const context = (req as any).dormitoryContext || resolveAuthoritativeDormitoryContext(req);
+    return context.dormitoryId;
+  };
+
+  // ==========================================================================
+  // PUBLIC BEARER REDEMPTION (no session required)
+  // ==========================================================================
 
   /**
    * POST /api/v1/staff-access/redeem
    * Request body: { token: "<raw 256-bit bearer token>" }
-   * Places canonical encrypted session token in HttpOnly SESSION_COOKIE_NAME
    */
-  router.post('/staff-access/redeem', async (req: Request, res: Response, next: NextFunction) => {
+  publicRouter.post('/staff-access/redeem', async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { token } = req.body;
       if (!token) {
@@ -38,13 +84,12 @@ export function createStaffRoutes(prisma: PrismaClient): Router {
       const result = await grantService.redeemAccessGrant(token, userAgentHash, ipMetadata);
       const env = getEnv();
 
-      // Set canonical HttpOnly session cookie
       res.cookie(env.SESSION_COOKIE_NAME, result.sessionToken, {
         httpOnly: true,
         secure: process.env.NODE_ENV === 'production',
         sameSite: 'lax',
         path: '/',
-        maxAge: 30 * 24 * 60 * 60 * 1000 // 30 days
+        maxAge: 30 * 24 * 60 * 60 * 1000
       });
 
       res.setHeader('Cache-Control', 'no-store');
@@ -52,35 +97,29 @@ export function createStaffRoutes(prisma: PrismaClient): Router {
 
       return res.status(200).json({
         success: true,
-        data: {
-          grant: result.grant
-        }
+        data: { grant: result.grant }
       });
     } catch (err) {
       next(err);
     }
   });
 
-  // --------------------------------------------------------------------------
-  // AUTHENTICATED OWNER STAFF MANAGEMENT API
-  // --------------------------------------------------------------------------
+  // ==========================================================================
+  // PROTECTED STAFF MANAGEMENT API
+  // ==========================================================================
 
   /**
    * GET /api/v1/properties/:id/staff
-   * List staff members, permanent Google owners, active grants, and slot meter
    */
-  router.get(
+  protectedRouter.get(
     '/properties/:id/staff',
-    requireDormitoryPermission('staff:read'),
+    ...authGuard('staff:read'),
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        const dormitoryId = req.params.id;
+        const dormitoryId = getDormitoryId(req);
         const staff = await grantService.listDormitoryStaff(dormitoryId);
         res.setHeader('Cache-Control', 'no-store');
-        return res.status(200).json({
-          success: true,
-          data: staff
-        });
+        return res.status(200).json({ success: true, data: staff });
       } catch (err) {
         next(err);
       }
@@ -89,20 +128,16 @@ export function createStaffRoutes(prisma: PrismaClient): Router {
 
   /**
    * GET /api/v1/properties/:id/line-friends
-   * List sanitized LINE friend directory for dormitory (NO identity hashes/encrypted blobs)
    */
-  router.get(
+  protectedRouter.get(
     '/properties/:id/line-friends',
-    requireDormitoryPermission('staff:read'),
+    ...authGuard('staff:read'),
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        const dormitoryId = req.params.id;
+        const dormitoryId = getDormitoryId(req);
         const friends = await friendService.getFriendsByDormitory(dormitoryId);
         res.setHeader('Cache-Control', 'no-store');
-        return res.status(200).json({
-          success: true,
-          data: friends
-        });
+        return res.status(200).json({ success: true, data: friends });
       } catch (err) {
         next(err);
       }
@@ -111,31 +146,109 @@ export function createStaffRoutes(prisma: PrismaClient): Router {
 
   /**
    * POST /api/v1/properties/:id/access-grants
-   * Issue new Access Grant link to a LINE Friend
    */
-  router.post(
+  protectedRouter.post(
     '/properties/:id/access-grants',
-    requireDormitoryPermission('staff:write'),
+    ...mutationGuard('staff:write'),
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        const dormitoryId = req.params.id;
+        if (!verifyCsrf(req, res)) return;
+        const dormitoryId = getDormitoryId(req);
         const { lineFriendId, roleCode } = req.body;
 
         if (!lineFriendId || !roleCode) {
           throw new AppError('lineFriendId and roleCode are required', 400, 'MISSING_FIELDS');
         }
 
-        const createdByPrincipal = req.user ? `usr_${req.user.id}` : 'usr_owner';
+        const createdByPrincipal = req.auth ? `usr_${req.auth.userId}` : 'usr_owner';
 
         const result = await grantService.createAccessGrant(
-          dormitoryId,
-          lineFriendId,
-          roleCode,
-          createdByPrincipal
+          dormitoryId, lineFriendId, roleCode, createdByPrincipal
         );
 
         res.setHeader('Cache-Control', 'no-store');
-        return res.status(201).json({
+        return res.status(201).json({ success: true, data: result });
+      } catch (err) {
+        next(err);
+      }
+    }
+  );
+
+  /**
+   * PATCH /api/v1/properties/:id/access-grants/:grantId/role
+   */
+  protectedRouter.patch(
+    '/properties/:id/access-grants/:grantId/role',
+    ...mutationGuard('staff:write'),
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        if (!verifyCsrf(req, res)) return;
+        const dormitoryId = getDormitoryId(req);
+        const { grantId } = req.params;
+        const { roleCode } = req.body;
+
+        if (!roleCode) {
+          throw new AppError('roleCode is required', 400, 'MISSING_ROLE_CODE');
+        }
+
+        const updatedByPrincipal = req.auth ? `usr_${req.auth.userId}` : 'usr_owner';
+
+        const updated = await grantService.changeGrantRole(
+          dormitoryId, grantId, roleCode, updatedByPrincipal
+        );
+
+        res.setHeader('Cache-Control', 'no-store');
+        return res.status(200).json({ success: true, data: updated });
+      } catch (err) {
+        next(err);
+      }
+    }
+  );
+
+  /**
+   * DELETE /api/v1/properties/:id/access-grants/:grantId
+   */
+  protectedRouter.delete(
+    '/properties/:id/access-grants/:grantId',
+    ...mutationGuard('staff:write'),
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        if (!verifyCsrf(req, res)) return;
+        const dormitoryId = getDormitoryId(req);
+        const { grantId } = req.params;
+        const revokedByPrincipal = req.auth ? `usr_${req.auth.userId}` : 'usr_owner';
+
+        const revoked = await grantService.revokeAccessGrant(
+          dormitoryId, grantId, revokedByPrincipal
+        );
+
+        res.setHeader('Cache-Control', 'no-store');
+        return res.status(200).json({
+          success: true,
+          data: { revoked: true, grantId: revoked.id }
+        });
+      } catch (err) {
+        next(err);
+      }
+    }
+  );
+
+  /**
+   * POST /api/v1/properties/:id/access-grants/:grantId/retry-delivery
+   */
+  protectedRouter.post(
+    '/properties/:id/access-grants/:grantId/retry-delivery',
+    ...mutationGuard('staff:write'),
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        if (!verifyCsrf(req, res)) return;
+        const dormitoryId = getDormitoryId(req);
+        const { grantId } = req.params;
+
+        const result = await grantService.retryDelivery(grantId, dormitoryId);
+
+        res.setHeader('Cache-Control', 'no-store');
+        return res.status(200).json({
           success: true,
           data: result
         });
@@ -145,73 +258,5 @@ export function createStaffRoutes(prisma: PrismaClient): Router {
     }
   );
 
-  /**
-   * PATCH /api/v1/properties/:id/access-grants/:grantId/role
-   * Change Role of an active Access Grant
-   */
-  router.patch(
-    '/properties/:id/access-grants/:grantId/role',
-    requireDormitoryPermission('staff:write'),
-    async (req: Request, res: Response, next: NextFunction) => {
-      try {
-        const { id: dormitoryId, grantId } = req.params;
-        const { roleCode } = req.body;
-
-        if (!roleCode) {
-          throw new AppError('roleCode is required', 400, 'MISSING_ROLE_CODE');
-        }
-
-        const updatedByPrincipal = req.user ? `usr_${req.user.id}` : 'usr_owner';
-
-        const updated = await grantService.changeGrantRole(
-          dormitoryId,
-          grantId,
-          roleCode,
-          updatedByPrincipal
-        );
-
-        res.setHeader('Cache-Control', 'no-store');
-        return res.status(200).json({
-          success: true,
-          data: updated
-        });
-      } catch (err) {
-        next(err);
-      }
-    }
-  );
-
-  /**
-   * DELETE /api/v1/properties/:id/access-grants/:grantId
-   * Revoke Access Grant immediately
-   */
-  router.delete(
-    '/properties/:id/access-grants/:grantId',
-    requireDormitoryPermission('staff:write'),
-    async (req: Request, res: Response, next: NextFunction) => {
-      try {
-        const { id: dormitoryId, grantId } = req.params;
-        const revokedByPrincipal = req.user ? `usr_${req.user.id}` : 'usr_owner';
-
-        const revoked = await grantService.revokeAccessGrant(
-          dormitoryId,
-          grantId,
-          revokedByPrincipal
-        );
-
-        res.setHeader('Cache-Control', 'no-store');
-        return res.status(200).json({
-          success: true,
-          data: {
-            revoked: true,
-            grantId: revoked.id
-          }
-        });
-      } catch (err) {
-        next(err);
-      }
-    }
-  );
-
-  return router;
+  return { publicRouter, protectedRouter };
 }

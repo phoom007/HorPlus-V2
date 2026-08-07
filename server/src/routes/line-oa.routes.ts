@@ -1,42 +1,81 @@
 /**
- * LINE OA Administration & Webhook Routes (Task-009 Final Product Model)
+ * LINE OA Administration & Webhook Routes (Task-009 — Canonical Auth Stack)
+ * Public: webhook ingestion (opaque key + signature verification)
+ * Protected: OA config management
  * @license Apache-2.0
  */
 
 import { Router, Request, Response, NextFunction } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { LineOaService } from '../services/line-oa.service.js';
+import { AuthenticationService } from '../services/auth.service.js';
 import { requireDormitoryPermission } from '../middleware/permission.js';
+import { requireDormitoryWriteEntitlement } from '../middleware/entitlement.js';
+import { resolveAuthoritativeDormitoryContext } from '../middleware/dormitory-context.js';
 import { AppError } from '../types/index.js';
 
-export function createLineOaRoutes(prisma: PrismaClient) {
-  const router = Router();
+export function createLineOaRoutes(prisma: PrismaClient, authService?: AuthenticationService) {
+  const publicRouter = Router();
+  const protectedRouter = Router();
   const lineOaService = new LineOaService(prisma);
 
-  // --------------------------------------------------------------------------
-  // Public Webhook Endpoint (Opaque Key in Path, Raw Body Signature Verification)
-  // --------------------------------------------------------------------------
+  const requireSession = authService
+    ? authService.requireAuth()
+    : (_req: Request, _res: Response, next: NextFunction) => next();
 
-  /**
-   * POST /api/v1/line/webhook/:opaqueWebhookKey
-   * Expects raw request body buffer (express.raw) for signature validation
-   */
-  router.post(
+  const authGuard = (permission: string) => [
+    requireSession,
+    requireDormitoryPermission(permission),
+  ];
+
+  const mutationGuard = (permission: string) => [
+    requireSession,
+    requireDormitoryPermission(permission),
+    requireDormitoryWriteEntitlement,
+  ];
+
+  // ---------- CSRF helper ----------
+  const verifyCsrf = (req: Request, res: Response): boolean => {
+    if (!authService) return true;
+    const csrfToken = (req.headers['x-csrf-token'] as string) || req.cookies?.['horplus_csrf'];
+    const sessionId = req.auth?.sessionId;
+    if (!sessionId || !authService.verifyCsrf(csrfToken, sessionId)) {
+      res.status(403).json({
+        error: {
+          code: 'CSRF_INVALID',
+          message: 'CSRF Token ไม่ถูกต้องหรือหมดอายุแล้ว',
+          fieldErrors: null,
+          requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+          timestamp: new Date().toISOString(),
+        },
+      });
+      return false;
+    }
+    return true;
+  };
+
+  const getDormitoryId = (req: Request): string => {
+    const context = (req as any).dormitoryContext || resolveAuthoritativeDormitoryContext(req);
+    return context.dormitoryId;
+  };
+
+  // ==========================================================================
+  // PUBLIC WEBHOOK (no session required — opaque key + HMAC signature)
+  // ==========================================================================
+
+  publicRouter.post(
     '/line/webhook/:opaqueWebhookKey',
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         const opaqueKey = req.params.opaqueWebhookKey;
         const signatureHeader = req.headers['x-line-signature'] as string;
 
-        // Ensure body is raw Buffer
         const bodyBuffer = Buffer.isBuffer(req.body)
           ? req.body
           : Buffer.from(typeof req.body === 'string' ? req.body : JSON.stringify(req.body || {}));
 
         const result = await lineOaService.processWebhookEvent(
-          opaqueKey,
-          bodyBuffer,
-          signatureHeader
+          opaqueKey, bodyBuffer, signatureHeader
         );
 
         return res.status(200).json(result);
@@ -46,102 +85,74 @@ export function createLineOaRoutes(prisma: PrismaClient) {
     }
   );
 
-  // --------------------------------------------------------------------------
-  // OWNER-Only LINE OA Configuration Routes
-  // --------------------------------------------------------------------------
+  // ==========================================================================
+  // PROTECTED LINE OA CONFIG
+  // ==========================================================================
 
-  /**
-   * GET /api/v1/dormitories/:dormId/line-oa/config
-   * Get LINE OA connection status (Secrets REDACTED)
-   */
-  router.get(
+  protectedRouter.get(
     '/dormitories/:dormId/line-oa/config',
-    requireDormitoryPermission('line_oa:manage'),
+    ...authGuard('line_oa:manage'),
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        const dormId = req.params.dormId;
+        const dormId = getDormitoryId(req);
         const baseUrl = `${req.protocol}://${req.get('host')}`;
         const config = await lineOaService.getDormitoryLineConfig(dormId, baseUrl);
-        return res.status(200).json({
-          success: true,
-          data: config
-        });
+        return res.status(200).json({ success: true, data: config });
       } catch (err) {
         next(err);
       }
     }
   );
 
-  /**
-   * PUT /api/v1/dormitories/:dormId/line-oa/config
-   * Update LINE OA credentials (Encrypted at rest)
-   */
-  router.put(
+  protectedRouter.put(
     '/dormitories/:dormId/line-oa/config',
-    requireDormitoryPermission('line_oa:manage'),
+    ...mutationGuard('line_oa:manage'),
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        const dormId = req.params.dormId;
+        if (!verifyCsrf(req, res)) return;
+        const dormId = getDormitoryId(req);
         const { lineOaId, channelId, channelSecret, channelAccessToken } = req.body;
 
         const updated = await lineOaService.updateDormitoryLineConfig(dormId, {
-          lineOaId,
-          channelId,
-          channelSecret,
-          channelAccessToken
+          lineOaId, channelId, channelSecret, channelAccessToken
         });
 
-        return res.status(200).json({
-          success: true,
-          data: updated
-        });
+        return res.status(200).json({ success: true, data: updated });
       } catch (err) {
         next(err);
       }
     }
   );
 
-  /**
-   * POST /api/v1/dormitories/:dormId/line-oa/disconnect
-   * Disconnect LINE OA
-   */
-  router.post(
+  protectedRouter.post(
     '/dormitories/:dormId/line-oa/disconnect',
-    requireDormitoryPermission('line_oa:manage'),
+    ...mutationGuard('line_oa:manage'),
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        const dormId = req.params.dormId;
+        if (!verifyCsrf(req, res)) return;
+        const dormId = getDormitoryId(req);
         const result = await lineOaService.disconnectLineConfig(dormId);
-        return res.status(200).json({
-          success: true,
-          data: result
-        });
+        return res.status(200).json({ success: true, data: result });
       } catch (err) {
         next(err);
       }
     }
   );
 
-  /**
-   * POST /api/v1/dormitories/:dormId/line-oa/rotate-webhook-key
-   * Rotate webhook opaque key
-   */
-  router.post(
+  protectedRouter.post(
     '/dormitories/:dormId/line-oa/rotate-webhook-key',
-    requireDormitoryPermission('line_oa:manage'),
+    ...mutationGuard('line_oa:manage'),
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        const dormId = req.params.dormId;
+        if (!verifyCsrf(req, res)) return;
+        const dormId = getDormitoryId(req);
         const result = await lineOaService.rotateWebhookKey(dormId);
-        return res.status(200).json({
-          success: true,
-          data: result
-        });
+        return res.status(200).json({ success: true, data: result });
       } catch (err) {
         next(err);
       }
     }
   );
 
-  return router;
+  return { publicRouter, protectedRouter };
 }

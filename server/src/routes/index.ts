@@ -83,8 +83,12 @@ export function createApiRouter(deps: AppApiDependencies | AuthenticationService
   router.use('/', createUserRouter(authService));
 
   const prisma = getPrismaClient();
-  router.use('/', createStaffRoutes(prisma));
-  router.use('/', createLineOaRoutes(prisma));
+
+  // TASK-009: Public routes (no session required)
+  const staffRoutes = createStaffRoutes(prisma, isDeps ? (deps as AppApiDependencies).authService : undefined);
+  const lineOaRoutes = createLineOaRoutes(prisma, isDeps ? (deps as AppApiDependencies).authService : undefined);
+  router.use('/', staffRoutes.publicRouter);
+  router.use('/', lineOaRoutes.publicRouter);
 
   if (isDeps) {
     const fullDeps = deps as AppApiDependencies;
@@ -149,6 +153,10 @@ export function createApiRouter(deps: AppApiDependencies | AuthenticationService
     router.use('/notifications', authContextStack, createNotificationRouter());
     router.use('/tenant/notifications', authContextStack, createTenantNotificationRouter());
     router.use('/tenant-portal', authContextStack, createTenantPortalRouter(fullDeps.authService));
+
+    // TASK-009: Protected staff & LINE OA routes
+    router.use('/', staffRoutes.protectedRouter);
+    router.use('/', lineOaRoutes.protectedRouter);
   }
 
   return router;
