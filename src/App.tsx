@@ -22,6 +22,7 @@ import { TermsPage } from './pages/public/TermsPage';
 import { PrivacyPage } from './pages/public/PrivacyPage';
 
 import { OwnerLoginPage } from './pages/auth/OwnerLoginPage';
+import { StaffAccessPage } from './pages/StaffAccessPage';
 
 import { OnboardingWizard } from './pages/onboarding/OnboardingWizard';
 
@@ -237,6 +238,7 @@ export default function App() {
           }
         />
         <Route path="/tenant/login" element={<Navigate to="/demo" replace />} />
+        <Route path="/staff-access" element={<StaffAccessPage />} />
 
 
 

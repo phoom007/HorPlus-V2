@@ -4,61 +4,19 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
 import {
   ShieldCheck,
   Plus,
   Trash2,
-  Key,
   Link as LinkIcon,
   Copy,
-  Check,
-  ShieldAlert,
   Clock,
-  Briefcase,
   Users2,
-  Wrench,
-  XCircle,
-  CheckCircle2,
-  ChevronLeft,
-  ChevronRight,
-  UserCheck,
-  Send,
-  RefreshCw
+  ShieldAlert,
+  RefreshCw,
+  RotateCcw
 } from 'lucide-react';
-
-interface StaffMember {
-  id: string;
-  type: 'PERMANENT_GOOGLE_OWNER' | 'ACCESS_GRANT';
-  displayName: string;
-  email?: string;
-  pictureUrl?: string;
-  roleCode: 'OWNER' | 'MANAGER' | 'TECH';
-  roleName?: string;
-  membershipOrigin?: string;
-  label?: string;
-  status?: string;
-  version?: number;
-  tokenPrefix?: string;
-  createdAt?: string;
-  isPermanent: boolean;
-  canRevoke: boolean;
-  canChangeRole: boolean;
-}
-
-interface LineFriend {
-  id: string;
-  displayName: string;
-  pictureUrl?: string;
-  friendStatus: string;
-}
-
-interface SlotUsage {
-  googleOwnersCount: number;
-  activeGrantsCount: number;
-  totalUsedSlots: number;
-  maxSlots: number;
-}
+import { Task009ApiAdapter, StaffMember, LineFriend, SlotUsage } from '../../data/adapters/task009';
 
 interface OwnerUsersProps {
   onAddLog: (action: string, details: string, type: string, id: string) => void;
@@ -92,44 +50,39 @@ export const OwnerUsers: React.FC<OwnerUsersProps> = ({ onAddLog }) => {
     type: 'success'
   });
 
-  const getDormId = () => {
+  const getDormId = (): string => {
     return (
       localStorage.getItem('selected_dormitory_id') ||
       sessionStorage.getItem('active_dormitory_selected_for_session') ||
-      'dorm-demo-001'
+      ''
     );
   };
 
   // Fetch Staff and LINE Friends from backend
   const fetchStaffData = async () => {
     const dormId = getDormId();
-    try {
-      const res = await fetch(`/api/v1/dormitories/${dormId}/staff`, { credentials: 'include' });
-      if (res.ok) {
-        const json = await res.json();
-        if (json.success && json.data) {
-          setPermanentOwners(json.data.permanentOwners || []);
-          setAccessGrants(json.data.accessGrants || []);
-          setSlotUsage(json.data.slotUsage || { googleOwnersCount: 1, activeGrantsCount: 0, totalUsedSlots: 1, maxSlots: 10 });
+    if (!dormId) return;
+
+    const resStaff = await Task009ApiAdapter.getStaff(dormId);
+    if (resStaff.success && resStaff.data) {
+      setPermanentOwners(resStaff.data.permanentOwners || []);
+      setAccessGrants(resStaff.data.accessGrants || []);
+      setSlotUsage(
+        resStaff.data.slotUsage || {
+          googleOwnersCount: 1,
+          activeGrantsCount: 0,
+          totalUsedSlots: 1,
+          maxSlots: 10
         }
-      }
-    } catch (err) {
-      console.warn('Backend staff API unavailable, using fallback state');
+      );
     }
 
-    try {
-      const resFriends = await fetch(`/api/v1/dormitories/${dormId}/line-friends`, { credentials: 'include' });
-      if (resFriends.ok) {
-        const json = await resFriends.json();
-        if (json.success && json.data) {
-          setLineFriends(json.data || []);
-          if (json.data.length > 0 && !selectedFriendId) {
-            setSelectedFriendId(json.data[0].id);
-          }
-        }
+    const resFriends = await Task009ApiAdapter.getLineFriends(dormId);
+    if (resFriends.success && resFriends.data) {
+      setLineFriends(resFriends.data || []);
+      if (resFriends.data.length > 0 && !selectedFriendId) {
+        setSelectedFriendId(resFriends.data[0].id);
       }
-    } catch (err) {
-      console.warn('Backend line-friends API unavailable');
     }
   };
 
@@ -139,99 +92,168 @@ export const OwnerUsers: React.FC<OwnerUsersProps> = ({ onAddLog }) => {
 
   const handleCreateGrant = async () => {
     if (isCreating) return;
-    setIsCreating(true);
     const dormId = getDormId();
+    if (!dormId) {
+      setToast({ message: 'กรุณาเลือกหอพักก่อนดำเนินการ', visible: true, type: 'error' });
+      return;
+    }
 
-    try {
-      const targetFriendId = selectedFriendId || (lineFriends[0]?.id || 'friend-demo-001');
+    const targetFriendId = selectedFriendId || lineFriends[0]?.id;
+    if (!targetFriendId) {
+      setToast({ message: 'กรุณาเลือก LINE Friend ที่ต้องการมอบสิทธิ์', visible: true, type: 'error' });
+      return;
+    }
 
-      const res = await fetch(`/api/v1/dormitories/${dormId}/staff/access-grants`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({
-          lineFriendId: targetFriendId,
-          roleCode: grantRole
-        })
-      });
+    setIsCreating(true);
+    const res = await Task009ApiAdapter.createAccessGrant(dormId, targetFriendId, grantRole);
+    setIsCreating(false);
 
-      if (res.ok) {
-        const json = await res.json();
-        if (json.success && json.data) {
-          setCreatedGrantResult(json.data);
-          setToast({
-            message: `สร้างสิทธิ์เข้าใช้งานระดับ ${grantRole} สำเร็จ!`,
-            visible: true,
-            type: 'success'
-          });
-          onAddLog(
-            'สร้าง Access Grant สิทธิ์ด่วน',
-            `สร้างสิทธิ์ Access Grant สำหรับ LINE Friend (Role: ${grantRole})`,
-            'AccessGrant',
-            json.data.grant.id
-          );
-          fetchStaffData();
-        }
-      } else {
-        const errJson = await res.json().catch(() => ({}));
-        setToast({
-          message: errJson.error?.message || 'ไม่สามารถสร้างสิทธิ์ access grant ได้ (โควตาเต็ม หรือสิทธิ์ไม่ถูกต้อง)',
-          visible: true,
-          type: 'error'
-        });
-      }
-    } catch (err) {
+    if (res.success && res.data) {
+      setCreatedGrantResult(res.data);
       setToast({
-        message: 'เกิดข้อผิดพลาดในการเชื่อมต่อเซิร์ฟเวอร์',
+        message: `สร้างสิทธิ์เข้าใช้งานระดับ ${grantRole} สำเร็จ!`,
         visible: true,
-        type: 'error'
+        type: 'success'
       });
-    } finally {
-      setIsCreating(false);
+      onAddLog(
+        'สร้าง Access Grant สิทธิ์ด่วน',
+        `สร้างสิทธิ์ Access Grant สำหรับ LINE Friend (Role: ${grantRole})`,
+        'AccessGrant',
+        res.data.grant?.id || ''
+      );
+      fetchStaffData();
+    } else {
+      const errCode = res.error?.code;
+      const errMsg =
+        res.error?.message ||
+        (errCode === 'STAFF_LIMIT_EXCEEDED'
+          ? 'จำนวนสิทธิ์เกินโควตาสูงสุด 10 สิทธิ์ต่อหอพัก'
+          : errCode === 'ACTIVE_GRANT_EXISTS'
+          ? 'LINE Friend ท่านนี้มีสิทธิ์ Access Grant ที่ใช้งานอยู่แล้ว'
+          : 'ไม่สามารถสร้างสิทธิ์ access grant ได้');
+      setToast({ message: errMsg, visible: true, type: 'error' });
+    }
+  };
+
+  const handleRoleChange = async (grantId: string, newRole: 'OWNER' | 'MANAGER' | 'TECH') => {
+    const dormId = getDormId();
+    if (!dormId) return;
+
+    const res = await Task009ApiAdapter.updateAccessGrantRole(dormId, grantId, newRole);
+    if (res.success) {
+      setToast({ message: `อัปเดตสิทธิ์เป็น ${newRole} เรียบร้อยแล้ว`, visible: true, type: 'success' });
+      onAddLog('อัปเดตระดับสิทธิ์ Access Grant', `เปลี่ยนสิทธิ์เป็น ${newRole}`, 'AccessGrant', grantId);
+      fetchStaffData();
+    } else {
+      setToast({ message: res.error?.message || 'ไม่สามารถอัปเดตสิทธิ์ได้', visible: true, type: 'error' });
     }
   };
 
   const handleRevokeGrant = async (grantId: string) => {
     const dormId = getDormId();
-    try {
-      const res = await fetch(`/api/v1/dormitories/${dormId}/staff/access-grants/${grantId}`, {
-        method: 'DELETE',
-        credentials: 'include'
-      });
+    if (!dormId) return;
 
-      if (res.ok) {
-        setToast({
-          message: 'เพิกถอนสิทธิ์เข้าใช้งานเรียบร้อยแล้ว (คืนโควตา 1 สิทธิ์)',
-          visible: true,
-          type: 'success'
-        });
-        onAddLog(
-          'เพิกถอน Access Grant',
-          `เพิกถอน Access Grant (ID: ${grantId}) ถาวร`,
-          'AccessGrant',
-          grantId
-        );
-        fetchStaffData();
-      }
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setRevokeConfirm(null);
+    const res = await Task009ApiAdapter.revokeAccessGrant(dormId, grantId);
+    setRevokeConfirm(null);
+
+    if (res.success) {
+      setToast({
+        message: 'เพิกถอนสิทธิ์เข้าใช้งานเรียบร้อยแล้ว (คืนโควตา 1 สิทธิ์)',
+        visible: true,
+        type: 'success'
+      });
+      onAddLog('เพิกถอน Access Grant', `เพิกถอน Access Grant (ID: ${grantId}) ถาวร`, 'AccessGrant', grantId);
+      fetchStaffData();
+    } else {
+      setToast({ message: res.error?.message || 'ไม่สามารถเพิกถอนสิทธิ์ได้', visible: true, type: 'error' });
     }
   };
 
-  const handleCopyBearerLink = (bearerUrl: string, id: string) => {
-    navigator.clipboard.writeText(bearerUrl).then(() => {
-      setCopiedGrantId(id);
-      setTimeout(() => setCopiedGrantId(null), 2000);
-    });
+  const handleGetCopyLink = async (grantId: string) => {
+    const dormId = getDormId();
+    if (!dormId) return;
+
+    const res = await Task009ApiAdapter.getCopyLink(dormId, grantId);
+    if (res.success && res.data?.bearerUrl) {
+      navigator.clipboard.writeText(res.data.bearerUrl).then(() => {
+        setCopiedGrantId(grantId);
+        setToast({ message: 'คัดลอกลิงก์สิทธิ์เรียบร้อยแล้ว', visible: true, type: 'success' });
+        setTimeout(() => setCopiedGrantId(null), 2000);
+      });
+    } else {
+      setToast({ message: res.error?.message || 'ไม่สามารถคัดลอกลิงก์สิทธิ์ได้', visible: true, type: 'error' });
+    }
   };
+
+  const handleRetryDelivery = async (grantId: string) => {
+    const dormId = getDormId();
+    if (!dormId) return;
+
+    const res = await Task009ApiAdapter.retryDelivery(dormId, grantId);
+    if (res.success) {
+      setToast({ message: 'ส่งข้อความ Flex แจ้งเตือนสิทธิ์ซ้ำเรียบร้อยแล้ว', visible: true, type: 'success' });
+      fetchStaffData();
+    } else {
+      setToast({ message: res.error?.message || 'ไม่สามารถส่งข้อความซ้ำได้', visible: true, type: 'error' });
+    }
+  };
+
+  const renderDeliveryBadge = (grant: StaffMember) => {
+    const statusVal = grant.lastDeliveryStatus || 'sent';
+    switch (statusVal) {
+      case 'sent':
+      case 'ACCEPTED':
+        return <span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 rounded text-[10px] font-extrabold">ส่งสำเร็จ</span>;
+      case 'failed':
+      case 'DEFINITIVE_FAILURE':
+        return <span className="px-2 py-0.5 bg-rose-100 text-rose-800 rounded text-[10px] font-extrabold">ส่งล้มเหลว</span>;
+      case 'quota_exhausted':
+        return <span className="px-2 py-0.5 bg-amber-100 text-amber-800 rounded text-[10px] font-extrabold">โควตาเต็ม</span>;
+      case 'retry_pending':
+      case 'RETRYABLE_UNKNOWN':
+        return <span className="px-2 py-0.5 bg-blue-100 text-blue-800 rounded text-[10px] font-extrabold">รอส่งซ้ำ</span>;
+      default:
+        return <span className="px-2 py-0.5 bg-slate-100 text-slate-700 rounded text-[10px] font-extrabold">พร้อมใช้งาน</span>;
+    }
+  };
+
+  const dormId = getDormId();
+  if (!dormId) {
+    return (
+      <div className="bg-white p-8 rounded-3xl border border-gray-100 shadow-3xs text-center space-y-3">
+        <ShieldAlert className="w-10 h-10 text-amber-500 mx-auto" />
+        <h3 className="text-base font-extrabold text-slate-900">ยังไม่ได้เลือกหอพัก</h3>
+        <p className="text-xs text-slate-500">กรุณาเลือกหอพักจากเมนูด้านบนเพื่อเริ่มจัดการทีมงานและสิทธิ์ Access Grant</p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6 w-full min-w-0">
-      
+      {/* Toast Notification */}
+      {toast.visible && (
+        <div
+          data-testid="toast-message"
+          className={`fixed bottom-6 right-6 z-50 px-4 py-3 rounded-2xl shadow-2xl text-xs font-extrabold border transition-all animate-in fade-in duration-200 ${
+            toast.type === 'success'
+              ? 'bg-emerald-950 text-emerald-300 border-emerald-800'
+              : 'bg-rose-950 text-rose-300 border-rose-800'
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            <span>{toast.message}</span>
+            <button onClick={() => setToast({ ...toast, visible: false })} className="ml-2 hover:opacity-70">
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Top Banner: Account Slot Usage Meter */}
-      <div className="bg-slate-900 border border-slate-800 p-4 sm:p-5 rounded-3xl text-white shadow-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+      <div
+        data-testid="slot-usage-meter"
+        className="bg-slate-900 border border-slate-800 p-4 sm:p-5 rounded-3xl text-white shadow-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4"
+      >
         <div className="space-y-1">
           <div className="flex items-center gap-2">
             <Users2 className="w-5 h-5 text-indigo-400" />
@@ -268,14 +290,14 @@ export const OwnerUsers: React.FC<OwnerUsersProps> = ({ onAddLog }) => {
         </div>
 
         {permanentOwners.length === 0 ? (
-          <div className="p-4 bg-slate-50 rounded-2xl flex items-center justify-between text-xs font-bold text-slate-700">
+          <div data-testid="permanent-owner-row" className="p-4 bg-slate-50 rounded-2xl flex items-center justify-between text-xs font-bold text-slate-700">
             <div className="flex items-center gap-3">
               <div className="w-9 h-9 rounded-xl bg-emerald-100 flex items-center justify-center text-emerald-700 font-bold">
                 PO
               </div>
               <div>
                 <div className="font-extrabold text-slate-900">เจ้าของหลัก (Google Account)</div>
-                <div className="text-[10px] text-slate-400 font-mono">owner@HorPlus.com</div>
+                <div className="text-[10px] text-slate-400 font-mono">Google Authenticated Principal</div>
               </div>
             </div>
             <span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 rounded font-bold text-[10px]">
@@ -284,7 +306,11 @@ export const OwnerUsers: React.FC<OwnerUsersProps> = ({ onAddLog }) => {
           </div>
         ) : (
           permanentOwners.map((po) => (
-            <div key={po.id} className="p-4 bg-slate-50/80 rounded-2xl flex items-center justify-between text-xs font-bold text-slate-700 border border-slate-100">
+            <div
+              key={po.id}
+              data-testid="permanent-owner-row"
+              className="p-4 bg-slate-50/80 rounded-2xl flex items-center justify-between text-xs font-bold text-slate-700 border border-slate-100"
+            >
               <div className="flex items-center gap-3">
                 <div className="w-9 h-9 rounded-xl bg-emerald-500 text-white flex items-center justify-center font-black">
                   {po.displayName.substring(0, 2).toUpperCase()}
@@ -310,7 +336,7 @@ export const OwnerUsers: React.FC<OwnerUsersProps> = ({ onAddLog }) => {
 
       {/* Access Grants & LINE Friends Main Grid */}
       <div className="grid lg:grid-cols-12 gap-6 items-start w-full min-w-0">
-        
+
         {/* Left Column: Create Bearer Access Grant */}
         <div className="lg:col-span-4 space-y-6 w-full min-w-0">
           <div className="bg-white p-5 rounded-3xl border border-gray-100 shadow-3xs space-y-4">
@@ -331,6 +357,7 @@ export const OwnerUsers: React.FC<OwnerUsersProps> = ({ onAddLog }) => {
                 </div>
               ) : (
                 <select
+                  data-testid="line-friend-select"
                   value={selectedFriendId}
                   onChange={(e) => setSelectedFriendId(e.target.value)}
                   className="w-full px-3 py-2.5 border border-gray-200 rounded-xl bg-slate-50 text-slate-800 font-extrabold text-xs focus:bg-white focus:border-indigo-500 focus:outline-none transition-all cursor-pointer"
@@ -348,6 +375,7 @@ export const OwnerUsers: React.FC<OwnerUsersProps> = ({ onAddLog }) => {
             <div className="space-y-1.5">
               <label className="block text-[10px] font-bold text-slate-700">ระดับสิทธิ์ในการเข้าถึง (Role) *</label>
               <select
+                data-testid="grant-role-select"
                 value={grantRole}
                 onChange={(e) => setGrantRole(e.target.value as any)}
                 className="w-full px-3 py-2.5 border border-gray-200 rounded-xl bg-slate-50 text-slate-800 font-extrabold text-xs focus:bg-white focus:border-indigo-500 focus:outline-none transition-all cursor-pointer"
@@ -359,10 +387,11 @@ export const OwnerUsers: React.FC<OwnerUsersProps> = ({ onAddLog }) => {
             </div>
 
             <button
+              data-testid="create-grant-button"
               onClick={handleCreateGrant}
-              disabled={isCreating || slotUsage.totalUsedSlots >= slotUsage.maxSlots}
+              disabled={isCreating || slotUsage.totalUsedSlots >= slotUsage.maxSlots || lineFriends.length === 0}
               className={`w-full py-2.5 text-white font-extrabold text-xs rounded-xl flex items-center justify-center gap-1.5 shadow-sm transition-all ${
-                isCreating || slotUsage.totalUsedSlots >= slotUsage.maxSlots
+                isCreating || slotUsage.totalUsedSlots >= slotUsage.maxSlots || lineFriends.length === 0
                   ? 'bg-indigo-300 cursor-not-allowed'
                   : 'bg-indigo-600 hover:bg-indigo-700 active:scale-98 cursor-pointer'
               }`}
@@ -385,10 +414,7 @@ export const OwnerUsers: React.FC<OwnerUsersProps> = ({ onAddLog }) => {
                 <span className="text-[10px] font-extrabold text-emerald-400 uppercase tracking-wider">
                   สร้างสิทธิ์ & Flex Message สำเร็จ
                 </span>
-                <button
-                  onClick={() => setCreatedGrantResult(null)}
-                  className="text-emerald-400 hover:text-white text-xs cursor-pointer"
-                >
+                <button onClick={() => setCreatedGrantResult(null)} className="text-emerald-400 hover:text-white text-xs cursor-pointer">
                   ✕
                 </button>
               </div>
@@ -399,7 +425,13 @@ export const OwnerUsers: React.FC<OwnerUsersProps> = ({ onAddLog }) => {
               </div>
 
               <button
-                onClick={() => handleCopyBearerLink(createdGrantResult.bearerUrl, 'new-grant')}
+                data-testid="copy-created-grant-link-button"
+                onClick={() => {
+                  navigator.clipboard.writeText(createdGrantResult.bearerUrl).then(() => {
+                    setCopiedGrantId('new-grant');
+                    setTimeout(() => setCopiedGrantId(null), 2000);
+                  });
+                }}
                 className="w-full py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-xs rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer"
               >
                 <Copy className="w-3.5 h-3.5" />
@@ -432,19 +464,19 @@ export const OwnerUsers: React.FC<OwnerUsersProps> = ({ onAddLog }) => {
             </div>
           ) : (
             <div className="overflow-x-auto w-full">
-              <table className="w-full text-left border-collapse min-w-[550px]">
+              <table className="w-full text-left border-collapse min-w-[650px]">
                 <thead>
                   <tr className="border-b border-slate-100 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
                     <th className="py-3 px-2">LINE Profile</th>
                     <th className="py-3 px-2">ระดับสิทธิ์ (Role)</th>
                     <th className="py-3 px-2">Token Prefix</th>
-                    <th className="py-3 px-2 text-center">สถานะ</th>
-                    <th className="py-3 px-2 text-center">เพิกถอนสิทธิ์</th>
+                    <th className="py-3 px-2 text-center">การจัดส่ง Flex</th>
+                    <th className="py-3 px-2 text-center">จัดการสิทธิ์</th>
                   </tr>
                 </thead>
                 <tbody className="text-xs divide-y divide-slate-50 font-bold">
                   {accessGrants.map((grant) => (
-                    <tr key={grant.id} className="hover:bg-slate-50/50 transition-colors">
+                    <tr key={grant.id} data-testid={`access-grant-row-${grant.id}`} className="hover:bg-slate-50/50 transition-colors">
                       <td className="py-3 px-2">
                         <div className="flex items-center gap-2.5">
                           {grant.pictureUrl ? (
@@ -457,31 +489,57 @@ export const OwnerUsers: React.FC<OwnerUsersProps> = ({ onAddLog }) => {
                           <span className="font-extrabold text-slate-900">{grant.displayName}</span>
                         </div>
                       </td>
+
                       <td className="py-3 px-2">
-                        <span className={`px-2 py-0.5 rounded text-[10px] font-black ${
-                          grant.roleCode === 'OWNER' ? 'bg-purple-100 text-purple-800' :
-                          grant.roleCode === 'MANAGER' ? 'bg-indigo-100 text-indigo-800' :
-                          'bg-amber-100 text-amber-800'
-                        }`}>
-                          {grant.roleCode}
-                        </span>
+                        <select
+                          data-testid={`role-change-select-${grant.id}`}
+                          value={grant.roleCode}
+                          onChange={(e) => handleRoleChange(grant.id, e.target.value as any)}
+                          className="px-2 py-1 bg-slate-50 border border-slate-200 rounded text-xs font-black text-slate-800 cursor-pointer"
+                        >
+                          <option value="OWNER">OWNER</option>
+                          <option value="MANAGER">MANAGER</option>
+                          <option value="TECH">TECH</option>
+                        </select>
                       </td>
+
                       <td className="py-3 px-2 font-mono text-[11px] text-slate-500">
                         {grant.tokenPrefix || '••••••••'}
                       </td>
+
                       <td className="py-3 px-2 text-center">
-                        <span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 rounded text-[10px] font-extrabold">
-                          ACTIVE
-                        </span>
+                        <div className="flex items-center justify-center gap-1.5">
+                          {renderDeliveryBadge(grant)}
+                          <button
+                            data-testid={`retry-delivery-button-${grant.id}`}
+                            onClick={() => handleRetryDelivery(grant.id)}
+                            className="p-1 text-indigo-600 hover:bg-indigo-50 rounded transition-colors cursor-pointer"
+                            title="ส่งข้อความ Flex ซ้ำ"
+                          >
+                            <RotateCcw className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </td>
+
                       <td className="py-3 px-2 text-center">
-                        <button
-                          onClick={() => setRevokeConfirm({ id: grant.id, name: grant.displayName })}
-                          className="p-1.5 text-rose-500 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
-                          title="เพิกถอนสิทธิ์ถาวร"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
+                        <div className="flex items-center justify-center gap-1">
+                          <button
+                            data-testid={`copy-link-button-${grant.id}`}
+                            onClick={() => handleGetCopyLink(grant.id)}
+                            className="p-1.5 text-slate-600 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
+                            title="คัดลอกลิงก์สิทธิ์"
+                          >
+                            <Copy className="w-4 h-4" />
+                          </button>
+                          <button
+                            data-testid={`revoke-grant-button-${grant.id}`}
+                            onClick={() => setRevokeConfirm({ id: grant.id, name: grant.displayName })}
+                            className="p-1.5 text-rose-500 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                            title="เพิกถอนสิทธิ์ถาวร"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -513,6 +571,7 @@ export const OwnerUsers: React.FC<OwnerUsersProps> = ({ onAddLog }) => {
                 ยกเลิก
               </button>
               <button
+                data-testid="confirm-revoke-button"
                 onClick={() => handleRevokeGrant(revokeConfirm.id)}
                 className="flex-1 py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-xs rounded-xl cursor-pointer"
               >

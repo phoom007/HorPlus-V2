@@ -33,6 +33,7 @@ import {
 // Legacy mock-storage persistence is retained ONLY for Dormitory profile fields (dormitory name, address, contact phone, taxId, bank accounts) outside the Wave 1G model-backed Property Defaults and Billing Settings.
 import { ConfirmDialog, SignaturePad } from '../../components/GlobalComponents';
 import { getDataProvider } from '../../data/dataProvider';
+import { Task009ApiAdapter } from '../../data/adapters/task009';
 import { PropagationPreviewModal } from '../../components/PropagationPreviewModal';
 import { VersionConflictModal } from '../../components/VersionConflictModal';
 
@@ -185,7 +186,8 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
     hasAccessToken: boolean;
     lineOaId: string | null;
     channelId: string | null;
-    lastVerifiedAt: string | null;
+    accessTokenVerifiedAt: string | null;
+    webhookVerifiedAt: string | null;
     webhookUrl: string | null;
   }>({
     connected: false,
@@ -193,7 +195,8 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
     hasAccessToken: false,
     lineOaId: '',
     channelId: '',
-    lastVerifiedAt: null,
+    accessTokenVerifiedAt: null,
+    webhookVerifiedAt: null,
     webhookUrl: null
   });
 
@@ -205,19 +208,14 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
   const [copiedWebhookUrl, setCopiedWebhookUrl] = useState(false);
 
   const fetchLineOaConfig = async () => {
-    const dormId = dorm?.id || 'dorm-demo-001';
-    try {
-      const res = await fetch(`/api/v1/dormitories/${dormId}/line-oa/config`, { credentials: 'include' });
-      if (res.ok) {
-        const json = await res.json();
-        if (json.success && json.data) {
-          setLineOaConfig(json.data);
-          if (json.data.lineOaId) setInputLineOaId(json.data.lineOaId);
-          if (json.data.channelId) setInputChannelId(json.data.channelId);
-        }
-      }
-    } catch (err) {
-      console.warn('Backend line-oa config API unavailable');
+    const dormId = dorm?.id || localStorage.getItem('selected_dormitory_id') || sessionStorage.getItem('active_dormitory_selected_for_session') || '';
+    if (!dormId) return;
+
+    const res = await Task009ApiAdapter.getLineOaConfig(dormId);
+    if (res.success && res.data) {
+      setLineOaConfig(res.data);
+      if (res.data.lineOaId) setInputLineOaId(res.data.lineOaId);
+      if (res.data.channelId) setInputChannelId(res.data.channelId);
     }
   };
 
@@ -227,68 +225,50 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
   }, [dorm?.id]);
 
   const handleSaveLineOaConfig = async () => {
-    const dormId = dorm?.id || 'dorm-demo-001';
+    const dormId = dorm?.id || localStorage.getItem('selected_dormitory_id') || sessionStorage.getItem('active_dormitory_selected_for_session') || '';
+    if (!dormId) return;
+
     setIsSavingLineOa(true);
-    try {
-      const res = await fetch(`/api/v1/dormitories/${dormId}/line-oa/config`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({
-          lineOaId: inputLineOaId,
-          channelId: inputChannelId,
-          channelSecret: inputChannelSecret || undefined,
-          channelAccessToken: inputChannelAccessToken || undefined
-        })
-      });
-      if (res.ok) {
-        const json = await res.json();
-        if (json.success) {
-          setLineOaConfig(json.data);
-          setInputChannelSecret('');
-          setInputChannelAccessToken('');
-          onAddLog('ตั้งค่า LINE Official Account', 'อัปเดตข้อมูลเชื่อมต่อ LINE OA สำเร็จ', 'LineOA', dormId);
-          alert('บันทึกการตั้งค่า LINE Official Account สำเร็จ!');
-        }
-      }
-    } catch (err) {
-      alert('เกิดข้อผิดพลาดในการเชื่อมต่อเซิร์ฟเวอร์');
-    } finally {
-      setIsSavingLineOa(false);
+    const res = await Task009ApiAdapter.updateLineOaConfig(dormId, {
+      lineOaId: inputLineOaId,
+      channelId: inputChannelId,
+      channelSecret: inputChannelSecret || undefined,
+      channelAccessToken: inputChannelAccessToken || undefined
+    });
+    setIsSavingLineOa(false);
+
+    if (res.success && res.data) {
+      setLineOaConfig(res.data);
+      setInputChannelSecret('');
+      setInputChannelAccessToken('');
+      onAddLog('ตั้งค่า LINE Official Account', 'อัปเดตข้อมูลเชื่อมต่อ LINE OA สำเร็จ', 'LineOA', dormId);
+      alert('บันทึกการตั้งค่า LINE Official Account สำเร็จ!');
+    } else {
+      alert(res.error?.message || 'เกิดข้อผิดพลาดในการบันทึกการตั้งค่า LINE OA');
     }
   };
 
   const handleDisconnectLineOa = async () => {
-    const dormId = dorm?.id || 'dorm-demo-001';
-    try {
-      const res = await fetch(`/api/v1/dormitories/${dormId}/line-oa/disconnect`, {
-        method: 'POST',
-        credentials: 'include'
-      });
-      if (res.ok) {
-        const json = await res.json();
-        setLineOaConfig(json.data);
-        onAddLog('ยกเลิกเชื่อมต่อ LINE OA', 'ยกเลิกการเชื่อมต่อ LINE Official Account', 'LineOA', dormId);
-      }
-    } catch (err) {
-      console.error(err);
+    const dormId = dorm?.id || localStorage.getItem('selected_dormitory_id') || sessionStorage.getItem('active_dormitory_selected_for_session') || '';
+    if (!dormId) return;
+
+    const res = await Task009ApiAdapter.disconnectLineOa(dormId);
+    if (res.success && res.data) {
+      setLineOaConfig(res.data);
+      onAddLog('ยกเลิกเชื่อมต่อ LINE OA', 'ยกเลิกการเชื่อมต่อ LINE Official Account', 'LineOA', dormId);
     }
   };
 
   const handleRotateWebhookKey = async () => {
-    const dormId = dorm?.id || 'dorm-demo-001';
-    try {
-      const res = await fetch(`/api/v1/dormitories/${dormId}/line-oa/rotate-webhook-key`, {
-        method: 'POST',
-        credentials: 'include'
-      });
-      if (res.ok) {
-        const json = await res.json();
-        setLineOaConfig(json.data);
-        alert('หมุนเวียน Webhook Opaque Key สำเร็จ!');
-      }
-    } catch (err) {
-      console.error(err);
+    const dormId = dorm?.id || localStorage.getItem('selected_dormitory_id') || sessionStorage.getItem('active_dormitory_selected_for_session') || '';
+    if (!dormId) return;
+
+    const res = await Task009ApiAdapter.rotateWebhookKey(dormId);
+    if (res.success && res.data) {
+      setLineOaConfig(res.data);
+      alert('หมุนเวียน Webhook Opaque Key สำเร็จ!');
+    } else {
+      alert(res.error?.message || 'ไม่สามารถหมุนเวียน Webhook Key ได้');
     }
   };
 

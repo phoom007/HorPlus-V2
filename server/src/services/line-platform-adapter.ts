@@ -49,7 +49,18 @@ export interface LinePlatformAdapter {
  * Never logs Channel Secret, Access Token, raw LINE User ID, or bearer tokens.
  */
 export class HttpLinePlatformAdapter implements LinePlatformAdapter {
-  private readonly baseUrl = 'https://api.line.me';
+  private readonly baseUrl: string;
+
+  constructor(customBaseUrl?: string) {
+    const isTestMode = process.env.HORPLUS_E2E === 'true' || process.env.NODE_ENV === 'test';
+    if (isTestMode && customBaseUrl) {
+      this.baseUrl = customBaseUrl;
+    } else if (isTestMode && process.env.LINE_API_BASE_URL) {
+      this.baseUrl = process.env.LINE_API_BASE_URL;
+    } else {
+      this.baseUrl = 'https://api.line.me';
+    }
+  }
 
   async verifyAccessToken(channelAccessToken: string): Promise<{ verified: boolean; botInfo?: LineBotInfo }> {
     try {
