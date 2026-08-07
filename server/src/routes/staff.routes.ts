@@ -74,9 +74,18 @@ export function createStaffRoutes(
     next();
   };
 
+  const resolveDormContext = (req: Request, _res: Response, next: NextFunction) => {
+    try {
+      resolveAuthoritativeDormitoryContext(req);
+      next();
+    } catch (err) {
+      next(err);
+    }
+  };
+
   const authGuard = (permission: string) => [
     requireSession,
-    resolveAuthoritativeDormitoryContext,
+    resolveDormContext,
     requireDormitoryPermission(permission),
     verifyDormitoryMatch,
     requireOwnerRole,
@@ -84,7 +93,7 @@ export function createStaffRoutes(
 
   const mutationGuard = (permission: string) => [
     requireSession,
-    resolveAuthoritativeDormitoryContext,
+    resolveDormContext,
     requireDormitoryPermission(permission),
     requireDormitoryWriteEntitlement,
     csrfMiddleware,

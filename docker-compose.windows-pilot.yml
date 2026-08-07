@@ -6,6 +6,10 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-horplus}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
       POSTGRES_DB: ${POSTGRES_DB:-horplus_wave1d_fasttrack_test}
+      HORPLUS_APP_DB_USER: ${HORPLUS_APP_DB_USER:-horplus_app}
+      HORPLUS_APP_DB_PASSWORD: ${HORPLUS_APP_DB_PASSWORD:-password}
+    volumes:
+      - ./docker/init-db.sh:/docker-entrypoint-initdb.d/01_init_runtime_role.sh
     ports:
       - "5455:5432"
     healthcheck:
@@ -35,8 +39,8 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3000
-      DATABASE_URL: postgresql://horplus_app:password@db:5432/horplus_wave1d_fasttrack_test?schema=public
-      DIRECT_URL: postgresql://horplus:password@db:5432/horplus_wave1d_fasttrack_test?schema=public
+      DATABASE_URL: postgresql://${HORPLUS_APP_DB_USER:-horplus_app}:${HORPLUS_APP_DB_PASSWORD:-password}@db:5432/${POSTGRES_DB:-horplus_wave1d_fasttrack_test}?schema=public
+      DIRECT_URL: postgresql://${POSTGRES_USER:-horplus}:${POSTGRES_PASSWORD:-password}@db:5432/${POSTGRES_DB:-horplus_wave1d_fasttrack_test}?schema=public
       REDIS_URL: redis://redis:6379
       LOG_LEVEL: info
       SESSION_ENCRYPTION_KEY: prod_session_secret_key_32_chars_long_0001
