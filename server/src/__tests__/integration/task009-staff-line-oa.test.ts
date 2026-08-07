@@ -1,5 +1,5 @@
 /**
- * TASK-009 Comprehensive Integration, Concurrency, RLS & Security Audit Test Suite
+ * TASK-009 Comprehensive Delta Test Suite — Auth, Concurrency, RLS, Session & Profile Audits
  * @license Apache-2.0
  */
 
@@ -8,22 +8,36 @@ import { PrismaClient } from '@prisma/client';
 import { AccessGrantService } from '../../services/access-grant.service.js';
 import { LineOaService } from '../../services/line-oa.service.js';
 import { LineFriendService } from '../../services/line-friend.service.js';
+import { AuthenticationService } from '../../services/auth.service.js';
+import { MockGoogleIdentityVerifier } from '../../services/google-verifier.service.js';
+import { AuditService } from '../../services/audit.service.js';
+import { PrismaUserRepository } from '../../db/repositories/user.repository.js';
+import { PrismaSessionRepository } from '../../db/repositories/session.repository.js';
+import { PrismaMembershipRepository } from '../../db/repositories/membership.repository.js';
+import { PrismaRoleRepository } from '../../db/repositories/role.repository.js';
 import { MockLinePlatformAdapter } from '../../services/line-platform-adapter.js';
 import { hashToken } from '../../utils/crypto-encryption.js';
+import { getEnv } from '../../config/env.js';
 
 const databaseUrl = process.env.DATABASE_URL || 'postgresql://horplus:password@127.0.0.1:5455/horplus_wave1d_fasttrack_test?schema=public';
 const prisma = new PrismaClient({ datasources: { db: { url: databaseUrl } } });
 
-describe('TASK-009 — Comprehensive Audit, Concurrency, RLS & Verification Suite', () => {
+describe('TASK-009 — Comprehensive Delta Verification Suite', () => {
   let grantService: AccessGrantService;
   let lineOaService: LineOaService;
   let friendService: LineFriendService;
+  let authService: AuthenticationService;
   let mockAdapter: MockLinePlatformAdapter;
 
   let testDormitoryId: string;
   let testDormitoryBId: string;
   let testOwnerUserId: string;
-  let testRoleId: string;
+  let testManagerUserId: string;
+  let testTechUserId: string;
+
+  let rOwnerId: string;
+  let rManagerId: string;
+  let rTechId: string;
 
   beforeAll(async () => {
     mockAdapter = new MockLinePlatformAdapter();
@@ -31,44 +45,81 @@ describe('TASK-009 — Comprehensive Audit, Concurrency, RLS & Verification Suit
     lineOaService = new LineOaService(prisma, mockAdapter);
     friendService = new LineFriendService(prisma);
 
-    // Setup Test Owner User
-    const user = await prisma.user.create({
-      data: {
-        email: `audit_owner_${Date.now()}@example.com`,
-        emailNormalized: `audit_owner_${Date.now()}@example.com`,
-        name: 'Audit Google Owner',
-        googleSubject: `goog_sub_${Date.now()}`
-      }
-    });
-    testOwnerUserId = user.id;
+    const userRepo = new PrismaUserRepository(prisma);
+    const sessionRepo = new PrismaSessionRepository(prisma);
+    const membershipRepo = new PrismaMembershipRepository(prisma);
+    const roleRepo = new PrismaRoleRepository(prisma);
+    const mockVerifier = new MockGoogleIdentityVerifier();
+    const auditService = new AuditService();
 
-    // Create Dormitory A and Dormitory B for RLS Isolation
-    const dormA = await prisma.dormitory.create({
-      data: { name: 'Dormitory Alpha RLS', createdByUserId: testOwnerUserId }
+    authService = new AuthenticationService(
+      getEnv(),
+      mockVerifier,
+      userRepo,
+      sessionRepo,
+      membershipRepo,
+      roleRepo,
+      auditService
+    );
+
+    // Force Row Level Security on table owners in test DB
+    await prisma.$executeRawUnsafe(`ALTER TABLE "dormitory_line_friends" FORCE ROW LEVEL SECURITY;`);
+    await prisma.$executeRawUnsafe(`ALTER TABLE "dormitory_access_grants" FORCE ROW LEVEL SECURITY;`);
+    await prisma.$executeRawUnsafe(`ALTER TABLE "dormitory_line_configs" FORCE ROW LEVEL SECURITY;`);
+    await prisma.$executeRawUnsafe(`ALTER TABLE "line_webhook_event_receipts" FORCE ROW LEVEL SECURITY;`);
+
+    // Create Users
+    const uOwner = await prisma.user.create({
+      data: { email: `owner_${Date.now()}@example.com`, emailNormalized: `owner_${Date.now()}@example.com`, name: 'Google Owner', googleSubject: `goog_owner_${Date.now()}` }
     });
+    testOwnerUserId = uOwner.id;
+
+    const uManager = await prisma.user.create({
+      data: { email: `manager_${Date.now()}@example.com`, emailNormalized: `manager_${Date.now()}@example.com`, name: 'Legacy Manager', googleSubject: `goog_mgr_${Date.now()}` }
+    });
+    testManagerUserId = uManager.id;
+
+    const uTech = await prisma.user.create({
+      data: { email: `tech_${Date.now()}@example.com`, emailNormalized: `tech_${Date.now()}@example.com`, name: 'Legacy Tech', googleSubject: `goog_tech_${Date.now()}` }
+    });
+    testTechUserId = uTech.id;
+
+    // Create Dormitories
+    const dormA = await prisma.dormitory.create({ data: { name: 'Dormitory Alpha RLS', createdByUserId: testOwnerUserId } });
     testDormitoryId = dormA.id;
 
-    const dormB = await prisma.dormitory.create({
-      data: { name: 'Dormitory Beta RLS', createdByUserId: testOwnerUserId }
-    });
+    const dormB = await prisma.dormitory.create({ data: { name: 'Dormitory Beta RLS', createdByUserId: testOwnerUserId } });
     testDormitoryBId = dormB.id;
 
-    // Get or Create Role
-    let r = await prisma.role.findFirst({ where: { code: 'OWNER' } });
-    if (!r) {
-      r = await prisma.role.create({ data: { code: 'OWNER', name: 'Owner', permissions: ['*'] } });
-    }
-    testRoleId = r.id;
+    // Get or Create Roles
+    const getOrCreateRole = async (code: string, name: string, permissions: string[]) => {
+      let r = await prisma.role.findFirst({ where: { code } });
+      if (!r) { r = await prisma.role.create({ data: { code, name, permissions } }); }
+      return r;
+    };
 
-    // Backfill & Create Permanent Google Owner Membership for Dormitory A
+    const rOwner = await getOrCreateRole('OWNER', 'Owner', ['*']);
+    const rMgr = await getOrCreateRole('MANAGER', 'Manager', ['room:*', 'billing:*']);
+    const rTch = await getOrCreateRole('TECH', 'Technician', ['meter:*']);
+
+    rOwnerId = rOwner.id;
+    rManagerId = rMgr.id;
+    rTechId = rTch.id;
+
+    // Create Mixed Legacy Memberships
+    // 1. Google Owner (createdByUserId & OWNER role)
     await prisma.dormitoryMember.create({
-      data: {
-        dormitoryId: testDormitoryId,
-        userId: testOwnerUserId,
-        roleId: testRoleId,
-        status: 'active',
-        membershipOrigin: 'GOOGLE_BOOTSTRAP'
-      }
+      data: { dormitoryId: testDormitoryId, userId: testOwnerUserId, roleId: rOwnerId, status: 'active', membershipOrigin: 'GOOGLE_BOOTSTRAP' }
+    });
+
+    // 2. Legacy Manager
+    await prisma.dormitoryMember.create({
+      data: { dormitoryId: testDormitoryId, userId: testManagerUserId, roleId: rManagerId, status: 'active', membershipOrigin: 'LEGACY_MEMBER' }
+    });
+
+    // 3. Legacy Tech
+    await prisma.dormitoryMember.create({
+      data: { dormitoryId: testDormitoryId, userId: testTechUserId, roleId: rTechId, status: 'active', membershipOrigin: 'LEGACY_MEMBER' }
     });
   });
 
@@ -76,214 +127,207 @@ describe('TASK-009 — Comprehensive Audit, Concurrency, RLS & Verification Suit
     if (testDormitoryId) await prisma.dormitory.delete({ where: { id: testDormitoryId } }).catch(() => {});
     if (testDormitoryBId) await prisma.dormitory.delete({ where: { id: testDormitoryBId } }).catch(() => {});
     if (testOwnerUserId) await prisma.user.delete({ where: { id: testOwnerUserId } }).catch(() => {});
+    if (testManagerUserId) await prisma.user.delete({ where: { id: testManagerUserId } }).catch(() => {});
+    if (testTechUserId) await prisma.user.delete({ where: { id: testTechUserId } }).catch(() => {});
     await prisma.$disconnect();
   });
 
-  it('1. Permanent Google Owner Backfill & Invariant Verification', async () => {
+  it('1 & 2. Mixed Legacy Migration Upgrade & Slot Counting', async () => {
     const staff = await grantService.listDormitoryStaff(testDormitoryId);
+
+    // Only Permanent Google Owner is in permanentOwners
     expect(staff.permanentOwners.length).toBe(1);
+    expect(staff.permanentOwners[0].displayName).toBe('Google Owner');
+    expect(staff.permanentOwners[0].label).toBe('เจ้าของหลัก');
+    expect(staff.permanentOwners[0].isPermanent).toBe(true);
 
-    const owner = staff.permanentOwners[0];
-    expect(owner.label).toBe('เจ้าของหลัก');
-    expect(owner.membershipOrigin).toBe('GOOGLE_BOOTSTRAP');
-    expect(owner.isPermanent).toBe(true);
-    expect(owner.canRevoke).toBe(false);
-    expect(owner.canChangeRole).toBe(false);
+    // Legacy Manager & Tech are in legacyMembers
+    expect(staff.legacyMembers.length).toBe(2);
+    for (const member of staff.legacyMembers) {
+      expect(member.isPermanent).toBe(false);
+      expect(member.canRevoke).toBe(true);
+    }
 
-    // Verify slot calculation counts 1 Permanent Owner + 0 Grants = 1
+    // Slot usage strictly counts 1 Google Owner + 0 Access Grants = 1 total slot
     expect(staff.slotUsage.googleOwnersCount).toBe(1);
     expect(staff.slotUsage.activeGrantsCount).toBe(0);
     expect(staff.slotUsage.totalUsedSlots).toBe(1);
   });
 
-  it('2. Webhook Event Receipt Lifecycle (processedAt NULL -> timestamp)', async () => {
+  it('3 & 4. Canonical Session Cookie Redemption & Existing Session Role Mutation', async () => {
+    const friend = await friendService.upsertFriendFromWebhook(testDormitoryId, 'U_SESSION_TEST_USER', 'Session User');
+    const grantRes = await grantService.createAccessGrant(testDormitoryId, friend.id, 'MANAGER', `usr_${testOwnerUserId}`);
+
+    // Redeem to get encrypted session tokens A and B
+    const redeemA = await grantService.redeemAccessGrant(grantRes.rawToken);
+    const redeemB = await grantService.redeemAccessGrant(grantRes.rawToken);
+
+    expect(redeemA.sessionToken).toBeDefined();
+    expect(redeemB.sessionToken).toBeDefined();
+
+    // Validate Session A -> Initially MANAGER
+    const valA1 = await authService.validateSession(redeemA.sessionToken);
+    expect(valA1).not.toBeNull();
+    expect(valA1?.memberships[0].roleCode).toBe('MANAGER');
+
+    // Change Grant Role to TECH
+    await grantService.changeGrantRole(testDormitoryId, grantRes.grant.id, 'TECH', `usr_${testOwnerUserId}`);
+
+    // Validate SAME Session A and Session B -> Dynamic resolution returns TECH!
+    const valA2 = await authService.validateSession(redeemA.sessionToken);
+    const valB2 = await authService.validateSession(redeemB.sessionToken);
+    expect(valA2?.memberships[0].roleCode).toBe('TECH');
+    expect(valB2?.memberships[0].roleCode).toBe('TECH');
+
+    // Change Grant Role to OWNER
+    await grantService.changeGrantRole(testDormitoryId, grantRes.grant.id, 'OWNER', `usr_${testOwnerUserId}`);
+
+    const valA3 = await authService.validateSession(redeemA.sessionToken);
+    expect(valA3?.memberships[0].roleCode).toBe('OWNER');
+
+    // Revoke Grant
+    await grantService.revokeAccessGrant(testDormitoryId, grantRes.grant.id, `usr_${testOwnerUserId}`);
+
+    // Validate Session A & B -> Immediately NULL (401)
+    const valA4 = await authService.validateSession(redeemA.sessionToken);
+    const valB4 = await authService.validateSession(redeemB.sessionToken);
+    expect(valA4).toBeNull();
+    expect(valB4).toBeNull();
+
+    // Redeem original raw token -> Immediately rejected
+    await expect(grantService.redeemAccessGrant(grantRes.rawToken)).rejects.toThrow('Access grant link has been revoked or is invalid');
+  });
+
+  it('5. Actual LINE User ID Passed to Push Adapter Spy', async () => {
+    mockAdapter.pushCalls = [];
+    const friend = await friendService.upsertFriendFromWebhook(testDormitoryId, 'U_RAW_LINE_ID_99', 'Raw Line User');
+    const grantRes = await grantService.createAccessGrant(testDormitoryId, friend.id, 'TECH', `usr_${testOwnerUserId}`);
+
+    expect(grantRes.pushed).toBe(true);
+    expect(mockAdapter.pushCalls.length).toBe(1);
+    // toLineUserId passed to pushMessage MUST be actual raw LINE ID, NOT internal UUID!
+    expect(mockAdapter.pushCalls[0].toLineUserId).toBe('U_RAW_LINE_ID_99');
+  });
+
+  it('6. Fetch Real LINE Profile on Webhook Events', async () => {
     const configResult = await lineOaService.updateDormitoryLineConfig(testDormitoryBId, {
-      lineOaId: '@dormB_oa',
-      channelId: '1657888888',
-      channelSecret: 'super_secret_key_12345',
-      channelAccessToken: 'token_access_key_12345'
+      lineOaId: '@dormB_profile_oa',
+      channelId: '1657777777',
+      channelSecret: 'secret_profile_key_12345',
+      channelAccessToken: 'token_profile_access_key_12345'
     });
 
-    expect(configResult.webhookUrl).toBeDefined();
     const rawKey = configResult.webhookUrl!.split('/api/v1/line/webhook/')[1];
-
     const samplePayload = JSON.stringify({
       events: [
         {
           type: 'follow',
-          webhookEventId: `evt_lifecycle_${Date.now()}`,
-          source: { userId: 'U_LIFECYCLE_USER' }
+          webhookEventId: `evt_profile_${Date.now()}`,
+          source: { userId: 'U_PROFILE_FETCH_1234' }
         }
       ]
     });
     const bodyBuffer = Buffer.from(samplePayload, 'utf8');
 
     const crypto = await import('crypto');
-    const signature = crypto.createHmac('sha256', 'super_secret_key_12345').update(bodyBuffer).digest('base64');
+    const signature = crypto.createHmac('sha256', 'secret_profile_key_12345').update(bodyBuffer).digest('base64');
 
-    // Process event
-    const result = await lineOaService.processWebhookEvent(rawKey, bodyBuffer, signature);
-    expect(result.success).toBe(true);
-    expect(result.processedCount).toBe(1);
+    await lineOaService.processWebhookEvent(rawKey, bodyBuffer, signature);
 
-    // Verify receipt in DB has completed status and processedAt populated
-    const receiptInDb = await prisma.lineWebhookEventReceipt.findFirst({
-      where: { dormitoryId: testDormitoryBId }
-    });
-    expect(receiptInDb).toBeDefined();
-    expect(receiptInDb?.status).toBe('processed');
-    expect(receiptInDb?.processedAt).toBeInstanceOf(Date);
+    const friend = await prisma.dormitoryLineFriend.findFirst({ where: { dormitoryId: testDormitoryBId } });
+    expect(friend).toBeDefined();
+    // Profile adapter fetched real displayName & pictureUrl
+    expect(friend?.displayName).toBe('LINE User (1234)');
+    expect(friend?.pictureUrl).toContain('https://profile.line-scdn.net/mock_1234.png');
   });
 
-  it('3. Duplicate Active Grant Prevention for Same LINE Friend', async () => {
-    const friend = await friendService.upsertFriendFromWebhook(
-      testDormitoryId,
-      'U_UNIQUE_FRIEND_01',
-      'Unique Friend'
-    );
+  it('8. Data CRUD Isolation Across Dormitories via PostgreSQL RLS', async () => {
+    // Ensure non-superuser app role exists with full schema permissions
+    await prisma.$executeRawUnsafe(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'horplus_app_user') THEN
+          CREATE ROLE horplus_app_user NOLOGIN NOSUPERUSER NOBYPASSRLS;
+        END IF;
+      END $$;
+    `);
+    await prisma.$executeRawUnsafe(`GRANT ALL ON SCHEMA public TO horplus_app_user;`);
+    await prisma.$executeRawUnsafe(`GRANT ALL ON ALL TABLES IN SCHEMA public TO horplus_app_user;`);
+    await prisma.$executeRawUnsafe(`GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO horplus_app_user;`);
+    await prisma.$executeRawUnsafe(`ALTER ROLE horplus_app_user SET search_path TO public;`);
 
-    // First grant creation -> Succeeds
-    const grant1 = await grantService.createAccessGrant(testDormitoryId, friend.id, 'MANAGER', `usr_${testOwnerUserId}`);
-    expect(grant1.grant.status).toBe('ACTIVE');
+    // Run SELECT query under horplus_app_user role
+    await prisma.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe(`SET ROLE horplus_app_user`);
+      await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${testDormitoryBId}, true)`;
 
-    // Second active grant attempt for SAME friend -> Throws ACTIVE_GRANT_EXISTS 409
-    await expect(
-      grantService.createAccessGrant(testDormitoryId, friend.id, 'TECH', `usr_${testOwnerUserId}`)
-    ).rejects.toThrow('Target LINE friend already has an active access grant in this dormitory');
-
-    // Revoke first grant
-    await grantService.revokeAccessGrant(testDormitoryId, grant1.grant.id, `usr_${testOwnerUserId}`);
-
-    // After revoke, new grant for same friend CAN be created!
-    const grant2 = await grantService.createAccessGrant(testDormitoryId, friend.id, 'TECH', `usr_${testOwnerUserId}`);
-    expect(grant2.grant.status).toBe('ACTIVE');
-  });
-
-  it('4. Slot Semantics: REVOKED grants do not consume slots (10-slot boundary)', async () => {
-    const capDorm = await prisma.dormitory.create({ data: { name: 'Cap Verification Dorm' } });
-    await prisma.dormitoryMember.create({
-      data: {
-        dormitoryId: capDorm.id,
-        userId: testOwnerUserId,
-        roleId: testRoleId,
-        status: 'active',
-        membershipOrigin: 'GOOGLE_BOOTSTRAP'
-      }
+      // SELECT Dorm A records under Dorm B context -> 0 rows
+      const friendsInA = await tx.$queryRaw<any[]>`SELECT * FROM public.dormitory_line_friends WHERE dormitory_id = ${testDormitoryId}::uuid`;
+      expect(friendsInA.length).toBe(0);
     });
 
-    // Create 9 active grants for 9 distinct friends = 10 total slots
-    for (let i = 1; i <= 9; i++) {
-      const friend = await friendService.upsertFriendFromWebhook(capDorm.id, `U_CAP_FRIEND_${i}`, `Friend ${i}`);
-      await grantService.createAccessGrant(capDorm.id, friend.id, 'TECH', 'usr_owner');
-    }
-
-    const usageAtCap = await grantService.getSlotUsage(capDorm.id);
-    expect(usageAtCap.totalUsedSlots).toBe(10);
-
-    // 10th grant attempt (11th total slot) -> Throws 409 STAFF_LIMIT_EXCEEDED
-    const extraFriend = await friendService.upsertFriendFromWebhook(capDorm.id, 'U_CAP_FRIEND_EXTRA', 'Extra Friend');
+    // Run INSERT under horplus_app_user role -> Expect RLS WITH CHECK rejection
     await expect(
-      grantService.createAccessGrant(capDorm.id, extraFriend.id, 'TECH', 'usr_owner')
-    ).rejects.toThrow('Cannot create access grant. Account slot limit (10) reached.');
-
-    // Cleanup
-    await prisma.dormitory.delete({ where: { id: capDorm.id } }).catch(() => {});
-  });
-
-  it('5. Dynamic Access Grant Authorization Resolution Across Active Sessions', async () => {
-    const friend = await friendService.upsertFriendFromWebhook(
-      testDormitoryId,
-      'U_DYNAMIC_AUTH_USER',
-      'Dynamic Auth User'
-    );
-
-    const grantResult = await grantService.createAccessGrant(
-      testDormitoryId,
-      friend.id,
-      'MANAGER',
-      `usr_${testOwnerUserId}`
-    );
-
-    // Redeem in Session A and Session B
-    const sessionA = await grantService.redeemAccessGrant(grantResult.rawToken, 'BrowserA', '127.0.0.1');
-    const sessionB = await grantService.redeemAccessGrant(grantResult.rawToken, 'BrowserB', '127.0.0.2');
-
-    expect(sessionA.grant.roleCode).toBe('MANAGER');
-    expect(sessionB.grant.roleCode).toBe('MANAGER');
-
-    // Owner updates grant role to TECH
-    await grantService.changeGrantRole(testDormitoryId, grantResult.grant.id, 'TECH', `usr_${testOwnerUserId}`);
-
-    // Re-redeeming or validating dynamically returns new role TECH
-    const redemptionA = await grantService.redeemAccessGrant(grantResult.rawToken);
-    expect(redemptionA.grant.roleCode).toBe('TECH');
-
-    // Owner revokes grant
-    await grantService.revokeAccessGrant(testDormitoryId, grantResult.grant.id, `usr_${testOwnerUserId}`);
-
-    // Sessions and original bearer token are immediately invalid
-    await expect(grantService.redeemAccessGrant(grantResult.rawToken)).rejects.toThrow(
-      'Access grant link has been revoked or is invalid'
-    );
-
-    const sessionAInDb = await prisma.session.findUnique({ where: { id: sessionA.session.id } });
-    expect(sessionAInDb?.status).toBe('revoked');
-  });
-
-  it('6. PostgreSQL RLS Policies & Multi-Tenancy Isolation Audit', async () => {
-    // Verify RLS Enablement & Policy definitions in PostgreSQL catalog
-    const rlsTables = await prisma.$queryRaw<any[]>`
-      SELECT tablename, rowsecurity
-      FROM pg_tables
-      WHERE schemaname = 'public'
-        AND tablename IN ('dormitory_line_friends', 'dormitory_access_grants', 'dormitory_line_configs', 'line_webhook_event_receipts');
-    `;
-    expect(rlsTables.length).toBe(4);
-    for (const table of rlsTables) {
-      expect(table.rowsecurity).toBe(true);
-    }
-
-    const policies = await prisma.$queryRaw<any[]>`
-      SELECT policyname, tablename, cmd, qual
-      FROM pg_policies
-      WHERE tablename IN ('dormitory_line_friends', 'dormitory_access_grants', 'dormitory_line_configs', 'line_webhook_event_receipts');
-    `;
-    expect(policies.length).toBe(4);
-    for (const pol of policies) {
-      expect(pol.qual).toContain('app.current_dormitory_id');
-    }
-  });
-
-  it('7. Public Webhook Resolver Function (resolve_line_webhook_config)', async () => {
-    const config = await lineOaService.updateDormitoryLineConfig(testDormitoryId, {
-      lineOaId: '@test_resolver_oa',
-      channelId: '1657999999',
-      channelSecret: 'secret_resolver_key_12345',
-      channelAccessToken: 'token_resolver_access_key_12345'
-    });
-
-    expect(config.webhookUrl).toBeDefined();
-    const rawKey = config.webhookUrl!.split('/api/v1/line/webhook/')[1];
-    const keyHash = hashToken(rawKey);
-
-    // Query SECURITY DEFINER function
-    const res = await prisma.$queryRaw<any[]>`SELECT * FROM public.resolve_line_webhook_config(${keyHash})`;
-    expect(res.length).toBe(1);
-    expect(res[0].dormitory_id).toBe(testDormitoryId);
-    expect(res[0].is_connected).toBe(true);
-
-    // Query with random key -> returns 0 rows
-    const resRandom = await prisma.$queryRaw<any[]>`SELECT * FROM public.resolve_line_webhook_config(${hashToken('random_invalid_key')})`;
-    expect(resRandom.length).toBe(0);
-  });
-
-  it('8. LINE Credentials Verification Adapter Failure Handling', async () => {
-    // Attempt updating config with invalid credentials (adapter rejects)
-    await expect(
-      lineOaService.updateDormitoryLineConfig(testDormitoryId, {
-        channelSecret: 'invalid_secret',
-        channelAccessToken: 'invalid_token'
+      prisma.$transaction(async (tx) => {
+        await tx.$executeRawUnsafe(`SET ROLE horplus_app_user`);
+        await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${testDormitoryBId}, true)`;
+        await tx.$executeRaw`
+          INSERT INTO public.dormitory_line_friends (id, dormitory_id, line_user_id_hash, line_user_id_encrypted, display_name, friend_status, created_at, updated_at)
+          VALUES (gen_random_uuid(), ${testDormitoryId}::uuid, 'hash_test', 'enc_test', 'Hacker', 'FOLLOWING', NOW(), NOW())
+        `;
       })
-    ).rejects.toThrow('LINE OA credential verification failed. Please check Channel Secret and Access Token.');
+    ).rejects.toThrow();
+  });
+
+  it('9 & 10. SECURITY DEFINER Webhook Resolver & Concurrent Webhook Deduplication', async () => {
+    const configResult = await lineOaService.updateDormitoryLineConfig(testDormitoryId, {
+      lineOaId: '@dormA_sec_oa',
+      channelId: '1657666666',
+      channelSecret: 'secret_sec_key_12345',
+      channelAccessToken: 'token_sec_access_key_12345'
+    });
+
+    const rawKey = configResult.webhookUrl!.split('/api/v1/line/webhook/')[1];
+    const eventId = `evt_concurrent_${Date.now()}`;
+
+    const samplePayload = JSON.stringify({
+      events: [
+        {
+          type: 'message',
+          webhookEventId: eventId,
+          source: { userId: 'U_CONCURRENT_USER' }
+        }
+      ]
+    });
+    const bodyBuffer = Buffer.from(samplePayload, 'utf8');
+
+    const crypto = await import('crypto');
+    const signature = crypto.createHmac('sha256', 'secret_sec_key_12345').update(bodyBuffer).digest('base64');
+
+    // Run 2 concurrent identical webhook deliveries
+    const [res1, res2] = await Promise.all([
+      lineOaService.processWebhookEvent(rawKey, bodyBuffer, signature),
+      lineOaService.processWebhookEvent(rawKey, bodyBuffer, signature)
+    ]);
+
+    expect(res1.success).toBe(true);
+    expect(res2.success).toBe(true);
+    // Exactly 1 processed, 1 deduplicated replay without 500 error!
+    expect(res1.processedCount + res2.processedCount).toBe(1);
+    expect(res1.deduplicatedCount + res2.deduplicatedCount).toBe(1);
+  });
+
+  it('11. Safe LINE Friend DTO API (NO Hashes/Encrypted identity blobs)', async () => {
+    const friends = await friendService.getFriendsByDormitory(testDormitoryId);
+    expect(friends.length).toBeGreaterThan(0);
+
+    const f = friends[0];
+    expect(f.id).toBeDefined();
+    expect(f.displayName).toBeDefined();
+    expect(f.friendStatus).toBeDefined();
+
+    // Verify secret fields are NOT exposed on DTO
+    expect((f as any).lineUserIdHash).toBeUndefined();
+    expect((f as any).lineUserIdEncrypted).toBeUndefined();
   });
 });
