@@ -251,7 +251,25 @@ test.describe.serial('TASK-009 Playwright Browser Lifecycle — Staff, LINE OA &
 
     await expect(page.locator('[data-testid="line-friend-select"]')).toBeVisible();
     await page.selectOption('[data-testid="grant-role-select"]', 'MANAGER');
+
+    // Capture real POST create-access-grant HTTP response triggered by UI click
+    const createResponsePromise = page.waitForResponse(
+      (res) =>
+        res.request().method() === 'POST' &&
+        res.url().includes(`/api/v1/properties/${dormId}/access-grants`)
+    );
+
     await page.click('[data-testid="create-grant-button"]');
+
+    const createResponse = await createResponsePromise;
+    expect(createResponse.status()).toBe(201);
+    const createJson = await createResponse.json();
+
+    expect(createJson.data.bearerUrl).toContain('/staff-access#');
+    expect(createJson.data).not.toHaveProperty('rawToken');
+    expect(JSON.stringify(createJson)).not.toContain('"rawToken"');
+
+    createdBearerUrl = createJson.data.bearerUrl;
 
     await expect(page.locator('[data-testid="toast-message"]')).toBeVisible();
     await expect(page.locator('[data-testid="slot-usage-meter"]')).toContainText('2 / 10');
@@ -267,12 +285,12 @@ test.describe.serial('TASK-009 Playwright Browser Lifecycle — Staff, LINE OA &
     const grant = staffJson.data.accessGrants[0];
     createdGrantId = grant.id;
 
+    // Verify GET copy-link independently returns same URL and no rawToken
     const copyLinkRes = await apiContext.get(`http://127.0.0.1:3001/api/v1/properties/${dormId}/access-grants/${grant.id}/copy-link`);
     const copyLinkJson = await copyLinkRes.json();
     expect(copyLinkJson.data).not.toHaveProperty('rawToken');
-    createdBearerUrl = copyLinkJson.data.url || copyLinkJson.data.bearerUrl;
-
-    expect(createdBearerUrl).toContain('/staff-access#');
+    expect(JSON.stringify(copyLinkJson)).not.toContain('"rawToken"');
+    expect(copyLinkJson.data.url).toBe(createdBearerUrl);
 
     // Assert fake LINE server received push request for U_E2E_SUCCESS with Flex bearer URL
     expect(fakeLineServer.pushRequests.length).toBeGreaterThan(0);
@@ -313,6 +331,12 @@ test.describe.serial('TASK-009 Playwright Browser Lifecycle — Staff, LINE OA &
     const contextA = await browser.newContext();
     const pageA = await contextA.newPage();
 
+    // Register console monitoring listener BEFORE navigating to bearer URL
+    const consoleMessages: string[] = [];
+    pageA.on('console', (msg) => {
+      consoleMessages.push(msg.text());
+    });
+
     await pageA.goto(getLocalBearerUrl(createdBearerUrl));
 
     // Wait for redirection into workspace
@@ -335,12 +359,48 @@ test.describe.serial('TASK-009 Playwright Browser Lifecycle — Staff, LINE OA &
     const sessionJson = await sessionRes.json();
     expect(sessionJson.data.memberships[0].roleCode).toBe('MANAGER');
 
-    // Verify localStorage and sessionStorage contain zero raw token credentials
+    // Verify browser console output contains zero raw token or secret values
     const extractedToken = createdBearerUrl.split('#')[1];
+    for (const msgText of consoleMessages) {
+      expect(msgText).not.toContain(extractedToken);
+      expect(msgText).not.toContain(createdBearerUrl);
+      expect(msgText).not.toContain(testChannelSecret);
+      expect(msgText).not.toContain(testChannelAccessToken);
+    }
+
+    // Verify localStorage and sessionStorage contain zero raw token credentials or full bearer URL
     const localStorageDump = await pageA.evaluate(() => JSON.stringify(localStorage));
     const sessionStorageDump = await pageA.evaluate(() => JSON.stringify(sessionStorage));
     expect(localStorageDump).not.toContain(extractedToken);
+    expect(localStorageDump).not.toContain(createdBearerUrl);
     expect(sessionStorageDump).not.toContain(extractedToken);
+    expect(sessionStorageDump).not.toContain(createdBearerUrl);
+
+    // Enumerate available IndexedDB databases and verify zero bearer token persistence
+    const indexedDbDump = await pageA.evaluate(async () => {
+      if (!window.indexedDB || !window.indexedDB.databases) return [];
+      const dbs = await window.indexedDB.databases();
+      const results: Array<{ dbName: string; stores: any }> = [];
+
+      for (const dbInfo of dbs) {
+        if (!dbInfo.name) continue;
+        const req = window.indexedDB.open(dbInfo.name);
+        await new Promise<void>((resolve) => {
+          req.onsuccess = () => {
+            const db = req.result;
+            const storeNames = Array.from(db.objectStoreNames);
+            results.push({ dbName: dbInfo.name, stores: storeNames });
+            db.close();
+            resolve();
+          };
+          req.onerror = () => resolve();
+        });
+      }
+      return results;
+    });
+
+    expect(JSON.stringify(indexedDbDump)).not.toContain(extractedToken);
+    expect(JSON.stringify(indexedDbDump)).not.toContain(createdBearerUrl);
 
     await contextA.close();
   });

@@ -157,6 +157,15 @@ describe('TASK-009 — Comprehensive Delta Verification Suite (Checkpoint 1D)', 
     const friend = await friendService.upsertFriendFromWebhook(testDormitoryId, 'U_SESSION_TEST_USER', 'Session User');
     const grantRes = await grantService.createAccessGrant(testDormitoryId, friend.id, 'MANAGER', `usr_${testOwnerUserId}`);
 
+    expect(grantRes.bearerUrl).toContain('/staff-access#');
+    expect(grantRes).not.toHaveProperty('rawToken');
+    expect(JSON.stringify(grantRes)).not.toContain('"rawToken"');
+
+    const copyLinkRes = await grantService.getGrantCopyLink(testDormitoryId, grantRes.grant.id);
+    expect(copyLinkRes.url).toContain('/staff-access#');
+    expect(copyLinkRes).not.toHaveProperty('rawToken');
+    expect(JSON.stringify(copyLinkRes)).not.toContain('"rawToken"');
+
     const rawToken = grantRes.bearerUrl.split('#')[1];
     const redeemA = await grantService.redeemAccessGrant(rawToken);
     const redeemB = await grantService.redeemAccessGrant(rawToken);
