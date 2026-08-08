@@ -52,11 +52,11 @@ export class HttpLinePlatformAdapter implements LinePlatformAdapter {
   private readonly baseUrl: string;
 
   constructor(customBaseUrl?: string) {
-    const isTestMode = process.env.HORPLUS_E2E === 'true' || process.env.NODE_ENV === 'test';
-    if (isTestMode && customBaseUrl) {
+    const testUrl = process.env.LINE_PLATFORM_URL || process.env.LINE_API_BASE_URL;
+    if (customBaseUrl) {
       this.baseUrl = customBaseUrl;
-    } else if (isTestMode && process.env.LINE_API_BASE_URL) {
-      this.baseUrl = process.env.LINE_API_BASE_URL;
+    } else if (testUrl) {
+      this.baseUrl = testUrl;
     } else {
       this.baseUrl = 'https://api.line.me';
     }
@@ -235,6 +235,12 @@ export class MockLinePlatformAdapter implements LinePlatformAdapter {
       return { outcome: 'DEFINITIVE_FAILURE', errorCode: 'MISSING_PARAMS', safeMessage: 'Missing required parameters' };
     }
     this.pushCalls.push({ toLineUserId, flexMessage, retryKey });
+    if (toLineUserId === 'U_E2E_FAILURE') {
+      return { outcome: 'DEFINITIVE_FAILURE', errorCode: 'USER_BLOCKED', safeMessage: 'User blocked bot' };
+    }
+    if (toLineUserId === 'U_E2E_RETRY') {
+      return { outcome: 'RETRYABLE_UNKNOWN', errorCode: 'NETWORK_TIMEOUT', safeMessage: 'Network timeout' };
+    }
     if (this.mockPushResult) {
       return this.mockPushResult;
     }

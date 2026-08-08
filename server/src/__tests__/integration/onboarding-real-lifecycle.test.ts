@@ -43,7 +43,7 @@ describe('Real Owner Onboarding Lifecycle & Idempotency', () => {
     const buildingRepo = new PrismaBuildingRepository(prisma);
     const roomRepo = new PrismaRoomRepository(prisma);
     const sensitiveFieldService = new SensitiveFieldService(process.env.DORM_ENCRYPTION_KEY || 'default_32_byte_secret_key_123456');
-    const promoService = new PromoService(promoRepo, subRepo);
+    const promoService = new PromoService(promoRepo);
     const auditService = new AuditService();
 
     provisioningService = new DormitoryProvisioningService(

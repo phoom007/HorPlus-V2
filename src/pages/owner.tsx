@@ -421,35 +421,14 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
   const hasUnviewedContracts = (contracts || []).some(c => !seenContractIds.includes(c.id));
 
   // Pending contract submissions badge state (0 default when no pending submissions exist)
-  const [pendingSubmissionsCount, setPendingSubmissionsCount] = useState<number>(() => {
-    try {
-      const saved = localStorage.getItem('HorPlus_pending_contract_submissions');
-      if (saved) {
-        const subs = JSON.parse(saved);
-        return subs.filter((s: any) => s.status === 'pending').length;
-      }
-    } catch {}
-    return 0;
-  });
+  // Pending contract submissions badge state (0 default until authoritative backend pending contract endpoint exists)
+  const [pendingSubmissionsCount, setPendingSubmissionsCount] = useState<number>(0);
 
   useEffect(() => {
-    const syncPending = () => {
-      try {
-        const saved = localStorage.getItem('HorPlus_pending_contract_submissions');
-        if (saved) {
-          const subs = JSON.parse(saved);
-          setPendingSubmissionsCount(subs.filter((s: any) => s.status === 'pending').length);
-          return;
-        }
-      } catch {}
-      setPendingSubmissionsCount(0);
-    };
-    syncPending();
-    window.addEventListener('storage', syncPending);
-    return () => window.removeEventListener('storage', syncPending);
+    setPendingSubmissionsCount(0);
   }, []);
 
-  // Settings incomplete status (derived from active dormitory settings)
+  // Settings completeness status (suppressed until authoritative API settings completeness contract exists)
   const isSettingsIncomplete = false;
 
   const handleTabChange = (tabId: string) => {

@@ -49,7 +49,7 @@ import {
   Tenant,
   User as UserType
 } from '../../types';
-import { getDormitory } from '../../data/mockData';
+
 
 // Helper to generate real EMVCo PromptPay QR Code payload
 const generatePromptPayPayload = (target: string, amount?: number): string => {
@@ -483,28 +483,11 @@ export const OwnerDashboard: React.FC<OwnerDashboardProps> = ({
   });
 
   useEffect(() => {
-    const syncPending = () => {
-      try {
-        const saved = localStorage.getItem('HorPlus_pending_contract_submissions');
-        if (saved) {
-          const subs = JSON.parse(saved);
-          setPendingSubmissionsCount(subs.filter((s: any) => s.status === 'pending').length);
-        }
-      } catch {}
-    };
-    syncPending();
-    window.addEventListener('storage', syncPending);
-    return () => window.removeEventListener('storage', syncPending);
+    setPendingSubmissionsCount(0);
   }, []);
 
-  // 6. ตั้งค่า: if required fields are missing or empty string
-  const dormInfo = getDormitory();
-  const isSettingsIncomplete = !dormInfo?.promptPayName?.trim() ||
-    !dormInfo?.taxId?.trim() ||
-    !dormInfo?.phone?.trim() ||
-    !dormInfo?.promptPayNumber?.trim() ||
-    !dormInfo?.bankAccountNumber?.trim() ||
-    !dormInfo?.bankName?.trim();
+  // Settings completeness status (suppressed until authoritative API settings completeness contract exists)
+  const isSettingsIncomplete = false;
 
   // Handler for clicking 'ดูรายละเอียด' button
   const handleDetailClick = () => {

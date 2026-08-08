@@ -55,7 +55,7 @@ export const OwnerAuthGuard: React.FC<{ children?: React.ReactNode }> = ({ child
     }
     const hasSelectedInSession = sessionStorage.getItem('active_dormitory_selected_for_session') 
       || localStorage.getItem('selected_dormitory_id') 
-      || memberships[0]?.dormitoryId;
+      || session.memberships[0]?.dormitoryId;
     if (!hasSelectedInSession) {
       return <Navigate to="/auth/owner" replace />;
     }

@@ -82,18 +82,23 @@ function getDefaultThaiErrorMessage(code: DomainErrorCode, status: number): stri
   }
 }
 
+export function buildRequestUrl(baseUrl: string, path: string): string {
+  const cleanBase = baseUrl.replace(/\/$/, '');
+  let cleanPath = path.replace(/^\//, '');
+  if ((cleanBase.endsWith('/api/v1') || cleanBase === '/api/v1') && cleanPath.startsWith('api/v1/')) {
+    cleanPath = cleanPath.substring(7);
+  }
+  return `${cleanBase}/${cleanPath}`;
+}
+
 export async function httpRequest<T>(
   method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',
   path: string,
   body?: any,
   options: HttpClientOptions = {}
 ): Promise<T> {
-  const baseUrl = getApiBaseUrl().replace(/\/$/, '');
-  let cleanPath = path.replace(/^\//, '');
-  if ((baseUrl.endsWith('/api/v1') || baseUrl === '/api/v1') && cleanPath.startsWith('api/v1/')) {
-    cleanPath = cleanPath.substring(7);
-  }
-  const url = `${baseUrl}/${cleanPath}`;
+  const baseUrl = getApiBaseUrl();
+  const url = buildRequestUrl(baseUrl, path);
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',

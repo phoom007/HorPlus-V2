@@ -38,6 +38,8 @@ import { InMemoryMeterRepository, PrismaMeterRepository } from './db/repositorie
 import { InMemoryBillRepository, PrismaBillRepository } from './db/repositories/bill.repository.js';
 
 import { SensitiveFieldService } from './services/sensitive-field.service.js';
+import { MockLinePlatformAdapter } from './services/line-platform-adapter.js';
+import { createLinePlatformAdapter } from './services/line-adapter-factory.js';
 import { PlanService } from './services/plan.service.js';
 import { PromoService } from './services/promo.service.js';
 import { OnboardingService } from './services/onboarding.service.js';
@@ -174,6 +176,9 @@ export function createApp(optionsOrAuth?: CreateAppOptions | AuthenticationServi
     billingCycleService,
     meterService,
     billingService,
+    lineAdapter: (process.env.NODE_ENV === 'production' || process.env.LINE_ADAPTER === 'http' || process.env.LINE_PLATFORM_URL)
+      ? createLinePlatformAdapter()
+      : new MockLinePlatformAdapter(),
     dormitoryRepo,
     billingRepo,
     subRepo,
