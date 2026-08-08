@@ -166,11 +166,11 @@ export class AccessGrantService {
       const baseUrl = process.env.PUBLIC_APP_URL || 'https://app.horplus.com';
       const bearerUrl = `${baseUrl}/staff-access#${rawToken}`;
 
-      return { grant, rawToken, bearerUrl };
+      return { grant, bearerUrl, _transientRawToken: rawToken };
     });
 
     // PHASE B: Attempt delivery outside the grant transaction
-    const delivery = await this.deliverAccessGrant(grantResult.grant.id, dormitoryId, grantResult.rawToken).catch((err) => {
+    const delivery = await this.deliverAccessGrant(grantResult.grant.id, dormitoryId, grantResult._transientRawToken).catch((err) => {
       console.error('DELIVERY ERROR:', err);
       return {
         deliveryStatus: 'failed' as const,
@@ -179,7 +179,8 @@ export class AccessGrantService {
     });
 
     return {
-      ...grantResult,
+      grant: grantResult.grant,
+      bearerUrl: grantResult.bearerUrl,
       pushed: delivery.pushed,
       deliveryStatus: delivery.deliveryStatus
     };
@@ -188,7 +189,7 @@ export class AccessGrantService {
   /**
    * Get recoverable Owner-authorized bearer Copy Link URL
    */
-  async getGrantCopyLink(dormitoryId: string, grantId: string): Promise<{ url: string; rawToken: string }> {
+  async getGrantCopyLink(dormitoryId: string, grantId: string): Promise<{ url: string; grantId: string }> {
     const grant = await this.prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormitoryId}, true)`;
       return await tx.dormitoryAccessGrant.findFirst({
@@ -204,7 +205,7 @@ export class AccessGrantService {
     const baseUrl = process.env.PUBLIC_APP_URL || 'https://app.horplus.com';
     return {
       url: `${baseUrl}/staff-access#${rawToken}`,
-      rawToken
+      grantId
     };
   }
 

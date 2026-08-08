@@ -38,7 +38,6 @@ export const OwnerUsers: React.FC<OwnerUsersProps> = ({ onAddLog }) => {
   const [isCreating, setIsCreating] = useState(false);
   const [createdGrantResult, setCreatedGrantResult] = useState<{
     bearerUrl: string;
-    rawToken: string;
     grant: any;
   } | null>(null);
 

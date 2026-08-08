@@ -269,6 +269,7 @@ test.describe.serial('TASK-009 Playwright Browser Lifecycle — Staff, LINE OA &
 
     const copyLinkRes = await apiContext.get(`http://127.0.0.1:3001/api/v1/properties/${dormId}/access-grants/${grant.id}/copy-link`);
     const copyLinkJson = await copyLinkRes.json();
+    expect(copyLinkJson.data).not.toHaveProperty('rawToken');
     createdBearerUrl = copyLinkJson.data.url || copyLinkJson.data.bearerUrl;
 
     expect(createdBearerUrl).toContain('/staff-access#');
@@ -292,6 +293,7 @@ test.describe.serial('TASK-009 Playwright Browser Lifecycle — Staff, LINE OA &
     const copyLinkRes = await apiContext.get(`http://127.0.0.1:3001/api/v1/properties/${dormId}/access-grants/${createdGrantId}/copy-link`);
     expect(copyLinkRes.ok()).toBe(true);
     const copyLinkJson = await copyLinkRes.json();
+    expect(copyLinkJson.data).not.toHaveProperty('rawToken');
     const fetchedUrl = copyLinkJson.data.url || copyLinkJson.data.bearerUrl;
 
     expect(fetchedUrl).toBe(createdBearerUrl);
@@ -332,6 +334,13 @@ test.describe.serial('TASK-009 Playwright Browser Lifecycle — Staff, LINE OA &
     expect(sessionRes.ok()).toBe(true);
     const sessionJson = await sessionRes.json();
     expect(sessionJson.data.memberships[0].roleCode).toBe('MANAGER');
+
+    // Verify localStorage and sessionStorage contain zero raw token credentials
+    const extractedToken = createdBearerUrl.split('#')[1];
+    const localStorageDump = await pageA.evaluate(() => JSON.stringify(localStorage));
+    const sessionStorageDump = await pageA.evaluate(() => JSON.stringify(sessionStorage));
+    expect(localStorageDump).not.toContain(extractedToken);
+    expect(sessionStorageDump).not.toContain(extractedToken);
 
     await contextA.close();
   });
@@ -531,10 +540,15 @@ test.describe.serial('TASK-009 Playwright Browser Lifecycle — Staff, LINE OA &
       });
     }
 
-    // Verify 10 / 10 slots used
+    // Verify 10 / 10 slots used via API
     const staffRes = await apiContext.get(`http://127.0.0.1:3001/api/v1/properties/${dormId}/staff`);
     const staffJson = await staffRes.json();
     expect(staffJson.data.slotUsage.totalUsedSlots).toBe(10);
+
+    // Verify UI browser page displays 10 / 10 and disables create-grant button
+    await page.goto('http://127.0.0.1:5173/owner/users');
+    await expect(page.locator('[data-testid="slot-usage-meter"]')).toContainText('10 / 10');
+    await expect(page.locator('[data-testid="create-grant-button"]')).toBeDisabled();
 
     // Attempt 11th grant -> 409 STAFF_LIMIT_EXCEEDED
     const extraFriend = await createTestLineFriend(dormId, 'line_user_slot_11', 'Slot Friend 11');
@@ -669,5 +683,17 @@ test.describe.serial('TASK-009 Playwright Browser Lifecycle — Staff, LINE OA &
     expect(configText).not.toContain('tokenEncrypted');
     expect(configText).not.toContain('lineUserIdHash');
     expect(configText).not.toContain('lineUserIdEncrypted');
+
+    // Assert zero rawToken exposure across access grant copy-link response
+    const staffRes = await apiContext.get(`http://127.0.0.1:3001/api/v1/properties/${dormId}/staff`);
+    const staffJson = await staffRes.json();
+    const activeGrant = staffJson.data.accessGrants[0];
+    if (activeGrant) {
+      const copyLinkRes = await apiContext.get(`http://127.0.0.1:3001/api/v1/properties/${dormId}/access-grants/${activeGrant.id}/copy-link`);
+      expect(copyLinkRes.ok()).toBe(true);
+      const copyLinkJson = await copyLinkRes.json();
+      expect(copyLinkJson.data).not.toHaveProperty('rawToken');
+      expect(JSON.stringify(copyLinkJson)).not.toContain('"rawToken"');
+    }
   });
 });

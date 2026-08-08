@@ -106,7 +106,7 @@ export const Task009ApiAdapter = {
     propertyId: string,
     lineFriendId: string,
     roleCode: 'OWNER' | 'MANAGER' | 'TECH'
-  ): Promise<{ success: boolean; data?: { bearerUrl: string; rawToken: string; grant: any }; error?: any }> {
+  ): Promise<{ success: boolean; data?: { bearerUrl: string; grant: any; pushed?: boolean; deliveryStatus?: string }; error?: any }> {
     try {
       const res = await httpRequest<any>('POST', `/properties/${propertyId}/access-grants`, {
         lineFriendId,
