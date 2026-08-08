@@ -160,6 +160,11 @@ test.describe.serial('TASK-009 Playwright Browser Lifecycle — Staff, LINE OA &
   // =========================================================================
   test('2. Configures LINE OA in Settings, verifies token via fake bot info, clears plaintext inputs', async ({ context, page }) => {
     await setupOwnerBrowserContext(context, page);
+
+    // Register console monitoring listener BEFORE configuring credentials
+    const ownerConsoleMessages: string[] = [];
+    page.on('console', (msg) => ownerConsoleMessages.push(msg.text()));
+
     await page.goto('http://127.0.0.1:5173/owner/settings');
 
     const configRes = await page.request.put(`http://127.0.0.1:3001/api/v1/dormitories/${dormId}/line-oa/config`, {
@@ -183,9 +188,15 @@ test.describe.serial('TASK-009 Playwright Browser Lifecycle — Staff, LINE OA &
     expect(json.data.webhookVerifiedAt).toBeNull();
     expect(json.data.webhookUrl).toContain('/api/v1/line/webhook/');
 
-    // Assert plaintext secret is NOT present in response
+    // Assert plaintext secret is NOT present in HTTP response
     expect(JSON.stringify(json)).not.toContain(testChannelSecret);
     expect(JSON.stringify(json)).not.toContain(testChannelAccessToken);
+
+    // Assert Owner browser console contains zero LINE secrets
+    for (const msgText of ownerConsoleMessages) {
+      expect(msgText).not.toContain(testChannelSecret);
+      expect(msgText).not.toContain(testChannelAccessToken);
+    }
   });
 
   // =========================================================================
@@ -247,6 +258,11 @@ test.describe.serial('TASK-009 Playwright Browser Lifecycle — Staff, LINE OA &
 
   test('4. Creates MANAGER Access Grant for Somchai E2E, sends Flex push to fake LINE, slot increases to 2 / 10', async ({ context, page }) => {
     await setupOwnerBrowserContext(context, page);
+
+    // Register console monitoring listener BEFORE grant creation
+    const ownerConsoleMessages: string[] = [];
+    page.on('console', (msg) => ownerConsoleMessages.push(msg.text()));
+
     await page.goto('http://127.0.0.1:5173/owner/users');
 
     await expect(page.locator('[data-testid="line-friend-select"]')).toBeVisible();
@@ -273,6 +289,22 @@ test.describe.serial('TASK-009 Playwright Browser Lifecycle — Staff, LINE OA &
 
     await expect(page.locator('[data-testid="toast-message"]')).toBeVisible();
     await expect(page.locator('[data-testid="slot-usage-meter"]')).toContainText('2 / 10');
+
+    // Runtime DOM Audit: Assert authorized bearer URL element is displayed and no standalone rawToken element exists
+    const bearerUrlElement = page.locator('div.text-emerald-300').filter({ hasText: '/staff-access#' });
+    await expect(bearerUrlElement).toBeVisible();
+    await expect(bearerUrlElement).toContainText('/staff-access#');
+    expect(await page.locator('[data-testid="raw-token-display"]').count()).toBe(0);
+    expect(await page.locator('input[name="rawToken"]').count()).toBe(0);
+
+    // Assert Owner browser console contains zero bearer credentials or LINE secrets
+    const extractedToken = createdBearerUrl.split('#')[1];
+    for (const msgText of ownerConsoleMessages) {
+      expect(msgText).not.toContain(extractedToken);
+      expect(msgText).not.toContain(createdBearerUrl);
+      expect(msgText).not.toContain(testChannelSecret);
+      expect(msgText).not.toContain(testChannelAccessToken);
+    }
 
     // Fetch created grant from staff API
     const apiContext = await playwrightRequest.newContext({
@@ -376,31 +408,59 @@ test.describe.serial('TASK-009 Playwright Browser Lifecycle — Staff, LINE OA &
     expect(sessionStorageDump).not.toContain(extractedToken);
     expect(sessionStorageDump).not.toContain(createdBearerUrl);
 
-    // Enumerate available IndexedDB databases and verify zero bearer token persistence
+    // Enumerate available IndexedDB databases and verify zero bearer token persistence inside record keys/values
     const indexedDbDump = await pageA.evaluate(async () => {
       if (!window.indexedDB || !window.indexedDB.databases) return [];
       const dbs = await window.indexedDB.databases();
-      const results: Array<{ dbName: string; stores: any }> = [];
+      const dump: Array<{ dbName: string; storeName: string; keys: any[]; values: any[] }> = [];
 
       for (const dbInfo of dbs) {
         if (!dbInfo.name) continue;
-        const req = window.indexedDB.open(dbInfo.name);
         await new Promise<void>((resolve) => {
-          req.onsuccess = () => {
+          const req = window.indexedDB.open(dbInfo.name);
+          req.onerror = () => resolve();
+          req.onsuccess = async () => {
             const db = req.result;
             const storeNames = Array.from(db.objectStoreNames);
-            results.push({ dbName: dbInfo.name, stores: storeNames });
-            db.close();
-            resolve();
+            if (storeNames.length === 0) {
+              db.close();
+              resolve();
+              return;
+            }
+            try {
+              const tx = db.transaction(storeNames, 'readonly');
+              for (const storeName of storeNames) {
+                const store = tx.objectStore(storeName);
+                const keysReq = store.getAllKeys();
+                const valuesReq = store.getAll();
+
+                await Promise.all([
+                  new Promise((resKey) => { keysReq.onsuccess = resKey; keysReq.onerror = resKey; }),
+                  new Promise((resVal) => { valuesReq.onsuccess = resVal; valuesReq.onerror = resVal; }),
+                ]);
+
+                dump.push({
+                  dbName: dbInfo.name,
+                  storeName,
+                  keys: keysReq.result || [],
+                  values: valuesReq.result || [],
+                });
+              }
+            } catch (err) {
+              // Ignore transaction errors
+            } finally {
+              db.close();
+              resolve();
+            }
           };
-          req.onerror = () => resolve();
         });
       }
-      return results;
+      return dump;
     });
 
-    expect(JSON.stringify(indexedDbDump)).not.toContain(extractedToken);
-    expect(JSON.stringify(indexedDbDump)).not.toContain(createdBearerUrl);
+    const serializedIndexedDbDump = JSON.stringify(indexedDbDump);
+    expect(serializedIndexedDbDump).not.toContain(extractedToken);
+    expect(serializedIndexedDbDump).not.toContain(createdBearerUrl);
 
     await contextA.close();
   });
