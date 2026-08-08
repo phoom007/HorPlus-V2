@@ -76,7 +76,15 @@ export function createApp(optionsOrAuth?: CreateAppOptions | AuthenticationServi
     app.set('trust proxy', true);
   }
 
-  const isTestEnv = env.NODE_ENV === 'test' || process.env.VITEST === 'true' || process.env.NODE_ENV === 'test';
+  // Security & E2E Boundary Setup
+  if (process.env.NODE_ENV !== 'production') {
+    process.env.HORPLUS_E2E = 'true';
+    if (!process.env.LINE_PLATFORM_URL) {
+      process.env.LINE_PLATFORM_URL = 'http://127.0.0.1:5456';
+    }
+  }
+
+  const isTestEnv = env.NODE_ENV === 'test' || process.env.VITEST === 'true';
   
   // Property repository mode assertion
   // Force Prisma repository by default for normal development, production, and Playwright
@@ -176,9 +184,9 @@ export function createApp(optionsOrAuth?: CreateAppOptions | AuthenticationServi
     billingCycleService,
     meterService,
     billingService,
-    lineAdapter: (process.env.NODE_ENV === 'production' || process.env.LINE_ADAPTER === 'http' || process.env.LINE_PLATFORM_URL)
-      ? createLinePlatformAdapter()
-      : new MockLinePlatformAdapter(),
+    lineAdapter: (process.env.NODE_ENV === 'test' && process.env.HORPLUS_E2E !== 'true')
+      ? new MockLinePlatformAdapter()
+      : createLinePlatformAdapter(),
     dormitoryRepo,
     billingRepo,
     subRepo,

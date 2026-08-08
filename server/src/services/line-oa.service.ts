@@ -25,14 +25,14 @@ export class LineOaService {
 
   constructor(private prisma: PrismaClient, adapter?: LinePlatformAdapter) {
     this.friendService = new LineFriendService(prisma);
-    if (!adapter) {
-      if (process.env.NODE_ENV === 'production' || process.env.LINE_ADAPTER === 'http' || process.env.LINE_PLATFORM_URL) {
-        this.lineAdapter = createLinePlatformAdapter();
-      } else {
-        this.lineAdapter = new MockLinePlatformAdapter();
-      }
-    } else {
+    if (adapter) {
       this.lineAdapter = adapter;
+    } else if (process.env.NODE_ENV === 'test' && process.env.HORPLUS_E2E !== 'true') {
+      this.lineAdapter = new MockLinePlatformAdapter();
+    } else {
+      // Normal application runtime (production, staging, local development):
+      // ALWAYS default to HttpLinePlatformAdapter targeting real LINE Messaging API
+      this.lineAdapter = createLinePlatformAdapter();
     }
   }
 

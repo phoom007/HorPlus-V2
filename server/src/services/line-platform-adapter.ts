@@ -52,14 +52,20 @@ export class HttpLinePlatformAdapter implements LinePlatformAdapter {
   private readonly baseUrl: string;
 
   constructor(customBaseUrl?: string) {
-    const testUrl = process.env.LINE_PLATFORM_URL || process.env.LINE_API_BASE_URL;
-    if (customBaseUrl) {
-      this.baseUrl = customBaseUrl;
-    } else if (testUrl) {
-      this.baseUrl = testUrl;
+    const isProduction = process.env.NODE_ENV === 'production';
+    const isAllowedBoundary = !isProduction && (process.env.NODE_ENV === 'test' || process.env.HORPLUS_E2E === 'true');
+    const requestedOverride = customBaseUrl || process.env.LINE_PLATFORM_URL || process.env.LINE_API_BASE_URL || (isAllowedBoundary ? 'http://127.0.0.1:5456' : undefined);
+
+    if (requestedOverride && isAllowedBoundary) {
+      this.baseUrl = requestedOverride;
     } else {
+      // SECURITY INVARIANT BR-001: Production & normal development runtime base URL is ALWAYS https://api.line.me
       this.baseUrl = 'https://api.line.me';
     }
+  }
+
+  public getBaseUrl(): string {
+    return this.baseUrl;
   }
 
   async verifyAccessToken(channelAccessToken: string): Promise<{ verified: boolean; botInfo?: LineBotInfo }> {

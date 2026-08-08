@@ -161,6 +161,8 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
     }
   });
 
+  let completePayloadCaptured: any = null;
+
   /** Helper: inject session cookies into a fresh browser context */
   async function injectSession(context: any, token = sessionToken, csrf = csrfToken) {
     await context.addCookies([
@@ -184,20 +186,23 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
     expect(sessionData.data.memberships.length).toBe(0);
   });
 
-  test('2. Form initializes clean (no demo PII/bank data) and ignores legacy localStorage contamination (ROR3-002 & ROR3-005)', async ({ context, page }) => {
+  test('2. Form initializes clean (no demo PII/bank data) and ignores legacy localStorage contamination (ROR3-002, ROR3-005 & BR-005)', async ({ context, page }) => {
     test.setTimeout(60000);
     await injectSession(context);
 
     // Initial page load triggers Vite cold-start module compilation
     await page.goto('http://127.0.0.1:5173/owner/register', { timeout: 45000 });
 
-    // ROR3-005 Assertions: verify form fields start clean BEFORE user types anything
+    // BR-005 Pre-Input Assertions: verify form fields start clean BEFORE user types anything
     const dormNameInput = page.locator('input[placeholder="เช่น หอพัก HorPlus สุขุมวิท"]');
     await expect(dormNameInput).toBeVisible({ timeout: 45000 });
     await expect(dormNameInput).toHaveValue('');
 
     const dormAddressInput = page.locator('textarea[placeholder="เช่น 88/9 ซอยสุขุมวิท 55 แขวงคลองตันเหนือ เขตวัฒนา กรุงเทพฯ 10110"]');
     await expect(dormAddressInput).toHaveValue('');
+
+    const provinceSelect = page.locator('select').filter({ hasText: 'กรุงเทพมหานคร' }).first();
+    await expect(provinceSelect).toHaveValue('');
 
     // Pre-seed browser localStorage with old fake registered_dorm_profile AND unscoped pending contracts
     await page.evaluate(() => {
@@ -222,13 +227,22 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
     await expect(dormNameInput).toHaveValue('');
     await expect(dormAddressInput).toHaveValue('');
 
-    // Advance to Step 4 to check bank fields initialize clean
-    const provinceSelect = page.locator('select').filter({ hasText: 'กรุงเทพมหานคร' }).first();
+    // Fill Step 1 to advance to Step 4 bank fields clean check
     await provinceSelect.selectOption('กรุงเทพมหานคร');
-    await page.fill('input[placeholder="เช่น หอพัก HorPlus สุขุมวิท"]', 'Clean Check Dorm');
-    await page.fill('textarea[placeholder="เช่น 88/9 ซอยสุขุมวิท 55 แขวงคลองตันเหนือ เขตวัฒนา กรุงเทพฯ 10110"]', '123 Clean St');
+    await dormNameInput.fill('Clean Check Dorm');
+    await dormAddressInput.fill('123 Clean St');
     await page.click('button:has-text("ถัดไป")'); // Step 1 -> 2
+
+    // Fill Step 2 room topology
+    const roomsPerFloorInput = page.locator('input[type="number"]').filter({ hasText: '' }).first();
+    await page.fill('input[type="number"] >> nth=1', '4');
     await page.click('button:has-text("ถัดไป")'); // Step 2 -> 3
+
+    // Fill Step 3 utility and rent rates
+    await page.fill('input[type="number"] >> nth=0', '18');
+    await page.fill('input[type="number"] >> nth=1', '8');
+    const rentInputStep2 = page.locator('label', { hasText: 'ค่าเช่ารายเดือน' }).first().locator('..').locator('input');
+    await rentInputStep2.fill('4500');
     await page.click('button:has-text("ถัดไป")'); // Step 3 -> 4
 
     // Verify Step 4 bank selection & account details start completely blank
@@ -243,7 +257,7 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
     await expect(accNameInput).toHaveValue('');
   });
 
-  test('3. Complete 5-step onboarding UI, verify CSRF/Idempotency headers, PostgreSQL records, AND same-browser lifecycle (ROR3-005 & ROR3-006)', async ({ context, page }) => {
+  test('3. Complete 5-step onboarding UI, verify CSRF/Idempotency headers, PostgreSQL records, AND same-browser lifecycle (ROR3-005, ROR3-006 & BR-005)', async ({ context, page }) => {
     test.setTimeout(60000);
     await injectSession(context);
     await page.goto('http://127.0.0.1:5173/owner/register');
@@ -255,10 +269,15 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
     await provinceSelect.selectOption('กรุงเทพมหานคร');
     await page.click('button:has-text("ถัดไป")');
 
-    // ── Step 2: Buildings & Rooms (default 1 building A, 4 rooms) ──
+    // ── Step 2: Buildings & Rooms (fill 4 rooms) ──
+    await page.fill('input[type="number"] >> nth=1', '4');
     await page.click('button:has-text("ถัดไป")');
 
-    // ── Step 3: Utilities & Service Rates (defaults ok) ──
+    // ── Step 3: Utilities & Service Rates (fill rates) ──
+    await page.fill('input[type="number"] >> nth=0', '18');
+    await page.fill('input[type="number"] >> nth=1', '8');
+    const rentInputStep3 = page.locator('label', { hasText: 'ค่าเช่ารายเดือน' }).first().locator('..').locator('input');
+    await rentInputStep3.fill('4500');
     await page.click('button:has-text("ถัดไป")');
 
     // ── Step 4: Deposits & Payment Account ──
@@ -289,7 +308,6 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
     await modal.locator('button', { hasText: 'Google Search' }).click();
     await modal.locator('input[type="checkbox"]').check();
 
-    let completePayloadCaptured: any = null;
     let completeHeadersCaptured: any = null;
 
     page.on('request', (req) => {
@@ -309,7 +327,7 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
       modal.locator('button:has-text("ยอมรับเงื่อนไข")').click(),
     ]);
 
-    expect(completeResponse.status()).toBeLessThan(400);
+    expect(completeResponse.status()).toBe(200);
 
     // Wait for redirect to /owner/dashboard
     await page.waitForURL('**/owner/dashboard', { timeout: 25000 });
@@ -321,7 +339,7 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
 
     capturedIdempotencyKey = completeHeadersCaptured['x-idempotency-key'];
 
-    // ROR3-005 HTTP Boundary Assertions: Prove stale fake values NEVER crossed HTTP boundary
+    // ROR3-005 & BR-005 HTTP Boundary Assertions: Prove stale fake values NEVER crossed HTTP boundary
     expect(completePayloadCaptured.dormitory.name).toBe('Real Playwright Dormitory');
     expect(completePayloadCaptured.dormitory.name).not.toContain('FAKE');
     expect(completePayloadCaptured.payment.bankAccountName).toBe('นาย สมชาย ใจดี');
@@ -370,32 +388,46 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
     expect(postReloadDorms.length).toBe(1);
   });
 
-  test('4. Idempotency, CSRF & Double-Submit Negative Matrix (ROR3-007)', async ({ page }) => {
-    // A. Replay with SAME idempotency key -> returns 200 OK with same data, does NOT duplicate records
-    const payload = {
-      dormitory: { name: 'Real Playwright Dormitory', type: 'apartment' },
-      billing: { billingDay: 25, dueDay: 5 },
-      payment: { cashAccepted: true },
-      planCode: 'FREE',
-    };
-
-    const replayRes = await page.request.post('http://127.0.0.1:3001/api/v1/onboarding/complete', {
+  test('4. Idempotency, CSRF & Double-Submit Negative Matrix (BR-006 & ROR3-007)', async ({ page }) => {
+    // A. Replay with EXACT SAME idempotency key & payload -> returns 200 OK with stored response body, does NOT duplicate records
+    const replaySamePayloadRes = await page.request.post('http://127.0.0.1:3001/api/v1/onboarding/complete', {
       headers: {
         'Cookie': `horplus_session=${sessionToken}; horplus_csrf=${csrfToken}`,
         'X-CSRF-Token': csrfToken,
         'X-Idempotency-Key': capturedIdempotencyKey,
         'Content-Type': 'application/json',
       },
-      data: payload,
+      data: completePayloadCaptured,
     });
 
-    expect([200, 409]).toContain(replayRes.status());
+    expect(replaySamePayloadRes.status()).toBe(200);
 
-    // DB Check: Dormitories count remains exactly 1
+    // Assert exact DB record counts after same-key replay
     const dormsAfterReplay = await prisma.dormitory.findMany({ where: { createdByUserId: freshUserId } });
     expect(dormsAfterReplay.length).toBe(1);
 
-    // B. Attempting completion with a NEW idempotency key for an owner who already completed onboarding
+    const membersAfterReplay = await prisma.dormitoryMember.findMany({ where: { userId: freshUserId } });
+    expect(membersAfterReplay.length).toBe(1);
+
+    const subsAfterReplay = await prisma.dormitorySubscription.findMany({ where: { dormitoryId: createdDormitoryId } });
+    expect(subsAfterReplay.length).toBe(1);
+
+    // B. Replay with SAME idempotency key but DIFFERENT payload -> returns 409 IDEMPOTENCY_KEY_REUSED
+    const diffPayloadRes = await page.request.post('http://127.0.0.1:3001/api/v1/onboarding/complete', {
+      headers: {
+        'Cookie': `horplus_session=${sessionToken}; horplus_csrf=${csrfToken}`,
+        'X-CSRF-Token': csrfToken,
+        'X-Idempotency-Key': capturedIdempotencyKey,
+        'Content-Type': 'application/json',
+      },
+      data: { ...completePayloadCaptured, planCode: 'PAID' },
+    });
+
+    expect(diffPayloadRes.status()).toBe(409);
+    const diffPayloadJson = await diffPayloadRes.json();
+    expect(diffPayloadJson.error.code).toBe('IDEMPOTENCY_KEY_REUSED');
+
+    // C. Attempting completion with a NEW idempotency key for an owner who already completed onboarding
     const newKey = `onb_new_key_${Date.now()}`;
     const newKeyRes = await page.request.post('http://127.0.0.1:3001/api/v1/onboarding/complete', {
       headers: {
@@ -404,15 +436,19 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
         'X-Idempotency-Key': newKey,
         'Content-Type': 'application/json',
       },
-      data: payload,
+      data: completePayloadCaptured,
     });
 
-    // Should return existing completed onboarding result or 409 conflict
-    expect([200, 400, 409]).toContain(newKeyRes.status());
+    // Assert exact status semantic for owner who already has active membership
+    expect(newKeyRes.status()).toBe(409);
+    const newKeyJson = await newKeyRes.json();
+    expect(newKeyJson.error.code).toBe('FREE_DORMITORY_LIMIT_REACHED');
+
+    // DB Check: Counts remain strictly 1
     const dormsAfterNewKey = await prisma.dormitory.findMany({ where: { createdByUserId: freshUserId } });
     expect(dormsAfterNewKey.length).toBe(1);
 
-    // C. Malformed required payload -> 400 VALIDATION_ERROR
+    // D. Malformed required payload -> 400 VALIDATION_ERROR
     const badPayloadRes = await page.request.post('http://127.0.0.1:3001/api/v1/onboarding/complete', {
       headers: {
         'Cookie': `horplus_session=${sessionToken}; horplus_csrf=${csrfToken}`,
@@ -425,7 +461,7 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
 
     expect(badPayloadRes.status()).toBe(400);
 
-    // D. Missing / Invalid CSRF token -> 403 CSRF_INVALID
+    // E. Missing / Invalid CSRF token -> 403 CSRF_INVALID
     const badCsrfRes = await page.request.post('http://127.0.0.1:3001/api/v1/onboarding/complete', {
       headers: {
         'Cookie': `horplus_session=${sessionToken}; horplus_csrf=${csrfToken}`,
@@ -433,20 +469,30 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
         'X-Idempotency-Key': `bad_csrf_${Date.now()}`,
         'Content-Type': 'application/json',
       },
-      data: payload,
+      data: completePayloadCaptured,
     });
 
     expect(badCsrfRes.status()).toBe(403);
   });
 
-  test('5. Multi-Dorm Owner Auth Guard Fallback (ROR3-008)', async ({ context, page }) => {
-    // Authenticate multi-dorm owner without setting selected_dormitory_id in localStorage
+  test('5. Multi-Dorm Owner Auth Guard & Explicit Selection (BR-003 & ROR3-008)', async ({ context, page }) => {
+    // Authenticate multi-dorm owner WITHOUT setting selected_dormitory_id in localStorage or sessionStorage
     await injectSession(context, multiSessionToken, multiCsrfToken);
 
     await page.goto('http://127.0.0.1:5173/owner/dashboard');
 
-    // OwnerAuthGuard should deterministically fallback to memberships[0].dormitoryId (multiDormId1)
-    // and keep user on /owner/dashboard without kicking to login
+    // BR-003: OwnerAuthGuard MUST NOT use memberships[0] automatically for multi-dorm owner!
+    // Must redirect to /auth/owner for explicit dormitory selection
+    await expect(page).toHaveURL('http://127.0.0.1:5173/auth/owner');
+
+    // Now explicitly select Dorm B (multiDormId2)
+    await page.evaluate((dormId) => {
+      localStorage.setItem('selected_dormitory_id', dormId);
+    }, multiDormId2);
+
+    await page.goto('http://127.0.0.1:5173/owner/dashboard');
+
+    // User is now allowed on /owner/dashboard with Dorm B explicitly selected
     await expect(page).toHaveURL('http://127.0.0.1:5173/owner/dashboard');
 
     // Verify session API returns 2 memberships

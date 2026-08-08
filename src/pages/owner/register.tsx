@@ -222,55 +222,55 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
       dormType: 'อพาร์ตเมนต์',
       genderType: 'รวม',
 
-      // 2. Flexible Structure (Starter building)
+      // 2. Flexible Structure (Starter building requiring explicit topology & rent)
       buildings: [
         {
           id: 'b-1',
           name: 'อาคาร A',
           totalFloors: 1,
-          roomsPerFloor: 4,
+          roomsPerFloor: 0,
           hasElevator: false,
           roomPrefix: 'A',
           formatPattern: 'prefix_floor_room',
           mode: 'auto' as 'auto' | 'manual',
           customRooms: [] as string[],
-          securityDeposit: 5000,
+          securityDeposit: 0,
           rentRates: {
-            monthly: 4500,
-            term: 18000,
-            termMonths: 4,
-            daily: 600,
+            monthly: 0,
+            term: 0,
+            termMonths: 1,
+            daily: 0,
             maxOccupants: 2
           }
         }
       ],
 
-      // 3. Utilities & Service Rates (Numeric Product Defaults)
+      // 3. Utilities & Service Rates (Requiring explicit configuration)
       utilities: {
         waterBillingMode: 'unit',
-        waterRate: 18,
+        waterRate: 0,
 
         electricBillingMode: 'unit',
-        electricRate: 8,
+        electricRate: 0,
 
-        commonFeeMode: 'room',
-        commonFeeRate: 200,
+        commonFeeMode: 'none',
+        commonFeeRate: 0,
 
-        internetFeeMode: 'room',
-        internetRate: 150,
+        internetFeeMode: 'none',
+        internetRate: 0,
 
-        parkingFeeMode: 'room',
-        parkingFeeRate: 100
+        parkingFeeMode: 'none',
+        parkingFeeRate: 0
       },
 
-      // 4. Deposits, Late Fees & Payment Account
+      // 4. Deposits, Late Fees & Payment Account (Default disabled late fee)
       deposits: {
-        securityDeposit: 5000,
+        securityDeposit: 0,
         advanceRentMonths: 1,
         dueDateDay: 5,
-        gracePeriodDays: 2,
-        lateFeeType: 'per_day',
-        lateFeeAmount: 100
+        gracePeriodDays: 0,
+        lateFeeType: 'none',
+        lateFeeAmount: 0
       },
 
       paymentAccount: {
@@ -358,19 +358,19 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
     const newBuilding = {
       id: `b-${Date.now()}`,
       name: `อาคาร `,
-      totalFloors: 3,
-      roomsPerFloor: 8,
+      totalFloors: 1,
+      roomsPerFloor: 0,
       hasElevator: false,
       roomPrefix: '',
       formatPattern: 'prefix_floor_room',
       mode: 'auto' as 'auto' | 'manual',
       customRooms: [] as string[],
-      securityDeposit: 5000,
+      securityDeposit: 0,
       rentRates: {
-        monthly: 4500,
-        term: 18000,
-        termMonths: 4,
-        daily: 600,
+        monthly: 0,
+        term: 0,
+        termMonths: 1,
+        daily: 0,
         maxOccupants: 2
       }
     };
@@ -893,10 +893,11 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">จังหวัด <span className="text-rose-500">*</span></label>
                   <select
-                    value={formData.province || 'กรุงเทพมหานคร'}
+                    value={formData.province}
                     onChange={(e) => setFormData({ ...formData, province: e.target.value })}
                     className="w-full px-3 py-2 text-xs bg-white border border-slate-200 rounded-xl focus:border-blue-500 outline-none font-bold text-slate-800 cursor-pointer"
                   >
+                    <option value="">-- เลือกจังหวัด --</option>
                     {PROVINCE_OPTIONS.map((prov) => (
                       <option key={prov} value={prov}>{prov}</option>
                     ))}
@@ -1516,11 +1517,11 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {formData.buildings.map((b, bIdx) => {
                   const rentRates = b.rentRates || {
-                    monthly: 4500,
-                    term: 18000,
-                    termMonths: 4,
-                    maxInstallmentMonths: 2,
-                    daily: 600,
+                    monthly: 0,
+                    term: 0,
+                    termMonths: 1,
+                    maxInstallmentMonths: 1,
+                    daily: 0,
                     maxOccupants: 2
                   };
 

@@ -48,15 +48,45 @@ export const OwnerAuthGuard: React.FC<{ children?: React.ReactNode }> = ({ child
     return <Navigate to="/auth/owner" replace />;
   }
 
-  // If user has active memberships, forbid accessing initial onboarding page (/owner/register)
-  if (session.memberships && session.memberships.length >= 1) {
+  const userMemberships = session.memberships || [];
+  const membershipCount = userMemberships.length;
+
+  if (membershipCount === 0) {
+    if (location.pathname !== '/owner/register') {
+      return <Navigate to="/owner/register" replace />;
+    }
+  } else {
+    // User has 1 or more memberships -> forbid accessing initial onboarding page (/owner/register)
     if (location.pathname === '/owner/register') {
       return <Navigate to="/auth/owner" replace />;
     }
-    const hasSelectedInSession = sessionStorage.getItem('active_dormitory_selected_for_session') 
-      || localStorage.getItem('selected_dormitory_id') 
-      || session.memberships[0]?.dormitoryId;
-    if (!hasSelectedInSession) {
+
+    const storedDormId = sessionStorage.getItem('active_dormitory_selected_for_session') 
+      || localStorage.getItem('selected_dormitory_id');
+
+    // Confirm storedDormId belongs to current active memberships (validate & reject stale/foreign values)
+    const isStoredValid = storedDormId && userMemberships.some((m: any) => m.dormitoryId === storedDormId);
+
+    let activeDormId: string | null = null;
+    if (isStoredValid) {
+      activeDormId = storedDormId;
+    } else {
+      if (storedDormId) {
+        sessionStorage.removeItem('active_dormitory_selected_for_session');
+        localStorage.removeItem('selected_dormitory_id');
+      }
+      // If exactly 1 membership, defaulting to that single membership is acceptable
+      if (membershipCount === 1) {
+        activeDormId = userMemberships[0].dormitoryId;
+        localStorage.setItem('selected_dormitory_id', activeDormId!);
+      } else {
+        // BR-003: 2+ memberships with no valid stored selection -> MUST NOT use memberships[0]
+        // Require explicit dormitory selection via login/selection UI
+        activeDormId = null;
+      }
+    }
+
+    if (!activeDormId) {
       return <Navigate to="/auth/owner" replace />;
     }
   }
