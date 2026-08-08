@@ -47,6 +47,7 @@ import {
   getRooms, 
   getDormitory 
 } from '../../data/mockData';
+import { onboardingClient, CompleteOnboardingPayload } from '../../data/onboardingClient';
 import { Dormitory, Building, Room } from '../../types';
 
 interface RegisterProps {
@@ -699,7 +700,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
     setShowTermsModal(true);
   };
 
-  const handleConfirmTermsAndComplete = () => {
+  const handleConfirmTermsAndComplete = async () => {
     if (!agreedTerms) {
       setValidationError('กรุณากดยินยอมรับเงื่อนไขและข้อบังคับก่อนดำเนินการต่อ');
       return;
@@ -716,95 +717,86 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
     setValidationError(null);
     try {
       const finalSource = referralSource === 'other' ? `อื่นๆ (${referralOtherText.trim()})` : referralSource;
-      const dataToSave = {
-        ...formData,
-        termsAcceptedAt: new Date().toISOString(),
-        referralSource: finalSource
-      };
-      localStorage.setItem('registered_dorm_profile', JSON.stringify(dataToSave));
+      const idempotencyKey = `onb_comp_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
 
-      // 1. Update Dormitory in mockData / localStorage
-      const currentDorm = getDormitory();
-      const updatedDorm: Dormitory = {
-        ...currentDorm,
-        name: formData.dormName || currentDorm.name,
-        address: formData.dormAddress || currentDorm.address,
-        phone: formData.ownerPhone || currentDorm.phone,
-        ownerName: formData.ownerName || currentDorm.ownerName,
-        ownerPhone: formData.ownerPhone || currentDorm.ownerPhone,
-        ownerEmail: formData.ownerEmail || currentDorm.ownerEmail,
-        bankName: formData.paymentAccount.bankName || currentDorm.bankName,
-        bankAccountNumber: formData.paymentAccount.accountNumber || currentDorm.bankAccountNumber,
-        bankAccountName: formData.paymentAccount.bankAccountName || formData.paymentAccount.accountName || currentDorm.bankAccountName,
-        promptPayName: formData.paymentAccount.promptPayName || formData.paymentAccount.accountName || currentDorm.promptPayName,
-        promptPayNumber: formData.paymentAccount.promptPayId || currentDorm.promptPayNumber,
-        waterUnitRate: formData.utilities.waterRate,
-        electricUnitRate: formData.utilities.electricRate,
-        waterBillingMode: formData.utilities.waterBillingMode as any,
-        electricBillingMode: formData.utilities.electricBillingMode as any,
-        commonFee: formData.utilities.commonFeeRate,
-        commonFeeMode: formData.utilities.commonFeeMode as any,
-        internetFee: formData.utilities.internetRate,
-        internetFeeMode: formData.utilities.internetFeeMode as any,
-        parkingFee: formData.utilities.parkingFeeRate,
-        parkingFeeMode: formData.utilities.parkingFeeMode as any,
-        lateFeeDaily: formData.deposits.lateFeeAmount,
-        lateFeeType: formData.deposits.lateFeeType as any,
-        rulesTemplate: formData.rulesTemplate,
-        petPolicy: formData.petPolicy,
-        updatedAt: new Date().toISOString()
-      };
-      saveDormitory(updatedDorm);
+      // Prepare generated rooms list for real backend provisioning
+      const generatedRoomsPayload: any[] = [];
 
-      // 2. Generate and save buildings & rooms based on registered settings
-      const newBuildings: Building[] = formData.buildings.map((b, idx) => ({
-        id: b.id || `bld-${idx + 1}`,
-        name: b.name,
-        floorsCount: b.totalFloors || 1,
-        description: `อาคารจากการลงทะเบียน (${b.roomsPerFloor} ห้อง/ชั้น)`,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      }));
-      saveBuildings(newBuildings);
-
-      // 3. Generate rooms list referencing registered rates and default unpaid deposit status
-      const existingRooms = getRooms();
-      const generatedRooms: Room[] = [];
-
-      formData.buildings.forEach((b) => {
+      formData.buildings.forEach((b, bIdx) => {
+        const bId = b.id || `bld-${bIdx + 1}`;
         const roomNumbers = getGeneratedRooms(b);
         const rentRates = b.rentRates || { monthly: 4500, term: 18000, daily: 600 };
         const securityDeposit = formData.deposits.securityDeposit || 5000;
 
         roomNumbers.forEach((rNum) => {
-          const existing = existingRooms.find(r => r.roomNumber.trim().toUpperCase() === rNum.trim().toUpperCase());
           const digitsOnly = rNum.replace(/\D/g, '');
           const calculatedFloor = digitsOnly ? (parseInt(digitsOnly.charAt(0)) || 1) : 1;
 
-          generatedRooms.push({
-            id: existing?.id || `room-${rNum.toLowerCase()}-${Date.now()}`,
+          generatedRoomsPayload.push({
+            buildingId: bId,
             roomNumber: rNum,
-            buildingId: b.id,
             floor: calculatedFloor,
             monthlyRent: rentRates.monthly || 4500,
-            termRent: rentRates.term || (rentRates.monthly ? rentRates.monthly * 4 : 18000),
-            dailyRent: rentRates.daily || 600,
             depositAmount: securityDeposit,
-            depositStatus: 'unpaid', // สถานะเงินมัดจำ เป็นยังไม่จ่ายเป็นค่าเริ่มต้น
-            status: existing?.status || 'vacant',
-            currentTenantId: existing?.currentTenantId,
-            maxOccupants: rentRates.maxOccupants || 2,
-            initialWaterMeter: existing?.initialWaterMeter || 0,
-            initialElectricMeter: existing?.initialElectricMeter || 0,
-            images: existing?.images || ['https://images.unsplash.com/photo-1522771739844-6a9f6d5f14af?w=400'],
-            createdAt: existing?.createdAt || new Date().toISOString(),
-            updatedAt: new Date().toISOString()
+            parkingFee: formData.utilities.parkingFeeRate || 0,
+            maximumOccupants: rentRates.maxOccupants || 2,
+            initialWaterReading: 0,
+            initialElectricityReading: 0,
+            status: 'vacant',
           });
         });
       });
 
-      if (generatedRooms.length > 0) {
-        saveRooms(generatedRooms);
+      const payload: CompleteOnboardingPayload = {
+        dormitory: {
+          name: formData.dormName || 'หอพักใหม่',
+          type: formData.dormType || 'apartment',
+          addressLine1: formData.dormAddress || undefined,
+          phone: formData.ownerPhone || undefined,
+          email: formData.ownerEmail || undefined,
+          estimatedBuildingCount: formData.buildings.length || 1,
+          estimatedRoomCount: generatedRoomsPayload.length || 10,
+        },
+        billing: {
+          billingDay: Number(formData.utilities.billingCycleDay) || 25,
+          dueDay: Number(formData.deposits.paymentDueDays) || 5,
+          waterBillingType: formData.utilities.waterBillingMode === 'fixed' ? 'fixed_monthly' : 'per_unit',
+          waterRate: String(formData.utilities.waterRate || '18.00'),
+          electricityBillingType: formData.utilities.electricBillingMode === 'fixed' ? 'fixed_monthly' : 'per_unit',
+          electricityRate: String(formData.utilities.electricRate || '7.00'),
+          commonFee: String(formData.utilities.commonFeeRate || '0.00'),
+          internetFee: String(formData.utilities.internetRate || '0.00'),
+          lateFeeType: formData.deposits.lateFeeType === 'per_day' ? 'per_day' : 'fixed',
+          lateFeeValue: String(formData.deposits.lateFeeAmount || '50.00'),
+          rentBillingType: 'monthly',
+        },
+        payment: {
+          cashAccepted: true,
+          promptPayType: 'mobile_phone',
+          promptPayValue: formData.paymentAccount.promptPayId || undefined,
+          bankCode: formData.paymentAccount.bankName || undefined,
+          bankAccountName: formData.paymentAccount.accountName || undefined,
+          bankAccountNumber: formData.paymentAccount.accountNumber || undefined,
+        },
+        buildings: formData.buildings.map((b, idx) => ({
+          id: b.id || `bld-${idx + 1}`,
+          name: b.name,
+          floorsCount: Number(b.totalFloors) || 1,
+          roomsPerFloor: Number(b.roomsPerFloor) || 1,
+          numberingPattern: b.numberingPattern || null,
+          description: `อาคาร ${b.name}`,
+        })),
+        rooms: generatedRoomsPayload,
+        planCode: 'FREE',
+        promoCode: formData.promoCode || undefined,
+      };
+
+      const res = await onboardingClient.complete(payload, idempotencyKey);
+      const createdDormId = res.data?.dormitory?.id;
+
+      if (createdDormId) {
+        localStorage.setItem('selected_dormitory_id', createdDormId);
+        sessionStorage.setItem('active_dormitory_selected_for_session', createdDormId);
       }
 
       setShowTermsModal(false);
@@ -812,7 +804,6 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
       setIsSavedSuccess(true);
       setTimeout(() => setSaveProgress(100), 50);
 
-      // Scroll to top immediately when showing completion screen
       window.scrollTo({ top: 0, behavior: 'smooth' });
       const scrollables = document.querySelectorAll('.overflow-y-auto, #owner-main-content');
       scrollables.forEach(el => { el.scrollTop = 0; });
@@ -824,15 +815,13 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
       setTimeout(() => {
         setIsSavedSuccess(false);
         setSaveProgress(0);
-        if (onNavigate) {
-          onNavigate('dashboard');
-          window.scrollTo({ top: 0, behavior: 'smooth' });
-          const scrollables2 = document.querySelectorAll('.overflow-y-auto, #owner-main-content');
-          scrollables2.forEach(el => { el.scrollTop = 0; });
-        }
+        // Authoritative AuthContext Refresh & Navigation to Owner Dashboard
+        window.location.href = '/owner/dashboard';
       }, 2800);
-    } catch (e) {
-      setValidationError('เกิดข้อผิดพลาดในการบันทึกข้อมูล');
+    } catch (e: any) {
+      console.error('Onboarding complete error:', e);
+      const errMsg = e.domainError?.message || e.message || 'เกิดข้อผิดพลาดในการบันทึกข้อมูลการสร้างหอพัก';
+      setValidationError(errMsg);
     }
   };
 
