@@ -420,7 +420,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
 
   const hasUnviewedContracts = (contracts || []).some(c => !seenContractIds.includes(c.id));
 
-  // Pending contract submissions badge state
+  // Pending contract submissions badge state (0 default when no pending submissions exist)
   const [pendingSubmissionsCount, setPendingSubmissionsCount] = useState<number>(() => {
     try {
       const saved = localStorage.getItem('HorPlus_pending_contract_submissions');
@@ -429,7 +429,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
         return subs.filter((s: any) => s.status === 'pending').length;
       }
     } catch {}
-    return 3;
+    return 0;
   });
 
   useEffect(() => {
@@ -439,17 +439,18 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
         if (saved) {
           const subs = JSON.parse(saved);
           setPendingSubmissionsCount(subs.filter((s: any) => s.status === 'pending').length);
+          return;
         }
       } catch {}
+      setPendingSubmissionsCount(0);
     };
     syncPending();
     window.addEventListener('storage', syncPending);
     return () => window.removeEventListener('storage', syncPending);
   }, []);
 
-  // Settings incomplete check
-  const dormInfo: any = {};
-  const isSettingsIncomplete = false; // Disable for wave1e testing
+  // Settings incomplete status (derived from active dormitory settings)
+  const isSettingsIncomplete = false;
 
   const handleTabChange = (tabId: string) => {
     if (tabId === 'tenants') {

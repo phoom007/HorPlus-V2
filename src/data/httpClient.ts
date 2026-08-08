@@ -88,8 +88,12 @@ export async function httpRequest<T>(
   body?: any,
   options: HttpClientOptions = {}
 ): Promise<T> {
-  const baseUrl = getApiBaseUrl();
-  const url = `${baseUrl.replace(/\/$/, '')}/${path.replace(/^\//, '')}`;
+  const baseUrl = getApiBaseUrl().replace(/\/$/, '');
+  let cleanPath = path.replace(/^\//, '');
+  if ((baseUrl.endsWith('/api/v1') || baseUrl === '/api/v1') && cleanPath.startsWith('api/v1/')) {
+    cleanPath = cleanPath.substring(7);
+  }
+  const url = `${baseUrl}/${cleanPath}`;
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',

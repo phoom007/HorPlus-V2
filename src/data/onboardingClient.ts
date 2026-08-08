@@ -93,29 +93,29 @@ export interface CompleteOnboardingResponse {
 
 export const onboardingClient = {
   async getStatus() {
-    return httpRequest<any>('GET', '/api/v1/onboarding/status');
+    return httpRequest<any>('GET', '/onboarding/status');
   },
 
   async getDraft() {
-    return httpRequest<any>('GET', '/api/v1/onboarding/draft');
+    return httpRequest<any>('GET', '/onboarding/draft');
   },
 
   async saveDraft(currentStep: string, payload: Record<string, any>) {
-    return httpRequest<any>('PUT', '/api/v1/onboarding/draft', { currentStep, payload });
+    return httpRequest<any>('PUT', '/onboarding/draft', { currentStep, payload });
   },
 
   async deleteDraft() {
-    return httpRequest<any>('DELETE', '/api/v1/onboarding/draft');
+    return httpRequest<any>('DELETE', '/onboarding/draft');
   },
 
   async validatePromo(code: string, planCode?: string) {
-    return httpRequest<any>('POST', '/api/v1/onboarding/promo/validate', { code, planCode });
+    return httpRequest<any>('POST', '/onboarding/promo/validate', { code, planCode });
   },
 
   async complete(payload: CompleteOnboardingPayload, idempotencyKey: string): Promise<CompleteOnboardingResponse> {
     return httpRequest<CompleteOnboardingResponse>(
       'POST',
-      '/api/v1/onboarding/complete',
+      '/onboarding/complete',
       { ...payload, idempotencyKey },
       { idempotencyKey }
     );

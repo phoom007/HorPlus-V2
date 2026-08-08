@@ -52,6 +52,7 @@ const OwnerWorkspaceContainer: React.FC = () => {
 
   const handleLogout = async () => {
     localStorage.removeItem('selected_dormitory_id');
+    localStorage.removeItem('registered_dorm_profile');
     sessionStorage.removeItem('active_dormitory_selected_for_session');
     clearDemoSession();
     try {

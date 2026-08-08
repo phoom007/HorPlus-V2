@@ -40,13 +40,6 @@ import {
   Megaphone,
   MessageSquare
 } from 'lucide-react';
-import { 
-  saveDormitory, 
-  saveBuildings, 
-  saveRooms, 
-  getRooms, 
-  getDormitory 
-} from '../../data/mockData';
 import { onboardingClient, CompleteOnboardingPayload } from '../../data/onboardingClient';
 import { Dormitory, Building, Room } from '../../types';
 
@@ -214,30 +207,31 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
   };
 
   // Load existing configuration or defaults from localStorage
+  // Initialize clean, neutral form state for authenticated Owner onboarding
   const getInitialForm = () => {
-    const defaultData = {
-      // 1. Owner & Dorm Info (Simplified per request)
-      ownerName: 'นายสมศักดิ์ วงศ์สว่าง',
-      ownerIdCard: '1-1002-99887-65-1',
-      ownerPhone: '081-999-8888',
-      ownerEmail: 'somsak.w@gmail.com',
+    return {
+      // 1. Owner & Dorm Info (Clean neutral defaults)
+      ownerName: '',
+      ownerIdCard: '',
+      ownerPhone: '',
+      ownerEmail: '',
 
-      dormName: 'หอพัก HorPlus สุขุมวิท (HorPlus Residence)',
-      dormAddress: '88/9 ซอยสุขุมวิท 55 (ทองหล่อ) แขวงคลองตันเหนือ เขตวัฒนา กรุงเทพฯ 10110',
-      province: 'กรุงเทพมหานคร',
+      dormName: '',
+      dormAddress: '',
+      province: '',
       dormType: 'อพาร์ตเมนต์',
       genderType: 'รวม',
 
-      // 2. Buildings & Flexible Structure
+      // 2. Flexible Structure (Starter building)
       buildings: [
         {
           id: 'b-1',
           name: 'อาคาร A',
-          totalFloors: 3,
-          roomsPerFloor: 8,
-          hasElevator: true,
+          totalFloors: 1,
+          roomsPerFloor: 4,
+          hasElevator: false,
           roomPrefix: 'A',
-          formatPattern: 'prefix_floor_room', // 'prefix_floor_room' | 'floor_room' | 'prefix_floor_slash_room' | 'floor_slash_room' | 'prefix_dash_floor_room'
+          formatPattern: 'prefix_floor_room',
           mode: 'auto' as 'auto' | 'manual',
           customRooms: [] as string[],
           securityDeposit: 5000,
@@ -248,43 +242,24 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
             daily: 600,
             maxOccupants: 2
           }
-        },
-        {
-          id: 'b-2',
-          name: 'อาคาร B',
-          totalFloors: 4,
-          roomsPerFloor: 8,
-          hasElevator: false,
-          roomPrefix: 'B',
-          formatPattern: 'prefix_floor_room',
-          mode: 'auto' as 'auto' | 'manual',
-          customRooms: [] as string[],
-          securityDeposit: 5000,
-          rentRates: {
-            monthly: 4200,
-            term: 16800,
-            termMonths: 4,
-            daily: 550,
-            maxOccupants: 2
-          }
         }
       ],
 
-      // 3. Utilities & Service Rates (Mirrors Settings page)
+      // 3. Utilities & Service Rates (Numeric Product Defaults)
       utilities: {
-        waterBillingMode: 'unit', // 'unit' (บาท/หน่วย) | 'person' (บาท/คน) | 'room' (บาท/ห้อง)
+        waterBillingMode: 'unit',
         waterRate: 18,
 
-        electricBillingMode: 'unit', // 'unit' | 'person' | 'room'
+        electricBillingMode: 'unit',
         electricRate: 8,
 
-        commonFeeMode: 'room', // 'room' | 'person'
+        commonFeeMode: 'room',
         commonFeeRate: 200,
 
-        internetFeeMode: 'room', // 'room' | 'free'
+        internetFeeMode: 'room',
         internetRate: 150,
 
-        parkingFeeMode: 'room', // 'room' | 'free'
+        parkingFeeMode: 'room',
         parkingFeeRate: 100
       },
 
@@ -294,22 +269,22 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
         advanceRentMonths: 1,
         dueDateDay: 5,
         gracePeriodDays: 2,
-        lateFeeType: 'per_day', // 'per_day' | 'fixed_once'
+        lateFeeType: 'per_day',
         lateFeeAmount: 100
       },
 
       paymentAccount: {
-        bankName: 'กสิกรไทย (KBank)',
-        accountNumber: '098-2-34567-8',
-        accountName: 'นายสมศักดิ์ วงศ์สว่าง',
-        bankAccountName: 'นายสมศักดิ์ วงศ์สว่าง',
-        promptPayId: '081-999-8888',
-        promptPayName: 'นายสมศักดิ์ วงศ์สว่าง'
+        bankName: '',
+        accountNumber: '',
+        accountName: '',
+        bankAccountName: '',
+        promptPayId: '',
+        promptPayName: ''
       },
 
-      // 5. Pets, Rules & Signature (Pet fees removed per request)
+      // 5. Pets, Rules & Signature
       petPolicy: {
-        allowed: 'conditional', // 'none' | 'free' | 'conditional'
+        allowed: 'conditional',
         allowedTypes: ['small_dog', 'cat', 'caged_birds']
       },
 
@@ -320,38 +295,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
 5. ห้ามดัดแปลง ต่อเติม หรือทาสีห้องพักโดยไม่ได้รับอนุญาต`,
 
       ownerSignatureUrl: '',
-
-
     };
-
-    try {
-      const saved = localStorage.getItem('registered_dorm_profile');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        return {
-          ...defaultData,
-          ...parsed,
-          buildings: (parsed.buildings || defaultData.buildings).map((b: any) => ({
-            ...b,
-            securityDeposit: b.securityDeposit !== undefined ? b.securityDeposit : (parsed.deposits?.securityDeposit || 5000),
-            rentRates: {
-              monthly: 4500,
-              term: 18000,
-              termMonths: 4,
-              daily: 600,
-              maxOccupants: 2,
-              ...(b.rentRates || {})
-            }
-          })),
-          utilities: { ...defaultData.utilities, ...(parsed.utilities || {}) },
-          deposits: { ...defaultData.deposits, ...(parsed.deposits || {}) },
-          paymentAccount: { ...defaultData.paymentAccount, ...(parsed.paymentAccount || {}) },
-          petPolicy: { ...defaultData.petPolicy, ...(parsed.petPolicy || {}) }
-        };
-      }
-    } catch {}
-
-    return defaultData;
   };
 
   const [formData, setFormData] = useState(getInitialForm());
