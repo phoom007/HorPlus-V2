@@ -610,6 +610,9 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
     return { valid: true };
   };
 
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [activeIdempotencyKey, setActiveIdempotencyKey] = useState('');
+
   const handleNextStep = () => {
     const check = validateStep(currentStep);
     if (!check.valid) {
@@ -617,7 +620,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
       return;
     }
     setValidationError(null);
-    setCurrentStep(prev => Math.min(prev + 1, 5));
+    setCurrentStep(prev => Math.min(prev + 1, 4));
   };
 
   const handleStepClick = (stepNum: number) => {
@@ -641,10 +644,14 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
       return;
     }
     setValidationError(null);
+    if (!activeIdempotencyKey) {
+      setActiveIdempotencyKey(`onb_comp_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`);
+    }
     setShowTermsModal(true);
   };
 
   const handleConfirmTermsAndComplete = async () => {
+    if (isSubmitting) return;
     if (!agreedTerms) {
       setValidationError('กรุณากดยินยอมรับเงื่อนไขและข้อบังคับก่อนดำเนินการต่อ');
       return;
@@ -659,9 +666,10 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
     }
 
     setValidationError(null);
+    setIsSubmitting(true);
     try {
       const finalSource = referralSource === 'other' ? `อื่นๆ (${referralOtherText.trim()})` : referralSource;
-      const idempotencyKey = `onb_comp_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+      const keyToUse = activeIdempotencyKey || `onb_comp_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
 
       // Prepare generated rooms list for real backend provisioning
       const generatedRoomsPayload: any[] = [];
@@ -669,8 +677,8 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
       formData.buildings.forEach((b, bIdx) => {
         const bId = b.id || `bld-${bIdx + 1}`;
         const roomNumbers = getGeneratedRooms(b);
-        const rentRates = b.rentRates || { monthly: 4500, term: 18000, daily: 600 };
-        const securityDeposit = formData.deposits.securityDeposit || 5000;
+        const rentRates = b.rentRates || { monthly: 0, term: 0, daily: 0 };
+        const securityDeposit = b.securityDeposit !== undefined ? b.securityDeposit : (formData.deposits.securityDeposit ?? 0);
 
         roomNumbers.forEach((rNum) => {
           const digitsOnly = rNum.replace(/\D/g, '');
@@ -680,10 +688,10 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
             buildingId: bId,
             roomNumber: rNum,
             floor: calculatedFloor,
-            monthlyRent: rentRates.monthly || 4500,
-            depositAmount: securityDeposit,
-            parkingFee: formData.utilities.parkingFeeRate || 0,
-            maximumOccupants: rentRates.maxOccupants || 2,
+            monthlyRent: rentRates.monthly ?? 0,
+            depositAmount: securityDeposit ?? 0,
+            parkingFee: formData.utilities.parkingFeeRate ?? 0,
+            maximumOccupants: rentRates.maxOccupants ?? 2,
             initialWaterReading: 0,
             initialElectricityReading: 0,
             status: 'vacant',
@@ -693,25 +701,25 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
 
       const payload: CompleteOnboardingPayload = {
         dormitory: {
-          name: formData.dormName || 'หอพักใหม่',
+          name: formData.dormName,
           type: formData.dormType || 'apartment',
           addressLine1: formData.dormAddress || undefined,
           phone: formData.ownerPhone || undefined,
           email: formData.ownerEmail || undefined,
-          estimatedBuildingCount: formData.buildings.length || 1,
-          estimatedRoomCount: generatedRoomsPayload.length || 10,
+          estimatedBuildingCount: formData.buildings.length,
+          estimatedRoomCount: generatedRoomsPayload.length,
         },
         billing: {
-          billingDay: Number(formData.utilities.billingCycleDay) || 25,
-          dueDay: Number(formData.deposits.paymentDueDays) || 5,
+          billingDay: 25,
+          dueDay: Number(formData.deposits.dueDateDay) || 5,
           waterBillingType: formData.utilities.waterBillingMode === 'fixed' ? 'fixed_monthly' : 'per_unit',
-          waterRate: String(formData.utilities.waterRate || '18.00'),
+          waterRate: String(formData.utilities.waterRate ?? 0),
           electricityBillingType: formData.utilities.electricBillingMode === 'fixed' ? 'fixed_monthly' : 'per_unit',
-          electricityRate: String(formData.utilities.electricRate || '7.00'),
-          commonFee: String(formData.utilities.commonFeeRate || '0.00'),
-          internetFee: String(formData.utilities.internetRate || '0.00'),
-          lateFeeType: formData.deposits.lateFeeType === 'per_day' ? 'per_day' : 'fixed',
-          lateFeeValue: String(formData.deposits.lateFeeAmount || '50.00'),
+          electricityRate: String(formData.utilities.electricRate ?? 0),
+          commonFee: String(formData.utilities.commonFeeRate ?? 0),
+          internetFee: String(formData.utilities.internetRate ?? 0),
+          lateFeeType: formData.deposits.lateFeeType === 'per_day' ? 'per_day' : (formData.deposits.lateFeeType === 'fixed' ? 'fixed' : 'none'),
+          lateFeeValue: formData.deposits.lateFeeType === 'none' ? '0.00' : String(formData.deposits.lateFeeAmount ?? 0),
           rentBillingType: 'monthly',
         },
         payment: {
@@ -719,7 +727,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
           promptPayType: 'mobile_phone',
           promptPayValue: formData.paymentAccount.promptPayId || undefined,
           bankCode: formData.paymentAccount.bankName || undefined,
-          bankAccountName: formData.paymentAccount.accountName || undefined,
+          bankAccountName: (formData.paymentAccount.bankAccountName || formData.paymentAccount.accountName) || undefined,
           bankAccountNumber: formData.paymentAccount.accountNumber || undefined,
         },
         buildings: formData.buildings.map((b, idx) => ({
@@ -735,7 +743,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
         promoCode: formData.promoCode || undefined,
       };
 
-      const res = await onboardingClient.complete(payload, idempotencyKey);
+      const res = await onboardingClient.complete(payload, keyToUse);
       const createdDormId = res.data?.dormitory?.id;
 
       if (createdDormId) {
@@ -750,7 +758,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
 
       window.scrollTo({ top: 0, behavior: 'smooth' });
       const scrollables = document.querySelectorAll('.overflow-y-auto, #owner-main-content');
-      scrollables.forEach(el => { el.scrollTop = 0; });
+      scrollables.forEach(el => { (el as HTMLElement).scrollTop = 0; });
 
       if (onAddLog) {
         onAddLog('บันทึกการลงทะเบียนหอพักและยอมรับเงื่อนไขเรียบร้อยแล้ว', 'system');
@@ -766,6 +774,8 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
       console.error('Onboarding complete error:', e);
       const errMsg = e.domainError?.message || e.message || 'เกิดข้อผิดพลาดในการบันทึกข้อมูลการสร้างหอพัก';
       setValidationError(errMsg);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -783,8 +793,6 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
     { num: 2, title: 'อาคาร & ผังห้อง', sub: 'ตึก & เลขห้อง' },
     { num: 3, title: 'ค่าเช่า & ค่าน้ำไฟ', sub: 'อัตราบริการ' },
     { num: 4, title: 'มัดจำ & บัญชี', sub: 'ประกัน & ธนาคาร' },
-    { num: 5, title: 'กฎ & สัญญา', sub: 'ระเบียบ & ลายเซ็น' },
-
   ];
 
   return (
@@ -2200,7 +2208,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
           </button>
 
           <div className="flex items-center gap-2">
-            {currentStep < 5 ? (
+            {currentStep < 4 ? (
               <button
                 onClick={handleNextStep}
                 className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-2xl text-xs font-black transition-all flex items-center gap-2 shadow-md cursor-pointer"
@@ -2215,7 +2223,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                   className="px-5 sm:px-6 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl text-xs sm:text-xs font-black transition-all flex items-center gap-2 shadow-lg cursor-pointer whitespace-nowrap"
                 >
                   <Save className="w-4 h-4 shrink-0" />
-                  <span>ลงทะเบียนหอพัก</span>
+                  <span>บันทึก & ยืนยันข้อมูลสร้างหอพัก</span>
                 </button>
               </div>
             )}
@@ -2338,11 +2346,11 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
               <button
                 type="button"
                 onClick={handleConfirmTermsAndComplete}
-                disabled={!agreedTerms || !referralSource || (referralSource === 'other' && !referralOtherText.trim())}
+                disabled={isSubmitting || !agreedTerms || !referralSource || (referralSource === 'other' && !referralOtherText.trim())}
                 className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-xl text-xs font-black transition-all shadow-md cursor-pointer flex items-center gap-2"
               >
                 <CheckCircle2 className="w-4 h-4" />
-                ยอมรับเงื่อนไข
+                {isSubmitting ? 'กำลังบันทึกข้อมูล...' : 'ยอมรับเงื่อนไข & ยืนยันสร้างหอพัก'}
               </button>
             </div>
 

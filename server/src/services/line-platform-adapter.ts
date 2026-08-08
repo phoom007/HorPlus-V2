@@ -49,19 +49,22 @@ export interface LinePlatformAdapter {
  * Never logs Channel Secret, Access Token, raw LINE User ID, or bearer tokens.
  */
 export class HttpLinePlatformAdapter implements LinePlatformAdapter {
-  private readonly baseUrl: string;
+  private readonly customBaseUrl?: string;
 
   constructor(customBaseUrl?: string) {
+    this.customBaseUrl = customBaseUrl;
+  }
+
+  public get baseUrl(): string {
     const isProduction = process.env.NODE_ENV === 'production';
     const isAllowedBoundary = !isProduction && (process.env.NODE_ENV === 'test' || process.env.HORPLUS_E2E === 'true');
-    const requestedOverride = customBaseUrl || process.env.LINE_PLATFORM_URL || process.env.LINE_API_BASE_URL || (isAllowedBoundary ? 'http://127.0.0.1:5456' : undefined);
+    const requestedOverride = this.customBaseUrl || process.env.LINE_PLATFORM_URL || process.env.LINE_API_BASE_URL;
 
     if (requestedOverride && isAllowedBoundary) {
-      this.baseUrl = requestedOverride;
-    } else {
-      // SECURITY INVARIANT BR-001: Production & normal development runtime base URL is ALWAYS https://api.line.me
-      this.baseUrl = 'https://api.line.me';
+      return requestedOverride;
     }
+    // SECURITY INVARIANT: Production & normal development runtime base URL is ALWAYS https://api.line.me
+    return 'https://api.line.me';
   }
 
   public getBaseUrl(): string {

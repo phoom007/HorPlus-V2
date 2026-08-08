@@ -75,6 +75,7 @@ export default defineConfig({
         ALLOW_OPERATIONAL_ACTIVATION: 'true',
         HORPLUS_E2E: 'true',
         LINE_API_BASE_URL: 'http://127.0.0.1:5456',
+        LINE_PLATFORM_URL: 'http://127.0.0.1:5456',
         PUBLIC_APP_URL: 'http://127.0.0.1:5173',
       },
     },

@@ -24,8 +24,8 @@ export const OnboardingBillingInputSchema = z.object({
   electricityRate: z.string().regex(/^\d+(\.\d{1,2})?$/, 'ค่าไฟต้องเป็นตัวเลขจำนวนเงินที่ถูกต้อง').default('7.00'),
   commonFee: z.string().regex(/^\d+(\.\d{1,2})?$/, 'ค่าส่วนกลางต้องเป็นตัวเลขจำนวนเงินที่ถูกต้อง').default('0.00'),
   internetFee: z.string().regex(/^\d+(\.\d{1,2})?$/, 'ค่าอินเทอร์เน็ตต้องเป็นตัวเลขจำนวนเงินที่ถูกต้อง').default('0.00'),
-  lateFeeType: z.enum(['fixed', 'per_day', 'percentage']).default('fixed'),
-  lateFeeValue: z.string().regex(/^\d+(\.\d{1,2})?$/, 'ค่าปรับต้องเป็นตัวเลขจำนวนเงินที่ถูกต้อง').default('50.00'),
+  lateFeeType: z.enum(['fixed', 'per_day', 'percentage', 'none']).default('none'),
+  lateFeeValue: z.string().regex(/^\d+(\.\d{1,2})?$/, 'ค่าปรับต้องเป็นตัวเลขจำนวนเงินที่ถูกต้อง').default('0.00'),
   rentBillingType: z.enum(['monthly']).default('monthly'),
 }).strict();
 
