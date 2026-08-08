@@ -208,7 +208,7 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
   const [copiedWebhookUrl, setCopiedWebhookUrl] = useState(false);
 
   const fetchLineOaConfig = async () => {
-    const dormId = dorm?.id || localStorage.getItem('selected_dormitory_id') || sessionStorage.getItem('active_dormitory_selected_for_session') || '';
+    const dormId = localStorage.getItem('selected_dormitory_id') || sessionStorage.getItem('active_dormitory_selected_for_session') || dorm?.id || '';
     if (!dormId) return;
 
     const res = await Task009ApiAdapter.getLineOaConfig(dormId);
@@ -225,7 +225,7 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
   }, [dorm?.id]);
 
   const handleSaveLineOaConfig = async () => {
-    const dormId = dorm?.id || localStorage.getItem('selected_dormitory_id') || sessionStorage.getItem('active_dormitory_selected_for_session') || '';
+    const dormId = localStorage.getItem('selected_dormitory_id') || sessionStorage.getItem('active_dormitory_selected_for_session') || dorm?.id || '';
     if (!dormId) return;
 
     setIsSavingLineOa(true);
@@ -249,7 +249,7 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
   };
 
   const handleDisconnectLineOa = async () => {
-    const dormId = dorm?.id || localStorage.getItem('selected_dormitory_id') || sessionStorage.getItem('active_dormitory_selected_for_session') || '';
+    const dormId = localStorage.getItem('selected_dormitory_id') || sessionStorage.getItem('active_dormitory_selected_for_session') || dorm?.id || '';
     if (!dormId) return;
 
     const res = await Task009ApiAdapter.disconnectLineOa(dormId);
@@ -260,7 +260,7 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
   };
 
   const handleRotateWebhookKey = async () => {
-    const dormId = dorm?.id || localStorage.getItem('selected_dormitory_id') || sessionStorage.getItem('active_dormitory_selected_for_session') || '';
+    const dormId = localStorage.getItem('selected_dormitory_id') || sessionStorage.getItem('active_dormitory_selected_for_session') || dorm?.id || '';
     if (!dormId) return;
 
     const res = await Task009ApiAdapter.rotateWebhookKey(dormId);
@@ -883,6 +883,7 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                     <label className="block text-[10px] font-bold text-slate-700">LINE OA Basic ID</label>
                     <input
                       type="text"
+                      data-testid="line-oa-id-input"
                       value={inputLineOaId}
                       onChange={(e) => setInputLineOaId(e.target.value)}
                       placeholder="@yourdorm_oa"
@@ -893,6 +894,7 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                     <label className="block text-[10px] font-bold text-slate-700">LINE Channel ID</label>
                     <input
                       type="text"
+                      data-testid="line-channel-id-input"
                       value={inputChannelId}
                       onChange={(e) => setInputChannelId(e.target.value)}
                       placeholder="1657XXXXXX"
@@ -905,6 +907,7 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                     </label>
                     <input
                       type="password"
+                      data-testid="line-channel-secret-input"
                       value={inputChannelSecret}
                       onChange={(e) => setInputChannelSecret(e.target.value)}
                       placeholder={lineOaConfig.hasChannelSecret ? '••••••••••••••••' : 'ป้อน Channel Secret'}
@@ -917,6 +920,7 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                     </label>
                     <input
                       type="password"
+                      data-testid="line-channel-access-token-input"
                       value={inputChannelAccessToken}
                       onChange={(e) => setInputChannelAccessToken(e.target.value)}
                       placeholder={lineOaConfig.hasAccessToken ? '••••••••••••••••' : 'ป้อน Access Token'}
@@ -956,6 +960,7 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                 <div className="flex gap-2 pt-1">
                   <button
                     onClick={handleSaveLineOaConfig}
+                    data-testid="save-line-oa-button"
                     disabled={isSavingLineOa}
                     className="flex-1 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs rounded-xl transition-all cursor-pointer"
                   >

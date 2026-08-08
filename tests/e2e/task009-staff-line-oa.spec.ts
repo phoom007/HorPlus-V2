@@ -158,29 +158,34 @@ test.describe.serial('TASK-009 Playwright Browser Lifecycle — Staff, LINE OA &
   // =========================================================================
   // TEST 2: Configure LINE OA in Settings & Verify Fake Bot Info
   // =========================================================================
-  test('2. Configures LINE OA in Settings, verifies token via fake bot info, clears plaintext inputs', async ({ context, page }) => {
+  test('2. Configures LINE OA in Settings via UI form, verifies token via fake bot info, clears plaintext inputs', async ({ context, page }) => {
     await setupOwnerBrowserContext(context, page);
 
-    // Register console monitoring listener BEFORE configuring credentials
+    // Register console monitoring listener BEFORE navigating or typing credentials
     const ownerConsoleMessages: string[] = [];
     page.on('console', (msg) => ownerConsoleMessages.push(msg.text()));
 
     await page.goto('http://127.0.0.1:5173/owner/settings');
 
-    const configRes = await page.request.put(`http://127.0.0.1:3001/api/v1/dormitories/${dormId}/line-oa/config`, {
-      headers: {
-        'X-CSRF-Token': csrfToken,
-        'Content-Type': 'application/json',
-      },
-      data: {
-        lineOaId: '@test_line_oa',
-        channelId: '1234567890',
-        channelSecret: testChannelSecret,
-        channelAccessToken: testChannelAccessToken,
-      },
-    });
-    expect(configRes.ok()).toBe(true);
-    const json = await configRes.json();
+    // Fill actual LINE OA form fields in UI
+    await page.fill('[data-testid="line-oa-id-input"]', '@test_line_oa');
+    await page.fill('[data-testid="line-channel-id-input"]', '1234567890');
+    await page.fill('[data-testid="line-channel-secret-input"]', testChannelSecret);
+    await page.fill('[data-testid="line-channel-access-token-input"]', testChannelAccessToken);
+
+    // Capture real PUT /api/v1/dormitories/:id/line-oa/config triggered by UI Save button click
+    const saveResponsePromise = page.waitForResponse(
+      (res) =>
+        res.request().method() === 'PUT' &&
+        res.url().includes(`/api/v1/dormitories/${dormId}/line-oa/config`)
+    );
+
+    await page.click('[data-testid="save-line-oa-button"]');
+
+    const saveResponse = await saveResponsePromise;
+    expect(saveResponse.status()).toBe(200);
+    const json = await saveResponse.json();
+
     expect(json.data.connected).toBe(true);
     expect(json.data.hasChannelSecret).toBe(true);
     expect(json.data.hasAccessToken).toBe(true);
@@ -191,6 +196,10 @@ test.describe.serial('TASK-009 Playwright Browser Lifecycle — Staff, LINE OA &
     // Assert plaintext secret is NOT present in HTTP response
     expect(JSON.stringify(json)).not.toContain(testChannelSecret);
     expect(JSON.stringify(json)).not.toContain(testChannelAccessToken);
+
+    // Assert inputs in UI are masked/cleared after save according to product behavior
+    await expect(page.locator('[data-testid="line-channel-secret-input"]')).toHaveValue('');
+    await expect(page.locator('[data-testid="line-channel-access-token-input"]')).toHaveValue('');
 
     // Assert Owner browser console contains zero LINE secrets
     for (const msgText of ownerConsoleMessages) {
@@ -334,24 +343,47 @@ test.describe.serial('TASK-009 Playwright Browser Lifecycle — Staff, LINE OA &
   // =========================================================================
   // TEST 5: Copy Link Returns Identical URL Without Consuming Extra Slot or Push
   // =========================================================================
-  test('5. Copy Link returns exact same bearer URL without creating new grant or extra LINE push', async () => {
-    const apiContext = await playwrightRequest.newContext({
-      extraHTTPHeaders: { Cookie: `horplus_session=${sessionToken}` },
-    });
+  test('5. Copy Link returns exact same bearer URL via UI click without creating new grant or extra LINE push', async ({ context, page }) => {
+    await setupOwnerBrowserContext(context, page);
+
+    const ownerConsoleMessages: string[] = [];
+    page.on('console', (msg) => ownerConsoleMessages.push(msg.text()));
+
+    await page.goto('http://127.0.0.1:5173/owner/users');
+
     const initialPushCount = fakeLineServer.pushRequests.length;
 
-    const copyLinkRes = await apiContext.get(`http://127.0.0.1:3001/api/v1/properties/${dormId}/access-grants/${createdGrantId}/copy-link`);
-    expect(copyLinkRes.ok()).toBe(true);
+    // Capture real GET /copy-link response triggered by UI Copy Link button click in table row
+    const copyLinkPromise = page.waitForResponse(
+      (res) =>
+        res.request().method() === 'GET' &&
+        res.url().includes(`/access-grants/${createdGrantId}/copy-link`)
+    );
+
+    const copyBtn = page.locator(`[data-testid="copy-link-button-${createdGrantId}"]`);
+    await expect(copyBtn).toBeVisible();
+    await copyBtn.click();
+
+    const copyLinkRes = await copyLinkPromise;
+    expect(copyLinkRes.status()).toBe(200);
     const copyLinkJson = await copyLinkRes.json();
+
     expect(copyLinkJson.data).not.toHaveProperty('rawToken');
+    expect(JSON.stringify(copyLinkJson)).not.toContain('"rawToken"');
+
     const fetchedUrl = copyLinkJson.data.url || copyLinkJson.data.bearerUrl;
-
     expect(fetchedUrl).toBe(createdBearerUrl);
-    expect(fakeLineServer.pushRequests.length).toBe(initialPushCount);
 
-    const staffRes = await apiContext.get(`http://127.0.0.1:3001/api/v1/properties/${dormId}/staff`);
-    const staffJson = await staffRes.json();
-    expect(staffJson.data.slotUsage.totalUsedSlots).toBe(2);
+    // Assert state: no new LINE push, slot count remains 2 / 10
+    expect(fakeLineServer.pushRequests.length).toBe(initialPushCount);
+    await expect(page.locator('[data-testid="slot-usage-meter"]')).toContainText('2 / 10');
+
+    // Assert Owner console contains neither extracted bearer token nor full bearer URL
+    const extractedToken = createdBearerUrl.split('#')[1];
+    for (const msgText of ownerConsoleMessages) {
+      expect(msgText).not.toContain(extractedToken);
+      expect(msgText).not.toContain(createdBearerUrl);
+    }
   });
 
   const getLocalBearerUrl = (url: string) => url.replace(/^https?:\/\/[^\/]+/, 'http://127.0.0.1:5173');
@@ -416,44 +448,54 @@ test.describe.serial('TASK-009 Playwright Browser Lifecycle — Staff, LINE OA &
 
       for (const dbInfo of dbs) {
         if (!dbInfo.name) continue;
-        await new Promise<void>((resolve) => {
-          const req = window.indexedDB.open(dbInfo.name);
-          req.onerror = () => resolve();
-          req.onsuccess = async () => {
-            const db = req.result;
-            const storeNames = Array.from(db.objectStoreNames);
-            if (storeNames.length === 0) {
-              db.close();
-              resolve();
-              return;
-            }
-            try {
-              const tx = db.transaction(storeNames, 'readonly');
-              for (const storeName of storeNames) {
-                const store = tx.objectStore(storeName);
-                const keysReq = store.getAllKeys();
-                const valuesReq = store.getAll();
 
-                await Promise.all([
-                  new Promise((resKey) => { keysReq.onsuccess = resKey; keysReq.onerror = resKey; }),
-                  new Promise((resVal) => { valuesReq.onsuccess = resVal; valuesReq.onerror = resVal; }),
-                ]);
-
-                dump.push({
-                  dbName: dbInfo.name,
-                  storeName,
-                  keys: keysReq.result || [],
-                  values: valuesReq.result || [],
-                });
-              }
-            } catch (err) {
-              // Ignore transaction errors
-            } finally {
-              db.close();
-              resolve();
-            }
-          };
+        // Open database — any open error rejects and fails test
+        const db = await new Promise<IDBDatabase>((resolve, reject) => {
+          const req = window.indexedDB.open(dbInfo.name!);
+          req.onerror = (e) => reject(new Error(`Failed to open IndexedDB database ${dbInfo.name}: ${e}`));
+          req.onsuccess = () => resolve(req.result);
         });
+
+        const storeNames = Array.from(db.objectStoreNames);
+        for (const storeName of storeNames) {
+          // Open a NEW readonly transaction for EACH store — any transaction error rejects and fails test
+          const { keys, values } = await new Promise<{ keys: any[]; values: any[] }>((resolve, reject) => {
+            try {
+              const tx = db.transaction(storeName, 'readonly');
+              const store = tx.objectStore(storeName);
+              const keysReq = store.getAllKeys();
+              const valuesReq = store.getAll();
+
+              let keysRes: any[] | null = null;
+              let valuesRes: any[] | null = null;
+
+              keysReq.onerror = (e) => reject(new Error(`IndexedDB getAllKeys error on ${storeName}: ${e}`));
+              valuesReq.onerror = (e) => reject(new Error(`IndexedDB getAll error on ${storeName}: ${e}`));
+
+              keysReq.onsuccess = () => {
+                keysRes = keysReq.result;
+                if (valuesRes !== null) resolve({ keys: keysRes, values: valuesRes });
+              };
+              valuesReq.onsuccess = () => {
+                valuesRes = valuesReq.result;
+                if (keysRes !== null) resolve({ keys: keysRes, values: valuesRes });
+              };
+
+              tx.onerror = (e) => reject(new Error(`IndexedDB transaction error on ${storeName}: ${e}`));
+              tx.onabort = (e) => reject(new Error(`IndexedDB transaction aborted on ${storeName}: ${e}`));
+            } catch (err) {
+              reject(err);
+            }
+          });
+
+          dump.push({
+            dbName: dbInfo.name,
+            storeName,
+            keys: keys || [],
+            values: values || [],
+          });
+        }
+        db.close();
       }
       return dump;
     });
