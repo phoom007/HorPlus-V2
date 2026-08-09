@@ -424,9 +424,12 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
     await modal.locator('input[type="checkbox"]').check();
 
     let completionPostCount = 0;
+    const capturedIdempotencyKeys: string[] = [];
     page.on('request', (req) => {
       if (req.url().includes('onboarding/complete') && req.method() === 'POST') {
         completionPostCount++;
+        const key = req.headers()['x-idempotency-key'];
+        if (key) capturedIdempotencyKeys.push(key);
       }
     });
 
@@ -446,8 +449,9 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
 
     await page.waitForURL('**/owner/dashboard', { timeout: 25000 });
 
-    // Assert exact HTTP POST completion request count = 1 (FD-005 requirement)
+    // Assert exact HTTP POST completion request count = 1 (FD-005 requirement) and 1 unique idempotency key (PP-007)
     expect(completionPostCount).toBe(1);
+    expect(capturedIdempotencyKeys.length).toBe(1);
 
     // Assert exact PostgreSQL DB record counts
     const rapidDorms = await prisma.dormitory.findMany({ where: { createdByUserId: rapidUser.id } });
@@ -614,6 +618,27 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
     expect(fBilling!.electricityRate.toString()).toBe('0');
     expect(fBilling!.lateFeeType).toBe('none');
     expect(fBilling!.lateFeeValue.toString()).toBe('0');
+    expect(fBilling!.bankCode).toBe('กสิกรไทย (KBank)');
+    expect(fBilling!.bankAccountNumber).toBe('888-8-88888-8');
+    expect(fBilling!.bankAccountName).toBe('นาย Fidelity Tester');
+    expect(fBilling!.promptPayType).toBeNull();
+    expect(fBilling!.promptPayValue).toBeNull();
+
+    // 3. Settings GET API Readback
+    const settingsGetRes = await context.request.get(`http://127.0.0.1:3001/api/v1/dormitories/${fDorm!.id}/billing-settings`, {
+      headers: {
+        'Cookie': `horplus_session=${fToken}; horplus_csrf=${fCsrf}`,
+        'x-dormitory-id': fDorm!.id,
+      },
+    });
+    expect(settingsGetRes.ok()).toBe(true);
+    const settingsData = (await settingsGetRes.json()).data;
+    expect(settingsData.billingDay).toBe(25);
+    expect(settingsData.bankCode).toBe('กสิกรไทย (KBank)');
+    expect(settingsData.bankAccountNumber).toBe('888-8-88888-8');
+    expect(settingsData.bankAccountName).toBe('นาย Fidelity Tester');
+    expect(settingsData.promptPayType).toBeNull();
+    expect(settingsData.promptPayValue).toBeNull();
 
     const fRooms = await prisma.room.findMany({ where: { dormitoryId: fDorm!.id } });
     expect(fRooms.length).toBe(3);
@@ -635,7 +660,7 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
     await prisma.user.delete({ where: { id: fidelityUser.id } });
   });
 
-  test('7. PromptPay Canonical Classification Matching — 10 Digits & 13 Digits (FD-001)', async ({ context, page }) => {
+  test('7. PromptPay Canonical Matrix — 10-Digit Mobile Phone (PP-001, PP-002, PP-003)', async ({ context, page }) => {
     test.setTimeout(60000);
     const ppUser = await prisma.user.create({
       data: {
@@ -670,7 +695,7 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
     await page.goto('http://127.0.0.1:5173/owner/register');
 
     // Step 1
-    await page.fill('input[placeholder="เช่น หอพัก HorPlus สุขุมวิท"]', 'PromptPay Classification Dorm');
+    await page.fill('input[placeholder="เช่น หอพัก HorPlus สุขุมวิท"]', 'PromptPay Mobile Phone Dorm');
     await page.fill('textarea[placeholder="เช่น 88/9 ซอยสุขุมวิท 55 แขวงคลองตันเหนือ เขตวัฒนา กรุงเทพฯ 10110"]', '99 PromptPay St');
     const provinceSelect = page.locator('select').filter({ hasText: 'กรุงเทพมหานคร' }).first();
     await provinceSelect.selectOption('กรุงเทพมหานคร');
@@ -719,12 +744,32 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
 
     expect(postRes.status()).toBe(200);
 
-    // FD-001 Assertion for 10-digit mobile_phone: promptPayType == 'mobile_phone', promptPayValue == '0819998888'
+    // 1. POST JSON Payload assertions
     expect(capturedPost.payment.promptPayType).toBe('mobile_phone');
     expect(capturedPost.payment.promptPayValue).toBe('0819998888');
 
-    // Cleanup
+    // 2. Database assertions
     const ppDorm = await prisma.dormitory.findFirst({ where: { createdByUserId: ppUser.id } });
+    expect(ppDorm).not.toBeNull();
+    const ppBilling = await prisma.dormitoryBillingSettings.findUnique({ where: { dormitoryId: ppDorm!.id } });
+    expect(ppBilling).not.toBeNull();
+    expect(ppBilling!.promptPayType).toBe('mobile_phone');
+    expect(ppBilling!.promptPayValue).toBe('0819998888');
+    expect(ppBilling!.bankCode).toBe('กสิกรไทย (KBank)');
+
+    // 3. Settings GET API Readback
+    const settingsRes = await context.request.get(`http://127.0.0.1:3001/api/v1/dormitories/${ppDorm!.id}/billing-settings`, {
+      headers: {
+        'Cookie': `horplus_session=${ppToken}; horplus_csrf=${ppCsrf}`,
+        'x-dormitory-id': ppDorm!.id,
+      },
+    });
+    expect(settingsRes.ok()).toBe(true);
+    const settingsBody = (await settingsRes.json()).data;
+    expect(settingsBody.promptPayType).toBe('mobile_phone');
+    expect(settingsBody.promptPayValue).toBe('0819998888');
+
+    // Cleanup
     if (ppDorm) {
       const subList = await prisma.dormitorySubscription.findMany({ where: { dormitoryId: ppDorm.id }, select: { id: true } });
       for (const sub of subList) {
@@ -739,5 +784,131 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
     }
     await prisma.session.deleteMany({ where: { userId: ppUser.id } });
     await prisma.user.delete({ where: { id: ppUser.id } });
+  });
+
+  test('8. PromptPay Canonical Matrix — 13-Digit National ID with AES-256-GCM Encryption (PP-001, PP-002, PP-003, PP-009)', async ({ context, page }) => {
+    test.setTimeout(60000);
+    const nidUser = await prisma.user.create({
+      data: {
+        email: `nid-owner-${Date.now()}@example.com`,
+        emailNormalized: `nid-owner-${Date.now()}@example.com`,
+        name: 'National ID PromptPay Owner',
+        googleSubject: `goog-nid-${Date.now()}`,
+        status: 'active',
+      },
+    });
+
+    const nidSid = crypto.randomUUID();
+    await prisma.session.create({
+      data: {
+        userId: nidUser.id,
+        sessionIdHash: SessionTokenService.hashSessionId(nidSid),
+        tokenVersion: 1,
+        status: 'active',
+        expiresAt: new Date(Date.now() + 86400 * 1000),
+      },
+    });
+
+    const sessionSecret = process.env.SESSION_ENCRYPTION_KEY || '0123456789abcdef0123456789abcdef';
+    const csrfSecret = process.env.CSRF_SIGNING_KEY || 'csrf-secret-key-0123456789abcdef';
+    const sessionTokenService = new SessionTokenService(sessionSecret);
+    const csrfService = new CsrfService(csrfSecret);
+
+    const nidToken = sessionTokenService.encryptToken({ sub: nidUser.id, sid: nidSid, type: 'session', version: 1 }, 86400);
+    const nidCsrf = csrfService.generateCsrfToken(nidSid);
+
+    await injectSession(context, nidToken, nidCsrf);
+    await page.goto('http://127.0.0.1:5173/owner/register');
+
+    // Step 1
+    await page.fill('input[placeholder="เช่น หอพัก HorPlus สุขุมวิท"]', 'PromptPay National ID Dorm');
+    await page.fill('textarea[placeholder="เช่น 88/9 ซอยสุขุมวิท 55 แขวงคลองตันเหนือ เขตวัฒนา กรุงเทพฯ 10110"]', '13 National ID Ave');
+    const provinceSelect = page.locator('select').filter({ hasText: 'กรุงเทพมหานคร' }).first();
+    await provinceSelect.selectOption('กรุงเทพมหานคร');
+    await page.click('button:has-text("ถัดไป")');
+
+    // Step 2
+    await page.fill('input[type="number"] >> nth=1', '2');
+    await page.click('button:has-text("ถัดไป")');
+
+    // Step 3
+    await page.fill('input[type="number"] >> nth=0', '18');
+    await page.fill('input[type="number"] >> nth=1', '8');
+    const rentInput = page.locator('label', { hasText: 'ค่าเช่ารายเดือน' }).first().locator('..').locator('input');
+    await rentInput.fill('5000');
+    await page.click('button:has-text("ถัดไป")');
+
+    // Step 4: Fill Bank details + 13-digit PromptPay Thai National ID
+    const bankSelect = page.locator('select').filter({ hasText: '-- เลือกธนาคาร --' });
+    await bankSelect.selectOption({ index: 1 });
+    await page.fill('input[placeholder="XXX-X-XXXXX-X"]', '321-0-98765-4');
+    await page.fill('input[placeholder="เช่น นาย สมศักดิ์ วงศ์สว่าง (บัญชีธนาคาร)"]', 'นาย ชาติชาย ประชาชน');
+
+    const promptPayInput = page.locator('input[placeholder="เช่น 081-999-8888 หรือ 1-1007-00123-45-6"]');
+    await promptPayInput.fill('1-1007-00123-45-6');
+
+    let capturedPost: any = null;
+    page.on('request', (req) => {
+      if (req.url().includes('onboarding/complete') && req.method() === 'POST') {
+        try {
+          capturedPost = JSON.parse(req.postData() || '{}');
+        } catch {}
+      }
+    });
+
+    await page.click('button:has-text("บันทึก & ยืนยันข้อมูลสร้างหอพัก")');
+
+    const modal = page.locator('.fixed.inset-0.z-50');
+    await modal.waitFor({ state: 'visible' });
+    await modal.locator('button', { hasText: 'Google Search' }).click();
+    await modal.locator('input[type="checkbox"]').check();
+
+    const [postRes] = await Promise.all([
+      page.waitForResponse((res) => res.url().includes('onboarding/complete'), { timeout: 15000 }),
+      modal.locator('button:has-text("ยอมรับเงื่อนไข & ยืนยันสร้างหอพัก")').click(),
+    ]);
+
+    expect(postRes.status()).toBe(200);
+
+    // 1. POST JSON Payload assertions for 13-digit national ID
+    expect(capturedPost.payment.promptPayType).toBe('national_id');
+    expect(capturedPost.payment.promptPayValue).toBe('1100700123456');
+
+    // 2. Database Privacy Assertions (PP-009): Raw plaintext National ID is NOT in promptPayValue column
+    const nidDorm = await prisma.dormitory.findFirst({ where: { createdByUserId: nidUser.id } });
+    expect(nidDorm).not.toBeNull();
+    const nidBilling = await prisma.dormitoryBillingSettings.findUnique({ where: { dormitoryId: nidDorm!.id } });
+    expect(nidBilling).not.toBeNull();
+    expect(nidBilling!.promptPayType).toBe('national_id');
+    expect(nidBilling!.promptPayValue).toBeNull(); // Raw plaintext protection
+    expect(nidBilling!.promptPayValueEncrypted).not.toBeNull(); // Encrypted via AES-256-GCM
+
+    // 3. Settings GET API Readback: Authorized owner receives decrypted national ID
+    const settingsRes = await context.request.get(`http://127.0.0.1:3001/api/v1/dormitories/${nidDorm!.id}/billing-settings`, {
+      headers: {
+        'Cookie': `horplus_session=${nidToken}; horplus_csrf=${nidCsrf}`,
+        'x-dormitory-id': nidDorm!.id,
+      },
+    });
+    expect(settingsRes.ok()).toBe(true);
+    const settingsBody = (await settingsRes.json()).data;
+    expect(settingsBody.promptPayType).toBe('national_id');
+    expect(settingsBody.promptPayValue).toBe('1100700123456');
+
+    // Cleanup
+    if (nidDorm) {
+      const subList = await prisma.dormitorySubscription.findMany({ where: { dormitoryId: nidDorm.id }, select: { id: true } });
+      for (const sub of subList) {
+        await prisma.subscriptionStatusHistory.deleteMany({ where: { subscriptionId: sub.id } }).catch(() => {});
+      }
+      await prisma.room.deleteMany({ where: { dormitoryId: nidDorm.id } });
+      await prisma.building.deleteMany({ where: { dormitoryId: nidDorm.id } });
+      await prisma.dormitoryBillingSettings.deleteMany({ where: { dormitoryId: nidDorm.id } });
+      await prisma.dormitorySubscription.deleteMany({ where: { dormitoryId: nidDorm.id } });
+      await prisma.dormitoryMember.deleteMany({ where: { dormitoryId: nidDorm.id } });
+      await prisma.dormitory.delete({ where: { id: nidDorm.id } });
+    }
+    await prisma.session.deleteMany({ where: { userId: nidUser.id } });
+    await prisma.user.delete({ where: { id: nidUser.id } });
   });
 });

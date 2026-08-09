@@ -122,6 +122,13 @@ model DormitoryBillingSettings {
   lateFeeType            String   @default("fixed") @map("late_fee_type") @db.VarChar(50)
   lateFeeValue           Decimal  @default(50.00) @map("late_fee_value") @db.Decimal(12, 2)
   rentBillingType        String   @default("monthly") @map("rent_billing_type") @db.VarChar(50)
+  cashAccepted           Boolean  @default(true) @map("cash_accepted")
+  promptPayType          String?  @map("prompt_pay_type") @db.VarChar(50)
+  promptPayValue         String?  @map("prompt_pay_value") @db.VarChar(255)
+  promptPayValueEncrypted String? @map("prompt_pay_value_encrypted") @db.Text
+  bankCode               String?  @map("bank_code") @db.VarChar(50)
+  bankAccountName        String?  @map("bank_account_name") @db.VarChar(255)
+  bankAccountNumber      String?  @map("bank_account_number") @db.VarChar(100)
   version                Int      @default(1)
   createdAt              DateTime @default(now()) @map("created_at") @db.Timestamptz()
   updatedAt              DateTime @updatedAt @map("updated_at") @db.Timestamptz()

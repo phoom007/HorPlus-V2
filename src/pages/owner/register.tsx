@@ -193,12 +193,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
   // Initialize clean, neutral form state for authenticated Owner onboarding
   const getInitialForm = () => {
     return {
-      // 1. Owner & Dorm Info (Clean neutral defaults)
-      ownerName: '',
-      ownerIdCard: '',
-      ownerPhone: '',
-      ownerEmail: '',
-
+      // 1. Dorm Info (Clean neutral defaults)
       dormName: '',
       dormAddress: '',
       province: '',

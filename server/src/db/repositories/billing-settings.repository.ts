@@ -12,6 +12,13 @@ export interface BillingSettingsEntity {
   lateFeeType: string;
   lateFeeValue: string; // Decimal string
   rentBillingType: string;
+  cashAccepted?: boolean;
+  promptPayType?: string | null;
+  promptPayValue?: string | null;
+  promptPayValueEncrypted?: string | null;
+  bankCode?: string | null;
+  bankAccountName?: string | null;
+  bankAccountNumber?: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -29,6 +36,13 @@ export interface CreateBillingSettingsData {
   lateFeeType?: string;
   lateFeeValue?: string;
   rentBillingType?: string;
+  cashAccepted?: boolean;
+  promptPayType?: string | null;
+  promptPayValue?: string | null;
+  promptPayValueEncrypted?: string | null;
+  bankCode?: string | null;
+  bankAccountName?: string | null;
+  bankAccountNumber?: string | null;
 }
 
 export interface IBillingSettingsRepository {
@@ -59,6 +73,13 @@ export class InMemoryBillingSettingsRepository implements IBillingSettingsReposi
       lateFeeType: 'fixed',
       lateFeeValue: '50.00',
       rentBillingType: 'monthly',
+      cashAccepted: true,
+      promptPayType: null,
+      promptPayValue: null,
+      promptPayValueEncrypted: null,
+      bankCode: null,
+      bankAccountName: null,
+      bankAccountNumber: null,
       createdAt: new Date(),
       updatedAt: new Date(),
     });
@@ -84,6 +105,13 @@ export class InMemoryBillingSettingsRepository implements IBillingSettingsReposi
       lateFeeType: data.lateFeeType || 'fixed',
       lateFeeValue: data.lateFeeValue || '50.00',
       rentBillingType: data.rentBillingType || 'monthly',
+      cashAccepted: data.cashAccepted ?? true,
+      promptPayType: data.promptPayType ?? null,
+      promptPayValue: data.promptPayValue ?? null,
+      promptPayValueEncrypted: data.promptPayValueEncrypted ?? null,
+      bankCode: data.bankCode ?? null,
+      bankAccountName: data.bankAccountName ?? null,
+      bankAccountNumber: data.bankAccountNumber ?? null,
       createdAt: now,
       updatedAt: now,
     };

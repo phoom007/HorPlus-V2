@@ -159,7 +159,23 @@ export function createDormitoryRouter(
   // GET /api/v1/dormitories/:dormitoryId/billing-settings
   router.get('/:dormitoryId/billing-settings', requireSession, requireDormitory, requireBillingView, async (req: Request, res: Response) => {
     const dormitoryId = req.params.dormitoryId;
-    const settings = await billingRepo.findByDormitoryId(dormitoryId);
+    let settings: any = await billingRepo.findByDormitoryId(dormitoryId);
+    if (!settings) {
+      const prisma = getPrismaClient();
+      if (prisma?.dormitoryBillingSettings) {
+        settings = await prisma.dormitoryBillingSettings.findUnique({ where: { dormitoryId } });
+      }
+    }
+
+    if (settings && settings.promptPayValueEncrypted) {
+      try {
+        const decrypted = sensitiveFieldService.decrypt(settings.promptPayValueEncrypted);
+        if (decrypted) {
+          settings = { ...settings, promptPayValue: decrypted };
+        }
+      } catch (_err) {}
+    }
+
     res.json({ data: settings });
   });
 

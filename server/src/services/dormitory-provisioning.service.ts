@@ -48,6 +48,14 @@ export interface CompleteOwnerOnboardingParams {
     lateFeeValue?: string;
     rentBillingType?: string;
   };
+  payment?: {
+    cashAccepted?: boolean;
+    promptPayType?: string | null;
+    promptPayValue?: string | null;
+    bankCode?: string | null;
+    bankAccountName?: string | null;
+    bankAccountNumber?: string | null;
+  };
   buildings?: {
     id: string; // The temp ID from frontend
     name: string;
@@ -127,7 +135,7 @@ export class DormitoryProvisioningService {
   }
 
   public async completeOwnerOnboarding(params: CompleteOwnerOnboardingParams): Promise<any> {
-    const { userId, idempotencyKey, requestId, planCode, promoCode, dormitory, billing, buildings, rooms } = params;
+    const { userId, idempotencyKey, requestId, planCode, promoCode, dormitory, billing, payment, buildings, rooms } = params;
 
     await subscriptionEntitlementService.assertDormitoryCreationAllowed(userId);
 
@@ -375,6 +383,10 @@ export class DormitoryProvisioningService {
         }
 
         // Create Billing Settings
+        const promptPayRaw = payment?.promptPayValue ? String(payment.promptPayValue).trim() : null;
+        const isNationalId = payment?.promptPayType === 'national_id';
+        const encryptedPromptPay = promptPayRaw ? this.sensitiveFieldService.encrypt(promptPayRaw).ciphertext : null;
+
         const billingData = {
           dormitoryId: createdDorm.id,
           billingDay: billing?.billingDay ?? 25,
@@ -388,6 +400,13 @@ export class DormitoryProvisioningService {
           lateFeeType: billing?.lateFeeType ?? 'none',
           lateFeeValue: billing?.lateFeeValue ?? '0.00',
           rentBillingType: billing?.rentBillingType ?? 'monthly',
+          cashAccepted: payment?.cashAccepted ?? true,
+          promptPayType: payment?.promptPayType ?? null,
+          promptPayValue: isNationalId ? null : promptPayRaw,
+          promptPayValueEncrypted: encryptedPromptPay,
+          bankCode: payment?.bankCode ?? null,
+          bankAccountName: payment?.bankAccountName ?? null,
+          bankAccountNumber: payment?.bankAccountNumber ?? null,
         };
         const createdBilling = tx.dormitory ? await tx.dormitoryBillingSettings.create({ data: billingData }) : await this.billingRepo.create(billingData);
 
