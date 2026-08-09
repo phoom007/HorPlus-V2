@@ -132,11 +132,11 @@ test.describe.serial('TASK-009 Playwright Browser Lifecycle — Staff, LINE OA &
         sameSite: 'Lax',
       },
     ]);
-    await page.goto('http://127.0.0.1:5173/owner/dashboard');
-    await page.evaluate((id: string) => {
+    await page.addInitScript((id: string) => {
       localStorage.setItem('selected_dormitory_id', id);
       sessionStorage.setItem('active_dormitory_selected_for_session', id);
     }, dormId);
+    await page.goto('http://127.0.0.1:5173/owner/dashboard');
   }
 
   // =========================================================================
@@ -278,7 +278,9 @@ test.describe.serial('TASK-009 Playwright Browser Lifecycle — Staff, LINE OA &
 
     await page.goto('http://127.0.0.1:5173/owner/users');
 
-    await expect(page.locator('[data-testid="line-friend-select"]')).toBeVisible();
+    const selectLocator = page.locator('[data-testid="line-friend-select"]');
+    await selectLocator.waitFor({ state: 'visible', timeout: 15000 });
+    await expect(selectLocator).toBeVisible();
     await page.selectOption('[data-testid="grant-role-select"]', 'MANAGER');
 
     // Capture real POST create-access-grant HTTP response triggered by UI click

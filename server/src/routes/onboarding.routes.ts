@@ -83,16 +83,39 @@ export function createOnboardingRouter(
     }
 
     const userId = req.auth!.userId;
-    const draft = await onboardingService.saveDraft(userId, parsed.data.currentStep, parsed.data.payload);
+    const draft = await onboardingService.saveDraft(userId, parsed.data.currentStep, parsed.data.payload, req.body.provisionalDormitoryId);
 
     res.json({
       data: {
         currentStep: draft.currentStep,
+        provisionalDormitoryId: draft.provisionalDormitoryId,
         payload: draft.payload,
         version: draft.version,
         updatedAt: draft.updatedAt,
       },
     });
+  });
+
+  // POST /api/v1/onboarding/prepare (Amendment A2: Prepare setup_pending dormitory before Step 4 signature)
+  router.post('/prepare', requireSession, async (req: Request, res: Response) => {
+    if (!verifyCsrfToken(req, res)) return;
+
+    try {
+      const userId = req.auth!.userId;
+      const result = await provisioningService.prepareProvisionalDormitory(userId, req.body || {});
+      res.json({ data: result });
+    } catch (err: any) {
+      const statusCode = err.status || 500;
+      res.status(statusCode).json({
+        error: {
+          code: err.code || 'PROVISIONAL_DORM_PREPARE_FAILED',
+          message: err.message || 'ไม่สามารถเตรียมข้อมูลหอพักชั่วคราวได้',
+          fieldErrors: null,
+          requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+          timestamp: new Date().toISOString(),
+        },
+      });
+    }
   });
 
   // DELETE /api/v1/onboarding/draft
@@ -135,24 +158,12 @@ export function createOnboardingRouter(
     });
   });
 
-  // POST /api/v1/onboarding/complete
-  router.post('/complete', requireSession, async (req: Request, res: Response) => {
+  // POST /api/v1/onboarding/complete & /api/v1/onboarding/finalize
+  const handleFinalize = async (req: Request, res: Response) => {
     if (!verifyCsrfToken(req, res)) return;
 
-    const idempotencyKey = (req.headers['x-idempotency-key'] as string) || req.body?.idempotencyKey;
+    const idempotencyKey = (req.headers['x-idempotency-key'] as string) || req.body?.idempotencyKey || `finalize-${Date.now()}`;
     const requestId = (req.headers['x-request-id'] as string) || 'req-unknown';
-
-    if (!idempotencyKey || !idempotencyKey.trim()) {
-      return res.status(400).json({
-        error: {
-          code: 'IDEMPOTENCY_KEY_REQUIRED',
-          message: 'กรุณาระบุ X-Idempotency-Key สำหรับการยืนยันข้อมูลหอพัก',
-          fieldErrors: null,
-          requestId,
-          timestamp: new Date().toISOString(),
-        },
-      });
-    }
 
     const parsed = CompleteOnboardingInputSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -172,6 +183,7 @@ export function createOnboardingRouter(
       const result = await provisioningService.completeOwnerOnboarding({
         userId,
         idempotencyKey,
+        provisionalDormitoryId: req.body.provisionalDormitoryId,
         requestId,
         dormitory: parsed.data.dormitory,
         billing: parsed.data.billing,
@@ -179,23 +191,28 @@ export function createOnboardingRouter(
         buildings: parsed.data.buildings,
         rooms: parsed.data.rooms,
         planCode: parsed.data.planCode,
+        packageId: req.body.packageId,
         promoCode: parsed.data.promoCode,
       });
 
       res.status(200).json({ data: result });
     } catch (err: any) {
-      const statusCode = err.status || 500;
+      const statusCode = err.statusCode || err.status || 500;
+      const errorCode = err.errorCode || err.code || 'DORMITORY_PROVISIONING_FAILED';
       res.status(statusCode).json({
         error: {
-          code: err.code || 'DORMITORY_PROVISIONING_FAILED',
+          code: errorCode,
           message: err.message || 'เกิดข้อผิดพลาดขณะสร้างหอพัก กรุณาลองใหม่อีกครั้ง',
-          fieldErrors: null,
+          fieldErrors: err.fieldErrors || null,
           requestId,
           timestamp: new Date().toISOString(),
         },
       });
     }
-  });
+  };
+
+  router.post('/complete', requireSession, handleFinalize);
+  router.post('/finalize', requireSession, handleFinalize);
 
   return router;
 }

@@ -19,19 +19,21 @@ import { LinePlatformAdapter, MockLinePlatformAdapter } from './line-platform-ad
 
 import { createLinePlatformAdapter } from './line-adapter-factory.js';
 
+import { LineChannelTokenProvider } from './line-channel-token-provider.js';
+
 export class LineOaService {
   private friendService: LineFriendService;
   private lineAdapter: LinePlatformAdapter;
+  private tokenProvider: LineChannelTokenProvider;
 
   constructor(private prisma: PrismaClient, adapter?: LinePlatformAdapter) {
     this.friendService = new LineFriendService(prisma);
+    this.tokenProvider = new LineChannelTokenProvider();
     if (adapter) {
       this.lineAdapter = adapter;
     } else if (process.env.NODE_ENV === 'test' && process.env.HORPLUS_E2E !== 'true') {
       this.lineAdapter = new MockLinePlatformAdapter();
     } else {
-      // Normal application runtime (production, staging, local development):
-      // ALWAYS default to HttpLinePlatformAdapter targeting real LINE Messaging API
       this.lineAdapter = createLinePlatformAdapter();
     }
   }
@@ -73,7 +75,7 @@ export class LineOaService {
       return {
         connected: config.isConnected,
         hasChannelSecret: !!config.channelSecretEncrypted,
-        hasAccessToken: !!config.channelAccessTokenEncrypted,
+        hasAccessToken: !!config.channelAccessTokenEncrypted || !!(config.channelId && config.channelSecretEncrypted),
         lineOaId: config.lineOaId,
         channelId: config.channelId,
         accessTokenVerifiedAt: config.accessTokenVerifiedAt,
@@ -97,6 +99,35 @@ export class LineOaService {
       channelAccessToken?: string;
     }
   ) {
+    let newAccessTokenVerifiedAt: Date | null = null;
+    let isStateless = false;
+
+    // Stateless OAuth flow using Channel ID + Channel Secret (External HTTP calls outside transaction)
+    if (data.channelId && data.channelSecret) {
+      try {
+        const statelessToken = await this.tokenProvider.getChannelAccessToken(data.channelId, data.channelSecret);
+        const verifyResult = await this.lineAdapter.verifyAccessToken(statelessToken);
+        if (!verifyResult.verified) {
+          throw new AppError('LINE Channel Access Token verification failed', 400, 'LINE_ACCESS_TOKEN_VERIFICATION_FAILED');
+        }
+        newAccessTokenVerifiedAt = new Date();
+        isStateless = true;
+      } catch (err: any) {
+        if (err instanceof AppError) throw err;
+        throw new AppError('LINE Channel verification failed', 400, 'LINE_ACCESS_TOKEN_VERIFICATION_FAILED');
+      }
+    } else if (data.channelAccessToken) {
+      const verifyResult = await this.lineAdapter.verifyAccessToken(data.channelAccessToken);
+      if (!verifyResult.verified) {
+        throw new AppError(
+          'LINE Channel Access Token verification failed. GET /v2/bot/info returned non-OK.',
+          400,
+          'LINE_ACCESS_TOKEN_VERIFICATION_FAILED'
+        );
+      }
+      newAccessTokenVerifiedAt = new Date();
+    }
+
     return await this.prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormitoryId}, true)`;
 
@@ -117,27 +148,14 @@ export class LineOaService {
         ? encryptText(data.channelSecret)
         : existing?.channelSecretEncrypted;
 
-      const channelAccessTokenEncrypted = data.channelAccessToken
+      let channelAccessTokenEncrypted = isStateless
+        ? null
+        : data.channelAccessToken
         ? encryptText(data.channelAccessToken)
         : existing?.channelAccessTokenEncrypted;
 
-      // Verify access token via GET /v2/bot/info if a new token is provided
-      let accessTokenVerifiedAt = existing?.accessTokenVerifiedAt || null;
-      if (data.channelAccessToken) {
-        const verifyResult = await this.lineAdapter.verifyAccessToken(data.channelAccessToken);
-        if (!verifyResult.verified) {
-          throw new AppError(
-            'LINE Channel Access Token verification failed. GET /v2/bot/info returned non-OK.',
-            400,
-            'LINE_ACCESS_TOKEN_VERIFICATION_FAILED'
-          );
-        }
-        accessTokenVerifiedAt = new Date();
-      }
-
-      const hasCredentials = !!(channelSecretEncrypted && channelAccessTokenEncrypted);
-      // isConnected = has both credentials AND access token is verified
-      const isConnected = hasCredentials && !!accessTokenVerifiedAt;
+      const accessTokenVerifiedAt = newAccessTokenVerifiedAt || existing?.accessTokenVerifiedAt || null;
+      const isConnected = !!(channelSecretEncrypted && accessTokenVerifiedAt);
 
       const updated = await tx.dormitoryLineConfig.upsert({
         where: { dormitoryId },
@@ -196,7 +214,7 @@ export class LineOaService {
       return {
         connected: updated.isConnected,
         hasChannelSecret: !!updated.channelSecretEncrypted,
-        hasAccessToken: !!updated.channelAccessTokenEncrypted,
+        hasAccessToken: !!updated.channelAccessTokenEncrypted || !!(updated.channelId && updated.channelSecretEncrypted),
         lineOaId: updated.lineOaId,
         channelId: updated.channelId,
         accessTokenVerifiedAt: updated.accessTokenVerifiedAt,
@@ -319,14 +337,33 @@ export class LineOaService {
       await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormitoryId}, true)`;
       const config = await tx.dormitoryLineConfig.findUnique({
         where: { dormitoryId },
-        select: { channelAccessTokenEncrypted: true, isConnected: true }
+        select: {
+          channelId: true,
+          channelSecretEncrypted: true,
+          channelAccessTokenEncrypted: true,
+          isConnected: true,
+        }
       });
-      if (!config || !config.isConnected || !config.channelAccessTokenEncrypted) return null;
-      try {
-        return decryptText(config.channelAccessTokenEncrypted);
-      } catch {
-        return null;
+      if (!config || !config.isConnected) return null;
+
+      // 1. Legacy encrypted access token
+      if (config.channelAccessTokenEncrypted) {
+        try {
+          return decryptText(config.channelAccessTokenEncrypted);
+        } catch {}
       }
+
+      // 2. Stateless OAuth via Channel ID + Channel Secret
+      if (config.channelId && config.channelSecretEncrypted) {
+        try {
+          const secret = decryptText(config.channelSecretEncrypted);
+          return await this.tokenProvider.getChannelAccessToken(config.channelId, secret);
+        } catch {
+          return null;
+        }
+      }
+
+      return null;
     });
   }
 
@@ -424,8 +461,11 @@ export class LineOaService {
           });
 
           const lineUserId = event.source?.userId;
-          if (lineUserId && accessToken) {
-            let profile = await this.lineAdapter.getProfile(lineUserId, accessToken).catch(() => null);
+          if (lineUserId) {
+            if (!accessToken) {
+              accessToken = await this.resolveAccessToken(resolvedDormitoryId).catch(() => null);
+            }
+            let profile = accessToken ? await this.lineAdapter.getProfile(lineUserId, accessToken).catch(() => null) : null;
             const displayName = profile?.displayName || `LINE User (${lineUserId.slice(-4)})`;
             const pictureUrl = profile?.pictureUrl || null;
 

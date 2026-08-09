@@ -404,19 +404,20 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
     await page.click('button:has-text("ถัดไป")');
 
     await page.fill('input[type="number"] >> nth=1', '4');
-    await page.click('button:has-text("ถัดไป")');
+    await page.click('button:has-text("ถัดไป")'); // Step 2 -> Step 3
 
     await page.fill('input[type="number"] >> nth=0', '18');
     await page.fill('input[type="number"] >> nth=1', '8');
     const rentInput = page.locator('label', { hasText: 'ค่าเช่ารายเดือน' }).first().locator('..').locator('input');
     await rentInput.fill('4500');
-    await page.click('button:has-text("ถัดไป")');
+    await page.click('button:has-text("ถัดไป")'); // Step 3 -> Step 4 (Deposit & Bank)
 
     const bankSelect = page.locator('select').filter({ hasText: '-- เลือกธนาคาร --' });
     await bankSelect.selectOption({ index: 1 });
     await page.fill('input[placeholder="XXX-X-XXXXX-X"]', '012-3-45678-9');
     await page.fill('input[placeholder="เช่น นาย สมศักดิ์ วงศ์สว่าง (บัญชีธนาคาร)"]', 'นาย สมชาย ใจดี');
-    await page.click('button:has-text("บันทึก & ยืนยันข้อมูลสร้างหอพัก")');
+
+    await page.click('button:has-text("บันทึก & ยืนยันข้อมูลสร้างหอพัก")'); // Step 4 -> Terms Modal
 
     const modal = page.locator('.fixed.inset-0.z-50');
     await modal.waitFor({ state: 'visible' });
@@ -461,18 +462,28 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
     expect(rapidRooms.length).toBe(4);
 
     // Cleanup rapid user
-    const rapidSubList = await prisma.dormitorySubscription.findMany({ where: { dormitoryId: rapidDorms[0].id }, select: { id: true } });
-    for (const sub of rapidSubList) {
-      await prisma.subscriptionStatusHistory.deleteMany({ where: { subscriptionId: sub.id } }).catch(() => {});
+    if (rapidDorms.length > 0) {
+      const rapidSubList = await prisma.dormitorySubscription.findMany({ where: { dormitoryId: rapidDorms[0].id }, select: { id: true } });
+      for (const sub of rapidSubList) {
+        await prisma.subscriptionStatusHistory.deleteMany({ where: { subscriptionId: sub.id } }).catch(() => {});
+      }
+      await prisma.accountBenefitClaim.deleteMany({ where: { dormitoryId: rapidDorms[0].id } }).catch(() => {});
+      await prisma.promoRedemption.deleteMany({ where: { dormitoryId: rapidDorms[0].id } }).catch(() => {});
+      await prisma.subscriptionPackageIntent.deleteMany({ where: { dormitoryId: rapidDorms[0].id } }).catch(() => {});
+      await prisma.ownerSignature.deleteMany({ where: { dormitoryId: rapidDorms[0].id } }).catch(() => {});
+      await prisma.room.deleteMany({ where: { dormitoryId: rapidDorms[0].id } }).catch(() => {});
+      await prisma.building.deleteMany({ where: { dormitoryId: rapidDorms[0].id } }).catch(() => {});
+      await prisma.dormitoryBillingSettings.deleteMany({ where: { dormitoryId: rapidDorms[0].id } }).catch(() => {});
+      await prisma.dormitorySubscription.deleteMany({ where: { dormitoryId: rapidDorms[0].id } }).catch(() => {});
+      await prisma.dormitoryMember.deleteMany({ where: { dormitoryId: rapidDorms[0].id } }).catch(() => {});
+      await prisma.dormitory.delete({ where: { id: rapidDorms[0].id } }).catch(() => {});
     }
-    await prisma.room.deleteMany({ where: { dormitoryId: rapidDorms[0].id } });
-    await prisma.building.deleteMany({ where: { dormitoryId: rapidDorms[0].id } });
-    await prisma.dormitoryBillingSettings.deleteMany({ where: { dormitoryId: rapidDorms[0].id } });
-    await prisma.dormitorySubscription.deleteMany({ where: { dormitoryId: rapidDorms[0].id } });
-    await prisma.dormitoryMember.deleteMany({ where: { dormitoryId: rapidDorms[0].id } });
-    await prisma.dormitory.delete({ where: { id: rapidDorms[0].id } });
-    await prisma.session.deleteMany({ where: { userId: rapidUser.id } });
-    await prisma.user.delete({ where: { id: rapidUser.id } });
+    await prisma.accountBenefitClaim.deleteMany({ where: { userId: rapidUser.id } }).catch(() => {});
+    await prisma.promoRedemption.deleteMany({ where: { redeemedBy: rapidUser.id } }).catch(() => {});
+    await prisma.subscriptionPackageIntent.deleteMany({ where: { userId: rapidUser.id } }).catch(() => {});
+    await prisma.ownerSignature.deleteMany({ where: { signedByUserId: rapidUser.id } }).catch(() => {});
+    await prisma.session.deleteMany({ where: { userId: rapidUser.id } }).catch(() => {});
+    await prisma.user.delete({ where: { id: rapidUser.id } }).catch(() => {});
   });
 
   test('5. Multi-Dorm Owner Auth Guard & Real UI Selection (RI-008)', async ({ context, page }) => {
@@ -646,18 +657,28 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
     expect(fRooms[0].depositAmount.toString()).toBe('0');
 
     // Cleanup fidelity user
-    const fSubList = await prisma.dormitorySubscription.findMany({ where: { dormitoryId: fDorm!.id }, select: { id: true } });
-    for (const sub of fSubList) {
-      await prisma.subscriptionStatusHistory.deleteMany({ where: { subscriptionId: sub.id } }).catch(() => {});
+    if (fDorm) {
+      const fSubList = await prisma.dormitorySubscription.findMany({ where: { dormitoryId: fDorm.id }, select: { id: true } });
+      for (const sub of fSubList) {
+        await prisma.subscriptionStatusHistory.deleteMany({ where: { subscriptionId: sub.id } }).catch(() => {});
+      }
+      await prisma.accountBenefitClaim.deleteMany({ where: { dormitoryId: fDorm.id } }).catch(() => {});
+      await prisma.promoRedemption.deleteMany({ where: { dormitoryId: fDorm.id } }).catch(() => {});
+      await prisma.subscriptionPackageIntent.deleteMany({ where: { dormitoryId: fDorm.id } }).catch(() => {});
+      await prisma.ownerSignature.deleteMany({ where: { dormitoryId: fDorm.id } }).catch(() => {});
+      await prisma.room.deleteMany({ where: { dormitoryId: fDorm.id } }).catch(() => {});
+      await prisma.building.deleteMany({ where: { dormitoryId: fDorm.id } }).catch(() => {});
+      await prisma.dormitoryBillingSettings.deleteMany({ where: { dormitoryId: fDorm.id } }).catch(() => {});
+      await prisma.dormitorySubscription.deleteMany({ where: { dormitoryId: fDorm.id } }).catch(() => {});
+      await prisma.dormitoryMember.deleteMany({ where: { dormitoryId: fDorm.id } }).catch(() => {});
+      await prisma.dormitory.delete({ where: { id: fDorm.id } }).catch(() => {});
     }
-    await prisma.room.deleteMany({ where: { dormitoryId: fDorm!.id } });
-    await prisma.building.deleteMany({ where: { dormitoryId: fDorm!.id } });
-    await prisma.dormitoryBillingSettings.deleteMany({ where: { dormitoryId: fDorm!.id } });
-    await prisma.dormitorySubscription.deleteMany({ where: { dormitoryId: fDorm!.id } });
-    await prisma.dormitoryMember.deleteMany({ where: { dormitoryId: fDorm!.id } });
-    await prisma.dormitory.delete({ where: { id: fDorm!.id } });
-    await prisma.session.deleteMany({ where: { userId: fidelityUser.id } });
-    await prisma.user.delete({ where: { id: fidelityUser.id } });
+    await prisma.accountBenefitClaim.deleteMany({ where: { userId: fidelityUser.id } }).catch(() => {});
+    await prisma.promoRedemption.deleteMany({ where: { redeemedBy: fidelityUser.id } }).catch(() => {});
+    await prisma.subscriptionPackageIntent.deleteMany({ where: { userId: fidelityUser.id } }).catch(() => {});
+    await prisma.ownerSignature.deleteMany({ where: { signedByUserId: fidelityUser.id } }).catch(() => {});
+    await prisma.session.deleteMany({ where: { userId: fidelityUser.id } }).catch(() => {});
+    await prisma.user.delete({ where: { id: fidelityUser.id } }).catch(() => {});
   });
 
   test('7. PromptPay Canonical Matrix — 10-Digit Mobile Phone (PP-001, PP-002, PP-003)', async ({ context, page }) => {
@@ -776,15 +797,23 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
       for (const sub of subList) {
         await prisma.subscriptionStatusHistory.deleteMany({ where: { subscriptionId: sub.id } }).catch(() => {});
       }
-      await prisma.room.deleteMany({ where: { dormitoryId: ppDorm.id } });
-      await prisma.building.deleteMany({ where: { dormitoryId: ppDorm.id } });
-      await prisma.dormitoryBillingSettings.deleteMany({ where: { dormitoryId: ppDorm.id } });
-      await prisma.dormitorySubscription.deleteMany({ where: { dormitoryId: ppDorm.id } });
-      await prisma.dormitoryMember.deleteMany({ where: { dormitoryId: ppDorm.id } });
-      await prisma.dormitory.delete({ where: { id: ppDorm.id } });
+      await prisma.accountBenefitClaim.deleteMany({ where: { dormitoryId: ppDorm.id } }).catch(() => {});
+      await prisma.promoRedemption.deleteMany({ where: { dormitoryId: ppDorm.id } }).catch(() => {});
+      await prisma.subscriptionPackageIntent.deleteMany({ where: { dormitoryId: ppDorm.id } }).catch(() => {});
+      await prisma.ownerSignature.deleteMany({ where: { dormitoryId: ppDorm.id } }).catch(() => {});
+      await prisma.room.deleteMany({ where: { dormitoryId: ppDorm.id } }).catch(() => {});
+      await prisma.building.deleteMany({ where: { dormitoryId: ppDorm.id } }).catch(() => {});
+      await prisma.dormitoryBillingSettings.deleteMany({ where: { dormitoryId: ppDorm.id } }).catch(() => {});
+      await prisma.dormitorySubscription.deleteMany({ where: { dormitoryId: ppDorm.id } }).catch(() => {});
+      await prisma.dormitoryMember.deleteMany({ where: { dormitoryId: ppDorm.id } }).catch(() => {});
+      await prisma.dormitory.delete({ where: { id: ppDorm.id } }).catch(() => {});
     }
-    await prisma.session.deleteMany({ where: { userId: ppUser.id } });
-    await prisma.user.delete({ where: { id: ppUser.id } });
+    await prisma.accountBenefitClaim.deleteMany({ where: { userId: ppUser.id } }).catch(() => {});
+    await prisma.promoRedemption.deleteMany({ where: { redeemedBy: ppUser.id } }).catch(() => {});
+    await prisma.subscriptionPackageIntent.deleteMany({ where: { userId: ppUser.id } }).catch(() => {});
+    await prisma.ownerSignature.deleteMany({ where: { signedByUserId: ppUser.id } }).catch(() => {});
+    await prisma.session.deleteMany({ where: { userId: ppUser.id } }).catch(() => {});
+    await prisma.user.delete({ where: { id: ppUser.id } }).catch(() => {});
   });
 
   test('8. PromptPay Canonical Matrix — 13-Digit National ID with AES-256-GCM Encryption (PP-001, PP-002, PP-003, PP-009)', async ({ context, page }) => {
@@ -902,14 +931,22 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
       for (const sub of subList) {
         await prisma.subscriptionStatusHistory.deleteMany({ where: { subscriptionId: sub.id } }).catch(() => {});
       }
-      await prisma.room.deleteMany({ where: { dormitoryId: nidDorm.id } });
-      await prisma.building.deleteMany({ where: { dormitoryId: nidDorm.id } });
-      await prisma.dormitoryBillingSettings.deleteMany({ where: { dormitoryId: nidDorm.id } });
-      await prisma.dormitorySubscription.deleteMany({ where: { dormitoryId: nidDorm.id } });
-      await prisma.dormitoryMember.deleteMany({ where: { dormitoryId: nidDorm.id } });
-      await prisma.dormitory.delete({ where: { id: nidDorm.id } });
+      await prisma.accountBenefitClaim.deleteMany({ where: { dormitoryId: nidDorm.id } }).catch(() => {});
+      await prisma.promoRedemption.deleteMany({ where: { dormitoryId: nidDorm.id } }).catch(() => {});
+      await prisma.subscriptionPackageIntent.deleteMany({ where: { dormitoryId: nidDorm.id } }).catch(() => {});
+      await prisma.ownerSignature.deleteMany({ where: { dormitoryId: nidDorm.id } }).catch(() => {});
+      await prisma.room.deleteMany({ where: { dormitoryId: nidDorm.id } }).catch(() => {});
+      await prisma.building.deleteMany({ where: { dormitoryId: nidDorm.id } }).catch(() => {});
+      await prisma.dormitoryBillingSettings.deleteMany({ where: { dormitoryId: nidDorm.id } }).catch(() => {});
+      await prisma.dormitorySubscription.deleteMany({ where: { dormitoryId: nidDorm.id } }).catch(() => {});
+      await prisma.dormitoryMember.deleteMany({ where: { dormitoryId: nidDorm.id } }).catch(() => {});
+      await prisma.dormitory.delete({ where: { id: nidDorm.id } }).catch(() => {});
     }
-    await prisma.session.deleteMany({ where: { userId: nidUser.id } });
-    await prisma.user.delete({ where: { id: nidUser.id } });
+    await prisma.accountBenefitClaim.deleteMany({ where: { userId: nidUser.id } }).catch(() => {});
+    await prisma.promoRedemption.deleteMany({ where: { redeemedBy: nidUser.id } }).catch(() => {});
+    await prisma.subscriptionPackageIntent.deleteMany({ where: { userId: nidUser.id } }).catch(() => {});
+    await prisma.ownerSignature.deleteMany({ where: { signedByUserId: nidUser.id } }).catch(() => {});
+    await prisma.session.deleteMany({ where: { userId: nidUser.id } }).catch(() => {});
+    await prisma.user.delete({ where: { id: nidUser.id } }).catch(() => {});
   });
 });

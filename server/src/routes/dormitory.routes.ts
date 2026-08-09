@@ -6,6 +6,7 @@ import { IBillingSettingsRepository } from '../db/repositories/billing-settings.
 import { ISubscriptionRepository } from '../db/repositories/subscription.repository.js';
 import { IPlanRepository } from '../db/repositories/plan.repository.js';
 import { SensitiveFieldService } from '../services/sensitive-field.service.js';
+import { SignatureStorageService } from '../services/signature-storage.service.js';
 import { createRequireSessionMiddleware } from '../middleware/require-session.js';
 import { createRequireDormitoryContextMiddleware } from '../middleware/require-dormitory.js';
 import { createRequirePermissionMiddleware } from '../middleware/require-permission.js';
@@ -531,6 +532,89 @@ export function createDormitoryRouter(
           : null,
       },
     });
+  });
+
+  // POST /api/v1/dormitories/:dormitoryId/signature (Task-009 Signature Persistence)
+  router.post('/:dormitoryId/signature', requireSession, requireDormitory, requireDormitoryUpdate, requireDormitoryWriteEntitlement, async (req: Request, res: Response) => {
+    if (!verifyCsrfToken(req, res)) return;
+
+    try {
+      const dormitoryId = req.params.dormitoryId;
+      const userId = req.auth!.userId;
+      let buffer: Buffer;
+
+      if (req.body?.signatureBase64) {
+        const base64Str = req.body.signatureBase64.replace(/^data:image\/\w+;base64,/, '');
+        buffer = Buffer.from(base64Str, 'base64');
+      } else if (Buffer.isBuffer(req.body)) {
+        buffer = req.body;
+      } else {
+        return res.status(400).json({
+          error: {
+            code: 'INVALID_SIGNATURE_PAYLOAD',
+            message: 'กรุณาระบุ signatureBase64 สำหรับบันทึกลายเซ็น',
+            fieldErrors: null,
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+
+      const prisma = getPrismaClient();
+      const signatureService = new SignatureStorageService(prisma);
+      const result = await signatureService.saveSignature({ dormitoryId, userId, buffer });
+
+      res.status(201).json({ data: result });
+    } catch (err: any) {
+      const statusCode = err.status || 500;
+      res.status(statusCode).json({
+        error: {
+          code: err.code || 'SIGNATURE_UPLOAD_FAILED',
+          message: err.message || 'เกิดข้อผิดพลาดขณะบันทึกลายเซ็น',
+          fieldErrors: null,
+          requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+          timestamp: new Date().toISOString(),
+        },
+      });
+    }
+  });
+
+  // GET /api/v1/dormitories/:dormitoryId/signature (Task-009 Signature Stream/Download)
+  router.get('/:dormitoryId/signature', requireSession, requireDormitory, requireDormitoryView, async (req: Request, res: Response) => {
+    try {
+      const dormitoryId = req.params.dormitoryId;
+      const prisma = getPrismaClient();
+      const signatureService = new SignatureStorageService(prisma);
+      const latestRecord = await signatureService.getLatestSignatureRecord(dormitoryId);
+
+      if (!latestRecord) {
+        return res.status(404).json({
+          error: {
+            code: 'SIGNATURE_NOT_FOUND',
+            message: 'ไม่พบลายเซ็นสำหรับหอพักนี้',
+            fieldErrors: null,
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+
+      const stream = await signatureService.getSignatureStream(latestRecord.objectKey);
+      res.setHeader('Content-Type', 'image/png');
+      res.setHeader('Cache-Control', 'private, no-cache');
+      stream.pipe(res);
+    } catch (err: any) {
+      const statusCode = err.status || 500;
+      res.status(statusCode).json({
+        error: {
+          code: err.code || 'SIGNATURE_STREAM_FAILED',
+          message: err.message || 'เกิดข้อผิดพลาดขณะเรียกลายเซ็น',
+          fieldErrors: null,
+          requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+          timestamp: new Date().toISOString(),
+        },
+      });
+    }
   });
 
   return router;

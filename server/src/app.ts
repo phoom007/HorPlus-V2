@@ -119,7 +119,7 @@ export function createApp(optionsOrAuth?: CreateAppOptions | AuthenticationServi
   const entitlementService = new EntitlementService(subRepo, planRepo);
   const planService = new PlanService(planRepo);
   const promoService = new PromoService(promoRepo);
-  const onboardingService = new OnboardingService(draftRepo, membershipRepo, dormitoryRepo, subRepo, planRepo);
+  const onboardingService = new OnboardingService(prisma!);
   const buildingService = new BuildingService(buildingRepo, roomRepo, auditService);
   const roomService = new RoomService(roomRepo, buildingRepo, subRepo, planRepo, contractRepo, auditService, entitlementService, prisma);
   const tenantService = new TenantService(tenantRepo, contractRepo, sensitiveFieldService, auditService);
@@ -143,23 +143,7 @@ export function createApp(optionsOrAuth?: CreateAppOptions | AuthenticationServi
     auditService
   );
 
-  const provisioningService = new DormitoryProvisioningService(
-    dormitoryRepo,
-    billingRepo,
-    planRepo,
-    subRepo,
-    promoRepo,
-    membershipRepo,
-    roleRepo,
-    draftRepo,
-    idempotencyRepo,
-    buildingRepo,
-    roomRepo,
-    sensitiveFieldService,
-    promoService,
-    auditService,
-    prisma
-  );
+  const provisioningService = new DormitoryProvisioningService(prisma!, sensitiveFieldService);
 
   const apiDeps: AppApiDependencies = {
     authService,

@@ -39,6 +39,9 @@ model User {
   paymentUploadIntents  PaymentUploadIntent[]
   subscriptionHistories SubscriptionStatusHistory[]
   promoRedemptions      PromoRedemption[]
+  ownerSignatures       OwnerSignature[]
+  accountBenefitClaims  AccountBenefitClaim[]
+  subscriptionPackageIntents SubscriptionPackageIntent[]
 
   @@map("users")
 }
@@ -61,7 +64,7 @@ model Dormitory {
   estimatedRoomCount     Int       @default(10) @map("estimated_room_count")
   timezone               String    @default("Asia/Bangkok") @db.VarChar(50)
   currency               String    @default("THB") @db.VarChar(10)
-  status                 String    @default("active") @db.VarChar(50)
+  status                 String    @default("setup_pending") @db.VarChar(50) // setup_pending, active, suspended
   createdByUserId        String?   @map("created_by_user_id") @db.Uuid
   createdAt              DateTime  @default(now()) @map("created_at") @db.Timestamptz()
   updatedAt              DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
@@ -104,6 +107,10 @@ model Dormitory {
   lineWebhookReceipts        LineWebhookEventReceipt[]
   linePushUsage              LinePushUsage[]
   linePushDeliveryAttempts   LinePushDeliveryAttempt[]
+  onboardingDrafts           OnboardingDraft[]
+  ownerSignatures            OwnerSignature[]
+  accountBenefitClaims       AccountBenefitClaim[]
+  subscriptionPackageIntents SubscriptionPackageIntent[]
 
   @@map("dormitories")
 }
@@ -296,14 +303,18 @@ model PlatformPromoRedemption {
 }
 
 model OnboardingDraft {
-  id          String   @id @default(uuid()) @db.Uuid
-  userId      String   @unique @map("user_id") @db.Uuid
-  version     Int      @default(1)
-  currentStep String   @default("dormitory") @map("current_step") @db.VarChar(50)
-  payload     Json
-  expiresAt   DateTime @map("expires_at") @db.Timestamptz()
-  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz()
-  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz()
+  id                     String    @id @default(uuid()) @db.Uuid
+  userId                 String    @unique @map("user_id") @db.Uuid
+  provisionalDormitoryId String?   @map("provisional_dormitory_id") @db.Uuid
+  version                Int       @default(1)
+  currentStep            String    @default("dormitory") @map("current_step") @db.VarChar(50)
+  payload                Json
+  expiresAt              DateTime  @map("expires_at") @db.Timestamptz()
+  finalizedAt            DateTime? @map("finalized_at") @db.Timestamptz()
+  createdAt              DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt              DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
+
+  provisionalDormitory Dormitory? @relation(fields: [provisionalDormitoryId], references: [id], onDelete: SetNull)
 
   @@map("onboarding_drafts")
 }
@@ -1087,10 +1098,12 @@ model SubscriptionPackage {
   price          Decimal? @db.Decimal(12, 2)
   currency       String   @default("THB") @db.VarChar(10)
   enabled        Boolean  @default(true)
+  catalogVersion Int      @default(1) @map("catalog_version")
   createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz()
   updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz()
 
-  plan SubscriptionPlan @relation(fields: [planId], references: [id], onDelete: Restrict)
+  plan    SubscriptionPlan            @relation(fields: [planId], references: [id], onDelete: Restrict)
+  intents SubscriptionPackageIntent[]
 
   @@unique([planId, durationMonths], name: "plan_duration_unique")
   @@map("subscription_packages")
@@ -1110,10 +1123,11 @@ model DormitorySubscription {
   createdAt       DateTime                    @default(now()) @map("created_at") @db.Timestamptz()
   updatedAt       DateTime                    @updatedAt @map("updated_at") @db.Timestamptz()
 
-  dormitory        Dormitory                  @relation(fields: [dormitoryId], references: [id], onDelete: Restrict)
-  plan             SubscriptionPlan           @relation(fields: [planId], references: [id], onDelete: Restrict)
-  statusHistories  SubscriptionStatusHistory[]
-  promoRedemptions PromoRedemption[]
+  dormitory            Dormitory                  @relation(fields: [dormitoryId], references: [id], onDelete: Restrict)
+  plan                 SubscriptionPlan           @relation(fields: [planId], references: [id], onDelete: Restrict)
+  statusHistories      SubscriptionStatusHistory[]
+  promoRedemptions     PromoRedemption[]
+  accountBenefitClaims AccountBenefitClaim[]
 
   @@index([dormitoryId])
   @@index([expiresAt])
@@ -1152,6 +1166,9 @@ model PromoCode {
   code                           String    @unique @db.VarChar(50)
   normalizedCode                 String    @unique @map("normalized_code") @db.VarChar(50)
   extensionDays                  Int       @default(60) @map("extension_days")
+  benefitType                    String    @default("TRIAL_EXTENSION") @map("benefit_type") @db.VarChar(50)
+  benefitUnit                    String    @default("MONTH") @map("benefit_unit") @db.VarChar(20)
+  benefitValue                   Int       @default(2) @map("benefit_value")
   enabled                        Boolean   @default(true)
   startsAt                       DateTime? @map("starts_at") @db.Timestamptz()
   endsAt                         DateTime? @map("ends_at") @db.Timestamptz()
@@ -1180,6 +1197,7 @@ model PromoRedemption {
   redeemer     User                  @relation(fields: [redeemedBy], references: [id], onDelete: Restrict)
 
   @@unique([promoCodeId, dormitoryId], name: "promo_dormitory_unique")
+  @@unique([promoCodeId, redeemedBy], name: "promo_user_unique", map: "promo_user_unique")
   @@index([dormitoryId])
   @@index([subscriptionId])
   @@index([redeemedBy])
@@ -1309,4 +1327,70 @@ model LinePushDeliveryAttempt {
 
   @@index([accessGrantId])
   @@map("line_push_delivery_attempts")
+}
+
+model OwnerSignature {
+  id             String   @id @default(uuid()) @db.Uuid
+  dormitoryId    String   @map("dormitory_id") @db.Uuid
+  signedByUserId String   @map("signed_by_user_id") @db.Uuid
+  objectKey      String   @map("object_key") @db.VarChar(255)
+  sha256         String   @db.VarChar(64)
+  mimeType       String   @default("image/png") @map("mime_type") @db.VarChar(50)
+  byteSize       Int      @map("byte_size")
+  version        Int      @default(1)
+  isCurrent      Boolean  @default(true) @map("is_current")
+  signedAt       DateTime @default(now()) @map("signed_at") @db.Timestamptz()
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  dormitory Dormitory @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
+  signedBy  User      @relation(fields: [signedByUserId], references: [id], onDelete: Restrict)
+
+  @@index([dormitoryId, isCurrent])
+  @@index([signedByUserId])
+  @@map("owner_signatures")
+}
+
+model AccountBenefitClaim {
+  id                String    @id @default(uuid()) @db.Uuid
+  userId            String    @map("user_id") @db.Uuid
+  benefitKey        String    @map("benefit_key") @db.VarChar(100)
+  dormitoryId       String    @map("dormitory_id") @db.Uuid
+  subscriptionId    String?   @map("subscription_id") @db.Uuid
+  grantedMonths     Int       @map("granted_months")
+  previousExpiresAt DateTime? @map("previous_expires_at") @db.Timestamptz()
+  newExpiresAt      DateTime  @map("new_expires_at") @db.Timestamptz()
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+
+  user         User                   @relation(fields: [userId], references: [id], onDelete: Restrict)
+  dormitory    Dormitory              @relation(fields: [dormitoryId], references: [id], onDelete: Restrict)
+  subscription DormitorySubscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+
+  @@unique([userId, benefitKey], name: "user_benefit_unique", map: "user_benefit_unique")
+  @@index([userId])
+  @@index([dormitoryId])
+  @@map("account_benefit_claims")
+}
+
+model SubscriptionPackageIntent {
+  id                     String    @id @default(uuid()) @db.Uuid
+  dormitoryId            String    @map("dormitory_id") @db.Uuid
+  userId                 String    @map("user_id") @db.Uuid
+  packageId              String    @map("package_id") @db.Uuid
+  status                 String    @default("PENDING_PAYMENT") @db.VarChar(50)
+  durationMonthsSnapshot Int       @map("duration_months_snapshot")
+  priceSnapshot          Decimal?  @map("price_snapshot") @db.Decimal(12, 2)
+  currencySnapshot       String    @default("THB") @map("currency_snapshot") @db.VarChar(10)
+  catalogVersion         Int       @default(1) @map("catalog_version")
+  activatedAt            DateTime? @map("activated_at") @db.Timestamptz()
+  createdAt              DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt              DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
+
+  dormitory Dormitory           @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
+  user      User                @relation(fields: [userId], references: [id], onDelete: Restrict)
+  package   SubscriptionPackage @relation(fields: [packageId], references: [id], onDelete: Restrict)
+
+  @@index([dormitoryId])
+  @@index([userId])
+  @@index([packageId])
+  @@map("subscription_package_intents")
 }

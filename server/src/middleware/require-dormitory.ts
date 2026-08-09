@@ -104,3 +104,40 @@ export function createRequireDormitoryContextMiddleware(
     next();
   };
 }
+
+export function createRequireActiveDormitoryMiddleware(prisma: any) {
+  return async (req: Request, res: Response, next: NextFunction) => {
+    const requestId = (req.headers['x-request-id'] as string) || 'req-unknown';
+    const dormitoryId = req.dormitoryContext?.dormitoryId || req.params.dormitoryId || (req.headers['x-dormitory-id'] as string | undefined);
+
+    if (!dormitoryId) {
+      return next();
+    }
+
+    try {
+      const dorm = await prisma.dormitory.findUnique({
+        where: { id: dormitoryId },
+        select: { status: true },
+      });
+
+      if (dorm && dorm.status === 'setup_pending') {
+        const path = req.originalUrl || req.url || '';
+        if (path.includes('/line-oa') || path.includes('/onboarding') || path.includes('/signatures')) {
+          return next();
+        }
+
+        return res.status(403).json({
+          error: {
+            code: 'DORMITORY_SETUP_PENDING',
+            message: 'หอพักนี้ยังอยู่ในขั้นตอนการลงทะเบียน กรุณาลงทะเบียนให้เสร็จสิ้นก่อนใช้งาน',
+            fieldErrors: null,
+            requestId,
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+    } catch {}
+
+    next();
+  };
+}

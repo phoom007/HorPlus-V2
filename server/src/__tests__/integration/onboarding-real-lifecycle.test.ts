@@ -1,5 +1,5 @@
 /**
- * Real Owner Onboarding Lifecycle & Idempotency Regression Tests
+ * Master 6-Step Owner Onboarding Real Lifecycle & Idempotency Regression Tests
  * @license Apache-2.0
  */
 
@@ -7,64 +7,25 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { PrismaClient } from '@prisma/client';
 import { DormitoryProvisioningService } from '../../services/dormitory-provisioning.service.js';
 import { OnboardingService } from '../../services/onboarding.service.js';
-import { PrismaDormitoryRepository } from '../../db/repositories/dormitory.repository.js';
-import { InMemoryBillingSettingsRepository } from '../../db/repositories/billing-settings.repository.js';
-import { InMemoryPlanRepository } from '../../db/repositories/plan.repository.js';
-import { PrismaSubscriptionRepository } from '../../db/repositories/subscription.repository.js';
-import { InMemoryPromoRepository } from '../../db/repositories/promo.repository.js';
-import { PrismaMembershipRepository } from '../../db/repositories/membership.repository.js';
-import { PrismaRoleRepository } from '../../db/repositories/role.repository.js';
-import { InMemoryOnboardingDraftRepository } from '../../db/repositories/onboarding-draft.repository.js';
-import { InMemoryIdempotencyRepository } from '../../db/repositories/idempotency.repository.js';
-import { PrismaBuildingRepository } from '../../db/repositories/building.repository.js';
-import { PrismaRoomRepository } from '../../db/repositories/room.repository.js';
+import { SignatureStorageService } from '../../services/signature-storage.service.js';
 import { SensitiveFieldService } from '../../services/sensitive-field.service.js';
-import { PromoService } from '../../services/promo.service.js';
-import { AuditService } from '../../services/audit.service.js';
 import crypto from 'crypto';
 
 const prisma = new PrismaClient();
 
-describe('Real Owner Onboarding Lifecycle & Idempotency', () => {
+describe('Master 6-Step Owner Onboarding Lifecycle & Idempotency', () => {
   let provisioningService: DormitoryProvisioningService;
   let onboardingService: OnboardingService;
+  let signatureService: SignatureStorageService;
   let testUserId: string;
+  let provDormId: string;
 
   beforeAll(async () => {
-    const dormRepo = new PrismaDormitoryRepository(prisma);
-    const billingRepo = new InMemoryBillingSettingsRepository();
-    const planRepo = new InMemoryPlanRepository();
-    const subRepo = new PrismaSubscriptionRepository(prisma);
-    const promoRepo = new InMemoryPromoRepository();
-    const membershipRepo = new PrismaMembershipRepository(prisma);
-    const roleRepo = new PrismaRoleRepository(prisma);
-    const draftRepo = new InMemoryOnboardingDraftRepository();
-    const idempotencyRepo = new InMemoryIdempotencyRepository();
-    const buildingRepo = new PrismaBuildingRepository(prisma);
-    const roomRepo = new PrismaRoomRepository(prisma);
     const sensitiveFieldService = new SensitiveFieldService(process.env.DORM_ENCRYPTION_KEY || 'default_32_byte_secret_key_123456');
-    const promoService = new PromoService(promoRepo);
-    const auditService = new AuditService();
 
-    provisioningService = new DormitoryProvisioningService(
-      dormRepo,
-      billingRepo,
-      planRepo,
-      subRepo,
-      promoRepo,
-      membershipRepo,
-      roleRepo,
-      draftRepo,
-      idempotencyRepo,
-      buildingRepo,
-      roomRepo,
-      sensitiveFieldService,
-      promoService,
-      auditService,
-      prisma
-    );
-
-    onboardingService = new OnboardingService(draftRepo, membershipRepo, dormRepo, subRepo, planRepo);
+    provisioningService = new DormitoryProvisioningService(prisma, sensitiveFieldService);
+    onboardingService = new OnboardingService(prisma);
+    signatureService = new SignatureStorageService(prisma);
 
     // Create fresh test user with 0 memberships
     testUserId = crypto.randomUUID();
@@ -74,18 +35,17 @@ describe('Real Owner Onboarding Lifecycle & Idempotency', () => {
         id: testUserId,
         email,
         emailNormalized: email.toLowerCase(),
-        name: 'Fresh Real Owner',
+        name: 'Fresh Master Real Owner',
         googleSubject: `goog_sub_${testUserId}`,
-      }
+      },
     });
   });
 
   afterAll(async () => {
     if (testUserId) {
-      // Cleanup created dormitories and user
       const user = await prisma.user.findUnique({
         where: { id: testUserId },
-        include: { memberships: true }
+        include: { memberships: true },
       });
       if (user) {
         for (const m of user.memberships) {
@@ -102,17 +62,51 @@ describe('Real Owner Onboarding Lifecycle & Idempotency', () => {
     expect(status.onboardingRequired).toBe(true);
   });
 
-  it('2. Completing onboarding provisions real Dormitory, OWNER membership, Buildings & Rooms in PostgreSQL', async () => {
-    const idempotencyKey = `idemp_onb_${Date.now()}`;
+  it('2. Preparing provisional dormitory before Step 4 creates setup_pending dormitory and webhook URL', async () => {
+    const prepared = await provisioningService.prepareProvisionalDormitory(testUserId, {
+      name: 'Master 6-Step Provisional Dormitory',
+    });
+
+    expect(prepared.provisionalDormitoryId).toBeDefined();
+    expect(prepared.webhookUrl).toContain('/api/v1/line/webhook/');
+    provDormId = prepared.provisionalDormitoryId;
+
+    const dormDb = await prisma.dormitory.findUnique({ where: { id: provDormId } });
+    expect(dormDb).not.toBeNull();
+    expect(dormDb?.status).toBe('setup_pending');
+  });
+
+  it('3. Uploading owner signature persists PNG signature record with isCurrent = true', async () => {
+    const validPngBuffer = Buffer.from([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+      0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+    ]);
+
+    const sigResult = await signatureService.saveSignature({
+      dormitoryId: provDormId,
+      userId: testUserId,
+      buffer: validPngBuffer,
+    });
+
+    expect(sigResult.id).toBeDefined();
+    expect(sigResult.version).toBe(2);
+
+    const latest = await signatureService.getLatestSignatureRecord(provDormId);
+    expect(latest).not.toBeNull();
+    expect(latest?.isCurrent).toBe(true);
+  });
+
+  it('4. Completing 6-step onboarding finalizes setup_pending -> active and grants +1 CALENDAR MONTH initial trial', async () => {
     const result = await provisioningService.completeOwnerOnboarding({
       userId: testUserId,
-      idempotencyKey,
+      idempotencyKey: `idemp_master_${Date.now()}`,
+      provisionalDormitoryId: provDormId,
       dormitory: {
-        name: 'Real Test Provisioned Dormitory',
+        name: 'Master 6-Step Active Dormitory',
         type: 'apartment',
-        addressLine1: '123 Real St',
+        addressLine1: '123 Master St',
         phone: '0812345678',
-        email: 'real@dorm.com',
+        email: 'master@dorm.com',
         estimatedBuildingCount: 1,
         estimatedRoomCount: 4,
       },
@@ -135,7 +129,7 @@ describe('Real Owner Onboarding Lifecycle & Idempotency', () => {
           name: 'Building A',
           floorsCount: 2,
           roomsPerFloor: 2,
-        }
+        },
       ],
       rooms: [
         { buildingId: 'bld-temp-1', roomNumber: '101', floor: 1, monthlyRent: 4500, depositAmount: 5000 },
@@ -144,35 +138,33 @@ describe('Real Owner Onboarding Lifecycle & Idempotency', () => {
         { buildingId: 'bld-temp-1', roomNumber: '202', floor: 2, monthlyRent: 4500, depositAmount: 5000 },
       ],
       planCode: 'FREE',
+      promoCode: 'HORPLUS',
     });
 
-    expect(result.dormitory.id).toBeDefined();
-    expect(result.dormitory.name).toBe('Real Test Provisioned Dormitory');
-    expect(result.membership.roleCode).toBe('OWNER');
+    expect(result.success).toBe(true);
+    expect(result.dormitoryId).toBe(provDormId);
+    expect(result.subscriptionStatus).toBe('TRIAL');
+    expect(result.totalTrialMonths).toBe(3); // +1 month initial + 2 months HORPLUS promo
 
     // Verify PostgreSQL state under RLS context
     await prisma.$transaction(async (tx) => {
-      await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${result.dormitory.id}, true)`;
+      await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${provDormId}, true)`;
 
-      const dormDb = await tx.dormitory.findUnique({ where: { id: result.dormitory.id } });
+      const dormDb = await tx.dormitory.findUnique({ where: { id: provDormId } });
       expect(dormDb).not.toBeNull();
-      expect(dormDb?.name).toBe('Real Test Provisioned Dormitory');
+      expect(dormDb?.status).toBe('active');
 
-      const memberDb = await tx.dormitoryMember.findFirst({
-        where: { dormitoryId: result.dormitory.id, userId: testUserId }
-      });
-      expect(memberDb).not.toBeNull();
+      const subDb = await tx.dormitorySubscription.findUnique({ where: { dormitoryId: provDormId } });
+      expect(subDb).not.toBeNull();
+      expect(subDb?.status).toBe('TRIAL');
 
-      const buildingsDb = await tx.building.findMany({ where: { dormitoryId: result.dormitory.id } });
-      expect(buildingsDb.length).toBe(1);
-      expect(buildingsDb[0].name).toBe('Building A');
-
-      const roomsDb = await tx.room.findMany({ where: { dormitoryId: result.dormitory.id } });
-      expect(roomsDb.length).toBe(4);
+      const claims = await tx.accountBenefitClaim.findMany({ where: { userId: testUserId } });
+      expect(claims.length).toBe(1);
+      expect(claims[0].benefitKey).toBe('INITIAL_TRIAL_V1');
     });
   });
 
-  it('3. After onboarding completion, onboardingRequired becomes false and ownedDormitoryCount = 1', async () => {
+  it('5. After onboarding completion, onboardingRequired becomes false and ownedDormitoryCount = 1', async () => {
     const status = await onboardingService.getStatus(testUserId);
     expect(status.ownedDormitoryCount).toBe(1);
     expect(status.onboardingRequired).toBe(false);

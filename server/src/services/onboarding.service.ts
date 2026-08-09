@@ -1,85 +1,100 @@
-import { IOnboardingDraftRepository, OnboardingDraftEntity } from '../db/repositories/onboarding-draft.repository.js';
-import { IMembershipRepository } from '../db/repositories/membership.repository.js';
-import { IDormitoryRepository } from '../db/repositories/dormitory.repository.js';
-import { ISubscriptionRepository } from '../db/repositories/subscription.repository.js';
-import { IPlanRepository } from '../db/repositories/plan.repository.js';
+/**
+ * Onboarding Service (Task-009 — Single OnboardingDraft Source of Truth & State Machine)
+ * @license Apache-2.0
+ */
+
+import { PrismaClient } from '@prisma/client';
+import { AppError } from '../types/index.js';
 
 export interface OnboardingStatusResult {
   onboardingRequired: boolean;
   hasDraft: boolean;
   currentStep: string | null;
+  provisionalDormitoryId: string | null;
   ownedDormitoryCount: number;
   freeDormitoryAvailable: boolean;
 }
 
 export class OnboardingService {
-  private draftRepo: IOnboardingDraftRepository;
-  private membershipRepo: IMembershipRepository;
-  private dormitoryRepo: IDormitoryRepository;
-  private subscriptionRepo: ISubscriptionRepository;
-  private planRepo: IPlanRepository;
-
-  constructor(
-    draftRepo: IOnboardingDraftRepository,
-    membershipRepo: IMembershipRepository,
-    dormitoryRepo: IDormitoryRepository,
-    subscriptionRepo: ISubscriptionRepository,
-    planRepo: IPlanRepository
-  ) {
-    this.draftRepo = draftRepo;
-    this.membershipRepo = membershipRepo;
-    this.dormitoryRepo = dormitoryRepo;
-    this.subscriptionRepo = subscriptionRepo;
-    this.planRepo = planRepo;
-  }
+  constructor(private prisma: PrismaClient) {}
 
   public async getStatus(userId: string): Promise<OnboardingStatusResult> {
-    const memberships = await this.membershipRepo.findByUserId(userId);
-    const activeMemberships = memberships.filter((m) => m.status === 'active');
-    const ownerMemberships = activeMemberships.filter((m) => m.roleCode === 'OWNER');
+    const memberships = await this.prisma.dormitoryMember.findMany({
+      where: { userId, status: 'active' },
+      include: { dormitory: true },
+    });
 
-    const draft = await this.draftRepo.findByUserId(userId);
+    const activeDormMemberships = memberships.filter(
+      (m) => m.dormitory && m.dormitory.status === 'active'
+    );
 
-    // Count FREE plan dormitories created/owned by user
-    let freeOwnedCount = 0;
-    for (const mem of ownerMemberships) {
-      const dorm = await this.dormitoryRepo.findById(mem.dormitoryId);
-      if (dorm && dorm.status === 'active') {
-        const sub = await this.subscriptionRepo.findByDormitoryId(dorm.id);
-        if (sub) {
-          const plan = await this.planRepo.findById(sub.planId);
-          if (plan && plan.code === 'FREE') {
-            freeOwnedCount++;
-          }
-        }
-      }
-    }
+    const draft = await this.prisma.onboardingDraft.findUnique({
+      where: { userId },
+    });
 
-    const freeDormitoryAvailable = freeOwnedCount === 0;
-    const onboardingRequired = activeMemberships.length === 0;
+    // Count all owned dormitories (active + setup_pending) for quota evaluation
+    const ownedDormitories = await this.prisma.dormitory.findMany({
+      where: {
+        createdByUserId: userId,
+        status: { in: ['active', 'setup_pending'] },
+      },
+    });
+
+    // Check if user already owns an active FREE plan dormitory
+    const freeSubs = await this.prisma.dormitorySubscription.findMany({
+      where: {
+        dormitoryId: { in: activeDormMemberships.map((m) => m.dormitoryId) },
+        plan: { code: 'FREE' },
+      },
+    });
+
+    const freeDormitoryAvailable = freeSubs.length === 0;
+    // Onboarding is required if no active dormitories exist or draft is unfinalized
+    const onboardingRequired = activeDormMemberships.length === 0 || (!!draft && !draft.finalizedAt);
 
     return {
       onboardingRequired,
-      hasDraft: !!draft,
-      currentStep: draft ? draft.currentStep : null,
-      ownedDormitoryCount: ownerMemberships.length,
+      hasDraft: !!draft && !draft.finalizedAt,
+      currentStep: draft && !draft.finalizedAt ? draft.currentStep : null,
+      provisionalDormitoryId: draft && !draft.finalizedAt ? draft.provisionalDormitoryId : null,
+      ownedDormitoryCount: ownedDormitories.length,
       freeDormitoryAvailable,
     };
   }
 
-  public async getDraft(userId: string): Promise<OnboardingDraftEntity | null> {
-    return this.draftRepo.findByUserId(userId);
+  public async getDraft(userId: string) {
+    const draft = await this.prisma.onboardingDraft.findUnique({
+      where: { userId },
+    });
+    if (!draft || draft.finalizedAt) return null;
+    return draft;
   }
 
-  public async saveDraft(userId: string, currentStep: string, payload: any): Promise<OnboardingDraftEntity> {
-    return this.draftRepo.saveDraft({
-      userId,
-      currentStep: currentStep || 'dormitory',
-      payload: payload || {},
+  public async saveDraft(userId: string, currentStep: string, payload: any, provisionalDormitoryId?: string) {
+    const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // 30 days expiry
+
+    return await this.prisma.onboardingDraft.upsert({
+      where: { userId },
+      create: {
+        userId,
+        currentStep: currentStep || 'dormitory',
+        payload: payload || {},
+        provisionalDormitoryId: provisionalDormitoryId || null,
+        expiresAt,
+      },
+      update: {
+        currentStep: currentStep || 'dormitory',
+        payload: payload || {},
+        ...(provisionalDormitoryId ? { provisionalDormitoryId } : {}),
+        expiresAt,
+        updatedAt: new Date(),
+      },
     });
   }
 
   public async deleteDraft(userId: string): Promise<void> {
-    await this.draftRepo.deleteByUserId(userId);
+    await this.prisma.onboardingDraft.deleteMany({
+      where: { userId },
+    });
   }
 }

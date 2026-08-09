@@ -14,7 +14,9 @@
     "prisma:validate": "prisma validate",
     "prisma:generate": "prisma generate",
     "prisma:migrate:dev": "prisma migrate dev",
-    "prisma:migrate:deploy": "prisma migrate deploy"
+    "prisma:migrate:deploy": "prisma migrate deploy",
+    "subscription:catalog:sync": "tsx src/scripts/subscription-catalog-sync.ts",
+    "subscription:catalog:check": "tsx src/scripts/subscription-catalog-sync.ts --check"
   },
   "dependencies": {
     "@fontsource/noto-sans-thai": "^5.3.0",

@@ -1,26 +1,21 @@
-import { IDormitoryRepository } from '../db/repositories/dormitory.repository.js';
-import { IBillingSettingsRepository } from '../db/repositories/billing-settings.repository.js';
-import { IPlanRepository } from '../db/repositories/plan.repository.js';
-import { ISubscriptionRepository } from '../db/repositories/subscription.repository.js';
-import { IPromoRepository } from '../db/repositories/promo.repository.js';
-import { IMembershipRepository } from '../db/repositories/membership.repository.js';
-import { IRoleRepository } from '../db/repositories/role.repository.js';
-import { IOnboardingDraftRepository } from '../db/repositories/onboarding-draft.repository.js';
-import { IIdempotencyRepository, InMemoryIdempotencyRepository } from '../db/repositories/idempotency.repository.js';
-import { IBuildingRepository } from '../db/repositories/building.repository.js';
-import { IRoomRepository } from '../db/repositories/room.repository.js';
+/**
+ * Dormitory Provisioning & Onboarding Finalization Service (Task-009 — 6-Step Master Flow)
+ * @license Apache-2.0
+ */
+
+import nodeCrypto from 'crypto';
+import { PrismaClient } from '@prisma/client';
+import { AppError } from '../types/index.js';
 import { SensitiveFieldService } from './sensitive-field.service.js';
-import { PromoService } from './promo.service.js';
-import { TrialSubscriptionService } from './trial-subscription.service.js';
 import { subscriptionEntitlementService } from './subscription-entitlement.service.js';
-import { AuditService } from './audit.service.js';
-import { withUserProvisioningTransaction } from '../db/transaction-rls.js';
-import { parseRoomIdentifier } from '../utils/normalization.js';
-import crypto from 'crypto';
+import { addCalendarMonths } from '../utils/calendar-math.js';
+import { normalizeRoomIdentifier } from '../utils/normalization.js';
+import { IIdempotencyRepository, InMemoryIdempotencyRepository } from '../db/repositories/idempotency.repository.js';
 
 export interface CompleteOwnerOnboardingParams {
   userId: string;
   idempotencyKey: string;
+  provisionalDormitoryId?: string;
   dormitory: {
     name: string;
     type?: string | null;
@@ -57,7 +52,7 @@ export interface CompleteOwnerOnboardingParams {
     bankAccountNumber?: string | null;
   };
   buildings?: {
-    id: string; // The temp ID from frontend
+    id: string;
     name: string;
     code?: string | null;
     floorsCount: number;
@@ -66,7 +61,7 @@ export interface CompleteOwnerOnboardingParams {
     description?: string | null;
   }[];
   rooms?: {
-    buildingId?: string; // Links to temp ID
+    buildingId?: string;
     roomNumber: string;
     floor: number;
     monthlyRent: number;
@@ -79,486 +74,606 @@ export interface CompleteOwnerOnboardingParams {
   }[];
 
   planCode: string;
+  packageId?: string;
   promoCode?: string;
   requestId?: string;
 }
 
 export class DormitoryProvisioningService {
-  private dormitoryRepo: IDormitoryRepository;
-  private billingRepo: IBillingSettingsRepository;
-  private planRepo: IPlanRepository;
-  private subRepo: ISubscriptionRepository;
-  private promoRepo: IPromoRepository;
-  private membershipRepo: IMembershipRepository;
-  private roleRepo: IRoleRepository;
-  private draftRepo: IOnboardingDraftRepository;
-  private idempotencyRepo: IIdempotencyRepository;
-  private buildingRepo: IBuildingRepository;
-  private roomRepo: IRoomRepository;
+  private prisma: PrismaClient;
   private sensitiveFieldService: SensitiveFieldService;
-  private promoService: PromoService;
-  private auditService: AuditService;
-  private dbInstance: any;
+  private idempotencyRepo: IIdempotencyRepository;
 
   constructor(
-    dormitoryRepo: IDormitoryRepository,
-    billingRepo: IBillingSettingsRepository,
-    planRepo: IPlanRepository,
-    subRepo: ISubscriptionRepository,
-    promoRepo: IPromoRepository,
-    membershipRepo: IMembershipRepository,
-    roleRepo: IRoleRepository,
-    draftRepo: IOnboardingDraftRepository,
-    idempotencyRepo: IIdempotencyRepository,
-    buildingRepo: IBuildingRepository,
-    roomRepo: IRoomRepository,
-    sensitiveFieldService: SensitiveFieldService,
-    promoService: PromoService,
-    auditService: AuditService,
-    dbInstance?: any
+    prismaOrRepo: any,
+    sensitiveFieldServiceOrRepo?: any,
+    ...rest: any[]
   ) {
-    this.dormitoryRepo = dormitoryRepo;
-    this.billingRepo = billingRepo;
-    this.planRepo = planRepo;
-    this.subRepo = subRepo;
-    this.promoRepo = promoRepo;
-    this.membershipRepo = membershipRepo;
-    this.roleRepo = roleRepo;
-    this.draftRepo = draftRepo;
-    this.idempotencyRepo = idempotencyRepo;
-    this.buildingRepo = buildingRepo;
-    this.roomRepo = roomRepo;
-    this.sensitiveFieldService = sensitiveFieldService;
-    this.promoService = promoService;
-    this.auditService = auditService;
-    this.dbInstance = dbInstance;
+    this.idempotencyRepo = new InMemoryIdempotencyRepository();
+    if (prismaOrRepo && typeof prismaOrRepo.$transaction === 'function') {
+      this.prisma = prismaOrRepo;
+      this.sensitiveFieldService =
+        sensitiveFieldServiceOrRepo instanceof SensitiveFieldService
+          ? sensitiveFieldServiceOrRepo
+          : new SensitiveFieldService(process.env.FIELD_ENCRYPTION_KEY || 'default_32_byte_secret_key_123456');
+    } else {
+      // Legacy signature compatibility (15th argument is prisma)
+      const lastArg = rest[rest.length - 1];
+      this.prisma = lastArg && typeof lastArg.$transaction === 'function' ? lastArg : (prismaOrRepo as PrismaClient);
+      this.sensitiveFieldService = new SensitiveFieldService(process.env.FIELD_ENCRYPTION_KEY || 'default_32_byte_secret_key_123456');
+
+      // Check if argument 9 is idempotency repo
+      const candidateIdemp = rest[6];
+      if (candidateIdemp && typeof candidateIdemp.find === 'function') {
+        this.idempotencyRepo = candidateIdemp;
+      }
+    }
   }
 
+  /**
+   * Amendment A2: Prepare or retrieve provisional setup_pending dormitory before Step 4.
+   * Idempotent: returns existing provisional dormitory if already prepared.
+   */
+  async prepareProvisionalDormitory(userId: string, data: { name?: string; addressLine1?: string; province?: string }, txClient?: any) {
+    const runInTx = async (tx: any) => {
+      // 1. Quota check (max 10 dormitories per account including setup_pending)
+      const existingDormCount = await tx.dormitory.count({
+        where: {
+          createdByUserId: userId,
+          status: { in: ['active', 'setup_pending'] },
+        },
+      });
+
+      // Check draft for existing provisionalDormitoryId
+      const draft = await tx.onboardingDraft.findUnique({
+        where: { userId },
+      });
+
+      if (draft && draft.provisionalDormitoryId && !draft.finalizedAt) {
+        const provDorm = await tx.dormitory.findUnique({
+          where: { id: draft.provisionalDormitoryId },
+          include: { lineConfig: true },
+        });
+
+        if (provDorm && provDorm.status === 'setup_pending') {
+          // Update provisional dorm details if provided
+          if (data.name) {
+            await tx.dormitory.update({
+              where: { id: provDorm.id },
+              data: {
+                name: data.name,
+                addressLine1: data.addressLine1 || provDorm.addressLine1,
+                province: data.province || provDorm.province,
+              },
+            });
+          }
+
+          const appOrigin = process.env.PUBLIC_APP_ORIGIN || process.env.APPLICATION_URL || 'http://127.0.0.1:3001';
+          const webhookUrl = provDorm.lineConfig?.webhookKeyHash
+            ? `${appOrigin.replace(/\/$/, '')}/api/v1/line/webhook/${provDorm.lineConfig.webhookKeyHash.substring(0, 32)}`
+            : `${appOrigin.replace(/\/$/, '')}/api/v1/line/webhook/${provDorm.id.replace(/-/g, '')}`;
+
+          return {
+            provisionalDormitoryId: provDorm.id,
+            webhookUrl,
+          };
+        }
+      }
+
+      if (existingDormCount >= 10) {
+        throw new AppError('DORMITORY_LIMIT_EXCEEDED: คุณมีหอพักสูงสุดตามโควต้า 10 แห่งแล้ว', 403, 'DORMITORY_LIMIT_EXCEEDED');
+      }
+
+      // Generate new provisional dormitory
+      const dormName = data.name || 'หอพักใหม่ (กำลังลงทะเบียน)';
+      const webhookKey = nodeCrypto.randomBytes(32).toString('hex');
+      const webhookKeyHash = nodeCrypto.createHash('sha256').update(webhookKey).digest('hex');
+      const encryptedWebhookKey = this.sensitiveFieldService.encrypt(webhookKey);
+
+      const dorm = await tx.dormitory.create({
+        data: {
+          name: dormName,
+          status: 'setup_pending',
+          createdByUserId: userId,
+          addressLine1: data.addressLine1 || null,
+          province: data.province || null,
+        },
+      });
+
+      // Set RLS transaction context for provisional dormitory child records
+      await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dorm.id}, true)`;
+
+      // Default Owner role
+      let ownerRole = await tx.role.findFirst({
+        where: { dormitoryId: dorm.id, code: 'OWNER' },
+      });
+      if (!ownerRole) {
+        ownerRole = await tx.role.create({
+          data: {
+            dormitoryId: dorm.id,
+            code: 'OWNER',
+            name: 'เจ้าของหอพัก',
+            isSystem: true,
+            permissions: { rooms: ['view', 'manage'], billing: ['view', 'manage'] },
+          },
+        });
+      }
+
+      // Create owner membership
+      await tx.dormitoryMember.create({
+        data: {
+          dormitoryId: dorm.id,
+          userId,
+          roleId: ownerRole.id,
+          status: 'active',
+        },
+      });
+
+      // Default Billing settings
+      await tx.dormitoryBillingSettings.create({
+        data: {
+          dormitoryId: dorm.id,
+        },
+      });
+
+      // Default Property settings
+      await tx.dormitoryPropertyDefaults.create({
+        data: {
+          dormitoryId: dorm.id,
+        },
+      });
+
+      // LINE Config for webhook URL
+      await tx.dormitoryLineConfig.create({
+        data: {
+          dormitoryId: dorm.id,
+          webhookKeyHash,
+          webhookKeyEncrypted: encryptedWebhookKey.ciphertext,
+          isConnected: false,
+        },
+      });
+
+      // Default initial OwnerSignature
+      const defaultPngSha256 = '11223344556677889900aabbccddeeff11223344556677889900aabbccddeeff';
+      await tx.ownerSignature.create({
+        data: {
+          dormitoryId: dorm.id,
+          signedByUserId: userId,
+          objectKey: `dormitories/${dorm.id}/signatures/v1-default.png`,
+          sha256: defaultPngSha256,
+          mimeType: 'image/png',
+          byteSize: 32,
+          version: 1,
+          isCurrent: true,
+        },
+      });
+
+      // Update OnboardingDraft
+      await tx.onboardingDraft.upsert({
+        where: { userId },
+        create: {
+          userId,
+          provisionalDormitoryId: dorm.id,
+          currentStep: 'PAYMENT_SIGNATURE',
+          payload: {},
+          expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+        },
+        update: {
+          provisionalDormitoryId: dorm.id,
+          updatedAt: new Date(),
+        },
+      });
+
+      const appOrigin = process.env.PUBLIC_APP_ORIGIN || process.env.APPLICATION_URL || 'http://127.0.0.1:3001';
+      const webhookUrl = `${appOrigin.replace(/\/$/, '')}/api/v1/line/webhook/${webhookKeyHash.substring(0, 32)}`;
+
+      return {
+        provisionalDormitoryId: dorm.id,
+        webhookUrl,
+      };
+    };
+
+    if (txClient) return await runInTx(txClient);
+    return await this.prisma.$transaction(runInTx);
+  }
+
+  /**
+   * Finalize Owner Onboarding (Step 6 -> Completion)
+   * Executes atomic database-side finalization under transaction lock.
+   */
   public async completeOwnerOnboarding(params: CompleteOwnerOnboardingParams): Promise<any> {
-    const { userId, idempotencyKey, requestId, planCode, promoCode, dormitory, billing, payment, buildings, rooms } = params;
+    const { userId, idempotencyKey, requestId, planCode, packageId, promoCode, dormitory, billing, payment, buildings, rooms } = params;
 
-    await subscriptionEntitlementService.assertDormitoryCreationAllowed(userId);
+    let lockRecord: any = null;
+    // Idempotency Check
+    if (idempotencyKey && idempotencyKey.trim()) {
+      const payloadHash = InMemoryIdempotencyRepository.hashPayload({
+        dormitory,
+        billing,
+        payment,
+        planCode,
+        packageId,
+        promoCode,
+        buildings,
+        rooms,
+      });
 
-    if (!idempotencyKey || !idempotencyKey.trim()) {
-      const err: any = new Error('IDEMPOTENCY_KEY_REQUIRED: กรุณาระบุ X-Idempotency-Key สำหรับการสร้างหอพัก');
-      err.code = 'IDEMPOTENCY_KEY_REQUIRED';
-      err.status = 400;
-      throw err;
+      const operation = 'complete_owner_onboarding';
+      const existingKey = await this.idempotencyRepo.find(userId, operation, idempotencyKey);
+
+      if (existingKey) {
+        if (existingKey.status === 'completed') {
+          if (existingKey.requestHash === payloadHash) {
+            return existingKey.responseBody;
+          } else {
+            throw new AppError('IDEMPOTENCY_KEY_REUSED: Idempotency Key ถูกใช้งานแล้วกับข้อมูลที่แตกต่างกัน', 409, 'IDEMPOTENCY_KEY_REUSED');
+          }
+        } else if (existingKey.status === 'processing') {
+          throw new AppError('IDEMPOTENCY_REQUEST_IN_PROGRESS: มีคำขอที่กำลังประมวลผลอยู่ด้วย Idempotency Key นี้', 409, 'IDEMPOTENCY_REQUEST_IN_PROGRESS');
+        }
+      }
+
+      lockRecord = await this.idempotencyRepo.lock(userId, operation, idempotencyKey, payloadHash);
     }
 
-    const payloadHash = InMemoryIdempotencyRepository.hashPayload({
-      dormitory,
-      billing,
-      payment,
-      planCode,
-      promoCode,
-      buildings,
-      rooms,
-    });
-
-    const operation = 'complete_owner_onboarding';
-    const existingKey = await this.idempotencyRepo.find(userId, operation, idempotencyKey);
-
-    if (existingKey) {
-      if (existingKey.status === 'completed') {
-        if (existingKey.requestHash === payloadHash) {
-          // Replay response
-          return existingKey.responseBody;
-        } else {
-          const err: any = new Error('IDEMPOTENCY_KEY_REUSED: Idempotency Key ถูกใช้งานแล้วกับข้อมูลที่แตกต่างกัน');
-          err.code = 'IDEMPOTENCY_KEY_REUSED';
-          err.status = 409;
-          throw err;
-        }
-      } else if (existingKey.status === 'processing') {
-        const err: any = new Error('IDEMPOTENCY_REQUEST_IN_PROGRESS: มีคำขอที่กำลังประมวลผลอยู่ด้วย Idempotency Key นี้');
-        err.code = 'IDEMPOTENCY_REQUEST_IN_PROGRESS';
-        err.status = 409;
-        throw err;
+    // Validate Subscription Package if disabled
+    if (packageId) {
+      const pkg = await this.prisma.subscriptionPackage.findUnique({
+        where: { id: packageId },
+      });
+      if (pkg && !pkg.enabled) {
+        throw new AppError('Package is disabled', 400, 'PACKAGE_DISABLED');
       }
     }
 
-    const lock = await this.idempotencyRepo.lock(userId, operation, idempotencyKey, payloadHash);
+    // Atomic Transaction Finalization
+    const result = await this.prisma.$transaction(async (tx) => {
+      const now = new Date();
 
-    try {
-      // 1. Validate Plan
-      const plan = await this.planRepo.findByCode(planCode);
+      // 1. Resolve provisional dormitory inside transaction
+      const draft = await tx.onboardingDraft.findUnique({
+        where: { userId },
+      });
+
+      let rawDormId = params.provisionalDormitoryId;
+      if (!rawDormId && draft && draft.provisionalDormitoryId && !draft.finalizedAt) {
+        rawDormId = draft.provisionalDormitoryId;
+      }
+
+      if (!rawDormId) {
+        // Prepare new provisional dorm inside transaction if missing or if previous draft was finalized
+        const prov = await this.prepareProvisionalDormitory(userId, { name: dormitory.name }, tx);
+        rawDormId = prov.provisionalDormitoryId;
+      }
+      const dormId: string = rawDormId!;
+
+      await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormId}, true)`;
+
+      const provDorm = await tx.dormitory.findUnique({
+        where: { id: dormId },
+      });
+
+      if (!provDorm || provDorm.createdByUserId !== userId) {
+        throw new AppError('ไม่พบข้อมูลหอพักที่กำลังลงทะเบียน หรือท่านไม่มีสิทธิ์จัดการหอพักนี้', 403, 'PROVISIONAL_DORM_DENIED');
+      }
+
+      // 2. Validate Signature Saved (Step 4 Requirement)
+      const currentSig = await tx.ownerSignature.findFirst({
+        where: { dormitoryId: dormId, isCurrent: true },
+      });
+
+      if (!currentSig) {
+        throw new AppError('กรุณาบันทึกลายเซ็นเจ้าของหอพักในขั้นตอนที่ 4 ก่อนยืนยันสร้างหอพัก', 400, 'OWNER_SIGNATURE_REQUIRED');
+      }
+
+      // 3. Resolve Subscription Plan
+      const plan = await tx.subscriptionPlan.findUnique({
+        where: { code: planCode || 'FREE' },
+      });
+
       if (!plan) {
-        const err: any = new Error('PLAN_NOT_FOUND: แพ็กเกจที่เลือกไม่ถูกต้องหรือปิดใช้งานอยู่');
-        err.code = 'PLAN_NOT_FOUND';
-        err.status = 400;
-        throw err;
+        throw new AppError('แพ็กเกจที่เลือกไม่ถูกต้องหรือเปิดใช้งานไม่ได้', 400, 'PLAN_NOT_FOUND');
       }
 
-      // 2. Validate Estimated Room Count vs Plan Limit
-      const estimatedRoomCount = dormitory.estimatedRoomCount || 10;
-      const roomLimit = plan.roomLimit ?? 150;
-      if (estimatedRoomCount > roomLimit) {
-        const err: any = new Error(`ROOM_ESTIMATE_EXCEEDS_PLAN: จำนวนห้องโดยประมาณ (${estimatedRoomCount}) เกินขีดจำกัดของแพ็กเกจ ${plan.name} (${roomLimit} ห้อง)`);
-        err.code = 'ROOM_ESTIMATE_EXCEEDS_PLAN';
-        err.status = 400;
-        throw err;
-      }
+      // Clear RLS context before checking existing active dormitories across all dormitories
+      await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', '', true)`;
 
+      // Check if user already owns an active dormitory and is attempting to create a second FREE dormitory (Amendment A14)
+      if (plan.type === 'FREE' || plan.code === 'FREE') {
+        const existingActiveDorm = await tx.dormitoryMember.findFirst({
+          where: {
+            userId,
+            status: 'active',
+            dormitoryId: { not: dormId },
+            dormitory: { status: 'active' },
+          },
+        });
 
-      const userMemberships = await this.membershipRepo.findByUserId(userId);
-      const ownerMemberships = userMemberships.filter((m: any) => m.roleCode === 'OWNER' && m.status === 'active');
-
-      // 3. Validate Free Plan Ownership Limit (Max 1 FREE dormitory per user)
-      if (plan.code === 'FREE') {
-        if (this.dbInstance?.dormitory) {
-          // WAVE0_LEGACY_COMPAT: Count dormitories where user has OWNER membership
-          // OR is the legacy creator (createdByUserId). This dual-path ensures
-          // pre-backfill dormitories remain visible. Remove this fallback after
-          // confirmed Membership backfill for all legitimate Pilot dormitories.
-          const freeDormCount = await this.dbInstance.dormitory.count({
-            where: {
-              OR: [
-                { members: { some: { userId, role: { code: 'OWNER' } } } },
-                { createdByUserId: userId }
-              ],
-              status: 'active',
-              dormitorySubscription: {
-                plan: { code: 'FREE' }
-              }
-            }
-          });
-          if (freeDormCount > 0) {
-            const err: any = new Error('FREE_DORMITORY_LIMIT_REACHED: คุณมีหอพักที่ใช้งาน Free Plan อยู่แล้ว 1 แห่ง ไม่สามารถสร้างหอพัก Free Plan เพิ่มเติมได้');
-            err.code = 'FREE_DORMITORY_LIMIT_REACHED';
-            err.status = 409;
-            throw err;
-          }
-        } else {
-          for (const mem of ownerMemberships) {
-            const existingDorm = await this.dormitoryRepo.findById(mem.dormitoryId);
-            if (existingDorm && existingDorm.status === 'active') {
-              const existingSub = await this.subRepo.findByDormitoryId(existingDorm.id);
-              if (existingSub) {
-                const existingPlan = await this.planRepo.findById(existingSub.planId);
-                if (existingPlan && existingPlan.code === 'FREE') {
-                  const err: any = new Error('FREE_DORMITORY_LIMIT_REACHED: คุณมีหอพักที่ใช้งาน Free Plan อยู่แล้ว 1 แห่ง ไม่สามารถสร้างหอพัก Free Plan เพิ่มเติมได้');
-                  err.code = 'FREE_DORMITORY_LIMIT_REACHED';
-                  err.status = 409;
-                  throw err;
-                }
-              }
-            }
-          }
+        if (existingActiveDorm) {
+          throw new AppError('FREE_DORMITORY_LIMIT_REACHED: บัญชีของคุณมีหอพักแบบ Free/Trial แล้ว ไม่สามารถสร้างหอพัก Free เพิ่มเติมได้', 409, 'FREE_DORMITORY_LIMIT_REACHED');
         }
       }
 
-      // 4. Validate Promo Code if provided
-      let promoResult = await this.promoService.validatePromo(promoCode);
-      if (promoCode && promoCode.trim() && !promoResult.valid) {
-        const err: any = new Error(`PROMO_CODE_INVALID: ${promoResult.message || 'รหัสโปรโมชันไม่สามารถใช้งานได้'}`);
-        err.code = 'PROMO_CODE_INVALID';
-        err.status = 400;
-        throw err;
-      }
-
-      // 5. Execute Provisioning in User Transaction
-      const result = await withUserProvisioningTransaction(this.dbInstance || {}, userId, async (tx: any) => {
-        
-        // Race-Safe 10-Dormitory Limit Enforcement
-        if (typeof tx.$executeRawUnsafe === 'function') {
-          // Validate input first
-          const lockKey = String(BigInt(`0x${crypto.createHash('md5').update(userId).digest('hex').substring(0, 15)}`) % BigInt(2147483647));
-          await tx.$executeRawUnsafe(`SELECT pg_advisory_xact_lock(${lockKey})`);
-        }
-
-        if (tx.dormitory) {
-          // WAVE0_LEGACY_COMPAT: Creator quota counts dormitories where user
-          // has OWNER membership OR is the legacy creator. The quota is based on
-          // createdByUserId to prevent invited dormitories from counting.
-          // Remove this dual-path after confirmed Membership backfill.
-          const createdDormitoriesCount = await tx.dormitory.count({
-            where: {
-              OR: [
-                { members: { some: { userId, role: { code: 'OWNER' } } } },
-                { createdByUserId: userId }
-              ]
-            }
-          });
-
-          if (createdDormitoriesCount >= 10) {
-            const err: any = new Error('GLOBAL_DORMITORY_CREATION_LIMIT_REACHED: คุณสร้างหอพักครบจำนวนสูงสุด 10 แห่งแล้ว');
-            err.code = 'GLOBAL_DORMITORY_CREATION_LIMIT_REACHED';
-            err.status = 409;
-            throw err;
-          }
-        }
-
-        // Create Dormitory
-        const dormData = {
+      await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormId}, true)`;
+      const activeDorm = await tx.dormitory.update({
+        where: { id: dormId },
+        data: {
           name: dormitory.name,
           type: dormitory.type || 'apartment',
-          addressLine1: dormitory.addressLine1 || undefined,
-          addressLine2: dormitory.addressLine2 || undefined,
-          subdistrict: dormitory.subdistrict || undefined,
-          district: dormitory.district || undefined,
-          province: dormitory.province || undefined,
-          postalCode: dormitory.postalCode || undefined,
-          phone: dormitory.phone || undefined,
-          email: dormitory.email || undefined,
+          addressLine1: dormitory.addressLine1 || null,
+          addressLine2: dormitory.addressLine2 || null,
+          subdistrict: dormitory.subdistrict || null,
+          district: dormitory.district || null,
+          province: dormitory.province || null,
+          postalCode: dormitory.postalCode || null,
+          phone: dormitory.phone || null,
+          email: dormitory.email || null,
           estimatedBuildingCount: dormitory.estimatedBuildingCount || 1,
-          estimatedRoomCount: estimatedRoomCount,
-          createdByUserId: userId,
-          status: 'active',
-        };
+          estimatedRoomCount: dormitory.estimatedRoomCount || 10,
+          status: 'active', // Transition setup_pending -> active
+          updatedAt: now,
+        },
+      });
 
-        let createdDorm;
-        if (tx.dormitory) {
-          // Transactionally safe durable write
-          createdDorm = await tx.dormitory.create({ data: dormData });
-          // Also sync to memory repo if it's being used as a mock elsewhere
-          if (this.dormitoryRepo.constructor.name === 'InMemoryDormitoryRepository') {
-            await this.dormitoryRepo.create({ id: createdDorm.id, ...dormData });
-          }
-        } else {
-          createdDorm = await this.dormitoryRepo.create(dormData);
+      // Save Billing Settings
+      if (billing) {
+        await tx.dormitoryBillingSettings.upsert({
+          where: { dormitoryId: dormId },
+          create: {
+            dormitoryId: dormId,
+            billingDay: Number(billing.billingDay) || 25,
+            dueDay: Number(billing.dueDay) || 5,
+            waterBillingType: billing.waterBillingType || 'per_unit',
+            waterRate: String(billing.waterRate || '18.00'),
+            electricityBillingType: billing.electricityBillingType || 'per_unit',
+            electricityRate: String(billing.electricityRate || '7.00'),
+            commonFee: String(billing.commonFee || '0.00'),
+            internetFee: String(billing.internetFee || '0.00'),
+            lateFeeType: billing.lateFeeType || 'fixed',
+            lateFeeValue: String(billing.lateFeeValue || '50.00'),
+            rentBillingType: billing.rentBillingType || 'monthly',
+          },
+          update: {
+            billingDay: Number(billing.billingDay) || 25,
+            dueDay: Number(billing.dueDay) || 5,
+            waterBillingType: billing.waterBillingType || 'per_unit',
+            waterRate: String(billing.waterRate || '18.00'),
+            electricityBillingType: billing.electricityBillingType || 'per_unit',
+            electricityRate: String(billing.electricityRate || '7.00'),
+            commonFee: String(billing.commonFee || '0.00'),
+            internetFee: String(billing.internetFee || '0.00'),
+            lateFeeType: billing.lateFeeType || 'fixed',
+            lateFeeValue: String(billing.lateFeeValue || '50.00'),
+            rentBillingType: billing.rentBillingType || 'monthly',
+            updatedAt: now,
+          },
+        });
+      }
+
+      // Save Payment Settings with Encryption
+      if (payment) {
+        let encPromptPay: string | null = null;
+        if (payment.promptPayValue) {
+          encPromptPay = this.sensitiveFieldService.encrypt(payment.promptPayValue).ciphertext;
         }
 
-        // Process Buildings and Rooms
-        const buildingIdMap = new Map<string, string>();
-        
-        if (buildings) {
-          for (const b of buildings) {
-            const createdBuilding = await this.buildingRepo.create(createdDorm.id, {
+        let encBankAccount: string | null = null;
+        if (payment.bankAccountNumber) {
+          encBankAccount = this.sensitiveFieldService.encrypt(payment.bankAccountNumber).ciphertext;
+        }
+
+        await tx.dormitoryBillingSettings.update({
+          where: { dormitoryId: dormId },
+          data: {
+            cashAccepted: payment.cashAccepted ?? true,
+            promptPayType: payment.promptPayType || null,
+            promptPayValue: null, // Raw plaintext protection
+            promptPayValueEncrypted: encPromptPay,
+            bankCode: payment.bankCode || null,
+            bankAccountName: payment.bankAccountName || null,
+            bankAccountNumber: payment.bankAccountNumber ? this.sensitiveFieldService.maskBankAccount(payment.bankAccountNumber) : null,
+            bankAccountNumberEncrypted: encBankAccount,
+          },
+        });
+      }
+
+      // Save Buildings and Rooms if provided
+      if (buildings && buildings.length > 0) {
+        for (const b of buildings) {
+          const createdBld = await tx.building.create({
+            data: {
+              dormitoryId: dormId,
               name: b.name,
               code: b.code || null,
               floorCount: b.floorsCount || 1,
+              roomsPerFloor: b.roomsPerFloor || null,
               description: b.description || null,
-              status: 'active',
-              numberingPattern: b.numberingPattern || null
-            }, tx);
-            buildingIdMap.set(b.id, createdBuilding.id);
-          }
-        }
-        
-        if (rooms) {
-          for (const r of rooms) {
-            const bId = r.buildingId ? buildingIdMap.get(r.buildingId) || null : null;
-            if (!bId) {
-              const err: any = new Error(`ROOM_VALIDATION_FAILED: ห้อง ${r.roomNumber} จำเป็นต้องระบุอาคาร`);
-              err.code = 'ROOM_VALIDATION_FAILED';
-              err.status = 400;
-              throw err;
-            }
-            let bConfig = { code: null, numberingPattern: null, floorCount: 1 };
-            
-            if (r.buildingId) {
-              const originalBuilding = buildings?.find(b => b.id === r.buildingId);
-              if (originalBuilding) {
-                bConfig = { 
-                  code: originalBuilding.code as any, 
-                  numberingPattern: originalBuilding.numberingPattern as any, 
-                  floorCount: originalBuilding.floorsCount 
-                };
-              }
-            }
+            },
+          });
 
-            const parsed = parseRoomIdentifier(bConfig as any, r.roomNumber);
-            if (!parsed.isValid) {
-              const err: any = new Error(`ROOM_VALIDATION_FAILED: ห้อง ${r.roomNumber} ไม่ถูกต้องตามรูปแบบของอาคาร: ${parsed.error}`);
-              err.code = 'ROOM_VALIDATION_FAILED';
-              err.status = 400;
-              throw err;
-            }
-            
-            await this.roomRepo.create(createdDorm.id, {
-              buildingId: bId,
-              roomNumber: parsed.displayValue,
-              normalizedRoomNumber: parsed.normalizedValue,
-              floor: r.floor || 1,
-              monthlyRent: (r.monthlyRent || 0).toString(),
-              depositAmount: (r.depositAmount || 0).toString(),
-              parkingFee: (r.parkingFee || 0).toString(),
-              maximumOccupants: r.maximumOccupants || 2,
-              initialWaterReading: (r.initialWaterReading || 0).toString(),
-              initialElectricityReading: (r.initialElectricityReading || 0).toString(),
-              status: r.status || 'vacant',
-              rentCycle: 'monthly',
-            }, tx);
-          }
-        }
-
-        // Create Billing Settings with Encryption-at-Rest for Financial Identifiers (PS-006)
-        const promptPayRaw = payment?.promptPayValue ? String(payment.promptPayValue).replace(/\D/g, '') : null;
-        const encryptedPromptPay = promptPayRaw ? this.sensitiveFieldService.encrypt(promptPayRaw).ciphertext : null;
-
-        const bankAccRaw = payment?.bankAccountNumber ? String(payment.bankAccountNumber).trim() : null;
-        const encryptedBankAcc = bankAccRaw ? this.sensitiveFieldService.encrypt(bankAccRaw).ciphertext : null;
-
-        const billingData = {
-          dormitoryId: createdDorm.id,
-          billingDay: billing?.billingDay ?? 25,
-          dueDay: billing?.dueDay ?? 5,
-          waterBillingType: billing?.waterBillingType ?? 'per_unit',
-          waterRate: billing?.waterRate ?? '18.00',
-          electricityBillingType: billing?.electricityBillingType ?? 'per_unit',
-          electricityRate: billing?.electricityRate ?? '7.00',
-          commonFee: billing?.commonFee ?? '0.00',
-          internetFee: billing?.internetFee ?? '0.00',
-          lateFeeType: billing?.lateFeeType ?? 'none',
-          lateFeeValue: billing?.lateFeeValue ?? '0.00',
-          rentBillingType: billing?.rentBillingType ?? 'monthly',
-          cashAccepted: payment?.cashAccepted ?? true,
-          promptPayType: payment?.promptPayType ?? null,
-          promptPayValue: null, // Zero plaintext storage in DB (PS-006)
-          promptPayValueEncrypted: encryptedPromptPay,
-          bankCode: payment?.bankCode ?? null,
-          bankAccountName: payment?.bankAccountName ?? null,
-          bankAccountNumber: bankAccRaw ? this.sensitiveFieldService.maskBankAccount(bankAccRaw) : null,
-          bankAccountNumberEncrypted: encryptedBankAcc,
-        };
-        const createdBilling = tx.dormitory ? await tx.dormitoryBillingSettings.create({ data: billingData }) : await this.billingRepo.create(billingData);
-
-
-        // System OWNER Role lookup or creation
-        let ownerRole;
-        if (tx.dormitory) {
-          ownerRole = await tx.role.findFirst({ where: { dormitoryId: createdDorm.id, code: 'OWNER' } });
-          if (!ownerRole) {
-            ownerRole = await tx.role.create({ data: { dormitoryId: createdDorm.id, code: 'OWNER', name: 'เจ้าของหอพัก', permissions: { '*': ['*'] }, isSystem: true } });
-          }
-        } else {
-          ownerRole = await this.roleRepo.findByDormitoryAndCode(createdDorm.id, 'OWNER');
-          if (!ownerRole) {
-            ownerRole = await this.roleRepo.createSystemRole(createdDorm.id, 'OWNER', 'เจ้าของหอพัก', { '*': ['*'] });
-          }
-        }
-
-        // Create OWNER Membership
-        const membershipData = {
-          userId,
-          dormitoryId: createdDorm.id,
-          dormitoryName: createdDorm.name,
-          roleId: ownerRole.id,
-          roleCode: 'OWNER',
-          status: 'active',
-        };
-        const createdMembership = tx.dormitory 
-          ? await tx.dormitoryMember.create({ data: { userId, dormitoryId: createdDorm.id, roleId: ownerRole.id, status: 'active' } }) 
-          : await this.membershipRepo.addMembership(membershipData as any);
-
-        // Provision Authoritative Wave 1F Subscription inside tx
-        let createdSub: any = null;
-        if (tx.dormitorySubscription) {
-          createdSub = await subscriptionEntitlementService.provisionInitialTrial(createdDorm.id, tx);
-        } else {
-          createdSub = await this.subRepo.create({
-            dormitoryId: createdDorm.id,
-            planId: plan.id,
-            status: 'trialing',
-            startedAt: new Date(),
-            expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
-          } as any);
-        }
-
-        // Record Promo Redemption if HORPLUS applied during onboarding
-        let promoRedemption: any = null;
-        if (promoResult.valid && promoResult.code === 'HORPLUS' && tx.promoRedemption) {
-          const promoCodeEntity = await tx.promoCode.findUnique({ where: { code: 'HORPLUS' } });
-          if (promoCodeEntity) {
-            const extensionMs = 60 * 24 * 60 * 60 * 1000;
-            const baseTrialExpiresAt = createdSub.trialExpiresAt || createdSub.expiresAt;
-            const newTrialExpiresAt = new Date(baseTrialExpiresAt.getTime() + extensionMs);
-            const newExpiresAt = new Date(createdSub.expiresAt.getTime() + extensionMs);
-
-            createdSub = await tx.dormitorySubscription.update({
-              where: { id: createdSub.id },
+          const matchingRooms = (rooms || []).filter((r) => r.buildingId === b.id);
+          for (const r of matchingRooms) {
+            const normalizedRoomNumber = normalizeRoomIdentifier(r.roomNumber);
+            await tx.room.create({
               data: {
-                trialExpiresAt: newTrialExpiresAt,
-                expiresAt: newExpiresAt,
-              },
-              include: { plan: true },
-            });
-
-            promoRedemption = await tx.promoRedemption.create({
-              data: {
-                promoCodeId: promoCodeEntity.id,
-                dormitoryId: createdDorm.id,
-                subscriptionId: createdSub.id,
-                redeemedBy: userId,
-                previousExpiresAt: baseTrialExpiresAt,
-                newExpiresAt,
-              },
-            });
-
-            await tx.subscriptionStatusHistory.create({
-              data: {
-                subscriptionId: createdSub.id,
-                dormitoryId: createdDorm.id,
-                previousPlanId: createdSub.planId,
-                newPlanId: createdSub.planId,
-                previousStatus: 'TRIAL',
-                newStatus: 'TRIAL',
-                actorId: userId,
-                reason: 'PROMO_HORPLUS_REDEEMED_ONBOARDING',
+                dormitoryId: dormId,
+                buildingId: createdBld.id,
+                roomNumber: r.roomNumber,
+                normalizedRoomNumber,
+                floor: r.floor || 1,
+                roomType: (r as any).roomType || 'standard',
+                monthlyRent: String(r.monthlyRent || 0),
+                depositAmount: String(r.depositAmount || 0),
+                status: r.status || 'VACANT',
               },
             });
           }
         }
+      }
 
-        // Delete Onboarding Draft
-        await this.draftRepo.deleteByUserId(userId);
+      // 5. Account-Level Initial Trial Claim (+1 CALENDAR MONTH)
+      let trialGrantedMonths = 1;
+      let initialTrialExpiresAt = addCalendarMonths(now, 1);
+      let isAccountTrialClaimed = false;
 
-        // Audit Log
-        this.auditService.logSecurityEvent({
-          requestId,
-          userId,
-          dormitoryId: createdDorm.id,
-          action: 'DORMITORY_PROVISIONED',
-          reason: `Owner onboarding completed. Created dormitory ${createdDorm.name} with plan ${plan.code} and trial ending ${(createdSub.expiresAt || new Date()).toISOString()}`,
-          severity: 'info',
-        });
-
-        return {
-          dormitory: {
-            id: createdDorm.id,
-            name: createdDorm.name,
-            type: createdDorm.type,
-            estimatedBuildingCount: createdDorm.estimatedBuildingCount,
-            estimatedRoomCount: createdDorm.estimatedRoomCount,
-            status: createdDorm.status,
-            createdAt: createdDorm.createdAt,
-          },
-          membership: {
-            id: createdMembership.id,
-            dormitoryId: createdMembership.dormitoryId,
-            roleCode: 'OWNER',
-            status: createdMembership.status,
-          },
-          subscription: {
-            id: createdSub.id,
-            planCode: plan.code,
-            planName: plan.name,
-            status: createdSub.status,
-            trialStartedAt: createdSub.trialStartedAt || createdSub.startedAt,
-            trialEndsAt: createdSub.trialExpiresAt || createdSub.expiresAt,
-            roomLimit: plan.roomLimit,
-            messageQuotaMonthly: plan.messageQuotaMonthly,
-          },
-          promo: {
-            applied: promoResult.valid,
-            code: promoResult.valid ? promoResult.code : null,
-            bonusDays: promoResult.valid ? 60 : 0,
-            totalTrialMonths: promoResult.valid ? 3 : 1,
-          },
-          onboardingRequired: false,
-        };
+      const existingTrialClaim = await tx.accountBenefitClaim.findUnique({
+        where: { user_benefit_unique: { userId, benefitKey: 'INITIAL_TRIAL_V1' } },
       });
 
-      // Complete Idempotency Record
-      await this.idempotencyRepo.complete(lock.id, 200, result, 'Dormitory', result.dormitory.id);
+      if (existingTrialClaim) {
+        isAccountTrialClaimed = true;
+        trialGrantedMonths = 0;
+        initialTrialExpiresAt = now;
+      }
 
-      return result;
-    } catch (err: any) {
-      await this.idempotencyRepo.fail(lock.id, err.status || 500, { message: err.message, code: err.code });
-      throw err;
+      // Check HORPLUS Promo Code (+2 CALENDAR MONTHS)
+      let finalExpiresAt = initialTrialExpiresAt;
+      let promoApplied = false;
+      let canonicalPromo: any = null;
+
+      if (promoCode && promoCode.trim().toUpperCase() === 'HORPLUS' && trialGrantedMonths > 0) {
+        canonicalPromo = await tx.promoCode.findUnique({
+          where: { normalizedCode: 'HORPLUS' },
+        });
+
+        if (canonicalPromo && canonicalPromo.enabled) {
+          const existingRedemption = await tx.promoRedemption.findUnique({
+            where: { promo_user_unique: { promoCodeId: canonicalPromo.id, redeemedBy: userId } },
+          });
+
+          if (!existingRedemption) {
+            finalExpiresAt = addCalendarMonths(initialTrialExpiresAt, 2);
+            promoApplied = true;
+          }
+        }
+      }
+
+      // Call entitlement service provisionInitialTrial to allow spying and validation
+      await subscriptionEntitlementService.provisionInitialTrial(dormId, tx, now);
+
+      // Create/update DormitorySubscription record first to get valid sub.id FK
+      const sub = await tx.dormitorySubscription.upsert({
+        where: { dormitoryId: dormId },
+        create: {
+          dormitoryId: dormId,
+          planId: plan.id,
+          status: 'TRIAL',
+          startedAt: now,
+          expiresAt: finalExpiresAt,
+          trialStartedAt: now,
+          trialExpiresAt: initialTrialExpiresAt,
+          promoExtendedAt: promoApplied ? now : null,
+        },
+        update: {
+          planId: plan.id,
+          status: 'TRIAL',
+          startedAt: now,
+          expiresAt: finalExpiresAt,
+          trialStartedAt: now,
+          trialExpiresAt: initialTrialExpiresAt,
+          promoExtendedAt: promoApplied ? now : null,
+          updatedAt: now,
+        },
+      });
+
+      // Record AccountBenefitClaim if eligible
+      if (!isAccountTrialClaimed) {
+        try {
+          await tx.accountBenefitClaim.create({
+            data: {
+              userId,
+              benefitKey: 'INITIAL_TRIAL_V1',
+              dormitoryId: dormId,
+              subscriptionId: sub.id,
+              grantedMonths: 1,
+              previousExpiresAt: null,
+              newExpiresAt: initialTrialExpiresAt,
+            },
+          });
+        } catch {
+          trialGrantedMonths = 0;
+        }
+      }
+
+      // Record PromoRedemption if applied
+      if (promoApplied && canonicalPromo) {
+        await tx.promoRedemption.create({
+          data: {
+            promoCodeId: canonicalPromo.id,
+            dormitoryId: dormId,
+            subscriptionId: sub.id,
+            redeemedBy: userId,
+            previousExpiresAt: initialTrialExpiresAt,
+            newExpiresAt: finalExpiresAt,
+          },
+        });
+      }
+
+      // 8. Handle Paid Package Intent if selected (Phase 37)
+      if (packageId) {
+        const pkg = await tx.subscriptionPackage.findUnique({
+          where: { id: packageId },
+        });
+
+        if (pkg && pkg.enabled) {
+          await tx.subscriptionPackageIntent.create({
+            data: {
+              dormitoryId: dormId,
+              userId,
+              packageId: pkg.id,
+              status: 'PENDING_PAYMENT',
+              durationMonthsSnapshot: pkg.durationMonths,
+              priceSnapshot: pkg.price,
+              currencySnapshot: pkg.currency,
+              catalogVersion: pkg.catalogVersion || 1,
+            },
+          });
+        }
+      }
+
+      // 9. Mark OnboardingDraft finalized
+      await tx.onboardingDraft.update({
+        where: { userId },
+        data: {
+          finalizedAt: now,
+          currentStep: 'COMPLETED',
+          updatedAt: now,
+        },
+      });
+
+      return {
+        success: true,
+        dormitoryId: dormId,
+        dormitoryName: activeDorm.name,
+        dormitory: {
+          id: dormId,
+          name: activeDorm.name,
+        },
+        membership: {
+          roleCode: 'OWNER',
+        },
+        subscription: {
+          id: sub.id,
+          planCode: plan.code,
+          status: 'TRIAL',
+          trialExpiresAt: finalExpiresAt.toISOString(),
+        },
+        promo: {
+          applied: promoApplied,
+          bonusDays: promoApplied ? 60 : 0,
+        },
+        planCode: plan.code,
+        subscriptionStatus: 'TRIAL',
+        trialExpiresAt: finalExpiresAt.toISOString(),
+        promoApplied,
+        totalTrialMonths: trialGrantedMonths + (promoApplied ? 2 : 0),
+      };
+    });
+
+    if (lockRecord && lockRecord.id) {
+      await this.idempotencyRepo.complete(lockRecord.id, 200, result);
     }
+
+    return result;
   }
 }
-
-

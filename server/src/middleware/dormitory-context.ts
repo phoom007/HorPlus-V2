@@ -60,7 +60,8 @@ export function resolveAuthoritativeDormitoryContext(req: Request): Authoritativ
   const requestedDormId =
     (req.headers['x-dormitory-id'] as string) ||
     (req.query?.dormitoryId as string) ||
-    (req.params?.dormitoryId as string);
+    (req.params?.dormitoryId as string) ||
+    (req.params?.id as string);
 
   let targetMembership: DormitoryMemberEntity | undefined;
 
@@ -70,11 +71,7 @@ export function resolveAuthoritativeDormitoryContext(req: Request): Authoritativ
       throw new AppError('Access denied for requested dormitory context.', 403, 'FORBIDDEN');
     }
   } else {
-    if (activeMemberships.length === 1) {
-      targetMembership = activeMemberships[0];
-    } else {
-      throw new AppError('Dormitory context selector required (x-dormitory-id header).', 400, 'DORMITORY_ID_REQUIRED');
-    }
+    targetMembership = activeMemberships[0];
   }
 
   // Fail closed on role resolution

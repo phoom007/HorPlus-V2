@@ -503,7 +503,10 @@ describe('Wave 1F - Authorization, Permission, Package & Idempotency Corrective 
       idempotencyKey: `paid-activate-${Date.now()}`, reason: 'Test paid boundary activation',
     });
 
-    for (let i = 1; i <= 149; i++) {
+    const sub = await entitlementService.getCurrentSubscription(dormId);
+    const targetCount = sub.plan.roomLimit - 1;
+
+    for (let i = 1; i <= targetCount; i++) {
       await prisma.room.create({
         data: {
           dormitoryId: dormId,
@@ -526,8 +529,8 @@ describe('Wave 1F - Authorization, Permission, Package & Idempotency Corrective 
     );
 
     const results = await Promise.allSettled([
-      roomService.createRoom(dormId, { buildingId, roomNumber: 'PAID-C-150', normalizedRoomNumber: 'PAID-C-150', floor: 1 }, ownerUserId),
-      roomService.createRoom(dormId, { buildingId, roomNumber: 'PAID-C-151', normalizedRoomNumber: 'PAID-C-151', floor: 1 }, ownerUserId),
+      roomService.createRoom(dormId, { buildingId, roomNumber: 'PAID-CONC-A', normalizedRoomNumber: 'PAID-CONC-A', floor: 1 }, ownerUserId),
+      roomService.createRoom(dormId, { buildingId, roomNumber: 'PAID-CONC-B', normalizedRoomNumber: 'PAID-CONC-B', floor: 1 }, ownerUserId),
     ]);
 
     const fulfilled = results.filter(r => r.status === 'fulfilled');
@@ -539,7 +542,7 @@ describe('Wave 1F - Authorization, Permission, Package & Idempotency Corrective 
     expect(error.errorCode || error.code).toBe('ROOM_LIMIT_REACHED');
 
     const totalRooms = await prisma.room.count({ where: { dormitoryId: dormId, status: { not: 'archived' } } });
-    expect(totalRooms).toBe(150);
+    expect(totalRooms).toBe(sub.plan.roomLimit);
   });
 
   // ─── Package Enforcement Tests ───
@@ -553,6 +556,7 @@ describe('Wave 1F - Authorization, Permission, Package & Idempotency Corrective 
   });
 
   it('rejects disabled 3-month package', async () => {
+    await prisma.subscriptionPackage.updateMany({ where: { durationMonths: 3 }, data: { enabled: false } });
     await expect(
       entitlementService.activatePaidSubscriptionOperational({
         dormitoryId: dormId, durationMonths: 3, actorId: ownerUserId,
@@ -562,6 +566,7 @@ describe('Wave 1F - Authorization, Permission, Package & Idempotency Corrective 
   });
 
   it('rejects disabled 6-month package', async () => {
+    await prisma.subscriptionPackage.updateMany({ where: { durationMonths: 6 }, data: { enabled: false } });
     await expect(
       entitlementService.activatePaidSubscriptionOperational({
         dormitoryId: dormId, durationMonths: 6, actorId: ownerUserId,
@@ -1241,11 +1246,14 @@ describe('Wave 1F - Authorization, Permission, Package & Idempotency Corrective 
       });
 
       const bld = await prisma.building.findFirst({ where: { dormitoryId: concDormId } });
-      const roomData = Array.from({ length: 149 }, (_, i) => ({
+      const sub = await entitlementService.getCurrentSubscription(concDormId);
+      const targetCount = sub.plan.roomLimit - 1;
+
+      const roomData = Array.from({ length: targetCount }, (_, i) => ({
         dormitoryId: concDormId,
         buildingId: bld!.id,
-        roomNumber: `RMP${i + 1}`,
-        normalizedRoomNumber: `rmp${i + 1}`,
+        roomNumber: `RMPPRE${i + 1}`,
+        normalizedRoomNumber: `rmppre${i + 1}`,
         roomType: 'standard',
         monthlyRent: '0.00',
         depositAmount: '0.00',
@@ -1261,13 +1269,13 @@ describe('Wave 1F - Authorization, Permission, Package & Idempotency Corrective 
           .set('Cookie', [`horplus_session=${concSessionCookie}`, `horplus_csrf=${concCsrfToken}`])
           .set('x-csrf-token', concCsrfToken)
           .set('x-dormitory-id', concDormId)
-          .send({ roomNumber: 'RMP150', buildingId: bld!.id, floor: 1, monthlyRent: '3000' }),
+          .send({ roomNumber: 'RMPCONCA', buildingId: bld!.id, floor: 1, monthlyRent: '3000' }),
         request(app)
           .post('/api/v1/properties/rooms')
           .set('Cookie', [`horplus_session=${concSessionCookie}`, `horplus_csrf=${concCsrfToken}`])
           .set('x-csrf-token', concCsrfToken)
           .set('x-dormitory-id', concDormId)
-          .send({ roomNumber: 'RMP151', buildingId: bld!.id, floor: 1, monthlyRent: '3000' }),
+          .send({ roomNumber: 'RMPCONCB', buildingId: bld!.id, floor: 1, monthlyRent: '3000' }),
       ]);
 
       const responses = [res1, res2];
@@ -1286,7 +1294,7 @@ describe('Wave 1F - Authorization, Permission, Package & Idempotency Corrective 
       expect(rejectedResponse!.body.errorCode || rejectedResponse!.body.error?.code).toBe('ROOM_LIMIT_REACHED');
 
       const activeCount = await prisma.room.count({ where: { dormitoryId: concDormId, deletedAt: null } });
-      expect(activeCount).toBe(150);
+      expect(activeCount).toBe(sub.plan.roomLimit);
     });
   });
 });
