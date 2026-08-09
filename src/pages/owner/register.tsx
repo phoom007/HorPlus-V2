@@ -499,8 +499,8 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
       nextStepNum = 4;
       setCurrentStep(4);
     } else if (currentStep === 4) {
-      const dormId = provisionalDormitoryId || await ensureProvisionalDormitory();
-      if (!signatureSaved && !dormId) {
+      await ensureProvisionalDormitory();
+      if (!signatureSaved) {
         setValidationError('กรุณากด "บันทึกลายเซ็น" ในขั้นตอนที่ 4 ก่อนดำเนินการต่อ');
         return;
       }

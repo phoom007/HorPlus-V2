@@ -133,7 +133,7 @@ export function createPaymentRouter(authService: AuthenticationService) {
   router.post('/slip/intent', requireAuth, requireDormitoryWriteEntitlement, requireCsrf, async (req, res) => {
     try {
       const auth = (req as any).auth;
-      const context = resolveAuthoritativeDormitoryContext(req);
+      const context = (req as any).dormitoryContext || (await resolveAuthoritativeDormitoryContext(req));
       const dormitoryId = context.dormitoryId;
       if (!dormitoryId) return res.status(400).json({ error: 'Missing dormitoryId' });
 
@@ -197,7 +197,7 @@ export function createPaymentRouter(authService: AuthenticationService) {
       if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
 
       const auth = (req as any).auth;
-      const context = resolveAuthoritativeDormitoryContext(req);
+      const context = (req as any).dormitoryContext || (await resolveAuthoritativeDormitoryContext(req));
       const dormitoryId = context.dormitoryId;
       const intentId = req.params.intentId;
       const intent = await prisma.paymentUploadIntent.findUnique({ where: { id: intentId } });
@@ -279,7 +279,7 @@ export function createPaymentRouter(authService: AuthenticationService) {
   router.post('/slip/submit', requireAuth, requireDormitoryWriteEntitlement, requireCsrf, async (req, res) => {
     try {
       const auth = (req as any).auth;
-      const context = resolveAuthoritativeDormitoryContext(req);
+      const context = (req as any).dormitoryContext || (await resolveAuthoritativeDormitoryContext(req));
       const dormitoryId = context.dormitoryId;
       if (!dormitoryId) return res.status(400).json({ error: 'Missing dormitoryId' });
 
@@ -326,7 +326,7 @@ export function createPaymentRouter(authService: AuthenticationService) {
   router.post('/cash', requireAuth, requireDormitoryPermission('payment:write'), requireDormitoryWriteEntitlement, requireCsrf, async (req, res) => {
     try {
       const auth = (req as any).auth;
-      const context = resolveAuthoritativeDormitoryContext(req);
+      const context = (req as any).dormitoryContext || (await resolveAuthoritativeDormitoryContext(req));
       const dormitoryId = context.dormitoryId;
 
       if (!ensureOwnerOrManager(req, res, dormitoryId)) {
@@ -369,7 +369,7 @@ export function createPaymentRouter(authService: AuthenticationService) {
   router.post('/:paymentId/approve', requireAuth, requireDormitoryPermission('payment:write'), requireDormitoryWriteEntitlement, requireCsrf, async (req, res) => {
     try {
       const auth = (req as any).auth;
-      const context = resolveAuthoritativeDormitoryContext(req);
+      const context = (req as any).dormitoryContext || (await resolveAuthoritativeDormitoryContext(req));
       const dormitoryId = context.dormitoryId;
 
       const paymentRecord = await prisma.payment.findUnique({ where: { id: req.params.paymentId } });
@@ -405,7 +405,7 @@ export function createPaymentRouter(authService: AuthenticationService) {
   router.post('/:paymentId/reject', requireAuth, requireDormitoryPermission('payment:write'), requireDormitoryWriteEntitlement, requireCsrf, async (req, res) => {
     try {
       const auth = (req as any).auth;
-      const context = resolveAuthoritativeDormitoryContext(req);
+      const context = (req as any).dormitoryContext || (await resolveAuthoritativeDormitoryContext(req));
       const dormitoryId = context.dormitoryId;
 
       const paymentRecord = await prisma.payment.findUnique({ where: { id: req.params.paymentId } });
@@ -445,7 +445,7 @@ export function createPaymentRouter(authService: AuthenticationService) {
   router.post('/:paymentId/reverse', requireAuth, requireDormitoryPermission('payment:write'), requireDormitoryWriteEntitlement, requireCsrf, async (req, res) => {
     try {
       const auth = (req as any).auth;
-      const context = resolveAuthoritativeDormitoryContext(req);
+      const context = (req as any).dormitoryContext || (await resolveAuthoritativeDormitoryContext(req));
       const dormitoryId = context.dormitoryId;
 
       const paymentRecord = await prisma.payment.findUnique({ where: { id: req.params.paymentId } });
@@ -489,7 +489,7 @@ export function createPaymentRouter(authService: AuthenticationService) {
   router.get('/:paymentId/evidence', requireAuth, async (req, res) => {
     try {
       const auth = (req as any).auth;
-      const context = resolveAuthoritativeDormitoryContext(req);
+      const context = (req as any).dormitoryContext || (await resolveAuthoritativeDormitoryContext(req));
       const dormitoryId = context.dormitoryId;
 
       const payment = await prisma.payment.findUnique({ where: { id: req.params.paymentId } });
@@ -533,7 +533,7 @@ export function createPaymentRouter(authService: AuthenticationService) {
   router.get('/', requireAuth, async (req, res) => {
     try {
       const auth = (req as any).auth;
-      const context = resolveAuthoritativeDormitoryContext(req);
+      const context = (req as any).dormitoryContext || (await resolveAuthoritativeDormitoryContext(req));
       const dormitoryId = context.dormitoryId;
       
       if (!ensureOwnerOrManager(req, res, dormitoryId)) {

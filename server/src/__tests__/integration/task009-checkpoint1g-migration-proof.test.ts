@@ -269,14 +269,14 @@ describe('TASK-009 Checkpoint 1G — Migration Freeze & Real Upgrade/Fresh Proof
       expect(output).not.toContain('modified since they were applied');
     }, 30000);
 
-    it('9. All 17 migrations: finished_at NOT NULL, rolled_back_at NULL', async () => {
+    it('9. All 18 migrations: finished_at NOT NULL, rolled_back_at NULL', async () => {
       const client = new PrismaClient({ datasources: { db: { url: dbUrl(UPGRADE_DB) } } });
       try {
         const rows = await client.$queryRaw<any[]>`
           SELECT migration_name, finished_at, rolled_back_at, applied_steps_count
           FROM _prisma_migrations ORDER BY started_at
         `;
-        expect(rows.length).toBe(17);
+        expect(rows.length).toBe(18);
         for (const row of rows) {
           expect(row.finished_at).not.toBeNull();
           expect(row.rolled_back_at).toBeNull();
@@ -297,9 +297,9 @@ describe('TASK-009 Checkpoint 1G — Migration Freeze & Real Upgrade/Fresh Proof
       await bootstrapRoleOnDb(FRESH_DB);
     });
 
-    it('10. Fresh migrate deploy applies all 17 migrations', () => {
+    it('10. Fresh migrate deploy applies all 18 migrations', () => {
       const output = runPrismaMigrate(FRESH_DB, 'migrate deploy');
-      expect(output).toContain('17 migrations');
+      expect(output).toContain('18 migrations');
     }, 30000);
 
     it('11. Second deploy returns no pending migrations', () => {
@@ -313,14 +313,14 @@ describe('TASK-009 Checkpoint 1G — Migration Freeze & Real Upgrade/Fresh Proof
       expect(output).not.toContain('modified since they were applied');
     }, 30000);
 
-    it('13. All 17 migrations: finished_at NOT NULL, rolled_back_at NULL', async () => {
+    it('13. All 18 migrations: finished_at NOT NULL, rolled_back_at NULL', async () => {
       const client = new PrismaClient({ datasources: { db: { url: dbUrl(FRESH_DB) } } });
       try {
         const rows = await client.$queryRaw<any[]>`
           SELECT migration_name, finished_at, rolled_back_at
           FROM _prisma_migrations ORDER BY started_at
         `;
-        expect(rows.length).toBe(17);
+        expect(rows.length).toBe(18);
         for (const row of rows) {
           expect(row.finished_at).not.toBeNull();
           expect(row.rolled_back_at).toBeNull();

@@ -3,6 +3,7 @@ import crypto from 'crypto';
 import { getPrismaClient } from '../../server/src/db/prisma.js';
 import { SessionTokenService } from '../../server/src/services/session-token.service.js';
 import { CsrfService } from '../../server/src/services/csrf.service.js';
+import { SignatureStorageService } from '../../server/src/services/signature-storage.service.js';
 import { FakeLineServer } from './helpers/fake-line-server.js';
 
 const prisma = getPrismaClient();
@@ -143,6 +144,11 @@ test.describe.serial('Master Six-Step Owner Onboarding E2E Flow', () => {
       await page.mouse.up();
     }
 
+    // Attempting Next before saving signature must be blocked on Step 4!
+    await page.click('[data-testid="button-next-step"]');
+    await expect(page.locator('text=กรุณากด "บันทึกลายเซ็น" ในขั้นตอนที่ 4 ก่อนดำเนินการต่อ')).toBeVisible();
+    await expect(page.locator('[data-testid="button-save-signature"]')).toBeVisible();
+
     await page.click('[data-testid="button-save-signature"]');
     await expect(page.locator('[data-testid="signature-status-saved"]')).toBeVisible();
     await page.click('[data-testid="button-next-step"]'); // 4 -> 5
@@ -264,28 +270,122 @@ test.describe.serial('Master Six-Step Owner Onboarding E2E Flow', () => {
     expect(intent?.durationMonthsSnapshot).toBe(1);
   });
 
-  test('Anti-abuse: Second onboarding attempt with same User.id receives zero extra initial trial or HORPLUS promo claim', async ({ context, page }) => {
+  test('Anti-abuse: Genuine second onboarding attempt with same User.id receives zero extra initial trial and zero extra promo claim', async ({ page }) => {
     test.setTimeout(60000);
 
-    const createdDorm = await prisma.dormitory.findFirst({
+    const firstDorm = await prisma.dormitory.findFirst({
       where: { createdByUserId: masterUserId, name: 'หอพัก 6-Step Master Residence' },
     });
-    expect(createdDorm).not.toBeNull();
+    expect(firstDorm).not.toBeNull();
 
-    const existingClaims = await prisma.$transaction(async (tx) => {
-      await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${createdDorm!.id}, true)`;
-      return await tx.accountBenefitClaim.count({
-        where: { userId: masterUserId, benefitKey: 'INITIAL_TRIAL_V1' },
+    // Prepare a second provisional dormitory for the same user
+    const prepRes = await page.request.post('http://127.0.0.1:3001/api/v1/onboarding/prepare', {
+      headers: {
+        'Cookie': `horplus_session=${masterSessionToken}; horplus_csrf=${masterCsrfToken}`,
+        'x-csrf-token': masterCsrfToken,
+      },
+      data: {
+        name: 'หอพักแห่งที่ 2 Master',
+        addressLine1: '456 ถ.รัชดาภิเษก',
+        province: 'กรุงเทพมหานคร',
+      },
+    });
+    expect(prepRes.status()).toBe(200);
+    const prepBody = await prepRes.json();
+    const secondDormId = prepBody.data.provisionalDormitoryId;
+    expect(secondDormId).toBeTruthy();
+
+    // Save owner signature and set verified LINE OA config for second provisional dorm to pass Step 4 gate
+    const sigService = new SignatureStorageService(prisma);
+    const validPngBuffer = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
+    await sigService.saveSignature({ dormitoryId: secondDormId, userId: masterUserId, buffer: validPngBuffer });
+
+    await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${secondDormId}, true)`;
+      await tx.dormitoryLineConfig.upsert({
+        where: { dormitoryId: secondDormId },
+        create: {
+          dormitoryId: secondDormId,
+          channelId: '1234567890',
+          channelSecretEncrypted: 'enc_secret',
+          channelAccessTokenEncrypted: 'enc_token',
+          webhookKeyHash: 'dummy_hash_' + Date.now(),
+          accessTokenVerifiedAt: new Date(),
+          webhookEndpointSetAt: new Date(),
+          webhookTestSucceededAt: new Date(),
+          webhookActive: true,
+          isConnected: true,
+        },
+        update: {
+          accessTokenVerifiedAt: new Date(),
+          webhookEndpointSetAt: new Date(),
+          webhookTestSucceededAt: new Date(),
+          webhookActive: true,
+          isConnected: true,
+        },
       });
     });
-    expect(existingClaims).toBe(1);
 
-    const existingRedemptions = await prisma.$transaction(async (tx) => {
-      await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${createdDorm!.id}, true)`;
-      return await tx.promoRedemption.count({
-        where: { redeemedBy: masterUserId },
+    const paidPkg = await prisma.subscriptionPackage.findFirst({
+      where: { durationMonths: 1, enabled: true },
+    });
+    expect(paidPkg).not.toBeNull();
+
+    // Finalize the second dormitory with HORPLUS promo code
+    const finalizeRes = await page.request.post('http://127.0.0.1:3001/api/v1/onboarding/finalize', {
+      headers: {
+        'Cookie': `horplus_session=${masterSessionToken}; horplus_csrf=${masterCsrfToken}`,
+        'x-csrf-token': masterCsrfToken,
+        'x-dormitory-id': secondDormId,
+      },
+      data: {
+        provisionalDormitoryId: secondDormId,
+        planCode: 'PAID',
+        packageId: paidPkg!.id,
+        promoCode: 'HORPLUS',
+        dormitory: {
+          name: 'หอพักแห่งที่ 2 Master',
+          type: 'apartment',
+          addressLine1: '456 ถ.รัชดาภิเษก',
+          province: 'กรุงเทพมหานคร',
+        },
+        billing: {
+          billingDay: 25,
+          dueDay: 5,
+          waterRate: '18.00',
+          electricityRate: '7.00',
+        },
+        payment: {
+          promptPayType: 'national_id',
+          promptPayValue: '1234567890123',
+        },
+        buildings: [{ id: 'bld-2', name: 'อาคาร A', floorsCount: 2, roomsPerFloor: 4 }],
+        rooms: [{ buildingId: 'bld-2', roomNumber: '101', floor: 1, monthlyRent: 4000, depositAmount: 4000, status: 'vacant' }],
+      },
+    });
+    expect(finalizeRes.status()).toBe(200);
+
+    // Verify second dormitory subscription received 0 trial months (expiresAt == startedAt)
+    const secondSub = await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${secondDormId}, true)`;
+      return await tx.dormitorySubscription.findUnique({
+        where: { dormitoryId: secondDormId },
       });
     });
-    expect(existingRedemptions).toBe(1);
+    expect(secondSub).not.toBeNull();
+    // For second dorm, trial was already claimed so trialExpiresAt == startedAt
+    expect(secondSub!.trialExpiresAt.getTime()).toBeLessThanOrEqual(secondSub!.startedAt.getTime() + 5000);
+
+    // Assert account-level initial trial claims for user is STILL exactly 1
+    const totalClaims = await prisma.accountBenefitClaim.count({
+      where: { userId: masterUserId, benefitKey: 'INITIAL_TRIAL_V1' },
+    });
+    expect(totalClaims).toBe(1);
+
+    // Assert promo redemptions for user is STILL exactly 1
+    const totalRedemptions = await prisma.promoRedemption.count({
+      where: { redeemedBy: masterUserId },
+    });
+    expect(totalRedemptions).toBe(1);
   });
 });

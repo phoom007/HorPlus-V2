@@ -106,7 +106,10 @@ export class SubscriptionEntitlementService {
         data: {
           code: 'HORPLUS',
           normalizedCode: 'HORPLUS',
-          extensionDays: 60,
+          benefitType: 'TRIAL_EXTENSION',
+          benefitUnit: 'MONTH',
+          benefitValue: 2,
+          enabled: true,
         },
       });
     }
@@ -570,11 +573,9 @@ export class SubscriptionEntitlementService {
     const now = params.now || new Date();
 
     const executeActivation = async (tx: any) => {
-      await this.ensureSeeded(tx);
-
-      // Load and validate SubscriptionPackage
+      // Load and validate SubscriptionPackage from PostgreSQL catalog
       const paidPlan = await tx.subscriptionPlan.findUnique({ where: { code: 'PAID' } });
-      if (!paidPlan) throw new AppError('PAID plan not seeded.', 500, 'PLAN_NOT_FOUND');
+      if (!paidPlan) throw new AppError('CATALOG_NOT_SYNCED: PAID plan not seeded.', 500, 'PLAN_NOT_FOUND');
 
       const pkg = await tx.subscriptionPackage.findFirst({
         where: {

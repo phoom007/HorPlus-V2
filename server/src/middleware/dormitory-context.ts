@@ -2,6 +2,7 @@ import { Request } from 'express';
 import type { AuthenticatedAuthContext } from './require-session.js';
 import { AppError } from '../types/index.js';
 import { DormitoryMemberEntity } from '../db/repositories/membership.repository.js';
+import { getPrismaClient } from '../db/prisma.js';
 
 export interface AuthoritativeDormitoryContext {
   dormitoryId: string;
@@ -46,7 +47,7 @@ export function normalizeRolePermissions(rawPermissions: any): string[] {
   return Array.from(normalized);
 }
 
-export function resolveAuthoritativeDormitoryContext(req: Request): AuthoritativeDormitoryContext {
+export async function resolveAuthoritativeDormitoryContext(req: Request): Promise<AuthoritativeDormitoryContext> {
   const auth = req.auth;
   if (!auth || !auth.user || !auth.memberships) {
     throw new AppError('Authentication required.', 401, 'UNAUTHORIZED');
@@ -71,22 +72,38 @@ export function resolveAuthoritativeDormitoryContext(req: Request): Authoritativ
     targetMembership = activeMemberships[0];
   }
 
+  // SEC-01: DB-backed authoritative provisional ownership resolver (NEVER route-string based)
   if (!targetMembership && requestedDormId) {
-    const path = req.originalUrl || req.url || '';
-    const isProvisionalOnboardingPath =
-      path.includes('/api/v1/onboarding') ||
-      path.includes('/line-oa') ||
-      path.includes('/signatures');
+    const prisma = getPrismaClient();
+    if (prisma) {
+      const dorm = await prisma.dormitory.findUnique({
+        where: { id: requestedDormId },
+        select: { id: true, status: true, createdByUserId: true, name: true },
+      });
 
-    if (isProvisionalOnboardingPath) {
-      targetMembership = {
-        id: `provisional-${requestedDormId}`,
-        dormitoryId: requestedDormId,
-        userId: auth.userId,
-        roleCode: 'OWNER',
-        status: 'active',
-        rolePermissions: ['onboarding:read', 'onboarding:write', 'line_oa:read', 'line_oa:write', 'line_oa:manage', 'signature:read', 'signature:write'],
-      } as any;
+      // Require ALL: dormitory exists, status is setup_pending, AND createdByUserId matches authenticated user
+      if (dorm && dorm.status === 'setup_pending' && dorm.createdByUserId === auth.userId) {
+        targetMembership = {
+          id: `provisional-${requestedDormId}`,
+          dormitoryId: requestedDormId,
+          dormitoryName: dorm.name,
+          dormitoryStatus: 'setup_pending',
+          userId: auth.userId,
+          roleCode: 'OWNER',
+          status: 'active',
+          rolePermissions: [
+            'onboarding:read',
+            'onboarding:write',
+            'line_oa:read',
+            'line_oa:write',
+            'line_oa:manage',
+            'signature:read',
+            'signature:write',
+            'dormitory:view',
+            'dormitory:update',
+          ],
+        } as any;
+      }
     }
   }
 
@@ -96,10 +113,6 @@ export function resolveAuthoritativeDormitoryContext(req: Request): Authoritativ
     } else {
       throw new AppError('Access denied for requested dormitory context.', 403, 'FORBIDDEN');
     }
-  }
-
-  if (!targetMembership) {
-    throw new AppError('Dormitory membership not resolved.', 403, 'FORBIDDEN');
   }
 
   // Fail closed on role resolution

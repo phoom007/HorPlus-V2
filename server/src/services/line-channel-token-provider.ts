@@ -35,8 +35,10 @@ export class LineChannelTokenProvider implements ILineChannelTokenProvider {
   private redisClient: Redis | null = null;
   private memoryCache: Map<string, { token: string; expiresAt: number }> = new Map();
   private inFlightRequests: Map<string, Promise<string>> = new Map();
+  private customBaseUrl?: string;
 
-  constructor(private lineBaseUrl: string = 'https://api.line.me', customRedisClient?: Redis) {
+  constructor(customBaseUrl?: string, customRedisClient?: Redis) {
+    this.customBaseUrl = customBaseUrl;
     if (customRedisClient) {
       this.redisClient = customRedisClient;
     } else {
@@ -53,6 +55,21 @@ export class LineChannelTokenProvider implements ILineChannelTokenProvider {
         this.redisClient = null;
       }
     }
+  }
+
+  public get baseUrl(): string {
+    const isProduction = process.env.NODE_ENV === 'production';
+    const isAllowedBoundary = !isProduction && (process.env.NODE_ENV === 'test' || process.env.HORPLUS_E2E === 'true');
+    const requestedOverride = this.customBaseUrl || process.env.LINE_PLATFORM_URL || process.env.LINE_BASE_URL || process.env.LINE_API_BASE_URL;
+
+    if (requestedOverride && isAllowedBoundary) {
+      return requestedOverride;
+    }
+    return 'https://api.line.me';
+  }
+
+  public getBaseUrl(): string {
+    return this.baseUrl;
   }
 
   public async ensureRedisConnected(): Promise<boolean> {
@@ -142,19 +159,13 @@ export class LineChannelTokenProvider implements ILineChannelTokenProvider {
 
       if (lockAcquired) {
         try {
-          // Re-check cache after acquiring lock
-          const rechecked = await this.redisClient.get(cacheKey);
-          if (rechecked) {
-            return rechecked;
-          }
-
           const token = await this.fetchStatelessToken(channelId, channelSecret);
           return token;
         } finally {
-          // Atomic compare-and-delete release using Lua script
+          // Atomic compare-and-delete release script
           const luaReleaseScript = `
-            if redis.call('get', KEYS[1]) == ARGV[1] then
-              return redis.call('del', KEYS[1])
+            if redis.call("get", KEYS[1]) == ARGV[1] then
+              return redis.call("del", KEYS[1])
             else
               return 0
             end
@@ -162,38 +173,31 @@ export class LineChannelTokenProvider implements ILineChannelTokenProvider {
           try {
             await this.redisClient.eval(luaReleaseScript, 1, lockKey, uniqueOwnerId);
           } catch {
-            // Non-blocking catch on lock release error
+            // Non-blocking lock release catch
           }
         }
       } else {
-        // Lock not acquired: poll token cache using bounded backoff + jitter
-        const maxWaitMs = 5000;
-        const startTime = Date.now();
-        let pollDelay = 50;
-
-        while (Date.now() - startTime < maxWaitMs) {
-          await new Promise((resolve) => setTimeout(resolve, pollDelay + Math.floor(Math.random() * 20)));
-          pollDelay = Math.min(pollDelay * 1.5, 300);
-
+        // Wait briefly for lock holder to finish
+        for (let attempt = 0; attempt < 10; attempt++) {
+          await new Promise((resolve) => setTimeout(resolve, 300));
           try {
-            const polledToken = await this.redisClient.get(cacheKey);
-            if (polledToken) {
-              return polledToken;
+            const token = await this.redisClient.get(cacheKey);
+            if (token) {
+              const ttl = await this.redisClient.ttl(cacheKey);
+              this.memoryCache.set(cacheKey, {
+                token,
+                expiresAt: Date.now() + Math.max(ttl, 0) * 1000,
+              });
+              return token;
             }
-          } catch {
-            // Continue polling
-          }
+          } catch {}
         }
-
-        throw new AppError('LINE token lock acquisition timed out', 503, 'LINE_TOKEN_LOCK_TIMEOUT');
       }
     }
 
-    // Degraded mode for local/dev without Redis: in-process single-flight deduplication
-    const existingRequest = this.inFlightRequests.get(cacheKey);
-    if (existingRequest) {
-      return await existingRequest;
-    }
+    // 4. In-flight Request Deduplication Fallback
+    const existing = this.inFlightRequests.get(cacheKey);
+    if (existing) return await existing;
 
     const requestPromise = this.fetchStatelessToken(channelId, channelSecret)
       .finally(() => {
@@ -205,7 +209,7 @@ export class LineChannelTokenProvider implements ILineChannelTokenProvider {
   }
 
   private async fetchStatelessToken(channelId: string, channelSecret: string): Promise<string> {
-    const baseUrl = process.env.LINE_PLATFORM_URL || process.env.LINE_BASE_URL || this.lineBaseUrl;
+    const baseUrl = this.baseUrl;
 
     try {
       const res = await fetch(`${baseUrl}/oauth2/v3/token`, {
@@ -276,5 +280,3 @@ export class LineChannelTokenProvider implements ILineChannelTokenProvider {
     }
   }
 }
-
-

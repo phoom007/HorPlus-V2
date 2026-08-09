@@ -23,7 +23,7 @@ import { SignatureStorageService } from '../../services/signature-storage.servic
 import { PNG } from 'pngjs';
 
 const prisma = getPrismaClient();
-const sensitiveService = new SensitiveFieldService(getEnv().FIELD_ENCRYPTION_KEY, 1);
+let sensitiveService: SensitiveFieldService;
 
 describe('Payment Security & Idempotency Boundary (PS-001 to PS-010)', () => {
   let app: any;
@@ -51,6 +51,7 @@ describe('Payment Security & Idempotency Boundary (PS-001 to PS-010)', () => {
     process.env.NODE_ENV = 'test';
     process.env.E2E_TEST_MODE = 'true';
     resetCachedEnv();
+    sensitiveService = new SensitiveFieldService(getEnv().FIELD_ENCRYPTION_KEY, 1);
     const mockGoogleVerifier = {} as any;
     const mockAuditService = { logAction: async () => {} } as any;
 

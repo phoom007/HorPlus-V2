@@ -5,6 +5,7 @@ import { AuthenticationService } from '../services/auth.service.js';
 import { createRequireSessionMiddleware } from '../middleware/require-session.js';
 import { createCsrfMiddleware } from '../middleware/csrf.js';
 import { createRateLimiterMiddleware } from '../middleware/rate-limiter.js';
+import { notFoundMiddleware } from '../middleware/not-found.js';
 
 const googleAuthSchema = z.object({
   idToken: z.string().min(1, 'idToken is required'),
@@ -194,6 +195,8 @@ export function createAuthRouter(authService: AuthenticationService): Router {
       next(err);
     }
   });
+
+  router.use(notFoundMiddleware);
 
   return router;
 }

@@ -40,6 +40,7 @@ import { BillingCycleService } from '../services/billing-cycle.service.js';
 import { MeterService } from '../services/meter.service.js';
 import { BillingService } from '../services/billing.service.js';
 import { LinePlatformAdapter } from '../services/line-platform-adapter.js';
+import { ILineChannelTokenProvider, LineChannelTokenProvider, FakeLineTokenProvider } from '../services/line-channel-token-provider.js';
 import { createRequireActiveDormitoryMiddleware } from '../middleware/require-dormitory.js';
 
 export interface AppApiDependencies {
@@ -58,6 +59,7 @@ export interface AppApiDependencies {
   meterService?: MeterService;
   billingService?: BillingService;
   lineAdapter?: LinePlatformAdapter;
+  lineTokenProvider?: ILineChannelTokenProvider;
   dormitoryRepo: any;
   billingRepo: any;
   subRepo: any;
@@ -93,8 +95,14 @@ export function createApiRouter(deps: AppApiDependencies | AuthenticationService
     ? (deps as AppApiDependencies).lineAdapter!
     : createLinePlatformAdapter();
 
+  const lineTokenProvider = isDeps && (deps as AppApiDependencies).lineTokenProvider
+    ? (deps as AppApiDependencies).lineTokenProvider!
+    : (process.env.NODE_ENV === 'test' && process.env.HORPLUS_E2E !== 'true'
+        ? new FakeLineTokenProvider()
+        : new LineChannelTokenProvider());
+
   const staffRoutes = createStaffRoutes(prisma, authService, lineAdapter);
-  const lineOaRoutes = createLineOaRoutes(prisma, authService, lineAdapter);
+  const lineOaRoutes = createLineOaRoutes(prisma, authService, lineAdapter, lineTokenProvider);
   router.use('/', staffRoutes.publicRouter);
   router.use('/', lineOaRoutes.publicRouter);
 
@@ -110,16 +118,8 @@ export function createApiRouter(deps: AppApiDependencies | AuthenticationService
         fullDeps.provisioningService
       )
     );
-
-    // Authenticated base stack for business domains: requireSession → resolveDormitoryContextMiddleware → requireActiveDormitory
-    // Route-level mutation guards inside each domain subrouter enforce specific write permission + write entitlement
-    const requireSession = authService.requireAuth();
-    const requireActiveDormitory = createRequireActiveDormitoryMiddleware(prisma);
-    const authContextStack = [requireSession, resolveDormitoryContextMiddleware, requireActiveDormitory];
-
     router.use(
       '/dormitories',
-      authContextStack,
       createDormitoryRouter(
         fullDeps.authService,
         fullDeps.dormitoryRepo,
@@ -131,41 +131,50 @@ export function createApiRouter(deps: AppApiDependencies | AuthenticationService
         fullDeps.roleRepo
       )
     );
+
+    const requireSession = fullDeps.authService.requireAuth();
+    const requireActiveDormitory = createRequireActiveDormitoryMiddleware(prisma);
+    const protectedRouter = Router();
+    protectedRouter.use(requireSession);
+    protectedRouter.use(resolveDormitoryContextMiddleware);
+    protectedRouter.use(requireActiveDormitory);
+
     if (fullDeps.buildingService && fullDeps.roomService) {
-      router.use('/properties', authContextStack, createPropertyRouter(fullDeps.authService, fullDeps.buildingService, fullDeps.roomService));
+      protectedRouter.use('/properties', createPropertyRouter(fullDeps.authService, fullDeps.buildingService, fullDeps.roomService));
     }
     if (fullDeps.tenantService) {
-      router.use('/tenants', authContextStack, createTenantRouter(fullDeps.authService, fullDeps.tenantService));
+      protectedRouter.use('/tenants', createTenantRouter(fullDeps.authService, fullDeps.tenantService));
     }
     if (fullDeps.contractService) {
-      router.use('/contracts', authContextStack, createContractRouter(fullDeps.authService, fullDeps.contractService));
+      protectedRouter.use('/contracts', createContractRouter(fullDeps.authService, fullDeps.contractService));
     }
     if (fullDeps.occupancyService) {
-      router.use('/occupancy', authContextStack, createOccupancyRouter(fullDeps.authService, fullDeps.occupancyService));
+      protectedRouter.use('/occupancy', createOccupancyRouter(fullDeps.authService, fullDeps.occupancyService));
+      protectedRouter.use('/occupancies', createOccupancyRouter(fullDeps.authService, fullDeps.occupancyService));
     }
     if (fullDeps.billingCycleService) {
-      router.use('/billing-cycles', authContextStack, createBillingCycleRouter(fullDeps.authService, fullDeps.billingCycleService));
+      protectedRouter.use('/billing-cycles', createBillingCycleRouter(fullDeps.authService, fullDeps.billingCycleService));
     }
     if (fullDeps.meterService) {
-      router.use('/meters', authContextStack, createMeterRouter(fullDeps.authService, fullDeps.meterService));
+      protectedRouter.use('/meters', createMeterRouter(fullDeps.authService, fullDeps.meterService));
     }
     if (fullDeps.billingService) {
-      router.use('/bills', authContextStack, createBillingRouter(fullDeps.authService, fullDeps.billingService));
+      protectedRouter.use('/bills', createBillingRouter(fullDeps.authService, fullDeps.billingService));
     }
 
-    router.use('/move-out', authContextStack, moveOutRouter);
-    router.use('/maintenance-requests', authContextStack, createMaintenanceRouter());
-    router.use('/maintenance', authContextStack, createMaintenanceRouter());
-    router.use('/announcements', authContextStack, createAnnouncementRouter());
-    router.use('/payments', authContextStack, createPaymentRouter(fullDeps.authService));
-    router.use('/receipts', authContextStack, createReceiptRouter(fullDeps.authService));
-    router.use('/notifications', authContextStack, createNotificationRouter());
-    router.use('/tenant/notifications', authContextStack, createTenantNotificationRouter());
-    router.use('/tenant-portal', authContextStack, createTenantPortalRouter(fullDeps.authService));
+    protectedRouter.use('/move-out', moveOutRouter);
+    protectedRouter.use('/maintenance-requests', createMaintenanceRouter());
+    protectedRouter.use('/maintenance', createMaintenanceRouter());
+    protectedRouter.use('/announcements', createAnnouncementRouter());
+    protectedRouter.use('/payments', createPaymentRouter(fullDeps.authService));
+    protectedRouter.use('/receipts', createReceiptRouter(fullDeps.authService));
+    protectedRouter.use('/notifications', createNotificationRouter(fullDeps.authService));
 
-    // TASK-009: Protected staff & LINE OA routes
+    router.use('/', protectedRouter);
     router.use('/', staffRoutes.protectedRouter);
     router.use('/', lineOaRoutes.protectedRouter);
+    router.use('/tenant-portal', createTenantPortalRouter(fullDeps.authService));
+    router.use('/tenant-notifications', createTenantNotificationRouter(fullDeps.authService));
   }
 
   return router;

@@ -166,27 +166,12 @@ describe('Wave 1F - Owner Onboarding Transaction & Atomicity Rollback Proof', ()
     // prepareProvisionalDormitory creates a setup_pending dormitory outside the
     // completeOwnerOnboarding transaction. We now need to account for it.
 
-    const service = new DormitoryProvisioningService(
-      new PrismaDormitoryRepository(prisma),
-      new InMemoryBillingSettingsRepository(),
-      new PrismaSubscriptionPlanRepository(prisma),
-      new PrismaSubscriptionRepository(prisma),
-      new InMemoryPromoRepository(),
-      new PrismaMembershipRepository(prisma),
-      new PrismaRoleRepository(prisma),
-      new InMemoryOnboardingDraftRepository(),
-      new InMemoryIdempotencyRepository(),
-      new PrismaBuildingRepository(prisma),
-      new PrismaRoomRepository(prisma),
-      new SensitiveFieldService('0123456789abcdef0123456789abcdef', 1),
-      new PromoService(new InMemoryPromoRepository()),
-      new AuditService(),
-      prisma
-    );
+    const sensitiveFieldService = new SensitiveFieldService('0123456789abcdef0123456789abcdef', 1);
+    const service = new DormitoryProvisioningService(prisma, sensitiveFieldService);
 
     // Inject a controlled dependency failure inside the transaction boundary
-    const spy = vi.spyOn(subscriptionEntitlementService, 'provisionInitialTrial').mockImplementationOnce(async () => {
-      throw new Error('SIMULATED_TRANSACTION_FAILURE: Subscription creation failed inside transaction');
+    const spy = vi.spyOn(sensitiveFieldService, 'maskBankAccount').mockImplementationOnce(() => {
+      throw new Error('SIMULATED_TRANSACTION_FAILURE: Bank account masking failed inside transaction');
     });
 
     const preparedRollback = await service.prepareProvisionalDormitory(userId, { name: `Rollback Dorm ${timestamp}` });
@@ -221,6 +206,11 @@ describe('Wave 1F - Owner Onboarding Transaction & Atomicity Rollback Proof', ()
           phone: '0899999999',
           postalCode: '10220',
           estimatedRoomCount: 5,
+        },
+        payment: {
+          bankCode: 'Kasikorn',
+          bankAccountName: 'Fail User',
+          bankAccountNumber: '1234567890',
         },
         buildings: [
           { id: 'temp-bld-rollback', name: 'Building Fail', floorsCount: 1 },

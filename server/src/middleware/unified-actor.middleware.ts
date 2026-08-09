@@ -35,7 +35,7 @@ export function extractUnifiedActor(req?: any, _res?: any, next?: any): any {
       actorType: 'google_owner',
       sessionId: req.auth.sessionId,
       userId: req.auth.userId,
-      dormitoryId: req.dormitoryId || (req.headers && (req.headers['x-dormitory-id'] as string)) || 'dorm-001',
+      dormitoryId: (req as any).dormitoryContext?.dormitoryId || req.dormitoryId || (req.headers && (req.headers['x-dormitory-id'] as string)) || 'dorm-001',
       roleCode: 'OWNER',
       displayName: req.auth.user?.name
     };

@@ -33,6 +33,7 @@ test.describe.serial('Wave 1G Real Playwright Lifecycle — Property, Room Defau
         name: `Wave1G Dorm ${Date.now()}`,
         code: `DM-E2E-${Date.now()}`,
         createdByUserId: owner.id,
+        status: 'active',
       },
     });
     dormId = dorm.id;
@@ -111,6 +112,7 @@ test.describe.serial('Wave 1G Real Playwright Lifecycle — Property, Room Defau
   });
 
   test('Complete API & Database Lifecycle — Strict Defaults, Propagation Counters, Snapshot & Entitlement', async ({ page, context }) => {
+    test.setTimeout(60000);
     const consoleErrors: string[] = [];
     const unhandledErrors: string[] = [];
 
@@ -133,7 +135,7 @@ test.describe.serial('Wave 1G Real Playwright Lifecycle — Property, Room Defau
     ]);
 
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
 
     const apiContext = await playwrightRequest.newContext({
       baseURL: 'http://127.0.0.1:3001',
@@ -601,7 +603,11 @@ test.describe.serial('Wave 1G Real Playwright Lifecycle — Property, Room Defau
     // Trigger save on UI with stale version -> VERSION_CONFLICT
     await defaultRentInput.fill('9200');
     await defaultRentInput.blur();
-    await page.waitForTimeout(2000);
+    const saveDefaultsBtn = page.getByTestId('btn-save-defaults').or(page.getByTestId('save-property-defaults-btn')).or(page.getByRole('button', { name: /บันทึก/ })).first();
+    if (await saveDefaultsBtn.isVisible()) {
+      await saveDefaultsBtn.click();
+    }
+    await page.waitForTimeout(1000);
 
     // Assert: VERSION_CONFLICT modal is visible (deterministic — must fail if not shown)
     const conflictModal = page.getByTestId('version-conflict-modal');

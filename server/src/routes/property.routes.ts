@@ -28,8 +28,14 @@ export function createPropertyRouter(
   ];
 
   const getDormitoryId = (req: Request): string => {
-    const context = resolveAuthoritativeDormitoryContext(req);
-    return context.dormitoryId;
+    const context = (req as any).dormitoryContext;
+    if (context?.dormitoryId) {
+      return context.dormitoryId;
+    }
+    if ((req as any).auth?.dormitoryId) {
+      return (req as any).auth.dormitoryId;
+    }
+    throw new AppError('Dormitory context not resolved.', 403, 'FORBIDDEN');
   };
 
   const verifyCsrf = (req: Request, res: Response): boolean => {

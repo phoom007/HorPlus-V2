@@ -180,7 +180,7 @@ describe('Wave 1F - Authorization, Permission, Package & Idempotency Corrective 
       auth: { userId: ownerUserId, user: { id: ownerUserId }, memberships },
       headers: { 'x-dormitory-id': dormId },
     };
-    const ctx = resolveAuthoritativeDormitoryContext(req);
+    const ctx = await resolveAuthoritativeDormitoryContext(req);
     expect(ctx.roleCode).toBe('OWNER');
     expect(ctx.permissions).toContain('*');
   });
@@ -196,7 +196,7 @@ describe('Wave 1F - Authorization, Permission, Package & Idempotency Corrective 
       auth: { userId: managerUserId, user: { id: managerUserId }, memberships },
       headers: { 'x-dormitory-id': dormId },
     };
-    const ctx = resolveAuthoritativeDormitoryContext(req);
+    const ctx = await resolveAuthoritativeDormitoryContext(req);
     expect(ctx.roleCode).toBe('MANAGER');
     expect(ctx.permissions).toContain('subscription:read');
     expect(ctx.permissions).toContain('subscription:write');
@@ -213,7 +213,7 @@ describe('Wave 1F - Authorization, Permission, Package & Idempotency Corrective 
       auth: { userId: techUserId, user: { id: techUserId }, memberships },
       headers: { 'x-dormitory-id': dormId },
     };
-    const ctx = resolveAuthoritativeDormitoryContext(req);
+    const ctx = await resolveAuthoritativeDormitoryContext(req);
     expect(ctx.permissions).toContain('maintenance:read');
     expect(ctx.permissions).toContain('maintenance:write');
     expect(ctx.permissions).not.toContain('room:write');
@@ -229,7 +229,7 @@ describe('Wave 1F - Authorization, Permission, Package & Idempotency Corrective 
       },
       headers: { 'x-dormitory-id': dormId },
     };
-    expect(() => resolveAuthoritativeDormitoryContext(invalidMemberReq)).toThrow('Dormitory membership role is invalid or unassigned.');
+    await expect(resolveAuthoritativeDormitoryContext(invalidMemberReq)).rejects.toThrow('Dormitory membership role is invalid or unassigned.');
   });
 
   // ─── Permission Middleware Tests ───
@@ -263,12 +263,12 @@ describe('Wave 1F - Authorization, Permission, Package & Idempotency Corrective 
     expect(body.error.code).toBe('FORBIDDEN');
   });
 
-  it('requireDormitoryPermission denies when context is missing', () => {
+  it('requireDormitoryPermission denies when context is missing', async () => {
     const middleware = requireDormitoryPermission('room:write');
     const req: any = { headers: {} };
     let statusCode = 0;
     const res: any = { status: (c: number) => { statusCode = c; return res; }, json: () => res };
-    middleware(req, res, () => {});
+    await middleware(req, res, () => {});
     expect(statusCode).toBe(403);
   });
 
@@ -353,7 +353,7 @@ describe('Wave 1F - Authorization, Permission, Package & Idempotency Corrective 
       auth: { userId: noPromoMgrId, user: { id: noPromoMgrId }, memberships: noPromoMemberships },
       headers: { 'x-dormitory-id': dormId },
     };
-    const ctxMgr = resolveAuthoritativeDormitoryContext(reqMgr);
+    const ctxMgr = await resolveAuthoritativeDormitoryContext(reqMgr);
     const hasPromoPerm = (ctxMgr.permissions || []).some((p) =>
       ['*', 'subscription:write', 'subscription:*', 'promo:redeem'].includes(p)
     );
@@ -1267,51 +1267,62 @@ describe('Wave 1F - Authorization, Permission, Package & Idempotency Corrective 
 
       const bld = await prisma.building.findFirst({ where: { dormitoryId: concDormId } });
       const sub = await entitlementService.getCurrentSubscription(concDormId);
-      const targetCount = sub.plan.roomLimit - 1;
+      try {
+        await prisma.subscriptionPlan.update({
+          where: { id: sub.planId },
+          data: { roomLimit: 15 },
+        });
+        const targetCount = 14;
 
-      const roomData = Array.from({ length: targetCount }, (_, i) => ({
-        dormitoryId: concDormId,
-        buildingId: bld!.id,
-        roomNumber: `RMPPRE${i + 1}`,
-        normalizedRoomNumber: `rmppre${i + 1}`,
-        roomType: 'standard',
-        monthlyRent: '0.00',
-        depositAmount: '0.00',
-        parkingFee: '0.00',
-        floor: 1,
-        status: 'vacant',
-      }));
-      await prisma.room.createMany({ data: roomData });
+        const roomData = Array.from({ length: targetCount }, (_, i) => ({
+          dormitoryId: concDormId,
+          buildingId: bld!.id,
+          roomNumber: `RMPPRE${i + 1}`,
+          normalizedRoomNumber: `rmppre${i + 1}`,
+          roomType: 'standard',
+          monthlyRent: '0.00',
+          depositAmount: '0.00',
+          parkingFee: '0.00',
+          floor: 1,
+          status: 'vacant',
+        }));
+        await prisma.room.createMany({ data: roomData });
 
-      const [res1, res2] = await Promise.all([
-        request(app)
-          .post('/api/v1/properties/rooms')
-          .set('Cookie', [`horplus_session=${concSessionCookie}`, `horplus_csrf=${concCsrfToken}`])
-          .set('x-csrf-token', concCsrfToken)
-          .set('x-dormitory-id', concDormId)
-          .send({ roomNumber: 'RMPCONCA', buildingId: bld!.id, floor: 1, monthlyRent: '3000' }),
-        request(app)
-          .post('/api/v1/properties/rooms')
-          .set('Cookie', [`horplus_session=${concSessionCookie}`, `horplus_csrf=${concCsrfToken}`])
-          .set('x-csrf-token', concCsrfToken)
-          .set('x-dormitory-id', concDormId)
-          .send({ roomNumber: 'RMPCONCB', buildingId: bld!.id, floor: 1, monthlyRent: '3000' }),
-      ]);
+        const [res1, res2] = await Promise.all([
+          request(app)
+            .post('/api/v1/properties/rooms')
+            .set('Cookie', [`horplus_session=${concSessionCookie}`, `horplus_csrf=${concCsrfToken}`])
+            .set('x-csrf-token', concCsrfToken)
+            .set('x-dormitory-id', concDormId)
+            .send({ roomNumber: 'RMPCONCA', buildingId: bld!.id, floor: 1, monthlyRent: '3000' }),
+          request(app)
+            .post('/api/v1/properties/rooms')
+            .set('Cookie', [`horplus_session=${concSessionCookie}`, `horplus_csrf=${concCsrfToken}`])
+            .set('x-csrf-token', concCsrfToken)
+            .set('x-dormitory-id', concDormId)
+            .send({ roomNumber: 'RMPCONCB', buildingId: bld!.id, floor: 1, monthlyRent: '3000' }),
+        ]);
 
-      const responses = [res1, res2];
-      const successResponse = responses.find((response) => response.status === 201);
-      const rejectedResponse = responses.find((response) => response.status === 409);
+        const responses = [res1, res2];
+        const successResponse = responses.find((response) => response.status === 201);
+        const rejectedResponse = responses.find((response) => response.status === 409);
 
-      expect(responses.filter((r) => r.status === 201).length).toBe(1);
-      expect(responses.filter((r) => r.status === 409).length).toBe(1);
+        expect(responses.filter((r) => r.status === 201).length).toBe(1);
+        expect(responses.filter((r) => r.status === 409).length).toBe(1);
 
-      expect(successResponse).toBeDefined();
-      expect(successResponse!.status).toBe(201);
-      expect(successResponse!.body.data || successResponse!.body.roomNumber || successResponse!.body.id).toBeDefined();
+        expect(successResponse).toBeDefined();
+        expect(successResponse!.status).toBe(201);
+        expect(successResponse!.body.data || successResponse!.body.roomNumber || successResponse!.body.id).toBeDefined();
 
-      expect(rejectedResponse).toBeDefined();
-      expect(rejectedResponse!.status).toBe(409);
-      expect(rejectedResponse!.body.errorCode || rejectedResponse!.body.error?.code).toBe('ROOM_LIMIT_REACHED');
+        expect(rejectedResponse).toBeDefined();
+        expect(rejectedResponse!.status).toBe(409);
+        expect(rejectedResponse!.body.errorCode || rejectedResponse!.body.error?.code).toBe('ROOM_LIMIT_REACHED');
+      } finally {
+        await prisma.subscriptionPlan.update({
+          where: { id: sub.planId },
+          data: { roomLimit: 150 },
+        });
+      }
 
       const activeCount = await prisma.room.count({ where: { dormitoryId: concDormId, deletedAt: null } });
       expect(activeCount).toBe(sub.plan.roomLimit);

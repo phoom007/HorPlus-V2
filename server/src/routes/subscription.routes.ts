@@ -23,7 +23,7 @@ export function createSubscriptionRouter(authService?: AuthenticationService): R
   // GET /api/v1/subscription/current
   router.get('/current', async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const context = resolveAuthoritativeDormitoryContext(req);
+      const context = (req as any).dormitoryContext || (await resolveAuthoritativeDormitoryContext(req));
       const subscription = await subscriptionEntitlementService.getCurrentSubscription(context.dormitoryId);
       return res.json({ data: subscription });
     } catch (err) {
@@ -34,7 +34,7 @@ export function createSubscriptionRouter(authService?: AuthenticationService): R
   // GET /api/v1/subscription/entitlements
   router.get('/entitlements', async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const context = resolveAuthoritativeDormitoryContext(req);
+      const context = (req as any).dormitoryContext || (await resolveAuthoritativeDormitoryContext(req));
       const entitlements = await subscriptionEntitlementService.getEffectiveEntitlements(context.dormitoryId);
       const availablePackages = await subscriptionEntitlementService.getAvailablePackages();
 
@@ -62,7 +62,7 @@ export function createSubscriptionRouter(authService?: AuthenticationService): R
   // POST /api/v1/subscription/promo/redeem
   router.post('/promo/redeem', csrfMiddleware, async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const context = resolveAuthoritativeDormitoryContext(req);
+      const context = (req as any).dormitoryContext || (await resolveAuthoritativeDormitoryContext(req));
 
       const isOwner = context.roleCode === 'OWNER';
       const isManager = context.roleCode === 'MANAGER';

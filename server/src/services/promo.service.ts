@@ -11,6 +11,7 @@ export interface PromoValidationResult {
   promoBonusMonths: number;
   totalTrialMonths: number;
   message: string;
+  errorCode?: string;
   promoCodeEntity?: any;
 }
 
@@ -59,6 +60,7 @@ export class PromoService {
         promoBonusMonths: 0,
         totalTrialMonths: initialTrialMonths,
         message: 'รหัสโปรโมชันไม่ถูกต้อง',
+        errorCode: 'PROMO_NOT_FOUND',
       };
     }
 
@@ -71,6 +73,7 @@ export class PromoService {
         promoBonusMonths: 0,
         totalTrialMonths: initialTrialMonths,
         message: 'รหัสโปรโมชันนี้ไม่สามารถใช้งานได้แล้ว',
+        errorCode: 'PROMO_DISABLED',
       };
     }
 
@@ -84,6 +87,7 @@ export class PromoService {
         promoBonusMonths: 0,
         totalTrialMonths: initialTrialMonths,
         message: 'รหัสโปรโมชันนี้ยังไม่ถึงเวลาเปิดใช้งาน',
+        errorCode: 'PROMO_NOT_YET_ACTIVE',
       };
     }
 
@@ -96,6 +100,26 @@ export class PromoService {
         promoBonusMonths: 0,
         totalTrialMonths: initialTrialMonths,
         message: 'รหัสโปรโมชันหมดอายุแล้ว',
+        errorCode: 'PROMO_EXPIRED',
+      };
+    }
+
+    // PROMO-01: Strictly validate benefit configuration (No silent hardcoded fallback)
+    if (
+      promo.benefitType !== 'TRIAL_EXTENSION' ||
+      promo.benefitUnit !== 'MONTH' ||
+      typeof promo.benefitValue !== 'number' ||
+      promo.benefitValue <= 0
+    ) {
+      return {
+        valid: false,
+        eligible: false,
+        code: normalizedCode,
+        trialMonths: initialTrialMonths,
+        promoBonusMonths: 0,
+        totalTrialMonths: initialTrialMonths,
+        message: 'การกำหนดค่าสิทธิประโยชน์ของโปรโมชันไม่ถูกต้อง',
+        errorCode: 'PROMO_CONFIGURATION_INVALID',
       };
     }
 
@@ -116,13 +140,12 @@ export class PromoService {
           promoBonusMonths: 0,
           totalTrialMonths: initialTrialMonths,
           message: 'รหัสโปรโมชันนี้ถูกใช้งานไปแล้วกับบัญชีนี้',
+          errorCode: 'PROMO_ALREADY_REDEEMED',
         };
       }
     }
 
-    const bonusMonths = (promo.benefitType === 'TRIAL_EXTENSION' && promo.benefitUnit === 'MONTH')
-      ? promo.benefitValue
-      : 2;
+    const bonusMonths = promo.benefitValue;
 
     return {
       valid: true,
@@ -139,4 +162,3 @@ export class PromoService {
     };
   }
 }
-

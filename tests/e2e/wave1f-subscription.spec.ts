@@ -196,6 +196,7 @@ test.describe('Wave 1F - Subscription & Entitlement Playwright E2E Suite', () =>
           buildingId: buildingId,
           roomNumber: num,
           normalizedRoomNumber: num,
+          roomType: 'standard',
           floor: 1,
         },
       });

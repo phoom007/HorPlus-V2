@@ -11,12 +11,13 @@ import { resolveAuthoritativeDormitoryContext } from './dormitory-context.js';
  *   → requireDormitoryWriteEntitlement → verifyCsrf → handler
  */
 export function requireDormitoryPermission(requiredPermission: string) {
-  return (req: Request, res: Response, next: NextFunction) => {
+  return async (req: Request, res: Response, next: NextFunction) => {
     try {
       let context = (req as any).dormitoryContext;
       if (!context) {
         try {
-          context = resolveAuthoritativeDormitoryContext(req);
+          context = await resolveAuthoritativeDormitoryContext(req);
+          (req as any).dormitoryContext = context;
         } catch {
           return res.status(403).json({
             error: {
@@ -76,9 +77,9 @@ export function requireDormitoryPermission(requiredPermission: string) {
  * Express middleware that resolves dormitory context and stores it on req.
  * Must run after authentication populates req.auth.
  */
-export function resolveDormitoryContextMiddleware(req: Request, res: Response, next: NextFunction) {
+export async function resolveDormitoryContextMiddleware(req: Request, res: Response, next: NextFunction) {
   try {
-    const context = resolveAuthoritativeDormitoryContext(req);
+    const context = await resolveAuthoritativeDormitoryContext(req);
     (req as any).dormitoryContext = context;
     next();
   } catch (err: any) {

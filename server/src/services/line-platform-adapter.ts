@@ -282,9 +282,14 @@ export class MockLinePlatformAdapter implements LinePlatformAdapter {
 
   public storedWebhookEndpoint: string = '';
   public storedWebhookActive: boolean = true;
+  public forceVerifyFail: boolean = false;
 
   async verifyAccessToken(channelAccessToken: string): Promise<{ verified: boolean; botInfo?: LineBotInfo }> {
     this.verifyAccessTokenCalls.push({ accessToken: channelAccessToken });
+    if (this.forceVerifyFail) {
+      this.forceVerifyFail = false;
+      return { verified: false };
+    }
     if (!channelAccessToken || channelAccessToken === 'invalid_token' || channelAccessToken.length < 8) {
       return { verified: false };
     }

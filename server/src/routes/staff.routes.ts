@@ -1,7 +1,7 @@
 /**
- * Staff & Access Grant Routes (Task-009 Checkpoint 1E)
- * Public: bearer redemption & CSRF credential issuance
- * Protected: staff management, grant CRUD, copy link, retry-delivery (OWNER-only)
+ * Staff Administration Routes (Task-009 Checkpoint 1B)
+ * Public: bearer token redemption
+ * Protected: staff listing, friend listing, access grant creation/role change/revocation/retry
  * @license Apache-2.0
  */
 
@@ -14,8 +14,8 @@ import { LinePlatformAdapter } from '../services/line-platform-adapter.js';
 import { requireDormitoryPermission } from '../middleware/permission.js';
 import { requireDormitoryWriteEntitlement } from '../middleware/entitlement.js';
 import { resolveAuthoritativeDormitoryContext } from '../middleware/dormitory-context.js';
-import { createCsrfMiddleware } from '../middleware/csrf.js';
 import { createRequireActiveDormitoryMiddleware } from '../middleware/require-dormitory.js';
+import { createCsrfMiddleware } from '../middleware/csrf.js';
 import { AppError } from '../types/index.js';
 import { getEnv } from '../config/env.js';
 
@@ -36,26 +36,30 @@ export function createStaffRoutes(
   const requireSession = authService.requireAuth();
   const csrfMiddleware = createCsrfMiddleware(authService);
 
-  const getDormitoryId = (req: Request): string => {
-    const context = (req as any).dormitoryContext || resolveAuthoritativeDormitoryContext(req);
+  const getDormitoryId = async (req: Request): Promise<string> => {
+    const context = (req as any).dormitoryContext || (await resolveAuthoritativeDormitoryContext(req));
     return context.dormitoryId;
   };
 
-  const verifyDormitoryMatch = (req: Request, res: Response, next: NextFunction) => {
-    const routeDormId = req.params.id || req.params.dormId || req.params.dormitoryId;
-    const authDormId = getDormitoryId(req);
-    if (routeDormId && authDormId && routeDormId !== authDormId) {
-      return res.status(403).json({
-        error: {
-          code: 'DORMITORY_MISMATCH',
-          message: 'Target dormitory ID does not match authenticated dormitory context',
-          fieldErrors: null,
-          requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
-          timestamp: new Date().toISOString(),
-        },
-      });
+  const verifyDormitoryMatch = async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const routeDormId = req.params.id || req.params.dormId || req.params.dormitoryId;
+      const authDormId = await getDormitoryId(req);
+      if (routeDormId && authDormId && routeDormId !== authDormId) {
+        return res.status(403).json({
+          error: {
+            code: 'DORMITORY_MISMATCH',
+            message: 'Target dormitory ID does not match authenticated dormitory context',
+            fieldErrors: null,
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+      next();
+    } catch (err) {
+      next(err);
     }
-    next();
   };
 
   const requireOwnerRole = (req: Request, res: Response, next: NextFunction) => {
@@ -76,9 +80,9 @@ export function createStaffRoutes(
     next();
   };
 
-  const resolveDormContext = (req: Request, _res: Response, next: NextFunction) => {
+  const resolveDormContext = async (req: Request, _res: Response, next: NextFunction) => {
     try {
-      resolveAuthoritativeDormitoryContext(req);
+      await resolveAuthoritativeDormitoryContext(req);
       next();
     } catch (err) {
       next(err);
@@ -174,7 +178,7 @@ export function createStaffRoutes(
     ...authGuard('staff:read'),
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        const dormitoryId = getDormitoryId(req);
+        const dormitoryId = await getDormitoryId(req);
         const staff = await grantService.listDormitoryStaff(dormitoryId);
         res.setHeader('Cache-Control', 'no-store');
         return res.status(200).json({ success: true, data: staff });
@@ -192,7 +196,7 @@ export function createStaffRoutes(
     ...authGuard('staff:read'),
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        const dormitoryId = getDormitoryId(req);
+        const dormitoryId = await getDormitoryId(req);
         const friends = await friendService.getFriendsByDormitory(dormitoryId);
         res.setHeader('Cache-Control', 'no-store');
         return res.status(200).json({ success: true, data: friends });
@@ -210,7 +214,7 @@ export function createStaffRoutes(
     ...authGuard('staff:read'),
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        const dormitoryId = getDormitoryId(req);
+        const dormitoryId = await getDormitoryId(req);
         const { grantId } = req.params;
         const copyLink = await grantService.getGrantCopyLink(dormitoryId, grantId);
         res.setHeader('Cache-Control', 'no-store');
@@ -229,7 +233,7 @@ export function createStaffRoutes(
     ...mutationGuard('staff:write'),
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        const dormitoryId = getDormitoryId(req);
+        const dormitoryId = await getDormitoryId(req);
         const { lineFriendId, roleCode } = req.body;
 
         if (!lineFriendId || !roleCode) {
@@ -258,7 +262,7 @@ export function createStaffRoutes(
     ...mutationGuard('staff:write'),
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        const dormitoryId = getDormitoryId(req);
+        const dormitoryId = await getDormitoryId(req);
         const { grantId } = req.params;
         const { roleCode } = req.body;
 
@@ -288,7 +292,7 @@ export function createStaffRoutes(
     ...mutationGuard('staff:write'),
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        const dormitoryId = getDormitoryId(req);
+        const dormitoryId = await getDormitoryId(req);
         const { grantId } = req.params;
         const revokedByPrincipal = req.auth ? `usr_${req.auth.userId}` : 'usr_owner';
 
@@ -315,7 +319,7 @@ export function createStaffRoutes(
     ...mutationGuard('staff:write'),
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        const dormitoryId = getDormitoryId(req);
+        const dormitoryId = await getDormitoryId(req);
         const { grantId } = req.params;
 
         const result = await grantService.retryDelivery(grantId, dormitoryId);

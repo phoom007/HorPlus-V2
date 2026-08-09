@@ -7,9 +7,10 @@
 
 import { Router, Request, Response, NextFunction } from 'express';
 import { PrismaClient } from '@prisma/client';
-import { LineOaService } from '../services/line-oa.service.js';
+import { LineOaService, getPublicWebhookOrigin } from '../services/line-oa.service.js';
 import { AuthenticationService } from '../services/auth.service.js';
 import { LinePlatformAdapter } from '../services/line-platform-adapter.js';
+import { ILineChannelTokenProvider } from '../services/line-channel-token-provider.js';
 import { requireDormitoryPermission } from '../middleware/permission.js';
 import { requireDormitoryWriteEntitlement } from '../middleware/entitlement.js';
 import { resolveAuthoritativeDormitoryContext } from '../middleware/dormitory-context.js';
@@ -18,7 +19,8 @@ import { createCsrfMiddleware } from '../middleware/csrf.js';
 export function createLineOaRoutes(
   prisma: PrismaClient,
   authService: AuthenticationService,
-  lineAdapter?: LinePlatformAdapter
+  lineAdapter?: LinePlatformAdapter,
+  tokenProvider?: ILineChannelTokenProvider
 ) {
   if (!authService) {
     throw new Error('AuthenticationService is required for protected LINE OA routes construction');
@@ -26,31 +28,35 @@ export function createLineOaRoutes(
 
   const publicRouter = Router();
   const protectedRouter = Router();
-  const lineOaService = new LineOaService(prisma, lineAdapter);
+  const lineOaService = new LineOaService(prisma, lineAdapter, tokenProvider);
 
   const requireSession = authService.requireAuth();
   const csrfMiddleware = createCsrfMiddleware(authService);
 
-  const getDormitoryId = (req: Request): string => {
-    const context = (req as any).dormitoryContext || resolveAuthoritativeDormitoryContext(req);
+  const getDormitoryId = async (req: Request): Promise<string> => {
+    const context = (req as any).dormitoryContext || (await resolveAuthoritativeDormitoryContext(req));
     return context.dormitoryId;
   };
 
-  const verifyDormitoryMatch = (req: Request, res: Response, next: NextFunction) => {
-    const routeDormId = req.params.id || req.params.dormId || req.params.dormitoryId;
-    const authDormId = getDormitoryId(req);
-    if (routeDormId && authDormId && routeDormId !== authDormId) {
-      return res.status(403).json({
-        error: {
-          code: 'DORMITORY_MISMATCH',
-          message: 'Target dormitory ID does not match authenticated dormitory context',
-          fieldErrors: null,
-          requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
-          timestamp: new Date().toISOString(),
-        },
-      });
+  const verifyDormitoryMatch = async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const routeDormId = req.params.id || req.params.dormId || req.params.dormitoryId;
+      const authDormId = await getDormitoryId(req);
+      if (routeDormId && authDormId && routeDormId !== authDormId) {
+        return res.status(403).json({
+          error: {
+            code: 'DORMITORY_MISMATCH',
+            message: 'Target dormitory ID does not match authenticated dormitory context',
+            fieldErrors: null,
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+      next();
+    } catch (err) {
+      next(err);
     }
-    next();
   };
 
   const requireOwnerRole = (req: Request, res: Response, next: NextFunction) => {
@@ -70,9 +76,9 @@ export function createLineOaRoutes(
     next();
   };
 
-  const resolveDormContext = (req: Request, _res: Response, next: NextFunction) => {
+  const resolveDormContext = async (req: Request, _res: Response, next: NextFunction) => {
     try {
-      resolveAuthoritativeDormitoryContext(req);
+      await resolveAuthoritativeDormitoryContext(req);
       next();
     } catch (err) {
       next(err);
@@ -132,8 +138,8 @@ export function createLineOaRoutes(
     ...authGuard('line_oa:manage'),
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        const dormId = getDormitoryId(req);
-        const baseUrl = `${req.protocol}://${req.get('host')}`;
+        const dormId = await getDormitoryId(req);
+        const baseUrl = getPublicWebhookOrigin();
         const config = await lineOaService.getDormitoryLineConfig(dormId, baseUrl);
         return res.status(200).json({ success: true, data: config, config });
       } catch (err) {
@@ -147,8 +153,8 @@ export function createLineOaRoutes(
     ...mutationGuard('line_oa:manage'),
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        const dormId = getDormitoryId(req);
-        const baseUrl = `${req.protocol}://${req.get('host')}`;
+        const dormId = await getDormitoryId(req);
+        const baseUrl = getPublicWebhookOrigin();
         const updated = await lineOaService.updateDormitoryLineConfig(dormId, req.body, baseUrl);
         return res.status(200).json({ success: true, data: updated, config: updated });
       } catch (err) {
@@ -162,8 +168,8 @@ export function createLineOaRoutes(
     ...mutationGuard('line_oa:manage'),
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        const dormId = getDormitoryId(req);
-        const baseUrl = `${req.protocol}://${req.get('host')}`;
+        const dormId = await getDormitoryId(req);
+        const baseUrl = getPublicWebhookOrigin();
         const updated = req.path.includes('rotate')
           ? await lineOaService.rotateWebhookKey(dormId, baseUrl)
           : await lineOaService.setWebhookEndpoint(dormId, baseUrl);
@@ -179,8 +185,8 @@ export function createLineOaRoutes(
     ...mutationGuard('line_oa:manage'),
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        const dormId = getDormitoryId(req);
-        const baseUrl = `${req.protocol}://${req.get('host')}`;
+        const dormId = await getDormitoryId(req);
+        const baseUrl = getPublicWebhookOrigin();
         const updated = await lineOaService.testWebhookEndpoint(dormId, baseUrl);
         return res.status(200).json({ success: true, data: updated, config: updated });
       } catch (err) {
@@ -194,7 +200,7 @@ export function createLineOaRoutes(
     ...mutationGuard('line_oa:manage'),
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        const dormId = getDormitoryId(req);
+        const dormId = await getDormitoryId(req);
         const disconnected = await lineOaService.disconnectLineConfig(dormId);
         return res.status(200).json({ success: true, data: disconnected, config: disconnected });
       } catch (err) {

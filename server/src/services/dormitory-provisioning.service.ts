@@ -12,6 +12,7 @@ import { addCalendarMonths } from '../utils/calendar-math.js';
 import { normalizeRoomIdentifier } from '../utils/normalization.js';
 import { decryptText } from '../utils/crypto-encryption.js';
 import { IIdempotencyRepository, InMemoryIdempotencyRepository } from '../db/repositories/idempotency.repository.js';
+import { getPublicWebhookOrigin } from './line-oa.service.js';
 
 export interface CompleteOwnerOnboardingParams {
   userId: string;
@@ -144,12 +145,12 @@ export class DormitoryProvisioningService {
             });
           }
 
-          const appOrigin = process.env.PUBLIC_APP_ORIGIN || process.env.APPLICATION_URL || 'http://127.0.0.1:3001';
+          const appOrigin = getPublicWebhookOrigin();
           let webhookUrl: string | null = null;
           if (provDorm.lineConfig?.webhookKeyEncrypted) {
             try {
               const rawKey = decryptText(provDorm.lineConfig.webhookKeyEncrypted);
-              webhookUrl = `${appOrigin.replace(/\/$/, '')}/api/v1/line/webhook/${rawKey}`;
+              webhookUrl = `${appOrigin}/api/v1/line/webhook/${rawKey}`;
             } catch {
               webhookUrl = null;
             }
@@ -245,8 +246,8 @@ export class DormitoryProvisioningService {
         },
       });
 
-      const appOrigin = process.env.PUBLIC_APP_ORIGIN || process.env.APPLICATION_URL || 'http://127.0.0.1:3001';
-      const webhookUrl = `${appOrigin.replace(/\/$/, '')}/api/v1/line/webhook/${webhookKey}`;
+      const appOrigin = getPublicWebhookOrigin();
+      const webhookUrl = `${appOrigin}/api/v1/line/webhook/${webhookKey}`;
 
       return {
         provisionalDormitoryId: dorm.id,
@@ -501,13 +502,25 @@ export class DormitoryProvisioningService {
         });
       }
 
-      // Save Buildings and Rooms if provided
+      // Save Buildings and Rooms if provided (idempotent upsert)
       if (buildings && buildings.length > 0) {
         for (const b of buildings) {
-          const createdBld = await tx.building.create({
-            data: {
+          const createdBld = await tx.building.upsert({
+            where: {
+              dormitory_building_name_unique: {
+                dormitoryId: dormId,
+                name: b.name,
+              },
+            },
+            create: {
               dormitoryId: dormId,
               name: b.name,
+              code: b.code || null,
+              floorCount: b.floorsCount || 1,
+              roomsPerFloor: b.roomsPerFloor || null,
+              description: b.description || null,
+            },
+            update: {
               code: b.code || null,
               floorCount: b.floorsCount || 1,
               roomsPerFloor: b.roomsPerFloor || null,
@@ -518,12 +531,27 @@ export class DormitoryProvisioningService {
           const matchingRooms = (rooms || []).filter((r) => r.buildingId === b.id);
           for (const r of matchingRooms) {
             const normalizedRoomNumber = normalizeRoomIdentifier(r.roomNumber);
-            await tx.room.create({
-              data: {
+            await tx.room.upsert({
+              where: {
+                dormitoryId_normalizedRoomNumber: {
+                  dormitoryId: dormId,
+                  normalizedRoomNumber,
+                },
+              },
+              create: {
                 dormitoryId: dormId,
                 buildingId: createdBld.id,
                 roomNumber: r.roomNumber,
                 normalizedRoomNumber,
+                floor: r.floor || 1,
+                roomType: (r as any).roomType || 'standard',
+                monthlyRent: String(r.monthlyRent ?? 0),
+                depositAmount: String(r.depositAmount ?? 0),
+                status: r.status || 'VACANT',
+              },
+              update: {
+                buildingId: createdBld.id,
+                roomNumber: r.roomNumber,
                 floor: r.floor || 1,
                 roomType: (r as any).roomType || 'standard',
                 monthlyRent: String(r.monthlyRent ?? 0),
@@ -535,46 +563,53 @@ export class DormitoryProvisioningService {
         }
       }
 
-      // 5. Account-Level Initial Trial Claim (+1 CALENDAR MONTH)
-      let trialGrantedMonths = 1;
-      let initialTrialExpiresAt = addCalendarMonths(now, 1);
-      let isAccountTrialClaimed = false;
+      // 5. Account-Level Initial Trial Claim & Data-Driven Promo Grant with Transaction Advisory Lock (TRIAL-01, PROMO-01)
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('user_benefit:' || ${userId} || ':INITIAL_TRIAL_V1'))`;
 
-      await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', '', true)`;
       const existingTrialClaim = await tx.accountBenefitClaim.findUnique({
         where: { user_benefit_unique: { userId, benefitKey: 'INITIAL_TRIAL_V1' } },
       });
-      await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormId}, true)`;
 
-      if (existingTrialClaim) {
-        isAccountTrialClaimed = true;
-        trialGrantedMonths = 0;
-        initialTrialExpiresAt = now;
-      }
+      const isTrialEligible = !existingTrialClaim;
+      let trialGrantedMonths = isTrialEligible ? 1 : 0;
+      let initialTrialExpiresAt = isTrialEligible ? addCalendarMonths(now, 1) : now;
 
-      // Check HORPLUS Promo Code (+2 CALENDAR MONTHS)
+      // Data-driven Promo Code evaluation (PROMO-01)
       let finalExpiresAt = initialTrialExpiresAt;
       let promoApplied = false;
       let canonicalPromo: any = null;
 
-      if (promoCode && promoCode.trim().toUpperCase() === 'HORPLUS' && trialGrantedMonths > 0) {
-        canonicalPromo = await tx.promoCode.findUnique({
-          where: { normalizedCode: 'HORPLUS' },
+      if (promoCode && promoCode.trim() && isTrialEligible) {
+        const normalizedCode = promoCode.trim().toUpperCase();
+        canonicalPromo = await tx.promoCode.findFirst({
+          where: {
+            OR: [
+              { normalizedCode },
+              { code: normalizedCode },
+            ],
+          },
         });
 
-        if (canonicalPromo && canonicalPromo.enabled) {
+        if (
+          canonicalPromo &&
+          canonicalPromo.enabled &&
+          (!canonicalPromo.startsAt || canonicalPromo.startsAt <= now) &&
+          (!canonicalPromo.endsAt || canonicalPromo.endsAt >= now) &&
+          canonicalPromo.benefitType === 'TRIAL_EXTENSION' &&
+          canonicalPromo.benefitUnit === 'MONTH' &&
+          typeof canonicalPromo.benefitValue === 'number' &&
+          canonicalPromo.benefitValue > 0
+        ) {
           const existingRedemption = await tx.promoRedemption.findUnique({
             where: { promo_user_unique: { promoCodeId: canonicalPromo.id, redeemedBy: userId } },
           });
 
           if (!existingRedemption) {
-            finalExpiresAt = addCalendarMonths(initialTrialExpiresAt, 2);
+            finalExpiresAt = addCalendarMonths(initialTrialExpiresAt, canonicalPromo.benefitValue);
             promoApplied = true;
           }
         }
       }
-
-      await subscriptionEntitlementService.provisionInitialTrial(dormId, tx, now);
 
       const sub = await tx.dormitorySubscription.upsert({
         where: { dormitoryId: dormId },
@@ -600,23 +635,31 @@ export class DormitoryProvisioningService {
         },
       });
 
-      if (!isAccountTrialClaimed) {
-        try {
-          await tx.accountBenefitClaim.create({
-            data: {
-              userId,
-              benefitKey: 'INITIAL_TRIAL_V1',
-              dormitoryId: dormId,
-              subscriptionId: sub.id,
-              grantedMonths: 1,
-              previousExpiresAt: null,
-              newExpiresAt: initialTrialExpiresAt,
-            },
-          });
-        } catch (err: any) {
-          console.error('[ACCOUNT BENEFIT CLAIM ERROR]', err);
-          trialGrantedMonths = 0;
-        }
+      if (isTrialEligible) {
+        await tx.subscriptionStatusHistory.create({
+          data: {
+            subscriptionId: sub.id,
+            dormitoryId: dormId,
+            previousPlanId: plan.id,
+            newPlanId: plan.id,
+            previousStatus: null,
+            newStatus: 'TRIAL',
+            reason: 'INITIAL_TRIAL_ONBOARDING',
+            actorId: userId,
+          },
+        });
+
+        await tx.accountBenefitClaim.create({
+          data: {
+            userId,
+            benefitKey: 'INITIAL_TRIAL_V1',
+            dormitoryId: dormId,
+            subscriptionId: sub.id,
+            grantedMonths: 1,
+            previousExpiresAt: null,
+            newExpiresAt: initialTrialExpiresAt,
+          },
+        });
       }
 
       if (promoApplied && canonicalPromo) {
@@ -656,35 +699,37 @@ export class DormitoryProvisioningService {
         },
       });
 
-      return {
-        success: true,
-        dormitoryId: dormId,
-        dormitoryName: activeDorm.name,
-        dormitory: {
-          id: dormId,
-          name: activeDorm.name,
-        },
-        membership: {
-          roleCode: 'OWNER',
-        },
-        subscription: {
-          id: sub.id,
+        const promoBonusMonths = (promoApplied && canonicalPromo && typeof canonicalPromo.benefitValue === 'number') ? canonicalPromo.benefitValue : 0;
+
+        return {
+          success: true,
+          dormitoryId: dormId,
+          dormitoryName: activeDorm.name,
+          dormitory: {
+            id: dormId,
+            name: activeDorm.name,
+          },
+          membership: {
+            roleCode: 'OWNER',
+          },
+          subscription: {
+            id: sub.id,
+            planCode: plan.code,
+            status: 'TRIAL',
+            trialExpiresAt: finalExpiresAt.toISOString(),
+          },
+          promo: {
+            applied: promoApplied,
+            promoBonusMonths,
+            trialMonths: trialGrantedMonths,
+            totalTrialMonths: trialGrantedMonths + promoBonusMonths,
+          },
           planCode: plan.code,
-          status: 'TRIAL',
+          subscriptionStatus: 'TRIAL',
           trialExpiresAt: finalExpiresAt.toISOString(),
-        },
-        promo: {
-          applied: promoApplied,
-          promoBonusMonths: promoApplied ? 2 : 0,
-          trialMonths: trialGrantedMonths,
-          totalTrialMonths: trialGrantedMonths + (promoApplied ? 2 : 0),
-        },
-        planCode: plan.code,
-        subscriptionStatus: 'TRIAL',
-        trialExpiresAt: finalExpiresAt.toISOString(),
-        promoApplied,
-        totalTrialMonths: trialGrantedMonths + (promoApplied ? 2 : 0),
-      };
+          promoApplied,
+          totalTrialMonths: trialGrantedMonths + promoBonusMonths,
+        };
     });
 
     if (lockRecord && lockRecord.id) {

@@ -215,11 +215,13 @@ describe('TASK-009 — Comprehensive Delta Verification Suite (Checkpoint 1D)', 
     expect(configResult.accessTokenVerifiedAt).not.toBeNull();
     expect(configResult.webhookVerifiedAt).toBeNull();
 
+    // Verify that invalid credentials cause rejection (stateless token issuance model)
+    mockAdapter.forceVerifyFail = true;
     await expect(
       lineOaService.updateDormitoryLineConfig(testDormitoryBId, {
-        channelAccessToken: 'invalid_token'
+        channelSecret: 'changed_secret_to_trigger_reverify'
       })
-    ).rejects.toThrow('LINE Channel Access Token verification failed');
+    ).rejects.toThrow('LINE Channel Credentials validation failed');
 
     const rawKey = configResult.webhookUrl!.split('/api/v1/line/webhook/')[1];
     const samplePayload = JSON.stringify({

@@ -9,7 +9,7 @@ export async function requireDormitoryWriteEntitlement(req: Request, res: Respon
   }
 
   try {
-    const context = resolveAuthoritativeDormitoryContext(req);
+    const context = await resolveAuthoritativeDormitoryContext(req);
     await subscriptionEntitlementService.assertDormitoryWritable(context.dormitoryId);
     next();
   } catch (err) {
