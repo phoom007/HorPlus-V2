@@ -139,8 +139,14 @@ export class AuthenticationService {
     const csrfToken = this.csrfService.generateCsrfToken(sessionId);
 
     const memberships = await this.membershipRepo.findByUserId(user.id);
-    const activeMemberships = memberships.filter((m) => m.status === 'active');
-    const onboardingRequired = activeMemberships.length === 0;
+    const prisma = getPrismaClient();
+    const activeDormCount = await prisma.dormitory.count({
+      where: {
+        createdByUserId: user.id,
+        status: 'active',
+      },
+    }).catch(() => 0);
+    const onboardingRequired = activeDormCount === 0;
 
     this.auditService.logSecurityEvent({
       requestId,
@@ -207,8 +213,14 @@ export class AuthenticationService {
     const csrfToken = this.csrfService.generateCsrfToken(sessionId);
 
     const memberships = await this.membershipRepo.findByUserId(user.id);
-    const activeMemberships = memberships.filter((m) => m.status === 'active');
-    const onboardingRequired = activeMemberships.length === 0;
+    const prisma = getPrismaClient();
+    const activeDormCount = await prisma.dormitory.count({
+      where: {
+        createdByUserId: user.id,
+        status: 'active',
+      },
+    }).catch(() => 0);
+    const onboardingRequired = activeDormCount === 0;
 
     return {
       user: {

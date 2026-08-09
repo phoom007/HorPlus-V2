@@ -22,6 +22,7 @@ import { DormitoryProvisioningService } from '../src/services/dormitory-provisio
 import { SensitiveFieldService } from '../src/services/sensitive-field.service.js';
 import { PromoService } from '../src/services/promo.service.js';
 import { AuditService } from '../src/services/audit.service.js';
+import { SignatureStorageService } from '../src/services/signature-storage.service.js';
 import { localStorageProvider } from '../src/services/local-storage.service.js';
 import { createPaymentRouter } from '../src/routes/payment.routes.js';
 import { createApiRouter } from '../src/routes/index.js';
@@ -293,7 +294,7 @@ describe('Wave 1F - Authorization, Permission, Package & Idempotency Corrective 
 
     const history = await prisma.subscriptionStatusHistory.findMany({ where: { dormitoryId: freshDormId } });
     expect(history.length).toBe(1);
-    expect(history[0].reason).toBe('INITIAL_PROVISIONING_30_DAY_TRIAL');
+    expect(history[0].reason).toBe('INITIAL_PROVISIONING_CALENDAR_MONTH_TRIAL');
 
     const legacySubs = await prisma.platformSubscription.findMany({ where: { dormitoryId: freshDormId } });
     expect(legacySubs.length).toBe(0);
@@ -1043,9 +1044,19 @@ describe('Wave 1F - Authorization, Permission, Package & Idempotency Corrective 
         auditService, prisma
       );
 
+      const prepared = await provisioningService.prepareProvisionalDormitory(onboardingUserId, { name: `Onboard Dorm ${timestamp}` });
+      const provDormId = prepared.provisionalDormitoryId;
+      const sigService = new SignatureStorageService(prisma);
+      const validPngBuffer = Buffer.from([
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+        0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+      ]);
+      await sigService.saveSignature({ dormitoryId: provDormId, userId: onboardingUserId, buffer: validPngBuffer });
+
       const result = await provisioningService.completeOwnerOnboarding({
         userId: onboardingUserId,
         idempotencyKey: `onb-idem-${timestamp}`,
+        provisionalDormitoryId: provDormId,
         planCode: 'FREE',
         dormitory: { name: `Onboard Dorm ${timestamp}`, code: `ONB-${timestamp}`, addressLine1: '123 Onb St', postalCode: '10100', phone: '0812345678' },
         billing: { bankName: 'Kasikorn', accountName: 'Onboard User', accountNumber: '1234567890' },

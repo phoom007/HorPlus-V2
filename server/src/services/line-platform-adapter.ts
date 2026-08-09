@@ -1,5 +1,5 @@
 /**
- * LINE Platform Adapter (Task-009 — Verification, Profile & Push Interface)
+ * LINE Platform Adapter (Task-009 — Verification, Profile, Webhook & Push Interface)
  * @license Apache-2.0
  */
 
@@ -8,7 +8,6 @@ export interface LineUserProfile {
   pictureUrl?: string | null;
 }
 
-/** Discriminated push result for idempotent delivery finalization */
 export type LinePushResult =
   | { outcome: 'ACCEPTED'; messageId?: string }
   | { outcome: 'ALREADY_ACCEPTED'; messageId?: string }
@@ -22,26 +21,32 @@ export interface LineBotInfo {
   chatMode: string;
 }
 
+export interface LineWebhookEndpointInfo {
+  endpoint: string;
+  active: boolean;
+}
+
+export interface LineWebhookTestResult {
+  success: boolean;
+  timestamp: string;
+  statusCode: number;
+  reason: string;
+  detail: string;
+}
+
 export interface LinePlatformAdapter {
-  /**
-   * Verify Channel Access Token by calling GET /v2/bot/info.
-   * Does NOT verify Channel Secret (webhook verification does that).
-   */
   verifyAccessToken(channelAccessToken: string): Promise<{ verified: boolean; botInfo?: LineBotInfo }>;
-
-  /** Fetch LINE user profile via GET /v2/bot/profile/{userId} */
   getProfile(lineUserId: string, accessToken: string): Promise<LineUserProfile | null>;
-
-  /**
-   * Push a message via POST /v2/bot/message/push.
-   * Requires X-Line-Retry-Key header for idempotent delivery.
-   */
   pushMessage(
     toLineUserId: string,
     flexMessage: any,
     accessToken: string,
     retryKey: string
   ): Promise<LinePushResult>;
+
+  setWebhookEndpoint(endpointUrl: string, accessToken: string): Promise<{ success: boolean }>;
+  testWebhookEndpoint(endpointUrl: string, accessToken: string): Promise<LineWebhookTestResult>;
+  getWebhookEndpoint(accessToken: string): Promise<LineWebhookEndpointInfo | null>;
 }
 
 /**
@@ -63,7 +68,6 @@ export class HttpLinePlatformAdapter implements LinePlatformAdapter {
     if (requestedOverride && isAllowedBoundary) {
       return requestedOverride;
     }
-    // SECURITY INVARIANT: Production & normal development runtime base URL is ALWAYS https://api.line.me
     return 'https://api.line.me';
   }
 
@@ -151,7 +155,6 @@ export class HttpLinePlatformAdapter implements LinePlatformAdapter {
         return { outcome: 'ACCEPTED', messageId: body.sentMessages?.[0]?.id };
       }
 
-      // 409 Conflict handling: require x-line-accepted-request-id header for ALREADY_ACCEPTED
       if (res.status === 409) {
         const acceptedRequestId = res.headers.get('x-line-accepted-request-id');
         if (acceptedRequestId) {
@@ -161,7 +164,6 @@ export class HttpLinePlatformAdapter implements LinePlatformAdapter {
             messageId: body.sentMessages?.[0]?.id || acceptedRequestId,
           };
         }
-        // Fail closed if accepted request ID header is missing
         return {
           outcome: 'DEFINITIVE_FAILURE',
           errorCode: 'HTTP_409_UNACCEPTED_RETRY',
@@ -169,7 +171,6 @@ export class HttpLinePlatformAdapter implements LinePlatformAdapter {
         };
       }
 
-      // 4xx (non-409) = definitive failure
       if (res.status >= 400 && res.status < 500) {
         return {
           outcome: 'DEFINITIVE_FAILURE',
@@ -178,19 +179,90 @@ export class HttpLinePlatformAdapter implements LinePlatformAdapter {
         };
       }
 
-      // 5xx = retryable
       return {
         outcome: 'RETRYABLE_UNKNOWN',
         errorCode: `HTTP_${res.status}`,
         safeMessage: `LINE API returned ${res.status}`,
       };
     } catch (err: any) {
-      // Network timeout / DNS failure = retryable unknown
       return {
         outcome: 'RETRYABLE_UNKNOWN',
         errorCode: err.code || 'NETWORK_ERROR',
         safeMessage: 'Network error contacting LINE API',
       };
+    }
+  }
+
+  async setWebhookEndpoint(endpointUrl: string, accessToken: string): Promise<{ success: boolean }> {
+    try {
+      const res = await fetch(`${this.baseUrl}/v2/bot/channel/webhook/endpoint`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({ endpoint: endpointUrl }),
+      });
+      return { success: res.ok };
+    } catch {
+      return { success: false };
+    }
+  }
+
+  async testWebhookEndpoint(endpointUrl: string, accessToken: string): Promise<LineWebhookTestResult> {
+    try {
+      const res = await fetch(`${this.baseUrl}/v2/bot/channel/webhook/test`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({ endpoint: endpointUrl }),
+      });
+      if (res.ok) {
+        const body = await res.json().catch(() => ({})) as any;
+        return {
+          success: body.success ?? true,
+          timestamp: body.timestamp || new Date().toISOString(),
+          statusCode: body.statusCode || 200,
+          reason: body.reason || 'OK',
+          detail: body.detail || 'Webhook test succeeded',
+        };
+      }
+      return {
+        success: false,
+        timestamp: new Date().toISOString(),
+        statusCode: res.status,
+        reason: 'HTTP_ERROR',
+        detail: `LINE API returned HTTP ${res.status}`,
+      };
+    } catch (err: any) {
+      return {
+        success: false,
+        timestamp: new Date().toISOString(),
+        statusCode: 500,
+        reason: 'NETWORK_ERROR',
+        detail: err.message || 'Failed to reach LINE API',
+      };
+    }
+  }
+
+  async getWebhookEndpoint(accessToken: string): Promise<LineWebhookEndpointInfo | null> {
+    try {
+      const res = await fetch(`${this.baseUrl}/v2/bot/channel/webhook/endpoint`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+        },
+      });
+      if (!res.ok) return null;
+      const body = await res.json() as any;
+      return {
+        endpoint: body.endpoint || '',
+        active: body.active ?? false,
+      };
+    } catch {
+      return null;
     }
   }
 }
@@ -207,6 +279,9 @@ export class MockLinePlatformAdapter implements LinePlatformAdapter {
   public mockPushResult?: LinePushResult;
   public simulate409WithAcceptedId = false;
   public simulate409WithoutAcceptedId = false;
+
+  public storedWebhookEndpoint: string = '';
+  public storedWebhookActive: boolean = true;
 
   async verifyAccessToken(channelAccessToken: string): Promise<{ verified: boolean; botInfo?: LineBotInfo }> {
     this.verifyAccessTokenCalls.push({ accessToken: channelAccessToken });
@@ -260,5 +335,27 @@ export class MockLinePlatformAdapter implements LinePlatformAdapter {
       return { outcome: 'DEFINITIVE_FAILURE', errorCode: 'HTTP_409_UNACCEPTED_RETRY', safeMessage: 'LINE API returned 409 without accepted request ID evidence' };
     }
     return { outcome: 'ACCEPTED', messageId: `msg_${Date.now()}_${Math.random().toString(36).substring(2, 7)}` };
+  }
+
+  async setWebhookEndpoint(endpointUrl: string, _accessToken: string): Promise<{ success: boolean }> {
+    this.storedWebhookEndpoint = endpointUrl;
+    return { success: true };
+  }
+
+  async testWebhookEndpoint(endpointUrl: string, _accessToken: string): Promise<LineWebhookTestResult> {
+    return {
+      success: true,
+      timestamp: new Date().toISOString(),
+      statusCode: 200,
+      reason: 'OK',
+      detail: 'Webhook test succeeded',
+    };
+  }
+
+  async getWebhookEndpoint(_accessToken: string): Promise<LineWebhookEndpointInfo | null> {
+    return {
+      endpoint: this.storedWebhookEndpoint,
+      active: this.storedWebhookActive,
+    };
   }
 }

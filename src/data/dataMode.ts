@@ -5,7 +5,10 @@
 
 export type DataMode = 'demo' | 'api';
 
-let activeDataMode: DataMode = ((import.meta as any).env?.VITE_DATA_MODE as DataMode) || ((import.meta as any).env?.PROD ? 'api' : 'demo');
+let activeDataMode: DataMode =
+  (typeof window !== 'undefined' && (window.localStorage?.getItem('horplus_data_mode') as DataMode)) ||
+  ((import.meta as any).env?.VITE_DATA_MODE as DataMode) ||
+  'api';
 
 export function getDataMode(): DataMode {
   return activeDataMode;

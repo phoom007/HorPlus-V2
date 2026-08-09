@@ -19,6 +19,7 @@ import { SensitiveFieldService } from '../../services/sensitive-field.service.js
 import { subscriptionEntitlementService } from '../../services/subscription-entitlement.service.js';
 import { DormitoryProvisioningService } from '../../services/dormitory-provisioning.service.js';
 import { InMemoryIdempotencyRepository } from '../../db/repositories/idempotency.repository.js';
+import { SignatureStorageService } from '../../services/signature-storage.service.js';
 
 const prisma = getPrismaClient();
 const sensitiveService = new SensitiveFieldService(getEnv().FIELD_ENCRYPTION_KEY, 1);
@@ -509,7 +510,21 @@ describe('Payment Security & Idempotency Boundary (PS-001 to PS-010)', () => {
       const idempAuth = await authService.authenticateTestUser(idempUser.id);
       const idKey = `idemp_pay_test_${Date.now()}`;
 
+      const prepRes = await request(app)
+        .post('/api/v1/onboarding/prepare')
+        .set('Cookie', [`horplus_session=${idempAuth.sessionToken}`, `horplus_csrf=${idempAuth.csrfToken}`])
+        .set('x-csrf-token', idempAuth.csrfToken)
+        .send({ name: 'Idemp Dorm 1' });
+      const provDormId = prepRes.body.data.provisionalDormitoryId;
+      const validPngBuffer = Buffer.from([
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+        0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+      ]);
+      const sigService = new SignatureStorageService(prisma);
+      await sigService.saveSignature({ dormitoryId: provDormId, userId: idempUser.id, buffer: validPngBuffer });
+
       const payload1 = {
+        provisionalDormitoryId: provDormId,
         dormitory: { name: 'Idemp Dorm 1' },
         billing: { billingDay: 25 },
         payment: {
@@ -522,6 +537,7 @@ describe('Payment Security & Idempotency Boundary (PS-001 to PS-010)', () => {
       };
 
       const payload2ChangedPayment = {
+        provisionalDormitoryId: provDormId,
         dormitory: { name: 'Idemp Dorm 1' },
         billing: { billingDay: 25 },
         payment: {
@@ -573,7 +589,21 @@ describe('Payment Security & Idempotency Boundary (PS-001 to PS-010)', () => {
       const replayAuth = await authService.authenticateTestUser(replayUser.id);
       const replayKey = `replay_exact_${Date.now()}`;
 
+      const prepRes = await request(app)
+        .post('/api/v1/onboarding/prepare')
+        .set('Cookie', [`horplus_session=${replayAuth.sessionToken}`, `horplus_csrf=${replayAuth.csrfToken}`])
+        .set('x-csrf-token', replayAuth.csrfToken)
+        .send({ name: 'Replay Dorm' });
+      const provDormId = prepRes.body.data.provisionalDormitoryId;
+      const validPngBuffer = Buffer.from([
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+        0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+      ]);
+      const sigService = new SignatureStorageService(prisma);
+      await sigService.saveSignature({ dormitoryId: provDormId, userId: replayUser.id, buffer: validPngBuffer });
+
       const payload = {
+        provisionalDormitoryId: provDormId,
         dormitory: { name: 'Replay Dorm' },
         billing: { billingDay: 1 },
         payment: {
@@ -620,7 +650,21 @@ describe('Payment Security & Idempotency Boundary (PS-001 to PS-010)', () => {
       const mutAuth = await authService.authenticateTestUser(mutUser.id);
       const mutKey = `mut_pp_${Date.now()}`;
 
+      const prepRes = await request(app)
+        .post('/api/v1/onboarding/prepare')
+        .set('Cookie', [`horplus_session=${mutAuth.sessionToken}`, `horplus_csrf=${mutAuth.csrfToken}`])
+        .set('x-csrf-token', mutAuth.csrfToken)
+        .send({ name: 'MutPP Dorm' });
+      const provDormId = prepRes.body.data.provisionalDormitoryId;
+      const validPngBuffer = Buffer.from([
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+        0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+      ]);
+      const sigService = new SignatureStorageService(prisma);
+      await sigService.saveSignature({ dormitoryId: provDormId, userId: mutUser.id, buffer: validPngBuffer });
+
       const origPayload = {
+        provisionalDormitoryId: provDormId,
         dormitory: { name: 'MutPP Dorm' },
         billing: { billingDay: 10 },
         payment: {
@@ -682,7 +726,21 @@ describe('Payment Security & Idempotency Boundary (PS-001 to PS-010)', () => {
       const mutAuth = await authService.authenticateTestUser(mutUser.id);
       const mutKey = `mut_bank_${Date.now()}`;
 
+      const prepRes = await request(app)
+        .post('/api/v1/onboarding/prepare')
+        .set('Cookie', [`horplus_session=${mutAuth.sessionToken}`, `horplus_csrf=${mutAuth.csrfToken}`])
+        .set('x-csrf-token', mutAuth.csrfToken)
+        .send({ name: 'MutBank Dorm' });
+      const provDormId = prepRes.body.data.provisionalDormitoryId;
+      const validPngBuffer = Buffer.from([
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+        0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+      ]);
+      const sigService = new SignatureStorageService(prisma);
+      await sigService.saveSignature({ dormitoryId: provDormId, userId: mutUser.id, buffer: validPngBuffer });
+
       const origPayload = {
+        provisionalDormitoryId: provDormId,
         dormitory: { name: 'MutBank Dorm' },
         billing: { billingDay: 15 },
         payment: {

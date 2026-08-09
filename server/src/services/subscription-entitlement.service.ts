@@ -48,22 +48,25 @@ export class SubscriptionEntitlementService {
    */
   async ensureSeeded(txClient?: any): Promise<void> {
     const db = txClient || this.db;
-    const freePlan = await db.subscriptionPlan.findUnique({ where: { code: 'FREE' } });
-    if (!freePlan) {
-      await db.subscriptionPlan.create({
-        data: {
+
+    try {
+      await db.subscriptionPlan.upsert({
+        where: { code: 'FREE' },
+        update: {},
+        create: {
           code: 'FREE',
           name: 'Free / Trial',
           type: 'FREE',
           roomLimit: 10,
         },
       });
-    }
+    } catch { /* ignore if concurrently created */ }
 
-    const paidPlan = await db.subscriptionPlan.findUnique({ where: { code: 'PAID' } });
-    if (!paidPlan) {
-      const createdPaid = await db.subscriptionPlan.create({
-        data: {
+    try {
+      const paidPlan = await db.subscriptionPlan.upsert({
+        where: { code: 'PAID' },
+        update: {},
+        create: {
           code: 'PAID',
           name: 'Paid',
           type: 'PAID',
@@ -71,26 +74,31 @@ export class SubscriptionEntitlementService {
         },
       });
 
-      const packages = [
-        { durationMonths: 1, price: 189.00, enabled: true },
-        { durationMonths: 3, price: 0.00, enabled: false },
-        { durationMonths: 6, price: 0.00, enabled: false },
-        { durationMonths: 12, price: 0.00, enabled: false },
-        { durationMonths: 24, price: 0.00, enabled: false },
-      ];
+      if (paidPlan) {
+        const existingPkgs = await db.subscriptionPackage.count({ where: { planId: paidPlan.id } });
+        if (existingPkgs === 0) {
+          const packages = [
+            { durationMonths: 1, price: 189.00, enabled: true },
+            { durationMonths: 3, price: 0.00, enabled: false },
+            { durationMonths: 6, price: 0.00, enabled: false },
+            { durationMonths: 12, price: 0.00, enabled: false },
+            { durationMonths: 24, price: 0.00, enabled: false },
+          ];
 
-      for (const pkg of packages) {
-        await db.subscriptionPackage.create({
-          data: {
-            planId: createdPaid.id,
-            durationMonths: pkg.durationMonths,
-            price: pkg.price,
-            currency: 'THB',
-            enabled: pkg.enabled,
-          },
-        });
+          for (const pkg of packages) {
+            await db.subscriptionPackage.create({
+              data: {
+                planId: paidPlan.id,
+                durationMonths: pkg.durationMonths,
+                price: pkg.price,
+                currency: 'THB',
+                enabled: pkg.enabled,
+              },
+            }).catch(() => {});
+          }
+        }
       }
-    }
+    } catch { /* ignore if concurrently created */ }
 
     const promo = await db.promoCode.findUnique({ where: { code: 'HORPLUS' } });
     if (!promo) {
@@ -105,19 +113,18 @@ export class SubscriptionEntitlementService {
   }
 
   /**
-   * Provision a 30-day Trial subscription for a new dormitory inside transaction
+   * Provision a 1 calendar-month Trial subscription for a new dormitory inside transaction
    */
   async provisionInitialTrial(dormitoryId: string, txClient?: any, now: Date = new Date()): Promise<any> {
     const db = txClient || this.db;
-    await this.ensureSeeded(db);
 
     const freePlan = await db.subscriptionPlan.findUnique({ where: { code: 'FREE' } });
-    if (!freePlan) throw new Error('FREE plan not seeded');
+    if (!freePlan) throw new Error('FREE plan not found in database. Run catalog sync script.');
 
     const existing = await db.dormitorySubscription.findUnique({ where: { dormitoryId } });
     if (existing) return existing;
 
-    const expiresAt = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+    const expiresAt = addCalendarMonths(now, 1);
 
     const sub = await db.dormitorySubscription.create({
       data: {
@@ -139,7 +146,7 @@ export class SubscriptionEntitlementService {
         newPlanId: freePlan.id,
         previousStatus: null,
         newStatus: 'TRIAL',
-        reason: 'INITIAL_PROVISIONING_30_DAY_TRIAL',
+        reason: 'INITIAL_PROVISIONING_CALENDAR_MONTH_TRIAL',
       },
     });
 
@@ -151,7 +158,6 @@ export class SubscriptionEntitlementService {
    */
   async backfillExistingDormitories(txClient?: any): Promise<number> {
     const db = txClient || this.db;
-    await this.ensureSeeded(db);
 
     const dormitoriesWithoutSub = await db.dormitory.findMany({
       where: {
@@ -166,7 +172,7 @@ export class SubscriptionEntitlementService {
 
     for (const dorm of dormitoriesWithoutSub) {
       const now = new Date();
-      const expiresAt = new Date(dorm.createdAt.getTime() + 30 * 24 * 60 * 60 * 1000);
+      const expiresAt = addCalendarMonths(dorm.createdAt, 1);
       const status = expiresAt.getTime() > now.getTime() ? 'TRIAL' : 'EXPIRED';
 
       try {
@@ -190,7 +196,7 @@ export class SubscriptionEntitlementService {
             newPlanId: freePlan.id,
             previousStatus: null,
             newStatus: status,
-            reason: 'EXISTING_DORMITORY_BACKFILL_30_DAY_TRIAL',
+            reason: 'EXISTING_DORMITORY_BACKFILL_CALENDAR_MONTH_TRIAL',
           },
         });
         count++;
@@ -225,7 +231,6 @@ export class SubscriptionEntitlementService {
    */
   async getEffectiveEntitlements(dormitoryId: string, now: Date = new Date(), txClient?: any): Promise<EffectiveEntitlements> {
     const db = txClient || this.db;
-    await this.ensureSeeded(db);
     const sub = await this.getCurrentSubscription(dormitoryId, db);
 
     const isExpired = sub.expiresAt.getTime() <= now.getTime();
@@ -286,7 +291,7 @@ export class SubscriptionEntitlementService {
   }
 
   /**
-   * Redeem promo code HORPLUS inside transaction
+   * Redeem promo code HORPLUS (+2 calendar months) inside transaction
    */
   async redeemPromoCode(params: {
     dormitoryId: string;
@@ -315,18 +320,24 @@ export class SubscriptionEntitlementService {
         throw new AppError('Promo code HORPLUS has already been redeemed for this dormitory.', 409, 'PROMO_ALREADY_REDEEMED');
       }
 
-      const promoCodeEntity = await tx.promoCode.findUnique({
+      let promoCodeEntity = await tx.promoCode.findUnique({
         where: { code: 'HORPLUS' },
       });
       if (!promoCodeEntity) {
-        throw new AppError('Promo code definition missing.', 404, 'PROMO_CODE_NOT_FOUND');
+        promoCodeEntity = await tx.promoCode.create({
+          data: {
+            code: 'HORPLUS',
+            normalizedCode: 'HORPLUS',
+            extensionDays: 60,
+          },
+        });
       }
 
       const currentSub = await this.getCurrentSubscription(params.dormitoryId, tx);
 
-      const extensionMs = promoCodeEntity.extensionDays * 24 * 60 * 60 * 1000;
-      const newTrialExpiresAt = new Date((currentSub.trialExpiresAt || currentSub.expiresAt).getTime() + extensionMs);
-      const newExpiresAt = new Date(currentSub.expiresAt.getTime() + extensionMs);
+      // Calendar month native promo: +2 calendar months
+      const newTrialExpiresAt = addCalendarMonths(currentSub.trialExpiresAt || currentSub.expiresAt, 2);
+      const newExpiresAt = addCalendarMonths(currentSub.expiresAt, 2);
 
       const updatedSub = await tx.dormitorySubscription.update({
         where: { id: currentSub.id },
@@ -357,7 +368,7 @@ export class SubscriptionEntitlementService {
           previousStatus: currentSub.status,
           newStatus: currentSub.status,
           actorId: params.userId,
-          reason: `PROMO_REDEEMED: ${promoCodeEntity.code} (+${promoCodeEntity.extensionDays} days)`,
+          reason: 'PROMO_REDEEMED: HORPLUS (+2 calendar months)',
         },
       });
 
@@ -425,7 +436,6 @@ export class SubscriptionEntitlementService {
    */
   async getAvailablePackages(txClient?: any): Promise<any[]> {
     const db = txClient || this.db;
-    await this.ensureSeeded(db);
     const packages = await db.subscriptionPackage.findMany({
       include: { plan: true },
       orderBy: { durationMonths: 'asc' },
@@ -436,7 +446,7 @@ export class SubscriptionEntitlementService {
       planCode: pkg.plan.code,
       planName: pkg.plan.name,
       durationMonths: pkg.durationMonths,
-      price: Number(pkg.price),
+      price: pkg.price !== null ? Number(pkg.price) : null,
       currency: pkg.currency,
       enabled: pkg.enabled,
       roomLimit: pkg.plan.roomLimit,
@@ -448,6 +458,14 @@ export class SubscriptionEntitlementService {
    */
   async assertDormitoryWritable(dormitoryId: string, now: Date = new Date(), txClient?: any): Promise<void> {
     const db = txClient || this.db;
+    const dorm = await db.dormitory.findUnique({
+      where: { id: dormitoryId },
+      select: { status: true },
+    });
+    if (dorm && dorm.status === 'setup_pending') {
+      return;
+    }
+
     const entitlement = await this.getEffectiveEntitlements(dormitoryId, now, db);
     if (entitlement.isReadOnly) {
       throw new AppError(

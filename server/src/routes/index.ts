@@ -28,6 +28,7 @@ import { createTenantPortalRouter } from './tenant-portal.routes.js';
 import { createSubscriptionRouter } from './subscription.routes.js';
 import { createStaffRoutes } from './staff.routes.js';
 import { createLineOaRoutes } from './line-oa.routes.js';
+import { createLinePlatformAdapter } from '../services/line-adapter-factory.js';
 import { getPrismaClient } from '../db/prisma.js';
 import { resolveDormitoryContextMiddleware } from '../middleware/permission.js';
 import { BuildingService } from '../services/building.service.js';
@@ -39,7 +40,7 @@ import { BillingCycleService } from '../services/billing-cycle.service.js';
 import { MeterService } from '../services/meter.service.js';
 import { BillingService } from '../services/billing.service.js';
 import { LinePlatformAdapter } from '../services/line-platform-adapter.js';
-import { createLinePlatformAdapter } from '../services/line-adapter-factory.js';
+import { createRequireActiveDormitoryMiddleware } from '../middleware/require-dormitory.js';
 
 export interface AppApiDependencies {
   authService: AuthenticationService;
@@ -110,10 +111,11 @@ export function createApiRouter(deps: AppApiDependencies | AuthenticationService
       )
     );
 
-    // Authenticated base stack for business domains: requireSession → resolveDormitoryContextMiddleware
+    // Authenticated base stack for business domains: requireSession → resolveDormitoryContextMiddleware → requireActiveDormitory
     // Route-level mutation guards inside each domain subrouter enforce specific write permission + write entitlement
     const requireSession = authService.requireAuth();
-    const authContextStack = [requireSession, resolveDormitoryContextMiddleware];
+    const requireActiveDormitory = createRequireActiveDormitoryMiddleware(prisma);
+    const authContextStack = [requireSession, resolveDormitoryContextMiddleware, requireActiveDormitory];
 
     router.use(
       '/dormitories',

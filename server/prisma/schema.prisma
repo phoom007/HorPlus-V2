@@ -1267,8 +1267,12 @@ model DormitoryLineConfig {
   webhookKeyEncrypted         String?   @map("webhook_key_encrypted") @db.Text
   isConnected                 Boolean   @default(false) @map("is_connected")
   lastVerifiedAt              DateTime? @map("last_verified_at") @db.Timestamptz()
-  accessTokenVerifiedAt DateTime? @map("access_token_verified_at") @db.Timestamptz()
-  webhookVerifiedAt     DateTime? @map("webhook_verified_at") @db.Timestamptz()
+  accessTokenVerifiedAt       DateTime? @map("access_token_verified_at") @db.Timestamptz()
+  webhookVerifiedAt           DateTime? @map("webhook_verified_at") @db.Timestamptz()
+  webhookEndpointSetAt        DateTime? @map("webhook_endpoint_set_at") @db.Timestamptz()
+  webhookTestSucceededAt      DateTime? @map("webhook_test_succeeded_at") @db.Timestamptz()
+  webhookActive               Boolean   @default(false) @map("webhook_active")
+  webhookActiveCheckedAt       DateTime? @map("webhook_active_checked_at") @db.Timestamptz()
   createdAt                   DateTime  @default(now()) @map("created_at") @db.Timestamptz()
   updatedAt                   DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
 
@@ -1345,6 +1349,7 @@ model OwnerSignature {
   dormitory Dormitory @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
   signedBy  User      @relation(fields: [signedByUserId], references: [id], onDelete: Restrict)
 
+  @@unique([dormitoryId, version], map: "dormitory_signature_version_unique")
   @@index([dormitoryId, isCurrent])
   @@index([signedByUserId])
   @@map("owner_signatures")

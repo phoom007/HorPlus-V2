@@ -88,23 +88,26 @@ export async function syncSubscriptionCatalog(prisma: PrismaClient, options: { d
           },
         });
       }
-    } else if (
-      Number(existingPkg.price) !== pkgDef.price ||
-      existingPkg.enabled !== pkgDef.enabled ||
-      existingPkg.catalogVersion !== CANONICAL_SUBSCRIPTION_CATALOG.version
-    ) {
-      changesDetected = true;
-      console.log(`[CatalogSync] Package drift detected: ${pkgDef.planCode} ${pkgDef.durationMonths}m`);
-      if (!dryRun && !checkOnly) {
-        await prisma.subscriptionPackage.update({
-          where: { id: existingPkg.id },
-          data: {
-            price: pkgDef.price,
-            currency: pkgDef.currency,
-            enabled: pkgDef.enabled,
-            catalogVersion: CANONICAL_SUBSCRIPTION_CATALOG.version,
-          },
-        });
+    } else {
+      const existingPrice = existingPkg.price !== null ? Number(existingPkg.price) : null;
+      if (
+        existingPrice !== pkgDef.price ||
+        existingPkg.enabled !== pkgDef.enabled ||
+        existingPkg.catalogVersion !== CANONICAL_SUBSCRIPTION_CATALOG.version
+      ) {
+        changesDetected = true;
+        console.log(`[CatalogSync] Package drift detected: ${pkgDef.planCode} ${pkgDef.durationMonths}m`);
+        if (!dryRun && !checkOnly) {
+          await prisma.subscriptionPackage.update({
+            where: { id: existingPkg.id },
+            data: {
+              price: pkgDef.price,
+              currency: pkgDef.currency,
+              enabled: pkgDef.enabled,
+              catalogVersion: CANONICAL_SUBSCRIPTION_CATALOG.version,
+            },
+          });
+        }
       }
     }
   }

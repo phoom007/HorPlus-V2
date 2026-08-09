@@ -16,7 +16,7 @@ export const OwnerAuthGuard: React.FC<{ children?: React.ReactNode }> = ({ child
   const [loading, setLoading] = React.useState(true);
 
   React.useEffect(() => {
-    fetch('/api/v1/auth/session')
+    fetch('/api/v1/auth/session', { credentials: 'include' })
       .then(res => {
         if (!res.ok) throw new Error('Not authenticated');
         return res.json();

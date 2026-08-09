@@ -27,9 +27,10 @@ export class LineFriendService {
     lineUserId: string,
     displayName: string,
     pictureUrl?: string | null,
-    eventStatus: 'FOLLOWING' | 'UNFOLLOWED' = 'FOLLOWING'
+    eventStatus: 'FOLLOWING' | 'UNFOLLOWED' = 'FOLLOWING',
+    externalTx?: any
   ): Promise<LineFriendDTO> {
-    return await this.prisma.$transaction(async (tx) => {
+    const run = async (tx: any) => {
       await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormitoryId}, true)`;
 
       const lineUserIdHash = hashToken(lineUserId);
@@ -70,9 +71,13 @@ export class LineFriendService {
           }
         });
       }
-
       return this.toDTO(record);
-    });
+    };
+
+    if (externalTx) {
+      return await run(externalTx);
+    }
+    return await this.prisma.$transaction(run);
   }
 
   /**

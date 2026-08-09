@@ -6,7 +6,7 @@
 export interface CatalogPackageDefinition {
   planCode: string;
   durationMonths: number;
-  price: number;
+  price: number | null;
   currency: string;
   enabled: boolean;
 }
@@ -45,7 +45,7 @@ export const CANONICAL_SUBSCRIPTION_CATALOG: SubscriptionCatalogRelease = {
       code: 'PAID',
       name: 'HorPlus PRO',
       type: 'PAID',
-      roomLimit: 300,
+      roomLimit: 150,
       messageQuotaMonthly: 300,
       enabled: true,
     },
@@ -61,23 +61,30 @@ export const CANONICAL_SUBSCRIPTION_CATALOG: SubscriptionCatalogRelease = {
     {
       planCode: 'PAID',
       durationMonths: 3,
-      price: 529,
+      price: null,
       currency: 'THB',
-      enabled: true,
+      enabled: false,
     },
     {
       planCode: 'PAID',
       durationMonths: 6,
-      price: 999,
+      price: null,
       currency: 'THB',
-      enabled: true,
+      enabled: false,
     },
     {
       planCode: 'PAID',
       durationMonths: 12,
-      price: 1799,
+      price: null,
       currency: 'THB',
-      enabled: true,
+      enabled: false,
+    },
+    {
+      planCode: 'PAID',
+      durationMonths: 24,
+      price: null,
+      currency: 'THB',
+      enabled: false,
     },
   ],
 };

@@ -81,7 +81,8 @@ export function resolveDormitoryContextMiddleware(req: Request, res: Response, n
     const context = resolveAuthoritativeDormitoryContext(req);
     (req as any).dormitoryContext = context;
     next();
-  } catch (err) {
+  } catch (err: any) {
+    console.error('[RESOLVE DORM CONTEXT ERROR]', { path: req.originalUrl, code: err.code, message: err.message });
     next(err);
   }
 }

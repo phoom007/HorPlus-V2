@@ -70,19 +70,19 @@ export class LinePushUsageService {
   /**
    * Get current quota status for a dormitory.
    */
-  async getQuotaStatus(dormitoryId: string): Promise<QuotaStatus> {
-    return await this.prisma.$transaction(async (tx) => {
-      await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormitoryId}, true)`;
+  async getQuotaStatus(dormitoryId: string, tx?: any): Promise<QuotaStatus> {
+    const run = async (db: any) => {
+      await db.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormitoryId}, true)`;
 
-      const dorm = await tx.dormitory.findUnique({
+      const dorm = await db.dormitory.findUnique({
         where: { id: dormitoryId },
         select: { timezone: true },
       });
       const timezone = dorm?.timezone || 'Asia/Bangkok';
       const periodKey = this.getCurrentPeriodKey(timezone);
-      const quotaLimit = await this.getQuotaLimit(dormitoryId, tx);
+      const quotaLimit = await this.getQuotaLimit(dormitoryId, db);
 
-      const usage = await tx.linePushUsage.findUnique({
+      const usage = await db.linePushUsage.findUnique({
         where: { dormitory_push_period_unique: { dormitoryId, periodKey } },
       });
 
@@ -98,7 +98,12 @@ export class LinePushUsageService {
         remaining,
         isAvailable: remaining > 0,
       };
-    });
+    };
+
+    if (tx) {
+      return await run(tx);
+    }
+    return await this.prisma.$transaction(run);
   }
 
   /**

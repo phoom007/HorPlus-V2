@@ -100,8 +100,10 @@ export async function httpRequest<T>(
   const baseUrl = getApiBaseUrl();
   const url = buildRequestUrl(baseUrl, path);
 
+  const isFormData = typeof FormData !== 'undefined' && body instanceof FormData;
+
   const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
+    ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
     Accept: 'application/json',
     'X-Request-Id': `req_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
     ...options.headers
@@ -134,7 +136,9 @@ export async function httpRequest<T>(
     signal: options.signal || controller.signal
   };
 
-  if (body !== undefined) {
+  if (isFormData) {
+    fetchOptions.body = body;
+  } else if (body !== undefined) {
     fetchOptions.body = JSON.stringify(body);
   }
 

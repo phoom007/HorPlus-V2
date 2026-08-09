@@ -19,6 +19,9 @@ import {
   PaymentSettingsInputSchema,
 } from '../types/onboarding-validation.js';
 
+import multer from 'multer';
+const upload = multer({ limits: { fileSize: 5 * 1024 * 1024 } });
+
 export function createDormitoryRouter(
   authService: AuthenticationService,
   dormitoryRepo: IDormitoryRepository,
@@ -534,8 +537,8 @@ export function createDormitoryRouter(
     });
   });
 
-  // POST /api/v1/dormitories/:dormitoryId/signature (Task-009 Signature Persistence)
-  router.post('/:dormitoryId/signature', requireSession, requireDormitory, requireDormitoryUpdate, requireDormitoryWriteEntitlement, async (req: Request, res: Response) => {
+  // POST /api/v1/dormitories/:dormitoryId/signature (Task-009 Signature Persistence - supports both singular and plural)
+  const handlePostSignature = async (req: Request, res: Response) => {
     if (!verifyCsrfToken(req, res)) return;
 
     try {
@@ -546,6 +549,8 @@ export function createDormitoryRouter(
       if (req.body?.signatureBase64) {
         const base64Str = req.body.signatureBase64.replace(/^data:image\/\w+;base64,/, '');
         buffer = Buffer.from(base64Str, 'base64');
+      } else if (req.file?.buffer) {
+        buffer = req.file.buffer;
       } else if (Buffer.isBuffer(req.body)) {
         buffer = req.body;
       } else {
@@ -577,10 +582,13 @@ export function createDormitoryRouter(
         },
       });
     }
-  });
+  };
+
+  router.post('/:dormitoryId/signature', requireSession, requireDormitory, requireDormitoryUpdate, requireDormitoryWriteEntitlement, upload.single('file'), handlePostSignature);
+  router.post('/:dormitoryId/signatures', requireSession, requireDormitory, requireDormitoryUpdate, requireDormitoryWriteEntitlement, upload.single('file'), handlePostSignature);
 
   // GET /api/v1/dormitories/:dormitoryId/signature (Task-009 Signature Stream/Download)
-  router.get('/:dormitoryId/signature', requireSession, requireDormitory, requireDormitoryView, async (req: Request, res: Response) => {
+  const handleGetSignature = async (req: Request, res: Response) => {
     try {
       const dormitoryId = req.params.dormitoryId;
       const prisma = getPrismaClient();
@@ -615,7 +623,10 @@ export function createDormitoryRouter(
         },
       });
     }
-  });
+  };
+
+  router.get('/:dormitoryId/signature', requireSession, requireDormitory, requireDormitoryView, handleGetSignature);
+  router.get('/:dormitoryId/signatures', requireSession, requireDormitory, requireDormitoryView, handleGetSignature);
 
   return router;
 }

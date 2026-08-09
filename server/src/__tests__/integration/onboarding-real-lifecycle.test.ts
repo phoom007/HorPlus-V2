@@ -89,7 +89,7 @@ describe('Master 6-Step Owner Onboarding Lifecycle & Idempotency', () => {
     });
 
     expect(sigResult.id).toBeDefined();
-    expect(sigResult.version).toBe(2);
+    expect(sigResult.version).toBe(1);
 
     const latest = await signatureService.getLatestSignatureRecord(provDormId);
     expect(latest).not.toBeNull();

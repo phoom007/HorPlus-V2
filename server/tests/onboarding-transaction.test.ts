@@ -16,6 +16,7 @@ import { SensitiveFieldService } from '../src/services/sensitive-field.service.j
 import { PromoService } from '../src/services/promo.service.js';
 import { AuditService } from '../src/services/audit.service.js';
 import { subscriptionEntitlementService } from '../src/services/subscription-entitlement.service.js';
+import { SignatureStorageService } from '../src/services/signature-storage.service.js';
 import crypto from 'crypto';
 
 const prisma = new PrismaClient();
@@ -63,9 +64,19 @@ describe('Wave 1F - Owner Onboarding Transaction & Atomicity Rollback Proof', ()
       prisma
     );
 
+    const prepared = await service.prepareProvisionalDormitory(userId, { name: `Onboard Dorm ${timestamp}` });
+    const provDormId = prepared.provisionalDormitoryId;
+    const sigService = new SignatureStorageService(prisma);
+    const validPngBuffer = Buffer.from([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+      0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+    ]);
+    await sigService.saveSignature({ dormitoryId: provDormId, userId, buffer: validPngBuffer });
+
     const result = await service.completeOwnerOnboarding({
       userId,
       idempotencyKey: `idempotency-onb-${timestamp}`,
+      provisionalDormitoryId: provDormId,
       planCode: 'FREE',
       dormitory: {
         name: `Onboard Dorm ${timestamp}`,
@@ -142,7 +153,9 @@ describe('Wave 1F - Owner Onboarding Transaction & Atomicity Rollback Proof', ()
     }
 
     // 1. Capture BEFORE counts for ALL 8 entities in PostgreSQL
-    const initialCounts = await getEntityCountsForUser(userId);
+    // NOTE: Captured BEFORE prepareProvisionalDormitory was not suitable because
+    // prepareProvisionalDormitory creates a setup_pending dormitory outside the
+    // completeOwnerOnboarding transaction. We now need to account for it.
 
     const service = new DormitoryProvisioningService(
       new PrismaDormitoryRepository(prisma),
@@ -167,10 +180,23 @@ describe('Wave 1F - Owner Onboarding Transaction & Atomicity Rollback Proof', ()
       throw new Error('SIMULATED_TRANSACTION_FAILURE: Subscription creation failed inside transaction');
     });
 
+    const preparedRollback = await service.prepareProvisionalDormitory(userId, { name: `Rollback Dorm ${timestamp}` });
+    const provDormIdRollback = preparedRollback.provisionalDormitoryId;
+    const sigService = new SignatureStorageService(prisma);
+    const validPngBuffer = Buffer.from([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+      0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+    ]);
+    await sigService.saveSignature({ dormitoryId: provDormIdRollback, userId, buffer: validPngBuffer });
+
+    // Capture counts AFTER prepare (provisional dorm + membership exist)
+    const initialCounts = await getEntityCountsForUser(userId);
+
     await expect(
       service.completeOwnerOnboarding({
         userId,
         idempotencyKey: `idempotency-rollback-${timestamp}`,
+        provisionalDormitoryId: provDormIdRollback,
         planCode: 'FREE',
         dormitory: {
           name: `Rollback Dorm ${timestamp}`,

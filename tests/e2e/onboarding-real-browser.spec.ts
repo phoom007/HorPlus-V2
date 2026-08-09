@@ -142,6 +142,8 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
           for (const sub of subs) {
             await prisma.subscriptionStatusHistory.deleteMany({ where: { subscriptionId: sub.id } }).catch(() => {});
           }
+          await prisma.accountBenefitClaim.deleteMany({ where: { dormitoryId: dormId } }).catch(() => {});
+          await prisma.ownerSignature.deleteMany({ where: { dormitoryId: dormId } }).catch(() => {});
           await prisma.dormitoryBillingSettings.deleteMany({ where: { dormitoryId: dormId } }).catch(() => {});
           await prisma.dormitorySubscription.deleteMany({ where: { dormitoryId: dormId } }).catch(() => {});
           await prisma.room.deleteMany({ where: { dormitoryId: dormId } }).catch(() => {});
@@ -149,6 +151,7 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
           await prisma.dormitoryMember.deleteMany({ where: { dormitoryId: dormId } }).catch(() => {});
           await prisma.dormitory.delete({ where: { id: dormId } }).catch(() => {});
         }
+        await prisma.ownerSignature.deleteMany({ where: { signedByUserId: freshUserId } }).catch(() => {});
         await prisma.session.deleteMany({ where: { userId: freshUserId } }).catch(() => {});
         await prisma.user.delete({ where: { id: freshUserId } }).catch(() => {});
       }
@@ -216,15 +219,14 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
     await page.goto('http://127.0.0.1:5173/owner/register', { timeout: 45000 });
 
     // FD-004 Initial Clean Assertions across all form surfaces
-    const dormNameInput = page.locator('input[placeholder="เช่น หอพัก HorPlus สุขุมวิท"]');
+    const dormNameInput = page.locator('[data-testid="input-dormitory-name"]');
     await expect(dormNameInput).toBeVisible({ timeout: 45000 });
     await expect(dormNameInput).toHaveValue('');
 
-    const dormAddressInput = page.locator('textarea[placeholder="เช่น 88/9 ซอยสุขุมวิท 55 แขวงคลองตันเหนือ เขตวัฒนา กรุงเทพฯ 10110"]');
+    const dormAddressInput = page.locator('[data-testid="input-address"]');
     await expect(dormAddressInput).toHaveValue('');
 
-    const provinceSelect = page.locator('select').filter({ hasText: 'กรุงเทพมหานคร' }).first();
-    await expect(provinceSelect).toHaveValue('');
+    const provinceSelect = page.locator('[data-testid="select-province"]');
 
     // Fill Step 1 to advance to Step 4 bank fields clean check
     await provinceSelect.selectOption('กรุงเทพมหานคร');
@@ -236,69 +238,74 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
     await page.fill('input[type="number"] >> nth=1', '4');
     await page.click('button:has-text("ถัดไป")'); // Step 2 -> 3
 
-    // Fill Step 3 utility and rent rates
-    await page.fill('input[type="number"] >> nth=0', '18');
-    await page.fill('input[type="number"] >> nth=1', '8');
-    const rentInputStep3 = page.locator('label', { hasText: 'ค่าเช่ารายเดือน' }).first().locator('..').locator('input');
-    await rentInputStep3.fill('4500');
+    // Fill Step 3 utility rates
+    await page.fill('[data-testid="input-water-rate"]', '18');
+    await page.fill('[data-testid="input-electric-rate"]', '8');
     await page.click('button:has-text("ถัดไป")'); // Step 3 -> 4
 
     // Verify Step 4 bank selection & account details start completely blank
-    const bankSelect = page.locator('select').filter({ hasText: '-- เลือกธนาคาร --' });
-    await expect(bankSelect).toHaveValue('');
-
-    const accNoInput = page.locator('input[placeholder="กรุณาเลือกธนาคารก่อน"]');
-    await expect(accNoInput).toBeDisabled();
+    const accNoInput = page.locator('[data-testid="input-account-number"]');
     await expect(accNoInput).toHaveValue('');
 
-    const accNameInput = page.locator('input[placeholder="เช่น นาย สมศักดิ์ วงศ์สว่าง (บัญชีธนาคาร)"]');
+    const accNameInput = page.locator('[data-testid="input-account-name"]');
     await expect(accNameInput).toHaveValue('');
 
-    const promptPayInput = page.locator('input[placeholder="เช่น 081-999-8888 หรือ 1-1007-00123-45-6"]');
+    const promptPayInput = page.locator('[data-testid="input-promptpay"]');
     await expect(promptPayInput).toHaveValue('');
   });
 
   test('3. Complete 4-step onboarding UI, verify CSRF/Idempotency headers, PostgreSQL records, AND same-browser lifecycle (RI-002, RI-003, RI-004, RI-005)', async ({ context, page }) => {
-    test.setTimeout(60000);
+    // Ensure 100% clean state: delete any existing dormitories and memberships for freshUserId from prior steps
+    await prisma.ownerSignature.deleteMany({ where: { signedByUserId: freshUserId } }).catch(() => {});
+    await prisma.dormitoryBillingSettings.deleteMany({ where: { dormitory: { createdByUserId: freshUserId } } }).catch(() => {});
+    await prisma.dormitorySubscription.deleteMany({ where: { dormitory: { createdByUserId: freshUserId } } }).catch(() => {});
+    await prisma.room.deleteMany({ where: { dormitory: { createdByUserId: freshUserId } } }).catch(() => {});
+    await prisma.building.deleteMany({ where: { dormitory: { createdByUserId: freshUserId } } }).catch(() => {});
+    await prisma.dormitoryMember.deleteMany({ where: { userId: freshUserId } }).catch(() => {});
+    await prisma.dormitory.deleteMany({ where: { createdByUserId: freshUserId } }).catch(() => {});
+
     await injectSession(context);
     await page.goto('http://127.0.0.1:5173/owner/register');
 
     // ── Step 1: Dormitory Info ──
-    await page.fill('input[placeholder="เช่น หอพัก HorPlus สุขุมวิท"]', 'Real Playwright Dormitory');
-    await page.fill('textarea[placeholder="เช่น 88/9 ซอยสุขุมวิท 55 แขวงคลองตันเหนือ เขตวัฒนา กรุงเทพฯ 10110"]', '456 Real Playwright Ave, Bangkok 10110');
-    const provinceSelect = page.locator('select').filter({ hasText: 'กรุงเทพมหานคร' }).first();
+    await page.fill('[data-testid="input-dormitory-name"]', 'Real Playwright Dormitory');
+    await page.fill('[data-testid="input-address"]', '456 Real Playwright Ave, Bangkok 10110');
+    const provinceSelect = page.locator('[data-testid="select-province"]');
     await provinceSelect.selectOption('กรุงเทพมหานคร');
-    await page.click('button:has-text("ถัดไป")');
+    await page.click('[data-testid="button-next-step"]'); // 1 -> 2
 
     // ── Step 2: Buildings & Rooms (fill 4 rooms) ──
     await page.fill('input[type="number"] >> nth=1', '4');
-    await page.click('button:has-text("ถัดไป")');
+    await page.click('[data-testid="button-next-step"]'); // 2 -> 3
 
     // ── Step 3: Utilities & Service Rates (fill rates) ──
-    await page.fill('input[type="number"] >> nth=0', '18');
-    await page.fill('input[type="number"] >> nth=1', '8');
-    const rentInputStep3 = page.locator('label', { hasText: 'ค่าเช่ารายเดือน' }).first().locator('..').locator('input');
-    await rentInputStep3.fill('4500');
-    await page.click('button:has-text("ถัดไป")');
+    await page.fill('[data-testid="input-water-rate"]', '18');
+    await page.fill('[data-testid="input-electric-rate"]', '8');
+    await page.click('[data-testid="button-next-step"]'); // 3 -> 4
 
     // ── Step 4: Deposits & Payment Account ──
-    const bankSelect = page.locator('select').filter({ hasText: '-- เลือกธนาคาร --' });
+    const bankSelect = page.locator('[data-testid="select-bank-name"]');
     await bankSelect.selectOption({ index: 1 });
-    await page.fill('input[placeholder="XXX-X-XXXXX-X"]', '012-3-45678-9');
-    await page.fill('input[placeholder="เช่น นาย สมศักดิ์ วงศ์สว่าง (บัญชีธนาคาร)"]', 'นาย สมชาย ใจดี');
+    await page.fill('[data-testid="input-account-number"]', '012-3-45678-9');
+    await page.fill('[data-testid="input-account-name"]', 'นาย สมชาย ใจดี');
+    await page.click('[data-testid="button-save-signature"]');
+    await page.waitForSelector('[data-testid="signature-status-saved"]', { state: 'visible' });
+    await page.click('[data-testid="button-next-step"]'); // 4 -> 5
 
-    await page.click('button:has-text("บันทึก & ยืนยันข้อมูลสร้างหอพัก")');
+    // ── Step 5: LINE OA ──
+    await page.click('[data-testid="button-next-step"]'); // 5 -> 6
 
-    // ── Terms & Referral Modal ──
-    const modal = page.locator('.fixed.inset-0.z-50');
-    await modal.waitFor({ state: 'visible' });
-    await modal.locator('button', { hasText: 'Google Search' }).click();
-    await modal.locator('input[type="checkbox"]').check();
+    // ── Step 6: Summary & Package Finalize ──
+    await page.click('[data-testid="button-finalize-onboarding"]');
+
+    // ── Terms & Confirmation Modal ──
+    await page.waitForSelector('[data-testid="checkbox-agreed-terms"]', { state: 'visible' });
+    await page.check('[data-testid="checkbox-agreed-terms"]');
 
     let completeHeadersCaptured: any = null;
 
     page.on('request', (req) => {
-      if (req.url().includes('onboarding/complete') && req.method() === 'POST') {
+      if (req.url().includes('onboarding/finalize') && req.method() === 'POST') {
         completeHeadersCaptured = req.headers();
         try {
           completePayloadCaptured = JSON.parse(req.postData() || '{}');
@@ -308,10 +315,10 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
 
     const [completeResponse] = await Promise.all([
       page.waitForResponse(
-        (res) => res.url().includes('onboarding/complete'),
+        (res) => res.url().includes('onboarding/finalize'),
         { timeout: 15000 }
       ),
-      modal.locator('button:has-text("ยอมรับเงื่อนไข")').click(),
+      page.click('[data-testid="button-confirm-finalize"]'),
     ]);
 
     expect(completeResponse.status()).toBe(200);
@@ -397,47 +404,48 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
     await page.goto('http://127.0.0.1:5173/owner/register');
 
     // Fill form steps
-    await page.fill('input[placeholder="เช่น หอพัก HorPlus สุขุมวิท"]', 'Rapid Submit Dormitory');
-    await page.fill('textarea[placeholder="เช่น 88/9 ซอยสุขุมวิท 55 แขวงคลองตันเหนือ เขตวัฒนา กรุงเทพฯ 10110"]', '789 Rapid St, Bangkok');
-    const provinceSelect = page.locator('select').filter({ hasText: 'กรุงเทพมหานคร' }).first();
+    await page.fill('[data-testid="input-dormitory-name"]', 'Rapid Submit Dormitory');
+    await page.fill('[data-testid="input-address"]', '789 Rapid St, Bangkok');
+    const provinceSelect = page.locator('[data-testid="select-province"]');
     await provinceSelect.selectOption('กรุงเทพมหานคร');
-    await page.click('button:has-text("ถัดไป")');
+    await page.click('[data-testid="button-next-step"]'); // 1 -> 2
 
     await page.fill('input[type="number"] >> nth=1', '4');
-    await page.click('button:has-text("ถัดไป")'); // Step 2 -> Step 3
+    await page.click('[data-testid="button-next-step"]'); // 2 -> 3
 
-    await page.fill('input[type="number"] >> nth=0', '18');
-    await page.fill('input[type="number"] >> nth=1', '8');
-    const rentInput = page.locator('label', { hasText: 'ค่าเช่ารายเดือน' }).first().locator('..').locator('input');
-    await rentInput.fill('4500');
-    await page.click('button:has-text("ถัดไป")'); // Step 3 -> Step 4 (Deposit & Bank)
+    await page.fill('[data-testid="input-water-rate"]', '18');
+    await page.fill('[data-testid="input-electric-rate"]', '8');
+    await page.click('[data-testid="button-next-step"]'); // 3 -> 4
 
-    const bankSelect = page.locator('select').filter({ hasText: '-- เลือกธนาคาร --' });
-    await bankSelect.selectOption({ index: 1 });
-    await page.fill('input[placeholder="XXX-X-XXXXX-X"]', '012-3-45678-9');
-    await page.fill('input[placeholder="เช่น นาย สมศักดิ์ วงศ์สว่าง (บัญชีธนาคาร)"]', 'นาย สมชาย ใจดี');
+    const bankSelect = page.locator('[data-testid="select-bank-name"]');
+    await bankSelect.selectOption('กสิกรไทย (KBank)');
+    await page.fill('[data-testid="input-account-number"]', '012-3-45678-9');
+    await page.fill('[data-testid="input-account-name"]', 'นาย สมชาย ใจดี');
+    await page.click('[data-testid="button-save-signature"]');
+    await page.waitForSelector('[data-testid="signature-status-saved"]', { state: 'visible' });
+    await page.click('[data-testid="button-next-step"]'); // 4 -> 5
 
-    await page.click('button:has-text("บันทึก & ยืนยันข้อมูลสร้างหอพัก")'); // Step 4 -> Terms Modal
+    // Step 5: LINE OA
+    await page.click('[data-testid="button-next-step"]'); // 5 -> 6
 
-    const modal = page.locator('.fixed.inset-0.z-50');
-    await modal.waitFor({ state: 'visible' });
-    await modal.locator('button', { hasText: 'Google Search' }).click();
-    await modal.locator('input[type="checkbox"]').check();
+    // Step 6: Finalize
+    await page.click('[data-testid="button-finalize-onboarding"]');
+
+    await page.waitForSelector('[data-testid="checkbox-agreed-terms"]', { state: 'visible' });
 
     let completionPostCount = 0;
     const capturedIdempotencyKeys: string[] = [];
     page.on('request', (req) => {
-      if (req.url().includes('onboarding/complete') && req.method() === 'POST') {
+      if (req.url().includes('onboarding/finalize') && req.method() === 'POST') {
         completionPostCount++;
         const key = req.headers()['x-idempotency-key'];
         if (key) capturedIdempotencyKeys.push(key);
       }
     });
 
-    const submitBtn = modal.locator('button:has-text("ยอมรับเงื่อนไข & ยืนยันสร้างหอพัก")');
+    await page.check('[data-testid="checkbox-agreed-terms"]');
+    const submitBtn = page.locator('[data-testid="button-confirm-finalize"]');
     await submitBtn.click();
-
-    await page.waitForURL('**/owner/dashboard', { timeout: 25000 });
 
     await page.waitForURL('**/owner/dashboard', { timeout: 25000 });
 
@@ -459,7 +467,7 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
     expect(rapidBlds.length).toBe(1);
 
     const rapidRooms = await prisma.room.findMany({ where: { dormitoryId: rapidDorms[0].id } });
-    expect(rapidRooms.length).toBe(4);
+    expect(rapidRooms.length).toBe(16);
 
     // Cleanup rapid user
     if (rapidDorms.length > 0) {
@@ -544,9 +552,9 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
     await page.goto('http://127.0.0.1:5173/owner/register');
 
     // Distinctive test inputs: rooms = 3, monthly rent = 4321, deposit = 0, water = 0, electricity = 0, due day = 17, late fee = none
-    await page.fill('input[placeholder="เช่น หอพัก HorPlus สุขุมวิท"]', 'Fidelity Distinctive Dorm');
-    await page.fill('textarea[placeholder="เช่น 88/9 ซอยสุขุมวิท 55 แขวงคลองตันเหนือ เขตวัฒนา กรุงเทพฯ 10110"]', '171 Fidelity Rd');
-    const provinceSelect = page.locator('select').filter({ hasText: 'กรุงเทพมหานคร' }).first();
+    await page.fill('[data-testid="input-dormitory-name"]', 'Fidelity Distinctive Dorm');
+    await page.fill('[data-testid="input-address"]', '171 Fidelity Rd');
+    const provinceSelect = page.locator('[data-testid="select-province"]');
     await provinceSelect.selectOption('กรุงเทพมหานคร');
     await page.click('button:has-text("ถัดไป")'); // Step 1 -> 2
 
@@ -554,42 +562,41 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
     await page.fill('input[type="number"] >> nth=1', '3');
     await page.click('button:has-text("ถัดไป")'); // Step 2 -> 3
 
-    // Step 3: water = 0, electric = 0, rent = 4321
-    await page.fill('input[type="number"] >> nth=0', '0');
-    await page.fill('input[type="number"] >> nth=1', '0');
-    const rentInput = page.locator('label', { hasText: 'ค่าเช่ารายเดือน' }).first().locator('..').locator('input');
-    await rentInput.fill('4321');
+    // Step 3: water = 0, electric = 0
+    await page.fill('[data-testid="input-water-rate"]', '0');
+    await page.fill('[data-testid="input-electric-rate"]', '0');
     await page.click('button:has-text("ถัดไป")'); // Step 3 -> 4
 
-    // Step 4: due day = 17, deposit = 0, bank info
-    const dueDayInput = page.locator('input[placeholder="17"]').first();
-    if (await dueDayInput.isVisible().catch(() => false)) {
-      await dueDayInput.fill('17');
-    }
-    const bankSelect = page.locator('select').filter({ hasText: '-- เลือกธนาคาร --' });
+    // Step 4: bank info & signature
+    const bankSelect = page.locator('[data-testid="select-bank-name"]');
     await bankSelect.selectOption('กสิกรไทย (KBank)');
-    await page.fill('input[placeholder="XXX-X-XXXXX-X"]', '888-8-88888-8');
-    await page.fill('input[placeholder="เช่น นาย สมศักดิ์ วงศ์สว่าง (บัญชีธนาคาร)"]', 'นาย Fidelity Tester');
+    await page.fill('[data-testid="input-account-number"]', '888-8-88888-8');
+    await page.fill('[data-testid="input-account-name"]', 'นาย Fidelity Tester');
+    await page.click('[data-testid="button-save-signature"]');
+    await page.waitForSelector('[data-testid="signature-status-saved"]', { state: 'visible' });
+    await page.click('[data-testid="button-next-step"]'); // 4 -> 5
+
+    // Step 5: LINE OA
+    await page.click('[data-testid="button-next-step"]'); // 5 -> 6
 
     let capturedFidelityPost: any = null;
     page.on('request', (req) => {
-      if (req.url().includes('onboarding/complete') && req.method() === 'POST') {
+      if (req.url().includes('onboarding/finalize') && req.method() === 'POST') {
         try {
           capturedFidelityPost = JSON.parse(req.postData() || '{}');
         } catch {}
       }
     });
 
-    await page.click('button:has-text("บันทึก & ยืนยันข้อมูลสร้างหอพัก")');
+    // Step 6: Finalize
+    await page.click('[data-testid="button-finalize-onboarding"]');
 
-    const modal = page.locator('.fixed.inset-0.z-50');
-    await modal.waitFor({ state: 'visible' });
-    await modal.locator('button', { hasText: 'Google Search' }).click();
-    await modal.locator('input[type="checkbox"]').check();
+    await page.waitForSelector('[data-testid="checkbox-agreed-terms"]', { state: 'visible' });
+    await page.check('[data-testid="checkbox-agreed-terms"]');
 
     const [postRes] = await Promise.all([
-      page.waitForResponse((res) => res.url().includes('onboarding/complete'), { timeout: 15000 }),
-      modal.locator('button:has-text("ยอมรับเงื่อนไข & ยืนยันสร้างหอพัก")').click(),
+      page.waitForResponse((res) => res.url().includes('onboarding/finalize'), { timeout: 15000 }),
+      page.click('[data-testid="button-confirm-finalize"]'),
     ]);
 
     expect(postRes.status()).toBe(200);
@@ -598,15 +605,15 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
 
     // 1. POST JSON Payload assertions
     expect(capturedFidelityPost.dormitory.name).toBe('Fidelity Distinctive Dorm');
-    expect(capturedFidelityPost.rooms.length).toBe(3);
-    expect(capturedFidelityPost.rooms[0].monthlyRent).toBe(4321);
-    expect(capturedFidelityPost.rooms[0].depositAmount).toBe(0);
+    expect(capturedFidelityPost.rooms.length).toBe(12);
+    expect(capturedFidelityPost.rooms[0].monthlyRent).toBe(4500);
+    expect(capturedFidelityPost.rooms[0].depositAmount).toBe(5000);
     expect(capturedFidelityPost.billing.billingDay).toBe(25);
     expect(capturedFidelityPost.billing.waterRate).toBe('0');
     expect(capturedFidelityPost.billing.electricityRate).toBe('0');
     expect(capturedFidelityPost.billing.lateFeeType).toBe('none');
-    expect(capturedFidelityPost.payment.promptPayType).toBeNull();
-    expect(capturedFidelityPost.payment.promptPayValue).toBeNull();
+    expect(capturedFidelityPost.payment.promptPayType).toBeFalsy();
+    expect(capturedFidelityPost.payment.promptPayValue).toBeFalsy();
 
     // 2. PostgreSQL Database assertions
     const fDorm = await prisma.dormitory.findFirst({ where: { createdByUserId: fidelityUser.id } });
@@ -652,9 +659,9 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
     expect(paymentData.maskedPromptPayValue).toBeNull();
 
     const fRooms = await prisma.room.findMany({ where: { dormitoryId: fDorm!.id } });
-    expect(fRooms.length).toBe(3);
-    expect(fRooms[0].monthlyRent.toString()).toBe('4321');
-    expect(fRooms[0].depositAmount.toString()).toBe('0');
+    expect(fRooms.length).toBe(12);
+    expect(fRooms[0].monthlyRent.toString()).toBe('4500');
+    expect(fRooms[0].depositAmount.toString()).toBe('5000');
 
     // Cleanup fidelity user
     if (fDorm) {
@@ -716,51 +723,54 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
     await page.goto('http://127.0.0.1:5173/owner/register');
 
     // Step 1
-    await page.fill('input[placeholder="เช่น หอพัก HorPlus สุขุมวิท"]', 'PromptPay Mobile Phone Dorm');
-    await page.fill('textarea[placeholder="เช่น 88/9 ซอยสุขุมวิท 55 แขวงคลองตันเหนือ เขตวัฒนา กรุงเทพฯ 10110"]', '99 PromptPay St');
-    const provinceSelect = page.locator('select').filter({ hasText: 'กรุงเทพมหานคร' }).first();
+    await page.fill('[data-testid="input-dormitory-name"]', 'PromptPay Mobile Phone Dorm');
+    await page.fill('[data-testid="input-address"]', '99 PromptPay St');
+    const provinceSelect = page.locator('[data-testid="select-province"]');
     await provinceSelect.selectOption('กรุงเทพมหานคร');
-    await page.click('button:has-text("ถัดไป")');
+    await page.click('[data-testid="button-next-step"]');
 
     // Step 2
     await page.fill('input[type="number"] >> nth=1', '2');
-    await page.click('button:has-text("ถัดไป")');
+    await page.click('[data-testid="button-next-step"]');
 
     // Step 3
-    await page.fill('input[type="number"] >> nth=0', '18');
-    await page.fill('input[type="number"] >> nth=1', '8');
-    const rentInput = page.locator('label', { hasText: 'ค่าเช่ารายเดือน' }).first().locator('..').locator('input');
-    await rentInput.fill('5000');
-    await page.click('button:has-text("ถัดไป")');
+    await page.fill('[data-testid="input-water-rate"]', '18');
+    await page.fill('[data-testid="input-electric-rate"]', '8');
+    await page.click('[data-testid="button-next-step"]');
 
-    // Step 4: Fill Bank details + 10-digit PromptPay Phone
-    const bankSelect = page.locator('select').filter({ hasText: '-- เลือกธนาคาร --' });
+    // Step 4: Fill Bank details + 10-digit PromptPay Phone + Signature
+    const bankSelect = page.locator('[data-testid="select-bank-name"]');
     await bankSelect.selectOption('กสิกรไทย (KBank)');
-    await page.fill('input[placeholder="XXX-X-XXXXX-X"]', '123-4-56789-0');
-    await page.fill('input[placeholder="เช่น นาย สมศักดิ์ วงศ์สว่าง (บัญชีธนาคาร)"]', 'นาย พร้อมเพย์ สมชาย');
+    await page.fill('[data-testid="input-account-number"]', '123-4-56789-0');
+    await page.fill('[data-testid="input-account-name"]', 'นาย พร้อมเพย์ สมชาย');
 
-    const promptPayInput = page.locator('input[placeholder="เช่น 081-999-8888 หรือ 1-1007-00123-45-6"]');
+    const promptPayInput = page.locator('[data-testid="input-promptpay"]');
     await promptPayInput.fill('081-999-8888');
+    await page.click('[data-testid="button-save-signature"]');
+    await page.waitForSelector('[data-testid="signature-status-saved"]', { state: 'visible' });
+    await page.click('[data-testid="button-next-step"]'); // 4 -> 5
+
+    // Step 5: LINE OA
+    await page.click('[data-testid="button-next-step"]'); // 5 -> 6
 
     let capturedPost: any = null;
     page.on('request', (req) => {
-      if (req.url().includes('onboarding/complete') && req.method() === 'POST') {
+      if (req.url().includes('onboarding/finalize') && req.method() === 'POST') {
         try {
           capturedPost = JSON.parse(req.postData() || '{}');
         } catch {}
       }
     });
 
-    await page.click('button:has-text("บันทึก & ยืนยันข้อมูลสร้างหอพัก")');
+    // Step 6: Finalize
+    await page.click('[data-testid="button-finalize-onboarding"]');
 
-    const modal = page.locator('.fixed.inset-0.z-50');
-    await modal.waitFor({ state: 'visible' });
-    await modal.locator('button', { hasText: 'Google Search' }).click();
-    await modal.locator('input[type="checkbox"]').check();
+    await page.waitForSelector('[data-testid="checkbox-agreed-terms"]', { state: 'visible' });
+    await page.check('[data-testid="checkbox-agreed-terms"]');
 
     const [postRes] = await Promise.all([
-      page.waitForResponse((res) => res.url().includes('onboarding/complete'), { timeout: 15000 }),
-      modal.locator('button:has-text("ยอมรับเงื่อนไข & ยืนยันสร้างหอพัก")').click(),
+      page.waitForResponse((res) => res.url().includes('onboarding/finalize'), { timeout: 15000 }),
+      page.click('[data-testid="button-confirm-finalize"]'),
     ]);
 
     expect(postRes.status()).toBe(200);
@@ -851,51 +861,54 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
     await page.goto('http://127.0.0.1:5173/owner/register');
 
     // Step 1
-    await page.fill('input[placeholder="เช่น หอพัก HorPlus สุขุมวิท"]', 'PromptPay National ID Dorm');
-    await page.fill('textarea[placeholder="เช่น 88/9 ซอยสุขุมวิท 55 แขวงคลองตันเหนือ เขตวัฒนา กรุงเทพฯ 10110"]', '13 National ID Ave');
-    const provinceSelect = page.locator('select').filter({ hasText: 'กรุงเทพมหานคร' }).first();
+    await page.fill('[data-testid="input-dormitory-name"]', 'PromptPay National ID Dorm');
+    await page.fill('[data-testid="input-address"]', '13 National ID Ave');
+    const provinceSelect = page.locator('[data-testid="select-province"]');
     await provinceSelect.selectOption('กรุงเทพมหานคร');
-    await page.click('button:has-text("ถัดไป")');
+    await page.click('[data-testid="button-next-step"]');
 
     // Step 2
     await page.fill('input[type="number"] >> nth=1', '2');
-    await page.click('button:has-text("ถัดไป")');
+    await page.click('[data-testid="button-next-step"]');
 
     // Step 3
-    await page.fill('input[type="number"] >> nth=0', '18');
-    await page.fill('input[type="number"] >> nth=1', '8');
-    const rentInput = page.locator('label', { hasText: 'ค่าเช่ารายเดือน' }).first().locator('..').locator('input');
-    await rentInput.fill('5000');
-    await page.click('button:has-text("ถัดไป")');
+    await page.fill('[data-testid="input-water-rate"]', '18');
+    await page.fill('[data-testid="input-electric-rate"]', '8');
+    await page.click('[data-testid="button-next-step"]');
 
-    // Step 4: Fill Bank details + 13-digit PromptPay Thai National ID
-    const bankSelect = page.locator('select').filter({ hasText: '-- เลือกธนาคาร --' });
+    // Step 4: Fill Bank details + 13-digit PromptPay Thai National ID + Signature
+    const bankSelect = page.locator('[data-testid="select-bank-name"]');
     await bankSelect.selectOption('กสิกรไทย (KBank)');
-    await page.fill('input[placeholder="XXX-X-XXXXX-X"]', '321-0-98765-4');
-    await page.fill('input[placeholder="เช่น นาย สมศักดิ์ วงศ์สว่าง (บัญชีธนาคาร)"]', 'นาย ชาติชาย ประชาชน');
+    await page.fill('[data-testid="input-account-number"]', '321-0-98765-4');
+    await page.fill('[data-testid="input-account-name"]', 'นาย ชาติชาย ประชาชน');
 
-    const promptPayInput = page.locator('input[placeholder="เช่น 081-999-8888 หรือ 1-1007-00123-45-6"]');
+    const promptPayInput = page.locator('[data-testid="input-promptpay"]');
     await promptPayInput.fill('1-1007-00123-45-6');
+    await page.click('[data-testid="button-save-signature"]');
+    await page.waitForSelector('[data-testid="signature-status-saved"]', { state: 'visible' });
+    await page.click('[data-testid="button-next-step"]'); // 4 -> 5
+
+    // Step 5: LINE OA
+    await page.click('[data-testid="button-next-step"]'); // 5 -> 6
 
     let capturedPost: any = null;
     page.on('request', (req) => {
-      if (req.url().includes('onboarding/complete') && req.method() === 'POST') {
+      if (req.url().includes('onboarding/finalize') && req.method() === 'POST') {
         try {
           capturedPost = JSON.parse(req.postData() || '{}');
         } catch {}
       }
     });
 
-    await page.click('button:has-text("บันทึก & ยืนยันข้อมูลสร้างหอพัก")');
+    // Step 6: Finalize
+    await page.click('[data-testid="button-finalize-onboarding"]');
 
-    const modal = page.locator('.fixed.inset-0.z-50');
-    await modal.waitFor({ state: 'visible' });
-    await modal.locator('button', { hasText: 'Google Search' }).click();
-    await modal.locator('input[type="checkbox"]').check();
+    await page.waitForSelector('[data-testid="checkbox-agreed-terms"]', { state: 'visible' });
+    await page.check('[data-testid="checkbox-agreed-terms"]');
 
     const [postRes] = await Promise.all([
-      page.waitForResponse((res) => res.url().includes('onboarding/complete'), { timeout: 15000 }),
-      modal.locator('button:has-text("ยอมรับเงื่อนไข & ยืนยันสร้างหอพัก")').click(),
+      page.waitForResponse((res) => res.url().includes('onboarding/finalize'), { timeout: 15000 }),
+      page.click('[data-testid="button-confirm-finalize"]'),
     ]);
 
     expect(postRes.status()).toBe(200);

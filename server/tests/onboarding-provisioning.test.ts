@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import request from 'supertest';
 import { createApp } from '../src/app.js';
+import { SignatureStorageService } from '../src/services/signature-storage.service.js';
+import { getPrismaClient } from '../src/db/prisma.js';
 
 describe('Onboarding & Provisioning API (TASK 011)', () => {
   let app: any;
@@ -103,7 +105,25 @@ describe('Onboarding & Provisioning API (TASK 011)', () => {
     const cookies = authRes.headers['set-cookie'];
     const csrfToken = authRes.body.data.csrfToken;
 
+    // 0. Prepare provisional dormitory and save signature
+    const prepRes = await request(app)
+      .post('/api/v1/onboarding/prepare')
+      .set('Cookie', cookies)
+      .set('X-CSRF-Token', csrfToken)
+      .send({ name: 'Grand Sunrise Dormitory' });
+    expect(prepRes.status).toBe(200);
+    const provDormId = prepRes.body.data.provisionalDormitoryId;
+    const prisma = getPrismaClient();
+    const sigService = new SignatureStorageService(prisma);
+    const validPngBuffer = Buffer.from([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+      0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+    ]);
+    const userId = prepRes.body.data.userId || authRes.body.data.userId || authRes.body.data.user?.id;
+    await sigService.saveSignature({ dormitoryId: provDormId, userId, buffer: validPngBuffer });
+
     const payload = {
+      provisionalDormitoryId: provDormId,
       dormitory: {
         name: 'Grand Sunrise Dormitory',
         type: 'apartment',
@@ -167,14 +187,28 @@ describe('Onboarding & Provisioning API (TASK 011)', () => {
     expect(conflictRes.body.error.code).toBe('IDEMPOTENCY_KEY_REUSED');
 
     // 4. FREE Plan Limit Enforcement (Attempting 2nd FREE plan dormitory -> 409)
+    const prepRes2 = await request(app)
+      .post('/api/v1/onboarding/prepare')
+      .set('Cookie', cookies)
+      .set('X-CSRF-Token', csrfToken)
+      .send({ name: 'Second FREE Dormitory' });
+    const provDormId2 = prepRes2.body.data?.provisionalDormitoryId;
+    if (provDormId2) {
+      const userId2 = prepRes2.body.data.userId || authRes.body.data.userId || authRes.body.data.user?.id;
+      await sigService.saveSignature({ dormitoryId: provDormId2, userId: userId2, buffer: validPngBuffer });
+    }
+
     const secondFreeRes = await request(app)
       .post('/api/v1/onboarding/complete')
       .set('Cookie', cookies)
       .set('X-CSRF-Token', csrfToken)
       .set('X-Idempotency-Key', 'idemp-test-002')
       .send({
-        ...payload,
+        provisionalDormitoryId: provDormId2,
         dormitory: { ...payload.dormitory, name: 'Second FREE Dormitory' },
+        billing: payload.billing,
+        payment: payload.payment,
+        planCode: 'FREE',
       });
 
     expect(secondFreeRes.status).toBe(409);

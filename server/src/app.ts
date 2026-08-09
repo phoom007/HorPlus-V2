@@ -87,7 +87,6 @@ export function createApp(optionsOrAuth?: CreateAppOptions | AuthenticationServi
     console.warn('Property repository mode: IN_MEMORY (This must not be seen in production or browser tests)');
   } else {
     console.log('Property repository mode: PRISMA_POSTGRESQL');
-    subscriptionEntitlementService.ensureSeeded().catch(() => {});
   }
 
   // Repositories

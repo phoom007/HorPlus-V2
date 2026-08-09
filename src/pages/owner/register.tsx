@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { 
   Building2, 
   User, 
@@ -13,31 +13,27 @@ import {
   AlertCircle, 
   Plus, 
   Trash2, 
-  Send, 
   Zap, 
   Droplet, 
   Wifi, 
   Sparkles, 
-  HelpCircle, 
   ArrowRight, 
   ArrowLeft, 
   Save, 
   Check, 
-  RefreshCw, 
-  Info, 
-  Users, 
-  SlidersHorizontal, 
-  Edit3, 
   X, 
   Building as BuildingIcon,
-  Share2,
-  Search,
-  Video,
-  Megaphone,
-  MessageSquare
+  MessageSquare,
+  PenTool,
+  Upload,
+  RefreshCw,
+  Info,
+  CheckCircle,
+  Clock,
+  HelpCircle,
+  Users
 } from 'lucide-react';
 import { onboardingClient, CompleteOnboardingPayload } from '../../data/onboardingClient';
-import { Dormitory, Building, Room } from '../../types';
 
 interface RegisterProps {
   onAddLog?: (action: string, details: string, module: string, targetId?: string) => void;
@@ -52,2000 +48,1241 @@ const BANK_OPTIONS = [
   'กรุงศรีอยุธยา (Krungsri)',
   'ทหารไทยธนชาต (ttb)',
   'ยูโอบี (UOB)',
-  'ซีไอเอ็มบี ไทย (CIMB Thai)',
-  'แลนด์ แอนด์ เฮ้าส์ (LH Bank)',
-  'เกียรตินาคินภัทร (KKP)',
-  'ทิสโก้ (TISCO)',
-  'ไอซีบีซี (ICBC Thai)',
-  'ออมสิน (GSBk)',
+  'ออมสิน (GSB)',
   'ธ.ก.ส. (BAAC)',
-  'ธอส. (GH Bank)',
-  'อิสลามแห่งประเทศไทย (IBANK)'
 ];
 
 const PROVINCE_OPTIONS = [
-  'กรุงเทพมหานคร', 'กระบี่', 'กาญจนบุรี', 'กาฬสินธุ์', 'กำแพงเพชร', 'ขอนแก่น', 'จันทบุรี', 'ฉะเชิงเทรา',
-  'ชลบุรี', 'ชัยนาท', 'ชัยภูมิ', 'ชุมพร', 'เชียงราย', 'เชียงใหม่', 'ตรัง', 'ตราด', 'ตาก', 'นครนายก',
-  'นครปฐม', 'นครพนม', 'นครราชสีมา', 'นครศรีธรรมราช', 'นครสวรรค์', 'นนทบุรี', 'นราธิวาส', 'น่าน',
-  'บึงกาฬ', 'บุรีรัมย์', 'ปทุมธานี', 'ประจวบคีรีขันธ์', 'ปราจีนบุรี', 'ปัตตานี', 'พระนครศรีอยุธยา', 'พะเยา',
-  'พังงา', 'พัทลุง', 'พิจิตร', 'พิษณุโลก', 'เพชรบุรี', 'เพชรบูรณ์', 'แพร่', 'ภูเก็ต', 'มหาสารคาม',
-  'มุกดาหาร', 'แม่ฮ่องสอน', 'ยโสธร', 'ยะลา', 'ร้อยเอ็ด', 'ระนอง', 'ระยอง', 'ราชบุรี', 'ลพบุรี',
-  'ลำปาง', 'ลำพูน', 'เลย', 'ศรีสะเกษ', 'สกลนคร', 'สงขลา', 'สตูล', 'สมุทรปราการ', 'สมุทรสงคราม',
-  'สมุทรสาคร', 'สระแก้ว', 'สระบุรี', 'สิงห์บุรี', 'สุโขทัย', 'สุพรรณบุรี', 'สุราษฎร์ธานี', 'สุรินทร์',
-  'หนองคาย', 'หนองบัวลำภู', 'อ่างทอง', 'อำนาจเจริญ', 'อุดรธานี', 'อุตรดิตถ์', 'อุทัยธานี', 'อุบลราชธานี'
+  'กรุงเทพมหานคร', 'เชียงใหม่', 'ชลบุรี', 'ขอนแก่น', 'นครราชสีมา', 'นนทบุรี', 'ปทุมธานี', 'สมุทรปราการ', 'ภูเก็ต', 'สงขลา'
 ];
 
-const DORM_TYPE_OPTIONS = [
-  'หอพักนักเรียน/นักศึกษา',
-  'อพาร์ตเมนต์',
-  'คอนโดมิเนียม',
-  'โรงแรม',
-  'บ้านเช่า',
-  'Co-Living',
-  'อื่นๆ'
+const REFERRAL_OPTIONS = [
+  { id: 'facebook', label: 'Facebook / Social Media', icon: MessageSquare },
+  { id: 'google', label: 'Google Search', icon: HelpCircle },
+  { id: 'friend', label: 'เพื่อน / คนรู้จักแนะนำ', icon: Users },
+  { id: 'other', label: 'อื่นๆ', icon: Sparkles }
 ];
 
-const GENDER_TYPE_OPTIONS = [
-  { id: 'รวม', label: 'หอพักรวม', desc: 'เปิดรับทุกเพศ' },
-  { id: 'ชาย', label: 'หอพักชาย', desc: 'ผู้พักชายเท่านั้น' },
-  { id: 'หญิง', label: 'หอพักหญิง', desc: 'ผู้พักหญิงเท่านั้น' }
-];
-
-// Formatting helpers for Phone, ID Card, and Bank Account
-const formatPhone = (val: string) => {
-  const digits = val.replace(/\D/g, '').slice(0, 10);
-  if (digits.length <= 3) return digits;
-  if (digits.length <= 6) return `${digits.slice(0, 3)}-${digits.slice(3)}`;
-  return `${digits.slice(0, 3)}-${digits.slice(3, 6)}-${digits.slice(6)}`;
-};
-
-const formatIdCard = (val: string) => {
-  const digits = val.replace(/\D/g, '').slice(0, 13);
-  if (digits.length <= 1) return digits;
-  if (digits.length <= 5) return `${digits.slice(0, 1)}-${digits.slice(1)}`;
-  if (digits.length <= 10) return `${digits.slice(0, 1)}-${digits.slice(1, 5)}-${digits.slice(5)}`;
-  if (digits.length <= 12) return `${digits.slice(0, 1)}-${digits.slice(1, 5)}-${digits.slice(5, 10)}-${digits.slice(10)}`;
-  return `${digits.slice(0, 1)}-${digits.slice(1, 5)}-${digits.slice(5, 10)}-${digits.slice(10, 12)}-${digits.slice(12)}`;
-};
-
-const formatBankAccount = (val: string) => {
-  const digits = val.replace(/\D/g, '').slice(0, 10);
-  if (digits.length <= 3) return digits;
-  if (digits.length <= 4) return `${digits.slice(0, 3)}-${digits.slice(3)}`;
-  if (digits.length <= 9) return `${digits.slice(0, 3)}-${digits.slice(3, 4)}-${digits.slice(4)}`;
-  return `${digits.slice(0, 3)}-${digits.slice(3, 4)}-${digits.slice(4, 9)}-${digits.slice(9)}`;
-};
-
-// 10 Preset Dormitory Rules for Quick Insertion
 export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate }) => {
   const [currentStep, setCurrentStep] = useState(1);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSavedSuccess, setIsSavedSuccess] = useState(false);
-  const [saveProgress, setSaveProgress] = useState(0);
   const [validationError, setValidationError] = useState<string | null>(null);
-  const [manualInputs, setManualInputs] = useState<{ [bId: string]: string }>({});
 
-  // Terms Modal & Referral Source states
+  // Provisional State
+  const [provisionalDormitoryId, setProvisionalDormitoryId] = useState<string | null>(null);
+  const [webhookUrl, setWebhookUrl] = useState<string | null>(null);
+
+  // Step 4: Signature States
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [isDrawing, setIsDrawing] = useState(false);
+  const [signatureSaved, setSignatureSaved] = useState(false);
+  const [signatureUploading, setSignatureUploading] = useState(false);
+
+  // Step 5: LINE OA States
+  const [lineChannelId, setLineChannelId] = useState('');
+  const [lineChannelSecret, setLineChannelSecret] = useState('');
+  const [lineOaId, setLineOaId] = useState('');
+  const [lineVerifying, setLineVerifying] = useState(false);
+  const [lineStatus, setLineStatus] = useState<{
+    credentialsVerified: boolean;
+    webhookEndpointSet: boolean;
+    webhookTestSucceeded: boolean;
+    webhookActive: boolean;
+    isReady: boolean;
+  }>({
+    credentialsVerified: false,
+    webhookEndpointSet: false,
+    webhookTestSucceeded: false,
+    webhookActive: false,
+    isReady: false,
+  });
+
+  // Step 6: Plan & Promo States
+  const [selectedPlan, setSelectedPlan] = useState<'FREE' | 'PRO'>('FREE');
+  const [selectedPackageId, setSelectedPackageId] = useState<string | undefined>(undefined);
+  const [promoCodeInput, setPromoCodeInput] = useState('');
+  const [promoResult, setPromoResult] = useState<{ valid: boolean; message: string; bonusDays?: number } | null>(null);
+
+  // Terms Modal State
   const [showTermsModal, setShowTermsModal] = useState(false);
   const [agreedTerms, setAgreedTerms] = useState(false);
-  const [referralSource, setReferralSource] = useState('');
+  const [referralSource, setReferralSource] = useState('facebook');
   const [referralOtherText, setReferralOtherText] = useState('');
 
-  // Room editing states
-  const [editingRoom, setEditingRoom] = useState<{ bIdx: number; oldRoom: string; newRoom: string } | null>(null);
-  const [bulkEditingBuildingIdx, setBulkEditingBuildingIdx] = useState<number | null>(null);
-  const [bulkRoomsInputText, setBulkRoomsInputText] = useState<string>('');
-
-  // Helper to generate room numbers list
-  const getGeneratedRooms = (b: {
-    totalFloors: number;
-    roomsPerFloor: number;
-    roomPrefix: string;
-    formatPattern: string;
-    mode: 'auto' | 'manual';
-    customRooms?: string[];
-  }) => {
-    if (b.customRooms && b.customRooms.length === 1 && b.customRooms[0] === '__EMPTY__') {
-      return [];
+  // Form Data State
+  const [formData, setFormData] = useState({
+    dormitoryName: '',
+    dormitoryType: 'อพาร์ตเมนต์',
+    ownerName: '',
+    phone: '',
+    email: '',
+    address: '',
+    province: 'กรุงเทพมหานคร',
+    postalCode: '10110',
+    buildings: [
+      {
+        id: 'bld-1',
+        name: 'อาคาร A',
+        roomPrefix: 'A',
+        floorsCount: 4,
+        roomsPerFloor: 5,
+        monthlyRent: 4500,
+        securityDeposit: 5000,
+      }
+    ],
+    utilities: {
+      waterRate: 18,
+      waterBillingMode: 'unit',
+      electricRate: 7,
+      electricBillingMode: 'unit',
+      commonFeeRate: 0,
+      commonFeeMode: 'free',
+      internetRate: 0,
+      internetFeeMode: 'free',
+      parkingFeeRate: 0,
+      parkingFeeMode: 'free',
+    },
+    paymentAccount: {
+      bankName: 'กสิกรไทย (KBank)',
+      accountNumber: '',
+      accountName: '',
+      promptPayId: '',
+    },
+    deposits: {
+      dueDateDay: 5,
+      lateFeeType: 'none',
+      lateFeeAmount: 0,
     }
+  });
 
-    if (b.mode === 'manual' && b.customRooms && b.customRooms.length > 0) {
-      return b.customRooms.filter(r => r !== '__EMPTY__');
-    }
-
-    if (b.mode === 'auto' && b.customRooms && b.customRooms.length > 0) {
-      return b.customRooms.filter(r => r !== '__EMPTY__');
-    }
-
-    const rooms: string[] = [];
-    const prefix = b.roomPrefix ? b.roomPrefix.trim() : '';
-
-    for (let floor = 1; floor <= (b.totalFloors || 0); floor++) {
-      for (let rm = 1; rm <= (b.roomsPerFloor || 0); rm++) {
-        const rmStr = rm < 10 ? `0${rm}` : `${rm}`;
-        let roomNum = '';
-
-        switch (b.formatPattern) {
-          case 'prefix_floor_room': // A101
-            roomNum = `${prefix}${floor}${rmStr}`;
-            break;
-          case 'floor_room': // 101
-            roomNum = `${floor}${rmStr}`;
-            break;
-          case 'prefix_floor_slash_room': // A1/1
-            roomNum = `${prefix}${floor}/${rm}`;
-            break;
-          case 'floor_slash_room': // 1/1
-            roomNum = `${floor}/${rm}`;
-            break;
-          case 'prefix_dash_floor_room': // A-101
-            roomNum = `${prefix ? prefix + '-' : ''}${floor}${rmStr}`;
-            break;
-          default:
-            roomNum = `${prefix}${floor}${rmStr}`;
-        }
-        rooms.push(roomNum);
+  // Setup HTML5 Canvas for Signature
+  useEffect(() => {
+    if (currentStep === 4 && canvasRef.current) {
+      const canvas = canvasRef.current;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.strokeStyle = '#1e293b';
+        ctx.lineWidth = 2.5;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
       }
     }
-    return rooms;
+  }, [currentStep]);
+
+  // Handle Canvas Drawing
+  const startDrawing = (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
+    setIsDrawing(true);
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const rect = canvas.getBoundingClientRect();
+    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
+    const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
+    ctx?.beginPath();
+    ctx?.moveTo(clientX - rect.left, clientY - rect.top);
   };
 
-  // Load existing configuration or defaults from localStorage
-  // Initialize clean, neutral form state for authenticated Owner onboarding
-  const getInitialForm = () => {
-    return {
-      // 1. Dorm Info (Clean neutral defaults)
-      dormName: '',
-      dormAddress: '',
-      province: '',
-      dormType: 'อพาร์ตเมนต์',
-      genderType: 'รวม',
-
-      // 2. Flexible Structure (Starter building requiring explicit topology & rent)
-      buildings: [
-        {
-          id: 'b-1',
-          name: 'อาคาร A',
-          totalFloors: 1,
-          roomsPerFloor: 0,
-          hasElevator: false,
-          roomPrefix: 'A',
-          formatPattern: 'prefix_floor_room',
-          mode: 'auto' as 'auto' | 'manual',
-          customRooms: [] as string[],
-          securityDeposit: 0,
-          rentRates: {
-            monthly: 0,
-            term: 0,
-            termMonths: 1,
-            daily: 0,
-            maxOccupants: 2
-          }
-        }
-      ],
-
-      // 3. Utilities & Service Rates (Requiring explicit configuration)
-      utilities: {
-        waterBillingMode: 'unit',
-        waterRate: 0,
-
-        electricBillingMode: 'unit',
-        electricRate: 0,
-
-        commonFeeMode: 'none',
-        commonFeeRate: 0,
-
-        internetFeeMode: 'none',
-        internetRate: 0,
-
-        parkingFeeMode: 'none',
-        parkingFeeRate: 0
-      },
-
-      // 4. Deposits, Late Fees & Payment Account (Default disabled late fee)
-      deposits: {
-        securityDeposit: 0,
-        advanceRentMonths: 1,
-        dueDateDay: 5,
-        gracePeriodDays: 0,
-        lateFeeType: 'none',
-        lateFeeAmount: 0
-      },
-
-      paymentAccount: {
-        bankName: '',
-        accountNumber: '',
-        accountName: '',
-        bankAccountName: '',
-        promptPayId: ''
-      }
-    };
+  const draw = (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
+    if (!isDrawing) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const rect = canvas.getBoundingClientRect();
+    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
+    const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
+    ctx?.lineTo(clientX - rect.left, clientY - rect.top);
+    ctx?.stroke();
   };
 
-  const [formData, setFormData] = useState(getInitialForm());
-
-
-  const handleAddBuilding = () => {
-    const newBuilding = {
-      id: `b-${Date.now()}`,
-      name: `อาคาร `,
-      totalFloors: 1,
-      roomsPerFloor: 0,
-      hasElevator: false,
-      roomPrefix: '',
-      formatPattern: 'prefix_floor_room',
-      mode: 'auto' as 'auto' | 'manual',
-      customRooms: [] as string[],
-      securityDeposit: 0,
-      rentRates: {
-        monthly: 0,
-        term: 0,
-        termMonths: 1,
-        daily: 0,
-        maxOccupants: 2
-      }
-    };
-    setFormData(prev => ({ ...prev, buildings: [newBuilding, ...prev.buildings] }));
+  const stopDrawing = () => {
+    setIsDrawing(false);
   };
 
-  const handleRemoveBuilding = (id: string) => {
-    if (formData.buildings.length <= 1) return;
-    setFormData(prev => ({ ...prev, buildings: prev.buildings.filter(b => b.id !== id) }));
+  const clearCanvas = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    ctx?.clearRect(0, 0, canvas.width, canvas.height);
+    setSignatureSaved(false);
   };
 
-  const handleRemoveSingleRoom = (bIdx: number, roomNum: string) => {
-    const updated = [...formData.buildings];
-    const b = updated[bIdx];
-    const currentList = getGeneratedRooms(b);
-    const filtered = currentList.filter(r => r !== roomNum);
-    b.customRooms = filtered.length === 0 ? ['__EMPTY__'] : filtered;
-    setFormData({ ...formData, buildings: updated });
-  };
-
-  const handleAddManualRooms = (bIdx: number) => {
-    const b = formData.buildings[bIdx];
-    const text = manualInputs[b.id] || '';
-    if (!text.trim()) return;
-
-    const parsed = text.split(/[\s,]+/).map(s => s.trim()).filter(Boolean);
-    if (parsed.length === 0) return;
-
-    const updated = [...formData.buildings];
-    const existing = b.customRooms && b.customRooms.length > 0 ? b.customRooms.filter(r => r !== '__EMPTY__') : getGeneratedRooms(b);
-    const combined = Array.from(new Set([...existing, ...parsed]));
-    updated[bIdx].customRooms = combined;
-    setFormData({ ...formData, buildings: updated });
-    setManualInputs(prev => ({ ...prev, [b.id]: '' }));
-  };
-
-  const handleOpenBulkEdit = (bIdx: number) => {
-    const b = formData.buildings[bIdx];
-    const roomList = getGeneratedRooms(b);
-    setBulkEditingBuildingIdx(bIdx);
-    setBulkRoomsInputText(roomList.join(', '));
-  };
-
-  const handleResetBuildingRooms = (bIdx: number) => {
-    const updated = [...formData.buildings];
-    updated[bIdx].customRooms = [];
-    setFormData({ ...formData, buildings: updated });
-    setBulkEditingBuildingIdx(null);
-  };
-
-  const handleSaveBulkEdit = (bIdx: number) => {
-    const text = bulkRoomsInputText || '';
-    const parsed = text.split(/[\s,]+/).map(s => s.trim()).filter(Boolean);
-    const updated = [...formData.buildings];
-    updated[bIdx].customRooms = parsed.length === 0 ? ['__EMPTY__'] : parsed;
-    setFormData({ ...formData, buildings: updated });
-    setBulkEditingBuildingIdx(null);
-    setBulkRoomsInputText('');
-  };
-
-  const handleSaveSingleRoomEdit = () => {
-    if (!editingRoom) return;
-    const { bIdx, oldRoom, newRoom } = editingRoom;
-    const trimmed = newRoom.trim();
-    if (!trimmed) {
-      setEditingRoom(null);
-      return;
-    }
-
-    const b = formData.buildings[bIdx];
-    const currentList = getGeneratedRooms(b);
-    const updatedList = currentList.map(r => (r === oldRoom ? trimmed : r));
-
-    const updated = [...formData.buildings];
-    updated[bIdx].customRooms = updatedList;
-    setFormData({ ...formData, buildings: updated });
-    setEditingRoom(null);
-  };
-
-  const validateStep = (stepNum: number): { valid: boolean; error?: string } => {
-    if (stepNum === 1) {
-      if (!formData.dormName || !formData.dormName.trim()) {
-        return { valid: false, error: 'กรุณากรอก "ชื่อหอพัก / อพาร์ตเมนต์"' };
-      }
-      if (!formData.dormAddress || !formData.dormAddress.trim()) {
-        return { valid: false, error: 'กรุณากรอก "ที่อยู่หอพัก"' };
-      }
-      if (!formData.province || !formData.province.trim()) {
-        return { valid: false, error: 'กรุณาเลือก "จังหวัด"' };
-      }
-      if (!formData.dormType || !formData.dormType.trim()) {
-        return { valid: false, error: 'กรุณาเลือก "ประเภทที่พัก"' };
-      }
-      if (!formData.genderType || !formData.genderType.trim()) {
-        return { valid: false, error: 'กรุณาเลือก "ประเภทผู้พัก / เพศของหอพัก"' };
-      }
-    }
-
-    if (stepNum === 2) {
-      if (!formData.buildings || formData.buildings.length === 0) {
-        return { valid: false, error: 'กรุณาเพิ่มอาคารอย่างน้อย 1 อาคาร' };
-      }
-      for (let i = 0; i < formData.buildings.length; i++) {
-        const b = formData.buildings[i];
-        const bLabel = b.roomPrefix ? `อาคาร ${b.roomPrefix}` : (b.name || `อาคารที่ ${i + 1}`);
-
-        if (b.mode === 'auto') {
-          if (!b.totalFloors || b.totalFloors <= 0) {
-            return { valid: false, error: `กรุณากรอก "จำนวนชั้น" ของ ${bLabel} ให้ถูกต้อง (ต้องมากกว่า 0)` };
-          }
-          if (!b.roomsPerFloor || b.roomsPerFloor <= 0) {
-            return { valid: false, error: `กรุณากรอก "ห้องต่อชั้น" ของ ${bLabel} ให้ถูกต้อง (ต้องมากกว่า 0)` };
-          }
-        }
-
-        const rooms = getGeneratedRooms(b);
-        if (rooms.length === 0) {
-          return { valid: false, error: `${bLabel} ยังไม่มีเลขห้องพัก กรุณาสร้างอัตโนมัติหรือระบุเลขห้อง` };
-        }
-      }
-    }
-
-    if (stepNum === 3) {
-      // Check utilities rates
-      if (isNaN(formData.utilities.waterRate) || formData.utilities.waterRate < 0) {
-        return { valid: false, error: 'กรุณากรอก "ค่าน้ำประปา" ให้ถูกต้อง (ต้องเป็นตัวเลข >= 0)' };
-      }
-      if (isNaN(formData.utilities.electricRate) || formData.utilities.electricRate < 0) {
-        return { valid: false, error: 'กรุณากรอก "ค่าไฟฟ้า" ให้ถูกต้อง (ต้องเป็นตัวเลข >= 0)' };
-      }
-      if (formData.utilities.commonFeeMode !== 'free' && formData.utilities.commonFeeMode !== 'none') {
-        if (isNaN(formData.utilities.commonFeeRate) || formData.utilities.commonFeeRate < 0) {
-          return { valid: false, error: 'กรุณากรอก "ค่าส่วนกลาง" ให้ถูกต้อง (ต้องเป็นตัวเลข >= 0)' };
-        }
-      }
-      if (formData.utilities.internetFeeMode !== 'free' && formData.utilities.internetFeeMode !== 'none') {
-        if (isNaN(formData.utilities.internetRate) || formData.utilities.internetRate < 0) {
-          return { valid: false, error: 'กรุณากรอก "ค่าอินเทอร์เน็ต" ให้ถูกต้อง (ต้องเป็นตัวเลข >= 0)' };
-        }
-      }
-      if (formData.utilities.parkingFeeMode !== 'free') {
-        if (isNaN(formData.utilities.parkingFeeRate) || formData.utilities.parkingFeeRate < 0) {
-          return { valid: false, error: 'กรุณากรอก "ค่าจอดรถ" ให้ถูกต้อง (ต้องเป็นตัวเลข >= 0)' };
-        }
-      }
-
-      // Check building rent rates
-      for (let i = 0; i < formData.buildings.length; i++) {
-        const b = formData.buildings[i];
-        const bLabel = b.roomPrefix ? `อาคาร ${b.roomPrefix}` : (b.name || `อาคารที่ ${i + 1}`);
-        const rates = b.rentRates;
-
-        if (!rates || isNaN(rates.monthly) || rates.monthly <= 0) {
-          return { valid: false, error: `กรุณากรอก "ค่าเช่ารายเดือน" ของ ${bLabel} ให้ถูกต้อง (ต้องมากกว่า 0)` };
-        }
-        if (isNaN(rates.daily) || rates.daily < 0) {
-          return { valid: false, error: `กรุณากรอก "ค่าเช่ารายวัน" ของ ${bLabel} ให้ถูกต้อง` };
-        }
-        if (!rates.maxOccupants || rates.maxOccupants <= 0) {
-          return { valid: false, error: `กรุณากรอก "จำนวนผู้เข้าพักสูงสุด" ของ ${bLabel} ให้ถูกต้อง (อย่างน้อย 1 คน)` };
-        }
-        if (rates.term !== undefined && (isNaN(rates.term) || rates.term < 0)) {
-          return { valid: false, error: `กรุณากรอก "ค่าเช่ารายเทอม" ของ ${bLabel} ให้ถูกต้อง` };
-        }
-        if (rates.termMonths !== undefined && rates.termMonths <= 0) {
-          return { valid: false, error: `กรุณากรอก "ระยะเวลาเทอม" ของ ${bLabel} ให้ถูกต้อง (อย่างน้อย 1 เดือน)` };
-        }
-      }
-    }
-
-    if (stepNum === 4) {
-      // Check security deposit per building
-      for (let i = 0; i < formData.buildings.length; i++) {
-        const b = formData.buildings[i];
-        const bLabel = b.roomPrefix ? `อาคาร ${b.roomPrefix}` : (b.name || `อาคารที่ ${i + 1}`);
-        const deposit = b.securityDeposit !== undefined ? b.securityDeposit : formData.deposits.securityDeposit;
-        if (deposit === undefined || isNaN(deposit) || deposit < 0) {
-          return { valid: false, error: `กรุณากรอก "ค่าประกันความเสียหาย" ของ ${bLabel} ให้ถูกต้อง` };
-        }
-      }
-
-      // Check due date day & late fee
-      if (!formData.deposits.dueDateDay || formData.deposits.dueDateDay < 1 || formData.deposits.dueDateDay > 31) {
-        return { valid: false, error: 'กรุณาเลือก "วันครบกำหนดชำระ"' };
-      }
-      if (formData.deposits.lateFeeType !== 'none') {
-        if (isNaN(formData.deposits.lateFeeAmount) || formData.deposits.lateFeeAmount < 0) {
-          return { valid: false, error: 'กรุณากรอก "อัตราค่าปรับ" ให้ถูกต้อง' };
-        }
-      }
-
-      // Check payment account details
-      if (!formData.paymentAccount.bankName) {
-        return { valid: false, error: 'กรุณาเลือก "ธนาคารที่รับโอน"' };
-      }
-      if (!formData.paymentAccount.accountNumber || !formData.paymentAccount.accountNumber.trim()) {
-        return { valid: false, error: 'กรุณากรอก "เลขที่บัญชีธนาคาร"' };
-      }
-      const cleanAcc = formData.paymentAccount.accountNumber.replace(/\D/g, '');
-      if (cleanAcc.length < 8) {
-        return { valid: false, error: 'กรุณากรอก "เลขที่บัญชีธนาคาร" ให้ครบถ้วน (อย่างน้อย 8 หลัก)' };
-      }
-      const bankAccName = formData.paymentAccount.bankAccountName || formData.paymentAccount.accountName;
-      if (!bankAccName || !bankAccName.trim()) {
-        return { valid: false, error: 'กรุณากรอก "ชื่อบัญชีธนาคาร"' };
-      }
-
-      // PromptPay checks (if PromptPay ID is entered)
-      if (formData.paymentAccount.promptPayId && formData.paymentAccount.promptPayId.trim()) {
-        const cleanPP = formData.paymentAccount.promptPayId.replace(/\D/g, '');
-        if (cleanPP.length !== 10 && cleanPP.length !== 13) {
-          return { valid: false, error: 'กรุณากรอก "เลขพร้อมเพย์" ให้ถูกต้อง (เบอร์โทร 10 หลัก หรือ เลขบัตรประชาชน 13 หลัก)' };
-        }
-      }
-    }
-
-    return { valid: true };
-  };
-
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [activeIdempotencyKey, setActiveIdempotencyKey] = useState('');
-
-  const handleNextStep = () => {
-    const check = validateStep(currentStep);
-    if (!check.valid) {
-      setValidationError(check.error || 'กรุณากรอกข้อมูลให้ครบถ้วน');
-      return;
-    }
-    setValidationError(null);
-    setCurrentStep(prev => Math.min(prev + 1, 4));
-  };
-
-  const handleStepClick = (stepNum: number) => {
-    if (stepNum > currentStep) {
-      for (let s = currentStep; s < stepNum; s++) {
-        const check = validateStep(s);
-        if (!check.valid) {
-          setValidationError(check.error || 'กรุณากรอกข้อมูลให้ครบถ้วนก่อนสลับขั้นตอน');
-          return;
-        }
-      }
-    }
-    setValidationError(null);
-    setCurrentStep(stepNum);
-  };
-
-  const handleSaveRegistration = () => {
-    const check = validateStep(currentStep);
-    if (!check.valid) {
-      setValidationError(check.error || 'กรุณากรอกข้อมูลให้ครบถ้วนก่อนบันทึก');
-      return;
-    }
-    setValidationError(null);
-    if (!activeIdempotencyKey) {
-      setActiveIdempotencyKey(`onb_comp_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`);
-    }
-    setShowTermsModal(true);
-  };
-
-  const handleConfirmTermsAndComplete = async () => {
-    if (isSubmitting) return;
-    if (!agreedTerms) {
-      setValidationError('กรุณากดยินยอมรับเงื่อนไขและข้อบังคับก่อนดำเนินการต่อ');
-      return;
-    }
-    if (!referralSource) {
-      setValidationError('กรุณาเลือกช่องทางที่คุณรู้จัก HorPlus');
-      return;
-    }
-    if (referralSource === 'other' && !referralOtherText.trim()) {
-      setValidationError('กรุณาระบุช่องทางอื่นๆ ที่รู้จัก HorPlus');
-      return;
-    }
-
-    setValidationError(null);
-    setIsSubmitting(true);
+  // Prepare Provisional Dormitory before Step 4
+  const ensureProvisionalDormitory = async () => {
+    if (provisionalDormitoryId) return provisionalDormitoryId;
     try {
-      const finalSource = referralSource === 'other' ? `อื่นๆ (${referralOtherText.trim()})` : referralSource;
-      const keyToUse = activeIdempotencyKey || `onb_comp_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+      const res = await onboardingClient.prepare({
+        name: formData.dormitoryName || 'หอพักใหม่',
+        addressLine1: formData.address,
+        province: formData.province,
+      });
+      const dormId = res.data?.provisionalDormitoryId || res.provisionalDormitoryId;
+      const webUrl = res.data?.webhookUrl || res.webhookUrl;
+      setProvisionalDormitoryId(dormId);
+      if (webUrl) setWebhookUrl(webUrl);
+      return dormId;
+    } catch (err: any) {
+      setValidationError(err.message || 'ไม่สามารถเตรียมข้อมูลหอพักชั่วคราวได้');
+      return null;
+    }
+  };
 
-      // Prepare generated rooms list for real backend provisioning
-      const generatedRoomsPayload: any[] = [];
+  // Upload Signature
+  const handleSaveSignature = async () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
 
-      formData.buildings.forEach((b, bIdx) => {
-        const bId = b.id || `bld-${bIdx + 1}`;
-        const roomNumbers = getGeneratedRooms(b);
-        const rentRates = b.rentRates || { monthly: 0, term: 0, daily: 0 };
-        const securityDeposit = b.securityDeposit !== undefined ? b.securityDeposit : (formData.deposits.securityDeposit ?? 0);
+    const dormId = await ensureProvisionalDormitory();
+    if (!dormId) return;
 
-        roomNumbers.forEach((rNum) => {
-          const digitsOnly = rNum.replace(/\D/g, '');
-          const calculatedFloor = digitsOnly ? (parseInt(digitsOnly.charAt(0)) || 1) : 1;
+    setSignatureUploading(true);
+    setValidationError(null);
 
-          generatedRoomsPayload.push({
-            buildingId: bId,
-            roomNumber: rNum,
-            floor: calculatedFloor,
-            monthlyRent: rentRates.monthly ?? 0,
-            depositAmount: securityDeposit ?? 0,
-            parkingFee: formData.utilities.parkingFeeRate ?? 0,
-            maximumOccupants: rentRates.maxOccupants ?? 2,
-            initialWaterReading: 0,
-            initialElectricityReading: 0,
-            status: 'vacant',
-          });
-        });
+    canvas.toBlob(async (blob) => {
+      if (!blob) {
+        setSignatureUploading(false);
+        setValidationError('ไม่สามารถสร้างรูปภาพลายเซ็นได้');
+        return;
+      }
+
+      const file = new File([blob], 'signature.png', { type: 'image/png' });
+      const fd = new FormData();
+      fd.append('file', file);
+
+      try {
+        await onboardingClient.uploadSignature(dormId, fd);
+        setSignatureSaved(true);
+        setValidationError(null);
+      } catch (err: any) {
+        setValidationError(err.message || 'เกิดข้อผิดพลาดในการบันทึกลายเซ็น');
+      } finally {
+        setSignatureUploading(false);
+      }
+    }, 'image/png');
+  };
+
+  // Handle LINE Credentials Update
+  const handleSaveLineCredentials = async () => {
+    if (!lineChannelId.trim() || !lineChannelSecret.trim()) {
+      setValidationError('กรุณากรอก Channel ID และ Channel Secret');
+      return;
+    }
+
+    const dormId = await ensureProvisionalDormitory();
+    if (!dormId) return;
+
+    setLineVerifying(true);
+    setValidationError(null);
+
+    try {
+      const res = await onboardingClient.updateLineConfig(dormId, {
+        channelId: lineChannelId.trim(),
+        channelSecret: lineChannelSecret.trim(),
+        lineOaId: lineOaId.trim() || undefined,
       });
 
-      const rawPromptPayDigits = (formData.paymentAccount.promptPayId || '').replace(/\D/g, '');
-      let promptPayType: 'mobile_phone' | 'national_id' | null = null;
-      let promptPayValue: string | null = null;
+      const config = res.data || res;
+      setLineStatus({
+        credentialsVerified: config.credentialsVerified ?? true,
+        webhookEndpointSet: config.webhookEndpointSet ?? false,
+        webhookTestSucceeded: config.webhookTestSucceeded ?? false,
+        webhookActive: config.webhookActive ?? false,
+        isReady: config.isReady ?? false,
+      });
 
-      if (rawPromptPayDigits.length === 10) {
-        promptPayType = 'mobile_phone';
-        promptPayValue = rawPromptPayDigits;
-      } else if (rawPromptPayDigits.length === 13) {
-        promptPayType = 'national_id';
-        promptPayValue = rawPromptPayDigits;
+      if (config.webhookUrl) {
+        setWebhookUrl(config.webhookUrl);
       }
-
-      const payload: CompleteOnboardingPayload = {
-        dormitory: {
-          name: formData.dormName,
-          type: formData.dormType || 'apartment',
-          addressLine1: formData.dormAddress || undefined,
-          phone: formData.ownerPhone || undefined,
-          email: formData.ownerEmail || undefined,
-          estimatedBuildingCount: formData.buildings.length,
-          estimatedRoomCount: generatedRoomsPayload.length,
-        },
-        billing: {
-          billingDay: 25,
-          dueDay: Number(formData.deposits.dueDateDay) || 5,
-          waterBillingType: formData.utilities.waterBillingMode === 'fixed' ? 'fixed_monthly' : 'per_unit',
-          waterRate: String(formData.utilities.waterRate ?? 0),
-          electricityBillingType: formData.utilities.electricBillingMode === 'fixed' ? 'fixed_monthly' : 'per_unit',
-          electricityRate: String(formData.utilities.electricRate ?? 0),
-          commonFee: String(formData.utilities.commonFeeRate ?? 0),
-          internetFee: String(formData.utilities.internetRate ?? 0),
-          lateFeeType: formData.deposits.lateFeeType === 'per_day' ? 'per_day' : (formData.deposits.lateFeeType === 'fixed' ? 'fixed' : 'none'),
-          lateFeeValue: formData.deposits.lateFeeType === 'none' ? '0.00' : String(formData.deposits.lateFeeAmount ?? 0),
-          rentBillingType: 'monthly',
-        },
-        payment: {
-          cashAccepted: true,
-          promptPayType,
-          promptPayValue,
-          bankCode: formData.paymentAccount.bankName || undefined,
-          bankAccountName: (formData.paymentAccount.bankAccountName || formData.paymentAccount.accountName) || undefined,
-          bankAccountNumber: formData.paymentAccount.accountNumber || undefined,
-        },
-        buildings: formData.buildings.map((b, idx) => ({
-          id: b.id || `bld-${idx + 1}`,
-          name: b.name,
-          floorsCount: Number(b.totalFloors) || 1,
-          roomsPerFloor: Number(b.roomsPerFloor) || 1,
-          numberingPattern: b.numberingPattern || null,
-          description: `อาคาร ${b.name}`,
-        })),
-        rooms: generatedRoomsPayload,
-        planCode: 'FREE',
-        promoCode: formData.promoCode || undefined,
-      };
-
-      const res = await onboardingClient.complete(payload, keyToUse);
-      const createdDormId = res.data?.dormitory?.id;
-
-      if (createdDormId) {
-        localStorage.setItem('selected_dormitory_id', createdDormId);
-        sessionStorage.setItem('active_dormitory_selected_for_session', createdDormId);
-      }
-
-      setShowTermsModal(false);
-      setSaveProgress(0);
-      setIsSavedSuccess(true);
-      setTimeout(() => setSaveProgress(100), 50);
-
-      window.scrollTo({ top: 0, behavior: 'smooth' });
-      const scrollables = document.querySelectorAll('.overflow-y-auto, #owner-main-content');
-      scrollables.forEach(el => { (el as HTMLElement).scrollTop = 0; });
-
-      if (onAddLog) {
-        onAddLog('บันทึกการลงทะเบียนหอพักและยอมรับเงื่อนไขเรียบร้อยแล้ว', 'system');
-      }
-
-      setTimeout(() => {
-        setIsSavedSuccess(false);
-        setSaveProgress(0);
-        // Authoritative AuthContext Refresh & Navigation to Owner Dashboard
-        window.location.href = '/owner/dashboard';
-      }, 2800);
-    } catch (e: any) {
-      console.error('Onboarding complete error:', e);
-      const errMsg = e.domainError?.message || e.message || 'เกิดข้อผิดพลาดในการบันทึกข้อมูลการสร้างหอพัก';
-      setValidationError(errMsg);
+    } catch (err: any) {
+      setValidationError(err.message || 'การตรวจสอบ LINE Credentials ล้มเหลว');
     } finally {
-      setIsSubmitting(false);
+      setLineVerifying(false);
     }
   };
 
-  const REFERRAL_OPTIONS = [
-    { id: 'facebook', label: 'Facebook / โซเชียล', icon: Share2 },
-    { id: 'google', label: 'Google Search / เว็บ', icon: Search },
-    { id: 'friend', label: 'เพื่อน / ช่างแนะนำ', icon: Users },
-    { id: 'tiktok_youtube', label: 'TikTok / YouTube', icon: Video },
-    { id: 'banner_event', label: 'ป้ายประกาศ / สัมมนา', icon: Megaphone },
-    { id: 'other', label: 'ช่องทางอื่นๆ', icon: MessageSquare }
-  ];
+  // Handle Set Webhook Endpoint
+  const handleSetLineWebhook = async () => {
+    if (!provisionalDormitoryId) return;
+    setLineVerifying(true);
+    try {
+      const res = await onboardingClient.setLineWebhook(provisionalDormitoryId);
+      const config = res.data || res;
+      setLineStatus(prev => ({
+        ...prev,
+        webhookEndpointSet: config.webhookEndpointSet ?? true,
+        isReady: config.isReady ?? false,
+      }));
+    } catch (err: any) {
+      setValidationError(err.message || 'ตั้งค่า Webhook Endpoint ไม่สำเร็จ');
+    } finally {
+      setLineVerifying(false);
+    }
+  };
 
-  const stepsList = [
-    { num: 1, title: 'ข้อมูลหอพัก', sub: 'ชื่อ & ที่อยู่' },
-    { num: 2, title: 'อาคาร & ผังห้อง', sub: 'ตึก & เลขห้อง' },
-    { num: 3, title: 'ค่าเช่า & ค่าน้ำไฟ', sub: 'อัตราบริการ' },
-    { num: 4, title: 'มัดจำ & บัญชี', sub: 'ประกัน & ธนาคาร' },
-  ];
+  // Handle Test Webhook Endpoint
+  const handleTestLineWebhook = async () => {
+    if (!provisionalDormitoryId) return;
+    setLineVerifying(true);
+    try {
+      const res = await onboardingClient.testLineWebhook(provisionalDormitoryId);
+      const config = res.config || res.data || res;
+      setLineStatus({
+        credentialsVerified: config.credentialsVerified ?? true,
+        webhookEndpointSet: config.webhookEndpointSet ?? true,
+        webhookTestSucceeded: config.webhookTestSucceeded ?? true,
+        webhookActive: config.webhookActive ?? true,
+        isReady: config.isReady ?? true,
+      });
+    } catch (err: any) {
+      setValidationError(err.message || 'ทดสอบ Webhook ไม่สำเร็จ');
+    } finally {
+      setLineVerifying(false);
+    }
+  };
+
+  // Handle Promo Validation
+  const handleValidatePromo = async () => {
+    if (!promoCodeInput.trim()) return;
+    try {
+      const res = await onboardingClient.validatePromo(promoCodeInput.trim().toUpperCase());
+      const data = res.data || res;
+      setPromoResult({
+        valid: data.valid,
+        message: data.message || (data.valid ? 'ใช้งานรหัสโปรโมชันสำเร็จ (+2 เดือน)' : 'รหัสไม่ถูกต้อง'),
+        bonusTrialDays: data.bonusTrialDays || 60,
+      });
+    } catch (err: any) {
+      setPromoResult({
+        valid: false,
+        message: err.message || 'รหัสโปรโมชันไม่ถูกต้อง',
+      });
+    }
+  };
+
+  // Step Navigation Validation
+  const handleNextStep = async () => {
+    setValidationError(null);
+
+    if (currentStep === 1) {
+      if (!formData.dormitoryName.trim()) {
+        setValidationError('กรุณากรอกชื่อหอพัก');
+        return;
+      }
+      setCurrentStep(2);
+    } else if (currentStep === 2) {
+      setCurrentStep(3);
+    } else if (currentStep === 3) {
+      // Prepare provisional dormitory when moving to step 4
+      await ensureProvisionalDormitory();
+      setCurrentStep(4);
+    } else if (currentStep === 4) {
+      if (!signatureSaved) {
+        setValidationError('กรุณากด "บันทึกลายเซ็น" ในขั้นตอนที่ 4 ก่อนดำเนินการต่อ');
+        return;
+      }
+      setCurrentStep(5);
+    } else if (currentStep === 5) {
+      setCurrentStep(6);
+    }
+  };
+
+  // Finalize Registration (Step 6 -> Modal -> API)
+  const handleFinalizeRegistration = async () => {
+    setIsSubmitting(true);
+    setValidationError(null);
+
+    const rooms: any[] = [];
+    formData.buildings.forEach((b) => {
+      for (let f = 1; f <= b.floorsCount; f++) {
+        for (let r = 1; r <= b.roomsPerFloor; r++) {
+          const roomNumber = `${b.roomPrefix}${f}${r < 10 ? '0' + r : r}`;
+          rooms.push({
+            buildingId: b.id,
+            roomNumber,
+            floor: f,
+            monthlyRent: Number(b.monthlyRent) || 0,
+            depositAmount: Number(b.securityDeposit) || 0,
+          });
+        }
+      }
+    });
+
+    const rawPp = formData.paymentAccount.promptPayId ? formData.paymentAccount.promptPayId.replace(/\D/g, '') : '';
+    let inferredPpType: 'mobile_phone' | 'national_id' | undefined = undefined;
+    if (rawPp.length === 10) inferredPpType = 'mobile_phone';
+    else if (rawPp.length === 13) inferredPpType = 'national_id';
+
+    const payload: CompleteOnboardingPayload = {
+      provisionalDormitoryId: provisionalDormitoryId || undefined,
+      packageId: selectedPackageId,
+      dormitory: {
+        name: formData.dormitoryName,
+        type: formData.dormitoryType,
+        addressLine1: formData.address,
+        province: formData.province,
+        postalCode: formData.postalCode,
+        phone: formData.phone,
+        email: formData.email,
+        estimatedBuildingCount: formData.buildings.length,
+        estimatedRoomCount: rooms.length,
+      },
+      billing: {
+        billingDay: 25,
+        dueDay: formData.deposits.dueDateDay || 5,
+        waterBillingType: 'per_unit',
+        waterRate: String(formData.utilities.waterRate),
+        electricityBillingType: 'per_unit',
+        electricityRate: String(formData.utilities.electricRate),
+        commonFee: String(formData.utilities.commonFeeRate),
+        internetFee: String(formData.utilities.internetRate),
+        lateFeeType: formData.deposits.lateFeeType,
+        lateFeeValue: String(formData.deposits.lateFeeAmount),
+        rentBillingType: 'monthly',
+      },
+      payment: {
+        cashAccepted: true,
+        promptPayType: inferredPpType,
+        promptPayValue: rawPp || undefined,
+        bankCode: formData.paymentAccount.bankName,
+        bankAccountName: formData.paymentAccount.accountName,
+        bankAccountNumber: formData.paymentAccount.accountNumber,
+      },
+      buildings: formData.buildings.map(b => ({
+        id: b.id,
+        name: b.name,
+        code: b.roomPrefix,
+        floorsCount: b.floorsCount,
+        roomsPerFloor: b.roomsPerFloor,
+      })),
+      rooms,
+      planCode: selectedPlan,
+      promoCode: promoResult?.valid ? 'HORPLUS' : undefined,
+    };
+
+    const idempotencyKey = `register-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+
+    try {
+      await onboardingClient.finalize(payload, idempotencyKey);
+      setIsSavedSuccess(true);
+      if (onAddLog) {
+        onAddLog('CREATE_DORMITORY', `สร้างหอพัก ${formData.dormitoryName} สำเร็จ`, 'ONBOARDING');
+      }
+      setTimeout(() => {
+        if (onNavigate) onNavigate('dashboard');
+        window.location.href = '/owner/dashboard';
+      }, 1500);
+    } catch (err: any) {
+      setValidationError(err.message || 'เกิดข้อผิดพลาดในการลงทะเบียนสร้างหอพัก');
+    } finally {
+      setIsSubmitting(false);
+      setShowTermsModal(false);
+    }
+  };
 
   return (
-    <div className="p-3 sm:p-6 max-w-6xl mx-auto space-y-6 pb-20">
-      {/* Full-Screen Success Overlay (Transparent Backdrop & Minimal Icon + Text) */}
-      {isSavedSuccess && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex flex-col items-center justify-center p-4 animate-in fade-in duration-200 pointer-events-auto">
-          <div className="flex flex-col items-center justify-center text-center space-y-3.5 max-w-sm w-full animate-in zoom-in-90 duration-300">
-            {/* Animated Checkmark Circle */}
-            <div className="relative">
-              <div className="absolute inset-0 rounded-full bg-emerald-400/40 animate-ping max-w-[80px] mx-auto h-20 w-20" />
-              <div className="w-20 h-20 sm:w-24 sm:h-24 bg-gradient-to-tr from-emerald-500 to-teal-400 text-white rounded-full flex items-center justify-center shadow-2xl shadow-emerald-500/50 relative z-10 animate-in zoom-in-50 duration-300">
-                <CheckCircle2 className="w-12 h-12 sm:w-14 sm:h-14 stroke-[2.5]" />
-              </div>
-            </div>
-
-            {/* Concise Text Message */}
-            <div className="space-y-1">
-              <h3 className="text-2xl sm:text-3xl font-black text-white drop-shadow-md tracking-tight">
-                ลงทะเบียนสำเร็จ!
-              </h3>
-              <p className="text-xs sm:text-sm font-extrabold text-emerald-200 drop-shadow-xs">
-                บันทึกข้อมูลและยินยอมรับเงื่อนไขเรียบร้อยแล้ว
-              </p>
-            </div>
+    <div className="max-w-5xl mx-auto p-4 sm:p-6 space-y-6">
+      {/* Header Banner */}
+      <div className="bg-gradient-to-r from-blue-700 via-indigo-700 to-slate-900 text-white p-6 sm:p-8 rounded-3xl shadow-xl relative overflow-hidden">
+        <div className="relative z-10 space-y-2">
+          <div className="inline-flex items-center gap-2 px-3 py-1 bg-white/10 backdrop-blur-md rounded-full text-xs font-bold text-blue-200">
+            <Sparkles className="w-3.5 h-3.5" /> ระบบลงทะเบียนเจ้าของหอพัก (Master 6-Step Flow)
           </div>
+          <h1 className="text-2xl sm:text-3xl font-black tracking-tight">ลงทะเบียนตั้งค่าหอพักใหม่</h1>
+          <p className="text-xs sm:text-sm text-blue-100/90 max-w-xl font-medium leading-relaxed">
+            กรอกข้อมูลตั้งค่าหอพัก ลายเซ็นอิเล็กทรอนิกส์ และ LINE Official Account เพื่อเปิดใช้งานระบบทันที
+          </p>
         </div>
-      )}
+      </div>
 
-      {/* Step Navigation Bar */}
-      <div className="bg-white p-3 sm:p-4 rounded-3xl border border-slate-100 shadow-xs overflow-x-auto no-scrollbar">
-        <div className="flex items-center justify-between min-w-[620px] sm:min-w-0 px-1 gap-1.5">
-          {stepsList.map((st) => {
-            const isActive = currentStep === st.num;
-            const isDone = currentStep > st.num;
+      {/* 6-Step Stepper Navigation */}
+      <div className="bg-white p-4 rounded-3xl border border-slate-100 shadow-sm">
+        <div className="grid grid-cols-6 gap-1 sm:gap-2 text-center">
+          {[
+            { step: 1, title: '1. ข้อมูลหอพัก', desc: 'ชื่อ & ที่อยู่' },
+            { step: 2, title: '2. อาคาร & ห้อง', desc: 'โครงสร้างหอ' },
+            { step: 3, title: '3. อัตราค่าน้ำไฟ', desc: 'ค่าบริการ' },
+            { step: 4, title: '4. บัญชี & ลายเซ็น', desc: 'ผู้ถือสิทธิ์' },
+            { step: 5, title: '5. LINE OA', desc: 'เชื่อมต่อไลน์' },
+            { step: 6, title: '6. สรุป & แพ็กเกจ', desc: 'ยืนยันสิทธิ์' },
+          ].map((s) => {
+            const isActive = currentStep === s.step;
+            const isDone = currentStep > s.step;
             return (
-              <React.Fragment key={st.num}>
-                <button
-                  onClick={() => handleStepClick(st.num)}
-                  className="flex items-center gap-2 text-left group cursor-pointer whitespace-nowrap shrink-0"
-                >
-                  <div
-                    className={`w-8 h-8 sm:w-9 sm:h-9 rounded-2xl flex items-center justify-center font-black text-xs transition-all shadow-2xs shrink-0 ${
-                      isActive
-                        ? 'bg-blue-600 text-white ring-4 ring-blue-100'
-                        : isDone
-                          ? 'bg-emerald-500 text-white'
-                          : 'bg-slate-100 text-slate-400 group-hover:bg-slate-200'
-                    }`}
-                  >
-                    {isDone ? <Check className="w-4 h-4 stroke-[3]" /> : st.num}
-                  </div>
-                  <div>
-                    <h5 className={`text-xs font-black leading-tight ${isActive ? 'text-blue-600' : isDone ? 'text-slate-800' : 'text-slate-400'}`}>
-                      {st.title}
-                    </h5>
-                    <p className="text-[10px] text-slate-400 font-medium hidden md:block">{st.sub}</p>
-                  </div>
-                </button>
-
-                {st.num < stepsList.length && (
-                  <div className={`h-0.5 flex-1 min-w-[8px] mx-1 rounded-full ${currentStep > st.num ? 'bg-emerald-500' : 'bg-slate-100'}`} />
-                )}
-              </React.Fragment>
+              <button
+                key={s.step}
+                data-testid={`step-button-${s.step}`}
+                onClick={() => {
+                  if (s.step < currentStep || isDone) setCurrentStep(s.step);
+                }}
+                className={`p-2.5 rounded-2xl transition-all text-left flex flex-col justify-between ${
+                  isActive
+                    ? 'bg-blue-600 text-white shadow-md'
+                    : isDone
+                    ? 'bg-blue-50 text-blue-800 border border-blue-100 hover:bg-blue-100/80'
+                    : 'bg-slate-50 text-slate-400 border border-slate-100'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className={`text-[10px] font-black uppercase tracking-wider ${isActive ? 'text-blue-200' : isDone ? 'text-blue-600' : 'text-slate-400'}`}>
+                    STEP {s.step}
+                  </span>
+                  {isDone && <CheckCircle className="w-3.5 h-3.5 text-blue-600" />}
+                </div>
+                <span className="text-xs font-black truncate mt-1">{s.title}</span>
+              </button>
             );
           })}
         </div>
       </div>
 
-      {/* STEP 1: Dormitory Info */}
+      {/* Validation Alert */}
+      {validationError && (
+        <div className="p-4 bg-rose-50 border border-rose-200 rounded-2xl flex items-center justify-between text-rose-800 text-xs font-bold animate-in fade-in">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+            <span>{validationError}</span>
+          </div>
+          <button onClick={() => setValidationError(null)} className="text-rose-500 hover:text-rose-700">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
+      {/* STEP 1: Dormitory Details */}
       {currentStep === 1 && (
-        <div className="bg-white p-5 sm:p-8 rounded-3xl border border-slate-100 shadow-xs space-y-6 animate-in fade-in duration-200">
+        <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm space-y-6">
           <div className="flex items-center gap-2 pb-3 border-b border-slate-100">
             <Building2 className="w-5 h-5 text-blue-600" />
             <div>
-              <h3 className="text-base font-black text-slate-800">ขั้นตอนที่ 1: ข้อมูลหอพัก</h3>
-              <p className="text-xs text-slate-400 font-medium">ระบุชื่อหอพัก ที่อยู่ และข้อมูลพื้นฐานของหอพัก</p>
+              <h3 className="text-base font-black text-slate-800">ขั้นตอนที่ 1: ข้อมูลหอพัก & ที่อยู่</h3>
+              <p className="text-xs text-slate-400 font-medium">ระบุชื่อหอพัก ข้อมูลติดต่อ และที่ตั้งสถานประกอบการ</p>
             </div>
           </div>
 
-          <div className="bg-slate-50/60 p-5 sm:p-6 rounded-2xl border border-slate-100 space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
+            <div>
+              <label className="block font-bold text-slate-700 mb-1">ชื่อหอพัก / อพาร์ตเมนต์ <span className="text-rose-500">*</span></label>
+              <input
+                type="text"
+                data-testid="input-dormitory-name"
+                value={formData.dormitoryName}
+                onChange={(e) => setFormData({ ...formData, dormitoryName: e.target.value })}
+                placeholder="เช่น หอพักสุขใจ อพาร์ตเมนต์"
+                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800 outline-none focus:border-blue-500"
+              />
+            </div>
 
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">ชื่อหอพัก / อพาร์ตเมนต์ <span className="text-rose-500">*</span></label>
-                <input
-                  type="text"
-                  value={formData.dormName}
-                  onChange={(e) => setFormData({ ...formData, dormName: e.target.value })}
-                  placeholder="เช่น หอพัก HorPlus สุขุมวิท"
-                  className="w-full px-3.5 py-2.5 text-xs sm:text-sm bg-white border border-slate-200 rounded-xl focus:border-blue-500 outline-none font-bold text-slate-800"
-                />
-              </div>
+            <div>
+              <label className="block font-bold text-slate-700 mb-1">ประเภทสถานประกอบการ</label>
+              <select
+                data-testid="select-dormitory-type"
+                value={formData.dormitoryType}
+                onChange={(e) => setFormData({ ...formData, dormitoryType: e.target.value })}
+                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800 outline-none focus:border-blue-500"
+              >
+                <option value="อพาร์ตเมนต์">อพาร์ตเมนต์</option>
+                <option value="หอพักนักศึกษา">หอพักนักศึกษา</option>
+                <option value="คอนโดมิเนียม">คอนโดมิเนียม</option>
+                <option value="บ้านเช่า">บ้านเช่า / ทาวน์เฮาส์</option>
+              </select>
+            </div>
 
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">ที่อยู่หอพัก (สำหรับออกเอกสารสัญญา) <span className="text-rose-500">*</span></label>
-                <textarea
-                  rows={3}
-                  value={formData.dormAddress}
-                  onChange={(e) => setFormData({ ...formData, dormAddress: e.target.value })}
-                  placeholder="เช่น 88/9 ซอยสุขุมวิท 55 แขวงคลองตันเหนือ เขตวัฒนา กรุงเทพฯ 10110"
-                  className="w-full p-3 text-xs sm:text-sm bg-white border border-slate-200 rounded-xl focus:border-blue-500 outline-none font-medium sm:font-bold text-slate-800 leading-relaxed min-h-[84px] resize-y"
-                />
-              </div>
+            <div>
+              <label className="block font-bold text-slate-700 mb-1">เบอร์โทรศัพท์ติดต่อ</label>
+              <input
+                type="text"
+                data-testid="input-phone"
+                value={formData.phone}
+                onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+                placeholder="081-234-5678"
+                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800 outline-none focus:border-blue-500"
+              />
+            </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">จังหวัด <span className="text-rose-500">*</span></label>
-                  <select
-                    value={formData.province}
-                    onChange={(e) => setFormData({ ...formData, province: e.target.value })}
-                    className="w-full px-3 py-2 text-xs bg-white border border-slate-200 rounded-xl focus:border-blue-500 outline-none font-bold text-slate-800 cursor-pointer"
-                  >
-                    <option value="">-- เลือกจังหวัด --</option>
-                    {PROVINCE_OPTIONS.map((prov) => (
-                      <option key={prov} value={prov}>{prov}</option>
-                    ))}
-                  </select>
-                </div>
+            <div>
+              <label className="block font-bold text-slate-700 mb-1">อีเมลติดต่อ</label>
+              <input
+                type="email"
+                data-testid="input-email"
+                value={formData.email}
+                onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                placeholder="owner@example.com"
+                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800 outline-none focus:border-blue-500"
+              />
+            </div>
 
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">ประเภทที่พัก <span className="text-rose-500">*</span></label>
-                  <select
-                    value={formData.dormType || 'อพาร์ตเมนต์'}
-                    onChange={(e) => setFormData({ ...formData, dormType: e.target.value })}
-                    className="w-full px-3 py-2 text-xs bg-white border border-slate-200 rounded-xl focus:border-blue-500 outline-none font-bold text-slate-800 cursor-pointer"
-                  >
-                    {DORM_TYPE_OPTIONS.map((type) => (
-                      <option key={type} value={type}>{type}</option>
-                    ))}
-                  </select>
-                </div>
-              </div>
+            <div className="sm:col-span-2">
+              <label className="block font-bold text-slate-700 mb-1">ที่อยู่สถานประกอบการ</label>
+              <input
+                type="text"
+                data-testid="input-address"
+                value={formData.address}
+                onChange={(e) => setFormData({ ...formData, address: e.target.value })}
+                placeholder="เลขที่ 123/45 ถนนพหลโยธิน แขวงลาดยาว เขตจตุจักร"
+                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800 outline-none focus:border-blue-500"
+              />
+            </div>
 
-              {/* Gender Policy Selector (ชาย, หญิง, รวม) */}
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1.5">ประเภทผู้พัก / เพศของหอพัก <span className="text-rose-500">*</span></label>
-                <div className="grid grid-cols-3 gap-2">
-                  {GENDER_TYPE_OPTIONS.map((g) => {
-                    const isSelected = (formData.genderType || 'รวม') === g.id;
-                    return (
-                      <button
-                        key={g.id}
-                        type="button"
-                        onClick={() => setFormData({ ...formData, genderType: g.id })}
-                        className={`p-2.5 rounded-xl border text-center transition-all cursor-pointer flex flex-col items-center justify-center ${
-                          isSelected
-                            ? 'bg-blue-600 text-white border-blue-600 shadow-xs'
-                            : 'bg-white text-slate-700 border-slate-200 hover:border-slate-300'
-                        }`}
-                      >
-                        <span className="text-xs font-black">{g.label}</span>
-                        <span className={`text-[9px] mt-0.5 ${isSelected ? 'text-blue-100' : 'text-slate-400'}`}>{g.desc}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
+            <div>
+              <label className="block font-bold text-slate-700 mb-1">จังหวัด</label>
+              <select
+                data-testid="select-province"
+                value={formData.province}
+                onChange={(e) => setFormData({ ...formData, province: e.target.value })}
+                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800 outline-none focus:border-blue-500"
+              >
+                {PROVINCE_OPTIONS.map((p) => (
+                  <option key={p} value={p}>{p}</option>
+                ))}
+              </select>
+            </div>
 
+            <div>
+              <label className="block font-bold text-slate-700 mb-1">รหัสไปรษณีย์</label>
+              <input
+                type="text"
+                data-testid="input-postal-code"
+                value={formData.postalCode}
+                onChange={(e) => setFormData({ ...formData, postalCode: e.target.value })}
+                placeholder="10110"
+                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800 outline-none focus:border-blue-500"
+              />
             </div>
           </div>
+        </div>
       )}
 
-      {/* STEP 2: Flexible Building Structure & Rooms (Enhanced per User Request) */}
+      {/* STEP 2: Buildings & Rooms */}
       {currentStep === 2 && (
-        <div className="bg-white p-5 sm:p-8 rounded-3xl border border-slate-100 shadow-xs space-y-6 animate-in fade-in duration-200">
-          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
+        <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm space-y-6">
+          <div className="flex items-center justify-between pb-3 border-b border-slate-100">
             <div className="flex items-center gap-2">
-              <Building2 className="w-5 h-5 text-blue-600" />
+              <BuildingIcon className="w-5 h-5 text-blue-600" />
               <div>
-                <h3 className="text-base font-black text-slate-800">ขั้นตอนที่ 2: อาคาร & ผังห้อง</h3>
-                <p className="text-xs text-slate-400 font-medium">ตั้งค่ารูปแบบเลขห้องพักได้อย่างยืดหยุ่น เช่น A101, 101, A1/1 หรือระบุเอง</p>
+                <h3 className="text-base font-black text-slate-800">ขั้นตอนที่ 2: อาคาร & จำนวนห้องพัก</h3>
+                <p className="text-xs text-slate-400 font-medium">เพิ่มอาคาร กำหนดจำนวนชั้น และจำนวนห้องต่อชั้น</p>
               </div>
             </div>
             <button
-              onClick={handleAddBuilding}
-              className="px-3.5 py-2 bg-blue-50 hover:bg-blue-100 text-blue-600 rounded-2xl text-xs font-extrabold transition-all flex items-center gap-1.5 cursor-pointer shrink-0"
+              type="button"
+              data-testid="button-add-building"
+              onClick={() => {
+                const newId = `bld-${formData.buildings.length + 1}`;
+                const charCode = 65 + formData.buildings.length;
+                const letter = String.fromCharCode(charCode);
+                setFormData({
+                  ...formData,
+                  buildings: [
+                    ...formData.buildings,
+                    {
+                      id: newId,
+                      name: `อาคาร ${letter}`,
+                      roomPrefix: letter,
+                      floorsCount: 4,
+                      roomsPerFloor: 5,
+                      monthlyRent: 4500,
+                      securityDeposit: 5000,
+                    }
+                  ]
+                });
+              }}
+              className="px-3 py-1.5 bg-blue-50 text-blue-700 hover:bg-blue-100 rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer"
             >
-              <Plus className="w-4 h-4" />
-              เพิ่มอาคารใหม่
+              <Plus className="w-4 h-4" /> เพิ่มอาคาร
             </button>
           </div>
 
-          <div className="space-y-6">
-            {formData.buildings.map((b, idx) => {
-              const currentRoomList = getGeneratedRooms(b);
-
-              return (
-                <div key={b.id} className="bg-slate-50/70 p-4 sm:p-6 rounded-3xl border border-slate-200/80 space-y-5 relative">
-                  {/* Building Header Bar */}
-                  <div className="flex items-center justify-between flex-wrap gap-2 pb-2 border-b border-slate-200/60">
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs font-black text-blue-700 bg-blue-50 border border-blue-100 px-3.5 py-1.5 rounded-xl text-sm flex items-center gap-1.5">
-                        <Building2 className="w-4 h-4 text-blue-600" />
-                        {b.roomPrefix ? `อาคาร ${b.roomPrefix}` : (b.name || 'อาคาร ')}
-                      </span>
-                    </div>
-
-                    {/* Auto / Manual Mode Switcher */}
-                    <div className="flex items-center gap-2">
-                      <div className="bg-white p-1 rounded-2xl border border-slate-200/80 flex items-center gap-1 shadow-3xs">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const updated = [...formData.buildings];
-                            updated[idx].mode = 'auto';
-                            setFormData({ ...formData, buildings: updated });
-                          }}
-                          className={`px-3 py-1.5 rounded-xl text-xs font-extrabold transition-all flex items-center gap-1.5 cursor-pointer ${
-                            b.mode === 'auto'
-                              ? 'bg-blue-600 text-white shadow-2xs'
-                              : 'text-slate-500 hover:text-slate-800 hover:bg-slate-50'
-                          }`}
-                        >
-                          <SlidersHorizontal className="w-3.5 h-3.5" />
-                          สร้างอัตโนมัติ
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const updated = [...formData.buildings];
-                            updated[idx].mode = 'manual';
-                            setFormData({ ...formData, buildings: updated });
-                          }}
-                          className={`px-3 py-1.5 rounded-xl text-xs font-extrabold transition-all flex items-center gap-1.5 cursor-pointer ${
-                            b.mode === 'manual'
-                              ? 'bg-blue-600 text-white shadow-2xs'
-                              : 'text-slate-500 hover:text-slate-800 hover:bg-slate-50'
-                          }`}
-                        >
-                          <Edit3 className="w-3.5 h-3.5" />
-                          เขียนเลขห้องเอง
-                        </button>
-                      </div>
-
-                      {formData.buildings.length > 1 && (
-                        <button
-                          onClick={() => handleRemoveBuilding(b.id)}
-                          className="text-slate-400 hover:text-rose-600 p-2 rounded-xl hover:bg-rose-50 transition-colors cursor-pointer"
-                          title="ลบอาคารนี้"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* AUTO GENERATE MODE */}
-                  {b.mode === 'auto' && (
-                    <div className="space-y-4">
-                      <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
-                        <div>
-                          <label className="block text-xs font-bold text-slate-700 mb-1">รหัสตึก</label>
-                          <input
-                            type="text"
-                            value={b.roomPrefix}
-                            onChange={(e) => {
-                              const val = e.target.value;
-                              const updated = [...formData.buildings];
-                              updated[idx].roomPrefix = val;
-                              updated[idx].name = val ? `อาคาร ${val}` : 'อาคาร ';
-                              setFormData({ ...formData, buildings: updated });
-                            }}
-                            placeholder="เช่น A, B (เว้นว่างได้)"
-                            className="w-full px-3 py-2 text-xs bg-white border border-slate-200 rounded-xl focus:border-blue-500 outline-none font-bold uppercase text-slate-800"
-                          />
-                          <span className="text-[10px] text-slate-400 font-medium block mt-1">
-                            เว้นว่างได้หากต้องการเลขล้วน (เช่น 101)
-                          </span>
-                        </div>
-
-                        <div>
-                          <label className="block text-xs font-bold text-slate-700 mb-1">จำนวนชั้น (ชั้น)</label>
-                          <input
-                            type="number"
-                            min={1}
-                            max={50}
-                            value={b.totalFloors === 0 ? '' : b.totalFloors}
-                            onChange={(e) => {
-                              const val = e.target.value;
-                              const updated = [...formData.buildings];
-                              updated[idx].totalFloors = val === '' ? 0 : (parseInt(val, 10) || 0);
-                              setFormData({ ...formData, buildings: updated });
-                            }}
-                            placeholder="ระบุจำนวนชั้น"
-                            className="w-full px-3 py-2 text-xs bg-white border border-slate-200 rounded-xl focus:border-blue-500 outline-none font-bold text-slate-800"
-                          />
-                        </div>
-
-                        <div>
-                          <label className="block text-xs font-bold text-slate-700 mb-1">ห้องต่อชั้น (ห้อง)</label>
-                          <input
-                            type="number"
-                            min={1}
-                            max={50}
-                            value={b.roomsPerFloor === 0 ? '' : b.roomsPerFloor}
-                            onChange={(e) => {
-                              const val = e.target.value;
-                              const updated = [...formData.buildings];
-                              updated[idx].roomsPerFloor = val === '' ? 0 : (parseInt(val, 10) || 0);
-                              setFormData({ ...formData, buildings: updated });
-                            }}
-                            placeholder="ระบุห้องต่อชั้น"
-                            className="w-full px-3 py-2 text-xs bg-white border border-slate-200 rounded-xl focus:border-blue-500 outline-none font-bold text-slate-800"
-                          />
-                        </div>
-
-                        <div>
-                          <label className="block text-xs font-bold text-slate-700 mb-1">รูปแบบเลขห้อง</label>
-                          {(() => {
-                            const pfx = b.roomPrefix ? b.roomPrefix.trim() : 'A';
-                            return (
-                              <select
-                                value={b.formatPattern || 'prefix_floor_room'}
-                                onChange={(e) => {
-                                  const updated = [...formData.buildings];
-                                  updated[idx].formatPattern = e.target.value;
-                                  setFormData({ ...formData, buildings: updated });
-                                }}
-                                className="w-full px-3 py-2 text-xs bg-white border border-slate-200 rounded-xl focus:border-blue-500 outline-none font-extrabold text-blue-700"
-                              >
-                                <option value="prefix_floor_room">ตึกชั้นห้อง ({pfx}101)</option>
-                                <option value="floor_room">ชั้นห้องแบบไม่มีตึก (101)</option>
-                                <option value="prefix_floor_slash_room">ตึกชั้น/ห้อง ({pfx}1/1)</option>
-                                <option value="floor_slash_room">ชั้น/ห้อง (1/1)</option>
-                                <option value="prefix_dash_floor_room">ตึก-ชั้นห้อง ({pfx}-101)</option>
-                              </select>
-                            );
-                          })()}
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* MANUAL ROOM ENTRY MODE */}
-                  {b.mode === 'manual' && (
-                    <div className="space-y-3 bg-white p-4 rounded-2xl border border-slate-200/80">
-                      <label className="block text-xs font-black text-slate-800">
-                        กรอกเลขห้องพักเอง (คั่นด้วยเครื่องหมายจุลภาค , หรือเว้นวรรค)
-                      </label>
-                      <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
-                        <input
-                          type="text"
-                          value={manualInputs[b.id] || ''}
-                          onChange={(e) => setManualInputs({ ...manualInputs, [b.id]: e.target.value })}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') {
-                              e.preventDefault();
-                              handleAddManualRooms(idx);
-                            }
-                          }}
-                          placeholder="เช่น A101, A102, A1/1, 101, 102"
-                          className="w-full sm:flex-1 px-3.5 py-2.5 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:border-blue-500 outline-none font-bold text-slate-800"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => handleAddManualRooms(idx)}
-                          className="w-full sm:w-auto px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-extrabold text-xs rounded-xl transition-all cursor-pointer shadow-xs shrink-0 flex items-center justify-center gap-1"
-                        >
-                          <span>+ เพิ่มเลขห้อง</span>
-                        </button>
-                      </div>
-                      <p className="text-[10px] text-slate-400 font-medium">
-                        พิมพ์เลขห้องแล้วกด เพิ่มเลขห้อง หรือกด Enter เพื่อใส่เลขห้องในตึกนี้
-                      </p>
-                    </div>
-                  )}
-
-                  {/* ROOM PILLS GRID DISPLAY (Matches Screenshot Style with Direct Click Edit) */}
-                  <div className="bg-white p-4 rounded-2xl border border-slate-200/80 space-y-3">
-                    <div className="flex items-center justify-between flex-wrap gap-2">
-                      <span className="text-xs font-black text-slate-700 flex items-center gap-1.5">
-                        <Building2 className="w-3.5 h-3.5 text-blue-600" />
-                        รายการเลขห้องพักในตึกนี้ ({currentRoomList.length} ห้อง)
-                      </span>
-                      <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => handleOpenBulkEdit(idx)}
-                          className="text-[11px] font-extrabold text-blue-600 bg-blue-50 hover:bg-blue-100 border border-blue-100 px-2.5 py-1 rounded-xl transition-all cursor-pointer flex items-center gap-1"
-                          title="แก้ไขเลขห้องทั้งหมดในคราวเดียว"
-                        >
-                          <Edit3 className="w-3 h-3 text-blue-600" />
-                          แก้ไขเลขห้องทั้งหมด
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleResetBuildingRooms(idx)}
-                          className="text-[11px] font-extrabold text-slate-600 bg-slate-100 hover:bg-slate-200 border border-slate-200 px-2.5 py-1 rounded-xl transition-all cursor-pointer flex items-center gap-1"
-                        >
-                          <RefreshCw className="w-3 h-3" />
-                          รีเซ็ต
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* Bulk Room Editor Mode */}
-                    {bulkEditingBuildingIdx === idx && (
-                      <div className="p-3.5 bg-blue-50/80 border border-blue-200 rounded-2xl space-y-2.5 animate-in fade-in duration-150">
-                        <div className="flex items-center justify-between">
-                          <label className="block text-xs font-black text-blue-900 flex items-center gap-1.5">
-                            <Edit3 className="w-3.5 h-3.5 text-blue-600" />
-                            แก้ไขชื่อ/เลขห้องทั้งหมดในตึกนี้ (คั่นด้วยเครื่องหมายจุลภาค , หรือเว้นวรรค)
-                          </label>
-                          <span className="text-[10px] text-blue-600 font-bold">พิมพ์หรือปรับเปลี่ยนชื่อห้องได้ฟรีสไตล์</span>
-                        </div>
-                        <textarea
-                          rows={3}
-                          value={bulkRoomsInputText}
-                          onChange={(e) => setBulkRoomsInputText(e.target.value)}
-                          placeholder="เช่น A101, A102, A103-Suite, A104-VIP"
-                          className="w-full p-2.5 bg-white border border-blue-200 rounded-xl text-xs font-mono font-bold text-slate-800 focus:border-blue-500 outline-none leading-relaxed"
-                        />
-                        <div className="flex items-center gap-2 justify-end">
-                          <button
-                            type="button"
-                            onClick={() => setBulkEditingBuildingIdx(null)}
-                            className="px-3 py-1.5 bg-white border border-slate-200 text-slate-600 rounded-xl text-xs font-bold hover:bg-slate-50 cursor-pointer"
-                          >
-                            ยกเลิก
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleSaveBulkEdit(idx)}
-                            className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-black shadow-xs cursor-pointer flex items-center gap-1"
-                          >
-                            <Check className="w-3.5 h-3.5 stroke-[3]" />
-                            บันทึกรายการเลขห้อง
-                          </button>
-                        </div>
-                      </div>
-                    )}
-
-                    <div className="max-h-56 overflow-y-auto p-2 bg-slate-50/50 rounded-xl border border-slate-200/60">
-                      <div className="grid grid-cols-1 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2">
-                        {currentRoomList.map((rm) => {
-                          const isEditingThis = editingRoom?.bIdx === idx && editingRoom?.oldRoom === rm;
-
-                          if (isEditingThis) {
-                            return (
-                              <div
-                                key={rm}
-                                className="bg-blue-50 p-1.5 rounded-xl border border-blue-400 flex items-center justify-between text-xs font-bold shadow-xs col-span-1 sm:col-span-2"
-                              >
-                                <input
-                                  type="text"
-                                  value={editingRoom.newRoom}
-                                  onChange={(e) => setEditingRoom({ ...editingRoom, newRoom: e.target.value })}
-                                  onKeyDown={(e) => {
-                                    if (e.key === 'Enter') {
-                                      e.preventDefault();
-                                      handleSaveSingleRoomEdit();
-                                    } else if (e.key === 'Escape') {
-                                      setEditingRoom(null);
-                                    }
-                                  }}
-                                  autoFocus
-                                  className="w-full px-2 py-1 bg-white border border-blue-300 rounded-lg text-xs font-black text-blue-900 outline-none"
-                                />
-                                <div className="flex items-center gap-1 ml-1 shrink-0">
-                                  <button
-                                    type="button"
-                                    onClick={handleSaveSingleRoomEdit}
-                                    className="p-1 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors cursor-pointer"
-                                    title="บันทึก"
-                                  >
-                                    <Check className="w-3.5 h-3.5" />
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => setEditingRoom(null)}
-                                    className="p-1 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg transition-colors cursor-pointer"
-                                    title="ยกเลิก"
-                                  >
-                                    <X className="w-3.5 h-3.5" />
-                                  </button>
-                                </div>
-                              </div>
-                            );
-                          }
-
-                          return (
-                            <div
-                              key={rm}
-                              className="bg-white pl-2.5 pr-1 py-1 rounded-xl border border-slate-200 flex items-center justify-between text-xs font-black text-blue-900 shadow-3xs group hover:border-blue-300 transition-colors"
-                            >
-                              <button
-                                type="button"
-                                onClick={() => setEditingRoom({ bIdx: idx, oldRoom: rm, newRoom: rm })}
-                                className="flex items-center gap-1.5 min-w-0 flex-1 text-left py-1 text-blue-950 hover:text-blue-600 transition-colors cursor-pointer"
-                                title={`คลิกเพื่อแก้ไขเลขห้อง ${rm}`}
-                              >
-                                <Building2 className="w-3.5 h-3.5 text-slate-400 group-hover:text-blue-600 shrink-0" />
-                                <span className="font-extrabold text-xs text-slate-800 group-hover:text-blue-700 truncate">{rm}</span>
-                              </button>
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleRemoveSingleRoom(idx, rm);
-                                }}
-                                className="text-slate-300 hover:text-rose-600 p-1.5 rounded-lg hover:bg-rose-50 transition-colors cursor-pointer shrink-0"
-                                title={`ลบห้อง ${rm}`}
-                              >
-                                <X className="w-3.5 h-3.5" />
-                              </button>
-                            </div>
-                          );
-                        })}
-
-                        {currentRoomList.length === 0 && (
-                          <div className="col-span-full text-center py-6 text-xs text-slate-400 font-bold">
-                            ยังไม่มีห้องพักในตึกนี้ กรุณาเลือกสร้างอัตโนมัติหรือกรอกเลขห้องเอง
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {/* STEP 3: Rates & Utilities (Mirrors Settings Page & Building-specific Rent) */}
-      {currentStep === 3 && (
-        <div className="bg-white p-5 sm:p-8 rounded-3xl border border-slate-100 shadow-xs space-y-6 animate-in fade-in duration-200">
-          <div className="flex items-center gap-2 pb-3 border-b border-slate-100">
-            <CreditCard className="w-5 h-5 text-blue-600" />
-            <div>
-              <h3 className="text-base font-black text-slate-800">ขั้นตอนที่ 3: ค่าเช่า & ค่าน้ำไฟ</h3>
-              <p className="text-xs text-slate-400 font-medium">ตั้งค่ารูปแบบค่าน้ำไฟส่วนกลาง (อ้างอิงจากหน้าตั้งค่า) และปรับอัตราค่าเช่าแยกตามแต่ละตึก</p>
-            </div>
-          </div>
-
-          <div className="space-y-6">
-            {/* Utilities Section (Matching Settings Page Structure) */}
-            <div className="bg-slate-50/70 p-4 sm:p-5 rounded-3xl border border-slate-200/80 space-y-4">
-              <h4 className="text-xs font-black text-indigo-950 uppercase tracking-wider flex items-center gap-2">
-                <Zap className="w-4 h-4 text-amber-500" />
-                อัตราค่าน้ำ ค่าไฟฟ้า และค่าบริการอื่นๆ
-              </h4>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 text-xs">
-                {/* Water */}
-                <div className="bg-white p-3.5 rounded-2xl border border-slate-200 space-y-2">
-                  <label className="block font-black text-slate-800 flex items-center gap-1.5">
-                    <Droplet className="w-4 h-4 text-blue-500" /> ค่าน้ำประปา
-                  </label>
-                  <div>
-                    <span className="text-[10px] text-slate-400 font-bold block mb-1">อัตรา (บาท)</span>
-                    <input
-                      type="number"
-                      value={formData.utilities.waterRate}
-                      onChange={(e) => setFormData({ ...formData, utilities: { ...formData.utilities, waterRate: parseFloat(e.target.value) || 0 } })}
-                      className="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl font-black text-slate-800 outline-none"
-                    />
-                  </div>
-                  <div>
-                    <span className="text-[10px] text-slate-400 font-bold block mb-1">รูปแบบการคิด</span>
-                    <select
-                      value={formData.utilities.waterBillingMode}
-                      onChange={(e) => setFormData({ ...formData, utilities: { ...formData.utilities, waterBillingMode: e.target.value } })}
-                      className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-700 outline-none"
-                    >
-                      <option value="unit">บาท/หน่วย</option>
-                      <option value="person">บาท/คน</option>
-                      <option value="room">บาท/ห้อง</option>
-                    </select>
-                  </div>
-                </div>
-
-                {/* Electric */}
-                <div className="bg-white p-3.5 rounded-2xl border border-slate-200 space-y-2">
-                  <label className="block font-black text-slate-800 flex items-center gap-1.5">
-                    <Zap className="w-4 h-4 text-amber-500" /> ค่าไฟฟ้า
-                  </label>
-                  <div>
-                    <span className="text-[10px] text-slate-400 font-bold block mb-1">อัตรา (บาท)</span>
-                    <input
-                      type="number"
-                      value={formData.utilities.electricRate}
-                      onChange={(e) => setFormData({ ...formData, utilities: { ...formData.utilities, electricRate: parseFloat(e.target.value) || 0 } })}
-                      className="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl font-black text-slate-800 outline-none"
-                    />
-                  </div>
-                  <div>
-                    <span className="text-[10px] text-slate-400 font-bold block mb-1">รูปแบบการคิด</span>
-                    <select
-                      value={formData.utilities.electricBillingMode}
-                      onChange={(e) => setFormData({ ...formData, utilities: { ...formData.utilities, electricBillingMode: e.target.value } })}
-                      className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-700 outline-none"
-                    >
-                      <option value="unit">บาท/หน่วย</option>
-                      <option value="person">บาท/คน</option>
-                      <option value="room">บาท/ห้อง</option>
-                    </select>
-                  </div>
-                </div>
-
-                {/* Common Fee */}
-                <div className="bg-white p-3.5 rounded-2xl border border-slate-200 space-y-2">
-                  <label className="block font-black text-slate-800 flex items-center gap-1.5">
-                    <Users className="w-4 h-4 text-emerald-500" /> ค่าส่วนกลาง
-                  </label>
-                  <div>
-                    <span className="text-[10px] text-slate-400 font-bold block mb-1">อัตรา (บาท)</span>
-                    <input
-                      type="number"
-                      value={formData.utilities.commonFeeMode === 'free' || formData.utilities.commonFeeMode === 'none' ? 0 : formData.utilities.commonFeeRate}
-                      disabled={formData.utilities.commonFeeMode === 'free' || formData.utilities.commonFeeMode === 'none'}
-                      onChange={(e) => setFormData({ ...formData, utilities: { ...formData.utilities, commonFeeRate: parseFloat(e.target.value) || 0 } })}
-                      placeholder={formData.utilities.commonFeeMode === 'free' || formData.utilities.commonFeeMode === 'none' ? 'ฟรี' : '0'}
-                      className="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl font-black text-slate-800 outline-none disabled:opacity-50 disabled:bg-slate-100"
-                    />
-                  </div>
-                  <div>
-                    <span className="text-[10px] text-slate-400 font-bold block mb-1">รูปแบบการคิด</span>
-                    <select
-                      value={formData.utilities.commonFeeMode}
-                      onChange={(e) => {
-                        const mode = e.target.value;
-                        setFormData({
-                          ...formData,
-                          utilities: {
-                            ...formData.utilities,
-                            commonFeeMode: mode,
-                            commonFeeRate: mode === 'free' || mode === 'none' ? 0 : (formData.utilities.commonFeeRate || 200)
-                          }
-                        });
-                      }}
-                      className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-700 outline-none cursor-pointer"
-                    >
-                      <option value="free">ไม่คิดค่าบริการ (ฟรี)</option>
-                      <option value="room">บาท/ห้อง</option>
-                      <option value="person">บาท/คน</option>
-                    </select>
-                  </div>
-                </div>
-
-                {/* Internet */}
-                <div className="bg-white p-3.5 rounded-2xl border border-slate-200 space-y-2">
-                  <label className="block font-black text-slate-800 flex items-center gap-1.5">
-                    <Wifi className="w-4 h-4 text-indigo-500" /> ค่าอินเทอร์เน็ต
-                  </label>
-                  <div>
-                    <span className="text-[10px] text-slate-400 font-bold block mb-1">อัตรา (บาท)</span>
-                    <input
-                      type="number"
-                      value={formData.utilities.internetFeeMode === 'free' || formData.utilities.internetFeeMode === 'none' ? 0 : formData.utilities.internetRate}
-                      disabled={formData.utilities.internetFeeMode === 'free' || formData.utilities.internetFeeMode === 'none'}
-                      onChange={(e) => setFormData({ ...formData, utilities: { ...formData.utilities, internetRate: parseFloat(e.target.value) || 0 } })}
-                      placeholder={formData.utilities.internetFeeMode === 'free' || formData.utilities.internetFeeMode === 'none' ? 'ฟรี' : '0'}
-                      className="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl font-black text-slate-800 outline-none disabled:opacity-50 disabled:bg-slate-100"
-                    />
-                  </div>
-                  <div>
-                    <span className="text-[10px] text-slate-400 font-bold block mb-1">รูปแบบการคิด</span>
-                    <select
-                      value={formData.utilities.internetFeeMode}
-                      onChange={(e) => {
-                        const mode = e.target.value;
-                        setFormData({
-                          ...formData,
-                          utilities: {
-                            ...formData.utilities,
-                            internetFeeMode: mode,
-                            internetRate: mode === 'free' || mode === 'none' ? 0 : (formData.utilities.internetRate || 150)
-                          }
-                        });
-                      }}
-                      className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-700 outline-none cursor-pointer"
-                    >
-                      <option value="free">ไม่คิดค่าบริการ (ฟรี)</option>
-                      <option value="room">บาท/ห้อง</option>
-                      <option value="person">บาท/คน</option>
-                    </select>
-                  </div>
-                </div>
-
-                {/* Parking Fee */}
-                <div className="bg-white p-3.5 rounded-2xl border border-slate-200 space-y-2">
-                  <label className="block font-black text-slate-800 flex items-center gap-1.5">
-                    <Building2 className="w-4 h-4 text-purple-500" /> ค่าจอดรถ
-                  </label>
-                  <div>
-                    <span className="text-[10px] text-slate-400 font-bold block mb-1">อัตรา (บาท)</span>
-                    <input
-                      type="number"
-                      value={formData.utilities.parkingFeeMode === 'free' ? 0 : formData.utilities.parkingFeeRate}
-                      disabled={formData.utilities.parkingFeeMode === 'free'}
-                      onChange={(e) => setFormData({ ...formData, utilities: { ...formData.utilities, parkingFeeRate: parseFloat(e.target.value) || 0 } })}
-                      placeholder={formData.utilities.parkingFeeMode === 'free' ? 'ฟรี' : '0'}
-                      className="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl font-black text-slate-800 outline-none disabled:opacity-50 disabled:bg-slate-100"
-                    />
-                  </div>
-                  <div>
-                    <span className="text-[10px] text-slate-400 font-bold block mb-1">รูปแบบการคิด</span>
-                    <select
-                      value={formData.utilities.parkingFeeMode}
-                      onChange={(e) => {
-                        const mode = e.target.value as 'room' | 'free' | 'vehicle';
-                        setFormData({
-                          ...formData,
-                          utilities: {
-                            ...formData.utilities,
-                            parkingFeeMode: mode,
-                            parkingFeeRate: mode === 'free' ? 0 : (formData.utilities.parkingFeeRate || 100)
-                          }
-                        });
-                      }}
-                      className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-700 outline-none cursor-pointer"
-                    >
-                      <option value="free">ไม่คิดค่าบริการ (ฟรี)</option>
-                      <option value="room">บาท/ห้อง</option>
-                      <option value="vehicle">บาท/คัน</option>
-                    </select>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Rent Rates Per Building (Adjustable per building per user request) */}
-            <div className="space-y-4">
-              <h4 className="text-xs font-black text-slate-800 uppercase tracking-wider flex items-center gap-2">
-                <BuildingIcon className="w-4 h-4 text-blue-600" />
-                ตั้งค่าอัตราค่าเช่าแยกตามแต่ละตึก
-              </h4>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {formData.buildings.map((b, bIdx) => {
-                  const rentRates = b.rentRates || {
-                    monthly: 0,
-                    term: 0,
-                    termMonths: 1,
-                    maxInstallmentMonths: 1,
-                    daily: 0,
-                    maxOccupants: 2
-                  };
-
-                  return (
-                    <div key={b.id} className="bg-slate-50/70 p-4 sm:p-5 rounded-3xl border border-slate-200/80 space-y-4">
-                      <div className="flex items-center justify-between border-b border-slate-200 pb-2">
-                        <span className="text-xs font-black text-blue-700 bg-blue-50 px-3 py-1 rounded-xl border border-blue-100 flex items-center gap-1.5">
-                          <Building2 className="w-3.5 h-3.5 text-blue-600" />
-                          {b.name}
-                        </span>
-                        <span className="text-[10px] font-bold text-slate-400">
-                          {getGeneratedRooms(b).length} ห้องพัก
-                        </span>
-                      </div>
-
-                      <div className="space-y-3">
-                        {/* Monthly Rent and Daily Rent */}
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                          <div>
-                            <label className="block text-xs font-bold text-slate-700 mb-1">ค่าเช่ารายเดือน (บาท/เดือน)</label>
-                            <input
-                              type="number"
-                              value={rentRates.monthly}
-                              onChange={(e) => {
-                                const updated = [...formData.buildings];
-                                updated[bIdx].rentRates = {
-                                  ...rentRates,
-                                  monthly: parseFloat(e.target.value) || 0
-                                };
-                                setFormData({ ...formData, buildings: updated });
-                              }}
-                              className="w-full px-3.5 py-2 text-xs bg-white border border-slate-200 rounded-xl font-black text-slate-800 outline-none focus:border-blue-500"
-                            />
-                          </div>
-
-                          <div>
-                            <label className="block text-xs font-bold text-slate-700 mb-1">ค่าเช่ารายวัน (บาท/วัน)</label>
-                            <input
-                              type="number"
-                              value={rentRates.daily}
-                              onChange={(e) => {
-                                const updated = [...formData.buildings];
-                                updated[bIdx].rentRates = {
-                                  ...rentRates,
-                                  daily: parseFloat(e.target.value) || 0
-                                };
-                                setFormData({ ...formData, buildings: updated });
-                              }}
-                              className="w-full px-3.5 py-2 text-xs bg-white border border-slate-200 rounded-xl font-black text-slate-800 outline-none focus:border-blue-500"
-                            />
-                          </div>
-                        </div>
-
-                        {/* Max Occupants on its own row underneath */}
-                        <div>
-                          <label className="block text-xs font-bold text-slate-700 mb-1">จำนวนผู้เข้าพักสูงสุด (คน)</label>
-                          <input
-                            type="number"
-                            min={1}
-                            max={20}
-                            value={rentRates.maxOccupants ?? 2}
-                            onChange={(e) => {
-                              const updated = [...formData.buildings];
-                              updated[bIdx].rentRates = {
-                                ...rentRates,
-                                maxOccupants: parseInt(e.target.value) || 1
-                              };
-                              setFormData({ ...formData, buildings: updated });
-                            }}
-                            className="w-full px-3.5 py-2 text-xs bg-white border border-slate-200 rounded-xl font-black text-slate-800 outline-none focus:border-blue-500"
-                            placeholder="2"
-                          />
-                        </div>
-
-                        <div className="p-3 bg-blue-50/50 rounded-2xl border border-blue-100/60 space-y-2.5">
-                          <div className="flex items-center justify-between">
-                            <label className="block text-xs font-bold text-blue-900">ค่าเช่ารายเทอม (บาท/เทอม)</label>
-                            <span className="text-[10px] bg-blue-600 text-white font-black px-2 py-0.5 rounded-md">รายเทอม</span>
-                          </div>
-
-                          {/* Term Price and Duration on the Same Line */}
-                          <div className="flex items-center gap-2">
-                            <input
-                              type="number"
-                              value={rentRates.term}
-                              onChange={(e) => {
-                                const updated = [...formData.buildings];
-                                updated[bIdx].rentRates = {
-                                  ...rentRates,
-                                  term: parseFloat(e.target.value) || 0
-                                };
-                                setFormData({ ...formData, buildings: updated });
-                              }}
-                              placeholder="18000"
-                              className="flex-1 min-w-0 px-3 py-1.5 text-xs bg-white border border-slate-200 rounded-xl font-bold text-blue-700 outline-none focus:border-blue-500"
-                            />
-                            <div className="flex items-center gap-1 bg-white px-2.5 py-1.5 border border-slate-200 rounded-xl shrink-0">
-                              <span className="text-xs font-bold text-slate-400">ระยะ:</span>
-                              <input
-                                type="number"
-                                min={1}
-                                max={12}
-                                value={rentRates.termMonths}
-                                onChange={(e) => {
-                                  const updated = [...formData.buildings];
-                                  updated[bIdx].rentRates = {
-                                    ...rentRates,
-                                    termMonths: parseInt(e.target.value) || 4
-                                  };
-                                  setFormData({ ...formData, buildings: updated });
-                                }}
-                                className="w-8 text-xs font-black text-slate-800 outline-none text-center"
-                              />
-                              <span className="text-xs font-bold text-slate-400">เดือน</span>
-                            </div>
-                          </div>
-
-                          {/* Compact Max Installment Row */}
-                          <div className="pt-2 border-t border-blue-100/80 flex items-center justify-between gap-2">
-                            <label className="text-xs font-bold text-blue-900 shrink-0">แบ่งชำระสูงสุด:</label>
-                            <div className="flex items-center gap-1.5 bg-white px-2.5 py-1 border border-blue-200 rounded-xl">
-                              <input
-                                type="number"
-                                min={1}
-                                max={12}
-                                value={rentRates.maxInstallmentMonths ?? 2}
-                                onChange={(e) => {
-                                  const updated = [...formData.buildings];
-                                  updated[bIdx].rentRates = {
-                                    ...rentRates,
-                                    maxInstallmentMonths: parseInt(e.target.value) || 2
-                                  };
-                                  setFormData({ ...formData, buildings: updated });
-                                }}
-                                className="w-8 text-xs font-black text-blue-700 outline-none text-center"
-                              />
-                              <span className="text-xs font-bold text-slate-600">งวด</span>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* STEP 4: Deposit, Late Fee & Payment Account (Enhanced Bank Dropbox & Account Name Note) */}
-      {currentStep === 4 && (
-        <div className="bg-white p-5 sm:p-8 rounded-3xl border border-slate-100 shadow-xs space-y-6 animate-in fade-in duration-200">
-          <div className="flex items-center gap-2 pb-3 border-b border-slate-100">
-            <ShieldCheck className="w-5 h-5 text-blue-600" />
-            <div>
-              <h3 className="text-base font-black text-slate-800">ขั้นตอนที่ 4: มัดจำ & บัญชี</h3>
-              <p className="text-xs text-slate-400 font-medium">กำหนดเงินประกันแรกเข้า วันครบกำหนดชำระ ค่าปรับ และระบุบัญชีธนาคารสำหรับตรวจสอบสลิปอัตโนมัติ</p>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {/* Deposits & Late Fees */}
-            <div className="bg-slate-50/60 p-4 sm:p-5 rounded-2xl border border-slate-100 space-y-4">
-              <h4 className="text-xs font-black text-slate-700 flex items-center gap-1.5 uppercase tracking-wide">
-                <AlertCircle className="w-4 h-4 text-amber-600" /> เงินมัดจำ / ประกัน & กฎการปรับ
-              </h4>
-
-              {/* Per-Building Security Deposit */}
-              <div className="bg-white p-3.5 sm:p-4 rounded-xl border border-slate-200/90 space-y-2.5">
-                <div className="flex items-center justify-between pb-2 border-b border-slate-100">
-                  <label className="block text-xs font-black text-slate-800 flex items-center gap-1.5">
-                    <ShieldCheck className="w-4 h-4 text-blue-600 shrink-0" />
-                    ค่าประกัน (บาท) <span className="text-rose-500">*</span>
-                  </label>
-                  <span className="text-[10px] font-black text-blue-700 bg-blue-50 border border-blue-100 px-2 py-0.5 rounded-md">
-                    ตั้งค่าตามตึก
+          <div className="space-y-4">
+            {formData.buildings.map((b, idx) => (
+              <div key={b.id} className="p-4 bg-slate-50/80 border border-slate-200/80 rounded-2xl space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-black text-blue-700 bg-blue-100/60 px-2.5 py-1 rounded-lg">
+                    อาคารที่ {idx + 1}
                   </span>
+                  {formData.buildings.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFormData({
+                          ...formData,
+                          buildings: formData.buildings.filter(item => item.id !== b.id)
+                        });
+                      }}
+                      className="text-rose-500 hover:text-rose-700 p-1"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  )}
                 </div>
 
-                <div className="space-y-2">
-                  {formData.buildings.map((b, bIdx) => {
-                    const depositVal = b.securityDeposit !== undefined ? b.securityDeposit : (formData.deposits.securityDeposit || 5000);
-                    return (
-                      <div key={b.id} className="flex items-center justify-between gap-3 bg-slate-50/80 p-2.5 rounded-xl border border-slate-200/80">
-                        <span className="text-xs font-extrabold text-slate-800 shrink-0 flex items-center gap-1.5">
-                          <Building2 className="w-3.5 h-3.5 text-blue-600" />
-                          {b.roomPrefix ? `อาคาร ${b.roomPrefix}` : (b.name || `อาคารที่ ${bIdx + 1}`)}
-                        </span>
-                        <div className="flex items-center gap-2 max-w-[180px] w-full">
-                          <input
-                            type="number"
-                            min={0}
-                            value={depositVal}
-                            onChange={(e) => {
-                              const val = parseFloat(e.target.value) || 0;
-                              const updated = [...formData.buildings];
-                              updated[bIdx].securityDeposit = val;
-                              setFormData({ ...formData, buildings: updated });
-                            }}
-                            className="w-full px-3 py-1.5 text-xs bg-white border border-slate-200 rounded-lg focus:border-blue-500 outline-none font-black text-slate-800 text-right"
-                          />
-                          <span className="text-xs font-bold text-slate-500 shrink-0">บาท</span>
-                        </div>
-                      </div>
-                    );
-                  })}
+                <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 text-xs">
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">ชื่ออาคาร</label>
+                    <input
+                      type="text"
+                      value={b.name}
+                      onChange={(e) => {
+                        const updated = [...formData.buildings];
+                        updated[idx].name = e.target.value;
+                        setFormData({ ...formData, buildings: updated });
+                      }}
+                      className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl font-bold text-slate-800 outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">นำหน้านำห้อง (Prefix)</label>
+                    <input
+                      type="text"
+                      value={b.roomPrefix}
+                      onChange={(e) => {
+                        const updated = [...formData.buildings];
+                        updated[idx].roomPrefix = e.target.value;
+                        setFormData({ ...formData, buildings: updated });
+                      }}
+                      className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl font-bold text-slate-800 outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">จำนวนชั้น</label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={50}
+                      value={b.floorsCount}
+                      onChange={(e) => {
+                        const updated = [...formData.buildings];
+                        updated[idx].floorsCount = parseInt(e.target.value) || 1;
+                        setFormData({ ...formData, buildings: updated });
+                      }}
+                      className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl font-bold text-slate-800 outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">จำนวนห้อง / ชั้น</label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={100}
+                      value={b.roomsPerFloor}
+                      onChange={(e) => {
+                        const updated = [...formData.buildings];
+                        updated[idx].roomsPerFloor = parseInt(e.target.value) || 1;
+                        setFormData({ ...formData, buildings: updated });
+                      }}
+                      className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl font-bold text-slate-800 outline-none"
+                    />
+                  </div>
                 </div>
               </div>
+            ))}
+          </div>
+        </div>
+      )}
 
-              <div className="pt-2 border-t border-slate-200/60">
-                <label className="block text-xs font-bold text-slate-700 mb-1">วันครบกำหนดชำระ (ของทุกเดือน)</label>
+      {/* STEP 3: Rates & Utilities */}
+      {currentStep === 3 && (
+        <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm space-y-6">
+          <div className="flex items-center gap-2 pb-3 border-b border-slate-100">
+            <Zap className="w-5 h-5 text-amber-500" />
+            <div>
+              <h3 className="text-base font-black text-slate-800">ขั้นตอนที่ 3: อัตราค่าน้ำ ไฟฟ้า & ค่าบริการ</h3>
+              <p className="text-xs text-slate-400 font-medium">กำหนดอัตราค่าน้ำ ค่าน้ำไฟ ค่าส่วนกลาง (รองรับค่า 0 บาท)</p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-xs">
+            {/* Water */}
+            <div className="p-4 bg-blue-50/50 border border-blue-100 rounded-2xl space-y-2">
+              <label className="block font-black text-blue-900 flex items-center gap-1.5">
+                <Droplet className="w-4 h-4 text-blue-600" /> ค่าน้ำประปา (บาท/หน่วย)
+              </label>
+              <input
+                type="number"
+                data-testid="input-water-rate"
+                value={formData.utilities.waterRate}
+                onChange={(e) => setFormData({ ...formData, utilities: { ...formData.utilities, waterRate: parseFloat(e.target.value) ?? 0 } })}
+                className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl font-black text-slate-800 outline-none"
+              />
+            </div>
+
+            {/* Electricity */}
+            <div className="p-4 bg-amber-50/50 border border-amber-100 rounded-2xl space-y-2">
+              <label className="block font-black text-amber-900 flex items-center gap-1.5">
+                <Zap className="w-4 h-4 text-amber-600" /> ค่าไฟฟ้า (บาท/หน่วย)
+              </label>
+              <input
+                type="number"
+                data-testid="input-electric-rate"
+                value={formData.utilities.electricRate}
+                onChange={(e) => setFormData({ ...formData, utilities: { ...formData.utilities, electricRate: parseFloat(e.target.value) ?? 0 } })}
+                className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl font-black text-slate-800 outline-none"
+              />
+            </div>
+
+            {/* Common Fee */}
+            <div className="p-4 bg-emerald-50/50 border border-emerald-100 rounded-2xl space-y-2">
+              <label className="block font-black text-emerald-900 flex items-center gap-1.5">
+                <Users className="w-4 h-4 text-emerald-600" /> ค่าส่วนกลาง (บาท/เดือน)
+              </label>
+              <input
+                type="number"
+                data-testid="input-common-fee"
+                value={formData.utilities.commonFeeRate}
+                onChange={(e) => setFormData({ ...formData, utilities: { ...formData.utilities, commonFeeRate: parseFloat(e.target.value) ?? 0 } })}
+                className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl font-black text-slate-800 outline-none"
+              />
+            </div>
+
+            {/* Internet */}
+            <div className="p-4 bg-indigo-50/50 border border-indigo-100 rounded-2xl space-y-2">
+              <label className="block font-black text-indigo-900 flex items-center gap-1.5">
+                <Wifi className="w-4 h-4 text-indigo-600" /> ค่าอินเทอร์เน็ต (บาท/เดือน)
+              </label>
+              <input
+                type="number"
+                data-testid="input-internet-fee"
+                value={formData.utilities.internetRate}
+                onChange={(e) => setFormData({ ...formData, utilities: { ...formData.utilities, internetRate: parseFloat(e.target.value) ?? 0 } })}
+                className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl font-black text-slate-800 outline-none"
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* STEP 4: Payment Account & Owner Signature Canvas */}
+      {currentStep === 4 && (
+        <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm space-y-6">
+          <div className="flex items-center gap-2 pb-3 border-b border-slate-100">
+            <PenTool className="w-5 h-5 text-blue-600" />
+            <div>
+              <h3 className="text-base font-black text-slate-800">ขั้นตอนที่ 4: บัญชีรับชำระ & ลายเซ็นเจ้าของหอพัก</h3>
+              <p className="text-xs text-slate-400 font-medium">ระบุข้อมูลบัญชีธนาคารสำหรับรับชำระเงิน และวาดลายเซ็นอิเล็กทรอนิกส์กำกับเอกสาร</p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 text-xs">
+            {/* Bank Details */}
+            <div className="space-y-4 bg-slate-50/80 p-4 rounded-2xl border border-slate-200/80">
+              <h4 className="font-black text-slate-800 flex items-center gap-1.5">
+                <CreditCard className="w-4 h-4 text-emerald-600" /> ข้อมูลบัญชีธนาคาร
+              </h4>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">ธนาคารที่รับโอน</label>
                 <select
-                  value={formData.deposits.dueDateDay}
-                  onChange={(e) => setFormData({ ...formData, deposits: { ...formData.deposits, dueDateDay: parseInt(e.target.value) || 5 } })}
-                  className="w-full px-3.5 py-2 text-xs bg-white border border-slate-200 rounded-xl focus:border-blue-500 outline-none font-bold"
+                  data-testid="select-bank-name"
+                  value={formData.paymentAccount.bankName}
+                  onChange={(e) => setFormData({ ...formData, paymentAccount: { ...formData.paymentAccount, bankName: e.target.value } })}
+                  className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl font-bold text-slate-800 outline-none"
                 >
-                  {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 25, 28].map(d => (
-                    <option key={d} value={d}>ทุกวันที่ {d} ของเดือน</option>
+                  {BANK_OPTIONS.map((b) => (
+                    <option key={b} value={b}>{b}</option>
                   ))}
                 </select>
               </div>
 
-              <div className="p-4 bg-amber-50/60 rounded-2xl border border-amber-200/80 space-y-3">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-1.5">
-                    <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
-                    <label className="block text-xs font-black text-amber-950">อัตราค่าปรับเมื่อเกินวันกำหนดชำระ</label>
-                  </div>
-                  <span className="text-[10px] font-bold text-amber-700 bg-amber-100/80 px-2 py-0.5 rounded-md">
-                    ค่าปรับ
-                  </span>
-                </div>
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">เลขที่บัญชีธนาคาร</label>
+                <input
+                  type="text"
+                  data-testid="input-account-number"
+                  value={formData.paymentAccount.accountNumber}
+                  onChange={(e) => setFormData({ ...formData, paymentAccount: { ...formData.paymentAccount, accountNumber: e.target.value } })}
+                  placeholder="123-4-56789-0"
+                  className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl font-bold text-slate-800 outline-none"
+                />
+              </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                  {[
-                    { id: 'none', label: 'ไม่มีค่าปรับ', desc: 'ไม่เรียกเก็บค่าปรับค้างชำระ' },
-                    { id: 'per_day', label: 'ปรับคิดรายวัน', desc: 'คิดคำนวณตามจำนวนวันที่เลท (บาท/วัน)' },
-                    { id: 'fixed_once', label: 'ปรับเหมาครั้งเดียว', desc: 'คิดอัตราเหมาจ่ายต่อใบแจ้งหนี้ (บาท/บิล)' }
-                  ].map((opt) => {
-                    const active = formData.deposits.lateFeeType === opt.id;
-                    return (
-                      <button
-                        key={opt.id}
-                        type="button"
-                        onClick={() => {
-                          setFormData({
-                            ...formData,
-                            deposits: {
-                              ...formData.deposits,
-                              lateFeeType: opt.id,
-                              lateFeeAmount: opt.id === 'none' ? 0 : (formData.deposits.lateFeeAmount || 100)
-                            }
-                          });
-                        }}
-                        className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
-                          active
-                            ? 'bg-amber-500/10 border-amber-500 text-amber-950 shadow-2xs ring-1 ring-amber-400'
-                            : 'bg-white border-amber-200/70 text-slate-700 hover:border-amber-300 hover:bg-amber-50/40'
-                        }`}
-                      >
-                        <div className="flex items-center justify-between gap-1">
-                          <span className={`text-xs font-black ${active ? 'text-amber-950' : 'text-slate-800'}`}>
-                            {opt.label}
-                          </span>
-                          {active && <Check className="w-3.5 h-3.5 text-amber-700 stroke-[3] shrink-0" />}
-                        </div>
-                        <p className="text-[10px] text-slate-500 font-medium mt-1 leading-tight">{opt.desc}</p>
-                      </button>
-                    );
-                  })}
-                </div>
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">ชื่อบัญชีธนาคาร</label>
+                <input
+                  type="text"
+                  data-testid="input-account-name"
+                  value={formData.paymentAccount.accountName}
+                  onChange={(e) => setFormData({ ...formData, paymentAccount: { ...formData.paymentAccount, accountName: e.target.value } })}
+                  placeholder="นาย สมศักดิ์ ใจดี"
+                  className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl font-bold text-slate-800 outline-none"
+                />
+              </div>
 
-                {formData.deposits.lateFeeType !== 'none' && (
-                  <div className="pt-2 border-t border-amber-200/60 flex items-center gap-3 flex-wrap animate-in fade-in duration-200">
-                    <div className="relative flex-1 min-w-[180px] max-w-xs">
-                      <input
-                        type="number"
-                        min={0}
-                        value={formData.deposits.lateFeeAmount || ''}
-                        onChange={(e) => setFormData({ ...formData, deposits: { ...formData.deposits, lateFeeAmount: parseFloat(e.target.value) || 0 } })}
-                        placeholder="100"
-                        className="w-full pl-3.5 pr-20 py-2 text-xs bg-white border border-amber-300 focus:border-amber-500 rounded-xl font-black text-amber-950 outline-none shadow-2xs"
-                      />
-                      <div className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-black text-amber-800 pointer-events-none">
-                        {formData.deposits.lateFeeType === 'per_day' ? 'บาท / วัน' : 'บาท / บิล'}
-                      </div>
-                    </div>
-                    <span className="text-[11px] font-bold text-amber-800">
-                      {formData.deposits.lateFeeType === 'per_day'
-                        ? '*คิดตามจำนวนวันเมื่อเลยวันครบกำหนด'
-                        : '*บวกเพิ่มในบิลรอบถัดไปทันที'}
-                    </span>
-                  </div>
-                )}
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">เบอร์พร้อมเพย์ (PromptPay)</label>
+                <input
+                  type="text"
+                  data-testid="input-promptpay"
+                  value={formData.paymentAccount.promptPayId}
+                  onChange={(e) => setFormData({ ...formData, paymentAccount: { ...formData.paymentAccount, promptPayId: e.target.value } })}
+                  placeholder="0812345678"
+                  className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl font-bold text-slate-800 outline-none"
+                />
               </div>
             </div>
 
-            {/* Payment Account with Separate Bank Account Name & PromptPay Account Name */}
-            <div className="bg-slate-50/60 p-4 sm:p-5 rounded-2xl border border-slate-100 space-y-4">
-              <div className="flex items-center justify-between border-b border-slate-200/80 pb-3">
-                <h4 className="text-xs font-black text-slate-800 flex items-center gap-1.5 uppercase tracking-wide">
-                  <CreditCard className="w-4 h-4 text-emerald-600" /> บัญชีรับชำระเงิน (ตรวจสลิป)
+            {/* Signature Drawing Canvas */}
+            <div className="space-y-3 bg-slate-50/80 p-4 rounded-2xl border border-slate-200/80">
+              <div className="flex items-center justify-between">
+                <h4 className="font-black text-slate-800 flex items-center gap-1.5">
+                  <PenTool className="w-4 h-4 text-blue-600" /> วาดลายเซ็นอิเล็กทรอนิกส์ <span className="text-rose-500">*</span>
                 </h4>
+                {signatureSaved && (
+                  <span data-testid="signature-status-saved" className="text-[10px] font-black text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full flex items-center gap-1">
+                    <CheckCircle className="w-3 h-3" /> บันทึกแล้ว
+                  </span>
+                )}
               </div>
 
-              {/* Sub-section 1: Bank Account Details */}
-              <div className="bg-white p-4 rounded-xl border border-slate-200/90 shadow-2xs space-y-3.5">
-                <div className="flex items-center gap-2 pb-2 border-b border-slate-100">
-                  <div className="w-5 h-5 rounded-lg bg-blue-100 text-blue-700 flex items-center justify-center font-black text-[11px]">
-                    1
+              <div className="bg-white border-2 border-dashed border-slate-300 rounded-2xl p-2 relative">
+                <canvas
+                  ref={canvasRef}
+                  width={380}
+                  height={160}
+                  onMouseDown={startDrawing}
+                  onMouseMove={draw}
+                  onMouseUp={stopDrawing}
+                  onMouseLeave={stopDrawing}
+                  onTouchStart={startDrawing}
+                  onTouchMove={draw}
+                  onTouchEnd={stopDrawing}
+                  className="w-full h-40 bg-white rounded-xl touch-none cursor-crosshair"
+                />
+                {!signatureSaved && (
+                  <div className="absolute bottom-3 right-3 text-[10px] text-slate-400 font-bold pointer-events-none">
+                    ใช้นิ้วหรือเมาส์วาดในกรอบนี้
                   </div>
-                  <h5 className="text-xs font-black text-slate-800">ข้อมูลบัญชีธนาคาร</h5>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">
-                      ธนาคารที่รับโอน <span className="text-rose-500">*</span>
-                    </label>
-                    <select
-                      value={formData.paymentAccount.bankName}
-                      onChange={(e) => setFormData({ ...formData, paymentAccount: { ...formData.paymentAccount, bankName: e.target.value } })}
-                      className="w-full px-3.5 py-2 text-xs bg-white border border-slate-200 rounded-xl focus:border-blue-500 outline-none font-bold text-slate-800 cursor-pointer"
-                    >
-                      <option value="">-- เลือกธนาคาร --</option>
-                      {BANK_OPTIONS.map((bank) => (
-                        <option key={bank} value={bank}>{bank}</option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">เลขที่บัญชีธนาคาร <span className="text-rose-500">*</span> </label>
-                    <input
-                      type="text"
-                      disabled={!formData.paymentAccount.bankName}
-                      value={formData.paymentAccount.accountNumber}
-                      onChange={(e) => setFormData({ ...formData, paymentAccount: { ...formData.paymentAccount, accountNumber: formatBankAccount(e.target.value) } })}
-                      placeholder={formData.paymentAccount.bankName ? "XXX-X-XXXXX-X" : "กรุณาเลือกธนาคารก่อน"}
-                      className={`w-full px-3.5 py-2 text-xs border rounded-xl outline-none font-bold transition-all ${
-                        formData.paymentAccount.bankName
-                          ? 'bg-white border-slate-200 focus:border-blue-500 text-slate-800'
-                          : 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed opacity-75'
-                      }`}
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="block text-xs font-bold text-slate-700">
-                      ชื่อบัญชีธนาคาร <span className="text-rose-500">*</span>
-                    </label>
-                    {formData.ownerName && (
-                      <button
-                        type="button"
-                        onClick={() => setFormData(prev => ({
-                          ...prev,
-                          paymentAccount: { 
-                            ...prev.paymentAccount, 
-                            accountName: prev.ownerName,
-                            bankAccountName: prev.ownerName
-                          }
-                        }))}
-                        className="text-[10px] font-extrabold text-blue-600 bg-blue-50 hover:bg-blue-100 border border-blue-100 px-2 py-0.5 rounded-lg transition-all cursor-pointer"
-                      >
-                        ดึงชื่อเจ้าของ
-                      </button>
-                    )}
-                  </div>
-                  <input
-                    type="text"
-                    value={formData.paymentAccount.bankAccountName || formData.paymentAccount.accountName || ''}
-                    onChange={(e) => setFormData({ 
-                      ...formData, 
-                      paymentAccount: { 
-                        ...formData.paymentAccount, 
-                        accountName: e.target.value,
-                        bankAccountName: e.target.value 
-                      } 
-                    })}
-                    placeholder="เช่น นาย สมศักดิ์ วงศ์สว่าง (บัญชีธนาคาร)"
-                    className="w-full px-3.5 py-2 text-xs bg-white border border-slate-200 rounded-xl focus:border-blue-500 outline-none font-bold text-slate-800"
-                  />
-                </div>
+                )}
               </div>
 
-              {/* Sub-section 2: PromptPay Details */}
-              <div className="bg-white p-4 rounded-xl border border-indigo-200/90 shadow-2xs space-y-3.5">
-                <div className="flex items-center gap-2 pb-2 border-b border-indigo-100">
-                  <div className="w-5 h-5 rounded-lg bg-indigo-100 text-indigo-700 flex items-center justify-center font-black text-[11px]">
-                    2
-                  </div>
-                  <h5 className="text-xs font-black text-indigo-950">ข้อมูลบัญชีพร้อมเพย์</h5>
-                </div>
-
-                <div className="grid grid-cols-1 gap-3">
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">
-                      เลขพร้อมเพย์ (เบอร์โทร 10 หลัก / บัตรประชาชน 13 หลัก)
-                    </label>
-                    <input
-                      type="text"
-                      value={formData.paymentAccount.promptPayId}
-                      onChange={(e) => {
-                        const raw = e.target.value.replace(/\D/g, '');
-                        const formatted = raw.length > 10 ? formatIdCard(e.target.value) : formatPhone(e.target.value);
-                        setFormData({ ...formData, paymentAccount: { ...formData.paymentAccount, promptPayId: formatted } });
-                      }}
-                      placeholder="เช่น 081-999-8888 หรือ 1-1007-00123-45-6"
-                      className="w-full px-3.5 py-2 text-xs bg-white border border-indigo-200 rounded-xl focus:border-indigo-500 outline-none font-bold text-indigo-600"
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <div className="p-3 bg-indigo-50/70 border border-indigo-100 rounded-xl flex items-start gap-2 text-xs text-indigo-900 font-medium">
-                <Calendar className="w-4 h-4 text-indigo-600 shrink-0 mt-0.5" />
-                <div>
-                  <span className="font-bold">รอบวันตัดบิลประจำเดือน:</span> วันที่ 25 ของทุกเดือน (กำหนดชำระเงินภายในวันที่ {formData.deposits.dueDateDay || 5})
-                </div>
-              </div>
-
-              <div className="p-2.5 bg-blue-50/70 border border-blue-100 rounded-xl flex items-start gap-1.5 text-[11px] text-blue-800 font-medium leading-relaxed">
-                <Info className="w-3.5 h-3.5 text-blue-600 shrink-0 mt-0.5" />
-                <span>
-                  <strong>ข้อสำคัญ:</strong> ชื่อบัญชีธนาคาร ต้องระบุให้ตรงกับข้อมูลจริง เพื่อให้ระบบตรวจสลิปทำงานได้แม่นยำ (เช่น น.ส. หอพลัส จำกัด)
-                </span>
+              <div className="flex items-center justify-between gap-2 pt-2">
+                <button
+                  type="button"
+                  data-testid="button-clear-signature"
+                  onClick={clearCanvas}
+                  className="px-3 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-xl font-bold text-xs cursor-pointer"
+                >
+                  ล้างลายเซ็น
+                </button>
+                <button
+                  type="button"
+                  data-testid="button-save-signature"
+                  onClick={handleSaveSignature}
+                  disabled={signatureUploading}
+                  className="px-4 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-black text-xs flex items-center gap-1.5 shadow-sm cursor-pointer disabled:opacity-50"
+                >
+                  {signatureUploading ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                  <span>บันทึกลายเซ็น</span>
+                </button>
               </div>
             </div>
           </div>
         </div>
       )}
 
-
-
-      {/* Bottom Step Control Actions */}
-      <div className="space-y-3">
-        {/* Validation Warning Alert (Placed near Next button) */}
-        {validationError && (
-          <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-2xl shadow-md flex items-center justify-between gap-3 text-rose-800 animate-in fade-in slide-in-from-bottom-2">
-            <div className="flex items-center gap-2.5 text-xs font-black">
-              <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
-              <span>{validationError}</span>
+      {/* STEP 5: LINE Official Account Setup */}
+      {currentStep === 5 && (
+        <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm space-y-6">
+          <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+            <div className="flex items-center gap-2">
+              <MessageSquare className="w-5 h-5 text-emerald-600" />
+              <div>
+                <h3 className="text-base font-black text-slate-800">ขั้นตอนที่ 5: ตั้งค่า LINE Official Account</h3>
+                <p className="text-xs text-slate-400 font-medium">เชื่อมต่อ Channel ID & Channel Secret สำหรับส่งการแจ้งเตือนผู้เช่า</p>
+              </div>
             </div>
-            <button
-              onClick={() => setValidationError(null)}
-              className="text-rose-500 hover:text-rose-700 p-1 rounded-lg hover:bg-rose-100 transition-colors cursor-pointer shrink-0"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
+
+            {/* 4-State Readiness Indicator Badge */}
+            <div data-testid="line-readiness-badge" className={`px-3 py-1.5 rounded-full text-xs font-black flex items-center gap-1.5 ${
+              lineStatus.isReady ? 'bg-emerald-100 text-emerald-800 border border-emerald-300' : 'bg-amber-100 text-amber-800 border border-amber-300'
+            }`}>
+              {lineStatus.isReady ? 'พร้อมใช้งาน ✅' : 'รอดำเนินการ ⏳'}
+            </div>
           </div>
-        )}
 
-        <div className="flex items-center justify-between bg-white p-4 rounded-3xl border border-slate-100 shadow-md">
-          <button
-            onClick={() => setCurrentStep(prev => Math.max(prev - 1, 1))}
-            disabled={currentStep === 1}
-            className={`px-4 py-2.5 rounded-2xl text-xs font-extrabold transition-all flex items-center gap-2 cursor-pointer ${
-              currentStep === 1 ? 'opacity-30 cursor-not-allowed bg-slate-100 text-slate-400' : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
-            }`}
-          >
-            <ArrowLeft className="w-4 h-4" />
-            ย้อนกลับ
-          </button>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 text-xs">
+            {/* Credentials Input */}
+            <div className="space-y-4 bg-slate-50/80 p-4 rounded-2xl border border-slate-200/80">
+              <h4 className="font-black text-slate-800">1. กรอก Channel Credentials</h4>
 
-          <div className="flex items-center gap-2">
-            {currentStep < 4 ? (
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">LINE Channel ID <span className="text-rose-500">*</span></label>
+                <input
+                  type="text"
+                  data-testid="input-line-channel-id"
+                  value={lineChannelId}
+                  onChange={(e) => setLineChannelId(e.target.value)}
+                  placeholder="เช่น 2001234567"
+                  className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl font-bold text-slate-800 outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">LINE Channel Secret <span className="text-rose-500">*</span></label>
+                <input
+                  type="password"
+                  data-testid="input-line-channel-secret"
+                  value={lineChannelSecret}
+                  onChange={(e) => setLineChannelSecret(e.target.value)}
+                  placeholder="••••••••••••••••••••••••••••••••"
+                  className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl font-bold text-slate-800 outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">LINE Basic ID / OA ID (ไม่บังคับ)</label>
+                <input
+                  type="text"
+                  data-testid="input-line-oa-id"
+                  value={lineOaId}
+                  onChange={(e) => setLineOaId(e.target.value)}
+                  placeholder="@horplus_dorm"
+                  className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl font-bold text-slate-800 outline-none"
+                />
+              </div>
+
               <button
-                onClick={handleNextStep}
-                className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-2xl text-xs font-black transition-all flex items-center gap-2 shadow-md cursor-pointer"
+                type="button"
+                data-testid="button-verify-line-credentials"
+                onClick={handleSaveLineCredentials}
+                disabled={lineVerifying}
+                className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-black text-xs flex items-center justify-center gap-2 shadow-sm cursor-pointer disabled:opacity-50"
               >
-                ถัดไป
-                <ArrowRight className="w-4 h-4" />
+                {lineVerifying ? <RefreshCw className="w-4 h-4 animate-spin" /> : <ShieldCheck className="w-4 h-4" />}
+                <span>บันทึก & ยืนยัน LINE Credentials</span>
               </button>
-            ) : (
-              <div className="flex items-center gap-2">
+            </div>
+
+            {/* Webhook & Status */}
+            <div className="space-y-4 bg-slate-50/80 p-4 rounded-2xl border border-slate-200/80">
+              <h4 className="font-black text-slate-800">2. ตั้งค่า Webhook URL & ทดสอบ</h4>
+
+              {webhookUrl && (
+                <div className="p-3 bg-white border border-slate-200 rounded-xl space-y-1">
+                  <span className="text-[10px] font-bold text-slate-400 block">Webhook URL สำหรับนำไปใส่ใน LINE Developers Console:</span>
+                  <input
+                    type="text"
+                    readOnly
+                    value={webhookUrl}
+                    className="w-full text-[11px] font-mono font-bold text-slate-700 bg-slate-50 p-1.5 rounded border border-slate-200 outline-none"
+                  />
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-2">
                 <button
-                  onClick={handleSaveRegistration}
-                  className="px-5 sm:px-6 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl text-xs sm:text-xs font-black transition-all flex items-center gap-2 shadow-lg cursor-pointer whitespace-nowrap"
+                  type="button"
+                  data-testid="button-set-webhook"
+                  onClick={handleSetLineWebhook}
+                  disabled={lineVerifying || !lineStatus.credentialsVerified}
+                  className="py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-xs cursor-pointer disabled:opacity-50"
                 >
-                  <Save className="w-4 h-4 shrink-0" />
-                  <span>บันทึก & ยืนยันข้อมูลสร้างหอพัก</span>
+                  ตั้งค่า Webhook URL
+                </button>
+                <button
+                  type="button"
+                  data-testid="button-test-webhook"
+                  onClick={handleTestLineWebhook}
+                  disabled={lineVerifying || !lineStatus.webhookEndpointSet}
+                  className="py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-xs cursor-pointer disabled:opacity-50"
+                >
+                  ทดสอบ Webhook
                 </button>
               </div>
+
+              {/* 4 Checks Status List */}
+              <div className="space-y-2 pt-2 border-t border-slate-200 text-[11px] font-bold">
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-600">1. Credentials Verified:</span>
+                  <span className={lineStatus.credentialsVerified ? 'text-emerald-600' : 'text-slate-400'}>
+                    {lineStatus.credentialsVerified ? 'ผ่าน ✅' : 'ยังไม่ผ่าน'}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-600">2. Webhook Endpoint Set:</span>
+                  <span className={lineStatus.webhookEndpointSet ? 'text-emerald-600' : 'text-slate-400'}>
+                    {lineStatus.webhookEndpointSet ? 'ผ่าน ✅' : 'ยังไม่ผ่าน'}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-600">3. Webhook Test Succeeded:</span>
+                  <span className={lineStatus.webhookTestSucceeded ? 'text-emerald-600' : 'text-slate-400'}>
+                    {lineStatus.webhookTestSucceeded ? 'ผ่าน ✅' : 'ยังไม่ผ่าน'}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-600">4. Webhook Active:</span>
+                  <span className={lineStatus.webhookActive ? 'text-emerald-600' : 'text-slate-400'}>
+                    {lineStatus.webhookActive ? 'ผ่าน ✅' : 'ยังไม่ผ่าน'}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* STEP 6: Package & Finalize */}
+      {currentStep === 6 && (
+        <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm space-y-6">
+          <div className="flex items-center gap-2 pb-3 border-b border-slate-100">
+            <Sparkles className="w-5 h-5 text-blue-600" />
+            <div>
+              <h3 className="text-base font-black text-slate-800">ขั้นตอนที่ 6: เลือกแพ็กเกจ & ยืนยันเปิดใช้งาน</h3>
+              <p className="text-xs text-slate-400 font-medium">เลือกแพ็กเกจการใช้งาน กรอกรหัสโปรโมชัน และยืนยันการลงทะเบียน</p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* FREE Plan */}
+            <div
+              data-testid="plan-card-free"
+              onClick={() => setSelectedPlan('FREE')}
+              className={`p-5 rounded-2xl border-2 transition-all cursor-pointer space-y-3 ${
+                selectedPlan === 'FREE' ? 'border-blue-600 bg-blue-50/50 shadow-md' : 'border-slate-200 bg-white hover:border-slate-300'
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-black text-blue-700 bg-blue-100 px-2.5 py-1 rounded-full">ทดลองใช้งาน (FREE)</span>
+                {selectedPlan === 'FREE' && <CheckCircle className="w-5 h-5 text-blue-600" />}
+              </div>
+              <h4 className="text-xl font-black text-slate-900">FREE Plan</h4>
+              <p className="text-xs text-slate-500 font-medium">ทดลองใช้งานฟรี 1 เดือนแรกเต็ม สำหรับหอพักขนาดเล็ก</p>
+              <ul className="text-xs text-slate-700 font-bold space-y-1.5 pt-2 border-t border-slate-200">
+                <li>• โควต้าห้องพักสูงสุด 10 ห้อง</li>
+                <li>• โควต้าส่งข้อความ LINE OA 30 ข้อความ / เดือน</li>
+                <li>• ทดลองใช้งานฟรี 1 เดือน</li>
+              </ul>
+            </div>
+
+            {/* PRO Plan */}
+            <div
+              data-testid="plan-card-pro"
+              onClick={() => setSelectedPlan('PRO')}
+              className={`p-5 rounded-2xl border-2 transition-all cursor-pointer space-y-3 ${
+                selectedPlan === 'PRO' ? 'border-indigo-600 bg-indigo-50/50 shadow-md' : 'border-slate-200 bg-white hover:border-slate-300'
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-black text-indigo-700 bg-indigo-100 px-2.5 py-1 rounded-full">มืออาชีพ (PRO)</span>
+                {selectedPlan === 'PRO' && <CheckCircle className="w-5 h-5 text-indigo-600" />}
+              </div>
+              <div className="flex items-baseline gap-1">
+                <h4 className="text-xl font-black text-slate-900">189 THB</h4>
+                <span className="text-xs text-slate-500 font-bold">/ เดือน</span>
+              </div>
+              <p className="text-xs text-slate-500 font-medium">สำหรับหอพักขนาดกลาง-ใหญ่ที่ต้องการระบบบริหารแบบครบวงจร</p>
+              <ul className="text-xs text-slate-700 font-bold space-y-1.5 pt-2 border-t border-slate-200">
+                <li>• โควต้าห้องพักสูงสุด 150 ห้อง</li>
+                <li>• โควต้าส่งข้อความ LINE OA 300 ข้อความ / เดือน</li>
+                <li>• ปลดล็อกทุกฟีเจอร์พรีเมียม</li>
+              </ul>
+            </div>
+          </div>
+
+          {/* Promo Code Input */}
+          <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-3">
+            <h4 className="text-xs font-black text-slate-800 flex items-center gap-1.5">
+              <Sparkles className="w-4 h-4 text-amber-500" /> รหัสโปรโมชัน (Promo Code)
+            </h4>
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                data-testid="input-promo-code"
+                value={promoCodeInput}
+                onChange={(e) => setPromoCodeInput(e.target.value)}
+                placeholder="ใส่รหัส HORPLUS เพื่อรับทดลองใช้งานเพิ่ม 2 เดือน"
+                className="flex-1 px-3.5 py-2 text-xs bg-white border border-slate-200 rounded-xl font-bold text-slate-800 outline-none uppercase"
+              />
+              <button
+                type="button"
+                data-testid="button-apply-promo"
+                onClick={handleValidatePromo}
+                className="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-xs font-black cursor-pointer shadow-sm"
+              >
+                ใช้งานรหัส
+              </button>
+            </div>
+            {promoResult && (
+              <p className={`text-xs font-bold ${promoResult.valid ? 'text-emerald-600' : 'text-rose-600'}`}>
+                {promoResult.message}
+              </p>
             )}
           </div>
         </div>
+      )}
+
+      {/* Bottom Controls */}
+      <div className="flex items-center justify-between bg-white p-4 rounded-3xl border border-slate-100 shadow-sm">
+        <button
+          type="button"
+          data-testid="button-prev-step"
+          onClick={() => setCurrentStep(prev => Math.max(1, prev - 1))}
+          disabled={currentStep === 1}
+          className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer disabled:opacity-40"
+        >
+          <ArrowLeft className="w-4 h-4" /> ย้อนกลับ
+        </button>
+
+        {currentStep < 6 ? (
+          <button
+            type="button"
+            data-testid="button-next-step"
+            onClick={handleNextStep}
+            className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-black flex items-center gap-1.5 shadow-md cursor-pointer"
+          >
+            <span>ถัดไป</span>
+            <ArrowRight className="w-4 h-4" />
+          </button>
+        ) : (
+          <button
+            type="button"
+            data-testid="button-finalize-onboarding"
+            onClick={() => setShowTermsModal(true)}
+            className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black flex items-center gap-2 shadow-lg cursor-pointer"
+          >
+            <CheckCircle2 className="w-4 h-4" />
+            <span>ยืนยันสร้างหอพัก</span>
+          </button>
+        )}
       </div>
 
-      {/* Terms & Conditions / Referral Survey Modal */}
+      {/* Terms & Confirmation Modal */}
       {showTermsModal && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-200">
-          <div className="bg-white rounded-3xl max-w-lg w-full max-h-[90vh] overflow-y-auto shadow-2xl border border-slate-100 p-5 sm:p-6 space-y-5 animate-in zoom-in-95 duration-200">
-            
-            {/* Modal Header */}
-            <div className="flex items-start justify-between border-b border-slate-100 pb-3.5">
-              <div className="flex items-center gap-2.5">
-                <div className="w-10 h-10 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center shrink-0">
-                  <ShieldCheck className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="text-sm sm:text-base font-black text-slate-800 leading-tight">
-                    เงื่อนไข & ช่องทางที่รู้จัก
-                  </h3>
-                  <p className="text-[11px] text-slate-400 font-medium">
-                    โปรดยืนยันข้อตกลงการใช้บริการระบบบริหารจัดการหอพัก HorPlus
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setShowTermsModal(false)}
-                className="text-slate-400 hover:text-slate-600 p-1 rounded-xl hover:bg-slate-100 transition-colors cursor-pointer shrink-0"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 space-y-4 shadow-2xl border border-slate-100">
+            <h3 className="text-base font-black text-slate-800">ยืนยันเงื่อนไข & สร้างหอพัก</h3>
 
-            {/* Survey Question: How did you know HorPlus (Placed on Top) */}
-            <div className="space-y-2.5 pb-2 border-b border-slate-100">
-              <label className="block text-xs font-black text-slate-800 flex items-center gap-1.5">
-                <Sparkles className="w-4 h-4 text-amber-500" />
-                คุณรู้จัก HorPlus มาจากช่องทางไหน? <span className="text-rose-500">*</span>
-              </label>
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
-                {REFERRAL_OPTIONS.map((opt) => {
-                  const isSelected = referralSource === opt.id;
-                  const IconComp = opt.icon;
-                  return (
-                    <button
-                      key={opt.id}
-                      type="button"
-                      onClick={() => setReferralSource(opt.id)}
-                      className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer text-xs font-bold flex items-center gap-2 ${
-                        isSelected
-                          ? 'bg-blue-600 text-white border-blue-600 shadow-xs'
-                          : 'bg-slate-50 text-slate-700 border-slate-200 hover:border-slate-300 hover:bg-slate-100/80'
-                      }`}
-                    >
-                      <IconComp className={`w-4 h-4 shrink-0 ${isSelected ? 'text-white' : 'text-blue-600'}`} />
-                      <span className="truncate">{opt.label}</span>
-                    </button>
-                  );
-                })}
-              </div>
-
-              {referralSource === 'other' && (
-                <input
-                  type="text"
-                  value={referralOtherText}
-                  onChange={(e) => setReferralOtherText(e.target.value)}
-                  placeholder="ระบุช่องทางอื่นๆ ที่รู้จัก HorPlus..."
-                  className="w-full px-3.5 py-2 text-xs bg-white border border-slate-200 rounded-xl focus:border-blue-500 outline-none font-bold text-slate-800 mt-2"
-                />
-              )}
-            </div>
-
-            {/* Terms & Regulations Scroll Box (Placed below survey) */}
-            <div className="space-y-2">
-              <label className="block text-xs font-black text-slate-700 flex items-center gap-1.5">
-                <FileText className="w-4 h-4 text-blue-600" />
-                ข้อบังคับและกฎหมายการใช้งานระบบ HorPlus
-              </label>
-              <div className="p-3.5 bg-slate-50 border border-slate-200/80 rounded-2xl text-[11px] text-slate-600 space-y-2.5 max-h-36 overflow-y-auto leading-relaxed font-medium">
-                <p className="font-bold text-slate-800">1. การคุ้มครองข้อมูลส่วนบุคคล (PDPA):</p>
-                <p className="text-slate-600">
-                  ผู้ใช้งานยินยอมให้ระบบ HorPlus จัดเก็บ ประมวลผล และบริหารจัดการข้อมูลผู้เช่า สัญญาเช่า ค่าน้ำไฟ และเอกสารที่เกี่ยวข้อง เพื่อวัตถุประสงค์ในการให้บริการระบบหอพักอย่างปลอดภัย
-                </p>
-                <p className="font-bold text-slate-800">2. ข้อบังคับทางกฎหมายและสัญญาเช่า:</p>
-                <p className="text-slate-600">
-                  ผู้ให้เช่าต้องตรวจสอบความถูกต้องของสัญญาเช่า ใบแจ้งหนี้ และข้อกำหนดอัตราค่าบริการค่าน้ำ-ค่าไฟให้สอดคล้องกับประกาศ สคบ. และกฎหมายที่เกี่ยวข้อง
-                </p>
-                <p className="font-bold text-slate-800">3. ความปลอดภัยและสิทธิ์ใช้งาน:</p>
-                <p className="text-slate-600">
-                  ผู้ใช้งานต้องเก็บรักษารหัสผ่านและสิทธิ์ผู้จัดการระบบเป็นความลับ ระบบ HorPlus จะไม่รับผิดชอบต่อความเสียหายจากการเผยแพร่ข้อมูลรับชำระโดยไม่ได้รับอนุญาต
-                </p>
-              </div>
-            </div>
-
-            {/* Checkbox Agreement */}
-            <label className="flex items-start gap-2.5 p-3 bg-blue-50/60 border border-blue-200/70 rounded-2xl cursor-pointer hover:bg-blue-50 transition-all">
+            <label className="flex items-start gap-2 text-xs font-bold text-slate-700 cursor-pointer">
               <input
                 type="checkbox"
+                data-testid="checkbox-agreed-terms"
                 checked={agreedTerms}
                 onChange={(e) => setAgreedTerms(e.target.checked)}
-                className="mt-0.5 w-4 h-4 text-blue-600 rounded cursor-pointer accent-blue-600 shrink-0"
+                className="mt-0.5 rounded text-blue-600"
               />
-              <span className="text-xs font-bold text-slate-800 leading-snug">
-                ข้าพเจ้าได้อ่าน เข้าใจ และยินยอมปฏิบัติตามเงื่อนไข ข้อบังคับทางกฎหมาย และนโยบายการใช้งานระบบ HorPlus ทุกประการ <span className="text-rose-500">*</span>
-              </span>
+              <span>ข้าพเจ้ายอมรับเงื่อนไขการใช้บริการและนโยบายความเป็นส่วนตัวของระบบ HorPlus</span>
             </label>
 
-            {/* Modal Actions */}
             <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
               <button
                 type="button"
                 onClick={() => setShowTermsModal(false)}
-                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-all cursor-pointer"
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold cursor-pointer"
               >
                 ยกเลิก
               </button>
               <button
                 type="button"
-                onClick={handleConfirmTermsAndComplete}
-                disabled={isSubmitting || !agreedTerms || !referralSource || (referralSource === 'other' && !referralOtherText.trim())}
-                className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-xl text-xs font-black transition-all shadow-md cursor-pointer flex items-center gap-2"
+                data-testid="button-confirm-finalize"
+                disabled={!agreedTerms || isSubmitting}
+                onClick={handleFinalizeRegistration}
+                className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black shadow-md cursor-pointer disabled:opacity-40"
               >
-                <CheckCircle2 className="w-4 h-4" />
-                {isSubmitting ? 'กำลังบันทึกข้อมูล...' : 'ยอมรับเงื่อนไข & ยืนยันสร้างหอพัก'}
+                {isSubmitting ? 'กำลังบันทึก...' : 'ยืนยันสร้างหอพักทันที'}
               </button>
             </div>
-
           </div>
         </div>
       )}

@@ -29,6 +29,9 @@ export class LocalOwnerSignatureStorage implements OwnerSignatureStorageProvider
   private storageDir: string;
 
   constructor(customStorageDir?: string) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new AppError('LocalOwnerSignatureStorage cannot be used in production environment', 500, 'STORAGE_UNCONFIGURED');
+    }
     this.storageDir = customStorageDir || path.join(process.cwd(), 'storage', 'signatures');
     if (!fs.existsSync(this.storageDir)) {
       fs.mkdirSync(this.storageDir, { recursive: true });
@@ -53,7 +56,6 @@ export class S3CompatibleOwnerSignatureStorage implements OwnerSignatureStorageP
   constructor() {
     const isConfigured = Boolean(process.env.R2_ACCESS_KEY_ID && process.env.R2_SECRET_ACCESS_KEY);
     if (!isConfigured) {
-      // Amendment A11: Production storage fails closed if unconfigured
       if (process.env.NODE_ENV === 'production') {
         throw new AppError('Production object storage is unconfigured', 500, 'STORAGE_UNCONFIGURED');
       }
@@ -64,7 +66,6 @@ export class S3CompatibleOwnerSignatureStorage implements OwnerSignatureStorageP
     if (!process.env.R2_ACCESS_KEY_ID) {
       throw new AppError('Production object storage is unconfigured', 500, 'STORAGE_UNCONFIGURED');
     }
-    // S3/R2 upload implementation placeholder for production deployment
   }
 
   async getStream(objectKey: string): Promise<Readable> {
@@ -81,8 +82,12 @@ export class SignatureStorageService {
   constructor(private prisma: PrismaClient, provider?: OwnerSignatureStorageProvider) {
     if (provider) {
       this.provider = provider;
-    } else if (process.env.NODE_ENV === 'production' && process.env.R2_ACCESS_KEY_ID) {
-      this.provider = new S3CompatibleOwnerSignatureStorage();
+    } else if (process.env.NODE_ENV === 'production') {
+      if (process.env.R2_ACCESS_KEY_ID && process.env.R2_SECRET_ACCESS_KEY) {
+        this.provider = new S3CompatibleOwnerSignatureStorage();
+      } else {
+        throw new AppError('Production signature object storage configuration is missing', 500, 'STORAGE_UNCONFIGURED');
+      }
     } else {
       this.provider = new LocalOwnerSignatureStorage();
     }
@@ -99,7 +104,7 @@ export class SignatureStorageService {
 
   /**
    * Process and save a new owner signature for a dormitory.
-   * Transactionally marks older versions as isCurrent = false.
+   * Uses transaction locking (SELECT pg_advisory_xact_lock) for atomic versioning.
    */
   async saveSignature(params: {
     dormitoryId: string;
@@ -122,6 +127,7 @@ export class SignatureStorageService {
 
     return await this.prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormitoryId}, true)`;
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${dormitoryId}))`;
 
       // Find current version
       const existingSignatures = await tx.ownerSignature.findMany({

@@ -666,7 +666,7 @@ export class AccessGrantService {
       }));
 
       const slotUsage = await this.getSlotUsage(dormitoryId, tx);
-      const quotaStatus = await this.pushUsageService.getQuotaStatus(dormitoryId);
+      const quotaStatus = await this.pushUsageService.getQuotaStatus(dormitoryId, tx);
 
       return {
         permanentOwners: googleOwners,

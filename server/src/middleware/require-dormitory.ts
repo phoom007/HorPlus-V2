@@ -49,7 +49,27 @@ export function createRequireDormitoryContextMiddleware(
       });
     }
 
-    const member = await membershipRepo.findByUserAndDormitory(req.auth.userId, dormitoryId);
+    let member = await membershipRepo.findByUserAndDormitory(req.auth.userId, dormitoryId);
+
+    if (!member) {
+      try {
+        const { getPrismaClient } = await import('../db/prisma.js');
+        const prisma = getPrismaClient();
+        const dorm = await prisma.dormitory.findUnique({
+          where: { id: dormitoryId },
+          select: { status: true, createdByUserId: true },
+        });
+        if (dorm && dorm.status === 'setup_pending' && dorm.createdByUserId === req.auth.userId) {
+          member = {
+            id: `provisional-${dormitoryId}`,
+            dormitoryId,
+            userId: req.auth.userId,
+            roleCode: 'OWNER',
+            status: 'active',
+          } as any;
+        }
+      } catch {}
+    }
 
     if (!member) {
       return res.status(403).json({
@@ -122,7 +142,7 @@ export function createRequireActiveDormitoryMiddleware(prisma: any) {
 
       if (dorm && dorm.status === 'setup_pending') {
         const path = req.originalUrl || req.url || '';
-        if (path.includes('/line-oa') || path.includes('/onboarding') || path.includes('/signatures')) {
+        if (path.includes('/line-oa') || path.includes('/onboarding') || path.includes('/signatures') || path.includes('/staff') || path.includes('/line-friends')) {
           return next();
         }
 

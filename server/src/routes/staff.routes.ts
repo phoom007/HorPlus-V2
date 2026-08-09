@@ -61,6 +61,7 @@ export function createStaffRoutes(
     const context = (req as any).dormitoryContext || (req.auth as any);
     const roleCode = context?.roleCode || context?.role || context?.memberships?.[0]?.roleCode;
     if (roleCode !== 'OWNER') {
+      console.error('[REQUIRE OWNER ROLE ERROR]', { path: req.originalUrl, roleCode, contextRole: context?.roleCode, authRole: (req as any).auth?.role });
       return res.status(403).json({
         error: {
           code: 'FORBIDDEN',

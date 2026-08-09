@@ -10,6 +10,7 @@ import { SensitiveFieldService } from './sensitive-field.service.js';
 import { subscriptionEntitlementService } from './subscription-entitlement.service.js';
 import { addCalendarMonths } from '../utils/calendar-math.js';
 import { normalizeRoomIdentifier } from '../utils/normalization.js';
+import { decryptText } from '../utils/crypto-encryption.js';
 import { IIdempotencyRepository, InMemoryIdempotencyRepository } from '../db/repositories/idempotency.repository.js';
 
 export interface CompleteOwnerOnboardingParams {
@@ -97,12 +98,10 @@ export class DormitoryProvisioningService {
           ? sensitiveFieldServiceOrRepo
           : new SensitiveFieldService(process.env.FIELD_ENCRYPTION_KEY || 'default_32_byte_secret_key_123456');
     } else {
-      // Legacy signature compatibility (15th argument is prisma)
       const lastArg = rest[rest.length - 1];
       this.prisma = lastArg && typeof lastArg.$transaction === 'function' ? lastArg : (prismaOrRepo as PrismaClient);
       this.sensitiveFieldService = new SensitiveFieldService(process.env.FIELD_ENCRYPTION_KEY || 'default_32_byte_secret_key_123456');
 
-      // Check if argument 9 is idempotency repo
       const candidateIdemp = rest[6];
       if (candidateIdemp && typeof candidateIdemp.find === 'function') {
         this.idempotencyRepo = candidateIdemp;
@@ -112,11 +111,10 @@ export class DormitoryProvisioningService {
 
   /**
    * Amendment A2: Prepare or retrieve provisional setup_pending dormitory before Step 4.
-   * Idempotent: returns existing provisional dormitory if already prepared.
+   * Creates ZERO OwnerSignature rows.
    */
   async prepareProvisionalDormitory(userId: string, data: { name?: string; addressLine1?: string; province?: string }, txClient?: any) {
     const runInTx = async (tx: any) => {
-      // 1. Quota check (max 10 dormitories per account including setup_pending)
       const existingDormCount = await tx.dormitory.count({
         where: {
           createdByUserId: userId,
@@ -124,7 +122,6 @@ export class DormitoryProvisioningService {
         },
       });
 
-      // Check draft for existing provisionalDormitoryId
       const draft = await tx.onboardingDraft.findUnique({
         where: { userId },
       });
@@ -136,7 +133,6 @@ export class DormitoryProvisioningService {
         });
 
         if (provDorm && provDorm.status === 'setup_pending') {
-          // Update provisional dorm details if provided
           if (data.name) {
             await tx.dormitory.update({
               where: { id: provDorm.id },
@@ -149,9 +145,15 @@ export class DormitoryProvisioningService {
           }
 
           const appOrigin = process.env.PUBLIC_APP_ORIGIN || process.env.APPLICATION_URL || 'http://127.0.0.1:3001';
-          const webhookUrl = provDorm.lineConfig?.webhookKeyHash
-            ? `${appOrigin.replace(/\/$/, '')}/api/v1/line/webhook/${provDorm.lineConfig.webhookKeyHash.substring(0, 32)}`
-            : `${appOrigin.replace(/\/$/, '')}/api/v1/line/webhook/${provDorm.id.replace(/-/g, '')}`;
+          let webhookUrl: string | null = null;
+          if (provDorm.lineConfig?.webhookKeyEncrypted) {
+            try {
+              const rawKey = decryptText(provDorm.lineConfig.webhookKeyEncrypted);
+              webhookUrl = `${appOrigin.replace(/\/$/, '')}/api/v1/line/webhook/${rawKey}`;
+            } catch {
+              webhookUrl = null;
+            }
+          }
 
           return {
             provisionalDormitoryId: provDorm.id,
@@ -164,7 +166,6 @@ export class DormitoryProvisioningService {
         throw new AppError('DORMITORY_LIMIT_EXCEEDED: คุณมีหอพักสูงสุดตามโควต้า 10 แห่งแล้ว', 403, 'DORMITORY_LIMIT_EXCEEDED');
       }
 
-      // Generate new provisional dormitory
       const dormName = data.name || 'หอพักใหม่ (กำลังลงทะเบียน)';
       const webhookKey = nodeCrypto.randomBytes(32).toString('hex');
       const webhookKeyHash = nodeCrypto.createHash('sha256').update(webhookKey).digest('hex');
@@ -180,10 +181,8 @@ export class DormitoryProvisioningService {
         },
       });
 
-      // Set RLS transaction context for provisional dormitory child records
       await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dorm.id}, true)`;
 
-      // Default Owner role
       let ownerRole = await tx.role.findFirst({
         where: { dormitoryId: dorm.id, code: 'OWNER' },
       });
@@ -199,7 +198,6 @@ export class DormitoryProvisioningService {
         });
       }
 
-      // Create owner membership
       await tx.dormitoryMember.create({
         data: {
           dormitoryId: dorm.id,
@@ -209,21 +207,18 @@ export class DormitoryProvisioningService {
         },
       });
 
-      // Default Billing settings
       await tx.dormitoryBillingSettings.create({
         data: {
           dormitoryId: dorm.id,
         },
       });
 
-      // Default Property settings
       await tx.dormitoryPropertyDefaults.create({
         data: {
           dormitoryId: dorm.id,
         },
       });
 
-      // LINE Config for webhook URL
       await tx.dormitoryLineConfig.create({
         data: {
           dormitoryId: dorm.id,
@@ -233,22 +228,8 @@ export class DormitoryProvisioningService {
         },
       });
 
-      // Default initial OwnerSignature
-      const defaultPngSha256 = '11223344556677889900aabbccddeeff11223344556677889900aabbccddeeff';
-      await tx.ownerSignature.create({
-        data: {
-          dormitoryId: dorm.id,
-          signedByUserId: userId,
-          objectKey: `dormitories/${dorm.id}/signatures/v1-default.png`,
-          sha256: defaultPngSha256,
-          mimeType: 'image/png',
-          byteSize: 32,
-          version: 1,
-          isCurrent: true,
-        },
-      });
+      // NOTE: ZERO OwnerSignature rows created during provisional preparation!
 
-      // Update OnboardingDraft
       await tx.onboardingDraft.upsert({
         where: { userId },
         create: {
@@ -265,7 +246,7 @@ export class DormitoryProvisioningService {
       });
 
       const appOrigin = process.env.PUBLIC_APP_ORIGIN || process.env.APPLICATION_URL || 'http://127.0.0.1:3001';
-      const webhookUrl = `${appOrigin.replace(/\/$/, '')}/api/v1/line/webhook/${webhookKeyHash.substring(0, 32)}`;
+      const webhookUrl = `${appOrigin.replace(/\/$/, '')}/api/v1/line/webhook/${webhookKey}`;
 
       return {
         provisionalDormitoryId: dorm.id,
@@ -279,13 +260,12 @@ export class DormitoryProvisioningService {
 
   /**
    * Finalize Owner Onboarding (Step 6 -> Completion)
-   * Executes atomic database-side finalization under transaction lock.
+   * Canonical endpoint: POST /api/v1/onboarding/finalize
    */
   public async completeOwnerOnboarding(params: CompleteOwnerOnboardingParams): Promise<any> {
     const { userId, idempotencyKey, requestId, planCode, packageId, promoCode, dormitory, billing, payment, buildings, rooms } = params;
 
     let lockRecord: any = null;
-    // Idempotency Check
     if (idempotencyKey && idempotencyKey.trim()) {
       const payloadHash = InMemoryIdempotencyRepository.hashPayload({
         dormitory,
@@ -316,7 +296,6 @@ export class DormitoryProvisioningService {
       lockRecord = await this.idempotencyRepo.lock(userId, operation, idempotencyKey, payloadHash);
     }
 
-    // Validate Subscription Package if disabled
     if (packageId) {
       const pkg = await this.prisma.subscriptionPackage.findUnique({
         where: { id: packageId },
@@ -326,11 +305,9 @@ export class DormitoryProvisioningService {
       }
     }
 
-    // Atomic Transaction Finalization
     const result = await this.prisma.$transaction(async (tx) => {
       const now = new Date();
 
-      // 1. Resolve provisional dormitory inside transaction
       const draft = await tx.onboardingDraft.findUnique({
         where: { userId },
       });
@@ -341,7 +318,6 @@ export class DormitoryProvisioningService {
       }
 
       if (!rawDormId) {
-        // Prepare new provisional dorm inside transaction if missing or if previous draft was finalized
         const prov = await this.prepareProvisionalDormitory(userId, { name: dormitory.name }, tx);
         rawDormId = prov.provisionalDormitoryId;
       }
@@ -375,10 +351,8 @@ export class DormitoryProvisioningService {
         throw new AppError('แพ็กเกจที่เลือกไม่ถูกต้องหรือเปิดใช้งานไม่ได้', 400, 'PLAN_NOT_FOUND');
       }
 
-      // Clear RLS context before checking existing active dormitories across all dormitories
       await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', '', true)`;
 
-      // Check if user already owns an active dormitory and is attempting to create a second FREE dormitory (Amendment A14)
       if (plan.type === 'FREE' || plan.code === 'FREE') {
         const existingActiveDorm = await tx.dormitoryMember.findFirst({
           where: {
@@ -410,13 +384,19 @@ export class DormitoryProvisioningService {
           email: dormitory.email || null,
           estimatedBuildingCount: dormitory.estimatedBuildingCount || 1,
           estimatedRoomCount: dormitory.estimatedRoomCount || 10,
-          status: 'active', // Transition setup_pending -> active
+          status: 'active',
           updatedAt: now,
         },
       });
 
-      // Save Billing Settings
+      // Save Billing Settings with Nullish Coalescing (Zero-value fidelity preserved)
       if (billing) {
+        const waterRateStr = (billing.waterRate !== undefined && billing.waterRate !== null && billing.waterRate !== '') ? String(billing.waterRate) : '18.00';
+        const electricityRateStr = (billing.electricityRate !== undefined && billing.electricityRate !== null && billing.electricityRate !== '') ? String(billing.electricityRate) : '7.00';
+        const commonFeeStr = (billing.commonFee !== undefined && billing.commonFee !== null && billing.commonFee !== '') ? String(billing.commonFee) : '0.00';
+        const internetFeeStr = (billing.internetFee !== undefined && billing.internetFee !== null && billing.internetFee !== '') ? String(billing.internetFee) : '0.00';
+        const lateFeeValueStr = (billing.lateFeeValue !== undefined && billing.lateFeeValue !== null && billing.lateFeeValue !== '') ? String(billing.lateFeeValue) : '50.00';
+
         await tx.dormitoryBillingSettings.upsert({
           where: { dormitoryId: dormId },
           create: {
@@ -424,26 +404,26 @@ export class DormitoryProvisioningService {
             billingDay: Number(billing.billingDay) || 25,
             dueDay: Number(billing.dueDay) || 5,
             waterBillingType: billing.waterBillingType || 'per_unit',
-            waterRate: String(billing.waterRate || '18.00'),
+            waterRate: waterRateStr,
             electricityBillingType: billing.electricityBillingType || 'per_unit',
-            electricityRate: String(billing.electricityRate || '7.00'),
-            commonFee: String(billing.commonFee || '0.00'),
-            internetFee: String(billing.internetFee || '0.00'),
+            electricityRate: electricityRateStr,
+            commonFee: commonFeeStr,
+            internetFee: internetFeeStr,
             lateFeeType: billing.lateFeeType || 'fixed',
-            lateFeeValue: String(billing.lateFeeValue || '50.00'),
+            lateFeeValue: lateFeeValueStr,
             rentBillingType: billing.rentBillingType || 'monthly',
           },
           update: {
             billingDay: Number(billing.billingDay) || 25,
             dueDay: Number(billing.dueDay) || 5,
             waterBillingType: billing.waterBillingType || 'per_unit',
-            waterRate: String(billing.waterRate || '18.00'),
+            waterRate: waterRateStr,
             electricityBillingType: billing.electricityBillingType || 'per_unit',
-            electricityRate: String(billing.electricityRate || '7.00'),
-            commonFee: String(billing.commonFee || '0.00'),
-            internetFee: String(billing.internetFee || '0.00'),
+            electricityRate: electricityRateStr,
+            commonFee: commonFeeStr,
+            internetFee: internetFeeStr,
             lateFeeType: billing.lateFeeType || 'fixed',
-            lateFeeValue: String(billing.lateFeeValue || '50.00'),
+            lateFeeValue: lateFeeValueStr,
             rentBillingType: billing.rentBillingType || 'monthly',
             updatedAt: now,
           },
@@ -467,7 +447,7 @@ export class DormitoryProvisioningService {
           data: {
             cashAccepted: payment.cashAccepted ?? true,
             promptPayType: payment.promptPayType || null,
-            promptPayValue: null, // Raw plaintext protection
+            promptPayValue: null,
             promptPayValueEncrypted: encPromptPay,
             bankCode: payment.bankCode || null,
             bankAccountName: payment.bankAccountName || null,
@@ -502,8 +482,8 @@ export class DormitoryProvisioningService {
                 normalizedRoomNumber,
                 floor: r.floor || 1,
                 roomType: (r as any).roomType || 'standard',
-                monthlyRent: String(r.monthlyRent || 0),
-                depositAmount: String(r.depositAmount || 0),
+                monthlyRent: String(r.monthlyRent ?? 0),
+                depositAmount: String(r.depositAmount ?? 0),
                 status: r.status || 'VACANT',
               },
             });
@@ -548,10 +528,8 @@ export class DormitoryProvisioningService {
         }
       }
 
-      // Call entitlement service provisionInitialTrial to allow spying and validation
       await subscriptionEntitlementService.provisionInitialTrial(dormId, tx, now);
 
-      // Create/update DormitorySubscription record first to get valid sub.id FK
       const sub = await tx.dormitorySubscription.upsert({
         where: { dormitoryId: dormId },
         create: {
@@ -576,7 +554,6 @@ export class DormitoryProvisioningService {
         },
       });
 
-      // Record AccountBenefitClaim if eligible
       if (!isAccountTrialClaimed) {
         try {
           await tx.accountBenefitClaim.create({
@@ -595,7 +572,6 @@ export class DormitoryProvisioningService {
         }
       }
 
-      // Record PromoRedemption if applied
       if (promoApplied && canonicalPromo) {
         await tx.promoRedemption.create({
           data: {
@@ -609,7 +585,6 @@ export class DormitoryProvisioningService {
         });
       }
 
-      // 8. Handle Paid Package Intent if selected (Phase 37)
       if (packageId) {
         const pkg = await tx.subscriptionPackage.findUnique({
           where: { id: packageId },
@@ -631,7 +606,6 @@ export class DormitoryProvisioningService {
         }
       }
 
-      // 9. Mark OnboardingDraft finalized
       await tx.onboardingDraft.update({
         where: { userId },
         data: {

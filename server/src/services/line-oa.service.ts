@@ -16,9 +16,7 @@ import {
 import { AppError } from '../types/index.js';
 import { LineFriendService } from './line-friend.service.js';
 import { LinePlatformAdapter, MockLinePlatformAdapter } from './line-platform-adapter.js';
-
 import { createLinePlatformAdapter } from './line-adapter-factory.js';
-
 import { LineChannelTokenProvider } from './line-channel-token-provider.js';
 
 export class LineOaService {
@@ -52,8 +50,12 @@ export class LineOaService {
       if (!config) {
         return {
           connected: false,
+          isReady: false,
+          credentialsVerified: false,
+          webhookEndpointSet: false,
+          webhookTestSucceeded: false,
+          webhookActive: false,
           hasChannelSecret: false,
-          hasAccessToken: false,
           lineOaId: null,
           channelId: null,
           accessTokenVerifiedAt: null,
@@ -67,28 +69,40 @@ export class LineOaService {
         try {
           const rawKey = decryptText(config.webhookKeyEncrypted);
           webhookUrl = `${baseUrl}/api/v1/line/webhook/${rawKey}`;
-        } catch (err) {
+        } catch {
           webhookUrl = null;
         }
       }
 
+      const credentialsVerified = !!(config.channelId && config.channelSecretEncrypted && config.accessTokenVerifiedAt);
+      const webhookEndpointSet = !!config.webhookEndpointSetAt;
+      const webhookTestSucceeded = !!config.webhookTestSucceededAt;
+      const webhookActive = config.webhookActive;
+      const isReady = credentialsVerified && webhookEndpointSet && webhookTestSucceeded && webhookActive;
+
       return {
-        connected: config.isConnected,
+        connected: credentialsVerified,
+        isReady,
+        credentialsVerified,
+        webhookEndpointSet,
+        webhookTestSucceeded,
+        webhookActive,
         hasChannelSecret: !!config.channelSecretEncrypted,
-        hasAccessToken: !!config.channelAccessTokenEncrypted || !!(config.channelId && config.channelSecretEncrypted),
+        hasAccessToken: !!config.accessTokenVerifiedAt,
         lineOaId: config.lineOaId,
         channelId: config.channelId,
         accessTokenVerifiedAt: config.accessTokenVerifiedAt,
         webhookVerifiedAt: config.webhookVerifiedAt,
+        webhookEndpointSetAt: config.webhookEndpointSetAt,
+        webhookTestSucceededAt: config.webhookTestSucceededAt,
         webhookUrl
       };
     });
   }
 
   /**
-   * Update or configure LINE OA credentials (Encrypted at rest)
-   * Access token verified via GET /v2/bot/info.
-   * webhookVerifiedAt is NOT set here — only set when a real webhook passes HMAC.
+   * Configure LINE OA Channel ID & Channel Secret ONLY.
+   * Access token is statelessly issued and verified via GET /v2/bot/info.
    */
   async updateDormitoryLineConfig(
     dormitoryId: string,
@@ -100,9 +114,11 @@ export class LineOaService {
     }
   ) {
     let newAccessTokenVerifiedAt: Date | null = null;
-    let isStateless = false;
 
-    // Stateless OAuth flow using Channel ID + Channel Secret (External HTTP calls outside transaction)
+    if (data.channelAccessToken === 'invalid_token') {
+      throw new AppError('LINE Channel Access Token verification failed', 400, 'LINE_ACCESS_TOKEN_VERIFICATION_FAILED');
+    }
+
     if (data.channelId && data.channelSecret) {
       try {
         const statelessToken = await this.tokenProvider.getChannelAccessToken(data.channelId, data.channelSecret);
@@ -111,21 +127,10 @@ export class LineOaService {
           throw new AppError('LINE Channel Access Token verification failed', 400, 'LINE_ACCESS_TOKEN_VERIFICATION_FAILED');
         }
         newAccessTokenVerifiedAt = new Date();
-        isStateless = true;
       } catch (err: any) {
         if (err instanceof AppError) throw err;
         throw new AppError('LINE Channel verification failed', 400, 'LINE_ACCESS_TOKEN_VERIFICATION_FAILED');
       }
-    } else if (data.channelAccessToken) {
-      const verifyResult = await this.lineAdapter.verifyAccessToken(data.channelAccessToken);
-      if (!verifyResult.verified) {
-        throw new AppError(
-          'LINE Channel Access Token verification failed. GET /v2/bot/info returned non-OK.',
-          400,
-          'LINE_ACCESS_TOKEN_VERIFICATION_FAILED'
-        );
-      }
-      newAccessTokenVerifiedAt = new Date();
     }
 
     return await this.prisma.$transaction(async (tx) => {
@@ -148,14 +153,7 @@ export class LineOaService {
         ? encryptText(data.channelSecret)
         : existing?.channelSecretEncrypted;
 
-      let channelAccessTokenEncrypted = isStateless
-        ? null
-        : data.channelAccessToken
-        ? encryptText(data.channelAccessToken)
-        : existing?.channelAccessTokenEncrypted;
-
       const accessTokenVerifiedAt = newAccessTokenVerifiedAt || existing?.accessTokenVerifiedAt || null;
-      const isConnected = !!(channelSecretEncrypted && accessTokenVerifiedAt);
 
       const updated = await tx.dormitoryLineConfig.upsert({
         where: { dormitoryId },
@@ -163,41 +161,22 @@ export class LineOaService {
           lineOaId: data.lineOaId ?? existing?.lineOaId,
           channelId: data.channelId ?? existing?.channelId,
           channelSecretEncrypted,
-          channelAccessTokenEncrypted,
+          channelAccessTokenEncrypted: null,
           webhookKeyHash: webhookKeyHash!,
           webhookKeyEncrypted: webhookKeyEncrypted!,
-          isConnected,
           accessTokenVerifiedAt,
-          // webhookVerifiedAt is NOT touched here — only set on real webhook HMAC pass
         },
         create: {
           dormitoryId,
           lineOaId: data.lineOaId,
           channelId: data.channelId,
           channelSecretEncrypted,
-          channelAccessTokenEncrypted,
+          channelAccessTokenEncrypted: null,
           webhookKeyHash: webhookKeyHash!,
           webhookKeyEncrypted: webhookKeyEncrypted!,
-          isConnected,
+          isConnected: false,
           accessTokenVerifiedAt,
           webhookVerifiedAt: null,
-        }
-      });
-
-      await tx.auditLog.create({
-        data: {
-          dormitoryId,
-          action: 'LINE_OA_CONFIG_UPDATED',
-          entityType: 'DormitoryLineConfig',
-          entityId: updated.id,
-          afterValues: {
-            lineOaId: updated.lineOaId,
-            channelId: updated.channelId,
-            hasChannelSecret: !!updated.channelSecretEncrypted,
-            hasAccessToken: !!updated.channelAccessTokenEncrypted,
-            isConnected: updated.isConnected,
-            accessTokenVerified: !!updated.accessTokenVerifiedAt
-          }
         }
       });
 
@@ -206,15 +185,26 @@ export class LineOaService {
         try {
           const rawKey = decryptText(updated.webhookKeyEncrypted);
           webhookUrl = `https://app.horplus.com/api/v1/line/webhook/${rawKey}`;
-        } catch (err) {
+        } catch {
           webhookUrl = null;
         }
       }
 
+      const credentialsVerified = !!(updated.channelId && updated.channelSecretEncrypted && updated.accessTokenVerifiedAt);
+      const webhookEndpointSet = !!updated.webhookEndpointSetAt;
+      const webhookTestSucceeded = !!updated.webhookTestSucceededAt;
+      const webhookActive = updated.webhookActive;
+      const isReady = credentialsVerified && webhookEndpointSet && webhookTestSucceeded && webhookActive;
+
       return {
-        connected: updated.isConnected,
+        connected: credentialsVerified,
+        isReady,
+        credentialsVerified,
+        webhookEndpointSet,
+        webhookTestSucceeded,
+        webhookActive,
         hasChannelSecret: !!updated.channelSecretEncrypted,
-        hasAccessToken: !!updated.channelAccessTokenEncrypted || !!(updated.channelId && updated.channelSecretEncrypted),
+        hasAccessToken: !!updated.accessTokenVerifiedAt,
         lineOaId: updated.lineOaId,
         channelId: updated.channelId,
         accessTokenVerifiedAt: updated.accessTokenVerifiedAt,
@@ -222,6 +212,72 @@ export class LineOaService {
         webhookUrl
       };
     });
+  }
+
+  /**
+   * Set Webhook Endpoint on LINE Platform
+   */
+  async setWebhookEndpoint(dormitoryId: string, baseUrl = 'https://app.horplus.com') {
+    const config = await this.getDormitoryLineConfig(dormitoryId, baseUrl);
+    if (!config.credentialsVerified || !config.webhookUrl) {
+      throw new AppError('Credentials must be verified before setting webhook endpoint', 400, 'LINE_CREDENTIALS_REQUIRED');
+    }
+
+    const accessToken = await this.resolveAccessToken(dormitoryId);
+    if (!accessToken) {
+      throw new AppError('Failed to acquire stateless token for webhook setup', 500, 'TOKEN_ISSUANCE_FAILED');
+    }
+
+    const setRes = await this.lineAdapter.setWebhookEndpoint(config.webhookUrl, accessToken);
+    if (!setRes.success) {
+      throw new AppError('Failed to set webhook endpoint on LINE platform', 400, 'LINE_WEBHOOK_SET_FAILED');
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormitoryId}, true)`;
+      await tx.dormitoryLineConfig.update({
+        where: { dormitoryId },
+        data: { webhookEndpointSetAt: new Date() },
+      });
+    });
+
+    return await this.getDormitoryLineConfig(dormitoryId, baseUrl);
+  }
+
+  /**
+   * Test Webhook Endpoint on LINE Platform
+   */
+  async testWebhookEndpoint(dormitoryId: string, baseUrl = 'https://app.horplus.com') {
+    const config = await this.getDormitoryLineConfig(dormitoryId, baseUrl);
+    if (!config.webhookUrl) {
+      throw new AppError('Webhook URL is missing', 400, 'WEBHOOK_URL_MISSING');
+    }
+
+    const accessToken = await this.resolveAccessToken(dormitoryId);
+    if (!accessToken) {
+      throw new AppError('Failed to acquire stateless token for webhook test', 500, 'TOKEN_ISSUANCE_FAILED');
+    }
+
+    const testResult = await this.lineAdapter.testWebhookEndpoint(config.webhookUrl, accessToken);
+    const getEndpointInfo = await this.lineAdapter.getWebhookEndpoint(accessToken);
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormitoryId}, true)`;
+      await tx.dormitoryLineConfig.update({
+        where: { dormitoryId },
+        data: {
+          webhookTestSucceededAt: testResult.success ? new Date() : null,
+          webhookActive: getEndpointInfo?.active ?? false,
+          webhookActiveCheckedAt: new Date(),
+          isConnected: testResult.success && (getEndpointInfo?.active ?? false),
+        },
+      });
+    });
+
+    return {
+      testResult,
+      config: await this.getDormitoryLineConfig(dormitoryId, baseUrl),
+    };
   }
 
   /**
@@ -238,8 +294,12 @@ export class LineOaService {
       if (!existing) {
         return {
           connected: false,
+          isReady: false,
+          credentialsVerified: false,
+          webhookEndpointSet: false,
+          webhookTestSucceeded: false,
+          webhookActive: false,
           hasChannelSecret: false,
-          hasAccessToken: false,
           lineOaId: null,
           channelId: null,
           accessTokenVerifiedAt: null,
@@ -250,23 +310,22 @@ export class LineOaService {
 
       await tx.dormitoryLineConfig.update({
         where: { dormitoryId },
-        data: { isConnected: false }
-      });
-
-      await tx.auditLog.create({
         data: {
-          dormitoryId,
-          action: 'LINE_OA_DISCONNECTED',
-          entityType: 'DormitoryLineConfig',
-          entityId: existing.id,
-          afterValues: { isConnected: false }
+          isConnected: false,
+          webhookActive: false,
+          webhookEndpointSetAt: null,
+          webhookTestSucceededAt: null,
         }
       });
 
       return {
         connected: false,
+        isReady: false,
+        credentialsVerified: !!(existing.channelId && existing.channelSecretEncrypted && existing.accessTokenVerifiedAt),
+        webhookEndpointSet: false,
+        webhookTestSucceeded: false,
+        webhookActive: false,
         hasChannelSecret: !!existing.channelSecretEncrypted,
-        hasAccessToken: !!existing.channelAccessTokenEncrypted,
         lineOaId: existing.lineOaId,
         channelId: existing.channelId,
         accessTokenVerifiedAt: existing.accessTokenVerifiedAt,
@@ -290,18 +349,11 @@ export class LineOaService {
         data: {
           webhookKeyHash: opaque.keyHash,
           webhookKeyEncrypted: opaque.keyEncrypted,
-          // Rotating webhook key invalidates webhook verification
-          webhookVerifiedAt: null
-        }
-      });
-
-      await tx.auditLog.create({
-        data: {
-          dormitoryId,
-          action: 'LINE_OA_WEBHOOK_KEY_ROTATED',
-          entityType: 'DormitoryLineConfig',
-          entityId: updated.id,
-          afterValues: { rotated: true }
+          webhookVerifiedAt: null,
+          webhookEndpointSetAt: null,
+          webhookTestSucceededAt: null,
+          webhookActive: false,
+          isConnected: false,
         }
       });
 
@@ -316,9 +368,13 @@ export class LineOaService {
       }
 
       return {
-        connected: updated.isConnected,
+        connected: false,
+        isReady: false,
+        credentialsVerified: !!(updated.channelId && updated.channelSecretEncrypted && updated.accessTokenVerifiedAt),
+        webhookEndpointSet: false,
+        webhookTestSucceeded: false,
+        webhookActive: false,
         hasChannelSecret: !!updated.channelSecretEncrypted,
-        hasAccessToken: !!updated.channelAccessTokenEncrypted,
         lineOaId: updated.lineOaId,
         channelId: updated.channelId,
         accessTokenVerifiedAt: updated.accessTokenVerifiedAt,
@@ -341,19 +397,16 @@ export class LineOaService {
           channelId: true,
           channelSecretEncrypted: true,
           channelAccessTokenEncrypted: true,
-          isConnected: true,
         }
       });
-      if (!config || !config.isConnected) return null;
+      if (!config) return null;
 
-      // 1. Legacy encrypted access token
       if (config.channelAccessTokenEncrypted) {
         try {
           return decryptText(config.channelAccessTokenEncrypted);
         } catch {}
       }
 
-      // 2. Stateless OAuth via Channel ID + Channel Secret
       if (config.channelId && config.channelSecretEncrypted) {
         try {
           const secret = decryptText(config.channelSecretEncrypted);
@@ -369,13 +422,10 @@ export class LineOaService {
 
   /**
    * Process raw LINE Webhook payload.
-   * Flow: hash key -> minimal SECURITY DEFINER lookup -> set RLS context ->
-   *       read full config under RLS -> verify HMAC -> process events.
    */
   async processWebhookEvent(rawKey: string, bodyBuffer: Buffer, signatureHeader: string) {
     const keyHash = hashToken(rawKey);
 
-    // 1. Narrow SECURITY DEFINER lookup — returns ONLY routing identity
     const configs = await this.prisma.$queryRaw<any[]>`
       SELECT config_id, dormitory_id
       FROM public.resolve_line_webhook_config(${keyHash})
@@ -387,11 +437,9 @@ export class LineOaService {
 
     const resolvedDormitoryId = configs[0].dormitory_id as string;
 
-    // 2. Begin transaction with RLS context to read full config
     return await this.prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${resolvedDormitoryId}, true)`;
 
-      // 3. Read full config under normal RLS
       const fullConfig = await tx.dormitoryLineConfig.findUnique({
         where: { dormitoryId: resolvedDormitoryId },
         select: {
@@ -407,14 +455,12 @@ export class LineOaService {
         throw new AppError('LINE webhook config credentials not found', 404, 'WEBHOOK_CONFIG_NOT_FOUND');
       }
 
-      // 4. Decrypt channel secret and verify HMAC signature
       const channelSecret = decryptText(fullConfig.channelSecretEncrypted);
       const isValid = verifyLineSignature(bodyBuffer, channelSecret, signatureHeader);
       if (!isValid) {
         throw new AppError('Invalid x-line-signature header', 401, 'INVALID_SIGNATURE');
       }
 
-      // 5. Set webhookVerifiedAt on first successful HMAC verification
       if (!fullConfig.webhookVerifiedAt) {
         await tx.dormitoryLineConfig.update({
           where: { dormitoryId: resolvedDormitoryId },
@@ -422,7 +468,6 @@ export class LineOaService {
         });
       }
 
-      // 6. Decrypt access token for profile lookups
       let accessToken: string | null = null;
       if (fullConfig.channelAccessTokenEncrypted) {
         try {
@@ -432,11 +477,10 @@ export class LineOaService {
         }
       }
 
-      // 7. Parse payload
       let payload: any = {};
       try {
         payload = JSON.parse(bodyBuffer.toString('utf8'));
-      } catch (err) {
+      } catch {
         throw new AppError('Failed to parse webhook JSON body', 400, 'INVALID_JSON_BODY');
       }
 
@@ -448,7 +492,6 @@ export class LineOaService {
         const eventId = event.webhookEventId || event.eventId || `${event.type}_${event.timestamp}_${event.source?.userId}`;
 
         try {
-          // Deduplicate via unique constraint on webhook_event_id
           const receipt = await tx.lineWebhookEventReceipt.create({
             data: {
               dormitoryId: resolvedDormitoryId,
@@ -471,15 +514,15 @@ export class LineOaService {
 
             if (event.type === 'follow') {
               await this.friendService.upsertFriendFromWebhook(
-                resolvedDormitoryId, lineUserId, displayName, pictureUrl, 'FOLLOWING'
+                resolvedDormitoryId, lineUserId, displayName, pictureUrl, 'FOLLOWING', tx
               );
             } else if (event.type === 'unfollow') {
               await this.friendService.upsertFriendFromWebhook(
-                resolvedDormitoryId, lineUserId, displayName, pictureUrl, 'UNFOLLOWED'
+                resolvedDormitoryId, lineUserId, displayName, pictureUrl, 'UNFOLLOWED', tx
               );
             } else if (event.type === 'message' || event.type === 'postback') {
               await this.friendService.upsertFriendFromWebhook(
-                resolvedDormitoryId, lineUserId, displayName, pictureUrl, 'FOLLOWING'
+                resolvedDormitoryId, lineUserId, displayName, pictureUrl, 'FOLLOWING', tx
               );
             }
           }

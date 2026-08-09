@@ -544,7 +544,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
     }
 
     try {
-      const res = await fetch('/api/v1/properties/rooms', { headers: reqHeaders });
+      const res = await fetch('/api/v1/properties/rooms', { headers: reqHeaders, credentials: 'include' });
       if (res.ok) {
         isApiConnected = true;
         const data = await res.json();
@@ -557,7 +557,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
     }
 
     try {
-      const bRes = await fetch('/api/v1/properties/buildings', { headers: reqHeaders });
+      const bRes = await fetch('/api/v1/properties/buildings', { headers: reqHeaders, credentials: 'include' });
       if (bRes.ok) {
         const bData = await bRes.json();
         setBuildings(bData.data || []);
