@@ -167,6 +167,6 @@ export const onboardingClient = {
   },
 
   async getAvailablePackages() {
-    return httpRequest<any>('GET', '/subscription/packages');
+    return httpRequest<any>('GET', '/public/subscription-catalog');
   }
 };

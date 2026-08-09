@@ -103,6 +103,19 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
   const [selectedPackageId, setSelectedPackageId] = useState<string | undefined>(undefined);
   const [promoCodeInput, setPromoCodeInput] = useState('');
   const [promoResult, setPromoResult] = useState<{ valid: boolean; message: string; bonusDays?: number } | null>(null);
+  const [catalogPackages, setCatalogPackages] = useState<any[]>([]);
+
+  useEffect(() => {
+    onboardingClient.getAvailablePackages()
+      .then((res: any) => {
+        const list = res.data || res || [];
+        setCatalogPackages(Array.isArray(list) ? list : []);
+      })
+      .catch(() => {});
+  }, []);
+
+  const proPkg = catalogPackages.find((p: any) => p.planCode === 'PRO' || p.code === 'PRO');
+  const proDisplayPrice = proPkg ? `${proPkg.price} ${proPkg.currency || 'THB'}` : 'PRO Plan';
 
   // Terms Modal State
   const [showTermsModal, setShowTermsModal] = useState(false);
@@ -125,16 +138,16 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
         id: 'bld-1',
         name: 'อาคาร A',
         roomPrefix: 'A',
-        floorsCount: 4,
-        roomsPerFloor: 5,
-        monthlyRent: 4500,
-        securityDeposit: 5000,
+        floorsCount: 1,
+        roomsPerFloor: 1,
+        monthlyRent: 0,
+        securityDeposit: 0,
       }
     ],
     utilities: {
-      waterRate: 18,
+      waterRate: 0,
       waterBillingMode: 'unit',
-      electricRate: 7,
+      electricRate: 0,
       electricBillingMode: 'unit',
       commonFeeRate: 0,
       commonFeeMode: 'free',
@@ -144,7 +157,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
       parkingFeeMode: 'free',
     },
     paymentAccount: {
-      bankName: 'กสิกรไทย (KBank)',
+      bankName: '',
       accountNumber: '',
       accountName: '',
       promptPayId: '',
@@ -1030,18 +1043,6 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                 />
               </div>
 
-              <div>
-                <label className="block font-bold text-slate-700 mb-1">LINE Basic ID / OA ID (ไม่บังคับ)</label>
-                <input
-                  type="text"
-                  data-testid="input-line-oa-id"
-                  value={lineOaId}
-                  onChange={(e) => setLineOaId(e.target.value)}
-                  placeholder="@horplus_dorm"
-                  className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl font-bold text-slate-800 outline-none"
-                />
-              </div>
-
               <button
                 type="button"
                 data-testid="button-verify-line-credentials"
@@ -1169,7 +1170,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                 {selectedPlan === 'PRO' && <CheckCircle className="w-5 h-5 text-indigo-600" />}
               </div>
               <div className="flex items-baseline gap-1">
-                <h4 className="text-xl font-black text-slate-900">189 THB</h4>
+                <h4 className="text-xl font-black text-slate-900">{proDisplayPrice}</h4>
                 <span className="text-xs text-slate-500 font-bold">/ เดือน</span>
               </div>
               <p className="text-xs text-slate-500 font-medium">สำหรับหอพักขนาดกลาง-ใหญ่ที่ต้องการระบบบริหารแบบครบวงจร</p>

@@ -467,7 +467,7 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
     expect(rapidBlds.length).toBe(1);
 
     const rapidRooms = await prisma.room.findMany({ where: { dormitoryId: rapidDorms[0].id } });
-    expect(rapidRooms.length).toBe(16);
+    expect(rapidRooms.length).toBe(4);
 
     // Cleanup rapid user
     if (rapidDorms.length > 0) {
@@ -605,9 +605,9 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
 
     // 1. POST JSON Payload assertions
     expect(capturedFidelityPost.dormitory.name).toBe('Fidelity Distinctive Dorm');
-    expect(capturedFidelityPost.rooms.length).toBe(12);
-    expect(capturedFidelityPost.rooms[0].monthlyRent).toBe(4500);
-    expect(capturedFidelityPost.rooms[0].depositAmount).toBe(5000);
+    expect(capturedFidelityPost.rooms.length).toBe(3);
+    expect(capturedFidelityPost.rooms[0].monthlyRent).toBe(0);
+    expect(capturedFidelityPost.rooms[0].depositAmount).toBe(0);
     expect(capturedFidelityPost.billing.billingDay).toBe(25);
     expect(capturedFidelityPost.billing.waterRate).toBe('0');
     expect(capturedFidelityPost.billing.electricityRate).toBe('0');
@@ -659,9 +659,9 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
     expect(paymentData.maskedPromptPayValue).toBeNull();
 
     const fRooms = await prisma.room.findMany({ where: { dormitoryId: fDorm!.id } });
-    expect(fRooms.length).toBe(12);
-    expect(fRooms[0].monthlyRent.toString()).toBe('4500');
-    expect(fRooms[0].depositAmount.toString()).toBe('5000');
+    expect(fRooms.length).toBe(3);
+    expect(fRooms[0].monthlyRent.toString()).toBe('0');
+    expect(fRooms[0].depositAmount.toString()).toBe('0');
 
     // Cleanup fidelity user
     if (fDorm) {
