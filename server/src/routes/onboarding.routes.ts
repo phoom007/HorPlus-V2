@@ -175,6 +175,7 @@ export function createOnboardingRouter(
         requestId,
         dormitory: parsed.data.dormitory,
         billing: parsed.data.billing,
+        payment: parsed.data.payment,
         buildings: parsed.data.buildings,
         rooms: parsed.data.rooms,
         planCode: parsed.data.planCode,

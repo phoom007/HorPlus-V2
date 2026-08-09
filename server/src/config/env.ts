@@ -82,7 +82,7 @@ export function validateEnv(rawEnv: Record<string, string | undefined> = process
     try {
       const dbUrl = new URL(parsed.data.DATABASE_URL);
       const dbName = dbUrl.pathname.replace(/^\//, '');
-      if (dbName !== 'horplus_test' && dbName !== 'horplus_e2e') {
+      if (dbName !== 'horplus_test' && dbName !== 'horplus_e2e' && dbName !== 'horplus_wave1d_fasttrack_test') {
         throw new Error(`E2E_TEST_MODE is true but connected to unauthorized database '${dbName}'. Allowed: 'horplus_test', 'horplus_e2e'`);
       }
     } catch (err: any) {

@@ -19,6 +19,7 @@ export interface BillingSettingsEntity {
   bankCode?: string | null;
   bankAccountName?: string | null;
   bankAccountNumber?: string | null;
+  bankAccountNumberEncrypted?: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -43,6 +44,7 @@ export interface CreateBillingSettingsData {
   bankCode?: string | null;
   bankAccountName?: string | null;
   bankAccountNumber?: string | null;
+  bankAccountNumberEncrypted?: string | null;
 }
 
 export interface IBillingSettingsRepository {

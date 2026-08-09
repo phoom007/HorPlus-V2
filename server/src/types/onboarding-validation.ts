@@ -31,12 +31,62 @@ export const OnboardingBillingInputSchema = z.object({
 
 export const OnboardingPaymentInputSchema = z.object({
   cashAccepted: z.boolean().default(true),
-  promptPayType: z.enum(['mobile_phone', 'national_id', 'e_wallet']).optional().nullable(),
+  promptPayType: z.enum(['mobile_phone', 'national_id']).optional().nullable(),
   promptPayValue: z.string().trim().optional().nullable(),
   bankCode: z.string().trim().optional().nullable(),
   bankAccountName: z.string().trim().optional().nullable(),
   bankAccountNumber: z.string().trim().optional().nullable(),
-}).strict();
+}).strict().superRefine((data, ctx) => {
+  const type = data.promptPayType;
+  const rawVal = data.promptPayValue ? data.promptPayValue.replace(/\D/g, '') : '';
+
+  if (!type && data.promptPayValue && data.promptPayValue.trim() !== '') {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['promptPayType'],
+      message: 'กรุณาระบุประเภทพร้อมเพย์เมื่อมีการกรอกหมายเลขพร้อมเพย์',
+    });
+  }
+
+  if (type) {
+    if (!rawVal || rawVal === '') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['promptPayValue'],
+        message: 'กรุณาระบุหมายเลขพร้อมเพย์เมื่อเลือกประเภทพร้อมเพย์',
+      });
+    } else if (type === 'mobile_phone') {
+      if (rawVal.length !== 10 || !/^0\d{9}$/.test(rawVal)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['promptPayValue'],
+          message: 'พร้อมเพย์ประเภทเบอร์โทรศัพท์ต้องเป็นตัวเลข 10 หลัก (เช่น 0812345678)',
+        });
+      }
+    } else if (type === 'national_id') {
+      if (rawVal.length !== 13 || !/^\d{13}$/.test(rawVal)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['promptPayValue'],
+          message: 'พร้อมเพย์ประเภทบัตรประชาชนต้องเป็นตัวเลข 13 หลัก',
+        });
+      }
+    }
+  }
+
+  if (data.bankAccountNumber && data.bankAccountNumber.trim() !== '') {
+    const cleanBankAcc = data.bankAccountNumber.replace(/\D/g, '');
+    if (cleanBankAcc.length < 8 || cleanBankAcc.length > 15) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['bankAccountNumber'],
+        message: 'เลขที่บัญชีธนาคารต้องเป็นตัวเลข 8-15 หลัก',
+      });
+    }
+  }
+});
+
+export const PaymentSettingsInputSchema = OnboardingPaymentInputSchema;
 
 export const BuildingSchema = z.object({
   name: z.string().min(1, 'Building name is required').max(255),

@@ -177,6 +177,30 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
           setInitialValues(initObj);
         }
       }
+
+      // Fetch payment settings from backend API (PS-007)
+      if (dorm?.id) {
+        const payRes = await fetch(`/api/v1/dormitories/${dorm.id}/payment-settings`, {
+          headers: { 'x-dormitory-id': dorm.id },
+        });
+        if (payRes.ok) {
+          const payData = await payRes.json();
+          if (payData.data) {
+            if (payData.data.promptPayValue) {
+              setLocalPromptPay(formatPromptPay(payData.data.promptPayValue));
+            } else if (payData.data.maskedPromptPayValue) {
+              setLocalPromptPay(payData.data.maskedPromptPayValue);
+            }
+            if (payData.data.bankCode) setLocalBankName(payData.data.bankCode);
+            if (payData.data.bankAccountName) setLocalBankAccountName(payData.data.bankAccountName);
+            if (payData.data.bankAccountNumber) {
+              setLocalBankAccountNumber(payData.data.bankAccountNumber);
+            } else if (payData.data.maskedBankAccountNumber) {
+              setLocalBankAccountNumber(payData.data.maskedBankAccountNumber);
+            }
+          }
+        }
+      }
     } catch (err) {}
   };
 
@@ -550,6 +574,51 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
     };
     setDorm(updated);
     triggerSaveNow(updated);
+
+    // If payment fields changed, trigger backend PATCH payment-settings (PS-007)
+    if (['promptPayNumber', 'promptPayName', 'bankName', 'bankAccountNumber', 'bankAccountName'].includes(key as string)) {
+      handlePaymentSettingsBlur();
+    }
+  };
+
+  const handlePaymentSettingsBlur = async (updatedFields?: Partial<{
+    bankCode: string;
+    bankAccountName: string;
+    bankAccountNumber: string;
+    promptPayType: string;
+    promptPayValue: string;
+  }>) => {
+    const promptPayDigits = (updatedFields?.promptPayValue ?? localPromptPay).replace(/\D/g, '');
+    const detectedType = promptPayDigits.length === 13 ? 'national_id' : (promptPayDigits.length === 10 ? 'mobile_phone' : null);
+
+    const payload = {
+      cashAccepted: true,
+      promptPayType: detectedType,
+      promptPayValue: promptPayDigits || null,
+      bankCode: updatedFields?.bankCode ?? localBankName ?? null,
+      bankAccountName: updatedFields?.bankAccountName ?? localBankAccountName ?? null,
+      bankAccountNumber: updatedFields?.bankAccountNumber ?? localBankAccountNumber ?? null,
+    };
+
+    try {
+      setSaveStatus('saving');
+      const activeDormId = dorm?.id;
+      if (activeDormId) {
+        const csrfToken = document.cookie.split('; ').find((r) => r.startsWith('csrf_token='))?.split('=')[1] || '';
+        await fetch(`/api/v1/dormitories/${activeDormId}/payment-settings`, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-dormitory-id': activeDormId,
+            'x-csrf-token': csrfToken,
+          },
+          body: JSON.stringify(payload),
+        });
+      }
+      setSaveStatus('saved');
+    } catch (err) {
+      console.error('Failed to save payment settings:', err);
+    }
   };
 
   const handleRateBlur = (field: keyof CycleRates, value: any) => {

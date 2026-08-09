@@ -149,6 +149,7 @@ export class DormitoryProvisioningService {
     const payloadHash = InMemoryIdempotencyRepository.hashPayload({
       dormitory,
       billing,
+      payment,
       planCode,
       promoCode,
       buildings,
@@ -382,10 +383,12 @@ export class DormitoryProvisioningService {
           }
         }
 
-        // Create Billing Settings
-        const promptPayRaw = payment?.promptPayValue ? String(payment.promptPayValue).trim() : null;
-        const isNationalId = payment?.promptPayType === 'national_id';
+        // Create Billing Settings with Encryption-at-Rest for Financial Identifiers (PS-006)
+        const promptPayRaw = payment?.promptPayValue ? String(payment.promptPayValue).replace(/\D/g, '') : null;
         const encryptedPromptPay = promptPayRaw ? this.sensitiveFieldService.encrypt(promptPayRaw).ciphertext : null;
+
+        const bankAccRaw = payment?.bankAccountNumber ? String(payment.bankAccountNumber).trim() : null;
+        const encryptedBankAcc = bankAccRaw ? this.sensitiveFieldService.encrypt(bankAccRaw).ciphertext : null;
 
         const billingData = {
           dormitoryId: createdDorm.id,
@@ -402,11 +405,12 @@ export class DormitoryProvisioningService {
           rentBillingType: billing?.rentBillingType ?? 'monthly',
           cashAccepted: payment?.cashAccepted ?? true,
           promptPayType: payment?.promptPayType ?? null,
-          promptPayValue: isNationalId ? null : promptPayRaw,
+          promptPayValue: null, // Zero plaintext storage in DB (PS-006)
           promptPayValueEncrypted: encryptedPromptPay,
           bankCode: payment?.bankCode ?? null,
           bankAccountName: payment?.bankAccountName ?? null,
-          bankAccountNumber: payment?.bankAccountNumber ?? null,
+          bankAccountNumber: bankAccRaw ? this.sensitiveFieldService.maskBankAccount(bankAccRaw) : null,
+          bankAccountNumberEncrypted: encryptedBankAcc,
         };
         const createdBilling = tx.dormitory ? await tx.dormitoryBillingSettings.create({ data: billingData }) : await this.billingRepo.create(billingData);
 

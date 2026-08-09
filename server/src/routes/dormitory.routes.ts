@@ -15,6 +15,7 @@ import {
   UpdateDormitoryInputSchema,
   OnboardingBillingInputSchema,
   OnboardingPaymentInputSchema,
+  PaymentSettingsInputSchema,
 } from '../types/onboarding-validation.js';
 
 export function createDormitoryRouter(
@@ -156,7 +157,7 @@ export function createDormitoryRouter(
     res.json({ data: updated });
   });
 
-  // GET /api/v1/dormitories/:dormitoryId/billing-settings
+  // GET /api/v1/dormitories/:dormitoryId/billing-settings (PS-001 Public Billing DTO Isolation)
   router.get('/:dormitoryId/billing-settings', requireSession, requireDormitory, requireBillingView, async (req: Request, res: Response) => {
     const dormitoryId = req.params.dormitoryId;
     let settings: any = await billingRepo.findByDormitoryId(dormitoryId);
@@ -167,16 +168,30 @@ export function createDormitoryRouter(
       }
     }
 
-    if (settings && settings.promptPayValueEncrypted) {
-      try {
-        const decrypted = sensitiveFieldService.decrypt(settings.promptPayValueEncrypted);
-        if (decrypted) {
-          settings = { ...settings, promptPayValue: decrypted };
-        }
-      } catch (_err) {}
+    if (!settings) {
+      return res.json({ data: null });
     }
 
-    res.json({ data: settings });
+    // PS-001: Explicit public billing DTO (excludes promptPayValueEncrypted and payment account details)
+    const publicBillingDTO = {
+      id: settings.id,
+      dormitoryId: settings.dormitoryId,
+      billingDay: settings.billingDay,
+      dueDay: settings.dueDay,
+      waterBillingType: settings.waterBillingType,
+      waterRate: String(settings.waterRate),
+      electricityBillingType: settings.electricityBillingType,
+      electricityRate: String(settings.electricityRate),
+      commonFee: String(settings.commonFee),
+      internetFee: String(settings.internetFee),
+      lateFeeType: settings.lateFeeType,
+      lateFeeValue: String(settings.lateFeeValue),
+      rentBillingType: settings.rentBillingType,
+      createdAt: settings.createdAt,
+      updatedAt: settings.updatedAt,
+    };
+
+    res.json({ data: publicBillingDTO });
   });
 
   // PATCH /api/v1/dormitories/:dormitoryId/billing-settings
@@ -204,6 +219,146 @@ export function createDormitoryRouter(
 
     const updated = await billingRepo.update(dormitoryId, parsed.data as any);
     res.json({ data: updated });
+  });
+
+  // GET /api/v1/dormitories/:dormitoryId/payment-settings (PS-002, PS-003, PS-008)
+  router.get('/:dormitoryId/payment-settings', requireSession, requireDormitory, requirePaymentView, async (req: Request, res: Response) => {
+    const dormitoryId = req.params.dormitoryId;
+    let settings: any = await billingRepo.findByDormitoryId(dormitoryId);
+    if (!settings) {
+      const prisma = getPrismaClient();
+      if (prisma?.dormitoryBillingSettings) {
+        settings = await prisma.dormitoryBillingSettings.findUnique({ where: { dormitoryId } });
+      }
+    }
+
+    if (!settings) {
+      return res.json({ data: null });
+    }
+
+    let decryptedPromptPay: string | null = null;
+    if (settings.promptPayValueEncrypted) {
+      try {
+        decryptedPromptPay = sensitiveFieldService.decrypt(settings.promptPayValueEncrypted);
+      } catch (err: any) {
+        console.error('Payment settings decrypt error for promptPay:', err.message);
+        return res.status(500).json({
+          error: {
+            code: 'PAYMENT_CONFIG_DECRYPTION_FAILED',
+            message: 'ไม่สามารถถอดรหัสข้อมูลพร้อมเพย์ได้',
+            fieldErrors: null,
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+    } else if (settings.promptPayValue) {
+      decryptedPromptPay = settings.promptPayValue;
+    }
+
+    let decryptedBankAccount: string | null = null;
+    if (settings.bankAccountNumberEncrypted) {
+      try {
+        decryptedBankAccount = sensitiveFieldService.decrypt(settings.bankAccountNumberEncrypted);
+      } catch (err: any) {
+        console.error('Payment settings decrypt error for bankAccount:', err.message);
+        return res.status(500).json({
+          error: {
+            code: 'PAYMENT_CONFIG_DECRYPTION_FAILED',
+            message: 'ไม่สามารถถอดรหัสข้อมูลบัญชีธนาคารได้',
+            fieldErrors: null,
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+    } else if (settings.bankAccountNumber && !settings.bankAccountNumber.includes('X')) {
+      decryptedBankAccount = settings.bankAccountNumber;
+    }
+
+    const publicPaymentDTO = {
+      id: settings.id,
+      dormitoryId: settings.dormitoryId,
+      cashAccepted: settings.cashAccepted ?? true,
+      promptPayType: settings.promptPayType ?? null,
+      promptPayValue: decryptedPromptPay,
+      maskedPromptPayValue: settings.promptPayType ? sensitiveFieldService.maskPromptPay(settings.promptPayType, decryptedPromptPay || undefined) : null,
+      hasPromptPay: Boolean(settings.promptPayType && (settings.promptPayValueEncrypted || decryptedPromptPay)),
+      bankCode: settings.bankCode ?? null,
+      bankAccountName: settings.bankAccountName ?? null,
+      bankAccountNumber: decryptedBankAccount || (settings.bankAccountNumber ?? null),
+      maskedBankAccountNumber: decryptedBankAccount ? sensitiveFieldService.maskBankAccount(decryptedBankAccount) : (settings.bankAccountNumber ?? null),
+      createdAt: settings.createdAt,
+      updatedAt: settings.updatedAt,
+    };
+
+    res.json({ data: publicPaymentDTO });
+  });
+
+  // PATCH /api/v1/dormitories/:dormitoryId/payment-settings (PS-007 Owner Lifecycle Update)
+  router.patch('/:dormitoryId/payment-settings', requireSession, requireDormitory, requirePaymentUpdate, requireDormitoryWriteEntitlement, async (req: Request, res: Response) => {
+    if (!verifyCsrfToken(req, res)) return;
+
+    const parsed = PaymentSettingsInputSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'ข้อมูลการตั้งค่าการชำระเงินไม่ถูกต้อง',
+          fieldErrors: parsed.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })),
+          requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+          timestamp: new Date().toISOString(),
+        },
+      });
+    }
+
+    const dormitoryId = req.params.dormitoryId;
+    const prisma = getPrismaClient();
+    const promptPayRaw = parsed.data.promptPayValue ? parsed.data.promptPayValue.replace(/\D/g, '') : null;
+    const encryptedPromptPay = promptPayRaw ? sensitiveFieldService.encrypt(promptPayRaw).ciphertext : null;
+
+    const bankAccRaw = parsed.data.bankAccountNumber ? parsed.data.bankAccountNumber.trim() : null;
+    const encryptedBankAcc = bankAccRaw ? sensitiveFieldService.encrypt(bankAccRaw).ciphertext : null;
+
+    const updateData: any = {
+      cashAccepted: parsed.data.cashAccepted ?? true,
+      promptPayType: parsed.data.promptPayType ?? null,
+      promptPayValue: null, // Always keep plaintext PromptPay null in DB
+      promptPayValueEncrypted: encryptedPromptPay,
+      bankCode: parsed.data.bankCode ?? null,
+      bankAccountName: parsed.data.bankAccountName ?? null,
+      bankAccountNumber: bankAccRaw ? sensitiveFieldService.maskBankAccount(bankAccRaw) : null,
+      bankAccountNumberEncrypted: encryptedBankAcc,
+    };
+
+    let updated: any;
+    if (prisma?.dormitoryBillingSettings) {
+      updated = await prisma.dormitoryBillingSettings.upsert({
+        where: { dormitoryId },
+        update: updateData,
+        create: { dormitoryId, ...updateData },
+      });
+    } else {
+      updated = await billingRepo.update(dormitoryId, updateData);
+    }
+
+    const publicPaymentDTO = {
+      id: updated.id,
+      dormitoryId: updated.dormitoryId,
+      cashAccepted: updated.cashAccepted ?? true,
+      promptPayType: updated.promptPayType ?? null,
+      promptPayValue: promptPayRaw,
+      maskedPromptPayValue: updated.promptPayType ? sensitiveFieldService.maskPromptPay(updated.promptPayType, promptPayRaw || undefined) : null,
+      hasPromptPay: Boolean(updated.promptPayType && promptPayRaw),
+      bankCode: updated.bankCode ?? null,
+      bankAccountName: updated.bankAccountName ?? null,
+      bankAccountNumber: bankAccRaw,
+      maskedBankAccountNumber: bankAccRaw ? sensitiveFieldService.maskBankAccount(bankAccRaw) : null,
+      createdAt: updated.createdAt,
+      updatedAt: updated.updatedAt,
+    };
+
+    res.json({ data: publicPaymentDTO });
   });
 
   // GET /api/v1/dormitories/:dormitoryId/subscription
