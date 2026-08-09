@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import request from 'supertest';
 import { createApp } from '../src/app.js';
 import { SignatureStorageService } from '../src/services/signature-storage.service.js';
+import { PNG } from 'pngjs';
 import { getPrismaClient } from '../src/db/prisma.js';
 
 describe('Onboarding & Provisioning API (TASK 011)', () => {
@@ -47,8 +48,10 @@ describe('Onboarding & Provisioning API (TASK 011)', () => {
 
     expect(promoRes.status).toBe(200);
     expect(promoRes.body.data.valid).toBe(true);
-    expect(promoRes.body.data.bonusTrialDays).toBe(60);
-    expect(promoRes.body.data.totalTrialDays).toBe(90);
+    expect(promoRes.body.data.eligible).toBe(true);
+    expect(promoRes.body.data.trialMonths).toBe(1);
+    expect(promoRes.body.data.promoBonusMonths).toBe(2);
+    expect(promoRes.body.data.totalTrialMonths).toBe(3);
 
     // Validate Invalid Code
     const invalidRes = await request(app)
@@ -115,10 +118,14 @@ describe('Onboarding & Provisioning API (TASK 011)', () => {
     const provDormId = prepRes.body.data.provisionalDormitoryId;
     const prisma = getPrismaClient();
     const sigService = new SignatureStorageService(prisma);
-    const validPngBuffer = Buffer.from([
-      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
-      0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
-    ]);
+    const pngObj = new PNG({ width: 16, height: 16 });
+    for (let i = 0; i < pngObj.data.length; i += 4) {
+      pngObj.data[i] = 0;
+      pngObj.data[i + 1] = 0;
+      pngObj.data[i + 2] = 0;
+      pngObj.data[i + 3] = 255;
+    }
+    const validPngBuffer = PNG.sync.write(pngObj);
     const userId = prepRes.body.data.userId || authRes.body.data.userId || authRes.body.data.user?.id;
     await sigService.saveSignature({ dormitoryId: provDormId, userId, buffer: validPngBuffer });
     await prisma.$transaction(async (tx) => {

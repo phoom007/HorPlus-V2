@@ -20,6 +20,7 @@ export class FakeLineServer {
   public baseUrl: string = '';
   public pushRequests: FakeLinePushRequest[] = [];
   public retryTracker: Set<string> = new Set();
+  public isWebhookActive: boolean = true;
 
   async start(): Promise<string> {
     return new Promise((resolve, reject) => {
@@ -37,6 +38,19 @@ export class FakeLineServer {
           try {
             if (bodyStr) bodyObj = JSON.parse(bodyStr);
           } catch { /* ignore */ }
+
+          // POST /oauth2/v3/token
+          if (method === 'POST' && url.includes('/oauth2/v3/token')) {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(
+              JSON.stringify({
+                access_token: 'fake_stateless_token_e2e_12345',
+                token_type: 'Bearer',
+                expires_in: 2592000,
+              })
+            );
+            return;
+          }
 
           // GET /v2/bot/info
           if (method === 'GET' && url.includes('/v2/bot/info')) {
@@ -111,6 +125,48 @@ export class FakeLineServer {
                 sentMessages: [{ id: `msg_${Date.now()}` }],
               })
             );
+            return;
+          }
+
+          // PUT /v2/bot/channel/webhook/endpoint
+          if (method === 'PUT' && url.includes('/v2/bot/channel/webhook/endpoint')) {
+            if (!auth || !auth.startsWith('Bearer ')) {
+              res.writeHead(401, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ message: 'Unauthorized' }));
+              return;
+            }
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({}));
+            return;
+          }
+
+          // GET /v2/bot/channel/webhook/endpoint
+          if (method === 'GET' && url.includes('/v2/bot/channel/webhook/endpoint')) {
+            if (!auth || !auth.startsWith('Bearer ')) {
+              res.writeHead(401, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ message: 'Unauthorized' }));
+              return;
+            }
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ endpoint: 'https://app.horplus.com/api/v1/line/webhook/test', active: this.isWebhookActive }));
+            return;
+          }
+
+          // POST /v2/bot/channel/webhook/test
+          if (method === 'POST' && url.includes('/v2/bot/channel/webhook/test')) {
+            if (!auth || !auth.startsWith('Bearer ')) {
+              res.writeHead(401, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ message: 'Unauthorized' }));
+              return;
+            }
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+              success: this.isWebhookActive,
+              timestamp: new Date().toISOString(),
+              statusCode: this.isWebhookActive ? 200 : 400,
+              reason: this.isWebhookActive ? 'OK' : 'WEBHOOK_INACTIVE',
+              detail: this.isWebhookActive ? 'Webhook test succeeded' : 'Webhook test failed: inactive',
+            }));
             return;
           }
 

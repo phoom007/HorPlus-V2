@@ -73,14 +73,19 @@ export function resolveAuthoritativeDormitoryContext(req: Request): Authoritativ
 
   if (!targetMembership && requestedDormId) {
     const path = req.originalUrl || req.url || '';
-    if (path.includes('/signatures') || path.includes('/line-oa') || path.includes('/onboarding') || path.includes('/dormitories')) {
+    const isProvisionalOnboardingPath =
+      path.includes('/api/v1/onboarding') ||
+      path.includes('/line-oa') ||
+      path.includes('/signatures');
+
+    if (isProvisionalOnboardingPath) {
       targetMembership = {
         id: `provisional-${requestedDormId}`,
         dormitoryId: requestedDormId,
         userId: auth.userId,
         roleCode: 'OWNER',
         status: 'active',
-        rolePermissions: ['*'],
+        rolePermissions: ['onboarding:read', 'onboarding:write', 'line_oa:read', 'line_oa:write', 'line_oa:manage', 'signature:read', 'signature:write'],
       } as any;
     }
   }

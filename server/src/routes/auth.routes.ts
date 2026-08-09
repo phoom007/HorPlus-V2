@@ -86,7 +86,7 @@ export function createAuthRouter(authService: AuthenticationService): Router {
   // GET /api/v1/auth/session
   router.get('/session', requireSession, async (req: Request, res: Response) => {
     const auth = req.auth!;
-    const activeMemberships = auth.memberships.filter((m) => m.status === 'active');
+    const activeMemberships = auth.memberships.filter((m) => m.status === 'active' && (!m.dormitoryStatus || m.dormitoryStatus === 'active'));
 
     return res.status(200).json({
       data: {
@@ -97,7 +97,7 @@ export function createAuthRouter(authService: AuthenticationService): Router {
           name: auth.user.name,
           avatarUrl: auth.user.avatarUrl,
         },
-        memberships: auth.memberships.map((m) => ({
+        memberships: activeMemberships.map((m) => ({
           id: m.id,
           dormitoryId: m.dormitoryId,
           dormitoryName: m.dormitoryName,

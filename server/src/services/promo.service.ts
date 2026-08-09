@@ -1,119 +1,142 @@
-import { IPromoRepository, PlatformPromoCodeEntity } from '../db/repositories/promo.repository.js';
+import { PrismaClient } from '@prisma/client';
 
 export interface PromoValidationResult {
   valid: boolean;
+  eligible: boolean;
   code: string;
-  standardTrialDays: number;
-  bonusTrialDays: number;
-  totalTrialDays: number;
-  message?: string;
-  promoCodeEntity?: PlatformPromoCodeEntity;
+  benefitType?: string;
+  benefitUnit?: string;
+  benefitValue?: number;
+  trialMonths: number;
+  promoBonusMonths: number;
+  totalTrialMonths: number;
+  message: string;
+  promoCodeEntity?: any;
 }
 
 export class PromoService {
-  private promoRepo: IPromoRepository;
+  private prisma: PrismaClient;
 
-  constructor(promoRepo: IPromoRepository) {
-    this.promoRepo = promoRepo;
+  constructor(prismaOrRepo?: any) {
+    if (prismaOrRepo && typeof prismaOrRepo.$transaction === 'function') {
+      this.prisma = prismaOrRepo;
+    } else {
+      this.prisma = new PrismaClient();
+    }
   }
 
-  public async validatePromo(code: string | undefined, dormitoryId?: string): Promise<PromoValidationResult> {
-    const standardTrialDays = 30;
+  public async validatePromo(code: string | undefined, userId?: string): Promise<PromoValidationResult> {
+    const initialTrialMonths = 1;
 
     if (!code || !code.trim()) {
       return {
         valid: false,
+        eligible: false,
         code: '',
-        standardTrialDays,
-        bonusTrialDays: 0,
-        totalTrialDays: standardTrialDays,
+        trialMonths: initialTrialMonths,
+        promoBonusMonths: 0,
+        totalTrialMonths: initialTrialMonths,
         message: 'กรุณากรอกรหัสโปรโมชัน',
       };
     }
 
     const normalizedCode = code.trim().toUpperCase();
-    const promo = await this.promoRepo.findByCode(normalizedCode);
+    const promo = await this.prisma.promoCode.findFirst({
+      where: {
+        OR: [
+          { normalizedCode },
+          { code: normalizedCode },
+        ],
+      },
+    });
 
     if (!promo) {
       return {
         valid: false,
+        eligible: false,
         code: normalizedCode,
-        standardTrialDays,
-        bonusTrialDays: 0,
-        totalTrialDays: standardTrialDays,
+        trialMonths: initialTrialMonths,
+        promoBonusMonths: 0,
+        totalTrialMonths: initialTrialMonths,
         message: 'รหัสโปรโมชันไม่ถูกต้อง',
       };
     }
 
-    if (promo.status !== 'active') {
+    if (!promo.enabled) {
       return {
         valid: false,
+        eligible: false,
         code: normalizedCode,
-        standardTrialDays,
-        bonusTrialDays: 0,
-        totalTrialDays: standardTrialDays,
+        trialMonths: initialTrialMonths,
+        promoBonusMonths: 0,
+        totalTrialMonths: initialTrialMonths,
         message: 'รหัสโปรโมชันนี้ไม่สามารถใช้งานได้แล้ว',
       };
     }
 
     const now = new Date();
-    if (promo.validFrom && promo.validFrom > now) {
+    if (promo.startsAt && promo.startsAt > now) {
       return {
         valid: false,
+        eligible: false,
         code: normalizedCode,
-        standardTrialDays,
-        bonusTrialDays: 0,
-        totalTrialDays: standardTrialDays,
+        trialMonths: initialTrialMonths,
+        promoBonusMonths: 0,
+        totalTrialMonths: initialTrialMonths,
         message: 'รหัสโปรโมชันนี้ยังไม่ถึงเวลาเปิดใช้งาน',
       };
     }
 
-    if (promo.validUntil && promo.validUntil < now) {
+    if (promo.endsAt && promo.endsAt < now) {
       return {
         valid: false,
+        eligible: false,
         code: normalizedCode,
-        standardTrialDays,
-        bonusTrialDays: 0,
-        totalTrialDays: standardTrialDays,
+        trialMonths: initialTrialMonths,
+        promoBonusMonths: 0,
+        totalTrialMonths: initialTrialMonths,
         message: 'รหัสโปรโมชันหมดอายุแล้ว',
       };
     }
 
-    if (promo.maxRedemptions !== null && promo.maxRedemptions !== undefined && promo.redemptionCount >= promo.maxRedemptions) {
-      return {
-        valid: false,
-        code: normalizedCode,
-        standardTrialDays,
-        bonusTrialDays: 0,
-        totalTrialDays: standardTrialDays,
-        message: 'รหัสโปรโมชันนี้ถูกใช้งานครบตามจำนวนโควต้าแล้ว',
-      };
-    }
+    if (userId) {
+      const existingRedemption = await this.prisma.promoRedemption.findFirst({
+        where: {
+          promoCodeId: promo.id,
+          redeemedBy: userId,
+        },
+      });
 
-    if (dormitoryId) {
-      const existingRedemption = await this.promoRepo.findRedemption(promo.id, dormitoryId);
       if (existingRedemption) {
         return {
           valid: false,
+          eligible: false,
           code: normalizedCode,
-          standardTrialDays,
-          bonusTrialDays: 0,
-          totalTrialDays: standardTrialDays,
-          message: 'รหัสโปรโมชันนี้ถูกใช้งานไปแล้วกับหอพักนี้',
+          trialMonths: initialTrialMonths,
+          promoBonusMonths: 0,
+          totalTrialMonths: initialTrialMonths,
+          message: 'รหัสโปรโมชันนี้ถูกใช้งานไปแล้วกับบัญชีนี้',
         };
       }
     }
 
-    const bonusTrialDays = promo.trialBonusDays || 0;
-    const totalTrialDays = Math.min(90, standardTrialDays + bonusTrialDays);
+    const bonusMonths = (promo.benefitType === 'TRIAL_EXTENSION' && promo.benefitUnit === 'MONTH')
+      ? promo.benefitValue
+      : 2;
 
     return {
       valid: true,
+      eligible: true,
       code: normalizedCode,
-      standardTrialDays,
-      bonusTrialDays,
-      totalTrialDays,
+      benefitType: promo.benefitType,
+      benefitUnit: promo.benefitUnit,
+      benefitValue: bonusMonths,
+      trialMonths: initialTrialMonths,
+      promoBonusMonths: bonusMonths,
+      totalTrialMonths: initialTrialMonths + bonusMonths,
+      message: `รหัสโปรโมชันถูกต้อง คุณได้รับส่วนขยายเพิ่ม ${bonusMonths} เดือน`,
       promoCodeEntity: promo,
     };
   }
 }
+

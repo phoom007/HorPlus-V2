@@ -13,25 +13,66 @@ export interface LineStatelessTokenResponse {
   expires_in: number;
 }
 
-export class LineChannelTokenProvider {
+export interface ILineChannelTokenProvider {
+  getChannelAccessToken(channelId: string, channelSecret: string): Promise<string>;
+  clearCache?(channelId: string): Promise<void>;
+}
+
+export class FakeLineTokenProvider implements ILineChannelTokenProvider {
+  constructor(private token: string = 'fake_stateless_token_12345') {}
+
+  async getChannelAccessToken(channelId: string, channelSecret: string): Promise<string> {
+    if (!channelId || !channelSecret) {
+      throw new AppError('Channel ID and Channel Secret are required for stateless token issuance', 400, 'INVALID_CHANNEL_CREDENTIALS');
+    }
+    return `fake_stateless_token_${channelId}`;
+  }
+
+  async clearCache(_channelId: string): Promise<void> {}
+}
+
+export class LineChannelTokenProvider implements ILineChannelTokenProvider {
   private redisClient: Redis | null = null;
   private memoryCache: Map<string, { token: string; expiresAt: number }> = new Map();
   private inFlightRequests: Map<string, Promise<string>> = new Map();
 
-  constructor(private lineBaseUrl: string = 'https://api.line.me') {
-    const redisUrl = process.env.REDIS_URL || 'redis://127.0.0.1:6379';
-    try {
-      this.redisClient = new Redis(redisUrl, {
-        lazyConnect: true,
-        maxRetriesPerRequest: 1,
-        enableOfflineQueue: false,
-      });
-      this.redisClient.on('error', () => {
-        // Silent catch for Redis connection errors in test environments without running Redis server
-      });
-    } catch {
-      this.redisClient = null;
+  constructor(private lineBaseUrl: string = 'https://api.line.me', customRedisClient?: Redis) {
+    if (customRedisClient) {
+      this.redisClient = customRedisClient;
+    } else {
+      const redisUrl = process.env.REDIS_URL || 'redis://127.0.0.1:6379';
+      try {
+        this.redisClient = new Redis(redisUrl, {
+          maxRetriesPerRequest: 1,
+          enableOfflineQueue: false,
+        });
+        this.redisClient.on('error', () => {
+          // Catch Redis connection errors
+        });
+      } catch {
+        this.redisClient = null;
+      }
     }
+  }
+
+  public async ensureRedisConnected(): Promise<boolean> {
+    if (!this.redisClient) return false;
+    if ((this.redisClient.status as string) === 'ready') return true;
+
+    try {
+      if (this.redisClient.status === 'connecting' || this.redisClient.status === 'connect') {
+        const start = Date.now();
+        while (Date.now() - start < 2000) {
+          if ((this.redisClient.status as string) === 'ready') return true;
+          await new Promise((r) => setTimeout(r, 50));
+        }
+      } else if (this.redisClient.status === 'wait' || this.redisClient.status === 'close') {
+        await this.redisClient.connect();
+      }
+    } catch {
+      return false;
+    }
+    return (this.redisClient.status as string) === 'ready';
   }
 
   private getCacheKey(channelId: string): string {
@@ -52,8 +93,11 @@ export class LineChannelTokenProvider {
       throw new AppError('Channel ID and Channel Secret are required for stateless token issuance', 400, 'INVALID_CHANNEL_CREDENTIALS');
     }
 
-    if (process.env.NODE_ENV === 'test' || process.env.HORPLUS_E2E === 'true') {
-      return `stateless_test_token_mock_${channelId}`;
+    const isProd = process.env.NODE_ENV === 'production';
+    const isRedisAvailable = await this.ensureRedisConnected();
+
+    if (isProd && !isRedisAvailable) {
+      throw new AppError('Distributed coordination unavailable', 503, 'REDIS_UNAVAILABLE');
     }
 
     const cacheKey = this.getCacheKey(channelId);
@@ -67,7 +111,7 @@ export class LineChannelTokenProvider {
     }
 
     // 2. Check L2 Redis Cache
-    if (this.redisClient && this.redisClient.status === 'ready') {
+    if (isRedisAvailable && this.redisClient) {
       try {
         const redisCached = await this.redisClient.get(cacheKey);
         if (redisCached) {
@@ -84,7 +128,7 @@ export class LineChannelTokenProvider {
     }
 
     // 3. Distributed Redis SET NX PX Lock
-    if (this.redisClient && this.redisClient.status === 'ready') {
+    if (isRedisAvailable && this.redisClient) {
       const uniqueOwnerId = crypto.randomUUID();
       const lockTTL = 10000; // 10 seconds
       let lockAcquired = false;
@@ -161,10 +205,7 @@ export class LineChannelTokenProvider {
   }
 
   private async fetchStatelessToken(channelId: string, channelSecret: string): Promise<string> {
-    // FakeLineServer / E2E mode override
-    const baseUrl = (process.env.HORPLUS_E2E === 'true' && process.env.LINE_BASE_URL)
-      ? process.env.LINE_BASE_URL
-      : this.lineBaseUrl;
+    const baseUrl = process.env.LINE_PLATFORM_URL || process.env.LINE_BASE_URL || this.lineBaseUrl;
 
     try {
       const res = await fetch(`${baseUrl}/oauth2/v3/token`, {
@@ -205,7 +246,7 @@ export class LineChannelTokenProvider {
       });
 
       // Cache token in Redis L2
-      if (this.redisClient && this.redisClient.status === 'ready') {
+      if (this.redisClient && ((this.redisClient.status as string) === 'ready' || await this.ensureRedisConnected())) {
         try {
           await this.redisClient.set(this.getCacheKey(channelId), body.access_token, 'EX', ttlSeconds);
         } catch {
@@ -226,7 +267,7 @@ export class LineChannelTokenProvider {
   async clearCache(channelId: string): Promise<void> {
     const cacheKey = this.getCacheKey(channelId);
     this.memoryCache.delete(cacheKey);
-    if (this.redisClient && this.redisClient.status === 'ready') {
+    if (this.redisClient && (this.redisClient.status as string) === 'ready') {
       try {
         await this.redisClient.del(cacheKey);
       } catch {
@@ -235,4 +276,5 @@ export class LineChannelTokenProvider {
     }
   }
 }
+
 

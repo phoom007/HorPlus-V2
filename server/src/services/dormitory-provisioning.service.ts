@@ -349,7 +349,7 @@ export class DormitoryProvisioningService {
 
       const isLineReady = Boolean(
         lineConfig &&
-        (lineConfig.accessTokenVerifiedAt || lineConfig.isConnected) &&
+        lineConfig.accessTokenVerifiedAt &&
         lineConfig.webhookEndpointSetAt &&
         lineConfig.webhookTestSucceededAt &&
         lineConfig.webhookActive

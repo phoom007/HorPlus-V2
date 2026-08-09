@@ -12,9 +12,11 @@ import crypto from 'crypto';
 import { getPrismaClient } from '../../server/src/db/prisma.js';
 import { SessionTokenService } from '../../server/src/services/session-token.service.js';
 import { CsrfService } from '../../server/src/services/csrf.service.js';
+import { FakeLineServer } from './helpers/fake-line-server.js';
 
 test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
   const prisma = getPrismaClient();
+  const fakeLineServer = new FakeLineServer();
 
   let freshUserId: string;
   let sessionToken: string;
@@ -31,7 +33,38 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
   let multiDormId1: string;
   let multiDormId2: string;
 
+  async function drawSignatureAndSetupLine(page: any) {
+    const canvas = page.locator('canvas');
+    await expect(canvas).toBeVisible();
+    const box = await canvas.boundingBox();
+    if (box) {
+      await page.mouse.move(box.x + 20, box.y + 20);
+      await page.mouse.down();
+      await page.mouse.move(box.x + 100, box.y + 60);
+      await page.mouse.move(box.x + 180, box.y + 30);
+      await page.mouse.up();
+    }
+    await page.click('[data-testid="button-save-signature"]');
+    await page.waitForSelector('[data-testid="signature-status-saved"]', { state: 'visible' });
+    await page.click('[data-testid="button-next-step"]'); // 4 -> 5
+
+    await page.fill('[data-testid="input-line-channel-id"]', '1650000001');
+    await page.fill('[data-testid="input-line-channel-secret"]', 'secret_key_12345');
+    await page.click('[data-testid="button-save-line-credentials"]');
+    await expect(page.locator('[data-testid="button-set-line-webhook"]')).toBeEnabled();
+    await page.click('[data-testid="button-set-line-webhook"]');
+    await expect(page.locator('[data-testid="button-test-line-webhook"]')).toBeEnabled();
+    await page.click('[data-testid="button-test-line-webhook"]');
+    await expect(page.locator('[data-testid="line-readiness-badge"]')).toContainText('พร้อมใช้งาน ✅');
+    await page.click('[data-testid="button-next-step"]'); // 5 -> 6
+  }
+
   test.beforeAll(async () => {
+    const fakeLineUrl = await fakeLineServer.start();
+    process.env.HORPLUS_E2E = 'true';
+    process.env.LINE_BASE_URL = fakeLineUrl;
+    process.env.LINE_PLATFORM_URL = fakeLineUrl;
+
     // 1. Create fresh User in PostgreSQL with 0 memberships
     const user = await prisma.user.create({
       data: {
@@ -129,6 +162,7 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
   });
 
   test.afterAll(async () => {
+    await fakeLineServer.stop();
     // Cleanup single test user & dorms
     if (freshUserId) {
       const user = await prisma.user.findUnique({
@@ -283,17 +317,12 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
     await page.fill('[data-testid="input-electric-rate"]', '8');
     await page.click('[data-testid="button-next-step"]'); // 3 -> 4
 
-    // ── Step 4: Deposits & Payment Account ──
+    // ── Step 4 & 5: Deposits, Payment Account, Signature & LINE OA ──
     const bankSelect = page.locator('[data-testid="select-bank-name"]');
     await bankSelect.selectOption({ index: 1 });
     await page.fill('[data-testid="input-account-number"]', '012-3-45678-9');
     await page.fill('[data-testid="input-account-name"]', 'นาย สมชาย ใจดี');
-    await page.click('[data-testid="button-save-signature"]');
-    await page.waitForSelector('[data-testid="signature-status-saved"]', { state: 'visible' });
-    await page.click('[data-testid="button-next-step"]'); // 4 -> 5
-
-    // ── Step 5: LINE OA ──
-    await page.click('[data-testid="button-next-step"]'); // 5 -> 6
+    await drawSignatureAndSetupLine(page);
 
     // ── Step 6: Summary & Package Finalize ──
     await page.click('[data-testid="button-finalize-onboarding"]');
@@ -421,12 +450,7 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
     await bankSelect.selectOption('กสิกรไทย (KBank)');
     await page.fill('[data-testid="input-account-number"]', '012-3-45678-9');
     await page.fill('[data-testid="input-account-name"]', 'นาย สมชาย ใจดี');
-    await page.click('[data-testid="button-save-signature"]');
-    await page.waitForSelector('[data-testid="signature-status-saved"]', { state: 'visible' });
-    await page.click('[data-testid="button-next-step"]'); // 4 -> 5
-
-    // Step 5: LINE OA
-    await page.click('[data-testid="button-next-step"]'); // 5 -> 6
+    await drawSignatureAndSetupLine(page);
 
     // Step 6: Finalize
     await page.click('[data-testid="button-finalize-onboarding"]');
@@ -572,12 +596,7 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
     await bankSelect.selectOption('กสิกรไทย (KBank)');
     await page.fill('[data-testid="input-account-number"]', '888-8-88888-8');
     await page.fill('[data-testid="input-account-name"]', 'นาย Fidelity Tester');
-    await page.click('[data-testid="button-save-signature"]');
-    await page.waitForSelector('[data-testid="signature-status-saved"]', { state: 'visible' });
-    await page.click('[data-testid="button-next-step"]'); // 4 -> 5
-
-    // Step 5: LINE OA
-    await page.click('[data-testid="button-next-step"]'); // 5 -> 6
+    await drawSignatureAndSetupLine(page);
 
     let capturedFidelityPost: any = null;
     page.on('request', (req) => {
@@ -746,12 +765,7 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
 
     const promptPayInput = page.locator('[data-testid="input-promptpay"]');
     await promptPayInput.fill('081-999-8888');
-    await page.click('[data-testid="button-save-signature"]');
-    await page.waitForSelector('[data-testid="signature-status-saved"]', { state: 'visible' });
-    await page.click('[data-testid="button-next-step"]'); // 4 -> 5
-
-    // Step 5: LINE OA
-    await page.click('[data-testid="button-next-step"]'); // 5 -> 6
+    await drawSignatureAndSetupLine(page);
 
     let capturedPost: any = null;
     page.on('request', (req) => {
@@ -884,12 +898,7 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
 
     const promptPayInput = page.locator('[data-testid="input-promptpay"]');
     await promptPayInput.fill('1-1007-00123-45-6');
-    await page.click('[data-testid="button-save-signature"]');
-    await page.waitForSelector('[data-testid="signature-status-saved"]', { state: 'visible' });
-    await page.click('[data-testid="button-next-step"]'); // 4 -> 5
-
-    // Step 5: LINE OA
-    await page.click('[data-testid="button-next-step"]'); // 5 -> 6
+    await drawSignatureAndSetupLine(page);
 
     let capturedPost: any = null;
     page.on('request', (req) => {

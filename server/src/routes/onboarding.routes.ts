@@ -57,6 +57,7 @@ export function createOnboardingRouter(
       data: draft
         ? {
             currentStep: draft.currentStep,
+            provisionalDormitoryId: draft.provisionalDormitoryId,
             payload: draft.payload,
             version: draft.version,
             updatedAt: draft.updatedAt,
@@ -145,14 +146,19 @@ export function createOnboardingRouter(
       });
     }
 
-    const result = await promoService.validatePromo(parsed.data.code);
+    const userId = req.auth?.userId;
+    const result = await promoService.validatePromo(parsed.data.code, userId);
     res.json({
       data: {
         valid: result.valid,
+        eligible: result.eligible,
         code: result.code,
-        standardTrialDays: result.standardTrialDays,
-        bonusTrialDays: result.bonusTrialDays,
-        totalTrialDays: result.totalTrialDays,
+        benefitType: result.benefitType,
+        benefitUnit: result.benefitUnit,
+        benefitValue: result.benefitValue,
+        trialMonths: result.trialMonths,
+        promoBonusMonths: result.promoBonusMonths,
+        totalTrialMonths: result.totalTrialMonths,
         message: result.message,
       },
     });

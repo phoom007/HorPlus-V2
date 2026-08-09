@@ -49,14 +49,15 @@ export const OwnerAuthGuard: React.FC<{ children?: React.ReactNode }> = ({ child
   }
 
   const userMemberships = session.memberships || [];
-  const membershipCount = userMemberships.length;
+  const activeMemberships = userMemberships.filter((m: any) => m.status === 'active' || !m.status);
+  const membershipCount = activeMemberships.length;
 
-  if (membershipCount === 0) {
+  if (session.onboardingRequired || membershipCount === 0) {
     if (location.pathname !== '/owner/register') {
       return <Navigate to="/owner/register" replace />;
     }
   } else {
-    // User has 1 or more memberships -> forbid accessing initial onboarding page (/owner/register)
+    // User has completed onboarding and has 1 or more memberships -> forbid accessing initial onboarding page (/owner/register)
     if (location.pathname === '/owner/register') {
       return <Navigate to="/auth/owner" replace />;
     }

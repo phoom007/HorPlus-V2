@@ -9,6 +9,7 @@ import { DormitoryProvisioningService } from '../../services/dormitory-provision
 import { OnboardingService } from '../../services/onboarding.service.js';
 import { SignatureStorageService } from '../../services/signature-storage.service.js';
 import { SensitiveFieldService } from '../../services/sensitive-field.service.js';
+import { PNG } from 'pngjs';
 import crypto from 'crypto';
 
 const prisma = new PrismaClient();
@@ -77,10 +78,14 @@ describe('Master 6-Step Owner Onboarding Lifecycle & Idempotency', () => {
   });
 
   it('3. Uploading owner signature persists PNG signature record with isCurrent = true', async () => {
-    const validPngBuffer = Buffer.from([
-      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
-      0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
-    ]);
+    const pngObj = new PNG({ width: 16, height: 16 });
+    for (let i = 0; i < pngObj.data.length; i += 4) {
+      pngObj.data[i] = 0;
+      pngObj.data[i + 1] = 0;
+      pngObj.data[i + 2] = 0;
+      pngObj.data[i + 3] = 255;
+    }
+    const validPngBuffer = PNG.sync.write(pngObj);
 
     const sigResult = await signatureService.saveSignature({
       dormitoryId: provDormId,

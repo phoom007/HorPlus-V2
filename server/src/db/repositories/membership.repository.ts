@@ -5,6 +5,7 @@ export interface DormitoryMemberEntity {
   userId: string;
   dormitoryId: string;
   dormitoryName?: string;
+  dormitoryStatus?: string;
   roleId: string;
   roleCode?: string;
   rolePermissions?: unknown;
@@ -127,6 +128,7 @@ export class PrismaMembershipRepository implements IMembershipRepository {
       userId: model.userId,
       dormitoryId: model.dormitoryId,
       dormitoryName: model.dormitory?.name,
+      dormitoryStatus: model.dormitory?.status,
       roleId: model.roleId,
       roleCode: model.role?.code,
       rolePermissions: model.role?.permissions,

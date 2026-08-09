@@ -20,6 +20,7 @@ import { subscriptionEntitlementService } from '../../services/subscription-enti
 import { DormitoryProvisioningService } from '../../services/dormitory-provisioning.service.js';
 import { InMemoryIdempotencyRepository } from '../../db/repositories/idempotency.repository.js';
 import { SignatureStorageService } from '../../services/signature-storage.service.js';
+import { PNG } from 'pngjs';
 
 const prisma = getPrismaClient();
 const sensitiveService = new SensitiveFieldService(getEnv().FIELD_ENCRYPTION_KEY, 1);
@@ -516,15 +517,23 @@ describe('Payment Security & Idempotency Boundary (PS-001 to PS-010)', () => {
         .set('x-csrf-token', idempAuth.csrfToken)
         .send({ name: 'Idemp Dorm 1' });
       const provDormId = prepRes.body.data.provisionalDormitoryId;
-      const validPngBuffer = Buffer.from([
-        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
-        0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
-      ]);
+      const pngObj = new PNG({ width: 16, height: 16 });
+      for (let i = 0; i < pngObj.data.length; i += 4) {
+        pngObj.data[i] = 0;
+        pngObj.data[i + 1] = 0;
+        pngObj.data[i + 2] = 0;
+        pngObj.data[i + 3] = 255;
+      }
+      const validPngBuffer = PNG.sync.write(pngObj);
       const sigService = new SignatureStorageService(prisma);
       await sigService.saveSignature({ dormitoryId: provDormId, userId: idempUser.id, buffer: validPngBuffer });
       await prisma.$transaction(async (tx) => {
         await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${provDormId}, true)`;
-        await tx.dormitoryLineConfig.update({ where: { dormitoryId: provDormId }, data: { accessTokenVerifiedAt: new Date(), webhookEndpointSetAt: new Date(), webhookTestSucceededAt: new Date(), webhookActive: true, isConnected: true } });
+        await tx.dormitoryLineConfig.upsert({
+          where: { dormitoryId: provDormId },
+          create: { dormitoryId: provDormId, webhookKeyHash: `dummy_hash_${provDormId}`, accessTokenVerifiedAt: new Date(), webhookEndpointSetAt: new Date(), webhookTestSucceededAt: new Date(), webhookActive: true, isConnected: true },
+          update: { accessTokenVerifiedAt: new Date(), webhookEndpointSetAt: new Date(), webhookTestSucceededAt: new Date(), webhookActive: true, isConnected: true },
+        });
       });
 
       const payload1 = {
@@ -599,15 +608,23 @@ describe('Payment Security & Idempotency Boundary (PS-001 to PS-010)', () => {
         .set('x-csrf-token', replayAuth.csrfToken)
         .send({ name: 'Replay Dorm' });
       const provDormId = prepRes.body.data.provisionalDormitoryId;
-      const validPngBuffer = Buffer.from([
-        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
-        0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
-      ]);
+      const pngObj = new PNG({ width: 16, height: 16 });
+      for (let i = 0; i < pngObj.data.length; i += 4) {
+        pngObj.data[i] = 0;
+        pngObj.data[i + 1] = 0;
+        pngObj.data[i + 2] = 0;
+        pngObj.data[i + 3] = 255;
+      }
+      const validPngBuffer = PNG.sync.write(pngObj);
       const sigService = new SignatureStorageService(prisma);
       await sigService.saveSignature({ dormitoryId: provDormId, userId: replayUser.id, buffer: validPngBuffer });
       await prisma.$transaction(async (tx) => {
         await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${provDormId}, true)`;
-        await tx.dormitoryLineConfig.update({ where: { dormitoryId: provDormId }, data: { accessTokenVerifiedAt: new Date(), webhookEndpointSetAt: new Date(), webhookTestSucceededAt: new Date(), webhookActive: true, isConnected: true } });
+        await tx.dormitoryLineConfig.upsert({
+          where: { dormitoryId: provDormId },
+          create: { dormitoryId: provDormId, webhookKeyHash: `dummy_hash_${provDormId}`, accessTokenVerifiedAt: new Date(), webhookEndpointSetAt: new Date(), webhookTestSucceededAt: new Date(), webhookActive: true, isConnected: true },
+          update: { accessTokenVerifiedAt: new Date(), webhookEndpointSetAt: new Date(), webhookTestSucceededAt: new Date(), webhookActive: true, isConnected: true },
+        });
       });
 
       const payload = {
@@ -664,15 +681,23 @@ describe('Payment Security & Idempotency Boundary (PS-001 to PS-010)', () => {
         .set('x-csrf-token', mutAuth.csrfToken)
         .send({ name: 'MutPP Dorm' });
       const provDormId = prepRes.body.data.provisionalDormitoryId;
-      const validPngBuffer = Buffer.from([
-        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
-        0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
-      ]);
+      const pngObj = new PNG({ width: 16, height: 16 });
+      for (let i = 0; i < pngObj.data.length; i += 4) {
+        pngObj.data[i] = 0;
+        pngObj.data[i + 1] = 0;
+        pngObj.data[i + 2] = 0;
+        pngObj.data[i + 3] = 255;
+      }
+      const validPngBuffer = PNG.sync.write(pngObj);
       const sigService = new SignatureStorageService(prisma);
       await sigService.saveSignature({ dormitoryId: provDormId, userId: mutUser.id, buffer: validPngBuffer });
       await prisma.$transaction(async (tx) => {
         await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${provDormId}, true)`;
-        await tx.dormitoryLineConfig.update({ where: { dormitoryId: provDormId }, data: { accessTokenVerifiedAt: new Date(), webhookEndpointSetAt: new Date(), webhookTestSucceededAt: new Date(), webhookActive: true, isConnected: true } });
+        await tx.dormitoryLineConfig.upsert({
+          where: { dormitoryId: provDormId },
+          create: { dormitoryId: provDormId, webhookKeyHash: `dummy_hash_${provDormId}`, accessTokenVerifiedAt: new Date(), webhookEndpointSetAt: new Date(), webhookTestSucceededAt: new Date(), webhookActive: true, isConnected: true },
+          update: { accessTokenVerifiedAt: new Date(), webhookEndpointSetAt: new Date(), webhookTestSucceededAt: new Date(), webhookActive: true, isConnected: true },
+        });
       });
 
       const origPayload = {
@@ -744,15 +769,23 @@ describe('Payment Security & Idempotency Boundary (PS-001 to PS-010)', () => {
         .set('x-csrf-token', mutAuth.csrfToken)
         .send({ name: 'MutBank Dorm' });
       const provDormId = prepRes.body.data.provisionalDormitoryId;
-      const validPngBuffer = Buffer.from([
-        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
-        0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
-      ]);
+      const pngObj = new PNG({ width: 16, height: 16 });
+      for (let i = 0; i < pngObj.data.length; i += 4) {
+        pngObj.data[i] = 0;
+        pngObj.data[i + 1] = 0;
+        pngObj.data[i + 2] = 0;
+        pngObj.data[i + 3] = 255;
+      }
+      const validPngBuffer = PNG.sync.write(pngObj);
       const sigService = new SignatureStorageService(prisma);
       await sigService.saveSignature({ dormitoryId: provDormId, userId: mutUser.id, buffer: validPngBuffer });
       await prisma.$transaction(async (tx) => {
         await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${provDormId}, true)`;
-        await tx.dormitoryLineConfig.update({ where: { dormitoryId: provDormId }, data: { accessTokenVerifiedAt: new Date(), webhookEndpointSetAt: new Date(), webhookTestSucceededAt: new Date(), webhookActive: true, isConnected: true } });
+        await tx.dormitoryLineConfig.upsert({
+          where: { dormitoryId: provDormId },
+          create: { dormitoryId: provDormId, webhookKeyHash: `dummy_hash_${provDormId}`, accessTokenVerifiedAt: new Date(), webhookEndpointSetAt: new Date(), webhookTestSucceededAt: new Date(), webhookActive: true, isConnected: true },
+          update: { accessTokenVerifiedAt: new Date(), webhookEndpointSetAt: new Date(), webhookTestSucceededAt: new Date(), webhookActive: true, isConnected: true },
+        });
       });
 
       const origPayload = {

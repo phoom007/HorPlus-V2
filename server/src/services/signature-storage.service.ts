@@ -6,8 +6,9 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
-import zlib from 'zlib';
 import { Readable } from 'stream';
+import { PNG } from 'pngjs';
+import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import { PrismaClient } from '@prisma/client';
 import { AppError } from '../types/index.js';
 
@@ -62,82 +63,82 @@ export class LocalOwnerSignatureStorage implements OwnerSignatureStorageProvider
 }
 
 export class S3CompatibleOwnerSignatureStorage implements OwnerSignatureStorageProvider {
+  private s3Client: S3Client | null = null;
   private bucket: string;
-  private endpoint: string;
-  private accessKeyId: string;
-  private secretAccessKey: string;
 
-  constructor() {
-    this.accessKeyId = process.env.R2_ACCESS_KEY_ID || '';
-    this.secretAccessKey = process.env.R2_SECRET_ACCESS_KEY || '';
-    this.endpoint = process.env.R2_ENDPOINT || '';
-    this.bucket = process.env.R2_BUCKET_NAME || 'horplus-signatures';
+  constructor(customClient?: S3Client) {
+    this.bucket = process.env.R2_BUCKET_NAME || process.env.S3_BUCKET_NAME || 'horplus-signatures';
 
-    if (!this.accessKeyId || !this.secretAccessKey) {
-      if (process.env.NODE_ENV === 'production') {
-        throw new AppError('Production object storage is unconfigured', 500, 'STORAGE_UNCONFIGURED');
+    if (customClient) {
+      this.s3Client = customClient;
+    } else {
+      const accessKeyId = process.env.R2_ACCESS_KEY_ID || process.env.AWS_ACCESS_KEY_ID || '';
+      const secretAccessKey = process.env.R2_SECRET_ACCESS_KEY || process.env.AWS_SECRET_ACCESS_KEY || '';
+      const endpoint = process.env.R2_ENDPOINT || process.env.S3_ENDPOINT || '';
+
+      if (!accessKeyId || !secretAccessKey || !endpoint) {
+        if (process.env.NODE_ENV === 'production') {
+          throw new AppError('Production object storage is unconfigured', 500, 'STORAGE_UNCONFIGURED');
+        }
+      } else {
+        this.s3Client = new S3Client({
+          region: 'auto',
+          endpoint,
+          credentials: { accessKeyId, secretAccessKey },
+        });
       }
     }
   }
 
   async save(objectKey: string, buffer: Buffer): Promise<void> {
-    if (!this.accessKeyId || !this.secretAccessKey || !this.endpoint) {
+    if (!this.s3Client) {
       throw new AppError('Production object storage is unconfigured', 500, 'STORAGE_UNCONFIGURED');
     }
-    // Perform S3/R2 PUT request
-    const url = `${this.endpoint.replace(/\/$/, '')}/${this.bucket}/${objectKey}`;
-    const res = await fetch(url, {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'image/png',
-        'Content-Length': String(buffer.length),
-        'Authorization': `AWS ${this.accessKeyId}:${this.secretAccessKey}`,
-      },
-      body: buffer,
-    }).catch((err) => {
+    try {
+      await this.s3Client.send(
+        new PutObjectCommand({
+          Bucket: this.bucket,
+          Key: objectKey,
+          Body: buffer,
+          ContentType: 'image/png',
+        })
+      );
+    } catch (err: any) {
       throw new AppError(`Object storage PUT failed: ${err.message}`, 502, 'STORAGE_ERROR');
-    });
-
-    if (!res.ok) {
-      throw new AppError(`Object storage PUT returned HTTP ${res.status}`, 502, 'STORAGE_ERROR');
     }
   }
 
   async getStream(objectKey: string): Promise<Readable> {
-    if (!this.accessKeyId || !this.secretAccessKey || !this.endpoint) {
+    if (!this.s3Client) {
       throw new AppError('Production object storage is unconfigured', 500, 'STORAGE_UNCONFIGURED');
     }
-    const url = `${this.endpoint.replace(/\/$/, '')}/${this.bucket}/${objectKey}`;
-    const res = await fetch(url, {
-      method: 'GET',
-      headers: {
-        'Authorization': `AWS ${this.accessKeyId}:${this.secretAccessKey}`,
-      },
-    }).catch((err) => {
-      throw new AppError(`Object storage GET failed: ${err.message}`, 502, 'STORAGE_ERROR');
-    });
-
-    if (!res.ok) {
+    try {
+      const response = await this.s3Client.send(
+        new GetObjectCommand({
+          Bucket: this.bucket,
+          Key: objectKey,
+        })
+      );
+      if (!response.Body) {
+        throw new AppError('Empty body from object storage', 502, 'STORAGE_ERROR');
+      }
+      return response.Body as Readable;
+    } catch (err: any) {
+      if (err instanceof AppError) throw err;
       throw new AppError('Signature file not found in object storage', 404, 'SIGNATURE_NOT_FOUND');
     }
-
-    if (!res.body) {
-      throw new AppError('Empty body from object storage', 502, 'STORAGE_ERROR');
-    }
-
-    // @ts-ignore
-    return Readable.fromWeb(res.body);
   }
 
   async delete(objectKey: string): Promise<void> {
-    if (!this.accessKeyId || !this.secretAccessKey || !this.endpoint) return;
-    const url = `${this.endpoint.replace(/\/$/, '')}/${this.bucket}/${objectKey}`;
-    await fetch(url, {
-      method: 'DELETE',
-      headers: {
-        'Authorization': `AWS ${this.accessKeyId}:${this.secretAccessKey}`,
-      },
-    }).catch(() => {});
+    if (!this.s3Client) return;
+    try {
+      await this.s3Client.send(
+        new DeleteObjectCommand({
+          Bucket: this.bucket,
+          Key: objectKey,
+        })
+      );
+    } catch {}
   }
 }
 
@@ -151,89 +152,27 @@ export function decodePngAndValidatePixels(buffer: Buffer): { width: number; hei
     throw new AppError('Invalid signature image file format. Must be a valid PNG file.', 400, 'INVALID_SIGNATURE_FORMAT');
   }
 
-  let offset = 8;
-  let width = 0;
-  let height = 0;
-  let bitDepth = 0;
-  let colorType = 0;
-  const idatChunks: Buffer[] = [];
-
-  while (offset < buffer.length) {
-    if (offset + 8 > buffer.length) break;
-    const length = buffer.readUInt32BE(offset);
-    const type = buffer.toString('ascii', offset + 4, offset + 8);
-    const dataStart = offset + 8;
-    const dataEnd = dataStart + length;
-
-    if (dataEnd > buffer.length) break;
-
-    if (type === 'IHDR') {
-      width = buffer.readUInt32BE(dataStart);
-      height = buffer.readUInt32BE(dataStart + 4);
-      bitDepth = buffer.readUInt8(dataStart + 8);
-      colorType = buffer.readUInt8(dataStart + 9);
-    } else if (type === 'IDAT') {
-      idatChunks.push(buffer.subarray(dataStart, dataEnd));
-    } else if (type === 'IEND') {
-      break;
-    }
-
-    offset = dataEnd + 4; // Skip CRC (4 bytes)
+  let png: PNG;
+  try {
+    png = PNG.sync.read(buffer);
+  } catch {
+    throw new AppError('Invalid signature image file format. Must be a valid PNG file.', 400, 'INVALID_SIGNATURE_FORMAT');
   }
 
-  if (width === 0 || height === 0) {
-    throw new AppError('Invalid PNG header: missing or corrupt IHDR chunk', 400, 'INVALID_SIGNATURE_FORMAT');
-  }
-
-  if (width < 1 || height < 1 || width > 4096 || height > 4096) {
+  const { width, height, data } = png;
+  if (!width || !height || width < 1 || height < 1 || width > 4096 || height > 4096) {
     throw new AppError(`PNG dimensions out of bounds (${width}x${height})`, 400, 'INVALID_SIGNATURE_DIMENSIONS');
   }
 
-  if (idatChunks.length === 0) {
-    if (buffer.length <= 64) {
-      return { width, height, nonBackgroundPixels: 1 };
-    }
-    throw new AppError('Invalid PNG file: missing IDAT chunk', 400, 'INVALID_SIGNATURE_FORMAT');
-  }
-
-  const combinedIdat = Buffer.concat(idatChunks);
-  let decompressed: Buffer;
-  try {
-    decompressed = zlib.inflateSync(combinedIdat);
-  } catch {
-    throw new AppError('Failed to decompress PNG image data', 400, 'INVALID_SIGNATURE_FORMAT');
-  }
-
   let nonBackgroundPixels = 0;
-  const bytesPerPixel = colorType === 6 ? 4 : colorType === 2 ? 3 : colorType === 4 ? 2 : 1;
-  const stride = 1 + width * bytesPerPixel;
+  for (let i = 0; i < data.length; i += 4) {
+    const r = data[i];
+    const g = data[i + 1];
+    const b = data[i + 2];
+    const a = data[i + 3];
 
-  for (let y = 0; y < height; y++) {
-    const lineStart = y * stride + 1;
-    for (let x = 0; x < width; x++) {
-      const p = lineStart + x * bytesPerPixel;
-      if (p + bytesPerPixel > decompressed.length) break;
-
-      if (colorType === 6) { // RGBA
-        const r = decompressed[p];
-        const g = decompressed[p + 1];
-        const b = decompressed[p + 2];
-        const a = decompressed[p + 3];
-        if (a > 20 && (r < 240 || g < 240 || b < 240)) {
-          nonBackgroundPixels++;
-        }
-      } else if (colorType === 2) { // RGB
-        const r = decompressed[p];
-        const g = decompressed[p + 1];
-        const b = decompressed[p + 2];
-        if (r < 240 || g < 240 || b < 240) {
-          nonBackgroundPixels++;
-        }
-      } else {
-        if (decompressed[p] < 240) {
-          nonBackgroundPixels++;
-        }
-      }
+    if (a > 20 && (r < 240 || g < 240 || b < 240)) {
+      nonBackgroundPixels++;
     }
   }
 

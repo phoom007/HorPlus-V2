@@ -219,6 +219,7 @@ export const CompleteOnboardingInputSchema = z.object({
 export const OnboardingDraftInputSchema = z.object({
   currentStep: z.string().trim().min(1, 'กรุณาระบุขั้นตอนปัจจุบัน').default('dormitory'),
   payload: z.record(z.string(), z.any()).default({}),
+  provisionalDormitoryId: z.string().trim().optional().nullable(),
 }).strict();
 
 export const ValidatePromoInputSchema = z.object({

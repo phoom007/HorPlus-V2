@@ -17,22 +17,24 @@ import { AppError } from '../types/index.js';
 import { LineFriendService } from './line-friend.service.js';
 import { LinePlatformAdapter, MockLinePlatformAdapter } from './line-platform-adapter.js';
 import { createLinePlatformAdapter } from './line-adapter-factory.js';
-import { LineChannelTokenProvider } from './line-channel-token-provider.js';
+import { LineChannelTokenProvider, ILineChannelTokenProvider, FakeLineTokenProvider } from './line-channel-token-provider.js';
 
 export class LineOaService {
   private friendService: LineFriendService;
   private lineAdapter: LinePlatformAdapter;
-  private tokenProvider: LineChannelTokenProvider;
+  private tokenProvider: ILineChannelTokenProvider;
 
-  constructor(private prisma: PrismaClient, adapter?: LinePlatformAdapter) {
+  constructor(private prisma: PrismaClient, adapter?: LinePlatformAdapter, tokenProvider?: ILineChannelTokenProvider) {
     this.friendService = new LineFriendService(prisma);
-    this.tokenProvider = new LineChannelTokenProvider();
     if (adapter) {
       this.lineAdapter = adapter;
+      this.tokenProvider = tokenProvider || new FakeLineTokenProvider();
     } else if (process.env.NODE_ENV === 'test' && process.env.HORPLUS_E2E !== 'true') {
       this.lineAdapter = new MockLinePlatformAdapter();
+      this.tokenProvider = tokenProvider || new FakeLineTokenProvider();
     } else {
       this.lineAdapter = createLinePlatformAdapter();
+      this.tokenProvider = tokenProvider || new LineChannelTokenProvider();
     }
   }
 

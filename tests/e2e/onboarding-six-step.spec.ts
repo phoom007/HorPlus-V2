@@ -3,15 +3,22 @@ import crypto from 'crypto';
 import { getPrismaClient } from '../../server/src/db/prisma.js';
 import { SessionTokenService } from '../../server/src/services/session-token.service.js';
 import { CsrfService } from '../../server/src/services/csrf.service.js';
+import { FakeLineServer } from './helpers/fake-line-server.js';
 
 const prisma = getPrismaClient();
 
-test.describe('Master Six-Step Owner Onboarding E2E Flow', () => {
+test.describe.serial('Master Six-Step Owner Onboarding E2E Flow', () => {
+  const fakeLineServer = new FakeLineServer();
   let masterUserId: string;
   let masterSessionToken: string;
   let masterCsrfToken: string;
 
   test.beforeAll(async () => {
+    const fakeLineUrl = await fakeLineServer.start();
+    process.env.HORPLUS_E2E = 'true';
+    process.env.LINE_BASE_URL = fakeLineUrl;
+    process.env.LINE_PLATFORM_URL = fakeLineUrl;
+
     const user = await prisma.user.create({
       data: {
         email: `master-sixstep-${Date.now()}@example.com`,
@@ -44,6 +51,7 @@ test.describe('Master Six-Step Owner Onboarding E2E Flow', () => {
   });
 
   test.afterAll(async () => {
+    await fakeLineServer.stop();
     if (masterUserId) {
       const masterDorms = await prisma.dormitory.findMany({ where: { createdByUserId: masterUserId }, select: { id: true } });
       for (const d of masterDorms) {
@@ -159,11 +167,19 @@ test.describe('Master Six-Step Owner Onboarding E2E Flow', () => {
     await expect(page.locator('[data-testid="button-set-line-webhook"]')).toBeEnabled();
     await page.click('[data-testid="button-set-line-webhook"]');
 
-    // Test Webhook
+    // Test Webhook when inactive: should fail readiness
+    fakeLineServer.isWebhookActive = false;
     await expect(page.locator('[data-testid="button-test-line-webhook"]')).toBeEnabled();
     await page.click('[data-testid="button-test-line-webhook"]');
+    await expect(page.locator('[data-testid="line-readiness-badge"]')).toContainText('รอดำเนินการ ⏳');
 
-    // Assert LINE readiness badge
+    // Attempting Next with inactive webhook must be blocked!
+    await page.click('[data-testid="button-next-step"]');
+    await expect(page.locator('text=กรุณาตั้งค่า LINE OA ให้ครบทุกขั้นตอน')).toBeVisible();
+
+    // Now switch FakeLine to active: test webhook succeeds and readiness shows ready
+    fakeLineServer.isWebhookActive = true;
+    await page.click('[data-testid="button-test-line-webhook"]');
     await expect(page.locator('[data-testid="line-readiness-badge"]')).toContainText('พร้อมใช้งาน ✅');
 
     // Now advance to Step 6
@@ -171,9 +187,28 @@ test.describe('Master Six-Step Owner Onboarding E2E Flow', () => {
 
     // STEP 6: Package & Finalize
     await expect(page.locator('[data-testid="plan-card-pro"]')).toBeVisible();
+    await expect(page.locator('[data-testid="plan-card-pro"]')).toContainText('189 THB');
     await page.click('[data-testid="plan-card-pro"]');
 
-    // Apply Promo HORPLUS
+    // Apply Promo HORPLUS Preview (Verify preview does NOT create PromoRedemption in DB before finalization)
+    await page.fill('[data-testid="input-promo-code"]', 'HORPLUS');
+    await page.click('[data-testid="button-apply-promo"]');
+    await expect(page.locator('text=รับส่วนขยายเพิ่ม 2 เดือน')).toBeVisible();
+
+    // Verify draft resume on F5 page reload
+    await page.reload();
+    await expect(page.locator('[data-testid="input-dormitory-name"]')).toHaveValue('หอพัก 6-Step Master Residence');
+
+    // Navigate to step 6 again
+    await page.click('[data-testid="button-next-step"]'); // 1 -> 2
+    await page.click('[data-testid="button-next-step"]'); // 2 -> 3
+    await page.click('[data-testid="button-next-step"]'); // 3 -> 4
+    await page.click('[data-testid="button-next-step"]'); // 4 -> 5
+    await page.click('[data-testid="button-next-step"]'); // 5 -> 6
+
+    await expect(page.locator('[data-testid="plan-card-pro"]')).toBeVisible();
+    await page.click('[data-testid="plan-card-pro"]');
+
     await page.fill('[data-testid="input-promo-code"]', 'HORPLUS');
     await page.click('[data-testid="button-apply-promo"]');
     await expect(page.locator('text=รับส่วนขยายเพิ่ม 2 เดือน')).toBeVisible();
@@ -209,6 +244,14 @@ test.describe('Master Six-Step Owner Onboarding E2E Flow', () => {
     expect(trialClaim).not.toBeNull();
     expect(trialClaim?.grantedMonths).toBe(1);
 
+    const promoRedemption = await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${createdDorm!.id}, true)`;
+      return await tx.promoRedemption.findFirst({
+        where: { redeemedBy: masterUserId },
+      });
+    });
+    expect(promoRedemption).not.toBeNull();
+
     const intent = await prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${createdDorm!.id}, true)`;
       return await tx.subscriptionPackageIntent.findFirst({
@@ -217,5 +260,32 @@ test.describe('Master Six-Step Owner Onboarding E2E Flow', () => {
     });
     expect(intent).not.toBeNull();
     expect(intent?.status).toBe('PENDING_PAYMENT');
+    expect(Number(intent?.priceSnapshot)).toBe(189);
+    expect(intent?.durationMonthsSnapshot).toBe(1);
+  });
+
+  test('Anti-abuse: Second onboarding attempt with same User.id receives zero extra initial trial or HORPLUS promo claim', async ({ context, page }) => {
+    test.setTimeout(60000);
+
+    const createdDorm = await prisma.dormitory.findFirst({
+      where: { createdByUserId: masterUserId, name: 'หอพัก 6-Step Master Residence' },
+    });
+    expect(createdDorm).not.toBeNull();
+
+    const existingClaims = await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${createdDorm!.id}, true)`;
+      return await tx.accountBenefitClaim.count({
+        where: { userId: masterUserId, benefitKey: 'INITIAL_TRIAL_V1' },
+      });
+    });
+    expect(existingClaims).toBe(1);
+
+    const existingRedemptions = await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${createdDorm!.id}, true)`;
+      return await tx.promoRedemption.count({
+        where: { redeemedBy: masterUserId },
+      });
+    });
+    expect(existingRedemptions).toBe(1);
   });
 });

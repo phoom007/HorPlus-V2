@@ -17,6 +17,7 @@ import { PromoService } from '../src/services/promo.service.js';
 import { AuditService } from '../src/services/audit.service.js';
 import { subscriptionEntitlementService } from '../src/services/subscription-entitlement.service.js';
 import { SignatureStorageService } from '../src/services/signature-storage.service.js';
+import { PNG } from 'pngjs';
 import crypto from 'crypto';
 
 const prisma = new PrismaClient();
@@ -67,10 +68,14 @@ describe('Wave 1F - Owner Onboarding Transaction & Atomicity Rollback Proof', ()
     const prepared = await service.prepareProvisionalDormitory(userId, { name: `Onboard Dorm ${timestamp}` });
     const provDormId = prepared.provisionalDormitoryId;
     const sigService = new SignatureStorageService(prisma);
-    const validPngBuffer = Buffer.from([
-      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
-      0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
-    ]);
+    const pngObj = new PNG({ width: 16, height: 16 });
+    for (let i = 0; i < pngObj.data.length; i += 4) {
+      pngObj.data[i] = 0;
+      pngObj.data[i + 1] = 0;
+      pngObj.data[i + 2] = 0;
+      pngObj.data[i + 3] = 255;
+    }
+    const validPngBuffer = PNG.sync.write(pngObj);
     await sigService.saveSignature({ dormitoryId: provDormId, userId, buffer: validPngBuffer });
     await prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${provDormId}, true)`;
@@ -187,10 +192,14 @@ describe('Wave 1F - Owner Onboarding Transaction & Atomicity Rollback Proof', ()
     const preparedRollback = await service.prepareProvisionalDormitory(userId, { name: `Rollback Dorm ${timestamp}` });
     const provDormIdRollback = preparedRollback.provisionalDormitoryId;
     const sigService = new SignatureStorageService(prisma);
-    const validPngBuffer = Buffer.from([
-      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
-      0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
-    ]);
+    const pngObj = new PNG({ width: 16, height: 16 });
+    for (let i = 0; i < pngObj.data.length; i += 4) {
+      pngObj.data[i] = 0;
+      pngObj.data[i + 1] = 0;
+      pngObj.data[i + 2] = 0;
+      pngObj.data[i + 3] = 255;
+    }
+    const validPngBuffer = PNG.sync.write(pngObj);
     await sigService.saveSignature({ dormitoryId: provDormIdRollback, userId, buffer: validPngBuffer });
     await prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${provDormIdRollback}, true)`;

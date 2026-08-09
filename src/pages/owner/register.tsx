@@ -99,24 +99,81 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
     isReady: false,
   });
 
-  // Step 6: Plan & Promo States
-  const [selectedPlan, setSelectedPlan] = useState<'FREE' | 'PRO'>('FREE');
+  const [selectedPlan, setSelectedPlan] = useState<'FREE' | 'PAID'>('FREE');
   const [selectedPackageId, setSelectedPackageId] = useState<string | undefined>(undefined);
   const [promoCodeInput, setPromoCodeInput] = useState('');
-  const [promoResult, setPromoResult] = useState<{ valid: boolean; message: string; bonusDays?: number } | null>(null);
+  const [promoResult, setPromoResult] = useState<{
+    valid: boolean;
+    eligible: boolean;
+    code: string;
+    message: string;
+    trialMonths: number;
+    promoBonusMonths: number;
+    totalTrialMonths: number;
+  } | null>(null);
   const [catalogPackages, setCatalogPackages] = useState<any[]>([]);
+  const [catalogLoading, setCatalogLoading] = useState(true);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
 
   useEffect(() => {
+    setCatalogLoading(true);
     onboardingClient.getAvailablePackages()
       .then((res: any) => {
         const list = res.data || res || [];
-        setCatalogPackages(Array.isArray(list) ? list : []);
+        const pkgs = Array.isArray(list) ? list : [];
+        setCatalogPackages(pkgs);
+        setCatalogError(null);
+
+        const pro = pkgs.find((p: any) => p.planCode === 'PAID' || p.plan?.code === 'PAID' || p.code === 'PRO' || p.planCode === 'PRO');
+        if (pro) {
+          setSelectedPackageId(pro.id);
+        }
+      })
+      .catch(() => {
+        setCatalogError('ไม่สามารถโหลดแพ็กเกจจากระบบได้ กรุณาลองใหม่อีกครั้ง');
+      })
+      .finally(() => {
+        setCatalogLoading(false);
+      });
+
+    onboardingClient.getDraft()
+      .then(async (res: any) => {
+        const draft = res.data || res;
+        if (draft && draft.payload && !draft.finalizedAt) {
+          if (draft.payload.dormitoryName) {
+            setFormData(prev => ({
+              ...prev,
+              ...draft.payload,
+            }));
+          }
+          if (draft.provisionalDormitoryId) {
+            setProvisionalDormitoryId(draft.provisionalDormitoryId);
+            setSignatureSaved(true);
+            try {
+              const lineRes = await onboardingClient.getLineConfig(draft.provisionalDormitoryId);
+              const raw = lineRes.data || lineRes;
+              const config = raw.config || raw;
+              const credentialsVerified = Boolean(config.credentialsVerified || config.accessTokenVerifiedAt);
+              const webhookEndpointSet = Boolean(config.webhookEndpointSet || config.webhookEndpointSetAt);
+              const webhookTestSucceeded = Boolean(config.webhookTestSucceeded || config.webhookTestSucceededAt);
+              const webhookActive = Boolean(config.webhookActive);
+              const isReady = credentialsVerified && webhookEndpointSet && webhookTestSucceeded && webhookActive;
+              setLineStatus({
+                credentialsVerified,
+                webhookEndpointSet,
+                webhookTestSucceeded,
+                webhookActive,
+                isReady,
+              });
+            } catch {}
+          }
+        }
       })
       .catch(() => {});
   }, []);
 
-  const proPkg = catalogPackages.find((p: any) => p.planCode === 'PAID' || p.plan?.code === 'PAID' || p.planCode === 'PRO' || p.code === 'PRO');
-  const proDisplayPrice = proPkg ? `${proPkg.price} ${proPkg.currency || 'THB'}` : '189 THB';
+  const proPkg = catalogPackages.find((p: any) => p.planCode === 'PAID' || p.plan?.code === 'PAID' || p.code === 'PRO' || p.planCode === 'PRO');
+  const proDisplayPrice = proPkg ? `${proPkg.price} ${proPkg.currency || 'THB'}` : null;
 
   // Terms Modal State
   const [showTermsModal, setShowTermsModal] = useState(false);
@@ -230,6 +287,14 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
   const ensureProvisionalDormitory = async () => {
     if (provisionalDormitoryId) return provisionalDormitoryId;
     try {
+      const draftRes = await onboardingClient.getDraft();
+      const draft = draftRes.data || draftRes;
+      if (draft && draft.provisionalDormitoryId) {
+        setProvisionalDormitoryId(draft.provisionalDormitoryId);
+        return draft.provisionalDormitoryId;
+      }
+    } catch {}
+    try {
       const res = await onboardingClient.prepare({
         name: formData.dormitoryName || 'หอพักใหม่',
         addressLine1: formData.address,
@@ -305,13 +370,20 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
         lineOaId: lineOaId.trim() || undefined,
       });
 
-      const config = res.data || res;
+      const raw = res.data || res;
+      const config = raw.config || raw;
+      const credentialsVerified = Boolean(config.credentialsVerified || config.accessTokenVerifiedAt);
+      const webhookEndpointSet = Boolean(config.webhookEndpointSet || config.webhookEndpointSetAt);
+      const webhookTestSucceeded = Boolean(config.webhookTestSucceeded || config.webhookTestSucceededAt);
+      const webhookActive = Boolean(config.webhookActive);
+      const isReady = credentialsVerified && webhookEndpointSet && webhookTestSucceeded && webhookActive;
+
       setLineStatus({
-        credentialsVerified: config.credentialsVerified ?? true,
-        webhookEndpointSet: config.webhookEndpointSet ?? false,
-        webhookTestSucceeded: config.webhookTestSucceeded ?? false,
-        webhookActive: config.webhookActive ?? false,
-        isReady: config.isReady ?? false,
+        credentialsVerified,
+        webhookEndpointSet,
+        webhookTestSucceeded,
+        webhookActive,
+        isReady,
       });
 
       if (config.webhookUrl) {
@@ -330,12 +402,21 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
     setLineVerifying(true);
     try {
       const res = await onboardingClient.setLineWebhook(provisionalDormitoryId);
-      const config = res.data || res;
-      setLineStatus(prev => ({
-        ...prev,
-        webhookEndpointSet: config.webhookEndpointSet ?? true,
-        isReady: config.isReady ?? false,
-      }));
+      const raw = res.data || res;
+      const config = raw.config || raw;
+      const credentialsVerified = Boolean(config.credentialsVerified || config.accessTokenVerifiedAt);
+      const webhookEndpointSet = Boolean(config.webhookEndpointSet || config.webhookEndpointSetAt);
+      const webhookTestSucceeded = Boolean(config.webhookTestSucceeded || config.webhookTestSucceededAt);
+      const webhookActive = Boolean(config.webhookActive);
+      const isReady = credentialsVerified && webhookEndpointSet && webhookTestSucceeded && webhookActive;
+
+      setLineStatus({
+        credentialsVerified,
+        webhookEndpointSet,
+        webhookTestSucceeded,
+        webhookActive,
+        isReady,
+      });
     } catch (err: any) {
       setValidationError(err.message || 'ตั้งค่า Webhook Endpoint ไม่สำเร็จ');
     } finally {
@@ -349,13 +430,20 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
     setLineVerifying(true);
     try {
       const res = await onboardingClient.testLineWebhook(provisionalDormitoryId);
-      const config = res.config || res.data || res;
+      const raw = res.data || res;
+      const config = raw.config || raw;
+      const credentialsVerified = Boolean(config.credentialsVerified || config.accessTokenVerifiedAt);
+      const webhookEndpointSet = Boolean(config.webhookEndpointSet || config.webhookEndpointSetAt);
+      const webhookTestSucceeded = Boolean(config.webhookTestSucceeded || config.webhookTestSucceededAt);
+      const webhookActive = Boolean(config.webhookActive);
+      const isReady = credentialsVerified && webhookEndpointSet && webhookTestSucceeded && webhookActive;
+
       setLineStatus({
-        credentialsVerified: config.credentialsVerified ?? true,
-        webhookEndpointSet: config.webhookEndpointSet ?? true,
-        webhookTestSucceeded: config.webhookTestSucceeded ?? true,
-        webhookActive: config.webhookActive ?? true,
-        isReady: config.isReady ?? true,
+        credentialsVerified,
+        webhookEndpointSet,
+        webhookTestSucceeded,
+        webhookActive,
+        isReady,
       });
     } catch (err: any) {
       setValidationError(err.message || 'ทดสอบ Webhook ไม่สำเร็จ');
@@ -364,21 +452,30 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
     }
   };
 
-  // Handle Promo Validation
+  // Handle Promo Validation (Canonical Month-Native Preview DTO)
   const handleValidatePromo = async () => {
     if (!promoCodeInput.trim()) return;
     try {
       const res = await onboardingClient.validatePromo(promoCodeInput.trim().toUpperCase());
       const data = res.data || res;
       setPromoResult({
-        valid: data.valid,
-        message: data.message || (data.valid ? 'ใช้งานรหัสโปรโมชันสำเร็จ (+2 เดือน)' : 'รหัสไม่ถูกต้อง'),
-        bonusTrialDays: data.bonusTrialDays || 60,
+        valid: Boolean(data.valid || data.eligible),
+        eligible: Boolean(data.eligible || data.valid),
+        code: data.code || promoCodeInput.trim().toUpperCase(),
+        message: data.message || (data.valid ? `ใช้งานรหัสโปรโมชันสำเร็จ (+${data.promoBonusMonths || 2} เดือน)` : 'รหัสไม่ถูกต้อง'),
+        trialMonths: data.trialMonths || 1,
+        promoBonusMonths: data.promoBonusMonths || 2,
+        totalTrialMonths: data.totalTrialMonths || 3,
       });
     } catch (err: any) {
       setPromoResult({
         valid: false,
+        eligible: false,
+        code: promoCodeInput.trim().toUpperCase(),
         message: err.message || 'รหัสโปรโมชันไม่ถูกต้อง',
+        trialMonths: 1,
+        promoBonusMonths: 0,
+        totalTrialMonths: 1,
       });
     }
   };
@@ -387,31 +484,67 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
   const handleNextStep = async () => {
     setValidationError(null);
 
+    let nextStepNum = currentStep;
     if (currentStep === 1) {
       if (!formData.dormitoryName.trim()) {
         setValidationError('กรุณากรอกชื่อหอพัก');
         return;
       }
+      nextStepNum = 2;
       setCurrentStep(2);
     } else if (currentStep === 2) {
+      nextStepNum = 3;
       setCurrentStep(3);
     } else if (currentStep === 3) {
-      // Prepare provisional dormitory when moving to step 4
-      await ensureProvisionalDormitory();
+      nextStepNum = 4;
       setCurrentStep(4);
     } else if (currentStep === 4) {
-      if (!signatureSaved) {
+      const dormId = provisionalDormitoryId || await ensureProvisionalDormitory();
+      if (!signatureSaved && !dormId) {
         setValidationError('กรุณากด "บันทึกลายเซ็น" ในขั้นตอนที่ 4 ก่อนดำเนินการต่อ');
         return;
       }
+      nextStepNum = 5;
       setCurrentStep(5);
     } else if (currentStep === 5) {
-      if (!lineStatus.isReady) {
+      const dormId = provisionalDormitoryId || await ensureProvisionalDormitory();
+      let isReady = lineStatus.isReady;
+      if (!isReady && dormId) {
+        try {
+          const lineRes = await onboardingClient.getLineConfig(dormId);
+          const raw = lineRes.data || lineRes;
+          const config = raw.config || raw;
+          const credentialsVerified = Boolean(config.credentialsVerified || config.accessTokenVerifiedAt);
+          const webhookEndpointSet = Boolean(config.webhookEndpointSet || config.webhookEndpointSetAt);
+          const webhookTestSucceeded = Boolean(config.webhookTestSucceeded || config.webhookTestSucceededAt);
+          const webhookActive = Boolean(config.webhookActive);
+          isReady = credentialsVerified && webhookEndpointSet && webhookTestSucceeded && webhookActive;
+          if (isReady) {
+            setLineStatus({
+              credentialsVerified,
+              webhookEndpointSet,
+              webhookTestSucceeded,
+              webhookActive,
+              isReady: true,
+            });
+          }
+        } catch {}
+      }
+
+      if (!isReady) {
         setValidationError('กรุณาตั้งค่า LINE OA ให้ครบทุกขั้นตอนก่อนดำเนินการต่อ');
         return;
       }
+      nextStepNum = 6;
       setCurrentStep(6);
     }
+
+    onboardingClient.saveDraft(String(nextStepNum), {
+      dormitoryName: formData.dormitoryName,
+      address: formData.address,
+      province: formData.province,
+      ...formData,
+    }, provisionalDormitoryId || undefined).catch(() => {});
   };
 
   // Finalize Registration (Step 6 -> Modal -> API)
@@ -442,7 +575,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
 
     const payload: CompleteOnboardingPayload = {
       provisionalDormitoryId: provisionalDormitoryId || undefined,
-      packageId: selectedPlan === 'PRO' ? (selectedPackageId || proPkg?.id) : undefined,
+      packageId: selectedPlan === 'PAID' ? (selectedPackageId || proPkg?.id) : undefined,
       dormitory: {
         name: formData.dormitoryName,
         type: formData.dormitoryType,
@@ -483,8 +616,8 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
         roomsPerFloor: b.roomsPerFloor,
       })),
       rooms,
-      planCode: selectedPlan,
-      promoCode: promoResult?.valid ? 'HORPLUS' : undefined,
+      planCode: selectedPlan === 'PAID' ? 'PAID' : 'FREE',
+      promoCode: promoResult?.valid ? (promoResult.code || 'HORPLUS') : undefined,
     };
 
     const idempotencyKey = `register-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
@@ -1175,19 +1308,31 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
             {/* PRO Plan */}
             <div
               data-testid="plan-card-pro"
-              onClick={() => setSelectedPlan('PRO')}
-              className={`p-5 rounded-2xl border-2 transition-all cursor-pointer space-y-3 ${
-                selectedPlan === 'PRO' ? 'border-indigo-600 bg-indigo-50/50 shadow-md' : 'border-slate-200 bg-white hover:border-slate-300'
+              onClick={() => {
+                if (proPkg) {
+                  setSelectedPlan('PAID');
+                  setSelectedPackageId(proPkg.id);
+                }
+              }}
+              className={`p-5 rounded-2xl border-2 transition-all space-y-3 ${
+                !proPkg
+                  ? 'opacity-60 cursor-not-allowed border-slate-200 bg-slate-50'
+                  : selectedPlan === 'PAID'
+                  ? 'border-indigo-600 bg-indigo-50/50 shadow-md cursor-pointer'
+                  : 'border-slate-200 bg-white hover:border-slate-300 cursor-pointer'
               }`}
             >
               <div className="flex items-center justify-between">
-                <span className="text-xs font-black text-indigo-700 bg-indigo-100 px-2.5 py-1 rounded-full">มืออาชีพ (PRO)</span>
-                {selectedPlan === 'PRO' && <CheckCircle className="w-5 h-5 text-indigo-600" />}
+                <span className="text-xs font-black text-indigo-700 bg-indigo-100 px-2.5 py-1 rounded-full">มืออาชีพ (HorPlus PRO)</span>
+                {selectedPlan === 'PAID' && <CheckCircle className="w-5 h-5 text-indigo-600" />}
               </div>
               <div className="flex items-baseline gap-1">
-                <h4 className="text-xl font-black text-slate-900">{proDisplayPrice}</h4>
-                <span className="text-xs text-slate-500 font-bold">/ เดือน</span>
+                <h4 className="text-xl font-black text-slate-900">
+                  {catalogLoading ? 'กำลังโหลดราคา...' : catalogError ? 'ไม่สามารถโหลดราคาได้' : (proDisplayPrice || 'ไม่สามารถโหลดราคาได้')}
+                </h4>
+                {proDisplayPrice && <span className="text-xs text-slate-500 font-bold">/ เดือน</span>}
               </div>
+              <h4 className="text-sm font-bold text-slate-800">HorPlus PRO</h4>
               <p className="text-xs text-slate-500 font-medium">สำหรับหอพักขนาดกลาง-ใหญ่ที่ต้องการระบบบริหารแบบครบวงจร</p>
               <ul className="text-xs text-slate-700 font-bold space-y-1.5 pt-2 border-t border-slate-200">
                 <li>• โควต้าห้องพักสูงสุด 150 ห้อง</li>
@@ -1221,9 +1366,14 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
               </button>
             </div>
             {promoResult && (
-              <p data-testid="promo-result-message" className={`text-xs font-bold ${promoResult.valid ? 'text-emerald-600' : 'text-rose-600'}`}>
-                {promoResult.valid ? 'ใช้งานรหัสโปรโมชัน HORPLUS สำเร็จ! (รับส่วนขยายเพิ่ม 2 เดือน)' : promoResult.message}
-              </p>
+              <div data-testid="promo-result-message" className={`text-xs font-bold ${promoResult.valid ? 'text-emerald-600' : 'text-rose-600'}`}>
+                <p>{promoResult.message}</p>
+                {promoResult.valid && (
+                  <p className="text-[11px] text-emerald-700 font-semibold mt-0.5">
+                    (ทดลองใช้งานฟรี {promoResult.trialMonths} เดือน + โบนัสโปรโมชัน {promoResult.promoBonusMonths} เดือน = รวมใช้งานฟรี {promoResult.totalTrialMonths} เดือนเต็ม)
+                  </p>
+                )}
+              </div>
             )}
           </div>
         </div>
