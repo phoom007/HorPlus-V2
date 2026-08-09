@@ -36,7 +36,8 @@ import { getDataProvider } from '../../data/dataProvider';
 import { Task009ApiAdapter } from '../../data/adapters/task009';
 import { PropagationPreviewModal } from '../../components/PropagationPreviewModal';
 import { VersionConflictModal } from '../../components/VersionConflictModal';
-import { getPaymentSettings, updatePaymentSettings } from '../../services/payment-settings.service';
+import { getPaymentSettings, updatePaymentSettings, PaymentSettingsUpdatePayload } from '../../services/payment-settings.service';
+import { getDormitoryProfile, updateDormitoryProfile, UpdateDormitoryProfilePayload } from '../../services/dormitory.service';
 
 import { Dormitory, CycleRates } from '../../types';
 
@@ -116,6 +117,8 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
   const DataProvider = getDataProvider();
   const [propertyVersion, setPropertyVersion] = useState<number>(1);
   const [billingVersion, setBillingVersion] = useState<number>(1);
+  const selectedDormId = localStorage.getItem('selected_dormitory_id') || sessionStorage.getItem('active_dormitory_selected_for_session') || dorm?.id || '';
+
   const [propertyMonthlyRent, setPropertyMonthlyRent] = useState<number>(4500);
   const [propertyDepositAmount, setPropertyDepositAmount] = useState<number>(9000);
 
@@ -178,30 +181,6 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
           setInitialValues(initObj);
         }
       }
-
-      // Fetch payment settings from backend API (PS-007)
-      if (dorm?.id) {
-        const payRes = await fetch(`/api/v1/dormitories/${dorm.id}/payment-settings`, {
-          headers: { 'x-dormitory-id': dorm.id },
-        });
-        if (payRes.ok) {
-          const payData = await payRes.json();
-          if (payData.data) {
-            if (payData.data.promptPayValue) {
-              setLocalPromptPay(formatPromptPay(payData.data.promptPayValue));
-            } else if (payData.data.maskedPromptPayValue) {
-              setLocalPromptPay(payData.data.maskedPromptPayValue);
-            }
-            if (payData.data.bankCode) setLocalBankName(payData.data.bankCode);
-            if (payData.data.bankAccountName) setLocalBankAccountName(payData.data.bankAccountName);
-            if (payData.data.bankAccountNumber) {
-              setLocalBankAccountNumber(payData.data.bankAccountNumber);
-            } else if (payData.data.maskedBankAccountNumber) {
-              setLocalBankAccountNumber(payData.data.maskedBankAccountNumber);
-            }
-          }
-        }
-      }
     } catch (err) {}
   };
 
@@ -245,10 +224,11 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
   };
 
   useEffect(() => {
+    fetchDormitoryProfile();
     fetchDormitoryDefaults();
     fetchLineOaConfig();
     fetchPaymentSettings();
-  }, [dorm?.id]);
+  }, [selectedDormId]);
 
   const handleSaveLineOaConfig = async () => {
     const dormId = localStorage.getItem('selected_dormitory_id') || sessionStorage.getItem('active_dormitory_selected_for_session') || dorm?.id || '';
@@ -501,16 +481,73 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
   const [localBankAccountName, setLocalBankAccountName] = useState('');
   const [paymentSaveError, setPaymentSaveError] = useState<string | null>(null);
 
-  const fetchPaymentSettings = async () => {
-    const dormId = localStorage.getItem('selected_dormitory_id') || sessionStorage.getItem('active_dormitory_selected_for_session') || dorm?.id || '';
-    if (!dormId) return;
+  // Server state for profile change detection
+  const [serverProfile, setServerProfile] = useState<{
+    name: string;
+    addressLine1: string;
+    phone: string;
+  }>({
+    name: dorm.name || '',
+    addressLine1: dorm.address || '',
+    phone: dorm.phone || '',
+  });
+
+  // Server state for payment settings change detection
+  const [serverPayment, setServerPayment] = useState<{
+    promptPayMask: string;
+    bankAccountMask: string;
+    bankCode: string;
+    bankAccountName: string;
+    promptPayType: 'mobile_phone' | 'national_id' | null;
+  }>({
+    promptPayMask: '',
+    bankAccountMask: '',
+    bankCode: '',
+    bankAccountName: '',
+    promptPayType: null,
+  });
+
+  const fetchDormitoryProfile = async () => {
+    if (!selectedDormId) return;
     try {
-      const settings = await getPaymentSettings(dormId);
+      const profile = await getDormitoryProfile(selectedDormId);
+      if (profile) {
+        setLocalName(profile.name || '');
+        setLocalAddress(profile.addressLine1 || '');
+        setLocalPhone(formatPhone(profile.phone || ''));
+        setServerProfile({
+          name: profile.name || '',
+          addressLine1: profile.addressLine1 || '',
+          phone: profile.phone || '',
+        });
+      }
+    } catch (err: any) {
+      console.error('Failed to fetch dormitory profile:', err);
+    }
+  };
+
+  const fetchPaymentSettings = async () => {
+    if (!selectedDormId) return;
+    try {
+      const settings = await getPaymentSettings(selectedDormId);
       if (settings) {
-        setLocalPromptPay(settings.maskedPromptPayValue || '');
-        setLocalBankName(settings.bankCode || '');
-        setLocalBankAccountNumber(settings.maskedBankAccountNumber || '');
-        setLocalBankAccountName(settings.bankAccountName || '');
+        const maskPP = settings.maskedPromptPayValue || '';
+        const maskAcc = settings.maskedBankAccountNumber || '';
+        const bCode = settings.bankCode || '';
+        const bName = settings.bankAccountName || '';
+
+        setLocalPromptPay(maskPP);
+        setLocalBankName(bCode);
+        setLocalBankAccountNumber(maskAcc);
+        setLocalBankAccountName(bName);
+
+        setServerPayment({
+          promptPayMask: maskPP,
+          bankAccountMask: maskAcc,
+          bankCode: bCode,
+          bankAccountName: bName,
+          promptPayType: settings.promptPayType || null,
+        });
       }
     } catch (err: any) {
       console.error('Failed to fetch payment settings:', err);
@@ -526,14 +563,6 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
     }
   }, [propSelectedCycle]);
 
-  // Synchronize local states with main state on load or change
-  useEffect(() => {
-    setLocalName(dorm.name);
-    setLocalAddress(dorm.address || '');
-    setLocalTaxId(formatTaxId(dorm.taxId || ''));
-    setLocalPhone(formatPhone(dorm.phone || ''));
-  }, [dorm.id, dorm.name, dorm.address, dorm.taxId, dorm.phone]);
-
   useEffect(() => {
     setLocalWaterUnitRate(currentRates.waterUnitRate);
     setLocalElectricUnitRate(currentRates.electricUnitRate);
@@ -543,7 +572,7 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
     setLocalLateFee(currentRates.lateFeeDaily ?? dorm.lateFeeDaily ?? 100);
   }, [selectedCycle, currentRates.waterUnitRate, currentRates.electricUnitRate, currentRates.commonFee, currentRates.internetFee, currentRates.parkingFee, currentRates.lateFeeDaily, dorm.lateFeeDaily]);
 
-  // Performs immediate save for profile/rate settings
+  // Performs immediate save for rate settings
   const triggerSaveNow = (updatedDorm: Dormitory) => {
     setSaveStatus('saving');
     saveDormitory(updatedDorm);
@@ -567,55 +596,118 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
     };
   }, []);
 
-  // Blur handlers to trigger save for profile fields
-  const handleGlobalFieldBlur = (key: keyof Dormitory, value: any) => {
-    const rawVal = typeof value === 'string' ? value.trim() : value;
-    const dormRawVal = typeof dorm[key] === 'string' ? (dorm[key] as string).trim() : dorm[key];
+  // Authoritative REST API Profile Blur Handler
+  const handleProfileBlur = async (field: 'name' | 'addressLine1' | 'phone', value: string) => {
+    if (!selectedDormId) return;
+    const rawVal = value.trim();
+    const currentServerVal = field === 'phone' ? serverProfile.phone.replace(/\D/g, '') : serverProfile[field];
+    const compareVal = field === 'phone' ? rawVal.replace(/\D/g, '') : rawVal;
 
-    if (dormRawVal === rawVal) {
+    if (currentServerVal === compareVal) {
       setSaveStatus('idle');
       return;
     }
 
-    const updated = {
-      ...dorm,
-      [key]: rawVal,
-      updatedAt: new Date().toISOString()
-    };
-    setDorm(updated);
-    triggerSaveNow(updated);
+    const payload: UpdateDormitoryProfilePayload = {};
+    if (field === 'name') payload.name = rawVal;
+    if (field === 'addressLine1') payload.addressLine1 = rawVal;
+    if (field === 'phone') payload.phone = rawVal.replace(/\D/g, '');
+
+    setSaveStatus('saving');
+    try {
+      const updated = await updateDormitoryProfile(selectedDormId, payload);
+      setLocalName(updated.name || '');
+      setLocalAddress(updated.addressLine1 || '');
+      setLocalPhone(formatPhone(updated.phone || ''));
+      setServerProfile({
+        name: updated.name || '',
+        addressLine1: updated.addressLine1 || '',
+        phone: updated.phone || '',
+      });
+      setSaveStatus('saved');
+      onRefreshData();
+    } catch (err: any) {
+      console.error('Failed to update dormitory profile:', err);
+      setSaveStatus('idle');
+    }
   };
 
+  // Authoritative REST API Payment Settings Blur Handler (Sends ONLY materially changed fields)
   const handlePaymentSettingsBlur = async (overrides?: Partial<{
     bankCode: string;
     bankAccountName: string;
     bankAccountNumber: string;
     promptPayValue: string;
   }>) => {
-    const dormId = localStorage.getItem('selected_dormitory_id') || sessionStorage.getItem('active_dormitory_selected_for_session') || dorm?.id || '';
-    if (!dormId) return;
+    if (!selectedDormId) return;
 
-    const rawPromptPay = overrides?.promptPayValue !== undefined ? overrides.promptPayValue : localPromptPay;
-    const promptPayDigits = rawPromptPay.replace(/\D/g, '');
-    const detectedType: 'mobile_phone' | 'national_id' | null = promptPayDigits.length === 13 ? 'national_id' : (promptPayDigits.length === 10 ? 'mobile_phone' : (rawPromptPay.includes('X') ? 'mobile_phone' : null));
+    const currentPromptPay = overrides?.promptPayValue !== undefined ? overrides.promptPayValue : localPromptPay;
+    const currentBankCode = overrides?.bankCode !== undefined ? overrides.bankCode : localBankName;
+    const currentBankAccountNumber = overrides?.bankAccountNumber !== undefined ? overrides.bankAccountNumber : localBankAccountNumber;
+    const currentBankAccountName = overrides?.bankAccountName !== undefined ? overrides.bankAccountName : localBankAccountName;
 
-    const payload = {
-      cashAccepted: true,
-      promptPayType: detectedType,
-      promptPayValue: rawPromptPay || null,
-      bankCode: overrides?.bankCode !== undefined ? overrides.bankCode : (localBankName || null),
-      bankAccountName: overrides?.bankAccountName !== undefined ? overrides.bankAccountName : (localBankAccountName || null),
-      bankAccountNumber: overrides?.bankAccountNumber !== undefined ? overrides.bankAccountNumber : (localBankAccountNumber || null),
-    };
+    const payload: PaymentSettingsUpdatePayload = {};
+
+    // 1. PromptPay changes: Only send promptPayValue + promptPayType if user typed a NEW unmasked number (no 'X')
+    if (currentPromptPay !== serverPayment.promptPayMask) {
+      if (currentPromptPay.trim() === '') {
+        payload.promptPayValue = null;
+        payload.promptPayType = null;
+      } else if (!currentPromptPay.includes('X')) {
+        const digits = currentPromptPay.replace(/\D/g, '');
+        const detectedType: 'mobile_phone' | 'national_id' = digits.length === 13 ? 'national_id' : 'mobile_phone';
+        payload.promptPayValue = currentPromptPay;
+        payload.promptPayType = detectedType;
+      }
+    }
+
+    // 2. Bank Code changes:
+    if (currentBankCode !== serverPayment.bankCode) {
+      payload.bankCode = currentBankCode || null;
+    }
+
+    // 3. Bank Account Name changes:
+    if (currentBankAccountName !== serverPayment.bankAccountName) {
+      payload.bankAccountName = currentBankAccountName || null;
+    }
+
+    // 4. Bank Account Number changes:
+    if (currentBankAccountNumber !== serverPayment.bankAccountMask) {
+      if (currentBankAccountNumber.trim() === '') {
+        payload.bankAccountNumber = null;
+      } else if (!currentBankAccountNumber.includes('X')) {
+        payload.bankAccountNumber = currentBankAccountNumber;
+      }
+    }
+
+    // Do not send empty PATCH if nothing changed
+    if (Object.keys(payload).length === 0) {
+      setSaveStatus('idle');
+      return;
+    }
 
     setSaveStatus('saving');
     setPaymentSaveError(null);
     try {
-      const updated = await updatePaymentSettings(dormId, payload);
-      setLocalPromptPay(updated.maskedPromptPayValue || '');
-      setLocalBankName(updated.bankCode || '');
-      setLocalBankAccountNumber(updated.maskedBankAccountNumber || '');
-      setLocalBankAccountName(updated.bankAccountName || '');
+      const updated = await updatePaymentSettings(selectedDormId, payload);
+      const maskPP = updated.maskedPromptPayValue || '';
+      const maskAcc = updated.maskedBankAccountNumber || '';
+      const bCode = updated.bankCode || '';
+      const bName = updated.bankAccountName || '';
+
+      setLocalPromptPay(maskPP);
+      setLocalBankName(bCode);
+      setLocalBankAccountNumber(maskAcc);
+      setLocalBankAccountName(bName);
+
+      setServerPayment({
+        promptPayMask: maskPP,
+        bankAccountMask: maskAcc,
+        bankCode: bCode,
+        bankAccountName: bName,
+        promptPayType: updated.promptPayType || null,
+      });
+
       setSaveStatus('saved');
     } catch (err: any) {
       console.error('Payment settings save failed:', err);
@@ -719,12 +811,13 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                   <input
                     type="text"
                     required
+                    data-testid="dormitory-name-input"
                     value={localName}
                     onChange={(e) => {
                       setLocalName(e.target.value);
                       setSaveStatus('typing');
                     }}
-                    onBlur={(e) => handleGlobalFieldBlur('name', e.target.value)}
+                    onBlur={(e) => handleProfileBlur('name', e.target.value)}
                     className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-bold focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs"
                   />
                 </div>
@@ -735,30 +828,29 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                   <input
                     type="text"
                     required
+                    data-testid="dormitory-phone-input"
                     value={localPhone}
                     placeholder="0XX-XXX-XXXX"
                     onChange={(e) => {
                       setLocalPhone(formatPhone(e.target.value));
                       setSaveStatus('typing');
                     }}
-                    onBlur={(e) => handleGlobalFieldBlur('phone', e.target.value)}
+                    onBlur={(e) => handleProfileBlur('phone', e.target.value)}
                     className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-bold focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs"
                   />
                 </div>
 
                 {/* เลขประจำตัวผู้เสียภาษี */}
                 <div className="space-y-1">
-                  <label className="block font-semibold text-slate-700">เลขประจำตัวผู้เสียภาษี</label>
+                  <label className="block font-semibold text-slate-700">
+                    เลขประจำตัวผู้เสียภาษี <span className="text-[10px] text-amber-600 font-normal">(ยังไม่รองรับการแก้ไขออนไลน์)</span>
+                  </label>
                   <input
                     type="text"
+                    disabled
                     value={localTaxId}
                     placeholder="X-XXXX-XXXXX-XX-X"
-                    onChange={(e) => {
-                      setLocalTaxId(formatTaxId(e.target.value));
-                      setSaveStatus('typing');
-                    }}
-                    onBlur={(e) => handleGlobalFieldBlur('taxId', e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-bold focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs"
+                    className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-slate-50 text-slate-500 font-bold outline-none cursor-not-allowed text-xs"
                   />
                 </div>
 
@@ -874,7 +966,7 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                     setLocalAddress(e.target.value);
                     setSaveStatus('typing');
                   }}
-                  onBlur={(e) => handleGlobalFieldBlur('address', e.target.value)}
+                  onBlur={(e) => handleProfileBlur('addressLine1', e.target.value)}
                   className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 h-20 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs"
                 />
               </div>
@@ -883,43 +975,11 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
               <div className="space-y-2 text-xs pt-3 border-t border-slate-100">
                 <label className="block font-semibold text-slate-700 flex items-center gap-1.5">
                   <PenTool className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
-                  ลายมือชื่อเจ้าของหอพัก (สำหรับลงชื่อในสัญญาเช่า)
+                  ลายมือชื่อเจ้าของหอพัก <span className="text-[10px] text-amber-600 font-normal">(ยังไม่รองรับการบันทึกออนไลน์)</span>
                 </label>
-                {dorm.ownerSignature ? (
-                  <div className="space-y-2 bg-slate-50 p-3 rounded-2xl border border-slate-200">
-                    <div className="flex items-center justify-between">
-                      <span className="text-[10px] text-emerald-600 font-bold flex items-center gap-1">
-                        <CheckCircle2 className="w-3.5 h-3.5" /> บันทึกลายเซ็นเรียบร้อยแล้ว
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const updated = { ...dorm, ownerSignature: undefined, updatedAt: new Date().toISOString() };
-                          setDorm(updated);
-                          saveDormitory(updated);
-                          if (onRefreshData) onRefreshData();
-                        }}
-                        className="text-[10px] text-rose-500 hover:text-rose-700 font-bold cursor-pointer"
-                      >
-                        ลบและเซ็นใหม่
-                      </button>
-                    </div>
-                    <img
-                      src={dorm.ownerSignature}
-                      alt="ลายเซ็นนิติบุคคล"
-                      className="h-16 max-w-full mx-auto object-contain border border-slate-200 rounded-xl bg-white p-2"
-                    />
-                  </div>
-                ) : (
-                  <SignaturePad
-                    onSave={(dataUrl) => {
-                      handleGlobalFieldBlur('ownerSignature', dataUrl);
-                    }}
-                    onClear={() => {
-                      handleGlobalFieldBlur('ownerSignature', '');
-                    }}
-                  />
-                )}
+                <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl text-slate-500 text-xs font-medium">
+                  ระบบยังไม่รองรับการตั้งค่าลายเซ็นดิจิทัลผ่านออนไลน์ในขณะนี้
+                </div>
               </div>
 
               {/* LINE Official Account Connection Card (Task-009 Final Product Model) */}

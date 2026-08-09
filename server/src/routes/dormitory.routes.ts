@@ -340,12 +340,34 @@ export function createDormitoryRouter(
       } else if (currentSettings?.promptPayValueEncrypted) {
         try {
           decryptedPromptPay = sensitiveFieldService.decrypt(currentSettings.promptPayValueEncrypted);
-        } catch {}
+        } catch (err: any) {
+          console.error('PATCH payment settings decrypt error for promptPay:', err.message);
+          return res.status(500).json({
+            error: {
+              code: 'PAYMENT_CONFIG_DECRYPTION_FAILED',
+              message: 'ไม่สามารถถอดรหัสข้อมูลพร้อมเพย์ได้',
+              fieldErrors: null,
+              requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+              timestamp: new Date().toISOString(),
+            },
+          });
+        }
       }
     } else if (currentSettings?.promptPayValueEncrypted) {
       try {
         decryptedPromptPay = sensitiveFieldService.decrypt(currentSettings.promptPayValueEncrypted);
-      } catch {}
+      } catch (err: any) {
+        console.error('PATCH payment settings decrypt error for promptPay:', err.message);
+        return res.status(500).json({
+          error: {
+            code: 'PAYMENT_CONFIG_DECRYPTION_FAILED',
+            message: 'ไม่สามารถถอดรหัสข้อมูลพร้อมเพย์ได้',
+            fieldErrors: null,
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
     }
 
     let finalBankAccEnc: string | null = currentSettings?.bankAccountNumberEncrypted ?? null;
@@ -364,12 +386,34 @@ export function createDormitoryRouter(
       } else if (currentSettings?.bankAccountNumberEncrypted) {
         try {
           decryptedBankAcc = sensitiveFieldService.decrypt(currentSettings.bankAccountNumberEncrypted);
-        } catch {}
+        } catch (err: any) {
+          console.error('PATCH payment settings decrypt error for bankAccount:', err.message);
+          return res.status(500).json({
+            error: {
+              code: 'PAYMENT_CONFIG_DECRYPTION_FAILED',
+              message: 'ไม่สามารถถอดรหัสข้อมูลบัญชีธนาคารได้',
+              fieldErrors: null,
+              requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+              timestamp: new Date().toISOString(),
+            },
+          });
+        }
       }
     } else if (currentSettings?.bankAccountNumberEncrypted) {
       try {
         decryptedBankAcc = sensitiveFieldService.decrypt(currentSettings.bankAccountNumberEncrypted);
-      } catch {}
+      } catch (err: any) {
+        console.error('PATCH payment settings decrypt error for bankAccount:', err.message);
+        return res.status(500).json({
+          error: {
+            code: 'PAYMENT_CONFIG_DECRYPTION_FAILED',
+            message: 'ไม่สามารถถอดรหัสข้อมูลบัญชีธนาคารได้',
+            fieldErrors: null,
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
     }
 
     const updateData: any = {
@@ -397,12 +441,34 @@ export function createDormitoryRouter(
     if (!decryptedPromptPay && updated.promptPayValueEncrypted) {
       try {
         decryptedPromptPay = sensitiveFieldService.decrypt(updated.promptPayValueEncrypted);
-      } catch {}
+      } catch (err: any) {
+        console.error('PATCH payment settings post-update decrypt error for promptPay:', err.message);
+        return res.status(500).json({
+          error: {
+            code: 'PAYMENT_CONFIG_DECRYPTION_FAILED',
+            message: 'ไม่สามารถถอดรหัสข้อมูลพร้อมเพย์หลังการบันทึกได้',
+            fieldErrors: null,
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
     }
     if (!decryptedBankAcc && updated.bankAccountNumberEncrypted) {
       try {
         decryptedBankAcc = sensitiveFieldService.decrypt(updated.bankAccountNumberEncrypted);
-      } catch {}
+      } catch (err: any) {
+        console.error('PATCH payment settings post-update decrypt error for bankAccount:', err.message);
+        return res.status(500).json({
+          error: {
+            code: 'PAYMENT_CONFIG_DECRYPTION_FAILED',
+            message: 'ไม่สามารถถอดรหัสข้อมูลบัญชีธนาคารหลังการบันทึกได้',
+            fieldErrors: null,
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
     }
 
     const publicPaymentDTO = {

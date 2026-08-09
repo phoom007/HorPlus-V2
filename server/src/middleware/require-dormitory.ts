@@ -23,7 +23,7 @@ export function createRequireDormitoryContextMiddleware(
 ) {
   return async (req: Request, res: Response, next: NextFunction) => {
     const requestId = (req.headers['x-request-id'] as string) || 'req-unknown';
-    const dormitoryId = req.headers['x-dormitory-id'] as string | undefined;
+    const dormitoryId = req.params.dormitoryId || (req.headers['x-dormitory-id'] as string | undefined);
 
     if (!dormitoryId) {
       return res.status(400).json({

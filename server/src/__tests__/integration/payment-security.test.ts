@@ -843,31 +843,20 @@ describe('Payment Security & Idempotency Boundary (PS-001 to PS-010)', () => {
       expect(getData).not.toHaveProperty('bankAccountNumber');
     });
 
-    it('PATCH with masked input preserves existing encrypted values (mask preservation)', async () => {
-      // First GET to get current masked values
-      const getRes = await request(app)
-        .get(`/api/v1/dormitories/${testDormId}/payment-settings`)
-        .set('Cookie', [`horplus_session=${ownerSessionToken}`])
-        .set('x-dormitory-id', testDormId);
-
-      expect(getRes.status).toBe(200);
-      const maskedPP = getRes.body.data.maskedPromptPayValue;
-
+    it('PATCH omitting masked payment fields preserves existing encrypted values', async () => {
       // Get DB ciphertext before PATCH
       const dbBefore = await prisma.dormitoryBillingSettings.findUnique({
         where: { dormitoryId: testDormId },
       });
       const encBefore = dbBefore?.promptPayValueEncrypted;
 
-      // PATCH with masked value (contains 'X') — should preserve existing ciphertext
+      // PATCH omitting promptPay fields (only sending bankAccountName) — must preserve existing ciphertext
       const patchRes = await request(app)
         .patch(`/api/v1/dormitories/${testDormId}/payment-settings`)
         .set('Cookie', [`horplus_session=${ownerSessionToken}`, `horplus_csrf=${ownerCsrfToken}`])
         .set('x-dormitory-id', testDormId)
         .set('x-csrf-token', ownerCsrfToken)
         .send({
-          promptPayType: 'mobile_phone',
-          promptPayValue: maskedPP, // Sending masked value back
           bankAccountName: 'Preserved Test',
         });
 
@@ -879,6 +868,203 @@ describe('Payment Security & Idempotency Boundary (PS-001 to PS-010)', () => {
       });
       expect(dbAfter?.promptPayValueEncrypted).toBe(encBefore);
       expect(dbAfter?.bankAccountName).toBe('Preserved Test');
+    });
+
+    it('OR-002 / Amendment 1 — PATCH with masked value containing X returns 400 VALIDATION_ERROR', async () => {
+      const patchRes = await request(app)
+        .patch(`/api/v1/dormitories/${testDormId}/payment-settings`)
+        .set('Cookie', [`horplus_session=${ownerSessionToken}`, `horplus_csrf=${ownerCsrfToken}`])
+        .set('x-dormitory-id', testDormId)
+        .set('x-csrf-token', ownerCsrfToken)
+        .send({
+          promptPayValue: '089-XXX-9999',
+        });
+
+      expect(patchRes.status).toBe(400);
+      expect(patchRes.body.error.code).toBe('VALIDATION_ERROR');
+      expect(patchRes.body.error.fieldErrors[0].message).toContain('ไม่สามารถส่งค่าที่ซ่อน (X)');
+    });
+
+    it('OR-003 — National-ID type preservation: PATCH bankCode only preserves national_id type and ciphertext', async () => {
+      const nationalIdDormId = crypto.randomUUID();
+      const natUserId = crypto.randomUUID();
+      const natRoleId = crypto.randomUUID();
+
+      await prisma.dormitory.create({
+        data: {
+          id: nationalIdDormId,
+          name: 'National ID Test Dorm',
+          code: `NAT-${Date.now().toString().slice(-4)}`,
+          status: 'active',
+        },
+      });
+
+      const userRes = await prisma.user.create({
+        data: {
+          id: natUserId,
+          googleSubject: `gsub_nat_${Date.now()}`,
+          email: `nat_owner_${Date.now()}@example.com`,
+          emailNormalized: `nat_owner_${Date.now()}@example.com`,
+          name: 'Nat Owner',
+        },
+      });
+
+      await prisma.role.create({
+        data: {
+          id: natRoleId,
+          dormitoryId: nationalIdDormId,
+          code: 'OWNER',
+          name: 'Owner',
+          permissions: { '*': ['*'] },
+          isSystem: true,
+        },
+      });
+
+      await prisma.dormitoryMember.create({
+        data: {
+          dormitoryId: nationalIdDormId,
+          userId: natUserId,
+          roleId: natRoleId,
+          status: 'active',
+          membershipOrigin: 'GOOGLE_BOOTSTRAP',
+        },
+      });
+
+      const freePlan = await prisma.subscriptionPlan.findFirst({ where: { code: 'FREE' } });
+      await prisma.dormitorySubscription.create({
+        data: {
+          dormitoryId: nationalIdDormId,
+          planId: freePlan!.id,
+          status: 'ACTIVE',
+          expiresAt: new Date(Date.now() + 365 * 86400000),
+        },
+      });
+
+      const natAuth = await authService.authenticateTestUser(natUserId);
+      const natSessionToken = natAuth.sessionToken;
+      const natCsrfToken = natAuth.csrfToken;
+
+      const encryptedNatId = sensitiveService.encrypt('1100700123456').ciphertext;
+
+      await prisma.dormitoryBillingSettings.create({
+        data: {
+          dormitoryId: nationalIdDormId,
+          promptPayType: 'national_id',
+          promptPayValueEncrypted: encryptedNatId,
+          bankCode: 'กรุงไทย (Krungthai)',
+        },
+      });
+
+      // Send PATCH containing ONLY bankCode (no promptPayValue, no promptPayType)
+      const patchRes = await request(app)
+        .patch(`/api/v1/dormitories/${nationalIdDormId}/payment-settings`)
+        .set('Cookie', [`horplus_session=${natSessionToken}`, `horplus_csrf=${natCsrfToken}`])
+        .set('x-dormitory-id', nationalIdDormId)
+        .set('x-csrf-token', natCsrfToken)
+        .send({
+          bankCode: 'กสิกรไทย (KBank)',
+        });
+
+      expect(patchRes.status).toBe(200);
+      expect(patchRes.body.data.bankCode).toBe('กสิกรไทย (KBank)');
+      expect(patchRes.body.data.promptPayType).toBe('national_id');
+
+      // Verify DB after PATCH
+      const dbSettings = await prisma.dormitoryBillingSettings.findUnique({
+        where: { dormitoryId: nationalIdDormId },
+      });
+      expect(dbSettings?.promptPayType).toBe('national_id');
+      expect(dbSettings?.promptPayValueEncrypted).toBe(encryptedNatId);
+      expect(dbSettings?.bankCode).toBe('กสิกรไทย (KBank)');
+    });
+
+    it('OR-004 — Fail-closed PATCH decryption: returns 500 PAYMENT_CONFIG_DECRYPTION_FAILED without DB mutation', async () => {
+      const corruptDormId = crypto.randomUUID();
+      const corruptUserId = crypto.randomUUID();
+      const corruptRoleId = crypto.randomUUID();
+
+      await prisma.dormitory.create({
+        data: {
+          id: corruptDormId,
+          name: 'Corrupt Ciphertext Test Dorm',
+          code: `CRP-${Date.now().toString().slice(-4)}`,
+          status: 'active',
+        },
+      });
+
+      await prisma.user.create({
+        data: {
+          id: corruptUserId,
+          googleSubject: `gsub_crp_${Date.now()}`,
+          email: `crp_owner_${Date.now()}@example.com`,
+          emailNormalized: `crp_owner_${Date.now()}@example.com`,
+          name: 'Corrupt Owner',
+        },
+      });
+
+      await prisma.role.create({
+        data: {
+          id: corruptRoleId,
+          dormitoryId: corruptDormId,
+          code: 'OWNER',
+          name: 'Owner',
+          permissions: { '*': ['*'] },
+          isSystem: true,
+        },
+      });
+
+      await prisma.dormitoryMember.create({
+        data: {
+          dormitoryId: corruptDormId,
+          userId: corruptUserId,
+          roleId: corruptRoleId,
+          status: 'active',
+          membershipOrigin: 'GOOGLE_BOOTSTRAP',
+        },
+      });
+
+      const freePlan = await prisma.subscriptionPlan.findFirst({ where: { code: 'FREE' } });
+      await prisma.dormitorySubscription.create({
+        data: {
+          dormitoryId: corruptDormId,
+          planId: freePlan!.id,
+          status: 'ACTIVE',
+          expiresAt: new Date(Date.now() + 365 * 86400000),
+        },
+      });
+
+      const corruptAuth = await authService.authenticateTestUser(corruptUserId);
+      const corruptSessionToken = corruptAuth.sessionToken;
+      const corruptCsrfToken = corruptAuth.csrfToken;
+
+      // Seed corrupt ciphertext directly in DB
+      await prisma.dormitoryBillingSettings.create({
+        data: {
+          dormitoryId: corruptDormId,
+          promptPayType: 'mobile_phone',
+          promptPayValueEncrypted: 'corrupt.ciphertext.invalidtag',
+          bankCode: 'กรุงเทพ (Bangkok)',
+        },
+      });
+
+      // Attempt PATCH of unrelated field (bankCode)
+      const patchRes = await request(app)
+        .patch(`/api/v1/dormitories/${corruptDormId}/payment-settings`)
+        .set('Cookie', [`horplus_session=${corruptSessionToken}`, `horplus_csrf=${corruptCsrfToken}`])
+        .set('x-dormitory-id', corruptDormId)
+        .set('x-csrf-token', corruptCsrfToken)
+        .send({
+          bankCode: 'ไทยพาณิชย์ (SCB)',
+        });
+
+      expect(patchRes.status).toBe(500);
+      expect(patchRes.body.error.code).toBe('PAYMENT_CONFIG_DECRYPTION_FAILED');
+
+      // Assert DB settings remain untouched (bankCode NOT updated to SCB)
+      const dbSettings = await prisma.dormitoryBillingSettings.findUnique({
+        where: { dormitoryId: corruptDormId },
+      });
+      expect(dbSettings?.bankCode).toBe('กรุงเทพ (Bangkok)');
     });
   });
 

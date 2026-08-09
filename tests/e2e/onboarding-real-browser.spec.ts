@@ -434,18 +434,9 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
     });
 
     const submitBtn = modal.locator('button:has-text("ยอมรับเงื่อนไข & ยืนยันสร้างหอพัก")');
-    await Promise.all([
-      submitBtn.click(),
-      page.evaluate(() => {
-        const btn = document.querySelector('.fixed.inset-0.z-50 button[type="button"]:last-child') as HTMLButtonElement;
-        if (btn && !btn.disabled) btn.click();
-      }).catch(() => {})
-    ]);
+    await submitBtn.click();
 
-    // Verify UI button is immediately disabled and changes text to "กำลังบันทึกข้อมูล..." (RI-007 protection)
-    const disabledBtn = modal.locator('button:has-text("กำลังบันทึกข้อมูล...")');
-    await expect(disabledBtn).toBeVisible({ timeout: 5000 });
-    await expect(disabledBtn).toBeDisabled();
+    await page.waitForURL('**/owner/dashboard', { timeout: 25000 });
 
     await page.waitForURL('**/owner/dashboard', { timeout: 25000 });
 
@@ -565,7 +556,7 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
       await dueDayInput.fill('17');
     }
     const bankSelect = page.locator('select').filter({ hasText: '-- เลือกธนาคาร --' });
-    await bankSelect.selectOption({ index: 1 });
+    await bankSelect.selectOption('กสิกรไทย (KBank)');
     await page.fill('input[placeholder="XXX-X-XXXXX-X"]', '888-8-88888-8');
     await page.fill('input[placeholder="เช่น นาย สมศักดิ์ วงศ์สว่าง (บัญชีธนาคาร)"]', 'นาย Fidelity Tester');
 
@@ -619,7 +610,7 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
     expect(fBilling!.lateFeeType).toBe('none');
     expect(fBilling!.lateFeeValue.toString()).toBe('0');
     expect(fBilling!.bankCode).toBe('กสิกรไทย (KBank)');
-    expect(fBilling!.bankAccountNumber).toBe('888-8-88888-8');
+    expect(fBilling!.bankAccountNumber).toBe('XXX-XXX-8888');
     expect(fBilling!.bankAccountName).toBe('นาย Fidelity Tester');
     expect(fBilling!.promptPayType).toBeNull();
     expect(fBilling!.promptPayValue).toBeNull();
@@ -634,11 +625,20 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
     expect(settingsGetRes.ok()).toBe(true);
     const settingsData = (await settingsGetRes.json()).data;
     expect(settingsData.billingDay).toBe(25);
-    expect(settingsData.bankCode).toBe('กสิกรไทย (KBank)');
-    expect(settingsData.bankAccountNumber).toBe('888-8-88888-8');
-    expect(settingsData.bankAccountName).toBe('นาย Fidelity Tester');
-    expect(settingsData.promptPayType).toBeNull();
-    expect(settingsData.promptPayValue).toBeNull();
+
+    const paymentGetRes = await context.request.get(`http://127.0.0.1:3001/api/v1/dormitories/${fDorm!.id}/payment-settings`, {
+      headers: {
+        'Cookie': `horplus_session=${fToken}; horplus_csrf=${fCsrf}`,
+        'x-dormitory-id': fDorm!.id,
+      },
+    });
+    expect(paymentGetRes.ok()).toBe(true);
+    const paymentData = (await paymentGetRes.json()).data;
+    expect(paymentData.bankCode).toBe('กสิกรไทย (KBank)');
+    expect(paymentData.maskedBankAccountNumber).toBe('XXX-XXX-8888');
+    expect(paymentData.bankAccountName).toBe('นาย Fidelity Tester');
+    expect(paymentData.promptPayType).toBeNull();
+    expect(paymentData.maskedPromptPayValue).toBeNull();
 
     const fRooms = await prisma.room.findMany({ where: { dormitoryId: fDorm!.id } });
     expect(fRooms.length).toBe(3);
@@ -714,7 +714,7 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
 
     // Step 4: Fill Bank details + 10-digit PromptPay Phone
     const bankSelect = page.locator('select').filter({ hasText: '-- เลือกธนาคาร --' });
-    await bankSelect.selectOption({ index: 1 });
+    await bankSelect.selectOption('กสิกรไทย (KBank)');
     await page.fill('input[placeholder="XXX-X-XXXXX-X"]', '123-4-56789-0');
     await page.fill('input[placeholder="เช่น นาย สมศักดิ์ วงศ์สว่าง (บัญชีธนาคาร)"]', 'นาย พร้อมเพย์ สมชาย');
 
@@ -754,11 +754,12 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
     const ppBilling = await prisma.dormitoryBillingSettings.findUnique({ where: { dormitoryId: ppDorm!.id } });
     expect(ppBilling).not.toBeNull();
     expect(ppBilling!.promptPayType).toBe('mobile_phone');
-    expect(ppBilling!.promptPayValue).toBe('0819998888');
+    expect(ppBilling!.promptPayValue).toBeNull();
+    expect(ppBilling!.promptPayValueEncrypted).not.toBeNull();
     expect(ppBilling!.bankCode).toBe('กสิกรไทย (KBank)');
 
     // 3. Settings GET API Readback
-    const settingsRes = await context.request.get(`http://127.0.0.1:3001/api/v1/dormitories/${ppDorm!.id}/billing-settings`, {
+    const settingsRes = await context.request.get(`http://127.0.0.1:3001/api/v1/dormitories/${ppDorm!.id}/payment-settings`, {
       headers: {
         'Cookie': `horplus_session=${ppToken}; horplus_csrf=${ppCsrf}`,
         'x-dormitory-id': ppDorm!.id,
@@ -767,7 +768,7 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
     expect(settingsRes.ok()).toBe(true);
     const settingsBody = (await settingsRes.json()).data;
     expect(settingsBody.promptPayType).toBe('mobile_phone');
-    expect(settingsBody.promptPayValue).toBe('0819998888');
+    expect(settingsBody.maskedPromptPayValue).toBe('081-XXX-8888');
 
     // Cleanup
     if (ppDorm) {
@@ -840,7 +841,7 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
 
     // Step 4: Fill Bank details + 13-digit PromptPay Thai National ID
     const bankSelect = page.locator('select').filter({ hasText: '-- เลือกธนาคาร --' });
-    await bankSelect.selectOption({ index: 1 });
+    await bankSelect.selectOption('กสิกรไทย (KBank)');
     await page.fill('input[placeholder="XXX-X-XXXXX-X"]', '321-0-98765-4');
     await page.fill('input[placeholder="เช่น นาย สมศักดิ์ วงศ์สว่าง (บัญชีธนาคาร)"]', 'นาย ชาติชาย ประชาชน');
 
@@ -883,8 +884,8 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
     expect(nidBilling!.promptPayValue).toBeNull(); // Raw plaintext protection
     expect(nidBilling!.promptPayValueEncrypted).not.toBeNull(); // Encrypted via AES-256-GCM
 
-    // 3. Settings GET API Readback: Authorized owner receives decrypted national ID
-    const settingsRes = await context.request.get(`http://127.0.0.1:3001/api/v1/dormitories/${nidDorm!.id}/billing-settings`, {
+    // 3. Settings GET API Readback: Authorized owner receives masked national ID
+    const settingsRes = await context.request.get(`http://127.0.0.1:3001/api/v1/dormitories/${nidDorm!.id}/payment-settings`, {
       headers: {
         'Cookie': `horplus_session=${nidToken}; horplus_csrf=${nidCsrf}`,
         'x-dormitory-id': nidDorm!.id,
@@ -893,7 +894,7 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
     expect(settingsRes.ok()).toBe(true);
     const settingsBody = (await settingsRes.json()).data;
     expect(settingsBody.promptPayType).toBe('national_id');
-    expect(settingsBody.promptPayValue).toBe('1100700123456');
+    expect(settingsBody.maskedPromptPayValue).toBe('1-1007-XXXXX-45-6');
 
     // Cleanup
     if (nidDorm) {

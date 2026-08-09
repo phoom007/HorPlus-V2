@@ -40,12 +40,13 @@ describe('Wave 1E - Tenant Payments, Manual Review, Receipts & Evidence Lifecycl
       }
     });
 
+    const uniqueSub = crypto.randomUUID();
     await prisma.user.create({
       data: {
         id: ownerUserId,
-        googleSubject: `sub-owner-${timestamp}`,
-        email: `owner-${timestamp}@horplus.com`,
-        emailNormalized: `owner-${timestamp}@horplus.com`,
+        googleSubject: `sub-owner-${uniqueSub}`,
+        email: `owner-${uniqueSub}@horplus.com`,
+        emailNormalized: `owner-${uniqueSub}@horplus.com`,
         name: 'Owner Tester'
       }
     });
@@ -53,9 +54,9 @@ describe('Wave 1E - Tenant Payments, Manual Review, Receipts & Evidence Lifecycl
     await prisma.user.create({
       data: {
         id: tenantUserId,
-        googleSubject: `sub-tenant-${timestamp}`,
-        email: `tenant-${timestamp}@horplus.com`,
-        emailNormalized: `tenant-${timestamp}@horplus.com`,
+        googleSubject: `sub-tenant-${uniqueSub}`,
+        email: `tenant-${uniqueSub}@horplus.com`,
+        emailNormalized: `tenant-${uniqueSub}@horplus.com`,
         name: 'Tenant Tester'
       }
     });

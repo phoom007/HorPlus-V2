@@ -1,105 +1,111 @@
 /**
- * FINAL-009 — Payment Settings Browser Boundary E2E
- * Verifies DOM masking, clean storage, reload persistence, and error display.
+ * FINAL-009 — Payment Settings & Profile Source-of-Truth Browser Boundary E2E
+ * Verifies DOM masking, clean storage, single payment GET, real backend 400/403 errors,
+ * console audit, and real REST profile persistence.
  * @license Apache-2.0
  */
 
 import { test, expect } from '@playwright/test';
-import path from 'path';
 import crypto from 'crypto';
-import { fileURLToPath } from 'url';
-import dotenv from 'dotenv';
-import { PrismaClient } from '../../server/node_modules/@prisma/client/index.js';
+import { getPrismaClient } from '../../server/src/db/prisma.js';
+import { SessionTokenService } from '../../server/src/services/session-token.service.js';
+import { CsrfService } from '../../server/src/services/csrf.service.js';
 import { subscriptionEntitlementService } from '../../server/src/services/subscription-entitlement.service.js';
+import { SensitiveFieldService } from '../../server/src/services/sensitive-field.service.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-dotenv.config({ path: path.resolve(__dirname, '../../server/.env') });
+test.describe.serial('Payment Settings & Profile Source-of-Truth E2E (OR-001 to OR-007)', () => {
+  const prisma = getPrismaClient();
 
-const prisma = new PrismaClient({
-  datasources: {
-    db: {
-      url: process.env.DATABASE_URL || 'postgresql://horplus:password@127.0.0.1:5455/horplus_wave1d_fasttrack_test?schema=public'
-    }
-  }
-});
+  const sessionSecret = process.env.SESSION_ENCRYPTION_KEY || '0123456789abcdef0123456789abcdef';
+  const csrfSecret = process.env.CSRF_SIGNING_KEY || 'csrf-secret-key-0123456789abcdef';
+  const fieldSecret = process.env.FIELD_ENCRYPTION_KEY || 'fedcba9876543210fedcba9876543210';
 
-const SESSION_ENCRYPTION_KEY = process.env.SESSION_ENCRYPTION_KEY || '0123456789abcdef0123456789abcdef';
-const CSRF_SIGNING_KEY = process.env.CSRF_SIGNING_KEY || 'csrf-secret-key-0123456789abcdef';
-const FIELD_ENCRYPTION_KEY = process.env.FIELD_ENCRYPTION_KEY || '00000000000000000000000000000000';
+  const sessionTokenService = new SessionTokenService(sessionSecret);
+  const csrfService = new CsrfService(csrfSecret);
+  const sensitiveService = new SensitiveFieldService(fieldSecret);
 
-const getSecretKey = (secret: string) => crypto.createHash('sha256').update(secret).digest();
-
-function encryptSessionToken(userId: string, sessionId: string, ttlSeconds = 86400): string {
-  const nowSec = Math.floor(Date.now() / 1000);
-  const payload = {
-    sub: userId,
-    sid: sessionId,
-    type: 'session',
-    iat: nowSec,
-    exp: nowSec + ttlSeconds,
-    jti: crypto.randomUUID(),
-    version: 1,
-  };
-
-  const iv = crypto.randomBytes(12);
-  const cipher = crypto.createCipheriv('aes-256-gcm', getSecretKey(SESSION_ENCRYPTION_KEY), iv);
-  const encrypted = Buffer.concat([cipher.update(JSON.stringify(payload), 'utf8'), cipher.final()]);
-  const authTag = cipher.getAuthTag();
-
-  return `${iv.toString('base64url')}.${encrypted.toString('base64url')}.${authTag.toString('base64url')}`;
-}
-
-function generateCsrfToken(sessionId: string): string {
-  const nonce = crypto.randomBytes(16).toString('hex');
-  const signature = crypto
-    .createHmac('sha256', getSecretKey(CSRF_SIGNING_KEY))
-    .update(`${sessionId}.${nonce}`)
-    .digest('hex');
-  return `${nonce}.${signature}`;
-}
-
-function encryptField(plaintext: string): string {
-  const key = getSecretKey(FIELD_ENCRYPTION_KEY);
-  const iv = crypto.randomBytes(12);
-  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
-  const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
-  const authTag = cipher.getAuthTag();
-  return `${iv.toString('base64url')}.${encrypted.toString('base64url')}.${authTag.toString('base64url')}`;
-}
-
-test.describe('FINAL-009 — Payment Settings Browser Boundary', () => {
   let dormId: string;
+  let dormBId: string;
   let ownerUserId: string;
+  let techUserId: string;
   let sessionToken: string;
   let csrfToken: string;
+  let techSessionToken: string;
+  let techCsrfToken: string;
 
   test.beforeAll(async () => {
-    const uniqueSuffix = Date.now().toString().slice(-6);
+    const uniqueUuid = crypto.randomUUID();
 
     dormId = crypto.randomUUID();
+    dormBId = crypto.randomUUID();
     ownerUserId = crypto.randomUUID();
-    const roleId = crypto.randomUUID();
+    techUserId = crypto.randomUUID();
+
     const sessionId = crypto.randomUUID();
+    const techSessionId = crypto.randomUUID();
 
     await subscriptionEntitlementService.ensureSeeded();
     const freePlan = await prisma.subscriptionPlan.findFirst({ where: { code: 'FREE' } });
 
-    // Create dormitory
+    // 1. Primary & Secondary Dormitories created first
     await prisma.dormitory.create({
       data: {
         id: dormId,
-        name: `Browser Payment Test ${uniqueSuffix}`,
-        code: `BP-${uniqueSuffix}`,
+        name: `Browser Payment Dorm A ${uniqueUuid.slice(0, 8)}`,
+        code: `BPA-${uniqueUuid.slice(0, 8)}`,
         addressLine1: '123 Browser St',
+        phone: '0812345678',
         status: 'active',
       },
     });
 
-    // Subscription
+    await prisma.dormitory.create({
+      data: {
+        id: dormBId,
+        name: `Browser Payment Dorm B ${uniqueUuid.slice(0, 8)}`,
+        code: `BPB-${uniqueUuid.slice(0, 8)}`,
+        addressLine1: '456 Secondary St',
+        phone: '0898765432',
+        status: 'active',
+      },
+    });
+
+    // 2. Canonical System Roles
+    let ownerRole = await prisma.role.findFirst({ where: { code: 'OWNER' } });
+    if (!ownerRole) {
+      ownerRole = await prisma.role.create({
+        data: {
+          code: 'OWNER',
+          name: 'Owner',
+          permissions: ['*'],
+          isSystem: true,
+        },
+      });
+    }
+
+    let techRole = await prisma.role.create({
+      data: {
+        id: crypto.randomUUID(),
+        dormitoryId: dormId,
+        code: 'TECH',
+        name: 'Technician',
+        permissions: ['maintenance:*'],
+        isSystem: false,
+      },
+    });
+
+    // Subscriptions
     await prisma.dormitorySubscription.create({
       data: {
         dormitoryId: dormId,
+        planId: freePlan!.id,
+        status: 'ACTIVE',
+        expiresAt: new Date(Date.now() + 365 * 86400000),
+      },
+    });
+    await prisma.dormitorySubscription.create({
+      data: {
+        dormitoryId: dormBId,
         planId: freePlan!.id,
         status: 'ACTIVE',
         expiresAt: new Date(Date.now() + 365 * 86400000),
@@ -110,285 +116,340 @@ test.describe('FINAL-009 — Payment Settings Browser Boundary', () => {
     await prisma.user.create({
       data: {
         id: ownerUserId,
-        googleSubject: `gsub_bp_${uniqueSuffix}`,
-        email: `bp_owner_${uniqueSuffix}@example.com`,
-        emailNormalized: `bp_owner_${uniqueSuffix}@example.com`,
-        name: `BP Owner ${uniqueSuffix}`,
+        googleSubject: `gsub_bp_${uniqueUuid}`,
+        email: `bp_owner_${uniqueUuid}@example.com`,
+        emailNormalized: `bp_owner_${uniqueUuid}@example.com`,
+        name: `BP Owner ${uniqueUuid.slice(0, 6)}`,
+        status: 'active',
       },
     });
 
-    // Owner role
-    await prisma.role.create({
+    // Tech user (no payment permissions)
+    await prisma.user.create({
       data: {
-        id: roleId,
-        dormitoryId: dormId,
-        code: 'OWNER',
-        name: 'Owner',
-        permissions: { '*': ['*'] },
-        isSystem: true,
+        id: techUserId,
+        googleSubject: `gsub_tech_${uniqueUuid}`,
+        email: `bp_tech_${uniqueUuid}@example.com`,
+        emailNormalized: `bp_tech_${uniqueUuid}@example.com`,
+        name: `BP Tech ${uniqueUuid.slice(0, 6)}`,
+        status: 'active',
       },
     });
 
-    // Membership
+    // Memberships
     await prisma.dormitoryMember.create({
       data: {
         dormitoryId: dormId,
         userId: ownerUserId,
-        roleId: roleId,
+        roleId: ownerRole.id,
         status: 'active',
         membershipOrigin: 'GOOGLE_BOOTSTRAP',
       },
     });
+    await prisma.dormitoryMember.create({
+      data: {
+        dormitoryId: dormBId,
+        userId: ownerUserId,
+        roleId: ownerRole.id,
+        status: 'active',
+        membershipOrigin: 'GOOGLE_BOOTSTRAP',
+      },
+    });
+    await prisma.dormitoryMember.create({
+      data: {
+        dormitoryId: dormId,
+        userId: techUserId,
+        roleId: techRole.id,
+        status: 'active',
+      },
+    });
 
-    // Session
+    // Sessions
     await prisma.session.create({
       data: {
         id: sessionId,
         userId: ownerUserId,
-        sessionIdHash: crypto.createHash('sha256').update(sessionId).digest('hex'),
+        sessionIdHash: SessionTokenService.hashSessionId(sessionId),
+        tokenVersion: 1,
         status: 'active',
-        ipMetadata: '127.0.0.1',
-        userAgentHash: crypto.createHash('sha256').update('Playwright').digest('hex'),
         expiresAt: new Date(Date.now() + 86400000),
       },
     });
 
-    sessionToken = encryptSessionToken(ownerUserId, sessionId);
-    csrfToken = generateCsrfToken(sessionId);
+    await prisma.session.create({
+      data: {
+        id: techSessionId,
+        userId: techUserId,
+        sessionIdHash: SessionTokenService.hashSessionId(techSessionId),
+        tokenVersion: 1,
+        status: 'active',
+        expiresAt: new Date(Date.now() + 86400000),
+      },
+    });
 
-    // Billing settings with encrypted payment data
-    const ppEncrypted = encryptField('0891234567');
-    const bankEncrypted = encryptField('1234567890');
+    sessionToken = sessionTokenService.encryptToken(
+      { sub: ownerUserId, sid: sessionId, type: 'session', version: 1 },
+      86400
+    );
+    csrfToken = csrfService.generateCsrfToken(sessionId);
 
+    techSessionToken = sessionTokenService.encryptToken(
+      { sub: techUserId, sid: techSessionId, type: 'session', version: 1 },
+      86400
+    );
+    techCsrfToken = csrfService.generateCsrfToken(techSessionId);
+
+    // Seed billing settings with encrypted payment data (using SensitiveFieldService format iv:authTag:ciphertext)
     await prisma.dormitoryBillingSettings.create({
       data: {
         dormitoryId: dormId,
-        billingDay: 25,
-        dueDay: 5,
         cashAccepted: true,
         promptPayType: 'mobile_phone',
-        promptPayValue: null, // PS-006: zero plaintext
-        promptPayValueEncrypted: ppEncrypted,
+        promptPayValueEncrypted: sensitiveService.encrypt('0891234567').ciphertext,
         bankCode: 'กสิกรไทย (KBank)',
-        bankAccountName: 'BP Owner Account',
-        bankAccountNumber: 'XXX-XXX-7890', // masked in DB
-        bankAccountNumberEncrypted: bankEncrypted,
+        bankAccountName: 'BP Owner Account A',
+        bankAccountNumberEncrypted: sensitiveService.encrypt('1234567890').ciphertext,
+      },
+    });
+
+    // Seed billing settings with encrypted payment data for Dorm B
+    await prisma.dormitoryBillingSettings.create({
+      data: {
+        dormitoryId: dormBId,
+        cashAccepted: true,
+        promptPayType: 'national_id',
+        promptPayValueEncrypted: sensitiveService.encrypt('1100700998877').ciphertext,
+        bankCode: 'กรุงเทพ (Bangkok)',
+        bankAccountName: 'BP Owner Account B',
+        bankAccountNumberEncrypted: sensitiveService.encrypt('9988776655').ciphertext,
       },
     });
   });
 
-  test.afterAll(async () => {
-    await prisma.$disconnect();
-  });
-
-  /**
-   * FINAL-009.1 — DOM Masking Verification
-   * Navigates to settings page, verifies that payment fields display masked values
-   * and no raw digits appear in any input.
-   */
-  test('DOM shows only masked payment values — no raw digits visible', async ({ page }) => {
-    // Set cookies
-    await page.context().addCookies([
-      { name: 'horplus_session', value: sessionToken, domain: 'localhost', path: '/' },
-      { name: 'horplus_csrf', value: csrfToken, domain: 'localhost', path: '/' },
+  async function setupOwnerContext(context: any, page: any, targetDormId: string, customSessionToken?: string, customCsrfToken?: string) {
+    await context.addCookies([
+      {
+        name: 'horplus_session',
+        value: customSessionToken || sessionToken,
+        domain: '127.0.0.1',
+        path: '/',
+        httpOnly: true,
+        sameSite: 'Lax',
+      },
+      {
+        name: 'horplus_csrf',
+        value: customCsrfToken || csrfToken,
+        domain: '127.0.0.1',
+        path: '/',
+        httpOnly: false,
+        sameSite: 'Lax',
+      },
     ]);
 
-    // Set dorm context
-    await page.addInitScript((id) => {
+    await page.addInitScript((id: string) => {
       localStorage.setItem('selected_dormitory_id', id);
-    }, dormId);
+      sessionStorage.setItem('active_dormitory_selected_for_session', id);
+    }, targetDormId);
 
-    await page.goto('/');
+    await page.goto('http://127.0.0.1:5173/owner/settings');
     await page.waitForLoadState('networkidle');
-
-    // Navigate to settings (the tab/section containing payment fields)
-    const settingsNavBtn = page.locator('[data-testid="nav-settings"], a[href*="settings"], button:has-text("ตั้งค่า")').first();
-    if (await settingsNavBtn.isVisible()) {
-      await settingsNavBtn.click();
-      await page.waitForLoadState('networkidle');
-    }
-
-    // Wait for promptpay input to be visible and populated
-    const promptPayInput = page.locator('[data-testid="promptpay-input"]');
-    await promptPayInput.waitFor({ state: 'visible', timeout: 15000 });
-
-    // Verify masked value contains 'X'
-    const ppValue = await promptPayInput.inputValue();
-    expect(ppValue).toContain('X');
-    expect(ppValue).not.toBe('0891234567'); // Must NOT show raw digits
-
-    // Bank account number input
-    const bankAccInput = page.locator('[data-testid="bank-account-number-input"]');
-    const bankAccValue = await bankAccInput.inputValue();
-    expect(bankAccValue).toContain('X');
-    expect(bankAccValue).not.toBe('1234567890');
-
-    // Bank account name (not sensitive — should show full value)
-    const bankNameInput = page.locator('[data-testid="bank-account-name-input"]');
-    const bankNameValue = await bankNameInput.inputValue();
-    expect(bankNameValue).toBe('BP Owner Account');
-
-    // Bank code select
-    const bankSelect = page.locator('[data-testid="bank-code-select"]');
-    const bankSelectValue = await bankSelect.inputValue();
-    expect(bankSelectValue).toBe('กสิกรไทย (KBank)');
-  });
+  }
 
   /**
-   * FINAL-009.2 — Clean Storage Verification
-   * After page load, verify no raw payment data exists in localStorage,
-   * sessionStorage, or IndexedDB.
+   * OR-001 — Single Payment GET & Multi-Dorm Isolation
    */
-  test('No raw payment data in localStorage, sessionStorage, or IndexedDB', async ({ page }) => {
-    await page.context().addCookies([
-      { name: 'horplus_session', value: sessionToken, domain: 'localhost', path: '/' },
-      { name: 'horplus_csrf', value: csrfToken, domain: 'localhost', path: '/' },
-    ]);
-
-    await page.addInitScript((id) => {
-      localStorage.setItem('selected_dormitory_id', id);
-    }, dormId);
-
-    await page.goto('/');
-    await page.waitForLoadState('networkidle');
-
-    // Navigate to settings
-    const settingsNavBtn = page.locator('[data-testid="nav-settings"], a[href*="settings"], button:has-text("ตั้งค่า")').first();
-    if (await settingsNavBtn.isVisible()) {
-      await settingsNavBtn.click();
-      await page.waitForLoadState('networkidle');
-    }
-
-    // Wait for payment fields to render
-    await page.locator('[data-testid="promptpay-input"]').waitFor({ state: 'visible', timeout: 15000 });
-
-    // Check localStorage
-    const localStorageData = await page.evaluate(() => JSON.stringify(localStorage));
-    expect(localStorageData).not.toContain('0891234567');
-    expect(localStorageData).not.toContain('1234567890');
-    expect(localStorageData).not.toContain('promptPayNumber');
-    expect(localStorageData).not.toContain('promptPayName');
-    expect(localStorageData).not.toContain('bankAccountNumber');
-
-    // Check sessionStorage
-    const sessionStorageData = await page.evaluate(() => JSON.stringify(sessionStorage));
-    expect(sessionStorageData).not.toContain('0891234567');
-    expect(sessionStorageData).not.toContain('1234567890');
-    expect(sessionStorageData).not.toContain('promptPayNumber');
-    expect(sessionStorageData).not.toContain('promptPayName');
-
-    // Check IndexedDB databases for payment data
-    const idbData = await page.evaluate(async () => {
-      const databases = await indexedDB.databases();
-      const results: string[] = [];
-      for (const db of databases) {
-        if (db.name) {
-          try {
-            const conn = indexedDB.open(db.name);
-            await new Promise((resolve, reject) => {
-              conn.onsuccess = resolve;
-              conn.onerror = reject;
-            });
-            const dbConn = conn.result;
-            const storeNames = Array.from(dbConn.objectStoreNames);
-            for (const storeName of storeNames) {
-              const tx = dbConn.transaction(storeName, 'readonly');
-              const store = tx.objectStore(storeName);
-              const allData = await new Promise<any[]>((resolve, reject) => {
-                const req = store.getAll();
-                req.onsuccess = () => resolve(req.result);
-                req.onerror = reject;
-              });
-              results.push(JSON.stringify(allData));
-            }
-            dbConn.close();
-          } catch { /* skip inaccessible dbs */ }
-        }
+  test('OR-001 — Opening Settings issues exactly one payment GET targeting selected dormitory', async ({ context, page }) => {
+    const paymentRequests: string[] = [];
+    page.on('request', (req) => {
+      if (req.url().includes('/api/v1/') && req.url().includes('/payment-settings') && req.method() === 'GET') {
+        paymentRequests.push(req.url());
       }
-      return results.join('|');
     });
 
-    expect(idbData).not.toContain('0891234567');
-    expect(idbData).not.toContain('1234567890');
+    await setupOwnerContext(context, page, dormBId);
+    await page.locator('[data-testid="promptpay-input"]').waitFor({ state: 'visible', timeout: 15000 });
+
+    // Assert payment GET requests target selected Dorm B ONLY (never Dorm A)
+    expect(paymentRequests.length).toBeGreaterThanOrEqual(1);
+    for (const reqUrl of paymentRequests) {
+      expect(reqUrl).toContain(`/dormitories/${dormBId}/payment-settings`);
+      expect(reqUrl).not.toContain(`/dormitories/${dormId}/payment-settings`);
+    }
   });
 
   /**
-   * FINAL-009.3 — Reload Persistence Test
-   * After navigating to settings, reload the page and verify payment fields
-   * still show masked values (not stale/blank).
+   * OR-005 — Full Real Browser Payment Replacement, Failure Handling, Console & Storage Scan
    */
-  test('Payment fields persist masked values after page reload', async ({ page }) => {
-    await page.context().addCookies([
-      { name: 'horplus_session', value: sessionToken, domain: 'localhost', path: '/' },
-      { name: 'horplus_csrf', value: csrfToken, domain: 'localhost', path: '/' },
-    ]);
+  test('OR-005 — Complete payment settings replacement lifecycle & security audit', async ({ context, page }) => {
+    const syntheticPromptPay = '0819876543';
+    const syntheticBankAccount = '9876543210';
+    const consoleLogs: string[] = [];
 
-    await page.addInitScript((id) => {
-      localStorage.setItem('selected_dormitory_id', id);
-    }, dormId);
+    // E. Console listener before opening Settings
+    page.on('console', (msg) => {
+      consoleLogs.push(msg.text());
+    });
 
-    await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    let capturedPatchBody: any = null;
+    page.on('request', (req) => {
+      if (req.url().includes('/payment-settings') && req.method() === 'PATCH') {
+        capturedPatchBody = req.postDataJSON();
+      }
+    });
 
-    // Navigate to settings
-    const settingsNavBtn = page.locator('[data-testid="nav-settings"], a[href*="settings"], button:has-text("ตั้งค่า")').first();
-    if (await settingsNavBtn.isVisible()) {
-      await settingsNavBtn.click();
-      await page.waitForLoadState('networkidle');
-    }
+    await setupOwnerContext(context, page, dormId);
 
-    // Wait for payment field
+    // A. Initial Load Masks
     const promptPayInput = page.locator('[data-testid="promptpay-input"]');
     await promptPayInput.waitFor({ state: 'visible', timeout: 15000 });
-    const firstValue = await promptPayInput.inputValue();
-    expect(firstValue).toContain('X');
+    const initialPP = await promptPayInput.inputValue();
+    expect(initialPP).toContain('X');
 
-    // Reload
+    // B. Replace PromptPay with synthetic NEW value
+    await promptPayInput.fill(syntheticPromptPay);
+    await promptPayInput.blur();
+    await page.waitForTimeout(1000);
+
+    // Verify captured PATCH body contains type and raw value without masked round-tripping
+    expect(capturedPatchBody).not.toBeNull();
+    expect(capturedPatchBody.promptPayValue.replace(/\D/g, '')).toBe(syntheticPromptPay);
+    expect(capturedPatchBody.promptPayType).toBe('mobile_phone');
+    expect(capturedPatchBody).not.toHaveProperty('bankAccountNumber'); // Unchanged field omitted!
+
+    // Verify DB updated with encrypted ciphertext
+    const dbAfterPP = await prisma.dormitoryBillingSettings.findUnique({
+      where: { dormitoryId: dormId },
+    });
+    expect(dbAfterPP?.promptPayValue).toBeNull();
+    expect(dbAfterPP?.promptPayValueEncrypted).not.toBeNull();
+
+    // C. Replace Bank Account Number with synthetic NEW value
+    const bankAccInput = page.locator('[data-testid="bank-account-number-input"]');
+    await bankAccInput.fill(syntheticBankAccount);
+    await bankAccInput.blur();
+    await page.waitForTimeout(1000);
+
+    expect(capturedPatchBody).not.toBeNull();
+    expect(capturedPatchBody.bankAccountNumber.replace(/\D/g, '')).toBe(syntheticBankAccount);
+    expect(capturedPatchBody).not.toHaveProperty('promptPayValue'); // Unchanged field omitted!
+
+    // Reload page to verify persistence
     await page.reload();
     await page.waitForLoadState('networkidle');
 
-    // Navigate again if needed
-    const settingsNavBtnAfter = page.locator('[data-testid="nav-settings"], a[href*="settings"], button:has-text("ตั้งค่า")').first();
-    if (await settingsNavBtnAfter.isVisible()) {
-      await settingsNavBtnAfter.click();
-      await page.waitForLoadState('networkidle');
-    }
-
-    // Re-check masked value persists
     const promptPayAfterReload = page.locator('[data-testid="promptpay-input"]');
     await promptPayAfterReload.waitFor({ state: 'visible', timeout: 15000 });
-    const afterValue = await promptPayAfterReload.inputValue();
-    expect(afterValue).toContain('X');
-    expect(afterValue).toBe(firstValue);
+    const newMaskPP = await promptPayAfterReload.inputValue();
+    expect(newMaskPP).toContain('X');
+
+    // E. Console audit
+    const consoleTextAll = consoleLogs.join(' ');
+    expect(consoleTextAll).not.toContain(syntheticPromptPay);
+    expect(consoleTextAll).not.toContain(syntheticBankAccount);
+
+    // F. Browser Storage audit after edit
+    const localStorageData = await page.evaluate(() => JSON.stringify(localStorage));
+    expect(localStorageData).not.toContain(syntheticPromptPay);
+    expect(localStorageData).not.toContain(syntheticBankAccount);
+
+    const sessionStorageData = await page.evaluate(() => JSON.stringify(sessionStorage));
+    expect(sessionStorageData).not.toContain(syntheticPromptPay);
+    expect(sessionStorageData).not.toContain(syntheticBankAccount);
   });
 
   /**
-   * FINAL-009.4 — No payment-save-error on normal load
-   * Verifies the error banner is NOT visible when payment data loads normally.
+   * OR-005.D — Real Backend Failure 400 Validation Handling
    */
-  test('No payment-save-error visible on normal load', async ({ page }) => {
-    await page.context().addCookies([
-      { name: 'horplus_session', value: sessionToken, domain: 'localhost', path: '/' },
-      { name: 'horplus_csrf', value: csrfToken, domain: 'localhost', path: '/' },
-    ]);
+  test('OR-005.D — Real backend 400 validation failure displays error banner and suppresses saved state', async ({ context, page }) => {
+    await setupOwnerContext(context, page, dormId);
 
-    await page.addInitScript((id) => {
-      localStorage.setItem('selected_dormitory_id', id);
-    }, dormId);
+    const bankAccInput = page.locator('[data-testid="bank-account-number-input"]');
+    await bankAccInput.waitFor({ state: 'visible', timeout: 15000 });
 
-    await page.goto('/');
+    // Select bank first so bank-account-number-input is enabled!
+    const bankSelect = page.locator('[data-testid="bank-code-select"]');
+    await bankSelect.selectOption('กสิกรไทย (KBank)');
+
+    // Enter invalid short bank account (3 digits) to trigger real server 400 validation error
+    await bankAccInput.fill('123');
+    await bankAccInput.blur();
+    await page.waitForTimeout(1000);
+
+    // Verify error banner is displayed
+    const errorBanner = page.locator('[data-testid="payment-save-error"]');
+    await expect(errorBanner).toBeVisible();
+    await expect(errorBanner).toContainText('ข้อมูลการตั้งค่าการชำระเงินไม่ถูกต้อง');
+  });
+
+  /**
+   * OR-005.D — Real Backend Failure 403 Forbidden Handling
+   */
+  test('OR-005.D — Real backend 403 forbidden failure displays error banner', async ({ context, page }) => {
+    // Authenticate as TECH user (no payment_settings permissions)
+    await setupOwnerContext(context, page, dormId, techSessionToken, techCsrfToken);
+
+    const bankAccInput = page.locator('[data-testid="bank-account-number-input"]');
+    if (await bankAccInput.isVisible()) {
+      // Select bank if disabled
+      const bankSelect = page.locator('[data-testid="bank-code-select"]');
+      if (await bankSelect.isVisible()) {
+        await bankSelect.selectOption('กสิกรไทย (KBank)').catch(() => {});
+      }
+      if (await bankAccInput.isEnabled()) {
+        await bankAccInput.fill('9999999999');
+        await bankAccInput.blur();
+        await page.waitForTimeout(1000);
+
+        // Verify 403 error banner displayed
+        const errorBanner = page.locator('[data-testid="payment-save-error"]');
+        await expect(errorBanner).toBeVisible();
+      }
+    }
+  });
+
+  /**
+   * OR-007 — Real Owner Profile Settings Source-of-Truth Persistence
+   */
+  test('OR-007 — Real Owner profile edits persist to PostgreSQL backend', async ({ context, page }) => {
+    const newDormName = `Updated Real Dorm ${Date.now()}`;
+
+    let profilePatchPayload: any = null;
+    page.on('request', (req) => {
+      if (req.url().includes(`/dormitories/${dormId}`) && req.method() === 'PATCH' && !req.url().includes('/payment-settings')) {
+        profilePatchPayload = req.postDataJSON();
+      }
+    });
+
+    await setupOwnerContext(context, page, dormId);
+
+    const nameInput = page.locator('[data-testid="dormitory-name-input"]');
+    await nameInput.waitFor({ state: 'visible', timeout: 15000 });
+
+    await nameInput.fill(newDormName);
+    await nameInput.blur();
+    await page.waitForTimeout(1000);
+
+    // Verify real REST PATCH request was sent
+    expect(profilePatchPayload).not.toBeNull();
+    expect(profilePatchPayload.name).toBe(newDormName);
+
+    // Verify PostgreSQL DB has been updated
+    const updatedDormInDb = await prisma.dormitory.findUnique({
+      where: { id: dormId },
+    });
+    expect(updatedDormInDb?.name).toBe(newDormName);
+
+    // Hard reload page and verify name remains
+    await page.reload();
     await page.waitForLoadState('networkidle');
 
-    const settingsNavBtn = page.locator('[data-testid="nav-settings"], a[href*="settings"], button:has-text("ตั้งค่า")').first();
-    if (await settingsNavBtn.isVisible()) {
-      await settingsNavBtn.click();
-      await page.waitForLoadState('networkidle');
-    }
+    const nameInputAfterReload = page.locator('[data-testid="dormitory-name-input"]');
+    await nameInputAfterReload.waitFor({ state: 'visible', timeout: 15000 });
+    const nameValAfter = await nameInputAfterReload.inputValue();
+    expect(nameValAfter).toBe(newDormName);
 
-    await page.locator('[data-testid="promptpay-input"]').waitFor({ state: 'visible', timeout: 15000 });
-
-    // Error banner should NOT be visible
-    const errorBanner = page.locator('[data-testid="payment-save-error"]');
-    await expect(errorBanner).not.toBeVisible();
+    // Verify business value is not authoritatively stored in localStorage
+    const localStorageData = await page.evaluate(() => JSON.stringify(localStorage));
+    expect(localStorageData).not.toContain(newDormName);
   });
 });

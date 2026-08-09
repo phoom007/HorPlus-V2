@@ -32,16 +32,18 @@ export interface PaymentSettingsUpdatePayload {
 }
 
 export async function getPaymentSettings(dormitoryId: string): Promise<PaymentSettingsDTO> {
-  return httpRequest<PaymentSettingsDTO>('GET', `/dormitories/${dormitoryId}/payment-settings`, undefined, {
+  const res = await httpRequest<{ data: PaymentSettingsDTO }>('GET', `/dormitories/${dormitoryId}/payment-settings`, undefined, {
     dormitoryId,
   });
+  return res.data;
 }
 
 export async function updatePaymentSettings(
   dormitoryId: string,
   payload: PaymentSettingsUpdatePayload
 ): Promise<PaymentSettingsDTO> {
-  return httpRequest<PaymentSettingsDTO>('PATCH', `/dormitories/${dormitoryId}/payment-settings`, payload, {
+  const res = await httpRequest<{ data: PaymentSettingsDTO }>('PATCH', `/dormitories/${dormitoryId}/payment-settings`, payload, {
     dormitoryId,
   });
+  return res.data;
 }

@@ -88,7 +88,88 @@ export const OnboardingPaymentInputSchema = z.object({
   }
 });
 
-export const PaymentSettingsInputSchema = OnboardingPaymentInputSchema;
+export const PaymentSettingsPatchInputSchema = z.object({
+  cashAccepted: z.boolean().optional(),
+  promptPayType: z.enum(['mobile_phone', 'national_id']).optional().nullable(),
+  promptPayValue: z.string().trim().optional().nullable(),
+  bankCode: z.string().trim().optional().nullable(),
+  bankAccountName: z.string().trim().optional().nullable(),
+  bankAccountNumber: z.string().trim().optional().nullable(),
+}).strict().superRefine((data, ctx) => {
+  // Reject any input containing masked 'X' characters
+  if (data.promptPayValue && data.promptPayValue.includes('X')) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['promptPayValue'],
+      message: 'ไม่สามารถส่งค่าที่ซ่อน (X) เพื่อแก้ไขข้อมูลได้',
+    });
+  }
+
+  if (data.bankAccountNumber && data.bankAccountNumber.includes('X')) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['bankAccountNumber'],
+      message: 'ไม่สามารถส่งค่าที่ซ่อน (X) เพื่อแก้ไขข้อมูลได้',
+    });
+  }
+
+  const type = data.promptPayType;
+  const pVal = data.promptPayValue;
+
+  if (pVal !== undefined && pVal !== null && pVal.trim() !== '') {
+    if (!type) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['promptPayType'],
+        message: 'กรุณาระบุประเภทพร้อมเพย์เมื่อมีการกรอกหมายเลขพร้อมเพย์',
+      });
+    }
+  }
+
+  if (type !== undefined && type !== null) {
+    if (pVal === undefined || pVal === null || pVal.trim() === '') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['promptPayValue'],
+        message: 'กรุณาระบุหมายเลขพร้อมเพย์เมื่อเลือกประเภทพร้อมเพย์',
+      });
+    }
+  }
+
+  if (type && pVal && !pVal.includes('X')) {
+    const rawVal = pVal.replace(/\D/g, '');
+    if (type === 'mobile_phone') {
+      if (rawVal.length !== 10 || !/^0\d{9}$/.test(rawVal)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['promptPayValue'],
+          message: 'พร้อมเพย์ประเภทเบอร์โทรศัพท์ต้องเป็นตัวเลข 10 หลัก (เช่น 0812345678)',
+        });
+      }
+    } else if (type === 'national_id') {
+      if (rawVal.length !== 13 || !/^\d{13}$/.test(rawVal)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['promptPayValue'],
+          message: 'พร้อมเพย์ประเภทบัตรประชาชนต้องเป็นตัวเลข 13 หลัก',
+        });
+      }
+    }
+  }
+
+  if (data.bankAccountNumber && data.bankAccountNumber.trim() !== '' && !data.bankAccountNumber.includes('X')) {
+    const cleanBankAcc = data.bankAccountNumber.replace(/\D/g, '');
+    if (cleanBankAcc.length < 8 || cleanBankAcc.length > 15) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['bankAccountNumber'],
+        message: 'เลขที่บัญชีธนาคารต้องเป็นตัวเลข 8-15 หลัก',
+      });
+    }
+  }
+});
+
+export const PaymentSettingsInputSchema = PaymentSettingsPatchInputSchema;
 
 export const BuildingSchema = z.object({
   name: z.string().min(1, 'Building name is required').max(255),
