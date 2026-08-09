@@ -281,13 +281,13 @@ export function createDormitoryRouter(
       dormitoryId: settings.dormitoryId,
       cashAccepted: settings.cashAccepted ?? true,
       promptPayType: settings.promptPayType ?? null,
-      promptPayValue: decryptedPromptPay,
-      maskedPromptPayValue: settings.promptPayType ? sensitiveFieldService.maskPromptPay(settings.promptPayType, decryptedPromptPay || undefined) : null,
+      maskedPromptPayValue: settings.promptPayType && decryptedPromptPay ? sensitiveFieldService.maskPromptPay(settings.promptPayType, decryptedPromptPay) : null,
       hasPromptPay: Boolean(settings.promptPayType && (settings.promptPayValueEncrypted || decryptedPromptPay)),
       bankCode: settings.bankCode ?? null,
       bankAccountName: settings.bankAccountName ?? null,
-      bankAccountNumber: decryptedBankAccount || (settings.bankAccountNumber ?? null),
       maskedBankAccountNumber: decryptedBankAccount ? sensitiveFieldService.maskBankAccount(decryptedBankAccount) : (settings.bankAccountNumber ?? null),
+      hasBankAccount: Boolean(settings.bankCode && (settings.bankAccountNumberEncrypted || decryptedBankAccount)),
+      version: settings.version ?? 1,
       createdAt: settings.createdAt,
       updatedAt: settings.updatedAt,
     };
@@ -314,21 +314,73 @@ export function createDormitoryRouter(
 
     const dormitoryId = req.params.dormitoryId;
     const prisma = getPrismaClient();
-    const promptPayRaw = parsed.data.promptPayValue ? parsed.data.promptPayValue.replace(/\D/g, '') : null;
-    const encryptedPromptPay = promptPayRaw ? sensitiveFieldService.encrypt(promptPayRaw).ciphertext : null;
 
-    const bankAccRaw = parsed.data.bankAccountNumber ? parsed.data.bankAccountNumber.trim() : null;
-    const encryptedBankAcc = bankAccRaw ? sensitiveFieldService.encrypt(bankAccRaw).ciphertext : null;
+    let currentSettings: any = null;
+    if (prisma?.dormitoryBillingSettings) {
+      currentSettings = await prisma.dormitoryBillingSettings.findUnique({ where: { dormitoryId } });
+    } else {
+      currentSettings = await billingRepo.findByDormitoryId(dormitoryId);
+    }
+
+    let finalPromptPayEnc: string | null = currentSettings?.promptPayValueEncrypted ?? null;
+    let finalPromptPayType: string | null = parsed.data.promptPayType !== undefined ? (parsed.data.promptPayType ?? null) : (currentSettings?.promptPayType ?? null);
+    let decryptedPromptPay: string | null = null;
+
+    if (parsed.data.promptPayValue !== undefined) {
+      const pVal = parsed.data.promptPayValue;
+      if (pVal === null || pVal.trim() === '') {
+        finalPromptPayEnc = null;
+        finalPromptPayType = null;
+      } else if (!pVal.includes('X')) {
+        const clean = pVal.replace(/\D/g, '');
+        if (clean) {
+          finalPromptPayEnc = sensitiveFieldService.encrypt(clean).ciphertext;
+          decryptedPromptPay = clean;
+        }
+      } else if (currentSettings?.promptPayValueEncrypted) {
+        try {
+          decryptedPromptPay = sensitiveFieldService.decrypt(currentSettings.promptPayValueEncrypted);
+        } catch {}
+      }
+    } else if (currentSettings?.promptPayValueEncrypted) {
+      try {
+        decryptedPromptPay = sensitiveFieldService.decrypt(currentSettings.promptPayValueEncrypted);
+      } catch {}
+    }
+
+    let finalBankAccEnc: string | null = currentSettings?.bankAccountNumberEncrypted ?? null;
+    let decryptedBankAcc: string | null = null;
+
+    if (parsed.data.bankAccountNumber !== undefined) {
+      const bVal = parsed.data.bankAccountNumber;
+      if (bVal === null || bVal.trim() === '') {
+        finalBankAccEnc = null;
+      } else if (!bVal.includes('X')) {
+        const clean = bVal.trim();
+        if (clean) {
+          finalBankAccEnc = sensitiveFieldService.encrypt(clean).ciphertext;
+          decryptedBankAcc = clean;
+        }
+      } else if (currentSettings?.bankAccountNumberEncrypted) {
+        try {
+          decryptedBankAcc = sensitiveFieldService.decrypt(currentSettings.bankAccountNumberEncrypted);
+        } catch {}
+      }
+    } else if (currentSettings?.bankAccountNumberEncrypted) {
+      try {
+        decryptedBankAcc = sensitiveFieldService.decrypt(currentSettings.bankAccountNumberEncrypted);
+      } catch {}
+    }
 
     const updateData: any = {
-      cashAccepted: parsed.data.cashAccepted ?? true,
-      promptPayType: parsed.data.promptPayType ?? null,
+      cashAccepted: parsed.data.cashAccepted ?? currentSettings?.cashAccepted ?? true,
+      promptPayType: finalPromptPayType,
       promptPayValue: null, // Always keep plaintext PromptPay null in DB
-      promptPayValueEncrypted: encryptedPromptPay,
-      bankCode: parsed.data.bankCode ?? null,
-      bankAccountName: parsed.data.bankAccountName ?? null,
-      bankAccountNumber: bankAccRaw ? sensitiveFieldService.maskBankAccount(bankAccRaw) : null,
-      bankAccountNumberEncrypted: encryptedBankAcc,
+      promptPayValueEncrypted: finalPromptPayEnc,
+      bankCode: parsed.data.bankCode !== undefined ? (parsed.data.bankCode ?? null) : (currentSettings?.bankCode ?? null),
+      bankAccountName: parsed.data.bankAccountName !== undefined ? (parsed.data.bankAccountName ?? null) : (currentSettings?.bankAccountName ?? null),
+      bankAccountNumber: decryptedBankAcc ? sensitiveFieldService.maskBankAccount(decryptedBankAcc) : null,
+      bankAccountNumberEncrypted: finalBankAccEnc,
     };
 
     let updated: any;
@@ -342,18 +394,29 @@ export function createDormitoryRouter(
       updated = await billingRepo.update(dormitoryId, updateData);
     }
 
+    if (!decryptedPromptPay && updated.promptPayValueEncrypted) {
+      try {
+        decryptedPromptPay = sensitiveFieldService.decrypt(updated.promptPayValueEncrypted);
+      } catch {}
+    }
+    if (!decryptedBankAcc && updated.bankAccountNumberEncrypted) {
+      try {
+        decryptedBankAcc = sensitiveFieldService.decrypt(updated.bankAccountNumberEncrypted);
+      } catch {}
+    }
+
     const publicPaymentDTO = {
       id: updated.id,
       dormitoryId: updated.dormitoryId,
       cashAccepted: updated.cashAccepted ?? true,
       promptPayType: updated.promptPayType ?? null,
-      promptPayValue: promptPayRaw,
-      maskedPromptPayValue: updated.promptPayType ? sensitiveFieldService.maskPromptPay(updated.promptPayType, promptPayRaw || undefined) : null,
-      hasPromptPay: Boolean(updated.promptPayType && promptPayRaw),
+      maskedPromptPayValue: updated.promptPayType && decryptedPromptPay ? sensitiveFieldService.maskPromptPay(updated.promptPayType, decryptedPromptPay) : null,
+      hasPromptPay: Boolean(updated.promptPayType && (updated.promptPayValueEncrypted || decryptedPromptPay)),
       bankCode: updated.bankCode ?? null,
       bankAccountName: updated.bankAccountName ?? null,
-      bankAccountNumber: bankAccRaw,
-      maskedBankAccountNumber: bankAccRaw ? sensitiveFieldService.maskBankAccount(bankAccRaw) : null,
+      maskedBankAccountNumber: decryptedBankAcc ? sensitiveFieldService.maskBankAccount(decryptedBankAcc) : null,
+      hasBankAccount: Boolean(updated.bankCode && (updated.bankAccountNumberEncrypted || decryptedBankAcc)),
+      version: updated.version ?? 1,
       createdAt: updated.createdAt,
       updatedAt: updated.updatedAt,
     };

@@ -38,6 +38,8 @@ export const EXPECTED_TASK009_MIGRATION_SHA256 = {
   '20260807140000_task009_owner_origin_fix': '94065284b13c83f0b0506dc77ecc3dbcf10cdc34bc8d0bfb641744612a463333',
   '20260807160000_task009_checkpoint1b_wiring': '40c78079404bc5bc03ce8e93b116325bb4d461849c35e470e0cfb878bf08d0d5',
   '20260807180000_task009_runtime_role_rls_grants': '9b1ab9b83dff8927382f970bd9a48d4067c33fbbdda833968ff447e10e8085fa',
+  '20260809120000_add_payment_config_to_billing_settings': 'a69b71588eb8e5dc4d47bfd5017cb427ee722dff83a4e8a86bbbc550cc76b738',
+  '20260809130000_secure_payment_settings_encryption': '955d6c40d140f165cc5583763e04d238d1facab59d181f5e58e8a6a0327e6ca8',
 } as const;
 
 export const TASK009_OWNED_TABLES = [
@@ -539,14 +541,12 @@ describe('TASK-009 Checkpoint 1I — Hermetic Pre-Merge Migration & Bootstrap Pr
       const client = new PrismaClient({ datasources: { db: { url: dbUrl(BASE_UPGRADE_DB) } } });
       return client.$queryRaw<any[]>`SELECT migration_name, checksum FROM _prisma_migrations ORDER BY started_at`
         .then((rows) => {
-          expect(rows.length).toBeGreaterThanOrEqual(13);
+          expect(rows.length).toBe(15);
           const task009Rows = rows.slice(9);
-          expect(task009Rows.length).toBeGreaterThanOrEqual(4);
+          expect(task009Rows.length).toBe(6);
           for (const row of task009Rows) {
             const expectedSha256 = (EXPECTED_TASK009_MIGRATION_SHA256 as any)[row.migration_name];
-            if (expectedSha256) {
-              expect(row.checksum).toBe(expectedSha256);
-            }
+            expect(row.checksum).toBe(expectedSha256);
           }
         })
         .finally(() => client.$disconnect());
@@ -618,14 +618,14 @@ describe('TASK-009 Checkpoint 1I — Hermetic Pre-Merge Migration & Bootstrap Pr
       runCanonicalBootstrapScript(FRESH_DEPLOY_DB, 'password');
     });
 
-    it('10. Fresh migrate deploy applies all 13 migrations from zero', () => {
+    it('10. Fresh migrate deploy applies all 15 migrations from zero', () => {
       const output = runPrismaCommand(FRESH_DEPLOY_DB, 'migrate deploy');
-      expect(output).toContain('migrations');
+      expect(output).toContain('15 migrations');
     }, 60000);
 
     it('11. Second deploy returns zero pending migrations', () => {
       const output = runPrismaCommand(FRESH_DEPLOY_DB, 'migrate deploy');
-      expect(output).toBeDefined();
+      expect(output).toContain('No pending migrations');
     }, 60000);
 
     it('12. Migration status is up to date with zero warnings', () => {
@@ -696,14 +696,14 @@ describe('TASK-009 Checkpoint 1I — Hermetic Pre-Merge Migration & Bootstrap Pr
       }
     }, 60000);
 
-    it('14. All 13 migrations in fresh DB have valid finished_at and matching frozen checksum constants', async () => {
+    it('14. All 15 migrations in fresh DB have valid finished_at and matching frozen checksum constants', async () => {
       const client = new PrismaClient({ datasources: { db: { url: dbUrl(FRESH_DEPLOY_DB) } } });
       try {
         const rows = await client.$queryRaw<any[]>`
           SELECT migration_name, checksum, finished_at, rolled_back_at
           FROM _prisma_migrations ORDER BY started_at
         `;
-        expect(rows.length).toBeGreaterThanOrEqual(13);
+        expect(rows.length).toBe(15);
         for (const row of rows) {
           expect(row.finished_at).not.toBeNull();
           expect(row.rolled_back_at).toBeNull();

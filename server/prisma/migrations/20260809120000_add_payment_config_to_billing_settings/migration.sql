@@ -6,4 +6,3 @@ ALTER TABLE "dormitory_billing_settings" ADD COLUMN "prompt_pay_value_encrypted"
 ALTER TABLE "dormitory_billing_settings" ADD COLUMN "bank_code" VARCHAR(50);
 ALTER TABLE "dormitory_billing_settings" ADD COLUMN "bank_account_name" VARCHAR(255);
 ALTER TABLE "dormitory_billing_settings" ADD COLUMN "bank_account_number" VARCHAR(100);
-ALTER TABLE "dormitory_billing_settings" ADD COLUMN "bank_account_number_encrypted" TEXT;

@@ -55,26 +55,28 @@ export const OnboardingPaymentInputSchema = z.object({
         path: ['promptPayValue'],
         message: 'กรุณาระบุหมายเลขพร้อมเพย์เมื่อเลือกประเภทพร้อมเพย์',
       });
-    } else if (type === 'mobile_phone') {
-      if (rawVal.length !== 10 || !/^0\d{9}$/.test(rawVal)) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['promptPayValue'],
-          message: 'พร้อมเพย์ประเภทเบอร์โทรศัพท์ต้องเป็นตัวเลข 10 หลัก (เช่น 0812345678)',
-        });
-      }
-    } else if (type === 'national_id') {
-      if (rawVal.length !== 13 || !/^\d{13}$/.test(rawVal)) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['promptPayValue'],
-          message: 'พร้อมเพย์ประเภทบัตรประชาชนต้องเป็นตัวเลข 13 หลัก',
-        });
+    } else if (!data.promptPayValue?.includes('X')) {
+      if (type === 'mobile_phone') {
+        if (rawVal.length !== 10 || !/^0\d{9}$/.test(rawVal)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['promptPayValue'],
+            message: 'พร้อมเพย์ประเภทเบอร์โทรศัพท์ต้องเป็นตัวเลข 10 หลัก (เช่น 0812345678)',
+          });
+        }
+      } else if (type === 'national_id') {
+        if (rawVal.length !== 13 || !/^\d{13}$/.test(rawVal)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['promptPayValue'],
+            message: 'พร้อมเพย์ประเภทบัตรประชาชนต้องเป็นตัวเลข 13 หลัก',
+          });
+        }
       }
     }
   }
 
-  if (data.bankAccountNumber && data.bankAccountNumber.trim() !== '') {
+  if (data.bankAccountNumber && data.bankAccountNumber.trim() !== '' && !data.bankAccountNumber.includes('X')) {
     const cleanBankAcc = data.bankAccountNumber.replace(/\D/g, '');
     if (cleanBankAcc.length < 8 || cleanBankAcc.length > 15) {
       ctx.addIssue({

@@ -24,12 +24,12 @@ export interface Dormitory {
   address: string;
   phone: string;
   taxId?: string;
-  promptPayType: 'phone' | 'citizenId' | 'eWallet';
-  promptPayNumber: string;
-  promptPayName: string;
-  bankName?: string;
-  bankAccountNumber?: string;
-  bankAccountName?: string;
+  promptPayType?: 'phone' | 'citizenId' | 'eWallet'; // DEPRECATED: payment is backend-authoritative
+  promptPayNumber?: string; // DEPRECATED: payment is backend-authoritative
+  promptPayName?: string; // DEPRECATED: payment is backend-authoritative
+  bankName?: string; // DEPRECATED: payment is backend-authoritative
+  bankAccountNumber?: string; // DEPRECATED: payment is backend-authoritative
+  bankAccountName?: string; // DEPRECATED: payment is backend-authoritative
   billStyle: 'combined' | 'separated'; // E3: Combined bill or separate bills
   billingDay: number; // e.g., 25th of the month
   dueDay: number; // e.g., 5th of the next month

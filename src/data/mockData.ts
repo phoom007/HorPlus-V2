@@ -134,11 +134,6 @@ export const initialDormitory: Dormitory = {
   address: 'เลขที่ 88/1 ถนนสุเทพ ตำบลสุเทพ อำเภอเมืองเชียงใหม่ จังหวัดเชียงใหม่ 50200',
   phone: '081-234-5678',
   taxId: '1234567890123',
-  promptPayType: 'phone',
-  promptPayNumber: '0812345678',
-  promptPayName: 'นายสมศักดิ์ รักดี',
-  bankName: 'กรุงไทย (Krungthai)',
-  bankAccountNumber: '123-4-56789-0',
   billStyle: 'combined', // Combined bill
   billingDay: 25,
   dueDay: 5,
@@ -933,8 +928,6 @@ export const initialDormitoriesList: Dormitory[] = [
     name: 'ฮอร์บิสซิเนส เรสซิเดนซ์ (HorPlus Residence)',
     address: '12/4 ซอยนิมมานทร์เหมินท์ 9 ต.สุเทพ อ.เมือง จ.เชียงใหม่ 50200',
     phone: '053-987-654',
-    promptPayNumber: '0819876543',
-    promptPayName: 'นายสมศักดิ์ รักดี (เรสซิเดนซ์)',
     createdAt: '2026-02-01T00:00:00Z',
     updatedAt: '2026-07-20T00:00:00Z'
   }
@@ -1036,15 +1029,23 @@ export const getNotifications = (): Notification[] => getStored<Notification[]>(
 
 // Saving Functions
 export const saveDormitory = (dorm: Dormitory) => {
-  setStored('dormitory', dorm);
+  const sanitized = { ...dorm };
+  delete sanitized.promptPayNumber;
+  delete sanitized.promptPayName;
+  delete sanitized.bankName;
+  delete sanitized.bankAccountNumber;
+  delete sanitized.bankAccountName;
+  delete (sanitized as any).promptPayType;
+
+  setStored('dormitory', sanitized);
   const currentList = getDormitories();
-  const idx = currentList.findIndex(d => d.id === dorm.id);
+  const idx = currentList.findIndex(d => d.id === sanitized.id);
   let updatedList: Dormitory[];
   if (idx >= 0) {
     updatedList = [...currentList];
-    updatedList[idx] = dorm;
+    updatedList[idx] = sanitized;
   } else {
-    updatedList = [...currentList, dorm];
+    updatedList = [...currentList, sanitized];
   }
   saveDormitories(updatedList);
 };

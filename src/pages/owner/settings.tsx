@@ -36,6 +36,7 @@ import { getDataProvider } from '../../data/dataProvider';
 import { Task009ApiAdapter } from '../../data/adapters/task009';
 import { PropagationPreviewModal } from '../../components/PropagationPreviewModal';
 import { VersionConflictModal } from '../../components/VersionConflictModal';
+import { getPaymentSettings, updatePaymentSettings } from '../../services/payment-settings.service';
 
 import { Dormitory, CycleRates } from '../../types';
 
@@ -246,6 +247,7 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
   useEffect(() => {
     fetchDormitoryDefaults();
     fetchLineOaConfig();
+    fetchPaymentSettings();
   }, [dorm?.id]);
 
   const handleSaveLineOaConfig = async () => {
@@ -492,12 +494,28 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
   const [localName, setLocalName] = useState(dorm.name);
   const [localTaxId, setLocalTaxId] = useState(dorm.taxId || '');
   const [localPhone, setLocalPhone] = useState(dorm.phone || '');
-  const [localPromptPay, setLocalPromptPay] = useState(dorm.promptPayNumber || '');
-  const [localPromptPayName, setLocalPromptPayName] = useState(dorm.promptPayName || '');
+  const [localPromptPay, setLocalPromptPay] = useState('');
   const [localAddress, setLocalAddress] = useState(dorm.address || '');
-  const [localBankName, setLocalBankName] = useState(dorm.bankName || '');
-  const [localBankAccountNumber, setLocalBankAccountNumber] = useState(dorm.bankAccountNumber || '');
-  const [localBankAccountName, setLocalBankAccountName] = useState(dorm.bankAccountName || dorm.promptPayName || '');
+  const [localBankName, setLocalBankName] = useState('');
+  const [localBankAccountNumber, setLocalBankAccountNumber] = useState('');
+  const [localBankAccountName, setLocalBankAccountName] = useState('');
+  const [paymentSaveError, setPaymentSaveError] = useState<string | null>(null);
+
+  const fetchPaymentSettings = async () => {
+    const dormId = localStorage.getItem('selected_dormitory_id') || sessionStorage.getItem('active_dormitory_selected_for_session') || dorm?.id || '';
+    if (!dormId) return;
+    try {
+      const settings = await getPaymentSettings(dormId);
+      if (settings) {
+        setLocalPromptPay(settings.maskedPromptPayValue || '');
+        setLocalBankName(settings.bankCode || '');
+        setLocalBankAccountNumber(settings.maskedBankAccountNumber || '');
+        setLocalBankAccountName(settings.bankAccountName || '');
+      }
+    } catch (err: any) {
+      console.error('Failed to fetch payment settings:', err);
+    }
+  };
 
   // Synchronize with external selected cycle from parent header
   useEffect(() => {
@@ -514,14 +532,7 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
     setLocalAddress(dorm.address || '');
     setLocalTaxId(formatTaxId(dorm.taxId || ''));
     setLocalPhone(formatPhone(dorm.phone || ''));
-    setLocalPromptPay(formatPromptPay(dorm.promptPayNumber || ''));
-    setLocalPromptPayName(dorm.promptPayName || '');
-    setLocalBankName(dorm.bankName || '');
-    setLocalBankAccountNumber(formatBankAccount(dorm.bankAccountNumber || ''));
-    setLocalBankAccountName(dorm.bankAccountName || dorm.promptPayName || '');
-  }, [dorm.id, dorm.name, dorm.address, dorm.taxId, dorm.phone, dorm.promptPayNumber, dorm.promptPayName, dorm.bankName, dorm.bankAccountNumber, dorm.bankAccountName]);
-
-
+  }, [dorm.id, dorm.name, dorm.address, dorm.taxId, dorm.phone]);
 
   useEffect(() => {
     setLocalWaterUnitRate(currentRates.waterUnitRate);
@@ -532,7 +543,7 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
     setLocalLateFee(currentRates.lateFeeDaily ?? dorm.lateFeeDaily ?? 100);
   }, [selectedCycle, currentRates.waterUnitRate, currentRates.electricUnitRate, currentRates.commonFee, currentRates.internetFee, currentRates.parkingFee, currentRates.lateFeeDaily, dorm.lateFeeDaily]);
 
-  // Performs immediate save
+  // Performs immediate save for profile/rate settings
   const triggerSaveNow = (updatedDorm: Dormitory) => {
     setSaveStatus('saving');
     saveDormitory(updatedDorm);
@@ -556,12 +567,11 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
     };
   }, []);
 
-  // Blur handlers to trigger save (Only triggers if values actually changed)
+  // Blur handlers to trigger save for profile fields
   const handleGlobalFieldBlur = (key: keyof Dormitory, value: any) => {
     const rawVal = typeof value === 'string' ? value.trim() : value;
     const dormRawVal = typeof dorm[key] === 'string' ? (dorm[key] as string).trim() : dorm[key];
 
-    // Check if truly changed
     if (dormRawVal === rawVal) {
       setSaveStatus('idle');
       return;
@@ -574,50 +584,43 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
     };
     setDorm(updated);
     triggerSaveNow(updated);
-
-    // If payment fields changed, trigger backend PATCH payment-settings (PS-007)
-    if (['promptPayNumber', 'promptPayName', 'bankName', 'bankAccountNumber', 'bankAccountName'].includes(key as string)) {
-      handlePaymentSettingsBlur();
-    }
   };
 
-  const handlePaymentSettingsBlur = async (updatedFields?: Partial<{
+  const handlePaymentSettingsBlur = async (overrides?: Partial<{
     bankCode: string;
     bankAccountName: string;
     bankAccountNumber: string;
-    promptPayType: string;
     promptPayValue: string;
   }>) => {
-    const promptPayDigits = (updatedFields?.promptPayValue ?? localPromptPay).replace(/\D/g, '');
-    const detectedType = promptPayDigits.length === 13 ? 'national_id' : (promptPayDigits.length === 10 ? 'mobile_phone' : null);
+    const dormId = localStorage.getItem('selected_dormitory_id') || sessionStorage.getItem('active_dormitory_selected_for_session') || dorm?.id || '';
+    if (!dormId) return;
+
+    const rawPromptPay = overrides?.promptPayValue !== undefined ? overrides.promptPayValue : localPromptPay;
+    const promptPayDigits = rawPromptPay.replace(/\D/g, '');
+    const detectedType: 'mobile_phone' | 'national_id' | null = promptPayDigits.length === 13 ? 'national_id' : (promptPayDigits.length === 10 ? 'mobile_phone' : (rawPromptPay.includes('X') ? 'mobile_phone' : null));
 
     const payload = {
       cashAccepted: true,
       promptPayType: detectedType,
-      promptPayValue: promptPayDigits || null,
-      bankCode: updatedFields?.bankCode ?? localBankName ?? null,
-      bankAccountName: updatedFields?.bankAccountName ?? localBankAccountName ?? null,
-      bankAccountNumber: updatedFields?.bankAccountNumber ?? localBankAccountNumber ?? null,
+      promptPayValue: rawPromptPay || null,
+      bankCode: overrides?.bankCode !== undefined ? overrides.bankCode : (localBankName || null),
+      bankAccountName: overrides?.bankAccountName !== undefined ? overrides.bankAccountName : (localBankAccountName || null),
+      bankAccountNumber: overrides?.bankAccountNumber !== undefined ? overrides.bankAccountNumber : (localBankAccountNumber || null),
     };
 
+    setSaveStatus('saving');
+    setPaymentSaveError(null);
     try {
-      setSaveStatus('saving');
-      const activeDormId = dorm?.id;
-      if (activeDormId) {
-        const csrfToken = document.cookie.split('; ').find((r) => r.startsWith('csrf_token='))?.split('=')[1] || '';
-        await fetch(`/api/v1/dormitories/${activeDormId}/payment-settings`, {
-          method: 'PATCH',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-dormitory-id': activeDormId,
-            'x-csrf-token': csrfToken,
-          },
-          body: JSON.stringify(payload),
-        });
-      }
+      const updated = await updatePaymentSettings(dormId, payload);
+      setLocalPromptPay(updated.maskedPromptPayValue || '');
+      setLocalBankName(updated.bankCode || '');
+      setLocalBankAccountNumber(updated.maskedBankAccountNumber || '');
+      setLocalBankAccountName(updated.bankAccountName || '');
       setSaveStatus('saved');
-    } catch (err) {
-      console.error('Failed to save payment settings:', err);
+    } catch (err: any) {
+      console.error('Payment settings save failed:', err);
+      setSaveStatus('idle');
+      setPaymentSaveError(err?.message || 'ไม่สามารถบันทึกข้อมูลการชำระเงินได้');
     }
   };
 
@@ -765,34 +768,15 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                   <input
                     type="text"
                     required
+                    data-testid="promptpay-input"
                     value={localPromptPay}
                     onChange={(e) => {
                       setLocalPromptPay(formatPromptPay(e.target.value));
                       setSaveStatus('typing');
                     }}
-                    onBlur={(e) => handleGlobalFieldBlur('promptPayNumber', e.target.value)}
+                    onBlur={() => handlePaymentSettingsBlur({ promptPayValue: localPromptPay })}
                     placeholder="เลขบัตรปชช. / เบอร์โทร"
                     className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-bold text-indigo-700 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs"
-                  />
-                </div>
-
-                {/* ชื่อบัญชีพร้อมเพย์ */}
-                <div className="space-y-1">
-                  <label className="block font-semibold text-slate-700">ชื่อบัญชีพร้อมเพย์ *</label>
-                  <input
-                    type="text"
-                    required
-                    value={localPromptPayName}
-                    placeholder="ชื่อ-นามสกุล ผู้รับเงินพร้อมเพย์"
-                    onChange={(e) => {
-                      setLocalPromptPayName(e.target.value);
-                      if (!localBankAccountName) {
-                        setLocalBankAccountName(e.target.value);
-                      }
-                      setSaveStatus('typing');
-                    }}
-                    onBlur={(e) => handleGlobalFieldBlur('promptPayName', e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-bold focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs"
                   />
                 </div>
 
@@ -801,14 +785,11 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                   <label className="block font-semibold text-slate-700">ธนาคาร *</label>
                   <select
                     value={localBankName}
+                    data-testid="bank-code-select"
                     onChange={(e) => {
                       const newBank = e.target.value;
                       setLocalBankName(newBank);
-                      handleGlobalFieldBlur('bankName', newBank);
-                      if (!newBank) {
-                        setLocalBankAccountNumber('');
-                        handleGlobalFieldBlur('bankAccountNumber', '');
-                      }
+                      handlePaymentSettingsBlur({ bankCode: newBank });
                     }}
                     className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-bold focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs"
                   >
@@ -844,6 +825,7 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                   <input
                     type="text"
                     required
+                    data-testid="bank-account-number-input"
                     value={localBankAccountNumber}
                     disabled={!localBankName}
                     placeholder={localBankName ? "XXX-X-XXXXX-X" : "กรุณาเลือกธนาคารก่อน"}
@@ -851,7 +833,7 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                       setLocalBankAccountNumber(formatBankAccount(e.target.value));
                       setSaveStatus('typing');
                     }}
-                    onBlur={(e) => handleGlobalFieldBlur('bankAccountNumber', e.target.value)}
+                    onBlur={() => handlePaymentSettingsBlur({ bankAccountNumber: localBankAccountNumber })}
                     className={`w-full px-3 py-2 border border-gray-200 rounded-xl text-slate-800 font-bold focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs ${
                       !localBankName ? 'opacity-50 bg-slate-50 cursor-not-allowed' : 'bg-white'
                     }`}
@@ -864,16 +846,23 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                   <input
                     type="text"
                     required
+                    data-testid="bank-account-name-input"
                     value={localBankAccountName}
                     placeholder="ชื่อบัญชีธนาคารผู้รับเงิน"
                     onChange={(e) => {
                       setLocalBankAccountName(e.target.value);
                       setSaveStatus('typing');
                     }}
-                    onBlur={(e) => handleGlobalFieldBlur('bankAccountName', e.target.value)}
+                    onBlur={() => handlePaymentSettingsBlur({ bankAccountName: localBankAccountName })}
                     className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-bold focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs"
                   />
                 </div>
+
+                {paymentSaveError && (
+                  <div data-testid="payment-save-error" className="p-2 bg-rose-50 border border-rose-200 rounded-xl text-rose-700 text-xs font-bold">
+                    {paymentSaveError}
+                  </div>
+                )}
               </div>
 
               <div className="space-y-1 text-xs">
