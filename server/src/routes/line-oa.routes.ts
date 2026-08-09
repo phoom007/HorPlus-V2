@@ -128,14 +128,14 @@ export function createLineOaRoutes(
   // ==========================================================================
 
   protectedRouter.get(
-    '/dormitories/:dormId/line-oa/config',
+    ['/dormitories/:dormId/line-oa', '/dormitories/:dormId/line-oa/config'],
     ...authGuard('line_oa:manage'),
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         const dormId = getDormitoryId(req);
         const baseUrl = `${req.protocol}://${req.get('host')}`;
         const config = await lineOaService.getDormitoryLineConfig(dormId, baseUrl);
-        return res.status(200).json({ success: true, data: config });
+        return res.status(200).json({ success: true, data: config, config });
       } catch (err) {
         next(err);
       }
@@ -143,13 +143,14 @@ export function createLineOaRoutes(
   );
 
   protectedRouter.put(
-    '/dormitories/:dormId/line-oa/config',
+    ['/dormitories/:dormId/line-oa', '/dormitories/:dormId/line-oa/config'],
     ...mutationGuard('line_oa:manage'),
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         const dormId = getDormitoryId(req);
-        const updated = await lineOaService.updateDormitoryLineConfig(dormId, req.body);
-        return res.status(200).json({ success: true, data: updated });
+        const baseUrl = `${req.protocol}://${req.get('host')}`;
+        const updated = await lineOaService.updateDormitoryLineConfig(dormId, req.body, baseUrl);
+        return res.status(200).json({ success: true, data: updated, config: updated });
       } catch (err) {
         next(err);
       }
@@ -157,13 +158,31 @@ export function createLineOaRoutes(
   );
 
   protectedRouter.post(
-    '/dormitories/:dormId/line-oa/rotate-webhook',
+    ['/dormitories/:dormId/line-oa/webhook/endpoint', '/dormitories/:dormId/line-oa/rotate-webhook'],
     ...mutationGuard('line_oa:manage'),
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         const dormId = getDormitoryId(req);
-        const updated = await lineOaService.rotateWebhookKey(dormId);
-        return res.status(200).json({ success: true, data: updated });
+        const baseUrl = `${req.protocol}://${req.get('host')}`;
+        const updated = req.path.includes('rotate')
+          ? await lineOaService.rotateWebhookKey(dormId, baseUrl)
+          : await lineOaService.setWebhookEndpoint(dormId, baseUrl);
+        return res.status(200).json({ success: true, data: updated, config: updated });
+      } catch (err) {
+        next(err);
+      }
+    }
+  );
+
+  protectedRouter.post(
+    '/dormitories/:dormId/line-oa/webhook/test',
+    ...mutationGuard('line_oa:manage'),
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const dormId = getDormitoryId(req);
+        const baseUrl = `${req.protocol}://${req.get('host')}`;
+        const updated = await lineOaService.testWebhookEndpoint(dormId, baseUrl);
+        return res.status(200).json({ success: true, data: updated, config: updated });
       } catch (err) {
         next(err);
       }
@@ -177,7 +196,7 @@ export function createLineOaRoutes(
       try {
         const dormId = getDormitoryId(req);
         const disconnected = await lineOaService.disconnectLineConfig(dormId);
-        return res.status(200).json({ success: true, data: disconnected });
+        return res.status(200).json({ success: true, data: disconnected, config: disconnected });
       } catch (err) {
         next(err);
       }

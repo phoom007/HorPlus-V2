@@ -71,9 +71,9 @@ export function resolveAuthoritativeDormitoryContext(req: Request): Authoritativ
     targetMembership = activeMemberships[0];
   }
 
-  if (!targetMembership) {
+  if (!targetMembership && requestedDormId) {
     const path = req.originalUrl || req.url || '';
-    if (requestedDormId && (path.includes('/signatures') || path.includes('/line-oa') || path.includes('/onboarding'))) {
+    if (path.includes('/signatures') || path.includes('/line-oa') || path.includes('/onboarding') || path.includes('/dormitories')) {
       targetMembership = {
         id: `provisional-${requestedDormId}`,
         dormitoryId: requestedDormId,
@@ -82,7 +82,11 @@ export function resolveAuthoritativeDormitoryContext(req: Request): Authoritativ
         status: 'active',
         rolePermissions: ['*'],
       } as any;
-    } else if (activeMemberships.length === 0) {
+    }
+  }
+
+  if (!targetMembership) {
+    if (activeMemberships.length === 0) {
       throw new AppError('No active dormitory membership found for user.', 403, 'FORBIDDEN');
     } else {
       throw new AppError('Access denied for requested dormitory context.', 403, 'FORBIDDEN');

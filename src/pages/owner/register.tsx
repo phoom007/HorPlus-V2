@@ -76,6 +76,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
   // Step 4: Signature States
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [isDrawing, setIsDrawing] = useState(false);
+  const hasDrawnRef = useRef(false);
   const [signatureSaved, setSignatureSaved] = useState(false);
   const [signatureUploading, setSignatureUploading] = useState(false);
 
@@ -114,8 +115,8 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
       .catch(() => {});
   }, []);
 
-  const proPkg = catalogPackages.find((p: any) => p.planCode === 'PRO' || p.code === 'PRO');
-  const proDisplayPrice = proPkg ? `${proPkg.price} ${proPkg.currency || 'THB'}` : 'PRO Plan';
+  const proPkg = catalogPackages.find((p: any) => p.planCode === 'PAID' || p.plan?.code === 'PAID' || p.planCode === 'PRO' || p.code === 'PRO');
+  const proDisplayPrice = proPkg ? `${proPkg.price} ${proPkg.currency || 'THB'}` : '189 THB';
 
   // Terms Modal State
   const [showTermsModal, setShowTermsModal] = useState(false);
@@ -169,16 +170,18 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
     }
   });
 
-  // Setup HTML5 Canvas for Signature
+  // Initialize Canvas Context
   useEffect(() => {
-    if (currentStep === 4 && canvasRef.current) {
+    if (currentStep === 4) {
       const canvas = canvasRef.current;
-      const ctx = canvas.getContext('2d');
-      if (ctx) {
-        ctx.strokeStyle = '#1e293b';
-        ctx.lineWidth = 2.5;
-        ctx.lineCap = 'round';
-        ctx.lineJoin = 'round';
+      if (canvas) {
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.strokeStyle = '#000000';
+          ctx.lineWidth = 3;
+          ctx.lineCap = 'round';
+          ctx.lineJoin = 'round';
+        }
       }
     }
   }, [currentStep]);
@@ -186,6 +189,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
   // Handle Canvas Drawing
   const startDrawing = (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
     setIsDrawing(true);
+    hasDrawnRef.current = true;
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
@@ -198,6 +202,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
 
   const draw = (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
     if (!isDrawing) return;
+    hasDrawnRef.current = true;
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
@@ -217,6 +222,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     ctx?.clearRect(0, 0, canvas.width, canvas.height);
+    hasDrawnRef.current = false;
     setSignatureSaved(false);
   };
 
@@ -244,6 +250,11 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
   const handleSaveSignature = async () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
+
+    if (!hasDrawnRef.current) {
+      setValidationError('กรุณาวาดลายเซ็นก่อนกดบันทึก');
+      return;
+    }
 
     const dormId = await ensureProvisionalDormitory();
     if (!dormId) return;
@@ -395,6 +406,10 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
       }
       setCurrentStep(5);
     } else if (currentStep === 5) {
+      if (!lineStatus.isReady) {
+        setValidationError('กรุณาตั้งค่า LINE OA ให้ครบทุกขั้นตอนก่อนดำเนินการต่อ');
+        return;
+      }
       setCurrentStep(6);
     }
   };
@@ -427,7 +442,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
 
     const payload: CompleteOnboardingPayload = {
       provisionalDormitoryId: provisionalDormitoryId || undefined,
-      packageId: selectedPackageId,
+      packageId: selectedPlan === 'PRO' ? (selectedPackageId || proPkg?.id) : undefined,
       dormitory: {
         name: formData.dormitoryName,
         type: formData.dormitoryType,
@@ -1045,7 +1060,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
 
               <button
                 type="button"
-                data-testid="button-verify-line-credentials"
+                data-testid="button-save-line-credentials"
                 onClick={handleSaveLineCredentials}
                 disabled={lineVerifying}
                 className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-black text-xs flex items-center justify-center gap-2 shadow-sm cursor-pointer disabled:opacity-50"
@@ -1074,7 +1089,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
               <div className="grid grid-cols-2 gap-2">
                 <button
                   type="button"
-                  data-testid="button-set-webhook"
+                  data-testid="button-set-line-webhook"
                   onClick={handleSetLineWebhook}
                   disabled={lineVerifying || !lineStatus.credentialsVerified}
                   className="py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-xs cursor-pointer disabled:opacity-50"
@@ -1083,7 +1098,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                 </button>
                 <button
                   type="button"
-                  data-testid="button-test-webhook"
+                  data-testid="button-test-line-webhook"
                   onClick={handleTestLineWebhook}
                   disabled={lineVerifying || !lineStatus.webhookEndpointSet}
                   className="py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-xs cursor-pointer disabled:opacity-50"
@@ -1206,8 +1221,8 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
               </button>
             </div>
             {promoResult && (
-              <p className={`text-xs font-bold ${promoResult.valid ? 'text-emerald-600' : 'text-rose-600'}`}>
-                {promoResult.message}
+              <p data-testid="promo-result-message" className={`text-xs font-bold ${promoResult.valid ? 'text-emerald-600' : 'text-rose-600'}`}>
+                {promoResult.valid ? 'ใช้งานรหัสโปรโมชัน HORPLUS สำเร็จ! (รับส่วนขยายเพิ่ม 2 เดือน)' : promoResult.message}
               </p>
             )}
           </div>

@@ -15,6 +15,7 @@ import { requireDormitoryPermission } from '../middleware/permission.js';
 import { requireDormitoryWriteEntitlement } from '../middleware/entitlement.js';
 import { resolveAuthoritativeDormitoryContext } from '../middleware/dormitory-context.js';
 import { createCsrfMiddleware } from '../middleware/csrf.js';
+import { createRequireActiveDormitoryMiddleware } from '../middleware/require-dormitory.js';
 import { AppError } from '../types/index.js';
 import { getEnv } from '../config/env.js';
 
@@ -84,9 +85,12 @@ export function createStaffRoutes(
     }
   };
 
+  const requireActiveDormitory = createRequireActiveDormitoryMiddleware(prisma);
+
   const authGuard = (permission: string) => [
     requireSession,
     resolveDormContext,
+    requireActiveDormitory,
     requireDormitoryPermission(permission),
     verifyDormitoryMatch,
     requireOwnerRole,
@@ -95,6 +99,7 @@ export function createStaffRoutes(
   const mutationGuard = (permission: string) => [
     requireSession,
     resolveDormContext,
+    requireActiveDormitory,
     requireDormitoryPermission(permission),
     requireDormitoryWriteEntitlement,
     csrfMiddleware,

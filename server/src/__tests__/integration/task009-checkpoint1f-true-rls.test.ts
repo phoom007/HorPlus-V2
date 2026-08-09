@@ -49,12 +49,12 @@ describe('TASK-009 Checkpoint 1F — True RLS & API Runtime Role Compatibility S
     ownerUserId = ownerUser.id;
 
     const dormA = await adminPrisma.dormitory.create({
-      data: { name: 'True RLS Dorm A 1F', createdByUserId: ownerUserId, timezone: 'Asia/Bangkok' }
+      data: { name: 'True RLS Dorm A 1F', status: 'active', createdByUserId: ownerUserId, timezone: 'Asia/Bangkok' }
     });
     dormAId = dormA.id;
 
     const dormB = await adminPrisma.dormitory.create({
-      data: { name: 'True RLS Dorm B 1F', createdByUserId: ownerUserId, timezone: 'Asia/Bangkok' }
+      data: { name: 'True RLS Dorm B 1F', status: 'active', createdByUserId: ownerUserId, timezone: 'Asia/Bangkok' }
     });
     dormBId = dormB.id;
 

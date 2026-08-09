@@ -6,7 +6,7 @@ describe('Error Handling and Standard Error Envelope', () => {
   const app = createApp();
 
   it('returns 404 with ROUTE_NOT_FOUND error envelope for unknown routes', async () => {
-    const response = await request(app).get('/api/v1/non-existent-endpoint');
+    const response = await request(app).get('/api/v1/auth/non-existent-endpoint');
 
     expect(response.status).toBe(404);
     expect(response.body).toHaveProperty('error');
@@ -23,7 +23,7 @@ describe('Error Handling and Standard Error Envelope', () => {
   it('preserves incoming X-Request-Id header in error response', async () => {
     const customRequestId = 'test-client-req-id-12345';
     const response = await request(app)
-      .get('/api/v1/unknown-route')
+      .get('/api/v1/auth/unknown-route')
       .set('X-Request-Id', customRequestId);
 
     expect(response.status).toBe(404);

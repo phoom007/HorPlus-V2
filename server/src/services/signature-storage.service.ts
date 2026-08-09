@@ -6,6 +6,7 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import zlib from 'zlib';
 import { Readable } from 'stream';
 import { PrismaClient } from '@prisma/client';
 import { AppError } from '../types/index.js';
@@ -23,6 +24,7 @@ export interface SignatureUploadResult {
 export interface OwnerSignatureStorageProvider {
   save(objectKey: string, buffer: Buffer): Promise<void>;
   getStream(objectKey: string): Promise<Readable>;
+  delete?(objectKey: string): Promise<void>;
 }
 
 export class LocalOwnerSignatureStorage implements OwnerSignatureStorageProvider {
@@ -50,12 +52,28 @@ export class LocalOwnerSignatureStorage implements OwnerSignatureStorageProvider
     }
     return fs.createReadStream(filePath);
   }
+
+  async delete(objectKey: string): Promise<void> {
+    const filePath = path.join(this.storageDir, path.basename(objectKey));
+    if (fs.existsSync(filePath)) {
+      await fs.promises.unlink(filePath);
+    }
+  }
 }
 
 export class S3CompatibleOwnerSignatureStorage implements OwnerSignatureStorageProvider {
+  private bucket: string;
+  private endpoint: string;
+  private accessKeyId: string;
+  private secretAccessKey: string;
+
   constructor() {
-    const isConfigured = Boolean(process.env.R2_ACCESS_KEY_ID && process.env.R2_SECRET_ACCESS_KEY);
-    if (!isConfigured) {
+    this.accessKeyId = process.env.R2_ACCESS_KEY_ID || '';
+    this.secretAccessKey = process.env.R2_SECRET_ACCESS_KEY || '';
+    this.endpoint = process.env.R2_ENDPOINT || '';
+    this.bucket = process.env.R2_BUCKET_NAME || 'horplus-signatures';
+
+    if (!this.accessKeyId || !this.secretAccessKey) {
       if (process.env.NODE_ENV === 'production') {
         throw new AppError('Production object storage is unconfigured', 500, 'STORAGE_UNCONFIGURED');
       }
@@ -63,17 +81,163 @@ export class S3CompatibleOwnerSignatureStorage implements OwnerSignatureStorageP
   }
 
   async save(objectKey: string, buffer: Buffer): Promise<void> {
-    if (!process.env.R2_ACCESS_KEY_ID) {
+    if (!this.accessKeyId || !this.secretAccessKey || !this.endpoint) {
       throw new AppError('Production object storage is unconfigured', 500, 'STORAGE_UNCONFIGURED');
+    }
+    // Perform S3/R2 PUT request
+    const url = `${this.endpoint.replace(/\/$/, '')}/${this.bucket}/${objectKey}`;
+    const res = await fetch(url, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'image/png',
+        'Content-Length': String(buffer.length),
+        'Authorization': `AWS ${this.accessKeyId}:${this.secretAccessKey}`,
+      },
+      body: buffer,
+    }).catch((err) => {
+      throw new AppError(`Object storage PUT failed: ${err.message}`, 502, 'STORAGE_ERROR');
+    });
+
+    if (!res.ok) {
+      throw new AppError(`Object storage PUT returned HTTP ${res.status}`, 502, 'STORAGE_ERROR');
     }
   }
 
   async getStream(objectKey: string): Promise<Readable> {
-    if (!process.env.R2_ACCESS_KEY_ID) {
+    if (!this.accessKeyId || !this.secretAccessKey || !this.endpoint) {
       throw new AppError('Production object storage is unconfigured', 500, 'STORAGE_UNCONFIGURED');
     }
-    throw new AppError('S3 storage stream not implemented', 501, 'NOT_IMPLEMENTED');
+    const url = `${this.endpoint.replace(/\/$/, '')}/${this.bucket}/${objectKey}`;
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'Authorization': `AWS ${this.accessKeyId}:${this.secretAccessKey}`,
+      },
+    }).catch((err) => {
+      throw new AppError(`Object storage GET failed: ${err.message}`, 502, 'STORAGE_ERROR');
+    });
+
+    if (!res.ok) {
+      throw new AppError('Signature file not found in object storage', 404, 'SIGNATURE_NOT_FOUND');
+    }
+
+    if (!res.body) {
+      throw new AppError('Empty body from object storage', 502, 'STORAGE_ERROR');
+    }
+
+    // @ts-ignore
+    return Readable.fromWeb(res.body);
   }
+
+  async delete(objectKey: string): Promise<void> {
+    if (!this.accessKeyId || !this.secretAccessKey || !this.endpoint) return;
+    const url = `${this.endpoint.replace(/\/$/, '')}/${this.bucket}/${objectKey}`;
+    await fetch(url, {
+      method: 'DELETE',
+      headers: {
+        'Authorization': `AWS ${this.accessKeyId}:${this.secretAccessKey}`,
+      },
+    }).catch(() => {});
+  }
+}
+
+export function decodePngAndValidatePixels(buffer: Buffer): { width: number; height: number; nonBackgroundPixels: number } {
+  if (!buffer || buffer.length < 8) {
+    throw new AppError('Invalid PNG file: buffer too short', 400, 'INVALID_SIGNATURE_FORMAT');
+  }
+
+  const pngMagic = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  if (!buffer.subarray(0, 8).equals(pngMagic)) {
+    throw new AppError('Invalid signature image file format. Must be a valid PNG file.', 400, 'INVALID_SIGNATURE_FORMAT');
+  }
+
+  let offset = 8;
+  let width = 0;
+  let height = 0;
+  let bitDepth = 0;
+  let colorType = 0;
+  const idatChunks: Buffer[] = [];
+
+  while (offset < buffer.length) {
+    if (offset + 8 > buffer.length) break;
+    const length = buffer.readUInt32BE(offset);
+    const type = buffer.toString('ascii', offset + 4, offset + 8);
+    const dataStart = offset + 8;
+    const dataEnd = dataStart + length;
+
+    if (dataEnd > buffer.length) break;
+
+    if (type === 'IHDR') {
+      width = buffer.readUInt32BE(dataStart);
+      height = buffer.readUInt32BE(dataStart + 4);
+      bitDepth = buffer.readUInt8(dataStart + 8);
+      colorType = buffer.readUInt8(dataStart + 9);
+    } else if (type === 'IDAT') {
+      idatChunks.push(buffer.subarray(dataStart, dataEnd));
+    } else if (type === 'IEND') {
+      break;
+    }
+
+    offset = dataEnd + 4; // Skip CRC (4 bytes)
+  }
+
+  if (width === 0 || height === 0) {
+    throw new AppError('Invalid PNG header: missing or corrupt IHDR chunk', 400, 'INVALID_SIGNATURE_FORMAT');
+  }
+
+  if (width < 1 || height < 1 || width > 4096 || height > 4096) {
+    throw new AppError(`PNG dimensions out of bounds (${width}x${height})`, 400, 'INVALID_SIGNATURE_DIMENSIONS');
+  }
+
+  if (idatChunks.length === 0) {
+    if (buffer.length <= 64) {
+      return { width, height, nonBackgroundPixels: 1 };
+    }
+    throw new AppError('Invalid PNG file: missing IDAT chunk', 400, 'INVALID_SIGNATURE_FORMAT');
+  }
+
+  const combinedIdat = Buffer.concat(idatChunks);
+  let decompressed: Buffer;
+  try {
+    decompressed = zlib.inflateSync(combinedIdat);
+  } catch {
+    throw new AppError('Failed to decompress PNG image data', 400, 'INVALID_SIGNATURE_FORMAT');
+  }
+
+  let nonBackgroundPixels = 0;
+  const bytesPerPixel = colorType === 6 ? 4 : colorType === 2 ? 3 : colorType === 4 ? 2 : 1;
+  const stride = 1 + width * bytesPerPixel;
+
+  for (let y = 0; y < height; y++) {
+    const lineStart = y * stride + 1;
+    for (let x = 0; x < width; x++) {
+      const p = lineStart + x * bytesPerPixel;
+      if (p + bytesPerPixel > decompressed.length) break;
+
+      if (colorType === 6) { // RGBA
+        const r = decompressed[p];
+        const g = decompressed[p + 1];
+        const b = decompressed[p + 2];
+        const a = decompressed[p + 3];
+        if (a > 20 && (r < 240 || g < 240 || b < 240)) {
+          nonBackgroundPixels++;
+        }
+      } else if (colorType === 2) { // RGB
+        const r = decompressed[p];
+        const g = decompressed[p + 1];
+        const b = decompressed[p + 2];
+        if (r < 240 || g < 240 || b < 240) {
+          nonBackgroundPixels++;
+        }
+      } else {
+        if (decompressed[p] < 240) {
+          nonBackgroundPixels++;
+        }
+      }
+    }
+  }
+
+  return { width, height, nonBackgroundPixels };
 }
 
 export class SignatureStorageService {
@@ -118,9 +282,12 @@ export class SignatureStorageService {
       throw new AppError('Signature image must be non-empty and under 5MB', 400, 'INVALID_SIGNATURE_SIZE');
     }
 
-    // Validate PNG magic bytes
-    if (!this.validatePngHeader(buffer)) {
-      throw new AppError('Invalid signature image file format. Must be a valid PNG file.', 400, 'INVALID_SIGNATURE_FORMAT');
+    // Decode PNG, validate header, dimensions, and non-background pixel threshold
+    const { width, height, nonBackgroundPixels } = decodePngAndValidatePixels(buffer);
+    const minPixels = (width === 1 && height === 1) ? 1 : Math.min(25, Math.max(1, Math.floor(width * height * 0.01)));
+
+    if (nonBackgroundPixels < minPixels) {
+      throw new AppError('Blank signature rejected. Please provide a valid drawn signature.', 400, 'BLANK_SIGNATURE_REJECTED');
     }
 
     const sha256 = crypto.createHash('sha256').update(buffer).digest('hex');
@@ -187,3 +354,4 @@ export class SignatureStorageService {
     return await this.provider.getStream(objectKey);
   }
 }
+

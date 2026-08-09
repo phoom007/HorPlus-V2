@@ -140,12 +140,10 @@ export function createRequireActiveDormitoryMiddleware(prisma: any) {
         select: { status: true },
       });
 
-      if (dorm && dorm.status === 'setup_pending') {
-        const path = req.originalUrl || req.url || '';
-        if (path.includes('/line-oa') || path.includes('/onboarding') || path.includes('/signatures') || path.includes('/staff') || path.includes('/line-friends')) {
-          return next();
-        }
+      const path = req.originalUrl || req.url || '';
+      const isOnboardingSetupPath = path.includes('/signatures') || path.includes('/line-oa') || path.includes('/onboarding');
 
+      if (dorm && dorm.status === 'setup_pending' && !isOnboardingSetupPath) {
         return res.status(403).json({
           error: {
             code: 'DORMITORY_SETUP_PENDING',
@@ -156,8 +154,19 @@ export function createRequireActiveDormitoryMiddleware(prisma: any) {
           },
         });
       }
-    } catch {}
 
-    next();
+      next();
+    } catch (err: any) {
+      return res.status(500).json({
+        error: {
+          code: 'DORMITORY_STATUS_CHECK_FAILED',
+          message: 'เกิดข้อผิดพลาดในการตรวจสอบสถานะหอพัก',
+          fieldErrors: null,
+          requestId,
+          timestamp: new Date().toISOString(),
+        },
+      });
+    }
   };
 }
+

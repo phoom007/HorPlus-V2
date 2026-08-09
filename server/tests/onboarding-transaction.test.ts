@@ -72,6 +72,10 @@ describe('Wave 1F - Owner Onboarding Transaction & Atomicity Rollback Proof', ()
       0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
     ]);
     await sigService.saveSignature({ dormitoryId: provDormId, userId, buffer: validPngBuffer });
+    await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${provDormId}, true)`;
+      await tx.dormitoryLineConfig.update({ where: { dormitoryId: provDormId }, data: { accessTokenVerifiedAt: new Date(), webhookEndpointSetAt: new Date(), webhookTestSucceededAt: new Date(), webhookActive: true, isConnected: true } });
+    });
 
     const result = await service.completeOwnerOnboarding({
       userId,
@@ -188,6 +192,10 @@ describe('Wave 1F - Owner Onboarding Transaction & Atomicity Rollback Proof', ()
       0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
     ]);
     await sigService.saveSignature({ dormitoryId: provDormIdRollback, userId, buffer: validPngBuffer });
+    await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${provDormIdRollback}, true)`;
+      await tx.dormitoryLineConfig.update({ where: { dormitoryId: provDormIdRollback }, data: { accessTokenVerifiedAt: new Date(), webhookEndpointSetAt: new Date(), webhookTestSucceededAt: new Date(), webhookActive: true, isConnected: true } });
+    });
 
     // Capture counts AFTER prepare (provisional dorm + membership exist)
     const initialCounts = await getEntityCountsForUser(userId);

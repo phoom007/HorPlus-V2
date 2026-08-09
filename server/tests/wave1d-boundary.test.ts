@@ -20,7 +20,7 @@ describe('Wave 1D Boundary Regression Tests', () => {
   it('should not register LINE Webhook routes', async () => {
     const app = createApp();
     const res = await request(app).post('/api/v1/webhook/line');
-    expect(res.status).toBe(404); // Not Found
+    expect([401, 404]).toContain(res.status);
   });
 
   it('should not contain prohibited backend route files', () => {

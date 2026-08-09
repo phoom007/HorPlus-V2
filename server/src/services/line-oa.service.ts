@@ -74,7 +74,7 @@ export class LineOaService {
         }
       }
 
-      const credentialsVerified = !!(config.channelId && config.channelSecretEncrypted && config.accessTokenVerifiedAt);
+      const credentialsVerified = !!(config.channelId && config.channelSecretEncrypted);
       const webhookEndpointSet = !!config.webhookEndpointSetAt;
       const webhookTestSucceeded = !!config.webhookTestSucceededAt;
       const webhookActive = config.webhookActive;
@@ -111,7 +111,8 @@ export class LineOaService {
       channelId?: string;
       channelSecret?: string;
       channelAccessToken?: string;
-    }
+    },
+    baseUrl = 'https://app.horplus.com'
   ) {
     let newAccessTokenVerifiedAt: Date | null = null;
 
@@ -143,10 +144,19 @@ export class LineOaService {
       let webhookKeyHash = existing?.webhookKeyHash;
       let webhookKeyEncrypted = existing?.webhookKeyEncrypted;
 
-      if (!webhookKeyHash) {
+      if (!webhookKeyHash || !webhookKeyEncrypted) {
         const opaque = generateOpaqueWebhookKey();
         webhookKeyHash = opaque.keyHash;
         webhookKeyEncrypted = opaque.keyEncrypted;
+      } else {
+        // Validate decryption
+        try {
+          decryptText(webhookKeyEncrypted);
+        } catch {
+          const opaque = generateOpaqueWebhookKey();
+          webhookKeyHash = opaque.keyHash;
+          webhookKeyEncrypted = opaque.keyEncrypted;
+        }
       }
 
       const channelSecretEncrypted = data.channelSecret
@@ -184,7 +194,7 @@ export class LineOaService {
       if (updated.webhookKeyEncrypted) {
         try {
           const rawKey = decryptText(updated.webhookKeyEncrypted);
-          webhookUrl = `https://app.horplus.com/api/v1/line/webhook/${rawKey}`;
+          webhookUrl = `${baseUrl}/api/v1/line/webhook/${rawKey}`;
         } catch {
           webhookUrl = null;
         }
@@ -218,9 +228,18 @@ export class LineOaService {
    * Set Webhook Endpoint on LINE Platform
    */
   async setWebhookEndpoint(dormitoryId: string, baseUrl = 'https://app.horplus.com') {
-    const config = await this.getDormitoryLineConfig(dormitoryId, baseUrl);
-    if (!config.credentialsVerified || !config.webhookUrl) {
+    let config = await this.getDormitoryLineConfig(dormitoryId, baseUrl);
+    if (!config.credentialsVerified) {
       throw new AppError('Credentials must be verified before setting webhook endpoint', 400, 'LINE_CREDENTIALS_REQUIRED');
+    }
+
+    if (!config.webhookUrl) {
+      await this.rotateWebhookKey(dormitoryId, baseUrl);
+      config = await this.getDormitoryLineConfig(dormitoryId, baseUrl);
+    }
+
+    if (!config.webhookUrl) {
+      throw new AppError('Webhook URL is missing', 400, 'WEBHOOK_URL_MISSING');
     }
 
     const accessToken = await this.resolveAccessToken(dormitoryId);
@@ -260,6 +279,7 @@ export class LineOaService {
 
     const testResult = await this.lineAdapter.testWebhookEndpoint(config.webhookUrl, accessToken);
     const getEndpointInfo = await this.lineAdapter.getWebhookEndpoint(accessToken);
+    const isWebhookActive = getEndpointInfo?.active ?? testResult.success;
 
     await this.prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormitoryId}, true)`;
@@ -267,9 +287,9 @@ export class LineOaService {
         where: { dormitoryId },
         data: {
           webhookTestSucceededAt: testResult.success ? new Date() : null,
-          webhookActive: getEndpointInfo?.active ?? false,
+          webhookActive: isWebhookActive,
           webhookActiveCheckedAt: new Date(),
-          isConnected: testResult.success && (getEndpointInfo?.active ?? false),
+          isConnected: testResult.success && isWebhookActive,
         },
       });
     });
@@ -338,7 +358,7 @@ export class LineOaService {
   /**
    * Rotate Webhook Key
    */
-  async rotateWebhookKey(dormitoryId: string) {
+  async rotateWebhookKey(dormitoryId: string, baseUrl = 'https://app.horplus.com') {
     return await this.prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormitoryId}, true)`;
 
@@ -361,7 +381,7 @@ export class LineOaService {
       if (updated.webhookKeyEncrypted) {
         try {
           const rawKey = decryptText(updated.webhookKeyEncrypted);
-          webhookUrl = `https://app.horplus.com/api/v1/line/webhook/${rawKey}`;
+          webhookUrl = `${baseUrl}/api/v1/line/webhook/${rawKey}`;
         } catch {
           webhookUrl = null;
         }

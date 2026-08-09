@@ -1052,6 +1052,10 @@ describe('Wave 1F - Authorization, Permission, Package & Idempotency Corrective 
         0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
       ]);
       await sigService.saveSignature({ dormitoryId: provDormId, userId: onboardingUserId, buffer: validPngBuffer });
+      await prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${provDormId}, true)`;
+        await tx.dormitoryLineConfig.update({ where: { dormitoryId: provDormId }, data: { accessTokenVerifiedAt: new Date(), webhookEndpointSetAt: new Date(), webhookTestSucceededAt: new Date(), webhookActive: true, isConnected: true } });
+      });
 
       const result = await provisioningService.completeOwnerOnboarding({
         userId: onboardingUserId,

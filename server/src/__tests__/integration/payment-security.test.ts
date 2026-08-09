@@ -522,6 +522,10 @@ describe('Payment Security & Idempotency Boundary (PS-001 to PS-010)', () => {
       ]);
       const sigService = new SignatureStorageService(prisma);
       await sigService.saveSignature({ dormitoryId: provDormId, userId: idempUser.id, buffer: validPngBuffer });
+      await prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${provDormId}, true)`;
+        await tx.dormitoryLineConfig.update({ where: { dormitoryId: provDormId }, data: { accessTokenVerifiedAt: new Date(), webhookEndpointSetAt: new Date(), webhookTestSucceededAt: new Date(), webhookActive: true, isConnected: true } });
+      });
 
       const payload1 = {
         provisionalDormitoryId: provDormId,
@@ -601,6 +605,10 @@ describe('Payment Security & Idempotency Boundary (PS-001 to PS-010)', () => {
       ]);
       const sigService = new SignatureStorageService(prisma);
       await sigService.saveSignature({ dormitoryId: provDormId, userId: replayUser.id, buffer: validPngBuffer });
+      await prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${provDormId}, true)`;
+        await tx.dormitoryLineConfig.update({ where: { dormitoryId: provDormId }, data: { accessTokenVerifiedAt: new Date(), webhookEndpointSetAt: new Date(), webhookTestSucceededAt: new Date(), webhookActive: true, isConnected: true } });
+      });
 
       const payload = {
         provisionalDormitoryId: provDormId,
@@ -662,6 +670,10 @@ describe('Payment Security & Idempotency Boundary (PS-001 to PS-010)', () => {
       ]);
       const sigService = new SignatureStorageService(prisma);
       await sigService.saveSignature({ dormitoryId: provDormId, userId: mutUser.id, buffer: validPngBuffer });
+      await prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${provDormId}, true)`;
+        await tx.dormitoryLineConfig.update({ where: { dormitoryId: provDormId }, data: { accessTokenVerifiedAt: new Date(), webhookEndpointSetAt: new Date(), webhookTestSucceededAt: new Date(), webhookActive: true, isConnected: true } });
+      });
 
       const origPayload = {
         provisionalDormitoryId: provDormId,
@@ -738,6 +750,10 @@ describe('Payment Security & Idempotency Boundary (PS-001 to PS-010)', () => {
       ]);
       const sigService = new SignatureStorageService(prisma);
       await sigService.saveSignature({ dormitoryId: provDormId, userId: mutUser.id, buffer: validPngBuffer });
+      await prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${provDormId}, true)`;
+        await tx.dormitoryLineConfig.update({ where: { dormitoryId: provDormId }, data: { accessTokenVerifiedAt: new Date(), webhookEndpointSetAt: new Date(), webhookTestSucceededAt: new Date(), webhookActive: true, isConnected: true } });
+      });
 
       const origPayload = {
         provisionalDormitoryId: provDormId,

@@ -47,29 +47,32 @@ test.describe('Master Six-Step Owner Onboarding E2E Flow', () => {
     if (masterUserId) {
       const masterDorms = await prisma.dormitory.findMany({ where: { createdByUserId: masterUserId }, select: { id: true } });
       for (const d of masterDorms) {
-        const subs = await prisma.dormitorySubscription.findMany({ where: { dormitoryId: d.id }, select: { id: true } });
-        for (const sub of subs) {
-          await prisma.subscriptionStatusHistory.deleteMany({ where: { subscriptionId: sub.id } }).catch(() => {});
-        }
-        await prisma.accountBenefitClaim.deleteMany({ where: { dormitoryId: d.id } }).catch(() => {});
-        await prisma.promoRedemption.deleteMany({ where: { dormitoryId: d.id } }).catch(() => {});
-        await prisma.subscriptionPackageIntent.deleteMany({ where: { dormitoryId: d.id } }).catch(() => {});
-        await prisma.ownerSignature.deleteMany({ where: { dormitoryId: d.id } }).catch(() => {});
-        await prisma.dormitoryBillingSettings.deleteMany({ where: { dormitoryId: d.id } }).catch(() => {});
-        await prisma.dormitorySubscription.deleteMany({ where: { dormitoryId: d.id } }).catch(() => {});
-        await prisma.room.deleteMany({ where: { dormitoryId: d.id } }).catch(() => {});
-        await prisma.building.deleteMany({ where: { dormitoryId: d.id } }).catch(() => {});
-        await prisma.dormitoryMember.deleteMany({ where: { dormitoryId: d.id } }).catch(() => {});
-        await prisma.dormitory.delete({ where: { id: d.id } }).catch(() => {});
+        await prisma.$transaction(async (tx) => {
+          await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${d.id}, true)`;
+          const subs = await tx.dormitorySubscription.findMany({ where: { dormitoryId: d.id }, select: { id: true } });
+          for (const sub of subs) {
+            await tx.subscriptionStatusHistory.deleteMany({ where: { subscriptionId: sub.id } });
+          }
+          await tx.accountBenefitClaim.deleteMany({ where: { dormitoryId: d.id } });
+          await tx.subscriptionPackageIntent.deleteMany({ where: { dormitoryId: d.id } });
+          await tx.ownerSignature.deleteMany({ where: { dormitoryId: d.id } });
+          await tx.promoRedemption.deleteMany({ where: { dormitoryId: d.id } });
+          await tx.dormitoryBillingSettings.deleteMany({ where: { dormitoryId: d.id } });
+          await tx.dormitorySubscription.deleteMany({ where: { dormitoryId: d.id } });
+          await tx.room.deleteMany({ where: { dormitoryId: d.id } });
+          await tx.building.deleteMany({ where: { dormitoryId: d.id } });
+          await tx.dormitoryMember.deleteMany({ where: { dormitoryId: d.id } });
+          await tx.dormitoryLineConfig.deleteMany({ where: { dormitoryId: d.id } });
+          await tx.dormitory.delete({ where: { id: d.id } });
+        }).catch(() => {});
       }
-      await prisma.ownerSignature.deleteMany({ where: { signedByUserId: masterUserId } }).catch(() => {});
       await prisma.session.deleteMany({ where: { userId: masterUserId } }).catch(() => {});
       await prisma.user.delete({ where: { id: masterUserId } }).catch(() => {});
     }
   });
 
-  test('Completes all 6 onboarding steps: Dormitory Info, Buildings, Zero-value Utilities, Signature, LINE OA 4-state readiness, and Package Finalization', async ({ context, page }) => {
-    test.setTimeout(60000);
+  test('Completes all 6 onboarding steps: Dormitory Info, Buildings, Zero-value Utilities, Signature strokes, LINE OA 4-state readiness, and Package Finalization with DB assertions', async ({ context, page }) => {
+    test.setTimeout(90000);
 
     await context.addCookies([
       {
@@ -119,14 +122,63 @@ test.describe('Master Six-Step Owner Onboarding E2E Flow', () => {
     await bankSelect.selectOption('กสิกรไทย (KBank)');
     await page.fill('[data-testid="input-account-number"]', '123-4-56789-0');
     await page.fill('[data-testid="input-account-name"]', 'นาย สมศักดิ์ Master');
+
+    // Draw real strokes on canvas to satisfy non-blank pixel threshold
+    const canvas = page.locator('canvas');
+    await expect(canvas).toBeVisible();
+    const box = await canvas.boundingBox();
+    if (box) {
+      await page.mouse.move(box.x + 20, box.y + 20);
+      await page.mouse.down();
+      await page.mouse.move(box.x + 100, box.y + 60);
+      await page.mouse.move(box.x + 180, box.y + 30);
+      await page.mouse.up();
+    }
+
     await page.click('[data-testid="button-save-signature"]');
     await expect(page.locator('[data-testid="signature-status-saved"]')).toBeVisible();
     await page.click('[data-testid="button-next-step"]'); // 4 -> 5
 
     // STEP 5: LINE OA Setup
+    await expect(page.locator('[data-testid="input-line-channel-id"]')).toBeVisible();
+
+    // Assert NO Basic ID or Channel Access Token input fields
+    await expect(page.locator('input[placeholder*="Channel Access Token"]')).toHaveCount(0);
+    await expect(page.locator('input[placeholder*="Basic ID"]')).toHaveCount(0);
+
+    // Attempting Next before setup must be blocked!
+    await page.click('[data-testid="button-next-step"]');
+    await expect(page.locator('text=กรุณาตั้งค่า LINE OA ให้ครบทุกขั้นตอน')).toBeVisible();
+
+    // Fill LINE Channel ID and Channel Secret
+    await page.fill('[data-testid="input-line-channel-id"]', '1650000001');
+    await page.fill('[data-testid="input-line-channel-secret"]', 'secret_key_12345');
+    await page.click('[data-testid="button-save-line-credentials"]');
+
+    // Set Webhook
+    await expect(page.locator('[data-testid="button-set-line-webhook"]')).toBeEnabled();
+    await page.click('[data-testid="button-set-line-webhook"]');
+
+    // Test Webhook
+    await expect(page.locator('[data-testid="button-test-line-webhook"]')).toBeEnabled();
+    await page.click('[data-testid="button-test-line-webhook"]');
+
+    // Assert LINE readiness badge
+    await expect(page.locator('[data-testid="line-readiness-badge"]')).toContainText('พร้อมใช้งาน ✅');
+
+    // Now advance to Step 6
     await page.click('[data-testid="button-next-step"]'); // 5 -> 6
 
     // STEP 6: Package & Finalize
+    await expect(page.locator('[data-testid="plan-card-pro"]')).toBeVisible();
+    await page.click('[data-testid="plan-card-pro"]');
+
+    // Apply Promo HORPLUS
+    await page.fill('[data-testid="input-promo-code"]', 'HORPLUS');
+    await page.click('[data-testid="button-apply-promo"]');
+    await expect(page.locator('text=รับส่วนขยายเพิ่ม 2 เดือน')).toBeVisible();
+
+    // Finalize
     await page.click('[data-testid="button-finalize-onboarding"]');
     await expect(page.locator('[data-testid="checkbox-agreed-terms"]')).toBeVisible();
     await page.check('[data-testid="checkbox-agreed-terms"]');
@@ -134,5 +186,36 @@ test.describe('Master Six-Step Owner Onboarding E2E Flow', () => {
 
     // Verify completion redirect
     await page.waitForURL('**/owner/dashboard', { timeout: 25000 });
+
+    // DB Assertions
+    const createdDorm = await prisma.dormitory.findFirst({
+      where: { createdByUserId: masterUserId, name: 'หอพัก 6-Step Master Residence' },
+    });
+    expect(createdDorm).not.toBeNull();
+    expect(createdDorm?.status).toBe('active');
+
+    const sub = await prisma.dormitorySubscription.findUnique({
+      where: { dormitoryId: createdDorm!.id },
+    });
+    expect(sub).not.toBeNull();
+    expect(sub?.status).toBe('TRIAL');
+
+    const trialClaim = await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${createdDorm!.id}, true)`;
+      return await tx.accountBenefitClaim.findFirst({
+        where: { userId: masterUserId, benefitKey: 'INITIAL_TRIAL_V1' },
+      });
+    });
+    expect(trialClaim).not.toBeNull();
+    expect(trialClaim?.grantedMonths).toBe(1);
+
+    const intent = await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${createdDorm!.id}, true)`;
+      return await tx.subscriptionPackageIntent.findFirst({
+        where: { dormitoryId: createdDorm!.id },
+      });
+    });
+    expect(intent).not.toBeNull();
+    expect(intent?.status).toBe('PENDING_PAYMENT');
   });
 });

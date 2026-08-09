@@ -97,6 +97,20 @@ describe('Master 6-Step Owner Onboarding Lifecycle & Idempotency', () => {
   });
 
   it('4. Completing 6-step onboarding finalizes setup_pending -> active and grants +1 CALENDAR MONTH initial trial', async () => {
+    await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${provDormId}, true)`;
+      await tx.dormitoryLineConfig.update({
+        where: { dormitoryId: provDormId },
+        data: {
+          accessTokenVerifiedAt: new Date(),
+          webhookEndpointSetAt: new Date(),
+          webhookTestSucceededAt: new Date(),
+          webhookActive: true,
+          isConnected: true,
+        },
+      });
+    });
+
     const result = await provisioningService.completeOwnerOnboarding({
       userId: testUserId,
       idempotencyKey: `idemp_master_${Date.now()}`,

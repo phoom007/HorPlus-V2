@@ -1,8 +1,9 @@
 /**
- * Distributed LINE Channel Access Token Provider (Task-009 — Redis Token Caching)
+ * Distributed LINE Channel Access Token Provider (Task-009 — Redis Token Caching & Distributed Locking)
  * @license Apache-2.0
  */
 
+import crypto from 'crypto';
 import { Redis } from 'ioredis';
 import { AppError } from '../types/index.js';
 
@@ -37,9 +38,13 @@ export class LineChannelTokenProvider {
     return `line:stateless_token:${channelId}`;
   }
 
+  private getLockKey(channelId: string): string {
+    return `line:token-lock:${channelId}`;
+  }
+
   /**
    * Acquire a stateless channel access token for Channel ID + Channel Secret.
-   * Uses Redis distributed caching with distributed TTL and single-flight locking.
+   * Uses Redis distributed caching with distributed TTL and SET NX PX distributed locking.
    * Token is NEVER saved to PostgreSQL or logged.
    */
   async getChannelAccessToken(channelId: string, channelSecret: string): Promise<string> {
@@ -47,22 +52,12 @@ export class LineChannelTokenProvider {
       throw new AppError('Channel ID and Channel Secret are required for stateless token issuance', 400, 'INVALID_CHANNEL_CREDENTIALS');
     }
 
-    if (
-      process.env.NODE_ENV === 'test' ||
-      process.env.HORPLUS_E2E === 'true' ||
-      channelId.startsWith('165') ||
-      channelId.startsWith('1657') ||
-      channelSecret.startsWith('secret') ||
-      channelSecret === 'test_secret' ||
-      channelSecret.includes('verif') ||
-      channelSecret.includes('12345') ||
-      channelSecret.includes('mock') ||
-      channelSecret.includes('key')
-    ) {
+    if (process.env.NODE_ENV === 'test' || process.env.HORPLUS_E2E === 'true') {
       return `stateless_test_token_mock_${channelId}`;
     }
 
     const cacheKey = this.getCacheKey(channelId);
+    const lockKey = this.getLockKey(channelId);
     const now = Date.now();
 
     // 1. Check L1 Memory Cache
@@ -84,11 +79,73 @@ export class LineChannelTokenProvider {
           return redisCached;
         }
       } catch {
-        // Fall back to HTTP fetch if Redis read fails
+        // Fall back to lock/fetch if Redis read fails
       }
     }
 
-    // 3. Single-flight deduplication to prevent token request stampedes
+    // 3. Distributed Redis SET NX PX Lock
+    if (this.redisClient && this.redisClient.status === 'ready') {
+      const uniqueOwnerId = crypto.randomUUID();
+      const lockTTL = 10000; // 10 seconds
+      let lockAcquired = false;
+
+      try {
+        const lockResult = await this.redisClient.set(lockKey, uniqueOwnerId, 'PX', lockTTL, 'NX');
+        lockAcquired = lockResult === 'OK';
+      } catch {
+        lockAcquired = false;
+      }
+
+      if (lockAcquired) {
+        try {
+          // Re-check cache after acquiring lock
+          const rechecked = await this.redisClient.get(cacheKey);
+          if (rechecked) {
+            return rechecked;
+          }
+
+          const token = await this.fetchStatelessToken(channelId, channelSecret);
+          return token;
+        } finally {
+          // Atomic compare-and-delete release using Lua script
+          const luaReleaseScript = `
+            if redis.call('get', KEYS[1]) == ARGV[1] then
+              return redis.call('del', KEYS[1])
+            else
+              return 0
+            end
+          `;
+          try {
+            await this.redisClient.eval(luaReleaseScript, 1, lockKey, uniqueOwnerId);
+          } catch {
+            // Non-blocking catch on lock release error
+          }
+        }
+      } else {
+        // Lock not acquired: poll token cache using bounded backoff + jitter
+        const maxWaitMs = 5000;
+        const startTime = Date.now();
+        let pollDelay = 50;
+
+        while (Date.now() - startTime < maxWaitMs) {
+          await new Promise((resolve) => setTimeout(resolve, pollDelay + Math.floor(Math.random() * 20)));
+          pollDelay = Math.min(pollDelay * 1.5, 300);
+
+          try {
+            const polledToken = await this.redisClient.get(cacheKey);
+            if (polledToken) {
+              return polledToken;
+            }
+          } catch {
+            // Continue polling
+          }
+        }
+
+        throw new AppError('LINE token lock acquisition timed out', 503, 'LINE_TOKEN_LOCK_TIMEOUT');
+      }
+    }
+
+    // Degraded mode for local/dev without Redis: in-process single-flight deduplication
     const existingRequest = this.inFlightRequests.get(cacheKey);
     if (existingRequest) {
       return await existingRequest;
@@ -178,3 +235,4 @@ export class LineChannelTokenProvider {
     }
   }
 }
+

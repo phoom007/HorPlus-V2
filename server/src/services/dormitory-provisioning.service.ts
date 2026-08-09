@@ -342,9 +342,53 @@ export class DormitoryProvisioningService {
         throw new AppError('กรุณาบันทึกลายเซ็นเจ้าของหอพักในขั้นตอนที่ 4 ก่อนยืนยันสร้างหอพัก', 400, 'OWNER_SIGNATURE_REQUIRED');
       }
 
-      // 3. Resolve Subscription Plan
+      // 3. Validate LINE OA Readiness (Step 5 Requirement)
+      const lineConfig = await tx.dormitoryLineConfig.findUnique({
+        where: { dormitoryId: dormId },
+      });
+
+      const isLineReady = Boolean(
+        lineConfig &&
+        (lineConfig.accessTokenVerifiedAt || lineConfig.isConnected) &&
+        lineConfig.webhookEndpointSetAt &&
+        lineConfig.webhookTestSucceededAt &&
+        lineConfig.webhookActive
+      );
+
+      if (!isLineReady) {
+        throw new AppError(
+          'LINE OA ยังไม่พร้อมใช้งาน กรุณาตั้งค่า LINE OA ให้ครบทุกขั้นตอนก่อนยืนยันสร้างหอพัก',
+          400,
+          'LINE_ONBOARDING_NOT_READY'
+        );
+      }
+
+      // 4. Resolve Subscription Plan & Package (Authoritative Package Logic)
+      let resolvedPlanCode = planCode || 'FREE';
+      let selectedPackage: any = null;
+
+      if (packageId) {
+        selectedPackage = await tx.subscriptionPackage.findUnique({
+          where: { id: packageId },
+          include: { plan: true },
+        });
+
+        if (!selectedPackage || !selectedPackage.enabled) {
+          throw new AppError('Package is disabled or invalid', 400, 'PACKAGE_DISABLED');
+        }
+
+        if (selectedPackage.price === null || selectedPackage.price === undefined) {
+          throw new AppError('Package price is unpriced or disabled', 400, 'PACKAGE_UNPRICED');
+        }
+
+        resolvedPlanCode = selectedPackage.plan?.code || selectedPackage.planCode;
+        if (resolvedPlanCode !== 'PAID') {
+          throw new AppError('Paid package must belong to PAID plan', 400, 'INVALID_PACKAGE_PLAN');
+        }
+      }
+
       const plan = await tx.subscriptionPlan.findUnique({
-        where: { code: planCode || 'FREE' },
+        where: { code: resolvedPlanCode },
       });
 
       if (!plan) {
@@ -496,9 +540,11 @@ export class DormitoryProvisioningService {
       let initialTrialExpiresAt = addCalendarMonths(now, 1);
       let isAccountTrialClaimed = false;
 
+      await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', '', true)`;
       const existingTrialClaim = await tx.accountBenefitClaim.findUnique({
         where: { user_benefit_unique: { userId, benefitKey: 'INITIAL_TRIAL_V1' } },
       });
+      await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormId}, true)`;
 
       if (existingTrialClaim) {
         isAccountTrialClaimed = true;
@@ -567,7 +613,8 @@ export class DormitoryProvisioningService {
               newExpiresAt: initialTrialExpiresAt,
             },
           });
-        } catch {
+        } catch (err: any) {
+          console.error('[ACCOUNT BENEFIT CLAIM ERROR]', err);
           trialGrantedMonths = 0;
         }
       }
@@ -585,25 +632,19 @@ export class DormitoryProvisioningService {
         });
       }
 
-      if (packageId) {
-        const pkg = await tx.subscriptionPackage.findUnique({
-          where: { id: packageId },
+      if (selectedPackage) {
+        await tx.subscriptionPackageIntent.create({
+          data: {
+            dormitoryId: dormId,
+            userId,
+            packageId: selectedPackage.id,
+            status: 'PENDING_PAYMENT',
+            durationMonthsSnapshot: selectedPackage.durationMonths,
+            priceSnapshot: selectedPackage.price,
+            currencySnapshot: selectedPackage.currency,
+            catalogVersion: selectedPackage.catalogVersion || 1,
+          },
         });
-
-        if (pkg && pkg.enabled) {
-          await tx.subscriptionPackageIntent.create({
-            data: {
-              dormitoryId: dormId,
-              userId,
-              packageId: pkg.id,
-              status: 'PENDING_PAYMENT',
-              durationMonthsSnapshot: pkg.durationMonths,
-              priceSnapshot: pkg.price,
-              currencySnapshot: pkg.currency,
-              catalogVersion: pkg.catalogVersion || 1,
-            },
-          });
-        }
       }
 
       await tx.onboardingDraft.update({
@@ -634,7 +675,9 @@ export class DormitoryProvisioningService {
         },
         promo: {
           applied: promoApplied,
-          bonusDays: promoApplied ? 60 : 0,
+          promoBonusMonths: promoApplied ? 2 : 0,
+          trialMonths: trialGrantedMonths,
+          totalTrialMonths: trialGrantedMonths + (promoApplied ? 2 : 0),
         },
         planCode: plan.code,
         subscriptionStatus: 'TRIAL',
