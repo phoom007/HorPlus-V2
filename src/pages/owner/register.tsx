@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState } from 'react';
 import { 
   Building2, 
   User, 
@@ -13,15 +13,11 @@ import {
   AlertCircle, 
   Plus, 
   Trash2, 
-  PenTool, 
   Send, 
   Zap, 
   Droplet, 
   Wifi, 
   Sparkles, 
-  Dog, 
-  Cat, 
-  Bird, 
   HelpCircle, 
   ArrowRight, 
   ArrowLeft, 
@@ -121,19 +117,6 @@ const formatBankAccount = (val: string) => {
 };
 
 // 10 Preset Dormitory Rules for Quick Insertion
-const PRESET_DORM_RULES = [
-  { id: 'quiet_hours', label: '🤫 งดส่งเสียงดังหลัง 22:00', text: '• ห้ามส่งเสียงดังรบกวนผู้อื่นหลังเวลา 22:00 น.' },
-  { id: 'no_smoking', label: '🚭 ห้ามสูบบุหรี่ในห้องพัก', text: '• ห้ามสูบบุหรี่ บุหรี่ไฟฟ้า และสิ่งเสพติดภายในห้องพักและทางเดินโดยเด็ดขาด' },
-  { id: 'no_pets_strict', label: '🐾 ห้ามเลี้ยงสัตว์เลี้ยง', text: '• ห้ามนำสัตว์เลี้ยงทุกชนิดเข้ามาเลี้ยงภายในห้องพักและพื้นที่ส่วนกลาง' },
-  { id: 'trash_disposal', label: '🗑️ มัดถุงขยะทิ้งจุดกำหนด', text: '• กรุณามัดถุงขยะให้เรียบร้อยและนำไปทิ้ง ณ จุดทิ้งขยะของหอพักเท่านั้น' },
-  { id: 'parking_rule', label: '🚗 จอดรถในซองที่กำหนด', text: '• จอดรถยนต์และจักรยานยนต์ในซองจอดที่กำหนด พร้อมติดสติ๊กเกอร์หอพัก' },
-  { id: 'electric_appliance', label: '⚡ ห้ามดัดแปลงระบบไฟฟ้า', text: '• ห้ามดัดแปลงระบบไฟฟ้าหรือใช้เครื่องใช้ไฟฟ้าที่กินกำลังไฟสูงเกินมาตรฐาน' },
-  { id: 'keycard_return', label: '🗝️ คืนกุญแจเมื่อย้ายออก', text: '• เมื่อสิ้นสุดสัญญาต้องคืนคีย์การ์ดและกุญแจห้องครบตามจำนวน (หากสูญหายปรับ 500 บ.)' },
-  { id: 'visitor_policy', label: '👥 ห้ามคนนอกค้างคืนโดยไม่แจ้ง', text: '• ห้ามบุคคลภายนอกเข้าพักค้างคืนเกิน 2 คืนโดยไม่ได้รับอนุมัติจากเจ้าของหอพัก' },
-  { id: 'cleanliness', label: '🧹 รักษาความสะอาดห้องพัก', text: '• ผู้เช่าต้องดูแลรักษาความสะอาดภายในห้องพัก ไม่ปล่อยให้เกิดกลิ่นหรือคราบสกปรก' },
-  { id: 'safety_lock', label: '🔐 ล็อคประตูและดูแลทรัพย์สิน', text: '• กรุณาล็อคประตูห้องพักทุกครั้งเมื่อออกไปข้างนอก ทางหอพักไม่รับผิดชอบกรณีทรัพย์สินสูญหาย' }
-];
-
 export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate }) => {
   const [currentStep, setCurrentStep] = useState(1);
   const [isSavedSuccess, setIsSavedSuccess] = useState(false);
@@ -278,80 +261,12 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
         accountNumber: '',
         accountName: '',
         bankAccountName: '',
-        promptPayId: '',
-        promptPayName: ''
-      },
-
-      // 5. Pets, Rules & Signature
-      petPolicy: {
-        allowed: 'conditional',
-        allowedTypes: ['small_dog', 'cat', 'caged_birds']
-      },
-
-      rulesTemplate: `1. ห้ามส่งเสียงดังรบกวนผู้อื่นหลังเวลา 22:00 น.
-2. ห้ามสูบบุหรี่ภายในห้องพักและบริเวณทางเดินกลาง (ฝ่าฝืนปรับ 2,000 บาท)
-3. การเลี้ยงสัตว์ต้องได้รับอนุญาตและเป็นไปตามประเภทที่กำหนดไว้เท่านั้น
-4. การชำระค่าเช่าต้องชำระภายในวันที่ 5 ของทุกเดือน เกินกำหนดคิดค่าปรับวันละ 100 บาท
-5. ห้ามดัดแปลง ต่อเติม หรือทาสีห้องพักโดยไม่ได้รับอนุญาต`,
-
-      ownerSignatureUrl: '',
+        promptPayId: ''
+      }
     };
   };
 
   const [formData, setFormData] = useState(getInitialForm());
-
-
-  // Signature Canvas Drawing
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const [isDrawing, setIsDrawing] = useState(false);
-
-  const startDrawing = (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    setIsDrawing(true);
-    const rect = canvas.getBoundingClientRect();
-    const x = ('touches' in e) ? e.touches[0].clientX - rect.left : e.clientX - rect.left;
-    const y = ('touches' in e) ? e.touches[0].clientY - rect.top : e.clientY - rect.top;
-    ctx.beginPath();
-    ctx.moveTo(x, y);
-  };
-
-  const draw = (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
-    if (!isDrawing) return;
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    const rect = canvas.getBoundingClientRect();
-    const x = ('touches' in e) ? e.touches[0].clientX - rect.left : e.clientX - rect.left;
-    const y = ('touches' in e) ? e.touches[0].clientY - rect.top : e.clientY - rect.top;
-    ctx.lineWidth = 3;
-    ctx.lineCap = 'round';
-    ctx.strokeStyle = '#1e293b';
-    ctx.lineTo(x, y);
-    ctx.stroke();
-  };
-
-  const stopDrawing = () => {
-    if (!isDrawing) return;
-    setIsDrawing(false);
-    const canvas = canvasRef.current;
-    if (canvas) {
-      const dataUrl = canvas.toDataURL('image/png');
-      setFormData(prev => ({ ...prev, ownerSignatureUrl: dataUrl }));
-    }
-  };
-
-  const clearCanvas = () => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    setFormData(prev => ({ ...prev, ownerSignatureUrl: '' }));
-  };
 
 
   const handleAddBuilding = () => {
@@ -584,26 +499,6 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
         if (cleanPP.length !== 10 && cleanPP.length !== 13) {
           return { valid: false, error: 'กรุณากรอก "เลขพร้อมเพย์" ให้ถูกต้อง (เบอร์โทร 10 หลัก หรือ เลขบัตรประชาชน 13 หลัก)' };
         }
-        if (!formData.paymentAccount.promptPayName || !formData.paymentAccount.promptPayName.trim()) {
-          return { valid: false, error: 'กรุณากรอก "ชื่อบัญชีพร้อมเพย์"' };
-        }
-      }
-    }
-
-    if (stepNum === 5) {
-      if (!formData.petPolicy.allowed) {
-        return { valid: false, error: 'กรุณาเลือก "เงื่อนไขการเลี้ยงสัตว์ในหอพัก"' };
-      }
-      if (formData.petPolicy.allowed === 'conditional') {
-        if (!formData.petPolicy.allowedTypes || formData.petPolicy.allowedTypes.length === 0) {
-          return { valid: false, error: 'กรุณาเลือก "ประเภทสัตว์ที่อนุญาต" อย่างน้อย 1 ประเภท' };
-        }
-      }
-      if (!formData.rulesTemplate || !formData.rulesTemplate.trim()) {
-        return { valid: false, error: 'กรุณาระบุ "ข้อตกลงสัญญา & ระเบียบโครงการ"' };
-      }
-      if (!formData.ownerSignatureUrl) {
-        return { valid: false, error: 'กรุณาวาด "ลายเซ็นเจ้าของหอพัก" ก่อนดำเนินการต่อ' };
       }
     }
 
@@ -699,6 +594,18 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
         });
       });
 
+      const rawPromptPayDigits = (formData.paymentAccount.promptPayId || '').replace(/\D/g, '');
+      let promptPayType: 'mobile_phone' | 'national_id' | null = null;
+      let promptPayValue: string | null = null;
+
+      if (rawPromptPayDigits.length === 10) {
+        promptPayType = 'mobile_phone';
+        promptPayValue = rawPromptPayDigits;
+      } else if (rawPromptPayDigits.length === 13) {
+        promptPayType = 'national_id';
+        promptPayValue = rawPromptPayDigits;
+      }
+
       const payload: CompleteOnboardingPayload = {
         dormitory: {
           name: formData.dormName,
@@ -724,8 +631,8 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
         },
         payment: {
           cashAccepted: true,
-          promptPayType: 'mobile_phone',
-          promptPayValue: formData.paymentAccount.promptPayId || undefined,
+          promptPayType,
+          promptPayValue,
           bankCode: formData.paymentAccount.bankName || undefined,
           bankAccountName: (formData.paymentAccount.bankAccountName || formData.paymentAccount.accountName) || undefined,
           bankAccountNumber: formData.paymentAccount.accountNumber || undefined,
@@ -1927,10 +1834,10 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                   <h5 className="text-xs font-black text-indigo-950">ข้อมูลบัญชีพร้อมเพย์</h5>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 gap-3">
                   <div>
                     <label className="block text-xs font-bold text-slate-700 mb-1">
-                      เลขพร้อมเพย์ (เบอร์ / บัตรปชช.)
+                      เลขพร้อมเพย์ (เบอร์โทร 10 หลัก / บัตรประชาชน 13 หลัก)
                     </label>
                     <input
                       type="text"
@@ -1940,235 +1847,25 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                         const formatted = raw.length > 10 ? formatIdCard(e.target.value) : formatPhone(e.target.value);
                         setFormData({ ...formData, paymentAccount: { ...formData.paymentAccount, promptPayId: formatted } });
                       }}
-                      placeholder="เช่น 081-999-8888"
+                      placeholder="เช่น 081-999-8888 หรือ 1-1007-00123-45-6"
                       className="w-full px-3.5 py-2 text-xs bg-white border border-indigo-200 rounded-xl focus:border-indigo-500 outline-none font-bold text-indigo-600"
                     />
                   </div>
+                </div>
+              </div>
 
-                  <div>
-                    <div className="flex items-center justify-between mb-1">
-                      <label className="block text-xs font-bold text-slate-700">
-                        ชื่อบัญชีพร้อมเพย์
-                      </label>
-                      <div className="flex items-center gap-1">
-                        {formData.ownerName && (
-                          <button
-                            type="button"
-                            onClick={() => setFormData(prev => ({
-                              ...prev,
-                              paymentAccount: { ...prev.paymentAccount, promptPayName: prev.ownerName }
-                            }))}
-                            className="text-[10px] font-extrabold text-blue-600 bg-blue-50 hover:bg-blue-100 border border-blue-100 px-2 py-0.5 rounded-lg transition-all cursor-pointer"
-                          >
-                            ดึงชื่อเจ้าของ
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                    <input
-                      type="text"
-                      value={formData.paymentAccount.promptPayName || ''}
-                      onChange={(e) => setFormData({ 
-                        ...formData, 
-                        paymentAccount: { ...formData.paymentAccount, promptPayName: e.target.value } 
-                      })}
-                      placeholder="เช่น นาย สมศักดิ์ วงศ์สว่าง (บัญชีพร้อมเพย์)"
-                      className="w-full px-3.5 py-2 text-xs bg-white border border-indigo-200 rounded-xl focus:border-indigo-500 outline-none font-bold text-slate-800"
-                    />
-                  </div>
+              <div className="p-3 bg-indigo-50/70 border border-indigo-100 rounded-xl flex items-start gap-2 text-xs text-indigo-900 font-medium">
+                <Calendar className="w-4 h-4 text-indigo-600 shrink-0 mt-0.5" />
+                <div>
+                  <span className="font-bold">รอบวันตัดบิลประจำเดือน:</span> วันที่ 25 ของทุกเดือน (กำหนดชำระเงินภายในวันที่ {formData.deposits.dueDateDay || 5})
                 </div>
               </div>
 
               <div className="p-2.5 bg-blue-50/70 border border-blue-100 rounded-xl flex items-start gap-1.5 text-[11px] text-blue-800 font-medium leading-relaxed">
                 <Info className="w-3.5 h-3.5 text-blue-600 shrink-0 mt-0.5" />
                 <span>
-                  <strong>ข้อสำคัญ:</strong> ชื่อบัญชีธนาคารและชื่อบัญชีพร้อมเพย์ ต้องระบุให้ตรงกับข้อมูลจริง เพื่อให้ระบบตรวจสลิปทำงานได้แม่นยำ (เช่น น.ส. หอพลัส จำกัด)
+                  <strong>ข้อสำคัญ:</strong> ชื่อบัญชีธนาคาร ต้องระบุให้ตรงกับข้อมูลจริง เพื่อให้ระบบตรวจสลิปทำงานได้แม่นยำ (เช่น น.ส. หอพลัส จำกัด)
                 </span>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* STEP 5: Pet Policy (Pet fee fields removed) & Contract Signature */}
-      {currentStep === 5 && (
-        <div className="bg-white p-5 sm:p-8 rounded-3xl border border-slate-100 shadow-xs space-y-6 animate-in fade-in duration-200">
-          <div className="flex items-center gap-2 pb-3 border-b border-slate-100">
-            <FileText className="w-5 h-5 text-blue-600" />
-            <div>
-              <h3 className="text-base font-black text-slate-800">ขั้นตอนที่ 5: กฎระเบียบ & สัญญา</h3>
-              <p className="text-xs text-slate-400 font-medium">กำหนดนโยบายการเลี้ยงสัตว์ ข้อตกลงโครงการ และเซ็นลายเซ็นอิเล็กทรอนิกส์</p>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-stretch">
-            {/* Left Column: Pet Policy & Owner Signature */}
-            <div className="space-y-4 flex flex-col justify-between">
-              {/* Pet Policy */}
-              <div className="bg-slate-50/60 p-4 sm:p-5 rounded-2xl border border-slate-100 space-y-4">
-                <h4 className="text-xs font-black text-slate-700 flex items-center gap-1.5 uppercase tracking-wide">
-                  <Dog className="w-4 h-4 text-emerald-600" /> กฎการเลี้ยงสัตว์
-                </h4>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">เงื่อนไขการเลี้ยงสัตว์ในหอพัก</label>
-                  <select
-                    value={formData.petPolicy.allowed}
-                    onChange={(e) => setFormData({ ...formData, petPolicy: { ...formData.petPolicy, allowed: e.target.value } })}
-                    className="w-full px-3.5 py-2 text-xs bg-white border border-slate-200 rounded-xl focus:border-blue-500 outline-none font-extrabold"
-                  >
-                    <option value="none">ไม่อนุญาตให้เลี้ยงสัตว์ทุกชนิด</option>
-                    <option value="conditional">อนุญาตให้เลี้ยงสัตว์ได้</option>
-                  </select>
-                </div>
-
-                {formData.petPolicy.allowed !== 'none' && (
-                  <div className="space-y-3 pt-2 border-t border-slate-200/60">
-                    <span className="text-xs font-bold text-slate-700 block">เลือกประเภทสัตว์ที่อนุญาต:</span>
-                    <div className="grid grid-cols-2 gap-2">
-                      {[
-                        { id: 'small_dog', label: 'สุนัขพันธุ์เล็ก' },
-                        { id: 'cat', label: 'แมว' },
-                        { id: 'caged_birds', label: 'นก / สัตว์เลี้ยงตัวเล็ก' },
-                        { id: 'aquarium', label: 'สัตว์ในกรง / ตู้ปลา' }
-                      ].map(pet => (
-                        <label key={pet.id} className="flex items-center gap-2 p-2 bg-white rounded-xl border border-slate-200 text-xs font-bold text-slate-700 cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={formData.petPolicy.allowedTypes.includes(pet.id)}
-                            onChange={(e) => {
-                              const exists = formData.petPolicy.allowedTypes.includes(pet.id);
-                              const updated = exists
-                                ? formData.petPolicy.allowedTypes.filter(t => t !== pet.id)
-                                : [...formData.petPolicy.allowedTypes, pet.id];
-                              setFormData({ ...formData, petPolicy: { ...formData.petPolicy, allowedTypes: updated } });
-                            }}
-                            className="rounded text-blue-600 focus:ring-blue-500"
-                          />
-                          <span>{pet.label}</span>
-                        </label>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* Owner Electronic Signature */}
-              <div className="bg-slate-50/60 p-4 sm:p-5 rounded-2xl border border-slate-100 space-y-3">
-                <div className="flex items-center justify-between">
-                  <h4 className="text-xs font-black text-slate-700 flex items-center gap-1.5 uppercase tracking-wide">
-                    <PenTool className="w-4 h-4 text-blue-600" /> ลายเซ็นเจ้าของหอพักสำหรับเอกสารสัญญาเช่า
-                  </h4>
-                  <button
-                    type="button"
-                    onClick={clearCanvas}
-                    className="text-[10px] font-extrabold text-rose-500 hover:underline cursor-pointer"
-                  >
-                    ล้างลายเซ็น
-                  </button>
-                </div>
-
-                <div className="bg-white border border-slate-200 rounded-2xl p-2 text-center relative overflow-hidden">
-                  <canvas
-                    ref={canvasRef}
-                    width={320}
-                    height={110}
-                    onMouseDown={startDrawing}
-                    onMouseMove={draw}
-                    onMouseUp={stopDrawing}
-                    onMouseLeave={stopDrawing}
-                    onTouchStart={startDrawing}
-                    onTouchMove={draw}
-                    onTouchEnd={stopDrawing}
-                    className="w-full h-28 touch-none bg-slate-50/50 rounded-xl border border-dashed border-slate-200 cursor-crosshair"
-                  />
-                  <p className="text-[10px] text-slate-400 font-medium mt-1">ใช้นิ้วหรือเมาส์วาดลายเซ็นในกรอบด้านบน</p>
-                </div>
-              </div>
-            </div>
-
-            {/* Right Column: Full-Height Contract Rules Form */}
-            <div className="bg-slate-50/60 p-4 sm:p-5 rounded-2xl border border-slate-100 flex flex-col space-y-4">
-              <div className="flex items-center justify-between flex-wrap gap-2">
-                <h4 className="text-xs font-black text-slate-700 flex items-center gap-1.5 uppercase tracking-wide">
-                  <FileText className="w-4 h-4 text-blue-600" /> แบบฟอร์มข้อตกลงสัญญา & ระเบียบโครงการ
-                </h4>
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const allRules = PRESET_DORM_RULES.map(r => r.text).join('\n');
-                      setFormData({ ...formData, rulesTemplate: allRules });
-                    }}
-                    className="text-[11px] font-black text-blue-600 bg-blue-50 hover:bg-blue-100 border border-blue-100 px-2.5 py-1 rounded-xl transition-all cursor-pointer"
-                  >
-                    + เลือกทั้งหมด 10 ข้อ
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setFormData({ ...formData, rulesTemplate: '' })}
-                    className="text-[11px] font-extrabold text-rose-500 hover:text-rose-700 hover:underline px-1.5 py-1 transition-all cursor-pointer"
-                  >
-                    ล้างข้อความ
-                  </button>
-                </div>
-              </div>
-
-              {/* 10 Preset Rule Option Chips - Responsive for mobile, tablet, desktop */}
-              <div className="space-y-2">
-                <label className="block text-[11px] font-extrabold text-slate-600">
-                  คลิกปุ่มเพื่อเพิ่ม/ยกเลิก ข้อตกลงสำเร็จรูป:
-                </label>
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-2 xl:grid-cols-5 gap-2">
-                  {PRESET_DORM_RULES.map((rule) => {
-                    const isSelected = (formData.rulesTemplate || '').includes(rule.text);
-
-                    const toggleRule = () => {
-                      const current = formData.rulesTemplate || '';
-                      if (isSelected) {
-                        const updated = current
-                          .split('\n')
-                          .filter(line => line.trim() !== rule.text.trim())
-                          .join('\n')
-                          .trim();
-                        setFormData({ ...formData, rulesTemplate: updated });
-                      } else {
-                        const newText = current.trim() ? `${current.trim()}\n${rule.text}` : rule.text;
-                        setFormData({ ...formData, rulesTemplate: newText });
-                      }
-                    };
-
-                    return (
-                      <button
-                        key={rule.id}
-                        type="button"
-                        onClick={toggleRule}
-                        className={`text-left p-2 rounded-xl border text-[11px] font-bold transition-all flex items-center justify-between gap-1.5 cursor-pointer ${
-                          isSelected
-                            ? 'bg-blue-600 text-white border-blue-600 shadow-3xs'
-                            : 'bg-white text-slate-700 border-slate-200 hover:border-blue-300 hover:bg-blue-50/50'
-                        }`}
-                      >
-                        <span className="truncate">{rule.label}</span>
-                        <span className={`text-[10px] px-1.5 py-0.5 rounded-md font-black shrink-0 ${
-                          isSelected ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-500'
-                        }`}>
-                          {isSelected ? '✓ เพิ่มแล้ว' : '+ เพิ่ม'}
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              <div className="flex-1 flex flex-col space-y-1.5 pt-2 border-t border-slate-200/60">
-                <label className="block text-xs font-bold text-slate-700">ข้อความระเบียบทั้งหมดที่แสดงในสัญญา:</label>
-                <textarea
-                  value={formData.rulesTemplate}
-                  onChange={(e) => setFormData({ ...formData, rulesTemplate: e.target.value })}
-                  placeholder="ระบุข้อตกลงและระเบียบเพิ่มเติม หรือเลือกจากตัวเลือกด้านบน..."
-                  className="w-full flex-1 min-h-[220px] p-3.5 text-xs bg-white border border-slate-200 rounded-2xl focus:border-blue-500 outline-none font-medium leading-relaxed resize-none shadow-2xs"
-                />
               </div>
             </div>
           </div>

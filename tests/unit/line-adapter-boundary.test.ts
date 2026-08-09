@@ -64,13 +64,16 @@ describe('BR-001 & RI-001 — LINE API Security & Boundary Controls', () => {
     expect(mockAdapter.verifyAccessTokenCalls.length).toBe(1);
   });
 
-  it('6. Normal development runtime preflight -> fake server 5456 is NOT selected by default', () => {
+  it('6. Normal development runtime preflight -> fake server 5456 is NOT selected by default (FD-007)', () => {
     process.env.NODE_ENV = 'development';
     delete process.env.HORPLUS_E2E;
     delete process.env.LINE_PLATFORM_URL;
+    delete process.env.LINE_API_BASE_URL;
 
     const adapter = new HttpLinePlatformAdapter();
-    expect(adapter.getBaseUrl()).not.toBe('http://127.0.0.1:5456');
+    expect(adapter).toBeInstanceOf(HttpLinePlatformAdapter);
     expect(adapter.getBaseUrl()).toBe('https://api.line.me');
+    expect(process.env.HORPLUS_E2E).toBeUndefined();
+    expect(adapter.getBaseUrl()).not.toBe('http://127.0.0.1:5456');
   });
 });

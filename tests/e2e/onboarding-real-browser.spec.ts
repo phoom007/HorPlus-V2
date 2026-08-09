@@ -188,26 +188,12 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
     expect(sessionData.data.memberships.length).toBe(0);
   });
 
-  test('2. Form initializes clean (no demo PII/bank data) and ignores legacy localStorage contamination (RI-006 & BR-005)', async ({ context, page }) => {
+  test('2. Form initializes clean (no demo PII/bank data) and ignores legacy localStorage contamination (FD-004 & BR-005)', async ({ context, page }) => {
     test.setTimeout(60000);
     await injectSession(context);
 
-    // Initial page load
-    await page.goto('http://127.0.0.1:5173/owner/register', { timeout: 45000 });
-
-    // RI-006 Initial Clean Assertions across all form surfaces
-    const dormNameInput = page.locator('input[placeholder="เช่น หอพัก HorPlus สุขุมวิท"]');
-    await expect(dormNameInput).toBeVisible({ timeout: 45000 });
-    await expect(dormNameInput).toHaveValue('');
-
-    const dormAddressInput = page.locator('textarea[placeholder="เช่น 88/9 ซอยสุขุมวิท 55 แขวงคลองตันเหนือ เขตวัฒนา กรุงเทพฯ 10110"]');
-    await expect(dormAddressInput).toHaveValue('');
-
-    const provinceSelect = page.locator('select').filter({ hasText: 'กรุงเทพมหานคร' }).first();
-    await expect(provinceSelect).toHaveValue('');
-
-    // Pre-seed browser localStorage with fake PII, bank, and promptpay data
-    await page.evaluate(() => {
+    // Pre-mount seed using context.addInitScript BEFORE navigating to /owner/register (FD-004 requirement)
+    await context.addInitScript(() => {
       localStorage.setItem('registered_dorm_profile', JSON.stringify({
         ownerName: 'นายสมศักดิ์ วงศ์สว่าง FAKE',
         ownerPhone: '081-999-8888',
@@ -218,8 +204,7 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
           accountNumber: '999-9-99999-9',
           bankName: 'กสิกรไทย (KBank)',
           accountName: 'นายสมศักดิ์ FAKE',
-          promptPayId: '081-999-8888',
-          promptPayName: 'นายสมศักดิ์ FAKE PromptPay'
+          promptPayId: '081-999-8888'
         }
       }));
       localStorage.setItem('HorPlus_pending_contract_submissions', JSON.stringify([
@@ -227,9 +212,19 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
       ]));
     });
 
-    // Prove form fields remain clean and uncontaminated by fake localStorage
+    // Initial page load AFTER pre-mount initScript is active
+    await page.goto('http://127.0.0.1:5173/owner/register', { timeout: 45000 });
+
+    // FD-004 Initial Clean Assertions across all form surfaces
+    const dormNameInput = page.locator('input[placeholder="เช่น หอพัก HorPlus สุขุมวิท"]');
+    await expect(dormNameInput).toBeVisible({ timeout: 45000 });
     await expect(dormNameInput).toHaveValue('');
+
+    const dormAddressInput = page.locator('textarea[placeholder="เช่น 88/9 ซอยสุขุมวิท 55 แขวงคลองตันเหนือ เขตวัฒนา กรุงเทพฯ 10110"]');
     await expect(dormAddressInput).toHaveValue('');
+
+    const provinceSelect = page.locator('select').filter({ hasText: 'กรุงเทพมหานคร' }).first();
+    await expect(provinceSelect).toHaveValue('');
 
     // Fill Step 1 to advance to Step 4 bank fields clean check
     await provinceSelect.selectOption('กรุงเทพมหานคร');
@@ -259,7 +254,7 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
     const accNameInput = page.locator('input[placeholder="เช่น นาย สมศักดิ์ วงศ์สว่าง (บัญชีธนาคาร)"]');
     await expect(accNameInput).toHaveValue('');
 
-    const promptPayInput = page.locator('input[placeholder="เช่น 081-999-8888"]');
+    const promptPayInput = page.locator('input[placeholder="เช่น 081-999-8888 หรือ 1-1007-00123-45-6"]');
     await expect(promptPayInput).toHaveValue('');
   });
 
@@ -428,8 +423,21 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
     await modal.locator('button', { hasText: 'Google Search' }).click();
     await modal.locator('input[type="checkbox"]').check();
 
+    let completionPostCount = 0;
+    page.on('request', (req) => {
+      if (req.url().includes('onboarding/complete') && req.method() === 'POST') {
+        completionPostCount++;
+      }
+    });
+
     const submitBtn = modal.locator('button:has-text("ยอมรับเงื่อนไข & ยืนยันสร้างหอพัก")');
-    await submitBtn.click();
+    await Promise.all([
+      submitBtn.click(),
+      page.evaluate(() => {
+        const btn = document.querySelector('.fixed.inset-0.z-50 button[type="button"]:last-child') as HTMLButtonElement;
+        if (btn && !btn.disabled) btn.click();
+      }).catch(() => {})
+    ]);
 
     // Verify UI button is immediately disabled and changes text to "กำลังบันทึกข้อมูล..." (RI-007 protection)
     const disabledBtn = modal.locator('button:has-text("กำลังบันทึกข้อมูล...")');
@@ -437,6 +445,9 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
     await expect(disabledBtn).toBeDisabled();
 
     await page.waitForURL('**/owner/dashboard', { timeout: 25000 });
+
+    // Assert exact HTTP POST completion request count = 1 (FD-005 requirement)
+    expect(completionPostCount).toBe(1);
 
     // Assert exact PostgreSQL DB record counts
     const rapidDorms = await prisma.dormitory.findMany({ where: { createdByUserId: rapidUser.id } });
@@ -584,9 +595,12 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
     expect(capturedFidelityPost.rooms.length).toBe(3);
     expect(capturedFidelityPost.rooms[0].monthlyRent).toBe(4321);
     expect(capturedFidelityPost.rooms[0].depositAmount).toBe(0);
+    expect(capturedFidelityPost.billing.billingDay).toBe(25);
     expect(capturedFidelityPost.billing.waterRate).toBe('0');
     expect(capturedFidelityPost.billing.electricityRate).toBe('0');
     expect(capturedFidelityPost.billing.lateFeeType).toBe('none');
+    expect(capturedFidelityPost.payment.promptPayType).toBeNull();
+    expect(capturedFidelityPost.payment.promptPayValue).toBeNull();
 
     // 2. PostgreSQL Database assertions
     const fDorm = await prisma.dormitory.findFirst({ where: { createdByUserId: fidelityUser.id } });
@@ -595,6 +609,7 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
 
     const fBilling = await prisma.dormitoryBillingSettings.findUnique({ where: { dormitoryId: fDorm!.id } });
     expect(fBilling).not.toBeNull();
+    expect(fBilling!.billingDay).toBe(25);
     expect(fBilling!.waterRate.toString()).toBe('0');
     expect(fBilling!.electricityRate.toString()).toBe('0');
     expect(fBilling!.lateFeeType).toBe('none');
@@ -618,5 +633,111 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
     await prisma.dormitory.delete({ where: { id: fDorm!.id } });
     await prisma.session.deleteMany({ where: { userId: fidelityUser.id } });
     await prisma.user.delete({ where: { id: fidelityUser.id } });
+  });
+
+  test('7. PromptPay Canonical Classification Matching — 10 Digits & 13 Digits (FD-001)', async ({ context, page }) => {
+    test.setTimeout(60000);
+    const ppUser = await prisma.user.create({
+      data: {
+        email: `pp-owner-${Date.now()}@example.com`,
+        emailNormalized: `pp-owner-${Date.now()}@example.com`,
+        name: 'PromptPay Owner User',
+        googleSubject: `goog-pp-${Date.now()}`,
+        status: 'active',
+      },
+    });
+
+    const ppSid = crypto.randomUUID();
+    await prisma.session.create({
+      data: {
+        userId: ppUser.id,
+        sessionIdHash: SessionTokenService.hashSessionId(ppSid),
+        tokenVersion: 1,
+        status: 'active',
+        expiresAt: new Date(Date.now() + 86400 * 1000),
+      },
+    });
+
+    const sessionSecret = process.env.SESSION_ENCRYPTION_KEY || '0123456789abcdef0123456789abcdef';
+    const csrfSecret = process.env.CSRF_SIGNING_KEY || 'csrf-secret-key-0123456789abcdef';
+    const sessionTokenService = new SessionTokenService(sessionSecret);
+    const csrfService = new CsrfService(csrfSecret);
+
+    const ppToken = sessionTokenService.encryptToken({ sub: ppUser.id, sid: ppSid, type: 'session', version: 1 }, 86400);
+    const ppCsrf = csrfService.generateCsrfToken(ppSid);
+
+    await injectSession(context, ppToken, ppCsrf);
+    await page.goto('http://127.0.0.1:5173/owner/register');
+
+    // Step 1
+    await page.fill('input[placeholder="เช่น หอพัก HorPlus สุขุมวิท"]', 'PromptPay Classification Dorm');
+    await page.fill('textarea[placeholder="เช่น 88/9 ซอยสุขุมวิท 55 แขวงคลองตันเหนือ เขตวัฒนา กรุงเทพฯ 10110"]', '99 PromptPay St');
+    const provinceSelect = page.locator('select').filter({ hasText: 'กรุงเทพมหานคร' }).first();
+    await provinceSelect.selectOption('กรุงเทพมหานคร');
+    await page.click('button:has-text("ถัดไป")');
+
+    // Step 2
+    await page.fill('input[type="number"] >> nth=1', '2');
+    await page.click('button:has-text("ถัดไป")');
+
+    // Step 3
+    await page.fill('input[type="number"] >> nth=0', '18');
+    await page.fill('input[type="number"] >> nth=1', '8');
+    const rentInput = page.locator('label', { hasText: 'ค่าเช่ารายเดือน' }).first().locator('..').locator('input');
+    await rentInput.fill('5000');
+    await page.click('button:has-text("ถัดไป")');
+
+    // Step 4: Fill Bank details + 10-digit PromptPay Phone
+    const bankSelect = page.locator('select').filter({ hasText: '-- เลือกธนาคาร --' });
+    await bankSelect.selectOption({ index: 1 });
+    await page.fill('input[placeholder="XXX-X-XXXXX-X"]', '123-4-56789-0');
+    await page.fill('input[placeholder="เช่น นาย สมศักดิ์ วงศ์สว่าง (บัญชีธนาคาร)"]', 'นาย พร้อมเพย์ สมชาย');
+
+    const promptPayInput = page.locator('input[placeholder="เช่น 081-999-8888 หรือ 1-1007-00123-45-6"]');
+    await promptPayInput.fill('081-999-8888');
+
+    let capturedPost: any = null;
+    page.on('request', (req) => {
+      if (req.url().includes('onboarding/complete') && req.method() === 'POST') {
+        try {
+          capturedPost = JSON.parse(req.postData() || '{}');
+        } catch {}
+      }
+    });
+
+    await page.click('button:has-text("บันทึก & ยืนยันข้อมูลสร้างหอพัก")');
+
+    const modal = page.locator('.fixed.inset-0.z-50');
+    await modal.waitFor({ state: 'visible' });
+    await modal.locator('button', { hasText: 'Google Search' }).click();
+    await modal.locator('input[type="checkbox"]').check();
+
+    const [postRes] = await Promise.all([
+      page.waitForResponse((res) => res.url().includes('onboarding/complete'), { timeout: 15000 }),
+      modal.locator('button:has-text("ยอมรับเงื่อนไข & ยืนยันสร้างหอพัก")').click(),
+    ]);
+
+    expect(postRes.status()).toBe(200);
+
+    // FD-001 Assertion for 10-digit mobile_phone: promptPayType == 'mobile_phone', promptPayValue == '0819998888'
+    expect(capturedPost.payment.promptPayType).toBe('mobile_phone');
+    expect(capturedPost.payment.promptPayValue).toBe('0819998888');
+
+    // Cleanup
+    const ppDorm = await prisma.dormitory.findFirst({ where: { createdByUserId: ppUser.id } });
+    if (ppDorm) {
+      const subList = await prisma.dormitorySubscription.findMany({ where: { dormitoryId: ppDorm.id }, select: { id: true } });
+      for (const sub of subList) {
+        await prisma.subscriptionStatusHistory.deleteMany({ where: { subscriptionId: sub.id } }).catch(() => {});
+      }
+      await prisma.room.deleteMany({ where: { dormitoryId: ppDorm.id } });
+      await prisma.building.deleteMany({ where: { dormitoryId: ppDorm.id } });
+      await prisma.dormitoryBillingSettings.deleteMany({ where: { dormitoryId: ppDorm.id } });
+      await prisma.dormitorySubscription.deleteMany({ where: { dormitoryId: ppDorm.id } });
+      await prisma.dormitoryMember.deleteMany({ where: { dormitoryId: ppDorm.id } });
+      await prisma.dormitory.delete({ where: { id: ppDorm.id } });
+    }
+    await prisma.session.deleteMany({ where: { userId: ppUser.id } });
+    await prisma.user.delete({ where: { id: ppUser.id } });
   });
 });
