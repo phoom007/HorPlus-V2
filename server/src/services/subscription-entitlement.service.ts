@@ -44,80 +44,11 @@ export class SubscriptionEntitlementService {
   }
 
   /**
-   * Seed standard plans and packages idempotently if missing
+   * Legacy seed helper — now a no-op to eliminate accidental product-data mutation.
    */
-  async ensureSeeded(txClient?: any): Promise<void> {
-    const db = txClient || this.db;
-
-    try {
-      await db.subscriptionPlan.upsert({
-        where: { code: 'FREE' },
-        update: {},
-        create: {
-          code: 'FREE',
-          name: 'Free / Trial',
-          type: 'FREE',
-          roomLimit: 10,
-        },
-      });
-    } catch { /* ignore if concurrently created */ }
-
-    try {
-      const paidPlan = await db.subscriptionPlan.upsert({
-        where: { code: 'PAID' },
-        update: {},
-        create: {
-          code: 'PAID',
-          name: 'Paid',
-          type: 'PAID',
-          roomLimit: 150,
-        },
-      });
-
-      if (paidPlan) {
-        const existingPkgs = await db.subscriptionPackage.count({ where: { planId: paidPlan.id } });
-        if (existingPkgs === 0) {
-          const packages = [
-            { durationMonths: 1, price: 189.00, enabled: true },
-            { durationMonths: 3, price: 0.00, enabled: false },
-            { durationMonths: 6, price: 0.00, enabled: false },
-            { durationMonths: 12, price: 0.00, enabled: false },
-            { durationMonths: 24, price: 0.00, enabled: false },
-          ];
-
-          for (const pkg of packages) {
-            await db.subscriptionPackage.create({
-              data: {
-                planId: paidPlan.id,
-                durationMonths: pkg.durationMonths,
-                price: pkg.price,
-                currency: 'THB',
-                enabled: pkg.enabled,
-              },
-            }).catch(() => {});
-          }
-        }
-      }
-    } catch { /* ignore if concurrently created */ }
-
-    const promo = await db.promoCode.findUnique({ where: { code: 'HORPLUS' } });
-    if (!promo) {
-      await db.promoCode.create({
-        data: {
-          code: 'HORPLUS',
-          normalizedCode: 'HORPLUS',
-          benefitType: 'TRIAL_EXTENSION',
-          benefitUnit: 'MONTH',
-          benefitValue: 2,
-          enabled: true,
-        },
-      });
-    }
+  async ensureSeeded(_txClient?: any): Promise<void> {
+    // No-op: Catalog plans and promo codes are seeded via migrations and sync scripts.
   }
-
-  /**
-   * Provision a 1 calendar-month Trial subscription for a new dormitory inside transaction
-   */
   async provisionInitialTrial(dormitoryId: string, txClient?: any, now: Date = new Date()): Promise<any> {
     const db = txClient || this.db;
 

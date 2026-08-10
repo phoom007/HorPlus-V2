@@ -58,6 +58,7 @@ export function createOnboardingRouter(
         ? {
             currentStep: draft.currentStep,
             provisionalDormitoryId: draft.provisionalDormitoryId,
+            signatureSaved: Boolean(draft.signatureSaved),
             payload: draft.payload,
             version: draft.version,
             updatedAt: draft.updatedAt,
@@ -84,16 +85,20 @@ export function createOnboardingRouter(
     }
 
     const userId = req.auth!.userId;
-    const draft = await onboardingService.saveDraft(userId, parsed.data.currentStep, parsed.data.payload, req.body.provisionalDormitoryId);
+    await onboardingService.saveDraft(userId, parsed.data.currentStep, parsed.data.payload, req.body.provisionalDormitoryId);
+    const draft = await onboardingService.getDraft(userId);
 
     res.json({
-      data: {
-        currentStep: draft.currentStep,
-        provisionalDormitoryId: draft.provisionalDormitoryId,
-        payload: draft.payload,
-        version: draft.version,
-        updatedAt: draft.updatedAt,
-      },
+      data: draft
+        ? {
+            currentStep: draft.currentStep,
+            provisionalDormitoryId: draft.provisionalDormitoryId,
+            signatureSaved: Boolean(draft.signatureSaved),
+            payload: draft.payload,
+            version: draft.version,
+            updatedAt: draft.updatedAt,
+          }
+        : null,
     });
   });
 

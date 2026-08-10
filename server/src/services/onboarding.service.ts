@@ -67,7 +67,26 @@ export class OnboardingService {
       where: { userId },
     });
     if (!draft || draft.finalizedAt) return null;
-    return draft;
+
+    let signatureSaved = false;
+    const provDormId = draft.provisionalDormitoryId;
+    if (provDormId) {
+      const sig = await this.prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${provDormId}, true)`;
+        return await tx.ownerSignature.findFirst({
+          where: {
+            dormitoryId: provDormId,
+            isCurrent: true,
+          },
+        });
+      });
+      signatureSaved = !!sig;
+    }
+
+    return {
+      ...draft,
+      signatureSaved,
+    };
   }
 
   public async saveDraft(userId: string, currentStep: string, payload: any, provisionalDormitoryId?: string) {

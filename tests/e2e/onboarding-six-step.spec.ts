@@ -388,4 +388,135 @@ test.describe.serial('Master Six-Step Owner Onboarding E2E Flow', () => {
     });
     expect(totalRedemptions).toBe(1);
   });
+
+  test('Server-authoritative OwnerSignature resume and state gating (Unsigned vs Signed Resume & Server Authority)', async ({ page }) => {
+    test.setTimeout(60000);
+
+    const sigUserId = crypto.randomUUID();
+    const sigSessionId = crypto.randomUUID();
+    await prisma.user.create({
+      data: {
+        id: sigUserId,
+        email: `sig-resume-${Date.now()}@example.com`,
+        emailNormalized: `sig-resume-${Date.now()}@example.com`,
+        name: 'Sig Resume User',
+        googleSubject: `sub-sig-res-${Date.now()}`,
+        status: 'active',
+      },
+    });
+
+    await prisma.session.create({
+      data: {
+        userId: sigUserId,
+        sessionIdHash: SessionTokenService.hashSessionId(sigSessionId),
+        tokenVersion: 1,
+        status: 'active',
+        expiresAt: new Date(Date.now() + 86400 * 1000),
+      },
+    });
+
+    const sessionSecret = process.env.SESSION_ENCRYPTION_KEY || '0123456789abcdef0123456789abcdef';
+    const csrfSecret = process.env.CSRF_SIGNING_KEY || 'csrf-secret-key-0123456789abcdef';
+    const sessionTokenService = new SessionTokenService(sessionSecret);
+    const csrfService = new CsrfService(csrfSecret);
+
+    const sigSessionToken = sessionTokenService.encryptToken({ sub: sigUserId, sid: sigSessionId, type: 'session', version: 1 }, 86400);
+    const sigCsrfToken = csrfService.generateCsrfToken(sigSessionId);
+
+    await page.context().addCookies([
+      { name: 'horplus_session', value: sigSessionToken, domain: '127.0.0.1', path: '/', httpOnly: true, secure: false, sameSite: 'Lax' },
+      { name: 'horplus_csrf', value: sigCsrfToken, domain: '127.0.0.1', path: '/', httpOnly: false, secure: false, sameSite: 'Lax' },
+    ]);
+
+    await page.goto('http://127.0.0.1:5173/owner/register');
+    await page.waitForLoadState('networkidle');
+
+    // Step 1: Dormitory Info
+    await expect(page.locator('[data-testid="input-dormitory-name"]')).toBeVisible();
+    await page.fill('[data-testid="input-dormitory-name"]', 'หอพัก Signature Truth Test');
+    await page.fill('[data-testid="input-address"]', '888/99 ถนนวิภาวดีรังสิต');
+    await page.click('[data-testid="button-next-step"]'); // 1 -> 2
+
+    // Step 2 -> Step 3
+    await expect(page.locator('[data-testid="button-add-building"]')).toBeVisible();
+    await page.click('[data-testid="button-next-step"]'); // 2 -> 3
+
+    // Step 3 -> Step 4
+    await expect(page.locator('[data-testid="input-water-rate"]')).toBeVisible();
+    await page.click('[data-testid="button-next-step"]'); // 3 -> 4
+
+    // Step 4
+    await expect(page.locator('[data-testid="input-account-number"]')).toBeVisible();
+    await page.click('[data-testid="button-next-step"]'); // Triggers prepare & validation error
+    await expect(page.locator('text=กรุณากด "บันทึกลายเซ็น"')).toBeVisible();
+
+    // Fetch provisionalDormitoryId for RLS-scoped DB assertions
+    const draftRes = await page.request.get('http://127.0.0.1:3001/api/v1/onboarding/draft', {
+      headers: {
+        'Cookie': `horplus_session=${sigSessionToken}; horplus_csrf=${sigCsrfToken}`,
+      },
+    });
+    const draftData = await draftRes.json();
+    const provDormId = draftData.data.provisionalDormitoryId;
+    expect(provDormId).toBeTruthy();
+
+    const getSigCount = async () => {
+      return await prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${provDormId}, true)`;
+        return await tx.ownerSignature.count({ where: { dormitoryId: provDormId } });
+      });
+    };
+
+    // CASE 1 — UNSIGNED RESUME:
+    await page.reload();
+    await page.waitForLoadState('networkidle');
+
+    await expect(page.locator('[data-testid="input-dormitory-name"]')).toBeVisible();
+    await page.click('[data-testid="button-next-step"]');
+    await expect(page.locator('[data-testid="button-add-building"]')).toBeVisible();
+    await page.click('[data-testid="button-next-step"]');
+    await expect(page.locator('[data-testid="input-water-rate"]')).toBeVisible();
+    await page.click('[data-testid="button-next-step"]');
+    await expect(page.locator('[data-testid="input-account-number"]')).toBeVisible();
+
+    const savedBadgeBefore = page.locator('text=บันทึกแล้ว');
+    await expect(savedBadgeBefore).not.toBeVisible();
+
+    const sigCountBefore = await getSigCount();
+    expect(sigCountBefore).toBe(0);
+
+    // CASE 2 — SIGNED RESUME:
+    const canvas = page.locator('canvas');
+    await expect(canvas).toBeVisible();
+    const box = await canvas.boundingBox();
+    if (box) {
+      await page.mouse.move(box.x + 20, box.y + 20);
+      await page.mouse.down();
+      await page.mouse.move(box.x + 100, box.y + 60);
+      await page.mouse.move(box.x + 180, box.y + 30);
+      await page.mouse.up();
+    }
+
+    await page.click('[data-testid="button-save-signature"]');
+    await expect(page.locator('text=บันทึกแล้ว')).toBeVisible();
+
+    const sigCountAfterSave = await getSigCount();
+    expect(sigCountAfterSave).toBe(1);
+
+    await page.reload();
+    await page.waitForLoadState('networkidle');
+
+    await expect(page.locator('[data-testid="input-dormitory-name"]')).toBeVisible();
+    await page.click('[data-testid="button-next-step"]');
+    await expect(page.locator('[data-testid="button-add-building"]')).toBeVisible();
+    await page.click('[data-testid="button-next-step"]');
+    await expect(page.locator('[data-testid="input-water-rate"]')).toBeVisible();
+    await page.click('[data-testid="button-next-step"]');
+    await expect(page.locator('[data-testid="input-account-number"]')).toBeVisible();
+
+    await expect(page.locator('text=บันทึกแล้ว')).toBeVisible();
+
+    const sigCountAfterReload = await getSigCount();
+    expect(sigCountAfterReload).toBe(1);
+  });
 });

@@ -148,7 +148,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
           }
           if (draft.provisionalDormitoryId) {
             setProvisionalDormitoryId(draft.provisionalDormitoryId);
-            setSignatureSaved(true);
+            setSignatureSaved(Boolean(draft.signatureSaved));
             try {
               const lineRes = await onboardingClient.getLineConfig(draft.provisionalDormitoryId);
               const raw = lineRes.data || lineRes;
@@ -291,6 +291,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
       const draft = draftRes.data || draftRes;
       if (draft && draft.provisionalDormitoryId) {
         setProvisionalDormitoryId(draft.provisionalDormitoryId);
+        setSignatureSaved(Boolean(draft.signatureSaved));
         return draft.provisionalDormitoryId;
       }
     } catch {}

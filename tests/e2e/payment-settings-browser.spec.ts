@@ -44,7 +44,6 @@ test.describe.serial('Payment Settings & Profile Source-of-Truth E2E (OR-001 to 
     const sessionId = crypto.randomUUID();
     const techSessionId = crypto.randomUUID();
 
-    await subscriptionEntitlementService.ensureSeeded();
     const freePlan = await prisma.subscriptionPlan.findFirst({ where: { code: 'FREE' } });
 
     // 1. Primary & Secondary Dormitories created first

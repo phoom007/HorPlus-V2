@@ -19,6 +19,7 @@ import { PrismaSessionRepository } from '../../db/repositories/session.repositor
 import { PrismaMembershipRepository } from '../../db/repositories/membership.repository.js';
 import { PrismaRoleRepository } from '../../db/repositories/role.repository.js';
 import { PromoService } from '../../services/promo.service.js';
+import { OnboardingService } from '../../services/onboarding.service.js';
 import { DormitoryProvisioningService } from '../../services/dormitory-provisioning.service.js';
 import { subscriptionEntitlementService } from '../../services/subscription-entitlement.service.js';
 import { SensitiveFieldService } from '../../services/sensitive-field.service.js';
@@ -556,6 +557,76 @@ describe('Final Pre-Operator Security & Real-LINE Closure Tests', () => {
         where: { userId: concUser },
       });
       expect(memberCount).toBe(1);
+    });
+
+    it('OnboardingService.getDraft returns signatureSaved: false when unsigned and signatureSaved: true when signed', async () => {
+      const sigUser = crypto.randomUUID();
+      await prisma.user.create({
+        data: {
+          id: sigUser,
+          email: `${sigUser}@example.com`,
+          emailNormalized: `${sigUser}@example.com`,
+          name: 'Sig Test User',
+          googleSubject: `sub-sig-${Date.now()}`,
+          status: 'active',
+        },
+      });
+
+      const onboardingService = new OnboardingService(prisma);
+      const prep = await provisioningService.prepareProvisionalDormitory(sigUser, { name: 'Sig Test Dorm' });
+      await onboardingService.saveDraft(sigUser, 'signature', { dormitoryName: 'Sig Test Dorm' }, prep.provisionalDormitoryId);
+
+      // CASE 1 — UNSIGNED RESUME
+      const draftUnsigned = await onboardingService.getDraft(sigUser);
+      expect(draftUnsigned?.signatureSaved).toBe(false);
+
+      // CASE 2 — SIGNED RESUME
+      await prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${prep.provisionalDormitoryId}, true)`;
+        await tx.ownerSignature.create({
+          data: {
+            dormitoryId: prep.provisionalDormitoryId,
+            signedByUserId: sigUser,
+            objectKey: `signatures/${prep.provisionalDormitoryId}/sig.png`,
+            sha256: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+            byteSize: 100,
+            isCurrent: true,
+          },
+        });
+      });
+
+      const draftSigned = await onboardingService.getDraft(sigUser);
+      expect(draftSigned?.signatureSaved).toBe(true);
+
+      // CASE 3 — SERVER AUTHORITY (Finalize without DB signature throws OWNER_SIGNATURE_REQUIRED)
+      const unsignedUser = crypto.randomUUID();
+      await prisma.user.create({
+        data: {
+          id: unsignedUser,
+          email: `${unsignedUser}@example.com`,
+          emailNormalized: `${unsignedUser}@example.com`,
+          name: 'Unsigned Finalize User',
+          googleSubject: `sub-unsig-${Date.now()}`,
+          status: 'active',
+        },
+      });
+      const unsignedPrep = await provisioningService.prepareProvisionalDormitory(unsignedUser, { name: 'Unsigned Dorm' });
+      await expect(
+        provisioningService.completeOwnerOnboarding({
+          userId: unsignedUser,
+          idempotencyKey: `idemp-unsig-${Date.now()}`,
+          provisionalDormitoryId: unsignedPrep.provisionalDormitoryId,
+          planCode: 'FREE',
+          dormitory: {
+            name: 'Unsigned Dorm',
+            addressLine1: '123 Test St',
+            province: 'Bangkok',
+            postalCode: '10110',
+          },
+          buildings: [{ id: `bld-${unsignedPrep.provisionalDormitoryId}`, name: 'อาคาร A', floorsCount: 1 }],
+          rooms: [{ buildingId: `bld-${unsignedPrep.provisionalDormitoryId}`, roomNumber: '101', floor: 1, monthlyRent: 3000, depositAmount: 3000, status: 'vacant' }],
+        })
+      ).rejects.toThrow(/กรุณาบันทึกลายเซ็นเจ้าของหอพัก/);
     });
   });
 });
