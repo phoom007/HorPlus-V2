@@ -103,15 +103,20 @@ export function PaymentsOwnerView({
       });
       if (bRes.ok) {
         const bData = await bRes.json();
-        setBills(Array.isArray(bData) ? bData : (bData.data || initialBills));
+        setBills(Array.isArray(bData) ? bData : (Array.isArray(bData?.data) ? bData.data : []));
+      } else {
+        const errData = await bRes.json().catch(() => ({}));
+        setError(errData.error || 'ไม่สามารถโหลดข้อมูลบิลได้');
+        setBills([]);
       }
     } catch (err: any) {
       console.error('Failed to load payments data:', err);
       setError('เกิดข้อผิดพลาดในการเชื่อมต่อเซิร์ฟเวอร์');
+      setBills([]);
     } finally {
       setLoading(false);
     }
-  }, [dormitoryId, initialBills]);
+  }, [dormitoryId]);
 
   useEffect(() => {
     console.log('[DEBUG] PaymentsOwnerView useEffect mounting');

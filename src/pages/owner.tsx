@@ -691,7 +691,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
   
   // Resolve selected dormitory ID dynamically from authorized memberships
   const savedDormId = sessionStorage.getItem('active_dormitory_selected_for_session') || localStorage.getItem('selected_dormitory_id');
-  const activeMemberships = memberships.filter((m: any) => m.status === 'active' || !m.status);
+  const activeMemberships = memberships.filter((m: any) => !m.status || String(m.status).toLowerCase() === 'active');
   
   const validDormId = activeMemberships.find((m: any) => m.dormitoryId === savedDormId)?.dormitoryId 
     || activeMemberships[0]?.dormitoryId 

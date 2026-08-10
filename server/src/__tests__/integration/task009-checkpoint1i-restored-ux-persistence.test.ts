@@ -485,6 +485,7 @@ describe('TASK-009 Checkpoint 1I — Authoritative Restored UX & LINE Config Tru
 
       expect(resA).toBeTruthy();
       expect(resB).toBeTruthy();
+      if (!resA || !resB) throw new Error('Draft not found');
       expect(resA.payload?.dormitoryName).toBe('Dorm A');
       expect(resB.payload?.dormitoryName).toBe('Dorm B');
       expect(resA.payload?.address).toBe('111 A Street');

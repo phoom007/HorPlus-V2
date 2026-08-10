@@ -49,7 +49,7 @@ export const OwnerAuthGuard: React.FC<{ children?: React.ReactNode }> = ({ child
   }
 
   const userMemberships = session.memberships || [];
-  const activeMemberships = userMemberships.filter((m: any) => m.status === 'active' || !m.status);
+  const activeMemberships = userMemberships.filter((m: any) => !m.status || String(m.status).toLowerCase() === 'active');
   const membershipCount = activeMemberships.length;
 
   if (session.onboardingRequired || membershipCount === 0) {

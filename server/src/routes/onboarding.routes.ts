@@ -200,7 +200,7 @@ export function createOnboardingRouter(
         billing: parsed.data.billing,
         payment: parsed.data.payment,
         buildings: parsed.data.buildings,
-        rooms: parsed.data.rooms,
+        rooms: parsed.data.rooms ? parsed.data.rooms.map((r) => ({ ...r, maximumOccupants: r.maximumOccupants ?? undefined })) : undefined,
         planCode: parsed.data.planCode,
         packageId: req.body.packageId,
         promoCode: parsed.data.promoCode,
