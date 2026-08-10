@@ -118,7 +118,6 @@ describe('TASK-009 — Comprehensive Delta Verification Suite (Checkpoint 1D)', 
     });
     // Configure LINE OA for testDormitoryId
     await lineOaService.updateDormitoryLineConfig(testDormitoryId, {
-      lineOaId: '@dormA_oa',
       channelId: '1657888888',
       channelSecret: 'secret_a_key_12345'
     });
@@ -204,7 +203,6 @@ describe('TASK-009 — Comprehensive Delta Verification Suite (Checkpoint 1D)', 
     mockAdapter.verifyAccessTokenCalls = [];
 
     const configResult = await lineOaService.updateDormitoryLineConfig(testDormitoryBId, {
-      lineOaId: '@dormB_verif_oa',
       channelId: '1657777777',
       channelSecret: 'secret_verif_key_12345'
     });
@@ -300,7 +298,6 @@ describe('TASK-009 — Comprehensive Delta Verification Suite (Checkpoint 1D)', 
 
   it('10. SECURITY DEFINER Webhook Resolver & Concurrent Webhook Deduplication', async () => {
     const configResult = await lineOaService.updateDormitoryLineConfig(testDormitoryId, {
-      lineOaId: '@dormA_sec_oa',
       channelId: '1657666666',
       channelSecret: 'secret_sec_key_12345'
     });
@@ -397,7 +394,6 @@ describe('TASK-009 — Comprehensive Delta Verification Suite (Checkpoint 1D)', 
   it('16. Attempt Expiration Idempotency (Repeat & Concurrent Expiration)', async () => {
     const dormExp = await prisma.dormitory.create({ data: { name: 'Dorm Expiry Idempotency', createdByUserId: testOwnerUserId, timezone: 'Asia/Bangkok' } });
     await lineOaService.updateDormitoryLineConfig(dormExp.id, {
-      lineOaId: '@dormExp_oa',
       channelId: '1657999888',
       channelSecret: 'secret_exp_key_12345'
     });

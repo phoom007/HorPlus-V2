@@ -155,7 +155,11 @@ export function createLineOaRoutes(
       try {
         const dormId = await getDormitoryId(req);
         const baseUrl = getPublicWebhookOrigin();
-        const updated = await lineOaService.updateDormitoryLineConfig(dormId, req.body, baseUrl);
+        const updated = await lineOaService.updateDormitoryLineConfig(
+          dormId,
+          { channelId: req.body.channelId, channelSecret: req.body.channelSecret },
+          baseUrl
+        );
         return res.status(200).json({ success: true, data: updated, config: updated });
       } catch (err) {
         next(err);

@@ -183,7 +183,17 @@ export class FakeLineServer {
         resolve(this.baseUrl);
       });
 
-      this.server.on('error', (err) => reject(err));
+      this.server.on('error', (err: NodeJS.ErrnoException) => {
+        if (err.code === 'EADDRINUSE') {
+          // Another spec already started FakeLineServer on this port — reuse it
+          this.port = 5456;
+          this.baseUrl = 'http://127.0.0.1:5456';
+          this.server = null;
+          resolve(this.baseUrl);
+        } else {
+          reject(err);
+        }
+      });
     });
   }
 

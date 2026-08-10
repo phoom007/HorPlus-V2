@@ -281,12 +281,23 @@ export class MockLinePlatformAdapter implements LinePlatformAdapter {
   public verifyAccessTokenCalls: Array<{ accessToken: string }> = [];
 
   public mockPushResult?: LinePushResult;
+  public customBotInfo?: LineBotInfo;
   public simulate409WithAcceptedId = false;
   public simulate409WithoutAcceptedId = false;
 
   public storedWebhookEndpoint: string = '';
   public storedWebhookActive: boolean = true;
   public forceVerifyFail: boolean = false;
+
+  public setVerifyResult(result: { verified: boolean; botInfo?: LineBotInfo }) {
+    if (result.verified && result.botInfo) {
+      this.customBotInfo = result.botInfo;
+      this.forceVerifyFail = false;
+    } else {
+      this.forceVerifyFail = !result.verified;
+      this.customBotInfo = undefined;
+    }
+  }
 
   async verifyAccessToken(channelAccessToken: string): Promise<{ verified: boolean; botInfo?: LineBotInfo }> {
     this.verifyAccessTokenCalls.push({ accessToken: channelAccessToken });
@@ -296,6 +307,12 @@ export class MockLinePlatformAdapter implements LinePlatformAdapter {
     }
     if (!channelAccessToken || channelAccessToken === 'invalid_token' || channelAccessToken.length < 8) {
       return { verified: false };
+    }
+    if (this.customBotInfo) {
+      return {
+        verified: true,
+        botInfo: this.customBotInfo,
+      };
     }
     return {
       verified: true,

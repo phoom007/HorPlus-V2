@@ -26,13 +26,9 @@ export interface PublicWebhookOriginStatus {
 }
 
 export function validatePublicWebhookOrigin(rawOrigin?: string): PublicWebhookOriginStatus {
-  const isE2EorTest = process.env.HORPLUS_E2E === 'true' || process.env.NODE_ENV === 'test';
-  const origin = (rawOrigin || process.env.PUBLIC_WEBHOOK_ORIGIN || process.env.PUBLIC_APP_ORIGIN || '').trim().replace(/\/+$/, '');
+  const origin = (rawOrigin || process.env.PUBLIC_WEBHOOK_ORIGIN || process.env.PUBLIC_APP_ORIGIN || (process.env.NODE_ENV === 'test' ? 'https://webhook.horplus.com' : '')).trim().replace(/\/+$/, '');
 
   if (!origin) {
-    if (isE2EorTest) {
-      return { origin: 'http://127.0.0.1:3001', isConfigured: true };
-    }
     return {
       origin: null,
       isConfigured: false,
@@ -40,21 +36,20 @@ export function validatePublicWebhookOrigin(rawOrigin?: string): PublicWebhookOr
     };
   }
 
-  if (!isE2EorTest) {
-    if (origin.startsWith('http://127.0.0.1') || origin.startsWith('http://localhost') || origin.startsWith('https://127.0.0.1') || origin.startsWith('https://localhost')) {
-      return {
-        origin: null,
-        isConfigured: false,
-        errorReason: 'PUBLIC_WEBHOOK_ORIGIN_LOCALHOST_REJECTED',
-      };
-    }
-    if (!origin.startsWith('https://')) {
-      return {
-        origin: null,
-        isConfigured: false,
-        errorReason: 'PUBLIC_WEBHOOK_ORIGIN_HTTPS_REQUIRED',
-      };
-    }
+  if (origin.startsWith('http://127.0.0.1') || origin.startsWith('http://localhost') || origin.startsWith('https://127.0.0.1') || origin.startsWith('https://localhost')) {
+    return {
+      origin: null,
+      isConfigured: false,
+      errorReason: 'PUBLIC_WEBHOOK_ORIGIN_LOCALHOST_REJECTED',
+    };
+  }
+
+  if (!origin.startsWith('https://')) {
+    return {
+      origin: null,
+      isConfigured: false,
+      errorReason: 'PUBLIC_WEBHOOK_ORIGIN_HTTPS_REQUIRED',
+    };
   }
 
   return { origin, isConfigured: true };
@@ -174,13 +169,14 @@ export class LineOaService {
   /**
    * Configure LINE OA Channel ID & Channel Secret ONLY.
    * Access token is statelessly issued and verified via GET /v2/bot/info.
+   * Basic ID (lineOaId) is derived ONLY from verified botInfo.
    */
   async updateDormitoryLineConfig(
     dormitoryId: string,
-    data: { channelId?: string; channelSecret?: string; lineOaId?: string },
+    data: { channelId?: string; channelSecret?: string },
     baseUrl = getPublicWebhookOrigin()
   ) {
-    return await this.prisma.$transaction(async (tx) => {
+    await this.prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormitoryId}, true)`;
 
       const existing = await tx.dormitoryLineConfig.findUnique({
@@ -189,13 +185,13 @@ export class LineOaService {
 
       let channelSecretEncrypted = existing?.channelSecretEncrypted;
       let accessTokenVerifiedAt = existing?.accessTokenVerifiedAt;
-      let lineOaId = data.lineOaId || existing?.lineOaId;
+      let lineOaId = existing?.lineOaId || null;
 
-      let botUserId = existing?.botUserId;
-      let botDisplayName = existing?.botDisplayName;
-      let botPictureUrl = existing?.botPictureUrl;
-      let botPremiumId = existing?.botPremiumId;
-      let botChatMode = existing?.botChatMode;
+      let botUserId = existing?.botUserId || null;
+      let botDisplayName = existing?.botDisplayName || null;
+      let botPictureUrl = existing?.botPictureUrl || null;
+      let botPremiumId = existing?.botPremiumId || null;
+      let botChatMode = existing?.botChatMode || null;
 
       const isChannelIdChanged = Boolean(data.channelId && data.channelId !== existing?.channelId);
       const isSecretProvided = Boolean(data.channelSecret);
@@ -221,11 +217,11 @@ export class LineOaService {
 
           accessTokenVerifiedAt = new Date();
           if (verification.botInfo) {
-            botUserId = verification.botInfo.userId;
-            botDisplayName = verification.botInfo.displayName;
-            botPictureUrl = verification.botInfo.pictureUrl;
-            botPremiumId = verification.botInfo.premiumId;
-            botChatMode = verification.botInfo.chatMode;
+            botUserId = verification.botInfo.userId || null;
+            botDisplayName = verification.botInfo.displayName || null;
+            botPictureUrl = verification.botInfo.pictureUrl || null;
+            botPremiumId = verification.botInfo.premiumId || null;
+            botChatMode = verification.botInfo.chatMode || null;
             if (verification.botInfo.basicId) {
               lineOaId = verification.botInfo.basicId;
             }
@@ -245,7 +241,7 @@ export class LineOaService {
         webhookKeyHash = opaque.keyHash;
       }
 
-      const updated = await tx.dormitoryLineConfig.upsert({
+      await tx.dormitoryLineConfig.upsert({
         where: { dormitoryId },
         create: {
           dormitoryId,
@@ -272,42 +268,14 @@ export class LineOaService {
           botPictureUrl,
           botPremiumId,
           botChatMode,
+          webhookKeyHash: webhookKeyHash!,
+          webhookKeyEncrypted: encryptedWebhookKey!,
           accessTokenVerifiedAt,
         }
       });
-
-      let webhookUrl: string | null = null;
-      if (updated.webhookKeyEncrypted) {
-        try {
-          const rawKey = decryptText(updated.webhookKeyEncrypted);
-          webhookUrl = `${baseUrl}/api/v1/line/webhook/${rawKey}`;
-        } catch {
-          webhookUrl = null;
-        }
-      }
-
-      const credentialsVerified = !!(updated.channelId && updated.channelSecretEncrypted && updated.accessTokenVerifiedAt);
-      const webhookEndpointSet = !!updated.webhookEndpointSetAt;
-      const webhookTestSucceeded = !!updated.webhookTestSucceededAt;
-      const webhookActive = Boolean(updated.webhookActive);
-      const isReady = credentialsVerified && webhookEndpointSet && webhookTestSucceeded && webhookActive;
-
-      return {
-        connected: credentialsVerified,
-        isReady,
-        credentialsVerified,
-        webhookEndpointSet,
-        webhookTestSucceeded,
-        webhookActive,
-        hasChannelSecret: !!updated.channelSecretEncrypted,
-        hasAccessToken: !!updated.accessTokenVerifiedAt,
-        lineOaId: updated.lineOaId,
-        channelId: updated.channelId,
-        accessTokenVerifiedAt: updated.accessTokenVerifiedAt,
-        webhookVerifiedAt: updated.webhookVerifiedAt,
-        webhookUrl
-      };
     });
+
+    return await this.getDormitoryLineConfig(dormitoryId, baseUrl);
   }
 
   /**
@@ -392,68 +360,42 @@ export class LineOaService {
   /**
    * Disconnect LINE OA
    */
-  async disconnectLineConfig(dormitoryId: string) {
-    return await this.prisma.$transaction(async (tx) => {
+  async disconnectLineConfig(dormitoryId: string, baseUrl = getPublicWebhookOrigin()) {
+    await this.prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormitoryId}, true)`;
 
       const existing = await tx.dormitoryLineConfig.findUnique({
         where: { dormitoryId }
       });
 
-      if (!existing) {
-        return {
-          connected: false,
-          isReady: false,
-          credentialsVerified: false,
-          webhookEndpointSet: false,
-          webhookTestSucceeded: false,
-          webhookActive: false,
-          hasChannelSecret: false,
-          lineOaId: null,
-          channelId: null,
-          accessTokenVerifiedAt: null,
-          webhookVerifiedAt: null,
-          webhookUrl: null
-        };
+      if (existing) {
+        await tx.dormitoryLineConfig.update({
+          where: { dormitoryId },
+          data: {
+            channelSecretEncrypted: null,
+            accessTokenVerifiedAt: null,
+            isConnected: false,
+            webhookActive: false,
+            webhookEndpointSetAt: null,
+            webhookTestSucceededAt: null,
+          }
+        });
       }
-
-      await tx.dormitoryLineConfig.update({
-        where: { dormitoryId },
-        data: {
-          isConnected: false,
-          webhookActive: false,
-          webhookEndpointSetAt: null,
-          webhookTestSucceededAt: null,
-        }
-      });
-
-      return {
-        connected: false,
-        isReady: false,
-        credentialsVerified: !!(existing.channelId && existing.channelSecretEncrypted && existing.accessTokenVerifiedAt),
-        webhookEndpointSet: false,
-        webhookTestSucceeded: false,
-        webhookActive: false,
-        hasChannelSecret: !!existing.channelSecretEncrypted,
-        lineOaId: existing.lineOaId,
-        channelId: existing.channelId,
-        accessTokenVerifiedAt: existing.accessTokenVerifiedAt,
-        webhookVerifiedAt: existing.webhookVerifiedAt,
-        webhookUrl: null
-      };
     });
+
+    return await this.getDormitoryLineConfig(dormitoryId, baseUrl);
   }
 
   /**
    * Rotate Webhook Key
    */
   async rotateWebhookKey(dormitoryId: string, baseUrl = getPublicWebhookOrigin()) {
-    return await this.prisma.$transaction(async (tx) => {
+    await this.prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormitoryId}, true)`;
 
       const opaque = generateOpaqueWebhookKey();
 
-      const updated = await tx.dormitoryLineConfig.update({
+      await tx.dormitoryLineConfig.update({
         where: { dormitoryId },
         data: {
           webhookKeyHash: opaque.keyHash,
@@ -465,32 +407,9 @@ export class LineOaService {
           isConnected: false,
         }
       });
-
-      let webhookUrl: string | null = null;
-      if (updated.webhookKeyEncrypted) {
-        try {
-          const rawKey = decryptText(updated.webhookKeyEncrypted);
-          webhookUrl = `${baseUrl}/api/v1/line/webhook/${rawKey}`;
-        } catch {
-          webhookUrl = null;
-        }
-      }
-
-      return {
-        connected: false,
-        isReady: false,
-        credentialsVerified: !!(updated.channelId && updated.channelSecretEncrypted && updated.accessTokenVerifiedAt),
-        webhookEndpointSet: false,
-        webhookTestSucceeded: false,
-        webhookActive: false,
-        hasChannelSecret: !!updated.channelSecretEncrypted,
-        lineOaId: updated.lineOaId,
-        channelId: updated.channelId,
-        accessTokenVerifiedAt: updated.accessTokenVerifiedAt,
-        webhookVerifiedAt: updated.webhookVerifiedAt,
-        webhookUrl
-      };
     });
+
+    return await this.getDormitoryLineConfig(dormitoryId, baseUrl);
   }
 
   /**

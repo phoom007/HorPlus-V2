@@ -182,7 +182,7 @@ export const onboardingClient = {
     });
   },
 
-  async updateLineConfig(dormitoryId: string, data: { channelId?: string; channelSecret?: string; lineOaId?: string }) {
+  async updateLineConfig(dormitoryId: string, data: { channelId?: string; channelSecret?: string }) {
     return httpRequest<any>('PUT', `/dormitories/${dormitoryId}/line-oa`, data, {
       headers: { 'X-Dormitory-Id': dormitoryId },
     });

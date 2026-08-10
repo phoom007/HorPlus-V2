@@ -10,7 +10,7 @@ import { SensitiveFieldService } from './sensitive-field.service.js';
 import { subscriptionEntitlementService } from './subscription-entitlement.service.js';
 import { addCalendarMonths } from '../utils/calendar-math.js';
 import { normalizeRoomIdentifier } from '../utils/normalization.js';
-import { decryptText } from '../utils/crypto-encryption.js';
+import { decryptText, generateOpaqueWebhookKey } from '../utils/crypto-encryption.js';
 import { IIdempotencyRepository, InMemoryIdempotencyRepository } from '../db/repositories/idempotency.repository.js';
 import { getPublicWebhookOrigin } from './line-oa.service.js';
 
@@ -69,13 +69,22 @@ export interface CompleteOwnerOnboardingParams {
     roomPrefix?: string | null;
     hasElevator?: boolean | null;
     numberingPattern?: string | null;
+    formatPattern?: string | null;
     description?: string | null;
+    monthlyRent?: number | null;
+    dailyRent?: number | null;
+    termRent?: number | null;
+    termMonths?: number | null;
+    maximumOccupants?: number | null;
   }[];
   rooms?: {
     buildingId?: string;
     roomNumber: string;
     floor: number;
     monthlyRent: number;
+    dailyRent?: number | null;
+    termRent?: number | null;
+    termMonths?: number | null;
     depositAmount: number;
     parkingFee?: number;
     maximumOccupants?: number;
@@ -232,9 +241,7 @@ export class DormitoryProvisioningService {
       }
 
       const dormName = data.name || 'หอพักใหม่ (กำลังลงทะเบียน)';
-      const webhookKey = nodeCrypto.randomBytes(32).toString('hex');
-      const webhookKeyHash = nodeCrypto.createHash('sha256').update(webhookKey).digest('hex');
-      const encryptedWebhookKey = this.sensitiveFieldService.encrypt(webhookKey);
+      const opaqueKey = generateOpaqueWebhookKey();
 
       const dorm = await tx.dormitory.create({
         data: {
@@ -287,8 +294,8 @@ export class DormitoryProvisioningService {
       await tx.dormitoryLineConfig.create({
         data: {
           dormitoryId: dorm.id,
-          webhookKeyHash,
-          webhookKeyEncrypted: encryptedWebhookKey.ciphertext,
+          webhookKeyHash: opaqueKey.keyHash,
+          webhookKeyEncrypted: opaqueKey.keyEncrypted,
           isConnected: false,
         },
       });
@@ -311,7 +318,7 @@ export class DormitoryProvisioningService {
       });
 
       const appOrigin = getPublicWebhookOrigin();
-      const webhookUrl = `${appOrigin}/api/v1/line/webhook/${webhookKey}`;
+      const webhookUrl = `${appOrigin}/api/v1/line/webhook/${opaqueKey.rawKey}`;
 
       return {
         provisionalDormitoryId: dorm.id,
@@ -501,12 +508,15 @@ export class DormitoryProvisioningService {
 
       // Save Billing Settings with Nullish Coalescing (Zero-value fidelity preserved)
       if (billing) {
-        const waterRateStr = (billing.waterRate !== undefined && billing.waterRate !== null && billing.waterRate !== '') ? String(billing.waterRate) : '18.00';
-        const electricityRateStr = (billing.electricityRate !== undefined && billing.electricityRate !== null && billing.electricityRate !== '') ? String(billing.electricityRate) : '7.00';
+        const waterRateStr = (billing.waterRate !== undefined && billing.waterRate !== null && billing.waterRate !== '') ? String(billing.waterRate) : '0.00';
+        const electricityRateStr = (billing.electricityRate !== undefined && billing.electricityRate !== null && billing.electricityRate !== '') ? String(billing.electricityRate) : '0.00';
         const commonFeeStr = (billing.commonFee !== undefined && billing.commonFee !== null && billing.commonFee !== '') ? String(billing.commonFee) : '0.00';
         const internetFeeStr = (billing.internetFee !== undefined && billing.internetFee !== null && billing.internetFee !== '') ? String(billing.internetFee) : '0.00';
         const parkingRateStr = (billing.parkingRate !== undefined && billing.parkingRate !== null && billing.parkingRate !== '') ? String(billing.parkingRate) : '0.00';
         const lateFeeValueStr = (billing.lateFeeValue !== undefined && billing.lateFeeValue !== null && billing.lateFeeValue !== '') ? String(billing.lateFeeValue) : '50.00';
+
+        const gracePeriodDaysNum = (billing.gracePeriodDays !== undefined && billing.gracePeriodDays !== null) ? Number(billing.gracePeriodDays) : 0;
+        const advanceRentMonthsNum = (billing.advanceRentMonths !== undefined && billing.advanceRentMonths !== null) ? Number(billing.advanceRentMonths) : 1;
 
         await tx.dormitoryBillingSettings.upsert({
           where: { dormitoryId: dormId },
@@ -524,8 +534,8 @@ export class DormitoryProvisioningService {
             internetFeeMode: billing.internetFeeMode || 'none',
             parkingRate: parkingRateStr,
             parkingFeeMode: billing.parkingFeeMode || 'none',
-            gracePeriodDays: Number(billing.gracePeriodDays) || 0,
-            advanceRentMonths: Number(billing.advanceRentMonths) || 1,
+            gracePeriodDays: gracePeriodDaysNum,
+            advanceRentMonths: advanceRentMonthsNum,
             lateFeeType: billing.lateFeeType || 'fixed',
             lateFeeValue: lateFeeValueStr,
             rentBillingType: billing.rentBillingType || 'monthly',
@@ -543,8 +553,8 @@ export class DormitoryProvisioningService {
             internetFeeMode: billing.internetFeeMode || 'none',
             parkingRate: parkingRateStr,
             parkingFeeMode: billing.parkingFeeMode || 'none',
-            gracePeriodDays: Number(billing.gracePeriodDays) || 0,
-            advanceRentMonths: Number(billing.advanceRentMonths) || 1,
+            gracePeriodDays: gracePeriodDaysNum,
+            advanceRentMonths: advanceRentMonthsNum,
             lateFeeType: billing.lateFeeType || 'fixed',
             lateFeeValue: lateFeeValueStr,
             rentBillingType: billing.rentBillingType || 'monthly',
@@ -583,6 +593,13 @@ export class DormitoryProvisioningService {
       // Save Buildings and Rooms if provided (idempotent upsert)
       if (buildings && buildings.length > 0) {
         for (const b of buildings) {
+          const bMonthlyStr = (b.monthlyRent !== undefined && b.monthlyRent !== null) ? String(b.monthlyRent) : null;
+          const bDailyStr = (b.dailyRent !== undefined && b.dailyRent !== null) ? String(b.dailyRent) : null;
+          const bTermStr = (b.termRent !== undefined && b.termRent !== null) ? String(b.termRent) : null;
+          const bTermMonths = b.termMonths ?? 6;
+          const bMaxOcc = b.maximumOccupants ?? 2;
+          const bNumPattern = b.numberingPattern || b.formatPattern || null;
+
           const createdBld = await tx.building.upsert({
             where: {
               dormitory_building_name_unique: {
@@ -596,19 +613,42 @@ export class DormitoryProvisioningService {
               code: b.code || null,
               floorCount: b.floorsCount || 1,
               roomsPerFloor: b.roomsPerFloor || null,
+              roomPrefix: b.roomPrefix || null,
+              hasElevator: b.hasElevator ?? false,
+              numberingPattern: bNumPattern,
               description: b.description || null,
+              monthlyRent: bMonthlyStr,
+              dailyRent: bDailyStr,
+              termRent: bTermStr,
+              termMonths: bTermMonths,
+              maximumOccupants: bMaxOcc,
             },
             update: {
               code: b.code || null,
               floorCount: b.floorsCount || 1,
               roomsPerFloor: b.roomsPerFloor || null,
+              roomPrefix: b.roomPrefix || null,
+              hasElevator: b.hasElevator ?? false,
+              numberingPattern: bNumPattern,
               description: b.description || null,
+              monthlyRent: bMonthlyStr,
+              dailyRent: bDailyStr,
+              termRent: bTermStr,
+              termMonths: bTermMonths,
+              maximumOccupants: bMaxOcc,
             },
           });
 
           const matchingRooms = (rooms || []).filter((r) => r.buildingId === b.id);
           for (const r of matchingRooms) {
             const normalizedRoomNumber = normalizeRoomIdentifier(r.roomNumber);
+            const rMonthlyStr = (r.monthlyRent !== undefined && r.monthlyRent !== null) ? String(r.monthlyRent) : (bMonthlyStr || '0');
+            const rDailyStr = (r.dailyRent !== undefined && r.dailyRent !== null) ? String(r.dailyRent) : bDailyStr;
+            const rTermStr = (r.termRent !== undefined && r.termRent !== null) ? String(r.termRent) : bTermStr;
+            const rTermMonths = r.termMonths ?? bTermMonths;
+            const rDepositStr = (r.depositAmount !== undefined && r.depositAmount !== null) ? String(r.depositAmount) : '0';
+            const rMaxOcc = r.maximumOccupants ?? bMaxOcc;
+
             await tx.room.upsert({
               where: {
                 dormitoryId_normalizedRoomNumber: {
@@ -623,8 +663,12 @@ export class DormitoryProvisioningService {
                 normalizedRoomNumber,
                 floor: r.floor || 1,
                 roomType: (r as any).roomType || 'standard',
-                monthlyRent: String(r.monthlyRent ?? 0),
-                depositAmount: String(r.depositAmount ?? 0),
+                monthlyRent: rMonthlyStr,
+                dailyRent: rDailyStr,
+                termRent: rTermStr,
+                termMonths: rTermMonths,
+                depositAmount: rDepositStr,
+                maximumOccupants: rMaxOcc,
                 status: r.status || 'VACANT',
               },
               update: {
@@ -632,8 +676,12 @@ export class DormitoryProvisioningService {
                 roomNumber: r.roomNumber,
                 floor: r.floor || 1,
                 roomType: (r as any).roomType || 'standard',
-                monthlyRent: String(r.monthlyRent ?? 0),
-                depositAmount: String(r.depositAmount ?? 0),
+                monthlyRent: rMonthlyStr,
+                dailyRent: rDailyStr,
+                termRent: rTermStr,
+                termMonths: rTermMonths,
+                depositAmount: rDepositStr,
+                maximumOccupants: rMaxOcc,
                 status: r.status || 'VACANT',
               },
             });

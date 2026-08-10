@@ -132,7 +132,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
   // Terms & Referral Modal states
   const [showTermsModal, setShowTermsModal] = useState(false);
   const [agreedTerms, setAgreedTerms] = useState(false);
-  const [referralSource, setReferralSource] = useState('');
+  const [referralSource, setReferralSource] = useState('facebook');
   const [referralOtherText, setReferralOtherText] = useState('');
 
   // Room editing states
@@ -177,7 +177,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
     webhookTestSucceeded: false,
     webhookActive: false,
     isReady: false,
-    isPublicWebhookConfigured: true,
+    isPublicWebhookConfigured: false,
   });
 
   // Step 6: Package & Catalog States
@@ -203,17 +203,17 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
     buildings: [
       {
         id: 'b-1',
-        name: 'อาคาร A',
+        name: 'อาคาร 1',
         totalFloors: 1,
-        roomsPerFloor: 5,
+        roomsPerFloor: 0,
         hasElevator: false,
-        roomPrefix: 'A',
+        roomPrefix: '',
         formatPattern: 'prefix_floor_room',
         mode: 'auto' as 'auto' | 'manual',
         customRooms: [] as string[],
         securityDeposit: 0,
         rentRates: {
-          monthly: 3500,
+          monthly: 0,
           term: 0,
           termMonths: 1,
           daily: 0,
@@ -225,9 +225,9 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
     // Step 3: Utilities & Service Rates
     utilities: {
       waterBillingMode: 'unit',
-      waterRate: 18,
+      waterRate: 0,
       electricBillingMode: 'unit',
-      electricRate: 7,
+      electricRate: 0,
       commonFeeMode: 'none',
       commonFeeRate: 0,
       internetFeeMode: 'none',
@@ -436,7 +436,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
           }
           if (draft.provisionalDormitoryId) {
             setProvisionalDormitoryId(draft.provisionalDormitoryId);
-            setSignatureSaved(Boolean(draft.signatureSaved));
+            setSignatureSaved(Boolean(draft.signatureSaved || draft.payload?.signatureSaved));
             try {
               const lineRes = await onboardingClient.getLineConfig(draft.provisionalDormitoryId);
               const raw = lineRes.data || lineRes;
@@ -457,7 +457,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                 webhookTestSucceeded,
                 webhookActive,
                 isReady,
-                isPublicWebhookConfigured: config.isPublicWebhookConfigured !== false,
+                isPublicWebhookConfigured: Boolean(config.isPublicWebhookConfigured),
                 webhookOriginError: config.webhookOriginError || null,
                 botUserId: config.botUserId || null,
                 botDisplayName: config.botDisplayName || null,
@@ -584,7 +584,6 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
       const res = await onboardingClient.updateLineConfig(dormId, {
         channelId: lineChannelId.trim(),
         channelSecret: lineChannelSecret.trim(),
-        lineOaId: lineOaId.trim() || undefined,
       });
 
       const raw = res.data || res;
@@ -601,7 +600,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
         webhookTestSucceeded,
         webhookActive,
         isReady,
-        isPublicWebhookConfigured: config.isPublicWebhookConfigured !== false,
+        isPublicWebhookConfigured: Boolean(config.isPublicWebhookConfigured),
         webhookOriginError: config.webhookOriginError || null,
         botUserId: config.botUserId || null,
         botDisplayName: config.botDisplayName || null,
@@ -808,7 +807,11 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
     setValidationError(null);
 
     let nextStepNum = currentStep + 1;
-    if (currentStep === 4) {
+    if (currentStep === 3) {
+      await ensureProvisionalDormitory();
+      nextStepNum = 4;
+      setCurrentStep(4);
+    } else if (currentStep === 4) {
       await ensureProvisionalDormitory();
       nextStepNum = 5;
       setCurrentStep(5);
@@ -850,6 +853,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
 
     onboardingClient.saveDraft(String(nextStepNum), {
       ...formData,
+      signatureSaved: signatureSaved || hasDrawnRef.current,
       dormitoryName: formData.dormitoryName,
       address: formData.address,
       province: formData.province,
@@ -975,7 +979,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
           cashAccepted: true,
           promptPayType,
           promptPayValue,
-          bankCode: formData.paymentAccount.bankName ? formData.paymentAccount.bankName.split(' ')[0] : undefined,
+          bankCode: formData.paymentAccount.bankName || undefined,
           bankAccountName: (formData.paymentAccount.bankAccountName || formData.paymentAccount.accountName || '').trim() || undefined,
           bankAccountNumber: formData.paymentAccount.accountNumber.trim() || undefined,
         },
@@ -993,11 +997,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
       setShowTermsModal(false);
 
       setTimeout(() => {
-        if (onNavigate) {
-          onNavigate('dashboard');
-        } else {
-          window.location.href = '/owner/dashboard';
-        }
+        window.location.href = '/owner/dashboard';
       }, 1200);
     } catch (err: any) {
       setValidationError(err.message || 'เกิดข้อผิดพลาดในการลงทะเบียนหอพัก กรุณาตรวจสอบข้อมูลอีกครั้ง');
@@ -1288,6 +1288,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                         <label className="block text-xs font-semibold text-slate-600 mb-1">นำหน้าห้อง (Prefix)</label>
                         <input
                           type="text"
+                          data-testid="input-building-prefix"
                           value={b.roomPrefix}
                           onChange={e => {
                             const updated = [...formData.buildings];
@@ -1594,6 +1595,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                     <label className="block text-xs font-semibold text-slate-700 mb-1">เลขพร้อมเพย์ (Optional)</label>
                     <input
                       type="text"
+                      data-testid="input-promptpay"
                       value={formData.paymentAccount.promptPayId}
                       onChange={e => setFormData(prev => ({ ...prev, paymentAccount: { ...prev.paymentAccount, promptPayId: e.target.value } }))}
                       placeholder="เบอร์โทรศัพท์ 10 หลัก หรือ เลขบัตรประชาชน 13 หลัก"
@@ -1614,7 +1616,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                     <p className="text-xs text-slate-500 mt-0.5">ใช้วาดสำหรับประทับลงในสัญญาเช่าและใบเสร็จรับเงินอย่างเป็นทางการ</p>
                   </div>
                   {signatureSaved && (
-                    <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-bold bg-emerald-100 text-emerald-700 border border-emerald-300">
+                    <span data-testid="signature-status-saved" className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-bold bg-emerald-100 text-emerald-700 border border-emerald-300">
                       <CheckCircle2 className="w-3.5 h-3.5" />
                       บันทึกแล้ว
                     </span>
@@ -1710,6 +1712,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                 </label>
                 <input
                   type="text"
+                  data-testid="input-line-channel-id"
                   value={lineChannelId}
                   onChange={e => setLineChannelId(e.target.value)}
                   placeholder="เช่น 2006123456"
@@ -1723,6 +1726,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                 </label>
                 <input
                   type="password"
+                  data-testid="input-line-channel-secret"
                   value={lineChannelSecret}
                   onChange={e => setLineChannelSecret(e.target.value)}
                   placeholder="••••••••••••••••••••••••••••••••"
@@ -1730,9 +1734,16 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                 />
               </div>
 
-              <div className="md:col-span-2 flex justify-end">
+              <div className="md:col-span-2 flex items-center justify-between">
+                <span data-testid="line-readiness-badge" className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold ${
+                  lineStatus.isReady ? 'bg-emerald-100 text-emerald-800 border border-emerald-300' : 'bg-amber-100 text-amber-800 border border-amber-300'
+                }`}>
+                  {lineStatus.isReady ? 'พร้อมใช้งาน ✅' : 'รอดำเนินการ ⏳'}
+                </span>
+
                 <button
                   type="button"
+                  data-testid="button-save-line-credentials"
                   onClick={handleVerifyLineCredentials}
                   disabled={lineVerifying}
                   className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-sm shadow-sm transition-all disabled:opacity-50"
@@ -1816,6 +1827,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                 <div className="flex items-center gap-3 pt-2">
                   <button
                     type="button"
+                    data-testid="button-set-line-webhook"
                     onClick={handleSetLineWebhook}
                     disabled={lineVerifying}
                     className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs shadow-sm transition-all disabled:opacity-50"
@@ -1824,6 +1836,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                   </button>
                   <button
                     type="button"
+                    data-testid="button-test-line-webhook"
                     onClick={handleTestLineWebhook}
                     disabled={lineVerifying}
                     className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-900 text-white font-semibold text-xs shadow-sm transition-all disabled:opacity-50"
@@ -1865,6 +1878,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                 <div className="flex items-center gap-2">
                   <input
                     type="text"
+                    data-testid="input-promo-code"
                     value={promoCodeInput}
                     onChange={e => setPromoCodeInput(e.target.value.toUpperCase())}
                     placeholder="กรอกรหัสโปรโมชัน HORPLUS"
@@ -1872,6 +1886,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                   />
                   <button
                     type="button"
+                    data-testid="button-apply-promo"
                     onClick={handleApplyPromoCode}
                     disabled={promoApplying}
                     className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs shadow-sm transition-all disabled:opacity-50"
@@ -1896,6 +1911,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                     return (
                       <div
                         key={pkg.id}
+                        data-testid="plan-card-pro"
                         onClick={() => setSelectedPackageId(pkg.id)}
                         className={`p-5 rounded-2xl border-2 cursor-pointer transition-all flex items-center justify-between ${
                           isSelected 
@@ -1952,6 +1968,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
           ) : (
             <button
               type="button"
+              data-testid="button-finalize-onboarding"
               onClick={handleOpenTermsModal}
               disabled={isSubmitting}
               className="inline-flex items-center gap-2 px-8 py-2.5 rounded-xl bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-700 hover:to-blue-700 text-white font-bold text-sm shadow-lg shadow-indigo-200 transition-all disabled:opacity-50"
@@ -2017,6 +2034,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
               <label className="flex items-start gap-3 cursor-pointer pt-2">
                 <input
                   type="checkbox"
+                  data-testid="checkbox-agreed-terms"
                   checked={agreedTerms}
                   onChange={e => setAgreedTerms(e.target.checked)}
                   className="mt-0.5 w-4 h-4 text-indigo-600 rounded-md border-slate-300 focus:ring-indigo-500"
@@ -2037,6 +2055,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
               </button>
               <button
                 type="button"
+                data-testid="button-confirm-finalize"
                 onClick={handleFinalize}
                 disabled={isSubmitting || !agreedTerms || !referralSource}
                 className="px-6 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs shadow-md transition-all disabled:opacity-50"

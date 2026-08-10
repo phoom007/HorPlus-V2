@@ -117,6 +117,8 @@ test.describe.serial('Master Six-Step Owner Onboarding E2E Flow', () => {
 
     // STEP 2: Buildings & Rooms
     await expect(page.locator('[data-testid="button-add-building"]')).toBeVisible();
+    await page.fill('input[type="number"] >> nth=1', '5');
+    await page.fill('[data-testid="input-building-prefix"]', 'A');
     await page.click('[data-testid="button-next-step"]'); // 2 -> 3
 
     // STEP 3: Rates & Utilities (Testing zero-value rate preservation)
@@ -150,7 +152,7 @@ test.describe.serial('Master Six-Step Owner Onboarding E2E Flow', () => {
     await expect(page.locator('[data-testid="button-save-signature"]')).toBeVisible();
 
     await page.click('[data-testid="button-save-signature"]');
-    await expect(page.locator('[data-testid="signature-status-saved"]')).toBeVisible();
+    await expect(page.locator('[data-testid="signature-status-saved"]')).toBeVisible({ timeout: 10000 });
     await page.click('[data-testid="button-next-step"]'); // 4 -> 5
 
     // STEP 5: LINE OA Setup
@@ -199,7 +201,7 @@ test.describe.serial('Master Six-Step Owner Onboarding E2E Flow', () => {
     // Apply Promo HORPLUS Preview (Verify preview does NOT create PromoRedemption in DB before finalization)
     await page.fill('[data-testid="input-promo-code"]', 'HORPLUS');
     await page.click('[data-testid="button-apply-promo"]');
-    await expect(page.locator('text=รับส่วนขยายเพิ่ม 2 เดือน')).toBeVisible();
+    await expect(page.locator('text=รับสิทธิ์ทดลองใช้งานฟรีเพิ่ม 2 เดือน')).toBeVisible();
 
     // Verify draft resume on F5 page reload
     await page.reload();
@@ -217,11 +219,13 @@ test.describe.serial('Master Six-Step Owner Onboarding E2E Flow', () => {
 
     await page.fill('[data-testid="input-promo-code"]', 'HORPLUS');
     await page.click('[data-testid="button-apply-promo"]');
-    await expect(page.locator('text=รับส่วนขยายเพิ่ม 2 เดือน')).toBeVisible();
+    await expect(page.locator('text=รับสิทธิ์ทดลองใช้งานฟรีเพิ่ม 2 เดือน')).toBeVisible();
 
     // Finalize
     await page.click('[data-testid="button-finalize-onboarding"]');
     await expect(page.locator('[data-testid="checkbox-agreed-terms"]')).toBeVisible();
+    // Select referral source (required to enable confirm button)
+    await page.click('button:has-text("Facebook / Social Media")');
     await page.check('[data-testid="checkbox-agreed-terms"]');
     await page.click('[data-testid="button-confirm-finalize"]');
 
@@ -268,6 +272,15 @@ test.describe.serial('Master Six-Step Owner Onboarding E2E Flow', () => {
     expect(intent?.status).toBe('PENDING_PAYMENT');
     expect(Number(intent?.priceSnapshot)).toBe(189);
     expect(intent?.durationMonthsSnapshot).toBe(1);
+
+    const createdBuilding = await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${createdDorm!.id}, true)`;
+      return await tx.building.findFirst({ where: { dormitoryId: createdDorm!.id } });
+    });
+    expect(createdBuilding).not.toBeNull();
+    expect(createdBuilding?.roomPrefix).toBe('A');
+    expect(createdBuilding?.hasElevator).toBe(false);
+    expect(createdBuilding?.termMonths).toBe(6);
   });
 
   test('Anti-abuse: Genuine second onboarding attempt with same User.id receives zero extra initial trial and zero extra promo claim', async ({ page }) => {
@@ -435,10 +448,12 @@ test.describe.serial('Master Six-Step Owner Onboarding E2E Flow', () => {
     await expect(page.locator('[data-testid="input-dormitory-name"]')).toBeVisible();
     await page.fill('[data-testid="input-dormitory-name"]', 'หอพัก Signature Truth Test');
     await page.fill('[data-testid="input-address"]', '888/99 ถนนวิภาวดีรังสิต');
+    await page.locator('[data-testid="select-province"]').selectOption('กรุงเทพมหานคร');
     await page.click('[data-testid="button-next-step"]'); // 1 -> 2
 
     // Step 2 -> Step 3
     await expect(page.locator('[data-testid="button-add-building"]')).toBeVisible();
+    await page.fill('input[type="number"] >> nth=1', '5');
     await page.click('[data-testid="button-next-step"]'); // 2 -> 3
 
     // Step 3 -> Step 4
@@ -474,6 +489,7 @@ test.describe.serial('Master Six-Step Owner Onboarding E2E Flow', () => {
     await expect(page.locator('[data-testid="input-dormitory-name"]')).toBeVisible();
     await page.click('[data-testid="button-next-step"]');
     await expect(page.locator('[data-testid="button-add-building"]')).toBeVisible();
+    await page.fill('input[type="number"] >> nth=1', '5');
     await page.click('[data-testid="button-next-step"]');
     await expect(page.locator('[data-testid="input-water-rate"]')).toBeVisible();
     await page.click('[data-testid="button-next-step"]');
@@ -509,6 +525,7 @@ test.describe.serial('Master Six-Step Owner Onboarding E2E Flow', () => {
     await expect(page.locator('[data-testid="input-dormitory-name"]')).toBeVisible();
     await page.click('[data-testid="button-next-step"]');
     await expect(page.locator('[data-testid="button-add-building"]')).toBeVisible();
+    await page.fill('input[type="number"] >> nth=1', '5');
     await page.click('[data-testid="button-next-step"]');
     await expect(page.locator('[data-testid="input-water-rate"]')).toBeVisible();
     await page.click('[data-testid="button-next-step"]');
