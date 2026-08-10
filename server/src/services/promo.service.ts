@@ -27,9 +27,35 @@ export class PromoService {
   }
 
   public async validatePromo(code: string | undefined, userId?: string): Promise<PromoValidationResult> {
-    const initialTrialMonths = 1;
+    let initialTrialMonths = 1;
+    let isInitialTrialClaimed = false;
+
+    if (userId) {
+      const existingClaim = await this.prisma.accountBenefitClaim.findFirst({
+        where: {
+          userId: userId,
+          benefitKey: 'INITIAL_TRIAL_V1',
+        },
+      });
+      if (existingClaim) {
+        isInitialTrialClaimed = true;
+        initialTrialMonths = 0;
+      }
+    }
 
     if (!code || !code.trim()) {
+      if (isInitialTrialClaimed) {
+        return {
+          valid: false,
+          eligible: false,
+          code: '',
+          trialMonths: 0,
+          promoBonusMonths: 0,
+          totalTrialMonths: 0,
+          message: 'บัญชีนี้เคยใช้สิทธิ์ทดลองใช้งานฟรีเริ่มต้นไปแล้ว',
+          errorCode: 'INITIAL_TRIAL_ALREADY_CLAIMED',
+        };
+      }
       return {
         valid: false,
         eligible: false,
@@ -120,6 +146,22 @@ export class PromoService {
         totalTrialMonths: initialTrialMonths,
         message: 'การกำหนดค่าสิทธิประโยชน์ของโปรโมชันไม่ถูกต้อง',
         errorCode: 'PROMO_CONFIGURATION_INVALID',
+      };
+    }
+
+    if (isInitialTrialClaimed) {
+      return {
+        valid: true,
+        eligible: false,
+        code: normalizedCode,
+        benefitType: promo.benefitType,
+        benefitUnit: promo.benefitUnit,
+        benefitValue: promo.benefitValue,
+        trialMonths: 0,
+        promoBonusMonths: 0,
+        totalTrialMonths: 0,
+        message: 'บัญชีนี้เคยใช้สิทธิ์ทดลองใช้งานฟรีเริ่มต้นไปแล้ว ไม่สามารถรับสิทธิ์ส่วนขยายทดลองใช้ฟรีซ้ำได้',
+        errorCode: 'INITIAL_TRIAL_ALREADY_CLAIMED',
       };
     }
 

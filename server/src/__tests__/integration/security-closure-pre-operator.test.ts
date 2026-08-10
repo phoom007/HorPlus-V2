@@ -20,6 +20,7 @@ import { PrismaMembershipRepository } from '../../db/repositories/membership.rep
 import { PrismaRoleRepository } from '../../db/repositories/role.repository.js';
 import { PromoService } from '../../services/promo.service.js';
 import { DormitoryProvisioningService } from '../../services/dormitory-provisioning.service.js';
+import { subscriptionEntitlementService } from '../../services/subscription-entitlement.service.js';
 import { SensitiveFieldService } from '../../services/sensitive-field.service.js';
 import {
   LineChannelTokenProvider,
@@ -393,6 +394,168 @@ describe('Final Pre-Operator Security & Real-LINE Closure Tests', () => {
       expect(result.eligible).toBe(false);
       expect(result.errorCode).toBe('PROMO_CONFIGURATION_INVALID');
       expect(result.promoBonusMonths).toBe(0);
+    });
+
+    it('PromoService preview rejects trial/promo months when account initial trial is already claimed', async () => {
+      const claimUserId = crypto.randomUUID();
+      await prisma.user.create({
+        data: {
+          id: claimUserId,
+          email: `${claimUserId}@example.com`,
+          emailNormalized: `${claimUserId}@example.com`,
+          name: 'Trial Claimed User',
+          googleSubject: `sub-claim-${Date.now()}`,
+          status: 'active',
+        },
+      });
+
+      const claimDorm = await prisma.dormitory.create({
+        data: {
+          name: 'Claimed Dorm 1',
+          code: `DM-CLM-${Date.now()}`,
+          createdByUserId: claimUserId,
+          status: 'active',
+        },
+      });
+
+      await prisma.accountBenefitClaim.create({
+        data: {
+          userId: claimUserId,
+          benefitKey: 'INITIAL_TRIAL_V1',
+          grantedMonths: 1,
+          newExpiresAt: new Date(Date.now() + 30 * 86400 * 1000),
+          dormitoryId: claimDorm.id,
+        },
+      });
+
+      const previewResult = await promoService.validatePromo('HORPLUS', claimUserId);
+      expect(previewResult.valid).toBe(true);
+      expect(previewResult.eligible).toBe(false);
+      expect(previewResult.trialMonths).toBe(0);
+      expect(previewResult.promoBonusMonths).toBe(0);
+      expect(previewResult.totalTrialMonths).toBe(0);
+      expect(previewResult.errorCode).toBe('INITIAL_TRIAL_ALREADY_CLAIMED');
+    });
+
+    it('redeemPromoCode endpoint requires catalog PromoCode definition and enforces account-level uniqueness & initial trial rule', async () => {
+      const testUser = crypto.randomUUID();
+      await prisma.user.create({
+        data: {
+          id: testUser,
+          email: `${testUser}@example.com`,
+          emailNormalized: `${testUser}@example.com`,
+          name: 'Redeem Test User',
+          googleSubject: `sub-rdm-${Date.now()}`,
+          status: 'active',
+        },
+      });
+
+      const testDorm = await prisma.dormitory.create({
+        data: {
+          name: 'Redeem Test Dorm 1',
+          code: `DM-RDM-${Date.now()}`,
+          createdByUserId: testUser,
+          status: 'active',
+        },
+      });
+      await subscriptionEntitlementService.provisionInitialTrial(testDorm.id);
+
+      await expect(
+        subscriptionEntitlementService.redeemPromoCode({
+          dormitoryId: testDorm.id,
+          code: 'UNCATALOGUED_CODE',
+          userId: testUser,
+          idempotencyKey: `idemp-uncat-${Date.now()}`,
+        })
+      ).rejects.toThrow(/PROMO_CATALOG_NOT_CONFIGURED/);
+
+      await prisma.promoCode.upsert({
+        where: { code: 'HORPLUS' },
+        create: {
+          code: 'HORPLUS',
+          normalizedCode: 'HORPLUS',
+          benefitType: 'TRIAL_EXTENSION',
+          benefitUnit: 'MONTH',
+          benefitValue: 2,
+          enabled: true,
+        },
+        update: {
+          benefitType: 'TRIAL_EXTENSION',
+          benefitUnit: 'MONTH',
+          benefitValue: 2,
+          enabled: true,
+        },
+      });
+
+      await prisma.accountBenefitClaim.create({
+        data: {
+          userId: testUser,
+          benefitKey: 'INITIAL_TRIAL_V1',
+          grantedMonths: 1,
+          newExpiresAt: new Date(Date.now() + 30 * 86400 * 1000),
+          dormitoryId: testDorm.id,
+        },
+      });
+
+      const redeemedResult = await subscriptionEntitlementService.redeemPromoCode({
+        dormitoryId: testDorm.id,
+        code: 'HORPLUS',
+        userId: testUser,
+        idempotencyKey: `idemp-rdm1-${Date.now()}`,
+      });
+      expect(redeemedResult).toBeDefined();
+
+      const testDorm2 = await prisma.dormitory.create({
+        data: {
+          name: 'Redeem Test Dorm 2',
+          code: `DM-RDM2-${Date.now()}`,
+          createdByUserId: testUser,
+          status: 'active',
+        },
+      });
+      await subscriptionEntitlementService.provisionInitialTrial(testDorm2.id);
+
+      await expect(
+        subscriptionEntitlementService.redeemPromoCode({
+          dormitoryId: testDorm2.id,
+          code: 'HORPLUS',
+          userId: testUser,
+          idempotencyKey: `idemp-rdm2-${Date.now()}`,
+        })
+      ).rejects.toThrow(/already been redeemed/);
+    });
+
+    it('proves REAL concurrent prepareProvisionalDormitory calls resolve to exact same provisionalDormitoryId with zero orphan records', async () => {
+      const concUser = crypto.randomUUID();
+      await prisma.user.create({
+        data: {
+          id: concUser,
+          email: `${concUser}@example.com`,
+          emailNormalized: `${concUser}@example.com`,
+          name: 'Conc Prepare User',
+          googleSubject: `sub-cnc-${Date.now()}`,
+          status: 'active',
+        },
+      });
+
+      const [prep1, prep2] = await Promise.all([
+        provisioningService.prepareProvisionalDormitory(concUser, { name: 'Concurrent Dorm Alpha' }),
+        provisioningService.prepareProvisionalDormitory(concUser, { name: 'Concurrent Dorm Beta' }),
+      ]);
+
+      expect(prep1.provisionalDormitoryId).toBeDefined();
+      expect(prep2.provisionalDormitoryId).toBeDefined();
+      expect(prep1.provisionalDormitoryId).toBe(prep2.provisionalDormitoryId);
+
+      const pendingCount = await prisma.dormitory.count({
+        where: { createdByUserId: concUser, status: 'setup_pending' },
+      });
+      expect(pendingCount).toBe(1);
+
+      const memberCount = await prisma.dormitoryMember.count({
+        where: { userId: concUser },
+      });
+      expect(memberCount).toBe(1);
     });
   });
 });

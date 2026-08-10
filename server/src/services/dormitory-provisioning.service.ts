@@ -116,6 +116,8 @@ export class DormitoryProvisioningService {
    */
   async prepareProvisionalDormitory(userId: string, data: { name?: string; addressLine1?: string; province?: string }, txClient?: any) {
     const runInTx = async (tx: any) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('user_provisional_prepare:' || ${userId}))`;
+
       const existingDormCount = await tx.dormitory.count({
         where: {
           createdByUserId: userId,
@@ -161,6 +163,59 @@ export class DormitoryProvisioningService {
             webhookUrl,
           };
         }
+      }
+
+      const existingProvDorm = await tx.dormitory.findFirst({
+        where: {
+          createdByUserId: userId,
+          status: 'setup_pending',
+        },
+        include: { lineConfig: true },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      if (existingProvDorm) {
+        if (data.name) {
+          await tx.dormitory.update({
+            where: { id: existingProvDorm.id },
+            data: {
+              name: data.name,
+              addressLine1: data.addressLine1 || existingProvDorm.addressLine1,
+              province: data.province || existingProvDorm.province,
+            },
+          });
+        }
+
+        await tx.onboardingDraft.upsert({
+          where: { userId },
+          create: {
+            userId,
+            provisionalDormitoryId: existingProvDorm.id,
+            currentStep: 'PAYMENT_SIGNATURE',
+            payload: {},
+            expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+          },
+          update: {
+            provisionalDormitoryId: existingProvDorm.id,
+            updatedAt: new Date(),
+          },
+        });
+
+        const appOrigin = getPublicWebhookOrigin();
+        let webhookUrl: string | null = null;
+        if (existingProvDorm.lineConfig?.webhookKeyEncrypted) {
+          try {
+            const rawKey = decryptText(existingProvDorm.lineConfig.webhookKeyEncrypted);
+            webhookUrl = `${appOrigin}/api/v1/line/webhook/${rawKey}`;
+          } catch {
+            webhookUrl = null;
+          }
+        }
+
+        return {
+          provisionalDormitoryId: existingProvDorm.id,
+          webhookUrl,
+        };
       }
 
       if (existingDormCount >= 10) {

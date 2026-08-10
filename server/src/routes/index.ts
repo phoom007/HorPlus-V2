@@ -168,13 +168,13 @@ export function createApiRouter(deps: AppApiDependencies | AuthenticationService
     protectedRouter.use('/announcements', createAnnouncementRouter());
     protectedRouter.use('/payments', createPaymentRouter(fullDeps.authService));
     protectedRouter.use('/receipts', createReceiptRouter(fullDeps.authService));
-    protectedRouter.use('/notifications', createNotificationRouter(fullDeps.authService));
+    protectedRouter.use('/notifications', createNotificationRouter());
 
     router.use('/', protectedRouter);
     router.use('/', staffRoutes.protectedRouter);
     router.use('/', lineOaRoutes.protectedRouter);
     router.use('/tenant-portal', createTenantPortalRouter(fullDeps.authService));
-    router.use('/tenant-notifications', createTenantNotificationRouter(fullDeps.authService));
+    router.use('/tenant-notifications', createTenantNotificationRouter());
   }
 
   return router;

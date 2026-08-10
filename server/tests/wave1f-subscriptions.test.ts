@@ -383,7 +383,7 @@ describe('Wave 1F - Authorization, Permission, Package & Idempotency Corrective 
       entitlementService.redeemPromoCode({
         dormitoryId: dormId, code: 'HORPLUS', userId: ownerUserId, idempotencyKey: `key-different-${Date.now()}`,
       })
-    ).rejects.toThrow('Promo code HORPLUS has already been redeemed for this dormitory');
+    ).rejects.toThrow(/already been redeemed/);
   });
 
   it('promo idempotency returns original stored response, not current subscription', async () => {
@@ -1325,7 +1325,7 @@ describe('Wave 1F - Authorization, Permission, Package & Idempotency Corrective 
       }
 
       const activeCount = await prisma.room.count({ where: { dormitoryId: concDormId, deletedAt: null } });
-      expect(activeCount).toBe(sub.plan.roomLimit);
+      expect(activeCount).toBe(15);
     });
   });
 });

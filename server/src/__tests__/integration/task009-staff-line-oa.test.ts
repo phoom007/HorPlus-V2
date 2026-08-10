@@ -120,8 +120,7 @@ describe('TASK-009 — Comprehensive Delta Verification Suite (Checkpoint 1D)', 
     await lineOaService.updateDormitoryLineConfig(testDormitoryId, {
       lineOaId: '@dormA_oa',
       channelId: '1657888888',
-      channelSecret: 'secret_a_key_12345',
-      channelAccessToken: 'token_a_access_key_12345'
+      channelSecret: 'secret_a_key_12345'
     });
   });
 
@@ -207,8 +206,7 @@ describe('TASK-009 — Comprehensive Delta Verification Suite (Checkpoint 1D)', 
     const configResult = await lineOaService.updateDormitoryLineConfig(testDormitoryBId, {
       lineOaId: '@dormB_verif_oa',
       channelId: '1657777777',
-      channelSecret: 'secret_verif_key_12345',
-      channelAccessToken: 'token_verif_access_key_12345'
+      channelSecret: 'secret_verif_key_12345'
     });
 
     expect(mockAdapter.verifyAccessTokenCalls.length).toBe(1);
@@ -304,8 +302,7 @@ describe('TASK-009 — Comprehensive Delta Verification Suite (Checkpoint 1D)', 
     const configResult = await lineOaService.updateDormitoryLineConfig(testDormitoryId, {
       lineOaId: '@dormA_sec_oa',
       channelId: '1657666666',
-      channelSecret: 'secret_sec_key_12345',
-      channelAccessToken: 'token_sec_access_key_12345'
+      channelSecret: 'secret_sec_key_12345'
     });
 
     const rawKey = configResult.webhookUrl!.split('/api/v1/line/webhook/')[1];
@@ -402,8 +399,7 @@ describe('TASK-009 — Comprehensive Delta Verification Suite (Checkpoint 1D)', 
     await lineOaService.updateDormitoryLineConfig(dormExp.id, {
       lineOaId: '@dormExp_oa',
       channelId: '1657999888',
-      channelSecret: 'secret_exp_key_12345',
-      channelAccessToken: 'token_exp_access_key_12345'
+      channelSecret: 'secret_exp_key_12345'
     });
 
     const friend = await friendService.upsertFriendFromWebhook(dormExp.id, 'U_EXPIRY_IDEM_USER', 'Expiry Idem User');

@@ -66,7 +66,7 @@ export function createSubscriptionRouter(authService?: AuthenticationService): R
 
       const isOwner = context.roleCode === 'OWNER';
       const isManager = context.roleCode === 'MANAGER';
-      const hasPromoPermission = (context.permissions || []).some((p) =>
+      const hasPromoPermission = (context.permissions || []).some((p: string) =>
         ['*', 'subscription:write', 'subscription:*', 'promo:redeem'].includes(p)
       );
 

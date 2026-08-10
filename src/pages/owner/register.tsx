@@ -459,13 +459,13 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
       const res = await onboardingClient.validatePromo(promoCodeInput.trim().toUpperCase());
       const data = res.data || res;
       setPromoResult({
-        valid: Boolean(data.valid || data.eligible),
-        eligible: Boolean(data.eligible || data.valid),
+        valid: Boolean(data.valid),
+        eligible: Boolean(data.eligible),
         code: data.code || promoCodeInput.trim().toUpperCase(),
-        message: data.message || (data.valid ? `ใช้งานรหัสโปรโมชันสำเร็จ (+${data.promoBonusMonths || 2} เดือน)` : 'รหัสไม่ถูกต้อง'),
-        trialMonths: data.trialMonths || 1,
-        promoBonusMonths: data.promoBonusMonths || 2,
-        totalTrialMonths: data.totalTrialMonths || 3,
+        message: data.message || (data.valid ? 'ใช้งานรหัสโปรโมชันสำเร็จ' : 'รหัสไม่ถูกต้อง'),
+        trialMonths: typeof data.trialMonths === 'number' ? data.trialMonths : 0,
+        promoBonusMonths: typeof data.promoBonusMonths === 'number' ? data.promoBonusMonths : 0,
+        totalTrialMonths: typeof data.totalTrialMonths === 'number' ? data.totalTrialMonths : 0,
       });
     } catch (err: any) {
       setPromoResult({
@@ -473,9 +473,9 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
         eligible: false,
         code: promoCodeInput.trim().toUpperCase(),
         message: err.message || 'รหัสโปรโมชันไม่ถูกต้อง',
-        trialMonths: 1,
+        trialMonths: 0,
         promoBonusMonths: 0,
-        totalTrialMonths: 1,
+        totalTrialMonths: 0,
       });
     }
   };
@@ -1366,9 +1366,9 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
               </button>
             </div>
             {promoResult && (
-              <div data-testid="promo-result-message" className={`text-xs font-bold ${promoResult.valid ? 'text-emerald-600' : 'text-rose-600'}`}>
+              <div data-testid="promo-result-message" className={`text-xs font-bold ${promoResult.valid && promoResult.eligible ? 'text-emerald-600' : 'text-rose-600'}`}>
                 <p>{promoResult.message}</p>
-                {promoResult.valid && (
+                {promoResult.valid && promoResult.eligible && (
                   <p className="text-[11px] text-emerald-700 font-semibold mt-0.5">
                     (ทดลองใช้งานฟรี {promoResult.trialMonths} เดือน + โบนัสโปรโมชัน {promoResult.promoBonusMonths} เดือน = รวมใช้งานฟรี {promoResult.totalTrialMonths} เดือนเต็ม)
                   </p>

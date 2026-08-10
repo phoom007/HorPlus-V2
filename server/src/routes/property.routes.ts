@@ -13,6 +13,7 @@ import {
 } from '../schemas/property-tenant-contract.schemas.js';
 
 import { resolveAuthoritativeDormitoryContext } from '../middleware/dormitory-context.js';
+import { AppError } from '../types/index.js';
 
 export function createPropertyRouter(
   authService: AuthenticationService,
