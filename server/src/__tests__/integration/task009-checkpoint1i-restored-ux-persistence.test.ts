@@ -10,6 +10,7 @@ import { LineOaService, validatePublicWebhookOrigin } from '../../services/line-
 import { SensitiveFieldService } from '../../services/sensitive-field.service.js';
 import { MockLinePlatformAdapter } from '../../services/line-platform-adapter.js';
 import { FakeLineTokenProvider } from '../../services/line-channel-token-provider.js';
+import { OnboardingService } from '../../services/onboarding.service.js';
 
 const ADMIN_URL = process.env.DIRECT_URL || 'postgresql://horplus:password@127.0.0.1:5455/horplus_wave1d_fasttrack_test?schema=public';
 
@@ -421,6 +422,81 @@ describe('TASK-009 Checkpoint 1I — Authoritative Restored UX & LINE Config Tru
       const dbBld = await prisma.building.findFirst({ where: { dormitoryId: dormId, name: 'อาคาร 1' } });
       expect(Number(dbBld?.monthlyRent)).not.toBe(3500);
       expect(Number(dbBld?.monthlyRent)).toBe(0);
+    });
+
+    it('2.3 Concurrency & Isolation: Concurrent getOnboardingDraft for 2 users in parallel using Promise.all returns distinct normalized payloads without cross-contamination', async () => {
+      const userA = await prisma.user.create({
+        data: {
+          email: `conc_user_a_${Date.now()}@test.com`,
+          emailNormalized: `conc_user_a_${Date.now()}@test.com`,
+          name: 'User A',
+          googleSubject: `goog_sub_conc_a_${Date.now()}`,
+        },
+      });
+
+      const userB = await prisma.user.create({
+        data: {
+          email: `conc_user_b_${Date.now()}@test.com`,
+          emailNormalized: `conc_user_b_${Date.now()}@test.com`,
+          name: 'User B',
+          googleSubject: `goog_sub_conc_b_${Date.now()}`,
+        },
+      });
+
+      await prisma.onboardingDraft.create({
+        data: {
+          userId: userA.id,
+          currentStep: 'utilities',
+          payload: {
+            dormitoryName: 'Dorm A',
+            address: '111 A Street',
+            province: 'กรุงเทพมหานคร',
+            buildings: [
+              { id: 'b-a', name: 'Building A', rentRates: { monthly: 5000, term: 0, termMonths: 6, daily: 0, maxOccupants: 2 } }
+            ],
+            utilities: { waterRate: 15, electricRate: 7 }
+          },
+          expiresAt: new Date(Date.now() + 30 * 86400 * 1000)
+        }
+      });
+
+      await prisma.onboardingDraft.create({
+        data: {
+          userId: userB.id,
+          currentStep: 'utilities',
+          payload: {
+            dormitoryName: 'Dorm B',
+            address: '222 B Street',
+            province: 'เชียงใหม่',
+            buildings: [
+              { id: 'b-b', name: 'Building B', rentRates: { monthly: 3000, term: 0, termMonths: 12, daily: 0, maxOccupants: 1 } }
+            ],
+            utilities: { waterRate: 20, electricRate: 8 }
+          },
+          expiresAt: new Date(Date.now() + 30 * 86400 * 1000)
+        }
+      });
+
+      const onboardingService = new OnboardingService(prisma);
+      const [resA, resB] = await Promise.all([
+        onboardingService.getDraft(userA.id),
+        onboardingService.getDraft(userB.id)
+      ]);
+
+      expect(resA).toBeTruthy();
+      expect(resB).toBeTruthy();
+      expect(resA.payload?.dormitoryName).toBe('Dorm A');
+      expect(resB.payload?.dormitoryName).toBe('Dorm B');
+      expect(resA.payload?.address).toBe('111 A Street');
+      expect(resB.payload?.address).toBe('222 B Street');
+      expect(resA.payload?.buildings[0].name).toBe('Building A');
+      expect(resB.payload?.buildings[0].name).toBe('Building B');
+      expect(resA.payload?.buildings[0].rentRates.monthly).toBe(5000);
+      expect(resB.payload?.buildings[0].rentRates.monthly).toBe(3000);
+
+      // Cleanup
+      await prisma.onboardingDraft.deleteMany({ where: { userId: { in: [userA.id, userB.id] } } });
+      await prisma.user.deleteMany({ where: { id: { in: [userA.id, userB.id] } } });
     });
   });
 });

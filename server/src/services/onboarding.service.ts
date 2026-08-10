@@ -5,6 +5,12 @@
 
 import { PrismaClient } from '@prisma/client';
 import { AppError } from '../types/index.js';
+import {
+  normalizeOnboardingDraftPayload,
+  CURRENT_ONBOARDING_DRAFT_SCHEMA_VERSION,
+} from './onboarding-draft-normalizer.js';
+
+export { normalizeOnboardingDraftPayload, CURRENT_ONBOARDING_DRAFT_SCHEMA_VERSION };
 
 export interface OnboardingStatusResult {
   onboardingRequired: boolean;
@@ -83,27 +89,31 @@ export class OnboardingService {
       signatureSaved = !!sig;
     }
 
+    const normalizedPayload = normalizeOnboardingDraftPayload(draft.payload);
+
     return {
       ...draft,
+      payload: normalizedPayload,
       signatureSaved,
     };
   }
 
   public async saveDraft(userId: string, currentStep: string, payload: any, provisionalDormitoryId?: string) {
     const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // 30 days expiry
+    const normalizedPayload = normalizeOnboardingDraftPayload(payload);
 
     return await this.prisma.onboardingDraft.upsert({
       where: { userId },
       create: {
         userId,
         currentStep: currentStep || 'dormitory',
-        payload: payload || {},
+        payload: normalizedPayload,
         provisionalDormitoryId: provisionalDormitoryId || null,
         expiresAt,
       },
       update: {
         currentStep: currentStep || 'dormitory',
-        payload: payload || {},
+        payload: normalizedPayload,
         ...(provisionalDormitoryId ? { provisionalDormitoryId } : {}),
         expiresAt,
         updatedAt: new Date(),

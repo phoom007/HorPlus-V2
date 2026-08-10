@@ -61,6 +61,11 @@ export interface CompleteOnboardingPayload {
     hasElevator?: boolean;
     numberingPattern?: string | null;
     description?: string | null;
+    monthlyRent?: number;
+    dailyRent?: number;
+    termRent?: number;
+    termMonths?: number;
+    maximumOccupants?: number;
   }[];
   rooms?: {
     buildingId?: string;

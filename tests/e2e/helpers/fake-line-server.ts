@@ -20,7 +20,13 @@ export class FakeLineServer {
   public baseUrl: string = '';
   public pushRequests: FakeLinePushRequest[] = [];
   public retryTracker: Set<string> = new Set();
+  public requestLog: Array<{ method: string; url: string }> = [];
   public isWebhookActive: boolean = true;
+  private requestedPort: number;
+
+  constructor(requestedPort: number = 5456) {
+    this.requestedPort = requestedPort;
+  }
 
   async start(): Promise<string> {
     return new Promise((resolve, reject) => {
@@ -29,6 +35,8 @@ export class FakeLineServer {
         const method = req.method?.toUpperCase() || 'GET';
         const auth = req.headers['authorization'];
         const retryKey = req.headers['x-line-retry-key'] as string | undefined;
+
+        this.requestLog.push({ method, url });
 
         let bodyChunks: Buffer[] = [];
         req.on('data', (chunk) => bodyChunks.push(chunk));
@@ -176,7 +184,7 @@ export class FakeLineServer {
         });
       });
 
-      this.server.listen(5456, '127.0.0.1', () => {
+      this.server.listen(this.requestedPort, '127.0.0.1', () => {
         const addr = this.server!.address() as AddressInfo;
         this.port = addr.port;
         this.baseUrl = `http://127.0.0.1:${this.port}`;
@@ -185,13 +193,9 @@ export class FakeLineServer {
 
       this.server.on('error', (err: NodeJS.ErrnoException) => {
         if (err.code === 'EADDRINUSE') {
-          // Another spec already started FakeLineServer on this port — reuse it
-          this.port = 5456;
-          this.baseUrl = 'http://127.0.0.1:5456';
-          this.server = null;
-          resolve(this.baseUrl);
+          reject(new Error(`FAKE_LINE_PORT_IN_USE: FakeLineServer port ${this.requestedPort} is already in use by another process`));
         } else {
-          reject(err);
+          reject(new Error(`FakeLineServer failed to bind on 127.0.0.1:${this.requestedPort}: ${err.message}`));
         }
       });
     });
@@ -210,5 +214,6 @@ export class FakeLineServer {
   reset(): void {
     this.pushRequests = [];
     this.retryTracker.clear();
+    this.requestLog = [];
   }
 }

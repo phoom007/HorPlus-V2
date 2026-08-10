@@ -213,7 +213,7 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
   test('1. Fresh Owner initially has zero memberships and onboardingRequired = true', async ({ context, page }) => {
     await injectSession(context);
 
-    const sessionRes = await page.request.get('http://127.0.0.1:3001/api/v1/auth/session', {
+    const sessionRes = await page.request.get('http://127.0.0.1:3101/api/v1/auth/session', {
       headers: {
         'Cookie': `horplus_session=${sessionToken}; horplus_csrf=${csrfToken}`,
       },
@@ -250,7 +250,7 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
     });
 
     // Initial page load AFTER pre-mount initScript is active
-    await page.goto('http://127.0.0.1:5173/owner/register', { timeout: 45000 });
+    await page.goto('http://127.0.0.1:5174/owner/register', { timeout: 45000 });
 
     // FD-004 Initial Clean Assertions across all form surfaces
     const dormNameInput = page.locator('[data-testid="input-dormitory-name"]');
@@ -299,7 +299,7 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
     await prisma.dormitory.deleteMany({ where: { createdByUserId: freshUserId } }).catch(() => {});
 
     await injectSession(context);
-    await page.goto('http://127.0.0.1:5173/owner/register');
+    await page.goto('http://127.0.0.1:5174/owner/register');
 
     // ── Step 1: Dormitory Info ──
     await page.fill('[data-testid="input-dormitory-name"]', 'Real Playwright Dormitory');
@@ -329,6 +329,7 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
 
     // ── Terms & Confirmation Modal ──
     await page.waitForSelector('[data-testid="checkbox-agreed-terms"]', { state: 'visible' });
+    await page.click('button:has-text("Facebook / Social Media")');
     await page.check('[data-testid="checkbox-agreed-terms"]');
 
     let completeHeadersCaptured: any = null;
@@ -384,7 +385,7 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
     expect(membersInDb[0].role.code).toBe('OWNER');
 
     // Verify Session API returns onboardingRequired = false
-    const postSessionRes = await page.request.get('http://127.0.0.1:3001/api/v1/auth/session', {
+    const postSessionRes = await page.request.get('http://127.0.0.1:3101/api/v1/auth/session', {
       headers: {
         'Cookie': `horplus_session=${sessionToken}; horplus_csrf=${csrfToken}`,
       },
@@ -395,7 +396,7 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
 
     // Hard page reload in SAME browser page
     await page.reload();
-    await expect(page).toHaveURL('http://127.0.0.1:5173/owner/dashboard');
+    await expect(page).toHaveURL('http://127.0.0.1:5174/owner/dashboard');
   });
 
   test('4. Real UI Rapid Double-Submit Protection (RI-007)', async ({ context, page }) => {
@@ -430,7 +431,7 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
     const rCsrf = csrfService.generateCsrfToken(rapidSid);
 
     await injectSession(context, rToken, rCsrf);
-    await page.goto('http://127.0.0.1:5173/owner/register');
+    await page.goto('http://127.0.0.1:5174/owner/register');
 
     // Fill form steps
     await page.fill('[data-testid="input-dormitory-name"]', 'Rapid Submit Dormitory');
@@ -522,10 +523,10 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
     // Authenticate multi-dorm owner WITHOUT setting selected_dormitory_id in localStorage or sessionStorage
     await injectSession(context, multiSessionToken, multiCsrfToken);
 
-    await page.goto('http://127.0.0.1:5173/owner/dashboard');
+    await page.goto('http://127.0.0.1:5174/owner/dashboard');
 
     // OwnerAuthGuard redirects to /auth/owner for explicit dormitory selection
-    await expect(page).toHaveURL('http://127.0.0.1:5173/auth/owner');
+    await expect(page).toHaveURL('http://127.0.0.1:5174/auth/owner');
 
     // RI-008: Explicitly select Dorm B via REAL UI interaction on /auth/owner
     const dormCardBeta = page.locator('h4', { hasText: 'Multi Owner Dorm Beta' });
@@ -534,11 +535,11 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
 
     // Verify user is redirected to /owner/dashboard
     await page.waitForURL('**/owner/dashboard', { timeout: 15000 });
-    await expect(page).toHaveURL('http://127.0.0.1:5173/owner/dashboard');
+    await expect(page).toHaveURL('http://127.0.0.1:5174/owner/dashboard');
 
     // Perform hard reload to verify selection persists
     await page.reload();
-    await expect(page).toHaveURL('http://127.0.0.1:5173/owner/dashboard');
+    await expect(page).toHaveURL('http://127.0.0.1:5174/owner/dashboard');
   });
 
   test('6. Payload Fidelity Test — UI == POST JSON == DATABASE (Distinctive Values)', async ({ context, page }) => {
@@ -573,7 +574,7 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
     const fCsrf = csrfService.generateCsrfToken(fSid);
 
     await injectSession(context, fToken, fCsrf);
-    await page.goto('http://127.0.0.1:5173/owner/register');
+    await page.goto('http://127.0.0.1:5174/owner/register');
 
     // Distinctive test inputs: rooms = 3, monthly rent = 4321, deposit = 0, water = 0, electricity = 0, due day = 17, late fee = none
     await page.fill('[data-testid="input-dormitory-name"]', 'Fidelity Distinctive Dorm');
@@ -611,6 +612,7 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
     await page.click('[data-testid="button-finalize-onboarding"]');
 
     await page.waitForSelector('[data-testid="checkbox-agreed-terms"]', { state: 'visible' });
+    await page.click('button:has-text("Facebook / Social Media")');
     await page.check('[data-testid="checkbox-agreed-terms"]');
 
     const [postRes] = await Promise.all([
@@ -653,7 +655,7 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
     expect(fBilling!.promptPayValue).toBeNull();
 
     // 3. Settings GET API Readback
-    const settingsGetRes = await context.request.get(`http://127.0.0.1:3001/api/v1/dormitories/${fDorm!.id}/billing-settings`, {
+    const settingsGetRes = await context.request.get(`http://127.0.0.1:3101/api/v1/dormitories/${fDorm!.id}/billing-settings`, {
       headers: {
         'Cookie': `horplus_session=${fToken}; horplus_csrf=${fCsrf}`,
         'x-dormitory-id': fDorm!.id,
@@ -663,7 +665,7 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
     const settingsData = (await settingsGetRes.json()).data;
     expect(settingsData.billingDay).toBe(25);
 
-    const paymentGetRes = await context.request.get(`http://127.0.0.1:3001/api/v1/dormitories/${fDorm!.id}/payment-settings`, {
+    const paymentGetRes = await context.request.get(`http://127.0.0.1:3101/api/v1/dormitories/${fDorm!.id}/payment-settings`, {
       headers: {
         'Cookie': `horplus_session=${fToken}; horplus_csrf=${fCsrf}`,
         'x-dormitory-id': fDorm!.id,
@@ -739,7 +741,7 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
     const ppCsrf = csrfService.generateCsrfToken(ppSid);
 
     await injectSession(context, ppToken, ppCsrf);
-    await page.goto('http://127.0.0.1:5173/owner/register');
+    await page.goto('http://127.0.0.1:5174/owner/register');
 
     // Step 1
     await page.fill('[data-testid="input-dormitory-name"]', 'PromptPay Mobile Phone Dorm');
@@ -780,6 +782,7 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
     await page.click('[data-testid="button-finalize-onboarding"]');
 
     await page.waitForSelector('[data-testid="checkbox-agreed-terms"]', { state: 'visible' });
+    await page.click('button:has-text("Facebook / Social Media")');
     await page.check('[data-testid="checkbox-agreed-terms"]');
 
     const [postRes] = await Promise.all([
@@ -804,7 +807,7 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
     expect(ppBilling!.bankCode).toBe('กสิกรไทย (KBank)');
 
     // 3. Settings GET API Readback
-    const settingsRes = await context.request.get(`http://127.0.0.1:3001/api/v1/dormitories/${ppDorm!.id}/payment-settings`, {
+    const settingsRes = await context.request.get(`http://127.0.0.1:3101/api/v1/dormitories/${ppDorm!.id}/payment-settings`, {
       headers: {
         'Cookie': `horplus_session=${ppToken}; horplus_csrf=${ppCsrf}`,
         'x-dormitory-id': ppDorm!.id,
@@ -872,7 +875,7 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
     const nidCsrf = csrfService.generateCsrfToken(nidSid);
 
     await injectSession(context, nidToken, nidCsrf);
-    await page.goto('http://127.0.0.1:5173/owner/register');
+    await page.goto('http://127.0.0.1:5174/owner/register');
 
     // Step 1
     await page.fill('[data-testid="input-dormitory-name"]', 'PromptPay National ID Dorm');
@@ -913,6 +916,7 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
     await page.click('[data-testid="button-finalize-onboarding"]');
 
     await page.waitForSelector('[data-testid="checkbox-agreed-terms"]', { state: 'visible' });
+    await page.click('button:has-text("Facebook / Social Media")');
     await page.check('[data-testid="checkbox-agreed-terms"]');
 
     const [postRes] = await Promise.all([
@@ -936,7 +940,7 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
     expect(nidBilling!.promptPayValueEncrypted).not.toBeNull(); // Encrypted via AES-256-GCM
 
     // 3. Settings GET API Readback: Authorized owner receives masked national ID
-    const settingsRes = await context.request.get(`http://127.0.0.1:3001/api/v1/dormitories/${nidDorm!.id}/payment-settings`, {
+    const settingsRes = await context.request.get(`http://127.0.0.1:3101/api/v1/dormitories/${nidDorm!.id}/payment-settings`, {
       headers: {
         'Cookie': `horplus_session=${nidToken}; horplus_csrf=${nidCsrf}`,
         'x-dormitory-id': nidDorm!.id,

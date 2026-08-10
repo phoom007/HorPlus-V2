@@ -250,7 +250,7 @@ test.describe.serial('Payment Settings & Profile Source-of-Truth E2E (OR-001 to 
       sessionStorage.setItem('active_dormitory_selected_for_session', id);
     }, targetDormId);
 
-    await page.goto('http://127.0.0.1:5173/owner/settings');
+    await page.goto('http://127.0.0.1:5174/owner/settings');
     await page.waitForLoadState('networkidle');
   }
 

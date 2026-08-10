@@ -119,12 +119,12 @@ test.describe.serial('TASK-009 Playwright Browser Lifecycle — Staff, LINE OA &
       {
         name: 'horplus_session',
         value: sessionToken,
-        url: 'http://127.0.0.1:5173',
+        url: 'http://127.0.0.1:5174',
       },
       {
         name: 'horplus_csrf',
         value: csrfToken,
-        url: 'http://127.0.0.1:5173',
+        url: 'http://127.0.0.1:5174',
       },
     ]);
     await page.addInitScript((id: string) => {
@@ -136,7 +136,7 @@ test.describe.serial('TASK-009 Playwright Browser Lifecycle — Staff, LINE OA &
       localStorage.setItem('active_dormitory_selected_for_session', id);
       localStorage.setItem('horplus_data_mode', 'api');
     }, dormId);
-    await page.goto('http://127.0.0.1:5173/owner/dashboard');
+    await page.goto('http://127.0.0.1:5174/owner/dashboard');
     await page.evaluate((id: string) => {
       localStorage.clear();
       sessionStorage.clear();
@@ -153,7 +153,7 @@ test.describe.serial('TASK-009 Playwright Browser Lifecycle — Staff, LINE OA &
   // =========================================================================
   test('1. Owner starts with permanent slot 1 / 10 and visible owner label', async ({ context, page }) => {
     await setupOwnerBrowserContext(context, page);
-    await page.goto('http://127.0.0.1:5173/owner/users');
+    await page.goto('http://127.0.0.1:5174/owner/users');
 
     await expect(page.locator('[data-testid="slot-usage-meter"]')).toBeVisible();
     await expect(page.locator('[data-testid="slot-usage-meter"]')).toContainText('1 / 10');
@@ -173,7 +173,7 @@ test.describe.serial('TASK-009 Playwright Browser Lifecycle — Staff, LINE OA &
     const ownerConsoleMessages: string[] = [];
     page.on('console', (msg) => ownerConsoleMessages.push(msg.text()));
 
-    await page.goto('http://127.0.0.1:5173/owner/settings');
+    await page.goto('http://127.0.0.1:5174/owner/settings');
 
     // Fill actual LINE OA form fields in UI
     await page.fill('[data-testid="line-oa-id-input"]', '@test_line_oa');
@@ -230,7 +230,7 @@ test.describe.serial('TASK-009 Playwright Browser Lifecycle — Staff, LINE OA &
         Cookie: `horplus_session=${sessionToken}`,
       },
     });
-    const configRes = await apiContext.get(`http://127.0.0.1:3001/api/v1/dormitories/${dormId}/line-oa/config`);
+    const configRes = await apiContext.get(`http://127.0.0.1:3101/api/v1/dormitories/${dormId}/line-oa/config`);
     expect(configRes.ok()).toBe(true);
     const configJson = await configRes.json();
     const webhookUrl: string = configJson.data.webhookUrl;
@@ -256,7 +256,7 @@ test.describe.serial('TASK-009 Playwright Browser Lifecycle — Staff, LINE OA &
     const hmac = crypto.createHmac('sha256', testChannelSecret).update(payload).digest('base64');
 
     // 4. POST webhook payload to server
-    const webhookRes = await apiContext.post(`http://127.0.0.1:3001/api/v1/line/webhook/${rawKey}`, {
+    const webhookRes = await apiContext.post(`http://127.0.0.1:3101/api/v1/line/webhook/${rawKey}`, {
       headers: {
         'Content-Type': 'application/json',
         'x-line-signature': hmac,
@@ -266,7 +266,7 @@ test.describe.serial('TASK-009 Playwright Browser Lifecycle — Staff, LINE OA &
     expect(webhookRes.ok()).toBe(true);
 
     // 5. Verify webhookVerifiedAt is now populated
-    const updatedConfigRes = await apiContext.get(`http://127.0.0.1:3001/api/v1/dormitories/${dormId}/line-oa/config`);
+    const updatedConfigRes = await apiContext.get(`http://127.0.0.1:3101/api/v1/dormitories/${dormId}/line-oa/config`);
     const updatedConfigJson = await updatedConfigRes.json();
     expect(updatedConfigJson.data.webhookVerifiedAt).not.toBeNull();
   });
@@ -311,7 +311,7 @@ test.describe.serial('TASK-009 Playwright Browser Lifecycle — Staff, LINE OA &
     const ownerConsoleMessages: string[] = [];
     page.on('console', (msg) => ownerConsoleMessages.push(msg.text()));
 
-    await page.goto('http://127.0.0.1:5173/owner/users');
+    await page.goto('http://127.0.0.1:5174/owner/users');
     await page.reload();
 
     const selectLocator = page.locator('[data-testid="line-friend-select"]');
@@ -361,7 +361,7 @@ test.describe.serial('TASK-009 Playwright Browser Lifecycle — Staff, LINE OA &
     const apiContext = await playwrightRequest.newContext({
       extraHTTPHeaders: { Cookie: `horplus_session=${sessionToken}` },
     });
-    const staffRes = await apiContext.get(`http://127.0.0.1:3001/api/v1/properties/${dormId}/staff`);
+    const staffRes = await apiContext.get(`http://127.0.0.1:3101/api/v1/properties/${dormId}/staff`);
     const staffJson = await staffRes.json();
     expect(staffJson.data.accessGrants.length).toBe(1);
 
@@ -369,7 +369,7 @@ test.describe.serial('TASK-009 Playwright Browser Lifecycle — Staff, LINE OA &
     createdGrantId = grant.id;
 
     // Verify GET copy-link independently returns same URL and no rawToken
-    const copyLinkRes = await apiContext.get(`http://127.0.0.1:3001/api/v1/properties/${dormId}/access-grants/${grant.id}/copy-link`);
+    const copyLinkRes = await apiContext.get(`http://127.0.0.1:3101/api/v1/properties/${dormId}/access-grants/${grant.id}/copy-link`);
     const copyLinkJson = await copyLinkRes.json();
     expect(copyLinkJson.data).not.toHaveProperty('rawToken');
     expect(JSON.stringify(copyLinkJson)).not.toContain('"rawToken"');
@@ -401,7 +401,7 @@ test.describe.serial('TASK-009 Playwright Browser Lifecycle — Staff, LINE OA &
     const ownerConsoleMessages: string[] = [];
     page.on('console', (msg) => ownerConsoleMessages.push(msg.text()));
 
-    await page.goto('http://127.0.0.1:5173/owner/users');
+    await page.goto('http://127.0.0.1:5174/owner/users');
 
     const initialPushCount = fakeLineServer.pushRequests.length;
 
@@ -438,7 +438,7 @@ test.describe.serial('TASK-009 Playwright Browser Lifecycle — Staff, LINE OA &
     }
   });
 
-  const getLocalBearerUrl = (url: string) => url.replace(/^https?:\/\/[^\/]+/, 'http://127.0.0.1:5173');
+  const getLocalBearerUrl = (url: string) => url.replace(/^https?:\/\/[^\/]+/, 'http://127.0.0.1:5174');
 
   // =========================================================================
   // TEST 6: Bearer Browser Redemption in BrowserContext A
@@ -470,7 +470,7 @@ test.describe.serial('TASK-009 Playwright Browser Lifecycle — Staff, LINE OA &
     expect(csrfCookie).toBeDefined();
 
     // Verify authenticated user role is MANAGER via session API
-    const sessionRes = await pageA.request.get('http://127.0.0.1:3001/api/v1/auth/session');
+    const sessionRes = await pageA.request.get('http://127.0.0.1:3101/api/v1/auth/session');
     expect(sessionRes.ok()).toBe(true);
     const sessionJson = await sessionRes.json();
     expect(sessionJson.data.memberships[0].roleCode).toBe('MANAGER');
@@ -569,13 +569,13 @@ test.describe.serial('TASK-009 Playwright Browser Lifecycle — Staff, LINE OA &
     await pageB.goto(getLocalBearerUrl(createdBearerUrl));
     await pageB.waitForURL('**/owner/dashboard');
 
-    const sessionRes = await pageB.request.get('http://127.0.0.1:3001/api/v1/auth/session');
+    const sessionRes = await pageB.request.get('http://127.0.0.1:3101/api/v1/auth/session');
     expect(sessionRes.ok()).toBe(true);
 
     const apiContext = await playwrightRequest.newContext({
       extraHTTPHeaders: { Cookie: `horplus_session=${sessionToken}` },
     });
-    const staffRes = await apiContext.get(`http://127.0.0.1:3001/api/v1/properties/${dormId}/staff`);
+    const staffRes = await apiContext.get(`http://127.0.0.1:3101/api/v1/properties/${dormId}/staff`);
     const staffJson = await staffRes.json();
     expect(staffJson.data.slotUsage.totalUsedSlots).toBe(2);
 
@@ -594,27 +594,27 @@ test.describe.serial('TASK-009 Playwright Browser Lifecycle — Staff, LINE OA &
     await pageA.waitForURL('**/owner/dashboard');
 
     // 1. Owner changes role to TECH
-    const patchTechRes = await page.request.patch(`http://127.0.0.1:3001/api/v1/properties/${dormId}/access-grants/${createdGrantId}/role`, {
+    const patchTechRes = await page.request.patch(`http://127.0.0.1:3101/api/v1/properties/${dormId}/access-grants/${createdGrantId}/role`, {
       headers: { 'X-CSRF-Token': csrfToken, 'Content-Type': 'application/json' },
       data: { roleCode: 'TECH' },
     });
     expect(patchTechRes.ok()).toBe(true);
 
     // 2. Next request in Session A receives TECH authority immediately
-    const sessionARes1 = await pageA.request.get('http://127.0.0.1:3001/api/v1/auth/session');
+    const sessionARes1 = await pageA.request.get('http://127.0.0.1:3101/api/v1/auth/session');
     expect(sessionARes1.ok()).toBe(true);
     const jsonA1 = await sessionARes1.json();
     expect(jsonA1.data.memberships[0].roleCode).toBe('TECH');
 
     // 3. Owner changes role to OWNER
-    const patchOwnerRes = await page.request.patch(`http://127.0.0.1:3001/api/v1/properties/${dormId}/access-grants/${createdGrantId}/role`, {
+    const patchOwnerRes = await page.request.patch(`http://127.0.0.1:3101/api/v1/properties/${dormId}/access-grants/${createdGrantId}/role`, {
       headers: { 'X-CSRF-Token': csrfToken, 'Content-Type': 'application/json' },
       data: { roleCode: 'OWNER' },
     });
     expect(patchOwnerRes.ok()).toBe(true);
 
     // 4. Next request in Session A receives OWNER authority immediately
-    const sessionARes2 = await pageA.request.get('http://127.0.0.1:3001/api/v1/auth/session');
+    const sessionARes2 = await pageA.request.get('http://127.0.0.1:3101/api/v1/auth/session');
     expect(sessionARes2.ok()).toBe(true);
     const jsonA2 = await sessionARes2.json();
     expect(jsonA2.data.memberships[0].roleCode).toBe('OWNER');
@@ -629,7 +629,7 @@ test.describe.serial('TASK-009 Playwright Browser Lifecycle — Staff, LINE OA &
     await setupOwnerBrowserContext(context, page);
 
     // Demote grant to MANAGER
-    await page.request.patch(`http://127.0.0.1:3001/api/v1/properties/${dormId}/access-grants/${createdGrantId}/role`, {
+    await page.request.patch(`http://127.0.0.1:3101/api/v1/properties/${dormId}/access-grants/${createdGrantId}/role`, {
       headers: { 'X-CSRF-Token': csrfToken, 'Content-Type': 'application/json' },
       data: { roleCode: 'MANAGER' },
     });
@@ -640,17 +640,17 @@ test.describe.serial('TASK-009 Playwright Browser Lifecycle — Staff, LINE OA &
     await pageGrant.waitForURL('**/owner/dashboard');
 
     // MANAGER attempts staff admin GET -> 403 FORBIDDEN
-    const mgrAdminRes = await pageGrant.request.get(`http://127.0.0.1:3001/api/v1/properties/${dormId}/staff`);
+    const mgrAdminRes = await pageGrant.request.get(`http://127.0.0.1:3101/api/v1/properties/${dormId}/staff`);
     expect(mgrAdminRes.status()).toBe(403);
 
     // Upgrade grant to OWNER
-    await page.request.patch(`http://127.0.0.1:3001/api/v1/properties/${dormId}/access-grants/${createdGrantId}/role`, {
+    await page.request.patch(`http://127.0.0.1:3101/api/v1/properties/${dormId}/access-grants/${createdGrantId}/role`, {
       headers: { 'X-CSRF-Token': csrfToken, 'Content-Type': 'application/json' },
       data: { roleCode: 'OWNER' },
     });
 
     // OWNER attempts staff admin GET -> 200 OK
-    const ownerAdminRes = await pageGrant.request.get(`http://127.0.0.1:3001/api/v1/properties/${dormId}/staff`);
+    const ownerAdminRes = await pageGrant.request.get(`http://127.0.0.1:3101/api/v1/properties/${dormId}/staff`);
     expect(ownerAdminRes.status()).toBe(200);
 
     await contextGrant.close();
@@ -668,22 +668,22 @@ test.describe.serial('TASK-009 Playwright Browser Lifecycle — Staff, LINE OA &
     await pageGrant.waitForURL('**/owner/dashboard');
 
     // Owner revokes grant
-    const revokeRes = await page.request.delete(`http://127.0.0.1:3001/api/v1/properties/${dormId}/access-grants/${createdGrantId}`, {
+    const revokeRes = await page.request.delete(`http://127.0.0.1:3101/api/v1/properties/${dormId}/access-grants/${createdGrantId}`, {
       headers: { 'X-CSRF-Token': csrfToken },
     });
     expect(revokeRes.ok()).toBe(true);
 
     // Active session immediately receives 401 UNAUTHORIZED
-    const sessionRes = await pageGrant.request.get('http://127.0.0.1:3001/api/v1/auth/session');
+    const sessionRes = await pageGrant.request.get('http://127.0.0.1:3101/api/v1/auth/session');
     expect(sessionRes.status()).toBe(401);
 
     // Slot usage returns to 1 / 10
-    const staffRes = await page.request.get(`http://127.0.0.1:3001/api/v1/properties/${dormId}/staff`);
+    const staffRes = await page.request.get(`http://127.0.0.1:3101/api/v1/properties/${dormId}/staff`);
     const staffJson = await staffRes.json();
     expect(staffJson.data.slotUsage.totalUsedSlots).toBe(1);
 
     // Re-redemption of revoked bearer URL fails with 401 ACCESS_GRANT_REVOKED
-    const redeemRes = await pageGrant.request.post('http://127.0.0.1:3001/api/v1/staff-access/redeem', {
+    const redeemRes = await pageGrant.request.post('http://127.0.0.1:3101/api/v1/staff-access/redeem', {
       data: { token: createdBearerUrl.split('#')[1] },
     });
     expect(redeemRes.status()).toBe(401);
@@ -696,7 +696,7 @@ test.describe.serial('TASK-009 Playwright Browser Lifecycle — Staff, LINE OA &
   // =========================================================================
   test('11. Re-grant same LINE Friend after revoke succeeds; duplicate active grant returns 409 ACTIVE_GRANT_EXISTS', async ({ context, page }) => {
     await setupOwnerBrowserContext(context, page);
-    await page.goto('http://127.0.0.1:5173/owner/users');
+    await page.goto('http://127.0.0.1:5174/owner/users');
 
     // 1. Re-grant same LINE Friend (Somchai E2E)
     await page.selectOption('[data-testid="grant-role-select"]', 'MANAGER');
@@ -707,11 +707,11 @@ test.describe.serial('TASK-009 Playwright Browser Lifecycle — Staff, LINE OA &
     const apiContext = await playwrightRequest.newContext({
       extraHTTPHeaders: { Cookie: `horplus_session=${sessionToken}` },
     });
-    const friendsRes = await apiContext.get(`http://127.0.0.1:3001/api/v1/properties/${dormId}/line-friends`);
+    const friendsRes = await apiContext.get(`http://127.0.0.1:3101/api/v1/properties/${dormId}/line-friends`);
     const friendsJson = await friendsRes.json();
     const friendId = friendsJson.data[0].id;
 
-    const dupRes = await apiContext.post(`http://127.0.0.1:3001/api/v1/properties/${dormId}/access-grants`, {
+    const dupRes = await apiContext.post(`http://127.0.0.1:3101/api/v1/properties/${dormId}/access-grants`, {
       headers: { 'X-CSRF-Token': csrfToken, 'Content-Type': 'application/json' },
       data: { lineFriendId: friendId, roleCode: 'MANAGER' },
     });
@@ -748,26 +748,26 @@ test.describe.serial('TASK-009 Playwright Browser Lifecycle — Staff, LINE OA &
     for (let i = 2; i <= 9; i++) {
       const lineFriend = await createTestLineFriend(dormId, `line_user_slot_${i}`, `Slot Friend ${i}`);
 
-      await apiContext.post(`http://127.0.0.1:3001/api/v1/properties/${dormId}/access-grants`, {
+      await apiContext.post(`http://127.0.0.1:3101/api/v1/properties/${dormId}/access-grants`, {
         headers: { 'X-CSRF-Token': csrfToken, 'Content-Type': 'application/json' },
         data: { lineFriendId: lineFriend.id, roleCode: 'TECH' },
       });
     }
 
     // Verify 10 / 10 slots used via API
-    const staffRes = await apiContext.get(`http://127.0.0.1:3001/api/v1/properties/${dormId}/staff`);
+    const staffRes = await apiContext.get(`http://127.0.0.1:3101/api/v1/properties/${dormId}/staff`);
     const staffJson = await staffRes.json();
     expect(staffJson.data.slotUsage.totalUsedSlots).toBe(10);
 
     // Verify UI browser page displays 10 / 10 and disables create-grant button
-    await page.goto('http://127.0.0.1:5173/owner/users');
+    await page.goto('http://127.0.0.1:5174/owner/users');
     await expect(page.locator('[data-testid="slot-usage-meter"]')).toContainText('10 / 10');
     await expect(page.locator('[data-testid="create-grant-button"]')).toBeDisabled();
 
     // Attempt 11th grant -> 409 STAFF_LIMIT_EXCEEDED
     const extraFriend = await createTestLineFriend(dormId, 'line_user_slot_11', 'Slot Friend 11');
 
-    const eleventhRes = await apiContext.post(`http://127.0.0.1:3001/api/v1/properties/${dormId}/access-grants`, {
+    const eleventhRes = await apiContext.post(`http://127.0.0.1:3101/api/v1/properties/${dormId}/access-grants`, {
       headers: { 'X-CSRF-Token': csrfToken, 'Content-Type': 'application/json' },
       data: { lineFriendId: extraFriend.id, roleCode: 'TECH' },
     });
@@ -788,15 +788,15 @@ test.describe.serial('TASK-009 Playwright Browser Lifecycle — Staff, LINE OA &
     const failFriend = await createTestLineFriend(dormId, 'U_E2E_FAILURE', 'Fail Push Friend');
 
     // Revoke one slot to allow test
-    const staffRes = await apiContext.get(`http://127.0.0.1:3001/api/v1/properties/${dormId}/staff`);
+    const staffRes = await apiContext.get(`http://127.0.0.1:3101/api/v1/properties/${dormId}/staff`);
     const staffJson = await staffRes.json();
     const lastGrant = staffJson.data.accessGrants[staffJson.data.accessGrants.length - 1];
-    await apiContext.delete(`http://127.0.0.1:3001/api/v1/properties/${dormId}/access-grants/${lastGrant.id}`, {
+    await apiContext.delete(`http://127.0.0.1:3101/api/v1/properties/${dormId}/access-grants/${lastGrant.id}`, {
       headers: { 'X-CSRF-Token': csrfToken },
     });
 
     // Create grant for U_E2E_FAILURE
-    const failGrantRes = await apiContext.post(`http://127.0.0.1:3001/api/v1/properties/${dormId}/access-grants`, {
+    const failGrantRes = await apiContext.post(`http://127.0.0.1:3101/api/v1/properties/${dormId}/access-grants`, {
       headers: { 'X-CSRF-Token': csrfToken, 'Content-Type': 'application/json' },
       data: { lineFriendId: failFriend.id, roleCode: 'TECH' },
     });
@@ -808,11 +808,11 @@ test.describe.serial('TASK-009 Playwright Browser Lifecycle — Staff, LINE OA &
     // 2. Retry Delivery with same X-Line-Retry-Key
     const retryFriend = await createTestLineFriend(dormId, 'U_E2E_RETRY', 'Retry Push Friend');
 
-    await apiContext.delete(`http://127.0.0.1:3001/api/v1/properties/${dormId}/access-grants/${failGrantJson.data.grant.id}`, {
+    await apiContext.delete(`http://127.0.0.1:3101/api/v1/properties/${dormId}/access-grants/${failGrantJson.data.grant.id}`, {
       headers: { 'X-CSRF-Token': csrfToken },
     });
 
-    const retryGrantRes = await apiContext.post(`http://127.0.0.1:3001/api/v1/properties/${dormId}/access-grants`, {
+    const retryGrantRes = await apiContext.post(`http://127.0.0.1:3101/api/v1/properties/${dormId}/access-grants`, {
       headers: { 'X-CSRF-Token': csrfToken, 'Content-Type': 'application/json' },
       data: { lineFriendId: retryFriend.id, roleCode: 'TECH' },
     });
@@ -822,7 +822,7 @@ test.describe.serial('TASK-009 Playwright Browser Lifecycle — Staff, LINE OA &
     expect(retryStatus).toBe('retry_pending');
 
     // Retry via API
-    const retryActionRes = await apiContext.post(`http://127.0.0.1:3001/api/v1/properties/${dormId}/access-grants/${retryGrantJson.data.grant.id}/retry-delivery`, {
+    const retryActionRes = await apiContext.post(`http://127.0.0.1:3101/api/v1/properties/${dormId}/access-grants/${retryGrantJson.data.grant.id}/retry-delivery`, {
       headers: { 'X-CSRF-Token': csrfToken },
     });
     expect(retryActionRes.ok()).toBe(true);
@@ -840,12 +840,12 @@ test.describe.serial('TASK-009 Playwright Browser Lifecycle — Staff, LINE OA &
     });
 
     // 1. Get initial webhook URL
-    const config1Res = await apiContext.get(`http://127.0.0.1:3001/api/v1/dormitories/${dormId}/line-oa/config`);
+    const config1Res = await apiContext.get(`http://127.0.0.1:3101/api/v1/dormitories/${dormId}/line-oa/config`);
     const config1Json = await config1Res.json();
     const url1 = config1Json.data.webhookUrl;
 
     // 2. Rotate webhook key
-    const rotateRes = await apiContext.post(`http://127.0.0.1:3001/api/v1/dormitories/${dormId}/line-oa/rotate-webhook`, {
+    const rotateRes = await apiContext.post(`http://127.0.0.1:3101/api/v1/dormitories/${dormId}/line-oa/rotate-webhook`, {
       headers: { 'X-CSRF-Token': csrfToken },
     });
     expect(rotateRes.ok()).toBe(true);
@@ -855,7 +855,7 @@ test.describe.serial('TASK-009 Playwright Browser Lifecycle — Staff, LINE OA &
     expect(url1).not.toBe(url2);
 
     // 3. Disconnect LINE OA
-    const disconnRes = await apiContext.delete(`http://127.0.0.1:3001/api/v1/dormitories/${dormId}/line-oa/disconnect`, {
+    const disconnRes = await apiContext.delete(`http://127.0.0.1:3101/api/v1/dormitories/${dormId}/line-oa/disconnect`, {
       headers: { 'X-CSRF-Token': csrfToken },
     });
     expect(disconnRes.ok()).toBe(true);
@@ -863,7 +863,7 @@ test.describe.serial('TASK-009 Playwright Browser Lifecycle — Staff, LINE OA &
     expect(disconnJson.data.connected).toBe(false);
 
     // 4. Verify Owner session remains valid
-    const sessionRes = await apiContext.get('http://127.0.0.1:3001/api/v1/auth/session');
+    const sessionRes = await apiContext.get('http://127.0.0.1:3101/api/v1/auth/session');
     expect(sessionRes.ok()).toBe(true);
   });
 
@@ -884,11 +884,11 @@ test.describe.serial('TASK-009 Playwright Browser Lifecycle — Staff, LINE OA &
     });
 
     // 2. Owner A attempts Dorm B staff endpoint -> 403 DORMITORY_MISMATCH / FORBIDDEN
-    const crossRes = await apiContext.get(`http://127.0.0.1:3001/api/v1/properties/${dormB.id}/staff`);
+    const crossRes = await apiContext.get(`http://127.0.0.1:3101/api/v1/properties/${dormB.id}/staff`);
     expect(crossRes.status()).toBeGreaterThanOrEqual(403);
 
     // 3. Secret leak proof: inspect all API responses
-    const configRes = await apiContext.get(`http://127.0.0.1:3001/api/v1/dormitories/${dormId}/line-oa/config`);
+    const configRes = await apiContext.get(`http://127.0.0.1:3101/api/v1/dormitories/${dormId}/line-oa/config`);
     const configText = await configRes.text();
 
     expect(configText).not.toContain('channelSecretEncrypted');
@@ -899,11 +899,11 @@ test.describe.serial('TASK-009 Playwright Browser Lifecycle — Staff, LINE OA &
     expect(configText).not.toContain('lineUserIdEncrypted');
 
     // Assert zero rawToken exposure across access grant copy-link response
-    const staffRes = await apiContext.get(`http://127.0.0.1:3001/api/v1/properties/${dormId}/staff`);
+    const staffRes = await apiContext.get(`http://127.0.0.1:3101/api/v1/properties/${dormId}/staff`);
     const staffJson = await staffRes.json();
     const activeGrant = staffJson.data.accessGrants[0];
     if (activeGrant) {
-      const copyLinkRes = await apiContext.get(`http://127.0.0.1:3001/api/v1/properties/${dormId}/access-grants/${activeGrant.id}/copy-link`);
+      const copyLinkRes = await apiContext.get(`http://127.0.0.1:3101/api/v1/properties/${dormId}/access-grants/${activeGrant.id}/copy-link`);
       expect(copyLinkRes.ok()).toBe(true);
       const copyLinkJson = await copyLinkRes.json();
       expect(copyLinkJson.data).not.toHaveProperty('rawToken');

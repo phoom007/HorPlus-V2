@@ -26,7 +26,8 @@ export interface PublicWebhookOriginStatus {
 }
 
 export function validatePublicWebhookOrigin(rawOrigin?: string): PublicWebhookOriginStatus {
-  const origin = (rawOrigin || process.env.PUBLIC_WEBHOOK_ORIGIN || process.env.PUBLIC_APP_ORIGIN || (process.env.NODE_ENV === 'test' ? 'https://webhook.horplus.com' : '')).trim().replace(/\/+$/, '');
+  const isE2E = process.env.NODE_ENV === 'test' || process.env.HORPLUS_E2E === 'true';
+  const origin = (rawOrigin || process.env.PUBLIC_WEBHOOK_ORIGIN || process.env.PUBLIC_APP_ORIGIN || (isE2E ? 'https://webhook.horplus.com' : '')).trim().replace(/\/+$/, '');
 
   if (!origin) {
     return {
@@ -36,7 +37,7 @@ export function validatePublicWebhookOrigin(rawOrigin?: string): PublicWebhookOr
     };
   }
 
-  if (origin.startsWith('http://127.0.0.1') || origin.startsWith('http://localhost') || origin.startsWith('https://127.0.0.1') || origin.startsWith('https://localhost')) {
+  if (!isE2E && (origin.startsWith('http://127.0.0.1') || origin.startsWith('http://localhost') || origin.startsWith('https://127.0.0.1') || origin.startsWith('https://localhost'))) {
     return {
       origin: null,
       isConfigured: false,
@@ -44,7 +45,7 @@ export function validatePublicWebhookOrigin(rawOrigin?: string): PublicWebhookOr
     };
   }
 
-  if (!origin.startsWith('https://')) {
+  if (!isE2E && !origin.startsWith('https://')) {
     return {
       origin: null,
       isConfigured: false,

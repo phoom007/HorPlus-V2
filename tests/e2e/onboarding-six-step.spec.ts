@@ -105,7 +105,7 @@ test.describe.serial('Master Six-Step Owner Onboarding E2E Flow', () => {
     ]);
 
     // 1. Navigate to register page
-    await page.goto('http://127.0.0.1:5173/owner/register');
+    await page.goto('http://127.0.0.1:5174/owner/register');
 
     // STEP 1: Dormitory Info & Address
     await expect(page.locator('[data-testid="input-dormitory-name"]')).toBeVisible();
@@ -117,14 +117,26 @@ test.describe.serial('Master Six-Step Owner Onboarding E2E Flow', () => {
 
     // STEP 2: Buildings & Rooms
     await expect(page.locator('[data-testid="button-add-building"]')).toBeVisible();
-    await page.fill('input[type="number"] >> nth=1', '5');
-    await page.fill('[data-testid="input-building-prefix"]', 'A');
+    await page.fill('[data-testid="input-building-rooms-per-floor"]', '5');
+    await page.fill('[data-testid="input-building-prefix"]', 'Z');
+    await page.check('[data-testid="checkbox-building-has-elevator"]');
+    await page.selectOption('[data-testid="select-building-format-pattern"]', 'prefix_floor_slash_room');
     await page.click('[data-testid="button-next-step"]'); // 2 -> 3
 
-    // STEP 3: Rates & Utilities (Testing zero-value rate preservation)
+    // STEP 3: Rates & Utilities (Testing zero-value & distinct field preservation)
     await expect(page.locator('[data-testid="input-water-rate"]')).toBeVisible();
     await page.fill('[data-testid="input-water-rate"]', '0');
-    await page.fill('[data-testid="input-electric-rate"]', '7');
+    await page.fill('[data-testid="input-electric-rate"]', '0');
+    await page.fill('[data-testid="input-common-fee-rate"]', '123');
+    await page.fill('[data-testid="input-internet-fee-rate"]', '234');
+    await page.fill('[data-testid="input-parking-fee-rate"]', '345');
+
+    await page.fill('[data-testid="input-building-monthly-rent"]', '4321');
+    await page.fill('[data-testid="input-building-daily-rent"]', '321');
+    await page.fill('[data-testid="input-building-term-rent"]', '22222');
+    await page.fill('[data-testid="input-building-term-months"]', '7');
+    await page.fill('[data-testid="input-building-max-occupants"]', '4');
+
     await page.click('[data-testid="button-next-step"]'); // 3 -> 4
 
     // STEP 4: Payment Account & Signature Drawing
@@ -133,6 +145,9 @@ test.describe.serial('Master Six-Step Owner Onboarding E2E Flow', () => {
     await bankSelect.selectOption('กสิกรไทย (KBank)');
     await page.fill('[data-testid="input-account-number"]', '123-4-56789-0');
     await page.fill('[data-testid="input-account-name"]', 'นาย สมศักดิ์ Master');
+    await page.fill('[data-testid="input-security-deposit"]', '0');
+    await page.fill('[data-testid="input-advance-rent-months"]', '0');
+    await page.fill('[data-testid="input-grace-period-days"]', '0');
 
     // Draw real strokes on canvas to satisfy non-blank pixel threshold
     const canvas = page.locator('canvas');
@@ -212,6 +227,7 @@ test.describe.serial('Master Six-Step Owner Onboarding E2E Flow', () => {
     await page.click('[data-testid="button-next-step"]'); // 2 -> 3
     await page.click('[data-testid="button-next-step"]'); // 3 -> 4
     await page.click('[data-testid="button-next-step"]'); // 4 -> 5
+    await expect(page.locator('[data-testid="line-readiness-badge"]')).toContainText('พร้อมใช้งาน ✅');
     await page.click('[data-testid="button-next-step"]'); // 5 -> 6
 
     await expect(page.locator('[data-testid="plan-card-pro"]')).toBeVisible();
@@ -278,9 +294,47 @@ test.describe.serial('Master Six-Step Owner Onboarding E2E Flow', () => {
       return await tx.building.findFirst({ where: { dormitoryId: createdDorm!.id } });
     });
     expect(createdBuilding).not.toBeNull();
-    expect(createdBuilding?.roomPrefix).toBe('A');
-    expect(createdBuilding?.hasElevator).toBe(false);
-    expect(createdBuilding?.termMonths).toBe(6);
+    expect(createdBuilding?.roomPrefix).toBe('Z');
+    expect(createdBuilding?.hasElevator).toBe(true);
+    expect(createdBuilding?.numberingPattern).toBe('prefix_floor_slash_room');
+    expect(Number(createdBuilding?.monthlyRent)).toBe(4321);
+    expect(Number(createdBuilding?.dailyRent)).toBe(321);
+    expect(Number(createdBuilding?.termRent)).toBe(22222);
+    expect(createdBuilding?.termMonths).toBe(7);
+    expect(createdBuilding?.maximumOccupants).toBe(4);
+
+    const createdRoom = await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${createdDorm!.id}, true)`;
+      return await tx.room.findFirst({ where: { dormitoryId: createdDorm!.id } });
+    });
+    expect(createdRoom).not.toBeNull();
+    expect(Number(createdRoom?.monthlyRent)).toBe(4321);
+    expect(Number(createdRoom?.dailyRent)).toBe(321);
+    expect(Number(createdRoom?.termRent)).toBe(22222);
+    expect(createdRoom?.termMonths).toBe(7);
+    expect(createdRoom?.maximumOccupants).toBe(4);
+
+    const createdBilling = await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${createdDorm!.id}, true)`;
+      return await tx.dormitoryBillingSettings.findUnique({ where: { dormitoryId: createdDorm!.id } });
+    });
+    expect(createdBilling).not.toBeNull();
+    expect(Number(createdBilling?.waterRate)).toBe(0);
+    expect(Number(createdBilling?.electricityRate)).toBe(0);
+    expect(Number(createdBilling?.commonFee)).toBe(123);
+    expect(Number(createdBilling?.internetFee)).toBe(234);
+    expect(Number(createdBilling?.parkingRate)).toBe(345);
+    expect(createdBilling?.advanceRentMonths).toBe(0);
+    expect(createdBilling?.gracePeriodDays).toBe(0);
+
+    // REAL-LINE ESCAPE TRIPWIRE ASSERTIONS
+    const received = fakeLineServer.requestLog.map((r) => `${r.method} ${r.url}`);
+    expect(received.some((r) => r.includes('POST') && r.includes('/oauth2/v3/token'))).toBe(true);
+    expect(received.some((r) => r.includes('GET') && r.includes('/v2/bot/info'))).toBe(true);
+    expect(received.some((r) => r.includes('PUT') && r.includes('/v2/bot/channel/webhook/endpoint'))).toBe(true);
+    expect(received.some((r) => r.includes('POST') && r.includes('/v2/bot/channel/webhook/test'))).toBe(true);
+    expect(received.some((r) => r.includes('GET') && r.includes('/v2/bot/channel/webhook/endpoint'))).toBe(true);
+    expect(received.some((r) => r.includes('api.line.me'))).toBe(false);
   });
 
   test('Anti-abuse: Genuine second onboarding attempt with same User.id receives zero extra initial trial and zero extra promo claim', async ({ page }) => {
@@ -292,7 +346,7 @@ test.describe.serial('Master Six-Step Owner Onboarding E2E Flow', () => {
     expect(firstDorm).not.toBeNull();
 
     // Prepare a second provisional dormitory for the same user
-    const prepRes = await page.request.post('http://127.0.0.1:3001/api/v1/onboarding/prepare', {
+    const prepRes = await page.request.post('http://127.0.0.1:3101/api/v1/onboarding/prepare', {
       headers: {
         'Cookie': `horplus_session=${masterSessionToken}; horplus_csrf=${masterCsrfToken}`,
         'x-csrf-token': masterCsrfToken,
@@ -345,7 +399,7 @@ test.describe.serial('Master Six-Step Owner Onboarding E2E Flow', () => {
     expect(paidPkg).not.toBeNull();
 
     // Finalize the second dormitory with HORPLUS promo code
-    const finalizeRes = await page.request.post('http://127.0.0.1:3001/api/v1/onboarding/finalize', {
+    const finalizeRes = await page.request.post('http://127.0.0.1:3101/api/v1/onboarding/finalize', {
       headers: {
         'Cookie': `horplus_session=${masterSessionToken}; horplus_csrf=${masterCsrfToken}`,
         'x-csrf-token': masterCsrfToken,
@@ -441,7 +495,7 @@ test.describe.serial('Master Six-Step Owner Onboarding E2E Flow', () => {
       { name: 'horplus_csrf', value: sigCsrfToken, domain: '127.0.0.1', path: '/', httpOnly: false, secure: false, sameSite: 'Lax' },
     ]);
 
-    await page.goto('http://127.0.0.1:5173/owner/register');
+    await page.goto('http://127.0.0.1:5174/owner/register');
     await page.waitForLoadState('networkidle');
 
     // Step 1: Dormitory Info
@@ -466,7 +520,7 @@ test.describe.serial('Master Six-Step Owner Onboarding E2E Flow', () => {
     await expect(page.locator('text=กรุณากด "บันทึกลายเซ็น"')).toBeVisible();
 
     // Fetch provisionalDormitoryId for RLS-scoped DB assertions
-    const draftRes = await page.request.get('http://127.0.0.1:3001/api/v1/onboarding/draft', {
+    const draftRes = await page.request.get('http://127.0.0.1:3101/api/v1/onboarding/draft', {
       headers: {
         'Cookie': `horplus_session=${sigSessionToken}; horplus_csrf=${sigCsrfToken}`,
       },
@@ -535,5 +589,77 @@ test.describe.serial('Master Six-Step Owner Onboarding E2E Flow', () => {
 
     const sigCountAfterReload = await getSigCount();
     expect(sigCountAfterReload).toBe(1);
+  });
+
+  test('Neutral state: Add Building creates neutral state without silent business default data (0 rooms/floor, 0 rent, 0 utilities)', async ({ page }) => {
+    const neutralUser = await prisma.user.create({
+      data: {
+        email: `neutral-owner-${Date.now()}@example.com`,
+        emailNormalized: `neutral-owner-${Date.now()}@example.com`,
+        name: 'Neutral Owner User',
+        googleSubject: `goog-neutral-${Date.now()}`,
+        status: 'active',
+      },
+    });
+
+    const nSid = crypto.randomUUID();
+    await prisma.session.create({
+      data: {
+        userId: neutralUser.id,
+        sessionIdHash: SessionTokenService.hashSessionId(nSid),
+        tokenVersion: 1,
+        status: 'active',
+        expiresAt: new Date(Date.now() + 86400 * 1000),
+      },
+    });
+
+    const sessionSecret = process.env.SESSION_ENCRYPTION_KEY || '0123456789abcdef0123456789abcdef';
+    const sessionTokenService = new SessionTokenService(sessionSecret);
+    const nToken = sessionTokenService.encryptToken({ sub: neutralUser.id, sid: nSid, type: 'session', version: 1 }, 86400);
+
+    await page.context().addCookies([
+      {
+        name: 'horplus_session',
+        value: nToken,
+        domain: '127.0.0.1',
+        path: '/',
+        httpOnly: false,
+        secure: false,
+        sameSite: 'Lax',
+      },
+    ]);
+
+    await page.goto('http://127.0.0.1:5174/owner/register');
+    await page.fill('[data-testid="input-dormitory-name"]', 'Neutral Test Dorm');
+    await page.fill('[data-testid="input-address"]', '123 Neutral Street');
+    await page.selectOption('[data-testid="select-province"]', 'กรุงเทพมหานคร');
+    await page.click('[data-testid="button-next-step"]'); // 1 -> 2
+
+    // Click Add Building
+    await page.click('[data-testid="button-add-building"]');
+
+    // Assert newly created building (building 0) does not contain 5 rooms/floor or 'A' prefix silently
+    const newBuildingRoomsPerFloor = page.locator('[data-testid="input-building-rooms-per-floor"]').first();
+    await expect(newBuildingRoomsPerFloor).toHaveValue('0');
+
+    // Fill roomsPerFloor for both buildings (building 0 and building 1) so Step 2 validation passes
+    await newBuildingRoomsPerFloor.fill('1');
+    await page.locator('[data-testid="input-building-rooms-per-floor"]').nth(1).fill('1');
+
+    // Go to Step 3
+    await page.click('[data-testid="button-next-step"]'); // 2 -> 3
+
+    // Wait for Step 3 element to appear
+    await expect(page.locator('[data-testid="input-water-rate"]')).toBeVisible();
+
+    // Assert neutral initial state (monthlyRent = 0, waterRate = 0, electricRate = 0)
+    await expect(page.locator('[data-testid="input-water-rate"]')).toHaveValue('0');
+    await expect(page.locator('[data-testid="input-electric-rate"]')).toHaveValue('0');
+    await expect(page.locator('[data-testid="input-building-monthly-rent"]').first()).toHaveValue('0');
+
+    // Cleanup neutral user
+    await prisma.onboardingDraft.deleteMany({ where: { userId: neutralUser.id } }).catch(() => {});
+    await prisma.session.deleteMany({ where: { userId: neutralUser.id } }).catch(() => {});
+    await prisma.user.delete({ where: { id: neutralUser.id } }).catch(() => {});
   });
 });

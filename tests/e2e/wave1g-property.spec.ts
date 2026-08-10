@@ -138,7 +138,7 @@ test.describe.serial('Wave 1G Real Playwright Lifecycle — Property, Room Defau
     await page.waitForLoadState('domcontentloaded');
 
     const apiContext = await playwrightRequest.newContext({
-      baseURL: 'http://127.0.0.1:3001',
+      baseURL: 'http://127.0.0.1:3101',
       extraHTTPHeaders: {
         Cookie: `horplus_session=${sessionToken}; horplus_csrf=${csrfToken}`,
         'x-csrf-token': csrfToken,
@@ -379,7 +379,7 @@ test.describe.serial('Wave 1G Real Playwright Lifecycle — Property, Room Defau
     }, dormId);
 
     const apiContext = await playwrightRequest.newContext({
-      baseURL: 'http://127.0.0.1:3001',
+      baseURL: 'http://127.0.0.1:3101',
       extraHTTPHeaders: {
         Cookie: `horplus_session=${sessionToken}; horplus_csrf=${csrfToken}`,
         'x-csrf-token': csrfToken,
@@ -388,7 +388,7 @@ test.describe.serial('Wave 1G Real Playwright Lifecycle — Property, Room Defau
     });
 
     const apiContext2 = await playwrightRequest.newContext({
-      baseURL: 'http://127.0.0.1:3001',
+      baseURL: 'http://127.0.0.1:3101',
       extraHTTPHeaders: {
         Cookie: `horplus_session=${sessionToken}; horplus_csrf=${csrfToken}`,
         'x-csrf-token': csrfToken,

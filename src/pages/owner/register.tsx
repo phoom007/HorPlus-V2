@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, Component } from 'react';
 import { 
   Building2, 
   User, 
@@ -123,7 +123,162 @@ const formatBankAccount = (val: string) => {
   return `${digits.slice(0, 3)}-${digits.slice(3, 4)}-${digits.slice(4, 9)}-${digits.slice(9)}`;
 };
 
-export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate }) => {
+function parseNum(val: any, fallback: number): number {
+  if (val === undefined || val === null || val === '') return fallback;
+  const num = Number(val);
+  return Number.isNaN(num) ? fallback : num;
+}
+
+export function normalizeOnboardingDraftPayload(rawPayload: any, neutralInitialState: any): any {
+  if (!rawPayload || typeof rawPayload !== 'object') {
+    return neutralInitialState;
+  }
+
+  const p = rawPayload;
+  const result = { ...neutralInitialState };
+
+  result.dormitoryName = (p.dormitoryName ?? p.dormName ?? p.name ?? neutralInitialState.dormitoryName ?? '').toString();
+  result.address = (p.address ?? p.dormAddress ?? p.addressLine1 ?? neutralInitialState.address ?? '').toString();
+  result.province = (p.province ?? neutralInitialState.province ?? '').toString();
+  result.dormType = (p.dormType ?? p.dormitoryType ?? p.type ?? neutralInitialState.dormType ?? 'อพาร์ตเมนต์').toString();
+  result.genderType = (p.genderType ?? p.genderPolicy ?? neutralInitialState.genderType ?? 'รวม').toString();
+
+  if (Array.isArray(p.buildings) && p.buildings.length > 0) {
+    result.buildings = p.buildings.map((b: any, idx: number) => {
+      const bObj = (b && typeof b === 'object') ? b : {};
+      const rawRates = bObj.rentRates || {};
+
+      const monthly = parseNum(rawRates.monthly ?? bObj.monthlyRent ?? bObj.monthly, 0);
+      const daily = parseNum(rawRates.daily ?? bObj.dailyRent ?? bObj.daily, 0);
+      const term = parseNum(rawRates.term ?? bObj.termRent ?? bObj.term, 0);
+      const termMonths = parseNum(rawRates.termMonths ?? bObj.termMonths, 6);
+      const maxOccupants = parseNum(rawRates.maxOccupants ?? bObj.maxOccupants ?? bObj.maximumOccupants, 2);
+
+      const totalFloors = parseNum(bObj.totalFloors ?? bObj.floorsCount ?? bObj.floorCount, 1);
+      const roomsPerFloor = parseNum(bObj.roomsPerFloor ?? bObj.roomsCount, 0);
+      const securityDeposit = parseNum(bObj.securityDeposit ?? bObj.depositAmount, 0);
+
+      return {
+        id: (bObj.id ?? `b-${idx + 1}`).toString(),
+        name: (bObj.name ?? `อาคาร ${String.fromCharCode(65 + idx)}`).toString(),
+        totalFloors: Math.max(1, totalFloors),
+        roomsPerFloor: Math.max(0, roomsPerFloor),
+        hasElevator: Boolean(bObj.hasElevator ?? false),
+        roomPrefix: (bObj.roomPrefix ?? '').toString(),
+        formatPattern: (bObj.formatPattern ?? bObj.numberingPattern ?? 'prefix_floor_room').toString(),
+        mode: (bObj.mode ?? 'auto').toString(),
+        customRooms: Array.isArray(bObj.customRooms) ? bObj.customRooms : [],
+        securityDeposit,
+        rentRates: {
+          monthly,
+          daily,
+          term,
+          termMonths: Math.max(1, termMonths),
+          maxOccupants: Math.max(1, maxOccupants),
+        },
+      };
+    });
+  }
+
+  const rawUtil = (p.utilities && typeof p.utilities === 'object') ? p.utilities : {};
+  result.utilities = {
+    waterBillingMode: (rawUtil.waterBillingMode ?? neutralInitialState.utilities?.waterBillingMode ?? 'unit').toString(),
+    waterRate: parseNum(rawUtil.waterRate, neutralInitialState.utilities?.waterRate ?? 0),
+    electricBillingMode: (rawUtil.electricBillingMode ?? neutralInitialState.utilities?.electricBillingMode ?? 'unit').toString(),
+    electricRate: parseNum(rawUtil.electricRate, neutralInitialState.utilities?.electricRate ?? 0),
+    commonFeeMode: (rawUtil.commonFeeMode ?? neutralInitialState.utilities?.commonFeeMode ?? 'none').toString(),
+    commonFeeRate: parseNum(rawUtil.commonFeeRate, neutralInitialState.utilities?.commonFeeRate ?? 0),
+    internetFeeMode: (rawUtil.internetFeeMode ?? neutralInitialState.utilities?.internetFeeMode ?? 'none').toString(),
+    internetRate: parseNum(rawUtil.internetRate, neutralInitialState.utilities?.internetRate ?? 0),
+    parkingFeeMode: (rawUtil.parkingFeeMode ?? neutralInitialState.utilities?.parkingFeeMode ?? 'none').toString(),
+    parkingFeeRate: parseNum(rawUtil.parkingFeeRate, neutralInitialState.utilities?.parkingFeeRate ?? 0),
+  };
+
+  const rawDep = (p.deposits && typeof p.deposits === 'object') ? p.deposits : {};
+  result.deposits = {
+    securityDeposit: parseNum(rawDep.securityDeposit, neutralInitialState.deposits?.securityDeposit ?? 0),
+    advanceRentMonths: parseNum(rawDep.advanceRentMonths, neutralInitialState.deposits?.advanceRentMonths ?? 1),
+    dueDateDay: parseNum(rawDep.dueDateDay, neutralInitialState.deposits?.dueDateDay ?? 5),
+    gracePeriodDays: parseNum(rawDep.gracePeriodDays, neutralInitialState.deposits?.gracePeriodDays ?? 0),
+    lateFeeType: (rawDep.lateFeeType ?? neutralInitialState.deposits?.lateFeeType ?? 'none').toString(),
+    lateFeeAmount: parseNum(rawDep.lateFeeAmount, neutralInitialState.deposits?.lateFeeAmount ?? 0),
+  };
+
+  const rawPayAcc = (p.paymentAccount && typeof p.paymentAccount === 'object') ? p.paymentAccount : {};
+  result.paymentAccount = {
+    bankName: (rawPayAcc.bankName ?? rawPayAcc.bankCode ?? neutralInitialState.paymentAccount?.bankName ?? '').toString(),
+    accountNumber: (rawPayAcc.accountNumber ?? rawPayAcc.bankAccountNumber ?? neutralInitialState.paymentAccount?.accountNumber ?? '').toString(),
+    accountName: (rawPayAcc.accountName ?? rawPayAcc.bankAccountName ?? neutralInitialState.paymentAccount?.accountName ?? '').toString(),
+    bankAccountName: (rawPayAcc.bankAccountName ?? rawPayAcc.accountName ?? neutralInitialState.paymentAccount?.bankAccountName ?? '').toString(),
+    promptPayId: (rawPayAcc.promptPayId ?? rawPayAcc.promptPayValue ?? neutralInitialState.paymentAccount?.promptPayId ?? '').toString(),
+  };
+
+  return result;
+}
+
+class OnboardingErrorBoundary extends Component<any, any> {
+  public state = { hasError: false };
+  public props: any;
+  public setState: any;
+
+  constructor(props: any) {
+    super(props);
+    this.props = props;
+  }
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+    console.error('Onboarding UI Render Error:', error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+          <div className="max-w-md w-full bg-white rounded-2xl p-6 shadow-sm border border-slate-200 text-center space-y-4">
+            <div className="w-12 h-12 rounded-full bg-amber-100 text-amber-600 flex items-center justify-center mx-auto">
+              <AlertCircle className="w-6 h-6" />
+            </div>
+            <h2 className="text-lg font-bold text-slate-800">
+              ไม่สามารถแสดงข้อมูลขั้นตอนนี้ได้
+            </h2>
+            <p className="text-slate-500 text-sm">
+              เกิดข้อผิดพลาดในการแสดงผล กรุณาลองรีเฟรชหน้าเว็บ หรือกดปุ่มย้อนกลับเพื่อลองใหม่อีกครั้ง
+            </p>
+            <div className="flex justify-center gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  if (typeof (this as any).setState === 'function') {
+                    (this as any).setState({ hasError: false });
+                  }
+                  window.location.reload();
+                }}
+                className="px-4 py-2 rounded-xl bg-indigo-600 text-white font-semibold text-sm hover:bg-indigo-700 transition-all"
+              >
+                รีเฟรชหน้าเว็บ
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+    return this.props?.children;
+  }
+}
+
+export const OwnerRegister: React.FC<RegisterProps> = (props) => {
+  return (
+    <OnboardingErrorBoundary>
+      <OwnerRegisterInner {...props} />
+    </OnboardingErrorBoundary>
+  );
+};
+
+const OwnerRegisterInner: React.FC<RegisterProps> = ({ onAddLog, onNavigate }) => {
   const [currentStep, setCurrentStep] = useState(1);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSavedSuccess, setIsSavedSuccess] = useState(false);
@@ -314,17 +469,17 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
       id: `b-${Date.now()}`,
       name: `อาคาร ${nextChar}`,
       totalFloors: 1,
-      roomsPerFloor: 5,
+      roomsPerFloor: 0,
       hasElevator: false,
-      roomPrefix: nextChar,
+      roomPrefix: '',
       formatPattern: 'prefix_floor_room',
       mode: 'auto' as 'auto' | 'manual',
       customRooms: [] as string[],
       securityDeposit: 0,
       rentRates: {
-        monthly: 3500,
+        monthly: 0,
         term: 0,
-        termMonths: 1,
+        termMonths: 6,
         daily: 0,
         maxOccupants: 2
       }
@@ -410,7 +565,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
     onboardingClient.getPublicCatalog()
       .then((res: any) => {
         const raw = res.data || res;
-        const pkgs = Array.isArray(raw) ? raw : (raw.packages || raw.catalog || []);
+        const pkgs = Array.isArray(raw) ? raw : (raw.data || raw.packages || raw.catalog || []);
         setCatalogPackages(pkgs);
         const proPkg = pkgs.find((p: any) => p.planCode === 'PAID' || p.plan?.code === 'PAID' || p.code === 'PRO' || p.planCode === 'PRO');
         if (proPkg) {
@@ -426,14 +581,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
       .then(async (res: any) => {
         const draft = res.data || res;
         if (draft && draft.payload && !draft.finalizedAt) {
-          if (draft.payload.dormitoryName || draft.payload.dormName) {
-            setFormData(prev => ({
-              ...prev,
-              ...draft.payload,
-              dormitoryName: draft.payload.dormitoryName || draft.payload.dormName || prev.dormitoryName,
-              address: draft.payload.address || draft.payload.dormAddress || prev.address,
-            }));
-          }
+          setFormData(prev => normalizeOnboardingDraftPayload(draft.payload, prev));
           if (draft.provisionalDormitoryId) {
             setProvisionalDormitoryId(draft.provisionalDormitoryId);
             setSignatureSaved(Boolean(draft.signatureSaved || draft.payload?.signatureSaved));
@@ -908,10 +1056,16 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
           roomsPerFloor: b.roomsPerFloor || 0,
           roomPrefix: b.roomPrefix || null,
           hasElevator: Boolean(b.hasElevator),
+          numberingPattern: b.formatPattern || (b as any).numberingPattern || 'prefix_floor_room',
+          monthlyRent: b.rentRates?.monthly ?? 0,
+          dailyRent: b.rentRates?.daily ?? 0,
+          termRent: b.rentRates?.term ?? 0,
+          termMonths: b.rentRates?.termMonths ?? 6,
+          maximumOccupants: b.rentRates?.maxOccupants ?? 2,
         });
 
         const roomNumbers = getGeneratedRooms(b);
-        const monthlyRent = b.rentRates?.monthly ?? 3500;
+        const monthlyRent = b.rentRates?.monthly ?? 0;
         const deposit = b.securityDeposit !== undefined ? b.securityDeposit : (formData.deposits.securityDeposit ?? 0);
 
         roomNumbers.forEach((rNum) => {
@@ -954,23 +1108,23 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
           addressLine1: formData.address.trim(),
           province: formData.province.trim(),
           estimatedBuildingCount: formData.buildings.length,
-          estimatedRoomCount: roomsPayload.length || 10,
+          estimatedRoomCount: roomsPayload.length,
         },
         billing: {
           billingDay: 25,
-          dueDay: Number(formData.deposits.dueDateDay) || 5,
+          dueDay: (formData.deposits.dueDateDay !== undefined && formData.deposits.dueDateDay !== null && formData.deposits.dueDateDay !== '') ? Number(formData.deposits.dueDateDay) : 5,
           waterBillingType: 'per_unit',
-          waterRate: String(formData.utilities.waterRate ?? 18),
+          waterRate: String(formData.utilities.waterRate ?? 0),
           electricityBillingType: 'per_unit',
-          electricityRate: String(formData.utilities.electricRate ?? 7),
+          electricityRate: String(formData.utilities.electricRate ?? 0),
           commonFee: String(formData.utilities.commonFeeRate ?? 0),
           commonFeeMode: formData.utilities.commonFeeMode || 'none',
           internetFee: String(formData.utilities.internetRate ?? 0),
           internetFeeMode: formData.utilities.internetFeeMode || 'none',
           parkingRate: String(formData.utilities.parkingFeeRate ?? 0),
           parkingFeeMode: formData.utilities.parkingFeeMode || 'none',
-          gracePeriodDays: Number(formData.deposits.gracePeriodDays) || 0,
-          advanceRentMonths: Number(formData.deposits.advanceRentMonths) || 1,
+          gracePeriodDays: (formData.deposits.gracePeriodDays !== undefined && formData.deposits.gracePeriodDays !== null && formData.deposits.gracePeriodDays !== '') ? Number(formData.deposits.gracePeriodDays) : 0,
+          advanceRentMonths: (formData.deposits.advanceRentMonths !== undefined && formData.deposits.advanceRentMonths !== null && formData.deposits.advanceRentMonths !== '') ? Number(formData.deposits.advanceRentMonths) : 1,
           lateFeeType: (formData.deposits.lateFeeType as any) || 'none',
           lateFeeValue: String(formData.deposits.lateFeeAmount ?? 0),
           rentBillingType: 'monthly',
@@ -1256,6 +1410,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                         <label className="block text-xs font-semibold text-slate-600 mb-1">จำนวนชั้น</label>
                         <input
                           type="number"
+                          data-testid="input-building-total-floors"
                           min={1}
                           max={100}
                           value={b.totalFloors}
@@ -1272,6 +1427,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                         <label className="block text-xs font-semibold text-slate-600 mb-1">ห้องต่อชั้น</label>
                         <input
                           type="number"
+                          data-testid="input-building-rooms-per-floor"
                           min={1}
                           max={100}
                           value={b.roomsPerFloor}
@@ -1303,6 +1459,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                       <div>
                         <label className="block text-xs font-semibold text-slate-600 mb-1">รูปแบบเลขห้อง</label>
                         <select
+                          data-testid="select-building-format-pattern"
                           value={b.formatPattern}
                           onChange={e => {
                             const updated = [...formData.buildings];
@@ -1318,6 +1475,23 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                           <option value="prefix_dash_floor_room">A-101 (Prefix-Floor+Room)</option>
                         </select>
                       </div>
+                    </div>
+
+                    <div className="flex items-center gap-2 pt-2">
+                      <label className="inline-flex items-center gap-2 text-xs font-semibold text-slate-700 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          data-testid="checkbox-building-has-elevator"
+                          checked={Boolean(b.hasElevator)}
+                          onChange={e => {
+                            const updated = [...formData.buildings];
+                            updated[bIdx].hasElevator = e.target.checked;
+                            setFormData({ ...formData, buildings: updated });
+                          }}
+                          className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 border-slate-300"
+                        />
+                        มีลิฟต์ (Has Elevator)
+                      </label>
                     </div>
 
                     <div className="flex items-center justify-between pt-2">
@@ -1414,6 +1588,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                     <label className="block text-xs font-semibold text-slate-700">ค่าบริการส่วนกลาง (บาท/เดือน)</label>
                     <input
                       type="number"
+                      data-testid="input-common-fee-rate"
                       min={0}
                       value={formData.utilities.commonFeeRate}
                       onChange={e => setFormData(prev => ({ ...prev, utilities: { ...prev.utilities, commonFeeRate: Number(e.target.value) } }))}
@@ -1422,9 +1597,22 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                   </div>
 
                   <div className="p-4 bg-white rounded-xl border border-slate-200 space-y-2">
+                    <label className="block text-xs font-semibold text-slate-700">ค่าอินเทอร์เน็ต (บาท/เดือน)</label>
+                    <input
+                      type="number"
+                      data-testid="input-internet-fee-rate"
+                      min={0}
+                      value={formData.utilities.internetRate}
+                      onChange={e => setFormData(prev => ({ ...prev, utilities: { ...prev.utilities, internetRate: Number(e.target.value) } }))}
+                      className="w-full px-3 py-2 rounded-lg border border-slate-300 font-bold text-slate-800 text-sm"
+                    />
+                  </div>
+
+                  <div className="p-4 bg-white rounded-xl border border-slate-200 space-y-2">
                     <label className="block text-xs font-semibold text-slate-700">ค่าจอดรถ (บาท/เดือน)</label>
                     <input
                       type="number"
+                      data-testid="input-parking-fee-rate"
                       min={0}
                       value={formData.utilities.parkingFeeRate}
                       onChange={e => setFormData(prev => ({ ...prev, utilities: { ...prev.utilities, parkingFeeRate: Number(e.target.value) } }))}
@@ -1435,7 +1623,9 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
               </div>
 
               {/* Building Rent Rates */}
-              {formData.buildings.map((b, bIdx) => (
+              {formData.buildings.map((b, bIdx) => {
+                const rentRates = b.rentRates || { monthly: 0, daily: 0, term: 0, termMonths: 6, maxOccupants: 2 };
+                return (
                 <div key={b.id} className="p-6 rounded-2xl border border-slate-200 bg-white space-y-4">
                   <h3 className="font-bold text-slate-800 text-sm flex items-center gap-2">
                     <BuildingIcon className="w-4 h-4 text-indigo-600" />
@@ -1446,11 +1636,15 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                       <label className="block text-xs font-semibold text-slate-600 mb-1">ค่าเช่ารายเดือน (บาท)</label>
                       <input
                         type="number"
+                        data-testid="input-building-monthly-rent"
                         min={0}
-                        value={b.rentRates.monthly}
+                        value={rentRates.monthly ?? 0}
                         onChange={e => {
                           const updated = [...formData.buildings];
-                          updated[bIdx].rentRates.monthly = Number(e.target.value);
+                          updated[bIdx] = {
+                            ...updated[bIdx],
+                            rentRates: { ...rentRates, monthly: Number(e.target.value) }
+                          };
                           setFormData({ ...formData, buildings: updated });
                         }}
                         className="w-full px-3 py-2 rounded-lg border border-slate-300 font-bold text-slate-800 text-sm"
@@ -1460,11 +1654,51 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                       <label className="block text-xs font-semibold text-slate-600 mb-1">ค่าเช่ารายวัน (บาท)</label>
                       <input
                         type="number"
+                        data-testid="input-building-daily-rent"
                         min={0}
-                        value={b.rentRates.daily}
+                        value={rentRates.daily ?? 0}
                         onChange={e => {
                           const updated = [...formData.buildings];
-                          updated[bIdx].rentRates.daily = Number(e.target.value);
+                          updated[bIdx] = {
+                            ...updated[bIdx],
+                            rentRates: { ...rentRates, daily: Number(e.target.value) }
+                          };
+                          setFormData({ ...formData, buildings: updated });
+                        }}
+                        className="w-full px-3 py-2 rounded-lg border border-slate-300 font-bold text-slate-800 text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">ค่าเช่าระยะยาว (บาท)</label>
+                      <input
+                        type="number"
+                        data-testid="input-building-term-rent"
+                        min={0}
+                        value={rentRates.term ?? 0}
+                        onChange={e => {
+                          const updated = [...formData.buildings];
+                          updated[bIdx] = {
+                            ...updated[bIdx],
+                            rentRates: { ...rentRates, term: Number(e.target.value) }
+                          };
+                          setFormData({ ...formData, buildings: updated });
+                        }}
+                        className="w-full px-3 py-2 rounded-lg border border-slate-300 font-bold text-slate-800 text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">ระยะเวลาสัญญา (เดือน)</label>
+                      <input
+                        type="number"
+                        data-testid="input-building-term-months"
+                        min={1}
+                        value={rentRates.termMonths ?? 6}
+                        onChange={e => {
+                          const updated = [...formData.buildings];
+                          updated[bIdx] = {
+                            ...updated[bIdx],
+                            rentRates: { ...rentRates, termMonths: Number(e.target.value) }
+                          };
                           setFormData({ ...formData, buildings: updated });
                         }}
                         className="w-full px-3 py-2 rounded-lg border border-slate-300 font-bold text-slate-800 text-sm"
@@ -1474,11 +1708,15 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                       <label className="block text-xs font-semibold text-slate-600 mb-1">จำนวนผู้พักสูงสุด (คน)</label>
                       <input
                         type="number"
+                        data-testid="input-building-max-occupants"
                         min={1}
-                        value={b.rentRates.maxOccupants}
+                        value={rentRates.maxOccupants ?? 2}
                         onChange={e => {
                           const updated = [...formData.buildings];
-                          updated[bIdx].rentRates.maxOccupants = Math.max(1, Number(e.target.value));
+                          updated[bIdx] = {
+                            ...updated[bIdx],
+                            rentRates: { ...rentRates, maxOccupants: Math.max(1, Number(e.target.value)) }
+                          };
                           setFormData({ ...formData, buildings: updated });
                         }}
                         className="w-full px-3 py-2 rounded-lg border border-slate-300 font-bold text-slate-800 text-sm"
@@ -1486,7 +1724,8 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                     </div>
                   </div>
                 </div>
-              ))}
+              );
+              })}
             </div>
           </div>
         )}
@@ -1509,14 +1748,26 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                   <ShieldCheck className="w-4 h-4 text-indigo-600" />
                   เงินประกันและวันครบกำหนดชำระ
                 </h3>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
                   <div>
                     <label className="block text-xs font-semibold text-slate-600 mb-1">เงินประกันความเสียหาย (บาท)</label>
                     <input
                       type="number"
+                      data-testid="input-security-deposit"
                       min={0}
                       value={formData.deposits.securityDeposit}
                       onChange={e => setFormData(prev => ({ ...prev, deposits: { ...prev.deposits, securityDeposit: Number(e.target.value) } }))}
+                      className="w-full px-3 py-2 rounded-lg border border-slate-300 font-bold text-slate-800 text-sm bg-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-600 mb-1">ค่าเช่าล่วงหน้า (เดือน)</label>
+                    <input
+                      type="number"
+                      data-testid="input-advance-rent-months"
+                      min={0}
+                      value={formData.deposits.advanceRentMonths}
+                      onChange={e => setFormData(prev => ({ ...prev, deposits: { ...prev.deposits, advanceRentMonths: Number(e.target.value) } }))}
                       className="w-full px-3 py-2 rounded-lg border border-slate-300 font-bold text-slate-800 text-sm bg-white"
                     />
                   </div>
@@ -1536,6 +1787,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                     <label className="block text-xs font-semibold text-slate-600 mb-1">ระยะเวลาผ่อนผัน (วัน)</label>
                     <input
                       type="number"
+                      data-testid="input-grace-period-days"
                       min={0}
                       value={formData.deposits.gracePeriodDays}
                       onChange={e => setFormData(prev => ({ ...prev, deposits: { ...prev.deposits, gracePeriodDays: Number(e.target.value) } }))}
@@ -1625,6 +1877,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
 
                 <div className="border-2 border-dashed border-slate-300 rounded-2xl p-2 bg-slate-50 flex flex-col items-center">
                   <canvas
+                    data-testid="canvas-signature"
                     ref={canvasRef}
                     width={560}
                     height={180}
