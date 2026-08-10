@@ -19,9 +19,50 @@ import { LinePlatformAdapter, MockLinePlatformAdapter } from './line-platform-ad
 import { createLinePlatformAdapter } from './line-adapter-factory.js';
 import { LineChannelTokenProvider, ILineChannelTokenProvider, FakeLineTokenProvider } from './line-channel-token-provider.js';
 
+export interface PublicWebhookOriginStatus {
+  origin: string | null;
+  isConfigured: boolean;
+  errorReason?: string;
+}
+
+export function validatePublicWebhookOrigin(rawOrigin?: string): PublicWebhookOriginStatus {
+  const isE2EorTest = process.env.HORPLUS_E2E === 'true' || process.env.NODE_ENV === 'test';
+  const origin = (rawOrigin || process.env.PUBLIC_WEBHOOK_ORIGIN || process.env.PUBLIC_APP_ORIGIN || '').trim().replace(/\/+$/, '');
+
+  if (!origin) {
+    if (isE2EorTest) {
+      return { origin: 'http://127.0.0.1:3001', isConfigured: true };
+    }
+    return {
+      origin: null,
+      isConfigured: false,
+      errorReason: 'WEBHOOK_PUBLIC_ORIGIN_NOT_CONFIGURED',
+    };
+  }
+
+  if (!isE2EorTest) {
+    if (origin.startsWith('http://127.0.0.1') || origin.startsWith('http://localhost') || origin.startsWith('https://127.0.0.1') || origin.startsWith('https://localhost')) {
+      return {
+        origin: null,
+        isConfigured: false,
+        errorReason: 'PUBLIC_WEBHOOK_ORIGIN_LOCALHOST_REJECTED',
+      };
+    }
+    if (!origin.startsWith('https://')) {
+      return {
+        origin: null,
+        isConfigured: false,
+        errorReason: 'PUBLIC_WEBHOOK_ORIGIN_HTTPS_REQUIRED',
+      };
+    }
+  }
+
+  return { origin, isConfigured: true };
+}
+
 export function getPublicWebhookOrigin(): string {
-  const origin = process.env.PUBLIC_WEBHOOK_ORIGIN || process.env.PUBLIC_APP_ORIGIN || process.env.APPLICATION_URL || (process.env.NODE_ENV === 'production' ? 'https://app.horplus.com' : 'http://127.0.0.1:3001');
-  return origin.replace(/\/+$/, '');
+  const status = validatePublicWebhookOrigin();
+  return status.origin || '';
 }
 
 export class LineOaService {
@@ -54,6 +95,8 @@ export class LineOaService {
    * Get LINE OA connection status (Secrets REDACTED)
    */
   async getDormitoryLineConfig(dormitoryId: string, baseUrl = getPublicWebhookOrigin()) {
+    const originStatus = validatePublicWebhookOrigin(baseUrl);
+
     return await this.prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormitoryId}, true)`;
 
@@ -70,8 +113,15 @@ export class LineOaService {
           webhookTestSucceeded: false,
           webhookActive: false,
           hasChannelSecret: false,
+          isPublicWebhookConfigured: originStatus.isConfigured,
+          webhookOriginError: originStatus.errorReason || null,
           lineOaId: null,
           channelId: null,
+          botUserId: null,
+          botDisplayName: null,
+          botPictureUrl: null,
+          botPremiumId: null,
+          botChatMode: null,
           accessTokenVerifiedAt: null,
           webhookVerifiedAt: null,
           webhookUrl: null
@@ -79,10 +129,10 @@ export class LineOaService {
       }
 
       let webhookUrl: string | null = null;
-      if (config.webhookKeyEncrypted) {
+      if (config.webhookKeyEncrypted && originStatus.isConfigured && originStatus.origin) {
         try {
           const rawKey = decryptText(config.webhookKeyEncrypted);
-          webhookUrl = `${baseUrl}/api/v1/line/webhook/${rawKey}`;
+          webhookUrl = `${originStatus.origin}/api/v1/line/webhook/${rawKey}`;
         } catch {
           webhookUrl = null;
         }
@@ -103,8 +153,15 @@ export class LineOaService {
         webhookActive,
         hasChannelSecret: !!config.channelSecretEncrypted,
         hasAccessToken: !!config.accessTokenVerifiedAt,
+        isPublicWebhookConfigured: originStatus.isConfigured,
+        webhookOriginError: originStatus.errorReason || null,
         lineOaId: config.lineOaId,
         channelId: config.channelId,
+        botUserId: config.botUserId,
+        botDisplayName: config.botDisplayName,
+        botPictureUrl: config.botPictureUrl,
+        botPremiumId: config.botPremiumId,
+        botChatMode: config.botChatMode,
         accessTokenVerifiedAt: config.accessTokenVerifiedAt,
         webhookVerifiedAt: config.webhookVerifiedAt,
         webhookEndpointSetAt: config.webhookEndpointSetAt,
@@ -134,8 +191,14 @@ export class LineOaService {
       let accessTokenVerifiedAt = existing?.accessTokenVerifiedAt;
       let lineOaId = data.lineOaId || existing?.lineOaId;
 
-      const isChannelIdChanged = data.channelId && data.channelId !== existing?.channelId;
-      const isSecretProvided = !!data.channelSecret;
+      let botUserId = existing?.botUserId;
+      let botDisplayName = existing?.botDisplayName;
+      let botPictureUrl = existing?.botPictureUrl;
+      let botPremiumId = existing?.botPremiumId;
+      let botChatMode = existing?.botChatMode;
+
+      const isChannelIdChanged = Boolean(data.channelId && data.channelId !== existing?.channelId);
+      const isSecretProvided = Boolean(data.channelSecret);
 
       if (isChannelIdChanged || isSecretProvided) {
         const channelIdToVerify = data.channelId || existing?.channelId;
@@ -157,8 +220,15 @@ export class LineOaService {
           }
 
           accessTokenVerifiedAt = new Date();
-          if (verification.botInfo?.basicId) {
-            lineOaId = verification.botInfo.basicId;
+          if (verification.botInfo) {
+            botUserId = verification.botInfo.userId;
+            botDisplayName = verification.botInfo.displayName;
+            botPictureUrl = verification.botInfo.pictureUrl;
+            botPremiumId = verification.botInfo.premiumId;
+            botChatMode = verification.botInfo.chatMode;
+            if (verification.botInfo.basicId) {
+              lineOaId = verification.botInfo.basicId;
+            }
           }
         }
       }
@@ -182,6 +252,11 @@ export class LineOaService {
           channelId: data.channelId || null,
           channelSecretEncrypted: channelSecretEncrypted || null,
           lineOaId: lineOaId || null,
+          botUserId: botUserId || null,
+          botDisplayName: botDisplayName || null,
+          botPictureUrl: botPictureUrl || null,
+          botPremiumId: botPremiumId || null,
+          botChatMode: botChatMode || null,
           webhookKeyHash: webhookKeyHash!,
           webhookKeyEncrypted: encryptedWebhookKey!,
           accessTokenVerifiedAt,
@@ -192,6 +267,11 @@ export class LineOaService {
           channelId: data.channelId !== undefined ? data.channelId : existing?.channelId,
           channelSecretEncrypted,
           lineOaId,
+          botUserId,
+          botDisplayName,
+          botPictureUrl,
+          botPremiumId,
+          botChatMode,
           accessTokenVerifiedAt,
         }
       });

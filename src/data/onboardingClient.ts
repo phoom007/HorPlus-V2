@@ -12,6 +12,7 @@ export interface CompleteOnboardingPayload {
   dormitory: {
     name: string;
     type?: string | null;
+    genderPolicy?: string | null;
     addressLine1?: string | null;
     addressLine2?: string | null;
     subdistrict?: string | null;
@@ -31,7 +32,13 @@ export interface CompleteOnboardingPayload {
     electricityBillingType?: string;
     electricityRate?: string;
     commonFee?: string;
+    commonFeeMode?: string;
     internetFee?: string;
+    internetFeeMode?: string;
+    parkingRate?: string;
+    parkingFeeMode?: string;
+    gracePeriodDays?: number;
+    advanceRentMonths?: number;
     lateFeeType?: string;
     lateFeeValue?: string;
     rentBillingType?: string;
@@ -50,6 +57,8 @@ export interface CompleteOnboardingPayload {
     code?: string | null;
     floorsCount: number;
     roomsPerFloor?: number | null;
+    roomPrefix?: string | null;
+    hasElevator?: boolean;
     numberingPattern?: string | null;
     description?: string | null;
   }[];
@@ -118,28 +127,53 @@ export const onboardingClient = {
     return httpRequest<any>('POST', '/onboarding/promo/validate', { code, planCode });
   },
 
-  async complete(payload: CompleteOnboardingPayload, idempotencyKey: string): Promise<CompleteOnboardingResponse> {
+  async complete(payload: CompleteOnboardingPayload, idempotencyKey?: string): Promise<CompleteOnboardingResponse> {
+    const ik = idempotencyKey || `finalize-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     return httpRequest<CompleteOnboardingResponse>(
       'POST',
       '/onboarding/finalize',
-      { ...payload, idempotencyKey },
-      { idempotencyKey }
+      { ...payload, idempotencyKey: ik },
+      { idempotencyKey: ik }
     );
   },
 
-  async finalize(payload: CompleteOnboardingPayload, idempotencyKey: string): Promise<CompleteOnboardingResponse> {
+  async finalize(payload: CompleteOnboardingPayload, idempotencyKey?: string): Promise<CompleteOnboardingResponse> {
+    const ik = idempotencyKey || `finalize-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     return httpRequest<CompleteOnboardingResponse>(
       'POST',
       '/onboarding/finalize',
-      { ...payload, idempotencyKey },
-      { idempotencyKey }
+      { ...payload, idempotencyKey: ik },
+      { idempotencyKey: ik }
     );
   },
 
-  async uploadSignature(dormitoryId: string, formData: FormData) {
-    return httpRequest<any>('POST', `/dormitories/${dormitoryId}/signatures`, formData, {
-      headers: { 'X-Dormitory-Id': dormitoryId },
-    });
+  async uploadSignature(dormitoryId: string, dataUrlOrFormData: string | FormData) {
+    let body: any;
+    const headers: Record<string, string> = { 'X-Dormitory-Id': dormitoryId };
+
+    if (typeof dataUrlOrFormData === 'string') {
+      const fd = new FormData();
+      // Convert base64 dataUrl to file blob if needed
+      if (dataUrlOrFormData.startsWith('data:')) {
+        const parts = dataUrlOrFormData.split(',');
+        const mime = parts[0].match(/:(.*?);/)?.[1] || 'image/png';
+        const bstr = atob(parts[1]);
+        let n = bstr.length;
+        const u8arr = new Uint8Array(n);
+        while (n--) {
+          u8arr[n] = bstr.charCodeAt(n);
+        }
+        const file = new File([u8arr], 'signature.png', { type: mime });
+        fd.append('file', file);
+        body = fd;
+      } else {
+        body = dataUrlOrFormData;
+      }
+    } else {
+      body = dataUrlOrFormData;
+    }
+
+    return httpRequest<any>('POST', `/dormitories/${dormitoryId}/signatures`, body, { headers });
   },
 
   async getLineConfig(dormitoryId: string) {
@@ -167,6 +201,10 @@ export const onboardingClient = {
   },
 
   async getAvailablePackages() {
+    return httpRequest<any>('GET', '/public/subscription-catalog');
+  },
+
+  async getPublicCatalog() {
     return httpRequest<any>('GET', '/public/subscription-catalog');
   }
 };

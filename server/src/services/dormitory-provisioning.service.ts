@@ -21,6 +21,7 @@ export interface CompleteOwnerOnboardingParams {
   dormitory: {
     name: string;
     type?: string | null;
+    genderPolicy?: string | null;
     addressLine1?: string | null;
     addressLine2?: string | null;
     subdistrict?: string | null;
@@ -40,7 +41,13 @@ export interface CompleteOwnerOnboardingParams {
     electricityBillingType?: string;
     electricityRate?: string;
     commonFee?: string;
+    commonFeeMode?: string | null;
     internetFee?: string;
+    internetFeeMode?: string | null;
+    parkingRate?: string | null;
+    parkingFeeMode?: string | null;
+    gracePeriodDays?: number | null;
+    advanceRentMonths?: number | null;
     lateFeeType?: string;
     lateFeeValue?: string;
     rentBillingType?: string;
@@ -59,6 +66,8 @@ export interface CompleteOwnerOnboardingParams {
     code?: string | null;
     floorsCount: number;
     roomsPerFloor?: number | null;
+    roomPrefix?: string | null;
+    hasElevator?: boolean | null;
     numberingPattern?: string | null;
     description?: string | null;
   }[];
@@ -474,6 +483,7 @@ export class DormitoryProvisioningService {
         data: {
           name: dormitory.name,
           type: dormitory.type || 'apartment',
+          genderPolicy: dormitory.genderPolicy || null,
           addressLine1: dormitory.addressLine1 || null,
           addressLine2: dormitory.addressLine2 || null,
           subdistrict: dormitory.subdistrict || null,
@@ -495,6 +505,7 @@ export class DormitoryProvisioningService {
         const electricityRateStr = (billing.electricityRate !== undefined && billing.electricityRate !== null && billing.electricityRate !== '') ? String(billing.electricityRate) : '7.00';
         const commonFeeStr = (billing.commonFee !== undefined && billing.commonFee !== null && billing.commonFee !== '') ? String(billing.commonFee) : '0.00';
         const internetFeeStr = (billing.internetFee !== undefined && billing.internetFee !== null && billing.internetFee !== '') ? String(billing.internetFee) : '0.00';
+        const parkingRateStr = (billing.parkingRate !== undefined && billing.parkingRate !== null && billing.parkingRate !== '') ? String(billing.parkingRate) : '0.00';
         const lateFeeValueStr = (billing.lateFeeValue !== undefined && billing.lateFeeValue !== null && billing.lateFeeValue !== '') ? String(billing.lateFeeValue) : '50.00';
 
         await tx.dormitoryBillingSettings.upsert({
@@ -508,7 +519,13 @@ export class DormitoryProvisioningService {
             electricityBillingType: billing.electricityBillingType || 'per_unit',
             electricityRate: electricityRateStr,
             commonFee: commonFeeStr,
+            commonFeeMode: billing.commonFeeMode || 'none',
             internetFee: internetFeeStr,
+            internetFeeMode: billing.internetFeeMode || 'none',
+            parkingRate: parkingRateStr,
+            parkingFeeMode: billing.parkingFeeMode || 'none',
+            gracePeriodDays: Number(billing.gracePeriodDays) || 0,
+            advanceRentMonths: Number(billing.advanceRentMonths) || 1,
             lateFeeType: billing.lateFeeType || 'fixed',
             lateFeeValue: lateFeeValueStr,
             rentBillingType: billing.rentBillingType || 'monthly',
@@ -521,7 +538,13 @@ export class DormitoryProvisioningService {
             electricityBillingType: billing.electricityBillingType || 'per_unit',
             electricityRate: electricityRateStr,
             commonFee: commonFeeStr,
+            commonFeeMode: billing.commonFeeMode || 'none',
             internetFee: internetFeeStr,
+            internetFeeMode: billing.internetFeeMode || 'none',
+            parkingRate: parkingRateStr,
+            parkingFeeMode: billing.parkingFeeMode || 'none',
+            gracePeriodDays: Number(billing.gracePeriodDays) || 0,
+            advanceRentMonths: Number(billing.advanceRentMonths) || 1,
             lateFeeType: billing.lateFeeType || 'fixed',
             lateFeeValue: lateFeeValueStr,
             rentBillingType: billing.rentBillingType || 'monthly',

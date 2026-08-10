@@ -17,7 +17,9 @@ export type LinePushResult =
 export interface LineBotInfo {
   userId: string;
   basicId: string;
+  premiumId?: string | null;
   displayName: string;
+  pictureUrl?: string | null;
   chatMode: string;
 }
 
@@ -95,7 +97,9 @@ export class HttpLinePlatformAdapter implements LinePlatformAdapter {
         botInfo: {
           userId: body.userId || '',
           basicId: body.basicId || '',
+          premiumId: body.premiumId || null,
           displayName: body.displayName || '',
+          pictureUrl: body.pictureUrl || null,
           chatMode: body.chatMode || '',
         },
       };
@@ -298,7 +302,9 @@ export class MockLinePlatformAdapter implements LinePlatformAdapter {
       botInfo: {
         userId: 'U_BOT_MOCK',
         basicId: '@mock_bot',
+        premiumId: null,
         displayName: 'Mock Bot',
+        pictureUrl: 'https://profile.line-scdn.net/mock_bot_avatar.png',
         chatMode: 'chat',
       },
     };
