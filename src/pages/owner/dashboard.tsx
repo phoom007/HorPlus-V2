@@ -51,48 +51,6 @@ import {
 } from '../../types';
 
 
-// Helper to generate real EMVCo PromptPay QR Code payload
-const generatePromptPayPayload = (target: string, amount?: number): string => {
-  const cleanTarget = target.replace(/[^0-9]/g, '');
-  let formattedTarget = cleanTarget;
-  if (cleanTarget.length === 10 && cleanTarget.startsWith('0')) {
-    formattedTarget = '0066' + cleanTarget.substring(1);
-  }
-  
-  const targetTag = formattedTarget.length === 13 ? '02' : '01';
-  const targetLength = formattedTarget.length.toString().padStart(2, '0');
-  const merchantInfoVal = `0016A000000677010111${targetTag}${targetLength}${formattedTarget}`;
-  const merchantInfoTag = `29${merchantInfoVal.length.toString().padStart(2, '0')}${merchantInfoVal}`;
-  
-  let amountStr = '';
-  if (amount && amount > 0) {
-    const formattedAmount = amount.toFixed(2);
-    amountStr = `54${formattedAmount.length.toString().padStart(2, '0')}${formattedAmount}`;
-  }
-  
-  const poi = amountStr ? '12' : '11';
-  const rawPayload = `0002010102${poi}${merchantInfoTag}5303764${amountStr}5802TH6304`;
-  
-  let crc = 0xFFFF;
-  for (let i = 0; i < rawPayload.length; i++) {
-    crc ^= rawPayload.charCodeAt(i) << 8;
-    for (let j = 0; j < 8; j++) {
-      if ((crc & 0x8000) !== 0) {
-        crc = ((crc << 1) ^ 0x1021) & 0xFFFF;
-      } else {
-        crc = (crc << 1) & 0xFFFF;
-      }
-    }
-  }
-  const crcHex = (crc & 0xFFFF).toString(16).toUpperCase().padStart(4, '0');
-  return rawPayload + crcHex;
-};
-
-const getPromptPayQrUrl = (target: string, amount?: number): string => {
-  const payload = generatePromptPayPayload(target, amount);
-  return `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(payload)}`;
-};
-
 interface OwnerDashboardProps {
   rooms: Room[];
   bills: Bill[];
@@ -132,10 +90,39 @@ export const OwnerDashboard: React.FC<OwnerDashboardProps> = ({
   const [isLineModalOpen, setIsLineModalOpen] = useState<boolean>(false);
   const [isPackageModalOpen, setIsPackageModalOpen] = useState<boolean>(false);
   const [modalStep, setModalStep] = useState<'select' | 'payment'>('select');
-  const [selectedPlanId, setSelectedPlanId] = useState<string>('small');
+  const [selectedPlanId, setSelectedPlanId] = useState<string>('micro');
   const [promoCode, setPromoCode] = useState<string>('');
   const [promoSuccessMsg, setPromoSuccessMsg] = useState<string>('');
   const [successNotice, setSuccessNotice] = useState<string>('');
+  const [entitlements, setEntitlements] = useState<any>(null);
+  const [entitlementsLoading, setEntitlementsLoading] = useState<boolean>(false);
+  const [entitlementsError, setEntitlementsError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (isPackageModalOpen) {
+      const activeDormId = sessionStorage.getItem('active_dormitory_selected_for_session') || localStorage.getItem('selected_dormitory_id') || '';
+      if (activeDormId) {
+        setEntitlementsLoading(true);
+        setEntitlementsError(null);
+        fetch('/api/v1/subscription/entitlements', {
+          headers: { 'x-dormitory-id': activeDormId }
+        })
+          .then(res => {
+            if (!res.ok) throw new Error('ไม่สามารถโหลดข้อมูลแพ็กเกจได้');
+            return res.json();
+          })
+          .then(json => {
+            setEntitlements(json.data);
+          })
+          .catch(err => {
+            setEntitlementsError(err.message || 'ไม่สามารถโหลดข้อมูลแพ็กเกจจากเซิร์ฟเวอร์');
+          })
+          .finally(() => setEntitlementsLoading(false));
+      } else {
+        setEntitlementsError('โปรดระบุหอพักที่ต้องการดำเนินการ');
+      }
+    }
+  }, [isPackageModalOpen]);
 
   // Auto-dismiss Toast notification after 4 seconds
   useEffect(() => {
@@ -149,15 +136,6 @@ export const OwnerDashboard: React.FC<OwnerDashboardProps> = ({
 
   // Payment step states
   const [slipImage, setSlipImage] = useState<string | null>(null);
-  const [isVerifying, setIsVerifying] = useState<boolean>(false);
-  const [isVerified, setIsVerified] = useState<boolean>(false);
-  const [copiedPromptPay, setCopiedPromptPay] = useState<boolean>(false);
-
-  const handleCopyPromptPay = () => {
-    navigator.clipboard.writeText('0935098808');
-    setCopiedPromptPay(true);
-    setTimeout(() => setCopiedPromptPay(false), 2000);
-  };
 
   const getRemainingDaysBadgeStyle = (days: number) => {
     if (days <= 3) {
@@ -172,100 +150,8 @@ export const OwnerDashboard: React.FC<OwnerDashboardProps> = ({
     return 'bg-white/20 text-white hover:bg-white/30 backdrop-blur-xs font-black border border-white/20';
   };
 
-  const PLAN_OPTIONS = [
-    {
-      id: 'free',
-      name: 'Free Plan',
-      price: '0 บาท',
-      rawPrice: 0,
-      daysAdded: 30,
-      period: 'ตลอดการใช้งาน',
-      limit: 'สูงสุด 10 ห้อง',
-      desc: 'สำหรับหอพักขนาดเล็กเริ่มต้น',
-      features: ['สูงสุด 10 ห้องพัก', 'จัดการผังห้องและสัญญา', 'ออกบิลประจำเดือน']
-    },
-    {
-      id: 'micro',
-      name: 'Micro Plan',
-      price: '189 บาท/เดือน',
-      rawPrice: 189,
-      daysAdded: 30,
-      period: 'รวม VAT แล้ว',
-      limit: 'สูงสุด 25 ห้อง',
-      desc: 'สำหรับอพาร์ตเมนต์ขนาดเล็ก',
-      features: ['สูงสุด 25 ห้องพัก', 'ตรวจสลิปโอนเงิน PromptPay', 'ระบบแจ้งซ่อมแซม']
-    },
-    {
-      id: 'small',
-      name: 'Small Plan',
-      price: '529 บาท/เดือน',
-      rawPrice: 529,
-      daysAdded: 30,
-      popular: true,
-      desc: 'หอพักขนาดกลางยอดนิยม',
-      features: ['สูงสุด 50 ห้องพัก', 'รายงานงบการเงิน', 'ไม่จำกัดบัญชีพนักงาน']
-    },
-    {
-      id: 'medium',
-      name: 'Medium Plan',
-      price: '999 บาท/เดือน',
-      rawPrice: 999,
-      daysAdded: 30,
-      desc: 'อาคารพักอาศัยขนาดใหญ่',
-      features: ['สูงสุด 100 ห้องพัก', 'ส่งประกาศไม่จำกัด', 'ประวัติ Audit Logs']
-    },
-    {
-      id: 'large',
-      name: 'Large Plan',
-      price: '1,799 บาท/เดือน',
-      rawPrice: 1799,
-      daysAdded: 30,
-      desc: 'คอมเพล็กซ์หอพักหลายอาคาร',
-      features: ['สูงสุด 200 ห้องพัก', 'API Integrations', 'การดูแลระดับ VIP']
-    },
-    {
-      id: 'enterprise',
-      name: 'Enterprise',
-      price: '2,999 บาท/เดือน',
-      rawPrice: 2999,
-      daysAdded: 30,
-      period: 'รวม VAT แล้ว',
-      limit: 'ไม่จำกัดจำนวนห้อง',
-      desc: 'โครงการและองค์กรขนาดใหญ่',
-      features: ['ไม่จำกัดจำนวนห้อง', 'Custom Branding', 'ทีมสนับสนุน 24/7']
-    }
-  ];
-
-  const handleSlipUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        const url = event.target?.result as string;
-        setSlipImage(url);
-        setIsVerifying(true);
-        setIsVerified(false);
-
-        // Instant verification simulation
-        setTimeout(() => {
-          setIsVerifying(false);
-          setIsVerified(true);
-
-          const selPlan = PLAN_OPTIONS.find(p => p.id === selectedPlanId) || PLAN_OPTIONS[2];
-          setRemainingDays(prev => prev + selPlan.daysAdded);
-
-          // Return to main page (dashboard) automatically
-          setTimeout(() => {
-            setSuccessNotice(`ชำระเงินแพ็กเกจ ${selPlan.name} เรียบร้อยแล้ว! ตรวจสอบสลิปผ่านทันที เพิ่มเวลาใช้งานอีก +${selPlan.daysAdded} วัน`);
-            setIsPackageModalOpen(false);
-            setModalStep('select');
-            setSlipImage(null);
-            setIsVerified(false);
-          }, 900);
-        }, 700);
-      };
-      reader.readAsDataURL(file);
-    }
+  const handleSlipUpload = (_e: React.ChangeEvent<HTMLInputElement>) => {
+    setSuccessNotice('ระบบสั่งซื้อแพ็กเกจขยายระยะเวลาใช้งานยังไม่พร้อมให้บริการแบบตอบรับอัตโนมัติในขณะนี้ (โปรดติดต่อเจ้าหน้าที่)');
   };
 
   // Stats Calculations
@@ -278,29 +164,10 @@ export const OwnerDashboard: React.FC<OwnerDashboardProps> = ({
     ? occupiedRooms.filter(r => !paidRoomIds.has(r.id)).length
     : currentMonthBills.filter(b => b.status !== 'paid').length;
 
-  // Calculate total unpaid amount directly based on bills and meter readings for all non-paid rooms
+  // Calculate total unpaid amount directly based on unpaid bills (no fake utility generation)
   const unpaidBills = currentMonthBills.filter(b => b.status !== 'paid');
-  const totalUnpaidAmount = (() => {
-    let sum = 0;
-    // Map existing bills by roomId for selectedCycle
-    const billMap = new Map<string, Bill>();
-    currentMonthBills.forEach(b => billMap.set(b.roomId, b));
+  const totalUnpaidAmount = unpaidBills.reduce((sum, b) => sum + Number(b.totalAmount || b.outstandingAmount || 0), 0);
 
-    rooms.forEach(room => {
-      // Only compute for occupied rooms or rooms that have a bill
-      const bill = billMap.get(room.id);
-      if (bill) {
-        if (bill.status !== 'paid') {
-          sum += bill.totalAmount;
-        }
-      } else if (room.status === 'occupied' || room.currentTenantId) {
-        // Fallback: Default monthly rent + standard estimated utilities if bill not explicitly created yet
-        sum += (room.monthlyRent || 0) + 500;
-      }
-    });
-
-    return sum;
-  })();
 
   const formatDueDateThai = (cycleStr: string) => {
     if (!cycleStr) return 'กำหนดชำระ: 30 มิ.ย. 2569';
@@ -1096,395 +963,67 @@ export const OwnerDashboard: React.FC<OwnerDashboardProps> = ({
       {isPackageModalOpen && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-5 overflow-y-auto animate-in fade-in">
           <div className="bg-white w-full max-w-3xl rounded-3xl shadow-2xl border border-slate-100 overflow-hidden my-auto space-y-0">
-            
-            {modalStep === 'select' ? (
-              <>
-                {/* Modal Header - Header removed as requested */}
-                <div className="p-4 sm:p-5 bg-white border-b border-slate-100 flex items-center justify-between">
-                  <div className="flex items-center gap-2.5">
-                    <div className="p-2 bg-blue-50 text-blue-600 rounded-xl">
-                      <Sparkles className="w-5 h-5" />
-                    </div>
-                    <div>
-                      <h3 className="text-base sm:text-lg font-black text-slate-800">เลือกแพ็กเกจ</h3>
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsPackageModalOpen(false);
-                      setModalStep('select');
-                    }}
-                    className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-xl transition-all cursor-pointer"
-                  >
-                    <X className="w-5 h-5" />
-                  </button>
+            <div className="p-4 sm:p-5 bg-white border-b border-slate-100 flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-blue-50 text-blue-600 rounded-xl">
+                  <Sparkles className="w-5 h-5" />
                 </div>
+                <div>
+                  <h3 className="text-base sm:text-lg font-black text-slate-800">แพ็กเกจการใช้งานระบบ</h3>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsPackageModalOpen(false)}
+                className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-xl transition-all cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
 
-                {/* Modal Body */}
-                <div className="p-5 sm:p-6 space-y-6 max-h-[65vh] overflow-y-auto">
-                  
-                  {/* Promo Code Input Box */}
-                  <div className="p-4 bg-blue-50/60 border border-blue-100 rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-3">
-                    <div className="flex items-center gap-2 text-xs font-bold text-slate-700">
-                      <Gift className="w-4 h-4 text-blue-600 shrink-0" />
-                      <span>มีโค้ดส่วนลดหรือรหัสโปรโมชั่น?</span>
-                    </div>
-                    <div className="flex items-center gap-2 w-full sm:w-auto">
-                      <input
-                        type="text"
-                        value={promoCode}
-                        onChange={(e) => setPromoCode(e.target.value)}
-                        placeholder="กรอกโค้ด HORPLUS"
-                        className="px-3 py-1.5 bg-white border border-slate-200 rounded-xl text-xs font-mono font-bold text-slate-800 uppercase focus:border-blue-500 outline-none w-full sm:w-36"
-                      />
+            <div className="p-5 sm:p-6 space-y-6 max-h-[65vh] overflow-y-auto">
+              {entitlementsLoading ? (
+                <div className="p-8 text-center text-slate-400 text-xs font-bold">กำลังโหลดข้อมูลแพ็กเกจ...</div>
+              ) : entitlementsError || !entitlements?.availablePackages ? (
+                <div data-testid="entitlement-catalog-error" className="p-4 bg-rose-50 border border-rose-200 rounded-2xl text-rose-700 text-xs font-bold text-center">
+                  {entitlementsError || 'ไม่สามารถโหลดแค็ตตาล็อกแพ็กเกจจากเซิร์ฟเวอร์หลักได้'}
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {(entitlements.availablePackages || []).map((pkg: any) => (
+                    <div
+                      key={pkg.id || pkg.code}
+                      className="p-4 rounded-2xl border border-slate-200 bg-white flex flex-col justify-between"
+                    >
+                      <div>
+                        <h4 className="font-black text-slate-900 text-sm mb-1">{pkg.name || pkg.code}</h4>
+                        <p className="text-xs text-slate-500 mb-2">{pkg.description || ''}</p>
+                        <div className="mb-3">
+                          <span className="text-lg font-black text-blue-600">฿{pkg.priceTHB ?? pkg.price}</span>
+                        </div>
+                      </div>
                       <button
                         type="button"
-                        onClick={() => {
-                          if ((promoCode || '').trim().toUpperCase() === 'HORPLUS') {
-                            setRemainingDays(prev => prev + 60);
-                            setSuccessNotice('🎉 ใช้งานโค้ด HORPLUS สำเร็จ! ขยายระยะเวลาใช้งานอีก +60 วัน (รวม 90 วันเต็ม)');
-                            setPromoCode('');
-                          } else {
-                            setSuccessNotice('❌ โค้ดส่วนลดไม่ถูกต้อง (ลองใช้โค้ด HORPLUS)');
-                          }
-                        }}
-                        className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-xl cursor-pointer shrink-0 transition-all active:scale-95 shadow-2xs"
+                        disabled
+                        className="w-full mt-4 py-2 rounded-xl text-xs font-black bg-slate-100 text-slate-400 cursor-not-allowed"
                       >
-                        ใช้โค้ด
+                        ไม่สามารถสั่งซื้อในโหมดอ่านอย่างเดียว
                       </button>
                     </div>
-                  </div>
-
-                  {/* Plans Grid */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                    {PLAN_OPTIONS.map((plan) => {
-                      const isFree = plan.id === 'free';
-                      const isSelected = selectedPlanId === plan.id && !isFree;
-                      return (
-                        <div
-                          key={plan.id}
-                          onClick={() => {
-                            if (!isFree) {
-                              setSelectedPlanId(plan.id);
-                            }
-                          }}
-                          className={`p-4 rounded-2xl border-2 transition-all relative flex flex-col justify-between ${
-                            isFree
-                              ? 'border-slate-200 bg-slate-50/70 opacity-75 cursor-not-allowed select-none'
-                              : isSelected
-                              ? 'border-blue-600 bg-blue-50/50 shadow-md ring-2 ring-blue-500/20 cursor-pointer'
-                              : 'border-slate-200 hover:border-slate-300 bg-white cursor-pointer'
-                          }`}
-                        >
-                          {isFree ? (
-                            <span className="absolute -top-3 right-4 px-2.5 py-0.5 bg-slate-500 text-white font-extrabold text-[9px] rounded-full shadow-2xs">
-                              แพ็กเกจเริ่มต้น
-                            </span>
-                          ) : plan.popular ? (
-                            <span className="absolute -top-3 right-4 px-2.5 py-0.5 bg-gradient-to-r from-amber-500 to-orange-500 text-white font-black text-[9px] rounded-full shadow-2xs">
-                              ยอดนิยม
-                            </span>
-                          ) : null}
-
-                          <div>
-                            <div className="flex items-center justify-between mb-1">
-                              <h4 className="font-black text-slate-900 text-sm">{plan.name}</h4>
-                              {isSelected && (
-                                <CheckCircle2 className="w-5 h-5 text-blue-600 shrink-0" />
-                              )}
-                            </div>
-                            <p className="text-xs text-slate-500 mb-2">{plan.desc}</p>
-                            
-                            <div className="mb-3">
-                              <span className="text-lg font-black text-blue-600">{plan.price}</span>
-                              <span className="text-[10px] text-slate-400 block">{plan.period}</span>
-                            </div>
-
-                            <div className="space-y-1.5 pt-2 border-t border-slate-100 text-xs">
-                              <p className="font-extrabold text-slate-700 text-[11px] mb-1">
-                                {plan.limit}
-                              </p>
-                              {plan.features.map((feat, idx) => (
-                                <div key={idx} className="flex items-center gap-1.5 text-[11px] text-slate-600">
-                                  <CheckCircle2 className={`w-3.5 h-3.5 shrink-0 ${isFree ? 'text-slate-400' : 'text-blue-500'}`} />
-                                  <span>{feat}</span>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-
-                          <button
-                            type="button"
-                            disabled={isFree}
-                            className={`w-full mt-4 py-2 rounded-xl text-xs font-black transition-all ${
-                              isFree
-                                ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
-                                : isSelected
-                                ? 'bg-blue-600 text-white shadow-xs cursor-pointer'
-                                : 'bg-slate-100 hover:bg-slate-200 text-slate-700 cursor-pointer'
-                            }`}
-                          >
-                            {isFree ? 'แพ็กเกจเริ่มต้น' : isSelected ? 'เลือกแพ็กเกจนี้' : 'เลือก'}
-                          </button>
-                        </div>
-                      );
-                    })}
-                  </div>
+                  ))}
                 </div>
+              )}
+            </div>
 
-                {/* Modal Footer */}
-                <div className="p-4 sm:p-5 bg-slate-50 border-t border-slate-100 flex items-center justify-between gap-3">
-                  <button
-                    type="button"
-                    onClick={() => setIsPackageModalOpen(false)}
-                    className="px-4 py-2.5 bg-white border border-slate-200 text-slate-700 hover:bg-slate-100 rounded-xl font-bold text-xs transition-all cursor-pointer"
-                  >
-                    ยกเลิก
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (selectedPlanId === 'free') {
-                        setSuccessNotice('❌ แพ็กเกจฟรีเป็นแพ็กเกจเริ่มต้น กรุณาเลือกแพ็กเกจที่ต้องการอัปเกรด');
-                        return;
-                      }
-                      setModalStep('payment');
-                    }}
-                    className="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-black text-xs shadow-md transition-all cursor-pointer flex items-center gap-1.5"
-                  >
-                    <span>ยืนยันเปลี่ยนแพ็กเกจ</span>
-                    <ArrowRight className="w-4 h-4" />
-                  </button>
-                </div>
-              </>
-            ) : (
-              /* Modal Step 2: PromptPay Payment & Slip Upload */
-              <>
-                <div className="p-4 sm:p-5 bg-white border-b border-slate-100 flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <button
-                      type="button"
-                      onClick={() => setModalStep('select')}
-                      className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl transition-all cursor-pointer flex items-center gap-1.5 text-xs font-black"
-                    >
-                      <ArrowLeft className="w-4 h-4" />
-                      <span>เปลี่ยนแพ็กเกจ</span>
-                    </button>
-                    <div>
-                      <h3 className="text-base sm:text-lg font-black text-slate-800">ชำระเงินค่าแพ็กเกจ</h3>
-                      <p className="text-xs text-slate-400 font-medium">สแกน QR Code และแนบรูปสลิปจากเครื่อง</p>
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsPackageModalOpen(false);
-                      setModalStep('select');
-                      setSlipImage(null);
-                    }}
-                    className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-xl transition-all cursor-pointer"
-                  >
-                    <X className="w-5 h-5" />
-                  </button>
-                </div>
-
-                {(() => {
-                  const selPlan = PLAN_OPTIONS.find(p => p.id === selectedPlanId) || PLAN_OPTIONS[2];
-                  const isFreePlan = selPlan.rawPrice === 0 || selPlan.id === 'free';
-
-                  return (
-                    <div className="p-5 sm:p-6 space-y-6 max-h-[70vh] overflow-y-auto">
-                      {/* Selected Package Info Banner */}
-                      <div className="p-4 bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-2xl flex items-center justify-between">
-                        <div>
-                          <span className="text-[10px] font-black uppercase text-blue-600 tracking-wider block">แพ็กเกจที่เลือก</span>
-                          <span className="text-base font-black text-slate-900">{selPlan.name}</span>
-                          <span className="text-xs text-slate-500 font-medium ml-2">({selPlan.limit})</span>
-                        </div>
-                        <div className="text-right">
-                          <span className="text-[10px] font-black uppercase text-slate-400 block">ยอดชำระสุทธิ</span>
-                          <span className="text-xl font-black text-blue-600">{selPlan.price}</span>
-                        </div>
-                      </div>
-
-                      {isFreePlan ? (
-                        <div className="p-8 bg-blue-50/80 border border-blue-200 rounded-3xl text-center space-y-3">
-                          <div className="p-3 bg-blue-100 text-blue-600 rounded-2xl w-12 h-12 mx-auto flex items-center justify-center">
-                            <Sparkles className="w-6 h-6" />
-                          </div>
-                          <h4 className="text-base font-black text-slate-900">แพ็กเกจฟรีเริ่มต้น (0 บาท)</h4>
-                          <p className="text-xs font-semibold text-slate-600 max-w-md mx-auto leading-relaxed">
-                            แพ็กเกจฟรีเป็นแพ็กเกจเริ่มต้น สามารถใช้งานได้ทันทีโดยไม่ต้องชำระเงิน และไม่มี QR Code สำหรับการสแกนจ่าย
-                          </p>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setIsPackageModalOpen(false);
-                              setModalStep('select');
-                              setSuccessNotice('🎉 คุณกำลังใช้งานแพ็กเกจฟรีเริ่มต้น');
-                            }}
-                            className="mt-2 px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-black text-xs shadow-md transition-all cursor-pointer"
-                          >
-                            ตกลง
-                          </button>
-                        </div>
-                      ) : (
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
-                        
-                        {/* PromptPay QR Code Box */}
-                        <div className="p-5 bg-white border border-slate-200 rounded-3xl shadow-xs space-y-4 text-center">
-                          <div className="bg-gradient-to-r from-blue-900 to-indigo-900 text-white p-2.5 rounded-2xl flex items-center justify-between">
-                            <div className="flex items-center gap-2">
-                              <QrCode className="w-4 h-4 text-blue-300" />
-                              <span className="font-black text-xs tracking-wider">พร้อมเพย์ / PromptPay</span>
-                            </div>
-                            <span className="text-[10px] bg-blue-800 text-blue-200 px-2 py-0.5 rounded-full font-bold">ฟรีค่าธรรมเนียม</span>
-                          </div>
-
-                          <div className="flex flex-col items-center justify-center p-3.5 bg-slate-50 border border-slate-100 rounded-2xl space-y-2">
-                            <img
-                              src={getPromptPayQrUrl('0935098808', selPlan.rawPrice)}
-                              alt={`PromptPay QR Code 0935098808 Amount ${selPlan.rawPrice}`}
-                              className="w-48 h-48 object-contain rounded-xl border border-white shadow-sm"
-                            />
-                            <div className="text-center space-y-0.5">
-                              <p className="text-[11px] font-extrabold text-slate-700">
-                                สแกนชำระเงินผ่านแอปธนาคารทุกแห่ง
-                              </p>
-                              {selPlan.rawPrice > 0 ? (
-                                <p className="text-[10.5px] font-black text-emerald-600">
-                                  ยอดชำระ: {selPlan.rawPrice.toLocaleString()} บาท
-                                </p>
-                              ) : (
-                                <p className="text-[10.5px] font-bold text-slate-500">
-                                  พร้อมเพย์ (093-509-8808)
-                                </p>
-                              )}
-                            </div>
-                          </div>
-
-                          <div className="space-y-2 text-left bg-blue-50/50 p-3.5 border border-blue-100 rounded-2xl text-xs">
-                            <div className="flex items-center justify-between">
-                              <span className="text-slate-500 font-bold">เลขพร้อมเพย์:</span>
-                              <div className="flex items-center gap-1.5 font-mono font-black text-slate-900">
-                                <span>093-509-8808</span>
-                                <button
-                                  type="button"
-                                  onClick={handleCopyPromptPay}
-                                  className="p-1 bg-white border border-slate-200 hover:bg-slate-50 text-blue-600 rounded-lg transition-all cursor-pointer"
-                                  title="คัดลอกเลขพร้อมเพย์"
-                                >
-                                  {copiedPromptPay ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
-                                </button>
-                              </div>
-                            </div>
-                            <div className="flex items-center justify-between border-t border-blue-100/60 pt-1.5">
-                              <span className="text-slate-500 font-bold">ชื่อบัญชีผู้รับ:</span>
-                              <span className="font-extrabold text-slate-800">นาย ภูวนาท ทานาลาด</span>
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* Slip Image Upload Box (Dropzone) */}
-                        <div className="space-y-4">
-                          <div>
-                            <h4 className="font-black text-slate-800 text-sm mb-1">เมื่อชำระเสร็จ กรุณาแนบสลิป</h4>
-                            <p className="text-xs text-slate-500 font-medium">ระบบจะทำการตรวจสอบสลิปและต่ออายุอัตโนมัติ</p>
-                          </div>
-
-                          <label
-                            htmlFor="package-slip-upload-file"
-                            className={`border-2 border-dashed rounded-3xl p-6 flex flex-col items-center justify-center text-center cursor-pointer transition-all min-h-[220px] ${
-                              slipImage
-                                ? 'border-emerald-500 bg-emerald-50/40'
-                                : 'border-slate-300 hover:border-blue-500 hover:bg-blue-50/50 bg-slate-50/80'
-                            }`}
-                          >
-                            <input
-                              id="package-slip-upload-file"
-                              type="file"
-                              accept="image/*"
-                              onChange={handleSlipUpload}
-                              className="hidden"
-                            />
-
-                            {slipImage ? (
-                              <div className="space-y-3 flex flex-col items-center">
-                                <div className="relative max-h-48 rounded-xl overflow-hidden border border-slate-200 shadow-md">
-                                  <img
-                                    src={slipImage}
-                                    alt="สลิปโอนเงิน"
-                                    className="max-h-48 object-contain"
-                                  />
-                                  <button
-                                    type="button"
-                                    onClick={(e) => {
-                                      e.preventDefault();
-                                      e.stopPropagation();
-                                      setSlipImage(null);
-                                    }}
-                                    className="absolute top-2 right-2 bg-rose-600 hover:bg-rose-700 text-white px-3 py-1 rounded-full text-xs font-bold transition-all cursor-pointer shadow-md active:scale-95 z-30"
-                                  >
-                                    ล้างรูปภาพ
-                                  </button>
-                                </div>
-                                <span className="text-xs text-blue-600 font-black underline cursor-pointer">
-                                  คลิกเพื่อเปลี่ยนรูปภาพสลิป
-                                </span>
-                              </div>
-                            ) : (
-                              <div className="space-y-2.5 flex flex-col items-center">
-                                <div className="p-3.5 bg-blue-100 text-blue-600 rounded-full shadow-2xs">
-                                  <Upload className="w-7 h-7" />
-                                </div>
-                                <div>
-                                  <p className="text-xs font-black text-slate-800">คลิกเพื่อแนบรูปภาพสลิปจากเครื่อง</p>
-                                  <p className="text-[11px] text-slate-400 font-medium mt-0.5">รองรับไฟล์ภาพ JPG, PNG, WEBP</p>
-                                </div>
-                              </div>
-                            )}
-                          </label>
-
-                          {/* Verification Banner */}
-                          {isVerifying && (
-                            <div className="p-4 bg-blue-50 border border-blue-200 rounded-2xl text-xs font-bold text-blue-900 flex items-center gap-3 animate-pulse shadow-2xs">
-                              <Loader2 className="w-5 h-5 text-blue-600 animate-spin shrink-0" />
-                              <span>กำลังตรวจสอบสลิปการโอนเงินอัตโนมัติ...</span>
-                            </div>
-                          )}
-
-                          {isVerified && (
-                            <div className="p-4 bg-emerald-50 border border-emerald-300 rounded-2xl text-xs font-black text-emerald-950 flex items-center gap-3 shadow-md animate-in fade-in">
-                              <CheckCircle2 className="w-6 h-6 text-emerald-600 shrink-0" />
-                              <div>
-                                <p className="text-sm font-black text-emerald-900">✓ ตรวจผ่านทันที!</p>
-                                <p className="text-xs text-emerald-700 font-medium">ชำระเงินสำเร็จแล้ว กำลังกลับสู่หน้าหลัก...</p>
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                      )}
-
-                    </div>
-                  );
-                })()}
-
-                <div className="p-4 sm:p-5 bg-slate-50 border-t border-slate-100 flex items-center justify-between gap-3">
-                  <button
-                    type="button"
-                    onClick={() => setModalStep('select')}
-                    className="px-4 py-2.5 bg-white border border-slate-200 text-slate-700 hover:bg-slate-100 rounded-xl font-bold text-xs transition-all cursor-pointer flex items-center gap-1.5"
-                  >
-                    <ArrowLeft className="w-4 h-4" />
-                    <span>ย้อนกลับไปเลือกแพ็กเกจ</span>
-                  </button>
-                </div>
-              </>
-            )}
-
+            <div className="p-4 sm:p-5 bg-slate-50 border-t border-slate-100 flex items-center justify-end">
+              <button
+                type="button"
+                onClick={() => setIsPackageModalOpen(false)}
+                className="px-4 py-2.5 bg-white border border-slate-200 text-slate-700 hover:bg-slate-100 rounded-xl font-bold text-xs transition-all cursor-pointer"
+              >
+                ปิด
+              </button>
+            </div>
           </div>
         </div>
       )}

@@ -18,8 +18,10 @@ import {
   XCircle,
   HelpCircle
 } from 'lucide-react';
-import { setTenantDemoSession } from '../../demo/demoSession';
-import { initialTenants, initialDormitory, getRooms } from '../../data/mockData';
+const setTenantDemoSession = (_t?: any) => {};
+const initialTenants: any[] = [{ id: 'tenant-02', name: 'ผู้เช่าตัวอย่าง' }];
+const initialDormitory = { name: 'หอพัก HorPlus' };
+const getRooms = () => [{ roomNumber: '101', currentTenantId: 'tenant-02' }];
 import { Tenant } from '../../types';
 import { DemoDisclosureBanner } from '../../components/public/DemoDisclosureBanner';
 

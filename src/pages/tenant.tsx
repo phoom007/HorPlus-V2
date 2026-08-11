@@ -65,7 +65,6 @@ import {
 } from '../components/GlobalComponents';
 
 import { Tenant, Room, Bill, Contract, MaintenanceRequest as RepairRequest, Announcement, Dormitory, BillItem, Building, formatItemDescription } from '../types';
-import { getContracts, getMaintenance, getAnnouncements, getBuildings } from '../data/mockData';
 
 const getBankBadgeInfo = (bankName: string) => {
   const name = bankName || 'กสิกรไทย (KBank)';
@@ -336,10 +335,10 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
       console.error('[TenantPortal] Technical error loading profile:', e?.message || 'Network error');
     }
 
-    setContracts(getContracts());
-    setRepairs(getMaintenance() as any);
-    setAnnouncements(getAnnouncements());
-    setBuildings(getBuildings());
+    setContracts([]);
+    setRepairs([]);
+    setAnnouncements([]);
+    setBuildings([]);
 
     try {
       const res = await fetch('/api/v1/tenant-portal/bills');

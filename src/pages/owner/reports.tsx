@@ -94,13 +94,7 @@ export const OwnerReports: React.FC<OwnerReportsProps> = ({
 
   // Available building options
   const buildingOptions = useMemo(() => {
-    if (buildings && buildings.length > 0) {
-      return buildings;
-    }
-    return [
-      { id: 'bld-a', name: 'อาคาร A (วิวเขา)', floorsCount: 4, createdAt: '', updatedAt: '' },
-      { id: 'bld-b', name: 'อาคาร B (สระว่ายน้ำ)', floorsCount: 4, createdAt: '', updatedAt: '' }
-    ];
+    return buildings || [];
   }, [buildings]);
 
   // Filtered rooms by selected building
@@ -111,16 +105,9 @@ export const OwnerReports: React.FC<OwnerReportsProps> = ({
       if (r.buildingId) {
         return r.buildingId === selectedBuilding;
       }
-      const bObj = buildingOptions.find(b => b.id === selectedBuilding);
-      if (bObj) {
-        const bName = (bObj.name || '').toLowerCase();
-        const rmNum = (r.roomNumber || '').toUpperCase();
-        if ((bName.includes('a') || (bObj.id || '').includes('a')) && rmNum.startsWith('A')) return true;
-        if ((bName.includes('b') || (bObj.id || '').includes('b')) && rmNum.startsWith('B')) return true;
-      }
       return false;
     });
-  }, [rooms, selectedBuilding, buildingOptions]);
+  }, [rooms, selectedBuilding]);
 
   const filteredRoomIds = useMemo(() => new Set(filteredRooms.map(r => r.id)), [filteredRooms]);
 
@@ -139,7 +126,7 @@ export const OwnerReports: React.FC<OwnerReportsProps> = ({
   const unpaidBills = useMemo(() => currentMonthBills.filter(b => b.status !== 'paid'), [currentMonthBills]);
 
   // Occupancy stats
-  const totalRooms = filteredRooms.length || (selectedBuilding === 'all' ? 30 : 15);
+  const totalRooms = filteredRooms.length;
   const occupiedCount = filteredRooms.filter(r => r.status === 'occupied').length;
   const vacantCount = filteredRooms.filter(r => r.status === 'vacant').length;
   const reservedCount = filteredRooms.filter(r => r.status === 'reserved').length;
@@ -149,7 +136,7 @@ export const OwnerReports: React.FC<OwnerReportsProps> = ({
   const fixedRentTotal = currentMonthBills.reduce((sum, b) => {
     const rentItem = b.items?.find(i => i.category === 'rent');
     return sum + (rentItem ? rentItem.amount : (b.rentAmount || 0));
-  }, 0) || filteredRooms.filter(r => r.status === 'occupied').reduce((sum, r) => sum + r.monthlyRent, 0);
+  }, 0);
 
   const waterTotal = currentMonthBills.reduce((sum, b) => {
     const wItem = b.items?.find(i => i.category === 'water');

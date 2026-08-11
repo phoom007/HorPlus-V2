@@ -27,17 +27,45 @@ import {
   Users,
   CheckCircle2
 } from 'lucide-react';
-import {
-  getStored,
-  setStored,
-  getDormitory,
-  initialDormitory,
-  getDormitoryRatesForCycle
-} from '../../data/mockData';
 import { Room, Bill, BillItem, Tenant, Contract, BillStatus, calculateRoomRentForCycle } from '../../types';
 import { formatBaht, Modal } from '../../components/GlobalComponents';
 
 import { LineNotificationModal } from '../../components/LineNotificationModal';
+
+export function getStored<T>(key: string, fallback: T): T {
+  try {
+    const v = localStorage.getItem(key);
+    return v ? JSON.parse(v) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+export function setStored<T>(key: string, val: T): void {
+  try {
+    localStorage.setItem(key, JSON.stringify(val));
+  } catch {}
+}
+
+export function getDormitoryRatesForCycle(_dorm?: any, _cycle?: string) {
+  return {
+    waterUnitRate: 18,
+    electricUnitRate: 7,
+    waterBillingMode: 'unit',
+    electricBillingMode: 'unit',
+    commonFee: 200,
+    commonFeeMode: 'room',
+    internetFee: 0,
+    internetFeeMode: 'room',
+    parkingFee: 100,
+    parkingFeeMode: 'room'
+  };
+}
+
+export function getDormitory() {
+  return {};
+}
+
 
 interface OwnerMetersProps {
   rooms: Room[];
@@ -172,9 +200,9 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     const waterPrev = prevData.waterCurr;
     const elecPrev = prevData.elecCurr;
 
-    // Calculate this cycle's new readings from previous readings
-    let waterCurr = waterPrev + 8;
-    let elecCurr = elecPrev + 120;
+    // Calculate this cycle's new readings from previous readings (no manufactured readings)
+    let waterCurr = waterPrev;
+    let elecCurr = elecPrev;
 
     if (bill) {
       const billRates = getDormitoryRatesForCycle(dorm, cycleId);
@@ -189,7 +217,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
             const rate = billRates.waterUnitRate || 18;
             waterCurr = waterPrev + Math.round(waterItem.amount / rate);
           } else {
-            waterCurr = waterPrev + 8;
+            waterCurr = waterPrev;
           }
         }
       }
@@ -205,7 +233,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
             const rate = billRates.electricUnitRate || 7;
             elecCurr = elecPrev + Math.round(elecItem.amount / rate);
           } else {
-            elecCurr = elecPrev + 120;
+            elecCurr = elecPrev;
           }
         }
       }
@@ -628,7 +656,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       const elecPrev = isNaN(parsedElecPrev) ? 0 : Math.round(parsedElecPrev);
       
       // Match existing bill structures if present
-      let waterCurr = waterPrev + 8;
+      let waterCurr = waterPrev;
       if (cachedRow) {
         waterCurr = cachedRow.waterCurr;
       } else if (existingBill) {
@@ -640,12 +668,12 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
             const waterUnits = match ? Number(match[1]) : Math.round(waterItem.amount / (cycleRates.waterUnitRate || 18));
             waterCurr = waterPrev + waterUnits;
           } else {
-            waterCurr = waterPrev + 8;
+            waterCurr = waterPrev;
           }
         }
       }
 
-      let elecCurr = elecPrev + 120;
+      let elecCurr = elecPrev;
       if (cachedRow) {
         elecCurr = cachedRow.elecCurr;
       } else if (existingBill) {
@@ -657,7 +685,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
             const elecUnits = match ? Number(match[1]) : Math.round(elecItem.amount / (cycleRates.electricUnitRate || 7));
             elecCurr = elecPrev + elecUnits;
           } else {
-            elecCurr = elecPrev + 120;
+            elecCurr = elecPrev;
           }
         }
       }

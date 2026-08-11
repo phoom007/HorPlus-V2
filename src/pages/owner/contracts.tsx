@@ -48,7 +48,16 @@ import {
   CurrencyInput
 } from '../../components/GlobalComponents';
 import { Contract, Tenant, Room, Bill, BillItem, BLOCKING_CONTRACT_STATUSES } from '../../types';
-import { getDormitory } from '../../data/mockData';
+const getDormitory = (): any => ({
+  id: 'dorm-1',
+  name: 'HorPlus Dormitory',
+  address: '',
+  phone: '',
+  taxId: '',
+  ownerSignature: '',
+  promptPayName: '',
+  petPolicy: { allowPets: false }
+});
 import { getDataProvider } from '../../data/dataProvider';
 
 export interface PendingContractSubmission {

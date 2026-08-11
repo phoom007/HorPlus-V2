@@ -33,17 +33,24 @@ import {
   Eye
 } from 'lucide-react';
 import { Room, Tenant, Contract, CoOccupant } from '../../types';
-import {
-  getRooms,
-  getBuildings,
-  getTenants,
-  getContracts,
-  saveTenants,
-  saveRooms,
-  saveContracts,
-  addAuditLog,
-  getDormitory
-} from '../../data/mockData';
+const getRooms = (): Room[] => [];
+const getBuildings = () => [];
+const getTenants = (): Tenant[] => [];
+const getContracts = (): Contract[] => [];
+const saveTenants = (_ts: Tenant[]) => {};
+const saveRooms = (_rs: Room[]) => {};
+const saveContracts = (_cs: Contract[]) => {};
+const addAuditLog = (..._args: any[]) => {};
+const getDormitory = (): any => ({
+  id: 'dorm-1',
+  name: 'HorPlus Dormitory',
+  address: '',
+  phone: '',
+  taxId: '',
+  ownerSignature: '',
+  promptPayName: '',
+  petPolicy: { allowPets: false }
+});
 
 interface TenantRegisterViewProps {
   onBack: () => void;

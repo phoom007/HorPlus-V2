@@ -5,8 +5,6 @@
 
 import React from 'react';
 import { Navigate, Outlet, useLocation } from 'react-router-dom';
-import { getDemoSession, setOwnerDemoSession } from '../demo/demoSession';
-import { getUsers } from '../data/mockData';
 
 export const AuthContext = React.createContext<any>(null);
 
@@ -111,21 +109,11 @@ export const TenantAuthGuard: React.FC<{ children?: React.ReactNode }> = ({ chil
         if (tenantData) {
           setSession({ userType: 'tenant', tenant: tenantData, user: tenantData });
         } else {
-          const demo = getDemoSession();
-          if (demo && demo.userType === 'tenant' && demo.tenant) {
-            setSession(demo);
-          } else {
-            setSession(null);
-          }
+          setSession(null);
         }
       })
       .catch(() => {
-        const demo = getDemoSession();
-        if (demo && demo.userType === 'tenant' && demo.tenant) {
-          setSession(demo);
-        } else {
-          setSession(null);
-        }
+        setSession(null);
       })
       .finally(() => setLoading(false));
   }, []);
@@ -135,7 +123,7 @@ export const TenantAuthGuard: React.FC<{ children?: React.ReactNode }> = ({ chil
   }
 
   if (!session || session.userType !== 'tenant' || !session.tenant) {
-    return <Navigate to="/demo" replace />;
+    return <Navigate to="/" replace />;
   }
 
   return (
@@ -146,12 +134,6 @@ export const TenantAuthGuard: React.FC<{ children?: React.ReactNode }> = ({ chil
 };
 
 export const PublicOnlyGuard: React.FC<{ children?: React.ReactNode }> = ({ children }) => {
-  const session = getDemoSession();
-  if (session && session.userType === 'owner' && session.user) {
-    return <Navigate to="/owner/dashboard" replace />;
-  }
-  if (session && session.userType === 'tenant' && session.tenant) {
-    return <Navigate to="/tenant/dashboard" replace />;
-  }
   return <>{children || <Outlet />}</>;
 };
+

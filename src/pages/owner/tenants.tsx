@@ -35,7 +35,11 @@ import {
   formatThaiDate
 } from '../../components/GlobalComponents';
 import { Tenant, Room, CoOccupant, EmergencyContact, Contract, Bill, BillItem, BLOCKING_CONTRACT_STATUSES } from '../../types';
-import { getDormitory } from '../../data/mockData';
+const getDormitory = (): any => ({
+  id: 'dorm-1',
+  name: 'HorPlus Dormitory',
+  petPolicy: { allowPets: false }
+});
 import { getDataProvider } from '../../data/dataProvider';
 import { convertImageToWebP, UPLOAD_DROPZONE_TEXT } from '../../utils/imageUtils';
 

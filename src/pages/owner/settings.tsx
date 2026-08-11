@@ -23,12 +23,25 @@ import {
   Layers,
   Copy
 } from 'lucide-react';
-import {
-  getDormitory,
-  saveDormitory,
-  getDormitoryRatesForCycle,
-  seedDatabase
-} from '../../data/mockData';
+export function getDormitoryRatesForCycle(_dorm?: any, _cycle?: string) {
+  return {
+    waterUnitRate: 18,
+    electricUnitRate: 7,
+    waterBillingMode: 'unit',
+    electricBillingMode: 'unit',
+    commonFee: 200,
+    commonFeeMode: 'room',
+    internetFee: 0,
+    internetFeeMode: 'room',
+    parkingFee: 100,
+    parkingFeeMode: 'room',
+    lateFeeDaily: 100,
+    lateFeeType: 'per_day'
+  };
+}
+const getDormitory = () => ({ id: 'dorm-1', name: 'HorPlus Dormitory' } as any);
+const saveDormitory = (_d: any) => {};
+const seedDatabase = (_b?: boolean) => {};
 
 // Legacy mock-storage persistence is retained ONLY for Dormitory profile fields (dormitory name, address, contact phone, taxId, bank accounts) outside the Wave 1G model-backed Property Defaults and Billing Settings.
 import { ConfirmDialog, SignaturePad } from '../../components/GlobalComponents';

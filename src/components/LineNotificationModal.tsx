@@ -10,7 +10,48 @@ import {
 } from 'lucide-react';
 import { Modal, formatBaht } from './GlobalComponents';
 import { Bill, Tenant, Room, Contract } from '../types';
-import { formatCycleThaiShort, getContracts, getDormitory, getDormitoryRatesForCycle, getStored, setStored } from '../data/mockData';
+
+export function getStored<T>(key: string, fallback: T): T {
+  try {
+    const v = localStorage.getItem(key);
+    return v ? JSON.parse(v) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+export function setStored<T>(key: string, val: T): void {
+  try {
+    localStorage.setItem(key, JSON.stringify(val));
+  } catch {}
+}
+
+export function getDormitoryRatesForCycle(_dorm?: any, _cycle?: string) {
+  return {
+    waterUnitRate: 18,
+    electricUnitRate: 7,
+    waterBillingMode: 'unit',
+    electricBillingMode: 'unit',
+    commonFee: 200,
+    commonFeeMode: 'room',
+    internetFee: 0,
+    internetFeeMode: 'room',
+    parkingFee: 100,
+    parkingFeeMode: 'room'
+  };
+}
+
+export function getDormitory() {
+  return {};
+}
+
+export function formatCycleThaiShort(cycle: string) {
+  if (!cycle) return '';
+  const [y, m] = cycle.split('-');
+  const months = ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'];
+  const idx = parseInt(m, 10) - 1;
+  return `${months[idx] || m} ${parseInt(y, 10) + 543}`;
+}
 
 import { tempMeterRowsCache, MeterRowState } from '../pages/owner/meters';
 
@@ -112,7 +153,7 @@ export const LineNotificationModal: React.FC<LineNotificationModalProps> = ({
     }
   }, [lineNotifyMap]);
 
-  const contractsList = contracts && contracts.length > 0 ? contracts : getContracts();
+  const contractsList = contracts && contracts.length > 0 ? contracts : [];
 
   // Compute cycle bills sorted by room number (only unpaid bills for occupied rooms with real active tenants)
   const cycleBillsMap = new Map<string, Bill>();

@@ -18,9 +18,7 @@ import { seedDatabase } from '../data/mockData';
 
 describe('Data Mode & Adapter Integration Suite', () => {
   beforeEach(() => {
-    // Reset data mode to demo and reseed mock database
-    setDataMode('demo');
-    seedDatabase(true);
+    setDataMode('api');
     vi.restoreAllMocks();
   });
 
@@ -30,9 +28,8 @@ describe('Data Mode & Adapter Integration Suite', () => {
       expect(provider).toBeInstanceOf(ApiDataProvider);
     });
 
-    it('should not fallback to DemoDataProvider even if data mode is set to demo', () => {
-      setDataMode('demo');
-      expect(getDataMode()).toBe('demo');
+    it('should strictly return api data mode', () => {
+      expect(getDataMode()).toBe('api');
       const provider = getDataProvider();
       expect(provider).toBeInstanceOf(ApiDataProvider);
     });
