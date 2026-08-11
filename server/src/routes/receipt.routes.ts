@@ -53,9 +53,12 @@ export function createReceiptRouter(authService: AuthenticationService) {
         // Tenant can only view if the receipt belongs to their bill
         if (tenant) {
           const bill = await prisma.bill.findUnique({ where: { id: receiptRecord.billId } });
-          const contract = await prisma.contract.findFirst({ where: { tenantId: tenant.id, status: 'active' } });
-          if (bill && (bill.tenantId === tenant.id || (contract && bill.roomId === contract.roomId))) {
-            authorized = true;
+          if (bill) {
+            const tenantContracts = await prisma.contract.findMany({ where: { tenantId: tenant.id }, select: { id: true } });
+            const tenantContractIds = tenantContracts.map(c => c.id);
+            if (bill.tenantId === tenant.id || (bill.contractId && tenantContractIds.includes(bill.contractId))) {
+              authorized = true;
+            }
           }
         }
       }
@@ -90,9 +93,12 @@ export function createReceiptRouter(authService: AuthenticationService) {
         const tenant = await ensureTenant(req, res, dormitoryId);
         if (tenant) {
           const bill = await prisma.bill.findUnique({ where: { id: receiptRecord.billId } });
-          const contract = await prisma.contract.findFirst({ where: { tenantId: tenant.id, status: 'active' } });
-          if (bill && (bill.tenantId === tenant.id || (contract && bill.roomId === contract.roomId))) {
-            authorized = true;
+          if (bill) {
+            const tenantContracts = await prisma.contract.findMany({ where: { tenantId: tenant.id }, select: { id: true } });
+            const tenantContractIds = tenantContracts.map(c => c.id);
+            if (bill.tenantId === tenant.id || (bill.contractId && tenantContractIds.includes(bill.contractId))) {
+              authorized = true;
+            }
           }
         }
       }

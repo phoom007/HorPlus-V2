@@ -89,9 +89,6 @@ const generatePromptPayPayload = (target: string, amount?: number): string => {
 };
 
 const getPromptPayQrUrl = (target: string, amount?: number): string => {
-  if (amount && amount > 0) {
-    return `https://promptpay.io/${target}/${amount}.png`;
-  }
   const payload = generatePromptPayPayload(target, amount);
   return `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(payload)}`;
 };

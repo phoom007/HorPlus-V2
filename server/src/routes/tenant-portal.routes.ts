@@ -7,6 +7,7 @@ import { AnnouncementService } from '../services/announcement.service.js';
 import { DocumentPdfService } from '../services/document-pdf.service.js';
 import { AuthenticationService } from '../services/auth.service.js';
 import { SensitiveFieldService } from '../services/sensitive-field.service.js';
+import { generatePromptPayPayload, maskPromptPayDisplay, generatePromptPayQrSvg } from '../services/promptpay-payload.service.js';
 
 type TenantContextResult = {
   error?: undefined;
@@ -65,6 +66,51 @@ async function resolveTenantContext(req: Request): Promise<TenantContextResult> 
     contract: contract || null,
     roomId: contract?.roomId || undefined
   };
+}
+
+async function getTenantBillWhere(prisma: any, ctx: { dormitoryId: string; tenant: { id: string } }) {
+  const contracts = await prisma.contract.findMany({
+    where: { tenantId: ctx.tenant.id, dormitoryId: ctx.dormitoryId },
+    select: { id: true }
+  });
+  const contractIds = contracts.map((c: any) => c.id);
+
+  return {
+    dormitoryId: ctx.dormitoryId,
+    status: { not: 'cancelled' },
+    OR: [
+      { tenantId: ctx.tenant.id },
+      ...(contractIds.length > 0 ? [{ contractId: { in: contractIds } }] : [])
+    ]
+  };
+}
+
+async function checkBillOwnership(prisma: any, billId: string, ctx: { dormitoryId: string; tenant: { id: string } }) {
+  const bill = await prisma.bill.findUnique({
+    where: { id: billId },
+    include: {
+      items: true,
+      Payment: {
+        include: { receipt: true },
+        orderBy: { createdAt: 'desc' }
+      }
+    }
+  });
+
+  if (!bill || bill.dormitoryId !== ctx.dormitoryId || bill.status === 'cancelled') {
+    return null;
+  }
+
+  const contracts = await prisma.contract.findMany({
+    where: { tenantId: ctx.tenant.id, dormitoryId: ctx.dormitoryId },
+    select: { id: true }
+  });
+  const contractIds = contracts.map((c: any) => c.id);
+
+  const isOwned = bill.tenantId === ctx.tenant.id || (bill.contractId && contractIds.includes(bill.contractId));
+  if (!isOwned) return null;
+
+  return bill;
 }
 
 export function createTenantPortalRouter(authService?: AuthenticationService): Router {
@@ -186,16 +232,9 @@ export function createTenantPortalRouter(authService?: AuthenticationService): R
         return res.status(ctx.error.statusCode).json({ error: { code: ctx.error.code, message: ctx.error.message, requestId: req.requestId } });
       }
 
+      const billWhere = await getTenantBillWhere(prisma, ctx);
       const bills = await prisma.bill.findMany({
-        where: {
-          dormitoryId: ctx.dormitoryId,
-          OR: [
-            { roomId: ctx.roomId || undefined },
-            { tenantId: ctx.tenant.id },
-            { contractId: ctx.contract?.id || undefined }
-          ],
-          status: { not: 'cancelled' }
-        },
+        where: billWhere,
         orderBy: { createdAt: 'desc' },
         include: {
           items: true,
@@ -268,18 +307,8 @@ export function createTenantPortalRouter(authService?: AuthenticationService): R
         return res.status(ctx.error.statusCode).json({ error: { code: ctx.error.code, message: ctx.error.message, requestId: req.requestId } });
       }
 
-      const bill = await prisma.bill.findUnique({
-        where: { id: req.params.billId },
-        include: {
-          items: true,
-          Payment: {
-            include: { receipt: true },
-            orderBy: { createdAt: 'desc' }
-          }
-        }
-      });
-
-      if (!bill || bill.dormitoryId !== ctx.dormitoryId || (bill.roomId !== ctx.roomId && bill.tenantId !== ctx.tenant.id)) {
+      const bill = await checkBillOwnership(prisma, req.params.billId, ctx);
+      if (!bill) {
         return res.status(404).json({
           error: { code: 'TENANT_BILL_NOT_FOUND', message: 'ไม่พบรายการบิลนี้', requestId: req.requestId }
         });
@@ -287,7 +316,7 @@ export function createTenantPortalRouter(authService?: AuthenticationService): R
 
       const room = bill.roomId ? await prisma.room.findUnique({ where: { id: bill.roomId } }) : null;
 
-      const mappedPayments = (bill.Payment || []).map((p) => ({
+      const mappedPayments = (bill.Payment || []).map((p: any) => ({
         id: p.id,
         method: p.method,
         amount: p.amount.toString(),
@@ -335,7 +364,46 @@ export function createTenantPortalRouter(authService?: AuthenticationService): R
     }
   });
 
-  // 5. Tenant Payment Options (PromptPay details from Dormitory Billing Settings)
+  // 5. Tenant Payment Options (Safe DTO without raw PromptPay identifier)
+  router.get('/payment-options/:billId/qr', async (req: Request, res: Response) => {
+    try {
+      const ctx = await resolveTenantContext(req);
+      if (ctx.error) {
+        return res.status(ctx.error.statusCode).json({ error: { code: ctx.error.code, message: ctx.error.message, requestId: req.requestId } });
+      }
+
+      const bill = await checkBillOwnership(prisma, req.params.billId, ctx);
+      if (!bill) {
+        return res.status(404).json({ error: { code: 'TENANT_BILL_NOT_FOUND', message: 'ไม่พบรายการบิลนี้', requestId: req.requestId } });
+      }
+
+      const settings = await prisma.dormitoryBillingSettings.findUnique({
+        where: { dormitoryId: ctx.dormitoryId }
+      });
+
+      if (!settings || !settings.promptPayValueEncrypted) {
+        return res.status(404).json({ error: { code: 'PROMPTPAY_NOT_CONFIGURED', message: 'ไม่ได้ตั้งค่า PromptPay', requestId: req.requestId } });
+      }
+
+      let rawPromptPay: string;
+      try {
+        rawPromptPay = sensitiveFieldService.decrypt(settings.promptPayValueEncrypted);
+      } catch (err) {
+        console.error('[TenantPortal] PromptPay decryption failed for QR endpoint:', err);
+        return res.status(500).json({ error: { code: 'PAYMENT_METHOD_CONFIGURATION_ERROR', message: 'เกิดข้อผิดพลาดในการอ่านข้อมูล PromptPay', requestId: req.requestId } });
+      }
+
+      const svg = generatePromptPayQrSvg(rawPromptPay, bill.totalAmount.toString());
+      res.setHeader('Content-Type', 'image/svg+xml');
+      res.setHeader('Cache-Control', 'private, no-cache, no-store, must-revalidate');
+      return res.status(200).send(svg);
+    } catch (err: any) {
+      return res.status(500).json({
+        error: { code: 'INTERNAL_ERROR', message: err.message, requestId: req.requestId }
+      });
+    }
+  });
+
   router.get('/payment-options/:billId?', async (req: Request, res: Response) => {
     try {
       const ctx = await resolveTenantContext(req);
@@ -344,12 +412,28 @@ export function createTenantPortalRouter(authService?: AuthenticationService): R
       }
 
       let targetAmount = '0.00';
+      let targetBillId = '';
+
       if (req.params.billId) {
-        const bill = await prisma.bill.findUnique({ where: { id: req.params.billId } });
-        if (!bill || bill.dormitoryId !== ctx.dormitoryId || (bill.roomId !== ctx.roomId && bill.tenantId !== ctx.tenant.id)) {
+        const bill = await checkBillOwnership(prisma, req.params.billId, ctx);
+        if (!bill) {
           return res.status(404).json({ error: { code: 'TENANT_BILL_NOT_FOUND', message: 'ไม่พบรายการบิลนี้', requestId: req.requestId } });
         }
         targetAmount = bill.totalAmount.toString();
+        targetBillId = bill.id;
+      } else {
+        const billWhere = await getTenantBillWhere(prisma, ctx);
+        const bill = await prisma.bill.findFirst({
+          where: {
+            ...billWhere,
+            status: { in: ['ISSUED', 'ISSUED_OVERDUE', 'REJECTED', 'issued', 'pending', 'overdue', 'rejected'] }
+          },
+          orderBy: { createdAt: 'desc' }
+        });
+        if (bill) {
+          targetAmount = bill.totalAmount.toString();
+          targetBillId = bill.id;
+        }
       }
 
       const settings = await prisma.dormitoryBillingSettings.findUnique({
@@ -359,33 +443,42 @@ export function createTenantPortalRouter(authService?: AuthenticationService): R
       if (!settings) {
         return res.json({
           success: true,
-          data: { configured: false, targetAmount }
+          data: { configured: false, targetAmount, paymentMethod: 'PROMPTPAY' }
         });
       }
 
-      let decryptedPromptPay: string | null = null;
+      let rawPromptPay: string | null = null;
       if (settings.promptPayValueEncrypted) {
         try {
-          decryptedPromptPay = sensitiveFieldService.decrypt(settings.promptPayValueEncrypted);
-        } catch {
-          decryptedPromptPay = settings.promptPayValue || null;
+          rawPromptPay = sensitiveFieldService.decrypt(settings.promptPayValueEncrypted);
+        } catch (err) {
+          console.error('[TenantPortal] PromptPay decryption failed:', err);
+          return res.json({
+            success: true,
+            data: {
+              configured: false,
+              errorCode: 'PAYMENT_METHOD_CONFIGURATION_ERROR',
+              targetAmount,
+              paymentMethod: 'PROMPTPAY'
+            }
+          });
         }
-      } else {
-        decryptedPromptPay = settings.promptPayValue || null;
       }
 
-      const hasPromptPay = Boolean(settings.promptPayType && (settings.promptPayValueEncrypted || decryptedPromptPay));
+      const isConfigured = Boolean(rawPromptPay || settings.bankAccountNumber);
 
       return res.json({
         success: true,
         data: {
-          configured: hasPromptPay,
+          configured: isConfigured,
+          targetAmount,
+          paymentMethod: 'PROMPTPAY',
           promptPayType: settings.promptPayType || 'NATID',
-          promptPayValue: decryptedPromptPay,
+          promptPayDisplay: rawPromptPay ? maskPromptPayDisplay(rawPromptPay, settings.promptPayType) : null,
+          qrUrl: (isConfigured && targetBillId) ? `/api/v1/tenant-portal/payment-options/${targetBillId}/qr` : null,
           bankCode: settings.bankCode || null,
           bankAccountName: settings.bankAccountName || null,
-          bankAccountNumber: settings.bankAccountNumber || null,
-          targetAmount
+          bankAccountNumber: settings.bankAccountNumber || null
         }
       });
     } catch (err: any) {
@@ -403,16 +496,14 @@ export function createTenantPortalRouter(authService?: AuthenticationService): R
         return res.status(ctx.error.statusCode).json({ error: { code: ctx.error.code, message: ctx.error.message, requestId: req.requestId } });
       }
 
+      const billWhere = await getTenantBillWhere(prisma, ctx);
       const payments = await prisma.payment.findMany({
         where: {
           dormitoryId: ctx.dormitoryId,
-          bill: {
-            OR: [
-              { roomId: ctx.roomId || undefined },
-              { tenantId: ctx.tenant.id },
-              { contractId: ctx.contract?.id || undefined }
-            ]
-          }
+          OR: [
+            { tenantId: ctx.tenant.id },
+            { bill: billWhere }
+          ]
         },
         orderBy: { createdAt: 'desc' },
         include: {
@@ -457,16 +548,11 @@ export function createTenantPortalRouter(authService?: AuthenticationService): R
         return res.status(ctx.error.statusCode).json({ error: { code: ctx.error.code, message: ctx.error.message, requestId: req.requestId } });
       }
 
+      const billWhere = await getTenantBillWhere(prisma, ctx);
       const receipts = await prisma.receipt.findMany({
         where: {
           dormitoryId: ctx.dormitoryId,
-          bill: {
-            OR: [
-              { roomId: ctx.roomId || undefined },
-              { tenantId: ctx.tenant.id },
-              { contractId: ctx.contract?.id || undefined }
-            ]
-          }
+          bill: billWhere
         },
         orderBy: { createdAt: 'desc' },
         include: {
@@ -508,10 +594,11 @@ export function createTenantPortalRouter(authService?: AuthenticationService): R
 
       const room = ctx.roomId ? await prisma.room.findUnique({ where: { id: ctx.roomId } }) : null;
 
+      const billWhere = await getTenantBillWhere(prisma, ctx);
       const latestReceipt = await prisma.receipt.findFirst({
         where: {
           dormitoryId: ctx.dormitoryId,
-          bill: { OR: [{ tenantId: ctx.tenant.id }, { roomId: ctx.roomId }] }
+          bill: billWhere
         },
         orderBy: { createdAt: 'desc' }
       });

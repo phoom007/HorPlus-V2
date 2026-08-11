@@ -19,6 +19,10 @@ function makeUniquePng(): Buffer {
 test.describe.serial('Tenant Web Payment & Receipt Portal E2E Suite', () => {
   const fakeLineServer = new FakeLineServer();
 
+  let sessionTokenService: SessionTokenService;
+  let csrfService: CsrfService;
+  let sensitiveFieldService: SensitiveFieldService;
+
   let ownerUserId: string;
   let ownerSessionToken: string;
   let ownerCsrfToken: string;
@@ -28,8 +32,10 @@ test.describe.serial('Tenant Web Payment & Receipt Portal E2E Suite', () => {
   let tenantASessionToken: string;
   let tenantACsrfToken: string;
   let tenantAId: string;
+  let contractAId: string;
   let roomAId: string;
   let billAId: string;
+  let receiptAId: string;
 
   let tenantBUserId: string;
   let tenantBSessionToken: string;
@@ -37,6 +43,12 @@ test.describe.serial('Tenant Web Payment & Receipt Portal E2E Suite', () => {
   let tenantBId: string;
   let roomBId: string;
   let billBId: string;
+
+  let tenantCUserId: string;
+  let tenantCSessionToken: string;
+
+  let tenantDUserId: string;
+  let tenantDSessionToken: string;
 
   let cycleId: string;
 
@@ -46,9 +58,9 @@ test.describe.serial('Tenant Web Payment & Receipt Portal E2E Suite', () => {
 
     const sessionSecret = process.env.SESSION_ENCRYPTION_KEY || '0123456789abcdef0123456789abcdef';
     const csrfSecret = process.env.CSRF_SIGNING_KEY || 'csrf-secret-key-0123456789abcdef';
-    const sessionTokenService = new SessionTokenService(sessionSecret);
-    const csrfService = new CsrfService(csrfSecret);
-    const sensitiveFieldService = new SensitiveFieldService(process.env.ENCRYPTION_KEY || 'default-secret-key-32-chars-01234');
+    sessionTokenService = new SessionTokenService(sessionSecret);
+    csrfService = new CsrfService(csrfSecret);
+    sensitiveFieldService = new SensitiveFieldService(process.env.ENCRYPTION_KEY || 'default-secret-key-32-chars-01234');
 
     // 1. Create Owner User & Dormitory
     const owner = await prisma.user.create({
@@ -110,8 +122,8 @@ test.describe.serial('Tenant Web Payment & Receipt Portal E2E Suite', () => {
       });
     }
 
-    // Configure PromptPay settings for dormitory
-    const encPp = sensitiveFieldService.encrypt('0812345678');
+    // Configure PromptPay settings for dormitory using 13-digit NATIONAL_ID
+    const encPp = sensitiveFieldService.encrypt('1234567890123');
     await prisma.dormitoryBillingSettings.create({
       data: {
         dormitoryId: ownerDormitoryId,
@@ -229,7 +241,7 @@ test.describe.serial('Tenant Web Payment & Receipt Portal E2E Suite', () => {
       });
       tenantAId = tA.id;
 
-      await tx.contract.create({
+      const cA = await tx.contract.create({
         data: {
           dormitoryId: ownerDormitoryId,
           tenantId: tA.id,
@@ -242,12 +254,14 @@ test.describe.serial('Tenant Web Payment & Receipt Portal E2E Suite', () => {
           status: 'active',
         },
       });
+      contractAId = cA.id;
 
       const bA = await tx.bill.create({
         data: {
           dormitoryId: ownerDormitoryId,
           billingCycleId: cycleId,
           tenantId: tA.id,
+          contractId: cA.id,
           roomId: roomAId,
           billNumber: 'INV-TN-001',
           billingDate: new Date('2026-08-25'),
@@ -317,7 +331,7 @@ test.describe.serial('Tenant Web Payment & Receipt Portal E2E Suite', () => {
       });
       tenantBId = tB.id;
 
-      await tx.contract.create({
+      const cB = await tx.contract.create({
         data: {
           dormitoryId: ownerDormitoryId,
           tenantId: tB.id,
@@ -336,6 +350,7 @@ test.describe.serial('Tenant Web Payment & Receipt Portal E2E Suite', () => {
           dormitoryId: ownerDormitoryId,
           billingCycleId: cycleId,
           tenantId: tB.id,
+          contractId: cB.id,
           roomId: roomBId,
           billNumber: 'INV-TN-002',
           billingDate: new Date('2026-08-25'),
@@ -382,17 +397,10 @@ test.describe.serial('Tenant Web Payment & Receipt Portal E2E Suite', () => {
       }).catch(() => {});
     }
 
-    if (ownerUserId) {
-      await prisma.session.deleteMany({ where: { userId: ownerUserId } }).catch(() => {});
-      await prisma.user.delete({ where: { id: ownerUserId } }).catch(() => {});
-    }
-    if (tenantAUserId) {
-      await prisma.session.deleteMany({ where: { userId: tenantAUserId } }).catch(() => {});
-      await prisma.user.delete({ where: { id: tenantAUserId } }).catch(() => {});
-    }
-    if (tenantBUserId) {
-      await prisma.session.deleteMany({ where: { userId: tenantBUserId } }).catch(() => {});
-      await prisma.user.delete({ where: { id: tenantBUserId } }).catch(() => {});
+    const cleanupUsers = [ownerUserId, tenantAUserId, tenantBUserId, tenantCUserId, tenantDUserId].filter(Boolean);
+    for (const uid of cleanupUsers) {
+      await prisma.session.deleteMany({ where: { userId: uid } }).catch(() => {});
+      await prisma.user.delete({ where: { id: uid } }).catch(() => {});
     }
   });
 
@@ -443,7 +451,7 @@ test.describe.serial('Tenant Web Payment & Receipt Portal E2E Suite', () => {
     // Assert Tenant A sees bill total amount 5,300
     await expect(page.locator('text=/5,300/')).toBeVisible();
 
-    // Open payment options via API to verify PromptPay QR data
+    // Open payment options via API to verify PromptPay QR safe DTO
     const optRes = await page.request.get(`http://127.0.0.1:3101/api/v1/tenant-portal/payment-options/${billAId}`, {
       headers: {
         'Cookie': `horplus_session=${tenantASessionToken}`,
@@ -452,7 +460,8 @@ test.describe.serial('Tenant Web Payment & Receipt Portal E2E Suite', () => {
     expect(optRes.status()).toBe(200);
     const optBody = await optRes.json();
     expect(optBody.data.configured).toBe(true);
-    expect(optBody.data.promptPayValue).toBe('0812345678');
+    expect(optBody.data.promptPayDisplay).toBe('x-xxxx-xxxxx-12-3');
+    expect(optBody.data.promptPayValue).toBeUndefined();
 
     // STEP A: Create intent & upload slip #1
     const slip1 = makeUniquePng();
@@ -583,9 +592,10 @@ test.describe.serial('Tenant Web Payment & Receipt Portal E2E Suite', () => {
     const receipts = await prisma.receipt.findMany({ where: { billId: billAId } });
     expect(receipts.length).toBe(1);
     const rc = receipts[0];
+    receiptAId = rc.id;
     expect(rc.receiptNumber).toMatch(/^RC-202608-B101-\d{4}$/);
 
-    // Fetch Receipt HTML as Tenant -> 200 OK with correct receipt number
+    // Fetch Receipt HTML as Tenant A -> 200 OK
     const htmlRes = await page.request.get(`http://127.0.0.1:3101/api/v1/receipts/${rc.id}/html`, {
       headers: {
         'Cookie': `horplus_session=${tenantASessionToken}`,
@@ -595,5 +605,268 @@ test.describe.serial('Tenant Web Payment & Receipt Portal E2E Suite', () => {
     const htmlText = await htmlRes.text();
     expect(htmlText).toContain(rc.receiptNumber);
     expect(htmlText).toContain('ใบเสร็จรับเงิน (RECEIPT)');
+  });
+
+  test('3. Same-Room Tenant Turnover Regression: Tenant B in same room B101 cannot access Tenant A historical data', async ({ page }) => {
+    // PHASE 1: Inactivate Contract A for Tenant A on room B101
+    await prisma.contract.update({
+      where: { id: contractAId },
+      data: { status: 'terminated' },
+    });
+
+    // PHASE 2: Create Tenant C in SAME room B101 with new Contract C and Bill C
+    const userC = await prisma.user.create({
+      data: {
+        email: `tenantC-${Date.now()}@example.com`,
+        emailNormalized: `tenantC-${Date.now()}@example.com`,
+        name: 'Chai Tenant C (New Tenant B101)',
+        googleSubject: `goog-tenantC-${Date.now()}`,
+        status: 'active',
+      },
+    });
+    tenantCUserId = userC.id;
+
+    const sidC = crypto.randomUUID();
+    await prisma.session.create({
+      data: {
+        userId: tenantCUserId,
+        sessionIdHash: SessionTokenService.hashSessionId(sidC),
+        tokenVersion: 1,
+        status: 'active',
+        expiresAt: new Date(Date.now() + 86400 * 1000),
+      },
+    });
+    tenantCSessionToken = sessionTokenService.encryptToken({ sub: tenantCUserId, sid: sidC, type: 'session', version: 1 }, 86400);
+
+    const roleTenant = await prisma.role.findFirst({ where: { code: 'TENANT' } });
+    await prisma.dormitoryMember.create({
+      data: {
+        dormitoryId: ownerDormitoryId,
+        userId: tenantCUserId,
+        roleId: roleTenant?.id || 'role-tenant',
+        status: 'active',
+      },
+    });
+
+    let billCId: string;
+    await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${ownerDormitoryId}, true)`;
+
+      const cycC = await tx.billingCycle.create({
+        data: {
+          dormitoryId: ownerDormitoryId,
+          cycleCode: '2026-09',
+          name: 'รอบเดือน กันยายน 2569',
+          periodStart: new Date('2026-09-01'),
+          periodEnd: new Date('2026-09-30'),
+          billingDate: new Date('2026-09-25'),
+          dueDate: new Date('2026-10-05'),
+          status: 'active',
+        },
+      });
+
+      const tC = await tx.tenant.create({
+        data: {
+          dormitoryId: ownerDormitoryId,
+          linkedUserId: tenantCUserId,
+          tenantNumber: 'TC-003',
+          firstName: 'ชัย',
+          lastName: 'ซี',
+          displayName: 'ชัย ซี',
+          phone: '0833333333',
+          status: 'active',
+        },
+      });
+
+      const cC = await tx.contract.create({
+        data: {
+          dormitoryId: ownerDormitoryId,
+          tenantId: tC.id,
+          roomId: roomAId, // SAME room B101!
+          contractNumber: 'CT-TC-003',
+          startDate: new Date('2026-09-01'),
+          endDate: new Date('2027-08-31'),
+          rentAmount: 5500,
+          depositAmount: 5500,
+          status: 'active',
+        },
+      });
+
+      const bC = await tx.bill.create({
+        data: {
+          dormitoryId: ownerDormitoryId,
+          billingCycleId: cycC.id,
+          tenantId: tC.id,
+          contractId: cC.id,
+          roomId: roomAId,
+          billNumber: 'INV-TN-003',
+          billingDate: new Date('2026-09-01'),
+          dueDate: new Date('2026-09-10'),
+          totalAmount: 5500,
+          outstandingAmount: 5500,
+          status: 'ISSUED',
+          items: {
+            create: [{ dormitoryId: ownerDormitoryId, type: 'RENT', description: 'ค่าเช่าห้องประจำเดือน', amount: 5500, quantity: 1 }],
+          },
+        },
+      });
+      billCId = bC.id;
+    });
+
+    const headersC = { 'Cookie': `horplus_session=${tenantCSessionToken}` };
+
+    // 1. Tenant C bill A detail -> 404
+    const resBillA = await page.request.get(`http://127.0.0.1:3101/api/v1/tenant-portal/bills/${billAId}`, { headers: headersC });
+    expect(resBillA.status()).toBe(404);
+
+    // 2. Tenant C payment options for bill A -> 404
+    const resOptA = await page.request.get(`http://127.0.0.1:3101/api/v1/tenant-portal/payment-options/${billAId}`, { headers: headersC });
+    expect(resOptA.status()).toBe(404);
+
+    // 3. Tenant C payment history -> payment A absent
+    const resPaymentsC = await page.request.get('http://127.0.0.1:3101/api/v1/tenant-portal/payments', { headers: headersC });
+    expect(resPaymentsC.status()).toBe(200);
+    const paymentsC = (await resPaymentsC.json()).data || [];
+    expect(paymentsC.some((p: any) => p.billId === billAId)).toBe(false);
+
+    // 4. Tenant C receipts list -> receipt A absent
+    const resReceiptsC = await page.request.get('http://127.0.0.1:3101/api/v1/tenant-portal/receipts', { headers: headersC });
+    expect(resReceiptsC.status()).toBe(200);
+    const receiptsC = (await resReceiptsC.json()).data || [];
+    expect(receiptsC.some((r: any) => r.id === receiptAId)).toBe(false);
+
+    // 5. Tenant C direct receipt A JSON -> 403 / 404
+    const resRcJson = await page.request.get(`http://127.0.0.1:3101/api/v1/receipts/${receiptAId}`, { headers: headersC });
+    expect([403, 404]).toContain(resRcJson.status());
+
+    // 6. Tenant C direct receipt A HTML -> 403 / 404
+    const resRcHtml = await page.request.get(`http://127.0.0.1:3101/api/v1/receipts/${receiptAId}/html`, { headers: headersC });
+    expect([403, 404]).toContain(resRcHtml.status());
+
+    // 7. Tenant C dashboard latest receipt != receipt A
+    const resDashC = await page.request.get('http://127.0.0.1:3101/api/v1/tenant-portal/dashboard', { headers: headersC });
+    expect(resDashC.status()).toBe(200);
+    const dashC = await resDashC.json();
+    expect(dashC.data.latestReceipt?.id).not.toBe(receiptAId);
+
+    // 8. Tenant A can STILL access their own historical receipt HTML (Tenant history retention policy)
+    const headersA = { 'Cookie': `horplus_session=${tenantASessionToken}` };
+    const resRcAHist = await page.request.get(`http://127.0.0.1:3101/api/v1/receipts/${receiptAId}/html`, { headers: headersA });
+    expect(resRcAHist.status()).toBe(200);
+  });
+
+  test('4. No Active Contract Security: Tenant with no active contract receives zero bills/payments/receipts', async ({ page }) => {
+    // Create Tenant D with no active contract
+    const userD = await prisma.user.create({
+      data: {
+        email: `tenantD-${Date.now()}@example.com`,
+        emailNormalized: `tenantD-${Date.now()}@example.com`,
+        name: 'Dee Tenant D (No Contract)',
+        googleSubject: `goog-tenantD-${Date.now()}`,
+        status: 'active',
+      },
+    });
+    tenantDUserId = userD.id;
+
+    const sidD = crypto.randomUUID();
+    await prisma.session.create({
+      data: {
+        userId: tenantDUserId,
+        sessionIdHash: SessionTokenService.hashSessionId(sidD),
+        tokenVersion: 1,
+        status: 'active',
+        expiresAt: new Date(Date.now() + 86400 * 1000),
+      },
+    });
+    tenantDSessionToken = sessionTokenService.encryptToken({ sub: tenantDUserId, sid: sidD, type: 'session', version: 1 }, 86400);
+
+    const roleTenant = await prisma.role.findFirst({ where: { code: 'TENANT' } });
+    await prisma.dormitoryMember.create({
+      data: {
+        dormitoryId: ownerDormitoryId,
+        userId: tenantDUserId,
+        roleId: roleTenant?.id || 'role-tenant',
+        status: 'active',
+      },
+    });
+
+    await prisma.tenant.create({
+      data: {
+        dormitoryId: ownerDormitoryId,
+        linkedUserId: tenantDUserId,
+        tenantNumber: 'TD-004',
+        firstName: 'ดี',
+        lastName: 'ดี',
+        displayName: 'ดีดี',
+        phone: '0844444444',
+        status: 'active',
+      },
+    });
+
+    const headersD = { 'Cookie': `horplus_session=${tenantDSessionToken}` };
+
+    const resBills = await page.request.get('http://127.0.0.1:3101/api/v1/tenant-portal/bills', { headers: headersD });
+    expect(resBills.status()).toBe(200);
+    expect((await resBills.json()).data).toEqual([]);
+
+    const resPayments = await page.request.get('http://127.0.0.1:3101/api/v1/tenant-portal/payments', { headers: headersD });
+    expect(resPayments.status()).toBe(200);
+    expect((await resPayments.json()).data).toEqual([]);
+
+    const resReceipts = await page.request.get('http://127.0.0.1:3101/api/v1/tenant-portal/receipts', { headers: headersD });
+    expect(resReceipts.status()).toBe(200);
+    expect((await resReceipts.json()).data).toEqual([]);
+  });
+
+  test('5. PromptPay Privacy & Same-Origin QR Interception Regression: No raw secret, no promptpay.io requests', async ({ page }) => {
+    // 1. Verify Payment Options API safe DTO
+    const optRes = await page.request.get(`http://127.0.0.1:3101/api/v1/tenant-portal/payment-options/${billBId}`, {
+      headers: { 'Cookie': `horplus_session=${tenantBSessionToken}` },
+    });
+    expect(optRes.status()).toBe(200);
+    const optBody = await optRes.json();
+    expect(optBody.data.configured).toBe(true);
+    expect(optBody.data.promptPayDisplay).toBe('x-xxxx-xxxxx-12-3');
+    expect(optBody.data.promptPayValue).toBeUndefined();
+    expect(optBody.data.promptPayValueEncrypted).toBeUndefined();
+    expect(JSON.stringify(optBody)).not.toContain('1234567890123');
+
+    // 2. Intercept browser network requests
+    const thirdPartyRequests: string[] = [];
+    page.on('request', req => {
+      const url = req.url();
+      if (url.includes('promptpay.io') || url.includes('1234567890123')) {
+        thirdPartyRequests.push(url);
+      }
+    });
+
+    await page.context().addCookies([
+      { name: 'horplus_session', value: tenantBSessionToken, domain: '127.0.0.1', path: '/', httpOnly: true, secure: false, sameSite: 'Lax' },
+      { name: 'horplus_csrf', value: tenantBCsrfToken, domain: '127.0.0.1', path: '/', httpOnly: false, secure: false, sameSite: 'Lax' },
+    ]);
+
+    await page.goto('http://127.0.0.1:5174/tenant');
+    await page.waitForLoadState('networkidle');
+
+    // Click notify payment if visible
+    const notifyBtn = page.locator('button:has-text("แจ้งชำระเงิน")');
+    if (await notifyBtn.isVisible()) {
+      await notifyBtn.click();
+      await page.waitForTimeout(500);
+    }
+
+    // Verify network requests contain NO third-party promptpay.io calls or raw national ID
+    expect(thirdPartyRequests.length).toBe(0);
+
+    // Verify same-origin QR endpoint returns SVG
+    const qrRes = await page.request.get(`http://127.0.0.1:3101/api/v1/tenant-portal/payment-options/${billBId}/qr`, {
+      headers: { 'Cookie': `horplus_session=${tenantBSessionToken}` },
+    });
+    expect(qrRes.status()).toBe(200);
+    expect(qrRes.headers()['content-type']).toContain('image/svg+xml');
+    const svgText = await qrRes.text();
+    expect(svgText).toContain('<svg');
+    expect(svgText).not.toContain('promptpay.io');
+    expect(svgText).not.toContain('1234567890123');
   });
 });

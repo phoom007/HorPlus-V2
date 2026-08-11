@@ -120,14 +120,7 @@ const getBankBadgeInfo = (bankName: string) => {
   return { label: 'BANK', bg: 'bg-slate-700 border-slate-600 text-white', name: bankName };
 };
 
-const getPromptPayQrUrl = (target: string, amount?: number): string => {
-  const cleanTarget = (target || '').replace(/[^0-9]/g, '');
-  if (!cleanTarget) return '';
-  if (amount && amount > 0) {
-    return `https://promptpay.io/${cleanTarget}/${amount}.png`;
-  }
-  return `https://promptpay.io/${cleanTarget}.png`;
-};
+
 
 // Helper function to compress images using HTML5 Canvas to prevent localStorage quota issues
 const compressImage = (dataUrl: string, maxWidth = 800, maxHeight = 800, quality = 0.6): Promise<string> => {
@@ -1700,19 +1693,23 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                       <div className="bg-white rounded-3xl p-5 border border-slate-100 shadow-xs space-y-3 text-center">
                         <h3 className="font-extrabold text-slate-800 text-[11px] text-left">ช่องทางการชำระเงิน (PromptPay)</h3>
                         
-                        {paymentOptions?.configured && paymentOptions?.promptPayValue ? (
+                        {paymentOptions?.configured && (paymentOptions?.qrUrl || paymentOptions?.promptPayDisplay) ? (
                           <div className="space-y-3">
-                            <div className="p-3 bg-slate-50 rounded-2xl border border-slate-100 inline-block">
-                              <img 
-                                src={getPromptPayQrUrl(paymentOptions.promptPayValue, Number(activeUnpaidBill.totalAmount))} 
-                                alt="PromptPay QR Code" 
-                                className="w-48 h-48 mx-auto rounded-xl shadow-xs"
-                              />
-                            </div>
-                            <div className="text-[10px] text-slate-600 font-bold">
-                              <span>PromptPay: </span>
-                              <span className="font-black text-indigo-600">{paymentOptions.promptPayValue}</span>
-                            </div>
+                            {paymentOptions?.qrUrl && (
+                              <div className="p-3 bg-slate-50 rounded-2xl border border-slate-100 inline-block">
+                                <img 
+                                  src={paymentOptions.qrUrl} 
+                                  alt="PromptPay QR Code" 
+                                  className="w-48 h-48 mx-auto rounded-xl shadow-xs"
+                                />
+                              </div>
+                            )}
+                            {paymentOptions?.promptPayDisplay && (
+                              <div className="text-[10px] text-slate-600 font-bold">
+                                <span>PromptPay: </span>
+                                <span className="font-black text-indigo-600">{paymentOptions.promptPayDisplay}</span>
+                              </div>
+                            )}
                             <p className="text-[8px] text-slate-400">สแกน QR Code ด้วยแอปธนาคารใดก็ได้ เพื่อชำระยอด ฿ {Number(activeUnpaidBill.totalAmount).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
                           </div>
                         ) : (
