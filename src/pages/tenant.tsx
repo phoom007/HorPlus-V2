@@ -239,8 +239,11 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
   const [isSubmittingSlip, setIsSubmittingSlip] = useState(false);
   const [paymentOptions, setPaymentOptions] = useState<{
     configured: boolean;
+    promptPayConfigured?: boolean;
+    bankTransferConfigured?: boolean;
     promptPayType?: string | null;
-    promptPayValue?: string | null;
+    promptPayDisplay?: string | null;
+    qrUrl?: string | null;
     bankCode?: string | null;
     bankAccountName?: string | null;
     bankAccountNumber?: string | null;
@@ -1691,9 +1694,9 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
 
                       {/* PromptPay QR & Instructions */}
                       <div className="bg-white rounded-3xl p-5 border border-slate-100 shadow-xs space-y-3 text-center">
-                        <h3 className="font-extrabold text-slate-800 text-[11px] text-left">ช่องทางการชำระเงิน (PromptPay)</h3>
+                        <h3 className="font-extrabold text-slate-800 text-[11px] text-left">ช่องทางการชำระเงิน</h3>
                         
-                        {paymentOptions?.configured && (paymentOptions?.qrUrl || paymentOptions?.promptPayDisplay) ? (
+                        {(paymentOptions?.promptPayConfigured || paymentOptions?.configured) && (paymentOptions?.qrUrl || paymentOptions?.promptPayDisplay) ? (
                           <div className="space-y-3">
                             {paymentOptions?.qrUrl && (
                               <div className="p-3 bg-slate-50 rounded-2xl border border-slate-100 inline-block">
@@ -1712,18 +1715,20 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                             )}
                             <p className="text-[8px] text-slate-400">สแกน QR Code ด้วยแอปธนาคารใดก็ได้ เพื่อชำระยอด ฿ {Number(activeUnpaidBill.totalAmount).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
                           </div>
-                        ) : (
-                          <div className="p-4 bg-amber-50 border border-amber-200 rounded-2xl text-amber-900 text-[10px] font-bold text-center">
-                            <AlertCircle className="w-5 h-5 text-amber-600 mx-auto mb-1" />
-                            <span>หอพักยังไม่ได้ตั้งค่า PromptPay หรือบัญชีรับโอนเงิน โปรดแนบหลักฐานสลิปโอนเงินเพื่อแจ้งเจ้าของหอพัก</span>
-                          </div>
-                        )}
+                        ) : null}
 
-                        {paymentOptions?.bankAccountNumber && (
+                        {(paymentOptions?.bankTransferConfigured || paymentOptions?.bankAccountNumber) && (
                           <div className="border-t border-slate-100 pt-3 text-left space-y-1 text-[10px]">
                             <p className="font-extrabold text-slate-700">บัญชีธนาคาร:</p>
                             <p className="text-slate-600">{paymentOptions.bankCode || 'ธนาคาร'} {paymentOptions.bankAccountNumber}</p>
                             {paymentOptions.bankAccountName && <p className="text-slate-500 text-[9px]">{paymentOptions.bankAccountName}</p>}
+                          </div>
+                        )}
+
+                        {(!paymentOptions?.promptPayConfigured && !paymentOptions?.bankTransferConfigured && !paymentOptions?.bankAccountNumber && !paymentOptions?.qrUrl) && (
+                          <div className="p-4 bg-amber-50 border border-amber-200 rounded-2xl text-amber-900 text-[10px] font-bold text-center">
+                            <AlertCircle className="w-5 h-5 text-amber-600 mx-auto mb-1" />
+                            <span>หอพักยังไม่ได้ตั้งค่า PromptPay หรือบัญชีรับโอนเงิน โปรดแนบหลักฐานสลิปโอนเงินเพื่อแจ้งเจ้าของหอพัก</span>
                           </div>
                         )}
                       </div>

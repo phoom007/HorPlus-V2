@@ -869,4 +869,60 @@ test.describe.serial('Tenant Web Payment & Receipt Portal E2E Suite', () => {
     expect(svgText).not.toContain('promptpay.io');
     expect(svgText).not.toContain('1234567890123');
   });
+
+  test('6. Payment Options Config States: PromptPay only, Bank only, Both, Neither, Decryption failure', async ({ page }) => {
+    const headersB = { 'Cookie': `horplus_session=${tenantBSessionToken}` };
+
+    // 1. Both PromptPay + Bank configured (Current DB state)
+    const resBoth = await page.request.get(`http://127.0.0.1:3101/api/v1/tenant-portal/payment-options/${billBId}`, { headers: headersB });
+    expect(resBoth.status()).toBe(200);
+    const bodyBoth = await resBoth.json();
+    expect(bodyBoth.data.promptPayConfigured).toBe(true);
+    expect(bodyBoth.data.bankTransferConfigured).toBe(true);
+    expect(bodyBoth.data.qrUrl).toContain('/qr');
+
+    // 2. Bank Only (Clear PromptPay)
+    await prisma.dormitoryBillingSettings.update({
+      where: { dormitoryId: ownerDormitoryId },
+      data: { promptPayValueEncrypted: null },
+    });
+    const resBankOnly = await page.request.get(`http://127.0.0.1:3101/api/v1/tenant-portal/payment-options/${billBId}`, { headers: headersB });
+    expect(resBankOnly.status()).toBe(200);
+    const bodyBankOnly = await resBankOnly.json();
+    expect(bodyBankOnly.data.promptPayConfigured).toBe(false);
+    expect(bodyBankOnly.data.bankTransferConfigured).toBe(true);
+    expect(bodyBankOnly.data.qrUrl).toBeNull();
+    expect(bodyBankOnly.data.bankAccountNumber).toBe('123-4-56789-0');
+
+    // 3. PromptPay Only (Set PromptPay, Clear Bank)
+    const encPp = sensitiveFieldService.encrypt('0812345678');
+    await prisma.dormitoryBillingSettings.update({
+      where: { dormitoryId: ownerDormitoryId },
+      data: { promptPayValueEncrypted: encPp.ciphertext, bankAccountNumber: null },
+    });
+    const resPpOnly = await page.request.get(`http://127.0.0.1:3101/api/v1/tenant-portal/payment-options/${billBId}`, { headers: headersB });
+    expect(resPpOnly.status()).toBe(200);
+    const bodyPpOnly = await resPpOnly.json();
+    expect(bodyPpOnly.data.promptPayConfigured).toBe(true);
+    expect(bodyPpOnly.data.bankTransferConfigured).toBe(false);
+    expect(bodyPpOnly.data.qrUrl).toContain('/qr');
+
+    // 4. Decryption Failure
+    await prisma.dormitoryBillingSettings.update({
+      where: { dormitoryId: ownerDormitoryId },
+      data: { promptPayValueEncrypted: 'invalid_corrupted_ciphertext_data' },
+    });
+    const resDecryptFail = await page.request.get(`http://127.0.0.1:3101/api/v1/tenant-portal/payment-options/${billBId}`, { headers: headersB });
+    expect(resDecryptFail.status()).toBe(200);
+    const bodyDecryptFail = await resDecryptFail.json();
+    expect(bodyDecryptFail.data.promptPayConfigured).toBe(false);
+    expect(bodyDecryptFail.data.qrUrl).toBeNull();
+    expect(bodyDecryptFail.data.errorCode).toBe('PAYMENT_METHOD_CONFIGURATION_ERROR');
+
+    // Restore settings
+    await prisma.dormitoryBillingSettings.update({
+      where: { dormitoryId: ownerDormitoryId },
+      data: { promptPayValueEncrypted: encPp.ciphertext, bankAccountNumber: '123-4-56789-0' },
+    });
+  });
 });

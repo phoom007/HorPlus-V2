@@ -393,9 +393,9 @@ export function createTenantPortalRouter(authService?: AuthenticationService): R
         return res.status(500).json({ error: { code: 'PAYMENT_METHOD_CONFIGURATION_ERROR', message: 'เกิดข้อผิดพลาดในการอ่านข้อมูล PromptPay', requestId: req.requestId } });
       }
 
-      const svg = generatePromptPayQrSvg(rawPromptPay, bill.totalAmount.toString());
+      const svg = await generatePromptPayQrSvg(rawPromptPay, bill.totalAmount.toString());
       res.setHeader('Content-Type', 'image/svg+xml');
-      res.setHeader('Cache-Control', 'private, no-cache, no-store, must-revalidate');
+      res.setHeader('Cache-Control', 'no-store, max-age=0, must-revalidate');
       return res.status(200).send(svg);
     } catch (err: any) {
       return res.status(500).json({
@@ -443,39 +443,45 @@ export function createTenantPortalRouter(authService?: AuthenticationService): R
       if (!settings) {
         return res.json({
           success: true,
-          data: { configured: false, targetAmount, paymentMethod: 'PROMPTPAY' }
+          data: {
+            promptPayConfigured: false,
+            bankTransferConfigured: false,
+            configured: false,
+            targetAmount,
+            paymentMethod: 'PROMPTPAY',
+            qrUrl: null
+          }
         });
       }
 
       let rawPromptPay: string | null = null;
+      let decryptionError = false;
+
       if (settings.promptPayValueEncrypted) {
         try {
           rawPromptPay = sensitiveFieldService.decrypt(settings.promptPayValueEncrypted);
         } catch (err) {
           console.error('[TenantPortal] PromptPay decryption failed:', err);
-          return res.json({
-            success: true,
-            data: {
-              configured: false,
-              errorCode: 'PAYMENT_METHOD_CONFIGURATION_ERROR',
-              targetAmount,
-              paymentMethod: 'PROMPTPAY'
-            }
-          });
+          decryptionError = true;
         }
       }
 
-      const isConfigured = Boolean(rawPromptPay || settings.bankAccountNumber);
+      const promptPayConfigured = Boolean(rawPromptPay && !decryptionError);
+      const bankTransferConfigured = Boolean(settings.bankAccountNumber);
+      const isConfigured = promptPayConfigured || bankTransferConfigured;
 
       return res.json({
         success: true,
         data: {
           configured: isConfigured,
+          promptPayConfigured,
+          bankTransferConfigured,
+          ...(decryptionError ? { errorCode: 'PAYMENT_METHOD_CONFIGURATION_ERROR' } : {}),
           targetAmount,
           paymentMethod: 'PROMPTPAY',
           promptPayType: settings.promptPayType || 'NATID',
-          promptPayDisplay: rawPromptPay ? maskPromptPayDisplay(rawPromptPay, settings.promptPayType) : null,
-          qrUrl: (isConfigured && targetBillId) ? `/api/v1/tenant-portal/payment-options/${targetBillId}/qr` : null,
+          promptPayDisplay: promptPayConfigured ? maskPromptPayDisplay(rawPromptPay!, settings.promptPayType) : null,
+          qrUrl: (promptPayConfigured && targetBillId) ? `/api/v1/tenant-portal/payment-options/${targetBillId}/qr` : null,
           bankCode: settings.bankCode || null,
           bankAccountName: settings.bankAccountName || null,
           bankAccountNumber: settings.bankAccountNumber || null
