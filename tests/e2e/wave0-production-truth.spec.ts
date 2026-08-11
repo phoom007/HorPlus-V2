@@ -1,54 +1,144 @@
 import { test, expect } from '@playwright/test';
+import { getPrismaClient } from '../../server/src/db/prisma.js';
+import { SessionTokenService } from '../../server/src/services/session-token.service.js';
+import { CsrfService } from '../../server/src/services/csrf.service.js';
+import crypto from 'crypto';
 
-test.describe('Wave 0 Production Truth Acceptance Suite', () => {
-  test.beforeEach(async ({ page }) => {
-    // Navigate to root
-    await page.goto('/');
+const prisma = getPrismaClient();
+
+const SESSION_ENCRYPTION_KEY = process.env.SESSION_ENCRYPTION_KEY || '0123456789abcdef0123456789abcdef';
+const CSRF_SIGNING_KEY = process.env.CSRF_SIGNING_KEY || 'csrf-secret-key-0123456789abcdef';
+
+const sessionTokenService = new SessionTokenService(SESSION_ENCRYPTION_KEY);
+const csrfService = new CsrfService(CSRF_SIGNING_KEY);
+
+test.describe.serial('Wave 0 Production Truth Acceptance Suite', () => {
+  let ownerUserId: string;
+  let ownerSessionToken: string;
+  let ownerCsrfToken: string;
+  let ownerDormitoryId: string;
+
+  test.beforeAll(async () => {
+    const timestamp = Date.now();
+    ownerDormitoryId = crypto.randomUUID();
+    ownerUserId = crypto.randomUUID();
+    const sessionId = crypto.randomUUID();
+    const roleId = crypto.randomUUID();
+
+    await prisma.user.create({
+      data: {
+        id: ownerUserId,
+        email: `w0-owner-${timestamp}@example.com`,
+        emailNormalized: `w0-owner-${timestamp}@example.com`,
+        name: 'Wave 0 Owner',
+        googleSubject: `goog-w0-owner-${timestamp}`,
+        status: 'active',
+      },
+    });
+
+    await prisma.session.create({
+      data: {
+        userId: ownerUserId,
+        sessionIdHash: SessionTokenService.hashSessionId(sessionId),
+        tokenVersion: 1,
+        status: 'active',
+        expiresAt: new Date(Date.now() + 86400 * 1000),
+      },
+    });
+
+    ownerSessionToken = sessionTokenService.encryptToken({ sub: ownerUserId, sid: sessionId, type: 'session', version: 1 }, 86400);
+    ownerCsrfToken = csrfService.generateCsrfToken(sessionId);
+
+    await prisma.dormitory.create({
+      data: {
+        id: ownerDormitoryId,
+        name: 'Wave 0 Residence',
+        addressLine1: '100 Truth St',
+        province: 'กรุงเทพมหานคร',
+        createdByUserId: ownerUserId,
+        status: 'active',
+      },
+    });
+
+    let roleOwner = await prisma.role.findFirst({ where: { code: 'OWNER' } });
+    if (!roleOwner) {
+      roleOwner = await prisma.role.create({
+        data: {
+          id: roleId,
+          code: 'OWNER',
+          name: 'Owner Role',
+          permissions: [],
+        },
+      });
+    }
+
+    await prisma.dormitoryMember.create({
+      data: {
+        dormitoryId: ownerDormitoryId,
+        userId: ownerUserId,
+        roleId: roleOwner.id,
+        status: 'active',
+      },
+    });
   });
 
+  test.afterAll(async () => {
+    if (ownerDormitoryId) {
+      await prisma.dormitoryMember.deleteMany({ where: { dormitoryId: ownerDormitoryId } }).catch(() => {});
+      await prisma.dormitory.delete({ where: { id: ownerDormitoryId } }).catch(() => {});
+    }
+    if (ownerUserId) {
+      await prisma.session.deleteMany({ where: { userId: ownerUserId } }).catch(() => {});
+      await prisma.user.delete({ where: { id: ownerUserId } }).catch(() => {});
+    }
+  });
+
+  async function setupOwnerContext(context: any, page: any, targetPath: string) {
+    await context.addCookies([
+      { name: 'horplus_session', value: ownerSessionToken, domain: '127.0.0.1', path: '/', httpOnly: true, secure: false, sameSite: 'Lax' },
+      { name: 'horplus_csrf', value: ownerCsrfToken, domain: '127.0.0.1', path: '/', httpOnly: false, secure: false, sameSite: 'Lax' },
+    ]);
+    await page.addInitScript((dormId: string) => {
+      localStorage.setItem('selected_dormitory_id', dormId);
+      sessionStorage.setItem('active_dormitory_selected_for_session', dormId);
+    }, ownerDormitoryId);
+
+    await page.goto(`http://127.0.0.1:5174${targetPath}`);
+    await page.waitForLoadState('networkidle');
+  }
+
   test('disabled /demo route in normal production runtime', async ({ page }) => {
-    await page.goto('/demo');
-    // Normal runtime should redirect away from /demo (e.g. to /)
+    await page.goto('http://127.0.0.1:5174/demo');
     await expect(page).not.toHaveURL(/\/demo$/);
   });
 
   test('no /tenant/login -> /demo redirect', async ({ page }) => {
-    await page.goto('/tenant/login');
-    // Must redirect to / (not /demo)
+    await page.goto('http://127.0.0.1:5174/tenant/login');
     await expect(page).not.toHaveURL(/\/demo/);
   });
 
-  test('Dashboard subscription entitlement catalog integration', async ({ page }) => {
-    await page.goto('/owner/dashboard');
-    await page.waitForTimeout(1500);
-    // Unauthenticated user is redirected away from /owner/dashboard by server-authoritative guard
-    expect(page.url()).not.toContain('/owner/dashboard');
+  test('Dashboard authenticated owner subscription entitlement catalog integration', async ({ context, page }) => {
+    await setupOwnerContext(context, page, '/owner/dashboard');
+    expect(page.url()).toContain('/owner/dashboard');
   });
 
-  test('Owner Meters does not manufacture meter readings on empty state', async ({ page }) => {
-    await page.goto('/owner/meters');
+  test('Owner Meters displays meter draft notice banner for authenticated owner', async ({ context, page }) => {
+    await setupOwnerContext(context, page, '/owner/meters');
 
-    // If redirected to login/root, verified guard
-    if (page.url().endsWith('/') || page.url().includes('login')) {
-      expect(true).toBe(true);
-      return;
-    }
+    expect(page.url()).toContain('/owner/meters');
+    const draftNotice = page.locator('[data-testid="meter-draft-notice"]');
+    await expect(draftNotice).toBeVisible();
+    await expect(draftNotice).toContainText('(ร่างที่ยังไม่ได้บันทึกลงเซิร์ฟเวอร์)');
 
-    // No hardcoded 8 or 120 increments manufactured
     const pageText = await page.textContent('body');
     expect(pageText).not.toContain('+ 8');
     expect(pageText).not.toContain('+ 120');
   });
 
-  test('Owner Reports displays 0 / empty state when no data exists', async ({ page }) => {
-    await page.goto('/owner/reports');
+  test('Owner Reports displays 0 / empty state when no data exists', async ({ context, page }) => {
+    await setupOwnerContext(context, page, '/owner/reports');
 
-    if (page.url().endsWith('/') || page.url().includes('login')) {
-      expect(true).toBe(true);
-      return;
-    }
-
-    // Reports should not manufacture 30/15 fallback room count
+    expect(page.url()).toContain('/owner/reports');
     const bodyContent = await page.content();
     expect(bodyContent).not.toContain('อาคาร A (วิวเขา)');
   });

@@ -86,7 +86,9 @@ export const OwnerDashboard: React.FC<OwnerDashboardProps> = ({
   const [showUnpaidModal, setShowUnpaidModal] = useState(false);
 
   // Subscription Remaining Days & Package Modal State
-  const [remainingDays, setRemainingDays] = useState<number>(90);
+  const [remainingDays, setRemainingDays] = useState<number | null>(null);
+  const [remainingDaysLoading, setRemainingDaysLoading] = useState<boolean>(false);
+  const [remainingDaysError, setRemainingDaysError] = useState<boolean>(false);
   const [isLineModalOpen, setIsLineModalOpen] = useState<boolean>(false);
   const [isPackageModalOpen, setIsPackageModalOpen] = useState<boolean>(false);
   const [modalStep, setModalStep] = useState<'select' | 'payment'>('select');
@@ -97,6 +99,29 @@ export const OwnerDashboard: React.FC<OwnerDashboardProps> = ({
   const [entitlements, setEntitlements] = useState<any>(null);
   const [entitlementsLoading, setEntitlementsLoading] = useState<boolean>(false);
   const [entitlementsError, setEntitlementsError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const activeDormId = sessionStorage.getItem('active_dormitory_selected_for_session') || localStorage.getItem('selected_dormitory_id') || '';
+    if (activeDormId) {
+      setRemainingDaysLoading(true);
+      fetch('/api/v1/subscription/entitlements', {
+        headers: { 'x-dormitory-id': activeDormId }
+      })
+        .then(res => res.ok ? res.json() : null)
+        .then(json => {
+          if (json && json.data && typeof json.data.remainingDays === 'number') {
+            setRemainingDays(json.data.remainingDays);
+          } else {
+            setRemainingDays(null);
+          }
+        })
+        .catch(() => {
+          setRemainingDaysError(true);
+          setRemainingDays(null);
+        })
+        .finally(() => setRemainingDaysLoading(false));
+    }
+  }, []);
 
   useEffect(() => {
     if (isPackageModalOpen) {
@@ -113,6 +138,9 @@ export const OwnerDashboard: React.FC<OwnerDashboardProps> = ({
           })
           .then(json => {
             setEntitlements(json.data);
+            if (json.data && typeof json.data.remainingDays === 'number') {
+              setRemainingDays(json.data.remainingDays);
+            }
           })
           .catch(err => {
             setEntitlementsError(err.message || 'ไม่สามารถโหลดข้อมูลแพ็กเกจจากเซิร์ฟเวอร์');
@@ -200,36 +228,19 @@ export const OwnerDashboard: React.FC<OwnerDashboardProps> = ({
   };
 
   // Billing Cycle Workflow Stats for selectedCycle
-  const actualOccupiedCount = rooms.filter(r => r.status === 'occupied').length || occupiedRooms.length || 1;
+  const actualOccupiedCount = rooms.filter(r => r.status === 'occupied').length;
   
-  // 1. Meter recorded count
-  let cachedMetersCount = 0;
-  try {
-    const savedMeters = localStorage.getItem(`meters_state_${selectedCycle}`);
-    if (savedMeters) {
-      const parsed = JSON.parse(savedMeters);
-      cachedMetersCount = Object.keys(parsed).length;
-    }
-  } catch {}
-  
+  // 1. Meter recorded count (strictly from current cycle bills)
   const currentCycleBills = bills.filter(b => b.cycleId === selectedCycle);
-  const metersRecordedCount = Math.min(actualOccupiedCount, Math.max(cachedMetersCount, currentCycleBills.length));
+  const metersRecordedCount = currentCycleBills.length;
   const isMetersDone = actualOccupiedCount > 0 && metersRecordedCount >= actualOccupiedCount;
 
   // 2. Billing issued count
   const issuedBillsCount = currentCycleBills.filter(b => b.status !== 'draft').length;
   const isBillingDone = actualOccupiedCount > 0 && (issuedBillsCount >= actualOccupiedCount || (currentCycleBills.length >= actualOccupiedCount && issuedBillsCount > 0));
 
-  // 3. LINE notifications sent count
-  let lineSentCount = 0;
-  try {
-    const lineMap = JSON.parse(localStorage.getItem('HorPlus_line_notify_map') || '{}');
-    currentCycleBills.forEach(b => {
-      if (lineMap[`${selectedCycle}_${b.tenantId}`]) {
-        lineSentCount++;
-      }
-    });
-  } catch {}
+  // 3. LINE notifications sent count (strictly from server bill state)
+  const lineSentCount = currentCycleBills.filter(b => (b as any).lineNotifiedAt || (b as any).lineSent).length;
   const isLineDone = currentCycleBills.length > 0 && lineSentCount >= currentCycleBills.length;
 
   // 4. Payment status
@@ -343,7 +354,7 @@ export const OwnerDashboard: React.FC<OwnerDashboardProps> = ({
         return subs.filter((s: any) => s.status === 'pending').length;
       }
     } catch {}
-    return 3;
+    return 0;
   });
 
   useEffect(() => {
@@ -512,10 +523,10 @@ export const OwnerDashboard: React.FC<OwnerDashboardProps> = ({
           <button
             type="button"
             onClick={() => setIsPackageModalOpen(true)}
-            className={`text-[11px] sm:text-xs font-black px-3.5 py-1.5 rounded-full flex items-center gap-1.5 transition-all cursor-pointer shadow-2xs hover:scale-105 active:scale-95 ${getRemainingDaysBadgeStyle(remainingDays)}`}
+            className={`text-[11px] sm:text-xs font-black px-3.5 py-1.5 rounded-full flex items-center gap-1.5 transition-all cursor-pointer shadow-2xs hover:scale-105 active:scale-95 ${remainingDays !== null ? getRemainingDaysBadgeStyle(remainingDays) : 'bg-white/20 text-white font-black border border-white/20'}`}
             title="คลิกเพื่อดูหรือเลือกแพ็กเกจการใช้งาน"
           >
-            <span>{remainingDays} วัน</span>
+            <span>{remainingDaysLoading ? '--' : remainingDays !== null ? `${remainingDays} วัน` : '--'}</span>
           </button>
         </div>
 
