@@ -499,7 +499,8 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
 
   const getWaterCost = (row: MeterRowState) => {
     const mode = cycleRates.waterBillingMode || 'unit';
-    const rate = Number(cycleRates.waterUnitRate) || 18;
+    const rateVal = cycleRates.waterUnitRate;
+    const rate = rateVal !== undefined && rateVal !== null && Number.isFinite(Number(rateVal)) ? Number(rateVal) : 0;
     const wCurr = Number(row.waterCurr) || 0;
     const wPrev = Number(row.waterPrev) || 0;
     const units = row.isReplaced ? wCurr : Math.max(0, wCurr - wPrev);
@@ -515,7 +516,8 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
 
   const getElectricCost = (row: MeterRowState) => {
     const mode = cycleRates.electricBillingMode || 'unit';
-    const rate = Number(cycleRates.electricUnitRate) || 7;
+    const rateVal = cycleRates.electricUnitRate;
+    const rate = rateVal !== undefined && rateVal !== null && Number.isFinite(Number(rateVal)) ? Number(rateVal) : 0;
     const eCurr = Number(row.elecCurr) || 0;
     const ePrev = Number(row.elecPrev) || 0;
     const units = row.isReplaced ? eCurr : Math.max(0, eCurr - ePrev);

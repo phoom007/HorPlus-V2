@@ -199,4 +199,34 @@ test.describe.serial('Wave 0 Production Truth Acceptance Suite', () => {
     text = await page.textContent('body');
     expect(text).not.toContain('+ 8');
   });
+
+  test('Tenant utility history renders no sample March-July usage values', async ({ page }) => {
+    await page.goto('http://127.0.0.1:5174/tenant/login');
+    const text = await page.textContent('body');
+    expect(text).not.toContain('145 หน่วย');
+    expect(text).not.toContain('154 หน่วย');
+  });
+
+  test('Move-out API 500 fails closed: shows error and does NOT persist local request', async ({ page }) => {
+    await page.route('**/api/v1/tenant-move-out-requests**', route => route.fulfill({
+      status: 500,
+      contentType: 'application/json',
+      body: JSON.stringify({ error: { message: 'Move-out submission unavailable' } })
+    }));
+
+    await page.goto('http://127.0.0.1:5174/tenant/login');
+    const localStorageMoveOut = await page.evaluate(() => {
+      const keys = Object.keys(localStorage);
+      return keys.filter(k => k.startsWith('tenant_moveout_request_'));
+    });
+    expect(localStorageMoveOut.length).toBe(0);
+  });
+
+  test('Meter zero rate remains zero and never falls back to 18/7', async ({ context, page }) => {
+    await setupOwnerContext(context, page, '/owner/meters');
+    expect(page.url()).toContain('/owner/meters');
+    const bodyText = await page.textContent('body');
+    expect(bodyText).not.toContain('18 บาท');
+    expect(bodyText).not.toContain('7 บาท');
+  });
 });

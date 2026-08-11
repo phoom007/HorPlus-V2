@@ -23,10 +23,13 @@ This document records the absolute closure of Wave 0 Production Truth Boundaries
 | `/tenant/register` | Fake registration flow | Validated registration backed by DB invitation code. | Tenant Auth API | Self-service invitation code lookup | Wave 1 | `FUNCTIONAL-GAP` |
 | `/tenant/home` | Synthetic dashboard metrics | Clean initial states backed by tenant DB. | Tenant Portal API | Dynamic widget customizer | Wave 1 | `TRUTH-SAFE` |
 | `/tenant/bills` | Sample tenant bills | Fetched real tenant bills, empty state when none exist. | Billing API | Online payment gateway redirect | Wave 1 | `TRUTH-SAFE` |
-| `/tenant/maintenance` | Sample repair tickets | Form submits real request, clean empty list when 0 exist. | Maintenance API | Photo attachment upload to cloud storage | Wave 1 | `TRUTH-SAFE` |
+| `/tenant/maintenance` | Sample repair tickets | Wired form submission to server endpoint, fail-closed on non-2xx response. | Maintenance API | Tenant maintenance create persistence & photo upload | Wave 2 | `TRUTH-SAFE` / `FUNCTIONAL-GAP` |
+| `/tenant/utilities` | Sample March-July utility history | Purged hardcoded utility history chart fixtures and fake meter readings. | Tenant Portal API | Tenant utility history API | Wave 2 | `TRUTH-SAFE` / `FUNCTIONAL-GAP` |
+| `/tenant/co-occupants` | Local state co-occupant editing | Disabled local mutations and fake success toasts; fails closed cleanly. | Tenant Portal API | Tenant co-occupant management persistence | Wave 2 | `TRUTH-SAFE` / `FUNCTIONAL-GAP` |
+| `/tenant/move-out` | Unchecked POST & localStorage request authority | Fails closed on non-2xx server response; removed localStorage request authority and fake cancellation. | Tenant Move-Out API | Tenant move-out request submission & cancellation | Wave 2 | `TRUTH-SAFE` / `FUNCTIONAL-GAP` |
 | `/tenant/announcements` | Sample tenant announcements | Clean zero state when no announcements. | Announcement API | Rich media announcements | Wave 1 | `TRUTH-SAFE` |
 | `/tenant/parcels` | Sample parcel tracking | Backed by parcel API with clean zero state. | Parcel API | Barcode scanner integration | Wave 1 | `TRUTH-SAFE` |
-| `/tenant/profile` | Sample profile data | Fetched real tenant profile. | Tenant Profile API | LINE account linking | Wave 1 | `FUNCTIONAL` |
+| `/tenant/profile` | Sample profile data | Fetched real tenant profile, removed hardcoded bank account fallback. | Tenant Profile API | LINE account linking | Wave 1 | `FUNCTIONAL` |
 
 ## Verification Gates
 1. **Architectural Gate (`src/tests/productionTruthBoundary.test.ts`)**: Asserts 0 `mockData` imports in runtime paths, `getDataMode() === 'api'`, 0 forbidden external QR URLs, 0 `meters_state_*` / numeric rate fallbacks in `meters.tsx`, and 0 editable token/ID test IDs in `settings.tsx`.

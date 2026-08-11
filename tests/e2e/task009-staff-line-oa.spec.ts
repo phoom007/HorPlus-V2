@@ -176,10 +176,8 @@ test.describe.serial('TASK-009 Playwright Browser Lifecycle — Staff, LINE OA &
     await page.goto('http://127.0.0.1:5174/owner/settings');
 
     // Fill actual LINE OA form fields in UI
-    await page.fill('[data-testid="line-oa-id-input"]', '@test_line_oa');
     await page.fill('[data-testid="line-channel-id-input"]', '1234567890');
     await page.fill('[data-testid="line-channel-secret-input"]', testChannelSecret);
-    await page.fill('[data-testid="line-channel-access-token-input"]', testChannelAccessToken);
 
     // Capture real PUT /api/v1/dormitories/:id/line-oa/config triggered by UI Save button click
     const saveResponsePromise = page.waitForResponse(
@@ -211,7 +209,7 @@ test.describe.serial('TASK-009 Playwright Browser Lifecycle — Staff, LINE OA &
 
     // Assert inputs in UI are masked/cleared after save according to product behavior
     await expect(page.locator('[data-testid="line-channel-secret-input"]')).toHaveValue('');
-    await expect(page.locator('[data-testid="line-channel-access-token-input"]')).toHaveValue('');
+    expect(await page.locator('[data-testid="line-channel-access-token-input"]').count()).toBe(0);
 
     // Assert Owner browser console contains zero LINE secrets
     for (const msgText of ownerConsoleMessages) {

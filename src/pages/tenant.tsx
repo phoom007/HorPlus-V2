@@ -236,6 +236,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
   const [toast, setToast] = useState<{ type: 'success' | 'error'; title: string; message: string; visible: boolean } | null>(null);
   const [slipFile, setSlipFile] = useState<File | null>(null);
   const [isSubmittingSlip, setIsSubmittingSlip] = useState(false);
+  const [isSubmittingRepair, setIsSubmittingRepair] = useState(false);
   const [paymentOptions, setPaymentOptions] = useState<{
     configured: boolean;
     promptPayConfigured?: boolean;
@@ -259,14 +260,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
   const [moveOutBank, setMoveOutBank] = useState('');
   const [moveOutAccount, setMoveOutAccount] = useState('');
   const [moveOutReason, setMoveOutReason] = useState('');
-  const [moveOutRequest, setMoveOutRequest] = useState<any>(() => {
-    try {
-      const saved = localStorage.getItem(`tenant_moveout_request_${tenant.id}`);
-      return saved ? JSON.parse(saved) : null;
-    } catch {
-      return null;
-    }
-  });
+  const [moveOutRequest, setMoveOutRequest] = useState<any>(null);
 
   // Document viewing / downloading state
   const [selectedDocModal, setSelectedDocModal] = useState<{
@@ -394,64 +388,11 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
   };
 
   const handleAddCoOccupant = () => {
-    if (!newCoName.trim()) {
-      setCoOccupantsError('กรุณากรอก ชื่อ-นามสกุล');
-      return;
-    }
-    if (!newCoPhone.trim()) {
-      setCoOccupantsError('กรุณากรอก เบอร์โทรศัพท์');
-      return;
-    }
-    
-    const newCo = {
-      id: `co-${Date.now()}`,
-      name: newCoName.trim(),
-      phone: newCoPhone.trim()
-    };
-
-    const updatedList = [...editCoOccupants, newCo];
-    setEditCoOccupants(updatedList);
-    
-    // Save immediately
-    const updatedTenant = { ...localTenant, coOccupants: updatedList };
-    setLocalTenant(updatedTenant);
-    
-    // Persist to localStorage
-    const allTenants = [];
-    const updatedTenantsList = allTenants.map(t => t.id === localTenant.id ? updatedTenant : t);
-    console.log(updatedTenantsList);
-    
-    // Log audit
-    
-
-    setNewCoName('');
-    setNewCoPhone('');
-    setCoOccupantsError('');
-
-    // Toast + Fade
-    showToast('success', 'เพิ่มผู้พักร่วมสำเร็จ', `เพิ่มคุณ ${newCo.name} เรียบร้อยแล้ว`);
+    showToast('error', 'ไม่สามารถดำเนินการได้', 'ฟังก์ชันจัดการผู้พักร่วมยังไม่พร้อมใช้งานในระบบขณะนี้');
   };
 
   const handleConfirmRemoveCoOccupant = (coId: string, coName: string) => {
-    const updatedList = editCoOccupants.filter(co => co.id !== coId);
-    setEditCoOccupants(updatedList);
-    
-    // Save immediately
-    const updatedTenant = { ...localTenant, coOccupants: updatedList };
-    setLocalTenant(updatedTenant);
-    
-    // Persist to localStorage
-    const allTenants = [];
-    const updatedTenantsList = allTenants.map(t => t.id === localTenant.id ? updatedTenant : t);
-    console.log(updatedTenantsList);
-    
-    // Log audit
-    
-
-    setDeleteConfirmCoId(null);
-
-    // Toast + Fade
-    showToast('success', 'ลบผู้พักร่วมสำเร็จ', `ลบคุณ ${coName} เรียบร้อยแล้ว`);
+    showToast('error', 'ไม่สามารถดำเนินการได้', 'ฟังก์ชันจัดการผู้พักร่วมยังไม่พร้อมใช้งานในระบบขณะนี้');
   };
 
   // Filters for this tenant specifically
@@ -575,20 +516,9 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
       showToast('error', 'กรุณาระบุวันที่', 'โปรดเลือกวันที่ประสงค์จะย้ายออก');
       return;
     }
-    const newReq = {
-      id: `REQ-${Date.now()}`,
-      tenantId: tenant.id,
-      roomId: tenantRoom?.id || '',
-      desiredDate: moveOutDate,
-      bankInfo: moveOutBank,
-      accountInfo: moveOutAccount,
-      reason: moveOutReason,
-      createdAt: new Date().toISOString(),
-      status: 'pending'
-    };
 
     try {
-      await fetch('/api/v1/tenant-move-out-requests', {
+      const response = await fetch('/api/v1/tenant-move-out-requests', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -599,25 +529,30 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
           reason: moveOutReason
         })
       });
-    } catch (err) {
-      // Fallback for offline demo mode
-    }
 
-    setMoveOutRequest(newReq);
-    try {
-      localStorage.setItem(`tenant_moveout_request_${tenant.id}`, JSON.stringify(newReq));
-    } catch {}
-    setIsMoveOutModalOpen(false);
-    showToast('success', 'ส่งคำขอแจ้งย้ายออกเรียบร้อยแล้ว', 'การเช่าจะยังไม่สิ้นสุดจนกว่าเจ้าของหอพักจะดำเนินการยืนยัน');
+      if (!response.ok) {
+        let errMsg = 'ระบบยังไม่เปิดให้ยื่นคำขอแจ้งย้ายออกออนไลน์ในขณะนี้';
+        try {
+          const errData = await response.json();
+          if (errData?.error?.message) errMsg = errData.error.message;
+        } catch {}
+        showToast('error', 'ไม่สามารถส่งคำขอได้', errMsg);
+        return;
+      }
+
+      const resData = await response.json();
+      setMoveOutRequest(resData.data || null);
+      setIsMoveOutModalOpen(false);
+      showToast('success', 'ส่งคำขอแจ้งย้ายออกเรียบร้อยแล้ว', 'การเช่าจะยังไม่สิ้นสุดจนกว่าเจ้าของหอพักจะดำเนินการยืนยัน');
+      refreshData();
+    } catch (err) {
+      showToast('error', 'ไม่สามารถส่งคำขอได้', 'เกิดข้อผิดพลาดในการเชื่อมต่อเซิร์ฟเวอร์');
+    }
   };
 
   // Handler for cancel move-out request
   const handleCancelMoveOutRequest = () => {
-    setMoveOutRequest(null);
-    try {
-      localStorage.removeItem(`tenant_moveout_request_${tenant.id}`);
-    } catch {}
-    showToast('success', 'ยกเลิกคำร้องแล้ว', 'ยกเลิกคำร้องขอแจ้งเลิกเช่าเรียบร้อยแล้ว');
+    showToast('error', 'ไม่สามารถดำเนินการได้', 'ฟังก์ชันยกเลิกคำขอแจ้งย้ายออกยังไม่พร้อมใช้งานในระบบขณะนี้');
   };
 
   // Handler for actual document downloading
@@ -717,20 +652,27 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
   // Duration in months calculation helper
   const getContractDurationMonths = (start: string, end: string) => {
     try {
+      if (!start || !end) return null;
       const s = new Date(start);
       const e = new Date(end);
-      if (isNaN(s.getTime()) || isNaN(e.getTime())) return 11;
+      if (isNaN(s.getTime()) || isNaN(e.getTime())) return null;
       const yearsDiff = e.getFullYear() - s.getFullYear();
       const monthsDiff = e.getMonth() - s.getMonth();
-      return yearsDiff * 12 + monthsDiff;
+      const total = yearsDiff * 12 + monthsDiff;
+      return total > 0 ? total : null;
     } catch {
-      return 11;
+      return null;
     }
   };
 
   const handleCopyAccount = () => {
-    const rawNumber = (dormInfo.bankAccountNumber || '123-4-56789-0').replace(/\s/g, '');
+    if (!dormInfo?.bankAccountNumber) {
+      showToast('error', 'คัดลอกไม่สำเร็จ', 'ยังไม่ได้ตั้งค่าเลขที่บัญชี');
+      return;
+    }
+    const rawNumber = dormInfo.bankAccountNumber.replace(/\s/g, '');
     navigator.clipboard.writeText(rawNumber);
+    showToast('success', 'คัดลอกสำเร็จ', `คัดลอกเลขที่บัญชี ${rawNumber} เรียบร้อยแล้ว`);
   };
 
   const handleRepairFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -763,47 +705,44 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
 
   // Submit payment evidence
   // Submit new repair request
-  const handleCreateRepair = (e: React.FormEvent) => {
+  const handleCreateRepair = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!repairTitle.trim() || !tenantRoom) return;
+    if (!repairTitle.trim() || !tenantRoom || isSubmittingRepair) return;
     
-    const newId = `rep-${Date.now()}`;
-    const newRequest: RepairRequest = {
-      id: newId,
-      roomId: tenantRoom.id,
-      tenantId: tenant.id,
-      title: repairTitle.trim(),
-      description: repairDesc.trim(),
-      imageBefore: repairImage || undefined,
-      urgency: 'medium',
-      priority: 'medium',
-      status: 'submitted',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    };
+    setIsSubmittingRepair(true);
+    try {
+      const res = await fetch('/api/v1/tenant-portal/maintenance', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          category: 'plumbing',
+          title: repairTitle.trim(),
+          description: repairDesc.trim() || repairTitle.trim(),
+          priority: 'medium'
+        })
+      });
 
-    const updatedRepairs = [newRequest, ...repairs];
-    console.log(updatedRepairs as any);
-    
-
-    refreshData();
-    setIsNewRepairOpen(false);
-    setRepairTitle('');
-    setRepairDesc('');
-    setRepairImage(null);
-    setRepairImageName(null);
-    setRepairSuccess(true);
-    setTimeout(() => setRepairSuccess(false), 4000);
+      if (res.ok) {
+        setIsNewRepairOpen(false);
+        setRepairTitle('');
+        setRepairDesc('');
+        setRepairImage(null);
+        setRepairImageName(null);
+        setRepairSuccess(true);
+        setTimeout(() => setRepairSuccess(false), 4000);
+        refreshData();
+      } else {
+        alert('ไม่สามารถส่งคำขอแจ้งซ่อมได้ในขณะนี้');
+      }
+    } catch (err) {
+      alert('เกิดข้อผิดพลาดในการส่งคำขอแจ้งซ่อม');
+    } finally {
+      setIsSubmittingRepair(false);
+    }
   };
 
-  // Utility history chart mock data
-  const utilitiesData = [
-    { name: 'มี.ค.', water: 7, elec: 112 },
-    { name: 'เม.ย.', water: 9, elec: 145 },
-    { name: 'พ.ค.', water: 8, elec: 130 },
-    { name: 'มิ.ย.', water: 10, elec: 154 },
-    { name: 'ก.ค.', water: 8, elec: 122 }
-  ];
+  // Utility history chart data
+  const utilitiesData: { name: string; water: number; elec: number }[] = [];
 
   // Helper to render consistent back-arrow sub-view header matching iOS/Android style
   const renderSubViewHeader = (title: string, rightAction?: React.ReactNode) => (

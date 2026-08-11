@@ -248,23 +248,9 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
 
   // Helper: check if a given cycle has at least 1 room whose bill/meter status is NOT 'ยังไม่ออกบิล' (draft)
   const hasAtLeastOneBilledRoom = (cycleId: string) => {
-    // 1. Check bills in state for this cycleId
+    // Check bills in state for this cycleId
     const currentBills = (bills || []).filter(b => b.cycleId === cycleId);
-    if (currentBills.some(b => b.status !== 'draft')) {
-      return true;
-    }
-
-    try {
-      const issuedRooms = localStorage.getItem(`meters_issued_rooms_${cycleId}`);
-      if (issuedRooms) {
-        const list = JSON.parse(issuedRooms);
-        if (Array.isArray(list) && list.length > 0) {
-          return true;
-        }
-      }
-    } catch {}
-
-    return false;
+    return currentBills.some(b => b.status !== 'draft');
   };
 
   const getMaxCycle = () => {

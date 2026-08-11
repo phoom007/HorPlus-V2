@@ -97,11 +97,19 @@ describe('Production Truth Boundary Architectural Gate', () => {
     const content = fs.readFileSync(metersPath, 'utf-8');
 
     expect(content).not.toContain('meters_state_');
-    expect(content).not.toContain('waterUnitRate || 18');
-    expect(content).not.toContain('electricUnitRate || 7');
+    expect(content).not.toMatch(/waterUnitRate.*\|\|\s*18/);
+    expect(content).not.toMatch(/electricUnitRate.*\|\|\s*7/);
     expect(content).not.toContain('commonFee !== undefined ? cycleRates.commonFee : 200');
     expect(content).not.toContain('parkingFee !== undefined ? cycleRates.parkingFee : 100');
     expect(content).not.toContain('Math.random');
+  });
+
+  it('owner.tsx must not contain meters_issued_rooms_ or meters_state_ business authority', () => {
+    const ownerPath = path.resolve(__dirname, '../pages/owner.tsx');
+    const content = fs.readFileSync(ownerPath, 'utf-8');
+
+    expect(content).not.toContain('meters_issued_rooms_');
+    expect(content).not.toContain('meters_state_');
   });
 
   it('settings.tsx must not contain line-channel-access-token-input or line-oa-id-input test IDs', () => {
@@ -112,5 +120,17 @@ describe('Production Truth Boundary Architectural Gate', () => {
     expect(content).not.toContain('line-oa-id-input');
     expect(content).toContain('line-channel-id-input');
     expect(content).toContain('line-channel-secret-input');
+  });
+
+  it('tenant.tsx must not contain fake bank account fallback, active utility fixture, move-out localStorage, or unpersisted repair success', () => {
+    const tenantPath = path.resolve(__dirname, '../pages/tenant.tsx');
+    const content = fs.readFileSync(tenantPath, 'utf-8');
+
+    expect(content).not.toContain("dormInfo.bankAccountNumber || '123-4-56789-0'");
+    expect(content).not.toContain("dormInfo?.bankAccountNumber || '123-4-56789-0'");
+    expect(content).not.toContain("{ name: 'มี.ค.', water: 7, elec: 112 }");
+    expect(content).not.toContain('tenant_moveout_request_');
+    expect(content).not.toContain("`rep-${Date.now()}`");
+    expect(content).toContain("res.ok");
   });
 });
