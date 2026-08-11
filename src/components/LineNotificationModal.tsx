@@ -221,8 +221,8 @@ export const LineNotificationModal: React.FC<LineNotificationModalProps> = ({
           const cachedRow = tempMeterRowsCache[selectedCycle].find(cr => cr.roomId === room.id);
           if (cachedRow) {
             const rates = getDormitoryRatesForCycle(getDormitory(), selectedCycle);
-            const waterCost = (cachedRow.waterCurr - cachedRow.waterPrev) * (rates.waterUnitRate || 18);
-            const elecCost = (cachedRow.elecCurr - cachedRow.elecPrev) * (rates.electricUnitRate || 7);
+            const waterCost = (cachedRow.waterCurr - cachedRow.waterPrev) * (rates.waterUnitRate || 0);
+            const elecCost = (cachedRow.elecCurr - cachedRow.elecPrev) * (rates.electricUnitRate || 0);
             const roomRent = (room.rentCycle === 'term') ? 0 : (room.monthlyRent || 0);
             const otherTotal = (cachedRow.otherFees || []).reduce((s, f) => s + f.amount, 0);
             const calc = roomRent + Math.max(0, waterCost) + Math.max(0, elecCost) + (cachedRow.overdueAmount || 0) + otherTotal;
@@ -348,8 +348,8 @@ export const LineNotificationModal: React.FC<LineNotificationModalProps> = ({
             const cachedRow = tempMeterRowsCache[selectedCycle].find(cr => cr.roomId === room.id || cr.roomNumber === room.roomNumber);
             if (cachedRow) {
               const rates = getDormitoryRatesForCycle(getDormitory(), selectedCycle);
-              const waterCost = (cachedRow.waterCurr - cachedRow.waterPrev) * (rates.waterUnitRate || 18);
-              const elecCost = (cachedRow.elecCurr - cachedRow.elecPrev) * (rates.electricUnitRate || 7);
+              const waterCost = (cachedRow.waterCurr - cachedRow.waterPrev) * (rates.waterUnitRate || 0);
+              const elecCost = (cachedRow.elecCurr - cachedRow.elecPrev) * (rates.electricUnitRate || 0);
               const roomRent = (room.rentCycle === 'term') ? 0 : (room.monthlyRent || 0);
               const otherTotal = (cachedRow.otherFees || []).reduce((s, f) => s + f.amount, 0);
               const calc = roomRent + Math.max(0, waterCost) + Math.max(0, elecCost) + (cachedRow.overdueAmount || 0) + otherTotal;
@@ -383,7 +383,7 @@ export const LineNotificationModal: React.FC<LineNotificationModalProps> = ({
 
         if (room) {
           if (!tempMeterRowsCache[selectedCycle]) {
-            const cacheKey = `meters_state_${selectedCycle}`;
+            const cacheKey = `meters_form_draft_${selectedCycle}`;
             tempMeterRowsCache[selectedCycle] = getStored<MeterRowState[]>(cacheKey, []) || [];
           }
           if (tempMeterRowsCache[selectedCycle] && tempMeterRowsCache[selectedCycle].length > 0) {
@@ -397,7 +397,7 @@ export const LineNotificationModal: React.FC<LineNotificationModalProps> = ({
               }
               return r;
             });
-            setStored(`meters_state_${selectedCycle}`, tempMeterRowsCache[selectedCycle]);
+            setStored(`meters_form_draft_${selectedCycle}`, tempMeterRowsCache[selectedCycle]);
           }
         }
       });

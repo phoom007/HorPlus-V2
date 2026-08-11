@@ -91,4 +91,26 @@ describe('Production Truth Boundary Architectural Gate', () => {
 
     expect(violations, `Found forbidden external QR generator URLs in:\n${violations.join('\n')}`).toEqual([]);
   });
+
+  it('meters.tsx must not contain legacy meters_state_, numeric rate fallbacks (18/7/200/100), or Math.random', () => {
+    const metersPath = path.resolve(__dirname, '../pages/owner/meters.tsx');
+    const content = fs.readFileSync(metersPath, 'utf-8');
+
+    expect(content).not.toContain('meters_state_');
+    expect(content).not.toContain('waterUnitRate || 18');
+    expect(content).not.toContain('electricUnitRate || 7');
+    expect(content).not.toContain('commonFee !== undefined ? cycleRates.commonFee : 200');
+    expect(content).not.toContain('parkingFee !== undefined ? cycleRates.parkingFee : 100');
+    expect(content).not.toContain('Math.random');
+  });
+
+  it('settings.tsx must not contain line-channel-access-token-input or line-oa-id-input test IDs', () => {
+    const settingsPath = path.resolve(__dirname, '../pages/owner/settings.tsx');
+    const content = fs.readFileSync(settingsPath, 'utf-8');
+
+    expect(content).not.toContain('line-channel-access-token-input');
+    expect(content).not.toContain('line-oa-id-input');
+    expect(content).toContain('line-channel-id-input');
+    expect(content).toContain('line-channel-secret-input');
+  });
 });

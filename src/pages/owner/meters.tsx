@@ -178,17 +178,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       return { waterCurr: initialWater, elecCurr: initialElec };
     }
 
-    // 1. Check cache first
-    const cacheKey = `meters_state_${cycleId}`;
-    const cached = getStored<MeterRowState[] | null>(cacheKey, null);
-    if (cached) {
-      const matched = cached.find(c => c.roomId === roomId);
-      if (matched) {
-        return { waterCurr: matched.waterCurr, elecCurr: matched.elecCurr };
-      }
-    }
-
-    // 2. Check if there is an existing bill for this cycle
+    // Check if there is an existing bill for this cycle
     const bill = bills.find(b => b.cycleId === cycleId && b.roomId === roomId);
     
     // Get previous cycle's new readings
@@ -219,8 +209,8 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
         } else {
           const mode = billRates.waterBillingMode || 'unit';
           if (mode === 'unit') {
-            const rate = billRates.waterUnitRate || 18;
-            waterCurr = waterPrev + Math.round(waterItem.amount / rate);
+            const rate = billRates.waterUnitRate || 0;
+            waterCurr = rate > 0 ? waterPrev + Math.round(waterItem.amount / rate) : waterPrev;
           } else {
             waterCurr = waterPrev;
           }
@@ -235,8 +225,8 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
         } else {
           const mode = billRates.electricBillingMode || 'unit';
           if (mode === 'unit') {
-            const rate = billRates.electricUnitRate || 7;
-            elecCurr = elecPrev + Math.round(elecItem.amount / rate);
+            const rate = billRates.electricUnitRate || 0;
+            elecCurr = rate > 0 ? elecPrev + Math.round(elecItem.amount / rate) : elecPrev;
           } else {
             elecCurr = elecPrev;
           }
@@ -289,17 +279,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       return 1 + (prevTenant.coOccupants?.length || 0);
     }
 
-    // 3. Check cache
-    const cacheKey = `meters_state_${prevCycleId}`;
-    const cached = getStored<MeterRowState[] | null>(cacheKey, null);
-    if (cached) {
-      const matched = cached.find(c => c.roomId === roomId);
-      if (matched && matched.peopleCount !== undefined) {
-        return matched.peopleCount;
-      }
-    }
-
-    // 4. Check previous bill
+    // 3. Check previous bill
     const bill = bills.find(b => b.cycleId === prevCycleId && b.roomId === roomId);
     if (bill) {
       for (const item of bill.items) {
@@ -552,7 +532,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   const getCommonFeeCost = (row: MeterRowState) => {
     if (row.peopleCount === 0) return 0;
     const mode = cycleRates.commonFeeMode || 'room';
-    const fee = cycleRates.commonFee !== undefined ? cycleRates.commonFee : 200;
+    const fee = cycleRates.commonFee !== undefined ? cycleRates.commonFee : 0;
     
     if (mode === 'person') {
       return (row.peopleCount || 0) * fee;
@@ -578,7 +558,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     if (row.peopleCount === 0) return 0;
     const mode = cycleRates.parkingFeeMode || 'room';
     if (mode === 'free') return 0;
-    const fee = cycleRates.parkingFee !== undefined ? cycleRates.parkingFee : 100;
+    const fee = cycleRates.parkingFee !== undefined ? cycleRates.parkingFee : 0;
     if (fee <= 0) return 0;
 
     if (mode === 'vehicle') {
@@ -635,8 +615,8 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   }, [selectedCycle]);
 
   useEffect(() => {
-    const cacheKey = `meters_state_${selectedCycle}`;
-    const cached = getStored<MeterRowState[] | null>(cacheKey, null);
+    const draftKey = `meters_form_draft_${selectedCycle}`;
+    const cached = getStored<MeterRowState[] | null>(draftKey, null);
     
     // Reference all real rooms in /owner/rooms sorted by roomNumber
     const activeRooms = [...rooms].sort((a, b) => 
@@ -670,7 +650,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
           const mode = cycleRates.waterBillingMode || 'unit';
           if (mode === 'unit') {
             const match = waterItem.description.match(/\((\d+)\s*หน่วย\)/);
-            const waterUnits = match ? Number(match[1]) : Math.round(waterItem.amount / (cycleRates.waterUnitRate || 18));
+            const waterUnits = match ? Number(match[1]) : (cycleRates.waterUnitRate ? Math.round(waterItem.amount / cycleRates.waterUnitRate) : 0);
             waterCurr = waterPrev + waterUnits;
           } else {
             waterCurr = waterPrev;
@@ -687,7 +667,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
           const mode = cycleRates.electricBillingMode || 'unit';
           if (mode === 'unit') {
             const match = elecItem.description.match(/\((\d+)\s*หน่วย\)/);
-            const elecUnits = match ? Number(match[1]) : Math.round(elecItem.amount / (cycleRates.electricUnitRate || 7));
+            const elecUnits = match ? Number(match[1]) : (cycleRates.electricUnitRate ? Math.round(elecItem.amount / cycleRates.electricUnitRate) : 0);
             elecCurr = elecPrev + elecUnits;
           } else {
             elecCurr = elecPrev;

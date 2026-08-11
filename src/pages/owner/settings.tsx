@@ -217,10 +217,8 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
     webhookUrl: null
   });
 
-  const [inputLineOaId, setInputLineOaId] = useState('');
   const [inputChannelId, setInputChannelId] = useState('');
   const [inputChannelSecret, setInputChannelSecret] = useState('');
-  const [inputChannelAccessToken, setInputChannelAccessToken] = useState('');
   const [isSavingLineOa, setIsSavingLineOa] = useState(false);
   const [copiedWebhookUrl, setCopiedWebhookUrl] = useState(false);
 
@@ -231,7 +229,6 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
     const res = await Task009ApiAdapter.getLineOaConfig(dormId);
     if (res.success && res.data) {
       setLineOaConfig(res.data);
-      if (res.data.lineOaId) setInputLineOaId(res.data.lineOaId);
       if (res.data.channelId) setInputChannelId(res.data.channelId);
     }
   };
@@ -249,17 +246,14 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
 
     setIsSavingLineOa(true);
     const res = await Task009ApiAdapter.updateLineOaConfig(dormId, {
-      lineOaId: inputLineOaId,
       channelId: inputChannelId,
-      channelSecret: inputChannelSecret || undefined,
-      channelAccessToken: inputChannelAccessToken || undefined
+      channelSecret: inputChannelSecret || undefined
     });
     setIsSavingLineOa(false);
 
     if (res.success && res.data) {
       setLineOaConfig(res.data);
       setInputChannelSecret('');
-      setInputChannelAccessToken('');
       onAddLog('ตั้งค่า LINE Official Account', 'อัปเดตข้อมูลเชื่อมต่อ LINE OA สำเร็จ', 'LineOA', dormId);
       alert('บันทึกการตั้งค่า LINE Official Account สำเร็จ!');
     } else {
@@ -1009,18 +1003,14 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                   </span>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-                  <div className="space-y-1">
-                    <label className="block text-[10px] font-bold text-slate-700">LINE OA Basic ID</label>
-                    <input
-                      type="text"
-                      data-testid="line-oa-id-input"
-                      value={inputLineOaId}
-                      onChange={(e) => setInputLineOaId(e.target.value)}
-                      placeholder="@yourdorm_oa"
-                      className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-bold focus:border-indigo-500 outline-none text-xs"
-                    />
+                {lineOaConfig.lineOaId && (
+                  <div className="text-[11px] font-semibold text-slate-600 bg-slate-50 border border-slate-200 px-3 py-2 rounded-xl flex items-center justify-between">
+                    <span>LINE OA Basic ID (เซิร์ฟเวอร์ยืนยัน):</span>
+                    <span className="font-mono font-bold text-slate-800">{lineOaConfig.lineOaId}</span>
                   </div>
+                )}
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
                   <div className="space-y-1">
                     <label className="block text-[10px] font-bold text-slate-700">LINE Channel ID</label>
                     <input
@@ -1042,19 +1032,6 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                       value={inputChannelSecret}
                       onChange={(e) => setInputChannelSecret(e.target.value)}
                       placeholder={lineOaConfig.hasChannelSecret ? '••••••••••••••••' : 'ป้อน Channel Secret'}
-                      className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-bold focus:border-indigo-500 outline-none text-xs"
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="block text-[10px] font-bold text-slate-700">
-                      Channel Access Token {lineOaConfig.hasAccessToken && <span className="text-emerald-600">(บันทึกแล้ว)</span>}
-                    </label>
-                    <input
-                      type="password"
-                      data-testid="line-channel-access-token-input"
-                      value={inputChannelAccessToken}
-                      onChange={(e) => setInputChannelAccessToken(e.target.value)}
-                      placeholder={lineOaConfig.hasAccessToken ? '••••••••••••••••' : 'ป้อน Access Token'}
                       className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-bold focus:border-indigo-500 outline-none text-xs"
                     />
                   </div>

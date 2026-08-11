@@ -254,17 +254,6 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
       return true;
     }
 
-    // 2. Check localStorage for cached meter rows or issued rooms for this cycle
-    try {
-      const cachedMeters = localStorage.getItem(`meters_state_${cycleId}`);
-      if (cachedMeters) {
-        const rows = JSON.parse(cachedMeters);
-        if (Array.isArray(rows) && rows.some((r: any) => r.billStatus && r.billStatus !== 'draft')) {
-          return true;
-        }
-      }
-    } catch {}
-
     try {
       const issuedRooms = localStorage.getItem(`meters_issued_rooms_${cycleId}`);
       if (issuedRooms) {

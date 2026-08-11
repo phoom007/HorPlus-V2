@@ -120,6 +120,8 @@ test.describe.serial('Wave 0 Production Truth Acceptance Suite', () => {
   test('Dashboard authenticated owner subscription entitlement catalog integration', async ({ context, page }) => {
     await setupOwnerContext(context, page, '/owner/dashboard');
     expect(page.url()).toContain('/owner/dashboard');
+    const bodyText = await page.textContent('body');
+    expect(bodyText).not.toContain('เหลือ 90 วัน');
   });
 
   test('Owner Meters displays meter draft notice banner for authenticated owner', async ({ context, page }) => {
@@ -135,11 +137,66 @@ test.describe.serial('Wave 0 Production Truth Acceptance Suite', () => {
     expect(pageText).not.toContain('+ 120');
   });
 
+  test('Owner Tenants page remains active with zero demo tenants', async ({ context, page }) => {
+    await setupOwnerContext(context, page, '/owner/tenants');
+    expect(page.url()).toContain('/owner/tenants');
+
+    const bodyText = await page.textContent('body');
+    expect(bodyText).not.toContain('สมชาย');
+    expect(bodyText).not.toContain('สมศรี');
+  });
+
+  test('Owner Contracts page remains active with zero demo contracts', async ({ context, page }) => {
+    await setupOwnerContext(context, page, '/owner/contracts');
+    expect(page.url()).toContain('/owner/contracts');
+
+    const bodyText = await page.textContent('body');
+    expect(bodyText).not.toContain('CTR-2026-DEMO');
+  });
+
+  test('Owner Maintenance page remains active with zero demo requests', async ({ context, page }) => {
+    await setupOwnerContext(context, page, '/owner/maintenance');
+    expect(page.url()).toContain('/owner/maintenance');
+
+    const bodyText = await page.textContent('body');
+    expect(bodyText).not.toContain('ก๊อกน้ำรั่ว');
+    expect(bodyText).not.toContain('แอร์ไม่เย็น');
+  });
+
+  test('Owner Announcements page remains active with zero demo announcements', async ({ context, page }) => {
+    await setupOwnerContext(context, page, '/owner/announcements');
+    expect(page.url()).toContain('/owner/announcements');
+
+    const bodyText = await page.textContent('body');
+    expect(bodyText).not.toContain('แจ้งปิดปรับปรุง');
+  });
+
   test('Owner Reports displays 0 / empty state when no data exists', async ({ context, page }) => {
     await setupOwnerContext(context, page, '/owner/reports');
 
     expect(page.url()).toContain('/owner/reports');
     const bodyContent = await page.content();
     expect(bodyContent).not.toContain('อาคาร A (วิวเขา)');
+  });
+
+  test('API 500 failures render empty state without fallback to demo data', async ({ context, page }) => {
+    await page.route('**/api/v1/maintenance**', route => route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ message: 'Internal Server Error' }) }));
+    await page.route('**/api/v1/announcements**', route => route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ message: 'Internal Server Error' }) }));
+    await page.route('**/api/v1/bills**', route => route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ message: 'Internal Server Error' }) }));
+
+    await setupOwnerContext(context, page, '/owner/maintenance');
+    expect(page.url()).toContain('/owner/maintenance');
+    let text = await page.textContent('body');
+    expect(text).not.toContain('ก๊อกน้ำรั่ว');
+
+    await setupOwnerContext(context, page, '/owner/announcements');
+    expect(page.url()).toContain('/owner/announcements');
+    text = await page.textContent('body');
+    expect(text).not.toContain('แจ้งปิดปรับปรุง');
+
+    await setupOwnerContext(context, page, '/owner/meters');
+    expect(page.url()).toContain('/owner/meters');
+    text = await page.textContent('body');
+    expect(text).not.toContain('+ 8');
   });
 });
