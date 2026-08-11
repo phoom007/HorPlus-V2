@@ -109,8 +109,9 @@ export async function httpRequest<T>(
     ...options.headers
   };
 
-  if (options.dormitoryId) {
-    headers['X-Dormitory-Id'] = options.dormitoryId;
+  const dormId = options.dormitoryId || (typeof localStorage !== 'undefined' ? (localStorage.getItem('selected_dormitory_id') || sessionStorage.getItem('active_dormitory_selected_for_session') || undefined) : undefined);
+  if (dormId) {
+    headers['X-Dormitory-Id'] = dormId;
   }
 
   if (options.idempotencyKey && ['POST', 'PUT', 'PATCH'].includes(method)) {

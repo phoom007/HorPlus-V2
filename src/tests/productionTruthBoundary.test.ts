@@ -112,7 +112,7 @@ describe('Production Truth Boundary Architectural Gate', () => {
     expect(content).not.toContain('meters_state_');
   });
 
-  it('settings.tsx must not contain line-channel-access-token-input or line-oa-id-input test IDs', () => {
+  it('settings.tsx must not contain fake dormitory definitions, no-op save, or hardcoded business defaults', () => {
     const settingsPath = path.resolve(__dirname, '../pages/owner/settings.tsx');
     const content = fs.readFileSync(settingsPath, 'utf-8');
 
@@ -120,9 +120,15 @@ describe('Production Truth Boundary Architectural Gate', () => {
     expect(content).not.toContain('line-oa-id-input');
     expect(content).toContain('line-channel-id-input');
     expect(content).toContain('line-channel-secret-input');
+    expect(content).not.toContain('export function getDormitoryRatesForCycle');
+    expect(content).not.toContain('const getDormitory =');
+    expect(content).not.toContain('const saveDormitory =');
+    expect(content).not.toContain('const seedDatabase =');
+    expect(content).not.toContain("useState<number>(4500)");
+    expect(content).not.toContain("useState<number>(9000)");
   });
 
-  it('tenant.tsx must not contain fake bank account fallback, active utility fixture, move-out localStorage, or unpersisted repair success', () => {
+  it('tenant.tsx must not contain fake bank account fallback, active utility fixture, move-out localStorage, unpersisted repair success, or mock date fallbacks', () => {
     const tenantPath = path.resolve(__dirname, '../pages/tenant.tsx');
     const content = fs.readFileSync(tenantPath, 'utf-8');
 
@@ -132,5 +138,7 @@ describe('Production Truth Boundary Architectural Gate', () => {
     expect(content).not.toContain('tenant_moveout_request_');
     expect(content).not.toContain("`rep-${Date.now()}`");
     expect(content).toContain("res.ok");
+    expect(content).not.toContain('Safe hardcoded fallbacks matching mockData');
+    expect(content).not.toContain("return '30 มิ.ย. 2569'");
   });
 });

@@ -71,6 +71,7 @@ export function createApp(optionsOrAuth?: CreateAppOptions | AuthenticationServi
   const app = express();
 
   app.disable('x-powered-by');
+  app.disable('etag');
 
   if (env.TRUST_PROXY) {
     app.set('trust proxy', true);

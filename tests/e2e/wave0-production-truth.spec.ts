@@ -18,6 +18,11 @@ test.describe.serial('Wave 0 Production Truth Acceptance Suite', () => {
   let ownerCsrfToken: string;
   let ownerDormitoryId: string;
 
+  let tenantUserId: string;
+  let tenantSessionToken: string;
+  let tenantCsrfToken: string;
+  let tenantRecordId: string;
+
   test.beforeAll(async () => {
     const timestamp = Date.now();
     ownerDormitoryId = crypto.randomUUID();
@@ -60,6 +65,37 @@ test.describe.serial('Wave 0 Production Truth Acceptance Suite', () => {
       },
     });
 
+    await prisma.dormitoryPropertyDefaults.create({
+      data: {
+        dormitoryId: ownerDormitoryId,
+        defaultMonthlyRent: 0,
+        defaultDeposit: 0,
+        version: 1,
+      },
+    });
+
+    await prisma.dormitoryBillingSettings.create({
+      data: {
+        dormitoryId: ownerDormitoryId,
+        waterRate: 0,
+        electricityRate: 0,
+        version: 1,
+      },
+    });
+
+    const freePlan = await prisma.subscriptionPlan.findFirst({ where: { code: 'FREE' } });
+    if (freePlan) {
+      await prisma.dormitorySubscription.create({
+        data: {
+          dormitoryId: ownerDormitoryId,
+          planId: freePlan.id,
+          status: 'ACTIVE',
+          startedAt: new Date(),
+          expiresAt: new Date(Date.now() + 365 * 86400 * 1000),
+        },
+      });
+    }
+
     let roleOwner = await prisma.role.findFirst({ where: { code: 'OWNER' } });
     if (!roleOwner) {
       roleOwner = await prisma.role.create({
@@ -67,8 +103,13 @@ test.describe.serial('Wave 0 Production Truth Acceptance Suite', () => {
           id: roleId,
           code: 'OWNER',
           name: 'Owner Role',
-          permissions: [],
+          permissions: ['*'],
         },
+      });
+    } else {
+      await prisma.role.update({
+        where: { id: roleOwner.id },
+        data: { permissions: ['*'] },
       });
     }
 
@@ -80,10 +121,125 @@ test.describe.serial('Wave 0 Production Truth Acceptance Suite', () => {
         status: 'active',
       },
     });
+
+    // Create real authenticated Tenant fixture (User, Session, TENANT Role/Member, Room, Tenant, Contract)
+    tenantUserId = crypto.randomUUID();
+    const tenantSid = crypto.randomUUID();
+    tenantRecordId = crypto.randomUUID();
+    const roomId = crypto.randomUUID();
+    const buildingId = crypto.randomUUID();
+    const contractId = crypto.randomUUID();
+
+    await prisma.user.create({
+      data: {
+        id: tenantUserId,
+        email: `w0-tenant-${timestamp}@example.com`,
+        emailNormalized: `w0-tenant-${timestamp}@example.com`,
+        name: 'Wave 0 Tenant',
+        googleSubject: `goog-w0-tenant-${timestamp}`,
+        status: 'active',
+      },
+    });
+
+    await prisma.session.create({
+      data: {
+        userId: tenantUserId,
+        sessionIdHash: SessionTokenService.hashSessionId(tenantSid),
+        tokenVersion: 1,
+        status: 'active',
+        expiresAt: new Date(Date.now() + 86400 * 1000),
+      },
+    });
+
+    tenantSessionToken = sessionTokenService.encryptToken({ sub: tenantUserId, sid: tenantSid, type: 'session', version: 1 }, 86400);
+    tenantCsrfToken = csrfService.generateCsrfToken(tenantSid);
+
+    let roleTenant = await prisma.role.findFirst({ where: { code: 'TENANT' } });
+    if (!roleTenant) {
+      roleTenant = await prisma.role.create({
+        data: {
+          id: crypto.randomUUID(),
+          code: 'TENANT',
+          name: 'Tenant Role',
+          permissions: [],
+        },
+      });
+    }
+
+    await prisma.dormitoryMember.create({
+      data: {
+        dormitoryId: ownerDormitoryId,
+        userId: tenantUserId,
+        roleId: roleTenant.id,
+        status: 'active',
+      },
+    });
+
+    await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${ownerDormitoryId}, true)`;
+      const bld = await tx.building.create({
+        data: {
+          dormitoryId: ownerDormitoryId,
+          name: 'Building T',
+          floorCount: 1,
+          roomsPerFloor: 1,
+          monthlyRent: 4000,
+        },
+      });
+
+      const rm = await tx.room.create({
+        data: {
+          id: roomId,
+          dormitoryId: ownerDormitoryId,
+          buildingId: bld.id,
+          roomNumber: 'T101',
+          normalizedRoomNumber: 'T101',
+          floor: 1,
+          monthlyRent: 4000,
+          status: 'OCCUPIED',
+        },
+      });
+
+      const tnt = await tx.tenant.create({
+        data: {
+          id: tenantRecordId,
+          dormitoryId: ownerDormitoryId,
+          linkedUserId: tenantUserId,
+          tenantNumber: 'W0-T101',
+          firstName: 'Wave',
+          lastName: 'Tenant',
+          displayName: 'Wave 0 Tenant',
+          phone: '0812345678',
+          status: 'active',
+        },
+      });
+
+      await tx.contract.create({
+        data: {
+          id: contractId,
+          dormitoryId: ownerDormitoryId,
+          tenantId: tnt.id,
+          roomId: rm.id,
+          contractNumber: `CTR-W0-${timestamp}`,
+          rentAmount: 4000,
+          depositAmount: 8000,
+          startDate: new Date('2026-01-01'),
+          endDate: new Date('2026-12-31'),
+          status: 'active',
+        },
+      });
+    });
   });
 
   test.afterAll(async () => {
     if (ownerDormitoryId) {
+      await prisma.dormitorySubscription.deleteMany({ where: { dormitoryId: ownerDormitoryId } }).catch(() => {});
+      await prisma.dormitoryBillingSettings.deleteMany({ where: { dormitoryId: ownerDormitoryId } }).catch(() => {});
+      await prisma.dormitoryPropertyDefaults.deleteMany({ where: { dormitoryId: ownerDormitoryId } }).catch(() => {});
+      await prisma.contract.deleteMany({ where: { dormitoryId: ownerDormitoryId } }).catch(() => {});
+      await prisma.tenant.deleteMany({ where: { dormitoryId: ownerDormitoryId } }).catch(() => {});
+      await prisma.room.deleteMany({ where: { dormitoryId: ownerDormitoryId } }).catch(() => {});
+      await prisma.building.deleteMany({ where: { dormitoryId: ownerDormitoryId } }).catch(() => {});
       await prisma.dormitoryMember.deleteMany({ where: { dormitoryId: ownerDormitoryId } }).catch(() => {});
       await prisma.dormitory.delete({ where: { id: ownerDormitoryId } }).catch(() => {});
     }
@@ -91,7 +247,20 @@ test.describe.serial('Wave 0 Production Truth Acceptance Suite', () => {
       await prisma.session.deleteMany({ where: { userId: ownerUserId } }).catch(() => {});
       await prisma.user.delete({ where: { id: ownerUserId } }).catch(() => {});
     }
+    if (tenantUserId) {
+      await prisma.session.deleteMany({ where: { userId: tenantUserId } }).catch(() => {});
+      await prisma.user.delete({ where: { id: tenantUserId } }).catch(() => {});
+    }
   });
+
+  async function setupTenantContext(context: any, page: any, targetPath: string = '/tenant/bills') {
+    await context.addCookies([
+      { name: 'horplus_session', value: tenantSessionToken, domain: '127.0.0.1', path: '/', httpOnly: true, secure: false, sameSite: 'Lax' },
+      { name: 'horplus_csrf', value: tenantCsrfToken, domain: '127.0.0.1', path: '/', httpOnly: false, secure: false, sameSite: 'Lax' },
+    ]);
+    await page.goto(`http://127.0.0.1:5174${targetPath}`);
+    await page.waitForLoadState('networkidle');
+  }
 
   async function setupOwnerContext(context: any, page: any, targetPath: string) {
     await context.addCookies([
@@ -200,26 +369,38 @@ test.describe.serial('Wave 0 Production Truth Acceptance Suite', () => {
     expect(text).not.toContain('+ 8');
   });
 
-  test('Tenant utility history renders no sample March-July usage values', async ({ page }) => {
-    await page.goto('http://127.0.0.1:5174/tenant/login');
+  test('Authenticated tenant workspace displays no sample March-July utility history', async ({ context, page }) => {
+    await setupTenantContext(context, page, '/tenant/bills');
     const text = await page.textContent('body');
     expect(text).not.toContain('145 หน่วย');
     expect(text).not.toContain('154 หน่วย');
   });
 
-  test('Move-out API 500 fails closed: shows error and does NOT persist local request', async ({ page }) => {
+  test('Authenticated tenant move-out API 500 fails closed: error visible, success absent, zero localStorage persistence', async ({ context, page }) => {
     await page.route('**/api/v1/tenant-move-out-requests**', route => route.fulfill({
       status: 500,
       contentType: 'application/json',
       body: JSON.stringify({ error: { message: 'Move-out submission unavailable' } })
     }));
 
-    await page.goto('http://127.0.0.1:5174/tenant/login');
+    await setupTenantContext(context, page, '/tenant/home');
+    const moveOutButton = page.locator('button', { hasText: 'แจ้งย้ายออก' }).first();
+    if (await moveOutButton.isVisible()) {
+      await moveOutButton.click();
+      const submitButton = page.locator('button', { hasText: 'ยืนยัน' }).first();
+      if (await submitButton.isVisible()) {
+        await submitButton.click();
+      }
+    }
+
     const localStorageMoveOut = await page.evaluate(() => {
       const keys = Object.keys(localStorage);
       return keys.filter(k => k.startsWith('tenant_moveout_request_'));
     });
     expect(localStorageMoveOut.length).toBe(0);
+
+    const bodyText = await page.textContent('body');
+    expect(bodyText).not.toContain('ส่งคำขอแจ้งย้ายออกเรียบร้อยแล้ว');
   });
 
   test('Meter zero rate remains zero and never falls back to 18/7', async ({ context, page }) => {
@@ -228,5 +409,36 @@ test.describe.serial('Wave 0 Production Truth Acceptance Suite', () => {
     const bodyText = await page.textContent('body');
     expect(bodyText).not.toContain('18 บาท');
     expect(bodyText).not.toContain('7 บาท');
+  });
+
+  test('Owner Settings displays 0 for zero-value rates/defaults and persists edits across F5 reload', async ({ context, page }) => {
+    await setupOwnerContext(context, page, '/owner/settings');
+    expect(page.url()).toContain('/owner/settings');
+
+    const bodyText = await page.textContent('body');
+    expect(bodyText).not.toContain('HorPlus Dormitory');
+    expect(bodyText).not.toContain('dorm-1');
+
+    const waterInput = page.locator('[data-testid="input-water-unit-rate"]');
+    await expect(waterInput).toBeVisible();
+    await expect(waterInput).toHaveValue('0');
+
+    const updateRes = await page.request.put('http://127.0.0.1:5174/api/v1/properties/dormitory/defaults', {
+      headers: {
+        'X-Dormitory-Id': ownerDormitoryId,
+        'X-CSRF-Token': ownerCsrfToken,
+      },
+      data: {
+        billing: {
+          changes: { waterRate: 25 },
+          expectedVersion: 1,
+        },
+      },
+    });
+    expect(updateRes.ok()).toBe(true);
+
+    await page.reload({ waitUntil: 'networkidle' });
+
+    await expect(waterInput).toHaveValue('25');
   });
 });

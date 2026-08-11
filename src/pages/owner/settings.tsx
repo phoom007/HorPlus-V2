@@ -23,25 +23,7 @@ import {
   Layers,
   Copy
 } from 'lucide-react';
-export function getDormitoryRatesForCycle(_dorm?: any, _cycle?: string) {
-  return {
-    waterUnitRate: 18,
-    electricUnitRate: 7,
-    waterBillingMode: 'unit',
-    electricBillingMode: 'unit',
-    commonFee: 200,
-    commonFeeMode: 'room',
-    internetFee: 0,
-    internetFeeMode: 'room',
-    parkingFee: 100,
-    parkingFeeMode: 'room',
-    lateFeeDaily: 100,
-    lateFeeType: 'per_day'
-  };
-}
-const getDormitory = () => ({ id: 'dorm-1', name: 'HorPlus Dormitory' } as any);
-const saveDormitory = (_d: any) => {};
-const seedDatabase = (_b?: boolean) => {};
+// Server-authoritative Settings page component
 
 // Legacy mock-storage persistence is retained ONLY for Dormitory profile fields (dormitory name, address, contact phone, taxId, bank accounts) outside the Wave 1G model-backed Property Defaults and Billing Settings.
 import { ConfirmDialog, SignaturePad } from '../../components/GlobalComponents';
@@ -123,25 +105,31 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
   selectedCycle: propSelectedCycle,
   onCycleChange
 }) => {
-  const [dorm, setDorm] = useState<Dormitory>(getDormitory());
-  const [selectedCycle, setSelectedCycle] = useState<string>('2026-07');
+  const [dorm, setDorm] = useState<Dormitory>({ id: '', name: '' } as any);
+  const [selectedCycle, setSelectedCycle] = useState<string>(propSelectedCycle || '');
   const [isCycleModalOpen, setIsCycleModalOpen] = useState(false);
-  const [tempYear, setTempYear] = useState<number>(2026);
+  const [tempYear, setTempYear] = useState<number>(new Date().getFullYear());
   const DataProvider = getDataProvider();
   const [propertyVersion, setPropertyVersion] = useState<number>(1);
   const [billingVersion, setBillingVersion] = useState<number>(1);
-  const selectedDormId = localStorage.getItem('selected_dormitory_id') || sessionStorage.getItem('active_dormitory_selected_for_session') || dorm?.id || '';
+  const selectedDormId = localStorage.getItem('selected_dormitory_id') || sessionStorage.getItem('active_dormitory_selected_for_session') || '';
 
-  const [propertyMonthlyRent, setPropertyMonthlyRent] = useState<number>(4500);
-  const [propertyDepositAmount, setPropertyDepositAmount] = useState<number>(9000);
+  const [propertyMonthlyRent, setPropertyMonthlyRent] = useState<number>(0);
+  const [propertyDepositAmount, setPropertyDepositAmount] = useState<number>(0);
 
-  const currentRates = getDormitoryRatesForCycle(dorm, selectedCycle);
-  const [localWaterUnitRate, setLocalWaterUnitRate] = useState<string | number>(currentRates.waterUnitRate);
-  const [localElectricUnitRate, setLocalElectricUnitRate] = useState<string | number>(currentRates.electricUnitRate);
-  const [localCommonFee, setLocalCommonFee] = useState<string | number>(currentRates.commonFee);
-  const [localInternetFee, setLocalInternetFee] = useState<string | number>(currentRates.internetFee);
-  const [localParkingFee, setLocalParkingFee] = useState<string | number>(currentRates.parkingFee ?? 100);
-  const [localLateFee, setLocalLateFee] = useState<string | number>(currentRates.lateFeeDaily ?? dorm.lateFeeDaily ?? 100);
+  const [localWaterUnitRate, setLocalWaterUnitRate] = useState<string | number>(0);
+  const [localElectricUnitRate, setLocalElectricUnitRate] = useState<string | number>(0);
+  const [localCommonFee, setLocalCommonFee] = useState<string | number>(0);
+  const [localInternetFee, setLocalInternetFee] = useState<string | number>(0);
+  const [localParkingFee, setLocalParkingFee] = useState<string | number>(0);
+  const [localLateFee, setLocalLateFee] = useState<string | number>(0);
+
+  const [waterBillingMode, setWaterBillingMode] = useState<string>('unit');
+  const [electricBillingMode, setElectricBillingMode] = useState<string>('unit');
+  const [commonFeeMode, setCommonFeeMode] = useState<string>('room');
+  const [internetFeeMode, setInternetFeeMode] = useState<string>('room');
+  const [parkingFeeMode, setParkingFeeMode] = useState<string>('room');
+  const [lateFeeType, setLateFeeType] = useState<string>('per_day');
 
   // Propagation Preview & Conflict state
   const isPropagationPreviewOpeningRef = useRef(false);
@@ -163,6 +151,8 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
     electricityRate?: number;
   }>({});
 
+  const isUserTypingRef = useRef(false);
+
   const fetchDormitoryDefaults = async () => {
     try {
       if (DataProvider.properties) {
@@ -173,23 +163,42 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
             setPropertyVersion(res.data.property.version || 1);
             const rentVal = res.data.property.defaultMonthlyRent !== undefined ? res.data.property.defaultMonthlyRent : res.data.property.monthlyRent;
             if (rentVal !== undefined) {
-              setPropertyMonthlyRent(rentVal);
+              if (!isUserTypingRef.current) setPropertyMonthlyRent(Number(rentVal));
               initObj.propertyMonthlyRent = Number(rentVal);
             }
             const depVal = res.data.property.defaultDeposit !== undefined ? res.data.property.defaultDeposit : res.data.property.depositAmount;
             if (depVal !== undefined) {
-              setPropertyDepositAmount(depVal);
+              if (!isUserTypingRef.current) setPropertyDepositAmount(Number(depVal));
               initObj.propertyDeposit = Number(depVal);
             }
           }
           if (res.data.billing) {
             setBillingVersion(res.data.billing.version || 1);
-            if (res.data.billing.waterRate !== undefined) {
-              initObj.waterRate = Number(res.data.billing.waterRate);
+            const waterVal = res.data.billing.waterRate !== undefined ? res.data.billing.waterRate : res.data.billing.waterUnitRate;
+            if (waterVal !== undefined) {
+              if (!isUserTypingRef.current) setLocalWaterUnitRate(Number(waterVal));
+              initObj.waterRate = Number(waterVal);
             }
-            if (res.data.billing.electricityRate !== undefined) {
-              initObj.electricityRate = Number(res.data.billing.electricityRate);
+            const elecVal = res.data.billing.electricityRate !== undefined ? res.data.billing.electricityRate : res.data.billing.electricUnitRate;
+            if (elecVal !== undefined) {
+              if (!isUserTypingRef.current) setLocalElectricUnitRate(Number(elecVal));
+              initObj.electricityRate = Number(elecVal);
             }
+            if (res.data.billing.commonFee !== undefined && !isUserTypingRef.current) setLocalCommonFee(Number(res.data.billing.commonFee));
+            if (res.data.billing.internetFee !== undefined && !isUserTypingRef.current) setLocalInternetFee(Number(res.data.billing.internetFee));
+            if (res.data.billing.parkingFee !== undefined && !isUserTypingRef.current) setLocalParkingFee(Number(res.data.billing.parkingFee));
+            if (res.data.billing.lateFeeDaily !== undefined && !isUserTypingRef.current) setLocalLateFee(Number(res.data.billing.lateFeeDaily));
+
+            if (res.data.billing.waterBillingMode || res.data.billing.waterBillingType) {
+              setWaterBillingMode(res.data.billing.waterBillingMode || res.data.billing.waterBillingType);
+            }
+            if (res.data.billing.electricBillingMode || res.data.billing.electricityBillingType) {
+              setElectricBillingMode(res.data.billing.electricBillingMode || res.data.billing.electricityBillingType);
+            }
+            if (res.data.billing.commonFeeMode) setCommonFeeMode(res.data.billing.commonFeeMode);
+            if (res.data.billing.internetFeeMode) setInternetFeeMode(res.data.billing.internetFeeMode);
+            if (res.data.billing.parkingFeeMode) setParkingFeeMode(res.data.billing.parkingFeeMode);
+            if (res.data.billing.lateFeeType) setLateFeeType(res.data.billing.lateFeeType);
           }
           setInitialValues(initObj);
         }
@@ -431,6 +440,7 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
         throw new Error(res.error?.message || 'Failed to update dormitory defaults');
       }
 
+      isUserTypingRef.current = false;
       await fetchDormitoryDefaults();
       setSaveStatus('saved');
       setTimeout(() => setSaveStatus('idle'), 2000);
@@ -447,10 +457,9 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
   const [resetSuccessNotice, setResetSuccessNotice] = useState(false);
 
   const handleResetDemoData = () => {
-    seedDatabase(true);
     onRefreshData();
     window.dispatchEvent(new Event('storage'));
-    onAddLog('รีเซ็ตระบบ', 'รีเซ็ตข้อมูลสาธิตทั้งหมดกลับเป็นชุดเริ่มต้นเรียบร้อยแล้ว', 'System', 'system-root');
+    onAddLog('รีเซ็ตระบบ', 'รีเซ็ตข้อมูลทั้งหมดเรียบร้อยแล้ว', 'System', 'system-root');
     setResetSuccessNotice(true);
     setTimeout(() => setResetSuccessNotice(false), 5000);
   };
@@ -570,29 +579,7 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
     }
   }, [propSelectedCycle]);
 
-  useEffect(() => {
-    setLocalWaterUnitRate(currentRates.waterUnitRate);
-    setLocalElectricUnitRate(currentRates.electricUnitRate);
-    setLocalCommonFee(currentRates.commonFee);
-    setLocalInternetFee(currentRates.internetFee);
-    setLocalParkingFee(currentRates.parkingFee ?? 100);
-    setLocalLateFee(currentRates.lateFeeDaily ?? dorm.lateFeeDaily ?? 100);
-  }, [selectedCycle, currentRates.waterUnitRate, currentRates.electricUnitRate, currentRates.commonFee, currentRates.internetFee, currentRates.parkingFee, currentRates.lateFeeDaily, dorm.lateFeeDaily]);
 
-  // Performs immediate save for rate settings
-  const triggerSaveNow = (updatedDorm: Dormitory) => {
-    setSaveStatus('saving');
-    saveDormitory(updatedDorm);
-    onRefreshData();
-
-    if (saveTimeoutRef.current) {
-      clearTimeout(saveTimeoutRef.current);
-    }
-    saveTimeoutRef.current = setTimeout(() => {
-      setSaveStatus('saved');
-      onAddLog('แก้ไขตั้งค่าระบบส่วนกลาง', `บันทึกการตั้งค่าอัตราบริการของงวด ${getShortCycleLabel(selectedCycle)} เรียบร้อยแล้ว`, 'Dormitory', updatedDorm.id);
-    }, 600);
-  };
 
   // Cleanup timeout on unmount
   useEffect(() => {
@@ -723,58 +710,14 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
     }
   };
 
-  const handleRateBlur = (field: keyof CycleRates, value: any) => {
-    // Only save if different from current value
-    if (currentRates[field] === value) {
-      setSaveStatus('idle');
-      return;
-    }
-
-    const updatedDorm = { ...dorm };
-    if (!updatedDorm.cycleSettings) {
-      updatedDorm.cycleSettings = {};
-    }
-
-    if (!updatedDorm.cycleSettings[selectedCycle]) {
-      const resolved = getDormitoryRatesForCycle(dorm, selectedCycle);
-      updatedDorm.cycleSettings[selectedCycle] = { ...resolved };
-    }
-    updatedDorm.cycleSettings[selectedCycle] = {
-      ...updatedDorm.cycleSettings[selectedCycle],
-      [field]: value
-    };
-    (updatedDorm as any)[field] = value;
-
-    updatedDorm.updatedAt = new Date().toISOString();
-    setDorm(updatedDorm);
-    triggerSaveNow(updatedDorm);
+  const handleRateBlur = (field: string, value: any) => {
+    const num = Number(value);
+    if (isNaN(num)) return;
+    handleSaveBackendDormitoryDefaults(undefined, { [field]: num });
   };
 
-  const handleRateSelectChange = (field: keyof CycleRates, value: any) => {
-    // Dropdowns are saved immediately on change
-    if (currentRates[field] === value) {
-      setSaveStatus('idle');
-      return;
-    }
-
-    const updatedDorm = { ...dorm };
-    if (!updatedDorm.cycleSettings) {
-      updatedDorm.cycleSettings = {};
-    }
-
-    if (!updatedDorm.cycleSettings[selectedCycle]) {
-      const resolved = getDormitoryRatesForCycle(dorm, selectedCycle);
-      updatedDorm.cycleSettings[selectedCycle] = { ...resolved };
-    }
-    updatedDorm.cycleSettings[selectedCycle] = {
-      ...updatedDorm.cycleSettings[selectedCycle],
-      [field]: value
-    };
-    (updatedDorm as any)[field] = value;
-
-    updatedDorm.updatedAt = new Date().toISOString();
-    setDorm(updatedDorm);
-    triggerSaveNow(updatedDorm);
+  const handleRateSelectChange = (field: string, value: any) => {
+    handleSaveBackendDormitoryDefaults(undefined, { [field]: value });
   };
 
   const getShortCycleLabel = (cycle: string) => {
@@ -1267,11 +1210,17 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                     required
                     value={localWaterUnitRate}
                     onChange={(e) => {
+                      isUserTypingRef.current = true;
                       setLocalWaterUnitRate(e.target.value);
                       setSaveStatus('typing');
                     }}
                     onBlur={(e) => {
                       handleSaveBackendDormitoryDefaults(undefined, { waterRate: Number(e.target.value) });
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        handleSaveBackendDormitoryDefaults(undefined, { waterRate: Number((e.target as HTMLInputElement).value) });
+                      }
                     }}
                     className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-bold focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs"
                     data-testid="input-water-unit-rate"
@@ -1281,8 +1230,9 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                 <div className="space-y-1">
                   <label className="block font-semibold text-slate-700">รูปแบบค่าน้ำประปา</label>
                   <select
-                    value={currentRates.waterBillingMode}
+                    value={waterBillingMode}
                     onChange={(e) => {
+                      setWaterBillingMode(e.target.value);
                       handleSaveBackendDormitoryDefaults(undefined, { waterBillingType: e.target.value });
                     }}
                     className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-medium focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs"
@@ -1317,8 +1267,11 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                 <div className="space-y-1">
                   <label className="block font-semibold text-slate-700">รูปแบบค่าไฟฟ้า</label>
                   <select
-                    value={currentRates.electricBillingMode}
-                    onChange={(e) => handleSaveBackendDormitoryDefaults(undefined, { electricityBillingType: e.target.value })}
+                    value={electricBillingMode}
+                    onChange={(e) => {
+                      setElectricBillingMode(e.target.value);
+                      handleSaveBackendDormitoryDefaults(undefined, { electricityBillingType: e.target.value });
+                    }}
                     className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-medium focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs"
                   >
                     <option value="unit">บาท/หน่วย</option>
@@ -1338,14 +1291,14 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                   <input
                     type="number"
                     required
-                    disabled={currentRates.commonFeeMode === 'free'}
-                    value={currentRates.commonFeeMode === 'free' ? 0 : localCommonFee}
+                    disabled={commonFeeMode === 'free'}
+                    value={commonFeeMode === 'free' ? 0 : localCommonFee}
                     onChange={(e) => {
                       setLocalCommonFee(e.target.value);
                       setSaveStatus('typing');
                     }}
                     onBlur={(e) => handleSaveBackendDormitoryDefaults(undefined, { commonFee: Number(e.target.value) })}
-                    placeholder={currentRates.commonFeeMode === 'free' ? 'ฟรี' : '0'}
+                    placeholder={commonFeeMode === 'free' ? 'ฟรี' : '0'}
                     className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-bold focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs disabled:opacity-50 disabled:bg-slate-100"
                   />
                 </div>
@@ -1353,7 +1306,7 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                 <div className="space-y-1">
                   <label className="block font-semibold text-slate-700">รูปแบบค่าส่วนกลาง ( legacy-only UI )</label>
                   <select
-                    value={currentRates.commonFeeMode}
+                    value={commonFeeMode}
                     disabled
                     className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-slate-100 text-slate-500 font-medium outline-none text-xs cursor-not-allowed"
                   >
@@ -1374,14 +1327,14 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                   <input
                     type="number"
                     required
-                    disabled={currentRates.internetFeeMode === 'free'}
-                    value={currentRates.internetFeeMode === 'free' ? 0 : localInternetFee}
+                    disabled={internetFeeMode === 'free'}
+                    value={internetFeeMode === 'free' ? 0 : localInternetFee}
                     onChange={(e) => {
                       setLocalInternetFee(e.target.value);
                       setSaveStatus('typing');
                     }}
                     onBlur={(e) => handleSaveBackendDormitoryDefaults(undefined, { internetFee: Number(e.target.value) })}
-                    placeholder={currentRates.internetFeeMode === 'free' ? 'ฟรี' : '0'}
+                    placeholder={internetFeeMode === 'free' ? 'ฟรี' : '0'}
                     className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-bold focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs disabled:opacity-50 disabled:bg-slate-100"
                   />
                 </div>
@@ -1389,7 +1342,7 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                 <div className="space-y-1">
                   <label className="block font-semibold text-slate-700">รูปแบบค่าอินเทอร์เน็ต ( legacy-only UI )</label>
                   <select
-                    value={currentRates.internetFeeMode}
+                    value={internetFeeMode}
                     disabled
                     className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-slate-100 text-slate-500 font-medium outline-none text-xs cursor-not-allowed"
                   >
@@ -1410,14 +1363,14 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                   <input
                     type="number"
                     required
-                    disabled={currentRates.parkingFeeMode === 'free'}
-                    value={currentRates.parkingFeeMode === 'free' ? 0 : localParkingFee}
+                    disabled={parkingFeeMode === 'free'}
+                    value={parkingFeeMode === 'free' ? 0 : localParkingFee}
                     onChange={(e) => {
                       setLocalParkingFee(e.target.value);
                       setSaveStatus('typing');
                     }}
                     onBlur={(e) => handleSaveBackendDormitoryDefaults({ defaultParkingFee: Number(e.target.value) }, undefined)}
-                    placeholder={currentRates.parkingFeeMode === 'free' ? 'ฟรี' : '0'}
+                    placeholder={parkingFeeMode === 'free' ? 'ฟรี' : '0'}
                     className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-bold focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs disabled:opacity-50 disabled:bg-slate-100"
                   />
                 </div>
@@ -1425,7 +1378,7 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                 <div className="space-y-1">
                   <label className="block font-semibold text-slate-700">รูปแบบค่าจอดรถ ( legacy-only UI )</label>
                   <select
-                    value={currentRates.parkingFeeMode || 'room'}
+                    value={parkingFeeMode || 'room'}
                     disabled
                     className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-slate-100 text-slate-500 font-medium outline-none text-xs cursor-not-allowed"
                   >
@@ -1446,14 +1399,14 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                   <input
                     type="number"
                     required
-                    disabled={currentRates.lateFeeType === 'free'}
-                    value={currentRates.lateFeeType === 'free' ? 0 : localLateFee}
+                    disabled={lateFeeType === 'free'}
+                    value={lateFeeType === 'free' ? 0 : localLateFee}
                     onChange={(e) => {
                       setLocalLateFee(e.target.value);
                       setSaveStatus('typing');
                     }}
                     onBlur={(e) => handleSaveBackendDormitoryDefaults(undefined, { lateFeeValue: Number(e.target.value) })}
-                    placeholder={currentRates.lateFeeType === 'free' ? 'ฟรี' : '0'}
+                    placeholder={lateFeeType === 'free' ? 'ฟรี' : '0'}
                     className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-bold focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs disabled:opacity-50 disabled:bg-slate-100"
                   />
                 </div>
@@ -1461,8 +1414,11 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                 <div className="space-y-1">
                   <label className="block font-semibold text-slate-700">รูปแบบค่าปรับเกินกำหนด</label>
                   <select
-                    value={currentRates.lateFeeType || dorm.lateFeeType || 'per_day'}
-                    onChange={(e) => handleSaveBackendDormitoryDefaults(undefined, { lateFeeType: e.target.value })}
+                    value={lateFeeType || 'per_day'}
+                    onChange={(e) => {
+                      setLateFeeType(e.target.value);
+                      handleSaveBackendDormitoryDefaults(undefined, { lateFeeType: e.target.value });
+                    }}
                     className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-medium focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs cursor-pointer"
                   >
                     <option value="free">ไม่คิดค่าปรับ (ฟรี)</option>

@@ -594,14 +594,10 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
 
   // Convert Gregorian Date to BE Thai calendar date
   const formatToBeDate = (dateStr: string) => {
+    if (!dateStr) return 'ไม่ระบุ';
     try {
       const d = new Date(dateStr);
-      if (isNaN(d.getTime())) {
-        // Safe hardcoded fallbacks matching mockData
-        if (dateStr.includes('2026-06')) return '30 มิ.ย. 2569';
-        if (dateStr.includes('2026-07')) return '15 ก.ค. 2569';
-        return dateStr;
-      }
+      if (isNaN(d.getTime())) return 'ไม่ระบุ';
       const thaiMonths = [
         'ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.',
         'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'
@@ -611,15 +607,16 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
       const year = d.getFullYear() + 543;
       return `${day} ${month} ${year}`;
     } catch {
-      return dateStr;
+      return 'ไม่ระบุ';
     }
   };
 
   // Full Thai month date conversion (e.g., 02 ก.ค. 2569)
   const formatToBeFullDate = (dateStr: string) => {
+    if (!dateStr) return 'ไม่ระบุ';
     try {
       const d = new Date(dateStr);
-      if (isNaN(d.getTime())) return dateStr;
+      if (isNaN(d.getTime())) return 'ไม่ระบุ';
       const thaiMonths = [
         'ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.',
         'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'
@@ -629,7 +626,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
       const year = d.getFullYear() + 543;
       return `${day} ${month} ${year}`;
     } catch {
-      return dateStr;
+      return 'ไม่ระบุ';
     }
   };
 
