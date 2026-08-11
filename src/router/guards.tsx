@@ -100,11 +100,49 @@ export const OwnerAuthGuard: React.FC<{ children?: React.ReactNode }> = ({ child
 };
 
 export const TenantAuthGuard: React.FC<{ children?: React.ReactNode }> = ({ children }) => {
-  const session = getDemoSession();
+  const [session, setSession] = React.useState<any>(null);
+  const [loading, setLoading] = React.useState(true);
+
+  React.useEffect(() => {
+    fetch('/api/v1/tenant-portal/profile', { credentials: 'include' })
+      .then(res => res.ok ? res.json() : null)
+      .then(json => {
+        const tenantData = json?.data?.tenant || (json?.id ? json : null);
+        if (tenantData) {
+          setSession({ userType: 'tenant', tenant: tenantData, user: tenantData });
+        } else {
+          const demo = getDemoSession();
+          if (demo && demo.userType === 'tenant' && demo.tenant) {
+            setSession(demo);
+          } else {
+            setSession(null);
+          }
+        }
+      })
+      .catch(() => {
+        const demo = getDemoSession();
+        if (demo && demo.userType === 'tenant' && demo.tenant) {
+          setSession(demo);
+        } else {
+          setSession(null);
+        }
+      })
+      .finally(() => setLoading(false));
+  }, []);
+
+  if (loading) {
+    return <div className="min-h-screen bg-slate-900 flex items-center justify-center text-white font-sans text-xs">Loading tenant portal...</div>;
+  }
+
   if (!session || session.userType !== 'tenant' || !session.tenant) {
     return <Navigate to="/demo" replace />;
   }
-  return <>{children || <Outlet />}</>;
+
+  return (
+    <AuthContext.Provider value={session}>
+      {children || <Outlet />}
+    </AuthContext.Provider>
+  );
 };
 
 export const PublicOnlyGuard: React.FC<{ children?: React.ReactNode }> = ({ children }) => {

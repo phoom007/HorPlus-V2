@@ -244,6 +244,15 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
   const [toast, setToast] = useState<{ type: 'success' | 'error'; title: string; message: string; visible: boolean } | null>(null);
   const [slipFile, setSlipFile] = useState<File | null>(null);
   const [isSubmittingSlip, setIsSubmittingSlip] = useState(false);
+  const [paymentOptions, setPaymentOptions] = useState<{
+    configured: boolean;
+    promptPayType?: string | null;
+    promptPayValue?: string | null;
+    bankCode?: string | null;
+    bankAccountName?: string | null;
+    bankAccountNumber?: string | null;
+    targetAmount?: string;
+  } | null>(null);
 
   // Move-out request state
   const [isMoveOutModalOpen, setIsMoveOutModalOpen] = useState(false);
@@ -373,12 +382,12 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
   }, [tenant]);
 
   useEffect(() => {
-    if (rooms.length > 0) {
+    if (rooms.length > 0 || bills.length > 0) {
       setDemoHasRoom(true);
     } else if (!financialLoading) {
-      setDemoHasRoom(rooms.some(r => r.currentTenantId === tenant.id));
+      setDemoHasRoom(rooms.some(r => r.currentTenantId === tenant.id) || bills.length > 0);
     }
-  }, [tenant.id, rooms, financialLoading]);
+  }, [tenant.id, rooms, bills, financialLoading]);
 
   const handleOpenCoOccupantsModal = () => {
     setEditCoOccupants([...localTenant.coOccupants]);
@@ -453,10 +462,8 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
   // Filters for this tenant specifically
   const tenantRoom = rooms.find(r => r.currentTenantId === tenant.id);
   const tenantBills = [...bills]
-    .filter(b => b.tenantId === tenant.id && b.status !== 'draft')
-    .sort((a, b) => b.cycleId.localeCompare(a.cycleId) || b.createdAt.localeCompare(a.createdAt)); 
- console.log('BILLS RAW IN LOCALSTORAGE:', localStorage.getItem('HorPlus_bills'));
-  console.log('bills.length', bills.length, 'tenantBills.length', tenantBills.length, 'tenant.id', tenant.id);
+    .filter(b => b.status !== 'draft' && b.status !== 'DRAFT')
+    .sort((a, b) => (b.cycleId || b.billingCycleId || '').localeCompare(a.cycleId || a.billingCycleId || '') || (b.createdAt || '').localeCompare(a.createdAt || '')); 
   const tenantRepairs = repairs.filter(r => r.roomId === tenantRoom?.id || r.tenantId === tenant.id);
   const tenantContracts = contracts.filter(c => c.tenantId === tenant.id);
   
@@ -517,8 +524,19 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
   });
 
   // Active Unpaid Bill
-  const activeUnpaidBill = tenantBills.find(b => ['pending', 'overdue', 'rejected', 'PENDING', 'OVERDUE', 'REJECTED'].includes(b.status));
+  const activeUnpaidBill = tenantBills.find(b => ['pending', 'overdue', 'rejected', 'issued', 'PENDING', 'OVERDUE', 'REJECTED', 'ISSUED'].includes(b.status));
   const activeUnpaidAmount = activeUnpaidBill ? activeUnpaidBill.totalAmount : 0;
+
+  useEffect(() => {
+    if (activeUnpaidBill) {
+      fetch(`/api/v1/tenant-portal/payment-options/${activeUnpaidBill.id}`)
+        .then(res => res.ok ? res.json() : null)
+        .then(json => {
+          if (json?.data) setPaymentOptions(json.data);
+        })
+        .catch(() => {});
+    }
+  }, [activeUnpaidBill?.id, subView]);
 
   // Invoice Details sub-view states
   const [invoiceTab, setInvoiceTab] = useState<'current' | 'history'>('current');
@@ -987,6 +1005,19 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                                   </button>
                                 </div>
                               )}
+                              {(() => {
+                                if (!activeUnpaidBill) return null;
+                                const rejectedPay = (activeUnpaidBill.payments || activeUnpaidBill.Payment || []).find((p: any) => p.status === 'REJECTED');
+                                if (!rejectedPay) return null;
+                                return (
+                                  <div className="bg-rose-50 border border-rose-200 rounded-xl p-2.5 text-xs text-rose-800 font-bold flex flex-col gap-1 mt-2">
+                                    <div className="flex items-center gap-1.5 text-rose-700">
+                                      <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                                      <span>สลิปถูกปฏิเสธ: {rejectedPay.rejectedReason || 'สลิปไม่ชัดเจน กรุณาแนบภาพใหม่'}</span>
+                                    </div>
+                                  </div>
+                                );
+                              })()}
                             </div>
                             <span className="px-3 py-1 rounded-full text-[10px] font-black bg-amber-50 border border-amber-200/90 text-amber-800 shrink-0 shadow-2xs">
                               รอชำระ
@@ -1359,33 +1390,68 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                     <h4 className="text-xs font-black text-slate-900">บิลและสถานะการชำระเงิน</h4>
                     
                     <div className="space-y-3">
-                      {tenantBills.map((b) => (
-                        <div key={b.id} className="p-4 bg-white border border-slate-100 rounded-2xl flex justify-between items-center gap-3 shadow-2xs">
-                          <div>
-                            <h5 className="font-black text-slate-800 text-xs">ยอดรวม: {formatBaht(b.totalAmount)}</h5>
-                            <p className="text-[9px] text-slate-400 mt-1">รอบประจำเดือน {formatThaiCycle(b.cycleId)}</p>
-                            <div className="mt-2.5">
-                              <StatusBadge status={b.status} type="bill" />
+                      {tenantBills.map((b) => {
+                        const paymentsList = b.payments || b.Payment || [];
+                        const rejectedPay = paymentsList.find((p: any) => p.status === 'REJECTED');
+                        const approvedPay = paymentsList.find((p: any) => p.status === 'APPROVED' && p.receipt);
+                        const isPaid = b.status === 'PAID' || b.status === 'paid';
+
+                        return (
+                          <div key={b.id} className="p-4 bg-white border border-slate-100 rounded-2xl space-y-3 shadow-2xs">
+                            <div className="flex justify-between items-start gap-3">
+                              <div>
+                                <h5 className="font-black text-slate-800 text-xs">บิลเลขที่: {b.billNumber || b.id.slice(0, 8)} (ยอดรวม {formatBaht(b.totalAmount)})</h5>
+                                <p className="text-[9px] text-slate-400 mt-0.5">รอบประจำเดือน {formatThaiCycle(b.cycleId || b.billingCycleId || '')}</p>
+                                <div className="mt-2">
+                                  <StatusBadge status={b.status} type="bill" />
+                                </div>
+                              </div>
+
+                              <div className="shrink-0 flex flex-col items-end gap-2">
+                                {isPaid && approvedPay?.receipt ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => window.open(`/api/v1/receipts/${approvedPay.receipt.id}/html`, '_blank')}
+                                    className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-[9px] rounded-lg transition-colors cursor-pointer flex items-center gap-1 shadow-xs"
+                                  >
+                                    <FileText className="w-3.5 h-3.5" />
+                                    <span>ดูใบเสร็จ ({approvedPay.receipt.receiptNumber})</span>
+                                  </button>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() => setSubView('invoice')}
+                                    className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold text-[9px] rounded-lg transition-colors cursor-pointer"
+                                  >
+                                    <FileText className="w-3.5 h-3.5 inline mr-1" />
+                                    รายละเอียด
+                                  </button>
+                                )}
+                              </div>
                             </div>
-                            {b.Payment && b.Payment.find((p: any) => p.status === 'REJECTED') && (
-                              <div className="mt-2 text-[9px] text-red-600 font-bold p-2 bg-red-50 rounded-lg border border-red-100">
-                                แจ้งปฏิเสธ: {b.Payment.find((p: any) => p.status === 'REJECTED')?.rejectedReason || 'โปรดตรวจสอบข้อมูลการชำระเงินและแจ้งโอนใหม่'}
+
+                            {rejectedPay && !isPaid && (
+                              <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl space-y-1.5 text-[9px]">
+                                <div className="flex items-center justify-between text-rose-800 font-bold">
+                                  <span className="flex items-center gap-1">
+                                    <AlertCircle className="w-3.5 h-3.5 text-rose-600" />
+                                    ถูกปฏิเสธสลิป: {rejectedPay.rejectedReason || 'สลิปไม่ชัดเจน กรุณาแนบภาพใหม่'}
+                                  </span>
+                                </div>
+                                <div className="flex justify-end pt-1">
+                                  <button
+                                    type="button"
+                                    onClick={() => setSubView('payment')}
+                                    className="px-3 py-1 bg-rose-600 hover:bg-rose-700 text-white font-black text-[9px] rounded-lg transition-colors cursor-pointer shadow-2xs"
+                                  >
+                                    แนบสลิปใหม่ (Resubmit)
+                                  </button>
+                                </div>
                               </div>
                             )}
                           </div>
-
-                          <div className="shrink-0">
-                              <button
-                                type="button"
-                                onClick={() => setSubView('invoice')}
-                                className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold text-[9px] rounded-lg transition-colors cursor-pointer"
-                              >
-                                <FileText className="w-3.5 h-3.5 inline mr-1" />
-                                รายละเอียด
-                              </button>
-                          </div>
-                        </div>
-                      ))}
+                        );
+                      })}
 
                       {tenantBills.length === 0 && (
                         <p className="text-center py-12 text-slate-400">ยังไม่มีบิลค่าน้ำไฟหรือค่าเช่าออกให้ตรวจสอบ</p>
@@ -1625,24 +1691,61 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                             ฿ {Number(activeUnpaidBill.totalAmount).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                           </h2>
                           <p className="text-[9px] text-slate-400 mt-1">
-                            ชำระภายใน {formatToBeDate(activeUnpaidBill.dueDate)}
+                            กำหนดชำระภายใน {formatToBeDate(activeUnpaidBill.dueDate)}
                           </p>
                         </div>
                       </div>
 
-                      <div className="bg-white rounded-3xl p-5 border border-slate-100 shadow-xs space-y-4">
-                        <h3 className="font-extrabold text-slate-800 text-[11px] mb-3">บัญชีโอนเงิน</h3>
-                        <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 font-bold">
-                            BBL
+                      {/* PromptPay QR & Instructions */}
+                      <div className="bg-white rounded-3xl p-5 border border-slate-100 shadow-xs space-y-3 text-center">
+                        <h3 className="font-extrabold text-slate-800 text-[11px] text-left">ช่องทางการชำระเงิน (PromptPay)</h3>
+                        
+                        {paymentOptions?.configured && paymentOptions?.promptPayValue ? (
+                          <div className="space-y-3">
+                            <div className="p-3 bg-slate-50 rounded-2xl border border-slate-100 inline-block">
+                              <img 
+                                src={getPromptPayQrUrl(paymentOptions.promptPayValue, Number(activeUnpaidBill.totalAmount))} 
+                                alt="PromptPay QR Code" 
+                                className="w-48 h-48 mx-auto rounded-xl shadow-xs"
+                              />
+                            </div>
+                            <div className="text-[10px] text-slate-600 font-bold">
+                              <span>PromptPay: </span>
+                              <span className="font-black text-indigo-600">{paymentOptions.promptPayValue}</span>
+                            </div>
+                            <p className="text-[8px] text-slate-400">สแกน QR Code ด้วยแอปธนาคารใดก็ได้ เพื่อชำระยอด ฿ {Number(activeUnpaidBill.totalAmount).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
                           </div>
-                          <div>
-                            <p className="text-[10px] font-bold text-slate-800">ธนาคารกรุงเทพ</p>
-                            <p className="text-sm font-black text-slate-700">123-4-56789-0</p>
-                            <p className="text-[9px] text-slate-500">บจก. หอพักดีเลิศ</p>
+                        ) : (
+                          <div className="p-4 bg-amber-50 border border-amber-200 rounded-2xl text-amber-900 text-[10px] font-bold text-center">
+                            <AlertCircle className="w-5 h-5 text-amber-600 mx-auto mb-1" />
+                            <span>หอพักยังไม่ได้ตั้งค่า PromptPay หรือบัญชีรับโอนเงิน โปรดแนบหลักฐานสลิปโอนเงินเพื่อแจ้งเจ้าของหอพัก</span>
                           </div>
-                        </div>
+                        )}
+
+                        {paymentOptions?.bankAccountNumber && (
+                          <div className="border-t border-slate-100 pt-3 text-left space-y-1 text-[10px]">
+                            <p className="font-extrabold text-slate-700">บัญชีธนาคาร:</p>
+                            <p className="text-slate-600">{paymentOptions.bankCode || 'ธนาคาร'} {paymentOptions.bankAccountNumber}</p>
+                            {paymentOptions.bankAccountName && <p className="text-slate-500 text-[9px]">{paymentOptions.bankAccountName}</p>}
+                          </div>
+                        )}
                       </div>
+
+                      {/* Rejected Callout if previous attempt was rejected */}
+                      {(() => {
+                        const rejectedPay = (activeUnpaidBill.payments || activeUnpaidBill.Payment || []).find((p: any) => p.status === 'REJECTED');
+                        if (!rejectedPay) return null;
+                        return (
+                          <div className="p-4 bg-rose-50 border border-rose-200 rounded-2xl space-y-1 text-[10px] text-rose-900 font-bold">
+                            <div className="flex items-center gap-2 text-rose-700">
+                              <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
+                              <span>การส่งสลิปครั้งก่อนถูกปฏิเสธ:</span>
+                            </div>
+                            <p className="text-rose-800 text-[9px] pl-6 font-medium">{rejectedPay.rejectedReason || 'สลิปไม่ชัดเจน กรุณาแนบภาพใหม่'}</p>
+                            <p className="text-slate-500 text-[8px] pl-6">กรุณาแนบภาพสลิปใบใหม่เพื่อส่งให้เจ้าของหอพักตรวจสอบอีกครั้ง</p>
+                          </div>
+                        );
+                      })()}
 
                       <div className="space-y-2">
                         <h3 className="font-extrabold text-slate-800 text-[11px] px-1">หลักฐานการโอนเงิน (สลิป)</h3>
@@ -1652,7 +1755,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                           </div>
                           <div>
                             <p className="text-indigo-600 text-xs font-bold">{slipFile ? slipFile.name : 'อัปโหลดรูปสลิปโอนเงิน'}</p>
-  <p className="text-slate-400 text-[9px] font-medium mt-0.5">{slipFile ? 'คลิกเพื่อเปลี่ยนไฟล์' : 'รองรับ JPG, PNG ขนาดไม่เกิน 5MB'}</p>
+                            <p className="text-slate-400 text-[9px] font-medium mt-0.5">{slipFile ? 'คลิกเพื่อเปลี่ยนไฟล์' : 'รองรับ JPG, PNG ขนาดไม่เกิน 5MB'}</p>
                           </div>
                           <input type="file" className="hidden" accept="image/*" onChange={(e) => {
                             if (e.target.files && e.target.files[0]) {
@@ -1668,12 +1771,12 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
 
                     <div className="absolute bottom-0 left-0 right-0 p-4 bg-white/95 backdrop-blur-md border-t border-gray-100 z-10">
                       <button
-    onClick={handleSubmitPaymentSlip}
-    disabled={!slipFile || isSubmittingSlip}
-    className={`w-full py-3.5 text-white font-black text-xs rounded-xl shadow-lg transition-all active:scale-95 ${(!slipFile || isSubmittingSlip) ? 'bg-indigo-400 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-700 shadow-indigo-200'}`}
-  >
-    {isSubmittingSlip ? 'กำลังส่งข้อมูล...' : 'ส่งหลักฐาน'}
-  </button>
+                        onClick={handleSubmitPaymentSlip}
+                        disabled={!slipFile || isSubmittingSlip}
+                        className={`w-full py-3.5 text-white font-black text-xs rounded-xl shadow-lg transition-all active:scale-95 ${(!slipFile || isSubmittingSlip) ? 'bg-indigo-400 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-700 shadow-indigo-200'}`}
+                      >
+                        {isSubmittingSlip ? 'กำลังส่งข้อมูล...' : 'ส่งหลักฐาน'}
+                      </button>
                     </div>
                   </div>
                 )}

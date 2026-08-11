@@ -53,7 +53,8 @@ export function createReceiptRouter(authService: AuthenticationService) {
         // Tenant can only view if the receipt belongs to their bill
         if (tenant) {
           const bill = await prisma.bill.findUnique({ where: { id: receiptRecord.billId } });
-          if (bill && bill.tenantId === tenant.id) {
+          const contract = await prisma.contract.findFirst({ where: { tenantId: tenant.id, status: 'active' } });
+          if (bill && (bill.tenantId === tenant.id || (contract && bill.roomId === contract.roomId))) {
             authorized = true;
           }
         }
@@ -89,7 +90,8 @@ export function createReceiptRouter(authService: AuthenticationService) {
         const tenant = await ensureTenant(req, res, dormitoryId);
         if (tenant) {
           const bill = await prisma.bill.findUnique({ where: { id: receiptRecord.billId } });
-          if (bill && bill.tenantId === tenant.id) {
+          const contract = await prisma.contract.findFirst({ where: { tenantId: tenant.id, status: 'active' } });
+          if (bill && (bill.tenantId === tenant.id || (contract && bill.roomId === contract.roomId))) {
             authorized = true;
           }
         }

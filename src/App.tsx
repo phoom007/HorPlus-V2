@@ -67,7 +67,7 @@ const OwnerWorkspaceContainer: React.FC = () => {
 // Wrapper for Protected Tenant Workspace
 const TenantWorkspaceContainer: React.FC = () => {
   const navigate = useNavigate();
-  const session = getDemoSession();
+  const session = React.useContext(AuthContext) || getDemoSession();
 
   if (!session || session.userType !== 'tenant' || !session.tenant) {
     return <Navigate to="/demo" replace />;
@@ -75,6 +75,9 @@ const TenantWorkspaceContainer: React.FC = () => {
 
   const handleLogout = () => {
     clearDemoSession();
+    try {
+      fetch('/api/v1/auth/logout', { method: 'POST', credentials: 'include' });
+    } catch {}
     navigate('/');
   };
 

@@ -95,6 +95,7 @@ export function PaymentsOwnerView({
       } else {
         const errData = await pRes.json().catch(() => ({}));
         setError(errData.error || 'ไม่สามารถโหลดข้อมูลการชำระเงินได้');
+        setPayments([]);
       }
 
       // 2. Fetch authoritative bills from API
@@ -112,6 +113,7 @@ export function PaymentsOwnerView({
     } catch (err: any) {
       console.error('Failed to load payments data:', err);
       setError('เกิดข้อผิดพลาดในการเชื่อมต่อเซิร์ฟเวอร์');
+      setPayments([]);
       setBills([]);
     } finally {
       setLoading(false);
@@ -325,9 +327,17 @@ export function PaymentsOwnerView({
         </div>
       )}
       {error && (
-        <div className="p-4 bg-rose-50 border border-rose-200 rounded-2xl flex items-center gap-3 text-rose-800 text-sm font-bold animate-in fade-in">
-          <AlertCircle className="w-5 h-5 text-rose-600 shrink-0" />
-          <span>{error}</span>
+        <div className="p-4 bg-rose-50 border border-rose-200 rounded-2xl flex items-center justify-between gap-3 text-rose-800 text-sm font-bold animate-in fade-in">
+          <div className="flex items-center gap-3">
+            <AlertCircle className="w-5 h-5 text-rose-600 shrink-0" />
+            <span>{error}</span>
+          </div>
+          <button
+            onClick={() => fetchPaymentsAndBills()}
+            className="px-3 py-1 bg-rose-100 hover:bg-rose-200 text-rose-900 text-xs font-black rounded-lg transition-colors border border-rose-300 shrink-0"
+          >
+            ลองใหม่ (Retry)
+          </button>
         </div>
       )}
 
