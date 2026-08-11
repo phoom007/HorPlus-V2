@@ -1,12 +1,12 @@
 /**
  * PromptPay EMVCo Payload Generator & Server-Side QR Code Service
- * Uses standard `qrcode` library for standards-compliant QR generation.
+ * Standard: Thai QR Payment / PromptPay Merchant-Presented Standard
  * @license Apache-2.0
  */
 
 import QRCode from 'qrcode';
 
-function crc16ccitt(str: string): string {
+export function crc16ccitt(str: string): string {
   let crc = 0xffff;
   for (let i = 0; i < str.length; i++) {
     let c = str.charCodeAt(i);
@@ -29,29 +29,23 @@ function formatTlv(tag: string, value: string): string {
 
 export function generatePromptPayPayload(target: string, amount?: number | string): string {
   const cleanTarget = (target || '').replace(/[^0-9]/g, '');
-  if (!cleanTarget) {
-    throw new Error('Invalid PromptPay target number');
-  }
 
   let subTag = '';
   if (cleanTarget.length === 10 && cleanTarget.startsWith('0')) {
-    // Mobile Phone (MSISDN): Tag 01, format 0066 + 9 digits
+    // 10-digit Thai Mobile (MSISDN): Tag 01, format 0066 + 9 digits
     const msisdn = `0066${cleanTarget.slice(1)}`;
     subTag = formatTlv('01', msisdn);
   } else if (cleanTarget.length === 13) {
-    // National ID / Tax ID: Tag 02, format 13 digits
+    // 13-digit National ID / Tax ID: Tag 02, format 13 digits
     subTag = formatTlv('02', cleanTarget);
-  } else if (cleanTarget.length === 15) {
-    // E-Wallet: Tag 03, format 15 digits
-    subTag = formatTlv('03', cleanTarget);
   } else {
-    // Fallback: use Tag 02 for 13-digit or Tag 01 for mobile
-    if (cleanTarget.length <= 10) {
-      const msisdn = `0066${cleanTarget.padStart(10, '0').slice(1)}`;
-      subTag = formatTlv('01', msisdn);
-    } else {
-      subTag = formatTlv('02', cleanTarget);
-    }
+    throw new Error('Invalid PromptPay target number: Must be a 10-digit mobile number starting with 0 or a 13-digit National ID');
+  }
+
+  // Validate Amount
+  const numAmount = amount !== undefined && amount !== null && amount !== '' ? Number(amount) : 0;
+  if (isNaN(numAmount) || !isFinite(numAmount) || numAmount < 0) {
+    throw new Error('Invalid PromptPay amount: Must be a non-negative finite number');
   }
 
   // Merchant Account Info Tag 29
@@ -60,9 +54,10 @@ export function generatePromptPayPayload(target: string, amount?: number | strin
 
   // Base TLVs
   const payloadFormat = formatTlv('00', '01');
-  const numAmount = amount ? Number(amount) : 0;
-  // POI: 11 = dynamic (exact bill amount specified), 12 = static (no amount specified)
-  const poi = formatTlv('01', numAmount > 0 ? '11' : '12');
+  // EMV Merchant-Presented Specification:
+  // Tag 01 = "12" for Dynamic QR (amount-bearing bill/transaction)
+  // Tag 01 = "11" for Static QR (reusable / customer-entered amount)
+  const poi = formatTlv('01', numAmount > 0 ? '12' : '11');
   const currency = formatTlv('53', '764');
   const country = formatTlv('58', 'TH');
 

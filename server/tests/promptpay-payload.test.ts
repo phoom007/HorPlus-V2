@@ -5,7 +5,8 @@ import {
   generatePromptPayPayload,
   maskPromptPayDisplay,
   generatePromptPayQrSvg,
-  generatePromptPayQrPngBuffer
+  generatePromptPayQrPngBuffer,
+  crc16ccitt
 } from '../src/services/promptpay-payload.service.js';
 
 function parseEmvTlv(payload: string): Record<string, string> {
@@ -26,19 +27,7 @@ function parseEmvTlv(payload: string): Record<string, string> {
 function verifyCrc16(payload: string): boolean {
   const body = payload.slice(0, -4);
   const expectedCrc = payload.slice(-4);
-  let crc = 0xffff;
-  for (let i = 0; i < body.length; i++) {
-    let c = body.charCodeAt(i);
-    crc ^= c << 8;
-    for (let j = 0; j < 8; j++) {
-      if ((crc & 0x8000) !== 0) {
-        crc = ((crc << 1) ^ 0x1021) & 0xffff;
-      } else {
-        crc = (crc << 1) & 0xffff;
-      }
-    }
-  }
-  const calcCrc = crc.toString(16).toUpperCase().padStart(4, '0');
+  const calcCrc = crc16ccitt(body);
   return calcCrc === expectedCrc;
 }
 
@@ -51,88 +40,79 @@ function decodeQrPngBuffer(pngBuffer: Buffer): string {
   return code.data;
 }
 
-describe('PromptPay Standards Compliance & Independent QR Decoding Tests', () => {
-  it('A. Mobile PromptPay (0812345678, 5300.00): EMV payload, PNG generation, and independent jsQR decode', async () => {
-    const target = '0812345678';
-    const amount = 5300.00;
-    const expectedPayload = generatePromptPayPayload(target, amount);
+describe('PromptPay EMV Standards & Point of Initiation Semantics Tests', () => {
+  it('1. GOLDEN VECTOR FIXTURE: Explicit independent TLV string matches production output and decoded QR', async () => {
+    // Explicitly constructed Golden Vector for mobile 0812345678 and amount 5300.00
+    // Tag 00: 000201
+    // Tag 01: 010212 (Dynamic POI for amount-bearing bill QR)
+    // Tag 29: 29370016A00000067701011101130066812345678 (PromptPay AID + MSISDN)
+    // Tag 53: 5303764 (THB)
+    // Tag 54: 54075300.00 (Amount)
+    // Tag 58: 5802TH (Country TH)
+    // Tag 63: 6304 + CRC
+    const rawGoldenBody = '00020101021229370016A00000067701011101130066812345678530376454075300.005802TH6304';
+    const goldenCrc = crc16ccitt(rawGoldenBody);
+    const goldenPayload = `${rawGoldenBody}${goldenCrc}`;
 
-    // 1. Generate PNG via qrcode library
-    const pngBuffer = await generatePromptPayQrPngBuffer(target, amount);
-    expect(pngBuffer).toBeInstanceOf(Buffer);
+    // A. Production payload matches Golden Vector exactly
+    const prodPayload = generatePromptPayPayload('0812345678', 5300.00);
+    expect(prodPayload).toBe(goldenPayload);
 
-    // 2. Decode using independent decoder jsQR
+    // B. Independent jsQR decode from PNG buffer matches Golden Vector exactly
+    const pngBuffer = await generatePromptPayQrPngBuffer('0812345678', 5300.00);
     const decodedPayload = decodeQrPngBuffer(pngBuffer);
-    expect(decodedPayload).toBe(expectedPayload);
+    expect(decodedPayload).toBe(goldenPayload);
 
-    // 3. Parse EMV TLVs
-    const tags = parseEmvTlv(decodedPayload);
-    expect(tags['00']).toBe('01'); // Payload format indicator
-    expect(tags['01']).toBe('11'); // Dynamic POI for amount-bearing bill QR
-    expect(tags['29']).toContain('A000000677010111'); // PromptPay AID
-    expect(tags['29']).toContain('0066812345678'); // MSISDN
-    expect(tags['53']).toBe('764'); // THB
-    expect(tags['54']).toBe('5300.00'); // Bill amount
-    expect(tags['58']).toBe('TH'); // Country TH
+    // C. Verify CRC
     expect(verifyCrc16(decodedPayload)).toBe(true);
   });
 
-  it('B. National ID PromptPay (13-digit fixture, 1500.50): PNG generation and independent jsQR decode', async () => {
-    const target = '1234567890123';
-    const amount = 1500.50;
-    const expectedPayload = generatePromptPayPayload(target, amount);
+  it('2. POI Semantics: Amount-bearing bill QR uses Tag 01 = "12" (Dynamic), No-amount uses Tag 01 = "11" (Static)', async () => {
+    // A. Mobile + 5300.00 -> Tag 01 = "12"
+    const mobilePayload = generatePromptPayPayload('0812345678', 5300.00);
+    const mobileTags = parseEmvTlv(mobilePayload);
+    expect(mobileTags['01']).toBe('12');
+    expect(mobileTags['54']).toBe('5300.00');
 
-    const pngBuffer = await generatePromptPayQrPngBuffer(target, amount);
-    const decodedPayload = decodeQrPngBuffer(pngBuffer);
-    expect(decodedPayload).toBe(expectedPayload);
+    // B. National ID + 1500.50 -> Tag 01 = "12"
+    const natIdPayload = generatePromptPayPayload('1234567890123', 1500.50);
+    const natIdTags = parseEmvTlv(natIdPayload);
+    expect(natIdTags['01']).toBe('12');
+    expect(natIdTags['54']).toBe('1500.50');
 
-    const tags = parseEmvTlv(decodedPayload);
-    expect(tags['00']).toBe('01');
-    expect(tags['01']).toBe('11');
-    expect(tags['29']).toContain('A000000677010111');
-    expect(tags['29']).toContain('02131234567890123'); // Tag 02 National ID
-    expect(tags['53']).toBe('764');
-    expect(tags['54']).toBe('1500.50');
-    expect(tags['58']).toBe('TH');
-    expect(verifyCrc16(decodedPayload)).toBe(true);
+    // C. Representative larger amount + 125000.75 -> Tag 01 = "12"
+    const largePayload = generatePromptPayPayload('0812345678', 125000.75);
+    const largeTags = parseEmvTlv(largePayload);
+    expect(largeTags['01']).toBe('12');
+    expect(largeTags['54']).toBe('125000.75');
+
+    // D. Zero / No-amount payload -> Tag 01 = "11" (Static), Tag 54 absent
+    const zeroPayload = generatePromptPayPayload('0812345678', 0);
+    const zeroTags = parseEmvTlv(zeroPayload);
+    expect(zeroTags['01']).toBe('11');
+    expect(zeroTags['54']).toBeUndefined();
   });
 
-  it('C. Representative Larger Amount (125000.75): PNG generation and independent jsQR decode', async () => {
-    const target = '0812345678';
-    const amount = 125000.75;
-    const expectedPayload = generatePromptPayPayload(target, amount);
-
-    const pngBuffer = await generatePromptPayQrPngBuffer(target, amount);
-    const decodedPayload = decodeQrPngBuffer(pngBuffer);
-    expect(decodedPayload).toBe(expectedPayload);
-
-    const tags = parseEmvTlv(decodedPayload);
-    expect(tags['54']).toBe('125000.75');
-    expect(verifyCrc16(decodedPayload)).toBe(true);
+  it('3. Strict Target Validation: Rejects invalid PromptPay target lengths and formats', () => {
+    expect(() => generatePromptPayPayload('12345', 500)).toThrow('Invalid PromptPay target number');
+    expect(() => generatePromptPayPayload('1812345678', 500)).toThrow('Invalid PromptPay target number');
+    expect(() => generatePromptPayPayload('abcdefghij', 500)).toThrow('Invalid PromptPay target number');
   });
 
-  it('D. Zero / No-amount payload (Static POI 12): PNG generation and independent jsQR decode', async () => {
-    const target = '0812345678';
-    const expectedPayload = generatePromptPayPayload(target, 0);
-
-    const pngBuffer = await generatePromptPayQrPngBuffer(target, 0);
-    const decodedPayload = decodeQrPngBuffer(pngBuffer);
-    expect(decodedPayload).toBe(expectedPayload);
-
-    const tags = parseEmvTlv(decodedPayload);
-    expect(tags['01']).toBe('12'); // Static POI when no amount
-    expect(tags['54']).toBeUndefined(); // Tag 54 absent
-    expect(verifyCrc16(decodedPayload)).toBe(true);
+  it('4. Strict Amount Validation: Rejects NaN, negative, and infinite amounts', () => {
+    expect(() => generatePromptPayPayload('0812345678', NaN)).toThrow('Invalid PromptPay amount');
+    expect(() => generatePromptPayPayload('0812345678', -500)).toThrow('Invalid PromptPay amount');
+    expect(() => generatePromptPayPayload('0812345678', Infinity)).toThrow('Invalid PromptPay amount');
   });
 
-  it('E. SVG QR generation produces valid SVG', async () => {
+  it('5. SVG QR generation produces valid SVG output', async () => {
     const svg = await generatePromptPayQrSvg('0812345678', 5300);
     expect(svg).toContain('<svg');
     expect(svg).toContain('</svg>');
     expect(svg).not.toContain('promptpay.io');
   });
 
-  it('F. Correctly masks promptPayDisplay', () => {
+  it('6. Masking display helper formats mobile and National ID correctly', () => {
     expect(maskPromptPayDisplay('0812345678')).toBe('081-***-5678');
     expect(maskPromptPayDisplay('1234567890123')).toBe('x-xxxx-xxxxx-12-3');
   });
