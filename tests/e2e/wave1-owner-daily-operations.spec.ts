@@ -189,10 +189,10 @@ test.describe.serial('HORPLUS — Wave 1 Owner Daily Operations Real Playwright 
     test.setTimeout(60000);
 
     await page.goto('/owner/tenants');
-    await page.waitForLoadState('domcontentloaded');
+    await page.waitForLoadState('networkidle');
 
     // Click Add Tenant button (NO conditional skip)
-    const addBtn = page.locator('button:has-text("เพิ่มผู้เช่า")').first();
+    const addBtn = page.locator('button:has-text("เพิ่มผู้เช่า"):visible').first();
     await expect(addBtn).toBeVisible({ timeout: 30000 });
     await addBtn.click();
 
