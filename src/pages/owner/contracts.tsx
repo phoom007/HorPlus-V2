@@ -251,6 +251,8 @@ export const OwnerContracts: React.FC<OwnerContractsProps> = ({
       }
     } catch (err: any) {
       setIsSaving(false);
+      setErrorText(err.message || 'เกิดข้อผิดพลาดในการปฏิเสธคำขอ');
+    }
   };
 
   // Navigation & Back state
