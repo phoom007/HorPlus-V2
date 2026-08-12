@@ -201,30 +201,30 @@ test.describe.serial('HORPLUS — Wave 1 Owner Daily Operations Real Playwright 
     await expect(nameInput).toBeVisible();
     await nameInput.fill('สมชาย ใจดี');
 
-    const phoneInput = page.locator('input[placeholder*="เบอร์โทร"]').first();
+    const phoneInput = page.locator('input[placeholder*="089-xxx-xxxx"]').first();
     await phoneInput.fill('0812345678');
 
-    const citizenInput = page.locator('input[placeholder*="เลขบัตร"]').first();
+    const citizenInput = page.locator('input[placeholder*="13 หลัก"]').first();
     await citizenInput.fill('1-1002-34567-89-1');
 
     // Click Next to step 1
-    const nextBtn1 = page.locator('button:has-text("ถัดไป")').first();
+    const nextBtn1 = page.locator('button:has-text("ขั้นตอนถัดไป")').first();
     await nextBtn1.click();
 
     // Fill Emergency contact
-    const emergencyName = page.locator('input[placeholder*="ชื่อผู้ติดต่อฉุกเฉิน"]').first();
+    const emergencyName = page.locator('input[placeholder*="ชื่อผู้ติดต่อ"]').first();
     await expect(emergencyName).toBeVisible();
     await emergencyName.fill('สมศรี ใจดี');
 
-    const emergencyPhone = page.locator('input[placeholder*="เบอร์โทรฉุกเฉิน"]').first();
+    const emergencyPhone = page.locator('input[placeholder*="เบอร์โทรศัพท์"]').first();
     await emergencyPhone.fill('0898765432');
 
     // Click Next to step 2
-    const nextBtn2 = page.locator('button:has-text("ถัดไป")').first();
+    const nextBtn2 = page.locator('button:has-text("ขั้นตอนถัดไป")').first();
     await nextBtn2.click();
 
     // Submit Tenant creation
-    const saveBtn = page.locator('button:has-text("บันทึกข้อมูลผู้เช่า")').first();
+    const saveBtn = page.locator('button:has-text("ยืนยันจดทะเบียนย้ายเข้า")').first();
     await expect(saveBtn).toBeVisible();
     await saveBtn.click();
 

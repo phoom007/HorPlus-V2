@@ -344,13 +344,13 @@ export class ApiMeterAdapter implements MeterDataSource {
             roomId: record.roomId,
             meterType: 'water',
             previousReading: String((record as any).waterPrev ?? 0),
-            currentReading: String((record as any).waterCurr ?? record.waterReading ?? 0)
+            currentReading: String((record as any).waterCurr ?? (record as any).waterReading ?? 0)
           },
           {
             roomId: record.roomId,
             meterType: 'electricity',
             previousReading: String((record as any).elecPrev ?? 0),
-            currentReading: String((record as any).elecCurr ?? record.electricityReading ?? 0)
+            currentReading: String((record as any).elecCurr ?? (record as any).electricityReading ?? 0)
           }
         ]
       });
@@ -449,8 +449,9 @@ export class ApiBillingAdapter implements BillingDataSource {
     }
   }
 
-  async generateBulkBills(cycleId: string, roomIds?: string[]): Promise<DataResult<any>> {
+  async generateBulkBills(cycleId: string, actorUserIdOrRoomIds?: any): Promise<DataResult<any>> {
     try {
+      const roomIds = Array.isArray(actorUserIdOrRoomIds) ? actorUserIdOrRoomIds : undefined;
       const res = await httpRequest<any>('POST', '/bills/generate/bulk', {
         billingCycleId: cycleId,
         roomIds
@@ -664,8 +665,9 @@ export class ApiTenantRegistrationAdapter implements TenantRegistrationDataSourc
 
   async listRequests(): Promise<DataResult<any[]>> {
     try {
-      const res = await httpRequest<{ data: any[] }>('GET', '/tenant-registrations');
-      return { success: true, data: res.data || res };
+      const res = await httpRequest<any>('GET', '/tenant-registrations');
+      const list = Array.isArray(res) ? res : (res.data || []);
+      return { success: true, data: list };
     } catch (err: any) {
       return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message } };
     }

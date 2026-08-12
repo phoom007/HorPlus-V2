@@ -159,9 +159,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
     setPetType('');
     setPetName('');
     
-    // Auto select first vacant room
-    const firstVacant = rooms.find(r => r.status === 'vacant');
-    setSelectedRoomId(firstVacant ? firstVacant.id : '');
+    setCurrentStep(0);
     setIsAddOpen(true);
   };
 

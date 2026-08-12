@@ -296,8 +296,12 @@ export const OwnerContracts: React.FC<OwnerContractsProps> = ({
   const [selectedTenantId, setSelectedTenantId] = useState<string>(tenants[0]?.id || '');
   const [selectedRoomId, setSelectedRoomId] = useState<string>(rooms[0]?.id || '');
   const [startDate, setStartDate] = useState('2026-07-14');
+  const [endDate, setEndDate] = useState('');
   const [stayDate, setStayDate] = useState('2026-07-20');
   const [durationMonths, setDurationMonths] = useState(6);
+  const [contractTerms, setContractTerms] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
+  const [isPendingDetailOpen, setIsPendingDetailOpen] = useState(false);
   const [tenantSig, setTenantSig] = useState<string | undefined>(
     'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="100" height="40"><path d="M10,20 Q30,10 50,25 T90,15" stroke="black" stroke-width="2" fill="none"/></svg>'
   );
