@@ -210,7 +210,21 @@ export class ApiTenantAdapter implements TenantDataSource {
 
   async addTenant(tenantData: Omit<Tenant, 'id' | 'createdAt' | 'updatedAt'>): Promise<DataResult<Tenant>> {
     try {
-      const data = await httpRequest<Tenant>('POST', '/tenants', tenantData);
+      const nameParts = (tenantData.name || '').trim().split(/\s+/);
+      const firstName = nameParts[0] || tenantData.name || 'ผู้เช่า';
+      const lastName = nameParts.slice(1).join(' ') || undefined;
+      const cleanEmail = tenantData.email && tenantData.email.trim() !== '' ? tenantData.email.trim() : undefined;
+      const cleanNationalId = (tenantData.citizenId || (tenantData as any).nationalId || '').replace(/\D/g, '');
+
+      const payload = {
+        ...tenantData,
+        firstName,
+        lastName,
+        email: cleanEmail,
+        nationalId: cleanNationalId.length === 13 ? cleanNationalId : undefined,
+      };
+
+      const data = await httpRequest<Tenant>('POST', '/tenants', payload);
       return { success: true, data };
     } catch (err: any) {
       return {
@@ -222,7 +236,21 @@ export class ApiTenantAdapter implements TenantDataSource {
 
   async updateTenant(tenant: Tenant): Promise<DataResult<Tenant>> {
     try {
-      const data = await httpRequest<Tenant>('PUT', `/tenants/${tenant.id}`, tenant);
+      const nameParts = (tenant.name || '').trim().split(/\s+/);
+      const firstName = nameParts[0] || tenant.name || 'ผู้เช่า';
+      const lastName = nameParts.slice(1).join(' ') || undefined;
+      const cleanEmail = tenant.email && tenant.email.trim() !== '' ? tenant.email.trim() : undefined;
+      const cleanNationalId = (tenant.citizenId || (tenant as any).nationalId || '').replace(/\D/g, '');
+
+      const payload = {
+        ...tenant,
+        firstName,
+        lastName,
+        email: cleanEmail,
+        nationalId: cleanNationalId.length === 13 ? cleanNationalId : undefined,
+      };
+
+      const data = await httpRequest<Tenant>('PUT', `/tenants/${tenant.id}`, payload);
       return { success: true, data };
     } catch (err: any) {
       return {
