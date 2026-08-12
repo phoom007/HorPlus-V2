@@ -353,13 +353,15 @@ test.describe.serial('HORPLUS — Wave 1 Owner Daily Operations Real Playwright 
     await expect(elecInput).toBeVisible();
     await elecInput.fill('600');
 
-    // 3. Click Save Meters button in UI & capture request
+    // 3. Click Save Meters button in UI & capture request/response
     const savePromise = page.waitForRequest((req) => req.url().includes('/api/v1/meters/readings/bulk') && req.method() === 'POST');
+    const responsePromise = page.waitForResponse((res) => res.url().includes('/api/v1/meters/readings/bulk') && res.status() === 200);
     const saveMetersBtn = page.locator('button:has-text("บันทึกข้อมูลค่ามิเตอร์"), button:has-text("บันทึกมิเตอร์")').first();
     await expect(saveMetersBtn).toBeVisible();
     await saveMetersBtn.click();
 
     const saveReq = await savePromise;
+    await responsePromise;
     const postData = JSON.parse(saveReq.postData() || '{}');
     // Assert billingCycleId in request body equals actual DB cycle UUID (NOT cycleCode YYYY-MM)
     expect(postData.billingCycleId).toBe(cycleId);
@@ -367,7 +369,7 @@ test.describe.serial('HORPLUS — Wave 1 Owner Daily Operations Real Playwright 
 
     // 4. F5 Reload -> 120 and 600 remain visible & DB matches
     await page.reload();
-    await page.waitForLoadState('domcontentloaded');
+    await page.waitForLoadState('networkidle');
 
     const readings = await prisma.meterReading.findMany({
       where: { dormitoryId: dormId, billingCycleId: cycleId, roomId: roomId },
@@ -405,10 +407,12 @@ test.describe.serial('HORPLUS — Wave 1 Owner Daily Operations Real Playwright 
     await expect(metersTab).toBeVisible({ timeout: 10000 });
     await metersTab.click();
 
-    // 2. Click Issue Bill button in UI
+    // 2. Click Issue Bill button in UI & await response
+    const billPromise = page.waitForResponse((res) => res.url().includes('/bulk-generate') && res.request().method() === 'POST');
     const issueBillBtn = page.locator('button:has-text("ออกบิลทุกห้อง"), button:has-text("ออกบิล")').first();
     await expect(issueBillBtn).toBeVisible();
     await issueBillBtn.click();
+    await billPromise;
 
     // 3. Assert PostgreSQL Bill and BillItems
     const bills = await prisma.bill.findMany({
