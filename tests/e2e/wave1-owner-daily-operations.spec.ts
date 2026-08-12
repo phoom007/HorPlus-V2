@@ -266,7 +266,7 @@ test.describe.serial('HORPLUS — Wave 1 Owner Daily Operations Real Playwright 
     test.setTimeout(45000);
 
     await page.goto('/owner/contracts');
-    await page.waitForLoadState('domcontentloaded');
+    await page.waitForLoadState('networkidle');
 
     // 2. Click Create Contract button in UI
     const createBtn = page.locator('button:has-text("ทำสัญญาเช่าใหม่"), button:has-text("สร้างสัญญา")').first();
