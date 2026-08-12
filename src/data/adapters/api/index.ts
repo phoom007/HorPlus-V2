@@ -307,7 +307,13 @@ export class ApiContractAdapter implements ContractDataSource {
 
   async addContract(contractData: Omit<Contract, 'id' | 'createdAt' | 'updatedAt'>): Promise<DataResult<Contract>> {
     try {
-      const data = await httpRequest<Contract>('POST', '/contracts', contractData, {
+      const payload = {
+        ...contractData,
+        rentAmount: String(contractData.rentAmount ?? '0'),
+        depositAmount: String(contractData.depositAmount ?? '0'),
+        advancePaymentAmount: String((contractData as any).advancePaymentAmount ?? '0'),
+      };
+      const data = await httpRequest<Contract>('POST', '/contracts', payload, {
         idempotencyKey: `contract_add_${Date.now()}`
       });
       return { success: true, data };
