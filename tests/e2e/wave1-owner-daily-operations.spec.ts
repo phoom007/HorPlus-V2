@@ -192,7 +192,7 @@ test.describe.serial('HORPLUS — Wave 1 Owner Daily Operations Real Playwright 
     await page.waitForLoadState('domcontentloaded');
 
     // Click Tenants tab
-    const tenantsTab = page.locator('button:has-text("ผู้เช่า")').first();
+    const tenantsTab = page.locator('button:has-text("ผู้เช่า"):visible').first();
     await expect(tenantsTab).toBeVisible({ timeout: 30000 });
     await tenantsTab.click();
 
@@ -261,7 +261,7 @@ test.describe.serial('HORPLUS — Wave 1 Owner Daily Operations Real Playwright 
     await page.waitForLoadState('domcontentloaded');
 
     // 1. Click Contracts tab in UI
-    const contractsTab = page.locator('button:has-text("สัญญาเช่า")').first();
+    const contractsTab = page.locator('button:has-text("สัญญาเช่า"):visible').first();
     await expect(contractsTab).toBeVisible({ timeout: 10000 });
     await contractsTab.click();
 
@@ -298,7 +298,7 @@ test.describe.serial('HORPLUS — Wave 1 Owner Daily Operations Real Playwright 
     await page.reload();
     await page.waitForLoadState('domcontentloaded');
 
-    const contractsTab2 = page.locator('button:has-text("สัญญาเช่า")').first();
+    const contractsTab2 = page.locator('button:has-text("สัญญาเช่า"):visible').first();
     await contractsTab2.click();
 
     // 7. Click Activate Contract UI Action
@@ -333,7 +333,7 @@ test.describe.serial('HORPLUS — Wave 1 Owner Daily Operations Real Playwright 
     await page.waitForLoadState('domcontentloaded');
 
     // 1. Click Meters tab in UI
-    const metersTab = page.locator('button:has-text("จดมิเตอร์")').first();
+    const metersTab = page.locator('button:has-text("จดมิเตอร์"):visible').first();
     await expect(metersTab).toBeVisible({ timeout: 10000 });
     await metersTab.click();
 
