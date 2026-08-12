@@ -286,17 +286,17 @@ export class InMemoryTenantRepository implements ITenantRepository {
     return item;
   }
 
-  public async updateCoOccupant(id: string, dormitoryId: string, data: Partial<TenantCoOccupantEntity>): Promise<TenantCoOccupantEntity | null> {
+  public async updateCoOccupant(id: string, dormitoryId: string, tenantId: string, data: Partial<TenantCoOccupantEntity>): Promise<TenantCoOccupantEntity | null> {
     const item = this.coOccupants.get(id);
-    if (!item || item.dormitoryId !== dormitoryId || item.deletedAt) return null;
+    if (!item || item.dormitoryId !== dormitoryId || item.tenantId !== tenantId || item.deletedAt) return null;
     const updated = { ...item, ...data, updatedAt: new Date() };
     this.coOccupants.set(id, updated);
     return updated;
   }
 
-  public async deleteCoOccupant(id: string, dormitoryId: string): Promise<boolean> {
+  public async deleteCoOccupant(id: string, dormitoryId: string, tenantId: string): Promise<boolean> {
     const item = this.coOccupants.get(id);
-    if (!item || item.dormitoryId !== dormitoryId) return false;
+    if (!item || item.dormitoryId !== dormitoryId || item.tenantId !== tenantId) return false;
     item.deletedAt = new Date();
     return true;
   }
