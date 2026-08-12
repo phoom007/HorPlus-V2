@@ -196,19 +196,18 @@ export const OwnerDashboard: React.FC<OwnerDashboardProps> = ({
   const totalUnpaidAmount = unpaidBills.reduce((sum, b) => sum + Number(b.totalAmount || b.outstandingAmount || 0), 0);
 
 
-  const formatDueDateThai = (cycleStr: string) => {
-    if (!cycleStr) return '';
-    const parts = cycleStr.split('-');
-    if (parts.length === 2) {
-      const yearCE = parseInt(parts[0], 10);
-      const yearBE = yearCE + 543;
-      const monthIdx = parseInt(parts[1], 10) - 1;
+  const formatDueDateThai = () => {
+    const rawDueDate = selectedBillingCycle?.dueDate;
+    if (!rawDueDate) return 'ยังไม่ได้กำหนดวันครบกำหนด';
+    try {
+      const d = new Date(rawDueDate);
+      if (isNaN(d.getTime())) return 'ยังไม่ได้กำหนดวันครบกำหนด';
+      const yearBE = d.getFullYear() + 543;
       const months = ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'];
-      if (monthIdx >= 0 && monthIdx < 12) {
-        return `กำหนดชำระ: 30 ${months[monthIdx]} ${yearBE}`;
-      }
+      return `กำหนดชำระ: ${d.getDate()} ${months[d.getMonth()]} ${yearBE}`;
+    } catch {
+      return 'ยังไม่ได้กำหนดวันครบกำหนด';
     }
-    return `กำหนดชำระ: ${cycleStr}`;
   };
 
   const formatThaiCycleName = (cycleStr: string) => {
@@ -229,9 +228,11 @@ export const OwnerDashboard: React.FC<OwnerDashboardProps> = ({
   // Billing Cycle Workflow Stats for selectedCycle
   const actualOccupiedCount = rooms.filter(r => r.status === 'occupied').length;
   
-  // 1. Meter recorded count (strictly from current cycle bills)
+  // 1. Meter recorded count (from MeterReading records for selectedBillingCycle)
   const currentCycleBills = bills.filter(b => b.cycleId === selectedCycle);
-  const metersRecordedCount = currentCycleBills.length;
+  const metersRecordedCount = selectedBillingCycle?.id
+    ? new Set((meterReadings || []).map((m: any) => m.roomId)).size
+    : currentCycleBills.length;
   const isMetersDone = actualOccupiedCount > 0 && metersRecordedCount >= actualOccupiedCount;
 
   // 2. Billing issued count
@@ -555,7 +556,7 @@ export const OwnerDashboard: React.FC<OwnerDashboardProps> = ({
               </div>
 
               <p className="text-[11px] sm:text-xs text-slate-400 font-semibold pt-0.5">
-                {formatDueDateThai(selectedCycle)}
+                {formatDueDateThai()}
               </p>
             </div>
 

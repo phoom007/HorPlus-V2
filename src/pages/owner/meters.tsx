@@ -113,7 +113,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   onSelectTenant,
   onAddLog,
   onNavigate,
-  selectedCycle = '2026-07'
+  selectedCycle = ''
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [meterRows, setMeterRows] = useState<MeterRowState[]>([]);
@@ -160,7 +160,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   const dorm = getDormitory();
   const cycleRates = getDormitoryRatesForCycle(dorm, selectedCycle);
 
-  const isFirstCycle = selectedCycle === '2026-01';
+  const isFirstCycle = false;
   const isWaterUnit = (cycleRates.waterBillingMode || 'unit') === 'unit';
   const isElecUnit = (cycleRates.electricBillingMode || 'unit') === 'unit';
 

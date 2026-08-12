@@ -188,7 +188,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
   const [isCycleModalOpen, setIsCycleModalOpen] = useState(false);
   const [tempYear, setTempYear] = useState(new Date().getFullYear());
 
-  const selectedCycle = selectedCycleCode || '2026-08';
+  const selectedCycle = selectedCycleCode;
 
   const handlePrevCycle = () => {
     if (billingCycles.length === 0) return;
@@ -682,7 +682,8 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
             contracts={contracts}
             tenants={tenants}
             activeUser={user}
-            selectedCycle={selectedCycle}
+            selectedCycle={selectedCycleCode}
+            selectedBillingCycle={billingCycles.find(c => c.id === selectedBillingCycleId || c.cycleCode === selectedCycleCode)}
             setSelectedCycle={(c: string) => setSelectedCycleCode(c)}
             onAddLog={handleAddLog}
             onNavigate={(tab, param) => {
@@ -721,7 +722,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
             rooms={rooms}
             bills={bills}
             contracts={contracts}
-            selectedCycle={selectedCycle}
+            selectedCycle={selectedCycleCode}
             onSaveTenants={handleSaveTenants}
             onSaveRooms={handleSaveRooms}
             onSaveContracts={handleSaveContracts}
@@ -746,7 +747,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
             tenants={tenants}
             rooms={rooms}
             bills={bills}
-            selectedCycle={selectedCycle}
+            selectedCycle={selectedCycleCode}
             onSaveContracts={handleSaveContracts}
             onSaveTenants={handleSaveTenants}
             onSaveRooms={handleSaveRooms}
@@ -776,7 +777,10 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
             }}
             onAddLog={handleAddLog}
             onNavigate={(tab) => setActiveTab(tab)}
-            selectedCycle={selectedCycle}
+            selectedCycle={selectedCycleCode}
+            selectedBillingCycleId={selectedBillingCycleId || billingCycles.find(c => c.cycleCode === selectedCycleCode)?.id}
+            selectedCycleCode={selectedCycleCode}
+            onRefetchData={refreshAllData}
           />
         );
       case 'payments':
@@ -1163,7 +1167,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
                 title="คลิกเพื่อเลือกงวดประจำเดือน"
               >
                 <CalendarIcon className="w-3.5 h-3.5 text-blue-600 shrink-0" />
-                <span className="truncate">ประจำเดือน {getCycleLabel(selectedCycle)}</span>
+                <span className="truncate">{selectedCycleCode ? `ประจำเดือน ${getCycleLabel(selectedCycleCode)}` : 'ยังไม่ได้ตั้งค่ารอบคำนวณ'}</span>
               </button>
 
               <button 

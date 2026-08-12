@@ -1510,9 +1510,6 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                             />
                           </div>
                         )}
-                      </>
-                    );
-                  })()}
                 </div>
 
                 <div className="p-4 border border-gray-200 rounded-2xl space-y-2">

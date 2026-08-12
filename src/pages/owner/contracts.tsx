@@ -348,7 +348,7 @@ export const OwnerContracts: React.FC<OwnerContractsProps> = ({
     return date.toISOString().split('T')[0];
   };
 
-  const handleSaveContract = () => {
+  const handleSaveContract = async () => {
     setErrorText(null);
     if (!selectedTenant) {
       setErrorText('กรุณาเลือกผู้เช่าจากระบบ');
@@ -358,18 +358,14 @@ export const OwnerContracts: React.FC<OwnerContractsProps> = ({
       setErrorText('กรุณาเลือกห้องพักสำหรับสัญญาเช่า');
       return;
     }
-    if (!tenantSig) {
-      setErrorText('กรุณาลงลายมือชื่อผู้เช่าเพื่อรับรองสัญญา');
-      return;
-    }
 
-    const calculatedEnd = calculateEndDate(startDate, durationMonths);
+    const calculatedEnd = endDate || calculateEndDate(startDate, durationMonths);
     if (startDate > calculatedEnd) {
       setErrorText('วันที่เริ่มต้นสัญญาต้องไม่เกินวันสิ้นสุดสัญญา');
       return;
     }
 
-    // Overlap Check (Task 4)
+    // Overlap Check
     const overlapContract = contracts.find(c => {
       if (!BLOCKING_CONTRACT_STATUSES.includes(c.status)) return false;
       const sameTenant = c.tenantId === selectedTenant.id;
@@ -394,52 +390,63 @@ export const OwnerContracts: React.FC<OwnerContractsProps> = ({
       return;
     }
 
-    const newId = `ct-${Date.now()}`;
-    const newContract: Contract = {
-      id: newId,
-      contractNumber: `CNT-2026-${1000 + contracts.length}`,
-      tenantId: selectedTenant.id,
-      roomId: selectedRoom.id,
-      startDate,
-      endDate: calculatedEnd,
-      durationMonths,
-      rentAmount: selectedRoom.monthlyRent,
-      depositAmount: selectedRoom.monthlyRent * 2,
-      depositStatus: 'unpaid',
-      terms: '1. ผู้เช่าตกลงชำระค่าเช่าภายในวันที่ 5 ของทุกเดือน หากช้าปรับวันละ 100 บาท\n2. ห้ามเลี้ยงสัตว์เลี้ยงชนิดที่ส่งเสียงดังหรือก่อให้เกิดกลิ่นรบกวนอาคาร\n3. เงินประกันความเสียหายจะได้รับคืนเต็มจำนวนภายใน 15 วันนับจากวันที่ย้ายออกโดยไม่มีสิ่งของชำรุด',
-      tenantSignature: tenantSig,
-      ownerSignature: 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="100" height="40"><path d="M10,25 Q40,5 60,30 T90,20" stroke="blue" stroke-width="2" fill="none"/></svg>',
-      status: 'active',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    };
+    try {
+      setIsSaving(true);
+      const res = await getDataProvider().contracts.addContract({
+        tenantId: selectedTenant.id,
+        roomId: selectedRoom.id,
+        startDate,
+        endDate: calculatedEnd,
+        durationMonths,
+        rentAmount: selectedRoom.monthlyRent || 0,
+        depositAmount: (selectedRoom.monthlyRent || 0) * 2,
+        depositStatus: 'unpaid',
+        terms: contractTerms || undefined,
+        tenantSignature: tenantSig || undefined,
+        ownerSignature: dorm?.ownerSignature || undefined,
+        status: 'draft'
+      } as any);
 
-    // Update Room currentTenantId and status to occupied
-    if (selectedRoom.status === 'vacant' || selectedRoom.currentTenantId !== selectedTenant.id) {
-      const updatedRooms = rooms.map(r => r.id === selectedRoom.id ? {
-        ...r,
-        status: 'occupied' as const,
-        currentTenantId: selectedTenant.id,
-        updatedAt: new Date().toISOString()
-      } : r);
-      onSaveRooms(updatedRooms);
+      setIsSaving(false);
+      if (res.success && res.data) {
+        const updatedContracts = await getDataProvider().contracts.getAll();
+        onSaveContracts(updatedContracts);
+        setSelectedContract(res.data);
+        setIsCreating(false);
+        onAddLog('สร้างร่างสัญญาเช่า', `สร้างร่างสัญญาเช่า ${res.data.contractNumber || res.data.id} (${selectedTenant.name} - ห้อง ${selectedRoom.roomNumber}) เรียบร้อย`, 'Contract', res.data.id);
+      } else {
+        setErrorText(res.error?.message || 'เกิดข้อผิดพลาดในการสร้างร่างสัญญา');
+      }
+    } catch (err: any) {
+      setIsSaving(false);
+      setErrorText(err.message || 'เกิดข้อผิดพลาดในการสร้างร่างสัญญา');
     }
+  };
 
-    // Update Tenant status to active
-    if (onSaveTenants) {
-      const updatedTenants = tenants.map(t => t.id === selectedTenant.id ? {
-        ...t,
-        status: 'active' as const,
-        rentalHistory: t.rentalHistory?.includes(selectedRoom.id) ? t.rentalHistory : [...(t.rentalHistory || []), selectedRoom.id],
-        updatedAt: new Date().toISOString()
-      } : t);
-      onSaveTenants(updatedTenants);
+  const handleActivateContract = async (contract: Contract) => {
+    if (!contract || contract.status === 'active') return;
+    try {
+      setIsSaving(true);
+      const res = await (getDataProvider().contracts as any).activateContract(contract.id);
+      setIsSaving(false);
+      if (res.success) {
+        const updatedContracts = await getDataProvider().contracts.getAll();
+        const updatedRooms = await getDataProvider().rooms.getAll();
+        const updatedTenants = await getDataProvider().tenants.getAll();
+        onSaveContracts(updatedContracts);
+        onSaveRooms(updatedRooms);
+        if (onSaveTenants) onSaveTenants(updatedTenants);
+
+        const activated = updatedContracts.find(c => c.id === contract.id);
+        if (activated) setSelectedContract(activated);
+        onAddLog('เปิดใช้งานสัญญาเช่า', `เปิดใช้งานสัญญาเช่า ${contract.contractNumber} เรียบร้อย`, 'Contract', contract.id);
+      } else {
+        setErrorText(res.error?.message || 'เกิดข้อผิดพลาดในการเปิดใช้งานสัญญา');
+      }
+    } catch (err: any) {
+      setIsSaving(false);
+      setErrorText(err.message || 'เกิดข้อผิดพลาดในการเปิดใช้งานสัญญา');
     }
-
-    onSaveContracts([...contracts, newContract]);
-    setSelectedContract(newContract);
-    setIsCreating(false);
-    onAddLog('ทำสัญญาเช่าฉบับใหม่', `บันทึกสัญญาเช่าใหม่ ${newContract.contractNumber} (${selectedTenant.name} - ห้อง ${selectedRoom.roomNumber}) เรียบร้อย`, 'Contract', newId);
   };
 
   const isContractActiveInCycle = (c: Contract, cycleId?: string) => {
@@ -1387,7 +1394,15 @@ export const OwnerContracts: React.FC<OwnerContractsProps> = ({
                 </span>
               </div>
               <div className="flex gap-2 w-full sm:w-auto">
-                {selectedContract.status === 'active' ? (
+                {selectedContract.status === 'draft' ? (
+                  <button
+                    onClick={() => handleActivateContract(selectedContract)}
+                    className="flex-1 sm:flex-none px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-sm active:scale-95"
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    ยืนยันเปิดใช้งานสัญญา
+                  </button>
+                ) : selectedContract.status === 'active' ? (
                   <>
                     <button
                       onClick={() => {

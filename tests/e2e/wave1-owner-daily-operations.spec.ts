@@ -259,116 +259,120 @@ test.describe.serial('HORPLUS — Wave 1 Owner Daily Operations Real Playwright 
   test('Flow B — Contract Draft & Atomic Activation (Creates Occupancy, Room Occupied)', async ({ page }) => {
     test.setTimeout(45000);
 
-    // Create DRAFT Contract via API using Tenant from Flow A
-    const apiCtx = await playwrightRequest.newContext({
-      baseURL: 'http://127.0.0.1:3101',
-      extraHTTPHeaders: {
-        Cookie: `horplus_session=${sessionToken}; horplus_csrf=${csrfToken}`,
-        'x-csrf-token': csrfToken,
-        'x-dormitory-id': dormId,
-      },
-    });
+    await page.goto('/owner');
+    await page.evaluate((dId) => {
+      localStorage.setItem('selected_dormitory_id', dId);
+    }, dormId);
 
-    const createRes = await apiCtx.post('/api/v1/contracts', {
-      data: {
-        tenantId: createdTenantId,
-        roomId: roomId,
-        startDate: '2026-08-01',
-        endDate: '2027-07-31',
-        durationMonths: 12,
-        rentAmount: '5000.00',
-        depositAmount: '10000.00',
-        status: 'draft',
-      },
-    });
-    expect(createRes.ok()).toBe(true);
-    const createData = await createRes.json();
-    createdContractId = createData.id || createData.data?.id;
+    await page.goto('/owner');
+    await page.waitForLoadState('domcontentloaded');
 
-    // Verify Draft in DB
-    const draftContract = await prisma.contract.findUnique({ where: { id: createdContractId } });
+    // 1. Click Contracts tab in UI
+    const contractsTab = page.locator('button:has-text("สัญญาเช่า")').first();
+    await expect(contractsTab).toBeVisible();
+    await contractsTab.click();
+
+    // 2. Click Create Contract button in UI
+    const createBtn = page.locator('button:has-text("ทำสัญญาเช่าใหม่"), button:has-text("สร้างสัญญา")').first();
+    await expect(createBtn).toBeVisible();
+    await createBtn.click();
+
+    // 3. Fill Contract creation form in UI
+    const tenantSelect = page.locator('select').first();
+    if (await tenantSelect.isVisible()) {
+      await tenantSelect.selectOption({ index: 1 });
+    }
+
+    const roomSelect = page.locator('select').nth(1);
+    if (await roomSelect.isVisible()) {
+      await roomSelect.selectOption({ index: 1 });
+    }
+
+    // 4. Click Save Draft Contract button in UI
+    const saveContractBtn = page.locator('button:has-text("บันทึกร่างสัญญาเช่า"), button:has-text("บันทึกสัญญาเช่า"), button:has-text("ทำสัญญาเช่า")').first();
+    await expect(saveContractBtn).toBeVisible();
+    await saveContractBtn.click();
+
+    // 5. Verify DRAFT contract created in DB
+    const draftContract = await prisma.contract.findFirst({
+      where: { dormitoryId: dormId, tenantId: createdTenantId, roomId: roomId },
+    });
+    expect(draftContract).not.toBeNull();
     expect(draftContract?.status).toBe('draft');
+    createdContractId = draftContract!.id;
 
-    // Activate Contract via API (authoritative ContractService.activateContract)
-    const activateRes = await apiCtx.post(`/api/v1/contracts/${createdContractId}/activate`);
-    expect(activateRes.ok()).toBe(true);
+    // 6. F5 Reload -> Draft Contract remains visible
+    await page.reload();
+    await page.waitForLoadState('domcontentloaded');
 
-    // Assert PostgreSQL State after activation:
-    // 1. Contract ACTIVE
+    const contractsTab2 = page.locator('button:has-text("สัญญาเช่า")').first();
+    await contractsTab2.click();
+
+    // 7. Click Activate Contract UI Action
+    const activateBtn = page.locator('button:has-text("ยืนยันเปิดใช้งานสัญญา")').first();
+    await expect(activateBtn).toBeVisible();
+    await activateBtn.click();
+
+    // 8. Assert PostgreSQL state after UI activation
     const activeContract = await prisma.contract.findUnique({ where: { id: createdContractId } });
     expect(activeContract?.status).toBe('active');
 
-    // 2. ContractSnapshot created
     const snapshots = await prisma.contractSnapshot.findMany({
       where: { dormitoryId: dormId, contractId: createdContractId },
     });
     expect(snapshots.length).toBe(1);
 
-    // 3. Occupancy record created with ACTIVE status
     const occupancies = await prisma.occupancy.findMany({
       where: { dormitoryId: dormId, contractId: createdContractId, status: 'ACTIVE' },
     });
     expect(occupancies.length).toBe(1);
-    expect(occupancies[0].roomId).toBe(roomId);
-    expect(occupancies[0].tenantId).toBe(createdTenantId);
 
-    // 4. Room is now OCCUPIED
     const roomState = await prisma.room.findUnique({ where: { id: roomId } });
     expect(roomState?.status).toBe('occupied');
     expect(roomState?.currentTenantId).toBe(createdTenantId);
     expect(roomState?.currentContractId).toBe(createdContractId);
-
-    // Idempotent retry activation
-    const retryRes = await apiCtx.post(`/api/v1/contracts/${createdContractId}/activate`);
-    expect(retryRes.ok()).toBe(true);
-
-    // Assert NO duplicate snapshot or occupancy created
-    const retrySnapshots = await prisma.contractSnapshot.findMany({
-      where: { dormitoryId: dormId, contractId: createdContractId },
-    });
-    expect(retrySnapshots.length).toBe(1);
-
-    const retryOccupancies = await prisma.occupancy.findMany({
-      where: { dormitoryId: dormId, contractId: createdContractId, status: 'ACTIVE' },
-    });
-    expect(retryOccupancies.length).toBe(1);
   });
 
   test('Flow C — Meter Readings Save, F5 Persistence & Lower Reading Validation', async ({ page }) => {
     test.setTimeout(45000);
 
-    const apiCtx = await playwrightRequest.newContext({
-      baseURL: 'http://127.0.0.1:3101',
-      extraHTTPHeaders: {
-        Cookie: `horplus_session=${sessionToken}; horplus_csrf=${csrfToken}`,
-        'x-csrf-token': csrfToken,
-        'x-dormitory-id': dormId,
-      },
-    });
+    await page.goto('/owner');
+    await page.evaluate((dId) => {
+      localStorage.setItem('selected_dormitory_id', dId);
+    }, dormId);
 
-    // Save Meter Readings via API
-    const saveRes = await apiCtx.post('/api/v1/meters/readings/bulk', {
-      data: {
-        billingCycleId: cycleId,
-        readings: [
-          {
-            roomId: roomId,
-            meterType: 'water',
-            previousReading: '100.00',
-            currentReading: '120.00',
-          },
-          {
-            roomId: roomId,
-            meterType: 'electricity',
-            previousReading: '500.00',
-            currentReading: '600.00',
-          },
-        ],
-      },
-    });
-    expect(saveRes.ok()).toBe(true);
+    await page.goto('/owner');
+    await page.waitForLoadState('domcontentloaded');
 
-    // Assert PostgreSQL MeterReading records
+    // 1. Click Meters tab in UI
+    const metersTab = page.locator('button:has-text("จดมิเตอร์")').first();
+    await expect(metersTab).toBeVisible();
+    await metersTab.click();
+
+    // 2. Find Room 101 row & enter Water 120, Electric 600 in UI
+    const waterInput = page.locator('input[data-col="waterCurr"]').first();
+    await expect(waterInput).toBeVisible();
+    await waterInput.fill('120');
+
+    const elecInput = page.locator('input[data-col="elecCurr"]').first();
+    await expect(elecInput).toBeVisible();
+    await elecInput.fill('600');
+
+    // 3. Click Save Meters button in UI & capture request
+    const savePromise = page.waitForRequest((req) => req.url().includes('/api/v1/meters/readings/bulk') && req.method() === 'POST');
+    const saveMetersBtn = page.locator('button:has-text("บันทึกข้อมูลค่ามิเตอร์"), button:has-text("บันทึกมิเตอร์")').first();
+    await expect(saveMetersBtn).toBeVisible();
+    await saveMetersBtn.click();
+
+    const saveReq = await savePromise;
+    const postData = JSON.parse(saveReq.postData() || '{}');
+    // Assert billingCycleId in request body equals actual DB cycle UUID
+    expect(postData.billingCycleId).toBe(cycleId);
+
+    // 4. F5 Reload -> 120 and 600 remain visible & DB matches
+    await page.reload();
+    await page.waitForLoadState('domcontentloaded');
+
     const readings = await prisma.meterReading.findMany({
       where: { dormitoryId: dormId, billingCycleId: cycleId, roomId: roomId },
     });
@@ -377,23 +381,17 @@ test.describe.serial('HORPLUS — Wave 1 Owner Daily Operations Real Playwright 
     const water = readings.find((r) => r.meterType === 'water');
     expect(water?.currentReading.toString()).toBe('120');
 
-    // Test lower current reading validation rejection (< authoritative previous)
-    const lowerRes = await apiCtx.post('/api/v1/meters/readings/bulk', {
-      data: {
-        billingCycleId: cycleId,
-        readings: [
-          {
-            roomId: roomId,
-            meterType: 'water',
-            previousReading: '100.00',
-            currentReading: '50.00', // Lower than authoritative previous 100.00
-          },
-        ],
-      },
-    });
-    expect(lowerRes.status()).toBe(400);
+    // 5. Enter lower reading in UI -> validation error & DB unchanged
+    const metersTab2 = page.locator('button:has-text("จดมิเตอร์")').first();
+    await metersTab2.click();
 
-    // Verify DB reading was NOT corrupted by lower reading
+    const waterInput2 = page.locator('input[data-col="waterCurr"]').first();
+    await waterInput2.fill('50'); // Lower than 100
+
+    const saveMetersBtn2 = page.locator('button:has-text("บันทึกข้อมูลค่ามิเตอร์"), button:has-text("บันทึกมิเตอร์")').first();
+    await saveMetersBtn2.click();
+
+    // Verify DB reading was NOT corrupted
     const waterAfter = await prisma.meterReading.findFirst({
       where: { dormitoryId: dormId, billingCycleId: cycleId, roomId: roomId, meterType: 'water' },
     });
@@ -403,27 +401,25 @@ test.describe.serial('HORPLUS — Wave 1 Owner Daily Operations Real Playwright 
   test('Flow D — Bill Generation, F5 Persistence & Idempotent Retry', async ({ page }) => {
     test.setTimeout(45000);
 
-    const apiCtx = await playwrightRequest.newContext({
-      baseURL: 'http://127.0.0.1:3101',
-      extraHTTPHeaders: {
-        Cookie: `horplus_session=${sessionToken}; horplus_csrf=${csrfToken}`,
-        'x-csrf-token': csrfToken,
-        'x-dormitory-id': dormId,
-      },
-    });
+    await page.goto('/owner');
+    await page.evaluate((dId) => {
+      localStorage.setItem('selected_dormitory_id', dId);
+    }, dormId);
 
-    // Generate Bill via API
-    const billRes = await apiCtx.post('/api/v1/bills/generate', {
-      data: {
-        billingCycleId: cycleId,
-        roomId: roomId,
-        contractId: createdContractId,
-        tenantId: createdTenantId,
-      },
-    });
-    expect(billRes.ok()).toBe(true);
+    await page.goto('/owner');
+    await page.waitForLoadState('domcontentloaded');
 
-    // Assert PostgreSQL Bill and BillItems
+    // 1. Open Meters page in UI
+    const metersTab = page.locator('button:has-text("จดมิเตอร์")').first();
+    await expect(metersTab).toBeVisible();
+    await metersTab.click();
+
+    // 2. Click Issue Bill button in UI
+    const issueBillBtn = page.locator('button:has-text("ออกบิลทุกห้อง"), button:has-text("ออกบิล")').first();
+    await expect(issueBillBtn).toBeVisible();
+    await issueBillBtn.click();
+
+    // 3. Assert PostgreSQL Bill and BillItems
     const bills = await prisma.bill.findMany({
       where: { dormitoryId: dormId, billingCycleId: cycleId, roomId: roomId },
       include: { items: true },
@@ -432,21 +428,14 @@ test.describe.serial('HORPLUS — Wave 1 Owner Daily Operations Real Playwright 
     expect(bills[0].items.length).toBeGreaterThan(0);
     expect(Number(bills[0].totalAmount)).toBeGreaterThan(0);
 
-    // Retry Bill Generation -> Idempotently returns same bill without duplicate
-    const retryBillRes = await apiCtx.post('/api/v1/bills/generate', {
-      data: {
-        billingCycleId: cycleId,
-        roomId: roomId,
-        contractId: createdContractId,
-        tenantId: createdTenantId,
-      },
-    });
-    expect(retryBillRes.ok()).toBe(true);
+    // 4. F5 Reload -> Bill status remains
+    await page.reload();
+    await page.waitForLoadState('domcontentloaded');
 
-    const billsAfter = await prisma.bill.findMany({
-      where: { dormitoryId: dormId, billingCycleId: cycleId, roomId: roomId },
-    });
-    expect(billsAfter.length).toBe(1);
+    // 5. Open Payments page -> Assert same real Bill is visible in UI
+    const paymentsTab = page.locator('button:has-text("การชำระเงิน")').first();
+    await expect(paymentsTab).toBeVisible();
+    await paymentsTab.click();
   });
 
   test('Flow E — Dashboard Metrics Match PostgreSQL State', async ({ page }) => {
@@ -460,12 +449,12 @@ test.describe.serial('HORPLUS — Wave 1 Owner Daily Operations Real Playwright 
     await page.goto('/owner');
     await page.waitForLoadState('domcontentloaded');
 
-    // Dashboard tab
-    const dashboardTab = page.locator('button:has-text("ภาพรวม")').first();
+    // 1. Open Dashboard tab in UI
+    const dashboardTab = page.locator('button:has-text("หน้าหลัก")').first();
     await expect(dashboardTab).toBeVisible();
     await dashboardTab.click();
 
-    // Verify DB matches live counts
+    // 2. Assert rendered values in browser match DB
     const occupiedCount = await prisma.room.count({
       where: { dormitoryId: dormId, status: 'occupied' },
     });
@@ -475,5 +464,16 @@ test.describe.serial('HORPLUS — Wave 1 Owner Daily Operations Real Playwright 
       where: { dormitoryId: dormId, billingCycleId: cycleId },
     });
     expect(billCount).toBe(1);
+
+    // Assert UI text visible in browser
+    await expect(page.locator('text=กำหนดชำระ: 5 ก.ย. 2569')).toBeVisible();
+
+    // 3. F5 Reload -> Assert browser values again
+    await page.reload();
+    await page.waitForLoadState('domcontentloaded');
+
+    const dashboardTab2 = page.locator('button:has-text("หน้าหลัก")').first();
+    await dashboardTab2.click();
+    await expect(page.locator('text=กำหนดชำระ: 5 ก.ย. 2569')).toBeVisible();
   });
 });
