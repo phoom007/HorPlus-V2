@@ -468,10 +468,7 @@ test.describe.serial('HORPLUS — Wave 1 Owner Daily Operations Real Playwright 
 
     // 3. F5 Reload -> Assert browser values again
     await page.reload();
-    await page.waitForLoadState('domcontentloaded');
-
-    const dashboardTab2 = page.locator('button:has-text("หน้าหลัก")').first();
-    await dashboardTab2.click();
+    await page.waitForLoadState('networkidle');
     await expect(page.locator('text=กำหนดชำระ: 5 ก.ย. 2569')).toBeVisible();
   });
 });
