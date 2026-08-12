@@ -424,15 +424,19 @@ test.describe.serial('HORPLUS — Wave 1 Owner Daily Operations Real Playwright 
     expect(Number(bills[0].totalAmount)).toBeGreaterThan(0);
 
     const generatedBill = bills[0];
-
     // 4. F5 Reload -> Bill status remains
     await page.reload();
     await page.waitForLoadState('domcontentloaded');
 
-    // 5. Open Payments page -> Assert same real Bill is visible in UI
+    // 5. Open Payments view in UI & select unpaid cash tab
     const paymentsTab = page.locator('button:has-text("การชำระเงิน")').first();
     await expect(paymentsTab).toBeVisible();
     await paymentsTab.click();
+
+    const cashTab = page.locator('button:has-text("บันทึกเงินสด")').first();
+    await expect(cashTab).toBeVisible();
+    await cashTab.click();
+
     await expect(page.locator(`text=${generatedBill.billNumber}`).or(page.locator('text=101'))).toBeVisible();
   });
 
