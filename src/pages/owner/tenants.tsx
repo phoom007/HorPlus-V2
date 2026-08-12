@@ -164,21 +164,12 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
   };
 
   const handleAddCoOccupant = () => {
-    if (coName && coPhone) {
-      const newCo: CoOccupant = {
-        id: `co-${Date.now()}`,
-        name: coName.trim(),
-        phone: coPhone.trim()
-      };
-      setCoOccupants([...coOccupants, newCo]);
-      setCoName('');
-      setCoPhone('');
-      setCoCitizen('');
-    }
+    // DEFERRED_BY_PRODUCT_POLICY: Co-occupants editing deferred
+    alert('ระบบจัดการผู้พักร่วมอาศัยซ้อนอยู่ระหว่างการปรับปรุง (DEFERRED_BY_PRODUCT_POLICY)');
   };
 
-  const handleRemoveCoOccupant = (id: string) => {
-    setCoOccupants(coOccupants.filter(c => c.id !== id));
+  const handleRemoveCoOccupant = (_id: string) => {
+    // DEFERRED_BY_PRODUCT_POLICY: Co-occupants editing deferred
   };
 
   const handleNextStep = () => {
@@ -306,122 +297,19 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
       }
     }
 
-    setTimeout(() => {
-      const tenantId = selectedTenant.id;
-      const tenantName = selectedTenant.name;
-      const room = rooms.find(r => r.currentTenantId === tenantId);
-      const roomNumber = room ? room.roomNumber : '';
-      const parsedDamageFee = Number(damageFee) || 0;
-
-      // 1. Update room status to vacant and clear currentTenantId
-      const updatedRooms = rooms.map(r => r.currentTenantId === tenantId ? {
-        ...r,
-        status: 'vacant' as const,
-        currentTenantId: undefined,
-        updatedAt: new Date().toISOString()
-      } : r);
-
-      // 2. Set tenant status to inactive (DO NOT delete history)
-      const updatedTenants = tenants.map(t => t.id === tenantId ? {
-        ...t,
-        status: 'inactive' as const,
-        updatedAt: new Date().toISOString()
-      } : t);
-
-      // 3. Update contract status to 'expired'
-      const updatedContracts = contracts.map(c => {
-        if (c.tenantId === tenantId && (c.status === 'active' || c.status === 'expiring_soon' || c.status === 'checking_out' || c.status === 'pending_signature')) {
-          return {
-            ...c,
-            status: 'expired' as const,
-            updatedAt: new Date().toISOString(),
-            terms: `${c.terms || ''}\n[ระบบนิติ] เลิกเช่าคืนห้องพักเมื่อ ${new Date().toLocaleDateString('th-TH')} / หักค่าเสียหาย: ${parsedDamageFee} บาท / คืนเงินประกัน: ${refundDeposit ? 'ใช่' : 'ไม่'}${additionalNote ? ` / หมายเหตุ: ${additionalNote}` : ''}`
-          };
-        }
-        return c;
-      });
-
-      // 4. Update or generate final bill for tenant
-      let updatedBills = [...bills];
-      const existingUnpaidBillIndex = updatedBills.findIndex(
-        b => b.tenantId === tenantId && b.status !== 'paid' && b.status !== 'cancelled'
-      );
-
-      if (existingUnpaidBillIndex >= 0) {
-        const existingBill = updatedBills[existingUnpaidBillIndex];
-        const otherItems = existingBill.items.filter(item => item.category !== 'fine');
-        if (parsedDamageFee > 0) {
-          otherItems.push({
-            id: `item-damage-${Date.now()}`,
-            description: 'หักค่าปรับ / ค่าเสียหายอื่น ๆ (แจ้งเลิกเช่า)',
-            amount: parsedDamageFee,
-            category: 'fine'
-          });
-        }
-        const newTotal = otherItems.reduce((sum, item) => sum + item.amount, 0);
-
-        updatedBills[existingUnpaidBillIndex] = {
-          ...existingBill,
-          items: otherItems,
-          totalAmount: newTotal,
-          status: 'pending',
-          updatedAt: new Date().toISOString()
-        };
-      } else {
-        const finalBillItems: BillItem[] = [
-          {
-            id: `item-rent-${Date.now()}`,
-            description: `ค่าเช่าห้องพักงวดสุดท้าย (ห้อง ${roomNumber || ''})`,
-            amount: room ? room.monthlyRent : 0,
-            category: 'rent'
-          }
-        ];
-        if (parsedDamageFee > 0) {
-          finalBillItems.push({
-            id: `item-damage-${Date.now()}`,
-            description: 'หักค่าปรับ / ค่าเสียหายอื่น ๆ (แจ้งเลิกเช่า)',
-            amount: parsedDamageFee,
-            category: 'fine'
-          });
-        }
-        const totalBillAmount = finalBillItems.reduce((sum, item) => sum + item.amount, 0);
-        const currentCycle = selectedCycle || new Date().toISOString().slice(0, 7);
-
-        const newFinalBill: Bill = {
-          id: `bill-final-${tenantId}-${Date.now()}`,
-          billNumber: `INV-${new Date().getFullYear()}${String(new Date().getMonth() + 1).padStart(2, '0')}-${roomNumber || 'OUT'}`,
-          cycleId: currentCycle,
-          roomId: room ? room.id : '',
-          tenantId: tenantId,
-          items: finalBillItems,
-          totalAmount: totalBillAmount,
-          dueDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-          status: 'pending',
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString()
-        };
-        updatedBills.push(newFinalBill);
-      }
-
-      // 5. Save and trigger callbacks
-      onSaveRooms(updatedRooms);
+    try {
+      const updatedTenants = await getDataProvider().tenants.getAll();
       onSaveTenants(updatedTenants);
-      if (onSaveContracts) {
-        onSaveContracts(updatedContracts);
+      if (onSaveRooms) {
+        const updatedRooms = await getDataProvider().rooms.getAll();
+        onSaveRooms(updatedRooms);
       }
-      if (onSaveBills) {
-        onSaveBills(updatedBills);
-      }
+    } catch {}
 
-      // 6. Add action log
-      const detailLog = `ผู้เช่า ${tenantName} เลิกเช่าคืนห้องพัก (ห้อง ${roomNumber}) - สถานะห้อง: ว่าง, สัญญา: หมดอายุ, เงินประกันคืน: ${refundDeposit ? 'คืนเงินประกัน' : 'ไม่คืน'}, หักค่าเสียหาย: ${parsedDamageFee} บาท`;
-      onAddLog('เลิกเช่าคืนห้อง', detailLog, 'Tenant', tenantId);
-
-      // 7. Close modals and clear selection
-      setIsSuccessAnimating(false);
-      setIsTerminateOpen(false);
-      setSelectedTenant(null);
-    }, 1200);
+    onAddLog('เลิกเช่าคืนห้อง', `ผู้เช่า ${selectedTenant.name} ย้ายออกเรียบร้อยแล้ว`, 'Tenant', tenantId);
+    setIsSuccessAnimating(false);
+    setIsTerminateOpen(false);
+    setSelectedTenant(null);
   };
 
   const handleConfirmTransfer = async () => {
@@ -529,7 +417,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
     }
   };
 
-  const handleSaveEditTenant = (e: React.FormEvent) => {
+  const handleSaveEditTenant = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim() || !phone.trim() || !citizenId.trim()) {
       setErrorText('กรุณากรอกข้อมูลที่จำเป็น (*) ให้ครบถ้วน');
@@ -537,13 +425,11 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
     }
 
     if (selectedTenant) {
-      const updatedTenants = tenants.map(t => t.id === selectedTenant.id ? {
-        ...t,
+      const updatePayload = {
         name: name.trim(),
         phone: phone.trim(),
         email: email.trim(),
         citizenId: citizenId.trim(),
-        idCardPhotoMock: idCardPhoto || undefined,
         emergencyContact: {
           name: emergencyName.trim(),
           relationship: emergencyRelation.trim(),
@@ -558,18 +444,26 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
           hasPet,
           type: hasPet ? petType.trim() : undefined,
           name: hasPet ? petName.trim() : undefined
-        },
-        updatedAt: new Date().toISOString()
-      } : t);
+        }
+      };
 
-      onSaveTenants(updatedTenants);
-      // Update selectedTenant state to reflect changes instantly
-      const updatedItem = updatedTenants.find(t => t.id === selectedTenant.id);
-      if (updatedItem) {
-        setSelectedTenant(updatedItem);
+      try {
+        const res = await getDataProvider().tenants.updateTenant(selectedTenant.id, updatePayload as any);
+        if (res.success) {
+          const updatedTenants = await getDataProvider().tenants.getAll();
+          onSaveTenants(updatedTenants);
+          const updatedItem = updatedTenants.find(t => t.id === selectedTenant.id);
+          if (updatedItem) {
+            setSelectedTenant(updatedItem);
+          }
+          setIsEditOpen(false);
+          onAddLog('แก้ไขทะเบียนผู้เช่า', `แก้ไขข้อมูลผู้เช่าคุณ ${name.trim()}`, 'Tenant', selectedTenant.id);
+        } else {
+          setErrorText(res.error?.message || 'เกิดข้อผิดพลาดในการบันทึกการแก้ไข');
+        }
+      } catch (err: any) {
+        setErrorText(err.message || 'เกิดข้อผิดพลาดในการบันทึกการแก้ไข');
       }
-      setIsEditOpen(false);
-      onAddLog('แก้ไขทะเบียนผู้เช่า', `แก้ไขข้อมูลผู้เช่าคุณ ${name.trim()}`, 'Tenant', selectedTenant.id);
     }
   };
 
@@ -1689,15 +1583,14 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
 
                 {/* Move-Out Request Details & Actual End Date Confirmation */}
                 {(() => {
-                  const stored = typeof window !== 'undefined' ? localStorage.getItem(`tenant_moveout_request_${selectedTenant.id}`) : null;
-                  const reqInfo = stored ? JSON.parse(stored) : null;
+                  const reqInfo = null;
 
                   return (
                     <div className="p-3 bg-amber-50/70 border border-amber-200 rounded-2xl space-y-2 text-xs">
                       <div className="flex items-center justify-between">
                         <span className="font-bold text-amber-900">คำขอแจ้งย้ายออกของผู้เช่า (ถ้ามี)</span>
                         <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 font-bold">
-                          {reqInfo ? 'มีคำขอรอยืนยัน' : 'ไม่มีคำขอแจ้งย้ายออก'}
+                          ไม่มีคำขอแจ้งย้ายออก (ระบบย้ายออกโดยตรง)
                         </span>
                       </div>
                       {reqInfo && (

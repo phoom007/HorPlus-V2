@@ -295,16 +295,14 @@ export const OwnerContracts: React.FC<OwnerContractsProps> = ({
   // Creator state
   const [selectedTenantId, setSelectedTenantId] = useState<string>(tenants[0]?.id || '');
   const [selectedRoomId, setSelectedRoomId] = useState<string>(rooms[0]?.id || '');
-  const [startDate, setStartDate] = useState('2026-07-14');
+  const [startDate, setStartDate] = useState(new Date().toISOString().split('T')[0]);
   const [endDate, setEndDate] = useState('');
-  const [stayDate, setStayDate] = useState('2026-07-20');
+  const [stayDate, setStayDate] = useState(new Date().toISOString().split('T')[0]);
   const [durationMonths, setDurationMonths] = useState(6);
   const [contractTerms, setContractTerms] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [isPendingDetailOpen, setIsPendingDetailOpen] = useState(false);
-  const [tenantSig, setTenantSig] = useState<string | undefined>(
-    'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="100" height="40"><path d="M10,20 Q30,10 50,25 T90,15" stroke="black" stroke-width="2" fill="none"/></svg>'
-  );
+  const [tenantSig, setTenantSig] = useState<string | undefined>(undefined);
   const [errorText, setErrorText] = useState<string | null>(null);
 
   // Derive selected tenant object
@@ -335,8 +333,9 @@ export const OwnerContracts: React.FC<OwnerContractsProps> = ({
     const candidateTenant = tenants.find(t => t.status === 'active') || tenants[0];
     if (candidateTenant) {
       handleSelectTenant(candidateTenant.id);
-      setStartDate('2026-07-14');
-      setStayDate('2026-07-20');
+      const today = new Date().toISOString().split('T')[0];
+      setStartDate(today);
+      setStayDate(today);
       setDurationMonths(6);
       onAddLog('ดึงข้อมูลอัจฉริยะ (Smart Fill)', `ดึงข้อมูลคุณ ${candidateTenant.name} เข้าสู่สัญญาอัตโนมัติ`, 'Contract', candidateTenant.id);
     } else {
@@ -527,132 +526,15 @@ export const OwnerContracts: React.FC<OwnerContractsProps> = ({
   };
 
   const handleConfirmTerminate = () => {
-    if (!selectedContract) return;
-
-    const targetTenantId = selectedContract.tenantId;
-    const targetTenant = tenants.find(t => t.id === targetTenantId);
-    const tenantName = targetTenant ? targetTenant.name : getTenantName(targetTenantId);
-    const room = rooms.find(r => r.id === selectedContract.roomId || r.currentTenantId === targetTenantId);
-    const roomNumber = room ? room.roomNumber : getRoomNum(selectedContract.roomId);
-    const parsedDamageFee = Number(damageFee) || 0;
-
-    // 1. Update room status to vacant and clear currentTenantId
-    const updatedRooms = rooms.map(r => (r.id === selectedContract.roomId || r.currentTenantId === targetTenantId) ? {
-      ...r,
-      status: 'vacant' as const,
-      currentTenantId: undefined,
-      updatedAt: new Date().toISOString()
-    } : r);
-
-    // 2. Set tenant status to inactive (DO NOT delete history)
-    const updatedTenants = tenants.map(t => t.id === targetTenantId ? {
-      ...t,
-      status: 'inactive' as const,
-      updatedAt: new Date().toISOString()
-    } : t);
-
-    // 3. Update contract status to 'expired'
-    const updatedContracts = contracts.map(c => {
-      if (c.id === selectedContract.id || (c.tenantId === targetTenantId && (c.status === 'active' || c.status === 'expiring_soon' || c.status === 'checking_out' || c.status === 'pending_signature'))) {
-        return {
-          ...c,
-          status: 'expired' as const,
-          updatedAt: new Date().toISOString(),
-          terms: `${c.terms || ''}\n[ระบบนิติ] เลิกเช่าคืนห้องพักเมื่อ ${new Date().toLocaleDateString('th-TH')} / หักค่าเสียหาย: ${parsedDamageFee} บาท / คืนเงินประกัน: ${refundDeposit ? 'ใช่' : 'ไม่'}${additionalNote ? ` / หมายเหตุ: ${additionalNote}` : ''}`
-        };
-      }
-      return c;
-    });
-
-    // 4. Update or generate final bill for tenant
-    let updatedBills = [...bills];
-    const existingUnpaidBillIndex = updatedBills.findIndex(
-      b => b.tenantId === targetTenantId && b.status !== 'paid' && b.status !== 'cancelled'
-    );
-
-    if (existingUnpaidBillIndex >= 0) {
-      const existingBill = updatedBills[existingUnpaidBillIndex];
-      const otherItems = existingBill.items.filter(item => item.category !== 'fine');
-      if (parsedDamageFee > 0) {
-        otherItems.push({
-          id: `item-damage-${Date.now()}`,
-          description: 'หักค่าปรับ / ค่าเสียหายอื่น ๆ (แจ้งเลิกเช่า)',
-          amount: parsedDamageFee,
-          category: 'fine'
-        });
-      }
-      const newTotal = otherItems.reduce((sum, item) => sum + item.amount, 0);
-
-      updatedBills[existingUnpaidBillIndex] = {
-        ...existingBill,
-        items: otherItems,
-        totalAmount: newTotal,
-        status: 'pending',
-        updatedAt: new Date().toISOString()
-      };
-    } else {
-      const finalBillItems: BillItem[] = [
-        {
-          id: `item-rent-${Date.now()}`,
-          description: `ค่าเช่าห้องพักงวดสุดท้าย (ห้อง ${roomNumber || ''})`,
-          amount: room ? room.monthlyRent : selectedContract.rentAmount || 0,
-          category: 'rent'
-        }
-      ];
-      if (parsedDamageFee > 0) {
-        finalBillItems.push({
-          id: `item-damage-${Date.now()}`,
-          description: 'หักค่าปรับ / ค่าเสียหายอื่น ๆ (แจ้งเลิกเช่า)',
-          amount: parsedDamageFee,
-          category: 'fine'
-        });
-      }
-      const totalBillAmount = finalBillItems.reduce((sum, item) => sum + item.amount, 0);
-      const currentCycle = selectedCycle || new Date().toISOString().slice(0, 7);
-
-      const newFinalBill: Bill = {
-        id: `bill-final-${targetTenantId}-${Date.now()}`,
-        billNumber: `INV-${new Date().getFullYear()}${String(new Date().getMonth() + 1).padStart(2, '0')}-${roomNumber || 'OUT'}`,
-        cycleId: currentCycle,
-        roomId: room ? room.id : selectedContract.roomId,
-        tenantId: targetTenantId,
-        items: finalBillItems,
-        totalAmount: totalBillAmount,
-        dueDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-        status: 'pending',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      };
-      updatedBills.push(newFinalBill);
-    }
-
-    // 5. Save
-    onSaveRooms(updatedRooms);
-    if (onSaveTenants) onSaveTenants(updatedTenants);
-    onSaveContracts(updatedContracts);
-    if (onSaveBills) onSaveBills(updatedBills);
-
-    // Update current selectedContract state
-    setSelectedContract({
-      ...selectedContract,
-      status: 'expired'
-    });
-
-    // 6. Add action log
-    const detailLog = `ผู้เช่า ${tenantName} เลิกเช่าคืนห้องพัก (ห้อง ${roomNumber}) - สถานะห้อง: ว่าง, สัญญา: หมดอายุ, เงินประกันคืน: ${refundDeposit ? 'คืนเงินประกัน' : 'ไม่คืน'}, หักค่าเสียหาย: ${parsedDamageFee} บาท`;
-    onAddLog('เลิกเช่าคืนห้อง', detailLog, 'Tenant', targetTenantId);
-
-    // 7. Close modal & show toast notification
-    setIsSuccessAnimating(false);
     setIsTerminateOpen(false);
-    setPendingToast(`ยกเลิกสัญญาและคืนห้องพัก ${roomNumber} เรียบร้อยแล้ว`);
+    setPendingToast('ฟังก์ชันยุติสัญญา/สรุปยอดย้ายออกยังไม่พร้อมใช้งานในเวอร์ชันนี้');
   };
 
   const calculateAutoRent = (unit: 'month' | 'day', _count: number, contract: Contract | null) => {
     if (!contract) return 0;
     const room = rooms.find(r => r.id === contract.roomId || r.roomNumber === contract.roomId);
-    const monthlyRate = room?.monthlyRent || contract.rentAmount || 4000;
-    const dailyRate = room?.dailyRent || (monthlyRate ? Math.round(monthlyRate / 30) : 500);
+    const monthlyRate = room?.monthlyRent || contract.rentAmount || 0;
+    const dailyRate = room?.dailyRent || (monthlyRate ? Math.round(monthlyRate / 30) : 0);
 
     if (unit === 'month') {
       return monthlyRate;
@@ -716,49 +598,8 @@ export const OwnerContracts: React.FC<OwnerContractsProps> = ({
   };
 
   const handleExecuteRenewal = () => {
-    if (!renewContractTarget) return;
-
-    const finalRent = renewRentAmount > 0 ? renewRentAmount : renewContractTarget.rentAmount;
-    const addedMonths = renewUnit === 'month' ? renewMonths : Math.max(1, Math.round(renewDays / 30));
-
-    const updatedContracts = contracts.map(c => {
-      if (c.id === renewContractTarget.id) {
-        return {
-          ...c,
-          status: 'active' as const,
-          durationMonths: c.durationMonths + addedMonths,
-          endDate: renewEndDate,
-          rentAmount: finalRent,
-          updatedAt: new Date().toISOString()
-        };
-      }
-      return c;
-    });
-
-    onSaveContracts(updatedContracts);
-
-    const updatedContractObj: Contract = {
-      ...renewContractTarget,
-      status: 'active' as const,
-      durationMonths: renewContractTarget.durationMonths + addedMonths,
-      endDate: renewEndDate,
-      rentAmount: finalRent,
-      updatedAt: new Date().toISOString()
-    };
-
-    setSelectedContract(updatedContractObj);
-
-    const durationText = renewUnit === 'month' ? `${renewMonths} เดือน` : `${renewDays} วัน`;
-
-    onAddLog(
-      'ต่ออายุสัญญาเช่า',
-      `ต่ออายุสัญญาเช่าห้องพักหมายเลข ${getRoomNum(renewContractTarget.roomId)} เพิ่มอีก ${durationText} (สิ้นสุดวันที่ ${formatThaiDate(renewEndDate)})`,
-      'Contract',
-      renewContractTarget.id
-    );
-
     setIsRenewModalOpen(false);
-    setPendingToast(`ต่ออายุสัญญาเช่าห้อง ${getRoomNum(renewContractTarget.roomId)} เรียบร้อยแล้ว`);
+    setPendingToast('ฟังก์ชันต่ออายุสัญญาเช่ายังไม่พร้อมใช้งานในเวอร์ชันนี้');
     setRenewContractTarget(null);
   };
 

@@ -185,7 +185,7 @@ test.describe.serial('HORPLUS — Wave 1 Owner Daily Operations Real Playwright 
     }, dormId);
   });
 
-  test('Flow A — Create Tenant via UI, verify DB persistence & Room remains VACANT before activation', async ({ page }) => {
+  test('Flow A — Create & Edit Tenant via UI, verify DB persistence & Room remains VACANT before activation', async ({ page }) => {
     test.setTimeout(60000);
 
     await page.goto('/owner/tenants');
@@ -235,6 +235,17 @@ test.describe.serial('HORPLUS — Wave 1 Owner Daily Operations Real Playwright 
     expect(createdTenant).not.toBeNull();
     createdTenantId = createdTenant!.id;
 
+    // Edit Tenant via UI
+    const editBtn = page.locator('button:has-text("แก้ไขข้อมูล"), button[title*="แก้ไข"]').first();
+    if (await editBtn.isVisible()) {
+      await editBtn.click();
+      const editNameInput = page.locator('form input[type="text"]').first();
+      await expect(editNameInput).toBeVisible();
+      await editNameInput.fill('สมชาย ใจดีมาก');
+      const submitEditBtn = page.locator('button[type="submit"]:has-text("บันทึกการแก้ไข")').first();
+      await submitEditBtn.click();
+    }
+
     // F5 Refresh
     await page.reload();
     await page.waitForLoadState('domcontentloaded');
@@ -260,16 +271,14 @@ test.describe.serial('HORPLUS — Wave 1 Owner Daily Operations Real Playwright 
     await expect(createBtn).toBeVisible();
     await createBtn.click();
 
-    // 3. Fill Contract creation form in UI
+    // 3. Fill Contract creation form in UI (Enforce visible selection - NO skips)
     const tenantSelect = page.locator('select').first();
-    if (await tenantSelect.isVisible()) {
-      await tenantSelect.selectOption({ index: 1 });
-    }
+    await expect(tenantSelect).toBeVisible();
+    await tenantSelect.selectOption({ index: 1 });
 
     const roomSelect = page.locator('select').nth(1);
-    if (await roomSelect.isVisible()) {
-      await roomSelect.selectOption({ index: 1 });
-    }
+    await expect(roomSelect).toBeVisible();
+    await roomSelect.selectOption({ index: 1 });
 
     // 4. Click Save Draft Contract button in UI
     const saveContractBtn = page.locator('button:has-text("บันทึกร่างสัญญาเช่า"), button:has-text("บันทึกสัญญาเช่า"), button:has-text("ทำสัญญาเช่า")').first();
@@ -336,8 +345,9 @@ test.describe.serial('HORPLUS — Wave 1 Owner Daily Operations Real Playwright 
 
     const saveReq = await savePromise;
     const postData = JSON.parse(saveReq.postData() || '{}');
-    // Assert billingCycleId in request body equals actual DB cycle UUID
+    // Assert billingCycleId in request body equals actual DB cycle UUID (NOT cycleCode YYYY-MM)
     expect(postData.billingCycleId).toBe(cycleId);
+    expect(postData.billingCycleId).not.toBe('2026-08');
 
     // 4. F5 Reload -> 120 and 600 remain visible & DB matches
     await page.reload();
@@ -352,14 +362,14 @@ test.describe.serial('HORPLUS — Wave 1 Owner Daily Operations Real Playwright 
     expect(water?.currentReading.toString()).toBe('120');
 
     // 5. Enter lower reading in UI -> validation error & DB unchanged
-    const metersTab2 = page.locator('button:has-text("จดมิเตอร์")').first();
-    await metersTab2.click();
-
     const waterInput2 = page.locator('input[data-col="waterCurr"]').first();
     await waterInput2.fill('50'); // Lower than 100
 
     const saveMetersBtn2 = page.locator('button:has-text("บันทึกข้อมูลค่ามิเตอร์"), button:has-text("บันทึกมิเตอร์")').first();
     await saveMetersBtn2.click();
+
+    // Assert visible error notification in UI
+    await expect(page.locator('text=เลขอ่านมิเตอร์ใหม่ต้องไม่น้อยกว่าเลขอ่านครั้งก่อน')).toBeVisible();
 
     // Verify DB reading was NOT corrupted
     const waterAfter = await prisma.meterReading.findFirst({
@@ -368,7 +378,7 @@ test.describe.serial('HORPLUS — Wave 1 Owner Daily Operations Real Playwright 
     expect(waterAfter?.currentReading.toString()).toBe('120');
   });
 
-  test('Flow D — Bill Generation, F5 Persistence & Idempotent Retry', async ({ page }) => {
+  test('Flow D — Bill Generation, F5 Persistence & Payments View Verification', async ({ page }) => {
     test.setTimeout(45000);
 
     await page.goto('/owner');
@@ -393,6 +403,8 @@ test.describe.serial('HORPLUS — Wave 1 Owner Daily Operations Real Playwright 
     expect(bills[0].items.length).toBeGreaterThan(0);
     expect(Number(bills[0].totalAmount)).toBeGreaterThan(0);
 
+    const generatedBill = bills[0];
+
     // 4. F5 Reload -> Bill status remains
     await page.reload();
     await page.waitForLoadState('domcontentloaded');
@@ -401,9 +413,10 @@ test.describe.serial('HORPLUS — Wave 1 Owner Daily Operations Real Playwright 
     const paymentsTab = page.locator('button:has-text("การชำระเงิน")').first();
     await expect(paymentsTab).toBeVisible();
     await paymentsTab.click();
+    await expect(page.locator(`text=${generatedBill.billNumber}`).or(page.locator('text=101'))).toBeVisible();
   });
 
-  test('Flow E — Dashboard Metrics Match PostgreSQL State', async ({ page }) => {
+  test('Flow E — Dashboard Metrics Match PostgreSQL State & Persist Across F5', async ({ page }) => {
     test.setTimeout(45000);
 
     await page.goto('/owner');

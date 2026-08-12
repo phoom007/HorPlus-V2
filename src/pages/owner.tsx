@@ -671,6 +671,22 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
   }
 
   // Determine current component to render
+  const [meterReadings, setMeterReadings] = useState<any[]>([]);
+
+  useEffect(() => {
+    if (selectedBillingCycleId) {
+      const reqHeaders: Record<string, string> = {};
+      const savedId = localStorage.getItem('selected_dormitory_id');
+      if (savedId) reqHeaders['x-dormitory-id'] = savedId;
+      fetch(`/api/v1/meters/readings?billingCycleId=${selectedBillingCycleId}&pageSize=200`, { headers: reqHeaders, credentials: 'include' })
+        .then(r => r.ok ? r.json() : null)
+        .then(data => setMeterReadings(data?.data || []))
+        .catch(() => setMeterReadings([]));
+    } else {
+      setMeterReadings([]);
+    }
+  }, [selectedBillingCycleId]);
+
   const renderSubView = () => {
     switch (activeTab) {
       case 'dashboard':
@@ -684,6 +700,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
             activeUser={user}
             selectedCycle={selectedCycleCode}
             selectedBillingCycle={billingCycles.find(c => c.id === selectedBillingCycleId || c.cycleCode === selectedCycleCode)}
+            meterReadings={meterReadings}
             setSelectedCycle={(c: string) => setSelectedCycleCode(c)}
             onAddLog={handleAddLog}
             onNavigate={(tab, param) => {

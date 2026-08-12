@@ -45,7 +45,7 @@ All 12 mandatory acceptance regressions have been implemented and verified via a
 - **Server Integration Truth Suite**: `server/tests/wave1-owner-daily-operations-truth.test.ts` (12/12 PASSED)
 - **Full Server Test Suite**: 24 test files, 334 tests (PASSED)
 - **Server Production Build**: `npm run build` (`tsc -p tsconfig.build.json`) (PASSED)
-- **Frontend Regression Guards Suite**: `src/tests/wave1-frontend-guards.test.ts` (4/4 PASSED)
+- **Frontend Regression Guards Suite**: `src/tests/wave1-frontend-guards.test.ts` (8/8 PASSED)
 - **Root Frontend Test Suite**: `npm test` (7 test files, 44 tests PASSED)
 - **Root Production Build**: `npm run build` (`vite build`) (PASSED)
 - **TypeScript Type Checks**: `npx tsc --noEmit` & `npx tsc --noEmit -p tsconfig.e2e.json` (PASSED)

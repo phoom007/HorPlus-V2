@@ -42,4 +42,25 @@ describe('Wave 1 Frontend Business Authority Regression Guards Suite', () => {
     expect(content).not.toContain("HorPlus_pending_contract_submissions");
     expect(content).not.toContain("id: 'dorm-1'");
   });
+
+  it('6. OwnerMeters requires selectedBillingCycleId and does not mutate local bill status', () => {
+    const content = fs.readFileSync(metersPath, 'utf8');
+    expect(content).toContain('selectedBillingCycleId: string');
+    expect(content).not.toContain('handleTogglePaid');
+    expect(content).not.toContain('saveBulkMeterRecords(meterRows as any, selectedCycle)');
+  });
+
+  it('7. OwnerTenants uses updateTenant API and no fake setTimeout move-out mutations', () => {
+    const content = fs.readFileSync(tenantsPath, 'utf8');
+    expect(content).toContain('updateTenant');
+    expect(content).not.toContain('tenant_moveout_request_');
+    expect(content).not.toContain('co-${Date.now()}');
+  });
+
+  it('8. OwnerContracts starts with empty tenant signature and no fake local termination/renewal mutations', () => {
+    const content = fs.readFileSync(contractsPath, 'utf8');
+    expect(content).toContain('useState<string | undefined>(undefined)');
+    expect(content).toContain('ฟังก์ชันยุติสัญญา/สรุปยอดย้ายออกยังไม่พร้อมใช้งานในเวอร์ชันนี้');
+    expect(content).toContain('ฟังก์ชันต่ออายุสัญญาเช่ายังไม่พร้อมใช้งานในเวอร์ชันนี้');
+  });
 });

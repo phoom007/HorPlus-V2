@@ -25,7 +25,8 @@ import {
   Send,
   Calendar,
   Users,
-  CheckCircle2
+  CheckCircle2,
+  FileText
 } from 'lucide-react';
 import { Room, Bill, BillItem, Tenant, Contract, BillStatus, calculateRoomRentForCycle } from '../../types';
 import { getDataProvider } from '../../data/dataProvider';
@@ -82,7 +83,10 @@ interface OwnerMetersProps {
   onSelectTenant: (tenantId: string) => void;
   onAddLog: (action: string, details: string, type: string, id: string) => void;
   onNavigate: (tab: string) => void;
+  selectedBillingCycleId: string;
+  selectedCycleCode: string;
   selectedCycle?: string;
+  onRefetchData?: () => void;
 }
 
 export interface MeterRowState {
@@ -114,7 +118,10 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   onSelectTenant,
   onAddLog,
   onNavigate,
-  selectedCycle = ''
+  selectedBillingCycleId,
+  selectedCycleCode,
+  selectedCycle = selectedCycleCode,
+  onRefetchData
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [meterRows, setMeterRows] = useState<MeterRowState[]>([]);
@@ -617,135 +624,103 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     }
   }, [selectedCycle]);
 
-  useEffect(() => {
-    const draftKey = `meters_form_draft_${selectedCycle}`;
-    const cached = getStored<MeterRowState[] | null>(draftKey, null);
-    
-    // Reference all real rooms in /owner/rooms sorted by roomNumber
-    const activeRooms = [...rooms].sort((a, b) => 
-      a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true, sensitivity: 'base' })
-    );
-
-    const rows: MeterRowState[] = activeRooms.map(r => {
-      const cycleTenant = getTenantForRoomAndCycle(r.id, selectedCycle);
-      const existingBill = bills.find(b => b.cycleId === selectedCycle && (b.roomId === r.id || b.roomId === r.roomNumber || (b.tenantId && cycleTenant && b.tenantId === cycleTenant.id)));
-      const cachedRow = cached?.find(c => c.roomId === r.id);
+  const fetchAuthoritativeReadings = async (cycleId: string) => {
+    if (!cycleId) return;
+    try {
+      const serverReadings = await getDataProvider().meters.getByCycle(cycleId);
+      const readingsByRoom: { [roomId: string]: { waterPrev?: number; waterCurr?: number; elecPrev?: number; elecCurr?: number } } = {};
       
-      const prevCycleData = getPrevCycleNewReadings(r.id);
-      const rawWaterBaseline = r.initialWaterMeter ?? (r as any).initialWaterReading ?? 0;
-      const rawElecBaseline = r.initialElectricMeter ?? (r as any).initialElectricityReading ?? 0;
-
-      const rawWaterPrev = cachedRow?.waterPrev ?? (prevCycleData ? prevCycleData.waterCurr : rawWaterBaseline);
-      const parsedWaterPrev = typeof rawWaterPrev === 'number' ? rawWaterPrev : Number(rawWaterPrev);
-      const waterPrev = isNaN(parsedWaterPrev) ? 0 : Math.round(parsedWaterPrev);
-
-      const rawElecPrev = cachedRow?.elecPrev ?? (prevCycleData ? prevCycleData.elecCurr : rawElecBaseline);
-      const parsedElecPrev = typeof rawElecPrev === 'number' ? rawElecPrev : Number(rawElecPrev);
-      const elecPrev = isNaN(parsedElecPrev) ? 0 : Math.round(parsedElecPrev);
-      
-      // Match existing bill structures if present
-      let waterCurr = waterPrev;
-      if (cachedRow) {
-        waterCurr = cachedRow.waterCurr;
-      } else if (existingBill) {
-        const waterItem = existingBill.items.find(item => item.category === 'water');
-        if (waterItem) {
-          const mode = cycleRates.waterBillingMode || 'unit';
-          if (mode === 'unit') {
-            const match = waterItem.description.match(/\((\d+)\s*หน่วย\)/);
-            const waterUnits = match ? Number(match[1]) : (cycleRates.waterUnitRate ? Math.round(waterItem.amount / cycleRates.waterUnitRate) : 0);
-            waterCurr = waterPrev + waterUnits;
-          } else {
-            waterCurr = waterPrev;
-          }
+      (serverReadings || []).forEach((r: any) => {
+        if (!readingsByRoom[r.roomId]) {
+          readingsByRoom[r.roomId] = {};
         }
-      }
-
-      let elecCurr = elecPrev;
-      if (cachedRow) {
-        elecCurr = cachedRow.elecCurr;
-      } else if (existingBill) {
-        const elecItem = existingBill.items.find(item => item.category === 'electricity');
-        if (elecItem) {
-          const mode = cycleRates.electricBillingMode || 'unit';
-          if (mode === 'unit') {
-            const match = elecItem.description.match(/\((\d+)\s*หน่วย\)/);
-            const elecUnits = match ? Number(match[1]) : (cycleRates.electricUnitRate ? Math.round(elecItem.amount / cycleRates.electricUnitRate) : 0);
-            elecCurr = elecPrev + elecUnits;
-          } else {
-            elecCurr = elecPrev;
-          }
+        if (r.meterType === 'water') {
+          readingsByRoom[r.roomId].waterPrev = Number(r.previousReading ?? 0);
+          readingsByRoom[r.roomId].waterCurr = Number(r.currentReading ?? 0);
+        } else if (r.meterType === 'electricity') {
+          readingsByRoom[r.roomId].elecPrev = Number(r.previousReading ?? 0);
+          readingsByRoom[r.roomId].elecCurr = Number(r.currentReading ?? 0);
         }
-      }
-
-      const tenantDefaultPeople = cycleTenant ? (1 + (cycleTenant.coOccupants?.length || 0)) : 1;
-      const peopleCount = cachedRow?.peopleCount ?? tenantDefaultPeople;
-      const overdueAmount = cachedRow?.overdueAmount ?? 0;
-      
-      const billStatus: BillStatus = existingBill 
-        ? existingBill.status 
-        : (cachedRow?.billStatus ?? (cachedRow?.isPaid ? 'paid' : 'draft'));
-      const isPaid = billStatus === 'paid';
-      
-      const otherFees: { description: string; amount: number }[] = [];
-      if (cachedRow?.otherFees) {
-        otherFees.push(...cachedRow.otherFees);
-      } else if (existingBill) {
-        existingBill.items.forEach(item => {
-          const isRent = item.category === 'rent' || item.description.startsWith('ค่าเช่า');
-          const isWater = item.category === 'water' || item.description.startsWith('ค่าน้ำ');
-          const isElec = item.category === 'electricity' || item.description.startsWith('ค่าไฟ');
-          const isCommon = item.description.startsWith('ค่าบริการส่วนกลาง') || item.id.includes('-common');
-          const isInternet = item.description.startsWith('ค่าบริการอินเทอร์เน็ต') || item.id.includes('-internet');
-          const isOverdue = item.description === 'ยอดค้างชำระสะสม' || item.id.includes('-overdue');
-          if (!isRent && !isWater && !isElec && !isCommon && !isInternet && !isOverdue) {
-            otherFees.push({ description: item.description, amount: item.amount });
-          }
-        });
-      }
-
-      return {
-        roomId: r.id,
-        roomNumber: r.roomNumber,
-        waterPrev,
-        waterCurr: Math.round(waterCurr),
-        elecPrev,
-        elecCurr: Math.round(elecCurr),
-        isReplaced: cachedRow?.isReplaced ?? false,
-        peopleCount,
-        overdueAmount,
-        isPaid,
-        billStatus,
-        editWaterPrev: false,
-        editElecPrev: false,
-        otherFees
-      };
-    });
-      
-    setAllowEditAllElecPrev(false);
-    setAllowEditAllWaterPrev(false);
-    originalRowsRef.current = JSON.parse(JSON.stringify(rows));
-
-    if (tempMeterRowsCache[selectedCycle]) {
-      const syncedCache = tempMeterRowsCache[selectedCycle].map(cachedR => {
-        const roomTenant = getTenantForRoomAndCycle(cachedR.roomId, selectedCycle);
-        const freshBill = bills.find(b => b.cycleId === selectedCycle && (b.roomId === cachedR.roomId || b.roomId === cachedR.roomNumber || (b.tenantId && roomTenant && b.tenantId === roomTenant.id)));
-        if (freshBill) {
-          return {
-            ...cachedR,
-            billStatus: freshBill.status,
-            isPaid: freshBill.status === 'paid'
-          };
-        }
-        return cachedR;
       });
-      tempMeterRowsCache[selectedCycle] = syncedCache;
-      setMeterRows(syncedCache);
-    } else {
-      setMeterRows(rows);
+
+      const activeRooms = [...rooms].sort((a, b) => 
+        a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true, sensitivity: 'base' })
+      );
+
+      const rows: MeterRowState[] = activeRooms.map(r => {
+        const roomReadings = readingsByRoom[r.id] || {};
+        const cycleTenant = getTenantForRoomAndCycle(r.id, selectedCycleCode || selectedCycle);
+        
+        const rawWaterBaseline = r.initialWaterMeter ?? (r as any).initialWaterReading ?? 0;
+        const rawElecBaseline = r.initialElectricMeter ?? (r as any).initialElectricityReading ?? 0;
+
+        const waterPrev = roomReadings.waterPrev ?? rawWaterBaseline;
+        const waterCurr = roomReadings.waterCurr ?? waterPrev;
+
+        const elecPrev = roomReadings.elecPrev ?? rawElecBaseline;
+        const elecCurr = roomReadings.elecCurr ?? elecPrev;
+
+        const tenantDefaultPeople = cycleTenant ? (1 + (cycleTenant.coOccupants?.length || 0)) : 1;
+        
+        const existingBill = (bills || []).find(b => 
+          (b.cycleId === cycleId || b.cycleId === selectedCycleCode) && 
+          (b.roomId === r.id || b.roomId === r.roomNumber)
+        );
+        const billStatus: BillStatus = existingBill ? existingBill.status : 'draft';
+        const isPaid = billStatus === 'paid';
+
+        return {
+          roomId: r.id,
+          roomNumber: r.roomNumber,
+          waterPrev: Math.round(waterPrev),
+          waterCurr: Math.round(waterCurr),
+          elecPrev: Math.round(elecPrev),
+          elecCurr: Math.round(elecCurr),
+          isReplaced: false,
+          peopleCount: tenantDefaultPeople,
+          overdueAmount: 0,
+          isPaid,
+          billStatus,
+          editWaterPrev: false,
+          editElecPrev: false,
+          otherFees: []
+        };
+      });
+
+      const localDraft = tempMeterRowsCache[cycleId];
+      if (localDraft) {
+        const merged = rows.map(serverRow => {
+          const draftRow = localDraft.find(d => d.roomId === serverRow.roomId);
+          if (draftRow) {
+            return {
+              ...serverRow,
+              waterCurr: draftRow.waterCurr,
+              elecCurr: draftRow.elecCurr,
+              peopleCount: draftRow.peopleCount,
+              isReplaced: draftRow.isReplaced,
+              otherFees: draftRow.otherFees
+            };
+          }
+          return serverRow;
+        });
+        setMeterRows(merged);
+      } else {
+        setMeterRows(rows);
+      }
+
+      setLoadedCycle(cycleId);
+    } catch (err) {
+      console.error("Failed to load meter readings:", err);
     }
-    setLoadedCycle(selectedCycle);
-  }, [selectedCycle, rooms, bills, tenants, contracts]);
+  };
+
+  useEffect(() => {
+    if (selectedBillingCycleId) {
+      fetchAuthoritativeReadings(selectedBillingCycleId);
+    } else {
+      setMeterRows([]);
+    }
+  }, [selectedBillingCycleId, rooms, bills]);
 
   // Synchronize state changes to temporary module cache to survive tab navigation
   useEffect(() => {
@@ -1059,34 +1034,23 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     }));
   };
 
-  const handleTogglePaid = (roomId: string) => {
-    setMeterRows(prev => prev.map(row => {
-      if (row.roomId === roomId) {
-        if (row.billStatus === 'paid') {
-          return row;
-        }
-        const nextStatus: BillStatus = row.billStatus === 'draft' ? 'pending' : 'draft';
-        return {
-          ...row,
-          billStatus: nextStatus,
-          isPaid: false
-        };
-      }
-      return row;
-    }));
-  };
-
   const handleIssueAllBills = async () => {
+    if (!selectedBillingCycleId) {
+      showToast('ยังไม่ได้ตั้งค่ารอบคำนวณ');
+      return;
+    }
     setIsSaving(true);
     try {
-      const res = await getDataProvider().billing.generateBulkBills(selectedCycle);
+      const res = await getDataProvider().billing.generateBulkBills(selectedBillingCycleId);
       setIsSaving(false);
       if (res.success) {
         showToast('ออกบิลสำหรับรอบบันทึกเรียบร้อยแล้ว');
         if (onSaveBills) {
-          const bills = await getDataProvider().billing.getByCycle(selectedCycle);
-          onSaveBills(bills);
+          const freshBills = await getDataProvider().billing.getByCycle(selectedBillingCycleId);
+          onSaveBills(freshBills);
         }
+        fetchAuthoritativeReadings(selectedBillingCycleId);
+        onRefetchData?.();
       } else {
         showToast(res.error?.message || 'เกิดข้อผิดพลาดในการออกบิล');
       }
@@ -1098,6 +1062,25 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
 
   const handleSaveMeters = async () => {
     if (isSaving) return;
+    if (!selectedBillingCycleId) {
+      showToast('ยังไม่ได้ตั้งค่ารอบคำนวณ');
+      return;
+    }
+
+    // Lower reading check
+    let lowerReadingError = false;
+    for (const row of meterRows) {
+      if (!row.isReplaced) {
+        if ((isWaterUnit && row.waterCurr < row.waterPrev) || (isElecUnit && row.elecCurr < row.elecPrev)) {
+          lowerReadingError = true;
+          break;
+        }
+      }
+    }
+    if (lowerReadingError) {
+      showToast('เลขอ่านมิเตอร์ใหม่ต้องไม่น้อยกว่าเลขอ่านครั้งก่อน');
+      return;
+    }
 
     // Validate any half-filled other fees fields
     let validationFailed = false;
@@ -1126,18 +1109,30 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     setIsSaving(true);
 
     try {
-      const res = await getDataProvider().meters.saveBulkMeterRecords(meterRows as any, selectedCycle);
+      const res = await getDataProvider().meters.saveBulkMeterRecords(meterRows as any, selectedBillingCycleId);
       setIsSaving(false);
       if (res.success) {
         originalRowsRef.current = JSON.parse(JSON.stringify(meterRows));
-        tempMeterRowsCache[selectedCycle] = meterRows;
+        delete tempMeterRowsCache[selectedBillingCycleId];
         showToast('บันทึกข้อมูลค่ามิเตอร์เรียบร้อยแล้ว');
+        fetchAuthoritativeReadings(selectedBillingCycleId);
+        onRefetchData?.();
       } else {
-        showToast(res.error?.message || 'เกิดข้อผิดพลาดในการบันทึกค่ามิเตอร์');
+        if ((res.error?.code as string) === 'STALE_VERSION' || res.error?.message?.includes('STALE') || res.error?.message?.includes('conflict')) {
+          showToast('ข้อมูลมิเตอร์มีการอัปเดตจากเครื่องอื่น (VERSION_CONFLICT) กรุณารีเฟรชข้อมูลล่าสุด');
+          fetchAuthoritativeReadings(selectedBillingCycleId);
+        } else {
+          showToast(res.error?.message || 'เกิดข้อผิดพลาดในการบันทึกค่ามิเตอร์');
+        }
       }
     } catch (err: any) {
       setIsSaving(false);
-      showToast(err.message || 'เกิดข้อผิดพลาดในการบันทึกค่ามิเตอร์');
+      if (err.message?.includes('409') || err.message?.includes('STALE')) {
+        showToast('ข้อมูลมิเตอร์มีการอัปเดตจากเครื่องอื่น (VERSION_CONFLICT) กรุณารีเฟรชข้อมูลล่าสุด');
+        fetchAuthoritativeReadings(selectedBillingCycleId);
+      } else {
+        showToast(err.message || 'เกิดข้อผิดพลาดในการบันทึกค่ามิเตอร์');
+      }
     }
   };
 
@@ -1161,6 +1156,11 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
 
   return (
     <div className="space-y-6">
+      {!selectedBillingCycleId && (
+        <div data-testid="missing-cycle-banner" className="text-xs font-semibold text-amber-800 bg-amber-50 border border-amber-200 px-4 py-3 rounded-2xl flex items-center gap-2">
+          <span>ยังไม่ได้ตั้งค่ารอบคำนวณ</span>
+        </div>
+      )}
       {/* Draft notice banner */}
       <div data-testid="meter-draft-notice" className="text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-3 py-2 rounded-xl flex items-center gap-2">
         <span>ระบบบันทึกค่ามิเตอร์เชื่อมต่อเซิร์ฟเวอร์หลักแล้ว</span>
@@ -1218,6 +1218,24 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
           
           {/* Action buttons */}
           <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto justify-end">
+            <button
+              type="button"
+              disabled={isSaving || !selectedBillingCycleId}
+              onClick={handleSaveMeters}
+              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-xs font-bold rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-md shadow-indigo-600/10"
+            >
+              <Save className="w-3.5 h-3.5" />
+              บันทึกข้อมูลค่ามิเตอร์
+            </button>
+            <button
+              type="button"
+              disabled={isSaving || !selectedBillingCycleId}
+              onClick={handleIssueAllBills}
+              className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-bold rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-md shadow-emerald-600/10"
+            >
+              <FileText className="w-3.5 h-3.5" />
+              ออกบิลทุกห้อง
+            </button>
             {showPullButton && (
               <button
                 type="button"
@@ -1237,9 +1255,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                   quickFillInputRef.current?.focus();
                 }, 100);
               }}
-              className={`${
-                showPullButton ? 'flex-1 sm:flex-initial' : 'w-full sm:w-auto'
-              } px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-md shadow-indigo-600/10`}
+              className="px-4 py-2 bg-slate-700 hover:bg-slate-800 text-white text-xs font-bold rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-md"
             >
               <Zap className="w-3.5 h-3.5 text-amber-300 fill-amber-300" />
               กรอกแบบรวดเร็ว
@@ -1690,19 +1706,19 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                       {formatBaht(calculatedTotal)}
                     </td>
 
-                    {/* Status Toggle Switch: text stacked vertically above the switch button */}
+                    {/* Status Display Badge (Read-only, payment status is server-authoritative) */}
                     <td className={`p-4 text-center transition-all duration-300 ${
                       flashingCells[`${row.roomId}-status`]
                         ? 'animate-vibrant-flash rounded-lg shadow-md z-10'
                         : ''
                     }`}>
                       <div className="flex flex-col items-center justify-center gap-1.5 min-w-[75px]">
-                        <span className={`text-[11px] font-extrabold leading-none ${
+                        <span className={`text-[11px] font-extrabold leading-none px-2.5 py-1 rounded-full border ${
                           row.billStatus === 'paid'
-                            ? 'text-emerald-600'
+                            ? 'text-emerald-700 bg-emerald-50 border-emerald-200'
                             : row.billStatus === 'draft'
-                            ? 'text-slate-500'
-                            : 'text-amber-500'
+                            ? 'text-slate-600 bg-slate-50 border-slate-200'
+                            : 'text-amber-700 bg-amber-50 border-amber-200'
                         }`}>
                           {row.billStatus === 'paid'
                             ? 'ชำระแล้ว'
@@ -1710,26 +1726,6 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                             ? 'ยังไม่ออกบิล'
                             : 'รอชำระเงิน'}
                         </span>
-                        <button
-                          type="button"
-                          disabled={row.billStatus === 'paid'}
-                          onClick={() => handleTogglePaid(row.roomId)}
-                          className={`relative inline-flex h-5 w-9 shrink-0 ${
-                            row.billStatus === 'paid' ? 'cursor-not-allowed' : 'cursor-pointer'
-                          } rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                            row.billStatus === 'paid'
-                              ? 'bg-emerald-500'
-                              : row.billStatus === 'draft'
-                              ? 'bg-slate-300'
-                              : 'bg-amber-400'
-                          }`}
-                        >
-                          <span
-                            className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-xs ring-0 transition duration-200 ease-in-out ${
-                              row.billStatus === 'draft' ? 'translate-x-0' : 'translate-x-4'
-                            }`}
-                          />
-                        </button>
                       </div>
                     </td>
 
