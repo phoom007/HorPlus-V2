@@ -186,19 +186,14 @@ test.describe.serial('HORPLUS — Wave 1 Owner Daily Operations Real Playwright 
   });
 
   test('Flow A — Create Tenant via UI, verify DB persistence & Room remains VACANT before activation', async ({ page }) => {
-    test.setTimeout(90000);
+    test.setTimeout(60000);
 
-    await page.goto('/owner');
+    await page.goto('/owner/tenants');
     await page.waitForLoadState('domcontentloaded');
-
-    // Click Tenants tab
-    const tenantsTab = page.locator('button:has-text("ผู้เช่า"):visible').first();
-    await expect(tenantsTab).toBeVisible({ timeout: 60000 });
-    await tenantsTab.click();
 
     // Click Add Tenant button (NO conditional skip)
     const addBtn = page.locator('button:has-text("เพิ่มผู้เช่า")').first();
-    await expect(addBtn).toBeVisible();
+    await expect(addBtn).toBeVisible({ timeout: 30000 });
     await addBtn.click();
 
     // Fill Tenant registration wizard
@@ -257,13 +252,8 @@ test.describe.serial('HORPLUS — Wave 1 Owner Daily Operations Real Playwright 
   test('Flow B — Contract Draft & Atomic Activation (Creates Occupancy, Room Occupied)', async ({ page }) => {
     test.setTimeout(45000);
 
-    await page.goto('/owner');
+    await page.goto('/owner/contracts');
     await page.waitForLoadState('domcontentloaded');
-
-    // 1. Click Contracts tab in UI
-    const contractsTab = page.locator('button:has-text("สัญญาเช่า"):visible').first();
-    await expect(contractsTab).toBeVisible({ timeout: 10000 });
-    await contractsTab.click();
 
     // 2. Click Create Contract button in UI
     const createBtn = page.locator('button:has-text("ทำสัญญาเช่าใหม่"), button:has-text("สร้างสัญญา")').first();
@@ -295,11 +285,8 @@ test.describe.serial('HORPLUS — Wave 1 Owner Daily Operations Real Playwright 
     createdContractId = draftContract!.id;
 
     // 6. F5 Reload -> Draft Contract remains visible
-    await page.reload();
+    await page.goto('/owner/contracts');
     await page.waitForLoadState('domcontentloaded');
-
-    const contractsTab2 = page.locator('button:has-text("สัญญาเช่า"):visible').first();
-    await contractsTab2.click();
 
     // 7. Click Activate Contract UI Action
     const activateBtn = page.locator('button:has-text("ยืนยันเปิดใช้งานสัญญา")').first();
@@ -329,13 +316,8 @@ test.describe.serial('HORPLUS — Wave 1 Owner Daily Operations Real Playwright 
   test('Flow C — Meter Readings Save, F5 Persistence & Lower Reading Validation', async ({ page }) => {
     test.setTimeout(45000);
 
-    await page.goto('/owner');
+    await page.goto('/owner/meters');
     await page.waitForLoadState('domcontentloaded');
-
-    // 1. Click Meters tab in UI
-    const metersTab = page.locator('button:has-text("จดมิเตอร์"):visible').first();
-    await expect(metersTab).toBeVisible({ timeout: 10000 });
-    await metersTab.click();
 
     // 2. Find Room 101 row & enter Water 120, Electric 600 in UI
     const waterInput = page.locator('input[data-col="waterCurr"]').first();
