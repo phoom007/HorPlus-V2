@@ -289,9 +289,9 @@ export class TenantRegistrationService {
             dormitoryId,
             roomId: req.requestedRoomId,
             tenantId: tenant.id,
-            contractId: contractId || null,
+            registrationId: id,
             status: 'ACTIVE',
-            moveInDate: payload.startDate ? new Date(payload.startDate) : new Date(),
+            startedAt: payload.startDate ? new Date(payload.startDate) : new Date(),
           },
         });
 

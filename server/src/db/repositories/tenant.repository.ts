@@ -112,8 +112,8 @@ export interface ITenantRepository {
   // Co-occupants
   findCoOccupants(tenantId: string, dormitoryId: string): Promise<TenantCoOccupantEntity[]>;
   createCoOccupant(dormitoryId: string, tenantId: string, data: Partial<TenantCoOccupantEntity>): Promise<TenantCoOccupantEntity>;
-  updateCoOccupant(id: string, dormitoryId: string, data: Partial<TenantCoOccupantEntity>): Promise<TenantCoOccupantEntity | null>;
-  deleteCoOccupant(id: string, dormitoryId: string): Promise<boolean>;
+  updateCoOccupant(id: string, dormitoryId: string, tenantId: string, data: Partial<TenantCoOccupantEntity>): Promise<TenantCoOccupantEntity | null>;
+  deleteCoOccupant(id: string, dormitoryId: string, tenantId: string): Promise<boolean>;
 
   // Emergency Contacts
   findEmergencyContacts(tenantId: string, dormitoryId: string): Promise<TenantEmergencyContactEntity[]>;
