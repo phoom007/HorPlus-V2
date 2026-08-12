@@ -1473,59 +1473,19 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                 <div className="p-4 border border-gray-200 rounded-2xl space-y-2">
                   <div className="flex justify-between items-center">
                     <label className="block text-xs font-semibold text-slate-700">ขออนุญาตนำสัตว์เลี้ยงเข้าพัก</label>
-                    {(() => {
-                      const dormObj = getDormitory();
-                      let pPolicy = dormObj?.petPolicy;
-                      if (!pPolicy) {
-                        try {
-                          const saved = localStorage.getItem('registered_dorm_profile');
-                          if (saved) pPolicy = JSON.parse(saved).petPolicy;
-                        } catch {}
-                      }
-                      const isAllowed = pPolicy ? pPolicy.allowed !== 'none' : true;
-                      return isAllowed ? (
-                        <span className="text-[9px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded-md">
-                          อนุญาตตามเงื่อนไข
-                        </span>
-                      ) : (
-                        <span className="text-[9px] font-bold bg-rose-50 text-rose-700 border border-rose-200 px-2 py-0.5 rounded-md">
-                          ไม่อนุญาตให้เลี้ยง
-                        </span>
-                      );
-                    })()}
+                    <span className="text-[9px] font-bold bg-slate-100 text-slate-600 border border-slate-200 px-2 py-0.5 rounded-md">
+                      ยังไม่ได้ตั้งค่านโยบายสัตว์เลี้ยง
+                    </span>
                   </div>
-                  {(() => {
-                    const dormObj = getDormitory();
-                    let pPolicy = dormObj?.petPolicy;
-                    if (!pPolicy) {
-                      try {
-                        const saved = localStorage.getItem('registered_dorm_profile');
-                        if (saved) pPolicy = JSON.parse(saved).petPolicy;
-                      } catch {}
-                    }
-                    const isAllowed = pPolicy ? pPolicy.allowed !== 'none' : true;
-                    if (!isAllowed) {
-                      return (
-                        <div className="p-2.5 bg-amber-50 border border-amber-200 rounded-xl flex items-start gap-2 mt-1">
-                          <Dog className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                          <div>
-                            <p className="text-xs font-bold text-amber-900">ไม่อนุญาตให้เลี้ยงสัตว์ทุกชนิด</p>
-                            <p className="text-[10px] text-amber-700 mt-0.5">ตามตั้งค่าระเบียบหอพักที่ลงทะเบียนไว้</p>
-                          </div>
-                        </div>
-                      );
-                    }
-                    return (
-                      <>
-                        <div className="flex items-center gap-2">
-                          <input
-                            type="checkbox"
-                            checked={hasPet}
-                            onChange={(e) => setHasPet(e.target.checked)}
-                            className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
-                          />
-                          <span className="text-xs text-slate-600">มีสัตว์เลี้ยงประสงค์นำเข้า</span>
-                        </div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={hasPet}
+                      onChange={(e) => setHasPet(e.target.checked)}
+                      className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                    />
+                    <span className="text-xs text-slate-600">มีสัตว์เลี้ยงประสงค์นำเข้า</span>
+                  </div>
                         {hasPet && (
                           <div className="flex flex-col gap-2 pt-1 animate-in slide-in-from-top-1">
                             <select

@@ -1262,8 +1262,8 @@ export const OwnerContracts: React.FC<OwnerContractsProps> = ({
 
                 <div className="space-y-4">
                   <p>
-                    สัญญาฉบับนี้ทำขึ้น ณ <span className="font-extrabold text-slate-900">อาคารหอพัก {dorm.name || 'HorPlus'} ({dorm.address || 'ที่อยู่หอพัก'})</span> เมื่อวันที่ <span className="font-semibold">{formatThaiDate(selectedContract.createdAt.split('T')[0])}</span> ระหว่าง
-                    <span className="font-extrabold text-slate-900"> นิติบุคคล {dorm.name || 'HorPlus'} (ผู้ให้เช่า)</span> ฝ่ายหนึ่ง กับ
+                    สัญญาฉบับนี้ทำขึ้น ณ <span className="font-extrabold text-slate-900">อาคารหอพัก {dorm?.name || 'HorPlus'} ({dorm?.address || 'ที่อยู่หอพัก'})</span> เมื่อวันที่ <span className="font-semibold">{formatThaiDate(selectedContract.createdAt.split('T')[0])}</span> ระหว่าง
+                    <span className="font-extrabold text-slate-900"> นิติบุคคล {dorm?.name || 'HorPlus'} (ผู้ให้เช่า)</span> ฝ่ายหนึ่ง กับ
                     <span className="font-extrabold text-slate-900"> คุณ{getTenantName(selectedContract.tenantId, selectedContract)} (ผู้เช่า)</span> อีกฝ่ายหนึ่ง โดยมีใจความดังเงื่อนไขต่อไปนี้:
                   </p>
 
