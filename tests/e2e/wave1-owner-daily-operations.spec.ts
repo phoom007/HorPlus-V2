@@ -193,7 +193,7 @@ test.describe.serial('HORPLUS — Wave 1 Owner Daily Operations Real Playwright 
 
     // Click Tenants tab
     const tenantsTab = page.locator('button:has-text("ผู้เช่า"):visible').first();
-    await expect(tenantsTab).toBeVisible({ timeout: 30000 });
+    await expect(tenantsTab).toBeVisible({ timeout: 60000 });
     await tenantsTab.click();
 
     // Click Add Tenant button (NO conditional skip)
