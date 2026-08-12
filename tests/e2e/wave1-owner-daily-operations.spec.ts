@@ -179,23 +179,21 @@ test.describe.serial('HORPLUS — Wave 1 Owner Daily Operations Real Playwright 
       { name: 'horplus_session', value: sessionToken, domain: '127.0.0.1', path: '/' },
       { name: 'horplus_csrf', value: csrfToken, domain: '127.0.0.1', path: '/' },
     ]);
+    await context.addInitScript((dId) => {
+      localStorage.setItem('selected_dormitory_id', dId);
+      sessionStorage.setItem('active_dormitory_selected_for_session', dId);
+    }, dormId);
   });
 
   test('Flow A — Create Tenant via UI, verify DB persistence & Room remains VACANT before activation', async ({ page }) => {
     test.setTimeout(45000);
 
-    // Set selected_dormitory_id in localStorage
     await page.goto('/owner');
-    await page.evaluate((dId) => {
-      localStorage.setItem('selected_dormitory_id', dId);
-    }, dormId);
-
-    await page.goto('/owner');
-    await page.waitForLoadState('domcontentloaded');
+    await page.waitForLoadState('networkidle');
 
     // Click Tenants tab
     const tenantsTab = page.locator('button:has-text("ผู้เช่า")').first();
-    await expect(tenantsTab).toBeVisible();
+    await expect(tenantsTab).toBeVisible({ timeout: 10000 });
     await tenantsTab.click();
 
     // Click Add Tenant button (NO conditional skip)
@@ -260,16 +258,11 @@ test.describe.serial('HORPLUS — Wave 1 Owner Daily Operations Real Playwright 
     test.setTimeout(45000);
 
     await page.goto('/owner');
-    await page.evaluate((dId) => {
-      localStorage.setItem('selected_dormitory_id', dId);
-    }, dormId);
-
-    await page.goto('/owner');
     await page.waitForLoadState('domcontentloaded');
 
     // 1. Click Contracts tab in UI
     const contractsTab = page.locator('button:has-text("สัญญาเช่า")').first();
-    await expect(contractsTab).toBeVisible();
+    await expect(contractsTab).toBeVisible({ timeout: 10000 });
     await contractsTab.click();
 
     // 2. Click Create Contract button in UI
@@ -337,16 +330,11 @@ test.describe.serial('HORPLUS — Wave 1 Owner Daily Operations Real Playwright 
     test.setTimeout(45000);
 
     await page.goto('/owner');
-    await page.evaluate((dId) => {
-      localStorage.setItem('selected_dormitory_id', dId);
-    }, dormId);
-
-    await page.goto('/owner');
     await page.waitForLoadState('domcontentloaded');
 
     // 1. Click Meters tab in UI
     const metersTab = page.locator('button:has-text("จดมิเตอร์")').first();
-    await expect(metersTab).toBeVisible();
+    await expect(metersTab).toBeVisible({ timeout: 10000 });
     await metersTab.click();
 
     // 2. Find Room 101 row & enter Water 120, Electric 600 in UI
@@ -402,16 +390,11 @@ test.describe.serial('HORPLUS — Wave 1 Owner Daily Operations Real Playwright 
     test.setTimeout(45000);
 
     await page.goto('/owner');
-    await page.evaluate((dId) => {
-      localStorage.setItem('selected_dormitory_id', dId);
-    }, dormId);
-
-    await page.goto('/owner');
     await page.waitForLoadState('domcontentloaded');
 
     // 1. Open Meters page in UI
     const metersTab = page.locator('button:has-text("จดมิเตอร์")').first();
-    await expect(metersTab).toBeVisible();
+    await expect(metersTab).toBeVisible({ timeout: 10000 });
     await metersTab.click();
 
     // 2. Click Issue Bill button in UI
@@ -442,16 +425,11 @@ test.describe.serial('HORPLUS — Wave 1 Owner Daily Operations Real Playwright 
     test.setTimeout(45000);
 
     await page.goto('/owner');
-    await page.evaluate((dId) => {
-      localStorage.setItem('selected_dormitory_id', dId);
-    }, dormId);
-
-    await page.goto('/owner');
     await page.waitForLoadState('domcontentloaded');
 
     // 1. Open Dashboard tab in UI
     const dashboardTab = page.locator('button:has-text("หน้าหลัก")').first();
-    await expect(dashboardTab).toBeVisible();
+    await expect(dashboardTab).toBeVisible({ timeout: 10000 });
     await dashboardTab.click();
 
     // 2. Assert rendered values in browser match DB
