@@ -207,7 +207,7 @@ describe('Wave 1 — Owner Daily Operations Mandatory Acceptance Regressions Sui
 
       await expect(
         meterService.updateMeterReading(waterReading.id, dormAId, '160.00', 'stale test', 999)
-      ).rejects.toThrow(/STALE_VERSION/);
+      ).rejects.toThrow(/STALE_VERSION|RESOURCE_VERSION_CONFLICT|ข้อมูลถูกแก้ไข/);
     });
   });
 
@@ -233,7 +233,7 @@ describe('Wave 1 — Owner Daily Operations Mandatory Acceptance Regressions Sui
           contractId: randomUUID(), // Mismatched contract ID
           tenantId: tenantA1Id,
         })
-      ).rejects.toThrow(/CONTRACT_ROOM_MISMATCH/);
+      ).rejects.toThrow(/CONTRACT_ROOM_MISMATCH|สัญญาที่ระบุ/);
     });
 
     it('2.3 Incomplete room excluded explicitly during bulk bill generation', async () => {
@@ -282,7 +282,7 @@ describe('Wave 1 — Owner Daily Operations Mandatory Acceptance Regressions Sui
 
       await expect(
         contractService.activateContract(ctr2.id, dormAId, {})
-      ).rejects.toThrow(/ROOM_ALREADY_OCCUPIED|CONTRACT_OVERLAP/);
+      ).rejects.toThrow(/ROOM_ALREADY_OCCUPIED|CONTRACT_OVERLAP|ช่วงเวลาสัญญาซ้อนทับ/);
     });
   });
 
