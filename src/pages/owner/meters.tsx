@@ -28,6 +28,7 @@ import {
   CheckCircle2
 } from 'lucide-react';
 import { Room, Bill, BillItem, Tenant, Contract, BillStatus, calculateRoomRentForCycle } from '../../types';
+import { getDataProvider } from '../../data/dataProvider';
 import { formatBaht, Modal } from '../../components/GlobalComponents';
 
 import { LineNotificationModal } from '../../components/LineNotificationModal';

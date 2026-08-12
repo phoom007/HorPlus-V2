@@ -61,6 +61,8 @@ interface OwnerDashboardProps {
   onNavigate: (tab: string, param?: string) => void;
   onActionClick?: (action: string) => void;
   selectedCycle?: string;
+  selectedBillingCycle?: any;
+  meterReadings?: any[];
   setSelectedCycle?: (cycle: string) => void;
   onAddLog?: (action: string, details: string, module: string, targetId?: string) => void;
 }
@@ -75,6 +77,8 @@ export const OwnerDashboard: React.FC<OwnerDashboardProps> = ({
   onNavigate,
   onActionClick,
   selectedCycle: propSelectedCycle,
+  selectedBillingCycle,
+  meterReadings = [],
   setSelectedCycle: propSetSelectedCycle,
   onAddLog
 }) => {

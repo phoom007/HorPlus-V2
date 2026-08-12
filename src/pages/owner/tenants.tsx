@@ -735,6 +735,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
             title="จดทะเบียนผู้เช่าและย้ายเข้า"
           >
             <Plus className="w-4 h-4" />
+            <span>เพิ่มผู้เช่า</span>
           </button>
         </div>
 
@@ -1268,57 +1269,10 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
         </Modal>
       )}
 
-      {/* Add Tenant Notice Modal */}
-      <Modal isOpen={isAddOpen} onClose={() => setIsAddOpen(false)} title="จดทะเบียนผู้เช่าและย้ายเข้า" size="md">
-        <div className="space-y-5 text-center py-2">
-          {/* Green LINE Icon Badge */}
-          <div className="w-16 h-16 bg-emerald-100 border border-emerald-200 rounded-3xl flex items-center justify-center mx-auto text-emerald-600 shadow-xs">
-            <QrCode className="w-8 h-8" />
-          </div>
-
-          <div className="space-y-2">
-            <h3 className="text-base font-black text-slate-900">
-              ให้ผู้เช่าสมัครและลงทะเบียนผ่าน LINE หอพัก
-            </h3>
-            <p className="text-xs text-slate-600 leading-relaxed max-w-md mx-auto font-medium">
-              ระบบถูกออกแบบให้ผู้เช่าเป็นผู้ลงทะเบียนและย้ายเข้าด้วยตนเองผ่าน <span className="font-bold text-emerald-600">LINE Official Account</span> ของหอพัก เพื่อความถูกต้องของข้อมูล การแนบเอกสารยืนยันตัวตน และทำสัญญาเช่าออนไลน์ได้ทันที
-            </p>
-          </div>
-
-          {/* Quick Steps Box */}
-          <div className="bg-slate-50 border border-slate-200/70 rounded-2xl p-4 text-left space-y-2.5">
-            <h4 className="text-xs font-black text-slate-800 flex items-center gap-1.5">
-              <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block"></span>
-              ขั้นตอนการลงทะเบียนสำหรับผู้เช่าใหม่
-            </h4>
-            <ol className="text-xs text-slate-600 space-y-2 list-decimal list-inside pl-1 font-medium">
-              <li>แอดไลน์หอพัก หรือสแกน <span className="font-bold text-slate-800">QR Code หอพัก</span></li>
-              <li>เลือกเมนู <span className="font-bold text-slate-800">"ลงทะเบียนผู้เช่า / ทำสัญญาเช่า"</span></li>
-              <li>กรอกข้อมูล แนบรูปบัตรประชาชน เลือกห้องพัก และทำสัญญาเช่าด้วยตนเอง</li>
-            </ol>
-          </div>
-
-          {/* Action buttons */}
-          <div className="pt-2 flex flex-col sm:flex-row gap-2 justify-center">
-            <button
-              type="button"
-              onClick={() => setIsAddOpen(false)}
-              className="px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl transition-all cursor-pointer"
-            >
-              เข้าใจแล้ว
-            </button>
-          </div>
-
-          {copySuccessToast && (
-            <div className="p-2.5 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-semibold rounded-xl animate-fade-in">
-              {copySuccessToast}
-            </div>
-          )}
-        </div>
-      </Modal>
-
-      {false && (
-        <div>
+      {/* Add Tenant Registration Modal */}
+      <Modal isOpen={isAddOpen} onClose={() => setIsAddOpen(false)} title="จดทะเบียนผู้เช่าและย้ายเข้า" size="lg">
+        <div className="space-y-4">
+          <Stepper steps={["ข้อมูลส่วนตัว", "ข้อมูลติดต่อฉุกเฉิน", "เลือกห้องพัก"]} currentStep={currentStep} />
 
           {/* Step 0: General Info */}
           {currentStep === 0 && (
@@ -1622,9 +1576,8 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
               )}
             </div>
           </div>
-
         </div>
-      )}
+      </Modal>
 
       {/* Lease Termination Modal */}
       {selectedTenant && (
