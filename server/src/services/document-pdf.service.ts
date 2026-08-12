@@ -24,8 +24,9 @@ export interface ContractPdfData {
   electricityRate: string;
   commonFee: string;
   internetFee?: string;
-  billingDay: number;
-  dueDay: number;
+  parkingFee?: string;
+  billingDay: number | string;
+  dueDay: number | string;
   lateFeeMode?: string;
   lateFeeAmount?: string;
   maxInstallmentsAllowed?: number;
@@ -80,8 +81,13 @@ export class DocumentPdfService {
    */
   public async generateContractPdf(data: ContractPdfData): Promise<Buffer> {
     const pdfDoc = await PDFDocument.create();
-    pdfDoc.setCreationDate(data.createdAt ? new Date(data.createdAt) : new Date('2026-01-01T00:00:00.000Z'));
-    pdfDoc.setModificationDate(data.createdAt ? new Date(data.createdAt) : new Date('2026-01-01T00:00:00.000Z'));
+    if (data.createdAt) {
+      const createdDate = new Date(data.createdAt);
+      if (!isNaN(createdDate.getTime())) {
+        pdfDoc.setCreationDate(createdDate);
+        pdfDoc.setModificationDate(createdDate);
+      }
+    }
     const { font, fontBold } = await this.loadFonts(pdfDoc);
 
     const page = pdfDoc.addPage([595.28, 841.89]); // A4
@@ -159,7 +165,7 @@ export class DocumentPdfService {
     y -= 15;
     page.drawText(`อัตราค่าสาธารณูปโภค: ค่าน้ำ ${data.waterRate} บาท/หน่วย | ค่าไฟ ${data.electricityRate} บาท/หน่วย`, { x: 60, y, size: 9, font });
     y -= 15;
-    page.drawText(`ค่าส่วนกลาง: ${data.commonFee} บาท/เดือน | ค่าอินเทอร์เน็ต: ${data.internetFee || '0.00'} บาท/เดือน`, { x: 60, y, size: 9, font });
+    page.drawText(`ค่าส่วนกลาง: ${data.commonFee} บาท/เดือน | ค่าอินเทอร์เน็ต: ${data.internetFee || 'ไม่ระบุ'} บาท/เดือน`, { x: 60, y, size: 9, font });
     y -= 15;
     page.drawText(`กำหนดการชำระ: ตัดรอบวันที่ ${data.billingDay} | ครบกำหนดชำระวันที่ ${data.dueDay} ของเดือน`, { x: 60, y, size: 9, font });
     y -= 25;

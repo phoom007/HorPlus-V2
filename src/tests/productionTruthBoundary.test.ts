@@ -148,14 +148,21 @@ describe('Production Truth Boundary Architectural Gate', () => {
     expect(content).not.toContain("return '30 มิ.ย. 2569'");
   });
 
-  it('server tenant contract PDF route must not hardcode 18.00/7.00/101/25/5 defaults', () => {
+  it('server tenant contract PDF route and DocumentPdfService must not contain billingDay fallback 1, dueDay fallback 1, internetFee || 0.00, or synthetic createdAt 2026-01-01', () => {
     const pdfRoutePath = path.resolve(__dirname, '../../server/src/routes/tenant-portal.routes.ts');
-    const content = fs.readFileSync(pdfRoutePath, 'utf-8');
+    const pdfServicePath = path.resolve(__dirname, '../../server/src/services/document-pdf.service.ts');
+    const routeContent = fs.readFileSync(pdfRoutePath, 'utf-8');
+    const serviceContent = fs.readFileSync(pdfServicePath, 'utf-8');
 
-    expect(content).not.toContain("waterRate: '18.00'");
-    expect(content).not.toContain("electricityRate: '7.00'");
-    expect(content).not.toContain("roomNumber: room?.roomNumber || '101'");
-    expect(content).not.toContain("billingDay: 25");
-    expect(content).not.toContain("dueDay: 5");
+    expect(routeContent).not.toContain("waterRate: '18.00'");
+    expect(routeContent).not.toContain("electricityRate: '7.00'");
+    expect(routeContent).not.toContain("roomNumber: room?.roomNumber || '101'");
+    expect(routeContent).not.toContain("billingDay: 25");
+    expect(routeContent).not.toContain("dueDay: 5");
+    expect(routeContent).not.toContain("billingDayVal = billSettings?.billingDay !== undefined ? billSettings.billingDay : 1");
+    expect(routeContent).not.toContain("dueDayVal = billSettings?.dueDay !== undefined ? billSettings.dueDay : 1");
+
+    expect(serviceContent).not.toContain("data.internetFee || '0.00'");
+    expect(serviceContent).not.toContain("2026-01-01T00:00:00.000Z");
   });
 });

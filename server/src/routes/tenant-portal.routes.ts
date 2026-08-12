@@ -824,34 +824,65 @@ export function createTenantPortalRouter(authService?: AuthenticationService): R
       const snapshot = await prisma.contractSnapshot.findFirst({
         where: { contractId: ctx.contract.id, dormitoryId: ctx.dormitoryId },
       });
-      const billSettings = await prisma.dormitoryBillingSettings.findUnique({ where: { dormitoryId: ctx.dormitoryId } });
+
+      const formatRate = (val: any): string => {
+        if (val !== undefined && val !== null && val !== '') {
+          const num = Number(val);
+          if (!isNaN(num)) {
+            return num.toFixed(2);
+          }
+        }
+        return 'ไม่ระบุ';
+      };
 
       const resolvedRoomNumber = snapshot?.exactRoomNumber || room?.roomNumber || 'ไม่ระบุ';
       const buildingName = room?.building?.name || undefined;
 
-      const waterVal = snapshot?.resolvedWaterRate !== undefined
-        ? snapshot.resolvedWaterRate
-        : billSettings?.waterRate !== undefined
-          ? billSettings.waterRate
+      const rentVal = snapshot?.resolvedRent ?? ctx.contract?.rentAmount;
+      const rentAmountStr = formatRate(rentVal);
+
+      const depositVal = snapshot?.resolvedDeposit ?? ctx.contract?.depositAmount;
+      const depositAmountStr = formatRate(depositVal);
+
+      const waterVal = snapshot ? snapshot.resolvedWaterRate : null;
+      const waterRateStr = formatRate(waterVal);
+
+      const elecVal = snapshot ? snapshot.resolvedElectricityRate : null;
+      const electricityRateStr = formatRate(elecVal);
+
+      const commonVal = snapshot ? snapshot.resolvedCommonFee : null;
+      const commonFeeStr = formatRate(commonVal);
+
+      const internetVal = snapshot ? snapshot.resolvedInternetFee : null;
+      const internetFeeStr = formatRate(internetVal);
+
+      const parkingVal = snapshot ? snapshot.resolvedParkingFee : null;
+      const parkingFeeStr = formatRate(parkingVal);
+
+      const snapData = snapshot?.snapshotData as any;
+      const rawBillingDay = snapData?.billingDay?.value !== undefined && snapData?.billingDay?.value !== null
+        ? snapData.billingDay.value
+        : snapData?.billingDay !== undefined && snapData?.billingDay !== null
+          ? snapData.billingDay
           : null;
-      const waterRateStr = waterVal !== null ? Number(waterVal).toFixed(2) : 'ไม่ระบุ';
 
-      const elecVal = snapshot?.resolvedElectricityRate !== undefined
-        ? snapshot.resolvedElectricityRate
-        : billSettings?.electricityRate !== undefined
-          ? billSettings.electricityRate
+      const rawDueDay = snapData?.dueDay?.value !== undefined && snapData?.dueDay?.value !== null
+        ? snapData.dueDay.value
+        : snapData?.dueDay !== undefined && snapData?.dueDay !== null
+          ? snapData.dueDay
           : null;
-      const electricityRateStr = elecVal !== null ? Number(elecVal).toFixed(2) : 'ไม่ระบุ';
 
-      const commonVal = snapshot?.resolvedCommonFee !== undefined && snapshot?.resolvedCommonFee !== null
-        ? snapshot.resolvedCommonFee
-        : billSettings?.commonFee !== undefined && billSettings?.commonFee !== null
-          ? billSettings.commonFee
-          : 0;
-      const commonFeeStr = Number(commonVal).toFixed(2);
+      const billingDayVal = (rawBillingDay !== null && rawBillingDay !== undefined && rawBillingDay !== '')
+        ? rawBillingDay
+        : 'ไม่ระบุ';
 
-      const billingDayVal = billSettings?.billingDay !== undefined ? billSettings.billingDay : 1;
-      const dueDayVal = billSettings?.dueDay !== undefined ? billSettings.dueDay : 1;
+      const dueDayVal = (rawDueDay !== null && rawDueDay !== undefined && rawDueDay !== '')
+        ? rawDueDay
+        : 'ไม่ระบุ';
+
+      const createdAtStr = ctx.contract.createdAt
+        ? ctx.contract.createdAt.toISOString().split('T')[0]
+        : (ctx.contract.startDate ? ctx.contract.startDate.toISOString().split('T')[0] : 'ไม่ระบุ');
 
       const pdfService = new DocumentPdfService();
       const pdfBuffer = await pdfService.generateContractPdf({
@@ -865,17 +896,19 @@ export function createTenantPortalRouter(authService?: AuthenticationService): R
         buildingName,
         roomNumber: resolvedRoomNumber,
         rentBillingType: ctx.contract.rentBillingType === 'term' ? 'term' : 'monthly',
-        startDate: ctx.contract.startDate.toISOString().split('T')[0],
-        endDate: ctx.contract.endDate.toISOString().split('T')[0],
-        rentAmount: Number(ctx.contract.rentAmount).toFixed(2),
-        depositAmount: Number(ctx.contract.depositAmount).toFixed(2),
+        startDate: ctx.contract.startDate ? ctx.contract.startDate.toISOString().split('T')[0] : 'ไม่ระบุ',
+        endDate: ctx.contract.endDate ? ctx.contract.endDate.toISOString().split('T')[0] : 'ไม่ระบุ',
+        rentAmount: rentAmountStr,
+        depositAmount: depositAmountStr,
         waterRate: waterRateStr,
         electricityRate: electricityRateStr,
         commonFee: commonFeeStr,
+        internetFee: internetFeeStr,
+        parkingFee: parkingFeeStr,
         billingDay: billingDayVal,
         dueDay: dueDayVal,
         terms: ctx.contract.terms || undefined,
-        createdAt: ctx.contract.createdAt ? ctx.contract.createdAt.toISOString().split('T')[0] : undefined,
+        createdAt: createdAtStr,
       });
 
       res.setHeader('Content-Type', 'application/pdf');

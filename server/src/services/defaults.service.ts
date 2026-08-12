@@ -70,6 +70,8 @@ export interface EffectiveRoomDefaults {
   maximumOccupants: EffectiveValueResult<number>;
   roomType: EffectiveValueResult<string>;
   defaultTerms: EffectiveValueResult<string | null>;
+  billingDay: EffectiveValueResult<number | null>;
+  dueDay: EffectiveValueResult<number | null>;
   sourceVersions: {
     dormitoryBillingVersion: number;
     dormitoryPropertyVersion: number;
@@ -246,6 +248,20 @@ export class DefaultsService {
         propertyDefaults?.defaultTerms || null,
         dormPropVer,
         (v) => (v ? String(v) : null)
+      ),
+      billingDay: resolveField(
+        null,
+        null,
+        billingSettings?.billingDay !== undefined && billingSettings?.billingDay !== null ? billingSettings.billingDay : null,
+        dormBillVer,
+        (v) => (v !== null && v !== undefined ? Number(v) : null)
+      ),
+      dueDay: resolveField(
+        null,
+        null,
+        billingSettings?.dueDay !== undefined && billingSettings?.dueDay !== null ? billingSettings.dueDay : null,
+        dormBillVer,
+        (v) => (v !== null && v !== undefined ? Number(v) : null)
       ),
       sourceVersions: {
         dormitoryBillingVersion: dormBillVer,
