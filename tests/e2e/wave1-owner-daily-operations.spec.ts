@@ -306,10 +306,15 @@ test.describe.serial('HORPLUS — Wave 1 Owner Daily Operations Real Playwright 
     await page.goto('/owner/contracts');
     await page.waitForLoadState('networkidle');
 
+    const contractItem = page.locator('div:has-text("ห้อง 101")').first();
+    if (await contractItem.isVisible()) {
+      await contractItem.click();
+    }
+
     // 7. Click Activate Contract UI Action & await response
-    const activatePromise = page.waitForResponse((res) => res.url().includes('/activate') && res.request().method() === 'POST');
     const activateBtn = page.locator('button:has-text("ยืนยันเปิดใช้งานสัญญา")').first();
     await expect(activateBtn).toBeVisible();
+    const activatePromise = page.waitForResponse((res) => res.url().includes('/activate') && res.request().method() === 'POST');
     await activateBtn.click();
     await activatePromise;
 
