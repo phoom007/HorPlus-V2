@@ -225,7 +225,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
         setIsApproveTermsOpen(false);
         setSelectedRegReq(null);
         await fetchRegRequests();
-        const updatedTenants = await getDataProvider().getTenantAdapter().getAll();
+        const updatedTenants = await getDataProvider().tenants.getAll();
         onSaveTenants(updatedTenants);
       } else {
         alert(res.error?.message || 'ไม่สามารถอนุมัติได้');
@@ -277,7 +277,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
   const handleAddCoOccupantToTenant = async () => {
     if (!selectedTenant || !newCoName.trim()) return;
     try {
-      const res = await getDataProvider().getTenantAdapter().addCoOccupant(selectedTenant.id, {
+      const res = await getDataProvider().tenants.addCoOccupant(selectedTenant.id, {
         name: newCoName.trim(),
         phone: newCoPhone.trim() || undefined,
         relationship: newCoRelation.trim() || 'ผู้ร่วมพัก',
@@ -286,7 +286,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
         setNewCoName('');
         setNewCoPhone('');
         setIsAddCoModalOpen(false);
-        const updatedTenants = await getDataProvider().getTenantAdapter().getAll();
+        const updatedTenants = await getDataProvider().tenants.getAll();
         onSaveTenants(updatedTenants);
         const refreshed = updatedTenants.find((t) => t.id === selectedTenant.id);
         if (refreshed) setSelectedTenant(refreshed);
@@ -301,9 +301,9 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
   const handleRemoveCoOccupantFromTenant = async (tenantId: string, coOccupantId: string) => {
     if (!confirm('คุณแน่ใจหรือไม่ที่จะลบผู้พักร่วมอาศัยท่านนี้?')) return;
     try {
-      const res = await getDataProvider().getTenantAdapter().removeCoOccupant(tenantId, coOccupantId);
+      const res = await getDataProvider().tenants.removeCoOccupant(tenantId, coOccupantId);
       if (res.success) {
-        const updatedTenants = await getDataProvider().getTenantAdapter().getAll();
+        const updatedTenants = await getDataProvider().tenants.getAll();
         onSaveTenants(updatedTenants);
         const refreshed = updatedTenants.find((t) => t.id === selectedTenant.id);
         if (refreshed) setSelectedTenant(refreshed);

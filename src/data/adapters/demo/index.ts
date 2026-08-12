@@ -169,6 +169,35 @@ export class DemoTenantAdapter implements TenantDataSource {
     }
     return { success: false, message: res.message, error: { code: 'VALIDATION_ERROR', message: res.message || 'แก้ไขข้อมูลผู้เช่าไม่สำเร็จ' } };
   }
+
+  async addCoOccupant(tenantId: string, coOccupant: { name: string; phone?: string; relationship?: string }): Promise<DataResult<any>> {
+    const tenant = tenantRepository.getById(tenantId);
+    if (!tenant) return { success: false, error: { code: 'RESOURCE_NOT_FOUND', message: 'ไม่พบผู้เช่า' } };
+    const newCo = { id: `co-${Date.now()}`, name: coOccupant.name, phone: coOccupant.phone || '', relationship: coOccupant.relationship };
+    tenant.coOccupants = tenant.coOccupants || [];
+    tenant.coOccupants.push(newCo);
+    return { success: true, data: newCo };
+  }
+
+  async updateCoOccupant(tenantId: string, coOccupantId: string, coOccupant: { name?: string; phone?: string; relationship?: string }): Promise<DataResult<any>> {
+    const tenant = tenantRepository.getById(tenantId);
+    if (!tenant) return { success: false, error: { code: 'RESOURCE_NOT_FOUND', message: 'ไม่พบผู้เช่า' } };
+    const target = tenant.coOccupants?.find((c) => c.id === coOccupantId);
+    if (!target) return { success: false, error: { code: 'RESOURCE_NOT_FOUND', message: 'ไม่พบผู้พักร่วม' } };
+    if (coOccupant.name) target.name = coOccupant.name;
+    if (coOccupant.phone) target.phone = coOccupant.phone;
+    if (coOccupant.relationship) target.relationship = coOccupant.relationship;
+    return { success: true, data: target };
+  }
+
+  async removeCoOccupant(tenantId: string, coOccupantId: string): Promise<DataResult<boolean>> {
+    const tenant = tenantRepository.getById(tenantId);
+    if (!tenant) return { success: false, error: { code: 'RESOURCE_NOT_FOUND', message: 'ไม่พบผู้เช่า' } };
+    if (tenant.coOccupants) {
+      tenant.coOccupants = tenant.coOccupants.filter((c) => c.id !== coOccupantId);
+    }
+    return { success: true, data: true };
+  }
 }
 
 export class DemoContractAdapter implements ContractDataSource {
