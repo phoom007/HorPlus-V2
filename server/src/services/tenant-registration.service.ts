@@ -24,9 +24,17 @@ export class TenantRegistrationService {
   public async createRequest(dormitoryId: string, payload: CreateRegistrationDto) {
     const prisma = getPrismaClient();
 
-    // 1. Verify requested room belongs to dormitory
+    // 1. Verify requested room belongs to dormitory (supports room ID, roomNumber, or normalizedRoomNumber)
     const room = await prisma.room.findFirst({
-      where: { id: payload.requestedRoomId, dormitoryId, deletedAt: null },
+      where: {
+        dormitoryId,
+        deletedAt: null,
+        OR: [
+          { id: payload.requestedRoomId },
+          { roomNumber: payload.requestedRoomId },
+          { normalizedRoomNumber: payload.requestedRoomId.toUpperCase() },
+        ],
+      },
     });
     if (!room) {
       const err = new Error('ROOM_NOT_FOUND');
@@ -49,7 +57,7 @@ export class TenantRegistrationService {
     return prisma.tenantRegistrationRequest.create({
       data: {
         dormitoryId,
-        requestedRoomId: payload.requestedRoomId,
+        requestedRoomId: room.id,
         firstName: payload.firstName.trim(),
         lastName: payload.lastName.trim(),
         phone: payload.phone.trim(),
