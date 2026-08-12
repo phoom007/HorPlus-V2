@@ -78,8 +78,7 @@ export const OwnerDashboard: React.FC<OwnerDashboardProps> = ({
   setSelectedCycle: propSetSelectedCycle,
   onAddLog
 }) => {
-  const [localCycle, setLocalCycle] = useState('2026-07');
-  const selectedCycle = propSelectedCycle || localCycle;
+  const selectedCycle = propSelectedCycle || '';
 
   const [visibleRoomsCount, setVisibleRoomsCount] = useState(8);
   const [sortByStatus, setSortByStatus] = useState<'vacant' | 'occupied' | 'maintenance' | null>(null);

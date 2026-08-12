@@ -35,12 +35,8 @@ import {
   formatThaiDate
 } from '../../components/GlobalComponents';
 import { Tenant, Room, CoOccupant, EmergencyContact, Contract, Bill, BillItem, BLOCKING_CONTRACT_STATUSES } from '../../types';
-const getDormitory = (): any => ({
-  id: 'dorm-1',
-  name: 'HorPlus Dormitory',
-  petPolicy: { allowPets: false }
-});
 import { getDataProvider } from '../../data/dataProvider';
+export const getDormitory = (): any => null;
 import { convertImageToWebP, UPLOAD_DROPZONE_TEXT } from '../../utils/imageUtils';
 
 interface OwnerTenantsProps {
@@ -206,21 +202,14 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
     }
   };
 
-  const handleSaveTenant = () => {
+  const handleSaveTenant = async () => {
     setErrorText(null);
-    if (!selectedRoomId) {
-      setErrorText('กรุณาเลือกห้องพักสำหรับจัดสรรผู้เช่า');
-      return;
-    }
 
-    const newTenantId = `tenant-${Date.now()}`;
-    const newTenant: Tenant = {
-      id: newTenantId,
+    const tenantPayload = {
       name: name.trim(),
       phone: phone.trim(),
       email: email.trim(),
       citizenId: citizenId.trim(),
-      coOccupants,
       emergencyContact: {
         name: emergencyName.trim(),
         relationship: emergencyRelation.trim(),
@@ -236,71 +225,39 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
         type: hasPet ? petType : undefined,
         name: hasPet ? petName : undefined
       },
-      rentalHistory: [selectedRoomId],
-      status: 'active',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
+      status: 'active' as const
     };
 
-    // Update Room Status & CurrentTenantId
-    const updatedRooms = rooms.map(r => r.id === selectedRoomId ? {
-      ...r,
-      status: 'occupied' as const,
-      currentTenantId: newTenantId
-    } : r);
-
-    const updatedTenants = [...tenants, newTenant];
-
-    onSaveRooms(updatedRooms);
-    onSaveTenants(updatedTenants);
-    
-    onAddLog('จดทะเบียนผู้เช่าใหม่', `ย้ายผู้เช่า ${name} เข้าพักห้อง ${rooms.find(r => r.id === selectedRoomId)?.roomNumber}`, 'Tenant', newTenantId);
-    
-    setIsAddOpen(false);
+    try {
+      const res = await getDataProvider().tenants.addTenant(tenantPayload as any);
+      if (res.success && res.data) {
+        setIsAddOpen(false);
+        const updated = await getDataProvider().tenants.getAll();
+        onSaveTenants(updated);
+        onAddLog('จดทะเบียนผู้เช่าใหม่', `สร้างประวัติผู้เช่า ${name}`, 'Tenant', res.data.id);
+      } else {
+        setErrorText(res.error?.message || 'เกิดข้อผิดพลาดในการบันทึกผู้เช่า');
+      }
+    } catch (err: any) {
+      setErrorText(err.message || 'เกิดข้อผิดพลาดในการบันทึกผู้เช่า');
+    }
   };
 
-  const handleDeleteTenant = (tenantId: string, tenantName: string) => {
-    const blockingReasons: string[] = [];
+  const handleDeleteTenant = async (tenantId: string, tenantName: string) => {
+    if (!window.confirm(`คุณต้องการถอนผู้เช่า "${tenantName}" ออกจากระบบถาวร?`)) return;
 
-    // Check 1: Tenant assigned to room
-    const assignedRoom = rooms.find(r => r.currentTenantId === tenantId);
-    if (assignedRoom) {
-      blockingReasons.push(`ผู้เช่ายังพักอยู่อาคาร ${assignedRoom.roomNumber}`);
-    }
-
-    // Check 2: Active or blocking contract
-    const activeContracts = contracts.filter(
-      c => c.tenantId === tenantId && BLOCKING_CONTRACT_STATUSES.includes(c.status)
-    );
-    if (activeContracts.length > 0) {
-      blockingReasons.push(`มีสัญญาเช่าที่ยังมีผลบังคับใช้ ${activeContracts.length} ฉบับ`);
-    }
-
-    // Check 3: Outstanding bills
-    const tenantBills = bills.filter(b => b.tenantId === tenantId);
-    if (tenantBills.length > 0) {
-      blockingReasons.push(`มีประวัติใบแจ้งชำระเงิน/บิลในระบบ ${tenantBills.length} รายการ`);
-    }
-
-    if (blockingReasons.length > 0) {
-      alert(`ไม่สามารถถอนผู้เช่า "${tenantName}" ออกจากระบบถาวรได้ เนื่องจากยังมีข้อมูลผูกอยู่:\n\n• ` + blockingReasons.join('\n• ') + '\n\nกรุณาใช้ระบบเลิกเช่าคืนห้องพักแทนการลบออกถาวร');
-      return;
-    }
-
-    if (window.confirm(`คุณต้องการถอนผู้เช่า "${tenantName}" ออกจากระบบถาวร?`)) {
-      // clear tenant room mapping if any
-      const updatedRooms = rooms.map(r => r.currentTenantId === tenantId ? {
-        ...r,
-        status: 'vacant' as const,
-        currentTenantId: undefined
-      } : r);
-
-      const updatedTenants = tenants.filter(t => t.id !== tenantId);
-      
-      onSaveRooms(updatedRooms);
-      onSaveTenants(updatedTenants);
-      onAddLog('ลบผู้เช่า', `ถอนผู้เช่า ${tenantName} ออกจากประวัติระบบ`, 'Tenant', tenantId);
-      setSelectedTenant(null);
+    try {
+      const res = await (getDataProvider().tenants as any).delete(tenantId);
+      if (res.success) {
+        const updated = await getDataProvider().tenants.getAll();
+        onSaveTenants(updated);
+        setSelectedTenant(null);
+        onAddLog('ลบผู้เช่า', `ถอนผู้เช่า ${tenantName} ออกจากระบบ`, 'Tenant', tenantId);
+      } else {
+        alert(res.error?.message || 'ไม่สามารถลบผู้เช่าออกจากระบบได้');
+      }
+    } catch (err: any) {
+      alert(err.message || 'ไม่สามารถลบผู้เช่าออกจากระบบได้');
     }
   };
 
@@ -1059,8 +1016,8 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                               </div>
                             </div>
                             {hasIdCard ? (
-                              <span className="text-[9px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-100 px-2 py-0.5 rounded-md shrink-0">
-                                Verified
+                              <span className="text-[9px] font-bold text-slate-700 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded-md shrink-0">
+                                อัปโหลดแล้ว
                               </span>
                             ) : (
                               <span className="text-[9px] font-bold text-amber-700 bg-amber-50 border border-amber-100 px-2 py-0.5 rounded-md shrink-0">
@@ -2144,87 +2101,44 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                 <div className="p-4 border border-gray-200 rounded-2xl space-y-2">
                   <div className="flex justify-between items-center">
                     <label className="block text-xs font-semibold text-slate-700">ขอเลี้ยงสัตว์เลี้ยง</label>
-                    {(() => {
-                      const dormObj = getDormitory();
-                      let pPolicy = dormObj?.petPolicy;
-                      if (!pPolicy) {
-                        try {
-                          const saved = localStorage.getItem('registered_dorm_profile');
-                          if (saved) pPolicy = JSON.parse(saved).petPolicy;
-                        } catch {}
-                      }
-                      const isAllowed = pPolicy ? pPolicy.allowed !== 'none' : true;
-                      return isAllowed ? (
-                        <span className="text-[9px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded-md">
-                          อนุญาตตามเงื่อนไข
-                        </span>
-                      ) : (
-                        <span className="text-[9px] font-bold bg-rose-50 text-rose-700 border border-rose-200 px-2 py-0.5 rounded-md">
-                          ไม่อนุญาตให้เลี้ยง
-                        </span>
-                      );
-                    })()}
+                    <span className="text-[9px] font-bold bg-slate-100 text-slate-600 border border-slate-200 px-2 py-0.5 rounded-md">
+                      ยังไม่ได้ตั้งค่านโยบายสัตว์เลี้ยง
+                    </span>
                   </div>
-                  {(() => {
-                    const dormObj = getDormitory();
-                    let pPolicy = dormObj?.petPolicy;
-                    if (!pPolicy) {
-                      try {
-                        const saved = localStorage.getItem('registered_dorm_profile');
-                        if (saved) pPolicy = JSON.parse(saved).petPolicy;
-                      } catch {}
-                    }
-                    const isAllowed = pPolicy ? pPolicy.allowed !== 'none' : true;
-                    if (!isAllowed) {
-                      return (
-                        <div className="p-2.5 bg-amber-50 border border-amber-200 rounded-xl flex items-start gap-2 mt-1">
-                          <Dog className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                          <div>
-                            <p className="text-xs font-bold text-amber-900">ไม่อนุญาตให้เลี้ยงสัตว์ทุกชนิด</p>
-                            <p className="text-[10px] text-amber-700 mt-0.5">ตามตั้งค่าระเบียบหอพักที่ลงทะเบียนไว้</p>
-                          </div>
-                        </div>
-                      );
-                    }
-                    return (
-                      <>
-                        <div className="flex items-center gap-2">
-                          <input
-                            type="checkbox"
-                            id="hasPetEdit"
-                            checked={hasPet}
-                            onChange={(e) => setHasPet(e.target.checked)}
-                            className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
-                          />
-                          <label htmlFor="hasPetEdit" className="text-xs text-slate-600 cursor-pointer">ประสงค์เลี้ยงสัตว์</label>
-                        </div>
-                        {hasPet && (
-                          <div className="flex flex-col gap-2 pt-1 animate-in slide-in-from-top-1">
-                            <select
-                              value={petType}
-                              onChange={(e) => setPetType(e.target.value)}
-                              className="px-2 py-1 border border-gray-200 rounded-lg text-xs bg-white text-slate-800 font-medium"
-                            >
-                              <option value="">-- เลือกประเภทสัตว์เลี้ยง --</option>
-                              {PET_OPTIONS.map(opt => (
-                                <option key={opt} value={opt}>{opt}</option>
-                              ))}
-                              {petType && !PET_OPTIONS.includes(petType) && (
-                                <option value={petType}>{petType}</option>
-                              )}
-                            </select>
-                            <input
-                              type="text"
-                              placeholder="ชื่อน้อง"
-                              value={petName}
-                              onChange={(e) => setPetName(e.target.value)}
-                              className="px-2 py-1 border border-gray-200 rounded-lg text-xs bg-white text-slate-800"
-                            />
-                          </div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      id="hasPetEdit"
+                      checked={hasPet}
+                      onChange={(e) => setHasPet(e.target.checked)}
+                      className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                    />
+                    <label htmlFor="hasPetEdit" className="text-xs text-slate-600 cursor-pointer">ประสงค์เลี้ยงสัตว์</label>
+                  </div>
+                  {hasPet && (
+                    <div className="flex flex-col gap-2 pt-1 animate-in slide-in-from-top-1">
+                      <select
+                        value={petType}
+                        onChange={(e) => setPetType(e.target.value)}
+                        className="px-2 py-1 border border-gray-200 rounded-lg text-xs bg-white text-slate-800 font-medium"
+                      >
+                        <option value="">-- เลือกประเภทสัตว์เลี้ยง --</option>
+                        {PET_OPTIONS.map(opt => (
+                          <option key={opt} value={opt}>{opt}</option>
+                        ))}
+                        {petType && !PET_OPTIONS.includes(petType) && (
+                          <option value={petType}>{petType}</option>
                         )}
-                      </>
-                    );
-                  })()}
+                      </select>
+                      <input
+                        type="text"
+                        placeholder="ชื่อน้อง"
+                        value={petName}
+                        onChange={(e) => setPetName(e.target.value)}
+                        className="px-2 py-1 border border-gray-200 rounded-lg text-xs bg-white text-slate-800"
+                      />
+                    </div>
+                  )}
                 </div>
 
                 <div className="p-4 border border-gray-200 rounded-2xl space-y-2">

@@ -51,9 +51,21 @@ export class TenantRegistrationService {
 
     const prisma = getPrismaClient();
     return prisma.$transaction(async (tx) => {
-      // 1. Transactionally create Tenant
-      const count = await tx.tenant.count({ where: { dormitoryId } });
-      const tenantNumber = `TNT-${(count + 1).toString().padStart(4, '0')}`;
+      // Validate requestedRoomId belongs to same dormitory
+      if (req.requestedRoomId) {
+        const room = await tx.room.findFirst({ where: { id: req.requestedRoomId, dormitoryId } });
+        if (!room) {
+          const err = new Error('ROOM_DORM_MISMATCH');
+          (err as any).statusCode = 400;
+          (err as any).code = 'ROOM_DORM_MISMATCH';
+          (err as any).message = 'ห้องพักที่ระบุไม่อยู่ในหอพักนี้';
+          throw err;
+        }
+      }
+
+      // Concurrency-safe tenant number generation
+      const tenantCount = await tx.tenant.count({ where: { dormitoryId } });
+      const tenantNumber = `TNT-${Date.now()}-${(tenantCount + 1).toString().padStart(4, '0')}`;
       const displayName = `${req.firstName} ${req.lastName}`.trim();
 
       const tenant = await tx.tenant.create({
@@ -68,17 +80,26 @@ export class TenantRegistrationService {
         },
       });
 
-      // 2. Optionally create DRAFT contract ONLY if all required terms explicitly provided by caller
       let contractId: string | null = null;
-      if (
-        payload.createContract &&
-        payload.startDate &&
-        payload.endDate &&
-        payload.rentAmount !== undefined &&
-        payload.depositAmount !== undefined
-      ) {
+      if (payload.createContract) {
+        // Require explicit mandatory contract terms (no invented defaults)
+        if (
+          !payload.startDate ||
+          !payload.endDate ||
+          payload.durationMonths === undefined ||
+          payload.rentAmount === undefined ||
+          payload.depositAmount === undefined ||
+          payload.advancePaymentAmount === undefined
+        ) {
+          const err = new Error('MISSING_CONTRACT_TERMS');
+          (err as any).statusCode = 400;
+          (err as any).code = 'MISSING_CONTRACT_TERMS';
+          (err as any).message = 'กรุณาระบุข้อกำหนดสัญญาที่จำเป็นให้ครบถ้วน';
+          throw err;
+        }
+
         const contractCount = await tx.contract.count({ where: { dormitoryId } });
-        const contractNumber = `CTR-${(contractCount + 1).toString().padStart(4, '0')}`;
+        const contractNumber = `CTR-${Date.now()}-${(contractCount + 1).toString().padStart(4, '0')}`;
 
         const contract = await tx.contract.create({
           data: {
@@ -89,10 +110,10 @@ export class TenantRegistrationService {
             status: 'draft',
             startDate: new Date(payload.startDate),
             endDate: new Date(payload.endDate),
-            durationMonths: payload.durationMonths || 12,
+            durationMonths: payload.durationMonths,
             rentAmount: String(payload.rentAmount),
             depositAmount: String(payload.depositAmount),
-            advancePaymentAmount: String(payload.advancePaymentAmount || '0.00'),
+            advancePaymentAmount: String(payload.advancePaymentAmount),
             terms: payload.terms || null,
             createdByUserId: actorUserId,
           },
@@ -100,7 +121,6 @@ export class TenantRegistrationService {
         contractId = contract.id;
       }
 
-      // 3. Update registration request status (NO OCCUPANCY CREATED AT APPROVAL STAGE)
       const updatedReq = await tx.tenantRegistrationRequest.update({
         where: { id },
         data: {

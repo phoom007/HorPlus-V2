@@ -48,16 +48,6 @@ import {
   CurrencyInput
 } from '../../components/GlobalComponents';
 import { Contract, Tenant, Room, Bill, BillItem, BLOCKING_CONTRACT_STATUSES } from '../../types';
-const getDormitory = (): any => ({
-  id: 'dorm-1',
-  name: 'HorPlus Dormitory',
-  address: '',
-  phone: '',
-  taxId: '',
-  ownerSignature: '',
-  promptPayName: '',
-  petPolicy: { allowPets: false }
-});
 import { getDataProvider } from '../../data/dataProvider';
 
 export interface PendingContractSubmission {
@@ -86,21 +76,14 @@ export interface PendingContractSubmission {
   editNoticeToTenant?: string;
 }
 
-const INITIAL_PENDING_SUBMISSIONS: PendingContractSubmission[] = [];
+export const getDormitory = (): any => null;
 
 export const getPendingContractSubmissions = (): PendingContractSubmission[] => {
-  try {
-    const saved = localStorage.getItem('HorPlus_pending_contract_submissions');
-    if (saved) return JSON.parse(saved);
-  } catch {}
-  return INITIAL_PENDING_SUBMISSIONS;
+  return [];
 };
 
-export const savePendingContractSubmissions = (subs: PendingContractSubmission[]) => {
-  try {
-    localStorage.setItem('HorPlus_pending_contract_submissions', JSON.stringify(subs));
-    window.dispatchEvent(new Event('storage'));
-  } catch {}
+export const savePendingContractSubmissions = (_subs: PendingContractSubmission[]) => {
+  // PostgreSQL tenant_registration_requests is authoritative
 };
 
 interface OwnerContractsProps {
@@ -215,122 +198,62 @@ export const OwnerContracts: React.FC<OwnerContractsProps> = ({
   }, [selectedPending]);
 
   const activePendingCount = pendingSubmissions.filter(p => p.status === 'pending').length;
-  const dorm = getDormitory();
+  const dorm: any = null;
 
-  const handleApprovePendingSubmission = (noticeMsg?: string) => {
+  const handleApprovePendingSubmission = async (noticeMsg?: string) => {
     if (!selectedPending) return;
 
-    const sub = selectedPending;
-    const finalStartDate = pendingStartDate || sub.startDate;
-    const finalDuration = pendingDuration || sub.durationMonths;
-    const finalEndDate = pendingEndDate || calculateEndDate(finalStartDate, finalDuration);
-    const finalRent = pendingRent || sub.rentAmount;
-    const finalDeposit = pendingDeposit || sub.depositAmount;
-    const finalTerms = pendingTerms || sub.terms;
-
-    // 1. Check or create tenant
-    let targetTenant = tenants.find(t => t.phone === sub.phone || t.name === sub.tenantName);
-    let tenantId = targetTenant ? targetTenant.id : `t-${Date.now()}`;
-
-    if (!targetTenant && onSaveTenants) {
-      const newTenantObj: Tenant = {
-        id: tenantId,
-        name: sub.tenantName,
-        phone: sub.phone,
-        email: sub.email,
-        citizenId: sub.citizenId,
-        coOccupants: [],
-        emergencyContact: {
-          name: sub.emergencyContactName,
-          phone: sub.emergencyContactPhone,
-          relationship: 'บุคคลติดต่อฉุกเฉิน'
-        },
-        vehicle: { licensePlate: '-', brand: '-', type: 'car' },
-        pet: { hasPet: false },
-        rentalHistory: [sub.requestedRoomId || sub.requestedRoomNumber],
-        status: 'active',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      };
-      onSaveTenants([...tenants, newTenantObj]);
-    } else if (targetTenant && onSaveTenants) {
-      onSaveTenants(tenants.map(t => t.id === tenantId ? { ...t, status: 'active' as const } : t));
+    try {
+      setIsSaving(true);
+      const res = await (getDataProvider().tenantRegistrations as any).approveRequest(selectedPending.id, {
+        createContract: true,
+        startDate: pendingStartDate || selectedPending.startDate,
+        endDate: pendingEndDate || calculateEndDate(pendingStartDate || selectedPending.startDate, pendingDuration || selectedPending.durationMonths),
+        durationMonths: pendingDuration || selectedPending.durationMonths,
+        rentAmount: pendingRent || selectedPending.rentAmount,
+        depositAmount: pendingDeposit || selectedPending.depositAmount,
+        advancePaymentAmount: 0,
+        terms: pendingTerms || selectedPending.terms
+      });
+      setIsSaving(false);
+      if (res.success) {
+        setIsPendingDetailOpen(false);
+        setSelectedPending(null);
+        if (onSaveContracts) {
+          const updatedContracts = await getDataProvider().contracts.getAll();
+          onSaveContracts(updatedContracts);
+        }
+        if (onSaveTenants) {
+          const updatedTenants = await getDataProvider().tenants.getAll();
+          onSaveTenants(updatedTenants);
+        }
+      } else {
+        setErrorText(res.error?.message || 'เกิดข้อผิดพลาดในการอนุมัติคำขอ');
+      }
+    } catch (err: any) {
+      setIsSaving(false);
+      setErrorText(err.message || 'เกิดข้อผิดพลาดในการอนุมัติคำขอ');
     }
-
-    // 2. Find room
-    const targetRoom = rooms.find(r => r.roomNumber === sub.requestedRoomNumber || r.id === sub.requestedRoomId) || rooms[0];
-
-    // 3. Create Contract
-    const newContractId = `ct-${Date.now()}`;
-    const newContract: Contract = {
-      id: newContractId,
-      contractNumber: `CNT-2026-${1000 + contracts.length}`,
-      tenantId: tenantId,
-      roomId: targetRoom ? targetRoom.id : sub.requestedRoomNumber,
-      startDate: finalStartDate,
-      endDate: finalEndDate,
-      durationMonths: finalDuration,
-      rentAmount: finalRent,
-      depositAmount: finalDeposit,
-      depositStatus: 'paid',
-      depositType: pendingDepositType,
-      terms: finalTerms,
-      tenantSignature: sub.tenantSignature,
-      ownerSignature: 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="100" height="40"><path d="M10,25 Q40,5 60,30 T90,20" stroke="blue" stroke-width="2" fill="none"/></svg>',
-      status: 'active',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    };
-
-    // Update Room
-    if (targetRoom) {
-      const updatedRooms = rooms.map(r => r.id === targetRoom.id ? {
-        ...r,
-        status: 'occupied' as const,
-        currentTenantId: tenantId,
-        updatedAt: new Date().toISOString()
-      } : r);
-      onSaveRooms(updatedRooms);
-    }
-
-    // Save Contract
-    onSaveContracts([...contracts, newContract]);
-    setSelectedContract(newContract);
-
-    // Update submission status
-    const nextSubmissions: PendingContractSubmission[] = pendingSubmissions.map(p => p.id === sub.id ? {
-      ...p,
-      status: 'approved' as const,
-      editNoticeToTenant: noticeMsg || undefined
-    } : p);
-    setPendingSubmissions(nextSubmissions);
-    savePendingContractSubmissions(nextSubmissions);
-
-    const noticeLog = noticeMsg ? ` (พร้อมส่งแจ้งเตือนแก้ไขผู้เช่า: "${noticeMsg}")` : '';
-    onAddLog('อนุมัติสัญญาเช่า', `อนุมัติสัญญาเช่าคุณ${sub.tenantName} (ห้อง ${sub.requestedRoomNumber}) เรียบร้อยแล้ว${noticeLog}`, 'Contract', newContractId);
-
-    setSelectedPending(null);
-    setIsEditNoticeModalOpen(false);
-    setPendingToast(`ยอมรับและอนุมัติสัญญาเช่าคุณ${sub.tenantName} เรียบร้อยแล้ว`);
   };
 
-  const handleRejectPendingSubmission = () => {
-    if (!selectedPending || !rejectReason.trim()) return;
+  const handleRejectPendingSubmission = async (reason: string) => {
+    if (!selectedPending) return;
 
-    const sub = selectedPending;
-    const nextSubmissions: PendingContractSubmission[] = pendingSubmissions.map(p => p.id === sub.id ? {
-      ...p,
-      status: 'rejected' as const,
-      rejectionReason: rejectReason.trim()
-    } : p);
-    setPendingSubmissions(nextSubmissions);
-    savePendingContractSubmissions(nextSubmissions);
-
-    onAddLog('ปฏิเสธสัญญาเช่า', `ปฏิเสธสัญญาเช่าคุณ${sub.tenantName} - เหตุผล: "${rejectReason.trim()}"`, 'Contract', sub.id);
-
-    setSelectedPending(null);
-    setIsRejectModalOpen(false);
-    setRejectReason('');
+    try {
+      setIsSaving(true);
+      const res = await (getDataProvider().tenantRegistrations as any).rejectRequest(selectedPending.id, reason);
+      setIsSaving(false);
+      if (res.success) {
+        setIsPendingDetailOpen(false);
+        setSelectedPending(null);
+      } else {
+        setErrorText(res.error?.message || 'เกิดข้อผิดพลาดในการปฏิเสธคำขอ');
+      }
+    } catch (err: any) {
+      setIsSaving(false);
+      setErrorText(err.message || 'เกิดข้อผิดพลาดในการปฏิเสธคำขอ');
+    }
+  };
     setPendingToast(`ปฏิเสธสัญญาเช่าคุณ${sub.tenantName} เรียบร้อยแล้ว (ผู้เช่าจะได้รับแจ้งเหตุผล)`);
   };
 

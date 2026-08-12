@@ -181,62 +181,53 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
   const [initialTenantId, setInitialTenantId] = useState<string | undefined>(undefined);
   const [initialContractId, setInitialContractId] = useState<string | undefined>(undefined);
   
-  // Dynamic Month Switcher State
-  const [selectedCycle, setSelectedCycle] = useState('2026-07');
+  // Authoritative Billing Cycle State
+  const [billingCycles, setBillingCycles] = useState<any[]>([]);
+  const [selectedBillingCycleId, setSelectedBillingCycleId] = useState<string>('');
+  const [selectedCycleCode, setSelectedCycleCode] = useState<string>('');
   const [isCycleModalOpen, setIsCycleModalOpen] = useState(false);
-  const [tempYear, setTempYear] = useState(2026);
+  const [tempYear, setTempYear] = useState(new Date().getFullYear());
 
-  // Dynamic Cycle Range Constraints
-  const minCycle = '2026-01'; // Oldest month of system usage
+  const selectedCycle = selectedCycleCode || '2026-08';
 
   const handlePrevCycle = () => {
-    const [yStr, mStr] = selectedCycle.split('-');
-    let y = parseInt(yStr);
-    let m = parseInt(mStr);
-    m -= 1;
-    if (m === 0) {
-      m = 12;
-      y -= 1;
-    }
-    const nextMStr = m < 10 ? `0${m}` : `${m}`;
-    const nextCycle = `${y}-${nextMStr}`;
-    
-    if (nextCycle >= minCycle) {
-      setSelectedCycle(nextCycle);
+    if (billingCycles.length === 0) return;
+    const idx = billingCycles.findIndex(c => c.id === selectedBillingCycleId || c.cycleCode === selectedCycleCode);
+    if (idx < billingCycles.length - 1) {
+      const prev = billingCycles[idx + 1];
+      setSelectedBillingCycleId(prev.id);
+      setSelectedCycleCode(prev.cycleCode);
     }
   };
 
   const handleNextCycle = () => {
-    const [yStr, mStr] = selectedCycle.split('-');
-    let y = parseInt(yStr);
-    let m = parseInt(mStr);
-    m += 1;
-    if (m === 13) {
-      m = 1;
-      y += 1;
-    }
-    const nextMStr = m < 10 ? `0${m}` : `${m}`;
-    const nextCycle = `${y}-${nextMStr}`;
-    
-    if (nextCycle <= maxCycle) {
-      setSelectedCycle(nextCycle);
+    if (billingCycles.length === 0) return;
+    const idx = billingCycles.findIndex(c => c.id === selectedBillingCycleId || c.cycleCode === selectedCycleCode);
+    if (idx > 0) {
+      const next = billingCycles[idx - 1];
+      setSelectedBillingCycleId(next.id);
+      setSelectedCycleCode(next.cycleCode);
     }
   };
 
   const getCycleLabel = (cycle: string) => {
-    const [year, month] = cycle.split('-');
-    const mIndex = parseInt(month) - 1;
+    if (!cycle) return '';
+    const parts = cycle.split('-');
+    if (parts.length < 2) return cycle;
+    const year = parts[0];
+    const month = parts[1];
+    const mIndex = parseInt(month, 10) - 1;
     const thaiMonthNames = [
       'มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน',
       'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'
     ];
     if (mIndex >= 0 && mIndex < 12) {
-      return `${thaiMonthNames[mIndex]} ${parseInt(year) + 543}`;
+      return `${thaiMonthNames[mIndex]} ${parseInt(year, 10) + 543}`;
     }
     return cycle;
   };
-  
-  // Local centralized states
+
+  // Centralized state
   const [rooms, setRooms] = useState<Room[]>([]);
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [bills, setBills] = useState<Bill[]>([]);
@@ -245,35 +236,6 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [buildings, setBuildings] = useState<Building[]>([]);
-
-  // Helper: check if a given cycle has at least 1 room whose bill/meter status is NOT 'ยังไม่ออกบิล' (draft)
-  const hasAtLeastOneBilledRoom = (cycleId: string) => {
-    // Check bills in state for this cycleId
-    const currentBills = (bills || []).filter(b => b.cycleId === cycleId);
-    return currentBills.some(b => b.status !== 'draft');
-  };
-
-  const getMaxCycle = () => {
-    // Start with default starting cycle '2026-07'
-    let curr = '2026-07';
-
-    // Allow advancing +1 month for each cycle that has at least 1 room billed/read
-    while (hasAtLeastOneBilledRoom(curr)) {
-      const [yStr, mStr] = curr.split('-');
-      let y = parseInt(yStr);
-      let m = parseInt(mStr);
-      m += 1;
-      if (m > 12) {
-        m = 1;
-        y += 1;
-      }
-      curr = `${y}-${m < 10 ? '0' + m : m}`;
-    }
-
-    return curr;
-  };
-
-  const maxCycle = getMaxCycle();
 
   // Header Search State & Safe Calculation
   const [headerSearchQuery, setHeaderSearchQuery] = useState('');
@@ -514,7 +476,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
     let isApiConnected = false;
     const reqHeaders: Record<string, string> = {};
     const savedId = localStorage.getItem('selected_dormitory_id');
-    if (savedId && savedId !== 'dorm-1' && savedId !== 'dorm-001') {
+    if (savedId) {
       reqHeaders['x-dormitory-id'] = savedId;
     }
 
@@ -545,12 +507,13 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
 
     if (isApiConnected) {
       try {
-        const [tRes, bRes, cRes, mRes, aRes] = await Promise.all([
+        const [tRes, bRes, cRes, mRes, aRes, bcRes] = await Promise.all([
           fetch('/api/v1/tenants', { headers: reqHeaders }).then(r => r.ok ? r.json() : null),
           fetch('/api/v1/bills', { headers: reqHeaders }).then(r => r.ok ? r.json() : null),
           fetch('/api/v1/contracts', { headers: reqHeaders }).then(r => r.ok ? r.json() : null),
           fetch('/api/v1/maintenance', { headers: reqHeaders }).then(r => r.ok ? r.json() : null),
           fetch('/api/v1/announcements', { headers: reqHeaders }).then(r => r.ok ? r.json() : null),
+          fetch('/api/v1/billing-cycles', { headers: reqHeaders }).then(r => r.ok ? r.json() : null),
         ]);
         setTenants(tRes?.data || []);
         setBills(bRes?.data || []);
@@ -558,6 +521,15 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
         setRepairs(mRes?.data || []);
         setAnnouncements(aRes?.data || []);
         setAuditLogs([]);
+
+        const loadedCycles = bcRes?.data || [];
+        setBillingCycles(loadedCycles);
+        if (loadedCycles.length > 0) {
+          if (!selectedBillingCycleId || !loadedCycles.some((c: any) => c.id === selectedBillingCycleId)) {
+            setSelectedBillingCycleId(loadedCycles[0].id);
+            setSelectedCycleCode(loadedCycles[0].cycleCode);
+          }
+        }
       } catch {
         setTenants([]);
         setBills([]);
@@ -565,6 +537,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
         setRepairs([]);
         setAnnouncements([]);
         setAuditLogs([]);
+        setBillingCycles([]);
       }
     } else {
       setTenants([]);
@@ -573,6 +546,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
       setRepairs([]);
       setAnnouncements([]);
       setAuditLogs([]);
+      setBillingCycles([]);
     }
   };
 

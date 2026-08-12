@@ -18,7 +18,14 @@ export function createTenantRegistrationRouter(
   ];
 
   const getDormitoryId = (req: Request): string => {
-    return (req.headers['x-dormitory-id'] as string) || req.auth?.dormitoryId || 'dorm-001';
+    const dormId = (req.headers['x-dormitory-id'] as string) || req.auth?.dormitoryId;
+    if (!dormId) {
+      const err = new Error('DORMITORY_ID_REQUIRED');
+      (err as any).statusCode = 400;
+      (err as any).code = 'DORMITORY_ID_REQUIRED';
+      throw err;
+    }
+    return dormId;
   };
 
   const verifyCsrf = (req: Request, res: Response): boolean => {

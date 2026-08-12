@@ -231,6 +231,18 @@ export class ApiTenantAdapter implements TenantDataSource {
       };
     }
   }
+
+  async delete(id: string): Promise<DataResult<boolean>> {
+    try {
+      await httpRequest<any>('DELETE', `/tenants/${id}`);
+      return { success: true, data: true };
+    } catch (err: any) {
+      return {
+        success: false,
+        error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message }
+      };
+    }
+  }
 }
 
 export class ApiContractAdapter implements ContractDataSource {
@@ -270,6 +282,18 @@ export class ApiContractAdapter implements ContractDataSource {
       const data = await httpRequest<Contract>('POST', '/contracts', contractData, {
         idempotencyKey: `contract_add_${Date.now()}`
       });
+      return { success: true, data };
+    } catch (err: any) {
+      return {
+        success: false,
+        error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message }
+      };
+    }
+  }
+
+  async activateContract(contractId: string): Promise<DataResult<any>> {
+    try {
+      const data = await httpRequest<any>('POST', `/contracts/${contractId}/activate`);
       return { success: true, data };
     } catch (err: any) {
       return {
