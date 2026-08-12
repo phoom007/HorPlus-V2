@@ -287,10 +287,12 @@ test.describe.serial('HORPLUS — Wave 1 Owner Daily Operations Real Playwright 
       await roomBtn.click();
     }
 
-    // 4. Click Save Draft Contract button in UI
+    // 4. Click Save Draft Contract button in UI & await response
+    const contractPromise = page.waitForResponse((res) => res.url().includes('/api/v1/contracts') && res.request().method() === 'POST' && res.status() === 201);
     const saveContractBtn = page.locator('button:has-text("บันทึกสัญญา"), button:has-text("บันทึกร่างสัญญาเช่า"), button:has-text("ทำสัญญาเช่า")').first();
     await expect(saveContractBtn).toBeVisible();
     await saveContractBtn.click();
+    await contractPromise;
 
     // 5. Verify DRAFT contract created in DB
     const draftContract = await prisma.contract.findFirst({
@@ -302,12 +304,14 @@ test.describe.serial('HORPLUS — Wave 1 Owner Daily Operations Real Playwright 
 
     // 6. F5 Reload -> Draft Contract remains visible
     await page.goto('/owner/contracts');
-    await page.waitForLoadState('domcontentloaded');
+    await page.waitForLoadState('networkidle');
 
-    // 7. Click Activate Contract UI Action
+    // 7. Click Activate Contract UI Action & await response
+    const activatePromise = page.waitForResponse((res) => res.url().includes('/activate') && res.request().method() === 'POST');
     const activateBtn = page.locator('button:has-text("ยืนยันเปิดใช้งานสัญญา")').first();
     await expect(activateBtn).toBeVisible();
     await activateBtn.click();
+    await activatePromise;
 
     // 8. Assert PostgreSQL state after UI activation
     const activeContract = await prisma.contract.findUnique({ where: { id: createdContractId } });
