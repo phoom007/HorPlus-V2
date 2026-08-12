@@ -6,6 +6,8 @@ import { InMemoryContractRepository } from '../src/db/repositories/contract.repo
 import { InMemoryRoomRepository } from '../src/db/repositories/room.repository.js';
 import { SensitiveFieldService } from '../src/services/sensitive-field.service.js';
 
+import { getPrismaClient } from '../src/db/prisma.js';
+
 describe('LOCAL-01 — Tenant Onboarding & Co-Occupant Management', () => {
   let tenantRepo: InMemoryTenantRepository;
   let contractRepo: InMemoryContractRepository;
@@ -16,7 +18,7 @@ describe('LOCAL-01 — Tenant Onboarding & Co-Occupant Management', () => {
   const dormA = '11111111-1111-4111-8111-111111111111';
   const dormB = '22222222-2222-4222-8222-222222222222';
 
-  beforeEach(() => {
+  beforeEach(async () => {
     tenantRepo = new InMemoryTenantRepository();
     contractRepo = new InMemoryContractRepository();
     roomRepo = new InMemoryRoomRepository();
@@ -24,6 +26,13 @@ describe('LOCAL-01 — Tenant Onboarding & Co-Occupant Management', () => {
 
     tenantService = new TenantService(tenantRepo, contractRepo, sensitiveService);
     registrationService = new TenantRegistrationService();
+
+    const prisma = getPrismaClient();
+    await prisma.dormitory.upsert({
+      where: { id: dormA },
+      create: { id: dormA, name: 'Dorm A', code: 'DORM-A' },
+      update: {},
+    });
   });
 
   describe('Co-Occupant Management & RLS Isolation', () => {
@@ -162,7 +171,13 @@ describe('LOCAL-01 — Tenant Onboarding & Co-Occupant Management', () => {
     });
 
     it('should enforce concurrency control: exactly ONE winner and ONE conflict on concurrent approval attempts', async () => {
-      const room = await roomRepo.create(dormA, { roomNumber: '101', floor: 1, type: 'standard', baseRent: '5000' });
+      const prisma = getPrismaClient();
+      const building = await prisma.building.create({
+        data: { dormitoryId: dormA, name: 'Building 1', code: 'B1' },
+      });
+      const room = await prisma.room.create({
+        data: { dormitoryId: dormA, buildingId: building.id, roomNumber: '101', floor: 1, type: 'standard', baseRent: '5000', status: 'vacant' },
+      });
 
       // 1. Create 2 registration requests for the same room
       const reqA = await registrationService.createRequest(dormA, {
