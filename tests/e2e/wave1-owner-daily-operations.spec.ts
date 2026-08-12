@@ -288,7 +288,7 @@ test.describe.serial('HORPLUS — Wave 1 Owner Daily Operations Real Playwright 
     }
 
     // 4. Click Save Draft Contract button in UI
-    const saveContractBtn = page.locator('button:has-text("บันทึกร่างสัญญาเช่า"), button:has-text("บันทึกสัญญาเช่า"), button:has-text("ทำสัญญาเช่า")').first();
+    const saveContractBtn = page.locator('button:has-text("บันทึกสัญญา"), button:has-text("บันทึกร่างสัญญาเช่า"), button:has-text("ทำสัญญาเช่า")').first();
     await expect(saveContractBtn).toBeVisible();
     await saveContractBtn.click();
 
