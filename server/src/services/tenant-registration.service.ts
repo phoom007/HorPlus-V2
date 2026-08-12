@@ -10,13 +10,13 @@ export interface CreateRegistrationDto {
 }
 
 export interface ApproveRegistrationDto {
-  createContract?: boolean;
-  startDate?: string;
-  endDate?: string;
-  durationMonths?: number;
-  rentAmount?: string | number;
-  depositAmount?: string | number;
-  advancePaymentAmount?: string | number;
+  createContract?: boolean; // Accepted for backward compat but ignored — approval always creates contract
+  startDate: string;
+  endDate: string;
+  durationMonths: number;
+  rentAmount: string | number;
+  depositAmount: string | number;
+  advancePaymentAmount: string | number;
   terms?: string;
 }
 
@@ -24,7 +24,7 @@ export class TenantRegistrationService {
   public async createRequest(dormitoryId: string, payload: CreateRegistrationDto) {
     const prisma = getPrismaClient();
 
-    let requestedRoomId: string | null = null;
+    let requestedRoomId: string = payload.requestedRoomId;
     if (payload.requestedRoomId) {
       const room = await prisma.room.findFirst({
         where: {
@@ -162,9 +162,27 @@ export class TenantRegistrationService {
   public async approveRequest(
     id: string,
     dormitoryId: string,
-    payload: ApproveRegistrationDto = {},
+    payload: ApproveRegistrationDto,
     actorUserId?: string
   ) {
+    // INVARIANT: Approval must always produce complete tenancy state.
+    // Validate required contract fields BEFORE any mutations.
+    if (
+      !payload ||
+      !payload.startDate ||
+      !payload.endDate ||
+      payload.durationMonths === undefined ||
+      payload.rentAmount === undefined ||
+      payload.depositAmount === undefined ||
+      payload.advancePaymentAmount === undefined
+    ) {
+      const err = new Error('MISSING_CONTRACT_TERMS');
+      (err as any).statusCode = 400;
+      (err as any).code = 'MISSING_CONTRACT_TERMS';
+      (err as any).message = 'กรุณาระบุข้อกำหนดสัญญาที่จำเป็นให้ครบถ้วน (วันเริ่ม, วันสิ้นสุด, ระยะเวลา, ค่าเช่า, เงินมัดจำ, ค่าล่วงหน้า)';
+      throw err;
+    }
+
     const prisma = getPrismaClient();
     return prisma.$transaction(async (tx) => {
       // 1. Re-verify request status inside transaction to guarantee idempotency and guard race conditions
@@ -225,6 +243,15 @@ export class TenantRegistrationService {
         }
       }
 
+      // INVARIANT: Registration must have a room assigned before approval
+      if (!req.requestedRoomId) {
+        const err = new Error('MISSING_ROOM_ASSIGNMENT');
+        (err as any).statusCode = 400;
+        (err as any).code = 'MISSING_ROOM_ASSIGNMENT';
+        (err as any).message = 'คำขอลงทะเบียนนี้ยังไม่ได้ระบุห้องพัก กรุณาระบุห้องพักก่อนอนุมัติ';
+        throw err;
+      }
+
       // 3. Create Tenant
       const tenantCount = await tx.tenant.count({ where: { dormitoryId } });
       const tenantNumber = `TNT-${Date.now()}-${(tenantCount + 1).toString().padStart(4, '0')}`;
@@ -242,71 +269,50 @@ export class TenantRegistrationService {
         },
       });
 
-      // 4. Create Contract according to workflow
-      let contractId: string | null = null;
-      if (payload.createContract) {
-        if (
-          !payload.startDate ||
-          !payload.endDate ||
-          payload.durationMonths === undefined ||
-          payload.rentAmount === undefined ||
-          payload.depositAmount === undefined ||
-          payload.advancePaymentAmount === undefined
-        ) {
-          const err = new Error('MISSING_CONTRACT_TERMS');
-          (err as any).statusCode = 400;
-          (err as any).code = 'MISSING_CONTRACT_TERMS';
-          (err as any).message = 'กรุณาระบุข้อกำหนดสัญญาที่จำเป็นให้ครบถ้วน';
-          throw err;
-        }
+      // 4. Create Contract (ALWAYS — approval invariant)
+      const contractCount = await tx.contract.count({ where: { dormitoryId } });
+      const contractNumber = `CTR-${Date.now()}-${(contractCount + 1).toString().padStart(4, '0')}`;
 
-        const contractCount = await tx.contract.count({ where: { dormitoryId } });
-        const contractNumber = `CTR-${Date.now()}-${(contractCount + 1).toString().padStart(4, '0')}`;
+      const contract = await tx.contract.create({
+        data: {
+          dormitoryId,
+          contractNumber,
+          roomId: req.requestedRoomId,
+          tenantId: tenant.id,
+          status: 'active',
+          startDate: new Date(payload.startDate),
+          endDate: new Date(payload.endDate),
+          durationMonths: payload.durationMonths,
+          rentAmount: String(payload.rentAmount),
+          depositAmount: String(payload.depositAmount),
+          advancePaymentAmount: String(payload.advancePaymentAmount),
+          terms: payload.terms || null,
+          createdByUserId: actorUserId,
+          activatedAt: new Date(),
+        },
+      });
+      const contractId = contract.id;
 
-        const contract = await tx.contract.create({
-          data: {
-            dormitoryId,
-            contractNumber,
-            roomId: req.requestedRoomId,
-            tenantId: tenant.id,
-            status: 'active',
-            startDate: new Date(payload.startDate),
-            endDate: new Date(payload.endDate),
-            durationMonths: payload.durationMonths,
-            rentAmount: String(payload.rentAmount),
-            depositAmount: String(payload.depositAmount),
-            advancePaymentAmount: String(payload.advancePaymentAmount),
-            terms: payload.terms || null,
-            createdByUserId: actorUserId,
-            activatedAt: new Date(),
-          },
-        });
-        contractId = contract.id;
-      }
+      // 5. Establish Authoritative Occupancy & Transition Room to Occupied (ALWAYS — approval invariant)
+      const occupancy = await tx.occupancy.create({
+        data: {
+          dormitoryId,
+          roomId: req.requestedRoomId,
+          tenantId: tenant.id,
+          registrationId: id,
+          status: 'ACTIVE',
+          startedAt: new Date(payload.startDate),
+        },
+      });
 
-      // 5. Establish Authoritative Occupancy & Transition Room to Occupied
-      let occupancy: any = null;
-      if (req.requestedRoomId && payload.createContract) {
-        occupancy = await tx.occupancy.create({
-          data: {
-            dormitoryId,
-            roomId: req.requestedRoomId,
-            tenantId: tenant.id,
-            registrationId: id,
-            status: 'ACTIVE',
-            startedAt: payload.startDate ? new Date(payload.startDate) : new Date(),
-          },
-        });
-
-        await tx.room.update({
-          where: { id: req.requestedRoomId },
-          data: {
-            status: 'occupied',
-            currentTenantId: tenant.id,
-            currentContractId: contractId || null,
-          },
-        });
-      }
+      await tx.room.update({
+        where: { id: req.requestedRoomId },
+        data: {
+          status: 'occupied',
+          currentTenantId: tenant.id,
+          currentContractId: contractId,
+        },
+      });
 
       // 6. Update Registration Request status to approved
       const updatedReq = await tx.tenantRegistrationRequest.update({

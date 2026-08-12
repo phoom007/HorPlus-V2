@@ -207,7 +207,14 @@ describe('LOCAL-01 — Tenant Onboarding & Co-Occupant Management', () => {
 
       // 3. Second approval attempt must fail with INVALID_REQUEST_STATUS
       await expect(
-        registrationService.approveRequest(req.id, dormA, { createContract: false })
+        registrationService.approveRequest(req.id, dormA, {
+          startDate: '2026-09-01',
+          endDate: '2027-08-31',
+          durationMonths: 12,
+          rentAmount: '5000',
+          depositAmount: '5000',
+          advancePaymentAmount: '5000',
+        })
       ).rejects.toThrow();
     });
 
@@ -257,6 +264,112 @@ describe('LOCAL-01 — Tenant Onboarding & Co-Occupant Management', () => {
       expect(statuses).toContain('approved');
       expect(statuses).toContain('pending_owner_approval');
     });
+
+    it('should reject approval with missing contract terms (partial-approval prevention)', async () => {
+      const req = await registrationService.createRequest(dormA, {
+        requestedRoomId: roomId,
+        firstName: 'Partial',
+        lastName: 'Blocked',
+        phone: '0818881111',
+      });
+
+      // Attempt approval without contract terms → must fail BEFORE any mutation
+      await expect(
+        registrationService.approveRequest(req.id, dormA, {} as any)
+      ).rejects.toThrow();
+
+      // Verify zero side effects: request still pending, no tenant/contract/occupancy created
+      const check = await registrationService.getRequestById(req.id, dormA);
+      expect(check.status).toBe('pending_owner_approval');
+
+      const prisma = getPrismaClient();
+      const tenantCount = await prisma.tenant.count({ where: { dormitoryId: dormA, firstName: 'Partial' } });
+      expect(tenantCount).toBe(0);
+    });
+
+    it('should create complete tenancy state on valid approval (Tenant + Contract + Occupancy + Room=occupied)', async () => {
+      const req = await registrationService.createRequest(dormA, {
+        requestedRoomId: roomId,
+        firstName: 'Complete',
+        lastName: 'State',
+        phone: '0817771111',
+      });
+
+      const result = await registrationService.approveRequest(req.id, dormA, {
+        startDate: '2026-09-01',
+        endDate: '2027-08-31',
+        durationMonths: 12,
+        rentAmount: '5000',
+        depositAmount: '5000',
+        advancePaymentAmount: '5000',
+      });
+
+      // Verify all entities created
+      expect(result.request.status).toBe('approved');
+      expect(result.tenant).toBeDefined();
+      expect(result.tenant.firstName).toBe('Complete');
+      expect(result.contractId).toBeDefined();
+      expect(result.occupancy).toBeDefined();
+      expect(result.occupancy.status).toBe('ACTIVE');
+
+      // Verify Room is occupied via direct PostgreSQL query
+      const prisma = getPrismaClient();
+      const room = await prisma.room.findUnique({ where: { id: roomId } });
+      expect(room!.status).toBe('occupied');
+      expect(room!.currentTenantId).toBe(result.tenant.id);
+      expect(room!.currentContractId).toBe(result.contractId);
+
+      // Verify Contract exists and is active
+      const contract = await prisma.contract.findUnique({ where: { id: result.contractId! } });
+      expect(contract!.status).toBe('active');
+      expect(contract!.tenantId).toBe(result.tenant.id);
+
+      // Verify Occupancy exists and is active
+      const occupancy = await prisma.occupancy.findFirst({ where: { roomId, dormitoryId: dormA, status: 'ACTIVE' } });
+      expect(occupancy).toBeDefined();
+      expect(occupancy!.tenantId).toBe(result.tenant.id);
+    });
+
+    it('should block approval for an already-occupied room', async () => {
+      // Create BOTH requests while room is still vacant (product rule: multiple pending allowed)
+      const req1 = await registrationService.createRequest(dormA, {
+        requestedRoomId: roomId,
+        firstName: 'First',
+        lastName: 'Tenant',
+        phone: '0816661111',
+      });
+      const req2 = await registrationService.createRequest(dormA, {
+        requestedRoomId: roomId,
+        firstName: 'Second',
+        lastName: 'Applicant',
+        phone: '0816662222',
+      });
+
+      // Approve the first request → room becomes occupied
+      await registrationService.approveRequest(req1.id, dormA, {
+        startDate: '2026-09-01',
+        endDate: '2027-08-31',
+        durationMonths: 12,
+        rentAmount: '5000',
+        depositAmount: '5000',
+        advancePaymentAmount: '5000',
+      });
+
+      // Attempt to approve second applicant for same occupied room → must fail
+      await expect(
+        registrationService.approveRequest(req2.id, dormA, {
+          startDate: '2026-09-01',
+          endDate: '2027-08-31',
+          durationMonths: 12,
+          rentAmount: '5000',
+          depositAmount: '5000',
+          advancePaymentAmount: '5000',
+        })
+      ).rejects.toThrow();
+
+      // Loser remains pending
+      const check = await registrationService.getRequestById(req2.id, dormA);
+      expect(check.status).toBe('pending_owner_approval');
+    });
   });
 });
-

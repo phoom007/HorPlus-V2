@@ -320,7 +320,13 @@ test.describe.serial('LOCAL-01 — Tenant Onboarding & Co-Occupant Management E2
         Cookie: `horplus_session=${sessionTokenA}; horplus_csrf=${csrfTokenA}`,
       },
       data: {
-        createContract: false,
+        createContract: true,
+        startDate: '2026-09-01',
+        endDate: '2027-08-31',
+        durationMonths: 12,
+        rentAmount: '5000',
+        depositAmount: '5000',
+        advancePaymentAmount: '5000',
       },
     });
 

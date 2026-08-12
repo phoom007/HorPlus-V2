@@ -342,9 +342,20 @@ export async function submitTenantRegistrationRequest(payload: {
   }
 }
 
-export async function approveTenantRegistrationRequest(id: string, payload?: any): Promise<DataResult<any>> {
+export interface ApproveRegistrationPayload {
+  createContract?: boolean;
+  startDate: string;
+  endDate: string;
+  durationMonths: number;
+  rentAmount: string | number;
+  depositAmount: string | number;
+  advancePaymentAmount: string | number;
+  terms?: string;
+}
+
+export async function approveTenantRegistrationRequest(id: string, payload: ApproveRegistrationPayload): Promise<DataResult<any>> {
   try {
-    const data = await httpRequest<any>('POST', `/tenant-registrations/${id}/approve`, payload || {});
+    const data = await httpRequest<any>('POST', `/tenant-registrations/${id}/approve`, payload);
     return { success: true, data };
   } catch (err: any) {
     return {
@@ -353,6 +364,7 @@ export async function approveTenantRegistrationRequest(id: string, payload?: any
     };
   }
 }
+
 
 export async function rejectTenantRegistrationRequest(id: string, reason?: string): Promise<DataResult<any>> {
   try {

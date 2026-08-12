@@ -287,7 +287,7 @@ describe('Wave 1 — Owner Daily Operations Mandatory Acceptance Regressions Sui
   });
 
   describe('4. Tenant Registration Request Lifecycle Regressions', () => {
-    it('4.1 Registration approval creates Tenant but does NOT occupy room before activation', async () => {
+    it('4.1 Registration approval always creates complete tenancy state (Tenant + Contract + Occupancy + Room=occupied)', async () => {
       const req = await prisma.tenantRegistrationRequest.create({
         data: {
           dormitoryId: dormAId,
@@ -299,16 +299,29 @@ describe('Wave 1 — Owner Daily Operations Mandatory Acceptance Regressions Sui
         },
       });
 
-      const res = await registrationService.approveRequest(req.id, dormAId, {});
+      const res = await registrationService.approveRequest(req.id, dormAId, {
+        startDate: '2026-09-01',
+        endDate: '2027-08-31',
+        durationMonths: 12,
+        rentAmount: '5000',
+        depositAmount: '5000',
+        advancePaymentAmount: '5000',
+      });
       expect(res.request.status).toBe('approved');
       expect(res.tenant).toBeDefined();
-      expect(res.contractId).toBeNull();
+      expect(res.contractId).toBeDefined();
+      expect(res.occupancy).toBeDefined();
+      expect(res.occupancy.status).toBe('ACTIVE');
 
-      // Ensure NO Occupancy was created for Room A2
+      // Verify Occupancy was created for Room A2
       const occs = await prisma.occupancy.findMany({
         where: { dormitoryId: dormAId, roomId: roomA2Id, status: 'ACTIVE' },
       });
-      expect(occs.length).toBe(0);
+      expect(occs.length).toBe(1);
+
+      // Verify Room is now occupied
+      const room = await prisma.room.findUnique({ where: { id: roomA2Id } });
+      expect(room!.status).toBe('occupied');
     });
   });
 
