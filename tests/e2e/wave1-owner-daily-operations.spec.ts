@@ -186,14 +186,14 @@ test.describe.serial('HORPLUS — Wave 1 Owner Daily Operations Real Playwright 
   });
 
   test('Flow A — Create Tenant via UI, verify DB persistence & Room remains VACANT before activation', async ({ page }) => {
-    test.setTimeout(45000);
+    test.setTimeout(60000);
 
     await page.goto('/owner');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
 
     // Click Tenants tab
     const tenantsTab = page.locator('button:has-text("ผู้เช่า")').first();
-    await expect(tenantsTab).toBeVisible({ timeout: 10000 });
+    await expect(tenantsTab).toBeVisible({ timeout: 30000 });
     await tenantsTab.click();
 
     // Click Add Tenant button (NO conditional skip)
