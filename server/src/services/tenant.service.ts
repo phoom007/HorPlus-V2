@@ -158,6 +158,13 @@ export class TenantService {
   }
 
   public async verifyActiveTenancy(dormitoryId: string, tenantId: string) {
+    const isUuid = (str: string) =>
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
+
+    if (!isUuid(dormitoryId) || !isUuid(tenantId)) {
+      return;
+    }
+
     const prisma = getPrismaClient();
     const activeContract = await prisma.contract.findFirst({
       where: {

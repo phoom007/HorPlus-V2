@@ -13,8 +13,8 @@ describe('LOCAL-01 — Tenant Onboarding & Co-Occupant Management', () => {
   let tenantService: TenantService;
   let registrationService: TenantRegistrationService;
 
-  const dormA = 'dorm-aaaa-1111';
-  const dormB = 'dorm-bbbb-2222';
+  const dormA = '11111111-1111-4111-8111-111111111111';
+  const dormB = '22222222-2222-4222-8222-222222222222';
 
   beforeEach(() => {
     tenantRepo = new InMemoryTenantRepository();
