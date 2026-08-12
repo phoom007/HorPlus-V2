@@ -362,6 +362,7 @@ test.describe.serial('HORPLUS — Wave 1 Owner Daily Operations Real Playwright 
 
     const saveReq = await savePromise;
     await responsePromise;
+    await page.waitForTimeout(300);
     const postData = JSON.parse(saveReq.postData() || '{}');
     // Assert billingCycleId in request body equals actual DB cycle UUID (NOT cycleCode YYYY-MM)
     expect(postData.billingCycleId).toBe(cycleId);
