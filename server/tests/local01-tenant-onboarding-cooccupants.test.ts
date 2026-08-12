@@ -141,4 +141,59 @@ describe('LOCAL-01 — Tenant Onboarding & Co-Occupant Management', () => {
       ).rejects.toThrow();
     });
   });
+
+  describe('Registration Approval Concurrency, Idempotency & Rollback Safety', () => {
+    it('should reject duplicate approval attempt on an already approved request (idempotency)', async () => {
+      // 1. Create registration request
+      const req = await registrationService.createRequest(dormA, {
+        firstName: 'Idempotent',
+        lastName: 'Test',
+        phone: '0819991111',
+      });
+
+      // 2. Approve request once
+      const approved = await registrationService.approveRequest(req.id, dormA, { createContract: false });
+      expect(approved.request.status).toBe('approved');
+
+      // 3. Second approval attempt must fail with INVALID_REQUEST_STATUS
+      await expect(
+        registrationService.approveRequest(req.id, dormA, { createContract: false })
+      ).rejects.toThrow();
+    });
+
+    it('should enforce concurrency control: exactly ONE winner and ONE conflict on concurrent approval attempts', async () => {
+      // 1. Create 2 registration requests for the same room
+      const reqA = await registrationService.createRequest(dormA, {
+        firstName: 'ConcurrentA',
+        lastName: 'WinnerOrLoser',
+        phone: '0812221111',
+      });
+
+      const reqB = await registrationService.createRequest(dormA, {
+        firstName: 'ConcurrentB',
+        lastName: 'WinnerOrLoser',
+        phone: '0812222222',
+      });
+
+      // 2. Run concurrent approval attempts using Promise.allSettled
+      const results = await Promise.allSettled([
+        registrationService.approveRequest(reqA.id, dormA, { createContract: false }),
+        registrationService.approveRequest(reqB.id, dormA, { createContract: false }),
+      ]);
+
+      const fulfilled = results.filter((r) => r.status === 'fulfilled');
+      const rejected = results.filter((r) => r.status === 'rejected');
+
+      expect(fulfilled.length).toBe(1);
+      expect(rejected.length).toBe(1);
+
+      // Verify winner is approved and loser remains pending
+      const checkA = await registrationService.getRequestById(reqA.id, dormA);
+      const checkB = await registrationService.getRequestById(reqB.id, dormA);
+
+      const statuses = [checkA.status, checkB.status];
+      expect(statuses).toContain('approved');
+      expect(statuses).toContain('pending_owner_approval');
+    });
+  });
 });

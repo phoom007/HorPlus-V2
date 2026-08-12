@@ -273,7 +273,7 @@ test.describe.serial('LOCAL-01 — Tenant Onboarding & Co-Occupant Management E2
 
     // Open Registration Requests modal
     await page.click('button:has-text("คำขอลงทะเบียน")');
-    await page.waitForSelector('text=รายการคำขอลงทะเบียนจองห้องพัก');
+    await page.waitForSelector('text=รายการคำขอลงทะเบียนสมัครเช่าห้องพัก');
 
     // Approve Applicant B
     const cardB = page.locator('div').filter({ hasText: 'ApplicantB SecondSub' }).first();
@@ -281,14 +281,26 @@ test.describe.serial('LOCAL-01 — Tenant Onboarding & Co-Occupant Management E2
     await page.waitForSelector('text=กำหนดข้อตกลงสัญญาและอนุมัติผู้เช่า');
     await page.click('button:has-text("ยืนยันการอนุมัติ")');
 
-    // Verify DB: B approved, Room A101 occupied by B
+    // Verify DB: B approved, Room A101 occupied by B, Occupancy ACTIVE created
     const updatedReqB = await prisma.tenantRegistrationRequest.findUnique({
       where: { id: reqIdApplicantB },
     });
     expect(updatedReqB?.status).toBe('approved');
+    expect(updatedReqB?.approvedTenantId).not.toBeNull();
 
     const roomA = await prisma.room.findUnique({ where: { id: roomIdA } });
     expect(roomA?.status).toBe('occupied');
+    expect(roomA?.currentTenantId).toBe(updatedReqB!.approvedTenantId!);
+
+    const occupancyB = await prisma.occupancy.findFirst({
+      where: {
+        dormitoryId: dormIdA,
+        roomId: roomIdA,
+        tenantId: updatedReqB!.approvedTenantId!,
+        status: 'ACTIVE',
+      },
+    });
+    expect(occupancyB).not.toBeNull();
 
     // Verify Applicant A remains pending in PostgreSQL (NOT auto-rejected)
     const reqA = await prisma.tenantRegistrationRequest.findUnique({

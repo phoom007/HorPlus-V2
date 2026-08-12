@@ -2356,7 +2356,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
       <Modal
         isOpen={isRegModalOpen}
         onClose={() => setIsRegModalOpen(false)}
-        title="รายการคำขอลงทะเบียนจองห้องพัก (Local Registration Requests)"
+        title="รายการคำขอลงทะเบียนสมัครเช่าห้องพัก (Local Registration Requests)"
         maxWidth="max-w-2xl"
       >
         <div className="space-y-4">

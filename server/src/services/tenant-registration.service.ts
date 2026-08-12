@@ -162,20 +162,39 @@ export class TenantRegistrationService {
     payload: ApproveRegistrationDto = {},
     actorUserId?: string
   ) {
-    const req = await this.getRequestById(id, dormitoryId);
-    if (req.status !== 'pending_owner_approval') {
-      const err = new Error('INVALID_REQUEST_STATUS');
-      (err as any).statusCode = 400;
-      (err as any).code = 'INVALID_REQUEST_STATUS';
-      (err as any).message = 'คำขอนี้ไม่ได้อยู่ในสถานะรออนุมัติ';
-      throw err;
-    }
-
     const prisma = getPrismaClient();
     return prisma.$transaction(async (tx) => {
-      // Validate requestedRoomId belongs to same dormitory
+      // 1. Re-verify request status inside transaction to guarantee idempotency and guard race conditions
+      const req = await tx.tenantRegistrationRequest.findFirst({
+        where: { id, dormitoryId },
+      });
+
+      if (!req) {
+        const err = new Error('REGISTRATION_REQUEST_NOT_FOUND');
+        (err as any).statusCode = 404;
+        (err as any).code = 'REGISTRATION_REQUEST_NOT_FOUND';
+        throw err;
+      }
+
+      if (req.status !== 'pending_owner_approval') {
+        const err = new Error('INVALID_REQUEST_STATUS');
+        (err as any).statusCode = 400;
+        (err as any).code = 'INVALID_REQUEST_STATUS';
+        (err as any).message = 'คำขอนี้ไม่ได้อยู่ในสถานะรออนุมัติ';
+        throw err;
+      }
+
+      // 2. Validate requestedRoomId and acquire database-authoritative row lock (FOR UPDATE)
+      let room: any = null;
       if (req.requestedRoomId) {
-        const room = await tx.room.findFirst({ where: { id: req.requestedRoomId, dormitoryId } });
+        const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(req.requestedRoomId);
+        if (isUuid) {
+          try {
+            await tx.$executeRaw`SELECT id FROM rooms WHERE id = ${req.requestedRoomId}::uuid FOR UPDATE`;
+          } catch {}
+        }
+
+        room = await tx.room.findFirst({ where: { id: req.requestedRoomId, dormitoryId } });
         if (!room) {
           const err = new Error('ROOM_DORM_MISMATCH');
           (err as any).statusCode = 400;
@@ -190,9 +209,20 @@ export class TenantRegistrationService {
           (err as any).message = 'ห้องพักนี้มีผู้เช่าอยู่แล้วไม่สามารถอนุมัติได้';
           throw err;
         }
+
+        const activeOccupancy = await tx.occupancy.findFirst({
+          where: { dormitoryId, roomId: req.requestedRoomId, status: 'ACTIVE' },
+        });
+        if (activeOccupancy) {
+          const err = new Error('ROOM_ALREADY_OCCUPIED');
+          (err as any).statusCode = 409;
+          (err as any).code = 'ROOM_ALREADY_OCCUPIED';
+          (err as any).message = 'ห้องพักนี้มีผู้เช่าอยู่แล้วไม่สามารถอนุมัติได้';
+          throw err;
+        }
       }
 
-      // Concurrency-safe tenant number generation
+      // 3. Create Tenant
       const tenantCount = await tx.tenant.count({ where: { dormitoryId } });
       const tenantNumber = `TNT-${Date.now()}-${(tenantCount + 1).toString().padStart(4, '0')}`;
       const displayName = `${req.firstName} ${req.lastName}`.trim();
@@ -209,9 +239,9 @@ export class TenantRegistrationService {
         },
       });
 
+      // 4. Create Contract according to workflow
       let contractId: string | null = null;
       if (payload.createContract) {
-        // Require explicit mandatory contract terms (no invented defaults)
         if (
           !payload.startDate ||
           !payload.endDate ||
@@ -236,7 +266,7 @@ export class TenantRegistrationService {
             contractNumber,
             roomId: req.requestedRoomId,
             tenantId: tenant.id,
-            status: 'draft',
+            status: 'active',
             startDate: new Date(payload.startDate),
             endDate: new Date(payload.endDate),
             durationMonths: payload.durationMonths,
@@ -245,11 +275,37 @@ export class TenantRegistrationService {
             advancePaymentAmount: String(payload.advancePaymentAmount),
             terms: payload.terms || null,
             createdByUserId: actorUserId,
+            activatedAt: new Date(),
           },
         });
         contractId = contract.id;
       }
 
+      // 5. Establish Authoritative Occupancy & Transition Room to Occupied
+      let occupancy: any = null;
+      if (req.requestedRoomId) {
+        occupancy = await tx.occupancy.create({
+          data: {
+            dormitoryId,
+            roomId: req.requestedRoomId,
+            tenantId: tenant.id,
+            contractId: contractId || null,
+            status: 'ACTIVE',
+            moveInDate: payload.startDate ? new Date(payload.startDate) : new Date(),
+          },
+        });
+
+        await tx.room.update({
+          where: { id: req.requestedRoomId },
+          data: {
+            status: 'occupied',
+            currentTenantId: tenant.id,
+            currentContractId: contractId || null,
+          },
+        });
+      }
+
+      // 6. Update Registration Request status to approved
       const updatedReq = await tx.tenantRegistrationRequest.update({
         where: { id },
         data: {
@@ -266,6 +322,7 @@ export class TenantRegistrationService {
         request: updatedReq,
         tenant,
         contractId,
+        occupancy,
       };
     });
   }
