@@ -1366,12 +1366,12 @@ export const OwnerContracts: React.FC<OwnerContractsProps> = ({
 
                   <div className="space-y-3">
                     <p className="text-[10px] text-slate-400 font-bold uppercase">ลงชื่อ นิติหอพัก / ผู้เช่าร่วม</p>
-                    {(selectedContract.ownerSignature || dorm.ownerSignature) ? (
-                      <img src={selectedContract.ownerSignature || dorm.ownerSignature} alt="ลายเซ็นผู้ให้เช่า" className="h-10 mx-auto border border-slate-100 rounded-lg p-1 bg-slate-50/50 object-contain" />
+                    {(selectedContract.ownerSignature || dorm?.ownerSignature) ? (
+                      <img src={selectedContract.ownerSignature || dorm?.ownerSignature} alt="ลายเซ็นผู้ให้เช่า" className="h-10 mx-auto border border-slate-100 rounded-lg p-1 bg-slate-50/50 object-contain" />
                     ) : (
                       <div className="h-10 border border-dashed border-slate-200 rounded-lg" />
                     )}
-                    <p className="font-extrabold text-slate-800">({dorm.promptPayName || dorm.name || 'กรรมการนิติบุคคล HorPlus'})</p>
+                    <p className="font-extrabold text-slate-800">({dorm?.promptPayName || dorm?.name || 'กรรมการนิติบุคคล HorPlus'})</p>
                   </div>
                 </div>
 
