@@ -27,13 +27,28 @@ describe('LOCAL-01 — Tenant Onboarding & Co-Occupant Management', () => {
   });
 
   describe('Co-Occupant Management & RLS Isolation', () => {
+    const createActiveContractForTenant = async (dormId: string, tenantId: string) => {
+      return contractRepo.create(dormId, {
+        tenantId,
+        roomId: '11111111-0000-0000-0000-000000000000',
+        status: 'active',
+        startDate: new Date(),
+        endDate: new Date(Date.now() + 86400000 * 30),
+        durationMonths: 1,
+        rentAmount: '5000',
+        depositAmount: '5000',
+        advancePaymentAmount: '5000',
+      });
+    };
+
     it('should add, update, and soft-remove co-occupants with historical auditability', async () => {
-      // 1. Create Tenant in Dorm A
+      // 1. Create Tenant in Dorm A with active contract
       const tenant = await tenantService.createTenant(dormA, {
         firstName: 'Somchai',
         lastName: 'Jaidee',
         phone: '0812345678',
       });
+      await createActiveContractForTenant(dormA, tenant.id);
 
       // 2. Add Co-Occupant
       const co1 = await tenantService.addCoOccupant(dormA, tenant.id, {
@@ -68,9 +83,12 @@ describe('LOCAL-01 — Tenant Onboarding & Co-Occupant Management', () => {
     });
 
     it('should reject co-occupant update/delete if coOccupant belongs to another tenant (ownership binding attack)', async () => {
-      // Create Tenant A and Tenant B in same Dorm A
+      // Create Tenant A and Tenant B in same Dorm A with active contracts
       const tenantA = await tenantService.createTenant(dormA, { firstName: 'TenantA', lastName: 'Alpha', phone: '0811111111' });
+      await createActiveContractForTenant(dormA, tenantA.id);
+
       const tenantB = await tenantService.createTenant(dormA, { firstName: 'TenantB', lastName: 'Beta', phone: '0822222222' });
+      await createActiveContractForTenant(dormA, tenantB.id);
 
       // Add co-occupant to Tenant B
       const coB = await tenantService.addCoOccupant(dormA, tenantB.id, { name: 'CoOccupant B1' });
@@ -90,19 +108,20 @@ describe('LOCAL-01 — Tenant Onboarding & Co-Occupant Management', () => {
       // Create inactive/archived tenant without active contract or occupancy
       const inactiveTenant = await tenantService.createTenant(dormA, { firstName: 'Inactive', lastName: 'Tenant', phone: '0833333333' });
 
-      // Override active tenancy check for dummy test
+      // Active tenancy check fails because no active contract or occupancy exists
       await expect(
         tenantService.addCoOccupant(dormA, inactiveTenant.id, { name: 'New CoOccupant' })
       ).rejects.toThrow();
     });
 
     it('should enforce strict cross-dormitory isolation on co-occupant mutations', async () => {
-      // Create Tenant in Dorm A
+      // Create Tenant in Dorm A with active contract
       const tenantA = await tenantService.createTenant(dormA, {
         firstName: 'TenantA',
         lastName: 'Test',
         phone: '0811111111',
       });
+      await createActiveContractForTenant(dormA, tenantA.id);
 
       const coA = await tenantService.addCoOccupant(dormA, tenantA.id, {
         name: 'CoOccupant A',

@@ -161,33 +161,38 @@ export class TenantService {
     const isUuid = (str: string) =>
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
 
-    if (!isUuid(dormitoryId) || !isUuid(tenantId)) {
-      return;
+    // 1. Check active contracts using contractRepo (supports both in-memory and prisma adapters)
+    try {
+      const contractsRes = await this.contractRepo.findAll(dormitoryId, { tenantId, pageSize: 100 });
+      const hasActiveContract = contractsRes.items.some((c) =>
+        ['active', 'expiring_soon', 'pending_signature', 'waiting_extension', 'checking_out'].includes(c.status)
+      );
+      if (hasActiveContract) {
+        return;
+      }
+    } catch {}
+
+    // 2. Check active occupancy using Prisma if UUID format is valid
+    if (isUuid(dormitoryId) && isUuid(tenantId)) {
+      try {
+        const prisma = getPrismaClient();
+        const activeOccupancy = await prisma.occupancy.findFirst({
+          where: {
+            dormitoryId,
+            tenantId,
+            status: 'ACTIVE',
+          },
+        });
+        if (activeOccupancy) {
+          return;
+        }
+      } catch {}
     }
 
-    const prisma = getPrismaClient();
-    const activeContract = await prisma.contract.findFirst({
-      where: {
-        dormitoryId,
-        tenantId,
-        status: { in: ['active', 'expiring_soon', 'pending_signature', 'waiting_extension', 'checking_out'] },
-        deletedAt: null,
-      },
-    });
-    const activeOccupancy = await prisma.occupancy.findFirst({
-      where: {
-        dormitoryId,
-        tenantId,
-        status: 'ACTIVE',
-      },
-    });
-
-    if (!activeContract && !activeOccupancy) {
-      const err = new Error('ผู้เช่าไม่มีสัญญาหรือสถานะการพักอาศัยที่เปิดใช้งานอยู่');
-      (err as any).code = 'NO_ACTIVE_TENANCY';
-      (err as any).statusCode = 403;
-      throw err;
-    }
+    const err = new Error('ผู้เช่าไม่มีสัญญาหรือสถานะการพักอาศัยที่เปิดใช้งานอยู่');
+    (err as any).code = 'NO_ACTIVE_TENANCY';
+    (err as any).statusCode = 403;
+    throw err;
   }
 
   // Child Entities Management
