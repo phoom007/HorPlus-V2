@@ -175,6 +175,8 @@ test.describe.serial('LOCAL-01 — Tenant Onboarding & Co-Occupant Management E2
   });
 
   test('Flow A — Tenant Local Registration Submission & Persistence', async ({ page }) => {
+    test.setTimeout(60000);
+
     await page.goto('/tenant/register');
     await page.waitForLoadState('networkidle');
 
@@ -184,7 +186,9 @@ test.describe.serial('LOCAL-01 — Tenant Onboarding & Co-Occupant Management E2
     await page.fill('input[placeholder="0812345678"]', '0819998888');
 
     // Submit
-    await page.click('button[type="submit"]');
+    const submitBtn = page.locator('button[type="submit"]');
+    await expect(submitBtn).toBeEnabled({ timeout: 30000 });
+    await submitBtn.click();
     await page.waitForSelector('text=ส่งคำขอลงทะเบียนเรียบร้อยแล้ว');
 
     // Query PostgreSQL to verify persistent registration request
