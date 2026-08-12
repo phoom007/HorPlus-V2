@@ -10,14 +10,13 @@ export interface CreateRegistrationDto {
 }
 
 export interface ApproveRegistrationDto {
-  createContract?: boolean; // Accepted for backward compat but ignored — approval always creates contract
   startDate: string;
   endDate: string;
   durationMonths: number;
   rentAmount: string | number;
   depositAmount: string | number;
   advancePaymentAmount: string | number;
-  terms?: string;
+  terms?: string | null;
 }
 
 export class TenantRegistrationService {

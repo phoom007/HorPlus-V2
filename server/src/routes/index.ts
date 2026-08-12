@@ -136,6 +136,10 @@ export function createApiRouter(deps: AppApiDependencies | AuthenticationService
 
     const requireSession = fullDeps.authService.requireAuth();
     const requireActiveDormitory = createRequireActiveDormitoryMiddleware(prisma);
+
+    const tenantRegService = new TenantRegistrationService();
+    router.use('/tenant-registrations', createTenantRegistrationRouter(fullDeps.authService, tenantRegService));
+
     const protectedRouter = Router();
     protectedRouter.use(requireSession);
     protectedRouter.use(resolveDormitoryContextMiddleware);
@@ -147,8 +151,6 @@ export function createApiRouter(deps: AppApiDependencies | AuthenticationService
     if (fullDeps.tenantService) {
       protectedRouter.use('/tenants', createTenantRouter(fullDeps.authService, fullDeps.tenantService));
     }
-    const tenantRegService = new TenantRegistrationService();
-    protectedRouter.use('/tenant-registrations', createTenantRegistrationRouter(fullDeps.authService, tenantRegService));
 
     if (fullDeps.contractService) {
       protectedRouter.use('/contracts', createContractRouter(fullDeps.authService, fullDeps.contractService));

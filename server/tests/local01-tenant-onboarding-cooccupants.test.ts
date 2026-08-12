@@ -195,7 +195,6 @@ describe('LOCAL-01 — Tenant Onboarding & Co-Occupant Management', () => {
 
       // 2. Approve request once (with contract to exercise full path)
       const approved = await registrationService.approveRequest(req.id, dormA, {
-        createContract: true,
         startDate: '2026-09-01',
         endDate: '2027-08-31',
         durationMonths: 12,
@@ -235,7 +234,6 @@ describe('LOCAL-01 — Tenant Onboarding & Co-Occupant Management', () => {
       });
 
       const contractPayload = {
-        createContract: true,
         startDate: '2026-09-01',
         endDate: '2027-08-31',
         durationMonths: 12,

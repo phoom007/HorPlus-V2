@@ -160,6 +160,9 @@ test.describe('Wave 1F - Subscription & Entitlement Playwright E2E Suite', () =>
       { name: 'horplus_session', value: sessionToken, domain: 'localhost', path: '/' },
       { name: 'horplus_csrf', value: csrfToken, domain: 'localhost', path: '/' },
       { name: 'csrf-token', value: csrfToken, domain: 'localhost', path: '/' },
+      { name: 'horplus_session', value: sessionToken, domain: '127.0.0.1', path: '/' },
+      { name: 'horplus_csrf', value: csrfToken, domain: '127.0.0.1', path: '/' },
+      { name: 'csrf-token', value: csrfToken, domain: '127.0.0.1', path: '/' },
     ]);
 
     await page.addInitScript((id) => {

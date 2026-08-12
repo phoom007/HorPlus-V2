@@ -603,7 +603,7 @@ test.describe.serial('Wave 1G Real Playwright Lifecycle — Property, Room Defau
     // Trigger save on UI with stale version -> VERSION_CONFLICT
     await defaultRentInput.fill('9200');
     await defaultRentInput.blur();
-    const saveDefaultsBtn = page.getByTestId('btn-save-defaults').or(page.getByTestId('save-property-defaults-btn')).or(page.getByRole('button', { name: /บันทึก/ })).first();
+    const saveDefaultsBtn = page.locator('button[data-testid="save-property-defaults-btn"], button[data-testid="btn-save-defaults"]').first();
     if (await saveDefaultsBtn.isVisible()) {
       await saveDefaultsBtn.click();
     }

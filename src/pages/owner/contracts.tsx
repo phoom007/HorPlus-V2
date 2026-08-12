@@ -206,7 +206,6 @@ export const OwnerContracts: React.FC<OwnerContractsProps> = ({
     try {
       setIsSaving(true);
       const res = await (getDataProvider().tenantRegistrations as any).approveRequest(selectedPending.id, {
-        createContract: true,
         startDate: pendingStartDate || selectedPending.startDate,
         endDate: pendingEndDate || calculateEndDate(pendingStartDate || selectedPending.startDate, pendingDuration || selectedPending.durationMonths),
         durationMonths: pendingDuration || selectedPending.durationMonths,

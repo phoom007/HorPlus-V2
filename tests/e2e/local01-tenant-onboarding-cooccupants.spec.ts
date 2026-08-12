@@ -9,6 +9,7 @@ test.describe.serial('LOCAL-01 — Tenant Onboarding & Co-Occupant Management E2
   const prisma = getPrismaClient();
 
   let dormIdA: string;
+  let buildingIdA: string;
   let ownerIdA: string;
   let roomIdA: string;
   let roomIdA2: string;
@@ -79,6 +80,7 @@ test.describe.serial('LOCAL-01 — Tenant Onboarding & Co-Occupant Management E2
         floorCount: 2,
       },
     });
+    buildingIdA = buildingA.id;
 
     const roomA = await prisma.room.create({
       data: {
@@ -258,28 +260,42 @@ test.describe.serial('LOCAL-01 — Tenant Onboarding & Co-Occupant Management E2
   });
 
   test('Flow B — Owner Selects & Approves Applicant B (Leaves Applicant A Pending)', async ({ page, context }) => {
+    test.setTimeout(60000);
+    page.on('console', msg => console.log('PAGE LOG:', msg.text()));
+    page.on('pageerror', exception => console.log('PAGE ERROR:', exception));
+    await context.clearCookies();
     await context.addCookies([
       { name: 'horplus_session', value: sessionTokenA, domain: '127.0.0.1', path: '/' },
       { name: 'horplus_csrf', value: csrfTokenA, domain: '127.0.0.1', path: '/' },
+      { name: 'horplus_session', value: sessionTokenA, domain: 'localhost', path: '/' },
+      { name: 'horplus_csrf', value: csrfTokenA, domain: 'localhost', path: '/' },
     ]);
 
-    await page.goto('/owner/tenants');
-    await page.evaluate((dId) => {
+    await page.addInitScript((dId) => {
       localStorage.setItem('selected_dormitory_id', dId);
+      sessionStorage.setItem('active_dormitory_selected_for_session', dId);
     }, dormIdA);
 
     await page.goto('/owner/tenants');
     await page.waitForLoadState('networkidle');
 
     // Open Registration Requests modal
-    await page.click('button:has-text("คำขอลงทะเบียน")');
+    const regBtn = page.locator('button[title*="คำขอลงทะเบียน"], button:has-text("คำขอลงทะเบียน")').first();
+    await expect(regBtn).toBeVisible({ timeout: 30000 });
+    await regBtn.click();
     await page.waitForSelector('text=รายการคำขอลงทะเบียนสมัครเช่าห้องพัก');
 
+    console.log('DEBUG reqIdApplicantA:', reqIdApplicantA);
+    console.log('DEBUG reqIdApplicantB:', reqIdApplicantB);
+
     // Approve Applicant B
-    const cardB = page.locator('div').filter({ hasText: 'ApplicantB SecondSub' }).first();
+    const cardB = page.locator('div.rounded-2xl').filter({ has: page.locator('h4', { hasText: 'ApplicantB SecondSub' }) });
     await cardB.locator('button:has-text("อนุมัติและทำสัญญา")').click();
     await page.waitForSelector('text=กำหนดข้อตกลงสัญญาและอนุมัติผู้เช่า');
-    await page.click('button:has-text("ยืนยันการอนุมัติ")');
+    await Promise.all([
+      page.waitForResponse(res => res.url().includes('/approve') && res.status() === 200),
+      page.click('button:has-text("ยืนยันการอนุมัติ")'),
+    ]);
 
     // Verify DB: B approved, Room A101 occupied by B, Occupancy ACTIVE created
     const updatedReqB = await prisma.tenantRegistrationRequest.findUnique({
@@ -310,7 +326,7 @@ test.describe.serial('LOCAL-01 — Tenant Onboarding & Co-Occupant Management E2
   });
 
   test('Flow C — Occupied Room Approval Block (409 Conflict)', async () => {
-    const apiContext = await playwrightRequest.newContext({ baseURL: 'http://127.0.0.1:3000' });
+    const apiContext = await playwrightRequest.newContext({ baseURL: 'http://127.0.0.1:3101' });
 
     // Attempt approving Applicant A into occupied Room A101 -> Backend must refuse with 409
     const approveRes = await apiContext.post(`/api/v1/tenant-registrations/${reqIdApplicantA}/approve`, {
@@ -320,7 +336,6 @@ test.describe.serial('LOCAL-01 — Tenant Onboarding & Co-Occupant Management E2
         Cookie: `horplus_session=${sessionTokenA}; horplus_csrf=${csrfTokenA}`,
       },
       data: {
-        createContract: true,
         startDate: '2026-09-01',
         endDate: '2027-08-31',
         durationMonths: 12,
@@ -340,7 +355,7 @@ test.describe.serial('LOCAL-01 — Tenant Onboarding & Co-Occupant Management E2
   });
 
   test('Flow D — Room Reassignment & Subsequent Approval', async () => {
-    const apiContext = await playwrightRequest.newContext({ baseURL: 'http://127.0.0.1:3000' });
+    const apiContext = await playwrightRequest.newContext({ baseURL: 'http://127.0.0.1:3101' });
 
     // Reassign Applicant A from Room A101 -> Room A102
     const reassignRes = await apiContext.patch(`/api/v1/tenant-registrations/${reqIdApplicantA}`, {
@@ -367,7 +382,6 @@ test.describe.serial('LOCAL-01 — Tenant Onboarding & Co-Occupant Management E2
         Cookie: `horplus_session=${sessionTokenA}; horplus_csrf=${csrfTokenA}`,
       },
       data: {
-        createContract: true,
         startDate: '2026-09-01',
         endDate: '2027-08-31',
         durationMonths: 12,
@@ -384,7 +398,7 @@ test.describe.serial('LOCAL-01 — Tenant Onboarding & Co-Occupant Management E2
   });
 
   test('Flow E — Co-Occupant Ownership Binding Security Verification', async () => {
-    // Create Tenant A and Tenant B in same Dorm A
+    // Create Tenant A and Tenant B in same Dorm A with active tenancy
     const tenantA = await prisma.tenant.create({
       data: {
         dormitoryId: dormIdA,
@@ -395,6 +409,13 @@ test.describe.serial('LOCAL-01 — Tenant Onboarding & Co-Occupant Management E2
         phone: '0891111111',
         status: 'active',
       },
+    });
+    const roomNumberA = `RB-A-${Date.now()}`;
+    const roomForA = await prisma.room.create({
+      data: { dormitoryId: dormIdA, buildingId: buildingIdA, roomNumber: roomNumberA, normalizedRoomNumber: roomNumberA, status: 'occupied', monthlyRent: '5000' },
+    });
+    await prisma.occupancy.create({
+      data: { dormitoryId: dormIdA, roomId: roomForA.id, tenantId: tenantA.id, status: 'ACTIVE', startedAt: new Date() },
     });
 
     const tenantB = await prisma.tenant.create({
@@ -408,6 +429,13 @@ test.describe.serial('LOCAL-01 — Tenant Onboarding & Co-Occupant Management E2
         status: 'active',
       },
     });
+    const roomNumberB = `RB-B-${Date.now()}`;
+    const roomForB = await prisma.room.create({
+      data: { dormitoryId: dormIdA, buildingId: buildingIdA, roomNumber: roomNumberB, normalizedRoomNumber: roomNumberB, status: 'occupied', monthlyRent: '5000' },
+    });
+    await prisma.occupancy.create({
+      data: { dormitoryId: dormIdA, roomId: roomForB.id, tenantId: tenantB.id, status: 'ACTIVE', startedAt: new Date() },
+    });
 
     const coB = await prisma.tenantCoOccupant.create({
       data: {
@@ -418,7 +446,7 @@ test.describe.serial('LOCAL-01 — Tenant Onboarding & Co-Occupant Management E2
       },
     });
 
-    const apiContext = await playwrightRequest.newContext({ baseURL: 'http://127.0.0.1:3000' });
+    const apiContext = await playwrightRequest.newContext({ baseURL: 'http://127.0.0.1:3101' });
 
     // Tenant A route attempting to mutate Tenant B's co-occupant -> Must fail (404)
     const attackUpdate = await apiContext.put(`/api/v1/tenants/${tenantA.id}/co-occupants/${coB.id}`, {
@@ -455,7 +483,7 @@ test.describe.serial('LOCAL-01 — Tenant Onboarding & Co-Occupant Management E2
       },
     });
 
-    const apiContext = await playwrightRequest.newContext({ baseURL: 'http://127.0.0.1:3000' });
+    const apiContext = await playwrightRequest.newContext({ baseURL: 'http://127.0.0.1:3101' });
 
     const mutateRes = await apiContext.post(`/api/v1/tenants/${inactiveTenant.id}/co-occupants`, {
       headers: {

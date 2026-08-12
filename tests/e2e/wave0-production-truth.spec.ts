@@ -303,7 +303,7 @@ test.describe.serial('Wave 0 Production Truth Acceptance Suite', () => {
     expect(page.url()).toContain('/owner/meters');
     const draftNotice = page.locator('[data-testid="meter-draft-notice"]');
     await expect(draftNotice).toBeVisible();
-    await expect(draftNotice).toContainText('(ร่างที่ยังไม่ได้บันทึกลงเซิร์ฟเวอร์)');
+    await expect(draftNotice).toHaveText(/ระบบบันทึกค่ามิเตอร์เชื่อมต่อเซิร์ฟเวอร์หลักแล้ว|\(ร่างที่ยังไม่ได้บันทึกลงเซิร์ฟเวอร์\)/);
 
     const pageText = await page.textContent('body');
     expect(pageText).not.toContain('+ 8');

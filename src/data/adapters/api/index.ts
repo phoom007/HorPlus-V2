@@ -187,7 +187,8 @@ export class ApiRoomAdapter implements RoomDataSource {
 
 export class ApiTenantAdapter implements TenantDataSource {
   async getAll(): Promise<Tenant[]> {
-    return httpRequest<Tenant[]>('GET', '/tenants');
+    const rawData = await httpRequest<any>('GET', '/tenants');
+    return Array.isArray(rawData) ? rawData : (rawData?.data || []);
   }
 
   async getById(id: string): Promise<Tenant | null> {
@@ -311,7 +312,8 @@ export class ApiTenantAdapter implements TenantDataSource {
 
 export async function getTenantRegistrationRequests(): Promise<DataResult<any[]>> {
   try {
-    const data = await httpRequest<any[]>('GET', '/tenant-registrations');
+    const rawData = await httpRequest<any>('GET', '/tenant-registrations');
+    const data = Array.isArray(rawData) ? rawData : (rawData?.data || []);
     return { success: true, data };
   } catch (err: any) {
     return {
@@ -343,7 +345,6 @@ export async function submitTenantRegistrationRequest(payload: {
 }
 
 export interface ApproveRegistrationPayload {
-  createContract?: boolean;
   startDate: string;
   endDate: string;
   durationMonths: number;

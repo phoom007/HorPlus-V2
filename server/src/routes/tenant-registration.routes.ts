@@ -4,6 +4,7 @@ import { TenantRegistrationService } from '../services/tenant-registration.servi
 import { createRequireSessionMiddleware } from '../middleware/require-session.js';
 import { requireDormitoryPermission } from '../middleware/permission.js';
 import { requireDormitoryWriteEntitlement } from '../middleware/entitlement.js';
+import { ApproveRegistrationSchema } from '../schemas/property-tenant-contract.schemas.js';
 
 export function createTenantRegistrationRouter(
   authService: AuthenticationService,
@@ -90,7 +91,7 @@ export function createTenantRegistrationRouter(
   });
 
   // GET /api/v1/tenant-registrations
-  router.get('/', async (req: Request, res: Response) => {
+  router.get('/', requireSession, async (req: Request, res: Response) => {
     try {
       const dormId = getDormitoryId(req);
       const requests = await registrationService.listRequests(dormId);
@@ -101,7 +102,7 @@ export function createTenantRegistrationRouter(
   });
 
   // GET /api/v1/tenant-registrations/:id
-  router.get('/:id', async (req: Request, res: Response) => {
+  router.get('/:id', requireSession, async (req: Request, res: Response) => {
     try {
       const dormId = getDormitoryId(req);
       const request = await registrationService.getRequestById(req.params.id, dormId);
@@ -112,7 +113,7 @@ export function createTenantRegistrationRouter(
   });
 
   // PATCH /api/v1/tenant-registrations/:id
-  router.patch('/:id', mutationGuard('tenant:write'), async (req: Request, res: Response) => {
+  router.patch('/:id', requireSession, mutationGuard('tenant:write'), async (req: Request, res: Response) => {
     if (!verifyCsrf(req, res)) return;
     try {
       const dormId = getDormitoryId(req);
@@ -136,11 +137,23 @@ export function createTenantRegistrationRouter(
   });
 
   // POST /api/v1/tenant-registrations/:id/approve
-  router.post('/:id/approve', mutationGuard('tenant:write'), async (req: Request, res: Response) => {
+  router.post('/:id/approve', requireSession, mutationGuard('tenant:write'), async (req: Request, res: Response) => {
     if (!verifyCsrf(req, res)) return;
     try {
       const dormId = getDormitoryId(req);
-      const result = await registrationService.approveRequest(req.params.id, dormId, req.body, req.auth?.userId);
+      const parsed = ApproveRegistrationSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'ข้อมูลการอนุมัติคำขอลงทะเบียนไม่ถูกต้อง',
+            fieldErrors: parsed.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })),
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+      const result = await registrationService.approveRequest(req.params.id, dormId, parsed.data, req.auth?.userId);
       res.json({ data: result });
     } catch (err) {
       handleServiceError(res, err, req);
@@ -148,7 +161,7 @@ export function createTenantRegistrationRouter(
   });
 
   // POST /api/v1/tenant-registrations/:id/reject
-  router.post('/:id/reject', mutationGuard('tenant:write'), async (req: Request, res: Response) => {
+  router.post('/:id/reject', requireSession, mutationGuard('tenant:write'), async (req: Request, res: Response) => {
     if (!verifyCsrf(req, res)) return;
     try {
       const dormId = getDormitoryId(req);

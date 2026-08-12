@@ -197,7 +197,8 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
     try {
       const res = await getTenantRegistrationRequests();
       if (res.success && res.data) {
-        setRegRequests(res.data);
+        const list = Array.isArray(res.data) ? res.data : (res.data as any).data || [];
+        setRegRequests(list);
       }
     } catch {}
   };
@@ -206,13 +207,12 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
     fetchRegRequests();
   }, []);
 
-  const pendingCount = regRequests.filter((r) => r.status === 'pending_owner_approval').length;
+  const pendingCount = Array.isArray(regRequests) ? regRequests.filter((r) => r.status === 'pending_owner_approval').length : 0;
 
   const handleApproveRegistration = async () => {
     if (!selectedRegReq) return;
     try {
       const res = await approveTenantRegistrationRequest(selectedRegReq.id, {
-        createContract: true,
         startDate: approveStartDate,
         endDate: approveEndDate,
         durationMonths: approveDuration,
