@@ -1222,6 +1222,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
                   </div>
                 </div>
               </>
+            )}
           </div>
 
           {/* Right Block: Desktop & Tablet Action Bar (>= sm) */}
