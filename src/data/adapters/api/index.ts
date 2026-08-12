@@ -366,6 +366,18 @@ export async function rejectTenantRegistrationRequest(id: string, reason?: strin
   }
 }
 
+export async function updateTenantRegistrationRoom(id: string, requestedRoomId: string): Promise<DataResult<any>> {
+  try {
+    const data = await httpRequest<any>('PATCH', `/tenant-registrations/${id}`, { requestedRoomId });
+    return { success: true, data };
+  } catch (err: any) {
+    return {
+      success: false,
+      error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message }
+    };
+  }
+}
+
 export class ApiContractAdapter implements ContractDataSource {
   async getAll(): Promise<Contract[]> {
     return httpRequest<Contract[]>('GET', '/contracts');

@@ -2,6 +2,7 @@ import { ITenantRepository, TenantEntity, TenantFilterQuery, CreateTenantData } 
 import { IContractRepository } from '../db/repositories/contract.repository.js';
 import { SensitiveFieldService } from './sensitive-field.service.js';
 import { AuditService } from './audit.service.js';
+import { getPrismaClient } from '../db/prisma.js';
 
 export class TenantService {
   constructor(
@@ -156,9 +157,36 @@ export class TenantService {
     return archived;
   }
 
+  public async verifyActiveTenancy(dormitoryId: string, tenantId: string) {
+    const prisma = getPrismaClient();
+    const activeContract = await prisma.contract.findFirst({
+      where: {
+        dormitoryId,
+        tenantId,
+        status: { in: ['active', 'expiring_soon', 'pending_signature', 'waiting_extension', 'checking_out'] },
+        deletedAt: null,
+      },
+    });
+    const activeOccupancy = await prisma.occupancy.findFirst({
+      where: {
+        dormitoryId,
+        tenantId,
+        status: 'ACTIVE',
+      },
+    });
+
+    if (!activeContract && !activeOccupancy) {
+      const err = new Error('ผู้เช่าไม่มีสัญญาหรือสถานะการพักอาศัยที่เปิดใช้งานอยู่');
+      (err as any).code = 'NO_ACTIVE_TENANCY';
+      (err as any).statusCode = 403;
+      throw err;
+    }
+  }
+
   // Child Entities Management
   public async addCoOccupant(dormitoryId: string, tenantId: string, data: any, actorUserId?: string) {
     const tenant = await this.getTenantById(tenantId, dormitoryId);
+    await this.verifyActiveTenancy(dormitoryId, tenantId);
     const co = await this.tenantRepo.createCoOccupant(dormitoryId, tenantId, data);
     if (this.auditService && actorUserId) {
       await this.auditService.log({
@@ -180,7 +208,8 @@ export class TenantService {
     actorUserId?: string
   ) {
     const tenant = await this.getTenantById(tenantId, dormitoryId);
-    const updated = await this.tenantRepo.updateCoOccupant(coOccupantId, dormitoryId, data);
+    await this.verifyActiveTenancy(dormitoryId, tenantId);
+    const updated = await this.tenantRepo.updateCoOccupant(coOccupantId, dormitoryId, tenantId, data);
     if (!updated) {
       const err = new Error('ไม่พบข้อมูลผู้พักร่วมที่ระบุ');
       (err as any).code = 'CO_OCCUPANT_NOT_FOUND';
@@ -201,7 +230,8 @@ export class TenantService {
 
   public async removeCoOccupant(dormitoryId: string, tenantId: string, coOccupantId: string, actorUserId?: string) {
     const tenant = await this.getTenantById(tenantId, dormitoryId);
-    const success = await this.tenantRepo.deleteCoOccupant(coOccupantId, dormitoryId);
+    await this.verifyActiveTenancy(dormitoryId, tenantId);
+    const success = await this.tenantRepo.deleteCoOccupant(coOccupantId, dormitoryId, tenantId);
     if (!success) {
       const err = new Error('ไม่พบข้อมูลผู้พักร่วมที่ระบุ');
       (err as any).code = 'CO_OCCUPANT_NOT_FOUND';

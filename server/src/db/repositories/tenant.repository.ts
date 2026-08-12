@@ -548,8 +548,8 @@ export class PrismaTenantRepository implements ITenantRepository {
       updatedAt: c.createdAt,
     } as any;
   }
-  public async updateCoOccupant(id: string, dormitoryId: string, data: Partial<TenantCoOccupantEntity>): Promise<TenantCoOccupantEntity | null> {
-    const existing = await this.prisma.tenantCoOccupant.findFirst({ where: { id, dormitoryId, deletedAt: null } });
+  public async updateCoOccupant(id: string, dormitoryId: string, tenantId: string, data: Partial<TenantCoOccupantEntity>): Promise<TenantCoOccupantEntity | null> {
+    const existing = await this.prisma.tenantCoOccupant.findFirst({ where: { id, dormitoryId, tenantId, deletedAt: null } });
     if (!existing) return null;
     const c = await this.prisma.tenantCoOccupant.update({
       where: { id },
@@ -572,8 +572,8 @@ export class PrismaTenantRepository implements ITenantRepository {
       updatedAt: c.updatedAt,
     } as any;
   }
-  public async deleteCoOccupant(id: string, dormitoryId: string): Promise<boolean> {
-    const existing = await this.prisma.tenantCoOccupant.findFirst({ where: { id, dormitoryId, deletedAt: null } });
+  public async deleteCoOccupant(id: string, dormitoryId: string, tenantId: string): Promise<boolean> {
+    const existing = await this.prisma.tenantCoOccupant.findFirst({ where: { id, dormitoryId, tenantId, deletedAt: null } });
     if (!existing) return false;
     await this.prisma.tenantCoOccupant.update({
       where: { id },

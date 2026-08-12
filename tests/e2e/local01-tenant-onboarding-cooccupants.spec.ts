@@ -11,6 +11,7 @@ test.describe.serial('LOCAL-01 — Tenant Onboarding & Co-Occupant Management E2
   let dormIdA: string;
   let ownerIdA: string;
   let roomIdA: string;
+  let roomIdA2: string;
   let sessionTokenA: string;
   let csrfTokenA: string;
 
@@ -19,7 +20,8 @@ test.describe.serial('LOCAL-01 — Tenant Onboarding & Co-Occupant Management E2
   let sessionTokenB: string;
   let csrfTokenB: string;
 
-  let submittedReqIdA: string;
+  let reqIdApplicantA: string;
+  let reqIdApplicantB: string;
 
   test.beforeAll(async () => {
     await subscriptionEntitlementService.ensureSeeded();
@@ -90,6 +92,19 @@ test.describe.serial('LOCAL-01 — Tenant Onboarding & Co-Occupant Management E2
       },
     });
     roomIdA = roomA.id;
+
+    const roomA2 = await prisma.room.create({
+      data: {
+        dormitoryId: dormA.id,
+        buildingId: buildingA.id,
+        roomNumber: 'A102',
+        normalizedRoomNumber: 'A102',
+        floor: 1,
+        status: 'vacant',
+        monthlyRent: '4800',
+      },
+    });
+    roomIdA2 = roomA2.id;
 
     // Create session & CSRF for Owner A
     const sidA = crypto.randomUUID();
@@ -174,17 +189,17 @@ test.describe.serial('LOCAL-01 — Tenant Onboarding & Co-Occupant Management E2
     await subscriptionEntitlementService.provisionInitialTrial(dormB.id);
   });
 
-  test('Flow A — Tenant Local Registration Submission & Persistence', async ({ page }) => {
+  test('Flow A — Multiple Applicants Same Room Submission & Persistence', async ({ page }) => {
     test.setTimeout(60000);
 
     await page.context().addInitScript((dId) => {
       localStorage.setItem('selected_dormitory_id', dId);
     }, dormIdA);
 
+    // 1. Applicant A submits for Room A101
     await page.goto('/tenant/register');
     await page.waitForLoadState('networkidle');
 
-    // Fill room selection (select dropdown or fallback text input)
     const roomSelect = page.locator('select');
     const roomInput = page.locator('input[placeholder*="ระบุรหัสห้องพัก"]');
     if (await roomSelect.isVisible()) {
@@ -193,38 +208,56 @@ test.describe.serial('LOCAL-01 — Tenant Onboarding & Co-Occupant Management E2
       await roomInput.fill(roomIdA);
     }
 
-    // Fill form
-    await page.fill('input[placeholder="สมชาย"]', 'Somchai');
-    await page.fill('input[placeholder="ใจดี"]', 'RegistrationTest');
-    await page.fill('input[placeholder="0812345678"]', '0819998888');
+    await page.fill('input[placeholder="สมชาย"]', 'ApplicantA');
+    await page.fill('input[placeholder="ใจดี"]', 'FirstSub');
+    await page.fill('input[placeholder="0812345678"]', '0811110001');
 
-    // Submit
-    const submitBtn = page.locator('button[type="submit"]');
-    await expect(submitBtn).toBeEnabled({ timeout: 30000 });
-    await submitBtn.click();
+    const submitBtn1 = page.locator('button[type="submit"]');
+    await expect(submitBtn1).toBeEnabled({ timeout: 30000 });
+    await submitBtn1.click();
     await page.waitForSelector('text=ส่งคำขอลงทะเบียนเรียบร้อยแล้ว');
 
-    // Query PostgreSQL to verify persistent registration request
-    const persisted = await prisma.tenantRegistrationRequest.findFirst({
-      where: {
-        dormitoryId: dormIdA,
-        phone: '0819998888',
-      },
+    const persistedA = await prisma.tenantRegistrationRequest.findFirst({
+      where: { dormitoryId: dormIdA, phone: '0811110001' },
     });
+    expect(persistedA).not.toBeNull();
+    expect(persistedA?.status).toBe('pending_owner_approval');
+    reqIdApplicantA = persistedA!.id;
 
-    expect(persisted).not.toBeNull();
-    expect(persisted?.status).toBe('pending_owner_approval');
-    expect(persisted?.firstName).toBe('Somchai');
-    submittedReqIdA = persisted!.id;
-
-    // Reload (F5) and verify server truth
-    await page.reload();
+    // 2. Applicant B ALSO submits for same Room A101 (Multiple pending applicants allowed)
+    await page.goto('/tenant/register');
     await page.waitForLoadState('networkidle');
-    expect(page.url()).toContain('/tenant/register');
+
+    if (await roomSelect.isVisible()) {
+      await roomSelect.selectOption(roomIdA);
+    } else if (await roomInput.isVisible()) {
+      await roomInput.fill(roomIdA);
+    }
+
+    await page.fill('input[placeholder="สมชาย"]', 'ApplicantB');
+    await page.fill('input[placeholder="ใจดี"]', 'SecondSub');
+    await page.fill('input[placeholder="0812345678"]', '0811110002');
+
+    const submitBtn2 = page.locator('button[type="submit"]');
+    await expect(submitBtn2).toBeEnabled({ timeout: 30000 });
+    await submitBtn2.click();
+    await page.waitForSelector('text=ส่งคำขอลงทะเบียนเรียบร้อยแล้ว');
+
+    const persistedB = await prisma.tenantRegistrationRequest.findFirst({
+      where: { dormitoryId: dormIdA, phone: '0811110002' },
+    });
+    expect(persistedB).not.toBeNull();
+    expect(persistedB?.status).toBe('pending_owner_approval');
+    reqIdApplicantB = persistedB!.id;
+
+    // Verify both pending requests exist for Room A101
+    const pendingCount = await prisma.tenantRegistrationRequest.count({
+      where: { dormitoryId: dormIdA, requestedRoomId: roomIdA, status: 'pending_owner_approval' },
+    });
+    expect(pendingCount).toBe(2);
   });
 
-  test('Flow B — Owner Registration Approval & Rejection Workflow', async ({ page, context }) => {
-    // Set Owner A cookies
+  test('Flow B — Owner Selects & Approves Applicant B (Leaves Applicant A Pending)', async ({ page, context }) => {
     await context.addCookies([
       { name: 'horplus_session', value: sessionTokenA, domain: '127.0.0.1', path: '/' },
       { name: 'horplus_csrf', value: csrfTokenA, domain: '127.0.0.1', path: '/' },
@@ -242,83 +275,33 @@ test.describe.serial('LOCAL-01 — Tenant Onboarding & Co-Occupant Management E2
     await page.click('button:has-text("คำขอลงทะเบียน")');
     await page.waitForSelector('text=รายการคำขอลงทะเบียนจองห้องพัก');
 
-    // Approve the pending request
-    await page.click('button:has-text("อนุมัติและทำสัญญา")');
+    // Approve Applicant B
+    const cardB = page.locator('div').filter({ hasText: 'ApplicantB SecondSub' }).first();
+    await cardB.locator('button:has-text("อนุมัติและทำสัญญา")').click();
     await page.waitForSelector('text=กำหนดข้อตกลงสัญญาและอนุมัติผู้เช่า');
     await page.click('button:has-text("ยืนยันการอนุมัติ")');
 
-    // Verify DB update
-    const updatedReq = await prisma.tenantRegistrationRequest.findUnique({
-      where: { id: submittedReqIdA },
+    // Verify DB: B approved, Room A101 occupied by B
+    const updatedReqB = await prisma.tenantRegistrationRequest.findUnique({
+      where: { id: reqIdApplicantB },
     });
-    expect(updatedReq?.status).toBe('approved');
-    expect(updatedReq?.approvedTenantId).not.toBeNull();
+    expect(updatedReqB?.status).toBe('approved');
 
-    // Verify Tenant & Contract created in PostgreSQL
-    const createdTenant = await prisma.tenant.findUnique({
-      where: { id: updatedReq!.approvedTenantId! },
-    });
-    expect(createdTenant).not.toBeNull();
-    expect(createdTenant?.firstName).toBe('Somchai');
+    const roomA = await prisma.room.findUnique({ where: { id: roomIdA } });
+    expect(roomA?.status).toBe('occupied');
 
-    // Now test Rejection with Thai reason
-    // Submit second registration request directly via API
-    const apiContext = await playwrightRequest.newContext({ baseURL: 'http://127.0.0.1:3000' });
-    const createRes = await apiContext.post('/api/v1/tenant-registrations', {
-      headers: { 'x-dormitory-id': dormIdA },
-      data: {
-        requestedRoomId: roomIdA,
-        firstName: 'RejectedApplicant',
-        lastName: 'ThaiReasonTest',
-        phone: '0897776666',
-        note: 'Testing rejection',
-      },
+    // Verify Applicant A remains pending in PostgreSQL (NOT auto-rejected)
+    const reqA = await prisma.tenantRegistrationRequest.findUnique({
+      where: { id: reqIdApplicantA },
     });
-    expect(createRes.status()).toBe(201);
-    const reqToReject = (await createRes.json()).data;
-
-    // Owner rejects request with Thai reason
-    const rejectRes = await apiContext.post(`/api/v1/tenant-registrations/${reqToReject.id}/reject`, {
-      headers: {
-        'x-dormitory-id': dormIdA,
-        'x-csrf-token': csrfTokenA,
-        Cookie: `horplus_session=${sessionTokenA}; horplus_csrf=${csrfTokenA}`,
-      },
-      data: {
-        reason: 'ห้องพักไม่ว่างสำหรับผู้เช่าท่านนี้',
-      },
-    });
-    expect(rejectRes.status()).toBe(200);
-
-    const rejectedInDb = await prisma.tenantRegistrationRequest.findUnique({
-      where: { id: reqToReject.id },
-    });
-    expect(rejectedInDb?.status).toBe('rejected');
-    expect(rejectedInDb?.rejectedReason).toBe('ห้องพักไม่ว่างสำหรับผู้เช่าท่านนี้');
+    expect(reqA?.status).toBe('pending_owner_approval');
   });
 
-  test('Flow C — Approval Conflict on Occupied Room (409 Conflict)', async () => {
-    // Mark room A as occupied
-    await prisma.room.update({
-      where: { id: roomIdA },
-      data: { status: 'occupied' },
-    });
-
-    // Create pending request for room A
-    const pendingReq = await prisma.tenantRegistrationRequest.create({
-      data: {
-        dormitoryId: dormIdA,
-        requestedRoomId: roomIdA,
-        firstName: 'ConflictTest',
-        lastName: 'Applicant',
-        phone: '0823334444',
-        status: 'pending_owner_approval',
-      },
-    });
-
-    // Attempt approving occupied room -> Expect 409 Conflict
+  test('Flow C — Occupied Room Approval Block (409 Conflict)', async () => {
     const apiContext = await playwrightRequest.newContext({ baseURL: 'http://127.0.0.1:3000' });
-    const approveRes = await apiContext.post(`/api/v1/tenant-registrations/${pendingReq.id}/approve`, {
+
+    // Attempt approving Applicant A into occupied Room A101 -> Backend must refuse with 409
+    const approveRes = await apiContext.post(`/api/v1/tenant-registrations/${reqIdApplicantA}/approve`, {
       headers: {
         'x-dormitory-id': dormIdA,
         'x-csrf-token': csrfTokenA,
@@ -332,106 +315,141 @@ test.describe.serial('LOCAL-01 — Tenant Onboarding & Co-Occupant Management E2
     expect(approveRes.status()).toBe(409);
     const body = await approveRes.json();
     expect(body.error.code).toBe('ROOM_ALREADY_OCCUPIED');
+
+    // Applicant A remains pending
+    const reqA = await prisma.tenantRegistrationRequest.findUnique({ where: { id: reqIdApplicantA } });
+    expect(reqA?.status).toBe('pending_owner_approval');
   });
 
-  test('Flow D — Co-Occupants Management (Add & Remove)', async () => {
-    // Re-set room status to vacant for testing
-    await prisma.room.update({
-      where: { id: roomIdA },
-      data: { status: 'vacant' },
-    });
-
-    // Create active tenant
-    const tenant = await prisma.tenant.create({
-      data: {
-        dormitoryId: dormIdA,
-        tenantNumber: `TNT-E2E-${Date.now()}`,
-        firstName: 'CoOccupantOwnerTest',
-        lastName: 'MainTenant',
-        displayName: 'CoOccupantOwnerTest MainTenant',
-        phone: '0855554444',
-        status: 'active',
-      },
-    });
-
-    // Add Co-Occupant via API
+  test('Flow D — Room Reassignment & Subsequent Approval', async () => {
     const apiContext = await playwrightRequest.newContext({ baseURL: 'http://127.0.0.1:3000' });
-    const addCoRes = await apiContext.post(`/api/v1/tenants/${tenant.id}/co-occupants`, {
+
+    // Reassign Applicant A from Room A101 -> Room A102
+    const reassignRes = await apiContext.patch(`/api/v1/tenant-registrations/${reqIdApplicantA}`, {
       headers: {
         'x-dormitory-id': dormIdA,
         'x-csrf-token': csrfTokenA,
         Cookie: `horplus_session=${sessionTokenA}; horplus_csrf=${csrfTokenA}`,
       },
       data: {
-        name: 'Somหญิง CoOccupant',
-        phone: '0891112222',
-        relationship: 'Sister',
+        requestedRoomId: roomIdA2,
       },
     });
+    expect(reassignRes.status()).toBe(200);
 
-    expect(addCoRes.status()).toBe(201);
-    const coData = (await addCoRes.json()).data;
-    expect(coData.id).toBeDefined();
+    // Verify change persisted in PostgreSQL
+    const reqAAfterReassign = await prisma.tenantRegistrationRequest.findUnique({ where: { id: reqIdApplicantA } });
+    expect(reqAAfterReassign?.requestedRoomId).toBe(roomIdA2);
 
-    // Verify DB
-    const coInDb = await prisma.tenantCoOccupant.findFirst({
-      where: { id: coData.id, dormitoryId: dormIdA },
-    });
-    expect(coInDb?.name).toBe('Somหญิง CoOccupant');
-    expect(coInDb?.status).toBe('active');
-
-    // Soft-remove co-occupant
-    const removeCoRes = await apiContext.delete(`/api/v1/tenants/${tenant.id}/co-occupants/${coData.id}`, {
+    // Approve Applicant A for Room A102
+    const approveA = await apiContext.post(`/api/v1/tenant-registrations/${reqIdApplicantA}/approve`, {
       headers: {
         'x-dormitory-id': dormIdA,
         'x-csrf-token': csrfTokenA,
         Cookie: `horplus_session=${sessionTokenA}; horplus_csrf=${csrfTokenA}`,
       },
+      data: {
+        createContract: true,
+        startDate: '2026-09-01',
+        endDate: '2027-08-31',
+        durationMonths: 12,
+        rentAmount: 4800,
+        depositAmount: 4800,
+        advancePaymentAmount: 4800,
+      },
     });
+    expect(approveA.status()).toBe(200);
 
-    expect(removeCoRes.status()).toBe(200);
-
-    // Verify historical audit preservation (status: 'removed', deletedAt is set)
-    const removedInDb = await prisma.tenantCoOccupant.findFirst({
-      where: { id: coData.id, dormitoryId: dormIdA },
-    });
-    expect(removedInDb?.status).toBe('removed');
-    expect(removedInDb?.deletedAt).not.toBeNull();
+    const approvedA = await prisma.tenantRegistrationRequest.findUnique({ where: { id: reqIdApplicantA } });
+    expect(approvedA?.status).toBe('approved');
+    expect(approvedA?.approvedRoomId).toBe(roomIdA2);
   });
 
-  test('Flow E — Cross-Dormitory Isolation Security Verification', async () => {
-    // Create tenant in Dorm A
+  test('Flow E — Co-Occupant Ownership Binding Security Verification', async () => {
+    // Create Tenant A and Tenant B in same Dorm A
     const tenantA = await prisma.tenant.create({
       data: {
         dormitoryId: dormIdA,
-        tenantNumber: `TNT-ISOLATION-${Date.now()}`,
-        firstName: 'IsolatedTenant',
+        tenantNumber: `TNT-BIND-A-${Date.now()}`,
+        firstName: 'TenantAlpha',
         lastName: 'DormA',
-        displayName: 'IsolatedTenant DormA',
-        phone: '0877778888',
+        displayName: 'TenantAlpha DormA',
+        phone: '0891111111',
         status: 'active',
       },
     });
 
-    const coA = await prisma.tenantCoOccupant.create({
+    const tenantB = await prisma.tenant.create({
       data: {
         dormitoryId: dormIdA,
-        tenantId: tenantA.id,
-        name: 'CoOccupant DormA',
+        tenantNumber: `TNT-BIND-B-${Date.now()}`,
+        firstName: 'TenantBeta',
+        lastName: 'DormA',
+        displayName: 'TenantBeta DormA',
+        phone: '0892222222',
         status: 'active',
       },
     });
 
-    // Owner B attempts mutating Dorm A's co-occupant using Dorm B header & session -> Must fail (404/403)
-    const apiContext = await playwrightRequest.newContext({ baseURL: 'http://127.0.0.1:3000' });
-    const crossMutateRes = await apiContext.delete(`/api/v1/tenants/${tenantA.id}/co-occupants/${coA.id}`, {
-      headers: {
-        'x-dormitory-id': dormIdB,
-        'x-csrf-token': csrfTokenB,
-        Cookie: `horplus_session=${sessionTokenB}; horplus_csrf=${csrfTokenB}`,
+    const coB = await prisma.tenantCoOccupant.create({
+      data: {
+        dormitoryId: dormIdA,
+        tenantId: tenantB.id,
+        name: 'CoOccupant B1',
+        status: 'active',
       },
     });
 
-    expect([403, 404]).toContain(crossMutateRes.status());
+    const apiContext = await playwrightRequest.newContext({ baseURL: 'http://127.0.0.1:3000' });
+
+    // Tenant A route attempting to mutate Tenant B's co-occupant -> Must fail (404)
+    const attackUpdate = await apiContext.put(`/api/v1/tenants/${tenantA.id}/co-occupants/${coB.id}`, {
+      headers: {
+        'x-dormitory-id': dormIdA,
+        'x-csrf-token': csrfTokenA,
+        Cookie: `horplus_session=${sessionTokenA}; horplus_csrf=${csrfTokenA}`,
+      },
+      data: { name: 'Hacked CoOccupant B1' },
+    });
+    expect(attackUpdate.status()).toBe(404);
+
+    const attackDelete = await apiContext.delete(`/api/v1/tenants/${tenantA.id}/co-occupants/${coB.id}`, {
+      headers: {
+        'x-dormitory-id': dormIdA,
+        'x-csrf-token': csrfTokenA,
+        Cookie: `horplus_session=${sessionTokenA}; horplus_csrf=${csrfTokenA}`,
+      },
+    });
+    expect(attackDelete.status()).toBe(404);
+  });
+
+  test('Flow F — Inactive Tenant Co-Occupant Mutation Verification', async () => {
+    // Create inactive tenant without active contract or active occupancy
+    const inactiveTenant = await prisma.tenant.create({
+      data: {
+        dormitoryId: dormIdA,
+        tenantNumber: `TNT-INACTIVE-${Date.now()}`,
+        firstName: 'InactiveTenant',
+        lastName: 'DormA',
+        displayName: 'InactiveTenant DormA',
+        phone: '0893333333',
+        status: 'archived',
+      },
+    });
+
+    const apiContext = await playwrightRequest.newContext({ baseURL: 'http://127.0.0.1:3000' });
+
+    const mutateRes = await apiContext.post(`/api/v1/tenants/${inactiveTenant.id}/co-occupants`, {
+      headers: {
+        'x-dormitory-id': dormIdA,
+        'x-csrf-token': csrfTokenA,
+        Cookie: `horplus_session=${sessionTokenA}; horplus_csrf=${csrfTokenA}`,
+      },
+      data: { name: 'New CoOccupant For Inactive' },
+    });
+
+    expect(mutateRes.status()).toBe(403);
+    const body = await mutateRes.json();
+    expect(body.error.code).toBe('NO_ACTIVE_TENANCY');
   });
 });

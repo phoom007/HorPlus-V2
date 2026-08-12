@@ -148,6 +148,7 @@ export interface TenantRegistrationDataSource {
   listRequests(): Promise<DataResult<any[]>>;
   approveRequest(params: { requestId: string; tenantId: string; contractId: string }): Promise<DataResult<any>>;
   rejectRequest(requestId: string, reason: string): Promise<DataResult<any>>;
+  updateRequestRoom?(requestId: string, requestedRoomId: string): Promise<DataResult<any>>;
 }
 
 export interface PropertyDataSource {

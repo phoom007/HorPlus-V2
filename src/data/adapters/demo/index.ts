@@ -536,6 +536,13 @@ export class DemoTenantRegistrationAdapter implements TenantRegistrationDataSour
       data: { success: true, requestId, status: 'rejected' }
     };
   }
+
+  async updateRequestRoom(requestId: string, requestedRoomId: string): Promise<DataResult<any>> {
+    return {
+      success: true,
+      data: { success: true, id: requestId, requestedRoomId }
+    };
+  }
 }
 
 export class DemoDataProvider implements HorPlusDataProvider {

@@ -111,6 +111,30 @@ export function createTenantRegistrationRouter(
     }
   });
 
+  // PATCH /api/v1/tenant-registrations/:id
+  router.patch('/:id', mutationGuard('tenant:write'), async (req: Request, res: Response) => {
+    if (!verifyCsrf(req, res)) return;
+    try {
+      const dormId = getDormitoryId(req);
+      const { requestedRoomId } = req.body || {};
+      if (!requestedRoomId) {
+        return res.status(400).json({
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'กรุณาระบุรหัสห้องพักใหม่',
+            fieldErrors: null,
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+      const updated = await registrationService.updateRequestRoom(req.params.id, dormId, requestedRoomId, req.auth?.userId);
+      res.json({ data: updated });
+    } catch (err) {
+      handleServiceError(res, err, req);
+    }
+  });
+
   // POST /api/v1/tenant-registrations/:id/approve
   router.post('/:id/approve', mutationGuard('tenant:write'), async (req: Request, res: Response) => {
     if (!verifyCsrf(req, res)) return;

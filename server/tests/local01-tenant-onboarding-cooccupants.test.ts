@@ -67,6 +67,35 @@ describe('LOCAL-01 — Tenant Onboarding & Co-Occupant Management', () => {
       expect(detailsAfterRemove.coOccupants.length).toBe(0);
     });
 
+    it('should reject co-occupant update/delete if coOccupant belongs to another tenant (ownership binding attack)', async () => {
+      // Create Tenant A and Tenant B in same Dorm A
+      const tenantA = await tenantService.createTenant(dormA, { firstName: 'TenantA', lastName: 'Alpha', phone: '0811111111' });
+      const tenantB = await tenantService.createTenant(dormA, { firstName: 'TenantB', lastName: 'Beta', phone: '0822222222' });
+
+      // Add co-occupant to Tenant B
+      const coB = await tenantService.addCoOccupant(dormA, tenantB.id, { name: 'CoOccupant B1' });
+
+      // Attempt updating B's co-occupant via Tenant A's route -> Must fail
+      await expect(
+        tenantService.updateCoOccupant(dormA, tenantA.id, coB.id, { name: 'Hacked CoOccupant B1' })
+      ).rejects.toThrow();
+
+      // Attempt deleting B's co-occupant via Tenant A's route -> Must fail
+      await expect(
+        tenantService.removeCoOccupant(dormA, tenantA.id, coB.id)
+      ).rejects.toThrow();
+    });
+
+    it('should reject co-occupant mutations if tenant has no active contract or occupancy', async () => {
+      // Create inactive/archived tenant without active contract or occupancy
+      const inactiveTenant = await tenantService.createTenant(dormA, { firstName: 'Inactive', lastName: 'Tenant', phone: '0833333333' });
+
+      // Override active tenancy check for dummy test
+      await expect(
+        tenantService.addCoOccupant(dormA, inactiveTenant.id, { name: 'New CoOccupant' })
+      ).rejects.toThrow();
+    });
+
     it('should enforce strict cross-dormitory isolation on co-occupant mutations', async () => {
       // Create Tenant in Dorm A
       const tenantA = await tenantService.createTenant(dormA, {

@@ -86,8 +86,6 @@ export class TenantRegistrationService {
       where: { dormitoryId },
       orderBy: { createdAt: 'desc' },
     });
-  }
-
   public async getRequestById(id: string, dormitoryId: string) {
     const prisma = getPrismaClient();
     const req = await prisma.tenantRegistrationRequest.findFirst({
@@ -100,6 +98,60 @@ export class TenantRegistrationService {
       throw err;
     }
     return req;
+  }
+
+  public async updateRequestRoom(
+    id: string,
+    dormitoryId: string,
+    requestedRoomId: string,
+    actorUserId?: string
+  ) {
+    const req = await this.getRequestById(id, dormitoryId);
+    if (req.status !== 'pending_owner_approval') {
+      const err = new Error('INVALID_REQUEST_STATUS');
+      (err as any).statusCode = 400;
+      (err as any).code = 'INVALID_REQUEST_STATUS';
+      (err as any).message = 'คำขอนี้ไม่ได้อยู่ในสถานะรออนุมัติ';
+      throw err;
+    }
+
+    const prisma = getPrismaClient();
+    const room = await prisma.room.findFirst({
+      where: {
+        dormitoryId,
+        deletedAt: null,
+        OR: [
+          { id: requestedRoomId },
+          { roomNumber: requestedRoomId },
+          { normalizedRoomNumber: requestedRoomId.toUpperCase() },
+        ],
+      },
+    });
+
+    if (!room) {
+      const err = new Error('ROOM_NOT_FOUND');
+      (err as any).statusCode = 404;
+      (err as any).code = 'ROOM_NOT_FOUND';
+      (err as any).message = 'ไม่พบห้องพักที่ระบุในหอพักนี้';
+      throw err;
+    }
+
+    if (room.status === 'occupied') {
+      const err = new Error('ROOM_ALREADY_OCCUPIED');
+      (err as any).statusCode = 409;
+      (err as any).code = 'ROOM_ALREADY_OCCUPIED';
+      (err as any).message = 'ห้องพักนี้มีผู้เช่าอยู่แล้ว';
+      throw err;
+    }
+
+    const updated = await prisma.tenantRegistrationRequest.update({
+      where: { id },
+      data: {
+        requestedRoomId: room.id,
+      },
+    });
+
+    return updated;
   }
 
   public async approveRequest(

@@ -40,6 +40,7 @@ import {
   getTenantRegistrationRequests,
   approveTenantRegistrationRequest,
   rejectTenantRegistrationRequest,
+  updateTenantRegistrationRoom,
 } from '../../data/adapters/api';
 export const getDormitory = (): any => null;
 import { convertImageToWebP, UPLOAD_DROPZONE_TEXT } from '../../utils/imageUtils';
@@ -232,6 +233,32 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
       }
     } catch (err: any) {
       alert(err.message || 'เกิดข้อผิดพลาดในการอนุมัติคำขอ');
+    }
+  };
+
+  // Reassign room modal state for registration request
+  const [isReassignModalOpen, setIsReassignModalOpen] = useState(false);
+  const [reassignTargetRoomId, setReassignTargetRoomId] = useState('');
+
+  const handleReassignRoom = async () => {
+    if (!selectedRegReq || !reassignTargetRoomId) return;
+    try {
+      const res = await updateTenantRegistrationRoom(selectedRegReq.id, reassignTargetRoomId);
+      if (res.success) {
+        alert('เปลี่ยนห้องพักในคำขอลงทะเบียนเรียบร้อยแล้ว');
+        setIsReassignModalOpen(false);
+        setReassignTargetRoomId('');
+        setSelectedRegReq(null);
+        await fetchRegRequests();
+        if (onSaveRooms) {
+          const updatedRooms = await getDataProvider().rooms.getAll();
+          onSaveRooms(updatedRooms);
+        }
+      } else {
+        alert(res.error?.message || 'ไม่สามารถเปลี่ยนห้องพักได้');
+      }
+    } catch (err: any) {
+      alert(err.message || 'เกิดข้อผิดพลาดในการเปลี่ยนห้องพัก');
     }
   };
 
@@ -2346,73 +2373,152 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
 
           {regRequests.length > 0 ? (
             <div className="space-y-3 max-h-96 overflow-y-auto pr-1">
-              {regRequests.map((req) => (
-                <div
-                  key={req.id}
-                  className={`p-4 border rounded-2xl space-y-2 transition-all ${
-                    req.status === 'pending_owner_approval'
-                      ? 'bg-amber-50/50 border-amber-200'
-                      : req.status === 'approved'
-                      ? 'bg-emerald-50/30 border-emerald-200'
-                      : 'bg-rose-50/30 border-rose-200'
-                  }`}
-                >
-                  <div className="flex justify-between items-start">
-                    <div>
-                      <h4 className="font-bold text-slate-900 text-sm">
-                        {req.firstName} {req.lastName}
-                      </h4>
-                      <p className="text-xs text-slate-600">เบอร์โทร: <span className="font-mono font-semibold">{req.phone}</span></p>
-                      {req.note && <p className="text-xs text-slate-500 italic mt-1">"{req.note}"</p>}
-                    </div>
-                    <span className={`px-2.5 py-1 text-[10px] font-black rounded-lg uppercase ${
+              {regRequests.map((req) => {
+                const reqRoom = rooms.find((r) => r.id === req.requestedRoomId || r.roomNumber === req.requestedRoomId);
+                const isOccupied = reqRoom?.status === 'occupied';
+
+                return (
+                  <div
+                    key={req.id}
+                    className={`p-4 border rounded-2xl space-y-2 transition-all ${
                       req.status === 'pending_owner_approval'
-                        ? 'bg-amber-100 text-amber-800 border border-amber-300'
+                        ? 'bg-amber-50/50 border-amber-200'
                         : req.status === 'approved'
-                        ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                        : 'bg-rose-100 text-rose-800 border border-rose-300'
-                    }`}>
-                      {req.status === 'pending_owner_approval' ? 'รออนุมัติ' : req.status === 'approved' ? 'อนุมัติแล้ว' : 'ปฏิเสธ'}
-                    </span>
-                  </div>
-
-                  {req.status === 'rejected' && req.rejectedReason && (
-                    <p className="text-xs text-rose-700 bg-rose-100/50 p-2 rounded-lg font-medium">
-                      เหตุผลการปฏิเสธ: {req.rejectedReason}
-                    </p>
-                  )}
-
-                  {req.status === 'pending_owner_approval' && (
-                    <div className="flex justify-end gap-2 pt-2 border-t border-gray-200/60">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setSelectedRegReq(req);
-                          setIsRejectModalOpen(true);
-                        }}
-                        className="px-3 py-1.5 bg-rose-100 hover:bg-rose-200 text-rose-700 font-bold text-xs rounded-xl"
-                      >
-                        ปฏิเสธคำขอ
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setSelectedRegReq(req);
-                          setIsApproveTermsOpen(true);
-                        }}
-                        className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl"
-                      >
-                        อนุมัติและทำสัญญา
-                      </button>
+                        ? 'bg-emerald-50/30 border-emerald-200'
+                        : 'bg-rose-50/30 border-rose-200'
+                    }`}
+                  >
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <h4 className="font-bold text-slate-900 text-sm">
+                          {req.firstName} {req.lastName}
+                        </h4>
+                        <p className="text-xs text-slate-600">
+                          เบอร์โทร: <span className="font-mono font-semibold">{req.phone}</span>
+                        </p>
+                        <p className="text-xs text-slate-600">
+                          ห้องที่ขอ: <span className="font-bold text-indigo-700">{reqRoom ? `ห้อง ${reqRoom.roomNumber}` : req.requestedRoomId}</span>
+                        </p>
+                        {req.note && <p className="text-xs text-slate-500 italic mt-1">"{req.note}"</p>}
+                      </div>
+                      <span className={`px-2.5 py-1 text-[10px] font-black rounded-lg uppercase ${
+                        req.status === 'pending_owner_approval'
+                          ? 'bg-amber-100 text-amber-800 border border-amber-300'
+                          : req.status === 'approved'
+                          ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                          : 'bg-rose-100 text-rose-800 border border-rose-300'
+                      }`}>
+                        {req.status === 'pending_owner_approval' ? 'รออนุมัติ' : req.status === 'approved' ? 'อนุมัติแล้ว' : 'ปฏิเสธ'}
+                      </span>
                     </div>
-                  )}
-                </div>
-              ))}
+
+                    {req.status === 'pending_owner_approval' && isOccupied && (
+                      <p className="text-xs text-rose-700 bg-rose-100/70 p-2 rounded-lg font-bold border border-rose-200">
+                        ห้องนี้มีผู้เช่าแล้ว กรุณาเปลี่ยนห้องก่อนอนุมัติ
+                      </p>
+                    )}
+
+                    {req.status === 'rejected' && req.rejectedReason && (
+                      <p className="text-xs text-rose-700 bg-rose-100/50 p-2 rounded-lg font-medium">
+                        เหตุผลการปฏิเสธ: {req.rejectedReason}
+                      </p>
+                    )}
+
+                    {req.status === 'pending_owner_approval' && (
+                      <div className="flex justify-end gap-2 pt-2 border-t border-gray-200/60">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedRegReq(req);
+                            setReassignTargetRoomId(req.requestedRoomId);
+                            setIsReassignModalOpen(true);
+                          }}
+                          className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl"
+                        >
+                          เปลี่ยนห้อง
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedRegReq(req);
+                            setIsRejectModalOpen(true);
+                          }}
+                          className="px-3 py-1.5 bg-rose-100 hover:bg-rose-200 text-rose-700 font-bold text-xs rounded-xl"
+                        >
+                          ปฏิเสธคำขอ
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedRegReq(req);
+                            setIsApproveTermsOpen(true);
+                          }}
+                          className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl"
+                        >
+                          อนุมัติและทำสัญญา
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           ) : (
             <p className="text-center text-xs text-gray-400 py-8 italic">ยังไม่มีคำขอลงทะเบียนในระบบ</p>
           )}
         </div>
+      </Modal>
+
+      {/* Modal: Reassign Room for Registration Request */}
+      <Modal
+        isOpen={isReassignModalOpen}
+        onClose={() => setIsReassignModalOpen(false)}
+        title="เปลี่ยนห้องพักสำหรับคำขอลงทะเบียน"
+        maxWidth="max-w-md"
+      >
+        {selectedRegReq && (
+          <div className="space-y-4 text-xs">
+            <div className="p-3 bg-indigo-50 border border-indigo-150 rounded-xl">
+              <p className="font-bold text-indigo-900">ผู้สมัคร: {selectedRegReq.firstName} {selectedRegReq.lastName}</p>
+              <p className="text-indigo-700 text-[11px]">เบอร์โทร: {selectedRegReq.phone}</p>
+            </div>
+
+            <div>
+              <label className="block font-bold text-slate-700 mb-1">เลือกห้องพักใหม่ *</label>
+              <select
+                value={reassignTargetRoomId}
+                onChange={(e) => setReassignTargetRoomId(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-200 rounded-xl"
+              >
+                <option value="">-- เลือกห้องพัก --</option>
+                {rooms
+                  .filter((r) => r.status !== 'occupied')
+                  .map((r) => (
+                    <option key={r.id} value={r.id}>
+                      ห้อง {r.roomNumber} (ว่าง)
+                    </option>
+                  ))}
+              </select>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-3 border-t border-gray-100">
+              <button
+                type="button"
+                onClick={() => setIsReassignModalOpen(false)}
+                className="px-4 py-2 border border-gray-200 font-bold rounded-xl"
+              >
+                ยกเลิก
+              </button>
+              <button
+                type="button"
+                onClick={handleReassignRoom}
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl"
+              >
+                บันทึกการเปลี่ยนห้อง
+              </button>
+            </div>
+          </div>
+        )}
       </Modal>
 
       {/* Modal: Approve Terms Confirmation */}
