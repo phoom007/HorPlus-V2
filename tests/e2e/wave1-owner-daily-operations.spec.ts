@@ -224,9 +224,9 @@ test.describe.serial('HORPLUS — Wave 1 Owner Daily Operations Real Playwright 
     await nextBtn2.click();
 
     // Submit Tenant creation & await 201 response
-    const tenantPromise = page.waitForResponse((res) => res.url().includes('/api/v1/tenants') && res.request().method() === 'POST' && res.status() === 201);
     const saveBtn = page.locator('button:has-text("ยืนยันจดทะเบียนย้ายเข้า")').first();
     await expect(saveBtn).toBeVisible();
+    const tenantPromise = page.waitForResponse((res) => res.url().includes('/api/v1/tenants') && res.request().method() === 'POST' && res.status() === 201);
     await saveBtn.click();
     await tenantPromise;
 
