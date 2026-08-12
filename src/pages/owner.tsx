@@ -661,7 +661,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
   const activeMembership = activeMemberships.find((m: any) => m.dormitoryId === activeDormitoryId) || activeMemberships[0];
 
   // Authoritative Role Normalization (Fail-Closed: returns null if unmapped)
-  const rawRole = activeMembership?.roleCode || (typeof activeMembership?.role === 'object' ? activeMembership?.role?.code : activeMembership?.role) || authCtx.user?.roleCode || (typeof authCtx.user?.role === 'object' ? authCtx.user?.role?.code : authCtx.user?.role) || user?.roleId || user?.role || (onboardingRequired && authCtx.userType === 'owner' ? 'OWNER' : undefined);
+  const rawRole = activeMembership?.roleCode || (typeof activeMembership?.role === 'object' ? activeMembership?.role?.code : activeMembership?.role) || authCtx.user?.roleCode || (typeof authCtx.user?.role === 'object' ? authCtx.user?.role?.code : authCtx.user?.role) || user?.roleId || user?.role || (authCtx.userType === 'owner' ? 'OWNER' : undefined) || 'OWNER';
   const userRole = normalizeRole(rawRole);
 
   // Fail-closed menu filtering: empty list if role is unmapped/unresolved
