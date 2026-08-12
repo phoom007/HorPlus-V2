@@ -126,12 +126,18 @@ describe('Production Truth Boundary Architectural Gate', () => {
     expect(content).not.toContain('const seedDatabase =');
     expect(content).not.toContain("useState<number>(4500)");
     expect(content).not.toContain("useState<number>(9000)");
+    expect(content).not.toContain('handleResetDemoData');
+    expect(content).not.toContain('รีเซ็ตข้อมูลสาธิต');
+    expect(content).not.toContain('Prototype');
   });
 
-  it('tenant.tsx must not contain fake bank account fallback, active utility fixture, move-out localStorage, unpersisted repair success, or mock date fallbacks', () => {
+  it('tenant.tsx must not contain demoHasRoom, A-101 room fallback, fake repair upload success label, or mock date fallbacks', () => {
     const tenantPath = path.resolve(__dirname, '../pages/tenant.tsx');
     const content = fs.readFileSync(tenantPath, 'utf-8');
 
+    expect(content).not.toContain('demoHasRoom');
+    expect(content).not.toContain('A-101');
+    expect(content).not.toContain('อัปโหลดสำเร็จ</p>');
     expect(content).not.toContain("dormInfo.bankAccountNumber || '123-4-56789-0'");
     expect(content).not.toContain("dormInfo?.bankAccountNumber || '123-4-56789-0'");
     expect(content).not.toContain("{ name: 'มี.ค.', water: 7, elec: 112 }");
@@ -140,5 +146,16 @@ describe('Production Truth Boundary Architectural Gate', () => {
     expect(content).toContain("res.ok");
     expect(content).not.toContain('Safe hardcoded fallbacks matching mockData');
     expect(content).not.toContain("return '30 มิ.ย. 2569'");
+  });
+
+  it('server tenant contract PDF route must not hardcode 18.00/7.00/101/25/5 defaults', () => {
+    const pdfRoutePath = path.resolve(__dirname, '../../server/src/routes/tenant-portal.routes.ts');
+    const content = fs.readFileSync(pdfRoutePath, 'utf-8');
+
+    expect(content).not.toContain("waterRate: '18.00'");
+    expect(content).not.toContain("electricityRate: '7.00'");
+    expect(content).not.toContain("roomNumber: room?.roomNumber || '101'");
+    expect(content).not.toContain("billingDay: 25");
+    expect(content).not.toContain("dueDay: 5");
   });
 });

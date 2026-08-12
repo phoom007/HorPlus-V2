@@ -206,7 +206,6 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
   const [activeTab, setActiveTab] = useState<'home' | 'announcements' | 'payments_tab' | 'profile'>(initialState.tab);
   const [zoomedImage, setZoomedImage] = useState<string | null>(null);
   const [subView, setSubView] = useState<null | 'invoice' | 'pay' | 'repairs' | 'utilities' | 'contract' | 'history' | 'register'>(initialState.sub);
-  const [demoHasRoom, setDemoHasRoom] = useState<boolean>(true); // Toggle demo state: true = มีห้อง (ยอดค้างชำระ), false = ยังไม่มีห้อง (เตรียมลงทะเบียน)
   const [isToastFading, setIsToastFading] = useState(false);
 
   useEffect(() => {
@@ -308,6 +307,17 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
       const profileRes = await fetch('/api/v1/tenant-portal/profile');
       if (profileRes.ok) {
         const profile = await profileRes.json();
+        if (profile) {
+          const profileName = profile.displayName || `${profile.firstName || ''} ${profile.lastName || ''}`.trim() || 'ผู้เช่า';
+          setLocalTenant(prev => ({
+            ...prev,
+            id: profile.id || prev?.id || '',
+            name: profileName,
+            phone: profile.phone || prev?.phone || '-',
+            citizenId: profile.nationalIdMasked || prev?.citizenId || '-',
+            email: profile.email || prev?.email || '-',
+          }));
+        }
         if (profile.room) {
            setRooms([{
              id: profile.room.id,
@@ -370,14 +380,6 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
     setLocalTenant(tenant);
   }, [tenant]);
 
-  useEffect(() => {
-    if (rooms.length > 0 || bills.length > 0) {
-      setDemoHasRoom(true);
-    } else if (!financialLoading) {
-      setDemoHasRoom(rooms.some(r => r.currentTenantId === tenant.id) || bills.length > 0);
-    }
-  }, [tenant.id, rooms, bills, financialLoading]);
-
   const handleOpenCoOccupantsModal = () => {
     setEditCoOccupants([...localTenant.coOccupants]);
     setNewCoName('');
@@ -396,7 +398,8 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
   };
 
   // Filters for this tenant specifically
-  const tenantRoom = rooms.find(r => r.currentTenantId === tenant.id);
+  const tenantRoom = rooms.find(r => r.currentTenantId === tenant.id || r.currentTenantId === localTenant.id) || (rooms.length > 0 ? rooms[0] : undefined);
+  const hasRoom = !financialLoading && !!tenantRoom?.roomNumber;
   const tenantBills = [...bills]
     .filter(b => b.status !== 'draft' && b.status !== 'DRAFT')
     .sort((a, b) => (b.cycleId || b.billingCycleId || '').localeCompare(a.cycleId || a.billingCycleId || '') || (b.createdAt || '').localeCompare(a.createdAt || '')); 
@@ -738,9 +741,6 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
     }
   };
 
-  // Utility history chart data
-  const utilitiesData: { name: string; water: number; elec: number }[] = [];
-
   // Helper to render consistent back-arrow sub-view header matching iOS/Android style
   const renderSubViewHeader = (title: string, rightAction?: React.ReactNode) => (
     <div className="flex items-center justify-between px-4 py-3 bg-white border-b border-gray-200/50 sticky top-0 z-30 shrink-0">
@@ -887,7 +887,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                           <div className="flex items-center gap-2 mt-1">
                             <span className="text-[10px] text-indigo-150 font-semibold flex items-center gap-1">
                               <ClockIcon className="w-3.5 h-3.5 opacity-80" />
-                              <span>{demoHasRoom ? `ห้อง ${tenantRoom?.roomNumber || 'A-101'}` : 'ยังไม่มีห้องพัก'}</span>
+                              <span>{financialLoading ? 'กำลังโหลดข้อมูล...' : hasRoom ? `ห้อง ${tenantRoom?.roomNumber}` : 'ยังไม่มีห้องพัก'}</span>
                             </span>
                           </div>
                         </div>
@@ -909,7 +909,13 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
 
                     {/* Floating Overlapping Card (Directly based on room presence: ยอดค้างชำระ [ตามรูป] or ลงทะเบียนผู้เช่า [สำหรับผู้เช่าใหม่]) */}
                     <div className="mt-[-60px] mx-4 bg-white rounded-3xl p-5 border border-slate-200/80 shadow-xl flex flex-col gap-3 relative z-10 transition-all">
-                      {demoHasRoom ? (
+                      {financialLoading ? (
+                        <div className="space-y-3 pt-0.5 animate-pulse">
+                          <div className="h-4 bg-slate-200 rounded w-1/3"></div>
+                          <div className="h-8 bg-slate-200 rounded w-1/2"></div>
+                          <div className="h-3 bg-slate-200 rounded w-2/3"></div>
+                        </div>
+                      ) : hasRoom ? (
                         /* Mode 1: ยอดค้างชำระ (ตรงตามรูปที่แนบมาเป๊ะๆ) */
                         <div className="space-y-3 pt-0.5 animate-in fade-in duration-200">
                           <div className="flex justify-between items-start">
@@ -1400,22 +1406,22 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                     <div className="bg-white p-4 border border-slate-100 rounded-2xl space-y-4 shadow-2xs">
                       <div className="flex gap-3.5 items-center">
                         <div className="w-10 h-10 rounded-full bg-indigo-50 text-indigo-700 flex items-center justify-center font-black text-sm">
-                          {tenant.name.charAt(0)}
+                          {(localTenant?.name || 'ผู้เช่า').charAt(0)}
                         </div>
                         <div>
-                          <h4 className="font-extrabold text-slate-800 text-xs">{tenant.name}</h4>
-                          <p className="text-[9px] text-slate-400 mt-0.5">อีเมล: {tenant.email}</p>
+                          <h4 className="font-extrabold text-slate-800 text-xs">{localTenant?.name || 'ผู้เช่า'}</h4>
+                          <p className="text-[9px] text-slate-400 mt-0.5">อีเมล: {localTenant?.email || '-'}</p>
                         </div>
                       </div>
 
                       <div className="border-t border-slate-100 pt-3 text-[10px] space-y-2 text-slate-600 leading-normal">
-                        <p><span className="text-slate-400">เบอร์โทรศัพท์:</span> <span className="font-bold text-slate-800">{tenant.phone}</span></p>
-                        <p><span className="text-slate-400">เลขประจำตัวประชาชน:</span> <span className="font-bold text-slate-800">{tenant.citizenId}</span></p>
+                        <p><span className="text-slate-400">เบอร์โทรศัพท์:</span> <span className="font-bold text-slate-800">{localTenant?.phone || '-'}</span></p>
+                        <p><span className="text-slate-400">เลขประจำตัวประชาชน:</span> <span className="font-bold text-slate-800">{localTenant?.citizenId || '-'}</span></p>
                         <p><span className="text-slate-400">ยานพาหนะ:</span> <span className="font-bold text-slate-800">
-                          {tenant.vehicle.type !== 'none' ? `มี (${tenant.vehicle.type === 'car' ? 'รถยนต์' : 'รถจักรยานยนต์'} ทะเบียน ${tenant.vehicle.licensePlate})` : 'ไม่มี'}
+                          {localTenant?.vehicle?.type && localTenant.vehicle.type !== 'none' ? `มี (${localTenant.vehicle.type === 'car' ? 'รถยนต์' : 'รถจักรยานยนต์'} ทะเบียน ${localTenant.vehicle.licensePlate || ''})` : 'ไม่มี'}
                         </span></p>
                         <p><span className="text-slate-400">สัตว์เลี้ยง:</span> <span className="font-bold text-slate-800">
-                          {tenant.pet.hasPet ? `มี (${tenant.pet.type} ชื่อ ${tenant.pet.name})` : 'ไม่มีสัตว์เลี้ยง'}
+                          {localTenant?.pet?.hasPet ? `มี (${localTenant.pet.type || ''} ชื่อ ${localTenant.pet.name || ''})` : 'ไม่มีสัตว์เลี้ยง'}
                         </span></p>
                       </div>
                     </div>
@@ -1423,7 +1429,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                     {/* Co-occupants section */}
                     <div className="bg-white p-4 border border-slate-100 rounded-2xl space-y-3 shadow-2xs">
                       <div className="flex justify-between items-center">
-                        <h5 className="font-black text-slate-800 text-[11px]">รายชื่อผู้พักอาศัยร่วม ({localTenant.coOccupants.length} ท่าน)</h5>
+                        <h5 className="font-black text-slate-800 text-[11px]">รายชื่อผู้พักอาศัยร่วม ({(localTenant?.coOccupants || []).length} ท่าน)</h5>
                         <button
                           type="button"
                           onClick={handleOpenCoOccupantsModal}
@@ -1432,13 +1438,13 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                           <Wrench className="w-3 h-3" /> แก้ไข / เพิ่ม
                         </button>
                       </div>
-                      {localTenant.coOccupants.map((co) => (
+                      {(localTenant?.coOccupants || []).map((co) => (
                         <div key={co.id} className="p-2.5 bg-slate-50 border border-slate-100 rounded-xl text-[10px] space-y-0.5">
                           <p className="font-bold text-slate-800">{co.name}</p>
                           <p className="text-slate-400">โทร: {co.phone}</p>
                         </div>
                       ))}
-                      {localTenant.coOccupants.length === 0 && (
+                      {(!localTenant?.coOccupants || localTenant.coOccupants.length === 0) && (
                         <p className="text-center text-[9px] text-slate-400 py-3 font-semibold">ไม่มีผู้พักอาศัยร่วมลงทะเบียน</p>
                       )}
                     </div>
@@ -1482,6 +1488,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                           </p>
                           <button
                             type="button"
+                            data-testid="button-tenant-moveout"
                             onClick={() => setIsMoveOutModalOpen(true)}
                             className="w-full py-2.5 bg-rose-50 hover:bg-rose-100 border border-rose-200/80 text-rose-700 font-extrabold rounded-xl text-[10px] transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-2xs"
                           >
@@ -1897,7 +1904,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                                     />
                                     <div className="min-w-0">
                                       <p className="text-slate-800 font-bold truncate text-[10px]">{repairImageName || 'image.jpg'}</p>
-                                      <p className="text-indigo-600 font-semibold text-[8px]">อัปโหลดสำเร็จ</p>
+                                      <p className="text-amber-600 font-semibold text-[8px]">เลือกไฟล์แล้ว — ยังไม่ได้อัปโหลด</p>
                                     </div>
                                   </div>
                                   <button
@@ -1937,49 +1944,22 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                 )}
 
                 {/* D. SUBVIEW: ค่าน้ำ / ค่าไฟ */}
-                {false && (
+                {subView === 'utilities' && (
                   <div className="flex flex-col h-full bg-slate-50">
                     {renderSubViewHeader('ค่าน้ำ / ค่าไฟ')}
                     
                     <div className="p-4 space-y-4">
-                      <div>
-                        <h4 className="text-xs font-black text-slate-800">วิเคราะห์ปริมาณการใช้</h4>
-                        <p className="text-[9px] text-slate-400 mt-1">เปรียบเทียบหน่วยน้ำไฟที่ใช้รายรอบบิลย้อนหลัง</p>
-                      </div>
-
-                      {/* Recharts chart representation */}
-                      <div className="bg-white p-3 rounded-2xl border border-slate-100 h-52 text-[8px] shadow-2xs">
-                        <ResponsiveContainer width="100%" height="100%">
-                          <LineChart data={utilitiesData}>
-                            <XAxis dataKey="name" stroke="#94a3b8" />
-                            <Tooltip />
-                            <Legend />
-                            <Line type="monotone" dataKey="elec" name="ไฟ (หน่วย)" stroke="#f59e0b" strokeWidth={2.5} />
-                            <Line type="monotone" dataKey="water" name="น้ำ (หน่วย)" stroke="#0ea5e9" strokeWidth={2.5} />
-                          </LineChart>
-                        </ResponsiveContainer>
-                      </div>
-
-                      {/* Current meter status reading card */}
-                      <div className="bg-white p-4 border border-slate-100 rounded-2xl shadow-2xs space-y-3">
-                        <h5 className="font-extrabold text-slate-800 text-[10px]">เลขอ่านมิเตอร์ล่าสุด</h5>
-                        <div className="grid grid-cols-2 gap-3">
-                          <div className="bg-amber-50/50 p-3 rounded-xl border border-amber-100 text-center space-y-1">
-                            <span className="text-[8px] text-amber-700 font-bold">มิเตอร์ไฟ</span>
-                            <p className="font-black text-amber-900 text-sm">122 หน่วย</p>
-                          </div>
-                          <div className="bg-sky-50/50 p-3 rounded-xl border border-sky-100 text-center space-y-1">
-                            <span className="text-[8px] text-sky-700 font-bold">มิเตอร์น้ำ</span>
-                            <p className="font-black text-sky-900 text-sm">8 หน่วย</p>
-                          </div>
-                        </div>
+                      <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-2xs text-center space-y-2">
+                        <Droplet className="w-8 h-8 text-slate-300 mx-auto" />
+                        <h4 className="text-xs font-black text-slate-700">ประวัติค่าน้ำและค่าไฟยังไม่พร้อมใช้งาน</h4>
+                        <p className="text-[10px] text-slate-400">ระบบอยู่ระหว่างการเตรียมความพร้อมข้อมูลการใช้งานย้อนหลัง</p>
                       </div>
                     </div>
                   </div>
                 )}
 
                 {/* E. SUBVIEW: เอกสารสัญญา (IMAGE 2) */}
-                {false && (
+                {subView === 'contract' && (
                   <div className="flex flex-col h-full bg-slate-50">
                     {renderSubViewHeader('เอกสารสัญญา')}
 
@@ -2033,7 +2013,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                                   subtitle: 'PDF • สัญญาเช่าฉบับสมบูรณ์.pdf',
                                   category: 'สัญญาเช่า',
                                   fileName: `สัญญาเช่า_${con.contractNumber}.txt`,
-                                  content: `=== เอกสารสัญญาเช่าห้องพัก ===\nเลขที่สัญญา: ${con.contractNumber}\nผู้เช่า: คุณ ${tenant.name}\nห้องพัก: ${tenantRoom?.roomNumber || 'A-101'}\nระยะเวลาสัญญา: ${formatToBeFullDate(con.startDate)} ถึง ${formatToBeFullDate(con.endDate)}\nอัตราค่าเช่า: ${con.monthlyRent.toLocaleString('th-TH')} บาท/เดือน\nเงินประกัน: ${con.depositAmount.toLocaleString('th-TH')} บาท\nลงนามโดย: ${tenant.name} (ผู้เช่า) และ �;ѡ (ผู้ให้เช่า)\nวันที่ออกเอกสาร: ${formatToBeFullDate(con.startDate)}`
+                                  content: `=== เอกสารสัญญาเช่าห้องพัก ===\nเลขที่สัญญา: ${con.contractNumber}\nผู้เช่า: คุณ ${tenant.name}\nห้องพัก: ${tenantRoom?.roomNumber || 'ไม่ระบุ'}\nระยะเวลาสัญญา: ${formatToBeFullDate(con.startDate)} ถึง ${formatToBeFullDate(con.endDate)}\nอัตราค่าเช่า: ${con.monthlyRent.toLocaleString('th-TH')} บาท/เดือน\nเงินประกัน: ${con.depositAmount.toLocaleString('th-TH')} บาท\nลงนามโดย: ${tenant.name} (ผู้เช่า) และ �;ѡ (ผู้ให้เช่า)\nวันที่ออกเอกสาร: ${formatToBeFullDate(con.startDate)}`
                                 },
                                 {
                                   title: 'กฎระเบียบและข้อบังคับอาคารพักอาศัย',
@@ -2047,7 +2027,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                                   subtitle: 'PDF • บัตรประชาชนผู้เช่า.pdf',
                                   category: 'เอกสารประจำตัว',
                                   fileName: `สำเนาบัตรประชาชน_${tenant.name}.txt`,
-                                  content: `=== สำเนาบัตรประจำตัวประชาชนผู้เช่า ===\nชื่อ-นามสกุล: ${tenant.name}\nเลขประจำตัวประชาชน: ${tenant.citizenId}\nเบอร์โทรศัพท์: ${tenant.phone}\nอีเมล: ${tenant.email}\nสถานะ: รับรองสำเนาถูกต้องสำหรับใช้ในการทำสัญญาเช่าพักอาศัยห้อง ${tenantRoom?.roomNumber || 'A-101'} เท่านั้น`
+                                  content: `=== สำเนาบัตรประจำตัวประชาชนผู้เช่า ===\nชื่อ-นามสกุล: ${tenant.name}\nเลขประจำตัวประชาชน: ${tenant.citizenId}\nเบอร์โทรศัพท์: ${tenant.phone}\nอีเมล: ${tenant.email}\nสถานะ: รับรองสำเนาถูกต้องสำหรับใช้ในการทำสัญญาเช่าพักอาศัยห้อง ${tenantRoom?.roomNumber || 'ไม่ระบุ'} เท่านั้น`
                                 }
                               ].map((doc, idx) => (
                                 <div 
@@ -2124,7 +2104,8 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
               const isSelected = activeTab === item.id && false;
               return (
                 <button
-                   key={item.id}
+                  key={item.id}
+                  data-testid={`nav-tab-${item.id}`}
                   onClick={() => {
                     setActiveTab(item.id as any);
                     setSubView(null);
@@ -2334,6 +2315,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
             </button>
             <button
               type="button"
+              data-testid="button-tenant-moveout-confirm"
               onClick={handleConfirmMoveOut}
               className="px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-extrabold shadow-xs transition-all flex items-center gap-1.5 cursor-pointer"
             >

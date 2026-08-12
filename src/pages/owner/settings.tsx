@@ -452,18 +452,6 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
 
   const minCycle = '2026-01'; // Oldest month of system usage
 
-
-  const [isResetConfirmOpen, setIsResetConfirmOpen] = useState(false);
-  const [resetSuccessNotice, setResetSuccessNotice] = useState(false);
-
-  const handleResetDemoData = () => {
-    onRefreshData();
-    window.dispatchEvent(new Event('storage'));
-    onAddLog('รีเซ็ตระบบ', 'รีเซ็ตข้อมูลทั้งหมดเรียบร้อยแล้ว', 'System', 'system-root');
-    setResetSuccessNotice(true);
-    setTimeout(() => setResetSuccessNotice(false), 5000);
-  };
-
   const getMaxCycle = () => {
     const today = new Date();
     let y = today.getFullYear();
@@ -1515,17 +1503,6 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
           onRetry={versionConflictState.onRetry}
         />
       )}
-
-      <ConfirmDialog
-        isOpen={isResetConfirmOpen}
-        onClose={() => setIsResetConfirmOpen(false)}
-        onConfirm={handleResetDemoData}
-        title="ยืนยันการรีเซ็ตข้อมูลสาธิต"
-        message="การรีเซ็ตจะลบข้อมูลที่สร้างหรือแก้ไขใน Prototype บน Browser นี้ และนำข้อมูลตัวอย่างเริ่มต้นกลับมา การดำเนินการนี้ไม่สามารถย้อนกลับได้"
-        confirmText="ยืนยันรีเซ็ตข้อมูล"
-        cancelText="ยกเลิก"
-        type="danger"
-      />
 
     </div>
   );

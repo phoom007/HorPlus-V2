@@ -45,12 +45,24 @@ export class DocumentPdfService {
     pdfDoc.registerFontkit(fontkit);
     const notoPath = path.join(process.cwd(), 'assets', 'fonts', 'noto-sans-thai-regular.woff');
     const notoBoldPath = path.join(process.cwd(), 'assets', 'fonts', 'noto-sans-thai-bold.woff');
+    const fontsourceNotoPath1 = path.join(process.cwd(), 'node_modules', '@fontsource', 'noto-sans-thai', 'files', 'noto-sans-thai-thai-400-normal.woff');
+    const fontsourceNotoBoldPath1 = path.join(process.cwd(), 'node_modules', '@fontsource', 'noto-sans-thai', 'files', 'noto-sans-thai-thai-700-normal.woff');
+    const fontsourceNotoPath2 = path.join(process.cwd(), 'server', 'node_modules', '@fontsource', 'noto-sans-thai', 'files', 'noto-sans-thai-thai-400-normal.woff');
+    const fontsourceNotoBoldPath2 = path.join(process.cwd(), 'server', 'node_modules', '@fontsource', 'noto-sans-thai', 'files', 'noto-sans-thai-thai-700-normal.woff');
     const tahomaPath = path.join(process.cwd(), 'assets', 'fonts', 'tahoma.ttf');
     const tahomaBoldPath = path.join(process.cwd(), 'assets', 'fonts', 'tahomabd.ttf');
 
     if (fs.existsSync(notoPath) && fs.existsSync(notoBoldPath)) {
       const font = await pdfDoc.embedFont(fs.readFileSync(notoPath));
       const fontBold = await pdfDoc.embedFont(fs.readFileSync(notoBoldPath));
+      return { font, fontBold };
+    } else if (fs.existsSync(fontsourceNotoPath1) && fs.existsSync(fontsourceNotoBoldPath1)) {
+      const font = await pdfDoc.embedFont(fs.readFileSync(fontsourceNotoPath1));
+      const fontBold = await pdfDoc.embedFont(fs.readFileSync(fontsourceNotoBoldPath1));
+      return { font, fontBold };
+    } else if (fs.existsSync(fontsourceNotoPath2) && fs.existsSync(fontsourceNotoBoldPath2)) {
+      const font = await pdfDoc.embedFont(fs.readFileSync(fontsourceNotoPath2));
+      const fontBold = await pdfDoc.embedFont(fs.readFileSync(fontsourceNotoBoldPath2));
       return { font, fontBold };
     } else if (fs.existsSync(tahomaPath) && fs.existsSync(tahomaBoldPath)) {
       const font = await pdfDoc.embedFont(fs.readFileSync(tahomaPath));

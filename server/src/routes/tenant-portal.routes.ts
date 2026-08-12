@@ -820,7 +820,38 @@ export function createTenantPortalRouter(authService?: AuthenticationService): R
       }
 
       const dorm = await prisma.dormitory.findUnique({ where: { id: ctx.dormitoryId } });
-      const room = ctx.roomId ? await prisma.room.findUnique({ where: { id: ctx.roomId } }) : null;
+      const room = ctx.roomId ? await prisma.room.findUnique({ where: { id: ctx.roomId }, include: { building: true } }) : null;
+      const snapshot = await prisma.contractSnapshot.findFirst({
+        where: { contractId: ctx.contract.id, dormitoryId: ctx.dormitoryId },
+      });
+      const billSettings = await prisma.dormitoryBillingSettings.findUnique({ where: { dormitoryId: ctx.dormitoryId } });
+
+      const resolvedRoomNumber = snapshot?.exactRoomNumber || room?.roomNumber || 'ไม่ระบุ';
+      const buildingName = room?.building?.name || undefined;
+
+      const waterVal = snapshot?.resolvedWaterRate !== undefined
+        ? snapshot.resolvedWaterRate
+        : billSettings?.waterRate !== undefined
+          ? billSettings.waterRate
+          : null;
+      const waterRateStr = waterVal !== null ? Number(waterVal).toFixed(2) : 'ไม่ระบุ';
+
+      const elecVal = snapshot?.resolvedElectricityRate !== undefined
+        ? snapshot.resolvedElectricityRate
+        : billSettings?.electricityRate !== undefined
+          ? billSettings.electricityRate
+          : null;
+      const electricityRateStr = elecVal !== null ? Number(elecVal).toFixed(2) : 'ไม่ระบุ';
+
+      const commonVal = snapshot?.resolvedCommonFee !== undefined && snapshot?.resolvedCommonFee !== null
+        ? snapshot.resolvedCommonFee
+        : billSettings?.commonFee !== undefined && billSettings?.commonFee !== null
+          ? billSettings.commonFee
+          : 0;
+      const commonFeeStr = Number(commonVal).toFixed(2);
+
+      const billingDayVal = billSettings?.billingDay !== undefined ? billSettings.billingDay : 1;
+      const dueDayVal = billSettings?.dueDay !== undefined ? billSettings.dueDay : 1;
 
       const pdfService = new DocumentPdfService();
       const pdfBuffer = await pdfService.generateContractPdf({
@@ -831,18 +862,20 @@ export function createTenantPortalRouter(authService?: AuthenticationService): R
         ownerName: dorm?.name || 'เจ้าของหอพัก',
         tenantName: ctx.tenant.displayName || `${ctx.tenant.firstName} ${ctx.tenant.lastName}`.trim(),
         tenantPhone: ctx.tenant.phone,
-        roomNumber: room?.roomNumber || '101',
+        buildingName,
+        roomNumber: resolvedRoomNumber,
         rentBillingType: ctx.contract.rentBillingType === 'term' ? 'term' : 'monthly',
         startDate: ctx.contract.startDate.toISOString().split('T')[0],
         endDate: ctx.contract.endDate.toISOString().split('T')[0],
-        rentAmount: ctx.contract.rentAmount.toString(),
-        depositAmount: ctx.contract.depositAmount.toString(),
-        waterRate: '18.00',
-        electricityRate: '7.00',
-        commonFee: '0.00',
-        billingDay: 25,
-        dueDay: 5,
-        terms: ctx.contract.terms || undefined
+        rentAmount: Number(ctx.contract.rentAmount).toFixed(2),
+        depositAmount: Number(ctx.contract.depositAmount).toFixed(2),
+        waterRate: waterRateStr,
+        electricityRate: electricityRateStr,
+        commonFee: commonFeeStr,
+        billingDay: billingDayVal,
+        dueDay: dueDayVal,
+        terms: ctx.contract.terms || undefined,
+        createdAt: ctx.contract.createdAt ? ctx.contract.createdAt.toISOString().split('T')[0] : undefined,
       });
 
       res.setHeader('Content-Type', 'application/pdf');

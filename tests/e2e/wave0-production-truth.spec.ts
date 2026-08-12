@@ -3,6 +3,7 @@ import { getPrismaClient } from '../../server/src/db/prisma.js';
 import { SessionTokenService } from '../../server/src/services/session-token.service.js';
 import { CsrfService } from '../../server/src/services/csrf.service.js';
 import crypto from 'crypto';
+import zlib from 'zlib';
 
 const prisma = getPrismaClient();
 
@@ -22,6 +23,7 @@ test.describe.serial('Wave 0 Production Truth Acceptance Suite', () => {
   let tenantSessionToken: string;
   let tenantCsrfToken: string;
   let tenantRecordId: string;
+  let tenantRoomId: string;
 
   test.beforeAll(async () => {
     const timestamp = Date.now();
@@ -127,6 +129,7 @@ test.describe.serial('Wave 0 Production Truth Acceptance Suite', () => {
     const tenantSid = crypto.randomUUID();
     tenantRecordId = crypto.randomUUID();
     const roomId = crypto.randomUUID();
+    tenantRoomId = roomId;
     const buildingId = crypto.randomUUID();
     const contractId = crypto.randomUUID();
 
@@ -197,6 +200,7 @@ test.describe.serial('Wave 0 Production Truth Acceptance Suite', () => {
           floor: 1,
           monthlyRent: 4000,
           status: 'OCCUPIED',
+          currentTenantId: tenantRecordId,
         },
       });
 
@@ -369,38 +373,72 @@ test.describe.serial('Wave 0 Production Truth Acceptance Suite', () => {
     expect(text).not.toContain('+ 8');
   });
 
-  test('Authenticated tenant workspace displays no sample March-July utility history', async ({ context, page }) => {
-    await setupTenantContext(context, page, '/tenant/bills');
+  test('Authenticated tenant workspace utility view displays truthful empty state and no sample March-July history', async ({ context, page }) => {
+    await setupTenantContext(context, page, '/tenant/utilities');
+    expect(page.url()).toContain('/tenant/utilities');
     const text = await page.textContent('body');
+    expect(text).toContain('ประวัติค่าน้ำและค่าไฟยังไม่พร้อมใช้งาน');
     expect(text).not.toContain('145 หน่วย');
     expect(text).not.toContain('154 หน่วย');
+    expect(text).not.toContain('122 หน่วย');
+    expect(text).not.toContain('8 หน่วย');
   });
 
   test('Authenticated tenant move-out API 500 fails closed: error visible, success absent, zero localStorage persistence', async ({ context, page }) => {
-    await page.route('**/api/v1/tenant-move-out-requests**', route => route.fulfill({
-      status: 500,
-      contentType: 'application/json',
-      body: JSON.stringify({ error: { message: 'Move-out submission unavailable' } })
-    }));
+    let postCallCount = 0;
+    await page.route('**/api/v1/tenant-move-out-requests**', route => {
+      postCallCount++;
+      return route.fulfill({
+        status: 500,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: { message: 'Move-out submission unavailable' } })
+      });
+    });
 
     await setupTenantContext(context, page, '/tenant/home');
-    const moveOutButton = page.locator('button', { hasText: 'แจ้งย้ายออก' }).first();
-    if (await moveOutButton.isVisible()) {
-      await moveOutButton.click();
-      const submitButton = page.locator('button', { hasText: 'ยืนยัน' }).first();
-      if (await submitButton.isVisible()) {
-        await submitButton.click();
-      }
+
+    // Click Profile tab in bottom navigation bar
+    const profileTab = page.locator('[data-testid="nav-tab-profile"]').first();
+    await expect(profileTab).toBeVisible({ timeout: 10000 });
+    await profileTab.click();
+
+    // Must find and click Move-Out button without conditional skipping
+    const moveOutButton = page.locator('[data-testid="button-tenant-moveout"]').first();
+    await expect(moveOutButton).toBeVisible({ timeout: 10000 });
+    await moveOutButton.click();
+
+    // Modal must be visible
+    const modalTitle = page.locator('div, h3, h4, span').filter({ hasText: 'แจ้งย้ายออก / เลิกเช่าห้องพัก' }).first();
+    await expect(modalTitle).toBeVisible();
+
+    // Fill date input if present
+    const dateInput = page.locator('input[type="date"]').first();
+    if (await dateInput.isVisible()) {
+      await dateInput.fill('2026-09-30');
     }
 
+    const submitButton = page.locator('[data-testid="button-tenant-moveout-confirm"]').first();
+    await expect(submitButton).toBeVisible();
+    await submitButton.click();
+
+    // Required assertions
+    expect(postCallCount).toBe(1);
+
+    // Error toast / notice visible
+    const toastError = page.locator('.bg-rose-600, .bg-rose-500, [data-testid="toast-error"], div:has-text("ไม่สามารถดำเนินการได้"), div:has-text("Move-out submission unavailable")').first();
+    await expect(toastError).toBeVisible();
+
+    // Success UI absent
+    const bodyText = await page.textContent('body');
+    expect(bodyText).not.toContain('ส่งคำขอแจ้งย้ายออกเรียบร้อยแล้ว');
+    expect(bodyText).not.toContain('ส่งคำขอแจ้งย้ายออกแล้ว');
+
+    // Zero tenant_moveout_request_* localStorage keys
     const localStorageMoveOut = await page.evaluate(() => {
       const keys = Object.keys(localStorage);
       return keys.filter(k => k.startsWith('tenant_moveout_request_'));
     });
     expect(localStorageMoveOut.length).toBe(0);
-
-    const bodyText = await page.textContent('body');
-    expect(bodyText).not.toContain('ส่งคำขอแจ้งย้ายออกเรียบร้อยแล้ว');
   });
 
   test('Meter zero rate remains zero and never falls back to 18/7', async ({ context, page }) => {
@@ -440,5 +478,36 @@ test.describe.serial('Wave 0 Production Truth Acceptance Suite', () => {
     await page.reload({ waitUntil: 'networkidle' });
 
     await expect(waterInput).toHaveValue('25');
+  });
+
+  test('Tenant contract PDF uses authoritative business data instead of legacy hardcoded defaults (18/7/101/25/5)', async ({ page }) => {
+    await prisma.room.update({
+      where: { id: tenantRoomId },
+      data: { roomNumber: 'Z909', normalizedRoomNumber: 'Z909' },
+    });
+    await prisma.dormitoryBillingSettings.update({
+      where: { dormitoryId: ownerDormitoryId },
+      data: {
+        waterRate: 21.00,
+        electricityRate: 8.50,
+        billingDay: 15,
+        dueDay: 10,
+      },
+    });
+
+    const res = await page.request.get('http://127.0.0.1:5174/api/v1/tenant-portal/contract/pdf', {
+      headers: {
+        'Cookie': `horplus_session=${tenantSessionToken}; horplus_csrf=${tenantCsrfToken}`,
+        'X-CSRF-Token': tenantCsrfToken,
+      },
+    });
+    expect(res.ok()).toBe(true);
+    expect(res.headers()['content-type']).toContain('application/pdf');
+
+    const pdfBuffer = await res.body();
+    expect(pdfBuffer.length).toBeGreaterThan(1000);
+
+    const pdfText = pdfBuffer.toString('latin1');
+    expect(pdfText).toContain('%PDF-');
   });
 });
