@@ -348,10 +348,12 @@ test.describe.serial('HORPLUS — Wave 1 Owner Daily Operations Real Playwright 
     const waterInput = page.locator('input[data-col="waterCurr"]').first();
     await expect(waterInput).toBeVisible();
     await waterInput.fill('120');
+    await waterInput.blur();
 
     const elecInput = page.locator('input[data-col="elecCurr"]').first();
     await expect(elecInput).toBeVisible();
     await elecInput.fill('600');
+    await elecInput.blur();
 
     // 3. Click Save Meters button in UI & capture request/response
     const savePromise = page.waitForRequest((req) => req.url().includes('/api/v1/meters/readings/bulk') && req.method() === 'POST');
