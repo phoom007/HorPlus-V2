@@ -172,7 +172,7 @@ test.describe.serial('HORPLUS — Wave 1 Owner Daily Operations Real Playwright 
     });
   });
 
-  test.beforeEach(async ({ context }) => {
+  test.beforeEach(async ({ page, context }) => {
     await context.clearCookies();
     await context.addCookies([
       { name: 'horplus_session', value: sessionToken, domain: 'localhost', path: '/' },
@@ -180,7 +180,7 @@ test.describe.serial('HORPLUS — Wave 1 Owner Daily Operations Real Playwright 
       { name: 'horplus_session', value: sessionToken, domain: '127.0.0.1', path: '/' },
       { name: 'horplus_csrf', value: csrfToken, domain: '127.0.0.1', path: '/' },
     ]);
-    await context.addInitScript((dId) => {
+    await page.addInitScript((dId) => {
       localStorage.setItem('selected_dormitory_id', dId);
       sessionStorage.setItem('active_dormitory_selected_for_session', dId);
     }, dormId);
