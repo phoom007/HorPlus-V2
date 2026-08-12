@@ -271,6 +271,96 @@ export class ApiTenantAdapter implements TenantDataSource {
       };
     }
   }
+
+  async addCoOccupant(tenantId: string, coOccupant: { name: string; phone?: string; relationship?: string }): Promise<DataResult<any>> {
+    try {
+      const data = await httpRequest<any>('POST', `/tenants/${tenantId}/co-occupants`, coOccupant);
+      return { success: true, data };
+    } catch (err: any) {
+      return {
+        success: false,
+        error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message }
+      };
+    }
+  }
+
+  async updateCoOccupant(tenantId: string, coOccupantId: string, coOccupant: { name?: string; phone?: string; relationship?: string }): Promise<DataResult<any>> {
+    try {
+      const data = await httpRequest<any>('PUT', `/tenants/${tenantId}/co-occupants/${coOccupantId}`, coOccupant);
+      return { success: true, data };
+    } catch (err: any) {
+      return {
+        success: false,
+        error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message }
+      };
+    }
+  }
+
+  async removeCoOccupant(tenantId: string, coOccupantId: string): Promise<DataResult<boolean>> {
+    try {
+      await httpRequest<any>('DELETE', `/tenants/${tenantId}/co-occupants/${coOccupantId}`);
+      return { success: true, data: true };
+    } catch (err: any) {
+      return {
+        success: false,
+        error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message }
+      };
+    }
+  }
+}
+
+export async function getTenantRegistrationRequests(): Promise<DataResult<any[]>> {
+  try {
+    const data = await httpRequest<any[]>('GET', '/tenant-registrations');
+    return { success: true, data };
+  } catch (err: any) {
+    return {
+      success: false,
+      error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message }
+    };
+  }
+}
+
+export async function submitTenantRegistrationRequest(payload: {
+  requestedRoomId: string;
+  firstName: string;
+  lastName: string;
+  phone: string;
+  note?: string;
+}): Promise<DataResult<any>> {
+  try {
+    const data = await httpRequest<any>('POST', '/tenant-registrations', payload);
+    return { success: true, data };
+  } catch (err: any) {
+    return {
+      success: false,
+      error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message }
+    };
+  }
+}
+
+export async function approveTenantRegistrationRequest(id: string, payload?: any): Promise<DataResult<any>> {
+  try {
+    const data = await httpRequest<any>('POST', `/tenant-registrations/${id}/approve`, payload || {});
+    return { success: true, data };
+  } catch (err: any) {
+    return {
+      success: false,
+      error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message }
+    };
+  }
+}
+
+export async function rejectTenantRegistrationRequest(id: string, reason?: string): Promise<DataResult<any>> {
+  try {
+    const data = await httpRequest<any>('POST', `/tenant-registrations/${id}/reject`, { reason });
+    return { success: true, data };
+  } catch (err: any) {
+    return {
+      success: false,
+      error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message }
+    };
+  }
 }
 
 export class ApiContractAdapter implements ContractDataSource {

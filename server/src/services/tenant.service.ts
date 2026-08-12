@@ -157,9 +157,67 @@ export class TenantService {
   }
 
   // Child Entities Management
-  public async addCoOccupant(dormitoryId: string, tenantId: string, data: any) {
-    await this.getTenantById(tenantId, dormitoryId);
-    return this.tenantRepo.createCoOccupant(dormitoryId, tenantId, data);
+  public async addCoOccupant(dormitoryId: string, tenantId: string, data: any, actorUserId?: string) {
+    const tenant = await this.getTenantById(tenantId, dormitoryId);
+    const co = await this.tenantRepo.createCoOccupant(dormitoryId, tenantId, data);
+    if (this.auditService && actorUserId) {
+      await this.auditService.log({
+        userId: actorUserId,
+        action: 'TENANT_CO_OCCUPANT_ADDED',
+        source: 'tenant',
+        reason: `Added co-occupant ${data.name} to tenant ${tenant.displayName}`,
+        ipMetadata: { dormitoryId, tenantId, coOccupantId: co.id },
+      });
+    }
+    return co;
+  }
+
+  public async updateCoOccupant(
+    dormitoryId: string,
+    tenantId: string,
+    coOccupantId: string,
+    data: any,
+    actorUserId?: string
+  ) {
+    const tenant = await this.getTenantById(tenantId, dormitoryId);
+    const updated = await this.tenantRepo.updateCoOccupant(coOccupantId, dormitoryId, data);
+    if (!updated) {
+      const err = new Error('ไม่พบข้อมูลผู้พักร่วมที่ระบุ');
+      (err as any).code = 'CO_OCCUPANT_NOT_FOUND';
+      (err as any).statusCode = 404;
+      throw err;
+    }
+    if (this.auditService && actorUserId) {
+      await this.auditService.log({
+        userId: actorUserId,
+        action: 'TENANT_CO_OCCUPANT_UPDATED',
+        source: 'tenant',
+        reason: `Updated co-occupant ${updated.name} for tenant ${tenant.displayName}`,
+        ipMetadata: { dormitoryId, tenantId, coOccupantId },
+      });
+    }
+    return updated;
+  }
+
+  public async removeCoOccupant(dormitoryId: string, tenantId: string, coOccupantId: string, actorUserId?: string) {
+    const tenant = await this.getTenantById(tenantId, dormitoryId);
+    const success = await this.tenantRepo.deleteCoOccupant(coOccupantId, dormitoryId);
+    if (!success) {
+      const err = new Error('ไม่พบข้อมูลผู้พักร่วมที่ระบุ');
+      (err as any).code = 'CO_OCCUPANT_NOT_FOUND';
+      (err as any).statusCode = 404;
+      throw err;
+    }
+    if (this.auditService && actorUserId) {
+      await this.auditService.log({
+        userId: actorUserId,
+        action: 'TENANT_CO_OCCUPANT_REMOVED',
+        source: 'tenant',
+        reason: `Removed co-occupant from tenant ${tenant.displayName}`,
+        ipMetadata: { dormitoryId, tenantId, coOccupantId },
+      });
+    }
+    return { success: true };
   }
 
   public async addEmergencyContact(dormitoryId: string, tenantId: string, data: any) {

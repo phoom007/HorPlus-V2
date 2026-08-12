@@ -59,6 +59,36 @@ export function createTenantRegistrationRouter(
     });
   };
 
+  // POST /api/v1/tenant-registrations
+  router.post('/', async (req: Request, res: Response) => {
+    try {
+      const dormId = getDormitoryId(req);
+      const { requestedRoomId, firstName, lastName, phone, note } = req.body || {};
+      if (!requestedRoomId || !firstName || !lastName || !phone) {
+        return res.status(400).json({
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'กรุณากรอกข้อมูลที่จำเป็น (*) ให้ครบถ้วน',
+            fieldErrors: null,
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+      const newReq = await registrationService.createRequest(dormId, {
+        dormitoryId: dormId,
+        requestedRoomId,
+        firstName,
+        lastName,
+        phone,
+        note,
+      });
+      res.status(201).json({ data: newReq });
+    } catch (err) {
+      handleServiceError(res, err, req);
+    }
+  });
+
   // GET /api/v1/tenant-registrations
   router.get('/', async (req: Request, res: Response) => {
     try {

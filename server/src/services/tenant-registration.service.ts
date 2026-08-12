@@ -1,5 +1,14 @@
 import { getPrismaClient } from '../db/prisma.js';
 
+export interface CreateRegistrationDto {
+  dormitoryId: string;
+  requestedRoomId: string;
+  firstName: string;
+  lastName: string;
+  phone: string;
+  note?: string;
+}
+
 export interface ApproveRegistrationDto {
   createContract?: boolean;
   startDate?: string;
@@ -12,6 +21,57 @@ export interface ApproveRegistrationDto {
 }
 
 export class TenantRegistrationService {
+  public async createRequest(dormitoryId: string, payload: CreateRegistrationDto) {
+    const prisma = getPrismaClient();
+
+    // 1. Verify requested room belongs to dormitory
+    const room = await prisma.room.findFirst({
+      where: { id: payload.requestedRoomId, dormitoryId, deletedAt: null },
+    });
+    if (!room) {
+      const err = new Error('ROOM_NOT_FOUND');
+      (err as any).statusCode = 404;
+      (err as any).code = 'ROOM_NOT_FOUND';
+      (err as any).message = 'ไม่พบห้องพักที่ระบุในหอพักนี้';
+      throw err;
+    }
+
+    // 2. Check if room is already occupied
+    if (room.status === 'occupied') {
+      const err = new Error('ROOM_ALREADY_OCCUPIED');
+      (err as any).statusCode = 409;
+      (err as any).code = 'ROOM_ALREADY_OCCUPIED';
+      (err as any).message = 'ห้องพักนี้มีผู้เช่าอยู่แล้ว';
+      throw err;
+    }
+
+    // 3. Create TenantRegistrationRequest
+    return prisma.tenantRegistrationRequest.create({
+      data: {
+        dormitoryId,
+        requestedRoomId: payload.requestedRoomId,
+        firstName: payload.firstName.trim(),
+        lastName: payload.lastName.trim(),
+        phone: payload.phone.trim(),
+        note: payload.note ? payload.note.trim() : null,
+        status: 'pending_owner_approval',
+        submittedAt: new Date(),
+      },
+    });
+  }
+
+  public async hasPendingRegistrationForRoom(dormitoryId: string, roomId: string): Promise<boolean> {
+    const prisma = getPrismaClient();
+    const count = await prisma.tenantRegistrationRequest.count({
+      where: {
+        dormitoryId,
+        requestedRoomId: roomId,
+        status: 'pending_owner_approval',
+      },
+    });
+    return count > 0;
+  }
+
   public async listRequests(dormitoryId: string) {
     const prisma = getPrismaClient();
     return prisma.tenantRegistrationRequest.findMany({
@@ -59,6 +119,13 @@ export class TenantRegistrationService {
           (err as any).statusCode = 400;
           (err as any).code = 'ROOM_DORM_MISMATCH';
           (err as any).message = 'ห้องพักที่ระบุไม่อยู่ในหอพักนี้';
+          throw err;
+        }
+        if (room.status === 'occupied') {
+          const err = new Error('ROOM_ALREADY_OCCUPIED');
+          (err as any).statusCode = 409;
+          (err as any).code = 'ROOM_ALREADY_OCCUPIED';
+          (err as any).message = 'ห้องพักนี้มีผู้เช่าอยู่แล้วไม่สามารถอนุมัติได้';
           throw err;
         }
       }

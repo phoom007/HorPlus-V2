@@ -153,12 +153,60 @@ export function createTenantRouter(
   // POST /api/v1/tenants/:id/co-occupants
   router.post('/:id/co-occupants', mutationGuard('tenant:write'), async (req: Request, res: Response) => {
     if (!verifyCsrf(req, res)) return;
-    return res.status(403).json({
-      error: {
-        code: 'DEFERRED_BY_PRODUCT_POLICY',
-        message: 'การเพิ่มหรือแก้ไขผู้พักร่วมถูกจัดการโดยผู้เช่าหลักเท่านั้น'
+    try {
+      const dormId = getDormitoryId(req);
+      const parsed = CreateCoOccupantSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'ข้อมูลผู้พักร่วมไม่ถูกต้อง',
+            fieldErrors: parsed.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })),
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
       }
-    });
+      const coOccupant = await tenantService.addCoOccupant(dormId, req.params.id, parsed.data, req.auth?.userId);
+      res.status(201).json({ data: coOccupant });
+    } catch (err) {
+      handleServiceError(res, err, req);
+    }
+  });
+
+  // PUT /api/v1/tenants/:id/co-occupants/:coOccupantId
+  router.put('/:id/co-occupants/:coOccupantId', mutationGuard('tenant:write'), async (req: Request, res: Response) => {
+    if (!verifyCsrf(req, res)) return;
+    try {
+      const dormId = getDormitoryId(req);
+      const coOccupant = await tenantService.updateCoOccupant(
+        dormId,
+        req.params.id,
+        req.params.coOccupantId,
+        req.body,
+        req.auth?.userId
+      );
+      res.json({ data: coOccupant });
+    } catch (err) {
+      handleServiceError(res, err, req);
+    }
+  });
+
+  // DELETE /api/v1/tenants/:id/co-occupants/:coOccupantId
+  router.delete('/:id/co-occupants/:coOccupantId', mutationGuard('tenant:write'), async (req: Request, res: Response) => {
+    if (!verifyCsrf(req, res)) return;
+    try {
+      const dormId = getDormitoryId(req);
+      const result = await tenantService.removeCoOccupant(
+        dormId,
+        req.params.id,
+        req.params.coOccupantId,
+        req.auth?.userId
+      );
+      res.json({ data: result });
+    } catch (err) {
+      handleServiceError(res, err, req);
+    }
   });
 
   // POST /api/v1/tenants/:id/emergency-contacts

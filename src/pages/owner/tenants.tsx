@@ -36,6 +36,11 @@ import {
 } from '../../components/GlobalComponents';
 import { Tenant, Room, CoOccupant, EmergencyContact, Contract, Bill, BillItem, BLOCKING_CONTRACT_STATUSES } from '../../types';
 import { getDataProvider } from '../../data/dataProvider';
+import {
+  getTenantRegistrationRequests,
+  approveTenantRegistrationRequest,
+  rejectTenantRegistrationRequest,
+} from '../../data/adapters/api';
 export const getDormitory = (): any => null;
 import { convertImageToWebP, UPLOAD_DROPZONE_TEXT } from '../../utils/imageUtils';
 
@@ -163,13 +168,151 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
     setIsAddOpen(true);
   };
 
-  const handleAddCoOccupant = () => {
-    // DEFERRED_BY_PRODUCT_POLICY: Co-occupants editing deferred
-    alert('ระบบจัดการผู้พักร่วมอาศัยซ้อนอยู่ระหว่างการปรับปรุง (DEFERRED_BY_PRODUCT_POLICY)');
+  // Registration requests & co-occupants state
+  const [regRequests, setRegRequests] = useState<any[]>([]);
+  const [isRegModalOpen, setIsRegModalOpen] = useState(false);
+  const [selectedRegReq, setSelectedRegReq] = useState<any | null>(null);
+
+  // Reject modal state
+  const [isRejectModalOpen, setIsRejectModalOpen] = useState(false);
+  const [rejectReasonText, setRejectReasonText] = useState('');
+
+  // Approve modal state
+  const [isApproveTermsOpen, setIsApproveTermsOpen] = useState(false);
+  const [approveStartDate, setApproveStartDate] = useState(new Date().toISOString().slice(0, 10));
+  const [approveEndDate, setApproveEndDate] = useState(new Date(Date.now() + 365 * 86400000).toISOString().slice(0, 10));
+  const [approveDuration, setApproveDuration] = useState(12);
+  const [approveRent, setApproveRent] = useState('4500');
+  const [approveDeposit, setApproveDeposit] = useState('9000');
+  const [approveAdvance, setApproveAdvance] = useState('4500');
+
+  // Co-occupants modal state for existing tenant
+  const [isAddCoModalOpen, setIsAddCoModalOpen] = useState(false);
+  const [newCoName, setNewCoName] = useState('');
+  const [newCoPhone, setNewCoPhone] = useState('');
+  const [newCoRelation, setNewCoRelation] = useState('ผู้ร่วมพัก');
+
+  const fetchRegRequests = async () => {
+    try {
+      const res = await getTenantRegistrationRequests();
+      if (res.success && res.data) {
+        setRegRequests(res.data);
+      }
+    } catch {}
   };
 
-  const handleRemoveCoOccupant = (_id: string) => {
-    // DEFERRED_BY_PRODUCT_POLICY: Co-occupants editing deferred
+  React.useEffect(() => {
+    fetchRegRequests();
+  }, []);
+
+  const pendingCount = regRequests.filter((r) => r.status === 'pending_owner_approval').length;
+
+  const handleApproveRegistration = async () => {
+    if (!selectedRegReq) return;
+    try {
+      const res = await approveTenantRegistrationRequest(selectedRegReq.id, {
+        createContract: true,
+        startDate: approveStartDate,
+        endDate: approveEndDate,
+        durationMonths: approveDuration,
+        rentAmount: approveRent,
+        depositAmount: approveDeposit,
+        advancePaymentAmount: approveAdvance,
+      });
+
+      if (res.success) {
+        alert('อนุมัติคำขอลงทะเบียนเรียบร้อยแล้ว');
+        setIsApproveTermsOpen(false);
+        setSelectedRegReq(null);
+        await fetchRegRequests();
+        const updatedTenants = await getDataProvider().getTenantAdapter().getAll();
+        onSaveTenants(updatedTenants);
+      } else {
+        alert(res.error?.message || 'ไม่สามารถอนุมัติได้');
+      }
+    } catch (err: any) {
+      alert(err.message || 'เกิดข้อผิดพลาดในการอนุมัติคำขอ');
+    }
+  };
+
+  const handleRejectRegistration = async () => {
+    if (!selectedRegReq) return;
+    if (!rejectReasonText.trim()) {
+      alert('กรุณาระบุเหตุผลการปฏิเสธคำขอ');
+      return;
+    }
+    try {
+      const res = await rejectTenantRegistrationRequest(selectedRegReq.id, rejectReasonText.trim());
+      if (res.success) {
+        alert('ปฏิเสธคำขอลงทะเบียนเรียบร้อยแล้ว');
+        setIsRejectModalOpen(false);
+        setRejectReasonText('');
+        setSelectedRegReq(null);
+        await fetchRegRequests();
+      } else {
+        alert(res.error?.message || 'ไม่สามารถปฏิเสธคำขอได้');
+      }
+    } catch (err: any) {
+      alert(err.message || 'เกิดข้อผิดพลาดในการปฏิเสธคำขอ');
+    }
+  };
+
+  const handleAddCoOccupant = () => {
+    if (!coName.trim()) return;
+    const newCo: CoOccupant = {
+      id: 'temp-' + Date.now(),
+      name: coName.trim(),
+      phone: coPhone.trim() || undefined,
+      relationship: 'ผู้ร่วมพัก',
+    };
+    setCoOccupants((prev) => [...prev, newCo]);
+    setCoName('');
+    setCoPhone('');
+  };
+
+  const handleRemoveCoOccupant = (id: string) => {
+    setCoOccupants((prev) => prev.filter((c) => c.id !== id));
+  };
+
+  const handleAddCoOccupantToTenant = async () => {
+    if (!selectedTenant || !newCoName.trim()) return;
+    try {
+      const res = await getDataProvider().getTenantAdapter().addCoOccupant(selectedTenant.id, {
+        name: newCoName.trim(),
+        phone: newCoPhone.trim() || undefined,
+        relationship: newCoRelation.trim() || 'ผู้ร่วมพัก',
+      });
+      if (res.success) {
+        setNewCoName('');
+        setNewCoPhone('');
+        setIsAddCoModalOpen(false);
+        const updatedTenants = await getDataProvider().getTenantAdapter().getAll();
+        onSaveTenants(updatedTenants);
+        const refreshed = updatedTenants.find((t) => t.id === selectedTenant.id);
+        if (refreshed) setSelectedTenant(refreshed);
+      } else {
+        alert(res.error?.message || 'ไม่สามารถเพิ่มผู้พักร่วมได้');
+      }
+    } catch (err: any) {
+      alert(err.message || 'เกิดข้อผิดพลาดในการเพิ่มผู้พักร่วม');
+    }
+  };
+
+  const handleRemoveCoOccupantFromTenant = async (tenantId: string, coOccupantId: string) => {
+    if (!confirm('คุณแน่ใจหรือไม่ที่จะลบผู้พักร่วมอาศัยท่านนี้?')) return;
+    try {
+      const res = await getDataProvider().getTenantAdapter().removeCoOccupant(tenantId, coOccupantId);
+      if (res.success) {
+        const updatedTenants = await getDataProvider().getTenantAdapter().getAll();
+        onSaveTenants(updatedTenants);
+        const refreshed = updatedTenants.find((t) => t.id === selectedTenant.id);
+        if (refreshed) setSelectedTenant(refreshed);
+      } else {
+        alert(res.error?.message || 'ไม่สามารถลบผู้พักร่วมได้');
+      }
+    } catch (err: any) {
+      alert(err.message || 'เกิดข้อผิดพลาดในการลบผู้พักร่วม');
+    }
   };
 
   const handleNextStep = () => {
@@ -621,14 +764,32 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
       }`}>
         <div className="flex justify-between items-center mb-4">
           <h3 className="text-base font-extrabold text-slate-900">ทะเบียนผู้เช่า ({filteredTenants.length})</h3>
-          <button
-            onClick={handleOpenAddWizard}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition-all cursor-pointer shadow-xs shrink-0"
-            title="จดทะเบียนผู้เช่าและย้ายเข้า"
-          >
-            <Plus className="w-4 h-4" />
-            <span>เพิ่มผู้เช่า</span>
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleOpenAddWizard}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition-all cursor-pointer shadow-xs shrink-0"
+              title="จดทะเบียนผู้เช่าและย้ายเข้า"
+            >
+              <Plus className="w-4 h-4" />
+              <span>เพิ่มผู้เช่า</span>
+            </button>
+            <button
+              onClick={() => {
+                fetchRegRequests();
+                setIsRegModalOpen(true);
+              }}
+              className="relative flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-xs font-bold transition-all cursor-pointer shadow-xs shrink-0"
+              title="คำขอลงทะเบียนรออนุมัติ"
+            >
+              <Clock className="w-4 h-4" />
+              <span>คำขอลงทะเบียน</span>
+              {pendingCount > 0 && (
+                <span className="ml-1 px-1.5 py-0.5 bg-white text-amber-800 rounded-full text-[10px] font-black">
+                  {pendingCount}
+                </span>
+              )}
+            </button>
+          </div>
         </div>
 
         {/* Search */}
@@ -826,6 +987,45 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                           <p className="font-extrabold text-indigo-600 text-[11px] sm:text-xs break-all">{formatPhone(selectedTenant.emergencyContact.phone)}</p>
                         </div>
                       </div>
+                    </div>
+
+                    {/* Co-Occupants Card */}
+                    <div className="p-4 bg-slate-50 border border-gray-100 rounded-2xl space-y-3.5">
+                      <div className="flex items-center justify-between border-b border-gray-100 pb-2">
+                        <h4 className="text-xs font-black text-slate-800 flex items-center gap-1.5">
+                          <Users className="w-4 h-4 text-indigo-600 shrink-0" />
+                          ข้อมูลผู้พักร่วมอาศัย (Co-Occupants)
+                        </h4>
+                        <button
+                          type="button"
+                          onClick={() => setIsAddCoModalOpen(true)}
+                          className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-[10px] rounded-lg transition-all flex items-center gap-1 shrink-0"
+                        >
+                          <Plus className="w-3 h-3" /> เพิ่มผู้พักร่วม
+                        </button>
+                      </div>
+                      {selectedTenant.coOccupants && selectedTenant.coOccupants.length > 0 ? (
+                        <div className="space-y-2">
+                          {selectedTenant.coOccupants.map((co) => (
+                            <div key={co.id} className="flex items-center justify-between p-2.5 bg-white border border-gray-100 rounded-xl text-xs">
+                              <div>
+                                <span className="font-bold text-slate-800">{co.name}</span>
+                                {co.relationship && <span className="text-gray-400 text-[10px] ml-2">({co.relationship})</span>}
+                                {co.phone && <p className="text-[10px] text-indigo-600 font-semibold">{formatPhone(co.phone)}</p>}
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveCoOccupantFromTenant(selectedTenant.id, co.id)}
+                                className="text-rose-500 hover:text-rose-700 text-[10px] font-bold px-2 py-1 bg-rose-50 hover:bg-rose-100 rounded-lg transition-colors"
+                              >
+                                ลบ
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-gray-400 text-[11px] italic">ยังไม่มีข้อมูลผู้พักร่วมอาศัย</p>
+                      )}
                     </div>
 
                     {/* Vehicles and Pets */}
@@ -2067,6 +2267,277 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
         </Modal>
       )}
 
+      {/* Modal: Add Co-Occupant to Tenant */}
+      <Modal
+        isOpen={isAddCoModalOpen}
+        onClose={() => setIsAddCoModalOpen(false)}
+        title="เพิ่มข้อมูลผู้พักร่วมอาศัย"
+        maxWidth="max-w-md"
+      >
+        <div className="space-y-4">
+          <div>
+            <label className="block text-xs font-bold text-slate-700 mb-1">ชื่อ-นามสกุล *</label>
+            <input
+              type="text"
+              required
+              value={newCoName}
+              onChange={(e) => setNewCoName(e.target.value)}
+              placeholder="สมหญิง ใจดี"
+              className="w-full px-3 py-2 text-xs border border-gray-200 rounded-xl"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-bold text-slate-700 mb-1">เบอร์โทรศัพท์</label>
+            <input
+              type="tel"
+              value={newCoPhone}
+              onChange={(e) => setNewCoPhone(e.target.value.replace(/\D/g, '').slice(0, 10))}
+              placeholder="0891234567"
+              className="w-full px-3 py-2 text-xs border border-gray-200 rounded-xl font-mono"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-bold text-slate-700 mb-1">ความสัมพันธ์</label>
+            <input
+              type="text"
+              value={newCoRelation}
+              onChange={(e) => setNewCoRelation(e.target.value)}
+              placeholder="เพื่อน / แฟน / พี่น้อง"
+              className="w-full px-3 py-2 text-xs border border-gray-200 rounded-xl"
+            />
+          </div>
+          <div className="flex justify-end gap-2 pt-3 border-t border-gray-100">
+            <button
+              type="button"
+              onClick={() => setIsAddCoModalOpen(false)}
+              className="px-4 py-2 border border-gray-200 text-xs font-bold rounded-xl"
+            >
+              ยกเลิก
+            </button>
+            <button
+              type="button"
+              onClick={handleAddCoOccupantToTenant}
+              className="px-4 py-2 bg-indigo-600 text-white text-xs font-bold rounded-xl hover:bg-indigo-700"
+            >
+              บันทึกผู้พักร่วม
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Modal: Registration Requests List */}
+      <Modal
+        isOpen={isRegModalOpen}
+        onClose={() => setIsRegModalOpen(false)}
+        title="รายการคำขอลงทะเบียนจองห้องพัก (Local Registration Requests)"
+        maxWidth="max-w-2xl"
+      >
+        <div className="space-y-4">
+          <div className="flex justify-between items-center pb-2 border-b border-gray-100">
+            <span className="text-xs text-slate-500">คำขอทั้งหมด ({regRequests.length} รายการ)</span>
+            <button
+              type="button"
+              onClick={fetchRegRequests}
+              className="text-[11px] text-indigo-600 font-bold hover:underline"
+            >
+              รีเฟรชรายการ
+            </button>
+          </div>
+
+          {regRequests.length > 0 ? (
+            <div className="space-y-3 max-h-96 overflow-y-auto pr-1">
+              {regRequests.map((req) => (
+                <div
+                  key={req.id}
+                  className={`p-4 border rounded-2xl space-y-2 transition-all ${
+                    req.status === 'pending_owner_approval'
+                      ? 'bg-amber-50/50 border-amber-200'
+                      : req.status === 'approved'
+                      ? 'bg-emerald-50/30 border-emerald-200'
+                      : 'bg-rose-50/30 border-rose-200'
+                  }`}
+                >
+                  <div className="flex justify-between items-start">
+                    <div>
+                      <h4 className="font-bold text-slate-900 text-sm">
+                        {req.firstName} {req.lastName}
+                      </h4>
+                      <p className="text-xs text-slate-600">เบอร์โทร: <span className="font-mono font-semibold">{req.phone}</span></p>
+                      {req.note && <p className="text-xs text-slate-500 italic mt-1">"{req.note}"</p>}
+                    </div>
+                    <span className={`px-2.5 py-1 text-[10px] font-black rounded-lg uppercase ${
+                      req.status === 'pending_owner_approval'
+                        ? 'bg-amber-100 text-amber-800 border border-amber-300'
+                        : req.status === 'approved'
+                        ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                        : 'bg-rose-100 text-rose-800 border border-rose-300'
+                    }`}>
+                      {req.status === 'pending_owner_approval' ? 'รออนุมัติ' : req.status === 'approved' ? 'อนุมัติแล้ว' : 'ปฏิเสธ'}
+                    </span>
+                  </div>
+
+                  {req.status === 'rejected' && req.rejectedReason && (
+                    <p className="text-xs text-rose-700 bg-rose-100/50 p-2 rounded-lg font-medium">
+                      เหตุผลการปฏิเสธ: {req.rejectedReason}
+                    </p>
+                  )}
+
+                  {req.status === 'pending_owner_approval' && (
+                    <div className="flex justify-end gap-2 pt-2 border-t border-gray-200/60">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedRegReq(req);
+                          setIsRejectModalOpen(true);
+                        }}
+                        className="px-3 py-1.5 bg-rose-100 hover:bg-rose-200 text-rose-700 font-bold text-xs rounded-xl"
+                      >
+                        ปฏิเสธคำขอ
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedRegReq(req);
+                          setIsApproveTermsOpen(true);
+                        }}
+                        className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl"
+                      >
+                        อนุมัติและทำสัญญา
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-center text-xs text-gray-400 py-8 italic">ยังไม่มีคำขอลงทะเบียนในระบบ</p>
+          )}
+        </div>
+      </Modal>
+
+      {/* Modal: Approve Terms Confirmation */}
+      <Modal
+        isOpen={isApproveTermsOpen}
+        onClose={() => setIsApproveTermsOpen(false)}
+        title="กำหนดข้อตกลงสัญญาและอนุมัติผู้เช่า"
+        maxWidth="max-w-md"
+      >
+        {selectedRegReq && (
+          <div className="space-y-4 text-xs">
+            <div className="p-3 bg-indigo-50 border border-indigo-150 rounded-xl">
+              <p className="font-bold text-indigo-900">ผู้สมัคร: {selectedRegReq.firstName} {selectedRegReq.lastName}</p>
+              <p className="text-indigo-700 text-[11px]">เบอร์โทร: {selectedRegReq.phone}</p>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">วันเริ่มสัญญา *</label>
+                <input
+                  type="date"
+                  value={approveStartDate}
+                  onChange={(e) => setApproveStartDate(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-xl"
+                />
+              </div>
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">วันสิ้นสุดสัญญา *</label>
+                <input
+                  type="date"
+                  value={approveEndDate}
+                  onChange={(e) => setApproveEndDate(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-xl"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-3 gap-2">
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">ค่าเช่า/เดือน *</label>
+                <input
+                  type="number"
+                  value={approveRent}
+                  onChange={(e) => setApproveRent(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-xl font-mono"
+                />
+              </div>
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">เงินประกัน *</label>
+                <input
+                  type="number"
+                  value={approveDeposit}
+                  onChange={(e) => setApproveDeposit(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-xl font-mono"
+                />
+              </div>
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">ล่วงหน้า *</label>
+                <input
+                  type="number"
+                  value={approveAdvance}
+                  onChange={(e) => setApproveAdvance(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-xl font-mono"
+                />
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-3 border-t border-gray-100">
+              <button
+                type="button"
+                onClick={() => setIsApproveTermsOpen(false)}
+                className="px-4 py-2 border border-gray-200 font-bold rounded-xl"
+              >
+                ยกเลิก
+              </button>
+              <button
+                type="button"
+                onClick={handleApproveRegistration}
+                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl"
+              >
+                ยืนยันการอนุมัติ
+              </button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* Modal: Reject Reason Input */}
+      <Modal
+        isOpen={isRejectModalOpen}
+        onClose={() => setIsRejectModalOpen(false)}
+        title="ระบุเหตุผลการปฏิเสธคำขอลงทะเบียน"
+        maxWidth="max-w-md"
+      >
+        <div className="space-y-4 text-xs">
+          <div>
+            <label className="block font-bold text-slate-700 mb-1">เหตุผลการปฏิเสธ (ภาษาไทย) *</label>
+            <textarea
+              rows={3}
+              required
+              value={rejectReasonText}
+              onChange={(e) => setRejectReasonText(e.target.value)}
+              placeholder="เช่น ห้องพักเต็มแล้ว หรือ ไม่ผ่านเงื่อนไขการตรวจสอบประวัติ"
+              className="w-full px-3 py-2 border border-gray-200 rounded-xl"
+            />
+          </div>
+
+          <div className="flex justify-end gap-2 pt-3 border-t border-gray-100">
+            <button
+              type="button"
+              onClick={() => setIsRejectModalOpen(false)}
+              className="px-4 py-2 border border-gray-200 font-bold rounded-xl"
+            >
+              ยกเลิก
+            </button>
+            <button
+              type="button"
+              onClick={handleRejectRegistration}
+              className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-xl"
+            >
+              ยืนยันการปฏิเสธ
+            </button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 };

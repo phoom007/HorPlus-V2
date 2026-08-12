@@ -106,6 +106,7 @@ export interface CoOccupant {
   id: string;
   name: string;
   phone: string;
+  relationship?: string;
   citizenId?: string;
 }
 

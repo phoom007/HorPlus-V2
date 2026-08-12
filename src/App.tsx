@@ -28,6 +28,7 @@ import { OnboardingWizard } from './pages/onboarding/OnboardingWizard';
 
 import { OwnerWorkspace } from './pages/owner';
 import { TenantWorkspace } from './pages/tenant';
+import { TenantRegisterPage } from './pages/tenant/TenantRegisterPage';
 
 import { OwnerAuthGuard, TenantAuthGuard, AuthContext } from './router/guards';
 
@@ -117,6 +118,7 @@ export default function App() {
           }
         />
         <Route path="/tenant/login" element={<Navigate to="/" replace />} />
+        <Route path="/tenant/register" element={<TenantRegisterPage />} />
         <Route path="/staff-access" element={<StaffAccessPage />} />
 
         {/* Owner Onboarding Redirect to Owner Register */}

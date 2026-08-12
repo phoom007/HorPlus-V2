@@ -511,7 +511,7 @@ export class PrismaTenantRepository implements ITenantRepository {
   }
 
   public async findCoOccupants(tenantId: string, dormitoryId: string): Promise<TenantCoOccupantEntity[]> {
-    const list = await this.prisma.tenantCoOccupant.findMany({ where: { tenantId, dormitoryId } });
+    const list = await this.prisma.tenantCoOccupant.findMany({ where: { tenantId, dormitoryId, deletedAt: null } });
     return list.map((c) => ({
       id: c.id,
       dormitoryId: c.dormitoryId,
@@ -519,9 +519,9 @@ export class PrismaTenantRepository implements ITenantRepository {
       name: c.name,
       relationship: c.relationship,
       phone: c.phone || null,
-      status: 'active',
+      status: c.status || 'active',
       createdAt: c.createdAt,
-      updatedAt: c.createdAt,
+      updatedAt: c.updatedAt,
     } as any));
   }
   public async createCoOccupant(dormitoryId: string, tenantId: string, data: Partial<TenantCoOccupantEntity>): Promise<TenantCoOccupantEntity> {
@@ -533,6 +533,7 @@ export class PrismaTenantRepository implements ITenantRepository {
         name: data.name || '',
         relationship: data.relationship || '',
         phone: data.phone || null,
+        status: 'active',
       },
     });
     return {
@@ -547,8 +548,39 @@ export class PrismaTenantRepository implements ITenantRepository {
       updatedAt: c.createdAt,
     } as any;
   }
-  public async updateCoOccupant(): Promise<any> { return null; }
-  public async deleteCoOccupant(): Promise<boolean> { return true; }
+  public async updateCoOccupant(id: string, dormitoryId: string, data: Partial<TenantCoOccupantEntity>): Promise<TenantCoOccupantEntity | null> {
+    const existing = await this.prisma.tenantCoOccupant.findFirst({ where: { id, dormitoryId, deletedAt: null } });
+    if (!existing) return null;
+    const c = await this.prisma.tenantCoOccupant.update({
+      where: { id },
+      data: {
+        ...(data.name !== undefined && { name: data.name }),
+        ...(data.phone !== undefined && { phone: data.phone }),
+        ...(data.relationship !== undefined && { relationship: data.relationship }),
+        ...(data.status !== undefined && { status: data.status }),
+      },
+    });
+    return {
+      id: c.id,
+      dormitoryId: c.dormitoryId,
+      tenantId: c.tenantId,
+      name: c.name,
+      relationship: c.relationship,
+      phone: c.phone || null,
+      status: c.status,
+      createdAt: c.createdAt,
+      updatedAt: c.updatedAt,
+    } as any;
+  }
+  public async deleteCoOccupant(id: string, dormitoryId: string): Promise<boolean> {
+    const existing = await this.prisma.tenantCoOccupant.findFirst({ where: { id, dormitoryId, deletedAt: null } });
+    if (!existing) return false;
+    await this.prisma.tenantCoOccupant.update({
+      where: { id },
+      data: { status: 'removed', deletedAt: new Date() },
+    });
+    return true;
+  }
 
   public async findEmergencyContacts(tenantId: string, dormitoryId: string): Promise<TenantEmergencyContactEntity[]> {
     const list = await this.prisma.tenantEmergencyContact.findMany({ where: { tenantId, dormitoryId } });

@@ -74,6 +74,9 @@ export interface TenantDataSource {
   getByRoomId(roomId: string): Promise<Tenant | null>;
   addTenant(tenantData: Omit<Tenant, 'id' | 'createdAt' | 'updatedAt'>, actorUserId?: string): Promise<DataResult<Tenant>>;
   updateTenant(tenant: Tenant, actorUserId?: string): Promise<DataResult<Tenant>>;
+  addCoOccupant(tenantId: string, coOccupant: { name: string; phone?: string; relationship?: string }): Promise<DataResult<any>>;
+  updateCoOccupant(tenantId: string, coOccupantId: string, coOccupant: { name?: string; phone?: string; relationship?: string }): Promise<DataResult<any>>;
+  removeCoOccupant(tenantId: string, coOccupantId: string): Promise<DataResult<boolean>>;
 }
 
 export interface ContractDataSource {
