@@ -173,6 +173,7 @@ test.describe.serial('HORPLUS — Wave 1 Owner Daily Operations Real Playwright 
   });
 
   test.beforeEach(async ({ context }) => {
+    await context.clearCookies();
     await context.addCookies([
       { name: 'horplus_session', value: sessionToken, domain: 'localhost', path: '/' },
       { name: 'horplus_csrf', value: csrfToken, domain: 'localhost', path: '/' },
@@ -188,6 +189,11 @@ test.describe.serial('HORPLUS — Wave 1 Owner Daily Operations Real Playwright 
   test('Flow A — Create & Edit Tenant via UI, verify DB persistence & Room remains VACANT before activation', async ({ page }) => {
     test.setTimeout(60000);
 
+    await page.goto('/owner/tenants');
+    await page.evaluate((dId) => {
+      localStorage.setItem('selected_dormitory_id', dId);
+      sessionStorage.setItem('active_dormitory_selected_for_session', dId);
+    }, dormId);
     await page.goto('/owner/tenants');
     await page.waitForLoadState('networkidle');
 
