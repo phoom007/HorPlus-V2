@@ -687,8 +687,8 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
             setSelectedCycle={(c: string) => setSelectedCycleCode(c)}
             onAddLog={handleAddLog}
             onNavigate={(tab, param) => {
-              setActiveTab(tab);
               if (param) setInitialRoomId(param);
+              changeTab(tab);
             }}
           />
         );
@@ -696,7 +696,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
         return (
           <OwnerRegister
             onAddLog={handleAddLog}
-            onNavigate={(tab) => setActiveTab(tab)}
+            onNavigate={(tab) => changeTab(tab)}
           />
         );
       case 'rooms':
@@ -710,7 +710,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
             onSaveRooms={handleSaveRooms}
             onSaveBuildings={handleSaveBuildings}
             onAddLog={handleAddLog}
-            onNavigate={(tab) => setActiveTab(tab)}
+            onNavigate={(tab) => changeTab(tab)}
             initialRoomId={initialRoomId}
             onClearInitialRoomId={() => setInitialRoomId(undefined)}
           />
@@ -730,13 +730,13 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
             onAddLog={handleAddLog}
             initialTenantId={initialTenantId}
             onClearInitialTenantId={() => setInitialTenantId(undefined)}
-            onBackToMeters={() => setActiveTab('meters')}
+            onBackToMeters={() => changeTab('meters')}
             onViewContract={(contractId, tenantId) => {
               setInitialContractId(contractId);
               if (tenantId) {
                 setInitialTenantId(tenantId);
               }
-              setActiveTab('contracts');
+              changeTab('contracts');
             }}
           />
         );
@@ -759,7 +759,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
               if (tenantId) {
                 setInitialTenantId(tenantId);
               }
-              setActiveTab('tenants');
+              changeTab('tenants');
             }}
           />
         );
@@ -773,10 +773,10 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
             onSaveBills={handleSaveBills}
             onSelectTenant={(tId) => {
               setInitialTenantId(tId);
-              setActiveTab('tenants');
+              changeTab('tenants');
             }}
             onAddLog={handleAddLog}
-            onNavigate={(tab) => setActiveTab(tab)}
+            onNavigate={(tab) => changeTab(tab)}
             selectedCycle={selectedCycleCode}
             selectedBillingCycleId={selectedBillingCycleId || billingCycles.find(c => c.cycleCode === selectedCycleCode)?.id}
             selectedCycleCode={selectedCycleCode}
