@@ -322,6 +322,7 @@ export async function getTenantRegistrationRequests(): Promise<DataResult<any[]>
 }
 
 export async function submitTenantRegistrationRequest(payload: {
+  dormitoryId?: string;
   requestedRoomId: string;
   firstName: string;
   lastName: string;
@@ -329,7 +330,9 @@ export async function submitTenantRegistrationRequest(payload: {
   note?: string;
 }): Promise<DataResult<any>> {
   try {
-    const data = await httpRequest<any>('POST', '/tenant-registrations', payload);
+    const activeDormId = payload.dormitoryId || localStorage.getItem('selected_dormitory_id') || undefined;
+    const bodyPayload = { ...payload, dormitoryId: activeDormId };
+    const data = await httpRequest<any>('POST', '/tenant-registrations', bodyPayload);
     return { success: true, data };
   } catch (err: any) {
     return {

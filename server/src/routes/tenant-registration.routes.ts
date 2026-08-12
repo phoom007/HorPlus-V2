@@ -18,7 +18,7 @@ export function createTenantRegistrationRouter(
   ];
 
   const getDormitoryId = (req: Request): string => {
-    const dormId = (req.headers['x-dormitory-id'] as string) || req.auth?.dormitoryId;
+    const dormId = (req.headers['x-dormitory-id'] as string) || req.auth?.dormitoryId || req.body?.dormitoryId;
     if (!dormId) {
       const err = new Error('DORMITORY_ID_REQUIRED');
       (err as any).statusCode = 400;
