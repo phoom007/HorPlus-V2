@@ -177,6 +177,10 @@ test.describe.serial('LOCAL-01 — Tenant Onboarding & Co-Occupant Management E2
   test('Flow A — Tenant Local Registration Submission & Persistence', async ({ page }) => {
     test.setTimeout(60000);
 
+    await page.context().addInitScript((dId) => {
+      localStorage.setItem('selected_dormitory_id', dId);
+    }, dormIdA);
+
     await page.goto('/tenant/register');
     await page.waitForLoadState('networkidle');
 

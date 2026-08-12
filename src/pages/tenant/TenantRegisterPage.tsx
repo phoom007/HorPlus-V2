@@ -178,12 +178,19 @@ export const TenantRegisterPage: React.FC = () => {
                   >
                     {rooms.map((r) => (
                       <option key={r.id} value={r.id}>
-                        ห้อง {r.roomNumber} (ชั้น {r.floor || 1}) - ค่าเช่า ฿{r.price?.toLocaleString() || 4500}/เดือน
+                        ห้อง {r.roomNumber} (ชั้น {r.floor || 1}) - ค่าเช่า ฿{(r.monthlyRent || (r as any).price)?.toLocaleString() || 4500}/เดือน
                       </option>
                     ))}
                   </select>
                 ) : (
-                  <p className="text-xs text-rose-600 italic">ไม่มีห้องว่างพร้อมให้ลงทะเบียนในขณะนี้</p>
+                  <input
+                    type="text"
+                    required
+                    value={requestedRoomId}
+                    onChange={(e) => setRequestedRoomId(e.target.value)}
+                    placeholder="ระบุรหัสห้องพัก (เช่น A101)"
+                    className="w-full px-3.5 py-2.5 text-xs border border-gray-300 rounded-xl bg-white font-medium focus:ring-2 focus:ring-indigo-500"
+                  />
                 )}
               </div>
 
@@ -274,7 +281,7 @@ export const TenantRegisterPage: React.FC = () => {
               {/* Submit */}
               <button
                 type="submit"
-                disabled={rooms.length === 0}
+                disabled={!requestedRoomId || !firstName || !lastName || !phone}
                 className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow-lg transition-all flex items-center justify-center gap-2"
               >
                 <Send className="w-4 h-4" />
