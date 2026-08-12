@@ -189,6 +189,10 @@ test.describe.serial('HORPLUS — Wave 1 Owner Daily Operations Real Playwright 
     test.setTimeout(60000);
 
     await page.goto('/owner/tenants');
+    await page.evaluate((dId) => {
+      localStorage.setItem('selected_dormitory_id', dId);
+    }, dormId);
+    await page.goto('/owner/tenants');
     await page.waitForLoadState('networkidle');
 
     // Click Add Tenant button (NO conditional skip)

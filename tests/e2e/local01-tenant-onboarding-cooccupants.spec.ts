@@ -184,6 +184,12 @@ test.describe.serial('LOCAL-01 — Tenant Onboarding & Co-Occupant Management E2
     await page.goto('/tenant/register');
     await page.waitForLoadState('networkidle');
 
+    // Fill room selection if fallback text input is shown
+    const roomInput = page.locator('input[placeholder*="ระบุรหัสห้องพัก"]');
+    if (await roomInput.isVisible()) {
+      await roomInput.fill(roomIdA);
+    }
+
     // Fill form
     await page.fill('input[placeholder="สมชาย"]', 'Somchai');
     await page.fill('input[placeholder="ใจดี"]', 'RegistrationTest');
