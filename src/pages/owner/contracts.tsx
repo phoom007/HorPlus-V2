@@ -1008,29 +1008,42 @@ export const OwnerContracts: React.FC<OwnerContractsProps> = ({
       }`}>
         <div className="flex justify-between items-center mb-4">
           <h3 className="text-xs font-extrabold text-slate-900 uppercase tracking-wider">สัญญาทั้งหมด ({filteredContracts.length})</h3>
-          <button 
-            type="button"
-            onClick={() => {
-              const target = pendingSubmissions.find(p => p.status === 'pending') || pendingSubmissions[0];
-              if (target) {
-                setSelectedPending(target);
-              } else {
-                setIsPendingListOpen(true);
-              }
-            }} 
-            className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-[10px] rounded-xl flex items-center gap-1.5 transition-all shadow-xs cursor-pointer relative"
-          >
-            <FileCheck2 className="w-3.5 h-3.5" />
-            <span>รออนุมัติสัญญาเช่า</span>
-            {activePendingCount > 0 && (
-              <>
-                <span className="px-1.5 py-0.2 bg-white text-indigo-700 rounded-full text-[9px] font-black shadow-2xs">
-                  {activePendingCount}
-                </span>
-                <span className="w-2.5 h-2.5 bg-rose-500 rounded-full animate-pulse absolute -top-1 -right-1 border-2 border-white shadow-2xs" />
-              </>
-            )}
-          </button>
+          <div className="flex items-center gap-1.5">
+            <button 
+              type="button"
+              onClick={() => {
+                setSelectedContract(null);
+                setIsCreating(true);
+              }}
+              className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white font-extrabold text-[10px] rounded-xl flex items-center gap-1 transition-all shadow-xs cursor-pointer"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>ทำสัญญาเช่าใหม่</span>
+            </button>
+            <button 
+              type="button"
+              onClick={() => {
+                const target = pendingSubmissions.find(p => p.status === 'pending') || pendingSubmissions[0];
+                if (target) {
+                  setSelectedPending(target);
+                } else {
+                  setIsPendingListOpen(true);
+                }
+              }} 
+              className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-[10px] rounded-xl flex items-center gap-1.5 transition-all shadow-xs cursor-pointer relative"
+            >
+              <FileCheck2 className="w-3.5 h-3.5" />
+              <span>รออนุมัติสัญญาเช่า</span>
+              {activePendingCount > 0 && (
+                <>
+                  <span className="px-1.5 py-0.2 bg-white text-indigo-700 rounded-full text-[9px] font-black shadow-2xs">
+                    {activePendingCount}
+                  </span>
+                  <span className="w-2.5 h-2.5 bg-rose-500 rounded-full animate-pulse absolute -top-1 -right-1 border-2 border-white shadow-2xs" />
+                </>
+              )}
+            </button>
+          </div>
         </div>
 
 
