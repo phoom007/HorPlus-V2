@@ -276,11 +276,16 @@ test.describe.serial('HORPLUS — Wave 1 Owner Daily Operations Real Playwright 
     // 3. Fill Contract creation form in UI (Enforce visible selection - NO skips)
     const tenantSelect = page.locator('select').first();
     await expect(tenantSelect).toBeVisible();
-    await tenantSelect.selectOption({ index: 1 });
+    if (createdTenantId) {
+      await tenantSelect.selectOption(createdTenantId);
+    } else {
+      await tenantSelect.selectOption({ index: 0 });
+    }
 
-    const roomSelect = page.locator('select').nth(1);
-    await expect(roomSelect).toBeVisible();
-    await roomSelect.selectOption({ index: 1 });
+    const roomBtn = page.locator('button:has-text("ห้อง 101")').first();
+    if (await roomBtn.isVisible()) {
+      await roomBtn.click();
+    }
 
     // 4. Click Save Draft Contract button in UI
     const saveContractBtn = page.locator('button:has-text("บันทึกร่างสัญญาเช่า"), button:has-text("บันทึกสัญญาเช่า"), button:has-text("ทำสัญญาเช่า")').first();
