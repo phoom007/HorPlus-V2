@@ -24,40 +24,43 @@ export class TenantRegistrationService {
   public async createRequest(dormitoryId: string, payload: CreateRegistrationDto) {
     const prisma = getPrismaClient();
 
-    // 1. Verify requested room belongs to dormitory (supports room ID, roomNumber, or normalizedRoomNumber)
-    const room = await prisma.room.findFirst({
-      where: {
-        dormitoryId,
-        deletedAt: null,
-        OR: [
-          { id: payload.requestedRoomId },
-          { roomNumber: payload.requestedRoomId },
-          { normalizedRoomNumber: payload.requestedRoomId.toUpperCase() },
-        ],
-      },
-    });
-    if (!room) {
-      const err = new Error('ROOM_NOT_FOUND');
-      (err as any).statusCode = 404;
-      (err as any).code = 'ROOM_NOT_FOUND';
-      (err as any).message = 'ไม่พบห้องพักที่ระบุในหอพักนี้';
-      throw err;
-    }
+    let requestedRoomId: string | null = null;
+    if (payload.requestedRoomId) {
+      const room = await prisma.room.findFirst({
+        where: {
+          dormitoryId,
+          deletedAt: null,
+          OR: [
+            { id: payload.requestedRoomId },
+            { roomNumber: payload.requestedRoomId },
+            { normalizedRoomNumber: payload.requestedRoomId.toUpperCase() },
+          ],
+        },
+      });
+      if (!room) {
+        const err = new Error('ROOM_NOT_FOUND');
+        (err as any).statusCode = 404;
+        (err as any).code = 'ROOM_NOT_FOUND';
+        (err as any).message = 'ไม่พบห้องพักที่ระบุในหอพักนี้';
+        throw err;
+      }
 
-    // 2. Check if room is already occupied
-    if (room.status === 'occupied') {
-      const err = new Error('ROOM_ALREADY_OCCUPIED');
-      (err as any).statusCode = 409;
-      (err as any).code = 'ROOM_ALREADY_OCCUPIED';
-      (err as any).message = 'ห้องพักนี้มีผู้เช่าอยู่แล้ว';
-      throw err;
+      if (room.status === 'occupied') {
+        const err = new Error('ROOM_ALREADY_OCCUPIED');
+        (err as any).statusCode = 409;
+        (err as any).code = 'ROOM_ALREADY_OCCUPIED';
+        (err as any).message = 'ห้องพักนี้มีผู้เช่าอยู่แล้ว';
+        throw err;
+      }
+
+      requestedRoomId = room.id;
     }
 
     // 3. Create TenantRegistrationRequest
     return prisma.tenantRegistrationRequest.create({
       data: {
         dormitoryId,
-        requestedRoomId: room.id,
+        requestedRoomId,
         firstName: payload.firstName.trim(),
         lastName: payload.lastName.trim(),
         phone: payload.phone.trim(),
@@ -283,7 +286,7 @@ export class TenantRegistrationService {
 
       // 5. Establish Authoritative Occupancy & Transition Room to Occupied
       let occupancy: any = null;
-      if (req.requestedRoomId) {
+      if (req.requestedRoomId && payload.createContract) {
         occupancy = await tx.occupancy.create({
           data: {
             dormitoryId,

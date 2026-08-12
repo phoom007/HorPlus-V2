@@ -162,23 +162,37 @@ describe('LOCAL-01 — Tenant Onboarding & Co-Occupant Management', () => {
     });
 
     it('should enforce concurrency control: exactly ONE winner and ONE conflict on concurrent approval attempts', async () => {
+      const room = await roomRepo.create(dormA, { roomNumber: '101', floor: 1, type: 'standard', baseRent: '5000' });
+
       // 1. Create 2 registration requests for the same room
       const reqA = await registrationService.createRequest(dormA, {
+        requestedRoomId: room.id,
         firstName: 'ConcurrentA',
         lastName: 'WinnerOrLoser',
         phone: '0812221111',
       });
 
       const reqB = await registrationService.createRequest(dormA, {
+        requestedRoomId: room.id,
         firstName: 'ConcurrentB',
         lastName: 'WinnerOrLoser',
         phone: '0812222222',
       });
 
+      const contractPayload = {
+        createContract: true,
+        startDate: '2026-09-01',
+        endDate: '2027-08-31',
+        durationMonths: 12,
+        rentAmount: '5000',
+        depositAmount: '5000',
+        advancePaymentAmount: '5000',
+      };
+
       // 2. Run concurrent approval attempts using Promise.allSettled
       const results = await Promise.allSettled([
-        registrationService.approveRequest(reqA.id, dormA, { createContract: false }),
-        registrationService.approveRequest(reqB.id, dormA, { createContract: false }),
+        registrationService.approveRequest(reqA.id, dormA, contractPayload),
+        registrationService.approveRequest(reqB.id, dormA, contractPayload),
       ]);
 
       const fulfilled = results.filter((r) => r.status === 'fulfilled');
