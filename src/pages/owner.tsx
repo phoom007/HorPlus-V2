@@ -683,7 +683,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
             tenants={tenants}
             activeUser={user}
             selectedCycle={selectedCycle}
-            setSelectedCycle={setSelectedCycle}
+            setSelectedCycle={(c: string) => setSelectedCycleCode(c)}
             onAddLog={handleAddLog}
             onNavigate={(tab, param) => {
               setActiveTab(tab);
@@ -828,7 +828,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
             onAddLog={handleAddLog}
             onRefreshData={refreshAllData}
             selectedCycle={selectedCycle}
-            onCycleChange={setSelectedCycle}
+            onCycleChange={(c: string) => setSelectedCycleCode(c)}
           />
         );
       default:
@@ -1146,9 +1146,9 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
             <div className="flex items-center justify-between bg-slate-100/80 p-1 rounded-2xl border border-slate-200/50 w-full sm:w-auto sm:min-w-[260px] gap-1">
               <button 
                 onClick={handlePrevCycle}
-                disabled={selectedCycle <= minCycle}
+                disabled={billingCycles.length === 0 || billingCycles.findIndex(c => c.id === selectedBillingCycleId || c.cycleCode === selectedCycleCode) >= billingCycles.length - 1}
                 className={`p-1.5 hover:bg-white text-slate-500 hover:text-slate-900 rounded-xl transition-all cursor-pointer ${
-                  selectedCycle <= minCycle ? 'opacity-25 cursor-not-allowed' : ''
+                  billingCycles.length === 0 || billingCycles.findIndex(c => c.id === selectedBillingCycleId || c.cycleCode === selectedCycleCode) >= billingCycles.length - 1 ? 'opacity-25 cursor-not-allowed' : ''
                 }`}
                 aria-label="ก่อนหน้า"
               >
@@ -1157,8 +1157,6 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
               
               <button 
                 onClick={() => {
-                  const [year] = selectedCycle.split('-');
-                  setTempYear(parseInt(year) || 2026);
                   setIsCycleModalOpen(!isCycleModalOpen);
                 }}
                 className={`flex items-center justify-center gap-1.5 px-2.5 py-1 rounded-xl font-extrabold text-xs text-slate-700 transition-all cursor-pointer flex-1 sm:flex-initial ${isCycleModalOpen ? 'bg-white shadow-xs' : 'hover:bg-white/80'}`}
@@ -1170,9 +1168,9 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
 
               <button 
                 onClick={handleNextCycle}
-                disabled={selectedCycle >= maxCycle}
+                disabled={billingCycles.length === 0 || billingCycles.findIndex(c => c.id === selectedBillingCycleId || c.cycleCode === selectedCycleCode) <= 0}
                 className={`p-1.5 hover:bg-white text-slate-500 hover:text-slate-900 rounded-xl transition-all cursor-pointer ${
-                  selectedCycle >= maxCycle ? 'opacity-25 cursor-not-allowed' : ''
+                  billingCycles.length === 0 || billingCycles.findIndex(c => c.id === selectedBillingCycleId || c.cycleCode === selectedCycleCode) <= 0 ? 'opacity-25 cursor-not-allowed' : ''
                 }`}
                 aria-label="ถัดไป"
               >
@@ -1180,7 +1178,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
               </button>
             </div>
 
-            {/* Dynamic Billing Cycle Selector Dropdown (directly under the block) */}
+            {/* Dynamic Billing Cycle Selector Dropdown */}
             {isCycleModalOpen && (
               <>
                 <div 
@@ -1199,76 +1197,31 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
                     </button>
                   </div>
 
-                  <div className="flex items-center justify-between bg-slate-50 p-1 rounded-2xl border border-slate-100 mb-4">
-                    <button 
-                      onClick={() => setTempYear(prev => {
-                        const minYear = parseInt(minCycle.split('-')[0]);
-                        return prev > minYear ? prev - 1 : prev;
-                      })}
-                      disabled={tempYear <= parseInt(minCycle.split('-')[0])}
-                      className={`p-1.5 hover:bg-white text-slate-500 hover:text-slate-900 rounded-xl transition-all cursor-pointer shadow-2xs ${
-                        tempYear <= parseInt(minCycle.split('-')[0]) ? 'opacity-25 cursor-not-allowed' : ''
-                      }`}
-                    >
-                      <ChevronLeft className="w-3.5 h-3.5" />
-                    </button>
-                    <span className="text-xs font-black text-slate-800">{tempYear + 543}</span>
-                    <button 
-                      onClick={() => setTempYear(prev => {
-                        const maxYear = parseInt(maxCycle.split('-')[0]);
-                        return prev < maxYear ? prev + 1 : prev;
-                      })}
-                      disabled={tempYear >= parseInt(maxCycle.split('-')[0])}
-                      className={`p-1.5 hover:bg-white text-slate-500 hover:text-slate-900 rounded-xl transition-all cursor-pointer shadow-2xs ${
-                        tempYear >= parseInt(maxCycle.split('-')[0]) ? 'opacity-25 cursor-not-allowed' : ''
-                      }`}
-                    >
-                      <ChevronRight className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-
-                  <div className="grid grid-cols-3 gap-1.5">
-                    {[
-                      { val: '01', label: 'มกราคม' },
-                      { val: '02', label: 'กุมภาพันธ์' },
-                      { val: '03', label: 'มีนาคม' },
-                      { val: '04', label: 'เมษายน' },
-                      { val: '05', label: 'พฤษภาคม' },
-                      { val: '06', label: 'มิถุนายน' },
-                      { val: '07', label: 'กรกฎาคม' },
-                      { val: '08', label: 'สิงหาคม' },
-                      { val: '09', label: 'กันยายน' },
-                      { val: '10', label: 'ตุลาคม' },
-                      { val: '11', label: 'พฤศจิกายน' },
-                      { val: '12', label: 'ธันวาคม' }
-                    ].map((m) => {
-                      const targetCycle = `${tempYear}-${m.val}`;
-                      const isSelected = selectedCycle === targetCycle;
-                      const isDisabled = targetCycle < minCycle || targetCycle > maxCycle;
+                  <div className="space-y-1 max-h-60 overflow-y-auto">
+                    {billingCycles.map((c) => {
+                      const isSelected = c.id === selectedBillingCycleId || c.cycleCode === selectedCycleCode;
                       return (
                         <button
-                          key={m.val}
-                          disabled={isDisabled}
+                          key={c.id || c.cycleCode}
                           onClick={() => {
-                            setSelectedCycle(targetCycle);
+                            setSelectedBillingCycleId(c.id);
+                            setSelectedCycleCode(c.cycleCode);
                             setIsCycleModalOpen(false);
                           }}
-                          className={`py-1.5 px-1 text-[10px] font-bold rounded-xl transition-all text-center ${
+                          className={`w-full py-2 px-3 text-left text-xs font-bold rounded-xl transition-all flex items-center justify-between ${
                             isSelected 
-                              ? 'bg-blue-600 hover:bg-blue-700 text-white shadow-sm cursor-pointer' 
-                              : isDisabled
-                                ? 'bg-slate-50 text-slate-300 border border-slate-100/50 cursor-not-allowed opacity-40'
-                                : 'bg-white hover:bg-slate-50 border border-slate-100 text-slate-600 hover:text-slate-800 cursor-pointer'
+                              ? 'bg-blue-600 text-white shadow-sm' 
+                              : 'bg-slate-50 hover:bg-slate-100 text-slate-700'
                           }`}
                         >
-                          {m.label}
+                          <span>ประจำเดือน {getCycleLabel(c.cycleCode)}</span>
+                          <span className="text-[10px] opacity-75">{c.status === 'closed' ? 'ปิดรอบแล้ว' : 'เปิดรอบชำระ'}</span>
                         </button>
                       );
                     })}
                   </div>
                 </div>
               </>
-            )}
           </div>
 
           {/* Right Block: Desktop & Tablet Action Bar (>= sm) */}
