@@ -197,7 +197,7 @@ test.describe.serial('HORPLUS — Wave 1 Owner Daily Operations Real Playwright 
     await addBtn.click();
 
     // Fill Tenant registration wizard
-    const nameInput = page.locator('input[placeholder*="ชื่อ-นามสกุล"]').first();
+    const nameInput = page.locator('input[placeholder*="นพดล"]').first();
     await expect(nameInput).toBeVisible();
     await nameInput.fill('สมชาย ใจดี');
 
