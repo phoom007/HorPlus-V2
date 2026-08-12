@@ -251,10 +251,6 @@ export const OwnerContracts: React.FC<OwnerContractsProps> = ({
       }
     } catch (err: any) {
       setIsSaving(false);
-      setErrorText(err.message || 'เกิดข้อผิดพลาดในการปฏิเสธคำขอ');
-    }
-  };
-    setPendingToast(`ปฏิเสธสัญญาเช่าคุณ${sub.tenantName} เรียบร้อยแล้ว (ผู้เช่าจะได้รับแจ้งเหตุผล)`);
   };
 
   // Navigation & Back state
