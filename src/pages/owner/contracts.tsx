@@ -86,77 +86,7 @@ export interface PendingContractSubmission {
   editNoticeToTenant?: string;
 }
 
-const INITIAL_PENDING_SUBMISSIONS: PendingContractSubmission[] = [
-  {
-    id: 'pending-ct-101',
-    tenantName: 'กิตติศักดิ์ พงษ์ศิริ',
-    phone: '081-234-5678',
-    email: 'kittisak.p@gmail.com',
-    citizenId: '1-1002-34567-89-1',
-    emergencyContactName: 'สมศักดิ์ พงษ์ศิริ (บิดา)',
-    emergencyContactPhone: '089-987-6543',
-    requestedRoomNumber: 'A201',
-    requestedRoomId: '201',
-    startDate: '2026-08-01',
-    endDate: '2027-07-31',
-    stayDate: '2026-08-01',
-    durationMonths: 12,
-    rentAmount: 5500,
-    depositAmount: 11000,
-    depositStatus: 'paid',
-    depositType: 'refundable',
-    terms: '1. ผู้เช่าตกลงชำระค่าเช่าภายในวันที่ 5 ของทุกเดือน หากช้าปรับวันละ 100 บาท\n2. ห้ามเลี้ยงสัตว์เลี้ยงทุกชนิดภายในห้องพัก\n3. ห้ามส่งเสียงดังรบกวนหลังเวลา 22:00 น.',
-    tenantSignature: 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="160" height="60"><path d="M10,40 Q40,10 70,45 T140,20 Q150,30 130,50" stroke="%231e3a8a" stroke-width="2.5" fill="none"/></svg>',
-    submittedAt: '2026-07-24T14:30:00.000Z',
-    status: 'pending'
-  },
-  {
-    id: 'pending-ct-102',
-    tenantName: 'นารีรัตน์ สุขสวัสดิ์',
-    phone: '082-987-6543',
-    email: 'nareerat.s@gmail.com',
-    citizenId: '3-5001-98765-43-2',
-    emergencyContactName: 'วิภา สุขสวัสดิ์ (มารดา)',
-    emergencyContactPhone: '086-543-2109',
-    requestedRoomNumber: '208',
-    requestedRoomId: 'room-208',
-    startDate: '2026-08-01',
-    endDate: '2027-01-31',
-    stayDate: '2026-08-05',
-    durationMonths: 6,
-    rentAmount: 4800,
-    depositAmount: 9600,
-    depositStatus: 'paid',
-    depositType: 'refundable',
-    terms: '1. ตกลงชำระค่าเช่าทุกวันที่ 1 ของเดือน\n2. เงินประกันได้รับคืนเต็มจำนวนเมื่อย้ายออกตามสัญญา\n3. ห้ามเจาะตอกผนังหรือแก้ไขโครงสร้างห้อง',
-    tenantSignature: 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="160" height="60"><path d="M15,35 Q50,5 90,40 T150,25" stroke="%230f766e" stroke-width="2.5" fill="none"/></svg>',
-    submittedAt: '2026-07-24T16:45:00.000Z',
-    status: 'pending'
-  },
-  {
-    id: 'pending-ct-103',
-    tenantName: 'ธีรพงษ์ วงศ์สว่าง',
-    phone: '089-111-2233',
-    email: 'teerapong.w@gmail.com',
-    citizenId: '1-7003-11223-44-5',
-    emergencyContactName: 'ประเสริฐ วงศ์สว่าง (พี่ชาย)',
-    emergencyContactPhone: '081-333-4455',
-    requestedRoomNumber: '105',
-    requestedRoomId: 'room-105',
-    startDate: '2026-08-15',
-    endDate: '2027-08-14',
-    stayDate: '2026-08-15',
-    durationMonths: 12,
-    rentAmount: 6000,
-    depositAmount: 12000,
-    depositStatus: 'paid',
-    depositType: 'refundable',
-    terms: '1. ชำระค่าเช่าตรงเวลาภายในวันที่ 5 ของเดือน\n2. สิทธิ์จอดรถยนต์ 1 คัน (ทะเบียน กข-9999)\n3. ห้ามสูบบุหรี่ภายในห้องพักและบริเวณระเบียง',
-    tenantSignature: 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="160" height="60"><path d="M12,45 C35,10 65,50 110,20 C130,10 145,35 155,25" stroke="%234338ca" stroke-width="2.5" fill="none"/></svg>',
-    submittedAt: '2026-07-25T01:15:00.000Z',
-    status: 'pending'
-  }
-];
+const INITIAL_PENDING_SUBMISSIONS: PendingContractSubmission[] = [];
 
 export const getPendingContractSubmissions = (): PendingContractSubmission[] => {
   try {

@@ -41,6 +41,8 @@ import { MeterService } from '../services/meter.service.js';
 import { BillingService } from '../services/billing.service.js';
 import { LinePlatformAdapter } from '../services/line-platform-adapter.js';
 import { ILineChannelTokenProvider, LineChannelTokenProvider, FakeLineTokenProvider } from '../services/line-channel-token-provider.js';
+import { TenantRegistrationService } from '../services/tenant-registration.service.js';
+import { createTenantRegistrationRouter } from './tenant-registration.routes.js';
 import { createRequireActiveDormitoryMiddleware } from '../middleware/require-dormitory.js';
 
 export interface AppApiDependencies {
@@ -145,6 +147,9 @@ export function createApiRouter(deps: AppApiDependencies | AuthenticationService
     if (fullDeps.tenantService) {
       protectedRouter.use('/tenants', createTenantRouter(fullDeps.authService, fullDeps.tenantService));
     }
+    const tenantRegService = new TenantRegistrationService();
+    protectedRouter.use('/tenant-registrations', createTenantRegistrationRouter(fullDeps.authService, tenantRegService));
+
     if (fullDeps.contractService) {
       protectedRouter.use('/contracts', createContractRouter(fullDeps.authService, fullDeps.contractService));
     }

@@ -39,10 +39,8 @@ export class BillingCycleService {
   ): Promise<{ cycle: BillingCycleEntity; rateSnapshot: BillingRateSnapshotEntity }> {
     const existing = await this.billingCycleRepo.findByCode(dormitoryId, data.cycleCode);
     if (existing) {
-      const err = new Error('DUPLICATE_CYCLE_CODE');
-      (err as any).statusCode = 409;
-      (err as any).code = 'DUPLICATE_CYCLE_CODE';
-      throw err;
+      const snapshot = await this.billingCycleRepo.findRateSnapshot(existing.id, dormitoryId);
+      return { cycle: existing, rateSnapshot: snapshot! };
     }
 
     const periodStart = new Date(data.periodStart);
@@ -62,34 +60,57 @@ export class BillingCycleService {
       throw err;
     }
 
-    const cycle = await this.billingCycleRepo.create(dormitoryId, {
-      cycleCode: data.cycleCode,
-      name: data.name,
-      periodStart,
-      periodEnd,
-      billingDate: new Date(data.billingDate),
-      dueDate: new Date(data.dueDate),
-      status: 'draft',
-      createdByUserId: userId,
-    });
-
-    const rateSnapshot = await this.billingCycleRepo.createRateSnapshot(dormitoryId, {
-      billingCycleId: cycle.id,
-      ...data.rateSnapshot,
-    });
-
-    if (this.auditService) {
-      await this.auditService.log({
-        dormitoryId,
-        actorUserId: userId || 'system',
-        action: 'billing_cycle.create',
-        resourceType: 'billing_cycle',
-        resourceId: cycle.id,
-        details: { cycleCode: cycle.cycleCode, name: cycle.name },
+    try {
+      const cycle = await this.billingCycleRepo.create(dormitoryId, {
+        cycleCode: data.cycleCode,
+        name: data.name,
+        periodStart,
+        periodEnd,
+        billingDate: new Date(data.billingDate),
+        dueDate: new Date(data.dueDate),
+        status: 'draft',
+        createdByUserId: userId,
       });
-    }
 
-    return { cycle, rateSnapshot };
+      const snapshotData = {
+        waterBillingType: data.rateSnapshot?.waterBillingType || 'per_unit',
+        waterRate: data.rateSnapshot?.waterRate !== undefined ? String(data.rateSnapshot.waterRate) : '0.00',
+        electricityBillingType: data.rateSnapshot?.electricityBillingType || 'per_unit',
+        electricityRate: data.rateSnapshot?.electricityRate !== undefined ? String(data.rateSnapshot.electricityRate) : '0.00',
+        commonFee: data.rateSnapshot?.commonFee !== undefined ? String(data.rateSnapshot.commonFee) : '0.00',
+        internetFee: data.rateSnapshot?.internetFee !== undefined ? String(data.rateSnapshot.internetFee) : '0.00',
+        lateFeeType: data.rateSnapshot?.lateFeeType || 'fixed',
+        lateFeeValue: data.rateSnapshot?.lateFeeValue !== undefined ? String(data.rateSnapshot.lateFeeValue) : '0.00',
+        currency: data.rateSnapshot?.currency || 'THB',
+      };
+
+      const rateSnapshot = await this.billingCycleRepo.createRateSnapshot(dormitoryId, {
+        billingCycleId: cycle.id,
+        ...snapshotData,
+      });
+
+      if (this.auditService) {
+        await this.auditService.log({
+          dormitoryId,
+          actorUserId: userId || 'system',
+          action: 'billing_cycle.create',
+          resourceType: 'billing_cycle',
+          resourceId: cycle.id,
+          details: { cycleCode: cycle.cycleCode, name: cycle.name },
+        });
+      }
+
+      return { cycle, rateSnapshot };
+    } catch (err: any) {
+      if (err.code === 'P2002' || (err.message && err.message.includes('unique'))) {
+        const raceExisting = await this.billingCycleRepo.findByCode(dormitoryId, data.cycleCode);
+        if (raceExisting) {
+          const snapshot = await this.billingCycleRepo.findRateSnapshot(raceExisting.id, dormitoryId);
+          return { cycle: raceExisting, rateSnapshot: snapshot! };
+        }
+      }
+      throw err;
+    }
   }
 
   public async getBillingCycles(

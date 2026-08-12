@@ -282,12 +282,29 @@ export class ApiContractAdapter implements ContractDataSource {
 
 export class ApiMeterAdapter implements MeterDataSource {
   async getByCycle(cycleId: string): Promise<MeterReading[]> {
-    return httpRequest<MeterReading[]>('GET', `/meters/cycle/${cycleId}`);
+    try {
+      const res = await httpRequest<{ data: any[] }>('GET', `/meters/readings?billingCycleId=${cycleId}&pageSize=200`);
+      return (res.data || []).map((r: any) => ({
+        id: r.id,
+        cycleId: r.billingCycleId,
+        roomId: r.roomId,
+        roomNumber: r.room?.roomNumber || r.roomId,
+        waterReading: Number(r.meterType === 'water' ? r.currentReading : 0),
+        electricityReading: Number(r.meterType === 'electricity' ? r.currentReading : 0),
+        recordedAt: r.readAt || r.createdAt,
+        ...r
+      }));
+    } catch (err: any) {
+      if (err instanceof HttpClientError && err.domainError.code === 'RESOURCE_NOT_FOUND') return [];
+      throw err;
+    }
   }
 
   async getByRoomAndCycle(roomId: string, cycleId: string): Promise<MeterReading | null> {
     try {
-      return await httpRequest<MeterReading>('GET', `/meters/room/${roomId}/cycle/${cycleId}`);
+      const res = await httpRequest<{ data: any[] }>('GET', `/meters/readings?billingCycleId=${cycleId}&roomId=${roomId}`);
+      const items = res.data || [];
+      return items.length > 0 ? items[0] : null;
     } catch (err: any) {
       if (err instanceof HttpClientError && err.domainError.code === 'RESOURCE_NOT_FOUND') return null;
       throw err;
@@ -296,8 +313,24 @@ export class ApiMeterAdapter implements MeterDataSource {
 
   async saveMeterRecord(record: Omit<MeterReading, 'id' | 'recordedAt'>): Promise<DataResult<MeterReading>> {
     try {
-      const data = await httpRequest<MeterReading>('POST', '/meters', record);
-      return { success: true, data };
+      const data = await httpRequest<MeterReading>('POST', '/meters/readings/bulk', {
+        billingCycleId: (record as any).cycleId || (record as any).billingCycleId,
+        readings: [
+          {
+            roomId: record.roomId,
+            meterType: 'water',
+            previousReading: String((record as any).waterPrev ?? 0),
+            currentReading: String((record as any).waterCurr ?? record.waterReading ?? 0)
+          },
+          {
+            roomId: record.roomId,
+            meterType: 'electricity',
+            previousReading: String((record as any).elecPrev ?? 0),
+            currentReading: String((record as any).elecCurr ?? record.electricityReading ?? 0)
+          }
+        ]
+      });
+      return { success: true, data: data as any };
     } catch (err: any) {
       return {
         success: false,
@@ -306,9 +339,34 @@ export class ApiMeterAdapter implements MeterDataSource {
     }
   }
 
-  async saveBulkMeterRecords(records: Array<Omit<MeterReading, 'id' | 'recordedAt'>>): Promise<DataResult<MeterReading[]>> {
+  async saveBulkMeterRecords(records: Array<Omit<MeterReading, 'id' | 'recordedAt'>>, billingCycleId?: string): Promise<DataResult<MeterReading[]>> {
     try {
-      const data = await httpRequest<MeterReading[]>('POST', '/meters/bulk', { records });
+      const cycleId = billingCycleId || (records[0] as any)?.cycleId || (records[0] as any)?.billingCycleId;
+      const formattedReadings = records.flatMap((r: any) => {
+        const items = [];
+        if (r.waterReading !== undefined || r.waterCurr !== undefined) {
+          items.push({
+            roomId: r.roomId,
+            meterType: 'water',
+            previousReading: String(r.waterPrev ?? 0),
+            currentReading: String(r.waterCurr ?? r.waterReading ?? 0)
+          });
+        }
+        if (r.electricityReading !== undefined || r.elecCurr !== undefined) {
+          items.push({
+            roomId: r.roomId,
+            meterType: 'electricity',
+            previousReading: String(r.elecPrev ?? 0),
+            currentReading: String(r.elecCurr ?? r.electricityReading ?? 0)
+          });
+        }
+        return items;
+      });
+
+      const data = await httpRequest<MeterReading[]>('POST', '/meters/readings/bulk', {
+        billingCycleId: cycleId,
+        readings: formattedReadings
+      });
       return { success: true, data };
     } catch (err: any) {
       return {
@@ -321,12 +379,14 @@ export class ApiMeterAdapter implements MeterDataSource {
 
 export class ApiBillingAdapter implements BillingDataSource {
   async getAll(): Promise<Bill[]> {
-    return httpRequest<Bill[]>('GET', '/bills');
+    const res = await httpRequest<{ data: Bill[] }>('GET', '/bills');
+    return res.data || (res as any);
   }
 
   async getById(id: string): Promise<Bill | null> {
     try {
-      return await httpRequest<Bill>('GET', `/bills/${id}`);
+      const res = await httpRequest<{ data: Bill }>('GET', `/bills/${id}`);
+      return res.data || (res as any);
     } catch (err: any) {
       if (err instanceof HttpClientError && err.domainError.code === 'RESOURCE_NOT_FOUND') return null;
       throw err;
@@ -334,23 +394,29 @@ export class ApiBillingAdapter implements BillingDataSource {
   }
 
   async getByTenantId(tenantId: string): Promise<Bill[]> {
-    return httpRequest<Bill[]>('GET', `/bills/tenant/${tenantId}`);
+    const res = await httpRequest<{ data: Bill[] }>('GET', `/bills?tenantId=${tenantId}`);
+    return res.data || (res as any);
   }
 
   async getByRoomId(roomId: string): Promise<Bill[]> {
-    return httpRequest<Bill[]>('GET', `/bills/room/${roomId}`);
+    const res = await httpRequest<{ data: Bill[] }>('GET', `/bills?roomId=${roomId}`);
+    return res.data || (res as any);
   }
 
   async getByCycle(cycleId: string): Promise<Bill[]> {
-    return httpRequest<Bill[]>('GET', `/bills/cycle/${cycleId}`);
+    const res = await httpRequest<{ data: Bill[] }>('GET', `/bills?billingCycleId=${cycleId}`);
+    return res.data || (res as any);
   }
 
   async generateBillForRoom(roomId: string, cycleId: string): Promise<DataResult<Bill>> {
     try {
-      const data = await httpRequest<Bill>('POST', `/bills/generate/room/${roomId}`, { cycleId }, {
+      const res = await httpRequest<{ data: { bill: Bill } }>('POST', '/bills/generate', {
+        billingCycleId: cycleId,
+        roomId
+      }, {
         idempotencyKey: `gen_bill_${roomId}_${cycleId}`
       });
-      return { success: true, data };
+      return { success: true, data: res.data.bill };
     } catch (err: any) {
       return {
         success: false,
@@ -359,12 +425,15 @@ export class ApiBillingAdapter implements BillingDataSource {
     }
   }
 
-  async generateBulkBills(cycleId: string): Promise<DataResult<Bill[]>> {
+  async generateBulkBills(cycleId: string, roomIds?: string[]): Promise<DataResult<any>> {
     try {
-      const data = await httpRequest<Bill[]>('POST', '/bills/generate/bulk', { cycleId }, {
+      const res = await httpRequest<any>('POST', '/bills/generate/bulk', {
+        billingCycleId: cycleId,
+        roomIds
+      }, {
         idempotencyKey: `gen_bulk_bills_${cycleId}`
       });
-      return { success: true, data };
+      return { success: true, data: res.data || res };
     } catch (err: any) {
       return {
         success: false,
@@ -508,8 +577,6 @@ export class ApiAuditAdapter implements AuditDataSource {
   }
 }
 
-
-
 export class ApiStaffRoleAdapter implements StaffRoleDataSource {
   async getFollowers(params?: { friendStatus?: string; search?: string }): Promise<DataResult<any[]>> {
     try {
@@ -573,16 +640,16 @@ export class ApiTenantRegistrationAdapter implements TenantRegistrationDataSourc
 
   async listRequests(): Promise<DataResult<any[]>> {
     try {
-      const data = await httpRequest<any[]>('GET', '/tenant-registration-requests');
-      return { success: true, data };
+      const res = await httpRequest<{ data: any[] }>('GET', '/tenant-registrations');
+      return { success: true, data: res.data || res };
     } catch (err: any) {
       return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message } };
     }
   }
 
-  async approveRequest(params: { requestId: string; tenantId: string; contractId: string }): Promise<DataResult<any>> {
+  async approveRequest(params: { requestId: string; tenantId?: string; contractId?: string; payload?: any }): Promise<DataResult<any>> {
     try {
-      const data = await httpRequest<any>('POST', `/tenant-registration-requests/${params.requestId}/approve`, params);
+      const data = await httpRequest<any>('POST', `/tenant-registrations/${params.requestId}/approve`, params.payload || params);
       return { success: true, data };
     } catch (err: any) {
       return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message } };
@@ -591,7 +658,7 @@ export class ApiTenantRegistrationAdapter implements TenantRegistrationDataSourc
 
   async rejectRequest(requestId: string, reason: string): Promise<DataResult<any>> {
     try {
-      const data = await httpRequest<any>('POST', `/tenant-registration-requests/${requestId}/reject`, { reason });
+      const data = await httpRequest<any>('POST', `/tenant-registrations/${requestId}/reject`, { reason });
       return { success: true, data };
     } catch (err: any) {
       return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message } };

@@ -328,6 +328,42 @@ export class ContractService {
           },
         });
 
+        // 8.5. Create ACTIVE Occupancy linked to room + tenant + contract
+        const existingActiveOccupancy = await tx.occupancy.findFirst({
+          where: {
+            dormitoryId,
+            roomId: contract.roomId,
+            status: 'ACTIVE',
+            contractId: { not: id },
+          },
+        });
+        if (existingActiveOccupancy) {
+          const err = new Error('มีผู้เข้าพักอยู่ในห้องพักนี้แล้ว');
+          (err as any).code = 'ROOM_ALREADY_OCCUPIED';
+          (err as any).statusCode = 409;
+          throw err;
+        }
+
+        let occupancy = await tx.occupancy.findFirst({
+          where: {
+            dormitoryId,
+            contractId: id,
+            status: 'ACTIVE',
+          },
+        });
+        if (!occupancy) {
+          occupancy = await tx.occupancy.create({
+            data: {
+              dormitoryId,
+              roomId: contract.roomId,
+              tenantId: contract.tenantId,
+              contractId: id,
+              startedAt: contract.startDate || now,
+              status: 'ACTIVE',
+            },
+          });
+        }
+
         // 9. Create ContractStatusHistory
         await tx.contractStatusHistory.create({
           data: {

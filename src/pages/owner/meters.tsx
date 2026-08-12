@@ -1075,11 +1075,27 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     }));
   };
 
-  const handleIssueAllBills = () => {
-    showToast('ฟังก์ชันการออกบิลยังไม่พร้อมใช้งานในระบบขณะนี้');
+  const handleIssueAllBills = async () => {
+    setIsSaving(true);
+    try {
+      const res = await getDataProvider().billing.generateBulkBills(selectedCycle);
+      setIsSaving(false);
+      if (res.success) {
+        showToast('ออกบิลสำหรับรอบบันทึกเรียบร้อยแล้ว');
+        if (onSaveBills) {
+          const bills = await getDataProvider().billing.getByCycle(selectedCycle);
+          onSaveBills(bills);
+        }
+      } else {
+        showToast(res.error?.message || 'เกิดข้อผิดพลาดในการออกบิล');
+      }
+    } catch (err: any) {
+      setIsSaving(false);
+      showToast(err.message || 'เกิดข้อผิดพลาดในการออกบิล');
+    }
   };
 
-  const handleSaveMeters = () => {
+  const handleSaveMeters = async () => {
     if (isSaving) return;
 
     // Validate any half-filled other fees fields
@@ -1108,46 +1124,20 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
 
     setIsSaving(true);
 
-    setTimeout(() => {
-      // Collect any typed but unsaved other fees from inputs before saving
-      let updatedMeterRows = [...meterRows];
-      let hasUnsavedFees = false;
-
-      updatedMeterRows = updatedMeterRows.map(row => {
-        const descEl = document.getElementById(`fee-desc-${row.roomId}`) as HTMLInputElement;
-        const amtEl = document.getElementById(`fee-amt-${row.roomId}`) as HTMLInputElement;
-        if (descEl && amtEl) {
-          const desc = descEl.value.trim();
-          const amt = Number(amtEl.value);
-          if (desc && amt > 0) {
-            hasUnsavedFees = true;
-            descEl.value = '';
-            amtEl.value = '';
-            return {
-              ...row,
-              otherFees: [...(row.otherFees || []), { description: desc, amount: amt }]
-            };
-          }
-        }
-        return row;
-      });
-
-      if (hasUnsavedFees) {
-        setMeterRows(updatedMeterRows);
-      }
-
-      // Save explicitly as UNSAVED form draft only (not authoritative backend persistence)
-      const cacheKey = `meters_form_draft_${selectedCycle}`;
-      setStored(cacheKey, updatedMeterRows);
-
-      // Force update of state and internal reference so checkIsDirty returns false immediately after save
-      setMeterRows(updatedMeterRows);
-      originalRowsRef.current = JSON.parse(JSON.stringify(updatedMeterRows));
-      tempMeterRowsCache[selectedCycle] = updatedMeterRows;
-
+    try {
+      const res = await getDataProvider().meters.saveBulkMeterRecords(meterRows as any, selectedCycle);
       setIsSaving(false);
-      showToast('ฟังก์ชันนี้ยังไม่พร้อมใช้งาน (บันทึกร่างข้อมูลเรียบร้อย)');
-    }, 400);
+      if (res.success) {
+        originalRowsRef.current = JSON.parse(JSON.stringify(meterRows));
+        tempMeterRowsCache[selectedCycle] = meterRows;
+        showToast('บันทึกข้อมูลค่ามิเตอร์เรียบร้อยแล้ว');
+      } else {
+        showToast(res.error?.message || 'เกิดข้อผิดพลาดในการบันทึกค่ามิเตอร์');
+      }
+    } catch (err: any) {
+      setIsSaving(false);
+      showToast(err.message || 'เกิดข้อผิดพลาดในการบันทึกค่ามิเตอร์');
+    }
   };
 
   const autofillMeters = () => {
@@ -1171,8 +1161,8 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   return (
     <div className="space-y-6">
       {/* Draft notice banner */}
-      <div data-testid="meter-draft-notice" className="text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-3 py-2 rounded-xl flex items-center gap-2">
-        <span>(ร่างที่ยังไม่ได้บันทึกลงเซิร์ฟเวอร์)</span>
+      <div data-testid="meter-draft-notice" className="text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-3 py-2 rounded-xl flex items-center gap-2">
+        <span>ระบบบันทึกค่ามิเตอร์เชื่อมต่อเซิร์ฟเวอร์หลักแล้ว</span>
       </div>
       {/* Floating Toast Notification (Mobile: Centered above bottom nav, White bg, Smooth Fade) */}
       {(saveSuccess || toastMessage) && (

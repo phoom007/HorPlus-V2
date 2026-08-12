@@ -171,6 +171,55 @@ export class MeterService {
     return { oldDevice: updatedOld, newDevice, replacement };
   }
 
+  public async resolveAuthoritativePreviousReading(
+    dormitoryId: string,
+    billingCycleId: string,
+    roomId: string,
+    meterType: 'water' | 'electricity',
+    tx?: any
+  ): Promise<string> {
+    // 1. Find prior billing cycle reading for this room and meter type
+    const cycle = await this.billingCycleRepo.findById(billingCycleId, dormitoryId);
+    if (cycle) {
+      const cycles = await this.billingCycleRepo.findAll(dormitoryId, { sortDirection: 'desc', pageSize: 100 });
+      const priorCycles = cycles.items.filter((c) => c.periodStart < cycle.periodStart);
+      for (const priorCycle of priorCycles) {
+        const priorReading = await this.meterRepo.findReadingByCycleRoomAndType(
+          dormitoryId,
+          priorCycle.id,
+          roomId,
+          meterType,
+          tx
+        );
+        if (priorReading) {
+          return priorReading.currentReading;
+        }
+      }
+    }
+
+    // 2. Find active MeterDevice initial / current reading
+    const device = await this.meterRepo.findDeviceByRoomAndType(dormitoryId, roomId, meterType, tx);
+    if (device && device.initialReading !== undefined && device.initialReading !== null) {
+      return String(device.initialReading);
+    }
+
+    // 3. Find Room initial meter value
+    const room = await this.roomRepo.findById(roomId, dormitoryId);
+    if (room) {
+      const roomObj = room as any;
+      if (meterType === 'water') {
+        const val = room.initialWaterReading ?? roomObj.initialWaterMeter;
+        if (val !== undefined && val !== null) return String(val);
+      }
+      if (meterType === 'electricity') {
+        const val = room.initialElectricityReading ?? roomObj.initialElectricMeter;
+        if (val !== undefined && val !== null) return String(val);
+      }
+    }
+
+    return '0.00';
+  }
+
   // --- Meter Readings ---
   public async submitBulkReadings(
     dormitoryId: string,
@@ -213,7 +262,16 @@ export class MeterService {
           }
         }
 
-        const prevVal = Number(item.previousReading);
+        // Derive authoritative previous reading from server DB
+        const authPrev = await this.resolveAuthoritativePreviousReading(
+          dormitoryId,
+          data.billingCycleId,
+          item.roomId,
+          item.meterType,
+          tx
+        );
+
+        const prevVal = Number(authPrev);
         const currVal = Number(item.currentReading);
 
         if (isNaN(prevVal) || isNaN(currVal) || prevVal < 0 || currVal < 0) {
@@ -238,12 +296,16 @@ export class MeterService {
 
         if (!device) {
           // Auto-create active device if missing
-          device = await this.meterRepo.createDevice(dormitoryId, {
-            roomId: item.roomId,
-            type: item.meterType,
-            meterNumber: `${item.meterType.toUpperCase()}-${item.roomId.slice(-4)}`,
-            initialReading: item.previousReading,
-          }, tx);
+          device = await this.meterRepo.createDevice(
+            dormitoryId,
+            {
+              roomId: item.roomId,
+              type: item.meterType,
+              meterNumber: `${item.meterType.toUpperCase()}-${item.roomId.slice(-4)}`,
+              initialReading: authPrev,
+            },
+            tx
+          );
         }
 
         const usageUnits = (currVal - prevVal).toFixed(2);
@@ -262,7 +324,7 @@ export class MeterService {
             existingReading.id,
             dormitoryId,
             {
-              previousReading: item.previousReading,
+              previousReading: authPrev,
               currentReading: item.currentReading,
               usageUnits,
               readAt: item.readAt ? new Date(item.readAt) : new Date(),
@@ -274,19 +336,23 @@ export class MeterService {
           );
           reading = updated!;
         } else {
-          reading = await this.meterRepo.createReading(dormitoryId, {
-            billingCycleId: data.billingCycleId,
-            roomId: item.roomId,
-            meterDeviceId: device.id,
-            meterType: item.meterType,
-            previousReading: item.previousReading,
-            currentReading: item.currentReading,
-            usageUnits,
-            readAt: item.readAt ? new Date(item.readAt) : new Date(),
-            readByUserId: userId,
-            status: 'draft',
-            notes: item.notes,
-          }, tx);
+          reading = await this.meterRepo.createReading(
+            dormitoryId,
+            {
+              billingCycleId: data.billingCycleId,
+              roomId: item.roomId,
+              meterDeviceId: device.id,
+              meterType: item.meterType,
+              previousReading: authPrev,
+              currentReading: item.currentReading,
+              usageUnits,
+              readAt: item.readAt ? new Date(item.readAt) : new Date(),
+              readByUserId: userId,
+              status: 'draft',
+              notes: item.notes,
+            },
+            tx
+          );
         }
         createdReadings.push(reading);
       }
@@ -304,8 +370,6 @@ export class MeterService {
       }
       return readings;
     });
-
-
   }
 
   public async getMeterReadings(
@@ -374,6 +438,13 @@ export class MeterService {
     );
 
     if (!updated) {
+      if (expectedVersion !== undefined && reading.version !== expectedVersion) {
+        const err = new Error('STALE_VERSION');
+        (err as any).statusCode = 409;
+        (err as any).code = 'STALE_VERSION';
+        (err as any).message = 'ข้อมูลถูกแก้ไขโดยผู้อื่นแล้ว กรุณารีเฟรชข้อมูล';
+        throw err;
+      }
       const err = new Error('METER_READING_NOT_FOUND');
       (err as any).statusCode = 404;
       (err as any).code = 'METER_READING_NOT_FOUND';

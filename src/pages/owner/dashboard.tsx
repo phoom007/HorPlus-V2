@@ -198,7 +198,7 @@ export const OwnerDashboard: React.FC<OwnerDashboardProps> = ({
 
 
   const formatDueDateThai = (cycleStr: string) => {
-    if (!cycleStr) return 'กำหนดชำระ: 30 มิ.ย. 2569';
+    if (!cycleStr) return '';
     const parts = cycleStr.split('-');
     if (parts.length === 2) {
       const yearCE = parseInt(parts[0], 10);
