@@ -86,6 +86,8 @@ export class TenantRegistrationService {
       where: { dormitoryId },
       orderBy: { createdAt: 'desc' },
     });
+  }
+
   public async getRequestById(id: string, dormitoryId: string) {
     const prisma = getPrismaClient();
     const req = await prisma.tenantRegistrationRequest.findFirst({
