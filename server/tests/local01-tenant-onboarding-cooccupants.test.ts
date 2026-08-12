@@ -152,16 +152,57 @@ describe('LOCAL-01 — Tenant Onboarding & Co-Occupant Management', () => {
   });
 
   describe('Registration Approval Concurrency, Idempotency & Rollback Safety', () => {
+    const buildingId = '33333333-3333-4333-8333-333333333333';
+    const roomId = '44444444-4444-4444-8444-444444444444';
+
+    beforeEach(async () => {
+      const prisma = getPrismaClient();
+      // Clean up from prior runs (order respects FK constraints)
+      await prisma.occupancy.deleteMany({ where: { dormitoryId: dormA } });
+      await prisma.contract.deleteMany({ where: { dormitoryId: dormA } });
+      await prisma.tenant.deleteMany({ where: { dormitoryId: dormA } });
+      await prisma.tenantRegistrationRequest.deleteMany({ where: { dormitoryId: dormA } });
+      await prisma.room.deleteMany({ where: { dormitoryId: dormA } });
+      await prisma.building.deleteMany({ where: { dormitoryId: dormA } });
+
+      // Create shared building + room
+      await prisma.building.create({
+        data: { id: buildingId, dormitoryId: dormA, name: 'Building 1', code: 'B1' },
+      });
+      await prisma.room.create({
+        data: {
+          id: roomId,
+          dormitoryId: dormA,
+          buildingId,
+          roomNumber: '101',
+          normalizedRoomNumber: '101',
+          floor: 1,
+          roomType: 'standard',
+          monthlyRent: '5000',
+          status: 'vacant',
+        },
+      });
+    });
+
     it('should reject duplicate approval attempt on an already approved request (idempotency)', async () => {
-      // 1. Create registration request
+      // 1. Create registration request with a valid room (schema requires requestedRoomId)
       const req = await registrationService.createRequest(dormA, {
+        requestedRoomId: roomId,
         firstName: 'Idempotent',
         lastName: 'Test',
         phone: '0819991111',
       });
 
-      // 2. Approve request once
-      const approved = await registrationService.approveRequest(req.id, dormA, { createContract: false });
+      // 2. Approve request once (with contract to exercise full path)
+      const approved = await registrationService.approveRequest(req.id, dormA, {
+        createContract: true,
+        startDate: '2026-09-01',
+        endDate: '2027-08-31',
+        durationMonths: 12,
+        rentAmount: '5000',
+        depositAmount: '5000',
+        advancePaymentAmount: '5000',
+      });
       expect(approved.request.status).toBe('approved');
 
       // 3. Second approval attempt must fail with INVALID_REQUEST_STATUS
@@ -171,24 +212,16 @@ describe('LOCAL-01 — Tenant Onboarding & Co-Occupant Management', () => {
     });
 
     it('should enforce concurrency control: exactly ONE winner and ONE conflict on concurrent approval attempts', async () => {
-      const prisma = getPrismaClient();
-      const building = await prisma.building.create({
-        data: { dormitoryId: dormA, name: 'Building 1', code: 'B1' },
-      });
-      const room = await prisma.room.create({
-        data: { dormitoryId: dormA, buildingId: building.id, roomNumber: '101', normalizedRoomNumber: '101', floor: 1, type: 'standard', baseRent: '5000', status: 'vacant' },
-      });
-
       // 1. Create 2 registration requests for the same room
       const reqA = await registrationService.createRequest(dormA, {
-        requestedRoomId: room.id,
+        requestedRoomId: roomId,
         firstName: 'ConcurrentA',
         lastName: 'WinnerOrLoser',
         phone: '0812221111',
       });
 
       const reqB = await registrationService.createRequest(dormA, {
-        requestedRoomId: room.id,
+        requestedRoomId: roomId,
         firstName: 'ConcurrentB',
         lastName: 'WinnerOrLoser',
         phone: '0812222222',
@@ -226,3 +259,4 @@ describe('LOCAL-01 — Tenant Onboarding & Co-Occupant Management', () => {
     });
   });
 });
+
