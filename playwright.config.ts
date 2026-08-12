@@ -54,7 +54,7 @@ export default defineConfig({
       command: 'npm run dev',
       cwd: './server',
       url: 'http://127.0.0.1:3101/health/liveness',
-      reuseExistingServer: false,
+      reuseExistingServer: !process.env.CI,
       timeout: 60000,
       stdout: 'pipe',
       env: {
@@ -72,7 +72,7 @@ export default defineConfig({
     {
       command: 'npx vite --port 5174 --host 127.0.0.1',
       url: 'http://127.0.0.1:5174',
-      reuseExistingServer: false,
+      reuseExistingServer: !process.env.CI,
       timeout: 60000,
       env: {
         ...process.env,

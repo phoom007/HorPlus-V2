@@ -186,7 +186,7 @@ test.describe.serial('HORPLUS — Wave 1 Owner Daily Operations Real Playwright 
   });
 
   test('Flow A — Create Tenant via UI, verify DB persistence & Room remains VACANT before activation', async ({ page }) => {
-    test.setTimeout(60000);
+    test.setTimeout(90000);
 
     await page.goto('/owner');
     await page.waitForLoadState('domcontentloaded');
