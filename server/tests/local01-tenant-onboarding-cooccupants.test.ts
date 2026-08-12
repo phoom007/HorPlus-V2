@@ -176,7 +176,7 @@ describe('LOCAL-01 — Tenant Onboarding & Co-Occupant Management', () => {
         data: { dormitoryId: dormA, name: 'Building 1', code: 'B1' },
       });
       const room = await prisma.room.create({
-        data: { dormitoryId: dormA, buildingId: building.id, roomNumber: '101', floor: 1, type: 'standard', baseRent: '5000', status: 'vacant' },
+        data: { dormitoryId: dormA, buildingId: building.id, roomNumber: '101', normalizedRoomNumber: '101', floor: 1, type: 'standard', baseRent: '5000', status: 'vacant' },
       });
 
       // 1. Create 2 registration requests for the same room
