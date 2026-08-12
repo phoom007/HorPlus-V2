@@ -305,7 +305,7 @@ export function PaymentsOwnerView({
   const unpaidBills = bills.filter(b => {
     const s = (b.status || '').toLowerCase();
     const hasActivePayment = payments.some(p => p.billId === b.id && ['PENDING', 'UNDER_REVIEW', 'APPROVED'].includes(p.status));
-    return (s === 'pending' || s === 'overdue' || s === 'issued' || s === 'published') && !hasActivePayment;
+    return (s === 'unpaid' || s === 'pending' || s === 'overdue' || s === 'issued' || s === 'published') && !hasActivePayment;
   });
   const paidPayments = payments.filter(p => p.status === 'APPROVED');
 
