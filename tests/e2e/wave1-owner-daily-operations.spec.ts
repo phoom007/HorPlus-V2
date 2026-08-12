@@ -306,7 +306,7 @@ test.describe.serial('HORPLUS — Wave 1 Owner Daily Operations Real Playwright 
     await page.goto('/owner/contracts');
     await page.waitForLoadState('networkidle');
 
-    const contractItem = page.locator('div:has-text("ห้อง 101")').first();
+    const contractItem = page.locator('div.cursor-pointer:has-text("ห้อง 101")').first();
     if (await contractItem.isVisible()) {
       await contractItem.click();
     }
