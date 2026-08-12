@@ -288,9 +288,9 @@ test.describe.serial('HORPLUS — Wave 1 Owner Daily Operations Real Playwright 
     }
 
     // 4. Click Save Draft Contract button in UI & await response
-    const contractPromise = page.waitForResponse((res) => res.url().includes('/api/v1/contracts') && res.request().method() === 'POST' && res.status() === 201);
     const saveContractBtn = page.locator('button:has-text("บันทึกสัญญา"), button:has-text("บันทึกร่างสัญญาเช่า"), button:has-text("ทำสัญญาเช่า")').first();
     await expect(saveContractBtn).toBeVisible();
+    const contractPromise = page.waitForResponse((res) => res.url().includes('/api/v1/contracts') && res.request().method() === 'POST' && res.status() === 201);
     await saveContractBtn.click();
     await contractPromise;
 
