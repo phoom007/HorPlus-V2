@@ -1,4 +1,9 @@
 import { describe, it, expect, beforeEach } from 'vitest';
+import supertest from 'supertest';
+import crypto from 'crypto';
+import { createApp } from '../src/app.js';
+import { SessionTokenService } from '../src/services/session-token.service.js';
+import { subscriptionEntitlementService } from '../src/services/subscription-entitlement.service.js';
 import { TenantRegistrationService } from '../src/services/tenant-registration.service.js';
 import { TenantService } from '../src/services/tenant.service.js';
 import { InMemoryTenantRepository } from '../src/db/repositories/tenant.repository.js';
@@ -368,6 +373,295 @@ describe('LOCAL-01 — Tenant Onboarding & Co-Occupant Management', () => {
       // Loser remains pending
       const check = await registrationService.getRequestById(req2.id, dormA);
       expect(check.status).toBe('pending_owner_approval');
+    });
+  });
+
+  describe('Security & Authorization Boundary (Phase 9 & Phase 10)', () => {
+    let app: any;
+    let dormAId: string;
+    let dormBId: string;
+    let userAId: string;
+    let userBId: string;
+    let userCId: string;
+    let sessionTokenA: string;
+    let sessionTokenB: string;
+    let sessionTokenC: string;
+    let reqAId: string;
+    let reqBId: string;
+    let roomAId: string;
+
+    beforeEach(async () => {
+      await subscriptionEntitlementService.ensureSeeded();
+      app = createApp({ forcePrisma: true });
+      const prisma = getPrismaClient();
+
+      const sessionSecret = process.env.SESSION_ENCRYPTION_KEY || '0123456789abcdef0123456789abcdef';
+      const tokenService = new SessionTokenService(sessionSecret);
+
+      // Create User A & Dorm A
+      const emailA = `sec-owner-a-${Date.now()}-${Math.random()}@example.com`;
+      const userA = await prisma.user.create({
+        data: {
+          email: emailA,
+          emailNormalized: emailA.toLowerCase(),
+          name: 'Sec Owner A',
+          googleSubject: `sub-sec-a-${Date.now()}-${Math.random()}`,
+          status: 'active',
+        },
+      });
+      userAId = userA.id;
+
+      const dormAObj = await prisma.dormitory.create({
+        data: {
+          name: `Sec Dorm A ${Date.now()}`,
+          code: `SDA-${Date.now()}`,
+          status: 'active',
+          createdByUserId: userA.id,
+        },
+      });
+      dormAId = dormAObj.id;
+
+      const roleOwnerA = await prisma.role.create({
+        data: { dormitoryId: dormAId, code: 'OWNER', name: 'Owner', isSystem: true, permissions: ['*'] },
+      });
+      await prisma.dormitoryMember.create({
+        data: {
+          dormitoryId: dormAId,
+          userId: userAId,
+          roleId: roleOwnerA.id,
+          status: 'active',
+        },
+      });
+
+      const sidA = crypto.randomUUID();
+      const sidAHash = SessionTokenService.hashSessionId(sidA);
+      await prisma.session.create({
+        data: { user: { connect: { id: userAId } }, sessionIdHash: sidAHash, expiresAt: new Date(Date.now() + 86400000), status: 'active' },
+      });
+      sessionTokenA = tokenService.encryptToken({ sub: userAId, sid: sidA, type: 'session', version: 1 }, 86400);
+
+      // Create User B & Dorm B
+      const emailB = `sec-owner-b-${Date.now()}-${Math.random()}@example.com`;
+      const userB = await prisma.user.create({
+        data: {
+          email: emailB,
+          emailNormalized: emailB.toLowerCase(),
+          name: 'Sec Owner B',
+          googleSubject: `sub-sec-b-${Date.now()}-${Math.random()}`,
+          status: 'active',
+        },
+      });
+      userBId = userB.id;
+
+      const dormBObj = await prisma.dormitory.create({
+        data: {
+          name: `Sec Dorm B ${Date.now()}`,
+          code: `SDB-${Date.now()}`,
+          status: 'active',
+          createdByUserId: userB.id,
+        },
+      });
+      dormBId = dormBObj.id;
+
+      const roleOwnerB = await prisma.role.create({
+        data: { dormitoryId: dormBId, code: 'OWNER', name: 'Owner', isSystem: true, permissions: ['*'] },
+      });
+      await prisma.dormitoryMember.create({
+        data: {
+          dormitoryId: dormBId,
+          userId: userBId,
+          roleId: roleOwnerB.id,
+          status: 'active',
+        },
+      });
+
+      const sidB = crypto.randomUUID();
+      const sidBHash = SessionTokenService.hashSessionId(sidB);
+      await prisma.session.create({
+        data: { user: { connect: { id: userBId } }, sessionIdHash: sidBHash, expiresAt: new Date(Date.now() + 86400000), status: 'active' },
+      });
+      sessionTokenB = tokenService.encryptToken({ sub: userBId, sid: sidB, type: 'session', version: 1 }, 86400);
+
+      // Create User C (TECH role in Dorm A — no tenant:read permission)
+      const emailC = `sec-tech-c-${Date.now()}-${Math.random()}@example.com`;
+      const userC = await prisma.user.create({
+        data: {
+          email: emailC,
+          emailNormalized: emailC.toLowerCase(),
+          name: 'Sec Tech C',
+          googleSubject: `sub-sec-c-${Date.now()}-${Math.random()}`,
+          status: 'active',
+        },
+      });
+      userCId = userC.id;
+
+      const roleTechA = await prisma.role.create({
+        data: { dormitoryId: dormAId, code: 'TECH', name: 'Tech', isSystem: true, permissions: ['maintenance:*'] },
+      });
+      await prisma.dormitoryMember.create({
+        data: {
+          dormitoryId: dormAId,
+          userId: userCId,
+          roleId: roleTechA.id,
+          status: 'active',
+        },
+      });
+
+      const sidC = crypto.randomUUID();
+      const sidCHash = SessionTokenService.hashSessionId(sidC);
+      await prisma.session.create({
+        data: { user: { connect: { id: userCId } }, sessionIdHash: sidCHash, expiresAt: new Date(Date.now() + 86400000), status: 'active' },
+      });
+      sessionTokenC = tokenService.encryptToken({ sub: userCId, sid: sidC, type: 'session', version: 1 }, 86400);
+
+      // Rooms in Dorm A & Dorm B
+      const buildingA = await prisma.building.create({
+        data: { dormitoryId: dormAId, name: 'Bldg A', floorCount: 1 },
+      });
+      const roomA = await prisma.room.create({
+        data: { dormitoryId: dormAId, buildingId: buildingA.id, roomNumber: 'R101', normalizedRoomNumber: 'R101', status: 'vacant', monthlyRent: '5000' },
+      });
+      roomAId = roomA.id;
+
+      const buildingB = await prisma.building.create({
+        data: { dormitoryId: dormBId, name: 'Bldg B', floorCount: 1 },
+      });
+      const roomB = await prisma.room.create({
+        data: { dormitoryId: dormBId, buildingId: buildingB.id, roomNumber: 'R201', normalizedRoomNumber: 'R201', status: 'vacant', monthlyRent: '6000' },
+      });
+
+      // Registration Requests in Dorm A & Dorm B
+      const reqA = await prisma.tenantRegistrationRequest.create({
+        data: {
+          dormitoryId: dormAId,
+          requestedRoomId: roomA.id,
+          firstName: 'ApplicantA',
+          lastName: 'DormA',
+          phone: '0811119999',
+          note: 'Secret Note A',
+          status: 'pending_owner_approval',
+        },
+      });
+      reqAId = reqA.id;
+
+      const reqB = await prisma.tenantRegistrationRequest.create({
+        data: {
+          dormitoryId: dormBId,
+          requestedRoomId: roomB.id,
+          firstName: 'ApplicantB',
+          lastName: 'DormB',
+          phone: '0822229999',
+          note: 'Secret Note B',
+          status: 'pending_owner_approval',
+        },
+      });
+      reqBId = reqB.id;
+    });
+
+    it('Test A — Anonymous public submission succeeds without granting authority', async () => {
+      const res = await supertest(app)
+        .post('/api/v1/tenant-registrations')
+        .send({
+          dormitoryId: dormAId,
+          requestedRoomId: roomAId,
+          firstName: 'PublicAnon',
+          lastName: 'Applicant',
+          phone: '0899990000',
+          note: 'Public submission test',
+        });
+
+      expect(res.status).toBe(201);
+      expect(res.body.data).toBeDefined();
+      expect(res.body.data.status).toBe('pending_owner_approval');
+      expect(res.body.data.firstName).toBe('PublicAnon');
+      expect(res.headers['set-cookie']).toBeUndefined(); // Zero session/authority granted
+    });
+
+    it('Test B — Anonymous private list is rejected (401) with zero PII leakage', async () => {
+      const res = await supertest(app)
+        .get('/api/v1/tenant-registrations')
+        .set('x-dormitory-id', dormAId);
+
+      expect(res.status).toBe(401);
+      const text = JSON.stringify(res.body);
+      expect(text).not.toContain('ApplicantA');
+      expect(text).not.toContain('0811119999');
+      expect(text).not.toContain('Secret Note A');
+    });
+
+    it('Test C — Anonymous private detail is rejected (401) with zero PII leakage', async () => {
+      const res = await supertest(app)
+        .get(`/api/v1/tenant-registrations/${reqAId}`)
+        .set('x-dormitory-id', dormAId);
+
+      expect(res.status).toBe(401);
+      const text = JSON.stringify(res.body);
+      expect(text).not.toContain('ApplicantA');
+      expect(text).not.toContain('0811119999');
+      expect(text).not.toContain('Secret Note A');
+    });
+
+    it('Test D — Same-dorm authorized read succeeds for Owner', async () => {
+      const res = await supertest(app)
+        .get('/api/v1/tenant-registrations')
+        .set('Cookie', `horplus_session=${sessionTokenA}`)
+        .set('x-dormitory-id', dormAId);
+
+      expect(res.status).toBe(200);
+      expect(Array.isArray(res.body.data)).toBe(true);
+      expect(res.body.data.some((r: any) => r.id === reqAId)).toBe(true);
+    });
+
+    it('Test E — Cross-dorm list attack is rejected (403) with zero Dorm B PII leakage', async () => {
+      // User A (belongs ONLY to Dorm A) sends GET with x-dormitory-id: Dorm B
+      const res = await supertest(app)
+        .get('/api/v1/tenant-registrations')
+        .set('Cookie', `horplus_session=${sessionTokenA}`)
+        .set('x-dormitory-id', dormBId);
+
+      expect(res.status).toBe(403);
+      const text = JSON.stringify(res.body);
+      expect(text).not.toContain('ApplicantB');
+      expect(text).not.toContain('0822229999');
+      expect(text).not.toContain('Secret Note B');
+    });
+
+    it('Test F — Cross-dorm detail attack is rejected with zero PII leakage', async () => {
+      // User A (belongs ONLY to Dorm A) attempts to read Dorm B request ID
+      // Scenario F1: User A sends x-dormitory-id: Dorm B -> 403 FORBIDDEN
+      const res1 = await supertest(app)
+        .get(`/api/v1/tenant-registrations/${reqBId}`)
+        .set('Cookie', `horplus_session=${sessionTokenA}`)
+        .set('x-dormitory-id', dormBId);
+
+      expect(res1.status).toBe(403);
+      const text1 = JSON.stringify(res1.body);
+      expect(text1).not.toContain('ApplicantB');
+      expect(text1).not.toContain('0822229999');
+
+      // Scenario F2: User A sends x-dormitory-id: Dorm A -> 404 NOT FOUND (non-enumerating)
+      const res2 = await supertest(app)
+        .get(`/api/v1/tenant-registrations/${reqBId}`)
+        .set('Cookie', `horplus_session=${sessionTokenA}`)
+        .set('x-dormitory-id', dormAId);
+
+      expect(res2.status).toBe(404);
+      const text2 = JSON.stringify(res2.body);
+      expect(text2).not.toContain('ApplicantB');
+      expect(text2).not.toContain('0822229999');
+    });
+
+    it('Test G — Unauthorized role (TECH) is denied read access (403) with zero PII leakage', async () => {
+      // User C has TECH role in Dorm A (no tenant:read privilege)
+      const res = await supertest(app)
+        .get('/api/v1/tenant-registrations')
+        .set('Cookie', `horplus_session=${sessionTokenC}`)
+        .set('x-dormitory-id', dormAId);
+
+      expect(res.status).toBe(403);
+      const text = JSON.stringify(res.body);
+      expect(text).not.toContain('ApplicantA');
+      expect(text).not.toContain('0811119999');
     });
   });
 });

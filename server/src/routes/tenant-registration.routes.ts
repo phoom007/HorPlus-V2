@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import { AuthenticationService } from '../services/auth.service.js';
 import { TenantRegistrationService } from '../services/tenant-registration.service.js';
 import { createRequireSessionMiddleware } from '../middleware/require-session.js';
-import { requireDormitoryPermission } from '../middleware/permission.js';
+import { requireDormitoryPermission, resolveDormitoryContextMiddleware } from '../middleware/permission.js';
 import { requireDormitoryWriteEntitlement } from '../middleware/entitlement.js';
 import { ApproveRegistrationSchema } from '../schemas/property-tenant-contract.schemas.js';
 
@@ -13,13 +13,19 @@ export function createTenantRegistrationRouter(
   const router = Router();
   const requireSession = createRequireSessionMiddleware(authService);
 
-  const mutationGuard = (permission: string) => [
-    requireDormitoryPermission(permission),
-    requireDormitoryWriteEntitlement,
-  ];
+  const getAuthoritativeDormitoryId = (req: Request): string => {
+    const dormId = (req as any).dormitoryContext?.dormitoryId || req.auth?.dormitoryId;
+    if (!dormId) {
+      const err = new Error('DORMITORY_ID_REQUIRED');
+      (err as any).statusCode = 400;
+      (err as any).code = 'DORMITORY_ID_REQUIRED';
+      throw err;
+    }
+    return dormId;
+  };
 
-  const getDormitoryId = (req: Request): string => {
-    const dormId = (req.headers['x-dormitory-id'] as string) || req.auth?.dormitoryId || req.body?.dormitoryId;
+  const getPublicDormitoryId = (req: Request): string => {
+    const dormId = (req.body?.dormitoryId as string) || (req.headers['x-dormitory-id'] as string) || (req.query?.dormitoryId as string);
     if (!dormId) {
       const err = new Error('DORMITORY_ID_REQUIRED');
       (err as any).statusCode = 400;
@@ -60,10 +66,10 @@ export function createTenantRegistrationRouter(
     });
   };
 
-  // POST /api/v1/tenant-registrations
+  // 1. PUBLIC ENDPOINT: POST /api/v1/tenant-registrations
   router.post('/', async (req: Request, res: Response) => {
     try {
-      const dormId = getDormitoryId(req);
+      const dormId = getPublicDormitoryId(req);
       const { requestedRoomId, firstName, lastName, phone, note } = req.body || {};
       if (!requestedRoomId || !firstName || !lastName || !phone) {
         return res.status(400).json({
@@ -90,10 +96,20 @@ export function createTenantRegistrationRouter(
     }
   });
 
+  // 2. PROTECTED PRIVATE ENDPOINTS
+  const privateRouter = Router();
+  privateRouter.use(requireSession);
+  privateRouter.use(resolveDormitoryContextMiddleware);
+
+  const mutationGuard = (permission: string) => [
+    requireDormitoryPermission(permission),
+    requireDormitoryWriteEntitlement,
+  ];
+
   // GET /api/v1/tenant-registrations
-  router.get('/', requireSession, async (req: Request, res: Response) => {
+  privateRouter.get('/', requireDormitoryPermission('tenant:read'), async (req: Request, res: Response) => {
     try {
-      const dormId = getDormitoryId(req);
+      const dormId = getAuthoritativeDormitoryId(req);
       const requests = await registrationService.listRequests(dormId);
       res.json({ data: requests });
     } catch (err) {
@@ -102,9 +118,9 @@ export function createTenantRegistrationRouter(
   });
 
   // GET /api/v1/tenant-registrations/:id
-  router.get('/:id', requireSession, async (req: Request, res: Response) => {
+  privateRouter.get('/:id', requireDormitoryPermission('tenant:read'), async (req: Request, res: Response) => {
     try {
-      const dormId = getDormitoryId(req);
+      const dormId = getAuthoritativeDormitoryId(req);
       const request = await registrationService.getRequestById(req.params.id, dormId);
       res.json({ data: request });
     } catch (err) {
@@ -113,10 +129,10 @@ export function createTenantRegistrationRouter(
   });
 
   // PATCH /api/v1/tenant-registrations/:id
-  router.patch('/:id', requireSession, mutationGuard('tenant:write'), async (req: Request, res: Response) => {
+  privateRouter.patch('/:id', ...mutationGuard('tenant:write'), async (req: Request, res: Response) => {
     if (!verifyCsrf(req, res)) return;
     try {
-      const dormId = getDormitoryId(req);
+      const dormId = getAuthoritativeDormitoryId(req);
       const { requestedRoomId } = req.body || {};
       if (!requestedRoomId) {
         return res.status(400).json({
@@ -137,10 +153,10 @@ export function createTenantRegistrationRouter(
   });
 
   // POST /api/v1/tenant-registrations/:id/approve
-  router.post('/:id/approve', requireSession, mutationGuard('tenant:write'), async (req: Request, res: Response) => {
+  privateRouter.post('/:id/approve', ...mutationGuard('tenant:write'), async (req: Request, res: Response) => {
     if (!verifyCsrf(req, res)) return;
     try {
-      const dormId = getDormitoryId(req);
+      const dormId = getAuthoritativeDormitoryId(req);
       const parsed = ApproveRegistrationSchema.safeParse(req.body);
       if (!parsed.success) {
         return res.status(400).json({
@@ -161,16 +177,18 @@ export function createTenantRegistrationRouter(
   });
 
   // POST /api/v1/tenant-registrations/:id/reject
-  router.post('/:id/reject', requireSession, mutationGuard('tenant:write'), async (req: Request, res: Response) => {
+  privateRouter.post('/:id/reject', ...mutationGuard('tenant:write'), async (req: Request, res: Response) => {
     if (!verifyCsrf(req, res)) return;
     try {
-      const dormId = getDormitoryId(req);
+      const dormId = getAuthoritativeDormitoryId(req);
       const result = await registrationService.rejectRequest(req.params.id, dormId, req.body?.reason, req.auth?.userId);
       res.json({ data: result });
     } catch (err) {
       handleServiceError(res, err, req);
     }
   });
+
+  router.use('/', privateRouter);
 
   return router;
 }
