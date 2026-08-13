@@ -105,6 +105,7 @@ describe('LOCAL-03: Local Notification Outbox & Operations Polish', () => {
       data: {
         id: testTenantId,
         dormitoryId: testDormitoryId,
+        tenantNumber: `TNT-${Date.now()}`,
         firstName: 'Test',
         lastName: 'Tenant',
         phone: '0812345678',
