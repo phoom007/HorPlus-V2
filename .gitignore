@@ -30,6 +30,8 @@ docs/execution-reports/
 !docs/execution-reports/*.md
 !docs/execution-reports/evidence/
 !docs/execution-reports/evidence/*.md
+!docs/evidence/
+!docs/evidence/*.txt
 docs/graphify-validation/
 docs/production-blueprint/
 graphify-out/
