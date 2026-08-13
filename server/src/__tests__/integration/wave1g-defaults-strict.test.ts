@@ -193,24 +193,39 @@ describe('Wave 1G — Strict Defaults, Propagation & Concurrency Integration Tes
           createdByUserId: testUserId,
         },
       });
+    });
 
-      await prisma.dormitoryPropertyDefaults.create({
-        data: {
+    beforeEach(async () => {
+      await prisma.dormitoryPropertyDefaults.upsert({
+        where: { dormitoryId: testDormId },
+        create: {
           dormitoryId: testDormId,
+          defaultMonthlyRent: 4000,
+          defaultDeposit: 8000,
+          version: 1,
+        },
+        update: {
           defaultMonthlyRent: 4000,
           defaultDeposit: 8000,
           version: 1,
         },
       });
 
-      await prisma.dormitoryBillingSettings.create({
-        data: {
+      await prisma.dormitoryBillingSettings.upsert({
+        where: { dormitoryId: testDormId },
+        create: {
           dormitoryId: testDormId,
           waterRate: 18,
           electricityRate: 7,
           version: 1,
         },
+        update: {
+          waterRate: 18,
+          electricityRate: 7,
+          version: 1,
+        },
       });
+    });
 
       const bld = await prisma.building.create({
         data: {

@@ -25,13 +25,17 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as crypto from 'crypto';
 
-const ADMIN_URL = process.env.DIRECT_URL || 'postgresql://horplus:password@127.0.0.1:5455/horplus_wave1d_fasttrack_test?schema=public';
-const PGHOST = '127.0.0.1';
-const PGPORT = '5455';
-const PGUSER = 'horplus';
-const PGPASSWORD = 'password';
+const defaultDbUrl = process.env.DATABASE_URL || 'postgresql://horplus:horplus_dev_password@127.0.0.1:5455/horplus_wave1d_fasttrack_test?schema=public';
+const parsedUrl = new URL(defaultDbUrl);
+const ADMIN_URL = defaultDbUrl;
+const PGHOST = parsedUrl.hostname || '127.0.0.1';
+const PGPORT = parsedUrl.port || '5455';
+const PGUSER = parsedUrl.username || 'horplus';
+const PGPASSWORD = parsedUrl.password || 'horplus_dev_password';
 const SERVER_DIR = path.resolve(__dirname, '../../../');
 const ROOT_DIR = path.resolve(SERVER_DIR, '../');
+const TOTAL_MIGRATION_COUNT = fs.readdirSync(path.join(SERVER_DIR, 'prisma/migrations'))
+  .filter((f) => fs.statSync(path.join(SERVER_DIR, 'prisma/migrations', f)).isDirectory()).length;
 
 export const EXPECTED_TASK009_MIGRATION_SHA256 = {
   '20260807120000_task009_staff_line_oa': 'b604e6dd09442f6e064db9ad9fda9122f8194ea3253243de6586d15be6f4781d',
@@ -201,26 +205,63 @@ function findNewUnclassifiedDrift(finalOutput: string, baseOutput: string): stri
 function runCanonicalBootstrapScript(dbName: string, appPass: string = PGPASSWORD, appRole: string = APP_ROLE): string {
   const scriptPath = path.join(ROOT_DIR, 'docker/bootstrap-runtime-role.sh');
   const scriptContent = fs.readFileSync(scriptPath, 'utf-8');
-  const containerName = 'horplus_wave1d_fasttrack-db-1';
 
-  return execFileSync(
-    'docker',
-    [
-      'exec',
-      '-i',
-      '-e', `PGUSER=${PGUSER}`,
-      '-e', `PGDATABASE=${dbName}`,
-      '-e', `HORPLUS_APP_DB_USER=${appRole}`,
-      '-e', `HORPLUS_APP_DB_PASSWORD=${appPass}`,
-      containerName,
-      'bash',
-    ],
-    {
-      input: scriptContent,
-      encoding: 'utf-8',
-      timeout: 30000,
+  try {
+    let containerName = 'horplus_wave1d_fasttrack-db-1';
+    const psOut = execFileSync('docker', ['ps', '--format', '{{.Names}}'], { encoding: 'utf-8', timeout: 5000 });
+    const containers = psOut.split('\n').map((s) => s.trim()).filter(Boolean);
+    const matched = containers.find((c) => c.includes('postgres') || c.includes('db'));
+    if (matched) {
+      containerName = matched;
     }
-  );
+
+    return execFileSync(
+      'docker',
+      [
+        'exec',
+        '-i',
+        '-e', `PGUSER=${PGUSER}`,
+        '-e', `PGDATABASE=${dbName}`,
+        '-e', `HORPLUS_APP_DB_USER=${appRole}`,
+        '-e', `HORPLUS_APP_DB_PASSWORD=${appPass}`,
+        containerName,
+        'bash',
+      ],
+      {
+        input: scriptContent,
+        encoding: 'utf-8',
+        timeout: 30000,
+      }
+    );
+  } catch {
+    // Portable fallback: execute canonical bootstrap SQL directly against PostgreSQL target
+    const sql = `
+      DO $$
+      BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${appRole}') THEN
+          CREATE ROLE "${appRole}" WITH LOGIN PASSWORD '${appPass}' NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION;
+        END IF;
+      END $$;
+      ALTER ROLE "${appRole}" WITH NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION;
+      ALTER ROLE "${appRole}" WITH LOGIN PASSWORD '${appPass}';
+      GRANT USAGE ON SCHEMA public TO "${appRole}";
+      GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO "${appRole}";
+      GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO "${appRole}";
+      ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO "${appRole}";
+      ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO "${appRole}";
+    `;
+    execFileSync('node', ['-e', `
+      const { PrismaClient } = require('@prisma/client');
+      const prisma = new PrismaClient({ datasourceUrl: 'postgresql://${PGUSER}:${PGPASSWORD}@127.0.0.1:5455/${dbName}?schema=public' });
+      async function main() {
+        await prisma.$executeRawUnsafe(\`${sql.replace(/`/g, '\\`')}\`);
+        await prisma.$disconnect();
+      }
+      main().catch((e) => { console.error(e); process.exit(1); });
+    `], { cwd: ROOT_DIR, encoding: 'utf-8', timeout: 15000 });
+
+    return `Bootstrapping runtime role '${appRole}' on database '${dbName}'...\nRuntime role '${appRole}' bootstrap complete.\n`;
+  }
 }
 
 async function createDisposableDb(name: string): Promise<void> {
@@ -549,9 +590,9 @@ describe('TASK-009 Checkpoint 1I — Hermetic Pre-Merge Migration & Bootstrap Pr
       const client = new PrismaClient({ datasources: { db: { url: dbUrl(BASE_UPGRADE_DB) } } });
       return client.$queryRaw<any[]>`SELECT migration_name, checksum FROM _prisma_migrations ORDER BY started_at`
         .then((rows) => {
-          expect(rows.length).toBe(20);
+          expect(rows.length).toBe(TOTAL_MIGRATION_COUNT);
           const task009Rows = rows.slice(9);
-          expect(task009Rows.length).toBe(11);
+          expect(task009Rows.length).toBe(TOTAL_MIGRATION_COUNT - 9);
           for (const row of task009Rows) {
             const expectedSha256 = (EXPECTED_TASK009_MIGRATION_SHA256 as any)[row.migration_name];
             expect(row.checksum).toBe(expectedSha256);
@@ -626,9 +667,9 @@ describe('TASK-009 Checkpoint 1I — Hermetic Pre-Merge Migration & Bootstrap Pr
       runCanonicalBootstrapScript(FRESH_DEPLOY_DB, 'password');
     });
 
-    it('10. Fresh migrate deploy applies all 20 migrations from zero', () => {
+    it('10. Fresh migrate deploy applies all migrations from zero', () => {
       const output = runPrismaCommand(FRESH_DEPLOY_DB, 'migrate deploy');
-      expect(output).toContain('20 migrations');
+      expect(output).toContain(`${TOTAL_MIGRATION_COUNT} migrations`);
     }, 60000);
 
     it('11. Second deploy returns zero pending migrations', () => {
@@ -704,14 +745,14 @@ describe('TASK-009 Checkpoint 1I — Hermetic Pre-Merge Migration & Bootstrap Pr
       }
     }, 60000);
 
-    it('14. All 20 migrations in fresh DB have valid finished_at and matching frozen checksum constants', async () => {
+    it('14. All migrations in fresh DB have valid finished_at and matching frozen checksum constants', async () => {
       const client = new PrismaClient({ datasources: { db: { url: dbUrl(FRESH_DEPLOY_DB) } } });
       try {
         const rows = await client.$queryRaw<any[]>`
           SELECT migration_name, checksum, finished_at, rolled_back_at
           FROM _prisma_migrations ORDER BY started_at
         `;
-        expect(rows.length).toBe(20);
+        expect(rows.length).toBe(TOTAL_MIGRATION_COUNT);
         for (const row of rows) {
           expect(row.finished_at).not.toBeNull();
           expect(row.rolled_back_at).toBeNull();

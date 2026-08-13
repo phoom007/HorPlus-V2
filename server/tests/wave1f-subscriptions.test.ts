@@ -90,6 +90,7 @@ describe('Wave 1F - Authorization, Permission, Package & Idempotency Corrective 
   });
 
   beforeEach(async () => {
+    await subscriptionEntitlementService.ensureSeeded();
     const timestamp = Date.now();
     dormId = crypto.randomUUID();
     otherDormId = crypto.randomUUID();

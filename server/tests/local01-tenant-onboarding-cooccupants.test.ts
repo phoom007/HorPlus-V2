@@ -519,7 +519,7 @@ describe('LOCAL-01 — Tenant Onboarding & Co-Occupant Management', () => {
         data: { dormitoryId: dormAId, name: 'Bldg A', floorCount: 1 },
       });
       const roomA = await prisma.room.create({
-        data: { dormitoryId: dormAId, buildingId: buildingA.id, roomNumber: 'R101', normalizedRoomNumber: 'R101', status: 'vacant', monthlyRent: '5000' },
+        data: { dormitoryId: dormAId, buildingId: buildingA.id, roomNumber: 'R101', normalizedRoomNumber: 'R101', roomType: 'STANDARD', status: 'vacant', monthlyRent: '5000' },
       });
       roomAId = roomA.id;
 
@@ -527,7 +527,7 @@ describe('LOCAL-01 — Tenant Onboarding & Co-Occupant Management', () => {
         data: { dormitoryId: dormBId, name: 'Bldg B', floorCount: 1 },
       });
       const roomB = await prisma.room.create({
-        data: { dormitoryId: dormBId, buildingId: buildingB.id, roomNumber: 'R201', normalizedRoomNumber: 'R201', status: 'vacant', monthlyRent: '6000' },
+        data: { dormitoryId: dormBId, buildingId: buildingB.id, roomNumber: 'R201', normalizedRoomNumber: 'R201', roomType: 'STANDARD', status: 'vacant', monthlyRent: '6000' },
       });
 
       // Registration Requests in Dorm A & Dorm B
