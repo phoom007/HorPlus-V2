@@ -166,7 +166,7 @@ export const OwnerContracts: React.FC<OwnerContractsProps> = ({
 
   React.useEffect(() => {
     fetchPendingRenewalRequests();
-  }, [contracts?.length]);
+  }, [contracts]);
 
   React.useEffect(() => {
     if (selectedContract?.id) {
