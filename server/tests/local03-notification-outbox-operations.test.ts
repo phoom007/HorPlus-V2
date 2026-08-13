@@ -108,6 +108,7 @@ describe('LOCAL-03: Local Notification Outbox & Operations Polish', () => {
         tenantNumber: `TNT-${Date.now()}`,
         firstName: 'Test',
         lastName: 'Tenant',
+        displayName: 'Test Tenant',
         phone: '0812345678',
         status: 'active',
       },
