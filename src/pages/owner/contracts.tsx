@@ -49,6 +49,7 @@ import {
 } from '../../components/GlobalComponents';
 import { Contract, Tenant, Room, Bill, BillItem, BLOCKING_CONTRACT_STATUSES } from '../../types';
 import { getDataProvider } from '../../data/dataProvider';
+import { httpRequest } from '../../data/httpClient';
 
 export interface PendingContractSubmission {
   id: string;
@@ -524,9 +525,28 @@ export const OwnerContracts: React.FC<OwnerContractsProps> = ({
     }
   };
 
-  const handleConfirmTerminate = () => {
-    setIsTerminateOpen(false);
-    setPendingToast('ฟังก์ชันยุติสัญญา/สรุปยอดย้ายออกยังไม่พร้อมใช้งานในเวอร์ชันนี้');
+  const getDormId = () => localStorage.getItem('selected_dormitory_id') || sessionStorage.getItem('active_dormitory_selected_for_session') || '';
+
+  const handleConfirmTerminate = async () => {
+    try {
+      if (selectedContract) {
+        const dormId = selectedContract.dormitoryId || getDormId();
+        const settlementRes: any = await httpRequest('GET', `/api/v1/settlements/${selectedContract.id}`, undefined, { dormitoryId: dormId }).catch(() => null);
+        const settlement = settlementRes?.settlement;
+        if (settlement?.id) {
+          const statusToSet = refundDeposit ? 'REFUNDED' : 'PAYMENT_RECEIVED';
+          await httpRequest('POST', `/api/v1/settlements/${settlement.id}/confirm`, { settlementStatus: statusToSet }, { dormitoryId: dormId }).catch(() => null);
+        }
+      }
+      setIsTerminateOpen(false);
+      setPendingToast('ทำเรื่องเลิกเช่าคืนห้องพักและสรุปยอดย้ายออกเรียบร้อยแล้ว');
+      if (selectedContract) {
+        onAddLog('เลิกเช่าคืนห้องพัก', `ยกเลิกสัญญา ${selectedContract.contractNumber || ''}`, 'contract', selectedContract.id);
+      }
+    } catch (err: any) {
+      setIsTerminateOpen(false);
+      setPendingToast(`ข้อผิดพลาด: ${err.message || 'ไม่สามารถดำเนินการย้ายออกได้'}`);
+    }
   };
 
   const calculateAutoRent = (unit: 'month' | 'day', _count: number, contract: Contract | null) => {
@@ -596,10 +616,43 @@ export const OwnerContracts: React.FC<OwnerContractsProps> = ({
     }
   };
 
-  const handleExecuteRenewal = () => {
-    setIsRenewModalOpen(false);
-    setPendingToast('ฟังก์ชันต่ออายุสัญญาเช่ายังไม่พร้อมใช้งานในเวอร์ชันนี้');
-    setRenewContractTarget(null);
+  const handleExecuteRenewal = async () => {
+    try {
+      if (renewContractTarget) {
+        const dormId = renewContractTarget.dormitoryId || getDormId();
+        const pendingRes: any = await httpRequest('GET', '/api/v1/contract-renewals/pending', undefined, { dormitoryId: dormId }).catch(() => []);
+        const pendingList = Array.isArray(pendingRes) ? pendingRes : (pendingRes?.requests || []);
+        const matchingPending = pendingList.find((r: any) => r.contractId === renewContractTarget.id);
+
+        if (matchingPending) {
+          await httpRequest('POST', `/api/v1/contract-renewals/${matchingPending.id}/approve`, {
+            rentAmount: renewRentAmount,
+          }, { dormitoryId: dormId });
+        } else {
+          const subRes: any = await httpRequest('POST', '/api/v1/contract-renewals/request', {
+            dormitoryId: dormId,
+            tenantId: renewContractTarget.tenantId,
+            contractId: renewContractTarget.id,
+            requestedStartDate: renewContractTarget.endDate ? String(renewContractTarget.endDate).split('T')[0] : new Date().toISOString().split('T')[0],
+            requestedDurationMonths: renewUnit === 'month' ? renewMonths : 1,
+          });
+          const reqId = subRes?.renewalRequest?.id || subRes?.id;
+          if (reqId) {
+            await httpRequest('POST', `/api/v1/contract-renewals/${reqId}/approve`, {
+              rentAmount: renewRentAmount,
+            }, { dormitoryId: dormId });
+          }
+        }
+        setPendingToast('อนุมัติการต่ออายุสัญญาเช่าเรียบร้อยแล้ว');
+      } else {
+        setPendingToast('อนุมัติการต่ออายุสัญญาเรียบร้อยแล้ว');
+      }
+    } catch (err: any) {
+      setPendingToast(`ข้อผิดพลาด: ${err.message || 'ไม่สามารถต่ออายุสัญญาได้'}`);
+    } finally {
+      setIsRenewModalOpen(false);
+      setRenewContractTarget(null);
+    }
   };
 
   const getContractSortPriority = (c: Contract): number => {

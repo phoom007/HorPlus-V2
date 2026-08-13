@@ -105,6 +105,15 @@ export class CleanupService {
       });
       consumedMetadataPurged = consumedRes.count;
 
+      // Phase 4: Automatic Scheduled Contract Activation (Asia/Bangkok effective dates)
+      try {
+        const { ContractRenewalService } = await import('./contract-renewal.service.js');
+        const renewalService = new ContractRenewalService();
+        await renewalService.activateAllScheduledContracts();
+      } catch (err) {
+        console.error('[CleanupService] Error during automatic scheduled contract activation', err);
+      }
+
       return { expiredMarked, orphansDeleted, consumedMetadataPurged };
     } catch (err) {
       console.error('[CleanupService] Unexpected error during cleanup execution', err);

@@ -869,4 +869,54 @@ describe('LOCAL-02: Contract Settlement, Termination & Renewal Suite', () => {
     expect(activeOccupancies.length).toBe(1);
     expect(activeOccupancies[0].tenantId).toBe(bResult.tenant.id);
   });
+
+  // Test 17: Explicit Asia/Bangkok Date Boundary & Activation Proof
+  it('17. Bangkok Date Boundary: 16:59:59.999Z is NOT active, 17:00:00.000Z is ELIGIBLE, repeated activation is idempotent', async () => {
+    // Create a scheduled renewal contract for start date 2026-09-01
+    const scheduledCtr = await prisma.contract.create({
+      data: {
+        dormitoryId: testDormitoryId,
+        contractNumber: 'CTR-BKK-001',
+        roomId: testRoomA101Id,
+        tenantId: testTenantAId,
+        status: 'approved_scheduled',
+        startDate: new Date('2026-09-01T00:00:00.000Z'),
+        endDate: new Date('2027-03-01T00:00:00.000Z'),
+        durationMonths: 6,
+        rentAmount: '5000',
+        depositAmount: '10000',
+        advancePaymentAmount: '5000',
+        previousContractId: testContractAId,
+        activatedAt: null,
+      },
+    });
+
+    // Instant 1: 2026-08-31T16:59:59.999Z (= 2026-08-31 23:59:59.999 in Bangkok) -> NOT ACTIVE
+    const beforeBangkokMidnight = new Date('2026-08-31T16:59:59.999Z');
+    const res1 = await contractRenewalService.activateScheduledContracts(testDormitoryId, beforeBangkokMidnight);
+    expect(res1.activatedCount).toBe(0);
+
+    const check1 = await prisma.contract.findUnique({ where: { id: scheduledCtr.id } });
+    expect(check1?.status).toBe('approved_scheduled');
+    expect(check1?.activatedAt).toBeNull();
+
+    // Instant 2: 2026-08-31T17:00:00.000Z (= 2026-09-01 00:00:00.000 in Bangkok) -> ELIGIBLE TO ACTIVATE
+    const atBangkokMidnight = new Date('2026-08-31T17:00:00.000Z');
+    const res2 = await contractRenewalService.activateScheduledContracts(testDormitoryId, atBangkokMidnight);
+    expect(res2.activatedCount).toBe(1);
+
+    const check2 = await prisma.contract.findUnique({ where: { id: scheduledCtr.id } });
+    expect(check2?.status).toBe('active');
+    expect(check2?.activatedAt).not.toBeNull();
+
+    // Test repeated activation on later same Bangkok date (2026-09-01T10:00:00Z) -> Idempotent, 0 new activations
+    const laterSameDay = new Date('2026-09-01T10:00:00.000Z');
+    const res3 = await contractRenewalService.activateScheduledContracts(testDormitoryId, laterSameDay);
+    expect(res3.activatedCount).toBe(0);
+
+    // Test next Bangkok day (2026-09-02) -> Idempotent, 0 new activations
+    const nextDay = new Date('2026-09-02T00:00:00.000Z');
+    const res4 = await contractRenewalService.activateScheduledContracts(testDormitoryId, nextDay);
+    expect(res4.activatedCount).toBe(0);
+  });
 });

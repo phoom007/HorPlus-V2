@@ -59,6 +59,11 @@ export function createTenantRegistrationRouter(
       error: {
         code: err.code || 'REGISTRATION_OPERATION_FAILED',
         message: err.message || 'เกิดข้อผิดพลาดในการดำเนินการจัดการคำขอลงทะเบียน',
+        activeTenantName: err.activeTenantName || null,
+        activeRoomNumber: err.activeRoomNumber || null,
+        hasFutureRenewal: err.hasFutureRenewal || false,
+        futureTenantName: err.futureTenantName || null,
+        futureStartDate: err.futureStartDate || null,
         fieldErrors: err.fieldErrors || null,
         requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
         timestamp: new Date().toISOString(),

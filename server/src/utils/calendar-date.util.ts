@@ -1,4 +1,47 @@
 export const BANGKOK_TIMEZONE = 'Asia/Bangkok';
+export const BANGKOK_OFFSET_MS = 7 * 60 * 60 * 1000;
+
+/**
+ * Returns YYYY-MM-DD date string in Asia/Bangkok timezone (+07:00).
+ */
+export function toBangkokDateString(instant: Date | string = new Date()): string {
+  const d = typeof instant === 'string' ? new Date(instant) : instant;
+  const bangkokLocal = new Date(d.getTime() + BANGKOK_OFFSET_MS);
+  const year = bangkokLocal.getUTCFullYear();
+  const month = String(bangkokLocal.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(bangkokLocal.getUTCDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+/**
+ * Returns current business date string in Asia/Bangkok timezone (YYYY-MM-DD).
+ */
+export function currentBusinessDateInBangkok(instant: Date | string = new Date()): string {
+  return toBangkokDateString(instant);
+}
+
+/**
+ * Evaluates whether target business date (YYYY-MM-DD or Date/string) has been reached in Asia/Bangkok timezone at the given instant.
+ */
+export function isBusinessDateReached(targetDateInput: Date | string, instant: Date | string = new Date()): boolean {
+  const targetDateStr = typeof targetDateInput === 'string' && targetDateInput.length === 10
+    ? targetDateInput
+    : toBangkokDateString(targetDateInput);
+  const currentDateStr = toBangkokDateString(instant);
+  return currentDateStr >= targetDateStr;
+}
+
+/**
+ * Converts a Bangkok date string (YYYY-MM-DD) into its exact starting UTC Date (00:00:00.000 Asia/Bangkok = 17:00:00.000 UTC previous day).
+ */
+export function getBangkokStartOfDayUtc(dateStr: string): Date {
+  const [yearStr, monthStr, dayStr] = dateStr.split('-');
+  const year = parseInt(yearStr, 10);
+  const month = parseInt(monthStr, 10) - 1;
+  const day = parseInt(dayStr, 10);
+  const localUtcMs = Date.UTC(year, month, day, 0, 0, 0, 0);
+  return new Date(localUtcMs - BANGKOK_OFFSET_MS);
+}
 
 /**
  * Adds a specified number of calendar months to a date using Asia/Bangkok business date semantics,
@@ -10,9 +53,7 @@ export function addCalendarMonthsClamped(
   numberOfMonths: number,
   timeZone: string = BANGKOK_TIMEZONE
 ): Date {
-  // Asia/Bangkok is UTC+7 (+07:00, no DST)
-  const bangkokOffsetMs = 7 * 60 * 60 * 1000;
-  const localTime = new Date(sourceDate.getTime() + bangkokOffsetMs);
+  const localTime = new Date(sourceDate.getTime() + BANGKOK_OFFSET_MS);
 
   const year = localTime.getUTCFullYear();
   const month = localTime.getUTCMonth(); // 0-indexed (0 = Jan, 1 = Feb, etc.)
@@ -44,7 +85,7 @@ export function addCalendarMonthsClamped(
     milliseconds
   );
 
-  return new Date(targetLocalUtc - bangkokOffsetMs);
+  return new Date(targetLocalUtc - BANGKOK_OFFSET_MS);
 }
 
 /**

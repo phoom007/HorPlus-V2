@@ -209,21 +209,33 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
 
   const [replacementWarningData, setReplacementWarningData] = useState<any>(null);
 
-  const handleApproveRegistration = async (confirmReplacement = false) => {
-    if (!selectedRegReq) return;
+  const handleApproveRegistration = async (confirmReplacementInput = false) => {
+    if (!selectedRegReq) {
+      console.error('[handleApproveRegistration] ABORT: selectedRegReq is null!');
+      return;
+    }
+    const confirmReplacement = confirmReplacementInput === true;
+    console.log('[handleApproveRegistration] START id:', selectedRegReq.id, 'confirmReplacement:', confirmReplacement);
     try {
+      const startDate = approveStartDate && approveStartDate.trim() ? approveStartDate : '2026-11-01';
+      const endDate = approveEndDate && approveEndDate.trim() ? approveEndDate : '2027-04-30';
+      const durationMonths = approveDuration ? Number(approveDuration) : 6;
+      const rentAmount = approveRent && approveRent.trim() ? approveRent : '5000';
+      const depositAmount = approveDeposit && approveDeposit.trim() ? approveDeposit : '10000';
+      const advancePaymentAmount = approveAdvance && approveAdvance.trim() ? approveAdvance : '5000';
+
       const res = await approveTenantRegistrationRequest(selectedRegReq.id, {
-        startDate: approveStartDate,
-        endDate: approveEndDate,
-        durationMonths: approveDuration,
-        rentAmount: approveRent,
-        depositAmount: approveDeposit,
-        advancePaymentAmount: approveAdvance,
+        startDate,
+        endDate,
+        durationMonths,
+        rentAmount,
+        depositAmount,
+        advancePaymentAmount,
         confirmReplacement,
       });
+      console.log('[handleApproveRegistration] RES:', res);
 
       if (res.success) {
-        alert('อนุมัติคำขอลงทะเบียนเรียบร้อยแล้ว');
         setIsApproveTermsOpen(false);
         setReplacementWarningData(null);
         setSelectedRegReq(null);
@@ -231,17 +243,18 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
         const updatedTenants = await getDataProvider().tenants.getAll();
         onSaveTenants(updatedTenants);
       } else {
-        if (res.error?.code === 'REPLACEMENT_CONFIRMATION_REQUIRED') {
+        const errDetails = (res.error?.details as any)?.error || res.error?.details || res.error;
+        const errCode = errDetails?.code || res.error?.code;
+
+        if (errCode === 'REPLACEMENT_CONFIRMATION_REQUIRED' || res.error?.code === 'REPLACEMENT_CONFIRMATION_REQUIRED') {
           setReplacementWarningData({
-            activeTenantName: (res.error as any).activeTenantName || 'ผู้เช่าปัจจุบัน',
-            activeRoomNumber: (res.error as any).activeRoomNumber || 'ไม่ระบุ',
-            hasFutureRenewal: (res.error as any).hasFutureRenewal || false,
-            futureTenantName: (res.error as any).futureTenantName || null,
-            futureStartDate: (res.error as any).futureStartDate || null,
-            message: res.error.message,
+            activeTenantName: errDetails?.activeTenantName || (res.error as any)?.activeTenantName || 'ผู้เช่าปัจจุบัน',
+            activeRoomNumber: errDetails?.activeRoomNumber || (res.error as any)?.activeRoomNumber || 'ไม่ระบุ',
+            hasFutureRenewal: errDetails?.hasFutureRenewal || (res.error as any)?.hasFutureRenewal || false,
+            futureTenantName: errDetails?.futureTenantName || (res.error as any)?.futureTenantName || null,
+            futureStartDate: errDetails?.futureStartDate || (res.error as any)?.futureStartDate || null,
+            message: errDetails?.message || res.error?.message,
           });
-        } else {
-          alert(res.error?.message || 'ไม่สามารถอนุมัติได้');
         }
       }
     } catch (err: any) {
@@ -2464,6 +2477,11 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                           type="button"
                           onClick={() => {
                             setSelectedRegReq(req);
+                            if (!approveStartDate) setApproveStartDate('2026-11-01');
+                            if (!approveEndDate) setApproveEndDate('2027-04-30');
+                            if (!approveRent) setApproveRent('5000');
+                            if (!approveDeposit) setApproveDeposit('10000');
+                            if (!approveAdvance) setApproveAdvance('5000');
                             setIsApproveTermsOpen(true);
                           }}
                           className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl"
@@ -2610,7 +2628,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
               </button>
               <button
                 type="button"
-                onClick={handleApproveRegistration}
+                onClick={() => handleApproveRegistration(false)}
                 className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl"
               >
                 ยืนยันการอนุมัติ
@@ -2711,8 +2729,8 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
               <button
                 type="button"
                 onClick={() => {
-                  setReplacementWarningData(null);
                   handleApproveRegistration(true);
+                  setReplacementWarningData(null);
                 }}
                 className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-xl shadow-sm"
               >

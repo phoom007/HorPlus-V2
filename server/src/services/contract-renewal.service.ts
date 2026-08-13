@@ -1,6 +1,12 @@
 import { getPrismaClient } from '../db/prisma.js';
 import { logger } from '../config/logger.js';
 import { AppError } from '../types/index.js';
+import {
+  toBangkokDateString,
+  currentBusinessDateInBangkok,
+  isBusinessDateReached,
+  getBangkokStartOfDayUtc,
+} from '../utils/calendar-date.util.js';
 
 export interface SubmitRenewalRequestInput {
   dormitoryId: string;
@@ -242,13 +248,12 @@ export class ContractRenewalService {
       const finalAdvance = advancePaymentAmount !== undefined ? String(advancePaymentAmount) : String(prevContract.advancePaymentAmount);
       const finalTerms = terms !== undefined ? terms : prevContract.terms;
 
-      // Check if requested start date is in the future relative to current execution date
+      // Check if requested start date is in the future relative to current execution date in Asia/Bangkok
       const now = new Date();
       const startDate = new Date(reqRecord.requestedStartDate);
       
-      // Compare calendar dates (midnight UTC/local string comparison for robust date boundary check)
-      const startDateStr = startDate.toISOString().split('T')[0];
-      const todayStr = now.toISOString().split('T')[0];
+      const startDateStr = toBangkokDateString(startDate);
+      const todayStr = currentBusinessDateInBangkok(now);
       const isFutureStartDate = startDateStr > todayStr;
 
       const contractNumber = `CTR-RNW-${Date.now().toString().slice(-6)}`;
@@ -316,8 +321,6 @@ export class ContractRenewalService {
           });
         }
       }
-      // Note: For future renewal (isFutureStartDate = true), Room currentTenantId/currentContractId 
-      // and ACTIVE Occupancy are NOT created now — they will be established on activation date!
 
       return { request: updatedRequest, contract: newContract };
     });
@@ -337,41 +340,45 @@ export class ContractRenewalService {
   }
 
   /**
-   * Evaluates and activates scheduled contracts whose effective start date has arrived.
+   * Evaluates and activates scheduled contracts whose effective start date in Asia/Bangkok has arrived.
    * Safety checks:
    * 1. Contract must still be in 'approved_scheduled' status and not deleted/cancelled.
    * 2. Room must be free of conflicting active tenancies from different tenants.
    */
   public async activateScheduledContracts(dormitoryId?: string, effectiveDate?: Date | string, actorUserId?: string) {
     const prisma = getPrismaClient();
-    let evalDate: Date;
-    if (typeof effectiveDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(effectiveDate)) {
-      evalDate = new Date(`${effectiveDate}T23:59:59.999Z`);
-    } else if (effectiveDate instanceof Date) {
-      evalDate = new Date(effectiveDate);
-      evalDate.setHours(23, 59, 59, 999);
-    } else {
-      evalDate = new Date();
-      evalDate.setHours(23, 59, 59, 999);
-    }
+    
+    // Evaluate target instant and business date in Asia/Bangkok
+    const evalInstant = effectiveDate
+      ? (typeof effectiveDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(effectiveDate)
+          ? getBangkokStartOfDayUtc(effectiveDate)
+          : new Date(effectiveDate))
+      : new Date();
+
+    const evalBangkokDateStr = toBangkokDateString(evalInstant);
 
     const whereClause: any = {
       deletedAt: null,
       status: 'approved_scheduled',
-      startDate: { lte: evalDate },
     };
     if (dormitoryId) {
       whereClause.dormitoryId = dormitoryId;
     }
 
-    const scheduledContracts = await prisma.contract.findMany({
+    const allScheduledContracts = await prisma.contract.findMany({
       where: whereClause,
       include: { room: true, tenant: true },
     });
 
+    // Filter scheduled contracts whose start date in Bangkok is reached on or before evalBangkokDateStr
+    const scheduledContracts = allScheduledContracts.filter((c) => {
+      return isBusinessDateReached(c.startDate, evalInstant);
+    });
+
     logger.info({
       event: 'ACTIVATE_SCHEDULED_CHECK',
-      evalDate: evalDate.toISOString(),
+      evalInstant: evalInstant.toISOString(),
+      evalBangkokDateStr,
       dormitoryId,
       foundCount: scheduledContracts.length,
       contractIds: scheduledContracts.map((c) => c.id),
@@ -432,6 +439,13 @@ export class ContractRenewalService {
     }
 
     return { activatedCount: activated.length, skippedCount: skipped.length, activated, skipped };
+  }
+
+  /**
+   * System-wide automatic activation helper for background scheduler / startup reconciliation
+   */
+  public async activateAllScheduledContracts() {
+    return this.activateScheduledContracts(undefined, new Date(), 'system-scheduled-job');
   }
 
   /**

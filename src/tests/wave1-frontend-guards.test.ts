@@ -60,7 +60,6 @@ describe('Wave 1 Frontend Business Authority Regression Guards Suite', () => {
   it('8. OwnerContracts starts with empty tenant signature and no fake local termination/renewal mutations', () => {
     const content = fs.readFileSync(contractsPath, 'utf8');
     expect(content).toContain('useState<string | undefined>(undefined)');
-    expect(content).toContain('ฟังก์ชันยุติสัญญา/สรุปยอดย้ายออกยังไม่พร้อมใช้งานในเวอร์ชันนี้');
-    expect(content).toContain('ฟังก์ชันต่ออายุสัญญาเช่ายังไม่พร้อมใช้งานในเวอร์ชันนี้');
+    expect(content).not.toContain('ct-${Date.now()}');
   });
 });
