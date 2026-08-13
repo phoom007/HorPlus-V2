@@ -341,6 +341,19 @@ describe('LOCAL-03: Local Notification Outbox & Operations Polish', () => {
     const repo = new PrismaNotificationRepository();
 
     const otherTenantId = crypto.randomUUID();
+    await prisma.tenant.create({
+      data: {
+        id: otherTenantId,
+        dormitoryId: testDormitoryId,
+        tenantNumber: `TNT-OTHER-${Date.now()}`,
+        firstName: 'Other',
+        lastName: 'Tenant',
+        displayName: 'Other Tenant',
+        phone: '0899999999',
+        status: 'active',
+      },
+    });
+
     const notice = await prisma.tenantNotice.create({
       data: {
         dormitoryId: testDormitoryId,
