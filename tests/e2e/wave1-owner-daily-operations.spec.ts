@@ -131,6 +131,7 @@ test.describe.serial('HORPLUS — Wave 1 Owner Daily Operations Real Playwright 
         buildingId: bld.id,
         roomNumber: '101',
         normalizedRoomNumber: '101',
+        roomType: 'STANDARD',
         status: 'vacant',
         monthlyRent: 5000,
         depositAmount: 10000,
