@@ -1,0 +1,31 @@
+================================================================================
+COMMAND: cd server && npx vitest run tests/local02-contract-settlement-renewal.test.ts
+TIMESTAMP: 2026-08-13T20:37:15+07:00
+ENVIRONMENT: Node.js v20.x, PostgreSQL 16 (127.0.0.1:5455/horplus_wave1d_fasttrack_test)
+================================================================================
+
+ RUN  v3.0.4 D:/horplus_wave1d_fasttrack/server
+
+ ✓ tests/local02-contract-settlement-renewal.test.ts (17 tests) 6689ms
+   ✓ LOCAL-02: Contract Settlement, Termination & Renewal Suite > 1. Tenant submits renewal request specifying duration; client financial inputs are rejected/derived from prior contract 1037ms
+   ✓ LOCAL-02: Contract Settlement, Termination & Renewal Suite > 2. Renewal request remains PENDING_OWNER_APPROVAL until Owner approves, creating linked contract with previousContractId 763ms
+   ✓ LOCAL-02: Contract Settlement, Termination & Renewal Suite > 3. Former tenant can submit renewal request after contract expiry + gap if room remains free 708ms
+   ✓ LOCAL-02: Contract Settlement, Termination & Renewal Suite > 4. Any pending registration request for the room blocks renewal eligibility 780ms
+   ✓ LOCAL-02: Contract Settlement, Termination & Renewal Suite > 5. Approving new applicant requires confirmation, terminates active tenancy immediately without rent proration, opens settlement, and notifies old tenant 928ms
+   ✓ LOCAL-02: Contract Settlement, Termination & Renewal Suite > 6. Damage items support mandatory description/amount, optional evidence, soft-remove, and settlement lock after confirmation 967ms
+   ✓ LOCAL-02: Contract Settlement, Termination & Renewal Suite > 7. TECH role is forbidden from approving renewals or mutating settlements 741ms
+   ✓ LOCAL-02: Contract Settlement, Termination & Renewal Suite > 8. Real Concurrency: Competing applicant approvals for the same room produce exactly ONE winner under PostgreSQL transaction lock 807ms
+   ✓ LOCAL-02: Contract Settlement, Termination & Renewal Suite > 9. Real Concurrency: Concurrent renewal approval vs replacement applicant approval produces exactly ONE winner 1128ms
+   ✓ LOCAL-02: Contract Settlement, Termination & Renewal Suite > 10. Atomic Rollback: Simulated midpoint error during forced replacement rolls back ALL database mutations 951ms
+   ✓ LOCAL-02: Contract Settlement, Termination & Renewal Suite > 11. Decimal Settlement Formula: Calculates Net = Deposit - Unpaid - Damage, setting correct direction and status 1340ms
+   ✓ LOCAL-02: Contract Settlement, Termination & Renewal Suite > 12. Future Renewal Approval: Creates approved_scheduled contract with activatedAt=null and does NOT establish active occupancy before start date 1365ms
+   ✓ LOCAL-02: Contract Settlement, Termination & Renewal Suite > 13. Effective Date Activation: activateScheduledContracts transitions scheduled contract to active and creates ACTIVE occupancy 2610ms
+   ✓ LOCAL-02: Contract Settlement, Termination & Renewal Suite > 14. Future Renewal Override: Owner approval of Applicant B requires confirmation, cancels future renewal, and creates persistent notice 1022ms
+   ✓ LOCAL-02: Contract Settlement, Termination & Renewal Suite > 15. Cancelled Future Activation Guard: Cancelled scheduled renewal cannot be activated on effective date 1106ms
+   ✓ LOCAL-02: Contract Settlement, Termination & Renewal Suite > 16. Active + Future Contract Replacement: Approving B when A has active A1 AND scheduled A2 terminates A1 and cancels A2 atomically 2267ms
+   ✓ LOCAL-02: Contract Settlement, Termination & Renewal Suite > 17. Bangkok Date Boundary: 16:59:59.999Z is NOT active, 17:00:00.000Z is ELIGIBLE, repeated activation is idempotent 1008ms
+
+ Test Files  1 passed (1)
+      Tests  17 passed (17)
+   Start at  20:37:08
+   Duration  7.55s (transform 189ms, setup 237ms, collect 166ms, tests 6.69s, environment 0ms, prepare 115ms)

@@ -48,6 +48,8 @@ server/assets/
 *.js
 !server/fix-ts-ignore.js
 !server/fix-ts.js
+!docs/evidence/
+!docs/evidence/*.txt
 query.sql
 start
 test-Checkslip.jpg

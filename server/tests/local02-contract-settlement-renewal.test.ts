@@ -51,6 +51,7 @@ describe('LOCAL-02: Contract Settlement, Termination & Renewal Suite', () => {
         buildingId: testBuildingId,
         roomNumber: 'A101',
         normalizedRoomNumber: 'A101',
+        roomType: 'STANDARD',
         floor: 1,
         status: 'occupied',
         monthlyRent: new Prisma.Decimal(5000),

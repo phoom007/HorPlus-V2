@@ -1,0 +1,41 @@
+================================================================================
+HORPLUS — LOCAL-02 ABSOLUTE FINAL GATE & REMOTE EVIDENCE SUMMARY
+TIMESTAMP: 2026-08-13T20:41:55+07:00
+BRANCH: feature/local02-contract-settlement-renewal
+================================================================================
+
+1. SAFETY ASSERTIONS & BOTSTRAP GUARANTEES
+- Generic container auto-discovery: REMOVED (0 generic keywords in codebase)
+- Container selection: Strictly docker-compose.windows-pilot.yml -> db
+- Database Host: Strictly 127.0.0.1
+- Database Port: Strictly 5455
+- Database Name Guard: Fails closed unless horplus_wave1d_fasttrack_test or task009_*
+- Unrelated workloads touched: NONE (chatbot_* containers completely untouched)
+
+2. QUALITY GATE EXECUTION RESULTS
+- Safe Bootstrap Integration (`task009-checkpoint1h-premerge-proof.test.ts`): 22/22 PASSED (Exit Code 0)
+- Targeted Backend Spec (`tests/local02-contract-settlement-renewal.test.ts`): 17/17 PASSED (Exit Code 0)
+- True Full Backend Suite (`npm --prefix server test`): 34/34 Test Files PASSED, 353 Tests PASSED (Exit Code 0)
+- Frontend Unit Suite (`npm test`): 8/8 Test Files PASSED, 50 Tests PASSED (Exit Code 0)
+- Root TypeScript Check (`npx tsc --noEmit`): PASSED (0 Errors)
+- E2E TypeScript Check (`npx tsc --noEmit -p tsconfig.e2e.json`): PASSED (0 Errors)
+- Root Frontend Build (`npm run build`): PASSED (Exit Code 0)
+- Backend Server Build (`npm --prefix server run build`): PASSED (Exit Code 0)
+- Targeted Playwright E2E (`npx playwright test tests/e2e/local02-contract-settlement-renewal.spec.ts --workers=1`): 7/7 FLOWS PASSED (Exit Code 0)
+- Full Playwright E2E Suite (`npx playwright test`): 3/3 E2E Suites PASSED (Exit Code 0)
+
+3. TERMINOLOGY COMPLIANCE
+- Frontend Unit: `npm test` (`vitest run src/tests --environment happy-dom`)
+- Backend Suite: `npm --prefix server test` (`vitest run --config vitest.config.ts`)
+- Playwright E2E: `npx playwright test`
+
+4. EVIDENCE TRACKING & VISIBILITY
+- `.gitignore`: Updated with `!docs/evidence/` and `!docs/evidence/*.txt` rules placed AFTER global `*.txt`
+- `docs/evidence/local02-final-server-test.txt`: Created & tracked
+- `docs/evidence/local02-full-backend-npm-test.txt`: Created & tracked
+- `docs/evidence/local02-full-playwright.txt`: Created & tracked
+- `docs/evidence/local02-final-gate-summary.txt`: Created & tracked
+
+================================================================================
+FINAL VERDICT: PASS — LOCAL-02 ABSOLUTE FINAL GREEN GATE COMPLETE
+================================================================================

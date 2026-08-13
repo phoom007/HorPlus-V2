@@ -109,6 +109,7 @@ test.describe.serial('LOCAL-02: E2E Contract Settlement, Termination & Renewal S
         buildingId,
         roomNumber: 'A101',
         normalizedRoomNumber: 'A101',
+        roomType: 'STANDARD',
         floor: 1,
         status: 'occupied',
         monthlyRent: '5000',

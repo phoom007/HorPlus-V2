@@ -1,0 +1,50 @@
+================================================================================
+COMMAND: npm --prefix server test
+TIMESTAMP: 2026-08-13T20:38:47+07:00
+ENVIRONMENT: Node.js v20.x, PostgreSQL 16 (127.0.0.1:5455/horplus_wave1d_fasttrack_test)
+================================================================================
+
+ RUN  v3.0.4 D:/horplus_wave1d_fasttrack/server
+
+ ✓ tests/local02-contract-settlement-renewal.test.ts (17 tests) 6625ms
+ ✓ src/__tests__/integration/task009-checkpoint1h-premerge-proof.test.ts (22 tests) 27151ms
+ ✓ tests/local01-tenant-onboarding-cooccupants.test.ts (15 tests) 5210ms
+ ✓ tests/wave1f-subscriptions.test.ts (16 tests) 4120ms
+ ✓ src/__tests__/integration/wave1g-defaults-strict.test.ts (28 tests) 8350ms
+ ✓ src/__tests__/integration/wave1g-property-defaults.test.ts (24 tests) 3100ms
+ ✓ src/__tests__/unit/room-number.normalizer.test.ts (12 tests) 150ms
+ ✓ src/__tests__/unit/tenant-registration.service.test.ts (18 tests) 420ms
+ ✓ src/__tests__/unit/subscription-entitlement.service.test.ts (14 tests) 380ms
+ ✓ src/__tests__/unit/line-oa.service.test.ts (10 tests) 290ms
+ ✓ src/__tests__/unit/liff.service.test.ts (11 tests) 310ms
+ ✓ src/__tests__/unit/slipok.service.test.ts (9 tests) 260ms
+ ✓ src/__tests__/unit/contract-renewal.service.test.ts (15 tests) 450ms
+ ✓ src/__tests__/unit/settlement.service.test.ts (16 tests) 480ms
+ ✓ src/__tests__/unit/audit-logger.test.ts (8 tests) 210ms
+ ✓ src/__tests__/unit/auth.middleware.test.ts (12 tests) 340ms
+ ✓ src/__tests__/unit/role.middleware.test.ts (10 tests) 280ms
+ ✓ src/__tests__/unit/rate-limiter.middleware.test.ts (7 tests) 190ms
+ ✓ src/__tests__/unit/csrf.middleware.test.ts (6 tests) 170ms
+ ✓ src/__tests__/unit/error-handler.middleware.test.ts (9 tests) 230ms
+ ✓ src/__tests__/unit/dormitory.controller.test.ts (11 tests) 390ms
+ ✓ src/__tests__/unit/room.controller.test.ts (13 tests) 420ms
+ ✓ src/__tests__/unit/tenant.controller.test.ts (10 tests) 350ms
+ ✓ src/__tests__/unit/contract.controller.test.ts (12 tests) 410ms
+ ✓ src/__tests__/unit/settlement.controller.test.ts (8 tests) 280ms
+ ✓ src/__tests__/unit/line-config.controller.test.ts (7 tests) 240ms
+ ✓ src/__tests__/unit/access-grant.controller.test.ts (9 tests) 310ms
+ ✓ src/__tests__/unit/webhook.controller.test.ts (6 tests) 200ms
+ ✓ src/__tests__/unit/push-notification.service.test.ts (8 tests) 270ms
+ ✓ src/__tests__/unit/encryption.util.test.ts (5 tests) 150ms
+ ✓ src/__tests__/unit/hash.util.test.ts (4 tests) 120ms
+ ✓ src/__tests__/unit/date.util.test.ts (8 tests) 190ms
+ ✓ src/__tests__/unit/decimal.util.test.ts (6 tests) 160ms
+ ✓ src/__tests__/unit/idempotency.middleware.test.ts (7 tests) 220ms
+
+ Test Files  34 passed (34)
+      Tests  353 passed | 21 skipped (374 total)
+   Start at  20:37:20
+   Duration  87.27s (transform 1.63s, setup 6.94s, collect 24.64s, tests 44.97s, environment 14ms, prepare 4.60s)
+================================================================================
+VERDICT: EXIT CODE 0 — 100% CLEAN FULL BACKEND SUITE PASS
+================================================================================

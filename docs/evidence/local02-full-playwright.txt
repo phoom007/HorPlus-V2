@@ -1,0 +1,16 @@
+================================================================================
+COMMAND: npx playwright test
+TIMESTAMP: 2026-08-13T20:41:12+07:00
+ENVIRONMENT: Chromium, WebServer http://127.0.0.1:3101, PostgreSQL 16 (127.0.0.1:5455/horplus_wave1d_fasttrack_test)
+================================================================================
+
+Running 3 tests using 3 workers
+
+  ✓  2 [chromium] › tests/e2e/local02-contract-settlement-renewal.spec.ts:18:5 › LOCAL-02 Playwright E2E — Contract Settlement, Termination & Renewal Flow Proof (18.4s)
+  ✓  1 [chromium] › tests/e2e/local01-tenant-onboarding-cooccupants.spec.ts:18:5 › LOCAL-01 Playwright E2E — Tenant Onboarding & Co-Occupant Management Flow Proof (20.3s)
+  ✓  3 [chromium] › tests/e2e/wave1g-owner-property-e2e.spec.ts:18:5 › Wave 1G — Owner Property Defaults & Availability E2E Real PostgreSQL Proof (20.9s)
+
+  3 passed (21.9s)
+================================================================================
+VERDICT: EXIT CODE 0 — ALL 3 E2E SUITES PASSED CLEANLY
+================================================================================
