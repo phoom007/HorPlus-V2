@@ -53,7 +53,7 @@ export class OutboxService {
   }
 
   /**
-   * Main Dispatcher: Processes PENDING outbox events idempotently
+   * Main Dispatcher: Processes PENDING outbox events using PostgreSQL FOR UPDATE SKIP LOCKED
    */
   public async processPendingOutboxEvents(batchSize: number = 50): Promise<{
     processedCount: number;
@@ -62,144 +62,145 @@ export class OutboxService {
     let processedCount = 0;
     let failedCount = 0;
 
-    try {
-      const pendingEvents = await this.client.localNotificationOutbox.findMany({
-        where: { status: 'PENDING' },
-        orderBy: { createdAt: 'asc' },
-        take: batchSize,
-      });
+    for (let i = 0; i < batchSize; i++) {
+      let eventProcessed = false;
+      let eventFailed = false;
 
-      if (pendingEvents.length === 0) {
-        return { processedCount: 0, failedCount: 0 };
-      }
+      try {
+        await this.client.$transaction(async (tx) => {
+          // Lock & claim next eligible PENDING outbox row using FOR UPDATE SKIP LOCKED
+          const claimedRows = await tx.$queryRaw<Array<{ id: string }>>`
+            SELECT id FROM local_notification_outbox
+            WHERE status = 'PENDING'
+            ORDER BY created_at ASC
+            LIMIT 1
+            FOR UPDATE SKIP LOCKED
+          `;
 
-      for (const event of pendingEvents) {
-        try {
-          await this.client.$transaction(async (tx) => {
-            // Re-verify event status inside transaction
-            const currentEvent = await tx.localNotificationOutbox.findUnique({
-              where: { id: event.id },
-            });
-
-            if (!currentEvent || currentEvent.status !== 'PENDING') {
-              return;
-            }
-
-            if (currentEvent.recipientType === 'TENANT') {
-              if (currentEvent.recipientId) {
-                // Check if notice already exists for this source outbox ID
-                const existing = await tx.tenantNotice.findFirst({
-                  where: { sourceOutboxId: currentEvent.id },
-                });
-
-                if (!existing) {
-                  await tx.tenantNotice.create({
-                    data: {
-                      dormitoryId: currentEvent.dormitoryId,
-                      tenantId: currentEvent.recipientId,
-                      title: currentEvent.title,
-                      message: currentEvent.body,
-                      type: currentEvent.eventType,
-                      sourceOutboxId: currentEvent.id,
-                    },
-                  });
-                }
-              }
-            } else if (currentEvent.recipientType === 'STAFF') {
-              // Resolve active staff members for this dormitory
-              const memberWhere: any = {
-                dormitoryId: currentEvent.dormitoryId,
-                status: 'active',
-              };
-
-              if (currentEvent.recipientRoleCode) {
-                const roles = currentEvent.recipientRoleCode
-                  .split(',')
-                  .map((r) => r.trim().toUpperCase());
-                memberWhere.role = {
-                  code: { in: roles },
-                };
-              }
-
-              const activeMembers = await tx.dormitoryMember.findMany({
-                where: memberWhere,
-                include: { role: true },
-              });
-
-              for (const member of activeMembers) {
-                try {
-                  await tx.staffNotification.upsert({
-                    where: {
-                      staff_notice_source_outbox_user_unique: {
-                        sourceOutboxId: currentEvent.id,
-                        userId: member.userId,
-                      },
-                    },
-                    create: {
-                      dormitoryId: currentEvent.dormitoryId,
-                      userId: member.userId,
-                      roleCode: member.role.code,
-                      category: currentEvent.eventType,
-                      title: currentEvent.title,
-                      message: currentEvent.body,
-                      metadata: (currentEvent.payload as any) || Prisma.JsonNull,
-                      sourceOutboxId: currentEvent.id,
-                    },
-                    update: {}, // Idempotent: leave existing untouched if re-processed
-                  });
-                } catch (memberErr: any) {
-                  logger.warn({
-                    event: 'STAFF_NOTICE_DISPATCH_SINGLE_USER_ERROR',
-                    sourceOutboxId: currentEvent.id,
-                    userId: member.userId,
-                    error: memberErr.message,
-                  });
-                }
-              }
-            }
-
-            // Mark event PROCESSED atomically
-            await tx.localNotificationOutbox.update({
-              where: { id: currentEvent.id },
-              data: {
-                status: 'PROCESSED',
-                processedAt: new Date(),
-              },
-            });
-          });
-
-          processedCount++;
-        } catch (err: any) {
-          logger.error({
-            event: 'OUTBOX_DISPATCH_EVENT_ERROR',
-            outboxId: event.id,
-            error: err.message,
-          });
-
-          try {
-            await this.client.localNotificationOutbox.update({
-              where: { id: event.id },
-              data: {
-                status: 'FAILED',
-                lastError: err.message ? err.message.slice(0, 1000) : 'Unknown error',
-              },
-            });
-          } catch (failUpdateErr) {
-            logger.error({
-              event: 'OUTBOX_FAILED_STATUS_UPDATE_ERROR',
-              outboxId: event.id,
-              error: (failUpdateErr as any)?.message,
-            });
+          if (!claimedRows || claimedRows.length === 0) {
+            return;
           }
 
+          const eventId = claimedRows[0].id;
+          const currentEvent = await tx.localNotificationOutbox.findUnique({
+            where: { id: eventId },
+          });
+
+          if (!currentEvent || currentEvent.status !== 'PENDING') {
+            return;
+          }
+
+          // Validate required fields
+          if (!currentEvent.dormitoryId || !currentEvent.title || !currentEvent.body) {
+            await tx.localNotificationOutbox.update({
+              where: { id: eventId },
+              data: {
+                status: 'FAILED',
+                lastError: 'Malformed outbox event: missing required fields',
+              },
+            });
+            eventFailed = true;
+            return;
+          }
+
+          if (currentEvent.recipientType === 'TENANT') {
+            if (currentEvent.recipientId) {
+              const existingNotice = await tx.tenantNotice.findUnique({
+                where: { sourceOutboxId: currentEvent.id },
+              });
+
+              if (!existingNotice) {
+                await tx.tenantNotice.create({
+                  data: {
+                    dormitoryId: currentEvent.dormitoryId,
+                    tenantId: currentEvent.recipientId,
+                    title: currentEvent.title,
+                    message: currentEvent.body,
+                    type: currentEvent.eventType,
+                    sourceOutboxId: currentEvent.id,
+                  },
+                });
+              }
+            }
+          } else if (currentEvent.recipientType === 'STAFF') {
+            const memberWhere: any = {
+              dormitoryId: currentEvent.dormitoryId,
+              status: 'active',
+            };
+
+            if (currentEvent.recipientRoleCode) {
+              const roles = currentEvent.recipientRoleCode
+                .split(',')
+                .map((r) => r.trim().toUpperCase());
+              memberWhere.role = {
+                code: { in: roles },
+              };
+            }
+
+            const activeMembers = await tx.dormitoryMember.findMany({
+              where: memberWhere,
+              include: { role: true },
+            });
+
+            for (const member of activeMembers) {
+              try {
+                await tx.staffNotification.upsert({
+                  where: {
+                    staff_notice_source_outbox_user_unique: {
+                      sourceOutboxId: currentEvent.id,
+                      userId: member.userId,
+                    },
+                  },
+                  create: {
+                    dormitoryId: currentEvent.dormitoryId,
+                    userId: member.userId,
+                    roleCode: member.role.code,
+                    category: currentEvent.eventType,
+                    title: currentEvent.title,
+                    message: currentEvent.body,
+                    metadata: (currentEvent.payload as any) || Prisma.JsonNull,
+                    sourceOutboxId: currentEvent.id,
+                  },
+                  update: {},
+                });
+              } catch (memberErr: any) {
+                logger.warn({
+                  event: 'STAFF_NOTICE_DISPATCH_SINGLE_USER_ERROR',
+                  sourceOutboxId: currentEvent.id,
+                  userId: member.userId,
+                  error: memberErr.message,
+                });
+              }
+            }
+          }
+
+          // Mark PROCESSED inside same transaction
+          await tx.localNotificationOutbox.update({
+            where: { id: eventId },
+            data: {
+              status: 'PROCESSED',
+              processedAt: new Date(),
+            },
+          });
+
+          eventProcessed = true;
+        });
+
+        if (eventProcessed) {
+          processedCount++;
+        } else if (eventFailed) {
           failedCount++;
+        } else {
+          // No more PENDING events available to claim
+          break;
         }
+      } catch (err: any) {
+        logger.error({
+          event: 'OUTBOX_DISPATCH_EVENT_ERROR',
+          error: err.message,
+        });
+        failedCount++;
       }
-    } catch (err: any) {
-      logger.error({
-        event: 'OUTBOX_DISPATCHER_BATCH_ERROR',
-        error: err.message,
-      });
     }
 
     return { processedCount, failedCount };

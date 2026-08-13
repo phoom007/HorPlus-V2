@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
 import { Prisma } from '@prisma/client';
 import {
   UpdateDormitoryDefaultsRequestSchema,
@@ -170,32 +170,29 @@ describe('Wave 1G — Strict Defaults, Propagation & Concurrency Integration Tes
     let testDormId: string;
     let testUserId: string;
 
-    beforeAll(async () => {
+    beforeEach(async () => {
       testUserId = crypto.randomUUID();
       testDormId = crypto.randomUUID();
 
-      const email = `wave1g-test-${Date.now()}@example.com`;
+      const email = `wave1g-test-${crypto.randomUUID()}@example.com`;
       await prisma.user.create({
         data: {
           id: testUserId,
           email,
           emailNormalized: email.toLowerCase(),
           name: 'Wave1G Test User',
-          googleSubject: `sub-${Date.now()}`,
+          googleSubject: `sub-${crypto.randomUUID()}`,
         },
       });
 
       await prisma.dormitory.create({
         data: {
           id: testDormId,
-          name: 'Wave1G Concurrency Dorm',
-          code: `DM-${Date.now()}`,
+          name: `Wave1G Dorm ${crypto.randomUUID().slice(0, 8)}`,
+          code: `DM-${crypto.randomUUID().slice(0, 8)}`,
           createdByUserId: testUserId,
         },
       });
-    });
-
-    beforeEach(async () => {
       await prisma.dormitoryPropertyDefaults.upsert({
         where: { dormitoryId: testDormId },
         create: {
@@ -225,13 +222,12 @@ describe('Wave 1G — Strict Defaults, Propagation & Concurrency Integration Tes
           version: 1,
         },
       });
-    });
 
       const bld = await prisma.building.create({
         data: {
           id: crypto.randomUUID(),
           dormitoryId: testDormId,
-          name: 'Building PG 1',
+          name: `Building PG ${crypto.randomUUID().slice(0, 8)}`,
           version: 1,
         },
       });
@@ -272,8 +268,8 @@ describe('Wave 1G — Strict Defaults, Propagation & Concurrency Integration Tes
         defaultsService.updateDormitoryDefaults(
           testDormId,
           {
-            property: { changes: { defaultMonthlyRent: 5000 }, expectedVersion: 1 }, // Stale version (current is 2)
-            billing: { changes: { waterRate: 25 }, expectedVersion: 2 }, // Fresh version
+            property: { changes: { defaultMonthlyRent: 5000 }, expectedVersion: 99 }, // Stale version (current is 1)
+            billing: { changes: { waterRate: 25 }, expectedVersion: 1 }, // Fresh version (current is 1)
           },
           testUserId
         )
@@ -281,8 +277,8 @@ describe('Wave 1G — Strict Defaults, Propagation & Concurrency Integration Tes
 
       // Verify billing waterRate was NOT mutated to 25
       const bill = await prisma.dormitoryBillingSettings.findUnique({ where: { dormitoryId: testDormId } });
-      expect(bill?.waterRate.toString()).toBe('20');
-      expect(bill?.version).toBe(2);
+      expect(bill?.waterRate.toString()).toBe('18');
+      expect(bill?.version).toBe(1);
     });
 
     it('proves concurrent applyDefaultPropagation idempotency replay under advisory lock', async () => {
@@ -294,8 +290,8 @@ describe('Wave 1G — Strict Defaults, Propagation & Concurrency Integration Tes
           billing: { waterRate: 22 },
         },
         expectedVersions: {
-          property: 2,
-          billing: 2,
+          property: 1,
+          billing: 1,
         },
         idempotencyKey,
       };
@@ -328,7 +324,7 @@ describe('Wave 1G — Strict Defaults, Propagation & Concurrency Integration Tes
           property: { defaultMonthlyRent: 4900 },
         },
         expectedVersions: {
-          property: 3,
+          property: 1,
         },
         idempotencyKey,
       };

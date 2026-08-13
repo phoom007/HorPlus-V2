@@ -441,6 +441,22 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
     } catch (e) {}
   };
 
+  const handleDeleteNotification = async (id: string | number) => {
+    const noticeId = String(id);
+    const reqHeaders: Record<string, string> = {};
+    const savedId = localStorage.getItem('selected_dormitory_id');
+    if (savedId) reqHeaders['x-dormitory-id'] = savedId;
+    try {
+      const res = await fetch(`/api/v1/notifications/${noticeId}/dismiss`, { method: 'POST', headers: reqHeaders, credentials: 'include' });
+      if (res.ok) {
+        setStaffNotices(prev => prev.filter(n => n.id !== noticeId));
+        setStaffUnreadCount(prev => Math.max(0, prev - 1));
+      }
+    } catch (e) {
+      console.error('[OwnerWorkspace] Error dismissing notification:', e);
+    }
+  };
+
   // Load centralized data
   const refreshAllData = async () => {
     let isApiConnected = false;
@@ -1299,36 +1315,35 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
                       </button>
                     </div>
 
+                    <div className="text-[10px] font-medium text-amber-800 bg-amber-50 p-2 rounded-xl border border-amber-200 flex items-center justify-between mb-2">
+                      <span>💡 <strong>คำแนะนำ:</strong> ปัดซ้ายที่รายการแจ้งเตือนเพื่อลบข้อความ</span>
+                    </div>
+
                     <div className="space-y-2 max-h-[320px] overflow-y-auto pr-1">
                       {staffNotices.map((notif) => (
-                        <div
-                          key={notif.id}
-                          data-testid={`staff-notice-item-${notif.id}`}
-                          className={`p-2.5 rounded-xl border text-left flex items-start justify-between gap-2 transition-all ${
-                            notif.isRead ? 'bg-slate-50 border-slate-100 text-slate-600' : 'bg-blue-50/70 border-blue-200 text-blue-950 font-medium'
-                          }`}
-                        >
-                          <div className="min-w-0 space-y-0.5">
-                            <div className="flex items-center gap-1.5">
-                              <span className="text-[9px] font-extrabold px-1.5 py-0.5 rounded-md bg-blue-100 text-blue-800 border border-blue-200">
-                                {notif.category || 'การแจ้งเตือน'}
-                              </span>
-                              <span className="text-[9px] text-slate-400">
-                                {new Date(notif.createdAt).toLocaleDateString('th-TH')}
-                              </span>
-                            </div>
-                            <h5 className="text-xs font-bold text-slate-900 leading-snug">{notif.title}</h5>
-                            <p className="text-[10px] text-slate-600 leading-normal">{notif.body}</p>
-                          </div>
+                        <div key={notif.id} data-testid={`staff-notice-item-${notif.id}`}>
+                          <SlidableNotificationItem
+                            notif={{
+                              id: notif.id,
+                              title: notif.title,
+                              description: notif.body,
+                              time: new Date(notif.createdAt).toLocaleDateString('th-TH'),
+                              tag: notif.category || 'แจ้งเตือน',
+                              tagColor: 'bg-blue-100 text-blue-800 border-blue-200',
+                            }}
+                            onDelete={handleDeleteNotification}
+                          />
                           {!notif.isRead && (
-                            <button
-                              type="button"
-                              data-testid={`button-staff-notice-read-${notif.id}`}
-                              onClick={() => handleMarkStaffNoticeAsRead(notif.id)}
-                              className="px-2 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-[9px] font-extrabold transition-all shrink-0 cursor-pointer"
-                            >
-                              อ่านแล้ว
-                            </button>
+                            <div className="flex justify-end pt-1 pr-1">
+                              <button
+                                type="button"
+                                data-testid={`button-staff-notice-read-${notif.id}`}
+                                onClick={() => handleMarkStaffNoticeAsRead(notif.id)}
+                                className="px-2 py-0.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-[9px] font-extrabold transition-all cursor-pointer"
+                              >
+                                อ่านแล้ว
+                              </button>
+                            </div>
                           )}
                         </div>
                       ))}

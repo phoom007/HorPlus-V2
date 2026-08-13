@@ -15,13 +15,21 @@ test.describe.serial('LOCAL-03: Local Notification Outbox & Operations Polish E2
 
   let dormId: string;
   let ownerUserId: string;
+  let managerUserId: string;
   let tenantUserId: string;
   let tenantId: string;
 
   let sessionTokenOwner: string;
   let csrfTokenOwner: string;
+  let sessionTokenManager: string;
+  let csrfTokenManager: string;
   let sessionTokenTenant: string;
   let csrfTokenTenant: string;
+
+  let tenantNoticeTitle = 'อนุมัติการต่อสัญญาเช่า';
+  let tenantNoticeBody = 'คำขอต่อสัญญาเช่าห้อง A101 ของคุณได้รับการอนุมัติเรียบร้อยแล้ว';
+  let staffNoticeTitle = 'มีคำขอลงทะเบียนผู้เช่าใหม่';
+  let staffNoticeBody = 'คุณสมชาย ใจดี ส่งคำขอลงทะเบียนผู้เช่าห้อง A101';
 
   test.beforeAll(async () => {
     // 1. Clean test DB & Seed Subscriptions
@@ -42,7 +50,29 @@ test.describe.serial('LOCAL-03: Local Notification Outbox & Operations Polish E2
     dormId = dorm.id;
     await subscriptionEntitlementService.provisionInitialTrial(dormId);
 
-    // 3. Create Owner User & Member
+    // 3. Create Roles
+    let ownerRole = await prisma.role.findFirst({ where: { code: 'OWNER' } });
+    if (!ownerRole) {
+      ownerRole = await prisma.role.create({
+        data: { name: 'Owner', code: 'OWNER', isSystem: true, permissions: ['*'] },
+      });
+    }
+
+    let managerRole = await prisma.role.findFirst({ where: { code: 'MANAGER' } });
+    if (!managerRole) {
+      managerRole = await prisma.role.create({
+        data: { name: 'Manager', code: 'MANAGER', isSystem: true, permissions: ['tenant:*'] },
+      });
+    }
+
+    let tenantRole = await prisma.role.findFirst({ where: { code: 'TENANT' } });
+    if (!tenantRole) {
+      tenantRole = await prisma.role.create({
+        data: { name: 'Tenant', code: 'TENANT', isSystem: true, permissions: [] },
+      });
+    }
+
+    // 4. Create Owner User & Member
     const ownerUser = await prisma.user.create({
       data: {
         email: 'owner_local03@test.com',
@@ -53,13 +83,6 @@ test.describe.serial('LOCAL-03: Local Notification Outbox & Operations Polish E2
       },
     });
     ownerUserId = ownerUser.id;
-
-    let ownerRole = await prisma.role.findFirst({ where: { code: 'OWNER' } });
-    if (!ownerRole) {
-      ownerRole = await prisma.role.create({
-        data: { name: 'Owner', code: 'OWNER', isSystem: true, permissions: ['*'] },
-      });
-    }
 
     await prisma.dormitoryMember.create({
       data: {
@@ -83,7 +106,41 @@ test.describe.serial('LOCAL-03: Local Notification Outbox & Operations Polish E2
     sessionTokenOwner = sessionTokenService.encryptToken({ sub: ownerUserId, sid: sidOwner, type: 'session', version: 1 }, 86400);
     csrfTokenOwner = csrfService.generateCsrfToken(sidOwner);
 
-    // 4. Create Tenant User & Record
+    // 5. Create Manager User & Member
+    const managerUser = await prisma.user.create({
+      data: {
+        email: 'manager_local03@test.com',
+        emailNormalized: 'manager_local03@test.com',
+        name: 'Manager Local03',
+        googleSubject: `sub-manager-l03-${Date.now()}`,
+        status: 'active',
+      },
+    });
+    managerUserId = managerUser.id;
+
+    await prisma.dormitoryMember.create({
+      data: {
+        dormitoryId: dormId,
+        userId: managerUserId,
+        roleId: managerRole.id,
+      },
+    });
+
+    const sidManager = crypto.randomUUID();
+    const hashManager = SessionTokenService.hashSessionId(sidManager);
+    await prisma.session.create({
+      data: {
+        userId: managerUserId,
+        sessionIdHash: hashManager,
+        tokenVersion: 1,
+        status: 'active',
+        expiresAt: new Date(Date.now() + 86400 * 1000),
+      },
+    });
+    sessionTokenManager = sessionTokenService.encryptToken({ sub: managerUserId, sid: sidManager, type: 'session', version: 1 }, 86400);
+    csrfTokenManager = csrfService.generateCsrfToken(sidManager);
+
+    // 6. Create Tenant User & Member & Record
     const tenantUser = await prisma.user.create({
       data: {
         email: 'tenant_l03@test.com',
@@ -94,6 +151,14 @@ test.describe.serial('LOCAL-03: Local Notification Outbox & Operations Polish E2
       },
     });
     tenantUserId = tenantUser.id;
+
+    await prisma.dormitoryMember.create({
+      data: {
+        dormitoryId: dormId,
+        userId: tenantUserId,
+        roleId: tenantRole.id,
+      },
+    });
 
     const tenant = await prisma.tenant.create({
       data: {
@@ -123,7 +188,7 @@ test.describe.serial('LOCAL-03: Local Notification Outbox & Operations Polish E2
     sessionTokenTenant = sessionTokenService.encryptToken({ sub: tenantUserId, sid: sidTenant, type: 'session', version: 1 }, 86400);
     csrfTokenTenant = csrfService.generateCsrfToken(sidTenant);
 
-    // 5. Seed an Outbox Event & Dispatch to create persistent notices
+    // 7. Seed Outbox Events & Dispatch
     await prisma.$transaction(async (tx) => {
       await outboxService.createOutboxEvent(tx, {
         dormitoryId: dormId,
@@ -132,8 +197,8 @@ test.describe.serial('LOCAL-03: Local Notification Outbox & Operations Polish E2
         aggregateId: crypto.randomUUID(),
         recipientType: 'TENANT',
         recipientId: tenantId,
-        title: 'อนุมัติการต่อสัญญาเช่า',
-        body: 'คำขอต่อสัญญาเช่าห้อง A101 ของคุณได้รับการอนุมัติเรียบร้อยแล้ว',
+        title: tenantNoticeTitle,
+        body: tenantNoticeBody,
       });
 
       await outboxService.createOutboxEvent(tx, {
@@ -142,16 +207,16 @@ test.describe.serial('LOCAL-03: Local Notification Outbox & Operations Polish E2
         aggregateType: 'TENANT_REGISTRATION',
         aggregateId: crypto.randomUUID(),
         recipientType: 'STAFF',
-        recipientRoleCode: 'OWNER',
-        title: 'มีคำขอลงทะเบียนผู้เช่าใหม่',
-        body: 'คุณสมชาย ใจดี ส่งคำขอลงทะเบียนผู้เช่าห้อง A101',
+        recipientRoleCode: 'OWNER,MANAGER',
+        title: staffNoticeTitle,
+        body: staffNoticeBody,
       });
     });
 
     await outboxService.processPendingOutboxEvents();
   });
 
-  test('Flow A & B: Tenant persistent in-app notice, read/unread state & F5 persistence', async ({ page, context }) => {
+  test('Flow A & B: Tenant persistent in-app notice, read state & F5 persistence', async ({ page, context }) => {
     await context.clearCookies();
     await context.addCookies([
       { name: 'horplus_session', value: sessionTokenTenant, domain: '127.0.0.1', path: '/' },
@@ -162,22 +227,33 @@ test.describe.serial('LOCAL-03: Local Notification Outbox & Operations Polish E2
     await page.goto('/tenant');
     await page.waitForLoadState('networkidle');
 
-    await expect(page.locator('body')).toBeVisible();
+    // Assert Tenant notice content is visible in DOM
+    const noticeTitle = page.getByText(tenantNoticeTitle);
+    await expect(noticeTitle).toBeVisible();
 
-    // Verify notification modal toggle is accessible
-    const bellButton = page.locator('button').filter({ has: page.locator('svg') }).first();
-    if (await bellButton.isVisible()) {
-      await bellButton.click();
+    const noticeBody = page.getByText(tenantNoticeBody);
+    await expect(noticeBody).toBeVisible();
+
+    // Mark as read via API or UI button
+    const markReadBtn = page.getByRole('button', { name: /อ่านแล้ว/i }).first();
+    if (await markReadBtn.isVisible()) {
+      await markReadBtn.click();
       await page.waitForTimeout(500);
     }
 
-    // F5 reload
+    // Verify DB read status updated
+    const updatedDbNotice = await prisma.tenantNotice.findFirst({
+      where: { dormitoryId: dormId, tenantId },
+    });
+    expect(updatedDbNotice?.isRead).toBe(true);
+
+    // Reload (F5) and assert read status persists
     await page.reload();
     await page.waitForLoadState('networkidle');
-    await expect(page.locator('body')).toBeVisible();
+    await expect(page.getByText(tenantNoticeTitle)).toBeVisible();
   });
 
-  test('Flow C & D: Owner operational notifications & RBAC enforcement', async ({ page, context }) => {
+  test('Flow C & D: Owner operational notifications, swipe guide badge & dismissal persistence', async ({ page, context }) => {
     await context.clearCookies();
     await context.addCookies([
       { name: 'horplus_session', value: sessionTokenOwner, domain: '127.0.0.1', path: '/' },
@@ -187,19 +263,62 @@ test.describe.serial('LOCAL-03: Local Notification Outbox & Operations Polish E2
 
     await page.goto('/owner/dashboard');
     await page.waitForLoadState('networkidle');
-    await expect(page.locator('body')).toBeVisible();
 
-    // Open notification dropdown in header
+    // Open notification dropdown
     const headerBell = page.locator('header button').filter({ has: page.locator('svg') }).first();
     if (await headerBell.isVisible()) {
       await headerBell.click();
       await page.waitForTimeout(500);
     }
 
-    // F5 reload
+    // Assert exact staff notice content & swipe guide badge in DOM
+    await expect(page.getByText(staffNoticeTitle)).toBeVisible();
+    await expect(page.getByText(/ปัดซ้ายที่รายการแจ้งเตือนเพื่อลบข้อความ/i)).toBeVisible();
+
+    // Perform dismissal via API endpoint (simulating swipe delete action)
+    const notice = await prisma.staffNotification.findFirst({
+      where: { dormitoryId: dormId, userId: ownerUserId },
+    });
+    expect(notice).not.toBeNull();
+
+    const dismissRes = await page.request.post(`/api/v1/notifications/${notice!.id}/dismiss`, {
+      headers: { 'x-dormitory-id': dormId },
+    });
+    expect(dismissRes.status()).toBe(200);
+
+    // F5 reload and verify notice remains hidden for Owner
     await page.reload();
     await page.waitForLoadState('networkidle');
-    await expect(page.locator('body')).toBeVisible();
+
+    const headerBell2 = page.locator('header button').filter({ has: page.locator('svg') }).first();
+    if (await headerBell2.isVisible()) {
+      await headerBell2.click();
+      await page.waitForTimeout(500);
+    }
+
+    await expect(page.getByText(staffNoticeTitle)).not.toBeVisible();
+  });
+
+  test('Flow D & H: Manager notification list remains unaffected by Owner dismissal', async ({ page, context }) => {
+    await context.clearCookies();
+    await context.addCookies([
+      { name: 'horplus_session', value: sessionTokenManager, domain: '127.0.0.1', path: '/' },
+      { name: 'horplus_csrf', value: csrfTokenManager, domain: '127.0.0.1', path: '/' },
+      { name: 'selected_dormitory_id', value: dormId, domain: '127.0.0.1', path: '/' },
+    ]);
+
+    await page.goto('/owner/dashboard');
+    await page.waitForLoadState('networkidle');
+
+    // Open notification dropdown
+    const headerBell = page.locator('header button').filter({ has: page.locator('svg') }).first();
+    if (await headerBell.isVisible()) {
+      await headerBell.click();
+      await page.waitForTimeout(500);
+    }
+
+    // Assert Manager still sees their copy of the staff notice!
+    await expect(page.getByText(staffNoticeTitle)).toBeVisible();
   });
 
   test('Flow E: Cross-dormitory isolation returns 403 for unauthorized dormitory header', async ({ request }) => {
@@ -211,16 +330,91 @@ test.describe.serial('LOCAL-03: Local Notification Outbox & Operations Polish E2
     expect([401, 403]).toContain(response.status());
   });
 
+  test('Flow F: Outbox reconciliation idempotency on re-dispatch', async () => {
+    const initialNotices = await prisma.tenantNotice.count({
+      where: { dormitoryId: dormId },
+    });
+
+    // Re-run dispatcher
+    await outboxService.processPendingOutboxEvents();
+
+    const afterNotices = await prisma.tenantNotice.count({
+      where: { dormitoryId: dormId },
+    });
+
+    expect(afterNotices).toBe(initialNotices); // ZERO duplicate notices created!
+  });
+
   test('Flow G: Truthful empty state rendering without fake placeholders', async ({ page, context }) => {
     await context.clearCookies();
     await context.addCookies([
-      { name: 'horplus_session', value: sessionTokenOwner, domain: '127.0.0.1', path: '/' },
-      { name: 'horplus_csrf', value: csrfTokenOwner, domain: '127.0.0.1', path: '/' },
+      { name: 'horplus_session', value: sessionTokenTenant, domain: '127.0.0.1', path: '/' },
+      { name: 'horplus_csrf', value: csrfTokenTenant, domain: '127.0.0.1', path: '/' },
       { name: 'selected_dormitory_id', value: dormId, domain: '127.0.0.1', path: '/' },
     ]);
 
-    await page.goto('/owner/dashboard');
+    // Create fresh tenant with 0 notifications
+    const freshTenantId = crypto.randomUUID();
+    const freshUserId = crypto.randomUUID();
+
+    const freshUser = await prisma.user.create({
+      data: {
+        id: freshUserId,
+        email: 'fresh_tenant@test.com',
+        emailNormalized: 'fresh_tenant@test.com',
+        name: 'Fresh Tenant',
+        googleSubject: `sub-fresh-${Date.now()}`,
+        status: 'active',
+      },
+    });
+
+    let tenantRole = await prisma.role.findFirst({ where: { code: 'TENANT' } });
+    await prisma.dormitoryMember.create({
+      data: {
+        dormitoryId: dormId,
+        userId: freshUserId,
+        roleId: tenantRole!.id,
+      },
+    });
+
+    await prisma.tenant.create({
+      data: {
+        id: freshTenantId,
+        dormitoryId: dormId,
+        linkedUserId: freshUserId,
+        tenantNumber: 'TNT-FRESH-01',
+        firstName: 'Fresh',
+        lastName: 'Tenant',
+        displayName: 'Fresh Tenant',
+        phone: '0811112222',
+        status: 'active',
+      },
+    });
+
+    const sidFresh = crypto.randomUUID();
+    const hashFresh = SessionTokenService.hashSessionId(sidFresh);
+    await prisma.session.create({
+      data: {
+        userId: freshUserId,
+        sessionIdHash: hashFresh,
+        tokenVersion: 1,
+        status: 'active',
+        expiresAt: new Date(Date.now() + 86400 * 1000),
+      },
+    });
+    const freshSessionToken = sessionTokenService.encryptToken({ sub: freshUserId, sid: sidFresh, type: 'session', version: 1 }, 86400);
+    const freshCsrfToken = csrfService.generateCsrfToken(sidFresh);
+
+    await context.clearCookies();
+    await context.addCookies([
+      { name: 'horplus_session', value: freshSessionToken, domain: '127.0.0.1', path: '/' },
+      { name: 'horplus_csrf', value: freshCsrfToken, domain: '127.0.0.1', path: '/' },
+      { name: 'selected_dormitory_id', value: dormId, domain: '127.0.0.1', path: '/' },
+    ]);
+
+    await page.goto('/tenant');
     await page.waitForLoadState('networkidle');
-    await expect(page.locator('body')).toBeVisible();
+
+    await expect(page.getByText('ไม่มีรายการแจ้งเตือนใหม่')).toBeVisible();
   });
 });

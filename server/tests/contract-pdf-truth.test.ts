@@ -231,6 +231,7 @@ describe('Contract PDF Evidence Gate — Route-Level & Immutability Verification
         buildingId: building.id,
         roomNumber: roomNum,
         normalizedRoomNumber: roomNum.toLowerCase(),
+        roomType: 'STANDARD',
         monthlyRent: 4321.00,
       },
     });
@@ -418,6 +419,7 @@ describe('Contract PDF Evidence Gate — Route-Level & Immutability Verification
         buildingId: building.id,
         roomNumber: roomNum,
         normalizedRoomNumber: roomNum.toLowerCase(),
+        roomType: 'STANDARD',
         monthlyRent: 3500.00,
       },
     });
@@ -563,6 +565,7 @@ describe('Contract PDF Evidence Gate — Route-Level & Immutability Verification
         buildingId: building.id,
         roomNumber: roomNum,
         normalizedRoomNumber: roomNum.toLowerCase(),
+        roomType: 'STANDARD',
         monthlyRent: 5000.00,
       },
     });

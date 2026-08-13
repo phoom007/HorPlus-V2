@@ -269,6 +269,14 @@ export class ContractService {
 
         const now = new Date();
 
+        let safeActorUserId: string | null = null;
+        if (actorUserId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(actorUserId)) {
+          const actorUser = await tx.user.findUnique({ where: { id: actorUserId } });
+          if (actorUser) {
+            safeActorUserId = actorUserId;
+          }
+        }
+
         // 5. Create ContractSnapshot atomically
         const snapshot = await tx.contractSnapshot.create({
           data: {
@@ -292,7 +300,7 @@ export class ContractService {
             sourceVersions: resolvedDefaults.sourceVersions,
             snapshotData: resolvedDefaults as any,
             lockedAt: now,
-            lockedByUserId: actorUserId,
+            lockedByUserId: safeActorUserId,
           },
         });
 
@@ -306,7 +314,7 @@ export class ContractService {
             signedByOwnerAt: payload.ownerSignature ? now : contract.signedByOwnerAt,
             signedByTenantAt: payload.tenantSignature ? now : contract.signedByTenantAt,
             activatedAt: now,
-            updatedByUserId: actorUserId,
+            updatedByUserId: safeActorUserId,
             version: { increment: 1 },
           },
         });
@@ -387,7 +395,7 @@ export class ContractService {
             fromStatus: contract.status,
             toStatus: 'active',
             reason: 'Contract activated & immutable snapshot locked',
-            changedByUserId: actorUserId,
+            changedByUserId: safeActorUserId,
             effectiveAt: now,
           },
         });
@@ -396,7 +404,7 @@ export class ContractService {
         await tx.auditLog.create({
           data: {
             dormitoryId,
-            actorUserId,
+            actorUserId: safeActorUserId,
             entityType: 'CONTRACT',
             entityId: id,
             action: 'CONTRACT_ACTIVATED',

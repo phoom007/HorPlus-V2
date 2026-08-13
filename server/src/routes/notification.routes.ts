@@ -20,21 +20,19 @@ export function createNotificationRouter(
   router.use(extractUnifiedActor);
 
   const getStaffContext = async (req: Request) => {
-    let context = (req as any).dormitoryContext;
-    if (!context) {
-      if (req.auth) {
-        context = await resolveAuthoritativeDormitoryContext(req);
-      } else {
-        const actor = req.actor;
-        const dormitoryId = (req.headers['x-dormitory-id'] as string) || actor?.dormitoryId;
-        const userId = actor?.userId || (req.headers['x-user-id'] as string);
-        const roleCode = actor?.roleCode || (req.headers['x-role-code'] as string) || 'OWNER';
-        if (!dormitoryId) {
-          throw new Error('BAD_REQUEST: Missing dormitory ID');
-        }
-        context = { dormitoryId, userId, roleCode };
-      }
+    if (!req.auth?.userId) {
+      const err: any = new Error('UNAUTHORIZED: Authentication required');
+      err.statusCode = 401;
+      throw err;
     }
+
+    const context = await resolveAuthoritativeDormitoryContext(req);
+    if (!context || !context.dormitoryId || !context.userId || !context.roleCode) {
+      const err: any = new Error('FORBIDDEN: Authoritative dormitory context missing or invalid');
+      err.statusCode = 403;
+      throw err;
+    }
+
     return context;
   };
 
@@ -53,8 +51,8 @@ export function createNotificationRouter(
       );
       res.json({ notifications, unreadCount });
     } catch (err: any) {
-      const status = err.statusCode || err.status || (err.message?.includes('Access denied') ? 403 : 500);
-      res.status(status).json({ error: { code: 'FORBIDDEN', message: err.message } });
+      const status = err.statusCode || err.status || (err.message?.includes('UNAUTHORIZED') ? 401 : 403);
+      res.status(status).json({ error: { code: status === 401 ? 'UNAUTHORIZED' : 'FORBIDDEN', message: err.message } });
     }
   });
 
@@ -75,8 +73,29 @@ export function createNotificationRouter(
       }
       res.json(updated);
     } catch (err: any) {
-      const status = err.statusCode || err.status || 500;
-      res.status(status).json({ error: { code: 'ERROR', message: err.message } });
+      const status = err.statusCode || err.status || (err.message?.includes('UNAUTHORIZED') ? 401 : 403);
+      res.status(status).json({ error: { code: status === 401 ? 'UNAUTHORIZED' : 'FORBIDDEN', message: err.message } });
+    }
+  });
+
+  // POST /api/v1/notifications/:id/dismiss (Swipe-to-delete per-user dismissal)
+  router.post('/:id/dismiss', async (req: Request, res: Response) => {
+    try {
+      const context = await getStaffContext(req);
+      const dismissed = await notificationService.dismissStaffNotification(
+        context.dormitoryId,
+        req.params.id,
+        context.userId
+      );
+      if (!dismissed) {
+        return res.status(404).json({
+          error: { code: 'NOT_FOUND', message: 'ไม่พบรายการแจ้งเตือนที่ระบุ' },
+        });
+      }
+      res.json({ success: true, id: req.params.id });
+    } catch (err: any) {
+      const status = err.statusCode || err.status || (err.message?.includes('UNAUTHORIZED') ? 401 : 403);
+      res.status(status).json({ error: { code: status === 401 ? 'UNAUTHORIZED' : 'FORBIDDEN', message: err.message } });
     }
   });
 
@@ -90,8 +109,8 @@ export function createNotificationRouter(
       );
       res.json({ markedCount: count });
     } catch (err: any) {
-      const status = err.statusCode || err.status || 500;
-      res.status(status).json({ error: { code: 'ERROR', message: err.message } });
+      const status = err.statusCode || err.status || (err.message?.includes('UNAUTHORIZED') ? 401 : 403);
+      res.status(status).json({ error: { code: status === 401 ? 'UNAUTHORIZED' : 'FORBIDDEN', message: err.message } });
     }
   });
 
@@ -102,7 +121,8 @@ export function createNotificationRouter(
       const preferences = await notificationService.getPreferences(context.dormitoryId);
       res.json(preferences);
     } catch (err: any) {
-      res.status(500).json({ error: { message: err.message } });
+      const status = err.statusCode || err.status || 500;
+      res.status(status).json({ error: { message: err.message } });
     }
   });
 
@@ -125,7 +145,8 @@ export function createNotificationRouter(
       );
       res.json(updated);
     } catch (err: any) {
-      res.status(500).json({ error: { message: err.message } });
+      const status = err.statusCode || err.status || 500;
+      res.status(status).json({ error: { message: err.message } });
     }
   });
 
@@ -133,32 +154,60 @@ export function createNotificationRouter(
 }
 
 export function createTenantNotificationRouter(
-  notificationService: NotificationService = new NotificationService()
+  notificationService: NotificationService = new NotificationService(),
+  authService?: AuthenticationService
 ): Router {
   const router = Router();
+
+  if (authService) {
+    const requireSession = createRequireSessionMiddleware(authService);
+    router.use(requireSession);
+  }
 
   router.use(extractUnifiedActor);
 
   const getTenantContext = async (req: Request) => {
+    const userId = req.auth?.userId;
+    if (!userId) {
+      const err: any = new Error('UNAUTHORIZED: Not logged in');
+      err.statusCode = 401;
+      throw err;
+    }
+
     const prisma = getPrismaClient();
-    const actor = req.actor;
-    let dormitoryId = (req.headers['x-dormitory-id'] as string) || actor?.dormitoryId;
-    let tenantId = actor?.tenantId || (req.headers['x-tenant-id'] as string);
+    const activeMemberships = await prisma.dormitoryMember.findMany({
+      where: { userId, status: 'active' },
+      include: { role: true },
+    });
 
-    if (req.auth?.userId) {
-      const tenant = await prisma.tenant.findFirst({
-        where: { linkedUserId: req.auth.userId, ...(dormitoryId ? { dormitoryId } : {}) },
-      });
-      if (tenant) {
-        tenantId = tenant.id;
-        dormitoryId = tenant.dormitoryId;
-      }
+    const membership = activeMemberships.find(
+      (m) => !m.role || (m.role.code || '').toUpperCase() === 'TENANT'
+    );
+
+    if (!membership) {
+      const err: any = new Error('FORBIDDEN: Not an active tenant member');
+      err.statusCode = 403;
+      throw err;
     }
 
-    if (!dormitoryId || !tenantId) {
-      throw new Error('FORBIDDEN: Tenant session context missing');
+    const clientDormId = req.headers['x-dormitory-id'] as string;
+    if (clientDormId && clientDormId !== membership.dormitoryId) {
+      const err: any = new Error('FORBIDDEN: Dormitory mismatch');
+      err.statusCode = 403;
+      throw err;
     }
-    return { actor, dormitoryId, tenantId };
+
+    const tenant = await prisma.tenant.findFirst({
+      where: { linkedUserId: userId, dormitoryId: membership.dormitoryId },
+    });
+
+    if (!tenant) {
+      const err: any = new Error('FORBIDDEN: Tenant record not found');
+      err.statusCode = 403;
+      throw err;
+    }
+
+    return { dormitoryId: membership.dormitoryId, tenantId: tenant.id };
   };
 
   router.get('/', async (req: Request, res: Response) => {
@@ -174,7 +223,8 @@ export function createTenantNotificationRouter(
       );
       res.json({ notifications, unreadCount });
     } catch (err: any) {
-      res.status(403).json({ error: { message: err.message } });
+      const status = err.statusCode || err.status || 403;
+      res.status(status).json({ error: { code: status === 401 ? 'UNAUTHORIZED' : 'FORBIDDEN', message: err.message } });
     }
   });
 
@@ -194,7 +244,8 @@ export function createTenantNotificationRouter(
       }
       res.json(updated);
     } catch (err: any) {
-      res.status(400).json({ error: { message: err.message } });
+      const status = err.statusCode || err.status || 400;
+      res.status(status).json({ error: { message: err.message } });
     }
   });
 
@@ -204,7 +255,8 @@ export function createTenantNotificationRouter(
       const count = await notificationService.markAllTenantAsRead(dormitoryId, tenantId);
       res.json({ markedCount: count });
     } catch (err: any) {
-      res.status(400).json({ error: { message: err.message } });
+      const status = err.statusCode || err.status || 400;
+      res.status(status).json({ error: { message: err.message } });
     }
   });
 

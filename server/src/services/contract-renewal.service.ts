@@ -337,9 +337,11 @@ export class ContractRenewalService {
       return { request: updatedRequest, contract: newContract };
     });
 
-    outboxService.processPendingOutboxEvents().catch((err) => {
+    try {
+      await outboxService.processPendingOutboxEvents();
+    } catch (err: any) {
       logger.error({ event: 'OUTBOX_DISPATCH_AFTER_RENEWAL_APPROVE_ERROR', error: err.message });
-    });
+    }
 
     logger.info({
       event: 'SECURITY_AUDIT',

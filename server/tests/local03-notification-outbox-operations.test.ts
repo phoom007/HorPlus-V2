@@ -424,4 +424,147 @@ describe('LOCAL-03: Local Notification Outbox & Operations Polish', () => {
     expect(marked).not.toBeNull();
     expect(marked?.isRead).toBe(true);
   });
+
+  // 11. TRUE Concurrent Dispatcher Exactly-One-Delivery
+  it('should deliver exactly one notice when two concurrent dispatchers process the same pending event', async () => {
+    const aggregateId = crypto.randomUUID();
+
+    await prisma.$transaction(async (tx) => {
+      await outboxService.createOutboxEvent(tx, {
+        dormitoryId: testDormitoryId,
+        eventType: 'CONCURRENCY_TEST',
+        aggregateType: 'TEST',
+        aggregateId,
+        recipientType: 'TENANT',
+        recipientId: testTenantId,
+        title: 'Concurrent Dispatch Test',
+        body: 'Body',
+      });
+    });
+
+    // Run 2 dispatchers concurrently
+    const [res1, res2] = await Promise.allSettled([
+      outboxService.processPendingOutboxEvents(),
+      outboxService.processPendingOutboxEvents(),
+    ]);
+
+    expect(res1.status).toBe('fulfilled');
+    expect(res2.status).toBe('fulfilled');
+
+    const notices = await prisma.tenantNotice.findMany({
+      where: { dormitoryId: testDormitoryId, tenantId: testTenantId },
+    });
+
+    expect(notices.length).toBe(1); // EXACTLY ONE notice delivered!
+  });
+
+  // 12. Tenant Destination Database Uniqueness
+  it('should enforce database-level unique constraint on TenantNotice.sourceOutboxId', async () => {
+    const outboxId = crypto.randomUUID();
+
+    await prisma.tenantNotice.create({
+      data: {
+        dormitoryId: testDormitoryId,
+        tenantId: testTenantId,
+        title: 'First Notice',
+        message: 'Message 1',
+        sourceOutboxId: outboxId,
+      },
+    });
+
+    await expect(
+      prisma.tenantNotice.create({
+        data: {
+          dormitoryId: testDormitoryId,
+          tenantId: testTenantId,
+          title: 'Duplicate Notice',
+          message: 'Message 2',
+          sourceOutboxId: outboxId,
+        },
+      })
+    ).rejects.toThrow();
+  });
+
+  // 13. Staff Notice Per-User Dismissal Isolation
+  it('should dismiss staff notice for the authenticated user only without affecting other staff members', async () => {
+    const repo = new PrismaNotificationRepository();
+
+    const aggregateId = crypto.randomUUID();
+    await prisma.$transaction(async (tx) => {
+      await outboxService.createOutboxEvent(tx, {
+        dormitoryId: testDormitoryId,
+        eventType: 'DISMISSAL_TEST',
+        aggregateType: 'TEST',
+        aggregateId,
+        recipientType: 'STAFF',
+        recipientRoleCode: 'OWNER,MANAGER',
+        title: 'Dismissal Isolation Test',
+        body: 'Testing dismissal isolation',
+      });
+    });
+
+    await outboxService.processPendingOutboxEvents();
+
+    const ownerNoticesBefore = await repo.listForStaff(testDormitoryId, testOwnerUserId);
+    const managerNoticesBefore = await repo.listForStaff(testDormitoryId, testManagerUserId);
+
+    expect(ownerNoticesBefore.length).toBe(1);
+    expect(managerNoticesBefore.length).toBe(1);
+
+    // Owner dismisses their notice
+    const dismissed = await repo.dismissStaffNotice(testDormitoryId, ownerNoticesBefore[0].id, testOwnerUserId);
+    expect(dismissed).toBe(true);
+
+    const ownerNoticesAfter = await repo.listForStaff(testDormitoryId, testOwnerUserId);
+    const managerNoticesAfter = await repo.listForStaff(testDormitoryId, testManagerUserId);
+
+    expect(ownerNoticesAfter.length).toBe(0); // Dismissed from Owner list!
+    expect(managerNoticesAfter.length).toBe(1); // Remains visible in Manager list!
+  });
+
+  // 14. Malformed Outbox Event Fail-Safe
+  it('should mark malformed event as FAILED without blocking valid outbox events', async () => {
+    // Insert malformed outbox event with empty body
+    const malformed = await prisma.localNotificationOutbox.create({
+      data: {
+        dormitoryId: testDormitoryId,
+        eventType: 'MALFORMED',
+        aggregateType: 'TEST',
+        aggregateId: crypto.randomUUID(),
+        recipientType: 'TENANT',
+        recipientId: testTenantId,
+        title: '',
+        body: '',
+        status: 'PENDING',
+        idempotencyKey: `malformed-${Date.now()}`,
+      },
+    });
+
+    // Insert valid event
+    const validAggregateId = crypto.randomUUID();
+    await prisma.$transaction(async (tx) => {
+      await outboxService.createOutboxEvent(tx, {
+        dormitoryId: testDormitoryId,
+        eventType: 'VALID_EVENT',
+        aggregateType: 'TEST',
+        aggregateId: validAggregateId,
+        recipientType: 'TENANT',
+        recipientId: testTenantId,
+        title: 'Valid Event Title',
+        body: 'Valid Event Body',
+      });
+    });
+
+    await outboxService.processPendingOutboxEvents();
+
+    const updatedMalformed = await prisma.localNotificationOutbox.findUnique({
+      where: { id: malformed.id },
+    });
+    expect(updatedMalformed?.status).toBe('FAILED');
+
+    const validNotice = await prisma.tenantNotice.findFirst({
+      where: { dormitoryId: testDormitoryId, title: 'Valid Event Title' },
+    });
+    expect(validNotice).not.toBeNull();
+  });
 });

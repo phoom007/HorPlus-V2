@@ -89,6 +89,13 @@ export class NotificationService {
     return (this.repo as InMemoryNotificationRepository).markAsRead(dormitoryId, notificationId);
   }
 
+  public async dismissStaffNotification(dormitoryId: string, id: string, userId: string): Promise<boolean> {
+    if (this.repo instanceof PrismaNotificationRepository) {
+      return this.repo.dismissStaffNotice(dormitoryId, id, userId);
+    }
+    return false;
+  }
+
   public async markAllStaffAsRead(dormitoryId: string, userId?: string): Promise<number> {
     return this.repo.markAllAsReadForStaff(dormitoryId, userId);
   }

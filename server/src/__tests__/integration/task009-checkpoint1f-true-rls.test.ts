@@ -12,8 +12,8 @@ import { createStaffRoutes } from '../../routes/staff.routes.js';
 import { createLineOaRoutes } from '../../routes/line-oa.routes.js';
 import { MockLinePlatformAdapter } from '../../services/line-platform-adapter.js';
 
-const directUrl = process.env.DIRECT_URL || 'postgresql://horplus:password@127.0.0.1:5455/horplus_wave1d_fasttrack_test?schema=public';
-const appUrl = process.env.DATABASE_URL || 'postgresql://horplus_app:password@127.0.0.1:5455/horplus_wave1d_fasttrack_test?schema=public';
+const directUrl = process.env.DIRECT_URL || 'postgresql://horplus:horplus_dev_password@127.0.0.1:5455/horplus_wave1d_fasttrack_test?schema=public';
+const appUrl = process.env.DATABASE_URL || 'postgresql://horplus_app:horplus_dev_password@127.0.0.1:5455/horplus_wave1d_fasttrack_test?schema=public';
 
 // Migration/Owner Prisma Client (horplus)
 const adminPrisma = new PrismaClient({ datasources: { db: { url: directUrl } } });

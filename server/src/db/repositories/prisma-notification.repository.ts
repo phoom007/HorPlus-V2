@@ -14,6 +14,8 @@ export interface InAppNotificationEntity {
   metadata?: Record<string, any> | null;
   isRead: boolean;
   readAt?: Date | null;
+  isDismissed?: boolean;
+  dismissedAt?: Date | null;
   createdAt: Date;
 }
 
@@ -73,6 +75,7 @@ export class PrismaNotificationRepository {
       where: {
         dormitoryId,
         userId,
+        isDismissed: false,
       },
       orderBy: { createdAt: 'desc' },
     });
@@ -90,6 +93,8 @@ export class PrismaNotificationRepository {
       metadata: r.metadata as any,
       isRead: r.isRead,
       readAt: r.readAt,
+      isDismissed: r.isDismissed,
+      dismissedAt: r.dismissedAt,
       createdAt: r.createdAt,
     }));
   }
@@ -148,6 +153,8 @@ export class PrismaNotificationRepository {
           metadata: updated.metadata as any,
           isRead: updated.isRead,
           readAt: updated.readAt,
+          isDismissed: updated.isDismissed,
+          dismissedAt: updated.dismissedAt,
           createdAt: updated.createdAt,
         };
       }
@@ -181,7 +188,7 @@ export class PrismaNotificationRepository {
       }
     }
 
-    // Fallback: search both with dormitoryId match only if specific IDs weren't matched
+    // Fallback search by dormitoryId + userId/tenantId
     const staffNoticeFallback = await this.client.staffNotification.findFirst({
       where: { id, dormitoryId, ...(userId ? { userId } : {}) },
     });
@@ -203,6 +210,8 @@ export class PrismaNotificationRepository {
         metadata: updated.metadata as any,
         isRead: updated.isRead,
         readAt: updated.readAt,
+        isDismissed: updated.isDismissed,
+        dismissedAt: updated.dismissedAt,
         createdAt: updated.createdAt,
       };
     }
@@ -235,11 +244,24 @@ export class PrismaNotificationRepository {
     return null;
   }
 
+  public async dismissStaffNotice(dormitoryId: string, id: string, userId: string): Promise<boolean> {
+    const notice = await this.client.staffNotification.findFirst({
+      where: { id, dormitoryId, userId },
+    });
+    if (!notice) return false;
+
+    await this.client.staffNotification.update({
+      where: { id: notice.id },
+      data: { isDismissed: true, dismissedAt: new Date() },
+    });
+    return true;
+  }
+
   public async markAllAsReadForStaff(dormitoryId: string, userId?: string): Promise<number> {
     if (!userId) return 0;
     const now = new Date();
     const result = await this.client.staffNotification.updateMany({
-      where: { dormitoryId, userId, isRead: false },
+      where: { dormitoryId, userId, isRead: false, isDismissed: false },
       data: { isRead: true, readAt: now },
     });
     return result.count;
@@ -258,7 +280,7 @@ export class PrismaNotificationRepository {
   public async getUnreadCountForStaff(dormitoryId: string, userId?: string): Promise<number> {
     if (!userId) return 0;
     return this.client.staffNotification.count({
-      where: { dormitoryId, userId, isRead: false },
+      where: { dormitoryId, userId, isRead: false, isDismissed: false },
     });
   }
 

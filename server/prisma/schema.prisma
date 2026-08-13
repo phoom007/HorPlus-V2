@@ -1513,7 +1513,7 @@ model TenantNotice {
   type           String    @default("GENERAL") @db.VarChar(50) // FORCED_TERMINATION, RENEWAL_APPROVED, RENEWAL_REJECTED
   isRead         Boolean   @default(false) @map("is_read")
   readAt         DateTime? @map("read_at") @db.Timestamptz()
-  sourceOutboxId String?   @map("source_outbox_id") @db.VarChar(255)
+  sourceOutboxId String?   @unique @map("source_outbox_id") @db.VarChar(255)
   createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz()
   updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
 
@@ -1561,6 +1561,8 @@ model StaffNotification {
   metadata       Json?     @map("metadata")
   isRead         Boolean   @default(false) @map("is_read")
   readAt         DateTime? @map("read_at") @db.Timestamptz()
+  isDismissed    Boolean   @default(false) @map("is_dismissed")
+  dismissedAt    DateTime? @map("dismissed_at") @db.Timestamptz()
   sourceOutboxId String?   @map("source_outbox_id") @db.VarChar(255)
   createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz()
   updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
@@ -1569,6 +1571,7 @@ model StaffNotification {
 
   @@unique([sourceOutboxId, userId], name: "staff_notice_source_outbox_user_unique", map: "staff_notice_source_outbox_user_unique")
   @@index([dormitoryId, userId, isRead])
+  @@index([dormitoryId, userId, isDismissed])
   @@index([userId, isRead])
   @@map("staff_notices")
 }
