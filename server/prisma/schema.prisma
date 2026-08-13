@@ -115,6 +115,8 @@ model Dormitory {
   renewalRequests            TenantRenewalRequest[]
   settlements                ContractSettlement[]
   notices                    TenantNotice[]
+  outboxEvents               LocalNotificationOutbox[]
+  staffNotices               StaffNotification[]
 
   @@map("dormitories")
 }
@@ -1502,19 +1504,71 @@ model ContractSettlementItem {
 }
 
 model TenantNotice {
-  id          String   @id @default(uuid()) @db.Uuid
-  dormitoryId String   @map("dormitory_id") @db.Uuid
-  tenantId    String   @map("tenant_id") @db.Uuid
-  userId      String?  @map("user_id") @db.Uuid
-  title       String   @db.VarChar(255)
-  message     String   @db.Text
-  type        String   @default("GENERAL") @db.VarChar(50) // FORCED_TERMINATION, RENEWAL_APPROVED, RENEWAL_REJECTED
-  isRead      Boolean  @default(false) @map("is_read")
-  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz()
-  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz()
+  id             String    @id @default(uuid()) @db.Uuid
+  dormitoryId    String    @map("dormitory_id") @db.Uuid
+  tenantId       String    @map("tenant_id") @db.Uuid
+  userId         String?   @map("user_id") @db.Uuid
+  title          String    @db.VarChar(255)
+  message        String    @db.Text
+  type           String    @default("GENERAL") @db.VarChar(50) // FORCED_TERMINATION, RENEWAL_APPROVED, RENEWAL_REJECTED
+  isRead         Boolean   @default(false) @map("is_read")
+  readAt         DateTime? @map("read_at") @db.Timestamptz()
+  sourceOutboxId String?   @map("source_outbox_id") @db.VarChar(255)
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
 
   dormitory Dormitory @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
   tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
+  @@index([dormitoryId, tenantId, isRead])
+  @@index([sourceOutboxId])
   @@map("tenant_notices")
+}
+
+model LocalNotificationOutbox {
+  id                String    @id @default(uuid()) @db.Uuid
+  dormitoryId       String    @map("dormitory_id") @db.Uuid
+  eventType         String    @map("event_type") @db.VarChar(100)
+  aggregateType     String    @map("aggregate_type") @db.VarChar(100)
+  aggregateId       String    @map("aggregate_id") @db.VarChar(255)
+  recipientType     String    @map("recipient_type") @db.VarChar(50) // TENANT, STAFF
+  recipientId       String?   @map("recipient_id") @db.VarChar(255) // tenantId or userId
+  recipientRoleCode String?   @map("recipient_role_code") @db.VarChar(50) // OWNER, MANAGER, etc.
+  title             String    @db.VarChar(255)
+  body              String    @db.Text
+  payload           Json?     @map("payload")
+  status            String    @default("PENDING") @db.VarChar(50) // PENDING, PROCESSED, FAILED
+  idempotencyKey    String    @unique @map("idempotency_key") @db.VarChar(255)
+  lastError         String?   @map("last_error") @db.Text
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  processedAt       DateTime? @map("processed_at") @db.Timestamptz()
+
+  dormitory Dormitory @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
+
+  @@index([dormitoryId, status])
+  @@index([status, createdAt])
+  @@map("local_notification_outbox")
+}
+
+model StaffNotification {
+  id             String    @id @default(uuid()) @db.Uuid
+  dormitoryId    String    @map("dormitory_id") @db.Uuid
+  userId         String    @map("user_id") @db.Uuid
+  roleCode       String?   @map("role_code") @db.VarChar(50)
+  category       String    @db.VarChar(100)
+  title          String    @db.VarChar(255)
+  message        String    @db.Text
+  metadata       Json?     @map("metadata")
+  isRead         Boolean   @default(false) @map("is_read")
+  readAt         DateTime? @map("read_at") @db.Timestamptz()
+  sourceOutboxId String?   @map("source_outbox_id") @db.VarChar(255)
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
+
+  dormitory Dormitory @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
+
+  @@unique([sourceOutboxId, userId], name: "staff_notice_source_outbox_user_unique", map: "staff_notice_source_outbox_user_unique")
+  @@index([dormitoryId, userId, isRead])
+  @@index([userId, isRead])
+  @@map("staff_notices")
 }

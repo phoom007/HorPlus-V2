@@ -438,6 +438,20 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
       .catch(() => setNotices([]));
   }, [tenant]);
 
+  const handleMarkNoticeAsRead = async (noticeId: string) => {
+    try {
+      await httpRequest('POST', `/api/v1/tenant-portal/notices/${noticeId}/read`);
+      setNotices(prev => prev.map(n => n.id === noticeId ? { ...n, isRead: true } : n));
+    } catch (e) {}
+  };
+
+  const handleMarkAllNoticesAsRead = async () => {
+    try {
+      await httpRequest('POST', '/api/v1/tenant-portal/notices/read-all');
+      setNotices(prev => prev.map(n => ({ ...n, isRead: true })));
+    } catch (e) {}
+  };
+
   const handleSubmitRenewal = async () => {
     if (!requestedStartDate) return;
     setIsSubmittingRenewal(true);
@@ -595,7 +609,8 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
   const unreadBills = tenantBills.filter(b => b.status === 'pending' || b.status === 'overdue' || b.status === 'rejected');
   const activeRepairs = tenantRepairs.filter(r => r.status === 'in_progress' || r.status === 'pending');
   const urgentAnnouncements = filteredAnnouncements.filter(a => a.isUrgent || a.isPinned);
-  const totalNotificationsCount = unreadBills.length + activeRepairs.length + urgentAnnouncements.length;
+  const unreadNoticesCount = notices.filter(n => !n.isRead).length;
+  const totalNotificationsCount = unreadBills.length + activeRepairs.length + urgentAnnouncements.length + unreadNoticesCount;
 
   // Handler for confirm move-out
   const handleConfirmMoveOut = async () => {
@@ -2621,6 +2636,38 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                 >
                   ดูประกาศ
                 </button>
+              </div>
+            ))}
+
+            {/* Persistent In-App Notices */}
+            {notices.map(n => (
+              <div
+                key={n.id}
+                data-testid={`tenant-notice-item-${n.id}`}
+                className={`p-3 border rounded-2xl flex items-center justify-between gap-3 ${
+                  n.isRead ? 'bg-slate-50 border-slate-200/80 text-slate-600' : 'bg-blue-50/80 border-blue-200 text-blue-900 font-semibold'
+                }`}
+              >
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 font-bold ${n.isRead ? 'bg-slate-200 text-slate-600' : 'bg-blue-100 text-blue-700'}`}>
+                    <Bell className="w-4 h-4" />
+                  </div>
+                  <div className="space-y-0.5 min-w-0">
+                    <h5 className="font-extrabold text-[11px] truncate">{n.title}</h5>
+                    <p className="text-[10px] leading-relaxed line-clamp-2">{n.message}</p>
+                    <span className="text-[9px] opacity-75">{new Date(n.createdAt).toLocaleDateString('th-TH')}</span>
+                  </div>
+                </div>
+                {!n.isRead && (
+                  <button
+                    type="button"
+                    data-testid={`button-tenant-notice-read-${n.id}`}
+                    onClick={() => handleMarkNoticeAsRead(n.id)}
+                    className="px-2.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-[9px] font-extrabold transition-all shrink-0 cursor-pointer"
+                  >
+                    อ่านแล้ว
+                  </button>
+                )}
               </div>
             ))}
 

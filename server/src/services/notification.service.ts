@@ -1,4 +1,5 @@
-import { InMemoryNotificationRepository, InAppNotificationEntity } from '../db/repositories/notification.repository.js';
+import { PrismaNotificationRepository, InAppNotificationEntity } from '../db/repositories/prisma-notification.repository.js';
+import { InMemoryNotificationRepository } from '../db/repositories/notification.repository.js';
 
 export interface NotificationPreferenceInput {
   notifyRoleAssignment?: boolean;
@@ -20,50 +21,91 @@ export type EventNotificationCategory =
   | 'MAINTENANCE_STATUS_UPDATED'
   | 'ANNOUNCEMENT_PUBLISHED';
 
-
 export class NotificationService {
-  constructor(
-    private notificationRepo: InMemoryNotificationRepository = new InMemoryNotificationRepository()
-  ) {}
+  private repo: PrismaNotificationRepository | InMemoryNotificationRepository;
 
-  public getNotificationRepository(): InMemoryNotificationRepository {
-    return this.notificationRepo;
+  constructor(
+    repository?: PrismaNotificationRepository | InMemoryNotificationRepository
+  ) {
+    this.repo = repository || new PrismaNotificationRepository();
+  }
+
+  public getNotificationRepository() {
+    return this.repo;
   }
 
   // --- In-App Notifications ---
-  public async createInAppNotification(data: Omit<InAppNotificationEntity, 'id' | 'isRead' | 'readAt' | 'createdAt'>): Promise<InAppNotificationEntity> {
-    return this.notificationRepo.create(data);
+  public async createInAppNotification(data: {
+    dormitoryId: string;
+    targetType: 'staff' | 'tenant';
+    targetUserId?: string | null;
+    targetTenantId?: string | null;
+    targetRoleCode?: string | null;
+    category: string;
+    title: string;
+    body: string;
+    metadata?: Record<string, any> | null;
+  }) {
+    if (this.repo instanceof PrismaNotificationRepository) {
+      if (data.targetType === 'tenant' && data.targetTenantId) {
+        return this.repo.createTenantNotice({
+          dormitoryId: data.dormitoryId,
+          tenantId: data.targetTenantId,
+          userId: data.targetUserId || null,
+          title: data.title,
+          message: data.body,
+          type: data.category,
+        });
+      } else if (data.targetType === 'staff' && data.targetUserId) {
+        return this.repo.createStaffNotice({
+          dormitoryId: data.dormitoryId,
+          userId: data.targetUserId,
+          roleCode: data.targetRoleCode || null,
+          category: data.category,
+          title: data.title,
+          message: data.body,
+          metadata: data.metadata,
+        });
+      }
+    }
+    if (this.repo instanceof InMemoryNotificationRepository) {
+      return (this.repo as InMemoryNotificationRepository).create(data as any);
+    }
+    return null;
   }
 
   public async getStaffNotifications(dormitoryId: string, userId?: string, roleCode?: string): Promise<InAppNotificationEntity[]> {
-    return this.notificationRepo.listForStaff(dormitoryId, userId, roleCode);
+    return this.repo.listForStaff(dormitoryId, userId, roleCode);
   }
 
   public async getTenantNotifications(dormitoryId: string, tenantId: string): Promise<InAppNotificationEntity[]> {
-    return this.notificationRepo.listForTenant(dormitoryId, tenantId);
+    return this.repo.listForTenant(dormitoryId, tenantId);
   }
 
-  public async markAsRead(dormitoryId: string, notificationId: string): Promise<InAppNotificationEntity | null> {
-    return this.notificationRepo.markAsRead(dormitoryId, notificationId);
+  public async markAsRead(dormitoryId: string, notificationId: string, userId?: string, tenantId?: string): Promise<InAppNotificationEntity | null> {
+    if (this.repo instanceof PrismaNotificationRepository) {
+      return this.repo.markAsRead(dormitoryId, notificationId, userId, tenantId);
+    }
+    return (this.repo as InMemoryNotificationRepository).markAsRead(dormitoryId, notificationId);
   }
 
   public async markAllStaffAsRead(dormitoryId: string, userId?: string): Promise<number> {
-    return this.notificationRepo.markAllAsReadForStaff(dormitoryId, userId);
+    return this.repo.markAllAsReadForStaff(dormitoryId, userId);
   }
 
   public async markAllTenantAsRead(dormitoryId: string, tenantId: string): Promise<number> {
-    return this.notificationRepo.markAllAsReadForTenant(dormitoryId, tenantId);
+    return this.repo.markAllAsReadForTenant(dormitoryId, tenantId);
   }
 
   public async getStaffUnreadCount(dormitoryId: string, userId?: string): Promise<number> {
-    return this.notificationRepo.getUnreadCountForStaff(dormitoryId, userId);
+    return this.repo.getUnreadCountForStaff(dormitoryId, userId);
   }
 
   public async getTenantUnreadCount(dormitoryId: string, tenantId: string): Promise<number> {
-    return this.notificationRepo.getUnreadCountForTenant(dormitoryId, tenantId);
+    return this.repo.getUnreadCountForTenant(dormitoryId, tenantId);
   }
 
-  // --- Notification Preferences (Owner Controlled) ---
+  // --- Notification Preferences (Owner Controlled, Static Release-1) ---
   public async getPreferences(dormitoryId: string) {
     return {
       notifyRoleAssignment: true,
@@ -80,23 +122,8 @@ export class NotificationService {
     if (actorRoleCode !== 'OWNER') {
       throw new Error('FORBIDDEN: Only OWNER can update notification preferences');
     }
-    // Preferences update logic disabled for Release 1 without LINE
+    // Preferences update disabled for Release 1 without LINE
     return input;
-  }
-
-
-  private isCategoryEnabledInPreferences(category: EventNotificationCategory, prefs: any): boolean {
-    switch (category) {
-      case 'ROLE_ASSIGNED': return prefs.notifyRoleAssignment ?? true;
-      case 'TENANT_APPROVED': return prefs.notifyTenantApproval ?? true;
-      case 'BILL_CREATED': return prefs.notifyBillCreated ?? true;
-      case 'PAYMENT_APPROVED': return prefs.notifyPaymentApproved ?? true;
-      case 'PAYMENT_REJECTED': return prefs.notifyPaymentRejected ?? true;
-      case 'MAINTENANCE_ASSIGNED':
-      case 'MAINTENANCE_STATUS_UPDATED': return prefs.notifyMaintenanceUpdate ?? true;
-      case 'ANNOUNCEMENT_PUBLISHED': return prefs.notifyAnnouncement ?? true;
-      default: return true;
-    }
   }
 
   public generateTextMessage(category: EventNotificationCategory, params: Record<string, string>): string {
@@ -133,3 +160,5 @@ export class NotificationService {
     }
   }
 }
+
+export const notificationService = new NotificationService();

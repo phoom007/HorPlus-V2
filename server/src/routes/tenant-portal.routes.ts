@@ -940,5 +940,51 @@ export function createTenantPortalRouter(authService?: AuthenticationService): R
     }
   });
 
+  // POST /api/v1/tenant-portal/notices/:id/read
+  router.post('/notices/:id/read', async (req: Request, res: Response) => {
+    try {
+      const ctx = await resolveTenantContext(req);
+      if (ctx.error) {
+        return res.status(ctx.error.statusCode).json({ error: { code: ctx.error.code, message: ctx.error.message, requestId: req.requestId } });
+      }
+
+      const notice = await prisma.tenantNotice.findFirst({
+        where: { id: req.params.id, dormitoryId: ctx.dormitoryId, tenantId: ctx.tenant.id },
+      });
+
+      if (!notice) {
+        return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'ไม่พบรายการแจ้งเตือนที่ระบุ', requestId: req.requestId } });
+      }
+
+      const updated = await prisma.tenantNotice.update({
+        where: { id: req.params.id },
+        data: { isRead: true, readAt: new Date() },
+      });
+
+      return res.json({ data: updated });
+    } catch (err: any) {
+      return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message, requestId: req.requestId } });
+    }
+  });
+
+  // POST /api/v1/tenant-portal/notices/read-all
+  router.post('/notices/read-all', async (req: Request, res: Response) => {
+    try {
+      const ctx = await resolveTenantContext(req);
+      if (ctx.error) {
+        return res.status(ctx.error.statusCode).json({ error: { code: ctx.error.code, message: ctx.error.message, requestId: req.requestId } });
+      }
+
+      const resUpdate = await prisma.tenantNotice.updateMany({
+        where: { dormitoryId: ctx.dormitoryId, tenantId: ctx.tenant.id, isRead: false },
+        data: { isRead: true, readAt: new Date() },
+      });
+
+      return res.json({ data: { markedCount: resUpdate.count } });
+    } catch (err: any) {
+      return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message, requestId: req.requestId } });
+    }
+  });
+
   return router;
 }

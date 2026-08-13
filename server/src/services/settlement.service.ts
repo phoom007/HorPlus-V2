@@ -2,6 +2,7 @@ import { getPrismaClient } from '../db/prisma.js';
 import { logger } from '../config/logger.js';
 import { AppError } from '../types/index.js';
 import { Prisma } from '@prisma/client';
+import { outboxService } from './outbox.service.js';
 
 export interface AddDamageItemInput {
   dormitoryId: string;
@@ -342,13 +343,32 @@ export class SettlementService {
 
     const safeActorId = actorUserId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(actorUserId) ? actorUserId : null;
 
-    const updated = await prisma.contractSettlement.update({
-      where: { id: settlementId },
-      data: {
-        settlementStatus: targetStatus,
-        confirmedAt: new Date(),
-        confirmedByUserId: safeActorId,
-      },
+    const updated = await prisma.$transaction(async (tx) => {
+      const res = await tx.contractSettlement.update({
+        where: { id: settlementId },
+        data: {
+          settlementStatus: targetStatus,
+          confirmedAt: new Date(),
+          confirmedByUserId: safeActorId,
+        },
+      });
+
+      await outboxService.createOutboxEvent(tx, {
+        dormitoryId,
+        eventType: 'SETTLEMENT_CONFIRMED',
+        aggregateType: 'CONTRACT_SETTLEMENT',
+        aggregateId: settlementId,
+        recipientType: 'TENANT',
+        recipientId: settlement.tenantId,
+        title: 'แจ้งยืนยันการคิดเงินย้ายออก',
+        body: `รายการคิดเงินย้ายออกสำหรับสัญญาของคุณได้รับการยืนยันสถานะ ${targetStatus} เรียบร้อยแล้ว`,
+      });
+
+      return res;
+    });
+
+    outboxService.processPendingOutboxEvents().catch((err) => {
+      logger.error({ event: 'OUTBOX_DISPATCH_AFTER_SETTLEMENT_CONFIRM_ERROR', error: err.message });
     });
 
     logger.info({

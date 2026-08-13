@@ -382,93 +382,63 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
     setIsSidebarOpen(false);
   };
 
-  // Notification Bell State
-  const [hasUnreadNotifications, setHasUnreadNotifications] = useState(false);
+  // Notification Bell State (PostgreSQL persistent)
+  const [staffNotices, setStaffNotices] = useState<any[]>([]);
+  const [staffUnreadCount, setStaffUnreadCount] = useState<number>(0);
   const [isNotificationOpen, setIsNotificationOpen] = useState(false);
 
-  // Dynamic notification states linked to repairs
-  const [seenRepairIds, setSeenRepairIds] = useState<string[]>([]);
-  const [deletedRepairIds, setDeletedRepairIds] = useState<string[]>([]);
-
-  // Load seen and deleted lists from localStorage
-  useEffect(() => {
-    const seen = localStorage.getItem('HorPlus_seen_repair_notifications');
-    const deleted = localStorage.getItem('HorPlus_deleted_repair_notifications');
+  const fetchStaffNotifications = async () => {
+    const reqHeaders: Record<string, string> = {};
+    const savedId = localStorage.getItem('selected_dormitory_id');
+    if (savedId) reqHeaders['x-dormitory-id'] = savedId;
     try {
-      if (seen) setSeenRepairIds(JSON.parse(seen));
-      if (deleted) setDeletedRepairIds(JSON.parse(deleted));
-    } catch (e) {
-      console.error(e);
-    }
-  }, []);
-
-  // Time formatter helper
-  const formatNotifTime = (dateStr: string) => {
-    if (!dateStr) return 'เมื่อสักครู่';
-    try {
-      const d = new Date(dateStr);
-      const now = new Date();
-      const diffMs = now.getTime() - d.getTime();
-      const diffMins = Math.floor(diffMs / (1000 * 60));
-      if (diffMins < 1) return 'เมื่อสักครู่';
-      if (diffMins < 60) return `${diffMins} นาทีที่แล้ว`;
-      const diffHours = Math.floor(diffMins / 60);
-      if (diffHours < 24) return `${diffHours} ชั่วโมงที่แล้ว`;
-      const diffDays = Math.floor(diffHours / 24);
-      if (diffDays < 7) return `${diffDays} วันที่แล้ว`;
-      
-      return d.toLocaleDateString('th-TH', { day: 'numeric', month: 'short' });
-    } catch (e) {
-      return 'ไม่ระบุเวลา';
-    }
+      const res = await fetch('/api/v1/notifications', { headers: reqHeaders, credentials: 'include' });
+      if (res.ok) {
+        const data = await res.json();
+        setStaffNotices(data.notifications || []);
+        setStaffUnreadCount(data.unreadCount || 0);
+      }
+    } catch (e) {}
   };
 
-  // Dynamically compute notification items based on repairs list
-  const notifications = repairs
-    .filter(rep => !deletedRepairIds.includes(String(rep.id)))
-    .map(rep => {
-      const room = rooms.find(r => r.id === rep.roomId || r.roomNumber === rep.roomId);
-      const roomNum = room ? room.roomNumber : rep.roomId || 'ไม่ระบุ';
-      return {
-        id: rep.id,
-        title: 'แจ้งซ่อมใหม่',
-        description: `ห้อง ${roomNum} แจ้งซ่อม: ${rep.title}`,
-        time: formatNotifTime(rep.createdAt),
-        tag: 'แจ้งซ่อม',
-        tagColor: 'bg-amber-50 text-amber-700 border-amber-100'
-      };
-    });
-
-  // Calculate unread badge state
   useEffect(() => {
-    if (repairs && repairs.length > 0) {
-      const activeRepairs = repairs.filter(rep => !deletedRepairIds.includes(String(rep.id)));
-      const hasUnread = activeRepairs.some(rep => !seenRepairIds.includes(String(rep.id)));
-      setHasUnreadNotifications(hasUnread);
-    } else {
-      setHasUnreadNotifications(false);
-    }
-  }, [repairs, seenRepairIds, deletedRepairIds]);
+    fetchStaffNotifications();
+  }, [activeTab]);
+
+  const hasUnreadNotifications = staffUnreadCount > 0;
 
   const handleOpenNotifications = () => {
     const nextState = !isNotificationOpen;
     setIsNotificationOpen(nextState);
     if (nextState) {
-      // Mark all current active repairs as seen
-      const activeRepairIds = repairs
-        .filter(rep => !deletedRepairIds.includes(String(rep.id)))
-        .map(rep => String(rep.id));
-      const updatedSeen = Array.from(new Set([...seenRepairIds, ...activeRepairIds]));
-      setSeenRepairIds(updatedSeen);
-      localStorage.setItem('HorPlus_seen_repair_notifications', JSON.stringify(updatedSeen));
-      setHasUnreadNotifications(false);
+      fetchStaffNotifications();
     }
   };
 
-  const handleDeleteNotification = (id: string | number) => {
-    const updatedDeleted = Array.from(new Set([...deletedRepairIds, String(id)]));
-    setDeletedRepairIds(updatedDeleted);
-    localStorage.setItem('HorPlus_deleted_repair_notifications', JSON.stringify(updatedDeleted));
+  const handleMarkStaffNoticeAsRead = async (id: string) => {
+    const reqHeaders: Record<string, string> = {};
+    const savedId = localStorage.getItem('selected_dormitory_id');
+    if (savedId) reqHeaders['x-dormitory-id'] = savedId;
+    try {
+      const res = await fetch(`/api/v1/notifications/${id}/read`, { method: 'POST', headers: reqHeaders, credentials: 'include' });
+      if (res.ok) {
+        setStaffNotices(prev => prev.map(n => n.id === id ? { ...n, isRead: true } : n));
+        setStaffUnreadCount(prev => Math.max(0, prev - 1));
+      }
+    } catch (e) {}
+  };
+
+  const handleMarkAllStaffNoticesAsRead = async () => {
+    const reqHeaders: Record<string, string> = {};
+    const savedId = localStorage.getItem('selected_dormitory_id');
+    if (savedId) reqHeaders['x-dormitory-id'] = savedId;
+    try {
+      const res = await fetch('/api/v1/notifications/read-all', { method: 'POST', headers: reqHeaders, credentials: 'include' });
+      if (res.ok) {
+        setStaffNotices(prev => prev.map(n => ({ ...n, isRead: true })));
+        setStaffUnreadCount(0);
+      }
+    } catch (e) {}
   };
 
   // Load centralized data
@@ -557,17 +527,6 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
     const handleStorageChange = (e: StorageEvent) => {
       if (e.key && e.key.includes('HorPlus_')) {
         refreshAllData();
-        
-        if (e.key === 'HorPlus_seen_repair_notifications') {
-          try {
-            if (e.newValue) setSeenRepairIds(JSON.parse(e.newValue));
-          } catch {}
-        }
-        if (e.key === 'HorPlus_deleted_repair_notifications') {
-          try {
-            if (e.newValue) setDeletedRepairIds(JSON.parse(e.newValue));
-          } catch {}
-        }
       }
     };
     
@@ -1340,15 +1299,40 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
                       </button>
                     </div>
 
-                    <div className="space-y-3 max-h-[320px] overflow-y-auto pr-1">
-                      {notifications.map((notif) => (
-                        <SlidableNotificationItem
+                    <div className="space-y-2 max-h-[320px] overflow-y-auto pr-1">
+                      {staffNotices.map((notif) => (
+                        <div
                           key={notif.id}
-                          notif={notif}
-                          onDelete={handleDeleteNotification}
-                        />
+                          data-testid={`staff-notice-item-${notif.id}`}
+                          className={`p-2.5 rounded-xl border text-left flex items-start justify-between gap-2 transition-all ${
+                            notif.isRead ? 'bg-slate-50 border-slate-100 text-slate-600' : 'bg-blue-50/70 border-blue-200 text-blue-950 font-medium'
+                          }`}
+                        >
+                          <div className="min-w-0 space-y-0.5">
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-[9px] font-extrabold px-1.5 py-0.5 rounded-md bg-blue-100 text-blue-800 border border-blue-200">
+                                {notif.category || 'การแจ้งเตือน'}
+                              </span>
+                              <span className="text-[9px] text-slate-400">
+                                {new Date(notif.createdAt).toLocaleDateString('th-TH')}
+                              </span>
+                            </div>
+                            <h5 className="text-xs font-bold text-slate-900 leading-snug">{notif.title}</h5>
+                            <p className="text-[10px] text-slate-600 leading-normal">{notif.body}</p>
+                          </div>
+                          {!notif.isRead && (
+                            <button
+                              type="button"
+                              data-testid={`button-staff-notice-read-${notif.id}`}
+                              onClick={() => handleMarkStaffNoticeAsRead(notif.id)}
+                              className="px-2 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-[9px] font-extrabold transition-all shrink-0 cursor-pointer"
+                            >
+                              อ่านแล้ว
+                            </button>
+                          )}
+                        </div>
                       ))}
-                      {notifications.length === 0 && (
+                      {staffNotices.length === 0 && (
                         <div className="text-center py-10 text-slate-400 text-xs font-medium">
                           ไม่มีข้อความแจ้งเตือนใหม่
                         </div>

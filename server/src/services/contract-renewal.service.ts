@@ -1,6 +1,7 @@
 import { getPrismaClient } from '../db/prisma.js';
 import { logger } from '../config/logger.js';
 import { AppError } from '../types/index.js';
+import { outboxService } from './outbox.service.js';
 import {
   toBangkokDateString,
   currentBusinessDateInBangkok,
@@ -322,7 +323,22 @@ export class ContractRenewalService {
         }
       }
 
+      await outboxService.createOutboxEvent(tx, {
+        dormitoryId,
+        eventType: 'RENEWAL_APPROVED',
+        aggregateType: 'TENANT_RENEWAL',
+        aggregateId: reqRecord.id,
+        recipientType: 'TENANT',
+        recipientId: reqRecord.tenantId,
+        title: 'อนุมัติการต่อสัญญาเช่า',
+        body: `คำขอต่อสัญญาเช่าห้อง ${reqRecord.room?.roomNumber || ''} ของคุณได้รับการอนุมัติเรียบร้อยแล้ว`,
+      });
+
       return { request: updatedRequest, contract: newContract };
+    });
+
+    outboxService.processPendingOutboxEvents().catch((err) => {
+      logger.error({ event: 'OUTBOX_DISPATCH_AFTER_RENEWAL_APPROVE_ERROR', error: err.message });
     });
 
     logger.info({
@@ -465,14 +481,34 @@ export class ContractRenewalService {
 
     const safeActorId = actorUserId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(actorUserId) ? actorUserId : null;
 
-    const updated = await prisma.tenantRenewalRequest.update({
-      where: { id: requestId },
-      data: {
-        status: 'REJECTED',
-        rejectionReason: reason?.trim() || null,
-        reviewedAt: new Date(),
-        reviewedByUserId: safeActorId,
-      },
+    const updated = await prisma.$transaction(async (tx) => {
+      const res = await tx.tenantRenewalRequest.update({
+        where: { id: requestId },
+        data: {
+          status: 'REJECTED',
+          rejectionReason: reason?.trim() || null,
+          reviewedAt: new Date(),
+          reviewedByUserId: safeActorId,
+        },
+        include: { room: true },
+      });
+
+      await outboxService.createOutboxEvent(tx, {
+        dormitoryId,
+        eventType: 'RENEWAL_REJECTED',
+        aggregateType: 'TENANT_RENEWAL',
+        aggregateId: requestId,
+        recipientType: 'TENANT',
+        recipientId: reqRecord.tenantId,
+        title: 'คำขอต่อสัญญาเช่าไม่ผ่านการอนุมัติ',
+        body: `คำขอต่อสัญญาเช่าห้อง ${res.room?.roomNumber || ''} ถูกปฏิเสธ${reason?.trim() ? ` สาเหตุ: ${reason.trim()}` : ''}`,
+      });
+
+      return res;
+    });
+
+    outboxService.processPendingOutboxEvents().catch((err) => {
+      logger.error({ event: 'OUTBOX_DISPATCH_AFTER_RENEWAL_REJECT_ERROR', error: err.message });
     });
 
     return updated;

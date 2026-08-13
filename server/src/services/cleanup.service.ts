@@ -114,6 +114,14 @@ export class CleanupService {
         console.error('[CleanupService] Error during automatic scheduled contract activation', err);
       }
 
+      // Phase 5: Outbox Event Reconciliation & Dispatch
+      try {
+        const { outboxService } = await import('./outbox.service.js');
+        await outboxService.processPendingOutboxEvents();
+      } catch (err) {
+        console.error('[CleanupService] Error during outbox reconciliation', err);
+      }
+
       return { expiredMarked, orphansDeleted, consumedMetadataPurged };
     } catch (err) {
       console.error('[CleanupService] Unexpected error during cleanup execution', err);

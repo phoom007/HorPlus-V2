@@ -2,6 +2,7 @@ import { getPrismaClient } from '../db/prisma.js';
 import { logger } from '../config/logger.js';
 import { AppError } from '../types/index.js';
 import { Prisma } from '@prisma/client';
+import { outboxService } from './outbox.service.js';
 
 export interface CreateRegistrationDto {
   dormitoryId: string;
@@ -221,7 +222,7 @@ export class TenantRegistrationService {
     }
 
     const prisma = getPrismaClient();
-    return prisma.$transaction(async (tx) => {
+    const resTx = await prisma.$transaction(async (tx) => {
       // 1. Re-verify request status inside transaction
       const req = await tx.tenantRegistrationRequest.findFirst({
         where: { id, dormitoryId },
@@ -327,16 +328,17 @@ export class TenantRegistrationService {
               },
             });
 
-            // c. Create persistent in-app notice for future renewal tenant
+            // c. Create persistent in-app notice for future renewal tenant via Outbox
             const formattedStart = new Date(futureContract.startDate).toLocaleDateString('th-TH');
-            await tx.tenantNotice.create({
-              data: {
-                dormitoryId,
-                tenantId: futureContract.tenantId,
-                title: 'แจ้งยกเลิกสัญญาต่ออายุในอนาคต',
-                message: `สัญญาต่ออายุห้อง ${room.roomNumber} ที่มีกำหนดเริ่มวันที่ ${formattedStart} ถูกยกเลิกโดยผู้ดูแลหอพัก เนื่องจากห้องได้รับการอนุมัติให้ผู้เช่ารายใหม่`,
-                type: 'FORCED_TERMINATION',
-              },
+            await outboxService.createOutboxEvent(tx, {
+              dormitoryId,
+              eventType: 'FORCED_TERMINATION',
+              aggregateType: 'TENANT_RENEWAL',
+              aggregateId: futureContract.id,
+              recipientType: 'TENANT',
+              recipientId: futureContract.tenantId,
+              title: 'แจ้งยกเลิกสัญญาต่ออายุในอนาคต',
+              body: `สัญญาต่ออายุห้อง ${room.roomNumber} ที่มีกำหนดเริ่มวันที่ ${formattedStart} ถูกยกเลิกโดยผู้ดูแลหอพัก เนื่องจากห้องได้รับการอนุมัติให้ผู้เช่ารายใหม่`,
             });
 
             logger.info({
@@ -452,15 +454,16 @@ export class TenantRegistrationService {
               });
             }
 
-            // e. Create persistent in-app notice for old tenant
-            await tx.tenantNotice.create({
-              data: {
-                dormitoryId,
-                tenantId: oldTenantId,
-                title: 'แจ้งยุติสัญญาเช่า',
-                message: `สัญญาเช่าห้อง ${room.roomNumber} ของคุณถูกยุติโดยผู้ดูแลหอพัก กรุณาตรวจสอบรายละเอียดสัญญาและยอดย้ายออกในระบบ`,
-                type: 'FORCED_TERMINATION',
-              },
+            // e. Create persistent in-app notice for old tenant via Outbox
+            await outboxService.createOutboxEvent(tx, {
+              dormitoryId,
+              eventType: 'FORCED_TERMINATION',
+              aggregateType: 'CONTRACT',
+              aggregateId: oldContractId || id,
+              recipientType: 'TENANT',
+              recipientId: oldTenantId,
+              title: 'แจ้งยุติสัญญาเช่า',
+              body: `สัญญาเช่าห้อง ${room.roomNumber} ของคุณถูกยุติโดยผู้ดูแลหอพัก กรุณาตรวจสอบรายละเอียดสัญญาและยอดย้ายออกในระบบ`,
             });
 
             logger.info({
@@ -568,6 +571,12 @@ export class TenantRegistrationService {
         occupancy,
       };
     });
+
+    outboxService.processPendingOutboxEvents().catch((err) => {
+      logger.error({ event: 'OUTBOX_DISPATCH_AFTER_REGISTRATION_APPROVE_ERROR', error: err.message });
+    });
+
+    return resTx;
   }
 
   public async rejectRequest(
