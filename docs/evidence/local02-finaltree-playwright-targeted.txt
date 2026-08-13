@@ -1,0 +1,28 @@
+================================================================================
+COMMAND: npx playwright test tests/e2e/local02-contract-settlement-renewal.spec.ts --workers=1
+TIMESTAMP: 2026-08-13T22:14:50+07:00
+TESTED EXECUTABLE SHA: 72e2b898b4a2173c0c863d67ebf908f54a54be12
+================================================================================
+
+Running 7 tests using 1 worker
+
+  ✓  1 [chromium] › tests/e2e/local02-contract-settlement-renewal.spec.ts:216:3 › LOCAL-02: E2E Contract Settlement, Termination & Renewal Suite › FLOW A — Renewal Request: Tenant submits renewal request via UI, status is PENDING_OWNER_APPROVAL, persists on F5 (6.9s)
+  ✓  2 [chromium] › tests/e2e/local02-contract-settlement-renewal.spec.ts:254:3 › LOCAL-02: E2E Contract Settlement, Termination & Renewal Suite › FLOW B — Future Renewal Approval: Owner approves renewal via UI, DB creates approved_scheduled contract (2.7s)
+  ✓  3 [chromium] › tests/e2e/local02-contract-settlement-renewal.spec.ts:312:3 › LOCAL-02: E2E Contract Settlement, Termination & Renewal Suite › FLOW C — Effective-Date Activation: Test clock activation transitions contract and occupancy on effective date (3.1s)
+  ✓  4 [chromium] › tests/e2e/local02-contract-settlement-renewal.spec.ts:344:3 › LOCAL-02: E2E Contract Settlement, Termination & Renewal Suite › FLOW D — Pending Applicant Lock: Registration request for room blocks tenant renewal eligibility UI (2.3s)
+  ✓  5 [chromium] › tests/e2e/local02-contract-settlement-renewal.spec.ts:374:3 › LOCAL-02: E2E Contract Settlement, Termination & Renewal Suite › FLOW E & F — Forced Replacement Warning & Confirmation via Real UI (5.6s)
+  ✓  6 [chromium] › tests/e2e/local02-contract-settlement-renewal.spec.ts:448:3 › LOCAL-02: E2E Contract Settlement, Termination & Renewal Suite › FLOW G — Old Tenant Notice: Login as terminated Tenant A shows persistent in-app notice in DOM (1.6s)
+  ✓  7 [chromium] › tests/e2e/local02-contract-settlement-renewal.spec.ts:468:3 › LOCAL-02: E2E Contract Settlement, Termination & Renewal Suite › FLOW H — Settlement: Add damage item, edit, soft-remove, confirm lock via REAL UI, subsequent mutations blocked (4.5s)
+
+  7 passed (27.5s)
+
+================================================================================
+METRICS & STATUS:
+- Executable SHA: 72e2b898b4a2173c0c863d67ebf908f54a54be12
+- Total Executable Tests: 7
+- Passed: 7
+- Failed: 0
+- Skipped: 0
+- Duration: 27.5s
+- Exit Code: 0
+================================================================================

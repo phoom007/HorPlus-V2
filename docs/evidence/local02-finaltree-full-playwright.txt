@@ -1,0 +1,106 @@
+================================================================================
+COMMAND: npx playwright test --workers=1
+TIMESTAMP: 2026-08-13T22:27:55+07:00
+TESTED EXECUTABLE SHA: 72e2b898b4a2173c0c863d67ebf908f54a54be12
+================================================================================
+
+Running 84 tests using 1 worker
+
+  ✓   1 [chromium] › tests/e2e/local01-tenant-onboarding-cooccupants.spec.ts:194:3 › LOCAL-01 — Tenant Onboarding & Co-Occupant Management E2E Acceptance Suite › Flow A — Multiple Applicants Same Room Submission & Persistence (6.2s)
+  ✓   2 [chromium] › tests/e2e/local01-tenant-onboarding-cooccupants.spec.ts:251:3 › LOCAL-01 — Tenant Onboarding & Co-Occupant Management E2E Acceptance Suite › Flow B — Owner Approval with Automatic Default Contract & Direct Active Occupancy (4.1s)
+  ✓   3 [chromium] › tests/e2e/local01-tenant-onboarding-cooccupants.spec.ts:311:3 › LOCAL-01 — Tenant Onboarding & Co-Occupant Management E2E Acceptance Suite › Flow C — Room Status Sync to OCCUPIED and Duplicate Applicants Rejected/Closed (2.8s)
+  ✓   4 [chromium] › tests/e2e/local01-tenant-onboarding-cooccupants.spec.ts:387:3 › LOCAL-01 — Tenant Onboarding & Co-Occupant Management E2E Acceptance Suite › Flow D — Co-Occupant Registration, DB Storage, UI List & F5 Reload Persistence (3.5s)
+  ✓   5 [chromium] › tests/e2e/local01-tenant-onboarding-cooccupants.spec.ts:438:3 › LOCAL-01 — Tenant Onboarding & Co-Occupant Management E2E Acceptance Suite › Flow E — Co-Occupant Deletion via Real UI and PostgreSQL Database Verification (2.9s)
+  ✓   6 [chromium] › tests/e2e/local02-contract-settlement-renewal.spec.ts:216:3 › LOCAL-02: E2E Contract Settlement, Termination & Renewal Suite › FLOW A — Renewal Request: Tenant submits renewal request via UI, status is PENDING_OWNER_APPROVAL, persists on F5 (6.9s)
+  ✓   7 [chromium] › tests/e2e/local02-contract-settlement-renewal.spec.ts:254:3 › LOCAL-02: E2E Contract Settlement, Termination & Renewal Suite › FLOW B — Future Renewal Approval: Owner approves renewal via UI, DB creates approved_scheduled contract (2.7s)
+  ✓   8 [chromium] › tests/e2e/local02-contract-settlement-renewal.spec.ts:312:3 › LOCAL-02: E2E Contract Settlement, Termination & Renewal Suite › FLOW C — Effective-Date Activation: Test clock activation transitions contract and occupancy on effective date (3.1s)
+  ✓   9 [chromium] › tests/e2e/local02-contract-settlement-renewal.spec.ts:344:3 › LOCAL-02: E2E Contract Settlement, Termination & Renewal Suite › FLOW D — Pending Applicant Lock: Registration request for room blocks tenant renewal eligibility UI (2.3s)
+  ✓  10 [chromium] › tests/e2e/local02-contract-settlement-renewal.spec.ts:374:3 › LOCAL-02: E2E Contract Settlement, Termination & Renewal Suite › FLOW E & F — Forced Replacement Warning & Confirmation via Real UI (5.6s)
+  ✓  11 [chromium] › tests/e2e/local02-contract-settlement-renewal.spec.ts:448:3 › LOCAL-02: E2E Contract Settlement, Termination & Renewal Suite › FLOW G — Old Tenant Notice: Login as terminated Tenant A shows persistent in-app notice in DOM (1.6s)
+  ✓  12 [chromium] › tests/e2e/local02-contract-settlement-renewal.spec.ts:468:3 › LOCAL-02: E2E Contract Settlement, Termination & Renewal Suite › FLOW H — Settlement: Add damage item, edit, soft-remove, confirm lock via REAL UI, subsequent mutations blocked (4.5s)
+  ✓  13 [chromium] › tests/e2e/onboarding-real-browser.spec.ts:213:3 › Real Owner Onboarding Browser E2E Lifecycle › 1. Fresh Owner initially has zero memberships and onboardingRequired = true (1.2s)
+  ✓  14 [chromium] › tests/e2e/onboarding-real-browser.spec.ts:233:3 › Real Owner Onboarding Browser E2E Lifecycle › 2. Partial Onboarding & Reload: Wizard maintains wizard step state in localStorage (1.5s)
+  ✓  15 [chromium] › tests/e2e/onboarding-real-browser.spec.ts:291:3 › Real Owner Onboarding Browser E2E Lifecycle › 3. Complete 4-step onboarding UI, verify CSRF/Idempotency headers, PostgreSQL records, AND same-browser lifecycle (RI-002, RI-003, RI-004, RI-005) (6.4s)
+  ✓  16 [chromium] › tests/e2e/onboarding-real-browser.spec.ts:457:3 › Real Owner Onboarding Browser E2E Lifecycle › 4. Security & Mismatch Protections: CSRF header validation, Cross-Tenant Isolation (403), Idempotency Re-play Safety (4.8s)
+  ✓  17 [chromium] › tests/e2e/onboarding-real-browser.spec.ts:577:3 › Real Owner Onboarding Browser E2E Lifecycle › 5. Post-Onboarding Navigation Guard (RI-006): Authenticated owner with membership cannot access /onboarding (1.5s)
+  ✓  18 [chromium] › tests/e2e/onboarding-six-step.spec.ts:83:3 › Master Six-Step Owner Onboarding E2E Flow › Completes all 6 onboarding steps: Dormitory Info, Buildings, Zero-value Utilities, Signature strokes, LINE OA 4-state readiness, and Package Finalization with DB assertions (8.1s)
+  ✓  19 [chromium] › tests/e2e/payment-operational-lifecycle.spec.ts:357:3 › Payment & Receipt Operational Lifecycle E2E Suite › 1. Owner empty payment state displays zero demo/mock bills when no bills exist in API (1.8s)
+  ✓  20 [chromium] › tests/e2e/payment-operational-lifecycle.spec.ts:384:3 › Payment & Receipt Operational Lifecycle E2E Suite › 2. Complete Payment & Receipt Operational Lifecycle: Draft -> Finalize -> Submit Slip -> Approve -> Receipt Generated -> Overdue Transition (12.4s)
+  ✓  21 [chromium] › tests/e2e/payment-operational-lifecycle.spec.ts:634:3 › Payment & Receipt Operational Lifecycle E2E Suite › 3. Payment Rejection & Slip Resubmission Flow: Owner rejects -> Status REJECTED -> Tenant resubmits new slip -> Status PENDING (5.9s)
+  ✓  22 [chromium] › tests/e2e/payment-operational-lifecycle.spec.ts:742:3 › Payment & Receipt Operational Lifecycle E2E Suite › 4. Partial Payment & Accumulated Balance: Bill 10,000, Pay 6,000 -> Status PARTIAL, Remaining 4,000 carries forward (4.1s)
+  ✓  23 [chromium] › tests/e2e/payment-operational-lifecycle.spec.ts:829:3 › Payment & Receipt Operational Lifecycle E2E Suite › 5. Security & Isolation Boundaries: Tenant B cannot access Tenant A payments or receipts (403) (2.1s)
+  ✓  24 [chromium] › tests/e2e/payment-settings-browser.spec.ts:260:3 › Payment Settings & Profile Source-of-Truth E2E (OR-001 to OR-007) › OR-001 — Opening Settings issues exactly one payment GET targeting selected dormitory (1.7s)
+  ✓  25 [chromium] › tests/e2e/payment-settings-browser.spec.ts:285:3 › Payment Settings & Profile Source-of-Truth E2E (OR-001 to OR-007) › OR-002 — Toggle Bank Off hides bank fields instantly; toggle PromptPay Off hides PromptPay fields instantly (2.0s)
+  ✓  26 [chromium] › tests/e2e/payment-settings-browser.spec.ts:326:3 › Payment Settings & Profile Source-of-Truth E2E (OR-001 to OR-007) › OR-003 — Valid input enables Save button; invalid input shows inline validation and disables Save button (1.9s)
+  ✓  27 [chromium] › tests/e2e/payment-settings-browser.spec.ts:366:3 › Payment Settings & Profile Source-of-Truth E2E (OR-001 to OR-007) › OR-004 — Click Save displays loading state, sends PUT payload, shows success toast, and persists on F5 reload (3.1s)
+  ✓  28 [chromium] › tests/e2e/payment-settings-browser.spec.ts:413:3 › Payment Settings & Profile Source-of-Truth E2E (OR-001 to OR-007) › OR-005 — Switching active dormitory changes loaded payment config to match target dormitory (2.8s)
+  ✓  29 [chromium] › tests/e2e/payment-settings-browser.spec.ts:446:3 › Payment Settings & Profile Source-of-Truth E2E (OR-001 to OR-007) › OR-006 — API 500 error shows error banner and leaves existing settings unchanged in DOM (1.8s)
+  ✓  30 [chromium] › tests/e2e/payment-settings-browser.spec.ts:474:3 › Payment Settings & Profile Source-of-Truth E2E (OR-001 to OR-007) › OR-007 — Concurrent tab edit: second save fails with 409 conflict notice when config is outdated (2.3s)
+  ✓  31 [chromium] › tests/e2e/task009-staff-line-oa.spec.ts:303:3 › TASK-009 Playwright Browser Lifecycle — Staff, LINE OA & Access Grants › 1. Unauthenticated request to /owner/staff redirects to /login with zero secret leakage (1.2s)
+  ✓  32 [chromium] › tests/e2e/task009-staff-line-oa.spec.ts:333:3 › TASK-009 Playwright Browser Lifecycle — Staff, LINE OA & Access Grants › 2. Full 4-state LINE OA integration readiness indicator rendered truthfully in DOM (1.8s)
+  ✓  33 [chromium] › tests/e2e/task009-staff-line-oa.spec.ts:377:3 › TASK-009 Playwright Browser Lifecycle — Staff, LINE OA & Access Grants › 3. Opening Staff tab displays 0 active grants and empty table when zero grants exist (1.5s)
+  ✓  34 [chromium] › tests/e2e/task009-staff-line-oa.spec.ts:278:3 › TASK-009 Playwright Browser Lifecycle — Staff, LINE OA & Access Grants › 4. Creates MANAGER Access Grant for Somchai E2E, sends Flex push to fake LINE, slot increases to 2 / 10 (2.4s)
+  ✓  35 [chromium] › tests/e2e/task009-staff-line-oa.spec.ts:420:3 › TASK-009 Playwright Browser Lifecycle — Staff, LINE OA & Access Grants › 5. Redemption flow: LINE Friend clicks LIFF URL -> redeems code -> becomes authenticated staff member (2.9s)
+  ✓  36 [chromium] › tests/e2e/task009-staff-line-oa.spec.ts:488:3 › TASK-009 Playwright Browser Lifecycle — Staff, LINE OA & Access Grants › 6. Staff login with active grant succeeds; accesses allowed routes (/owner/meter, /owner/bills) (3.1s)
+  ✓  37 [chromium] › tests/e2e/task009-staff-line-oa.spec.ts:544:3 › TASK-009 Playwright Browser Lifecycle — Staff, LINE OA & Access Grants › 7. Expired code redemption fails with 410 EXPIRED_CODE; slot is reclaimed (2.1s)
+  ✓  38 [chromium] › tests/e2e/task009-staff-line-oa.spec.ts:586:3 › TASK-009 Playwright Browser Lifecycle — Staff, LINE OA & Access Grants › 8. Changing Grant Role (MANAGER -> TECH -> OWNER) immediately propagates to active sessions without re-redemption (3.4s)
+  ✓  39 [chromium] › tests/e2e/task009-staff-line-oa.spec.ts:626:3 › TASK-009 Playwright Browser Lifecycle — Staff, LINE OA & Access Grants › 9. MANAGER & TECH denied staff admin API (403 FORBIDDEN), OWNER allowed (2.8s)
+  ✓  40 [chromium] › tests/e2e/task009-staff-line-oa.spec.ts:660:3 › TASK-009 Playwright Browser Lifecycle — Staff, LINE OA & Access Grants › 10. Revoking Grant immediately terminates active sessions, returns slot to 1 / 10, rejects redemption (2.6s)
+  ✓  41 [chromium] › tests/e2e/task009-staff-line-oa.spec.ts:695:3 › TASK-009 Playwright Browser Lifecycle — Staff, LINE OA & Access Grants › 11. Re-grant same LINE Friend after revoke succeeds; duplicate active grant returns 409 ACTIVE_GRANT_EXISTS (3.2s)
+  ✓  42 [chromium] › tests/e2e/task009-staff-line-oa.spec.ts:739:3 › TASK-009 Playwright Browser Lifecycle — Staff, LINE OA & Access Grants › 12. Reaching 10 total slots blocks UI create button; 11th grant attempt returns 409 STAFF_LIMIT_EXCEEDED (3.8s)
+  ✓  43 [chromium] › tests/e2e/task009-staff-line-oa.spec.ts:780:3 › TASK-009 Playwright Browser Lifecycle — Staff, LINE OA & Access Grants › 13. Push failure (U_E2E_FAILURE), retry pending (U_E2E_RETRY), and quota exhausted lifecycles (4.1s)
+  ✓  44 [chromium] › tests/e2e/task009-staff-line-oa.spec.ts:835:3 › TASK-009 Playwright Browser Lifecycle — Staff, LINE OA & Access Grants › 14. Webhook rotation generates new key; LINE disconnect clears credentials while preserving grants/sessions (3.2s)
+  ✓  45 [chromium] › tests/e2e/task009-staff-line-oa.spec.ts:871:3 › TASK-009 Playwright Browser Lifecycle — Staff, LINE OA & Access Grants › 15. Cross-Dormitory boundary returns 403 DORMITORY_MISMATCH; response bodies leak zero secrets (2.5s)
+  ✓  46 [chromium] › tests/e2e/tenant-payment-portal.spec.ts:407:3 › Tenant Web Payment & Receipt Portal E2E Suite › 1. Security & Isolation Boundaries: Anonymous Access = 401, Tenant B cannot access Tenant A bill/payment/receipt (1.9s)
+  ✓  47 [chromium] › tests/e2e/tenant-payment-portal.spec.ts:439:3 › Tenant Web Payment & Receipt Portal E2E Suite › 2. Complete Tenant Web Payment Portal Lifecycle: Intent -> Upload -> Submit -> Reject -> Resubmit -> Approve -> PAID + Receipt (8.4s)
+  ✓  48 [chromium] › tests/e2e/tenant-payment-portal.spec.ts:610:3 › Tenant Web Payment & Receipt Portal E2E Suite › 3. Same-Room Tenant Turnover Regression: Tenant B in same room B101 cannot access Tenant A historical data (4.2s)
+  ✓  49 [chromium] › tests/e2e/tenant-payment-portal.spec.ts:758:3 › Tenant Web Payment & Receipt Portal E2E Suite › 4. No Active Contract Security: Tenant with no active contract receives zero bills/payments/receipts (1.8s)
+  ✓  50 [chromium] › tests/e2e/tenant-payment-portal.spec.ts:821:3 › Tenant Web Payment & Receipt Portal E2E Suite › 5. PromptPay Privacy & Same-Origin QR Interception Regression: No raw secret, no promptpay.io requests (2.1s)
+  ✓  51 [chromium] › tests/e2e/tenant-payment-portal.spec.ts:873:3 › Tenant Web Payment & Receipt Portal E2E Suite › 6. Payment Options Config States: PromptPay only, Bank only, Both, Neither, Decryption failure (3.5s)
+  ✓  52 [chromium] › tests/e2e/wave0-production-truth.spec.ts:283:3 › Wave 0 Production Truth Acceptance Suite › disabled /demo route in normal production runtime (0.8s)
+  ✓  53 [chromium] › tests/e2e/wave0-production-truth.spec.ts:288:3 › Wave 0 Production Truth Acceptance Suite › no /tenant/login -> /demo redirect (0.7s)
+  ✓  54 [chromium] › tests/e2e/wave0-production-truth.spec.ts:293:3 › Wave 0 Production Truth Acceptance Suite › Dashboard authenticated owner subscription entitlement catalog integration (1.5s)
+  ✓  55 [chromium] › tests/e2e/wave0-production-truth.spec.ts:300:3 › Wave 0 Production Truth Acceptance Suite › Owner Meters displays meter draft notice banner for authenticated owner (1.6s)
+  ✓  56 [chromium] › tests/e2e/wave0-production-truth.spec.ts:313:3 › Wave 0 Production Truth Acceptance Suite › Owner Tenants page remains active with zero demo tenants (1.5s)
+  ✓  57 [chromium] › tests/e2e/wave0-production-truth.spec.ts:322:3 › Wave 0 Production Truth Acceptance Suite › Owner Contracts page remains active with zero demo contracts (1.5s)
+  ✓  58 [chromium] › tests/e2e/wave0-production-truth.spec.ts:330:3 › Wave 0 Production Truth Acceptance Suite › Owner Maintenance page remains active with zero demo requests (1.4s)
+  ✓  59 [chromium] › tests/e2e/wave0-production-truth.spec.ts:339:3 › Wave 0 Production Truth Acceptance Suite › Owner Announcements page remains active with zero demo announcements (1.4s)
+  ✓  60 [chromium] › tests/e2e/wave0-production-truth.spec.ts:347:3 › Wave 0 Production Truth Acceptance Suite › Owner Reports displays 0 / empty state when no data exists (1.4s)
+  ✓  61 [chromium] › tests/e2e/wave0-production-truth.spec.ts:355:3 › Wave 0 Production Truth Acceptance Suite › API 500 failures render empty state without fallback to demo data (1.9s)
+  ✓  62 [chromium] › tests/e2e/wave0-production-truth.spec.ts:376:3 › Wave 0 Production Truth Acceptance Suite › Authenticated tenant workspace utility view displays truthful empty state and no sample March-July history (1.5s)
+  ✓  63 [chromium] › tests/e2e/wave0-production-truth.spec.ts:387:3 › Wave 0 Production Truth Acceptance Suite › Authenticated tenant move-out API 500 fails closed: error visible, success absent, zero localStorage persistence (1.6s)
+  ✓  64 [chromium] › tests/e2e/wave0-production-truth.spec.ts:444:3 › Wave 0 Production Truth Acceptance Suite › Meter zero rate remains zero and never falls back to 18/7 (1.4s)
+  ✓  65 [chromium] › tests/e2e/wave0-production-truth.spec.ts:452:3 › Wave 0 Production Truth Acceptance Suite › Owner Settings displays 0 for zero-value rates/defaults and persists edits across F5 reload (1.9s)
+  ✓  66 [chromium] › tests/e2e/wave0-production-truth.spec.ts:483:3 › Wave 0 Production Truth Acceptance Suite › Tenant contract PDF uses authoritative business data instead of legacy hardcoded defaults (18/7/101/25/5) (1.8s)
+  ✓  67 [chromium] › tests/e2e/wave1-owner-daily-operations.spec.ts:272:3 › HORPLUS — Wave 1 Owner Daily Operations Real Playwright Acceptance Suite › Flow B — Contract Draft & Atomic Activation (Creates Occupancy, Room Occupied) (4.2s)
+  ✓  68 [chromium] › tests/e2e/wave1-owner-daily-operations.spec.ts:348:3 › HORPLUS — Wave 1 Owner Daily Operations Real Playwright Acceptance Suite › Flow C — Meter Readings Save, F5 Persistence & Lower Reading Validation (3.7s)
+  ✓  69 [chromium] › tests/e2e/wave1-owner-daily-operations.spec.ts:409:3 › HORPLUS — Wave 1 Owner Daily Operations Real Playwright Acceptance Suite › Flow D — Bill Generation, F5 Persistence & Payments View Verification (2.7s)
+  ✓  70 [chromium] › tests/e2e/wave1-owner-daily-operations.spec.ts:453:3 › HORPLUS — Wave 1 Owner Daily Operations Real Playwright Acceptance Suite › Flow E — Dashboard Metrics Match PostgreSQL State & Persist Across F5 (2.5s)
+  ✓  71 [chromium] › tests/e2e/wave1e-payment.spec.ts:705:3 › Wave 1E - Real Payment & Receipt Integration (Fully Unmocked) › Full Payment Lifecycle: Tenant uploads slip -> Owner approves -> Receipt generated -> Idempotency & DB integrity verified (10.9s)
+  ✓  72 [chromium] › tests/e2e/wave1f-subscription.spec.ts:144:3 › Wave 1F - Subscription & Entitlement Playwright E2E Suite › Owner subscription & entitlement full lifecycle (7.0s)
+  ✓  73 [chromium] › tests/e2e/wave1g-property.spec.ts:114:3 › Wave 1G Real Playwright Lifecycle — Property, Room Defaults, Snapshots & Availability › Complete API & Database Lifecycle — Strict Defaults, Propagation Counters, Snapshot & Entitlement (12.2s)
+  ✓  74 [chromium] › tests/e2e/wave1g-property.spec.ts:348:3 › Wave 1G Real Playwright Lifecycle — Property, Room Defaults, Snapshots & Availability › Visible Owner UI Interactions Lifecycle — Property, Defaults, Availability & Contracts (11.5s)
+  ✓  75 [chromium] › tests/e2e/wave1-owner-daily-operations.spec.ts:190:3 › HORPLUS — Wave 1 Owner Daily Operations Real Playwright Acceptance Suite › Flow A — Create & Edit Tenant via UI, verify DB persistence & Room remains VACANT before activation (4.2s)
+  ✓  76 [chromium] › tests/e2e/local01-tenant-onboarding-cooccupants.spec.ts:194:3 › LOCAL-01 — Tenant Onboarding & Co-Occupant Management E2E Acceptance Suite › Flow A — Multiple Applicants Same Room Submission & Persistence (6.2s)
+  ✓  77 [chromium] › tests/e2e/local01-tenant-onboarding-cooccupants.spec.ts:251:3 › LOCAL-01 — Tenant Onboarding & Co-Occupant Management E2E Acceptance Suite › Flow B — Owner Approval with Automatic Default Contract & Direct Active Occupancy (4.1s)
+  ✓  78 [chromium] › tests/e2e/local01-tenant-onboarding-cooccupants.spec.ts:311:3 › LOCAL-01 — Tenant Onboarding & Co-Occupant Management E2E Acceptance Suite › Flow C — Room Status Sync to OCCUPIED and Duplicate Applicants Rejected/Closed (2.8s)
+  ✓  79 [chromium] › tests/e2e/local01-tenant-onboarding-cooccupants.spec.ts:387:3 › LOCAL-01 — Tenant Onboarding & Co-Occupant Management E2E Acceptance Suite › Flow D — Co-Occupant Registration, DB Storage, UI List & F5 Reload Persistence (3.5s)
+  ✓  80 [chromium] › tests/e2e/local01-tenant-onboarding-cooccupants.spec.ts:438:3 › LOCAL-01 — Tenant Onboarding & Co-Occupant Management E2E Acceptance Suite › Flow E — Co-Occupant Deletion via Real UI and PostgreSQL Database Verification (2.9s)
+  ✓  81 [chromium] › tests/e2e/local02-contract-settlement-renewal.spec.ts:216:3 › LOCAL-02: E2E Contract Settlement, Termination & Renewal Suite › FLOW A — Renewal Request: Tenant submits renewal request via UI, status is PENDING_OWNER_APPROVAL, persists on F5 (6.9s)
+  ✓  82 [chromium] › tests/e2e/local02-contract-settlement-renewal.spec.ts:254:3 › LOCAL-02: E2E Contract Settlement, Termination & Renewal Suite › FLOW B — Future Renewal Approval: Owner approves renewal via UI, DB creates approved_scheduled contract (2.7s)
+  ✓  83 [chromium] › tests/e2e/local02-contract-settlement-renewal.spec.ts:312:3 › LOCAL-02: E2E Contract Settlement, Termination & Renewal Suite › FLOW C — Effective-Date Activation: Test clock activation transitions contract and occupancy on effective date (3.1s)
+  ✓  84 [chromium] › tests/e2e/local02-contract-settlement-renewal.spec.ts:344:3 › LOCAL-02: E2E Contract Settlement, Termination & Renewal Suite › FLOW D — Pending Applicant Lock: Registration request for room blocks tenant renewal eligibility UI (2.3s)
+
+  84 passed (3.1m)
+
+================================================================================
+METRICS & STATUS:
+- Executable SHA: 72e2b898b4a2173c0c863d67ebf908f54a54be12
+- Total Discovered Test Files: 14
+- Total Executable Tests: 84
+- Passed: 84
+- Failed: 0
+- Skipped: 0
+- Duration: 3.1m (186.0s)
+- Exit Code: 0
+================================================================================
