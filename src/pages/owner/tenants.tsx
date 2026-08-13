@@ -207,9 +207,9 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
     fetchRegRequests();
   }, []);
 
-  const pendingCount = Array.isArray(regRequests) ? regRequests.filter((r) => r.status === 'pending_owner_approval').length : 0;
+  const [replacementWarningData, setReplacementWarningData] = useState<any>(null);
 
-  const handleApproveRegistration = async () => {
+  const handleApproveRegistration = async (confirmReplacement = false) => {
     if (!selectedRegReq) return;
     try {
       const res = await approveTenantRegistrationRequest(selectedRegReq.id, {
@@ -219,17 +219,27 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
         rentAmount: approveRent,
         depositAmount: approveDeposit,
         advancePaymentAmount: approveAdvance,
+        confirmReplacement,
       });
 
       if (res.success) {
         alert('อนุมัติคำขอลงทะเบียนเรียบร้อยแล้ว');
         setIsApproveTermsOpen(false);
+        setReplacementWarningData(null);
         setSelectedRegReq(null);
         await fetchRegRequests();
         const updatedTenants = await getDataProvider().tenants.getAll();
         onSaveTenants(updatedTenants);
       } else {
-        alert(res.error?.message || 'ไม่สามารถอนุมัติได้');
+        if (res.error?.code === 'REPLACEMENT_CONFIRMATION_REQUIRED') {
+          setReplacementWarningData({
+            activeTenantName: (res.error as any).activeTenantName || 'ผู้เช่าปัจจุบัน',
+            activeRoomNumber: (res.error as any).activeRoomNumber || 'ไม่ระบุ',
+            message: res.error.message,
+          });
+        } else {
+          alert(res.error?.message || 'ไม่สามารถอนุมัติได้');
+        }
       }
     } catch (err: any) {
       alert(err.message || 'เกิดข้อผิดพลาดในการอนุมัติคำขอ');
@@ -810,9 +820,9 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
             >
               <Clock className="w-4 h-4" />
               <span>คำขอลงทะเบียน</span>
-              {pendingCount > 0 && (
+              {regRequests.filter(r => r.status === 'pending_owner_approval').length > 0 && (
                 <span className="ml-1 px-1.5 py-0.5 bg-white text-amber-800 rounded-full text-[10px] font-black">
-                  {pendingCount}
+                  {regRequests.filter(r => r.status === 'pending_owner_approval').length}
                 </span>
               )}
             </button>
@@ -2643,6 +2653,53 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
             </button>
           </div>
         </div>
+      </Modal>
+
+      {/* Modal: High-Visibility Destructive Replacement Warning Modal */}
+      <Modal
+        isOpen={!!replacementWarningData}
+        onClose={() => setReplacementWarningData(null)}
+        title="⚠️ คำเตือนการยุติสัญญาและยกเลิกผู้เช่าเดิม"
+        maxWidth="max-w-lg"
+      >
+        {replacementWarningData && (
+          <div className="space-y-4 text-xs">
+            <div className="p-4 bg-amber-50 border-2 border-amber-300 text-amber-900 rounded-xl space-y-2">
+              <p className="font-bold text-sm text-amber-900 flex items-center gap-2">
+                ⚠️ ห้องพักนี้มีผู้เช่าปัจจุบันอยู่แล้ว
+              </p>
+              <p className="leading-relaxed font-semibold">
+                ห้องนี้มีผู้เช่าปัจจุบันอยู่ การอนุมัติผู้สมัครรายใหม่นี้จะยุติสัญญาและสิทธิ์การพักอาศัยของผู้เช่าปัจจุบันทันที และระบบจะเริ่มขั้นตอนคำนวณยอดย้ายออก กรุณาตรวจสอบข้อมูลก่อนยืนยัน
+              </p>
+            </div>
+
+            <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-1 text-slate-700">
+              <p><span className="font-bold">ห้องพัก:</span> {replacementWarningData.activeRoomNumber}</p>
+              <p><span className="font-bold">ผู้เช่าปัจจุบัน:</span> {replacementWarningData.activeTenantName}</p>
+              <p><span className="font-bold">ผู้สมัครใหม่:</span> {selectedRegReq?.firstName} {selectedRegReq?.lastName}</p>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-3 border-t border-gray-100">
+              <button
+                type="button"
+                onClick={() => setReplacementWarningData(null)}
+                className="px-4 py-2 border border-gray-200 font-bold rounded-xl text-slate-600 hover:bg-slate-50"
+              >
+                ยกเลิก
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setReplacementWarningData(null);
+                  handleApproveRegistration(true);
+                }}
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-xl shadow-sm"
+              >
+                ยืนยันยกเลิกผู้เช่าเดิมและอนุมัติผู้เช่าใหม่
+              </button>
+            </div>
+          </div>
+        )}
       </Modal>
     </div>
   );

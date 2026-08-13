@@ -163,9 +163,69 @@ export interface Contract {
   tenantSignature?: string; // Base64 signature image
   ownerSignature?: string; // Base64 signature image
   tenantIdCardMock?: string;
+  previousContractId?: string;
   status: ContractStatus;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface TenantRenewalRequest {
+  id: string;
+  dormitoryId: string;
+  tenantId: string;
+  contractId: string;
+  roomId: string;
+  requestedDurationMonths: number;
+  requestedStartDate: string;
+  requestedEndDate: string;
+  status: 'PENDING_OWNER_APPROVAL' | 'APPROVED' | 'REJECTED' | 'CANCELLED';
+  rejectionReason?: string;
+  createdContractId?: string;
+  createdAt: string;
+  updatedAt: string;
+  tenant?: Tenant;
+  contract?: Contract;
+  room?: Room;
+}
+
+export interface DamageChargeItem {
+  id: string;
+  settlementId: string;
+  description: string;
+  amount: number;
+  evidenceUrl?: string;
+  isDeleted?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface ContractSettlement {
+  id: string;
+  dormitoryId: string;
+  tenantId: string;
+  contractId: string;
+  roomId: string;
+  depositAmount: number;
+  unpaidBillAmount: number;
+  damageChargeTotal: number;
+  netSettlement: number;
+  settlementDirection: 'REFUND' | 'PAYMENT_DUE' | 'ZERO';
+  settlementStatus: 'PENDING_REFUND' | 'REFUNDED' | 'PENDING_PAYMENT' | 'PAYMENT_RECEIVED' | 'CLOSED_ZERO';
+  confirmedAt?: string;
+  confirmedByUserId?: string;
+  createdAt?: string;
+  items: DamageChargeItem[];
+}
+
+export interface TenantNotice {
+  id: string;
+  dormitoryId: string;
+  tenantId: string;
+  title: string;
+  message: string;
+  type: string;
+  isRead: boolean;
+  createdAt: string;
 }
 
 export interface ContractRequest {

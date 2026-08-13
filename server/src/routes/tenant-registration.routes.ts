@@ -128,6 +128,17 @@ export function createTenantRegistrationRouter(
     }
   });
 
+  // GET /api/v1/tenant-registrations/:id/replacement-warning
+  privateRouter.get('/:id/replacement-warning', requireDormitoryPermission('tenant:read'), async (req: Request, res: Response) => {
+    try {
+      const dormId = getAuthoritativeDormitoryId(req);
+      const details = await registrationService.getReplacementWarningDetails(dormId, req.params.id);
+      res.json({ data: details });
+    } catch (err) {
+      handleServiceError(res, err, req);
+    }
+  });
+
   // PATCH /api/v1/tenant-registrations/:id
   privateRouter.patch('/:id', ...mutationGuard('tenant:write'), async (req: Request, res: Response) => {
     if (!verifyCsrf(req, res)) return;

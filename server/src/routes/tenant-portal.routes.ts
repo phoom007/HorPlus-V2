@@ -921,5 +921,24 @@ export function createTenantPortalRouter(authService?: AuthenticationService): R
     }
   });
 
+  // GET /api/v1/tenant-portal/notices (Persistent in-app tenant notices)
+  router.get('/notices', async (req: Request, res: Response) => {
+    try {
+      const ctx = await resolveTenantContext(req);
+      if (ctx.error) {
+        return res.status(ctx.error.statusCode).json({ error: { code: ctx.error.code, message: ctx.error.message, requestId: req.requestId } });
+      }
+
+      const notices = await prisma.tenantNotice.findMany({
+        where: { dormitoryId: ctx.dormitoryId, tenantId: ctx.tenant.id },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      return res.json({ data: notices });
+    } catch (err: any) {
+      return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message, requestId: req.requestId } });
+    }
+  });
+
   return router;
 }

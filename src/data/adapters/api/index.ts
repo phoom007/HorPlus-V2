@@ -352,6 +352,7 @@ export interface ApproveRegistrationPayload {
   depositAmount: string | number;
   advancePaymentAmount: string | number;
   terms?: string;
+  confirmReplacement?: boolean;
 }
 
 export async function approveTenantRegistrationRequest(id: string, payload: ApproveRegistrationPayload): Promise<DataResult<any>> {
@@ -366,6 +367,150 @@ export async function approveTenantRegistrationRequest(id: string, payload: Appr
   }
 }
 
+export async function getReplacementWarning(id: string): Promise<DataResult<any>> {
+  try {
+    const data = await httpRequest<any>('GET', `/tenant-registrations/${id}/replacement-warning`);
+    return { success: true, data };
+  } catch (err: any) {
+    return {
+      success: false,
+      error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message }
+    };
+  }
+}
+
+export async function getRenewalEligibility(contractId: string, tenantId: string): Promise<DataResult<any>> {
+  try {
+    const data = await httpRequest<any>('GET', `/contract-renewals/eligibility?contractId=${contractId}&tenantId=${tenantId}`);
+    return { success: true, data };
+  } catch (err: any) {
+    return {
+      success: false,
+      error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message }
+    };
+  }
+}
+
+export async function submitRenewalRequest(payload: { contractId: string; tenantId: string; requestedStartDate: string; requestedDurationMonths: number }): Promise<DataResult<any>> {
+  try {
+    const data = await httpRequest<any>('POST', `/contract-renewals/request`, payload);
+    return { success: true, data };
+  } catch (err: any) {
+    return {
+      success: false,
+      error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message }
+    };
+  }
+}
+
+export async function getRenewalRequests(status?: string): Promise<DataResult<any>> {
+  try {
+    const query = status ? `?status=${status}` : '';
+    const data = await httpRequest<any>('GET', `/contract-renewals/requests${query}`);
+    return { success: true, data };
+  } catch (err: any) {
+    return {
+      success: false,
+      error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message }
+    };
+  }
+}
+
+export async function approveRenewalRequest(requestId: string, payload?: any): Promise<DataResult<any>> {
+  try {
+    const data = await httpRequest<any>('POST', `/contract-renewals/requests/${requestId}/approve`, payload || {});
+    return { success: true, data };
+  } catch (err: any) {
+    return {
+      success: false,
+      error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message }
+    };
+  }
+}
+
+export async function rejectRenewalRequest(requestId: string, reason?: string): Promise<DataResult<any>> {
+  try {
+    const data = await httpRequest<any>('POST', `/contract-renewals/requests/${requestId}/reject`, { reason });
+    return { success: true, data };
+  } catch (err: any) {
+    return {
+      success: false,
+      error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message }
+    };
+  }
+}
+
+export async function getContractSettlement(contractId: string): Promise<DataResult<any>> {
+  try {
+    const data = await httpRequest<any>('GET', `/settlements/${contractId}`);
+    return { success: true, data };
+  } catch (err: any) {
+    return {
+      success: false,
+      error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message }
+    };
+  }
+}
+
+export async function addDamageChargeItem(settlementId: string, payload: { description: string; amount: number; evidenceUrl?: string }): Promise<DataResult<any>> {
+  try {
+    const data = await httpRequest<any>('POST', `/settlements/${settlementId}/damage-items`, payload);
+    return { success: true, data };
+  } catch (err: any) {
+    return {
+      success: false,
+      error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message }
+    };
+  }
+}
+
+export async function editDamageChargeItem(itemId: string, payload: { description?: string; amount?: number; evidenceUrl?: string }): Promise<DataResult<any>> {
+  try {
+    const data = await httpRequest<any>('PUT', `/settlements/damage-items/${itemId}`, payload);
+    return { success: true, data };
+  } catch (err: any) {
+    return {
+      success: false,
+      error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message }
+    };
+  }
+}
+
+export async function softRemoveDamageChargeItem(itemId: string): Promise<DataResult<any>> {
+  try {
+    const data = await httpRequest<any>('DELETE', `/settlements/damage-items/${itemId}`);
+    return { success: true, data };
+  } catch (err: any) {
+    return {
+      success: false,
+      error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message }
+    };
+  }
+}
+
+export async function confirmSettlement(settlementId: string, status: string): Promise<DataResult<any>> {
+  try {
+    const data = await httpRequest<any>('POST', `/settlements/${settlementId}/confirm`, { status });
+    return { success: true, data };
+  } catch (err: any) {
+    return {
+      success: false,
+      error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message }
+    };
+  }
+}
+
+export async function getTenantNotices(): Promise<DataResult<any>> {
+  try {
+    const data = await httpRequest<any>('GET', `/tenant-portal/notices`);
+    return { success: true, data };
+  } catch (err: any) {
+    return {
+      success: false,
+      error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message }
+    };
+  }
+}
 
 export async function rejectTenantRegistrationRequest(id: string, reason?: string): Promise<DataResult<any>> {
   try {

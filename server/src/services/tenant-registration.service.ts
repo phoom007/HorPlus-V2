@@ -1,4 +1,7 @@
 import { getPrismaClient } from '../db/prisma.js';
+import { logger } from '../config/logger.js';
+import { AppError } from '../types/index.js';
+import { Prisma } from '@prisma/client';
 
 export interface CreateRegistrationDto {
   dormitoryId: string;
@@ -17,6 +20,7 @@ export interface ApproveRegistrationDto {
   depositAmount: string | number;
   advancePaymentAmount: string | number;
   terms?: string | null;
+  confirmReplacement?: boolean;
 }
 
 export class TenantRegistrationService {
@@ -45,17 +49,12 @@ export class TenantRegistrationService {
       }
 
       if (room.status === 'occupied') {
-        const err = new Error('ROOM_ALREADY_OCCUPIED');
-        (err as any).statusCode = 409;
-        (err as any).code = 'ROOM_ALREADY_OCCUPIED';
-        (err as any).message = 'ห้องพักนี้มีผู้เช่าอยู่แล้ว';
-        throw err;
+        // Note: Multiple pending requests are allowed, but occupied check is handled during approval with replacement warning
       }
 
       requestedRoomId = room.id;
     }
 
-    // 3. Create TenantRegistrationRequest
     return prisma.tenantRegistrationRequest.create({
       data: {
         dormitoryId,
@@ -68,6 +67,38 @@ export class TenantRegistrationService {
         submittedAt: new Date(),
       },
     });
+  }
+
+  public async getReplacementWarningDetails(dormitoryId: string, registrationId: string) {
+    const prisma = getPrismaClient();
+    const req = await prisma.tenantRegistrationRequest.findFirst({
+      where: { id: registrationId, dormitoryId },
+    });
+
+    if (!req || !req.requestedRoomId) {
+      return { requiresReplacementWarning: false };
+    }
+
+    const activeOccupancy = await prisma.occupancy.findFirst({
+      where: {
+        dormitoryId,
+        roomId: req.requestedRoomId,
+        status: 'ACTIVE',
+      },
+      include: { tenant: true, contract: true, room: true },
+    });
+
+    if (!activeOccupancy) {
+      return { requiresReplacementWarning: false };
+    }
+
+    return {
+      requiresReplacementWarning: true,
+      currentOccupancy: activeOccupancy,
+      currentTenant: activeOccupancy.tenant,
+      currentContract: activeOccupancy.contract,
+      room: activeOccupancy.room,
+    };
   }
 
   public async hasPendingRegistrationForRoom(dormitoryId: string, roomId: string): Promise<boolean> {
@@ -140,14 +171,6 @@ export class TenantRegistrationService {
       throw err;
     }
 
-    if (room.status === 'occupied') {
-      const err = new Error('ROOM_ALREADY_OCCUPIED');
-      (err as any).statusCode = 409;
-      (err as any).code = 'ROOM_ALREADY_OCCUPIED';
-      (err as any).message = 'ห้องพักนี้มีผู้เช่าอยู่แล้ว';
-      throw err;
-    }
-
     const updated = await prisma.tenantRegistrationRequest.update({
       where: { id },
       data: {
@@ -164,8 +187,6 @@ export class TenantRegistrationService {
     payload: ApproveRegistrationDto,
     actorUserId?: string
   ) {
-    // INVARIANT: Approval must always produce complete tenancy state.
-    // Validate required contract fields BEFORE any mutations.
     if (
       !payload ||
       !payload.startDate ||
@@ -184,7 +205,7 @@ export class TenantRegistrationService {
 
     const prisma = getPrismaClient();
     return prisma.$transaction(async (tx) => {
-      // 1. Re-verify request status inside transaction to guarantee idempotency and guard race conditions
+      // 1. Re-verify request status inside transaction
       const req = await tx.tenantRegistrationRequest.findFirst({
         where: { id, dormitoryId },
       });
@@ -222,27 +243,151 @@ export class TenantRegistrationService {
           (err as any).message = 'ห้องพักที่ระบุไม่อยู่ในหอพักนี้';
           throw err;
         }
-        if (room.status === 'occupied') {
-          const err = new Error('ROOM_ALREADY_OCCUPIED');
-          (err as any).statusCode = 409;
-          (err as any).code = 'ROOM_ALREADY_OCCUPIED';
-          (err as any).message = 'ห้องพักนี้มีผู้เช่าอยู่แล้วไม่สามารถอนุมัติได้';
-          throw err;
-        }
 
+        // Check if room currently has an active tenancy/occupancy
         const activeOccupancy = await tx.occupancy.findFirst({
           where: { dormitoryId, roomId: req.requestedRoomId, status: 'ACTIVE' },
+          include: { tenant: true, contract: true },
         });
+
         if (activeOccupancy) {
-          const err = new Error('ROOM_ALREADY_OCCUPIED');
-          (err as any).statusCode = 409;
-          (err as any).code = 'ROOM_ALREADY_OCCUPIED';
-          (err as any).message = 'ห้องพักนี้มีผู้เช่าอยู่แล้วไม่สามารถอนุมัติได้';
-          throw err;
+          // If Owner did NOT explicitly confirm replacement, require confirmation warning first!
+          if (!payload.confirmReplacement) {
+            const err = new Error('REPLACEMENT_CONFIRMATION_REQUIRED: ห้องนี้มีผู้เช่าปัจจุบันอยู่ กรุณายืนยันการยุติสัญญาผู้เช่าเดิม');
+            (err as any).statusCode = 409;
+            (err as any).code = 'REPLACEMENT_CONFIRMATION_REQUIRED';
+            (err as any).message = `ห้อง ${room.roomNumber} มีผู้เช่าปัจจุบันอยู่ (${activeOccupancy.tenant.displayName}) การอนุมัติผู้เช่ารายใหม่นี้จะยุติสัญญาของผู้เช่าปัจจุบันทันที`;
+            (err as any).activeTenantName = activeOccupancy.tenant.displayName;
+            (err as any).activeRoomNumber = room.roomNumber;
+            throw err;
+          }
+
+          // ATOMIC OWNER-FORCED REPLACEMENT TERMINATION
+          const oldTenantId = activeOccupancy.tenantId;
+          const oldContractId = activeOccupancy.contractId;
+
+          // a. Terminate old contract (Original agreed dates on contract remain IMMUTABLE! NO rent proration!)
+          if (oldContractId) {
+            await tx.contract.update({
+              where: { id: oldContractId },
+              data: {
+                status: 'terminated',
+                terminatedAt: new Date(),
+                terminationEffectiveDate: new Date(),
+                terminationReason: 'ยุติสัญญาเนื่องจากผู้ดูแลหอพักอนุมัติผู้เช่ารายใหม่เข้าแทนที่',
+              },
+            });
+          }
+
+          const safeActorId = actorUserId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(actorUserId) ? actorUserId : null;
+
+          // b. Close old occupancy
+          await tx.occupancy.update({
+            where: { id: activeOccupancy.id },
+            data: {
+              status: 'ENDED',
+              endedAt: new Date(),
+              endedByUserId: safeActorId,
+              endedReason: 'ย้ายออกจากการอนุมัติผู้เช่าใหม่แทนที่ (Owner Replacement)',
+            },
+          });
+
+          // c. Invalidate/cancel any pending renewal requests for old tenant
+          await tx.tenantRenewalRequest.updateMany({
+            where: {
+              dormitoryId,
+              tenantId: oldTenantId,
+              status: 'PENDING_OWNER_APPROVAL',
+            },
+            data: {
+              status: 'CANCELLED',
+              rejectionReason: 'ยกเลิกเนื่องจากผู้ดูแลหอพักอนุมัติผู้เช่ารายใหม่เข้าแทนที่',
+              reviewedAt: new Date(),
+              reviewedByUserId: safeActorId,
+            },
+          });
+
+          // d. Initiate/open Settlement for old tenant
+          if (oldContractId) {
+            const unpaidBills = await tx.bill.findMany({
+              where: {
+                dormitoryId,
+                contractId: oldContractId,
+                status: { in: ['unpaid', 'overdue'] },
+              },
+            });
+
+            const unpaidTotal = unpaidBills.reduce(
+              (sum, b) => sum.add(new Prisma.Decimal(b.totalAmount || 0)),
+              new Prisma.Decimal(0)
+            );
+
+            const oldContract = activeOccupancy.contract;
+            const deposit = new Prisma.Decimal(oldContract?.depositAmount || 0);
+            const net = deposit.sub(unpaidTotal);
+
+            let direction = 'ZERO';
+            let status = 'CLOSED_ZERO';
+            if (net.gt(0)) {
+              direction = 'REFUND';
+              status = 'PENDING_REFUND';
+            } else if (net.lt(0)) {
+              direction = 'PAYMENT_DUE';
+              status = 'PENDING_PAYMENT';
+            }
+
+            await tx.contractSettlement.upsert({
+              where: {
+                dormitory_contract_settlement_unique: {
+                  dormitoryId,
+                  contractId: oldContractId,
+                },
+              },
+              create: {
+                dormitoryId,
+                tenantId: oldTenantId,
+                contractId: oldContractId,
+                roomId: req.requestedRoomId,
+                depositAmount: deposit,
+                unpaidBillAmount: unpaidTotal,
+                damageChargeTotal: new Prisma.Decimal(0),
+                netSettlement: net,
+                settlementDirection: direction,
+                settlementStatus: status,
+              },
+              update: {
+                depositAmount: deposit,
+                unpaidBillAmount: unpaidTotal,
+                netSettlement: net,
+                settlementDirection: direction,
+                settlementStatus: status,
+              },
+            });
+          }
+
+          // e. Create persistent in-app notice for old tenant
+          await tx.tenantNotice.create({
+            data: {
+              dormitoryId,
+              tenantId: oldTenantId,
+              title: 'แจ้งยุติสัญญาเช่า',
+              message: `สัญญาเช่าห้อง ${room.roomNumber} ของคุณถูกยุติโดยผู้ดูแลหอพัก กรุณาตรวจสอบรายละเอียดสัญญาและยอดย้ายออกในระบบ`,
+              type: 'FORCED_TERMINATION',
+            },
+          });
+
+          logger.info({
+            event: 'SECURITY_AUDIT',
+            dormitoryId,
+            oldTenantId,
+            roomId: req.requestedRoomId,
+            actorUserId,
+            action: 'OWNER_FORCED_REPLACEMENT_EXECUTED',
+            msg: `Owner terminated active tenancy for tenant ${oldTenantId} to approve replacement applicant ${id}`,
+          });
         }
       }
 
-      // INVARIANT: Registration must have a room assigned before approval
       if (!req.requestedRoomId) {
         const err = new Error('MISSING_ROOM_ASSIGNMENT');
         (err as any).statusCode = 400;
@@ -251,7 +396,7 @@ export class TenantRegistrationService {
         throw err;
       }
 
-      // 3. Create Tenant
+      // 3. Create Tenant B
       const tenantCount = await tx.tenant.count({ where: { dormitoryId } });
       const tenantNumber = `TNT-${Date.now()}-${(tenantCount + 1).toString().padStart(4, '0')}`;
       const displayName = `${req.firstName} ${req.lastName}`.trim();
@@ -268,7 +413,9 @@ export class TenantRegistrationService {
         },
       });
 
-      // 4. Create Contract (ALWAYS — approval invariant)
+      const safeActorId = actorUserId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(actorUserId) ? actorUserId : null;
+
+      // 4. Create Contract B
       const contractCount = await tx.contract.count({ where: { dormitoryId } });
       const contractNumber = `CTR-${Date.now()}-${(contractCount + 1).toString().padStart(4, '0')}`;
 
@@ -286,13 +433,13 @@ export class TenantRegistrationService {
           depositAmount: String(payload.depositAmount),
           advancePaymentAmount: String(payload.advancePaymentAmount),
           terms: payload.terms || null,
-          createdByUserId: actorUserId,
+          createdByUserId: safeActorId,
           activatedAt: new Date(),
         },
       });
       const contractId = contract.id;
 
-      // 5. Establish Authoritative Occupancy & Transition Room to Occupied (ALWAYS — approval invariant)
+      // 5. Establish Authoritative Occupancy B & Transition Room B to Occupied
       const occupancy = await tx.occupancy.create({
         data: {
           dormitoryId,
@@ -319,7 +466,7 @@ export class TenantRegistrationService {
         data: {
           status: 'approved',
           reviewedAt: new Date(),
-          reviewedByUserId: actorUserId,
+          reviewedByUserId: safeActorId,
           approvedTenantId: tenant.id,
           approvedRoomId: req.requestedRoomId,
           approvedContractId: contractId,
@@ -362,3 +509,5 @@ export class TenantRegistrationService {
     });
   }
 }
+
+export const tenantRegistrationService = new TenantRegistrationService();

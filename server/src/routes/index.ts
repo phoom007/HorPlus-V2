@@ -43,6 +43,8 @@ import { LinePlatformAdapter } from '../services/line-platform-adapter.js';
 import { ILineChannelTokenProvider, LineChannelTokenProvider, FakeLineTokenProvider } from '../services/line-channel-token-provider.js';
 import { TenantRegistrationService } from '../services/tenant-registration.service.js';
 import { createTenantRegistrationRouter } from './tenant-registration.routes.js';
+import { createContractRenewalRouter } from './contract-renewal.routes.js';
+import { createSettlementRouter } from './settlement.routes.js';
 import { createRequireActiveDormitoryMiddleware } from '../middleware/require-dormitory.js';
 
 export interface AppApiDependencies {
@@ -170,6 +172,8 @@ export function createApiRouter(deps: AppApiDependencies | AuthenticationService
     }
 
     protectedRouter.use('/move-out', moveOutRouter);
+    protectedRouter.use('/contract-renewals', createContractRenewalRouter(fullDeps.authService));
+    protectedRouter.use('/settlements', createSettlementRouter(fullDeps.authService));
     protectedRouter.use('/maintenance-requests', createMaintenanceRouter());
     protectedRouter.use('/maintenance', createMaintenanceRouter());
     protectedRouter.use('/announcements', createAnnouncementRouter());

@@ -163,6 +163,7 @@ export const ApproveRegistrationSchema = z.object({
     z.string().regex(/^\d+(\.\d{1,2})?$/, 'ค่าเช่าล่วงหน้าต้องเป็นตัวเลขที่ถูกต้อง')
   ]),
   terms: z.string().optional().nullable(),
+  confirmReplacement: z.boolean().optional(),
 }).strict();
 
 export const UpdateDormitoryPropertyChangesSchema = z.object({
