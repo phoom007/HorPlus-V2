@@ -34,7 +34,6 @@ describe('LOCAL-03: Local Notification Outbox & Operations Polish', () => {
         email: ownerEmail,
         emailNormalized: ownerEmail.toLowerCase(),
         name: 'Test Owner',
-        displayName: 'Test Owner',
       },
     });
 
@@ -45,7 +44,6 @@ describe('LOCAL-03: Local Notification Outbox & Operations Polish', () => {
         email: managerEmail,
         emailNormalized: managerEmail.toLowerCase(),
         name: 'Test Manager',
-        displayName: 'Test Manager',
       },
     });
 
