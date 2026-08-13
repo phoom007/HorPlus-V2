@@ -145,7 +145,7 @@ export interface Tenant {
   updatedAt: string;
 }
 
-export type ContractStatus = 'draft' | 'pending_signature' | 'active' | 'expiring_soon' | 'expired' | 'terminated' | 'waiting_extension' | 'checking_out';
+export type ContractStatus = 'draft' | 'pending_signature' | 'active' | 'approved_scheduled' | 'scheduled' | 'SCHEDULED' | 'expiring_soon' | 'expired' | 'terminated' | 'waiting_extension' | 'checking_out';
 
 export interface Contract {
   id: string;

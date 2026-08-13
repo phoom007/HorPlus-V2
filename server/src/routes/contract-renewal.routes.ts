@@ -123,20 +123,22 @@ export function createContractRenewalRouter(authService: AuthenticationService):
     }
   });
 
-  // GET /api/v1/contract-renewals/requests
-  router.get('/requests', requireDormitoryPermission('contract:read'), async (req: Request, res: Response) => {
+  // GET /api/v1/contract-renewals/requests or /pending
+  const getRequestsHandler = async (req: Request, res: Response) => {
     try {
       const dormId = getAuthoritativeDormitoryId(req);
-      const status = req.query.status as string;
+      const status = (req.query.status as string) || (req.path.endsWith('/pending') ? 'PENDING_OWNER_APPROVAL' : undefined);
       const requests = await contractRenewalService.listRenewalRequests(dormId, status);
       res.json({ data: requests });
     } catch (err) {
       handleServiceError(res, err, req);
     }
-  });
+  };
+  router.get('/requests', requireDormitoryPermission('contract:read'), getRequestsHandler);
+  router.get('/pending', requireDormitoryPermission('contract:read'), getRequestsHandler);
 
-  // POST /api/v1/contract-renewals/requests/:id/approve (Owner/Manager approves)
-  router.post('/requests/:id/approve', ...mutationGuard('contract:write'), async (req: Request, res: Response) => {
+  // POST /api/v1/contract-renewals/requests/:id/approve or /:id/approve
+  const approveRequestHandler = async (req: Request, res: Response) => {
     if (!verifyCsrf(req, res)) return;
     try {
       const dormId = getAuthoritativeDormitoryId(req);
@@ -157,10 +159,12 @@ export function createContractRenewalRouter(authService: AuthenticationService):
     } catch (err) {
       handleServiceError(res, err, req);
     }
-  });
+  };
+  router.post('/requests/:id/approve', ...mutationGuard('contract:write'), approveRequestHandler);
+  router.post('/:id/approve', ...mutationGuard('contract:write'), approveRequestHandler);
 
-  // POST /api/v1/contract-renewals/requests/:id/reject (Owner/Manager rejects)
-  router.post('/requests/:id/reject', ...mutationGuard('contract:write'), async (req: Request, res: Response) => {
+  // POST /api/v1/contract-renewals/requests/:id/reject or /:id/reject
+  const rejectRequestHandler = async (req: Request, res: Response) => {
     if (!verifyCsrf(req, res)) return;
     try {
       const dormId = getAuthoritativeDormitoryId(req);
@@ -178,7 +182,9 @@ export function createContractRenewalRouter(authService: AuthenticationService):
     } catch (err) {
       handleServiceError(res, err, req);
     }
-  });
+  };
+  router.post('/requests/:id/reject', ...mutationGuard('contract:write'), rejectRequestHandler);
+  router.post('/:id/reject', ...mutationGuard('contract:write'), rejectRequestHandler);
 
   // POST /api/v1/contract-renewals/activate-scheduled (Owner/Manager or System triggers scheduled contract activation)
   router.post('/activate-scheduled', ...mutationGuard('contract:write'), async (req: Request, res: Response) => {

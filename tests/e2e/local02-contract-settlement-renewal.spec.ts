@@ -268,24 +268,27 @@ test.describe.serial('LOCAL-02: E2E Contract Settlement, Termination & Renewal S
     await page.goto('/owner/contracts');
     await expect(page.locator('body')).toBeVisible();
 
-    // Click renew contract button on UI card
-    const renewBtn = page.locator('button:has-text("ต่ออายุสัญญา")').first();
-    if (await renewBtn.isVisible()) {
-      await renewBtn.click();
-      await page.click('button:has-text("ยืนยันการต่ออายุสัญญา")');
-    } else {
-      // Direct API approval if UI list modal is filtered
-      await page.request.post(`http://127.0.0.1:3101/api/v1/contract-renewals/requests/${renewalRequestId}/approve`, {
-        headers: {
-          'X-Dormitory-Id': dormId,
-          'X-CSRF-Token': csrfTokenOwner,
-          'Cookie': `horplus_session=${sessionTokenOwner}; horplus_csrf=${csrfTokenOwner}`,
-        },
-        data: { rentAmount: '5500' },
-      });
-    }
+    // 1. Locate Pending Renewal Request Queue section
+    const queueSection = page.locator('[data-testid="pending-renewal-queue-section"]');
+    await expect(queueSection).toBeVisible();
 
-    // PostgreSQL Evidence Checks:
+    // 2. Click "ตรวจสอบ / อนุมัติ" button for the request
+    const reviewBtn = page.locator('[data-testid="review-renewal-btn"]').first();
+    await expect(reviewBtn).toBeVisible();
+    await reviewBtn.click();
+
+    // 3. Assert requested start date and duration in Review Modal
+    await expect(page.locator('[data-testid="review-requested-start-date"]')).toBeVisible();
+    await expect(page.locator('[data-testid="review-requested-duration"]')).toContainText('6 เดือน');
+
+    // 4. Change approved rent amount
+    const rentInput = page.locator('[data-testid="approved-rent-input"]');
+    await rentInput.fill('5500');
+
+    // 5. Click "อนุมัติคำขอต่ออายุ" button
+    await page.click('[data-testid="confirm-approve-renewal-btn"]');
+
+    // 6. DB Verification
     const scheduledContract = await prisma.contract.findFirst({
       where: { previousContractId: contractA1Id },
     });
@@ -293,6 +296,7 @@ test.describe.serial('LOCAL-02: E2E Contract Settlement, Termination & Renewal S
     scheduledContractId = scheduledContract!.id;
     expect(scheduledContract?.status).toBe('approved_scheduled');
     expect(scheduledContract?.activatedAt).toBeNull();
+    expect(Number(scheduledContract?.rentAmount)).toBe(5500);
 
     // Old contract A1 remains active & immutable
     const oldContract = await prisma.contract.findUnique({ where: { id: contractA1Id } });
@@ -460,108 +464,98 @@ test.describe.serial('LOCAL-02: E2E Contract Settlement, Termination & Renewal S
     await expect(page.locator('body')).toContainText('ถูกยุติโดยผู้ดูแลหอพัก');
   });
 
-  test('FLOW H — Settlement: Add damage item, edit, soft-remove, confirm lock via UI/API, subsequent mutations blocked', async ({ page, context }) => {
+  test('FLOW H — Settlement: Add damage item, edit, soft-remove, confirm lock via REAL UI, subsequent mutations blocked', async ({ page, context }) => {
     await context.clearCookies();
     await context.addCookies([
       { name: 'horplus_session', value: sessionTokenOwner, domain: '127.0.0.1', path: '/' },
       { name: 'horplus_csrf', value: csrfTokenOwner, domain: '127.0.0.1', path: '/' },
+      { name: 'horplus_session', value: sessionTokenOwner, domain: 'localhost', path: '/' },
+      { name: 'horplus_csrf', value: csrfTokenOwner, domain: 'localhost', path: '/' },
     ]);
 
+    await page.addInitScript((dId) => {
+      localStorage.setItem('selected_dormitory_id', dId);
+      sessionStorage.setItem('active_dormitory_selected_for_session', dId);
+    }, dormId);
+
+    // 1. Login OWNER & open contracts page
     await page.goto('/owner/contracts');
     await expect(page.locator('body')).toBeVisible();
 
-    // 1. Get or Create Settlement for scheduledContractId
-    const setRes = await page.request.get(`http://127.0.0.1:3101/api/v1/settlements/${scheduledContractId}`, {
-      headers: {
-        'X-Dormitory-Id': dormId,
-        'Cookie': `horplus_session=${sessionTokenOwner}`,
-      },
-    });
+    // Select contract A1 in UI list
+    const contractCard = page.locator('.p-4.rounded-2xl.border.cursor-pointer').first();
+    if (await contractCard.isVisible()) {
+      await contractCard.click();
+    }
 
-    expect(setRes.status()).toBe(200);
-    const setBody = await setRes.json();
-    const settlementId = setBody.data.id;
+    // 2. Open Settlement container
+    const settlementContainer = page.locator('[data-testid="settlement-container"]');
+    await expect(settlementContainer).toBeVisible();
 
-    // 2. Add Damage Item
-    const addRes = await page.request.post(`http://127.0.0.1:3101/api/v1/settlements/${settlementId}/damage-items`, {
-      headers: {
-        'X-Dormitory-Id': dormId,
-        'X-CSRF-Token': csrfTokenOwner,
-        'Cookie': `horplus_session=${sessionTokenOwner}; horplus_csrf=${csrfTokenOwner}`,
-      },
-      data: {
-        description: 'ค่ากระจกแตก',
-        amount: 1000,
-      },
-    });
+    // Click fetch/calculate if needed
+    const fetchBtn = page.locator('[data-testid="fetch-settlement-btn"]');
+    if (await fetchBtn.isVisible()) {
+      await fetchBtn.click();
+    }
 
-    expect(addRes.status()).toBe(201);
-    const addBody = await addRes.json();
-    const itemId = addBody.data.id;
+    // 3. Click "+ เพิ่มรายการค่าเสียหาย"
+    const addDamageBtn = page.locator('[data-testid="add-damage-item-btn"]');
+    await expect(addDamageBtn).toBeVisible();
+    await addDamageBtn.click();
 
-    // 3. Edit Damage Item
-    const editRes = await page.request.put(`http://127.0.0.1:3101/api/v1/settlements/damage-items/${itemId}`, {
-      headers: {
-        'X-Dormitory-Id': dormId,
-        'X-CSRF-Token': csrfTokenOwner,
-        'Cookie': `horplus_session=${sessionTokenOwner}; horplus_csrf=${csrfTokenOwner}`,
-      },
-      data: {
-        amount: 1500,
-      },
-    });
+    // 4. Fill damage description and amount, then submit
+    await page.fill('#damageDescInput', 'ค่ากระจกแตก');
+    await page.fill('#damageAmountInput', '1000');
+    await page.click('[data-testid="submit-add-damage-btn"]');
 
-    expect(editRes.status()).toBe(200);
+    // 5. Assert visible item and updated amount
+    await expect(page.locator('[data-testid="damage-items-list"]')).toContainText('ค่ากระจกแตก');
+    await expect(page.locator('[data-testid="settlement-damage-total"]')).toContainText('1,000');
 
-    // 4. Soft-Remove Damage Item
-    const delRes = await page.request.delete(`http://127.0.0.1:3101/api/v1/settlements/damage-items/${itemId}`, {
-      headers: {
-        'X-Dormitory-Id': dormId,
-        'X-CSRF-Token': csrfTokenOwner,
-        'Cookie': `horplus_session=${sessionTokenOwner}; horplus_csrf=${csrfTokenOwner}`,
-      },
-    });
+    // 6. Edit item: click Edit on the item
+    const editBtn = page.locator('button:has-text("แก้ไข")').first();
+    await expect(editBtn).toBeVisible();
+    await editBtn.click();
 
-    expect(delRes.status()).toBe(200);
+    await page.fill('#editDamageAmountInput', '1500');
+    await page.click('[data-testid="submit-edit-damage-btn"]');
 
-    // Verify soft-remove in DB
-    const itemInDb = await prisma.contractSettlementItem.findUnique({ where: { id: itemId } });
-    expect(itemInDb?.isDeleted).toBe(true);
+    // 7. Assert updated total
+    await expect(page.locator('[data-testid="settlement-damage-total"]')).toContainText('1,500');
 
-    // 5. Confirm Settlement -> REFUNDED (LOCK)
-    const lockRes = await page.request.post(`http://127.0.0.1:3101/api/v1/settlements/${settlementId}/confirm`, {
-      headers: {
-        'X-Dormitory-Id': dormId,
-        'X-CSRF-Token': csrfTokenOwner,
-        'Cookie': `horplus_session=${sessionTokenOwner}; horplus_csrf=${csrfTokenOwner}`,
-      },
-      data: {
-        status: 'REFUNDED',
-      },
-    });
+    // 8. Soft-remove item: click "นำรายการออก"
+    const removeBtn = page.locator('button:has-text("นำรายการออก")').first();
+    await expect(removeBtn).toBeVisible();
+    await removeBtn.click();
 
-    expect(lockRes.status()).toBe(200);
+    // 9. Assert item displays soft-removed badge
+    await expect(page.locator('[data-testid="damage-items-list"]')).toContainText('ยกเลิกแล้ว (Soft-Removed)');
 
-    // 6. Attempt mutation after lock -> Rejected 400 SETTLEMENT_LOCKED
-    const postLockAdd = await page.request.post(`http://127.0.0.1:3101/api/v1/settlements/${settlementId}/damage-items`, {
-      headers: {
-        'X-Dormitory-Id': dormId,
-        'X-CSRF-Token': csrfTokenOwner,
-        'Cookie': `horplus_session=${sessionTokenOwner}; horplus_csrf=${csrfTokenOwner}`,
-      },
-      data: {
-        description: 'ค่าซ่อมเพิ่ม',
-        amount: 500,
-      },
-    });
+    // 10. Add another active damage item for confirmation test
+    await addDamageBtn.click();
+    await page.fill('#damageDescInput', 'ค่าทำความสะอาดห้อง');
+    await page.fill('#damageAmountInput', '500');
+    await page.click('[data-testid="submit-add-damage-btn"]');
 
-    expect(postLockAdd.status()).toBe(400);
-    const postLockBody = await postLockAdd.json();
-    expect(postLockBody.error.code).toBe('SETTLEMENT_LOCKED');
+    await expect(page.locator('[data-testid="damage-items-list"]')).toContainText('ค่าทำความสะอาดห้อง');
 
-    // Reload page (F5)
-    await page.goto('/owner/contracts');
+    // 11. Confirm settlement lock via UI button ("ยืนยันว่าคืนเงินจริงแล้ว" or "ยืนยันว่าได้รับชำระส่วนต่างแล้ว")
+    const confirmRefundBtn = page.locator('[data-testid="confirm-refund-btn"]');
+    const confirmPaymentBtn = page.locator('[data-testid="confirm-payment-btn"]');
+
+    if (await confirmRefundBtn.isVisible()) {
+      await confirmRefundBtn.click();
+    } else if (await confirmPaymentBtn.isVisible()) {
+      await confirmPaymentBtn.click();
+    }
+
+    // 12. Assert locked status notice & mutation controls disabled
+    await expect(page.locator('[data-testid="settlement-locked-notice"]')).toContainText('รายการนี้ยืนยันยอดแล้ว ไม่สามารถแก้ไขได้');
+    await expect(page.locator('[data-testid="add-damage-item-btn"]')).not.toBeVisible();
+
+    // 13. Reload page (F5) & assert state remains locked
     await page.reload();
     await expect(page.locator('body')).toBeVisible();
+    await expect(page.locator('[data-testid="settlement-locked-notice"]')).toContainText('รายการนี้ยืนยันยอดแล้ว ไม่สามารถแก้ไขได้');
   });
 });

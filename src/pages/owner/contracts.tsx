@@ -35,7 +35,10 @@ import {
   Phone,
   Mail,
   FileCheck,
-  X
+  X,
+  History,
+  ArrowDown,
+  Receipt
 } from 'lucide-react';
 import {
   StatusBadge,
@@ -139,6 +142,40 @@ export const OwnerContracts: React.FC<OwnerContractsProps> = ({
     }
   }, [selectedContract?.id]);
 
+  const fetchPendingRenewalRequests = async () => {
+    try {
+      const dormId = getDormId();
+      const res: any = await httpRequest('GET', '/api/v1/contract-renewals/requests', { status: 'PENDING_OWNER_APPROVAL' }, { dormitoryId: dormId }).catch(() => null);
+      const list = Array.isArray(res) ? res : Array.isArray(res?.data) ? res.data : [];
+      setPendingRenewalRequests(list);
+    } catch (e) {
+      setPendingRenewalRequests([]);
+    }
+  };
+
+  const fetchSettlementForContract = async (contractId: string) => {
+    try {
+      const dormId = getDormId();
+      const res: any = await httpRequest('GET', `/api/v1/settlements/${contractId}`, undefined, { dormitoryId: dormId }).catch(() => null);
+      const setl = res?.settlement || res?.data?.settlement || res?.data || res;
+      setSettlementData(setl);
+    } catch (e) {
+      setSettlementData(null);
+    }
+  };
+
+  React.useEffect(() => {
+    fetchPendingRenewalRequests();
+  }, [contracts?.length]);
+
+  React.useEffect(() => {
+    if (selectedContract?.id) {
+      fetchSettlementForContract(selectedContract.id);
+    } else {
+      setSettlementData(null);
+    }
+  }, [selectedContract?.id]);
+
   // Pending Contract Approvals State
   const [pendingSubmissions, setPendingSubmissions] = useState<PendingContractSubmission[]>(getPendingContractSubmissions);
   const [isPendingListOpen, setIsPendingListOpen] = useState(false);
@@ -161,6 +198,24 @@ export const OwnerContracts: React.FC<OwnerContractsProps> = ({
   // Edit Notice modal state
   const [isEditNoticeModalOpen, setIsEditNoticeModalOpen] = useState(false);
   const [editNotice, setEditNotice] = useState('');
+
+  // Pending Tenant Renewal Requests Queue State
+  const [pendingRenewalRequests, setPendingRenewalRequests] = useState<any[]>([]);
+  const [selectedRenewalRequest, setSelectedRenewalRequest] = useState<any | null>(null);
+  const [isRenewalRequestModalOpen, setIsRenewalRequestModalOpen] = useState(false);
+  const [approvedRentAmount, setApprovedRentAmount] = useState<number>(0);
+  const [approvedDepositAmount, setApprovedDepositAmount] = useState<number>(0);
+  const [approvedAdvancePayment, setApprovedAdvancePayment] = useState<number>(0);
+  const [isRejectRenewalModalOpen, setIsRejectRenewalModalOpen] = useState(false);
+  const [renewalRejectReason, setRenewalRejectReason] = useState('');
+
+  // Settlement & Damage Item Management State
+  const [settlementData, setSettlementData] = useState<any>(null);
+  const [isAddDamageModalOpen, setIsAddDamageModalOpen] = useState(false);
+  const [editingDamageItem, setEditingDamageItem] = useState<any | null>(null);
+  const [damageDesc, setDamageDesc] = useState('');
+  const [damageAmount, setDamageAmount] = useState('');
+  const [damageEvidenceUrl, setDamageEvidenceUrl] = useState('');
 
   // Toast notification
   const [pendingToast, setPendingToast] = useState<string | null>(null);
@@ -531,12 +586,8 @@ export const OwnerContracts: React.FC<OwnerContractsProps> = ({
     try {
       if (selectedContract) {
         const dormId = selectedContract.dormitoryId || getDormId();
-        const settlementRes: any = await httpRequest('GET', `/api/v1/settlements/${selectedContract.id}`, undefined, { dormitoryId: dormId }).catch(() => null);
-        const settlement = settlementRes?.settlement;
-        if (settlement?.id) {
-          const statusToSet = refundDeposit ? 'REFUNDED' : 'PAYMENT_RECEIVED';
-          await httpRequest('POST', `/api/v1/settlements/${settlement.id}/confirm`, { settlementStatus: statusToSet }, { dormitoryId: dormId }).catch(() => null);
-        }
+        await httpRequest('GET', `/api/v1/settlements/${selectedContract.id}`, undefined, { dormitoryId: dormId }).catch(() => null);
+        fetchSettlementForContract(selectedContract.id);
       }
       setIsTerminateOpen(false);
       setPendingToast('ทำเรื่องเลิกเช่าคืนห้องพักและสรุปยอดย้ายออกเรียบร้อยแล้ว');
@@ -620,38 +671,143 @@ export const OwnerContracts: React.FC<OwnerContractsProps> = ({
     try {
       if (renewContractTarget) {
         const dormId = renewContractTarget.dormitoryId || getDormId();
-        const pendingRes: any = await httpRequest('GET', '/api/v1/contract-renewals/pending', undefined, { dormitoryId: dormId }).catch(() => []);
-        const pendingList = Array.isArray(pendingRes) ? pendingRes : (pendingRes?.requests || []);
-        const matchingPending = pendingList.find((r: any) => r.contractId === renewContractTarget.id);
-
-        if (matchingPending) {
-          await httpRequest('POST', `/api/v1/contract-renewals/${matchingPending.id}/approve`, {
+        const subRes: any = await httpRequest('POST', '/api/v1/contract-renewals/request', {
+          dormitoryId: dormId,
+          tenantId: renewContractTarget.tenantId,
+          contractId: renewContractTarget.id,
+          requestedStartDate: renewContractTarget.endDate ? String(renewContractTarget.endDate).split('T')[0] : new Date().toISOString().split('T')[0],
+          requestedDurationMonths: renewUnit === 'month' ? renewMonths : 1,
+        });
+        const reqId = subRes?.data?.id || subRes?.renewalRequest?.id || subRes?.id;
+        if (reqId) {
+          const appRes: any = await httpRequest('POST', `/api/v1/contract-renewals/requests/${reqId}/approve`, {
             rentAmount: renewRentAmount,
           }, { dormitoryId: dormId });
-        } else {
-          const subRes: any = await httpRequest('POST', '/api/v1/contract-renewals/request', {
-            dormitoryId: dormId,
-            tenantId: renewContractTarget.tenantId,
-            contractId: renewContractTarget.id,
-            requestedStartDate: renewContractTarget.endDate ? String(renewContractTarget.endDate).split('T')[0] : new Date().toISOString().split('T')[0],
-            requestedDurationMonths: renewUnit === 'month' ? renewMonths : 1,
-          });
-          const reqId = subRes?.renewalRequest?.id || subRes?.id;
-          if (reqId) {
-            await httpRequest('POST', `/api/v1/contract-renewals/${reqId}/approve`, {
-              rentAmount: renewRentAmount,
-            }, { dormitoryId: dormId });
+          const newContract = appRes?.data?.contract || appRes?.contract;
+          if (newContract?.status === 'approved_scheduled' || newContract?.activatedAt === null) {
+            setPendingToast('อนุมัติแล้ว — รอวันเริ่มสัญญา');
+          } else {
+            setPendingToast('สร้างและอนุมัติสัญญารอบถัดไปเรียบร้อยแล้ว');
           }
         }
-        setPendingToast('อนุมัติการต่ออายุสัญญาเช่าเรียบร้อยแล้ว');
-      } else {
-        setPendingToast('อนุมัติการต่ออายุสัญญาเรียบร้อยแล้ว');
       }
     } catch (err: any) {
       setPendingToast(`ข้อผิดพลาด: ${err.message || 'ไม่สามารถต่ออายุสัญญาได้'}`);
     } finally {
       setIsRenewModalOpen(false);
       setRenewContractTarget(null);
+    }
+  };
+
+  const handleApproveTenantRenewalRequest = async (reqId: string) => {
+    try {
+      const dormId = getDormId();
+      const appRes: any = await httpRequest('POST', `/api/v1/contract-renewals/requests/${reqId}/approve`, {
+        rentAmount: approvedRentAmount,
+        depositAmount: approvedDepositAmount,
+        advancePaymentAmount: approvedAdvancePayment,
+      }, { dormitoryId: dormId });
+      
+      const newContract = appRes?.data?.contract || appRes?.contract;
+      if (newContract?.status === 'approved_scheduled' || newContract?.status === 'SCHEDULED' || newContract?.activatedAt === null) {
+        setPendingToast('อนุมัติแล้ว — รอวันเริ่มสัญญา');
+      } else {
+        setPendingToast('อนุมัติคำขอต่ออายุสัญญาเช่าเรียบร้อยแล้ว');
+      }
+      setIsRenewalRequestModalOpen(false);
+      setSelectedRenewalRequest(null);
+      fetchPendingRenewalRequests();
+    } catch (err: any) {
+      setPendingToast(`ข้อผิดพลาด: ${err.message || 'ไม่สามารถอนุมัติคำขอได้'}`);
+    }
+  };
+
+  const handleRejectTenantRenewalRequest = async (reqId: string, reason: string) => {
+    try {
+      const dormId = getDormId();
+      await httpRequest('POST', `/api/v1/contract-renewals/requests/${reqId}/reject`, {
+        reason,
+      }, { dormitoryId: dormId });
+      setPendingToast('ปฏิเสธคำขอต่ออายุสัญญาเรียบร้อยแล้ว');
+      setIsRejectRenewalModalOpen(false);
+      setIsRenewalRequestModalOpen(false);
+      setSelectedRenewalRequest(null);
+      fetchPendingRenewalRequests();
+    } catch (err: any) {
+      setPendingToast(`ข้อผิดพลาด: ${err.message || 'ไม่สามารถปฏิเสธคำขอได้'}`);
+    }
+  };
+
+  const handleAddDamageItem = async (settlementId: string) => {
+    try {
+      if (!damageDesc || !damageAmount) return;
+      const dormId = getDormId();
+      await httpRequest('POST', `/api/v1/settlements/${settlementId}/damage-items`, {
+        description: damageDesc,
+        amount: Number(damageAmount),
+        evidenceUrl: damageEvidenceUrl || undefined,
+      }, { dormitoryId: dormId });
+      setPendingToast('เพิ่มรายการค่าเสียหายเรียบร้อยแล้ว');
+      setDamageDesc('');
+      setDamageAmount('');
+      setDamageEvidenceUrl('');
+      setIsAddDamageModalOpen(false);
+      if (selectedContract) {
+        fetchSettlementForContract(selectedContract.id);
+      }
+    } catch (err: any) {
+      setPendingToast(`ข้อผิดพลาด: ${err.message || 'ไม่สามารถเพิ่มรายการค่าเสียหายได้'}`);
+    }
+  };
+
+  const handleEditDamageItem = async (itemId: string) => {
+    try {
+      if (!damageDesc || !damageAmount) return;
+      const dormId = getDormId();
+      await httpRequest('PUT', `/api/v1/settlements/damage-items/${itemId}`, {
+        description: damageDesc,
+        amount: Number(damageAmount),
+        evidenceUrl: damageEvidenceUrl || undefined,
+      }, { dormitoryId: dormId });
+      setPendingToast('แก้ไขรายการค่าเสียหายเรียบร้อยแล้ว');
+      setEditingDamageItem(null);
+      setDamageDesc('');
+      setDamageAmount('');
+      setDamageEvidenceUrl('');
+      if (selectedContract) {
+        fetchSettlementForContract(selectedContract.id);
+      }
+    } catch (err: any) {
+      setPendingToast(`ข้อผิดพลาด: ${err.message || 'ไม่สามารถแก้ไขรายการค่าเสียหายได้'}`);
+    }
+  };
+
+  const handleSoftRemoveDamageItem = async (itemId: string) => {
+    try {
+      const dormId = getDormId();
+      await httpRequest('DELETE', `/api/v1/settlements/damage-items/${itemId}`, undefined, { dormitoryId: dormId });
+      setPendingToast('นำรายการค่าเสียหายออกเรียบร้อยแล้ว');
+      if (selectedContract) {
+        fetchSettlementForContract(selectedContract.id);
+      }
+    } catch (err: any) {
+      setPendingToast(`ข้อผิดพลาด: ${err.message || 'ไม่สามารถนำรายการออกได้'}`);
+    }
+  };
+
+  const handleConfirmSettlementStatus = async (settlementId: string, statusToSet: 'REFUNDED' | 'PAYMENT_RECEIVED') => {
+    try {
+      const dormId = getDormId();
+      await httpRequest('POST', `/api/v1/settlements/${settlementId}/confirm`, {
+        settlementStatus: statusToSet,
+        status: statusToSet,
+      }, { dormitoryId: dormId });
+      setPendingToast('ยืนยันสถานะการย้ายออกเรียบร้อยแล้ว (HorPlus บันทึกสถานะเท่านั้น)');
+      if (selectedContract) {
+        fetchSettlementForContract(selectedContract.id);
+      }
+    } catch (err: any) {
+      setPendingToast(`ข้อผิดพลาด: ${err.message || 'ไม่สามารถยืนยันสถานะได้'}`);
     }
   };
 
@@ -1052,6 +1208,75 @@ export const OwnerContracts: React.FC<OwnerContractsProps> = ({
   // Contract Master-Detail splits list (Default layout)
   return (
     <div className="space-y-4">
+      {/* SECTION: คำขอต่ออายุสัญญา (Pending Renewal Requests Queue) */}
+      <div className="bg-white border border-amber-200 rounded-3xl p-5 shadow-xs mb-4 space-y-4" data-testid="pending-renewal-queue-section">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 rounded-xl bg-amber-100 flex items-center justify-center text-amber-700 font-extrabold">
+              <Clock className="w-4 h-4" />
+            </div>
+            <div>
+              <h3 className="font-extrabold text-slate-800 text-sm">คำขอต่ออายุสัญญา</h3>
+              <p className="text-slate-400 text-xs font-medium">คำขอต่ออายุสัญญาจากผู้เช่าที่รอการตรวจสอบและอนุมัติ</p>
+            </div>
+          </div>
+          <span className="px-3 py-1 bg-amber-100 text-amber-800 font-extrabold rounded-full text-xs" data-testid="pending-renewal-count">
+            {pendingRenewalRequests.length} รายการ
+          </span>
+        </div>
+
+        {pendingRenewalRequests.length === 0 ? (
+          <div className="p-4 text-center bg-slate-50 rounded-2xl border border-dashed border-slate-200" data-testid="empty-pending-renewal-queue">
+            <CheckCircle2 className="w-6 h-6 text-slate-400 mx-auto mb-1 opacity-60" />
+            <p className="font-extrabold text-slate-600 text-xs">ไม่มีคำขอต่ออายุสัญญาที่รออนุมัติในขณะนี้</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5" data-testid="pending-renewal-queue">
+            {pendingRenewalRequests.map((req) => (
+              <div key={req.id} className="p-4 bg-amber-50/50 border border-amber-200 rounded-2xl space-y-3" data-testid={`renewal-request-item-${req.id}`}>
+                <div className="flex justify-between items-start">
+                  <div>
+                    <span className="font-black text-slate-900 text-sm block" data-testid="renewal-tenant-name">
+                      คุณ{req.tenant?.fullName || req.tenant?.name || getTenantName(req.tenantId)}
+                    </span>
+                    <span className="text-xs font-extrabold text-indigo-600 block" data-testid="renewal-room-number">
+                      ห้อง {req.room?.roomNumber || getRoomNum(req.contract?.roomId)}
+                    </span>
+                  </div>
+                  <span className="px-2.5 py-1 bg-amber-100 text-amber-800 border border-amber-300 rounded-xl text-[11px] font-extrabold" data-testid="renewal-status-badge">
+                    รอเจ้าของอนุมัติ
+                  </span>
+                </div>
+
+                <div className="text-[11px] text-slate-600 space-y-1 bg-white p-3 rounded-xl border border-amber-100">
+                  <p><strong>สัญญาเดิม:</strong> {req.contract?.contractNumber || 'ไม่ระบุ'}</p>
+                  <p><strong>วันที่เริ่มที่ผู้เช่าร้องขอ:</strong> <span data-testid="requested-start-date">{formatThaiDate(req.requestedStartDate)}</span></p>
+                  <p><strong>ระยะเวลาที่ร้องขอ:</strong> <span data-testid="requested-duration">{req.requestedDurationMonths} เดือน</span></p>
+                  <p><strong>ค่าเช่าต่อเดือน:</strong> {formatBaht(req.rentAmount || req.contract?.rentAmount)}</p>
+                </div>
+
+                <div className="flex justify-end gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedRenewalRequest(req);
+                      setApprovedRentAmount(req.rentAmount || req.contract?.rentAmount || 0);
+                      setApprovedDepositAmount(req.depositAmount || req.contract?.depositAmount || 0);
+                      setApprovedAdvancePayment(req.advancePaymentAmount || 0);
+                      setIsRenewalRequestModalOpen(true);
+                    }}
+                    className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs rounded-xl cursor-pointer shadow-xs"
+                    data-testid="review-renewal-btn"
+                  >
+                    ตรวจสอบ / อนุมัติ
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
       <div className="grid lg:grid-cols-3 gap-6">
       
       {/* Left List Pane */}
@@ -1295,6 +1520,277 @@ export const OwnerContracts: React.FC<OwnerContractsProps> = ({
               </div>
             </PrintView>
 
+                {/* Contract Chain / History Section */}
+                <div className="mt-6 p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-3" data-testid="contract-chain-container">
+                  <h4 className="font-extrabold text-slate-800 text-xs flex items-center gap-1.5">
+                    <History className="w-4 h-4 text-indigo-600" />
+                    ประวัติการต่ออายุสัญญา (Contract Chain)
+                  </h4>
+                  {(() => {
+                    const chain: Contract[] = [];
+                    let curr: Contract | undefined = selectedContract;
+                    const visited = new Set<string>();
+
+                    while (curr && !visited.has(curr.id)) {
+                      visited.add(curr.id);
+                      chain.unshift(curr);
+                      if (curr.previousContractId) {
+                        curr = contracts.find(c => c.id === curr?.previousContractId);
+                      } else {
+                        break;
+                      }
+                    }
+
+                    let lastInChain = chain[chain.length - 1];
+                    while (lastInChain) {
+                      const nextChild = contracts.find(c => c.previousContractId === lastInChain.id && !visited.has(c.id));
+                      if (nextChild) {
+                        visited.add(nextChild.id);
+                        chain.push(nextChild);
+                        lastInChain = nextChild;
+                      } else {
+                        break;
+                      }
+                    }
+
+                    if (chain.length <= 1) {
+                      return (
+                        <div className="text-[11px] text-slate-400 font-medium">
+                          สัญญานี้เป็นสัญญาแรกเริ่ม (ไม่มีประวัติการต่ออายุย้อนหลังหรือถัดไป)
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <div className="space-y-3">
+                        {chain.map((c, idx) => (
+                          <React.Fragment key={c.id}>
+                            {idx > 0 && (
+                              <div className="flex items-center gap-2 pl-4 text-indigo-600 font-extrabold text-[11px]">
+                                <ArrowDown className="w-4 h-4" />
+                                <span>ต่ออายุจากสัญญานี้</span>
+                              </div>
+                            )}
+                            <div
+                              className={`p-3.5 rounded-xl border text-xs flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 ${
+                                c.id === selectedContract.id
+                                  ? 'bg-indigo-50/80 border-indigo-300 ring-2 ring-indigo-500/20'
+                                  : 'bg-white border-slate-200'
+                              }`}
+                              data-testid={`chain-contract-item-${c.id}`}
+                            >
+                              <div>
+                                <div className="flex items-center gap-2">
+                                  <span className="font-extrabold text-slate-900">{c.contractNumber || c.id}</span>
+                                  {c.id === selectedContract.id && (
+                                    <span className="px-2 py-0.5 bg-indigo-600 text-white rounded text-[10px] font-black">ฉบับปัจจุบันที่เลือก</span>
+                                  )}
+                                </div>
+                                <p className="text-[11px] text-slate-500 mt-0.5">
+                                  {formatThaiDate(c.startDate)} ถึง {formatThaiDate(c.endDate)} &bull; ค่าเช่า {formatBaht(c.rentAmount)}/เดือน
+                                </p>
+                              </div>
+                              <div>
+                                <span className={`px-2.5 py-1 rounded-lg text-[11px] font-extrabold ${
+                                  c.status === 'active' ? 'bg-emerald-100 text-emerald-800' :
+                                  c.status === 'approved_scheduled' ? 'bg-amber-100 text-amber-800' :
+                                  'bg-slate-100 text-slate-600'
+                                }`}>
+                                  {c.status === 'approved_scheduled' ? 'อนุมัติแล้ว — รอวันเริ่มสัญญา' : c.status === 'active' ? 'ใช้งานอยู่' : c.status}
+                                </span>
+                              </div>
+                            </div>
+                          </React.Fragment>
+                        ))}
+                      </div>
+                    );
+                  })()}
+                </div>
+
+                {/* Real Owner Settlement & Damage Charge UI */}
+                <div className="mt-6 p-5 bg-white border border-slate-200 rounded-3xl shadow-xs space-y-4" data-testid="settlement-container">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Receipt className="w-5 h-5 text-indigo-600" />
+                      <h4 className="font-extrabold text-slate-800 text-sm">สรุปยอดย้ายออก (Settlement Summary)</h4>
+                    </div>
+                    {settlementData && (
+                      <span className={`px-3 py-1 rounded-full text-xs font-extrabold ${
+                        settlementData.status === 'REFUNDED' || settlementData.status === 'PAYMENT_RECEIVED'
+                          ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                          : 'bg-amber-100 text-amber-800 border border-amber-300'
+                      }`} data-testid="settlement-status-badge">
+                        {settlementData.status === 'PENDING_REFUND' ? 'รอคืนเงิน' :
+                         settlementData.status === 'REFUNDED' ? 'คืนเงินแล้ว' :
+                         settlementData.status === 'PENDING_PAYMENT' ? 'รอชำระส่วนต่าง' :
+                         settlementData.status === 'PAYMENT_RECEIVED' ? 'ชำระส่วนต่างแล้ว' :
+                         settlementData.status === 'CLOSED_ZERO' ? 'ไม่มียอดต้องชำระหรือคืน' :
+                         settlementData.status}
+                      </span>
+                    )}
+                  </div>
+
+                  {!settlementData ? (
+                    <div className="p-4 text-center bg-slate-50 rounded-2xl border border-dashed border-slate-200">
+                      <p className="text-xs text-slate-500 font-semibold mb-2">ยังไม่ได้ดึงยอดย้ายออกสำหรับสัญญานี้</p>
+                      <button
+                        type="button"
+                        onClick={() => fetchSettlementForContract(selectedContract.id)}
+                        className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs rounded-xl cursor-pointer"
+                        data-testid="fetch-settlement-btn"
+                      >
+                        คำนวณ / ดึงยอดย้ายออก
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="space-y-4 text-xs font-sans">
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-50 p-4 rounded-2xl border border-slate-200">
+                        <div>
+                          <span className="text-gray-400 font-bold text-[10px] block">เงินประกัน (Deposit):</span>
+                          <span className="font-extrabold text-slate-800 text-sm" data-testid="settlement-deposit">{formatBaht(settlementData.depositAmount)}</span>
+                        </div>
+                        <div>
+                          <span className="text-gray-400 font-bold text-[10px] block">ค้างชำระ (Unpaid):</span>
+                          <span className="font-extrabold text-rose-600 text-sm" data-testid="settlement-unpaid">{formatBaht(settlementData.unpaidBillsAmount || 0)}</span>
+                        </div>
+                        <div>
+                          <span className="text-gray-400 font-bold text-[10px] block">ค่าเสียหายรวม (Damage Total):</span>
+                          <span className="font-extrabold text-rose-600 text-sm" data-testid="settlement-damage-total">{formatBaht(settlementData.damageTotal || 0)}</span>
+                        </div>
+                        <div>
+                          <span className="text-gray-400 font-bold text-[10px] block">ยอดสุทธิ (Net Amount):</span>
+                          <span className="font-black text-indigo-700 text-sm" data-testid="settlement-net-amount">{formatBaht(settlementData.netAmount || 0)}</span>
+                        </div>
+                      </div>
+
+                      <div className="p-3 bg-indigo-50/70 border border-indigo-200 rounded-xl font-bold text-indigo-900 flex justify-between items-center">
+                        <span>ทิศทางชำระ:</span>
+                        <span className="text-sm font-extrabold" data-testid="settlement-direction">
+                          {settlementData.direction === 'REFUND_TO_TENANT' ? 'คืนเงินให้ผู้เช่า' :
+                           settlementData.direction === 'COLLECT_FROM_TENANT' ? 'เรียกเก็บจากผู้เช่า' :
+                           'ไม่มียอดต้องชำระหรือคืน'}
+                        </span>
+                      </div>
+
+                      <div className="space-y-3 pt-2">
+                        <div className="flex justify-between items-center">
+                          <h5 className="font-extrabold text-slate-800 text-xs">รายการค่าเสียหาย (Damage Charge Items)</h5>
+                          {(settlementData.status !== 'REFUNDED' && settlementData.status !== 'PAYMENT_RECEIVED') && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setDamageDesc('');
+                                setDamageAmount('');
+                                setDamageEvidenceUrl('');
+                                setIsAddDamageModalOpen(true);
+                              }}
+                              className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs rounded-xl cursor-pointer shadow-2xs"
+                              data-testid="add-damage-item-btn"
+                            >
+                              + เพิ่มรายการค่าเสียหาย
+                            </button>
+                          )}
+                        </div>
+
+                        <div className="space-y-2" data-testid="damage-items-list">
+                          {(!settlementData.damageItems || settlementData.damageItems.length === 0) ? (
+                            <div className="p-4 text-center bg-slate-50/60 rounded-xl text-slate-400 text-xs">
+                              ไม่มีรายการค่าเสียหาย
+                            </div>
+                          ) : (
+                            settlementData.damageItems.map((item: any) => (
+                              <div
+                                key={item.id}
+                                className={`p-3 rounded-xl border flex justify-between items-center ${
+                                  item.isDeleted ? 'bg-slate-100 border-slate-200 opacity-60' : 'bg-white border-slate-200'
+                                }`}
+                                data-testid={`damage-item-${item.id}`}
+                              >
+                                <div>
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-bold text-slate-800" data-testid="damage-item-desc">{item.description}</span>
+                                    {item.isDeleted && (
+                                      <span className="px-2 py-0.5 bg-slate-200 text-slate-600 rounded text-[10px] font-bold">ยกเลิกแล้ว (Soft-Removed)</span>
+                                    )}
+                                  </div>
+                                  {item.evidenceUrl && (
+                                    <a href={item.evidenceUrl} target="_blank" rel="noreferrer" className="text-[10px] text-indigo-600 font-bold underline mt-0.5 block">
+                                      ดูหลักฐานภาพถ่าย
+                                    </a>
+                                  )}
+                                </div>
+                                <div className="flex items-center gap-3">
+                                  <span className="font-extrabold text-slate-900" data-testid="damage-item-amount">{formatBaht(item.amount)}</span>
+                                  {(!item.isDeleted && settlementData.status !== 'REFUNDED' && settlementData.status !== 'PAYMENT_RECEIVED') && (
+                                    <div className="flex items-center gap-1">
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setEditingDamageItem(item);
+                                          setDamageDesc(item.description);
+                                          setDamageAmount(String(item.amount));
+                                          setDamageEvidenceUrl(item.evidenceUrl || '');
+                                        }}
+                                        className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-lg text-[11px] cursor-pointer"
+                                        data-testid={`edit-damage-btn-${item.id}`}
+                                      >
+                                        แก้ไข
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleSoftRemoveDamageItem(item.id)}
+                                        className="px-2.5 py-1 bg-rose-50 hover:bg-rose-100 text-rose-600 font-bold rounded-lg text-[11px] cursor-pointer"
+                                        data-testid={`soft-remove-damage-btn-${item.id}`}
+                                      >
+                                        นำรายการออก
+                                      </button>
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      </div>
+
+                      {settlementData.status === 'REFUNDED' || settlementData.status === 'PAYMENT_RECEIVED' ? (
+                        <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-emerald-800 font-bold text-xs flex items-center justify-between" data-testid="settlement-locked-notice">
+                          <span>รายการนี้ยืนยันยอดแล้ว ไม่สามารถแก้ไขได้</span>
+                          <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                        </div>
+                      ) : (
+                        <div className="pt-3 border-t border-slate-100 space-y-2">
+                          <div className="flex justify-end gap-2">
+                            {settlementData.status === 'PENDING_REFUND' && (
+                              <button
+                                type="button"
+                                onClick={() => handleConfirmSettlementStatus(settlementData.id, 'REFUNDED')}
+                                className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs rounded-xl cursor-pointer shadow-sm"
+                                data-testid="confirm-refund-btn"
+                              >
+                                ยืนยันว่าคืนเงินจริงแล้ว
+                              </button>
+                            )}
+                            {settlementData.status === 'PENDING_PAYMENT' && (
+                              <button
+                                type="button"
+                                onClick={() => handleConfirmSettlementStatus(settlementData.id, 'PAYMENT_RECEIVED')}
+                                className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs rounded-xl cursor-pointer shadow-sm"
+                                data-testid="confirm-payment-btn"
+                              >
+                                ยืนยันว่าได้รับชำระส่วนต่างแล้ว
+                              </button>
+                            )}
+                          </div>
+                          <p className="text-[11px] text-slate-400 text-right font-medium">
+                            HorPlus บันทึกสถานะเท่านั้น การโอนเงินจริงดำเนินการภายนอกระบบ
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
             {/* Action buttons section */}
             <div className="mt-6 pt-5 border-t border-slate-100 flex flex-col sm:flex-row justify-between items-center gap-4">
               <div className="flex flex-col items-start text-left">
@@ -1332,7 +1828,7 @@ export const OwnerContracts: React.FC<OwnerContractsProps> = ({
                       className="flex-1 sm:flex-none px-4 py-2 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-600 font-extrabold text-xs rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer animate-pulse hover:animate-none"
                     >
                       <CheckCircle2 className="w-3.5 h-3.5" />
-                      ต่ออายุสัญญา
+                      สร้างสัญญารอบถัดไป
                     </button>
                   </>
                 ) : (
@@ -2223,6 +2719,232 @@ export const OwnerContracts: React.FC<OwnerContractsProps> = ({
               className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold rounded-xl text-xs transition-all shadow-xs cursor-pointer flex items-center gap-1.5"
             >
               <CheckCircle2 className="w-4 h-4" /> ยืนยันยอมรับและส่งแจ้งเตือน
+            </button>
+          </div>
+        </div>
+      </Modal>
+    )}
+
+    {/* Modal: Review Tenant Renewal Request */}
+    {isRenewalRequestModalOpen && selectedRenewalRequest && (
+      <Modal
+        isOpen={isRenewalRequestModalOpen}
+        onClose={() => {
+          setIsRenewalRequestModalOpen(false);
+          setSelectedRenewalRequest(null);
+        }}
+        title="ตรวจสอบคำขอต่ออายุสัญญา (จากผู้เช่า)"
+      >
+        <div className="space-y-4 text-xs font-sans">
+          <div className="bg-slate-50 border border-slate-200 p-4 rounded-2xl space-y-2">
+            <p><strong className="text-slate-700">ผู้เช่า:</strong> คุณ{selectedRenewalRequest.tenant?.fullName || selectedRenewalRequest.tenant?.name || getTenantName(selectedRenewalRequest.tenantId)}</p>
+            <p><strong className="text-slate-700">ห้องพัก:</strong> ห้อง {selectedRenewalRequest.room?.roomNumber || getRoomNum(selectedRenewalRequest.contract?.roomId)}</p>
+            <p><strong className="text-slate-700">สัญญาเดิม:</strong> {selectedRenewalRequest.contract?.contractNumber}</p>
+            <p><strong className="text-slate-700">วันที่เริ่มที่ผู้เช่าร้องขอ:</strong> <span data-testid="review-requested-start-date">{formatThaiDate(selectedRenewalRequest.requestedStartDate)}</span></p>
+            <p><strong className="text-slate-700">ระยะเวลาที่ร้องขอ:</strong> <span data-testid="review-requested-duration">{selectedRenewalRequest.requestedDurationMonths} เดือน</span></p>
+          </div>
+
+          <div className="space-y-3 bg-white p-4 rounded-2xl border border-indigo-100 shadow-2xs">
+            <h4 className="font-extrabold text-indigo-900 text-xs">กำหนดเงื่อนไขทางการเงินรอบสัญญาใหม่ (เจ้าของกำหนด)</h4>
+            <div>
+              <label className="block text-[11px] font-bold text-slate-700 mb-1" htmlFor="approvedRentInput">ค่าเช่ารายเดือน (บาท)</label>
+              <input
+                id="approvedRentInput"
+                type="number"
+                value={approvedRentAmount}
+                onChange={(e) => setApprovedRentAmount(Number(e.target.value))}
+                className="w-full px-3 py-2 border border-slate-200 rounded-xl font-bold text-slate-800"
+                data-testid="approved-rent-input"
+              />
+            </div>
+            <div>
+              <label className="block text-[11px] font-bold text-slate-700 mb-1" htmlFor="approvedDepositInput">เงินประกัน (บาท)</label>
+              <input
+                id="approvedDepositInput"
+                type="number"
+                value={approvedDepositAmount}
+                onChange={(e) => setApprovedDepositAmount(Number(e.target.value))}
+                className="w-full px-3 py-2 border border-slate-200 rounded-xl font-bold text-slate-800"
+                data-testid="approved-deposit-input"
+              />
+            </div>
+          </div>
+
+          <div className="flex justify-between items-center pt-3 border-t border-slate-100">
+            <button
+              type="button"
+              onClick={() => setIsRejectRenewalModalOpen(true)}
+              className="px-4 py-2 bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 rounded-xl font-bold text-xs cursor-pointer"
+              data-testid="reject-renewal-btn"
+            >
+              ปฏิเสธคำขอ
+            </button>
+            <button
+              type="button"
+              onClick={() => handleApproveTenantRenewalRequest(selectedRenewalRequest.id)}
+              className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs rounded-xl cursor-pointer shadow-sm"
+              data-testid="confirm-approve-renewal-btn"
+            >
+              อนุมัติคำขอต่ออายุ
+            </button>
+          </div>
+        </div>
+      </Modal>
+    )}
+
+    {/* Modal: Rejection Reason for Renewal Request */}
+    {isRejectRenewalModalOpen && selectedRenewalRequest && (
+      <Modal
+        isOpen={isRejectRenewalModalOpen}
+        onClose={() => setIsRejectRenewalModalOpen(false)}
+        title="ระบุเหตุผลในการปฏิเสธคำขอต่ออายุ"
+      >
+        <div className="space-y-4 text-xs font-sans">
+          <div>
+            <label className="block text-[11px] font-bold text-slate-700 mb-1" htmlFor="renewalRejectReasonInput">เหตุผลในการปฏิเสธ (ถ้ามี)</label>
+            <textarea
+              id="renewalRejectReasonInput"
+              value={renewalRejectReason}
+              onChange={(e) => setRenewalRejectReason(e.target.value)}
+              className="w-full px-3 py-2 border border-slate-200 rounded-xl h-20 resize-none text-slate-800"
+              placeholder="ระบุเหตุผลในการปฏิเสธ..."
+              data-testid="renewal-reject-reason-input"
+            />
+          </div>
+
+          <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+            <button
+              type="button"
+              onClick={() => setIsRejectRenewalModalOpen(false)}
+              className="px-4 py-2 border border-slate-200 bg-white text-slate-600 font-semibold rounded-xl cursor-pointer"
+            >
+              ยกเลิก
+            </button>
+            <button
+              type="button"
+              onClick={() => handleRejectTenantRenewalRequest(selectedRenewalRequest.id, renewalRejectReason)}
+              className="px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white font-extrabold rounded-xl cursor-pointer shadow-sm"
+              data-testid="confirm-reject-renewal-btn"
+            >
+              ยืนยันการปฏิเสธ
+            </button>
+          </div>
+        </div>
+      </Modal>
+    )}
+
+    {/* Modal: Add Damage Charge Item */}
+    {isAddDamageModalOpen && settlementData && (
+      <Modal
+        isOpen={isAddDamageModalOpen}
+        onClose={() => setIsAddDamageModalOpen(false)}
+        title="เพิ่มรายการค่าเสียหาย"
+      >
+        <div className="space-y-4 text-xs font-sans">
+          <div>
+            <label className="block text-[11px] font-bold text-slate-700 mb-1" htmlFor="damageDescInput">รายละเอียด / เหตุผล</label>
+            <input
+              id="damageDescInput"
+              type="text"
+              value={damageDesc}
+              onChange={(e) => setDamageDesc(e.target.value)}
+              className="w-full px-3 py-2 border border-slate-200 rounded-xl text-slate-800 font-bold"
+              placeholder="เช่น กระจกแตก, ค่าทำความสะอาด"
+              data-testid="damage-desc-input"
+            />
+          </div>
+          <div>
+            <label className="block text-[11px] font-bold text-slate-700 mb-1" htmlFor="damageAmountInput">จำนวนเงิน (บาท)</label>
+            <input
+              id="damageAmountInput"
+              type="number"
+              value={damageAmount}
+              onChange={(e) => setDamageAmount(e.target.value)}
+              className="w-full px-3 py-2 border border-slate-200 rounded-xl text-slate-800 font-bold"
+              placeholder="เช่น 500"
+              data-testid="damage-amount-input"
+            />
+          </div>
+          <div>
+            <label className="block text-[11px] font-bold text-slate-700 mb-1" htmlFor="damageEvidenceInput">ลิงก์ภาพถ่าย/หลักฐาน ( optional )</label>
+            <input
+              id="damageEvidenceInput"
+              type="text"
+              value={damageEvidenceUrl}
+              onChange={(e) => setDamageEvidenceUrl(e.target.value)}
+              className="w-full px-3 py-2 border border-slate-200 rounded-xl text-slate-800"
+              placeholder="https://..."
+              data-testid="damage-evidence-input"
+            />
+          </div>
+
+          <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+            <button
+              type="button"
+              onClick={() => setIsAddDamageModalOpen(false)}
+              className="px-4 py-2 border border-slate-200 bg-white text-slate-600 font-semibold rounded-xl cursor-pointer"
+            >
+              ยกเลิก
+            </button>
+            <button
+              type="button"
+              onClick={() => handleAddDamageItem(settlementData.id)}
+              className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold rounded-xl cursor-pointer shadow-sm"
+              data-testid="submit-add-damage-btn"
+            >
+              บันทึกรายการ
+            </button>
+          </div>
+        </div>
+      </Modal>
+    )}
+
+    {/* Modal: Edit Damage Charge Item */}
+    {editingDamageItem && (
+      <Modal
+        isOpen={!!editingDamageItem}
+        onClose={() => setEditingDamageItem(null)}
+        title="แก้ไขรายการค่าเสียหาย"
+      >
+        <div className="space-y-4 text-xs font-sans">
+          <div>
+            <label className="block text-[11px] font-bold text-slate-700 mb-1" htmlFor="editDamageDescInput">รายละเอียด / เหตุผล</label>
+            <input
+              id="editDamageDescInput"
+              type="text"
+              value={damageDesc}
+              onChange={(e) => setDamageDesc(e.target.value)}
+              className="w-full px-3 py-2 border border-slate-200 rounded-xl text-slate-800 font-bold"
+              data-testid="edit-damage-desc-input"
+            />
+          </div>
+          <div>
+            <label className="block text-[11px] font-bold text-slate-700 mb-1" htmlFor="editDamageAmountInput">จำนวนเงิน (บาท)</label>
+            <input
+              id="editDamageAmountInput"
+              type="number"
+              value={damageAmount}
+              onChange={(e) => setDamageAmount(e.target.value)}
+              className="w-full px-3 py-2 border border-slate-200 rounded-xl text-slate-800 font-bold"
+              data-testid="edit-damage-amount-input"
+            />
+          </div>
+
+          <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+            <button
+              type="button"
+              onClick={() => setEditingDamageItem(null)}
+              className="px-4 py-2 border border-slate-200 bg-white text-slate-600 font-semibold rounded-xl cursor-pointer"
+            >
+              ยกเลิก
+            </button>
+            <button
+              type="button"
+              onClick={() => handleEditDamageItem(editingDamageItem.id)}
+              className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold rounded-xl cursor-pointer shadow-sm"
+              data-testid="submit-edit-damage-btn"
+            >
+              บันทึกการแก้ไข
             </button>
           </div>
         </div>

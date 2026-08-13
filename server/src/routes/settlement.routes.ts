@@ -141,7 +141,7 @@ export function createSettlementRouter(authService: AuthenticationService): Rout
     try {
       const dormId = getAuthoritativeDormitoryId(req);
       const role = (req as any).dormitoryContext?.role?.code || req.auth?.role || '';
-      const { status } = req.body || {};
+      const status = req.body?.status || req.body?.settlementStatus;
 
       const confirmed = await settlementService.confirmSettlementStatus(
         dormId,

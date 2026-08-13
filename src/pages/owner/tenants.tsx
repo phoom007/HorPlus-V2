@@ -2734,7 +2734,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                 }}
                 className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-xl shadow-sm"
               >
-                {replacementWarningData.hasFutureRenewal ? 'ยืนยันยกเลิกสิทธิ์อนาคตและอนุมัติผู้เช่าใหม่' : 'ยืนยันยกเลิกผู้เช่าเดิมและอนุมัติผู้เช่าใหม่'}
+                ยืนยันยกเลิกผู้เช่าเดิมและอนุมัติผู้เช่าใหม่
               </button>
             </div>
           </div>
