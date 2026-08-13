@@ -4,7 +4,7 @@ ADD COLUMN "source_outbox_id" VARCHAR(255);
 
 -- CreateTable: local_notification_outbox
 CREATE TABLE "local_notification_outbox" (
-    "id" UUID NOT NULL DEFAULT gen_random_uuid(),
+    "id" UUID NOT NULL,
     "dormitory_id" UUID NOT NULL,
     "event_type" VARCHAR(100) NOT NULL,
     "aggregate_type" VARCHAR(100) NOT NULL,
@@ -26,7 +26,7 @@ CREATE TABLE "local_notification_outbox" (
 
 -- CreateTable: staff_notices
 CREATE TABLE "staff_notices" (
-    "id" UUID NOT NULL DEFAULT gen_random_uuid(),
+    "id" UUID NOT NULL,
     "dormitory_id" UUID NOT NULL,
     "user_id" UUID NOT NULL,
     "role_code" VARCHAR(50),
@@ -38,7 +38,7 @@ CREATE TABLE "staff_notices" (
     "read_at" TIMESTAMPTZ,
     "source_outbox_id" VARCHAR(255),
     "created_at" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updated_at" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" TIMESTAMPTZ NOT NULL,
 
     CONSTRAINT "staff_notices_pkey" PRIMARY KEY ("id")
 );
