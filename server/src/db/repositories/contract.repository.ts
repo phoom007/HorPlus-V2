@@ -40,6 +40,7 @@ export interface ContractEntity {
   createdAt: Date;
   updatedAt: Date;
   deletedAt?: Date | null;
+  previousContractId?: string | null;
 }
 
 export interface ContractStatusHistoryEntity {
@@ -70,6 +71,7 @@ export interface CreateContractData {
   advancePaymentAmount?: string;
   terms?: string | null;
   createdByUserId?: string | null;
+  previousContractId?: string | null;
 }
 
 export interface ContractFilterQuery {
@@ -384,6 +386,7 @@ export class PrismaContractRepository implements IContractRepository {
       createdAt: c.createdAt,
       updatedAt: c.updatedAt,
       deletedAt: c.deletedAt,
+      previousContractId: c.previousContractId,
     };
   }
 

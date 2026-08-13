@@ -242,8 +242,16 @@ export class ContractRenewalService {
       const finalAdvance = advancePaymentAmount !== undefined ? String(advancePaymentAmount) : String(prevContract.advancePaymentAmount);
       const finalTerms = terms !== undefined ? terms : prevContract.terms;
 
-      const contractNumber = `CTR-RNW-${Date.now().toString().slice(-6)}`;
+      // Check if requested start date is in the future relative to current execution date
+      const now = new Date();
+      const startDate = new Date(reqRecord.requestedStartDate);
+      
+      // Compare calendar dates (midnight UTC/local string comparison for robust date boundary check)
+      const startDateStr = startDate.toISOString().split('T')[0];
+      const todayStr = now.toISOString().split('T')[0];
+      const isFutureStartDate = startDateStr > todayStr;
 
+      const contractNumber = `CTR-RNW-${Date.now().toString().slice(-6)}`;
       const safeActorId = actorUserId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(actorUserId) ? actorUserId : null;
 
       // Create NEW linked Contract (Old contract remains IMMUTABLE!)
@@ -253,7 +261,7 @@ export class ContractRenewalService {
           contractNumber,
           roomId: reqRecord.roomId,
           tenantId: reqRecord.tenantId,
-          status: 'active',
+          status: isFutureStartDate ? 'approved_scheduled' : 'active',
           startDate: reqRecord.requestedStartDate,
           endDate: reqRecord.requestedEndDate,
           durationMonths: reqRecord.requestedDurationMonths,
@@ -264,7 +272,7 @@ export class ContractRenewalService {
           terms: finalTerms,
           previousContractId: prevContract.id,
           createdByUserId: safeActorId,
-          activatedAt: new Date(),
+          activatedAt: isFutureStartDate ? null : now,
         },
       });
 
@@ -273,21 +281,43 @@ export class ContractRenewalService {
         where: { id: reqRecord.id },
         data: {
           status: 'APPROVED',
-          reviewedAt: new Date(),
+          reviewedAt: now,
           reviewedByUserId: safeActorId,
           createdContractId: newContract.id,
         },
       });
 
-      // Update Room currentContractId & currentTenantId
-      await tx.room.update({
-        where: { id: reqRecord.roomId },
-        data: {
-          status: 'occupied',
-          currentTenantId: reqRecord.tenantId,
-          currentContractId: newContract.id,
-        },
-      });
+      if (!isFutureStartDate) {
+        // Current-date renewal: activate immediately & update Room pointers
+        await tx.room.update({
+          where: { id: reqRecord.roomId },
+          data: {
+            status: 'occupied',
+            currentTenantId: reqRecord.tenantId,
+            currentContractId: newContract.id,
+          },
+        });
+
+        // Ensure active occupancy exists
+        const existingOccupancy = await tx.occupancy.findFirst({
+          where: { dormitoryId, contractId: newContract.id },
+        });
+
+        if (!existingOccupancy) {
+          await tx.occupancy.create({
+            data: {
+              dormitoryId,
+              roomId: reqRecord.roomId,
+              tenantId: reqRecord.tenantId,
+              contractId: newContract.id,
+              status: 'ACTIVE',
+              startedAt: reqRecord.requestedStartDate,
+            },
+          });
+        }
+      }
+      // Note: For future renewal (isFutureStartDate = true), Room currentTenantId/currentContractId 
+      // and ACTIVE Occupancy are NOT created now — they will be established on activation date!
 
       return { request: updatedRequest, contract: newContract };
     });
@@ -304,6 +334,104 @@ export class ContractRenewalService {
     });
 
     return result;
+  }
+
+  /**
+   * Evaluates and activates scheduled contracts whose effective start date has arrived.
+   * Safety checks:
+   * 1. Contract must still be in 'approved_scheduled' status and not deleted/cancelled.
+   * 2. Room must be free of conflicting active tenancies from different tenants.
+   */
+  public async activateScheduledContracts(dormitoryId?: string, effectiveDate?: Date | string, actorUserId?: string) {
+    const prisma = getPrismaClient();
+    let evalDate: Date;
+    if (typeof effectiveDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(effectiveDate)) {
+      evalDate = new Date(`${effectiveDate}T23:59:59.999Z`);
+    } else if (effectiveDate instanceof Date) {
+      evalDate = new Date(effectiveDate);
+      evalDate.setHours(23, 59, 59, 999);
+    } else {
+      evalDate = new Date();
+      evalDate.setHours(23, 59, 59, 999);
+    }
+
+    const whereClause: any = {
+      deletedAt: null,
+      status: 'approved_scheduled',
+      startDate: { lte: evalDate },
+    };
+    if (dormitoryId) {
+      whereClause.dormitoryId = dormitoryId;
+    }
+
+    const scheduledContracts = await prisma.contract.findMany({
+      where: whereClause,
+      include: { room: true, tenant: true },
+    });
+
+    logger.info({
+      event: 'ACTIVATE_SCHEDULED_CHECK',
+      evalDate: evalDate.toISOString(),
+      dormitoryId,
+      foundCount: scheduledContracts.length,
+      contractIds: scheduledContracts.map((c) => c.id),
+    });
+
+    const activated: any[] = [];
+    const skipped: any[] = [];
+
+    const { ContractService } = await import('./contract.service.js');
+    const { PrismaContractRepository } = await import('../db/repositories/contract.repository.js');
+    const { PrismaRoomRepository } = await import('../db/repositories/room.repository.js');
+    const { PrismaTenantRepository } = await import('../db/repositories/tenant.repository.js');
+
+    const contractService = new ContractService(
+      new PrismaContractRepository(prisma),
+      new PrismaRoomRepository(prisma),
+      new PrismaTenantRepository(prisma)
+    );
+
+    for (const contract of scheduledContracts) {
+      // Safety Check: Re-verify status and check for conflicting active occupancy
+      const activeOccupancy = await prisma.occupancy.findFirst({
+        where: {
+          dormitoryId: contract.dormitoryId,
+          roomId: contract.roomId,
+          status: 'ACTIVE',
+          tenantId: { not: contract.tenantId },
+        },
+      });
+
+      if (activeOccupancy) {
+        logger.warn({
+          event: 'SCHEDULED_ACTIVATION_CONFLICT',
+          contractId: contract.id,
+          roomId: contract.roomId,
+          msg: `Scheduled contract ${contract.id} cannot activate because room is occupied by tenant ${activeOccupancy.tenantId}`,
+        });
+        skipped.push({ contractId: contract.id, reason: 'ROOM_OCCUPIED_BY_DIFFERENT_TENANT' });
+        continue;
+      }
+
+      try {
+        const activatedContract = await contractService.activateContract(
+          contract.id,
+          contract.dormitoryId,
+          {},
+          actorUserId
+        );
+        activated.push(activatedContract);
+      } catch (err: any) {
+        logger.error({
+          event: 'SCHEDULED_ACTIVATION_ERROR',
+          contractId: contract.id,
+          error: err.message,
+        });
+        skipped.push({ contractId: contract.id, reason: err.message });
+      }
+    }
+
+    return { activatedCount: activated.length, skippedCount: skipped.length, activated, skipped };
   }
 
   /**

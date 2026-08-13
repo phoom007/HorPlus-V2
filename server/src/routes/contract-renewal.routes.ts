@@ -180,5 +180,22 @@ export function createContractRenewalRouter(authService: AuthenticationService):
     }
   });
 
+  // POST /api/v1/contract-renewals/activate-scheduled (Owner/Manager or System triggers scheduled contract activation)
+  router.post('/activate-scheduled', ...mutationGuard('contract:write'), async (req: Request, res: Response) => {
+    if (!verifyCsrf(req, res)) return;
+    try {
+      const dormId = getAuthoritativeDormitoryId(req);
+      const effectiveDate = req.body?.effectiveDate;
+      const result = await contractRenewalService.activateScheduledContracts(
+        dormId,
+        effectiveDate,
+        req.auth?.userId
+      );
+      res.json({ data: result });
+    } catch (err) {
+      handleServiceError(res, err, req);
+    }
+  });
+
   return router;
 }

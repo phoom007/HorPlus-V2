@@ -235,6 +235,9 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
           setReplacementWarningData({
             activeTenantName: (res.error as any).activeTenantName || 'ผู้เช่าปัจจุบัน',
             activeRoomNumber: (res.error as any).activeRoomNumber || 'ไม่ระบุ',
+            hasFutureRenewal: (res.error as any).hasFutureRenewal || false,
+            futureTenantName: (res.error as any).futureTenantName || null,
+            futureStartDate: (res.error as any).futureStartDate || null,
             message: res.error.message,
           });
         } else {
@@ -2537,6 +2540,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
         onClose={() => setIsApproveTermsOpen(false)}
         title="กำหนดข้อตกลงสัญญาและอนุมัติผู้เช่า"
         maxWidth="max-w-md"
+        zIndex="z-[600]"
       >
         {selectedRegReq && (
           <div className="space-y-4 text-xs">
@@ -2659,23 +2663,40 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
       <Modal
         isOpen={!!replacementWarningData}
         onClose={() => setReplacementWarningData(null)}
-        title="⚠️ คำเตือนการยุติสัญญาและยกเลิกผู้เช่าเดิม"
+        title={replacementWarningData?.hasFutureRenewal ? "⚠️ คำเตือนการยกเลิกสัญญาต่ออายุในอนาคต" : "⚠️ คำเตือนการยุติสัญญาและยกเลิกผู้เช่าเดิม"}
         maxWidth="max-w-lg"
       >
         {replacementWarningData && (
           <div className="space-y-4 text-xs">
             <div className="p-4 bg-amber-50 border-2 border-amber-300 text-amber-900 rounded-xl space-y-2">
               <p className="font-bold text-sm text-amber-900 flex items-center gap-2">
-                ⚠️ ห้องพักนี้มีผู้เช่าปัจจุบันอยู่แล้ว
+                ⚠️ {replacementWarningData.hasFutureRenewal ? 'ห้องพักนี้มีสัญญาต่ออายุในอนาคตที่ได้รับอนุมัติแล้ว' : 'ห้องพักนี้มีผู้เช่าปัจจุบันอยู่แล้ว'}
               </p>
-              <p className="leading-relaxed font-semibold">
-                ห้องนี้มีผู้เช่าปัจจุบันอยู่ การอนุมัติผู้สมัครรายใหม่นี้จะยุติสัญญาและสิทธิ์การพักอาศัยของผู้เช่าปัจจุบันทันที และระบบจะเริ่มขั้นตอนคำนวณยอดย้ายออก กรุณาตรวจสอบข้อมูลก่อนยืนยัน
+              <p className="leading-relaxed font-semibold whitespace-pre-line">
+                {replacementWarningData.hasFutureRenewal ? `ห้องนี้มีสัญญาต่ออายุในอนาคตที่ได้รับอนุมัติแล้ว
+
+การอนุมัติผู้สมัครรายใหม่นี้จะยกเลิกสิทธิ์การต่อสัญญา
+ในอนาคตของผู้เช่าเดิม และผู้สมัครรายใหม่จะได้รับสิทธิ์ในห้องนี้แทน
+
+กรุณาตรวจสอบข้อมูลก่อนยืนยัน` : 'ห้องนี้มีผู้เช่าปัจจุบันอยู่ การอนุมัติผู้สมัครรายใหม่นี้จะยุติสัญญาและสิทธิ์การพักอาศัยของผู้เช่าปัจจุบันทันที และระบบจะเริ่มขั้นตอนคำนวณยอดย้ายออก กรุณาตรวจสอบข้อมูลก่อนยืนยัน'}
               </p>
             </div>
 
             <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-1 text-slate-700">
               <p><span className="font-bold">ห้องพัก:</span> {replacementWarningData.activeRoomNumber}</p>
-              <p><span className="font-bold">ผู้เช่าปัจจุบัน:</span> {replacementWarningData.activeTenantName}</p>
+              {replacementWarningData.hasFutureRenewal && (
+                <>
+                  {replacementWarningData.futureTenantName && (
+                    <p><span className="font-bold">ผู้เช่าสัญญาอนาคต:</span> {replacementWarningData.futureTenantName}</p>
+                  )}
+                  {replacementWarningData.futureStartDate && (
+                    <p><span className="font-bold">วันเริ่มสัญญาอนาคต:</span> {replacementWarningData.futureStartDate}</p>
+                  )}
+                </>
+              )}
+              {replacementWarningData.activeTenantName && (
+                <p><span className="font-bold">ผู้เช่าปัจจุบัน:</span> {replacementWarningData.activeTenantName}</p>
+              )}
               <p><span className="font-bold">ผู้สมัครใหม่:</span> {selectedRegReq?.firstName} {selectedRegReq?.lastName}</p>
             </div>
 
@@ -2695,7 +2716,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                 }}
                 className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-xl shadow-sm"
               >
-                ยืนยันยกเลิกผู้เช่าเดิมและอนุมัติผู้เช่าใหม่
+                {replacementWarningData.hasFutureRenewal ? 'ยืนยันยกเลิกสิทธิ์อนาคตและอนุมัติผู้เช่าใหม่' : 'ยืนยันยกเลิกผู้เช่าเดิมและอนุมัติผู้เช่าใหม่'}
               </button>
             </div>
           </div>

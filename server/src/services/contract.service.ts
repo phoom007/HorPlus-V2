@@ -207,7 +207,7 @@ export class ContractService {
       };
     }
 
-    if (!['draft', 'pending_signature', 'approved'].includes(contract.status)) {
+    if (!['draft', 'pending_signature', 'approved', 'approved_scheduled'].includes(contract.status)) {
       const err = new Error(`ไม่สามารถเปิดใช้งานสัญญาที่อยู่ในสถานะ ${contract.status} ได้`);
       (err as any).code = 'INVALID_CONTRACT_STATUS_TRANSITION';
       (err as any).statusCode = 400;
@@ -240,11 +240,12 @@ export class ContractService {
 
         // 3. Recheck interval availability
         const { BLOCKING_CONTRACT_STATUSES } = await import('./blocking-contract-policy.js');
+        const ignoreContractIds = [id, contract.previousContractId].filter((x): x is string => !!x);
         const overlapping = await tx.contract.findMany({
           where: {
             dormitoryId,
             roomId: contract.roomId,
-            id: { not: id },
+            id: { notIn: ignoreContractIds },
             deletedAt: null,
             status: { in: [...BLOCKING_CONTRACT_STATUSES] },
             startDate: { lt: contract.endDate },
@@ -310,6 +311,18 @@ export class ContractService {
           },
         });
 
+        // 6.5. If this is a renewed contract, complete prior contract & end prior active occupancy
+        if (contract.previousContractId) {
+          await tx.contract.update({
+            where: { id: contract.previousContractId },
+            data: { status: 'completed' },
+          });
+          await tx.occupancy.updateMany({
+            where: { contractId: contract.previousContractId, status: 'ACTIVE' },
+            data: { status: 'ENDED', endedAt: now, endedReason: 'ต่ออายุสัญญาฉบับใหม่' },
+          });
+        }
+
         // 7. Sync Room status & pointers
         await tx.room.update({
           where: { id: contract.roomId },
@@ -329,12 +342,14 @@ export class ContractService {
         });
 
         // 8.5. Create ACTIVE Occupancy linked to room + tenant + contract
+        const ignoreOccupancyContractIds = [id, contract.previousContractId].filter((x): x is string => !!x);
         const existingActiveOccupancy = await tx.occupancy.findFirst({
           where: {
             dormitoryId,
             roomId: contract.roomId,
             status: 'ACTIVE',
-            contractId: { not: id },
+            tenantId: { not: contract.tenantId },
+            contractId: { notIn: ignoreOccupancyContractIds },
           },
         });
         if (existingActiveOccupancy) {

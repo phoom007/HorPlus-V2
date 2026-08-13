@@ -1996,9 +1996,19 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                             </div>
 
                             <div className="pt-3 border-t border-slate-100">
-                              <span className="px-3 py-1 bg-emerald-50 text-emerald-700 border border-emerald-200/50 rounded-full text-[9px] font-bold">
-                                สถานะ: กำลังเช่า
-                              </span>
+                              {con.status === 'approved_scheduled' ? (
+                                <span className="px-3 py-1 bg-amber-50 text-amber-700 border border-amber-200/50 rounded-full text-[9px] font-bold">
+                                  สัญญาต่ออายุได้รับอนุมัติแล้ว • เริ่มวันที่ {formatToBeFullDate(con.startDate)}
+                                </span>
+                              ) : con.status === 'cancelled' ? (
+                                <span className="px-3 py-1 bg-rose-50 text-rose-700 border border-rose-200/50 rounded-full text-[9px] font-bold">
+                                  สถานะ: สัญญายกเลิก
+                                </span>
+                              ) : (
+                                <span className="px-3 py-1 bg-emerald-50 text-emerald-700 border border-emerald-200/50 rounded-full text-[9px] font-bold">
+                                  สถานะ: กำลังพักอาศัย / สัญญาปัจจุบัน
+                                </span>
+                              )}
                             </div>
                           </div>
 

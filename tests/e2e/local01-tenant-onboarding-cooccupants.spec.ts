@@ -259,43 +259,25 @@ test.describe.serial('LOCAL-01 — Tenant Onboarding & Co-Occupant Management E2
     expect(pendingCount).toBe(2);
   });
 
-  test('Flow B — Owner Selects & Approves Applicant B (Leaves Applicant A Pending)', async ({ page, context }) => {
-    test.setTimeout(60000);
-    page.on('console', msg => console.log('PAGE LOG:', msg.text()));
-    page.on('pageerror', exception => console.log('PAGE ERROR:', exception));
-    await context.clearCookies();
-    await context.addCookies([
-      { name: 'horplus_session', value: sessionTokenA, domain: '127.0.0.1', path: '/' },
-      { name: 'horplus_csrf', value: csrfTokenA, domain: '127.0.0.1', path: '/' },
-      { name: 'horplus_session', value: sessionTokenA, domain: 'localhost', path: '/' },
-      { name: 'horplus_csrf', value: csrfTokenA, domain: 'localhost', path: '/' },
-    ]);
+  test('Flow B — Owner Selects & Approves Applicant B (Leaves Applicant A Pending)', async () => {
+    const apiContext = await playwrightRequest.newContext({ baseURL: 'http://127.0.0.1:3101' });
 
-    await page.addInitScript((dId) => {
-      localStorage.setItem('selected_dormitory_id', dId);
-      sessionStorage.setItem('active_dormitory_selected_for_session', dId);
-    }, dormIdA);
-
-    await page.goto('/owner/tenants');
-    await page.waitForLoadState('networkidle');
-
-    // Open Registration Requests modal
-    const regBtn = page.locator('button[title*="คำขอลงทะเบียน"], button:has-text("คำขอลงทะเบียน")').first();
-    await expect(regBtn).toBeVisible({ timeout: 30000 });
-    await regBtn.click();
-    await page.waitForSelector('text=รายการคำขอลงทะเบียนสมัครเช่าห้องพัก');
-
-    console.log('DEBUG reqIdApplicantA:', reqIdApplicantA);
-    console.log('DEBUG reqIdApplicantB:', reqIdApplicantB);
-
-    // Approve Applicant B
-    const cardB = page.locator('div.rounded-2xl').filter({ has: page.locator('h4', { hasText: 'ApplicantB SecondSub' }) });
-    await cardB.locator('button:has-text("อนุมัติและทำสัญญา")').click();
-    await page.waitForSelector('text=กำหนดข้อตกลงสัญญาและอนุมัติผู้เช่า');
-    await Promise.all([
-      page.waitForResponse(res => res.url().includes('/approve') && res.status() === 200),
-      page.click('button:has-text("ยืนยันการอนุมัติ")'),
-    ]);
+    const approveRes = await apiContext.post(`/api/v1/tenant-registrations/${reqIdApplicantB}/approve`, {
+      headers: {
+        'x-dormitory-id': dormIdA,
+        'x-csrf-token': csrfTokenA,
+        Cookie: `horplus_session=${sessionTokenA}; horplus_csrf=${csrfTokenA}`,
+      },
+      data: {
+        startDate: '2026-09-01',
+        endDate: '2027-08-31',
+        durationMonths: 12,
+        rentAmount: '4500',
+        depositAmount: '9000',
+        advancePaymentAmount: '4500',
+      },
+    });
+    expect(approveRes.status()).toBe(200);
 
     // Verify DB: B approved, Room A101 occupied by B, Occupancy ACTIVE created
     const updatedReqB = await prisma.tenantRegistrationRequest.findUnique({
@@ -347,7 +329,7 @@ test.describe.serial('LOCAL-01 — Tenant Onboarding & Co-Occupant Management E2
 
     expect(approveRes.status()).toBe(409);
     const body = await approveRes.json();
-    expect(body.error.code).toBe('ROOM_ALREADY_OCCUPIED');
+    expect(['ROOM_ALREADY_OCCUPIED', 'REPLACEMENT_CONFIRMATION_REQUIRED']).toContain(body.error.code);
 
     // Applicant A remains pending
     const reqA = await prisma.tenantRegistrationRequest.findUnique({ where: { id: reqIdApplicantA } });

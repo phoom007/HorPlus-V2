@@ -437,6 +437,10 @@ describe('LOCAL-02: Contract Settlement, Termination & Renewal Suite', () => {
       },
     });
 
+    // Make room vacant first to test competing initial claims
+    await prisma.occupancy.update({ where: { id: testOccupancyAId }, data: { status: 'ENDED' } });
+    await prisma.room.update({ where: { id: testRoomA101Id }, data: { status: 'vacant', currentTenantId: null, currentContractId: null } });
+
     const payload = {
       startDate: '2026-07-01',
       endDate: '2026-12-31',
@@ -444,14 +448,18 @@ describe('LOCAL-02: Contract Settlement, Termination & Renewal Suite', () => {
       rentAmount: '5000',
       depositAmount: '10000',
       advancePaymentAmount: '5000',
-      confirmReplacement: true,
+      confirmReplacement: false,
     };
 
-    // Execute concurrent approval requests
-    await Promise.allSettled([
+    const results = await Promise.allSettled([
       tenantRegistrationService.approveRequest(reg1.id, testDormitoryId, payload, mockOwnerUserId),
       tenantRegistrationService.approveRequest(reg2.id, testDormitoryId, payload, mockOwnerUserId),
     ]);
+
+    const fulfilled = results.filter(r => r.status === 'fulfilled');
+    const rejected = results.filter(r => r.status === 'rejected');
+    expect(fulfilled.length).toBe(1);
+    expect(rejected.length).toBe(1);
 
     // Verify room has exactly ONE active contract & occupancy
     const activeOccupancies = await prisma.occupancy.findMany({
@@ -510,7 +518,9 @@ describe('LOCAL-02: Contract Settlement, Termination & Renewal Suite', () => {
     ]);
 
     const fulfilled = results.filter(r => r.status === 'fulfilled');
-    expect(fulfilled.length).toBeGreaterThanOrEqual(1);
+    const rejected = results.filter(r => r.status === 'rejected');
+    expect(fulfilled.length).toBe(1);
+    expect(rejected.length).toBe(1);
 
     // Exactly one active contract exists for Room A101
     const activeContracts = await prisma.contract.findMany({
@@ -612,5 +622,251 @@ describe('LOCAL-02: Contract Settlement, Termination & Renewal Suite', () => {
     expect(Number(s3Recalc.netSettlement)).toBe(-1000);
     expect(s3Recalc.settlementDirection).toBe('PAYMENT_DUE');
     expect(s3Recalc.settlementStatus).toBe('PENDING_PAYMENT');
+  });
+
+  // Test 12: Future Renewal Approval creates scheduled contract (approved_scheduled), preserves current active contract & room pointers until start date
+  it('12. Future Renewal Approval: Creates approved_scheduled contract with activatedAt=null and does NOT establish active occupancy before start date', async () => {
+    // Tenant A submits renewal request for future date (2026-10-01)
+    const req = await contractRenewalService.submitRenewalRequest({
+      dormitoryId: testDormitoryId,
+      tenantId: testTenantAId,
+      contractId: testContractAId,
+      requestedStartDate: '2026-10-01',
+      requestedDurationMonths: 6,
+    });
+
+    const approvalResult = await contractRenewalService.approveRenewalRequest({
+      dormitoryId: testDormitoryId,
+      requestId: req.id,
+      actorUserId: mockOwnerUserId,
+      actorRole: 'OWNER',
+    });
+
+    expect(approvalResult.request.status).toBe('APPROVED');
+    const futureContract = approvalResult.contract;
+    expect(futureContract?.status).toBe('approved_scheduled');
+    expect(futureContract?.activatedAt).toBeNull();
+    expect(futureContract?.previousContractId).toBe(testContractAId);
+
+    // Verify room status and pointers remain current contract A (NOT future contract)
+    const room = await prisma.room.findUnique({ where: { id: testRoomA101Id } });
+    expect(room?.currentContractId).toBe(testContractAId);
+    expect(room?.currentTenantId).toBe(testTenantAId);
+
+    // Verify NO active occupancy exists for future contract
+    const futureOccupancy = await prisma.occupancy.findFirst({
+      where: { contractId: futureContract?.id, status: 'ACTIVE' },
+    });
+    expect(futureOccupancy).toBeNull();
+
+    // Verify current contract A remains active
+    const currentContract = await prisma.contract.findUnique({ where: { id: testContractAId } });
+    expect(currentContract?.status).toBe('active');
+  });
+
+  // Test 13: Scheduled activation on effective start date
+  it('13. Effective Date Activation: activateScheduledContracts transitions scheduled contract to active and creates ACTIVE occupancy', async () => {
+    // Setup approved scheduled contract
+    const req = await contractRenewalService.submitRenewalRequest({
+      dormitoryId: testDormitoryId,
+      tenantId: testTenantAId,
+      contractId: testContractAId,
+      requestedStartDate: '2026-10-01',
+      requestedDurationMonths: 6,
+    });
+    const { contract: futureContract } = await contractRenewalService.approveRenewalRequest({
+      dormitoryId: testDormitoryId,
+      requestId: req.id,
+      actorUserId: mockOwnerUserId,
+      actorRole: 'OWNER',
+    });
+
+    // Advance clock/evaluate on 2026-10-01
+    const res = await contractRenewalService.activateScheduledContracts(testDormitoryId, '2026-10-01', mockOwnerUserId);
+    expect(res.activatedCount).toBeGreaterThanOrEqual(1);
+
+    const activatedContract = await prisma.contract.findUnique({ where: { id: futureContract!.id } });
+    expect(activatedContract?.status).toBe('active');
+    expect(activatedContract?.activatedAt).not.toBeNull();
+
+    const activeOccupancy = await prisma.occupancy.findFirst({
+      where: { contractId: futureContract!.id, status: 'ACTIVE' },
+    });
+    expect(activeOccupancy).not.toBeNull();
+
+    const room = await prisma.room.findUnique({ where: { id: testRoomA101Id } });
+    expect(room?.currentContractId).toBe(futureContract!.id);
+  });
+
+  // Test 14: Owner overrides approved future renewal with explicit warning check
+  it('14. Future Renewal Override: Owner approval of Applicant B requires confirmation, cancels future renewal, and creates persistent notice', async () => {
+    // Setup approved scheduled contract for Tenant A
+    const rnwReq = await contractRenewalService.submitRenewalRequest({
+      dormitoryId: testDormitoryId,
+      tenantId: testTenantAId,
+      contractId: testContractAId,
+      requestedStartDate: '2026-10-01',
+      requestedDurationMonths: 6,
+    });
+    const { contract: futureContract } = await contractRenewalService.approveRenewalRequest({
+      dormitoryId: testDormitoryId,
+      requestId: rnwReq.id,
+      actorUserId: mockOwnerUserId,
+      actorRole: 'OWNER',
+    });
+
+    // Applicant B submits registration
+    const appB = await tenantRegistrationService.createRequest(testDormitoryId, {
+      dormitoryId: testDormitoryId,
+      requestedRoomId: testRoomA101Id,
+      firstName: 'Boonmee',
+      lastName: 'Rakdee',
+      phone: '0899999999',
+    });
+
+    // Unconfirmed approval throws 409 REPLACEMENT_CONFIRMATION_REQUIRED
+    await expect(
+      tenantRegistrationService.approveRequest(appB.id, testDormitoryId, {
+        startDate: '2026-10-01',
+        endDate: '2027-03-31',
+        durationMonths: 6,
+        rentAmount: '5000',
+        depositAmount: '10000',
+        advancePaymentAmount: '5000',
+        confirmReplacement: false,
+      })
+    ).rejects.toThrow('REPLACEMENT_CONFIRMATION_REQUIRED');
+
+    // Confirmed approval executes replacement & future renewal override atomically
+    const bResult = await tenantRegistrationService.approveRequest(appB.id, testDormitoryId, {
+      startDate: '2026-10-01',
+      endDate: '2027-03-31',
+      durationMonths: 6,
+      rentAmount: '5000',
+      depositAmount: '10000',
+      advancePaymentAmount: '5000',
+      confirmReplacement: true,
+    });
+
+    expect(bResult.request.status).toBe('approved');
+
+    // Future contract A2 is cancelled
+    const cancelledContract = await prisma.contract.findUnique({ where: { id: futureContract!.id } });
+    expect(cancelledContract?.status).toBe('cancelled');
+
+    // Tenant A renewal request is CANCELLED
+    const cancelledReq = await prisma.tenantRenewalRequest.findUnique({ where: { id: rnwReq.id } });
+    expect(cancelledReq?.status).toBe('CANCELLED');
+
+    // Persistent notice created for Tenant A
+    const notice = await prisma.tenantNotice.findFirst({
+      where: { tenantId: testTenantAId, title: 'แจ้งยกเลิกสัญญาต่ออายุในอนาคต' },
+    });
+    expect(notice).not.toBeNull();
+
+    // Room points to B
+    const room = await prisma.room.findUnique({ where: { id: testRoomA101Id } });
+    expect(room?.currentTenantId).toBe(bResult.tenant.id);
+  });
+
+  // Test 15: Cancelled future renewal never auto-activates
+  it('15. Cancelled Future Activation Guard: Cancelled scheduled renewal cannot be activated on effective date', async () => {
+    // Setup and override scheduled renewal
+    const rnwReq = await contractRenewalService.submitRenewalRequest({
+      dormitoryId: testDormitoryId,
+      tenantId: testTenantAId,
+      contractId: testContractAId,
+      requestedStartDate: '2026-10-01',
+      requestedDurationMonths: 6,
+    });
+    const { contract: futureContract } = await contractRenewalService.approveRenewalRequest({
+      dormitoryId: testDormitoryId,
+      requestId: rnwReq.id,
+      actorUserId: mockOwnerUserId,
+      actorRole: 'OWNER',
+    });
+
+    const appB = await tenantRegistrationService.createRequest(testDormitoryId, {
+      dormitoryId: testDormitoryId,
+      requestedRoomId: testRoomA101Id,
+      firstName: 'Boonmee',
+      lastName: 'Rakdee',
+      phone: '0899999999',
+    });
+
+    await tenantRegistrationService.approveRequest(appB.id, testDormitoryId, {
+      startDate: '2026-10-01',
+      endDate: '2027-03-31',
+      durationMonths: 6,
+      rentAmount: '5000',
+      depositAmount: '10000',
+      advancePaymentAmount: '5000',
+      confirmReplacement: true,
+    });
+
+    // Attempt to run scheduled activation for 2026-10-01
+    await contractRenewalService.activateScheduledContracts(testDormitoryId, new Date('2026-10-01'));
+
+    // Future contract A2 remains cancelled, not activated
+    const cancelledContract = await prisma.contract.findUnique({ where: { id: futureContract!.id } });
+    expect(cancelledContract?.status).toBe('cancelled');
+    expect(cancelledContract?.activatedAt).toBeNull();
+  });
+
+  // Test 16: Active + Future Contract Replacement
+  it('16. Active + Future Contract Replacement: Approving B when A has active A1 AND scheduled A2 terminates A1 and cancels A2 atomically', async () => {
+    // Setup active A1 AND scheduled A2
+    const rnwReq = await contractRenewalService.submitRenewalRequest({
+      dormitoryId: testDormitoryId,
+      tenantId: testTenantAId,
+      contractId: testContractAId,
+      requestedStartDate: '2026-10-01',
+      requestedDurationMonths: 6,
+    });
+    const { contract: futureContractA2 } = await contractRenewalService.approveRenewalRequest({
+      dormitoryId: testDormitoryId,
+      requestId: rnwReq.id,
+      actorUserId: mockOwnerUserId,
+      actorRole: 'OWNER',
+    });
+
+    const appB = await tenantRegistrationService.createRequest(testDormitoryId, {
+      dormitoryId: testDormitoryId,
+      requestedRoomId: testRoomA101Id,
+      firstName: 'Chai',
+      lastName: 'Dee',
+      phone: '0811111111',
+    });
+
+    const bResult = await tenantRegistrationService.approveRequest(appB.id, testDormitoryId, {
+      startDate: '2026-08-15',
+      endDate: '2027-02-15',
+      durationMonths: 6,
+      rentAmount: '5000',
+      depositAmount: '10000',
+      advancePaymentAmount: '5000',
+      confirmReplacement: true,
+    });
+
+    // A1 active contract terminated
+    const terminatedA1 = await prisma.contract.findUnique({ where: { id: testContractAId } });
+    expect(terminatedA1?.status).toBe('terminated');
+
+    // A1 active occupancy ENDED
+    const endedOccupancyA = await prisma.occupancy.findUnique({ where: { id: testOccupancyAId } });
+    expect(endedOccupancyA?.status).toBe('ENDED');
+
+    // A2 scheduled contract cancelled
+    const cancelledA2 = await prisma.contract.findUnique({ where: { id: futureContractA2!.id } });
+    expect(cancelledA2?.status).toBe('cancelled');
+
+    // Settlement opened for A1
+    const settlementA1 = await prisma.contractSettlement.findFirst({ where: { contractId: testContractAId } });
+    expect(settlementA1).not.toBeNull();
+
+    // Exactly one active room occupant (B)
+    const activeOccupancies = await prisma.occupancy.findMany({ where: { roomId: testRoomA101Id, status: 'ACTIVE' } });
+    expect(activeOccupancies.length).toBe(1);
+    expect(activeOccupancies[0].tenantId).toBe(bResult.tenant.id);
   });
 });

@@ -42,7 +42,7 @@ export function createSettlementRouter(authService: AuthenticationService): Rout
     const statusCode = err.statusCode || err.status || 500;
     res.status(statusCode).json({
       error: {
-        code: err.code || 'SETTLEMENT_OPERATION_FAILED',
+        code: err.code || err.errorCode || 'SETTLEMENT_OPERATION_FAILED',
         message: err.message || 'เกิดข้อผิดพลาดในการคำนวณยอดย้ายออก',
         fieldErrors: err.fieldErrors || null,
         requestId: (req.headers['x-request-id'] as string) || 'req-unknown',

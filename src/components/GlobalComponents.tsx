@@ -468,9 +468,10 @@ interface ModalProps {
   size?: 'sm' | 'md' | 'lg' | 'xl' | 'full';
   transparentBg?: boolean;
   hideHeader?: boolean;
+  zIndex?: string;
 }
 
-export const Modal: React.FC<ModalProps> = ({ isOpen, onClose, title, children, footer, size = 'md', transparentBg = false, hideHeader = false }) => {
+export const Modal: React.FC<ModalProps> = ({ isOpen, onClose, title, children, footer, size = 'md', transparentBg = false, hideHeader = false, zIndex = 'z-[500]' }) => {
   useEffect(() => {
     if (!isOpen) return;
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -491,9 +492,9 @@ export const Modal: React.FC<ModalProps> = ({ isOpen, onClose, title, children, 
   };
 
   return (
-    <div className="fixed inset-0 z-[500] flex items-center justify-center p-4 overflow-hidden">
+    <div className={`fixed inset-0 ${zIndex} flex items-center justify-center p-4 overflow-hidden`}>
       {/* Overlay */}
-      <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs" onClick={onClose} />
+      <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }} />
       
       {/* Content wrapper */}
       <div className={`${transparentBg ? 'bg-transparent border-transparent shadow-none' : 'bg-white border-gray-100 shadow-2xl'} rounded-3xl overflow-hidden w-full relative z-10 flex flex-col ${sizes[size]} animate-in fade-in duration-200 transform zoom-in-95 max-h-[90vh]`}>

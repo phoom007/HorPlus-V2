@@ -88,16 +88,33 @@ export class TenantRegistrationService {
       include: { tenant: true, contract: true, room: true },
     });
 
-    if (!activeOccupancy) {
+    const futureContract = await prisma.contract.findFirst({
+      where: {
+        dormitoryId,
+        roomId: req.requestedRoomId,
+        deletedAt: null,
+        status: 'approved_scheduled',
+      },
+      include: { tenant: true, room: true },
+    });
+
+    if (!activeOccupancy && !futureContract) {
       return { requiresReplacementWarning: false };
     }
 
+    const room = activeOccupancy?.room || futureContract?.room;
+
     return {
       requiresReplacementWarning: true,
-      currentOccupancy: activeOccupancy,
-      currentTenant: activeOccupancy.tenant,
-      currentContract: activeOccupancy.contract,
-      room: activeOccupancy.room,
+      hasActiveOccupancy: !!activeOccupancy,
+      hasFutureRenewal: !!futureContract,
+      currentOccupancy: activeOccupancy || null,
+      currentTenant: activeOccupancy?.tenant || null,
+      currentContract: activeOccupancy?.contract || null,
+      futureContract: futureContract || null,
+      futureTenant: futureContract?.tenant || null,
+      futureStartDate: futureContract?.startDate || null,
+      room,
     };
   }
 
@@ -244,147 +261,218 @@ export class TenantRegistrationService {
           throw err;
         }
 
-        // Check if room currently has an active tenancy/occupancy
+        // Check if room currently has an active tenancy OR an approved future renewal contract
         const activeOccupancy = await tx.occupancy.findFirst({
           where: { dormitoryId, roomId: req.requestedRoomId, status: 'ACTIVE' },
           include: { tenant: true, contract: true },
         });
 
-        if (activeOccupancy) {
+        const futureContract = await tx.contract.findFirst({
+          where: {
+            dormitoryId,
+            roomId: req.requestedRoomId,
+            deletedAt: null,
+            status: 'approved_scheduled',
+          },
+          include: { tenant: true },
+        });
+
+        if (activeOccupancy || futureContract) {
           // If Owner did NOT explicitly confirm replacement, require confirmation warning first!
           if (!payload.confirmReplacement) {
-            const err = new Error('REPLACEMENT_CONFIRMATION_REQUIRED: ห้องนี้มีผู้เช่าปัจจุบันอยู่ กรุณายืนยันการยุติสัญญาผู้เช่าเดิม');
+            let msg = `ห้อง ${room.roomNumber} มีผู้เช่าปัจจุบันอยู่ (${activeOccupancy?.tenant.displayName}) การอนุมัติผู้สมัครรายใหม่นี้จะยุติสัญญาของผู้เช่าปัจจุบันทันที`;
+            if (futureContract) {
+              msg = `ห้องนี้มีสัญญาต่ออายุในอนาคตที่ได้รับอนุมัติแล้ว\n\nการอนุมัติผู้สมัครรายใหม่นี้จะยกเลิกสิทธิ์การต่อสัญญา\nในอนาคตของผู้เช่าเดิม และผู้สมัครรายใหม่จะได้รับสิทธิ์ในห้องนี้แทน\n\nกรุณาตรวจสอบข้อมูลก่อนยืนยัน`;
+            }
+
+            const err = new Error(`REPLACEMENT_CONFIRMATION_REQUIRED: ${msg}`);
             (err as any).statusCode = 409;
             (err as any).code = 'REPLACEMENT_CONFIRMATION_REQUIRED';
-            (err as any).message = `ห้อง ${room.roomNumber} มีผู้เช่าปัจจุบันอยู่ (${activeOccupancy.tenant.displayName}) การอนุมัติผู้เช่ารายใหม่นี้จะยุติสัญญาของผู้เช่าปัจจุบันทันที`;
-            (err as any).activeTenantName = activeOccupancy.tenant.displayName;
+            (err as any).message = `REPLACEMENT_CONFIRMATION_REQUIRED: ${msg}`;
+            (err as any).activeTenantName = activeOccupancy?.tenant.displayName || null;
             (err as any).activeRoomNumber = room.roomNumber;
+            (err as any).hasFutureRenewal = !!futureContract;
+            (err as any).futureTenantName = futureContract?.tenant.displayName || null;
+            (err as any).futureStartDate = futureContract?.startDate ? new Date(futureContract.startDate).toLocaleDateString('th-TH') : null;
             throw err;
-          }
-
-          // ATOMIC OWNER-FORCED REPLACEMENT TERMINATION
-          const oldTenantId = activeOccupancy.tenantId;
-          const oldContractId = activeOccupancy.contractId;
-
-          // a. Terminate old contract (Original agreed dates on contract remain IMMUTABLE! NO rent proration!)
-          if (oldContractId) {
-            await tx.contract.update({
-              where: { id: oldContractId },
-              data: {
-                status: 'terminated',
-                terminatedAt: new Date(),
-                terminationEffectiveDate: new Date(),
-                terminationReason: 'ยุติสัญญาเนื่องจากผู้ดูแลหอพักอนุมัติผู้เช่ารายใหม่เข้าแทนที่',
-              },
-            });
           }
 
           const safeActorId = actorUserId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(actorUserId) ? actorUserId : null;
 
-          // b. Close old occupancy
-          await tx.occupancy.update({
-            where: { id: activeOccupancy.id },
-            data: {
-              status: 'ENDED',
-              endedAt: new Date(),
-              endedByUserId: safeActorId,
-              endedReason: 'ย้ายออกจากการอนุมัติผู้เช่าใหม่แทนที่ (Owner Replacement)',
-            },
-          });
-
-          // c. Invalidate/cancel any pending renewal requests for old tenant
-          await tx.tenantRenewalRequest.updateMany({
-            where: {
-              dormitoryId,
-              tenantId: oldTenantId,
-              status: 'PENDING_OWNER_APPROVAL',
-            },
-            data: {
-              status: 'CANCELLED',
-              rejectionReason: 'ยกเลิกเนื่องจากผู้ดูแลหอพักอนุมัติผู้เช่ารายใหม่เข้าแทนที่',
-              reviewedAt: new Date(),
-              reviewedByUserId: safeActorId,
-            },
-          });
-
-          // d. Initiate/open Settlement for old tenant
-          if (oldContractId) {
-            const unpaidBills = await tx.bill.findMany({
-              where: {
-                dormitoryId,
-                contractId: oldContractId,
-                status: { in: ['unpaid', 'overdue'] },
+          // A. ATOMIC FUTURE RENEWAL OVERRIDE CANCELLATION
+          if (futureContract) {
+            // a. Cancel/invalidate scheduled contract (preserve audit details)
+            await tx.contract.update({
+              where: { id: futureContract.id },
+              data: {
+                status: 'cancelled',
+                terminatedAt: new Date(),
+                terminationReason: 'ยกเลิกเนื่องจากผู้ดูแลหอพักอนุมัติผู้เช่ารายใหม่เข้าแทนที่',
               },
             });
 
-            const unpaidTotal = unpaidBills.reduce(
-              (sum, b) => sum.add(new Prisma.Decimal(b.totalAmount || 0)),
-              new Prisma.Decimal(0)
-            );
-
-            const oldContract = activeOccupancy.contract;
-            const deposit = new Prisma.Decimal(oldContract?.depositAmount || 0);
-            const net = deposit.sub(unpaidTotal);
-
-            let direction = 'ZERO';
-            let status = 'CLOSED_ZERO';
-            if (net.gt(0)) {
-              direction = 'REFUND';
-              status = 'PENDING_REFUND';
-            } else if (net.lt(0)) {
-              direction = 'PAYMENT_DUE';
-              status = 'PENDING_PAYMENT';
-            }
-
-            await tx.contractSettlement.upsert({
+            // b. Invalidate related renewal request(s)
+            await tx.tenantRenewalRequest.updateMany({
               where: {
-                dormitory_contract_settlement_unique: {
-                  dormitoryId,
-                  contractId: oldContractId,
-                },
-              },
-              create: {
                 dormitoryId,
-                tenantId: oldTenantId,
-                contractId: oldContractId,
                 roomId: req.requestedRoomId,
-                depositAmount: deposit,
-                unpaidBillAmount: unpaidTotal,
-                damageChargeTotal: new Prisma.Decimal(0),
-                netSettlement: net,
-                settlementDirection: direction,
-                settlementStatus: status,
+                tenantId: futureContract.tenantId,
+                status: { in: ['PENDING_OWNER_APPROVAL', 'APPROVED'] },
               },
-              update: {
-                depositAmount: deposit,
-                unpaidBillAmount: unpaidTotal,
-                netSettlement: net,
-                settlementDirection: direction,
-                settlementStatus: status,
+              data: {
+                status: 'CANCELLED',
+                rejectionReason: 'ยกเลิกโดยผู้ดูแลหอพักเนื่องจากอนุมัติผู้เช่ารายใหม่เข้าแทนที่',
+                reviewedAt: new Date(),
+                reviewedByUserId: safeActorId,
               },
+            });
+
+            // c. Create persistent in-app notice for future renewal tenant
+            const formattedStart = new Date(futureContract.startDate).toLocaleDateString('th-TH');
+            await tx.tenantNotice.create({
+              data: {
+                dormitoryId,
+                tenantId: futureContract.tenantId,
+                title: 'แจ้งยกเลิกสัญญาต่ออายุในอนาคต',
+                message: `สัญญาต่ออายุห้อง ${room.roomNumber} ที่มีกำหนดเริ่มวันที่ ${formattedStart} ถูกยกเลิกโดยผู้ดูแลหอพัก เนื่องจากห้องได้รับการอนุมัติให้ผู้เช่ารายใหม่`,
+                type: 'FORCED_TERMINATION',
+              },
+            });
+
+            logger.info({
+              event: 'SECURITY_AUDIT',
+              dormitoryId,
+              futureTenantId: futureContract.tenantId,
+              roomId: req.requestedRoomId,
+              actorUserId,
+              action: 'FUTURE_RENEWAL_OVERRIDDEN',
+              msg: `Owner cancelled scheduled future contract ${futureContract.id} to approve replacement applicant ${id}`,
             });
           }
 
-          // e. Create persistent in-app notice for old tenant
-          await tx.tenantNotice.create({
-            data: {
-              dormitoryId,
-              tenantId: oldTenantId,
-              title: 'แจ้งยุติสัญญาเช่า',
-              message: `สัญญาเช่าห้อง ${room.roomNumber} ของคุณถูกยุติโดยผู้ดูแลหอพัก กรุณาตรวจสอบรายละเอียดสัญญาและยอดย้ายออกในระบบ`,
-              type: 'FORCED_TERMINATION',
-            },
-          });
+          // B. ATOMIC OWNER-FORCED REPLACEMENT TERMINATION FOR ACTIVE OCCUPANCY
+          if (activeOccupancy) {
+            const oldTenantId = activeOccupancy.tenantId;
+            const oldContractId = activeOccupancy.contractId;
 
-          logger.info({
-            event: 'SECURITY_AUDIT',
-            dormitoryId,
-            oldTenantId,
-            roomId: req.requestedRoomId,
-            actorUserId,
-            action: 'OWNER_FORCED_REPLACEMENT_EXECUTED',
-            msg: `Owner terminated active tenancy for tenant ${oldTenantId} to approve replacement applicant ${id}`,
-          });
+            // a. Terminate old contract (Original agreed dates on contract remain IMMUTABLE! NO rent proration!)
+            if (oldContractId) {
+              await tx.contract.update({
+                where: { id: oldContractId },
+                data: {
+                  status: 'terminated',
+                  terminatedAt: new Date(),
+                  terminationEffectiveDate: new Date(),
+                  terminationReason: 'ยุติสัญญาเนื่องจากผู้ดูแลหอพักอนุมัติผู้เช่ารายใหม่เข้าแทนที่',
+                },
+              });
+            }
+
+            // b. Close old occupancy
+            await tx.occupancy.update({
+              where: { id: activeOccupancy.id },
+              data: {
+                status: 'ENDED',
+                endedAt: new Date(),
+                endedByUserId: safeActorId,
+                endedReason: 'ย้ายออกจากการอนุมัติผู้เช่าใหม่แทนที่ (Owner Replacement)',
+              },
+            });
+
+            // c. Invalidate/cancel any pending renewal requests for old tenant
+            await tx.tenantRenewalRequest.updateMany({
+              where: {
+                dormitoryId,
+                tenantId: oldTenantId,
+                status: 'PENDING_OWNER_APPROVAL',
+              },
+              data: {
+                status: 'CANCELLED',
+                rejectionReason: 'ยกเลิกเนื่องจากผู้ดูแลหอพักอนุมัติผู้เช่ารายใหม่เข้าแทนที่',
+                reviewedAt: new Date(),
+                reviewedByUserId: safeActorId,
+              },
+            });
+
+            // d. Initiate/open Settlement for old tenant
+            if (oldContractId) {
+              const unpaidBills = await tx.bill.findMany({
+                where: {
+                  dormitoryId,
+                  contractId: oldContractId,
+                  status: { in: ['unpaid', 'overdue'] },
+                },
+              });
+
+              const unpaidTotal = unpaidBills.reduce(
+                (sum, b) => sum.add(new Prisma.Decimal(b.totalAmount || 0)),
+                new Prisma.Decimal(0)
+              );
+
+              const oldContract = activeOccupancy.contract;
+              const deposit = new Prisma.Decimal(oldContract?.depositAmount || 0);
+              const net = deposit.sub(unpaidTotal);
+
+              let direction = 'ZERO';
+              let status = 'CLOSED_ZERO';
+              if (net.gt(0)) {
+                direction = 'REFUND';
+                status = 'PENDING_REFUND';
+              } else if (net.lt(0)) {
+                direction = 'PAYMENT_DUE';
+                status = 'PENDING_PAYMENT';
+              }
+
+              await tx.contractSettlement.upsert({
+                where: {
+                  dormitory_contract_settlement_unique: {
+                    dormitoryId,
+                    contractId: oldContractId,
+                  },
+                },
+                create: {
+                  dormitoryId,
+                  tenantId: oldTenantId,
+                  contractId: oldContractId,
+                  roomId: req.requestedRoomId,
+                  depositAmount: deposit,
+                  unpaidBillAmount: unpaidTotal,
+                  damageChargeTotal: new Prisma.Decimal(0),
+                  netSettlement: net,
+                  settlementDirection: direction,
+                  settlementStatus: status,
+                },
+                update: {
+                  depositAmount: deposit,
+                  unpaidBillAmount: unpaidTotal,
+                  netSettlement: net,
+                  settlementDirection: direction,
+                  settlementStatus: status,
+                },
+              });
+            }
+
+            // e. Create persistent in-app notice for old tenant
+            await tx.tenantNotice.create({
+              data: {
+                dormitoryId,
+                tenantId: oldTenantId,
+                title: 'แจ้งยุติสัญญาเช่า',
+                message: `สัญญาเช่าห้อง ${room.roomNumber} ของคุณถูกยุติโดยผู้ดูแลหอพัก กรุณาตรวจสอบรายละเอียดสัญญาและยอดย้ายออกในระบบ`,
+                type: 'FORCED_TERMINATION',
+              },
+            });
+
+            logger.info({
+              event: 'SECURITY_AUDIT',
+              dormitoryId,
+              oldTenantId,
+              roomId: req.requestedRoomId,
+              actorUserId,
+              action: 'OWNER_FORCED_REPLACEMENT_EXECUTED',
+              msg: `Owner terminated active tenancy for tenant ${oldTenantId} to approve replacement applicant ${id}`,
+            });
+          }
         }
       }
 
