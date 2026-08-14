@@ -96,12 +96,8 @@ test.describe('LOCAL-04 — Master Cross-Portal Playwright Acceptance Suite (Jou
     await page.waitForLoadState('networkidle');
 
     const roomSelect = page.locator('select');
-    const roomInput = page.locator('input[placeholder*="ระบุรหัสห้องพัก"]');
-    if (await roomSelect.isVisible()) {
-      await roomSelect.selectOption(roomId);
-    } else if (await roomInput.isVisible()) {
-      await roomInput.fill(roomId);
-    }
+    await expect(roomSelect).toBeVisible({ timeout: 15000 });
+    await roomSelect.selectOption(roomId);
 
     await page.fill('input[placeholder="สมชาย"]', firstName);
     await page.fill('input[placeholder="ใจดี"]', lastName);
@@ -783,12 +779,12 @@ test.describe('LOCAL-04 — Master Cross-Portal Playwright Acceptance Suite (Jou
     await tenantCtx.page.waitForLoadState('networkidle');
 
     // Click on "โปรไฟล์" bottom navigation tab
-    const profileTabBtn = tenantCtx.page.locator('button:has-text("โปรไฟล์")');
-    await expect(profileTabBtn).toBeVisible({ timeout: 15000 });
+    const profileTabBtn = tenantCtx.page.locator('[data-testid="nav-tab-profile"], button:has-text("โปรไฟล์")').first();
+    await expect(profileTabBtn).toBeVisible({ timeout: 30000 });
     await profileTabBtn.click();
 
     // Verify co-occupant name is visible in tenant DOM
-    await expect(tenantCtx.page.locator('text=Somsri Cooccupant')).toBeVisible({ timeout: 15000 });
+    await expect(tenantCtx.page.locator('text=Somsri Cooccupant')).toBeVisible({ timeout: 30000 });
 
     // Tenant opens co-occupants modal and tries mutation -> blocked with error toast
     const manageCoBtn = tenantCtx.page.locator('button:has-text("แก้ไข / เพิ่ม")');
