@@ -1107,6 +1107,10 @@ test.describe('LOCAL-04 — Master Cross-Portal Playwright Acceptance Suite (Jou
     await oldTenantCtx.page.goto('/tenant');
     await oldTenantCtx.page.waitForLoadState('networkidle');
 
+    const notifBellBtn = oldTenantCtx.page.locator('button[aria-label="การแจ้งเตือน"]').first();
+    await expect(notifBellBtn).toBeVisible({ timeout: 15000 });
+    await notifBellBtn.click();
+
     await expect(oldTenantCtx.page.locator('text=แจ้งยุติสัญญาเช่า').first()).toBeVisible({ timeout: 15000 });
 
     // 6. Owner confirms settlement refund in Settlements UI (net > 0: PENDING_REFUND -> REFUNDED)
