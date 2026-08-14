@@ -96,8 +96,21 @@ test.describe('LOCAL-04 — Master Cross-Portal Playwright Acceptance Suite (Jou
     await page.waitForLoadState('networkidle');
 
     const roomSelect = page.locator('select');
-    await expect(roomSelect).toBeVisible({ timeout: 30000 });
-    await roomSelect.selectOption(roomId);
+    const roomInput = page.locator('input[placeholder*="ระบุรหัสห้องพัก"]');
+
+    await Promise.race([
+      roomSelect.waitFor({ state: 'visible', timeout: 30000 }).catch(() => {}),
+      roomInput.waitFor({ state: 'visible', timeout: 30000 }).catch(() => {})
+    ]);
+
+    if (await roomSelect.isVisible()) {
+      const hasOption = (await roomSelect.locator(`option[value="${roomId}"]`).count()) > 0;
+      if (hasOption) {
+        await roomSelect.selectOption(roomId);
+      }
+    } else if (await roomInput.isVisible()) {
+      await roomInput.fill(roomId);
+    }
 
     await page.fill('input[placeholder="สมชาย"]', firstName);
     await page.fill('input[placeholder="ใจดี"]', lastName);

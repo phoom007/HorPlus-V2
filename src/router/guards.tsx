@@ -105,8 +105,12 @@ export const TenantAuthGuard: React.FC<{ children?: React.ReactNode }> = ({ chil
     fetch('/api/v1/tenant-portal/profile', { credentials: 'include' })
       .then(res => res.ok ? res.json() : null)
       .then(json => {
-        const tenantData = json?.data?.tenant || (json?.id ? json : null);
-        if (tenantData) {
+        const rawTenant = json?.data?.tenant || (json?.id ? json : null);
+        if (rawTenant) {
+          const tenantData = {
+            ...rawTenant,
+            name: rawTenant.displayName || `${rawTenant.firstName || ''} ${rawTenant.lastName || ''}`.trim() || rawTenant.name || 'ผู้เช่า'
+          };
           setSession({ userType: 'tenant', tenant: tenantData, user: tenantData });
         } else {
           setSession(null);

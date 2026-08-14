@@ -319,7 +319,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
     setFinancialError(null);
 
     try {
-      const profileRes = await fetch('/api/v1/tenant-portal/profile');
+      const profileRes = await fetch('/api/v1/tenant-portal/profile', { credentials: 'include' });
       if (profileRes.ok) {
         const profile = await profileRes.json();
         if (profile) {
@@ -361,7 +361,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
     setBuildings([]);
 
     try {
-      const ctrRes = await fetch('/api/v1/tenant-portal/contract');
+      const ctrRes = await fetch('/api/v1/tenant-portal/contract', { credentials: 'include' });
       if (ctrRes.ok) {
         const ctrJson = await ctrRes.json();
         if (ctrJson.data) {
@@ -396,7 +396,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
     } catch (e) {}
 
     try {
-      const res = await fetch('/api/v1/tenant-portal/bills');
+      const res = await fetch('/api/v1/tenant-portal/bills', { credentials: 'include' });
       if (res.ok) {
         const json = await res.json();
         if (json.data) {
