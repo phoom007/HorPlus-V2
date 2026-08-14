@@ -30,15 +30,17 @@ export class TenantRegistrationService {
 
     let requestedRoomId: string = payload.requestedRoomId;
     if (payload.requestedRoomId) {
+      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(payload.requestedRoomId);
       const room = await prisma.room.findFirst({
         where: {
           dormitoryId,
           deletedAt: null,
-          OR: [
-            { id: payload.requestedRoomId },
-            { roomNumber: payload.requestedRoomId },
-            { normalizedRoomNumber: payload.requestedRoomId.toUpperCase() },
-          ],
+          OR: isUuid
+            ? [{ id: payload.requestedRoomId }]
+            : [
+                { roomNumber: payload.requestedRoomId },
+                { normalizedRoomNumber: payload.requestedRoomId.toUpperCase() },
+              ],
         },
       });
       if (!room) {

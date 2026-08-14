@@ -6,8 +6,8 @@ This document establishes the comprehensive, authoritative inventory of all scre
 
 ## Inventory Summary
 
-- **Total Inventory Items**: 78
-- **In-Scope Local Items**: 73
+- **Total Inventory Items**: 87
+- **In-Scope Local Items**: 82
 - **Deferred External Integrations**: 5 (Real LINE OA webhook, LIFF SDK, LINE Messaging API Push, SlipOK live API, PromptPay bank switch)
 - **Roles Covered**: `OWNER`, `MANAGER`, `TECH`, `TENANT`, `PUBLIC` / `APPLICANT`
 - **Portals Covered**: Public Portal, Owner Workspace, Tenant Portal, Staff Access
@@ -55,7 +55,7 @@ This document establishes the comprehensive, authoritative inventory of all scre
 | **INV-OWN-025** | OWNER / MGR | Owner Workspace | Contracts | `/owner/contracts` | Contract Renewal Review | Review tenant renewal requests (Approve / Reject) | Click approve renewal / enter reject reason | Mutation | OWNER, MANAGER | `POST /api/v1/contract-renewals/requests/:id/approve`, `POST /api/v1/contract-renewals/requests/:id/reject` | Contract Renewal Service | YES (`contract_renewal_requests`, `contracts`) | Generates chained renewal contract linked to previousContractId | YES | NONE | IN_SCOPE |
 | **INV-OWN-026** | OWNER / MGR | Owner Workspace | Contracts | `/owner/contracts` | Contract PDF & Print | View printable lease agreement with signatures | Click print / download | Read | OWNER, MANAGER | Client Print View | UI State | NO | Printable PDF rendering | YES | NONE | IN_SCOPE |
 | **INV-OWN-027** | OWNER / MGR | Owner Workspace | Contracts | `/owner/contracts` | Settlement Statement | View deposit settlement calculation & update payment status | Click view settlement / record settlement paid | Mutation | OWNER, MANAGER | `GET /api/v1/settlements/:contractId`, `POST /api/v1/settlements/:contractId/settle` | Settlement Service | YES (`settlements`, `contracts`) | Finalizes contract deposit reconciliation | YES | NONE | IN_SCOPE |
-| **INV-OWN-028** | OWNER / MGR / TECH | Owner Workspace | Meters | `/owner/meters` | Meter Reading Table | Enter water & electricity readings for active billing cycle | Enter current readings & save | Mutation | OWNER, MANAGER, TECH | `GET /api/v1/meters/readings`, `POST /api/v1/meters/readings` | Meter Service | YES (`meter_readings`, `meter_devices`) | Updates room meter consumption & generates draft bills | YES | NONE | IN_SCOPE |
+| **INV-OWN-028** | OWNER / MGR / TECH | Owner Workspace | Meters | `/owner/meters` | Meter Reading Table | Enter water & electricity readings, view/edit peopleCount for cycle (Bill issuance is separate action; unpaid bills auto-recalculate) | Enter current readings, edit peopleCount & save | Mutation | OWNER, MANAGER, TECH | `GET /api/v1/meters/readings`, `POST /api/v1/meters/readings` | Meter & Billing Orchestration Services | YES (`meter_readings`, `meter_devices`, `room_billing_cycle_snapshots`) | Updates room meter consumption & people-count snapshot | YES | NONE | IN_SCOPE |
 | **INV-OWN-029** | OWNER / MGR / TECH | Owner Workspace | Meters | `/owner/meters` | Lower Reading Validation | Prevents entering Current Reading < Previous Reading | Visual warning & server rejection | Mutation / Guard | OWNER, MANAGER, TECH | `POST /api/v1/meters/readings` | Meter Service | YES (`meter_readings`) | Rejects invalid negative consumption | YES | NONE | IN_SCOPE |
 | **INV-OWN-030** | OWNER / MGR / TECH | Owner Workspace | Meters | `/owner/meters` | Cycle Switcher | Switch between monthly billing cycles | Click prev / next cycle | Read | OWNER, MANAGER, TECH | `GET /api/v1/billing-cycles` | Billing Cycle Service | YES (`billing_cycles`) | Reloads cycle-specific meter readings | YES | NONE | IN_SCOPE |
 | **INV-OWN-031** | OWNER / MGR | Owner Workspace | Payments | `/owner/payments` | Checking Tab | Review pending payment slips submitted by tenants | View slip image & bill details | Read | OWNER, MANAGER | `GET /api/v1/payments?status=UNDER_REVIEW` | Payment Service | YES (`payments`, `bills`) | Lists pending tenant slips | YES | NONE | IN_SCOPE |
@@ -110,7 +110,7 @@ This document establishes the comprehensive, authoritative inventory of all scre
 
 ## Approved Boundary & Scope Confirmation
 
-1. **In-Scope Local Inventory**: Exactly 73 items covering 100% of the active local application across Owner Workspace, Tenant Portal, Public Portal, and Staff Access.
+1. **In-Scope Local Inventory**: Exactly 82 items covering 100% of the active local application across Owner Workspace, Tenant Portal, Public Portal, and Staff Access.
 2. **Deferred External Scope**: Exactly 5 integration items cleanly segregated under `DEFERRED_EXTERNAL`.
 3. **In-Memory Domains**: Maintenance & Announcements are formally recognized as In-Memory per approved product boundary (no claim of server-restart persistence).
 4. **PostgreSQL Authoritative**: All core transactional entities (Auth, Dormitories, Buildings, Rooms, Tenants, Co-Occupants, Contracts, Contract Snapshots, Meter Readings, Bills, Bill Items, Payments, Receipts, Settlements, Staff Grants, Subscriptions, Notifications) are backed by PostgreSQL on port 5455.

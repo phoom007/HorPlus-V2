@@ -121,7 +121,7 @@ test.describe('HORPLUS LOCAL-06 — Master Local Product Acceptance Suite', () =
         dormitoryId: dormId,
         code: 'TECH',
         name: 'Technician',
-        permissions: ['maintenance:*', 'meters:read', 'meters:write'],
+        permissions: ['meters:*', 'maintenance:*'],
       },
     });
 
@@ -130,7 +130,7 @@ test.describe('HORPLUS LOCAL-06 — Master Local Product Acceptance Suite', () =
         dormitoryId: dormId,
         code: 'TENANT',
         name: 'Tenant',
-        permissions: ['tenant:*'],
+        permissions: ['tenant-portal:*'],
       },
     });
 
@@ -170,9 +170,9 @@ test.describe('HORPLUS LOCAL-06 — Master Local Product Acceptance Suite', () =
     // 4. Manager User
     managerUser = await prisma.user.create({
       data: {
-        googleSubject: `manager-uat-${timestamp}`,
-        email: `manager-uat-${timestamp}@example.com`,
-        emailNormalized: `manager-uat-${timestamp}@example.com`,
+        googleSubject: `mgr-uat-${timestamp}`,
+        email: `mgr-uat-${timestamp}@example.com`,
+        emailNormalized: `mgr-uat-${timestamp}@example.com`,
         name: 'Master UAT Manager',
         status: 'active',
       },
@@ -480,16 +480,20 @@ test.describe('HORPLUS LOCAL-06 — Master Local Product Acceptance Suite', () =
     await page.goto('/tenant/register');
     await page.waitForLoadState('networkidle');
 
-    const nameInput = page.locator('input[placeholder*="สมชาย"]');
-    if (await nameInput.isVisible()) {
-      await nameInput.fill('Applicant Test');
-      await page.locator('input[placeholder*="08"]').first().fill('0899999999');
-      const submitBtn = page.locator('button[type="submit"]');
-      if (await submitBtn.isEnabled()) {
-        await submitBtn.click();
-        await expect(page.locator('text=ส่งคำขอลงทะเบียนเรียบร้อยแล้ว').first()).toBeVisible({ timeout: 10000 });
-      }
+    const roomInput = page.locator('input[placeholder*="A101"]');
+    if (await roomInput.isVisible()) {
+      await roomInput.fill('102');
     }
+
+    const nameInput = page.locator('input[placeholder*="สมชาย"]');
+    await expect(nameInput).toBeVisible({ timeout: 10000 });
+    await nameInput.fill('Applicant');
+    await page.locator('input[placeholder*="ใจดี"]').fill('Test');
+    await page.locator('input[placeholder*="08"]').first().fill('0899999999');
+    const submitBtn = page.locator('button[type="submit"]');
+    await expect(submitBtn).toBeEnabled({ timeout: 10000 });
+    await submitBtn.click();
+    await expect(page.locator('text=ส่งคำขอลงทะเบียนเรียบร้อยแล้ว').first()).toBeVisible({ timeout: 10000 });
   });
 
   test('UAT-PUB-010: Staff Access Token Redemption exchanges bearer token', async ({ page, context }) => {
@@ -541,39 +545,36 @@ test.describe('HORPLUS LOCAL-06 — Master Local Product Acceptance Suite', () =
     await setupSession(context, page, sessionTokenOwner, csrfTokenOwner, dormId);
     await page.goto('/owner/dashboard');
     const vacantPill = page.locator('button:has-text("ว่าง")').first();
-    if (await vacantPill.isVisible()) {
-      await vacantPill.click();
-    }
+    await expect(vacantPill).toBeVisible({ timeout: 10000 });
+    await vacantPill.click();
     await expect(page.locator('#owner-main-content')).toBeVisible({ timeout: 10000 });
   });
 
   test('UAT-OWN-DASH-003: Dashboard opens unpaid bills modal', async ({ page, context }) => {
     await setupSession(context, page, sessionTokenOwner, csrfTokenOwner, dormId);
     await page.goto('/owner/dashboard');
+    await expect(page.locator('#owner-main-content')).toBeVisible({ timeout: 10000 });
     const unpaidBtn = page.locator('button:has-text("ค้างชำระ"), div:has-text("ค้างชำระ")').first();
-    if (await unpaidBtn.isVisible()) {
-      await unpaidBtn.click();
-    }
+    await expect(unpaidBtn).toBeVisible({ timeout: 10000 });
+    await unpaidBtn.click();
   });
 
   test('UAT-OWN-DASH-004: Dashboard quick action navigates to Meters', async ({ page, context }) => {
     await setupSession(context, page, sessionTokenOwner, csrfTokenOwner, dormId);
     await page.goto('/owner/dashboard');
     const metersBtn = page.locator('button:has-text("จดมิเตอร์")').first();
-    if (await metersBtn.isVisible()) {
-      await metersBtn.click();
-      await expect(page).toHaveURL(/.*owner\/meters.*/);
-    }
+    await expect(metersBtn).toBeVisible({ timeout: 10000 });
+    await metersBtn.click();
+    await expect(page).toHaveURL(/.*owner\/meters.*/);
   });
 
   test('UAT-OWN-DASH-005: Dashboard quick action navigates to Invoices/Payments', async ({ page, context }) => {
     await setupSession(context, page, sessionTokenOwner, csrfTokenOwner, dormId);
     await page.goto('/owner/dashboard');
     const invoiceBtn = page.locator('button:has-text("ออกบิล")').first();
-    if (await invoiceBtn.isVisible()) {
-      await invoiceBtn.click();
-      await expect(page).toHaveURL(/.*owner\/(payments|meters).*/);
-    }
+    await expect(invoiceBtn).toBeVisible({ timeout: 10000 });
+    await invoiceBtn.click();
+    await expect(page).toHaveURL(/.*owner\/(payments|meters).*/);
   });
 
   test('UAT-OWN-DASH-006: Dashboard displays subscription banner and remaining days', async ({ page, context }) => {
@@ -585,20 +586,21 @@ test.describe('HORPLUS LOCAL-06 — Master Local Product Acceptance Suite', () =
   test('UAT-OWN-DASH-007: Header global search filters rooms and tenants', async ({ page, context }) => {
     await setupSession(context, page, sessionTokenOwner, csrfTokenOwner, dormId);
     await page.goto('/owner/dashboard');
-    const searchInput = page.locator('input[placeholder*="ค้นหา"]').first();
-    if (await searchInput.isVisible()) {
-      await searchInput.fill('101');
-      await expect(page.locator('text=101').first()).toBeVisible();
-    }
+    const searchBtn = page.locator('button[title*="ค้นหา"]').filter({ visible: true });
+    await expect(searchBtn).toBeVisible({ timeout: 10000 });
+    await searchBtn.click();
+    const searchInput = page.locator('input[placeholder*="ค้นหา"]').filter({ visible: true }).first();
+    await expect(searchInput).toBeVisible({ timeout: 10000 });
+    await searchInput.fill('101');
+    await expect(page.locator('button:has-text("101")').filter({ visible: true }).first()).toBeVisible({ timeout: 10000 });
   });
 
   test('UAT-OWN-DASH-008: Header notification tray marks notifications as read', async ({ page, context }) => {
     await setupSession(context, page, sessionTokenOwner, csrfTokenOwner, dormId);
     await page.goto('/owner/dashboard');
-    const bellBtn = page.locator('button[title*="แจ้งเตือน"], button:has-text("แจ้งเตือน"), button:has(.lucide-bell)').first();
-    if (await bellBtn.isVisible()) {
-      await bellBtn.click();
-    }
+    const bellBtn = page.locator('[data-testid="button-staff-notification-bell"]').filter({ visible: true });
+    await expect(bellBtn).toBeVisible({ timeout: 10000 });
+    await bellBtn.click();
     await expect(page.locator('body')).toBeVisible();
   });
 
@@ -615,41 +617,38 @@ test.describe('HORPLUS LOCAL-06 — Master Local Product Acceptance Suite', () =
   test('UAT-OWN-ROOM-002: Rooms availability search checks vacant rooms by date range', async ({ page, context }) => {
     await setupSession(context, page, sessionTokenOwner, csrfTokenOwner, dormId);
     await page.goto('/owner/rooms');
-    const checkAvailBtn = page.locator('button:has-text("ตรวจสอบห้องว่าง")').first();
-    if (await checkAvailBtn.isVisible()) {
-      await checkAvailBtn.click();
-    }
+    const checkAvailBtn = page.locator('button[data-testid="btn-search-availability"], button:has-text("ค้นหาห้องว่าง")').first();
+    await expect(checkAvailBtn).toBeVisible({ timeout: 10000 });
+    await checkAvailBtn.click();
   });
 
   test('UAT-OWN-ROOM-003: Rooms page creates new room with pricing and meters', async ({ page, context }) => {
     await setupSession(context, page, sessionTokenOwner, csrfTokenOwner, dormId);
     await page.goto('/owner/rooms');
     const addRoomBtn = page.locator('button:has-text("เพิ่มห้อง"), button:has-text("เพิ่มห้องพัก")').first();
-    if (await addRoomBtn.isVisible()) {
-      await addRoomBtn.click();
-    }
+    await expect(addRoomBtn).toBeVisible({ timeout: 10000 });
+    await addRoomBtn.click();
   });
 
   test('UAT-OWN-ROOM-004: Rooms page edits room pricing and details', async ({ page, context }) => {
     await setupSession(context, page, sessionTokenOwner, csrfTokenOwner, dormId);
     await page.goto('/owner/rooms');
     const roomCard = page.locator('text=102').first();
-    await expect(roomCard).toBeVisible();
+    await expect(roomCard).toBeVisible({ timeout: 10000 });
   });
 
   test('UAT-OWN-ROOM-005: Rooms page blocks deleting room with active contract', async ({ page, context }) => {
     await setupSession(context, page, sessionTokenOwner, csrfTokenOwner, dormId);
     await page.goto('/owner/rooms');
-    await expect(page.locator('text=101').first()).toBeVisible();
+    await expect(page.locator('text=101').first()).toBeVisible({ timeout: 10000 });
   });
 
   test('UAT-OWN-ROOM-006: Rooms page manages buildings and floors', async ({ page, context }) => {
     await setupSession(context, page, sessionTokenOwner, csrfTokenOwner, dormId);
     await page.goto('/owner/rooms');
-    const bldBtn = page.locator('button:has-text("จัดการอาคาร"), button:has-text("เพิ่มอาคาร")').first();
-    if (await bldBtn.isVisible()) {
-      await bldBtn.click();
-    }
+    const bldBtn = page.locator('button[data-testid="btn-edit-building"], button:has-text("ตั้งค่าอาคาร")').first();
+    await expect(bldBtn).toBeVisible({ timeout: 10000 });
+    await bldBtn.click();
   });
 
   // ==========================================
@@ -666,41 +665,41 @@ test.describe('HORPLUS LOCAL-06 — Master Local Product Acceptance Suite', () =
     await setupSession(context, page, sessionTokenOwner, csrfTokenOwner, dormId);
     await page.goto('/owner/tenants');
     const addTenantBtn = page.locator('button:has-text("เพิ่มผู้เช่า")').first();
-    if (await addTenantBtn.isVisible()) {
-      await addTenantBtn.click();
-    }
+    await expect(addTenantBtn).toBeVisible({ timeout: 10000 });
+    await addTenantBtn.click();
   });
 
   test('UAT-OWN-TNT-003: Tenant profile displays personal details and ID card view', async ({ page, context }) => {
     await setupSession(context, page, sessionTokenOwner, csrfTokenOwner, dormId);
     await page.goto('/owner/tenants');
     const tenantItem = page.locator('text=Somchai Jaidee').first();
+    await expect(tenantItem).toBeVisible({ timeout: 10000 });
     await tenantItem.click();
-    await expect(page.locator('text=101').first()).toBeVisible();
+    await expect(page.locator('text=101').first()).toBeVisible({ timeout: 10000 });
   });
 
   test('UAT-OWN-TNT-004: Tenant profile edits tenant contact information', async ({ page, context }) => {
     await setupSession(context, page, sessionTokenOwner, csrfTokenOwner, dormId);
     await page.goto('/owner/tenants');
-    await expect(page.locator('text=Somchai Jaidee').first()).toBeVisible();
+    await expect(page.locator('text=Somchai Jaidee').first()).toBeVisible({ timeout: 10000 });
   });
 
   test('UAT-OWN-TNT-005: Tenant lease termination initiates move-out settlement', async ({ page, context }) => {
     await setupSession(context, page, sessionTokenOwner, csrfTokenOwner, dormId);
     await page.goto('/owner/tenants');
-    await expect(page.locator('text=Somchai Jaidee').first()).toBeVisible();
+    await expect(page.locator('text=Somchai Jaidee').first()).toBeVisible({ timeout: 10000 });
   });
 
   test('UAT-OWN-TNT-006: Tenant room transfer moves tenant to vacant room', async ({ page, context }) => {
     await setupSession(context, page, sessionTokenOwner, csrfTokenOwner, dormId);
     await page.goto('/owner/tenants');
-    await expect(page.locator('text=Somchai Jaidee').first()).toBeVisible();
+    await expect(page.locator('text=Somchai Jaidee').first()).toBeVisible({ timeout: 10000 });
   });
 
   test('UAT-OWN-TNT-007: Tenants review registration requests approves applicant', async ({ page, context }) => {
     await setupSession(context, page, sessionTokenOwner, csrfTokenOwner, dormId);
     await page.goto('/owner/tenants');
-    await expect(page.locator('#owner-main-content')).toBeVisible();
+    await expect(page.locator('#owner-main-content')).toBeVisible({ timeout: 10000 });
   });
 
   // ==========================================
@@ -717,9 +716,8 @@ test.describe('HORPLUS LOCAL-06 — Master Local Product Acceptance Suite', () =
     await setupSession(context, page, sessionTokenOwner, csrfTokenOwner, dormId);
     await page.goto('/owner/contracts');
     const newContractBtn = page.locator('button:has-text("สร้างสัญญาเช่า"), button:has-text("ทำสัญญา")').first();
-    if (await newContractBtn.isVisible()) {
-      await newContractBtn.click();
-    }
+    await expect(newContractBtn).toBeVisible({ timeout: 10000 });
+    await newContractBtn.click();
   });
 
   test('UAT-OWN-CTR-003: Forced replacement guard warns on overwriting active contract', async ({ page, context }) => {
@@ -794,18 +792,16 @@ test.describe('HORPLUS LOCAL-06 — Master Local Product Acceptance Suite', () =
     await setupSession(context, page, sessionTokenOwner, csrfTokenOwner, dormId);
     await page.goto('/owner/payments');
     const cashTab = page.locator('button:has-text("เงินสด")').first();
-    if (await cashTab.isVisible()) {
-      await cashTab.click();
-    }
+    await expect(cashTab).toBeVisible({ timeout: 10000 });
+    await cashTab.click();
   });
 
   test('UAT-OWN-PAY-005: Payments reverses approved payment and voids receipt', async ({ page, context }) => {
     await setupSession(context, page, sessionTokenOwner, csrfTokenOwner, dormId);
     await page.goto('/owner/payments');
     const paidTab = page.locator('button:has-text("ชำระแล้ว")').first();
-    if (await paidTab.isVisible()) {
-      await paidTab.click();
-    }
+    await expect(paidTab).toBeVisible({ timeout: 10000 });
+    await paidTab.click();
   });
 
   test('UAT-OWN-PAY-006: Paid history displays official receipt preview', async ({ page, context }) => {
@@ -828,9 +824,8 @@ test.describe('HORPLUS LOCAL-06 — Master Local Product Acceptance Suite', () =
     await setupSession(context, page, sessionTokenOwner, csrfTokenOwner, dormId);
     await page.goto('/owner/maintenance');
     const addRepairBtn = page.locator('button:has-text("แจ้งซ่อม"), button:has-text("เพิ่มรายการ")').first();
-    if (await addRepairBtn.isVisible()) {
-      await addRepairBtn.click();
-    }
+    await expect(addRepairBtn).toBeVisible({ timeout: 10000 });
+    await addRepairBtn.click();
   });
 
   test('UAT-OWN-MNT-003: Maintenance updates ticket status and records repair cost', async ({ page, context }) => {
@@ -852,10 +847,9 @@ test.describe('HORPLUS LOCAL-06 — Master Local Product Acceptance Suite', () =
   test('UAT-OWN-ANN-002: Announcements creates and pins dormitory broadcast', async ({ page, context }) => {
     await setupSession(context, page, sessionTokenOwner, csrfTokenOwner, dormId);
     await page.goto('/owner/announcements');
-    const addAnnBtn = page.locator('button:has-text("สร้างประกาศ"), button:has-text("เพิ่มประกาศ")').first();
-    if (await addAnnBtn.isVisible()) {
-      await addAnnBtn.click();
-    }
+    const addAnnBtn = page.locator('button:has-text("เขียนประกาศ"), button:has-text("สร้างประกาศ"), button:has-text("เพิ่มประกาศ")').first();
+    await expect(addAnnBtn).toBeVisible({ timeout: 10000 });
+    await addAnnBtn.click();
   });
 
   test('UAT-OWN-ANN-003: Announcements deletes published broadcast', async ({ page, context }) => {
@@ -884,9 +878,8 @@ test.describe('HORPLUS LOCAL-06 — Master Local Product Acceptance Suite', () =
     await setupSession(context, page, sessionTokenOwner, csrfTokenOwner, dormId);
     await page.goto('/owner/reports');
     const exportBtn = page.locator('button:has-text("Export"), button:has-text("ส่งออก")').first();
-    if (await exportBtn.isVisible()) {
-      await exportBtn.click();
-    }
+    await expect(exportBtn).toBeVisible({ timeout: 10000 });
+    await exportBtn.click();
   });
 
   // ==========================================
@@ -900,12 +893,21 @@ test.describe('HORPLUS LOCAL-06 — Master Local Product Acceptance Suite', () =
   });
 
   test('UAT-OWN-USR-002: Staff access creates bearer access grant for LINE Friend', async ({ page, context }) => {
+    await prisma.dormitoryLineFriend.create({
+      data: {
+        dormitoryId: dormId,
+        lineUserIdHash: crypto.createHash('sha256').update(`U_TEST_${Date.now()}`).digest('hex'),
+        lineUserIdEncrypted: 'enc-dummy',
+        displayName: 'Somchai Line Friend',
+        friendStatus: 'FOLLOWING',
+      },
+    });
+
     await setupSession(context, page, sessionTokenOwner, csrfTokenOwner, dormId);
     await page.goto('/owner/users');
-    const createGrantBtn = page.locator('button:has-text("สร้างสิทธิ์เข้าใช้งาน")').first();
-    if (await createGrantBtn.isVisible()) {
-      await createGrantBtn.click();
-    }
+    const createGrantBtn = page.locator('button[data-testid="create-grant-button"], button:has-text("สร้างสิทธิ์ Access Grant")').first();
+    await expect(createGrantBtn).toBeVisible({ timeout: 10000 });
+    await createGrantBtn.click();
   });
 
   test('UAT-OWN-USR-003: Staff access updates grant role (OWNER/MANAGER/TECH)', async ({ page, context }) => {
@@ -939,10 +941,9 @@ test.describe('HORPLUS LOCAL-06 — Master Local Product Acceptance Suite', () =
   test('UAT-OWN-SUB-002: Subscription redeems promo code for plan extension', async ({ page, context }) => {
     await setupSession(context, page, sessionTokenOwner, csrfTokenOwner, dormId);
     await page.goto('/owner/subscription');
-    const promoInput = page.locator('input[placeholder*="โค้ด"]').first();
-    if (await promoInput.isVisible()) {
-      await promoInput.fill('WELCOME2026');
-    }
+    const promoInput = page.locator('input[placeholder*="Enter promo code"], input[placeholder*="promo"]').first();
+    await expect(promoInput).toBeVisible({ timeout: 10000 });
+    await promoInput.fill('WELCOME2026');
   });
 
   test('UAT-OWN-SUB-003: Subscription selects package upgrade intent', async ({ page, context }) => {
@@ -1014,8 +1015,9 @@ test.describe('HORPLUS LOCAL-06 — Master Local Product Acceptance Suite', () =
   test('UAT-TNT-PAY-001: Tenant payments renders PromptPay QR and slip upload', async ({ page, context }) => {
     await setupSession(context, page, sessionTokenTenant, csrfTokenTenant, dormId);
     await page.goto('/tenant/invoice');
-    await expect(page.locator('button:has-text("แจ้งชำระเงิน")').first()).toBeVisible({ timeout: 10000 });
-    await page.locator('button:has-text("แจ้งชำระเงิน")').first().click();
+    const payBtn = page.locator('button:has-text("แจ้งชำระเงิน")').first();
+    await expect(payBtn).toBeVisible({ timeout: 10000 });
+    await payBtn.click();
     await expect(page.locator('text=ช่องทางการชำระเงิน').first()).toBeVisible({ timeout: 10000 });
   });
 
@@ -1041,9 +1043,8 @@ test.describe('HORPLUS LOCAL-06 — Master Local Product Acceptance Suite', () =
     await setupSession(context, page, sessionTokenTenant, csrfTokenTenant, dormId);
     await page.goto('/tenant/contract');
     const renewBtn = page.locator('button:has-text("ต่อสัญญา"), button:has-text("ขอต่อสัญญา")').first();
-    if (await renewBtn.isVisible()) {
-      await renewBtn.click();
-    }
+    await expect(renewBtn).toBeVisible({ timeout: 10000 });
+    await renewBtn.click();
   });
 
   test('UAT-TNT-HIS-001: Tenant payments history displays official receipt view', async ({ page, context }) => {
@@ -1067,28 +1068,25 @@ test.describe('HORPLUS LOCAL-06 — Master Local Product Acceptance Suite', () =
   test('UAT-TNT-PRF-002: Tenant profile manages co-occupants (Add / Delete)', async ({ page, context }) => {
     await setupSession(context, page, sessionTokenTenant, csrfTokenTenant, dormId);
     await page.goto('/tenant/profile');
-    const coBtn = page.locator('button:has-text("ผู้พักอาศัยร่วม")').first();
-    if (await coBtn.isVisible()) {
-      await coBtn.click();
-    }
+    const coBtn = page.locator('button:has-text("แก้ไข / เพิ่ม"), button:has-text("ผู้พักอาศัยร่วม")').first();
+    await expect(coBtn).toBeVisible({ timeout: 10000 });
+    await coBtn.click();
   });
 
   test('UAT-TNT-PRF-003: Tenant profile submits move-out notice', async ({ page, context }) => {
     await setupSession(context, page, sessionTokenTenant, csrfTokenTenant, dormId);
     await page.goto('/tenant/profile');
     const moveOutBtn = page.locator('button:has-text("แจ้งย้ายออก")').first();
-    if (await moveOutBtn.isVisible()) {
-      await moveOutBtn.click();
-    }
+    await expect(moveOutBtn).toBeVisible({ timeout: 10000 });
+    await moveOutBtn.click();
   });
 
   test('UAT-TNT-NTF-001: Tenant notification tray marks notices as read', async ({ page, context }) => {
     await setupSession(context, page, sessionTokenTenant, csrfTokenTenant, dormId);
     await page.goto('/tenant/dashboard');
-    const notifBtn = page.locator('button:has(.lucide-bell)').first();
-    if (await notifBtn.isVisible()) {
-      await notifBtn.click();
-    }
+    const notifBtn = page.locator('button[aria-label="การแจ้งเตือน"]').first();
+    await expect(notifBtn).toBeVisible({ timeout: 10000 });
+    await notifBtn.click();
   });
 
   // ==========================================
