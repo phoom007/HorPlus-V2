@@ -98,7 +98,19 @@ export async function httpRequest<T>(
   options: HttpClientOptions = {}
 ): Promise<T> {
   const baseUrl = getApiBaseUrl();
-  const url = buildRequestUrl(baseUrl, path);
+  let url = buildRequestUrl(baseUrl, path);
+  if (['GET', 'HEAD'].includes(method) && body && typeof body === 'object' && !(typeof FormData !== 'undefined' && body instanceof FormData)) {
+    const params = new URLSearchParams();
+    for (const [k, v] of Object.entries(body)) {
+      if (v !== undefined && v !== null) {
+        params.append(k, String(v));
+      }
+    }
+    const queryString = params.toString();
+    if (queryString) {
+      url += (url.includes('?') ? '&' : '?') + queryString;
+    }
+  }
 
   const isFormData = typeof FormData !== 'undefined' && body instanceof FormData;
 
@@ -137,10 +149,12 @@ export async function httpRequest<T>(
     signal: options.signal || controller.signal
   };
 
-  if (isFormData) {
-    fetchOptions.body = body;
-  } else if (body !== undefined) {
-    fetchOptions.body = JSON.stringify(body);
+  if (!['GET', 'HEAD'].includes(method)) {
+    if (isFormData) {
+      fetchOptions.body = body;
+    } else if (body !== undefined) {
+      fetchOptions.body = JSON.stringify(body);
+    }
   }
 
   try {

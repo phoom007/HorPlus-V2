@@ -234,7 +234,11 @@ test.describe.serial('LOCAL-02: E2E Contract Settlement, Termination & Renewal S
     // Fill renewal request form in real UI
     await page.fill('#renewalStartDateInput', '2026-10-01');
     await page.selectOption('#renewalDurationInput', '6');
+    const submitReqPromise = page.waitForResponse(
+      (res) => res.url().includes('/api/v1/contract-renewals') && res.request().method() === 'POST' && res.status() === 201
+    );
     await page.click('#submitRenewalRequestBtn');
+    await submitReqPromise;
 
     // Assert UI shows pending status badge
     await expect(page.locator('#renewalStatusBadge')).toContainText('รออนุมัติ');
@@ -266,7 +270,11 @@ test.describe.serial('LOCAL-02: E2E Contract Settlement, Termination & Renewal S
     }, dormId);
 
     // Open Owner Contracts UI via Browser
+    const renewalListPromise = page.waitForResponse(
+      (res) => res.url().includes('/api/v1/contract-renewals') && res.status() === 200
+    ).catch(() => null);
     await page.goto('/owner/contracts');
+    await renewalListPromise;
     await expect(page.locator('body')).toBeVisible();
 
     // 1. Locate Pending Renewal Request Queue section
@@ -287,7 +295,11 @@ test.describe.serial('LOCAL-02: E2E Contract Settlement, Termination & Renewal S
     await rentInput.fill('5500');
 
     // 5. Click "อนุมัติคำขอต่ออายุ" button
+    const approveResPromise = page.waitForResponse(
+      (res) => res.url().includes('/approve') && res.status() === 200
+    );
     await page.click('[data-testid="confirm-approve-renewal-btn"]');
+    await approveResPromise;
 
     // 6. DB Verification
     const scheduledContract = await prisma.contract.findFirst({
@@ -483,25 +495,18 @@ test.describe.serial('LOCAL-02: E2E Contract Settlement, Termination & Renewal S
     await page.goto('/owner/contracts');
     await expect(page.locator('body')).toBeVisible();
 
-    // Select contract A1 in UI list
-    const contractCard = page.locator('.p-4.rounded-2xl.border.cursor-pointer').first();
-    if (await contractCard.isVisible()) {
-      await contractCard.click();
-    }
+    // Select terminated contract in UI list
+    const contractCard = page.locator('div.cursor-pointer').filter({ hasText: 'ยกเลิกก่อนกำหนด' }).first();
+    await expect(contractCard).toBeVisible({ timeout: 15000 });
+    await contractCard.click();
 
     // 2. Open Settlement container
     const settlementContainer = page.locator('[data-testid="settlement-container"]');
     await expect(settlementContainer).toBeVisible();
 
-    // Click fetch/calculate if needed
-    const fetchBtn = page.locator('[data-testid="fetch-settlement-btn"]');
-    if (await fetchBtn.isVisible()) {
-      await fetchBtn.click();
-    }
-
     // 3. Click "+ เพิ่มรายการค่าเสียหาย"
     const addDamageBtn = page.locator('[data-testid="add-damage-item-btn"]');
-    await expect(addDamageBtn).toBeVisible();
+    await expect(addDamageBtn).toBeVisible({ timeout: 15000 });
     await addDamageBtn.click();
 
     // 4. Fill damage description and amount, then submit
@@ -543,12 +548,17 @@ test.describe.serial('LOCAL-02: E2E Contract Settlement, Termination & Renewal S
     // 11. Confirm settlement lock via UI button ("ยืนยันว่าคืนเงินจริงแล้ว" or "ยืนยันว่าได้รับชำระส่วนต่างแล้ว")
     const confirmRefundBtn = page.locator('[data-testid="confirm-refund-btn"]');
     const confirmPaymentBtn = page.locator('[data-testid="confirm-payment-btn"]');
+    await expect(confirmRefundBtn.or(confirmPaymentBtn)).toBeVisible({ timeout: 15000 });
 
+    const confirmResPromise = page.waitForResponse(
+      (res) => res.url().includes('/confirm') && res.status() === 200
+    );
     if (await confirmRefundBtn.isVisible()) {
       await confirmRefundBtn.click();
-    } else if (await confirmPaymentBtn.isVisible()) {
+    } else {
       await confirmPaymentBtn.click();
     }
+    await confirmResPromise;
 
     // 12. Assert locked status notice & mutation controls disabled
     await expect(page.locator('[data-testid="settlement-locked-notice"]')).toContainText('รายการนี้ยืนยันยอดแล้ว ไม่สามารถแก้ไขได้');
@@ -557,6 +567,9 @@ test.describe.serial('LOCAL-02: E2E Contract Settlement, Termination & Renewal S
     // 13. Reload page (F5) & assert state remains locked
     await page.reload();
     await expect(page.locator('body')).toBeVisible();
+    const contractCardAfter = page.locator('div.cursor-pointer').filter({ hasText: 'ยกเลิกก่อนกำหนด' }).first();
+    await expect(contractCardAfter).toBeVisible({ timeout: 15000 });
+    await contractCardAfter.click();
     await expect(page.locator('[data-testid="settlement-locked-notice"]')).toContainText('รายการนี้ยืนยันยอดแล้ว ไม่สามารถแก้ไขได้');
   });
 });

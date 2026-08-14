@@ -88,6 +88,7 @@ test.describe.serial('LOCAL-01 — Tenant Onboarding & Co-Occupant Management E2
         buildingId: buildingA.id,
         roomNumber: 'A101',
         normalizedRoomNumber: 'A101',
+        roomType: 'standard',
         floor: 1,
         status: 'vacant',
         monthlyRent: '4500',
@@ -101,6 +102,7 @@ test.describe.serial('LOCAL-01 — Tenant Onboarding & Co-Occupant Management E2
         buildingId: buildingA.id,
         roomNumber: 'A102',
         normalizedRoomNumber: 'A102',
+        roomType: 'standard',
         floor: 1,
         status: 'vacant',
         monthlyRent: '4800',
@@ -394,7 +396,7 @@ test.describe.serial('LOCAL-01 — Tenant Onboarding & Co-Occupant Management E2
     });
     const roomNumberA = `RB-A-${Date.now()}`;
     const roomForA = await prisma.room.create({
-      data: { dormitoryId: dormIdA, buildingId: buildingIdA, roomNumber: roomNumberA, normalizedRoomNumber: roomNumberA, status: 'occupied', monthlyRent: '5000' },
+      data: { dormitoryId: dormIdA, buildingId: buildingIdA, roomNumber: roomNumberA, normalizedRoomNumber: roomNumberA, roomType: 'standard', status: 'occupied', monthlyRent: '5000' },
     });
     await prisma.occupancy.create({
       data: { dormitoryId: dormIdA, roomId: roomForA.id, tenantId: tenantA.id, status: 'ACTIVE', startedAt: new Date() },
@@ -413,7 +415,7 @@ test.describe.serial('LOCAL-01 — Tenant Onboarding & Co-Occupant Management E2
     });
     const roomNumberB = `RB-B-${Date.now()}`;
     const roomForB = await prisma.room.create({
-      data: { dormitoryId: dormIdA, buildingId: buildingIdA, roomNumber: roomNumberB, normalizedRoomNumber: roomNumberB, status: 'occupied', monthlyRent: '5000' },
+      data: { dormitoryId: dormIdA, buildingId: buildingIdA, roomNumber: roomNumberB, normalizedRoomNumber: roomNumberB, roomType: 'standard', status: 'occupied', monthlyRent: '5000' },
     });
     await prisma.occupancy.create({
       data: { dormitoryId: dormIdA, roomId: roomForB.id, tenantId: tenantB.id, status: 'ACTIVE', startedAt: new Date() },

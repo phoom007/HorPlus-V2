@@ -185,6 +185,7 @@ test.describe.serial('Payment & Receipt Operational Lifecycle E2E Suite', () => 
           buildingId: bld.id,
           roomNumber: 'A101',
           normalizedRoomNumber: 'A101',
+          roomType: 'standard',
           floor: 1,
           monthlyRent: 5000,
           status: 'OCCUPIED',

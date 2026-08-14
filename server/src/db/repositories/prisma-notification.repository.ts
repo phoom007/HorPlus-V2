@@ -19,6 +19,10 @@ export interface InAppNotificationEntity {
   createdAt: Date;
 }
 
+const isUuid = (val: unknown): val is string => {
+  return typeof val === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val);
+};
+
 export class PrismaNotificationRepository {
   constructor(private client: PrismaClient = getPrismaClient()) {}
 
@@ -40,7 +44,7 @@ export class PrismaNotificationRepository {
         category: data.category,
         title: data.title,
         message: data.message,
-        metadata: data.metadata || undefined,
+        metadata: data.metadata || null,
         sourceOutboxId: data.sourceOutboxId || null,
       },
     });
@@ -69,7 +73,7 @@ export class PrismaNotificationRepository {
   }
 
   public async listForStaff(dormitoryId: string, userId?: string, roleCode?: string): Promise<InAppNotificationEntity[]> {
-    if (!userId) return [];
+    if (!isUuid(dormitoryId) || !isUuid(userId)) return [];
 
     const rows = await this.client.staffNotification.findMany({
       where: {
@@ -100,7 +104,7 @@ export class PrismaNotificationRepository {
   }
 
   public async listForTenant(dormitoryId: string, tenantId: string): Promise<InAppNotificationEntity[]> {
-    if (!tenantId) return [];
+    if (!isUuid(dormitoryId) || !isUuid(tenantId)) return [];
 
     const rows = await this.client.tenantNotice.findMany({
       where: {
@@ -128,10 +132,11 @@ export class PrismaNotificationRepository {
   }
 
   public async markAsRead(dormitoryId: string, id: string, userId?: string, tenantId?: string): Promise<InAppNotificationEntity | null> {
+    if (!isUuid(dormitoryId) || !isUuid(id)) return null;
     const now = new Date();
 
     // Check staff_notices first if userId is provided
-    if (userId) {
+    if (isUuid(userId)) {
       const staffNotice = await this.client.staffNotification.findFirst({
         where: { id, dormitoryId, userId },
       });
@@ -161,7 +166,7 @@ export class PrismaNotificationRepository {
     }
 
     // Check tenant_notices if tenantId is provided or generic match
-    if (tenantId) {
+    if (isUuid(tenantId)) {
       const tenantNotice = await this.client.tenantNotice.findFirst({
         where: { id, dormitoryId, tenantId },
       });
@@ -190,7 +195,7 @@ export class PrismaNotificationRepository {
 
     // Fallback search by dormitoryId + userId/tenantId
     const staffNoticeFallback = await this.client.staffNotification.findFirst({
-      where: { id, dormitoryId, ...(userId ? { userId } : {}) },
+      where: { id, dormitoryId, ...(isUuid(userId) ? { userId } : {}) },
     });
     if (staffNoticeFallback) {
       const updated = await this.client.staffNotification.update({
@@ -217,7 +222,7 @@ export class PrismaNotificationRepository {
     }
 
     const tenantNoticeFallback = await this.client.tenantNotice.findFirst({
-      where: { id, dormitoryId, ...(tenantId ? { tenantId } : {}) },
+      where: { id, dormitoryId, ...(isUuid(tenantId) ? { tenantId } : {}) },
     });
     if (tenantNoticeFallback) {
       const updated = await this.client.tenantNotice.update({
@@ -245,6 +250,7 @@ export class PrismaNotificationRepository {
   }
 
   public async dismissStaffNotice(dormitoryId: string, id: string, userId: string): Promise<boolean> {
+    if (!isUuid(dormitoryId) || !isUuid(id) || !isUuid(userId)) return false;
     const notice = await this.client.staffNotification.findFirst({
       where: { id, dormitoryId, userId },
     });
@@ -258,7 +264,7 @@ export class PrismaNotificationRepository {
   }
 
   public async markAllAsReadForStaff(dormitoryId: string, userId?: string): Promise<number> {
-    if (!userId) return 0;
+    if (!isUuid(dormitoryId) || !isUuid(userId)) return 0;
     const now = new Date();
     const result = await this.client.staffNotification.updateMany({
       where: { dormitoryId, userId, isRead: false, isDismissed: false },
@@ -268,7 +274,7 @@ export class PrismaNotificationRepository {
   }
 
   public async markAllAsReadForTenant(dormitoryId: string, tenantId: string): Promise<number> {
-    if (!tenantId) return 0;
+    if (!isUuid(dormitoryId) || !isUuid(tenantId)) return 0;
     const now = new Date();
     const result = await this.client.tenantNotice.updateMany({
       where: { dormitoryId, tenantId, isRead: false },
@@ -278,14 +284,14 @@ export class PrismaNotificationRepository {
   }
 
   public async getUnreadCountForStaff(dormitoryId: string, userId?: string): Promise<number> {
-    if (!userId) return 0;
+    if (!isUuid(dormitoryId) || !isUuid(userId)) return 0;
     return this.client.staffNotification.count({
       where: { dormitoryId, userId, isRead: false, isDismissed: false },
     });
   }
 
   public async getUnreadCountForTenant(dormitoryId: string, tenantId: string): Promise<number> {
-    if (!tenantId) return 0;
+    if (!isUuid(dormitoryId) || !isUuid(tenantId)) return 0;
     return this.client.tenantNotice.count({
       where: { dormitoryId, tenantId, isRead: false },
     });

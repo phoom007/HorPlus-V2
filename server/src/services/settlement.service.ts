@@ -44,7 +44,7 @@ export class SettlementService {
 
     let settlement = await prisma.contractSettlement.findFirst({
       where: { dormitoryId, contractId },
-      include: { items: { where: { isDeleted: false } } },
+      include: { items: { orderBy: { createdAt: 'asc' } } },
     });
 
     if (!settlement) {
@@ -90,7 +90,7 @@ export class SettlementService {
           settlementDirection: direction,
           settlementStatus: status,
         },
-        include: { items: { where: { isDeleted: false } } },
+        include: { items: { orderBy: { createdAt: 'asc' } } },
       });
     } else {
       // If settlement is NOT locked, dynamically refresh unpaid bills and damage totals
@@ -108,10 +108,12 @@ export class SettlementService {
           new Prisma.Decimal(0)
         );
 
-        const damageTotal = settlement.items.reduce(
-          (sum, item) => sum.add(new Prisma.Decimal(item.amount || 0)),
-          new Prisma.Decimal(0)
-        );
+        const damageTotal = settlement.items
+          .filter((item) => !item.isDeleted)
+          .reduce(
+            (sum, item) => sum.add(new Prisma.Decimal(item.amount || 0)),
+            new Prisma.Decimal(0)
+          );
 
         const deposit = new Prisma.Decimal(contract.depositAmount || 0);
         const net = deposit.sub(unpaidBillTotal).sub(damageTotal);
@@ -137,7 +139,7 @@ export class SettlementService {
             settlementDirection: direction,
             settlementStatus: status,
           },
-          include: { items: { where: { isDeleted: false } } },
+          include: { items: { orderBy: { createdAt: 'asc' } } },
         });
       }
     }

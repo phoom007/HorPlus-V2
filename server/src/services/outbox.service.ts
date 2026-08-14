@@ -142,35 +142,38 @@ export class OutboxService {
               include: { role: true },
             });
 
+            if (activeMembers.length === 0) {
+              await tx.localNotificationOutbox.update({
+                where: { id: eventId },
+                data: {
+                  status: 'FAILED',
+                  lastError: 'NO_ACTIVE_RECIPIENTS',
+                },
+              });
+              eventFailed = true;
+              return;
+            }
+
             for (const member of activeMembers) {
-              try {
-                await tx.staffNotification.upsert({
-                  where: {
-                    staff_notice_source_outbox_user_unique: {
-                      sourceOutboxId: currentEvent.id,
-                      userId: member.userId,
-                    },
-                  },
-                  create: {
-                    dormitoryId: currentEvent.dormitoryId,
-                    userId: member.userId,
-                    roleCode: member.role.code,
-                    category: currentEvent.eventType,
-                    title: currentEvent.title,
-                    message: currentEvent.body,
-                    metadata: (currentEvent.payload as any) || Prisma.JsonNull,
+              await tx.staffNotification.upsert({
+                where: {
+                  staff_notice_source_outbox_user_unique: {
                     sourceOutboxId: currentEvent.id,
+                    userId: member.userId,
                   },
-                  update: {},
-                });
-              } catch (memberErr: any) {
-                logger.warn({
-                  event: 'STAFF_NOTICE_DISPATCH_SINGLE_USER_ERROR',
-                  sourceOutboxId: currentEvent.id,
+                },
+                create: {
+                  dormitoryId: currentEvent.dormitoryId,
                   userId: member.userId,
-                  error: memberErr.message,
-                });
-              }
+                  roleCode: member.role.code,
+                  category: currentEvent.eventType,
+                  title: currentEvent.title,
+                  message: currentEvent.body,
+                  metadata: (currentEvent.payload as any) || Prisma.JsonNull,
+                  sourceOutboxId: currentEvent.id,
+                },
+                update: {}, // Idempotent: leave existing untouched if re-processed
+              });
             }
           }
 

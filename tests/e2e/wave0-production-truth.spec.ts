@@ -197,6 +197,7 @@ test.describe.serial('Wave 0 Production Truth Acceptance Suite', () => {
           buildingId: bld.id,
           roomNumber: 'T101',
           normalizedRoomNumber: 'T101',
+          roomType: 'standard',
           floor: 1,
           monthlyRent: 4000,
           status: 'OCCUPIED',

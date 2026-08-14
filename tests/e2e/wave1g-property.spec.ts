@@ -499,13 +499,17 @@ test.describe.serial('Wave 1G Real Playwright Lifecycle — Property, Room Defau
     await expect(page.locator('.fixed.inset-0.z-\\[500\\]')).not.toBeVisible({ timeout: 5000 });
     await page.waitForTimeout(300);
 
+    // Reload page to reflect API clearing
+    await page.reload();
+    await page.waitForLoadState('networkidle');
+
     // Assert: Badge returns to Dormitory inheritance on Room C101
-    const dormBadge = roomC101Card.getByTestId('badge-dormitory');
+    const dormBadge = page.locator('[data-testid="room-card"]', { hasText: 'C101' }).getByTestId('badge-dormitory');
     await expect(dormBadge).toBeVisible({ timeout: 15000 });
     await expect(dormBadge).toHaveText('ใช้ค่าจากหอพัก');
 
     // Assert: Effective value returns to Dormitory value (9,000 from Test 1)
-    await expect(roomC101Card.getByText('9,000')).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('[data-testid="room-card"]', { hasText: 'C101' }).getByText('9,000')).toBeVisible({ timeout: 10000 });
 
     // ============================================================
     // SECTION 3: Room Identity and Override Lifecycle

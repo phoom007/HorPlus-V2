@@ -14,8 +14,10 @@ test.describe.serial('LOCAL-03: Local Notification Outbox & Operations Polish E2
   const csrfService = new CsrfService(csrfSecret);
 
   let dormId: string;
+  let dormBId: string;
   let ownerUserId: string;
   let managerUserId: string;
+  let techUserId: string;
   let tenantUserId: string;
   let tenantId: string;
 
@@ -23,6 +25,8 @@ test.describe.serial('LOCAL-03: Local Notification Outbox & Operations Polish E2
   let csrfTokenOwner: string;
   let sessionTokenManager: string;
   let csrfTokenManager: string;
+  let sessionTokenTech: string;
+  let csrfTokenTech: string;
   let sessionTokenTenant: string;
   let csrfTokenTenant: string;
 
@@ -38,17 +42,28 @@ test.describe.serial('LOCAL-03: Local Notification Outbox & Operations Polish E2
       'TRUNCATE TABLE local_notification_outbox, staff_notices, tenant_notices, contract_settlement_items, contract_settlements, tenant_renewal_requests, occupancies, bill_items, receipts, payment_status_histories, payments, bills, contract_snapshots, contracts, tenant_registration_requests, tenants, rooms, buildings, dormitory_members, sessions, users, dormitories CASCADE;'
     );
 
-    // 2. Create Dormitory
+    // 2. Create Dormitory A & Dormitory B
     const dorm = await prisma.dormitory.create({
       data: {
-        name: 'E2E LOCAL-03 Dormitory',
-        code: 'E2E-L03',
+        name: 'E2E LOCAL-03 Dormitory A',
+        code: 'E2E-L03-A',
         type: 'apartment',
         status: 'active',
       },
     });
     dormId = dorm.id;
     await subscriptionEntitlementService.provisionInitialTrial(dormId);
+
+    const dormB = await prisma.dormitory.create({
+      data: {
+        name: 'E2E LOCAL-03 Dormitory B',
+        code: 'E2E-L03-B',
+        type: 'apartment',
+        status: 'active',
+      },
+    });
+    dormBId = dormB.id;
+    await subscriptionEntitlementService.provisionInitialTrial(dormBId);
 
     // 3. Create Roles
     let ownerRole = await prisma.role.findFirst({ where: { code: 'OWNER' } });
@@ -65,6 +80,13 @@ test.describe.serial('LOCAL-03: Local Notification Outbox & Operations Polish E2
       });
     }
 
+    let techRole = await prisma.role.findFirst({ where: { code: 'TECH' } });
+    if (!techRole) {
+      techRole = await prisma.role.create({
+        data: { name: 'Technician', code: 'TECH', isSystem: true, permissions: ['maintenance:*'] },
+      });
+    }
+
     let tenantRole = await prisma.role.findFirst({ where: { code: 'TENANT' } });
     if (!tenantRole) {
       tenantRole = await prisma.role.create({
@@ -72,7 +94,7 @@ test.describe.serial('LOCAL-03: Local Notification Outbox & Operations Polish E2
       });
     }
 
-    // 4. Create Owner User & Member
+    // 4. Create Owner User & Member (Dorm A only)
     const ownerUser = await prisma.user.create({
       data: {
         email: 'owner_local03@test.com',
@@ -106,7 +128,7 @@ test.describe.serial('LOCAL-03: Local Notification Outbox & Operations Polish E2
     sessionTokenOwner = sessionTokenService.encryptToken({ sub: ownerUserId, sid: sidOwner, type: 'session', version: 1 }, 86400);
     csrfTokenOwner = csrfService.generateCsrfToken(sidOwner);
 
-    // 5. Create Manager User & Member
+    // 5. Create Manager User & Member (Dorm A)
     const managerUser = await prisma.user.create({
       data: {
         email: 'manager_local03@test.com',
@@ -140,7 +162,41 @@ test.describe.serial('LOCAL-03: Local Notification Outbox & Operations Polish E2
     sessionTokenManager = sessionTokenService.encryptToken({ sub: managerUserId, sid: sidManager, type: 'session', version: 1 }, 86400);
     csrfTokenManager = csrfService.generateCsrfToken(sidManager);
 
-    // 6. Create Tenant User & Member & Record
+    // 6. Create Tech User & Member (Dorm A)
+    const techUser = await prisma.user.create({
+      data: {
+        email: 'tech_local03@test.com',
+        emailNormalized: 'tech_local03@test.com',
+        name: 'Tech Local03',
+        googleSubject: `sub-tech-l03-${Date.now()}`,
+        status: 'active',
+      },
+    });
+    techUserId = techUser.id;
+
+    await prisma.dormitoryMember.create({
+      data: {
+        dormitoryId: dormId,
+        userId: techUserId,
+        roleId: techRole.id,
+      },
+    });
+
+    const sidTech = crypto.randomUUID();
+    const hashTech = SessionTokenService.hashSessionId(sidTech);
+    await prisma.session.create({
+      data: {
+        userId: techUserId,
+        sessionIdHash: hashTech,
+        tokenVersion: 1,
+        status: 'active',
+        expiresAt: new Date(Date.now() + 86400 * 1000),
+      },
+    });
+    sessionTokenTech = sessionTokenService.encryptToken({ sub: techUserId, sid: sidTech, type: 'session', version: 1 }, 86400);
+    csrfTokenTech = csrfService.generateCsrfToken(sidTech);
+
+    // 7. Create Tenant User & Member & Record (Dorm A)
     const tenantUser = await prisma.user.create({
       data: {
         email: 'tenant_l03@test.com',
@@ -188,7 +244,7 @@ test.describe.serial('LOCAL-03: Local Notification Outbox & Operations Polish E2
     sessionTokenTenant = sessionTokenService.encryptToken({ sub: tenantUserId, sid: sidTenant, type: 'session', version: 1 }, 86400);
     csrfTokenTenant = csrfService.generateCsrfToken(sidTenant);
 
-    // 7. Seed Outbox Events & Dispatch
+    // 8. Seed Outbox Events & Dispatch
     await prisma.$transaction(async (tx) => {
       await outboxService.createOutboxEvent(tx, {
         dormitoryId: dormId,
@@ -234,12 +290,19 @@ test.describe.serial('LOCAL-03: Local Notification Outbox & Operations Polish E2
     const noticeBody = page.getByText(tenantNoticeBody);
     await expect(noticeBody).toBeVisible();
 
-    // Mark as read via API or UI button
-    const markReadBtn = page.getByRole('button', { name: /อ่านแล้ว/i }).first();
-    if (await markReadBtn.isVisible()) {
-      await markReadBtn.click();
-      await page.waitForTimeout(500);
-    }
+    // Open notification drawer via bell icon to access mark-as-read control
+    const notifBell = page.locator('button[aria-label="การแจ้งเตือน"]').first();
+    await expect(notifBell).toBeVisible();
+    await notifBell.click();
+
+    // Assert mark as read button is explicitly visible in notification drawer (no silent skips)
+    const markReadBtn = page.locator('[data-testid^="button-tenant-notice-read-"]').first();
+    await expect(markReadBtn).toBeVisible();
+
+    await Promise.all([
+      page.waitForResponse((res) => res.url().includes('/read') && res.status() === 200),
+      markReadBtn.click(),
+    ]);
 
     // Verify DB read status updated
     const updatedDbNotice = await prisma.tenantNotice.findFirst({
@@ -253,7 +316,7 @@ test.describe.serial('LOCAL-03: Local Notification Outbox & Operations Polish E2
     await expect(page.getByText(tenantNoticeTitle)).toBeVisible();
   });
 
-  test('Flow C & D: Owner operational notifications, swipe guide badge & dismissal persistence', async ({ page, context }) => {
+  test('Flow C & D: Owner operational notifications, swipe guide badge & real UI swipe dismissal persistence', async ({ page, context }) => {
     await context.clearCookies();
     await context.addCookies([
       { name: 'horplus_session', value: sessionTokenOwner, domain: '127.0.0.1', path: '/' },
@@ -265,36 +328,51 @@ test.describe.serial('LOCAL-03: Local Notification Outbox & Operations Polish E2
     await page.waitForLoadState('networkidle');
 
     // Open notification dropdown
-    const headerBell = page.locator('header button').filter({ has: page.locator('svg') }).first();
-    if (await headerBell.isVisible()) {
-      await headerBell.click();
-      await page.waitForTimeout(500);
-    }
+    const headerBell = page.locator('[data-testid="button-staff-notification-bell"]').first();
+    await expect(headerBell).toBeVisible();
+    await headerBell.click();
+    await page.waitForTimeout(500);
 
     // Assert exact staff notice content & swipe guide badge in DOM
     await expect(page.getByText(staffNoticeTitle)).toBeVisible();
     await expect(page.getByText(/ปัดซ้ายที่รายการแจ้งเตือนเพื่อลบข้อความ/i)).toBeVisible();
 
-    // Perform dismissal via API endpoint (simulating swipe delete action)
-    const notice = await prisma.staffNotification.findFirst({
+    // Locate SlidableNotificationItem and perform real UI drag/swipe left gesture
+    const noticeCard = page.locator('[data-testid^="staff-notice-item-"]').first();
+    await expect(noticeCard).toBeVisible();
+    const box = await noticeCard.boundingBox();
+    expect(box).not.toBeNull();
+
+    if (box) {
+      await Promise.all([
+        page.waitForResponse((res) => res.url().includes('/dismiss') && res.status() === 200),
+        (async () => {
+          await page.mouse.move(box.x + box.width - 20, box.y + box.height / 2);
+          await page.mouse.down();
+          await page.mouse.move(box.x - 50, box.y + box.height / 2, { steps: 15 });
+          await page.mouse.up();
+        })(),
+      ]);
+    }
+
+    // Assert notice disappears from UI
+    await expect(page.getByText(staffNoticeTitle)).not.toBeVisible();
+
+    // Verify DB dismissal status updated in PostgreSQL
+    const dbNotice = await prisma.staffNotification.findFirst({
       where: { dormitoryId: dormId, userId: ownerUserId },
     });
-    expect(notice).not.toBeNull();
-
-    const dismissRes = await page.request.post(`/api/v1/notifications/${notice!.id}/dismiss`, {
-      headers: { 'x-dormitory-id': dormId },
-    });
-    expect(dismissRes.status()).toBe(200);
+    expect(dbNotice?.isDismissed).toBe(true);
+    expect(dbNotice?.dismissedAt).not.toBeNull();
 
     // F5 reload and verify notice remains hidden for Owner
     await page.reload();
     await page.waitForLoadState('networkidle');
 
-    const headerBell2 = page.locator('header button').filter({ has: page.locator('svg') }).first();
-    if (await headerBell2.isVisible()) {
-      await headerBell2.click();
-      await page.waitForTimeout(500);
-    }
+    const headerBell2 = page.locator('[data-testid="button-staff-notification-bell"]').first();
+    await expect(headerBell2).toBeVisible();
+    await headerBell2.click();
+    await page.waitForTimeout(500);
 
     await expect(page.getByText(staffNoticeTitle)).not.toBeVisible();
   });
@@ -311,26 +389,62 @@ test.describe.serial('LOCAL-03: Local Notification Outbox & Operations Polish E2
     await page.waitForLoadState('networkidle');
 
     // Open notification dropdown
-    const headerBell = page.locator('header button').filter({ has: page.locator('svg') }).first();
-    if (await headerBell.isVisible()) {
-      await headerBell.click();
-      await page.waitForTimeout(500);
-    }
+    const headerBell = page.locator('[data-testid="button-staff-notification-bell"]').first();
+    await expect(headerBell).toBeVisible();
+    await headerBell.click();
+    await page.waitForTimeout(500);
 
     // Assert Manager still sees their copy of the staff notice!
     await expect(page.getByText(staffNoticeTitle)).toBeVisible();
   });
 
-  test('Flow E: Cross-dormitory isolation returns 403 for unauthorized dormitory header', async ({ request }) => {
-    const response = await request.get('/api/v1/notifications', {
+  test('Flow E: Authenticated cross-dormitory isolation returns 403 when Owner A selects Dorm B', async ({ page, context }) => {
+    // Owner A is active member only in Dorm A (dormId), NOT Dorm B (dormBId)
+    await context.clearCookies();
+    await context.addCookies([
+      { name: 'horplus_session', value: sessionTokenOwner, domain: '127.0.0.1', path: '/' },
+      { name: 'horplus_csrf', value: csrfTokenOwner, domain: '127.0.0.1', path: '/' },
+    ]);
+
+    // Send authenticated request claiming Dorm B
+    const response = await page.request.get('/api/v1/notifications', {
       headers: {
-        'x-dormitory-id': '00000000-0000-0000-0000-000000000000',
+        'x-dormitory-id': dormBId,
       },
     });
-    expect([401, 403]).toContain(response.status());
+
+    // Must return HTTP 403 Forbidden (NOT 401)
+    expect(response.status()).toBe(403);
+    const body = await response.json();
+    expect(body.error?.code).toBe('FORBIDDEN');
+    expect(body.notifications).toBeUndefined();
   });
 
-  test('Flow F: Outbox reconciliation idempotency on re-dispatch', async () => {
+  test('Flow F: TECH RBAC — Authenticated TECH session denied from OWNER-only preferences', async ({ page, context }) => {
+    await context.clearCookies();
+    await context.addCookies([
+      { name: 'horplus_session', value: sessionTokenTech, domain: '127.0.0.1', path: '/' },
+      { name: 'horplus_csrf', value: csrfTokenTech, domain: '127.0.0.1', path: '/' },
+      { name: 'selected_dormitory_id', value: dormId, domain: '127.0.0.1', path: '/' },
+    ]);
+
+    // TECH attempts OWNER-only preferences modification
+    const response = await page.request.patch('/api/v1/notifications/preferences', {
+      headers: {
+        'x-dormitory-id': dormId,
+      },
+      data: {
+        repairAlertsEnabled: false,
+      },
+    });
+
+    // Must return HTTP 403 Forbidden
+    expect(response.status()).toBe(403);
+    const body = await response.json();
+    expect(body.error?.code).toBe('FORBIDDEN');
+  });
+
+  test('Flow G: Outbox reconciliation idempotency on re-dispatch', async () => {
     const initialNotices = await prisma.tenantNotice.count({
       where: { dormitoryId: dormId },
     });
@@ -345,14 +459,7 @@ test.describe.serial('LOCAL-03: Local Notification Outbox & Operations Polish E2
     expect(afterNotices).toBe(initialNotices); // ZERO duplicate notices created!
   });
 
-  test('Flow G: Truthful empty state rendering without fake placeholders', async ({ page, context }) => {
-    await context.clearCookies();
-    await context.addCookies([
-      { name: 'horplus_session', value: sessionTokenTenant, domain: '127.0.0.1', path: '/' },
-      { name: 'horplus_csrf', value: csrfTokenTenant, domain: '127.0.0.1', path: '/' },
-      { name: 'selected_dormitory_id', value: dormId, domain: '127.0.0.1', path: '/' },
-    ]);
-
+  test('Flow H: Truthful empty state rendering without fake placeholders', async ({ page, context }) => {
     // Create fresh tenant with 0 notifications
     const freshTenantId = crypto.randomUUID();
     const freshUserId = crypto.randomUUID();
@@ -415,6 +522,12 @@ test.describe.serial('LOCAL-03: Local Notification Outbox & Operations Polish E2
     await page.goto('/tenant');
     await page.waitForLoadState('networkidle');
 
-    await expect(page.getByText('ไม่มีรายการแจ้งเตือนใหม่')).toBeVisible();
+    // Open notification modal to view empty state
+    const notifBell = page.locator('button[aria-label="การแจ้งเตือน"]').first();
+    await expect(notifBell).toBeVisible();
+    await notifBell.click();
+    await page.waitForTimeout(400);
+
+    await expect(page.getByText(/ไม่มีรายการแจ้งเตือนใหม่/i)).toBeVisible();
   });
 });

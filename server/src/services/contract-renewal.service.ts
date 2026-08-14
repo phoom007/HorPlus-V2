@@ -29,6 +29,9 @@ export interface ApproveRenewalInput {
   actorRole: string;
 }
 
+const isUuid = (val?: string | null): boolean =>
+  typeof val === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val);
+
 export class ContractRenewalService {
   /**
    * Authoritative calculation of renewal eligibility.
@@ -40,6 +43,14 @@ export class ContractRenewalService {
    * 5. Supported for active contract OR former tenant after contract expiry (Gap Renewal, Rule 2).
    */
   public async getRenewalEligibility(dormitoryId: string, tenantId: string, contractId: string) {
+    if (!isUuid(dormitoryId) || !isUuid(tenantId) || !isUuid(contractId)) {
+      return {
+        eligible: false,
+        reasonCode: 'CONTRACT_NOT_FOUND',
+        message: 'ไม่พบข้อมูลสัญญาเช่าที่ระบุ',
+      };
+    }
+
     const prisma = getPrismaClient();
 
     const contract = await prisma.contract.findFirst({
@@ -520,6 +531,9 @@ export class ContractRenewalService {
    * List Renewal Requests for Dormitory
    */
   public async listRenewalRequests(dormitoryId: string, status?: string) {
+    if (!isUuid(dormitoryId)) {
+      return [];
+    }
     const prisma = getPrismaClient();
     const where: any = { dormitoryId };
     if (status) {

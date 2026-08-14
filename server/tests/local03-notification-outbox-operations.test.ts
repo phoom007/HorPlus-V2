@@ -567,4 +567,131 @@ describe('LOCAL-03: Local Notification Outbox & Operations Polish', () => {
     });
     expect(validNotice).not.toBeNull();
   });
+
+  // 15. Staff Delivery Atomicity & Rollback Integrity
+  it('should roll back all staff deliveries and keep event recoverable when one recipient delivery fails', async () => {
+    let outboxId = '';
+    const aggregateId = crypto.randomUUID();
+
+    // Create STAFF outbox event targeting both OWNER and MANAGER
+    await prisma.$transaction(async (tx) => {
+      const event = await outboxService.createOutboxEvent(tx, {
+        dormitoryId: testDormitoryId,
+        eventType: 'ATOMICITY_TEST',
+        aggregateType: 'TEST',
+        aggregateId,
+        recipientType: 'STAFF',
+        recipientRoleCode: 'OWNER,MANAGER',
+        title: 'Atomic Staff Notice',
+        body: 'Must roll back atomically if one recipient fails',
+      });
+      outboxId = event.id;
+    });
+
+    try {
+      // Inject deterministic failure only for the Manager recipient on staff_notices
+      await prisma.$executeRawUnsafe(`
+        CREATE OR REPLACE FUNCTION test_fail_second_staff_recipient() RETURNS trigger AS $$
+        BEGIN
+          IF NEW.user_id = '${testManagerUserId}' THEN
+            RAISE EXCEPTION 'INDUCED_DELIVERY_FAILURE_FOR_MANAGER';
+          END IF;
+          RETURN NEW;
+        END;
+        $$ LANGUAGE plpgsql;
+      `);
+
+      await prisma.$executeRawUnsafe('DROP TRIGGER IF EXISTS trg_test_fail_second_staff ON staff_notices;');
+      await prisma.$executeRawUnsafe(`
+        CREATE TRIGGER trg_test_fail_second_staff
+          BEFORE INSERT OR UPDATE ON staff_notices
+          FOR EACH ROW
+          EXECUTE FUNCTION test_fail_second_staff_recipient();
+      `);
+
+      // Run dispatcher — should fail during Manager upsert and abort the transaction
+      await outboxService.processPendingOutboxEvents();
+
+      // Assert zero partial staff notifications committed (Owner insertion rolled back)
+      const noticesAfterFailure = await prisma.staffNotification.findMany({
+        where: { sourceOutboxId: outboxId },
+      });
+      expect(noticesAfterFailure.length).toBe(0);
+
+      // Assert outbox event was NOT marked PROCESSED (remains PENDING and recoverable)
+      const outboxAfterFailure = await prisma.localNotificationOutbox.findUnique({
+        where: { id: outboxId },
+      });
+      expect(outboxAfterFailure?.status).toBe('PENDING');
+      expect(outboxAfterFailure?.processedAt).toBeNull();
+    } finally {
+      // Clean up the temporary test trigger
+      await prisma.$executeRawUnsafe('DROP TRIGGER IF EXISTS trg_test_fail_second_staff ON staff_notices;');
+      await prisma.$executeRawUnsafe('DROP FUNCTION IF EXISTS test_fail_second_staff_recipient();');
+    }
+
+    // Now re-run dispatcher after removing induced failure
+    const retryResult = await outboxService.processPendingOutboxEvents();
+    expect(retryResult.processedCount).toBeGreaterThanOrEqual(1);
+
+    // Assert both intended recipients received exactly one notification with no duplicates
+    const finalNotices = await prisma.staffNotification.findMany({
+      where: { sourceOutboxId: outboxId },
+    });
+    expect(finalNotices.length).toBe(2);
+
+    const ownerNotice = finalNotices.find((n) => n.userId === testOwnerUserId);
+    const managerNotice = finalNotices.find((n) => n.userId === testManagerUserId);
+    expect(ownerNotice).toBeDefined();
+    expect(managerNotice).toBeDefined();
+
+    // Assert outbox event is now PROCESSED with processedAt timestamp
+    const finalOutbox = await prisma.localNotificationOutbox.findUnique({
+      where: { id: outboxId },
+    });
+    expect(finalOutbox?.status).toBe('PROCESSED');
+    expect(finalOutbox?.processedAt).not.toBeNull();
+  });
+
+  // 16. Zero Active Recipients Explicit Policy
+  it('should mark STAFF event as FAILED with NO_ACTIVE_RECIPIENTS when no active members exist', async () => {
+    // Suspend all dormitory members for this dormitory
+    await prisma.dormitoryMember.updateMany({
+      where: { dormitoryId: testDormitoryId },
+      data: { status: 'suspended' },
+    });
+
+    let outboxId = '';
+    const aggregateId = crypto.randomUUID();
+
+    await prisma.$transaction(async (tx) => {
+      const event = await outboxService.createOutboxEvent(tx, {
+        dormitoryId: testDormitoryId,
+        eventType: 'ZERO_RECIPIENT_TEST',
+        aggregateType: 'TEST',
+        aggregateId,
+        recipientType: 'STAFF',
+        recipientRoleCode: 'OWNER,MANAGER',
+        title: 'Zero Recipient Notice',
+        body: 'Should fail with NO_ACTIVE_RECIPIENTS',
+      });
+      outboxId = event.id;
+    });
+
+    const result = await outboxService.processPendingOutboxEvents();
+    expect(result.failedCount).toBeGreaterThanOrEqual(1);
+
+    const outbox = await prisma.localNotificationOutbox.findUnique({
+      where: { id: outboxId },
+    });
+    expect(outbox?.status).toBe('FAILED');
+    expect(outbox?.lastError).toBe('NO_ACTIVE_RECIPIENTS');
+    expect(outbox?.processedAt).toBeNull();
+
+    // Zero staff notifications created
+    const notices = await prisma.staffNotification.findMany({
+      where: { sourceOutboxId: outboxId },
+    });
+    expect(notices.length).toBe(0);
+  });
 });

@@ -12,8 +12,30 @@ import { createStaffRoutes } from '../../routes/staff.routes.js';
 import { createLineOaRoutes } from '../../routes/line-oa.routes.js';
 import { MockLinePlatformAdapter } from '../../services/line-platform-adapter.js';
 
-const directUrl = process.env.DIRECT_URL || 'postgresql://horplus:horplus_dev_password@127.0.0.1:5455/horplus_wave1d_fasttrack_test?schema=public';
-const appUrl = process.env.DATABASE_URL || 'postgresql://horplus_app:horplus_dev_password@127.0.0.1:5455/horplus_wave1d_fasttrack_test?schema=public';
+const rawAdminUrl = process.env.DIRECT_URL || process.env.DATABASE_URL;
+if (!rawAdminUrl) {
+  throw new Error('DIRECT_URL or DATABASE_URL must be configured for test database connection');
+}
+
+const parsedDirect = new URL(rawAdminUrl);
+const dbHost = parsedDirect.hostname;
+const dbPort = parsedDirect.port || '5455';
+const dbName = parsedDirect.pathname.replace(/^\//, '');
+
+// Safety check: only approved local test database cluster allowed
+if (dbHost !== '127.0.0.1' || dbPort !== '5455' || dbName !== 'horplus_wave1d_fasttrack_test') {
+  throw new Error(`Safety check failed: Test database must be 127.0.0.1:5455/horplus_wave1d_fasttrack_test (got ${dbHost}:${dbPort}/${dbName})`);
+}
+
+const appUser = process.env.HORPLUS_APP_DB_USER || 'horplus_app';
+const appPassword = process.env.HORPLUS_APP_DB_PASSWORD || parsedDirect.password;
+
+if (!appPassword) {
+  throw new Error('HORPLUS_APP_DB_PASSWORD is required for runtime role RLS test execution');
+}
+
+const directUrl = rawAdminUrl;
+const appUrl = `postgresql://${appUser}:${encodeURIComponent(appPassword)}@${dbHost}:${dbPort}/${dbName}?schema=public`;
 
 // Migration/Owner Prisma Client (horplus)
 const adminPrisma = new PrismaClient({ datasources: { db: { url: directUrl } } });
@@ -37,6 +59,11 @@ describe('TASK-009 Checkpoint 1F — True RLS & API Runtime Role Compatibility S
   let receiptAId: string;
 
   beforeAll(async () => {
+    // Ensure runtime role credentials and security attributes are synchronized
+    await adminPrisma.$executeRawUnsafe(
+      `ALTER ROLE ${appUser} WITH PASSWORD '${appPassword.replace(/'/g, "''")}' LOGIN NOSUPERUSER NOBYPASSRLS;`
+    );
+
     // Seed test data via adminPrisma
     const ownerUser = await adminPrisma.user.create({
       data: {

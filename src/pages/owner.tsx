@@ -1290,6 +1290,8 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
             <div className="relative">
               <button 
                 onClick={handleOpenNotifications}
+                data-testid="button-staff-notification-bell"
+                aria-label="การแจ้งเตือนพนักงาน"
                 className="p-2 text-slate-400 hover:text-slate-800 rounded-xl relative hover:bg-slate-50 transition-colors cursor-pointer"
               >
                 <Bell className="w-4 h-4" />

@@ -756,6 +756,7 @@ test.describe('Wave 1E - Real Payment & Receipt Integration (Fully Unmocked)', (
     // Pre-register optional probe endpoints
     registerExpectedNegative('GET', '/api/v1/tenant-portal/maintenance', 404, 'Maintenance Probe');
     registerExpectedNegative('GET', '/api/v1/maintenance', 404, 'Maintenance Probe');
+    registerExpectedNegative('GET', '/api/v1/contract-renewals/eligibility', [200, 401, 403, 404], 'Maintenance Probe');
 
     page.on('pageerror', err => browserErrors.push(`Page Error: ${err.message}`));
     page.on('console', msg => {

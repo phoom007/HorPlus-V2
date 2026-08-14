@@ -1616,16 +1616,16 @@ export const OwnerContracts: React.FC<OwnerContractsProps> = ({
                     </div>
                     {settlementData && (
                       <span className={`px-3 py-1 rounded-full text-xs font-extrabold ${
-                        settlementData.status === 'REFUNDED' || settlementData.status === 'PAYMENT_RECEIVED'
+                        (settlementData.status === 'REFUNDED' || settlementData.settlementStatus === 'REFUNDED' || settlementData.status === 'PAYMENT_RECEIVED' || settlementData.settlementStatus === 'PAYMENT_RECEIVED')
                           ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
                           : 'bg-amber-100 text-amber-800 border border-amber-300'
                       }`} data-testid="settlement-status-badge">
-                        {settlementData.status === 'PENDING_REFUND' ? 'รอคืนเงิน' :
-                         settlementData.status === 'REFUNDED' ? 'คืนเงินแล้ว' :
-                         settlementData.status === 'PENDING_PAYMENT' ? 'รอชำระส่วนต่าง' :
-                         settlementData.status === 'PAYMENT_RECEIVED' ? 'ชำระส่วนต่างแล้ว' :
-                         settlementData.status === 'CLOSED_ZERO' ? 'ไม่มียอดต้องชำระหรือคืน' :
-                         settlementData.status}
+                        {(settlementData.status === 'PENDING_REFUND' || settlementData.settlementStatus === 'PENDING_REFUND') ? 'รอคืนเงิน' :
+                         (settlementData.status === 'REFUNDED' || settlementData.settlementStatus === 'REFUNDED') ? 'คืนเงินแล้ว' :
+                         (settlementData.status === 'PENDING_PAYMENT' || settlementData.settlementStatus === 'PENDING_PAYMENT') ? 'รอชำระส่วนต่าง' :
+                         (settlementData.status === 'PAYMENT_RECEIVED' || settlementData.settlementStatus === 'PAYMENT_RECEIVED') ? 'ชำระส่วนต่างแล้ว' :
+                         (settlementData.status === 'CLOSED_ZERO' || settlementData.settlementStatus === 'CLOSED_ZERO') ? 'ไม่มียอดต้องชำระหรือคืน' :
+                         settlementData.status || settlementData.settlementStatus}
                       </span>
                     )}
                   </div>
@@ -1651,23 +1651,23 @@ export const OwnerContracts: React.FC<OwnerContractsProps> = ({
                         </div>
                         <div>
                           <span className="text-gray-400 font-bold text-[10px] block">ค้างชำระ (Unpaid):</span>
-                          <span className="font-extrabold text-rose-600 text-sm" data-testid="settlement-unpaid">{formatBaht(settlementData.unpaidBillsAmount || 0)}</span>
+                          <span className="font-extrabold text-rose-600 text-sm" data-testid="settlement-unpaid">{formatBaht(settlementData.unpaidBillsAmount ?? settlementData.unpaidBillAmount ?? 0)}</span>
                         </div>
                         <div>
                           <span className="text-gray-400 font-bold text-[10px] block">ค่าเสียหายรวม (Damage Total):</span>
-                          <span className="font-extrabold text-rose-600 text-sm" data-testid="settlement-damage-total">{formatBaht(settlementData.damageTotal || 0)}</span>
+                          <span className="font-extrabold text-rose-600 text-sm" data-testid="settlement-damage-total">{formatBaht(settlementData.damageTotal ?? settlementData.damageChargeTotal ?? 0)}</span>
                         </div>
                         <div>
                           <span className="text-gray-400 font-bold text-[10px] block">ยอดสุทธิ (Net Amount):</span>
-                          <span className="font-black text-indigo-700 text-sm" data-testid="settlement-net-amount">{formatBaht(settlementData.netAmount || 0)}</span>
+                          <span className="font-black text-indigo-700 text-sm" data-testid="settlement-net-amount">{formatBaht(settlementData.netAmount ?? settlementData.netSettlement ?? 0)}</span>
                         </div>
                       </div>
 
                       <div className="p-3 bg-indigo-50/70 border border-indigo-200 rounded-xl font-bold text-indigo-900 flex justify-between items-center">
                         <span>ทิศทางชำระ:</span>
                         <span className="text-sm font-extrabold" data-testid="settlement-direction">
-                          {settlementData.direction === 'REFUND_TO_TENANT' ? 'คืนเงินให้ผู้เช่า' :
-                           settlementData.direction === 'COLLECT_FROM_TENANT' ? 'เรียกเก็บจากผู้เช่า' :
+                          {(settlementData.direction === 'REFUND_TO_TENANT' || settlementData.settlementDirection === 'REFUND' || settlementData.direction === 'REFUND') ? 'คืนเงินให้ผู้เช่า' :
+                           (settlementData.direction === 'COLLECT_FROM_TENANT' || settlementData.settlementDirection === 'PAYMENT_DUE' || settlementData.direction === 'PAYMENT_DUE') ? 'เรียกเก็บจากผู้เช่า' :
                            'ไม่มียอดต้องชำระหรือคืน'}
                         </span>
                       </div>
@@ -1675,7 +1675,7 @@ export const OwnerContracts: React.FC<OwnerContractsProps> = ({
                       <div className="space-y-3 pt-2">
                         <div className="flex justify-between items-center">
                           <h5 className="font-extrabold text-slate-800 text-xs">รายการค่าเสียหาย (Damage Charge Items)</h5>
-                          {(settlementData.status !== 'REFUNDED' && settlementData.status !== 'PAYMENT_RECEIVED') && (
+                          {!(settlementData.status === 'REFUNDED' || settlementData.settlementStatus === 'REFUNDED' || settlementData.status === 'PAYMENT_RECEIVED' || settlementData.settlementStatus === 'PAYMENT_RECEIVED') && (
                             <button
                               type="button"
                               onClick={() => {
@@ -1693,12 +1693,12 @@ export const OwnerContracts: React.FC<OwnerContractsProps> = ({
                         </div>
 
                         <div className="space-y-2" data-testid="damage-items-list">
-                          {(!settlementData.damageItems || settlementData.damageItems.length === 0) ? (
+                          {(!(settlementData.damageItems || settlementData.items) || (settlementData.damageItems || settlementData.items).length === 0) ? (
                             <div className="p-4 text-center bg-slate-50/60 rounded-xl text-slate-400 text-xs">
                               ไม่มีรายการค่าเสียหาย
                             </div>
                           ) : (
-                            settlementData.damageItems.map((item: any) => (
+                            (settlementData.damageItems || settlementData.items).map((item: any) => (
                               <div
                                 key={item.id}
                                 className={`p-3 rounded-xl border flex justify-between items-center ${
@@ -1721,7 +1721,7 @@ export const OwnerContracts: React.FC<OwnerContractsProps> = ({
                                 </div>
                                 <div className="flex items-center gap-3">
                                   <span className="font-extrabold text-slate-900" data-testid="damage-item-amount">{formatBaht(item.amount)}</span>
-                                  {(!item.isDeleted && settlementData.status !== 'REFUNDED' && settlementData.status !== 'PAYMENT_RECEIVED') && (
+                                  {(!item.isDeleted && !(settlementData.status === 'REFUNDED' || settlementData.settlementStatus === 'REFUNDED' || settlementData.status === 'PAYMENT_RECEIVED' || settlementData.settlementStatus === 'PAYMENT_RECEIVED')) && (
                                     <div className="flex items-center gap-1">
                                       <button
                                         type="button"
@@ -1753,7 +1753,7 @@ export const OwnerContracts: React.FC<OwnerContractsProps> = ({
                         </div>
                       </div>
 
-                      {settlementData.status === 'REFUNDED' || settlementData.status === 'PAYMENT_RECEIVED' ? (
+                      {(settlementData.status === 'REFUNDED' || settlementData.settlementStatus === 'REFUNDED' || settlementData.status === 'PAYMENT_RECEIVED' || settlementData.settlementStatus === 'PAYMENT_RECEIVED') ? (
                         <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-emerald-800 font-bold text-xs flex items-center justify-between" data-testid="settlement-locked-notice">
                           <span>รายการนี้ยืนยันยอดแล้ว ไม่สามารถแก้ไขได้</span>
                           <CheckCircle2 className="w-4 h-4 text-emerald-600" />
@@ -1761,7 +1761,7 @@ export const OwnerContracts: React.FC<OwnerContractsProps> = ({
                       ) : (
                         <div className="pt-3 border-t border-slate-100 space-y-2">
                           <div className="flex justify-end gap-2">
-                            {settlementData.status === 'PENDING_REFUND' && (
+                            {(settlementData.status === 'PENDING_REFUND' || settlementData.settlementStatus === 'PENDING_REFUND') && (
                               <button
                                 type="button"
                                 onClick={() => handleConfirmSettlementStatus(settlementData.id, 'REFUNDED')}
@@ -1771,7 +1771,7 @@ export const OwnerContracts: React.FC<OwnerContractsProps> = ({
                                 ยืนยันว่าคืนเงินจริงแล้ว
                               </button>
                             )}
-                            {settlementData.status === 'PENDING_PAYMENT' && (
+                            {(settlementData.status === 'PENDING_PAYMENT' || settlementData.settlementStatus === 'PENDING_PAYMENT') && (
                               <button
                                 type="button"
                                 onClick={() => handleConfirmSettlementStatus(settlementData.id, 'PAYMENT_RECEIVED')}
