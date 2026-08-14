@@ -20,6 +20,8 @@ export interface TenantEntity {
   photoUrl?: string | null;
   petInfo?: any;
   notes?: string | null;
+  coOccupants?: TenantCoOccupantEntity[];
+  vehicles?: TenantVehicleEntity[];
   version: number;
   createdAt: Date;
   updatedAt: Date;
@@ -413,6 +415,37 @@ export class PrismaTenantRepository implements ITenantRepository {
       address: t.address,
       status: t.status,
       version: t.version,
+      coOccupants: Array.isArray(t.coOccupants) ? t.coOccupants.map((c: any) => ({
+        id: c.id,
+        dormitoryId: c.dormitoryId,
+        tenantId: c.tenantId,
+        contractId: c.contractId || null,
+        name: c.name,
+        phone: c.phone || null,
+        relationship: c.relationship || null,
+        nationalIdEncrypted: c.nationalIdEncrypted || null,
+        nationalIdMasked: c.nationalIdMasked || null,
+        dateOfBirth: c.dateOfBirth || null,
+        status: c.status,
+        createdAt: c.createdAt,
+        updatedAt: c.updatedAt,
+        deletedAt: c.deletedAt || null,
+      })) : undefined,
+      vehicles: Array.isArray(t.vehicles) ? t.vehicles.map((v: any) => ({
+        id: v.id,
+        dormitoryId: v.dormitoryId,
+        tenantId: v.tenantId,
+        type: v.type,
+        brand: v.brand || null,
+        model: v.model || null,
+        color: v.color || null,
+        licensePlate: v.licensePlate,
+        province: v.province || null,
+        status: v.status,
+        createdAt: v.createdAt,
+        updatedAt: v.updatedAt,
+        deletedAt: v.deletedAt || null,
+      })) : undefined,
       createdAt: t.createdAt,
       updatedAt: t.updatedAt,
       deletedAt: t.deletedAt,
@@ -424,12 +457,18 @@ export class PrismaTenantRepository implements ITenantRepository {
     if (!isUuid(id)) return null;
     const where: any = { id };
     if (dormitoryId) where.dormitoryId = dormitoryId;
-    const t = await this.prisma.tenant.findFirst({ where });
+    const t = await this.prisma.tenant.findFirst({
+      where,
+      include: { coOccupants: { where: { deletedAt: null, status: 'active' } }, vehicles: { where: { deletedAt: null } } },
+    });
     return t ? this.mapTenantToEntity(t) : null;
   }
 
   public async findByTenantNumber(dormitoryId: string, tenantNumber: string): Promise<TenantEntity | null> {
-    const t = await this.prisma.tenant.findFirst({ where: { dormitoryId, tenantNumber } });
+    const t = await this.prisma.tenant.findFirst({
+      where: { dormitoryId, tenantNumber },
+      include: { coOccupants: { where: { deletedAt: null, status: 'active' } }, vehicles: { where: { deletedAt: null } } },
+    });
     return t ? this.mapTenantToEntity(t) : null;
   }
 
@@ -441,7 +480,13 @@ export class PrismaTenantRepository implements ITenantRepository {
     const skip = (page - 1) * pageSize;
 
     const [items, total] = await Promise.all([
-      this.prisma.tenant.findMany({ where, skip, take: pageSize, orderBy: { createdAt: 'desc' } }),
+      this.prisma.tenant.findMany({
+        where,
+        include: { coOccupants: { where: { deletedAt: null, status: 'active' } }, vehicles: { where: { deletedAt: null } } },
+        skip,
+        take: pageSize,
+        orderBy: { createdAt: 'desc' },
+      }),
       this.prisma.tenant.count({ where }),
     ]);
 

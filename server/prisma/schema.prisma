@@ -118,6 +118,7 @@ model Dormitory {
   outboxEvents               LocalNotificationOutbox[]
   staffNotices               StaffNotification[]
   roomBillingCycleSnapshots  RoomBillingCycleSnapshot[]
+  roomNextCycleCorrections   RoomNextCycleCorrection[]
 
   @@map("dormitories")
 }
@@ -445,6 +446,7 @@ model Room {
   renewalRequests            TenantRenewalRequest[]
   settlements                ContractSettlement[]
   roomBillingCycleSnapshots  RoomBillingCycleSnapshot[]
+  roomNextCycleCorrections   RoomNextCycleCorrection[]
 
   @@unique([dormitoryId, normalizedRoomNumber], map: "dormitory_normalized_room_number_unique")
   @@map("rooms")
@@ -750,6 +752,25 @@ model RoomBillingCycleSnapshot {
   @@index([dormitoryId, billingCycleId])
   @@index([roomId])
   @@map("room_billing_cycle_snapshots")
+}
+
+model RoomNextCycleCorrection {
+  id              String    @id @default(uuid()) @db.Uuid
+  dormitoryId     String    @map("dormitory_id") @db.Uuid
+  roomId          String    @map("room_id") @db.Uuid
+  peopleCount     Int       @default(1) @map("people_count")
+  source          String    @default("METER_CORRECTION") @map("source") @db.VarChar(50)
+  updatedByUserId String?   @map("updated_by_user_id") @db.Uuid
+  consumedAt      DateTime? @map("consumed_at") @db.Timestamptz()
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
+
+  dormitory Dormitory @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
+  room      Room      @relation(fields: [roomId], references: [id], onDelete: Cascade)
+
+  @@unique([dormitoryId, roomId], name: "dormitory_room_next_cycle_correction_unique")
+  @@index([dormitoryId, roomId])
+  @@map("room_next_cycle_corrections")
 }
 
 model MeterDevice {

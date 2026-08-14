@@ -187,7 +187,18 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     }
 
     // Check if there is an existing bill for this cycle
-    const bill = bills.find(b => b.cycleId === cycleId && b.roomId === roomId);
+    const compactCycle = cycleId.replace('-', '');
+    const bill = bills.find(b => {
+      const matchRoom = b.roomId === roomId || (b as any).roomNumber === roomId;
+      if (!matchRoom) return false;
+      return Boolean(
+        b.cycleId === cycleId ||
+        (b as any).billingCycleId === cycleId ||
+        (b as any).cycleCode === cycleId ||
+        (b.billNumber && (b.billNumber.includes(cycleId) || b.billNumber.includes(compactCycle))) ||
+        (b.billingDate && String(b.billingDate).startsWith(cycleId))
+      );
+    });
     
     // Get previous cycle's new readings
     const [cy, cm] = cycleId.split('-').map(Number);
@@ -207,34 +218,34 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     let waterCurr = waterPrev;
     let elecCurr = elecPrev;
 
-    if (bill) {
+    if (bill && Array.isArray(bill.items)) {
       const billRates = getDormitoryRatesForCycle(dorm, cycleId);
-      const waterItem = bill.items.find(item => item.category === 'water');
+      const waterItem = bill.items.find(item => item.category === 'water' || (item as any).type === 'water');
       if (waterItem) {
-        const match = waterItem.description.match(/\((\d+)\s*หน่วย\)/);
+        const match = waterItem.description?.match(/\((\d+)\s*หน่วย\)/);
         if (match) {
           waterCurr = waterPrev + Number(match[1]);
         } else {
           const mode = billRates.waterBillingMode || 'unit';
           if (mode === 'unit') {
             const rate = billRates.waterUnitRate || 0;
-            waterCurr = rate > 0 ? waterPrev + Math.round(waterItem.amount / rate) : waterPrev;
+            waterCurr = rate > 0 ? waterPrev + Math.round(Number(waterItem.amount) / rate) : waterPrev;
           } else {
             waterCurr = waterPrev;
           }
         }
       }
 
-      const elecItem = bill.items.find(item => item.category === 'electricity');
+      const elecItem = bill.items.find(item => item.category === 'electricity' || (item as any).type === 'electricity');
       if (elecItem) {
-        const match = elecItem.description.match(/\((\d+)\s*หน่วย\)/);
+        const match = elecItem.description?.match(/\((\d+)\s*หน่วย\)/);
         if (match) {
           elecCurr = elecPrev + Number(match[1]);
         } else {
           const mode = billRates.electricBillingMode || 'unit';
           if (mode === 'unit') {
             const rate = billRates.electricUnitRate || 0;
-            elecCurr = rate > 0 ? elecPrev + Math.round(elecItem.amount / rate) : elecPrev;
+            elecCurr = rate > 0 ? elecPrev + Math.round(Number(elecItem.amount) / rate) : elecPrev;
           } else {
             elecCurr = elecPrev;
           }
@@ -250,8 +261,10 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     const activeContract = (contracts || []).find(c => {
       if (c.roomId !== roomId) return false;
       const [cy, cm] = cycle.split('-').map(Number);
-      const [sy, sm] = c.startDate.split('-').map(Number);
-      const [ey, em] = c.endDate.split('-').map(Number);
+      const startValStr = typeof c.startDate === 'string' ? c.startDate : new Date(c.startDate).toISOString().slice(0, 10);
+      const endValStr = typeof c.endDate === 'string' ? c.endDate : new Date(c.endDate).toISOString().slice(0, 10);
+      const [sy, sm] = startValStr.split('-').map(Number);
+      const [ey, em] = endValStr.split('-').map(Number);
       const cycleVal = cy * 12 + (cm - 1);
       const startVal = sy * 12 + (sm - 1);
       const endVal = ey * 12 + (em - 1);
@@ -275,13 +288,28 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   };
 
   const getPrevCycleBillingPeopleCount = (roomId: string, prevCycleId: string): number => {
+    const compactPrevCycle = prevCycleId.replace('-', '');
     // 1. Check previous bill
-    const bill = bills.find(b => b.cycleId === prevCycleId && b.roomId === roomId);
-    if (bill) {
+    const bill = bills.find(b => {
+      const matchRoom = b.roomId === roomId || (b as any).roomNumber === roomId;
+      if (!matchRoom) return false;
+      return Boolean(
+        b.cycleId === prevCycleId ||
+        (b as any).billingCycleId === prevCycleId ||
+        (b as any).cycleCode === prevCycleId ||
+        (b.billNumber && (b.billNumber.includes(prevCycleId) || b.billNumber.includes(compactPrevCycle))) ||
+        (b.billingDate && String(b.billingDate).startsWith(prevCycleId))
+      );
+    });
+
+    if (bill && Array.isArray(bill.items)) {
       for (const item of bill.items) {
-        const match = item.description.match(/\((\d+)\s*คน\)/);
+        const match = item.description?.match(/\((\d+)\s*คน\)/);
         if (match) {
           return Number(match[1]);
+        }
+        if (item.metadata?.peopleCount) {
+          return Number(item.metadata.peopleCount);
         }
       }
     }
@@ -303,7 +331,9 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     return 1;
   };
 
-  const showPullButton = loadedCycle === selectedCycle && meterRows.some(row => {
+  const isCycleLoaded = Boolean(loadedCycle && (loadedCycle === selectedCycle || loadedCycle === selectedBillingCycleId || loadedCycle === selectedCycleCode));
+
+  const showPullButton = isCycleLoaded && meterRows.some(row => {
     const prevData = getPrevCycleNewReadings(row.roomId);
     const [cy, cm] = selectedCycle.split('-').map(Number);
     let prevYear = cy;
@@ -316,13 +346,11 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     const prevBillingPeople = getPrevCycleBillingPeopleCount(row.roomId, targetPrevCycleId);
     const currentHouseholdPeople = getCurrentHouseholdPeopleCount(row.roomId);
 
-    if (prevData) {
-      const waterMismatch = isWaterUnit && row.waterPrev !== prevData.waterCurr;
-      const elecMismatch = isElecUnit && row.elecPrev !== prevData.elecCurr;
-      const peopleMismatch = row.peopleCount !== currentHouseholdPeople || row.peopleCount !== prevBillingPeople;
-      return waterMismatch || elecMismatch || peopleMismatch;
-    }
-    return false;
+    const waterMismatch = prevData && isWaterUnit && row.waterPrev !== prevData.waterCurr;
+    const elecMismatch = prevData && isElecUnit && row.elecPrev !== prevData.elecCurr;
+    const peopleMismatch = row.peopleCount !== currentHouseholdPeople || row.peopleCount !== prevBillingPeople || prevBillingPeople !== currentHouseholdPeople;
+
+    return Boolean(waterMismatch || elecMismatch || peopleMismatch);
   });
 
   const handlePullPreviousData = async () => {
@@ -766,10 +794,10 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
 
   // Synchronize state changes to temporary module cache to survive tab navigation
   useEffect(() => {
-    if (meterRows && meterRows.length > 0 && loadedCycle === selectedCycle) {
+    if (meterRows && meterRows.length > 0 && isCycleLoaded) {
       tempMeterRowsCache[selectedCycle] = meterRows;
     }
-  }, [meterRows, selectedCycle, loadedCycle]);
+  }, [meterRows, selectedCycle, isCycleLoaded]);
 
   const handleNumberChange = (roomId: string, field: 'waterCurr' | 'elecCurr' | 'peopleCount' | 'overdueAmount' | 'waterPrev' | 'elecPrev', value: number) => {
     setMeterRows(prev => prev.map(row => {

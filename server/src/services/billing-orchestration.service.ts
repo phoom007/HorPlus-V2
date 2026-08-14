@@ -159,41 +159,46 @@ export class BillingOrchestrationService {
       return existing.peopleCount;
     }
 
-    // Seed from household truth if tenantId available
     let seedCount = 1;
-    if (tenantId) {
-      seedCount = await this.getHouseholdCount(dormitoryId, tenantId, client);
-    } else {
-      // Find room active contract or tenant
-      const activeContract = await client.contract.findFirst({
-        where: {
-          dormitoryId,
-          roomId,
-          status: { in: ['active', 'expiring_soon', 'pending_signature', 'waiting_extension', 'checking_out'] },
-          deletedAt: null,
-        },
-      });
-      if (activeContract) {
-        seedCount = await this.getHouseholdCount(dormitoryId, activeContract.tenantId, client);
-      }
-    }
+    let seedSource = 'HOUSEHOLD_SYNC';
 
-    // Check if previous cycle had a meter correction snapshot to propagate if higher
-    const targetCycle = await client.billingCycle.findUnique({ where: { id: billingCycleId } });
-    if (targetCycle) {
-      const prevCycleSnapshot = await client.roomBillingCycleSnapshot.findFirst({
-        where: {
-          dormitoryId,
-          roomId,
-          billingCycle: {
-            periodStart: { lt: targetCycle.periodStart },
-          },
-        },
-        orderBy: { billingCycle: { periodStart: 'desc' } },
+    // 1. Check pending Owner next-cycle correction
+    const pendingCorrection = await client.roomNextCycleCorrection.findFirst({
+      where: {
+        dormitoryId,
+        roomId,
+        consumedAt: null,
+      },
+      orderBy: { updatedAt: 'desc' },
+    });
+
+    if (pendingCorrection) {
+      seedCount = Math.max(1, pendingCorrection.peopleCount);
+      seedSource = 'METER_CORRECTION';
+      await client.roomNextCycleCorrection.update({
+        where: { id: pendingCorrection.id },
+        data: { consumedAt: new Date() },
       });
-      if (prevCycleSnapshot && prevCycleSnapshot.source === 'METER_CORRECTION') {
-        seedCount = Math.max(seedCount, prevCycleSnapshot.peopleCount);
+    } else {
+      // 2. Resolve from household truth
+      let householdCount = 1;
+      if (tenantId) {
+        householdCount = await this.getHouseholdCount(dormitoryId, tenantId, client);
+      } else {
+        const activeContract = await client.contract.findFirst({
+          where: {
+            dormitoryId,
+            roomId,
+            status: { in: ['active', 'expiring_soon', 'pending_signature', 'waiting_extension', 'checking_out'] },
+            deletedAt: null,
+          },
+        });
+        if (activeContract) {
+          householdCount = await this.getHouseholdCount(dormitoryId, activeContract.tenantId, client);
+        }
       }
+      seedCount = householdCount;
+      seedSource = 'HOUSEHOLD_SYNC';
     }
 
     await client.roomBillingCycleSnapshot.upsert({
@@ -209,7 +214,7 @@ export class BillingOrchestrationService {
         billingCycleId,
         roomId,
         peopleCount: seedCount,
-        source: 'HOUSEHOLD_SYNC',
+        source: seedSource,
       },
       update: {},
     });
@@ -275,27 +280,6 @@ export class BillingOrchestrationService {
       orderBy: { createdAt: 'desc' },
     });
 
-    // Fallback to DormitoryBillingSettings if rate snapshot not found
-    const liveSettings = !rateSnapshot
-      ? await tx.dormitoryBillingSettings.findUnique({ where: { dormitoryId } })
-      : null;
-
-    const waterRate = rateSnapshot
-      ? toDecimal(rateSnapshot.waterRate)
-      : liveSettings?.waterRate
-      ? toDecimal(liveSettings.waterRate)
-      : toDecimal('0.00');
-
-    const commonFee = rateSnapshot
-      ? toDecimal(rateSnapshot.commonFee)
-      : liveSettings?.commonFee
-      ? toDecimal(liveSettings.commonFee)
-      : toDecimal('0.00');
-
-    const commonFeeMode = rateSnapshot
-      ? rateSnapshot.commonFeeMode
-      : liveSettings?.commonFeeMode || 'room';
-
     const items = bill.items;
     let newSubtotal = toDecimal('0.00');
     let itemsUpdated = 0;
@@ -307,34 +291,48 @@ export class BillingOrchestrationService {
       let updatedDesc = item.description;
       let updatedMeta = item.metadata ? { ...(item.metadata as any) } : {};
 
-      if (item.type === 'water') {
-        const isPerPerson =
-          (item.metadata as any)?.mode === 'person' ||
-          item.unit === 'person' ||
-          (rateSnapshot && rateSnapshot.waterBillingType === 'person');
+      const itemMetaMode = (item.metadata as any)?.mode;
+      const itemMetaBillingType = (item.metadata as any)?.billingType;
+      const isPerPersonUnit = item.unit === 'person';
+      const isPerPersonMeta = itemMetaMode === 'person' || itemMetaBillingType === 'person';
 
-        if (isPerPerson) {
-          const unitPrice = item.unitPrice ? toDecimal(item.unitPrice) : waterRate;
-          updatedQuantity = peopleCountDec;
-          updatedAmount = mulDecimals(peopleCountDec, unitPrice);
+      let isPerPerson = isPerPersonUnit || isPerPersonMeta;
+
+      if (!isPerPerson && rateSnapshot) {
+        if (item.type === 'water' && rateSnapshot.waterBillingType === 'person') {
+          isPerPerson = true;
+        } else if (item.type === 'electricity' && rateSnapshot.electricityBillingType === 'person') {
+          isPerPerson = true;
+        } else if (item.type === 'common_fee' && rateSnapshot.commonFeeMode === 'person') {
+          isPerPerson = true;
+        } else if (item.type === 'internet' && rateSnapshot.internetFeeMode === 'person') {
+          isPerPerson = true;
+        } else if (item.type === 'parking' && rateSnapshot.parkingFeeMode === 'person') {
+          isPerPerson = true;
+        }
+      }
+
+      if (isPerPerson && item.type !== 'rent') {
+        const unitPrice = item.unitPrice ? toDecimal(item.unitPrice) : toDecimal('0.00');
+        updatedQuantity = peopleCountDec;
+        updatedAmount = mulDecimals(peopleCountDec, unitPrice);
+
+        if (item.type === 'water') {
           updatedDesc = `ค่าน้ำประปา (${newPeopleCount} คน)`;
-          updatedMeta = { ...updatedMeta, peopleCount: newPeopleCount, mode: 'person' };
-          itemsUpdated++;
-        }
-      } else if (item.type === 'common_fee') {
-        const isPerPerson =
-          commonFeeMode === 'person' ||
-          (item.metadata as any)?.mode === 'person' ||
-          item.unit === 'person';
-
-        if (isPerPerson) {
-          const unitPrice = item.unitPrice ? toDecimal(item.unitPrice) : commonFee;
-          updatedQuantity = peopleCountDec;
-          updatedAmount = mulDecimals(peopleCountDec, unitPrice);
+        } else if (item.type === 'electricity') {
+          updatedDesc = `ค่าไฟฟ้า (${newPeopleCount} คน)`;
+        } else if (item.type === 'common_fee') {
           updatedDesc = `ค่าส่วนกลาง (${newPeopleCount} คน)`;
-          updatedMeta = { ...updatedMeta, peopleCount: newPeopleCount, mode: 'person' };
-          itemsUpdated++;
+        } else if (item.type === 'internet') {
+          updatedDesc = `ค่าบริการอินเทอร์เน็ต (${newPeopleCount} คน)`;
+        } else if (item.type === 'parking') {
+          updatedDesc = `ค่าที่จอดรถ (${newPeopleCount} คน)`;
+        } else if (item.description.match(/\(\d+\s*คน\)/)) {
+          updatedDesc = item.description.replace(/\(\d+\s*คน\)/, `(${newPeopleCount} คน)`);
         }
+
+        updatedMeta = { ...updatedMeta, peopleCount: newPeopleCount, mode: 'person' };
+        itemsUpdated++;
       }
 
       newSubtotal = addDecimals(newSubtotal, updatedAmount);
@@ -941,6 +939,31 @@ export class BillingOrchestrationService {
             },
           });
         }
+
+        // Always persist pending next-cycle correction so future cycles honor it
+        await tx.roomNextCycleCorrection.upsert({
+          where: {
+            dormitory_room_next_cycle_correction_unique: {
+              dormitoryId,
+              roomId,
+            },
+          },
+          create: {
+            dormitoryId,
+            roomId,
+            peopleCount: newPeopleCount,
+            source: 'METER_CORRECTION',
+            updatedByUserId: userId || null,
+            consumedAt: nextCycle ? new Date() : null,
+          },
+          update: {
+            peopleCount: newPeopleCount,
+            source: 'METER_CORRECTION',
+            updatedByUserId: userId || null,
+            consumedAt: nextCycle ? new Date() : null,
+            updatedAt: new Date(),
+          },
+        });
 
         if (activeContract && prevPeopleCount !== newPeopleCount) {
           await this.outboxService.createOutboxEvent(tx, {

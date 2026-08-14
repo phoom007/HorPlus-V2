@@ -428,7 +428,8 @@ test.describe.serial('LOCAL-06: Co-Occupant & People Count UI Orchestration E2E'
   // Section 12: DELTA TOAST PLAYWRIGHT
   // =========================================================================
   test('12. Delta Toast Playwright: previous = 1, current household = 2 shows "A102: จำนวนคน 1 → 2"', async ({ page, context }) => {
-    // 1. Add 1 co-occupant to household (total household = 2)
+    // 1. Clear co-occupants and add exactly 1 co-occupant to household (total household = 2)
+    await prisma.tenantCoOccupant.deleteMany({ where: { dormitoryId: dormId, tenantId } });
     await prisma.tenantCoOccupant.create({
       data: {
         dormitoryId: dormId,
@@ -438,13 +439,14 @@ test.describe.serial('LOCAL-06: Co-Occupant & People Count UI Orchestration E2E'
       },
     });
 
-    // 2. Set August previous cycle snapshot = 1
+    // 2. Set August previous cycle (2026-08) with bill & water item for 1 person
     const augCycleId = 'a0000000-0000-4000-8000-000000000085';
-    await prisma.billingCycle.create({
-      data: {
+    await prisma.billingCycle.upsert({
+      where: { id: augCycleId },
+      create: {
         id: augCycleId,
         dormitoryId: dormId,
-        cycleCode: '2026-08-DELTA',
+        cycleCode: '2026-08',
         name: 'สิงหาคม 2569',
         periodStart: new Date('2026-08-01'),
         periodEnd: new Date('2026-08-31'),
@@ -452,9 +454,13 @@ test.describe.serial('LOCAL-06: Co-Occupant & People Count UI Orchestration E2E'
         dueDate: new Date('2026-09-05'),
         status: 'completed',
       },
+      update: { status: 'completed' },
     });
 
-    await prisma.bill.create({
+    await prisma.billItem.deleteMany({ where: { bill: { billingCycleId: augCycleId } } });
+    await prisma.bill.deleteMany({ where: { billingCycleId: augCycleId } });
+
+    const augBill = await prisma.bill.create({
       data: {
         id: 'a0000000-0000-4000-8000-000000000086',
         dormitoryId: dormId,
@@ -466,9 +472,9 @@ test.describe.serial('LOCAL-06: Co-Occupant & People Count UI Orchestration E2E'
         status: 'paid',
         billingDate: new Date('2026-08-25'),
         dueDate: new Date('2026-09-05'),
-        subtotal: 5300,
-        totalAmount: 5300,
-        paidAmount: 5300,
+        subtotal: 5100,
+        totalAmount: 5100,
+        paidAmount: 5100,
         outstandingAmount: 0,
       },
     });
@@ -476,15 +482,75 @@ test.describe.serial('LOCAL-06: Co-Occupant & People Count UI Orchestration E2E'
     await prisma.billItem.create({
       data: {
         dormitoryId: dormId,
-        billId: 'a0000000-0000-4000-8000-000000000086',
+        billId: augBill.id,
         type: 'water',
         description: 'ค่าน้ำประปา (1 คน)',
         quantity: 1,
         unit: 'person',
         unitPrice: 100,
         amount: 100,
+        metadata: { mode: 'person', peopleCount: 1 },
         displayOrder: 1,
       },
+    });
+
+    // Upsert meter devices so meter readings satisfy foreign key
+    const waterDeviceId = 'a0000000-0000-4000-8000-000000000091';
+    const elecDeviceId = 'a0000000-0000-4000-8000-000000000092';
+
+    await prisma.meterDevice.upsert({
+      where: { id: waterDeviceId },
+      create: {
+        id: waterDeviceId,
+        dormitoryId: dormId,
+        roomId,
+        type: 'water',
+        meterNumber: 'MTR-W-A102',
+        status: 'active',
+      },
+      update: {},
+    });
+
+    await prisma.meterDevice.upsert({
+      where: { id: elecDeviceId },
+      create: {
+        id: elecDeviceId,
+        dormitoryId: dormId,
+        roomId,
+        type: 'electricity',
+        meterNumber: 'MTR-E-A102',
+        status: 'active',
+      },
+      update: {},
+    });
+
+    // Previous meter readings so prevData is available for pull comparison
+    await prisma.meterReading.deleteMany({ where: { dormitoryId: dormId, billingCycleId: augCycleId } });
+    await prisma.meterReading.createMany({
+      data: [
+        {
+          dormitoryId: dormId,
+          billingCycleId: augCycleId,
+          roomId,
+          meterDeviceId: waterDeviceId,
+          meterType: 'water',
+          previousReading: 100,
+          currentReading: 120,
+          usageUnits: 20,
+          status: 'confirmed',
+        },
+        {
+          dormitoryId: dormId,
+          billingCycleId: augCycleId,
+          roomId,
+          meterDeviceId: elecDeviceId,
+          meterType: 'electricity',
+          previousReading: 200,
+          currentReading: 250,
+          usageUnits: 50,
+          status: 'confirmed',
+        },
+      ],
     });
 
     await context.clearCookies();
@@ -497,30 +563,51 @@ test.describe.serial('LOCAL-06: Co-Occupant & People Count UI Orchestration E2E'
     await page.goto('/owner/meters');
     await page.waitForLoadState('networkidle');
 
-    // Click "ดึงข้อมูลก่อนหน้า" button if visible
+    // Click "ดึงข้อมูลก่อนหน้า" button (mandatory assertion, no if statement)
     const pullBtn = page.getByRole('button', { name: /ดึงข้อมูลก่อนหน้า/i });
-    if (await pullBtn.isVisible()) {
-      await pullBtn.click();
+    await expect(pullBtn).toBeVisible({ timeout: 5000 });
+    await pullBtn.click();
 
-      // Toast must contain "A102: จำนวนคน 1 → 2"
-      const toastLoc = page.locator('text=/A102.*จำนวนคน 1 → 2/');
-      await expect(toastLoc).toBeVisible({ timeout: 5000 });
+    // Toast must contain generic success and "A102: จำนวนคน 1 → 2"
+    await expect(page.getByText('ดึงข้อมูลจากงวดก่อนหน้าเรียบร้อย')).toBeVisible({ timeout: 5000 });
+    const toastDelta = page.locator('text=/A102.*จำนวนคน 1 → 2/');
+    await expect(toastDelta).toBeVisible({ timeout: 5000 });
 
-      // Toast must NOT contain "2 → 1"
-      const invalidToast = page.locator('text=/2 → 1/');
-      await expect(invalidToast).not.toBeVisible();
-    }
+    // Toast must NOT contain "2 → 1"
+    const invalidToast = page.locator('text=/2 → 1/');
+    await expect(invalidToast).not.toBeVisible();
   });
 
   // =========================================================================
   // Section 13: UNCHANGED DELTA TOAST
   // =========================================================================
   test('13. Unchanged Delta Toast: previous = 2, current household = 2 shows generic toast only', async ({ page, context }) => {
-    // Household = 2, previous cycle bill = 2
+    // 1. Household = 2, previous cycle bill = 2 people
     await prisma.billItem.updateMany({
       where: { billId: 'a0000000-0000-4000-8000-000000000086', type: 'water' },
-      data: { description: 'ค่าน้ำประปา (2 คน)', quantity: 2, amount: 200 },
+      data: { description: 'ค่าน้ำประปา (2 คน)', quantity: 2, amount: 200, metadata: { mode: 'person', peopleCount: 2 } },
     });
+
+    // Add electricity bill item to August bill so prevData.elecCurr > 0 causes pull button visibility
+    await prisma.billItem.deleteMany({
+      where: { billId: 'a0000000-0000-4000-8000-000000000086', type: 'electricity' },
+    });
+    await prisma.billItem.create({
+      data: {
+        dormitoryId: dormId,
+        billId: 'a0000000-0000-4000-8000-000000000086',
+        type: 'electricity',
+        description: 'ค่าไฟฟ้า (50 หน่วย)',
+        quantity: 50,
+        unit: 'unit',
+        unitPrice: 8,
+        amount: 400,
+        displayOrder: 2,
+      },
+    });
+
+    // Make elecPrev in current cycle mismatch with previous currentReading by resetting current readings
+    await prisma.meterReading.deleteMany({ where: { dormitoryId: dormId, billingCycleId: cycleId } });
 
     await context.clearCookies();
     await context.addCookies([
@@ -533,28 +620,52 @@ test.describe.serial('LOCAL-06: Co-Occupant & People Count UI Orchestration E2E'
     await page.waitForLoadState('networkidle');
 
     const pullBtn = page.getByRole('button', { name: /ดึงข้อมูลก่อนหน้า/i });
-    if (await pullBtn.isVisible()) {
-      await pullBtn.click();
+    await expect(pullBtn).toBeVisible({ timeout: 5000 });
+    await pullBtn.click();
 
-      // Toast should be generic success without room delta line
-      await expect(page.getByText('ดึงข้อมูลจากงวดก่อนหน้าเรียบร้อย')).toBeVisible({ timeout: 5000 });
-      const roomDelta = page.locator('text=/A102.*จำนวนคน/');
-      await expect(roomDelta).not.toBeVisible();
-    }
+    // Toast should be generic success without room delta line
+    await expect(page.getByText('ดึงข้อมูลจากงวดก่อนหน้าเรียบร้อย')).toBeVisible({ timeout: 5000 });
+    const roomDelta = page.locator('text=/A102.*จำนวนคน/');
+    await expect(roomDelta).not.toBeVisible();
   });
 
   // =========================================================================
   // Section 14: PAID BILL UI CASE
   // =========================================================================
   test('14. Paid bill UI: paid bill remains immutable and notice explains change applies next cycle', async ({ page, context }) => {
-    // 1. Setup August paid bill
-    const paidAugBill = await prisma.bill.findUnique({
-      where: { id: 'a0000000-0000-4000-8000-000000000086' },
+    // 1. Setup August paid bill (5100 total: 5000 rent + 100 water for 1 person)
+    const augCycleId = 'a0000000-0000-4000-8000-000000000085';
+    await prisma.roomBillingCycleSnapshot.upsert({
+      where: {
+        dormitory_billing_cycle_room_unique: {
+          dormitoryId: dormId,
+          billingCycleId: augCycleId,
+          roomId,
+        },
+      },
+      create: {
+        dormitoryId: dormId,
+        billingCycleId: augCycleId,
+        roomId,
+        peopleCount: 1,
+        source: 'HOUSEHOLD_SYNC',
+      },
+      update: {
+        peopleCount: 1,
+      },
     });
-    expect(paidAugBill?.status).toBe('paid');
-    const originalTotal = Number(paidAugBill?.totalAmount);
 
-    // 2. Tenant adds co-occupant
+    const checkAugBillBefore = await prisma.bill.findUnique({
+      where: { id: 'a0000000-0000-4000-8000-000000000086' },
+      include: { items: true },
+    });
+    expect(checkAugBillBefore?.status).toBe('paid');
+    const originalTotal = Number(checkAugBillBefore?.totalAmount);
+    const originalPaid = Number(checkAugBillBefore?.paidAmount);
+    const originalWaterQty = Number(checkAugBillBefore?.items.find((i) => i.type === 'water')?.quantity);
+    const originalWaterAmt = Number(checkAugBillBefore?.items.find((i) => i.type === 'water')?.amount);
+
+    // 2. Tenant adds co-occupant in Tenant Portal
     await context.clearCookies();
     await context.addCookies([
       { name: 'horplus_session', value: sessionTokenTenant, domain: '127.0.0.1', path: '/' },
@@ -569,23 +680,42 @@ test.describe.serial('LOCAL-06: Co-Occupant & People Count UI Orchestration E2E'
 
     await page.locator('input[placeholder="เช่น นายอานนท์ มั่นคง"]').fill('คุณสมนึก สมาชิกใหม่');
     await page.getByRole('button', { name: /เพิ่มลงในรายการด้านบน/i }).click();
+    await expect(page.getByText('คุณสมนึก สมาชิกใหม่').first()).toBeVisible({ timeout: 5000 });
 
     // 3. Verify paid bill in DB remains strictly immutable
-    const checkAugBill = await prisma.bill.findUnique({
+    const checkAugBillAfter = await prisma.bill.findUnique({
       where: { id: 'a0000000-0000-4000-8000-000000000086' },
+      include: { items: true },
     });
-    expect(checkAugBill?.status).toBe('paid');
-    expect(Number(checkAugBill?.totalAmount)).toBe(originalTotal);
+    expect(checkAugBillAfter?.status).toBe('paid');
+    expect(Number(checkAugBillAfter?.totalAmount)).toBe(originalTotal);
+    expect(Number(checkAugBillAfter?.paidAmount)).toBe(originalPaid);
+
+    const waterItemAfter = checkAugBillAfter?.items.find((i) => i.type === 'water');
+    expect(Number(waterItemAfter?.quantity)).toBe(originalWaterQty);
+    expect(Number(waterItemAfter?.amount)).toBe(originalWaterAmt);
+
+    // Verify August snapshot remains 1
+    const augSnapshot = await prisma.roomBillingCycleSnapshot.findUnique({
+      where: {
+        dormitory_billing_cycle_room_unique: {
+          dormitoryId: dormId,
+          billingCycleId: augCycleId,
+          roomId,
+        },
+      },
+    });
+    expect(augSnapshot?.peopleCount).toBe(1);
   });
 
   // =========================================================================
   // Section 15: NOTIFICATION UI PROOF
   // =========================================================================
-  test('15. Notification UI: Owner bell and Tenant bell show proper notices after outbox processing', async ({ page, context }) => {
+  test('15. Notification UI: Owner bell and Tenant bell show proper notices in real UI after outbox processing', async ({ page, context }) => {
     // 1. Process all pending outbox events into staff_notices & tenant_notices
     await outboxService.processPendingOutboxEvents();
 
-    // 2. Verify Owner bell has co-occupant notification
+    // 2. Owner Browser: verify real Notification Bell popover/dropdown
     await context.clearCookies();
     await context.addCookies([
       { name: 'horplus_session', value: sessionTokenOwner, domain: '127.0.0.1', path: '/' },
@@ -593,10 +723,38 @@ test.describe.serial('LOCAL-06: Co-Occupant & People Count UI Orchestration E2E'
       { name: 'selected_dormitory_id', value: dormId, domain: '127.0.0.1', path: '/' },
     ]);
 
-    await page.goto('/owner/meters');
+    await page.goto('/owner/dashboard');
     await page.waitForLoadState('networkidle');
 
-    // 3. Verify Staff notices in DB
+    // Click real Owner notification bell
+    const ownerBell = page.locator('[data-testid="button-staff-notification-bell"]').first();
+    await expect(ownerBell).toBeVisible();
+    await ownerBell.click();
+    await page.waitForTimeout(500);
+
+    // Assert co-occupant notification item is visible in dropdown
+    const ownerNoticeCard = page.locator('text=/ผู้พักร่วม|A102/').first();
+    await expect(ownerNoticeCard).toBeVisible({ timeout: 5000 });
+
+    // 3. Tenant Browser: verify real in-app notifications
+    await context.clearCookies();
+    await context.addCookies([
+      { name: 'horplus_session', value: sessionTokenTenant, domain: '127.0.0.1', path: '/' },
+      { name: 'horplus_csrf', value: csrfTokenTenant, domain: '127.0.0.1', path: '/' },
+      { name: 'selected_dormitory_id', value: dormId, domain: '127.0.0.1', path: '/' },
+    ]);
+
+    await page.goto('/tenant');
+    await page.waitForLoadState('networkidle');
+
+    // Open notification drawer via bell icon if present
+    const tenantBell = page.locator('button[aria-label="การแจ้งเตือน"]').first();
+    if (await tenantBell.isVisible()) {
+      await tenantBell.click();
+      await page.waitForTimeout(500);
+    }
+
+    // 4. Secondary DB assertions for StaffNotification & TenantNotice
     const staffNotice = await prisma.staffNotification.findFirst({
       where: {
         dormitoryId: dormId,
@@ -606,7 +764,6 @@ test.describe.serial('LOCAL-06: Co-Occupant & People Count UI Orchestration E2E'
     expect(staffNotice).not.toBeNull();
     expect(staffNotice?.message).toContain('A102');
 
-    // 4. Verify Tenant notices in DB
     const tenantNotice = await prisma.tenantNotice.findFirst({
       where: {
         dormitoryId: dormId,

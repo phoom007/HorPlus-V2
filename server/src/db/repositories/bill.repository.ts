@@ -25,6 +25,7 @@ export interface BillEntity {
   cancelledByUserId?: string | null;
   cancellationReason?: string | null;
   version: number;
+  items?: BillItemEntity[];
   createdAt: Date;
   updatedAt: Date;
 }
@@ -430,6 +431,7 @@ export class PrismaBillRepository implements IBillRepository {
       cancelledByUserId: model.cancelledByUserId || null,
       cancellationReason: model.cancellationReason || null,
       version: model.version,
+      items: Array.isArray(model.items) ? model.items.map((i: any) => this.mapItemToEntity(i)) : undefined,
       createdAt: model.createdAt,
       updatedAt: model.updatedAt,
     };
@@ -584,6 +586,7 @@ export class PrismaBillRepository implements IBillRepository {
     const [bills, total] = await Promise.all([
       this.prisma.bill.findMany({
         where,
+        include: { items: true },
         skip,
         take: pageSize,
         orderBy: { createdAt: 'desc' },
