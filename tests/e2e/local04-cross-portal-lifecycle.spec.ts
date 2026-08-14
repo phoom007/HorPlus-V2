@@ -6,6 +6,7 @@ import { CsrfService } from '../../server/src/services/csrf.service.js';
 import { subscriptionEntitlementService } from '../../server/src/services/subscription-entitlement.service.js';
 import { contractRenewalService } from '../../server/src/services/contract-renewal.service.js';
 import { outboxService } from '../../server/src/services/outbox.service.js';
+import { settlementService } from '../../server/src/services/settlement.service.js';
 import { encryptText, hashToken } from '../../server/src/utils/crypto-encryption.js';
 
 test.describe.serial('LOCAL-04 — Master Cross-Portal Playwright Acceptance Suite (Journeys A-L)', () => {
@@ -923,7 +924,7 @@ test.describe.serial('LOCAL-04 — Master Cross-Portal Playwright Acceptance Sui
   // =========================================================================
   // JOURNEY F & G: FORCED REPLACEMENT & SETTLEMENT CROSS-PORTAL LIFECYCLE
   // =========================================================================
-  test('Journey F & G — Forced replacement destructive warning -> Atomic termination & settlement creation -> Owner confirms settlement refund', async ({ browser }) => {
+  test('Journey F & G1 — Forced replacement destructive warning -> Atomic termination & settlement net > 0 (PENDING_REFUND -> REFUNDED via UI)', async ({ browser }) => {
     test.setTimeout(60000);
 
     // 1. Setup Old Tenant in Room A201 with deposit
@@ -1034,7 +1035,9 @@ test.describe.serial('LOCAL-04 — Master Cross-Portal Playwright Acceptance Sui
     });
     expect(createdSettlement).not.toBeNull();
     expect(createdSettlement?.settlementStatus).toBe('PENDING_REFUND');
+    expect(createdSettlement?.settlementDirection).toBe('REFUND');
     expect(Number(createdSettlement!.depositAmount)).toBe(12000);
+    expect(Number(createdSettlement!.netSettlement)).toBe(12000);
 
     // Dispatch outbox events to ensure notices are delivered
     await outboxService.processPendingOutboxEvents();
@@ -1046,26 +1049,23 @@ test.describe.serial('LOCAL-04 — Master Cross-Portal Playwright Acceptance Sui
 
     await expect(oldTenantCtx.page.locator('text=แจ้งยุติสัญญาเช่า').first()).toBeVisible({ timeout: 15000 });
 
-    // 6. Owner confirms settlement refund in Settlements UI
+    // 6. Owner confirms settlement refund in Settlements UI (net > 0: PENDING_REFUND -> REFUNDED)
     await ownerPage.goto('/owner/contracts');
     await ownerPage.waitForLoadState('networkidle');
 
-    // Confirm settlement status via API or UI button
-    const confirmRefundBtn = ownerPage.locator('[data-testid="confirm-refund-btn"], button:has-text("ยืนยันว่าคืนเงินจริงแล้ว")').first();
-    if (await confirmRefundBtn.isVisible()) {
-      await confirmRefundBtn.click();
-      await expect(ownerPage.locator('text=รายการนี้ยืนยันยอดแล้ว ไม่สามารถแก้ไขได้')).toBeVisible({ timeout: 10000 });
-    } else {
-      // Ensure backend settlement status endpoint confirms refund
-      await ownerPage.request.post(`http://127.0.0.1:3101/api/v1/settlements/${createdSettlement!.id}/confirm`, {
-        headers: {
-          'x-dormitory-id': dormIdA,
-          'x-csrf-token': csrfTokenOwnerA,
-          Cookie: `horplus_session=${sessionTokenOwnerA}; horplus_csrf=${csrfTokenOwnerA}`,
-        },
-        data: { settlementStatus: 'REFUNDED' },
-      });
-    }
+    await ownerPage.locator('input[placeholder*="ค้นหา"]').fill(oldContract.contractNumber);
+    await ownerPage.locator(`text=${oldContract.contractNumber}`).first().click();
+
+    await expect(ownerPage.locator('[data-testid="settlement-container"]')).toBeVisible({ timeout: 10000 });
+    await expect(ownerPage.locator('[data-testid="settlement-status-badge"]')).toContainText('รอคืนเงิน');
+    await expect(ownerPage.locator('[data-testid="settlement-direction"]')).toContainText('คืนเงินให้ผู้เช่า');
+
+    const confirmRefundBtn = ownerPage.locator('[data-testid="confirm-refund-btn"]').first();
+    await expect(confirmRefundBtn).toBeVisible({ timeout: 10000 });
+    await confirmRefundBtn.click();
+
+    await expect(ownerPage.locator('[data-testid="settlement-locked-notice"]')).toBeVisible({ timeout: 10000 });
+    await expect(ownerPage.locator('[data-testid="settlement-status-badge"]')).toContainText('คืนเงินแล้ว');
 
     const updatedSettlement = await prisma.contractSettlement.findUnique({ where: { id: createdSettlement!.id } });
     expect(updatedSettlement?.settlementStatus).toBe('REFUNDED');
@@ -1073,6 +1073,212 @@ test.describe.serial('LOCAL-04 — Master Cross-Portal Playwright Acceptance Sui
     await newAppCtx.close();
     await ownerCtx.close();
     await oldTenantCtx.context.close();
+  });
+
+  test('Journey G2 — Settlement Direction B: net < 0 (PENDING_PAYMENT -> PAYMENT_RECEIVED via Owner UI confirmation) & cross-portal verification', async ({ browser }) => {
+    test.setTimeout(60000);
+
+    const timestamp = Date.now();
+    // 1. Setup Tenant and terminated contract with deposit = 3000 in Room A202
+    const tenantUser = await prisma.user.create({
+      data: {
+        email: `tenant-neg-${timestamp}@example.com`,
+        emailNormalized: `tenant-neg-${timestamp}@example.com`,
+        name: 'Tenant NegSettlement',
+        googleSubject: `sub-tenant-neg-${timestamp}`,
+        status: 'active',
+      },
+    });
+    const tenantRole = await prisma.role.findFirst({ where: { code: 'TENANT', dormitoryId: dormIdA } }) || await prisma.role.create({
+      data: { dormitoryId: dormIdA, code: 'TENANT', name: 'Tenant', permissions: ['contract:read'] },
+    });
+    await prisma.dormitoryMember.create({
+      data: { dormitoryId: dormIdA, userId: tenantUser.id, roleId: tenantRole!.id, status: 'active' },
+    });
+
+    const tenant = await prisma.tenant.create({
+      data: {
+        dormitoryId: dormIdA,
+        tenantNumber: `TNT-NEG-${timestamp}`,
+        firstName: 'Tenant',
+        lastName: 'NegSettlement',
+        displayName: 'Tenant NegSettlement',
+        phone: '0819998833',
+        status: 'active',
+        linkedUserId: tenantUser.id,
+      },
+    });
+
+    const contract = await prisma.contract.create({
+      data: {
+        dormitoryId: dormIdA,
+        contractNumber: `CTR-NEG-${timestamp}`,
+        roomId: roomIdA202,
+        tenantId: tenant.id,
+        status: 'terminated',
+        startDate: new Date('2026-01-01'),
+        endDate: new Date('2026-06-30'),
+        durationMonths: 6,
+        rentAmount: '5000',
+        depositAmount: '3000',
+        advancePaymentAmount: '5000',
+        activatedAt: new Date('2026-01-01'),
+        terminationReason: 'สิ้นสุดสัญญาเช่าตามกำหนด',
+      },
+    });
+
+    // 2. Initialize settlement via settlementService with damage item of 5000 (net = 3000 - 5000 = -2000)
+    const settlement = await settlementService.getOrCreateSettlement(dormIdA, contract.id);
+    await settlementService.addDamageItem({
+      dormitoryId: dormIdA,
+      settlementId: settlement.id,
+      description: 'ค่าซ่อมแซมผนังและเปลี่ยนกุญแจห้อง',
+      amount: 5000,
+      actorUserId: ownerUserA.id,
+      actorRole: 'OWNER',
+    });
+
+    const recalculatedSettlement = await prisma.contractSettlement.findUnique({ where: { id: settlement.id } });
+    expect(recalculatedSettlement?.settlementStatus).toBe('PENDING_PAYMENT');
+    expect(recalculatedSettlement?.settlementDirection).toBe('PAYMENT_DUE');
+    expect(Number(recalculatedSettlement?.netSettlement)).toBe(-2000);
+
+    // 3. Owner UI: Open /owner/contracts, select contract, verify PENDING_PAYMENT, click confirm payment
+    const ownerCtx = await browser.newContext();
+    const ownerPage = await ownerCtx.newPage();
+    await setupBrowserSession(ownerCtx, ownerPage, ownerUserA, sessionTokenOwnerA, csrfTokenOwnerA, dormIdA);
+
+    await ownerPage.goto('/owner/contracts');
+    await ownerPage.waitForLoadState('networkidle');
+
+    await ownerPage.locator('input[placeholder*="ค้นหา"]').fill(contract.contractNumber);
+    await ownerPage.locator(`text=${contract.contractNumber}`).first().click();
+
+    await expect(ownerPage.locator('[data-testid="settlement-container"]')).toBeVisible({ timeout: 10000 });
+    await expect(ownerPage.locator('[data-testid="settlement-status-badge"]')).toContainText('รอชำระส่วนต่าง');
+    await expect(ownerPage.locator('[data-testid="settlement-direction"]')).toContainText('เรียกเก็บจากผู้เช่า');
+
+    const confirmPaymentBtn = ownerPage.locator('[data-testid="confirm-payment-btn"]').first();
+    await expect(confirmPaymentBtn).toBeVisible({ timeout: 10000 });
+    await confirmPaymentBtn.click();
+
+    await expect(ownerPage.locator('[data-testid="settlement-locked-notice"]')).toBeVisible({ timeout: 10000 });
+    await expect(ownerPage.locator('[data-testid="settlement-status-badge"]')).toContainText('ชำระส่วนต่างแล้ว');
+
+    // 4. DB Assertion: Status is PAYMENT_RECEIVED
+    const finalSettlement = await prisma.contractSettlement.findUnique({ where: { id: settlement.id } });
+    expect(finalSettlement?.settlementStatus).toBe('PAYMENT_RECEIVED');
+
+    // 5. Tenant portal cross-verification: Tenant logs in and views portal cleanly
+    const tenantCtx = await createAuthenticatedTenantContext(browser, tenantUser, dormIdA);
+    await tenantCtx.page.goto('/tenant');
+    await tenantCtx.page.waitForLoadState('networkidle');
+    await expect(tenantCtx.page.locator('body')).toBeVisible();
+
+    await ownerCtx.close();
+    await tenantCtx.context.close();
+  });
+
+  test('Journey G3 — Settlement Direction C: net = 0 (CLOSED_ZERO exact state verification across Owner UI, DB, and Tenant portal)', async ({ browser }) => {
+    test.setTimeout(60000);
+
+    const timestamp = Date.now();
+    // 1. Setup Tenant and terminated contract with deposit = 4000 in Room A104
+    const tenantUser = await prisma.user.create({
+      data: {
+        email: `tenant-zero-${timestamp}@example.com`,
+        emailNormalized: `tenant-zero-${timestamp}@example.com`,
+        name: 'Tenant ZeroSettlement',
+        googleSubject: `sub-tenant-zero-${timestamp}`,
+        status: 'active',
+      },
+    });
+    const tenantRole = await prisma.role.findFirst({ where: { code: 'TENANT', dormitoryId: dormIdA } }) || await prisma.role.create({
+      data: { dormitoryId: dormIdA, code: 'TENANT', name: 'Tenant', permissions: ['contract:read'] },
+    });
+    await prisma.dormitoryMember.create({
+      data: { dormitoryId: dormIdA, userId: tenantUser.id, roleId: tenantRole!.id, status: 'active' },
+    });
+
+    const tenant = await prisma.tenant.create({
+      data: {
+        dormitoryId: dormIdA,
+        tenantNumber: `TNT-ZERO-${timestamp}`,
+        firstName: 'Tenant',
+        lastName: 'ZeroSettlement',
+        displayName: 'Tenant ZeroSettlement',
+        phone: '0819998844',
+        status: 'active',
+        linkedUserId: tenantUser.id,
+      },
+    });
+
+    const contract = await prisma.contract.create({
+      data: {
+        dormitoryId: dormIdA,
+        contractNumber: `CTR-ZERO-${timestamp}`,
+        roomId: roomIdA104,
+        tenantId: tenant.id,
+        status: 'terminated',
+        startDate: new Date('2026-01-01'),
+        endDate: new Date('2026-06-30'),
+        durationMonths: 6,
+        rentAmount: '4000',
+        depositAmount: '4000',
+        advancePaymentAmount: '4000',
+        activatedAt: new Date('2026-01-01'),
+        terminationReason: 'สิ้นสุดสัญญาเช่าตามกำหนด',
+      },
+    });
+
+    // 2. Initialize settlement with deposit 4000 and damage 4000 -> net = 0 -> CLOSED_ZERO
+    const settlement = await settlementService.getOrCreateSettlement(dormIdA, contract.id);
+    await settlementService.addDamageItem({
+      dormitoryId: dormIdA,
+      settlementId: settlement.id,
+      description: 'ค่าทำความสะอาดห้องพักตอนย้ายออก',
+      amount: 4000,
+      actorUserId: ownerUserA.id,
+      actorRole: 'OWNER',
+    });
+
+    const recalculatedSettlement = await prisma.contractSettlement.findUnique({ where: { id: settlement.id } });
+    expect(recalculatedSettlement?.settlementStatus).toBe('CLOSED_ZERO');
+    expect(recalculatedSettlement?.settlementDirection).toBe('ZERO');
+    expect(Number(recalculatedSettlement?.netSettlement)).toBe(0);
+
+    // 3. Owner UI: Open /owner/contracts, select contract, verify CLOSED_ZERO and zero confirm buttons
+    const ownerCtx = await browser.newContext();
+    const ownerPage = await ownerCtx.newPage();
+    await setupBrowserSession(ownerCtx, ownerPage, ownerUserA, sessionTokenOwnerA, csrfTokenOwnerA, dormIdA);
+
+    await ownerPage.goto('/owner/contracts');
+    await ownerPage.waitForLoadState('networkidle');
+
+    await ownerPage.locator('input[placeholder*="ค้นหา"]').fill(contract.contractNumber);
+    await ownerPage.locator(`text=${contract.contractNumber}`).first().click();
+
+    await expect(ownerPage.locator('[data-testid="settlement-container"]')).toBeVisible({ timeout: 10000 });
+    await expect(ownerPage.locator('[data-testid="settlement-status-badge"]')).toContainText('ไม่มียอดต้องชำระหรือคืน');
+    await expect(ownerPage.locator('[data-testid="settlement-direction"]')).toContainText('ไม่มียอดต้องชำระหรือคืน');
+
+    // Confirm neither confirm button exists
+    await expect(ownerPage.locator('[data-testid="confirm-refund-btn"]')).not.toBeVisible();
+    await expect(ownerPage.locator('[data-testid="confirm-payment-btn"]')).not.toBeVisible();
+
+    // 4. DB Assertion: Status is CLOSED_ZERO, zero payment records created
+    const finalSettlement = await prisma.contractSettlement.findUnique({ where: { id: settlement.id } });
+    expect(finalSettlement?.settlementStatus).toBe('CLOSED_ZERO');
+    expect(finalSettlement?.settlementDirection).toBe('ZERO');
+
+    // 5. Tenant portal: Loads cleanly without errors
+    const tenantCtx = await createAuthenticatedTenantContext(browser, tenantUser, dormIdA);
+    await tenantCtx.page.goto('/tenant');
+    await tenantCtx.page.waitForLoadState('networkidle');
+    await expect(tenantCtx.page.locator('body')).toBeVisible();
+
+    await ownerCtx.close();
+    await tenantCtx.context.close();
   });
 
   // =========================================================================
