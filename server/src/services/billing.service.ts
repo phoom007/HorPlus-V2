@@ -11,6 +11,7 @@ import { IContractRepository } from '../db/repositories/contract.repository.js';
 import { IRoomRepository } from '../db/repositories/room.repository.js';
 import { ITenantRepository } from '../db/repositories/tenant.repository.js';
 import { AuditService } from './audit.service.js';
+import { billingOrchestrationService } from './billing-orchestration.service.js';
 import { toDecimal, addDecimals, mulDecimals, formatDecimal, subDecimals, compareDecimals, isZeroDecimal } from '../utils/decimal-math.util.js';
 
 export interface GenerateBillDto {
@@ -43,6 +44,8 @@ export interface BillPreviewResult {
   electricityAmount: string;
   commonFee: string;
   internetFee: string;
+  parkingFee?: string;
+  peopleCount: number;
   subtotal: string;
   discountAmount: string;
   totalAmount: string;
@@ -50,8 +53,10 @@ export interface BillPreviewResult {
     type: string;
     description: string;
     quantity: string;
+    unit?: string;
     unitPrice: string;
     amount: string;
+    metadata?: any;
   }>;
 }
 
@@ -91,6 +96,13 @@ export class BillingService {
     const elecRate = toDecimal(rateSnapshot.electricityRate);
     const commonFee = toDecimal(rateSnapshot.commonFee);
     const internetFee = toDecimal(rateSnapshot.internetFee);
+    const parkingFee = toDecimal((rateSnapshot as any).parkingFee || '0.00');
+
+    const waterMode = (rateSnapshot as any).waterBillingType || 'per_unit';
+    const elecMode = (rateSnapshot as any).electricityBillingType || 'per_unit';
+    const commonMode = (rateSnapshot as any).commonFeeMode || 'room';
+    const internetMode = (rateSnapshot as any).internetFeeMode || 'room';
+    const parkingMode = (rateSnapshot as any).parkingFeeMode || 'room';
 
     // Find active contract for room
     const activeContracts = await this.contractRepo.findActiveContractsForRoom(dormitoryId, roomId);
@@ -101,6 +113,15 @@ export class BillingService {
       throw err;
     }
     const contract = activeContracts[0];
+
+    // Authoritative billing-cycle peopleCount snapshot resolution
+    const peopleCount = await billingOrchestrationService.resolveCyclePeopleCount(
+      dormitoryId,
+      billingCycleId,
+      roomId,
+      contract.tenantId
+    );
+    const peopleCountDec = toDecimal(peopleCount.toString());
 
     // Find meter readings
     const waterReading = await this.meterRepo.findReadingByCycleRoomAndType(
@@ -118,58 +139,119 @@ export class BillingService {
 
     const waterUsage = toDecimal(waterReading?.usageUnits || '0.00');
     const elecUsage = toDecimal(elecReading?.usageUnits || '0.00');
-
-    const waterAmount = mulDecimals(waterUsage, waterRate);
-    const elecAmount = mulDecimals(elecUsage, elecRate);
     const rentAmount = toDecimal(contract.rentAmount);
 
-    const items: Array<{ type: string; description: string; quantity: string; unitPrice: string; amount: string }> = [
+    let waterQuantity = waterUsage;
+    let waterAmount = mulDecimals(waterUsage, waterRate);
+    let waterDesc = `ค่าน้ำประปา (${formatDecimal(waterUsage)} หน่วย)`;
+    let waterUnit = 'unit';
+
+    if (waterMode === 'per_person' || waterMode === 'person') {
+      waterQuantity = peopleCountDec;
+      waterAmount = mulDecimals(peopleCountDec, waterRate);
+      waterDesc = `ค่าน้ำประปา (${peopleCount} คน)`;
+      waterUnit = 'person';
+    } else if (waterMode === 'flat_rate' || waterMode === 'per_room' || waterMode === 'room') {
+      waterQuantity = toDecimal('1.00');
+      waterAmount = waterRate;
+      waterDesc = `ค่าน้ำประปา (เหมาจ่าย)`;
+      waterUnit = 'room';
+    }
+
+    let elecQuantity = elecUsage;
+    let elecAmount = mulDecimals(elecUsage, elecRate);
+    let elecDesc = `ค่าไฟฟ้า (${formatDecimal(elecUsage)} หน่วย)`;
+    let elecUnit = 'unit';
+
+    if (elecMode === 'per_person' || elecMode === 'person') {
+      elecQuantity = peopleCountDec;
+      elecAmount = mulDecimals(peopleCountDec, elecRate);
+      elecDesc = `ค่าไฟฟ้า (${peopleCount} คน)`;
+      elecUnit = 'person';
+    } else if (elecMode === 'flat_rate' || elecMode === 'per_room' || elecMode === 'room') {
+      elecQuantity = toDecimal('1.00');
+      elecAmount = elecRate;
+      elecDesc = `ค่าไฟฟ้า (เหมาจ่าย)`;
+      elecUnit = 'room';
+    }
+
+    const items: Array<{ type: string; description: string; quantity: string; unit?: string; unitPrice: string; amount: string; metadata?: any }> = [
       {
         type: 'rent',
         description: 'ค่าเช่าห้องพัก',
         quantity: '1.00',
+        unit: 'month',
         unitPrice: formatDecimal(rentAmount),
         amount: formatDecimal(rentAmount),
       },
     ];
 
-    if (!isZeroDecimal(waterUsage) || !isZeroDecimal(waterRate)) {
+    if (!isZeroDecimal(waterAmount) || !isZeroDecimal(waterRate)) {
       items.push({
         type: 'water',
-        description: `ค่าน้ำประปา (${formatDecimal(waterUsage)} หน่วย)`,
-        quantity: formatDecimal(waterUsage),
+        description: waterDesc,
+        quantity: formatDecimal(waterQuantity),
+        unit: waterUnit,
         unitPrice: formatDecimal(waterRate),
         amount: formatDecimal(waterAmount),
+        metadata: waterUnit === 'person' ? { mode: 'person', peopleCount } : undefined,
       });
     }
 
-    if (!isZeroDecimal(elecUsage) || !isZeroDecimal(elecRate)) {
+    if (!isZeroDecimal(elecAmount) || !isZeroDecimal(elecRate)) {
       items.push({
         type: 'electricity',
-        description: `ค่าไฟฟ้า (${formatDecimal(elecUsage)} หน่วย)`,
-        quantity: formatDecimal(elecUsage),
+        description: elecDesc,
+        quantity: formatDecimal(elecQuantity),
+        unit: elecUnit,
         unitPrice: formatDecimal(elecRate),
         amount: formatDecimal(elecAmount),
+        metadata: elecUnit === 'person' ? { mode: 'person', peopleCount } : undefined,
       });
     }
 
-    if (!isZeroDecimal(commonFee)) {
+    if (!isZeroDecimal(commonFee) && commonMode !== 'none') {
+      const isPerPerson = commonMode === 'person';
+      const q = isPerPerson ? peopleCountDec : toDecimal('1.00');
+      const amt = isPerPerson ? mulDecimals(peopleCountDec, commonFee) : commonFee;
       items.push({
         type: 'common_fee',
-        description: 'ค่าส่วนกลาง',
-        quantity: '1.00',
+        description: isPerPerson ? `ค่าส่วนกลาง (${peopleCount} คน)` : 'ค่าส่วนกลาง',
+        quantity: formatDecimal(q),
+        unit: isPerPerson ? 'person' : 'room',
         unitPrice: formatDecimal(commonFee),
-        amount: formatDecimal(commonFee),
+        amount: formatDecimal(amt),
+        metadata: isPerPerson ? { mode: 'person', peopleCount } : undefined,
       });
     }
 
-    if (!isZeroDecimal(internetFee)) {
+    if (!isZeroDecimal(internetFee) && internetMode !== 'none') {
+      const isPerPerson = internetMode === 'person';
+      const q = isPerPerson ? peopleCountDec : toDecimal('1.00');
+      const amt = isPerPerson ? mulDecimals(peopleCountDec, internetFee) : internetFee;
       items.push({
         type: 'internet',
-        description: 'ค่าบริการอินเทอร์เน็ต',
-        quantity: '1.00',
+        description: isPerPerson ? `ค่าบริการอินเทอร์เน็ต (${peopleCount} คน)` : 'ค่าบริการอินเทอร์เน็ต',
+        quantity: formatDecimal(q),
+        unit: isPerPerson ? 'person' : 'room',
         unitPrice: formatDecimal(internetFee),
-        amount: formatDecimal(internetFee),
+        amount: formatDecimal(amt),
+        metadata: isPerPerson ? { mode: 'person', peopleCount } : undefined,
+      });
+    }
+
+    if (!isZeroDecimal(parkingFee) && parkingMode !== 'free' && parkingMode !== 'none') {
+      const isPerPerson = parkingMode === 'person';
+      const q = isPerPerson ? peopleCountDec : toDecimal('1.00');
+      const amt = isPerPerson ? mulDecimals(peopleCountDec, parkingFee) : parkingFee;
+      items.push({
+        type: 'parking',
+        description: isPerPerson ? `ค่าที่จอดรถ (${peopleCount} คน)` : 'ค่าที่จอดรถ',
+        quantity: formatDecimal(q),
+        unit: isPerPerson ? 'person' : 'room',
+        unitPrice: formatDecimal(parkingFee),
+        amount: formatDecimal(amt),
+        metadata: isPerPerson ? { mode: 'person', peopleCount } : undefined,
       });
     }
 
@@ -191,6 +273,8 @@ export class BillingService {
       electricityAmount: formatDecimal(elecAmount),
       commonFee: formatDecimal(commonFee),
       internetFee: formatDecimal(internetFee),
+      parkingFee: formatDecimal(parkingFee),
+      peopleCount,
       subtotal: formatDecimal(subtotal),
       discountAmount: '0.00',
       totalAmount: formatDecimal(subtotal),
@@ -268,8 +352,10 @@ export class BillingService {
         type: i.type,
         description: i.description,
         quantity: i.quantity,
+        unit: i.unit || null,
         unitPrice: i.unitPrice,
         amount: i.amount,
+        metadata: i.metadata || null,
         displayOrder: idx,
       }));
 
@@ -279,8 +365,10 @@ export class BillingService {
             type: ci.type,
             description: ci.description,
             quantity: ci.quantity,
+            unit: (ci as any).unit || null,
             unitPrice: ci.unitPrice,
             amount: ci.amount,
+            metadata: (ci as any).metadata || null,
             displayOrder: preview.items.length + idx,
           });
         });

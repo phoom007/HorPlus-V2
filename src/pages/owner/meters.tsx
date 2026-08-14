@@ -333,6 +333,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     const targetPrevCycleId = `${prevYear}-${String(prevMonth).padStart(2, '0')}`;
 
     const newFlashing: { [key: string]: boolean } = {};
+    const peopleDeltas: string[] = [];
 
     const updatedRows = meterRows.map(row => {
       const prevData = getPrevCycleNewReadings(row.roomId);
@@ -346,6 +347,9 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
         if (isElecUnit) {
           nextRow.elecPrev = prevData.elecCurr;
           newFlashing[`${row.roomId}-elecPrev`] = true;
+        }
+        if (row.peopleCount !== prevPeople) {
+          peopleDeltas.push(`${row.roomNumber}: จำนวนคน ${row.peopleCount} → ${prevPeople}`);
         }
         nextRow.peopleCount = prevPeople;
         newFlashing[`${row.roomId}-peopleCount`] = true;
@@ -369,7 +373,11 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       }, 1500);
     }
 
-    showToast(`ดึงข้อมูลจากงวดก่อนหน้าเรียบร้อย`);
+    if (peopleDeltas.length === 0) {
+      showToast(`ดึงข้อมูลจากงวดก่อนหน้าเรียบร้อย`);
+    } else {
+      showToast(`ดึงข้อมูลจากงวดก่อนหน้าเรียบร้อย\n${peopleDeltas.join('\n')}`);
+    }
   };
 
   const getTemplateFormatString = () => {
@@ -1175,7 +1183,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
           }`}
         >
           <CheckCircle className="w-4.5 h-4.5 text-emerald-500 shrink-0" />
-          <span>{toastMessage || "บันทึกข้อมูลสำเร็จ"}</span>
+          <span className="whitespace-pre-line">{toastMessage || "บันทึกข้อมูลสำเร็จ"}</span>
         </div>
       )}
 

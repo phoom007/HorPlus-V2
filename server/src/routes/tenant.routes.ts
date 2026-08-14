@@ -11,6 +11,7 @@ import {
   CreateEmergencyContactSchema,
   CreateVehicleSchema,
 } from '../schemas/property-tenant-contract.schemas.js';
+import { billingOrchestrationService } from '../services/billing-orchestration.service.js';
 
 export function createTenantRouter(
   authService: AuthenticationService,
@@ -169,8 +170,13 @@ export function createTenantRouter(
           },
         });
       }
-      const coOccupant = await tenantService.addCoOccupant(dormId, req.params.id, parsed.data, req.auth?.userId);
-      res.status(201).json({ data: coOccupant });
+      const result = await billingOrchestrationService.addTenantCoOccupant(
+        dormId,
+        req.params.id,
+        parsed.data,
+        { userId: req.auth?.userId, isTenant: false }
+      );
+      res.status(201).json({ data: result.coOccupant, peopleCount: result.peopleCount, recalculation: result.recalculation });
     } catch (err) {
       handleServiceError(res, err, req);
     }
@@ -199,13 +205,13 @@ export function createTenantRouter(
     if (!verifyCsrf(req, res)) return;
     try {
       const dormId = getDormitoryId(req);
-      const result = await tenantService.removeCoOccupant(
+      const result = await billingOrchestrationService.removeTenantCoOccupant(
         dormId,
         req.params.id,
         req.params.coOccupantId,
-        req.auth?.userId
+        { userId: req.auth?.userId, isTenant: false }
       );
-      res.json({ data: result });
+      res.json({ data: { success: true, removedId: result.removedId, peopleCount: result.peopleCount, recalculation: result.recalculation } });
     } catch (err) {
       handleServiceError(res, err, req);
     }

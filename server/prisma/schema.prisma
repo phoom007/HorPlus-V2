@@ -117,6 +117,7 @@ model Dormitory {
   notices                    TenantNotice[]
   outboxEvents               LocalNotificationOutbox[]
   staffNotices               StaffNotification[]
+  roomBillingCycleSnapshots  RoomBillingCycleSnapshot[]
 
   @@map("dormitories")
 }
@@ -441,8 +442,9 @@ model Room {
   bills             Bill[]
   occupancies       Occupancy[]
   moveOutRequests   TenantMoveOutRequest[]
-  renewalRequests   TenantRenewalRequest[]
-  settlements       ContractSettlement[]
+  renewalRequests            TenantRenewalRequest[]
+  settlements                ContractSettlement[]
+  roomBillingCycleSnapshots  RoomBillingCycleSnapshot[]
 
   @@unique([dormitoryId, normalizedRoomNumber], map: "dormitory_normalized_room_number_unique")
   @@map("rooms")
@@ -694,8 +696,9 @@ model BillingCycle {
 
   dormitory     Dormitory             @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
   rateSnapshots BillingRateSnapshot[]
-  meterReadings MeterReading[]
-  bills         Bill[]
+  meterReadings             MeterReading[]
+  bills                     Bill[]
+  roomBillingCycleSnapshots RoomBillingCycleSnapshot[]
 
   @@unique([dormitoryId, cycleCode], name: "dormitory_cycle_code_unique")
   @@map("billing_cycles")
@@ -710,7 +713,11 @@ model BillingRateSnapshot {
   electricityBillingType String   @default("per_unit") @map("electricity_billing_type") @db.VarChar(50)
   electricityRate        Decimal  @default(7.00) @map("electricity_rate") @db.Decimal(12, 2)
   commonFee              Decimal  @default(0.00) @map("common_fee") @db.Decimal(12, 2)
+  commonFeeMode          String   @default("room") @map("common_fee_mode") @db.VarChar(50)
   internetFee            Decimal  @default(0.00) @map("internet_fee") @db.Decimal(12, 2)
+  internetFeeMode        String   @default("room") @map("internet_fee_mode") @db.VarChar(50)
+  parkingFee             Decimal  @default(0.00) @map("parking_fee") @db.Decimal(12, 2)
+  parkingFeeMode         String   @default("room") @map("parking_fee_mode") @db.VarChar(50)
   lateFeeType            String   @default("fixed") @map("late_fee_type") @db.VarChar(50)
   lateFeeValue           Decimal  @default(50.00) @map("late_fee_value") @db.Decimal(12, 2)
   currency               String   @default("THB") @db.VarChar(10)
@@ -721,6 +728,28 @@ model BillingRateSnapshot {
   bills        Bill[]
 
   @@map("billing_rate_snapshots")
+}
+
+model RoomBillingCycleSnapshot {
+  id              String   @id @default(uuid()) @db.Uuid
+  dormitoryId     String   @map("dormitory_id") @db.Uuid
+  billingCycleId  String   @map("billing_cycle_id") @db.Uuid
+  roomId          String   @map("room_id") @db.Uuid
+  peopleCount     Int      @default(1) @map("people_count")
+  source          String   @default("HOUSEHOLD_SYNC") @map("source") @db.VarChar(50) // HOUSEHOLD_SYNC, METER_CORRECTION, CYCLE_CARRY_FORWARD, MANUAL
+  updatedByUserId String?  @map("updated_by_user_id") @db.Uuid
+  version         Int      @default(1)
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz()
+
+  dormitory    Dormitory    @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
+  billingCycle BillingCycle @relation(fields: [billingCycleId], references: [id], onDelete: Cascade)
+  room         Room         @relation(fields: [roomId], references: [id], onDelete: Cascade)
+
+  @@unique([dormitoryId, billingCycleId, roomId], name: "dormitory_billing_cycle_room_unique")
+  @@index([dormitoryId, billingCycleId])
+  @@index([roomId])
+  @@map("room_billing_cycle_snapshots")
 }
 
 model MeterDevice {

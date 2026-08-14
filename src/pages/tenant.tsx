@@ -235,6 +235,8 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
   const [newCoPhone, setNewCoPhone] = useState('');
   const [coOccupantsError, setCoOccupantsError] = useState('');
   const [deleteConfirmCoId, setDeleteConfirmCoId] = useState<string | null>(null);
+  const [isAddingCo, setIsAddingCo] = useState(false);
+  const [isDeletingCo, setIsDeletingCo] = useState(false);
   const [toast, setToast] = useState<{ type: 'success' | 'error'; title: string; message: string; visible: boolean } | null>(null);
   const [slipFile, setSlipFile] = useState<File | null>(null);
   const [isSubmittingSlip, setIsSubmittingSlip] = useState(false);
@@ -490,12 +492,53 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
     setIsCoOccupantsModalOpen(true);
   };
 
-  const handleAddCoOccupant = () => {
-    showToast('error', 'ไม่สามารถดำเนินการได้', 'ฟังก์ชันจัดการผู้พักร่วมยังไม่พร้อมใช้งานในระบบขณะนี้');
+  const handleAddCoOccupant = async () => {
+    if (!newCoName.trim()) {
+      setCoOccupantsError('กรุณากรอกชื่อ-นามสกุล หรือชื่อเล่นของผู้พักร่วม');
+      return;
+    }
+    setCoOccupantsError('');
+    setIsAddingCo(true);
+    try {
+      const res = await httpRequest<any>('POST', '/api/v1/tenant-portal/co-occupants', {
+        name: newCoName.trim(),
+        phone: newCoPhone.trim() || undefined,
+      });
+      const newCo = res?.data || res;
+      setEditCoOccupants(prev => [...prev, newCo]);
+      setLocalTenant(prev => ({
+        ...prev,
+        coOccupants: [...(prev.coOccupants || []), newCo],
+      }));
+      setNewCoName('');
+      setNewCoPhone('');
+      showToast('success', 'เพิ่มผู้พักร่วมสำเร็จ', `เพิ่มคุณ ${newCo.name} เรียบร้อยแล้ว`);
+      refreshData();
+    } catch (err: any) {
+      setCoOccupantsError(err.message || 'เกิดข้อผิดพลาดในการเพิ่มผู้พักร่วม');
+      showToast('error', 'ไม่สามารถเพิ่มผู้พักร่วมได้', err.message || 'เกิดข้อผิดพลาดในการเพิ่มผู้พักร่วม');
+    } finally {
+      setIsAddingCo(false);
+    }
   };
 
-  const handleConfirmRemoveCoOccupant = (coId: string, coName: string) => {
-    showToast('error', 'ไม่สามารถดำเนินการได้', 'ฟังก์ชันจัดการผู้พักร่วมยังไม่พร้อมใช้งานในระบบขณะนี้');
+  const handleConfirmRemoveCoOccupant = async (coId: string, coName: string) => {
+    setIsDeletingCo(true);
+    try {
+      await httpRequest<any>('DELETE', `/api/v1/tenant-portal/co-occupants/${coId}`);
+      setEditCoOccupants(prev => prev.filter(c => c.id !== coId));
+      setLocalTenant(prev => ({
+        ...prev,
+        coOccupants: (prev.coOccupants || []).filter(c => c.id !== coId),
+      }));
+      setDeleteConfirmCoId(null);
+      showToast('success', 'ลบผู้พักร่วมสำเร็จ', `นำคุณ ${coName} ออกจากรายการเรียบร้อยแล้ว`);
+      refreshData();
+    } catch (err: any) {
+      showToast('error', 'ไม่สามารถลบผู้พักร่วมได้', err.message || 'เกิดข้อผิดพลาดในการลบผู้พักร่วม');
+    } finally {
+      setIsDeletingCo(false);
+    }
   };
 
   // Filters for this tenant specifically
@@ -505,7 +548,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
     .filter(b => b.status !== 'draft' && b.status !== 'DRAFT')
     .sort((a, b) => (b.cycleId || b.billingCycleId || '').localeCompare(a.cycleId || a.billingCycleId || '') || (b.createdAt || '').localeCompare(a.createdAt || '')); 
   const tenantRepairs = repairs.filter(r => r.roomId === tenantRoom?.id || r.tenantId === tenant.id);
-  const tenantContracts = contracts.length > 0 ? contracts : [{ id: 'ctr-current', contractNumber: 'CTR-001', tenantId: tenant.id, startDate: '2026-01-01', endDate: '2026-06-30', monthlyRent: 5000, rentAmount: 5000, depositAmount: 10000, status: 'active' } as any];
+  const tenantContracts = contracts;
   
   // Filter announcements for this tenant's building or all
   const filteredAnnouncements = announcements.filter(ann => {
@@ -2344,10 +2387,11 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                         </button>
                         <button
                           type="button"
+                          disabled={isDeletingCo}
                           onClick={() => handleConfirmRemoveCoOccupant(co.id, co.name)}
-                          className="px-2.5 py-1 bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-bold rounded-lg transition-all cursor-pointer"
+                          className="px-2.5 py-1 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white text-[10px] font-bold rounded-lg transition-all cursor-pointer"
                         >
-                          ยืนยันลบ
+                          {isDeletingCo ? 'กำลังลบ...' : 'ยืนยันลบ'}
                         </button>
                       </div>
                     </div>
@@ -2398,7 +2442,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                 />
               </div>
               <div>
-                <label className="block text-[10px] text-slate-500 mb-1 font-bold">เบอร์โทรศัพท์ *</label>
+                <label className="block text-[10px] text-slate-500 mb-1 font-bold">เบอร์โทรศัพท์</label>
                 <input
                   type="text"
                   value={newCoPhone}
@@ -2411,10 +2455,11 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
 
             <button
               type="button"
+              disabled={isAddingCo}
               onClick={handleAddCoOccupant}
-              className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl shadow-xs transition-all flex items-center justify-center gap-1 cursor-pointer"
+              className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow-xs transition-all flex items-center justify-center gap-1 cursor-pointer"
             >
-              <Plus className="w-3.5 h-3.5" /> เพิ่มลงในรายการด้านบน
+              <Plus className="w-3.5 h-3.5" /> {isAddingCo ? 'กำลังเพิ่ม...' : 'เพิ่มลงในรายการด้านบน'}
             </button>
           </div>
 

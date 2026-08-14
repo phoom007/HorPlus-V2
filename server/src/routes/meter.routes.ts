@@ -9,7 +9,10 @@ import {
   ReplaceMeterSchema,
   BulkMeterReadingSchema,
   UpdateMeterReadingSchema,
+  UpdateCyclePeopleCountSchema,
 } from '../schemas/billing-meter.schemas.js';
+import { billingOrchestrationService } from '../services/billing-orchestration.service.js';
+import { getPrismaClient } from '../db/prisma.js';
 
 export function createMeterRouter(
   authService: AuthenticationService,
@@ -193,6 +196,67 @@ export function createMeterRouter(
         req.auth?.userId
       );
       res.json({ data: reading });
+    } catch (err) {
+      handleServiceError(res, err, req);
+    }
+  });
+
+  // PUT /api/v1/meters/cycle-people-count
+  router.put('/cycle-people-count', mutationGuard('meter:write'), async (req: Request, res: Response) => {
+    if (!verifyCsrf(req, res)) return;
+    try {
+      const dormId = getDormitoryId(req);
+      const parsed = UpdateCyclePeopleCountSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'ข้อมูลจำนวนคนไม่ถูกต้อง',
+            fieldErrors: parsed.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })),
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+
+      const result = await billingOrchestrationService.correctMeterCyclePeopleCount(
+        dormId,
+        parsed.data.billingCycleId,
+        parsed.data.roomId,
+        parsed.data.peopleCount,
+        req.auth?.userId
+      );
+
+      res.json({ success: true, data: result });
+    } catch (err) {
+      handleServiceError(res, err, req);
+    }
+  });
+
+  // GET /api/v1/meters/cycle-people-count
+  router.get('/cycle-people-count', async (req: Request, res: Response) => {
+    try {
+      const dormId = getDormitoryId(req);
+      const billingCycleId = req.query.billingCycleId as string;
+      if (!billingCycleId) {
+        return res.status(400).json({
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'Billing Cycle ID จำเป็นต้องระบุ',
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+          },
+        });
+      }
+
+      const prisma = getPrismaClient();
+      const snapshots = await prisma.roomBillingCycleSnapshot.findMany({
+        where: {
+          dormitoryId: dormId,
+          billingCycleId,
+        },
+      });
+
+      res.json({ data: snapshots });
     } catch (err) {
       handleServiceError(res, err, req);
     }

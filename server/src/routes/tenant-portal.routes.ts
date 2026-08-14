@@ -8,6 +8,8 @@ import { DocumentPdfService } from '../services/document-pdf.service.js';
 import { AuthenticationService } from '../services/auth.service.js';
 import { SensitiveFieldService } from '../services/sensitive-field.service.js';
 import { generatePromptPayPayload, maskPromptPayDisplay, generatePromptPayQrSvg } from '../services/promptpay-payload.service.js';
+import { billingOrchestrationService } from '../services/billing-orchestration.service.js';
+import { CreateCoOccupantSchema } from '../schemas/property-tenant-contract.schemas.js';
 
 type TenantContextResult = {
   error?: undefined;
@@ -992,6 +994,118 @@ export function createTenantPortalRouter(authService?: AuthenticationService): R
       return res.json({ data: { markedCount: resUpdate.count } });
     } catch (err: any) {
       return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message, requestId: req.requestId } });
+    }
+  });
+
+  // 12. Tenant Co-Occupants List
+  router.get('/co-occupants', async (req: Request, res: Response) => {
+    try {
+      const ctx = await resolveTenantContext(req);
+      if (ctx.error) {
+        return res.status(ctx.error.statusCode).json({ error: { code: ctx.error.code, message: ctx.error.message, requestId: req.requestId } });
+      }
+
+      const coOccupants = await prisma.tenantCoOccupant.findMany({
+        where: { dormitoryId: ctx.dormitoryId, tenantId: ctx.tenant.id, deletedAt: null },
+        orderBy: { createdAt: 'asc' },
+      });
+
+      const householdCount = 1 + coOccupants.length;
+
+      return res.json({
+        success: true,
+        data: coOccupants.map((c) => ({
+          id: c.id,
+          name: c.name,
+          phone: c.phone || '',
+          relationship: c.relationship || '',
+          createdAt: c.createdAt.toISOString(),
+        })),
+        peopleCount: householdCount,
+      });
+    } catch (err: any) {
+      return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message, requestId: req.requestId } });
+    }
+  });
+
+  // 13. Tenant Co-Occupant Add (Self-Service)
+  router.post('/co-occupants', async (req: Request, res: Response) => {
+    try {
+      const ctx = await resolveTenantContext(req);
+      if (ctx.error) {
+        return res.status(ctx.error.statusCode).json({ error: { code: ctx.error.code, message: ctx.error.message, requestId: req.requestId } });
+      }
+
+      const parsed = CreateCoOccupantSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'ข้อมูลผู้พักร่วมไม่ถูกต้อง',
+            fieldErrors: parsed.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })),
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+          },
+        });
+      }
+
+      const actorUserId = req.auth?.userId || ctx.tenant.id;
+      const result = await billingOrchestrationService.addTenantCoOccupant(
+        ctx.dormitoryId,
+        ctx.tenant.id,
+        parsed.data,
+        { userId: actorUserId, isTenant: true }
+      );
+
+      return res.status(201).json({
+        success: true,
+        data: {
+          id: result.coOccupant.id,
+          name: result.coOccupant.name,
+          phone: result.coOccupant.phone || '',
+          relationship: result.coOccupant.relationship || '',
+          createdAt: result.coOccupant.createdAt.toISOString(),
+        },
+        peopleCount: result.peopleCount,
+        prevPeopleCount: result.prevPeopleCount,
+        recalculation: result.recalculation,
+      });
+    } catch (err: any) {
+      const statusCode = err.statusCode || 500;
+      return res.status(statusCode).json({
+        error: { code: err.code || 'INTERNAL_ERROR', message: err.message, requestId: req.requestId },
+      });
+    }
+  });
+
+  // 14. Tenant Co-Occupant Delete (Self-Service)
+  router.delete('/co-occupants/:id', async (req: Request, res: Response) => {
+    try {
+      const ctx = await resolveTenantContext(req);
+      if (ctx.error) {
+        return res.status(ctx.error.statusCode).json({ error: { code: ctx.error.code, message: ctx.error.message, requestId: req.requestId } });
+      }
+
+      const actorUserId = req.auth?.userId || ctx.tenant.id;
+      const result = await billingOrchestrationService.removeTenantCoOccupant(
+        ctx.dormitoryId,
+        ctx.tenant.id,
+        req.params.id,
+        { userId: actorUserId, isTenant: true }
+      );
+
+      return res.json({
+        success: true,
+        message: 'ลบผู้พักอาศัยร่วมเรียบร้อยแล้ว',
+        removedId: result.removedId,
+        peopleCount: result.peopleCount,
+        prevPeopleCount: result.prevPeopleCount,
+        recalculation: result.recalculation,
+      });
+    } catch (err: any) {
+      const statusCode = err.statusCode || 500;
+      return res.status(statusCode).json({
+        error: { code: err.code || 'INTERNAL_ERROR', message: err.message, requestId: req.requestId },
+      });
     }
   });
 

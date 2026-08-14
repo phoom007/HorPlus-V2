@@ -70,6 +70,12 @@ export const UpdateMeterReadingSchema = z.object({
   version: z.number().int().optional(),
 });
 
+export const UpdateCyclePeopleCountSchema = z.object({
+  billingCycleId: z.string().min(1, 'Billing Cycle ID จำเป็นต้องระบุ'),
+  roomId: z.string().min(1, 'Room ID จำเป็นต้องระบุ'),
+  peopleCount: z.number().int().min(1, 'จำนวนคนต้องมีอย่างน้อย 1 คน'),
+});
+
 export const CreateBillPreviewSchema = z.object({
   billingCycleId: z.string().min(1, 'Billing Cycle ID จำเป็นต้องระบุ'),
   roomIds: z.array(z.string()).optional(),
