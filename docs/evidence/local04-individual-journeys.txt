@@ -1,0 +1,99 @@
+HORPLUS LOCAL-04 INDIVIDUAL JOURNEY EXECUTION EVIDENCE
+=======================================================
+Timestamp: 2026-08-14T11:31:24.087Z
+Executable SHA: 87d773024fb1648cc26e7708e4e1c8750ca5f06b
+Total Tests: 13
+
+-------------------------------------------------------
+Test 1: Journey A — Tenant Application submission via UI -> Owner UI approval modal -> PostgreSQL atomic creation -> Tenant portal view
+Grep Pattern: "Journey A "
+Status: PASS
+Exit Code: 0
+Duration: 22.2s
+
+-------------------------------------------------------
+Test 2: Journey B — Multiple applicants for same room persist; Owner approves A without auto-rejecting B; Owner reassigns B to another room via UI
+Grep Pattern: "Journey B "
+Status: PASS
+Exit Code: 0
+Duration: 19.6s
+
+-------------------------------------------------------
+Test 3: Journey C — Owner manages co-occupants via UI without modifying financial terms; Tenant cannot mutate co-occupants
+Grep Pattern: "Journey C "
+Status: PASS
+Exit Code: 0
+Duration: 17.8s
+
+-------------------------------------------------------
+Test 4: Journey D & E — Tenant submits renewal via UI -> Owner approves scheduled renewal -> Scheduled clock activation updates contract chain
+Grep Pattern: "Journey D & E"
+Status: PASS
+Exit Code: 0
+Duration: 22.1s
+
+-------------------------------------------------------
+Test 5: Journey F & G1 — Forced replacement destructive warning -> Atomic termination & settlement net > 0 (PENDING_REFUND -> REFUNDED via UI)
+Grep Pattern: "Journey F & G1"
+Status: PASS
+Exit Code: 0
+Duration: 21.8s
+
+-------------------------------------------------------
+Test 6: Journey G2 — Settlement Direction B: net < 0 (PENDING_PAYMENT -> PAYMENT_RECEIVED via Owner UI confirmation) & cross-portal verification
+Grep Pattern: "Journey G2"
+Status: PASS
+Exit Code: 0
+Duration: 21.1s
+
+-------------------------------------------------------
+Test 7: Journey G3 — Settlement Direction C: net = 0 (CLOSED_ZERO exact state verification across Owner UI, DB, and Tenant portal)
+Grep Pattern: "Journey G3"
+Status: PASS
+Exit Code: 0
+Duration: 16.7s
+
+-------------------------------------------------------
+Test 8: Journey H — Real-UI Meter Entry, Lower-Reading Rejection, F5 Persistence, Real-UI Bill Issuance & Tenant Cross-Portal View
+Grep Pattern: "Journey H "
+Status: PASS
+Exit Code: 0
+Duration: 21.0s
+
+-------------------------------------------------------
+Test 9: Journey I — OWNER has full access; MANAGER has delegated operational access; TECH is restricted from financial contracts and staff administration
+Grep Pattern: "Journey I "
+Status: PASS
+Exit Code: 0
+Duration: 14.5s
+
+-------------------------------------------------------
+Test 10: Journey J — Owner creates staff access grant via UI, bearer link is redeemed cleanly without secrets, slot tracking maintains 10 quota, and grant revocation terminates sessions
+Grep Pattern: "Journey J "
+Status: PASS
+Exit Code: 0
+Duration: 19.1s
+
+-------------------------------------------------------
+Test 11: Journey K — Real UI domain mutation creates outbox event; delivers notice cross-portal; read state persists across F5; Owner swipe-to-dismiss deletes notification without affecting other staff
+Grep Pattern: "Journey K "
+Status: PASS
+Exit Code: 0
+Duration: 30.0s
+
+-------------------------------------------------------
+Test 12: Journey L — Authenticated Owner A and Tenant A receive 403 when requesting Dormitory B resources with zero leaked PII
+Grep Pattern: "Journey L "
+Status: PASS
+Exit Code: 0
+Duration: 9.6s
+
+-------------------------------------------------------
+Test 13: Truthful empty states render without fake placeholder records and fail closed on errors
+Grep Pattern: "Truthful empty states"
+Status: PASS
+Exit Code: 0
+Duration: 14.3s
+
+=======================================================
+SUMMARY: ALL 13 INDIVIDUAL JOURNEYS PASSED

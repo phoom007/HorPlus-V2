@@ -1,5 +1,5 @@
 === COMMAND: npm run build ===
-=== TIMESTAMP: 2026-08-14T09:18:35.902Z ===
+=== TIMESTAMP: 2026-08-14T11:45:22.865Z ===
 
 
 > react-example@0.0.0 build
@@ -12,12 +12,12 @@ rendering chunks...
 computing gzip size...
 [2mdist/[22m[32mindex.html                 [39m[1m[2m    1.12 kB[22m[1m[22m[2m │ gzip:   0.54 kB[22m
 [2mdist/[22m[35massets/index-BgkKEscw.css  [39m[1m[2m  144.70 kB[22m[1m[22m[2m │ gzip:  20.51 kB[22m
-[2mdist/[22m[36massets/index-BaCSw5by.js   [39m[1m[33m1,721.50 kB[39m[22m[2m │ gzip: 427.34 kB[22m
-[32m✓ built in 8.96s[39m
+[2mdist/[22m[36massets/index-BfcKK7AZ.js   [39m[1m[33m1,721.79 kB[39m[22m[2m │ gzip: 427.42 kB[22m
+[32m✓ built in 8.67s[39m
 
 
 === COMMAND: npm run build ===
-=== TIMESTAMP: 2026-08-14T09:18:46.169Z ===
+=== TIMESTAMP: 2026-08-14T11:45:32.729Z ===
 
 
 > horplus-backend@0.1.0 build
@@ -26,7 +26,7 @@ computing gzip size...
 
 
 === COMMAND: npm run lint ===
-=== TIMESTAMP: 2026-08-14T09:18:56.463Z ===
+=== TIMESTAMP: 2026-08-14T11:45:43.085Z ===
 
 
 > horplus-backend@0.1.0 lint

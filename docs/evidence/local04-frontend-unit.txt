@@ -1,5 +1,5 @@
 === COMMAND: npm test ===
-=== TIMESTAMP: 2026-08-14T09:17:56.405Z ===
+=== TIMESTAMP: 2026-08-14T11:44:35.795Z ===
 
 
 > react-example@0.0.0 test
@@ -8,19 +8,21 @@
 
 [1m[46m RUN [49m[22m [36mv3.2.7 [39m[90mD:/horplus_wave1d_fasttrack[39m
 
- [32m✓[39m src/tests/tenantFailClosed.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 15[2mms[22m[39m
- [32m✓[39m src/tests/wave1-frontend-guards.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 29[2mms[22m[39m
- [32m✓[39m src/tests/productionTruthBoundary.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 65[2mms[22m[39m
+ [32m✓[39m src/tests/wave1-frontend-guards.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 45[2mms[22m[39m
+ [32m✓[39m src/tests/tenantFailClosed.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 21[2mms[22m[39m
  [32m✓[39m src/tests/local01-tenant-onboarding.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 9[2mms[22m[39m
- [32m✓[39m src/tests/qa.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 145[2mms[22m[39m
- [32m✓[39m src/tests/dataModeAndAdapters.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 119[2mms[22m[39m
- [32m✓[39m src/tests/wave1d-boundary.test.ts [2m([22m[2m3 tests[22m[2m | [22m[33m1 skipped[39m[2m)[22m[32m 5[2mms[22m[39m
- [32m✓[39m src/tests/wave1g-owner-ui.test.tsx [2m([22m[2m13 tests[22m[2m)[22m[33m 1269[2mms[22m[39m
-   [33m[2m✓[22m[39m Wave 1G — Owner Property UI Component & Integration Tests[2m > [22m5. Connected Owner Page Section Integration Tests[2m > [22mconnects OwnerRooms page: open Building editor, set & clear Building override, edit Room identity & override, archive with expectedVersion, and query availability [33m 501[2mms[22m[39m
+ [32m✓[39m src/tests/productionTruthBoundary.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 116[2mms[22m[39m
+ [32m✓[39m src/tests/qa.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 127[2mms[22m[39m
+ [32m✓[39m src/tests/dataModeAndAdapters.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 102[2mms[22m[39m
+ [32m✓[39m src/tests/wave1d-boundary.test.ts [2m([22m[2m3 tests[22m[2m | [22m[33m1 skipped[39m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/tests/wave1g-owner-ui.test.tsx [2m([22m[2m13 tests[22m[2m)[22m[33m 2192[2mms[22m[39m
+   [33m[2m✓[22m[39m Wave 1G — Owner Property UI Component & Integration Tests[2m > [22m2. VERSION_CONFLICT Modal UX[2m > [22mrenders Thai 409 conflict message and action buttons when open, triggers onReload click [33m 603[2mms[22m[39m
+   [33m[2m✓[22m[39m Wave 1G — Owner Property UI Component & Integration Tests[2m > [22m5. Connected Owner Page Section Integration Tests[2m > [22mconnects OwnerSettings page to updateDormitoryDefaults and handles independent versions and VERSION_CONFLICT reload [33m 421[2mms[22m[39m
+   [33m[2m✓[22m[39m Wave 1G — Owner Property UI Component & Integration Tests[2m > [22m5. Connected Owner Page Section Integration Tests[2m > [22mconnects OwnerRooms page: open Building editor, set & clear Building override, edit Room identity & override, archive with expectedVersion, and query availability [33m 649[2mms[22m[39m
 
 [2m Test Files [22m [1m[32m8 passed[39m[22m[90m (8)[39m
 [2m      Tests [22m [1m[32m50 passed[39m[22m[2m | [22m[33m1 skipped[39m[90m (51)[39m
-[2m   Start at [22m 16:17:58
-[2m   Duration [22m 6.58s[2m (transform 1.88s, setup 0ms, collect 3.86s, tests 1.65s, environment 11.72s, prepare 3.19s)[22m
+[2m   Start at [22m 18:44:36
+[2m   Duration [22m 7.44s[2m (transform 1.86s, setup 0ms, collect 4.06s, tests 2.62s, environment 11.25s, prepare 3.41s)[22m
 
 

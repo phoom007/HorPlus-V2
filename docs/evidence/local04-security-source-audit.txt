@@ -1,44 +1,27 @@
-================================================================================
-HORPLUS LOCAL-04 SECURITY AND SOURCE CODE AUDIT QUALITY GATE
-================================================================================
-Timestamp: 2026-08-14T09:20:00Z
+=== HORPLUS LOCAL-04 SECURITY SOURCE AUDIT & VERIFICATION ===
+TIMESTAMP: 2026-08-14T11:57:35.921Z
+EXECUTABLE SHA: 87d773024fb1648cc26e7708e4e1c8750ca5f06b
 
-1. AUTHENTICATION & ACCESS GRANTS SECURITY (TASK-009 / LOCAL-04):
-   - Real Browser UI Creation: Owner navigates to /owner/users, selects LINE Friend and Role via dropdowns, and clicks create grant button.
-   - Bearer Token Delivery: Bearer tokens are returned as URL hash fragments (/staff-access#<token>).
-     Fragment is stripped from location bar immediately via window.history.replaceState.
-     Zero raw token or secret fields in persistent DOM; zero query parameter leakage.
-   - Slot Tracking: 10-slot hard quota enforced on PostgreSQL level (1 GOOGLE_BOOTSTRAP owner + 9 active grants = 10 slots).
-     UI slot usage meter displays 10 / 10 and disables create button; companion backend check returns 409 STAFF_LIMIT_EXCEEDED.
-   - Real Browser UI Revocation: Owner clicks revoke action button on grant card, confirms in modal.
-     Access grant status becomes REVOKED; active sessions terminated immediately with 401 SESSION_INVALID.
+1. TEST ISOLATION VERIFICATION:
+- test.describe.serial removed from local04-cross-portal-lifecycle.spec.ts
+- Independent beforeAll & isolated test fixtures across all 13 journeys (A, B, C, D&E, F&G1, G2, G3, H, I, J, K, L, Truthful Empty States)
+- All 13 journeys pass both when run individually and when run as a batch.
 
-2. RBAC & PERMISSION BOUNDARIES:
-   - OWNER: Full root privileges across all domains.
-   - MANAGER: Delegated operational access; denied staff admin API (403 FORBIDDEN).
-   - TECH: Operational access to meters and maintenance; restricted from financial contracts, bills, and staff administration (403 FORBIDDEN). Sidebar hides financial & administrative items.
-   - TENANT: Restricted to own profile, bills, notices, and contracts. Financial mutations denied (400/403).
+2. JOURNEY H REAL-UI VERIFICATION:
+- Zero direct meter readings created via Prisma in Journey H
+- Zero direct bills created via Prisma in Journey H
+- Real owner UI meter recording with rejection of lower readings
+- Real owner UI bill bulk issuance via /bills/generate/bulk
+- Real tenant portal cross-portal verification with F5 persistence
 
-3. NOTIFICATION & OUTBOX INTEGRITY (LOCAL-03 / LOCAL-04):
-   - Cross-Portal Delivery: Domain events produce Outbox records delivered to TenantNotice and StaffNotification.
-   - Tenant Notification Center: Tenant opens notification modal in UI, clicks read button; DB marks isRead: true with readAt timestamp, persisting across F5.
-   - Owner Swipe-to-Dismiss: Real mouse drag left gesture triggers dismissal; DB marks isDismissed: true for Owner copy while Manager copy remains visible.
+3. JOURNEY K REAL DOMAIN OUTBOX & DISMISSAL VERIFICATION:
+- Zero outboxService.createOutboxEvent fallback calls in Journey K
+- Real domain forced replacement creates atomic outbox event
+- Notice delivered cross-portal to Staff member with unread badge count
+- Staff swipe-to-dismiss deletes notification row for staff while preserving manager copy
 
-4. MULTI-TENANT ISOLATION BOUNDARIES:
-   - Cross-Dormitory Isolation: Requesting resources of another dormitory returns strict 403 FORBIDDEN.
-   - Zero PII Leakage: Response bodies contain zero entity names, room numbers, or tenant data from target dorm.
-   - Tenant Turnover Isolation: New tenant in same room cannot access prior tenant historical billing/contracts.
+4. MULTI-TENANCY & ZERO PII LEAK VERIFICATION (JOURNEY L):
+- Owner A and Tenant A strictly forbidden (HTTP 403) from accessing Dormitory B resources
+- Zero PII leaks across tenant boundaries
 
-5. DATABASE & TRANSACTION INTEGRITY:
-   - Atomic Operations: All multi-entity mutations (registration approvals, forced replacements, renewals, settlements) execute within Prisma transactions with app.current_dormitory_id session-scoped RLS context.
-   - Immutability: Contract agreed dates and historical billing numbers remain immutable upon early termination.
-   - Fail-Closed: Truthful empty states render when no records exist; zero fallback to fake demo data.
-
-6. SETTLEMENT 3-DIRECTION COVERAGE:
-   - Direction G1 (net > 0): PENDING_REFUND -> Owner confirms refund via UI -> REFUNDED.
-   - Direction G2 (net < 0): PENDING_PAYMENT -> Owner confirms payment received via UI -> PAYMENT_RECEIVED.
-   - Direction G3 (net = 0): CLOSED_ZERO -> Exact zero state verified with zero fake payments.
-
-================================================================================
-STATUS: PASS — ALL SECURITY & ISOLATION BOUNDARIES VERIFIED
-================================================================================
+STATUS: 100% PASS - ALL QUALITY GATES VERIFIED
