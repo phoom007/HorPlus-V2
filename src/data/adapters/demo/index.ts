@@ -255,6 +255,14 @@ export class DemoMeterAdapter implements MeterDataSource {
     }
     return { success: true, data: saved };
   }
+
+  async getCyclePeopleCount(cycleId: string, roomId?: string): Promise<DataResult<any[]>> {
+    return { success: true, data: [] };
+  }
+
+  async updateCyclePeopleCount(cycleId: string, roomId: string, peopleCount: number): Promise<DataResult<any>> {
+    return { success: true, data: { cycleId, roomId, peopleCount } };
+  }
 }
 
 export class DemoBillingAdapter implements BillingDataSource {

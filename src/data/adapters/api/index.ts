@@ -696,6 +696,35 @@ export class ApiMeterAdapter implements MeterDataSource {
       };
     }
   }
+
+  async getCyclePeopleCount(cycleId: string, roomId?: string): Promise<DataResult<any[]>> {
+    try {
+      const url = `/meters/cycle-people-count?billingCycleId=${cycleId}${roomId ? `&roomId=${roomId}` : ''}`;
+      const res = await httpRequest<{ data: any[] }>('GET', url);
+      return { success: true, data: res.data || (res as any) };
+    } catch (err: any) {
+      return {
+        success: false,
+        error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message }
+      };
+    }
+  }
+
+  async updateCyclePeopleCount(cycleId: string, roomId: string, peopleCount: number): Promise<DataResult<any>> {
+    try {
+      const data = await httpRequest<any>('PUT', '/meters/cycle-people-count', {
+        billingCycleId: cycleId,
+        roomId,
+        peopleCount
+      });
+      return { success: true, data };
+    } catch (err: any) {
+      return {
+        success: false,
+        error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message }
+      };
+    }
+  }
 }
 
 export class ApiBillingAdapter implements BillingDataSource {

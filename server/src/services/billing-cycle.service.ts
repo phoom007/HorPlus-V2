@@ -19,7 +19,11 @@ export interface CreateBillingCycleDto {
     electricityBillingType?: string;
     electricityRate?: string;
     commonFee?: string;
+    commonFeeMode?: string;
     internetFee?: string;
+    internetFeeMode?: string;
+    parkingFee?: string;
+    parkingFeeMode?: string;
     lateFeeType?: string;
     lateFeeValue?: string;
     currency?: string;
@@ -53,7 +57,11 @@ export class BillingCycleService {
           electricityBillingType: settings?.electricityBillingType || 'per_unit',
           electricityRate: settings ? String(settings.electricityRate) : '0.00',
           commonFee: settings ? String(settings.commonFee) : '0.00',
+          commonFeeMode: settings?.commonFeeMode || 'room',
           internetFee: settings ? String(settings.internetFee) : '0.00',
+          internetFeeMode: settings?.internetFeeMode || 'room',
+          parkingFee: settings ? String(settings.parkingRate) : '0.00',
+          parkingFeeMode: settings?.parkingFeeMode || 'room',
           lateFeeType: settings?.lateFeeType || 'fixed',
           lateFeeValue: settings ? String(settings.lateFeeValue) : '0.00',
           currency: 'THB',
@@ -110,7 +118,11 @@ export class BillingCycleService {
       electricityBillingType: settings?.electricityBillingType || data.rateSnapshot?.electricityBillingType || 'per_unit',
       electricityRate: settings ? String(settings.electricityRate) : (data.rateSnapshot?.electricityRate !== undefined ? String(data.rateSnapshot.electricityRate) : '0.00'),
       commonFee: settings ? String(settings.commonFee) : (data.rateSnapshot?.commonFee !== undefined ? String(data.rateSnapshot.commonFee) : '0.00'),
+      commonFeeMode: settings?.commonFeeMode || data.rateSnapshot?.commonFeeMode || 'room',
       internetFee: settings ? String(settings.internetFee) : (data.rateSnapshot?.internetFee !== undefined ? String(data.rateSnapshot.internetFee) : '0.00'),
+      internetFeeMode: settings?.internetFeeMode || data.rateSnapshot?.internetFeeMode || 'room',
+      parkingFee: settings ? String(settings.parkingRate) : (data.rateSnapshot?.parkingFee !== undefined ? String(data.rateSnapshot.parkingFee) : '0.00'),
+      parkingFeeMode: settings?.parkingFeeMode || data.rateSnapshot?.parkingFeeMode || 'room',
       lateFeeType: settings?.lateFeeType || data.rateSnapshot?.lateFeeType || 'fixed',
       lateFeeValue: settings ? String(settings.lateFeeValue) : (data.rateSnapshot?.lateFeeValue !== undefined ? String(data.rateSnapshot.lateFeeValue) : '0.00'),
       currency: data.rateSnapshot?.currency || 'THB',
@@ -179,7 +191,11 @@ export class BillingCycleService {
           electricityBillingType: result.rateSnapshot.electricityBillingType,
           electricityRate: result.rateSnapshot.electricityRate.toString(),
           commonFee: result.rateSnapshot.commonFee.toString(),
+          commonFeeMode: result.rateSnapshot.commonFeeMode,
           internetFee: result.rateSnapshot.internetFee.toString(),
+          internetFeeMode: result.rateSnapshot.internetFeeMode,
+          parkingFee: result.rateSnapshot.parkingFee.toString(),
+          parkingFeeMode: result.rateSnapshot.parkingFeeMode,
           lateFeeType: result.rateSnapshot.lateFeeType,
           lateFeeValue: result.rateSnapshot.lateFeeValue.toString(),
           currency: result.rateSnapshot.currency,

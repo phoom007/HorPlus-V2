@@ -96,6 +96,8 @@ export interface MeterDataSource {
   getByRoomAndCycle(roomId: string, cycleId: string): Promise<MeterReading | null>;
   saveMeterRecord(record: Omit<MeterReading, 'id' | 'recordedAt'>, actorUserId?: string): Promise<DataResult<MeterReading>>;
   saveBulkMeterRecords(records: Array<Omit<MeterReading, 'id' | 'recordedAt'>>, actorUserId?: string): Promise<DataResult<MeterReading[]>>;
+  getCyclePeopleCount(cycleId: string, roomId?: string): Promise<DataResult<any[]>>;
+  updateCyclePeopleCount(cycleId: string, roomId: string, peopleCount: number): Promise<DataResult<any>>;
 }
 
 export interface BillingDataSource {

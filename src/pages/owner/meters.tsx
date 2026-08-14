@@ -274,20 +274,8 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     return getCycleNewReadings(roomId, targetPrevCycleId);
   };
 
-  const getPrevCyclePeopleCount = (roomId: string, prevCycleId: string): number => {
-    // 1. Primary priority: Check tenant in current cycle and calculate 1 (main) + co-occupants
-    const currentTenant = getTenantForRoomAndCycle(roomId, selectedCycle);
-    if (currentTenant) {
-      return 1 + (currentTenant.coOccupants?.length || 0);
-    }
-
-    // 2. Check previous cycle tenant
-    const prevTenant = getTenantForRoomAndCycle(roomId, prevCycleId);
-    if (prevTenant) {
-      return 1 + (prevTenant.coOccupants?.length || 0);
-    }
-
-    // 3. Check previous bill
+  const getPrevCycleBillingPeopleCount = (roomId: string, prevCycleId: string): number => {
+    // 1. Check previous bill
     const bill = bills.find(b => b.cycleId === prevCycleId && b.roomId === roomId);
     if (bill) {
       for (const item of bill.items) {
@@ -298,7 +286,21 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       }
     }
 
-    return 1; // Default to 1 if not found
+    // 2. Check previous cycle tenant
+    const prevTenant = getTenantForRoomAndCycle(roomId, prevCycleId);
+    if (prevTenant) {
+      return 1 + (prevTenant.coOccupants?.length || 0);
+    }
+
+    return 1;
+  };
+
+  const getCurrentHouseholdPeopleCount = (roomId: string): number => {
+    const currentTenant = getTenantForRoomAndCycle(roomId, selectedCycle);
+    if (currentTenant) {
+      return 1 + (currentTenant.coOccupants?.length || 0);
+    }
+    return 1;
   };
 
   const showPullButton = loadedCycle === selectedCycle && meterRows.some(row => {
@@ -311,18 +313,19 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       prevYear -= 1;
     }
     const targetPrevCycleId = `${prevYear}-${String(prevMonth).padStart(2, '0')}`;
-    const prevPeople = getPrevCyclePeopleCount(row.roomId, targetPrevCycleId);
+    const prevBillingPeople = getPrevCycleBillingPeopleCount(row.roomId, targetPrevCycleId);
+    const currentHouseholdPeople = getCurrentHouseholdPeopleCount(row.roomId);
 
     if (prevData) {
       const waterMismatch = isWaterUnit && row.waterPrev !== prevData.waterCurr;
       const elecMismatch = isElecUnit && row.elecPrev !== prevData.elecCurr;
-      const peopleMismatch = row.peopleCount !== prevPeople;
+      const peopleMismatch = row.peopleCount !== currentHouseholdPeople || row.peopleCount !== prevBillingPeople;
       return waterMismatch || elecMismatch || peopleMismatch;
     }
     return false;
   });
 
-  const handlePullPreviousData = () => {
+  const handlePullPreviousData = async () => {
     const [cy, cm] = selectedCycle.split('-').map(Number);
     let prevYear = cy;
     let prevMonth = cm - 1;
@@ -337,9 +340,11 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
 
     const updatedRows = meterRows.map(row => {
       const prevData = getPrevCycleNewReadings(row.roomId);
-      const prevPeople = getPrevCyclePeopleCount(row.roomId, targetPrevCycleId);
+      const prevBillingPeople = getPrevCycleBillingPeopleCount(row.roomId, targetPrevCycleId);
+      const currentHouseholdPeople = getCurrentHouseholdPeopleCount(row.roomId);
+
+      const nextRow = { ...row };
       if (prevData) {
-        const nextRow = { ...row };
         if (isWaterUnit) {
           nextRow.waterPrev = prevData.waterCurr;
           newFlashing[`${row.roomId}-waterPrev`] = true;
@@ -348,17 +353,31 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
           nextRow.elecPrev = prevData.elecCurr;
           newFlashing[`${row.roomId}-elecPrev`] = true;
         }
-        if (row.peopleCount !== prevPeople) {
-          peopleDeltas.push(`${row.roomNumber}: จำนวนคน ${row.peopleCount} → ${prevPeople}`);
-        }
-        nextRow.peopleCount = prevPeople;
-        newFlashing[`${row.roomId}-peopleCount`] = true;
-        return nextRow;
       }
-      return row;
+
+      if (prevBillingPeople !== currentHouseholdPeople) {
+        peopleDeltas.push(`${row.roomNumber}: จำนวนคน ${prevBillingPeople} → ${currentHouseholdPeople}`);
+      }
+      nextRow.peopleCount = currentHouseholdPeople;
+      newFlashing[`${row.roomId}-peopleCount`] = true;
+      return nextRow;
     });
 
     setMeterRows(updatedRows);
+
+    // Persist snapshot & recalculate if cycle selected
+    if (selectedBillingCycleId) {
+      for (const r of updatedRows) {
+        const orig = (originalRowsRef.current || []).find(o => o.roomId === r.roomId);
+        if (!orig || orig.peopleCount !== r.peopleCount) {
+          await getDataProvider().meters.updateCyclePeopleCount(
+            selectedBillingCycleId,
+            r.roomId,
+            r.peopleCount
+          );
+        }
+      }
+    }
 
     if (Object.keys(newFlashing).length > 0) {
       setFlashingCells(prev => ({ ...prev, ...newFlashing }));
@@ -635,9 +654,12 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   const fetchAuthoritativeReadings = async (cycleId: string) => {
     if (!cycleId) return;
     try {
-      const serverReadings = await getDataProvider().meters.getByCycle(cycleId);
-      const readingsByRoom: { [roomId: string]: { waterPrev?: number; waterCurr?: number; elecPrev?: number; elecCurr?: number } } = {};
+      const [serverReadings, cyclePeopleRes] = await Promise.all([
+        getDataProvider().meters.getByCycle(cycleId),
+        getDataProvider().meters.getCyclePeopleCount(cycleId)
+      ]);
       
+      const readingsByRoom: { [roomId: string]: { waterPrev?: number; waterCurr?: number; elecPrev?: number; elecCurr?: number } } = {};
       (serverReadings || []).forEach((r: any) => {
         if (!readingsByRoom[r.roomId]) {
           readingsByRoom[r.roomId] = {};
@@ -648,6 +670,14 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
         } else if (r.meterType === 'electricity') {
           readingsByRoom[r.roomId].elecPrev = Number(r.previousReading ?? 0);
           readingsByRoom[r.roomId].elecCurr = Number(r.currentReading ?? 0);
+        }
+      });
+
+      const snapshots = (cyclePeopleRes && cyclePeopleRes.success && Array.isArray(cyclePeopleRes.data)) ? cyclePeopleRes.data : [];
+      const snapshotMap: { [roomId: string]: number } = {};
+      snapshots.forEach((s: any) => {
+        if (s.roomId) {
+          snapshotMap[s.roomId] = Number(s.peopleCount);
         }
       });
 
@@ -669,6 +699,8 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
         const elecCurr = roomReadings.elecCurr ?? elecPrev;
 
         const tenantDefaultPeople = cycleTenant ? (1 + (cycleTenant.coOccupants?.length || 0)) : 1;
+        const snapPeople = snapshotMap[r.id];
+        const rowPeople = snapPeople !== undefined ? snapPeople : tenantDefaultPeople;
         
         const existingBill = (bills || []).find(b => 
           (b.cycleId === cycleId || b.cycleId === selectedCycleCode) && 
@@ -685,7 +717,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
           elecPrev: Math.round(elecPrev),
           elecCurr: Math.round(elecCurr),
           isReplaced: false,
-          peopleCount: tenantDefaultPeople,
+          peopleCount: Math.max(1, rowPeople),
           overdueAmount: 0,
           isPaid,
           billStatus,
@@ -694,6 +726,8 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
           otherFees: []
         };
       });
+
+      originalRowsRef.current = JSON.parse(JSON.stringify(rows));
 
       const localDraft = tempMeterRowsCache[cycleId];
       if (localDraft) {
@@ -819,11 +853,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
           const rawVal = cells[cellIdx].trim();
 
           let cleaned = rawVal.replace(/[^0-9]/g, '');
-          if (field === 'peopleCount') {
-            cleaned = cleaned.charAt(0) || '0';
-          }
-
-          const numVal = Number(cleaned) || 0;
+          const numVal = field === 'peopleCount' ? Math.max(1, Number(cleaned) || 1) : (Number(cleaned) || 0);
           if (row[field] !== numVal) {
             row[field] = numVal;
             newFlashing[`${row.roomId}-${field}`] = true;
@@ -1118,6 +1148,20 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
 
     try {
       const res = await getDataProvider().meters.saveBulkMeterRecords(meterRows as any, selectedBillingCycleId);
+      
+      // Save any changed peopleCount to roomBillingCycleSnapshot
+      const peopleChanged = meterRows.filter(r => {
+        const orig = (originalRowsRef.current || []).find(o => o.roomId === r.roomId);
+        return !orig || orig.peopleCount !== r.peopleCount;
+      });
+      for (const pRow of peopleChanged) {
+        await getDataProvider().meters.updateCyclePeopleCount(
+          selectedBillingCycleId,
+          pRow.roomId,
+          Math.max(1, pRow.peopleCount)
+        );
+      }
+
       setIsSaving(false);
       if (res.success) {
         originalRowsRef.current = JSON.parse(JSON.stringify(meterRows));
@@ -1531,23 +1575,16 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                       </td>
                     )}
 
-                    {/* People Count Input (Only allows 0-9 and replaces latest character) */}
+                    {/* People Count Input */}
                     <td className="p-4 text-center">
                       <input
                         type="text"
                         inputMode="numeric"
-                        pattern="[0-9]"
+                        pattern="[0-9]*"
                         value={row.peopleCount}
                         onChange={(e) => {
-                          const val = e.target.value;
-                          if (val.length === 0) {
-                            handleNumberChange(row.roomId, 'peopleCount', 0);
-                          } else {
-                            const lastChar = val.charAt(val.length - 1);
-                            if (/[0-9]/.test(lastChar)) {
-                              handleNumberChange(row.roomId, 'peopleCount', Number(lastChar));
-                            }
-                          }
+                          const val = e.target.value.replace(/[^0-9]/g, '');
+                          handleNumberChange(row.roomId, 'peopleCount', val === '' ? 1 : Math.max(1, Number(val)));
                         }}
                         onPaste={(e) => handlePaste(row.roomId, 'peopleCount', e)}
                         data-row={idx}

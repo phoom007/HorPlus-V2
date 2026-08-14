@@ -87,6 +87,51 @@ export class BillingOrchestrationService {
   }
 
   /**
+   * Resolves the true current billing cycle for a dormitory:
+   * 1. Active/open cycle whose periodStart <= now <= periodEnd
+   * 2. Active/open cycle whose periodStart <= now (ordered by periodStart desc)
+   * 3. Earliest upcoming active/open cycle (ordered by periodStart asc)
+   */
+  public async resolveCurrentBillingCycle(
+    dormitoryId: string,
+    tx: Prisma.TransactionClient
+  ) {
+    const now = new Date();
+
+    // 1. Non-completed cycle currently in effect (periodStart <= now <= periodEnd)
+    const currentRangeCycle = await tx.billingCycle.findFirst({
+      where: {
+        dormitoryId,
+        status: { notIn: ['completed'] },
+        periodStart: { lte: now },
+        periodEnd: { gte: now },
+      },
+      orderBy: { periodStart: 'desc' },
+    });
+    if (currentRangeCycle) return currentRangeCycle;
+
+    // 2. Non-completed cycle that has already started (periodStart <= now)
+    const pastStartedCycle = await tx.billingCycle.findFirst({
+      where: {
+        dormitoryId,
+        status: { notIn: ['completed'] },
+        periodStart: { lte: now },
+      },
+      orderBy: { periodStart: 'desc' },
+    });
+    if (pastStartedCycle) return pastStartedCycle;
+
+    // 3. Fallback: earliest upcoming non-completed cycle
+    return await tx.billingCycle.findFirst({
+      where: {
+        dormitoryId,
+        status: { notIn: ['completed'] },
+      },
+      orderBy: { periodStart: 'asc' },
+    });
+  }
+
+  /**
    * Resolves or seeds the PostgreSQL-authoritative RoomBillingCycleSnapshot
    */
   public async resolveCyclePeopleCount(
@@ -164,13 +209,16 @@ export class BillingOrchestrationService {
     prevPeopleCount: number,
     tx: Prisma.TransactionClient
   ): Promise<RecalculationResult> {
-    // 1. Find bill for this cycle and room
+    // 1. Find authoritative active/unpaid bill for this cycle and room
     const bill = await tx.bill.findFirst({
       where: {
         dormitoryId,
         billingCycleId,
         roomId,
+        status: { notIn: ['cancelled', 'voided', 'withdrawn', 'superseded'] },
+        cancelledAt: null,
       },
+      orderBy: { createdAt: 'desc' },
       include: {
         items: {
           orderBy: { displayOrder: 'asc' },
@@ -375,14 +423,8 @@ export class BillingOrchestrationService {
         prevPeopleCount: prevHouseholdCount,
       };
 
-      // 4. Find active/latest billing cycle
-      const activeCycle = await tx.billingCycle.findFirst({
-        where: {
-          dormitoryId,
-          status: { notIn: ['completed'] },
-        },
-        orderBy: { periodStart: 'desc' },
-      });
+      // 4. Find active/current billing cycle (contextually overlapping or current)
+      const activeCycle = await this.resolveCurrentBillingCycle(dormitoryId, tx);
 
       let currentCycleBillPaid = false;
 
@@ -399,13 +441,16 @@ export class BillingOrchestrationService {
         });
         const prevCyclePeopleCount = currentSnapshot ? currentSnapshot.peopleCount : prevHouseholdCount;
 
-        // Check if current bill is paid
+        // Check authoritative current bill
         const currentBill = await tx.bill.findFirst({
           where: {
             dormitoryId,
             billingCycleId: activeCycle.id,
             roomId: contract.roomId,
+            status: { notIn: ['cancelled', 'voided', 'withdrawn', 'superseded'] },
+            cancelledAt: null,
           },
+          orderBy: { createdAt: 'desc' },
         });
 
         if (currentBill && !isBillRecalculatable(currentBill)) {
@@ -600,13 +645,8 @@ export class BillingOrchestrationService {
         prevPeopleCount: prevHouseholdCount,
       };
 
-      const activeCycle = await tx.billingCycle.findFirst({
-        where: {
-          dormitoryId,
-          status: { notIn: ['completed'] },
-        },
-        orderBy: { periodStart: 'desc' },
-      });
+      // Find active/current billing cycle (contextually overlapping or current)
+      const activeCycle = await this.resolveCurrentBillingCycle(dormitoryId, tx);
 
       let currentCycleBillPaid = false;
 
@@ -622,12 +662,16 @@ export class BillingOrchestrationService {
         });
         const prevCyclePeopleCount = currentSnapshot ? currentSnapshot.peopleCount : prevHouseholdCount;
 
+        // Check authoritative current bill
         const currentBill = await tx.bill.findFirst({
           where: {
             dormitoryId,
             billingCycleId: activeCycle.id,
             roomId: contract.roomId,
+            status: { notIn: ['cancelled', 'voided', 'withdrawn', 'superseded'] },
+            cancelledAt: null,
           },
+          orderBy: { createdAt: 'desc' },
         });
 
         if (currentBill && !isBillRecalculatable(currentBill)) {

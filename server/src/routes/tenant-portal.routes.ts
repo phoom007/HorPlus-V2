@@ -1030,10 +1030,62 @@ export function createTenantPortalRouter(authService?: AuthenticationService): R
 
   // 13. Tenant Co-Occupant Add (Self-Service)
   router.post('/co-occupants', async (req: Request, res: Response) => {
+    // Canonical CSRF verification
+    const csrfHeader = req.headers['x-csrf-token'] as string | undefined;
+    const csrfCookie = req.cookies?.['horplus_csrf'];
+    const requestId = (req.headers['x-request-id'] as string) || req.requestId || 'req-unknown';
+
+    if (!csrfHeader) {
+      return res.status(403).json({
+        error: {
+          code: 'CSRF_TOKEN_REQUIRED',
+          message: 'ไม่พบ CSRF token ในคำขอ (X-CSRF-Token header missing)',
+          fieldErrors: null,
+          requestId,
+          timestamp: new Date().toISOString(),
+        },
+      });
+    }
+
+    const sessionId = req.auth?.sessionId;
+    if (!sessionId) {
+      return res.status(401).json({
+        error: {
+          code: 'SESSION_REQUIRED',
+          message: 'ไม่พบข้อมูลเซสชันสำหรับตรวจสอบ CSRF token',
+          fieldErrors: null,
+          requestId,
+          timestamp: new Date().toISOString(),
+        },
+      });
+    }
+
+    if (authService) {
+      const isValid = authService.verifyCsrf(csrfHeader, sessionId);
+      if (!isValid || (csrfCookie && csrfCookie !== csrfHeader)) {
+        return res.status(403).json({
+          error: {
+            code: 'CSRF_TOKEN_INVALID',
+            message: 'CSRF token ไม่ถูกต้องหรือไม่สัมพันธ์กับเซสชันปัจจุบัน',
+            fieldErrors: null,
+            requestId,
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+    }
+
+    const actorUserId = req.auth?.userId;
+    if (!actorUserId) {
+      return res.status(401).json({
+        error: { code: 'UNAUTHORIZED', message: 'ไม่พบข้อมูลผู้ใช้ที่เข้าสู่ระบบ', requestId },
+      });
+    }
+
     try {
       const ctx = await resolveTenantContext(req);
       if (ctx.error) {
-        return res.status(ctx.error.statusCode).json({ error: { code: ctx.error.code, message: ctx.error.message, requestId: req.requestId } });
+        return res.status(ctx.error.statusCode).json({ error: { code: ctx.error.code, message: ctx.error.message, requestId } });
       }
 
       const parsed = CreateCoOccupantSchema.safeParse(req.body);
@@ -1043,12 +1095,11 @@ export function createTenantPortalRouter(authService?: AuthenticationService): R
             code: 'VALIDATION_ERROR',
             message: 'ข้อมูลผู้พักร่วมไม่ถูกต้อง',
             fieldErrors: parsed.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })),
-            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            requestId,
           },
         });
       }
 
-      const actorUserId = req.auth?.userId || ctx.tenant.id;
       const result = await billingOrchestrationService.addTenantCoOccupant(
         ctx.dormitoryId,
         ctx.tenant.id,
@@ -1071,21 +1122,94 @@ export function createTenantPortalRouter(authService?: AuthenticationService): R
       });
     } catch (err: any) {
       const statusCode = err.statusCode || 500;
+      const code = err.code || (statusCode >= 500 ? 'INTERNAL_ERROR' : 'BAD_REQUEST');
+      const message = statusCode >= 500 ? 'เกิดข้อผิดพลาดภายในระบบ' : (err.message || 'เกิดข้อผิดพลาด');
       return res.status(statusCode).json({
-        error: { code: err.code || 'INTERNAL_ERROR', message: err.message, requestId: req.requestId },
+        error: { code, message, requestId },
       });
     }
   });
 
   // 14. Tenant Co-Occupant Delete (Self-Service)
   router.delete('/co-occupants/:id', async (req: Request, res: Response) => {
+    // Canonical CSRF verification
+    const csrfHeader = req.headers['x-csrf-token'] as string | undefined;
+    const csrfCookie = req.cookies?.['horplus_csrf'];
+    const requestId = (req.headers['x-request-id'] as string) || req.requestId || 'req-unknown';
+
+    if (!csrfHeader) {
+      return res.status(403).json({
+        error: {
+          code: 'CSRF_TOKEN_REQUIRED',
+          message: 'ไม่พบ CSRF token ในคำขอ (X-CSRF-Token header missing)',
+          fieldErrors: null,
+          requestId,
+          timestamp: new Date().toISOString(),
+        },
+      });
+    }
+
+    const sessionId = req.auth?.sessionId;
+    if (!sessionId) {
+      return res.status(401).json({
+        error: {
+          code: 'SESSION_REQUIRED',
+          message: 'ไม่พบข้อมูลเซสชันสำหรับตรวจสอบ CSRF token',
+          fieldErrors: null,
+          requestId,
+          timestamp: new Date().toISOString(),
+        },
+      });
+    }
+
+    if (authService) {
+      const isValid = authService.verifyCsrf(csrfHeader, sessionId);
+      if (!isValid || (csrfCookie && csrfCookie !== csrfHeader)) {
+        return res.status(403).json({
+          error: {
+            code: 'CSRF_TOKEN_INVALID',
+            message: 'CSRF token ไม่ถูกต้องหรือไม่สัมพันธ์กับเซสชันปัจจุบัน',
+            fieldErrors: null,
+            requestId,
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+    }
+
+    const actorUserId = req.auth?.userId;
+    if (!actorUserId) {
+      return res.status(401).json({
+        error: { code: 'UNAUTHORIZED', message: 'ไม่พบข้อมูลผู้ใช้ที่เข้าสู่ระบบ', requestId },
+      });
+    }
+
     try {
       const ctx = await resolveTenantContext(req);
       if (ctx.error) {
-        return res.status(ctx.error.statusCode).json({ error: { code: ctx.error.code, message: ctx.error.message, requestId: req.requestId } });
+        return res.status(ctx.error.statusCode).json({ error: { code: ctx.error.code, message: ctx.error.message, requestId } });
       }
 
-      const actorUserId = req.auth?.userId || ctx.tenant.id;
+      // Assert co-occupant ownership for the requesting tenant
+      const coOccupant = await prisma.tenantCoOccupant.findFirst({
+        where: {
+          id: req.params.id,
+          tenantId: ctx.tenant.id,
+          dormitoryId: ctx.dormitoryId,
+          deletedAt: null,
+        },
+      });
+
+      if (!coOccupant) {
+        return res.status(404).json({
+          error: {
+            code: 'CO_OCCUPANT_NOT_FOUND',
+            message: 'ไม่พบข้อมูลผู้พักร่วมที่ระบุ',
+            requestId,
+          },
+        });
+      }
+
       const result = await billingOrchestrationService.removeTenantCoOccupant(
         ctx.dormitoryId,
         ctx.tenant.id,
@@ -1103,8 +1227,10 @@ export function createTenantPortalRouter(authService?: AuthenticationService): R
       });
     } catch (err: any) {
       const statusCode = err.statusCode || 500;
+      const code = err.code || (statusCode >= 500 ? 'INTERNAL_ERROR' : 'BAD_REQUEST');
+      const message = statusCode >= 500 ? 'เกิดข้อผิดพลาดภายในระบบ' : (err.message || 'เกิดข้อผิดพลาด');
       return res.status(statusCode).json({
-        error: { code: err.code || 'INTERNAL_ERROR', message: err.message, requestId: req.requestId },
+        error: { code, message, requestId },
       });
     }
   });

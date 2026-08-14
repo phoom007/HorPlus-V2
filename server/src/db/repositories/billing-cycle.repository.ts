@@ -28,7 +28,11 @@ export interface BillingRateSnapshotEntity {
   electricityBillingType: string;
   electricityRate: string;
   commonFee: string;
+  commonFeeMode: string;
   internetFee: string;
+  internetFeeMode: string;
+  parkingFee: string;
+  parkingFeeMode: string;
   lateFeeType: string;
   lateFeeValue: string;
   currency: string;
@@ -55,7 +59,11 @@ export interface CreateRateSnapshotData {
   electricityBillingType?: string;
   electricityRate?: string;
   commonFee?: string;
+  commonFeeMode?: string;
   internetFee?: string;
+  internetFeeMode?: string;
+  parkingFee?: string;
+  parkingFeeMode?: string;
   lateFeeType?: string;
   lateFeeValue?: string;
   currency?: string;
@@ -214,7 +222,11 @@ export class InMemoryBillingCycleRepository implements IBillingCycleRepository {
       electricityBillingType: data.electricityBillingType || 'per_unit',
       electricityRate: data.electricityRate || '7.00',
       commonFee: data.commonFee || '0.00',
+      commonFeeMode: data.commonFeeMode || 'room',
       internetFee: data.internetFee || '0.00',
+      internetFeeMode: data.internetFeeMode || 'room',
+      parkingFee: data.parkingFee || '0.00',
+      parkingFeeMode: data.parkingFeeMode || 'room',
       lateFeeType: data.lateFeeType || 'fixed',
       lateFeeValue: data.lateFeeValue || '50.00',
       currency: data.currency || 'THB',
@@ -270,7 +282,11 @@ export class PrismaBillingCycleRepository implements IBillingCycleRepository {
       electricityBillingType: s.electricityBillingType,
       electricityRate: fmt(s.electricityRate, '7.00'),
       commonFee: fmt(s.commonFee, '0.00'),
+      commonFeeMode: s.commonFeeMode || 'room',
       internetFee: fmt(s.internetFee, '0.00'),
+      internetFeeMode: s.internetFeeMode || 'room',
+      parkingFee: fmt(s.parkingFee, '0.00'),
+      parkingFeeMode: s.parkingFeeMode || 'room',
       lateFeeType: s.lateFeeType,
       lateFeeValue: fmt(s.lateFeeValue, '50.00'),
       currency: s.currency,
@@ -386,7 +402,11 @@ export class PrismaBillingCycleRepository implements IBillingCycleRepository {
         electricityBillingType: data.electricityBillingType || 'per_unit',
         electricityRate: data.electricityRate || '7.00',
         commonFee: data.commonFee || '0.00',
+        commonFeeMode: data.commonFeeMode || 'room',
         internetFee: data.internetFee || '0.00',
+        internetFeeMode: data.internetFeeMode || 'room',
+        parkingFee: data.parkingFee || '0.00',
+        parkingFeeMode: data.parkingFeeMode || 'room',
         lateFeeType: data.lateFeeType || 'fixed',
         lateFeeValue: data.lateFeeValue || '50.00',
         currency: data.currency || 'THB',
