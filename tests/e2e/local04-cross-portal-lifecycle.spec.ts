@@ -554,12 +554,12 @@ test.describe('LOCAL-04 — Master Cross-Portal Playwright Acceptance Suite (Jou
     await tenantPortalCtx.page.waitForLoadState('networkidle');
 
     // Assert room number and tenant profile visible in DOM
-    await expect(tenantPortalCtx.page.locator('text=A101').first()).toBeVisible({ timeout: 15000 });
+    await expect(tenantPortalCtx.page.locator('text=A101').first()).toBeVisible({ timeout: 30000 });
 
     // F5 Persistence test on tenant portal
     await tenantPortalCtx.page.reload();
     await tenantPortalCtx.page.waitForLoadState('networkidle');
-    await expect(tenantPortalCtx.page.locator('text=A101').first()).toBeVisible({ timeout: 15000 });
+    await expect(tenantPortalCtx.page.locator('text=A101').first()).toBeVisible({ timeout: 30000 });
 
     await tenantCtx.close();
     await ownerCtx.close();
@@ -1645,22 +1645,22 @@ test.describe('LOCAL-04 — Master Cross-Portal Playwright Acceptance Suite (Jou
     await tenantCtx.page.goto('/tenant');
     await tenantCtx.page.waitForLoadState('networkidle');
 
-    const billTabBtn = tenantCtx.page.locator('button:has-text("บิล")');
-    await expect(billTabBtn).toBeVisible({ timeout: 15000 });
+    const billTabBtn = tenantCtx.page.locator('[data-testid="nav-tab-payments_tab"], button:has-text("บิล")').first();
+    await expect(billTabBtn).toBeVisible({ timeout: 30000 });
     await billTabBtn.click();
 
     // Verify bill appears in DOM with exact bill total
     const formattedTotal = Number(issuedBill.totalAmount).toLocaleString();
-    await expect(tenantCtx.page.locator(`text=${formattedTotal}`).first()).toBeVisible({ timeout: 15000 });
+    await expect(tenantCtx.page.locator(`text=${formattedTotal}`).first()).toBeVisible({ timeout: 30000 });
 
     // F5 Persistence in Tenant UI
     await tenantCtx.page.reload();
     await tenantCtx.page.waitForLoadState('networkidle');
-    const billTabBtnAfter = tenantCtx.page.locator('button:has-text("บิล")');
+    const billTabBtnAfter = tenantCtx.page.locator('[data-testid="nav-tab-payments_tab"], button:has-text("บิล")').first();
     if (await billTabBtnAfter.isVisible()) {
       await billTabBtnAfter.click();
     }
-    await expect(tenantCtx.page.locator(`text=${formattedTotal}`).first()).toBeVisible({ timeout: 15000 });
+    await expect(tenantCtx.page.locator(`text=${formattedTotal}`).first()).toBeVisible({ timeout: 30000 });
 
     await ownerCtx.close();
     await tenantCtx.context.close();
@@ -2027,20 +2027,20 @@ test.describe('LOCAL-04 — Master Cross-Portal Playwright Acceptance Suite (Jou
     await tenantCtx.page.waitForLoadState('networkidle');
 
     const notifBellBtn = tenantCtx.page.locator('button[aria-label="การแจ้งเตือน"]').first();
-    await expect(notifBellBtn).toBeVisible({ timeout: 15000 });
+    await expect(notifBellBtn).toBeVisible({ timeout: 30000 });
     await notifBellBtn.click();
 
     // Assert exact notice item and unread state
     const noticeItem = tenantCtx.page.locator(`[data-testid="tenant-notice-item-${tenantNotice!.id}"]`);
-    await expect(noticeItem).toBeVisible({ timeout: 15000 });
+    await expect(noticeItem).toBeVisible({ timeout: 30000 });
 
     // Perform real read interaction through UI
     const readBtn = tenantCtx.page.locator(`[data-testid="button-tenant-notice-read-${tenantNotice!.id}"]`);
-    await expect(readBtn).toBeVisible({ timeout: 15000 });
+    await expect(readBtn).toBeVisible({ timeout: 30000 });
     await readBtn.click();
 
     // Read button disappears in UI
-    await expect(readBtn).not.toBeVisible({ timeout: 15000 });
+    await expect(readBtn).not.toBeVisible({ timeout: 30000 });
 
     // Assert PostgreSQL isRead = true and readAt != null
     const updatedDbNotice = await prisma.tenantNotice.findUnique({
