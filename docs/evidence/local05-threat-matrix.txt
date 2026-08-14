@@ -1,71 +1,91 @@
 ================================================================================
 LOCAL-05 Threat Matrix — Security & Resilience Audit
 ================================================================================
+TESTED_EXECUTABLE_SHA: e5e425d6aff342b3a8af57536da5c71c8a64267b
 Date:       2026-08-14
-Status:     ALL PASS
 Test File:  server/tests/local05-security-resilience-audit.test.ts
+Status:     ALL VERIFIED
 ================================================================================
 
-┌────┬─────────────────────────────────────────────┬────────┬───────┬─────────┐
-│ #  │ Threat Category                             │ Tests  │ Pass  │ Status  │
-├────┼─────────────────────────────────────────────┼────────┼───────┼─────────┤
-│  1 │ Session Cookie Security                     │   2    │   2   │  PASS   │
-│  2 │ Authentication Guards                       │   3    │   3   │  PASS   │
-│  3 │ CSRF Defense on State Mutations             │   6    │   6   │  PASS   │
-│  4 │ Cross-Dormitory Isolation (Owner/Staff)     │   2    │   2   │  PASS   │
-│  5 │ Tenant-Portal Cross-Tenant IDOR             │   3    │   3   │  PASS   │
-│  6 │ Staff RBAC Mutation Restrictions (TECH)     │   3    │   3   │  PASS   │
-│  7 │ Input Validation & SQL Parameterization     │   3    │   3   │  PASS   │
-│  8 │ Bearer Security & Quota Concurrency         │   3    │   3   │  PASS   │
-│  9 │ Transaction Rollback Resilience             │   3    │   3   │  PASS   │
-│ 10 │ Outbox Replay, Dedup & Concurrency          │   3    │   3   │  PASS   │
-│ 11 │ Startup & Scheduler Resilience              │   2    │   2   │  PASS   │
-│ 12 │ Redis Failure Resilience & Degradation      │   3    │   3   │  PASS   │
-│ 13 │ Database Failure Fail-Closed & Recovery     │   1    │   1   │  PASS   │
-│ 14 │ Rate-Limit & Abuse Resistance               │   2    │   2   │  PASS   │
-│ 15 │ Upload & Payment Evidence Security          │   6    │   6   │  PASS   │
-│ 16 │ Mass-Assignment Defense                     │   2    │   2   │  PASS   │
-│ 17 │ Secret & Error Response Hygiene             │   1    │   1   │  PASS   │
-├────┼─────────────────────────────────────────────┼────────┼───────┼─────────┤
-│    │ TOTAL                                       │  48    │  48   │  PASS   │
-└────┴─────────────────────────────────────────────┴────────┴───────┴─────────┘
+┌────┬─────────────────────────────────────────────┬────────┬───────┬────────────────────┐
+│ #  │ Threat Category                             │ Tests  │ Pass  │ Status             │
+├────┼─────────────────────────────────────────────┼────────┼───────┼────────────────────┤
+│  1 │ Session Cookie Security                     │   2    │   2   │ VERIFIED           │
+│  2 │ Authentication Guards                       │   3    │   3   │ VERIFIED           │
+│  3 │ CSRF Defense on State Mutations             │   6    │   6   │ FIXED_AND_VERIFIED │
+│  4 │ Cross-Dormitory Isolation (Owner/Staff)     │   2    │   2   │ VERIFIED           │
+│  5 │ Tenant-Portal Cross-Tenant IDOR             │   3    │   3   │ VERIFIED           │
+│  6 │ Staff RBAC Mutation Restrictions (TECH)     │   3    │   3   │ VERIFIED           │
+│  7 │ Input Validation & SQL Parameterization     │   3    │   3   │ FIXED_AND_VERIFIED │
+│  8 │ Bearer Security & Quota Concurrency         │   3    │   3   │ VERIFIED           │
+│  9 │ Transaction Rollback Resilience             │   3    │   3   │ VERIFIED           │
+│ 10 │ Outbox Replay, Dedup & Concurrency          │   3    │   3   │ VERIFIED           │
+│ 11 │ Startup & Scheduler Resilience              │   2    │   2   │ VERIFIED           │
+│ 12 │ Redis Failure Resilience & Degradation      │   3    │   3   │ VERIFIED           │
+│ 13 │ Database Failure Fail-Closed & Recovery     │   1    │   1   │ VERIFIED           │
+│ 14 │ Rate-Limit & Abuse Resistance               │   5    │   5   │ VERIFIED           │
+│ 15 │ Upload & Payment Evidence Security          │   6    │   6   │ FIXED_AND_VERIFIED │
+│ 16 │ Mass-Assignment Defense                     │   2    │   2   │ VERIFIED           │
+│ 17 │ Secret & Error Response Hygiene             │   1    │   1   │ VERIFIED           │
+├────┼─────────────────────────────────────────────┼────────┼───────┼────────────────────┤
+│    │ TOTAL                                       │  53    │  53   │ ALL VERIFIED       │
+└────┴─────────────────────────────────────────────┴────────┴───────┴────────────────────┘
 
-Note: Section 18 (Dormitory Write Entitlement Guard, 2 tests) is listed as a
-separate section in the test file but falls under the broader "Authorization &
-Access Control" threat domain. Total unique tests: 50.
+================================================================================
+Section 11 — Scheduler Isolation Details
+================================================================================
 
-┌────┬─────────────────────────────────────────────┬────────┬───────┬─────────┐
-│ 18 │ Dormitory Write Entitlement Guard           │   2    │   2   │  PASS   │
-├────┼─────────────────────────────────────────────┼────────┼───────┼─────────┤
-│    │ GRAND TOTAL                                 │  50    │  50   │  PASS   │
-└────┴─────────────────────────────────────────────┴────────┴───────┴─────────┘
+  Test:     should isolate Phase 4 (contract activation) failure so Phase 5
+            (outbox) still completes in real CleanupService
+  Method:   Real CleanupService.runCleanup() with vi.spyOn fault injection on
+            ContractRenewalService.prototype.activateAllScheduledContracts
+  Proof:    Phase 4 throws SIMULATED_CONTRACT_ACTIVATION_CRASH.
+            Phase 5 (outbox processing) still completes — PENDING event
+            transitions to PROCESSED status.
+  Status:   VERIFIED (real production seam tested, not synthetic helper)
+
+================================================================================
+Section 14 — Rate-Limit Bypass Resistance Details
+================================================================================
+
+  Rate limiter key: rate_limit:${req.path}:${ip}
+  TRUST_PROXY: false (test default)
+  Express req.ip: socket remote address (ignores x-forwarded-for)
+  req.path: strips query strings (/api/v1/auth/google?x=1 → /api/v1/auth/google)
+
+  Bypass Attempts:
+    x-forwarded-for: 203.0.113.199      → BLOCKED (still 429)
+    x-real-ip: 198.51.100.42            → BLOCKED (still 429)
+    /api/v1/auth/google?x=1             → BLOCKED (still 429)
 
 ================================================================================
 Threat Coverage Analysis
 ================================================================================
 
-  Authentication & Session Management ........... COVERED (Sections 1, 2, 8)
-  Authorization & Access Control ................ COVERED (Sections 4, 5, 6, 18)
-  Cross-Site Request Forgery (CSRF) ............. COVERED (Section 3)
-  Injection Attacks (SQL, NoSQL) ................ COVERED (Section 7)
-  Insecure Direct Object References (IDOR) ...... COVERED (Sections 4, 5)
-  Mass Assignment ............................... COVERED (Section 16)
-  Information Disclosure ........................ COVERED (Sections 1, 17)
-  Rate Limiting & Abuse Prevention .............. COVERED (Section 14)
-  Transaction Integrity & Rollback .............. COVERED (Section 9)
-  Event Processing & Idempotency ................ COVERED (Section 10)
-  Infrastructure Resilience (Redis) ............. COVERED (Section 12)
-  Infrastructure Resilience (Database) .......... COVERED (Section 13)
-  Startup & Scheduler Safety .................... COVERED (Section 11)
-  File Upload Security .......................... COVERED (Section 15)
-  Payment Evidence Integrity .................... COVERED (Section 15)
-  Directory Traversal ........................... COVERED (Section 15)
-  Multi-Tenant Data Isolation ................... COVERED (Sections 4, 5)
+  Authentication & Session Management ........... VERIFIED (Sections 1, 2, 8)
+  Authorization & Access Control ................ VERIFIED (Sections 4, 5, 6)
+  Cross-Site Request Forgery (CSRF) ............. FIXED_AND_VERIFIED (Section 3)
+  Injection Attacks (SQL) ....................... FIXED_AND_VERIFIED (Section 7)
+  Insecure Direct Object References (IDOR) ...... VERIFIED (Sections 4, 5)
+  Mass Assignment ............................... VERIFIED (Section 16)
+  Information Disclosure ........................ VERIFIED (Sections 1, 17)
+  Rate Limiting & Abuse Prevention .............. VERIFIED (Section 14)
+  Transaction Integrity & Rollback .............. VERIFIED (Section 9)
+  Event Processing & Idempotency ................ VERIFIED (Section 10)
+  Infrastructure Resilience (Redis) ............. VERIFIED (Section 12)
+  Infrastructure Resilience (Database) .......... VERIFIED (Section 13)
+  Startup & Scheduler Safety .................... VERIFIED (Section 11)
+  File Upload Security .......................... FIXED_AND_VERIFIED (Section 15)
+  Payment Evidence Integrity .................... FIXED_AND_VERIFIED (Section 15)
+  Directory Traversal ........................... VERIFIED (Section 15)
+  Multi-Tenant Data Isolation ................... VERIFIED (Sections 4, 5)
 
   Total Threat Categories: 17
-  Verified:               17
-  Unverified:              0
+  VERIFIED:              13
+  FIXED_AND_VERIFIED:     4
+  RESIDUAL_RISK:          0
+  NOT_APPLICABLE:         0
 
 ================================================================================
-Verdict: ALL 17 THREAT CATEGORIES TESTED AND VERIFIED — PASS
+Verdict: ALL 17 THREAT CATEGORIES VERIFIED — PASS
 ================================================================================

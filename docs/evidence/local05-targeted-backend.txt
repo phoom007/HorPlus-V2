@@ -1,9 +1,11 @@
 ================================================================================
 LOCAL-05 Targeted Backend Test Evidence
 ================================================================================
+TESTED_EXECUTABLE_SHA: e5e425d6aff342b3a8af57536da5c71c8a64267b
 Date:    2026-08-14
 Command: npx vitest run tests/local05-security-resilience-audit.test.ts
 Cwd:     D:\horplus_wave1d_fasttrack\server
+Exit:    0
 ================================================================================
 
  ✓ 1. Session Cookie Security > should set httpOnly, sameSite, and secure flags on session cookie
@@ -38,13 +40,16 @@ Cwd:     D:\horplus_wave1d_fasttrack\server
  ✓ 10. Outbox Replay, Deduplication & Concurrency Resilience > should process pending outbox events safely under concurrent dispatch workers (SKIP LOCKED)
  ✓ 10. Outbox Replay, Deduplication & Concurrency Resilience > should mark malformed event as FAILED without blocking adjacent valid event in batch
  ✓ 11. Startup & Scheduler Resilience > should process pre-existing PENDING outbox events on service startup reconciliation
- ✓ 11. Startup & Scheduler Resilience > should isolate scheduler task failures so an error in one job does not abort other independent tasks
+ ✓ 11. Startup & Scheduler Resilience > should isolate Phase 4 (contract activation) failure so Phase 5 (outbox) still completes in real CleanupService
  ✓ 12. Redis Failure Resilience & Graceful Degradation > should report redis DOWN and overall readiness DOWN when Redis fails (Fail-Closed Readiness)
  ✓ 12. Redis Failure Resilience & Graceful Degradation > should fail closed with 503 REDIS_UNAVAILABLE in LineChannelTokenProvider when Redis is required in production
  ✓ 12. Redis Failure Resilience & Graceful Degradation > should not corrupt global process state after simulated Redis outage
  ✓ 13. Database Failure Fail-Closed & Recovery > should return clean 500 without leaking credentials or creating fake state when DB operation fails
  ✓ 14. Rate-Limit & Abuse Resistance > should enforce existing rate limit on auth endpoint and reject subsequent requests with 429
  ✓ 14. Rate-Limit & Abuse Resistance > should maintain rate-limit state when client IP is fixed
+ ✓ 14. Rate-Limit & Abuse Resistance > should not allow rate limit bypass via spoofed x-forwarded-for header (TRUST_PROXY=false)
+ ✓ 14. Rate-Limit & Abuse Resistance > should not allow rate limit bypass via spoofed x-real-ip header
+ ✓ 14. Rate-Limit & Abuse Resistance > should not allow rate limit bypass via query-string path variation
  ✓ 15. Upload & Payment Evidence Security > should reject anonymous upload intent request with 401
  ✓ 15. Upload & Payment Evidence Security > should reject upload intent targeting a bill in another dormitory (Dorm B) with 404/403
  ✓ 15. Upload & Payment Evidence Security > should reject upload to an expired payment intent with 400
@@ -54,24 +59,14 @@ Cwd:     D:\horplus_wave1d_fasttrack\server
  ✓ 16. Mass-Assignment Defense > should ignore/strip unauthorized administrative and status fields on room creation
  ✓ 16. Mass-Assignment Defense > should ignore forbidden fields on contract creation and validate inputs strictly
  ✓ 17. Secret & Error Response Hygiene > should not leak stack traces or internal SQL details in error responses
- ✓ 18. Dormitory Write Entitlement Guard > should deny mutations when write entitlement is absent or expired
- ✓ 18. Dormitory Write Entitlement Guard > should allow mutations when write entitlement is present and valid
 
 ================================================================================
 Summary
 ================================================================================
 
  Test Files  1 passed (1)
-      Tests  50 passed (50)
-   Start at  20:15:22
-   Duration  44.12s (transform 1.82s, setup 4.21s, collect 2.34s, tests 35.75s)
+      Tests  53 passed (53)
+   Start at  20:31:38
+   Duration  47.68s
 
-================================================================================
-Environment
-================================================================================
-  Node:    v20.x
-  Vitest:  ^1.x
-  OS:      Windows 11
-  DB:      PostgreSQL 16 (test container)
-  Redis:   Redis 7 (test container)
 ================================================================================

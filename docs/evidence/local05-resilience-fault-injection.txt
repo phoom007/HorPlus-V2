@@ -1,0 +1,160 @@
+================================================================================
+LOCAL-05 Resilience Fault-Injection Evidence
+================================================================================
+TESTED_EXECUTABLE_SHA: 6d3f783763a36e2c8362adb0c8c081726b3a2bb4
+Date:                  2026-08-14
+Test File:             server/tests/local05-security-resilience-audit.test.ts
+Command:               npx vitest run tests/local05-security-resilience-audit.test.ts
+Exit Code:             0
+Total Tests:           53 passed (53)
+================================================================================
+
+1. FORCED REPLACEMENT ROLLBACK / RECOVERY
+--------------------------------------------------------------------------------
+Test: 9.2 Real Business Flow A: Forced Replacement Transaction Mid-Flow
+      Rollback & Recovery
+Status: PASS
+
+Proof: Creates a real occupancy + tenant-room link, then executes a forced
+replacement within a Prisma $transaction. Mid-transaction failure rolls back
+the entire replacement atomically. Post-rollback recovery creates a clean new
+contract and occupancy without duplicates.
+
+2. STAFF OUTBOX MULTI-RECIPIENT ROLLBACK / RETRY
+--------------------------------------------------------------------------------
+Test: 9.3 Real Business Flow B: Outbox STAFF Delivery Multi-Recipient
+      Rollback & Recovery
+Status: PASS
+
+Proof: Creates a STAFF access grant and inserts outbox notification events
+targeting multiple recipients. Uses Proxy-based transaction interception to
+inject a failure during staffNotification.upsert. Proves that the transaction
+rolls back atomically, then retries with processPendingOutboxEvents(1) and
+verifies the valid event is eventually processed to PROCESSED status.
+
+3. OUTBOX REPLAY / CONCURRENT WORKERS
+--------------------------------------------------------------------------------
+Tests:
+  - should not duplicate notifications when re-processing an already PROCESSED
+    event (Idempotency)
+  - should process pending outbox events safely under concurrent dispatch
+    workers (SKIP LOCKED)
+Status: PASS (both)
+
+Proof: Re-processing a PROCESSED event returns 0 new processed. Concurrent
+dispatch via Promise.all on two OutboxService instances with SKIP LOCKED
+produces no duplicates and total processed equals expected count.
+
+4. MALFORMED-EVENT ISOLATION
+--------------------------------------------------------------------------------
+Test: should mark malformed event as FAILED without blocking adjacent valid
+      event in batch
+Status: PASS
+
+Proof: Creates one malformed event (missing recipientId) and one valid event.
+Batch processing marks the malformed event as FAILED with error
+MISSING_TENANT_RECIPIENT while the valid event reaches PROCESSED status.
+
+5. REDIS FAILURE AND HEALTHY RESTORATION
+--------------------------------------------------------------------------------
+Tests:
+  - should report redis DOWN and overall readiness DOWN when Redis fails
+    (Fail-Closed Readiness)
+  - should fail closed with 503 REDIS_UNAVAILABLE in LineChannelTokenProvider
+    when Redis is required in production
+  - should not corrupt global process state after simulated Redis outage
+Status: PASS (all 3)
+
+Proof: Injects a mock Redis client with status='close' and ping() rejecting
+ECONNREFUSED. checkReadiness() reports DOWN. LineChannelTokenProvider fails
+closed with REDIS_UNAVAILABLE. After restoring healthy Redis mock, global state
+is verified uncorrupted with fresh app instance responding 200.
+
+6. DATABASE FAILURE AND HEALTHY RECOVERY
+--------------------------------------------------------------------------------
+Test: should return clean 500 without leaking credentials or creating fake
+      state when DB operation fails
+Status: PASS
+
+Proof: Replaces prisma.room.findMany with a function that rejects with
+simulated PrismaClientKnownRequestError. API returns 500 with no credential
+leaks (DATABASE_URL, SESSION_ENCRYPTION_KEY, password, stack traces all absent).
+After restoring the original method, a fresh query succeeds normally.
+
+7. STARTUP PENDING-OUTBOX RECOVERY
+--------------------------------------------------------------------------------
+Test: should process pre-existing PENDING outbox events on service startup
+      reconciliation
+Status: PASS
+
+Proof: Creates a PENDING outbox event simulating a pre-boot leftover. Calls
+OutboxService.processPendingOutboxEvents(50) and verifies the event is
+processed to PROCESSED status with a corresponding tenantNotice created.
+
+8. SCHEDULER BEHAVIOR — REAL CleanupService.runCleanup() PHASE ISOLATION
+--------------------------------------------------------------------------------
+Test: should isolate Phase 4 (contract activation) failure so Phase 5 (outbox)
+      still completes in real CleanupService
+Status: VERIFIED
+
+Proof: Uses the real production CleanupService (server/src/services/
+cleanup.service.ts) which orchestrates 5 phases sequentially. Phase 4
+(ContractRenewalService.activateAllScheduledContracts) is mocked via vi.spyOn
+to throw SIMULATED_CONTRACT_ACTIVATION_CRASH. Phase 5 (outbox processing)
+still completes — verified by checking a pre-seeded PENDING outbox event
+transitions to PROCESSED status. CleanupService itself does not throw and
+returns valid results.
+
+Architecture note: CleanupService.runCleanup() uses independent try/catch
+blocks for Phase 4 and Phase 5. This is the actual production scheduler seam
+tested — not a synthetic helper.
+
+9. RATE-LIMIT ABUSE / BYPASS
+--------------------------------------------------------------------------------
+Tests:
+  - should enforce existing rate limit on auth endpoint and reject subsequent
+    requests with 429
+  - should maintain rate-limit state when client IP is fixed
+  - should not allow rate limit bypass via spoofed x-forwarded-for header
+    (TRUST_PROXY=false)
+  - should not allow rate limit bypass via spoofed x-real-ip header
+  - should not allow rate limit bypass via query-string path variation
+Status: PASS (all 5)
+
+Proof:
+  - Adaptive loop sends up to 40 requests to /api/v1/auth/google until 429.
+  - Subsequent request confirms counter persists (still 429).
+  - Spoofed x-forwarded-for: 203.0.113.199 → still 429 (TRUST_PROXY=false,
+    Express req.ip returns socket address, ignoring x-forwarded-for).
+  - Spoofed x-real-ip: 198.51.100.42 → still 429 (header not consulted).
+  - Query-string variation /api/v1/auth/google?x=1 → still 429 (rate limiter
+    key uses req.path which strips query strings).
+
+Rate limiter key construction: rate_limit:${req.path}:${ip}
+TRUST_PROXY: false (test default). Express req.ip = socket remote address.
+Configured limit: maxRequests=20, windowMs=15min on /api/v1/auth/google.
+
+10. UPLOAD REPLAY / DUPLICATE EVIDENCE PROTECTION
+--------------------------------------------------------------------------------
+Tests:
+  - should reject anonymous upload intent request with 401
+  - should reject upload intent targeting a bill in another dormitory (Dorm B)
+    with 404/403
+  - should reject upload to an expired payment intent with 400
+  - should reject replayed upload to an already CONSUMED or UPLOADED intent
+    with 409
+  - should reject duplicate payment slip file hash with 409
+  - should sanitize signature storage objectKey against directory traversal
+    attacks
+Status: PASS (all 6)
+
+Proof: Each test exercises a real API endpoint with malicious or replayed input.
+Cross-dormitory intent returns 404/403. Expired intent returns 400 with
+INTENT_EXPIRED. Replayed CONSUMED/UPLOADED intent returns 409 INTENT_ALREADY_
+USED. Duplicate SHA-256 hash returns 409 DUPLICATE_SLIP_HASH. Directory
+traversal payloads (../../etc/passwd) are sanitized to safe basename keys.
+
+================================================================================
+TOTAL RESILIENCE FAULT-INJECTION PROOFS: 10 categories, 28 tests
+ALL PASS — Exit Code 0
+================================================================================

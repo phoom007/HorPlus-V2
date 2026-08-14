@@ -1,0 +1,103 @@
+================================================================================
+LOCAL-05 Threat Model Audit Evidence
+================================================================================
+Date:                  2026-08-14
+TESTED_EXECUTABLE_SHA: 6d3f783763a36e2c8362adb0c8c081726b3a2bb4
+Reference:             docs/security/local05-threat-model.md
+================================================================================
+
+TRUST BOUNDARIES VERIFIED
+================================================================================
+
+1. Anonymous → Authenticated
+   Verified by: Sections 1, 2, 14, 15, 17
+   Method: All protected endpoints reject unauthenticated requests with 401.
+   Rate limiter on auth endpoint enforces abuse resistance.
+
+2. Cross-Dormitory Isolation (Multi-Tenancy)
+   Verified by: Sections 4, 5
+   Method: Owner A cannot read/mutate Dorm B data despite spoofed headers.
+   Tenant A cannot access Tenant Portal under Dorm B context.
+
+3. Cross-Tenant IDOR
+   Verified by: Section 5
+   Method: Tenant A cannot access Tenant B bills via direct ID reference.
+
+4. Staff RBAC Permission Matrix
+   Verified by: Section 6
+   Method: TECH staff denied contract creation, billing, and access grants.
+
+5. Task009 Bearer Grant Security
+   Verified by: Section 8
+   Method: Revoked grants rejected. Active grants create valid sessions.
+   Quota concurrency limited to 10 slots.
+
+6. CSRF on State Mutations
+   Verified by: Section 3
+   Method: POST/PUT/PATCH/DELETE require x-csrf-token header.
+   Cookie-only fallback eliminated. GET exempt.
+
+7. Input Validation & SQL Safety
+   Verified by: Section 7
+   Method: Invalid amounts, malformed UUIDs, and SQL injection payloads
+   all produce clean 400 responses without crash or data leakage.
+
+8. Transaction Integrity
+   Verified by: Section 9
+   Method: Forced replacement rollback, multi-recipient outbox rollback,
+   both tested with real business flows and Prisma $transaction.
+
+9. Event Processing Integrity
+   Verified by: Section 10
+   Method: Idempotent replay, concurrent SKIP LOCKED workers,
+   malformed event isolation — all verified.
+
+10. Infrastructure Resilience (Redis)
+    Verified by: Section 12
+    Method: Fail-closed readiness, fail-closed token provider,
+    no global state corruption after outage.
+
+11. Infrastructure Resilience (Database)
+    Verified by: Section 13
+    Method: Fail-closed 500 without credential leakage.
+    Recovery verified after restoring DB access.
+
+12. Rate Limiting & Abuse
+    Verified by: Section 14
+    Method: Threshold enforcement, IP persistence, header spoof resistance
+    (x-forwarded-for, x-real-ip), query-string path variation resistance.
+
+13. Upload & Payment Evidence Security
+    Verified by: Section 15
+    Method: Cross-dormitory rejection, expired intent rejection, replay
+    rejection, duplicate hash rejection, directory traversal sanitization.
+
+14. Mass Assignment Defense
+    Verified by: Section 16
+    Method: Administrative fields (roleCode, isOwner, permissions) stripped
+    on room and contract creation.
+
+15. Error Response Hygiene
+    Verified by: Section 17
+    Method: No stack traces, node_modules paths, DATABASE_URL, or
+    SESSION_ENCRYPTION_KEY leaked in error responses.
+
+16. Scheduler Failure Isolation
+    Verified by: Section 11
+    Method: Real CleanupService.runCleanup() tested with Phase 4 failure
+    injected. Phase 5 still completes independently.
+
+17. Startup Reconciliation
+    Verified by: Section 11
+    Method: Pre-existing PENDING outbox events processed on startup.
+
+THREAT MODEL COVERAGE
+================================================================================
+  Total trust boundaries: 17
+  Verified:               17
+  Unverified:              0
+  Residual Risk:           0 (scheduler isolation verified with real seam)
+
+================================================================================
+Verdict: ALL THREAT MODEL BOUNDARIES VERIFIED
+================================================================================
