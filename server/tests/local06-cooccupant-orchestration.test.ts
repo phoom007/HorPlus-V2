@@ -490,26 +490,69 @@ describe('LOCAL-06 — Co-Occupant / People-Count / Auto-Bill Recalculation & Ou
     expect(snapshotInDb?.peopleCount).toBe(1);
   });
 
-  it('5. should allow owner meter peopleCount correction without altering named co-occupants list', async () => {
-    // Create unpaid bill for 1 person (5380)
-    const bill = await prisma.bill.create({
+  it('5. Paid August cycle: Owner meter correction preserves August snapshot & seeds September cycle', async () => {
+    const augCycleId = 'a0000000-0000-4000-8000-000000000051';
+
+    // 1. Create August cycle (period: 2026-08-01 to 2026-08-31)
+    await prisma.billingCycle.create({
       data: {
-        id: billId3,
+        id: augCycleId,
         dormitoryId: dormId,
-        billingCycleId: cycleId,
+        cycleCode: '2026-08-PAID-TEST',
+        name: 'สิงหาคม 2569 ชำระแล้ว',
+        periodStart: new Date('2026-08-01'),
+        periodEnd: new Date('2026-08-31'),
+        billingDate: new Date('2026-08-25'),
+        dueDate: new Date('2026-09-05'),
+        status: 'published',
+      },
+    });
+
+    await prisma.billingRateSnapshot.create({
+      data: {
+        dormitoryId: dormId,
+        billingCycleId: augCycleId,
+        waterRate: 100,
+        waterBillingType: 'person',
+        electricityRate: 8,
+        electricityBillingType: 'unit',
+        commonFee: 200,
+        commonFeeMode: 'person',
+        internetFee: 0,
+        internetFeeMode: 'room',
+        parkingFee: 0,
+        parkingFeeMode: 'free',
+      },
+    });
+
+    // August snapshot: 1 person
+    await prisma.roomBillingCycleSnapshot.create({
+      data: {
+        dormitoryId: dormId,
+        billingCycleId: augCycleId,
+        roomId,
+        peopleCount: 1,
+        source: 'HOUSEHOLD_SYNC',
+      },
+    });
+
+    // August bill: PAID
+    const augBill = await prisma.bill.create({
+      data: {
+        id: 'a0000000-0000-4000-8000-000000000053',
+        dormitoryId: dormId,
+        billingCycleId: augCycleId,
         roomId,
         tenantId,
         contractId,
-        billNumber: 'INV-202609-003',
-        status: 'unpaid',
-        billingDate: new Date('2026-09-25'),
-        dueDate: new Date('2026-10-05'),
+        billNumber: 'INV-202608-PAID-IMMUTABLE',
+        status: 'paid',
+        billingDate: new Date('2026-08-25'),
+        dueDate: new Date('2026-09-05'),
         subtotal: 5380,
-        discountAmount: 0,
-        fineAmount: 0,
         totalAmount: 5380,
-        paidAmount: 0,
-        outstandingAmount: 5380,
+        paidAmount: 5380,
+        outstandingAmount: 0,
       },
     });
 
@@ -517,7 +560,7 @@ describe('LOCAL-06 — Co-Occupant / People-Count / Auto-Bill Recalculation & Ou
       data: [
         {
           dormitoryId: dormId,
-          billId: bill.id,
+          billId: augBill.id,
           type: 'rent',
           description: 'ค่าเช่าห้องพัก',
           quantity: 1,
@@ -528,7 +571,7 @@ describe('LOCAL-06 — Co-Occupant / People-Count / Auto-Bill Recalculation & Ou
         },
         {
           dormitoryId: dormId,
-          billId: bill.id,
+          billId: augBill.id,
           type: 'water',
           description: 'ค่าน้ำประปา (1 คน)',
           quantity: 1,
@@ -538,48 +581,56 @@ describe('LOCAL-06 — Co-Occupant / People-Count / Auto-Bill Recalculation & Ou
           metadata: { mode: 'person', peopleCount: 1 },
           displayOrder: 1,
         },
-        {
-          dormitoryId: dormId,
-          billId: bill.id,
-          type: 'common_fee',
-          description: 'ค่าส่วนกลาง (1 คน)',
-          quantity: 1,
-          unit: 'person',
-          unitPrice: 200,
-          amount: 200,
-          metadata: { mode: 'person', peopleCount: 1 },
-          displayOrder: 2,
-        },
-        {
-          dormitoryId: dormId,
-          billId: bill.id,
-          type: 'electricity',
-          description: 'ค่าไฟฟ้า (10.00 หน่วย)',
-          quantity: 10,
-          unit: 'unit',
-          unitPrice: 8,
-          amount: 80,
-          displayOrder: 3,
-        },
       ],
     });
 
-    // Owner corrects meter count to 3
+    // 2. Owner corrects meter count on August cycle: 1 -> 2
     const correctResult = await billingOrchestrationService.correctMeterCyclePeopleCount(
       dormId,
-      cycleId,
+      augCycleId,
       roomId,
-      3,
+      2,
       ownerUserId
     );
 
-    expect(correctResult.peopleCount).toBe(3);
-    expect(correctResult.prevPeopleCount).toBe(1);
-    expect(correctResult.recalculation.recalculated).toBe(true);
-    expect(Number(correctResult.recalculation.newTotalAmount)).toBe(5980); // 5000 + 300 (water) + 600 (common) + 80 (elec)
+    expect(correctResult.appliedToCurrentCycle).toBe(false);
+    expect(correctResult.appliesToNextCycle).toBe(true);
+    expect(correctResult.reason).toBe('PAID_OR_LOCKED');
+    expect(correctResult.peopleCount).toBe(1);
 
-    // Verify snapshot in DB has source 'meter_correction'
-    const snapshot = await prisma.roomBillingCycleSnapshot.findUnique({
+    // August snapshot MUST remain 1
+    const augSnapshot = await prisma.roomBillingCycleSnapshot.findUnique({
+      where: {
+        dormitory_billing_cycle_room_unique: {
+          dormitoryId: dormId,
+          billingCycleId: augCycleId,
+          roomId,
+        },
+      },
+    });
+    expect(augSnapshot?.peopleCount).toBe(1);
+
+    // August bill MUST remain completely unchanged
+    const checkAugBill = await prisma.bill.findUnique({
+      where: { id: augBill.id },
+      include: { items: true },
+    });
+    expect(checkAugBill?.status).toBe('paid');
+    expect(Number(checkAugBill?.totalAmount)).toBe(5380);
+    const augWaterItem = checkAugBill?.items.find((i) => i.type === 'water');
+    expect(Number(augWaterItem?.quantity)).toBe(1);
+    expect(Number(augWaterItem?.amount)).toBe(100);
+
+    // September next-cycle (cycleId from beforeEach) snapshot resolves / seeds to 2
+    const sepPeopleCount = await billingOrchestrationService.resolveCyclePeopleCount(
+      dormId,
+      cycleId,
+      roomId,
+      tenantId
+    );
+    expect(sepPeopleCount).toBe(2);
+
+    const sepSnapshot = await prisma.roomBillingCycleSnapshot.findUnique({
       where: {
         dormitory_billing_cycle_room_unique: {
           dormitoryId: dormId,
@@ -588,28 +639,7 @@ describe('LOCAL-06 — Co-Occupant / People-Count / Auto-Bill Recalculation & Ou
         },
       },
     });
-    expect(snapshot?.peopleCount).toBe(3);
-    expect(snapshot?.source).toBe('METER_CORRECTION');
-
-    // Verify named co-occupants list was NOT created/invented
-    const coOccupants = await prisma.tenantCoOccupant.findMany({
-      where: { dormitoryId: dormId, tenantId, deletedAt: null },
-    });
-    expect(coOccupants.length).toBe(0);
-
-    // Verify Tenant notification in outbox
-    const tenantOutbox = await prisma.localNotificationOutbox.findMany({
-      where: { dormitoryId: dormId, recipientType: 'TENANT' },
-    });
-    expect(tenantOutbox.length).toBeGreaterThanOrEqual(1);
-
-    // Process outbox and check in-app tenant notice created
-    await outboxService.processPendingOutboxEvents();
-    const tenantNotices = await prisma.tenantNotice.findMany({
-      where: { dormitoryId: dormId, tenantId },
-    });
-    expect(tenantNotices.length).toBeGreaterThanOrEqual(1);
-    expect(tenantNotices.some((n) => n.title.includes('ปรับปรุง') || n.title.includes('คำนวณใหม่') || n.title.includes('ผู้พักอาศัย'))).toBe(true);
+    expect(sepSnapshot?.peopleCount).toBe(2);
   });
 
   it('6. Rate snapshot fidelity: changing DormitoryBillingSettings does not affect old cycle bill recalculation', async () => {
@@ -991,49 +1021,17 @@ describe('LOCAL-06 — Co-Occupant / People-Count / Auto-Bill Recalculation & Ou
     expect(Number(checkCancelled?.totalAmount)).toBe(1000);
   });
 
-  it('9. Transaction rollback proof: deterministic error leaves state clean', async () => {
-    // Count before
-    const initialCoCount = await prisma.tenantCoOccupant.count({ where: { dormitoryId: dormId } });
-    const initialSnapshotCount = await prisma.roomBillingCycleSnapshot.count({ where: { dormitoryId: dormId } });
-
-    // Attempt mutation that throws inside transaction
-    let threw = false;
-    try {
-      await prisma.$transaction(async (tx) => {
-        await tx.tenantCoOccupant.create({
-          data: {
-            dormitoryId: dormId,
-            tenantId,
-            name: 'คนที่จะ Rollback',
-          },
-        });
-        throw new Error('SIMULATED_TRANSACTION_FAILURE');
-      });
-    } catch (err: any) {
-      threw = true;
-      expect(err.message).toBe('SIMULATED_TRANSACTION_FAILURE');
-    }
-
-    expect(threw).toBe(true);
-
-    // Counts after must match initial
-    const finalCoCount = await prisma.tenantCoOccupant.count({ where: { dormitoryId: dormId } });
-    const finalSnapshotCount = await prisma.roomBillingCycleSnapshot.count({ where: { dormitoryId: dormId } });
-    expect(finalCoCount).toBe(initialCoCount);
-    expect(finalSnapshotCount).toBe(initialSnapshotCount);
-  });
-
-  it('10. Concurrency resilience proof: rapid mutations execute safely without corruption', async () => {
-    // Initial snapshot & unpaid bill
-    const bill = await prisma.bill.create({
+  it('9. Real orchestration rollback proof: failure inside service transaction leaves state completely clean', async () => {
+    // Initial unpaid bill & snapshot
+    const rollbackBill = await prisma.bill.create({
       data: {
-        id: 'a0000000-0000-4000-8000-000000000051',
+        id: 'a0000000-0000-4000-8000-000000000061',
         dormitoryId: dormId,
         billingCycleId: cycleId,
         roomId,
         tenantId,
         contractId,
-        billNumber: 'INV-202609-CONC',
+        billNumber: 'INV-202609-ROLLBACK',
         status: 'unpaid',
         billingDate: new Date('2026-09-25'),
         dueDate: new Date('2026-10-05'),
@@ -1048,7 +1046,7 @@ describe('LOCAL-06 — Co-Occupant / People-Count / Auto-Bill Recalculation & Ou
       data: [
         {
           dormitoryId: dormId,
-          billId: bill.id,
+          billId: rollbackBill.id,
           type: 'rent',
           description: 'ค่าเช่าห้องพัก',
           quantity: 1,
@@ -1059,7 +1057,7 @@ describe('LOCAL-06 — Co-Occupant / People-Count / Auto-Bill Recalculation & Ou
         },
         {
           dormitoryId: dormId,
-          billId: bill.id,
+          billId: rollbackBill.id,
           type: 'water',
           description: 'ค่าน้ำประปา (1 คน)',
           quantity: 1,
@@ -1072,23 +1070,160 @@ describe('LOCAL-06 — Co-Occupant / People-Count / Auto-Bill Recalculation & Ou
       ],
     });
 
-    // Execute 3 co-occupant additions sequentially or safely
-    const r1 = await billingOrchestrationService.addTenantCoOccupant(
+    const initialCoCount = await prisma.tenantCoOccupant.count({ where: { dormitoryId: dormId } });
+    const initialOutboxCount = await prisma.localNotificationOutbox.count({ where: { dormitoryId: dormId } });
+
+    // A. Injected failure during addTenantCoOccupant
+    const serviceOutbox = (billingOrchestrationService as any).outboxService;
+    const originalCreateOutbox = serviceOutbox.createOutboxEvent.bind(serviceOutbox);
+    let injectedError = false;
+
+    // Inject outbox failure inside transaction
+    serviceOutbox.createOutboxEvent = async () => {
+      throw new Error('SIMULATED_ORCHESTRATION_FAILURE');
+    };
+
+    try {
+      await billingOrchestrationService.addTenantCoOccupant(
+        dormId,
+        tenantId,
+        { name: 'คนที่จะ Rollback' },
+        { userId: tenantUserId, isTenant: true }
+      );
+    } catch (err: any) {
+      injectedError = true;
+      expect(err.message).toBe('SIMULATED_ORCHESTRATION_FAILURE');
+    } finally {
+      serviceOutbox.createOutboxEvent = originalCreateOutbox;
+    }
+
+    expect(injectedError).toBe(true);
+
+    // Verify atomic rollback
+    const coCountAfter = await prisma.tenantCoOccupant.count({ where: { dormitoryId: dormId } });
+    expect(coCountAfter).toBe(initialCoCount);
+
+    const billAfter = await prisma.bill.findUnique({ where: { id: rollbackBill.id } });
+    expect(Number(billAfter?.totalAmount)).toBe(5380);
+
+    const outboxAfter = await prisma.localNotificationOutbox.count({ where: { dormitoryId: dormId } });
+    expect(outboxAfter).toBe(initialOutboxCount);
+
+    // B. Retry without failure succeeds cleanly
+    const retryResult = await billingOrchestrationService.addTenantCoOccupant(
       dormId,
       tenantId,
-      { name: 'ผู้พักร่วมคนที่ 1' },
+      { name: 'คนที่จะ Rollback' },
       { userId: tenantUserId, isTenant: true }
     );
-    const r2 = await billingOrchestrationService.addTenantCoOccupant(
-      dormId,
-      tenantId,
-      { name: 'ผู้พักร่วมคนที่ 2' },
-      { userId: tenantUserId, isTenant: true }
-    );
+    expect(retryResult.peopleCount).toBe(2);
 
-    expect(r1.peopleCount).toBe(2);
-    expect(r2.peopleCount).toBe(3);
+    const coCountFinal = await prisma.tenantCoOccupant.count({ where: { dormitoryId: dormId, deletedAt: null } });
+    expect(coCountFinal).toBe(initialCoCount + 1);
 
+    // C. Injected failure during removeTenantCoOccupant
+    serviceOutbox.createOutboxEvent = async () => {
+      throw new Error('SIMULATED_REMOVE_ORCHESTRATION_FAILURE');
+    };
+
+    let removeError = false;
+    try {
+      await billingOrchestrationService.removeTenantCoOccupant(
+        dormId,
+        tenantId,
+        retryResult.coOccupant.id,
+        { userId: tenantUserId, isTenant: true }
+      );
+    } catch (err: any) {
+      removeError = true;
+      expect(err.message).toBe('SIMULATED_REMOVE_ORCHESTRATION_FAILURE');
+    } finally {
+      serviceOutbox.createOutboxEvent = originalCreateOutbox;
+    }
+
+    expect(removeError).toBe(true);
+
+    // Verify remove rollback: co-occupant deletedAt is STILL NULL
+    const checkCo = await prisma.tenantCoOccupant.findUnique({ where: { id: retryResult.coOccupant.id } });
+    expect(checkCo?.deletedAt).toBeNull();
+    expect(checkCo?.status).toBe('active');
+  });
+
+  it('10. True PostgreSQL Concurrency: overlapping mutations serialize cleanly without lost updates', async () => {
+    // Initial snapshot & unpaid bill
+    const concBill = await prisma.bill.create({
+      data: {
+        id: 'a0000000-0000-4000-8000-000000000071',
+        dormitoryId: dormId,
+        billingCycleId: cycleId,
+        roomId,
+        tenantId,
+        contractId,
+        billNumber: 'INV-202609-CONC-TRUE',
+        status: 'unpaid',
+        billingDate: new Date('2026-09-25'),
+        dueDate: new Date('2026-10-05'),
+        subtotal: 5380,
+        totalAmount: 5380,
+        paidAmount: 0,
+        outstandingAmount: 5380,
+      },
+    });
+
+    await prisma.billItem.createMany({
+      data: [
+        {
+          dormitoryId: dormId,
+          billId: concBill.id,
+          type: 'rent',
+          description: 'ค่าเช่าห้องพัก',
+          quantity: 1,
+          unit: 'month',
+          unitPrice: 5000,
+          amount: 5000,
+          displayOrder: 0,
+        },
+        {
+          dormitoryId: dormId,
+          billId: concBill.id,
+          type: 'water',
+          description: 'ค่าน้ำประปา (1 คน)',
+          quantity: 1,
+          unit: 'person',
+          unitPrice: 100,
+          amount: 100,
+          metadata: { mode: 'person', peopleCount: 1 },
+          displayOrder: 1,
+        },
+      ],
+    });
+
+    // Trigger 2 overlapping concurrent mutations
+    const results = await Promise.allSettled([
+      billingOrchestrationService.addTenantCoOccupant(
+        dormId,
+        tenantId,
+        { name: 'ผู้พักร่วมพร้อมกัน คนที่ 1' },
+        { userId: tenantUserId, isTenant: true }
+      ),
+      billingOrchestrationService.addTenantCoOccupant(
+        dormId,
+        tenantId,
+        { name: 'ผู้พักร่วมพร้อมกัน คนที่ 2' },
+        { userId: tenantUserId, isTenant: true }
+      ),
+    ]);
+
+    expect(results[0].status).toBe('fulfilled');
+    expect(results[1].status).toBe('fulfilled');
+
+    // Final household state: exactly 2 active co-occupant rows added
+    const coList = await prisma.tenantCoOccupant.findMany({
+      where: { dormitoryId: dormId, tenantId, deletedAt: null, name: { contains: 'ผู้พักร่วมพร้อมกัน' } },
+    });
+    expect(coList.length).toBe(2);
+
+    // Final snapshot: exactly 3 people (1 primary + 2 co-occupants)
     const snapshotInDb = await prisma.roomBillingCycleSnapshot.findUnique({
       where: {
         dormitory_billing_cycle_room_unique: {
@@ -1100,8 +1235,16 @@ describe('LOCAL-06 — Co-Occupant / People-Count / Auto-Bill Recalculation & Ou
     });
     expect(snapshotInDb?.peopleCount).toBe(3);
 
-    const billInDb = await prisma.bill.findUnique({ where: { id: bill.id } });
-    expect(Number(billInDb?.totalAmount)).toBe(5300); // 5000 + 100 * 3
+    // Final authoritative bill: correctly recalculated for 3 people (5000 rent + 300 water = 5300)
+    const billInDb = await prisma.bill.findUnique({
+      where: { id: concBill.id },
+      include: { items: true },
+    });
+    expect(Number(billInDb?.totalAmount)).toBe(5300);
+
+    const waterItem = billInDb?.items.find((i) => i.type === 'water');
+    expect(Number(waterItem?.quantity)).toBe(3);
+    expect(Number(waterItem?.amount)).toBe(300);
   });
 
   it('11. Security: CSRF requirement and cross-tenant deletion isolation (IDOR protection)', async () => {

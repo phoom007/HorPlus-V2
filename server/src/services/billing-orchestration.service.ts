@@ -38,9 +38,11 @@ export interface RecalculationResult {
   newTotal?: string;
   prevTotalAmount?: string;
   newTotalAmount?: string;
+  oldTotalAmount?: string;
   prevPeopleCount?: number;
   newPeopleCount: number;
   isPaidImmutable?: boolean;
+  itemsUpdated?: number;
 }
 
 export function isBillRecalculatable(bill: {
@@ -176,6 +178,24 @@ export class BillingOrchestrationService {
       }
     }
 
+    // Check if previous cycle had a meter correction snapshot to propagate if higher
+    const targetCycle = await client.billingCycle.findUnique({ where: { id: billingCycleId } });
+    if (targetCycle) {
+      const prevCycleSnapshot = await client.roomBillingCycleSnapshot.findFirst({
+        where: {
+          dormitoryId,
+          roomId,
+          billingCycle: {
+            periodStart: { lt: targetCycle.periodStart },
+          },
+        },
+        orderBy: { billingCycle: { periodStart: 'desc' } },
+      });
+      if (prevCycleSnapshot && prevCycleSnapshot.source === 'METER_CORRECTION') {
+        seedCount = Math.max(seedCount, prevCycleSnapshot.peopleCount);
+      }
+    }
+
     await client.roomBillingCycleSnapshot.upsert({
       where: {
         dormitory_billing_cycle_room_unique: {
@@ -249,126 +269,127 @@ export class BillingOrchestrationService {
       };
     }
 
-    // 3. Find rate snapshot for cycle
-    let rateSnapshot = bill.rateSnapshotId
-      ? await tx.billingRateSnapshot.findUnique({ where: { id: bill.rateSnapshotId } })
+    // 3. Load Billing Rate Snapshot for this cycle
+    const rateSnapshot = await tx.billingRateSnapshot.findFirst({
+      where: { billingCycleId },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    // Fallback to DormitoryBillingSettings if rate snapshot not found
+    const liveSettings = !rateSnapshot
+      ? await tx.dormitoryBillingSettings.findUnique({ where: { dormitoryId } })
       : null;
-    if (!rateSnapshot) {
-      rateSnapshot = await tx.billingRateSnapshot.findFirst({
-        where: { dormitoryId, billingCycleId },
-        orderBy: { createdAt: 'desc' },
-      });
-    }
 
-    const roomNumber = bill.room?.roomNumber || 'ไม่ระบุ';
-    const peopleCountDec = toDecimal(newPeopleCount.toString());
+    const waterRate = rateSnapshot
+      ? toDecimal(rateSnapshot.waterRate)
+      : liveSettings?.waterRate
+      ? toDecimal(liveSettings.waterRate)
+      : toDecimal('0.00');
 
-    // 4. Update per-person line items
-    let updatedSubtotal = toDecimal('0.00');
+    const commonFee = rateSnapshot
+      ? toDecimal(rateSnapshot.commonFee)
+      : liveSettings?.commonFee
+      ? toDecimal(liveSettings.commonFee)
+      : toDecimal('0.00');
 
-    for (const item of bill.items) {
-      const isPerPersonItem =
-        item.unit === 'person' ||
-        (item.metadata as any)?.mode === 'person' ||
-        (item.type === 'water' && (rateSnapshot?.waterBillingType === 'per_person' || rateSnapshot?.waterBillingType === 'person')) ||
-        (item.type === 'electricity' && (rateSnapshot?.electricityBillingType === 'per_person' || rateSnapshot?.electricityBillingType === 'person')) ||
-        (item.type === 'common_fee' && rateSnapshot?.commonFeeMode === 'person') ||
-        (item.type === 'internet' && rateSnapshot?.internetFeeMode === 'person') ||
-        (item.type === 'parking' && rateSnapshot?.parkingFeeMode === 'person');
+    const commonFeeMode = rateSnapshot
+      ? rateSnapshot.commonFeeMode
+      : liveSettings?.commonFeeMode || 'room';
 
-      if (isPerPersonItem) {
-        const unitPrice = toDecimal(item.unitPrice);
-        const newItemAmount = mulDecimals(peopleCountDec, unitPrice);
-        let newDescription = item.description;
+    const items = bill.items;
+    let newSubtotal = toDecimal('0.00');
+    let itemsUpdated = 0;
+    const peopleCountDec = toDecimal(newPeopleCount);
 
-        if (newDescription.includes('คน')) {
-          newDescription = newDescription.replace(/\(\d+\s*คน\)/, `(${newPeopleCount} คน)`);
-        } else {
-          newDescription = `${newDescription} (${newPeopleCount} คน)`;
+    for (const item of items) {
+      let updatedAmount = toDecimal(item.amount);
+      let updatedQuantity = toDecimal(item.quantity);
+      let updatedDesc = item.description;
+      let updatedMeta = item.metadata ? { ...(item.metadata as any) } : {};
+
+      if (item.type === 'water') {
+        const isPerPerson =
+          (item.metadata as any)?.mode === 'person' ||
+          item.unit === 'person' ||
+          (rateSnapshot && rateSnapshot.waterBillingType === 'person');
+
+        if (isPerPerson) {
+          const unitPrice = item.unitPrice ? toDecimal(item.unitPrice) : waterRate;
+          updatedQuantity = peopleCountDec;
+          updatedAmount = mulDecimals(peopleCountDec, unitPrice);
+          updatedDesc = `ค่าน้ำประปา (${newPeopleCount} คน)`;
+          updatedMeta = { ...updatedMeta, peopleCount: newPeopleCount, mode: 'person' };
+          itemsUpdated++;
         }
+      } else if (item.type === 'common_fee') {
+        const isPerPerson =
+          commonFeeMode === 'person' ||
+          (item.metadata as any)?.mode === 'person' ||
+          item.unit === 'person';
 
+        if (isPerPerson) {
+          const unitPrice = item.unitPrice ? toDecimal(item.unitPrice) : commonFee;
+          updatedQuantity = peopleCountDec;
+          updatedAmount = mulDecimals(peopleCountDec, unitPrice);
+          updatedDesc = `ค่าส่วนกลาง (${newPeopleCount} คน)`;
+          updatedMeta = { ...updatedMeta, peopleCount: newPeopleCount, mode: 'person' };
+          itemsUpdated++;
+        }
+      }
+
+      newSubtotal = addDecimals(newSubtotal, updatedAmount);
+
+      if (
+        !updatedAmount.equals(toDecimal(item.amount)) ||
+        !updatedQuantity.equals(toDecimal(item.quantity)) ||
+        updatedDesc !== item.description
+      ) {
         await tx.billItem.update({
           where: { id: item.id },
           data: {
-            quantity: formatDecimal(peopleCountDec),
-            amount: formatDecimal(newItemAmount),
-            unit: 'person',
-            description: newDescription,
-            metadata: {
-              ...(item.metadata as any || {}),
-              mode: 'person',
-              peopleCount: newPeopleCount,
-            },
+            quantity: formatDecimal(updatedQuantity),
+            amount: formatDecimal(updatedAmount),
+            description: updatedDesc,
+            metadata: updatedMeta,
           },
         });
-
-        updatedSubtotal = addDecimals(updatedSubtotal, newItemAmount);
-      } else {
-        // Preserved non-person item
-        updatedSubtotal = addDecimals(updatedSubtotal, item.amount);
       }
     }
 
-    // 5. Calculate new totalAmount and outstandingAmount
-    const discountDec = toDecimal(bill.discountAmount);
-    const fineDec = toDecimal(bill.fineAmount);
-    const rawTotal = subDecimals(addDecimals(updatedSubtotal, fineDec), discountDec);
-    const newTotal = compareDecimals(rawTotal, '0.00') < 0 ? toDecimal('0.00') : rawTotal;
-    const paidDec = toDecimal(bill.paidAmount);
-    const rawOutstanding = subDecimals(newTotal, paidDec);
-    const newOutstanding = compareDecimals(rawOutstanding, '0.00') < 0 ? toDecimal('0.00') : rawOutstanding;
-
-    const prevTotalStr = formatDecimal(bill.totalAmount);
-    const newTotalStr = formatDecimal(newTotal);
+    const discountAmount = toDecimal(bill.discountAmount);
+    const fineAmount = toDecimal(bill.fineAmount);
+    const rawTotal = subDecimals(addDecimals(newSubtotal, fineAmount), discountAmount);
+    const newTotalAmount = compareDecimals(rawTotal, '0.00') < 0 ? toDecimal('0.00') : rawTotal;
+    const paidAmount = toDecimal(bill.paidAmount);
+    const rawOutstanding = subDecimals(newTotalAmount, paidAmount);
+    const newOutstandingAmount = compareDecimals(rawOutstanding, '0.00') < 0 ? toDecimal('0.00') : rawOutstanding;
 
     await tx.bill.update({
       where: { id: bill.id },
       data: {
-        subtotal: formatDecimal(updatedSubtotal),
-        totalAmount: newTotalStr,
-        outstandingAmount: formatDecimal(newOutstanding),
-        updatedAt: new Date(),
+        subtotal: formatDecimal(newSubtotal),
+        totalAmount: formatDecimal(newTotalAmount),
+        outstandingAmount: formatDecimal(newOutstandingAmount),
       },
     });
-
-    // 6. If total amount changed, create notification outbox event for Tenant
-    if (bill.tenantId && prevTotalStr !== newTotalStr) {
-      await this.outboxService.createOutboxEvent(tx, {
-        dormitoryId,
-        eventType: 'UNPAID_BILL_RECALCULATED',
-        aggregateType: 'BILL',
-        aggregateId: bill.id,
-        recipientType: 'TENANT',
-        recipientId: bill.tenantId,
-        title: `ยอดบิลห้อง ${roomNumber} มีการคำนวณใหม่`,
-        body: `ยอดบิลห้อง ${roomNumber} มีการคำนวณใหม่ จำนวนคน ${prevPeopleCount} → ${newPeopleCount} ยอดใหม่ ฿${Number(newTotalStr).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
-        payload: {
-          billId: bill.id,
-          billNumber: bill.billNumber,
-          roomNumber,
-          prevTotal: prevTotalStr,
-          newTotal: newTotalStr,
-          prevPeopleCount,
-          newPeopleCount,
-        },
-      });
-    }
 
     return {
       recalculated: true,
       billId: bill.id,
       billNumber: bill.billNumber,
-      prevTotal: prevTotalStr,
-      newTotal: newTotalStr,
-      prevTotalAmount: prevTotalStr,
-      newTotalAmount: newTotalStr,
       prevPeopleCount,
       newPeopleCount,
+      oldTotalAmount: formatDecimal(bill.totalAmount),
+      newTotalAmount: formatDecimal(newTotalAmount),
+      prevTotalAmount: formatDecimal(bill.totalAmount),
+      prevTotal: formatDecimal(bill.totalAmount),
+      newTotal: formatDecimal(newTotalAmount),
+      itemsUpdated,
     };
   }
 
   /**
-   * Atomically adds a co-occupant for a tenant, reconciles cycle snapshot, recalculates unpaid bill,
+   * Atomically adds a co-occupant, reconciles cycle snapshot, recalculates unpaid bill,
    * creates outbox event, and records audit log.
    */
   public async addTenantCoOccupant(
@@ -378,18 +399,7 @@ export class BillingOrchestrationService {
     actor: { userId?: string; isTenant?: boolean }
   ) {
     const result = await this.prisma.$transaction(async (tx) => {
-      // 1. Verify tenant exists and belongs to dormitory
-      const tenant = await tx.tenant.findFirst({
-        where: { id: tenantId, dormitoryId, deletedAt: null },
-      });
-      if (!tenant) {
-        const err = new Error('ไม่พบข้อมูลผู้เช่า');
-        (err as any).statusCode = 404;
-        (err as any).code = 'TENANT_NOT_FOUND';
-        throw err;
-      }
-
-      // 2. Active contract/room lookup
+      // Find active contract to lock by room
       const contract = await tx.contract.findFirst({
         where: {
           dormitoryId,
@@ -400,14 +410,32 @@ export class BillingOrchestrationService {
         include: { room: true },
       });
 
+      // PostgreSQL transactional advisory lock to guarantee serialized concurrency
+      if (contract?.roomId) {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${dormitoryId + ':' + contract.roomId}))`;
+      } else {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${dormitoryId + ':' + tenantId}))`;
+      }
+
+      // 1. Verify Tenant exists in this dormitory
+      const tenant = await tx.tenant.findFirst({
+        where: { id: tenantId, dormitoryId, deletedAt: null },
+      });
+
+      if (!tenant) {
+        const err = new Error('ไม่พบข้อมูลผู้เช่า');
+        (err as any).statusCode = 404;
+        (err as any).code = 'TENANT_NOT_FOUND';
+        throw err;
+      }
+
       const prevHouseholdCount = await this.getHouseholdCount(dormitoryId, tenantId, tx);
 
-      // 3. Insert CoOccupant
+      // 2. Insert CoOccupant
       const coOccupant = await tx.tenantCoOccupant.create({
         data: {
           dormitoryId,
           tenantId,
-          contractId: contract?.id || null,
           name: data.name.trim(),
           phone: data.phone?.trim() || null,
           relationship: data.relationship?.trim() || null,
@@ -423,13 +451,12 @@ export class BillingOrchestrationService {
         prevPeopleCount: prevHouseholdCount,
       };
 
-      // 4. Find active/current billing cycle (contextually overlapping or current)
+      // 3. Find active/current billing cycle (contextually overlapping or current)
       const activeCycle = await this.resolveCurrentBillingCycle(dormitoryId, tx);
 
       let currentCycleBillPaid = false;
 
       if (activeCycle && contract?.roomId) {
-        // Check current cycle snapshot
         const currentSnapshot = await tx.roomBillingCycleSnapshot.findUnique({
           where: {
             dormitory_billing_cycle_room_unique: {
@@ -501,7 +528,7 @@ export class BillingOrchestrationService {
         }
       }
 
-      // 5. Create Outbox Event
+      // 4. Create Outbox Event
       if (actor.isTenant) {
         // Tenant added co-occupant -> notify Staff
         const billingNote = recalculation.recalculated
@@ -625,6 +652,13 @@ export class BillingOrchestrationService {
         },
         include: { room: true },
       });
+
+      // PostgreSQL transactional advisory lock
+      if (contract?.roomId) {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${dormitoryId + ':' + contract.roomId}))`;
+      } else {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${dormitoryId + ':' + tenantId}))`;
+      }
 
       const prevHouseholdCount = await this.getHouseholdCount(dormitoryId, tenantId, tx);
 
@@ -805,6 +839,8 @@ export class BillingOrchestrationService {
   /**
    * Corrects the billing-cycle peopleCount snapshot from the Owner Meter page
    * Recalculates any active unpaid bill and notifies the tenant via outbox.
+   * If current cycle is PAID / locked: leaves current snapshot & bill strictly immutable,
+   * applies to next cycle snapshot.
    */
   public async correctMeterCyclePeopleCount(
     dormitoryId: string,
@@ -814,6 +850,9 @@ export class BillingOrchestrationService {
     userId?: string
   ) {
     const result = await this.prisma.$transaction(async (tx) => {
+      // PostgreSQL transactional advisory lock
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${dormitoryId + ':' + roomId}))`;
+
       const room = await tx.room.findUnique({
         where: { id: roomId },
       });
@@ -836,7 +875,117 @@ export class BillingOrchestrationService {
 
       const prevPeopleCount = existingSnapshot ? existingSnapshot.peopleCount : 1;
 
-      // Upsert snapshot
+      // Check authoritative current bill
+      const currentBill = await tx.bill.findFirst({
+        where: {
+          dormitoryId,
+          billingCycleId,
+          roomId,
+          status: { notIn: ['cancelled', 'voided', 'withdrawn', 'superseded'] },
+          cancelledAt: null,
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      const isPaidOrLocked = currentBill && !isBillRecalculatable(currentBill);
+
+      const targetCycle = await tx.billingCycle.findUnique({
+        where: { id: billingCycleId },
+      });
+
+      const activeContract = await tx.contract.findFirst({
+        where: {
+          dormitoryId,
+          roomId,
+          status: { in: ['active', 'expiring_soon', 'pending_signature', 'waiting_extension', 'checking_out'] },
+          deletedAt: null,
+        },
+      });
+
+      if (isPaidOrLocked) {
+        // PAID / FINANCIALLY LOCKED:
+        // Current cycle bill and RoomBillingCycleSnapshot remain STRICTLY IMMUTABLE!
+        // Apply correction to the next billing cycle if it exists
+        const nextCycle = targetCycle
+          ? await tx.billingCycle.findFirst({
+              where: {
+                dormitoryId,
+                status: { notIn: ['completed'] },
+                periodStart: { gt: targetCycle.periodStart },
+              },
+              orderBy: { periodStart: 'asc' },
+            })
+          : null;
+
+        if (nextCycle) {
+          await tx.roomBillingCycleSnapshot.upsert({
+            where: {
+              dormitory_billing_cycle_room_unique: {
+                dormitoryId,
+                billingCycleId: nextCycle.id,
+                roomId,
+              },
+            },
+            create: {
+              dormitoryId,
+              billingCycleId: nextCycle.id,
+              roomId,
+              peopleCount: newPeopleCount,
+              source: 'METER_CORRECTION',
+              updatedByUserId: userId || null,
+            },
+            update: {
+              peopleCount: newPeopleCount,
+              source: 'METER_CORRECTION',
+              updatedByUserId: userId || null,
+            },
+          });
+        }
+
+        if (activeContract && prevPeopleCount !== newPeopleCount) {
+          await this.outboxService.createOutboxEvent(tx, {
+            dormitoryId,
+            eventType: 'CO_OCCUPANT_UPDATED',
+            aggregateType: 'ROOM',
+            aggregateId: roomId,
+            recipientType: 'TENANT',
+            recipientId: activeContract.tenantId,
+            title: `งวดปัจจุบันชำระแล้ว - จำนวนคนจะปรับใช้ในงวดถัดไป`,
+            body: `เจ้าหน้าที่ได้แก้ไขจำนวนคนสำหรับห้อง ${room.roomNumber} จาก ${prevPeopleCount} เป็น ${newPeopleCount} คน ซึ่งจะมีผลในรอบบิลถัดไป`,
+            payload: {
+              type: 'METER_PEOPLE_COUNT_CORRECTED',
+              roomId,
+              prevPeopleCount,
+              newPeopleCount,
+              billingCycleId,
+              recalculated: false,
+              appliesToNextCycle: true,
+              note: 'การเปลี่ยนแปลงจะมีผลในงวดถัดไป เนื่องจากงวดปัจจุบันชำระแล้ว',
+            },
+          });
+        }
+
+        return {
+          appliedToCurrentCycle: false,
+          appliesToNextCycle: true,
+          reason: 'PAID_OR_LOCKED',
+          currentCyclePeopleCount: prevPeopleCount,
+          requestedPeopleCount: newPeopleCount,
+          peopleCount: prevPeopleCount,
+          prevPeopleCount,
+          recalculation: {
+            recalculated: false,
+            reason: 'PAID_OR_LOCKED',
+            billId: currentBill.id,
+            billNumber: currentBill.billNumber,
+            prevPeopleCount,
+            newPeopleCount,
+            isPaidImmutable: true,
+          },
+        };
+      }
+
+      // Financially unlocked: upsert snapshot on current cycle
       await tx.roomBillingCycleSnapshot.upsert({
         where: {
           dormitory_billing_cycle_room_unique: {
@@ -869,16 +1018,6 @@ export class BillingOrchestrationService {
         prevPeopleCount,
         tx
       );
-
-      // Notify tenant if contract/tenant exists
-      const activeContract = await tx.contract.findFirst({
-        where: {
-          dormitoryId,
-          roomId,
-          status: { in: ['active', 'expiring_soon', 'pending_signature', 'waiting_extension', 'checking_out'] },
-          deletedAt: null,
-        },
-      });
 
       if (activeContract && prevPeopleCount !== newPeopleCount) {
         const billingNote = recalculation.recalculated

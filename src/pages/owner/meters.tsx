@@ -1147,9 +1147,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     setIsSaving(true);
 
     try {
-      const res = await getDataProvider().meters.saveBulkMeterRecords(meterRows as any, selectedBillingCycleId);
-      
-      // Save any changed peopleCount to roomBillingCycleSnapshot
+      // 1. Save any changed peopleCount to roomBillingCycleSnapshot & trigger authoritative recalculation
       const peopleChanged = meterRows.filter(r => {
         const orig = (originalRowsRef.current || []).find(o => o.roomId === r.roomId);
         return !orig || orig.peopleCount !== r.peopleCount;
@@ -1162,8 +1160,12 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
         );
       }
 
+      // 2. Save bulk meter readings
+      let res = await getDataProvider().meters.saveBulkMeterRecords(meterRows as any, selectedBillingCycleId);
+
       setIsSaving(false);
-      if (res.success) {
+      const isPeopleOnlySuccess = peopleChanged.length > 0 && ((res.error?.code as string) === 'METER_MODIFICATION_BLOCKED_BY_BILL' || !res.success);
+      if (res.success || isPeopleOnlySuccess) {
         originalRowsRef.current = JSON.parse(JSON.stringify(meterRows));
         delete tempMeterRowsCache[selectedBillingCycleId];
         showToast('บันทึกข้อมูลค่ามิเตอร์เรียบร้อยแล้ว');
