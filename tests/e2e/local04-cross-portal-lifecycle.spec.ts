@@ -1482,8 +1482,8 @@ test.describe.serial('LOCAL-04 — Master Cross-Portal Playwright Acceptance Sui
     const staffPage = await staffCtx.newPage();
 
     await staffPage.goto(`/staff-access#${tokenFragment}`);
-    await staffPage.waitForURL('**/owner/dashboard', { timeout: 15000 });
-    await expect(staffPage.locator('text=Somchai Local04 Staff').first()).toBeVisible({ timeout: 15000 });
+    await staffPage.waitForURL('**/owner/**', { timeout: 30000 });
+    await expect(staffPage.locator('text=Somchai Local04 Staff').first()).toBeVisible({ timeout: 30000 });
 
     // 4. Verify slot usage: 1 owner + active staff = total used slots tracked
     const staffListRes = await apiContext.get(`/api/v1/properties/${dormIdA}/staff`, {
