@@ -1,0 +1,34 @@
+=== HORPLUS LOCAL-05 SECURITY SOURCE AUDIT & VERIFICATION ===
+TIMESTAMP: 2026-08-14T12:53:37.394Z
+
+1. XSS INERTIA & ESCAPING VERIFICATION:
+- Location: src/pages/owner/tenants.tsx:1338-1398 (Print Preview rendering)
+- Fix: Replaced unescaped string interpolation with escapeHtml() across all tenant fields (name, phone, nationalId, address, notes, vehicle info, emergency contact).
+- Proof: Stored XSS injection payloads (<script>window.__HORPLUS_XSS__=1</script>) safely rendered as inert text; window.__HORPLUS_XSS__ evaluates to undefined in browser context.
+
+2. SQL INJECTION IMMUNITY & PARAMETERIZED QUERIES:
+- Location: server/src/services/occupancy.service.ts:202, 294
+- Fix: Refactored raw string interpolation in $executeRawUnsafe to type-safe parameterized Prisma template tags ($executeRaw`...`).
+- Proof: SQL injection attacks (e.g. "Building ' OR '1'='1'; DROP TABLE users CASCADE; --") handled safely without syntax errors or table destruction.
+
+3. EXCEPTION HANDLING & TRUTHFUL HTTP STATUS CODES:
+- Location: server/src/middleware/error-handler.ts & server/src/routes/property.routes.ts
+- Fix: Mapped Prisma P2023 (malformed UUID) and invalid input parameters to HTTP 400 Bad Request (INVALID_ID_FORMAT) instead of unhandled 500 crashes.
+- Proof: Malformed UUID routes (/api/v1/properties/rooms/not-a-valid-uuid) return clean, truthful 400 responses with zero leaked stack traces or DB internals.
+
+4. SESSION REVOCATION & VERSION BUMPING:
+- Location: server/src/services/auth.service.ts:264
+- Fix: Added strict session.tokenVersion !== payload.version validation check.
+- Proof: When user account tokenVersion is incremented or session status changed to revoked, all existing session tokens fail closed with HTTP 401 immediately.
+
+5. STRICT DOUBLE-SUBMIT CSRF HEADER ENFORCEMENT:
+- Locations: 11 route files (property.routes.ts, billing.routes.ts, billing-cycle.routes.ts, contract.routes.ts, contract-renewal.routes.ts, dormitory.routes.ts, meter.routes.ts, settlement.routes.ts, tenant.routes.ts, tenant-registration.routes.ts, onboarding.routes.ts)
+- Fix: Eliminated cookie-only fallback in verifyCsrf(). Every state-changing HTTP mutation strictly requires the x-csrf-token request header matching the session HMAC signature.
+- Proof: Browser form POST with ambient cookie but missing or forged x-csrf-token header returns exact HTTP 403 CSRF_INVALID rejection.
+
+6. TASK-009 BEARER TOKEN SECURITY & SINGLE-USE REDEMPTION:
+- Location: server/src/services/access-grant.service.ts
+- Fix: Bearer access grants hash the secret token before database lookup. Upon redemption, browser strips token hash from URL. Revocation takes effect immediately. Quota limit (max 10 staff slots) is atomic and concurrency-safe.
+- Proof: Both backend and Playwright E2E suites confirm zero hash leakage, strict 10-slot quota limit under concurrent creation, and instant 401 fail-closed on revoked grant.
+
+STATUS: 100% PASS - ALL SECURITY FIXES AUDITED & VERIFIED

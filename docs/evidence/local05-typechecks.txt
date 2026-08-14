@@ -1,0 +1,17 @@
+=== COMMAND: npx tsc --noEmit ===
+=== TIMESTAMP: 2026-08-14T12:41:30.755Z ===
+
+src/pages/owner/tenants.tsx(1382,44): error TS2304: Cannot find name 'photoUrl'.
+
+
+Command failed: npx tsc --noEmit
+
+=== COMMAND: npx tsc --noEmit -p tsconfig.e2e.json ===
+=== TIMESTAMP: 2026-08-14T12:41:44.998Z ===
+
+
+
+=== COMMAND: npx tsc --noEmit ===
+=== TIMESTAMP: 2026-08-14T12:41:54.798Z ===
+
+
