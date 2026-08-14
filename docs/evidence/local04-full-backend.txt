@@ -1,0 +1,30 @@
+================================================================================
+HORPLUS LOCAL-04 FULL BACKEND TEST SUITE QUALITY GATE
+================================================================================
+Timestamp: 2026-08-14T07:50:57Z
+Command: npm --prefix server test
+Exit Code: 0
+
+Test Files: 35 passed (35)
+Tests:      395 passed (395)
+Duration:   153.22s
+
+Suite Breakdown:
+ ✓ tests/security-session.test.ts (5 tests)
+ ✓ tests/health.test.ts (6 tests)
+ ✓ tests/env.test.ts (11 tests)
+ ✓ src/__tests__/integration/task009-checkpoint1f-upgrade-proof.test.ts (3 tests)
+ ✓ tests/local-storage.test.ts (6 tests)
+ ✓ src/__tests__/unit/room-number.normalizer.test.ts (11 tests)
+ ✓ tests/sensitive-field.service.test.ts (5 tests)
+ ✓ tests/error-handler.test.ts (2 tests)
+ ✓ tests/wave1d-boundary.test.ts (4 tests)
+ ✓ tests/shutdown.test.ts (1 test)
+ ✓ server/tests/local01-tenant-onboarding-cooccupants.test.ts (13 tests)
+ ✓ server/tests/local02-contract-settlement-renewal.test.ts (20 tests)
+ ✓ server/tests/local03-notification-outbox-operations.test.ts (18 tests)
+ ✓ src/__tests__/integration/task009-staff-line-oa.test.ts (25 tests)
+ [All other core service, integration, domain, and security test files passed]
+================================================================================
+STATUS: PASS
+================================================================================

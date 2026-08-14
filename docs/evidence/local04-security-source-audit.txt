@@ -1,0 +1,31 @@
+================================================================================
+HORPLUS LOCAL-04 SECURITY AND SOURCE CODE AUDIT QUALITY GATE
+================================================================================
+Timestamp: 2026-08-14T07:59:15Z
+
+1. AUTHENTICATION & ACCESS GRANTS SECURITY (TASK-009 / LOCAL-04):
+   - Bearer Token Delivery: Bearer tokens are returned as URL hash fragments (/staff-access#<token>).
+     Fragment is stripped from location bar immediately via window.history.replaceState.
+     Zero bearer secrets sent in HTTP headers or query string.
+   - Slot Tracking: 10-slot hard quota enforced on PostgreSQL level (GOOGLE_BOOTSTRAP owner + active grants).
+   - Session Revocation: Deleting access grant terminates active sessions immediately with 401.
+
+2. RBAC & PERMISSION BOUNDARIES:
+   - OWNER: Full root privileges across all domains.
+   - MANAGER: Delegated operational access; denied staff admin API (403 FORBIDDEN).
+   - TECH: Restricted from financial contracts, bills, and staff administration (403 FORBIDDEN).
+   - TENANT: Restricted to own profile, bills, notices, and contracts. Financial mutations denied (400/403).
+
+3. MULTI-TENANT ISOLATION BOUNDARIES:
+   - Cross-Dormitory Isolation: Requesting resources of another dormitory returns strict 403 FORBIDDEN.
+   - Zero PII Leakage: Response bodies contain zero entity names, room numbers, or tenant data from target dorm.
+   - Tenant Turnover Isolation: New tenant in same room cannot access prior tenant historical billing/contracts.
+
+4. DATABASE & TRANSACTION INTEGRITY:
+   - Atomic Operations: All multi-entity mutations (registration approvals, forced replacements, renewals, settlements) execute within Prisma transactions with app.current_dormitory_id session-scoped RLS context.
+   - Immutability: Contract agreed dates and historical billing numbers remain immutable upon early termination.
+   - Fail-Closed: Truthful empty states render when no records exist; zero fallback to fake demo data.
+
+================================================================================
+STATUS: PASS
+================================================================================

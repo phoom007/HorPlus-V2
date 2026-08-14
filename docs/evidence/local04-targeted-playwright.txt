@@ -1,0 +1,25 @@
+================================================================================
+HORPLUS LOCAL-04 TARGETED PLAYWRIGHT ACCEPTANCE SUITE QUALITY GATE
+================================================================================
+Timestamp: 2026-08-14T07:53:06Z
+Command: npx playwright test tests/e2e/local04-cross-portal-lifecycle.spec.ts --workers=1
+Exit Code: 0
+Total Tests: 11 passed (11)
+Duration: 1.3m
+
+Test Results Breakdown:
+ ✓ Journey A — Real Unauthenticated Registration -> Owner Review & Approve -> Atomic Contract Creation -> Tenant Login Verification
+ ✓ Journey B — Same-Room Applicants Queue: Owner approves applicant A without auto-rejecting applicant B -> Owner reassigns applicant B to Room A103 and approves
+ ✓ Journey C — Co-occupant Management: Owner adds co-occupant Somsri via UI without changing contract financials; Tenant views Somsri in UI and is denied direct mutation
+ ✓ Journey D & E — Tenant submits renewal via UI -> Owner approves scheduled renewal -> Scheduled clock activation updates contract chain
+ ✓ Journey F & G — Forced replacement destructive warning -> Atomic termination & settlement creation -> Owner confirms settlement refund
+ ✓ Journey H — Owner enters meter readings with F5 persistence and issues bill; Tenant reloads portal to view authoritative bill details
+ ✓ Journey I — OWNER has full access; MANAGER has delegated operational access; TECH is restricted from financial contracts and staff administration
+ ✓ Journey J — Owner creates staff access grant via UI, bearer link is redeemed cleanly without secrets, slot tracking maintains 10 quota, and grant revocation terminates sessions
+ ✓ Journey K — Outbox event delivers notice cross-portal; read state persists across F5; Owner swipe-to-dismiss deletes notification without affecting other staff
+ ✓ Journey L — Authenticated Owner A and Tenant A receive 403 when requesting Dormitory B resources with zero leaked PII
+ ✓ Truthful empty states render without fake placeholder records and fail closed on errors
+
+================================================================================
+STATUS: PASS (100% GREEN)
+================================================================================
