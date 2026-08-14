@@ -17,6 +17,7 @@ import { LocalOwnerSignatureStorage } from '../src/services/signature-storage.se
 import { encryptText, hashToken } from '../src/utils/crypto-encryption.js';
 import { AppError } from '../src/errors/app-error.js';
 import { Redis } from 'ioredis';
+import { CleanupService } from '../src/services/cleanup.service.js';
 
 const prisma = getPrismaClient();
 
@@ -1118,30 +1119,45 @@ describe.sequential('LOCAL-05: Local Security & Resilience Audit Suite', () => {
       expect(notice?.title).toBe('Pre-Boot Title');
     });
 
-    it('should isolate scheduler task failures so an error in one job does not abort other independent tasks', async () => {
-      let task1Executed = false;
-      let task2Executed = false;
+    it('should isolate Phase 4 (contract activation) failure so Phase 5 (outbox) still completes in real CleanupService', async () => {
+      // Create a PENDING outbox event that Phase 5 should process
+      const outboxEvent = await prisma.localNotificationOutbox.create({
+        data: {
+          dormitoryId: dormIdA,
+          eventType: 'SCHEDULER_ISOLATION_TEST',
+          aggregateType: 'TENANT',
+          aggregateId: tenantA.id,
+          recipientType: 'TENANT',
+          recipientId: tenantA.id,
+          title: 'Scheduler Isolation',
+          body: 'Phase 5 must still process this',
+          status: 'PENDING',
+          idempotencyKey: `sched-iso-${Date.now()}`
+        }
+      });
 
-      const runScheduledJob = async (tasks: Array<() => Promise<void>>) => {
-        const results = await Promise.allSettled(tasks.map(t => t()));
-        return results;
-      };
+      // Inject failure in Phase 4 (contract activation) via dynamic import interception
+      const origImport = CleanupService.prototype['runCleanup'];
+      const cleanupSvc = new CleanupService(prisma);
 
-      const task1Failing = async () => {
-        task1Executed = true;
-        throw new Error('SIMULATED_TASK_1_SCHEDULED_FAILURE');
-      };
+      // Spy on contract-renewal import to throw during Phase 4
+      const mockContractModule = vi.fn().mockRejectedValue(new Error('SIMULATED_CONTRACT_ACTIVATION_CRASH'));
+      const origDynImport = (await import('../src/services/contract-renewal.service.js')).ContractRenewalService;
+      const activateSpy = vi.spyOn(origDynImport.prototype, 'activateAllScheduledContracts')
+        .mockRejectedValueOnce(new Error('SIMULATED_CONTRACT_ACTIVATION_CRASH'));
 
-      const task2Valid = async () => {
-        task2Executed = true;
-      };
+      // Run real CleanupService.runCleanup()
+      const result = await cleanupSvc.runCleanup();
 
-      const results = await runScheduledJob([task1Failing, task2Valid]);
+      // Phase 4 threw but Phase 5 (outbox) should still have completed
+      const processedEvent = await prisma.localNotificationOutbox.findUnique({ where: { id: outboxEvent.id } });
+      expect(processedEvent?.status).toBe('PROCESSED');
 
-      expect(task1Executed).toBe(true);
-      expect(task2Executed).toBe(true);
-      expect(results[0].status).toBe('rejected');
-      expect(results[1].status).toBe('fulfilled');
+      // CleanupService itself did not throw — it returned results
+      expect(result).toBeDefined();
+      expect(typeof result.expiredMarked).toBe('number');
+
+      activateSpy.mockRestore();
     });
   });
 
@@ -1284,6 +1300,39 @@ describe.sequential('LOCAL-05: Local Security & Resilience Audit Suite', () => {
     it('should maintain rate-limit state when client IP is fixed', async () => {
       const res = await supertest(app)
         .post('/api/v1/auth/google')
+        .send({ idToken: 'test.invalid.token' });
+
+      expect(res.status).toBe(429);
+    });
+
+    it('should not allow rate limit bypass via spoofed x-forwarded-for header (TRUST_PROXY=false)', async () => {
+      // TRUST_PROXY defaults to false in test environment.
+      // When trust proxy is disabled, Express req.ip returns the socket remote address,
+      // so x-forwarded-for is never consulted for IP resolution.
+      // The rate limiter key uses req.ip, so spoofed headers MUST NOT reset the counter.
+      const res = await supertest(app)
+        .post('/api/v1/auth/google')
+        .set('x-forwarded-for', '203.0.113.199')
+        .send({ idToken: 'test.invalid.token' });
+
+      expect(res.status).toBe(429);
+    });
+
+    it('should not allow rate limit bypass via spoofed x-real-ip header', async () => {
+      const res = await supertest(app)
+        .post('/api/v1/auth/google')
+        .set('x-real-ip', '198.51.100.42')
+        .send({ idToken: 'test.invalid.token' });
+
+      expect(res.status).toBe(429);
+    });
+
+    it('should not allow rate limit bypass via query-string path variation', async () => {
+      // Rate limiter key uses req.path (not req.originalUrl).
+      // Express req.path strips query strings: /api/v1/auth/google?x=1 => /api/v1/auth/google
+      // So query-string variations MUST NOT bypass the limiter.
+      const res = await supertest(app)
+        .post('/api/v1/auth/google?x=1')
         .send({ idToken: 'test.invalid.token' });
 
       expect(res.status).toBe(429);

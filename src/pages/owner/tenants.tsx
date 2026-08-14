@@ -1333,6 +1333,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                   const printWindow = window.open('', '_blank');
                   if (!printWindow) return;
                   const hasPhoto = selectedTenant.idCardPhotoMock && selectedTenant.idCardPhotoMock !== 'MOCK_ID_CARD_BASE64';
+                  const photoUrl = hasPhoto ? `data:image/jpeg;base64,${selectedTenant.idCardPhotoMock}` : '';
                   const escapeHtml = (val?: string | null) => {
                     if (!val) return '-';
                     return String(val)
