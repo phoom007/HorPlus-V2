@@ -16,6 +16,10 @@ export function globalErrorHandler(err: Error, req: Request, res: Response, _nex
     errorCode = err.errorCode;
     message = err.message;
     fieldErrors = err.fieldErrors || null;
+  } else if ((err as any).code === 'P2023' || (err.message && err.message.includes('Malformed UUID')) || (err.message && err.message.includes('invalid input syntax for type uuid'))) {
+    statusCode = 400;
+    errorCode = 'INVALID_ID_FORMAT';
+    message = 'รหัสระบุตัวตน (ID) ไม่ถูกต้องตามรูปแบบ UUID';
   }
 
   logger.error({

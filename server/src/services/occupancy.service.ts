@@ -199,7 +199,7 @@ export class OccupancyService {
       }
 
       // Row-level lock on the room to safely serialize concurrent operations on this specific room
-      await tx.$executeRawUnsafe('SELECT id FROM rooms WHERE id = $1 FOR UPDATE', occupancy.roomId);
+      await tx.$executeRaw`SELECT id FROM rooms WHERE id = ${occupancy.roomId}::uuid FOR UPDATE`;
 
       const updatedOccupancy = await tx.occupancy.update({
         where: { id: occupancy.id },
@@ -291,7 +291,7 @@ export class OccupancyService {
 
       // Row-level lock on both rooms to prevent concurrent modifications, sort IDs to prevent deadlocks
       const roomsToLock = [sourceOccupancy.roomId, targetRoomId].sort();
-      await tx.$executeRawUnsafe('SELECT id FROM rooms WHERE id IN ($1, $2) FOR UPDATE', roomsToLock[0], roomsToLock[1]);
+      await tx.$executeRaw`SELECT id FROM rooms WHERE id IN (${roomsToLock[0]}::uuid, ${roomsToLock[1]}::uuid) FOR UPDATE`;
 
       // End source occupancy
       const endedOccupancy = await tx.occupancy.update({

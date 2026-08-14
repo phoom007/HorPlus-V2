@@ -40,9 +40,11 @@ export function createPropertyRouter(
   };
 
   const verifyCsrf = (req: Request, res: Response): boolean => {
-    const csrfToken = (req.headers['x-csrf-token'] as string) || req.cookies?.['horplus_csrf'];
+    const csrfHeader = req.headers['x-csrf-token'] as string | undefined;
+    const csrfCookie = req.cookies?.['horplus_csrf'];
     const sessionId = req.auth?.sessionId;
-    if (!sessionId || !authService.verifyCsrf(csrfToken, sessionId)) {
+
+    if (!csrfHeader || !sessionId || !authService.verifyCsrf(csrfHeader, sessionId) || (csrfCookie && csrfCookie !== csrfHeader)) {
       res.status(403).json({
         error: {
           code: 'CSRF_INVALID',
@@ -59,11 +61,20 @@ export function createPropertyRouter(
 
   const handleServiceError = (res: Response, err: any, req: Request) => {
     console.error('PROPERTY SERVICE ERROR:', err);
-    const statusCode = err.statusCode || err.status || 500;
+    let statusCode = err.statusCode || err.status || 500;
+    let errorCode = err.errorCode || err.code || 'PROPERTY_OPERATION_FAILED';
+    let message = err.message || 'Operation failed';
+
+    if (err.code === 'P2023' || (err.message && (err.message.includes('Malformed UUID') || err.message.includes('invalid input syntax for type uuid')))) {
+      statusCode = 400;
+      errorCode = 'INVALID_ID_FORMAT';
+      message = 'รหัสระบุตัวตน (ID) ไม่ถูกต้องตามรูปแบบ UUID';
+    }
+
     res.status(statusCode).json({
       error: {
-        code: err.errorCode || err.code || 'PROPERTY_OPERATION_FAILED',
-        message: err.message || 'Operation failed',
+        code: errorCode,
+        message,
         fieldErrors: err.fieldErrors || null,
         requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
         timestamp: new Date().toISOString(),

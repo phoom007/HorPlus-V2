@@ -21,9 +21,11 @@ export function createOnboardingRouter(
 
   // Helper for CSRF check
   const verifyCsrfToken = (req: Request, res: Response): boolean => {
-    const csrfToken = (req.headers['x-csrf-token'] as string) || req.cookies?.[getCsrfCookieName()];
+    const csrfHeader = req.headers['x-csrf-token'] as string | undefined;
+    const csrfCookie = req.cookies?.[getCsrfCookieName()];
     const sessionId = req.auth?.sessionId;
-    if (!sessionId || !authService.verifyCsrf(csrfToken, sessionId)) {
+
+    if (!csrfHeader || !sessionId || !authService.verifyCsrf(csrfHeader, sessionId) || (csrfCookie && csrfCookie !== csrfHeader)) {
       res.status(403).json({
         error: {
           code: 'CSRF_INVALID',

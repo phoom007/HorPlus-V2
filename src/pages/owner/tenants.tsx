@@ -1333,14 +1333,22 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                   const printWindow = window.open('', '_blank');
                   if (!printWindow) return;
                   const hasPhoto = selectedTenant.idCardPhotoMock && selectedTenant.idCardPhotoMock !== 'MOCK_ID_CARD_BASE64';
-                  const photoUrl = hasPhoto ? selectedTenant.idCardPhotoMock : '';
-                  
+                  const escapeHtml = (val?: string | null) => {
+                    if (!val) return '-';
+                    return String(val)
+                      .replace(/&/g, '&amp;')
+                      .replace(/</g, '&lt;')
+                      .replace(/>/g, '&gt;')
+                      .replace(/"/g, '&quot;')
+                      .replace(/'/g, '&#039;');
+                  };
+
                   printWindow.document.write(`
                     <!DOCTYPE html>
                     <html lang="th">
                     <head>
                       <meta charset="UTF-8">
-                      <title>สำเนาบัตรประจำตัวประชาชน - ${selectedTenant.name}</title>
+                      <title>สำเนาบัตรประจำตัวประชาชน - ${escapeHtml(selectedTenant.name)}</title>
                       <style>
                         body { font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 24px; color: #1e293b; line-height: 1.5; background: #ffffff; }
                         .container { max-width: 650px; margin: 0 auto; border: 1px solid #cbd5e1; border-radius: 16px; padding: 28px; background: #ffffff; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); }
@@ -1377,11 +1385,11 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
 
                         <div class="section-title">ข้อมูลส่วนตัวผู้เช่า</div>
                         <table class="info-grid">
-                          <tr><td class="label">ชื่อ-นามสกุล:</td><td class="value">${selectedTenant.name}</td></tr>
-                          <tr><td class="label">เลขประจำตัวประชาชน:</td><td class="value">${selectedTenant.citizenId || '-'}</td></tr>
-                          <tr><td class="label">เบอร์โทรศัพท์:</td><td class="value">${selectedTenant.phone}</td></tr>
-                          <tr><td class="label">อีเมล:</td><td class="value">${selectedTenant.email || '-'}</td></tr>
-                          <tr><td class="label">ผู้ติดต่อฉุกเฉิน:</td><td class="value">${selectedTenant.emergencyContact?.name || '-'} (${selectedTenant.emergencyContact?.relationship || '-'}) เบอร์: ${selectedTenant.emergencyContact?.phone || '-'}</td></tr>
+                          <tr><td class="label">ชื่อ-นามสกุล:</td><td class="value">${escapeHtml(selectedTenant.name)}</td></tr>
+                          <tr><td class="label">เลขประจำตัวประชาชน:</td><td class="value">${escapeHtml(selectedTenant.citizenId)}</td></tr>
+                          <tr><td class="label">เบอร์โทรศัพท์:</td><td class="value">${escapeHtml(selectedTenant.phone)}</td></tr>
+                          <tr><td class="label">อีเมล:</td><td class="value">${escapeHtml(selectedTenant.email)}</td></tr>
+                          <tr><td class="label">ผู้ติดต่อฉุกเฉิน:</td><td class="value">${escapeHtml(selectedTenant.emergencyContact?.name)} (${escapeHtml(selectedTenant.emergencyContact?.relationship)}) เบอร์: ${escapeHtml(selectedTenant.emergencyContact?.phone)}</td></tr>
                         </table>
 
                         <div class="footer-note">เอกสารนี้พิมพ์จากระบบบริหารจัดการหอพัก เมื่อ ${new Date().toLocaleDateString('th-TH', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' })} น.</div>

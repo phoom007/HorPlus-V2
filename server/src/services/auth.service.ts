@@ -261,6 +261,7 @@ export class AuthenticationService {
     if (!session) { return null; }
     if (session.status !== 'active') { return null; }
     if (session.expiresAt < new Date()) { return null; }
+    if (session.tokenVersion !== payload.version) { return null; }
 
     // Dynamic resolution for ACCESS_GRANT sessions (Task-009 Final Product Model)
     if (session.principalType === 'ACCESS_GRANT' || session.accessGrantId) {
