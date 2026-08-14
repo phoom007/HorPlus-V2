@@ -328,7 +328,7 @@ test.describe.serial('LOCAL-03: Local Notification Outbox & Operations Polish E2
     await page.waitForLoadState('networkidle');
 
     // Open notification dropdown
-    const headerBell = page.locator('[data-testid="button-staff-notification-bell"]').first();
+    const headerBell = page.locator('[data-testid="button-staff-notification-bell"]:visible').first();
     await expect(headerBell).toBeVisible();
     await headerBell.click();
     await page.waitForTimeout(500);
@@ -369,7 +369,7 @@ test.describe.serial('LOCAL-03: Local Notification Outbox & Operations Polish E2
     await page.reload();
     await page.waitForLoadState('networkidle');
 
-    const headerBell2 = page.locator('[data-testid="button-staff-notification-bell"]').first();
+    const headerBell2 = page.locator('[data-testid="button-staff-notification-bell"]:visible').first();
     await expect(headerBell2).toBeVisible();
     await headerBell2.click();
     await page.waitForTimeout(500);
@@ -389,7 +389,7 @@ test.describe.serial('LOCAL-03: Local Notification Outbox & Operations Polish E2
     await page.waitForLoadState('networkidle');
 
     // Open notification dropdown
-    const headerBell = page.locator('[data-testid="button-staff-notification-bell"]').first();
+    const headerBell = page.locator('[data-testid="button-staff-notification-bell"]:visible').first();
     await expect(headerBell).toBeVisible();
     await headerBell.click();
     await page.waitForTimeout(500);

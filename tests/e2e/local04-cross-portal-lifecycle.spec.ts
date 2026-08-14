@@ -2137,7 +2137,7 @@ test.describe('LOCAL-04 — Master Cross-Portal Playwright Acceptance Suite (Jou
     await mgrPage.goto('/owner/dashboard');
     await mgrPage.waitForLoadState('networkidle');
 
-    const mgrBell = mgrPage.locator('[data-testid="button-staff-notification-bell"]').first();
+    const mgrBell = mgrPage.locator('[data-testid="button-staff-notification-bell"]:visible').first();
     await expect(mgrBell).toBeVisible({ timeout: 30000 });
     await mgrBell.click();
 
