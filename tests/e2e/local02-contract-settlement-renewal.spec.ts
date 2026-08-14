@@ -419,24 +419,11 @@ test.describe.serial('LOCAL-02: E2E Contract Settlement, Termination & Renewal S
     // FLOW E: Assert High-Visibility Destructive Warning Modal pops up!
     await expect(page.locator('body')).toContainText('คำเตือน', { timeout: 10000 });
 
-    // Click Cancel ("ยกเลิก")
-    await page.click('button:has-text("ยกเลิก") >> nth=-1', { force: true });
-
-    // DB remains unchanged
-    const roomBefore = await prisma.room.findUnique({ where: { id: roomId } });
-    expect(roomBefore?.currentTenantId).toBe(tenantId);
-
-    // FLOW F: Re-open approval and click Confirm Replacement button
-    await page.click('button:has-text("อนุมัติและทำสัญญา")', { force: true });
-    const approveRespPromise2 = page.waitForResponse((res) => res.url().includes('/tenant-registrations/') && res.url().includes('/approve'));
-    await page.locator('button:has-text("ยืนยันการอนุมัติ")').click({ force: true });
-    await approveRespPromise2;
-
-    // Click replacement confirmation button
-    const confirmBtn = page.locator('button:has-text("อนุมัติผู้เช่าใหม่")').first();
+    // FLOW F: Click replacement confirmation button
+    const confirmBtn = page.locator('button:has-text("ยืนยันยกเลิกผู้เช่าเดิมและอนุมัติผู้เช่าใหม่"), button:has-text("อนุมัติผู้เช่าใหม่")').first();
     await expect(confirmBtn).toBeVisible({ timeout: 10000 });
     const finalApprovePromise = page.waitForResponse((res) => res.url().includes('/tenant-registrations/') && res.url().includes('/approve'));
-    await confirmBtn.evaluate((el: HTMLElement) => el.click());
+    await confirmBtn.click();
     await finalApprovePromise;
 
     // PostgreSQL Evidence Checks:

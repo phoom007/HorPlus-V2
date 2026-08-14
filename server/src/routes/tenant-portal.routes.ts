@@ -138,6 +138,9 @@ export function createTenantPortalRouter(authService?: AuthenticationService): R
       const contract = ctx.contract;
       const room = ctx.roomId ? await prisma.room.findUnique({ where: { id: ctx.roomId } }) : null;
       const dorm = await prisma.dormitory.findUnique({ where: { id: ctx.dormitoryId } });
+      const coOccupants = await prisma.tenantCoOccupant.findMany({
+        where: { tenantId: tenant.id, dormitoryId: ctx.dormitoryId, deletedAt: null }
+      });
 
       const phone = tenant.phone ? `${tenant.phone.slice(0, 3)}***${tenant.phone.slice(-4)}` : null;
 
@@ -164,6 +167,12 @@ export function createTenantPortalRouter(authService?: AuthenticationService): R
           buildingId: room.buildingId
         } : null,
         roomMembers: [],
+        coOccupants: coOccupants.map((c: any) => ({
+          id: c.id,
+          name: c.name,
+          relationship: c.relationship,
+          phone: c.phone
+        })),
         activeContract: contract ? {
           id: contract.id,
           contractNumber: contract.contractNumber,
@@ -175,7 +184,7 @@ export function createTenantPortalRouter(authService?: AuthenticationService): R
           rentAmount: contract.rentAmount.toString(),
           depositAmount: contract.depositAmount.toString(),
           advancePaymentAmount: contract.advancePaymentAmount.toString(),
-          coOccupantsCount: 0
+          coOccupantsCount: coOccupants.length
         } : null
       });
     } catch (err: any) {

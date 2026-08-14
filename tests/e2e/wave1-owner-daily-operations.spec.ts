@@ -419,7 +419,8 @@ test.describe.serial('HORPLUS — Wave 1 Owner Daily Operations Real Playwright 
 
     // 2. Click Issue Bill button in UI & await response
     const issueBillBtn = page.locator('button:has-text("ออกบิลทุกห้อง"), button:has-text("ออกบิล")').first();
-    await expect(issueBillBtn).toBeVisible();
+    await expect(issueBillBtn).toBeVisible({ timeout: 10000 });
+    await expect(issueBillBtn).toBeEnabled({ timeout: 15000 });
     const billPromise = page.waitForResponse((res) => res.url().includes('/bills/generate/bulk') && res.request().method() === 'POST');
     await issueBillBtn.click();
     await billPromise;

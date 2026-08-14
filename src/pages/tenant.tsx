@@ -331,6 +331,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
             phone: profile.phone || prev?.phone || '-',
             citizenId: profile.nationalIdMasked || prev?.citizenId || '-',
             email: profile.email || prev?.email || '-',
+            coOccupants: profile.coOccupants || prev?.coOccupants || [],
           }));
         }
         if (profile.room) {
@@ -453,20 +454,22 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
   };
 
   const handleSubmitRenewal = async () => {
-    if (!requestedStartDate) return;
+    const activeCtr = tenantContracts.find(c => c.status === 'active' || c.status === 'expiring_soon' || c.status === 'expired') || (tenantContracts.length > 0 ? tenantContracts[0] : null);
+    if (!activeCtr) {
+      showToast('error', 'ไม่พบข้อมูลสัญญา', 'ไม่พบข้อมูลสัญญาเช่าเดิมสำหรับการต่อสัญญา');
+      return;
+    }
+    const effectiveStartDate = requestedStartDate || (activeCtr.endDate ? String(activeCtr.endDate).split('T')[0] : '');
+    if (!effectiveStartDate) return;
+
     setIsSubmittingRenewal(true);
     try {
-      const activeCtr = tenantContracts.find(c => c.status === 'active' || c.status === 'expiring_soon' || c.status === 'expired') || (tenantContracts.length > 0 ? tenantContracts[0] : null);
-      if (!activeCtr) {
-        showToast('error', 'ไม่พบข้อมูลสัญญา', 'ไม่พบข้อมูลสัญญาเช่าเดิมสำหรับการต่อสัญญา');
-        return;
-      }
       await httpRequest('POST', '/api/v1/contract-renewals/request', {
         dormitoryId: activeCtr.dormitoryId || tenant.dormitoryId,
         tenantId: tenant.id,
         contractId: activeCtr.id,
-        requestedStartDate,
-        requestedDurationMonths: Number(requestedDurationMonths),
+        requestedStartDate: effectiveStartDate,
+        requestedDurationMonths: Number(requestedDurationMonths || 6),
       });
       showToast('success', 'ส่งคำขอต่อสัญญาสำเร็จ', 'คำขอต่อสัญญาเช่าของคุณถูกส่งไปยังผู้ดูแลหอพักเรียบร้อยแล้ว');
       const updatedElig: any = await httpRequest('GET', `/api/v1/contract-renewals/eligibility?contractId=${activeCtr.id}&tenantId=${tenant.id}`);

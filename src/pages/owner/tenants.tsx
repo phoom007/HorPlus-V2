@@ -1029,15 +1029,15 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
                         <div className="flex flex-col gap-1">
                           <span className="text-gray-400 font-medium text-[10px]">ชื่อผู้ติดต่อ:</span>
-                          <p className="font-extrabold text-slate-800 text-[11px] sm:text-xs break-all">{selectedTenant.emergencyContact.name}</p>
+                          <p className="font-extrabold text-slate-800 text-[11px] sm:text-xs break-all">{selectedTenant.emergencyContact?.name || 'ไม่มีข้อมูล'}</p>
                         </div>
                         <div className="flex flex-col gap-1">
                           <span className="text-gray-400 font-medium text-[10px]">ความสัมพันธ์:</span>
-                          <p className="font-extrabold text-slate-800 text-[11px] sm:text-xs break-all">{selectedTenant.emergencyContact.relationship}</p>
+                          <p className="font-extrabold text-slate-800 text-[11px] sm:text-xs break-all">{selectedTenant.emergencyContact?.relationship || 'ไม่มีข้อมูล'}</p>
                         </div>
                         <div className="flex flex-col gap-1">
                           <span className="text-gray-400 font-medium text-[10px]">เบอร์โทรติดต่อ:</span>
-                          <p className="font-extrabold text-indigo-600 text-[11px] sm:text-xs break-all">{formatPhone(selectedTenant.emergencyContact.phone)}</p>
+                          <p className="font-extrabold text-indigo-600 text-[11px] sm:text-xs break-all">{formatPhone(selectedTenant.emergencyContact?.phone)}</p>
                         </div>
                       </div>
                     </div>
@@ -1089,7 +1089,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                           <Car className="w-4 h-4 text-emerald-600 shrink-0" />
                           ข้อมูลยานพาหนะ
                         </h4>
-                        {selectedTenant.vehicle.type !== 'none' ? (
+                        {selectedTenant.vehicle && selectedTenant.vehicle.type !== 'none' ? (
                           <div className="space-y-2.5 text-[11px]">
                             <div className="flex flex-col gap-1">
                               <span className="text-gray-400 font-medium text-[10px]">ประเภทยานพาหนะ:</span>
@@ -1117,7 +1117,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                           <Heart className="w-4 h-4 text-rose-600 shrink-0" />
                           การขอเลี้ยงสัตว์เลี้ยง
                         </h4>
-                        {selectedTenant.pet.hasPet ? (
+                        {selectedTenant.pet && selectedTenant.pet.hasPet ? (
                           <div className="space-y-2.5 text-[11px]">
                             <div className="flex flex-col gap-1">
                               <span className="text-gray-400 font-medium text-[10px]">ประเภทสัตว์:</span>
@@ -1260,8 +1260,8 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                     </div>
 
                     <div className="space-y-4 pt-4 border-t border-gray-100">
-                      <h4 className="text-xs font-bold text-slate-800">ผู้พักอาศัยร่วมประสงค์ขอแจ้งบันทึก ({selectedTenant.coOccupants.length} คน)</h4>
-                       {selectedTenant.coOccupants.map((co, index) => (
+                      <h4 className="text-xs font-bold text-slate-800">ผู้พักอาศัยร่วมประสงค์ขอแจ้งบันทึก ({selectedTenant.coOccupants?.length || 0} คน)</h4>
+                       {(selectedTenant.coOccupants || []).map((co, index) => (
                         <div key={co.id} className="p-3.5 bg-slate-50 border border-gray-100 rounded-2xl flex justify-between items-center text-xs gap-3">
                           <div className="min-w-0">
                             <p className="font-bold text-slate-800 truncate">{co.name}</p>
@@ -1272,7 +1272,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                           </span>
                         </div>
                       ))}
-                      {selectedTenant.coOccupants.length === 0 && (
+                      {(!selectedTenant.coOccupants || selectedTenant.coOccupants.length === 0) && (
                         <p className="text-center py-12 text-xs text-gray-400">พักอาศัยเพียงท่านเดียว (ไม่มีประวัติแจ้งผู้พักร่วม)</p>
                       )}
                     </div>
@@ -1283,7 +1283,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
             </div>
 
             <div className="pt-4 border-t border-gray-100 flex justify-between items-center text-[10px] text-gray-400 shrink-0">
-              <span>จดบันทึกเข้าระบบเมื่อ: {selectedTenant.createdAt.split('T')[0]}</span>
+              <span>จดบันทึกเข้าระบบเมื่อ: {selectedTenant.createdAt ? String(selectedTenant.createdAt).split('T')[0] : '-'}</span>
               <span>รหัสบันทึก: {selectedTenant.id}</span>
             </div>
           </div>
@@ -2280,16 +2280,16 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                 name.trim() !== selectedTenant.name ||
                 phone.trim() !== selectedTenant.phone ||
                 email.trim() !== (selectedTenant.email || '') ||
-                citizenId.trim() !== selectedTenant.citizenId ||
-                emergencyName.trim() !== selectedTenant.emergencyContact.name ||
-                emergencyRelation.trim() !== selectedTenant.emergencyContact.relationship ||
-                emergencyPhone.trim() !== selectedTenant.emergencyContact.phone ||
-                vehicleType !== selectedTenant.vehicle.type ||
-                vehiclePlate.trim() !== (selectedTenant.vehicle.licensePlate || '') ||
-                vehicleBrand.trim() !== (selectedTenant.vehicle.brand || '') ||
-                hasPet !== selectedTenant.pet.hasPet ||
-                (hasPet && petType.trim() !== (selectedTenant.pet.type || '')) ||
-                (hasPet && petName.trim() !== (selectedTenant.pet.name || '')) ||
+                citizenId.trim() !== (selectedTenant.citizenId || '') ||
+                emergencyName.trim() !== (selectedTenant.emergencyContact?.name || '') ||
+                emergencyRelation.trim() !== (selectedTenant.emergencyContact?.relationship || '') ||
+                emergencyPhone.trim() !== (selectedTenant.emergencyContact?.phone || '') ||
+                vehicleType !== (selectedTenant.vehicle?.type || 'none') ||
+                vehiclePlate.trim() !== (selectedTenant.vehicle?.licensePlate || '') ||
+                vehicleBrand.trim() !== (selectedTenant.vehicle?.brand || '') ||
+                hasPet !== (selectedTenant.pet?.hasPet || false) ||
+                (hasPet && petType.trim() !== (selectedTenant.pet?.type || '')) ||
+                (hasPet && petName.trim() !== (selectedTenant.pet?.name || '')) ||
                 idCardPhoto !== (selectedTenant.idCardPhotoMock || '')
               ) : false;
 
@@ -2682,7 +2682,8 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
         isOpen={!!replacementWarningData}
         onClose={() => setReplacementWarningData(null)}
         title={replacementWarningData?.hasFutureRenewal ? "⚠️ คำเตือนการยกเลิกสัญญาต่ออายุในอนาคต" : "⚠️ คำเตือนการยุติสัญญาและยกเลิกผู้เช่าเดิม"}
-        maxWidth="max-w-lg"
+        size="lg"
+        zIndex="z-[700]"
       >
         {replacementWarningData && (
           <div className="space-y-4 text-xs">
@@ -2730,7 +2731,6 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                 type="button"
                 onClick={() => {
                   handleApproveRegistration(true);
-                  setReplacementWarningData(null);
                 }}
                 className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-xl shadow-sm"
               >
