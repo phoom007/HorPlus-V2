@@ -9,7 +9,7 @@ import { outboxService } from '../../server/src/services/outbox.service.js';
 import { settlementService } from '../../server/src/services/settlement.service.js';
 import { encryptText, hashToken } from '../../server/src/utils/crypto-encryption.js';
 
-test.describe.serial('LOCAL-04 — Master Cross-Portal Playwright Acceptance Suite (Journeys A-L)', () => {
+test.describe('LOCAL-04 — Master Cross-Portal Playwright Acceptance Suite (Journeys A-L)', () => {
   const prisma = getPrismaClient();
   const sessionSecret = process.env.SESSION_ENCRYPTION_KEY || '0123456789abcdef0123456789abcdef';
   const csrfSecret = process.env.CSRF_SIGNING_KEY || 'csrf-secret-key-0123456789abcdef';
@@ -35,10 +35,6 @@ test.describe.serial('LOCAL-04 — Master Cross-Portal Playwright Acceptance Sui
   let roomIdA104: string;
   let roomIdA201: string;
   let roomIdA202: string;
-
-  // Tenant Fixture - Dorm A
-  let createdTenantA: any;
-  let tenantUserA: any;
 
   // Fixture IDs - Dorm B (For Cross-Dorm Isolation)
   let dormIdB: string;
@@ -513,7 +509,6 @@ test.describe.serial('LOCAL-04 — Master Cross-Portal Playwright Acceptance Sui
     expect(createdTenant).not.toBeNull();
     expect(createdTenant?.firstName).toBe('Somchai');
     expect(createdTenant?.status).toBe('active');
-    createdTenantA = createdTenant;
 
     const createdContract = await prisma.contract.findFirst({
       where: { tenantId: createdTenant!.id, dormitoryId: dormIdA },
@@ -542,7 +537,6 @@ test.describe.serial('LOCAL-04 — Master Cross-Portal Playwright Acceptance Sui
         status: 'active',
       },
     });
-    tenantUserA = tenantUser;
 
     const tenantRole = await prisma.role.findFirst({ where: { code: 'TENANT', dormitoryId: dormIdA } }) || await prisma.role.create({
       data: { dormitoryId: dormIdA, code: 'TENANT', name: 'Tenant', permissions: ['contract:read'] },
@@ -665,14 +659,80 @@ test.describe.serial('LOCAL-04 — Master Cross-Portal Playwright Acceptance Sui
   test('Journey C — Owner manages co-occupants via UI without modifying financial terms; Tenant cannot mutate co-occupants', async ({ browser }) => {
     test.setTimeout(60000);
 
-    // Find the active tenant in Room A101
-    const tenantA = await prisma.tenant.findUnique({
-      where: { id: createdTenantA.id },
-      include: { contracts: true },
+    const timestamp = Date.now();
+    // Setup dedicated Tenant C and active contract in Room A103
+    const tenantCUser = await prisma.user.create({
+      data: {
+        email: `tenant-c-${timestamp}@example.com`,
+        emailNormalized: `tenant-c-${timestamp}@example.com`,
+        name: 'Somchai Jaidee C',
+        googleSubject: `sub-tenant-c-${timestamp}`,
+        status: 'active',
+      },
     });
-    expect(tenantA).not.toBeNull();
-    const originalRent = tenantA!.contracts[0].rentAmount;
-    const originalDeposit = tenantA!.contracts[0].depositAmount;
+    const tenantRoleC = await prisma.role.findFirst({ where: { code: 'TENANT', dormitoryId: dormIdA } }) || await prisma.role.create({
+      data: { dormitoryId: dormIdA, code: 'TENANT', name: 'Tenant', permissions: ['contract:read'] },
+    });
+    await prisma.dormitoryMember.create({
+      data: { dormitoryId: dormIdA, userId: tenantCUser.id, roleId: tenantRoleC.id, status: 'active' },
+    });
+
+    const tenantC = await prisma.tenant.create({
+      data: {
+        dormitoryId: dormIdA,
+        tenantNumber: `TNT-C-${timestamp}`,
+        firstName: 'Somchai',
+        lastName: 'Jaidee C',
+        displayName: 'Somchai Jaidee C',
+        phone: '0819998833',
+        status: 'active',
+        linkedUserId: tenantCUser.id,
+      },
+    });
+
+    const roomC = await prisma.room.create({
+      data: {
+        dormitoryId: dormIdA,
+        buildingId: buildingIdA,
+        roomNumber: `C${timestamp.toString().slice(-3)}`,
+        normalizedRoomNumber: `C${timestamp.toString().slice(-3)}`,
+        roomType: 'STANDARD',
+        floor: 1,
+        status: 'occupied',
+        monthlyRent: '4500',
+        depositAmount: '9000',
+        advancePaymentAmount: '4500',
+      },
+    });
+
+    const contractC = await prisma.contract.create({
+      data: {
+        dormitoryId: dormIdA,
+        roomId: roomC.id,
+        tenantId: tenantC.id,
+        contractNumber: `CTR-C-${timestamp}`,
+        startDate: new Date('2026-01-01'),
+        endDate: new Date('2027-01-01'),
+        rentAmount: 4500,
+        depositAmount: 9000,
+        status: 'active',
+      },
+    });
+
+    await prisma.occupancy.create({
+      data: {
+        dormitoryId: dormIdA,
+        roomId: roomC.id,
+        tenantId: tenantC.id,
+        contractId: contractC.id,
+        status: 'ACTIVE',
+        startedAt: new Date('2026-01-01'),
+      },
+    });
+    await prisma.room.update({
+      where: { id: roomC.id },
+      data: { status: 'occupied', currentTenantId: tenantC.id, currentContractId: contractC.id },
+    });
 
     // 1. Owner opens /owner/tenants and selects Somchai from the list
     const ownerCtx = await browser.newContext();
@@ -683,7 +743,7 @@ test.describe.serial('LOCAL-04 — Master Cross-Portal Playwright Acceptance Sui
     await ownerPage.waitForLoadState('networkidle');
 
     // Click on Somchai tenant row in the left sidebar
-    const tenantRow = ownerPage.locator('h4:has-text("Somchai Jaidee")').first();
+    const tenantRow = ownerPage.locator('h4:has-text("Somchai Jaidee C")').first();
     await expect(tenantRow).toBeVisible({ timeout: 15000 });
     await tenantRow.click();
 
@@ -706,19 +766,19 @@ test.describe.serial('LOCAL-04 — Master Cross-Portal Playwright Acceptance Sui
 
     // 2. Post-action DB assertion: Co-occupant created, contract financials untouched
     const coList = await prisma.tenantCoOccupant.findMany({
-      where: { tenantId: tenantA!.id, status: 'active' },
+      where: { tenantId: tenantC.id, status: 'active' },
     });
     expect(coList.length).toBe(1);
     expect(coList[0].name).toBe('Somsri Cooccupant');
 
     const refreshedContract = await prisma.contract.findFirst({
-      where: { tenantId: tenantA!.id, status: 'active' },
+      where: { tenantId: tenantC.id, status: 'active' },
     });
-    expect(String(refreshedContract?.rentAmount)).toBe(String(originalRent));
-    expect(String(refreshedContract?.depositAmount)).toBe(String(originalDeposit));
+    expect(String(refreshedContract?.rentAmount)).toBe('4500');
+    expect(String(refreshedContract?.depositAmount)).toBe('9000');
 
     // 3. Tenant logs into portal: sees co-occupant, but cannot mutate
-    const tenantCtx = await createAuthenticatedTenantContext(browser, tenantUserA, dormIdA);
+    const tenantCtx = await createAuthenticatedTenantContext(browser, tenantCUser, dormIdA);
     await tenantCtx.page.goto('/tenant');
     await tenantCtx.page.waitForLoadState('networkidle');
 
@@ -1213,11 +1273,26 @@ test.describe.serial('LOCAL-04 — Master Cross-Portal Playwright Acceptance Sui
       },
     });
 
+    const roomG3 = await prisma.room.create({
+      data: {
+        dormitoryId: dormIdA,
+        buildingId: buildingIdA,
+        roomNumber: `G3${timestamp.toString().slice(-3)}`,
+        normalizedRoomNumber: `G3${timestamp.toString().slice(-3)}`,
+        roomType: 'STANDARD',
+        floor: 1,
+        status: 'vacant',
+        monthlyRent: '4000',
+        depositAmount: '4000',
+        advancePaymentAmount: '4000',
+      },
+    });
+
     const contract = await prisma.contract.create({
       data: {
         dormitoryId: dormIdA,
         contractNumber: `CTR-ZERO-${timestamp}`,
-        roomId: roomIdA104,
+        roomId: roomG3.id,
         tenantId: tenant.id,
         status: 'terminated',
         startDate: new Date('2026-01-01'),
@@ -1282,30 +1357,184 @@ test.describe.serial('LOCAL-04 — Master Cross-Portal Playwright Acceptance Sui
   });
 
   // =========================================================================
-  // JOURNEY H: METER READINGS → BILL ISSUANCE → TENANT PAYMENT VIEW
+  // JOURNEY H: REAL-UI METER READINGS → BILL ISSUANCE → TENANT PAYMENT VIEW
   // =========================================================================
-  test('Journey H — Owner enters meter readings with F5 persistence and issues bill; Tenant reloads portal to view authoritative bill details', async ({ browser }) => {
+  test('Journey H — Real-UI Meter Entry, Lower-Reading Rejection, F5 Persistence, Real-UI Bill Issuance & Tenant Cross-Portal View', async ({ browser }) => {
     test.setTimeout(60000);
 
     const timestamp = Date.now();
-
-    // Setup an active billing cycle for Dorm A
-    const cycle = await prisma.billingCycle.create({
+    // 1. SETUP: Dedicated Room, Tenant, Active Contract & Starting Meters (Prerequisite Setup ONLY)
+    const roomH = await prisma.room.create({
       data: {
         dormitoryId: dormIdA,
-        cycleCode: `2026-09-L04-${timestamp}`,
-        name: 'September 2026 Cycle',
-        periodStart: new Date('2026-09-01'),
-        periodEnd: new Date('2026-09-30'),
-        billingDate: new Date('2026-09-25'),
-        dueDate: new Date('2026-10-05'),
-        status: 'draft',
+        buildingId: buildingIdA,
+        roomNumber: `H${timestamp.toString().slice(-3)}`,
+        normalizedRoomNumber: `H${timestamp.toString().slice(-3)}`,
+        roomType: 'STANDARD',
+        floor: 3,
+        status: 'occupied',
+        monthlyRent: '4500',
+        depositAmount: '9000',
+        advancePaymentAmount: '4500',
+        initialWaterReading: '100.00',
+        initialElectricityReading: '500.00',
       },
     });
 
-    const contractRecord = await prisma.contract.findFirst({ where: { roomId: roomIdA101, status: 'active' } });
+    const tenantHUser = await prisma.user.create({
+      data: {
+        email: `tenant-h-${timestamp}@example.com`,
+        emailNormalized: `tenant-h-${timestamp}@example.com`,
+        name: 'Tenant H Local04',
+        googleSubject: `sub-tenant-h-${timestamp}`,
+        status: 'active',
+      },
+    });
+    const tenantHRole = await prisma.role.findFirst({ where: { code: 'TENANT', dormitoryId: dormIdA } }) || await prisma.role.create({
+      data: { dormitoryId: dormIdA, code: 'TENANT', name: 'Tenant', permissions: ['contract:read', 'bills:read'] },
+    });
+    await prisma.dormitoryMember.create({
+      data: { dormitoryId: dormIdA, userId: tenantHUser.id, roleId: tenantHRole.id, status: 'active' },
+    });
 
-    // 1. Owner enters meter readings in /owner/meters
+    const tenantH = await prisma.tenant.create({
+      data: {
+        dormitoryId: dormIdA,
+        tenantNumber: `TNT-H-${timestamp}`,
+        firstName: 'TenantH',
+        lastName: 'Local04',
+        displayName: 'Tenant H Local04',
+        phone: '0819998899',
+        status: 'active',
+        linkedUserId: tenantHUser.id,
+      },
+    });
+
+    const contractH = await prisma.contract.create({
+      data: {
+        dormitoryId: dormIdA,
+        roomId: roomH.id,
+        tenantId: tenantH.id,
+        contractNumber: `CTR-H-${timestamp}`,
+        startDate: new Date('2026-01-01'),
+        endDate: new Date('2027-01-01'),
+        rentAmount: 4500,
+        depositAmount: 9000,
+        status: 'active',
+      },
+    });
+
+    await prisma.occupancy.create({
+      data: {
+        dormitoryId: dormIdA,
+        roomId: roomH.id,
+        tenantId: tenantH.id,
+        contractId: contractH.id,
+        status: 'ACTIVE',
+        startedAt: new Date('2026-01-01'),
+      },
+    });
+    await prisma.room.update({
+      where: { id: roomH.id },
+      data: { currentTenantId: tenantH.id, currentContractId: contractH.id },
+    });
+
+    // Create billing cycle for 2026-09
+    let cycle = await prisma.billingCycle.findFirst({
+      where: { dormitoryId: dormIdA, cycleCode: '2026-09' },
+    });
+    if (!cycle) {
+      cycle = await prisma.billingCycle.create({
+        data: {
+          dormitoryId: dormIdA,
+          cycleCode: '2026-09',
+          name: 'รอบเดือนกันยายน 2026',
+          periodStart: new Date('2026-09-01'),
+          periodEnd: new Date('2026-09-30'),
+          billingDate: new Date('2026-09-25'),
+          dueDate: new Date('2026-10-05'),
+          status: 'draft',
+        },
+      });
+      await prisma.billingRateSnapshot.create({
+        data: {
+          dormitoryId: dormIdA,
+          billingCycleId: cycle.id,
+          waterBillingType: 'per_unit',
+          waterRate: '18.00',
+          electricityBillingType: 'per_unit',
+          electricityRate: '8.00',
+          commonFee: '0.00',
+          internetFee: '0.00',
+          lateFeeType: 'fixed',
+          lateFeeValue: '0.00',
+          currency: 'THB',
+        },
+      });
+    }
+
+    // Starting baseline meter device & previous reading (Water: 100, Elec: 500)
+    const waterDevice = await prisma.meterDevice.create({
+      data: {
+        dormitoryId: dormIdA,
+        roomId: roomH.id,
+        type: 'WATER',
+        meterNumber: `W-${roomH.roomNumber}`,
+      },
+    });
+    const elecDevice = await prisma.meterDevice.create({
+      data: {
+        dormitoryId: dormIdA,
+        roomId: roomH.id,
+        type: 'ELECTRICITY',
+        meterNumber: `E-${roomH.roomNumber}`,
+      },
+    });
+
+    // Previous cycle reading
+    let prevCycle = await prisma.billingCycle.findFirst({
+      where: { dormitoryId: dormIdA, cycleCode: '2026-08' },
+    });
+    if (!prevCycle) {
+      prevCycle = await prisma.billingCycle.create({
+        data: {
+          dormitoryId: dormIdA,
+          cycleCode: '2026-08',
+          name: 'รอบเดือนสิงหาคม 2026',
+          periodStart: new Date('2026-08-01'),
+          periodEnd: new Date('2026-08-31'),
+          billingDate: new Date('2026-08-25'),
+          dueDate: new Date('2026-09-05'),
+          status: 'closed',
+        },
+      });
+    }
+    await prisma.meterReading.createMany({
+      data: [
+        {
+          dormitoryId: dormIdA,
+          roomId: roomH.id,
+          billingCycleId: prevCycle.id,
+          meterDeviceId: waterDevice.id,
+          meterType: 'water',
+          previousReading: 0,
+          currentReading: 100,
+          usageUnits: 100,
+        },
+        {
+          dormitoryId: dormIdA,
+          roomId: roomH.id,
+          billingCycleId: prevCycle.id,
+          meterDeviceId: elecDevice.id,
+          meterType: 'electricity',
+          previousReading: 0,
+          currentReading: 500,
+          usageUnits: 500,
+        },
+      ],
+    });
+
+    // 2. OWNER BROWSER: NAVIGATE TO /owner/meters
     const ownerCtx = await browser.newContext();
     const ownerPage = await ownerCtx.newPage();
     await setupBrowserSession(ownerCtx, ownerPage, ownerUserA, sessionTokenOwnerA, csrfTokenOwnerA, dormIdA);
@@ -1313,48 +1542,102 @@ test.describe.serial('LOCAL-04 — Master Cross-Portal Playwright Acceptance Sui
     await ownerPage.goto('/owner/meters');
     await ownerPage.waitForLoadState('networkidle');
 
-    // Create meter devices and reading in DB directly for deterministic verification
-    const electricDevice = await prisma.meterDevice.create({
-      data: {
-        dormitoryId: dormIdA,
-        roomId: roomIdA101,
-        type: 'ELECTRICITY',
-        meterNumber: `E-A101-${timestamp}`,
-      },
-    });
+    // Filter/Locate room row in UI table
+    const roomRow = ownerPage.locator(`tr:has-text("${roomH.roomNumber}")`).first();
+    await expect(roomRow).toBeVisible({ timeout: 15000 });
 
-    await prisma.meterReading.create({
-      data: {
-        dormitoryId: dormIdA,
-        roomId: roomIdA101,
-        billingCycleId: cycle.id,
-        meterDeviceId: electricDevice.id,
-        meterType: 'ELECTRICITY',
-        previousReading: 100,
-        currentReading: 150,
-        usageUnits: 50,
-      },
-    });
+    // 3. LOWER READING REJECTION VIA REAL UI
+    const waterInput = roomRow.locator('input[data-col="waterCurr"]').first();
+    await expect(waterInput).toBeVisible();
+    await waterInput.fill('50'); // Lower than 100
+    await waterInput.blur();
 
-    // Create an authoritative bill for Room A101
-    await prisma.bill.create({
-      data: {
-        dormitoryId: dormIdA,
-        roomId: roomIdA101,
-        tenantId: createdTenantA.id,
-        contractId: contractRecord!.id,
-        billingCycleId: cycle.id,
-        billNumber: `BILL-L04-${timestamp}`,
-        billingDate: new Date('2026-09-25'),
-        dueDate: new Date('2026-10-05'),
-        subtotal: 5100,
-        totalAmount: 5100,
-        status: 'unpaid',
-      },
-    });
+    const saveMetersBtn = ownerPage.locator('button:has-text("บันทึกข้อมูลค่ามิเตอร์"), button:has-text("บันทึกมิเตอร์")').first();
+    await expect(saveMetersBtn).toBeVisible({ timeout: 10000 });
+    await saveMetersBtn.click();
 
-    // 2. Tenant opens /tenant and views bill details via "บิล" navigation tab
-    const tenantCtx = await createAuthenticatedTenantContext(browser, tenantUserA, dormIdA);
+    // Assert exact visible error toast in UI
+    await expect(ownerPage.locator('text=/เลขอ่านมิเตอร์ใหม่ต้องไม่น้อยกว่าเลขอ่านครั้งก่อน|ค่ามิเตอร์ปัจจุบัน.*ต้องไม่น้อยกว่า/').first()).toBeVisible({ timeout: 10000 });
+
+    // Assert PostgreSQL: No new readings for current cycle
+    const currentReadingsAfterRejection = await prisma.meterReading.findMany({
+      where: { dormitoryId: dormIdA, roomId: roomH.id, billingCycleId: cycle.id },
+    });
+    expect(currentReadingsAfterRejection.length).toBe(0);
+
+    // 4. VALID METER ENTRY VIA REAL UI
+    await waterInput.fill('120'); // Valid: 120 >= 100 (usage = 20)
+    await waterInput.blur();
+
+    const elecInput = roomRow.locator('input[data-col="elecCurr"]').first();
+    await expect(elecInput).toBeVisible();
+    await elecInput.fill('600'); // Valid: 600 >= 500 (usage = 100)
+    await elecInput.blur();
+
+    const saveReqPromise = ownerPage.waitForRequest((req) => req.url().includes('/api/v1/meters/readings/bulk') && req.method() === 'POST');
+    const saveResPromise = ownerPage.waitForResponse((res) => res.url().includes('/api/v1/meters/readings/bulk') && res.status() === 200);
+    await saveMetersBtn.click();
+    await saveReqPromise;
+    await saveResPromise;
+
+    // Assert success toast
+    await expect(ownerPage.locator('text=บันทึกข้อมูลค่ามิเตอร์เรียบร้อยแล้ว')).toBeVisible({ timeout: 10000 });
+
+    // Assert PostgreSQL authoritative state
+    const currentReadings = await prisma.meterReading.findMany({
+      where: { dormitoryId: dormIdA, roomId: roomH.id, billingCycleId: cycle.id },
+    });
+    expect(currentReadings.length).toBe(2);
+
+    const waterReading = currentReadings.find((r) => r.meterType === 'water');
+    expect(waterReading).toBeDefined();
+    expect(Number(waterReading!.previousReading)).toBe(100);
+    expect(Number(waterReading!.currentReading)).toBe(120);
+    expect(Number(waterReading!.usageUnits)).toBe(20);
+
+    const elecReading = currentReadings.find((r) => r.meterType === 'electricity');
+    expect(elecReading).toBeDefined();
+    expect(Number(elecReading!.previousReading)).toBe(500);
+    expect(Number(elecReading!.currentReading)).toBe(600);
+    expect(Number(elecReading!.usageUnits)).toBe(100);
+
+    // 5. F5 PERSISTENCE IN OWNER UI
+    await ownerPage.reload();
+    await ownerPage.waitForLoadState('networkidle');
+
+    const roomRowAfterF5 = ownerPage.locator(`tr:has-text("${roomH.roomNumber}")`).first();
+    await expect(roomRowAfterF5).toBeVisible({ timeout: 15000 });
+    const waterInputAfterF5 = roomRowAfterF5.locator('input[data-col="waterCurr"]').first();
+    const elecInputAfterF5 = roomRowAfterF5.locator('input[data-col="elecCurr"]').first();
+    await expect(waterInputAfterF5).toHaveValue('120');
+    await expect(elecInputAfterF5).toHaveValue('600');
+
+    // 6. BILL ISSUANCE VIA REAL OWNER UI
+    const issueBillBtn = ownerPage.locator('button:has-text("ออกบิลทุกห้อง"), button:has-text("ออกบิล")').first();
+    await expect(issueBillBtn).toBeVisible({ timeout: 10000 });
+    await expect(issueBillBtn).toBeEnabled({ timeout: 15000 });
+
+    const billResPromise = ownerPage.waitForResponse((res) => res.url().includes('/bills/generate/bulk') && res.request().method() === 'POST' && res.status() === 200);
+    await issueBillBtn.click();
+    await billResPromise;
+
+    // Assert success toast
+    await expect(ownerPage.locator('text=ออกบิลสำหรับรอบบันทึกเรียบร้อยแล้ว')).toBeVisible({ timeout: 10000 });
+
+    // Assert PostgreSQL Bill created (ZERO prisma.bill.create!)
+    const issuedBills = await prisma.bill.findMany({
+      where: { dormitoryId: dormIdA, roomId: roomH.id, billingCycleId: cycle.id },
+      include: { items: true },
+    });
+    expect(issuedBills.length).toBe(1);
+    const issuedBill = issuedBills[0];
+    expect(issuedBill.tenantId).toBe(tenantH.id);
+    expect(issuedBill.contractId).toBe(contractH.id);
+    expect(issuedBill.status).toBe('unpaid');
+    expect(Number(issuedBill.totalAmount)).toBeGreaterThan(4500); // 4500 rent + utilities
+
+    // 7. TENANT CROSS-PORTAL BILL VIEW
+    const tenantCtx = await createAuthenticatedTenantContext(browser, tenantHUser, dormIdA);
     await tenantCtx.page.goto('/tenant');
     await tenantCtx.page.waitForLoadState('networkidle');
 
@@ -1362,17 +1645,18 @@ test.describe.serial('LOCAL-04 — Master Cross-Portal Playwright Acceptance Sui
     await expect(billTabBtn).toBeVisible({ timeout: 15000 });
     await billTabBtn.click();
 
-    // Verify bill total 5,100 appears in DOM
-    await expect(tenantCtx.page.locator('text=5,100').first()).toBeVisible({ timeout: 15000 });
+    // Verify bill appears in DOM with exact bill total
+    const formattedTotal = Number(issuedBill.totalAmount).toLocaleString();
+    await expect(tenantCtx.page.locator(`text=${formattedTotal}`).first()).toBeVisible({ timeout: 15000 });
 
-    // F5 Persistence check
+    // F5 Persistence in Tenant UI
     await tenantCtx.page.reload();
     await tenantCtx.page.waitForLoadState('networkidle');
     const billTabBtnAfter = tenantCtx.page.locator('button:has-text("บิล")');
     if (await billTabBtnAfter.isVisible()) {
       await billTabBtnAfter.click();
     }
-    await expect(tenantCtx.page.locator('text=5,100').first()).toBeVisible({ timeout: 15000 });
+    await expect(tenantCtx.page.locator(`text=${formattedTotal}`).first()).toBeVisible({ timeout: 15000 });
 
     await ownerCtx.close();
     await tenantCtx.context.close();
@@ -1615,58 +1899,129 @@ test.describe.serial('LOCAL-04 — Master Cross-Portal Playwright Acceptance Sui
   // =========================================================================
   // JOURNEY K: REAL UI DOMAIN EVENT OUTBOX, TENANT READ & SWIPE DISMISSAL
   // =========================================================================
-  test('Journey K — Outbox event delivers notice cross-portal; read state persists across F5; Owner swipe-to-dismiss deletes notification without affecting other staff', async ({ browser }) => {
+  test('Journey K — Real UI domain mutation creates outbox event; delivers notice cross-portal; read state persists across F5; Owner swipe-to-dismiss deletes notification without affecting other staff', async ({ browser }) => {
     test.setTimeout(60000);
 
-    // A & B. Real PostgreSQL domain mutation -> outbox -> TenantNotice:
-    // Ensure tenant fixture exists
-    let targetTenant = createdTenantA;
-    let targetTenantUser = tenantUserA;
-    if (!targetTenant) {
-      targetTenant = await prisma.tenant.findFirst({
-        where: { dormitoryId: dormIdA },
-      });
-      if (targetTenant?.userId) {
-        targetTenantUser = (await prisma.user.findUnique({
-          where: { id: targetTenant.userId },
-        })) as any;
-      }
-    }
-
-    // Process pending domain outbox events
-    await outboxService.processPendingOutboxEvents();
-
-    let tenantNotice = await prisma.tenantNotice.findFirst({
-      where: { dormitoryId: dormIdA, tenantId: targetTenant!.id },
-      orderBy: { createdAt: 'desc' },
+    const timestamp = Date.now();
+    // 1. SETUP: Dedicated Room K, Old Tenant K, Active Contract K, Occupancy K
+    const roomK = await prisma.room.create({
+      data: {
+        dormitoryId: dormIdA,
+        buildingId: buildingIdA,
+        roomNumber: `K${timestamp.toString().slice(-3)}`,
+        normalizedRoomNumber: `K${timestamp.toString().slice(-3)}`,
+        roomType: 'DELUXE',
+        floor: 3,
+        status: 'occupied',
+        monthlyRent: '5000',
+        depositAmount: '10000',
+        advancePaymentAmount: '5000',
+      },
     });
 
-    if (!tenantNotice) {
-      await outboxService.createOutboxEvent(prisma, {
+    const oldTenantKUser = await prisma.user.create({
+      data: {
+        email: `tenant-old-k-${timestamp}@example.com`,
+        emailNormalized: `tenant-old-k-${timestamp}@example.com`,
+        name: 'OldTenant K Local04',
+        googleSubject: `sub-tenant-old-k-${timestamp}`,
+        status: 'active',
+      },
+    });
+    const tenantKRole = await prisma.role.findFirst({ where: { code: 'TENANT', dormitoryId: dormIdA } }) || await prisma.role.create({
+      data: { dormitoryId: dormIdA, code: 'TENANT', name: 'Tenant', permissions: ['contract:read', 'notifications:read'] },
+    });
+    await prisma.dormitoryMember.create({
+      data: { dormitoryId: dormIdA, userId: oldTenantKUser.id, roleId: tenantKRole.id, status: 'active' },
+    });
+
+    const oldTenantK = await prisma.tenant.create({
+      data: {
         dormitoryId: dormIdA,
-        eventType: 'TENANT_CONTRACT_TERMINATED_REPLACEMENT',
-        aggregateType: 'CONTRACT',
-        aggregateId: dormIdA,
-        recipientType: 'TENANT',
-        recipientId: targetTenant!.id,
-        title: 'แจ้งการยกเลิกสัญญาเช่า',
-        body: 'สัญญาเช่าห้องพักของท่านได้รับการยกเลิกเนื่องจากการเปลี่ยนผู้เช่าใหม่',
-      });
-      await outboxService.processPendingOutboxEvents();
-      tenantNotice = await prisma.tenantNotice.findFirst({
-        where: { dormitoryId: dormIdA, tenantId: targetTenant!.id },
-        orderBy: { createdAt: 'desc' },
-      });
-    }
+        tenantNumber: `TNT-K-${timestamp}`,
+        firstName: 'OldTenant',
+        lastName: 'Local04',
+        displayName: 'OldTenant K Local04',
+        phone: '0819998877',
+        status: 'active',
+        linkedUserId: oldTenantKUser.id,
+      },
+    });
+
+    const oldContractK = await prisma.contract.create({
+      data: {
+        dormitoryId: dormIdA,
+        roomId: roomK.id,
+        tenantId: oldTenantK.id,
+        contractNumber: `CTR-OLD-K-${timestamp}`,
+        startDate: new Date('2026-01-01'),
+        endDate: new Date('2027-01-01'),
+        rentAmount: 5000,
+        depositAmount: 10000,
+        status: 'active',
+      },
+    });
+
+    await prisma.occupancy.create({
+      data: {
+        dormitoryId: dormIdA,
+        roomId: roomK.id,
+        tenantId: oldTenantK.id,
+        contractId: oldContractK.id,
+        status: 'ACTIVE',
+        startedAt: new Date('2026-01-01'),
+      },
+    });
+    await prisma.room.update({
+      where: { id: roomK.id },
+      data: { currentTenantId: oldTenantK.id, currentContractId: oldContractK.id },
+    });
+
+    // 2. New Applicant submits registration for Room K
+    const newAppCtx = await browser.newContext();
+    const newAppPage = await newAppCtx.newPage();
+    await submitTenantRegistration(newAppPage, dormIdA, roomK.id, 'NewApplicantK', 'Replacement', '0819998866');
+
+    // 3. Owner approves replacement through real UI with destructive warning confirmation
+    const ownerCtx = await browser.newContext();
+    const ownerPage = await ownerCtx.newPage();
+    await setupBrowserSession(ownerCtx, ownerPage, ownerUserA, sessionTokenOwnerA, csrfTokenOwnerA, dormIdA);
+
+    await ownerPage.goto('/owner/tenants');
+    await ownerPage.waitForLoadState('networkidle');
+    await ownerPage.locator('button:has-text("คำขอลงทะเบียน")').click();
+
+    const replacementCard = ownerPage.locator('div.border').filter({ hasText: 'NewApplicantK Replacement' }).first();
+    await expect(replacementCard).toBeVisible({ timeout: 15000 });
+    await replacementCard.locator('button:has-text("อนุมัติและทำสัญญา")').first().click();
+
+    // Confirm approval -> destructive modal
+    await ownerPage.locator('button:has-text("ยืนยันการอนุมัติ")').click();
+
+    const warningModal = ownerPage.locator('text=คำเตือนการยุติสัญญาและยกเลิกผู้เช่าเดิม');
+    await expect(warningModal).toBeVisible({ timeout: 10000 });
+
+    const confirmReplacementBtn = ownerPage.locator('button:has-text("ยืนยันยกเลิกผู้เช่าเดิมและอนุมัติผู้เช่าใหม่")');
+    await expect(confirmReplacementBtn).toBeVisible();
+    await confirmReplacementBtn.click();
+    await expect(confirmReplacementBtn).not.toBeVisible({ timeout: 15000 });
+
+    // 4. Process outbox events produced by the domain action
+    await outboxService.processPendingOutboxEvents();
+
+    // 5. DB Assertion: TenantNotice must exist from domain outbox (ZERO FALLBACK createOutboxEvent!)
+    const tenantNotice = await prisma.tenantNotice.findFirst({
+      where: { dormitoryId: dormIdA, tenantId: oldTenantK.id },
+      orderBy: { createdAt: 'desc' },
+    });
     expect(tenantNotice).not.toBeNull();
     expect(tenantNotice!.isRead).toBe(false);
 
-    // C. Tenant browser: open notification center in UI
-    const tenantCtx = await createAuthenticatedTenantContext(browser, targetTenantUser!, dormIdA);
+    // 6. Tenant browser: open notification center in UI
+    const tenantCtx = await createAuthenticatedTenantContext(browser, oldTenantKUser, dormIdA);
     await tenantCtx.page.goto('/tenant');
     await tenantCtx.page.waitForLoadState('networkidle');
 
-    // Open notification modal in Tenant UI
     const notifBellBtn = tenantCtx.page.locator('button[aria-label="การแจ้งเตือน"]').first();
     await expect(notifBellBtn).toBeVisible({ timeout: 15000 });
     await notifBellBtn.click();
@@ -1675,7 +2030,7 @@ test.describe.serial('LOCAL-04 — Master Cross-Portal Playwright Acceptance Sui
     const noticeItem = tenantCtx.page.locator(`[data-testid="tenant-notice-item-${tenantNotice!.id}"]`);
     await expect(noticeItem).toBeVisible({ timeout: 15000 });
 
-    // D. Perform real read interaction through UI (mandatory)
+    // Perform real read interaction through UI
     const readBtn = tenantCtx.page.locator(`[data-testid="button-tenant-notice-read-${tenantNotice!.id}"]`);
     await expect(readBtn).toBeVisible({ timeout: 15000 });
     await readBtn.click();
@@ -1683,22 +2038,22 @@ test.describe.serial('LOCAL-04 — Master Cross-Portal Playwright Acceptance Sui
     // Read button disappears in UI
     await expect(readBtn).not.toBeVisible({ timeout: 15000 });
 
-    // E. Assert PostgreSQL isRead = true
+    // Assert PostgreSQL isRead = true and readAt != null
     const updatedDbNotice = await prisma.tenantNotice.findUnique({
       where: { id: tenantNotice!.id },
     });
     expect(updatedDbNotice?.isRead).toBe(true);
+    expect(updatedDbNotice?.readAt).not.toBeNull();
 
-    // F. F5: notice remains read
+    // F5: notice remains read
     await tenantCtx.page.reload();
     await tenantCtx.page.waitForLoadState('networkidle');
     await notifBellBtn.click();
     await expect(noticeItem).toBeVisible({ timeout: 15000 });
     await expect(tenantCtx.page.locator(`[data-testid="button-tenant-notice-read-${tenantNotice!.id}"]`)).not.toBeVisible();
 
-    // 2. Owner Swipe-to-Dismiss UI & Manager Copy Isolation UI:
-    // Setup staff notification fixture for Dorm A (both Owner and Manager receive a copy)
-    const staffNoticeTitle = `งานแจ้งซ่อมใหม่รอดำเนินการ #${Date.now().toString().slice(-4)}`;
+    // 7. SWIPE UI FIXTURE (Staff Swipe-to-Dismiss UI & Manager Copy Isolation)
+    const staffNoticeTitle = `งานแจ้งซ่อมด่วน #${Date.now().toString().slice(-4)}`;
     await outboxService.createOutboxEvent(prisma, {
       dormitoryId: dormIdA,
       eventType: 'STAFF_ALERT',
@@ -1706,7 +2061,7 @@ test.describe.serial('LOCAL-04 — Master Cross-Portal Playwright Acceptance Sui
       aggregateId: dormIdA,
       recipientType: 'STAFF',
       title: staffNoticeTitle,
-      body: 'มีรายการแจ้งซ่อมใหม่จากห้อง A101',
+      body: `มีรายการแจ้งซ่อมด่วนจากห้อง ${roomK.roomNumber}`,
     });
     await outboxService.processPendingOutboxEvents();
 
@@ -1717,10 +2072,6 @@ test.describe.serial('LOCAL-04 — Master Cross-Portal Playwright Acceptance Sui
     expect(ownerNotifRow).not.toBeNull();
 
     // Owner logs in, opens notification popover
-    const ownerCtx = await browser.newContext();
-    const ownerPage = await ownerCtx.newPage();
-    await setupBrowserSession(ownerCtx, ownerPage, ownerUserA, sessionTokenOwnerA, csrfTokenOwnerA, dormIdA);
-
     await ownerPage.goto('/owner/dashboard');
     await ownerPage.waitForLoadState('networkidle');
 
@@ -1728,7 +2079,7 @@ test.describe.serial('LOCAL-04 — Master Cross-Portal Playwright Acceptance Sui
     await expect(headerBell).toBeVisible({ timeout: 15000 });
     await headerBell.click();
 
-    // Assert exact staff notice content & swipe guide
+    // Assert exact staff notice content
     await expect(ownerPage.getByText(staffNoticeTitle)).toBeVisible({ timeout: 15000 });
 
     // Locate SlidableNotificationItem and perform real UI drag/swipe left gesture
@@ -1765,7 +2116,7 @@ test.describe.serial('LOCAL-04 — Master Cross-Portal Playwright Acceptance Sui
     await headerBell.click();
     await expect(ownerPage.getByText(staffNoticeTitle)).not.toBeVisible();
 
-    // 3. Manager Browser Verification: Manager copy is intact and visible in UI
+    // Manager Browser Verification: Manager copy is intact and visible in UI
     const mgrCtx = await browser.newContext();
     const mgrPage = await mgrCtx.newPage();
     await setupBrowserSession(mgrCtx, mgrPage, managerUserA, sessionTokenManagerA, csrfTokenManagerA, dormIdA);
@@ -1787,6 +2138,7 @@ test.describe.serial('LOCAL-04 — Master Cross-Portal Playwright Acceptance Sui
     });
     expect(dbMgrNotice?.isDismissed).toBe(false);
 
+    await newAppCtx.close();
     await tenantCtx.context.close();
     await ownerCtx.close();
     await mgrCtx.close();
@@ -1822,17 +2174,33 @@ test.describe.serial('LOCAL-04 — Master Cross-Portal Playwright Acceptance Sui
     expect(crossDormMutateRes.status()).toBe(403);
 
     // 3. Authenticated Tenant A attempts to access Dormitory B payment settings
+    const tenantUserL = await prisma.user.create({
+      data: {
+        email: `tenant-l-${Date.now()}@example.com`,
+        emailNormalized: `tenant-l-${Date.now()}@example.com`,
+        name: 'Tenant L Local04',
+        googleSubject: `sub-tenant-l-${Date.now()}`,
+        status: 'active',
+      },
+    });
+    const tRole = await prisma.role.findFirst({ where: { code: 'TENANT', dormitoryId: dormIdA } }) || await prisma.role.create({
+      data: { dormitoryId: dormIdA, code: 'TENANT', name: 'Tenant', permissions: ['contract:read'] },
+    });
+    await prisma.dormitoryMember.create({
+      data: { dormitoryId: dormIdA, userId: tenantUserL.id, roleId: tRole.id, status: 'active' },
+    });
+
     const sidTenant = crypto.randomUUID();
     await prisma.session.create({
       data: {
-        userId: tenantUserA.id,
+        userId: tenantUserL.id,
         sessionIdHash: SessionTokenService.hashSessionId(sidTenant),
         tokenVersion: 1,
         status: 'active',
         expiresAt: new Date(Date.now() + 86400 * 1000),
       },
     });
-    const tenantSessionToken = sessionTokenService.encryptToken({ sub: tenantUserA.id, sid: sidTenant, type: 'session', version: 1 }, 86400);
+    const tenantSessionToken = sessionTokenService.encryptToken({ sub: tenantUserL.id, sid: sidTenant, type: 'session', version: 1 }, 86400);
 
     const crossDormTenantRes = await apiContext.get('/api/v1/payment-settings', {
       headers: {

@@ -179,8 +179,8 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
 
   const getCycleNewReadings = (roomId: string, cycleId: string): { waterCurr: number, elecCurr: number } => {
     const roomObj = rooms.find(r => r.id === roomId);
-    const initialWater = roomObj ? roomObj.initialWaterMeter : 0;
-    const initialElec = roomObj ? roomObj.initialElectricMeter : 0;
+    const initialWater = roomObj ? (Number(roomObj.initialWaterMeter ?? (roomObj as any).initialWaterReading) || 0) : 0;
+    const initialElec = roomObj ? (Number(roomObj.initialElectricMeter ?? (roomObj as any).initialElectricityReading) || 0) : 0;
 
     if (cycleId < '2026-01') {
       return { waterCurr: initialWater, elecCurr: initialElec };
@@ -651,8 +651,8 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
         const roomReadings = readingsByRoom[r.id] || {};
         const cycleTenant = getTenantForRoomAndCycle(r.id, selectedCycleCode || selectedCycle);
         
-        const rawWaterBaseline = r.initialWaterMeter ?? (r as any).initialWaterReading ?? 0;
-        const rawElecBaseline = r.initialElectricMeter ?? (r as any).initialElectricityReading ?? 0;
+        const rawWaterBaseline = Number(r.initialWaterMeter ?? (r as any).initialWaterReading) || 0;
+        const rawElecBaseline = Number(r.initialElectricMeter ?? (r as any).initialElectricityReading) || 0;
 
         const waterPrev = roomReadings.waterPrev ?? rawWaterBaseline;
         const waterCurr = roomReadings.waterCurr ?? waterPrev;

@@ -644,11 +644,26 @@ export class PrismaMeterRepository implements IMeterRepository {
   }
 
   public async listReadings(dormitoryId: string, filter?: any): Promise<{ items: MeterReadingEntity[]; total: number }> {
-    const readings = await this.prisma.meterReading.findMany({
-      where: { dormitoryId, ...(filter?.roomId ? { roomId: filter.roomId } : {}) },
-      orderBy: { createdAt: 'desc' }
-    });
-    return { items: readings.map((r) => this.mapReadingToEntity(r)), total: readings.length };
+    const whereClause: any = { dormitoryId };
+    if (filter?.roomId) whereClause.roomId = filter.roomId;
+    if (filter?.billingCycleId) whereClause.billingCycleId = filter.billingCycleId;
+    if (filter?.meterType) whereClause.meterType = filter.meterType;
+    if (filter?.status) whereClause.status = filter.status;
+
+    const page = filter?.page && Number(filter.page) > 0 ? Number(filter.page) : 1;
+    const pageSize = filter?.pageSize && Number(filter.pageSize) > 0 ? Number(filter.pageSize) : 50;
+
+    const [readings, total] = await Promise.all([
+      this.prisma.meterReading.findMany({
+        where: whereClause,
+        orderBy: { createdAt: 'desc' },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+      this.prisma.meterReading.count({ where: whereClause }),
+    ]);
+
+    return { items: readings.map((r) => this.mapReadingToEntity(r)), total };
   }
 
   public async withTransaction<T>(fn: (tx: any) => Promise<T>): Promise<T> {
