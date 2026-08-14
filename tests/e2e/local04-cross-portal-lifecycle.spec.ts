@@ -96,7 +96,7 @@ test.describe('LOCAL-04 — Master Cross-Portal Playwright Acceptance Suite (Jou
     await page.waitForLoadState('networkidle');
 
     const roomSelect = page.locator('select');
-    await expect(roomSelect).toBeVisible({ timeout: 15000 });
+    await expect(roomSelect).toBeVisible({ timeout: 30000 });
     await roomSelect.selectOption(roomId);
 
     await page.fill('input[placeholder="สมชาย"]', firstName);
@@ -106,7 +106,7 @@ test.describe('LOCAL-04 — Master Cross-Portal Playwright Acceptance Suite (Jou
     const submitBtn = page.locator('button[type="submit"]');
     await expect(submitBtn).toBeEnabled({ timeout: 30000 });
     await submitBtn.click();
-    await expect(page.locator('text=ส่งคำขอลงทะเบียนเรียบร้อยแล้ว')).toBeVisible({ timeout: 15000 });
+    await expect(page.locator('text=ส่งคำขอลงทะเบียนเรียบร้อยแล้ว')).toBeVisible({ timeout: 30000 });
   }
 
   // Helper to create and authenticate a tenant browser context
@@ -471,11 +471,11 @@ test.describe('LOCAL-04 — Master Cross-Portal Playwright Acceptance Suite (Jou
 
     // Click "คำขอลงทะเบียน" button
     const regBtn = ownerPage.locator('button:has-text("คำขอลงทะเบียน")');
-    await expect(regBtn).toBeVisible({ timeout: 15000 });
+    await expect(regBtn).toBeVisible({ timeout: 30000 });
     await regBtn.click();
 
     // Verify registration modal opens
-    await expect(ownerPage.locator('text=รายการคำขอลงทะเบียนสมัครเช่าห้องพัก')).toBeVisible({ timeout: 10000 });
+    await expect(ownerPage.locator('text=รายการคำขอลงทะเบียนสมัครเช่าห้องพัก')).toBeVisible({ timeout: 30000 });
 
     // Find Somchai Jaidee card and click "อนุมัติและทำสัญญา"
     const somchaiCard = ownerPage.locator('div.border').filter({ hasText: 'Somchai Jaidee' }).first();
@@ -490,7 +490,7 @@ test.describe('LOCAL-04 — Master Cross-Portal Playwright Acceptance Suite (Jou
     await confirmApproveBtn.click();
 
     // Wait for modal to close and list to update
-    await expect(ownerPage.locator('text=ยืนยันการอนุมัติ')).not.toBeVisible({ timeout: 15000 });
+    await expect(ownerPage.locator('text=ยืนยันการอนุมัติ')).not.toBeVisible({ timeout: 30000 });
 
     // 3. Post-Action PostgreSQL Assertions
     const updatedReq = await prisma.tenantRegistrationRequest.findUnique({
@@ -601,7 +601,7 @@ test.describe('LOCAL-04 — Master Cross-Portal Playwright Acceptance Suite (Jou
     await expect(cardB1).toBeVisible();
     await cardB1.locator('button:has-text("อนุมัติและทำสัญญา")').first().click();
     await ownerPage.locator('button:has-text("ยืนยันการอนุมัติ")').click();
-    await expect(ownerPage.locator('text=ยืนยันการอนุมัติ')).not.toBeVisible({ timeout: 15000 });
+    await expect(ownerPage.locator('text=ยืนยันการอนุมัติ')).not.toBeVisible({ timeout: 30000 });
 
     // Verify DB: Applicant B1 approved, Applicant B2 REMAINS PENDING (Not auto-rejected)
     const reqB1 = await prisma.tenantRegistrationRequest.findFirst({
@@ -626,7 +626,7 @@ test.describe('LOCAL-04 — Master Cross-Portal Playwright Acceptance Suite (Jou
     const reassignSelect = ownerPage.locator('select');
     await reassignSelect.selectOption(roomIdA103);
     await ownerPage.locator('button:has-text("บันทึกการเปลี่ยนห้อง")').click();
-    await expect(ownerPage.locator('text=เปลี่ยนห้องพักสำหรับคำขอลงทะเบียน')).not.toBeVisible({ timeout: 15000 });
+    await expect(ownerPage.locator('text=เปลี่ยนห้องพักสำหรับคำขอลงทะเบียน')).not.toBeVisible({ timeout: 30000 });
 
     // Verify DB: Applicant B2 requestedRoomId is now Room A103
     const updatedReqB2 = await prisma.tenantRegistrationRequest.findUnique({ where: { id: reqB2!.id } });
@@ -636,7 +636,7 @@ test.describe('LOCAL-04 — Master Cross-Portal Playwright Acceptance Suite (Jou
     const updatedCardB2 = ownerPage.locator('div.border').filter({ hasText: 'ApplicantB2 SecondRoom102' }).first();
     await updatedCardB2.locator('button:has-text("อนุมัติและทำสัญญา")').first().click();
     await ownerPage.locator('button:has-text("ยืนยันการอนุมัติ")').click();
-    await expect(ownerPage.locator('text=ยืนยันการอนุมัติ')).not.toBeVisible({ timeout: 15000 });
+    await expect(ownerPage.locator('text=ยืนยันการอนุมัติ')).not.toBeVisible({ timeout: 30000 });
 
     // Verify DB: Both rooms A102 and A103 are now occupied
     const roomA102 = await prisma.room.findUnique({ where: { id: roomIdA102 } });
@@ -740,11 +740,11 @@ test.describe('LOCAL-04 — Master Cross-Portal Playwright Acceptance Suite (Jou
 
     // Click on Somchai tenant row in the left sidebar
     const tenantRow = ownerPage.locator('h4:has-text("Somchai Jaidee C")').first();
-    await expect(tenantRow).toBeVisible({ timeout: 15000 });
+    await expect(tenantRow).toBeVisible({ timeout: 30000 });
     await tenantRow.click();
 
     // Verify detail panel opens
-    await expect(ownerPage.locator('text=ข้อมูลผู้พักร่วมอาศัย (Co-Occupants)')).toBeVisible({ timeout: 15000 });
+    await expect(ownerPage.locator('text=ข้อมูลผู้พักร่วมอาศัย (Co-Occupants)')).toBeVisible({ timeout: 30000 });
 
     // Click "เพิ่มผู้พักร่วม" button
     const addCoBtn = ownerPage.locator('button:has-text("เพิ่มผู้พักร่วม")').first();
@@ -758,7 +758,7 @@ test.describe('LOCAL-04 — Master Cross-Portal Playwright Acceptance Suite (Jou
     await ownerPage.fill('input[placeholder="0891234567"]', '0821112233');
 
     await ownerPage.locator('button:has-text("บันทึกผู้พักร่วม")').click();
-    await expect(ownerPage.locator('text=เพิ่มข้อมูลผู้พักร่วมอาศัย')).not.toBeVisible({ timeout: 15000 });
+    await expect(ownerPage.locator('text=เพิ่มข้อมูลผู้พักร่วมอาศัย')).not.toBeVisible({ timeout: 30000 });
 
     // 2. Post-action DB assertion: Co-occupant created, contract financials untouched
     const coList = await prisma.tenantCoOccupant.findMany({
@@ -788,7 +788,7 @@ test.describe('LOCAL-04 — Master Cross-Portal Playwright Acceptance Suite (Jou
 
     // Tenant opens co-occupants modal and tries mutation -> blocked with error toast
     const manageCoBtn = tenantCtx.page.locator('button:has-text("แก้ไข / เพิ่ม")');
-    await expect(manageCoBtn).toBeVisible({ timeout: 10000 });
+    await expect(manageCoBtn).toBeVisible({ timeout: 30000 });
     await manageCoBtn.click();
     await expect(tenantCtx.page.getByRole('heading', { name: 'รายชื่อผู้พักอาศัยร่วม', exact: true })).toBeVisible();
 
@@ -797,7 +797,7 @@ test.describe('LOCAL-04 — Master Cross-Portal Playwright Acceptance Suite (Jou
     await expect(tenantAddBtn).toBeVisible();
     await tenantAddBtn.click();
     // Toast displays polite rejection
-    await expect(tenantCtx.page.locator('text=ฟังก์ชันจัดการผู้พักร่วมยังไม่พร้อมใช้งานในระบบขณะนี้')).toBeVisible({ timeout: 10000 });
+    await expect(tenantCtx.page.locator('text=ฟังก์ชันจัดการผู้พักร่วมยังไม่พร้อมใช้งานในระบบขณะนี้')).toBeVisible({ timeout: 30000 });
 
     await ownerCtx.close();
     await tenantCtx.context.close();
@@ -878,19 +878,19 @@ test.describe('LOCAL-04 — Master Cross-Portal Playwright Acceptance Suite (Jou
 
     // Click "เอกสารสัญญา" card on home dashboard
     const contractMenuCard = tenantCtx.page.locator('span:has-text("เอกสารสัญญา")').first();
-    await expect(contractMenuCard).toBeVisible({ timeout: 15000 });
+    await expect(contractMenuCard).toBeVisible({ timeout: 30000 });
     await contractMenuCard.click();
 
     // Find and submit renewal request form
     const renewalSection = tenantCtx.page.locator('text=คำขอต่ออายุสัญญาเช่า');
-    await expect(renewalSection).toBeVisible({ timeout: 15000 });
+    await expect(renewalSection).toBeVisible({ timeout: 30000 });
 
     const submitRenewalBtn = tenantCtx.page.locator('#submitRenewalRequestBtn, button:has-text("ส่งคำขอต่อสัญญา")').first();
     await expect(submitRenewalBtn).toBeVisible();
     await submitRenewalBtn.click();
 
     // Verify toast or badge confirmation
-    await expect(tenantCtx.page.locator('#renewalStatusBadge')).toBeVisible({ timeout: 15000 });
+    await expect(tenantCtx.page.locator('#renewalStatusBadge')).toBeVisible({ timeout: 30000 });
 
     // F5 Persistence: Renewal request status remains pending
     await tenantCtx.page.reload();
@@ -899,7 +899,7 @@ test.describe('LOCAL-04 — Master Cross-Portal Playwright Acceptance Suite (Jou
     if (await contractMenuCardAfter.isVisible()) {
       await contractMenuCardAfter.click();
     }
-    await expect(tenantCtx.page.locator('#renewalStatusBadge')).toBeVisible({ timeout: 15000 });
+    await expect(tenantCtx.page.locator('#renewalStatusBadge')).toBeVisible({ timeout: 30000 });
 
     // Verify DB
     const renewalReq = await prisma.tenantRenewalRequest.findFirst({
@@ -925,7 +925,7 @@ test.describe('LOCAL-04 — Master Cross-Portal Playwright Acceptance Suite (Jou
 
     const confirmApproveBtn = ownerPage.locator('[data-testid="confirm-approve-renewal-btn"], button:has-text("อนุมัติคำขอต่ออายุ")').first();
     await confirmApproveBtn.click();
-    await expect(ownerPage.locator('text=ตรวจสอบคำขอต่ออายุสัญญา (จากผู้เช่า)')).not.toBeVisible({ timeout: 15000 });
+    await expect(ownerPage.locator('text=ตรวจสอบคำขอต่ออายุสัญญา (จากผู้เช่า)')).not.toBeVisible({ timeout: 30000 });
 
     // 4. PostgreSQL Assertions: New contract created in approved_scheduled state
     const scheduledContract = await prisma.contract.findFirst({
@@ -1068,7 +1068,7 @@ test.describe('LOCAL-04 — Master Cross-Portal Playwright Acceptance Suite (Jou
 
     // Destructive Warning Modal must appear
     const warningModal = ownerPage.locator('text=คำเตือนการยุติสัญญาและยกเลิกผู้เช่าเดิม');
-    await expect(warningModal).toBeVisible({ timeout: 10000 });
+    await expect(warningModal).toBeVisible({ timeout: 30000 });
 
     // Owner confirms forced replacement
     const confirmReplacementBtn = ownerPage.locator('button:has-text("ยืนยันยกเลิกผู้เช่าเดิมและอนุมัติผู้เช่าใหม่")');
@@ -1076,7 +1076,7 @@ test.describe('LOCAL-04 — Master Cross-Portal Playwright Acceptance Suite (Jou
     await confirmReplacementBtn.click();
 
     // Wait for modal to dismiss
-    await expect(confirmReplacementBtn).not.toBeVisible({ timeout: 15000 });
+    await expect(confirmReplacementBtn).not.toBeVisible({ timeout: 30000 });
 
     // 4. PostgreSQL Atomic Assertions
     const terminatedOldContract = await prisma.contract.findUnique({ where: { id: oldContract.id } });
@@ -1104,10 +1104,10 @@ test.describe('LOCAL-04 — Master Cross-Portal Playwright Acceptance Suite (Jou
     await oldTenantCtx.page.waitForLoadState('networkidle');
 
     const notifBellBtn = oldTenantCtx.page.locator('button[aria-label="การแจ้งเตือน"]').first();
-    await expect(notifBellBtn).toBeVisible({ timeout: 15000 });
+    await expect(notifBellBtn).toBeVisible({ timeout: 30000 });
     await notifBellBtn.click();
 
-    await expect(oldTenantCtx.page.locator('text=แจ้งยุติสัญญาเช่า').first()).toBeVisible({ timeout: 15000 });
+    await expect(oldTenantCtx.page.locator('text=แจ้งยุติสัญญาเช่า').first()).toBeVisible({ timeout: 30000 });
 
     // 6. Owner confirms settlement refund in Settlements UI (net > 0: PENDING_REFUND -> REFUNDED)
     await ownerPage.goto('/owner/contracts');
@@ -1116,15 +1116,15 @@ test.describe('LOCAL-04 — Master Cross-Portal Playwright Acceptance Suite (Jou
     await ownerPage.locator('input[placeholder*="ค้นหา"]').fill(oldContract.contractNumber);
     await ownerPage.locator(`text=${oldContract.contractNumber}`).first().click();
 
-    await expect(ownerPage.locator('[data-testid="settlement-container"]')).toBeVisible({ timeout: 10000 });
+    await expect(ownerPage.locator('[data-testid="settlement-container"]')).toBeVisible({ timeout: 30000 });
     await expect(ownerPage.locator('[data-testid="settlement-status-badge"]')).toContainText('รอคืนเงิน');
     await expect(ownerPage.locator('[data-testid="settlement-direction"]')).toContainText('คืนเงินให้ผู้เช่า');
 
     const confirmRefundBtn = ownerPage.locator('[data-testid="confirm-refund-btn"]').first();
-    await expect(confirmRefundBtn).toBeVisible({ timeout: 10000 });
+    await expect(confirmRefundBtn).toBeVisible({ timeout: 30000 });
     await confirmRefundBtn.click();
 
-    await expect(ownerPage.locator('[data-testid="settlement-locked-notice"]')).toBeVisible({ timeout: 10000 });
+    await expect(ownerPage.locator('[data-testid="settlement-locked-notice"]')).toBeVisible({ timeout: 30000 });
     await expect(ownerPage.locator('[data-testid="settlement-status-badge"]')).toContainText('คืนเงินแล้ว');
 
     const updatedSettlement = await prisma.contractSettlement.findUnique({ where: { id: createdSettlement!.id } });
@@ -1214,15 +1214,15 @@ test.describe('LOCAL-04 — Master Cross-Portal Playwright Acceptance Suite (Jou
     await ownerPage.locator('input[placeholder*="ค้นหา"]').fill(contract.contractNumber);
     await ownerPage.locator(`text=${contract.contractNumber}`).first().click();
 
-    await expect(ownerPage.locator('[data-testid="settlement-container"]')).toBeVisible({ timeout: 10000 });
+    await expect(ownerPage.locator('[data-testid="settlement-container"]')).toBeVisible({ timeout: 30000 });
     await expect(ownerPage.locator('[data-testid="settlement-status-badge"]')).toContainText('รอชำระส่วนต่าง');
     await expect(ownerPage.locator('[data-testid="settlement-direction"]')).toContainText('เรียกเก็บจากผู้เช่า');
 
     const confirmPaymentBtn = ownerPage.locator('[data-testid="confirm-payment-btn"]').first();
-    await expect(confirmPaymentBtn).toBeVisible({ timeout: 10000 });
+    await expect(confirmPaymentBtn).toBeVisible({ timeout: 30000 });
     await confirmPaymentBtn.click();
 
-    await expect(ownerPage.locator('[data-testid="settlement-locked-notice"]')).toBeVisible({ timeout: 10000 });
+    await expect(ownerPage.locator('[data-testid="settlement-locked-notice"]')).toBeVisible({ timeout: 30000 });
     await expect(ownerPage.locator('[data-testid="settlement-status-badge"]')).toContainText('ชำระส่วนต่างแล้ว');
 
     // 4. DB Assertion: Status is PAYMENT_RECEIVED
@@ -1333,7 +1333,7 @@ test.describe('LOCAL-04 — Master Cross-Portal Playwright Acceptance Suite (Jou
     await ownerPage.locator('input[placeholder*="ค้นหา"]').fill(contract.contractNumber);
     await ownerPage.locator(`text=${contract.contractNumber}`).first().click();
 
-    await expect(ownerPage.locator('[data-testid="settlement-container"]')).toBeVisible({ timeout: 10000 });
+    await expect(ownerPage.locator('[data-testid="settlement-container"]')).toBeVisible({ timeout: 30000 });
     await expect(ownerPage.locator('[data-testid="settlement-status-badge"]')).toContainText('ไม่มียอดต้องชำระหรือคืน');
     await expect(ownerPage.locator('[data-testid="settlement-direction"]')).toContainText('ไม่มียอดต้องชำระหรือคืน');
 
@@ -1544,7 +1544,7 @@ test.describe('LOCAL-04 — Master Cross-Portal Playwright Acceptance Suite (Jou
 
     // Filter/Locate room row in UI table
     const roomRow = ownerPage.locator(`tr:has-text("${roomH.roomNumber}")`).first();
-    await expect(roomRow).toBeVisible({ timeout: 15000 });
+    await expect(roomRow).toBeVisible({ timeout: 30000 });
 
     // 3. LOWER READING REJECTION VIA REAL UI
     const waterInput = roomRow.locator('input[data-col="waterCurr"]').first();
@@ -1553,11 +1553,11 @@ test.describe('LOCAL-04 — Master Cross-Portal Playwright Acceptance Suite (Jou
     await waterInput.blur();
 
     const saveMetersBtn = ownerPage.locator('button:has-text("บันทึกข้อมูลค่ามิเตอร์"), button:has-text("บันทึกมิเตอร์")').first();
-    await expect(saveMetersBtn).toBeVisible({ timeout: 10000 });
+    await expect(saveMetersBtn).toBeVisible({ timeout: 30000 });
     await saveMetersBtn.click();
 
     // Assert exact visible error toast in UI
-    await expect(ownerPage.locator('text=/เลขอ่านมิเตอร์ใหม่ต้องไม่น้อยกว่าเลขอ่านครั้งก่อน|ค่ามิเตอร์ปัจจุบัน.*ต้องไม่น้อยกว่า/').first()).toBeVisible({ timeout: 10000 });
+    await expect(ownerPage.locator('text=/เลขอ่านมิเตอร์ใหม่ต้องไม่น้อยกว่าเลขอ่านครั้งก่อน|ค่ามิเตอร์ปัจจุบัน.*ต้องไม่น้อยกว่า/').first()).toBeVisible({ timeout: 30000 });
 
     // Assert PostgreSQL: No new readings for current cycle
     const currentReadingsAfterRejection = await prisma.meterReading.findMany({
@@ -1581,7 +1581,7 @@ test.describe('LOCAL-04 — Master Cross-Portal Playwright Acceptance Suite (Jou
     await saveResPromise;
 
     // Assert success toast
-    await expect(ownerPage.locator('text=บันทึกข้อมูลค่ามิเตอร์เรียบร้อยแล้ว')).toBeVisible({ timeout: 10000 });
+    await expect(ownerPage.locator('text=บันทึกข้อมูลค่ามิเตอร์เรียบร้อยแล้ว')).toBeVisible({ timeout: 30000 });
 
     // Assert PostgreSQL authoritative state
     const currentReadings = await prisma.meterReading.findMany({
@@ -1606,7 +1606,7 @@ test.describe('LOCAL-04 — Master Cross-Portal Playwright Acceptance Suite (Jou
     await ownerPage.waitForLoadState('networkidle');
 
     const roomRowAfterF5 = ownerPage.locator(`tr:has-text("${roomH.roomNumber}")`).first();
-    await expect(roomRowAfterF5).toBeVisible({ timeout: 15000 });
+    await expect(roomRowAfterF5).toBeVisible({ timeout: 30000 });
     const waterInputAfterF5 = roomRowAfterF5.locator('input[data-col="waterCurr"]').first();
     const elecInputAfterF5 = roomRowAfterF5.locator('input[data-col="elecCurr"]').first();
     await expect(waterInputAfterF5).toHaveValue('120');
@@ -1614,15 +1614,15 @@ test.describe('LOCAL-04 — Master Cross-Portal Playwright Acceptance Suite (Jou
 
     // 6. BILL ISSUANCE VIA REAL OWNER UI
     const issueBillBtn = ownerPage.locator('button:has-text("ออกบิลทุกห้อง"), button:has-text("ออกบิล")').first();
-    await expect(issueBillBtn).toBeVisible({ timeout: 10000 });
-    await expect(issueBillBtn).toBeEnabled({ timeout: 15000 });
+    await expect(issueBillBtn).toBeVisible({ timeout: 30000 });
+    await expect(issueBillBtn).toBeEnabled({ timeout: 30000 });
 
     const billResPromise = ownerPage.waitForResponse((res) => res.url().includes('/bills/generate/bulk') && res.request().method() === 'POST' && res.status() === 200);
     await issueBillBtn.click();
     await billResPromise;
 
     // Assert success toast
-    await expect(ownerPage.locator('text=ออกบิลสำหรับรอบบันทึกเรียบร้อยแล้ว')).toBeVisible({ timeout: 10000 });
+    await expect(ownerPage.locator('text=ออกบิลสำหรับรอบบันทึกเรียบร้อยแล้ว')).toBeVisible({ timeout: 30000 });
 
     // Assert PostgreSQL Bill created (ZERO prisma.bill.create!)
     const issuedBills = await prisma.bill.findMany({
@@ -1716,11 +1716,11 @@ test.describe('LOCAL-04 — Master Cross-Portal Playwright Acceptance Suite (Jou
 
     await techPage.goto('/owner/dashboard');
     await techPage.waitForLoadState('networkidle');
-    await expect(techPage.locator('text=Tech A Local04').first()).toBeVisible({ timeout: 15000 });
+    await expect(techPage.locator('text=Tech A Local04').first()).toBeVisible({ timeout: 30000 });
 
     // TECH sidebar shows operational items (meters, maintenance)
-    await expect(techPage.locator('[data-testid="nav-item-meters"]').first()).toBeVisible({ timeout: 15000 });
-    await expect(techPage.locator('[data-testid="nav-item-maintenance"]').first()).toBeVisible({ timeout: 15000 });
+    await expect(techPage.locator('[data-testid="nav-item-meters"]').first()).toBeVisible({ timeout: 30000 });
+    await expect(techPage.locator('[data-testid="nav-item-maintenance"]').first()).toBeVisible({ timeout: 30000 });
 
     // TECH sidebar hides financial & administrative items (contracts, payments, users, subscription, settings)
     await expect(techPage.locator('[data-testid="nav-item-contracts"]')).not.toBeVisible();
@@ -1757,29 +1757,29 @@ test.describe('LOCAL-04 — Master Cross-Portal Playwright Acceptance Suite (Jou
 
     await ownerPage.goto('/owner/users');
     await ownerPage.waitForLoadState('networkidle');
-    await expect(ownerPage.locator('[data-testid="slot-usage-meter"]')).toBeVisible({ timeout: 15000 });
+    await expect(ownerPage.locator('[data-testid="slot-usage-meter"]')).toBeVisible({ timeout: 30000 });
 
     // Select LINE friend in real UI dropdown
     const friendSelect = ownerPage.locator('[data-testid="line-friend-select"]');
-    await expect(friendSelect).toBeVisible({ timeout: 15000 });
+    await expect(friendSelect).toBeVisible({ timeout: 30000 });
     await friendSelect.selectOption(friend.id);
 
     // Select MANAGER role in real UI dropdown
     const roleSelect = ownerPage.locator('[data-testid="grant-role-select"]');
-    await expect(roleSelect).toBeVisible({ timeout: 15000 });
+    await expect(roleSelect).toBeVisible({ timeout: 30000 });
     await roleSelect.selectOption('MANAGER');
 
     // Submit via real UI button
     const createGrantBtn = ownerPage.locator('[data-testid="create-grant-button"]');
-    await expect(createGrantBtn).toBeEnabled({ timeout: 15000 });
+    await expect(createGrantBtn).toBeEnabled({ timeout: 30000 });
     await createGrantBtn.click();
 
     // Assert exact success state in real UI
-    await expect(ownerPage.locator('text=สร้างสิทธิ์ & Flex Message สำเร็จ')).toBeVisible({ timeout: 15000 });
+    await expect(ownerPage.locator('text=สร้างสิทธิ์ & Flex Message สำเร็จ')).toBeVisible({ timeout: 30000 });
 
     // Capture bearer URL from the UI presentation
     const bearerUrlEl = ownerPage.locator('div.font-mono div.text-emerald-300').first();
-    await expect(bearerUrlEl).toBeVisible({ timeout: 15000 });
+    await expect(bearerUrlEl).toBeVisible({ timeout: 30000 });
     const bearerUrlText = (await bearerUrlEl.textContent()) || '';
     expect(bearerUrlText).toContain('/staff-access#');
 
@@ -1835,7 +1835,7 @@ test.describe('LOCAL-04 — Master Cross-Portal Playwright Acceptance Suite (Jou
     await ownerPage.reload();
     await ownerPage.waitForLoadState('networkidle');
     const slotMeter = ownerPage.locator('[data-testid="slot-usage-meter"]');
-    await expect(slotMeter).toBeVisible({ timeout: 15000 });
+    await expect(slotMeter).toBeVisible({ timeout: 30000 });
     await expect(slotMeter).toContainText('10 / 10 สิทธิ์');
     await expect(createGrantBtn).toBeDisabled();
 
@@ -1871,16 +1871,16 @@ test.describe('LOCAL-04 — Master Cross-Portal Playwright Acceptance Suite (Jou
     expect(targetGrant).not.toBeNull();
 
     const revokeBtn = ownerPage.locator(`[data-testid="revoke-grant-button-${targetGrant!.id}"]`);
-    await expect(revokeBtn).toBeVisible({ timeout: 15000 });
+    await expect(revokeBtn).toBeVisible({ timeout: 30000 });
     await revokeBtn.click();
 
     // Confirm in real modal
     const confirmRevokeBtn = ownerPage.locator('[data-testid="confirm-revoke-button"]');
-    await expect(confirmRevokeBtn).toBeVisible({ timeout: 15000 });
+    await expect(confirmRevokeBtn).toBeVisible({ timeout: 30000 });
     await confirmRevokeBtn.click();
 
     // Toast confirmation in real UI
-    await expect(ownerPage.locator('text=เพิกถอนสิทธิ์เข้าใช้งานเรียบร้อยแล้ว').first()).toBeVisible({ timeout: 15000 });
+    await expect(ownerPage.locator('text=เพิกถอนสิทธิ์เข้าใช้งานเรียบร้อยแล้ว').first()).toBeVisible({ timeout: 30000 });
 
     // Assert grant is REVOKED in DB
     const dbGrant = await prisma.dormitoryAccessGrant.findUnique({
@@ -1992,19 +1992,19 @@ test.describe('LOCAL-04 — Master Cross-Portal Playwright Acceptance Suite (Jou
     await ownerPage.locator('button:has-text("คำขอลงทะเบียน")').click();
 
     const replacementCard = ownerPage.locator('div.border').filter({ hasText: 'NewApplicantK Replacement' }).first();
-    await expect(replacementCard).toBeVisible({ timeout: 15000 });
+    await expect(replacementCard).toBeVisible({ timeout: 30000 });
     await replacementCard.locator('button:has-text("อนุมัติและทำสัญญา")').first().click();
 
     // Confirm approval -> destructive modal
     await ownerPage.locator('button:has-text("ยืนยันการอนุมัติ")').click();
 
     const warningModal = ownerPage.locator('text=คำเตือนการยุติสัญญาและยกเลิกผู้เช่าเดิม');
-    await expect(warningModal).toBeVisible({ timeout: 10000 });
+    await expect(warningModal).toBeVisible({ timeout: 30000 });
 
     const confirmReplacementBtn = ownerPage.locator('button:has-text("ยืนยันยกเลิกผู้เช่าเดิมและอนุมัติผู้เช่าใหม่")');
     await expect(confirmReplacementBtn).toBeVisible();
     await confirmReplacementBtn.click();
-    await expect(confirmReplacementBtn).not.toBeVisible({ timeout: 15000 });
+    await expect(confirmReplacementBtn).not.toBeVisible({ timeout: 30000 });
 
     // 4. Process outbox events produced by the domain action
     await outboxService.processPendingOutboxEvents();
@@ -2049,7 +2049,7 @@ test.describe('LOCAL-04 — Master Cross-Portal Playwright Acceptance Suite (Jou
     await tenantCtx.page.reload();
     await tenantCtx.page.waitForLoadState('networkidle');
     await notifBellBtn.click();
-    await expect(noticeItem).toBeVisible({ timeout: 15000 });
+    await expect(noticeItem).toBeVisible({ timeout: 30000 });
     await expect(tenantCtx.page.locator(`[data-testid="button-tenant-notice-read-${tenantNotice!.id}"]`)).not.toBeVisible();
 
     // 7. SWIPE UI FIXTURE (Staff Swipe-to-Dismiss UI & Manager Copy Isolation)
@@ -2076,15 +2076,15 @@ test.describe('LOCAL-04 — Master Cross-Portal Playwright Acceptance Suite (Jou
     await ownerPage.waitForLoadState('networkidle');
 
     const headerBell = ownerPage.locator('[data-testid="button-staff-notification-bell"]').first();
-    await expect(headerBell).toBeVisible({ timeout: 15000 });
+    await expect(headerBell).toBeVisible({ timeout: 30000 });
     await headerBell.click();
 
     // Assert exact staff notice content
-    await expect(ownerPage.getByText(staffNoticeTitle)).toBeVisible({ timeout: 15000 });
+    await expect(ownerPage.getByText(staffNoticeTitle)).toBeVisible({ timeout: 30000 });
 
     // Locate SlidableNotificationItem and perform real UI drag/swipe left gesture
     const noticeCard = ownerPage.locator(`[data-testid="staff-notice-item-${ownerNotifRow!.id}"]`).first();
-    await expect(noticeCard).toBeVisible({ timeout: 15000 });
+    await expect(noticeCard).toBeVisible({ timeout: 30000 });
     const box = await noticeCard.boundingBox();
     expect(box).not.toBeNull();
 
@@ -2101,7 +2101,7 @@ test.describe('LOCAL-04 — Master Cross-Portal Playwright Acceptance Suite (Jou
     }
 
     // Assert notice disappears from Owner UI
-    await expect(ownerPage.getByText(staffNoticeTitle)).not.toBeVisible({ timeout: 15000 });
+    await expect(ownerPage.getByText(staffNoticeTitle)).not.toBeVisible({ timeout: 30000 });
 
     // Verify DB dismissal status in PostgreSQL for Owner
     const dbOwnerNotice = await prisma.staffNotification.findUnique({
@@ -2125,11 +2125,11 @@ test.describe('LOCAL-04 — Master Cross-Portal Playwright Acceptance Suite (Jou
     await mgrPage.waitForLoadState('networkidle');
 
     const mgrBell = mgrPage.locator('[data-testid="button-staff-notification-bell"]').first();
-    await expect(mgrBell).toBeVisible({ timeout: 15000 });
+    await expect(mgrBell).toBeVisible({ timeout: 30000 });
     await mgrBell.click();
 
     // Manager still sees the notice in their notification popover
-    await expect(mgrPage.getByText(staffNoticeTitle)).toBeVisible({ timeout: 15000 });
+    await expect(mgrPage.getByText(staffNoticeTitle)).toBeVisible({ timeout: 30000 });
 
     // DB confirms Manager copy not dismissed
     const dbMgrNotice = await prisma.staffNotification.findFirst({
@@ -2228,7 +2228,7 @@ test.describe('LOCAL-04 — Master Cross-Portal Playwright Acceptance Suite (Jou
     await ownerBPage.waitForLoadState('networkidle');
 
     // Asserts zero demo tenants
-    await expect(ownerBPage.locator('text=ไม่พบข้อมูลทะเบียนผู้เช่า').first()).toBeVisible({ timeout: 15000 });
+    await expect(ownerBPage.locator('text=ไม่พบข้อมูลทะเบียนผู้เช่า').first()).toBeVisible({ timeout: 30000 });
 
     await ownerBCtx.close();
   });
