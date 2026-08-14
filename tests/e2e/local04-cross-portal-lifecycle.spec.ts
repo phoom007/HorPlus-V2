@@ -1623,12 +1623,13 @@ test.describe.serial('LOCAL-04 — Master Cross-Portal Playwright Acceptance Sui
     let targetTenant = createdTenantA;
     let targetTenantUser = tenantUserA;
     if (!targetTenant) {
-      targetTenant = (await prisma.tenant.findFirst({
+      targetTenant = await prisma.tenant.findFirst({
         where: { dormitoryId: dormIdA },
-        include: { user: true },
-      })) as any;
-      if (targetTenant?.user) {
-        targetTenantUser = targetTenant.user;
+      });
+      if (targetTenant?.userId) {
+        targetTenantUser = (await prisma.user.findUnique({
+          where: { id: targetTenant.userId },
+        })) as any;
       }
     }
 
