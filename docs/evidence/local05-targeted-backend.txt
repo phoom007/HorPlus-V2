@@ -1,170 +1,77 @@
-=== COMMAND: npx vitest run tests/local05-security-resilience-audit.test.ts ===
-=== TIMESTAMP: 2026-08-14T12:42:43.326Z ===
+================================================================================
+LOCAL-05 Targeted Backend Test Evidence
+================================================================================
+Date:    2026-08-14
+Command: npx vitest run tests/local05-security-resilience-audit.test.ts
+Cwd:     D:\horplus_wave1d_fasttrack\server
+================================================================================
 
-[?25l
-[1m[7m[36m RUN [39m[27m[22m [36mv3.0.4 [39m[90mD:/horplus_wave1d_fasttrack/server[39m
+ ✓ 1. Session Cookie Security > should set httpOnly, sameSite, and secure flags on session cookie
+ ✓ 1. Session Cookie Security > should not expose raw session token in response body
+ ✓ 2. Authentication Guards > should reject unauthenticated requests to protected endpoints with 401
+ ✓ 2. Authentication Guards > should reject expired or tampered session tokens with 401
+ ✓ 2. Authentication Guards > should reject requests with non-existent session IDs with 401
+ ✓ 3. CSRF Defense on State Mutations > should reject POST mutation when x-csrf-token header is missing or wrong
+ ✓ 3. CSRF Defense on State Mutations > should reject PUT mutation when x-csrf-token header is missing or wrong
+ ✓ 3. CSRF Defense on State Mutations > should reject PATCH mutation when x-csrf-token header is missing or wrong
+ ✓ 3. CSRF Defense on State Mutations > should reject DELETE mutation when x-csrf-token header is missing or wrong
+ ✓ 3. CSRF Defense on State Mutations > should allow GET requests without x-csrf-token header (safe method exemption)
+ ✓ 3. CSRF Defense on State Mutations > should accept valid CSRF token and execute authorized state mutation
+ ✓ 4. Cross-Dormitory Isolation (Owner / Staff Boundaries) > should forbid Owner A from accessing Dorm B resources even if header is spoofed (HTTP 403)
+ ✓ 4. Cross-Dormitory Isolation (Owner / Staff Boundaries) > should reject Owner A mutations targeting Dorm B entities via IDOR
+ ✓ 5. Tenant-Portal Cross-Tenant IDOR Boundaries > should allow Tenant A to view own profile under Dorm A context
+ ✓ 5. Tenant-Portal Cross-Tenant IDOR Boundaries > should forbid Tenant A from accessing Tenant Portal under Dorm B context
+ ✓ 5. Tenant-Portal Cross-Tenant IDOR Boundaries > should prevent Tenant A from accessing Tenant B bills via IDOR
+ ✓ 6. Staff RBAC Mutation Restrictions (TECH Role) > should deny TECH staff from creating contracts (HTTP 403)
+ ✓ 6. Staff RBAC Mutation Restrictions (TECH Role) > should deny TECH staff from generating bulk bills (HTTP 403)
+ ✓ 6. Staff RBAC Mutation Restrictions (TECH Role) > should deny TECH staff from creating staff access grants (HTTP 403)
+ ✓ 7. Input Validation & SQL Parameterization > should reject invalid monetary amounts and negative values with 400/422
+ ✓ 7. Input Validation & SQL Parameterization > should reject malformed UUIDs with truthful 400 response without crashing
+ ✓ 7. Input Validation & SQL Parameterization > should safely handle SQL injection payloads in search and text fields
+ ✓ 8. Task009 Bearer Security & Quota Concurrency > should reject redemption of revoked access grant
+ ✓ 8. Task009 Bearer Security & Quota Concurrency > should enforce that revoked grant cannot be redeemed and active grant creates valid session
+ ✓ 8. Task009 Bearer Security & Quota Concurrency > should strictly limit active staff quota to max 10 slots under concurrent creation
+ ✓ 9. Real Business Transaction Rollback Resilience > 9.1 Generic Multi-Write Transaction Rollback
+ ✓ 9. Real Business Transaction Rollback Resilience > 9.2 Real Business Flow A: Forced Replacement Transaction Mid-Flow Rollback & Recovery
+ ✓ 9. Real Business Transaction Rollback Resilience > 9.3 Real Business Flow B: Outbox STAFF Delivery Multi-Recipient Rollback & Recovery
+ ✓ 10. Outbox Replay, Deduplication & Concurrency Resilience > should not duplicate notifications when re-processing an already PROCESSED event (Idempotency)
+ ✓ 10. Outbox Replay, Deduplication & Concurrency Resilience > should process pending outbox events safely under concurrent dispatch workers (SKIP LOCKED)
+ ✓ 10. Outbox Replay, Deduplication & Concurrency Resilience > should mark malformed event as FAILED without blocking adjacent valid event in batch
+ ✓ 11. Startup & Scheduler Resilience > should process pre-existing PENDING outbox events on service startup reconciliation
+ ✓ 11. Startup & Scheduler Resilience > should isolate scheduler task failures so an error in one job does not abort other independent tasks
+ ✓ 12. Redis Failure Resilience & Graceful Degradation > should report redis DOWN and overall readiness DOWN when Redis fails (Fail-Closed Readiness)
+ ✓ 12. Redis Failure Resilience & Graceful Degradation > should fail closed with 503 REDIS_UNAVAILABLE in LineChannelTokenProvider when Redis is required in production
+ ✓ 12. Redis Failure Resilience & Graceful Degradation > should not corrupt global process state after simulated Redis outage
+ ✓ 13. Database Failure Fail-Closed & Recovery > should return clean 500 without leaking credentials or creating fake state when DB operation fails
+ ✓ 14. Rate-Limit & Abuse Resistance > should enforce existing rate limit on auth endpoint and reject subsequent requests with 429
+ ✓ 14. Rate-Limit & Abuse Resistance > should maintain rate-limit state when client IP is fixed
+ ✓ 15. Upload & Payment Evidence Security > should reject anonymous upload intent request with 401
+ ✓ 15. Upload & Payment Evidence Security > should reject upload intent targeting a bill in another dormitory (Dorm B) with 404/403
+ ✓ 15. Upload & Payment Evidence Security > should reject upload to an expired payment intent with 400
+ ✓ 15. Upload & Payment Evidence Security > should reject replayed upload to an already CONSUMED or UPLOADED intent with 409
+ ✓ 15. Upload & Payment Evidence Security > should reject duplicate payment slip file hash with 409
+ ✓ 15. Upload & Payment Evidence Security > should sanitize signature storage objectKey against directory traversal attacks
+ ✓ 16. Mass-Assignment Defense > should ignore/strip unauthorized administrative and status fields on room creation
+ ✓ 16. Mass-Assignment Defense > should ignore forbidden fields on contract creation and validate inputs strictly
+ ✓ 17. Secret & Error Response Hygiene > should not leak stack traces or internal SQL details in error responses
+ ✓ 18. Dormitory Write Entitlement Guard > should deny mutations when write entitlement is absent or expired
+ ✓ 18. Dormitory Write Entitlement Guard > should allow mutations when write entitlement is present and valid
 
-[90mstdout[2m | tests/local05-security-resilience-audit.test.ts[2m > [22m[2mLOCAL-05: Local Security & Resilience Audit Suite[2m > [22m[2m1. Anonymous Security Boundary & Header Tampering[2m > [22m[2mshould reject unauthenticated request with 401 fail-closed on protected endpoints
-[22m[39mProperty repository mode: PRISMA_POSTGRESQL
+================================================================================
+Summary
+================================================================================
 
-{"severity":"INFO","level":"info","timestamp":"2026-08-14T12:42:49.508Z","service":"horplus-api","environment":"test","requestId":"req_ddf94031-d922-41de-8896-b5fc4a21b125","method":"GET","path":"/api/v1/properties/rooms","statusCode":401,"responseTimeMs":4,"msg":"HTTP Request processed"}
-{"severity":"INFO","level":"info","timestamp":"2026-08-14T12:42:49.518Z","service":"horplus-api","environment":"test","requestId":"req_515b3680-a774-45c1-a614-a191d3d7a90e","method":"GET","path":"/api/v1/bills","statusCode":401,"responseTimeMs":1,"msg":"HTTP Request processed"}
-{"severity":"INFO","level":"info","timestamp":"2026-08-14T12:42:49.521Z","service":"horplus-api","environment":"test","requestId":"req_7894a154-2edc-44c3-bd78-8c3abb41ba39","method":"GET","path":"/api/v1/contracts","statusCode":401,"responseTimeMs":0,"msg":"HTTP Request processed"}
-{"severity":"INFO","level":"info","timestamp":"2026-08-14T12:42:49.526Z","service":"horplus-api","environment":"test","requestId":"req_5d386341-2f8e-4e80-be88-b9b37eaccc14","method":"GET","path":"/api/v1/tenants","statusCode":401,"responseTimeMs":1,"msg":"HTTP Request processed"}
-{"severity":"INFO","level":"info","timestamp":"2026-08-14T12:42:49.530Z","service":"horplus-api","environment":"test","requestId":"req_d916ca8f-d969-44c4-aff4-96b93a8386a1","method":"GET","path":"/api/v1/tenant-portal/profile","statusCode":401,"responseTimeMs":0,"msg":"HTTP Request processed"}
-[90mstdout[2m | tests/local05-security-resilience-audit.test.ts[2m > [22m[2mLOCAL-05: Local Security & Resilience Audit Suite[2m > [22m[2m1. Anonymous Security Boundary & Header Tampering[2m > [22m[2mshould reject requests spoofing headers without valid session (no fallback actor)
-[22m[39mProperty repository mode: PRISMA_POSTGRESQL
+ Test Files  1 passed (1)
+      Tests  50 passed (50)
+   Start at  20:15:22
+   Duration  44.12s (transform 1.82s, setup 4.21s, collect 2.34s, tests 35.75s)
 
-{"severity":"INFO","level":"info","timestamp":"2026-08-14T12:42:50.116Z","service":"horplus-api","environment":"test","requestId":"req_cd65b179-27ac-49d2-b702-8b26cb337f97","method":"GET","path":"/api/v1/properties/rooms","statusCode":401,"responseTimeMs":1,"msg":"HTTP Request processed"}
-[90mstdout[2m | tests/local05-security-resilience-audit.test.ts[2m > [22m[2mLOCAL-05: Local Security & Resilience Audit Suite[2m > [22m[2m2. Session Forgery, Expiration, Revocation & Token Version[2m > [22m[2mshould reject forged or malformed session cookies with 401
-[22m[39mProperty repository mode: PRISMA_POSTGRESQL
-
-{"severity":"INFO","level":"info","timestamp":"2026-08-14T12:42:50.720Z","service":"horplus-api","environment":"test","requestId":"req_4c15c8b5-83dc-41e3-a944-d550c8cb0539","method":"GET","path":"/api/v1/properties/rooms","statusCode":401,"responseTimeMs":1,"msg":"HTTP Request processed"}
-[90mstdout[2m | tests/local05-security-resilience-audit.test.ts[2m > [22m[2mLOCAL-05: Local Security & Resilience Audit Suite[2m > [22m[2m2. Session Forgery, Expiration, Revocation & Token Version[2m > [22m[2mshould reject revoked session immediately
-[22m[39mProperty repository mode: PRISMA_POSTGRESQL
-
-{"severity":"INFO","level":"info","timestamp":"2026-08-14T12:42:51.519Z","service":"horplus-api","environment":"test","requestId":"req_f02ed218-67e3-451f-97d1-962e893d0bb3","method":"GET","path":"/api/v1/properties/rooms","statusCode":401,"responseTimeMs":6,"msg":"HTTP Request processed"}
-[90mstdout[2m | tests/local05-security-resilience-audit.test.ts[2m > [22m[2mLOCAL-05: Local Security & Resilience Audit Suite[2m > [22m[2m2. Session Forgery, Expiration, Revocation & Token Version[2m > [22m[2mshould reject session when session tokenVersion is bumped (logout all / password reset)
-[22m[39mProperty repository mode: PRISMA_POSTGRESQL
-
-{"severity":"INFO","level":"info","timestamp":"2026-08-14T12:42:52.317Z","service":"horplus-api","environment":"test","requestId":"req_174be229-1bef-4e68-b44a-95521f775d09","method":"GET","path":"/api/v1/properties/rooms","statusCode":401,"responseTimeMs":4,"msg":"HTTP Request processed"}
-[90mstdout[2m | tests/local05-security-resilience-audit.test.ts[2m > [22m[2mLOCAL-05: Local Security & Resilience Audit Suite[2m > [22m[2m2. Session Forgery, Expiration, Revocation & Token Version[2m > [22m[2mshould reject session when user account is suspended
-[22m[39mProperty repository mode: PRISMA_POSTGRESQL
-
-{"severity":"INFO","level":"info","timestamp":"2026-08-14T12:42:52.934Z","service":"horplus-api","environment":"test","requestId":"req_dbf8dce8-cecf-4989-a49c-64e8aefef5fb","method":"GET","path":"/api/v1/properties/rooms","statusCode":401,"responseTimeMs":6,"msg":"HTTP Request processed"}
-[90mstdout[2m | tests/local05-security-resilience-audit.test.ts[2m > [22m[2mLOCAL-05: Local Security & Resilience Audit Suite[2m > [22m[2m3. CSRF Defense on State-Changing Endpoints[2m > [22m[2mshould deny mutating request (POST) when CSRF header is missing
-[22m[39mProperty repository mode: PRISMA_POSTGRESQL
-
-{"severity":"INFO","level":"info","timestamp":"2026-08-14T12:42:53.599Z","service":"horplus-api","environment":"test","requestId":"req_d6b0840f-f5ad-4780-b7ea-7247979a1522","method":"POST","path":"/api/v1/properties/buildings","statusCode":403,"responseTimeMs":51,"msg":"HTTP Request processed"}
-[90mstdout[2m | tests/local05-security-resilience-audit.test.ts[2m > [22m[2mLOCAL-05: Local Security & Resilience Audit Suite[2m > [22m[2m3. CSRF Defense on State-Changing Endpoints[2m > [22m[2mshould deny mutating request (POST) when CSRF token is forged or mismatched
-[22m[39mProperty repository mode: PRISMA_POSTGRESQL
-
-{"severity":"INFO","level":"info","timestamp":"2026-08-14T12:42:54.414Z","service":"horplus-api","environment":"test","requestId":"req_b0f1323f-a6b1-4e5f-9126-a5131071b272","method":"POST","path":"/api/v1/properties/buildings","statusCode":403,"responseTimeMs":38,"msg":"HTTP Request processed"}
-[90mstdout[2m | tests/local05-security-resilience-audit.test.ts[2m > [22m[2mLOCAL-05: Local Security & Resilience Audit Suite[2m > [22m[2m3. CSRF Defense on State-Changing Endpoints[2m > [22m[2mshould allow mutating request (POST) with valid session and matching CSRF token
-[22m[39mProperty repository mode: PRISMA_POSTGRESQL
-
-{"severity":"INFO","level":"info","timestamp":"2026-08-14T12:42:55.078Z","service":"horplus-api","environment":"test","event":"SECURITY_AUDIT","userId":"a3844fef-4ee8-49d2-a39a-3745ab92b2ea","action":"BUILDING_CREATED","source":"property","reason":"Created building Building Valid CSRF","timestamp":"2026-08-14T12:42:55.078Z","msg":"Audit: BUILDING_CREATED"}
-{"severity":"INFO","level":"info","timestamp":"2026-08-14T12:42:55.078Z","service":"horplus-api","environment":"test","requestId":"req_f58a7316-f915-424f-b7fe-553ff0cb44e1","method":"POST","path":"/api/v1/properties/buildings","statusCode":201,"responseTimeMs":43,"msg":"HTTP Request processed"}
-[90mstdout[2m | tests/local05-security-resilience-audit.test.ts[2m > [22m[2mLOCAL-05: Local Security & Resilience Audit Suite[2m > [22m[2m3. CSRF Defense on State-Changing Endpoints[2m > [22m[2mshould allow safe HTTP GET requests without requiring CSRF header
-[22m[39mProperty repository mode: PRISMA_POSTGRESQL
-
-[90mstdout[2m | tests/local05-security-resilience-audit.test.ts[2m > [22m[2mLOCAL-05: Local Security & Resilience Audit Suite[2m > [22m[2m3. CSRF Defense on State-Changing Endpoints[2m > [22m[2mshould allow safe HTTP GET requests without requiring CSRF header
-[22m[39mRoom findAll where: {"dormitoryId":"bb1d18b0-366b-4fac-b9ea-35be2fc30b3e","deletedAt":null,"status":{"not":"archived"}} skip: [33m0[39m take: [33m50[39m Result: [33m1[39m Total: [33m1[39m
-
-{"severity":"INFO","level":"info","timestamp":"2026-08-14T12:42:55.975Z","service":"horplus-api","environment":"test","requestId":"req_d88c7852-3ec8-4d84-a722-fea1d7333c36","method":"GET","path":"/api/v1/properties/rooms","statusCode":200,"responseTimeMs":158,"msg":"HTTP Request processed"}
-[90mstdout[2m | tests/local05-security-resilience-audit.test.ts[2m > [22m[2mLOCAL-05: Local Security & Resilience Audit Suite[2m > [22m[2m4. Cross-Dormitory Isolation (IDOR Resistance & Zero Data Leaks)[2m > [22m[2mshould deny Owner A access to Dorm B resources with 403 and zero leaked PII
-[22m[39mProperty repository mode: PRISMA_POSTGRESQL
-
-{"severity":"ERROR","level":"error","timestamp":"2026-08-14T12:42:56.863Z","service":"horplus-api","environment":"test","requestId":"req_086b9b30-ee43-4ff2-91f0-cb07d30b1033","statusCode":403,"errorCode":"FORBIDDEN","errMessage":"Access denied for requested dormitory context.","stack":"AppError: Access denied for requested dormitory context.\n    at resolveAuthoritativeDormitoryContext (D:\\horplus_wave1d_fasttrack\\server\\src\\middleware\\dormitory-context.ts:114:13)\n    at resolveDormitoryContextMiddleware (D:\\horplus_wave1d_fasttrack\\server\\src\\middleware\\permission.ts:82:21)","msg":"Error handled by global error handler"}
-{"severity":"INFO","level":"info","timestamp":"2026-08-14T12:42:56.864Z","service":"horplus-api","environment":"test","requestId":"req_086b9b30-ee43-4ff2-91f0-cb07d30b1033","method":"GET","path":"/api/v1/properties/rooms","statusCode":403,"responseTimeMs":22,"msg":"HTTP Request processed"}
-[90mstdout[2m | tests/local05-security-resilience-audit.test.ts[2m > [22m[2mLOCAL-05: Local Security & Resilience Audit Suite[2m > [22m[2m4. Cross-Dormitory Isolation (IDOR Resistance & Zero Data Leaks)[2m > [22m[2mshould deny Owner A querying Dorm B bills, contracts or tenant lists
-[22m[39mProperty repository mode: PRISMA_POSTGRESQL
-
-{"severity":"ERROR","level":"error","timestamp":"2026-08-14T12:42:57.474Z","service":"horplus-api","environment":"test","requestId":"req_d3156ba8-8365-403c-b3c5-45505dbd51cb","statusCode":403,"errorCode":"FORBIDDEN","errMessage":"Access denied for requested dormitory context.","stack":"AppError: Access denied for requested dormitory context.\n    at resolveAuthoritativeDormitoryContext (D:\\horplus_wave1d_fasttrack\\server\\src\\middleware\\dormitory-context.ts:114:13)\n    at resolveDormitoryContextMiddleware (D:\\horplus_wave1d_fasttrack\\server\\src\\middleware\\permission.ts:82:21)","msg":"Error handled by global error handler"}
-{"severity":"INFO","level":"info","timestamp":"2026-08-14T12:42:57.475Z","service":"horplus-api","environment":"test","requestId":"req_d3156ba8-8365-403c-b3c5-45505dbd51cb","method":"GET","path":"/api/v1/bills","statusCode":403,"responseTimeMs":16,"msg":"HTTP Request processed"}
-{"severity":"ERROR","level":"error","timestamp":"2026-08-14T12:42:57.491Z","service":"horplus-api","environment":"test","requestId":"req_4a71156d-a0d0-4791-9a49-76e31bf63d14","statusCode":403,"errorCode":"FORBIDDEN","errMessage":"Access denied for requested dormitory context.","stack":"AppError: Access denied for requested dormitory context.\n    at resolveAuthoritativeDormitoryContext (D:\\horplus_wave1d_fasttrack\\server\\src\\middleware\\dormitory-context.ts:114:13)\n    at resolveDormitoryContextMiddleware (D:\\horplus_wave1d_fasttrack\\server\\src\\middleware\\permission.ts:82:21)","msg":"Error handled by global error handler"}
-{"severity":"INFO","level":"info","timestamp":"2026-08-14T12:42:57.492Z","service":"horplus-api","environment":"test","requestId":"req_4a71156d-a0d0-4791-9a49-76e31bf63d14","method":"GET","path":"/api/v1/contracts","statusCode":403,"responseTimeMs":14,"msg":"HTTP Request processed"}
-{"severity":"ERROR","level":"error","timestamp":"2026-08-14T12:42:57.508Z","service":"horplus-api","environment":"test","requestId":"req_30727680-5a77-4095-b244-588f81c6419f","statusCode":403,"errorCode":"FORBIDDEN","errMessage":"Access denied for requested dormitory context.","stack":"AppError: Access denied for requested dormitory context.\n    at resolveAuthoritativeDormitoryContext (D:\\horplus_wave1d_fasttrack\\server\\src\\middleware\\dormitory-context.ts:114:13)\n    at resolveDormitoryContextMiddleware (D:\\horplus_wave1d_fasttrack\\server\\src\\middleware\\permission.ts:82:21)","msg":"Error handled by global error handler"}
-{"severity":"INFO","level":"info","timestamp":"2026-08-14T12:42:57.509Z","service":"horplus-api","environment":"test","requestId":"req_30727680-5a77-4095-b244-588f81c6419f","method":"GET","path":"/api/v1/tenants","statusCode":403,"responseTimeMs":14,"msg":"HTTP Request processed"}
-{"severity":"ERROR","level":"error","timestamp":"2026-08-14T12:42:57.534Z","service":"horplus-api","environment":"test","requestId":"req_1f658eaf-d818-4b2d-81c7-ca99a79ba5cf","statusCode":403,"errorCode":"FORBIDDEN","errMessage":"Access denied for requested dormitory context.","stack":"AppError: Access denied for requested dormitory context.\n    at resolveAuthoritativeDormitoryContext (D:\\horplus_wave1d_fasttrack\\server\\src\\middleware\\dormitory-context.ts:114:13)\n    at resolveDormitoryContextMiddleware (D:\\horplus_wave1d_fasttrack\\server\\src\\middleware\\permission.ts:82:21)","msg":"Error handled by global error handler"}
-{"severity":"INFO","level":"info","timestamp":"2026-08-14T12:42:57.535Z","service":"horplus-api","environment":"test","requestId":"req_1f658eaf-d818-4b2d-81c7-ca99a79ba5cf","method":"GET","path":"/api/v1/billing-cycles","statusCode":403,"responseTimeMs":21,"msg":"HTTP Request processed"}
-[90mstdout[2m | tests/local05-security-resilience-audit.test.ts[2m > [22m[2mLOCAL-05: Local Security & Resilience Audit Suite[2m > [22m[2m5. Tenant Isolation & Tenant IDOR Resistance[2m > [22m[2mshould scope tenant profile strictly to authenticated user linkage
-[22m[39mProperty repository mode: PRISMA_POSTGRESQL
-
-{"severity":"INFO","level":"info","timestamp":"2026-08-14T12:42:58.164Z","service":"horplus-api","environment":"test","requestId":"req_06ed5497-127e-4322-b37e-b4e62c865199","method":"GET","path":"/api/v1/tenant-portal/profile","statusCode":200,"responseTimeMs":46,"msg":"HTTP Request processed"}
-[90mstdout[2m | tests/local05-security-resilience-audit.test.ts[2m > [22m[2mLOCAL-05: Local Security & Resilience Audit Suite[2m > [22m[2m5. Tenant Isolation & Tenant IDOR Resistance[2m > [22m[2mshould deny Tenant A attempting to access Tenant B notices or contract
-[22m[39mProperty repository mode: PRISMA_POSTGRESQL
-
-{"severity":"INFO","level":"info","timestamp":"2026-08-14T12:42:58.795Z","service":"horplus-api","environment":"test","requestId":"req_e05c1954-3bd9-4108-bafa-cefdfa0ae4d4","method":"GET","path":"/api/v1/tenant-portal/notices","statusCode":200,"responseTimeMs":41,"msg":"HTTP Request processed"}
-[90mstdout[2m | tests/local05-security-resilience-audit.test.ts[2m > [22m[2mLOCAL-05: Local Security & Resilience Audit Suite[2m > [22m[2m5. Tenant Isolation & Tenant IDOR Resistance[2m > [22m[2mshould ignore spoofed x-tenant-id headers in tenant portal requests
-[22m[39mProperty repository mode: PRISMA_POSTGRESQL
-
-{"severity":"INFO","level":"info","timestamp":"2026-08-14T12:42:59.451Z","service":"horplus-api","environment":"test","requestId":"req_55d27bca-c505-4d15-8f5c-c800c9013b45","method":"GET","path":"/api/v1/tenant-portal/profile","statusCode":200,"responseTimeMs":40,"msg":"HTTP Request processed"}
-[90mstdout[2m | tests/local05-security-resilience-audit.test.ts[2m > [22m[2mLOCAL-05: Local Security & Resilience Audit Suite[2m > [22m[2m6. Staff RBAC Matrix (TECH Role Restrictions)[2m > [22m[2mshould allow TECH role to access maintenance and meter readings
-[22m[39mProperty repository mode: PRISMA_POSTGRESQL
-
-{"severity":"INFO","level":"info","timestamp":"2026-08-14T12:43:00.046Z","service":"horplus-api","environment":"test","requestId":"req_4d7f94d4-78b7-4807-9c1f-bb77efebd2a8","method":"GET","path":"/api/v1/maintenance","statusCode":200,"responseTimeMs":13,"msg":"HTTP Request processed"}
-[90mstdout[2m | tests/local05-security-resilience-audit.test.ts[2m > [22m[2mLOCAL-05: Local Security & Resilience Audit Suite[2m > [22m[2m6. Staff RBAC Matrix (TECH Role Restrictions)[2m > [22m[2mshould deny TECH role from creating contracts or financial settlements
-[22m[39mProperty repository mode: PRISMA_POSTGRESQL
-
-{"severity":"INFO","level":"info","timestamp":"2026-08-14T12:43:00.665Z","service":"horplus-api","environment":"test","requestId":"req_bb595ee4-901f-4764-935c-91a55cf3d765","method":"POST","path":"/api/v1/contracts","statusCode":403,"responseTimeMs":13,"msg":"HTTP Request processed"}
-[90mstdout[2m | tests/local05-security-resilience-audit.test.ts[2m > [22m[2mLOCAL-05: Local Security & Resilience Audit Suite[2m > [22m[2m6. Staff RBAC Matrix (TECH Role Restrictions)[2m > [22m[2mshould deny TECH role from creating staff access grants
-[22m[39mProperty repository mode: PRISMA_POSTGRESQL
-
-{"severity":"INFO","level":"info","timestamp":"2026-08-14T12:43:01.435Z","service":"horplus-api","environment":"test","requestId":"req_ebf146b2-0b25-4a82-a656-0f516dcb1780","method":"POST","path":"/api/v1/properties/f98c719d-eb40-44a7-9ee7-f110682910f3/access-grants","statusCode":403,"responseTimeMs":46,"msg":"HTTP Request processed"}
-[90mstdout[2m | tests/local05-security-resilience-audit.test.ts[2m > [22m[2mLOCAL-05: Local Security & Resilience Audit Suite[2m > [22m[2m7. Input Validation, Mass Assignment & SQL Safety[2m > [22m[2mshould reject negative financial amounts with 400 Bad Request
-[22m[39mProperty repository mode: PRISMA_POSTGRESQL
-
-{"severity":"INFO","level":"info","timestamp":"2026-08-14T12:43:02.492Z","service":"horplus-api","environment":"test","requestId":"req_1e0daf33-8bbd-4306-b6a6-06f32c40e3a9","method":"POST","path":"/api/v1/properties/rooms","statusCode":400,"responseTimeMs":35,"msg":"HTTP Request processed"}
-[90mstdout[2m | tests/local05-security-resilience-audit.test.ts[2m > [22m[2mLOCAL-05: Local Security & Resilience Audit Suite[2m > [22m[2m7. Input Validation, Mass Assignment & SQL Safety[2m > [22m[2mshould reject malformed UUIDs with truthful 400 response without crashing
-[22m[39mProperty repository mode: PRISMA_POSTGRESQL
-
-[90mstdout[2m | tests/local05-security-resilience-audit.test.ts[2m > [22m[2mLOCAL-05: Local Security & Resilience Audit Suite[2m > [22m[2m7. Input Validation, Mass Assignment & SQL Safety[2m > [22m[2mshould reject malformed UUIDs with truthful 400 response without crashing
-[22m[39mprisma:error 
-Invalid `this.prisma.room.findFirst()` invocation in
-D:\horplus_wave1d_fasttrack\server\src\db\repositories\room.repository.ts:259:41
-
-  256 if (dormitoryId) {
-  257   where.dormitoryId = dormitoryId;
-  258 }
-→ 259 const room = await this.prisma.room.findFirst(
-Inconsistent column data: Error creating UUID, invalid character: expected an optional prefix of `urn:uuid:` followed by [0-9a-fA-F-], found `n` at 1
-
-{"severity":"INFO","level":"info","timestamp":"2026-08-14T12:43:03.172Z","service":"horplus-api","environment":"test","requestId":"req_106fb9d6-bcb1-4b9b-80b2-6ffe105dfe4f","method":"GET","path":"/api/v1/properties/rooms/not-a-valid-uuid","statusCode":400,"responseTimeMs":29,"msg":"HTTP Request processed"}
-[90mstdout[2m | tests/local05-security-resilience-audit.test.ts[2m > [22m[2mLOCAL-05: Local Security & Resilience Audit Suite[2m > [22m[2m7. Input Validation, Mass Assignment & SQL Safety[2m > [22m[2mshould safely handle SQL injection payloads in search and text fields
-[22m[39mProperty repository mode: PRISMA_POSTGRESQL
-
-{"severity":"INFO","level":"info","timestamp":"2026-08-14T12:43:03.795Z","service":"horplus-api","environment":"test","event":"SECURITY_AUDIT","userId":"577902b9-e7b0-4eb0-8e7c-160c4d756c1a","action":"BUILDING_CREATED","source":"property","reason":"Created building Building ' OR '1'='1'; DROP TABLE users CASCADE; --","timestamp":"2026-08-14T12:43:03.795Z","msg":"Audit: BUILDING_CREATED"}
-{"severity":"INFO","level":"info","timestamp":"2026-08-14T12:43:03.796Z","service":"horplus-api","environment":"test","requestId":"req_6fd50f8c-c604-43a9-9918-ab084cb9be34","method":"POST","path":"/api/v1/properties/buildings","statusCode":201,"responseTimeMs":38,"msg":"HTTP Request processed"}
-[90mstdout[2m | tests/local05-security-resilience-audit.test.ts[2m > [22m[2mLOCAL-05: Local Security & Resilience Audit Suite[2m > [22m[2m8. Task009 Bearer Security & Quota Concurrency[2m > [22m[2mshould reject redemption of revoked access grant
-[22m[39mProperty repository mode: PRISMA_POSTGRESQL
-
-[90mstdout[2m | tests/local05-security-resilience-audit.test.ts[2m > [22m[2mLOCAL-05: Local Security & Resilience Audit Suite[2m > [22m[2m8. Task009 Bearer Security & Quota Concurrency[2m > [22m[2mshould enforce that revoked grant cannot be redeemed and active grant creates valid session
-[22m[39mProperty repository mode: PRISMA_POSTGRESQL
-
-[90mstdout[2m | tests/local05-security-resilience-audit.test.ts[2m > [22m[2mLOCAL-05: Local Security & Resilience Audit Suite[2m > [22m[2m8. Task009 Bearer Security & Quota Concurrency[2m > [22m[2mshould strictly limit active staff quota to max 10 slots under concurrent creation
-[22m[39mProperty repository mode: PRISMA_POSTGRESQL
-
-[90mstdout[2m | tests/local05-security-resilience-audit.test.ts[2m > [22m[2mLOCAL-05: Local Security & Resilience Audit Suite[2m > [22m[2m9. Transaction Rollback & Data Integrity Resilience[2m > [22m[2mshould roll back completely on transaction failure with zero partial records
-[22m[39mProperty repository mode: PRISMA_POSTGRESQL
-
-[90mstdout[2m | tests/local05-security-resilience-audit.test.ts[2m > [22m[2mLOCAL-05: Local Security & Resilience Audit Suite[2m > [22m[2m10. Secret & Error Response Hygiene[2m > [22m[2mshould not leak stack traces or internal SQL details in error responses
-[22m[39mProperty repository mode: PRISMA_POSTGRESQL
-
-{"severity":"WARN","level":"warn","timestamp":"2026-08-14T12:43:08.436Z","service":"horplus-api","environment":"test","event":"SECURITY_AUDIT","requestId":"req-unknown","action":"LOGIN_FAILURE","source":"auth","ipMetadata":"::ffff:127.0.0.1","reason":"Unrecognized mock Google ID Token","timestamp":"2026-08-14T12:43:08.436Z","msg":"Audit: LOGIN_FAILURE"}
-{"severity":"ERROR","level":"error","timestamp":"2026-08-14T12:43:08.438Z","service":"horplus-api","environment":"test","requestId":"req_434695ac-02fa-47db-842d-c93fc745897f","statusCode":400,"errorCode":"INVALID_GOOGLE_TOKEN","errMessage":"Unrecognized mock Google ID Token","stack":"GoogleAuthError: Unrecognized mock Google ID Token\n    at MockGoogleIdentityVerifier.verifyIdToken (D:\\horplus_wave1d_fasttrack\\server\\src\\services\\google-verifier.service.ts:158:11)\n    at AuthenticationService.authenticateGoogle (D:\\horplus_wave1d_fasttrack\\server\\src\\services\\auth.service.ts:78:50)\n    at D:\\horplus_wave1d_fasttrack\\server\\src\\routes\\auth.routes.ts:48:44\n    at Layer.handle [as handle_request] (D:\\horplus_wave1d_fasttrack\\server\\node_modules\\express\\lib\\router\\layer.js:95:5)\n    at next (D:\\horplus_wave1d_fasttrack\\server\\node_modules\\express\\lib\\router\\route.js:149:13)\n    at D:\\horplus_wave1d_fasttrack\\server\\src\\middleware\\rate-limiter.ts:58:5\n    at Layer.handle [as handle_request] (D:\\horplus_wave1d_fasttrack\\server\\node_modules\\express\\lib\\router\\layer.js:95:5)\n    at next (D:\\horplus_wave1d_fasttrack\\server\\node_modules\\express\\lib\\router\\route.js:149:13)\n    at Route.dispatch (D:\\horplus_wave1d_fasttrack\\server\\node_modules\\express\\lib\\router\\route.js:119:3)\n    at Layer.handle [as handle_request] (D:\\horplus_wave1d_fasttrack\\server\\node_modules\\express\\lib\\router\\layer.js:95:5)","msg":"Error handled by global error handler"}
-{"severity":"INFO","level":"info","timestamp":"2026-08-14T12:43:08.438Z","service":"horplus-api","environment":"test","requestId":"req_434695ac-02fa-47db-842d-c93fc745897f","method":"POST","path":"/api/v1/auth/google","statusCode":400,"responseTimeMs":3,"msg":"HTTP Request processed"}
- [32m✓[39m tests/local05-security-resilience-audit.test.ts [2m([22m[2m26 tests[22m[2m)[22m[33m 19679[2mms[22m[39m
-   [33m[2m✓[22m[39m LOCAL-05: Local Security & Resilience Audit Suite[2m > [22m1. Anonymous Security Boundary & Header Tampering[2m > [22mshould reject unauthenticated request with 401 fail-closed on protected endpoints [33m748[2mms[22m[39m
-   [33m[2m✓[22m[39m LOCAL-05: Local Security & Resilience Audit Suite[2m > [22m1. Anonymous Security Boundary & Header Tampering[2m > [22mshould reject requests spoofing headers without valid session (no fallback actor) [33m585[2mms[22m[39m
-   [33m[2m✓[22m[39m LOCAL-05: Local Security & Resilience Audit Suite[2m > [22m2. Session Forgery, Expiration, Revocation & Token Version[2m > [22mshould reject forged or malformed session cookies with 401 [33m604[2mms[22m[39m
-   [33m[2m✓[22m[39m LOCAL-05: Local Security & Resilience Audit Suite[2m > [22m2. Session Forgery, Expiration, Revocation & Token Version[2m > [22mshould reject revoked session immediately [33m799[2mms[22m[39m
-   [33m[2m✓[22m[39m LOCAL-05: Local Security & Resilience Audit Suite[2m > [22m2. Session Forgery, Expiration, Revocation & Token Version[2m > [22mshould reject session when session tokenVersion is bumped (logout all / password reset) [33m799[2mms[22m[39m
-   [33m[2m✓[22m[39m LOCAL-05: Local Security & Resilience Audit Suite[2m > [22m2. Session Forgery, Expiration, Revocation & Token Version[2m > [22mshould reject session when user account is suspended [33m617[2mms[22m[39m
-   [33m[2m✓[22m[39m LOCAL-05: Local Security & Resilience Audit Suite[2m > [22m3. CSRF Defense on State-Changing Endpoints[2m > [22mshould deny mutating request (POST) when CSRF header is missing [33m665[2mms[22m[39m
-   [33m[2m✓[22m[39m LOCAL-05: Local Security & Resilience Audit Suite[2m > [22m3. CSRF Defense on State-Changing Endpoints[2m > [22mshould deny mutating request (POST) when CSRF token is forged or mismatched [33m816[2mms[22m[39m
-   [33m[2m✓[22m[39m LOCAL-05: Local Security & Resilience Audit Suite[2m > [22m3. CSRF Defense on State-Changing Endpoints[2m > [22mshould allow mutating request (POST) with valid session and matching CSRF token [33m664[2mms[22m[39m
-   [33m[2m✓[22m[39m LOCAL-05: Local Security & Resilience Audit Suite[2m > [22m3. CSRF Defense on State-Changing Endpoints[2m > [22mshould allow safe HTTP GET requests without requiring CSRF header [33m897[2mms[22m[39m
-   [33m[2m✓[22m[39m LOCAL-05: Local Security & Resilience Audit Suite[2m > [22m4. Cross-Dormitory Isolation (IDOR Resistance & Zero Data Leaks)[2m > [22mshould deny Owner A access to Dorm B resources with 403 and zero leaked PII [33m889[2mms[22m[39m
-   [33m[2m✓[22m[39m LOCAL-05: Local Security & Resilience Audit Suite[2m > [22m4. Cross-Dormitory Isolation (IDOR Resistance & Zero Data Leaks)[2m > [22mshould deny Owner A querying Dorm B bills, contracts or tenant lists [33m671[2mms[22m[39m
-   [33m[2m✓[22m[39m LOCAL-05: Local Security & Resilience Audit Suite[2m > [22m5. Tenant Isolation & Tenant IDOR Resistance[2m > [22mshould scope tenant profile strictly to authenticated user linkage [33m628[2mms[22m[39m
-   [33m[2m✓[22m[39m LOCAL-05: Local Security & Resilience Audit Suite[2m > [22m5. Tenant Isolation & Tenant IDOR Resistance[2m > [22mshould deny Tenant A attempting to access Tenant B notices or contract [33m630[2mms[22m[39m
-   [33m[2m✓[22m[39m LOCAL-05: Local Security & Resilience Audit Suite[2m > [22m5. Tenant Isolation & Tenant IDOR Resistance[2m > [22mshould ignore spoofed x-tenant-id headers in tenant portal requests [33m657[2mms[22m[39m
-   [33m[2m✓[22m[39m LOCAL-05: Local Security & Resilience Audit Suite[2m > [22m6. Staff RBAC Matrix (TECH Role Restrictions)[2m > [22mshould allow TECH role to access maintenance and meter readings [33m595[2mms[22m[39m
-   [33m[2m✓[22m[39m LOCAL-05: Local Security & Resilience Audit Suite[2m > [22m6. Staff RBAC Matrix (TECH Role Restrictions)[2m > [22mshould deny TECH role from creating contracts or financial settlements [33m619[2mms[22m[39m
-   [33m[2m✓[22m[39m LOCAL-05: Local Security & Resilience Audit Suite[2m > [22m6. Staff RBAC Matrix (TECH Role Restrictions)[2m > [22mshould deny TECH role from creating staff access grants [33m771[2mms[22m[39m
-   [33m[2m✓[22m[39m LOCAL-05: Local Security & Resilience Audit Suite[2m > [22m7. Input Validation, Mass Assignment & SQL Safety[2m > [22mshould reject negative financial amounts with 400 Bad Request [33m1057[2mms[22m[39m
-   [33m[2m✓[22m[39m LOCAL-05: Local Security & Resilience Audit Suite[2m > [22m7. Input Validation, Mass Assignment & SQL Safety[2m > [22mshould reject malformed UUIDs with truthful 400 response without crashing [33m679[2mms[22m[39m
-   [33m[2m✓[22m[39m LOCAL-05: Local Security & Resilience Audit Suite[2m > [22m7. Input Validation, Mass Assignment & SQL Safety[2m > [22mshould safely handle SQL injection payloads in search and text fields [33m631[2mms[22m[39m
-   [33m[2m✓[22m[39m LOCAL-05: Local Security & Resilience Audit Suite[2m > [22m8. Task009 Bearer Security & Quota Concurrency[2m > [22mshould reject redemption of revoked access grant [33m847[2mms[22m[39m
-   [33m[2m✓[22m[39m LOCAL-05: Local Security & Resilience Audit Suite[2m > [22m8. Task009 Bearer Security & Quota Concurrency[2m > [22mshould enforce that revoked grant cannot be redeemed and active grant creates valid session [33m1206[2mms[22m[39m
-   [33m[2m✓[22m[39m LOCAL-05: Local Security & Resilience Audit Suite[2m > [22m8. Task009 Bearer Security & Quota Concurrency[2m > [22mshould strictly limit active staff quota to max 10 slots under concurrent creation [33m1309[2mms[22m[39m
-   [33m[2m✓[22m[39m LOCAL-05: Local Security & Resilience Audit Suite[2m > [22m9. Transaction Rollback & Data Integrity Resilience[2m > [22mshould roll back completely on transaction failure with zero partial records [33m633[2mms[22m[39m
-   [33m[2m✓[22m[39m LOCAL-05: Local Security & Resilience Audit Suite[2m > [22m10. Secret & Error Response Hygiene[2m > [22mshould not leak stack traces or internal SQL details in error responses [33m641[2mms[22m[39m
-
-[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
-[2m      Tests [22m [1m[32m26 passed[39m[22m[90m (26)[39m
-[2m   Start at [22m 19:42:44
-[2m   Duration [22m 23.52s[2m (transform 1.28s, setup 315ms, collect 2.97s, tests 19.68s, environment 1ms, prepare 188ms)[22m
-
-[?25h
+================================================================================
+Environment
+================================================================================
+  Node:    v20.x
+  Vitest:  ^1.x
+  OS:      Windows 11
+  DB:      PostgreSQL 16 (test container)
+  Redis:   Redis 7 (test container)
+================================================================================

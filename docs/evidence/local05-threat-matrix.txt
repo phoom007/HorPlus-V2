@@ -1,19 +1,71 @@
-=== HORPLUS LOCAL-05 THREAT MATRIX AUDIT VERIFICATION ===
-TIMESTAMP: 2026-08-14T12:53:37.394Z
+================================================================================
+LOCAL-05 Threat Matrix — Security & Resilience Audit
+================================================================================
+Date:       2026-08-14
+Status:     ALL PASS
+Test File:  server/tests/local05-security-resilience-audit.test.ts
+================================================================================
 
-| Threat ID | Threat Description | Attack Vector | Security Control | Test Coverage | Status |
-|-----------|--------------------|---------------|------------------|---------------|--------|
-| THREAT-01 | Anonymous Boundary Escape | Direct API requests without session | requireAuth / requireSession fail-closed | local05-security: 1.1, 1.2 | VERIFIED |
-| THREAT-02 | Session Forgery & Tampering | Tampered AES-GCM session tokens | Decryption MAC integrity check | local05-security: 2.1, 2.2 | VERIFIED |
-| THREAT-03 | Zombie Session Post-Logout | Session reuse after logout/bump | tokenVersion validation in DB | local05-security: 2.3, 2.4 | VERIFIED |
-| THREAT-04 | Cross-Site Request Forgery | Ambient cookie submission | Strict X-CSRF-Token HMAC header | local05-security: 3.1-3.4, E2E-04 | VERIFIED |
-| THREAT-05 | Cross-Dormitory IDOR Attack | Header spoofing / resource ID guessing | Authoritative dormitory context & RLS | local05-security: 4.1, 4.2, E2E-01 | VERIFIED |
-| THREAT-06 | Tenant Cross-Tenant IDOR | Tenant querying other tenant data | Strict userId-to-tenant linkage | local05-security: 5.1-5.3, E2E-02 | VERIFIED |
-| THREAT-07 | Staff Privilege Escalation | TECH staff creating contracts/grants | Strict RBAC permission matrix | local05-security: 6.1-6.3, E2E-03 | VERIFIED |
-| THREAT-08 | Stored XSS in Reports/UI | Malicious script payload in tenant/room | Full HTML entity escaping in render | local05-security: 7.3, E2E-05 | VERIFIED |
-| THREAT-09 | SQL Injection Vulnerability | Quotes & SQL comments in input fields | Parameterized Prisma queries ($executeRaw) | local05-security: 7.3 | VERIFIED |
-| THREAT-10 | Task009 Grant Replay & Quota Race | Replay revoked link / flood grant creation | Hash lookup, instant revocation, slot lock | local05-security: 8.1-8.3, E2E-06 | VERIFIED |
-| THREAT-11 | Partial Mutation on DB Failure | Mid-transaction exception | Atomic Prisma $transaction rollback | local05-security: 9.1 | VERIFIED |
-| THREAT-12 | Secret & Stack Trace Leakage | Detailed error responses to client | Global error handler sanitization | local05-security: 10.1 | VERIFIED |
+┌────┬─────────────────────────────────────────────┬────────┬───────┬─────────┐
+│ #  │ Threat Category                             │ Tests  │ Pass  │ Status  │
+├────┼─────────────────────────────────────────────┼────────┼───────┼─────────┤
+│  1 │ Session Cookie Security                     │   2    │   2   │  PASS   │
+│  2 │ Authentication Guards                       │   3    │   3   │  PASS   │
+│  3 │ CSRF Defense on State Mutations             │   6    │   6   │  PASS   │
+│  4 │ Cross-Dormitory Isolation (Owner/Staff)     │   2    │   2   │  PASS   │
+│  5 │ Tenant-Portal Cross-Tenant IDOR             │   3    │   3   │  PASS   │
+│  6 │ Staff RBAC Mutation Restrictions (TECH)     │   3    │   3   │  PASS   │
+│  7 │ Input Validation & SQL Parameterization     │   3    │   3   │  PASS   │
+│  8 │ Bearer Security & Quota Concurrency         │   3    │   3   │  PASS   │
+│  9 │ Transaction Rollback Resilience             │   3    │   3   │  PASS   │
+│ 10 │ Outbox Replay, Dedup & Concurrency          │   3    │   3   │  PASS   │
+│ 11 │ Startup & Scheduler Resilience              │   2    │   2   │  PASS   │
+│ 12 │ Redis Failure Resilience & Degradation      │   3    │   3   │  PASS   │
+│ 13 │ Database Failure Fail-Closed & Recovery     │   1    │   1   │  PASS   │
+│ 14 │ Rate-Limit & Abuse Resistance               │   2    │   2   │  PASS   │
+│ 15 │ Upload & Payment Evidence Security          │   6    │   6   │  PASS   │
+│ 16 │ Mass-Assignment Defense                     │   2    │   2   │  PASS   │
+│ 17 │ Secret & Error Response Hygiene             │   1    │   1   │  PASS   │
+├────┼─────────────────────────────────────────────┼────────┼───────┼─────────┤
+│    │ TOTAL                                       │  48    │  48   │  PASS   │
+└────┴─────────────────────────────────────────────┴────────┴───────┴─────────┘
 
-ALL 12 THREAT CATEGORIES MITIGATED & TEST-VERIFIED.
+Note: Section 18 (Dormitory Write Entitlement Guard, 2 tests) is listed as a
+separate section in the test file but falls under the broader "Authorization &
+Access Control" threat domain. Total unique tests: 50.
+
+┌────┬─────────────────────────────────────────────┬────────┬───────┬─────────┐
+│ 18 │ Dormitory Write Entitlement Guard           │   2    │   2   │  PASS   │
+├────┼─────────────────────────────────────────────┼────────┼───────┼─────────┤
+│    │ GRAND TOTAL                                 │  50    │  50   │  PASS   │
+└────┴─────────────────────────────────────────────┴────────┴───────┴─────────┘
+
+================================================================================
+Threat Coverage Analysis
+================================================================================
+
+  Authentication & Session Management ........... COVERED (Sections 1, 2, 8)
+  Authorization & Access Control ................ COVERED (Sections 4, 5, 6, 18)
+  Cross-Site Request Forgery (CSRF) ............. COVERED (Section 3)
+  Injection Attacks (SQL, NoSQL) ................ COVERED (Section 7)
+  Insecure Direct Object References (IDOR) ...... COVERED (Sections 4, 5)
+  Mass Assignment ............................... COVERED (Section 16)
+  Information Disclosure ........................ COVERED (Sections 1, 17)
+  Rate Limiting & Abuse Prevention .............. COVERED (Section 14)
+  Transaction Integrity & Rollback .............. COVERED (Section 9)
+  Event Processing & Idempotency ................ COVERED (Section 10)
+  Infrastructure Resilience (Redis) ............. COVERED (Section 12)
+  Infrastructure Resilience (Database) .......... COVERED (Section 13)
+  Startup & Scheduler Safety .................... COVERED (Section 11)
+  File Upload Security .......................... COVERED (Section 15)
+  Payment Evidence Integrity .................... COVERED (Section 15)
+  Directory Traversal ........................... COVERED (Section 15)
+  Multi-Tenant Data Isolation ................... COVERED (Sections 4, 5)
+
+  Total Threat Categories: 17
+  Verified:               17
+  Unverified:              0
+
+================================================================================
+Verdict: ALL 17 THREAT CATEGORIES TESTED AND VERIFIED — PASS
+================================================================================

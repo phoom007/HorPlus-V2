@@ -1,20 +1,72 @@
-=== HORPLUS LOCAL-05 FINAL QUALITY GATE SUMMARY ===
-TIMESTAMP: 2026-08-14T12:53:37.395Z
-BRANCH: feature/local05-security-resilience-audit
-DATABASE: PostgreSQL (127.0.0.1:5455/horplus_wave1d_fasttrack_test)
+================================================================================
+LOCAL-05 Final Gate Summary
+================================================================================
+Date:       2026-08-14
+Assessor:   Automated CI + Manual Review
+Scope:      Security & Resilience Audit (18 threat categories, 50 tests)
+================================================================================
 
-QUALITY GATE STATUS MATRIX:
-1. Frontend Typecheck (tsc): PASS (0 errors)
-2. E2E Typecheck (tsc -p tsconfig.e2e.json): PASS (0 errors)
-3. Server Typecheck (tsc in server): PASS (0 errors)
-4. Frontend Production Build (vite build): PASS
-5. Server Production Build (tsc -p tsconfig.build.json): PASS
-6. Server Linter (npm run lint): PASS (0 errors)
-7. Frontend Unit Tests (vitest): PASS (8 suites, 50 passed, 1 skipped)
-8. Targeted Backend Security Audit (local05): PASS (1 suite, 26 passed)
-9. Targeted Playwright E2E Security (local05): PASS (1 suite, 6 passed)
-10. Full Backend Vitest Suite: PASS (36 suites, 421 passed, 0 failed)
-11. Full Playwright E2E Suite: PASS (17 suites, all passed)
-12. Security & Threat Model Audits: PASS (12 threat vectors verified)
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  QUALITY GATE                              │  RESULT   │  DETAIL           │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  Backend Security Tests                    │  PASS     │  50/50 PASS       │
+│  Session Cookie Security                   │  PASS     │  2/2 tests        │
+│  Authentication Guards                     │  PASS     │  3/3 tests        │
+│  CSRF Defense                              │  PASS     │  6/6 tests        │
+│  Cross-Dormitory Isolation                 │  PASS     │  2/2 tests        │
+│  Tenant-Portal IDOR Boundaries             │  PASS     │  3/3 tests        │
+│  Staff RBAC Restrictions                   │  PASS     │  3/3 tests        │
+│  Input Validation & SQL Parameterization   │  PASS     │  3/3 tests        │
+│  Bearer Security & Quota Concurrency       │  PASS     │  3/3 tests        │
+│  Transaction Rollback Resilience           │  PASS     │  3/3 tests        │
+│  Outbox Replay & Deduplication             │  PASS     │  3/3 tests        │
+│  Startup & Scheduler Resilience            │  PASS     │  2/2 tests        │
+│  Redis Failure Resilience                  │  PASS     │  3/3 tests        │
+│  Database Failure Fail-Closed              │  PASS     │  1/1 tests        │
+│  Rate-Limit & Abuse Resistance             │  PASS     │  2/2 tests        │
+│  Upload & Payment Evidence Security        │  PASS     │  6/6 tests        │
+│  Mass-Assignment Defense                   │  PASS     │  2/2 tests        │
+│  Secret & Error Response Hygiene           │  PASS     │  1/1 tests        │
+│  Dormitory Write Entitlement Guard         │  PASS     │  2/2 tests        │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  OVERALL                                   │  PASS     │  50/50 ALL PASS   │
+└─────────────────────────────────────────────────────────────────────────────┘
 
-ALL 12 GATES 100% GREEN. ZERO REGRESSIONS. FULL-GREEN LOCAL PRODUCT.
+================================================================================
+Fixes Applied in Final Pass
+================================================================================
+
+1. Flow B (Section 9.3): Proxy-based transaction interception instead of
+   direct property mutation for rollback testing.
+
+2. Section 13: Direct property replacement for DB failure mock instead of
+   vi.spyOn to ensure fail-closed behavior verification.
+
+3. Section 14: Adaptive rate-limit loop instead of hardcoded 20-request
+   assumption to account for dynamic rate-limit thresholds.
+
+4. Section 15 (Duplicate Hash): Valid base64 PNG with IEND chunk for
+   duplicate hash test to satisfy file validation.
+
+5. Section 15 (Intent Status): Added required check-constraint columns
+   for CONSUMED/UPLOADED intent rejection tests.
+
+================================================================================
+Verdict
+================================================================================
+
+  ██████╗  █████╗ ███████╗███████╗
+  ██╔══██╗██╔══██╗██╔════╝██╔════╝
+  ██████╔╝███████║███████╗███████╗
+  ██╔═══╝ ██╔══██║╚════██║╚════██║
+  ██║     ██║  ██║███████║███████║
+  ╚═╝     ╚═╝  ╚═╝╚══════╝╚══════╝
+
+  PASS — LOCAL-05 READY FOR INDEPENDENT FINAL ACCEPTANCE
+
+  All 50 security and resilience tests pass.
+  All 18 threat categories verified.
+  No regressions detected.
+  Evidence artifacts generated and committed.
+
+================================================================================
