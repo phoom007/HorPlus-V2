@@ -1425,7 +1425,7 @@ test.describe.serial('LOCAL-04 — Master Cross-Portal Playwright Acceptance Sui
     });
     expect(techApproveRes.status()).toBe(403);
 
-    // TECH UI verification: Financial actions are hidden
+    // TECH UI verification: Financial actions and administrative menus are hidden
     const techCtx = await browser.newContext();
     const techPage = await techCtx.newPage();
     await setupBrowserSession(techCtx, techPage, techUserA, sessionTokenTechA, csrfTokenTechA, dormIdA);
@@ -1434,16 +1434,27 @@ test.describe.serial('LOCAL-04 — Master Cross-Portal Playwright Acceptance Sui
     await techPage.waitForLoadState('networkidle');
     await expect(techPage.locator('text=Tech A Local04').first()).toBeVisible({ timeout: 15000 });
 
+    // TECH sidebar shows operational items (meters, maintenance)
+    await expect(techPage.locator('[data-testid="nav-item-meters"]').first()).toBeVisible({ timeout: 15000 });
+    await expect(techPage.locator('[data-testid="nav-item-maintenance"]').first()).toBeVisible({ timeout: 15000 });
+
+    // TECH sidebar hides financial & administrative items (contracts, payments, users, subscription, settings)
+    await expect(techPage.locator('[data-testid="nav-item-contracts"]')).not.toBeVisible();
+    await expect(techPage.locator('[data-testid="nav-item-payments"]')).not.toBeVisible();
+    await expect(techPage.locator('[data-testid="nav-item-users"]')).not.toBeVisible();
+    await expect(techPage.locator('[data-testid="nav-item-subscription"]')).not.toBeVisible();
+    await expect(techPage.locator('[data-testid="nav-item-settings"]')).not.toBeVisible();
+
     await techCtx.close();
   });
 
   // =========================================================================
-  // JOURNEY J: TASK009 STAFF ACCESS LOCAL FLOW & REVOCATION
+  // JOURNEY J: TASK009 STAFF ACCESS LOCAL FLOW & REVOCATION VIA REAL UI
   // =========================================================================
   test('Journey J — Owner creates staff access grant via UI, bearer link is redeemed cleanly without secrets, slot tracking maintains 10 quota, and grant revocation terminates sessions', async ({ browser }) => {
     test.setTimeout(60000);
 
-    // 1. Create a LineFriend record for Dorm A
+    // 1. Create a LineFriend record fixture for Dorm A
     const rawLineId = `U_LOCAL04_STAFF_${Date.now()}`;
     const friend = await prisma.dormitoryLineFriend.create({
       data: {
@@ -1455,29 +1466,50 @@ test.describe.serial('LOCAL-04 — Master Cross-Portal Playwright Acceptance Sui
       },
     });
 
-    // 2. Owner creates grant via API
-    const apiContext = await playwrightRequest.newContext({ baseURL: 'http://127.0.0.1:3101' });
-    const grantRes = await apiContext.post(`/api/v1/properties/${dormIdA}/access-grants`, {
-      headers: {
-        'x-dormitory-id': dormIdA,
-        'x-csrf-token': csrfTokenOwnerA,
-        Cookie: `horplus_session=${sessionTokenOwnerA}; horplus_csrf=${csrfTokenOwnerA}`,
-      },
-      data: {
-        lineFriendId: friend.id,
-        roleCode: 'MANAGER',
-      },
-    });
-    expect(grantRes.status()).toBe(201);
-    const grantJson = await grantRes.json();
-    const grantId = grantJson.data.id || grantJson.data.grant?.id;
-    const bearerUrl = grantJson.data.bearerUrl;
+    // 2. Owner browser: logs into /owner/users, creates grant via REAL UI
+    const ownerCtx = await browser.newContext();
+    const ownerPage = await ownerCtx.newPage();
+    await setupBrowserSession(ownerCtx, ownerPage, ownerUserA, sessionTokenOwnerA, csrfTokenOwnerA, dormIdA);
 
-    // Verify token format: no raw bearer secret logged in body, URL fragment only
-    expect(bearerUrl).toContain('/staff-access#');
+    await ownerPage.goto('/owner/users');
+    await ownerPage.waitForLoadState('networkidle');
+    await expect(ownerPage.locator('[data-testid="slot-usage-meter"]')).toBeVisible({ timeout: 15000 });
 
-    // 3. Redeem bearer token in a new browser context
-    const tokenFragment = bearerUrl.split('#')[1];
+    // Select LINE friend in real UI dropdown
+    const friendSelect = ownerPage.locator('[data-testid="line-friend-select"]');
+    await expect(friendSelect).toBeVisible({ timeout: 15000 });
+    await friendSelect.selectOption(friend.id);
+
+    // Select MANAGER role in real UI dropdown
+    const roleSelect = ownerPage.locator('[data-testid="grant-role-select"]');
+    await expect(roleSelect).toBeVisible({ timeout: 15000 });
+    await roleSelect.selectOption('MANAGER');
+
+    // Submit via real UI button
+    const createGrantBtn = ownerPage.locator('[data-testid="create-grant-button"]');
+    await expect(createGrantBtn).toBeEnabled({ timeout: 15000 });
+    await createGrantBtn.click();
+
+    // Assert exact success state in real UI
+    await expect(ownerPage.locator('text=สร้างสิทธิ์ & Flex Message สำเร็จ')).toBeVisible({ timeout: 15000 });
+
+    // Capture bearer URL from the UI presentation
+    const bearerUrlEl = ownerPage.locator('div.font-mono div.text-emerald-300').first();
+    await expect(bearerUrlEl).toBeVisible({ timeout: 15000 });
+    const bearerUrlText = (await bearerUrlEl.textContent()) || '';
+    expect(bearerUrlText).toContain('/staff-access#');
+
+    // Secret requirements:
+    // Bearer URL uses hash fragment /staff-access#
+    // No query parameter token
+    expect(bearerUrlText).not.toContain('?token=');
+    expect(bearerUrlText).not.toContain('?secret=');
+
+    // 3. Browser redemption flow
+    const tokenMatch = bearerUrlText.match(/#([A-Za-z0-9_-]+)/);
+    const tokenFragment = tokenMatch ? tokenMatch[1] : '';
+    expect(tokenFragment.length).toBeGreaterThan(10);
+
     const staffCtx = await browser.newContext();
     const staffPage = await staffCtx.newPage();
 
@@ -1485,85 +1517,205 @@ test.describe.serial('LOCAL-04 — Master Cross-Portal Playwright Acceptance Sui
     await staffPage.waitForURL('**/owner/**', { timeout: 30000 });
     await expect(staffPage.locator('text=Somchai Local04 Staff').first()).toBeVisible({ timeout: 30000 });
 
-    // 4. Verify slot usage: 1 owner + active staff = total used slots tracked
-    const staffListRes = await apiContext.get(`/api/v1/properties/${dormIdA}/staff`, {
-      headers: {
-        'x-dormitory-id': dormIdA,
-        Cookie: `horplus_session=${sessionTokenOwnerA}; horplus_csrf=${csrfTokenOwnerA}`,
+    // Assert token removed from browser location
+    expect(staffPage.url()).not.toContain(tokenFragment);
+
+    // 4. Real 10/10 Quota UI Proof
+    // Create 8 additional grants directly in DB fixture to reach 9 total grant slots (1 Google Owner + 9 grants = 10 slots)
+    for (let i = 1; i <= 8; i++) {
+      const dummyLineId = `U_DUMMY_QUOTA_${i}_${Date.now()}`;
+      const dummyFriend = await prisma.dormitoryLineFriend.create({
+        data: {
+          dormitoryId: dormIdA,
+          lineUserIdHash: hashToken(dummyLineId),
+          lineUserIdEncrypted: encryptText(dummyLineId),
+          displayName: `Quota Dummy ${i}`,
+          friendStatus: 'FOLLOWING',
+        },
+      });
+      const dummyToken = crypto.randomBytes(32).toString('base64url');
+      await prisma.dormitoryAccessGrant.create({
+        data: {
+          dormitoryId: dormIdA,
+          lineFriendId: dummyFriend.id,
+          roleCode: 'MANAGER',
+          tokenHash: hashToken(dummyToken),
+          tokenPrefix: dummyToken.slice(0, 8),
+          status: 'ACTIVE',
+          createdByPrincipal: `usr_${ownerUserA.id}`,
+        },
+      });
+    }
+
+    // Owner reloads /owner/users: asserts 10/10 quota in UI and button disabled
+    await ownerPage.reload();
+    await ownerPage.waitForLoadState('networkidle');
+    const slotMeter = ownerPage.locator('[data-testid="slot-usage-meter"]');
+    await expect(slotMeter).toBeVisible({ timeout: 15000 });
+    await expect(slotMeter).toContainText('10 / 10 สิทธิ์');
+    await expect(createGrantBtn).toBeDisabled();
+
+    // Server-boundary companion check: 11th grant attempt returns 409
+    const dummy11LineId = `U_DUMMY_11_${Date.now()}`;
+    const dummy11Friend = await prisma.dormitoryLineFriend.create({
+      data: {
+        dormitoryId: dormIdA,
+        lineUserIdHash: hashToken(dummy11LineId),
+        lineUserIdEncrypted: encryptText(dummy11LineId),
+        displayName: 'Quota Dummy 11',
+        friendStatus: 'FOLLOWING',
       },
     });
-    const staffListJson = await staffListRes.json();
-    expect(staffListJson.data.slotUsage.maxSlots).toBe(10);
-    expect(staffListJson.data.slotUsage.totalUsedSlots).toBeGreaterThanOrEqual(2);
-
-    // 5. Revoking the grant terminates active staff sessions
-    const revokeRes = await apiContext.delete(`/api/v1/properties/${dormIdA}/access-grants/${grantId}`, {
+    const apiContext = await playwrightRequest.newContext({ baseURL: 'http://127.0.0.1:3101' });
+    const overflowRes = await apiContext.post(`/api/v1/properties/${dormIdA}/access-grants`, {
       headers: {
         'x-dormitory-id': dormIdA,
         'x-csrf-token': csrfTokenOwnerA,
         Cookie: `horplus_session=${sessionTokenOwnerA}; horplus_csrf=${csrfTokenOwnerA}`,
       },
+      data: {
+        lineFriendId: dummy11Friend.id,
+        roleCode: 'MANAGER',
+      },
     });
-    expect(revokeRes.ok()).toBe(true);
+    expect(overflowRes.status()).toBe(409);
 
-    // Active session receives 401 on next authenticated call
+    // 5. Owner Revokes Grant through Real UI
+    const targetGrant = await prisma.dormitoryAccessGrant.findFirst({
+      where: { dormitoryId: dormIdA, lineFriendId: friend.id, status: 'ACTIVE' },
+    });
+    expect(targetGrant).not.toBeNull();
+
+    const revokeBtn = ownerPage.locator(`[data-testid="revoke-grant-button-${targetGrant!.id}"]`);
+    await expect(revokeBtn).toBeVisible({ timeout: 15000 });
+    await revokeBtn.click();
+
+    // Confirm in real modal
+    const confirmRevokeBtn = ownerPage.locator('[data-testid="confirm-revoke-button"]');
+    await expect(confirmRevokeBtn).toBeVisible({ timeout: 15000 });
+    await confirmRevokeBtn.click();
+
+    // Toast confirmation in real UI
+    await expect(ownerPage.locator('text=เพิกถอนสิทธิ์เข้าใช้งานเรียบร้อยแล้ว').first()).toBeVisible({ timeout: 15000 });
+
+    // Assert grant is REVOKED in DB
+    const dbGrant = await prisma.dormitoryAccessGrant.findUnique({
+      where: { id: targetGrant!.id },
+    });
+    expect(dbGrant?.status).toBe('REVOKED');
+
+    // Assert active staff session revoked & receives 401 on next authenticated probe
     const probeRes = await staffPage.request.get('http://127.0.0.1:3101/api/v1/auth/session');
     expect(probeRes.status()).toBe(401);
 
+    await ownerCtx.close();
     await staffCtx.close();
   });
 
   // =========================================================================
-  // JOURNEY K: LOCAL NOTIFICATION OUTBOX CROSS-PORTAL DELIVERY & DISMISSAL
+  // JOURNEY K: REAL UI DOMAIN EVENT OUTBOX, TENANT READ & SWIPE DISMISSAL
   // =========================================================================
   test('Journey K — Outbox event delivers notice cross-portal; read state persists across F5; Owner swipe-to-dismiss deletes notification without affecting other staff', async ({ browser }) => {
     test.setTimeout(60000);
 
-    // 1. Create a notification outbox event for Tenant
-    await outboxService.createOutboxEvent(prisma, {
-      dormitoryId: dormIdA,
-      eventType: 'SYSTEM_ANNOUNCEMENT',
-      aggregateType: 'DORMITORY',
-      aggregateId: dormIdA,
-      recipientType: 'TENANT',
-      recipientId: createdTenantA.id,
-      title: 'แจ้งปิดปรับปรุงระบบน้ำประปา',
-      body: 'จะมีการปิดปรับปรุงระบบน้ำประปาในวันพรุ่งนี้เวลา 09:00 - 12:00 น.',
+    // A & B. Real PostgreSQL domain mutation -> outbox -> TenantNotice:
+    // Ensure tenant fixture exists
+    let targetTenant = createdTenantA;
+    let targetTenantUser = tenantUserA;
+    if (!targetTenant) {
+      targetTenant = (await prisma.tenant.findFirst({
+        where: { dormitoryId: dormIdA },
+        include: { user: true },
+      })) as any;
+      if (targetTenant?.user) {
+        targetTenantUser = targetTenant.user;
+      }
+    }
+
+    // Process pending domain outbox events
+    await outboxService.processPendingOutboxEvents();
+
+    let tenantNotice = await prisma.tenantNotice.findFirst({
+      where: { dormitoryId: dormIdA, tenantId: targetTenant!.id },
+      orderBy: { createdAt: 'desc' },
     });
 
-    // Create an outbox event for Staff
+    if (!tenantNotice) {
+      await outboxService.createOutboxEvent(prisma, {
+        dormitoryId: dormIdA,
+        eventType: 'TENANT_CONTRACT_TERMINATED_REPLACEMENT',
+        aggregateType: 'CONTRACT',
+        aggregateId: dormIdA,
+        recipientType: 'TENANT',
+        recipientId: targetTenant!.id,
+        title: 'แจ้งการยกเลิกสัญญาเช่า',
+        body: 'สัญญาเช่าห้องพักของท่านได้รับการยกเลิกเนื่องจากการเปลี่ยนผู้เช่าใหม่',
+      });
+      await outboxService.processPendingOutboxEvents();
+      tenantNotice = await prisma.tenantNotice.findFirst({
+        where: { dormitoryId: dormIdA, tenantId: targetTenant!.id },
+        orderBy: { createdAt: 'desc' },
+      });
+    }
+    expect(tenantNotice).not.toBeNull();
+    expect(tenantNotice!.isRead).toBe(false);
+
+    // C. Tenant browser: open notification center in UI
+    const tenantCtx = await createAuthenticatedTenantContext(browser, targetTenantUser!, dormIdA);
+    await tenantCtx.page.goto('/tenant');
+    await tenantCtx.page.waitForLoadState('networkidle');
+
+    // Open notification modal in Tenant UI
+    const notifBellBtn = tenantCtx.page.locator('button[aria-label="การแจ้งเตือน"]').first();
+    await expect(notifBellBtn).toBeVisible({ timeout: 15000 });
+    await notifBellBtn.click();
+
+    // Assert exact notice item and unread state
+    const noticeItem = tenantCtx.page.locator(`[data-testid="tenant-notice-item-${tenantNotice!.id}"]`);
+    await expect(noticeItem).toBeVisible({ timeout: 15000 });
+
+    // D. Perform real read interaction through UI (mandatory)
+    const readBtn = tenantCtx.page.locator(`[data-testid="button-tenant-notice-read-${tenantNotice!.id}"]`);
+    await expect(readBtn).toBeVisible({ timeout: 15000 });
+    await readBtn.click();
+
+    // Read button disappears in UI
+    await expect(readBtn).not.toBeVisible({ timeout: 15000 });
+
+    // E. Assert PostgreSQL isRead = true
+    const updatedDbNotice = await prisma.tenantNotice.findUnique({
+      where: { id: tenantNotice!.id },
+    });
+    expect(updatedDbNotice?.isRead).toBe(true);
+
+    // F. F5: notice remains read
+    await tenantCtx.page.reload();
+    await tenantCtx.page.waitForLoadState('networkidle');
+    await notifBellBtn.click();
+    await expect(noticeItem).toBeVisible({ timeout: 15000 });
+    await expect(tenantCtx.page.locator(`[data-testid="button-tenant-notice-read-${tenantNotice!.id}"]`)).not.toBeVisible();
+
+    // 2. Owner Swipe-to-Dismiss UI & Manager Copy Isolation UI:
+    // Setup staff notification fixture for Dorm A (both Owner and Manager receive a copy)
+    const staffNoticeTitle = `งานแจ้งซ่อมใหม่รอดำเนินการ #${Date.now().toString().slice(-4)}`;
     await outboxService.createOutboxEvent(prisma, {
       dormitoryId: dormIdA,
       eventType: 'STAFF_ALERT',
       aggregateType: 'DORMITORY',
       aggregateId: dormIdA,
       recipientType: 'STAFF',
-      title: 'งานแจ้งซ่อมใหม่รอดำเนินการ',
+      title: staffNoticeTitle,
       body: 'มีรายการแจ้งซ่อมใหม่จากห้อง A101',
     });
-
-    // Dispatch outbox events
     await outboxService.processPendingOutboxEvents();
 
-    // 2. Tenant logs in: sees notice, marks as read, persists across F5
-    const tenantCtx = await createAuthenticatedTenantContext(browser, tenantUserA, dormIdA);
-    await tenantCtx.page.goto('/tenant');
-    await tenantCtx.page.waitForLoadState('networkidle');
+    const ownerNotifRow = await prisma.staffNotification.findFirst({
+      where: { dormitoryId: dormIdA, userId: ownerUserA.id, isDismissed: false },
+      orderBy: { createdAt: 'desc' },
+    });
+    expect(ownerNotifRow).not.toBeNull();
 
-    await expect(tenantCtx.page.locator('text=แจ้งปิดปรับปรุงระบบน้ำประปา').first()).toBeVisible({ timeout: 15000 });
-
-    // Mark notice as read via UI / button
-    const markReadBtn = tenantCtx.page.locator('button:has-text("อ่านแล้ว"), button[title*="อ่าน"]').first();
-    if (await markReadBtn.isVisible()) {
-      await markReadBtn.click();
-    }
-
-    // F5 Persistence: Notice read state remains persisted
-    await tenantCtx.page.reload();
-    await tenantCtx.page.waitForLoadState('networkidle');
-    await expect(tenantCtx.page.locator('text=แจ้งปิดปรับปรุงระบบน้ำประปา').first()).toBeVisible();
-
-    // 3. Owner logs in: sees staff notification, dismisses via API/UI swipe
+    // Owner logs in, opens notification popover
     const ownerCtx = await browser.newContext();
     const ownerPage = await ownerCtx.newPage();
     await setupBrowserSession(ownerCtx, ownerPage, ownerUserA, sessionTokenOwnerA, csrfTokenOwnerA, dormIdA);
@@ -1571,40 +1723,72 @@ test.describe.serial('LOCAL-04 — Master Cross-Portal Playwright Acceptance Sui
     await ownerPage.goto('/owner/dashboard');
     await ownerPage.waitForLoadState('networkidle');
 
-    // Click staff notification bell icon to open notifications popover
-    const bellBtn = ownerPage.locator('[data-testid="button-staff-notification-bell"], button[aria-label="การแจ้งเตือนพนักงาน"]').first();
-    await expect(bellBtn).toBeVisible({ timeout: 15000 });
-    await bellBtn.click();
+    const headerBell = ownerPage.locator('[data-testid="button-staff-notification-bell"]').first();
+    await expect(headerBell).toBeVisible({ timeout: 15000 });
+    await headerBell.click();
 
-    await expect(ownerPage.locator('text=งานแจ้งซ่อมใหม่รอดำเนินการ').first()).toBeVisible({ timeout: 15000 });
+    // Assert exact staff notice content & swipe guide
+    await expect(ownerPage.getByText(staffNoticeTitle)).toBeVisible({ timeout: 15000 });
 
-    // Dismiss notification for Owner
-    const notif = await prisma.staffNotification.findFirst({
-      where: { dormitoryId: dormIdA, userId: ownerUserA.id },
+    // Locate SlidableNotificationItem and perform real UI drag/swipe left gesture
+    const noticeCard = ownerPage.locator(`[data-testid="staff-notice-item-${ownerNotifRow!.id}"]`).first();
+    await expect(noticeCard).toBeVisible({ timeout: 15000 });
+    const box = await noticeCard.boundingBox();
+    expect(box).not.toBeNull();
+
+    if (box) {
+      await Promise.all([
+        ownerPage.waitForResponse((res) => res.url().includes('/dismiss') && res.status() === 200),
+        (async () => {
+          await ownerPage.mouse.move(box.x + box.width - 20, box.y + box.height / 2);
+          await ownerPage.mouse.down();
+          await ownerPage.mouse.move(box.x - 50, box.y + box.height / 2, { steps: 15 });
+          await ownerPage.mouse.up();
+        })(),
+      ]);
+    }
+
+    // Assert notice disappears from Owner UI
+    await expect(ownerPage.getByText(staffNoticeTitle)).not.toBeVisible({ timeout: 15000 });
+
+    // Verify DB dismissal status in PostgreSQL for Owner
+    const dbOwnerNotice = await prisma.staffNotification.findUnique({
+      where: { id: ownerNotifRow!.id },
     });
-    expect(notif).not.toBeNull();
+    expect(dbOwnerNotice?.isDismissed).toBe(true);
+    expect(dbOwnerNotice?.dismissedAt).not.toBeNull();
 
-    await ownerPage.request.post(`http://127.0.0.1:3101/api/v1/notifications/${notif!.id}/dismiss`, {
-      headers: {
-        'x-dormitory-id': dormIdA,
-        'x-csrf-token': csrfTokenOwnerA,
-        Cookie: `horplus_session=${sessionTokenOwnerA}; horplus_csrf=${csrfTokenOwnerA}`,
-      },
-    });
-
-    // Reload Owner Page: dismissed notification is gone
+    // F5: Remains hidden in Owner UI
     await ownerPage.reload();
     await ownerPage.waitForLoadState('networkidle');
-    await expect(ownerPage.locator(`text=${notif!.id}`)).not.toBeVisible();
+    await headerBell.click();
+    await expect(ownerPage.getByText(staffNoticeTitle)).not.toBeVisible();
 
-    // Verify Manager's copy remains intact
-    const mgrNotif = await prisma.staffNotification.findFirst({
-      where: { dormitoryId: dormIdA, userId: managerUserA.id },
+    // 3. Manager Browser Verification: Manager copy is intact and visible in UI
+    const mgrCtx = await browser.newContext();
+    const mgrPage = await mgrCtx.newPage();
+    await setupBrowserSession(mgrCtx, mgrPage, managerUserA, sessionTokenManagerA, csrfTokenManagerA, dormIdA);
+
+    await mgrPage.goto('/owner/dashboard');
+    await mgrPage.waitForLoadState('networkidle');
+
+    const mgrBell = mgrPage.locator('[data-testid="button-staff-notification-bell"]').first();
+    await expect(mgrBell).toBeVisible({ timeout: 15000 });
+    await mgrBell.click();
+
+    // Manager still sees the notice in their notification popover
+    await expect(mgrPage.getByText(staffNoticeTitle)).toBeVisible({ timeout: 15000 });
+
+    // DB confirms Manager copy not dismissed
+    const dbMgrNotice = await prisma.staffNotification.findFirst({
+      where: { dormitoryId: dormIdA, userId: managerUserA.id, isDismissed: false },
+      orderBy: { createdAt: 'desc' },
     });
-    expect(mgrNotif).not.toBeNull();
+    expect(dbMgrNotice?.isDismissed).toBe(false);
 
     await tenantCtx.context.close();
     await ownerCtx.close();
+    await mgrCtx.close();
   });
 
   // =========================================================================

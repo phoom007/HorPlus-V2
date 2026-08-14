@@ -49,6 +49,7 @@ export function normalizeRole(roleInput?: any): WorkspaceRole | null {
 
   // STAFF / TECHNICIAN / HOUSEKEEPING
   if (
+    rUpper === 'TECH' ||
     rUpper === 'TECHNICIAN' ||
     rUpper === 'HOUSEKEEPING' ||
     rUpper === 'STAFF' ||
