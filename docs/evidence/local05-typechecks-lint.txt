@@ -1,22 +1,41 @@
-================================================================================
-LOCAL-05 TypeChecks & Lint Evidence
-================================================================================
-TESTED_EXECUTABLE_SHA: e5e425d6aff342b3a8af57536da5c71c8a64267b
-Date:    2026-08-14
-================================================================================
+=== HORPLUS LOCAL-05 TYPECHECKS & LINT RAW EVIDENCE ===
+=== TESTED_EXECUTABLE_SHA: e5e425d6aff342b3a8af57536da5c71c8a64267b ===
+=== TIMESTAMP: 2026-08-14T14:11:58.415Z ===
 
-1. Frontend TypeCheck (npx tsc --noEmit)
-   Exit: 0
-   Errors: 0
+--------------------------------------------------------------------------------
+COMMAND: npx tsc --noEmit
+CWD:     D:\horplus_wave1d_fasttrack
+EXIT_CODE: 0
+OUTPUT:
+(empty / clean 0 errors)
 
-2. E2E TypeCheck (npx tsc --noEmit -p tsconfig.e2e.json)
-   Exit: 0
-   Errors: 0
+--------------------------------------------------------------------------------
+COMMAND: npx tsc --noEmit -p tsconfig.e2e.json
+CWD:     D:\horplus_wave1d_fasttrack
+EXIT_CODE: 0
+OUTPUT:
+(empty / clean 0 errors)
 
-3. Server Lint/TypeCheck (npm --prefix server run lint → tsc --noEmit)
-   Exit: 0
-   Errors: 0
+--------------------------------------------------------------------------------
+COMMAND: npm --prefix server run typecheck
+CWD:     D:\horplus_wave1d_fasttrack
+EXIT_CODE: 1
+STDOUT:
 
-================================================================================
-All TypeScript compilation checks pass with zero errors.
-================================================================================
+STDERR:
+npm error Missing script: "typecheck"
+npm error
+npm error To see a list of scripts, run:
+npm error   npm run
+npm error A complete log of this run can be found in: C:\Users\HP\AppData\Local\npm-cache\_logs\2026-08-14T14_12_21_923Z-debug-0.log
+
+--------------------------------------------------------------------------------
+COMMAND: npm --prefix server run lint
+CWD:     D:\horplus_wave1d_fasttrack
+EXIT_CODE: 0
+OUTPUT:
+
+> horplus-backend@0.1.0 lint
+> tsc --noEmit
+
+

@@ -1,7 +1,7 @@
 ================================================================================
 LOCAL-05 Resilience Fault-Injection Evidence
 ================================================================================
-TESTED_EXECUTABLE_SHA: 6d3f783763a36e2c8362adb0c8c081726b3a2bb4
+TESTED_EXECUTABLE_SHA: e5e425d6aff342b3a8af57536da5c71c8a64267b
 Date:                  2026-08-14
 Test File:             server/tests/local05-security-resilience-audit.test.ts
 Command:               npx vitest run tests/local05-security-resilience-audit.test.ts

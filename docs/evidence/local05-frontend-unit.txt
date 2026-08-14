@@ -1,22 +1,27 @@
-================================================================================
-LOCAL-05 Frontend Unit Test Evidence
-================================================================================
-TESTED_EXECUTABLE_SHA: e5e425d6aff342b3a8af57536da5c71c8a64267b
-Date:    2026-08-14
-Command: npm test (vitest run src/tests --environment happy-dom)
-Exit:    0
-================================================================================
+=== COMMAND: npm test ===
+=== TESTED_EXECUTABLE_SHA: e5e425d6aff342b3a8af57536da5c71c8a64267b ===
+=== EXIT_CODE: 0 ===
 
- ✓ src/tests/wave1-frontend-guards.test.ts (8 tests)
- ✓ src/tests/productionTruthBoundary.test.ts (8 tests)
- ✓ src/tests/tenantFailClosed.test.ts (2 tests)
- ✓ src/tests/local01-tenant-onboarding.test.ts (2 tests)
- ✓ src/tests/qa.test.ts (5 tests)
- ✓ src/tests/dataModeAndAdapters.test.ts (10 tests)
- ✓ src/tests/wave1d-boundary.test.ts (3 tests | 1 skipped)
- ✓ src/tests/wave1g-owner-ui.test.tsx (13 tests)
 
-Test Files:  8 passed (8)
-Tests:       50 passed | 1 skipped (51)
-Duration:    12.55s
-================================================================================
+> react-example@0.0.0 test
+> vitest run src/tests --environment happy-dom
+
+
+[1m[46m RUN [49m[22m [36mv3.2.7 [39m[90mD:/horplus_wave1d_fasttrack[39m
+
+ [32m✓[39m src/tests/wave1d-boundary.test.ts [2m([22m[2m3 tests[22m[2m | [22m[33m1 skipped[39m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m src/tests/wave1-frontend-guards.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 39[2mms[22m[39m
+ [32m✓[39m src/tests/tenantFailClosed.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 18[2mms[22m[39m
+ [32m✓[39m src/tests/productionTruthBoundary.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 124[2mms[22m[39m
+ [32m✓[39m src/tests/qa.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 174[2mms[22m[39m
+ [32m✓[39m src/tests/dataModeAndAdapters.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 170[2mms[22m[39m
+ [32m✓[39m src/tests/local01-tenant-onboarding.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/tests/wave1g-owner-ui.test.tsx [2m([22m[2m13 tests[22m[2m)[22m[33m 1451[2mms[22m[39m
+   [33m[2m✓[22m[39m Wave 1G — Owner Property UI Component & Integration Tests[2m > [22m5. Connected Owner Page Section Integration Tests[2m > [22mconnects OwnerSettings page to updateDormitoryDefaults and handles independent versions and VERSION_CONFLICT reload [33m 345[2mms[22m[39m
+   [33m[2m✓[22m[39m Wave 1G — Owner Property UI Component & Integration Tests[2m > [22m5. Connected Owner Page Section Integration Tests[2m > [22mconnects OwnerRooms page: open Building editor, set & clear Building override, edit Room identity & override, archive with expectedVersion, and query availability [33m 562[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m8 passed[39m[22m[90m (8)[39m
+[2m      Tests [22m [1m[32m50 passed[39m[22m[2m | [22m[33m1 skipped[39m[90m (51)[39m
+[2m   Start at [22m 21:11:42
+[2m   Duration [22m 7.55s[2m (transform 1.57s, setup 0ms, collect 3.34s, tests 1.99s, environment 12.94s, prepare 3.14s)[22m
+
