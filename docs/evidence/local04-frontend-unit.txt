@@ -1,7 +1,7 @@
 ================================================================================
 HORPLUS LOCAL-04 FRONTEND UNIT TESTS QUALITY GATE
 ================================================================================
-Timestamp: 2026-08-14T07:48:14Z
+Timestamp: 2026-08-14T08:40:20Z
 Command: npm test
 Exit Code: 0
 
@@ -10,21 +10,21 @@ Exit Code: 0
 
  RUN  v3.2.7 D:/horplus_wave1d_fasttrack
 
- ✓ src/tests/wave1-frontend-guards.test.ts (8 tests) 25ms
- ✓ src/tests/wave1d-boundary.test.ts (3 tests | 1 skipped) 9ms
- ✓ src/tests/tenantFailClosed.test.ts (2 tests) 20ms
- ✓ src/tests/productionTruthBoundary.test.ts (8 tests) 108ms
- ✓ src/tests/qa.test.ts (5 tests) 258ms
- ✓ src/tests/dataModeAndAdapters.test.ts (10 tests) 120ms
- ✓ src/tests/local01-tenant-onboarding.test.ts (2 tests) 15ms
- ✓ src/tests/wave1g-owner-ui.test.tsx (13 tests) 1290ms
-   ✓ Wave 1G — Owner Property UI Component & Integration Tests > 5. Connected Owner Page Section Integration Tests > connects OwnerSettings page to updateDormitoryDefaults and handles independent versions and VERSION_CONFLICT reload  315ms
-   ✓ Wave 1G — Owner Property UI Component & Integration Tests > 5. Connected Owner Page Section Integration Tests > connects OwnerRooms page: open Building editor, set & clear Building override, edit Room identity & override, archive with expectedVersion, and query availability  494ms
+ ✓ src/tests/productionTruthBoundary.test.ts (8 tests) 82ms
+ ✓ src/tests/tenantFailClosed.test.ts (2 tests) 19ms
+ ✓ src/tests/wave1-frontend-guards.test.ts (8 tests) 34ms
+ ✓ src/tests/local01-tenant-onboarding.test.ts (2 tests) 13ms
+ ✓ src/tests/qa.test.ts (5 tests) 176ms
+ ✓ src/tests/dataModeAndAdapters.test.ts (10 tests) 124ms
+ ✓ src/tests/wave1d-boundary.test.ts (3 tests | 1 skipped) 6ms
+ ✓ src/tests/wave1g-owner-ui.test.tsx (13 tests) 1520ms
+   ✓ Wave 1G — Owner Property UI Component & Integration Tests > 5. Connected Owner Page Section Integration Tests > connects OwnerSettings page to updateDormitoryDefaults and handles independent versions and VERSION_CONFLICT reload  344ms
+   ✓ Wave 1G — Owner Property UI Component & Integration Tests > 5. Connected Owner Page Section Integration Tests > connects OwnerRooms page: open Building editor, set & clear Building override, edit Room identity & override, archive with expectedVersion, and query availability  622ms
 
  Test Files  8 passed (8)
       Tests  50 passed | 1 skipped (51)
-   Start at  14:48:05
-   Duration  8.51s (transform 2.25s, setup 0ms, collect 5.34s, tests 1.85s, environment 13.80s, prepare 3.59s)
+   Start at  15:40:13
+   Duration  7.02s (transform 2.32s, setup 0ms, collect 5.02s, tests 1.98s, environment 9.60s, prepare 1.91s)
 
 ================================================================================
 STATUS: PASS

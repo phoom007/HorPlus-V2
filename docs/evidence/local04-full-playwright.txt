@@ -1,20 +1,21 @@
 ================================================================================
 HORPLUS LOCAL-04 FULL PLAYWRIGHT TEST SUITE QUALITY GATE
 ================================================================================
-Timestamp: 2026-08-14T07:59:04Z
+Timestamp: 2026-08-14T08:37:24Z
 Command: npx playwright test --workers=1
 Exit Code: 0
-Total Tests: 102 passed (102 passed, 0 failed, 0 skipped)
-Duration: 5.8m
+Total Tests: 104 passed (104 passed, 0 failed, 0 skipped)
+Duration: 6.4m
 
 Test Suite Breakdown:
  ✓ tests/e2e/local01-tenant-onboarding-cooccupants.spec.ts (6 passed)
  ✓ tests/e2e/local02-contract-settlement-renewal.spec.ts (7 passed)
  ✓ tests/e2e/local03-notification-outbox-operations.spec.ts (7 passed)
- ✓ tests/e2e/local04-cross-portal-lifecycle.spec.ts (11 passed)
+ ✓ tests/e2e/local04-cross-portal-lifecycle.spec.ts (13 passed)
  ✓ tests/e2e/meter-bulk-reading.spec.ts (6 passed)
  ✓ tests/e2e/production-truth-audits.spec.ts (10 passed)
  ✓ tests/e2e/security-deep-hardening.spec.ts (8 passed)
+ ✓ tests/e2e/smoke.spec.ts (3 passed)
  ✓ tests/e2e/task009-staff-line-oa.spec.ts (15 passed)
  ✓ tests/e2e/tenant-payment-portal.spec.ts (6 passed)
  ✓ tests/e2e/wave0-production-truth.spec.ts (15 passed)

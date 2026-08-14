@@ -1,18 +1,20 @@
 ================================================================================
 HORPLUS LOCAL-04 TARGETED PLAYWRIGHT ACCEPTANCE SUITE QUALITY GATE
 ================================================================================
-Timestamp: 2026-08-14T07:53:06Z
+Timestamp: 2026-08-14T08:17:31Z
 Command: npx playwright test tests/e2e/local04-cross-portal-lifecycle.spec.ts --workers=1
 Exit Code: 0
-Total Tests: 11 passed (11)
-Duration: 1.3m
+Total Tests: 13 passed (13 passed, 0 failed, 0 skipped)
+Duration: 1.7m
 
 Test Results Breakdown:
- ✓ Journey A — Real Unauthenticated Registration -> Owner Review & Approve -> Atomic Contract Creation -> Tenant Login Verification
- ✓ Journey B — Same-Room Applicants Queue: Owner approves applicant A without auto-rejecting applicant B -> Owner reassigns applicant B to Room A103 and approves
- ✓ Journey C — Co-occupant Management: Owner adds co-occupant Somsri via UI without changing contract financials; Tenant views Somsri in UI and is denied direct mutation
+ ✓ Journey A — Tenant Application submission via UI -> Owner UI approval modal -> PostgreSQL atomic creation -> Tenant portal view
+ ✓ Journey B — Multiple applicants for same room persist; Owner approves A without auto-rejecting B; Owner reassigns B to another room via UI
+ ✓ Journey C — Owner manages co-occupants via UI without modifying financial terms; Tenant cannot mutate co-occupants
  ✓ Journey D & E — Tenant submits renewal via UI -> Owner approves scheduled renewal -> Scheduled clock activation updates contract chain
- ✓ Journey F & G — Forced replacement destructive warning -> Atomic termination & settlement creation -> Owner confirms settlement refund
+ ✓ Journey F & G1 — Forced replacement destructive warning -> Atomic termination & settlement net > 0 (PENDING_REFUND -> REFUNDED via UI)
+ ✓ Journey G2 — Settlement Direction B: net < 0 (PENDING_PAYMENT -> PAYMENT_RECEIVED via Owner UI confirmation) & cross-portal verification
+ ✓ Journey G3 — Settlement Direction C: net = 0 (CLOSED_ZERO exact state verification across Owner UI, DB, and Tenant portal)
  ✓ Journey H — Owner enters meter readings with F5 persistence and issues bill; Tenant reloads portal to view authoritative bill details
  ✓ Journey I — OWNER has full access; MANAGER has delegated operational access; TECH is restricted from financial contracts and staff administration
  ✓ Journey J — Owner creates staff access grant via UI, bearer link is redeemed cleanly without secrets, slot tracking maintains 10 quota, and grant revocation terminates sessions
