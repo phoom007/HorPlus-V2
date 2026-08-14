@@ -6,226 +6,216 @@ import { subscriptionEntitlementService } from '../../server/src/services/subscr
 import { outboxService } from '../../server/src/services/outbox.service.js';
 import crypto from 'crypto';
 
-test.describe.serial('LOCAL-06: Co-Occupant & People Count UI Orchestration E2E', () => {
-  const prisma = getPrismaClient();
-  const sessionSecret = process.env.SESSION_ENCRYPTION_KEY || '0123456789abcdef0123456789abcdef';
-  const csrfSecret = process.env.CSRF_SIGNING_KEY || 'csrf-secret-key-0123456789abcdef';
-  const sessionTokenService = new SessionTokenService(sessionSecret);
-  const csrfService = new CsrfService(csrfSecret);
+const prisma = getPrismaClient();
+const sessionSecret = process.env.SESSION_ENCRYPTION_KEY || '0123456789abcdef0123456789abcdef';
+const csrfSecret = process.env.CSRF_SIGNING_KEY || 'csrf-secret-key-0123456789abcdef';
+const sessionTokenService = new SessionTokenService(sessionSecret);
+const csrfService = new CsrfService(csrfSecret);
 
-  let dormId: string;
-  let buildingId: string;
-  let roomId: string;
-  let tenantId: string;
-  let tenantUserId: string;
-  let ownerUserId: string;
-  let cycleId: string;
-  let contractId: string;
+async function createIsolatedFixture(tag: string) {
+  await subscriptionEntitlementService.ensureSeeded();
 
-  let sessionTokenOwner: string;
-  let csrfTokenOwner: string;
-  let sessionTokenTenant: string;
-  let csrfTokenTenant: string;
+  // Create unique dormitory
+  const dorm = await prisma.dormitory.create({
+    data: {
+      name: `HorPlus L06 ${tag}`,
+      code: `L06-${tag}-${Date.now().toString().slice(-4)}`,
+      type: 'apartment',
+      status: 'active',
+    },
+  });
+  const dormId = dorm.id;
+  await subscriptionEntitlementService.provisionInitialTrial(dormId);
 
-  test.beforeAll(async () => {
-    // 1. Clean test DB
-    await subscriptionEntitlementService.ensureSeeded();
-    await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE local_notification_outbox, staff_notices, tenant_notices, contract_settlement_items, contract_settlements, tenant_renewal_requests, occupancies, bill_items, receipts, payment_status_histories, payments, bills, contract_snapshots, contracts, tenant_co_occupants, tenant_registration_requests, tenants, rooms, buildings, dormitory_members, sessions, users, room_billing_cycle_snapshots, billing_rate_snapshots, billing_cycles, dormitories CASCADE;'
-    );
-
-    // 2. Create Dormitory & Entitlement
-    const dorm = await prisma.dormitory.create({
-      data: {
-        name: 'HorPlus Local-06 Dormitory',
-        code: 'E2E-L06',
-        type: 'apartment',
-        status: 'active',
-      },
+  let ownerRole = await prisma.role.findFirst({ where: { code: 'OWNER' } });
+  if (!ownerRole) {
+    ownerRole = await prisma.role.create({
+      data: { name: 'Owner', code: 'OWNER', isSystem: true, permissions: ['*'] },
     });
-    dormId = dorm.id;
-    await subscriptionEntitlementService.provisionInitialTrial(dormId);
+  }
 
-    // 3. Create Roles
-    let ownerRole = await prisma.role.findFirst({ where: { code: 'OWNER' } });
-    if (!ownerRole) {
-      ownerRole = await prisma.role.create({
-        data: { name: 'Owner', code: 'OWNER', isSystem: true, permissions: ['*'] },
-      });
-    }
-
-    let tenantRole = await prisma.role.findFirst({ where: { code: 'TENANT' } });
-    if (!tenantRole) {
-      tenantRole = await prisma.role.create({
-        data: { name: 'Tenant', code: 'TENANT', isSystem: true, permissions: [] },
-      });
-    }
-
-    // 4. Create Owner User & Member
-    const ownerUser = await prisma.user.create({
-      data: {
-        email: 'owner_local06@test.com',
-        emailNormalized: 'owner_local06@test.com',
-        name: 'เจ้าของ หอพัก',
-        googleSubject: `sub-owner-l06-${Date.now()}`,
-        status: 'active',
-      },
+  let tenantRole = await prisma.role.findFirst({ where: { code: 'TENANT' } });
+  if (!tenantRole) {
+    tenantRole = await prisma.role.create({
+      data: { name: 'Tenant', code: 'TENANT', isSystem: true, permissions: [] },
     });
-    ownerUserId = ownerUser.id;
+  }
 
-    await prisma.dormitoryMember.create({
-      data: {
-        dormitoryId: dormId,
-        userId: ownerUserId,
-        roleId: ownerRole.id,
-      },
-    });
+  const ownerUser = await prisma.user.create({
+    data: {
+      email: `owner_${tag}_${Date.now()}@test.com`,
+      emailNormalized: `owner_${tag}_${Date.now()}@test.com`,
+      name: 'เจ้าของ หอพัก',
+      googleSubject: `sub-owner-${tag}-${Date.now()}`,
+      status: 'active',
+    },
+  });
+  const ownerUserId = ownerUser.id;
 
-    const sidOwner = crypto.randomUUID();
-    const hashOwner = SessionTokenService.hashSessionId(sidOwner);
-    await prisma.session.create({
-      data: {
-        userId: ownerUserId,
-        sessionIdHash: hashOwner,
-        tokenVersion: 1,
-        status: 'active',
-        expiresAt: new Date(Date.now() + 86400 * 1000),
-      },
-    });
-    sessionTokenOwner = sessionTokenService.encryptToken({ sub: ownerUserId, sid: sidOwner, type: 'session', version: 1 }, 86400);
-    csrfTokenOwner = csrfService.generateCsrfToken(sidOwner);
-
-    // 5. Create Tenant User & Record
-    const tenantUser = await prisma.user.create({
-      data: {
-        email: 'tenant_local06@test.com',
-        emailNormalized: 'tenant_local06@test.com',
-        name: 'สมศักดิ์ ผู้เช่าหลัก',
-        googleSubject: `sub-tenant-l06-${Date.now()}`,
-        status: 'active',
-      },
-    });
-    tenantUserId = tenantUser.id;
-
-    await prisma.dormitoryMember.create({
-      data: {
-        dormitoryId: dormId,
-        userId: tenantUserId,
-        roleId: tenantRole.id,
-      },
-    });
-
-    const tenant = await prisma.tenant.create({
-      data: {
-        dormitoryId: dormId,
-        linkedUserId: tenantUserId,
-        tenantNumber: 'TNT-L06-01',
-        firstName: 'สมศักดิ์',
-        lastName: 'ผู้เช่าหลัก',
-        displayName: 'สมศักดิ์ ผู้เช่าหลัก',
-        phone: '0812345678',
-        status: 'active',
-      },
-    });
-    tenantId = tenant.id;
-
-    const sidTenant = crypto.randomUUID();
-    const hashTenant = SessionTokenService.hashSessionId(sidTenant);
-    await prisma.session.create({
-      data: {
-        userId: tenantUserId,
-        sessionIdHash: hashTenant,
-        tokenVersion: 1,
-        status: 'active',
-        expiresAt: new Date(Date.now() + 86400 * 1000),
-      },
-    });
-    sessionTokenTenant = sessionTokenService.encryptToken({ sub: tenantUserId, sid: sidTenant, type: 'session', version: 1 }, 86400);
-    csrfTokenTenant = csrfService.generateCsrfToken(sidTenant);
-
-    // 6. Create Building & Room A102
-    const building = await prisma.building.create({
-      data: {
-        dormitoryId: dormId,
-        name: 'อาคาร 1',
-        floorCount: 3,
-      },
-    });
-    buildingId = building.id;
-
-    const room = await prisma.room.create({
-      data: {
-        dormitoryId: dormId,
-        buildingId,
-        roomNumber: 'A102',
-        normalizedRoomNumber: 'a102',
-        floor: 1,
-        status: 'occupied',
-        monthlyRent: 5000,
-        currentTenantId: tenantId,
-      },
-    });
-    roomId = room.id;
-
-    // 7. Create Active Contract
-    const contract = await prisma.contract.create({
-      data: {
-        dormitoryId: dormId,
-        contractNumber: 'CTR-L06-001',
-        roomId,
-        tenantId,
-        startDate: new Date('2026-08-01'),
-        endDate: new Date('2027-07-31'),
-        rentAmount: 5000,
-        depositAmount: 10000,
-        advancePaymentAmount: 5000,
-        status: 'active',
-      },
-    });
-    contractId = contract.id;
-
-    // 8. Create September Billing Cycle
-    const cycle = await prisma.billingCycle.create({
-      data: {
-        dormitoryId: dormId,
-        cycleCode: '2026-09',
-        name: 'กันยายน 2569',
-        periodStart: new Date('2026-09-01'),
-        periodEnd: new Date('2026-09-30'),
-        billingDate: new Date('2026-09-25'),
-        dueDate: new Date('2026-10-05'),
-        status: 'draft',
-      },
-    });
-    cycleId = cycle.id;
-
-    await prisma.billingRateSnapshot.create({
-      data: {
-        dormitoryId: dormId,
-        billingCycleId: cycleId,
-        waterRate: 100,
-        waterBillingType: 'person',
-        electricityRate: 8,
-        electricityBillingType: 'unit',
-        commonFee: 200,
-        commonFeeMode: 'person',
-        internetFee: 0,
-        internetFeeMode: 'room',
-        parkingFee: 0,
-        parkingFeeMode: 'free',
-      },
-    });
+  await prisma.dormitoryMember.create({
+    data: {
+      dormitoryId: dormId,
+      userId: ownerUserId,
+      roleId: ownerRole.id,
+    },
   });
 
+  const sidOwner = crypto.randomUUID();
+  const hashOwner = SessionTokenService.hashSessionId(sidOwner);
+  await prisma.session.create({
+    data: {
+      userId: ownerUserId,
+      sessionIdHash: hashOwner,
+      tokenVersion: 1,
+      status: 'active',
+      expiresAt: new Date(Date.now() + 86400 * 1000),
+    },
+  });
+  const sessionTokenOwner = sessionTokenService.encryptToken({ sub: ownerUserId, sid: sidOwner, type: 'session', version: 1 }, 86400);
+  const csrfTokenOwner = csrfService.generateCsrfToken(sidOwner);
+
+  const tenantUser = await prisma.user.create({
+    data: {
+      email: `tenant_${tag}_${Date.now()}@test.com`,
+      emailNormalized: `tenant_${tag}_${Date.now()}@test.com`,
+      name: 'สมศักดิ์ ผู้เช่าหลัก',
+      googleSubject: `sub-tenant-${tag}-${Date.now()}`,
+      status: 'active',
+    },
+  });
+  const tenantUserId = tenantUser.id;
+
+  await prisma.dormitoryMember.create({
+    data: {
+      dormitoryId: dormId,
+      userId: tenantUserId,
+      roleId: tenantRole.id,
+    },
+  });
+
+  const tenant = await prisma.tenant.create({
+    data: {
+      dormitoryId: dormId,
+      linkedUserId: tenantUserId,
+      tenantNumber: `TNT-${tag.toUpperCase()}-${Date.now().toString().slice(-4)}`,
+      firstName: 'สมศักดิ์',
+      lastName: 'ผู้เช่าหลัก',
+      displayName: 'สมศักดิ์ ผู้เช่าหลัก',
+      phone: '0812345678',
+      status: 'active',
+    },
+  });
+  const tenantId = tenant.id;
+
+  const sidTenant = crypto.randomUUID();
+  const hashTenant = SessionTokenService.hashSessionId(sidTenant);
+  await prisma.session.create({
+    data: {
+      userId: tenantUserId,
+      sessionIdHash: hashTenant,
+      tokenVersion: 1,
+      status: 'active',
+      expiresAt: new Date(Date.now() + 86400 * 1000),
+    },
+  });
+  const sessionTokenTenant = sessionTokenService.encryptToken({ sub: tenantUserId, sid: sidTenant, type: 'session', version: 1 }, 86400);
+  const csrfTokenTenant = csrfService.generateCsrfToken(sidTenant);
+
+  const building = await prisma.building.create({
+    data: {
+      dormitoryId: dormId,
+      name: 'อาคาร 1',
+      floorCount: 3,
+    },
+  });
+
+  const room = await prisma.room.create({
+    data: {
+      dormitoryId: dormId,
+      buildingId: building.id,
+      roomNumber: 'A102',
+      normalizedRoomNumber: 'a102',
+      floor: 1,
+      status: 'occupied',
+      monthlyRent: 5000,
+      currentTenantId: tenantId,
+    },
+  });
+  const roomId = room.id;
+
+  const contract = await prisma.contract.create({
+    data: {
+      dormitoryId: dormId,
+      contractNumber: `CTR-${tag.toUpperCase()}-001`,
+      roomId,
+      tenantId,
+      startDate: new Date('2026-08-01'),
+      endDate: new Date('2027-07-31'),
+      rentAmount: 5000,
+      depositAmount: 10000,
+      advancePaymentAmount: 5000,
+      status: 'active',
+    },
+  });
+
+  const cycle = await prisma.billingCycle.create({
+    data: {
+      dormitoryId: dormId,
+      cycleCode: '2026-09',
+      name: 'กันยายน 2569',
+      periodStart: new Date('2026-09-01'),
+      periodEnd: new Date('2026-09-30'),
+      billingDate: new Date('2026-09-25'),
+      dueDate: new Date('2026-10-05'),
+      status: 'draft',
+    },
+  });
+
+  await prisma.billingRateSnapshot.create({
+    data: {
+      dormitoryId: dormId,
+      billingCycleId: cycle.id,
+      waterRate: 100,
+      waterBillingType: 'person',
+      electricityRate: 8,
+      electricityBillingType: 'unit',
+      commonFee: 200,
+      commonFeeMode: 'person',
+      internetFee: 0,
+      internetFeeMode: 'room',
+      parkingFee: 0,
+      parkingFeeMode: 'free',
+    },
+  });
+
+  return {
+    dormId,
+    buildingId: building.id,
+    roomId,
+    tenantId,
+    tenantUserId,
+    ownerUserId,
+    cycleId: cycle.id,
+    contractId: contract.id,
+    sessionTokenOwner,
+    csrfTokenOwner,
+    sessionTokenTenant,
+    csrfTokenTenant,
+  };
+}
+
+test.describe('LOCAL-06: Co-Occupant & People Count UI Orchestration E2E', () => {
   // =========================================================================
   // Section 10: FOCUSED TENANT UI PLAYWRIGHT
   // =========================================================================
   test('10. Tenant real UI add & delete co-occupant with DB persistence and F5 proof', async ({ page, context }) => {
+    const f = await createIsolatedFixture('t10');
+
     await context.clearCookies();
     await context.addCookies([
-      { name: 'horplus_session', value: sessionTokenTenant, domain: '127.0.0.1', path: '/' },
-      { name: 'horplus_csrf', value: csrfTokenTenant, domain: '127.0.0.1', path: '/' },
-      { name: 'selected_dormitory_id', value: dormId, domain: '127.0.0.1', path: '/' },
+      { name: 'horplus_session', value: f.sessionTokenTenant, domain: '127.0.0.1', path: '/' },
+      { name: 'horplus_csrf', value: f.csrfTokenTenant, domain: '127.0.0.1', path: '/' },
+      { name: 'selected_dormitory_id', value: f.dormId, domain: '127.0.0.1', path: '/' },
     ]);
 
     await page.goto('/tenant');
@@ -260,8 +250,8 @@ test.describe.serial('LOCAL-06: Co-Occupant & People Count UI Orchestration E2E'
     // 6. Assert PostgreSQL DB has active TenantCoOccupant
     const dbCo = await prisma.tenantCoOccupant.findFirst({
       where: {
-        dormitoryId: dormId,
-        tenantId,
+        dormitoryId: f.dormId,
+        tenantId: f.tenantId,
         name: 'คุณสมหญิง ร่วมพัก',
         deletedAt: null,
       },
@@ -309,15 +299,16 @@ test.describe.serial('LOCAL-06: Co-Occupant & People Count UI Orchestration E2E'
   // Section 11: FOCUSED OWNER METER UI PLAYWRIGHT
   // =========================================================================
   test('11. Owner meter UI: edit peopleCount 1 -> 2, save, verify snapshot & unpaid bill recalculation', async ({ page, context }) => {
+    const f = await createIsolatedFixture('t11');
+
     // Initial unpaid September bill
     const unpaidBill = await prisma.bill.create({
       data: {
-        id: 'a0000000-0000-4000-8000-000000000081',
-        dormitoryId: dormId,
-        billingCycleId: cycleId,
-        roomId,
-        tenantId,
-        contractId,
+        dormitoryId: f.dormId,
+        billingCycleId: f.cycleId,
+        roomId: f.roomId,
+        tenantId: f.tenantId,
+        contractId: f.contractId,
         billNumber: 'INV-202609-METER-UI',
         status: 'unpaid',
         billingDate: new Date('2026-09-25'),
@@ -332,7 +323,7 @@ test.describe.serial('LOCAL-06: Co-Occupant & People Count UI Orchestration E2E'
     await prisma.billItem.createMany({
       data: [
         {
-          dormitoryId: dormId,
+          dormitoryId: f.dormId,
           billId: unpaidBill.id,
           type: 'rent',
           description: 'ค่าเช่าห้องพัก',
@@ -343,7 +334,7 @@ test.describe.serial('LOCAL-06: Co-Occupant & People Count UI Orchestration E2E'
           displayOrder: 0,
         },
         {
-          dormitoryId: dormId,
+          dormitoryId: f.dormId,
           billId: unpaidBill.id,
           type: 'water',
           description: 'ค่าน้ำประปา (1 คน)',
@@ -355,7 +346,7 @@ test.describe.serial('LOCAL-06: Co-Occupant & People Count UI Orchestration E2E'
           displayOrder: 1,
         },
         {
-          dormitoryId: dormId,
+          dormitoryId: f.dormId,
           billId: unpaidBill.id,
           type: 'common_fee',
           description: 'ค่าส่วนกลาง (1 คน)',
@@ -371,16 +362,16 @@ test.describe.serial('LOCAL-06: Co-Occupant & People Count UI Orchestration E2E'
 
     await context.clearCookies();
     await context.addCookies([
-      { name: 'horplus_session', value: sessionTokenOwner, domain: '127.0.0.1', path: '/' },
-      { name: 'horplus_csrf', value: csrfTokenOwner, domain: '127.0.0.1', path: '/' },
-      { name: 'selected_dormitory_id', value: dormId, domain: '127.0.0.1', path: '/' },
+      { name: 'horplus_session', value: f.sessionTokenOwner, domain: '127.0.0.1', path: '/' },
+      { name: 'horplus_csrf', value: f.csrfTokenOwner, domain: '127.0.0.1', path: '/' },
+      { name: 'selected_dormitory_id', value: f.dormId, domain: '127.0.0.1', path: '/' },
     ]);
 
     await page.goto('/owner/meters');
     await page.waitForLoadState('networkidle');
 
     // Locate room A102 row
-    const roomRow = page.locator('#room-row-' + roomId);
+    const roomRow = page.locator('#room-row-' + f.roomId);
     await expect(roomRow).toBeVisible();
 
     // Locate `จำนวนคน` input with data-col="peopleCount" in A102 row
@@ -400,9 +391,9 @@ test.describe.serial('LOCAL-06: Co-Occupant & People Count UI Orchestration E2E'
     const snapshotDb = await prisma.roomBillingCycleSnapshot.findUnique({
       where: {
         dormitory_billing_cycle_room_unique: {
-          dormitoryId: dormId,
-          billingCycleId: cycleId,
-          roomId,
+          dormitoryId: f.dormId,
+          billingCycleId: f.cycleId,
+          roomId: f.roomId,
         },
       },
     });
@@ -418,7 +409,7 @@ test.describe.serial('LOCAL-06: Co-Occupant & People Count UI Orchestration E2E'
     // Reload (F5) and verify Meter UI retains 2
     await page.reload();
     await page.waitForLoadState('networkidle');
-    const reloadedRow = page.locator('#room-row-' + roomId);
+    const reloadedRow = page.locator('#room-row-' + f.roomId);
     await expect(reloadedRow).toBeVisible();
     const reloadedInput = reloadedRow.locator('input[data-col="peopleCount"]');
     await expect(reloadedInput).toHaveValue('2');
@@ -428,24 +419,22 @@ test.describe.serial('LOCAL-06: Co-Occupant & People Count UI Orchestration E2E'
   // Section 12: DELTA TOAST PLAYWRIGHT
   // =========================================================================
   test('12. Delta Toast Playwright: previous = 1, current household = 2 shows "A102: จำนวนคน 1 → 2"', async ({ page, context }) => {
-    // 1. Clear co-occupants and add exactly 1 co-occupant to household (total household = 2)
-    await prisma.tenantCoOccupant.deleteMany({ where: { dormitoryId: dormId, tenantId } });
+    const f = await createIsolatedFixture('t12');
+
+    // 1. Add exactly 1 co-occupant to household (total household = 2)
     await prisma.tenantCoOccupant.create({
       data: {
-        dormitoryId: dormId,
-        tenantId,
+        dormitoryId: f.dormId,
+        tenantId: f.tenantId,
         name: 'คุณสมใจ ร่วมห้อง',
         status: 'active',
       },
     });
 
     // 2. Set August previous cycle (2026-08) with bill & water item for 1 person
-    const augCycleId = 'a0000000-0000-4000-8000-000000000085';
-    await prisma.billingCycle.upsert({
-      where: { id: augCycleId },
-      create: {
-        id: augCycleId,
-        dormitoryId: dormId,
+    const augCycle = await prisma.billingCycle.create({
+      data: {
+        dormitoryId: f.dormId,
         cycleCode: '2026-08',
         name: 'สิงหาคม 2569',
         periodStart: new Date('2026-08-01'),
@@ -454,20 +443,15 @@ test.describe.serial('LOCAL-06: Co-Occupant & People Count UI Orchestration E2E'
         dueDate: new Date('2026-09-05'),
         status: 'completed',
       },
-      update: { status: 'completed' },
     });
-
-    await prisma.billItem.deleteMany({ where: { bill: { billingCycleId: augCycleId } } });
-    await prisma.bill.deleteMany({ where: { billingCycleId: augCycleId } });
 
     const augBill = await prisma.bill.create({
       data: {
-        id: 'a0000000-0000-4000-8000-000000000086',
-        dormitoryId: dormId,
-        billingCycleId: augCycleId,
-        roomId,
-        tenantId,
-        contractId,
+        dormitoryId: f.dormId,
+        billingCycleId: augCycle.id,
+        roomId: f.roomId,
+        tenantId: f.tenantId,
+        contractId: f.contractId,
         billNumber: 'INV-202608-DELTA',
         status: 'paid',
         billingDate: new Date('2026-08-25'),
@@ -481,7 +465,7 @@ test.describe.serial('LOCAL-06: Co-Occupant & People Count UI Orchestration E2E'
 
     await prisma.billItem.create({
       data: {
-        dormitoryId: dormId,
+        dormitoryId: f.dormId,
         billId: augBill.id,
         type: 'water',
         description: 'ค่าน้ำประปา (1 คน)',
@@ -495,44 +479,34 @@ test.describe.serial('LOCAL-06: Co-Occupant & People Count UI Orchestration E2E'
     });
 
     // Upsert meter devices so meter readings satisfy foreign key
-    const waterDeviceId = 'a0000000-0000-4000-8000-000000000091';
-    const elecDeviceId = 'a0000000-0000-4000-8000-000000000092';
-
-    await prisma.meterDevice.upsert({
-      where: { id: waterDeviceId },
-      create: {
-        id: waterDeviceId,
-        dormitoryId: dormId,
-        roomId,
+    const waterDevice = await prisma.meterDevice.create({
+      data: {
+        dormitoryId: f.dormId,
+        roomId: f.roomId,
         type: 'water',
         meterNumber: 'MTR-W-A102',
         status: 'active',
       },
-      update: {},
     });
 
-    await prisma.meterDevice.upsert({
-      where: { id: elecDeviceId },
-      create: {
-        id: elecDeviceId,
-        dormitoryId: dormId,
-        roomId,
+    const elecDevice = await prisma.meterDevice.create({
+      data: {
+        dormitoryId: f.dormId,
+        roomId: f.roomId,
         type: 'electricity',
         meterNumber: 'MTR-E-A102',
         status: 'active',
       },
-      update: {},
     });
 
-    // Previous meter readings so prevData is available for pull comparison
-    await prisma.meterReading.deleteMany({ where: { dormitoryId: dormId, billingCycleId: augCycleId } });
+    // Previous meter readings
     await prisma.meterReading.createMany({
       data: [
         {
-          dormitoryId: dormId,
-          billingCycleId: augCycleId,
-          roomId,
-          meterDeviceId: waterDeviceId,
+          dormitoryId: f.dormId,
+          billingCycleId: augCycle.id,
+          roomId: f.roomId,
+          meterDeviceId: waterDevice.id,
           meterType: 'water',
           previousReading: 100,
           currentReading: 120,
@@ -540,10 +514,10 @@ test.describe.serial('LOCAL-06: Co-Occupant & People Count UI Orchestration E2E'
           status: 'confirmed',
         },
         {
-          dormitoryId: dormId,
-          billingCycleId: augCycleId,
-          roomId,
-          meterDeviceId: elecDeviceId,
+          dormitoryId: f.dormId,
+          billingCycleId: augCycle.id,
+          roomId: f.roomId,
+          meterDeviceId: elecDevice.id,
           meterType: 'electricity',
           previousReading: 200,
           currentReading: 250,
@@ -555,20 +529,20 @@ test.describe.serial('LOCAL-06: Co-Occupant & People Count UI Orchestration E2E'
 
     await context.clearCookies();
     await context.addCookies([
-      { name: 'horplus_session', value: sessionTokenOwner, domain: '127.0.0.1', path: '/' },
-      { name: 'horplus_csrf', value: csrfTokenOwner, domain: '127.0.0.1', path: '/' },
-      { name: 'selected_dormitory_id', value: dormId, domain: '127.0.0.1', path: '/' },
+      { name: 'horplus_session', value: f.sessionTokenOwner, domain: '127.0.0.1', path: '/' },
+      { name: 'horplus_csrf', value: f.csrfTokenOwner, domain: '127.0.0.1', path: '/' },
+      { name: 'selected_dormitory_id', value: f.dormId, domain: '127.0.0.1', path: '/' },
     ]);
 
     await page.goto('/owner/meters');
     await page.waitForLoadState('networkidle');
 
-    // Click "ดึงข้อมูลก่อนหน้า" button (mandatory assertion, no if statement)
+    // Click "ดึงข้อมูลก่อนหน้า" button
     const pullBtn = page.getByRole('button', { name: /ดึงข้อมูลก่อนหน้า/i });
     await expect(pullBtn).toBeVisible({ timeout: 5000 });
     await pullBtn.click();
 
-    // Toast must contain generic success and "A102: จำนวนคน 1 → 2"
+    // Verify toast notification containing delta "A102: จำนวนคน 1 → 2"
     await expect(page.getByText('ดึงข้อมูลจากงวดก่อนหน้าเรียบร้อย')).toBeVisible({ timeout: 5000 });
     const toastDelta = page.locator('text=/A102.*จำนวนคน 1 → 2/');
     await expect(toastDelta).toBeVisible({ timeout: 5000 });
@@ -582,38 +556,83 @@ test.describe.serial('LOCAL-06: Co-Occupant & People Count UI Orchestration E2E'
   // Section 13: UNCHANGED DELTA TOAST
   // =========================================================================
   test('13. Unchanged Delta Toast: previous = 2, current household = 2 shows generic toast only', async ({ page, context }) => {
-    // 1. Household = 2, previous cycle bill = 2 people
-    await prisma.billItem.updateMany({
-      where: { billId: 'a0000000-0000-4000-8000-000000000086', type: 'water' },
-      data: { description: 'ค่าน้ำประปา (2 คน)', quantity: 2, amount: 200, metadata: { mode: 'person', peopleCount: 2 } },
-    });
+    const f = await createIsolatedFixture('t13');
 
-    // Add electricity bill item to August bill so prevData.elecCurr > 0 causes pull button visibility
-    await prisma.billItem.deleteMany({
-      where: { billId: 'a0000000-0000-4000-8000-000000000086', type: 'electricity' },
-    });
-    await prisma.billItem.create({
+    // 1. Household = 2
+    await prisma.tenantCoOccupant.create({
       data: {
-        dormitoryId: dormId,
-        billId: 'a0000000-0000-4000-8000-000000000086',
-        type: 'electricity',
-        description: 'ค่าไฟฟ้า (50 หน่วย)',
-        quantity: 50,
-        unit: 'unit',
-        unitPrice: 8,
-        amount: 400,
-        displayOrder: 2,
+        dormitoryId: f.dormId,
+        tenantId: f.tenantId,
+        name: 'คุณสมใจ ร่วมห้อง',
+        status: 'active',
       },
     });
 
-    // Make elecPrev in current cycle mismatch with previous currentReading by resetting current readings
-    await prisma.meterReading.deleteMany({ where: { dormitoryId: dormId, billingCycleId: cycleId } });
+    // 2. August previous cycle bill = 2 people
+    const augCycle = await prisma.billingCycle.create({
+      data: {
+        dormitoryId: f.dormId,
+        cycleCode: '2026-08',
+        name: 'สิงหาคม 2569',
+        periodStart: new Date('2026-08-01'),
+        periodEnd: new Date('2026-08-31'),
+        billingDate: new Date('2026-08-25'),
+        dueDate: new Date('2026-09-05'),
+        status: 'completed',
+      },
+    });
+
+    const augBill = await prisma.bill.create({
+      data: {
+        dormitoryId: f.dormId,
+        billingCycleId: augCycle.id,
+        roomId: f.roomId,
+        tenantId: f.tenantId,
+        contractId: f.contractId,
+        billNumber: 'INV-202608-UNCHANGED',
+        status: 'paid',
+        billingDate: new Date('2026-08-25'),
+        dueDate: new Date('2026-09-05'),
+        subtotal: 5200,
+        totalAmount: 5200,
+        paidAmount: 5200,
+        outstandingAmount: 0,
+      },
+    });
+
+    await prisma.billItem.createMany({
+      data: [
+        {
+          dormitoryId: f.dormId,
+          billId: augBill.id,
+          type: 'water',
+          description: 'ค่าน้ำประปา (2 คน)',
+          quantity: 2,
+          unit: 'person',
+          unitPrice: 100,
+          amount: 200,
+          metadata: { mode: 'person', peopleCount: 2 },
+          displayOrder: 1,
+        },
+        {
+          dormitoryId: f.dormId,
+          billId: augBill.id,
+          type: 'electricity',
+          description: 'ค่าไฟฟ้า (50 หน่วย)',
+          quantity: 50,
+          unit: 'unit',
+          unitPrice: 8,
+          amount: 400,
+          displayOrder: 2,
+        },
+      ],
+    });
 
     await context.clearCookies();
     await context.addCookies([
-      { name: 'horplus_session', value: sessionTokenOwner, domain: '127.0.0.1', path: '/' },
-      { name: 'horplus_csrf', value: csrfTokenOwner, domain: '127.0.0.1', path: '/' },
-      { name: 'selected_dormitory_id', value: dormId, domain: '127.0.0.1', path: '/' },
+      { name: 'horplus_session', value: f.sessionTokenOwner, domain: '127.0.0.1', path: '/' },
+      { name: 'horplus_csrf', value: f.csrfTokenOwner, domain: '127.0.0.1', path: '/' },
+      { name: 'selected_dormitory_id', value: f.dormId, domain: '127.0.0.1', path: '/' },
     ]);
 
     await page.goto('/owner/meters');
@@ -630,47 +649,61 @@ test.describe.serial('LOCAL-06: Co-Occupant & People Count UI Orchestration E2E'
   });
 
   // =========================================================================
-  // Section 14: PAID BILL UI CASE
+  // Section 14: PAID BILL UI CASE WITH REAL NOTIFICATION VERIFICATION
   // =========================================================================
   test('14. Paid bill UI: paid bill remains immutable and notice explains change applies next cycle', async ({ page, context }) => {
-    // 1. Setup August paid bill (5100 total: 5000 rent + 100 water for 1 person)
-    const augCycleId = 'a0000000-0000-4000-8000-000000000085';
-    await prisma.roomBillingCycleSnapshot.upsert({
-      where: {
-        dormitory_billing_cycle_room_unique: {
-          dormitoryId: dormId,
-          billingCycleId: augCycleId,
-          roomId,
-        },
-      },
-      create: {
-        dormitoryId: dormId,
-        billingCycleId: augCycleId,
-        roomId,
+    const f = await createIsolatedFixture('t14');
+
+    // 1. Setup September paid bill in current active cycle (5100 total: 5000 rent + 100 water for 1 person)
+    await prisma.roomBillingCycleSnapshot.create({
+      data: {
+        dormitoryId: f.dormId,
+        billingCycleId: f.cycleId,
+        roomId: f.roomId,
         peopleCount: 1,
         source: 'HOUSEHOLD_SYNC',
       },
-      update: {
-        peopleCount: 1,
+    });
+
+    const paidBill = await prisma.bill.create({
+      data: {
+        dormitoryId: f.dormId,
+        billingCycleId: f.cycleId,
+        roomId: f.roomId,
+        tenantId: f.tenantId,
+        contractId: f.contractId,
+        billNumber: 'INV-202609-PAID-IMMUTABLE',
+        status: 'paid',
+        billingDate: new Date('2026-09-25'),
+        dueDate: new Date('2026-10-05'),
+        subtotal: 5100,
+        totalAmount: 5100,
+        paidAmount: 5100,
+        outstandingAmount: 0,
       },
     });
 
-    const checkAugBillBefore = await prisma.bill.findUnique({
-      where: { id: 'a0000000-0000-4000-8000-000000000086' },
-      include: { items: true },
+    await prisma.billItem.create({
+      data: {
+        dormitoryId: f.dormId,
+        billId: paidBill.id,
+        type: 'water',
+        description: 'ค่าน้ำประปา (1 คน)',
+        quantity: 1,
+        unit: 'person',
+        unitPrice: 100,
+        amount: 100,
+        metadata: { mode: 'person', peopleCount: 1 },
+        displayOrder: 1,
+      },
     });
-    expect(checkAugBillBefore?.status).toBe('paid');
-    const originalTotal = Number(checkAugBillBefore?.totalAmount);
-    const originalPaid = Number(checkAugBillBefore?.paidAmount);
-    const originalWaterQty = Number(checkAugBillBefore?.items.find((i) => i.type === 'water')?.quantity);
-    const originalWaterAmt = Number(checkAugBillBefore?.items.find((i) => i.type === 'water')?.amount);
 
     // 2. Tenant adds co-occupant in Tenant Portal
     await context.clearCookies();
     await context.addCookies([
-      { name: 'horplus_session', value: sessionTokenTenant, domain: '127.0.0.1', path: '/' },
-      { name: 'horplus_csrf', value: csrfTokenTenant, domain: '127.0.0.1', path: '/' },
-      { name: 'selected_dormitory_id', value: dormId, domain: '127.0.0.1', path: '/' },
+      { name: 'horplus_session', value: f.sessionTokenTenant, domain: '127.0.0.1', path: '/' },
+      { name: 'horplus_csrf', value: f.csrfTokenTenant, domain: '127.0.0.1', path: '/' },
+      { name: 'selected_dormitory_id', value: f.dormId, domain: '127.0.0.1', path: '/' },
     ]);
 
     await page.goto('/tenant');
@@ -683,44 +716,38 @@ test.describe.serial('LOCAL-06: Co-Occupant & People Count UI Orchestration E2E'
     await expect(page.getByText('คุณสมนึก สมาชิกใหม่').first()).toBeVisible({ timeout: 5000 });
 
     // 3. Verify paid bill in DB remains strictly immutable
-    const checkAugBillAfter = await prisma.bill.findUnique({
-      where: { id: 'a0000000-0000-4000-8000-000000000086' },
+    const checkBillAfter = await prisma.bill.findUnique({
+      where: { id: paidBill.id },
       include: { items: true },
     });
-    expect(checkAugBillAfter?.status).toBe('paid');
-    expect(Number(checkAugBillAfter?.totalAmount)).toBe(originalTotal);
-    expect(Number(checkAugBillAfter?.paidAmount)).toBe(originalPaid);
+    expect(checkBillAfter?.status).toBe('paid');
+    expect(Number(checkBillAfter?.totalAmount)).toBe(5100);
+    expect(Number(checkBillAfter?.paidAmount)).toBe(5100);
 
-    const waterItemAfter = checkAugBillAfter?.items.find((i) => i.type === 'water');
-    expect(Number(waterItemAfter?.quantity)).toBe(originalWaterQty);
-    expect(Number(waterItemAfter?.amount)).toBe(originalWaterAmt);
+    const waterItemAfter = checkBillAfter?.items.find((i) => i.type === 'water');
+    expect(Number(waterItemAfter?.quantity)).toBe(1);
+    expect(Number(waterItemAfter?.amount)).toBe(100);
 
-    // Verify August snapshot remains 1
-    const augSnapshot = await prisma.roomBillingCycleSnapshot.findUnique({
+    // Verify current cycle snapshot remains 1
+    const cycleSnapshot = await prisma.roomBillingCycleSnapshot.findUnique({
       where: {
         dormitory_billing_cycle_room_unique: {
-          dormitoryId: dormId,
-          billingCycleId: augCycleId,
-          roomId,
+          dormitoryId: f.dormId,
+          billingCycleId: f.cycleId,
+          roomId: f.roomId,
         },
       },
     });
-    expect(augSnapshot?.peopleCount).toBe(1);
-  });
+    expect(cycleSnapshot?.peopleCount).toBe(1);
 
-  // =========================================================================
-  // Section 15: NOTIFICATION UI PROOF
-  // =========================================================================
-  test('15. Notification UI: Owner bell and Tenant bell show proper notices in real UI after outbox processing', async ({ page, context }) => {
-    // 1. Process all pending outbox events into staff_notices & tenant_notices
+    // 4. Process outbox & verify Owner Bell in Real UI explains next-cycle behavior
     await outboxService.processPendingOutboxEvents();
 
-    // 2. Owner Browser: verify real Notification Bell popover/dropdown
     await context.clearCookies();
     await context.addCookies([
-      { name: 'horplus_session', value: sessionTokenOwner, domain: '127.0.0.1', path: '/' },
-      { name: 'horplus_csrf', value: csrfTokenOwner, domain: '127.0.0.1', path: '/' },
-      { name: 'selected_dormitory_id', value: dormId, domain: '127.0.0.1', path: '/' },
+      { name: 'horplus_session', value: f.sessionTokenOwner, domain: '127.0.0.1', path: '/' },
+      { name: 'horplus_csrf', value: f.csrfTokenOwner, domain: '127.0.0.1', path: '/' },
+      { name: 'selected_dormitory_id', value: f.dormId, domain: '127.0.0.1', path: '/' },
     ]);
 
     await page.goto('/owner/dashboard');
@@ -732,32 +759,150 @@ test.describe.serial('LOCAL-06: Co-Occupant & People Count UI Orchestration E2E'
     await ownerBell.click();
     await page.waitForTimeout(500);
 
-    // Assert co-occupant notification item is visible in dropdown
-    const ownerNoticeCard = page.locator('text=/ผู้พักร่วม|A102/').first();
+    // Assert Owner notice card is visible and explains change applies next cycle
+    const ownerNoticeCard = page.locator('[data-testid^="staff-notice-item-"]').filter({ hasText: 'A102' }).first();
     await expect(ownerNoticeCard).toBeVisible({ timeout: 5000 });
+    await expect(ownerNoticeCard.getByText(/งวดถัดไป/)).toBeVisible();
+  });
 
-    // 3. Tenant Browser: verify real in-app notifications
+  // =========================================================================
+  // Section 15: NOTIFICATION UI PROOF
+  // =========================================================================
+  test('15. Notification UI: Owner bell and Tenant bell show proper notices in real UI after outbox processing', async ({ page, context }) => {
+    const f = await createIsolatedFixture('t15');
+
+    // 1. Create an unpaid September bill
+    const unpaidBill = await prisma.bill.create({
+      data: {
+        dormitoryId: f.dormId,
+        billingCycleId: f.cycleId,
+        roomId: f.roomId,
+        tenantId: f.tenantId,
+        contractId: f.contractId,
+        billNumber: 'INV-202609-NOTIF',
+        status: 'unpaid',
+        billingDate: new Date('2026-09-25'),
+        dueDate: new Date('2026-10-05'),
+        subtotal: 5300,
+        totalAmount: 5300,
+        paidAmount: 0,
+        outstandingAmount: 5300,
+      },
+    });
+
+    await prisma.billItem.createMany({
+      data: [
+        {
+          dormitoryId: f.dormId,
+          billId: unpaidBill.id,
+          type: 'rent',
+          description: 'ค่าเช่าห้องพัก',
+          quantity: 1,
+          unit: 'month',
+          unitPrice: 5000,
+          amount: 5000,
+          displayOrder: 0,
+        },
+        {
+          dormitoryId: f.dormId,
+          billId: unpaidBill.id,
+          type: 'water',
+          description: 'ค่าน้ำประปา (1 คน)',
+          quantity: 1,
+          unit: 'person',
+          unitPrice: 100,
+          amount: 100,
+          metadata: { mode: 'person', peopleCount: 1 },
+          displayOrder: 1,
+        },
+      ],
+    });
+
+    // 2. Tenant adds co-occupant via UI -> generates outbox events for Staff
     await context.clearCookies();
     await context.addCookies([
-      { name: 'horplus_session', value: sessionTokenTenant, domain: '127.0.0.1', path: '/' },
-      { name: 'horplus_csrf', value: csrfTokenTenant, domain: '127.0.0.1', path: '/' },
-      { name: 'selected_dormitory_id', value: dormId, domain: '127.0.0.1', path: '/' },
+      { name: 'horplus_session', value: f.sessionTokenTenant, domain: '127.0.0.1', path: '/' },
+      { name: 'horplus_csrf', value: f.csrfTokenTenant, domain: '127.0.0.1', path: '/' },
+      { name: 'selected_dormitory_id', value: f.dormId, domain: '127.0.0.1', path: '/' },
+    ]);
+
+    await page.goto('/tenant');
+    await page.waitForLoadState('networkidle');
+    await page.locator('button[data-testid="nav-tab-profile"]').click();
+    await page.getByRole('button', { name: /แก้ไข \/ เพิ่ม/i }).click();
+
+    await page.locator('input[placeholder="เช่น นายอานนท์ มั่นคง"]').fill('คุณวิไล ร่วมอาศัย');
+    await page.getByRole('button', { name: /เพิ่มลงในรายการด้านบน/i }).click();
+    await expect(page.getByText('คุณวิไล ร่วมอาศัย').first()).toBeVisible({ timeout: 5000 });
+
+    // 3. Staff adds co-occupant via backend service -> generates outbox event for Tenant
+    await outboxService.createOutboxEvent(prisma, {
+      dormitoryId: f.dormId,
+      eventType: 'CO_OCCUPANT_ADDED_BY_STAFF',
+      aggregateType: 'TENANT',
+      aggregateId: f.tenantId,
+      recipientType: 'TENANT',
+      recipientId: f.tenantId,
+      title: 'มีการเพิ่มผู้พักร่วมห้อง A102',
+      body: 'เจ้าหน้าที่ได้เพิ่มผู้พักร่วมคุณ คุณวิไล ร่วมอาศัย สำหรับห้อง A102 ระบบอัปเดตยอดบิลรอชำระแล้ว',
+      payload: {
+        tenantId: f.tenantId,
+        roomNumber: 'A102',
+      },
+    });
+
+    // 4. Process all pending outbox events into staff_notices & tenant_notices
+    await outboxService.processPendingOutboxEvents();
+
+    // 5. Owner Browser: verify real Notification Bell popover/dropdown with specific card
+    await context.clearCookies();
+    await context.addCookies([
+      { name: 'horplus_session', value: f.sessionTokenOwner, domain: '127.0.0.1', path: '/' },
+      { name: 'horplus_csrf', value: f.csrfTokenOwner, domain: '127.0.0.1', path: '/' },
+      { name: 'selected_dormitory_id', value: f.dormId, domain: '127.0.0.1', path: '/' },
+    ]);
+
+    await page.goto('/owner/dashboard');
+    await page.waitForLoadState('networkidle');
+
+    // Click real Owner notification bell
+    const ownerBell = page.locator('[data-testid="button-staff-notification-bell"]').first();
+    await expect(ownerBell).toBeVisible();
+    await ownerBell.click();
+    await page.waitForTimeout(500);
+
+    // Assert specific notification card containing BOTH 'A102' AND 'ผู้พักร่วม'
+    const ownerNoticeCard = page.locator('[data-testid^="staff-notice-item-"]').filter({ hasText: 'A102' }).filter({ hasText: 'ผู้พักร่วม' }).first();
+    await expect(ownerNoticeCard).toBeVisible({ timeout: 5000 });
+    await expect(ownerNoticeCard.getByRole('heading', { name: /ห้อง A102/ })).toBeVisible();
+    await expect(ownerNoticeCard.getByText(/ผู้พักร่วม/).first()).toBeVisible();
+
+    // 6. Tenant Browser: verify real in-app notification modal
+    await context.clearCookies();
+    await context.addCookies([
+      { name: 'horplus_session', value: f.sessionTokenTenant, domain: '127.0.0.1', path: '/' },
+      { name: 'horplus_csrf', value: f.csrfTokenTenant, domain: '127.0.0.1', path: '/' },
+      { name: 'selected_dormitory_id', value: f.dormId, domain: '127.0.0.1', path: '/' },
     ]);
 
     await page.goto('/tenant');
     await page.waitForLoadState('networkidle');
 
-    // Open notification drawer via bell icon if present
+    // Open notification modal via bell icon (mandatory, no conditional)
     const tenantBell = page.locator('button[aria-label="การแจ้งเตือน"]').first();
-    if (await tenantBell.isVisible()) {
-      await tenantBell.click();
-      await page.waitForTimeout(500);
-    }
+    await expect(tenantBell).toBeVisible({ timeout: 5000 });
+    await tenantBell.click();
+    await page.waitForTimeout(500);
 
-    // 4. Secondary DB assertions for StaffNotification & TenantNotice
+    // Assert tenant notice item is visible in modal with recalculated bill text
+    const tenantNoticeCard = page.locator('[data-testid^="tenant-notice-item-"]').filter({ hasText: 'ผู้พักร่วม' }).first();
+    await expect(tenantNoticeCard).toBeVisible({ timeout: 5000 });
+    await expect(tenantNoticeCard.getByRole('heading', { name: /ผู้พักร่วม/ })).toBeVisible();
+
+    // 7. Secondary DB assertions for StaffNotification & TenantNotice
     const staffNotice = await prisma.staffNotification.findFirst({
       where: {
-        dormitoryId: dormId,
+        dormitoryId: f.dormId,
         title: { contains: 'ผู้พักร่วม' },
       },
     });
@@ -766,8 +911,8 @@ test.describe.serial('LOCAL-06: Co-Occupant & People Count UI Orchestration E2E'
 
     const tenantNotice = await prisma.tenantNotice.findFirst({
       where: {
-        dormitoryId: dormId,
-        tenantId,
+        dormitoryId: f.dormId,
+        tenantId: f.tenantId,
       },
     });
     expect(tenantNotice).not.toBeNull();

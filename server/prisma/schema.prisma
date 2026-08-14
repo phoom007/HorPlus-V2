@@ -755,15 +755,17 @@ model RoomBillingCycleSnapshot {
 }
 
 model RoomNextCycleCorrection {
-  id              String    @id @default(uuid()) @db.Uuid
-  dormitoryId     String    @map("dormitory_id") @db.Uuid
-  roomId          String    @map("room_id") @db.Uuid
-  peopleCount     Int       @default(1) @map("people_count")
-  source          String    @default("METER_CORRECTION") @map("source") @db.VarChar(50)
-  updatedByUserId String?   @map("updated_by_user_id") @db.Uuid
-  consumedAt      DateTime? @map("consumed_at") @db.Timestamptz()
-  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz()
-  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
+  id                        String    @id @default(uuid()) @db.Uuid
+  dormitoryId               String    @map("dormitory_id") @db.Uuid
+  roomId                    String    @map("room_id") @db.Uuid
+  peopleCount               Int       @default(1) @map("people_count")
+  source                    String    @default("METER_CORRECTION") @map("source") @db.VarChar(50)
+  sourceBillingCycleId      String?   @map("source_billing_cycle_id") @db.Uuid
+  effectiveAfterPeriodStart DateTime? @map("effective_after_period_start") @db.Timestamptz()
+  updatedByUserId           String?   @map("updated_by_user_id") @db.Uuid
+  consumedAt                DateTime? @map("consumed_at") @db.Timestamptz()
+  createdAt                 DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt                 DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
 
   dormitory Dormitory @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
   room      Room      @relation(fields: [roomId], references: [id], onDelete: Cascade)

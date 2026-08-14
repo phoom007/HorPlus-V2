@@ -1653,7 +1653,7 @@ describe('LOCAL-06 — Co-Occupant / People-Count / Auto-Bill Recalculation & Ou
     expect(checkAugBill?.status).toBe('paid');
     expect(Number(checkAugBill?.totalAmount)).toBe(5300);
 
-    // Persistent pending-next-cycle correction record exists with peopleCount = 2 and consumedAt = null
+    // Persistent pending-next-cycle correction record exists with peopleCount = 2, source/effective boundary, and consumedAt = null
     const pendingCorrection = await prisma.roomNextCycleCorrection.findUnique({
       where: {
         dormitory_room_next_cycle_correction_unique: {
@@ -1664,9 +1664,74 @@ describe('LOCAL-06 — Co-Occupant / People-Count / Auto-Bill Recalculation & Ou
     });
     expect(pendingCorrection).not.toBeNull();
     expect(pendingCorrection?.peopleCount).toBe(2);
+    expect(pendingCorrection?.sourceBillingCycleId).toBe(augCycleId);
+    expect(pendingCorrection?.effectiveAfterPeriodStart).not.toBeNull();
     expect(pendingCorrection?.consumedAt).toBeNull();
 
-    // 3. Now create September cycle
+    // 3. Regression Test A: Resolve a July historical cycle with no snapshot
+    const julyCycleId = 'a0000000-0000-4000-8000-000000000885';
+    await prisma.billingCycle.create({
+      data: {
+        id: julyCycleId,
+        dormitoryId: dormId,
+        cycleCode: '2026-07-JULY',
+        name: 'กรกฎาคม 2569',
+        periodStart: new Date('2026-07-01'),
+        periodEnd: new Date('2026-07-31'),
+        billingDate: new Date('2026-07-25'),
+        dueDate: new Date('2026-08-05'),
+        status: 'completed',
+      },
+    });
+
+    const julyPeopleCount = await billingOrchestrationService.resolveCyclePeopleCount(
+      dormId,
+      julyCycleId,
+      roomId,
+      tenantId
+    );
+    expect(julyPeopleCount).toBe(1); // Historical July uses normal/household truth (1)
+
+    // Pending correction MUST remain unconsumed after July resolution
+    const unconsumedAfterJuly = await prisma.roomNextCycleCorrection.findUnique({
+      where: {
+        dormitory_room_next_cycle_correction_unique: {
+          dormitoryId: dormId,
+          roomId,
+        },
+      },
+    });
+    expect(unconsumedAfterJuly?.consumedAt).toBeNull();
+
+    // 4. Regression Test B: Resolve August source cycle again if snapshot were missing
+    await prisma.roomBillingCycleSnapshot.deleteMany({
+      where: {
+        dormitoryId: dormId,
+        billingCycleId: augCycleId,
+        roomId,
+      },
+    });
+
+    const augReResolveCount = await billingOrchestrationService.resolveCyclePeopleCount(
+      dormId,
+      augCycleId,
+      roomId,
+      tenantId
+    );
+    expect(augReResolveCount).toBe(1); // August source cycle must NOT consume future correction into itself
+
+    // Pending correction MUST still remain unconsumed
+    const unconsumedAfterAug = await prisma.roomNextCycleCorrection.findUnique({
+      where: {
+        dormitory_room_next_cycle_correction_unique: {
+          dormitoryId: dormId,
+          roomId,
+        },
+      },
+    });
+    expect(unconsumedAfterAug?.consumedAt).toBeNull();
+
+    // 5. Now create September cycle (first strictly FUTURE cycle after August)
     await prisma.billingCycle.create({
       data: {
         id: sepCycleId,
@@ -1681,7 +1746,7 @@ describe('LOCAL-06 — Co-Occupant / People-Count / Auto-Bill Recalculation & Ou
       },
     });
 
-    // 4. Resolve September peopleCount -> consumes the pending correction (2)
+    // Resolve September peopleCount -> consumes the pending correction (2)
     const sepPeopleCount = await billingOrchestrationService.resolveCyclePeopleCount(
       dormId,
       sepCycleId,
@@ -1713,7 +1778,7 @@ describe('LOCAL-06 — Co-Occupant / People-Count / Auto-Bill Recalculation & Ou
     });
     expect(consumedCorrection?.consumedAt).not.toBeNull();
 
-    // 5. Subsequent October cycle created later should resolve to household truth (1) without leaking the consumed correction
+    // 6. Regression Test C: Subsequent October cycle created later should resolve to household truth (1) without leaking consumed correction
     await prisma.billingCycle.create({
       data: {
         id: octCycleId,

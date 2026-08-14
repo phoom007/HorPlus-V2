@@ -159,10 +159,15 @@ export class BillingOrchestrationService {
       return existing.peopleCount;
     }
 
+    const targetCycle = await client.billingCycle.findUnique({
+      where: { id: billingCycleId },
+    });
+
     let seedCount = 1;
     let seedSource = 'HOUSEHOLD_SYNC';
 
     // 1. Check pending Owner next-cycle correction
+    // Must target a strictly FUTURE cycle: targetCycle.periodStart > pendingCorrection.effectiveAfterPeriodStart
     const pendingCorrection = await client.roomNextCycleCorrection.findFirst({
       where: {
         dormitoryId,
@@ -172,7 +177,13 @@ export class BillingOrchestrationService {
       orderBy: { updatedAt: 'desc' },
     });
 
-    if (pendingCorrection) {
+    const isEligibleFutureCycle =
+      pendingCorrection &&
+      targetCycle &&
+      (!pendingCorrection.effectiveAfterPeriodStart || targetCycle.periodStart > pendingCorrection.effectiveAfterPeriodStart) &&
+      (!pendingCorrection.sourceBillingCycleId || targetCycle.id !== pendingCorrection.sourceBillingCycleId);
+
+    if (isEligibleFutureCycle) {
       seedCount = Math.max(1, pendingCorrection.peopleCount);
       seedSource = 'METER_CORRECTION';
       await client.roomNextCycleCorrection.update({
@@ -940,7 +951,7 @@ export class BillingOrchestrationService {
           });
         }
 
-        // Always persist pending next-cycle correction so future cycles honor it
+        // Always persist pending next-cycle correction with source/effective boundary so future cycles honor it
         await tx.roomNextCycleCorrection.upsert({
           where: {
             dormitory_room_next_cycle_correction_unique: {
@@ -953,12 +964,16 @@ export class BillingOrchestrationService {
             roomId,
             peopleCount: newPeopleCount,
             source: 'METER_CORRECTION',
+            sourceBillingCycleId: billingCycleId,
+            effectiveAfterPeriodStart: targetCycle ? targetCycle.periodStart : new Date(),
             updatedByUserId: userId || null,
             consumedAt: nextCycle ? new Date() : null,
           },
           update: {
             peopleCount: newPeopleCount,
             source: 'METER_CORRECTION',
+            sourceBillingCycleId: billingCycleId,
+            effectiveAfterPeriodStart: targetCycle ? targetCycle.periodStart : new Date(),
             updatedByUserId: userId || null,
             consumedAt: nextCycle ? new Date() : null,
             updatedAt: new Date(),
