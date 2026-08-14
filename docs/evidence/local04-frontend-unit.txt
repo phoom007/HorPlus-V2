@@ -1,31 +1,26 @@
-================================================================================
-HORPLUS LOCAL-04 FRONTEND UNIT TESTS QUALITY GATE
-================================================================================
-Timestamp: 2026-08-14T08:40:20Z
-Command: npm test
-Exit Code: 0
+=== COMMAND: npm test ===
+=== TIMESTAMP: 2026-08-14T09:17:56.405Z ===
+
 
 > react-example@0.0.0 test
 > vitest run src/tests --environment happy-dom
 
- RUN  v3.2.7 D:/horplus_wave1d_fasttrack
 
- ✓ src/tests/productionTruthBoundary.test.ts (8 tests) 82ms
- ✓ src/tests/tenantFailClosed.test.ts (2 tests) 19ms
- ✓ src/tests/wave1-frontend-guards.test.ts (8 tests) 34ms
- ✓ src/tests/local01-tenant-onboarding.test.ts (2 tests) 13ms
- ✓ src/tests/qa.test.ts (5 tests) 176ms
- ✓ src/tests/dataModeAndAdapters.test.ts (10 tests) 124ms
- ✓ src/tests/wave1d-boundary.test.ts (3 tests | 1 skipped) 6ms
- ✓ src/tests/wave1g-owner-ui.test.tsx (13 tests) 1520ms
-   ✓ Wave 1G — Owner Property UI Component & Integration Tests > 5. Connected Owner Page Section Integration Tests > connects OwnerSettings page to updateDormitoryDefaults and handles independent versions and VERSION_CONFLICT reload  344ms
-   ✓ Wave 1G — Owner Property UI Component & Integration Tests > 5. Connected Owner Page Section Integration Tests > connects OwnerRooms page: open Building editor, set & clear Building override, edit Room identity & override, archive with expectedVersion, and query availability  622ms
+[1m[46m RUN [49m[22m [36mv3.2.7 [39m[90mD:/horplus_wave1d_fasttrack[39m
 
- Test Files  8 passed (8)
-      Tests  50 passed | 1 skipped (51)
-   Start at  15:40:13
-   Duration  7.02s (transform 2.32s, setup 0ms, collect 5.02s, tests 1.98s, environment 9.60s, prepare 1.91s)
+ [32m✓[39m src/tests/tenantFailClosed.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 15[2mms[22m[39m
+ [32m✓[39m src/tests/wave1-frontend-guards.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 29[2mms[22m[39m
+ [32m✓[39m src/tests/productionTruthBoundary.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 65[2mms[22m[39m
+ [32m✓[39m src/tests/local01-tenant-onboarding.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/tests/qa.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 145[2mms[22m[39m
+ [32m✓[39m src/tests/dataModeAndAdapters.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 119[2mms[22m[39m
+ [32m✓[39m src/tests/wave1d-boundary.test.ts [2m([22m[2m3 tests[22m[2m | [22m[33m1 skipped[39m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/tests/wave1g-owner-ui.test.tsx [2m([22m[2m13 tests[22m[2m)[22m[33m 1269[2mms[22m[39m
+   [33m[2m✓[22m[39m Wave 1G — Owner Property UI Component & Integration Tests[2m > [22m5. Connected Owner Page Section Integration Tests[2m > [22mconnects OwnerRooms page: open Building editor, set & clear Building override, edit Room identity & override, archive with expectedVersion, and query availability [33m 501[2mms[22m[39m
 
-================================================================================
-STATUS: PASS
-================================================================================
+[2m Test Files [22m [1m[32m8 passed[39m[22m[90m (8)[39m
+[2m      Tests [22m [1m[32m50 passed[39m[22m[2m | [22m[33m1 skipped[39m[90m (51)[39m
+[2m   Start at [22m 16:17:58
+[2m   Duration [22m 6.58s[2m (transform 1.88s, setup 0ms, collect 3.86s, tests 1.65s, environment 11.72s, prepare 3.19s)[22m
+
+
