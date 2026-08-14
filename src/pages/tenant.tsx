@@ -195,7 +195,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
     if (seg === 'payments_tab' || querySub === 'payments_tab') return { tab: 'payments_tab' as const, sub: null };
     
     if (seg === 'bills' || seg === 'invoice' || querySub === 'bills' || querySub === 'invoice') return { tab: 'home' as const, sub: 'invoice' as const };
-    if (seg === 'payments' || seg === 'pay' || querySub === 'pay') return { tab: 'home' as const, sub: 'pay' as const };
+    if (seg === 'payments' || seg === 'pay' || querySub === 'pay' || querySub === 'payment') return { tab: 'home' as const, sub: 'payment' as const };
     if (seg === 'maintenance' || seg === 'repairs' || querySub === 'repairs') return { tab: 'home' as const, sub: 'repairs' as const };
     if (seg === 'contract' || querySub === 'contract') return { tab: 'home' as const, sub: 'contract' as const };
     if (seg === 'utilities' || querySub === 'utilities') return { tab: 'home' as const, sub: 'utilities' as const };
@@ -208,7 +208,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
   const initialState = mapPathToState(pathSeg);
   const [activeTab, setActiveTab] = useState<'home' | 'announcements' | 'payments_tab' | 'profile'>(initialState.tab);
   const [zoomedImage, setZoomedImage] = useState<string | null>(null);
-  const [subView, setSubView] = useState<null | 'invoice' | 'pay' | 'repairs' | 'utilities' | 'contract' | 'history' | 'register'>(initialState.sub);
+  const [subView, setSubView] = useState<null | 'invoice' | 'payment' | 'pay' | 'repairs' | 'utilities' | 'contract' | 'history' | 'register'>(initialState.sub);
   const [isToastFading, setIsToastFading] = useState(false);
 
   useEffect(() => {
@@ -1734,7 +1734,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
 
                 
                 {/* B. SUBVIEW: แจ้งชำระเงิน (IMAGE 9) */}
-                {subView === 'payment' && activeUnpaidBill && (
+                {(subView === 'payment' || subView === 'pay') && (activeUnpaidBill || true) && (
                   <div className="flex flex-col h-full bg-slate-50 relative">
                     {renderSubViewHeader('แจ้งชำระเงิน', <DollarSign className="w-5 h-5 text-slate-400" />)}
                     

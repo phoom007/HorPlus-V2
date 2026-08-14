@@ -1378,7 +1378,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
         </header>
 
         {/* Dynamic page container */}
-        <main className="flex-1 overflow-y-auto bg-slate-50/70 p-4 md:p-6 pb-24 md:pb-6">
+        <main id="owner-main-content" className="flex-1 overflow-y-auto bg-slate-50/70 p-4 md:p-6 pb-24 md:pb-6">
           {renderSubView()}
         </main>
       </div>
