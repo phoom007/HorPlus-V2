@@ -1,4 +1,4 @@
-﻿Γùç injected env (0) from server\.env // tip: Γîÿ enable debugging { debug: true }
+﻿Γùç injected env (0) from server\.env // tip: Γîÿ custom filepath { path: '/custom/path/.env' }
 Listing tests:
   [chromium] ΓÇ║ e2e\local01-tenant-onboarding-cooccupants.spec.ts:196:3 ΓÇ║ LOCAL-01 ΓÇö Tenant Onboarding & Co-Occupant Management E2E Acceptance Suite ΓÇ║ Flow A ΓÇö Multiple Applicants Same Room Submission & Persistence
   [chromium] ΓÇ║ e2e\local01-tenant-onboarding-cooccupants.spec.ts:264:3 ΓÇ║ LOCAL-01 ΓÇö Tenant Onboarding & Co-Occupant Management E2E Acceptance Suite ΓÇ║ Flow B ΓÇö Owner Selects & Approves Applicant B (Leaves Applicant A Pending)
