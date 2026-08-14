@@ -754,7 +754,7 @@ test.describe('LOCAL-06: Co-Occupant & People Count UI Orchestration E2E', () =>
     await page.waitForLoadState('networkidle');
 
     // Click real Owner notification bell
-    const ownerBell = page.locator('[data-testid="button-staff-notification-bell"]').first();
+    const ownerBell = page.locator('[data-testid="button-staff-notification-bell"]:visible').first();
     await expect(ownerBell).toBeVisible();
     await ownerBell.click();
     await page.waitForTimeout(500);
@@ -862,7 +862,7 @@ test.describe('LOCAL-06: Co-Occupant & People Count UI Orchestration E2E', () =>
     await page.waitForLoadState('networkidle');
 
     // Click real Owner notification bell
-    const ownerBell = page.locator('[data-testid="button-staff-notification-bell"]').first();
+    const ownerBell = page.locator('[data-testid="button-staff-notification-bell"]:visible').first();
     await expect(ownerBell).toBeVisible();
     await ownerBell.click();
     await page.waitForTimeout(500);

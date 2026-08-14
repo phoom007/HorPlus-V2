@@ -287,52 +287,103 @@ export class BillingService {
     data: GenerateBillDto,
     userId?: string
   ): Promise<{ bill: BillEntity; items: BillItemEntity[]; created: boolean }> {
+    const cycle = await this.billingCycleRepo.findById(data.billingCycleId, dormitoryId);
+    if (!cycle) {
+      const err = new Error('BILLING_CYCLE_NOT_FOUND');
+      (err as any).statusCode = 404;
+      (err as any).code = 'BILLING_CYCLE_NOT_FOUND';
+      throw err;
+    }
+
+    if (cycle.status === 'locked' || cycle.status === 'completed') {
+      const err = new Error('BILLING_CYCLE_LOCKED');
+      (err as any).statusCode = 400;
+      (err as any).code = 'BILLING_CYCLE_LOCKED';
+      throw err;
+    }
+
+    // Derive/validate active contract and tenant for room
+    const activeContracts = await this.contractRepo.findActiveContractsForRoom(dormitoryId, data.roomId);
+    if (activeContracts.length === 0) {
+      const err = new Error('NO_ACTIVE_CONTRACT_FOR_ROOM');
+      (err as any).statusCode = 404;
+      (err as any).code = 'NO_ACTIVE_CONTRACT_FOR_ROOM';
+      throw err;
+    }
+    const contract = activeContracts[0];
+
+    if (data.contractId && data.contractId !== contract.id) {
+      const err = new Error('CONTRACT_ROOM_MISMATCH');
+      (err as any).statusCode = 400;
+      (err as any).code = 'CONTRACT_ROOM_MISMATCH';
+      (err as any).message = 'สัญญาที่ระบุไม่ตรงกับสัญญาของห้องพัก';
+      throw err;
+    }
+
+    if (data.tenantId && data.tenantId !== contract.tenantId) {
+      const err = new Error('TENANT_CONTRACT_MISMATCH');
+      (err as any).statusCode = 400;
+      (err as any).code = 'TENANT_CONTRACT_MISMATCH';
+      (err as any).message = 'ผู้เช่าที่ระบุไม่ตรงกับผู้เช่าในสัญญา';
+      throw err;
+    }
+
+    const effectiveContractId = contract.id;
+    const effectiveTenantId = contract.tenantId;
+
+    const existingBillBefore = await this.billRepo.findByCycleAndContract(
+      dormitoryId,
+      data.billingCycleId,
+      effectiveContractId
+    );
+    if (existingBillBefore) {
+      const items = await this.billRepo.getBillItems(existingBillBefore.id, dormitoryId);
+      return { bill: existingBillBefore, items, created: false };
+    }
+
+    const preview = await this.generateBillPreview(dormitoryId, data.billingCycleId, data.roomId);
+    const rateSnapshot = await this.billingCycleRepo.findRateSnapshot(data.billingCycleId, dormitoryId);
+
+    const billItems: CreateBillItemData[] = preview.items.map((i, idx) => ({
+      type: i.type,
+      description: i.description,
+      quantity: i.quantity,
+      unit: i.unit || null,
+      unitPrice: i.unitPrice,
+      amount: i.amount,
+      metadata: i.metadata || null,
+      displayOrder: idx,
+    }));
+
+    if (data.customItems) {
+      data.customItems.forEach((ci, idx) => {
+        billItems.push({
+          type: ci.type,
+          description: ci.description,
+          quantity: ci.quantity,
+          unit: (ci as any).unit || null,
+          unitPrice: ci.unitPrice,
+          amount: ci.amount,
+          metadata: (ci as any).metadata || null,
+          displayOrder: preview.items.length + idx,
+        });
+      });
+    }
+
+    let subtotalDec = toDecimal('0.00');
+    for (const item of billItems) {
+      subtotalDec = addDecimals(subtotalDec, item.amount);
+    }
+
+    const discountDec = toDecimal(data.discountAmount || '0.00');
+    const rawTotal = subDecimals(subtotalDec, discountDec);
+    const totalDec = compareDecimals(rawTotal, '0.00') < 0 ? toDecimal('0.00') : rawTotal;
+
+    const billingDate = data.billingDate ? new Date(data.billingDate) : new Date(cycle.billingDate);
+    const dueDate = data.dueDate ? new Date(data.dueDate) : new Date(cycle.dueDate);
+
     return this.billRepo.withTransaction(async (tx) => {
       await this.billRepo.executeRawLock(data.roomId, tx);
-
-      const cycle = await this.billingCycleRepo.findById(data.billingCycleId, dormitoryId);
-      if (!cycle) {
-        const err = new Error('BILLING_CYCLE_NOT_FOUND');
-        (err as any).statusCode = 404;
-        (err as any).code = 'BILLING_CYCLE_NOT_FOUND';
-        throw err;
-      }
-
-      if (cycle.status === 'locked' || cycle.status === 'completed') {
-        const err = new Error('BILLING_CYCLE_LOCKED');
-        (err as any).statusCode = 400;
-        (err as any).code = 'BILLING_CYCLE_LOCKED';
-        throw err;
-      }
-
-      // Derive/validate active contract and tenant for room
-      const activeContracts = await this.contractRepo.findActiveContractsForRoom(dormitoryId, data.roomId);
-      if (activeContracts.length === 0) {
-        const err = new Error('NO_ACTIVE_CONTRACT_FOR_ROOM');
-        (err as any).statusCode = 404;
-        (err as any).code = 'NO_ACTIVE_CONTRACT_FOR_ROOM';
-        throw err;
-      }
-      const contract = activeContracts[0];
-
-      if (data.contractId && data.contractId !== contract.id) {
-        const err = new Error('CONTRACT_ROOM_MISMATCH');
-        (err as any).statusCode = 400;
-        (err as any).code = 'CONTRACT_ROOM_MISMATCH';
-        (err as any).message = 'สัญญาที่ระบุไม่ตรงกับสัญญาของห้องพัก';
-        throw err;
-      }
-
-      if (data.tenantId && data.tenantId !== contract.tenantId) {
-        const err = new Error('TENANT_CONTRACT_MISMATCH');
-        (err as any).statusCode = 400;
-        (err as any).code = 'TENANT_CONTRACT_MISMATCH';
-        (err as any).message = 'ผู้เช่าที่ระบุไม่ตรงกับผู้เช่าในสัญญา';
-        throw err;
-      }
-
-      const effectiveContractId = contract.id;
-      const effectiveTenantId = contract.tenantId;
 
       const existingBill = await this.billRepo.findByCycleAndContract(
         dormitoryId,
@@ -345,48 +396,7 @@ export class BillingService {
         return { bill: existingBill, items, created: false };
       }
 
-      const preview = await this.generateBillPreview(dormitoryId, data.billingCycleId, data.roomId);
-      const rateSnapshot = await this.billingCycleRepo.findRateSnapshot(data.billingCycleId, dormitoryId);
-
-      const billItems: CreateBillItemData[] = preview.items.map((i, idx) => ({
-        type: i.type,
-        description: i.description,
-        quantity: i.quantity,
-        unit: i.unit || null,
-        unitPrice: i.unitPrice,
-        amount: i.amount,
-        metadata: i.metadata || null,
-        displayOrder: idx,
-      }));
-
-      if (data.customItems) {
-        data.customItems.forEach((ci, idx) => {
-          billItems.push({
-            type: ci.type,
-            description: ci.description,
-            quantity: ci.quantity,
-            unit: (ci as any).unit || null,
-            unitPrice: ci.unitPrice,
-            amount: ci.amount,
-            metadata: (ci as any).metadata || null,
-            displayOrder: preview.items.length + idx,
-          });
-        });
-      }
-
-      let subtotalDec = toDecimal('0.00');
-      for (const item of billItems) {
-        subtotalDec = addDecimals(subtotalDec, item.amount);
-      }
-
-      const discountDec = toDecimal(data.discountAmount || '0.00');
-      const rawTotal = subDecimals(subtotalDec, discountDec);
-      const totalDec = compareDecimals(rawTotal, '0.00') < 0 ? toDecimal('0.00') : rawTotal;
-
-      const billingDate = data.billingDate ? new Date(data.billingDate) : new Date(cycle.billingDate);
-      const dueDate = data.dueDate ? new Date(data.dueDate) : new Date(cycle.dueDate);
-
-      const countRes = await this.billRepo.findAll(dormitoryId, { billingCycleId: data.billingCycleId });
+      const countRes = await this.billRepo.findAll(dormitoryId, { billingCycleId: data.billingCycleId }, tx);
       const billSeq = (countRes.total + 1).toString().padStart(4, '0');
       const billNumber = `INV-${cycle.cycleCode}-${billSeq}`;
 

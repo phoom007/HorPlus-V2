@@ -570,8 +570,10 @@ export class PrismaBillRepository implements IBillRepository {
 
   public async findAll(
     dormitoryId: string,
-    filter: BillFilterQuery = {}
+    filter: BillFilterQuery = {},
+    tx?: any
   ): Promise<{ items: BillEntity[]; total: number }> {
+    const client = this.getClient(tx);
     const where: any = { dormitoryId };
     if (filter.billingCycleId) where.billingCycleId = filter.billingCycleId;
     if (filter.contractId) where.contractId = filter.contractId;
@@ -584,17 +586,17 @@ export class PrismaBillRepository implements IBillRepository {
     const skip = (page - 1) * pageSize;
 
     const [bills, total] = await Promise.all([
-      this.prisma.bill.findMany({
+      client.bill.findMany({
         where,
         include: { items: true },
         skip,
         take: pageSize,
         orderBy: { createdAt: 'desc' },
       }),
-      this.prisma.bill.count({ where }),
+      client.bill.count({ where }),
     ]);
 
-    return { items: bills.map((b) => this.mapBillToEntity(b)), total };
+    return { items: bills.map((b: any) => this.mapBillToEntity(b)), total };
   }
 
   public async update(
@@ -736,7 +738,7 @@ export class PrismaBillRepository implements IBillRepository {
   }
 
   public async withTransaction<T>(fn: (tx: any) => Promise<T>): Promise<T> {
-    return this.prisma.$transaction(fn, { timeout: 10000 });
+    return this.prisma.$transaction(fn, { timeout: 30000 });
   }
 
   public async executeRawLock(roomId: string, tx: any): Promise<void> {

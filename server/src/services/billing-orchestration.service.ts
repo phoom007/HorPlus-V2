@@ -461,6 +461,22 @@ export class BillingOrchestrationService {
         throw err;
       }
 
+      if (!contract) {
+        const activeOccupancy = await tx.occupancy.findFirst({
+          where: {
+            dormitoryId,
+            tenantId,
+            status: 'ACTIVE',
+          },
+        });
+        if (!activeOccupancy) {
+          const err = new Error('ผู้เช่าไม่มีสัญญาหรือสถานะการพักอาศัยที่เปิดใช้งานอยู่');
+          (err as any).code = 'NO_ACTIVE_TENANCY';
+          (err as any).statusCode = 403;
+          throw err;
+        }
+      }
+
       const prevHouseholdCount = await this.getHouseholdCount(dormitoryId, tenantId, tx);
 
       // 2. Insert CoOccupant
@@ -690,6 +706,22 @@ export class BillingOrchestrationService {
         await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${dormitoryId + ':' + contract.roomId}))`;
       } else {
         await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${dormitoryId + ':' + tenantId}))`;
+      }
+
+      if (!contract) {
+        const activeOccupancy = await tx.occupancy.findFirst({
+          where: {
+            dormitoryId,
+            tenantId,
+            status: 'ACTIVE',
+          },
+        });
+        if (!activeOccupancy) {
+          const err = new Error('ผู้เช่าไม่มีสัญญาหรือสถานะการพักอาศัยที่เปิดใช้งานอยู่');
+          (err as any).code = 'NO_ACTIVE_TENANCY';
+          (err as any).statusCode = 403;
+          throw err;
+        }
       }
 
       const prevHouseholdCount = await this.getHouseholdCount(dormitoryId, tenantId, tx);

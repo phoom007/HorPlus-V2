@@ -806,11 +806,11 @@ test.describe('LOCAL-04 — Master Cross-Portal Playwright Acceptance Suite (Jou
     await expect(tenantCtx.page.getByRole('heading', { name: 'รายชื่อผู้พักอาศัยร่วม', exact: true })).toBeVisible();
 
     // Click add co-occupant in tenant modal
+    await tenantCtx.page.locator('input[placeholder="เช่น นายอานนท์ มั่นคง"]').fill('Somsak Cooccupant');
     const tenantAddBtn = tenantCtx.page.locator('button:has-text("เพิ่มลงในรายการด้านบน")');
     await expect(tenantAddBtn).toBeVisible();
     await tenantAddBtn.click();
-    // Toast displays polite rejection
-    await expect(tenantCtx.page.locator('text=ฟังก์ชันจัดการผู้พักร่วมยังไม่พร้อมใช้งานในระบบขณะนี้')).toBeVisible({ timeout: 30000 });
+    await expect(tenantCtx.page.getByText('Somsak Cooccupant').first()).toBeVisible({ timeout: 10000 });
 
     await ownerCtx.close();
     await tenantCtx.context.close();
@@ -1594,7 +1594,7 @@ test.describe('LOCAL-04 — Master Cross-Portal Playwright Acceptance Suite (Jou
     await saveResPromise;
 
     // Assert success toast
-    await expect(ownerPage.locator('text=บันทึกข้อมูลค่ามิเตอร์เรียบร้อยแล้ว')).toBeVisible({ timeout: 30000 });
+    await expect(ownerPage.getByText(/บันทึกข้อมูลค่ามิเตอร์เรียบร้อยแล้ว/).first()).toBeVisible({ timeout: 30000 });
 
     // Assert PostgreSQL authoritative state
     const currentReadings = await prisma.meterReading.findMany({
@@ -2088,7 +2088,7 @@ test.describe('LOCAL-04 — Master Cross-Portal Playwright Acceptance Suite (Jou
     await ownerPage.goto('/owner/dashboard');
     await ownerPage.waitForLoadState('networkidle');
 
-    const headerBell = ownerPage.locator('[data-testid="button-staff-notification-bell"]').first();
+    const headerBell = ownerPage.locator('[data-testid="button-staff-notification-bell"]:visible').first();
     await expect(headerBell).toBeVisible({ timeout: 30000 });
     await headerBell.click();
 

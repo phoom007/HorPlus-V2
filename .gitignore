@@ -25,6 +25,7 @@ coverage/
 backups/
 scratch/
 scripts/
+!scripts/verify-local06-acceptance-matrix.mjs
 !server/src/scripts/
 docs/execution-reports/
 !docs/execution-reports/*.md
