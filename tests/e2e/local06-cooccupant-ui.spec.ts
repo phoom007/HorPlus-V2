@@ -766,12 +766,12 @@ test.describe('LOCAL-06: Co-Occupant & People Count UI Orchestration E2E', () =>
   });
 
   // =========================================================================
-  // Section 15: NOTIFICATION UI PROOF
+  // Section 15: REAL NOTIFICATION UI PROOFS VIA DOMAIN MUTATIONS
   // =========================================================================
-  test('15. Notification UI: Owner bell and Tenant bell show proper notices in real UI after outbox processing', async ({ page, context }) => {
+  test('15. Notification UI: Owner bell and Tenant bell show proper notices in real UI via real domain mutations after outbox processing', async ({ page, context }) => {
     const f = await createIsolatedFixture('t15');
 
-    // 1. Create an unpaid September bill
+    // 1. Create an unpaid September bill for 1 person (5300: 5000 rent + 100 water 1 person + 200 common fee 1 person)
     const unpaidBill = await prisma.bill.create({
       data: {
         dormitoryId: f.dormId,
@@ -815,10 +815,22 @@ test.describe('LOCAL-06: Co-Occupant & People Count UI Orchestration E2E', () =>
           metadata: { mode: 'person', peopleCount: 1 },
           displayOrder: 1,
         },
+        {
+          dormitoryId: f.dormId,
+          billId: unpaidBill.id,
+          type: 'common_fee',
+          description: 'ค่าส่วนกลาง (1 คน)',
+          quantity: 1,
+          unit: 'person',
+          unitPrice: 200,
+          amount: 200,
+          metadata: { mode: 'person', peopleCount: 1 },
+          displayOrder: 2,
+        },
       ],
     });
 
-    // 2. Tenant adds co-occupant via UI -> generates outbox events for Staff
+    // 2. Flow A: Tenant adds co-occupant via UI -> generates real outbox event for Staff
     await context.clearCookies();
     await context.addCookies([
       { name: 'horplus_session', value: f.sessionTokenTenant, domain: '127.0.0.1', path: '/' },
@@ -835,26 +847,10 @@ test.describe('LOCAL-06: Co-Occupant & People Count UI Orchestration E2E', () =>
     await page.getByRole('button', { name: /เพิ่มลงในรายการด้านบน/i }).click();
     await expect(page.getByText('คุณวิไล ร่วมอาศัย').first()).toBeVisible({ timeout: 5000 });
 
-    // 3. Staff adds co-occupant via backend service -> generates outbox event for Tenant
-    await outboxService.createOutboxEvent(prisma, {
-      dormitoryId: f.dormId,
-      eventType: 'CO_OCCUPANT_ADDED_BY_STAFF',
-      aggregateType: 'TENANT',
-      aggregateId: f.tenantId,
-      recipientType: 'TENANT',
-      recipientId: f.tenantId,
-      title: 'มีการเพิ่มผู้พักร่วมห้อง A102',
-      body: 'เจ้าหน้าที่ได้เพิ่มผู้พักร่วมคุณ คุณวิไล ร่วมอาศัย สำหรับห้อง A102 ระบบอัปเดตยอดบิลรอชำระแล้ว',
-      payload: {
-        tenantId: f.tenantId,
-        roomNumber: 'A102',
-      },
-    });
-
-    // 4. Process all pending outbox events into staff_notices & tenant_notices
+    // Process outbox to materialize StaffNotification from real Tenant action
     await outboxService.processPendingOutboxEvents();
 
-    // 5. Owner Browser: verify real Notification Bell popover/dropdown with specific card
+    // 3. Flow A Verification: Owner Browser opens real Notification Bell
     await context.clearCookies();
     await context.addCookies([
       { name: 'horplus_session', value: f.sessionTokenOwner, domain: '127.0.0.1', path: '/' },
@@ -877,7 +873,25 @@ test.describe('LOCAL-06: Co-Occupant & People Count UI Orchestration E2E', () =>
     await expect(ownerNoticeCard.getByRole('heading', { name: /ห้อง A102/ })).toBeVisible();
     await expect(ownerNoticeCard.getByText(/ผู้พักร่วม/).first()).toBeVisible();
 
-    // 6. Tenant Browser: verify real in-app notification modal
+    // 4. Flow B: Real Owner Meter UI domain mutation -> generates real outbox event for Tenant
+    await page.goto('/owner/meters');
+    await page.waitForLoadState('networkidle');
+
+    const roomRow = page.locator('#room-row-' + f.roomId);
+    await expect(roomRow).toBeVisible();
+    const peopleInputLoc = roomRow.locator('input[data-col="peopleCount"]');
+    await expect(peopleInputLoc).toBeVisible();
+    await peopleInputLoc.fill('3');
+
+    const saveBtn = page.getByRole('button', { name: /บันทึกข้อมูลค่ามิเตอร์/i });
+    await expect(saveBtn).toBeVisible();
+    await saveBtn.click();
+    await expect(page.getByText('บันทึกข้อมูลค่ามิเตอร์เรียบร้อยแล้ว')).toBeVisible({ timeout: 5000 });
+
+    // Process outbox to materialize TenantNotice from real Owner action
+    await outboxService.processPendingOutboxEvents();
+
+    // 5. Flow B Verification: Tenant Browser opens real Notification Bell
     await context.clearCookies();
     await context.addCookies([
       { name: 'horplus_session', value: f.sessionTokenTenant, domain: '127.0.0.1', path: '/' },
@@ -894,12 +908,13 @@ test.describe('LOCAL-06: Co-Occupant & People Count UI Orchestration E2E', () =>
     await tenantBell.click();
     await page.waitForTimeout(500);
 
-    // Assert tenant notice item is visible in modal with recalculated bill text
-    const tenantNoticeCard = page.locator('[data-testid^="tenant-notice-item-"]').filter({ hasText: 'ผู้พักร่วม' }).first();
+    // Assert tenant notice item is visible in modal with real domain text
+    const tenantNoticeCard = page.locator('[data-testid^="tenant-notice-item-"]').filter({ hasText: 'A102' }).first();
     await expect(tenantNoticeCard).toBeVisible({ timeout: 5000 });
-    await expect(tenantNoticeCard.getByRole('heading', { name: /ผู้พักร่วม/ })).toBeVisible();
+    await expect(tenantNoticeCard.getByRole('heading', { name: /A102/ })).toBeVisible();
+    await expect(tenantNoticeCard.getByText(/ยอดรอชำระ|จำนวนคน/)).toBeVisible();
 
-    // 7. Secondary DB assertions for StaffNotification & TenantNotice
+    // 6. Secondary DB assertions for StaffNotification & TenantNotice
     const staffNotice = await prisma.staffNotification.findFirst({
       where: {
         dormitoryId: f.dormId,
@@ -916,5 +931,6 @@ test.describe('LOCAL-06: Co-Occupant & People Count UI Orchestration E2E', () =>
       },
     });
     expect(tenantNotice).not.toBeNull();
+    expect(tenantNotice?.message).toContain('A102');
   });
 });

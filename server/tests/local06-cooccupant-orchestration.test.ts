@@ -1731,22 +1731,68 @@ describe('LOCAL-06 — Co-Occupant / People-Count / Auto-Bill Recalculation & Ou
     });
     expect(unconsumedAfterAug?.consumedAt).toBeNull();
 
-    // 5. Now create September cycle (first strictly FUTURE cycle after August)
-    await prisma.billingCycle.create({
-      data: {
-        id: sepCycleId,
-        dormitoryId: dormId,
-        cycleCode: '2026-09-LATER',
-        name: 'กันยายน 2569 สร้างทีหลัง',
-        periodStart: new Date('2026-09-01'),
-        periodEnd: new Date('2026-09-30'),
-        billingDate: new Date('2026-09-25'),
-        dueDate: new Date('2026-10-05'),
-        status: 'draft',
-      },
+    // 5. Mandatory Regression Test: Create BOTH September and October, and resolve October FIRST
+    await prisma.billingCycle.createMany({
+      data: [
+        {
+          id: sepCycleId,
+          dormitoryId: dormId,
+          cycleCode: '2026-09-LATER',
+          name: 'กันยายน 2569 สร้างทีหลัง',
+          periodStart: new Date('2026-09-01'),
+          periodEnd: new Date('2026-09-30'),
+          billingDate: new Date('2026-09-25'),
+          dueDate: new Date('2026-10-05'),
+          status: 'draft',
+        },
+        {
+          id: octCycleId,
+          dormitoryId: dormId,
+          cycleCode: '2026-10-OCT',
+          name: 'ตุลาคม 2569',
+          periodStart: new Date('2026-10-01'),
+          periodEnd: new Date('2026-10-31'),
+          billingDate: new Date('2026-10-25'),
+          dueDate: new Date('2026-11-05'),
+          status: 'draft',
+        },
+      ],
     });
 
-    // Resolve September peopleCount -> consumes the pending correction (2)
+    // 5.1 Resolve October FIRST (do NOT resolve September first)
+    const octPeopleCountFirst = await billingOrchestrationService.resolveCyclePeopleCount(
+      dormId,
+      octCycleId,
+      roomId,
+      tenantId
+    );
+    // October is NOT the immediate next cycle (September is earlier), so October does NOT consume correction
+    expect(octPeopleCountFirst).toBe(1);
+
+    const octSnapshotFirst = await prisma.roomBillingCycleSnapshot.findUnique({
+      where: {
+        dormitory_billing_cycle_room_unique: {
+          dormitoryId: dormId,
+          billingCycleId: octCycleId,
+          roomId,
+        },
+      },
+    });
+    expect(octSnapshotFirst?.peopleCount).toBe(1);
+    expect(octSnapshotFirst?.source).toBe('HOUSEHOLD_SYNC');
+
+    // Pending correction MUST remain unconsumed after October resolution
+    const unconsumedAfterOct = await prisma.roomNextCycleCorrection.findUnique({
+      where: {
+        dormitory_room_next_cycle_correction_unique: {
+          dormitoryId: dormId,
+          roomId,
+        },
+      },
+    });
+    expect(unconsumedAfterOct?.consumedAt).toBeNull();
+
+    // 5.2 Then resolve September (the immediate next cycle)
     const sepPeopleCount = await billingOrchestrationService.resolveCyclePeopleCount(
       dormId,
       sepCycleId,
@@ -1778,27 +1824,28 @@ describe('LOCAL-06 — Co-Occupant / People-Count / Auto-Bill Recalculation & Ou
     });
     expect(consumedCorrection?.consumedAt).not.toBeNull();
 
-    // 6. Regression Test C: Subsequent October cycle created later should resolve to household truth (1) without leaking consumed correction
+    // 5.3 Subsequent November cycle created later should resolve to household truth (1) without leaking consumed correction
+    const novCycleId = 'a0000000-0000-4000-8000-000000000886';
     await prisma.billingCycle.create({
       data: {
-        id: octCycleId,
+        id: novCycleId,
         dormitoryId: dormId,
-        cycleCode: '2026-10-OCT',
-        name: 'ตุลาคม 2569',
-        periodStart: new Date('2026-10-01'),
-        periodEnd: new Date('2026-10-31'),
-        billingDate: new Date('2026-10-25'),
-        dueDate: new Date('2026-11-05'),
+        cycleCode: '2026-11-NOV',
+        name: 'พฤศจิกายน 2569',
+        periodStart: new Date('2026-11-01'),
+        periodEnd: new Date('2026-11-30'),
+        billingDate: new Date('2026-11-25'),
+        dueDate: new Date('2026-12-05'),
         status: 'draft',
       },
     });
 
-    const octPeopleCount = await billingOrchestrationService.resolveCyclePeopleCount(
+    const novPeopleCount = await billingOrchestrationService.resolveCyclePeopleCount(
       dormId,
-      octCycleId,
+      novCycleId,
       roomId,
       tenantId
     );
-    expect(octPeopleCount).toBe(1); // Household truth is 1, consumed correction does not leak
+    expect(novPeopleCount).toBe(1); // Household truth is 1, consumed correction does not leak
   });
 });

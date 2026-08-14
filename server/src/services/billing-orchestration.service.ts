@@ -167,7 +167,7 @@ export class BillingOrchestrationService {
     let seedSource = 'HOUSEHOLD_SYNC';
 
     // 1. Check pending Owner next-cycle correction
-    // Must target a strictly FUTURE cycle: targetCycle.periodStart > pendingCorrection.effectiveAfterPeriodStart
+    // Must target the immediate EARLIEST future cycle strictly after the source cycle
     const pendingCorrection = await client.roomNextCycleCorrection.findFirst({
       where: {
         dormitoryId,
@@ -177,13 +177,36 @@ export class BillingOrchestrationService {
       orderBy: { updatedAt: 'desc' },
     });
 
-    const isEligibleFutureCycle =
-      pendingCorrection &&
-      targetCycle &&
-      (!pendingCorrection.effectiveAfterPeriodStart || targetCycle.periodStart > pendingCorrection.effectiveAfterPeriodStart) &&
-      (!pendingCorrection.sourceBillingCycleId || targetCycle.id !== pendingCorrection.sourceBillingCycleId);
+    let isEligibleNextCycle = false;
+    if (pendingCorrection && targetCycle) {
+      let sourcePeriodStart: Date | null = pendingCorrection.effectiveAfterPeriodStart;
+      if (!sourcePeriodStart && pendingCorrection.sourceBillingCycleId) {
+        const sourceCycle = await client.billingCycle.findUnique({
+          where: { id: pendingCorrection.sourceBillingCycleId },
+        });
+        if (sourceCycle) {
+          sourcePeriodStart = sourceCycle.periodStart;
+        }
+      }
 
-    if (isEligibleFutureCycle) {
+      if (sourcePeriodStart) {
+        // Find the earliest billing cycle strictly after the source cycle
+        const earliestFutureCycle = await client.billingCycle.findFirst({
+          where: {
+            dormitoryId,
+            periodStart: { gt: sourcePeriodStart },
+          },
+          orderBy: { periodStart: 'asc' },
+        });
+
+        // The pending correction is eligible ONLY when targetCycle is the immediate earliest future cycle
+        if (earliestFutureCycle && earliestFutureCycle.id === targetCycle.id) {
+          isEligibleNextCycle = true;
+        }
+      }
+    }
+
+    if (isEligibleNextCycle && pendingCorrection) {
       seedCount = Math.max(1, pendingCorrection.peopleCount);
       seedSource = 'METER_CORRECTION';
       await client.roomNextCycleCorrection.update({
