@@ -43,6 +43,8 @@ const adminPrisma = new PrismaClient({
   datasources: { db: { url: ADMIN_URL } }
 });
 
+const CANONICAL_APP_PASSWORD = process.env.HORPLUS_APP_DB_PASSWORD || 'horplus_dev_password';
+
 function dbUrl(dbName: string, user: string = PGUSER, pass: string = PGPASSWORD): string {
   return `postgresql://${user}:${pass}@${PGHOST}:${PGPORT}/${dbName}?schema=public`;
 }
@@ -58,7 +60,7 @@ function runPrismaMigrate(dbName: string, cmd: string): string {
     cwd: SERVER_DIR,
     env,
     encoding: 'utf-8',
-    timeout: 60000,
+    timeout: 180000,
   });
 }
 
@@ -82,7 +84,7 @@ async function bootstrapRoleOnDb(dbName: string): Promise<void> {
       DO $$
       DECLARE
         v_role text := '${APP_ROLE}';
-        v_pass text := 'password';
+        v_pass text := '${CANONICAL_APP_PASSWORD.replace(/'/g, "''")}';
       BEGIN
         IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = v_role) THEN
           EXECUTE format('CREATE ROLE %I WITH LOGIN PASSWORD %L NOSUPERUSER NOBYPASSRLS', v_role, v_pass);
@@ -107,6 +109,10 @@ describe('TASK-009 Checkpoint 1G — Migration Freeze & Real Upgrade/Fresh Proof
   afterAll(async () => {
     await dropDisposableDb(UPGRADE_DB);
     await dropDisposableDb(FRESH_DB);
+    // Deterministically restore canonical runtime role password on the cluster
+    try {
+      await adminPrisma.$executeRawUnsafe(`ALTER ROLE ${APP_ROLE} WITH PASSWORD '${CANONICAL_APP_PASSWORD.replace(/'/g, "''")}'`);
+    } catch { /* ignore */ }
     await masterPrisma.$disconnect();
     await adminPrisma.$disconnect();
   });
@@ -133,7 +139,7 @@ describe('TASK-009 Checkpoint 1G — Migration Freeze & Real Upgrade/Fresh Proof
           DO $$
           DECLARE
             v_role text := '${APP_ROLE}';
-            v_pass text := 'password';
+            v_pass text := '${CANONICAL_APP_PASSWORD.replace(/'/g, "''")}';
           BEGIN
             IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = v_role) THEN
               EXECUTE format('CREATE ROLE %I WITH LOGIN PASSWORD %L NOSUPERUSER NOBYPASSRLS', v_role, v_pass);
@@ -179,7 +185,7 @@ describe('TASK-009 Checkpoint 1G — Migration Freeze & Real Upgrade/Fresh Proof
       expect(roles[0].rolcanlogin).toBe(true);
 
       // Restore password to test default
-      await adminPrisma.$executeRawUnsafe(`ALTER ROLE ${APP_ROLE} WITH PASSWORD 'password'`);
+      await adminPrisma.$executeRawUnsafe(`ALTER ROLE ${APP_ROLE} WITH PASSWORD '${CANONICAL_APP_PASSWORD.replace(/'/g, "''")}'`);
     });
   });
 

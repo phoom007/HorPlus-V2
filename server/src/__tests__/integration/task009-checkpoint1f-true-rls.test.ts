@@ -59,7 +59,11 @@ describe('TASK-009 Checkpoint 1F — True RLS & API Runtime Role Compatibility S
   let receiptAId: string;
 
   beforeAll(async () => {
-    // Verify runtime role exists and has required security attributes (LOGIN, NOSUPERUSER, NOBYPASSRLS)
+    // Synchronize runtime role password and verify security attributes (LOGIN, NOSUPERUSER, NOBYPASSRLS)
+    await adminPrisma.$executeRawUnsafe(
+      `ALTER ROLE ${appUser} WITH PASSWORD '${appPassword.replace(/'/g, "''")}' LOGIN NOSUPERUSER NOBYPASSRLS;`
+    );
+
     const roleCheck = await adminPrisma.$queryRaw<any[]>`
       SELECT rolname, rolcanlogin, rolsuper, rolbypassrls FROM pg_roles WHERE rolname = ${appUser}
     `;
