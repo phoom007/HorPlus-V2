@@ -57,13 +57,14 @@ All quality gates were executed against PostgreSQL on port 5455 (`horplus_wave1d
 ========================================================================================
   1. Master Local UAT E2E Suite        tests/e2e/local06-master-local-uat 87 / 87 PASSED (100%)
   2. Acceptance Matrix Validator       verify-local06-acceptance-matrix   0 unmapped / 100%
-  3. Full Playwright E2E Suite         npx playwright test --workers=1   197 / 197 PASSED (100%)
-  4. Full Backend Unit & Integration   npm --prefix server test           448 / 448 PASSED (100%)
+  3. Full Playwright E2E Suite         npx playwright test --workers=1   215 / 215 PASSED (100%)
+  4. Full Backend Unit & Integration   npm --prefix server test           461 / 461 PASSED (100%)
   5. Frontend Unit & Integration       npm test                           50 / 50 PASSED (100%)
   6. Frontend Typecheck                tsc --noEmit                       0 ERRORS
-  7. Backend Typecheck                 tsc --noEmit (server)              0 ERRORS
-  8. Frontend Production Bundle        vite build                         BUILT CLEANLY
-  9. Backend Production Bundle         tsc -p tsconfig.build.json         BUILT CLEANLY
+  7. Backend Typecheck / Lint          npm --prefix server run lint       0 ERRORS
+  8. Frontend Production Bundle        npm run build                      BUILT CLEANLY
+  9. Backend Production Bundle         npm --prefix server run build      BUILT CLEANLY
+ 10. Database Schema Migrations        npx prisma migrate status          26 MIGRATIONS (UP TO DATE)
 ========================================================================================
 ```
 

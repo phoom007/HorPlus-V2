@@ -1,0 +1,6 @@
+﻿=== FRONTEND TYPECHECK ===
+=== BACKEND LINT / TYPECHECK ===
+
+> horplus-backend@0.1.0 lint
+> tsc --noEmit
+
