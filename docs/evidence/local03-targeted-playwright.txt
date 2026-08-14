@@ -1,0 +1,283 @@
+﻿[WebServer] 
+[WebServer] > horplus-backend@0.1.0 dev
+[WebServer] > tsx watch src/server.ts
+[WebServer] 
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:16.533Z","service":"horplus-api","environment":"development","config":{"NODE_ENV":"development","PORT":3101,"API_BASE_PATH":"/api/v1","DATABASE_URL":"postgresql://***:***@127.0.0.1:5455/horplus_wave1d_fasttrack_test?schema=public","REDIS_URL":"redis://127.0.0.1:6379","LOG_LEVEL":"info","CORS_ORIGINS":["http://127.0.0.1:5174","http://localhost:5174"],"BODY_LIMIT":"1mb","SHUTDOWN_TIMEOUT_MS":10000,"E2E_TEST_MODE":false,"GOOGLE_CLIENT_ID":"507149070057-14erqd704ljstpqvfl5n4jk6n74amebd.apps.googleusercontent.com","SESSION_ENCRYPTION_KEY":"[REDACTED]","SESSION_TTL_SECONDS":86400,"SESSION_COOKIE_NAME":"horplus_session","CSRF_SIGNING_KEY":"[REDACTED]","CSRF_COOKIE_NAME":"horplus_csrf","COOKIE_SECURE":false,"COOKIE_SAME_SITE":"lax","TRUST_PROXY":false,"FIELD_ENCRYPTION_KEY":"[REDACTED]","FIELD_ENCRYPTION_KEY_VERSION":1},"msg":"Environment validated successfully. Starting HorPlus API server..."}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:16.627Z","service":"horplus-api","environment":"development","msg":"Connected to Redis server"}
+
+[WebServer] Property repository mode: PRISMA_POSTGRESQL
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:16.689Z","service":"horplus-api","environment":"development","port":3101,"host":"0.0.0.0","environment":"development","msg":"HorPlus API server listening on 0.0.0.0:3101"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:16.714Z","service":"horplus-api","environment":"development","event":"ACTIVATE_SCHEDULED_CHECK","evalInstant":"2026-08-14T04:41:16.707Z","evalBangkokDateStr":"2026-08-14","foundCount":0,"contractIds":[]}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:17.431Z","service":"horplus-api","environment":"development","requestId":"req_1b0e12cf-1a6d-4289-b587-fe240244a513","method":"GET","path":"/health/liveness","statusCode":200,"responseTimeMs":3,"msg":"HTTP Request processed"}
+
+
+Running 7 tests using 1 worker
+
+[1/7] [chromium] ΓÇ║ tests\e2e\local03-notification-outbox-operations.spec.ts:275:3 ΓÇ║ LOCAL-03: Local Notification Outbox & Operations Polish E2E ΓÇ║ Flow A & B: Tenant persistent in-app notice, read state & F5 persistence
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:32.931Z","service":"horplus-api","environment":"development","requestId":"req_09920d9d-9a89-4dcd-a166-58a10a0d35e4","method":"GET","path":"/api/v1/tenant-portal/profile","statusCode":200,"responseTimeMs":89,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:32.979Z","service":"horplus-api","environment":"development","requestId":"req_d6e4ee33-2cf4-42fe-80e4-97b50ece1f8c","method":"GET","path":"/api/v1/tenant-portal/profile","statusCode":200,"responseTimeMs":40,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:33.169Z","service":"horplus-api","environment":"development","requestId":"req_1786682493110_j4cg8","method":"GET","path":"/api/v1/tenant-portal/notices","statusCode":200,"responseTimeMs":49,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:33.183Z","service":"horplus-api","environment":"development","requestId":"req_53b97afa-1563-4ff6-82d9-9c76396ca146","method":"GET","path":"/api/v1/tenant-portal/profile","statusCode":200,"responseTimeMs":70,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:33.236Z","service":"horplus-api","environment":"development","requestId":"req_d8cb1f6c-0ad0-4bd4-a49e-5257bf4cf70b","method":"GET","path":"/api/v1/tenant-portal/profile","statusCode":200,"responseTimeMs":48,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:33.252Z","service":"horplus-api","environment":"development","requestId":"req_1786682493118_gaomz","method":"GET","path":"/api/v1/tenant-portal/notices","statusCode":200,"responseTimeMs":78,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:33.320Z","service":"horplus-api","environment":"development","requestId":"req_211e74d1-9720-4c8c-8f47-cbd5df289b27","method":"GET","path":"/api/v1/tenant-portal/profile","statusCode":200,"responseTimeMs":79,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:33.322Z","service":"horplus-api","environment":"development","requestId":"req_1786682493150_p7xny","method":"GET","path":"/api/v1/tenant-portal/notices","statusCode":200,"responseTimeMs":54,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:33.342Z","service":"horplus-api","environment":"development","requestId":"req_42c33359-77c8-49d2-b6da-6e73fdd4c7d0","method":"GET","path":"/api/v1/tenant-portal/contract","statusCode":404,"responseTimeMs":76,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:33.385Z","service":"horplus-api","environment":"development","requestId":"req_553618c5-194f-48cf-8079-db90a3cde7c5","method":"GET","path":"/api/v1/tenant-portal/contract","statusCode":404,"responseTimeMs":38,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:33.411Z","service":"horplus-api","environment":"development","requestId":"req_51538262-9c6c-4dbe-a72f-1a019aeeee79","method":"GET","path":"/api/v1/tenant-portal/bills","statusCode":200,"responseTimeMs":54,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:33.430Z","service":"horplus-api","environment":"development","requestId":"req_5cadbf2c-980d-4f89-a8ba-480b721d2733","method":"GET","path":"/api/v1/tenant-portal/contract","statusCode":404,"responseTimeMs":40,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:33.455Z","service":"horplus-api","environment":"development","requestId":"req_1fd737f0-48e3-4602-8f2c-c6a26de2ba22","method":"GET","path":"/api/v1/tenant-portal/bills","statusCode":200,"responseTimeMs":39,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:33.506Z","service":"horplus-api","environment":"development","requestId":"req_70935a11-e8d3-4c78-853d-6b725fd6c1db","method":"GET","path":"/api/v1/tenant-portal/bills","statusCode":200,"responseTimeMs":43,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:36.770Z","service":"horplus-api","environment":"development","requestId":"req_1786682496702_r80at","method":"POST","path":"/api/v1/tenant-portal/notices/71047b3e-da3d-4741-8972-d9deb722f69f/read","statusCode":200,"responseTimeMs":46,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:37.051Z","service":"horplus-api","environment":"development","requestId":"req_15778f51-316b-495a-a24d-1e5e10bd85a0","method":"GET","path":"/api/v1/tenant-portal/profile","statusCode":200,"responseTimeMs":26,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:37.087Z","service":"horplus-api","environment":"development","requestId":"req_11d4a751-5cfe-4dde-b1d6-633025f77984","method":"GET","path":"/api/v1/tenant-portal/profile","statusCode":200,"responseTimeMs":32,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:37.126Z","service":"horplus-api","environment":"development","requestId":"req_1786682497078_dpvui","method":"GET","path":"/api/v1/tenant-portal/notices","statusCode":200,"responseTimeMs":45,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:37.131Z","service":"horplus-api","environment":"development","requestId":"req_5886e1bf-7bbe-45ec-be80-d2d4c432199b","method":"GET","path":"/api/v1/tenant-portal/profile","statusCode":200,"responseTimeMs":39,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:37.168Z","service":"horplus-api","environment":"development","requestId":"req_1786682497079_yjfz7","method":"GET","path":"/api/v1/tenant-portal/notices","statusCode":200,"responseTimeMs":38,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:37.177Z","service":"horplus-api","environment":"development","requestId":"req_a4402f13-d363-4747-83b6-1c3e46d49a14","method":"GET","path":"/api/v1/tenant-portal/profile","statusCode":200,"responseTimeMs":42,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:37.194Z","service":"horplus-api","environment":"development","requestId":"req_eadd71f7-3b8c-45d9-ac87-1c9a62bbf475","method":"GET","path":"/api/v1/tenant-portal/contract","statusCode":404,"responseTimeMs":41,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:37.214Z","service":"horplus-api","environment":"development","requestId":"req_1786682497117_l84zz","method":"GET","path":"/api/v1/tenant-portal/notices","statusCode":200,"responseTimeMs":40,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:37.220Z","service":"horplus-api","environment":"development","requestId":"req_c59bf472-30b4-42ef-887d-15e87ead9d64","method":"GET","path":"/api/v1/tenant-portal/profile","statusCode":200,"responseTimeMs":38,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:37.241Z","service":"horplus-api","environment":"development","requestId":"req_5dffb685-2d38-4d1a-835f-0cd03cf7e762","method":"GET","path":"/api/v1/tenant-portal/contract","statusCode":404,"responseTimeMs":43,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:37.272Z","service":"horplus-api","environment":"development","requestId":"req_7c7a2d0d-4296-4f69-8d2c-48482802fafd","method":"GET","path":"/api/v1/tenant-portal/bills","statusCode":200,"responseTimeMs":46,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:37.295Z","service":"horplus-api","environment":"development","requestId":"req_e7297c96-1090-46a9-aa3d-a3d009f207ac","method":"GET","path":"/api/v1/tenant-portal/contract","statusCode":404,"responseTimeMs":36,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:37.335Z","service":"horplus-api","environment":"development","requestId":"req_d324d5ef-e2ae-4dda-aa65-cfc0d73283c0","method":"GET","path":"/api/v1/tenant-portal/bills","statusCode":200,"responseTimeMs":59,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:37.394Z","service":"horplus-api","environment":"development","requestId":"req_6dd26dd9-8e78-4d35-bf61-7905fd79fe2d","method":"GET","path":"/api/v1/tenant-portal/bills","statusCode":200,"responseTimeMs":51,"msg":"HTTP Request processed"}
+
+[2/7] [chromium] ΓÇ║ tests\e2e\local03-notification-outbox-operations.spec.ts:319:3 ΓÇ║ LOCAL-03: Local Notification Outbox & Operations Polish E2E ΓÇ║ Flow C & D: Owner operational notifications, swipe guide badge & real UI swipe dismissal persistence
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:38.662Z","service":"horplus-api","environment":"development","requestId":"req_f31ba98b-c253-4590-8e0a-83cc7ec84b88","method":"GET","path":"/api/v1/auth/session","statusCode":200,"responseTimeMs":20,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:38.681Z","service":"horplus-api","environment":"development","requestId":"req_bbf00fe6-2ff6-4f40-8192-da7b977f2eb6","method":"GET","path":"/api/v1/auth/session","statusCode":200,"responseTimeMs":15,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:38.866Z","service":"horplus-api","environment":"development","requestId":"req_301a3cd3-26c6-45a6-b82b-4d4b5617b5ba","method":"GET","path":"/api/v1/subscription/entitlements","statusCode":200,"responseTimeMs":59,"msg":"HTTP Request processed"}
+
+[WebServer] Room findAll where: {"dormitoryId":"eb91db75-5852-457c-9d85-42eee152048f","deletedAt":null,"status":{"not":"archived"}} skip: 0 take: 50 Result: 0 Total: 0
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:38.974Z","service":"horplus-api","environment":"development","requestId":"req_9ee9c3e0-3979-4ffe-940e-fdb928c8be2a","method":"GET","path":"/api/v1/notifications","statusCode":200,"responseTimeMs":58,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:38.984Z","service":"horplus-api","environment":"development","requestId":"req_bc44c1d6-25a3-4b1e-9b62-2933e085b4e7","method":"GET","path":"/api/v1/properties/rooms","statusCode":200,"responseTimeMs":66,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:38.996Z","service":"horplus-api","environment":"development","requestId":"req_0c6209da-93b3-45b5-a3ab-07710c43d87c","method":"GET","path":"/api/v1/subscription/entitlements","statusCode":200,"responseTimeMs":76,"msg":"HTTP Request processed"}
+
+[WebServer] Room findAll where: {"dormitoryId":"eb91db75-5852-457c-9d85-42eee152048f","deletedAt":null,"status":{"not":"archived"}} skip: 0 take: 50 Result: 0 Total: 0
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:39.023Z","service":"horplus-api","environment":"development","requestId":"req_cd08c4f6-3c66-4799-b432-03f396e66095","method":"GET","path":"/api/v1/notifications","statusCode":200,"responseTimeMs":42,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:39.028Z","service":"horplus-api","environment":"development","requestId":"req_59ecd8bf-4c38-42fc-aa59-974faa4514fa","method":"GET","path":"/api/v1/properties/rooms","statusCode":200,"responseTimeMs":34,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:39.060Z","service":"horplus-api","environment":"development","requestId":"req_f35e59cd-39bb-469f-b7c9-346d3cc57c93","method":"GET","path":"/api/v1/properties/buildings","statusCode":200,"responseTimeMs":25,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:39.157Z","service":"horplus-api","environment":"development","requestId":"req_1e1e6a08-f9eb-46e2-8b9c-ea22c182dbbc","method":"GET","path":"/api/v1/announcements","statusCode":200,"responseTimeMs":39,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:39.159Z","service":"horplus-api","environment":"development","requestId":"req_e59a14f4-ee8e-4375-a7a9-d989af9f858e","method":"GET","path":"/api/v1/tenants","statusCode":200,"responseTimeMs":46,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:39.163Z","service":"horplus-api","environment":"development","requestId":"req_cea7d52d-5b9e-413d-abbf-29524e237349","method":"GET","path":"/api/v1/properties/buildings","statusCode":200,"responseTimeMs":57,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:39.169Z","service":"horplus-api","environment":"development","requestId":"req_6807edce-8b30-4d7e-8d1d-da0bb8308390","method":"GET","path":"/api/v1/contracts","statusCode":200,"responseTimeMs":53,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:39.195Z","service":"horplus-api","environment":"development","requestId":"req_e09717e6-1a9f-4e9f-8392-fad613ede215","method":"GET","path":"/api/v1/maintenance","statusCode":200,"responseTimeMs":79,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:39.203Z","service":"horplus-api","environment":"development","requestId":"req_0a45eefa-199d-4c1a-9c2e-92236dee558f","method":"GET","path":"/api/v1/billing-cycles","statusCode":200,"responseTimeMs":39,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:39.210Z","service":"horplus-api","environment":"development","requestId":"req_f5be41c6-6bec-4fcf-88c6-5572bc33e7ee","method":"GET","path":"/api/v1/bills","statusCode":200,"responseTimeMs":96,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:39.263Z","service":"horplus-api","environment":"development","requestId":"req_48f7f6cd-6920-44aa-922a-5bceb27c86ab","method":"GET","path":"/api/v1/maintenance","statusCode":200,"responseTimeMs":23,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:39.265Z","service":"horplus-api","environment":"development","requestId":"req_ec983c7d-40e8-43ba-8526-2f169c7de0bf","method":"GET","path":"/api/v1/announcements","statusCode":200,"responseTimeMs":24,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:39.275Z","service":"horplus-api","environment":"development","requestId":"req_c020bdab-e83b-43c5-9ae3-a44932f0c6cb","method":"GET","path":"/api/v1/contracts","statusCode":200,"responseTimeMs":36,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:39.283Z","service":"horplus-api","environment":"development","requestId":"req_6d09dba4-bf96-47a5-84d4-9472194ce6f2","method":"GET","path":"/api/v1/bills","statusCode":200,"responseTimeMs":46,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:39.294Z","service":"horplus-api","environment":"development","requestId":"req_f87b0303-c216-4baa-9259-02d6ae392e2f","method":"GET","path":"/api/v1/billing-cycles","statusCode":200,"responseTimeMs":53,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:39.299Z","service":"horplus-api","environment":"development","requestId":"req_d445621e-037f-4b1f-af59-20241e58cf03","method":"GET","path":"/api/v1/tenants","statusCode":200,"responseTimeMs":70,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:40.001Z","service":"horplus-api","environment":"development","requestId":"req_fb7fff99-21a1-4cd7-84f2-ec415821c961","method":"GET","path":"/api/v1/notifications","statusCode":200,"responseTimeMs":52,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:40.921Z","service":"horplus-api","environment":"development","requestId":"req_3054c59e-e92b-44c6-b0c6-85f8d4ca1b22","method":"POST","path":"/api/v1/notifications/09376628-f889-4f7c-a8e9-6a20875dc696/dismiss","statusCode":200,"responseTimeMs":37,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:41.226Z","service":"horplus-api","environment":"development","requestId":"req_5cf8a263-54b7-4409-9b12-a9568bda100b","method":"GET","path":"/api/v1/auth/session","statusCode":200,"responseTimeMs":12,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:41.242Z","service":"horplus-api","environment":"development","requestId":"req_d9d5341e-fe2f-4dd8-8bf0-4cf98f564fb4","method":"GET","path":"/api/v1/auth/session","statusCode":200,"responseTimeMs":12,"msg":"HTTP Request processed"}
+
+[WebServer] Room findAll where: {"dormitoryId":"eb91db75-5852-457c-9d85-42eee152048f","deletedAt":null,"status":{"not":"archived"}} skip: 0 take: 50 Result: 0 Total: 0
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:41.326Z","service":"horplus-api","environment":"development","requestId":"req_57c6a246-fddb-4f38-9371-12f939112a7a","method":"GET","path":"/api/v1/subscription/entitlements","statusCode":200,"responseTimeMs":31,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:41.335Z","service":"horplus-api","environment":"development","requestId":"req_57837d7f-d2b1-45e3-b5af-8c0b0ddd6529","method":"GET","path":"/api/v1/properties/rooms","statusCode":200,"responseTimeMs":36,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:41.348Z","service":"horplus-api","environment":"development","requestId":"req_5bb2da52-4e12-4a20-b69f-76a5c84cf6ce","method":"GET","path":"/api/v1/notifications","statusCode":200,"responseTimeMs":51,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:41.363Z","service":"horplus-api","environment":"development","requestId":"req_9f8beb3f-1cf4-4b7a-b100-6dfdae810f68","method":"GET","path":"/api/v1/subscription/entitlements","statusCode":200,"responseTimeMs":32,"msg":"HTTP Request processed"}
+
+[WebServer] Room findAll where: {"dormitoryId":"eb91db75-5852-457c-9d85-42eee152048f","deletedAt":null,"status":{"not":"archived"}} skip: 0 take: 50 Result: 0 Total: 0
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:41.369Z","service":"horplus-api","environment":"development","requestId":"req_e92707a2-a209-41fe-9503-6d649086eb5d","method":"GET","path":"/api/v1/properties/rooms","statusCode":200,"responseTimeMs":29,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:41.387Z","service":"horplus-api","environment":"development","requestId":"req_25ed5e37-20ce-4f46-9073-b56222cc89b9","method":"GET","path":"/api/v1/notifications","statusCode":200,"responseTimeMs":33,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:41.432Z","service":"horplus-api","environment":"development","requestId":"req_c4a469cd-5043-4866-8ced-9b1872cd7368","method":"GET","path":"/api/v1/properties/buildings","statusCode":200,"responseTimeMs":18,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:41.472Z","service":"horplus-api","environment":"development","requestId":"req_7a44da66-1b57-42e1-8c35-8ca0514edb8c","method":"GET","path":"/api/v1/properties/buildings","statusCode":200,"responseTimeMs":18,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:41.525Z","service":"horplus-api","environment":"development","requestId":"req_47102fff-c757-4dfa-bdef-92203bcb8571","method":"GET","path":"/api/v1/maintenance","statusCode":200,"responseTimeMs":21,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:41.530Z","service":"horplus-api","environment":"development","requestId":"req_b0dafb9a-e49c-4303-9576-b32736619cb8","method":"GET","path":"/api/v1/tenants","statusCode":200,"responseTimeMs":36,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:41.533Z","service":"horplus-api","environment":"development","requestId":"req_428ce093-ff42-49cc-b28f-93a299fc71a4","method":"GET","path":"/api/v1/announcements","statusCode":200,"responseTimeMs":28,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:41.536Z","service":"horplus-api","environment":"development","requestId":"req_dd9ed60a-cc13-42a9-8692-5bca821c96a6","method":"GET","path":"/api/v1/bills","statusCode":200,"responseTimeMs":34,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:41.537Z","service":"horplus-api","environment":"development","requestId":"req_8b1c02e8-efdf-4e46-bf91-3a6a3251c5ba","method":"GET","path":"/api/v1/contracts","statusCode":200,"responseTimeMs":35,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:41.542Z","service":"horplus-api","environment":"development","requestId":"req_3a53886c-3ec4-41ad-a77a-945817b01372","method":"GET","path":"/api/v1/billing-cycles","statusCode":200,"responseTimeMs":36,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:41.578Z","service":"horplus-api","environment":"development","requestId":"req_9535aa2b-b1ed-462b-89f7-4821fc041b53","method":"GET","path":"/api/v1/tenants","statusCode":200,"responseTimeMs":23,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:41.586Z","service":"horplus-api","environment":"development","requestId":"req_d1ca7819-69bf-4201-857c-69d0be5c842f","method":"GET","path":"/api/v1/maintenance","statusCode":200,"responseTimeMs":22,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:41.591Z","service":"horplus-api","environment":"development","requestId":"req_0ece805e-a745-44f1-9c35-e0c28f2b31a8","method":"GET","path":"/api/v1/announcements","statusCode":200,"responseTimeMs":25,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:41.595Z","service":"horplus-api","environment":"development","requestId":"req_598c3ecb-d81e-48e3-a3b8-9ec5195b04b2","method":"GET","path":"/api/v1/bills","statusCode":200,"responseTimeMs":33,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:41.596Z","service":"horplus-api","environment":"development","requestId":"req_dde9d4af-be13-43ea-a6ac-7c36e557768b","method":"GET","path":"/api/v1/contracts","statusCode":200,"responseTimeMs":33,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:41.599Z","service":"horplus-api","environment":"development","requestId":"req_037f9a33-83e8-4860-ab17-01cfe87680df","method":"GET","path":"/api/v1/billing-cycles","statusCode":200,"responseTimeMs":32,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:42.220Z","service":"horplus-api","environment":"development","requestId":"req_fc90c3f5-623e-49a9-afb9-0c949eefa4f2","method":"GET","path":"/api/v1/notifications","statusCode":200,"responseTimeMs":41,"msg":"HTTP Request processed"}
+
+[3/7] [chromium] ΓÇ║ tests\e2e\local03-notification-outbox-operations.spec.ts:380:3 ΓÇ║ LOCAL-03: Local Notification Outbox & Operations Polish E2E ΓÇ║ Flow D & H: Manager notification list remains unaffected by Owner dismissal
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:43.294Z","service":"horplus-api","environment":"development","requestId":"req_4da38392-a433-49f8-b02f-d6fe74d5581b","method":"GET","path":"/api/v1/auth/session","statusCode":200,"responseTimeMs":9,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:43.309Z","service":"horplus-api","environment":"development","requestId":"req_e0c0aa24-04a8-412e-b31a-8af5f4393038","method":"GET","path":"/api/v1/auth/session","statusCode":200,"responseTimeMs":11,"msg":"HTTP Request processed"}
+
+[WebServer] Room findAll where: {"dormitoryId":"eb91db75-5852-457c-9d85-42eee152048f","deletedAt":null,"status":{"not":"archived"}} skip: 0 take: 50 Result: 0 Total: 0
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:43.417Z","service":"horplus-api","environment":"development","requestId":"req_5dafa283-a8cf-4370-848f-356af392cb04","method":"GET","path":"/api/v1/subscription/entitlements","statusCode":200,"responseTimeMs":30,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:43.426Z","service":"horplus-api","environment":"development","requestId":"req_751c91cf-a59c-4d10-a8de-5a1659ac16b4","method":"GET","path":"/api/v1/properties/rooms","statusCode":200,"responseTimeMs":35,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:43.430Z","service":"horplus-api","environment":"development","requestId":"req_899061ae-69ae-4581-876c-c7cfb34ab97d","method":"GET","path":"/api/v1/notifications","statusCode":200,"responseTimeMs":40,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:43.455Z","service":"horplus-api","environment":"development","requestId":"req_a6e694c6-0792-4241-9d49-81bd74be4aba","method":"GET","path":"/api/v1/subscription/entitlements","statusCode":200,"responseTimeMs":32,"msg":"HTTP Request processed"}
+
+[WebServer] Room findAll where: {"dormitoryId":"eb91db75-5852-457c-9d85-42eee152048f","deletedAt":null,"status":{"not":"archived"}} skip: 0 take: 50 Result: 0 Total: 0
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:43.462Z","service":"horplus-api","environment":"development","requestId":"req_a007eb2f-ecf2-4749-85bc-8f29fc82a236","method":"GET","path":"/api/v1/properties/rooms","statusCode":200,"responseTimeMs":31,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:43.475Z","service":"horplus-api","environment":"development","requestId":"req_10bf7744-0b82-4c1b-9469-6e1b54b50fad","method":"GET","path":"/api/v1/notifications","statusCode":200,"responseTimeMs":39,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:43.595Z","service":"horplus-api","environment":"development","requestId":"req_4fc343db-7386-4337-81e9-75c11d36b24b","method":"GET","path":"/api/v1/properties/buildings","statusCode":200,"responseTimeMs":24,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:43.624Z","service":"horplus-api","environment":"development","requestId":"req_b7468cda-0fcf-4194-8931-8929c78d05cc","method":"GET","path":"/api/v1/properties/buildings","statusCode":200,"responseTimeMs":21,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:43.653Z","service":"horplus-api","environment":"development","requestId":"req_5eee2bb0-6cab-4fe1-9aa6-597f47060e04","method":"GET","path":"/api/v1/maintenance","statusCode":200,"responseTimeMs":25,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:43.656Z","service":"horplus-api","environment":"development","requestId":"req_73af5bbd-ae05-4c05-be0c-015180f084ef","method":"GET","path":"/api/v1/announcements","statusCode":200,"responseTimeMs":26,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:43.658Z","service":"horplus-api","environment":"development","requestId":"req_05e55e3f-8978-43aa-ad48-4eed84b1aac6","method":"GET","path":"/api/v1/bills","statusCode":200,"responseTimeMs":32,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:43.660Z","service":"horplus-api","environment":"development","requestId":"req_b5fe7acd-658a-4d4b-8ac4-b4865ae5f89e","method":"GET","path":"/api/v1/tenants","statusCode":200,"responseTimeMs":35,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:43.662Z","service":"horplus-api","environment":"development","requestId":"req_ec8174d3-6d94-4a83-bda2-b6ba38189974","method":"GET","path":"/api/v1/contracts","statusCode":200,"responseTimeMs":35,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:43.666Z","service":"horplus-api","environment":"development","requestId":"req_84e23a4c-b7bc-459a-a588-d59247c4a752","method":"GET","path":"/api/v1/billing-cycles","statusCode":200,"responseTimeMs":33,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:43.709Z","service":"horplus-api","environment":"development","requestId":"req_6d8a02ce-75f3-46f4-b5f1-5f3159d41495","method":"GET","path":"/api/v1/maintenance","statusCode":200,"responseTimeMs":23,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:43.717Z","service":"horplus-api","environment":"development","requestId":"req_dba1b36d-36da-41aa-9479-41f9fd386524","method":"GET","path":"/api/v1/tenants","statusCode":200,"responseTimeMs":40,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:43.719Z","service":"horplus-api","environment":"development","requestId":"req_30167b57-7549-4f4e-8460-24c7b5763606","method":"GET","path":"/api/v1/announcements","statusCode":200,"responseTimeMs":32,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:43.722Z","service":"horplus-api","environment":"development","requestId":"req_4cf9689f-751c-4824-b8d5-5260292d8cba","method":"GET","path":"/api/v1/bills","statusCode":200,"responseTimeMs":40,"msg":"HTTP Request processed"}
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:43.724Z","service":"horplus-api","environment":"development","requestId":"req_f134f0da-68db-4dd9-ac66-f5f18f803a58","method":"GET","path":"/api/v1/contracts","statusCode":200,"responseTimeMs":40,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:43.729Z","service":"horplus-api","environment":"development","requestId":"req_36e734dd-fd84-4b9a-bfa7-2d0654712ff8","method":"GET","path":"/api/v1/billing-cycles","statusCode":200,"responseTimeMs":41,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:44.439Z","service":"horplus-api","environment":"development","requestId":"req_453f28b9-70c4-4452-8e3f-0c6b06fd6f92","method":"GET","path":"/api/v1/notifications","statusCode":200,"responseTimeMs":31,"msg":"HTTP Request processed"}
+
+[4/7] [chromium] ΓÇ║ tests\e2e\local03-notification-outbox-operations.spec.ts:401:3 ΓÇ║ LOCAL-03: Local Notification Outbox & Operations Polish E2E ΓÇ║ Flow E: Authenticated cross-dormitory isolation returns 403 when Owner A selects Dorm B
+
+node.exe : [WebServer] [RESOLVE DORM CONTEXT ERROR] {
+At C:\Program Files\nodejs\npx.ps1:29 char:3
++   & $NODE_EXE $NPX_CLI_JS $args
++   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: ([WebServer] [RE...ONTEXT ERROR] {:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+[WebServer]   path: '/api/v1/notifications',
+[WebServer]   code: undefined,
+[WebServer]   message: 'Access denied for requested dormitory context.'
+[WebServer] }
+[WebServer] {"severity":"ERROR","level":"error","timestamp":"2026-08-14T04:41:45.313Z","service":"horplus-api","environment":"development","requestId":"req_1b4ece39-faed-48b1-bf4d-ad9c3ed836aa","statusCode":403,"errorCode":"FORBIDDEN","errMessage":"Access denied for requested dormitory context.","stack":"AppError: Access denied for requested dormitory context.\n    at resolveAuthoritativeDormitoryContext (D:\\horplus_wave1d_fasttrack\\server\\src\\middleware\\dormitory-context.ts:114:13)\n    at async resolveDormitoryContextMiddleware (D:\\horplus_wave1d_fasttrack\\server\\src\\middleware\\permission.ts:82:21)","msg":"Error handled by global error handler"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:45.314Z","service":"horplus-api","environment":"development","requestId":"req_1b4ece39-faed-48b1-bf4d-ad9c3ed836aa","method":"GET","path":"/api/v1/notifications","statusCode":403,"responseTimeMs":15,"msg":"HTTP Request processed"}
+
+[5/7] [chromium] ΓÇ║ tests\e2e\local03-notification-outbox-operations.spec.ts:423:3 ΓÇ║ LOCAL-03: Local Notification Outbox & Operations Polish E2E ΓÇ║ Flow F: TECH RBAC ΓÇö Authenticated TECH session denied from OWNER-only preferences
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:45.466Z","service":"horplus-api","environment":"development","requestId":"req_817d449b-998e-4e8c-bc67-c4ec8413f19d","method":"PATCH","path":"/api/v1/notifications/preferences","statusCode":403,"responseTimeMs":20,"msg":"HTTP Request processed"}
+
+[6/7] [chromium] ΓÇ║ tests\e2e\local03-notification-outbox-operations.spec.ts:447:3 ΓÇ║ LOCAL-03: Local Notification Outbox & Operations Polish E2E ΓÇ║ Flow G: Outbox reconciliation idempotency on re-dispatch
+[7/7] [chromium] ΓÇ║ tests\e2e\local03-notification-outbox-operations.spec.ts:462:3 ΓÇ║ LOCAL-03: Local Notification Outbox & Operations Polish E2E ΓÇ║ Flow H: Truthful empty state rendering without fake placeholders
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:46.074Z","service":"horplus-api","environment":"development","requestId":"req_cb19cb3a-16c2-40a8-918b-bee29fed4010","method":"GET","path":"/api/v1/tenant-portal/profile","statusCode":200,"responseTimeMs":81,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:46.180Z","service":"horplus-api","environment":"development","requestId":"req_2da7b1d5-4f33-4d52-800f-77318abeb6af","method":"GET","path":"/api/v1/tenant-portal/profile","statusCode":200,"responseTimeMs":101,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:46.477Z","service":"horplus-api","environment":"development","requestId":"req_1786682506291_d57fk","method":"GET","path":"/api/v1/tenant-portal/notices","statusCode":200,"responseTimeMs":176,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:46.479Z","service":"horplus-api","environment":"development","requestId":"req_5ddb5291-ee94-401d-9303-799ca9bcfbd1","method":"GET","path":"/api/v1/tenant-portal/profile","statusCode":200,"responseTimeMs":180,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:46.587Z","service":"horplus-api","environment":"development","requestId":"req_1786682506295_bnhh7","method":"GET","path":"/api/v1/tenant-portal/notices","statusCode":200,"responseTimeMs":102,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:46.591Z","service":"horplus-api","environment":"development","requestId":"req_abe42fdd-51f2-416a-b4c0-333d4002035e","method":"GET","path":"/api/v1/tenant-portal/contract","statusCode":404,"responseTimeMs":86,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:46.593Z","service":"horplus-api","environment":"development","requestId":"req_dec0e0c7-811c-4a57-be92-6b992a1c7d0b","method":"GET","path":"/api/v1/tenant-portal/profile","statusCode":200,"responseTimeMs":106,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:46.682Z","service":"horplus-api","environment":"development","requestId":"req_1d0e1d46-851d-473d-aa2d-8ebefaad9f33","method":"GET","path":"/api/v1/tenant-portal/profile","statusCode":200,"responseTimeMs":82,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:46.684Z","service":"horplus-api","environment":"development","requestId":"req_1786682506329_7w2ek","method":"GET","path":"/api/v1/tenant-portal/notices","statusCode":200,"responseTimeMs":85,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:46.707Z","service":"horplus-api","environment":"development","requestId":"req_7c8f8af9-08d8-4b75-bb81-6ec9f0a28719","method":"GET","path":"/api/v1/tenant-portal/contract","statusCode":404,"responseTimeMs":52,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:46.715Z","service":"horplus-api","environment":"development","requestId":"req_af4c657d-bced-457d-84b0-5d480fc04673","method":"GET","path":"/api/v1/tenant-portal/bills","statusCode":200,"responseTimeMs":85,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:46.764Z","service":"horplus-api","environment":"development","requestId":"req_4ccd480f-1be3-49fd-8844-e27f3231d540","method":"GET","path":"/api/v1/tenant-portal/contract","statusCode":404,"responseTimeMs":51,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:46.781Z","service":"horplus-api","environment":"development","requestId":"req_1665f260-14db-42a5-9d21-083a0d577e24","method":"GET","path":"/api/v1/tenant-portal/bills","statusCode":200,"responseTimeMs":58,"msg":"HTTP Request processed"}
+
+[WebServer] {"severity":"INFO","level":"info","timestamp":"2026-08-14T04:41:46.844Z","service":"horplus-api","environment":"development","requestId":"req_e94aea7a-46c5-4a1b-9495-af7f33ea17f5","method":"GET","path":"/api/v1/tenant-portal/bills","statusCode":200,"responseTimeMs":53,"msg":"HTTP Request processed"}
+
+  7 passed (36.1s)

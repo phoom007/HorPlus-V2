@@ -175,7 +175,7 @@ test.describe('Wave 1F - Subscription & Entitlement Playwright E2E Suite', () =>
 
     // 5. Verify 30-day Trial details
     await expect(page.locator('text=Current Plan')).toBeVisible({ timeout: 10000 });
-    await expect(page.getByText('HorPlus Free').or(page.getByText('Free / Trial')).first()).toBeVisible();
+    await expect(page.getByText('Free / Trial').first()).toBeVisible();
     await expect(page.getByText('TRIAL', { exact: true })).toBeVisible();
 
     // 6. Redeem HORPLUS promo code on UI

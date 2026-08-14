@@ -28,10 +28,10 @@ if (dbHost !== '127.0.0.1' || dbPort !== '5455' || dbName !== 'horplus_wave1d_fa
 }
 
 const appUser = process.env.HORPLUS_APP_DB_USER || 'horplus_app';
-const appPassword = process.env.HORPLUS_APP_DB_PASSWORD || parsedDirect.password;
+const appPassword = process.env.HORPLUS_APP_DB_PASSWORD;
 
 if (!appPassword) {
-  throw new Error('HORPLUS_APP_DB_PASSWORD is required for runtime role RLS test execution');
+  throw new Error('HORPLUS_APP_DB_PASSWORD is required in environment for runtime role RLS test execution (fail-closed, no admin fallback allowed)');
 }
 
 const directUrl = rawAdminUrl;
@@ -59,10 +59,16 @@ describe('TASK-009 Checkpoint 1F — True RLS & API Runtime Role Compatibility S
   let receiptAId: string;
 
   beforeAll(async () => {
-    // Ensure runtime role credentials and security attributes are synchronized
-    await adminPrisma.$executeRawUnsafe(
-      `ALTER ROLE ${appUser} WITH PASSWORD '${appPassword.replace(/'/g, "''")}' LOGIN NOSUPERUSER NOBYPASSRLS;`
-    );
+    // Verify runtime role exists and has required security attributes (LOGIN, NOSUPERUSER, NOBYPASSRLS)
+    const roleCheck = await adminPrisma.$queryRaw<any[]>`
+      SELECT rolname, rolcanlogin, rolsuper, rolbypassrls FROM pg_roles WHERE rolname = ${appUser}
+    `;
+    if (!roleCheck || roleCheck.length === 0) {
+      throw new Error(`Runtime role ${appUser} does not exist in test database cluster`);
+    }
+    if (!roleCheck[0].rolcanlogin || roleCheck[0].rolsuper || roleCheck[0].rolbypassrls) {
+      throw new Error(`Runtime role ${appUser} has invalid attributes: canlogin=${roleCheck[0].rolcanlogin}, super=${roleCheck[0].rolsuper}, bypassrls=${roleCheck[0].rolbypassrls}`);
+    }
 
     // Seed test data via adminPrisma
     const ownerUser = await adminPrisma.user.create({
@@ -152,12 +158,15 @@ describe('TASK-009 Checkpoint 1F — True RLS & API Runtime Role Compatibility S
     const appUser = await appPrisma.$queryRaw<any[]>`SELECT current_user`;
     expect(appUser[0].current_user).toBe('horplus_app');
 
+    expect(adminUser[0].current_user).not.toBe(appUser[0].current_user);
+
     const roleAttrs = await adminPrisma.$queryRaw<any[]>`
-      SELECT rolname, rolsuper, rolbypassrls FROM pg_roles WHERE rolname = 'horplus_app'
+      SELECT rolname, rolsuper, rolbypassrls, rolcanlogin FROM pg_roles WHERE rolname = 'horplus_app'
     `;
     expect(roleAttrs.length).toBe(1);
     expect(roleAttrs[0].rolsuper).toBe(false);
     expect(roleAttrs[0].rolbypassrls).toBe(false);
+    expect(roleAttrs[0].rolcanlogin).toBe(true);
   });
 
   it('2. TASK-009 Table Ownership Verification (table_owner != horplus_app)', async () => {

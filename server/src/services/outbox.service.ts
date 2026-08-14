@@ -90,13 +90,26 @@ export class OutboxService {
             return;
           }
 
-          // Validate required fields
+          // 1. Validate required basic fields
           if (!currentEvent.dormitoryId || !currentEvent.title || !currentEvent.body) {
             await tx.localNotificationOutbox.update({
               where: { id: eventId },
               data: {
                 status: 'FAILED',
-                lastError: 'Malformed outbox event: missing required fields',
+                lastError: 'MISSING_REQUIRED_FIELDS',
+              },
+            });
+            eventFailed = true;
+            return;
+          }
+
+          // 2. Validate recipientType
+          if (currentEvent.recipientType !== 'TENANT' && currentEvent.recipientType !== 'STAFF') {
+            await tx.localNotificationOutbox.update({
+              where: { id: eventId },
+              data: {
+                status: 'FAILED',
+                lastError: 'INVALID_RECIPIENT_TYPE',
               },
             });
             eventFailed = true;
@@ -104,23 +117,66 @@ export class OutboxService {
           }
 
           if (currentEvent.recipientType === 'TENANT') {
-            if (currentEvent.recipientId) {
-              const existingNotice = await tx.tenantNotice.findUnique({
-                where: { sourceOutboxId: currentEvent.id },
+            if (!currentEvent.recipientId) {
+              await tx.localNotificationOutbox.update({
+                where: { id: eventId },
+                data: {
+                  status: 'FAILED',
+                  lastError: 'MISSING_TENANT_RECIPIENT',
+                },
               });
+              eventFailed = true;
+              return;
+            }
 
-              if (!existingNotice) {
-                await tx.tenantNotice.create({
-                  data: {
-                    dormitoryId: currentEvent.dormitoryId,
-                    tenantId: currentEvent.recipientId,
-                    title: currentEvent.title,
-                    message: currentEvent.body,
-                    type: currentEvent.eventType,
-                    sourceOutboxId: currentEvent.id,
-                  },
-                });
-              }
+            const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+            if (!uuidRegex.test(currentEvent.recipientId)) {
+              await tx.localNotificationOutbox.update({
+                where: { id: eventId },
+                data: {
+                  status: 'FAILED',
+                  lastError: 'INVALID_TENANT_RECIPIENT',
+                },
+              });
+              eventFailed = true;
+              return;
+            }
+
+            // Verify recipient tenant exists and belongs to authoritative event dormitory
+            const tenant = await tx.tenant.findFirst({
+              where: {
+                id: currentEvent.recipientId,
+                dormitoryId: currentEvent.dormitoryId,
+              },
+            });
+
+            if (!tenant) {
+              await tx.localNotificationOutbox.update({
+                where: { id: eventId },
+                data: {
+                  status: 'FAILED',
+                  lastError: 'RECIPIENT_DORMITORY_MISMATCH',
+                },
+              });
+              eventFailed = true;
+              return;
+            }
+
+            const existingNotice = await tx.tenantNotice.findUnique({
+              where: { sourceOutboxId: currentEvent.id },
+            });
+
+            if (!existingNotice) {
+              await tx.tenantNotice.create({
+                data: {
+                  dormitoryId: currentEvent.dormitoryId,
+                  tenantId: currentEvent.recipientId,
+                  title: currentEvent.title,
+                  message: currentEvent.body,
+                  type: currentEvent.eventType,
+                  sourceOutboxId: currentEvent.id,
+                },
+              });
             }
           } else if (currentEvent.recipientType === 'STAFF') {
             const memberWhere: any = {
@@ -131,7 +187,22 @@ export class OutboxService {
             if (currentEvent.recipientRoleCode) {
               const roles = currentEvent.recipientRoleCode
                 .split(',')
-                .map((r) => r.trim().toUpperCase());
+                .map((r) => r.trim().toUpperCase())
+                .filter(Boolean);
+
+              const validRolePattern = /^[A-Z0-9_]+$/;
+              if (roles.length === 0 || !roles.every((r) => validRolePattern.test(r))) {
+                await tx.localNotificationOutbox.update({
+                  where: { id: eventId },
+                  data: {
+                    status: 'FAILED',
+                    lastError: 'INVALID_RECIPIENT_ROLE',
+                  },
+                });
+                eventFailed = true;
+                return;
+              }
+
               memberWhere.role = {
                 code: { in: roles },
               };

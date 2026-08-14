@@ -327,6 +327,11 @@ describe('TASK-009 Checkpoint 1I — Hermetic Pre-Merge Migration & Bootstrap Pr
       } catch { /* ignore */ }
     }
 
+    // Deterministically restore canonical runtime-role password on main test DB
+    try {
+      runCanonicalBootstrapScript('horplus_wave1d_fasttrack_test', process.env.HORPLUS_APP_DB_PASSWORD || 'horplus_dev_password');
+    } catch { /* ignore */ }
+
     await masterPrisma.$disconnect();
     await mainAdminPrisma.$disconnect();
   });
@@ -428,7 +433,8 @@ describe('TASK-009 Checkpoint 1I — Hermetic Pre-Merge Migration & Bootstrap Pr
     });
 
     it('4. Bootstrap is idempotent (second execution succeeds and preserves security posture)', async () => {
-      const output = runCanonicalBootstrapScript('horplus_wave1d_fasttrack_test', 'password');
+      const canonicalPass = process.env.HORPLUS_APP_DB_PASSWORD || 'horplus_dev_password';
+      const output = runCanonicalBootstrapScript('horplus_wave1d_fasttrack_test', canonicalPass);
       expect(output).toContain('bootstrap complete');
 
       const roles = await mainAdminPrisma.$queryRaw<any[]>`
@@ -448,7 +454,8 @@ describe('TASK-009 Checkpoint 1I — Hermetic Pre-Merge Migration & Bootstrap Pr
         await mainAdminPrisma.$executeRawUnsafe(`ALTER ROLE horplus_app BYPASSRLS`);
       } catch { /* ignore if non-superuser */ }
 
-      runCanonicalBootstrapScript('horplus_wave1d_fasttrack_test', 'password');
+      const canonicalPass = process.env.HORPLUS_APP_DB_PASSWORD || 'horplus_dev_password';
+      runCanonicalBootstrapScript('horplus_wave1d_fasttrack_test', canonicalPass);
 
       const roles = await mainAdminPrisma.$queryRaw<any[]>`
         SELECT rolbypassrls, rolsuper FROM pg_roles WHERE rolname = ${APP_ROLE}
@@ -462,6 +469,13 @@ describe('TASK-009 Checkpoint 1I — Hermetic Pre-Merge Migration & Bootstrap Pr
       const content = fs.readFileSync(initDbPath, 'utf-8');
       expect(content).toContain('bootstrap-runtime-role.sh');
       expect(content).not.toContain('FATAL: HORPLUS_APP_DB_PASSWORD not set');
+    });
+
+    afterAll(() => {
+      // Deterministically restore canonical runtime-role password on main test DB immediately after bootstrap tests
+      try {
+        runCanonicalBootstrapScript('horplus_wave1d_fasttrack_test', process.env.HORPLUS_APP_DB_PASSWORD || 'horplus_dev_password');
+      } catch { /* ignore */ }
     });
   });
 

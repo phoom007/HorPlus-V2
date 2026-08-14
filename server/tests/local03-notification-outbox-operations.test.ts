@@ -694,4 +694,236 @@ describe('LOCAL-03: Local Notification Outbox & Operations Polish', () => {
     });
     expect(notices.length).toBe(0);
   });
+
+  // 17. Structural Validation: TENANT event with recipientId = null -> FAILED
+  it('should mark TENANT event with null recipientId as FAILED and create no TenantNotice', async () => {
+    let outboxId = '';
+    const aggregateId = crypto.randomUUID();
+
+    const event = await prisma.localNotificationOutbox.create({
+      data: {
+        dormitoryId: testDormitoryId,
+        eventType: 'TENANT_STRUCTURAL_NULL_RECIPIENT',
+        aggregateType: 'TEST',
+        aggregateId,
+        recipientType: 'TENANT',
+        recipientId: null,
+        title: 'Missing Recipient Test',
+        body: 'Recipient is null',
+        status: 'PENDING',
+        idempotencyKey: `null-recipient-${Date.now()}`,
+      },
+    });
+    outboxId = event.id;
+
+    const result = await outboxService.processPendingOutboxEvents();
+    expect(result.failedCount).toBeGreaterThanOrEqual(1);
+
+    const outbox = await prisma.localNotificationOutbox.findUnique({
+      where: { id: outboxId },
+    });
+    expect(outbox?.status).toBe('FAILED');
+    expect(outbox?.lastError).toBe('MISSING_TENANT_RECIPIENT');
+    expect(outbox?.processedAt).toBeNull();
+
+    // Zero TenantNotice records created
+    const notices = await prisma.tenantNotice.findMany({
+      where: { sourceOutboxId: outboxId },
+    });
+    expect(notices.length).toBe(0);
+  });
+
+  // 18. Structural Validation: TENANT event with malformed recipient UUID -> FAILED
+  it('should mark TENANT event with malformed recipient UUID as FAILED', async () => {
+    let outboxId = '';
+    const aggregateId = crypto.randomUUID();
+
+    const event = await prisma.localNotificationOutbox.create({
+      data: {
+        dormitoryId: testDormitoryId,
+        eventType: 'TENANT_STRUCTURAL_MALFORMED_UUID',
+        aggregateType: 'TEST',
+        aggregateId,
+        recipientType: 'TENANT',
+        recipientId: 'not-a-valid-uuid-string',
+        title: 'Malformed Recipient Test',
+        body: 'Recipient is not a valid UUID',
+        status: 'PENDING',
+        idempotencyKey: `malformed-uuid-${Date.now()}`,
+      },
+    });
+    outboxId = event.id;
+
+    const result = await outboxService.processPendingOutboxEvents();
+    expect(result.failedCount).toBeGreaterThanOrEqual(1);
+
+    const outbox = await prisma.localNotificationOutbox.findUnique({
+      where: { id: outboxId },
+    });
+    expect(outbox?.status).toBe('FAILED');
+    expect(outbox?.lastError).toBe('INVALID_TENANT_RECIPIENT');
+    expect(outbox?.processedAt).toBeNull();
+
+    // Zero TenantNotice records created
+    const notices = await prisma.tenantNotice.findMany({
+      where: { sourceOutboxId: outboxId },
+    });
+    expect(notices.length).toBe(0);
+  });
+
+  // 19. Structural Validation: TENANT event points to tenant from another dorm -> FAILED (No leakage)
+  it('should mark TENANT event as FAILED when tenant belongs to another dormitory (cross-dorm isolation)', async () => {
+    const otherDormitoryId = crypto.randomUUID();
+    const otherTenantId = crypto.randomUUID();
+
+    // Create another dormitory and a tenant belonging to that dormitory
+    await prisma.dormitory.create({
+      data: {
+        id: otherDormitoryId,
+        name: 'Other Foreign Dormitory',
+        code: `DORM-FOREIGN-${Date.now()}`,
+        status: 'active',
+        createdByUserId: testOwnerUserId,
+      },
+    });
+
+    await prisma.tenant.create({
+      data: {
+        id: otherTenantId,
+        dormitoryId: otherDormitoryId,
+        tenantNumber: `TNT-FOR-${Date.now()}`,
+        firstName: 'Foreign',
+        lastName: 'Tenant',
+        displayName: 'Foreign Tenant',
+        phone: '0899999999',
+        status: 'active',
+      },
+    });
+
+    let outboxId = '';
+    const aggregateId = crypto.randomUUID();
+
+    // Outbox event has dormitoryId = testDormitoryId, but recipientId = otherTenantId
+    const event = await prisma.localNotificationOutbox.create({
+      data: {
+        dormitoryId: testDormitoryId,
+        eventType: 'TENANT_CROSS_DORM_MISMATCH',
+        aggregateType: 'TEST',
+        aggregateId,
+        recipientType: 'TENANT',
+        recipientId: otherTenantId,
+        title: 'Cross Dorm Mismatch Notice',
+        body: 'Tenant belongs to other dorm',
+        status: 'PENDING',
+        idempotencyKey: `cross-dorm-${Date.now()}`,
+      },
+    });
+    outboxId = event.id;
+
+    const result = await outboxService.processPendingOutboxEvents();
+    expect(result.failedCount).toBeGreaterThanOrEqual(1);
+
+    const outbox = await prisma.localNotificationOutbox.findUnique({
+      where: { id: outboxId },
+    });
+    expect(outbox?.status).toBe('FAILED');
+    expect(outbox?.lastError).toBe('RECIPIENT_DORMITORY_MISMATCH');
+    expect(outbox?.processedAt).toBeNull();
+
+    // Zero TenantNotice records created anywhere
+    const notices = await prisma.tenantNotice.findMany({
+      where: { sourceOutboxId: outboxId },
+    });
+    expect(notices.length).toBe(0);
+  });
+
+  // 20. Structural Validation: Unknown recipientType -> FAILED
+  it('should mark event with unknown recipientType as FAILED without creating notices', async () => {
+    let outboxId = '';
+    const aggregateId = crypto.randomUUID();
+
+    const event = await prisma.localNotificationOutbox.create({
+      data: {
+        dormitoryId: testDormitoryId,
+        eventType: 'UNKNOWN_RECIPIENT_TYPE_TEST',
+        aggregateType: 'TEST',
+        aggregateId,
+        recipientType: 'UNKNOWN_TYPE_INVALID',
+        recipientId: testTenantId,
+        title: 'Invalid Recipient Type Notice',
+        body: 'Recipient type is invalid',
+        status: 'PENDING',
+        idempotencyKey: `invalid-recipient-type-${Date.now()}`,
+      },
+    });
+    outboxId = event.id;
+
+    const result = await outboxService.processPendingOutboxEvents();
+    expect(result.failedCount).toBeGreaterThanOrEqual(1);
+
+    const outbox = await prisma.localNotificationOutbox.findUnique({
+      where: { id: outboxId },
+    });
+    expect(outbox?.status).toBe('FAILED');
+    expect(outbox?.lastError).toBe('INVALID_RECIPIENT_TYPE');
+    expect(outbox?.processedAt).toBeNull();
+
+    const tenantNotices = await prisma.tenantNotice.findMany({
+      where: { sourceOutboxId: outboxId },
+    });
+    expect(tenantNotices.length).toBe(0);
+
+    const staffNotices = await prisma.staffNotification.findMany({
+      where: { sourceOutboxId: outboxId },
+    });
+    expect(staffNotices.length).toBe(0);
+  });
+
+  // 21. Structural Validation: Valid TENANT event remains PROCESSED exactly once
+  it('should process valid TENANT event exactly once with idempotency guarantee', async () => {
+    let outboxId = '';
+    const aggregateId = crypto.randomUUID();
+
+    await prisma.$transaction(async (tx) => {
+      const event = await outboxService.createOutboxEvent(tx, {
+        dormitoryId: testDormitoryId,
+        eventType: 'VALID_TENANT_NOTICE',
+        aggregateType: 'TEST',
+        aggregateId,
+        recipientType: 'TENANT',
+        recipientId: testTenantId,
+        title: 'Valid Tenant Notice',
+        body: 'Legitimate notice for valid tenant',
+      });
+      outboxId = event.id;
+    });
+
+    // First run
+    const result1 = await outboxService.processPendingOutboxEvents();
+    expect(result1.processedCount).toBeGreaterThanOrEqual(1);
+
+    const outbox = await prisma.localNotificationOutbox.findUnique({
+      where: { id: outboxId },
+    });
+    expect(outbox?.status).toBe('PROCESSED');
+    expect(outbox?.lastError).toBeNull();
+    expect(outbox?.processedAt).not.toBeNull();
+
+    const notices1 = await prisma.tenantNotice.findMany({
+      where: { sourceOutboxId: outboxId },
+    });
+    expect(notices1.length).toBe(1);
+    expect(notices1[0].tenantId).toBe(testTenantId);
+    expect(notices1[0].dormitoryId).toBe(testDormitoryId);
+    expect(notices1[0].title).toBe('Valid Tenant Notice');
+
+    // Second run: idempotency
+    const result2 = await outboxService.processPendingOutboxEvents();
+    expect(result2.processedCount).toBe(0);
+
+    const notices2 = await prisma.tenantNotice.findMany({
+      where: { sourceOutboxId: outboxId },
+    });
+    expect(notices2.length).toBe(1);
+  });
 });
