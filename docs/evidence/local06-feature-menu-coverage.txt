@@ -1,106 +1,112 @@
 ================================================================================
-  HORPLUS LOCAL-06 — FEATURE & MENU ACCEPTANCE COVERAGE AUDIT
+  HORPLUS LOCAL-06 — SOURCE-DERIVED FEATURE & MENU COVERAGE AUDIT
 ================================================================================
-Generated at: 2026-08-15T10:55:11.494Z
+Generated at: 2026-08-15T12:18:51.782Z
 
-COVERAGE RATIO: 100.0% (82 / 82 IN-SCOPE FEATURES COVERED)
-UNMAPPED ITEMS: 0
-DEFERRED ITEMS: 5 (Cleanly segregated under DEFERRED_EXTERNAL)
+SOURCE RECONCILIATION SUMMARY:
+--------------------------------------------------------------------------------
+Source Files Inspected:                 13
+Source Routes Discovered:               35
+Inventory Declarations:                 87
+Matched:                                82 / 82 (100.0%)
+Missing from Inventory:                 0
+Missing from Source:                    0 (In-Scope Local)
+Deferred External Integrations:         5
 
 FEATURE MAPPING TABLE:
 --------------------------------------------------------------------------------
 Inventory ID | Portal          | Menu/Route              | Action Type | DB Entity          | Coverage Status
 --------------------------------------------------------------------------------
-INV-PUB-001  | Public Site     | Landing Page (`/`)      | Read        | NO                 | 100% COVERED
-INV-PUB-002  | Public Site     | Features Page (`/featur | Read        | NO                 | 100% COVERED
-INV-PUB-003  | Public Site     | Pricing Page (`/pricing | Read        | NO                 | 100% COVERED
-INV-PUB-004  | Public Site     | How It Works (`/how-it- | Read        | NO                 | 100% COVERED
-INV-PUB-005  | Public Site     | Help Center (`/help`)   | Read        | NO                 | 100% COVERED
-INV-PUB-006  | Public Site     | Terms of Service (`/ter | Read        | NO                 | 100% COVERED
-INV-PUB-007  | Public Site     | Privacy Policy (`/priva | Read        | NO                 | 100% COVERED
-INV-PUB-008  | Public Site     | Owner Login (`/auth/own | Mutation    | YES (`users`, `ses | 100% COVERED
-INV-PUB-009  | Public Site     | Tenant Registration (`/ | Mutation    | YES (`tenant_regis | 100% COVERED
-INV-PUB-010  | Staff Access    | Staff Access Entry (`/s | Mutation    | YES (`staff_access | 100% COVERED
-INV-OWN-001  | Owner Workspace | Dashboard (`/owner/dash | Read        | YES (`rooms`, `bil | 100% COVERED
-INV-OWN-002  | Owner Workspace | Dashboard (`/owner/dash | Read        | NO                 | 100% COVERED
-INV-OWN-003  | Owner Workspace | Dashboard (`/owner/dash | Read        | YES (`bills`)      | 100% COVERED
-INV-OWN-004  | Owner Workspace | Dashboard (`/owner/dash | Navigation  | NO                 | 100% COVERED
-INV-OWN-005  | Owner Workspace | Dashboard (`/owner/dash | Navigation  | NO                 | 100% COVERED
-INV-OWN-006  | Owner Workspace | Dashboard (`/owner/dash | Read        | YES (`platform_sub | 100% COVERED
-INV-OWN-007  | Owner Workspace | Header (`/owner/*`)     | Read        | NO                 | 100% COVERED
-INV-OWN-008  | Owner Workspace | Header (`/owner/*`)     | Mutation    | YES (`notification | 100% COVERED
-INV-OWN-009  | Owner Workspace | Rooms (`/owner/rooms`)  | Read        | YES (`rooms`, `bui | 100% COVERED
-INV-OWN-010  | Owner Workspace | Rooms (`/owner/rooms`)  | Read        | YES (`rooms`, `con | 100% COVERED
-INV-OWN-011  | Owner Workspace | Rooms (`/owner/rooms`)  | Mutation    | YES (`rooms`, `met | 100% COVERED
-INV-OWN-012  | Owner Workspace | Rooms (`/owner/rooms`)  | Mutation    | YES (`rooms`)      | 100% COVERED
-INV-OWN-013  | Owner Workspace | Rooms (`/owner/rooms`)  | Mutation    | YES (`rooms`)      | 100% COVERED
-INV-OWN-014  | Owner Workspace | Rooms (`/owner/rooms`)  | Mutation    | YES (`buildings`)  | 100% COVERED
-INV-OWN-015  | Owner Workspace | Tenants (`/owner/tenant | Read        | YES (`tenants`)    | 100% COVERED
-INV-OWN-016  | Owner Workspace | Tenants (`/owner/tenant | Mutation    | YES (`tenants`, `t | 100% COVERED
-INV-OWN-017  | Owner Workspace | Tenants (`/owner/tenant | Read        | YES (`tenants`)    | 100% COVERED
-INV-OWN-018  | Owner Workspace | Tenants (`/owner/tenant | Mutation    | YES (`tenants`)    | 100% COVERED
-INV-OWN-019  | Owner Workspace | Tenants (`/owner/tenant | Mutation    | YES (`contracts`,  | 100% COVERED
-INV-OWN-020  | Owner Workspace | Tenants (`/owner/tenant | Mutation    | YES (`rooms`, `ten | 100% COVERED
-INV-OWN-021  | Owner Workspace | Tenants (`/owner/tenant | Mutation    | YES (`tenant_regis | 100% COVERED
-INV-OWN-022  | Owner Workspace | Contracts (`/owner/cont | Read        | YES (`contracts`,  | 100% COVERED
-INV-OWN-023  | Owner Workspace | Contracts (`/owner/cont | Mutation    | YES (`contracts`,  | 100% COVERED
-INV-OWN-024  | Owner Workspace | Contracts (`/owner/cont | Mutation    | YES (`contracts`)  | 100% COVERED
-INV-OWN-025  | Owner Workspace | Contracts (`/owner/cont | Mutation    | YES (`contract_ren | 100% COVERED
-INV-OWN-026  | Owner Workspace | Contracts (`/owner/cont | Read        | NO                 | 100% COVERED
-INV-OWN-027  | Owner Workspace | Contracts (`/owner/cont | Mutation    | YES (`settlements` | 100% COVERED
-INV-OWN-028  | Owner Workspace | Meters (`/owner/meters` | Mutation    | YES (`meter_readin | 100% COVERED
-INV-OWN-029  | Owner Workspace | Meters (`/owner/meters` | Mutation / Guard | YES (`meter_readin | 100% COVERED
-INV-OWN-030  | Owner Workspace | Meters (`/owner/meters` | Read        | YES (`billing_cycl | 100% COVERED
-INV-OWN-031  | Owner Workspace | Payments (`/owner/payme | Read        | YES (`payments`, ` | 100% COVERED
-INV-OWN-032  | Owner Workspace | Payments (`/owner/payme | Mutation    | YES (`payments`, ` | 100% COVERED
-INV-OWN-033  | Owner Workspace | Payments (`/owner/payme | Mutation    | YES (`payments`, ` | 100% COVERED
-INV-OWN-034  | Owner Workspace | Payments (`/owner/payme | Mutation    | YES (`payments`, ` | 100% COVERED
-INV-OWN-035  | Owner Workspace | Payments (`/owner/payme | Mutation    | YES (`payments`, ` | 100% COVERED
-INV-OWN-036  | Owner Workspace | Payments (`/owner/payme | Read        | YES (`receipts`)   | 100% COVERED
-INV-OWN-037  | Owner Workspace | Maintenance (`/owner/ma | Read        | NO (Approved In-Me | 100% COVERED
-INV-OWN-038  | Owner Workspace | Maintenance (`/owner/ma | Mutation    | NO (Approved In-Me | 100% COVERED
-INV-OWN-039  | Owner Workspace | Maintenance (`/owner/ma | Mutation    | NO (Approved In-Me | 100% COVERED
-INV-OWN-040  | Owner Workspace | Announcements (`/owner/ | Read        | NO (Approved In-Me | 100% COVERED
-INV-OWN-041  | Owner Workspace | Announcements (`/owner/ | Mutation    | NO (Approved In-Me | 100% COVERED
-INV-OWN-042  | Owner Workspace | Announcements (`/owner/ | Mutation    | NO (Approved In-Me | 100% COVERED
-INV-OWN-043  | Owner Workspace | Reports (`/owner/report | Read        | YES (`bills`, `roo | 100% COVERED
-INV-OWN-044  | Owner Workspace | Reports (`/owner/report | Read        | YES (`bills`)      | 100% COVERED
-INV-OWN-045  | Owner Workspace | Reports (`/owner/report | Read / Export | YES (`bills`)      | 100% COVERED
-INV-OWN-046  | Owner Workspace | Users & Staff (`/owner/ | Read        | YES (`dormitory_me | 100% COVERED
-INV-OWN-047  | Owner Workspace | Users & Staff (`/owner/ | Mutation    | YES (`staff_access | 100% COVERED
-INV-OWN-048  | Owner Workspace | Users & Staff (`/owner/ | Mutation    | YES (`staff_access | 100% COVERED
-INV-OWN-049  | Owner Workspace | Users & Staff (`/owner/ | Mutation    | YES (`staff_access | 100% COVERED
-INV-OWN-050  | Owner Workspace | Users & Staff (`/owner/ | Mutation    | YES (`dormitories` | 100% COVERED
-INV-OWN-051  | Owner Workspace | Subscription (`/owner/s | Read        | YES (`platform_sub | 100% COVERED
-INV-OWN-052  | Owner Workspace | Subscription (`/owner/s | Mutation    | YES (`promo_redemp | 100% COVERED
-INV-OWN-053  | Owner Workspace | Subscription (`/owner/s | Mutation    | YES (`subscription | 100% COVERED
-INV-OWN-054  | Owner Workspace | Settings (`/owner/setti | Mutation    | YES (`dormitories` | 100% COVERED
-INV-OWN-055  | Owner Workspace | Settings (`/owner/setti | Mutation    | YES (`dormitories` | 100% COVERED
-INV-OWN-056  | Owner Workspace | Settings (`/owner/setti | Mutation    | YES (`dormitory_bi | 100% COVERED
-INV-OWN-057  | Owner Workspace | Settings (`/owner/setti | Mutation    | YES (`dormitory_bi | 100% COVERED
-INV-OWN-058  | Owner Workspace | Settings (`/owner/setti | Mutation    | YES (`owner_signat | 100% COVERED
-INV-OWN-059  | Owner Workspace | Onboarding (`/owner/reg | Mutation    | YES (`dormitories` | 100% COVERED
-INV-TNT-001  | Tenant Portal   | Home / Dashboard (`/ten | Read        | YES (`tenants`, `r | 100% COVERED
-INV-TNT-002  | Tenant Portal   | Invoice / Bills (`/tena | Read        | YES (`bills`, `bil | 100% COVERED
-INV-TNT-003  | Tenant Portal   | Payments (`/tenant/pay` | Mutation    | YES (`payments`, ` | 100% COVERED
-INV-TNT-004  | Tenant Portal   | Maintenance (`/tenant/r | Mutation    | NO (Approved In-Me | 100% COVERED
-INV-TNT-005  | Tenant Portal   | Utilities (`/tenant/uti | Read        | YES (`meter_readin | 100% COVERED
-INV-TNT-006  | Tenant Portal   | Contract (`/tenant/cont | Read        | YES (`contracts`)  | 100% COVERED
-INV-TNT-007  | Tenant Portal   | Contract (`/tenant/cont | Mutation    | YES (`contract_ren | 100% COVERED
-INV-TNT-008  | Tenant Portal   | Payments Tab / History  | Read        | YES (`receipts`, ` | 100% COVERED
-INV-TNT-009  | Tenant Portal   | Announcements (`/tenant | Read        | NO (Approved In-Me | 100% COVERED
-INV-TNT-010  | Tenant Portal   | Profile (`/tenant/profi | Read        | YES (`tenants`)    | 100% COVERED
-INV-TNT-011  | Tenant Portal   | Profile (`/tenant/profi | Mutation    | YES (`tenant_co_oc | 100% COVERED
-INV-TNT-012  | Tenant Portal   | Profile (`/tenant/profi | Mutation    | YES (`tenant_move_ | 100% COVERED
-INV-TNT-013  | Tenant Portal   | Header (`/tenant/*`)    | Mutation    | YES (`notification | 100% COVERED
+INV-PUB-001  | Public Site     | Landing Page (/)        | Read        | NO                 | 100% COVERED
+INV-PUB-002  | Public Site     | Features Page (/feature | Read        | NO                 | 100% COVERED
+INV-PUB-003  | Public Site     | Pricing Page (/pricing) | Read        | NO                 | 100% COVERED
+INV-PUB-004  | Public Site     | How It Works (/how-it-w | Read        | NO                 | 100% COVERED
+INV-PUB-005  | Public Site     | Help Center (/help)     | Read        | NO                 | 100% COVERED
+INV-PUB-006  | Public Site     | Terms of Service (/term | Read        | NO                 | 100% COVERED
+INV-PUB-007  | Public Site     | Privacy Policy (/privac | Read        | NO                 | 100% COVERED
+INV-PUB-008  | Public Site     | Owner Login (/auth/owne | Mutation    | YES (users, sessio | 100% COVERED
+INV-PUB-009  | Public Site     | Tenant Registration (/t | Mutation    | YES (tenant_regist | 100% COVERED
+INV-PUB-010  | Staff Access    | Staff Access Entry (/st | Mutation    | YES (staff_access_ | 100% COVERED
+INV-OWN-001  | Owner Workspace | Dashboard (/owner/dashb | Read        | YES (rooms, bills) | 100% COVERED
+INV-OWN-002  | Owner Workspace | Dashboard (/owner/dashb | Read        | NO                 | 100% COVERED
+INV-OWN-003  | Owner Workspace | Dashboard (/owner/dashb | Read        | YES (bills)        | 100% COVERED
+INV-OWN-004  | Owner Workspace | Dashboard (/owner/dashb | Navigation  | NO                 | 100% COVERED
+INV-OWN-005  | Owner Workspace | Dashboard (/owner/dashb | Navigation  | NO                 | 100% COVERED
+INV-OWN-006  | Owner Workspace | Dashboard (/owner/dashb | Read        | YES (platform_subs | 100% COVERED
+INV-OWN-007  | Owner Workspace | Header (/owner/)        | Read        | NO                 | 100% COVERED
+INV-OWN-008  | Owner Workspace | Header (/owner/)        | Mutation    | YES (notifications | 100% COVERED
+INV-OWN-009  | Owner Workspace | Rooms (/owner/rooms)    | Read        | YES (rooms, buildi | 100% COVERED
+INV-OWN-010  | Owner Workspace | Rooms (/owner/rooms)    | Read        | YES (rooms, contra | 100% COVERED
+INV-OWN-011  | Owner Workspace | Rooms (/owner/rooms)    | Mutation    | YES (rooms, meter_ | 100% COVERED
+INV-OWN-012  | Owner Workspace | Rooms (/owner/rooms)    | Mutation    | YES (rooms)        | 100% COVERED
+INV-OWN-013  | Owner Workspace | Rooms (/owner/rooms)    | Mutation    | YES (rooms)        | 100% COVERED
+INV-OWN-014  | Owner Workspace | Rooms (/owner/rooms)    | Mutation    | YES (buildings)    | 100% COVERED
+INV-OWN-015  | Owner Workspace | Tenants (/owner/tenants | Read        | YES (tenants)      | 100% COVERED
+INV-OWN-016  | Owner Workspace | Tenants (/owner/tenants | Mutation    | YES (tenants, tena | 100% COVERED
+INV-OWN-017  | Owner Workspace | Tenants (/owner/tenants | Read        | YES (tenants)      | 100% COVERED
+INV-OWN-018  | Owner Workspace | Tenants (/owner/tenants | Mutation    | YES (tenants)      | 100% COVERED
+INV-OWN-019  | Owner Workspace | Tenants (/owner/tenants | Mutation    | YES (contracts, te | 100% COVERED
+INV-OWN-020  | Owner Workspace | Tenants (/owner/tenants | Mutation    | YES (rooms, tenant | 100% COVERED
+INV-OWN-021  | Owner Workspace | Tenants (/owner/tenants | Mutation    | YES (tenant_regist | 100% COVERED
+INV-OWN-022  | Owner Workspace | Contracts (/owner/contr | Read        | YES (contracts, co | 100% COVERED
+INV-OWN-023  | Owner Workspace | Contracts (/owner/contr | Mutation    | YES (contracts, ro | 100% COVERED
+INV-OWN-024  | Owner Workspace | Contracts (/owner/contr | Mutation    | YES (contracts)    | 100% COVERED
+INV-OWN-025  | Owner Workspace | Contracts (/owner/contr | Mutation    | YES (contract_rene | 100% COVERED
+INV-OWN-026  | Owner Workspace | Contracts (/owner/contr | Read        | NO                 | 100% COVERED
+INV-OWN-027  | Owner Workspace | Contracts (/owner/contr | Mutation    | YES (settlements,  | 100% COVERED
+INV-OWN-028  | Owner Workspace | Meters (/owner/meters)  | Mutation    | YES (meter_reading | 100% COVERED
+INV-OWN-029  | Owner Workspace | Meters (/owner/meters)  | Mutation / Guard | YES (meter_reading | 100% COVERED
+INV-OWN-030  | Owner Workspace | Meters (/owner/meters)  | Read        | YES (billing_cycle | 100% COVERED
+INV-OWN-031  | Owner Workspace | Payments (/owner/paymen | Read        | YES (payments, bil | 100% COVERED
+INV-OWN-032  | Owner Workspace | Payments (/owner/paymen | Mutation    | YES (payments, bil | 100% COVERED
+INV-OWN-033  | Owner Workspace | Payments (/owner/paymen | Mutation    | YES (payments, bil | 100% COVERED
+INV-OWN-034  | Owner Workspace | Payments (/owner/paymen | Mutation    | YES (payments, bil | 100% COVERED
+INV-OWN-035  | Owner Workspace | Payments (/owner/paymen | Mutation    | YES (payments, bil | 100% COVERED
+INV-OWN-036  | Owner Workspace | Payments (/owner/paymen | Read        | YES (receipts)     | 100% COVERED
+INV-OWN-037  | Owner Workspace | Maintenance (/owner/mai | Read        | NO (Approved In-Me | 100% COVERED
+INV-OWN-038  | Owner Workspace | Maintenance (/owner/mai | Mutation    | NO (Approved In-Me | 100% COVERED
+INV-OWN-039  | Owner Workspace | Maintenance (/owner/mai | Mutation    | NO (Approved In-Me | 100% COVERED
+INV-OWN-040  | Owner Workspace | Announcements (/owner/a | Read        | NO (Approved In-Me | 100% COVERED
+INV-OWN-041  | Owner Workspace | Announcements (/owner/a | Mutation    | NO (Approved In-Me | 100% COVERED
+INV-OWN-042  | Owner Workspace | Announcements (/owner/a | Mutation    | NO (Approved In-Me | 100% COVERED
+INV-OWN-043  | Owner Workspace | Reports (/owner/reports | Read        | YES (bills, rooms) | 100% COVERED
+INV-OWN-044  | Owner Workspace | Reports (/owner/reports | Read        | YES (bills)        | 100% COVERED
+INV-OWN-045  | Owner Workspace | Reports (/owner/reports | Read / Export | YES (bills)        | 100% COVERED
+INV-OWN-046  | Owner Workspace | Users & Staff (/owner/u | Read        | YES (dormitory_mem | 100% COVERED
+INV-OWN-047  | Owner Workspace | Users & Staff (/owner/u | Mutation    | YES (staff_access_ | 100% COVERED
+INV-OWN-048  | Owner Workspace | Users & Staff (/owner/u | Mutation    | YES (staff_access_ | 100% COVERED
+INV-OWN-049  | Owner Workspace | Users & Staff (/owner/u | Mutation    | YES (staff_access_ | 100% COVERED
+INV-OWN-050  | Owner Workspace | Users & Staff (/owner/u | Mutation    | YES (dormitories)  | 100% COVERED
+INV-OWN-051  | Owner Workspace | Subscription (/owner/su | Read        | YES (platform_subs | 100% COVERED
+INV-OWN-052  | Owner Workspace | Subscription (/owner/su | Mutation    | YES (promo_redempt | 100% COVERED
+INV-OWN-053  | Owner Workspace | Subscription (/owner/su | Mutation    | YES (subscription_ | 100% COVERED
+INV-OWN-054  | Owner Workspace | Settings (/owner/settin | Mutation    | YES (dormitories)  | 100% COVERED
+INV-OWN-055  | Owner Workspace | Settings (/owner/settin | Mutation    | YES (dormitories)  | 100% COVERED
+INV-OWN-056  | Owner Workspace | Settings (/owner/settin | Mutation    | YES (dormitory_bil | 100% COVERED
+INV-OWN-057  | Owner Workspace | Settings (/owner/settin | Mutation    | YES (dormitory_bil | 100% COVERED
+INV-OWN-058  | Owner Workspace | Settings (/owner/settin | Mutation    | YES (owner_signatu | 100% COVERED
+INV-OWN-059  | Owner Workspace | Onboarding (/owner/regi | Mutation    | YES (dormitories,  | 100% COVERED
+INV-TNT-001  | Tenant Portal   | Home / Dashboard (/tena | Read        | YES (tenants, room | 100% COVERED
+INV-TNT-002  | Tenant Portal   | Invoice / Bills (/tenan | Read        | YES (bills, bill_i | 100% COVERED
+INV-TNT-003  | Tenant Portal   | Payments (/tenant/pay)  | Mutation    | YES (payments, bil | 100% COVERED
+INV-TNT-004  | Tenant Portal   | Maintenance (/tenant/re | Mutation    | NO (Approved In-Me | 100% COVERED
+INV-TNT-005  | Tenant Portal   | Utilities (/tenant/util | Read        | YES (meter_reading | 100% COVERED
+INV-TNT-006  | Tenant Portal   | Contract (/tenant/contr | Read        | YES (contracts)    | 100% COVERED
+INV-TNT-007  | Tenant Portal   | Contract (/tenant/contr | Mutation    | YES (contract_rene | 100% COVERED
+INV-TNT-008  | Tenant Portal   | Payments Tab / History  | Read        | YES (receipts, pay | 100% COVERED
+INV-TNT-009  | Tenant Portal   | Announcements (/tenant/ | Read        | NO (Approved In-Me | 100% COVERED
+INV-TNT-010  | Tenant Portal   | Profile (/tenant/profil | Read        | YES (tenants)      | 100% COVERED
+INV-TNT-011  | Tenant Portal   | Profile (/tenant/profil | Mutation    | YES (tenant_co_occ | 100% COVERED
+INV-TNT-012  | Tenant Portal   | Profile (/tenant/profil | Mutation    | YES (tenant_move_o | 100% COVERED
+INV-TNT-013  | Tenant Portal   | Header (/tenant/)       | Mutation    | YES (notifications | 100% COVERED
 --------------------------------------------------------------------------------
 DEFERRED EXTERNAL ITEMS:
 --------------------------------------------------------------------------------
-INV-EXT-001  | External Gateway | LINE OA Webhook (`/api/ | Mutation    | External Adapter   | DEFERRED (EXT-01/02)
-INV-EXT-002  | External Gateway | LIFF SDK Auth (`/tenant | Auth        | External Adapter   | DEFERRED (EXT-01/02)
+INV-EXT-001  | External Gateway | LINE OA Webhook (/api/v | Mutation    | External Adapter   | DEFERRED (EXT-01/02)
+INV-EXT-002  | External Gateway | LIFF SDK Auth (/tenant  | Auth        | External Adapter   | DEFERRED (EXT-01/02)
 INV-EXT-003  | External Gateway | LINE Push Notifications | Integration | External Adapter   | DEFERRED (EXT-01/02)
-INV-EXT-004  | External Gateway | SlipOK Bank Slip OCR (` | Mutation    | External Adapter   | DEFERRED (EXT-01/02)
+INV-EXT-004  | External Gateway | SlipOK Bank Slip OCR (/ | Mutation    | External Adapter   | DEFERRED (EXT-01/02)
 INV-EXT-005  | External Gateway | PromptPay Direct Webhoo | Mutation    | External Adapter   | DEFERRED (EXT-01/02)
 ================================================================================
-FINAL VERDICT: 100% IN-SCOPE LOCAL COVERAGE VERIFIED
+FINAL VERDICT: 100% IN-SCOPE LOCAL PRODUCT FEATURES & MENUS RECONCILED FROM SOURCE
 ================================================================================

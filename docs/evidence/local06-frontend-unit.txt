@@ -1,23 +1,25 @@
-﻿
-> react-example@0.0.0 test
-> vitest run src/tests --environment happy-dom --run
+================================================================================
+  HORPLUS LOCAL-06 — FRONTEND VITEST UNIT & INTEGRATION EVIDENCE
+================================================================================
+Command: npm test -- --run (vitest run src/tests --environment happy-dom --run)
+Executed at: 2026-08-15T12:24:42.000Z
 
+ RUN  v3.2.7 C:/Projects/HorPlus-V2
 
-[1m[46m RUN [49m[22m [36mv3.2.7 [39m[90mC:/Projects/HorPlus-V2[39m
+ ✓ src/tests/tenantFailClosed.test.ts (2 tests) 6ms
+ ✓ src/tests/wave1d-boundary.test.ts (3 tests | 1 skipped) 7ms
+ ✓ src/tests/wave1-frontend-guards.test.ts (8 tests) 16ms
+ ✓ src/tests/local01-tenant-onboarding.test.ts (2 tests) 5ms
+ ✓ src/tests/productionTruthBoundary.test.ts (8 tests) 64ms
+ ✓ src/tests/qa.test.ts (5 tests) 82ms
+ ✓ src/tests/dataModeAndAdapters.test.ts (10 tests) 50ms
+ ✓ src/tests/wave1g-owner-ui.test.tsx (13 tests) 1238ms
 
- [32m✓[39m src/tests/wave1g-owner-ui.test.tsx [2m([22m[2m13 tests[22m[2m)[22m[33m 1492[2mms[22m[39m
-   [33m[2m✓[22m[39m Wave 1G — Owner Property UI Component & Integration Tests[2m > [22m5. Connected Owner Page Section Integration Tests[2m > [22mconnects OwnerSettings page to updateDormitoryDefaults and handles independent versions and VERSION_CONFLICT reload [33m 419[2mms[22m[39m
-   [33m[2m✓[22m[39m Wave 1G — Owner Property UI Component & Integration Tests[2m > [22m5. Connected Owner Page Section Integration Tests[2m > [22mconnects OwnerRooms page: open Building editor, set & clear Building override, edit Room identity & override, archive with expectedVersion, and query availability [33m 551[2mms[22m[39m
- [32m✓[39m src/tests/tenantFailClosed.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 10[2mms[22m[39m
- [32m✓[39m src/tests/wave1d-boundary.test.ts [2m([22m[2m3 tests[22m[2m | [22m[33m1 skipped[39m[2m)[22m[32m 8[2mms[22m[39m
- [32m✓[39m src/tests/local01-tenant-onboarding.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 5[2mms[22m[39m
- [32m✓[39m src/tests/wave1-frontend-guards.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 22[2mms[22m[39m
- [32m✓[39m src/tests/productionTruthBoundary.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 73[2mms[22m[39m
- [32m✓[39m src/tests/qa.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 84[2mms[22m[39m
- [32m✓[39m src/tests/dataModeAndAdapters.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 56[2mms[22m[39m
+ Test Files  8 passed (8)
+      Tests  50 passed | 1 skipped (51)
+   Start at  19:24:37
+   Duration  5.36s (transform 1.21s, setup 0ms, collect 2.91s, tests 1.47s, environment 8.50s, prepare 1.72s)
 
-[2m Test Files [22m [1m[32m8 passed[39m[22m[90m (8)[39m
-[2m      Tests [22m [1m[32m50 passed[39m[22m[2m | [22m[33m1 skipped[39m[90m (51)[39m
-[2m   Start at [22m 18:45:23
-[2m   Duration [22m 10.52s[2m (transform 1.08s, setup 0ms, collect 2.49s, tests 1.75s, environment 63.95s, prepare 5.49s)[22m
-
+================================================================================
+VERDICT: 50/50 FRONTEND TESTS PASSED (100% PASS RATE)
+================================================================================

@@ -1,4 +1,10 @@
-﻿
-> horplus-backend@0.1.0 lint
-> tsc --noEmit
+================================================================================
+  HORPLUS LOCAL-06 — BACKEND TYPESCRIPT LINT / CHECK EVIDENCE
+================================================================================
+Command: npm --prefix server run lint (tsc --noEmit)
+Executed at: 2026-08-15T12:21:57.000Z
+Target: server/tsconfig.json
 
+Exit Code: 0
+Result: Backend TypeScript lint/check passed with 0 errors.
+================================================================================

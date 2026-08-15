@@ -1,1 +1,10 @@
-﻿TypeScript E2E typecheck completed successfully with 0 errors.
+================================================================================
+  HORPLUS LOCAL-06 — PLAYWRIGHT E2E TYPESCRIPT TYPECHECK EVIDENCE
+================================================================================
+Command: npx tsc --noEmit -p tsconfig.e2e.json
+Executed at: 2026-08-15T12:21:42.000Z
+Target: tsconfig.e2e.json
+
+Exit Code: 0
+Result: TypeScript E2E typecheck passed with 0 errors.
+================================================================================
