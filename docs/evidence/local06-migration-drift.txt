@@ -2,29 +2,29 @@
   HORPLUS LOCAL-06 — TASK-009 MIGRATION DIFFERENTIAL DRIFT & BOOTSTRAP PROOF
 ================================================================================
 Command: npm --prefix server test -- src/__tests__/integration/task009-checkpoint1h-premerge-proof.test.ts --run
-Executed at: 2026-08-15T13:28:55.000Z
+Executed at: 2026-08-15T13:48:34.000Z
 
 > horplus-backend@0.1.0 test
 > vitest run src/__tests__/integration/task009-checkpoint1h-premerge-proof.test.ts --run
 
  RUN  v3.0.4 C:/Projects/HorPlus-V2/server
 
- ✓ src/__tests__/integration/task009-checkpoint1h-premerge-proof.test.ts (22 tests) 26643ms
-   ✓ TASK-009 Checkpoint 1I — Hermetic Pre-Merge Migration & Bootstrap Proof > Canonical Runtime-Role Bootstrap Execution & Authentication > 3. Executes canonical bootstrap script with shell-safe argument array & special-character password 366ms
-   ✓ TASK-009 Checkpoint 1I — Hermetic Pre-Merge Migration & Bootstrap Proof > Real Wave-1G Base Database Upgrade & Differential Schema Proof > 6. Applies ONLY base Wave-1G migrations (2cbc3bd) from temporary self-contained base worktree & records baseline schema drift 4062ms
-   ✓ TASK-009 Checkpoint 1I — Hermetic Pre-Merge Migration & Bootstrap Proof > Real Wave-1G Base Database Upgrade & Differential Schema Proof > 8. Runs bootstrap script and deploys feature-branch TASK-009 migrations over base database 2628ms
-   ✓ TASK-009 Checkpoint 1I — Hermetic Pre-Merge Migration & Bootstrap Proof > Real Wave-1G Base Database Upgrade & Differential Schema Proof > 9. Verifies exact migration semantics, quota backfill, owner/manager origins & ZERO TASK-009 schema drift AFTER upgrade 2015ms
-   ✓ TASK-009 Checkpoint 1I — Hermetic Pre-Merge Migration & Bootstrap Proof > Fresh Final Database Deployment & Differential Schema Drift Proof > 10. Fresh migrate deploy applies all migrations from zero 2630ms
-   ✓ TASK-009 Checkpoint 1I — Hermetic Pre-Merge Migration & Bootstrap Proof > Fresh Final Database Deployment & Differential Schema Drift Proof > 11. Second deploy returns zero pending migrations 1976ms
-   ✓ TASK-009 Checkpoint 1I — Hermetic Pre-Merge Migration & Bootstrap Proof > Fresh Final Database Deployment & Differential Schema Drift Proof > 12. Migration status is up to date with zero warnings 1839ms
-   ✓ TASK-009 Checkpoint 1I — Hermetic Pre-Merge Migration & Bootstrap Proof > Fresh Final Database Deployment & Differential Schema Drift Proof > 13.1 Disposable fault-injection proof: proves actual DB-vs-datamodel diff detects database schema drift with exit code 2 & column detection 5119ms
-   ✓ TASK-009 Checkpoint 1I — Hermetic Pre-Merge Migration & Bootstrap Proof > Fresh Final Database Deployment & Differential Schema Drift Proof > 13.2 Fresh untouched final DB vs datamodel diff produces ZERO TASK-009 schema drift and ZERO new unclassified drift 1829ms
-   ✓ TASK-009 Checkpoint 1I — Hermetic Pre-Merge Migration & Bootstrap Proof > Fresh Final Database Deployment & Differential Schema Drift Proof > 13.3 Negative datamodel-semantic proof: proves actual DB-vs-datamodel diff detects datamodel drift with exit code 2 & column detection 1754ms
+ ✓ src/__tests__/integration/task009-checkpoint1h-premerge-proof.test.ts (22 tests) 27476ms
+   ✓ TASK-009 Checkpoint 1I — Hermetic Pre-Merge Migration & Bootstrap Proof > Canonical Runtime-Role Bootstrap Execution & Authentication > 3. Executes canonical bootstrap script with shell-safe argument array & special-character password 319ms
+   ✓ TASK-009 Checkpoint 1I — Hermetic Pre-Merge Migration & Bootstrap Proof > Real Wave-1G Base Database Upgrade & Differential Schema Proof > 6. Applies ONLY base Wave-1G migrations (2cbc3bd) from temporary self-contained base worktree & records baseline schema drift 3994ms
+   ✓ TASK-009 Checkpoint 1I — Hermetic Pre-Merge Migration & Bootstrap Proof > Real Wave-1G Base Database Upgrade & Differential Schema Proof > 8. Runs bootstrap script and deploys feature-branch TASK-009 migrations over base database 2639ms
+   ✓ TASK-009 Checkpoint 1I — Hermetic Pre-Merge Migration & Bootstrap Proof > Real Wave-1G Base Database Upgrade & Differential Schema Proof > 9. Verifies exact migration semantics, quota backfill, owner/manager origins & ZERO TASK-009 schema drift AFTER upgrade 1931ms
+   ✓ TASK-009 Checkpoint 1I — Hermetic Pre-Merge Migration & Bootstrap Proof > Fresh Final Database Deployment & Differential Schema Drift Proof > 10. Fresh migrate deploy applies all migrations from zero 2648ms
+   ✓ TASK-009 Checkpoint 1I — Hermetic Pre-Merge Migration & Bootstrap Proof > Fresh Final Database Deployment & Differential Schema Drift Proof > 11. Second deploy returns zero pending migrations 1920ms
+   ✓ TASK-009 Checkpoint 1I — Hermetic Pre-Merge Migration & Bootstrap Proof > Fresh Final Database Deployment & Differential Schema Drift Proof > 12. Migration status is up to date with zero warnings 1855ms
+   ✓ TASK-009 Checkpoint 1I — Hermetic Pre-Merge Migration & Bootstrap Proof > Fresh Final Database Deployment & Differential Schema Drift Proof > 13.1 Disposable fault-injection proof: proves actual DB-vs-datamodel diff detects database schema drift with exit code 2 & column detection 5653ms
+   ✓ TASK-009 Checkpoint 1I — Hermetic Pre-Merge Migration & Bootstrap Proof > Fresh Final Database Deployment & Differential Schema Drift Proof > 13.2 Fresh untouched final DB vs datamodel diff produces ZERO TASK-009 schema drift and ZERO new unclassified drift 2073ms
+   ✓ TASK-009 Checkpoint 1I — Hermetic Pre-Merge Migration & Bootstrap Proof > Fresh Final Database Deployment & Differential Schema Drift Proof > 13.3 Negative datamodel-semantic proof: proves actual DB-vs-datamodel diff detects datamodel drift with exit code 2 & column detection 1991ms
 
  Test Files  1 passed (1)
       Tests  22 passed (22)
-   Start at  20:28:28
-   Duration  27.27s (transform 101ms, setup 208ms, collect 89ms, tests 26.64s, environment 0ms, prepare 115ms)
+   Start at  20:48:05
+   Duration  28.15s (transform 98ms, setup 219ms, collect 85ms, tests 27.48s, environment 0ms, prepare 111ms)
 
 ================================================================================
 VERDICT: 22/22 MIGRATION DIFFERENTIAL DRIFT TESTS PASSED — ZERO SCHEMA DRIFT
