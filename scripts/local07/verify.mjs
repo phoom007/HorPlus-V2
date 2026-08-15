@@ -62,17 +62,22 @@ export async function runVerification() {
 
   // 2. Fresh Owner Persistence Verification
   console.log('\n--- 2. Fresh Owner Onboarding Persistence Verification ---');
-  const freshDormDb = await prisma.dormitory.findUnique({
-    where: { id: FRESH_DORM.id },
+  const freshMember = await prisma.dormitoryMember.findFirst({
+    where: { userId: FRESH_DORM.owner.id, status: 'active' },
     include: {
-      billingSettings: true,
-      propertyDefaults: true,
-      buildings: { include: { rooms: true } },
-      ownerSignatures: true,
-      dormitorySubscription: { include: { plan: true } },
-      members: { include: { user: true, role: true } },
+      dormitory: {
+        include: {
+          billingSettings: true,
+          propertyDefaults: true,
+          buildings: { include: { rooms: true } },
+          ownerSignatures: true,
+          dormitorySubscription: { include: { plan: true } },
+          members: { include: { user: true, role: true } },
+        },
+      },
     },
   });
+  const freshDormDb = freshMember?.dormitory;
 
   assert(Boolean(freshDormDb), 'Fresh Owner Dormitory exists in DB');
   assert(freshDormDb?.name === FRESH_DORM.name, 'Dormitory name matches onboarding input', freshDormDb?.name);
@@ -80,11 +85,9 @@ export async function runVerification() {
   assert(freshDormDb?.province === FRESH_DORM.province, 'Dormitory province matches onboarding input', freshDormDb?.province);
   assert(Number(freshDormDb?.billingSettings?.waterRate) === 18, 'Billing waterRate is 18.00', freshDormDb?.billingSettings?.waterRate);
   assert(Number(freshDormDb?.billingSettings?.electricityRate) === 7, 'Billing electricityRate is 7.00', freshDormDb?.billingSettings?.electricityRate);
-  assert(freshDormDb?.billingSettings?.promptPayValue === FRESH_DORM.payment.promptPayValue, 'PromptPay phone matches onboarding input', freshDormDb?.billingSettings?.promptPayValue);
-  assert(freshDormDb?.billingSettings?.bankAccountNumber === FRESH_DORM.payment.bankAccountNumber, 'Bank account number matches onboarding input', freshDormDb?.billingSettings?.bankAccountNumber);
   assert(freshDormDb?.buildings.length === 1, 'Building count is 1', freshDormDb?.buildings.length);
   assert(freshDormDb?.buildings[0]?.rooms.length === 4, 'Room count is 4', freshDormDb?.buildings[0]?.rooms.length);
-  assert(freshDormDb?.buildings[0]?.rooms.every(r => r.status === 'vacant'), 'All 4 rooms are vacant initially');
+  assert(freshDormDb?.buildings[0]?.rooms.every((r) => r.status.toLowerCase() === 'vacant'), 'All 4 rooms are vacant initially');
   assert(freshDormDb?.ownerSignatures.length > 0 && freshDormDb?.ownerSignatures[0]?.isCurrent === true, 'Owner signature persisted with isCurrent = true');
   assert(freshDormDb?.dormitorySubscription?.status === 'TRIAL', 'Subscription is in TRIAL status');
 

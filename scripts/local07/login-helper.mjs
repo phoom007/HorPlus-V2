@@ -38,9 +38,14 @@ const prisma = new PrismaClient({
   },
 });
 
-// Derive keys from server/.env or defaults
-const SESSION_KEY = process.env.SESSION_ENCRYPTION_KEY || '1e9c2e3f7c2f9cf79f4c4e0720b98662e5f9468183c43d8ec2795db1bc3a23b4';
-const CSRF_KEY = process.env.CSRF_SIGNING_KEY || 'd8a6bdf8842654b5345ea9b7ab2aa31ef480e4649e8b59c13e9b89b07582d67f';
+// Derive keys strictly from server environment (fail-closed, no hardcoded defaults)
+const SESSION_KEY = process.env.SESSION_ENCRYPTION_KEY;
+const CSRF_KEY = process.env.CSRF_SIGNING_KEY;
+
+if (!SESSION_KEY || !CSRF_KEY) {
+  throw new Error('CRITICAL SECURITY ERROR: SESSION_ENCRYPTION_KEY or CSRF_SIGNING_KEY is missing from environment!');
+}
+
 const SESSION_SECRET_DERIVED = crypto.createHash('sha256').update(SESSION_KEY).digest();
 const CSRF_SECRET_DERIVED = crypto.createHash('sha256').update(CSRF_KEY).digest();
 
@@ -123,6 +128,11 @@ export async function createAllSessions() {
   console.log('================================================================================\n');
 
   for (const id of identities) {
+    const member = await prisma.dormitoryMember.findFirst({
+      where: { userId: id.userId, status: 'active' },
+    });
+    const effectiveDormId = member?.dormitoryId || id.dormId;
+
     const sessionId = crypto.randomUUID();
     const sessionIdHash = crypto.createHash('sha256').update(sessionId).digest('hex');
     const expiresAt = new Date(Date.now() + 86400 * 1000);
@@ -193,13 +203,13 @@ export async function createAllSessions() {
         {
           origin: 'http://127.0.0.1:5173',
           localStorage: [
-            { name: 'selected_dormitory_id', value: id.dormId },
+            { name: 'selected_dormitory_id', value: effectiveDormId },
           ],
         },
         {
           origin: 'http://localhost:5173',
           localStorage: [
-            { name: 'selected_dormitory_id', value: id.dormId },
+            { name: 'selected_dormitory_id', value: effectiveDormId },
           ],
         },
       ],
@@ -211,7 +221,7 @@ export async function createAllSessions() {
     sessionManifest[id.key] = {
       title: id.title,
       userId: id.userId,
-      dormitoryId: id.dormId,
+      dormitoryId: effectiveDormId,
       sessionToken,
       csrfToken,
       storageStatePath: filePath,
@@ -220,8 +230,9 @@ export async function createAllSessions() {
 
     console.log(`📌 ${id.title}`);
     console.log(`   Session State: .local07-sessions/${id.key}.json`);
+    console.log(`   Dormitory ID:  ${effectiveDormId}`);
     console.log(`   Target URL:    http://127.0.0.1:5173${id.targetPath}`);
-    console.log(`   Cookie:        horplus_session=${sessionToken.substring(0, 20)}...`);
+    console.log(`   Session ID:    ${sessionId.substring(0, 8)}... (active in DB)`);
     console.log('');
   }
 

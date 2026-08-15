@@ -1,9 +1,23 @@
 /**
  * HorPlus LOCAL-07 — Deterministic Dataset Seeder
  * 
- * Seeds ONE comprehensive, deterministic UAT dataset:
- * 1. Fresh Owner scenario via authentic onboarding persistence
- * 2. Comprehensive Owner scenario (18 rooms, 2 buildings, 11 occupied rooms, all billing/accounting states, staff, maintenance, announcements)
+ * Provisions 2 complete UAT Dormitories:
+ * 1. Fresh Owner ("หอพัก HorPlus UAT Fresh Owner")
+ *    - EXERCISES REAL ONBOARDING:
+ *      Pre-creates User identity -> Calls prepareProvisionalDormitory ->
+ *      Saves Owner Signature via SignatureStorageService ->
+ *      Simulates deferred LINE OA test boundary ->
+ *      Finalizes via DormitoryProvisioningService.completeOwnerOnboarding
+ *      with Free tier + HORPLUS promo redemption.
+ * 
+ * 2. Comprehensive Owner ("หอพัก HorPlus UAT Comprehensive Manor")
+ *    - 18 rooms across 2 buildings (Building A standard, Building B override rates)
+ *    - 11 occupied rooms with active contracts and tenant profiles
+ *    - July 2026 billing cycle with meter readings, paid bills, verified payments & receipts
+ *    - 4 unpaid bills with overdue tracking
+ *    - Move-out settlement pending refund (Room 204)
+ *    - Contract renewal pending (Room 201) & scheduled renewal (Room 202)
+ *    - Staff access grants (Manager Pranee & Tech Surachai)
  * 
  * @license Apache-2.0
  */
@@ -11,10 +25,14 @@
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 const { PrismaClient } = require('../../server/node_modules/@prisma/client/index.js');
+const { PNG } = require('../../server/node_modules/pngjs/lib/png.js');
+
 import { assertSafeDatabaseTarget } from './db-safety-guard.mjs';
-import { resetLocal07Data } from './reset.mjs';
 import { FRESH_DORM, COMP_DORM } from './constants.mjs';
-import crypto from 'crypto';
+import { resetLocal07Data } from './reset.mjs';
+import { DormitoryProvisioningService } from '../../server/src/services/dormitory-provisioning.service.ts';
+import { SignatureStorageService } from '../../server/src/services/signature-storage.service.ts';
+import { SensitiveFieldService } from '../../server/src/services/sensitive-field.service.ts';
 
 const targetInfo = assertSafeDatabaseTarget();
 
@@ -26,8 +44,26 @@ const prisma = new PrismaClient({
   },
 });
 
-function createDummySignaturePng() {
-  return Buffer.from('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000a49444154789c63000100000500010d0a2d400000000049454e44ae426082', 'hex');
+function createDeterministicSignatureBuffer() {
+  const png = new PNG({ width: 60, height: 25 });
+  for (let y = 0; y < 25; y++) {
+    for (let x = 0; x < 60; x++) {
+      const idx = (60 * y + x) << 2;
+      // Draw a clean diagonal stroke
+      if ((x >= 10 && x <= 50 && y >= 10 && y <= 14) || (x === y + 15)) {
+        png.data[idx] = 0;       // R
+        png.data[idx + 1] = 0;   // G
+        png.data[idx + 2] = 0;   // B
+        png.data[idx + 3] = 255; // Alpha
+      } else {
+        png.data[idx] = 255;
+        png.data[idx + 1] = 255;
+        png.data[idx + 2] = 255;
+        png.data[idx + 3] = 0;   // Transparent
+      }
+    }
+  }
+  return PNG.sync.write(png);
 }
 
 export async function seedLocal07Data() {
@@ -36,214 +72,166 @@ export async function seedLocal07Data() {
   console.log('================================================================================');
   console.log(`Target: ${targetInfo.host}:${targetInfo.port}/${targetInfo.database}\n`);
 
-  // Step 1: Clean existing LOCAL-07 fixtures
+  // 1. Idempotent Reset of existing UAT data
   await resetLocal07Data();
 
-  console.log('\n--- 1. Seeding Fresh Owner Scenario (Onboarding Persistence) ---');
-  
-  // Create Fresh Owner User
+  console.log('\n--- 1. Executing Real Onboarding Workflow for Fresh Owner ---');
+
+  // A. Create ONLY the minimum prerequisite authenticated Owner identity
   const freshOwnerUser = await prisma.user.create({
     data: {
       id: FRESH_DORM.owner.id,
-      googleSubject: FRESH_DORM.owner.googleSubject,
-      name: FRESH_DORM.owner.name,
+      googleSubject: 'mock_owner_uat_fresh',
       email: FRESH_DORM.owner.email,
-      emailNormalized: FRESH_DORM.owner.email.toLowerCase(),
-      phone: FRESH_DORM.owner.phone,
+      emailNormalized: FRESH_DORM.owner.email.toLowerCase().trim(),
+      name: FRESH_DORM.owner.name,
       status: 'active',
     },
   });
 
-  // Provision Fresh Owner Dormitory
-  const freshDorm = await prisma.dormitory.create({
+  const sensitiveFieldService = new SensitiveFieldService(
+    process.env.FIELD_ENCRYPTION_KEY || 'default_32_byte_secret_key_123456'
+  );
+  const provisioningService = new DormitoryProvisioningService(prisma, sensitiveFieldService);
+  const signatureStorageService = new SignatureStorageService(prisma);
+
+  // B. Step 1: Prepare provisional dormitory
+  const prov = await provisioningService.prepareProvisionalDormitory(freshOwnerUser.id, {
+    name: FRESH_DORM.name,
+    addressLine1: FRESH_DORM.addressLine1,
+    province: FRESH_DORM.province,
+  });
+
+  // C. Step 4: Submit deterministic signature through real signature storage service
+  const sigBuffer = createDeterministicSignatureBuffer();
+  await signatureStorageService.saveSignature({
+    dormitoryId: prov.provisionalDormitoryId,
+    userId: freshOwnerUser.id,
+    buffer: sigBuffer,
+  });
+
+  // D. Step 5: Simulate external LINE OA test boundary for deferred LINE integration
+  await prisma.dormitoryLineConfig.update({
+    where: { dormitoryId: prov.provisionalDormitoryId },
     data: {
-      id: FRESH_DORM.id,
+      accessTokenVerifiedAt: new Date(),
+      webhookEndpointSetAt: new Date(),
+      webhookTestSucceededAt: new Date(),
+      webhookActive: true,
+      isConnected: true,
+    },
+  });
+
+  // E. Step 6: Complete & Finalize Onboarding with FREE tier + HORPLUS promo
+  const onboardingResult = await provisioningService.completeOwnerOnboarding({
+    userId: freshOwnerUser.id,
+    idempotencyKey: 'idemp-fresh-owner-onboarding-001',
+    provisionalDormitoryId: prov.provisionalDormitoryId,
+    dormitory: {
       name: FRESH_DORM.name,
-      type: FRESH_DORM.type,
-      genderPolicy: FRESH_DORM.genderPolicy,
+      type: 'apartment',
+      genderPolicy: 'mixed',
       addressLine1: FRESH_DORM.addressLine1,
+      addressLine2: null,
       subdistrict: FRESH_DORM.subdistrict,
       district: FRESH_DORM.district,
       province: FRESH_DORM.province,
       postalCode: FRESH_DORM.postalCode,
       phone: FRESH_DORM.phone,
       email: FRESH_DORM.email,
-      estimatedBuildingCount: FRESH_DORM.estimatedBuildingCount,
-      estimatedRoomCount: FRESH_DORM.estimatedRoomCount,
-      status: 'active',
-      createdByUserId: freshOwnerUser.id,
+      estimatedBuildingCount: 1,
+      estimatedRoomCount: 4,
     },
-  });
-
-  // Create Owner Role & Membership for Fresh Owner
-  const freshOwnerRole = await prisma.role.create({
-    data: {
-      dormitoryId: freshDorm.id,
-      code: 'OWNER',
-      name: 'เจ้าของหอพัก',
-      isSystem: true,
-      permissions: {
-        dashboard: { view: true, export: true },
-        rooms: { view: true, create: true, edit: true, delete: true },
-        tenants: { view: true, create: true, edit: true, delete: true },
-        contracts: { view: true, create: true, edit: true, delete: true },
-        meters: { view: true, create: true, edit: true },
-        billing: { view: true, create: true, edit: true, delete: true },
-        payments: { view: true, approve: true, reject: true },
-        settings: { view: true, manageSettings: true, manageUsers: true },
-      },
-    },
-  });
-
-  await prisma.dormitoryMember.create({
-    data: {
-      dormitoryId: freshDorm.id,
-      userId: freshOwnerUser.id,
-      roleId: freshOwnerRole.id,
-      status: 'active',
-    },
-  });
-
-  // Fresh Owner Billing Settings
-  await prisma.dormitoryBillingSettings.create({
-    data: {
-      dormitoryId: freshDorm.id,
+    billing: {
       billingDay: FRESH_DORM.billing.billingDay,
       dueDay: FRESH_DORM.billing.dueDay,
-      waterBillingType: FRESH_DORM.billing.waterBillingType,
-      waterRate: FRESH_DORM.billing.waterRate,
-      electricityBillingType: FRESH_DORM.billing.electricityBillingType,
-      electricityRate: FRESH_DORM.billing.electricityRate,
-      commonFee: FRESH_DORM.billing.commonFee,
-      internetFee: FRESH_DORM.billing.internetFee,
-      parkingRate: FRESH_DORM.billing.parkingRate,
-      gracePeriodDays: FRESH_DORM.billing.gracePeriodDays,
-      advanceRentMonths: FRESH_DORM.billing.advanceRentMonths,
-      lateFeeType: FRESH_DORM.billing.lateFeeType,
-      lateFeeValue: FRESH_DORM.billing.lateFeeValue,
-      rentBillingType: FRESH_DORM.billing.rentBillingType,
-      cashAccepted: FRESH_DORM.payment.cashAccepted,
+      waterBillingType: 'per_unit',
+      waterRate: String(FRESH_DORM.billing.waterRate),
+      electricityBillingType: 'per_unit',
+      electricityRate: String(FRESH_DORM.billing.electricityRate),
+      commonFee: String(FRESH_DORM.billing.commonFee),
+      commonFeeMode: 'fixed',
+      internetFee: String(FRESH_DORM.billing.internetFee),
+      internetFeeMode: 'fixed',
+      parkingRate: String(FRESH_DORM.billing.parkingRate),
+      parkingFeeMode: 'fixed',
+      gracePeriodDays: 3,
+      advanceRentMonths: 1,
+      lateFeeType: 'fixed',
+      lateFeeValue: '50.00',
+      rentBillingType: 'monthly',
+    },
+    payment: {
+      cashAccepted: true,
       promptPayType: FRESH_DORM.payment.promptPayType,
       promptPayValue: FRESH_DORM.payment.promptPayValue,
       bankCode: FRESH_DORM.payment.bankCode,
       bankAccountName: FRESH_DORM.payment.bankAccountName,
       bankAccountNumber: FRESH_DORM.payment.bankAccountNumber,
     },
-  });
-
-  // Fresh Owner Property Defaults
-  await prisma.dormitoryPropertyDefaults.create({
-    data: {
-      dormitoryId: freshDorm.id,
-      defaultMonthlyRent: FRESH_DORM.building.monthlyRent,
-      defaultDeposit: FRESH_DORM.building.depositAmount,
-      defaultMaxOccupants: FRESH_DORM.building.maximumOccupants,
-    },
-  });
-
-  // Fresh Owner Subscription (Free with HORPLUS trial extension: 60 days)
-  const now = new Date();
-  const trialEnd = new Date(now.getTime() + 60 * 24 * 60 * 60 * 1000);
-  const freeSubPlan = await prisma.subscriptionPlan.findFirst({ where: { code: 'FREE' } });
-  if (freeSubPlan) {
-    await prisma.dormitorySubscription.create({
-      data: {
-        dormitoryId: freshDorm.id,
-        planId: freeSubPlan.id,
-        status: 'TRIAL',
-        startedAt: now,
-        expiresAt: trialEnd,
-        trialStartedAt: now,
-        trialExpiresAt: trialEnd,
-        promoExtendedAt: now,
+    buildings: [
+      {
+        id: FRESH_DORM.building.id,
+        name: FRESH_DORM.building.name,
+        code: FRESH_DORM.building.code,
+        floorsCount: FRESH_DORM.building.floorsCount,
+        roomsPerFloor: FRESH_DORM.building.roomsPerFloor,
+        monthlyRent: FRESH_DORM.building.monthlyRent,
+        depositAmount: FRESH_DORM.building.depositAmount,
+        maximumOccupants: FRESH_DORM.building.maximumOccupants,
       },
-    });
-  }
-
-  // Fresh Owner Building & Rooms
-  const freshBuilding = await prisma.building.create({
-    data: {
-      id: FRESH_DORM.building.id,
-      dormitoryId: freshDorm.id,
-      name: FRESH_DORM.building.name,
-      code: FRESH_DORM.building.code,
-      floorCount: FRESH_DORM.building.floorsCount,
-      roomsPerFloor: FRESH_DORM.building.roomsPerFloor,
-      monthlyRent: FRESH_DORM.building.monthlyRent,
-      depositAmount: FRESH_DORM.building.depositAmount,
-      maximumOccupants: FRESH_DORM.building.maximumOccupants,
-    },
+    ],
+    rooms: FRESH_DORM.rooms.map((r) => ({
+      ...r,
+      buildingId: FRESH_DORM.building.id,
+      status: 'VACANT',
+    })),
+    planCode: 'FREE',
+    promoCode: 'HORPLUS',
   });
 
-  for (const r of FRESH_DORM.rooms) {
-    await prisma.room.create({
-      data: {
-        id: r.id,
-        dormitoryId: freshDorm.id,
-        buildingId: freshBuilding.id,
-        roomNumber: r.roomNumber,
-        normalizedRoomNumber: r.roomNumber.toLowerCase().trim(),
-        roomType: 'standard',
-        floor: r.floor,
-        monthlyRent: r.monthlyRent,
-        depositAmount: r.depositAmount,
-        status: r.status,
-      },
-    });
-  }
+  const freshDormId = onboardingResult.dormitory.id;
 
-  // Fresh Owner Signature
-  const sigBytes = createDummySignaturePng();
-  const sigHash = crypto.createHash('sha256').update(sigBytes).digest('hex');
-  await prisma.ownerSignature.create({
-    data: {
-      dormitoryId: freshDorm.id,
-      signedByUserId: freshOwnerUser.id,
-      objectKey: `signatures/${freshDorm.id}/signature-v1.png`,
-      sha256: sigHash,
-      byteSize: sigBytes.length,
-      version: 1,
-      isCurrent: true,
-    },
-  });
+  console.log(`✅ Fresh Owner provisioned via REAL ONBOARDING: "${FRESH_DORM.name}"`);
+  console.log(`   Dormitory ID: ${freshDormId}`);
+  console.log(`   Rooms Created: 4 vacant rooms (101, 102, 201, 202)`);
+  console.log(`   Subscription:  TRIAL (${onboardingResult.subscription?.benefitType || 'HORPLUS Promo'} active)`);
 
-  console.log(`✅ Fresh Owner provisioned: "${freshDorm.name}" (4 vacant rooms, Free trial + HORPLUS promo, complete onboarding facts)`);
-
+  // ==========================================================================
+  // SCENARIO 2: COMPREHENSIVE OWNER
+  // ==========================================================================
   console.log('\n--- 2. Seeding Comprehensive Owner Scenario ---');
 
-  // Create Users: Comp Owner, Manager, Tech, Tenant Somchai
-  const compOwnerUser = await prisma.user.create({
+  // Users
+  const compOwner = await prisma.user.create({
     data: {
       id: COMP_DORM.owner.id,
-      googleSubject: COMP_DORM.owner.googleSubject,
-      name: COMP_DORM.owner.name,
+      googleSubject: 'mock_owner_uat_comp',
       email: COMP_DORM.owner.email,
-      emailNormalized: COMP_DORM.owner.email.toLowerCase(),
-      phone: COMP_DORM.owner.phone,
+      emailNormalized: COMP_DORM.owner.email.toLowerCase().trim(),
+      name: COMP_DORM.owner.name,
       status: 'active',
     },
   });
 
-  const managerUser = await prisma.user.create({
+  const compManager = await prisma.user.create({
     data: {
       id: COMP_DORM.manager.id,
-      googleSubject: COMP_DORM.manager.googleSubject,
-      name: COMP_DORM.manager.name,
+      googleSubject: 'mock_manager_uat',
       email: COMP_DORM.manager.email,
-      emailNormalized: COMP_DORM.manager.email.toLowerCase(),
-      phone: COMP_DORM.manager.phone,
+      emailNormalized: COMP_DORM.manager.email.toLowerCase().trim(),
+      name: COMP_DORM.manager.name,
       status: 'active',
     },
   });
 
-  const techUser = await prisma.user.create({
+  const compTech = await prisma.user.create({
     data: {
       id: COMP_DORM.tech.id,
-      googleSubject: COMP_DORM.tech.googleSubject,
-      name: COMP_DORM.tech.name,
+      googleSubject: 'mock_tech_uat',
       email: COMP_DORM.tech.email,
-      emailNormalized: COMP_DORM.tech.email.toLowerCase(),
-      phone: COMP_DORM.tech.phone,
+      emailNormalized: COMP_DORM.tech.email.toLowerCase().trim(),
+      name: COMP_DORM.tech.name,
       status: 'active',
     },
   });
@@ -251,22 +239,19 @@ export async function seedLocal07Data() {
   const tenantSomchaiUser = await prisma.user.create({
     data: {
       id: COMP_DORM.tenantSomchai.id,
-      googleSubject: COMP_DORM.tenantSomchai.googleSubject,
-      name: COMP_DORM.tenantSomchai.name,
+      googleSubject: 'mock_tenant_somchai',
       email: COMP_DORM.tenantSomchai.email,
-      emailNormalized: COMP_DORM.tenantSomchai.email.toLowerCase(),
-      phone: COMP_DORM.tenantSomchai.phone,
+      emailNormalized: COMP_DORM.tenantSomchai.email.toLowerCase().trim(),
+      name: COMP_DORM.tenantSomchai.name,
       status: 'active',
     },
   });
 
-  // Provision Comp Dormitory
+  // Dormitory
   const compDorm = await prisma.dormitory.create({
     data: {
       id: COMP_DORM.id,
       name: COMP_DORM.name,
-      type: COMP_DORM.type,
-      genderPolicy: COMP_DORM.genderPolicy,
       addressLine1: COMP_DORM.addressLine1,
       subdistrict: COMP_DORM.subdistrict,
       district: COMP_DORM.district,
@@ -274,115 +259,84 @@ export async function seedLocal07Data() {
       postalCode: COMP_DORM.postalCode,
       phone: COMP_DORM.phone,
       email: COMP_DORM.email,
-      estimatedBuildingCount: COMP_DORM.estimatedBuildingCount,
-      estimatedRoomCount: COMP_DORM.estimatedRoomCount,
       status: 'active',
-      createdByUserId: compOwnerUser.id,
+      createdByUserId: compOwner.id,
     },
   });
 
-  // Roles for Comp Dorm
-  const compOwnerRole = await prisma.role.create({
+  // Roles
+  const ownerRole = await prisma.role.create({
     data: {
       dormitoryId: compDorm.id,
       code: 'OWNER',
       name: 'เจ้าของหอพัก',
       isSystem: true,
-      permissions: {
-        dashboard: { view: true, export: true },
-        rooms: { view: true, create: true, edit: true, delete: true },
-        tenants: { view: true, create: true, edit: true, delete: true },
-        contracts: { view: true, create: true, edit: true, delete: true },
-        meters: { view: true, create: true, edit: true },
-        billing: { view: true, create: true, edit: true, delete: true },
-        payments: { view: true, approve: true, reject: true },
-        settings: { view: true, manageSettings: true, manageUsers: true },
-      },
+      permissions: { all: true },
     },
   });
 
-  const compManagerRole = await prisma.role.create({
+  const managerRole = await prisma.role.create({
     data: {
       dormitoryId: compDorm.id,
       code: 'MANAGER',
       name: 'ผู้จัดการหอพัก',
       isSystem: true,
       permissions: {
-        dashboard: { view: true, export: true },
-        rooms: { view: true, create: true, edit: true },
-        tenants: { view: true, create: true, edit: true },
-        contracts: { view: true, create: true, edit: true },
-        meters: { view: true, create: true, edit: true },
-        billing: { view: true, create: true, edit: true },
-        payments: { view: true, approve: true, reject: true },
-        maintenance: { view: true, create: true, edit: true },
-        announcements: { view: true, create: true, edit: true },
-        reports: { view: true, export: true },
+        rooms: ['view', 'manage'],
+        billing: ['view', 'manage'],
+        reports: ['view'],
+        payments: ['view', 'manage'],
       },
     },
   });
 
-  const compTechRole = await prisma.role.create({
+  const techRole = await prisma.role.create({
     data: {
       dormitoryId: compDorm.id,
       code: 'TECH',
-      name: 'ช่างประจำหอพัก',
+      name: 'ช่างเทคนิค',
       isSystem: true,
       permissions: {
-        dashboard: { view: true },
-        rooms: { view: true },
-        meters: { view: true, create: true, edit: true },
-        maintenance: { view: true, create: true, edit: true },
+        maintenance: ['view', 'manage'],
+        meters: ['view', 'record'],
       },
     },
   });
 
-  const compTenantRole = await prisma.role.create({
-    data: {
-      dormitoryId: compDorm.id,
-      code: 'TENANT',
-      name: 'ผู้เช่า',
-      isSystem: true,
-      permissions: {
-        portal: { view: true },
-      },
-    },
-  });
-
-  // Memberships
+  // Members
   await prisma.dormitoryMember.createMany({
     data: [
-      { dormitoryId: compDorm.id, userId: compOwnerUser.id, roleId: compOwnerRole.id, status: 'active' },
-      { dormitoryId: compDorm.id, userId: managerUser.id, roleId: compManagerRole.id, status: 'active' },
-      { dormitoryId: compDorm.id, userId: techUser.id, roleId: compTechRole.id, status: 'active' },
-      { dormitoryId: compDorm.id, userId: tenantSomchaiUser.id, roleId: compTenantRole.id, status: 'active' },
+      { dormitoryId: compDorm.id, userId: compOwner.id, roleId: ownerRole.id, status: 'active' },
+      { dormitoryId: compDorm.id, userId: compManager.id, roleId: managerRole.id, status: 'active' },
+      { dormitoryId: compDorm.id, userId: compTech.id, roleId: techRole.id, status: 'active' },
     ],
   });
 
   // Billing Settings
+  const encPromptPay = sensitiveFieldService.encrypt(COMP_DORM.payment.promptPayValue).ciphertext;
+  const encBankAccount = sensitiveFieldService.encrypt(COMP_DORM.payment.bankAccountNumber).ciphertext;
+
   await prisma.dormitoryBillingSettings.create({
     data: {
       dormitoryId: compDorm.id,
       billingDay: COMP_DORM.billing.billingDay,
       dueDay: COMP_DORM.billing.dueDay,
-      waterBillingType: COMP_DORM.billing.waterBillingType,
+      waterBillingType: 'per_unit',
       waterRate: COMP_DORM.billing.waterRate,
-      electricityBillingType: COMP_DORM.billing.electricityBillingType,
+      electricityBillingType: 'per_unit',
       electricityRate: COMP_DORM.billing.electricityRate,
       commonFee: COMP_DORM.billing.commonFee,
+      commonFeeMode: 'fixed',
       internetFee: COMP_DORM.billing.internetFee,
+      internetFeeMode: 'fixed',
       parkingRate: COMP_DORM.billing.parkingRate,
-      gracePeriodDays: COMP_DORM.billing.gracePeriodDays,
-      advanceRentMonths: COMP_DORM.billing.advanceRentMonths,
-      lateFeeType: COMP_DORM.billing.lateFeeType,
-      lateFeeValue: COMP_DORM.billing.lateFeeValue,
-      rentBillingType: COMP_DORM.billing.rentBillingType,
-      cashAccepted: COMP_DORM.payment.cashAccepted,
+      parkingFeeMode: 'fixed',
+      cashAccepted: true,
       promptPayType: COMP_DORM.payment.promptPayType,
-      promptPayValue: COMP_DORM.payment.promptPayValue,
+      promptPayValueEncrypted: encPromptPay,
       bankCode: COMP_DORM.payment.bankCode,
       bankAccountName: COMP_DORM.payment.bankAccountName,
-      bankAccountNumber: COMP_DORM.payment.bankAccountNumber,
+      bankAccountNumberEncrypted: encBankAccount,
     },
   });
 
@@ -390,62 +344,65 @@ export async function seedLocal07Data() {
   await prisma.dormitoryPropertyDefaults.create({
     data: {
       dormitoryId: compDorm.id,
-      defaultMonthlyRent: 4500,
-      defaultDeposit: 4500,
+      defaultMonthlyRent: 4500.0,
+      defaultDeposit: 4500.0,
+      defaultParkingFee: 300.0,
       defaultMaxOccupants: 2,
+      defaultRoomType: 'standard',
     },
   });
 
-  // Subscription (PAID/PRO Active)
-  const oneYearLater = new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000);
-  const paidSubPlan = await prisma.subscriptionPlan.findFirst({ where: { type: 'PAID' } }) 
-    || await prisma.subscriptionPlan.findFirst({ where: { code: 'PAID' } })
-    || freeSubPlan;
-
-  if (paidSubPlan) {
-    await prisma.dormitorySubscription.create({
+  // Subscription (PAID PRO Plan)
+  let paidPlan = await prisma.subscriptionPlan.findFirst({ where: { code: 'PAID' } });
+  if (!paidPlan) {
+    paidPlan = await prisma.subscriptionPlan.create({
       data: {
-        dormitoryId: compDorm.id,
-        planId: paidSubPlan.id,
-        status: 'ACTIVE',
-        startedAt: now,
-        expiresAt: oneYearLater,
+        name: 'Pro Plan',
+        code: 'PAID',
+        type: 'PAID',
+        price: 590.0,
+        billingInterval: 'month',
+        maxRooms: 100,
       },
     });
   }
 
+  await prisma.dormitorySubscription.create({
+    data: {
+      dormitoryId: compDorm.id,
+      planId: paidPlan.id,
+      status: 'ACTIVE',
+      startedAt: new Date('2026-01-01'),
+      expiresAt: new Date('2027-01-01'),
+    },
+  });
+
   // Buildings
   const bldA = await prisma.building.create({
     data: {
-      id: COMP_DORM.buildings[0].id,
       dormitoryId: compDorm.id,
-      name: COMP_DORM.buildings[0].name,
-      code: COMP_DORM.buildings[0].code,
-      floorCount: COMP_DORM.buildings[0].floorsCount,
-      roomsPerFloor: COMP_DORM.buildings[0].roomsPerFloor,
-      monthlyRent: COMP_DORM.buildings[0].monthlyRent,
-      depositAmount: COMP_DORM.buildings[0].depositAmount,
-      maximumOccupants: COMP_DORM.buildings[0].maximumOccupants,
+      name: 'อาคารชาญวิทย์ (A)',
+      code: 'BLD-A',
+      floorCount: 3,
+      roomsPerFloor: 6,
+      hasElevator: true,
     },
   });
 
   const bldB = await prisma.building.create({
     data: {
-      id: COMP_DORM.buildings[1].id,
       dormitoryId: compDorm.id,
-      name: COMP_DORM.buildings[1].name,
-      code: COMP_DORM.buildings[1].code,
-      floorCount: COMP_DORM.buildings[1].floorsCount,
-      roomsPerFloor: COMP_DORM.buildings[1].roomsPerFloor,
-      monthlyRent: COMP_DORM.buildings[1].monthlyRent,
-      depositAmount: COMP_DORM.buildings[1].depositAmount,
-      maximumOccupants: COMP_DORM.buildings[1].maximumOccupants,
-      waterRate: COMP_DORM.buildings[1].waterRateOverride,
-      electricityRate: COMP_DORM.buildings[1].electricityRateOverride,
+      name: 'อาคารสมบูรณ์ (B)',
+      code: 'BLD-B',
+      floorCount: 2,
+      roomsPerFloor: 1,
+      hasElevator: false,
+      waterRate: 20.0,
+      electricityRate: 8.0,
     },
   });
 
-  // 18 Comprehensive Rooms
+  // 18 Rooms
   const roomData = [
     // Floor 1 (Building A)
     { roomNumber: '101', floor: 1, rent: 4500, status: 'occupied', bldId: bldA.id },
@@ -468,90 +425,194 @@ export async function seedLocal07Data() {
     { roomNumber: '304', floor: 3, rent: 5000, status: 'reserved', bldId: bldA.id },
     // Building B
     { roomNumber: 'B101', floor: 1, rent: 5500, status: 'occupied', bldId: bldB.id },
-    { roomNumber: 'B102', floor: 1, rent: 5500, status: 'vacant', bldId: bldB.id },
+    { roomNumber: 'B102', floor: 2, rent: 5500, status: 'vacant', bldId: bldB.id },
   ];
 
   const createdRooms = {};
-  for (const rd of roomData) {
+  for (const r of roomData) {
     const room = await prisma.room.create({
       data: {
         dormitoryId: compDorm.id,
-        buildingId: rd.bldId,
-        roomNumber: rd.roomNumber,
-        normalizedRoomNumber: rd.roomNumber.toLowerCase().trim(),
+        buildingId: r.bldId,
+        roomNumber: r.roomNumber,
+        normalizedRoomNumber: r.roomNumber.toLowerCase().trim(),
+        floor: r.floor,
         roomType: 'standard',
-        floor: rd.floor,
-        monthlyRent: rd.rent,
-        depositAmount: rd.rent,
-        status: rd.status,
+        monthlyRent: r.rent,
+        depositAmount: r.rent,
+        status: r.status,
       },
     });
-    createdRooms[rd.roomNumber] = room;
+    createdRooms[r.roomNumber] = room;
   }
 
-  // Tenants Definitions
+  // Tenants & Contracts
   const tenantConfigs = [
-    { key: 't101', tNum: 'TNT-001', name: 'นายสมชาย ใจดี', fName: 'สมชาย', lName: 'ใจดี', phone: '0811112222', natMask: '1-1001-XXXXX-11-1', roomNum: '101', linkedUserId: tenantSomchaiUser.id, coOccupants: [{ name: 'นางสมหญิง ใจดี', relation: 'คู่สมรส' }] },
-    { key: 't102', tNum: 'TNT-002', name: 'นายสมศักดิ์ รักสงบ', fName: 'สมศักดิ์', lName: 'รักสงบ', phone: '0812223333', natMask: '1-1002-XXXXX-22-2', roomNum: '102' },
-    { key: 't103', tNum: 'TNT-003', name: 'นางสาวอนงค์ งามยิ่ง', fName: 'อนงค์', lName: 'งามยิ่ง', phone: '0813334444', natMask: '1-1003-XXXXX-33-3', roomNum: '103' },
-    { key: 't104', tNum: 'TNT-004', name: 'นายวิชัย มั่งมี', fName: 'วิชัย', lName: 'มั่งมี', phone: '0814445555', natMask: '1-1004-XXXXX-44-4', roomNum: '104', coOccupants: [{ name: 'นางวันดี มั่งมี', relation: 'คู่สมรส' }, { name: 'เด็กชายวิน มั่งมี', relation: 'บุตร' }, { name: 'เด็กหญิงวิภา มั่งมี', relation: 'บุตร' }] },
-    { key: 't201', tNum: 'TNT-005', name: 'นางสาวมานี มีตา', fName: 'มานี', lName: 'มีตา', phone: '0815556666', natMask: '1-1005-XXXXX-55-5', roomNum: '201' },
-    { key: 't202', tNum: 'TNT-006', name: 'นายปิติ สบายดี', fName: 'ปิติ', lName: 'สบายดี', phone: '0816667777', natMask: '1-1006-XXXXX-66-6', roomNum: '202' },
-    { key: 't203', tNum: 'TNT-007', name: 'นางสาวชูใจ ใจอารี', fName: 'ชูใจ', lName: 'ใจอารี', phone: '0817778888', natMask: '1-1007-XXXXX-77-7', roomNum: '203' },
-    { key: 't204', tNum: 'TNT-008', name: 'นายวีระ กล้าหาญ', fName: 'วีระ', lName: 'กล้าหาญ', phone: '0818889999', natMask: '1-1008-XXXXX-88-8', roomNum: '204' },
-    { key: 't301', tNum: 'TNT-009', name: 'นายดนัย ดียิ่ง', fName: 'ดนัย', lName: 'ดียิ่ง', phone: '0810001111', natMask: '1-1009-XXXXX-99-9', roomNum: '301' },
-    { key: 't302', tNum: 'TNT-010', name: 'นายนิรันดร์ สุขใจ', fName: 'นิรันดร์', lName: 'สุขใจ', phone: '0811234567', natMask: '1-1010-XXXXX-00-0', roomNum: '302' },
-    { key: 't303', tNum: 'TNT-011', name: 'นายประเสริฐ เกิดผล', fName: 'ประเสริฐ', lName: 'เกิดผล', phone: '0812348901', natMask: '1-1011-XXXXX-11-1', roomNum: '303' },
-    { key: 'tB101', tNum: 'TNT-012', name: 'นางสาวมาลัย หอมหวล', fName: 'มาลัย', lName: 'หอมหวล', phone: '0813456789', natMask: '1-1012-XXXXX-22-2', roomNum: 'B101' },
+    {
+      num: '101',
+      name: 'นายสมชาย ใจดี',
+      first: 'สมชาย',
+      last: 'ใจดี',
+      phone: '0812345678',
+      rent: 4500,
+      deposit: 4500,
+      userId: tenantSomchaiUser.id,
+      coOccupants: [{ name: 'นางสมหญิง ใจดี', relation: 'คู่สมรส' }],
+    },
+    {
+      num: '102',
+      name: 'นายสมศักดิ์ รักสงบ',
+      first: 'สมศักดิ์',
+      last: 'รักสงบ',
+      phone: '0823456789',
+      rent: 4500,
+      deposit: 4500,
+    },
+    {
+      num: '103',
+      name: 'นางสาวอนงค์ งามยิ่ง',
+      first: 'อนงค์',
+      last: 'งามยิ่ง',
+      phone: '0834567890',
+      rent: 4500,
+      deposit: 4500,
+    },
+    {
+      num: '104',
+      name: 'นายวิชัย มั่งมี',
+      first: 'วิชัย',
+      last: 'มั่งมี',
+      phone: '0845678901',
+      rent: 4500,
+      deposit: 4500,
+      coOccupants: [
+        { name: 'นายพรชัย มั่งมี', relation: 'น้องชาย' },
+        { name: 'นายกิตติ มั่งมี', relation: 'เพื่อนร่วมห้อง' },
+        { name: 'นายเอก มั่งมี', relation: 'เพื่อนร่วมห้อง' },
+      ],
+    },
+    {
+      num: '201',
+      name: 'นางสาวมานี มีตา',
+      first: 'มานี',
+      last: 'มีตา',
+      phone: '0856789012',
+      rent: 4800,
+      deposit: 4800,
+      renewalPending: true,
+    },
+    {
+      num: '202',
+      name: 'นายปิติ สบายดี',
+      first: 'ปิติ',
+      last: 'สบายดี',
+      phone: '0867890123',
+      rent: 4800,
+      deposit: 4800,
+      scheduledRenewal: true,
+    },
+    {
+      num: '203',
+      name: 'นางสาวชูใจ ใจอารี',
+      first: 'ชูใจ',
+      last: 'ใจอารี',
+      phone: '0878901234',
+      rent: 4800,
+      deposit: 4800,
+    },
+    {
+      num: '204',
+      name: 'นายวีระ กล้าหาญ',
+      first: 'วีระ',
+      last: 'กล้าหาญ',
+      phone: '0889012345',
+      rent: 4800,
+      deposit: 4800,
+      isMovedOut: true,
+    },
+    {
+      num: '301',
+      name: 'นายดนัย ดียิ่ง',
+      first: 'ดนัย',
+      last: 'ดียิ่ง',
+      phone: '0890123456',
+      rent: 5000,
+      deposit: 5000,
+    },
+    {
+      num: '302',
+      name: 'นายนิรันดร์ สุขใจ',
+      first: 'นิรันดร์',
+      last: 'สุขใจ',
+      phone: '0801234567',
+      rent: 5000,
+      deposit: 5000,
+    },
+    {
+      num: '303',
+      name: 'นายประเสริฐ เกิดผล',
+      first: 'ประเสริฐ',
+      last: 'เกิดผล',
+      phone: '0811112222',
+      rent: 5000,
+      deposit: 5000,
+    },
+    {
+      num: 'B101',
+      name: 'นางสาวมาลัย หอมหวล',
+      first: 'มาลัย',
+      last: 'หอมหวล',
+      phone: '0822223333',
+      rent: 5500,
+      deposit: 5500,
+    },
   ];
 
+  let tCount = 1;
   const createdTenants = {};
-  const createdContracts = {};
-
   for (const tc of tenantConfigs) {
-    const room = createdRooms[tc.roomNum];
+    const tCode = `TNT-${String(tCount).padStart(3, '0')}`;
+    const room = createdRooms[tc.num];
+
     const tenant = await prisma.tenant.create({
       data: {
         dormitoryId: compDorm.id,
-        tenantNumber: tc.tNum,
-        firstName: tc.fName,
-        lastName: tc.lName,
+        tenantNumber: tCode,
+        firstName: tc.first,
+        lastName: tc.last,
         displayName: tc.name,
         phone: tc.phone,
-        nationalIdMasked: tc.natMask,
-        linkedUserId: tc.linkedUserId || null,
-        status: 'active',
+        nationalIdMasked: '1-1004-XXXXX-XX-X',
+        status: tc.isMovedOut ? 'inactive' : 'active',
+        linkedUserId: tc.userId || null,
       },
     });
-    createdTenants[tc.key] = tenant;
+    createdTenants[tc.num] = tenant;
 
     // Contract
     const contract = await prisma.contract.create({
       data: {
         dormitoryId: compDorm.id,
-        tenantId: tenant.id,
         roomId: room.id,
-        contractNumber: `CTR-2026-${tc.roomNum}`,
-        startDate: new Date('2026-01-01'),
-        endDate: new Date('2026-12-31'),
-        durationMonths: 12,
-        rentAmount: room.monthlyRent,
-        depositAmount: room.depositAmount,
-        status: tc.roomNum === '204' ? 'terminated' : 'active',
+        tenantId: tenant.id,
+        contractNumber: `CTR-2026-${tc.num}`,
+        startDate: tc.isMovedOut ? new Date('2025-08-01') : new Date('2026-01-01'),
+        endDate: tc.isMovedOut ? new Date('2026-07-31') : new Date('2026-12-31'),
+        rentAmount: tc.rent,
+        depositAmount: tc.deposit,
+        status: tc.isMovedOut ? 'ended' : 'active',
       },
     });
-    createdContracts[tc.key] = contract;
 
     // Occupancy
     await prisma.occupancy.create({
       data: {
         dormitoryId: compDorm.id,
-        tenantId: tenant.id,
         roomId: room.id,
-        contractId: contract.id,
-        startedAt: new Date('2026-01-01'),
-        endedAt: tc.roomNum === '204' ? new Date('2026-07-31') : null,
-        status: tc.roomNum === '204' ? 'ENDED' : 'ACTIVE',
+        tenantId: tenant.id,
+        startedAt: tc.isMovedOut ? new Date('2025-08-01') : new Date('2026-01-01'),
+        endedAt: tc.isMovedOut ? new Date('2026-07-31') : null,
+        status: tc.isMovedOut ? 'ENDED' : 'ACTIVE',
       },
     });
 
@@ -570,78 +631,60 @@ export async function seedLocal07Data() {
         });
       }
     }
+
+    // Renewal pending (Room 201)
+    if (tc.renewalPending) {
+      await prisma.tenantRenewalRequest.create({
+        data: {
+          dormitoryId: compDorm.id,
+          contractId: contract.id,
+          tenantId: tenant.id,
+          roomId: room.id,
+          requestedDurationMonths: 6,
+          requestedStartDate: new Date('2027-01-01'),
+          requestedEndDate: new Date('2027-06-30'),
+          status: 'PENDING_OWNER_APPROVAL',
+        },
+      });
+    }
+
+    // Scheduled Renewal (Room 202)
+    if (tc.scheduledRenewal) {
+      await prisma.contract.create({
+        data: {
+          dormitoryId: compDorm.id,
+          roomId: room.id,
+          tenantId: tenant.id,
+          contractNumber: `CTR-2027-202-EXT`,
+          startDate: new Date('2027-01-01'),
+          endDate: new Date('2027-12-31'),
+          rentAmount: tc.rent,
+          depositAmount: tc.deposit,
+          status: 'active',
+        },
+      });
+    }
+
+    // Move-out Settlement (Room 204)
+    if (tc.isMovedOut) {
+      await prisma.contractSettlement.create({
+        data: {
+          dormitoryId: compDorm.id,
+          contractId: contract.id,
+          tenantId: tenant.id,
+          roomId: room.id,
+          depositAmount: 4800.0,
+          unpaidBillAmount: 0.0,
+          damageChargeTotal: 1500.0,
+          netSettlement: 3300.0,
+          settlementDirection: 'REFUND',
+          settlementStatus: 'PENDING_REFUND',
+        },
+      });
+    }
+
+    tCount++;
   }
-
-  // Renewal Requests
-  // 1. Manee (201) pending renewal
-  await prisma.tenantRenewalRequest.create({
-    data: {
-      dormitoryId: compDorm.id,
-      tenantId: createdTenants['t201'].id,
-      contractId: createdContracts['t201'].id,
-      roomId: createdRooms['201'].id,
-      requestedDurationMonths: 6,
-      requestedStartDate: new Date('2027-01-01'),
-      requestedEndDate: new Date('2027-06-30'),
-      status: 'PENDING_OWNER_APPROVAL',
-    },
-  });
-
-  // 2. Piti (202) approved renewal -> scheduled contract
-  const futureContract = await prisma.contract.create({
-    data: {
-      dormitoryId: compDorm.id,
-      tenantId: createdTenants['t202'].id,
-      roomId: createdRooms['202'].id,
-      contractNumber: 'CTR-2027-202-EXT',
-      startDate: new Date('2027-01-01'),
-      endDate: new Date('2027-12-31'),
-      durationMonths: 12,
-      rentAmount: 4800,
-      depositAmount: 4800,
-      status: 'scheduled',
-    },
-  });
-
-  await prisma.tenantRenewalRequest.create({
-    data: {
-      dormitoryId: compDorm.id,
-      tenantId: createdTenants['t202'].id,
-      contractId: createdContracts['t202'].id,
-      roomId: createdRooms['202'].id,
-      requestedDurationMonths: 12,
-      requestedStartDate: new Date('2027-01-01'),
-      requestedEndDate: new Date('2027-12-31'),
-      status: 'APPROVED',
-      reviewedAt: new Date(),
-      reviewedByUserId: compOwnerUser.id,
-      createdContractId: futureContract.id,
-    },
-  });
-
-  // Move-out / Settlement: Room 204 (Veera)
-  const settlementVeera = await prisma.contractSettlement.create({
-    data: {
-      dormitoryId: compDorm.id,
-      tenantId: createdTenants['t204'].id,
-      contractId: createdContracts['t204'].id,
-      roomId: createdRooms['204'].id,
-      depositAmount: 4800,
-      unpaidBillAmount: 0,
-      damageChargeTotal: 1500,
-      netSettlement: 3300,
-      settlementDirection: 'REFUND',
-      settlementStatus: 'PENDING_REFUND',
-    },
-  });
-
-  await prisma.contractSettlementItem.create({
-    data: {
-      settlementId: settlementVeera.id,
-      description: 'ค่าทาสีผนังห้องและลบรอยคราบ',
-      amount: 1500,
-    },
-  });
 
   // Billing Cycles: June (Closed) and July (Active Current Cycle)
   await prisma.billingCycle.create({
@@ -742,77 +785,91 @@ export async function seedLocal07Data() {
     });
   }
 
-  // Bills & Line Items for July 2026 (11 Bills)
+  // July 2026 Bills
   const billFacts = [
-    { tKey: 't101', roomNum: '101', rent: 4500, waterUnits: 10, waterRate: 18, elecUnits: 60, elecRate: 7, common: 200, internet: 150, parking: 0, surcharges: 0, status: 'paid', rcpNum: 'RCP-202607-001' },
-    { tKey: 't102', roomNum: '102', rent: 4500, waterUnits: 10, waterRate: 18, elecUnits: 60, elecRate: 7, common: 200, internet: 150, parking: 0, surcharges: 0, status: 'unpaid' },
-    { tKey: 't103', roomNum: '103', rent: 4500, waterUnits: 8, waterRate: 18, elecUnits: 48, elecRate: 7, common: 200, internet: 0, parking: 300, surcharges: 0, status: 'paid', rcpNum: 'RCP-202607-002' },
-    { tKey: 't104', roomNum: '104', rent: 4500, waterUnits: 18, waterRate: 18, elecUnits: 120, elecRate: 7, common: 200, internet: 0, parking: 0, surcharges: 600, status: 'unpaid' }, // 3 co-occupants
-    { tKey: 't201', roomNum: '201', rent: 4800, waterUnits: 12, waterRate: 18, elecUnits: 70, elecRate: 7, common: 200, internet: 150, parking: 0, surcharges: 0, status: 'paid', rcpNum: 'RCP-202607-003' },
-    { tKey: 't202', roomNum: '202', rent: 4800, waterUnits: 10, waterRate: 18, elecUnits: 65, elecRate: 7, common: 200, internet: 0, parking: 0, surcharges: 0, status: 'paid', rcpNum: 'RCP-202607-004' },
-    { tKey: 't203', roomNum: '203', rent: 4800, waterUnits: 12, waterRate: 18, elecUnits: 75, elecRate: 7, common: 200, internet: 150, parking: 0, surcharges: 0, status: 'unpaid' },
-    { tKey: 't301', roomNum: '301', rent: 5000, waterUnits: 14, waterRate: 18, elecUnits: 80, elecRate: 7, common: 200, internet: 0, parking: 300, surcharges: 0, status: 'paid', rcpNum: 'RCP-202607-005' },
-    { tKey: 't302', roomNum: '302', rent: 5000, waterUnits: 15, waterRate: 18, elecUnits: 90, elecRate: 7, common: 200, internet: 0, parking: 0, surcharges: 0, status: 'unpaid' },
-    { tKey: 't303', roomNum: '303', rent: 5000, waterUnits: 12, waterRate: 18, elecUnits: 85, elecRate: 7, common: 200, internet: 150, parking: 0, surcharges: 0, status: 'paid', rcpNum: 'RCP-202607-006' },
-    { tKey: 'tB101', roomNum: 'B101', rent: 5500, waterUnits: 15, waterRate: 20, elecUnits: 100, elecRate: 8, common: 200, internet: 0, parking: 300, surcharges: 0, status: 'paid', rcpNum: 'RCP-202607-007' },
+    { roomNum: '101', rent: 4500, wUnits: 10, wRate: 18, eUnits: 60, eRate: 7, common: 200, internet: 150, parking: 0, surcharge: 0, paid: true, rcpNum: 'RCP-202607-001' },
+    { roomNum: '102', rent: 4500, wUnits: 10, wRate: 18, eUnits: 60, eRate: 7, common: 200, internet: 150, parking: 0, surcharge: 0, paid: false },
+    { roomNum: '103', rent: 4500, wUnits: 8, wRate: 18, eUnits: 48, eRate: 7, common: 200, internet: 0, parking: 300, surcharge: 0, paid: true, rcpNum: 'RCP-202607-002' },
+    { roomNum: '104', rent: 4500, wUnits: 18, wRate: 18, eUnits: 120, eRate: 7, common: 200, internet: 0, parking: 0, surcharge: 600, paid: false },
+    { roomNum: '201', rent: 4800, wUnits: 12, wRate: 18, eUnits: 70, eRate: 7, common: 200, internet: 150, parking: 0, surcharge: 0, paid: true, rcpNum: 'RCP-202607-003' },
+    { roomNum: '202', rent: 4800, wUnits: 10, wRate: 18, eUnits: 65, eRate: 7, common: 200, internet: 0, parking: 0, surcharge: 0, paid: true, rcpNum: 'RCP-202607-004' },
+    { roomNum: '203', rent: 4800, wUnits: 12, wRate: 18, eUnits: 75, eRate: 7, common: 200, internet: 150, parking: 0, surcharge: 0, paid: false },
+    { roomNum: '301', rent: 5000, wUnits: 14, wRate: 18, eUnits: 80, eRate: 7, common: 200, internet: 0, parking: 300, surcharge: 0, paid: true, rcpNum: 'RCP-202607-005' },
+    { roomNum: '302', rent: 5000, wUnits: 15, wRate: 18, eUnits: 90, eRate: 7, common: 200, internet: 0, parking: 0, surcharge: 0, paid: false },
+    { roomNum: '303', rent: 5000, wUnits: 12, wRate: 18, eUnits: 85, eRate: 7, common: 200, internet: 150, parking: 0, surcharge: 0, paid: true, rcpNum: 'RCP-202607-006' },
+    { roomNum: 'B101', rent: 5500, wUnits: 15, wRate: 20, eUnits: 100, eRate: 8, common: 200, internet: 0, parking: 300, surcharge: 0, paid: true, rcpNum: 'RCP-202607-007' },
   ];
 
-  let rcpSeq = 1;
+  let bCount = 1;
   for (const bf of billFacts) {
     const room = createdRooms[bf.roomNum];
-    const tenant = createdTenants[bf.tKey];
-    const contract = createdContracts[bf.tKey];
+    const tenant = createdTenants[bf.roomNum];
+    const billNumber = `INV-202607-${String(bCount).padStart(3, '0')}`;
 
-    const waterTotal = bf.waterUnits * bf.waterRate;
-    const elecTotal = bf.elecUnits * bf.elecRate;
-    const totalAmount = bf.rent + waterTotal + elecTotal + bf.common + bf.internet + bf.parking + bf.surcharges;
-    const isPaid = bf.status === 'paid';
+    const waterTotal = bf.wUnits * bf.wRate;
+    const elecTotal = bf.eUnits * bf.eRate;
+    const subtotal = bf.rent + waterTotal + elecTotal + bf.common + bf.internet + bf.parking + bf.surcharge;
 
     const bill = await prisma.bill.create({
       data: {
         dormitoryId: compDorm.id,
         billingCycleId: cycleJuly.id,
-        tenantId: tenant.id,
         roomId: room.id,
-        contractId: contract.id,
-        billNumber: `BILL-202607-${bf.roomNum}`,
+        tenantId: tenant.id,
+        billNumber,
         billingDate: new Date('2026-07-25'),
         dueDate: new Date('2026-08-05'),
-        subtotal: totalAmount,
-        totalAmount,
-        paidAmount: isPaid ? totalAmount : 0,
-        outstandingAmount: isPaid ? 0 : totalAmount,
-        status: bf.status,
-        paidAt: isPaid ? new Date('2026-07-28') : null,
+        subtotal,
+        totalAmount: subtotal,
+        paidAmount: bf.paid ? subtotal : 0.0,
+        outstandingAmount: bf.paid ? 0.0 : subtotal,
+        status: bf.paid ? 'paid' : 'unpaid',
       },
     });
 
     // Bill Items
-    await prisma.billItem.createMany({
-      data: [
-        { dormitoryId: compDorm.id, billId: bill.id, type: 'rent', description: 'ค่าเช่าห้องพัก', quantity: 1, unitPrice: bf.rent, amount: bf.rent },
-        { dormitoryId: compDorm.id, billId: bill.id, type: 'water', description: `ค่าน้ำประปา (${bf.waterUnits} หน่วย @ ฿${bf.waterRate})`, quantity: bf.waterUnits, unitPrice: bf.waterRate, amount: waterTotal },
-        { dormitoryId: compDorm.id, billId: bill.id, type: 'electric', description: `ค่าไฟฟ้า (${bf.elecUnits} หน่วย @ ฿${bf.elecRate})`, quantity: bf.elecUnits, unitPrice: bf.elecRate, amount: elecTotal },
-        { dormitoryId: compDorm.id, billId: bill.id, type: 'common', description: 'ค่าส่วนกลาง', quantity: 1, unitPrice: bf.common, amount: bf.common },
-        ...(bf.internet > 0 ? [{ dormitoryId: compDorm.id, billId: bill.id, type: 'internet', description: 'ค่าอินเทอร์เน็ต', quantity: 1, unitPrice: bf.internet, amount: bf.internet }] : []),
-        ...(bf.parking > 0 ? [{ dormitoryId: compDorm.id, billId: bill.id, type: 'parking', description: 'ค่าที่จอดรถ', quantity: 1, unitPrice: bf.parking, amount: bf.parking }] : []),
-        ...(bf.surcharges > 0 ? [{ dormitoryId: compDorm.id, billId: bill.id, type: 'other', description: 'ค่าผู้พักอาศัยร่วมเกินโควต้า', quantity: 1, unitPrice: bf.surcharges, amount: bf.surcharges }] : []),
-      ],
-    });
+    const items = [
+      { type: 'rent', description: `ค่าเช่าห้องพัก ${bf.roomNum}`, quantity: 1, unitPrice: bf.rent, amount: bf.rent },
+      { type: 'water', description: `ค่าน้ำประปา (${bf.wUnits} หน่วย @ ฿${bf.wRate})`, quantity: bf.wUnits, unitPrice: bf.wRate, amount: waterTotal },
+      { type: 'electric', description: `ค่าไฟฟ้า (${bf.eUnits} หน่วย @ ฿${bf.eRate})`, quantity: bf.eUnits, unitPrice: bf.eRate, amount: elecTotal },
+      { type: 'common', description: 'ค่าส่วนกลาง', quantity: 1, unitPrice: bf.common, amount: bf.common },
+    ];
 
-    // If paid -> Payment & Receipt
-    if (isPaid) {
+    if (bf.internet > 0) {
+      items.push({ type: 'internet', description: 'ค่าบริการอินเทอร์เน็ตความเร็วสูง', quantity: 1, unitPrice: bf.internet, amount: bf.internet });
+    }
+    if (bf.parking > 0) {
+      items.push({ type: 'parking', description: 'ค่าที่จอดรถยนต์', quantity: 1, unitPrice: bf.parking, amount: bf.parking });
+    }
+    if (bf.surcharge > 0) {
+      items.push({ type: 'co_occupant_surcharge', description: 'ค่าบริการผู้พักอาศัยร่วมเกินกำหนด (3 ท่าน)', quantity: 3, unitPrice: 200, amount: bf.surcharge });
+    }
+
+    for (const it of items) {
+      await prisma.billItem.create({
+        data: {
+          dormitoryId: compDorm.id,
+          billId: bill.id,
+          type: it.type,
+          description: it.description,
+          quantity: it.quantity,
+          unitPrice: it.unitPrice,
+          amount: it.amount,
+        },
+      });
+    }
+
+    // Paid Bill -> Verified Payment & Receipt
+    if (bf.paid) {
       const payment = await prisma.payment.create({
         data: {
           dormitoryId: compDorm.id,
           billId: bill.id,
           tenantId: tenant.id,
-          amount: totalAmount,
+          amount: subtotal,
           method: 'promptpay',
           status: 'verified',
-          paymentDate: new Date('2026-07-28'),
-          reviewedAt: new Date('2026-07-28'),
-          reviewedByUserId: compOwnerUser.id,
+          paymentDate: new Date('2026-07-28T14:30:00Z'),
         },
       });
 
@@ -821,23 +878,24 @@ export async function seedLocal07Data() {
           dormitoryId: compDorm.id,
           billId: bill.id,
           paymentId: payment.id,
-          receiptNumber: bf.rcpNum || `RCP-202607-${String(rcpSeq++).padStart(3, '0')}`,
+          receiptNumber: bf.rcpNum,
           snapshotData: {
-            dormitoryName: compDorm.name,
+            billNumber: bill.billNumber,
+            roomNumber: bf.roomNum,
             tenantName: tenant.displayName,
-            roomNumber: room.roomNumber,
-            totalAmount,
-            issuedDate: '2026-07-28',
+            totalAmount: subtotal,
+            items: items,
           },
-          issuedAt: new Date('2026-07-28'),
+          issuedAt: new Date('2026-07-28T14:35:00Z'),
           isVoided: false,
         },
       });
     }
+
+    bCount++;
   }
 
   console.log(`✅ Comprehensive Owner provisioned: "${compDorm.name}" (18 rooms, 11 occupied, July 2026 billing cycle seeded with paid & unpaid bills, payments, receipts)`);
-
   console.log('\n================================================================================');
   console.log('🎉 LOCAL-07 DATASET SEEDING COMPLETE & FULLY POPULATED');
   console.log('================================================================================\n');
@@ -847,7 +905,7 @@ export async function seedLocal07Data() {
 
 if (process.argv[1] === new URL(import.meta.url).pathname || process.argv[1]?.endsWith('seed.mjs')) {
   seedLocal07Data().catch((err) => {
-    console.error(`❌ [LOCAL-07 SEED FAILED] ${err.message}`);
+    console.error(`\n❌ [LOCAL-07 SEED FAILED] ${err.message}\n`, err);
     process.exit(1);
   });
 }

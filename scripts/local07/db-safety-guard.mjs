@@ -1,12 +1,18 @@
 /**
- * HorPlus LOCAL-07 — Database Safety Guard
+ * HorPlus LOCAL-07 — Hard Safety Boundary Guard (PostgreSQL & Redis)
  * 
- * Verifies that DATABASE_URL and DIRECT_URL strictly target:
- * Host:     127.0.0.1
- * Port:     5455
- * Database: horplus_wave1d_fasttrack_test
+ * Verifies that DATABASE_URL, DIRECT_URL, and REDIS_URL strictly target:
+ * - PostgreSQL Host:     127.0.0.1
+ * - PostgreSQL Port:     5455
+ * - PostgreSQL Database: horplus_wave1d_fasttrack_test
+ * - Redis Host:          127.0.0.1
+ * - Redis Port:          6380
  * 
- * Aborts execution immediately with non-zero exit code if target is non-conforming.
+ * Uses robust URL parsing to reject:
+ * - 'localhost' or external hosts
+ * - Port 5432 (default PostgreSQL) or 6379 (default Redis)
+ * - Databases like 'horplus_pilot' or any non-fasttrack DB
+ * - Malformed URLs or target strings hidden in query parameters
  * 
  * @license Apache-2.0
  */
@@ -20,6 +26,90 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const ROOT_DIR = path.resolve(__dirname, '../..');
 
+export const REQUIRED_SAFETY_CONFIG = {
+  DB_HOST: '127.0.0.1',
+  DB_PORT: '5455',
+  DB_NAME: 'horplus_wave1d_fasttrack_test',
+  REDIS_HOST: '127.0.0.1',
+  REDIS_PORT: '6380',
+};
+
+export function parseAndValidatePostgresUrl(rawUrl, varName = 'DATABASE_URL') {
+  if (!rawUrl || typeof rawUrl !== 'string' || !rawUrl.trim()) {
+    throw new Error(`CRITICAL SAFETY ERROR: ${varName} is missing or empty!`);
+  }
+
+  let parsed;
+  try {
+    parsed = new URL(rawUrl);
+  } catch (err) {
+    throw new Error(`CRITICAL SAFETY ERROR: ${varName} is not a valid URL: ${err.message}`);
+  }
+
+  if (parsed.protocol !== 'postgresql:' && parsed.protocol !== 'postgres:') {
+    throw new Error(`CRITICAL SAFETY ERROR: ${varName} protocol must be 'postgresql:' or 'postgres:'. Found: '${parsed.protocol}'`);
+  }
+
+  if (parsed.hostname !== REQUIRED_SAFETY_CONFIG.DB_HOST) {
+    throw new Error(
+      `CRITICAL SAFETY ERROR: ${varName} host must be strictly '${REQUIRED_SAFETY_CONFIG.DB_HOST}'. Found: '${parsed.hostname}' (localhost and external hosts are forbidden)`
+    );
+  }
+
+  if (parsed.port !== REQUIRED_SAFETY_CONFIG.DB_PORT) {
+    throw new Error(
+      `CRITICAL SAFETY ERROR: ${varName} port must be strictly '${REQUIRED_SAFETY_CONFIG.DB_PORT}'. Found: '${parsed.port || 'default'}' (port 5432 and other ports are forbidden)`
+    );
+  }
+
+  const cleanPath = parsed.pathname.replace(/^\/+/, '');
+  if (cleanPath !== REQUIRED_SAFETY_CONFIG.DB_NAME) {
+    throw new Error(
+      `CRITICAL SAFETY ERROR: ${varName} database must be strictly '${REQUIRED_SAFETY_CONFIG.DB_NAME}'. Found: '${cleanPath}' ('horplus_pilot' and other databases are forbidden)`
+    );
+  }
+
+  return {
+    host: parsed.hostname,
+    port: parsed.port,
+    database: cleanPath,
+  };
+}
+
+export function parseAndValidateRedisUrl(rawUrl, varName = 'REDIS_URL') {
+  if (!rawUrl || typeof rawUrl !== 'string' || !rawUrl.trim()) {
+    throw new Error(`CRITICAL SAFETY ERROR: ${varName} is missing or empty!`);
+  }
+
+  let parsed;
+  try {
+    parsed = new URL(rawUrl);
+  } catch (err) {
+    throw new Error(`CRITICAL SAFETY ERROR: ${varName} is not a valid URL: ${err.message}`);
+  }
+
+  if (parsed.protocol !== 'redis:' && parsed.protocol !== 'rediss:') {
+    throw new Error(`CRITICAL SAFETY ERROR: ${varName} protocol must be 'redis:'. Found: '${parsed.protocol}'`);
+  }
+
+  if (parsed.hostname !== REQUIRED_SAFETY_CONFIG.REDIS_HOST) {
+    throw new Error(
+      `CRITICAL SAFETY ERROR: ${varName} host must be strictly '${REQUIRED_SAFETY_CONFIG.REDIS_HOST}'. Found: '${parsed.hostname}'`
+    );
+  }
+
+  if (parsed.port !== REQUIRED_SAFETY_CONFIG.REDIS_PORT) {
+    throw new Error(
+      `CRITICAL SAFETY ERROR: ${varName} port must be strictly '${REQUIRED_SAFETY_CONFIG.REDIS_PORT}'. Found: '${parsed.port || 'default'}' (port 6379 is forbidden)`
+    );
+  }
+
+  return {
+    host: parsed.hostname,
+    port: parsed.port,
+  };
+}
+
 export function assertSafeDatabaseTarget() {
   const envPath = path.join(ROOT_DIR, 'server/.env');
   if (fs.existsSync(envPath)) {
@@ -28,58 +118,25 @@ export function assertSafeDatabaseTarget() {
 
   const dbUrl = process.env.DATABASE_URL || '';
   const directUrl = process.env.DIRECT_URL || '';
+  const redisUrl = process.env.REDIS_URL || '';
 
-  const REQUIRED_PORT = '5455';
-  const REQUIRED_DB = 'horplus_wave1d_fasttrack_test';
-  const FORBIDDEN_PORTS = ['5432'];
-  const FORBIDDEN_DBS = ['horplus_pilot', 'production'];
+  // 1. Validate DATABASE_URL
+  const dbInfo = parseAndValidatePostgresUrl(dbUrl, 'DATABASE_URL');
 
-  // 1. Check DATABASE_URL
-  if (!dbUrl) {
-    throw new Error('DATABASE_URL is not set!');
-  }
+  // 2. Validate DIRECT_URL
+  const directInfo = parseAndValidatePostgresUrl(directUrl, 'DIRECT_URL');
 
-  for (const fPort of FORBIDDEN_PORTS) {
-    if (dbUrl.includes(`:${fPort}`)) {
-      throw new Error(`CRITICAL SAFETY ERROR: DATABASE_URL targets forbidden port :${fPort}! Allowed port is :${REQUIRED_PORT}`);
-    }
-  }
-
-  for (const fDb of FORBIDDEN_DBS) {
-    if (dbUrl.includes(fDb)) {
-      throw new Error(`CRITICAL SAFETY ERROR: DATABASE_URL targets forbidden database "${fDb}"! Allowed DB is "${REQUIRED_DB}"`);
-    }
-  }
-
-  if (!dbUrl.includes(`:${REQUIRED_PORT}`) || !dbUrl.includes(REQUIRED_DB)) {
-    throw new Error(`CRITICAL SAFETY ERROR: DATABASE_URL must strictly contain :${REQUIRED_PORT} and ${REQUIRED_DB}. Found: "${dbUrl}"`);
-  }
-
-  // 2. Check DIRECT_URL
-  if (!directUrl) {
-    throw new Error('DIRECT_URL is not set!');
-  }
-
-  for (const fPort of FORBIDDEN_PORTS) {
-    if (directUrl.includes(`:${fPort}`)) {
-      throw new Error(`CRITICAL SAFETY ERROR: DIRECT_URL targets forbidden port :${fPort}! Allowed port is :${REQUIRED_PORT}`);
-    }
-  }
-
-  for (const fDb of FORBIDDEN_DBS) {
-    if (directUrl.includes(fDb)) {
-      throw new Error(`CRITICAL SAFETY ERROR: DIRECT_URL targets forbidden database "${fDb}"! Allowed DB is "${REQUIRED_DB}"`);
-    }
-  }
-
-  if (!directUrl.includes(`:${REQUIRED_PORT}`) || !directUrl.includes(REQUIRED_DB)) {
-    throw new Error(`CRITICAL SAFETY ERROR: DIRECT_URL must strictly contain :${REQUIRED_PORT} and ${REQUIRED_DB}. Found: "${directUrl}"`);
+  // 3. Validate REDIS_URL if provided
+  let redisInfo = null;
+  if (redisUrl) {
+    redisInfo = parseAndValidateRedisUrl(redisUrl, 'REDIS_URL');
   }
 
   return {
-    database: REQUIRED_DB,
-    port: REQUIRED_PORT,
-    host: '127.0.0.1',
+    database: dbInfo.database,
+    port: dbInfo.port,
+    host: dbInfo.host,
+    redisPort: redisInfo ? redisInfo.port : REQUIRED_SAFETY_CONFIG.REDIS_PORT,
     safe: true,
   };
 }
@@ -88,7 +145,8 @@ export function assertSafeDatabaseTarget() {
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   try {
     const info = assertSafeDatabaseTarget();
-    console.log(`✅ [SAFETY GUARD PASS] Target database verified: ${info.host}:${info.port}/${info.database}`);
+    console.log(`✅ [SAFETY GUARD PASS] Target PostgreSQL: ${info.host}:${info.port}/${info.database}`);
+    console.log(`✅ [SAFETY GUARD PASS] Target Redis:      ${info.host}:${info.redisPort}`);
   } catch (err) {
     console.error(`❌ [SAFETY GUARD VIOLATION] ${err.message}`);
     process.exit(1);

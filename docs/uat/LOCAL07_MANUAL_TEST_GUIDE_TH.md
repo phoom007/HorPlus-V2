@@ -1,6 +1,7 @@
 # HorPlus LOCAL-07 — คู่มือการทดสอบระบบด้วยตนเองสำหรับ Product Owner (Manual UAT Guide)
 
-> **สถานะปัจจุบัน:** `LOCAL-07 — USER MANUAL UAT READY / IN PROGRESS` *(รอ Product Owner เข้าใช้งานและประเมินผล)*
+> **สถานะปัจจุบัน:** `LOCAL-07 — USER MANUAL UAT READY / IN PROGRESS`  
+> *(ชุดข้อมูลและสภาพแวดล้อม UAT พร้อมสำหรับการทดสอบโดย Product Owner — ยังไม่ทำการ SEALED)*
 
 ---
 
@@ -9,7 +10,7 @@
 LOCAL-07 จัดเตรียมชุดข้อมูลทดสอบเสมือนจริงที่แม่นยำ (Deterministic UAT Dataset) พร้อมกลไกความปลอดภัยและระบบคำนวณอิสระ (Oracle) เพื่อให้ **Product Owner** สามารถเปิดใช้งาน HorPlus บนเว็บเบราว์เซอร์จริงในเครื่องตนเอง เพื่อประเมิน:
 
 1. **UX/UI & Flow:** ความสะดวกในการใช้งาน ความสวยงาม และความลื่นไหลของหน้าจอ
-2. **Onboarding & Settings Persistence:** ข้อมูลจากการลงทะเบียนหอพักใหม่ถูกบันทึกและแสดงผลในเมนูตั้งค่าถูกต้องหรือไม่ และคงอยู่หลังกดรีเฟรช (F5) หรือไม่
+2. **Onboarding & Settings Persistence:** ข้อมูลจากการลงทะเบียนหอพักใหม่ถูกบันทึกผ่าน Service จริง (`DormitoryProvisioningService`, `SignatureStorageService`) และแสดงผลในเมนูตั้งค่าถูกต้องหรือไม่
 3. **Dashboard & Financial Accuracy:** ตัวเลขสรุป KPI, ยอดค้างชำระ, และรายรับสอดคล้องกับตาราง Oracle หรือไม่
 4. **Billing & Accounting Lifecycle:** การออกบิล, การคำนวณค่าน้ำ-ค่าไฟ, ค่าผู้พักอาศัยร่วม, การรับชำระเงิน, และการออกใบเสร็จ
 5. **Contract & Multi-Persona Operations:** การต่อสัญญา, การย้ายออก/ตัดรอบเงินประกัน, สิทธิ์การใช้งานของ Staff (Manager/Tech) และ Tenant Portal
@@ -18,15 +19,20 @@ LOCAL-07 จัดเตรียมชุดข้อมูลทดสอบ�
 
 ## 🚀 1. ขั้นตอนการเริ่มต้นใช้งานอย่างรวดเร็ว (Quick Start)
 
-### ขั้นตอนที่ 1: ตรวจสอบและสตาร์ต Service ฐานข้อมูล
-เปิด Terminal และตรวจสอบว่า Docker หรือ Local PostgreSQL & Redis รันอยู่บนพอร์ตทดสอบ:
-- **PostgreSQL:** `127.0.0.1:5455` (Database: `horplus_wave1d_fasttrack_test`)
-- **Redis:** `127.0.0.1:6380`
+### ขั้นตอนที่ 1: ตรวจสอบและสตาร์ต Service ฐานข้อมูล (Windows Pilot Compose)
+เปิด PowerShell / Terminal และสตาร์ต PostgreSQL และ Redis ด้วยคำสั่ง UAT Infra:
 
 ```bash
-# หากใช้ docker-compose ในโปรเจกต์
-npm run db:up
+# สตาร์ต PostgreSQL (5455) และ Redis (6380) บน docker-compose.windows-pilot.yml
+npm run uat:infra:up
+
+# ตรวจสอบสถานะคอนเทนเนอร์
+npm run uat:infra:status
 ```
+
+> 🔒 **ความปลอดภัยฐานข้อมูล:** ระบบมี Database Safety Guard ตรวจสอบ `DATABASE_URL` อย่างเข้มงวด โดยจะอนุญาตให้รันเฉพาะพอร์ต `5455` และฐานข้อมูล `horplus_wave1d_fasttrack_test` เท่านั้น
+
+---
 
 ### ขั้นตอนที่ 2: สตาร์ต Backend API Server และ Frontend Dev Server
 เปิด Terminal แยก 2 หน้าต่าง:
@@ -43,6 +49,8 @@ npm run dev
 # รันที่ http://127.0.0.1:5173
 ```
 
+---
+
 ### ขั้นตอนที่ 3: รีเฟรชชุดข้อมูล UAT ด้วยคำสั่งเดียว (Single-Command Refresh)
 เปิด Terminal ที่ 3 แล้วรันคำสั่ง:
 ```bash
@@ -52,23 +60,51 @@ npm run uat:refresh
 
 ---
 
+### ขั้นตอนที่ 4: เปิดเว็บเบราว์เซอร์เข้าใช้งานแต่ละบทบาทอัตโนมัติ (Browser Launcher)
+คุณสามารถเปิดเบราว์เซอร์พร้อมล็อกอินเข้าใช้งานในแต่ละบทบาทได้ทันทีด้วยคำสั่ง:
+
+```bash
+# 1. เจ้าของหอพักใหม่ (Fresh Owner)
+npm run uat:open:fresh
+# หรือ: npm run uat:open -- fresh-owner
+
+# 2. เจ้าของหอพักเต็มรูปแบบ 18 ห้อง (Comprehensive Owner)
+npm run uat:open:owner
+# หรือ: npm run uat:open -- comp-owner
+
+# 3. ผู้เช่าห้อง 101 นายสมชาย (Tenant Somchai)
+npm run uat:open:tenant
+# หรือ: npm run uat:open -- tenant-somchai
+
+# 4. ผู้จัดการหอพัก (Manager Pranee)
+npm run uat:open:manager
+# หรือ: npm run uat:open -- manager
+
+# 5. ช่างเทคนิค (Tech Surachai)
+npm run uat:open:tech
+# หรือ: npm run uat:open -- tech
+```
+
+---
+
 ## 🔑 2. ตารางข้อมูลการเข้าสู่ระบบ (Manual Access Sheet)
 
-| ลำดับ | บทบาท (Role) | ชื่อผู้ใช้งาน | รายละเอียด / วัตถุประสงค์การทดสอบ | URL สำหรับเข้าใช้งาน | Session State File |
+| ลำดับ | บทบาท (Role) | ชื่อผู้ใช้งาน | รายละเอียด / วัตถุประสงค์การทดสอบ | URL สำหรับเข้าใช้งาน | คำสั่งเปิดเบราว์เซอร์ |
 | :---: | :--- | :--- | :--- | :--- | :--- |
-| **1** | **Fresh Owner** *(เจ้าของใหม่)* | `เจ้าของทดสอบ Fresh Owner` | เพิ่งเสร็จสิ้น Onboarding มี 4 ห้องว่าง ตรวจสอบการบันทึกข้อมูลและหน้า Settings | [http://127.0.0.1:5173/owner/dashboard](http://127.0.0.1:5173/owner/dashboard) | `.local07-sessions/fresh-owner.json` |
-| **2** | **Comprehensive Owner** *(เจ้าของหอพักเต็มรูปแบบ)* | `เจ้าของทดสอบ Comprehensive Owner` | หอพักขนาด 18 ห้อง (2 อาคาร) มีข้อมูลครบทุกสถานะบิล สัญญา มิเตอร์ ช่าง และประกาศ | [http://127.0.0.1:5173/owner/dashboard](http://127.0.0.1:5173/owner/dashboard) | `.local07-sessions/comp-owner.json` |
-| **3** | **Tenant** *(ผู้เช่า)* | `นายสมชาย ใจดี` (ห้อง 101) | ตรวจสอบ Tenant Portal, ดูบิลกรกฎาคม 2569, ดูใบเสร็จ, ประวัติสัญญา, และแจ้งซ่อม | [http://127.0.0.1:5173/tenant/dashboard](http://127.0.0.1:5173/tenant/dashboard) | `.local07-sessions/tenant-somchai.json` |
-| **4** | **Staff Manager** *(ผู้จัดการ)* | `นางสาวปราณี ผู้จัดการ` | สิทธิ์จัดการห้องพัก ผู้เช่า บิล การรับชำระเงิน และรายงาน (ไม่มีสิทธิ์ลบหอพัก) | [http://127.0.0.1:5173/owner/dashboard](http://127.0.0.1:5173/owner/dashboard) | `.local07-sessions/manager.json` |
-| **5** | **Staff Tech** *(ช่างเทคนิค)* | `นายสุรชัย ช่างเทคนิค` | สิทธิ์ดูงานซ่อมบำรุง บันทึกมิเตอร์ (ไม่มีสิทธิ์ดูการเงิน/บิล) | [http://127.0.0.1:5173/owner/dashboard](http://127.0.0.1:5173/owner/dashboard) | `.local07-sessions/tech.json` |
+| **1** | **Fresh Owner** *(เจ้าของใหม่)* | `เจ้าของทดสอบ Fresh Owner` | เพิ่งเสร็จสิ้น Onboarding มี 4 ห้องว่าง ตรวจสอบการบันทึกข้อมูลและหน้า Settings | [http://127.0.0.1:5173/owner/dashboard](http://127.0.0.1:5173/owner/dashboard) | `npm run uat:open:fresh` |
+| **2** | **Comprehensive Owner** *(เจ้าของหอพักเต็มรูปแบบ)* | `เจ้าของทดสอบ Comprehensive Owner` | หอพักขนาด 18 ห้อง (2 อาคาร) มีข้อมูลครบทุกสถานะบิล สัญญา มิเตอร์ ช่าง และประกาศ | [http://127.0.0.1:5173/owner/dashboard](http://127.0.0.1:5173/owner/dashboard) | `npm run uat:open:owner` |
+| **3** | **Tenant** *(ผู้เช่า)* | `นายสมชาย ใจดี` (ห้อง 101) | ตรวจสอบ Tenant Portal, ดูบิลกรกฎาคม 2569, ดูใบเสร็จ, ประวัติสัญญา, และแจ้งซ่อม | [http://127.0.0.1:5173/tenant/dashboard](http://127.0.0.1:5173/tenant/dashboard) | `npm run uat:open:tenant` |
+| **4** | **Staff Manager** *(ผู้จัดการ)* | `นางสาวปราณี ผู้จัดการ` | สิทธิ์จัดการห้องพัก ผู้เช่า บิล การรับชำระเงิน และรายงาน (ไม่มีสิทธิ์ลบหอพัก) | [http://127.0.0.1:5173/owner/dashboard](http://127.0.0.1:5173/owner/dashboard) | `npm run uat:open:manager` |
+| **5** | **Staff Tech** *(ช่างเทคนิค)* | `นายสุรชัย ช่างเทคนิค` | สิทธิ์ดูงานซ่อมบำรุง บันทึกมิเตอร์ (ไม่มีสิทธิ์ดูการเงิน/บิล) | [http://127.0.0.1:5173/owner/dashboard](http://127.0.0.1:5173/owner/dashboard) | `npm run uat:open:tech` |
 
 ---
 
 ## 📋 3. รายการตรวจสอบตามลำดับ (Step-by-Step Scenario Review)
 
 ### หมวดที่ 1: ตรวจสอบ Fresh Owner & การคงอยู่ของข้อมูลตั้งค่า (Settings Persistence)
+> 📄 **เอกสารอ้างอิงอย่างละเอียด:** ดู [docs/uat/LOCAL07_FRESH_OWNER_PERSISTENCE_MAP_TH.md](file:///C:/Projects/HorPlus-V2/docs/uat/LOCAL07_FRESH_OWNER_PERSISTENCE_MAP_TH.md)
 1. **เข้าสู่ระบบในฐานะ Fresh Owner:**
-   - เปิดเบราว์เซอร์และใช้ Session `fresh-owner`
+   - รัน `npm run uat:open:fresh`
    - ตรวจสอบว่าระบบนำทางเข้าสู่หน้า `/owner/dashboard` ของ "หอพัก HorPlus UAT Fresh Owner"
 2. **ตรวจสอบข้อมูลหอพักและห้องพักเริ่มต้น:**
    - หน้าแดชบอร์ดต้องแสดง: จำนวนห้องทั้งหมด 4 ห้อง (ว่าง 100%)
@@ -79,6 +115,7 @@ npm run uat:refresh
      - ค่าน้ำ: ฿18.00 / ยูนิต, ค่าไฟ: ฿7.00 / ยูนิต
      - ค่าส่วนกลาง: ฿150.00, ค่าเน็ต: ฿200.00, ค่าจอดรถ: ฿500.00
      - ช่องทางชำระเงิน: พร้อมเพย์เบอร์ `081-999-8888` / ธนาคารกสิกรไทย `1234567890`
+     - แพ็กเกจ: ทดลองใช้งาน (Trial) รวม ~90 วันจากการใช้โค้ด `HORPLUS`
 4. **ทดสอบแก้ไขข้อมูลและกด F5:**
    - ทดลองแก้ไขชื่อหอพักหรือปรับอัตราค่าน้ำเป็น ฿19.00 -> กดบันทึก -> กดปุ่ม F5 (Reload)
    - ผลที่ต้องได้: ข้อมูลที่แก้ไขต้องแสดงผลถูกต้อง ไม่สูญหาย และไม่คืนค่าเดิม
@@ -87,7 +124,7 @@ npm run uat:refresh
 
 ### หมวดที่ 2: ตรวจสอบ Comprehensive Owner & ความถูกต้องของ Dashboard KPIs
 1. **เข้าสู่ระบบในฐานะ Comprehensive Owner:**
-   - ใช้ Session `comp-owner` เปิดหน้า `/owner/dashboard`
+   - รัน `npm run uat:open:owner` เปิดหน้า `/owner/dashboard`
 2. **เทียบตัวเลข Dashboard กับ Calculation Oracle (รอบบิล ก.ค. 2569):**
    - **จำนวนห้องพักทั้งหมด:** `18 ห้อง` (อาคารชาญวิทย์ 16 ห้อง + อาคารสมบูรณ์ 2 ห้อง)
    - **ห้องที่มีผู้พัก (Occupied):** `11 ห้อง`
@@ -126,8 +163,7 @@ npm run uat:refresh
 ---
 
 ### หมวดที่ 5: ตรวจสอบ Tenant Portal (ผู้เช่า)
-1. **เข้าสู่ระบบด้วย Session `tenant-somchai`:**
-   - เปิดหน้า [http://127.0.0.1:5173/tenant/dashboard](http://127.0.0.1:5173/tenant/dashboard)
+1. **เข้าสู่ระบบด้วยคำสั่ง:** `npm run uat:open:tenant`
 2. **ตรวจสอบมุมมองผู้เช่า:**
    - แสดงข้อมูลห้อง 101, ชื่อผู้เช่า "นายสมชาย ใจดี", ข้อมูลผู้พักร่วม "นางสมหญิง ใจดี"
    - บิลเดือน ก.ค. 2569 แสดงสถานะ "ชำระแล้ว" พร้อมปุ่มเปิดดูใบเสร็จ `RCP-202607-001`
@@ -136,9 +172,9 @@ npm run uat:refresh
 ---
 
 ### หมวดที่ 6: ตรวจสอบสิทธิ์การใช้งานของ Staff (Manager & Tech Roles)
-1. **Staff Manager (`manager`):**
+1. **Staff Manager (`npm run uat:open:manager`):**
    - เข้าหน้าแดชบอร์ด จัดการห้องพัก บิล และดูรายงานได้ แต่ไม่สามารถเข้าถึงการตั้งค่าระดับระบบเจ้าของได้
-2. **Staff Tech (`tech`):**
+2. **Staff Tech (`npm run uat:open:tech`):**
    - เข้าดูรายการแจ้งซ่อม (เห็นงานซ่อมแอร์ห้อง 206) และจดมิเตอร์ได้ แต่ไม่สามารถเข้าถึงหน้าการเงิน บิล หรือยอดรายรับได้
 
 ---
@@ -153,7 +189,17 @@ npm run uat:refresh
 
 ---
 
-## 📝 4. แบบฟอร์มสรุปผลการประเมินโดย Product Owner (Review Signoff Sheet)
+## 🔍 4. ข้อมูลข้อจำกัดและการตัดสินใจเชิงผลิตภัณฑ์ (Documented Product Gaps)
+
+| รหัส Gap | ฟังก์ชันงาน (Feature Area) | พฤติกรรมปัจจุบันในระบบ (Current Behavior) | แนวทางพัฒนาในอนาคต (Post LOCAL-07 Backlog) |
+|---|---|---|---|
+| **GAP-01** | **การส่งออกรายงาน (Reports Export)** | ส่งออกรายงานในรูปแบบ **CSV พร้อม UTF-8 BOM** เพื่อให้เปิดใน Excel ได้ถูกต้อง | พัฒนา Export เป็นไฟล์ `.xlsx` (Native Excel Workbook) ในเฟสถัดไป |
+| **GAP-02** | **การออกใบเสร็จรับเงิน (Receipt Printing)** | ใช้หน้าต่างพิมพ์ใบเสร็จผ่านเบราว์เซอร์ (**HTML Print View / CSS Page Media**) | พัฒนาการสร้างไฟล์ Binary PDF Direct Download ทางฝั่ง Backend |
+| **GAP-03** | **การตั้งค่า LINE Official Account** | ในหน้า Onboarding มีปุ่มทางเลือก **"ข้าม / ตั้งค่าภายหลัง"** สำหรับทดสอบ Local Dev | การบังคับเชื่อมต่อ Webhook จริงสำหรับ Production Deployment |
+
+---
+
+## 📝 5. แบบฟอร์มสรุปผลการประเมินโดย Product Owner (Review Signoff Sheet)
 
 Product Owner สามารถทำเครื่องหมาย `[x]` ในช่องที่ผ่านการประเมิน:
 
@@ -170,4 +216,4 @@ Product Owner สามารถทำเครื่องหมาย `[x]` �
 - [ ] **11. Export Functionality (CSV & Contract PDF):** การส่งออก CSV รายงาน และการสร้าง PDF สัญญาเช่าภาษาไทยใช้งานได้
 
 ---
-*จัดทำขึ้นเพื่อให้ Product Owner ทดสอบระบบอย่างอิสระและครบถ้วนสมบูรณ์ — HorPlus Local UAT Sandbox*
+*สถานะ: `LOCAL-07 — USER MANUAL UAT READY / IN PROGRESS` (รอ Product Owner ทดสอบและประเมินผล)*
