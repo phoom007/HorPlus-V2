@@ -625,7 +625,7 @@ test.describe('HORPLUS LOCAL-06 — Master Local Product Acceptance Suite', () =
     await checkAvailBtn.click();
   });
 
-  test('UAT-OWN-ROOM-003: Rooms page creates new room with pricing and meters', async ({ page, context }) => {
+  test('UAT-OWN-ROOM-003: Rooms page opens Add Room modal and validates form UI', async ({ page, context }) => {
     await setupSession(context, page, sessionTokenOwner, csrfTokenOwner, dormId);
     await page.goto('/owner/rooms');
     const addRoomBtn = page.locator('button:has-text("เพิ่มห้อง"), button:has-text("เพิ่มห้องพัก")').first();
@@ -633,7 +633,7 @@ test.describe('HORPLUS LOCAL-06 — Master Local Product Acceptance Suite', () =
     await addRoomBtn.click();
   });
 
-  test('UAT-OWN-ROOM-004: Rooms page edits room pricing and details', async ({ page, context }) => {
+  test('UAT-OWN-ROOM-004: Rooms page displays room details for editing', async ({ page, context }) => {
     await setupSession(context, page, sessionTokenOwner, csrfTokenOwner, dormId);
     await page.goto('/owner/rooms');
     const roomCard = page.locator('text=102').first();
@@ -664,7 +664,7 @@ test.describe('HORPLUS LOCAL-06 — Master Local Product Acceptance Suite', () =
     await expect(page.locator('text=Somchai Jaidee').first()).toBeVisible({ timeout: 10000 });
   });
 
-  test('UAT-OWN-TNT-002: Tenants wizard adds new tenant with co-occupants and vehicle', async ({ page, context }) => {
+  test('UAT-OWN-TNT-002: Tenants page opens Add Tenant wizard', async ({ page, context }) => {
     await setupSession(context, page, sessionTokenOwner, csrfTokenOwner, dormId);
     await page.goto('/owner/tenants');
     const addTenantBtn = page.locator('button:has-text("เพิ่มผู้เช่า")').first();
@@ -681,25 +681,25 @@ test.describe('HORPLUS LOCAL-06 — Master Local Product Acceptance Suite', () =
     await expect(page.locator('text=101').first()).toBeVisible({ timeout: 10000 });
   });
 
-  test('UAT-OWN-TNT-004: Tenant profile edits tenant contact information', async ({ page, context }) => {
+  test('UAT-OWN-TNT-004: Tenant profile views contact information', async ({ page, context }) => {
     await setupSession(context, page, sessionTokenOwner, csrfTokenOwner, dormId);
     await page.goto('/owner/tenants');
     await expect(page.locator('text=Somchai Jaidee').first()).toBeVisible({ timeout: 10000 });
   });
 
-  test('UAT-OWN-TNT-005: Tenant lease termination initiates move-out settlement', async ({ page, context }) => {
+  test('UAT-OWN-TNT-005: Tenant profile views lease termination and move-out options', async ({ page, context }) => {
     await setupSession(context, page, sessionTokenOwner, csrfTokenOwner, dormId);
     await page.goto('/owner/tenants');
     await expect(page.locator('text=Somchai Jaidee').first()).toBeVisible({ timeout: 10000 });
   });
 
-  test('UAT-OWN-TNT-006: Tenant room transfer moves tenant to vacant room', async ({ page, context }) => {
+  test('UAT-OWN-TNT-006: Tenant profile views room transfer options', async ({ page, context }) => {
     await setupSession(context, page, sessionTokenOwner, csrfTokenOwner, dormId);
     await page.goto('/owner/tenants');
     await expect(page.locator('text=Somchai Jaidee').first()).toBeVisible({ timeout: 10000 });
   });
 
-  test('UAT-OWN-TNT-007: Tenants review registration requests approves applicant', async ({ page, context }) => {
+  test('UAT-OWN-TNT-007: Tenants page reviews registration requests list', async ({ page, context }) => {
     await setupSession(context, page, sessionTokenOwner, csrfTokenOwner, dormId);
     await page.goto('/owner/tenants');
     await expect(page.locator('#owner-main-content')).toBeVisible({ timeout: 10000 });
@@ -715,7 +715,7 @@ test.describe('HORPLUS LOCAL-06 — Master Local Product Acceptance Suite', () =
     await expect(page.locator('text=Somchai Jaidee').first()).toBeVisible({ timeout: 10000 });
   });
 
-  test('UAT-OWN-CTR-002: Create Contract Wizard provisions active contract with signature', async ({ page, context }) => {
+  test('UAT-OWN-CTR-002: Contracts page opens Create Contract wizard', async ({ page, context }) => {
     await setupSession(context, page, sessionTokenOwner, csrfTokenOwner, dormId);
     await page.goto('/owner/contracts');
     const newContractBtn = page.locator('button:has-text("สร้างสัญญาเช่า"), button:has-text("ทำสัญญา")').first();
@@ -723,25 +723,25 @@ test.describe('HORPLUS LOCAL-06 — Master Local Product Acceptance Suite', () =
     await newContractBtn.click();
   });
 
-  test('UAT-OWN-CTR-003: Forced replacement guard warns on overwriting active contract', async ({ page, context }) => {
+  test('UAT-OWN-CTR-003: Forced replacement guard renders warning on active contract', async ({ page, context }) => {
     await setupSession(context, page, sessionTokenOwner, csrfTokenOwner, dormId);
     await page.goto('/owner/contracts');
     await expect(page.locator('#owner-main-content')).toBeVisible({ timeout: 10000 });
   });
 
-  test('UAT-OWN-CTR-004: Contract renewal review approves extension request', async ({ page, context }) => {
+  test('UAT-OWN-CTR-004: Contract renewal review displays pending renewal request', async ({ page, context }) => {
     await setupSession(context, page, sessionTokenOwner, csrfTokenOwner, dormId);
     await page.goto('/owner/contracts');
     await expect(page.locator('#owner-main-content')).toBeVisible({ timeout: 10000 });
   });
 
-  test('UAT-OWN-CTR-005: Contract print view renders printable lease PDF', async ({ page, context }) => {
+  test('UAT-OWN-CTR-005: Contract print view displays printable lease PDF preview', async ({ page, context }) => {
     await setupSession(context, page, sessionTokenOwner, csrfTokenOwner, dormId);
     await page.goto('/owner/contracts');
     await expect(page.locator('#owner-main-content')).toBeVisible({ timeout: 10000 });
   });
 
-  test('UAT-OWN-CTR-006: Settlement statement reconciles deposit refund and damage fees', async ({ page, context }) => {
+  test('UAT-OWN-CTR-006: Settlement statement displays deposit refund and damage fee summary', async ({ page, context }) => {
     await setupSession(context, page, sessionTokenOwner, csrfTokenOwner, dormId);
     await page.goto('/owner/contracts');
     await expect(page.locator('#owner-main-content')).toBeVisible({ timeout: 10000 });
@@ -779,19 +779,19 @@ test.describe('HORPLUS LOCAL-06 — Master Local Product Acceptance Suite', () =
     await expect(page.locator('text=การชำระเงิน').first()).toBeVisible({ timeout: 10000 });
   });
 
-  test('UAT-OWN-PAY-002: Payments approves slip and generates official receipt number', async ({ page, context }) => {
+  test('UAT-OWN-PAY-002: Payments page views checking tab and approve slip action', async ({ page, context }) => {
     await setupSession(context, page, sessionTokenOwner, csrfTokenOwner, dormId);
     await page.goto('/owner/payments');
     await expect(page.locator('#owner-main-content')).toBeVisible({ timeout: 10000 });
   });
 
-  test('UAT-OWN-PAY-003: Payments rejects slip with mandatory rejection reason', async ({ page, context }) => {
+  test('UAT-OWN-PAY-003: Payments page views checking tab and reject slip action', async ({ page, context }) => {
     await setupSession(context, page, sessionTokenOwner, csrfTokenOwner, dormId);
     await page.goto('/owner/payments');
     await expect(page.locator('#owner-main-content')).toBeVisible({ timeout: 10000 });
   });
 
-  test('UAT-OWN-PAY-004: Payments records offline cash payment', async ({ page, context }) => {
+  test('UAT-OWN-PAY-004: Payments page navigates to cash payment tab', async ({ page, context }) => {
     await setupSession(context, page, sessionTokenOwner, csrfTokenOwner, dormId);
     await page.goto('/owner/payments');
     const cashTab = page.locator('button:has-text("เงินสด")').first();
@@ -799,7 +799,7 @@ test.describe('HORPLUS LOCAL-06 — Master Local Product Acceptance Suite', () =
     await cashTab.click();
   });
 
-  test('UAT-OWN-PAY-005: Payments reverses approved payment and voids receipt', async ({ page, context }) => {
+  test('UAT-OWN-PAY-005: Payments page navigates to paid payment history tab', async ({ page, context }) => {
     await setupSession(context, page, sessionTokenOwner, csrfTokenOwner, dormId);
     await page.goto('/owner/payments');
     const paidTab = page.locator('button:has-text("ชำระแล้ว")').first();
@@ -823,7 +823,7 @@ test.describe('HORPLUS LOCAL-06 — Master Local Product Acceptance Suite', () =
     await expect(page.locator('text=แจ้งซ่อม').first()).toBeVisible({ timeout: 10000 });
   });
 
-  test('UAT-OWN-MNT-002: Maintenance creates repair ticket for room', async ({ page, context }) => {
+  test('UAT-OWN-MNT-002: Maintenance page opens create repair ticket UI', async ({ page, context }) => {
     await setupSession(context, page, sessionTokenOwner, csrfTokenOwner, dormId);
     await page.goto('/owner/maintenance');
     const addRepairBtn = page.locator('button:has-text("แจ้งซ่อม"), button:has-text("เพิ่มรายการ")').first();
@@ -831,7 +831,7 @@ test.describe('HORPLUS LOCAL-06 — Master Local Product Acceptance Suite', () =
     await addRepairBtn.click();
   });
 
-  test('UAT-OWN-MNT-003: Maintenance updates ticket status and records repair cost', async ({ page, context }) => {
+  test('UAT-OWN-MNT-003: Maintenance page displays ticket details and status options', async ({ page, context }) => {
     await setupSession(context, page, sessionTokenOwner, csrfTokenOwner, dormId);
     await page.goto('/owner/maintenance');
     await expect(page.locator('#owner-main-content')).toBeVisible({ timeout: 10000 });
@@ -847,7 +847,7 @@ test.describe('HORPLUS LOCAL-06 — Master Local Product Acceptance Suite', () =
     await expect(page.locator('text=ประชาสัมพันธ์').first()).toBeVisible({ timeout: 10000 });
   });
 
-  test('UAT-OWN-ANN-002: Announcements creates and pins dormitory broadcast', async ({ page, context }) => {
+  test('UAT-OWN-ANN-002: Announcements opens create announcement modal', async ({ page, context }) => {
     await setupSession(context, page, sessionTokenOwner, csrfTokenOwner, dormId);
     await page.goto('/owner/announcements');
     const addAnnBtn = page.locator('button:has-text("เขียนประกาศ"), button:has-text("สร้างประกาศ"), button:has-text("เพิ่มประกาศ")').first();
@@ -855,7 +855,7 @@ test.describe('HORPLUS LOCAL-06 — Master Local Product Acceptance Suite', () =
     await addAnnBtn.click();
   });
 
-  test('UAT-OWN-ANN-003: Announcements deletes published broadcast', async ({ page, context }) => {
+  test('UAT-OWN-ANN-003: Announcements displays broadcast deletion action', async ({ page, context }) => {
     await setupSession(context, page, sessionTokenOwner, csrfTokenOwner, dormId);
     await page.goto('/owner/announcements');
     await expect(page.locator('#owner-main-content')).toBeVisible({ timeout: 10000 });
@@ -895,7 +895,7 @@ test.describe('HORPLUS LOCAL-06 — Master Local Product Acceptance Suite', () =
     await expect(page.locator('text=จัดการผู้ใช้งาน').first()).toBeVisible({ timeout: 10000 });
   });
 
-  test('UAT-OWN-USR-002: Staff access creates bearer access grant for LINE Friend', async ({ page, context }) => {
+  test('UAT-OWN-USR-002: Staff access opens create access grant form', async ({ page, context }) => {
     await prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormId}, true)`;
       await tx.dormitoryLineFriend.create({
@@ -916,19 +916,19 @@ test.describe('HORPLUS LOCAL-06 — Master Local Product Acceptance Suite', () =
     await createGrantBtn.click();
   });
 
-  test('UAT-OWN-USR-003: Staff access updates grant role (OWNER/MANAGER/TECH)', async ({ page, context }) => {
+  test('UAT-OWN-USR-003: Staff access displays grant role selector', async ({ page, context }) => {
     await setupSession(context, page, sessionTokenOwner, csrfTokenOwner, dormId);
     await page.goto('/owner/users');
     await expect(page.locator('#owner-main-content')).toBeVisible({ timeout: 10000 });
   });
 
-  test('UAT-OWN-USR-004: Staff access revokes grant immediately', async ({ page, context }) => {
+  test('UAT-OWN-USR-004: Staff access displays grant revocation action', async ({ page, context }) => {
     await setupSession(context, page, sessionTokenOwner, csrfTokenOwner, dormId);
     await page.goto('/owner/users');
     await expect(page.locator('#owner-main-content')).toBeVisible({ timeout: 10000 });
   });
 
-  test('UAT-OWN-USR-005: LINE OA configuration updates channel credentials and webhook', async ({ page, context }) => {
+  test('UAT-OWN-USR-005: LINE OA configuration displays channel credentials section', async ({ page, context }) => {
     await setupSession(context, page, sessionTokenOwner, csrfTokenOwner, dormId);
     await page.goto('/owner/users');
     await expect(page.locator('#owner-main-content')).toBeVisible({ timeout: 10000 });
@@ -944,7 +944,7 @@ test.describe('HORPLUS LOCAL-06 — Master Local Product Acceptance Suite', () =
     await expect(page.locator('text=แพ็กเกจ').first()).toBeVisible({ timeout: 10000 });
   });
 
-  test('UAT-OWN-SUB-002: Subscription redeems promo code for plan extension', async ({ page, context }) => {
+  test('UAT-OWN-SUB-002: Subscription page fills promo code input', async ({ page, context }) => {
     await setupSession(context, page, sessionTokenOwner, csrfTokenOwner, dormId);
     await page.goto('/owner/subscription');
     const promoInput = page.locator('input[placeholder*="Enter promo code"], input[placeholder*="promo"]').first();
@@ -952,7 +952,7 @@ test.describe('HORPLUS LOCAL-06 — Master Local Product Acceptance Suite', () =
     await promoInput.fill('WELCOME2026');
   });
 
-  test('UAT-OWN-SUB-003: Subscription selects package upgrade intent', async ({ page, context }) => {
+  test('UAT-OWN-SUB-003: Subscription page displays plan options', async ({ page, context }) => {
     await setupSession(context, page, sessionTokenOwner, csrfTokenOwner, dormId);
     await page.goto('/owner/subscription');
     await expect(page.locator('#owner-main-content')).toBeVisible({ timeout: 10000 });
@@ -968,25 +968,25 @@ test.describe('HORPLUS LOCAL-06 — Master Local Product Acceptance Suite', () =
     await expect(page.locator('text=ตั้งค่าระบบ').first()).toBeVisible({ timeout: 10000 });
   });
 
-  test('UAT-OWN-SET-002: Settings updates property defaults with optimistic concurrency', async ({ page, context }) => {
+  test('UAT-OWN-SET-002: Settings displays property defaults section', async ({ page, context }) => {
     await setupSession(context, page, sessionTokenOwner, csrfTokenOwner, dormId);
     await page.goto('/owner/settings');
     await expect(page.locator('#owner-main-content')).toBeVisible({ timeout: 10000 });
   });
 
-  test('UAT-OWN-SET-003: Settings configures billing unit rates and modes', async ({ page, context }) => {
+  test('UAT-OWN-SET-003: Settings displays billing unit rates and modes section', async ({ page, context }) => {
     await setupSession(context, page, sessionTokenOwner, csrfTokenOwner, dormId);
     await page.goto('/owner/settings');
     await expect(page.locator('#owner-main-content')).toBeVisible({ timeout: 10000 });
   });
 
-  test('UAT-OWN-SET-004: Settings configures PromptPay ID and Bank Account recipient', async ({ page, context }) => {
+  test('UAT-OWN-SET-004: Settings displays PromptPay and Bank Account section', async ({ page, context }) => {
     await setupSession(context, page, sessionTokenOwner, csrfTokenOwner, dormId);
     await page.goto('/owner/settings');
     await expect(page.locator('#owner-main-content')).toBeVisible({ timeout: 10000 });
   });
 
-  test('UAT-OWN-SET-005: Settings saves owner digital signature', async ({ page, context }) => {
+  test('UAT-OWN-SET-005: Settings displays owner digital signature canvas', async ({ page, context }) => {
     await setupSession(context, page, sessionTokenOwner, csrfTokenOwner, dormId);
     await page.goto('/owner/settings');
     await expect(page.locator('#owner-main-content')).toBeVisible({ timeout: 10000 });

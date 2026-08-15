@@ -1753,14 +1753,18 @@ test.describe('LOCAL-04 — Master Cross-Portal Playwright Acceptance Suite (Jou
 
     // 1. Create a LineFriend record fixture for Dorm A
     const rawLineId = `U_LOCAL04_STAFF_${Date.now()}`;
-    const friend = await prisma.dormitoryLineFriend.create({
-      data: {
-        dormitoryId: dormIdA,
-        lineUserIdHash: hashToken(rawLineId),
-        lineUserIdEncrypted: encryptText(rawLineId),
-        displayName: 'Somchai Local04 Staff',
-        friendStatus: 'FOLLOWING',
-      },
+    let friend: any;
+    await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormIdA}, true)`;
+      friend = await tx.dormitoryLineFriend.create({
+        data: {
+          dormitoryId: dormIdA,
+          lineUserIdHash: hashToken(rawLineId),
+          lineUserIdEncrypted: encryptText(rawLineId),
+          displayName: 'Somchai Local04 Staff',
+          friendStatus: 'FOLLOWING',
+        },
+      });
     });
 
     // 2. Owner browser: logs into /owner/users, creates grant via REAL UI
@@ -1819,30 +1823,33 @@ test.describe('LOCAL-04 — Master Cross-Portal Playwright Acceptance Suite (Jou
 
     // 4. Real 10/10 Quota UI Proof
     // Create 8 additional grants directly in DB fixture to reach 9 total grant slots (1 Google Owner + 9 grants = 10 slots)
-    for (let i = 1; i <= 8; i++) {
-      const dummyLineId = `U_DUMMY_QUOTA_${i}_${Date.now()}`;
-      const dummyFriend = await prisma.dormitoryLineFriend.create({
-        data: {
-          dormitoryId: dormIdA,
-          lineUserIdHash: hashToken(dummyLineId),
-          lineUserIdEncrypted: encryptText(dummyLineId),
-          displayName: `Quota Dummy ${i}`,
-          friendStatus: 'FOLLOWING',
-        },
-      });
-      const dummyToken = crypto.randomBytes(32).toString('base64url');
-      await prisma.dormitoryAccessGrant.create({
-        data: {
-          dormitoryId: dormIdA,
-          lineFriendId: dummyFriend.id,
-          roleCode: 'MANAGER',
-          tokenHash: hashToken(dummyToken),
-          tokenPrefix: dummyToken.slice(0, 8),
-          status: 'ACTIVE',
-          createdByPrincipal: `usr_${ownerUserA.id}`,
-        },
-      });
-    }
+    await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormIdA}, true)`;
+      for (let i = 1; i <= 8; i++) {
+        const dummyLineId = `U_DUMMY_QUOTA_${i}_${Date.now()}`;
+        const dummyFriend = await tx.dormitoryLineFriend.create({
+          data: {
+            dormitoryId: dormIdA,
+            lineUserIdHash: hashToken(dummyLineId),
+            lineUserIdEncrypted: encryptText(dummyLineId),
+            displayName: `Quota Dummy ${i}`,
+            friendStatus: 'FOLLOWING',
+          },
+        });
+        const dummyToken = crypto.randomBytes(32).toString('base64url');
+        await tx.dormitoryAccessGrant.create({
+          data: {
+            dormitoryId: dormIdA,
+            lineFriendId: dummyFriend.id,
+            roleCode: 'MANAGER',
+            tokenHash: hashToken(dummyToken),
+            tokenPrefix: dummyToken.slice(0, 8),
+            status: 'ACTIVE',
+            createdByPrincipal: `usr_${ownerUserA.id}`,
+          },
+        });
+      }
+    });
 
     // Owner reloads /owner/users: asserts 10/10 quota in UI and button disabled
     await ownerPage.reload();
@@ -1854,14 +1861,18 @@ test.describe('LOCAL-04 — Master Cross-Portal Playwright Acceptance Suite (Jou
 
     // Server-boundary companion check: 11th grant attempt returns 409
     const dummy11LineId = `U_DUMMY_11_${Date.now()}`;
-    const dummy11Friend = await prisma.dormitoryLineFriend.create({
-      data: {
-        dormitoryId: dormIdA,
-        lineUserIdHash: hashToken(dummy11LineId),
-        lineUserIdEncrypted: encryptText(dummy11LineId),
-        displayName: 'Quota Dummy 11',
-        friendStatus: 'FOLLOWING',
-      },
+    let dummy11Friend: any;
+    await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormIdA}, true)`;
+      dummy11Friend = await tx.dormitoryLineFriend.create({
+        data: {
+          dormitoryId: dormIdA,
+          lineUserIdHash: hashToken(dummy11LineId),
+          lineUserIdEncrypted: encryptText(dummy11LineId),
+          displayName: 'Quota Dummy 11',
+          friendStatus: 'FOLLOWING',
+        },
+      });
     });
     const apiContext = await playwrightRequest.newContext({ baseURL: 'http://127.0.0.1:3101' });
     const overflowRes = await apiContext.post(`/api/v1/properties/${dormIdA}/access-grants`, {
@@ -1878,8 +1889,11 @@ test.describe('LOCAL-04 — Master Cross-Portal Playwright Acceptance Suite (Jou
     expect(overflowRes.status()).toBe(409);
 
     // 5. Owner Revokes Grant through Real UI
-    const targetGrant = await prisma.dormitoryAccessGrant.findFirst({
-      where: { dormitoryId: dormIdA, lineFriendId: friend.id, status: 'ACTIVE' },
+    const targetGrant = await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormIdA}, true)`;
+      return await tx.dormitoryAccessGrant.findFirst({
+        where: { dormitoryId: dormIdA, lineFriendId: friend.id, status: 'ACTIVE' },
+      });
     });
     expect(targetGrant).not.toBeNull();
 
@@ -1896,8 +1910,11 @@ test.describe('LOCAL-04 — Master Cross-Portal Playwright Acceptance Suite (Jou
     await expect(ownerPage.locator('text=เพิกถอนสิทธิ์เข้าใช้งานเรียบร้อยแล้ว').first()).toBeVisible({ timeout: 30000 });
 
     // Assert grant is REVOKED in DB
-    const dbGrant = await prisma.dormitoryAccessGrant.findUnique({
-      where: { id: targetGrant!.id },
+    const dbGrant = await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormIdA}, true)`;
+      return await tx.dormitoryAccessGrant.findUnique({
+        where: { id: targetGrant!.id },
+      });
     });
     expect(dbGrant?.status).toBe('REVOKED');
 

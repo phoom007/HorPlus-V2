@@ -35,9 +35,26 @@ test.describe.serial('LOCAL-02: E2E Contract Settlement, Termination & Renewal S
   test.beforeAll(async () => {
     // 1. Clean test DB & Seed Subscriptions
     await subscriptionEntitlementService.ensureSeeded();
-    await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE tenant_notices, contract_settlement_items, contract_settlements, tenant_renewal_requests, occupancies, bill_items, receipts, payment_status_histories, payments, bills, contract_snapshots, contracts, tenant_registration_requests, tenants, rooms, buildings, dormitory_members, sessions, users, dormitories CASCADE;'
-    );
+    const tablesToClean = [
+      'account_benefit_claims', 'promo_redemptions', 'subscription_status_histories',
+      'dormitory_subscriptions', 'payment_upload_intents', 'local_notification_outbox',
+      'staff_notices', 'tenant_notices', 'contract_settlement_items', 'contract_settlements',
+      'tenant_renewal_requests', 'tenant_move_out_requests', 'bill_items', 'receipts',
+      'receipt_sequences', 'payment_status_histories', 'payments', 'bill_status_histories',
+      'bills', 'room_next_cycle_corrections', 'room_billing_cycle_snapshots',
+      'billing_rate_snapshots', 'billing_cycles', 'meter_replacements', 'meter_readings',
+      'meter_devices', 'contract_snapshots', 'contract_status_histories', 'contracts',
+      'occupancies', 'tenant_vehicles', 'tenant_emergency_contacts', 'tenant_co_occupants',
+      'tenant_registration_requests', 'tenants', 'rooms', 'buildings', 'dormitory_members',
+      'dormitory_access_grants', 'dormitory_line_friends', 'dormitory_line_configs',
+      'line_webhook_event_receipts', 'line_push_delivery_attempts', 'line_push_usage',
+      'owner_signatures', 'dormitory_billing_settings', 'dormitory_property_defaults',
+      'onboarding_drafts', 'audit_logs', 'subscription_package_intents', 'dormitories',
+      'sessions', 'users'
+    ];
+    for (const tbl of tablesToClean) {
+      await prisma.$executeRawUnsafe(`DELETE FROM "${tbl}";`);
+    }
 
     // 2. Create Dormitory
     const dorm = await prisma.dormitory.create({

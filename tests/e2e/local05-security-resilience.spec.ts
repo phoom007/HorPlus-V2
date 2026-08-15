@@ -75,10 +75,27 @@ test.describe('LOCAL-05: Adversarial Local Security & Resilience E2E Suite', () 
   }
 
   test.beforeEach(async () => {
-    // Truncate DB to guarantee clean slate
-    await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE local_notification_outbox, staff_notices, tenant_notices, contract_settlement_items, contract_settlements, tenant_renewal_requests, occupancies, bill_items, receipts, payment_status_histories, payments, bills, contract_snapshots, contracts, tenant_registration_requests, tenants, rooms, buildings, dormitory_members, dormitory_access_grants, dormitories, sessions, users CASCADE;'
-    );
+    // Delete table rows in foreign-key dependency order for clean test slate
+    const tablesToClean = [
+      'account_benefit_claims', 'promo_redemptions', 'subscription_status_histories',
+      'dormitory_subscriptions', 'payment_upload_intents', 'local_notification_outbox',
+      'staff_notices', 'tenant_notices', 'contract_settlement_items', 'contract_settlements',
+      'tenant_renewal_requests', 'tenant_move_out_requests', 'bill_items', 'receipts',
+      'receipt_sequences', 'payment_status_histories', 'payments', 'bill_status_histories',
+      'bills', 'room_next_cycle_corrections', 'room_billing_cycle_snapshots',
+      'billing_rate_snapshots', 'billing_cycles', 'meter_replacements', 'meter_readings',
+      'meter_devices', 'contract_snapshots', 'contract_status_histories', 'contracts',
+      'occupancies', 'tenant_vehicles', 'tenant_emergency_contacts', 'tenant_co_occupants',
+      'tenant_registration_requests', 'tenants', 'rooms', 'buildings', 'dormitory_members',
+      'dormitory_access_grants', 'dormitory_line_friends', 'dormitory_line_configs',
+      'line_webhook_event_receipts', 'line_push_delivery_attempts', 'line_push_usage',
+      'owner_signatures', 'dormitory_billing_settings', 'dormitory_property_defaults',
+      'onboarding_drafts', 'audit_logs', 'subscription_package_intents', 'dormitories',
+      'sessions', 'users'
+    ];
+    for (const tbl of tablesToClean) {
+      await prisma.$executeRawUnsafe(`DELETE FROM "${tbl}";`);
+    }
 
     dormIdA = crypto.randomUUID();
     dormIdB = crypto.randomUUID();
@@ -432,17 +449,22 @@ test.describe('LOCAL-05: Adversarial Local Security & Resilience E2E Suite', () 
   // 6. TASK009 BEARER REDEMPTION, HASH STRIPPING & REVOCATION ENFORCEMENT
   // =========================================================================
   test('E2E-SEC-06: Task009 bearer URL hash is stripped upon redemption; revoked grant loses access', async ({ page }) => {
-    const grantService = new AccessGrantService(prisma);
     const rawLineId = `line-e2e-${Date.now()}`;
-    const friend = await prisma.dormitoryLineFriend.create({
-      data: {
-        dormitoryId: dormIdA,
-        lineUserIdHash: hashToken(rawLineId),
-        lineUserIdEncrypted: encryptText(rawLineId),
-        displayName: 'E2E Staff Member'
-      }
+    let friend: any;
+
+    await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormIdA}, true)`;
+      friend = await tx.dormitoryLineFriend.create({
+        data: {
+          dormitoryId: dormIdA,
+          lineUserIdHash: hashToken(rawLineId),
+          lineUserIdEncrypted: encryptText(rawLineId),
+          displayName: 'E2E Staff Member'
+        }
+      });
     });
 
+    const grantService = new AccessGrantService(prisma);
     const grant = await grantService.createAccessGrant(
       dormIdA,
       friend.id,
