@@ -1,25 +1,17 @@
-================================================================================
-  HORPLUS LOCAL-06 — FRONTEND VITEST UNIT & INTEGRATION EVIDENCE
-================================================================================
-Command: npm test -- --run (vitest run src/tests --environment happy-dom --run)
-Executed at: 2026-08-15T12:24:42.000Z
 
  RUN  v3.2.7 C:/Projects/HorPlus-V2
 
- ✓ src/tests/tenantFailClosed.test.ts (2 tests) 6ms
- ✓ src/tests/wave1d-boundary.test.ts (3 tests | 1 skipped) 7ms
- ✓ src/tests/wave1-frontend-guards.test.ts (8 tests) 16ms
- ✓ src/tests/local01-tenant-onboarding.test.ts (2 tests) 5ms
- ✓ src/tests/productionTruthBoundary.test.ts (8 tests) 64ms
- ✓ src/tests/qa.test.ts (5 tests) 82ms
- ✓ src/tests/dataModeAndAdapters.test.ts (10 tests) 50ms
- ✓ src/tests/wave1g-owner-ui.test.tsx (13 tests) 1238ms
+ ✓ src/tests/tenantFailClosed.test.ts (2 tests) 7ms
+ ✓ src/tests/wave1d-boundary.test.ts (3 tests | 1 skipped) 6ms
+ ✓ src/tests/wave1-frontend-guards.test.ts (8 tests) 15ms
+ ✓ src/tests/local01-tenant-onboarding.test.ts (2 tests) 6ms
+ ✓ src/tests/productionTruthBoundary.test.ts (8 tests) 72ms
+ ✓ src/tests/qa.test.ts (5 tests) 79ms
+ ✓ src/tests/dataModeAndAdapters.test.ts (10 tests) 58ms
+ ✓ src/tests/wave1g-owner-ui.test.tsx (13 tests) 1273ms
+   ✓ Wave 1G — Owner Property UI Component & Integration Tests > 5. Connected Owner Page Section Integration Tests > connects OwnerRooms page: open Building editor, set & clear Building override, edit Room identity & override, archive with expectedVersion, and query availability  520ms
 
  Test Files  8 passed (8)
       Tests  50 passed | 1 skipped (51)
-   Start at  19:24:37
-   Duration  5.36s (transform 1.21s, setup 0ms, collect 2.91s, tests 1.47s, environment 8.50s, prepare 1.72s)
-
-================================================================================
-VERDICT: 50/50 FRONTEND TESTS PASSED (100% PASS RATE)
-================================================================================
+   Start at  20:26:58
+   Duration  5.23s (transform 1.14s, setup 0ms, collect 2.81s, tests 1.52s, environment 8.72s, prepare 1.83s)

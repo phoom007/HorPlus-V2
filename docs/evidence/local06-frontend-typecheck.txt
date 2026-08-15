@@ -1,10 +1,4 @@
-================================================================================
-  HORPLUS LOCAL-06 — FRONTEND TYPESCRIPT TYPECHECK EVIDENCE
-================================================================================
-Command: npx tsc --noEmit
-Executed at: 2026-08-15T12:21:26.000Z
-Target: Root tsconfig.json
-
-Exit Code: 0
-Result: TypeScript frontend typecheck passed with 0 errors.
-================================================================================
+TypeScript compilation (Frontend) passed with 0 errors.
+Checked against tsconfig.app.json and tsconfig.json.
+Timestamp: 2026-08-15T13:27:24Z
+Exit code: 0

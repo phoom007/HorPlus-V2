@@ -1,112 +1,113 @@
 ================================================================================
-  HORPLUS LOCAL-06 — SOURCE-DERIVED FEATURE & MENU COVERAGE AUDIT
+  HORPLUS LOCAL-06 — FEATURE & MENU INVENTORY COVERAGE AUDIT
 ================================================================================
-Generated at: 2026-08-15T12:18:51.782Z
+Generated at: 2026-08-15T13:29:07.821Z
+Authoritative Source: Application Frontend Codebase & Master Acceptance Inventory
 
-SOURCE RECONCILIATION SUMMARY:
+SCOPE SUMMARY:
 --------------------------------------------------------------------------------
-Source Files Inspected:                 13
-Source Routes Discovered:               35
-Inventory Declarations:                 87
-Matched:                                82 / 82 (100.0%)
-Missing from Inventory:                 0
-Missing from Source:                    0 (In-Scope Local)
-Deferred External Integrations:         5
+Total Declared Features:       87
+In-Scope Local Features:       82
+Deferred External Features:    5
+Source Surfaces Reconciled:    40
 
-FEATURE MAPPING TABLE:
+IN-SCOPE FEATURE INVENTORY BREAKDOWN BY PORTAL / ROLE:
 --------------------------------------------------------------------------------
-Inventory ID | Portal          | Menu/Route              | Action Type | DB Entity          | Coverage Status
+Public Site Features:          9
+Owner Workspace Features:      59
+Tenant Portal Features:        13
+Staff Access Features:         1
+
+AUDIT BREAKDOWN TABLE:
 --------------------------------------------------------------------------------
-INV-PUB-001  | Public Site     | Landing Page (/)        | Read        | NO                 | 100% COVERED
-INV-PUB-002  | Public Site     | Features Page (/feature | Read        | NO                 | 100% COVERED
-INV-PUB-003  | Public Site     | Pricing Page (/pricing) | Read        | NO                 | 100% COVERED
-INV-PUB-004  | Public Site     | How It Works (/how-it-w | Read        | NO                 | 100% COVERED
-INV-PUB-005  | Public Site     | Help Center (/help)     | Read        | NO                 | 100% COVERED
-INV-PUB-006  | Public Site     | Terms of Service (/term | Read        | NO                 | 100% COVERED
-INV-PUB-007  | Public Site     | Privacy Policy (/privac | Read        | NO                 | 100% COVERED
-INV-PUB-008  | Public Site     | Owner Login (/auth/owne | Mutation    | YES (users, sessio | 100% COVERED
-INV-PUB-009  | Public Site     | Tenant Registration (/t | Mutation    | YES (tenant_regist | 100% COVERED
-INV-PUB-010  | Staff Access    | Staff Access Entry (/st | Mutation    | YES (staff_access_ | 100% COVERED
-INV-OWN-001  | Owner Workspace | Dashboard (/owner/dashb | Read        | YES (rooms, bills) | 100% COVERED
-INV-OWN-002  | Owner Workspace | Dashboard (/owner/dashb | Read        | NO                 | 100% COVERED
-INV-OWN-003  | Owner Workspace | Dashboard (/owner/dashb | Read        | YES (bills)        | 100% COVERED
-INV-OWN-004  | Owner Workspace | Dashboard (/owner/dashb | Navigation  | NO                 | 100% COVERED
-INV-OWN-005  | Owner Workspace | Dashboard (/owner/dashb | Navigation  | NO                 | 100% COVERED
-INV-OWN-006  | Owner Workspace | Dashboard (/owner/dashb | Read        | YES (platform_subs | 100% COVERED
-INV-OWN-007  | Owner Workspace | Header (/owner/)        | Read        | NO                 | 100% COVERED
-INV-OWN-008  | Owner Workspace | Header (/owner/)        | Mutation    | YES (notifications | 100% COVERED
-INV-OWN-009  | Owner Workspace | Rooms (/owner/rooms)    | Read        | YES (rooms, buildi | 100% COVERED
-INV-OWN-010  | Owner Workspace | Rooms (/owner/rooms)    | Read        | YES (rooms, contra | 100% COVERED
-INV-OWN-011  | Owner Workspace | Rooms (/owner/rooms)    | Mutation    | YES (rooms, meter_ | 100% COVERED
-INV-OWN-012  | Owner Workspace | Rooms (/owner/rooms)    | Mutation    | YES (rooms)        | 100% COVERED
-INV-OWN-013  | Owner Workspace | Rooms (/owner/rooms)    | Mutation    | YES (rooms)        | 100% COVERED
-INV-OWN-014  | Owner Workspace | Rooms (/owner/rooms)    | Mutation    | YES (buildings)    | 100% COVERED
-INV-OWN-015  | Owner Workspace | Tenants (/owner/tenants | Read        | YES (tenants)      | 100% COVERED
-INV-OWN-016  | Owner Workspace | Tenants (/owner/tenants | Mutation    | YES (tenants, tena | 100% COVERED
-INV-OWN-017  | Owner Workspace | Tenants (/owner/tenants | Read        | YES (tenants)      | 100% COVERED
-INV-OWN-018  | Owner Workspace | Tenants (/owner/tenants | Mutation    | YES (tenants)      | 100% COVERED
-INV-OWN-019  | Owner Workspace | Tenants (/owner/tenants | Mutation    | YES (contracts, te | 100% COVERED
-INV-OWN-020  | Owner Workspace | Tenants (/owner/tenants | Mutation    | YES (rooms, tenant | 100% COVERED
-INV-OWN-021  | Owner Workspace | Tenants (/owner/tenants | Mutation    | YES (tenant_regist | 100% COVERED
-INV-OWN-022  | Owner Workspace | Contracts (/owner/contr | Read        | YES (contracts, co | 100% COVERED
-INV-OWN-023  | Owner Workspace | Contracts (/owner/contr | Mutation    | YES (contracts, ro | 100% COVERED
-INV-OWN-024  | Owner Workspace | Contracts (/owner/contr | Mutation    | YES (contracts)    | 100% COVERED
-INV-OWN-025  | Owner Workspace | Contracts (/owner/contr | Mutation    | YES (contract_rene | 100% COVERED
-INV-OWN-026  | Owner Workspace | Contracts (/owner/contr | Read        | NO                 | 100% COVERED
-INV-OWN-027  | Owner Workspace | Contracts (/owner/contr | Mutation    | YES (settlements,  | 100% COVERED
-INV-OWN-028  | Owner Workspace | Meters (/owner/meters)  | Mutation    | YES (meter_reading | 100% COVERED
-INV-OWN-029  | Owner Workspace | Meters (/owner/meters)  | Mutation / Guard | YES (meter_reading | 100% COVERED
-INV-OWN-030  | Owner Workspace | Meters (/owner/meters)  | Read        | YES (billing_cycle | 100% COVERED
-INV-OWN-031  | Owner Workspace | Payments (/owner/paymen | Read        | YES (payments, bil | 100% COVERED
-INV-OWN-032  | Owner Workspace | Payments (/owner/paymen | Mutation    | YES (payments, bil | 100% COVERED
-INV-OWN-033  | Owner Workspace | Payments (/owner/paymen | Mutation    | YES (payments, bil | 100% COVERED
-INV-OWN-034  | Owner Workspace | Payments (/owner/paymen | Mutation    | YES (payments, bil | 100% COVERED
-INV-OWN-035  | Owner Workspace | Payments (/owner/paymen | Mutation    | YES (payments, bil | 100% COVERED
-INV-OWN-036  | Owner Workspace | Payments (/owner/paymen | Read        | YES (receipts)     | 100% COVERED
-INV-OWN-037  | Owner Workspace | Maintenance (/owner/mai | Read        | NO (Approved In-Me | 100% COVERED
-INV-OWN-038  | Owner Workspace | Maintenance (/owner/mai | Mutation    | NO (Approved In-Me | 100% COVERED
-INV-OWN-039  | Owner Workspace | Maintenance (/owner/mai | Mutation    | NO (Approved In-Me | 100% COVERED
-INV-OWN-040  | Owner Workspace | Announcements (/owner/a | Read        | NO (Approved In-Me | 100% COVERED
-INV-OWN-041  | Owner Workspace | Announcements (/owner/a | Mutation    | NO (Approved In-Me | 100% COVERED
-INV-OWN-042  | Owner Workspace | Announcements (/owner/a | Mutation    | NO (Approved In-Me | 100% COVERED
-INV-OWN-043  | Owner Workspace | Reports (/owner/reports | Read        | YES (bills, rooms) | 100% COVERED
-INV-OWN-044  | Owner Workspace | Reports (/owner/reports | Read        | YES (bills)        | 100% COVERED
-INV-OWN-045  | Owner Workspace | Reports (/owner/reports | Read / Export | YES (bills)        | 100% COVERED
-INV-OWN-046  | Owner Workspace | Users & Staff (/owner/u | Read        | YES (dormitory_mem | 100% COVERED
-INV-OWN-047  | Owner Workspace | Users & Staff (/owner/u | Mutation    | YES (staff_access_ | 100% COVERED
-INV-OWN-048  | Owner Workspace | Users & Staff (/owner/u | Mutation    | YES (staff_access_ | 100% COVERED
-INV-OWN-049  | Owner Workspace | Users & Staff (/owner/u | Mutation    | YES (staff_access_ | 100% COVERED
-INV-OWN-050  | Owner Workspace | Users & Staff (/owner/u | Mutation    | YES (dormitories)  | 100% COVERED
-INV-OWN-051  | Owner Workspace | Subscription (/owner/su | Read        | YES (platform_subs | 100% COVERED
-INV-OWN-052  | Owner Workspace | Subscription (/owner/su | Mutation    | YES (promo_redempt | 100% COVERED
-INV-OWN-053  | Owner Workspace | Subscription (/owner/su | Mutation    | YES (subscription_ | 100% COVERED
-INV-OWN-054  | Owner Workspace | Settings (/owner/settin | Mutation    | YES (dormitories)  | 100% COVERED
-INV-OWN-055  | Owner Workspace | Settings (/owner/settin | Mutation    | YES (dormitories)  | 100% COVERED
-INV-OWN-056  | Owner Workspace | Settings (/owner/settin | Mutation    | YES (dormitory_bil | 100% COVERED
-INV-OWN-057  | Owner Workspace | Settings (/owner/settin | Mutation    | YES (dormitory_bil | 100% COVERED
-INV-OWN-058  | Owner Workspace | Settings (/owner/settin | Mutation    | YES (owner_signatu | 100% COVERED
-INV-OWN-059  | Owner Workspace | Onboarding (/owner/regi | Mutation    | YES (dormitories,  | 100% COVERED
-INV-TNT-001  | Tenant Portal   | Home / Dashboard (/tena | Read        | YES (tenants, room | 100% COVERED
-INV-TNT-002  | Tenant Portal   | Invoice / Bills (/tenan | Read        | YES (bills, bill_i | 100% COVERED
-INV-TNT-003  | Tenant Portal   | Payments (/tenant/pay)  | Mutation    | YES (payments, bil | 100% COVERED
-INV-TNT-004  | Tenant Portal   | Maintenance (/tenant/re | Mutation    | NO (Approved In-Me | 100% COVERED
-INV-TNT-005  | Tenant Portal   | Utilities (/tenant/util | Read        | YES (meter_reading | 100% COVERED
-INV-TNT-006  | Tenant Portal   | Contract (/tenant/contr | Read        | YES (contracts)    | 100% COVERED
-INV-TNT-007  | Tenant Portal   | Contract (/tenant/contr | Mutation    | YES (contract_rene | 100% COVERED
-INV-TNT-008  | Tenant Portal   | Payments Tab / History  | Read        | YES (receipts, pay | 100% COVERED
-INV-TNT-009  | Tenant Portal   | Announcements (/tenant/ | Read        | NO (Approved In-Me | 100% COVERED
-INV-TNT-010  | Tenant Portal   | Profile (/tenant/profil | Read        | YES (tenants)      | 100% COVERED
-INV-TNT-011  | Tenant Portal   | Profile (/tenant/profil | Mutation    | YES (tenant_co_occ | 100% COVERED
-INV-TNT-012  | Tenant Portal   | Profile (/tenant/profil | Mutation    | YES (tenant_move_o | 100% COVERED
-INV-TNT-013  | Tenant Portal   | Header (/tenant/)       | Mutation    | YES (notifications | 100% COVERED
---------------------------------------------------------------------------------
-DEFERRED EXTERNAL ITEMS:
---------------------------------------------------------------------------------
-INV-EXT-001  | External Gateway | LINE OA Webhook (/api/v | Mutation    | External Adapter   | DEFERRED (EXT-01/02)
-INV-EXT-002  | External Gateway | LIFF SDK Auth (/tenant  | Auth        | External Adapter   | DEFERRED (EXT-01/02)
-INV-EXT-003  | External Gateway | LINE Push Notifications | Integration | External Adapter   | DEFERRED (EXT-01/02)
-INV-EXT-004  | External Gateway | SlipOK Bank Slip OCR (/ | Mutation    | External Adapter   | DEFERRED (EXT-01/02)
-INV-EXT-005  | External Gateway | PromptPay Direct Webhoo | Mutation    | External Adapter   | DEFERRED (EXT-01/02)
+[01] INV-PUB-001  | Public Site    | /                         | HorPlus landing hero, value proposition, feature preview | COVERED
+[02] INV-PUB-002  | Public Site    | /features                 | Product capabilities breakdown | COVERED
+[03] INV-PUB-003  | Public Site    | /pricing                  | Pricing tier packages (Free, Micro, Standard, Pro, Enterprise) | COVERED
+[04] INV-PUB-004  | Public Site    | /how-it-works             | Onboarding & workflow guide    | COVERED
+[05] INV-PUB-005  | Public Site    | /help                     | FAQs & support guide           | COVERED
+[06] INV-PUB-006  | Public Site    | /terms                    | Legal terms & conditions       | COVERED
+[07] INV-PUB-007  | Public Site    | /privacy                  | Privacy & PDPA policy          | COVERED
+[08] INV-PUB-008  | Public Site    | /auth/owner               | Google OAuth Sign-in & Dev bypass login | COVERED
+[09] INV-PUB-009  | Public Site    | /tenant/register          | Public applicant dormitory onboarding registration | COVERED
+[10] INV-PUB-010  | Staff Access   | /staff-access#<token>     | Redeem bearer access grant link | COVERED
+[11] INV-OWN-001  | Owner Workspace | /owner/dashboard          | Dormitory statistics overview (Rooms, Occupancy, Vacant, Maintenance) | COVERED
+[12] INV-OWN-002  | Owner Workspace | /owner/dashboard          | Filter room cards by vacant, occupied, maintenance | COVERED
+[13] INV-OWN-003  | Owner Workspace | /owner/dashboard          | Modal showing unpaid tenant bills with direct payment navigation | COVERED
+[14] INV-OWN-004  | Owner Workspace | /owner/dashboard          | Quick link to meter entry      | COVERED
+[15] INV-OWN-005  | Owner Workspace | /owner/dashboard          | Quick link to billing / payment management | COVERED
+[16] INV-OWN-006  | Owner Workspace | /owner/dashboard          | Package remaining days & upgrade button | COVERED
+[17] INV-OWN-007  | Owner Workspace | /owner/*                  | Search tenant by name/phone or room by number | COVERED
+[18] INV-OWN-008  | Owner Workspace | /owner/*                  | Persistent notification tray with unread badge | COVERED
+[19] INV-OWN-009  | Owner Workspace | /owner/rooms              | Room inventory listing across buildings | COVERED
+[20] INV-OWN-010  | Owner Workspace | /owner/rooms              | Search available rooms by date range | COVERED
+[21] INV-OWN-011  | Owner Workspace | /owner/rooms              | Create new room with pricing, floor, initial meters | COVERED
+[22] INV-OWN-012  | Owner Workspace | /owner/rooms              | Update room pricing, deposit, status, or notes | COVERED
+[23] INV-OWN-013  | Owner Workspace | /owner/rooms              | Remove vacant room (blocked if active contract) | COVERED
+[24] INV-OWN-014  | Owner Workspace | /owner/rooms              | Create or edit dormitory building / floor structure | COVERED
+[25] INV-OWN-015  | Owner Workspace | /owner/tenants            | Tenant directory listing and search | COVERED
+[26] INV-OWN-016  | Owner Workspace | /owner/tenants            | 4-step wizard to create tenant, co-occupants, vehicle, pet | COVERED
+[27] INV-OWN-017  | Owner Workspace | /owner/tenants            | View tenant details, co-occupants, vehicles, pets, ID card | COVERED
+[28] INV-OWN-018  | Owner Workspace | /owner/tenants            | Edit tenant contact info, citizen ID, emergency contacts | COVERED
+[29] INV-OWN-019  | Owner Workspace | /owner/tenants            | Terminate tenant lease, calculate damage/refund, vacate room | COVERED
+[30] INV-OWN-020  | Owner Workspace | /owner/tenants            | Transfer tenant to another vacant room | COVERED
+[31] INV-OWN-021  | Owner Workspace | /owner/tenants            | Review & approve/reject tenant registration requests | COVERED
+[32] INV-OWN-022  | Owner Workspace | /owner/contracts          | View contracts list, contract summary, locked snapshot | COVERED
+[33] INV-OWN-023  | Owner Workspace | /owner/contracts          | Create new lease agreement (Room, Tenant, Terms, Deposit) | COVERED
+[34] INV-OWN-024  | Owner Workspace | /owner/contracts          | Prevent accidental overwrite of active contract without explicit confirmation | COVERED
+[35] INV-OWN-025  | Owner Workspace | /owner/contracts          | Review tenant renewal requests (Approve / Reject) | COVERED
+[36] INV-OWN-026  | Owner Workspace | /owner/contracts          | View printable lease agreement with signatures | COVERED
+[37] INV-OWN-027  | Owner Workspace | /owner/contracts          | View deposit settlement calculation & update payment status | COVERED
+[38] INV-OWN-028  | Owner Workspace | /owner/meters             | Enter water & electricity readings, view/edit peopleCount for cycle (Bill issuance is separate action; unpaid bills auto-recalculate) | COVERED
+[39] INV-OWN-029  | Owner Workspace | /owner/meters             | Prevents entering Current Reading < Previous Reading | COVERED
+[40] INV-OWN-030  | Owner Workspace | /owner/meters             | Switch between monthly billing cycles | COVERED
+[41] INV-OWN-031  | Owner Workspace | /owner/payments           | Review pending payment slips submitted by tenants | COVERED
+[42] INV-OWN-032  | Owner Workspace | /owner/payments           | Approve tenant payment slip, mark bill PAID, issue receipt | COVERED
+[43] INV-OWN-033  | Owner Workspace | /owner/payments           | Reject invalid payment slip with mandatory reason | COVERED
+[44] INV-OWN-034  | Owner Workspace | /owner/payments           | Record offline cash payment directly from tenant | COVERED
+[45] INV-OWN-035  | Owner Workspace | /owner/payments           | Reversal of mistakenly approved payment | COVERED
+[46] INV-OWN-036  | Owner Workspace | /owner/payments           | View history of paid bills and official receipt PDF | COVERED
+[47] INV-OWN-037  | Owner Workspace | /owner/maintenance        | View repair requests in columns (Submitted, Accepted, Scheduled, Done) | COVERED
+[48] INV-OWN-038  | Owner Workspace | /owner/maintenance        | Create maintenance ticket for room with category, photo, urgency | COVERED
+[49] INV-OWN-039  | Owner Workspace | /owner/maintenance        | Move ticket status, assign technician, record repair cost | COVERED
+[50] INV-OWN-040  | Owner Workspace | /owner/announcements      | View published dormitory broadcasts | COVERED
+[51] INV-OWN-041  | Owner Workspace | /owner/announcements      | Broadcast announcement to all tenants or specific rooms | COVERED
+[52] INV-OWN-042  | Owner Workspace | /owner/announcements      | Remove announcement broadcast  | COVERED
+[53] INV-OWN-043  | Owner Workspace | /owner/reports            | Revenue summary, occupancy percentage, outstanding totals | COVERED
+[54] INV-OWN-044  | Owner Workspace | /owner/reports            | Monthly collection trends visualization | COVERED
+[55] INV-OWN-045  | Owner Workspace | /owner/reports            | Export billing and collection data to CSV format | COVERED
+[56] INV-OWN-046  | Owner Workspace | /owner/users              | View quota usage (e.g. 1/10 slots used) | COVERED
+[57] INV-OWN-047  | Owner Workspace | /owner/users              | Create temporary/staff bearer access grant for LINE Friend | COVERED
+[58] INV-OWN-048  | Owner Workspace | /owner/users              | Update existing access grant role (OWNER / MANAGER / TECH) | COVERED
+[59] INV-OWN-049  | Owner Workspace | /owner/users              | Revoke staff access grant immediately | COVERED
+[60] INV-OWN-050  | Owner Workspace | /owner/users              | View & configure LINE OA credentials & webhook | COVERED
+[61] INV-OWN-051  | Owner Workspace | /owner/subscription       | View current package tier, expiration, room limits | COVERED
+[62] INV-OWN-052  | Owner Workspace | /owner/subscription       | Redeem discount or trial promo code (e.g. WELCOME2026) | COVERED
+[63] INV-OWN-053  | Owner Workspace | /owner/subscription       | Select Micro, Standard, Pro, or Enterprise subscription | COVERED
+[64] INV-OWN-054  | Owner Workspace | /owner/settings           | Edit dormitory name, address, phone, tax ID | COVERED
+[65] INV-OWN-055  | Owner Workspace | /owner/settings           | Set default rent, deposit with optimistic concurrency | COVERED
+[66] INV-OWN-056  | Owner Workspace | /owner/settings           | Configure water/electric unit rates, common fees, late fees | COVERED
+[67] INV-OWN-057  | Owner Workspace | /owner/settings           | Configure PromptPay ID/Type and Bank Account details | COVERED
+[68] INV-OWN-058  | Owner Workspace | /owner/settings           | Draw and save owner signature for automatic lease signing | COVERED
+[69] INV-OWN-059  | Owner Workspace | /owner/register           | 6-step initial dormitory setup wizard | COVERED
+[70] INV-TNT-001  | Tenant Portal  | /tenant/dashboard         | View active room summary, current bill preview, announcements | COVERED
+[71] INV-TNT-002  | Tenant Portal  | /tenant/invoice           | View itemized monthly bill (Rent, Water, Electric, Common fee) | COVERED
+[72] INV-TNT-003  | Tenant Portal  | /tenant/pay               | View PromptPay QR, Bank Account info, and upload slip | COVERED
+[73] INV-TNT-004  | Tenant Portal  | /tenant/repairs           | View repair history and submit new repair ticket | COVERED
+[74] INV-TNT-005  | Tenant Portal  | /tenant/utilities         | View historical water and electricity meter consumption charts | COVERED
+[75] INV-TNT-006  | Tenant Portal  | /tenant/contract          | View active lease contract terms, deposit, download PDF | COVERED
+[76] INV-TNT-007  | Tenant Portal  | /tenant/contract          | Submit contract extension / renewal request to Owner | COVERED
+[77] INV-TNT-008  | Tenant Portal  | /tenant/payments_tab      | View past receipts history, view/print official receipt | COVERED
+[78] INV-TNT-009  | Tenant Portal  | /tenant/announcements     | View published dormitory announcements & pinned notices | COVERED
+[79] INV-TNT-010  | Tenant Portal  | /tenant/profile           | View personal profile, citizen ID, emergency contact | COVERED
+[80] INV-TNT-011  | Tenant Portal  | /tenant/profile           | Manage room co-occupants (Add / Delete co-occupant) | COVERED
+[81] INV-TNT-012  | Tenant Portal  | /tenant/profile           | Submit notice of lease termination & move-out date | COVERED
+[82] INV-TNT-013  | Tenant Portal  | /tenant/*                 | Persistent tenant notifications tray | COVERED
+[83] INV-EXT-001  | External Gateway | /api/v1/line-oa/webhook   | Real-time LINE Messaging API webhook callback | DEFERRED_EXTERNAL (EXT-01/02)
+[84] INV-EXT-002  | External Gateway | /tenant (via LIFF)        | LINE Front-end Framework OAuth exchange | DEFERRED_EXTERNAL (EXT-01/02)
+[85] INV-EXT-003  | External Gateway | N/A (Outbound)            | Outbound broadcast / notification push to LINE users | DEFERRED_EXTERNAL (EXT-01/02)
+[86] INV-EXT-004  | External Gateway | /api/v1/payments/slip-ocr | Automated QR/Slip verification against bank networks | DEFERRED_EXTERNAL (EXT-01/02)
+[87] INV-EXT-005  | External Gateway | /api/v1/payments/promptpay-webhook | Instant bank transfer reconciliation callback | DEFERRED_EXTERNAL (EXT-01/02)
+
 ================================================================================
-FINAL VERDICT: 100% IN-SCOPE LOCAL PRODUCT FEATURES & MENUS RECONCILED FROM SOURCE
+VERDICT: 100% IN-SCOPE LOCAL PRODUCT FEATURES COVERED & RECONCILED (0 GAPS)
 ================================================================================
