@@ -16,7 +16,12 @@
     "test:api": "npm --prefix server run test",
     "db:up": "docker compose up -d postgres redis",
     "db:down": "docker compose down",
-    "db:logs": "docker compose logs -f"
+    "db:logs": "docker compose logs -f",
+    "uat:refresh": "node scripts/local07/refresh.mjs",
+    "uat:reset": "node scripts/local07/reset.mjs",
+    "uat:seed": "node scripts/local07/seed.mjs",
+    "uat:verify": "node scripts/local07/verify.mjs",
+    "uat:login": "node scripts/local07/login-helper.mjs"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

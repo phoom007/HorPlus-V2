@@ -26,9 +26,12 @@ backups/
 scratch/
 !scripts/
 scripts/*
+!scripts/local07/
+!scripts/local07/*
 !scripts/verify-local06-acceptance-matrix.mjs
 !scripts/generate-route-menu-evidence.mjs
 !server/src/scripts/
+.local07-sessions/
 docs/execution-reports/
 !docs/execution-reports/*.md
 !docs/execution-reports/evidence/

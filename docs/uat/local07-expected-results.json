@@ -1,0 +1,247 @@
+{
+  "schemaVersion": "1.0.0",
+  "generatedAt": "2026-08-15T14:42:52.189Z",
+  "dataset": "LOCAL-07 Manual UAT Review Sandbox",
+  "dormitories": {
+    "freshOwner": {
+      "id": "10000001-0000-4000-8000-000000000001",
+      "name": "หอพัก HorPlus UAT Fresh Owner",
+      "ownerName": "เจ้าของทดสอบ Fresh Owner",
+      "ownerEmail": "owner.fresh@horplus-uat.local",
+      "subscription": {
+        "plan": "FREE",
+        "promo": "HORPLUS (60 Days Trial)",
+        "remainingDaysRange": [
+          59,
+          61
+        ]
+      },
+      "kpis": {
+        "totalRooms": 4,
+        "occupiedRooms": 0,
+        "vacantRooms": 4,
+        "reservedRooms": 0,
+        "maintenanceRooms": 0,
+        "activeTenants": 0,
+        "occupancyRatePercent": 0,
+        "vacantRatePercent": 100
+      },
+      "settings": {
+        "billingDay": 25,
+        "dueDay": 5,
+        "waterRate": "18.00",
+        "electricityRate": "7.00",
+        "commonFee": "150.00",
+        "internetFee": "200.00",
+        "parkingRate": "500.00",
+        "promptPayType": "mobile_phone",
+        "promptPayValue": "0819998888",
+        "bankCode": "KBANK",
+        "bankAccountNumber": "1234567890"
+      }
+    },
+    "comprehensiveOwner": {
+      "id": "20000001-0000-4000-8000-000000000002",
+      "name": "หอพัก HorPlus UAT Comprehensive Manor",
+      "ownerName": "เจ้าของทดสอบ Comprehensive Owner",
+      "ownerEmail": "owner.comp@horplus-uat.local",
+      "subscription": {
+        "plan": "PAID (PRO)",
+        "status": "ACTIVE"
+      },
+      "kpis": {
+        "totalRooms": 18,
+        "occupiedRooms": 11,
+        "vacantRooms": 5,
+        "reservedRooms": 1,
+        "maintenanceRooms": 1,
+        "endedOrArchivedRooms": 1,
+        "activeTenants": 11,
+        "occupancyRatePercent": 61,
+        "vacantRatePercent": 28
+      },
+      "cycleJuly2026": {
+        "cycleCode": "2026-07",
+        "cycleName": "รอบบิล กรกฎาคม 2569",
+        "totalBills": 11,
+        "paidBillsCount": 7,
+        "unpaidBillsCount": 4,
+        "financialBreakdown": {
+          "fixedRentTotal": 52900,
+          "waterUnitsTotal": 136,
+          "waterAmountTotal": 2478,
+          "electricityUnitsTotal": 853,
+          "electricityAmountTotal": 6071,
+          "commonFeeTotal": 2200,
+          "internetFeeTotal": 750,
+          "parkingFeeTotal": 900,
+          "coOccupantSurchargesTotal": 600,
+          "otherFeesTotal": 600,
+          "fineTotal": 0,
+          "totalBilledAmount": 65899,
+          "totalPaidRevenue": 41994,
+          "totalOutstandingUnpaid": 23905,
+          "paidPercent": 64,
+          "unpaidPercent": 36,
+          "averageRevenuePerUser": 5991
+        },
+        "billsList": [
+          {
+            "room": "101",
+            "tenant": "นายสมชาย ใจดี",
+            "rent": 4500,
+            "water": 180,
+            "elec": 420,
+            "common": 200,
+            "internet": 150,
+            "parking": 0,
+            "surcharge": 0,
+            "total": 5450,
+            "status": "PAID",
+            "receipt": "RCP-202607-001"
+          },
+          {
+            "room": "102",
+            "tenant": "นายสมศักดิ์ รักสงบ",
+            "rent": 4500,
+            "water": 180,
+            "elec": 420,
+            "common": 200,
+            "internet": 150,
+            "parking": 0,
+            "surcharge": 0,
+            "total": 5450,
+            "status": "UNPAID",
+            "receipt": null
+          },
+          {
+            "room": "103",
+            "tenant": "นางสาวอนงค์ งามยิ่ง",
+            "rent": 4500,
+            "water": 144,
+            "elec": 336,
+            "common": 200,
+            "internet": 0,
+            "parking": 300,
+            "surcharge": 0,
+            "total": 5480,
+            "status": "PAID",
+            "receipt": "RCP-202607-002"
+          },
+          {
+            "room": "104",
+            "tenant": "นายวิชัย มั่งมี",
+            "rent": 4500,
+            "water": 324,
+            "elec": 840,
+            "common": 200,
+            "internet": 0,
+            "parking": 0,
+            "surcharge": 600,
+            "total": 6464,
+            "status": "UNPAID",
+            "receipt": null
+          },
+          {
+            "room": "201",
+            "tenant": "นางสาวมานี มีตา",
+            "rent": 4800,
+            "water": 216,
+            "elec": 490,
+            "common": 200,
+            "internet": 150,
+            "parking": 0,
+            "surcharge": 0,
+            "total": 5856,
+            "status": "PAID",
+            "receipt": "RCP-202607-003"
+          },
+          {
+            "room": "202",
+            "tenant": "นายปิติ สบายดี",
+            "rent": 4800,
+            "water": 180,
+            "elec": 455,
+            "common": 200,
+            "internet": 0,
+            "parking": 0,
+            "surcharge": 0,
+            "total": 5635,
+            "status": "PAID",
+            "receipt": "RCP-202607-004"
+          },
+          {
+            "room": "203",
+            "tenant": "นางสาวชูใจ ใจอารี",
+            "rent": 4800,
+            "water": 216,
+            "elec": 525,
+            "common": 200,
+            "internet": 150,
+            "parking": 0,
+            "surcharge": 0,
+            "total": 5891,
+            "status": "UNPAID",
+            "receipt": null
+          },
+          {
+            "room": "301",
+            "tenant": "นายดนัย ดียิ่ง",
+            "rent": 5000,
+            "water": 252,
+            "elec": 560,
+            "common": 200,
+            "internet": 0,
+            "parking": 300,
+            "surcharge": 0,
+            "total": 6312,
+            "status": "PAID",
+            "receipt": "RCP-202607-005"
+          },
+          {
+            "room": "302",
+            "tenant": "นายนิรันดร์ สุขใจ",
+            "rent": 5000,
+            "water": 270,
+            "elec": 630,
+            "common": 200,
+            "internet": 0,
+            "parking": 0,
+            "surcharge": 0,
+            "total": 6100,
+            "status": "UNPAID",
+            "receipt": null
+          },
+          {
+            "room": "303",
+            "tenant": "นายประเสริฐ เกิดผล",
+            "rent": 5000,
+            "water": 216,
+            "elec": 595,
+            "common": 200,
+            "internet": 150,
+            "parking": 0,
+            "surcharge": 0,
+            "total": 6161,
+            "status": "PAID",
+            "receipt": "RCP-202607-006"
+          },
+          {
+            "room": "B101",
+            "tenant": "นางสาวมาลัย หอมหวล",
+            "rent": 5500,
+            "water": 300,
+            "elec": 800,
+            "common": 200,
+            "internet": 0,
+            "parking": 300,
+            "surcharge": 0,
+            "total": 7100,
+            "status": "PAID",
+            "receipt": "RCP-202607-007"
+          }
+        ]
+      }
+    }
+  }
+}
