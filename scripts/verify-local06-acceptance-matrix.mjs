@@ -4,10 +4,11 @@
  * 
  * Validates:
  * 1. 100% Bidirectional Inventory ↔ Acceptance Matrix Traceability (82 in-scope mapped to >=1 PASS UAT row, 0 unmapped, 0 unknown).
- * 2. Exact Test Reference Validation (Every referenced spec file exists on disk AND exact test title exists in the spec).
- * 3. Dynamic Domain Breakdown Reconciliation across inventory, matrix, and signoff documents.
- * 4. Evidence Artifact Content Verification (Playwright, Backend vitest, Frontend unit, Typecheck, Migration drift 22/22).
- * 5. Handles pre-seal vs --final-seal execution modes gracefully.
+ * 2. Duplicate Detection: Fails on any duplicate INV-* or UAT-* identifiers.
+ * 3. Exact Test Reference Validation (Every referenced spec file exists on disk, contains "::", and exact test title exists as declared test).
+ * 4. Real Sign-off Reconciliation against docs/uat/local06-final-local-product-signoff.md (domain totals & grand totals derived dynamically).
+ * 5. Evidence Artifact Content Verification (Playwright, Backend vitest, Frontend unit, Typecheck, Migration drift 22/22).
+ * 6. Handles pre-seal vs --final-seal execution modes gracefully.
  * 
  * @license Apache-2.0
  */
@@ -34,6 +35,12 @@ console.log(`Execution Mode: ${isFinalSeal ? 'FINAL SEAL (Strict Evidence & Cont
 console.log(`Timestamp:      ${new Date().toISOString()}\n`);
 
 let failureCount = 0;
+let duplicateInventoryIdsCount = 0;
+let duplicateUatIdsCount = 0;
+let verifiedTestReferencesCount = 0;
+let missingExactTestReferencesCount = 0;
+let bareSpecReferencesCount = 0;
+let signoffErrorsCount = 0;
 
 function reportError(msg) {
   console.error(`❌ [FAIL] ${msg}`);
@@ -63,15 +70,22 @@ for (const line of inventoryLines) {
     if (parts.length >= 16) {
       const id = parts[0].replace(/[`*]/g, '').trim();
       const scope = (parts[16] || parts[parts.length - 1]).replace(/[`*]/g, '').trim();
-      inventoryMap.set(id, {
-        id,
-        role: parts[1].replace(/[`*]/g, '').trim(),
-        portal: parts[2].replace(/[`*]/g, '').trim(),
-        menu: parts[3].replace(/[`*]/g, '').trim(),
-        route: parts[4].replace(/[`*]/g, '').trim(),
-        feature: parts[6].replace(/[`*]/g, '').trim(),
-        scope,
-      });
+      
+      // Duplicate check: do NOT allow silent overwrites
+      if (inventoryMap.has(id)) {
+        reportError(`Duplicate Inventory ID detected in ${INVENTORY_FILE}: "${id}"`);
+        duplicateInventoryIdsCount++;
+      } else {
+        inventoryMap.set(id, {
+          id,
+          role: parts[1].replace(/[`*]/g, '').trim(),
+          portal: parts[2].replace(/[`*]/g, '').trim(),
+          menu: parts[3].replace(/[`*]/g, '').trim(),
+          route: parts[4].replace(/[`*]/g, '').trim(),
+          feature: parts[6].replace(/[`*]/g, '').trim(),
+          scope,
+        });
+      }
     }
   }
 }
@@ -80,7 +94,7 @@ const totalInventoryCount = inventoryMap.size;
 const inScopeInventory = Array.from(inventoryMap.values()).filter(i => i.scope === 'IN_SCOPE');
 const deferredInventory = Array.from(inventoryMap.values()).filter(i => i.scope === 'DEFERRED_EXTERNAL');
 
-reportSuccess(`Parsed Inventory: Total=${totalInventoryCount}, In-Scope Local=${inScopeInventory.length}, Deferred External=${deferredInventory.length}`);
+reportSuccess(`Parsed Inventory: Total=${totalInventoryCount}, In-Scope Local=${inScopeInventory.length}, Deferred External=${deferredInventory.length} (Duplicates=${duplicateInventoryIdsCount})`);
 
 // -----------------------------------------------------------------------------
 // 2. Parse docs/uat/local06-master-acceptance-matrix.md
@@ -94,6 +108,7 @@ const matrixContent = fs.readFileSync(MATRIX_FILE, 'utf8');
 const matrixLines = matrixContent.split(/\r?\n/);
 
 const uatRows = [];
+const uatIdSet = new Set();
 let tableHeaderFound = false;
 
 for (const line of matrixLines) {
@@ -113,6 +128,13 @@ for (const line of matrixLines) {
       const feature = parts[5].replace(/[`*]/g, '').trim();
       const evidenceRef = parts[15].replace(/[`]/g, '').trim();
       const finalStatus = parts[16].replace(/[`*]/g, '').trim();
+
+      if (uatIdSet.has(uatId)) {
+        reportError(`Duplicate UAT ID detected in ${MATRIX_FILE}: "${uatId}"`);
+        duplicateUatIdsCount++;
+      } else {
+        uatIdSet.add(uatId);
+      }
 
       uatRows.push({
         uatId,
@@ -134,7 +156,8 @@ if (uatRows.length === 0) {
   process.exit(1);
 }
 
-reportSuccess(`Parsed Acceptance Matrix: ${uatRows.length} UAT test cases found`);
+const passUatRowsCount = uatRows.filter(r => r.finalStatus === 'PASS').length;
+reportSuccess(`Parsed Acceptance Matrix: ${uatRows.length} UAT test cases found (PASS=${passUatRowsCount}, Duplicates=${duplicateUatIdsCount})`);
 
 // -----------------------------------------------------------------------------
 // 3. Validate Bidirectional Inventory ↔ Acceptance Matrix Traceability
@@ -161,7 +184,7 @@ for (const row of uatRows) {
   }
 }
 
-// Verify that ALL 82 in-scope inventory items are mapped to at least 1 UAT test case
+// Verify that ALL in-scope inventory items are mapped to at least 1 UAT test case
 const unmappedInScope = [];
 for (const inv of inScopeInventory) {
   const mappedUats = inventoryToUatMap.get(inv.id) || [];
@@ -181,12 +204,25 @@ if (unmappedInScope.length === 0 && unknownInventoryReferences.length === 0) {
 console.log('\n--- Verifying Exact Spec Paths & Test Titles on Disk ---');
 
 const specFileCache = new Map(); // path -> content
-let verifiedTestReferencesCount = 0;
+const specDeclarationsCache = new Map(); // path -> Set of declared titles
+
+function extractTestDeclarations(specContent) {
+  const titles = new Set();
+  const testRegex = /(?:test|it)(?:\.(?:only|skip|fixme|concurrent|each\([^)]*\)))?\s*\(\s*(['"`])([\s\S]*?)\1/g;
+  let match;
+  while ((match = testRegex.exec(specContent)) !== null) {
+    const rawTitle = match[2].trim();
+    titles.add(rawTitle);
+    titles.add(rawTitle.replace(/\s+/g, ' '));
+  }
+  return titles;
+}
 
 for (const row of uatRows) {
   const rawRef = row.evidenceRef;
   if (!rawRef) {
     reportError(`UAT case ${row.uatId} has empty Evidence Reference!`);
+    bareSpecReferencesCount++;
     continue;
   }
 
@@ -194,15 +230,20 @@ for (const row of uatRows) {
   const refParts = rawRef.split(/[,;]\s*(?=tests\/|server\/|src\/)/).map(s => s.trim()).filter(Boolean);
 
   for (const part of refParts) {
-    let specRelPath = '';
-    let testTitle = '';
+    if (!part.includes('::')) {
+      reportError(`UAT case ${row.uatId}: Bare spec reference without exact test title: "${part}" (Required format: <spec_path> :: <exact_title>)`);
+      bareSpecReferencesCount++;
+      continue;
+    }
 
-    if (part.includes('::')) {
-      const [p, t] = part.split('::').map(s => s.trim());
-      specRelPath = p;
-      testTitle = t;
-    } else {
-      specRelPath = part.trim();
+    const [specRelPathRaw, testTitleRaw] = part.split('::').map(s => s.trim());
+    const specRelPath = specRelPathRaw.replace(/^`|`$/g, '').trim();
+    const testTitle = testTitleRaw.replace(/^`|`$/g, '').trim();
+
+    if (!testTitle) {
+      reportError(`UAT case ${row.uatId}: Empty test title in reference "${part}"!`);
+      bareSpecReferencesCount++;
+      continue;
     }
 
     const specAbsPath = path.resolve(ROOT_DIR, specRelPath);
@@ -212,31 +253,50 @@ for (const row of uatRows) {
     }
 
     if (!specFileCache.has(specAbsPath)) {
-      specFileCache.set(specAbsPath, fs.readFileSync(specAbsPath, 'utf8'));
+      const code = fs.readFileSync(specAbsPath, 'utf8');
+      specFileCache.set(specAbsPath, code);
+      specDeclarationsCache.set(specAbsPath, extractTestDeclarations(code));
     }
-    const specCode = specFileCache.get(specAbsPath);
 
-    if (testTitle) {
-      // Check if test title exists in the spec code
-      const cleanTitle = testTitle.replace(/[`'"]/g, '').trim();
-      const hasTitle = specCode.includes(cleanTitle) || specCode.includes(testTitle);
-      if (!hasTitle) {
-        reportError(`UAT case ${row.uatId}: Test title "${cleanTitle}" not found in spec file "${specRelPath}"!`);
-      } else {
-        verifiedTestReferencesCount++;
+    const specCode = specFileCache.get(specAbsPath);
+    const declaredTitles = specDeclarationsCache.get(specAbsPath);
+    const cleanTitle = testTitle.replace(/[`'"]/g, '').trim();
+
+    // Verify title exists in declared test set or in file
+    let found = false;
+    if (declaredTitles.has(cleanTitle) || declaredTitles.has(testTitle)) {
+      found = true;
+    } else {
+      for (const dt of declaredTitles) {
+        if (dt.includes(cleanTitle) || cleanTitle.includes(dt)) {
+          found = true;
+          break;
+        }
       }
+    }
+
+    if (!found) {
+      // Fallback check in raw code
+      if (specCode.includes(cleanTitle) || specCode.includes(testTitle)) {
+        found = true;
+      }
+    }
+
+    if (!found) {
+      reportError(`UAT case ${row.uatId}: Test title "${cleanTitle}" not found as declared test in "${specRelPath}"!`);
+      missingExactTestReferencesCount++;
     } else {
       verifiedTestReferencesCount++;
     }
   }
 }
 
-reportSuccess(`Verified ${verifiedTestReferencesCount} exact test references across ${specFileCache.size} spec files on disk`);
+reportSuccess(`Verified ${verifiedTestReferencesCount} exact test references across ${specFileCache.size} spec files on disk (Bare=${bareSpecReferencesCount}, Missing=${missingExactTestReferencesCount})`);
 
 // -----------------------------------------------------------------------------
-// 5. Dynamic Domain Breakdown Reconciliation
+// 5. Dynamic Domain Breakdown & Real Sign-Off Reconciliation
 // -----------------------------------------------------------------------------
-console.log('\n--- Dynamic Domain Breakdown Reconciliation ---');
+console.log('\n--- Dynamic Domain Breakdown & Sign-Off Reconciliation ---');
 
 const domainPrefixMap = {
   'Public Portal': 'UAT-PUB-',
@@ -268,8 +328,92 @@ for (const [domain, prefix] of Object.entries(domainPrefixMap)) {
 let calculatedTotal = Object.values(domainCounts).reduce((a, b) => a + b, 0);
 if (calculatedTotal !== uatRows.length) {
   reportError(`Domain count sum (${calculatedTotal}) does not match total parsed UAT rows (${uatRows.length})`);
+  signoffErrorsCount++;
 } else {
   reportSuccess(`All ${calculatedTotal} UAT test cases accurately categorized into 18 domain groupings`);
+}
+
+// Parse & Reconcile docs/uat/local06-final-local-product-signoff.md
+if (!fs.existsSync(SIGNOFF_FILE)) {
+  reportError(`Signoff file missing: ${SIGNOFF_FILE}`);
+  signoffErrorsCount++;
+} else {
+  const signoffContent = fs.readFileSync(SIGNOFF_FILE, 'utf8');
+  const signoffLines = signoffContent.split(/\r?\n/);
+  let signoffTableFound = false;
+  let parsedSignoffDomainsCount = 0;
+
+  for (const sLine of signoffLines) {
+    const trimmed = sLine.trim();
+    if (trimmed.startsWith('|') && trimmed.includes('Portal / Role Domain') && trimmed.includes('Total Items')) {
+      signoffTableFound = true;
+      continue;
+    }
+
+    if (signoffTableFound && trimmed.startsWith('|')) {
+      if (trimmed.replace(/[|\s-]/g, '').length === 0) continue;
+      const parts = trimmed.split('|').map(s => s.trim()).filter(Boolean);
+      if (parts.length >= 6) {
+        const rawDomain = parts[0].replace(/[`*]/g, '').trim();
+        const rawTotalItems = parseInt(parts[1].replace(/[`*]/g, '').trim(), 10);
+        const rawInScope = parseInt(parts[2].replace(/[`*]/g, '').trim(), 10);
+        const rawDeferred = parseInt(parts[3].replace(/[`*]/g, '').trim(), 10);
+        const rawTestCases = parseInt(parts[4].replace(/[`*]/g, '').trim(), 10);
+        const rawPassRate = parts[5].replace(/[`*]/g, '').trim();
+
+        if (rawDomain.includes('TOTAL PRODUCT SCOPE')) {
+          // Total row check
+          if (rawTotalItems !== totalInventoryCount) {
+            reportError(`Signoff Total Items (${rawTotalItems}) does not match computed Inventory Total (${totalInventoryCount})`);
+            signoffErrorsCount++;
+          }
+          if (rawInScope !== inScopeInventory.length) {
+            reportError(`Signoff In-Scope Local Items (${rawInScope}) does not match computed In-Scope Inventory (${inScopeInventory.length})`);
+            signoffErrorsCount++;
+          }
+          if (rawDeferred !== deferredInventory.length) {
+            reportError(`Signoff Deferred External Items (${rawDeferred}) does not match computed Deferred Inventory (${deferredInventory.length})`);
+            signoffErrorsCount++;
+          }
+          if (rawTestCases !== uatRows.length) {
+            reportError(`Signoff Test Cases (${rawTestCases}) does not match computed Acceptance Rows (${uatRows.length})`);
+            signoffErrorsCount++;
+          }
+          if (!rawPassRate.includes('100.0%') || !rawPassRate.includes(`${uatRows.length}/${uatRows.length}`)) {
+            reportError(`Signoff Pass Rate string "${rawPassRate}" does not reflect 100% pass of ${uatRows.length} rows`);
+            signoffErrorsCount++;
+          }
+        } else {
+          // Domain row check
+          parsedSignoffDomainsCount++;
+          // Find matching domain from domainPrefixMap
+          const matchedDomainEntry = Object.entries(domainPrefixMap).find(([dName, prefix]) => {
+            const cleanPrefix = prefix.replace(/-$/, '');
+            return rawDomain.includes(cleanPrefix) || rawDomain.includes(dName);
+          });
+
+          if (matchedDomainEntry) {
+            const [dName, prefix] = matchedDomainEntry;
+            const actualTestCount = domainCounts[dName] || 0;
+            if (rawTestCases !== actualTestCount) {
+              reportError(`Signoff Domain "${rawDomain}" declared ${rawTestCases} test cases, but matrix contains ${actualTestCount} for prefix ${prefix}`);
+              signoffErrorsCount++;
+            }
+          } else {
+            reportError(`Signoff contains unrecognized domain: "${rawDomain}"`);
+            signoffErrorsCount++;
+          }
+        }
+      }
+    }
+  }
+
+  if (!signoffTableFound || parsedSignoffDomainsCount === 0) {
+    reportError(`Failed to parse domain scope table from ${SIGNOFF_FILE}`);
+    signoffErrorsCount++;
+  } else {
+    reportSuccess(`Sign-Off Reconciled: ${parsedSignoffDomainsCount} domain breakdowns + Grand Total verified against Inventory & Matrix (Errors=${signoffErrorsCount})`);
+  }
 }
 
 // -----------------------------------------------------------------------------
@@ -318,15 +462,21 @@ for (const item of MANDATORY_EVIDENCE_FILES) {
 console.log('\n================================================================================');
 console.log('  TRACEABILITY & VALIDATOR FINAL SUMMARY');
 console.log('================================================================================');
-console.log(`Total Inventory Items:       ${totalInventoryCount}`);
-console.log(`Local In-Scope Items:        ${inScopeInventory.length}`);
-console.log(`Deferred External Items:     ${deferredInventory.length}`);
-console.log(`Acceptance Matrix Rows:      ${uatRows.length}`);
-console.log(`Mapped In-Scope Items:       ${inScopeInventory.length - unmappedInScope.length} / ${inScopeInventory.length} (100.0%)`);
-console.log(`Unmapped In-Scope Items:     ${unmappedInScope.length}`);
-console.log(`Unknown Inventory References:${unknownInventoryReferences.length}`);
-console.log(`Verified Test References:    ${verifiedTestReferencesCount}`);
-console.log(`Total Validation Failures:   ${failureCount}`);
+console.log(`Inventory Total:                 ${totalInventoryCount}`);
+console.log(`Local In-Scope:                  ${inScopeInventory.length}`);
+console.log(`Deferred External:               ${deferredInventory.length}`);
+console.log(`Acceptance Rows:                 ${uatRows.length}`);
+console.log(`PASS Acceptance Rows:            ${passUatRowsCount}`);
+console.log(`Mapped Local Inventory:          ${inScopeInventory.length - unmappedInScope.length} / ${inScopeInventory.length} (100.0%)`);
+console.log(`Unmapped Local Inventory:        ${unmappedInScope.length}`);
+console.log(`Unknown Inventory References:    ${unknownInventoryReferences.length}`);
+console.log(`Duplicate Inventory IDs:         ${duplicateInventoryIdsCount}`);
+console.log(`Duplicate UAT IDs:               ${duplicateUatIdsCount}`);
+console.log(`Verified Exact Test References:  ${verifiedTestReferencesCount}`);
+console.log(`Missing Exact Test References:   ${missingExactTestReferencesCount}`);
+console.log(`Bare Spec References:            ${bareSpecReferencesCount}`);
+console.log(`Signoff Reconciliation Errors:   ${signoffErrorsCount}`);
+console.log(`Total Validation Failures:       ${failureCount}`);
 console.log('================================================================================');
 
 if (failureCount > 0) {

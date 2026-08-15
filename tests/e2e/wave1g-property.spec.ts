@@ -424,6 +424,7 @@ test.describe.serial('Wave 1G Real Playwright Lifecycle — Property, Room Defau
     // ============================================================
     // SECTION 2: Building Override — Set, Assert, Clear, Assert
     // ============================================================
+    await page.getByLabel('กรองตามอาคาร').selectOption({ label: 'Building A' });
     const editBldBtn = page.getByTestId('btn-edit-building');
     await expect(editBldBtn).toBeVisible({ timeout: 15000 });
     await editBldBtn.click();

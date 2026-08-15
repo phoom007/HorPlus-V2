@@ -7,8 +7,10 @@ This master acceptance matrix provides the machine-checkable specification and a
 ## Acceptance Summary
 
 - **Total Acceptance Test Cases**: 87
-- **In-Scope Pass Rate**: 100% (87 / 87 PASS)
-- **Unmapped / Blocked / Failed Items**: 0
+- **Acceptance Rows Passed**: 87 / 87 (100.0%)
+- **Local In-Scope Inventory Mapped**: 82 / 82 (100.0%)
+- **Deferred External Inventory**: 5
+- **Unmapped Local Inventory**: 0
 - **Automated E2E Suite Reference**: `tests/e2e/local06-master-local-uat.spec.ts`
 
 ---
