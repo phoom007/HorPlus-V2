@@ -110,6 +110,7 @@ describe('LOCAL-06 — Co-Occupant / People-Count / Auto-Bill Recalculation & Ou
         normalizedRoomNumber: 'a102',
         floor: 1,
         status: 'occupied',
+        roomType: 'standard',
         monthlyRent: 5000,
         currentTenantId: tenantId,
       },

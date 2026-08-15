@@ -135,6 +135,7 @@ async function createIsolatedFixture(tag: string) {
       buildingId: building.id,
       roomNumber: 'A102',
       normalizedRoomNumber: 'a102',
+      roomType: 'standard',
       floor: 1,
       status: 'occupied',
       monthlyRent: 5000,

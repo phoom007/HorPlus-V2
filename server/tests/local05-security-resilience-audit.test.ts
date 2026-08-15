@@ -643,13 +643,16 @@ describe.sequential('LOCAL-05: Local Security & Resilience Audit Suite', () => {
       const grantService = new AccessGrantService(prisma);
       
       const rawLineId = `line-user-${Date.now()}`;
-      const friend = await prisma.dormitoryLineFriend.create({
-        data: {
-          dormitoryId: dormIdA,
-          lineUserIdHash: hashToken(rawLineId),
-          lineUserIdEncrypted: encryptText(rawLineId),
-          displayName: 'Line Staff Alpha'
-        }
+      const friend = await prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormIdA}, true)`;
+        return tx.dormitoryLineFriend.create({
+          data: {
+            dormitoryId: dormIdA,
+            lineUserIdHash: hashToken(rawLineId),
+            lineUserIdEncrypted: encryptText(rawLineId),
+            displayName: 'Line Staff Alpha'
+          }
+        });
       });
 
       const grant = await grantService.createAccessGrant(
@@ -678,13 +681,16 @@ describe.sequential('LOCAL-05: Local Security & Resilience Audit Suite', () => {
       const grantService = new AccessGrantService(prisma);
       
       const rawLineId = `line-replay-${Date.now()}`;
-      const friend = await prisma.dormitoryLineFriend.create({
-        data: {
-          dormitoryId: dormIdA,
-          lineUserIdHash: hashToken(rawLineId),
-          lineUserIdEncrypted: encryptText(rawLineId),
-          displayName: 'Line Staff Replay'
-        }
+      const friend = await prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormIdA}, true)`;
+        return tx.dormitoryLineFriend.create({
+          data: {
+            dormitoryId: dormIdA,
+            lineUserIdHash: hashToken(rawLineId),
+            lineUserIdEncrypted: encryptText(rawLineId),
+            displayName: 'Line Staff Replay'
+          }
+        });
       });
 
       const grant = await grantService.createAccessGrant(
@@ -714,13 +720,16 @@ describe.sequential('LOCAL-05: Local Security & Resilience Audit Suite', () => {
       const friends = [];
       for (let i = 0; i < 12; i++) {
         const lineId = `line-quota-${i}-${Date.now()}`;
-        const f = await prisma.dormitoryLineFriend.create({
-          data: {
-            dormitoryId: dormIdA,
-            lineUserIdHash: hashToken(lineId),
-            lineUserIdEncrypted: encryptText(lineId),
-            displayName: `Quota Staff ${i}`
-          }
+        const f = await prisma.$transaction(async (tx) => {
+          await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormIdA}, true)`;
+          return tx.dormitoryLineFriend.create({
+            data: {
+              dormitoryId: dormIdA,
+              lineUserIdHash: hashToken(lineId),
+              lineUserIdEncrypted: encryptText(lineId),
+              displayName: `Quota Staff ${i}`
+            }
+          });
         });
         friends.push(f);
       }

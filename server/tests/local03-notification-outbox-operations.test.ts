@@ -1,10 +1,14 @@
 import { describe, it, expect, beforeEach } from 'vitest';
+import { PrismaClient } from '@prisma/client';
 import { getPrismaClient } from '../src/db/prisma.js';
 import { outboxService } from '../src/services/outbox.service.js';
 import { PrismaNotificationRepository } from '../src/db/repositories/prisma-notification.repository.js';
 import crypto from 'crypto';
 
 const prisma = getPrismaClient();
+const adminPrisma = new PrismaClient({
+  datasources: { db: { url: process.env.DIRECT_URL || process.env.DATABASE_URL } },
+});
 
 describe('LOCAL-03: Local Notification Outbox & Operations Polish', () => {
   let testDormitoryId: string;
@@ -590,7 +594,7 @@ describe('LOCAL-03: Local Notification Outbox & Operations Polish', () => {
 
     try {
       // Inject deterministic failure only for the Manager recipient on staff_notices
-      await prisma.$executeRawUnsafe(`
+      await adminPrisma.$executeRawUnsafe(`
         CREATE OR REPLACE FUNCTION test_fail_second_staff_recipient() RETURNS trigger AS $$
         BEGIN
           IF NEW.user_id = '${testManagerUserId}' THEN
@@ -601,8 +605,8 @@ describe('LOCAL-03: Local Notification Outbox & Operations Polish', () => {
         $$ LANGUAGE plpgsql;
       `);
 
-      await prisma.$executeRawUnsafe('DROP TRIGGER IF EXISTS trg_test_fail_second_staff ON staff_notices;');
-      await prisma.$executeRawUnsafe(`
+      await adminPrisma.$executeRawUnsafe('DROP TRIGGER IF EXISTS trg_test_fail_second_staff ON staff_notices;');
+      await adminPrisma.$executeRawUnsafe(`
         CREATE TRIGGER trg_test_fail_second_staff
           BEFORE INSERT OR UPDATE ON staff_notices
           FOR EACH ROW
@@ -626,8 +630,8 @@ describe('LOCAL-03: Local Notification Outbox & Operations Polish', () => {
       expect(outboxAfterFailure?.processedAt).toBeNull();
     } finally {
       // Clean up the temporary test trigger
-      await prisma.$executeRawUnsafe('DROP TRIGGER IF EXISTS trg_test_fail_second_staff ON staff_notices;');
-      await prisma.$executeRawUnsafe('DROP FUNCTION IF EXISTS test_fail_second_staff_recipient();');
+      await adminPrisma.$executeRawUnsafe('DROP TRIGGER IF EXISTS trg_test_fail_second_staff ON staff_notices;');
+      await adminPrisma.$executeRawUnsafe('DROP FUNCTION IF EXISTS test_fail_second_staff_recipient();');
     }
 
     // Now re-run dispatcher after removing induced failure

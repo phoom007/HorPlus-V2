@@ -112,6 +112,56 @@ export async function syncSubscriptionCatalog(prisma: PrismaClient, options: { d
     }
   }
 
+  // 3. Sync Promo Codes
+  for (const promoDef of CANONICAL_SUBSCRIPTION_CATALOG.promoCodes || []) {
+    const existingPromo = await prisma.promoCode.findFirst({
+      where: { code: promoDef.code },
+    });
+
+    if (!existingPromo) {
+      changesDetected = true;
+      console.log(`[CatalogSync] PromoCode missing: ${promoDef.code}`);
+      if (!dryRun && !checkOnly) {
+        await prisma.promoCode.create({
+          data: {
+            code: promoDef.code,
+            normalizedCode: promoDef.normalizedCode,
+            extensionDays: promoDef.extensionDays,
+            benefitType: promoDef.benefitType,
+            benefitUnit: promoDef.benefitUnit,
+            benefitValue: promoDef.benefitValue,
+            enabled: promoDef.enabled,
+            maximumRedemptionsPerDormitory: promoDef.maximumRedemptionsPerDormitory,
+          },
+        });
+      }
+    } else if (
+      existingPromo.extensionDays !== promoDef.extensionDays ||
+      existingPromo.benefitType !== promoDef.benefitType ||
+      existingPromo.benefitUnit !== promoDef.benefitUnit ||
+      existingPromo.benefitValue !== promoDef.benefitValue ||
+      existingPromo.enabled !== promoDef.enabled ||
+      existingPromo.maximumRedemptionsPerDormitory !== promoDef.maximumRedemptionsPerDormitory
+    ) {
+      changesDetected = true;
+      console.log(`[CatalogSync] PromoCode drift detected for: ${promoDef.code}`);
+      if (!dryRun && !checkOnly) {
+        await prisma.promoCode.update({
+          where: { id: existingPromo.id },
+          data: {
+            normalizedCode: promoDef.normalizedCode,
+            extensionDays: promoDef.extensionDays,
+            benefitType: promoDef.benefitType,
+            benefitUnit: promoDef.benefitUnit,
+            benefitValue: promoDef.benefitValue,
+            enabled: promoDef.enabled,
+            maximumRedemptionsPerDormitory: promoDef.maximumRedemptionsPerDormitory,
+          },
+        });
+      }
+    }
+  }
+
   if (checkOnly) {
     if (changesDetected) {
       console.error('[CatalogSync] DRIFT DETECTED: Database catalog does not match developer catalog file!');

@@ -25,9 +25,8 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as crypto from 'crypto';
 
-const defaultDbUrl = process.env.DATABASE_URL || 'postgresql://horplus:horplus_dev_password@127.0.0.1:5455/horplus_wave1d_fasttrack_test?schema=public';
-const parsedUrl = new URL(defaultDbUrl);
-const ADMIN_URL = defaultDbUrl;
+const ADMIN_URL = process.env.DIRECT_URL || 'postgresql://horplus:password@127.0.0.1:5455/horplus_wave1d_fasttrack_test?schema=public';
+const parsedUrl = new URL(ADMIN_URL);
 const PGHOST = parsedUrl.hostname || '127.0.0.1';
 const PGPORT = parsedUrl.port || '5455';
 const PGUSER = parsedUrl.username || 'horplus';

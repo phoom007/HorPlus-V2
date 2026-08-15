@@ -20,12 +20,24 @@ export interface CatalogPlanDefinition {
   enabled: boolean;
 }
 
+export interface CatalogPromoCodeDefinition {
+  code: string;
+  normalizedCode: string;
+  extensionDays: number;
+  benefitType: string;
+  benefitUnit: string;
+  benefitValue: number;
+  enabled: boolean;
+  maximumRedemptionsPerDormitory: number;
+}
+
 export interface SubscriptionCatalogRelease {
   version: number;
   releaseDate: string;
   description: string;
   plans: CatalogPlanDefinition[];
   packages: CatalogPackageDefinition[];
+  promoCodes?: CatalogPromoCodeDefinition[];
 }
 
 export const CANONICAL_SUBSCRIPTION_CATALOG: SubscriptionCatalogRelease = {
@@ -85,6 +97,18 @@ export const CANONICAL_SUBSCRIPTION_CATALOG: SubscriptionCatalogRelease = {
       price: null,
       currency: 'THB',
       enabled: false,
+    },
+  ],
+  promoCodes: [
+    {
+      code: 'HORPLUS',
+      normalizedCode: 'HORPLUS',
+      extensionDays: 60,
+      benefitType: 'TRIAL_EXTENSION',
+      benefitUnit: 'MONTH',
+      benefitValue: 2,
+      enabled: true,
+      maximumRedemptionsPerDormitory: 1,
     },
   ],
 };

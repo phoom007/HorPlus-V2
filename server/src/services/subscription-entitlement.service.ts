@@ -44,10 +44,12 @@ export class SubscriptionEntitlementService {
   }
 
   /**
-   * Legacy seed helper — now a no-op to eliminate accidental product-data mutation.
+   * Syncs canonical subscription catalog (plans, packages, promo codes) into database.
    */
-  async ensureSeeded(_txClient?: any): Promise<void> {
-    // No-op: Catalog plans and promo codes are seeded via migrations and sync scripts.
+  async ensureSeeded(txClient?: any): Promise<void> {
+    const db = txClient || this.db;
+    const { syncSubscriptionCatalog } = await import('../scripts/subscription-catalog-sync.js');
+    await syncSubscriptionCatalog(db);
   }
   async provisionInitialTrial(dormitoryId: string, txClient?: any, now: Date = new Date()): Promise<any> {
     const db = txClient || this.db;
