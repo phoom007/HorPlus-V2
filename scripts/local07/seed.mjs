@@ -211,6 +211,15 @@ export async function seedLocal07Data() {
     })),
     planCode: 'FREE',
     promoCode: 'HORPLUS',
+    defaultTerms: `1. ห้ามสูบบุหรี่ภายในห้องพักและพื้นที่ส่วนกลาง
+2. ห้ามส่งเสียงดังรบกวนผู้อื่นหลังเวลา 22:00 น.
+3. ชำระค่าเช่าและค่าน้ำไฟตรงตามกำหนดเวลา ภายในวันที่ 5 ของทุกเดือน
+4. ห้ามนำบุคคลภายนอกมาพักค้างคืนโดยไม่แจ้งเจ้าหน้าที่
+5. รักษาความสะอาดและดูแลรักษาทรัพย์สินของหอพักอย่างเคร่งครัด`,
+    petPolicy: {
+      allowed: 'none',
+      allowedTypes: [],
+    },
   });
 
   const freshDormId = onboardingResult.dormitory.id;
@@ -383,6 +392,15 @@ export async function seedLocal07Data() {
       defaultParkingFee: 300.0,
       defaultMaxOccupants: 2,
       defaultRoomType: 'standard',
+      defaultTerms: `1. ห้ามสูบบุหรี่ภายในห้องพักและพื้นที่ส่วนกลาง
+2. ห้ามส่งเสียงดังรบกวนผู้อื่นหลังเวลา 22:00 น.
+3. ชำระค่าเช่าและค่าน้ำไฟตรงตามกำหนดเวลา ภายในวันที่ 5 ของทุกเดือน
+4. ห้ามนำบุคคลภายนอกมาพักค้างคืนโดยไม่แจ้งเจ้าหน้าที่
+5. รักษาความสะอาดและดูแลรักษาทรัพย์สินของหอพักอย่างเคร่งครัด`,
+      petPolicy: {
+        allowed: 'conditional',
+        allowedTypes: ['cat', 'small_pet'],
+      },
     },
   });
 
@@ -920,7 +938,57 @@ export async function seedLocal07Data() {
     bCount++;
   }
 
-  console.log(`✅ Comprehensive Owner provisioned: "${compDorm.name}" (18 rooms, 11 occupied, July 2026 billing cycle seeded with paid & unpaid bills, payments, receipts)`);
+  // Seed sample Tenant Registration Request (Pending) with acceptance snapshot & signature
+  const room102 = await prisma.room.findFirst({
+    where: { dormitoryId: compDorm.id, roomNumber: '102' },
+  });
+
+  if (room102) {
+    const signatureStorage = new SignatureStorageService();
+    const tenantSigResult = await signatureStorage.saveTenantSignature({
+      dormitoryId: compDorm.id,
+      buffer: sigBuffer,
+    });
+
+    const canonicalSnapshot = {
+      defaultTerms: `1. ห้ามสูบบุหรี่ภายในห้องพักและพื้นที่ส่วนกลาง
+2. ห้ามส่งเสียงดังรบกวนผู้อื่นหลังเวลา 22:00 น.
+3. ชำระค่าเช่าและค่าน้ำไฟตรงตามกำหนดเวลา ภายในวันที่ 5 ของทุกเดือน
+4. ห้ามนำบุคคลภายนอกมาพักค้างคืนโดยไม่แจ้งเจ้าหน้าที่
+5. รักษาความสะอาดและดูแลรักษาทรัพย์สินของหอพักอย่างเคร่งครัด`,
+      dormitoryId: compDorm.id,
+      dormitoryName: compDorm.name,
+      petPolicy: {
+        allowed: 'conditional',
+        allowedTypes: ['cat', 'small_pet'],
+      },
+      policyVersion: 1,
+    };
+    const crypto = await import('crypto');
+    const snapshotJson = JSON.stringify(canonicalSnapshot);
+    const snapshotSha256 = crypto.createHash('sha256').update(snapshotJson).digest('hex');
+
+    await prisma.tenantRegistrationRequest.create({
+      data: {
+        dormitoryId: compDorm.id,
+        requestedRoomId: room102.id,
+        firstName: 'กิตติศักดิ์',
+        lastName: 'มงคลดี',
+        phone: '089-112-3344',
+        note: 'ประสงค์เข้าพักช่วงต้นเดือนหน้า เลี้ยงแมว 1 ตัว',
+        status: 'pending',
+        acceptanceSnapshot: canonicalSnapshot,
+        acceptanceSnapshotSha256: snapshotSha256,
+        acceptedAt: new Date('2026-08-01T10:00:00Z'),
+        tenantSignatureObjectKey: tenantSigResult.objectKey,
+        tenantSignatureSha256: tenantSigResult.sha256,
+        tenantSignatureMimeType: tenantSigResult.mimeType,
+        tenantSignatureByteSize: tenantSigResult.byteSize,
+      },
+    });
+  }
+
+  console.log(`✅ Comprehensive Owner provisioned: "${compDorm.name}" (18 rooms, 11 occupied, July 2026 billing cycle seeded with paid & unpaid bills, payments, receipts, and 1 pending tenant registration request)`);
   console.log('\n================================================================================');
   console.log('🎉 LOCAL-07 DATASET SEEDING COMPLETE & FULLY POPULATED');
   console.log('================================================================================\n');

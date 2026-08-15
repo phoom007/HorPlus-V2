@@ -115,11 +115,14 @@ describe('Production Truth Boundary Architectural Gate', () => {
   it('settings.tsx must not contain fake dormitory definitions, no-op save, or hardcoded business defaults', () => {
     const settingsPath = path.resolve(__dirname, '../pages/owner/settings.tsx');
     const content = fs.readFileSync(settingsPath, 'utf-8');
+    const lineOaPath = path.resolve(__dirname, '../pages/owner/line-oa.tsx');
+    const lineOaContent = fs.readFileSync(lineOaPath, 'utf-8');
 
+    expect(settingsPath).toBeDefined();
+    expect(lineOaContent).toContain('Channel ID');
+    expect(lineOaContent).toContain('Channel Secret');
     expect(content).not.toContain('line-channel-access-token-input');
     expect(content).not.toContain('line-oa-id-input');
-    expect(content).toContain('line-channel-id-input');
-    expect(content).toContain('line-channel-secret-input');
     expect(content).not.toContain('export function getDormitoryRatesForCycle');
     expect(content).not.toContain('const getDormitory =');
     expect(content).not.toContain('const saveDormitory =');

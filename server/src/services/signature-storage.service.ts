@@ -292,5 +292,41 @@ export class SignatureStorageService {
   async getSignatureStream(objectKey: string): Promise<Readable> {
     return await this.provider.getStream(objectKey);
   }
+
+  /**
+   * Process and save a tenant's registration signature.
+   * Validates non-blank PNG, computes SHA-256, and stores in object storage.
+   */
+  async saveTenantSignature(params: {
+    dormitoryId: string;
+    buffer: Buffer;
+    mimeType?: string;
+  }): Promise<{ objectKey: string; sha256: string; mimeType: string; byteSize: number }> {
+    const { dormitoryId, buffer, mimeType = 'image/png' } = params;
+
+    if (!buffer || buffer.length === 0 || buffer.length > 5 * 1024 * 1024) {
+      throw new AppError('ลายเซ็นต้องไม่ว่างเปล่าและขนาดไม่เกิน 5MB', 400, 'INVALID_SIGNATURE_SIZE');
+    }
+
+    const { width, height, nonBackgroundPixels } = decodePngAndValidatePixels(buffer);
+    const minPixels = (width === 1 && height === 1) ? 1 : Math.min(25, Math.max(1, Math.floor(width * height * 0.01)));
+
+    if (nonBackgroundPixels < minPixels) {
+      throw new AppError('กรุณาเซ็นชื่อก่อนบันทึกคำขอลงทะเบียน', 400, 'BLANK_SIGNATURE_REJECTED');
+    }
+
+    const sha256 = crypto.createHash('sha256').update(buffer).digest('hex');
+    const objectKey = `dormitories/${dormitoryId}/tenant-signatures/${sha256}.png`;
+
+    await this.provider.save(objectKey, buffer);
+
+    return {
+      objectKey,
+      sha256,
+      mimeType,
+      byteSize: buffer.length,
+    };
+  }
 }
+
 

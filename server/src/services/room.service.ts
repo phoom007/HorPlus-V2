@@ -76,9 +76,27 @@ export class RoomService {
       buildingsResult.items.map((b: any) => [b.id, b.name])
     );
 
+    let entitledRoomIds = new Set<string>();
+    try {
+      const sub = await subscriptionEntitlementService.getCurrentSubscription(dormitoryId);
+      const roomLimit = sub.plan.roomLimit || 10;
+      const allActiveRooms = await this.roomRepo.findAll(dormitoryId);
+      const activeEligible = (allActiveRooms.items || []).filter((r: any) => r.status !== 'archived');
+      activeEligible.sort((a: any, b: any) => {
+        const timeA = new Date(a.createdAt || 0).getTime();
+        const timeB = new Date(b.createdAt || 0).getTime();
+        if (timeA !== timeB) return timeA - timeB;
+        return (a.id || '').localeCompare(b.id || '');
+      });
+      entitledRoomIds = new Set(activeEligible.slice(0, roomLimit).map((r: any) => r.id));
+    } catch {
+      // Fallback: mark entitled if subscription check unavailable
+    }
+
     const items = result.items.map((room: any) => ({
       ...room,
-      buildingName: buildingMap.get(room.buildingId) || 'Building'
+      buildingName: buildingMap.get(room.buildingId) || 'Building',
+      isEntitled: entitledRoomIds.size > 0 ? entitledRoomIds.has(room.id) : true,
     }));
 
     return {

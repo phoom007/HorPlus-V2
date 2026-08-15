@@ -234,6 +234,14 @@ export const CompleteOnboardingInputSchema = z.object({
   idempotencyKey: z.string().optional(),
   marketingSource: z.string().optional(),
   termsAccepted: z.boolean().optional(),
+  rules: z.string().optional(),
+  defaultTerms: z.string().optional(),
+  petPolicy: z.object({
+    allowed: z.string(),
+    allowedTypes: z.array(z.string()).optional(),
+  }).optional(),
+  signatureSaved: z.boolean().optional(),
+  signatureObjectKey: z.string().optional(),
 });
 
 export const OnboardingDraftInputSchema = z.object({

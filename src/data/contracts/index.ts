@@ -34,6 +34,7 @@ export type DomainErrorCode =
   | 'REPLACEMENT_CONFIRMATION_REQUIRED'
   | 'SETTLEMENT_LOCKED'
   | 'PENDING_REGISTRATION_LOCK'
+  | 'POLICY_VERSION_MISMATCH'
   | 'INTERNAL_ERROR';
 
 export interface DomainError {

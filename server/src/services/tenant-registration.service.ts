@@ -3,6 +3,9 @@ import { logger } from '../config/logger.js';
 import { AppError } from '../types/index.js';
 import { Prisma } from '@prisma/client';
 import { outboxService } from './outbox.service.js';
+import { SignatureStorageService } from './signature-storage.service.js';
+import { subscriptionEntitlementService } from './subscription-entitlement.service.js';
+import crypto from 'crypto';
 
 export interface CreateRegistrationDto {
   dormitoryId: string;
@@ -11,6 +14,25 @@ export interface CreateRegistrationDto {
   lastName: string;
   phone: string;
   note?: string;
+  agreedTerms?: boolean;
+  signatureBase64?: string;
+  expectedPolicyVersion?: number;
+}
+
+export function canonicalJsonStringify(obj: any): string {
+  if (obj === null || typeof obj !== 'object') {
+    return JSON.stringify(obj);
+  }
+  if (Array.isArray(obj)) {
+    return '[' + obj.map(canonicalJsonStringify).join(',') + ']';
+  }
+  const keys = Object.keys(obj).sort();
+  return '{' + keys.map(k => `${JSON.stringify(k)}:${canonicalJsonStringify(obj[k])}`).join(',') + '}';
+}
+
+export function computeSnapshotSha256(snapshot: any): string {
+  const canonicalJson = canonicalJsonStringify(snapshot);
+  return crypto.createHash('sha256').update(canonicalJson, 'utf8').digest('hex');
 }
 
 export interface ApproveRegistrationDto {
@@ -25,10 +47,66 @@ export interface ApproveRegistrationDto {
 }
 
 export class TenantRegistrationService {
+  public async getPublicDormitoryPolicy(dormitoryId: string) {
+    const prisma = getPrismaClient();
+    const dorm = await prisma.dormitory.findUnique({
+      where: { id: dormitoryId },
+      select: { id: true, name: true },
+    });
+    if (!dorm) {
+      throw new AppError('ไม่พบข้อมูลหอพัก', 404, 'DORMITORY_NOT_FOUND');
+    }
+
+    const defaults = await prisma.dormitoryPropertyDefaults.findUnique({
+      where: { dormitoryId },
+    });
+
+    return {
+      dormitoryId,
+      dormitoryName: dorm.name,
+      defaultTerms: defaults?.defaultTerms || '',
+      petPolicy: defaults?.petPolicy || { allowed: 'none', allowedTypes: [] },
+      version: defaults?.version || 1,
+    };
+  }
+
   public async createRequest(dormitoryId: string, payload: CreateRegistrationDto) {
     const prisma = getPrismaClient();
 
+    // 1. Mandatory acceptance validation
+    if (payload.agreedTerms === false) {
+      throw new AppError('กรุณายอมรับกฎระเบียบและเงื่อนไขของหอพักก่อนส่งคำขอลงทะเบียน', 400, 'TERMS_NOT_ACCEPTED');
+    }
+
+    // 2. Fetch Dormitory & Policy Defaults
+    const dorm = await prisma.dormitory.findUnique({
+      where: { id: dormitoryId },
+      select: { id: true, name: true },
+    });
+    if (!dorm) {
+      throw new AppError('ไม่พบข้อมูลหอพัก', 404, 'DORMITORY_NOT_FOUND');
+    }
+
+    const defaults = await prisma.dormitoryPropertyDefaults.findUnique({
+      where: { dormitoryId },
+    });
+
+    // Concurrency Protection: Policy Version Mismatch
+    if (
+      payload.expectedPolicyVersion !== undefined &&
+      defaults &&
+      defaults.version !== payload.expectedPolicyVersion
+    ) {
+      throw new AppError(
+        'กฎระเบียบหรือเงื่อนไขของหอพักมีการเปลี่ยนแปลง กรุณาตรวจสอบและยอมรับเงื่อนไขใหม่อีกครั้ง',
+        409,
+        'POLICY_VERSION_MISMATCH'
+      );
+    }
+
+    // 3. Resolve requested room
     let requestedRoomId: string = payload.requestedRoomId;
+    let resolvedRoomNumber = '';
     if (payload.requestedRoomId) {
       const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(payload.requestedRoomId);
       const room = await prisma.room.findFirst({
@@ -51,12 +129,44 @@ export class TenantRegistrationService {
         throw err;
       }
 
-      if (room.status === 'occupied') {
-        // Note: Multiple pending requests are allowed, but occupied check is handled during approval with replacement warning
-      }
-
       requestedRoomId = room.id;
+      resolvedRoomNumber = room.roomNumber;
     }
+
+    // 4. Save Tenant Signature Binary if provided
+    let sigMeta: { objectKey?: string; sha256?: string; mimeType?: string; byteSize?: number } = {};
+    if (payload.signatureBase64 && payload.signatureBase64.trim()) {
+      const base64Clean = payload.signatureBase64.replace(/^data:image\/\w+;base64,/, '');
+      const buffer = Buffer.from(base64Clean, 'base64');
+      const sigStorage = new SignatureStorageService(prisma);
+      const savedSig = await sigStorage.saveTenantSignature({
+        dormitoryId,
+        buffer,
+      });
+      sigMeta = {
+        objectKey: savedSig.objectKey,
+        sha256: savedSig.sha256,
+        mimeType: savedSig.mimeType,
+        byteSize: savedSig.byteSize,
+      };
+    }
+
+    // 5. Build Canonical Acceptance Snapshot & Compute SHA-256
+    const acceptedAt = new Date();
+    const acceptanceSnapshot = {
+      snapshotVersion: 1,
+      dormitoryId,
+      dormitoryName: dorm.name,
+      requestedRoomId,
+      requestedRoomNumber: resolvedRoomNumber,
+      defaultTerms: defaults?.defaultTerms || '',
+      petPolicy: defaults?.petPolicy || { allowed: 'none', allowedTypes: [] },
+      policyVersion: defaults?.version || 1,
+      acceptedAt: acceptedAt.toISOString(),
+      applicantName: `${payload.firstName.trim()} ${payload.lastName.trim()}`,
+      applicantPhone: payload.phone.trim(),
+    };
+    const acceptanceSnapshotSha256 = computeSnapshotSha256(acceptanceSnapshot);
 
     return prisma.tenantRegistrationRequest.create({
       data: {
@@ -67,7 +177,14 @@ export class TenantRegistrationService {
         phone: payload.phone.trim(),
         note: payload.note ? payload.note.trim() : null,
         status: 'pending_owner_approval',
-        submittedAt: new Date(),
+        submittedAt: acceptedAt,
+        acceptedAt,
+        acceptanceSnapshot,
+        acceptanceSnapshotSha256,
+        tenantSignatureObjectKey: sigMeta.objectKey || null,
+        tenantSignatureSha256: sigMeta.sha256 || null,
+        tenantSignatureMimeType: sigMeta.mimeType || null,
+        tenantSignatureByteSize: sigMeta.byteSize || null,
       },
     });
   }
@@ -263,6 +380,9 @@ export class TenantRegistrationService {
           (err as any).message = 'ห้องพักที่ระบุไม่อยู่ในหอพักนี้';
           throw err;
         }
+
+        // Check room operational entitlement limit (FREE tier first-10 active rooms)
+        await subscriptionEntitlementService.assertRoomOperationalEntitlement(dormitoryId, room.id, new Date(), tx);
 
         // Check if room currently has an active tenancy OR an approved future renewal contract
         const activeOccupancy = await tx.occupancy.findFirst({

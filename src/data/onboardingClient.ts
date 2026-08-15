@@ -81,6 +81,9 @@ export interface CompleteOnboardingPayload {
   }[];
   planCode: string;
   promoCode?: string;
+  defaultTerms?: string;
+  petPolicy?: any;
+  rules?: any;
 }
 
 export interface CompleteOnboardingResponse {

@@ -238,6 +238,21 @@ export const Task009ApiAdapter = {
   },
 
   /**
+   * Test Webhook Endpoint for a dormitory
+   */
+  async testWebhookEndpoint(dormId: string): Promise<{ success: boolean; data?: LineOaConfigResponse; error?: any }> {
+    try {
+      const res = await httpRequest<any>('POST', `/dormitories/${dormId}/line-oa/test-webhook`);
+      return { success: true, data: res.data || res };
+    } catch (err: any) {
+      return {
+        success: false,
+        error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message }
+      };
+    }
+  },
+
+  /**
    * Disconnect LINE OA for a dormitory
    */
   async disconnectLineOa(dormId: string): Promise<{ success: boolean; data?: LineOaConfigResponse; error?: any }> {

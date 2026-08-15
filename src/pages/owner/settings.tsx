@@ -21,7 +21,8 @@ import {
   PenTool,
   CheckCircle2,
   Layers,
-  Copy
+  Copy,
+  X
 } from 'lucide-react';
 // Server-authoritative Settings page component
 
@@ -33,6 +34,7 @@ import { PropagationPreviewModal } from '../../components/PropagationPreviewModa
 import { VersionConflictModal } from '../../components/VersionConflictModal';
 import { getPaymentSettings, updatePaymentSettings, PaymentSettingsUpdatePayload } from '../../services/payment-settings.service';
 import { getDormitoryProfile, updateDormitoryProfile, UpdateDormitoryProfilePayload } from '../../services/dormitory.service';
+import { OwnerLineOaPage } from './line-oa';
 
 import { Dormitory, CycleRates } from '../../types';
 
@@ -230,6 +232,7 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
   const [inputChannelSecret, setInputChannelSecret] = useState('');
   const [isSavingLineOa, setIsSavingLineOa] = useState(false);
   const [copiedWebhookUrl, setCopiedWebhookUrl] = useState(false);
+  const [showLineOaModal, setShowLineOaModal] = useState(false);
 
   const fetchLineOaConfig = async () => {
     const dormId = localStorage.getItem('selected_dormitory_id') || sessionStorage.getItem('active_dormitory_selected_for_session') || dorm?.id || '';
@@ -920,12 +923,12 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                 </div>
               </div>
 
-              {/* LINE Official Account Connection Card (Task-009 Final Product Model) */}
-              <div className="pt-6 border-t border-slate-100 space-y-4">
+              {/* LINE Official Account Connection Card (Clean Summary & CTA) */}
+              <div className="pt-6 border-t border-slate-100 space-y-3">
                 <div className="flex items-center justify-between">
                   <h5 className="text-xs font-extrabold text-slate-900 flex items-center gap-2">
                     <Wifi className="w-4 h-4 text-emerald-600 shrink-0" />
-                    เชื่อมต่อ LINE Official Account (LINE OA)
+                    LINE Official Account (LINE OA)
                   </h5>
                   <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-black ${
                     lineOaConfig.connected ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'
@@ -934,85 +937,27 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                   </span>
                 </div>
 
-                {lineOaConfig.lineOaId && (
-                  <div className="text-[11px] font-semibold text-slate-600 bg-slate-50 border border-slate-200 px-3 py-2 rounded-xl flex items-center justify-between">
-                    <span>LINE OA Basic ID (เซิร์ฟเวอร์ยืนยัน):</span>
-                    <span className="font-mono font-bold text-slate-800">{lineOaConfig.lineOaId}</span>
+                <div className="p-3.5 bg-slate-50 border border-slate-200/80 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div>
+                    <span className="text-xs font-bold text-slate-800 block">
+                      {lineOaConfig.connected
+                        ? (lineOaConfig.lineOaId ? `LINE Basic ID: ${lineOaConfig.lineOaId}` : 'เชื่อมต่อ Messaging API เรียบร้อย')
+                        : 'ยังไม่ได้เชื่อมต่อ LINE OA'}
+                    </span>
+                    <span className="text-[11px] text-slate-500">
+                      {lineOaConfig.connected
+                        ? 'ระบบเปิดใช้งานการส่งการแจ้งเตือนอัตโนมัติแล้ว'
+                        : 'ตั้งค่า Channel ID & Secret เพื่อเปิดใช้งานการแจ้งเตือน'}
+                    </span>
                   </div>
-                )}
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-                  <div className="space-y-1">
-                    <label className="block text-[10px] font-bold text-slate-700">LINE Channel ID</label>
-                    <input
-                      type="text"
-                      data-testid="line-channel-id-input"
-                      value={inputChannelId}
-                      onChange={(e) => setInputChannelId(e.target.value)}
-                      placeholder="1657XXXXXX"
-                      className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-bold focus:border-indigo-500 outline-none text-xs"
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="block text-[10px] font-bold text-slate-700">
-                      Channel Secret {lineOaConfig.hasChannelSecret && <span className="text-emerald-600">(บันทึกแล้ว)</span>}
-                    </label>
-                    <input
-                      type="password"
-                      data-testid="line-channel-secret-input"
-                      value={inputChannelSecret}
-                      onChange={(e) => setInputChannelSecret(e.target.value)}
-                      placeholder={lineOaConfig.hasChannelSecret ? '••••••••••••••••' : 'ป้อน Channel Secret'}
-                      className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-bold focus:border-indigo-500 outline-none text-xs"
-                    />
-                  </div>
-                </div>
-
-                {lineOaConfig.webhookUrl && (
-                  <div className="bg-slate-900 border border-slate-800 p-3 rounded-2xl space-y-2 text-white text-xs">
-                    <div className="flex items-center justify-between text-[10px] text-slate-400 font-bold">
-                      <span>Webhook URL สำหรับตั้งค่าใน LINE Developers Console:</span>
-                      <button
-                        onClick={handleRotateWebhookKey}
-                        className="text-amber-400 hover:text-amber-300 underline cursor-pointer"
-                      >
-                        หมุนเวียนคีย์ (Rotate Key)
-                      </button>
-                    </div>
-                    <div className="font-mono text-[11px] text-emerald-400 break-all bg-slate-950/80 p-2 rounded-xl border border-slate-800">
-                      {lineOaConfig.webhookUrl}
-                    </div>
-                    <button
-                      onClick={() => {
-                        navigator.clipboard.writeText(lineOaConfig.webhookUrl || '');
-                        setCopiedWebhookUrl(true);
-                        setTimeout(() => setCopiedWebhookUrl(false), 2000);
-                      }}
-                      className="w-full py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-extrabold text-xs rounded-xl flex items-center justify-center gap-1.5 cursor-pointer"
-                    >
-                      <Copy className="w-3.5 h-3.5" />
-                      {copiedWebhookUrl ? 'คัดลอก Webhook URL เรียบร้อย!' : 'คัดลอก Webhook URL'}
-                    </button>
-                  </div>
-                )}
-
-                <div className="flex gap-2 pt-1">
                   <button
-                    onClick={handleSaveLineOaConfig}
-                    data-testid="save-line-oa-button"
-                    disabled={isSavingLineOa}
-                    className="flex-1 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs rounded-xl transition-all cursor-pointer"
+                    type="button"
+                    onClick={() => setShowLineOaModal(true)}
+                    className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl transition-colors cursor-pointer shrink-0 shadow-sm"
                   >
-                    {isSavingLineOa ? 'กำลังบันทึก...' : 'บันทึกการเชื่อมต่อ LINE OA'}
+                    จัดการ LINE OA
                   </button>
-                  {lineOaConfig.connected && (
-                    <button
-                      onClick={handleDisconnectLineOa}
-                      className="px-3 py-2 bg-slate-100 hover:bg-rose-50 hover:text-rose-600 text-slate-700 font-bold text-xs rounded-xl transition-all cursor-pointer"
-                    >
-                      ยกเลิกการเชื่อมต่อ
-                    </button>
-                  )}
                 </div>
               </div>
             </div>
@@ -1502,6 +1447,31 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
           onCancel={() => setVersionConflictState(null)}
           onRetry={versionConflictState.onRetry}
         />
+      )}
+
+      {/* Standalone LINE OA Modal */}
+      {showLineOaModal && (
+        <div className="fixed inset-0 z-[120] bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
+          <div className="relative w-full max-w-4xl bg-slate-50 rounded-3xl shadow-2xl overflow-hidden my-8 max-h-[90vh] overflow-y-auto">
+            <button
+              onClick={() => {
+                setShowLineOaModal(false);
+                fetchLineOaConfig();
+              }}
+              className="absolute top-4 right-4 z-10 p-2 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-700 transition-colors cursor-pointer"
+            >
+              <X className="w-5 h-5" />
+            </button>
+            <OwnerLineOaPage
+              dormitoryId={dorm?.id}
+              onNavigateBack={() => {
+                setShowLineOaModal(false);
+                fetchLineOaConfig();
+              }}
+              onAddLog={onAddLog}
+            />
+          </div>
+        </div>
       )}
 
     </div>

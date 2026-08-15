@@ -73,11 +73,32 @@ export function createTenantRegistrationRouter(
     });
   };
 
-  // 1. PUBLIC ENDPOINT: POST /api/v1/tenant-registrations
+  // 1. PUBLIC ENDPOINTS
+  // GET /api/v1/tenant-registrations/public-policy
+  router.get('/public-policy', async (req: Request, res: Response) => {
+    try {
+      const dormId = getPublicDormitoryId(req);
+      const policy = await registrationService.getPublicDormitoryPolicy(dormId);
+      res.json({ data: policy });
+    } catch (err) {
+      handleServiceError(res, err, req);
+    }
+  });
+
+  // POST /api/v1/tenant-registrations
   router.post('/', async (req: Request, res: Response) => {
     try {
       const dormId = getPublicDormitoryId(req);
-      const { requestedRoomId, firstName, lastName, phone, note } = req.body || {};
+      const {
+        requestedRoomId,
+        firstName,
+        lastName,
+        phone,
+        note,
+        agreedTerms,
+        signatureBase64,
+        expectedPolicyVersion,
+      } = req.body || {};
       if (!requestedRoomId || !firstName || !lastName || !phone) {
         return res.status(400).json({
           error: {
@@ -96,6 +117,9 @@ export function createTenantRegistrationRouter(
         lastName,
         phone,
         note,
+        agreedTerms,
+        signatureBase64,
+        expectedPolicyVersion,
       });
       res.status(201).json({ data: newReq });
     } catch (err) {

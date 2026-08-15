@@ -330,11 +330,34 @@ export async function submitTenantRegistrationRequest(payload: {
   lastName: string;
   phone: string;
   note?: string;
+  agreedTerms?: boolean;
+  signatureBase64?: string;
+  expectedPolicyVersion?: number;
 }): Promise<DataResult<any>> {
   try {
     const activeDormId = payload.dormitoryId || localStorage.getItem('selected_dormitory_id') || undefined;
     const bodyPayload = { ...payload, dormitoryId: activeDormId };
     const data = await httpRequest<any>('POST', '/tenant-registrations', bodyPayload);
+    return { success: true, data };
+  } catch (err: any) {
+    return {
+      success: false,
+      error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message }
+    };
+  }
+}
+
+export async function getPublicDormitoryPolicy(dormitoryId?: string): Promise<DataResult<{
+  dormitoryId: string;
+  dormitoryName: string;
+  defaultTerms: string;
+  petPolicy: { allowed: string; allowedTypes?: string[] };
+  version: number;
+}>> {
+  try {
+    const activeDormId = dormitoryId || localStorage.getItem('selected_dormitory_id') || undefined;
+    const query = activeDormId ? `?dormitoryId=${activeDormId}` : '';
+    const data = await httpRequest<any>('GET', `/tenant-registrations/public-policy${query}`);
     return { success: true, data };
   } catch (err: any) {
     return {

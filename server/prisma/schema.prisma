@@ -172,6 +172,7 @@ model DormitoryPropertyDefaults {
   defaultMaxOccupants   Int      @default(2) @map("default_max_occupants")
   defaultRoomType       String   @default("standard") @map("default_room_type") @db.VarChar(100)
   defaultTerms          String?  @map("default_terms") @db.Text
+  petPolicy             Json     @default("{\"allowed\":\"none\",\"allowedTypes\":[]}") @map("pet_policy")
   version               Int      @default(1)
   createdAt             DateTime @default(now()) @map("created_at") @db.Timestamptz()
   updatedAt             DateTime @updatedAt @map("updated_at") @db.Timestamptz()
@@ -946,13 +947,20 @@ model TenantRegistrationRequest {
   submittedAt        DateTime? @map("submitted_at") @db.Timestamptz()
   reviewedAt         DateTime? @map("reviewed_at") @db.Timestamptz()
   reviewedByUserId   String?   @map("reviewed_by_user_id") @db.Uuid
-  rejectedReason     String?   @map("rejected_reason") @db.Text
-  approvedTenantId   String?   @map("approved_tenant_id") @db.Uuid
-  approvedContractId String?   @map("approved_contract_id") @db.Uuid
-  approvedRoomId     String?   @map("approved_room_id") @db.Uuid
-  version            Int       @default(1)
-  createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz()
-  updatedAt          DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
+  rejectedReason              String?   @map("rejected_reason") @db.Text
+  approvedTenantId            String?   @map("approved_tenant_id") @db.Uuid
+  approvedContractId          String?   @map("approved_contract_id") @db.Uuid
+  approvedRoomId              String?   @map("approved_room_id") @db.Uuid
+  acceptanceSnapshot          Json?     @map("acceptance_snapshot")
+  acceptanceSnapshotSha256    String?   @map("acceptance_snapshot_sha256") @db.VarChar(64)
+  acceptedAt                  DateTime? @map("accepted_at") @db.Timestamptz()
+  tenantSignatureObjectKey    String?   @map("tenant_signature_object_key") @db.VarChar(255)
+  tenantSignatureSha256       String?   @map("tenant_signature_sha256") @db.VarChar(64)
+  tenantSignatureMimeType     String?   @map("tenant_signature_mime_type") @db.VarChar(50)
+  tenantSignatureByteSize     Int?      @map("tenant_signature_byte_size")
+  version                     Int       @default(1)
+  createdAt                   DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt                   DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
 
   dormitory   Dormitory   @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
   occupancies Occupancy[]
@@ -1356,6 +1364,11 @@ model DormitoryLineConfig {
   botPictureUrl               String?   @map("bot_picture_url") @db.Text
   botPremiumId                String?   @map("bot_premium_id") @db.VarChar(100)
   botChatMode                 String?   @map("bot_chat_mode") @db.VarChar(50)
+  notifyRepairRequest         Boolean   @default(true) @map("notify_repair_request")
+  notifyRepairCompleted       Boolean   @default(true) @map("notify_repair_completed")
+  notifyPaymentReceived       Boolean   @default(true) @map("notify_payment_received")
+  notifyTenantRegister        Boolean   @default(true) @map("notify_tenant_register")
+  notifyTenantApproved        Boolean   @default(true) @map("notify_tenant_approved")
   createdAt                   DateTime  @default(now()) @map("created_at") @db.Timestamptz()
   updatedAt                   DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
 

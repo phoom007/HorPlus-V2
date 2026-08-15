@@ -123,21 +123,30 @@ export async function runVerification() {
   assert(freshDormDb?.buildings[0]?.rooms.every((r) => r.status.toLowerCase() === 'vacant'), 'All 4 rooms are vacant initially');
   assert(freshDormDb?.ownerSignatures.length > 0 && freshDormDb?.ownerSignatures[0]?.isCurrent === true, 'Owner signature persisted with isCurrent = true');
   assert(freshDormDb?.dormitorySubscription?.status === 'TRIAL', 'Subscription is in TRIAL status');
+  assert(Boolean(freshDormDb?.propertyDefaults?.defaultTerms), 'Fresh Owner property defaults has defaultTerms text');
+  assert(Boolean(freshDormDb?.propertyDefaults?.petPolicy), 'Fresh Owner property defaults has petPolicy object');
 
   // 3. Comprehensive Owner KPI & Oracle Verification
   console.log('\n--- 3. Comprehensive Owner KPI & Financial Oracle Verification ---');
   const compDormDb = await prisma.dormitory.findUnique({
     where: { id: COMP_DORM.id },
     include: {
+      propertyDefaults: true,
       buildings: { include: { rooms: true } },
       tenants: true,
       contracts: true,
       billingCycles: { include: { bills: { include: { items: true, Receipt: true, Payment: true } } } },
       members: { include: { role: true, user: true } },
+      tenantRegistrationRequests: true,
     },
   });
 
   assert(Boolean(compDormDb), 'Comprehensive Dormitory exists in DB');
+  assert(Boolean(compDormDb?.propertyDefaults?.defaultTerms), 'Comprehensive Owner has defaultTerms');
+  assert(compDormDb?.propertyDefaults?.petPolicy?.allowed === 'conditional', 'Comprehensive Owner has conditional petPolicy');
+  assert(compDormDb?.tenantRegistrationRequests?.length > 0, 'Comprehensive Owner has pending tenant registration request');
+  assert(Boolean(compDormDb?.tenantRegistrationRequests[0]?.acceptanceSnapshotSha256), 'Tenant registration request has canonical acceptanceSnapshotSha256');
+  assert(Boolean(compDormDb?.tenantRegistrationRequests[0]?.tenantSignatureObjectKey), 'Tenant registration request has tenantSignatureObjectKey');
   const totalRooms = compDormDb?.buildings.reduce((sum, b) => sum + b.rooms.length, 0) || 0;
   assert(totalRooms === 18, 'Total room count is exactly 18', totalRooms);
 

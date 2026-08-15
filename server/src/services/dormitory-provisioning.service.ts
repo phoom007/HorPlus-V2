@@ -97,6 +97,12 @@ export interface CompleteOwnerOnboardingParams {
   packageId?: string;
   promoCode?: string;
   requestId?: string;
+  rules?: string;
+  defaultTerms?: string;
+  petPolicy?: {
+    allowed: string;
+    allowedTypes?: string[];
+  };
 }
 
 export class DormitoryProvisioningService {
@@ -589,6 +595,23 @@ export class DormitoryProvisioningService {
           },
         });
       }
+
+      // Save Dormitory Property Defaults (Step 5 Rules & Pet Policy)
+      const resolvedTerms = params.defaultTerms || (typeof params.rules === 'string' ? params.rules : null);
+      const resolvedPetPolicy = params.petPolicy || { allowed: 'none', allowedTypes: [] };
+      await tx.dormitoryPropertyDefaults.upsert({
+        where: { dormitoryId: dormId },
+        create: {
+          dormitoryId: dormId,
+          defaultTerms: resolvedTerms,
+          petPolicy: resolvedPetPolicy,
+        },
+        update: {
+          defaultTerms: resolvedTerms !== null ? resolvedTerms : undefined,
+          petPolicy: resolvedPetPolicy,
+          updatedAt: now,
+        },
+      });
 
       // Save Buildings and Rooms if provided (idempotent upsert)
       if (buildings && buildings.length > 0) {

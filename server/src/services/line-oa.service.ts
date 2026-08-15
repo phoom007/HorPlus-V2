@@ -96,6 +96,28 @@ export class LineOaService {
     return await this.prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormitoryId}, true)`;
 
+      // Calculate current month LINE quota
+      const now = new Date();
+      const currentYearMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+      
+      const sub = await tx.dormitorySubscription.findUnique({
+        where: { dormitoryId },
+        include: { plan: true },
+      });
+      const isPaid = sub?.plan?.code === 'PAID' || sub?.plan?.type === 'PAID';
+      const monthlyQuota = sub?.plan?.messageQuotaMonthly || (isPaid ? 300 : 30);
+
+      const usage = await tx.linePushUsage.findUnique({
+        where: {
+          dormitory_push_period_unique: {
+            dormitoryId,
+            periodKey: currentYearMonth,
+          },
+        },
+      });
+      const usedQuota = usage?.successCount || 0;
+      const remainingQuota = Math.max(0, monthlyQuota - usedQuota);
+
       const config = await tx.dormitoryLineConfig.findUnique({
         where: { dormitoryId }
       });
@@ -120,7 +142,15 @@ export class LineOaService {
           botChatMode: null,
           accessTokenVerifiedAt: null,
           webhookVerifiedAt: null,
-          webhookUrl: null
+          webhookUrl: null,
+          notifyRepairRequest: true,
+          notifyRepairCompleted: true,
+          notifyPaymentReceived: true,
+          notifyTenantRegister: true,
+          notifyTenantApproved: true,
+          monthlyQuota,
+          usedQuota,
+          remainingQuota,
         };
       }
 
@@ -162,8 +192,44 @@ export class LineOaService {
         webhookVerifiedAt: config.webhookVerifiedAt,
         webhookEndpointSetAt: config.webhookEndpointSetAt,
         webhookTestSucceededAt: config.webhookTestSucceededAt,
-        webhookUrl
+        webhookUrl,
+        notifyRepairRequest: config.notifyRepairRequest,
+        notifyRepairCompleted: config.notifyRepairCompleted,
+        notifyPaymentReceived: config.notifyPaymentReceived,
+        notifyTenantRegister: config.notifyTenantRegister,
+        notifyTenantApproved: config.notifyTenantApproved,
+        monthlyQuota,
+        usedQuota,
+        remainingQuota,
       };
+    });
+  }
+
+  /**
+   * Update notification preferences for LINE OA events
+   */
+  async updatePreferences(
+    dormitoryId: string,
+    preferences: {
+      notifyRepairRequest?: boolean;
+      notifyRepairCompleted?: boolean;
+      notifyPaymentReceived?: boolean;
+      notifyTenantRegister?: boolean;
+      notifyTenantApproved?: boolean;
+    }
+  ) {
+    return await this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormitoryId}, true)`;
+      return await tx.dormitoryLineConfig.update({
+        where: { dormitoryId },
+        data: {
+          notifyRepairRequest: preferences.notifyRepairRequest !== undefined ? preferences.notifyRepairRequest : undefined,
+          notifyRepairCompleted: preferences.notifyRepairCompleted !== undefined ? preferences.notifyRepairCompleted : undefined,
+          notifyPaymentReceived: preferences.notifyPaymentReceived !== undefined ? preferences.notifyPaymentReceived : undefined,
+          notifyTenantRegister: preferences.notifyTenantRegister !== undefined ? preferences.notifyTenantRegister : undefined,
+          notifyTenantApproved: preferences.notifyTenantApproved !== undefined ? preferences.notifyTenantApproved : undefined,
+        },
+      });
     });
   }
 

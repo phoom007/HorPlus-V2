@@ -169,9 +169,12 @@ export class SubscriptionEntitlementService {
     const db = txClient || this.db;
     const sub = await this.getCurrentSubscription(dormitoryId, db);
 
-    const isExpired = sub.expiresAt.getTime() <= now.getTime();
+    const isFreePlan = sub.plan.type === 'FREE' || sub.plan.code === 'FREE';
+    const isExpired = isFreePlan ? false : sub.expiresAt.getTime() <= now.getTime();
     let effectiveStatus: 'TRIAL' | 'ACTIVE' | 'EXPIRED' | 'SUSPENDED' = sub.status;
-    if (isExpired && (sub.status === 'TRIAL' || sub.status === 'ACTIVE')) {
+    if (isFreePlan) {
+      effectiveStatus = sub.status === 'SUSPENDED' ? 'SUSPENDED' : 'ACTIVE';
+    } else if (isExpired && (sub.status === 'TRIAL' || sub.status === 'ACTIVE')) {
       effectiveStatus = 'EXPIRED';
     }
 
@@ -183,20 +186,20 @@ export class SubscriptionEntitlementService {
     });
 
     const roomLimit = sub.plan.roomLimit;
-    const isOverLimit = roomCount > roomLimit;
+    const isOverLimit = isFreePlan ? false : roomCount > roomLimit;
     const isActive = !isExpired && (effectiveStatus === 'TRIAL' || effectiveStatus === 'ACTIVE');
     const isReadOnly = !isActive || isOverLimit;
 
-    const remainingRooms = Math.max(0, roomLimit - roomCount);
+    const remainingRooms = isFreePlan ? Math.max(0, roomLimit - roomCount) : Math.max(0, roomLimit - roomCount);
 
     const promoRedemption = await db.promoRedemption.findFirst({
       where: { dormitoryId },
     });
 
     let reason: string | undefined;
-    if (isExpired) {
+    if (isExpired && !isFreePlan) {
       reason = 'SUBSCRIPTION_EXPIRED: Dormitory subscription has expired.';
-    } else if (isOverLimit) {
+    } else if (isOverLimit && !isFreePlan) {
       reason = `ROOM_LIMIT_EXCEEDED: Room count (${roomCount}) exceeds plan limit (${roomLimit}).`;
     } else if (sub.status === 'SUSPENDED') {
       reason = 'SUBSCRIPTION_SUSPENDED: Dormitory subscription is suspended.';
@@ -467,11 +470,51 @@ export class SubscriptionEntitlementService {
     await this.assertDormitoryWritable(dormitoryId, now, db);
     const entitlement = await this.getEffectiveEntitlements(dormitoryId, now, db);
 
-    if (entitlement.roomCount >= entitlement.roomLimit) {
+    const isFreePlan = entitlement.plan.type === 'FREE' || entitlement.plan.code === 'FREE';
+    if (!isFreePlan && entitlement.roomCount >= entitlement.roomLimit) {
       throw new AppError(
         `Cannot create room. Current room count (${entitlement.roomCount}) has reached or exceeded plan limit (${entitlement.roomLimit}).`,
         409,
         'ROOM_LIMIT_REACHED'
+      );
+    }
+  }
+
+  /**
+   * Assert operational entitlement for a specific room.
+   * Under FREE tier, the first 10 non-archived rooms (by createdAt ASC, id ASC) are operational.
+   * Rooms #11+ cannot perform operational actions (assigning tenant, active contracts, billing, meters).
+   */
+  async assertRoomOperationalEntitlement(dormitoryId: string, roomId: string, now: Date = new Date(), txClient?: any): Promise<void> {
+    const db = txClient || this.db;
+    await this.assertDormitoryWritable(dormitoryId, now, db);
+    const entitlement = await this.getEffectiveEntitlements(dormitoryId, now, db);
+    const roomLimit = entitlement.roomLimit; // 10 for FREE, 150 for PAID
+
+    if (!roomLimit || roomLimit >= 1000) return;
+
+    const eligibleRooms = await db.room.findMany({
+      where: {
+        dormitoryId,
+        status: { not: 'archived' },
+      },
+      orderBy: [
+        { createdAt: 'asc' },
+        { id: 'asc' },
+      ],
+      select: { id: true },
+    });
+
+    const roomIndex = eligibleRooms.findIndex((r: any) => r.id === roomId);
+    if (roomIndex === -1) {
+      return; // Room might not exist or is archived
+    }
+
+    if (roomIndex >= roomLimit) {
+      throw new AppError(
+        `ห้องพักนี้เกินสิทธิ์การใช้งานของแพ็กเกจฟรี (จำกัด ${roomLimit} ห้องที่เปิดใช้งานพร้อมกัน) กรุณาอัปเกรดแพ็กเกจเพื่อเปิดใช้งานห้องนี้`,
+        403,
+        'ROOM_ENTITLEMENT_LOCKED'
       );
     }
   }

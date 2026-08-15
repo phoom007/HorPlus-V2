@@ -59,14 +59,14 @@ export function createLineOaRoutes(
     }
   };
 
-  const requireOwnerRole = (req: Request, res: Response, next: NextFunction) => {
+  const requireOwnerOrManagerRole = (req: Request, res: Response, next: NextFunction) => {
     const context = (req as any).dormitoryContext || (req.auth as any);
-    const roleCode = context?.roleCode || context?.role || context?.memberships?.[0]?.roleCode;
-    if (roleCode !== 'OWNER') {
+    const roleCode = (context?.roleCode || context?.role || context?.memberships?.[0]?.roleCode || '').toUpperCase();
+    if (roleCode !== 'OWNER' && roleCode !== 'MANAGER') {
       return res.status(403).json({
         error: {
           code: 'FORBIDDEN',
-          message: 'การจัดการ LINE OA อนุญาตเฉพาะเจ้าของหอพักเท่านั้น (OWNER role required)',
+          message: 'การจัดการ LINE OA อนุญาตเฉพาะเจ้าของหรือผู้จัดการหอพักเท่านั้น (OWNER or MANAGER role required)',
           fieldErrors: null,
           requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
           timestamp: new Date().toISOString(),
@@ -90,7 +90,7 @@ export function createLineOaRoutes(
     resolveDormContext,
     requireDormitoryPermission(permission),
     verifyDormitoryMatch,
-    requireOwnerRole,
+    requireOwnerOrManagerRole,
   ];
 
   const mutationGuard = (permission: string) => [
@@ -100,7 +100,7 @@ export function createLineOaRoutes(
     requireDormitoryWriteEntitlement,
     csrfMiddleware,
     verifyDormitoryMatch,
-    requireOwnerRole,
+    requireOwnerOrManagerRole,
   ];
 
   // ==========================================================================
@@ -207,6 +207,26 @@ export function createLineOaRoutes(
         const dormId = await getDormitoryId(req);
         const disconnected = await lineOaService.disconnectLineConfig(dormId);
         return res.status(200).json({ success: true, data: disconnected, config: disconnected });
+      } catch (err) {
+        next(err);
+      }
+    }
+  );
+
+  protectedRouter.patch(
+    ['/dormitories/:dormId/line-oa/preferences', '/dormitories/:dormId/line-oa/config/preferences'],
+    ...mutationGuard('line_oa:manage'),
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const dormId = await getDormitoryId(req);
+        const updated = await lineOaService.updatePreferences(dormId, {
+          notifyRepairRequest: req.body.notifyRepairRequest,
+          notifyRepairCompleted: req.body.notifyRepairCompleted,
+          notifyPaymentReceived: req.body.notifyPaymentReceived,
+          notifyTenantRegister: req.body.notifyTenantRegister,
+          notifyTenantApproved: req.body.notifyTenantApproved,
+        });
+        return res.status(200).json({ success: true, data: updated, preferences: updated });
       } catch (err) {
         next(err);
       }
