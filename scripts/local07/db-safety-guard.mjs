@@ -126,17 +126,15 @@ export function assertSafeDatabaseTarget() {
   // 2. Validate DIRECT_URL
   const directInfo = parseAndValidatePostgresUrl(directUrl, 'DIRECT_URL');
 
-  // 3. Validate REDIS_URL if provided
-  let redisInfo = null;
-  if (redisUrl) {
-    redisInfo = parseAndValidateRedisUrl(redisUrl, 'REDIS_URL');
-  }
+  // 3. Validate REDIS_URL (strictly required)
+  const redisInfo = parseAndValidateRedisUrl(redisUrl, 'REDIS_URL');
 
   return {
     database: dbInfo.database,
     port: dbInfo.port,
     host: dbInfo.host,
-    redisPort: redisInfo ? redisInfo.port : REQUIRED_SAFETY_CONFIG.REDIS_PORT,
+    redisHost: redisInfo.host,
+    redisPort: redisInfo.port,
     safe: true,
   };
 }

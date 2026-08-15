@@ -14,7 +14,7 @@ import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 const { PrismaClient } = require('../../server/node_modules/@prisma/client/index.js');
 import { assertSafeDatabaseTarget } from './db-safety-guard.mjs';
-import { FRESH_DORM, COMP_DORM } from './constants.mjs';
+import { FRESH_DORM, COMP_DORM, REGISTRATION_OWNER } from './constants.mjs';
 
 const targetInfo = assertSafeDatabaseTarget();
 
@@ -31,6 +31,7 @@ export async function resetLocal07Data() {
 
   const targetDormIds = [FRESH_DORM.id, COMP_DORM.id];
   const targetUserIds = [
+    REGISTRATION_OWNER.id,
     FRESH_DORM.owner.id,
     COMP_DORM.owner.id,
     COMP_DORM.manager.id,

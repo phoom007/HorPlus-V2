@@ -15,7 +15,8 @@ import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 const { PrismaClient } = require('../../server/node_modules/@prisma/client/index.js');
 import { assertSafeDatabaseTarget } from './db-safety-guard.mjs';
-import { FRESH_DORM, COMP_DORM } from './constants.mjs';
+import { FRESH_DORM, COMP_DORM, REGISTRATION_OWNER } from './constants.mjs';
+import { CANONICAL_SUBSCRIPTION_CATALOG } from '../../server/src/config/subscription-catalog.js';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -56,9 +57,41 @@ export async function runVerification() {
   try {
     const safety = assertSafeDatabaseTarget();
     assert(safety.port === '5455' && safety.database === 'horplus_wave1d_fasttrack_test', 'Database strictly targets port 5455 & horplus_wave1d_fasttrack_test');
+    assert(safety.redisPort === '6380', 'Redis strictly targets port 6380');
   } catch (err) {
     assert(false, 'Database safety guard failed', err.message);
   }
+
+  // 2. Pre-Onboarding Registration Owner State Verification
+  console.log('\n--- 2. Registration Owner Pre-Onboarding State Verification ---');
+  const regUser = await prisma.user.findUnique({
+    where: { id: REGISTRATION_OWNER.id },
+    include: { memberships: true },
+  });
+  assert(Boolean(regUser), 'Registration Owner user identity exists in DB');
+  assert(regUser?.memberships.length === 0, 'Registration Owner has strictly 0 active memberships', regUser?.memberships.length);
+  const regDormCount = await prisma.dormitory.count({ where: { createdByUserId: REGISTRATION_OWNER.id } });
+  assert(regDormCount === 0, 'Registration Owner has strictly 0 dormitories created before manual review', regDormCount);
+
+  // 3. Canonical Subscription Catalog Verification
+  console.log('\n--- 3. Canonical Subscription Catalog Verification ---');
+  const freePlan = await prisma.subscriptionPlan.findUnique({ where: { code: 'FREE' } });
+  const paidPlan = await prisma.subscriptionPlan.findUnique({ where: { code: 'PAID' } });
+  const paidPkg = await prisma.subscriptionPackage.findFirst({
+    where: { plan: { code: 'PAID' }, durationMonths: 1, enabled: true },
+  });
+  const horplusPromo = await prisma.promoCode.findFirst({ where: { code: 'HORPLUS' } });
+
+  const canonFree = CANONICAL_SUBSCRIPTION_CATALOG.plans.find(p => p.code === 'FREE');
+  const canonPaid = CANONICAL_SUBSCRIPTION_CATALOG.plans.find(p => p.code === 'PAID');
+  const canonPkg = CANONICAL_SUBSCRIPTION_CATALOG.packages.find(p => p.planCode === 'PAID' && p.durationMonths === 1);
+  const canonPromo = CANONICAL_SUBSCRIPTION_CATALOG.promoCodes?.find(p => p.code === 'HORPLUS');
+
+  assert(freePlan?.roomLimit === canonFree?.roomLimit, `FREE room limit matches canonical truth (${canonFree?.roomLimit})`, freePlan?.roomLimit);
+  assert(paidPlan?.roomLimit === canonPaid?.roomLimit, `PAID room limit matches canonical truth (${canonPaid?.roomLimit})`, paidPlan?.roomLimit);
+  assert(paidPlan?.messageQuotaMonthly === canonPaid?.messageQuotaMonthly, `PAID message quota matches canonical truth (${canonPaid?.messageQuotaMonthly})`, paidPlan?.messageQuotaMonthly);
+  assert(Number(paidPkg?.price) === canonPkg?.price, `PAID 1-month package price matches canonical truth (฿${canonPkg?.price})`, paidPkg?.price);
+  assert(horplusPromo?.extensionDays === canonPromo?.extensionDays, `HORPLUS promo extension days matches canonical truth (${canonPromo?.extensionDays} days)`, horplusPromo?.extensionDays);
 
   // 2. Fresh Owner Persistence Verification
   console.log('\n--- 2. Fresh Owner Onboarding Persistence Verification ---');
@@ -148,6 +181,7 @@ export async function runVerification() {
   assert(fs.existsSync(manifestPath), '.local07-sessions/manifest.json exists');
   if (fs.existsSync(manifestPath)) {
     const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    assert(Boolean(manifest['registration-owner']), 'Registration Owner session exists in manifest');
     assert(Boolean(manifest['fresh-owner']), 'Fresh Owner session exists in manifest');
     assert(Boolean(manifest['comp-owner']), 'Comprehensive Owner session exists in manifest');
     assert(Boolean(manifest['tenant-somchai']), 'Tenant Somchai session exists in manifest');

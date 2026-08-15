@@ -28,11 +28,12 @@ const { PrismaClient } = require('../../server/node_modules/@prisma/client/index
 const { PNG } = require('../../server/node_modules/pngjs/lib/png.js');
 
 import { assertSafeDatabaseTarget } from './db-safety-guard.mjs';
-import { FRESH_DORM, COMP_DORM } from './constants.mjs';
+import { FRESH_DORM, COMP_DORM, REGISTRATION_OWNER } from './constants.mjs';
 import { resetLocal07Data } from './reset.mjs';
 import { DormitoryProvisioningService } from '../../server/src/services/dormitory-provisioning.service.ts';
 import { SignatureStorageService } from '../../server/src/services/signature-storage.service.ts';
 import { SensitiveFieldService } from '../../server/src/services/sensitive-field.service.ts';
+import { syncSubscriptionCatalog } from '../../server/src/scripts/subscription-catalog-sync.ts';
 
 const targetInfo = assertSafeDatabaseTarget();
 
@@ -72,10 +73,34 @@ export async function seedLocal07Data() {
   console.log('================================================================================');
   console.log(`Target: ${targetInfo.host}:${targetInfo.port}/${targetInfo.database}\n`);
 
+  // Fail-closed validation for FIELD_ENCRYPTION_KEY
+  const fieldKey = process.env.FIELD_ENCRYPTION_KEY;
+  if (!fieldKey || !fieldKey.trim()) {
+    throw new Error('CRITICAL SECURITY ERROR: FIELD_ENCRYPTION_KEY is missing from environment! Cannot proceed with local seeding.');
+  }
+
   // 1. Idempotent Reset of existing UAT data
   await resetLocal07Data();
 
-  console.log('\n--- 1. Executing Real Onboarding Workflow for Fresh Owner ---');
+  // 2. Synchronize Canonical Subscription Catalog (Plans, Packages, Promos)
+  console.log('\n--- 0. Synchronizing Canonical Subscription Catalog ---');
+  await syncSubscriptionCatalog(prisma);
+
+  // 3. Seed Pre-Onboarding Manual Review Identity (Registration Owner)
+  console.log('\n--- 1. Seeding Pre-Onboarding Manual Review Persona (Registration Owner) ---');
+  await prisma.user.create({
+    data: {
+      id: REGISTRATION_OWNER.id,
+      googleSubject: REGISTRATION_OWNER.googleSubject,
+      email: REGISTRATION_OWNER.email,
+      emailNormalized: REGISTRATION_OWNER.email.toLowerCase().trim(),
+      name: REGISTRATION_OWNER.name,
+      status: 'active',
+    },
+  });
+  console.log(`✅ Registration Owner created: "${REGISTRATION_OWNER.name}" (0 memberships, ready for manual onboarding wizard)`);
+
+  console.log('\n--- 2. Executing Real Onboarding Workflow for Fresh Owner ---');
 
   // A. Create ONLY the minimum prerequisite authenticated Owner identity
   const freshOwnerUser = await prisma.user.create({
@@ -89,9 +114,7 @@ export async function seedLocal07Data() {
     },
   });
 
-  const sensitiveFieldService = new SensitiveFieldService(
-    process.env.FIELD_ENCRYPTION_KEY || 'default_32_byte_secret_key_123456'
-  );
+  const sensitiveFieldService = new SensitiveFieldService(fieldKey);
   const provisioningService = new DormitoryProvisioningService(prisma, sensitiveFieldService);
   const signatureStorageService = new SignatureStorageService(prisma);
 
@@ -303,12 +326,23 @@ export async function seedLocal07Data() {
     },
   });
 
+  const tenantRole = await prisma.role.create({
+    data: {
+      dormitoryId: compDorm.id,
+      code: 'TENANT',
+      name: 'ผู้เช่า',
+      isSystem: true,
+      permissions: [],
+    },
+  });
+
   // Members
   await prisma.dormitoryMember.createMany({
     data: [
       { dormitoryId: compDorm.id, userId: compOwner.id, roleId: ownerRole.id, status: 'active' },
       { dormitoryId: compDorm.id, userId: compManager.id, roleId: managerRole.id, status: 'active' },
       { dormitoryId: compDorm.id, userId: compTech.id, roleId: techRole.id, status: 'active' },
+      { dormitoryId: compDorm.id, userId: tenantSomchaiUser.id, roleId: tenantRole.id, status: 'active' },
     ],
   });
 
@@ -352,19 +386,10 @@ export async function seedLocal07Data() {
     },
   });
 
-  // Subscription (PAID PRO Plan)
-  let paidPlan = await prisma.subscriptionPlan.findFirst({ where: { code: 'PAID' } });
+  // Subscription (Canonical PAID PRO Plan from catalog)
+  const paidPlan = await prisma.subscriptionPlan.findUnique({ where: { code: 'PAID' } });
   if (!paidPlan) {
-    paidPlan = await prisma.subscriptionPlan.create({
-      data: {
-        name: 'Pro Plan',
-        code: 'PAID',
-        type: 'PAID',
-        price: 590.0,
-        billingInterval: 'month',
-        maxRooms: 100,
-      },
-    });
+    throw new Error('CRITICAL ERROR: Canonical PAID subscription plan is missing in database after catalog synchronization!');
   }
 
   await prisma.dormitorySubscription.create({

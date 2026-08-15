@@ -9,6 +9,14 @@
 
 export const UAT_METADATA_TAG = 'HORPLUS_LOCAL07_UAT';
 
+export const REGISTRATION_OWNER = {
+  id: '10000000-0000-4000-8000-000000000001',
+  googleSubject: 'mock_owner_uat_registration',
+  name: 'เจ้าของทดสอบ Registration Owner',
+  email: 'owner.register@horplus-uat.local',
+  phone: '0810001111',
+};
+
 export const FRESH_DORM = {
   id: '10000001-0000-4000-8000-000000000001',
   name: 'หอพัก HorPlus UAT Fresh Owner',

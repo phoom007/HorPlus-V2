@@ -25,6 +25,7 @@
     "uat:verify": "tsx scripts/local07/verify.mjs",
     "uat:login": "tsx scripts/local07/login-helper.mjs",
     "uat:open": "tsx scripts/local07/open-browser.mjs",
+    "uat:open:register": "tsx scripts/local07/open-browser.mjs registration-owner",
     "uat:open:fresh": "tsx scripts/local07/open-browser.mjs fresh-owner",
     "uat:open:owner": "tsx scripts/local07/open-browser.mjs comp-owner",
     "uat:open:tenant": "tsx scripts/local07/open-browser.mjs tenant-somchai",

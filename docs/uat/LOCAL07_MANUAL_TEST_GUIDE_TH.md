@@ -1,6 +1,6 @@
 # HorPlus LOCAL-07 — คู่มือการทดสอบระบบด้วยตนเองสำหรับ Product Owner (Manual UAT Guide)
 
-> **สถานะปัจจุบัน:** `LOCAL-07 — USER MANUAL UAT READY / IN PROGRESS`  
+> **สถานะปัจจุบัน:** `LOCAL-07 — PRODUCT OWNER MANUAL UAT READY / IN PROGRESS`  
 > *(ชุดข้อมูลและสภาพแวดล้อม UAT พร้อมสำหรับการทดสอบโดย Product Owner — ยังไม่ทำการ SEALED)*
 
 ---
@@ -10,10 +10,24 @@
 LOCAL-07 จัดเตรียมชุดข้อมูลทดสอบเสมือนจริงที่แม่นยำ (Deterministic UAT Dataset) พร้อมกลไกความปลอดภัยและระบบคำนวณอิสระ (Oracle) เพื่อให้ **Product Owner** สามารถเปิดใช้งาน HorPlus บนเว็บเบราว์เซอร์จริงในเครื่องตนเอง เพื่อประเมิน:
 
 1. **UX/UI & Flow:** ความสะดวกในการใช้งาน ความสวยงาม และความลื่นไหลของหน้าจอ
-2. **Onboarding & Settings Persistence:** ข้อมูลจากการลงทะเบียนหอพักใหม่ถูกบันทึกผ่าน Service จริง (`DormitoryProvisioningService`, `SignatureStorageService`) และแสดงผลในเมนูตั้งค่าถูกต้องหรือไม่
-3. **Dashboard & Financial Accuracy:** ตัวเลขสรุป KPI, ยอดค้างชำระ, และรายรับสอดคล้องกับตาราง Oracle หรือไม่
-4. **Billing & Accounting Lifecycle:** การออกบิล, การคำนวณค่าน้ำ-ค่าไฟ, ค่าผู้พักอาศัยร่วม, การรับชำระเงิน, และการออกใบเสร็จ
-5. **Contract & Multi-Persona Operations:** การต่อสัญญา, การย้ายออก/ตัดรอบเงินประกัน, สิทธิ์การใช้งานของ Staff (Manager/Tech) และ Tenant Portal
+2. **Real UI Onboarding Experience:** ทดสอบกรอกฟอร์มลงทะเบียนสร้างหอพักใหม่ด้วยตนเองผ่าน UI จริงครบทุกขั้นตอน
+3. **Settings Persistence:** ข้อมูลจากการลงทะเบียนหอพักใหม่ถูกบันทึกและแสดงผลในเมนูตั้งค่าถูกต้อง และคงอยู่หลังกดรีเฟรช (F5)
+4. **Dashboard & Financial Accuracy:** ตัวเลขสรุป KPI, ยอดค้างชำระ, และรายรับสอดคล้องกับตาราง Oracle
+5. **Billing & Accounting Lifecycle:** การออกบิล, การคำนวณค่าน้ำ-ค่าไฟ, ค่าผู้พักอาศัยร่วม, การรับชำระเงิน, และการออกใบเสร็จ
+6. **Contract & Multi-Persona Operations:** การต่อสัญญา, การย้ายออก/ตัดรอบเงินประกัน, สิทธิ์การใช้งานของ Staff (Manager/Tech) และ Tenant Portal
+
+---
+
+## 🎭 ความแตกต่างระหว่าง 2 บทบาทเจ้าของใหม่ (Owner Personas Distinction)
+
+| บทบาท (Persona) | วัตถุประสงค์ (Purpose) | สภาพเริ่มต้นหลัง `uat:refresh` | การใช้งานที่แนะนำ |
+|---|---|---|---|
+| **`registration-owner`** | **MANUAL UI ONBOARDING PROOF**<br>*(พิสูจน์การกรอกฟอร์มจริงผ่าน UI)* | **Pre-Onboarding:** มีเพียง User Identity ไม่มีหอพัก/ห้องพัก (0 Memberships) เมื่อเข้าเว็บจะถูกนำทางไปหน้า `/owner/register` อัตโนมัติ | ใช้สำหรับให้ **Product Owner กรอกข้อมูลลงฟอร์มจริงด้วยตนเอง** ตามคู่มือ [LOCAL07_REGISTRATION_INPUT_TH.md](file:///C:/Projects/HorPlus-V2/docs/uat/LOCAL07_REGISTRATION_INPUT_TH.md) |
+| **`fresh-owner`** | **AUTOMATED AUTHORITATIVE SERVICE-LEVEL POST-ONBOARDING FIXTURE**<br>*(ชุดข้อมูลอ้างอิงระดับ Service)* | **Post-Onboarding:** หอพักขนาด 4 ห้องสร้างเสร็จสมบูรณ์ผ่าน Backend Service พร้อมสิทธิ์ทดลองใช้ 90 วัน | ใช้สำหรับ**ตรวจสอบผลลัพธ์หน้าแดชบอร์ด/ตั้งค่าทันที** โดยไม่ต้องเสียเวลากรอกฟอร์มใหม่ทุกครั้ง |
+
+> ⚠️ **คำเตือนสำคัญเกี่ยวกับการรีเฟรชข้อมูล (Do Not Reset During Manual Session):**  
+> การรันคำสั่ง `npm run uat:refresh` จะทำการ**ล้างข้อมูลและคืนสถานะของ `registration-owner` กลับเป็น Pre-Onboarding เสมอ**  
+> ให้รันคำสั่งนี้เฉพาะเมื่อคุณต้องการเริ่มทดสอบวงจรการลงทะเบียนใหม่อีกครั้งเท่านั้น ในระหว่างกำลังทดสอบกรอกฟอร์ม ห้ามรันคำสั่งนี้
 
 ---
 
@@ -30,7 +44,7 @@ npm run uat:infra:up
 npm run uat:infra:status
 ```
 
-> 🔒 **ความปลอดภัยฐานข้อมูล:** ระบบมี Database Safety Guard ตรวจสอบ `DATABASE_URL` อย่างเข้มงวด โดยจะอนุญาตให้รันเฉพาะพอร์ต `5455` และฐานข้อมูล `horplus_wave1d_fasttrack_test` เท่านั้น
+> 🔒 **ความปลอดภัยฐานข้อมูล:** ระบบมี Database Safety Guard ตรวจสอบ `DATABASE_URL` และ `REDIS_URL` อย่างเข้มงวด โดยจะอนุญาตให้รันเฉพาะพอร์ต `5455` (Database: `horplus_wave1d_fasttrack_test`) และ Redis พอร์ต `6380` เท่านั้น
 
 ---
 
@@ -56,7 +70,7 @@ npm run dev
 ```bash
 npm run uat:refresh
 ```
-*คำสั่งนี้จะทำการตรวจสอบความปลอดภัยฐานข้อมูล -> ล้างข้อมูล UAT เก่า -> ลงข้อมูลชุดใหม่ที่สมบูรณ์ -> สร้างตารางคำนวณ Oracle -> สร้าง Session Token เข้าสู่ระบบอัตโนมัติ 5 บทบาท*
+*คำสั่งนี้จะทำการตรวจสอบความปลอดภัยฐานข้อมูล -> ซิงก์ Catalog แพ็กเกจมาตรฐาน -> ล้างข้อมูล UAT เก่า -> ลงข้อมูลชุดใหม่ที่สมบูรณ์ -> สร้างตารางคำนวณ Oracle -> สร้าง Session Token เข้าสู่ระบบอัตโนมัติ 6 บทบาท*
 
 ---
 
@@ -64,7 +78,11 @@ npm run uat:refresh
 คุณสามารถเปิดเบราว์เซอร์พร้อมล็อกอินเข้าใช้งานในแต่ละบทบาทได้ทันทีด้วยคำสั่ง:
 
 ```bash
-# 1. เจ้าของหอพักใหม่ (Fresh Owner)
+# 0. ทดสอบกรอกฟอร์มลงทะเบียนสร้างหอพักใหม่ด้วยตนเอง (Registration Owner)
+npm run uat:open:register
+# หรือ: npm run uat:open -- registration-owner
+
+# 1. เจ้าของหอพักใหม่ที่ผ่าน Onboarding แล้ว (Fresh Owner)
 npm run uat:open:fresh
 # หรือ: npm run uat:open -- fresh-owner
 
@@ -91,8 +109,9 @@ npm run uat:open:tech
 
 | ลำดับ | บทบาท (Role) | ชื่อผู้ใช้งาน | รายละเอียด / วัตถุประสงค์การทดสอบ | URL สำหรับเข้าใช้งาน | คำสั่งเปิดเบราว์เซอร์ |
 | :---: | :--- | :--- | :--- | :--- | :--- |
-| **1** | **Fresh Owner** *(เจ้าของใหม่)* | `เจ้าของทดสอบ Fresh Owner` | เพิ่งเสร็จสิ้น Onboarding มี 4 ห้องว่าง ตรวจสอบการบันทึกข้อมูลและหน้า Settings | [http://127.0.0.1:5173/owner/dashboard](http://127.0.0.1:5173/owner/dashboard) | `npm run uat:open:fresh` |
-| **2** | **Comprehensive Owner** *(เจ้าของหอพักเต็มรูปแบบ)* | `เจ้าของทดสอบ Comprehensive Owner` | หอพักขนาด 18 ห้อง (2 อาคาร) มีข้อมูลครบทุกสถานะบิล สัญญา มิเตอร์ ช่าง และประกาศ | [http://127.0.0.1:5173/owner/dashboard](http://127.0.0.1:5173/owner/dashboard) | `npm run uat:open:owner` |
+| **0** | **Registration Owner** *(กรอกฟอร์มจริง)* | `เจ้าของทดสอบ Registration Owner` | **Pre-onboarding:** ทดสอบกรอกฟอร์ม Onboarding Wizard 6 ขั้นตอนด้วยตนเอง | [http://127.0.0.1:5173/owner/register](http://127.0.0.1:5173/owner/register) | `npm run uat:open:register` |
+| **1** | **Fresh Owner** *(หอพักใหม่เสร็จแล้ว)* | `เจ้าของทดสอบ Fresh Owner` | เพิ่งเสร็จสิ้น Onboarding มี 4 ห้องว่าง ตรวจสอบการบันทึกข้อมูลและหน้า Settings | [http://127.0.0.1:5173/owner/dashboard](http://127.0.0.1:5173/owner/dashboard) | `npm run uat:open:fresh` |
+| **2** | **Comprehensive Owner** *(หอพักเต็มรูปแบบ)* | `เจ้าของทดสอบ Comprehensive Owner` | หอพักขนาด 18 ห้อง (2 อาคาร) มีข้อมูลครบทุกสถานะบิล สัญญา มิเตอร์ ช่าง และประกาศ | [http://127.0.0.1:5173/owner/dashboard](http://127.0.0.1:5173/owner/dashboard) | `npm run uat:open:owner` |
 | **3** | **Tenant** *(ผู้เช่า)* | `นายสมชาย ใจดี` (ห้อง 101) | ตรวจสอบ Tenant Portal, ดูบิลกรกฎาคม 2569, ดูใบเสร็จ, ประวัติสัญญา, และแจ้งซ่อม | [http://127.0.0.1:5173/tenant/dashboard](http://127.0.0.1:5173/tenant/dashboard) | `npm run uat:open:tenant` |
 | **4** | **Staff Manager** *(ผู้จัดการ)* | `นางสาวปราณี ผู้จัดการ` | สิทธิ์จัดการห้องพัก ผู้เช่า บิล การรับชำระเงิน และรายงาน (ไม่มีสิทธิ์ลบหอพัก) | [http://127.0.0.1:5173/owner/dashboard](http://127.0.0.1:5173/owner/dashboard) | `npm run uat:open:manager` |
 | **5** | **Staff Tech** *(ช่างเทคนิค)* | `นายสุรชัย ช่างเทคนิค` | สิทธิ์ดูงานซ่อมบำรุง บันทึกมิเตอร์ (ไม่มีสิทธิ์ดูการเงิน/บิล) | [http://127.0.0.1:5173/owner/dashboard](http://127.0.0.1:5173/owner/dashboard) | `npm run uat:open:tech` |
@@ -100,6 +119,29 @@ npm run uat:open:tech
 ---
 
 ## 📋 3. รายการตรวจสอบตามลำดับ (Step-by-Step Scenario Review)
+
+### หมวดที่ 0: ทดสอบการกรอก Onboarding UI ด้วยตนเอง (Registration Owner — Real UI Onboarding)
+> 📄 **ข้อมูลที่ใช้กรอก:** ดู [docs/uat/LOCAL07_REGISTRATION_INPUT_TH.md](file:///C:/Projects/HorPlus-V2/docs/uat/LOCAL07_REGISTRATION_INPUT_TH.md)
+1. **รันคำสั่ง:** `npm run uat:open:register`
+2. **ตรวจสอบหน้าเริ่มต้น:** ระบบต้องนำทางเข้าสู่หน้า `/owner/register` (Onboarding Wizard ขั้นตอนที่ 1)
+3. **กรอกข้อมูลขั้นตอนที่ 1-6:** คัดลอกค่าจาก Cheat Sheet กรอกลงในแต่ละหน้าจอ:
+   - ขั้นตอนที่ 1 (ข้อมูลหอพัก): ชื่อหอพัก, ที่อยู่, เบอร์โทร
+   - ขั้นตอนที่ 2 (อาคารและห้อง): อาคาร A (2 ชั้น ชั้นละ 2 ห้อง ค่าเช่า ฿4,500)
+   - ขั้นตอนที่ 3 (อัตราค่าบริการ): ค่าน้ำ ฿18 / ค่าไฟ ฿7 / ส่วนกลาง ฿150 / เน็ต ฿200 / จอดรถ ฿500
+   - ขั้นตอนที่ 4 (การเงินและลายเซ็น): วันตัดรอบ 25 / ครบกำหนด 5 / พร้อมเพย์ 0891234567 / ธนาคารกสิกรไทย / วาดลายเซ็น
+   - ขั้นตอนที่ 5 (LINE OA): คลิกปุ่ม "ข้ามไปก่อน / ทดสอบภายหลัง" (GAP-03)
+   - ขั้นตอนที่ 6 (แพ็กเกจและโปรโมชัน): เลือกแพ็กเกจฟรี + ใส่โค้ด `HORPLUS` -> กดยืนยันการลงทะเบียน
+4. **ตรวจสอบผลลัพธ์หลังกดยืนยัน:**
+   - ระบบต้องนำทางเข้าสู่หน้า `/owner/dashboard` โดยอัตโนมัติ
+   - แสดงชื่อหอพัก `หอพักทดสอบ แกรนด์ วิลล่า UAT`
+   - แดชบอร์ดแสดงจำนวนห้อง 4 ห้อง (ว่าง 100%)
+5. **ตรวจสอบเมนูตั้งค่า (`/owner/settings`):**
+   - ตรวจสอบว่าค่าน้ำ ค่าไฟ วันตัดรอบบิล บัญชีธนาคาร และลายเซ็น แสดงผลตรงกับที่กรอก
+6. **ทดสอบแก้ไขข้อมูลและกด F5:**
+   - ทดลองแก้ไขชื่อหอพักหรือปรับอัตราค่าน้ำ -> กดบันทึก -> กดปุ่ม F5 (Reload)
+   - ผลที่ต้องได้: ข้อมูลที่แก้ไขต้องแสดงผลถูกต้อง ไม่สูญหาย และไม่คืนค่าเดิม
+
+---
 
 ### หมวดที่ 1: ตรวจสอบ Fresh Owner & การคงอยู่ของข้อมูลตั้งค่า (Settings Persistence)
 > 📄 **เอกสารอ้างอิงอย่างละเอียด:** ดู [docs/uat/LOCAL07_FRESH_OWNER_PERSISTENCE_MAP_TH.md](file:///C:/Projects/HorPlus-V2/docs/uat/LOCAL07_FRESH_OWNER_PERSISTENCE_MAP_TH.md)
@@ -201,19 +243,20 @@ npm run uat:open:tech
 
 ## 📝 5. แบบฟอร์มสรุปผลการประเมินโดย Product Owner (Review Signoff Sheet)
 
-Product Owner สามารถทำเครื่องหมาย `[x]` ในช่องที่ผ่านการประเมิน:
+Product Owner สามารถทำเครื่องหมาย `[x]` ในช่องที่ผ่านการประเมิน (สถานะปัจจุบันทุกช่อง: `PENDING USER REVIEW`):
 
-- [ ] **1. Onboarding & Registration Persistence:** ข้อมูลตอนสร้างหอพักใหม่บันทึกครบถ้วนและคงอยู่หลังกดรีเฟรช F5
-- [ ] **2. Settings & Property Defaults:** เมนูตั้งค่าค่าน้ำ ค่าไฟ ค่าส่วนกลาง และบัญชีธนาคารทำงานถูกต้อง
-- [ ] **3. Dashboard Calculations & KPIs:** ยอดรวมห้องพัก, อัตราเข้าพัก, ยอดเรียกเก็บ ฿65,899, และยอดค้างชำระ ฿23,905 ถูกต้องตรงตาม Oracle
-- [ ] **4. Multi-Building & Rate Override:** อาคาร B สามารถคิดอัตราค่าน้ำ/ค่าไฟแยกจากอาคาร A ได้ถูกต้อง
-- [ ] **5. Co-Occupant Surcharges:** การคิดค่าปรับ/ค่าบริการผู้พักอาศัยร่วมเกินโควต้าในห้อง 104 ถูกต้อง
-- [ ] **6. Billing & Invoicing Operations:** การออกบิล, การล็อคยอดเมื่อชำระ, และการออกใบเสร็จทำงานถูกต้อง
-- [ ] **7. Move-out & Settlement Refund:** การหักค่าความเสียหายและสรุปยอดคืนเงินประกันห้อง 204 ถูกต้อง
-- [ ] **8. Contract Renewal Workflow:** คำขอต่อสัญญาและการสร้างสัญญาต่อเนื่องล่วงหน้าทำงานถูกต้อง
-- [ ] **9. Tenant Portal Experience:** ผู้เช่าสามารถเข้าดูบิล ใบเสร็จ และแจ้งซ่อมได้สะดวก
-- [ ] **10. Staff RBAC Permission Boundary:** การแยกสิทธิ์ Manager vs Tech ปลอดภัยและถูกต้อง
-- [ ] **11. Export Functionality (CSV & Contract PDF):** การส่งออก CSV รายงาน และการสร้าง PDF สัญญาเช่าภาษาไทยใช้งานได้
+- [ ] **0. Real UI Onboarding Wizard (`registration-owner`):** กรอกฟอร์ม 6 ขั้นตอนผ่าน UI จริง บันทึกสำเร็จ และ Redirect สู่แดชบอร์ดถูกต้อง [PENDING USER REVIEW]
+- [ ] **1. Onboarding & Registration Persistence:** ข้อมูลตอนสร้างหอพักใหม่บันทึกครบถ้วนและคงอยู่หลังกดรีเฟรช F5 [PENDING USER REVIEW]
+- [ ] **2. Settings & Property Defaults:** เมนูตั้งค่าค่าน้ำ ค่าไฟ ค่าส่วนกลาง และบัญชีธนาคารทำงานถูกต้อง [PENDING USER REVIEW]
+- [ ] **3. Dashboard Calculations & KPIs:** ยอดรวมห้องพัก, อัตราเข้าพัก, ยอดเรียกเก็บ ฿65,899, และยอดค้างชำระ ฿23,905 ถูกต้องตรงตาม Oracle [PENDING USER REVIEW]
+- [ ] **4. Multi-Building & Rate Override:** อาคาร B สามารถคิดอัตราค่าน้ำ/ค่าไฟแยกจากอาคาร A ได้ถูกต้อง [PENDING USER REVIEW]
+- [ ] **5. Co-Occupant Surcharges:** การคิดค่าปรับ/ค่าบริการผู้พักอาศัยร่วมเกินโควต้าในห้อง 104 ถูกต้อง [PENDING USER REVIEW]
+- [ ] **6. Billing & Invoicing Operations:** การออกบิล, การล็อคยอดเมื่อชำระ, และการออกใบเสร็จทำงานถูกต้อง [PENDING USER REVIEW]
+- [ ] **7. Move-out & Settlement Refund:** การหักค่าความเสียหายและสรุปยอดคืนเงินประกันห้อง 204 ถูกต้อง [PENDING USER REVIEW]
+- [ ] **8. Contract Renewal Workflow:** คำขอต่อสัญญาและการสร้างสัญญาต่อเนื่องล่วงหน้าทำงานถูกต้อง [PENDING USER REVIEW]
+- [ ] **9. Tenant Portal Experience:** ผู้เช่าสามารถเข้าดูบิล ใบเสร็จ และแจ้งซ่อมได้สะดวก [PENDING USER REVIEW]
+- [ ] **10. Staff RBAC Permission Boundary:** การแยกสิทธิ์ Manager vs Tech ปลอดภัยและถูกต้อง [PENDING USER REVIEW]
+- [ ] **11. Export Functionality (CSV & Contract PDF):** การส่งออก CSV รายงาน และการสร้าง PDF สัญญาเช่าภาษาไทยใช้งานได้ [PENDING USER REVIEW]
 
 ---
-*สถานะ: `LOCAL-07 — USER MANUAL UAT READY / IN PROGRESS` (รอ Product Owner ทดสอบและประเมินผล)*
+*สถานะ: `LOCAL-07 — PRODUCT OWNER MANUAL UAT READY / IN PROGRESS` (รอ Product Owner ทดสอบและประเมินผล)*

@@ -16,8 +16,14 @@
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 const { PrismaClient } = require('../../server/node_modules/@prisma/client/index.js');
+
+// Explicit Dev/Test runtime gate
+if (process.env.NODE_ENV === 'production') {
+  throw new Error('CRITICAL SAFETY ERROR: LOCAL-07 session generator refuses execution in production environment!');
+}
+
 import { assertSafeDatabaseTarget } from './db-safety-guard.mjs';
-import { FRESH_DORM, COMP_DORM } from './constants.mjs';
+import { FRESH_DORM, COMP_DORM, REGISTRATION_OWNER } from './constants.mjs';
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
@@ -38,6 +44,9 @@ const prisma = new PrismaClient({
   },
 });
 
+import { SessionTokenService } from '../../server/src/services/session-token.service.ts';
+import { CsrfService } from '../../server/src/services/csrf.service.ts';
+
 // Derive keys strictly from server environment (fail-closed, no hardcoded defaults)
 const SESSION_KEY = process.env.SESSION_ENCRYPTION_KEY;
 const CSRF_KEY = process.env.CSRF_SIGNING_KEY;
@@ -46,32 +55,8 @@ if (!SESSION_KEY || !CSRF_KEY) {
   throw new Error('CRITICAL SECURITY ERROR: SESSION_ENCRYPTION_KEY or CSRF_SIGNING_KEY is missing from environment!');
 }
 
-const SESSION_SECRET_DERIVED = crypto.createHash('sha256').update(SESSION_KEY).digest();
-const CSRF_SECRET_DERIVED = crypto.createHash('sha256').update(CSRF_KEY).digest();
-
-function encryptSessionToken(payload, ttlSeconds = 86400) {
-  const nowSec = Math.floor(Date.now() / 1000);
-  const fullPayload = {
-    ...payload,
-    iat: nowSec,
-    exp: nowSec + ttlSeconds,
-    jti: crypto.randomUUID(),
-  };
-
-  const iv = crypto.randomBytes(12);
-  const cipher = crypto.createCipheriv('aes-256-gcm', SESSION_SECRET_DERIVED, iv);
-  const jsonStr = JSON.stringify(fullPayload);
-  const encrypted = Buffer.concat([cipher.update(jsonStr, 'utf8'), cipher.final()]);
-  const authTag = cipher.getAuthTag();
-
-  return `${iv.toString('base64url')}.${encrypted.toString('base64url')}.${authTag.toString('base64url')}`;
-}
-
-function generateCsrfToken(sessionId) {
-  const nonce = crypto.randomBytes(16).toString('hex');
-  const sig = crypto.createHmac('sha256', CSRF_SECRET_DERIVED).update(`${sessionId}.${nonce}`).digest('hex');
-  return `${nonce}.${sig}`;
-}
+const sessionTokenService = new SessionTokenService(SESSION_KEY);
+const csrfService = new CsrfService(CSRF_KEY);
 
 export async function createAllSessions() {
   if (!fs.existsSync(SESSIONS_DIR)) {
@@ -80,8 +65,16 @@ export async function createAllSessions() {
 
   const identities = [
     {
+      key: 'registration-owner',
+      title: '0. Registration Owner (ทดสอบกรอก Onboarding UI ด้วยตนเอง)',
+      userId: REGISTRATION_OWNER.id,
+      dormId: null,
+      userType: 'owner',
+      targetPath: '/owner/register',
+    },
+    {
       key: 'fresh-owner',
-      title: '1. Fresh Owner (เพิ่งเสร็จสิ้น Onboarding)',
+      title: '1. Fresh Owner (เพิ่งเสร็จสิ้น Onboarding - Service Oracle)',
       userId: FRESH_DORM.owner.id,
       dormId: FRESH_DORM.id,
       userType: 'owner',
@@ -134,7 +127,7 @@ export async function createAllSessions() {
     const effectiveDormId = member?.dormitoryId || id.dormId;
 
     const sessionId = crypto.randomUUID();
-    const sessionIdHash = crypto.createHash('sha256').update(sessionId).digest('hex');
+    const sessionIdHash = SessionTokenService.hashSessionId(sessionId);
     const expiresAt = new Date(Date.now() + 86400 * 1000);
 
     // Save session in DB
@@ -150,14 +143,14 @@ export async function createAllSessions() {
       },
     });
 
-    const sessionToken = encryptSessionToken({
+    const sessionToken = sessionTokenService.encryptToken({
       sub: id.userId,
       sid: sessionId,
       type: 'session',
       version: 1,
-    });
+    }, 86400);
 
-    const csrfToken = generateCsrfToken(sessionId);
+    const csrfToken = csrfService.generateCsrfToken(sessionId);
 
     // Generate Playwright storage state
     const storageState = {
@@ -202,15 +195,11 @@ export async function createAllSessions() {
       origins: [
         {
           origin: 'http://127.0.0.1:5173',
-          localStorage: [
-            { name: 'selected_dormitory_id', value: effectiveDormId },
-          ],
+          localStorage: effectiveDormId ? [{ name: 'selected_dormitory_id', value: effectiveDormId }] : [],
         },
         {
           origin: 'http://localhost:5173',
-          localStorage: [
-            { name: 'selected_dormitory_id', value: effectiveDormId },
-          ],
+          localStorage: effectiveDormId ? [{ name: 'selected_dormitory_id', value: effectiveDormId }] : [],
         },
       ],
     };

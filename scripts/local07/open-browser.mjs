@@ -18,6 +18,11 @@
  * @license Apache-2.0
  */
 
+// Explicit Dev/Test runtime gate
+if (process.env.NODE_ENV === 'production') {
+  throw new Error('CRITICAL SAFETY ERROR: LOCAL-07 browser launcher refuses execution in production environment!');
+}
+
 import { chromium } from 'playwright';
 import { assertSafeDatabaseTarget } from './db-safety-guard.mjs';
 import { createAllSessions } from './login-helper.mjs';
@@ -31,8 +36,10 @@ const ROOT_DIR = path.resolve(__dirname, '../..');
 const SESSIONS_DIR = path.join(ROOT_DIR, '.local07-sessions');
 
 const PERSONA_MAP = {
-  'fresh-owner': { file: 'fresh-owner.json', url: 'http://127.0.0.1:5173/owner/dashboard', name: 'Fresh Owner (เพิ่งเสร็จสิ้น Onboarding)' },
-  'fresh': { file: 'fresh-owner.json', url: 'http://127.0.0.1:5173/owner/dashboard', name: 'Fresh Owner (เพิ่งเสร็จสิ้น Onboarding)' },
+  'registration-owner': { file: 'registration-owner.json', url: 'http://127.0.0.1:5173/owner/register', name: 'Registration Owner (กรอก Onboarding UI ด้วยตนเอง)' },
+  'register': { file: 'registration-owner.json', url: 'http://127.0.0.1:5173/owner/register', name: 'Registration Owner (กรอก Onboarding UI ด้วยตนเอง)' },
+  'fresh-owner': { file: 'fresh-owner.json', url: 'http://127.0.0.1:5173/owner/dashboard', name: 'Fresh Owner (เพิ่งเสร็จสิ้น Onboarding - Service Oracle)' },
+  'fresh': { file: 'fresh-owner.json', url: 'http://127.0.0.1:5173/owner/dashboard', name: 'Fresh Owner (เพิ่งเสร็จสิ้น Onboarding - Service Oracle)' },
   'comp-owner': { file: 'comp-owner.json', url: 'http://127.0.0.1:5173/owner/dashboard', name: 'Comprehensive Owner (หอพักขนาดเต็ม 18 ห้อง)' },
   'comp': { file: 'comp-owner.json', url: 'http://127.0.0.1:5173/owner/dashboard', name: 'Comprehensive Owner (หอพักขนาดเต็ม 18 ห้อง)' },
   'owner': { file: 'comp-owner.json', url: 'http://127.0.0.1:5173/owner/dashboard', name: 'Comprehensive Owner (หอพักขนาดเต็ม 18 ห้อง)' },
@@ -48,19 +55,26 @@ async function main() {
   const safety = assertSafeDatabaseTarget();
 
   // 2. Resolve Persona Argument
-  const rawArg = (process.argv[2] || 'fresh-owner').toLowerCase().trim();
+  const rawArg = (process.argv[2] || 'register').toLowerCase().trim();
   const persona = PERSONA_MAP[rawArg];
 
   if (!persona) {
     console.error(`\n❌ Unknown persona "${rawArg}"!`);
     console.log('Available personas:');
-    console.log('  - fresh-owner   (alias: fresh)');
-    console.log('  - comp-owner    (aliases: comp, owner)');
-    console.log('  - tenant-somchai (aliases: tenant, somchai)');
+    console.log('  - registration-owner (alias: register)');
+    console.log('  - fresh-owner        (alias: fresh)');
+    console.log('  - comp-owner         (aliases: comp, owner)');
+    console.log('  - tenant-somchai     (aliases: tenant, somchai)');
     console.log('  - manager');
     console.log('  - tech\n');
-    console.log('Example: npm run uat:open -- fresh-owner\n');
+    console.log('Example: npm run uat:open -- registration-owner\n');
     process.exit(1);
+  }
+
+  // 3. Validate loopback target URL
+  const parsedUrl = new URL(persona.url);
+  if (parsedUrl.hostname !== '127.0.0.1' && parsedUrl.hostname !== 'localhost') {
+    throw new Error(`CRITICAL SAFETY ERROR: Target URL host must be loopback (127.0.0.1/localhost). Found: '${parsedUrl.hostname}'`);
   }
 
   const sessionFile = path.join(SESSIONS_DIR, persona.file);

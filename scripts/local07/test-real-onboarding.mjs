@@ -93,9 +93,11 @@ export async function runRealOnboardingTestProof() {
     });
     assert(Boolean(user.id), 'User identity created', user.id);
 
-    const sensitiveFieldService = new SensitiveFieldService(
-      process.env.FIELD_ENCRYPTION_KEY || 'default_32_byte_secret_key_123456'
-    );
+    const fieldKey = process.env.FIELD_ENCRYPTION_KEY;
+    if (!fieldKey || !fieldKey.trim()) {
+      throw new Error('CRITICAL SECURITY ERROR: FIELD_ENCRYPTION_KEY is missing from environment!');
+    }
+    const sensitiveFieldService = new SensitiveFieldService(fieldKey);
     const provisioningService = new DormitoryProvisioningService(prisma, sensitiveFieldService);
     const signatureStorageService = new SignatureStorageService(prisma);
 

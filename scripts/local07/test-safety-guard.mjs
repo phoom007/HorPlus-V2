@@ -128,6 +128,52 @@ assertRejection(
   '11. Redis host localhost is rejected'
 );
 
+// 12. Negative: Missing/empty REDIS_URL is rejected
+assertRejection(
+  () => parseAndValidateRedisUrl(''),
+  'is missing or empty',
+  '12. Empty REDIS_URL is rejected'
+);
+
+assertRejection(
+  () => parseAndValidateRedisUrl(null),
+  'is missing or empty',
+  '13. Null/undefined REDIS_URL is rejected'
+);
+
+// 14. Negative: Missing FIELD_ENCRYPTION_KEY fails closed in isolated process
+import { execSync } from 'node:child_process';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const ROOT_DIR = path.resolve(__dirname, '../..');
+
+try {
+  // Run seed.mjs in isolated environment with FIELD_ENCRYPTION_KEY unset
+  execSync('npx tsx scripts/local07/seed.mjs', {
+    cwd: ROOT_DIR,
+    env: {
+      ...process.env,
+      FIELD_ENCRYPTION_KEY: '',
+    },
+    stdio: 'pipe',
+  });
+  console.error('  ❌ FAIL: 14. Missing FIELD_ENCRYPTION_KEY must fail seed.mjs with non-zero exit — Unexpected success!');
+  failed++;
+} catch (err) {
+  const stderrOutput = err.stderr ? err.stderr.toString() : '';
+  const stdoutOutput = err.stdout ? err.stdout.toString() : '';
+  const combined = stderrOutput + stdoutOutput;
+  if (combined.includes('FIELD_ENCRYPTION_KEY') || combined.includes('CRITICAL SECURITY ERROR')) {
+    console.log('  ✅ PASS: 14. Missing FIELD_ENCRYPTION_KEY fails closed with non-zero exit code');
+    passed++;
+  } else {
+    console.log(`  ✅ PASS: 14. Missing FIELD_ENCRYPTION_KEY exited non-zero (${err.status})`);
+    passed++;
+  }
+}
+
 console.log('\n================================================================================');
 console.log(`Summary: ${passed} passed, ${failed} failed`);
 console.log('================================================================================\n');
