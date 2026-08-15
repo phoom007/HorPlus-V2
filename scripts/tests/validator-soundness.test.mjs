@@ -12,6 +12,8 @@
  * 6. Signoff document total or domain breakdown mismatch
  * 7. Discovered source route without inventory declaration
  * 8. Declared in-scope inventory route absent from source
+ * 9. Substring match false-positive rejection (fuzzy match rejected)
+ * 10. Comment-only match false-positive rejection (comment string rejected)
  * 
  * @license Apache-2.0
  */
@@ -209,7 +211,7 @@ runTest('Validator fails on missing exact test title in referenced spec', () => 
     }
 
     if (!failed) throw new Error('Validator did NOT fail on missing test title');
-    if (!output.includes('not found as declared test in')) throw new Error(`Missing expected error message, got: ${output}`);
+    if (!output.includes('not found as declared executable test in')) throw new Error(`Missing expected error message, got: ${output}`);
   } finally {
     cleanupSandbox(sb);
   }
@@ -253,7 +255,7 @@ runTest('Validator fails on signoff document total / count mismatch', () => {
   try {
     const signoffPath = path.join(sb, 'docs/uat/local06-final-local-product-signoff.md');
     let content = fs.readFileSync(signoffPath, 'utf8');
-    content = content.replace('| **TOTAL PRODUCT SCOPE** | **87** |', '| **TOTAL PRODUCT SCOPE** | **99** |');
+    content = content.replace('| **TOTAL PRODUCT INVENTORY** | **87** |', '| **TOTAL PRODUCT INVENTORY** | **99** |');
     fs.writeFileSync(signoffPath, content, 'utf8');
 
     let failed = false;
@@ -266,7 +268,7 @@ runTest('Validator fails on signoff document total / count mismatch', () => {
     }
 
     if (!failed) throw new Error('Validator did NOT fail on signoff total mismatch');
-    if (!output.includes('Signoff Total Items') && !output.includes('does not match')) throw new Error(`Missing expected error message, got: ${output}`);
+    if (!output.includes('Signoff Table A Grand Total') && !output.includes('does not match')) throw new Error(`Missing expected error message, got: ${output}`);
   } finally {
     cleanupSandbox(sb);
   }
@@ -327,6 +329,73 @@ runTest('Route Generator fails when declared in-scope inventory route is absent 
 
     if (!failed) throw new Error('Generator did NOT fail on absent in-scope inventory route');
     if (!output.includes('Missing from Source: 1')) throw new Error(`Missing expected error message, got: ${output}`);
+  } finally {
+    cleanupSandbox(sb);
+  }
+});
+
+// -----------------------------------------------------------------------------
+// Test 9: Substring Match False-Positive Rejection
+// -----------------------------------------------------------------------------
+runTest('Validator fails on substring test title reference (rejects fuzzy matching)', () => {
+  const sb = createSandbox();
+  try {
+    const matrixPath = path.join(sb, 'docs/uat/local06-master-acceptance-matrix.md');
+    let content = fs.readFileSync(matrixPath, 'utf8');
+    // Replace full title with a partial substring: "renders hero and value props"
+    content = content.replace(
+      'UAT-PUB-001: Public Landing Page renders hero and value props',
+      'renders hero and value props'
+    );
+    fs.writeFileSync(matrixPath, content, 'utf8');
+
+    let failed = false;
+    let output = '';
+    try {
+      execSync(`node "${path.join(sb, 'scripts/verify-local06-acceptance-matrix.mjs')}"`, { cwd: sb, stdio: 'pipe' });
+    } catch (err) {
+      failed = true;
+      output = err.stdout.toString() + err.stderr.toString();
+    }
+
+    if (!failed) throw new Error('Validator did NOT fail on substring test reference');
+    if (!output.includes('not found as declared executable test in')) throw new Error(`Missing expected error message, got: ${output}`);
+  } finally {
+    cleanupSandbox(sb);
+  }
+});
+
+// -----------------------------------------------------------------------------
+// Test 10: Comment-Only Match False-Positive Rejection
+// -----------------------------------------------------------------------------
+runTest('Validator fails on comment-only string reference (rejects non-executable commentary)', () => {
+  const sb = createSandbox();
+  try {
+    const specPath = path.join(sb, 'tests/e2e/local06-master-local-uat.spec.ts');
+    let specContent = fs.readFileSync(specPath, 'utf8');
+    // Append a fake test title inside a comment
+    specContent += '\n// FAKE_COMMENT_ONLY_TEST_IDENTIFIER_999\n';
+    fs.writeFileSync(specPath, specContent, 'utf8');
+
+    const matrixPath = path.join(sb, 'docs/uat/local06-master-acceptance-matrix.md');
+    let matrixContent = fs.readFileSync(matrixPath, 'utf8');
+    matrixContent = matrixContent.replace(
+      'UAT-PUB-001: Public Landing Page renders hero and value props',
+      'FAKE_COMMENT_ONLY_TEST_IDENTIFIER_999'
+    );
+    fs.writeFileSync(matrixPath, matrixContent, 'utf8');
+
+    let failed = false;
+    let output = '';
+    try {
+      execSync(`node "${path.join(sb, 'scripts/verify-local06-acceptance-matrix.mjs')}"`, { cwd: sb, stdio: 'pipe' });
+    } catch (err) {
+      failed = true;
+      output = err.stdout.toString() + err.stderr.toString();
+    }
+
+    if (!failed) throw new Error('Validator did NOT fail on comment-only reference');
+    if (!output.includes('not found as declared executable test in')) throw new Error(`Missing expected error message, got: ${output}`);
   } finally {
     cleanupSandbox(sb);
   }

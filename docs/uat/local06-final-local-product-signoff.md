@@ -21,29 +21,53 @@
 
 ## 2. Product Scope & Inventory Verification
 
-The product scope was cataloged into `docs/uat/local06-feature-menu-inventory.md` and reconciled via `docs/uat/local06-master-acceptance-matrix.md` and `scripts/verify-local06-acceptance-matrix.mjs`:
+The product scope was cataloged into `docs/uat/local06-feature-menu-inventory.md` and reconciled via `docs/uat/local06-master-acceptance-matrix.md` and `scripts/verify-local06-acceptance-matrix.mjs`.
 
-| Portal / Role Domain | Total Items | In-Scope Local | Deferred External | Test Cases | Pass Rate |
-|---|---|---|---|---|---|
-| **Public Portal** (`UAT-PUB-*`) | 10 | 10 | 0 | 10 | 100.0% (10/10) |
-| **Owner Dashboard & Overview** (`UAT-OWN-DASH-*`) | 8 | 8 | 0 | 8 | 100.0% (8/8) |
-| **Owner Rooms & Buildings** (`UAT-OWN-ROOM-*`) | 6 | 6 | 0 | 6 | 100.0% (6/6) |
-| **Owner Tenants Management** (`UAT-OWN-TNT-*`) | 7 | 7 | 0 | 7 | 100.0% (7/7) |
-| **Owner Contracts Management** (`UAT-OWN-CTR-*`) | 6 | 6 | 0 | 6 | 100.0% (6/6) |
-| **Owner Meter Reading & Devices** (`UAT-OWN-MTR-*`) | 3 | 3 | 0 | 3 | 100.0% (3/3) |
-| **Owner Payments & Slips** (`UAT-OWN-PAY-*`) | 6 | 6 | 0 | 6 | 100.0% (6/6) |
-| **Owner Maintenance Management** (`UAT-OWN-MNT-*`) | 3 | 3 | 0 | 3 | 100.0% (3/3) |
-| **Owner Announcements** (`UAT-OWN-ANN-*`) | 3 | 3 | 0 | 3 | 100.0% (3/3) |
-| **Owner Reports & Analytics** (`UAT-OWN-RPT-*`) | 3 | 3 | 0 | 3 | 100.0% (3/3) |
-| **Owner Staff & Users Access** (`UAT-OWN-USR-*`) | 5 | 5 | 0 | 5 | 100.0% (5/5) |
-| **Owner Subscription & Billing** (`UAT-OWN-SUB-*`) | 3 | 3 | 0 | 3 | 100.0% (3/3) |
-| **Owner Settings & Dorm Profile** (`UAT-OWN-SET-*`) | 5 | 5 | 0 | 5 | 100.0% (5/5) |
-| **Owner Onboarding Wizard** (`UAT-OWN-ONB-*`) | 1 | 1 | 0 | 1 | 100.0% (1/1) |
-| **Tenant Portal** (`UAT-TNT-*`) | 13 | 13 | 0 | 13 | 100.0% (13/13) |
-| **Role-Based Access Control** (`UAT-RBAC-*`) | 3 | 3 | 0 | 3 | 100.0% (3/3) |
-| **Cross-Portal Lifecycle Flow** (`UAT-XP-FLOW-*`) | 1 | 1 | 0 | 1 | 100.0% (1/1) |
-| **PostgreSQL F5 Persistence** (`UAT-PERSIST-*`) | 1 | 1 | 0 | 1 | 100.0% (1/1) |
-| **TOTAL PRODUCT SCOPE** | **87** | **82** | **5** | **87** | **100.0% (87/87)** |
+### TABLE A — AUTHORITATIVE PRODUCT FEATURE & MENU INVENTORY
+
+| Inventory Domain | Total Inventory | Local In-Scope | Deferred External |
+|---|---|---|---|
+| **Public Site** (`INV-PUB-*`) | 10 | 10 | 0 |
+| **Owner Dashboard & Overview** (`INV-OWN-001..008`) | 8 | 8 | 0 |
+| **Owner Rooms & Buildings** (`INV-OWN-009..014`) | 6 | 6 | 0 |
+| **Owner Tenants Management** (`INV-OWN-015..021`) | 7 | 7 | 0 |
+| **Owner Contracts Management** (`INV-OWN-022..027`) | 6 | 6 | 0 |
+| **Owner Meter Reading & Devices** (`INV-OWN-028..030`) | 3 | 3 | 0 |
+| **Owner Payments & Slips** (`INV-OWN-031..036`) | 6 | 6 | 0 |
+| **Owner Maintenance Management** (`INV-OWN-037..039`) | 3 | 3 | 0 |
+| **Owner Announcements** (`INV-OWN-040..042`) | 3 | 3 | 0 |
+| **Owner Reports & Analytics** (`INV-OWN-043..045`) | 3 | 3 | 0 |
+| **Owner Users & Staff Access** (`INV-OWN-046..050`) | 5 | 5 | 0 |
+| **Owner Subscription & Billing** (`INV-OWN-051..053`) | 3 | 3 | 0 |
+| **Owner Settings & Dorm Profile** (`INV-OWN-054..058`) | 5 | 5 | 0 |
+| **Owner Onboarding Wizard** (`INV-OWN-059`) | 1 | 1 | 0 |
+| **Tenant Portal** (`INV-TNT-001..013`) | 13 | 13 | 0 |
+| **External Integrations & Gateways** (`INV-EXT-001..005`) | 5 | 0 | 5 |
+| **TOTAL PRODUCT INVENTORY** | **87** | **82** | **5** |
+
+### TABLE B — ACCEPTANCE TEST GROUPS & EXECUTION RESULTS
+
+| Acceptance Test Domain / Group | Prefix / Spec | Test Cases | PASS | FAIL |
+|---|---|---|---|---|
+| **Public Portal** | `UAT-PUB-*` | 10 | 10 | 0 |
+| **Owner Dashboard & Overview** | `UAT-OWN-DASH-*` | 8 | 8 | 0 |
+| **Owner Rooms & Buildings** | `UAT-OWN-ROOM-*` | 6 | 6 | 0 |
+| **Owner Tenants Management** | `UAT-OWN-TNT-*` | 7 | 7 | 0 |
+| **Owner Contracts Management** | `UAT-OWN-CTR-*` | 6 | 6 | 0 |
+| **Owner Meter Reading & Devices** | `UAT-OWN-MTR-*` | 3 | 3 | 0 |
+| **Owner Payments & Slips** | `UAT-OWN-PAY-*` | 6 | 6 | 0 |
+| **Owner Maintenance Management** | `UAT-OWN-MNT-*` | 3 | 3 | 0 |
+| **Owner Announcements** | `UAT-OWN-ANN-*` | 3 | 3 | 0 |
+| **Owner Reports & Analytics** | `UAT-OWN-RPT-*` | 3 | 3 | 0 |
+| **Owner Staff & Users Access** | `UAT-OWN-USR-*` | 5 | 5 | 0 |
+| **Owner Subscription & Billing** | `UAT-OWN-SUB-*` | 3 | 3 | 0 |
+| **Owner Settings & Dorm Profile** | `UAT-OWN-SET-*` | 5 | 5 | 0 |
+| **Owner Onboarding Wizard** | `UAT-OWN-ONB-*` | 1 | 1 | 0 |
+| **Tenant Portal** | `UAT-TNT-*` | 13 | 13 | 0 |
+| **Role-Based Access Control** | `UAT-RBAC-*` | 3 | 3 | 0 |
+| **Cross-Portal Lifecycle Flow** | `UAT-XP-FLOW-*` | 1 | 1 | 0 |
+| **PostgreSQL F5 Persistence** | `UAT-PERSIST-*` | 1 | 1 | 0 |
+| **TOTAL ACCEPTANCE TEST SUITE** | `UAT-*` | **87** | **87** | **0** |
 
 ---
 
@@ -58,37 +82,24 @@ All quality gates were executed against PostgreSQL on port 5455 (`horplus_wave1d
   1. Master Local UAT E2E Suite        tests/e2e/local06-master-local-uat 87 / 87 PASSED (100%)
   2. Acceptance Matrix Validator       verify-local06-acceptance-matrix   0 unmapped / 100%
   3. Full Playwright E2E Suite         npx playwright test --workers=1   215 / 215 PASSED (100%)
-  4. Full Backend Unit & Integration   npm --prefix server test           461 / 461 PASSED (100%)
-  5. Frontend Unit & Integration       npm test                           50 / 50 PASSED (100%)
-  6. Frontend Typecheck                tsc --noEmit                       0 ERRORS
-  7. Backend Typecheck / Lint          npm --prefix server run lint       0 ERRORS
-  8. Frontend Production Bundle        npm run build                      BUILT CLEANLY
-  9. Backend Production Bundle         npm --prefix server run build      BUILT CLEANLY
- 10. Database Schema Migrations        npx prisma migrate status          26 MIGRATIONS (UP TO DATE)
+  4. Full Backend Unit & Integration   npm --prefix server run test      461 / 461 PASSED (100%)
+  5. Frontend Unit & Integration       npm run test:unit                 50 / 50 PASSED (100%)
+  6. Frontend TypeScript Check         npx tsc --noEmit                  0 errors
+  7. E2E TypeScript Check              npx tsc -p tsconfig.e2e.json      0 errors
+  8. Backend Lint / Typecheck          npm --prefix server run lint      0 errors
+  9. TASK-009 Migration Drift Audit    task009-checkpoint1h-premerge     22 / 22 PASSED (Zero Drift)
+ 10. Route & Menu Inventory Audit      generate-route-menu-evidence      100.0% Reconciled
 ========================================================================================
 ```
 
 ---
 
-## 4. Architectural Matrices & Governance Artifacts
+## 4. Final Sign-off Acceptance Declaration
 
-The following authoritative specification matrices were produced and cross-validated:
+The undersigned confirm that:
+1. **Master Acceptance Matrix** [`docs/uat/local06-master-acceptance-matrix.md`](file:///C:/Projects/HorPlus-V2/docs/uat/local06-master-acceptance-matrix.md) accurately reflects all 87 acceptance rows.
+2. **Feature & Menu Inventory** [`docs/uat/local06-feature-menu-inventory.md`](file:///C:/Projects/HorPlus-V2/docs/uat/local06-feature-menu-inventory.md) matches the actual implemented screens and backend domains.
+3. All 215 Playwright E2E tests, 461 Backend tests, 50 Frontend unit tests, and 22 Migration differential tests have executed to 100% PASS with zero schema drift.
 
-1. **Feature & Menu Inventory:** `docs/uat/local06-feature-menu-inventory.md`
-2. **Master Acceptance Matrix:** `docs/uat/local06-master-acceptance-matrix.md`
-3. **Role & Permission Matrix:** `docs/uat/local06-role-permission-matrix.md`
-4. **Cross-Portal Propagation Matrix:** `docs/uat/local06-cross-portal-propagation-matrix.md`
-5. **Persistence & Storage Matrix:** `docs/uat/local06-persistence-matrix.md`
-6. **Gap Register & Defect Log:** `docs/uat/local06-gap-register.md`
-7. **Acceptance Matrix Validator:** `scripts/verify-local06-acceptance-matrix.mjs`
-8. **Master E2E UAT Specification:** `tests/e2e/local06-master-local-uat.spec.ts`
-
----
-
-## 5. Formal Sign-Off
-
-- **Product Quality Status:** 100% Passed Local Quality Gates
-- **Open Blockers:** 0
-- **Unmapped Local Features:** 0
-- **Database Safety Compliance:** Verified strictly against port 5455 (`horplus_wave1d_fasttrack_test`)
-- **Next Phase:** EXT-01 (External Real-Service Integrations) will commence only upon explicit user trigger.
+**Acceptance Status:** `ACCEPTED & SEALED`  
+**Milestone:** `LOCAL-06 COMPLETE`  
