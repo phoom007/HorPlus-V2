@@ -1,0 +1,6 @@
+﻿Prisma schema loaded from server\prisma\schema.prisma
+Datasource "db": PostgreSQL database "horplus_wave1d_fasttrack_test", schema "public" at "127.0.0.1:5455"
+
+26 migrations found in prisma/migrations
+
+Database schema is up to date!
