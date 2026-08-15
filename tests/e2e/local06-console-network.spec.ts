@@ -178,6 +178,7 @@ test.describe('LOCAL-06 Console & Network Cleanliness Audit', () => {
         floor: 1,
         monthlyRent: 4500,
         depositAmount: 9000,
+        roomType: 'standard',
         status: 'occupied',
       },
     });

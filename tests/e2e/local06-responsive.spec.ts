@@ -163,6 +163,7 @@ test.describe('LOCAL-06 Responsive Viewports Acceptance Suite', () => {
         floor: 1,
         monthlyRent: 5000,
         depositAmount: 10000,
+        roomType: 'standard',
         status: 'occupied',
       },
     });

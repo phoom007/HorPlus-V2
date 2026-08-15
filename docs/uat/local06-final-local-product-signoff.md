@@ -29,9 +29,9 @@ The product scope was cataloged into `docs/uat/local06-feature-menu-inventory.md
 | **Owner Dashboard & Overview** (`UAT-OWN-DASH-*`) | 8 | 8 | 0 | 8 | 100.0% (8/8) |
 | **Owner Rooms & Buildings** (`UAT-OWN-ROOM-*`) | 6 | 6 | 0 | 6 | 100.0% (6/6) |
 | **Owner Tenants Management** (`UAT-OWN-TNT-*`) | 7 | 7 | 0 | 7 | 100.0% (7/7) |
-| **Owner Contracts Management** (`UAT-OWN-CTR-*`) | 7 | 7 | 0 | 7 | 100.0% (7/7) |
-| **Owner Meter Reading & Devices** (`UAT-OWN-MTR-*`) | 4 | 4 | 0 | 4 | 100.0% (4/4) |
-| **Owner Payments & Slips** (`UAT-OWN-PAY-*`) | 8 | 8 | 0 | 8 | 100.0% (8/8) |
+| **Owner Contracts Management** (`UAT-OWN-CTR-*`) | 6 | 6 | 0 | 6 | 100.0% (6/6) |
+| **Owner Meter Reading & Devices** (`UAT-OWN-MTR-*`) | 3 | 3 | 0 | 3 | 100.0% (3/3) |
+| **Owner Payments & Slips** (`UAT-OWN-PAY-*`) | 6 | 6 | 0 | 6 | 100.0% (6/6) |
 | **Owner Maintenance Management** (`UAT-OWN-MNT-*`) | 3 | 3 | 0 | 3 | 100.0% (3/3) |
 | **Owner Announcements** (`UAT-OWN-ANN-*`) | 3 | 3 | 0 | 3 | 100.0% (3/3) |
 | **Owner Reports & Analytics** (`UAT-OWN-RPT-*`) | 3 | 3 | 0 | 3 | 100.0% (3/3) |
@@ -39,7 +39,7 @@ The product scope was cataloged into `docs/uat/local06-feature-menu-inventory.md
 | **Owner Subscription & Billing** (`UAT-OWN-SUB-*`) | 3 | 3 | 0 | 3 | 100.0% (3/3) |
 | **Owner Settings & Dorm Profile** (`UAT-OWN-SET-*`) | 5 | 5 | 0 | 5 | 100.0% (5/5) |
 | **Owner Onboarding Wizard** (`UAT-OWN-ONB-*`) | 1 | 1 | 0 | 1 | 100.0% (1/1) |
-| **Tenant Portal** (`UAT-TNT-*`) | 9 | 9 | 0 | 9 | 100.0% (9/9) |
+| **Tenant Portal** (`UAT-TNT-*`) | 13 | 13 | 0 | 13 | 100.0% (13/13) |
 | **Role-Based Access Control** (`UAT-RBAC-*`) | 3 | 3 | 0 | 3 | 100.0% (3/3) |
 | **Cross-Portal Lifecycle Flow** (`UAT-XP-FLOW-*`) | 1 | 1 | 0 | 1 | 100.0% (1/1) |
 | **PostgreSQL F5 Persistence** (`UAT-PERSIST-*`) | 1 | 1 | 0 | 1 | 100.0% (1/1) |

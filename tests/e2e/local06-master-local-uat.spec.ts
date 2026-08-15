@@ -501,28 +501,31 @@ test.describe('HORPLUS LOCAL-06 — Master Local Product Acceptance Suite', () =
     const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
 
     const lineUserId = `U_E2E_${Date.now()}`;
-    const friend = await prisma.dormitoryLineFriend.create({
-      data: {
-        dormitoryId: dormId,
-        lineUserIdHash: crypto.createHash('sha256').update(lineUserId).digest('hex'),
-        lineUserIdEncrypted: 'enc-dummy',
-        displayName: 'Somchai Staff',
-        friendStatus: 'FOLLOWING',
-      },
-    });
+    await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormId}, true)`;
+      const friend = await tx.dormitoryLineFriend.create({
+        data: {
+          dormitoryId: dormId,
+          lineUserIdHash: crypto.createHash('sha256').update(lineUserId).digest('hex'),
+          lineUserIdEncrypted: 'enc-dummy',
+          displayName: 'Somchai Staff',
+          friendStatus: 'FOLLOWING',
+        },
+      });
 
-    await prisma.dormitoryAccessGrant.create({
-      data: {
-        dormitoryId: dormId,
-        lineFriendId: friend.id,
-        roleCode: 'MANAGER',
-        tokenHash,
-        tokenEncrypted: 'enc-dummy',
-        tokenPrefix: rawToken.substring(0, 8),
-        status: 'ACTIVE',
-        version: 1,
-        createdByPrincipal: ownerUser.id,
-      },
+      await tx.dormitoryAccessGrant.create({
+        data: {
+          dormitoryId: dormId,
+          lineFriendId: friend.id,
+          roleCode: 'MANAGER',
+          tokenHash,
+          tokenEncrypted: 'enc-dummy',
+          tokenPrefix: rawToken.substring(0, 8),
+          status: 'ACTIVE',
+          version: 1,
+          createdByPrincipal: ownerUser.id,
+        },
+      });
     });
 
     await setupSession(context, page, sessionTokenManager, csrfTokenManager, dormId);
@@ -893,14 +896,17 @@ test.describe('HORPLUS LOCAL-06 — Master Local Product Acceptance Suite', () =
   });
 
   test('UAT-OWN-USR-002: Staff access creates bearer access grant for LINE Friend', async ({ page, context }) => {
-    await prisma.dormitoryLineFriend.create({
-      data: {
-        dormitoryId: dormId,
-        lineUserIdHash: crypto.createHash('sha256').update(`U_TEST_${Date.now()}`).digest('hex'),
-        lineUserIdEncrypted: 'enc-dummy',
-        displayName: 'Somchai Line Friend',
-        friendStatus: 'FOLLOWING',
-      },
+    await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormId}, true)`;
+      await tx.dormitoryLineFriend.create({
+        data: {
+          dormitoryId: dormId,
+          lineUserIdHash: crypto.createHash('sha256').update(`U_TEST_${Date.now()}`).digest('hex'),
+          lineUserIdEncrypted: 'enc-dummy',
+          displayName: 'Somchai Line Friend',
+          friendStatus: 'FOLLOWING',
+        },
+      });
     });
 
     await setupSession(context, page, sessionTokenOwner, csrfTokenOwner, dormId);

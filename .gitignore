@@ -24,8 +24,10 @@ coverage/
 # ----------------------------------------------------------------------
 backups/
 scratch/
-scripts/
+!scripts/
+scripts/*
 !scripts/verify-local06-acceptance-matrix.mjs
+!scripts/generate-route-menu-evidence.mjs
 !server/src/scripts/
 docs/execution-reports/
 !docs/execution-reports/*.md
