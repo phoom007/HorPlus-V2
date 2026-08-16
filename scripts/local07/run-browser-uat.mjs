@@ -163,6 +163,26 @@ async function runBrowserUAT() {
       uatResults.step2_untouched_max_installments_2 = true;
     }
 
+    // Fill building name, floors, rooms per floor, prefix (since initial defaults are clean)
+    const bldPrefixInput = page.locator('label:has-text("รหัสตึก")').locator('xpath=..').locator('input').first();
+    if (await bldPrefixInput.isVisible()) {
+      await bldPrefixInput.fill('A');
+      await page.waitForTimeout(100);
+      console.log('  Filled Room Prefix: A');
+    }
+    const bldFloorsInput = page.locator('label:has-text("จำนวนชั้น")').locator('xpath=..').locator('input').first();
+    if (await bldFloorsInput.isVisible()) {
+      await bldFloorsInput.fill('2');
+      await page.waitForTimeout(100);
+      console.log('  Filled Floors: 2');
+    }
+    const bldRoomsInput = page.locator('label:has-text("ห้องต่อชั้น")').locator('xpath=..').locator('input').first();
+    if (await bldRoomsInput.isVisible()) {
+      await bldRoomsInput.fill('2');
+      await page.waitForTimeout(100);
+      console.log('  Filled Rooms Per Floor: 2');
+    }
+
     // Advance to Step 3: ค่าน้ำ ค่าไฟ ค่าส่วนกลาง
     console.log('\n--- TEST 2.5: Step 3 — Clean Utilities Defaults Verification ---');
     const nextBtn2 = page.locator('button:has-text("ถัดไป")').first();
@@ -246,7 +266,20 @@ async function runBrowserUAT() {
       const promptPayNameVal = await promptPayNameInput.inputValue();
       console.log(`  PromptPay Name copied from Bank Account: "${promptPayNameVal}"`);
 
-      if (promptPayNameVal === 'บริษัท สมชาย จำกัด') {
+      // Test emptying Bank Account Name -> PromptPay name becomes empty
+      await bankAccountNameInput.fill('');
+      await pullNameButtons.first().click();
+      await page.waitForTimeout(200);
+      const promptPayCleared = await promptPayNameInput.inputValue();
+      console.log(`  PromptPay Name when Bank Account Name empty: "${promptPayCleared}" (Expected: "")`);
+
+      // Refill Bank Account Name -> PromptPay name refilled
+      await bankAccountNameInput.fill('บริษัท สมชาย จำกัด');
+      await pullNameButtons.first().click();
+      await page.waitForTimeout(200);
+      const promptPayRefilled = await promptPayNameInput.inputValue();
+
+      if (promptPayNameVal === 'บริษัท สมชาย จำกัด' && promptPayCleared === '' && promptPayRefilled === 'บริษัท สมชาย จำกัด') {
         uatResults.step4_promptpay_copies_bank_name = true;
       }
 
@@ -375,20 +408,31 @@ async function runBrowserUAT() {
     console.log(`  Trial ฿0 displayed: ${zeroPriceVisible ? '✅ YES' : '❌ NO'}`);
     console.log(`  Struck-through ฿189 displayed: ${struck189Visible ? '✅ YES' : '❌ NO'}`);
 
-    // Verify 5 Packages Duration Buttons via DOM
-    const found5Packages = await page.evaluate(() => {
+    // Verify 5 Packages Duration Buttons and Explicit Real Sale & Reference Prices via DOM
+    const priceCatalog = await page.evaluate(() => {
       const text = document.body.innerText;
-      console.log('Step 7 text:', text);
       const has1 = text.includes('1 เดือน');
       const has3 = text.includes('3 เดือน');
       const has6 = text.includes('6 เดือน');
       const has12 = text.includes('12 เดือน');
       const has24 = text.includes('24 เดือน');
-      return { has1, has3, has6, has12, has24, all: has1 && has3 && has6 && has12 && has24, sample: text.slice(text.indexOf('ขั้นตอนที่ 7'), text.indexOf('ขั้นตอนที่ 7') + 800) };
-    });
-    console.log(`  Packages check: ${JSON.stringify(found5Packages)}`);
+      
+      const p1 = text.includes('189') && text.includes('990');
+      const p3 = text.includes('529') && (text.includes('2990') || text.includes('2,990'));
+      const p6 = text.includes('999') && (text.includes('5990') || text.includes('5,990'));
+      const p12 = (text.includes('1799') || text.includes('1,799')) && (text.includes('10990') || text.includes('10,990'));
+      const p24 = (text.includes('2999') || text.includes('2,999')) && (text.includes('20000') || text.includes('20,000'));
 
-    if (freePlanVisible && proPlanVisible && zeroPriceVisible && (found5Packages.all || found5Packages.has1)) {
+      return {
+        has1, has3, has6, has12, has24,
+        p1, p3, p6, p12, p24,
+        allPackages: has1 && has3 && has6 && has12 && has24,
+        allPrices: p1 && p3 && p6 && p12 && p24,
+      };
+    });
+    console.log(`  Pricing catalog assertions (189/990, 529/2990, 999/5990, 1799/10990, 2999/20000):`, JSON.stringify(priceCatalog));
+
+    if (freePlanVisible && proPlanVisible && zeroPriceVisible && priceCatalog.allPackages && priceCatalog.allPrices) {
       uatResults.step7_pricing_catalog_and_trial_defaults = true;
     }
 
@@ -497,6 +541,18 @@ async function runBrowserUAT() {
     const signature = activeDorm?.ownerSignatures[0];
     console.log(`  Owner Signature Object Key: "${signature?.objectKey}" (isCurrent: ${signature?.isCurrent})`);
 
+    const packageIntents = activeDorm ? await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT set_config('app.bypass_rls', 'on', true)`;
+      return await tx.subscriptionPackageIntent.findMany({
+        where: { dormitoryId: activeDorm.id },
+      });
+    }) : [];
+
+    console.log(`  Persisted Package Intents Count: ${packageIntents.length} (Expected: 1)`);
+    console.log(`  Package Intent ID: ${packageIntents[0]?.id}`);
+    console.log(`  Package Intent Status: ${packageIntents[0]?.status} (Expected: SUCCEEDED)`);
+    console.log(`  Package Intent isZeroPayValidated: ${packageIntents[0]?.isZeroPayValidated} (Expected: true)`);
+
     const isPgValid = activeDorm &&
       activeDorm.phone === null &&
       activeDorm.email === null &&
@@ -507,7 +563,10 @@ async function runBrowserUAT() {
       (defaults?.defaultTerms?.length || 0) > 50 &&
       defaults?.petPolicy?.allowed === 'conditional' &&
       Array.isArray(defaults?.petPolicy?.allowedTypes) &&
-      defaults.petPolicy.allowedTypes.includes('dog');
+      defaults.petPolicy.allowedTypes.includes('dog') &&
+      packageIntents.length === 1 &&
+      packageIntents[0]?.status === 'SUCCEEDED' &&
+      packageIntents[0]?.isZeroPayValidated === true;
 
     if (isPgValid) {
       uatResults.step7_postgresql_persistence = true;
@@ -680,6 +739,7 @@ async function runBrowserUAT() {
 
   } catch (err) {
     console.error('❌ Browser UAT error:', err);
+    throw err;
   } finally {
     await browser.close();
     await prisma.$disconnect();
@@ -689,6 +749,46 @@ async function runBrowserUAT() {
   console.log('  LOCAL-07 BROWSER UAT SUMMARY REPORT');
   console.log('================================================================================');
   console.log(JSON.stringify(uatResults, null, 2));
+
+  // FAIL CLOSED ENFORCEMENT
+  const requiredCheckpoints = [
+    'step1_baseline_and_removed_fields',
+    'step2_untouched_max_installments_2',
+    'step3_clean_monetary_defaults',
+    'step4_single_helper_button',
+    'step4_promptpay_copies_bank_name',
+    'step4_independent_promptpay_name',
+    'step5_pets_rules_signature',
+    'step6_line_skip_path',
+    'step7_pricing_catalog_and_trial_defaults',
+    'step7_promo_and_finalize_api',
+    'step7_postgresql_persistence',
+    'step7_f5_reload_persistence',
+    'tenant_rules_and_pet_readback',
+    'tenant_acceptance_snapshot_immutability',
+  ];
+
+  const failedCheckpoints = requiredCheckpoints.filter((k) => !uatResults[k]);
+
+  if (failedCheckpoints.length > 0) {
+    console.error(`\n❌ FAIL CLOSED: The following UAT checkpoints failed: ${failedCheckpoints.join(', ')}`);
+    process.exitCode = 1;
+    throw new Error(`UAT failed on checkpoints: ${failedCheckpoints.join(', ')}`);
+  }
+
+  if (uatResults.browser_console_errors.length > 0) {
+    console.error(`\n❌ FAIL CLOSED: Unexpected Browser Console errors found:\n${uatResults.browser_console_errors.join('\n')}`);
+    process.exitCode = 1;
+    throw new Error(`Unexpected browser console errors found`);
+  }
+
+  if (uatResults.failed_network_requests.length > 0) {
+    console.error(`\n❌ FAIL CLOSED: Unexpected HTTP >= 400 errors found:\n${uatResults.failed_network_requests.join('\n')}`);
+    process.exitCode = 1;
+    throw new Error(`Unexpected HTTP error responses found`);
+  }
+
+  console.log('\n✅ ALL UAT CHECKPOINTS PASSED STRICTLY WITH ZERO ERRORS.');
 
   return uatResults;
 }

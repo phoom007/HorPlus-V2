@@ -83,7 +83,14 @@ export interface CompleteOnboardingPayload {
     status?: string;
   }[];
   planCode: string;
+  packageId?: string;
+  packageIntentId?: string;
   promoCode?: string;
+  referralCode?: string;
+  coinApplied?: number;
+  marketingSource?: string;
+  termsAccepted?: boolean;
+  ownerSignatureUrl?: string;
   defaultTerms?: string;
   petPolicy?: any;
   rules?: any;

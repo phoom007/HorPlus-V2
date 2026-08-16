@@ -19,6 +19,7 @@ describe('LOCAL-03: Local Notification Outbox & Operations Polish', () => {
   beforeEach(async () => {
     // Delete table rows in foreign-key dependency order for clean test slate
     const tablesToClean = [
+      'referral_attributions', 'user_referral_codes', 'coin_ledger_entries', 'coin_wallets',
       'account_benefit_claims', 'promo_redemptions', 'subscription_status_histories',
       'dormitory_subscriptions', 'payment_upload_intents', 'local_notification_outbox',
       'staff_notices', 'tenant_notices', 'contract_settlement_items', 'contract_settlements',

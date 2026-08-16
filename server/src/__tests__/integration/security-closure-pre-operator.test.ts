@@ -344,13 +344,18 @@ describe('Final Pre-Operator Security & Real-LINE Closure Tests', () => {
       };
 
       // Execute both finalizations CONCURRENTLY
-      const [res1, res2] = await Promise.all([
+      const results = await Promise.allSettled([
         finalizeDorm(dorm1Prep.provisionalDormitoryId, 'Race Dormitory Alpha'),
         finalizeDorm(dorm2Prep.provisionalDormitoryId, 'Race Dormitory Beta'),
       ]);
 
-      expect(res1).toBeDefined();
-      expect(res2).toBeDefined();
+      const fulfilled = results.filter((r) => r.status === 'fulfilled') as PromiseFulfilledResult<any>[];
+      const rejected = results.filter((r) => r.status === 'rejected') as PromiseRejectedResult[];
+
+      expect(fulfilled.length).toBe(1);
+      expect(fulfilled[0].value.totalTrialMonths).toBe(3);
+      expect(rejected.length).toBe(1);
+      expect(rejected[0].reason?.code || rejected[0].reason?.message).toMatch(/PROMO_ALREADY_REDEEMED/);
 
       // Assert exactly ONE AccountBenefitClaim exists
       const totalClaims = await prisma.accountBenefitClaim.count({
@@ -363,11 +368,6 @@ describe('Final Pre-Operator Security & Real-LINE Closure Tests', () => {
         where: { redeemedBy: raceUserId },
       });
       expect(totalRedemptions).toBe(1);
-
-      // Assert one call received 3 trial months (1 initial + 2 promo) and the other received 0
-      const monthsArray = [res1.totalTrialMonths, res2.totalTrialMonths].sort((a, b) => a - b);
-      expect(monthsArray[0]).toBe(0);
-      expect(monthsArray[1]).toBe(3);
     });
 
     it('PromoService strictly validates benefit fields and rejects invalid configs without falling back to 2 months', async () => {

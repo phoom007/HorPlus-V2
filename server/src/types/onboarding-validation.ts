@@ -234,6 +234,7 @@ export const CompleteOnboardingInputSchema = z.object({
   rooms: z.array(OnboardingRoomInputSchema).optional(),
   planCode: z.string().trim().min(1, 'กรุณาเลือกแพ็กเกจ'),
   packageId: z.string().trim().optional(),
+  packageIntentId: z.string().trim().optional(),
   promoCode: z.string().trim().optional(),
   referralCode: z.string().trim().optional(),
   coinApplied: z.coerce.number().int().min(0).optional(),

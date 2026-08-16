@@ -90,14 +90,21 @@ export async function syncSubscriptionCatalog(prisma: PrismaClient, options: { d
         });
       }
     } else {
-      // Seed mode: populate referencePrice if missing, but preserve runtime DB authority
-      if (existingPkg.referencePrice === null && pkgDef.referencePrice !== undefined) {
+      if (
+        existingPkg.enabled !== pkgDef.enabled ||
+        Number(existingPkg.price) !== Number(pkgDef.price) ||
+        (pkgDef.referencePrice !== undefined && Number(existingPkg.referencePrice) !== Number(pkgDef.referencePrice))
+      ) {
         changesDetected = true;
+        console.log(`[CatalogSync] Package drift detected for: ${pkgDef.planCode} ${pkgDef.durationMonths}m`);
         if (!dryRun && !checkOnly) {
           await prisma.subscriptionPackage.update({
             where: { id: existingPkg.id },
             data: {
-              referencePrice: pkgDef.referencePrice,
+              enabled: pkgDef.enabled,
+              price: pkgDef.price,
+              referencePrice: pkgDef.referencePrice !== undefined ? pkgDef.referencePrice : existingPkg.referencePrice,
+              catalogVersion: CANONICAL_SUBSCRIPTION_CATALOG.version,
             },
           });
         }

@@ -229,11 +229,11 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
       buildings: [
         {
           id: 'b-1',
-          name: 'อาคาร A',
-          totalFloors: 3,
-          roomsPerFloor: 8,
+          name: '',
+          totalFloors: 1,
+          roomsPerFloor: 0,
           hasElevator: false,
-          roomPrefix: 'A',
+          roomPrefix: '',
           formatPattern: 'prefix_floor_room',
           mode: 'auto' as 'auto' | 'manual',
           customRooms: [] as string[],
@@ -556,9 +556,9 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
   const handleAddBuilding = () => {
     const newBuilding = {
       id: `b-${Date.now()}`,
-      name: `อาคาร `,
-      totalFloors: 3,
-      roomsPerFloor: 8,
+      name: '',
+      totalFloors: 1,
+      roomsPerFloor: 0,
       hasElevator: false,
       roomPrefix: '',
       formatPattern: 'prefix_floor_room',
@@ -899,14 +899,14 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
       // 3. Map Buildings
       const mappedBuildings = formData.buildings.map((b, idx) => ({
         id: b.id || `bld-${idx + 1}`,
-        name: b.name,
+        name: (b.name && b.name.trim()) ? b.name.trim() : (b.roomPrefix ? `อาคาร ${b.roomPrefix.trim()}` : `อาคาร ${idx + 1}`),
         code: b.roomPrefix || null,
         floorsCount: b.totalFloors || 1,
         roomsPerFloor: b.roomsPerFloor || null,
         roomPrefix: b.roomPrefix || null,
         hasElevator: b.hasElevator ?? false,
         numberingPattern: b.formatPattern || null,
-        description: `อาคาร ${b.name}`,
+        description: `อาคาร ${(b.name && b.name.trim()) ? b.name.trim() : (b.roomPrefix ? b.roomPrefix.trim() : idx + 1)}`,
         monthlyRent: b.rentRates?.monthly ?? 0,
         dailyRent: b.rentRates?.daily ?? null,
         termRent: b.rentRates?.term ?? null,
@@ -984,13 +984,14 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
           promptPayValue: rawPP,
           promptPayAccountName: formData.paymentAccount.promptPayName || null,
           bankCode: formData.paymentAccount.bankName || null,
-          bankAccountName: formData.paymentAccount.bankAccountName || formData.paymentAccount.accountName || null,
+          bankAccountName: formData.paymentAccount.bankAccountName || null,
           bankAccountNumber: formData.paymentAccount.accountNumber ? formData.paymentAccount.accountNumber.replace(/\D/g, '') : null,
         },
         buildings: mappedBuildings,
         rooms: mappedRooms,
         planCode: (selectedPlan || 'free').toUpperCase(),
         packageId: selectedPlan === 'pro' ? (selectedPackageId || undefined) : undefined,
+        packageIntentId: quoteSummary?.intentId || undefined,
         promoCode: appliedPromo ? promoCodeInput.trim() : undefined,
         referralCode: referralCodeInput ? referralCodeInput.trim() : undefined,
         coinApplied: coinToApply > 0 ? coinToApply : undefined,
@@ -2252,7 +2253,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                             ...prev,
                             paymentAccount: {
                               ...prev.paymentAccount,
-                              promptPayName: prev.paymentAccount.bankAccountName || prev.paymentAccount.accountName || ''
+                              promptPayName: prev.paymentAccount.bankAccountName || ''
                             }
                           }))}
                           className="text-[10px] font-extrabold text-blue-600 bg-blue-50 hover:bg-blue-100 border border-blue-100 px-2 py-0.5 rounded-lg transition-all cursor-pointer"

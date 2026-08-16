@@ -13,6 +13,7 @@ import { createCsrfMiddleware } from '../middleware/csrf.js';
 
 const createQuoteSchema = z.object({
   packageId: z.string().uuid().optional(),
+  dormitoryId: z.string().uuid().optional(),
   isFreePlan: z.boolean().optional(),
   promoCode: z.string().optional(),
   referralCode: z.string().optional(),
@@ -74,7 +75,11 @@ export function createSubscriptionQuoteRouter(authService: AuthenticationService
     try {
       const userId = req.auth!.userId;
       const body = createQuoteSchema.parse(req.body);
-      const quote = await subscriptionIntentService.createIntentQuote(userId, body);
+      const requestedDormId =
+        (req.headers['x-dormitory-id'] as string) ||
+        body.dormitoryId ||
+        (req.query?.dormitoryId as string);
+      const quote = await subscriptionIntentService.createIntentQuote(userId, body, undefined, requestedDormId);
 
       res.json({
         success: true,

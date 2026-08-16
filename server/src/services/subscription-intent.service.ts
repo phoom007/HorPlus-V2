@@ -32,10 +32,43 @@ export class SubscriptionIntentService {
   }
 
   /**
-   * Derive server-authoritative dormitory ID from authenticated OnboardingDraft
+   * Derive server-authoritative dormitory ID from context, draft, or membership
    */
-  async resolveOnboardingDormitoryId(userId: string, txClient?: any): Promise<string> {
+  async resolveOnboardingDormitoryId(userId: string, txClient?: any, requestedDormitoryId?: string): Promise<string> {
     const db = txClient || this.prisma;
+
+    // 1. If explicit requestedDormitoryId is provided, verify ownership/membership
+    if (requestedDormitoryId) {
+      // Check active membership with OWNER/ADMIN role
+      const member = await db.dormitoryMember.findFirst({
+        where: {
+          dormitoryId: requestedDormitoryId,
+          userId,
+          status: 'active',
+          role: { code: { in: ['OWNER', 'ADMIN'] } },
+        },
+      });
+      if (member) {
+        return requestedDormitoryId;
+      }
+
+      // Or check provisional dormitory created by user
+      const provDorm = await db.dormitory.findFirst({
+        where: {
+          id: requestedDormitoryId,
+          createdByUserId: userId,
+          status: 'setup_pending',
+          deletedAt: null,
+        },
+      });
+      if (provDorm) {
+        return requestedDormitoryId;
+      }
+
+      throw new AppError('ไม่มีสิทธิ์เข้าถึงหอพักที่ระบุสำหรับแพ็กเกจนี้', 403, 'FORBIDDEN_DORMITORY_ACCESS');
+    }
+
+    // 2. Check active onboarding draft
     const draft = await db.onboardingDraft.findFirst({
       where: {
         userId,
@@ -47,20 +80,26 @@ export class SubscriptionIntentService {
       return draft.provisionalDormitoryId;
     }
 
-    // Check if user owns an existing dormitory
-    const ownedDorm = await db.dormitory.findFirst({
+    // 3. Post-onboarding context: Check user's active memberships
+    const activeMemberships = await db.dormitoryMember.findMany({
       where: {
-        createdByUserId: userId,
-        deletedAt: null,
+        userId,
+        status: 'active',
+        role: { code: { in: ['OWNER', 'ADMIN'] } },
       },
-      orderBy: { createdAt: 'desc' },
     });
 
-    if (ownedDorm) {
-      return ownedDorm.id;
+    if (activeMemberships.length === 1) {
+      return activeMemberships[0].dormitoryId;
+    } else if (activeMemberships.length > 1) {
+      throw new AppError(
+        'กรุณาระบุหอพักที่ต้องการดำเนินการ (Dormitory context required for multi-dorm owner)',
+        400,
+        'DORMITORY_CONTEXT_REQUIRED'
+      );
     }
 
-    // If no draft exists yet, create a provisional draft & dormitory
+    // 4. If no draft or existing dorms, create provisional draft & dormitory
     const provisionalDorm = await db.dormitory.create({
       data: {
         name: 'หอพักใหม่',
@@ -90,9 +129,9 @@ export class SubscriptionIntentService {
   /**
    * Create server-authoritative pricing quote snapshot in SubscriptionPackageIntent
    */
-  async createIntentQuote(userId: string, params: CreateIntentQuoteParams, txClient?: any) {
+  async createIntentQuote(userId: string, params: CreateIntentQuoteParams, txClient?: any, requestedDormitoryId?: string) {
     const runInTx = async (tx: any) => {
-      const dormitoryId = await this.resolveOnboardingDormitoryId(userId, tx);
+      const dormitoryId = await this.resolveOnboardingDormitoryId(userId, tx, requestedDormitoryId);
       await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormitoryId}, true)`;
       await tx.$executeRaw`SELECT set_config('app.current_user_id', ${userId}, true)`;
 
@@ -202,6 +241,18 @@ export class SubscriptionIntentService {
       // 7. Persist Intent Snapshot
       // If free plan, find or link packageId if available
       const targetPackageId = pkg ? pkg.id : (await tx.subscriptionPackage.findFirst({ where: { plan: { code: 'FREE' } } }))?.id || params.packageId;
+
+      // Supersede / expire older pending quote intents for this dormitory/user
+      await tx.subscriptionPackageIntent.updateMany({
+        where: {
+          dormitoryId,
+          userId,
+          status: 'PENDING_PAYMENT',
+        },
+        data: {
+          status: 'EXPIRED',
+        },
+      });
 
       const intent = await tx.subscriptionPackageIntent.create({
         data: {

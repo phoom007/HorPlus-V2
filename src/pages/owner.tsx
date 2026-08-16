@@ -411,6 +411,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
   const [isNotificationOpen, setIsNotificationOpen] = useState(false);
 
   const fetchStaffNotifications = async () => {
+    if (activeTab === 'register' || onboardingRequired) return;
     const reqHeaders: Record<string, string> = {};
     const savedId = localStorage.getItem('selected_dormitory_id');
     if (savedId) reqHeaders['x-dormitory-id'] = savedId;
@@ -482,6 +483,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
 
   // Load centralized data
   const refreshAllData = async () => {
+    if (activeTab === 'register' || onboardingRequired) return;
     let isApiConnected = false;
     const reqHeaders: Record<string, string> = {};
     const savedId = localStorage.getItem('selected_dormitory_id');

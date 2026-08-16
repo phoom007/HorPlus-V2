@@ -4,7 +4,7 @@
  */
 
 import nodeCrypto from 'crypto';
-import { PrismaClient } from '@prisma/client';
+import { Prisma, PrismaClient } from '@prisma/client';
 import { AppError } from '../types/index.js';
 import { SensitiveFieldService } from './sensitive-field.service.js';
 import { subscriptionEntitlementService } from './subscription-entitlement.service.js';
@@ -15,6 +15,7 @@ import { IIdempotencyRepository, InMemoryIdempotencyRepository } from '../db/rep
 import { getPublicWebhookOrigin } from './line-oa.service.js';
 import { promoService } from './promo.service.js';
 import { referralService } from './referral.service.js';
+import { coinWalletService } from './coin-wallet.service.js';
 
 export interface CompleteOwnerOnboardingParams {
   userId: string;
@@ -99,7 +100,10 @@ export interface CompleteOwnerOnboardingParams {
 
   planCode: string;
   packageId?: string;
+  packageIntentId?: string;
   promoCode?: string;
+  referralCode?: string;
+  coinApplied?: number;
   requestId?: string;
   rules?: string;
   defaultTerms?: string;
@@ -821,36 +825,136 @@ export class DormitoryProvisioningService {
       // Canonical Promo Code atomic redemption via ONE PromoService authority (PROMO-01)
       let promoApplied = false;
       let promoBonusMonths = 0;
-      let finalExpiresAt = initialTrialExpiresAt;
+      let finalExpiresAt = isZeroPayBenefit ? initialTrialExpiresAt : now;
 
-      if (isTrialEligible && promoCode && promoCode.trim()) {
+      if (promoCode && promoCode.trim()) {
         const promoRedeemRes = await promoService.redeemPromoAtomic(userId, dormId, promoCode, tx, undefined, now);
         promoApplied = true;
         promoBonusMonths = promoRedeemRes.bonusMonths || 2;
-        finalExpiresAt = promoRedeemRes.newExpiresAt || addCalendarMonths(initialTrialExpiresAt, promoBonusMonths);
+        finalExpiresAt = promoRedeemRes.newExpiresAt || addCalendarMonths(isTrialEligible ? initialTrialExpiresAt : now, promoBonusMonths);
       }
 
       // Settle Referral on first dormitory creation
       await referralService.settleReferralOnboarding(userId, dormId, 0, tx);
 
-      if (selectedPackage) {
-        await tx.subscriptionPackageIntent.create({
-          data: {
+      // 6. Settle or Link Authoritative SubscriptionPackageIntent (Zero duplicate creation)
+      let authoritativeIntent: any = null;
+
+      if (params.packageIntentId) {
+        authoritativeIntent = await tx.subscriptionPackageIntent.findUnique({
+          where: { id: params.packageIntentId },
+          include: { package: { include: { plan: true } } },
+        });
+
+        if (!authoritativeIntent) {
+          throw new AppError('ไม่พบข้อมูลรายการคำสั่งซื้อแพ็กเกจ', 404, 'INTENT_NOT_FOUND');
+        }
+
+        if (authoritativeIntent.userId !== userId) {
+          throw new AppError('ไม่มีสิทธิ์เข้าถึงรายการคำสั่งซื้อแพ็กเกจนี้', 403, 'FORBIDDEN_INTENT_ACCESS');
+        }
+
+        if (authoritativeIntent.expiresAt && authoritativeIntent.expiresAt < now) {
+          throw new AppError('รายการคำสั่งซื้อแพ็กเกจหมดอายุแล้ว กรุณาเลือกแพ็กเกจใหม่อีกครั้ง', 400, 'INTENT_EXPIRED');
+        }
+
+        if (authoritativeIntent.dormitoryId !== dormId) {
+          await tx.subscriptionPackageIntent.update({
+            where: { id: authoritativeIntent.id },
+            data: { dormitoryId: dormId },
+          });
+          authoritativeIntent.dormitoryId = dormId;
+        }
+      } else {
+        // Fallback: look for existing pending quote intent for this user/dormitory
+        authoritativeIntent = await tx.subscriptionPackageIntent.findFirst({
+          where: {
+            userId,
+            dormitoryId: dormId,
+            status: 'PENDING_PAYMENT',
+            expiresAt: { gt: now },
+          },
+          orderBy: { createdAt: 'desc' },
+          include: { package: { include: { plan: true } } },
+        });
+
+        if (!authoritativeIntent && selectedPackage) {
+          authoritativeIntent = await tx.subscriptionPackageIntent.create({
+            data: {
+              dormitoryId: dormId,
+              userId,
+              packageId: selectedPackage.id,
+              status: 'PENDING_PAYMENT',
+              durationMonthsSnapshot: selectedPackage.durationMonths,
+              priceSnapshot: selectedPackage.price,
+              referencePriceSnapshot: selectedPackage.referencePrice,
+              finalPayableAmount: selectedPackage.price,
+              checkoutVersion: 2,
+              isZeroPayValidated: false,
+              currencySnapshot: selectedPackage.currency,
+              catalogVersion: selectedPackage.catalogVersion || 2,
+              expiresAt: addCalendarMonths(now, 1),
+            },
+            include: { package: { include: { plan: true } } },
+          });
+        }
+      }
+
+      if (authoritativeIntent) {
+        // Expire superseded pending quote intents for this user/dormitory
+        await tx.subscriptionPackageIntent.updateMany({
+          where: {
             dormitoryId: dormId,
             userId,
-            packageId: selectedPackage.id,
             status: 'PENDING_PAYMENT',
-            durationMonthsSnapshot: selectedPackage.durationMonths,
-            priceSnapshot: selectedPackage.price,
-            referencePriceSnapshot: selectedPackage.referencePrice,
-            finalPayableAmount: selectedPackage.price,
-            checkoutVersion: 2,
-            isZeroPayValidated: false,
-            currencySnapshot: selectedPackage.currency,
-            catalogVersion: selectedPackage.catalogVersion || 2,
-            expiresAt: addCalendarMonths(now, 1),
+            id: { not: authoritativeIntent.id },
+          },
+          data: {
+            status: 'EXPIRED',
           },
         });
+
+        // Handle Zero-Pay Intent Commit (trial, Free plan, or 100% coin discount)
+        const isZeroPayPayable = authoritativeIntent.finalPayableAmount.equals(new Prisma.Decimal(0));
+
+        if (isZeroPayPayable || authoritativeIntent.isZeroPayValidated) {
+          // Debit coin wallet if Coin was applied
+          if (authoritativeIntent.coinApplied > 0) {
+            await coinWalletService.debitWallet(
+              userId,
+              authoritativeIntent.coinApplied,
+              'SUBSCRIPTION_DEBIT',
+              'SUBSCRIPTION_PACKAGE_INTENT',
+              authoritativeIntent.id,
+              `ชำระค่าแพ็กเกจ ${authoritativeIntent.package?.plan?.name || 'HorPlus'} (${authoritativeIntent.durationMonthsSnapshot} เดือน)`,
+              idempotencyKey ? `zero-pay-finalize-${authoritativeIntent.id}-${idempotencyKey}` : `zero-pay-finalize-${authoritativeIntent.id}`,
+              tx
+            );
+          }
+
+          await tx.subscriptionPackageIntent.update({
+            where: { id: authoritativeIntent.id },
+            data: {
+              status: 'SUCCEEDED',
+              activatedAt: now,
+              isZeroPayValidated: true,
+            },
+          });
+
+          // If paid package duration > 1 (e.g. 3, 6, 12, 24 mo) paid 100% with coin or promo:
+          if (!authoritativeIntent.isFreePlanSnapshot && !isTrialEligible && authoritativeIntent.durationMonthsSnapshot > 0) {
+            const paidExpiresAt = addCalendarMonths(now, authoritativeIntent.durationMonthsSnapshot + (promoBonusMonths || 0));
+            await tx.dormitorySubscription.update({
+              where: { id: sub.id },
+              data: {
+                planId: proPlan?.id || sub.planId,
+                status: 'ACTIVE',
+                expiresAt: paidExpiresAt,
+                updatedAt: now,
+              },
+            });
+          }
+        }
       }
 
       await tx.onboardingDraft.updateMany({
@@ -862,39 +966,39 @@ export class DormitoryProvisioningService {
         },
       });
 
-        const trialGrantedMonths = isTrialEligible ? 1 : 0;
-        const totalTrialMonths = trialGrantedMonths + promoBonusMonths;
+      const trialGrantedMonths = isTrialEligible ? 1 : 0;
+      const totalTrialMonths = trialGrantedMonths + promoBonusMonths;
 
-        return {
-          success: true,
-          dormitoryId: dormId,
-          dormitoryName: activeDorm.name,
-          dormitory: {
-            id: dormId,
-            name: activeDorm.name,
-          },
-          membership: {
-            roleCode: 'OWNER',
-          },
-          subscription: {
-            id: sub.id,
-            planCode: effectivePlan.code,
-            status: subStatus,
-            trialExpiresAt: isZeroPayBenefit ? finalExpiresAt.toISOString() : null,
-          },
-          promo: {
-            applied: promoApplied,
-            promoBonusMonths,
-            trialMonths: trialGrantedMonths,
-            totalTrialMonths,
-          },
+      return {
+        success: true,
+        dormitoryId: dormId,
+        dormitoryName: activeDorm.name,
+        dormitory: {
+          id: dormId,
+          name: activeDorm.name,
+        },
+        membership: {
+          roleCode: 'OWNER',
+        },
+        subscription: {
+          id: sub.id,
           planCode: effectivePlan.code,
-          subscriptionStatus: subStatus,
-          trialExpiresAt: isZeroPayBenefit ? finalExpiresAt.toISOString() : null,
-          promoApplied,
+          status: subStatus,
+          trialExpiresAt: (isZeroPayBenefit || promoApplied) ? finalExpiresAt.toISOString() : null,
+        },
+        promo: {
+          applied: promoApplied,
+          promoBonusMonths,
+          trialMonths: trialGrantedMonths,
           totalTrialMonths,
-          packageIntentId: selectedPackage ? (await tx.subscriptionPackageIntent.findFirst({ where: { dormitoryId: dormId, userId } }))?.id : null,
-        };
+        },
+        planCode: effectivePlan.code,
+        subscriptionStatus: subStatus,
+        trialExpiresAt: (isZeroPayBenefit || promoApplied) ? finalExpiresAt.toISOString() : null,
+        promoApplied,
+        totalTrialMonths,
+        packageIntentId: authoritativeIntent ? authoritativeIntent.id : null,
+      };
     });
 
     if (lockRecord && lockRecord.id) {
