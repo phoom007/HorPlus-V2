@@ -738,4 +738,114 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
       await prisma.dormitory.delete({ where: { id: dorm.id } });
     });
   });
+
+  describe('15. Real Concurrency Integration Test for Promo HORPLUS through OWNER ONBOARDING FINALIZE', () => {
+    it('guarantees global first-100 cap under concurrent onboarding finalization starting at 99 redemptions', async () => {
+      // 1. Ensure HORPLUS promo code exists with globalMaxRedemptions = 100
+      const promo = await prisma.promoCode.findFirst({
+        where: { OR: [{ code: 'HORPLUS' }, { normalizedCode: 'HORPLUS' }] },
+      });
+      expect(promo).toBeDefined();
+
+      // Clean all promo redemptions for test isolation
+      await prisma.promoRedemption.deleteMany({ where: { promoCodeId: promo!.id } });
+
+      // 2. Set currentRedemptionsCount = 99
+      await prisma.promoCode.update({
+        where: { id: promo!.id },
+        data: { currentRedemptionsCount: 99, globalMaxRedemptions: 100, enabled: true },
+      });
+
+      // 3. Create 4 fresh eligible users
+      const users: any[] = [];
+      const dormsToClean: string[] = [];
+      for (let i = 0; i < 4; i++) {
+        const email = `concurrent-promo-owner-${i}-${Date.now()}@example.com`;
+        const u = await prisma.user.create({
+          data: {
+            googleSubject: `google-concurrent-${i}-${Date.now()}`,
+            email,
+            emailNormalized: email,
+            name: `Concurrent Owner ${i}`,
+            status: 'active',
+          },
+        });
+        users.push(u);
+      }
+
+      // 4. Concurrently finalize onboarding with HORPLUS promo for all 4 users
+      const provisioningService = new DormitoryProvisioningService(prisma);
+      const finalizePromises = users.map((u, idx) =>
+        provisioningService.completeOwnerOnboarding({
+          userId: u.id,
+          idempotencyKey: `idem-concurrent-promo-${u.id}-${Date.now()}`,
+          dormitory: {
+            name: `หอพัก Concurrent Promo ${idx}`,
+            type: 'apartment',
+            province: 'กรุงเทพมหานคร',
+          },
+          ownerSignatureUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+          promoCode: 'HORPLUS',
+        })
+      );
+
+      const results = await Promise.allSettled(finalizePromises);
+
+      // Track successful dormitory creations for cleanup
+      for (const res of results) {
+        if (res.status === 'fulfilled' && res.value?.dormitoryId) {
+          dormsToClean.push(res.value.dormitoryId);
+        }
+      }
+
+      const fulfilled = results.filter((r) => r.status === 'fulfilled');
+      const rejected = results.filter((r) => r.status === 'rejected');
+
+      // 5. Assert: EXACTLY ONE obtains slot 100, remaining 3 fail safely with PROMO_GLOBAL_LIMIT_REACHED
+      expect(fulfilled.length).toBe(1);
+      expect(rejected.length).toBe(3);
+
+      for (const rej of rejected) {
+        const reason = (rej as PromiseRejectedResult).reason;
+        expect(reason.message || reason.errorCode).toMatch(/PROMO_GLOBAL_LIMIT_REACHED|สิทธิ์โปรโมชันนี้ครบตามจำนวน/);
+      }
+
+      // 6. Assert: Database authoritative counters NEVER exceed 100
+      const finalPromo = await prisma.promoCode.findUnique({
+        where: { id: promo!.id },
+      });
+      expect(finalPromo?.currentRedemptionsCount).toBe(100);
+
+      const totalRedemptions = await prisma.promoRedemption.count({
+        where: { promoCodeId: promo!.id },
+      });
+      expect(totalRedemptions).toBe(1); // 1 real redemption added to the 99 seeded counter = 100 total
+
+      // 7. Cleanup
+      for (const dId of dormsToClean) {
+        await prisma.subscriptionPackageIntent.deleteMany({ where: { dormitoryId: dId } });
+        await prisma.promoRedemption.deleteMany({ where: { dormitoryId: dId } });
+        await prisma.subscriptionStatusHistory.deleteMany({ where: { dormitoryId: dId } });
+        await prisma.accountBenefitClaim.deleteMany({ where: { dormitoryId: dId } });
+        await prisma.ownerSignature.deleteMany({ where: { dormitoryId: dId } });
+        await prisma.dormitorySubscription.deleteMany({ where: { dormitoryId: dId } });
+        await prisma.dormitoryPropertyDefaults.deleteMany({ where: { dormitoryId: dId } });
+        await prisma.dormitoryBillingSettings.deleteMany({ where: { dormitoryId: dId } });
+        await prisma.dormitoryMember.deleteMany({ where: { dormitoryId: dId } });
+        await prisma.dormitory.delete({ where: { id: dId } }).catch(() => {});
+      }
+      for (const u of users) {
+        await prisma.accountBenefitClaim.deleteMany({ where: { userId: u.id } });
+        await prisma.ownerSignature.deleteMany({ where: { signedByUserId: u.id } });
+        await prisma.promoRedemption.deleteMany({ where: { redeemedBy: u.id } });
+        await prisma.user.delete({ where: { id: u.id } }).catch(() => {});
+      }
+
+      // Restore promo counter to 0
+      await prisma.promoCode.update({
+        where: { id: promo!.id },
+        data: { currentRedemptionsCount: 0 },
+      });
+    });
+  });
 });

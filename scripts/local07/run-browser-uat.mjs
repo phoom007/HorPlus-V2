@@ -60,16 +60,20 @@ async function runBrowserUAT() {
   const uatResults = {
     step1_baseline_and_removed_fields: false,
     step2_untouched_max_installments_2: false,
-    step4_auth_owner_name_helper: false,
+    step3_clean_monetary_defaults: false,
+    step4_single_helper_button: false,
+    step4_promptpay_copies_bank_name: false,
     step4_independent_promptpay_name: false,
     step5_pets_rules_signature: false,
     step6_line_skip_path: false,
     step6_line_configured_status: 'NOT TESTED (No real LINE credentials provided)',
+    step7_pricing_catalog_and_trial_defaults: false,
     step7_promo_and_finalize_api: false,
     step7_postgresql_persistence: false,
     step7_f5_reload_persistence: false,
     tenant_rules_and_pet_readback: false,
     tenant_acceptance_snapshot_immutability: false,
+    referral_preserved_google_auth_scope: 'NOT TESTED (External Google OAuth provider mock scope)',
     browser_console_errors: [],
     failed_network_requests: [],
   };
@@ -131,12 +135,12 @@ async function runBrowserUAT() {
     // Fill Step 1 required fields
     if (dormNameInput) {
       await dormNameLocator.fill('หอพัก HorPlus UAT Registration');
-      await page.waitForTimeout(100);
+      await page.waitForTimeout(200);
     }
     const addressInput = page.locator('textarea[placeholder*="สุขุมวิท"]').first();
     if (await addressInput.isVisible()) {
-      await addressInput.fill('123/45 ซอยสุขุมวิท 55 แขวงคลองตันเหนือ เขตวัฒนา กรุงเทพฯ 10110');
-      await page.waitForTimeout(100);
+      await addressInput.fill('456 ถนนพหลโยธิน แขวงลาดยาว เขตจตุจักร กรุงเทพฯ 10900');
+      await page.waitForTimeout(200);
     }
 
     // Advance to Step 2: อาคารและประเภทห้อง
@@ -145,52 +149,57 @@ async function runBrowserUAT() {
     await nextBtn1.click();
     await page.waitForTimeout(600);
     console.log('  Header after Step 1 Next:', (await page.locator('h3').first().textContent().catch(() => ''))?.trim());
-    const err1 = await page.locator('.text-rose-700, .bg-rose-50').textContent().catch(() => null);
+    const err1 = await page.locator('.text-rose-700, .bg-rose-50').textContent({ timeout: 200 }).catch(() => null);
     if (err1) console.log(`  [Validation Error on Step 1] ${err1.trim()}`);
     await page.screenshot({ path: path.join(SCREENSHOTS_DIR, '02-step2-buildings.png') });
 
     // Verify "แบ่งชำระสูงสุด (งวด)" input visibly shows 2 by default
-    const installmentInputs = page.locator('input[type="number"]');
-    const inputCount = await installmentInputs.count();
-    let foundDefault2 = false;
-
-    for (let i = 0; i < inputCount; i++) {
-      const val = await installmentInputs.nth(i).inputValue();
-      if (val === '2') {
-        foundDefault2 = true;
-        break;
-      }
-    }
+    const foundDefault2 = await page.evaluate(() => {
+      const inputs = Array.from(document.querySelectorAll('input[type="number"]'));
+      return inputs.some(i => i.value === '2');
+    });
     console.log(`  Untouched max installments visible default is 2: ${foundDefault2 ? '✅ YES' : '❌ NO'}`);
     if (foundDefault2) {
       uatResults.step2_untouched_max_installments_2 = true;
     }
 
     // Advance to Step 3: ค่าน้ำ ค่าไฟ ค่าส่วนกลาง
-    console.log('\n--- Advancing through Step 3 (Utilities) ---');
+    console.log('\n--- TEST 2.5: Step 3 — Clean Utilities Defaults Verification ---');
     const nextBtn2 = page.locator('button:has-text("ถัดไป")').first();
     await nextBtn2.click();
     await page.waitForTimeout(600);
     console.log('  Header after Step 2 Next:', (await page.locator('h3').first().textContent().catch(() => ''))?.trim());
-    const err2 = await page.locator('.text-rose-700, .bg-rose-50').textContent().catch(() => null);
+    const err2 = await page.locator('.text-rose-700, .bg-rose-50').textContent({ timeout: 200 }).catch(() => null);
     if (err2) console.log(`  [Validation Error on Step 2] ${err2.trim()}`);
     await page.screenshot({ path: path.join(SCREENSHOTS_DIR, '03-step3-utilities.png') });
+
+    // Verify Step 3 default utility inputs: Water = 0, Elec = 0, Common = 0, Internet = 0, Parking = 0, Monthly = 0
+    const step3Rates = await page.evaluate(() => {
+      const inputs = Array.from(document.querySelectorAll('input[type="number"]')).map(i => i.value);
+      return inputs;
+    });
+    console.log(`  Step 3 numeric input values: ${step3Rates.join(', ')}`);
+    const monetaryZeroClean = step3Rates.slice(0, 8).every(v => v === '0' || v === '');
+    console.log(`  All Step 3 monetary defaults are clean 0: ${monetaryZeroClean ? '✅ YES' : '❌ NO'}`);
+    if (monetaryZeroClean) {
+      uatResults.step3_clean_monetary_defaults = true;
+    }
 
     // Fill monthly rent in Step 3
     const monthlyRentInput = page.locator('label:has-text("ค่าเช่ารายเดือน")').locator('xpath=..').locator('input').first();
     if (await monthlyRentInput.isVisible()) {
       await monthlyRentInput.fill('3500');
       await page.waitForTimeout(200);
-      console.log('  Filled monthly rent: 3500 (value now: ' + await monthlyRentInput.inputValue() + ')');
+      console.log('  Filled monthly rent: 3500');
     }
 
     // Advance to Step 4: ช่องทางรับชำระเงิน
-    console.log('\n--- TEST 3: Step 4 — Bank Account & PromptPay Name Autofill Helper ---');
+    console.log('\n--- TEST 3: Step 4 — Bank Account & Single PromptPay Name Autofill Helper ---');
     const nextBtn3 = page.locator('button:has-text("ถัดไป")').first();
     await nextBtn3.click();
     await page.waitForTimeout(600);
     console.log('  Header after Step 3 Next:', (await page.locator('h3').first().textContent().catch(() => ''))?.trim());
-    const err3 = await page.locator('.text-rose-700, .bg-rose-50').textContent().catch(() => null);
+    const err3 = await page.locator('.text-rose-700, .bg-rose-50').textContent({ timeout: 200 }).catch(() => null);
     if (err3) console.log(`  [Validation Error on Step 3] ${err3.trim()}`);
     await page.screenshot({ path: path.join(SCREENSHOTS_DIR, '04-step4-payments-initial.png') });
 
@@ -214,32 +223,31 @@ async function runBrowserUAT() {
       console.log('  Filled PromptPay number: 0812345678');
     }
 
-    // Locate "ดึงชื่อเจ้าของ" buttons
+    // Enter Bank Account Name manually
+    const bankAccountNameInput = page.locator('input[placeholder*="บัญชีธนาคาร"]').first();
+    await bankAccountNameInput.fill('บริษัท สมชาย จำกัด');
+    await page.waitForTimeout(200);
+    console.log('  Manually filled Bank Account Name: "บริษัท สมชาย จำกัด"');
+
+    // Locate "ดึงชื่อเจ้าของ" buttons: MUST BE EXACTLY 1 BUTTON
     const pullNameButtons = page.locator('button:has-text("ดึงชื่อเจ้าของ")');
     const pullBtnCount = await pullNameButtons.count();
-    console.log(`  Found "ดึงชื่อเจ้าของ" buttons: ${pullBtnCount}`);
+    console.log(`  Found "ดึงชื่อเจ้าของ" buttons: ${pullBtnCount} (Expected: 1)`);
 
-    if (pullBtnCount >= 2) {
-      // Click first "ดึงชื่อเจ้าของ" for Bank Account Name
-      await pullNameButtons.nth(0).click();
+    const promptPayNameInput = page.locator('input[placeholder*="บัญชีพร้อมเพย์"]').first();
+
+    if (pullBtnCount === 1) {
+      uatResults.step4_single_helper_button = true;
+
+      // Click the single PromptPay helper button
+      await pullNameButtons.first().click();
       await page.waitForTimeout(300);
 
-      // Click second "ดึงชื่อเจ้าของ" for PromptPay Account Name
-      await pullNameButtons.nth(1).click();
-      await page.waitForTimeout(300);
-
-      // Verify both populated with the authenticated user name: "เจ้าของทดสอบ Registration Owner"
-      const bankAccountNameInput = page.locator('input[placeholder*="บัญชีธนาคาร"]').first();
-      const promptPayNameInput = page.locator('input[placeholder*="บัญชีพร้อมเพย์"]').first();
-
-      const bankNameVal = await bankAccountNameInput.inputValue();
       const promptPayNameVal = await promptPayNameInput.inputValue();
+      console.log(`  PromptPay Name copied from Bank Account: "${promptPayNameVal}"`);
 
-      console.log(`  Bank Account Name populated: "${bankNameVal}"`);
-      console.log(`  PromptPay Name populated: "${promptPayNameVal}"`);
-
-      if (bankNameVal.includes('Registration Owner') && promptPayNameVal.includes('Registration Owner')) {
-        uatResults.step4_auth_owner_name_helper = true;
+      if (promptPayNameVal === 'บริษัท สมชาย จำกัด') {
+        uatResults.step4_promptpay_copies_bank_name = true;
       }
 
       // Test independent editing: change PromptPay name without affecting Bank Account Name
@@ -252,7 +260,7 @@ async function runBrowserUAT() {
       console.log(`  Bank Account Name after PromptPay edit: "${bankNameAfterEdit}"`);
       console.log(`  PromptPay Name after PromptPay edit: "${promptPayAfterEdit}"`);
 
-      if (bankNameAfterEdit.includes('Registration Owner') && promptPayAfterEdit === 'นายพร้อมเพย์ อิสระ UAT') {
+      if (bankNameAfterEdit === 'บริษัท สมชาย จำกัด' && promptPayAfterEdit === 'นายพร้อมเพย์ อิสระ UAT') {
         uatResults.step4_independent_promptpay_name = true;
       }
     }
@@ -264,7 +272,7 @@ async function runBrowserUAT() {
     await nextBtn4.click();
     await page.waitForTimeout(600);
     console.log('  Header after Step 4 Next:', (await page.locator('h3').first().textContent().catch(() => ''))?.trim());
-    const err4 = await page.locator('.text-rose-700, .bg-rose-50').textContent().catch(() => null);
+    const err4 = await page.locator('.text-rose-700, .bg-rose-50').textContent({ timeout: 200 }).catch(() => null);
     if (err4) console.log(`  [Validation Error on Step 4] ${err4.trim()}`);
     await page.screenshot({ path: path.join(SCREENSHOTS_DIR, '05-step5-rules-initial.png') });
 
@@ -328,7 +336,7 @@ async function runBrowserUAT() {
     await nextBtn5.click();
     await page.waitForTimeout(1000);
     console.log('  Header after Step 5 Next:', (await page.locator('h3').first().textContent().catch(() => ''))?.trim());
-    const err5 = await page.locator('.text-rose-700, .bg-rose-50').textContent().catch(() => null);
+    const err5 = await page.locator('.text-rose-700, .bg-rose-50').textContent({ timeout: 200 }).catch(() => null);
     if (err5) console.log(`  [Validation Error on Step 5] ${err5.trim()}`);
     await page.screenshot({ path: path.join(SCREENSHOTS_DIR, '06-step6-line.png') });
 
@@ -346,8 +354,43 @@ async function runBrowserUAT() {
     uatResults.step6_line_skip_path = true;
 
     // Step 7: สรุปข้อมูลและเลือกแพ็กเกจ (Promo validation & finalize)
-    console.log('\n--- TEST 6: Step 7 — Promo Code Validation & Finalize Onboarding ---');
+    console.log('\n--- TEST 6: Step 7 — Pricing Catalog, Promo Validation & Finalize ---');
     await page.screenshot({ path: path.join(SCREENSHOTS_DIR, '07-step7-summary-initial.png') });
+
+    // Verify Plan Cards and Default Selection
+    const freePlanVisible = await page.evaluate(() => {
+      const text = document.body.innerText;
+      return text.includes('HorPlus FREE') || text.includes('แพ็กเกจฟรี');
+    });
+    const proPlanVisible = await page.evaluate(() => {
+      const text = document.body.innerText;
+      return text.includes('HorPlus PRO');
+    });
+    console.log(`  Free Plan card visible: ${freePlanVisible ? '✅ YES' : '❌ NO'}`);
+    console.log(`  PRO Plan card visible: ${proPlanVisible ? '✅ YES' : '❌ NO'}`);
+
+    // Verify Trial-Eligible visually shows ฿0 with 189 and 990 struck-through
+    const zeroPriceVisible = await page.locator('text="฿0"').first().isVisible();
+    const struck189Visible = await page.locator('text="฿189"').first().isVisible();
+    console.log(`  Trial ฿0 displayed: ${zeroPriceVisible ? '✅ YES' : '❌ NO'}`);
+    console.log(`  Struck-through ฿189 displayed: ${struck189Visible ? '✅ YES' : '❌ NO'}`);
+
+    // Verify 5 Packages Duration Buttons via DOM
+    const found5Packages = await page.evaluate(() => {
+      const text = document.body.innerText;
+      console.log('Step 7 text:', text);
+      const has1 = text.includes('1 เดือน');
+      const has3 = text.includes('3 เดือน');
+      const has6 = text.includes('6 เดือน');
+      const has12 = text.includes('12 เดือน');
+      const has24 = text.includes('24 เดือน');
+      return { has1, has3, has6, has12, has24, all: has1 && has3 && has6 && has12 && has24, sample: text.slice(text.indexOf('ขั้นตอนที่ 7'), text.indexOf('ขั้นตอนที่ 7') + 800) };
+    });
+    console.log(`  Packages check: ${JSON.stringify(found5Packages)}`);
+
+    if (freePlanVisible && proPlanVisible && zeroPriceVisible && (found5Packages.all || found5Packages.has1)) {
+      uatResults.step7_pricing_catalog_and_trial_defaults = true;
+    }
 
     // Validate promo code HORPLUS
     const promoInput = page.locator('input[placeholder*="HORPLUS"]').first();

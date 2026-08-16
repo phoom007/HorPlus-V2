@@ -564,13 +564,13 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
       formatPattern: 'prefix_floor_room',
       mode: 'auto' as 'auto' | 'manual',
       customRooms: [] as string[],
-      securityDeposit: 5000,
+      securityDeposit: 0,
       rentRates: {
-        monthly: 4500,
-        term: 18000,
+        monthly: 0,
+        term: 0,
         termMonths: 4,
         maxInstallmentMonths: 2,
-        daily: 600,
+        daily: 0,
         maxOccupants: 2
       }
     };
@@ -907,7 +907,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
         hasElevator: b.hasElevator ?? false,
         numberingPattern: b.formatPattern || null,
         description: `อาคาร ${b.name}`,
-        monthlyRent: b.rentRates?.monthly ?? 4500,
+        monthlyRent: b.rentRates?.monthly ?? 0,
         dailyRent: b.rentRates?.daily ?? null,
         termRent: b.rentRates?.term ?? null,
         termMonths: b.rentRates?.termMonths ?? 4,
@@ -919,8 +919,8 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
       const mappedRooms: any[] = [];
       formData.buildings.forEach((b) => {
         const roomNumbers = getGeneratedRooms(b);
-        const rentRates = b.rentRates || { monthly: 4500, term: 18000, daily: 600 };
-        const secDep = b.securityDeposit || formData.deposits.securityDeposit || 5000;
+        const rentRates = b.rentRates || { monthly: 0, term: 0, daily: 0, termMonths: 4, maxInstallmentMonths: 2, maxOccupants: 2 };
+        const secDep = b.securityDeposit !== undefined ? b.securityDeposit : (formData.deposits.securityDeposit ?? 0);
 
         roomNumbers.forEach((rNum) => {
           const digitsOnly = rNum.replace(/\D/g, '');
@@ -929,12 +929,12 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
             buildingId: b.id,
             roomNumber: rNum,
             floor: calculatedFloor,
-            monthlyRent: rentRates.monthly || 4500,
-            dailyRent: rentRates.daily || null,
-            termRent: rentRates.term || null,
-            termMonths: rentRates.termMonths || 4,
+            monthlyRent: rentRates.monthly ?? 0,
+            dailyRent: rentRates.daily ?? null,
+            termRent: rentRates.term ?? null,
+            termMonths: rentRates.termMonths ?? 4,
             depositAmount: secDep,
-            maximumOccupants: rentRates.maxOccupants || 2,
+            maximumOccupants: rentRates.maxOccupants ?? 2,
             status: 'vacant',
           });
         });
@@ -1363,10 +1363,11 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                               const updated = [...formData.buildings];
                               updated[idx].rentRates = {
                                 ...(updated[idx].rentRates || {
-                                  monthly: 4500,
-                                  term: 18000,
+                                  monthly: 0,
+                                  term: 0,
                                   termMonths: 4,
-                                  daily: 600,
+                                  maxInstallmentMonths: 2,
+                                  daily: 0,
                                   maxOccupants: 2
                                 }),
                                 maxOccupants: isNaN(val) ? 1 : Math.max(1, val)
@@ -1435,10 +1436,11 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                               const updated = [...formData.buildings];
                               updated[idx].rentRates = {
                                 ...(updated[idx].rentRates || {
-                                  monthly: 4500,
-                                  term: 18000,
+                                  monthly: 0,
+                                  term: 0,
                                   termMonths: 4,
-                                  daily: 600,
+                                  maxInstallmentMonths: 2,
+                                  daily: 0,
                                   maxOccupants: 2
                                 }),
                                 maxOccupants: isNaN(val) ? 1 : Math.max(1, val)
@@ -1847,11 +1849,11 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {formData.buildings.map((b, bIdx) => {
                   const rentRates = b.rentRates || {
-                    monthly: 4500,
-                    term: 18000,
+                    monthly: 0,
+                    term: 0,
                     termMonths: 4,
                     maxInstallmentMonths: 2,
-                    daily: 600,
+                    daily: 0,
                     maxOccupants: 2
                   };
 
@@ -2025,7 +2027,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
 
                 <div className="space-y-2">
                   {formData.buildings.map((b, bIdx) => {
-                    const depositVal = b.securityDeposit !== undefined ? b.securityDeposit : (formData.deposits.securityDeposit || 5000);
+                    const depositVal = b.securityDeposit !== undefined ? b.securityDeposit : (formData.deposits.securityDeposit ?? 0);
                     return (
                       <div key={b.id} className="flex items-center justify-between gap-3 bg-slate-50/80 p-2.5 rounded-xl border border-slate-200/80">
                         <span className="text-xs font-extrabold text-slate-800 shrink-0 flex items-center gap-1.5">
@@ -2191,27 +2193,9 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                 </div>
 
                 <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="block text-xs font-bold text-slate-700">
-                      ชื่อบัญชีธนาคาร <span className="text-rose-500">*</span>
-                    </label>
-                    <div className="flex items-center gap-1">
-                      <button
-                        type="button"
-                        onClick={() => setFormData(prev => ({
-                          ...prev,
-                          paymentAccount: {
-                            ...prev.paymentAccount,
-                            accountName: authUserName,
-                            bankAccountName: authUserName
-                          }
-                        }))}
-                        className="text-[10px] font-extrabold text-blue-600 bg-blue-50 hover:bg-blue-100 border border-blue-100 px-2 py-0.5 rounded-lg transition-all cursor-pointer"
-                      >
-                        ดึงชื่อเจ้าของ
-                      </button>
-                    </div>
-                  </div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    ชื่อบัญชีธนาคาร <span className="text-rose-500">*</span>
+                  </label>
                   <input
                     type="text"
                     value={formData.paymentAccount.bankAccountName || formData.paymentAccount.accountName || ''}
@@ -2268,7 +2252,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                             ...prev,
                             paymentAccount: {
                               ...prev.paymentAccount,
-                              promptPayName: prev.paymentAccount.bankAccountName || prev.paymentAccount.accountName || authUserName
+                              promptPayName: prev.paymentAccount.bankAccountName || prev.paymentAccount.accountName || ''
                             }
                           }))}
                           className="text-[10px] font-extrabold text-blue-600 bg-blue-50 hover:bg-blue-100 border border-blue-100 px-2 py-0.5 rounded-lg transition-all cursor-pointer"

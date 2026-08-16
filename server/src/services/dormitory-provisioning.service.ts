@@ -757,32 +757,16 @@ export class DormitoryProvisioningService {
       });
 
       const isTrialEligible = !existingTrialClaim;
-      let trialGrantedMonths = isTrialEligible ? 1 : 0;
-      let initialTrialExpiresAt = isTrialEligible ? addCalendarMonths(now, 1) : now;
-
-      // Canonical Promo Code evaluation (PromoService)
-      let finalExpiresAt = initialTrialExpiresAt;
-      let promoApplied = false;
-      let canonicalPromo: any = null;
-
-      if (promoCode && promoCode.trim()) {
-        const promoRes = await promoService.validatePromo(promoCode, userId, dormId, tx);
-        if (promoRes.valid && promoRes.eligible) {
-          canonicalPromo = promoRes.promoCodeEntity;
-          const bonusMonths = canonicalPromo.benefitValue || 2;
-          finalExpiresAt = addCalendarMonths(initialTrialExpiresAt, bonusMonths);
-          promoApplied = true;
-        }
-      }
+      const initialTrialExpiresAt = isTrialEligible ? addCalendarMonths(now, 1) : now;
 
       // Mandatory Guard 1: Real HorPlus PRO entitlement during trial, otherwise FREE
       const proPlan = await tx.subscriptionPlan.findUnique({ where: { code: 'PAID' } });
       const freePlan = await tx.subscriptionPlan.findUnique({ where: { code: 'FREE' } });
 
-      const isZeroPayBenefit = isTrialEligible || promoApplied;
+      const isZeroPayBenefit = isTrialEligible;
       const effectivePlan = isZeroPayBenefit ? (proPlan || plan) : (freePlan || plan);
       const subStatus = isZeroPayBenefit ? 'TRIAL' : 'ACTIVE';
-      const subExpiresAt = isZeroPayBenefit ? finalExpiresAt : addCalendarMonths(now, 1200);
+      const subExpiresAt = isZeroPayBenefit ? initialTrialExpiresAt : addCalendarMonths(now, 1200);
 
       const sub = await tx.dormitorySubscription.upsert({
         where: { dormitoryId: dormId },
@@ -794,7 +778,7 @@ export class DormitoryProvisioningService {
           expiresAt: subExpiresAt,
           trialStartedAt: isZeroPayBenefit ? now : null,
           trialExpiresAt: isTrialEligible ? initialTrialExpiresAt : null,
-          promoExtendedAt: promoApplied ? now : null,
+          promoExtendedAt: null,
         },
         update: {
           planId: effectivePlan.id,
@@ -803,7 +787,6 @@ export class DormitoryProvisioningService {
           expiresAt: subExpiresAt,
           trialStartedAt: isZeroPayBenefit ? now : null,
           trialExpiresAt: isTrialEligible ? initialTrialExpiresAt : null,
-          promoExtendedAt: promoApplied ? now : null,
           updatedAt: now,
         },
       });
@@ -835,24 +818,16 @@ export class DormitoryProvisioningService {
         });
       }
 
-      if (promoApplied && canonicalPromo) {
-        await tx.promoRedemption.create({
-          data: {
-            promoCodeId: canonicalPromo.id,
-            dormitoryId: dormId,
-            subscriptionId: sub.id,
-            redeemedBy: userId,
-            previousExpiresAt: initialTrialExpiresAt,
-            newExpiresAt: finalExpiresAt,
-          },
-        });
+      // Canonical Promo Code atomic redemption via ONE PromoService authority (PROMO-01)
+      let promoApplied = false;
+      let promoBonusMonths = 0;
+      let finalExpiresAt = initialTrialExpiresAt;
 
-        await tx.promoCode.update({
-          where: { id: canonicalPromo.id },
-          data: {
-            currentRedemptionsCount: { increment: 1 },
-          },
-        });
+      if (isTrialEligible && promoCode && promoCode.trim()) {
+        const promoRedeemRes = await promoService.redeemPromoAtomic(userId, dormId, promoCode, tx, undefined, now);
+        promoApplied = true;
+        promoBonusMonths = promoRedeemRes.bonusMonths || 2;
+        finalExpiresAt = promoRedeemRes.newExpiresAt || addCalendarMonths(initialTrialExpiresAt, promoBonusMonths);
       }
 
       // Settle Referral on first dormitory creation
@@ -887,7 +862,8 @@ export class DormitoryProvisioningService {
         },
       });
 
-        const promoBonusMonths = (promoApplied && canonicalPromo && typeof canonicalPromo.benefitValue === 'number') ? canonicalPromo.benefitValue : 0;
+        const trialGrantedMonths = isTrialEligible ? 1 : 0;
+        const totalTrialMonths = trialGrantedMonths + promoBonusMonths;
 
         return {
           success: true,
@@ -910,13 +886,13 @@ export class DormitoryProvisioningService {
             applied: promoApplied,
             promoBonusMonths,
             trialMonths: trialGrantedMonths,
-            totalTrialMonths: trialGrantedMonths + promoBonusMonths,
+            totalTrialMonths,
           },
           planCode: effectivePlan.code,
           subscriptionStatus: subStatus,
           trialExpiresAt: isZeroPayBenefit ? finalExpiresAt.toISOString() : null,
           promoApplied,
-          totalTrialMonths: trialGrantedMonths + promoBonusMonths,
+          totalTrialMonths,
           packageIntentId: selectedPackage ? (await tx.subscriptionPackageIntent.findFirst({ where: { dormitoryId: dormId, userId } }))?.id : null,
         };
     });
