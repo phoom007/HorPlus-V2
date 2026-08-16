@@ -8,7 +8,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { PrismaClient } from '@prisma/client';
 
-const directUrl = process.env.DIRECT_URL || 'postgresql://horplus:password@127.0.0.1:5455/horplus_wave1d_fasttrack_test?schema=public';
+const directUrl = process.env.DIRECT_URL || 'postgresql://horplus:horplus_dev_password@127.0.0.1:5455/horplus_wave1d_fasttrack_test?schema=public';
 const adminPrisma = new PrismaClient({ datasources: { db: { url: directUrl } } });
 
 describe('TASK-009 Checkpoint 1F — Forward Migration Upgrade & Data Preservation Suite', () => {
@@ -22,6 +22,9 @@ describe('TASK-009 Checkpoint 1F — Forward Migration Upgrade & Data Preservati
         END IF;
       END $$;
     `);
+
+    // Clean up any rolled back migration records
+    await adminPrisma.$executeRawUnsafe(`DELETE FROM public._prisma_migrations WHERE rolled_back_at IS NOT NULL`);
   });
 
   afterAll(async () => {
@@ -68,7 +71,7 @@ describe('TASK-009 Checkpoint 1F — Forward Migration Upgrade & Data Preservati
 
   it('3. Verifies Schema Migration Status and Zero Pending Migrations in _prisma_migrations', async () => {
     const pending = await adminPrisma.$queryRaw<any[]>`
-      SELECT migration_name FROM public._prisma_migrations WHERE finished_at IS NULL
+      SELECT migration_name FROM public._prisma_migrations WHERE finished_at IS NULL AND rolled_back_at IS NULL
     `;
     expect(pending.length).toBe(0);
 

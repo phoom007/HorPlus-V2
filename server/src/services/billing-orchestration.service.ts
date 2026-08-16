@@ -333,15 +333,15 @@ export class BillingOrchestrationService {
       let isPerPerson = isPerPersonUnit || isPerPersonMeta;
 
       if (!isPerPerson && rateSnapshot) {
-        if (item.type === 'water' && rateSnapshot.waterBillingType === 'person') {
+        if (item.type === 'water' && (rateSnapshot.waterBillingType === 'person' || rateSnapshot.waterBillingType === 'per_person')) {
           isPerPerson = true;
-        } else if (item.type === 'electricity' && rateSnapshot.electricityBillingType === 'person') {
+        } else if (item.type === 'electricity' && (rateSnapshot.electricityBillingType === 'person' || rateSnapshot.electricityBillingType === 'per_person')) {
           isPerPerson = true;
-        } else if (item.type === 'common_fee' && rateSnapshot.commonFeeMode === 'person') {
+        } else if (item.type === 'common_fee' && (rateSnapshot.commonFeeMode === 'person' || rateSnapshot.commonFeeMode === 'per_person')) {
           isPerPerson = true;
-        } else if (item.type === 'internet' && rateSnapshot.internetFeeMode === 'person') {
+        } else if (item.type === 'internet' && (rateSnapshot.internetFeeMode === 'person' || rateSnapshot.internetFeeMode === 'per_person')) {
           isPerPerson = true;
-        } else if (item.type === 'parking' && rateSnapshot.parkingFeeMode === 'person') {
+        } else if (item.type === 'parking' && (rateSnapshot.parkingFeeMode === 'person' || rateSnapshot.parkingFeeMode === 'per_person')) {
           isPerPerson = true;
         }
       }

@@ -388,8 +388,11 @@ export class SubscriptionIntentService {
         );
       }
 
-      // Revalidate INITIAL_TRIAL_V1 at commit time
+      // 1. User/Benefit-Level Transactional Serialization & Revalidation
       if (intent.isTrialEligibleSnapshot) {
+        // Lock authoritative user row to serialize concurrent benefit commitments globally per user
+        await tx.$queryRaw`SELECT id FROM "users" WHERE id = ${userId}::uuid FOR UPDATE`;
+
         const existingClaim = await tx.accountBenefitClaim.findFirst({
           where: {
             userId,
@@ -480,14 +483,8 @@ export class SubscriptionIntentService {
 
       // 4. Claim Initial Trial if applicable
       if (intent.isTrialEligibleSnapshot) {
-        await tx.accountBenefitClaim.upsert({
-          where: {
-            user_benefit_unique: {
-              userId,
-              benefitKey: 'INITIAL_TRIAL_V1',
-            },
-          },
-          create: {
+        await tx.accountBenefitClaim.create({
+          data: {
             userId,
             benefitKey: 'INITIAL_TRIAL_V1',
             dormitoryId: intent.dormitoryId,
@@ -496,7 +493,6 @@ export class SubscriptionIntentService {
             previousExpiresAt: null,
             newExpiresAt: addCalendarMonths(now, 1),
           },
-          update: {},
         });
       }
 

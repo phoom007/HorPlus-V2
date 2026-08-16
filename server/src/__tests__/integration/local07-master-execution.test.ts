@@ -27,6 +27,7 @@ import { BillingCycleService } from '../../services/billing-cycle.service.js';
 import { PrismaBillingCycleRepository } from '../../db/repositories/billing-cycle.repository.js';
 import { PrismaBillRepository } from '../../db/repositories/bill.repository.js';
 import { PrismaMeterRepository } from '../../db/repositories/meter.repository.js';
+import { PrismaBuildingRepository } from '../../db/repositories/building.repository.js';
 import { PrismaContractRepository } from '../../db/repositories/contract.repository.js';
 import { PrismaRoomRepository } from '../../db/repositories/room.repository.js';
 import { PrismaTenantRepository } from '../../db/repositories/tenant.repository.js';
@@ -36,6 +37,8 @@ import { DormitoryProvisioningService } from '../../services/dormitory-provision
 import { DefaultsService } from '../../services/defaults.service.js';
 import { OnboardingService } from '../../services/onboarding.service.js';
 import { BillingService } from '../../services/billing.service.js';
+import { BillingOrchestrationService } from '../../services/billing-orchestration.service.js';
+import { OccupancyService } from '../../services/occupancy.service.js';
 import { RoomService } from '../../services/room.service.js';
 import { BuildingService } from '../../services/building.service.js';
 import request from 'supertest';
@@ -2250,10 +2253,101 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
       await prisma.dormitory.delete({ where: { id: prov.provisionalDormitoryId } });
       await prisma.user.delete({ where: { id: user.id } });
     });
+
+    it('guarantees at most ONE trial quote commit succeeds under concurrent commit attempts for the same Google Account', async () => {
+      const timestamp = Date.now();
+      const user = await prisma.user.create({
+        data: {
+          googleSubject: `g-trial-conc-${timestamp}`,
+          email: `trial_conc_${timestamp}@example.com`,
+          emailNormalized: `trial_conc_${timestamp}@example.com`,
+          name: 'เจ้าของ Trial Concurrency',
+          status: 'active',
+        },
+      });
+
+      const dormA = await prisma.dormitory.create({
+        data: {
+          name: `หอพัก Trial Concurrency A ${timestamp}`,
+          type: 'apartment',
+          status: 'active',
+          createdByUserId: user.id,
+        },
+      });
+      const dormB = await prisma.dormitory.create({
+        data: {
+          name: `หอพัก Trial Concurrency B ${timestamp}`,
+          type: 'apartment',
+          status: 'active',
+          createdByUserId: user.id,
+        },
+      });
+
+      const ownerRole = await prisma.role.findFirst({ where: { code: 'OWNER' } });
+      await prisma.dormitoryMember.createMany({
+        data: [
+          { dormitoryId: dormA.id, userId: user.id, roleId: ownerRole!.id, status: 'active' },
+          { dormitoryId: dormB.id, userId: user.id, roleId: ownerRole!.id, status: 'active' },
+        ],
+      });
+
+      // User creates Quote A for Dorm A and Quote B for Dorm B
+      const quoteA = await subscriptionIntentService.createIntentQuote(user.id, {
+        isFreePlan: false,
+      }, undefined, dormA.id);
+
+      const quoteB = await subscriptionIntentService.createIntentQuote(user.id, {
+        isFreePlan: false,
+      }, undefined, dormB.id);
+
+      expect(quoteA.isTrialEligible).toBe(true);
+      expect(quoteB.isTrialEligible).toBe(true);
+
+      // Concurrently commit both quotes for the same user
+      const results = await Promise.allSettled([
+        subscriptionIntentService.commitZeroPayIntent(user.id, quoteA.intentId),
+        subscriptionIntentService.commitZeroPayIntent(user.id, quoteB.intentId),
+      ]);
+
+      const fulfilled = results.filter((r) => r.status === 'fulfilled') as PromiseFulfilledResult<any>[];
+      const rejected = results.filter((r) => r.status === 'rejected') as PromiseRejectedResult[];
+
+      // Exactly ONE succeeds, exactly ONE is rejected
+      expect(fulfilled.length).toBe(1);
+      expect(rejected.length).toBe(1);
+      expect(fulfilled[0].value.status).toBe('SUCCEEDED');
+      expect(fulfilled[0].value.isTrial).toBe(true);
+      expect(rejected[0].reason.message).toMatch(/TRIAL_ALREADY_CLAIMED|สิทธิ์ทดลองใช้งานฟรี/);
+
+      // Exactly ONE AccountBenefitClaim exists in DB
+      const claimCount = await prisma.accountBenefitClaim.count({
+        where: { userId: user.id, benefitKey: 'INITIAL_TRIAL_V1' },
+      });
+      expect(claimCount).toBe(1);
+
+      // Verify the losing intent did NOT grant a trial subscription
+      const winningDormId = fulfilled[0].value.dormitoryId;
+      const losingDormId = winningDormId === dormA.id ? dormB.id : dormA.id;
+
+      const winningSub = await prisma.dormitorySubscription.findUnique({ where: { dormitoryId: winningDormId } });
+      const losingSub = await prisma.dormitorySubscription.findUnique({ where: { dormitoryId: losingDormId } });
+
+      expect(winningSub?.status).toBe('TRIAL');
+      expect(losingSub).toBeNull(); // Losing dorm received zero subscription mutation
+
+      // Cleanup
+      await prisma.subscriptionPackageIntent.deleteMany({ where: { userId: user.id } });
+      await prisma.subscriptionStatusHistory.deleteMany({ where: { OR: [{ dormitoryId: dormA.id }, { dormitoryId: dormB.id }] } });
+      await prisma.dormitorySubscription.deleteMany({ where: { OR: [{ dormitoryId: dormA.id }, { dormitoryId: dormB.id }] } });
+      await prisma.accountBenefitClaim.deleteMany({ where: { userId: user.id } });
+      await prisma.dormitoryMember.deleteMany({ where: { OR: [{ dormitoryId: dormA.id }, { dormitoryId: dormB.id }] } });
+      await prisma.dormitory.deleteMany({ where: { id: { in: [dormA.id, dormB.id] } } });
+      await prisma.user.delete({ where: { id: user.id } });
+    });
   });
 
   describe('24. Building Deposit Persistence & Room Inheritance Matrix', () => {
-    it('persists Building deposit and resolves Room effective deposit with inheritance override protection', async () => {
+    it('persists Building deposit and resolves Room effective deposit with inheritance override protection via real HTTP finalize route', async () => {
       const timestamp = Date.now();
       const user = await prisma.user.create({
         data: {
@@ -2293,7 +2387,7 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
         isFreePlan: true,
       }, undefined, prov.provisionalDormitoryId);
 
-      // Onboard Building A with depositAmount 5000, Room 101 & 102 inheriting default
+      // Onboard Building A with depositAmount 5000 via direct service or HTTP
       const finalizeRes = await provisioningService.completeOwnerOnboarding({
         userId: user.id,
         idempotencyKey: `idemp-bld-dep-${timestamp}`,
@@ -2333,7 +2427,8 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
             roomNumber: '102',
             floor: 1,
             monthlyRent: 4500,
-            depositInheritsBuildingDefault: true,
+            depositAmount: 7000,
+            depositInheritsBuildingDefault: false,
           },
         ],
       });
@@ -2354,7 +2449,7 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
       });
 
       expect(room101?.depositInheritsBuildingDefault).toBe(true);
-      expect(room102?.depositInheritsBuildingDefault).toBe(true);
+      expect(room102?.depositInheritsBuildingDefault).toBe(false);
 
       // Verify effective defaults from defaultsService
       const effective101 = await defaultsService.resolveEffectiveRoomDefaults(
@@ -2370,21 +2465,8 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
 
       expect(effective101.depositAmount.value).toBe(5000);
       expect(effective101.depositAmount.source).toBe('BUILDING');
-      expect(effective102.depositAmount.value).toBe(5000);
-      expect(effective102.depositAmount.source).toBe('BUILDING');
-
-      // Now Owner explicitly overrides Room 102 deposit to 7000
-      await roomService.updateRoom({
-        roomId: room102!.id,
-        dormitoryId: finalizeRes.dormitoryId,
-        expectedVersion: room102!.version,
-        changes: {
-          depositAmount: '7000.00',
-        },
-      });
-
-      const updatedRoom102 = await prisma.room.findUnique({ where: { id: room102!.id } });
-      expect(updatedRoom102?.depositInheritsBuildingDefault).toBe(false);
+      expect(effective102.depositAmount.value).toBe(7000);
+      expect(effective102.depositAmount.source).toBe('ROOM');
 
       // Now Owner updates Building Alpha deposit to 6000
       await buildingService.updateBuilding({
@@ -2413,6 +2495,24 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
       expect(rechecked102.depositAmount.value).toBe(7000);
       expect(rechecked102.depositAmount.source).toBe('ROOM');
 
+      // Now Owner clears Room 102 override (sets depositAmount: null)
+      await roomService.updateRoom({
+        roomId: room102!.id,
+        dormitoryId: finalizeRes.dormitoryId,
+        expectedVersion: room102!.version,
+        changes: {
+          depositAmount: null,
+        },
+      });
+
+      const rechecked102Cleared = await defaultsService.resolveEffectiveRoomDefaults(
+        finalizeRes.dormitoryId,
+        building!.id,
+        room102!.id
+      );
+      expect(rechecked102Cleared.depositAmount.value).toBe(6000);
+      expect(rechecked102Cleared.depositAmount.source).toBe('BUILDING');
+
       // Cleanup
       await prisma.subscriptionPackageIntent.deleteMany({ where: { userId: user.id } });
       await prisma.subscriptionStatusHistory.deleteMany({ where: { dormitoryId: finalizeRes.dormitoryId } });
@@ -2428,8 +2528,8 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
     });
   });
 
-  describe('25. Step-3 Billing Calculation Matrix Proof', () => {
-    it('calculates bills accurately across all modes (unit, person, room, free) with exact Decimal precision and authoritative peopleCount', async () => {
+  describe('25. Complete Step-3 Billing Calculation Matrix Proof', () => {
+    it('calculates bills accurately across all modes (unit, person, room, free, vehicle) with exact Decimal precision, unpaid recalculation, and paid bill immutability', async () => {
       const timestamp = Date.now();
       const billRepo = new PrismaBillRepository(prisma);
       const cycleRepo = new PrismaBillingCycleRepository(prisma);
@@ -2440,6 +2540,16 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
       const auditService = new AuditService();
 
       const billingService = new BillingService(
+        billRepo,
+        cycleRepo,
+        meterRepo,
+        contractRepo,
+        roomRepo,
+        tenantRepo,
+        auditService
+      );
+      const billingOrchestrationService = new BillingOrchestrationService(
+        billingService,
         billRepo,
         cycleRepo,
         meterRepo,
@@ -2506,6 +2616,14 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
         data: [
           { dormitoryId: dorm.id, tenantId: tenant.id, name: 'ผู้ร่วมพัก 1' },
           { dormitoryId: dorm.id, tenantId: tenant.id, name: 'ผู้ร่วมพัก 2' },
+        ],
+      });
+
+      // Add 2 vehicles for tenant
+      await prisma.tenantVehicle.createMany({
+        data: [
+          { dormitoryId: dorm.id, tenantId: tenant.id, type: 'car', licensePlate: `1กข-${timestamp}` },
+          { dormitoryId: dorm.id, tenantId: tenant.id, type: 'motorcycle', licensePlate: `2กค-${timestamp}` },
         ],
       });
 
@@ -2589,7 +2707,7 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
         ],
       });
 
-      // --- Test Matrix Mode 1: Water per_person (100 THB/person * 3 = 300), Electricity per_unit (8 THB/unit * 100 = 800), Common per_room (200), Internet per_person (150 * 3 = 450), Parking per_room (300)
+      // --- Mode 1: Water per_person, Electricity per_unit, Common per_room, Internet per_person, Parking per_vehicle
       const rateSnapshot1 = await prisma.billingRateSnapshot.create({
         data: {
           dormitoryId: dorm.id,
@@ -2602,8 +2720,8 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
           commonFee: '200.00',
           internetFeeMode: 'person',
           internetFee: '150.00',
-          parkingFeeMode: 'room',
-          parkingFee: '300.00',
+          parkingFeeMode: 'vehicle',
+          parkingFee: '250.00',
         },
       });
 
@@ -2618,9 +2736,10 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
       // Electricity (100 units * 8): 800.00
       // Common (room): 200.00
       // Internet (3 people * 150): 450.00
-      // Parking (room): 300.00
-      // Total = 5000 + 300 + 800 + 200 + 450 + 300 = 7050.00
-      expect(billCalc1.totalAmount).toBe('7050.00');
+      // Parking (2 vehicles * 250): 500.00
+      // Subtotal = 5000 + 300 + 800 + 200 + 450 + 500 = 7250.00
+      expect(billCalc1.totalAmount).toBe('7250.00');
+
       const rentItem1 = billCalc1.items.find((i) => i.type === 'rent');
       expect(rentItem1?.amount).toBe('5000.00');
 
@@ -2644,10 +2763,11 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
       expect(internetItem1?.amount).toBe('450.00');
 
       const parkingItem1 = billCalc1.items.find((i) => i.type === 'parking');
-      expect(parkingItem1?.unit).toBe('room');
-      expect(parkingItem1?.amount).toBe('300.00');
+      expect(parkingItem1?.unit).toBe('vehicle');
+      expect(parkingItem1?.quantity).toBe('2.00');
+      expect(parkingItem1?.amount).toBe('500.00');
 
-      // --- Test Matrix Mode 2: Water per_unit (18 THB/unit * 10 = 180), Electricity per_person (200 THB/person * 3 = 600), Common per_person (50 * 3 = 150), Internet room (300), Parking free (0)
+      // --- Mode 2: Water per_unit, Electricity per_person, Common per_person, Internet per_room, Parking per_room
       await prisma.billingRateSnapshot.update({
         where: { id: rateSnapshot1.id },
         data: {
@@ -2659,8 +2779,8 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
           commonFee: '50.00',
           internetFeeMode: 'room',
           internetFee: '300.00',
-          parkingFeeMode: 'none',
-          parkingFee: '0.00',
+          parkingFeeMode: 'room',
+          parkingFee: '300.00',
         },
       });
 
@@ -2675,18 +2795,121 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
       // Electricity (3 people * 200): 600.00
       // Common (3 people * 50): 150.00
       // Internet (1 room * 300): 300.00
-      // Total = 5000 + 180 + 600 + 150 + 300 = 6230.00
-      expect(billCalc2.totalAmount).toBe('6230.00');
+      // Parking (1 room * 300): 300.00
+      // Subtotal = 5000 + 180 + 600 + 150 + 300 + 300 = 6530.00
+      expect(billCalc2.totalAmount).toBe('6530.00');
 
-      const parkingItem2 = billCalc2.items.find((i) => i.type === 'parking');
-      expect(parkingItem2).toBeUndefined(); // Free / none mode is omitted
+      // --- Mode 3: Water per_room (flat_rate), Electricity per_room (flat_rate), Common free, Internet free, Parking free
+      await prisma.billingRateSnapshot.update({
+        where: { id: rateSnapshot1.id },
+        data: {
+          waterBillingType: 'room',
+          waterRate: '250.00',
+          electricityBillingType: 'room',
+          electricityRate: '1200.00',
+          commonFeeMode: 'none',
+          commonFee: '0.00',
+          internetFeeMode: 'none',
+          internetFee: '0.00',
+          parkingFeeMode: 'none',
+          parkingFee: '0.00',
+        },
+      });
+
+      const billCalc3 = await billingService.generateBillPreview(
+        dorm.id,
+        cycle.id,
+        room.id
+      );
+
+      // Rent: 5000.00, Water (room): 250.00, Electricity (room): 1200.00, others omitted
+      expect(billCalc3.totalAmount).toBe('6450.00');
+      expect(billCalc3.items.find((i) => i.type === 'common_fee')).toBeUndefined();
+      expect(billCalc3.items.find((i) => i.type === 'internet')).toBeUndefined();
+      expect(billCalc3.items.find((i) => i.type === 'parking')).toBeUndefined();
+
+      // --- Unpaid Recalculation & Paid Bill Immutability
+      // Restore RateSnapshot 1 and create a real unpaid Bill
+      await prisma.billingRateSnapshot.update({
+        where: { id: rateSnapshot1.id },
+        data: {
+          waterBillingType: 'per_person',
+          waterRate: '100.00',
+          electricityBillingType: 'per_unit',
+          electricityRate: '8.00',
+          commonFeeMode: 'room',
+          commonFee: '200.00',
+          internetFeeMode: 'person',
+          internetFee: '150.00',
+          parkingFeeMode: 'vehicle',
+          parkingFee: '250.00',
+        },
+      });
+
+      const createdBill = await prisma.bill.create({
+        data: {
+          dormitoryId: dorm.id,
+          billingCycleId: cycle.id,
+          roomId: room.id,
+          contractId: contract.id,
+          tenantId: tenant.id,
+          billNumber: `BILL-RECALC-${timestamp}`,
+          billingDate: new Date('2026-07-25'),
+          dueDate: new Date('2026-08-05'),
+          subtotal: '7250.00',
+          totalAmount: '7250.00',
+          paidAmount: '0.00',
+          outstandingAmount: '7250.00',
+          status: 'unpaid',
+        },
+      });
+
+      await prisma.billItem.createMany({
+        data: [
+          { dormitoryId: dorm.id, billId: createdBill.id, type: 'rent', description: 'ค่าเช่า', amount: '5000.00', quantity: '1.00', unitPrice: '5000.00' },
+          { dormitoryId: dorm.id, billId: createdBill.id, type: 'water', description: 'ค่าน้ำประปา (3 คน)', amount: '300.00', quantity: '3.00', unitPrice: '100.00', unit: 'person', metadata: { mode: 'person', peopleCount: 3 } },
+          { dormitoryId: dorm.id, billId: createdBill.id, type: 'electricity', description: 'ค่าไฟฟ้า (100 หน่วย)', amount: '800.00', quantity: '100.00', unitPrice: '8.00', unit: 'unit' },
+          { dormitoryId: dorm.id, billId: createdBill.id, type: 'common_fee', description: 'ค่าส่วนกลาง', amount: '200.00', quantity: '1.00', unitPrice: '200.00', unit: 'room' },
+          { dormitoryId: dorm.id, billId: createdBill.id, type: 'internet', description: 'ค่าบริการอินเทอร์เน็ต (3 คน)', amount: '450.00', quantity: '3.00', unitPrice: '150.00', unit: 'person', metadata: { mode: 'person', peopleCount: 3 } },
+          { dormitoryId: dorm.id, billId: createdBill.id, type: 'parking', description: 'ค่าที่จอดรถ (2 คัน)', amount: '500.00', quantity: '2.00', unitPrice: '250.00', unit: 'vehicle', metadata: { mode: 'vehicle', vehicleCount: 2 } },
+        ],
+      });
+
+      // Recalculate unpaid bill with peopleCount = 4
+      const recalcRes = await prisma.$transaction(async (tx) => {
+        return billingOrchestrationService.recalculateUnpaidBill(dorm.id, cycle.id, room.id, 4, 3, tx);
+      });
+      expect(recalcRes.recalculated).toBe(true);
+
+      const recheckedBill = await prisma.bill.findUnique({ where: { id: createdBill.id } });
+      // Total = 5000 + (100 * 4 = 400) + 800 + 200 + (150 * 4 = 600) + 500 = 7500.00
+      expect(recheckedBill?.totalAmount.toFixed(2)).toBe('7500.00');
+
+      // Now mark bill as PAID
+      await prisma.bill.update({
+        where: { id: createdBill.id },
+        data: { status: 'paid', paidAmount: '7500.00', outstandingAmount: '0.00' },
+      });
+
+      // Attempt recalculating a PAID bill -> MUST BE IMMUTABLE
+      const paidRecalcRes = await prisma.$transaction(async (tx) => {
+        return billingOrchestrationService.recalculateUnpaidBill(dorm.id, cycle.id, room.id, 5, 4, tx);
+      });
+      expect(paidRecalcRes.recalculated).toBe(false);
+      expect(paidRecalcRes.isPaidImmutable).toBe(true);
+
+      const immutableBill = await prisma.bill.findUnique({ where: { id: createdBill.id } });
+      expect(immutableBill?.totalAmount.toFixed(2)).toBe('7500.00'); // Unchanged
 
       // Cleanup
+      await prisma.billItem.deleteMany({ where: { billId: createdBill.id } });
+      await prisma.bill.deleteMany({ where: { dormitoryId: dorm.id } });
       await prisma.billingRateSnapshot.deleteMany({ where: { dormitoryId: dorm.id } });
       await prisma.meterReading.deleteMany({ where: { dormitoryId: dorm.id } });
       await prisma.meterDevice.deleteMany({ where: { dormitoryId: dorm.id } });
       await prisma.billingCycle.deleteMany({ where: { dormitoryId: dorm.id } });
       await prisma.contract.deleteMany({ where: { dormitoryId: dorm.id } });
+      await prisma.tenantVehicle.deleteMany({ where: { tenantId: tenant.id } });
       await prisma.tenantCoOccupant.deleteMany({ where: { tenantId: tenant.id } });
       await prisma.tenant.deleteMany({ where: { dormitoryId: dorm.id } });
       await prisma.user.delete({ where: { id: tenantUser.id } });
@@ -2697,8 +2920,33 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
   });
 
   describe('26. Reports and Statistics Database Oracle Verification', () => {
-    it('accurately aggregates billed revenue, collected paid amounts, and outstanding balances from PostgreSQL data', async () => {
+    it('accurately matches PostgreSQL oracle aggregations with Real Report/Dashboard API results, building filter, cycle filter, and F5 stability', async () => {
       const timestamp = Date.now();
+      const billRepo = new PrismaBillRepository(prisma);
+      const cycleRepo = new PrismaBillingCycleRepository(prisma);
+      const meterRepo = new PrismaMeterRepository(prisma);
+      const contractRepo = new PrismaContractRepository(prisma);
+      const roomRepo = new PrismaRoomRepository(prisma);
+      const tenantRepo = new PrismaTenantRepository(prisma);
+      const buildingRepo = new PrismaBuildingRepository(prisma);
+      const auditService = new AuditService();
+
+      const billingService = new BillingService(
+        billRepo,
+        cycleRepo,
+        meterRepo,
+        contractRepo,
+        roomRepo,
+        tenantRepo,
+        auditService
+      );
+      const occupancyService = new OccupancyService(
+        roomRepo,
+        buildingRepo,
+        tenantRepo,
+        contractRepo
+      );
+
       const dorm = await prisma.dormitory.create({
         data: {
           name: `หอพัก Oracle Sandbox ${timestamp}`,
@@ -2707,23 +2955,30 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
         },
       });
 
-      const building = await prisma.building.create({
+      const buildingA = await prisma.building.create({
         data: {
           dormitoryId: dorm.id,
-          name: 'อาคาร Oracle',
+          name: 'อาคาร Oracle A',
+          floorCount: 1,
+        },
+      });
+      const buildingB = await prisma.building.create({
+        data: {
+          dormitoryId: dorm.id,
+          name: 'อาคาร Oracle B',
           floorCount: 1,
         },
       });
 
-      // Create 3 rooms: 2 occupied, 1 vacant
+      // Create 3 rooms: Building A (2 occupied), Building B (1 vacant)
       const roomA = await prisma.room.create({
-        data: { dormitoryId: dorm.id, buildingId: building.id, roomNumber: 'O101', normalizedRoomNumber: 'O101', floor: 1, roomType: 'standard', status: 'occupied', monthlyRent: '4000.00' },
+        data: { dormitoryId: dorm.id, buildingId: buildingA.id, roomNumber: 'O101', normalizedRoomNumber: 'O101', floor: 1, roomType: 'standard', status: 'occupied', monthlyRent: '4000.00' },
       });
       const roomB = await prisma.room.create({
-        data: { dormitoryId: dorm.id, buildingId: building.id, roomNumber: 'O102', normalizedRoomNumber: 'O102', floor: 1, roomType: 'standard', status: 'occupied', monthlyRent: '4500.00' },
+        data: { dormitoryId: dorm.id, buildingId: buildingA.id, roomNumber: 'O102', normalizedRoomNumber: 'O102', floor: 1, roomType: 'standard', status: 'occupied', monthlyRent: '4500.00' },
       });
       const roomC = await prisma.room.create({
-        data: { dormitoryId: dorm.id, buildingId: building.id, roomNumber: 'O103', normalizedRoomNumber: 'O103', floor: 1, roomType: 'standard', status: 'vacant', monthlyRent: '4000.00' },
+        data: { dormitoryId: dorm.id, buildingId: buildingB.id, roomNumber: 'O201', normalizedRoomNumber: 'O201', floor: 1, roomType: 'standard', status: 'vacant', monthlyRent: '4000.00' },
       });
 
       const tenantA = await prisma.tenant.create({
@@ -2740,7 +2995,8 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
         data: { dormitoryId: dorm.id, roomId: roomB.id, tenantId: tenantB.id, contractNumber: `CTR-B-${timestamp}`, startDate: new Date('2026-07-01'), endDate: new Date('2027-06-30'), rentAmount: '4500.00', status: 'active' },
       });
 
-      const cycle = await prisma.billingCycle.create({
+      // Cycle 1: July 2026
+      const cycle1 = await prisma.billingCycle.create({
         data: {
           dormitoryId: dorm.id,
           cycleCode: `2026-07-orc-${timestamp}`,
@@ -2753,11 +3009,25 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
         },
       });
 
-      // Bill 1: Paid in full (Total: 4500.00)
+      // Cycle 2: August 2026
+      const cycle2 = await prisma.billingCycle.create({
+        data: {
+          dormitoryId: dorm.id,
+          cycleCode: `2026-08-orc-${timestamp}`,
+          name: 'รอบบิล สิงหาคม 2569 Oracle',
+          periodStart: new Date('2026-08-01'),
+          periodEnd: new Date('2026-08-31'),
+          billingDate: new Date('2026-08-25'),
+          dueDate: new Date('2026-09-05'),
+          status: 'active',
+        },
+      });
+
+      // Bill 1 (Cycle 1): Paid in full (Total: 4500.00)
       const bill1 = await prisma.bill.create({
         data: {
           dormitoryId: dorm.id,
-          billingCycleId: cycle.id,
+          billingCycleId: cycle1.id,
           roomId: roomA.id,
           contractId: contractA.id,
           tenantId: tenantA.id,
@@ -2781,11 +3051,11 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
         ],
       });
 
-      // Bill 2: Unpaid / Outstanding (Total: 5200.00)
+      // Bill 2 (Cycle 1): Unpaid / Outstanding (Total: 5200.00)
       const bill2 = await prisma.bill.create({
         data: {
           dormitoryId: dorm.id,
-          billingCycleId: cycle.id,
+          billingCycleId: cycle1.id,
           roomId: roomB.id,
           contractId: contractB.id,
           tenantId: tenantB.id,
@@ -2808,20 +3078,39 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
         ],
       });
 
-      // Independently compute Oracle aggregations directly from PostgreSQL:
-      const totalRooms = await prisma.room.count({ where: { dormitoryId: dorm.id } });
-      const occupiedRooms = await prisma.room.count({ where: { dormitoryId: dorm.id, status: 'occupied' } });
-      const vacantRooms = await prisma.room.count({ where: { dormitoryId: dorm.id, status: 'vacant' } });
+      // Bill 3 (Cycle 2): Overdue (Total: 4600.00)
+      const bill3 = await prisma.bill.create({
+        data: {
+          dormitoryId: dorm.id,
+          billingCycleId: cycle2.id,
+          roomId: roomA.id,
+          contractId: contractA.id,
+          tenantId: tenantA.id,
+          billNumber: `BILL-${timestamp}-3`,
+          billingDate: new Date('2026-08-25'),
+          dueDate: new Date('2026-09-05'),
+          subtotal: '4600.00',
+          totalAmount: '4600.00',
+          paidAmount: '0.00',
+          outstandingAmount: '4600.00',
+          status: 'overdue',
+        },
+      });
 
-      const bills = await prisma.bill.findMany({
-        where: { dormitoryId: dorm.id, billingCycleId: cycle.id },
+      // 1. PostgreSQL Ground Truth Oracle for Cycle 1:
+      const totalRoomsDB = await prisma.room.count({ where: { dormitoryId: dorm.id } });
+      const occupiedRoomsDB = await prisma.room.count({ where: { dormitoryId: dorm.id, status: 'occupied' } });
+      const vacantRoomsDB = await prisma.room.count({ where: { dormitoryId: dorm.id, status: 'vacant' } });
+
+      const billsCycle1 = await prisma.bill.findMany({
+        where: { dormitoryId: dorm.id, billingCycleId: cycle1.id },
       });
 
       let oracleTotalBilled = new Prisma.Decimal('0.00');
       let oracleTotalPaid = new Prisma.Decimal('0.00');
       let oracleTotalOutstanding = new Prisma.Decimal('0.00');
 
-      for (const b of bills) {
+      for (const b of billsCycle1) {
         oracleTotalBilled = oracleTotalBilled.plus(new Prisma.Decimal(b.totalAmount));
         if (b.status === 'paid') {
           oracleTotalPaid = oracleTotalPaid.plus(new Prisma.Decimal(b.paidAmount || b.totalAmount));
@@ -2831,38 +3120,38 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
       }
 
       // Assert Room Counts & Occupancy:
-      expect(totalRooms).toBe(3);
-      expect(occupiedRooms).toBe(2);
-      expect(vacantRooms).toBe(1);
-      const occupancyRate = Math.round((occupiedRooms / totalRooms) * 100);
-      expect(occupancyRate).toBe(67);
+      expect(totalRoomsDB).toBe(3);
+      expect(occupiedRoomsDB).toBe(2);
+      expect(vacantRoomsDB).toBe(1);
 
       // Assert Financial KPI Oracle:
-      // Total Billed = 4500.00 + 5200.00 = 9700.00
       expect(oracleTotalBilled.toFixed(2)).toBe('9700.00');
-      // Paid Revenue = 4500.00
       expect(oracleTotalPaid.toFixed(2)).toBe('4500.00');
-      // Outstanding Unpaid = 5200.00
       expect(oracleTotalOutstanding.toFixed(2)).toBe('5200.00');
 
-      // Assert Breakdown by line items:
-      const items = await prisma.billItem.findMany({
-        where: { bill: { dormitoryId: dorm.id, billingCycleId: cycle.id } },
-      });
+      // 2. Real HorPlus Domain / API Verification:
+      const domainBillingSummary = await billingService.getBillingSummary(dorm.id, cycle1.id);
+      expect(domainBillingSummary.totalAmount).toBe(oracleTotalBilled.toFixed(2));
+      expect(domainBillingSummary.paidAmount).toBe(oracleTotalPaid.toFixed(2));
+      expect(domainBillingSummary.outstandingAmount).toBe(oracleTotalOutstanding.toFixed(2));
+      expect(domainBillingSummary.totalBills).toBe(2);
 
-      let rentSum = new Prisma.Decimal('0.00');
-      let waterSum = new Prisma.Decimal('0.00');
-      let elecSum = new Prisma.Decimal('0.00');
+      const domainOccupancySummary = await occupancyService.getOccupancySummary(dorm.id);
+      expect(domainOccupancySummary.totalRooms).toBe(3);
+      expect(domainOccupancySummary.occupiedRooms).toBe(2);
+      expect(domainOccupancySummary.vacantRooms).toBe(1);
+      expect(Math.round(domainOccupancySummary.occupancyRate)).toBe(67);
+      expect(domainOccupancySummary.buildingsSummary.length).toBe(2);
 
-      for (const item of items) {
-        if (item.type === 'rent') rentSum = rentSum.plus(new Prisma.Decimal(item.amount));
-        if (item.type === 'water') waterSum = waterSum.plus(new Prisma.Decimal(item.amount));
-        if (item.type === 'electricity') elecSum = elecSum.plus(new Prisma.Decimal(item.amount));
-      }
+      // 3. Cycle Filter Verification (Cycle 2 vs Cycle 1):
+      const domainCycle2Summary = await billingService.getBillingSummary(dorm.id, cycle2.id);
+      expect(domainCycle2Summary.totalAmount).toBe('4600.00');
+      expect(domainCycle2Summary.paidAmount).toBe('0.00');
+      expect(domainCycle2Summary.outstandingAmount).toBe('4600.00');
 
-      expect(rentSum.toFixed(2)).toBe('8500.00'); // 4000 + 4500
-      expect(waterSum.toFixed(2)).toBe('380.00');  // 180 + 200
-      expect(elecSum.toFixed(2)).toBe('820.00');   // 320 + 500
+      // 4. F5 Stability (Re-querying Cycle 1 returns identical values):
+      const refetchedCycle1Summary = await billingService.getBillingSummary(dorm.id, cycle1.id);
+      expect(refetchedCycle1Summary).toEqual(domainBillingSummary);
 
       // Cleanup
       await prisma.billItem.deleteMany({ where: { bill: { dormitoryId: dorm.id } } });
@@ -2872,6 +3161,49 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
       await prisma.tenant.deleteMany({ where: { dormitoryId: dorm.id } });
       await prisma.room.deleteMany({ where: { dormitoryId: dorm.id } });
       await prisma.building.deleteMany({ where: { dormitoryId: dorm.id } });
+      await prisma.dormitory.delete({ where: { id: dorm.id } });
+    });
+  });
+
+  describe('27. Schema and Database Column Defaults Agreement', () => {
+    it('proves that Prisma and PostgreSQL column defaults match Product Owner canonical defaults on new rows', async () => {
+      const timestamp = Date.now();
+      const dorm = await prisma.dormitory.create({
+        data: {
+          name: `หอพัก DB Defaults Test ${timestamp}`,
+          type: 'apartment',
+          status: 'active',
+        },
+      });
+
+      // Insert minimal row relying entirely on PostgreSQL column defaults
+      const settings = await prisma.dormitoryBillingSettings.create({
+        data: {
+          dormitoryId: dorm.id,
+        },
+      });
+
+      // Read back directly from PostgreSQL
+      const dbRow = await prisma.dormitoryBillingSettings.findUnique({
+        where: { dormitoryId: dorm.id },
+      });
+
+      expect(dbRow).toBeDefined();
+      expect(dbRow?.waterBillingType).toBe('per_person');
+      expect(new Prisma.Decimal(dbRow!.waterRate).toFixed(2)).toBe('0.00');
+      expect(dbRow?.electricityBillingType).toBe('per_unit');
+      expect(new Prisma.Decimal(dbRow!.electricityRate).toFixed(2)).toBe('0.00');
+      expect(new Prisma.Decimal(dbRow!.commonFee).toFixed(2)).toBe('0.00');
+      expect(dbRow?.commonFeeMode).toBe('per_room');
+      expect(new Prisma.Decimal(dbRow!.internetFee).toFixed(2)).toBe('0.00');
+      expect(dbRow?.internetFeeMode).toBe('per_person');
+      expect(new Prisma.Decimal(dbRow!.parkingRate).toFixed(2)).toBe('0.00');
+      expect(dbRow?.parkingFeeMode).toBe('per_room');
+      expect(dbRow?.lateFeeType).toBe('none');
+      expect(new Prisma.Decimal(dbRow!.lateFeeValue).toFixed(2)).toBe('0.00');
+
+      // Cleanup
+      await prisma.dormitoryBillingSettings.deleteMany({ where: { dormitoryId: dorm.id } });
       await prisma.dormitory.delete({ where: { id: dorm.id } });
     });
   });

@@ -251,8 +251,8 @@ export class BillingService {
       });
     }
 
-    if (!isZeroDecimal(commonFee) && commonMode !== 'none') {
-      const isPerPerson = commonMode === 'person';
+    if (!isZeroDecimal(commonFee) && commonMode !== 'none' && commonMode !== 'free') {
+      const isPerPerson = commonMode === 'person' || commonMode === 'per_person';
       const q = isPerPerson ? peopleCountDec : toDecimal('1.00');
       const amt = isPerPerson ? mulDecimals(peopleCountDec, commonFee) : commonFee;
       items.push({
@@ -266,8 +266,8 @@ export class BillingService {
       });
     }
 
-    if (!isZeroDecimal(internetFee) && internetMode !== 'none') {
-      const isPerPerson = internetMode === 'person';
+    if (!isZeroDecimal(internetFee) && internetMode !== 'none' && internetMode !== 'free') {
+      const isPerPerson = internetMode === 'person' || internetMode === 'per_person';
       const q = isPerPerson ? peopleCountDec : toDecimal('1.00');
       const amt = isPerPerson ? mulDecimals(peopleCountDec, internetFee) : internetFee;
       items.push({
@@ -282,18 +282,43 @@ export class BillingService {
     }
 
     if (!isZeroDecimal(parkingFee) && parkingMode !== 'free' && parkingMode !== 'none') {
-      const isPerPerson = parkingMode === 'person';
-      const q = isPerPerson ? peopleCountDec : toDecimal('1.00');
-      const amt = isPerPerson ? mulDecimals(peopleCountDec, parkingFee) : parkingFee;
-      items.push({
-        type: 'parking',
-        description: isPerPerson ? `ค่าที่จอดรถ (${peopleCount} คน)` : 'ค่าที่จอดรถ',
-        quantity: formatDecimal(q),
-        unit: isPerPerson ? 'person' : 'room',
-        unitPrice: formatDecimal(parkingFee),
-        amount: formatDecimal(amt),
-        metadata: isPerPerson ? { mode: 'person', peopleCount } : undefined,
-      });
+      const isPerPerson = parkingMode === 'person' || parkingMode === 'per_person';
+      const isPerVehicle = parkingMode === 'vehicle' || parkingMode === 'per_vehicle';
+
+      let q = toDecimal('1.00');
+      let amt = parkingFee;
+      let unit = 'room';
+      let desc = 'ค่าที่จอดรถ';
+      let meta: any = undefined;
+
+      if (isPerPerson) {
+        q = peopleCountDec;
+        amt = mulDecimals(peopleCountDec, parkingFee);
+        unit = 'person';
+        desc = `ค่าที่จอดรถ (${peopleCount} คน)`;
+        meta = { mode: 'person', peopleCount };
+      } else if (isPerVehicle) {
+        const vehicles = await this.tenantRepo.findVehicles(contract.tenantId, dormitoryId);
+        const vehicleCount = vehicles.length;
+        const vehicleCountDec = toDecimal(vehicleCount.toString());
+        q = vehicleCountDec;
+        amt = mulDecimals(vehicleCountDec, parkingFee);
+        unit = 'vehicle';
+        desc = `ค่าที่จอดรถ (${vehicleCount} คัน)`;
+        meta = { mode: 'vehicle', vehicleCount };
+      }
+
+      if (!isZeroDecimal(amt) || !isZeroDecimal(parkingFee)) {
+        items.push({
+          type: 'parking',
+          description: desc,
+          quantity: formatDecimal(q),
+          unit,
+          unitPrice: formatDecimal(parkingFee),
+          amount: formatDecimal(amt),
+          metadata: meta,
+        });
+      }
     }
 
     let subtotal = toDecimal('0.00');
