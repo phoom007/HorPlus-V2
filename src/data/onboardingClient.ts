@@ -47,6 +47,7 @@ export interface CompleteOnboardingPayload {
     cashAccepted?: boolean;
     promptPayType?: string | null;
     promptPayValue?: string | null;
+    promptPayAccountName?: string | null;
     bankCode?: string | null;
     bankAccountName?: string | null;
     bankAccountNumber?: string | null;
@@ -60,11 +61,13 @@ export interface CompleteOnboardingPayload {
     roomPrefix?: string | null;
     hasElevator?: boolean;
     numberingPattern?: string | null;
+    formatPattern?: string | null;
     description?: string | null;
     monthlyRent?: number;
     dailyRent?: number;
     termRent?: number;
     termMonths?: number;
+    maxInstallmentMonths?: number;
     maximumOccupants?: number;
   }[];
   rooms?: {

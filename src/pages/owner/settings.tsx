@@ -588,6 +588,7 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
   const [localTaxId, setLocalTaxId] = useState(dorm.taxId || '');
   const [localPhone, setLocalPhone] = useState(dorm.phone || '');
   const [localPromptPay, setLocalPromptPay] = useState('');
+  const [localPromptPayName, setLocalPromptPayName] = useState('');
   const [localAddress, setLocalAddress] = useState(dorm.address || '');
   const [localBankName, setLocalBankName] = useState('');
   const [localBankAccountNumber, setLocalBankAccountNumber] = useState('');
@@ -608,12 +609,14 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
   // Server state for payment settings change detection
   const [serverPayment, setServerPayment] = useState<{
     promptPayMask: string;
+    promptPayAccountName: string;
     bankAccountMask: string;
     bankCode: string;
     bankAccountName: string;
     promptPayType: 'mobile_phone' | 'national_id' | null;
   }>({
     promptPayMask: '',
+    promptPayAccountName: '',
     bankAccountMask: '',
     bankCode: '',
     bankAccountName: '',
@@ -645,17 +648,20 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
       const settings = await getPaymentSettings(selectedDormId);
       if (settings) {
         const maskPP = settings.maskedPromptPayValue || '';
+        const ppName = settings.promptPayAccountName || '';
         const maskAcc = settings.maskedBankAccountNumber || '';
         const bCode = settings.bankCode || '';
         const bName = settings.bankAccountName || '';
 
         setLocalPromptPay(maskPP);
+        setLocalPromptPayName(ppName);
         setLocalBankName(bCode);
         setLocalBankAccountNumber(maskAcc);
         setLocalBankAccountName(bName);
 
         setServerPayment({
           promptPayMask: maskPP,
+          promptPayAccountName: ppName,
           bankAccountMask: maskAcc,
           bankCode: bCode,
           bankAccountName: bName,
@@ -729,10 +735,12 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
     bankAccountName: string;
     bankAccountNumber: string;
     promptPayValue: string;
+    promptPayAccountName: string;
   }>) => {
     if (!selectedDormId) return;
 
     const currentPromptPay = overrides?.promptPayValue !== undefined ? overrides.promptPayValue : localPromptPay;
+    const currentPromptPayName = overrides?.promptPayAccountName !== undefined ? overrides.promptPayAccountName : localPromptPayName;
     const currentBankCode = overrides?.bankCode !== undefined ? overrides.bankCode : localBankName;
     const currentBankAccountNumber = overrides?.bankAccountNumber !== undefined ? overrides.bankAccountNumber : localBankAccountNumber;
     const currentBankAccountName = overrides?.bankAccountName !== undefined ? overrides.bankAccountName : localBankAccountName;
@@ -750,6 +758,11 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
         payload.promptPayValue = currentPromptPay;
         payload.promptPayType = detectedType;
       }
+    }
+
+    // 1.1 PromptPay Account Name changes:
+    if (currentPromptPayName !== serverPayment.promptPayAccountName) {
+      payload.promptPayAccountName = currentPromptPayName || null;
     }
 
     // 2. Bank Code changes:
@@ -782,17 +795,20 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
     try {
       const updated = await updatePaymentSettings(selectedDormId, payload);
       const maskPP = updated.maskedPromptPayValue || '';
+      const ppName = updated.promptPayAccountName || '';
       const maskAcc = updated.maskedBankAccountNumber || '';
       const bCode = updated.bankCode || '';
       const bName = updated.bankAccountName || '';
 
       setLocalPromptPay(maskPP);
+      setLocalPromptPayName(ppName);
       setLocalBankName(bCode);
       setLocalBankAccountNumber(maskAcc);
       setLocalBankAccountName(bName);
 
       setServerPayment({
         promptPayMask: maskPP,
+        promptPayAccountName: ppName,
         bankAccountMask: maskAcc,
         bankCode: bCode,
         bankAccountName: bName,
@@ -916,6 +932,23 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                     onBlur={() => handlePaymentSettingsBlur({ promptPayValue: localPromptPay })}
                     placeholder="เลขบัตรปชช. / เบอร์โทร"
                     className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-bold text-indigo-700 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs"
+                  />
+                </div>
+
+                {/* ชื่อบัญชีพร้อมเพย์ */}
+                <div className="space-y-1">
+                  <label className="block font-semibold text-slate-700">ชื่อบัญชีพร้อมเพย์</label>
+                  <input
+                    type="text"
+                    data-testid="promptpay-name-input"
+                    value={localPromptPayName}
+                    onChange={(e) => {
+                      setLocalPromptPayName(e.target.value);
+                      setSaveStatus('typing');
+                    }}
+                    onBlur={() => handlePaymentSettingsBlur({ promptPayAccountName: localPromptPayName })}
+                    placeholder="ชื่อบัญชีพร้อมเพย์ผู้รับเงิน"
+                    className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-bold focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs"
                   />
                 </div>
 
@@ -1096,7 +1129,7 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                         {[
                           { id: 'dog', label: 'สุนัข (Dog)' },
                           { id: 'cat', label: 'แมว (Cat)' },
-                          { id: 'small', label: 'สัตว์เล็ก (กระต่าย/หนู)' },
+                          { id: 'small_pet', label: 'สัตว์เล็ก (กระต่าย/หนู/นก)' },
                           { id: 'other', label: 'สัตว์แปลก (other)' },
                         ].map(type => {
                           const isChecked = (propertyPetPolicy.allowedTypes || []).includes(type.id);

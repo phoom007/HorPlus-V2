@@ -192,7 +192,7 @@ export class ContractService {
   public async activateContract(
     id: string,
     dormitoryId: string,
-    payload: { ownerSignature?: string | null; tenantSignature?: string | null },
+    payload: { ownerSignature?: string | null; tenantSignature?: string | null; selectedInstallments?: number | null },
     actorUserId?: string
   ) {
     const contract = await this.getContractById(id, dormitoryId);
@@ -277,6 +277,36 @@ export class ContractService {
           }
         }
 
+        // 4.1 Calculate term-rent installment schedule if explicitly configured (Fixtures/DTOs)
+        let installmentConfig: any = null;
+        const requestedInstallments = payload.selectedInstallments || (contract as any).selectedInstallments;
+        const resolvedRentType = resolvedDefaults.rentBillingType.value;
+        const isTermRent = resolvedRentType === 'term' || (room.termRent && !room.monthlyRent);
+
+        if (isTermRent && requestedInstallments && typeof requestedInstallments === 'number' && requestedInstallments >= 1) {
+          const building = await tx.building.findUnique({ where: { id: room.buildingId } });
+          const maxInst = building?.maxTermRentInstallments || 1;
+          const selectedInst = requestedInstallments;
+
+          if (selectedInst > maxInst) {
+            const err = new Error(`จำนวนงวดที่เลือก (${selectedInst}) เกินกว่าจำนวนงวดสูงสุดของอาคาร (${maxInst})`);
+            (err as any).code = 'INSTALLMENT_EXCEEDS_BUILDING_MAX';
+            (err as any).statusCode = 400;
+            throw err;
+          }
+
+          const { generateExactInstallmentSchedule } = await import('../utils/installment-math.util.js');
+          const termRentStr = String(contract.rentAmount || resolvedDefaults.monthlyRent.value);
+          const schedule = generateExactInstallmentSchedule(termRentStr, selectedInst);
+
+          installmentConfig = {
+            maxInstallments: maxInst,
+            selectedInstallments: selectedInst,
+            termRentTotal: termRentStr,
+            installmentSchedule: schedule,
+          };
+        }
+
         // 5. Create ContractSnapshot atomically
         const snapshot = await tx.contractSnapshot.create({
           data: {
@@ -297,6 +327,7 @@ export class ContractService {
             waterBillingType: resolvedDefaults.waterBillingType.value,
             electricityBillingType: resolvedDefaults.electricityBillingType.value,
             rentBillingType: resolvedDefaults.rentBillingType.value,
+            installmentConfig: installmentConfig || null,
             sourceVersions: resolvedDefaults.sourceVersions,
             snapshotData: resolvedDefaults as any,
             lockedAt: now,

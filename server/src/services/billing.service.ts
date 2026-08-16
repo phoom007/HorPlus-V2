@@ -13,6 +13,7 @@ import { ITenantRepository } from '../db/repositories/tenant.repository.js';
 import { AuditService } from './audit.service.js';
 import { billingOrchestrationService } from './billing-orchestration.service.js';
 import { toDecimal, addDecimals, mulDecimals, formatDecimal, subDecimals, compareDecimals, isZeroDecimal } from '../utils/decimal-math.util.js';
+import { getPrismaClient } from '../db/prisma.js';
 
 export interface GenerateBillDto {
   billingCycleId: string;
@@ -175,16 +176,56 @@ export class BillingService {
       elecUnit = 'room';
     }
 
-    const items: Array<{ type: string; description: string; quantity: string; unit?: string; unitPrice: string; amount: string; metadata?: any }> = [
-      {
+    // Resolve Rent Item: Check if Contract has immutable installmentConfig snapshot
+    const prisma = getPrismaClient();
+    const contractSnapshot = await prisma.contractSnapshot.findUnique({
+      where: { contractId: contract.id },
+    });
+
+    let rentItem: { type: string; description: string; quantity: string; unit?: string; unitPrice: string; amount: string; metadata?: any } | null = null;
+
+    const installmentConfig = contractSnapshot?.installmentConfig as any;
+    if (installmentConfig && Array.isArray(installmentConfig.installmentSchedule) && installmentConfig.installmentSchedule.length > 0) {
+      const contractStart = new Date(contract.startDate);
+      const cycleStart = new Date(cycle.periodStart);
+      const cycleOffset = (cycleStart.getFullYear() - contractStart.getFullYear()) * 12 + (cycleStart.getMonth() - contractStart.getMonth());
+
+      const scheduleItem = installmentConfig.installmentSchedule.find((s: any) => s.cycleOffset === cycleOffset);
+      if (scheduleItem) {
+        rentItem = {
+          type: 'rent',
+          description: scheduleItem.description || `ค่าเช่าห้องพัก (งวดที่ ${scheduleItem.installmentNo}/${installmentConfig.selectedInstallments})`,
+          quantity: '1.00',
+          unit: 'installment',
+          unitPrice: scheduleItem.amount,
+          amount: scheduleItem.amount,
+          metadata: {
+            installmentNo: scheduleItem.installmentNo,
+            totalInstallments: installmentConfig.selectedInstallments,
+            termRentTotal: installmentConfig.termRentTotal,
+            cycleOffset,
+            isFinalInstallment: scheduleItem.installmentNo === installmentConfig.selectedInstallments,
+          },
+        };
+      } else {
+        // After final installment: omit rent line item entirely! (No zero-value rent line)
+        rentItem = null;
+      }
+    } else {
+      rentItem = {
         type: 'rent',
         description: 'ค่าเช่าห้องพัก',
         quantity: '1.00',
         unit: 'month',
         unitPrice: formatDecimal(rentAmount),
         amount: formatDecimal(rentAmount),
-      },
-    ];
+      };
+    }
+
+    const items: Array<{ type: string; description: string; quantity: string; unit?: string; unitPrice: string; amount: string; metadata?: any }> = [];
+    if (rentItem) {
+      items.push(rentItem);
+    }
 
     if (!isZeroDecimal(waterAmount) || !isZeroDecimal(waterRate)) {
       items.push({
@@ -264,7 +305,7 @@ export class BillingService {
       contractId: contract.id,
       roomId,
       tenantId: contract.tenantId,
-      rentAmount: formatDecimal(rentAmount),
+      rentAmount: rentItem ? rentItem.amount : '0.00',
       waterUsage: formatDecimal(waterUsage),
       waterRate: formatDecimal(waterRate),
       waterAmount: formatDecimal(waterAmount),

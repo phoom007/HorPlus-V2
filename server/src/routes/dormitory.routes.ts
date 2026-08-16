@@ -287,6 +287,7 @@ export function createDormitoryRouter(
       dormitoryId: settings.dormitoryId,
       cashAccepted: settings.cashAccepted ?? true,
       promptPayType: settings.promptPayType ?? null,
+      promptPayAccountName: settings.promptPayAccountName ?? null,
       maskedPromptPayValue: settings.promptPayType && decryptedPromptPay ? sensitiveFieldService.maskPromptPay(settings.promptPayType, decryptedPromptPay) : null,
       hasPromptPay: Boolean(settings.promptPayType && (settings.promptPayValueEncrypted || decryptedPromptPay)),
       bankCode: settings.bankCode ?? null,
@@ -427,6 +428,7 @@ export function createDormitoryRouter(
       promptPayType: finalPromptPayType,
       promptPayValue: null, // Always keep plaintext PromptPay null in DB
       promptPayValueEncrypted: finalPromptPayEnc,
+      promptPayAccountName: parsed.data.promptPayAccountName !== undefined ? (parsed.data.promptPayAccountName ?? null) : (currentSettings?.promptPayAccountName ?? null),
       bankCode: parsed.data.bankCode !== undefined ? (parsed.data.bankCode ?? null) : (currentSettings?.bankCode ?? null),
       bankAccountName: parsed.data.bankAccountName !== undefined ? (parsed.data.bankAccountName ?? null) : (currentSettings?.bankAccountName ?? null),
       bankAccountNumber: decryptedBankAcc ? sensitiveFieldService.maskBankAccount(decryptedBankAcc) : null,
@@ -482,6 +484,7 @@ export function createDormitoryRouter(
       dormitoryId: updated.dormitoryId,
       cashAccepted: updated.cashAccepted ?? true,
       promptPayType: updated.promptPayType ?? null,
+      promptPayAccountName: updated.promptPayAccountName ?? null,
       maskedPromptPayValue: updated.promptPayType && decryptedPromptPay ? sensitiveFieldService.maskPromptPay(updated.promptPayType, decryptedPromptPay) : null,
       hasPromptPay: Boolean(updated.promptPayType && (updated.promptPayValueEncrypted || decryptedPromptPay)),
       bankCode: updated.bankCode ?? null,

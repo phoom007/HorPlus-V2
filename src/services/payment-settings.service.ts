@@ -11,6 +11,7 @@ export interface PaymentSettingsDTO {
   dormitoryId: string;
   cashAccepted: boolean;
   promptPayType: 'mobile_phone' | 'national_id' | null;
+  promptPayAccountName?: string | null;
   maskedPromptPayValue: string | null;
   hasPromptPay: boolean;
   bankCode: string | null;
@@ -26,6 +27,7 @@ export interface PaymentSettingsUpdatePayload {
   cashAccepted?: boolean;
   promptPayType?: 'mobile_phone' | 'national_id' | null;
   promptPayValue?: string | null;
+  promptPayAccountName?: string | null;
   bankCode?: string | null;
   bankAccountName?: string | null;
   bankAccountNumber?: string | null;

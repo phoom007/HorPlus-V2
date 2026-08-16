@@ -42,13 +42,8 @@ import {
   Copy
 } from 'lucide-react';
 
-import {
-  saveDormitory,
-  saveBuildings,
-  saveRooms,
-  getRooms,
-  getDormitory
-} from '../../data/mockData';
+import { onboardingClient } from '../../data/onboardingClient';
+import { AuthContext } from '../../router/guards';
 import { Dormitory, Building, Room } from '../../types';
 
 interface RegisterProps {
@@ -311,16 +306,16 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
       // 5. Pets, Rules & Signature (Pet fees removed per request)
       petPolicy: {
         allowed: 'conditional', // 'none' | 'free' | 'conditional'
-        allowedTypes: ['small_dog', 'cat', 'caged_birds']
+        allowedTypes: ['dog', 'cat', 'small_pet']
       },
       ownerSignatureUrl: '',
 
       // 6. LINE OA (Access Token removed per request)
       lineOA: {
         oaName: '@horplus_dorm',
-        channelId: '1657889900',
-        channelSecret: 'e4d8f9c2a1b3c4d5e6f7a8b9c0d1e2f3',
-        isConnected: true
+        channelId: '',
+        channelSecret: '',
+        isConnected: false
       }
     };
 
@@ -447,32 +442,52 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
     setSignatureSavedToast(null);
   };
 
-  const handleApplyPromo = () => {
+  const handleApplyPromo = async () => {
     if (!promoCodeInput.trim()) {
       setPromoMessage('กรุณากรอกรหัสโปรโมชั่น');
       return;
     }
-    if (promoCodeInput.trim().toUpperCase() === 'HORPLUS') {
-      setAppliedPromo(true);
-      setPromoMessage('✓ ใช้งานรหัส HORPLUS สำเร็จ! ได้รับสิทธิ์ทดลองใช้งานฟรีเพิ่ม 60 วัน');
-    } else {
+    try {
+      const res = await onboardingClient.validatePromo(promoCodeInput.trim(), selectedPlan.toUpperCase());
+      if (res && res.valid) {
+        setAppliedPromo(true);
+        setPromoMessage(`✓ ใช้งานรหัส ${promoCodeInput.trim()} สำเร็จ! ${res.description || 'ได้รับสิทธิ์โปรโมชั่น'}`);
+      } else {
+        setAppliedPromo(false);
+        setPromoMessage('รหัสโปรโมชั่นไม่ถูกต้อง หรือหมดอายุแล้ว');
+      }
+    } catch (err: any) {
       setAppliedPromo(false);
-      setPromoMessage('รหัสโปรโมชั่นไม่ถูกต้อง หรือหมดอายุแล้ว');
+      setPromoMessage(err?.message || 'รหัสโปรโมชั่นไม่ถูกต้อง หรือหมดอายุแล้ว');
     }
   };
 
-  const handleTestLineConnection = () => {
+  const handleTestLineConnection = async () => {
+    if (!formData.lineOA.channelId || !formData.lineOA.channelSecret) {
+      setLineStatusMsg({ type: 'error', msg: 'กรุณากรอก Channel ID และ Channel Secret ให้ครบถ้วน' });
+      return;
+    }
     setTestingLine(true);
     setLineStatusMsg(null);
-    setTimeout(() => {
-      setTestingLine(false);
-      if (formData.lineOA.channelId && formData.lineOA.channelSecret) {
-        setFormData(prev => ({ ...prev, lineOA: { ...prev.lineOA, isConnected: true } }));
-        setLineStatusMsg({ type: 'success', msg: 'ทดสอบสำเร็จ: เชื่อมต่อ LINE Messaging API สำเร็จแล้ว' });
-      } else {
-        setLineStatusMsg({ type: 'error', msg: 'กรุณากรอก Channel ID และ Channel Secret ให้ครบถ้วน' });
+    try {
+      const prep = await onboardingClient.prepare({ name: formData.dormName, addressLine1: formData.dormAddress, province: formData.province });
+      const provDormId = prep?.provisionalDormitoryId || prep?.data?.provisionalDormitoryId;
+      if (provDormId) {
+        await onboardingClient.updateLineConfig(provDormId, {
+          channelId: formData.lineOA.channelId,
+          channelSecret: formData.lineOA.channelSecret,
+        });
+        await onboardingClient.setLineWebhook(provDormId);
+        await onboardingClient.testLineWebhook(provDormId);
       }
-    }, 1000);
+      setFormData(prev => ({ ...prev, lineOA: { ...prev.lineOA, isConnected: true } }));
+      setLineStatusMsg({ type: 'success', msg: 'ทดสอบสำเร็จ: เชื่อมต่อ LINE Messaging API สำเร็จแล้ว' });
+    } catch (err: any) {
+      setFormData(prev => ({ ...prev, lineOA: { ...prev.lineOA, isConnected: false } }));
+      setLineStatusMsg({ type: 'error', msg: err?.message || 'การเชื่อมต่อ LINE OA ล้มเหลว กรุณาตรวจสอบข้อมูล' });
+    } finally {
+      setTestingLine(false);
+    }
   };
 
   const handleAddBuilding = () => {
@@ -782,7 +797,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
     setShowTermsModal(true);
   };
 
-  const handleConfirmTermsAndComplete = () => {
+  const handleConfirmTermsAndComplete = async () => {
     if (!agreedTerms) {
       setValidationError('กรุณากดยินยอมรับเงื่อนไขและข้อบังคับก่อนดำเนินการต่อ');
       return;
@@ -799,98 +814,128 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
     setValidationError(null);
     try {
       const finalSource = referralSource === 'other' ? `อื่นๆ (${referralOtherText.trim()})` : referralSource;
-      const dataToSave = {
-        ...formData,
-        selectedPlan,
-        promoCode: appliedPromo ? promoCodeInput : null,
-        termsAcceptedAt: new Date().toISOString(),
-        referralSource: finalSource
-      };
-      localStorage.setItem('registered_dorm_profile', JSON.stringify(dataToSave));
 
-      // 1. Update Dormitory in mockData / localStorage
-      const currentDorm = getDormitory();
-      const updatedDorm: Dormitory = {
-        ...currentDorm,
-        name: formData.dormName || currentDorm.name,
-        address: formData.dormAddress || currentDorm.address,
-        phone: formData.ownerPhone || currentDorm.phone,
-        ownerName: formData.ownerName || currentDorm.ownerName,
-        ownerPhone: formData.ownerPhone || currentDorm.ownerPhone,
-        ownerEmail: formData.ownerEmail || currentDorm.ownerEmail,
-        bankName: formData.paymentAccount.bankName || currentDorm.bankName,
-        bankAccountNumber: formData.paymentAccount.accountNumber || currentDorm.bankAccountNumber,
-        bankAccountName: formData.paymentAccount.bankAccountName || formData.paymentAccount.accountName || currentDorm.bankAccountName,
-        promptPayName: formData.paymentAccount.promptPayName || formData.paymentAccount.accountName || currentDorm.promptPayName,
-        promptPayNumber: formData.paymentAccount.promptPayId || currentDorm.promptPayNumber,
-        waterUnitRate: formData.utilities.waterRate,
-        electricUnitRate: formData.utilities.electricRate,
-        waterBillingMode: formData.utilities.waterBillingMode as any,
-        electricBillingMode: formData.utilities.electricBillingMode as any,
-        commonFee: formData.utilities.commonFeeRate,
-        commonFeeMode: formData.utilities.commonFeeMode as any,
-        internetFee: formData.utilities.internetRate,
-        internetFeeMode: formData.utilities.internetFeeMode as any,
-        parkingFee: formData.utilities.parkingFeeRate,
-        parkingFeeMode: formData.utilities.parkingFeeMode as any,
-        lateFeeDaily: formData.deposits.lateFeeAmount,
-        lateFeeType: formData.deposits.lateFeeType as any,
-        rulesTemplate: formData.rulesTemplate,
-        petPolicy: formData.petPolicy,
-        updatedAt: new Date().toISOString()
-      };
-      saveDormitory(updatedDorm);
+      // 1. Prepare provisional dormitory ID
+      const prep = await onboardingClient.prepare({
+        name: formData.dormName,
+        addressLine1: formData.dormAddress,
+        province: formData.province,
+      });
+      const provisionalDormitoryId = prep?.provisionalDormitoryId || prep?.data?.provisionalDormitoryId;
 
-      // 2. Generate and save buildings & rooms based on registered settings
-      const newBuildings: Building[] = formData.buildings.map((b, idx) => ({
+      // 2. Upload Signature if present
+      if (formData.ownerSignatureUrl && provisionalDormitoryId) {
+        try {
+          await onboardingClient.uploadSignature(provisionalDormitoryId, formData.ownerSignatureUrl);
+        } catch (sigErr) {
+          console.warn('Owner signature upload warning:', sigErr);
+        }
+      }
+
+      // 3. Map Buildings
+      const mappedBuildings = formData.buildings.map((b, idx) => ({
         id: b.id || `bld-${idx + 1}`,
         name: b.name,
+        code: b.roomPrefix || null,
         floorsCount: b.totalFloors || 1,
-        description: `อาคารจากการลงทะเบียน (${b.roomsPerFloor} ห้อง/ชั้น)`,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
+        roomsPerFloor: b.roomsPerFloor || null,
+        roomPrefix: b.roomPrefix || null,
+        hasElevator: b.hasElevator ?? false,
+        numberingPattern: b.formatPattern || null,
+        description: `อาคาร ${b.name}`,
+        monthlyRent: b.rentRates?.monthly ?? 4500,
+        dailyRent: b.rentRates?.daily ?? null,
+        termRent: b.rentRates?.term ?? null,
+        termMonths: b.rentRates?.termMonths ?? 4,
+        maxInstallmentMonths: b.rentRates?.maxInstallmentMonths ?? 1,
+        maximumOccupants: b.rentRates?.maxOccupants ?? 2,
       }));
-      saveBuildings(newBuildings);
 
-      // 3. Generate rooms list referencing registered rates and default unpaid deposit status
-      const existingRooms = getRooms();
-      const generatedRooms: Room[] = [];
-
+      // 4. Map Rooms
+      const mappedRooms: any[] = [];
       formData.buildings.forEach((b) => {
         const roomNumbers = getGeneratedRooms(b);
         const rentRates = b.rentRates || { monthly: 4500, term: 18000, daily: 600 };
-        const securityDeposit = formData.deposits.securityDeposit || 5000;
+        const secDep = b.securityDeposit || formData.deposits.securityDeposit || 5000;
 
         roomNumbers.forEach((rNum) => {
-          const existing = existingRooms.find(r => r.roomNumber.trim().toUpperCase() === rNum.trim().toUpperCase());
           const digitsOnly = rNum.replace(/\D/g, '');
           const calculatedFloor = digitsOnly ? (parseInt(digitsOnly.charAt(0)) || 1) : 1;
-
-          generatedRooms.push({
-            id: existing?.id || `room-${rNum.toLowerCase()}-${Date.now()}`,
-            roomNumber: rNum,
+          mappedRooms.push({
             buildingId: b.id,
+            roomNumber: rNum,
             floor: calculatedFloor,
             monthlyRent: rentRates.monthly || 4500,
-            termRent: rentRates.term || (rentRates.monthly ? rentRates.monthly * 4 : 18000),
-            dailyRent: rentRates.daily || 600,
-            depositAmount: securityDeposit,
-            depositStatus: 'unpaid', // สถานะเงินมัดจำ เป็นยังไม่จ่ายเป็นค่าเริ่มต้น
-            status: existing?.status || 'vacant',
-            currentTenantId: existing?.currentTenantId,
-            maxOccupants: rentRates.maxOccupants || 2,
-            initialWaterMeter: existing?.initialWaterMeter || 0,
-            initialElectricMeter: existing?.initialElectricMeter || 0,
-            images: existing?.images || ['https://images.unsplash.com/photo-1522771739844-6a9f6d5f14af?w=400'],
-            createdAt: existing?.createdAt || new Date().toISOString(),
-            updatedAt: new Date().toISOString()
+            dailyRent: rentRates.daily || null,
+            termRent: rentRates.term || null,
+            termMonths: rentRates.termMonths || 4,
+            depositAmount: secDep,
+            maximumOccupants: rentRates.maxOccupants || 2,
+            status: 'vacant',
           });
         });
       });
 
-      if (generatedRooms.length > 0) {
-        saveRooms(generatedRooms);
-      }
+      const waterBillingType = formData.utilities.waterBillingMode === 'unit' ? 'per_unit' : (formData.utilities.waterBillingMode === 'person' ? 'per_person' : 'flat_rate');
+      const elecBillingType = formData.utilities.electricBillingMode === 'unit' ? 'per_unit' : (formData.utilities.electricBillingMode === 'person' ? 'per_person' : 'flat_rate');
+
+      const rawPP = formData.paymentAccount.promptPayId ? formData.paymentAccount.promptPayId.replace(/\D/g, '') : null;
+      const ppType = rawPP ? (rawPP.length === 13 ? 'national_id' : 'mobile_phone') : null;
+
+      const payload = {
+        provisionalDormitoryId,
+        dormitory: {
+          name: formData.dormName,
+          type: formData.dormType || 'apartment',
+          genderPolicy: formData.genderType || 'รวม',
+          addressLine1: formData.dormAddress || null,
+          province: formData.province || null,
+          phone: formData.ownerPhone || null,
+          email: formData.ownerEmail || null,
+          estimatedBuildingCount: formData.buildings.length || 1,
+          estimatedRoomCount: mappedRooms.length || 10,
+        },
+        billing: {
+          billingDay: 25,
+          dueDay: formData.deposits.dueDateDay || 5,
+          waterBillingType,
+          waterRate: String(formData.utilities.waterRate ?? 18),
+          electricityBillingType: elecBillingType,
+          electricityRate: String(formData.utilities.electricRate ?? 7),
+          commonFee: String(formData.utilities.commonFeeRate ?? 0),
+          commonFeeMode: formData.utilities.commonFeeMode || 'none',
+          internetFee: String(formData.utilities.internetRate ?? 0),
+          internetFeeMode: formData.utilities.internetFeeMode || 'none',
+          parkingRate: String(formData.utilities.parkingFeeRate ?? 0),
+          parkingFeeMode: formData.utilities.parkingFeeMode || 'none',
+          gracePeriodDays: formData.deposits.gracePeriodDays || 0,
+          advanceRentMonths: formData.deposits.advanceRentMonths || 1,
+          lateFeeType: formData.deposits.lateFeeType || 'fixed',
+          lateFeeValue: String(formData.deposits.lateFeeAmount ?? 50),
+          rentBillingType: 'monthly',
+        },
+        payment: {
+          cashAccepted: true,
+          promptPayType: ppType,
+          promptPayValue: rawPP,
+          promptPayAccountName: formData.paymentAccount.promptPayName || null,
+          bankCode: formData.paymentAccount.bankName || null,
+          bankAccountName: formData.paymentAccount.bankAccountName || formData.paymentAccount.accountName || null,
+          bankAccountNumber: formData.paymentAccount.accountNumber ? formData.paymentAccount.accountNumber.replace(/\D/g, '') : null,
+        },
+        buildings: mappedBuildings,
+        rooms: mappedRooms,
+        planCode: (selectedPlan || 'free').toUpperCase(),
+        promoCode: appliedPromo ? promoCodeInput.trim() : undefined,
+        petPolicy: {
+          allowed: formData.petPolicy.allowed || 'none',
+          allowedTypes: formData.petPolicy.allowedTypes || [],
+        },
+        defaultTerms: formData.rulesTemplate || undefined,
+        rules: formData.rulesTemplate || undefined,
+      };
+
+      await onboardingClient.finalize(payload as any);
 
       setShowTermsModal(false);
       setSaveProgress(0);
@@ -903,7 +948,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
       scrollables.forEach(el => { el.scrollTop = 0; });
 
       if (onAddLog) {
-        onAddLog('บันทึกการลงทะเบียนหอพักและยอมรับเงื่อนไขเรียบร้อยแล้ว', 'system');
+        onAddLog('บันทึกการลงทะเบียนหอพักและยอมรับเงื่อนไขเรียบร้อยแล้ว', 'system', 'onboarding');
       }
 
       setTimeout(() => {
@@ -914,10 +959,12 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
           window.scrollTo({ top: 0, behavior: 'smooth' });
           const scrollables2 = document.querySelectorAll('.overflow-y-auto, #owner-main-content');
           scrollables2.forEach(el => { el.scrollTop = 0; });
+        } else {
+          window.location.href = '/owner';
         }
       }, 2800);
-    } catch (e) {
-      setValidationError('เกิดข้อผิดพลาดในการบันทึกข้อมูล');
+    } catch (e: any) {
+      setValidationError(e?.message || 'เกิดข้อผิดพลาดในการบันทึกข้อมูล');
     }
   };
 
@@ -2211,10 +2258,10 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                     <span className="text-xs font-bold text-slate-700 block">เลือกประเภทสัตว์ที่อนุญาต:</span>
                     <div className="grid grid-cols-2 gap-2">
                       {[
-                        { id: 'small_dog', label: 'สุนัขพันธุ์เล็ก' },
+                        { id: 'dog', label: 'สุนัข' },
                         { id: 'cat', label: 'แมว' },
-                        { id: 'caged_birds', label: 'นก / สัตว์เลี้ยงตัวเล็ก' },
-                        { id: 'aquarium', label: 'สัตว์ในกรง / ตู้ปลา' }
+                        { id: 'small_pet', label: 'สัตว์เลี้ยงขนาดเล็ก / นก' },
+                        { id: 'other', label: 'อื่นๆ' }
                       ].map(pet => (
                         <label key={pet.id} className="flex items-center gap-2 p-2 bg-white rounded-xl border border-slate-200 text-xs font-bold text-slate-700 cursor-pointer">
                           <input

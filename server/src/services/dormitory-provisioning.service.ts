@@ -56,6 +56,7 @@ export interface CompleteOwnerOnboardingParams {
     cashAccepted?: boolean;
     promptPayType?: string | null;
     promptPayValue?: string | null;
+    promptPayAccountName?: string | null;
     bankCode?: string | null;
     bankAccountName?: string | null;
     bankAccountNumber?: string | null;
@@ -75,6 +76,7 @@ export interface CompleteOwnerOnboardingParams {
     dailyRent?: number | null;
     termRent?: number | null;
     termMonths?: number | null;
+    maxInstallmentMonths?: number | null;
     maximumOccupants?: number | null;
   }[];
   rooms?: {
@@ -423,25 +425,28 @@ export class DormitoryProvisioningService {
         throw new AppError('กรุณาบันทึกลายเซ็นเจ้าของหอพักในขั้นตอนที่ 4 ก่อนยืนยันสร้างหอพัก', 400, 'OWNER_SIGNATURE_REQUIRED');
       }
 
-      // 3. Validate LINE OA Readiness (Step 5 Requirement)
+      // 3. Validate LINE OA Readiness (Step 5 Requirement) - Only if configured
       const lineConfig = await tx.dormitoryLineConfig.findUnique({
         where: { dormitoryId: dormId },
       });
 
-      const isLineReady = Boolean(
-        lineConfig &&
-        lineConfig.accessTokenVerifiedAt &&
-        lineConfig.webhookEndpointSetAt &&
-        lineConfig.webhookTestSucceededAt &&
-        lineConfig.webhookActive
-      );
-
-      if (!isLineReady) {
-        throw new AppError(
-          'LINE OA ยังไม่พร้อมใช้งาน กรุณาตั้งค่า LINE OA ให้ครบทุกขั้นตอนก่อนยืนยันสร้างหอพัก',
-          400,
-          'LINE_ONBOARDING_NOT_READY'
+      const hasConfiguredLine = Boolean(lineConfig && lineConfig.channelId);
+      if (hasConfiguredLine) {
+        const isLineReady = Boolean(
+          lineConfig &&
+          lineConfig.accessTokenVerifiedAt &&
+          lineConfig.webhookEndpointSetAt &&
+          lineConfig.webhookTestSucceededAt &&
+          lineConfig.webhookActive
         );
+
+        if (!isLineReady) {
+          throw new AppError(
+            'LINE OA ยังไม่พร้อมใช้งาน กรุณาตั้งค่า LINE OA ให้ครบทุกขั้นตอนก่อนยืนยันสร้างหอพัก',
+            400,
+            'LINE_ONBOARDING_NOT_READY'
+          );
+        }
       }
 
       // 4. Resolve Subscription Plan & Package (Authoritative Package Logic)
@@ -591,6 +596,7 @@ export class DormitoryProvisioningService {
             promptPayType: payment.promptPayType || null,
             promptPayValue: null,
             promptPayValueEncrypted: encPromptPay,
+            promptPayAccountName: payment.promptPayAccountName || null,
             bankCode: payment.bankCode || null,
             bankAccountName: payment.bankAccountName || null,
             bankAccountNumber: payment.bankAccountNumber ? this.sensitiveFieldService.maskBankAccount(payment.bankAccountNumber) : null,
@@ -623,6 +629,9 @@ export class DormitoryProvisioningService {
           const bDailyStr = (b.dailyRent !== undefined && b.dailyRent !== null) ? String(b.dailyRent) : null;
           const bTermStr = (b.termRent !== undefined && b.termRent !== null) ? String(b.termRent) : null;
           const bTermMonths = b.termMonths ?? 6;
+          const bMaxInstallments = (b.maxInstallmentMonths !== undefined && b.maxInstallmentMonths !== null)
+            ? Math.max(1, Math.min(12, Number(b.maxInstallmentMonths)))
+            : 1;
           const bMaxOcc = b.maximumOccupants ?? 2;
           const bNumPattern = b.numberingPattern || b.formatPattern || null;
 
@@ -647,6 +656,7 @@ export class DormitoryProvisioningService {
               dailyRent: bDailyStr,
               termRent: bTermStr,
               termMonths: bTermMonths,
+              maxTermRentInstallments: bMaxInstallments,
               maximumOccupants: bMaxOcc,
             },
             update: {
@@ -661,6 +671,7 @@ export class DormitoryProvisioningService {
               dailyRent: bDailyStr,
               termRent: bTermStr,
               termMonths: bTermMonths,
+              maxTermRentInstallments: bMaxInstallments,
               maximumOccupants: bMaxOcc,
             },
           });
