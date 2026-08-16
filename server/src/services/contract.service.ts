@@ -280,8 +280,8 @@ export class ContractService {
         // 4.1 Calculate term-rent installment schedule if explicitly configured (Fixtures/DTOs)
         let installmentConfig: any = null;
         const requestedInstallments = payload.selectedInstallments || (contract as any).selectedInstallments;
-        const resolvedRentType = resolvedDefaults.rentBillingType.value;
-        const isTermRent = resolvedRentType === 'term' || (room.termRent && !room.monthlyRent);
+        const resolvedRentType = contract.rentBillingType || resolvedDefaults.rentBillingType?.value || 'monthly';
+        const isTermRent = resolvedRentType === 'term';
 
         if (isTermRent && requestedInstallments && typeof requestedInstallments === 'number' && requestedInstallments >= 1) {
           const building = await tx.building.findUnique({ where: { id: room.buildingId } });
@@ -296,7 +296,7 @@ export class ContractService {
           }
 
           const { generateExactInstallmentSchedule } = await import('../utils/installment-math.util.js');
-          const termRentStr = String(contract.rentAmount || resolvedDefaults.monthlyRent.value);
+          const termRentStr = String(contract.rentAmount || (isTermRent && room.termRent ? room.termRent : resolvedDefaults.monthlyRent.value));
           const schedule = generateExactInstallmentSchedule(termRentStr, selectedInst);
 
           installmentConfig = {
@@ -316,7 +316,7 @@ export class ContractService {
             roomId: contract.roomId,
             tenantId: contract.tenantId,
             exactRoomNumber: room.roomNumber,
-            resolvedRent: contract.rentAmount || resolvedDefaults.monthlyRent.value,
+            resolvedRent: contract.rentAmount || (resolvedRentType === 'term' && room.termRent ? room.termRent : resolvedDefaults.monthlyRent.value),
             resolvedDeposit: contract.depositAmount || resolvedDefaults.depositAmount.value,
             resolvedAdvancePayment: contract.advancePaymentAmount || resolvedDefaults.advancePaymentAmount.value,
             resolvedWaterRate: resolvedDefaults.waterRate.value,
@@ -326,7 +326,7 @@ export class ContractService {
             resolvedParkingFee: resolvedDefaults.parkingFee.value,
             waterBillingType: resolvedDefaults.waterBillingType.value,
             electricityBillingType: resolvedDefaults.electricityBillingType.value,
-            rentBillingType: resolvedDefaults.rentBillingType.value,
+            rentBillingType: resolvedRentType,
             installmentConfig: installmentConfig || null,
             sourceVersions: resolvedDefaults.sourceVersions,
             snapshotData: resolvedDefaults as any,

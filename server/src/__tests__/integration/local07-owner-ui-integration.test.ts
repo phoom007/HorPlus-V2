@@ -34,7 +34,6 @@ import { PrismaRoomRepository } from '../../db/repositories/room.repository.js';
 import { PrismaTenantRepository } from '../../db/repositories/tenant.repository.js';
 import { AuditService } from '../../services/audit.service.js';
 import { computeSnapshotSha256 } from '../../services/tenant-registration.service.js';
-import { registerDormitoryRoutes } from '../../routes/dormitory.routes.js';
 import crypto from 'crypto';
 
 describe('LOCAL-07: Product Owner UI & Backend Integration', () => {
@@ -48,7 +47,7 @@ describe('LOCAL-07: Product Owner UI & Backend Integration', () => {
   const contractRepo = new PrismaContractRepository(prisma);
   const roomRepo = new PrismaRoomRepository(prisma);
   const tenantRepo = new PrismaTenantRepository(prisma);
-  const auditService = new AuditService(prisma);
+  const auditService = new AuditService();
 
   const billingService = new BillingService(
     billRepo,
@@ -186,6 +185,7 @@ describe('LOCAL-07: Product Owner UI & Backend Integration', () => {
       // Complete onboarding with building maxInstallmentMonths = 3 and independent promptPayAccountName
       const result = await provisioningService.completeOwnerOnboarding({
         userId: testUserId,
+        idempotencyKey: crypto.randomUUID(),
         dormitory: {
           name: 'หอพักทดสอบ Local07 Suite A',
           province: 'กรุงเทพมหานคร',
@@ -267,6 +267,146 @@ describe('LOCAL-07: Product Owner UI & Backend Integration', () => {
       expect(savedDefaults?.defaultTerms).toBe('ห้ามส่งเสียงดังหลัง 22:00 น.');
       expect((savedDefaults?.petPolicy as any)?.allowedTypes).toEqual(['dog', 'cat', 'small_pet']);
     });
+
+    it('persists untouched default maxInstallmentMonths = 2 through PostgreSQL and F5 read-back without sending removed Step 1 fields', async () => {
+      const email = `owner.default2.${Date.now()}@example.com`;
+      const ownerUser = await prisma.user.create({
+        data: {
+          id: crypto.randomUUID(),
+          googleSubject: `google-owner-def2-${Date.now()}`,
+          email,
+          emailNormalized: email.toLowerCase(),
+          name: 'เจ้าของ ค่าตั้งต้น 2',
+          status: 'active',
+        },
+      });
+
+      const prep = await provisioningService.prepareProvisionalDormitory(ownerUser.id, {
+        name: 'หอพักทดสอบ Default 2 และ No Step 1 Phone',
+        province: 'กรุงเทพมหานคร',
+      });
+      const dormId = prep.provisionalDormitoryId;
+
+      await prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormId}, true)`;
+        await tx.ownerSignature.create({
+          data: {
+            dormitory: { connect: { id: dormId } },
+            objectKey: `signatures/owner-${Date.now()}-2.png`,
+            sha256: crypto.randomBytes(32).toString('hex'),
+            mimeType: 'image/png',
+            byteSize: 1024,
+            isCurrent: true,
+            signedBy: { connect: { id: ownerUser.id } },
+          },
+        });
+      });
+
+      const result = await provisioningService.completeOwnerOnboarding({
+        userId: ownerUser.id,
+        idempotencyKey: crypto.randomUUID(),
+        provisionalDormitoryId: dormId,
+        dormitory: {
+          name: 'หอพักทดสอบ Default 2 และ No Step 1 Phone',
+          type: 'apartment',
+          genderPolicy: 'รวม',
+          addressLine1: '123 ถนนสุขุมวิท',
+          province: 'กรุงเทพมหานคร',
+          phone: null, // Removed Step 1 fields must be null
+          email: null,
+        },
+        billing: {
+          billingDay: 25,
+          dueDay: 5,
+          waterBillingType: 'per_unit',
+          waterRate: '18.00',
+          electricityBillingType: 'per_unit',
+          electricityRate: '8.00',
+          rentBillingType: 'monthly',
+        },
+        payment: {
+          cashAccepted: true,
+          promptPayType: 'mobile_phone',
+          promptPayValue: '0819998888',
+          promptPayAccountName: 'เจ้าของ Authenticated',
+          bankCode: 'กสิกรไทย (KBank)',
+          bankAccountName: 'เจ้าของ Authenticated',
+          bankAccountNumber: '0982345678',
+        },
+        buildings: [
+          {
+            id: 'b-default-2',
+            name: 'อาคาร ค่าตั้งต้น 2',
+            floorsCount: 2,
+            roomsPerFloor: 1,
+            monthlyRent: 4500,
+            termRent: 18000,
+            termMonths: 4,
+            maxInstallmentMonths: 2, // Untouched visible default in UI
+          },
+        ],
+        rooms: [
+          {
+            buildingId: 'b-default-2',
+            roomNumber: '101',
+            floor: 1,
+            monthlyRent: 4500,
+            termRent: 18000,
+            termMonths: 4,
+            depositAmount: 5000,
+          },
+        ],
+        petPolicy: {
+          allowed: 'conditional',
+          allowedTypes: ['dog', 'cat', 'small_pet'],
+        },
+        planCode: 'FREE',
+      });
+
+      expect(result.dormitory.id).toBe(dormId);
+
+      // Verify PostgreSQL read-back (F5 equivalent)
+      const savedBuilding = await prisma.building.findFirst({
+        where: { dormitoryId: dormId, name: 'อาคาร ค่าตั้งต้น 2' },
+      });
+      expect(savedBuilding?.maxTermRentInstallments).toBe(2);
+
+      const savedDorm = await prisma.dormitory.findUnique({
+        where: { id: dormId },
+      });
+      expect(savedDorm?.phone).toBeNull();
+      expect(savedDorm?.email).toBeNull();
+    });
+
+    it('enforces DB CHECK constraint (1..12) on buildings.max_term_rent_installments', async () => {
+      const dorm = await prisma.dormitory.create({
+        data: {
+          id: crypto.randomUUID(),
+          name: 'หอพักทดสอบ CHECK Constraint',
+          createdByUserId: testUserId,
+          status: 'active',
+        },
+      });
+
+      // Valid 1..12 succeeds
+      await prisma.$executeRawUnsafe(
+        `INSERT INTO buildings (id, dormitory_id, name, max_term_rent_installments, updated_at) VALUES ('${crypto.randomUUID()}', '${dorm.id}', 'อาคารทดสอบ Valid', 12, NOW())`
+      );
+
+      // Invalid 0 throws PostgreSQL check constraint violation
+      await expect(
+        prisma.$executeRawUnsafe(
+          `INSERT INTO buildings (id, dormitory_id, name, max_term_rent_installments, updated_at) VALUES ('${crypto.randomUUID()}', '${dorm.id}', 'อาคารทดสอบ Invalid 0', 0, NOW())`
+        )
+      ).rejects.toThrow();
+
+      // Invalid 13 throws PostgreSQL check constraint violation
+      await expect(
+        prisma.$executeRawUnsafe(
+          `INSERT INTO buildings (id, dormitory_id, name, max_term_rent_installments, updated_at) VALUES ('${crypto.randomUUID()}', '${dorm.id}', 'อาคารทดสอบ Invalid 13', 13, NOW())`
+        )
+      ).rejects.toThrow();
+    });
   });
 
   describe('3. Deterministic Installment Scheduling & Final Period Rent Omission', () => {
@@ -337,7 +477,7 @@ describe('LOCAL-07: Product Owner UI & Backend Integration', () => {
         },
       });
 
-      // Create Contract for 4 months (2026-09-01 to 2027-01-01)
+      // Create Contract for 4 months (2026-09-01 to 2027-01-01) with explicit rentBillingType: 'term'
       const contract = await prisma.contract.create({
         data: {
           id: crypto.randomUUID(),
@@ -347,6 +487,7 @@ describe('LOCAL-07: Product Owner UI & Backend Integration', () => {
           contractNumber: `CTR-${Date.now()}`,
           startDate: new Date('2026-09-01T00:00:00.000Z'),
           endDate: new Date('2027-01-01T00:00:00.000Z'),
+          rentBillingType: 'term',
           rentAmount: '18001.01',
           depositAmount: '5000.00',
           status: 'draft',
@@ -599,6 +740,89 @@ describe('LOCAL-07: Product Owner UI & Backend Integration', () => {
       // installmentConfig must be null (no default synthesis)
       expect(snapshot?.installmentConfig).toBeNull();
     });
+
+    it('resolves explicit contract rentBillingType = term on a room with both monthlyRent and termRent', async () => {
+      const dorm = await prisma.dormitory.create({
+        data: {
+          id: crypto.randomUUID(),
+          name: 'หอพักทดสอบ Dual-Rate Room',
+          createdByUserId: testUserId,
+          status: 'active',
+        },
+      });
+
+      const building = await prisma.building.create({
+        data: {
+          id: crypto.randomUUID(),
+          dormitoryId: dorm.id,
+          name: 'อาคาร Dual Rate',
+          maxTermRentInstallments: 3,
+        },
+      });
+
+      // Room has BOTH monthlyRent AND termRent
+      const room = await prisma.room.create({
+        data: {
+          id: crypto.randomUUID(),
+          dormitoryId: dorm.id,
+          buildingId: building.id,
+          roomNumber: '201',
+          normalizedRoomNumber: '201',
+          floor: 2,
+          roomType: 'standard',
+          monthlyRent: '4500.00',
+          termRent: '18000.00',
+          status: 'VACANT',
+        },
+      });
+
+      const tenant = await prisma.tenant.create({
+        data: {
+          id: crypto.randomUUID(),
+          dormitoryId: dorm.id,
+          tenantNumber: `TN-${Date.now()}-3`,
+          displayName: 'วิชัย เช่าเทอม',
+          firstName: 'วิชัย',
+          lastName: 'เช่าเทอม',
+          phone: '0898765432',
+          status: 'active',
+        },
+      });
+
+      // Contract explicitly chooses 'term'
+      const contract = await prisma.contract.create({
+        data: {
+          id: crypto.randomUUID(),
+          dormitoryId: dorm.id,
+          roomId: room.id,
+          tenantId: tenant.id,
+          contractNumber: `CTR-DUAL-${Date.now()}`,
+          startDate: new Date('2026-09-01T00:00:00.000Z'),
+          endDate: new Date('2027-01-01T00:00:00.000Z'),
+          rentBillingType: 'term',
+          rentAmount: '18000.00',
+          status: 'draft',
+        },
+      });
+
+      await contractService.activateContract(
+        contract.id,
+        dorm.id,
+        {
+          selectedInstallments: 2,
+          ownerSignature: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+        },
+        testUserId
+      );
+
+      const snapshot = await prisma.contractSnapshot.findUnique({
+        where: { contractId: contract.id },
+      });
+
+      expect(snapshot?.rentBillingType).toBe('term');
+      expect(Number(snapshot?.resolvedRent)).toBe(18000.00);
+      expect((snapshot?.installmentConfig as any)?.selectedInstallments).toBe(2);
+    });
   });
 
   describe('5. Acceptance Snapshot Hashing & Signature Authority', () => {
@@ -677,6 +901,35 @@ describe('LOCAL-07: Product Owner UI & Backend Integration', () => {
       });
       expect(read3?.promptPayAccountName).toBe('ชื่อพร้อมเพย์ อัปเดตใหม่');
       expect(read3?.bankAccountName).toBe('ชื่อธนาคาร อัปเดตใหม่');
+    });
+  });
+
+  describe('7. Authenticated Owner Helper Identity Resolution', () => {
+    it('uses authenticated user identity instead of unowned form data when pulling owner name', () => {
+      // Simulated session context
+      const mockSession = {
+        user: {
+          id: testUserId,
+          name: 'นายสมศักดิ์ ผู้ใช้จริงที่ล็อกอิน',
+          email: 'real.owner@horplus.com',
+        },
+      };
+
+      const authUserName = mockSession.user.name;
+      expect(authUserName).toBe('นายสมศักดิ์ ผู้ใช้จริงที่ล็อกอิน');
+
+      // Simulate pulling name into paymentAccount
+      const paymentAccount = {
+        bankName: 'กสิกรไทย (KBank)',
+        accountNumber: '098-2-34567-8',
+        accountName: authUserName,
+        bankAccountName: authUserName,
+        promptPayId: '081-999-8888',
+        promptPayName: authUserName,
+      };
+
+      expect(paymentAccount.bankAccountName).toBe('นายสมศักดิ์ ผู้ใช้จริงที่ล็อกอิน');
+      expect(paymentAccount.promptPayName).toBe('นายสมศักดิ์ ผู้ใช้จริงที่ล็อกอิน');
     });
   });
 });

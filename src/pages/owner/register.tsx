@@ -138,6 +138,8 @@ const PRESET_DORM_RULES = [
 ];
 
 export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate }) => {
+  const authContext = React.useContext(AuthContext);
+  const authUserName = authContext?.user?.name || authContext?.user?.displayName || authContext?.name || '';
   const [currentStep, setCurrentStep] = useState(1);
   const [isSavedSuccess, setIsSavedSuccess] = useState(false);
   const [saveProgress, setSaveProgress] = useState(0);
@@ -209,15 +211,10 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
     return rooms;
   };
 
-  // Load existing configuration or defaults from localStorage
+  // Load existing configuration or defaults
   const getInitialForm = () => {
     const defaultData = {
       // 1. Owner & Dorm Info (Simplified per request)
-      ownerName: 'นายสมศักดิ์ วงศ์สว่าง',
-      ownerIdCard: '1-1002-99887-65-1',
-      ownerPhone: '081-999-8888',
-      ownerEmail: 'somsak.w@gmail.com',
-
       dormName: 'หอพัก HorPlus สุขุมวิท (HorPlus Residence)',
       dormAddress: '88/9 ซอยสุขุมวิท 55 (ทองหล่อ) แขวงคลองตันเหนือ เขตวัฒนา กรุงเทพฯ 10110',
       province: 'กรุงเทพมหานคร',
@@ -241,6 +238,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
             monthly: 4500,
             term: 18000,
             termMonths: 4,
+            maxInstallmentMonths: 2,
             daily: 600,
             maxOccupants: 2
           }
@@ -260,6 +258,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
             monthly: 4200,
             term: 16800,
             termMonths: 4,
+            maxInstallmentMonths: 2,
             daily: 550,
             maxOccupants: 2
           }
@@ -297,10 +296,10 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
       paymentAccount: {
         bankName: 'กสิกรไทย (KBank)',
         accountNumber: '098-2-34567-8',
-        accountName: 'นายสมศักดิ์ วงศ์สว่าง',
-        bankAccountName: 'นายสมศักดิ์ วงศ์สว่าง',
+        accountName: '',
+        bankAccountName: '',
         promptPayId: '081-999-8888',
-        promptPayName: 'นายสมศักดิ์ วงศ์สว่าง'
+        promptPayName: ''
       },
 
       // 5. Pets, Rules & Signature (Pet fees removed per request)
@@ -318,34 +317,6 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
         isConnected: false
       }
     };
-
-    try {
-      const saved = localStorage.getItem('registered_dorm_profile');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        return {
-          ...defaultData,
-          ...parsed,
-          buildings: (parsed.buildings || defaultData.buildings).map((b: any) => ({
-            ...b,
-            securityDeposit: b.securityDeposit !== undefined ? b.securityDeposit : (parsed.deposits?.securityDeposit || 5000),
-            rentRates: {
-              monthly: 4500,
-              term: 18000,
-              termMonths: 4,
-              daily: 600,
-              maxOccupants: 2,
-              ...(b.rentRates || {})
-            }
-          })),
-          utilities: { ...defaultData.utilities, ...(parsed.utilities || {}) },
-          deposits: { ...defaultData.deposits, ...(parsed.deposits || {}) },
-          paymentAccount: { ...defaultData.paymentAccount, ...(parsed.paymentAccount || {}) },
-          petPolicy: { ...defaultData.petPolicy, ...(parsed.petPolicy || {}) },
-          lineOA: { ...defaultData.lineOA, ...(parsed.lineOA || {}) }
-        };
-      }
-    } catch { }
 
     return defaultData;
   };
@@ -506,6 +477,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
         monthly: 4500,
         term: 18000,
         termMonths: 4,
+        maxInstallmentMonths: 2,
         daily: 600,
         maxOccupants: 2
       }
@@ -847,7 +819,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
         dailyRent: b.rentRates?.daily ?? null,
         termRent: b.rentRates?.term ?? null,
         termMonths: b.rentRates?.termMonths ?? 4,
-        maxInstallmentMonths: b.rentRates?.maxInstallmentMonths ?? 1,
+        maxInstallmentMonths: b.rentRates?.maxInstallmentMonths ?? 2,
         maximumOccupants: b.rentRates?.maxOccupants ?? 2,
       }));
 
@@ -890,8 +862,8 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
           genderPolicy: formData.genderType || 'รวม',
           addressLine1: formData.dormAddress || null,
           province: formData.province || null,
-          phone: formData.ownerPhone || null,
-          email: formData.ownerEmail || null,
+          phone: null,
+          email: null,
           estimatedBuildingCount: formData.buildings.length || 1,
           estimatedRoomCount: mappedRooms.length || 10,
         },
@@ -2115,15 +2087,15 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                     <label className="block text-xs font-bold text-slate-700">
                       ชื่อบัญชีธนาคาร <span className="text-rose-500">*</span>
                     </label>
-                    {formData.ownerName && (
+                    {authUserName && (
                       <button
                         type="button"
                         onClick={() => setFormData(prev => ({
                           ...prev,
                           paymentAccount: {
                             ...prev.paymentAccount,
-                            accountName: prev.ownerName,
-                            bankAccountName: prev.ownerName
+                            accountName: authUserName,
+                            bankAccountName: authUserName
                           }
                         }))}
                         className="text-[10px] font-extrabold text-blue-600 bg-blue-50 hover:bg-blue-100 border border-blue-100 px-2 py-0.5 rounded-lg transition-all cursor-pointer"
@@ -2182,12 +2154,12 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                         ชื่อบัญชีพร้อมเพย์
                       </label>
                       <div className="flex items-center gap-1">
-                        {formData.ownerName && (
+                        {authUserName && (
                           <button
                             type="button"
                             onClick={() => setFormData(prev => ({
                               ...prev,
-                              paymentAccount: { ...prev.paymentAccount, promptPayName: prev.ownerName }
+                              paymentAccount: { ...prev.paymentAccount, promptPayName: authUserName }
                             }))}
                             className="text-[10px] font-extrabold text-blue-600 bg-blue-50 hover:bg-blue-100 border border-blue-100 px-2 py-0.5 rounded-lg transition-all cursor-pointer"
                           >
