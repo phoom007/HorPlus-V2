@@ -33,7 +33,11 @@ import { PrismaContractRepository } from '../../db/repositories/contract.reposit
 import { PrismaRoomRepository } from '../../db/repositories/room.repository.js';
 import { PrismaTenantRepository } from '../../db/repositories/tenant.repository.js';
 import { AuditService } from '../../services/audit.service.js';
-import { computeSnapshotSha256 } from '../../services/tenant-registration.service.js';
+import { computeSnapshotSha256, TenantRegistrationService } from '../../services/tenant-registration.service.js';
+import { createOnboardingRouter } from '../../routes/onboarding.routes.js';
+import { cookieParserMiddleware } from '../../middleware/cookie-parser.middleware.js';
+import { SignatureStorageService } from '../../services/signature-storage.service.js';
+import { PNG } from 'pngjs';
 import crypto from 'crypto';
 
 describe('LOCAL-07: Product Owner UI & Backend Integration', () => {
@@ -930,6 +934,187 @@ describe('LOCAL-07: Product Owner UI & Backend Integration', () => {
 
       expect(paymentAccount.bankAccountName).toBe('นายสมศักดิ์ ผู้ใช้จริงที่ล็อกอิน');
       expect(paymentAccount.promptPayName).toBe('นายสมศักดิ์ ผู้ใช้จริงที่ล็อกอิน');
+    });
+  });
+
+  describe('8. HTTP Finalize Route PropertyDefaults Integration Regression', () => {
+    it('persists defaultTerms and petPolicy via real HTTP POST /api/v1/onboarding/finalize route', async () => {
+      // Create dedicated owner user to have fresh subscription limits
+      const finalizeUserId = crypto.randomUUID();
+      const testEmail = `finalize.test.${Date.now()}@example.com`;
+      await prisma.user.create({
+        data: {
+          id: finalizeUserId,
+          email: testEmail,
+          emailNormalized: testEmail.toLowerCase(),
+          name: 'นายทดสอบ บัญชีเจ้าของ',
+          googleSubject: `google-sub-${Date.now()}`,
+        },
+      });
+
+      // 1. Prepare express app with createOnboardingRouter
+      const app = express();
+      app.use(express.json());
+      app.use(cookieParserMiddleware);
+
+      const mockAuthService = {
+        validateSession: async () => ({
+          user: { id: finalizeUserId, name: 'นายทดสอบ บัญชีเจ้าของ' },
+          session: { id: 'test-session-id', userId: finalizeUserId, tokenVersion: 0 },
+          rawSessionId: 'test-session-id',
+          memberships: [],
+        }),
+        verifyCsrf: (_header: string, _sessionId: string) => true,
+      };
+      const mockOnboardingService = {
+        getStatus: async () => ({}),
+        getDraft: async () => null,
+        saveDraft: async () => {},
+        deleteDraft: async () => {},
+      };
+      const mockPromoService = {
+        validatePromo: async () => ({ valid: true }),
+      };
+
+      const onboardingRouter = createOnboardingRouter(
+        mockAuthService as any,
+        mockOnboardingService as any,
+        mockPromoService as any,
+        provisioningService
+      );
+
+      app.use('/api/v1/onboarding', onboardingRouter);
+
+      // 2. Prepare provisional dormitory & upload owner signature
+      const prep = await provisioningService.prepareProvisionalDormitory(finalizeUserId, {
+        name: 'หอพักทดสอบ HTTP Finalize Step 5 Persistence',
+      });
+      const provDormId = prep.provisionalDormitoryId;
+
+      // Upload valid PNG signature
+      const pngObj = new PNG({ width: 16, height: 16 });
+      for (let i = 0; i < pngObj.data.length; i += 4) {
+        pngObj.data[i] = 0;
+        pngObj.data[i + 1] = 0;
+        pngObj.data[i + 2] = 0;
+        pngObj.data[i + 3] = 255;
+      }
+      const validPngBuffer = PNG.sync.write(pngObj);
+      const signatureService = new SignatureStorageService(prisma);
+      await signatureService.saveSignature({
+        dormitoryId: provDormId,
+        userId: finalizeUserId,
+        buffer: validPngBuffer,
+      });
+
+      // 3. Execute HTTP POST /api/v1/onboarding/finalize
+      const knownDefaultTerms = '1. ห้ามส่งเสียงดังรบกวนหลัง 22:00 น.\n2. ชำระค่าเช่าตรงกำหนดทุกวันที่ 5\n3. ดูแลรักษาความสะอาดพื้นที่ส่วนกลาง';
+      const expectedPetPolicy = {
+        allowed: 'conditional',
+        allowedTypes: ['dog', 'cat', 'small_pet', 'other'] as ('dog' | 'cat' | 'small_pet' | 'other')[],
+      };
+
+      const finalizePayload = {
+        provisionalDormitoryId: provDormId,
+        planCode: 'FREE',
+        dormitory: {
+          name: 'หอพักทดสอบ HTTP Finalize Step 5 Persistence',
+          type: 'apartment',
+          genderPolicy: 'รวม',
+          addressLine1: '123 ถนนสุขุมวิท',
+          province: 'กรุงเทพมหานคร',
+          phone: null,
+          email: null,
+          estimatedBuildingCount: 1,
+          estimatedRoomCount: 4,
+        },
+        billing: {
+          billingDay: 25,
+          dueDay: 5,
+          waterBillingType: 'per_unit',
+          waterRate: '18.00',
+          electricityBillingType: 'per_unit',
+          electricityRate: '7.00',
+          commonFee: '0.00',
+          commonFeeMode: 'none',
+          internetFee: '0.00',
+          internetFeeMode: 'none',
+          parkingRate: '0.00',
+          parkingFeeMode: 'none',
+          gracePeriodDays: 0,
+          advanceRentMonths: 1,
+          lateFeeType: 'fixed',
+          lateFeeValue: '50.00',
+          rentBillingType: 'monthly',
+        },
+        payment: {
+          cashAccepted: true,
+          promptPayType: 'mobile_phone',
+          promptPayValue: '0819998888',
+          promptPayAccountName: 'นายทดสอบ บัญชีเจ้าของ',
+          bankCode: 'กสิกรไทย (KBank)',
+          bankAccountName: 'นายทดสอบ บัญชีเจ้าของ',
+          bankAccountNumber: '0982345678',
+        },
+        buildings: [
+          {
+            id: 'bld-1',
+            name: 'อาคาร A',
+            floorsCount: 2,
+            roomsPerFloor: 2,
+            monthlyRent: 4500,
+            maxInstallmentMonths: 2,
+            maximumOccupants: 2,
+          },
+        ],
+        rooms: [
+          {
+            buildingId: 'bld-1',
+            roomNumber: '101',
+            floor: 1,
+            monthlyRent: 4500,
+            depositAmount: 9000,
+            maximumOccupants: 2,
+            status: 'vacant',
+          },
+        ],
+        rules: knownDefaultTerms,
+        defaultTerms: knownDefaultTerms,
+        petPolicy: expectedPetPolicy,
+      };
+
+      const res = await request(app)
+        .post('/api/v1/onboarding/finalize')
+        .set('Cookie', 'horplus_session=test-session-token; horplus_csrf=valid-csrf')
+        .set('x-csrf-token', 'valid-csrf')
+        .send(finalizePayload);
+
+      if (res.status !== 200) {
+        console.error('Finalize failed:', res.status, JSON.stringify(res.body, null, 2));
+      }
+
+      expect(res.status).toBe(200);
+      expect(res.body.data).toBeDefined();
+      expect(res.body.data.dormitoryId).toBe(provDormId);
+
+      // 4. Verify PostgreSQL persistence directly in dormitoryPropertyDefaults
+      const defaults = await prisma.dormitoryPropertyDefaults.findUnique({
+        where: { dormitoryId: provDormId },
+      });
+
+      expect(defaults).not.toBeNull();
+      expect(defaults?.defaultTerms).toBe(knownDefaultTerms);
+      expect((defaults?.petPolicy as any)?.allowed).toBe('conditional');
+      expect((defaults?.petPolicy as any)?.allowedTypes).toEqual(['dog', 'cat', 'small_pet', 'other']);
+
+      // 5. Verify roundtrip / readback via getPublicDormitoryPolicy
+      const registrationService = new TenantRegistrationService();
+      const publicPolicy = await registrationService.getPublicDormitoryPolicy(provDormId);
+
+      expect(publicPolicy.dormitoryId).toBe(provDormId);
+      expect(publicPolicy.defaultTerms).toBe(knownDefaultTerms);
+      expect((publicPolicy.petPolicy as any).allowed).toBe('conditional');
+      expect((publicPolicy.petPolicy as any).allowedTypes).toEqual(['dog', 'cat', 'small_pet', 'other']);
     });
   });
 });

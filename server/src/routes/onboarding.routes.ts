@@ -206,6 +206,9 @@ export function createOnboardingRouter(
         planCode: parsed.data.planCode,
         packageId: req.body.packageId,
         promoCode: parsed.data.promoCode,
+        rules: parsed.data.rules,
+        defaultTerms: parsed.data.defaultTerms,
+        petPolicy: parsed.data.petPolicy,
       });
 
       res.status(200).json({ data: result });

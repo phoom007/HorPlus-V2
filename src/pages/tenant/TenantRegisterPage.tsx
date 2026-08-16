@@ -43,16 +43,28 @@ export const TenantRegisterPage: React.FC = () => {
   const loadData = async () => {
     try {
       setLoading(true);
-      const allRooms = await getDataProvider().rooms.getAll();
-      const vacantRooms = allRooms.filter((r) => r.status === 'vacant');
-      setRooms(vacantRooms);
-      if (vacantRooms.length > 0) {
-        setRequestedRoomId(vacantRooms[0].id);
-      }
+      const urlParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
+      const urlDormId = urlParams?.get('dormitoryId') || undefined;
 
-      const policyRes = await getPublicDormitoryPolicy();
+      const policyRes = await getPublicDormitoryPolicy(urlDormId);
       if (policyRes.success && policyRes.data) {
         setPolicyData(policyRes.data);
+      }
+
+      const activeDormId = policyRes.data?.dormitoryId || urlDormId || (typeof window !== 'undefined' ? localStorage.getItem('selected_dormitory_id') : undefined) || undefined;
+
+      try {
+        const allRooms = await getDataProvider().rooms.getAll();
+        const vacantRooms = allRooms.filter((r) => r.status === 'vacant' && (!activeDormId || (r as any).dormitoryId === activeDormId || !(r as any).dormitoryId));
+        setRooms(vacantRooms);
+        if (vacantRooms.length > 0) {
+          setRequestedRoomId(vacantRooms[0].id);
+        } else {
+          setRequestedRoomId('101');
+        }
+      } catch {
+        setRooms([]);
+        setRequestedRoomId('101');
       }
     } catch (err: any) {
       setErrorText('ไม่สามารถโหลดข้อมูลห้องพักหรือเงื่อนไขหอพักได้');
@@ -129,6 +141,7 @@ export const TenantRegisterPage: React.FC = () => {
 
     try {
       const res = await submitTenantRegistrationRequest({
+        dormitoryId: policyData.dormitoryId,
         requestedRoomId,
         firstName: firstName.trim(),
         lastName: lastName.trim(),

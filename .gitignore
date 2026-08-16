@@ -58,6 +58,7 @@ server/assets/
 !docs/evidence/*.txt
 query.sql
 start
+docs/uat/screenshots/
 test-Checkslip.jpg
 untracked.list
 server/uploads/
