@@ -22,7 +22,8 @@ describe('Master 6-Step Owner Onboarding Lifecycle & Idempotency', () => {
   let provDormId: string;
 
   beforeAll(async () => {
-    const sensitiveFieldService = new SensitiveFieldService(process.env.DORM_ENCRYPTION_KEY || 'default_32_byte_secret_key_123456');
+    const testKey = process.env.FIELD_ENCRYPTION_KEY || 'fedcba9876543210fedcba9876543210';
+    const sensitiveFieldService = new SensitiveFieldService(testKey);
 
     provisioningService = new DormitoryProvisioningService(prisma, sensitiveFieldService);
     onboardingService = new OnboardingService(prisma);

@@ -446,4 +446,233 @@ describe('LOCAL-07: Migration, Defaults & Persistence Proof', () => {
     await prisma.dormitory.delete({ where: { id: testDormPaid.id } });
     await prisma.user.delete({ where: { id: testUser.id } });
   });
+
+  it('7. Negative direct API validation for Tenant Registration (agreedTerms, blank signature, policyVersion)', async () => {
+    const { TenantRegistrationService } = await import('../../services/tenant-registration.service.js');
+    const registrationService = new TenantRegistrationService();
+
+    const testUser = await prisma.user.create({
+      data: {
+        googleSubject: `sub_tenant_reg_${Date.now()}`,
+        email: `tenantreg_${Date.now()}@test.local`,
+        emailNormalized: `tenantreg_${Date.now()}@test.local`,
+        name: 'Tenant Reg Test User',
+      },
+    });
+
+    const testDorm = await prisma.dormitory.create({
+      data: { name: 'Tenant Reg Test Dorm', createdByUserId: testUser.id },
+    });
+
+    await prisma.dormitoryPropertyDefaults.create({
+      data: {
+        dormitoryId: testDorm.id,
+        defaultTerms: 'กฎระเบียบหอพักตัวอย่าง',
+        petPolicy: { allowed: 'none', allowedTypes: [] },
+        version: 1,
+      },
+    });
+
+    const bld = await prisma.building.create({
+      data: { dormitoryId: testDorm.id, name: 'B1', code: 'B1', floorCount: 1, roomsPerFloor: 1 },
+    });
+
+    const room = await prisma.room.create({
+      data: {
+        dormitoryId: testDorm.id,
+        buildingId: bld.id,
+        roomNumber: '101',
+        normalizedRoomNumber: '101',
+        roomType: 'standard',
+        floor: 1,
+        monthlyRent: 3000,
+        depositAmount: 3000,
+        status: 'vacant',
+      },
+    });
+
+    const { PNG } = await import('pngjs');
+    const blankPngObj = new PNG({ width: 10, height: 10 });
+    const blankPngBuffer = PNG.sync.write(blankPngObj);
+    const blankPng = `data:image/png;base64,${blankPngBuffer.toString('base64')}`;
+
+    const validPngObj = new PNG({ width: 10, height: 10 });
+    for (let i = 0; i < 100; i++) {
+      const idx = i * 4;
+      validPngObj.data[idx] = 0; // R
+      validPngObj.data[idx + 1] = 0; // G
+      validPngObj.data[idx + 2] = 0; // B
+      validPngObj.data[idx + 3] = 255; // Alpha
+    }
+    const validPngBuffer = PNG.sync.write(validPngObj);
+    const validNonBlankPng = `data:image/png;base64,${validPngBuffer.toString('base64')}`;
+
+    // 7a. Missing or false agreedTerms -> 400
+    await expect(
+      registrationService.createRequest(testDorm.id, {
+        dormitoryId: testDorm.id,
+        requestedRoomId: room.id,
+        firstName: 'สมชาย',
+        lastName: 'ใจดี',
+        phone: '0812345678',
+        agreedTerms: false as any,
+        signatureBase64: validNonBlankPng,
+        expectedPolicyVersion: 1,
+      })
+    ).rejects.toThrow('กรุณายอมรับกฎระเบียบและเงื่อนไขของหอพักก่อนส่งคำขอลงทะเบียน');
+
+    // 7b. Missing signature -> 400
+    await expect(
+      registrationService.createRequest(testDorm.id, {
+        dormitoryId: testDorm.id,
+        requestedRoomId: room.id,
+        firstName: 'สมชาย',
+        lastName: 'ใจดี',
+        phone: '0812345678',
+        agreedTerms: true,
+        signatureBase64: '',
+        expectedPolicyVersion: 1,
+      })
+    ).rejects.toThrow('กรุณาเซ็นชื่อก่อนส่งคำขอลงทะเบียน');
+
+    // 7c. Blank signature -> 400
+    await expect(
+      registrationService.createRequest(testDorm.id, {
+        dormitoryId: testDorm.id,
+        requestedRoomId: room.id,
+        firstName: 'สมชาย',
+        lastName: 'ใจดี',
+        phone: '0812345678',
+        agreedTerms: true,
+        signatureBase64: blankPng,
+        expectedPolicyVersion: 1,
+      })
+    ).rejects.toThrow('กรุณาเซ็นชื่อก่อนบันทึกคำขอลงทะเบียน');
+
+    // 7d. Invalid expectedPolicyVersion (stale version 999 vs current 1) -> 409
+    await expect(
+      registrationService.createRequest(testDorm.id, {
+        dormitoryId: testDorm.id,
+        requestedRoomId: room.id,
+        firstName: 'สมชาย',
+        lastName: 'ใจดี',
+        phone: '0812345678',
+        agreedTerms: true,
+        signatureBase64: validNonBlankPng,
+        expectedPolicyVersion: 999,
+      })
+    ).rejects.toThrow('กฎระเบียบหรือเงื่อนไขของหอพักมีการเปลี่ยนแปลง');
+
+    // Verify 0 requests created so far
+    const reqCount = await prisma.tenantRegistrationRequest.count({
+      where: { dormitoryId: testDorm.id },
+    });
+    expect(reqCount).toBe(0);
+
+    // 7e. Valid payload -> 201 Created with authoritative snapshot and signature metadata
+    const validCreated = await registrationService.createRequest(testDorm.id, {
+      dormitoryId: testDorm.id,
+      requestedRoomId: room.id,
+      firstName: 'สมชาย',
+      lastName: 'ใจดี',
+      phone: '0812345678',
+      agreedTerms: true,
+      signatureBase64: validNonBlankPng,
+      expectedPolicyVersion: 1,
+    });
+
+    expect(validCreated.status).toBe('pending_owner_approval');
+    expect(validCreated.acceptedAt).toBeInstanceOf(Date);
+    expect(validCreated.acceptanceSnapshot).toBeDefined();
+    expect(validCreated.acceptanceSnapshotSha256).toHaveLength(64);
+    expect(validCreated.tenantSignatureObjectKey).toBeTruthy();
+    expect(validCreated.tenantSignatureSha256).toHaveLength(64);
+    expect(validCreated.tenantSignatureMimeType).toBe('image/png');
+    expect(validCreated.tenantSignatureByteSize).toBeGreaterThan(0);
+
+    // Cleanup
+    await prisma.tenantRegistrationRequest.deleteMany({ where: { dormitoryId: testDorm.id } });
+    await prisma.room.deleteMany({ where: { dormitoryId: testDorm.id } });
+    await prisma.building.deleteMany({ where: { dormitoryId: testDorm.id } });
+    await prisma.dormitoryPropertyDefaults.deleteMany({ where: { dormitoryId: testDorm.id } });
+    await prisma.dormitory.delete({ where: { id: testDorm.id } });
+    await prisma.user.delete({ where: { id: testUser.id } });
+  });
+
+  it('8. Negative proof: SensitiveFieldService fails closed when FIELD_ENCRYPTION_KEY is missing', async () => {
+    const { SensitiveFieldService } = await import('../../services/sensitive-field.service.js');
+    expect(() => new SensitiveFieldService('')).toThrow('CRITICAL_SECURITY_ERROR');
+
+    const origEnv = process.env.FIELD_ENCRYPTION_KEY;
+    try {
+      delete process.env.FIELD_ENCRYPTION_KEY;
+      expect(() => new SensitiveFieldService()).toThrow('CRITICAL_SECURITY_ERROR');
+    } finally {
+      process.env.FIELD_ENCRYPTION_KEY = origEnv;
+    }
+  });
+
+  it('9. Step 5 defaults mutation atomically increments version N -> N+1', async () => {
+    const { DefaultsService } = await import('../../services/defaults.service.js');
+    const defaultsService = new DefaultsService();
+
+    const testUser = await prisma.user.create({
+      data: {
+        googleSubject: `sub_ver_test_${Date.now()}`,
+        email: `vertest_${Date.now()}@test.local`,
+        emailNormalized: `vertest_${Date.now()}@test.local`,
+        name: 'Version Increment Test User',
+      },
+    });
+
+    const testDorm = await prisma.dormitory.create({
+      data: { name: 'Version Increment Test Dorm', createdByUserId: testUser.id },
+    });
+
+    await prisma.dormitoryPropertyDefaults.create({
+      data: {
+        dormitoryId: testDorm.id,
+        defaultTerms: 'ข้อกำหนดเริ่มต้น v1',
+        petPolicy: { allowed: 'none', allowedTypes: [] },
+        version: 1,
+      },
+    });
+
+    // Update petPolicy and defaultTerms
+    const updatedRes = await defaultsService.updateDormitoryDefaults(
+      testDorm.id,
+      {
+        property: {
+          changes: {
+            defaultTerms: 'ข้อกำหนดแก้ไข v2',
+            petPolicy: { allowed: 'conditional', allowedTypes: ['cat'] },
+          },
+          expectedVersion: 1,
+        },
+      },
+      testUser.id
+    );
+
+    expect(updatedRes.property?.version).toBe(2);
+
+    const savedInDb = await prisma.dormitoryPropertyDefaults.findUnique({
+      where: { dormitoryId: testDorm.id },
+    });
+    expect(savedInDb?.version).toBe(2);
+    expect(savedInDb?.defaultTerms).toBe('ข้อกำหนดแก้ไข v2');
+    expect(savedInDb?.petPolicy).toEqual({ allowed: 'conditional', allowedTypes: ['cat'] });
+
+    // Public Policy API returns version 2
+    const { TenantRegistrationService } = await import('../../services/tenant-registration.service.js');
+    const registrationService = new TenantRegistrationService();
+    const publicPolicy = await registrationService.getPublicDormitoryPolicy(testDorm.id);
+    expect(publicPolicy.version).toBe(2);
+    expect(publicPolicy.defaultTerms).toBe('ข้อกำหนดแก้ไข v2');
+    expect(publicPolicy.petPolicy).toEqual({ allowed: 'conditional', allowedTypes: ['cat'] });
+
+    // Cleanup
+    await prisma.dormitoryPropertyDefaults.deleteMany({ where: { dormitoryId: testDorm.id } });
+    await prisma.dormitory.delete({ where: { id: testDorm.id } });
+    await prisma.user.delete({ where: { id: testUser.id } });
+  });
 });

@@ -1155,6 +1155,7 @@ export class ApiPropertyAdapter implements PropertyDataSource {
         defaultRoomType: 'defaultRoomType',
         terms: 'defaultTerms',
         defaultTerms: 'defaultTerms',
+        petPolicy: 'petPolicy',
       };
 
       const canonicalBillingMap: Record<string, string> = {

@@ -327,6 +327,13 @@ export class SignatureStorageService {
       byteSize: buffer.length,
     };
   }
+
+  async deleteSignature(objectKey: string): Promise<void> {
+    if (!objectKey) return;
+    if (this.provider.delete) {
+      await this.provider.delete(objectKey);
+    }
+  }
 }
 
 

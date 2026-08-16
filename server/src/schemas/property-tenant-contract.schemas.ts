@@ -166,6 +166,12 @@ export const ApproveRegistrationSchema = z.object({
   confirmReplacement: z.boolean().optional(),
 }).strict();
 
+export const PetPolicySchema = z.object({
+  allowed: z.enum(['none', 'conditional']),
+  allowedTypes: z.array(z.string()).default([]),
+  rules: z.string().optional().nullable(),
+}).passthrough();
+
 export const UpdateDormitoryPropertyChangesSchema = z.object({
   defaultMonthlyRent: z.union([z.number(), z.string()]).optional(),
   defaultTermRent: z.union([z.number(), z.string()]).optional().nullable(),
@@ -176,6 +182,7 @@ export const UpdateDormitoryPropertyChangesSchema = z.object({
   defaultMaxOccupants: z.number().int().min(1).optional(),
   defaultRoomType: z.string().optional(),
   defaultTerms: z.string().optional().nullable(),
+  petPolicy: PetPolicySchema.optional(),
 }).strict();
 
 export const UpdateDormitoryBillingChangesSchema = z.object({

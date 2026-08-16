@@ -121,11 +121,14 @@ export class DormitoryProvisioningService {
       this.sensitiveFieldService =
         sensitiveFieldServiceOrRepo instanceof SensitiveFieldService
           ? sensitiveFieldServiceOrRepo
-          : new SensitiveFieldService(process.env.FIELD_ENCRYPTION_KEY || 'default_32_byte_secret_key_123456');
+          : new SensitiveFieldService();
     } else {
       const lastArg = rest[rest.length - 1];
       this.prisma = lastArg && typeof lastArg.$transaction === 'function' ? lastArg : (prismaOrRepo as PrismaClient);
-      this.sensitiveFieldService = new SensitiveFieldService(process.env.FIELD_ENCRYPTION_KEY || 'default_32_byte_secret_key_123456');
+      this.sensitiveFieldService =
+        sensitiveFieldServiceOrRepo instanceof SensitiveFieldService
+          ? sensitiveFieldServiceOrRepo
+          : new SensitiveFieldService();
 
       const candidateIdemp = rest[6];
       if (candidateIdemp && typeof candidateIdemp.find === 'function') {

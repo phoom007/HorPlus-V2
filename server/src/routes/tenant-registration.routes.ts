@@ -1,4 +1,5 @@
 import { Router, Request, Response } from 'express';
+import { z } from 'zod';
 import { AuthenticationService } from '../services/auth.service.js';
 import { TenantRegistrationService } from '../services/tenant-registration.service.js';
 import { createRequireSessionMiddleware } from '../middleware/require-session.js';
@@ -86,40 +87,59 @@ export function createTenantRegistrationRouter(
   });
 
   // POST /api/v1/tenant-registrations
+  const CreateTenantRegistrationSchema = z.object({
+    dormitoryId: z.string().uuid().optional(),
+    requestedRoomId: z.string().min(1, 'กรุณาระบุห้องพักที่ต้องการสมัคร'),
+    firstName: z.string().trim().min(1, 'กรุณาระบุชื่อจริง'),
+    lastName: z.string().trim().min(1, 'กรุณาระบุนามสกุล'),
+    phone: z.string().trim().min(1, 'กรุณาระบุเบอร์โทรศัพท์'),
+    note: z.string().optional().nullable(),
+    agreedTerms: z.literal(true, {
+      errorMap: () => ({ message: 'กรุณายอมรับกฎระเบียบและเงื่อนไขของหอพักก่อนส่งคำขอลงทะเบียน' }),
+    }),
+    signatureBase64: z.string().min(1, 'กรุณาเซ็นชื่อก่อนส่งคำขอลงทะเบียน'),
+    expectedPolicyVersion: z.number().int().min(1, 'กรุณาระบุเวอร์ชันของกฎระเบียบที่ถูกต้อง'),
+  }).strict();
+
   router.post('/', async (req: Request, res: Response) => {
     try {
       const dormId = getPublicDormitoryId(req);
-      const {
-        requestedRoomId,
-        firstName,
-        lastName,
-        phone,
-        note,
-        agreedTerms,
-        signatureBase64,
-        expectedPolicyVersion,
-      } = req.body || {};
-      if (!requestedRoomId || !firstName || !lastName || !phone) {
+      const parseResult = CreateTenantRegistrationSchema.safeParse(req.body);
+      if (!parseResult.success) {
+        const firstIssue = parseResult.error.issues[0];
+        const isTerms = firstIssue.path.includes('agreedTerms');
+        const isSig = firstIssue.path.includes('signatureBase64');
+        const isVersion = firstIssue.path.includes('expectedPolicyVersion');
+        const code = isTerms
+          ? 'TERMS_NOT_ACCEPTED'
+          : isSig
+          ? 'SIGNATURE_REQUIRED'
+          : isVersion
+          ? 'INVALID_POLICY_VERSION'
+          : 'VALIDATION_ERROR';
+
         return res.status(400).json({
           error: {
-            code: 'VALIDATION_ERROR',
-            message: 'กรุณากรอกข้อมูลที่จำเป็น (*) ให้ครบถ้วน',
-            fieldErrors: null,
+            code,
+            message: firstIssue.message || 'ข้อมูลที่ส่งมาไม่ถูกต้อง',
+            fieldErrors: parseResult.error.flatten().fieldErrors,
             requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
             timestamp: new Date().toISOString(),
           },
         });
       }
+
+      const validData = parseResult.data;
       const newReq = await registrationService.createRequest(dormId, {
         dormitoryId: dormId,
-        requestedRoomId,
-        firstName,
-        lastName,
-        phone,
-        note,
-        agreedTerms,
-        signatureBase64,
-        expectedPolicyVersion,
+        requestedRoomId: validData.requestedRoomId,
+        firstName: validData.firstName,
+        lastName: validData.lastName,
+        phone: validData.phone,
+        note: validData.note || undefined,
+        agreedTerms: validData.agreedTerms,
+        signatureBase64: validData.signatureBase64,
+        expectedPolicyVersion: validData.expectedPolicyVersion,
       });
       res.status(201).json({ data: newReq });
     } catch (err) {

@@ -28,6 +28,7 @@ export interface EffectiveEntitlements {
   roomCount: number;
   roomLimit: number;
   remainingRooms: number;
+  remainingDays?: number | null;
   expiresAt: Date;
   startedAt?: Date;
   trialStartedAt?: Date;
@@ -220,6 +221,7 @@ export class SubscriptionEntitlementService {
       roomCount,
       roomLimit,
       remainingRooms,
+      remainingDays: isFreePlan ? null : Math.max(0, Math.ceil((sub.expiresAt.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))),
       expiresAt: sub.expiresAt,
       startedAt: sub.startedAt,
       trialStartedAt: sub.trialStartedAt || undefined,

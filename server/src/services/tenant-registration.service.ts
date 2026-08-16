@@ -14,9 +14,9 @@ export interface CreateRegistrationDto {
   lastName: string;
   phone: string;
   note?: string;
-  agreedTerms?: boolean;
-  signatureBase64?: string;
-  expectedPolicyVersion?: number;
+  agreedTerms: true;
+  signatureBase64: string;
+  expectedPolicyVersion: number;
 }
 
 export function canonicalJsonStringify(obj: any): string {
@@ -73,69 +73,25 @@ export class TenantRegistrationService {
   public async createRequest(dormitoryId: string, payload: CreateRegistrationDto) {
     const prisma = getPrismaClient();
 
-    // 1. Mandatory acceptance validation
-    if (payload.agreedTerms === false) {
+    // 1. Mandatory server boundary validation
+    if (payload.agreedTerms !== true) {
       throw new AppError('กรุณายอมรับกฎระเบียบและเงื่อนไขของหอพักก่อนส่งคำขอลงทะเบียน', 400, 'TERMS_NOT_ACCEPTED');
     }
-
-    // 2. Fetch Dormitory & Policy Defaults
-    const dorm = await prisma.dormitory.findUnique({
-      where: { id: dormitoryId },
-      select: { id: true, name: true },
-    });
-    if (!dorm) {
-      throw new AppError('ไม่พบข้อมูลหอพัก', 404, 'DORMITORY_NOT_FOUND');
+    if (!payload.signatureBase64 || typeof payload.signatureBase64 !== 'string' || !payload.signatureBase64.trim()) {
+      throw new AppError('กรุณาเซ็นชื่อก่อนส่งคำขอลงทะเบียน', 400, 'SIGNATURE_REQUIRED');
+    }
+    if (typeof payload.expectedPolicyVersion !== 'number' || payload.expectedPolicyVersion < 1 || !Number.isInteger(payload.expectedPolicyVersion)) {
+      throw new AppError('กรุณาระบุเวอร์ชันของกฎระเบียบที่ถูกต้อง', 400, 'INVALID_POLICY_VERSION');
+    }
+    if (!payload.requestedRoomId || !payload.firstName?.trim() || !payload.lastName?.trim() || !payload.phone?.trim()) {
+      throw new AppError('กรุณากรอกข้อมูลที่จำเป็น (*) ให้ครบถ้วน', 400, 'VALIDATION_ERROR');
     }
 
-    const defaults = await prisma.dormitoryPropertyDefaults.findUnique({
-      where: { dormitoryId },
-    });
+    // 2. Validate and store tenant signature binary first
+    let savedObjectKey: string | null = null;
+    let sigMeta: { objectKey: string; sha256: string; mimeType: string; byteSize: number };
 
-    // Concurrency Protection: Policy Version Mismatch
-    if (
-      payload.expectedPolicyVersion !== undefined &&
-      defaults &&
-      defaults.version !== payload.expectedPolicyVersion
-    ) {
-      throw new AppError(
-        'กฎระเบียบหรือเงื่อนไขของหอพักมีการเปลี่ยนแปลง กรุณาตรวจสอบและยอมรับเงื่อนไขใหม่อีกครั้ง',
-        409,
-        'POLICY_VERSION_MISMATCH'
-      );
-    }
-
-    // 3. Resolve requested room
-    let requestedRoomId: string = payload.requestedRoomId;
-    let resolvedRoomNumber = '';
-    if (payload.requestedRoomId) {
-      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(payload.requestedRoomId);
-      const room = await prisma.room.findFirst({
-        where: {
-          dormitoryId,
-          deletedAt: null,
-          OR: isUuid
-            ? [{ id: payload.requestedRoomId }]
-            : [
-                { roomNumber: payload.requestedRoomId },
-                { normalizedRoomNumber: payload.requestedRoomId.toUpperCase() },
-              ],
-        },
-      });
-      if (!room) {
-        const err = new Error('ROOM_NOT_FOUND');
-        (err as any).statusCode = 404;
-        (err as any).code = 'ROOM_NOT_FOUND';
-        (err as any).message = 'ไม่พบห้องพักที่ระบุในหอพักนี้';
-        throw err;
-      }
-
-      requestedRoomId = room.id;
-      resolvedRoomNumber = room.roomNumber;
-    }
-
-    // 4. Save Tenant Signature Binary if provided
-    let sigMeta: { objectKey?: string; sha256?: string; mimeType?: string; byteSize?: number } = {};
-    if (payload.signatureBase64 && payload.signatureBase64.trim()) {
+    try {
       const base64Clean = payload.signatureBase64.replace(/^data:image\/\w+;base64,/, '');
       const buffer = Buffer.from(base64Clean, 'base64');
       const sigStorage = new SignatureStorageService(prisma);
@@ -143,50 +99,121 @@ export class TenantRegistrationService {
         dormitoryId,
         buffer,
       });
-      sigMeta = {
-        objectKey: savedSig.objectKey,
-        sha256: savedSig.sha256,
-        mimeType: savedSig.mimeType,
-        byteSize: savedSig.byteSize,
-      };
+      savedObjectKey = savedSig.objectKey;
+      sigMeta = savedSig;
+    } catch (sigErr: any) {
+      if (sigErr instanceof AppError) throw sigErr;
+      throw new AppError('ลายเซ็นไม่ถูกต้องหรือไม่สามารถประมวลผลได้', 400, 'INVALID_SIGNATURE_DATA');
     }
 
-    // 5. Build Canonical Acceptance Snapshot & Compute SHA-256
-    const acceptedAt = new Date();
-    const acceptanceSnapshot = {
-      snapshotVersion: 1,
-      dormitoryId,
-      dormitoryName: dorm.name,
-      requestedRoomId,
-      requestedRoomNumber: resolvedRoomNumber,
-      defaultTerms: defaults?.defaultTerms || '',
-      petPolicy: defaults?.petPolicy || { allowed: 'none', allowedTypes: [] },
-      policyVersion: defaults?.version || 1,
-      acceptedAt: acceptedAt.toISOString(),
-      applicantName: `${payload.firstName.trim()} ${payload.lastName.trim()}`,
-      applicantPhone: payload.phone.trim(),
-    };
-    const acceptanceSnapshotSha256 = computeSnapshotSha256(acceptanceSnapshot);
+    // 3. Authoritative DB Transaction with FOR UPDATE lock on policy defaults to prevent TOCTOU race
+    try {
+      return await prisma.$transaction(async (tx) => {
+        // Lock property defaults row
+        const defaultsRaw = await tx.$queryRaw<Array<{
+          id: string;
+          dormitory_id: string;
+          default_terms: string | null;
+          pet_policy: any;
+          version: number;
+        }>>`
+          SELECT id, dormitory_id, default_terms, pet_policy, version
+          FROM dormitory_property_defaults
+          WHERE dormitory_id = ${dormitoryId}::uuid
+          FOR UPDATE
+        `;
 
-    return prisma.tenantRegistrationRequest.create({
-      data: {
-        dormitoryId,
-        requestedRoomId,
-        firstName: payload.firstName.trim(),
-        lastName: payload.lastName.trim(),
-        phone: payload.phone.trim(),
-        note: payload.note ? payload.note.trim() : null,
-        status: 'pending_owner_approval',
-        submittedAt: acceptedAt,
-        acceptedAt,
-        acceptanceSnapshot,
-        acceptanceSnapshotSha256,
-        tenantSignatureObjectKey: sigMeta.objectKey || null,
-        tenantSignatureSha256: sigMeta.sha256 || null,
-        tenantSignatureMimeType: sigMeta.mimeType || null,
-        tenantSignatureByteSize: sigMeta.byteSize || null,
-      },
-    });
+        const defaults = defaultsRaw && defaultsRaw.length > 0 ? defaultsRaw[0] : null;
+        const currentVersion = defaults?.version ?? 1;
+
+        // Concurrency Check: Policy Version Mismatch
+        if (currentVersion !== payload.expectedPolicyVersion) {
+          throw new AppError(
+            'กฎระเบียบหรือเงื่อนไขของหอพักมีการเปลี่ยนแปลง กรุณาตรวจสอบและยอมรับเงื่อนไขใหม่อีกครั้ง',
+            409,
+            'POLICY_VERSION_MISMATCH'
+          );
+        }
+
+        // Fetch Dormitory Info
+        const dorm = await tx.dormitory.findUnique({
+          where: { id: dormitoryId },
+          select: { id: true, name: true },
+        });
+        if (!dorm) {
+          throw new AppError('ไม่พบข้อมูลหอพัก', 404, 'DORMITORY_NOT_FOUND');
+        }
+
+        // Resolve requested room
+        const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(payload.requestedRoomId);
+        const room = await tx.room.findFirst({
+          where: {
+            dormitoryId,
+            deletedAt: null,
+            OR: isUuid
+              ? [{ id: payload.requestedRoomId }]
+              : [
+                  { roomNumber: payload.requestedRoomId },
+                  { normalizedRoomNumber: payload.requestedRoomId.toUpperCase() },
+                ],
+          },
+        });
+        if (!room) {
+          throw new AppError('ไม่พบห้องพักที่ระบุในหอพักนี้', 404, 'ROOM_NOT_FOUND');
+        }
+
+        // Build Canonical Acceptance Snapshot & Compute SHA-256
+        const acceptedAt = new Date();
+        const defaultTerms = defaults?.default_terms ?? '';
+        const petPolicy = defaults?.pet_policy ?? { allowed: 'none', allowedTypes: [] };
+
+        const acceptanceSnapshot = {
+          snapshotVersion: 1,
+          dormitoryId,
+          dormitoryName: dorm.name,
+          requestedRoomId: room.id,
+          requestedRoomNumber: room.roomNumber,
+          defaultTerms,
+          petPolicy,
+          policyVersion: currentVersion,
+          acceptedAt: acceptedAt.toISOString(),
+          applicantName: `${payload.firstName.trim()} ${payload.lastName.trim()}`,
+          applicantPhone: payload.phone.trim(),
+        };
+        const acceptanceSnapshotSha256 = computeSnapshotSha256(acceptanceSnapshot);
+
+        return tx.tenantRegistrationRequest.create({
+          data: {
+            dormitoryId,
+            requestedRoomId: room.id,
+            firstName: payload.firstName.trim(),
+            lastName: payload.lastName.trim(),
+            phone: payload.phone.trim(),
+            note: payload.note ? payload.note.trim() : null,
+            status: 'pending_owner_approval',
+            submittedAt: acceptedAt,
+            acceptedAt,
+            acceptanceSnapshot,
+            acceptanceSnapshotSha256,
+            tenantSignatureObjectKey: sigMeta.objectKey,
+            tenantSignatureSha256: sigMeta.sha256,
+            tenantSignatureMimeType: sigMeta.mimeType,
+            tenantSignatureByteSize: sigMeta.byteSize,
+          },
+        });
+      });
+    } catch (txErr: any) {
+      // Clean up orphan signature binary if request creation or TOCTOU lock failed
+      if (savedObjectKey) {
+        try {
+          const sigStorage = new SignatureStorageService(prisma);
+          await sigStorage.deleteSignature(savedObjectKey);
+        } catch (cleanupErr) {
+          logger.warn('Failed to clean up orphan tenant signature:', { objectKey: savedObjectKey, error: cleanupErr });
+        }
+      }
+      throw txErr;
+    }
   }
 
   public async getReplacementWarningDetails(dormitoryId: string, registrationId: string) {

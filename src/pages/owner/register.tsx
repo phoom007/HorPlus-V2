@@ -601,7 +601,11 @@ const OwnerRegisterInner: React.FC<RegisterProps> = ({ onAddLog }) => {
           setFormData(prev => normalizeOnboardingDraftPayload(draft.payload, prev));
           if (draft.provisionalDormitoryId) {
             setProvisionalDormitoryId(draft.provisionalDormitoryId);
-            setSignatureSaved(Boolean(draft.signatureSaved || draft.payload?.signatureSaved));
+            const isSigSaved = Boolean(draft.signatureSaved || draft.payload?.signatureSaved);
+            setSignatureSaved(isSigSaved);
+            if (isSigSaved) {
+              setSavedSignatureDataUrl(`/api/v1/dormitories/${draft.provisionalDormitoryId}/signatures?t=${Date.now()}`);
+            }
             try {
               const lineRes = await onboardingClient.getLineConfig(draft.provisionalDormitoryId);
               const raw = lineRes.data || lineRes;
@@ -1933,10 +1937,14 @@ const OwnerRegisterInner: React.FC<RegisterProps> = ({ onAddLog }) => {
               {(signatureSaved || savedSignatureDataUrl) && !isEditingSignature ? (
                 <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-4">
                   <div className="p-3 bg-white rounded-xl border border-slate-200 shadow-inner flex items-center justify-center max-w-[280px]">
-                    {savedSignatureDataUrl ? (
-                      <img src={savedSignatureDataUrl} alt="Owner Signature" className="h-16 object-contain" />
+                    {savedSignatureDataUrl || (provisionalDormitoryId && signatureSaved) ? (
+                      <img
+                        src={savedSignatureDataUrl || `/api/v1/dormitories/${provisionalDormitoryId}/signatures?t=${Date.now()}`}
+                        alt="Owner Signature"
+                        className="h-16 object-contain"
+                      />
                     ) : (
-                      <span className="text-xs font-bold text-emerald-600">✓ ลายเซ็นถูกบันทึกในระบบเรียบร้อย</span>
+                      <span className="text-xs font-bold text-slate-400">ยังไม่มีลายเซ็นในระบบ</span>
                     )}
                   </div>
 
@@ -2145,7 +2153,7 @@ const OwnerRegisterInner: React.FC<RegisterProps> = ({ onAddLog }) => {
               >
                 <div className="flex items-center justify-between">
                   <span className="px-3 py-1 bg-emerald-100 text-emerald-800 rounded-full text-xs font-black">
-                    ฟรีตลอดชีพ
+                    FREE 1 เดือน — ต่ออายุสิทธิ์อัตโนมัติ
                   </span>
                   <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${
                     selectedPlanCode === 'FREE' ? 'border-indigo-600 bg-indigo-600' : 'border-slate-300'
@@ -2156,17 +2164,21 @@ const OwnerRegisterInner: React.FC<RegisterProps> = ({ onAddLog }) => {
 
                 <div>
                   <h3 className="text-lg font-black text-slate-900">HorPlus FREE</h3>
-                  <div className="text-2xl font-black text-indigo-600 mt-1">฿0 <span className="text-xs font-normal text-slate-500">/ ตลอดชีพ</span></div>
+                  <div className="text-2xl font-black text-indigo-600 mt-1">฿0 <span className="text-xs font-normal text-slate-500">/ เดือน (ต่ออายุสิทธิ์ FREE อัตโนมัติทุกเดือน)</span></div>
                 </div>
 
                 <div className="space-y-2 text-xs text-slate-600 pt-2 border-t border-slate-200/60">
                   <div className="flex items-center gap-2 font-semibold">
                     <Check className="w-4 h-4 text-emerald-600" />
-                    <span>เปิดใช้งานได้พร้อมกัน <strong>10 ห้องพักแรก</strong></span>
+                    <span>เปิดใช้งานได้พร้อมกัน <strong>10 ห้องพักแรก</strong> (ใช้งานต่อเนื่องไม่มีวันหมดอายุ)</span>
                   </div>
                   <div className="flex items-center gap-2 font-semibold">
                     <Check className="w-4 h-4 text-emerald-600" />
                     <span>สร้างตึกและห้องพักได้ไม่จำกัดเพื่อวางผัง</span>
+                  </div>
+                  <div className="flex items-center gap-2 font-semibold">
+                    <Check className="w-4 h-4 text-emerald-600" />
+                    <span>ระบบบันทึกบัญชี ออกบิล และใบเสร็จรับเงินอัตโนมัติ</span>
                   </div>
                   <div className="flex items-center gap-2 font-semibold">
                     <Check className="w-4 h-4 text-emerald-600" />

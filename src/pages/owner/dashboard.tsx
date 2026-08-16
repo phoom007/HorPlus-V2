@@ -112,8 +112,13 @@ export const OwnerDashboard: React.FC<OwnerDashboardProps> = ({
       })
         .then(res => res.ok ? res.json() : null)
         .then(json => {
-          if (json && json.data && typeof json.data.remainingDays === 'number') {
-            setRemainingDays(json.data.remainingDays);
+          if (json && json.data) {
+            setEntitlements(json.data);
+            if (typeof json.data.remainingDays === 'number') {
+              setRemainingDays(json.data.remainingDays);
+            } else {
+              setRemainingDays(null);
+            }
           } else {
             setRemainingDays(null);
           }
@@ -530,7 +535,7 @@ export const OwnerDashboard: React.FC<OwnerDashboardProps> = ({
             className={`text-[11px] sm:text-xs font-black px-3.5 py-1.5 rounded-full flex items-center gap-1.5 transition-all cursor-pointer shadow-2xs hover:scale-105 active:scale-95 ${remainingDays !== null ? getRemainingDaysBadgeStyle(remainingDays) : 'bg-white/20 text-white font-black border border-white/20'}`}
             title="คลิกเพื่อดูหรือเลือกแพ็กเกจการใช้งาน"
           >
-            <span>{remainingDaysLoading ? '--' : remainingDays !== null ? `${remainingDays} วัน` : '--'}</span>
+            <span>{remainingDaysLoading ? '--' : entitlements?.plan?.code === 'FREE' || remainingDays === null ? 'FREE (ถาวร)' : `${remainingDays} วัน`}</span>
           </button>
         </div>
 

@@ -8,6 +8,12 @@ export function valuesEquivalent(val1: any, val2: any): boolean {
   if (val1 === null || val1 === undefined || val2 === null || val2 === undefined) {
     return val1 === val2;
   }
+  if (typeof val1 === 'object' && typeof val2 === 'object') {
+    if (typeof val1.toNumber === 'function' && typeof val2.toNumber === 'function') {
+      return Math.abs(val1.toNumber() - val2.toNumber()) < 0.000001;
+    }
+    return JSON.stringify(val1) === JSON.stringify(val2);
+  }
   const str1 = typeof val1 === 'object' && val1 !== null && typeof val1.toString === 'function' ? val1.toString() : String(val1);
   const str2 = typeof val2 === 'object' && val2 !== null && typeof val2.toString === 'function' ? val2.toString() : String(val2);
   if (str1 === str2) return true;

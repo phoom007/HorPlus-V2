@@ -218,7 +218,7 @@ export const SubscriptionPage: React.FC<SubscriptionPageProps> = ({ dormitoryId 
             <div>
               <h3 className="text-2xl font-black text-slate-900">{plan?.name || 'Free / Trial'}</h3>
               <p className="text-xs text-slate-500 mt-1 font-medium">
-                {plan?.code === 'PAID' ? 'Standard Paid Subscription' : 'Trial Period (Max 10 rooms)'}
+                {plan?.code === 'PAID' ? 'Standard Paid Subscription' : 'แพ็กเกจฟรีถาวร (สูงสุด 10 ห้องพักแรก)'}
               </p>
             </div>
           </div>
@@ -238,10 +238,14 @@ export const SubscriptionPage: React.FC<SubscriptionPageProps> = ({ dormitoryId 
             </div>
             <div>
               <h3 className="text-2xl font-black text-slate-900">
-                {expiresAt ? new Date(expiresAt).toLocaleDateString('th-TH') : '-'}
+                {plan?.code === 'FREE'
+                  ? 'ต่ออายุอัตโนมัติ'
+                  : expiresAt
+                  ? new Date(expiresAt).toLocaleDateString('th-TH')
+                  : '-'}
               </h3>
               <p className="text-xs text-slate-500 mt-1 font-medium">
-                {isActive ? `${daysRemaining} days remaining` : 'Expired'}
+                {plan?.code === 'FREE' ? 'ใช้งานได้ต่อเนื่อง (ฟรีถาวร)' : isActive ? `${daysRemaining} days remaining` : 'Expired'}
               </p>
             </div>
           </div>

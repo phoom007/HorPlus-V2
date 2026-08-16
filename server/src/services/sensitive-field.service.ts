@@ -4,13 +4,18 @@ export class SensitiveFieldService {
   private key: Buffer;
   private keyVersion: number;
 
-  constructor(encryptionKeyHexOrString: string, keyVersion: number = 1) {
+  constructor(encryptionKeyHexOrString?: string, keyVersion: number = 1) {
+    const rawKey = encryptionKeyHexOrString !== undefined ? encryptionKeyHexOrString : process.env.FIELD_ENCRYPTION_KEY;
+    const keyStr = (rawKey || '').trim();
+    if (!keyStr) {
+      throw new Error('CRITICAL_SECURITY_ERROR: FIELD_ENCRYPTION_KEY is required and cannot be empty.');
+    }
     this.keyVersion = keyVersion;
     // Derive a 32-byte key from string using sha256 or slice
-    if (Buffer.from(encryptionKeyHexOrString, 'hex').length === 32) {
-      this.key = Buffer.from(encryptionKeyHexOrString, 'hex');
+    if (Buffer.from(keyStr, 'hex').length === 32) {
+      this.key = Buffer.from(keyStr, 'hex');
     } else {
-      this.key = crypto.createHash('sha256').update(encryptionKeyHexOrString).digest();
+      this.key = crypto.createHash('sha256').update(keyStr).digest();
     }
   }
 
