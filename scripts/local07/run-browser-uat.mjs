@@ -22,6 +22,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { REGISTRATION_OWNER, FRESH_DORM, COMP_DORM } from './constants.mjs';
+import { assertSafeDatabaseTarget } from './db-safety-guard.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -31,10 +32,12 @@ const SCREENSHOTS_DIR = path.join(ROOT_DIR, 'docs/uat/screenshots');
 
 fs.mkdirSync(SCREENSHOTS_DIR, { recursive: true });
 
+assertSafeDatabaseTarget();
+
 const prisma = new PrismaClient({
   datasources: {
     db: {
-      url: process.env.DIRECT_URL || process.env.DATABASE_URL || 'postgresql://postgres:postgres@127.0.0.1:5455/horplus_wave1d_fasttrack_test?schema=public',
+      url: process.env.DIRECT_URL || process.env.DATABASE_URL,
     },
   },
 });
@@ -193,15 +196,25 @@ async function runBrowserUAT() {
     if (err2) console.log(`  [Validation Error on Step 2] ${err2.trim()}`);
     await page.screenshot({ path: path.join(SCREENSHOTS_DIR, '03-step3-utilities.png') });
 
-    // Verify Step 3 default utility inputs: Water = 0, Elec = 0, Common = 0, Internet = 0, Parking = 0, Monthly = 0
-    const step3Rates = await page.evaluate(() => {
+    // Verify Step 3 default utility inputs and modes: Water = 0 / person, Elec = 0 / unit, Common = 0 / room, Internet = 0 / person, Parking = 0 / room
+    const step3Details = await page.evaluate(() => {
       const inputs = Array.from(document.querySelectorAll('input[type="number"]')).map(i => i.value);
-      return inputs;
+      const selects = Array.from(document.querySelectorAll('select')).map(s => s.value);
+      return { inputs, selects };
     });
-    console.log(`  Step 3 numeric input values: ${step3Rates.join(', ')}`);
-    const monetaryZeroClean = step3Rates.slice(0, 8).every(v => v === '0' || v === '');
+    console.log(`  Step 3 numeric input values: ${step3Details.inputs.join(', ')}`);
+    console.log(`  Step 3 selected modes: ${step3Details.selects.join(', ')}`);
+
+    const monetaryZeroClean = step3Details.inputs.slice(0, 8).every(v => v === '0' || v === '');
+    const modesMatch = 
+      step3Details.selects.includes('person') && // water
+      step3Details.selects.includes('unit') &&   // electricity
+      step3Details.selects.includes('room');     // common / parking
+
     console.log(`  All Step 3 monetary defaults are clean 0: ${monetaryZeroClean ? '✅ YES' : '❌ NO'}`);
-    if (monetaryZeroClean) {
+    console.log(`  All Step 3 billing modes match defaults (water: person, elec: unit, common: room, internet: person, parking: room): ${modesMatch ? '✅ YES' : '❌ NO'}`);
+
+    if (monetaryZeroClean && modesMatch) {
       uatResults.step3_clean_monetary_defaults = true;
     }
 
@@ -213,8 +226,8 @@ async function runBrowserUAT() {
       console.log('  Filled monthly rent: 3500');
     }
 
-    // Advance to Step 4: ช่องทางรับชำระเงิน
-    console.log('\n--- TEST 3: Step 4 — Bank Account & Single PromptPay Name Autofill Helper ---');
+    // Advance to Step 4: ช่องทางรับชำระเงิน และเงินประกัน
+    console.log('\n--- TEST 3: Step 4 — Bank Account, Building Deposit (5000) & Single PromptPay Helper ---');
     const nextBtn3 = page.locator('button:has-text("ถัดไป")').first();
     await nextBtn3.click();
     await page.waitForTimeout(600);
@@ -222,6 +235,14 @@ async function runBrowserUAT() {
     const err3 = await page.locator('.text-rose-700, .bg-rose-50').textContent({ timeout: 200 }).catch(() => null);
     if (err3) console.log(`  [Validation Error on Step 3] ${err3.trim()}`);
     await page.screenshot({ path: path.join(SCREENSHOTS_DIR, '04-step4-payments-initial.png') });
+
+    // Fill Building Security Deposit = 5000 in Step 4
+    const depositInput = page.locator('label:has-text("ค่าประกัน")').locator('xpath=../..').locator('input[type="number"]').first();
+    if (await depositInput.isVisible()) {
+      await depositInput.fill('5000');
+      await page.waitForTimeout(100);
+      console.log('  Filled Building Security Deposit: 5000');
+    }
 
     // Select bank in Step 4
     const bankSelect = page.locator('select').filter({ hasText: 'เลือกธนาคาร' }).first();
@@ -527,6 +548,7 @@ async function runBrowserUAT() {
     
     const building1 = activeDorm?.buildings[0];
     console.log(`  Building maxTermRentInstallments: ${building1?.maxTermRentInstallments} (Expected: 2)`);
+    console.log(`  Building depositAmount: ${building1?.depositAmount} (Expected: 5000)`);
     
     const billing = activeDorm?.billingSettings;
     console.log(`  PromptPay Account Name: "${billing?.promptPayAccountName}"`);
@@ -553,10 +575,13 @@ async function runBrowserUAT() {
     console.log(`  Package Intent Status: ${packageIntents[0]?.status} (Expected: SUCCEEDED)`);
     console.log(`  Package Intent isZeroPayValidated: ${packageIntents[0]?.isZeroPayValidated} (Expected: true)`);
 
+    const isDeposit5000 = Number(building1?.depositAmount) === 5000;
+
     const isPgValid = activeDorm &&
       activeDorm.phone === null &&
       activeDorm.email === null &&
       building1?.maxTermRentInstallments === 2 &&
+      isDeposit5000 &&
       billing?.promptPayAccountName === 'นายพร้อมเพย์ อิสระ UAT' &&
       signature?.isCurrent === true &&
       defaults?.defaultTerms !== null &&

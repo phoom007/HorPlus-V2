@@ -19,12 +19,22 @@ import { execSync } from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs';
 
-const ADMIN_URL = process.env.DIRECT_URL || 'postgresql://horplus:horplus_dev_password@127.0.0.1:5455/horplus_wave1d_fasttrack_test?schema=public';
-const RUNTIME_URL = process.env.DATABASE_URL || 'postgresql://horplus_app:horplus_dev_password@127.0.0.1:5455/horplus_wave1d_fasttrack_test?schema=public';
+function getGuardedAdminUrl(): string {
+  const rawUrl = process.env.DIRECT_URL || process.env.DATABASE_URL;
+  if (!rawUrl) throw new Error('FAIL CLOSED: DIRECT_URL or DATABASE_URL is required');
+  const parsed = new URL(rawUrl);
+  if (parsed.hostname !== '127.0.0.1' || parsed.port !== '5455' || parsed.pathname.replace(/^\/+/, '') !== 'horplus_wave1d_fasttrack_test') {
+    throw new Error('FAIL CLOSED: Target must be 127.0.0.1:5455/horplus_wave1d_fasttrack_test');
+  }
+  return rawUrl;
+}
+
+const ADMIN_URL = getGuardedAdminUrl();
+const RUNTIME_URL = process.env.DATABASE_URL || ADMIN_URL;
 const PGHOST = '127.0.0.1';
 const PGPORT = '5455';
 const PGUSER = 'horplus';
-const PGPASSWORD = process.env.PGPASSWORD || 'horplus_dev_password';
+const PGPASSWORD = process.env.PGPASSWORD || process.env.HORPLUS_APP_DB_PASSWORD || '';
 const SERVER_DIR = path.resolve(__dirname, '../../../');
 
 // Disposable database names

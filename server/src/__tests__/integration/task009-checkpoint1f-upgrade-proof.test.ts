@@ -8,23 +8,48 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { PrismaClient } from '@prisma/client';
 
-const directUrl = process.env.DIRECT_URL || 'postgresql://horplus:horplus_dev_password@127.0.0.1:5455/horplus_wave1d_fasttrack_test?schema=public';
+function getGuardedDirectUrl(): string {
+  const rawUrl = process.env.DIRECT_URL || process.env.DATABASE_URL;
+  if (!rawUrl || typeof rawUrl !== 'string' || !rawUrl.trim()) {
+    throw new Error('FAIL CLOSED: DIRECT_URL or DATABASE_URL environment variable is required');
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch (err: any) {
+    throw new Error(`FAIL CLOSED: Invalid database URL format: ${err.message}`);
+  }
+  if (parsed.protocol !== 'postgresql:' && parsed.protocol !== 'postgres:') {
+    throw new Error(`FAIL CLOSED: Invalid protocol '${parsed.protocol}', expected 'postgresql:'`);
+  }
+  if (parsed.hostname !== '127.0.0.1') {
+    throw new Error(`FAIL CLOSED: Target host must be strictly 127.0.0.1 (got '${parsed.hostname}')`);
+  }
+  if (parsed.port !== '5455') {
+    throw new Error(`FAIL CLOSED: Target port must be strictly 5455 (got '${parsed.port || 'default'}')`);
+  }
+  const dbName = parsed.pathname.replace(/^\/+/, '');
+  if (dbName !== 'horplus_wave1d_fasttrack_test') {
+    throw new Error(`FAIL CLOSED: Target database must be 'horplus_wave1d_fasttrack_test' (got '${dbName}')`);
+  }
+  return rawUrl;
+}
+
+const directUrl = getGuardedDirectUrl();
 const adminPrisma = new PrismaClient({ datasources: { db: { url: directUrl } } });
 
 describe('TASK-009 Checkpoint 1F — Forward Migration Upgrade & Data Preservation Suite', () => {
   beforeAll(async () => {
+    const appPassword = process.env.HORPLUS_APP_DB_PASSWORD || process.env.DB_PASSWORD || 'horplus_dev_password';
     // Ensure horplus_app role exists in test database
     await adminPrisma.$executeRawUnsafe(`
       DO $$
       BEGIN
         IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'horplus_app') THEN
-          CREATE ROLE horplus_app WITH LOGIN PASSWORD 'password' NOSUPERUSER NOBYPASSRLS;
+          CREATE ROLE horplus_app WITH LOGIN PASSWORD '${appPassword.replace(/'/g, "''")}' NOSUPERUSER NOBYPASSRLS;
         END IF;
       END $$;
     `);
-
-    // Clean up any rolled back migration records
-    await adminPrisma.$executeRawUnsafe(`DELETE FROM public._prisma_migrations WHERE rolled_back_at IS NOT NULL`);
   });
 
   afterAll(async () => {
@@ -70,10 +95,12 @@ describe('TASK-009 Checkpoint 1F — Forward Migration Upgrade & Data Preservati
   });
 
   it('3. Verifies Schema Migration Status and Zero Pending Migrations in _prisma_migrations', async () => {
-    const pending = await adminPrisma.$queryRaw<any[]>`
-      SELECT migration_name FROM public._prisma_migrations WHERE finished_at IS NULL AND rolled_back_at IS NULL
+    const pendingOrFailed = await adminPrisma.$queryRaw<any[]>`
+      SELECT migration_name, finished_at, rolled_back_at
+      FROM public._prisma_migrations
+      WHERE finished_at IS NULL OR rolled_back_at IS NOT NULL
     `;
-    expect(pending.length).toBe(0);
+    expect(pendingOrFailed.length).toBe(0);
 
     const totalApplied = await adminPrisma.$queryRaw<any[]>`
       SELECT COUNT(*)::int AS count FROM public._prisma_migrations WHERE finished_at IS NOT NULL
