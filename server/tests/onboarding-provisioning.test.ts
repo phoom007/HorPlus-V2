@@ -4,6 +4,7 @@ import { createApp } from '../src/app.js';
 import { SignatureStorageService } from '../src/services/signature-storage.service.js';
 import { PNG } from 'pngjs';
 import { getPrismaClient } from '../src/db/prisma.js';
+import { subscriptionIntentService } from '../src/services/subscription-intent.service.js';
 
 describe('Onboarding & Provisioning API (TASK 011)', () => {
   let app: any;
@@ -136,8 +137,11 @@ describe('Onboarding & Provisioning API (TASK 011)', () => {
       });
     });
 
+    const quote = await subscriptionIntentService.createIntentQuote(userId, { promoCode: 'HORPLUS' }, undefined, provDormId);
+
     const payload = {
       provisionalDormitoryId: provDormId,
+      packageIntentId: quote.intentId,
       dormitory: {
         name: 'Grand Sunrise Dormitory',
         type: 'apartment',
@@ -219,6 +223,8 @@ describe('Onboarding & Provisioning API (TASK 011)', () => {
       });
     }
 
+    const quote2 = await subscriptionIntentService.createIntentQuote(userId, { isFreePlan: true }, undefined, provDormId2);
+
     const secondFreeRes = await request(app)
       .post('/api/v1/onboarding/complete')
       .set('Cookie', cookies)
@@ -226,6 +232,7 @@ describe('Onboarding & Provisioning API (TASK 011)', () => {
       .set('X-Idempotency-Key', 'idemp-test-002')
       .send({
         provisionalDormitoryId: provDormId2,
+        packageIntentId: quote2.intentId,
         dormitory: { ...payload.dormitory, name: 'Second FREE Dormitory' },
         billing: payload.billing,
         payment: payload.payment,

@@ -32,13 +32,24 @@ export class CoinWalletService {
     });
 
     if (!wallet) {
-      wallet = await db.coinWallet.create({
-        data: {
-          userId,
-          balance: 0,
-          version: 1,
-        },
-      });
+      if (txClient) {
+        const lockKey = Math.abs(
+          userId.split('').reduce((acc, c) => ((acc << 5) - acc + c.charCodeAt(0)) | 0, 0)
+        );
+        await txClient.$executeRaw`SELECT pg_advisory_xact_lock(${lockKey})`;
+        wallet = await db.coinWallet.findUnique({ where: { userId } });
+      }
+      if (!wallet) {
+        wallet = await db.coinWallet.upsert({
+          where: { userId },
+          create: {
+            userId,
+            balance: 0,
+            version: 1,
+          },
+          update: {},
+        });
+      }
     }
 
     return wallet;

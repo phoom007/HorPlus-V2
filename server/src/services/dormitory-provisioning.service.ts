@@ -16,6 +16,7 @@ import { getPublicWebhookOrigin } from './line-oa.service.js';
 import { promoService } from './promo.service.js';
 import { referralService } from './referral.service.js';
 import { coinWalletService } from './coin-wallet.service.js';
+import { subscriptionIntentService } from './subscription-intent.service.js';
 
 export interface CompleteOwnerOnboardingParams {
   userId: string;
@@ -476,7 +477,48 @@ export class DormitoryProvisioningService {
         }
       }
 
-      // 4. Resolve Subscription Plan & Package (Authoritative Package Logic)
+      // 4. Validate Authoritative SubscriptionPackageIntent (Required Step 7 Quote Authority)
+      if (!params.packageIntentId) {
+        throw new AppError('กรุณาระบุรหัสรายการคำสั่งซื้อแพ็กเกจ (packageIntentId is required)', 400, 'MISSING_PACKAGE_INTENT');
+      }
+
+      await tx.$executeRaw`SELECT set_config('app.current_user_id', ${userId}, true)`;
+      await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormId}, true)`;
+      const authoritativeIntent = await tx.subscriptionPackageIntent.findUnique({
+        where: { id: params.packageIntentId },
+        include: { package: { include: { plan: true } } },
+      });
+
+      if (!authoritativeIntent) {
+        throw new AppError('ไม่พบข้อมูลรายการคำสั่งซื้อแพ็กเกจ', 404, 'INTENT_NOT_FOUND');
+      }
+
+      if (authoritativeIntent.userId !== userId) {
+        throw new AppError('ไม่มีสิทธิ์เข้าถึงรายการคำสั่งซื้อแพ็กเกจนี้', 403, 'FORBIDDEN_INTENT_ACCESS');
+      }
+
+      // CRITICAL: NEVER rewrite or retarget an intent to another dormitory
+      if (authoritativeIntent.dormitoryId !== dormId) {
+        throw new AppError('รายการคำสั่งซื้อไม่ตรงกับหอพักที่กำลังดำเนินการ (Intent dormitory mismatch)', 403, 'INTENT_DORMITORY_MISMATCH');
+      }
+
+      if (authoritativeIntent.checkoutVersion < 2) {
+        throw new AppError('รายการคำสั่งซื้อนี้เป็นเวอร์ชันเดิม ไม่สามารถเปิดใช้งานได้', 400, 'INVALID_CHECKOUT_VERSION');
+      }
+
+      if (authoritativeIntent.status !== 'PENDING_PAYMENT' && authoritativeIntent.status !== 'SUCCEEDED') {
+        throw new AppError('สถานะรายการคำสั่งซื้อไม่ถูกต้อง', 400, 'INVALID_INTENT_STATUS');
+      }
+
+      if (authoritativeIntent.status === 'PENDING_PAYMENT' && authoritativeIntent.expiresAt && authoritativeIntent.expiresAt < now) {
+        throw new AppError('รายการคำสั่งซื้อแพ็กเกจหมดอายุแล้ว กรุณาเลือกแพ็กเกจใหม่อีกครั้ง', 400, 'INTENT_EXPIRED');
+      }
+
+      if (params.packageId && authoritativeIntent.packageId && params.packageId !== authoritativeIntent.packageId) {
+        throw new AppError('แพ็กเกจที่เลือกไม่ตรงกับรายการคำสั่งซื้อที่อนุมัติ', 400, 'PACKAGE_MISMATCH');
+      }
+
+      // 5. Resolve Subscription Plan & Package (Authoritative Package Logic)
       let resolvedPlanCode = planCode || 'FREE';
       let selectedPackage: any = null;
 
@@ -554,7 +596,7 @@ export class DormitoryProvisioningService {
         const commonFeeStr = (billing.commonFee !== undefined && billing.commonFee !== null && billing.commonFee !== '') ? String(billing.commonFee) : '0.00';
         const internetFeeStr = (billing.internetFee !== undefined && billing.internetFee !== null && billing.internetFee !== '') ? String(billing.internetFee) : '0.00';
         const parkingRateStr = (billing.parkingRate !== undefined && billing.parkingRate !== null && billing.parkingRate !== '') ? String(billing.parkingRate) : '0.00';
-        const lateFeeValueStr = (billing.lateFeeValue !== undefined && billing.lateFeeValue !== null && billing.lateFeeValue !== '') ? String(billing.lateFeeValue) : '50.00';
+        const lateFeeValueStr = (billing.lateFeeValue !== undefined && billing.lateFeeValue !== null && billing.lateFeeValue !== '') ? String(billing.lateFeeValue) : '0.00';
 
         const gracePeriodDaysNum = (billing.gracePeriodDays !== undefined && billing.gracePeriodDays !== null) ? Number(billing.gracePeriodDays) : 0;
         const advanceRentMonthsNum = (billing.advanceRentMonths !== undefined && billing.advanceRentMonths !== null) ? Number(billing.advanceRentMonths) : 1;
@@ -577,7 +619,7 @@ export class DormitoryProvisioningService {
             parkingFeeMode: billing.parkingFeeMode || 'none',
             gracePeriodDays: gracePeriodDaysNum,
             advanceRentMonths: advanceRentMonthsNum,
-            lateFeeType: billing.lateFeeType || 'fixed',
+            lateFeeType: billing.lateFeeType || 'none',
             lateFeeValue: lateFeeValueStr,
             rentBillingType: billing.rentBillingType || 'monthly',
           },
@@ -596,7 +638,7 @@ export class DormitoryProvisioningService {
             parkingFeeMode: billing.parkingFeeMode || 'none',
             gracePeriodDays: gracePeriodDaysNum,
             advanceRentMonths: advanceRentMonthsNum,
-            lateFeeType: billing.lateFeeType || 'fixed',
+            lateFeeType: billing.lateFeeType || 'none',
             lateFeeValue: lateFeeValueStr,
             rentBillingType: billing.rentBillingType || 'monthly',
             updatedAt: now,
@@ -753,252 +795,138 @@ export class DormitoryProvisioningService {
         }
       }
 
-      // 5. Account-Level Initial Trial Claim & Data-Driven Promo Grant with Transaction Advisory Lock (TRIAL-01, PROMO-01)
-      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('user_benefit:' || ${userId} || ':INITIAL_TRIAL_V1'))`;
-
-      const existingTrialClaim = await tx.accountBenefitClaim.findUnique({
-        where: { user_benefit_unique: { userId, benefitKey: 'INITIAL_TRIAL_V1' } },
-      });
-
-      const isTrialEligible = !existingTrialClaim;
-      const initialTrialExpiresAt = isTrialEligible ? addCalendarMonths(now, 1) : now;
-
-      // Mandatory Guard 1: Real HorPlus PRO entitlement during trial, otherwise FREE
-      const proPlan = await tx.subscriptionPlan.findUnique({ where: { code: 'PAID' } });
-      const freePlan = await tx.subscriptionPlan.findUnique({ where: { code: 'FREE' } });
-
-      const isZeroPayBenefit = isTrialEligible;
-      const effectivePlan = isZeroPayBenefit ? (proPlan || plan) : (freePlan || plan);
-      const subStatus = isZeroPayBenefit ? 'TRIAL' : 'ACTIVE';
-      const subExpiresAt = isZeroPayBenefit ? initialTrialExpiresAt : addCalendarMonths(now, 1200);
-
-      const sub = await tx.dormitorySubscription.upsert({
-        where: { dormitoryId: dormId },
-        create: {
+      // Expire superseded pending quote intents for this user/dormitory
+      await tx.subscriptionPackageIntent.updateMany({
+        where: {
           dormitoryId: dormId,
-          planId: effectivePlan.id,
-          status: subStatus,
-          startedAt: now,
-          expiresAt: subExpiresAt,
-          trialStartedAt: isZeroPayBenefit ? now : null,
-          trialExpiresAt: isTrialEligible ? initialTrialExpiresAt : null,
-          promoExtendedAt: null,
+          userId,
+          status: 'PENDING_PAYMENT',
+          id: { not: authoritativeIntent.id },
         },
-        update: {
-          planId: effectivePlan.id,
-          status: subStatus,
-          startedAt: now,
-          expiresAt: subExpiresAt,
-          trialStartedAt: isZeroPayBenefit ? now : null,
-          trialExpiresAt: isTrialEligible ? initialTrialExpiresAt : null,
-          updatedAt: now,
+        data: {
+          status: 'EXPIRED',
         },
       });
-
-      if (isTrialEligible) {
-        await tx.subscriptionStatusHistory.create({
-          data: {
-            subscriptionId: sub.id,
-            dormitoryId: dormId,
-            previousPlanId: null,
-            newPlanId: effectivePlan.id,
-            previousStatus: null,
-            newStatus: 'TRIAL',
-            reason: 'INITIAL_PRO_TRIAL_ONBOARDING',
-            actorId: userId,
-          },
-        });
-
-        await tx.accountBenefitClaim.create({
-          data: {
-            userId,
-            benefitKey: 'INITIAL_TRIAL_V1',
-            dormitoryId: dormId,
-            subscriptionId: sub.id,
-            grantedMonths: 1,
-            previousExpiresAt: null,
-            newExpiresAt: initialTrialExpiresAt,
-          },
-        });
-      }
-
-      // Canonical Promo Code atomic redemption via ONE PromoService authority (PROMO-01)
-      let promoApplied = false;
-      let promoBonusMonths = 0;
-      let finalExpiresAt = isZeroPayBenefit ? initialTrialExpiresAt : now;
-
-      if (promoCode && promoCode.trim()) {
-        const promoRedeemRes = await promoService.redeemPromoAtomic(userId, dormId, promoCode, tx, undefined, now);
-        promoApplied = true;
-        promoBonusMonths = promoRedeemRes.bonusMonths || 2;
-        finalExpiresAt = promoRedeemRes.newExpiresAt || addCalendarMonths(isTrialEligible ? initialTrialExpiresAt : now, promoBonusMonths);
-      }
 
       // Settle Referral on first dormitory creation
       await referralService.settleReferralOnboarding(userId, dormId, 0, tx);
 
-      // 6. Settle or Link Authoritative SubscriptionPackageIntent (Zero duplicate creation)
-      let authoritativeIntent: any = null;
+      // 6. Execute Canonical Financial State Transition
+      let resultPayload: any;
 
-      if (params.packageIntentId) {
-        authoritativeIntent = await tx.subscriptionPackageIntent.findUnique({
-          where: { id: params.packageIntentId },
-          include: { package: { include: { plan: true } } },
-        });
-
-        if (!authoritativeIntent) {
-          throw new AppError('ไม่พบข้อมูลรายการคำสั่งซื้อแพ็กเกจ', 404, 'INTENT_NOT_FOUND');
+      if (authoritativeIntent.finalPayableAmount && authoritativeIntent.finalPayableAmount.equals(new Prisma.Decimal(0))) {
+        if (authoritativeIntent.isZeroPayValidated !== true) {
+          throw new AppError('รายการสั่งซื้อนี้ไม่ผ่านการตรวจสอบความถูกต้องของยอดชำระ 0 บาท', 400, 'ZERO_PAY_UNVALIDATED');
         }
 
-        if (authoritativeIntent.userId !== userId) {
-          throw new AppError('ไม่มีสิทธิ์เข้าถึงรายการคำสั่งซื้อแพ็กเกจนี้', 403, 'FORBIDDEN_INTENT_ACCESS');
-        }
+        // Delegate strictly to canonical single commit implementation
+        const commitRes = await subscriptionIntentService.commitZeroPayIntent(userId, authoritativeIntent.id, idempotencyKey, tx);
 
-        if (authoritativeIntent.expiresAt && authoritativeIntent.expiresAt < now) {
-          throw new AppError('รายการคำสั่งซื้อแพ็กเกจหมดอายุแล้ว กรุณาเลือกแพ็กเกจใหม่อีกครั้ง', 400, 'INTENT_EXPIRED');
-        }
-
-        if (authoritativeIntent.dormitoryId !== dormId) {
-          await tx.subscriptionPackageIntent.update({
-            where: { id: authoritativeIntent.id },
-            data: { dormitoryId: dormId },
-          });
-          authoritativeIntent.dormitoryId = dormId;
-        }
-      } else {
-        // Fallback: look for existing pending quote intent for this user/dormitory
-        authoritativeIntent = await tx.subscriptionPackageIntent.findFirst({
-          where: {
-            userId,
-            dormitoryId: dormId,
-            status: 'PENDING_PAYMENT',
-            expiresAt: { gt: now },
-          },
-          orderBy: { createdAt: 'desc' },
-          include: { package: { include: { plan: true } } },
-        });
-
-        if (!authoritativeIntent && selectedPackage) {
-          authoritativeIntent = await tx.subscriptionPackageIntent.create({
-            data: {
-              dormitoryId: dormId,
-              userId,
-              packageId: selectedPackage.id,
-              status: 'PENDING_PAYMENT',
-              durationMonthsSnapshot: selectedPackage.durationMonths,
-              priceSnapshot: selectedPackage.price,
-              referencePriceSnapshot: selectedPackage.referencePrice,
-              finalPayableAmount: selectedPackage.price,
-              checkoutVersion: 2,
-              isZeroPayValidated: false,
-              currencySnapshot: selectedPackage.currency,
-              catalogVersion: selectedPackage.catalogVersion || 2,
-              expiresAt: addCalendarMonths(now, 1),
-            },
-            include: { package: { include: { plan: true } } },
-          });
-        }
-      }
-
-      if (authoritativeIntent) {
-        // Expire superseded pending quote intents for this user/dormitory
-        await tx.subscriptionPackageIntent.updateMany({
-          where: {
-            dormitoryId: dormId,
-            userId,
-            status: 'PENDING_PAYMENT',
-            id: { not: authoritativeIntent.id },
-          },
+        await tx.onboardingDraft.updateMany({
+          where: { userId },
           data: {
-            status: 'EXPIRED',
+            finalizedAt: now,
+            currentStep: 'COMPLETED',
+            updatedAt: now,
           },
         });
 
-        // Handle Zero-Pay Intent Commit (trial, Free plan, or 100% coin discount)
-        const isZeroPayPayable = authoritativeIntent.finalPayableAmount.equals(new Prisma.Decimal(0));
+        resultPayload = {
+          success: true,
+          dormitoryId: dormId,
+          dormitoryName: activeDorm.name,
+          dormitory: {
+            id: dormId,
+            name: activeDorm.name,
+          },
+          membership: {
+            roleCode: 'OWNER',
+          },
+          subscription: {
+            id: commitRes.subscriptionId,
+            planCode: commitRes.planCode,
+            status: commitRes.isTrial ? 'TRIAL' : 'ACTIVE',
+            trialExpiresAt: commitRes.isTrial && commitRes.expiresAt ? commitRes.expiresAt.toISOString() : null,
+            expiresAt: commitRes.expiresAt ? commitRes.expiresAt.toISOString() : null,
+          },
+          promo: {
+            applied: commitRes.promoBonusMonths > 0,
+            promoBonusMonths: commitRes.promoBonusMonths,
+            trialMonths: commitRes.isTrial ? 1 : 0,
+            totalTrialMonths: (commitRes.isTrial ? 1 : 0) + commitRes.promoBonusMonths,
+          },
+          planCode: commitRes.planCode,
+          subscriptionStatus: commitRes.isTrial ? 'TRIAL' : 'ACTIVE',
+          trialExpiresAt: commitRes.isTrial && commitRes.expiresAt ? commitRes.expiresAt.toISOString() : null,
+          promoApplied: commitRes.promoBonusMonths > 0,
+          totalTrialMonths: (commitRes.isTrial ? 1 : 0) + commitRes.promoBonusMonths,
+          packageIntentId: authoritativeIntent.id,
+        };
+      } else {
+        // Paid package pending payment (> 0 THB) -> Setup default free plan baseline; no early PRO entitlement
+        const freePlan = (await tx.subscriptionPlan.findUnique({ where: { code: 'FREE' } })) || plan;
+        const targetFreePlanId = freePlan?.id || plan.id;
+        const sub = await tx.dormitorySubscription.upsert({
+          where: { dormitoryId: dormId },
+          create: {
+            dormitoryId: dormId,
+            planId: targetFreePlanId,
+            status: 'ACTIVE',
+            startedAt: now,
+            expiresAt: addCalendarMonths(now, 1200),
+          },
+          update: {
+            planId: targetFreePlanId,
+            status: 'ACTIVE',
+            startedAt: now,
+            expiresAt: addCalendarMonths(now, 1200),
+            updatedAt: now,
+          },
+        });
 
-        if (isZeroPayPayable || authoritativeIntent.isZeroPayValidated) {
-          // Debit coin wallet if Coin was applied
-          if (authoritativeIntent.coinApplied > 0) {
-            await coinWalletService.debitWallet(
-              userId,
-              authoritativeIntent.coinApplied,
-              'SUBSCRIPTION_DEBIT',
-              'SUBSCRIPTION_PACKAGE_INTENT',
-              authoritativeIntent.id,
-              `ชำระค่าแพ็กเกจ ${authoritativeIntent.package?.plan?.name || 'HorPlus'} (${authoritativeIntent.durationMonthsSnapshot} เดือน)`,
-              idempotencyKey ? `zero-pay-finalize-${authoritativeIntent.id}-${idempotencyKey}` : `zero-pay-finalize-${authoritativeIntent.id}`,
-              tx
-            );
-          }
+        await tx.onboardingDraft.updateMany({
+          where: { userId },
+          data: {
+            finalizedAt: now,
+            currentStep: 'COMPLETED',
+            updatedAt: now,
+          },
+        });
 
-          await tx.subscriptionPackageIntent.update({
-            where: { id: authoritativeIntent.id },
-            data: {
-              status: 'SUCCEEDED',
-              activatedAt: now,
-              isZeroPayValidated: true,
-            },
-          });
-
-          // If paid package duration > 1 (e.g. 3, 6, 12, 24 mo) paid 100% with coin or promo:
-          if (!authoritativeIntent.isFreePlanSnapshot && !isTrialEligible && authoritativeIntent.durationMonthsSnapshot > 0) {
-            const paidExpiresAt = addCalendarMonths(now, authoritativeIntent.durationMonthsSnapshot + (promoBonusMonths || 0));
-            await tx.dormitorySubscription.update({
-              where: { id: sub.id },
-              data: {
-                planId: proPlan?.id || sub.planId,
-                status: 'ACTIVE',
-                expiresAt: paidExpiresAt,
-                updatedAt: now,
-              },
-            });
-          }
-        }
+        resultPayload = {
+          success: true,
+          dormitoryId: dormId,
+          dormitoryName: activeDorm.name,
+          dormitory: {
+            id: dormId,
+            name: activeDorm.name,
+          },
+          membership: {
+            roleCode: 'OWNER',
+          },
+          subscription: {
+            id: sub.id,
+            planCode: 'FREE',
+            status: 'ACTIVE',
+            trialExpiresAt: null,
+          },
+          promo: {
+            applied: false,
+            promoBonusMonths: 0,
+            trialMonths: 0,
+            totalTrialMonths: 0,
+          },
+          planCode: 'FREE',
+          subscriptionStatus: 'ACTIVE',
+          trialExpiresAt: null,
+          promoApplied: false,
+          totalTrialMonths: 0,
+          packageIntentId: authoritativeIntent.id,
+          isPendingPayment: true,
+        };
       }
 
-      await tx.onboardingDraft.updateMany({
-        where: { userId },
-        data: {
-          finalizedAt: now,
-          currentStep: 'COMPLETED',
-          updatedAt: now,
-        },
-      });
-
-      const trialGrantedMonths = isTrialEligible ? 1 : 0;
-      const totalTrialMonths = trialGrantedMonths + promoBonusMonths;
-
-      return {
-        success: true,
-        dormitoryId: dormId,
-        dormitoryName: activeDorm.name,
-        dormitory: {
-          id: dormId,
-          name: activeDorm.name,
-        },
-        membership: {
-          roleCode: 'OWNER',
-        },
-        subscription: {
-          id: sub.id,
-          planCode: effectivePlan.code,
-          status: subStatus,
-          trialExpiresAt: (isZeroPayBenefit || promoApplied) ? finalExpiresAt.toISOString() : null,
-        },
-        promo: {
-          applied: promoApplied,
-          promoBonusMonths,
-          trialMonths: trialGrantedMonths,
-          totalTrialMonths,
-        },
-        planCode: effectivePlan.code,
-        subscriptionStatus: subStatus,
-        trialExpiresAt: (isZeroPayBenefit || promoApplied) ? finalExpiresAt.toISOString() : null,
-        promoApplied,
-        totalTrialMonths,
-        packageIntentId: authoritativeIntent ? authoritativeIntent.id : null,
-      };
+      return resultPayload;
     });
 
     if (lockRecord && lockRecord.id) {

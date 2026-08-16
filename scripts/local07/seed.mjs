@@ -34,6 +34,7 @@ import { DormitoryProvisioningService } from '../../server/src/services/dormitor
 import { SignatureStorageService } from '../../server/src/services/signature-storage.service.ts';
 import { SensitiveFieldService } from '../../server/src/services/sensitive-field.service.ts';
 import { syncSubscriptionCatalog } from '../../server/src/scripts/subscription-catalog-sync.ts';
+import { subscriptionIntentService } from '../../server/src/services/subscription-intent.service.ts';
 
 const targetInfo = assertSafeDatabaseTarget();
 
@@ -145,11 +146,19 @@ export async function seedLocal07Data() {
     },
   });
 
-  // E. Step 6: Complete & Finalize Onboarding with FREE tier + HORPLUS promo
+  // E. Step 7: Create Authoritative Quote & Finalize Onboarding with TRIAL + HORPLUS promo
+  const freshQuote = await subscriptionIntentService.createIntentQuote(
+    freshOwnerUser.id,
+    { promoCode: 'HORPLUS' },
+    undefined,
+    prov.provisionalDormitoryId
+  );
+
   const onboardingResult = await provisioningService.completeOwnerOnboarding({
     userId: freshOwnerUser.id,
     idempotencyKey: 'idemp-fresh-owner-onboarding-001',
     provisionalDormitoryId: prov.provisionalDormitoryId,
+    packageIntentId: freshQuote.intentId,
     dormitory: {
       name: FRESH_DORM.name,
       type: 'apartment',
@@ -180,8 +189,8 @@ export async function seedLocal07Data() {
       parkingFeeMode: 'fixed',
       gracePeriodDays: 3,
       advanceRentMonths: 1,
-      lateFeeType: 'fixed',
-      lateFeeValue: '50.00',
+      lateFeeType: 'none',
+      lateFeeValue: '0.00',
       rentBillingType: 'monthly',
     },
     payment: {
@@ -209,7 +218,7 @@ export async function seedLocal07Data() {
       buildingId: FRESH_DORM.building.id,
       status: 'VACANT',
     })),
-    planCode: 'FREE',
+    planCode: 'PAID',
     promoCode: 'HORPLUS',
     defaultTerms: `1. ห้ามสูบบุหรี่ภายในห้องพักและพื้นที่ส่วนกลาง
 2. ห้ามส่งเสียงดังรบกวนผู้อื่นหลังเวลา 22:00 น.

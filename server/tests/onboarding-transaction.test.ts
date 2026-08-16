@@ -14,6 +14,7 @@ import { InMemoryOnboardingDraftRepository } from '../src/db/repositories/onboar
 import { InMemoryIdempotencyRepository } from '../src/db/repositories/idempotency.repository.js';
 import { SensitiveFieldService } from '../src/services/sensitive-field.service.js';
 import { PromoService } from '../src/services/promo.service.js';
+import { subscriptionIntentService } from '../src/services/subscription-intent.service.js';
 import { AuditService } from '../src/services/audit.service.js';
 import { subscriptionEntitlementService } from '../src/services/subscription-entitlement.service.js';
 import { SignatureStorageService } from '../src/services/signature-storage.service.js';
@@ -82,10 +83,13 @@ describe('Wave 1F - Owner Onboarding Transaction & Atomicity Rollback Proof', ()
       await tx.dormitoryLineConfig.update({ where: { dormitoryId: provDormId }, data: { accessTokenVerifiedAt: new Date(), webhookEndpointSetAt: new Date(), webhookTestSucceededAt: new Date(), webhookActive: true, isConnected: true } });
     });
 
+    const quote1 = await subscriptionIntentService.createIntentQuote(userId, { isFreePlan: true }, undefined, provDormId);
+
     const result = await service.completeOwnerOnboarding({
       userId,
       idempotencyKey: `idempotency-onb-${timestamp}`,
       provisionalDormitoryId: provDormId,
+      packageIntentId: quote1.intentId,
       planCode: 'FREE',
       dormitory: {
         name: `Onboard Dorm ${timestamp}`,
@@ -194,11 +198,14 @@ describe('Wave 1F - Owner Onboarding Transaction & Atomicity Rollback Proof', ()
     // Capture counts AFTER prepare (provisional dorm + membership exist)
     const initialCounts = await getEntityCountsForUser(userId);
 
+    const quote2 = await subscriptionIntentService.createIntentQuote(userId, { isFreePlan: true }, undefined, provDormIdRollback);
+
     await expect(
       service.completeOwnerOnboarding({
         userId,
         idempotencyKey: `idempotency-rollback-${timestamp}`,
         provisionalDormitoryId: provDormIdRollback,
+        packageIntentId: quote2.intentId,
         planCode: 'FREE',
         dormitory: {
           name: `Rollback Dorm ${timestamp}`,

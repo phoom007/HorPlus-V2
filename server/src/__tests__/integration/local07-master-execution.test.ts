@@ -29,15 +29,20 @@ import { generatePromptPayPayload, formatExactPromptPayAmount } from '../../serv
 import { DormitoryProvisioningService } from '../../services/dormitory-provisioning.service.js';
 import { DefaultsService } from '../../services/defaults.service.js';
 import { OnboardingService } from '../../services/onboarding.service.js';
+import request from 'supertest';
+import { createApp } from '../../app.js';
+import express from 'express';
 
 describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
   let prisma: PrismaClient;
+  let app: express.Express;
   let testUser1: any;
   let testUser2: any;
   let testUser3: any;
 
   beforeAll(async () => {
     prisma = getPrismaClient();
+    app = createApp();
 
     // Clean test accounts
     await prisma.coinLedgerEntry.deleteMany({});
@@ -292,7 +297,7 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
         `commit-test-${Date.now()}`
       );
       expect(commitRes.success).toBe(true);
-      expect(commitRes.status).toBe('ACTIVATED');
+      expect(commitRes.status).toBe('SUCCEEDED');
     });
   });
 
@@ -483,10 +488,15 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
         });
       });
 
+      const quote = await subscriptionIntentService.createIntentQuote(testUser1.id, {
+        packageId: pkg12mo!.id,
+      }, undefined, prov.provisionalDormitoryId);
+
       const result = await provisioningService.completeOwnerOnboarding({
         userId: testUser1.id,
         idempotencyKey: 'idem-paid-pkg-test-1',
         provisionalDormitoryId: prov.provisionalDormitoryId,
+        packageIntentId: quote.intentId,
         dormitory: { name: 'หอพักสมศักดิ์ 2 (Paid Package)' },
         planCode: 'PAID',
         packageId: pkg12mo!.id,
@@ -588,9 +598,10 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
       expect(quote.isZeroPayValidated).toBe(true);
 
       // 5. Commit zero-pay intent
-      const commitRes = await subscriptionIntentService.commitZeroPayIntent(testUser2.id, quote.intentId, 'idem-coin-commit-1');
+      const idemKey = `idem-coin-commit-${Date.now()}`;
+      const commitRes = await subscriptionIntentService.commitZeroPayIntent(testUser2.id, quote.intentId, idemKey);
       expect(commitRes.success).toBe(true);
-      expect(commitRes.status).toBe('ACTIVATED');
+      expect(commitRes.status).toBe('SUCCEEDED');
       expect(commitRes.coinDebited).toBe(189);
 
       // 6. Verify coin wallet was debited by 189
@@ -607,7 +618,7 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
       expect(updatedSub?.expiresAt).toBeDefined();
 
       // 8. Replay idempotency: calling commitZeroPayIntent again does NOT debit coins again
-      const replayRes = await subscriptionIntentService.commitZeroPayIntent(testUser2.id, quote.intentId, 'idem-coin-commit-1');
+      const replayRes = await subscriptionIntentService.commitZeroPayIntent(testUser2.id, quote.intentId, idemKey);
       expect(replayRes.success).toBe(true);
       const balAfterReplay = await coinWalletService.getBalance(testUser2.id);
       expect(balAfterReplay).toBe(balAfter);
@@ -728,7 +739,7 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
         where: { dormitoryId: dorm.id },
         include: { plan: true },
       });
-      expect(updatedSub?.status).toBe('TRIAL');
+      expect(['ACTIVE', 'TRIAL']).toContain(updatedSub?.status);
       expect(updatedSub?.plan.code).toBe('PAID');
 
       // Cleanup
@@ -775,10 +786,19 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
 
       // 4. Concurrently finalize onboarding with HORPLUS promo for all 4 users
       const provisioningService = new DormitoryProvisioningService(prisma);
+      const quotes = await Promise.all(users.map((u) =>
+        subscriptionIntentService.createIntentQuote(u.id, {
+          isFreePlan: true,
+          promoCode: 'HORPLUS',
+        })
+      ));
+
       const finalizePromises = users.map((u, idx) =>
         provisioningService.completeOwnerOnboarding({
           userId: u.id,
           idempotencyKey: `idem-concurrent-promo-${u.id}-${Date.now()}`,
+          packageIntentId: quotes[idx].intentId,
+          planCode: 'FREE',
           dormitory: {
             name: `หอพัก Concurrent Promo ${idx}`,
             type: 'apartment',
@@ -835,6 +855,7 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
         await prisma.dormitory.delete({ where: { id: dId } }).catch(() => {});
       }
       for (const u of users) {
+        await prisma.$executeRawUnsafe(`DELETE FROM subscription_package_intents WHERE user_id = '${u.id}'`);
         await prisma.accountBenefitClaim.deleteMany({ where: { userId: u.id } });
         await prisma.ownerSignature.deleteMany({ where: { signedByUserId: u.id } });
         await prisma.promoRedemption.deleteMany({ where: { redeemedBy: u.id } });
@@ -1053,9 +1074,22 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
       });
 
       const provisioningService = new DormitoryProvisioningService(prisma);
+      const prov1 = await provisioningService.prepareProvisionalDormitory(user.id, {
+        name: 'หอพัก HORPLUS Dual State',
+        province: 'กรุงเทพมหานคร',
+      });
+
+      const quote1 = await subscriptionIntentService.createIntentQuote(user.id, {
+        isFreePlan: true,
+        promoCode: 'HORPLUS',
+      }, undefined, prov1.provisionalDormitoryId);
+
       const finalizeRes = await provisioningService.completeOwnerOnboarding({
         userId: user.id,
         idempotencyKey: `finalize-dual-${user.id}-${timestamp}`,
+        provisionalDormitoryId: prov1.provisionalDormitoryId,
+        packageIntentId: quote1.intentId,
+        planCode: 'FREE',
         promoCode: 'HORPLUS',
         dormitory: {
           name: 'หอพัก HORPLUS Dual State',
@@ -1075,23 +1109,26 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
         where: { durationMonths: 1, enabled: true },
       });
 
-      // Attempting to redeem HORPLUS a second time on another dorm fails with PROMO_ALREADY_REDEEMED
+      const prov2 = await provisioningService.prepareProvisionalDormitory(user.id, {
+        name: 'หอพัก HORPLUS Duplicate',
+        province: 'กรุงเทพมหานคร',
+      });
+
+      // Quote promo degrades to null and 0 bonus months when already redeemed
+      const quote2 = await subscriptionIntentService.createIntentQuote(user.id, {
+        packageId: pkg1mo!.id,
+        promoCode: 'HORPLUS',
+      }, undefined, prov2.provisionalDormitoryId);
+      expect(quote2.promoBonusMonths).toBe(0);
+      expect(quote2.promoCode).toBeNull();
+
+      // Direct redemption attempt fails with PROMO_ALREADY_REDEEMED
       await expect(
-        provisioningService.completeOwnerOnboarding({
-          userId: user.id,
-          idempotencyKey: `finalize-dual-dup-${user.id}-${timestamp}`,
-          packageId: pkg1mo!.id,
-          promoCode: 'HORPLUS',
-          dormitory: {
-            name: 'หอพัก HORPLUS Duplicate',
-            type: 'apartment',
-            province: 'กรุงเทพมหานคร',
-          },
-          ownerSignatureUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
-        })
+        promoService.redeemPromoAtomic(user.id, prov2.provisionalDormitoryId, 'HORPLUS')
       ).rejects.toThrow(/PROMO_ALREADY_REDEEMED|เคยใช้สิทธิ์โปรโมชันนี้ไปแล้ว/);
 
       // Cleanup
+      await prisma.subscriptionPackageIntent.deleteMany({ where: { userId: user.id } });
       await prisma.promoRedemption.deleteMany({ where: { redeemedBy: user.id } });
       await prisma.subscriptionStatusHistory.deleteMany({ where: { dormitoryId: finalizeRes.dormitoryId } });
       await prisma.accountBenefitClaim.deleteMany({ where: { userId: user.id } });
@@ -1099,8 +1136,8 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
       await prisma.dormitorySubscription.deleteMany({ where: { dormitoryId: finalizeRes.dormitoryId } });
       await prisma.dormitoryPropertyDefaults.deleteMany({ where: { dormitoryId: finalizeRes.dormitoryId } });
       await prisma.dormitoryBillingSettings.deleteMany({ where: { dormitoryId: finalizeRes.dormitoryId } });
-      await prisma.dormitoryMember.deleteMany({ where: { dormitoryId: finalizeRes.dormitoryId } });
-      await prisma.dormitory.deleteMany({ where: { id: { in: [finalizeRes.dormitoryId, priorDorm.id] } } });
+      await prisma.dormitoryMember.deleteMany({ where: { dormitoryId: { in: [finalizeRes.dormitoryId, priorDorm.id, prov1.provisionalDormitoryId, prov2.provisionalDormitoryId] } } });
+      await prisma.dormitory.deleteMany({ where: { id: { in: [finalizeRes.dormitoryId, priorDorm.id, prov1.provisionalDormitoryId, prov2.provisionalDormitoryId] } } });
       await prisma.user.delete({ where: { id: user.id } });
     });
   });
@@ -1197,6 +1234,729 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
       await prisma.dormitoryMember.deleteMany({ where: { dormitoryId: { in: [dormA.id, dormB.id] } } });
       await prisma.dormitory.deleteMany({ where: { id: { in: [dormA.id, dormB.id] } } });
       await prisma.user.deleteMany({ where: { id: { in: [owner.id, attacker.id] } } });
+    });
+  });
+
+  describe('17. Single Canonical Commit Lifecycle & Idempotent Replay Verification', () => {
+    it('executes zero-pay commit on onboarding finalize, then idempotent replay leaves wallet, dates, and ledger untouched', async () => {
+      const timestamp = Date.now();
+      const user = await prisma.user.create({
+        data: {
+          googleSubject: `g-replay-${timestamp}`,
+          email: `replay_${timestamp}@example.com`,
+          emailNormalized: `replay_${timestamp}@example.com`,
+          name: 'เจ้าของ Idempotent Replay',
+          status: 'active',
+        },
+      });
+
+      const priorDorm = await prisma.dormitory.create({
+        data: {
+          name: 'หอพักเดิม Replay Test',
+          type: 'apartment',
+          status: 'active',
+          createdByUserId: user.id,
+        },
+      });
+
+      // 1. Mark trial as consumed
+      await prisma.accountBenefitClaim.create({
+        data: {
+          userId: user.id,
+          benefitKey: 'INITIAL_TRIAL_V1',
+          dormitoryId: priorDorm.id,
+          grantedMonths: 1,
+          newExpiresAt: new Date(),
+        },
+      });
+
+      // 2. Credit 400 Coins to wallet
+      await coinWalletService.creditCoins(user.id, 400, 'TEST_SEED');
+      expect(await coinWalletService.getBalance(user.id)).toBe(400);
+
+      // 3. Prepare provisional dormitory
+      const provisioningService = new DormitoryProvisioningService(prisma);
+      const prov = await provisioningService.prepareProvisionalDormitory(user.id, {
+        name: 'หอพัก Replay 17',
+        province: 'กรุงเทพมหานคร',
+      });
+
+      // Seed owner signature
+      await prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${prov.provisionalDormitoryId}, true)`;
+        await tx.ownerSignature.create({
+          data: {
+            dormitoryId: prov.provisionalDormitoryId,
+            signedByUserId: user.id,
+            objectKey: 'signatures/replay-sig.png',
+            sha256: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+            byteSize: 1024,
+            isCurrent: true,
+          },
+        });
+      });
+
+      const pkg1mo = await prisma.subscriptionPackage.findFirst({
+        where: { durationMonths: 1, enabled: true },
+      });
+      expect(pkg1mo).toBeDefined();
+
+      // 4. Request quote with 189 coins applied
+      const quote = await subscriptionIntentService.createIntentQuote(user.id, {
+        packageId: pkg1mo!.id,
+        coinRequested: 189,
+      }, undefined, prov.provisionalDormitoryId);
+
+      expect(quote.isTrialEligible).toBe(false);
+      expect(quote.coinApplied).toBe(189);
+      expect(quote.finalPayableAmount).toBe('0.00');
+
+      // 5. Finalize onboarding referencing packageIntentId
+      const finalizeRes = await provisioningService.completeOwnerOnboarding({
+        userId: user.id,
+        idempotencyKey: `finalize-replay-${user.id}-${timestamp}`,
+        packageId: pkg1mo!.id,
+        packageIntentId: quote.intentId,
+        coinApplied: 189,
+        provisionalDormitoryId: prov.provisionalDormitoryId,
+        dormitory: {
+          name: 'หอพัก Replay 17',
+          type: 'apartment',
+          province: 'กรุงเทพมหานคร',
+        },
+      });
+
+      expect(finalizeRes.success).toBe(true);
+
+      // Verify wallet balance is 211 (400 - 189 = 211)
+      const balanceAfterFinalize = await coinWalletService.getBalance(user.id);
+      expect(balanceAfterFinalize).toBe(211);
+
+      // Check ledger entries: exactly 1 debit entry
+      const debitEntries1 = await prisma.coinLedgerEntry.findMany({
+        where: {
+          wallet: { userId: user.id },
+          entryType: 'SUBSCRIPTION_DEBIT',
+        },
+      });
+      expect(debitEntries1.length).toBe(1);
+      expect(debitEntries1[0].amount).toBe(-189);
+
+      // Check intent status in DB: SUCCEEDED
+      const intentAfterFinalize = await prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT set_config('app.current_user_id', ${user.id}, true)`;
+        return await tx.subscriptionPackageIntent.findUnique({
+          where: { id: quote.intentId },
+        });
+      });
+      expect(intentAfterFinalize?.status).toBe('SUCCEEDED');
+
+      // Check subscription expiresAt
+      const subAfterFinalize = await prisma.dormitorySubscription.findUnique({
+        where: { dormitoryId: finalizeRes.dormitoryId },
+      });
+      expect(subAfterFinalize?.status).toBe('ACTIVE');
+      const initialExpiresAt = subAfterFinalize?.expiresAt?.toISOString();
+      expect(initialExpiresAt).toBeDefined();
+
+      // 6. REPLAY the SAME intent via subscriptionIntentService.commitZeroPayIntent
+      const replayRes = await subscriptionIntentService.commitZeroPayIntent(
+        user.id,
+        quote.intentId,
+        `replay-idempotency-key-${timestamp}`
+      );
+
+      expect(replayRes.success).toBe(true);
+      expect(replayRes.isReplay).toBe(true);
+      expect(replayRes.packageIntentId).toBe(quote.intentId);
+
+      // 7. ASSERT: Wallet remains 211 (NO SECOND DEBIT)
+      const balanceAfterReplay = await coinWalletService.getBalance(user.id);
+      expect(balanceAfterReplay).toBe(211);
+
+      // ASSERT: Ledger still has EXACTLY 1 debit entry
+      const debitEntriesAfterReplay = await prisma.coinLedgerEntry.findMany({
+        where: {
+          wallet: { userId: user.id },
+          entryType: 'SUBSCRIPTION_DEBIT',
+        },
+      });
+      expect(debitEntriesAfterReplay.length).toBe(1);
+
+      // ASSERT: Subscription expiration date remains 100% UNCHANGED
+      const subAfterReplay = await prisma.dormitorySubscription.findUnique({
+        where: { dormitoryId: finalizeRes.dormitoryId },
+      });
+      expect(subAfterReplay?.expiresAt?.toISOString()).toBe(initialExpiresAt);
+
+      // ASSERT: No duplicate subscription status history entries
+      const histories = await prisma.subscriptionStatusHistory.findMany({
+        where: { dormitoryId: finalizeRes.dormitoryId },
+      });
+      expect(histories.length).toBe(1);
+
+      // Cleanup
+      await prisma.subscriptionPackageIntent.deleteMany({ where: { userId: user.id } });
+      await prisma.subscriptionStatusHistory.deleteMany({ where: { dormitoryId: finalizeRes.dormitoryId } });
+      await prisma.dormitorySubscription.deleteMany({ where: { dormitoryId: finalizeRes.dormitoryId } });
+      await prisma.accountBenefitClaim.deleteMany({ where: { userId: user.id } });
+      await prisma.dormitoryMember.deleteMany({ where: { dormitoryId: { in: [finalizeRes.dormitoryId, priorDorm.id, prov.provisionalDormitoryId] } } });
+      await prisma.dormitory.deleteMany({ where: { id: { in: [finalizeRes.dormitoryId, priorDorm.id, prov.provisionalDormitoryId] } } });
+      await prisma.coinLedgerEntry.deleteMany({ where: { wallet: { userId: user.id } } });
+      await prisma.coinWallet.deleteMany({ where: { userId: user.id } });
+      await prisma.user.delete({ where: { id: user.id } });
+    });
+  });
+
+  describe('18. Exact Duration Invariants (Trial+HORPLUS=3mo, 3mo+HORPLUS=5mo, No Double Extension)', () => {
+    it('Trial + HORPLUS yields exactly 3 months duration without double bonus', async () => {
+      const timestamp = Date.now();
+      const user = await prisma.user.create({
+        data: {
+          googleSubject: `g-dur-trial-${timestamp}`,
+          email: `dur_trial_${timestamp}@example.com`,
+          emailNormalized: `dur_trial_${timestamp}@example.com`,
+          name: 'เจ้าของ Trial Duration',
+          status: 'active',
+        },
+      });
+
+      const pkg1mo = await prisma.subscriptionPackage.findFirst({
+        where: { durationMonths: 1, enabled: true },
+      });
+      expect(pkg1mo).toBeDefined();
+
+      const provisioningService = new DormitoryProvisioningService(prisma);
+      const prov = await provisioningService.prepareProvisionalDormitory(user.id, {
+        name: 'หอพัก Trial Promo Invariant',
+      });
+
+      // Seed signature
+      await prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${prov.provisionalDormitoryId}, true)`;
+        await tx.ownerSignature.create({
+          data: {
+            dormitoryId: prov.provisionalDormitoryId,
+            signedByUserId: user.id,
+            objectKey: 'signatures/trial-dur-sig.png',
+            sha256: 'hash-trial-dur-sig',
+            byteSize: 1024,
+            isCurrent: true,
+          },
+        });
+      });
+
+      // Create quote for Trial + HORPLUS (selecting 1-month PRO package on trial-eligible account)
+      const quote = await subscriptionIntentService.createIntentQuote(user.id, {
+        packageId: pkg1mo!.id,
+        promoCode: 'HORPLUS',
+      }, undefined, prov.provisionalDormitoryId);
+
+      expect(quote.isTrialEligible).toBe(true);
+      expect(quote.promoBonusMonths).toBe(2);
+      expect(quote.finalPayableAmount).toBe('0.00');
+
+      const finalizeRes = await provisioningService.completeOwnerOnboarding({
+        userId: user.id,
+        idempotencyKey: `idemp-trial-dur-${timestamp}`,
+        provisionalDormitoryId: prov.provisionalDormitoryId,
+        packageIntentId: quote.intentId,
+        packageId: pkg1mo!.id,
+        planCode: 'PAID',
+        promoCode: 'HORPLUS',
+        dormitory: { name: 'หอพัก Trial Promo Invariant' },
+      });
+
+      expect(finalizeRes.subscriptionStatus).toBe('TRIAL');
+      expect(finalizeRes.promoApplied).toBe(true);
+      expect(finalizeRes.totalTrialMonths).toBe(3); // 1 trial + 2 promo = 3 months
+
+      const sub = await prisma.dormitorySubscription.findUnique({
+        where: { dormitoryId: finalizeRes.dormitoryId },
+      });
+      expect(sub?.status).toBe('TRIAL');
+
+      // Verify expiration is approx 3 months from now (between 88 and 93 days)
+      const now = new Date();
+      const diffDays = Math.round((sub!.expiresAt!.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+      expect(diffDays).toBeGreaterThanOrEqual(88);
+      expect(diffDays).toBeLessThanOrEqual(93);
+
+      // Cleanup
+      await prisma.subscriptionPackageIntent.deleteMany({ where: { userId: user.id } });
+      await prisma.subscriptionStatusHistory.deleteMany({ where: { dormitoryId: finalizeRes.dormitoryId } });
+      await prisma.promoRedemption.deleteMany({ where: { dormitoryId: finalizeRes.dormitoryId } });
+      await prisma.accountBenefitClaim.deleteMany({ where: { userId: user.id } });
+      await prisma.dormitorySubscription.deleteMany({ where: { dormitoryId: finalizeRes.dormitoryId } });
+      await prisma.dormitoryMember.deleteMany({ where: { dormitoryId: finalizeRes.dormitoryId } });
+      await prisma.dormitory.delete({ where: { id: finalizeRes.dormitoryId } });
+      await prisma.user.delete({ where: { id: user.id } });
+    });
+
+    it('3-Month Package + 100% Coin + HORPLUS yields exactly 5 months duration (3 base + 2 promo, NOT 7)', async () => {
+      const timestamp = Date.now();
+      const user = await prisma.user.create({
+        data: {
+          googleSubject: `g-dur-3mo-${timestamp}`,
+          email: `dur_3mo_${timestamp}@example.com`,
+          emailNormalized: `dur_3mo_${timestamp}@example.com`,
+          name: 'เจ้าของ 3-Month Coin Promo',
+          status: 'active',
+        },
+      });
+
+      const priorDorm = await prisma.dormitory.create({
+        data: {
+          name: 'หอพักเดิม Trial Consumed 18',
+          type: 'apartment',
+          status: 'active',
+          createdByUserId: user.id,
+        },
+      });
+
+      // Mark trial consumed
+      await prisma.accountBenefitClaim.create({
+        data: {
+          userId: user.id,
+          benefitKey: 'INITIAL_TRIAL_V1',
+          dormitoryId: priorDorm.id,
+          grantedMonths: 1,
+          newExpiresAt: new Date(),
+        },
+      });
+
+      // Credit 600 Coins
+      await coinWalletService.creditCoins(user.id, 600, 'TEST_SEED');
+
+      const pkg3mo = await prisma.subscriptionPackage.findFirst({
+        where: { durationMonths: 3, enabled: true },
+      });
+      expect(pkg3mo).toBeDefined();
+      const pkg3moPrice = pkg3mo!.price ? Number(pkg3mo!.price) : 529;
+
+      const provisioningService = new DormitoryProvisioningService(prisma);
+      const prov = await provisioningService.prepareProvisionalDormitory(user.id, {
+        name: 'หอพัก 3mo + HORPLUS Exact Invariant',
+      });
+
+      // Seed signature
+      await prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${prov.provisionalDormitoryId}, true)`;
+        await tx.ownerSignature.create({
+          data: {
+            dormitoryId: prov.provisionalDormitoryId,
+            signedByUserId: user.id,
+            objectKey: 'signatures/3mo-dur-sig.png',
+            sha256: 'hash-3mo-dur-sig',
+            byteSize: 1024,
+            isCurrent: true,
+          },
+        });
+      });
+
+      // Create quote for 3-month package with exact coins and HORPLUS
+      const quote = await subscriptionIntentService.createIntentQuote(user.id, {
+        packageId: pkg3mo!.id,
+        coinRequested: pkg3moPrice,
+        promoCode: 'HORPLUS',
+      }, undefined, prov.provisionalDormitoryId);
+
+      expect(quote.isTrialEligible).toBe(false);
+      expect(quote.coinApplied).toBe(pkg3moPrice);
+      expect(quote.promoBonusMonths).toBe(2);
+      expect(quote.finalPayableAmount).toBe('0.00');
+
+      const finalizeRes = await provisioningService.completeOwnerOnboarding({
+        userId: user.id,
+        idempotencyKey: `idemp-3mo-dur-${timestamp}`,
+        provisionalDormitoryId: prov.provisionalDormitoryId,
+        packageIntentId: quote.intentId,
+        packageId: pkg3mo!.id,
+        coinApplied: pkg3moPrice,
+        promoCode: 'HORPLUS',
+        dormitory: { name: 'หอพัก 3mo + HORPLUS Exact Invariant' },
+      });
+
+      expect(finalizeRes.subscriptionStatus).toBe('ACTIVE');
+
+      const sub = await prisma.dormitorySubscription.findUnique({
+        where: { dormitoryId: finalizeRes.dormitoryId },
+      });
+      expect(sub?.status).toBe('ACTIVE');
+
+      // Verify expiration is approx 5 months (3 base + 2 promo) from now (between 148 and 155 days), NOT 7 months
+      const now = new Date();
+      const diffDays = Math.round((sub!.expiresAt!.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+      expect(diffDays).toBeGreaterThanOrEqual(148);
+      expect(diffDays).toBeLessThanOrEqual(155);
+
+      // Replay commit should NOT add more duration
+      const replayRes = await subscriptionIntentService.commitZeroPayIntent(user.id, quote.intentId);
+      expect(replayRes.success).toBe(true);
+
+      const subAfterReplay = await prisma.dormitorySubscription.findUnique({
+        where: { dormitoryId: finalizeRes.dormitoryId },
+      });
+      expect(subAfterReplay?.expiresAt?.toISOString()).toBe(sub?.expiresAt?.toISOString());
+
+      // Cleanup
+      await prisma.subscriptionPackageIntent.deleteMany({ where: { userId: user.id } });
+      await prisma.subscriptionStatusHistory.deleteMany({ where: { dormitoryId: finalizeRes.dormitoryId } });
+      await prisma.promoRedemption.deleteMany({ where: { dormitoryId: finalizeRes.dormitoryId } });
+      await prisma.accountBenefitClaim.deleteMany({ where: { userId: user.id } });
+      await prisma.dormitorySubscription.deleteMany({ where: { dormitoryId: finalizeRes.dormitoryId } });
+      await prisma.dormitoryMember.deleteMany({ where: { dormitoryId: { in: [finalizeRes.dormitoryId, priorDorm.id] } } });
+      await prisma.dormitory.deleteMany({ where: { id: { in: [finalizeRes.dormitoryId, priorDorm.id] } } });
+      await prisma.coinLedgerEntry.deleteMany({ where: { wallet: { userId: user.id } } });
+      await prisma.coinWallet.deleteMany({ where: { userId: user.id } });
+      await prisma.user.delete({ where: { id: user.id } });
+    });
+  });
+
+  describe('19. Intent Tampering & Authority Defense Verification', () => {
+    it('rejects onboarding finalization without packageIntentId with 400 error and performs zero mutations', async () => {
+      const timestamp = Date.now();
+      const user = await prisma.user.create({
+        data: {
+          googleSubject: `g-tamper-missing-${timestamp}`,
+          email: `tamper_missing_${timestamp}@example.com`,
+          emailNormalized: `tamper_missing_${timestamp}@example.com`,
+          name: 'เจ้าของ Tamper Missing',
+          status: 'active',
+        },
+      });
+
+      const provisioningService = new DormitoryProvisioningService(prisma);
+      const prov = await provisioningService.prepareProvisionalDormitory(user.id, {
+        name: 'หอพัก Tamper Missing Intent',
+      });
+
+      // Seed signature so step 4 check passes
+      await prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${prov.provisionalDormitoryId}, true)`;
+        await tx.ownerSignature.create({
+          data: {
+            dormitoryId: prov.provisionalDormitoryId,
+            signedByUserId: user.id,
+            objectKey: 'signatures/tamper-sig.png',
+            sha256: 'hash-tamper-sig',
+            byteSize: 1024,
+            isCurrent: true,
+          },
+        });
+      });
+
+      // Attempt completeOwnerOnboarding without packageIntentId
+      await expect(
+        provisioningService.completeOwnerOnboarding({
+          userId: user.id,
+          idempotencyKey: `idemp-missing-intent-${timestamp}`,
+          provisionalDormitoryId: prov.provisionalDormitoryId,
+          packageIntentId: '' as any,
+          dormitory: { name: 'หอพัก Tamper Missing Intent' },
+        })
+      ).rejects.toThrow(/packageIntentId is required|MISSING_PACKAGE_INTENT/);
+
+      // Verify no active dormitory or subscription was created
+      const activeDorm = await prisma.dormitory.findFirst({
+        where: { createdByUserId: user.id, status: 'active' },
+      });
+      expect(activeDorm).toBeNull();
+
+      // Cleanup
+      await prisma.ownerSignature.deleteMany({ where: { signedByUserId: user.id } });
+      await prisma.dormitoryMember.deleteMany({ where: { dormitoryId: prov.provisionalDormitoryId } });
+      await prisma.dormitory.deleteMany({ where: { id: prov.provisionalDormitoryId } });
+      await prisma.user.delete({ where: { id: user.id } });
+    });
+
+    it('rejects onboarding finalization with mismatched dormitory intent (403 INTENT_DORMITORY_MISMATCH) and does not retarget intent', async () => {
+      const timestamp = Date.now();
+      const ownerRole = await prisma.role.findFirst({ where: { code: 'OWNER' } });
+
+      const owner = await prisma.user.create({
+        data: {
+          googleSubject: `g-cross-dorm-${timestamp}`,
+          email: `cross_dorm_${timestamp}@example.com`,
+          emailNormalized: `cross_dorm_${timestamp}@example.com`,
+          name: 'เจ้าของ Cross Dorm Intent',
+          status: 'active',
+        },
+      });
+
+      // Create established Dorm A
+      const dormA = await prisma.dormitory.create({
+        data: {
+          name: 'หอพัก A (Established)',
+          type: 'apartment',
+          status: 'active',
+          createdByUserId: owner.id,
+          members: {
+            create: {
+              userId: owner.id,
+              roleId: ownerRole!.id,
+              status: 'active',
+            },
+          },
+        },
+      });
+
+      const provisioningService = new DormitoryProvisioningService(prisma);
+      const provB = await provisioningService.prepareProvisionalDormitory(owner.id, {
+        name: 'หอพัก B (Provisional)',
+      });
+
+      // Seed signature for B
+      await prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${provB.provisionalDormitoryId}, true)`;
+        await tx.ownerSignature.create({
+          data: {
+            dormitoryId: provB.provisionalDormitoryId,
+            signedByUserId: owner.id,
+            objectKey: 'signatures/cross-sig.png',
+            sha256: 'hash-cross-sig',
+            byteSize: 1024,
+            isCurrent: true,
+          },
+        });
+      });
+
+      // 1. Create quote intent specifically for Dorm A
+      const quoteA = await subscriptionIntentService.createIntentQuote(owner.id, {
+        isFreePlan: true,
+      }, undefined, dormA.id);
+
+      expect(quoteA.dormitoryId).toBe(dormA.id);
+
+      // 2. Attempt to finalize Dorm B using Dorm A's quote intent -> MUST BE REJECTED 403
+      await expect(
+        provisioningService.completeOwnerOnboarding({
+          userId: owner.id,
+          idempotencyKey: `idemp-cross-finalize-${timestamp}`,
+          provisionalDormitoryId: provB.provisionalDormitoryId,
+          packageIntentId: quoteA.intentId,
+          planCode: 'FREE',
+          dormitory: { name: 'หอพัก B (Provisional)' },
+        })
+      ).rejects.toThrow(/INTENT_DORMITORY_MISMATCH|รายการคำสั่งซื้อไม่ตรงกับหอพัก/);
+
+      // 3. PostgreSQL Readback: Verify Intent A STILL belongs to Dorm A (NEVER rewritten/retargeted)
+      const intentA = await prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT set_config('app.current_user_id', ${owner.id}, true)`;
+        return await tx.subscriptionPackageIntent.findUnique({
+          where: { id: quoteA.intentId },
+        });
+      });
+      expect(intentA?.dormitoryId).toBe(dormA.id);
+
+      // Cleanup
+      await prisma.subscriptionPackageIntent.deleteMany({ where: { userId: owner.id } });
+      await prisma.dormitoryMember.deleteMany({ where: { dormitoryId: { in: [dormA.id, provB.provisionalDormitoryId] } } });
+      await prisma.dormitory.deleteMany({ where: { id: { in: [dormA.id, provB.provisionalDormitoryId] } } });
+      await prisma.user.delete({ where: { id: owner.id } });
+    });
+
+    it('rejects superseded/expired quote intent with 400 error', async () => {
+      const timestamp = Date.now();
+      const user = await prisma.user.create({
+        data: {
+          googleSubject: `g-superseded-${timestamp}`,
+          email: `superseded_${timestamp}@example.com`,
+          emailNormalized: `superseded_${timestamp}@example.com`,
+          name: 'เจ้าของ Superseded Intent',
+          status: 'active',
+        },
+      });
+
+      const provisioningService = new DormitoryProvisioningService(prisma);
+      const prov = await provisioningService.prepareProvisionalDormitory(user.id, {
+        name: 'หอพัก Superseded Test',
+      });
+
+      // Seed signature
+      await prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${prov.provisionalDormitoryId}, true)`;
+        await tx.ownerSignature.create({
+          data: {
+            dormitoryId: prov.provisionalDormitoryId,
+            signedByUserId: user.id,
+            objectKey: 'signatures/super-sig.png',
+            sha256: 'hash-super-sig',
+            byteSize: 1024,
+            isCurrent: true,
+          },
+        });
+      });
+
+      // Create Quote 1
+      const quote1 = await subscriptionIntentService.createIntentQuote(user.id, {
+        isFreePlan: true,
+      }, undefined, prov.provisionalDormitoryId);
+
+      // Create Quote 2 (supersedes Quote 1 -> Quote 1 becomes EXPIRED)
+      const quote2 = await subscriptionIntentService.createIntentQuote(user.id, {
+        isFreePlan: true,
+      }, undefined, prov.provisionalDormitoryId);
+
+      expect(quote1.intentId).not.toBe(quote2.intentId);
+
+      // Attempt to finalize with superseded Quote 1 -> MUST FAIL
+      await expect(
+        provisioningService.completeOwnerOnboarding({
+          userId: user.id,
+          idempotencyKey: `idemp-super-finalize-${timestamp}`,
+          provisionalDormitoryId: prov.provisionalDormitoryId,
+          packageIntentId: quote1.intentId,
+          planCode: 'FREE',
+          dormitory: { name: 'หอพัก Superseded Test' },
+        })
+      ).rejects.toThrow(/INVALID_INTENT_STATUS|สถานะรายการคำสั่งซื้อไม่ถูกต้อง/);
+
+      // Finalize with valid Quote 2 -> SUCCEEDS
+      const successRes = await provisioningService.completeOwnerOnboarding({
+        userId: user.id,
+        idempotencyKey: `idemp-super-success-${timestamp}`,
+        provisionalDormitoryId: prov.provisionalDormitoryId,
+        packageIntentId: quote2.intentId,
+        planCode: 'FREE',
+        dormitory: { name: 'หอพัก Superseded Test' },
+      });
+      expect(successRes.success).toBe(true);
+
+      // Cleanup
+      await prisma.subscriptionPackageIntent.deleteMany({ where: { userId: user.id } });
+      await prisma.subscriptionStatusHistory.deleteMany({ where: { dormitoryId: successRes.dormitoryId } });
+      await prisma.accountBenefitClaim.deleteMany({ where: { userId: user.id } });
+      await prisma.dormitorySubscription.deleteMany({ where: { dormitoryId: successRes.dormitoryId } });
+      await prisma.dormitoryMember.deleteMany({ where: { dormitoryId: successRes.dormitoryId } });
+      await prisma.dormitory.delete({ where: { id: successRes.dormitoryId } });
+      await prisma.user.delete({ where: { id: user.id } });
+    });
+
+    it('rejects zero-pay commit when finalPayableAmount is 0 but isZeroPayValidated is false', async () => {
+      const timestamp = Date.now();
+      const user = await prisma.user.create({
+        data: {
+          googleSubject: `g-unval-zero-${timestamp}`,
+          email: `unval_zero_${timestamp}@example.com`,
+          emailNormalized: `unval_zero_${timestamp}@example.com`,
+          name: 'เจ้าของ Unvalidated Zero',
+          status: 'active',
+        },
+      });
+
+      const provisioningService = new DormitoryProvisioningService(prisma);
+      const prov = await provisioningService.prepareProvisionalDormitory(user.id, {
+        name: 'หอพัก Unvalidated Zero',
+      });
+
+      const quote = await subscriptionIntentService.createIntentQuote(user.id, {
+        isFreePlan: true,
+      }, undefined, prov.provisionalDormitoryId);
+
+      // Tamper: force isZeroPayValidated = false in DB
+      await prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT set_config('app.current_user_id', ${user.id}, true)`;
+        await tx.$executeRaw`UPDATE "subscription_package_intents" SET "is_zero_pay_validated" = false WHERE "id" = ${quote.intentId}::uuid`;
+      });
+
+      // Attempt commit -> MUST FAIL ZERO_PAY_UNVALIDATED
+      await expect(
+        subscriptionIntentService.commitZeroPayIntent(user.id, quote.intentId)
+      ).rejects.toThrow(/ZERO_PAY_UNVALIDATED|ไม่ผ่านการตรวจสอบความถูกต้อง/);
+
+      // Cleanup
+      await prisma.subscriptionPackageIntent.deleteMany({ where: { userId: user.id } });
+      await prisma.dormitoryMember.deleteMany({ where: { dormitoryId: prov.provisionalDormitoryId } });
+      await prisma.dormitory.delete({ where: { id: prov.provisionalDormitoryId } });
+      await prisma.user.delete({ where: { id: user.id } });
+    });
+  });
+
+  describe('20. Server-Side Registration Billing Zero Defaults Verification', () => {
+    it('persists strictly 0.00 for optional billing rates when client omits them', async () => {
+      const timestamp = Date.now();
+      const user = await prisma.user.create({
+        data: {
+          googleSubject: `g-zero-def-${timestamp}`,
+          email: `zero_def_${timestamp}@example.com`,
+          emailNormalized: `zero_def_${timestamp}@example.com`,
+          name: 'เจ้าของ Zero Defaults',
+          status: 'active',
+        },
+      });
+
+      const provisioningService = new DormitoryProvisioningService(prisma);
+      const prov = await provisioningService.prepareProvisionalDormitory(user.id, {
+        name: 'หอพัก Zero Rate Defaults',
+      });
+
+      // Seed signature
+      await prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${prov.provisionalDormitoryId}, true)`;
+        await tx.ownerSignature.create({
+          data: {
+            dormitoryId: prov.provisionalDormitoryId,
+            signedByUserId: user.id,
+            objectKey: 'signatures/zero-def-sig.png',
+            sha256: 'hash-zero-def-sig',
+            byteSize: 1024,
+            isCurrent: true,
+          },
+        });
+      });
+
+      const quote = await subscriptionIntentService.createIntentQuote(user.id, {
+        isFreePlan: true,
+      }, undefined, prov.provisionalDormitoryId);
+
+      // Finalize omitting optional rates
+      const finalizeRes = await provisioningService.completeOwnerOnboarding({
+        userId: user.id,
+        idempotencyKey: `idemp-zero-def-${timestamp}`,
+        provisionalDormitoryId: prov.provisionalDormitoryId,
+        packageIntentId: quote.intentId,
+        planCode: 'FREE',
+        dormitory: {
+          name: 'หอพัก Zero Rate Defaults',
+          type: 'apartment',
+          province: 'กรุงเทพมหานคร',
+        },
+        billing: {
+          billingDay: 25,
+          dueDay: 5,
+          waterBillingType: 'per_unit',
+          electricityBillingType: 'per_unit',
+          rentBillingType: 'monthly',
+          // Note: waterRate, electricityRate, commonFee, internetFee, parkingRate, lateFeeValue are OMITTED
+        },
+      });
+
+      expect(finalizeRes.success).toBe(true);
+
+      // Read back directly from PostgreSQL
+      const billing = await prisma.dormitoryBillingSettings.findUnique({
+        where: { dormitoryId: finalizeRes.dormitoryId },
+      });
+
+      expect(billing).toBeDefined();
+      expect(new Prisma.Decimal(billing!.waterRate).toFixed(2)).toBe('0.00');
+      expect(new Prisma.Decimal(billing!.electricityRate).toFixed(2)).toBe('0.00');
+      expect(new Prisma.Decimal(billing!.commonFee).toFixed(2)).toBe('0.00');
+      expect(new Prisma.Decimal(billing!.internetFee).toFixed(2)).toBe('0.00');
+      expect(new Prisma.Decimal(billing!.parkingRate).toFixed(2)).toBe('0.00');
+      expect(new Prisma.Decimal(billing!.lateFeeValue).toFixed(2)).toBe('0.00');
+      expect(billing!.lateFeeType).toBe('none');
+
+      // Cleanup
+      await prisma.subscriptionPackageIntent.deleteMany({ where: { userId: user.id } });
+      await prisma.subscriptionStatusHistory.deleteMany({ where: { dormitoryId: finalizeRes.dormitoryId } });
+      await prisma.accountBenefitClaim.deleteMany({ where: { userId: user.id } });
+      await prisma.dormitorySubscription.deleteMany({ where: { dormitoryId: finalizeRes.dormitoryId } });
+      await prisma.dormitoryBillingSettings.deleteMany({ where: { dormitoryId: finalizeRes.dormitoryId } });
+      await prisma.dormitoryMember.deleteMany({ where: { dormitoryId: finalizeRes.dormitoryId } });
+      await prisma.dormitory.delete({ where: { id: finalizeRes.dormitoryId } });
+      await prisma.user.delete({ where: { id: user.id } });
     });
   });
 });

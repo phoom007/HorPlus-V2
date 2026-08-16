@@ -946,6 +946,25 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
       const rawPP = formData.paymentAccount.promptPayId ? formData.paymentAccount.promptPayId.replace(/\D/g, '') : null;
       const ppType = rawPP ? (rawPP.length === 13 ? 'national_id' : 'mobile_phone') : null;
 
+      let activeIntentId = quoteSummary?.intentId;
+      if (!activeIntentId) {
+        const quote = await onboardingClient.getSubscriptionQuote({
+          isFreePlan: selectedPlan === 'free',
+          packageId: selectedPlan === 'pro' ? (selectedPackageId || undefined) : undefined,
+          promoCode: appliedPromo ? promoCodeInput.trim() : undefined,
+          referralCode: referralCodeInput ? referralCodeInput.trim() : undefined,
+          coinRequested: coinToApply,
+        });
+        if (quote?.data?.intentId) {
+          activeIntentId = quote.data.intentId;
+          setQuoteSummary(quote.data);
+        }
+      }
+
+      if (!activeIntentId) {
+        throw new Error('ไม่พบข้อมูลรายการคำสั่งซื้อแพ็กเกจ กรุณารีเฟรชหน้านี้และลองใหม่อีกครั้ง');
+      }
+
       const payload = {
         provisionalDormitoryId,
         dormitory: {
@@ -991,7 +1010,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
         rooms: mappedRooms,
         planCode: (selectedPlan || 'free').toUpperCase(),
         packageId: selectedPlan === 'pro' ? (selectedPackageId || undefined) : undefined,
-        packageIntentId: quoteSummary?.intentId || undefined,
+        packageIntentId: activeIntentId,
         promoCode: appliedPromo ? promoCodeInput.trim() : undefined,
         referralCode: referralCodeInput ? referralCodeInput.trim() : undefined,
         coinApplied: coinToApply > 0 ? coinToApply : undefined,

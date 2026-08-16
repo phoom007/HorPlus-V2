@@ -23,6 +23,7 @@ import {
   generateExactInstallmentSchedule,
 } from '../../utils/installment-math.util.js';
 import { DormitoryProvisioningService } from '../../services/dormitory-provisioning.service.js';
+import { subscriptionIntentService } from '../../services/subscription-intent.service.js';
 import { SensitiveFieldService } from '../../services/sensitive-field.service.js';
 import { BillingService } from '../../services/billing.service.js';
 import { ContractService } from '../../services/contract.service.js';
@@ -186,10 +187,15 @@ describe('LOCAL-07: Product Owner UI & Backend Integration', () => {
         });
       });
 
-      // Complete onboarding with building maxInstallmentMonths = 3 and independent promptPayAccountName
+      // Create quote and complete onboarding with building maxInstallmentMonths = 3 and independent promptPayAccountName
+      const quote1 = await subscriptionIntentService.createIntentQuote(testUserId, { isFreePlan: true }, undefined, dormId);
+
       const result = await provisioningService.completeOwnerOnboarding({
         userId: testUserId,
         idempotencyKey: crypto.randomUUID(),
+        provisionalDormitoryId: dormId,
+        packageIntentId: quote1.intentId,
+        planCode: 'FREE',
         dormitory: {
           name: 'หอพักทดสอบ Local07 Suite A',
           province: 'กรุงเทพมหานคร',
@@ -306,10 +312,14 @@ describe('LOCAL-07: Product Owner UI & Backend Integration', () => {
         });
       });
 
+      const quote2 = await subscriptionIntentService.createIntentQuote(ownerUser.id, { isFreePlan: true }, undefined, dormId);
+
       const result = await provisioningService.completeOwnerOnboarding({
         userId: ownerUser.id,
         idempotencyKey: crypto.randomUUID(),
         provisionalDormitoryId: dormId,
+        packageIntentId: quote2.intentId,
+        planCode: 'FREE',
         dormitory: {
           name: 'หอพักทดสอบ Default 2 และ No Step 1 Phone',
           type: 'apartment',
@@ -1007,7 +1017,9 @@ describe('LOCAL-07: Product Owner UI & Backend Integration', () => {
         buffer: validPngBuffer,
       });
 
-      // 3. Execute HTTP POST /api/v1/onboarding/finalize
+      // 3. Create Quote and Execute HTTP POST /api/v1/onboarding/finalize
+      const quote = await subscriptionIntentService.createIntentQuote(finalizeUserId, { isFreePlan: true }, undefined, provDormId);
+
       const knownDefaultTerms = '1. ห้ามส่งเสียงดังรบกวนหลัง 22:00 น.\n2. ชำระค่าเช่าตรงกำหนดทุกวันที่ 5\n3. ดูแลรักษาความสะอาดพื้นที่ส่วนกลาง';
       const expectedPetPolicy = {
         allowed: 'conditional',
@@ -1016,6 +1028,7 @@ describe('LOCAL-07: Product Owner UI & Backend Integration', () => {
 
       const finalizePayload = {
         provisionalDormitoryId: provDormId,
+        packageIntentId: quote.intentId,
         planCode: 'FREE',
         dormitory: {
           name: 'หอพักทดสอบ HTTP Finalize Step 5 Persistence',

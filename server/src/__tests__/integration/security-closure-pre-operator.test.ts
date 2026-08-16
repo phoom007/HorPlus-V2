@@ -21,6 +21,7 @@ import { PrismaRoleRepository } from '../../db/repositories/role.repository.js';
 import { PromoService } from '../../services/promo.service.js';
 import { OnboardingService } from '../../services/onboarding.service.js';
 import { DormitoryProvisioningService } from '../../services/dormitory-provisioning.service.js';
+import { subscriptionIntentService } from '../../services/subscription-intent.service.js';
 import { subscriptionEntitlementService } from '../../services/subscription-entitlement.service.js';
 import { SensitiveFieldService } from '../../services/sensitive-field.service.js';
 import {
@@ -322,11 +323,18 @@ describe('Final Pre-Operator Security & Real-LINE Closure Tests', () => {
       expect(paidPkg).not.toBeNull();
 
       const finalizeDorm = async (dormId: string, name: string) => {
+        const quote = await subscriptionIntentService.createIntentQuote(
+          raceUserId,
+          { packageId: paidPkg!.id, promoCode: 'HORPLUS' },
+          undefined,
+          dormId
+        );
         return await provisioningService.completeOwnerOnboarding({
           userId: raceUserId,
           idempotencyKey: crypto.randomUUID(),
           requestId: crypto.randomUUID(),
           provisionalDormitoryId: dormId,
+          packageIntentId: quote.intentId,
           planCode: 'PAID',
           packageId: paidPkg!.id,
           promoCode: 'HORPLUS',
@@ -355,7 +363,7 @@ describe('Final Pre-Operator Security & Real-LINE Closure Tests', () => {
       expect(fulfilled.length).toBe(1);
       expect(fulfilled[0].value.totalTrialMonths).toBe(3);
       expect(rejected.length).toBe(1);
-      expect(rejected[0].reason?.code || rejected[0].reason?.message).toMatch(/PROMO_ALREADY_REDEEMED/);
+      expect(rejected[0].reason?.code || rejected[0].reason?.message).toMatch(/PROMO_ALREADY_REDEEMED|INVALID_INTENT_STATUS|สถานะรายการคำสั่งซื้อไม่ถูกต้อง/);
 
       // Assert exactly ONE AccountBenefitClaim exists
       const totalClaims = await prisma.accountBenefitClaim.count({
@@ -610,11 +618,13 @@ describe('Final Pre-Operator Security & Real-LINE Closure Tests', () => {
         },
       });
       const unsignedPrep = await provisioningService.prepareProvisionalDormitory(unsignedUser, { name: 'Unsigned Dorm' });
+      const unsignedQuote = await subscriptionIntentService.createIntentQuote(unsignedUser, { isFreePlan: true }, undefined, unsignedPrep.provisionalDormitoryId);
       await expect(
         provisioningService.completeOwnerOnboarding({
           userId: unsignedUser,
           idempotencyKey: `idemp-unsig-${Date.now()}`,
           provisionalDormitoryId: unsignedPrep.provisionalDormitoryId,
+          packageIntentId: unsignedQuote.intentId,
           planCode: 'FREE',
           dormitory: {
             name: 'Unsigned Dorm',

@@ -17,9 +17,8 @@ import { PrismaMembershipRepository } from '../../db/repositories/membership.rep
 import { PrismaRoleRepository } from '../../db/repositories/role.repository.js';
 import { SensitiveFieldService } from '../../services/sensitive-field.service.js';
 import { subscriptionEntitlementService } from '../../services/subscription-entitlement.service.js';
-import { DormitoryProvisioningService } from '../../services/dormitory-provisioning.service.js';
-import { InMemoryIdempotencyRepository } from '../../db/repositories/idempotency.repository.js';
 import { SignatureStorageService } from '../../services/signature-storage.service.js';
+import { subscriptionIntentService } from '../../services/subscription-intent.service.js';
 import { PNG } from 'pngjs';
 
 const prisma = getPrismaClient();
@@ -537,8 +536,11 @@ describe('Payment Security & Idempotency Boundary (PS-001 to PS-010)', () => {
         });
       });
 
+      const quote1 = await subscriptionIntentService.createIntentQuote(idempUser.id, { isFreePlan: true }, undefined, provDormId);
+
       const payload1 = {
         provisionalDormitoryId: provDormId,
+        packageIntentId: quote1.intentId,
         dormitory: { name: 'Idemp Dorm 1' },
         billing: { billingDay: 25 },
         payment: {
@@ -552,6 +554,7 @@ describe('Payment Security & Idempotency Boundary (PS-001 to PS-010)', () => {
 
       const payload2ChangedPayment = {
         provisionalDormitoryId: provDormId,
+        packageIntentId: quote1.intentId,
         dormitory: { name: 'Idemp Dorm 1' },
         billing: { billingDay: 25 },
         payment: {
@@ -628,8 +631,11 @@ describe('Payment Security & Idempotency Boundary (PS-001 to PS-010)', () => {
         });
       });
 
+      const quoteReplay = await subscriptionIntentService.createIntentQuote(replayUser.id, { isFreePlan: true }, undefined, provDormId);
+
       const payload = {
         provisionalDormitoryId: provDormId,
+        packageIntentId: quoteReplay.intentId,
         dormitory: { name: 'Replay Dorm' },
         billing: { billingDay: 1 },
         payment: {
@@ -701,8 +707,11 @@ describe('Payment Security & Idempotency Boundary (PS-001 to PS-010)', () => {
         });
       });
 
+      const quoteMutPP = await subscriptionIntentService.createIntentQuote(mutUser.id, { isFreePlan: true }, undefined, provDormId);
+
       const origPayload = {
         provisionalDormitoryId: provDormId,
+        packageIntentId: quoteMutPP.intentId,
         dormitory: { name: 'MutPP Dorm' },
         billing: { billingDay: 10 },
         payment: {
@@ -789,8 +798,11 @@ describe('Payment Security & Idempotency Boundary (PS-001 to PS-010)', () => {
         });
       });
 
+      const quoteMutBank = await subscriptionIntentService.createIntentQuote(mutUser.id, { isFreePlan: true }, undefined, provDormId);
+
       const origPayload = {
         provisionalDormitoryId: provDormId,
+        packageIntentId: quoteMutBank.intentId,
         dormitory: { name: 'MutBank Dorm' },
         billing: { billingDay: 15 },
         payment: {

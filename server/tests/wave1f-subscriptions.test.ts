@@ -19,6 +19,7 @@ import { InMemoryOnboardingDraftRepository } from '../src/db/repositories/onboar
 import { PrismaOnboardingDraftRepository } from '../src/db/repositories/onboarding-draft.repository.js';
 import { InMemoryIdempotencyRepository, PrismaIdempotencyRepository } from '../src/db/repositories/idempotency.repository.js';
 import { DormitoryProvisioningService } from '../src/services/dormitory-provisioning.service.js';
+import { subscriptionIntentService } from '../src/services/subscription-intent.service.js';
 import { SensitiveFieldService } from '../src/services/sensitive-field.service.js';
 import { PNG } from 'pngjs';
 import { PromoService } from '../src/services/promo.service.js';
@@ -1081,10 +1082,13 @@ describe('Wave 1F - Authorization, Permission, Package & Idempotency Corrective 
         await tx.dormitoryLineConfig.update({ where: { dormitoryId: provDormId }, data: { accessTokenVerifiedAt: new Date(), webhookEndpointSetAt: new Date(), webhookTestSucceededAt: new Date(), webhookActive: true, isConnected: true } });
       });
 
+      const quote1 = await subscriptionIntentService.createIntentQuote(onboardingUserId, { isFreePlan: true }, undefined, provDormId);
+
       const result = await provisioningService.completeOwnerOnboarding({
         userId: onboardingUserId,
         idempotencyKey: `onb-idem-${timestamp}`,
         provisionalDormitoryId: provDormId,
+        packageIntentId: quote1.intentId,
         planCode: 'FREE',
         dormitory: { name: `Onboard Dorm ${timestamp}`, code: `ONB-${timestamp}`, addressLine1: '123 Onb St', postalCode: '10100', phone: '0812345678' },
         billing: { bankName: 'Kasikorn', accountName: 'Onboard User', accountNumber: '1234567890' },
@@ -1138,10 +1142,13 @@ describe('Wave 1F - Authorization, Permission, Package & Idempotency Corrective 
         prisma
       );
 
+      const quote2 = await subscriptionIntentService.createIntentQuote(rollbackUserId, { isFreePlan: true });
+
       await expect(
         provisioningService.completeOwnerOnboarding({
           userId: rollbackUserId,
           idempotencyKey: rollbackIdempotencyKey,
+          packageIntentId: quote2.intentId,
           planCode: 'FREE',
           dormitory: { name: `Rollback Dorm ${timestamp}`, code: rollbackDormCode, addressLine1: '123 Roll St', postalCode: '10100', phone: '0812345678' },
           billing: { bankName: 'Kasikorn', accountName: 'Rollback User', accountNumber: '1234567890' },

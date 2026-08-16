@@ -6,6 +6,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { PrismaClient } from '@prisma/client';
 import { DormitoryProvisioningService } from '../../services/dormitory-provisioning.service.js';
+import { subscriptionIntentService } from '../../services/subscription-intent.service.js';
 import { OnboardingService } from '../../services/onboarding.service.js';
 import { SignatureStorageService } from '../../services/signature-storage.service.js';
 import { SensitiveFieldService } from '../../services/sensitive-field.service.js';
@@ -117,10 +118,14 @@ describe('Master 6-Step Owner Onboarding Lifecycle & Idempotency', () => {
       });
     });
 
+    const quote = await subscriptionIntentService.createIntentQuote(testUserId, { promoCode: 'HORPLUS' }, undefined, provDormId);
+
     const result = await provisioningService.completeOwnerOnboarding({
       userId: testUserId,
       idempotencyKey: `idemp_master_${Date.now()}`,
       provisionalDormitoryId: provDormId,
+      packageIntentId: quote.intentId,
+      planCode: 'PAID',
       dormitory: {
         name: 'Master 6-Step Active Dormitory',
         type: 'apartment',
@@ -157,7 +162,6 @@ describe('Master 6-Step Owner Onboarding Lifecycle & Idempotency', () => {
         { buildingId: 'bld-temp-1', roomNumber: '201', floor: 2, monthlyRent: 4500, depositAmount: 5000 },
         { buildingId: 'bld-temp-1', roomNumber: '202', floor: 2, monthlyRent: 4500, depositAmount: 5000 },
       ],
-      planCode: 'FREE',
       promoCode: 'HORPLUS',
     });
 

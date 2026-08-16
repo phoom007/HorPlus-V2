@@ -6,6 +6,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { PrismaClient } from '@prisma/client';
 import { DormitoryProvisioningService } from '../../services/dormitory-provisioning.service.js';
+import { subscriptionIntentService } from '../../services/subscription-intent.service.js';
 import { LineOaService, validatePublicWebhookOrigin } from '../../services/line-oa.service.js';
 import { SensitiveFieldService } from '../../services/sensitive-field.service.js';
 import { MockLinePlatformAdapter } from '../../services/line-platform-adapter.js';
@@ -264,9 +265,12 @@ describe('TASK-009 Checkpoint 1I — Authoritative Restored UX & LINE Config Tru
         });
       });
 
+      const quote1 = await subscriptionIntentService.createIntentQuote(testUserId, { isFreePlan: true }, undefined, dormId);
+
       const res = await provisioningService.completeOwnerOnboarding({
         userId: testUserId,
         idempotencyKey: ik,
+        packageIntentId: quote1.intentId,
         ...payload,
       });
 
@@ -407,9 +411,12 @@ describe('TASK-009 Checkpoint 1I — Authoritative Restored UX & LINE Config Tru
         });
       });
 
+      const quote2 = await subscriptionIntentService.createIntentQuote(testUserId2, { isFreePlan: true }, undefined, dormId);
+
       await provisioningService.completeOwnerOnboarding({
         userId: testUserId2,
         idempotencyKey: ik,
+        packageIntentId: quote2.intentId,
         ...payload,
       });
 

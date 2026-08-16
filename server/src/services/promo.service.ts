@@ -347,11 +347,12 @@ export class PromoService {
             newExpiresAt = addCalendarMonths(now, bonusMonths);
           }
 
+          const currentStatus = (sub.status === 'ACTIVE' || sub.status === 'TRIAL') ? sub.status : 'TRIAL';
           await tx.dormitorySubscription.update({
             where: { id: sub.id },
             data: {
               planId: proPlan?.id || sub.planId,
-              status: 'TRIAL',
+              status: currentStatus,
               expiresAt: newExpiresAt,
               promoExtendedAt: now,
               updatedAt: now,
@@ -365,7 +366,7 @@ export class PromoService {
               previousPlanId: sub.planId,
               newPlanId: proPlan?.id || sub.planId,
               previousStatus: sub.status,
-              newStatus: 'TRIAL',
+              newStatus: currentStatus,
               reason: 'PROMO_EXTENSION_CALENDAR_MONTHS',
               actorId: userId,
             },

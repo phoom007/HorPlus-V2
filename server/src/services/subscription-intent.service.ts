@@ -142,11 +142,18 @@ export class SubscriptionIntentService {
       let basePrice = new Prisma.Decimal(0);
       let isFreePlan = Boolean(params.isFreePlan);
 
-      if (!isFreePlan && params.packageId) {
-        pkg = await tx.subscriptionPackage.findUnique({
-          where: { id: params.packageId },
-          include: { plan: true },
-        });
+      if (!isFreePlan) {
+        if (params.packageId) {
+          pkg = await tx.subscriptionPackage.findUnique({
+            where: { id: params.packageId },
+            include: { plan: true },
+          });
+        } else {
+          pkg = await tx.subscriptionPackage.findFirst({
+            where: { durationMonths: 1, enabled: true },
+            include: { plan: true },
+          });
+        }
 
         if (!pkg || !pkg.enabled) {
           throw new AppError('ไม่พบแพ็กเกจที่เลือก หรือแพ็กเกจถูกปิดใช้งาน', 404, 'PACKAGE_NOT_FOUND');
@@ -218,7 +225,7 @@ export class SubscriptionIntentService {
         }
       }
 
-      // 5. Calculate Integer Coin Deduction
+      // 5. Calculate Integer Coin Deduction (Exact Decimal/string minor-unit arithmetic)
       const coinBalance = await coinWalletService.getBalance(userId, tx);
       const totalAvailableCoin = coinBalance + provisionalReferralCoin;
 
@@ -226,9 +233,11 @@ export class SubscriptionIntentService {
       // Cannot request more than available coins
       coinRequested = Math.min(coinRequested, totalAvailableCoin);
 
-      // Convert exact money floor: max coin that can be applied to priceAfterTrial
-      const priceAfterTrialInt = priceAfterTrial.floor().toNumber();
-      const coinApplied = Math.min(coinRequested, priceAfterTrialInt);
+      // Derive maximum applicable Coin using exact Decimal without Float/JS Number conversion
+      const maxCoinPayableDecimal = priceAfterTrial.floor();
+      const coinRequestedDecimal = new Prisma.Decimal(coinRequested);
+      const coinAppliedDecimal = Prisma.Decimal.min(coinRequestedDecimal, maxCoinPayableDecimal);
+      const coinApplied = parseInt(coinAppliedDecimal.toFixed(0), 10);
 
       // 6. Compute Final Payable Amount using exact Decimal subtraction
       const finalPayable = priceAfterTrial.minus(new Prisma.Decimal(coinApplied));
@@ -239,8 +248,10 @@ export class SubscriptionIntentService {
       const isZeroPay = finalPayableAmount.equals(new Prisma.Decimal(0));
 
       // 7. Persist Intent Snapshot
-      // If free plan, find or link packageId if available
-      const targetPackageId = pkg ? pkg.id : (await tx.subscriptionPackage.findFirst({ where: { plan: { code: 'FREE' } } }))?.id || params.packageId;
+      // If free plan, link to 1-mo default package
+      const targetPackageId = pkg
+        ? pkg.id
+        : (await tx.subscriptionPackage.findFirst({ where: { durationMonths: 1 } }))?.id || params.packageId;
 
       // Supersede / expire older pending quote intents for this dormitory/user
       await tx.subscriptionPackageIntent.updateMany({
@@ -308,6 +319,7 @@ export class SubscriptionIntentService {
 
   /**
    * Commit zero-pay intent to activate subscription (Free plan, 1-mo PRO trial, or 100% Coin discount)
+   * Canonical single implementation for all zero-pay financial state transitions.
    */
   async commitZeroPayIntent(userId: string, intentId: string, idempotencyKey?: string, txClient?: any) {
     const runInTx = async (tx: any) => {
@@ -330,9 +342,27 @@ export class SubscriptionIntentService {
         throw new AppError('ไม่มีสิทธิ์เข้าถึงรายการสั่งซื้อนี้', 403, 'FORBIDDEN_INTENT_ACCESS');
       }
 
-      // Replay idempotency check
-      if (intent.status === 'ACTIVATED') {
-        return { success: true, status: 'ACTIVATED', message: 'รายการนี้ได้รับการเปิดใช้งานแล้ว' };
+      // Replay idempotency check (Terminal status is SUCCEEDED)
+      if (intent.status === 'SUCCEEDED' || intent.status === 'ACTIVATED') {
+        const existingSub = await tx.dormitorySubscription.findUnique({
+          where: { dormitoryId: intent.dormitoryId },
+          include: { plan: true },
+        });
+        return {
+          success: true,
+          status: 'SUCCEEDED',
+          isReplay: true,
+          packageIntentId: intent.id,
+          dormitoryId: intent.dormitoryId,
+          subscriptionId: existingSub?.id || '',
+          planCode: existingSub?.plan?.code || (intent.isFreePlanSnapshot ? 'FREE' : 'PAID'),
+          durationMonths: intent.durationMonthsSnapshot,
+          expiresAt: existingSub?.expiresAt || null,
+          coinDebited: intent.coinApplied,
+          isTrial: intent.isTrialEligibleSnapshot,
+          promoBonusMonths: intent.promoBonusMonthsSnapshot,
+          message: 'รายการนี้ได้รับการเปิดใช้งานแล้ว',
+        };
       }
 
       const now = new Date();
@@ -341,20 +371,21 @@ export class SubscriptionIntentService {
         throw new AppError('รายการสั่งซื้อหมดอายุแล้ว กรุณาทำรายการใหม่อีกครั้ง', 400, 'INTENT_EXPIRED');
       }
 
-      // Mandatory Guard 2: Explicit checkout lifecycle and exact Decimal zero check
+      // Mandatory Guard: Explicit checkout lifecycle version 2+
       if (intent.checkoutVersion < 2) {
         throw new AppError('รายการสั่งซื้อนี้เป็นเวอร์ชันเดิม ไม่สามารถเปิดใช้งานอัตโนมัติได้', 400, 'LEGACY_INTENT_UNACTIVATABLE');
       }
 
-      if (!intent.finalPayableAmount || !intent.finalPayableAmount.equals(new Prisma.Decimal(0)) || !intent.isZeroPayValidated) {
+      // Require BOTH finalPayableAmount === 0 AND isZeroPayValidated === true
+      if (!intent.finalPayableAmount || !intent.finalPayableAmount.equals(new Prisma.Decimal(0)) || intent.isZeroPayValidated !== true) {
         throw new AppError(
-          'รายการนี้มียอดที่ต้องชำระ ไม่สามารถเปิดใช้งานอัตโนมัติได้โดยไม่ผ่านการยืนยันชำระเงิน',
+          'รายการนี้มียอดที่ต้องชำระ หรือไม่ผ่านการตรวจสอบความถูกต้อง ไม่สามารถเปิดใช้งานอัตโนมัติได้',
           400,
-          'PAYMENT_REQUIRED'
+          'ZERO_PAY_UNVALIDATED'
         );
       }
 
-      // 2. Lock and Debit Coin Wallet if Coin was applied
+      // 2. Lock and Debit Coin Wallet if Coin was applied (Exactly Once)
       if (intent.coinApplied > 0) {
         await coinWalletService.debitWallet(
           userId,
@@ -368,7 +399,7 @@ export class SubscriptionIntentService {
         );
       }
 
-      // 3. Resolve Subscription Plan & Duration Mutation
+      // 3. Resolve Subscription Plan & Set BASE Entitlement Duration (PromoService performs the +2 extension)
       const proPlan = await tx.subscriptionPlan.findUnique({ where: { code: 'PAID' } });
       const freePlan = await tx.subscriptionPlan.findUnique({ where: { code: 'FREE' } });
 
@@ -379,8 +410,8 @@ export class SubscriptionIntentService {
 
       if (intent.isTrialEligibleSnapshot) {
         subStatus = 'TRIAL';
-        durationMonths = 1 + (intent.promoBonusMonthsSnapshot || 0);
-        subExpiresAt = addCalendarMonths(now, durationMonths);
+        durationMonths = 1;
+        subExpiresAt = addCalendarMonths(now, 1);
         targetPlanId = proPlan.id;
       } else if (intent.isFreePlanSnapshot) {
         subStatus = 'ACTIVE';
@@ -389,7 +420,7 @@ export class SubscriptionIntentService {
       } else {
         // Paid package (e.g. 100% coin discount or promo bonus)
         subStatus = 'ACTIVE';
-        durationMonths = intent.durationMonthsSnapshot + (intent.promoBonusMonthsSnapshot || 0);
+        durationMonths = intent.durationMonthsSnapshot;
         subExpiresAt = addCalendarMonths(now, durationMonths);
         targetPlanId = proPlan.id;
       }
@@ -404,7 +435,7 @@ export class SubscriptionIntentService {
           expiresAt: subExpiresAt,
           trialStartedAt: intent.isTrialEligibleSnapshot ? now : null,
           trialExpiresAt: intent.isTrialEligibleSnapshot ? addCalendarMonths(now, 1) : null,
-          promoExtendedAt: intent.promoBonusMonthsSnapshot > 0 ? now : null,
+          promoExtendedAt: null,
         },
         update: {
           planId: targetPlanId,
@@ -413,7 +444,6 @@ export class SubscriptionIntentService {
           expiresAt: subExpiresAt,
           trialStartedAt: intent.isTrialEligibleSnapshot ? now : null,
           trialExpiresAt: intent.isTrialEligibleSnapshot ? addCalendarMonths(now, 1) : null,
-          promoExtendedAt: intent.promoBonusMonthsSnapshot > 0 ? now : null,
           updatedAt: now,
         },
       });
@@ -453,24 +483,32 @@ export class SubscriptionIntentService {
         });
       }
 
-      // 5. Redeem Promo Code atomically if applicable
+      // 5. Redeem Promo Code atomically if applicable (PromoService performs the single +2 months bonus extension)
+      let promoApplied = false;
+      let promoBonusMonths = 0;
       if (intent.promoCodeSnapshot) {
-        await promoService.redeemPromoAtomic(userId, intent.dormitoryId, intent.promoCodeSnapshot, tx);
+        const promoRes = await promoService.redeemPromoAtomic(userId, intent.dormitoryId, intent.promoCodeSnapshot, tx);
+        promoApplied = Boolean((promoRes as any).success ?? promoRes.body?.success ?? promoRes.id);
+        promoBonusMonths = promoRes.bonusMonths || promoRes.body?.data?.bonusMonths || 2;
+        const updatedSub = await tx.dormitorySubscription.findUnique({ where: { id: sub.id } });
+        if (updatedSub) {
+          subExpiresAt = updatedSub.expiresAt;
+        }
       }
 
-      // 6. Mark intent ACTIVATED
+      // 6. Mark intent SUCCEEDED
       await tx.subscriptionPackageIntent.update({
         where: { id: intent.id },
         data: {
-          status: 'ACTIVATED',
+          status: 'SUCCEEDED',
           activatedAt: now,
-          idempotencyKey: idempotencyKey || null,
+          isZeroPayValidated: true,
         },
       });
 
       return {
         success: true,
-        status: 'ACTIVATED',
+        status: 'SUCCEEDED',
         dormitoryId: intent.dormitoryId,
         subscriptionId: sub.id,
         planCode: intent.isFreePlanSnapshot ? 'FREE' : 'PAID',
@@ -478,7 +516,8 @@ export class SubscriptionIntentService {
         expiresAt: subExpiresAt,
         coinDebited: intent.coinApplied,
         isTrial: intent.isTrialEligibleSnapshot,
-        promoBonusMonths: intent.promoBonusMonthsSnapshot,
+        promoBonusMonths,
+        promoApplied,
       };
     };
 
