@@ -166,12 +166,12 @@ export const TenantRegisterPage: React.FC = () => {
   const petPolicyAllowed = policyData.petPolicy?.allowed === 'conditional' || policyData.petPolicy?.allowed === 'all';
   const petTypesText = Array.isArray(policyData.petPolicy?.allowedTypes) && policyData.petPolicy.allowedTypes.length > 0
     ? policyData.petPolicy.allowedTypes.map(t => {
-        if (t === 'dog') return 'สุนัข';
-        if (t === 'cat') return 'แมว';
-        if (t === 'small_pet') return 'สัตว์เลี้ยงขนาดเล็ก';
-        if (t === 'exotic') return 'สัตว์แปลก';
-        return t;
-      }).join(', ')
+      if (t === 'dog') return 'สุนัข';
+      if (t === 'cat') return 'แมว';
+      if (t === 'small_pet') return 'สัตว์เลี้ยงขนาดเล็ก';
+      if (t === 'other') return 'อื่นๆ';
+      return t;
+    }).join(', ')
     : 'ไม่มีการระบุประเภท';
 
   return (
@@ -319,9 +319,8 @@ export const TenantRegisterPage: React.FC = () => {
                     <Heart className="w-3.5 h-3.5 text-rose-500" />
                     <span className="font-bold text-slate-700">นโยบายสัตว์เลี้ยง:</span>
                   </div>
-                  <span className={`font-bold px-2 py-0.5 rounded-md text-[11px] ${
-                    petPolicyAllowed ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'
-                  }`}>
+                  <span className={`font-bold px-2 py-0.5 rounded-md text-[11px] ${petPolicyAllowed ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'
+                    }`}>
                     {petPolicyAllowed ? `อนุญาต (${petTypesText})` : 'ไม่อนุญาตให้เลี้ยงสัตว์'}
                   </span>
                 </div>
