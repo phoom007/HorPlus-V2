@@ -912,6 +912,8 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
         termRent: b.rentRates?.term ?? null,
         termMonths: b.rentRates?.termMonths ?? 4,
         maxInstallmentMonths: b.rentRates?.maxInstallmentMonths ?? 2,
+        depositAmount: b.securityDeposit !== undefined ? b.securityDeposit : (formData.deposits.securityDeposit ?? 0),
+        securityDeposit: b.securityDeposit !== undefined ? b.securityDeposit : (formData.deposits.securityDeposit ?? 0),
         maximumOccupants: b.rentRates?.maxOccupants ?? 2,
       }));
 

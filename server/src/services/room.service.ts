@@ -311,10 +311,19 @@ export class RoomService {
         }
       }
 
+      const finalChanges = { ...changes };
+      if (finalChanges.depositAmount !== undefined && finalChanges.depositInheritsBuildingDefault === undefined) {
+        if (finalChanges.depositAmount !== null) {
+          finalChanges.depositInheritsBuildingDefault = false;
+        } else {
+          finalChanges.depositInheritsBuildingDefault = true;
+        }
+      }
+
       const updateRes = await tx.room.updateMany({
         where: { id, dormitoryId: targetDormId, deletedAt: null, version: expectedVersion },
         data: {
-          ...changes,
+          ...finalChanges,
           normalizedRoomNumber,
           version: { increment: 1 },
         },

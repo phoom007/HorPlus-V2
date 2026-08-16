@@ -348,6 +348,7 @@ export class SubscriptionIntentService {
           where: { dormitoryId: intent.dormitoryId },
           include: { plan: true },
         });
+        const isFreeReplay = intent.durationMonthsSnapshot === 0 && !intent.isTrialEligibleSnapshot;
         return {
           success: true,
           status: 'SUCCEEDED',
@@ -355,7 +356,7 @@ export class SubscriptionIntentService {
           packageIntentId: intent.id,
           dormitoryId: intent.dormitoryId,
           subscriptionId: existingSub?.id || '',
-          planCode: existingSub?.plan?.code || (intent.isFreePlanSnapshot ? 'FREE' : 'PAID'),
+          planCode: existingSub?.plan?.code || (isFreeReplay ? 'FREE' : 'PAID'),
           durationMonths: intent.durationMonthsSnapshot,
           expiresAt: existingSub?.expiresAt || null,
           coinDebited: intent.coinApplied,
@@ -363,6 +364,8 @@ export class SubscriptionIntentService {
           promoBonusMonths: intent.promoBonusMonthsSnapshot,
           message: 'รายการนี้ได้รับการเปิดใช้งานแล้ว',
         };
+      } else if (intent.status !== 'PENDING_PAYMENT') {
+        throw new AppError('สถานะรายการสั่งซื้อไม่ถูกต้อง', 400, 'INVALID_INTENT_STATUS');
       }
 
       const now = new Date();
@@ -385,6 +388,19 @@ export class SubscriptionIntentService {
         );
       }
 
+      // Revalidate INITIAL_TRIAL_V1 at commit time
+      if (intent.isTrialEligibleSnapshot) {
+        const existingClaim = await tx.accountBenefitClaim.findFirst({
+          where: {
+            userId,
+            benefitKey: 'INITIAL_TRIAL_V1',
+          },
+        });
+        if (existingClaim) {
+          throw new AppError('สิทธิ์ทดลองใช้งานฟรี 1 เดือนถูกใช้งานไปแล้ว กรุณาขอใบเสนอราคาใหม่', 409, 'TRIAL_ALREADY_CLAIMED');
+        }
+      }
+
       // 2. Lock and Debit Coin Wallet if Coin was applied (Exactly Once)
       if (intent.coinApplied > 0) {
         await coinWalletService.debitWallet(
@@ -403,7 +419,8 @@ export class SubscriptionIntentService {
       const proPlan = await tx.subscriptionPlan.findUnique({ where: { code: 'PAID' } });
       const freePlan = await tx.subscriptionPlan.findUnique({ where: { code: 'FREE' } });
 
-      let targetPlanId = intent.package?.planId || (intent.isFreePlanSnapshot ? freePlan.id : proPlan.id);
+      const isFree = intent.durationMonthsSnapshot === 0 && !intent.isTrialEligibleSnapshot;
+      let targetPlanId = isFree ? freePlan.id : (intent.package?.planId || proPlan.id);
       let subStatus: 'TRIAL' | 'ACTIVE' = 'ACTIVE';
       let subExpiresAt: Date | null = null;
       let durationMonths = 0;
@@ -413,9 +430,9 @@ export class SubscriptionIntentService {
         durationMonths = 1;
         subExpiresAt = addCalendarMonths(now, 1);
         targetPlanId = proPlan.id;
-      } else if (intent.isFreePlanSnapshot) {
+      } else if (isFree) {
         subStatus = 'ACTIVE';
-        subExpiresAt = null;
+        subExpiresAt = addCalendarMonths(now, 1200);
         targetPlanId = freePlan.id;
       } else {
         // Paid package (e.g. 100% coin discount or promo bonus)

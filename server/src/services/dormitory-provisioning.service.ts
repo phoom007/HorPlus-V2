@@ -81,6 +81,8 @@ export interface CompleteOwnerOnboardingParams {
     termRent?: number | null;
     termMonths?: number | null;
     maxInstallmentMonths?: number | null;
+    depositAmount?: number | null;
+    securityDeposit?: number | null;
     maximumOccupants?: number | null;
   }[];
   rooms?: {
@@ -91,7 +93,8 @@ export interface CompleteOwnerOnboardingParams {
     dailyRent?: number | null;
     termRent?: number | null;
     termMonths?: number | null;
-    depositAmount: number;
+    depositAmount?: number | null;
+    depositInheritsBuildingDefault?: boolean | null;
     parkingFee?: number;
     maximumOccupants?: number;
     initialWaterReading?: number;
@@ -506,11 +509,61 @@ export class DormitoryProvisioningService {
         throw new AppError('รายการคำสั่งซื้อนี้เป็นเวอร์ชันเดิม ไม่สามารถเปิดใช้งานได้', 400, 'INVALID_CHECKOUT_VERSION');
       }
 
-      if (authoritativeIntent.status !== 'PENDING_PAYMENT' && authoritativeIntent.status !== 'SUCCEEDED') {
+      // CRITICAL: If authoritativeIntent is already SUCCEEDED, return immutable finalized state with ZERO mutations
+      if (authoritativeIntent.status === 'SUCCEEDED') {
+        const existingSub = await tx.dormitorySubscription.findUnique({
+          where: { dormitoryId: dormId },
+          include: { plan: true },
+        });
+
+        const activeDormDb = await tx.dormitory.findUnique({
+          where: { id: dormId },
+        });
+
+        const isTrial = existingSub?.status === 'TRIAL' || authoritativeIntent.isTrialEligibleSnapshot;
+        const promoBonus = authoritativeIntent.promoCodeSnapshot ? 2 : (authoritativeIntent.promoBonusMonthsSnapshot || 0);
+
+        const isFreeReplay = authoritativeIntent.durationMonthsSnapshot === 0 && !authoritativeIntent.isTrialEligibleSnapshot;
+
+        return {
+          success: true,
+          dormitoryId: dormId,
+          dormitoryName: activeDormDb?.name || provDorm.name,
+          dormitory: {
+            id: dormId,
+            name: activeDormDb?.name || provDorm.name,
+          },
+          membership: {
+            roleCode: 'OWNER',
+          },
+          subscription: {
+            id: existingSub?.id || '',
+            planCode: existingSub?.plan?.code || (isFreeReplay ? 'FREE' : 'PAID'),
+            status: existingSub?.status || (isTrial ? 'TRIAL' : 'ACTIVE'),
+            trialExpiresAt: existingSub?.trialExpiresAt ? existingSub.trialExpiresAt.toISOString() : (existingSub?.expiresAt ? existingSub.expiresAt.toISOString() : null),
+            expiresAt: existingSub?.expiresAt ? existingSub.expiresAt.toISOString() : null,
+          },
+          promo: {
+            applied: promoBonus > 0,
+            promoBonusMonths: promoBonus,
+            trialMonths: isTrial ? 1 : 0,
+            totalTrialMonths: (isTrial ? 1 : 0) + promoBonus,
+          },
+          planCode: existingSub?.plan?.code || (isFreeReplay ? 'FREE' : 'PAID'),
+          subscriptionStatus: existingSub?.status || (isTrial ? 'TRIAL' : 'ACTIVE'),
+          trialExpiresAt: existingSub?.trialExpiresAt ? existingSub.trialExpiresAt.toISOString() : (existingSub?.expiresAt ? existingSub.expiresAt.toISOString() : null),
+          promoApplied: promoBonus > 0,
+          totalTrialMonths: (isTrial ? 1 : 0) + promoBonus,
+          packageIntentId: authoritativeIntent.id,
+          isReplay: true,
+        };
+      }
+
+      if (authoritativeIntent.status !== 'PENDING_PAYMENT') {
         throw new AppError('สถานะรายการคำสั่งซื้อไม่ถูกต้อง', 400, 'INVALID_INTENT_STATUS');
       }
 
-      if (authoritativeIntent.status === 'PENDING_PAYMENT' && authoritativeIntent.expiresAt && authoritativeIntent.expiresAt < now) {
+      if (authoritativeIntent.expiresAt && authoritativeIntent.expiresAt < now) {
         throw new AppError('รายการคำสั่งซื้อแพ็กเกจหมดอายุแล้ว กรุณาเลือกแพ็กเกจใหม่อีกครั้ง', 400, 'INTENT_EXPIRED');
       }
 
@@ -607,16 +660,16 @@ export class DormitoryProvisioningService {
             dormitoryId: dormId,
             billingDay: Number(billing.billingDay) || 25,
             dueDay: Number(billing.dueDay) || 5,
-            waterBillingType: billing.waterBillingType || 'per_unit',
+            waterBillingType: billing.waterBillingType || 'per_person',
             waterRate: waterRateStr,
             electricityBillingType: billing.electricityBillingType || 'per_unit',
             electricityRate: electricityRateStr,
             commonFee: commonFeeStr,
-            commonFeeMode: billing.commonFeeMode || 'none',
+            commonFeeMode: billing.commonFeeMode || 'per_room',
             internetFee: internetFeeStr,
-            internetFeeMode: billing.internetFeeMode || 'none',
+            internetFeeMode: billing.internetFeeMode || 'per_person',
             parkingRate: parkingRateStr,
-            parkingFeeMode: billing.parkingFeeMode || 'none',
+            parkingFeeMode: billing.parkingFeeMode || 'per_room',
             gracePeriodDays: gracePeriodDaysNum,
             advanceRentMonths: advanceRentMonthsNum,
             lateFeeType: billing.lateFeeType || 'none',
@@ -626,16 +679,16 @@ export class DormitoryProvisioningService {
           update: {
             billingDay: Number(billing.billingDay) || 25,
             dueDay: Number(billing.dueDay) || 5,
-            waterBillingType: billing.waterBillingType || 'per_unit',
+            waterBillingType: billing.waterBillingType || 'per_person',
             waterRate: waterRateStr,
             electricityBillingType: billing.electricityBillingType || 'per_unit',
             electricityRate: electricityRateStr,
             commonFee: commonFeeStr,
-            commonFeeMode: billing.commonFeeMode || 'none',
+            commonFeeMode: billing.commonFeeMode || 'per_room',
             internetFee: internetFeeStr,
-            internetFeeMode: billing.internetFeeMode || 'none',
+            internetFeeMode: billing.internetFeeMode || 'per_person',
             parkingRate: parkingRateStr,
-            parkingFeeMode: billing.parkingFeeMode || 'none',
+            parkingFeeMode: billing.parkingFeeMode || 'per_room',
             gracePeriodDays: gracePeriodDaysNum,
             advanceRentMonths: advanceRentMonthsNum,
             lateFeeType: billing.lateFeeType || 'none',
@@ -697,10 +750,12 @@ export class DormitoryProvisioningService {
           const bMonthlyStr = (b.monthlyRent !== undefined && b.monthlyRent !== null) ? String(b.monthlyRent) : null;
           const bDailyStr = (b.dailyRent !== undefined && b.dailyRent !== null) ? String(b.dailyRent) : null;
           const bTermStr = (b.termRent !== undefined && b.termRent !== null) ? String(b.termRent) : null;
-          const bTermMonths = b.termMonths ?? 6;
+          const bTermMonths = b.termMonths ?? 4;
           const bMaxInstallments = (b.maxInstallmentMonths !== undefined && b.maxInstallmentMonths !== null)
             ? Math.max(1, Math.min(12, Number(b.maxInstallmentMonths)))
-            : 1;
+            : 2;
+          const bDepositNum = b.depositAmount !== undefined ? b.depositAmount : b.securityDeposit;
+          const bDepositStr = (bDepositNum !== undefined && bDepositNum !== null) ? String(bDepositNum) : null;
           const bMaxOcc = b.maximumOccupants ?? 2;
           const bNumPattern = b.numberingPattern || b.formatPattern || null;
 
@@ -726,6 +781,7 @@ export class DormitoryProvisioningService {
               termRent: bTermStr,
               termMonths: bTermMonths,
               maxTermRentInstallments: bMaxInstallments,
+              depositAmount: bDepositStr,
               maximumOccupants: bMaxOcc,
             },
             update: {
@@ -741,6 +797,7 @@ export class DormitoryProvisioningService {
               termRent: bTermStr,
               termMonths: bTermMonths,
               maxTermRentInstallments: bMaxInstallments,
+              depositAmount: bDepositStr,
               maximumOccupants: bMaxOcc,
             },
           });
@@ -752,7 +809,13 @@ export class DormitoryProvisioningService {
             const rDailyStr = (r.dailyRent !== undefined && r.dailyRent !== null) ? String(r.dailyRent) : bDailyStr;
             const rTermStr = (r.termRent !== undefined && r.termRent !== null) ? String(r.termRent) : bTermStr;
             const rTermMonths = r.termMonths ?? bTermMonths;
-            const rDepositStr = (r.depositAmount !== undefined && r.depositAmount !== null) ? String(r.depositAmount) : '0';
+
+            const isExplicitRoomDeposit = r.depositAmount !== undefined && r.depositAmount !== null && (bDepositStr === null || String(r.depositAmount) !== bDepositStr) && r.depositInheritsBuildingDefault === false;
+            const depositInheritsBuildingDefault = isExplicitRoomDeposit ? false : (r.depositInheritsBuildingDefault !== undefined ? Boolean(r.depositInheritsBuildingDefault) : true);
+            const rDepositStr = !depositInheritsBuildingDefault && r.depositAmount !== undefined && r.depositAmount !== null
+              ? String(r.depositAmount)
+              : (bDepositStr !== null ? bDepositStr : (r.depositAmount !== undefined && r.depositAmount !== null ? String(r.depositAmount) : '0'));
+
             const rMaxOcc = r.maximumOccupants ?? bMaxOcc;
 
             await tx.room.upsert({
@@ -774,6 +837,7 @@ export class DormitoryProvisioningService {
                 termRent: rTermStr,
                 termMonths: rTermMonths,
                 depositAmount: rDepositStr,
+                depositInheritsBuildingDefault,
                 maximumOccupants: rMaxOcc,
                 status: r.status || 'VACANT',
               },
@@ -787,6 +851,7 @@ export class DormitoryProvisioningService {
                 termRent: rTermStr,
                 termMonths: rTermMonths,
                 depositAmount: rDepositStr,
+                depositInheritsBuildingDefault,
                 maximumOccupants: rMaxOcc,
                 status: r.status || 'VACANT',
               },
