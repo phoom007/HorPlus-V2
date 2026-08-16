@@ -7,6 +7,7 @@ export interface CatalogPackageDefinition {
   planCode: string;
   durationMonths: number;
   price: number | null;
+  referencePrice?: number | null;
   currency: string;
   enabled: boolean;
 }
@@ -27,6 +28,7 @@ export interface CatalogPromoCodeDefinition {
   benefitType: string;
   benefitUnit: string;
   benefitValue: number;
+  globalMaxRedemptions?: number | null;
   enabled: boolean;
   maximumRedemptionsPerDormitory: number;
 }
@@ -41,9 +43,9 @@ export interface SubscriptionCatalogRelease {
 }
 
 export const CANONICAL_SUBSCRIPTION_CATALOG: SubscriptionCatalogRelease = {
-  version: 1,
-  releaseDate: '2026-08-09',
-  description: 'HorPlus Version 1 Canonical Product & Package Catalog',
+  version: 2,
+  releaseDate: '2026-08-16',
+  description: 'HorPlus Version 2 Canonical Product & Package Catalog (LOCAL-07 Master)',
   plans: [
     {
       code: 'FREE',
@@ -67,36 +69,41 @@ export const CANONICAL_SUBSCRIPTION_CATALOG: SubscriptionCatalogRelease = {
       planCode: 'PAID',
       durationMonths: 1,
       price: 189,
+      referencePrice: 990,
       currency: 'THB',
       enabled: true,
     },
     {
       planCode: 'PAID',
       durationMonths: 3,
-      price: null,
+      price: 529,
+      referencePrice: 2990,
       currency: 'THB',
-      enabled: false,
+      enabled: true,
     },
     {
       planCode: 'PAID',
       durationMonths: 6,
-      price: null,
+      price: 999,
+      referencePrice: 5990,
       currency: 'THB',
-      enabled: false,
+      enabled: true,
     },
     {
       planCode: 'PAID',
       durationMonths: 12,
-      price: null,
+      price: 1799,
+      referencePrice: 10990,
       currency: 'THB',
-      enabled: false,
+      enabled: true,
     },
     {
       planCode: 'PAID',
       durationMonths: 24,
-      price: null,
+      price: 2999,
+      referencePrice: 20000,
       currency: 'THB',
-      enabled: false,
+      enabled: true,
     },
   ],
   promoCodes: [
@@ -107,6 +114,7 @@ export const CANONICAL_SUBSCRIPTION_CATALOG: SubscriptionCatalogRelease = {
       benefitType: 'TRIAL_EXTENSION',
       benefitUnit: 'MONTH',
       benefitValue: 2,
+      globalMaxRedemptions: 100,
       enabled: true,
       maximumRedemptionsPerDormitory: 1,
     },

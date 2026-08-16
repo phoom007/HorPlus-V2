@@ -1,4 +1,16 @@
+/**
+ * Canonical Promo Code Authority Service (LOCAL-07 Master)
+ * Invariants:
+ * - HORPLUS grants +2 months (60 days)
+ * - First 100 Google Accounts globally (atomic concurrency cap)
+ * - Single redemption per Google Account
+ * - Works whether initial trial is unused (1 + 2 = 3 months) or already consumed (+2 months)
+ * @license Apache-2.0
+ */
+
 import { PrismaClient } from '@prisma/client';
+import { getPrismaClient } from '../db/prisma.js';
+import { AppError } from '../types/index.js';
 
 export interface PromoValidationResult {
   valid: boolean;
@@ -22,16 +34,25 @@ export class PromoService {
     if (prismaOrRepo && typeof prismaOrRepo.$transaction === 'function') {
       this.prisma = prismaOrRepo;
     } else {
-      this.prisma = new PrismaClient();
+      this.prisma = getPrismaClient();
     }
   }
 
-  public async validatePromo(code: string | undefined, userId?: string): Promise<PromoValidationResult> {
+  /**
+   * Authoritative promo validation used across Onboarding, Subscription Quote, and Renewal
+   */
+  public async validatePromo(
+    code: string | undefined,
+    userId?: string,
+    dormitoryId?: string,
+    txClient?: any
+  ): Promise<PromoValidationResult> {
+    const db = txClient || this.prisma;
     let initialTrialMonths = 1;
     let isInitialTrialClaimed = false;
 
     if (userId) {
-      const existingClaim = await this.prisma.accountBenefitClaim.findFirst({
+      const existingClaim = await db.accountBenefitClaim.findFirst({
         where: {
           userId: userId,
           benefitKey: 'INITIAL_TRIAL_V1',
@@ -68,7 +89,7 @@ export class PromoService {
     }
 
     const normalizedCode = code.trim().toUpperCase();
-    const promo = await this.prisma.promoCode.findFirst({
+    const promo = await db.promoCode.findFirst({
       where: {
         OR: [
           { normalizedCode },
@@ -130,43 +151,9 @@ export class PromoService {
       };
     }
 
-    // PROMO-01: Strictly validate benefit configuration (No silent hardcoded fallback)
-    if (
-      promo.benefitType !== 'TRIAL_EXTENSION' ||
-      promo.benefitUnit !== 'MONTH' ||
-      typeof promo.benefitValue !== 'number' ||
-      promo.benefitValue <= 0
-    ) {
-      return {
-        valid: false,
-        eligible: false,
-        code: normalizedCode,
-        trialMonths: initialTrialMonths,
-        promoBonusMonths: 0,
-        totalTrialMonths: initialTrialMonths,
-        message: 'การกำหนดค่าสิทธิประโยชน์ของโปรโมชันไม่ถูกต้อง',
-        errorCode: 'PROMO_CONFIGURATION_INVALID',
-      };
-    }
-
-    if (isInitialTrialClaimed) {
-      return {
-        valid: true,
-        eligible: false,
-        code: normalizedCode,
-        benefitType: promo.benefitType,
-        benefitUnit: promo.benefitUnit,
-        benefitValue: promo.benefitValue,
-        trialMonths: 0,
-        promoBonusMonths: 0,
-        totalTrialMonths: 0,
-        message: 'บัญชีนี้เคยใช้สิทธิ์ทดลองใช้งานฟรีเริ่มต้นไปแล้ว ไม่สามารถรับสิทธิ์ส่วนขยายทดลองใช้ฟรีซ้ำได้',
-        errorCode: 'INITIAL_TRIAL_ALREADY_CLAIMED',
-      };
-    }
-
+    // Check account-level one-redemption-per-account invariant
     if (userId) {
-      const existingRedemption = await this.prisma.promoRedemption.findFirst({
+      const existingRedemption = await db.promoRedemption.findFirst({
         where: {
           promoCodeId: promo.id,
           redeemedBy: userId,
@@ -181,13 +168,48 @@ export class PromoService {
           trialMonths: initialTrialMonths,
           promoBonusMonths: 0,
           totalTrialMonths: initialTrialMonths,
-          message: 'รหัสโปรโมชันนี้ถูกใช้งานไปแล้วกับบัญชีนี้',
+          message: 'บัญชีนี้เคยใช้สิทธิ์โปรโมชันนี้ไปแล้ว',
           errorCode: 'PROMO_ALREADY_REDEEMED',
         };
       }
     }
 
-    const bonusMonths = promo.benefitValue;
+    // Check global capacity cap (first 100 accounts)
+    if (promo.globalMaxRedemptions !== null && promo.globalMaxRedemptions !== undefined) {
+      const currentCount = promo.currentRedemptionsCount;
+      if (currentCount >= promo.globalMaxRedemptions) {
+        return {
+          valid: false,
+          eligible: false,
+          code: normalizedCode,
+          trialMonths: initialTrialMonths,
+          promoBonusMonths: 0,
+          totalTrialMonths: initialTrialMonths,
+          message: `สิทธิ์โปรโมชันนี้ครบตามจำนวนที่กำหนดแล้ว (${promo.globalMaxRedemptions} บัญชี)`,
+          errorCode: 'PROMO_GLOBAL_LIMIT_REACHED',
+        };
+      }
+    }
+
+    // Check benefit configuration validity
+    if (promo.benefitType !== 'TRIAL_EXTENSION' || promo.benefitValue <= 0) {
+      return {
+        valid: false,
+        eligible: false,
+        code: normalizedCode,
+        trialMonths: initialTrialMonths,
+        promoBonusMonths: 0,
+        totalTrialMonths: initialTrialMonths,
+        message: 'การตั้งค่าสิทธิ์โปรโมชันไม่ถูกต้อง',
+        errorCode: 'PROMO_CONFIGURATION_INVALID',
+      };
+    }
+
+    // Dual-State Promo Calculation:
+    // If trial unused: 1 mo trial + 2 mo HORPLUS = 3 mo
+    // If trial consumed: 0 mo trial + 2 mo HORPLUS = 2 mo
+    const promoBonusMonths = promo.benefitValue;
+    const totalTrialMonths = initialTrialMonths + promoBonusMonths;
 
     return {
       valid: true,
@@ -195,12 +217,83 @@ export class PromoService {
       code: normalizedCode,
       benefitType: promo.benefitType,
       benefitUnit: promo.benefitUnit,
-      benefitValue: bonusMonths,
+      benefitValue: promo.benefitValue,
       trialMonths: initialTrialMonths,
-      promoBonusMonths: bonusMonths,
-      totalTrialMonths: initialTrialMonths + bonusMonths,
-      message: `รหัสโปรโมชันถูกต้อง คุณได้รับส่วนขยายเพิ่ม ${bonusMonths} เดือน`,
+      promoBonusMonths: promoBonusMonths,
+      totalTrialMonths: totalTrialMonths,
+      message: `ใช้รหัสโปรโมชัน ${normalizedCode} สำเร็จ (รับสิทธิ์เพิ่ม ${promoBonusMonths} เดือน)`,
       promoCodeEntity: promo,
     };
   }
+
+  /**
+   * Authoritative promo redemption with transactional capacity row-locking
+   */
+  public async redeemPromoAtomic(
+    userId: string,
+    dormitoryId: string,
+    code: string,
+    txClient?: any
+  ) {
+    const runInTx = async (tx: any) => {
+      const normalizedCode = code.trim().toUpperCase();
+
+      const promo = await tx.promoCode.findFirst({
+        where: {
+          OR: [
+            { normalizedCode },
+            { code: normalizedCode },
+          ],
+        },
+      });
+
+      if (!promo) {
+        throw new AppError('ไม่พบรหัสโปรโมชัน', 404, 'PROMO_NOT_FOUND');
+      }
+
+      // 1. Lock promo row for atomic capacity count update
+      await tx.$executeRaw`SELECT * FROM "promo_codes" WHERE "id" = ${promo.id}::uuid FOR UPDATE`;
+
+      const lockedPromo = await tx.promoCode.findUniqueOrThrow({
+        where: { id: promo.id },
+      });
+
+      if (lockedPromo.globalMaxRedemptions !== null && lockedPromo.currentRedemptionsCount >= lockedPromo.globalMaxRedemptions) {
+        throw new AppError(
+          `สิทธิ์โปรโมชันนี้ครบตามจำนวนที่กำหนดแล้ว (${lockedPromo.globalMaxRedemptions} บัญชี)`,
+          400,
+          'PROMO_GLOBAL_LIMIT_REACHED'
+        );
+      }
+
+      // 2. Check duplicate account redemption
+      const existingRedemption = await tx.promoRedemption.findFirst({
+        where: {
+          promoCodeId: lockedPromo.id,
+          redeemedBy: userId,
+        },
+      });
+
+      if (existingRedemption) {
+        throw new AppError('บัญชีนี้เคยใช้สิทธิ์โปรโมชันนี้ไปแล้ว', 400, 'PROMO_ALREADY_REDEEMED');
+      }
+
+      // 3. Atomically increment capacity counter
+      await tx.promoCode.update({
+        where: { id: lockedPromo.id },
+        data: {
+          currentRedemptionsCount: { increment: 1 },
+        },
+      });
+
+      return lockedPromo;
+    };
+
+    if (txClient) {
+      return await runInTx(txClient);
+    }
+    return await this.prisma.$transaction(runInTx);
+  }
 }
+
+export const promoService = new PromoService();

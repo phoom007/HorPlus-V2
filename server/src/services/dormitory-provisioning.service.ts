@@ -13,6 +13,8 @@ import { normalizeRoomIdentifier } from '../utils/normalization.js';
 import { decryptText, generateOpaqueWebhookKey } from '../utils/crypto-encryption.js';
 import { IIdempotencyRepository, InMemoryIdempotencyRepository } from '../db/repositories/idempotency.repository.js';
 import { getPublicWebhookOrigin } from './line-oa.service.js';
+import { promoService } from './promo.service.js';
+import { referralService } from './referral.service.js';
 
 export interface CompleteOwnerOnboardingParams {
   userId: string;
@@ -434,15 +436,14 @@ export class DormitoryProvisioningService {
       if (hasConfiguredLine) {
         const isLineReady = Boolean(
           lineConfig &&
-          lineConfig.accessTokenVerifiedAt &&
-          lineConfig.webhookEndpointSetAt &&
-          lineConfig.webhookTestSucceededAt &&
-          lineConfig.webhookActive
+          lineConfig.channelId &&
+          lineConfig.channelSecretEncrypted &&
+          lineConfig.accessTokenVerifiedAt
         );
 
         if (!isLineReady) {
           throw new AppError(
-            'LINE OA ยังไม่พร้อมใช้งาน กรุณาตั้งค่า LINE OA ให้ครบทุกขั้นตอนก่อนยืนยันสร้างหอพัก',
+            'LINE OA ยังไม่พร้อมใช้งาน กรุณายืนยันการเชื่อมต่อ LINE OA (Channel ID และ Channel Secret) ก่อนยืนยันสร้างหอพัก',
             400,
             'LINE_ONBOARDING_NOT_READY'
           );
@@ -737,62 +738,50 @@ export class DormitoryProvisioningService {
       let trialGrantedMonths = isTrialEligible ? 1 : 0;
       let initialTrialExpiresAt = isTrialEligible ? addCalendarMonths(now, 1) : now;
 
-      // Data-driven Promo Code evaluation (PROMO-01)
+      // Canonical Promo Code evaluation (PromoService)
       let finalExpiresAt = initialTrialExpiresAt;
       let promoApplied = false;
       let canonicalPromo: any = null;
 
-      if (promoCode && promoCode.trim() && isTrialEligible) {
-        const normalizedCode = promoCode.trim().toUpperCase();
-        canonicalPromo = await tx.promoCode.findFirst({
-          where: {
-            OR: [
-              { normalizedCode },
-              { code: normalizedCode },
-            ],
-          },
-        });
-
-        if (
-          canonicalPromo &&
-          canonicalPromo.enabled &&
-          (!canonicalPromo.startsAt || canonicalPromo.startsAt <= now) &&
-          (!canonicalPromo.endsAt || canonicalPromo.endsAt >= now) &&
-          canonicalPromo.benefitType === 'TRIAL_EXTENSION' &&
-          canonicalPromo.benefitUnit === 'MONTH' &&
-          typeof canonicalPromo.benefitValue === 'number' &&
-          canonicalPromo.benefitValue > 0
-        ) {
-          const existingRedemption = await tx.promoRedemption.findUnique({
-            where: { promo_user_unique: { promoCodeId: canonicalPromo.id, redeemedBy: userId } },
-          });
-
-          if (!existingRedemption) {
-            finalExpiresAt = addCalendarMonths(initialTrialExpiresAt, canonicalPromo.benefitValue);
-            promoApplied = true;
-          }
+      if (promoCode && promoCode.trim()) {
+        const promoRes = await promoService.validatePromo(promoCode, userId, dormId, tx);
+        if (promoRes.valid && promoRes.eligible) {
+          canonicalPromo = await promoService.redeemPromoAtomic(userId, dormId, promoCode, tx);
+          const bonusMonths = canonicalPromo.benefitValue || 2;
+          finalExpiresAt = addCalendarMonths(initialTrialExpiresAt, bonusMonths);
+          promoApplied = true;
         }
       }
+
+      // Mandatory Guard 1: Real HorPlus PRO entitlement during trial
+      const proPlan = await tx.subscriptionPlan.findUnique({ where: { code: 'PAID' } });
+      const freePlan = await tx.subscriptionPlan.findUnique({ where: { code: 'FREE' } });
+
+      const effectivePlan = (isTrialEligible || promoApplied || resolvedPlanCode === 'PAID')
+        ? (proPlan || plan)
+        : (freePlan || plan);
+
+      const subStatus = (isTrialEligible || promoApplied) ? 'TRIAL' : (resolvedPlanCode === 'PAID' ? 'ACTIVE' : 'ACTIVE');
 
       const sub = await tx.dormitorySubscription.upsert({
         where: { dormitoryId: dormId },
         create: {
           dormitoryId: dormId,
-          planId: plan.id,
-          status: 'TRIAL',
+          planId: effectivePlan.id,
+          status: subStatus,
           startedAt: now,
-          expiresAt: finalExpiresAt,
-          trialStartedAt: now,
-          trialExpiresAt: initialTrialExpiresAt,
+          expiresAt: (isTrialEligible || promoApplied) ? finalExpiresAt : addCalendarMonths(now, 12),
+          trialStartedAt: (isTrialEligible || promoApplied) ? now : null,
+          trialExpiresAt: isTrialEligible ? initialTrialExpiresAt : null,
           promoExtendedAt: promoApplied ? now : null,
         },
         update: {
-          planId: plan.id,
-          status: 'TRIAL',
+          planId: effectivePlan.id,
+          status: subStatus,
           startedAt: now,
-          expiresAt: finalExpiresAt,
-          trialStartedAt: now,
-          trialExpiresAt: initialTrialExpiresAt,
+          expiresAt: (isTrialEligible || promoApplied) ? finalExpiresAt : addCalendarMonths(now, 12),
+          trialStartedAt: (isTrialEligible || promoApplied) ? now : null,
+          trialExpiresAt: isTrialEligible ? initialTrialExpiresAt : null,
           promoExtendedAt: promoApplied ? now : null,
           updatedAt: now,
         },
@@ -803,11 +792,11 @@ export class DormitoryProvisioningService {
           data: {
             subscriptionId: sub.id,
             dormitoryId: dormId,
-            previousPlanId: plan.id,
-            newPlanId: plan.id,
+            previousPlanId: null,
+            newPlanId: effectivePlan.id,
             previousStatus: null,
             newStatus: 'TRIAL',
-            reason: 'INITIAL_TRIAL_ONBOARDING',
+            reason: 'INITIAL_PRO_TRIAL_ONBOARDING',
             actorId: userId,
           },
         });
@@ -838,6 +827,9 @@ export class DormitoryProvisioningService {
         });
       }
 
+      // Settle Referral on first dormitory creation
+      await referralService.settleReferralOnboarding(userId, dormId, 0, tx);
+
       if (selectedPackage) {
         await tx.subscriptionPackageIntent.create({
           data: {
@@ -847,8 +839,12 @@ export class DormitoryProvisioningService {
             status: 'PENDING_PAYMENT',
             durationMonthsSnapshot: selectedPackage.durationMonths,
             priceSnapshot: selectedPackage.price,
+            referencePriceSnapshot: selectedPackage.referencePrice,
+            finalPayableAmount: selectedPackage.price,
+            checkoutVersion: 2,
+            isZeroPayValidated: false,
             currencySnapshot: selectedPackage.currency,
-            catalogVersion: selectedPackage.catalogVersion || 1,
+            catalogVersion: selectedPackage.catalogVersion || 2,
           },
         });
       }

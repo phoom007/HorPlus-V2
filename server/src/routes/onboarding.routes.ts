@@ -204,7 +204,7 @@ export function createOnboardingRouter(
         buildings: parsed.data.buildings,
         rooms: parsed.data.rooms ? parsed.data.rooms.map((r) => ({ ...r, maximumOccupants: r.maximumOccupants ?? undefined })) : undefined,
         planCode: parsed.data.planCode,
-        packageId: req.body.packageId,
+        packageId: parsed.data.packageId || req.body.packageId,
         promoCode: parsed.data.promoCode,
         rules: parsed.data.rules,
         defaultTerms: parsed.data.defaultTerms,

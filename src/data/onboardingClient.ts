@@ -212,10 +212,40 @@ export const onboardingClient = {
   },
 
   async getAvailablePackages() {
-    return httpRequest<any>('GET', '/public/subscription-catalog');
+    return httpRequest<any>('GET', '/subscription/packages');
   },
 
   async getPublicCatalog() {
-    return httpRequest<any>('GET', '/public/subscription-catalog');
+    return httpRequest<any>('GET', '/subscription/packages');
+  },
+
+  async getReferralMe() {
+    return httpRequest<any>('GET', '/referral/me');
+  },
+
+  async validateReferral(code: string) {
+    return httpRequest<any>('POST', '/referral/validate', { code });
+  },
+
+  async getCoinWallet() {
+    return httpRequest<any>('GET', '/referral/wallet');
+  },
+
+  async getPackages() {
+    return httpRequest<any>('GET', '/subscription/packages');
+  },
+
+  async getSubscriptionQuote(data: {
+    packageId?: string;
+    isFreePlan?: boolean;
+    promoCode?: string;
+    referralCode?: string;
+    coinRequested?: number;
+  }) {
+    return httpRequest<any>('POST', '/subscription/quote', data);
+  },
+
+  async commitSubscriptionIntent(intentId: string, idempotencyKey?: string) {
+    return httpRequest<any>('POST', '/subscription/commit', { intentId, idempotencyKey });
   }
 };

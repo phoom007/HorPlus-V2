@@ -42,6 +42,11 @@ model User {
   ownerSignatures       OwnerSignature[]
   accountBenefitClaims  AccountBenefitClaim[]
   subscriptionPackageIntents SubscriptionPackageIntent[]
+  referralCode          UserReferralCode?
+  inviteeAttribution    ReferralAttribution? @relation("InviteeAttribution")
+  inviterAttributions   ReferralAttribution[] @relation("InviterAttributions")
+  coinWallet            CoinWallet?
+  coinLedgerEntries     CoinLedgerEntry[]
 
   @@map("users")
 }
@@ -108,6 +113,7 @@ model Dormitory {
   lineWebhookReceipts        LineWebhookEventReceipt[]
   linePushUsage              LinePushUsage[]
   linePushDeliveryAttempts   LinePushDeliveryAttempt[]
+  referralAttributions       ReferralAttribution[]
   onboardingDrafts           OnboardingDraft[]
   ownerSignatures            OwnerSignature[]
   accountBenefitClaims       AccountBenefitClaim[]
@@ -414,6 +420,7 @@ model Room {
   termMonths                Int?      @default(6) @map("term_months")
   dailyRent                 Decimal?  @map("daily_rent") @db.Decimal(12, 2)
   depositAmount             Decimal?  @map("deposit_amount") @db.Decimal(12, 2)
+  depositInheritsBuildingDefault Boolean @default(true) @map("deposit_inherits_building_default")
   advancePaymentAmount      Decimal?  @map("advance_payment_amount") @db.Decimal(12, 2)
   waterRate                 Decimal?  @map("water_rate") @db.Decimal(12, 2)
   electricityRate           Decimal?  @map("electricity_rate") @db.Decimal(12, 2)
@@ -1184,6 +1191,7 @@ model SubscriptionPackage {
   planId         String   @map("plan_id") @db.Uuid
   durationMonths Int      @map("duration_months")
   price          Decimal? @db.Decimal(12, 2)
+  referencePrice Decimal? @map("reference_price") @db.Decimal(12, 2)
   currency       String   @default("THB") @db.VarChar(10)
   enabled        Boolean  @default(true)
   catalogVersion Int      @default(1) @map("catalog_version")
@@ -1257,6 +1265,8 @@ model PromoCode {
   benefitType                    String    @default("TRIAL_EXTENSION") @map("benefit_type") @db.VarChar(50)
   benefitUnit                    String    @default("MONTH") @map("benefit_unit") @db.VarChar(20)
   benefitValue                   Int       @default(2) @map("benefit_value")
+  globalMaxRedemptions           Int?      @map("global_max_redemptions")
+  currentRedemptionsCount        Int       @default(0) @map("current_redemptions_count")
   enabled                        Boolean   @default(true)
   startsAt                       DateTime? @map("starts_at") @db.Timestamptz()
   endsAt                         DateTime? @map("ends_at") @db.Timestamptz()
@@ -1475,18 +1485,30 @@ model AccountBenefitClaim {
 }
 
 model SubscriptionPackageIntent {
-  id                     String    @id @default(uuid()) @db.Uuid
-  dormitoryId            String    @map("dormitory_id") @db.Uuid
-  userId                 String    @map("user_id") @db.Uuid
-  packageId              String    @map("package_id") @db.Uuid
-  status                 String    @default("PENDING_PAYMENT") @db.VarChar(50)
-  durationMonthsSnapshot Int       @map("duration_months_snapshot")
-  priceSnapshot          Decimal?  @map("price_snapshot") @db.Decimal(12, 2)
-  currencySnapshot       String    @default("THB") @map("currency_snapshot") @db.VarChar(10)
-  catalogVersion         Int       @default(1) @map("catalog_version")
-  activatedAt            DateTime? @map("activated_at") @db.Timestamptz()
-  createdAt              DateTime  @default(now()) @map("created_at") @db.Timestamptz()
-  updatedAt              DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
+  id                         String    @id @default(uuid()) @db.Uuid
+  dormitoryId                String    @map("dormitory_id") @db.Uuid
+  userId                     String    @map("user_id") @db.Uuid
+  packageId                  String    @map("package_id") @db.Uuid
+  status                     String    @default("PENDING_PAYMENT") @db.VarChar(50)
+  durationMonthsSnapshot     Int       @map("duration_months_snapshot")
+  priceSnapshot              Decimal?  @map("price_snapshot") @db.Decimal(12, 2)
+  referencePriceSnapshot     Decimal?  @map("reference_price_snapshot") @db.Decimal(12, 2)
+  isTrialEligibleSnapshot    Boolean   @default(false) @map("is_trial_eligible_snapshot")
+  promoCodeSnapshot          String?   @map("promo_code_snapshot") @db.VarChar(50)
+  promoBonusMonthsSnapshot   Int       @default(0) @map("promo_bonus_months_snapshot")
+  referralCodeSnapshot       String?   @map("referral_code_snapshot") @db.VarChar(6)
+  coinRequested              Int       @default(0) @map("coin_requested")
+  coinApplied                Int       @default(0) @map("coin_applied")
+  finalPayableAmount         Decimal?  @map("final_payable_amount") @db.Decimal(12, 2)
+  checkoutVersion            Int       @default(1) @map("checkout_version")
+  isZeroPayValidated         Boolean   @default(false) @map("is_zero_pay_validated")
+  currencySnapshot           String    @default("THB") @map("currency_snapshot") @db.VarChar(10)
+  catalogVersion             Int       @default(1) @map("catalog_version")
+  idempotencyKey             String?   @unique @map("idempotency_key") @db.VarChar(255)
+  expiresAt                  DateTime? @map("expires_at") @db.Timestamptz()
+  activatedAt                DateTime? @map("activated_at") @db.Timestamptz()
+  createdAt                  DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt                  DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
 
   dormitory Dormitory           @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
   user      User                @relation(fields: [userId], references: [id], onDelete: Restrict)
@@ -1642,3 +1664,86 @@ model StaffNotification {
   @@index([userId, isRead])
   @@map("staff_notices")
 }
+
+model UserReferralCode {
+  id         String   @id @default(uuid()) @db.Uuid
+  userId     String   @unique @map("user_id") @db.Uuid
+  code       String   @unique @db.VarChar(6)
+  maxUsage   Int      @default(10) @map("max_usage")
+  usageCount Int      @default(0) @map("usage_count")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt  DateTime @updatedAt @map("updated_at") @db.Timestamptz()
+
+  user         User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  attributions ReferralAttribution[]
+
+  @@map("user_referral_codes")
+}
+
+model ReferralAttribution {
+  id                     String    @id @default(uuid()) @db.Uuid
+  inviteeUserId          String    @unique @map("invitee_user_id") @db.Uuid
+  inviterUserId          String    @map("inviter_user_id") @db.Uuid
+  referralCodeId         String    @map("referral_code_id") @db.Uuid
+  referralCodeSnapshot   String    @map("referral_code_snapshot") @db.VarChar(6)
+  status                 String    @default("PENDING") @db.VarChar(50) // PENDING, QUALIFIED, VOIDED
+  provisionalCoinGranted Int       @default(10) @map("provisional_coin_granted")
+  dormitoryId            String?   @map("dormitory_id") @db.Uuid
+  qualifiedAt            DateTime? @map("qualified_at") @db.Timestamptz()
+  createdAt              DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt              DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
+
+  invitee      User             @relation("InviteeAttribution", fields: [inviteeUserId], references: [id], onDelete: Restrict)
+  inviter      User             @relation("InviterAttributions", fields: [inviterUserId], references: [id], onDelete: Restrict)
+  referralCode UserReferralCode @relation(fields: [referralCodeId], references: [id], onDelete: Restrict)
+  dormitory    Dormitory?       @relation(fields: [dormitoryId], references: [id], onDelete: SetNull)
+
+  @@index([inviterUserId, status])
+  @@map("referral_attributions")
+}
+
+model CoinWallet {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @unique @map("user_id") @db.Uuid
+  balance   Int      @default(0) @map("balance")
+  version   Int      @default(1)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz()
+
+  user          User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  ledgerEntries CoinLedgerEntry[]
+
+  @@map("coin_wallets")
+}
+
+model CoinLedgerEntry {
+  id             String   @id @default(uuid()) @db.Uuid
+  walletId       String   @map("wallet_id") @db.Uuid
+  userId         String   @map("user_id") @db.Uuid
+  entryType      String   @map("entry_type") @db.VarChar(50) // REFERRAL_INVITEE_CREDIT, REFERRAL_INVITER_CREDIT, SUBSCRIPTION_DEBIT, REVERSAL, ADMIN_ADJUSTMENT
+  amount         Int      @map("amount") // + credit, - debit
+  balanceAfter   Int      @map("balance_after")
+  referenceType  String?  @map("reference_type") @db.VarChar(50)
+  referenceId    String?  @map("reference_id") @db.VarChar(255)
+  description    String?  @db.Text
+  idempotencyKey String?  @unique @map("idempotency_key") @db.VarChar(255)
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  wallet CoinWallet @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  user   User       @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([userId, createdAt])
+  @@map("coin_ledger_entries")
+}
+
+model ReferralProgramConfig {
+  id                   String   @id @default(uuid()) @db.Uuid
+  enabled              Boolean  @default(true)
+  rewardCoin           Int      @default(10) @map("reward_coin")
+  maxQualifiedInvitees Int      @default(10) @map("max_qualified_invitees")
+  version              Int      @default(1)
+  updatedAt            DateTime @updatedAt @map("updated_at") @db.Timestamptz()
+
+  @@map("referral_program_configs")
+}
+

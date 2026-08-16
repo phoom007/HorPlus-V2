@@ -72,12 +72,16 @@ export const OwnerReports: React.FC<OwnerReportsProps> = ({
   selectedCycle: propSelectedCycle,
   onNavigate
 }) => {
-  const [selectedYear, setSelectedYear] = useState('2026');
+  const currentYearStr = new Date().getFullYear().toString();
+  const currentMonthStr = String(new Date().getMonth() + 1).padStart(2, '0');
+  const defaultCurrentCycle = `${currentYearStr}-${currentMonthStr}`;
+
+  const [selectedYear, setSelectedYear] = useState(propSelectedCycle ? propSelectedCycle.split('-')[0] : currentYearStr);
   const [selectedBuilding, setSelectedBuilding] = useState('all');
-  const [selectedCycleState, setSelectedCycleState] = useState<string>(propSelectedCycle || '2026-07');
+  const [selectedCycleState, setSelectedCycleState] = useState<string>(propSelectedCycle || defaultCurrentCycle);
   const [showCsvPopover, setShowCsvPopover] = useState(false);
 
-  const selectedCycle = selectedCycleState || propSelectedCycle || '2026-07';
+  const selectedCycle = selectedCycleState || propSelectedCycle || defaultCurrentCycle;
 
   // Month Names Mapping
   const monthNames: Record<string, string> = {

@@ -135,6 +135,29 @@ const SlidableNotificationItem: React.FC<SlidableNotificationItemProps> = ({ not
   );
 };
 
+export const UserAvatar: React.FC<{ user: { name?: string; avatar?: string; avatarUrl?: string; picture?: string; email?: string }; className?: string }> = ({ user, className = "w-10 h-10 rounded-full" }) => {
+  const [imgError, setImgError] = useState(false);
+  const src = user?.avatarUrl || user?.avatar || user?.picture;
+  const initial = (user?.name || user?.email || 'U').charAt(0).toUpperCase();
+
+  if (src && !imgError) {
+    return (
+      <img
+        src={src}
+        alt={user?.name || 'User'}
+        onError={() => setImgError(true)}
+        className={`${className} object-cover shrink-0 shadow-2xs`}
+      />
+    );
+  }
+
+  return (
+    <div className={`${className} bg-blue-600 text-white font-black flex items-center justify-center text-xs shrink-0 shadow-2xs select-none`}>
+      {initial}
+    </div>
+  );
+};
+
 interface OwnerWorkspaceProps {
   user: User;
   onLogout: () => void;
@@ -511,9 +534,14 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
         const loadedCycles = bcRes?.data || [];
         setBillingCycles(loadedCycles);
         if (loadedCycles.length > 0) {
+          const cycleWithActivity = loadedCycles.find((c: any) =>
+            (c.meterReadings && c.meterReadings.length > 0) ||
+            (c.bills && c.bills.length > 0)
+          );
+          const targetCycle = cycleWithActivity || loadedCycles[0];
           if (!selectedBillingCycleId || !loadedCycles.some((c: any) => c.id === selectedBillingCycleId)) {
-            setSelectedBillingCycleId(loadedCycles[0].id);
-            setSelectedCycleCode(loadedCycles[0].cycleCode);
+            setSelectedBillingCycleId(targetCycle.id);
+            setSelectedCycleCode(targetCycle.cycleCode);
           }
         }
       } catch {
@@ -914,7 +942,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
             <div className="pt-4 border-t border-slate-100 shrink-0">
               <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider px-2 mb-2">ACCOUNT</div>
               <div className="flex items-center gap-3 px-1 mb-4">
-                <img src={user.avatar} alt={user.name} className="w-10 h-10 rounded-full border-2 border-blue-100 object-cover shrink-0 shadow-sm" />
+                <UserAvatar user={user} className="w-10 h-10 rounded-full border-2 border-blue-100" />
                 <div className="min-w-0">
                   <p className="text-xs font-extrabold text-slate-900 truncate leading-tight">{user.name}</p>
                   <span className="text-[10px] text-slate-500 font-bold block mt-1 leading-none">{user.roleName}</span>
@@ -995,7 +1023,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
         <div className="pt-4 border-t border-slate-100 shrink-0">
           <div className="text-[9px] text-slate-400 font-bold uppercase tracking-wider px-2 mb-2">ACCOUNT</div>
           <div className="flex items-center gap-3 px-1 mb-4">
-            <img src={user.avatar} alt={user.name} className="w-10 h-10 rounded-full border-2 border-blue-100 object-cover shrink-0 shadow-sm" />
+            <UserAvatar user={user} className="w-10 h-10 rounded-full border-2 border-blue-100" />
             <div className="min-w-0">
               <p className="text-xs font-extrabold text-slate-900 truncate leading-tight">{user.name}</p>
               <span className="text-[10px] text-slate-500 font-bold block mt-1 leading-none">{user.roleName}</span>
@@ -1134,7 +1162,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
                 className="focus:outline-none hover:opacity-80 transition-opacity cursor-pointer flex items-center shrink-0"
                 title={userRole === 'owner' ? "ตั้งค่าระบบ" : "หน้าหลัก"}
               >
-                <img src={user.avatar} alt={user.name} className="w-7 h-7 rounded-full border border-slate-100 object-cover" />
+                <UserAvatar user={user} className="w-7 h-7 rounded-full border border-slate-100" />
               </button>
             </div>
           </div>
@@ -1370,7 +1398,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
               className="flex items-center gap-2 hover:opacity-80 transition-opacity cursor-pointer focus:outline-none text-left"
               title={userRole === 'owner' ? "ตั้งค่าระบบ" : "หน้าหลัก"}
             >
-              <img src={user.avatar} alt={user.name} className="w-7.5 h-7.5 rounded-full border border-slate-100 object-cover" />
+              <UserAvatar user={user} className="w-7.5 h-7.5 rounded-full border border-slate-100" />
               <div className="hidden xl:block leading-none text-left">
                 <p className="text-xs font-bold text-slate-800">{user.name}</p>
                 <span className="text-[9px] text-slate-400 font-bold">{user.roleName}</span>

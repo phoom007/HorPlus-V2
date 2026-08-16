@@ -1,4 +1,5 @@
 import { PrismaClient } from '@prisma/client';
+import { getPrismaClient } from '../db/prisma.js';
 import { AppError } from '../types/index.js';
 import { normalizeRolePermissions } from '../middleware/dormitory-context.js';
 
@@ -41,22 +42,22 @@ export class SubscriptionEntitlementService {
   private db: PrismaClient;
 
   constructor(prisma?: PrismaClient) {
-    this.db = prisma || new PrismaClient();
+    this.db = prisma || getPrismaClient();
   }
 
   /**
    * Syncs canonical subscription catalog (plans, packages, promo codes) into database.
    */
   async ensureSeeded(txClient?: any): Promise<void> {
-    const db = txClient || this.db;
+    const db = (txClient && typeof txClient.subscriptionPlan?.findUnique === 'function') ? txClient : (this.db || getPrismaClient());
     const { syncSubscriptionCatalog } = await import('../scripts/subscription-catalog-sync.js');
     await syncSubscriptionCatalog(db);
   }
   async provisionInitialTrial(dormitoryId: string, txClient?: any, now: Date = new Date()): Promise<any> {
-    const db = txClient || this.db;
+    const db = (txClient && typeof txClient.subscriptionPlan?.findUnique === 'function') ? txClient : (this.db || getPrismaClient());
 
-    const freePlan = await db.subscriptionPlan.findUnique({ where: { code: 'FREE' } });
-    if (!freePlan) throw new Error('FREE plan not found in database. Run catalog sync script.');
+    const proPlan = await db.subscriptionPlan.findUnique({ where: { code: 'PAID' } });
+    if (!proPlan) throw new Error('PAID plan (HorPlus PRO) not found in database. Run catalog sync script.');
 
     const existing = await db.dormitorySubscription.findUnique({ where: { dormitoryId } });
     if (existing) return existing;
@@ -66,7 +67,7 @@ export class SubscriptionEntitlementService {
     const sub = await db.dormitorySubscription.create({
       data: {
         dormitoryId,
-        planId: freePlan.id,
+        planId: proPlan.id,
         status: 'TRIAL',
         startedAt: now,
         expiresAt,
@@ -79,8 +80,8 @@ export class SubscriptionEntitlementService {
       data: {
         subscriptionId: sub.id,
         dormitoryId,
-        previousPlanId: freePlan.id,
-        newPlanId: freePlan.id,
+        previousPlanId: null,
+        newPlanId: proPlan.id,
         previousStatus: null,
         newStatus: 'TRIAL',
         reason: 'INITIAL_PROVISIONING_CALENDAR_MONTH_TRIAL',

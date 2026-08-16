@@ -46,6 +46,8 @@ import { createTenantRegistrationRouter } from './tenant-registration.routes.js'
 import { createContractRenewalRouter } from './contract-renewal.routes.js';
 import { createSettlementRouter } from './settlement.routes.js';
 import { createRequireActiveDormitoryMiddleware } from '../middleware/require-dormitory.js';
+import { createReferralRouter } from './referral.routes.js';
+import { createSubscriptionQuoteRouter } from './subscription-quote.routes.js';
 
 export interface AppApiDependencies {
   authService: AuthenticationService;
@@ -90,6 +92,8 @@ export function createApiRouter(deps: AppApiDependencies | AuthenticationService
 
   router.use('/auth', createAuthRouter(authService));
   router.use('/subscription', createSubscriptionRouter(authService));
+  router.use('/subscription', createSubscriptionQuoteRouter(authService));
+  router.use('/referral', createReferralRouter(authService));
   router.use('/', createUserRouter(authService));
 
   const prisma = getPrismaClient();

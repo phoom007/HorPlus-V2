@@ -27,6 +27,39 @@ function formatTlv(tag: string, value: string): string {
   return `${tag}${len}${value}`;
 }
 
+/**
+ * Format exact decimal money string without floating-point IEEE-754 precision issues
+ */
+export function formatExactPromptPayAmount(amount?: number | string): { formattedAmount: string; isZero: boolean } {
+  if (amount === undefined || amount === null || amount === '') {
+    return { formattedAmount: '0.00', isZero: true };
+  }
+
+  const str = String(amount).trim();
+  if (str === '0' || str === '0.0' || str === '0.00' || str === '0.000') {
+    return { formattedAmount: '0.00', isZero: true };
+  }
+
+  if (!/^\d+(\.\d{1,4})?$/.test(str)) {
+    throw new Error(`Invalid PromptPay amount format: "${str}". Must be a non-negative decimal string.`);
+  }
+
+  const [whole, fraction = ''] = str.split('.');
+  const wholeBigInt = BigInt(whole);
+  const fracPadded = fraction.padEnd(2, '0').slice(0, 2);
+  const minorUnits = wholeBigInt * 100n + BigInt(fracPadded);
+
+  if (minorUnits === 0n) {
+    return { formattedAmount: '0.00', isZero: true };
+  }
+
+  const minorWhole = minorUnits / 100n;
+  const minorFrac = (minorUnits % 100n).toString().padStart(2, '0');
+  const formatted = `${minorWhole}.${minorFrac}`;
+
+  return { formattedAmount: formatted, isZero: false };
+}
+
 export function generatePromptPayPayload(target: string, amount?: number | string): string {
   const cleanTarget = (target || '').replace(/[^0-9]/g, '');
 
@@ -42,11 +75,8 @@ export function generatePromptPayPayload(target: string, amount?: number | strin
     throw new Error('Invalid PromptPay target number: Must be a 10-digit mobile number starting with 0 or a 13-digit National ID');
   }
 
-  // Validate Amount
-  const numAmount = amount !== undefined && amount !== null && amount !== '' ? Number(amount) : 0;
-  if (isNaN(numAmount) || !isFinite(numAmount) || numAmount < 0) {
-    throw new Error('Invalid PromptPay amount: Must be a non-negative finite number');
-  }
+  // Exact Money formatting
+  const { formattedAmount, isZero } = formatExactPromptPayAmount(amount);
 
   // Merchant Account Info Tag 29
   const aid = formatTlv('00', 'A000000677010111');
@@ -57,13 +87,12 @@ export function generatePromptPayPayload(target: string, amount?: number | strin
   // EMV Merchant-Presented Specification:
   // Tag 01 = "12" for Dynamic QR (amount-bearing bill/transaction)
   // Tag 01 = "11" for Static QR (reusable / customer-entered amount)
-  const poi = formatTlv('01', numAmount > 0 ? '12' : '11');
+  const poi = formatTlv('01', !isZero ? '12' : '11');
   const currency = formatTlv('53', '764');
   const country = formatTlv('58', 'TH');
 
   let amountTlv = '';
-  if (numAmount > 0) {
-    const formattedAmount = numAmount.toFixed(2);
+  if (!isZero) {
     amountTlv = formatTlv('54', formattedAmount);
   }
 

@@ -70,25 +70,33 @@ export class BillingCycleService {
       return { cycle: existing, rateSnapshot: snapshot! };
     }
 
-    // Determine periodStart and periodEnd
+    // Determine periodStart, periodEnd, billingDate, and dueDate using configured billing settings
+    const settings = await prisma.dormitoryBillingSettings.findUnique({ where: { dormitoryId } });
+    const configuredDueDay = settings?.dueDay || 5;
+    const configuredBillingDay = settings?.billingDay || 25;
+
     let pStartStr = data.periodStart;
     let pEndStr = data.periodEnd;
     let bDateStr = data.billingDate;
     let dDateStr = data.dueDate;
 
-    if (!pStartStr || !pEndStr) {
+    if (!pStartStr || !pEndStr || !dDateStr) {
       const parts = data.cycleCode.split('-');
       if (parts.length === 2) {
         const y = parseInt(parts[0], 10);
         const m = parseInt(parts[1], 10);
         const lastDay = new Date(y, m, 0).getDate();
-        pStartStr = `${y}-${String(m).padStart(2, '0')}-01`;
-        pEndStr = `${y}-${String(m).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
-        bDateStr = bDateStr || `${y}-${String(m).padStart(2, '0')}-25`;
+        pStartStr = pStartStr || `${y}-${String(m).padStart(2, '0')}-01`;
+        pEndStr = pEndStr || `${y}-${String(m).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+
+        const bDayClamped = Math.min(configuredBillingDay, lastDay);
+        bDateStr = bDateStr || `${y}-${String(m).padStart(2, '0')}-${String(bDayClamped).padStart(2, '0')}`;
 
         const nextM = m === 12 ? 1 : m + 1;
         const nextY = m === 12 ? y + 1 : y;
-        dDateStr = dDateStr || `${nextY}-${String(nextM).padStart(2, '0')}-05`;
+        const nextMonthLastDay = new Date(nextY, nextM, 0).getDate();
+        const dDayClamped = Math.min(configuredDueDay, nextMonthLastDay);
+        dDateStr = dDateStr || `${nextY}-${String(nextM).padStart(2, '0')}-${String(dDayClamped).padStart(2, '0')}`;
       }
     }
 
@@ -109,9 +117,7 @@ export class BillingCycleService {
       throw err;
     }
 
-    // Fetch authoritative billing settings for rate derivation
-    const settings = await prisma.dormitoryBillingSettings.findUnique({ where: { dormitoryId } });
-
+    // Rate snapshot derivation using authoritative billing settings
     const snapshotData = {
       waterBillingType: settings?.waterBillingType || data.rateSnapshot?.waterBillingType || 'per_unit',
       waterRate: settings ? String(settings.waterRate) : (data.rateSnapshot?.waterRate !== undefined ? String(data.rateSnapshot.waterRate) : '0.00'),
@@ -313,5 +319,56 @@ export class BillingCycleService {
     }
 
     return updated;
+  }
+
+  public async ensureRollingBillingCycles(dormitoryId: string, userId?: string): Promise<BillingCycleEntity[]> {
+    const prisma = (await import('../db/prisma.js')).getPrismaClient();
+    const dorm = await prisma.dormitory.findUnique({
+      where: { id: dormitoryId },
+      include: { billingSettings: true },
+    });
+
+    if (!dorm) return [];
+
+    const now = new Date();
+    const startYear = dorm.createdAt.getFullYear();
+    const startMonth = dorm.createdAt.getMonth() + 1;
+
+    // Ensure cycles for onboarding month + next 2 future months (rolling window of 3 months)
+    const targetCycles: string[] = [];
+    for (let offset = 0; offset <= 2; offset++) {
+      let curM = startMonth + offset;
+      let curY = startYear;
+      while (curM > 12) {
+        curM -= 12;
+        curY += 1;
+      }
+      targetCycles.push(`${curY}-${String(curM).padStart(2, '0')}`);
+    }
+
+    // Also include up to current calendar month + 1
+    const currentCalY = now.getFullYear();
+    const currentCalM = now.getMonth() + 1;
+    const nextCalM = currentCalM === 12 ? 1 : currentCalM + 1;
+    const nextCalY = currentCalM === 12 ? currentCalY + 1 : currentCalY;
+    const currentCalCode = `${currentCalY}-${String(currentCalM).padStart(2, '0')}`;
+    const nextCalCode = `${nextCalY}-${String(nextCalM).padStart(2, '0')}`;
+
+    if (!targetCycles.includes(currentCalCode)) targetCycles.push(currentCalCode);
+    if (!targetCycles.includes(nextCalCode)) targetCycles.push(nextCalCode);
+
+    for (const code of targetCycles) {
+      await this.createBillingCycle(dormitoryId, {
+        cycleCode: code,
+        name: code,
+        periodStart: '',
+        periodEnd: '',
+        billingDate: '',
+        dueDate: '',
+      }, userId);
+    }
+
+    const res = await this.getBillingCycles(dormitoryId, { pageSize: 50 });
+    return res.items;
   }
 }

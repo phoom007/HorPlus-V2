@@ -431,11 +431,10 @@ describe('Final Pre-Operator Security & Real-LINE Closure Tests', () => {
 
       const previewResult = await promoService.validatePromo('HORPLUS', claimUserId);
       expect(previewResult.valid).toBe(true);
-      expect(previewResult.eligible).toBe(false);
+      expect(previewResult.eligible).toBe(true);
       expect(previewResult.trialMonths).toBe(0);
-      expect(previewResult.promoBonusMonths).toBe(0);
-      expect(previewResult.totalTrialMonths).toBe(0);
-      expect(previewResult.errorCode).toBe('INITIAL_TRIAL_ALREADY_CLAIMED');
+      expect(previewResult.promoBonusMonths).toBe(2);
+      expect(previewResult.totalTrialMonths).toBe(2);
     });
 
     it('redeemPromoCode endpoint requires catalog PromoCode definition and enforces account-level uniqueness & initial trial rule', async () => {

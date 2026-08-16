@@ -39,7 +39,11 @@ import {
   Video,
   Megaphone,
   MessageSquare,
-  Copy
+  Copy,
+  Coins,
+  Lock,
+  Gift,
+  Tag
 } from 'lucide-react';
 
 import { onboardingClient } from '../../data/onboardingClient';
@@ -214,11 +218,11 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
   // Load existing configuration or defaults
   const getInitialForm = () => {
     const defaultData = {
-      // 1. Owner & Dorm Info (Simplified per request)
-      dormName: 'หอพัก HorPlus สุขุมวิท (HorPlus Residence)',
-      dormAddress: '88/9 ซอยสุขุมวิท 55 (ทองหล่อ) แขวงคลองตันเหนือ เขตวัฒนา กรุงเทพฯ 10110',
+      // 1. Owner & Dorm Info (Clean baseline)
+      dormName: '',
+      dormAddress: '',
       province: 'กรุงเทพมหานคร',
-      dormType: 'อพาร์ตเมนต์',
+      dormType: 'หอพักนักเรียน/นักศึกษา',
       genderType: 'รวม',
 
       // 2. Buildings & Flexible Structure
@@ -228,93 +232,77 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
           name: 'อาคาร A',
           totalFloors: 3,
           roomsPerFloor: 8,
-          hasElevator: true,
-          roomPrefix: 'A',
-          formatPattern: 'prefix_floor_room', // 'prefix_floor_room' | 'floor_room' | 'prefix_floor_slash_room' | 'floor_slash_room' | 'prefix_dash_floor_room'
-          mode: 'auto' as 'auto' | 'manual',
-          customRooms: [] as string[],
-          securityDeposit: 5000,
-          rentRates: {
-            monthly: 4500,
-            term: 18000,
-            termMonths: 4,
-            maxInstallmentMonths: 2,
-            daily: 600,
-            maxOccupants: 2
-          }
-        },
-        {
-          id: 'b-2',
-          name: 'อาคาร B',
-          totalFloors: 4,
-          roomsPerFloor: 8,
           hasElevator: false,
-          roomPrefix: 'B',
+          roomPrefix: 'A',
           formatPattern: 'prefix_floor_room',
           mode: 'auto' as 'auto' | 'manual',
           customRooms: [] as string[],
-          securityDeposit: 5000,
+          securityDeposit: 0,
           rentRates: {
-            monthly: 4200,
-            term: 16800,
+            monthly: 0,
+            term: 0,
             termMonths: 4,
             maxInstallmentMonths: 2,
-            daily: 550,
+            daily: 0,
             maxOccupants: 2
           }
         }
       ],
 
-      // 3. Utilities & Service Rates (Mirrors Settings page)
+      // 3. Utilities & Service Rates (Approved Step 3 defaults)
       utilities: {
-        waterBillingMode: 'unit', // 'unit' (บาท/หน่วย) | 'person' (บาท/คน) | 'room' (บาท/ห้อง)
-        waterRate: 18,
+        waterBillingMode: 'person', // 'unit' | 'person' | 'room' (default: person)
+        waterRate: 0,
 
-        electricBillingMode: 'unit', // 'unit' | 'person' | 'room'
-        electricRate: 8,
+        electricBillingMode: 'unit', // 'unit' | 'person' | 'room' (default: unit)
+        electricRate: 0,
 
-        commonFeeMode: 'room', // 'room' | 'person'
-        commonFeeRate: 200,
+        commonFeeMode: 'room', // 'room' | 'person' (default: room)
+        commonFeeRate: 0,
 
-        internetFeeMode: 'room', // 'room' | 'free'
-        internetRate: 150,
+        internetFeeMode: 'person', // 'person' | 'room' | 'free' (default: person)
+        internetRate: 0,
 
-        parkingFeeMode: 'room', // 'room' | 'free'
-        parkingFeeRate: 100
+        parkingFeeMode: 'room', // 'room' | 'free' (default: room)
+        parkingFeeRate: 0
       },
 
       // 4. Deposits, Late Fees & Payment Account
       deposits: {
-        securityDeposit: 5000,
+        securityDeposit: 0,
         advanceRentMonths: 1,
         dueDateDay: 5,
         gracePeriodDays: 2,
-        lateFeeType: 'per_day', // 'per_day' | 'fixed_once'
-        lateFeeAmount: 100
+        lateFeeType: 'none', // 'none' | 'per_day' | 'fixed_once' (default: none)
+        lateFeeAmount: 0
       },
 
       paymentAccount: {
         bankName: 'กสิกรไทย (KBank)',
-        accountNumber: '098-2-34567-8',
+        accountNumber: '',
         accountName: '',
         bankAccountName: '',
-        promptPayId: '081-999-8888',
+        promptPayId: '',
         promptPayName: ''
       },
 
-      // 5. Pets, Rules & Signature (Pet fees removed per request)
+      // 5. Pets, Rules & Signature
       petPolicy: {
-        allowed: 'conditional', // 'none' | 'free' | 'conditional'
-        allowedTypes: ['dog', 'cat', 'small_pet']
+        allowed: 'none', // 'none' | 'free' | 'conditional' (default: none)
+        allowedTypes: []
       },
       ownerSignatureUrl: '',
+      rulesTemplate: '',
 
-      // 6. LINE OA (Access Token removed per request)
+      // 6. LINE OA
       lineOA: {
-        oaName: '@horplus_dorm',
+        oaName: '',
         channelId: '',
         channelSecret: '',
-        isConnected: false
+        isConnected: false,
+        botDisplayName: '',
+        botPictureUrl: '',
+        lineOaId: ''
       }
     };
 
@@ -332,6 +320,97 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
   const [promoCodeInput, setPromoCodeInput] = useState('HORPLUS');
   const [appliedPromo, setAppliedPromo] = useState(false);
   const [promoMessage, setPromoMessage] = useState<string | null>(null);
+
+  // Packages, Referral & Coin Wallet states
+  const [packages, setPackages] = useState<any[]>([]);
+  const [selectedDurationMonths, setSelectedDurationMonths] = useState<number>(1);
+  const [selectedPackageId, setSelectedPackageId] = useState<string | null>(null);
+  const [referralCodeInput, setReferralCodeInput] = useState('');
+  const [isReferralBound, setIsReferralBound] = useState(false);
+  const [userOwnReferralCode, setUserOwnReferralCode] = useState('');
+  const [referralUsageCount, setReferralUsageCount] = useState(0);
+  const [coinWalletBalance, setCoinWalletBalance] = useState(0);
+  const [coinToApply, setCoinToApply] = useState(0);
+  const [isCopiedReferral, setIsCopiedReferral] = useState(false);
+  const [isFirstTrialEligible, setIsFirstTrialEligible] = useState(true);
+  const [quoteSummary, setQuoteSummary] = useState<any>(null);
+
+  // Load packages, referral data, and coin balance on mount
+  React.useEffect(() => {
+    const initData = async () => {
+      try {
+        const pkgRes = await onboardingClient.getPackages();
+        if (pkgRes?.data?.packages) {
+          setPackages(pkgRes.data.packages);
+          const pkg1mo = pkgRes.data.packages.find((p: any) => p.durationMonths === 1);
+          if (pkg1mo) setSelectedPackageId(pkg1mo.id);
+        }
+      } catch (err) {
+        console.warn('Failed to load packages:', err);
+      }
+
+      try {
+        const refMeRes = await onboardingClient.getReferralMe();
+        if (refMeRes?.data) {
+          setUserOwnReferralCode(refMeRes.data.code);
+          setReferralUsageCount(refMeRes.data.usageCount || 0);
+        }
+      } catch (err) {
+        console.warn('Failed to load user referral code:', err);
+      }
+
+      try {
+        const walletRes = await onboardingClient.getCoinWallet();
+        if (walletRes?.data) {
+          setCoinWalletBalance(walletRes.data.balance || 0);
+        }
+      } catch (err) {
+        console.warn('Failed to load coin wallet:', err);
+      }
+
+      // Parse and bind ?ref= URL parameter
+      try {
+        const urlParams = new URLSearchParams(window.location.search);
+        const refParam = urlParams.get('ref');
+        if (refParam && /^\d{6}$/.test(refParam)) {
+          setReferralCodeInput(refParam);
+          const valRes = await onboardingClient.validateReferral(refParam);
+          if (valRes?.data?.valid) {
+            setIsReferralBound(true);
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to validate referral param:', err);
+      }
+    };
+
+    initData();
+  }, []);
+
+  // Fetch live price quote when on Step 7
+  React.useEffect(() => {
+    if (currentStep !== 7) return;
+    const fetchQuote = async () => {
+      try {
+        const quote = await onboardingClient.getSubscriptionQuote({
+          isFreePlan: selectedPlan === 'free',
+          packageId: selectedPlan === 'pro' ? (selectedPackageId || undefined) : undefined,
+          promoCode: appliedPromo ? promoCodeInput.trim() : undefined,
+          referralCode: referralCodeInput ? referralCodeInput.trim() : undefined,
+          coinRequested: coinToApply,
+        });
+        if (quote?.data) {
+          setQuoteSummary(quote.data);
+          if (quote.data.isTrialEligible !== undefined) {
+            setIsFirstTrialEligible(quote.data.isTrialEligible);
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to fetch quote:', err);
+      }
+    };
+    fetchQuote();
+  }, [currentStep, selectedPlan, selectedPackageId, appliedPromo, promoCodeInput, referralCodeInput, coinToApply]);
 
   // Signature Canvas Drawing
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -444,18 +523,31 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
       const prep = await onboardingClient.prepare({ name: formData.dormName, addressLine1: formData.dormAddress, province: formData.province });
       const provDormId = prep?.provisionalDormitoryId || prep?.data?.provisionalDormitoryId;
       if (provDormId) {
-        await onboardingClient.updateLineConfig(provDormId, {
+        const lineRes = await onboardingClient.updateLineConfig(provDormId, {
           channelId: formData.lineOA.channelId,
           channelSecret: formData.lineOA.channelSecret,
         });
-        await onboardingClient.setLineWebhook(provDormId);
-        await onboardingClient.testLineWebhook(provDormId);
+        const botDisplayName = lineRes?.data?.botDisplayName || lineRes?.botDisplayName || '';
+        const botPictureUrl = lineRes?.data?.botPictureUrl || lineRes?.botPictureUrl || '';
+        const lineOaId = lineRes?.data?.lineOaId || lineRes?.lineOaId || '';
+
+        setFormData(prev => ({
+          ...prev,
+          lineOA: {
+            ...prev.lineOA,
+            isConnected: true,
+            botDisplayName,
+            botPictureUrl,
+            oaName: lineOaId || prev.lineOA.oaName
+          }
+        }));
+      } else {
+        setFormData(prev => ({ ...prev, lineOA: { ...prev.lineOA, isConnected: true } }));
       }
-      setFormData(prev => ({ ...prev, lineOA: { ...prev.lineOA, isConnected: true } }));
-      setLineStatusMsg({ type: 'success', msg: 'ทดสอบสำเร็จ: เชื่อมต่อ LINE Messaging API สำเร็จแล้ว' });
+      setLineStatusMsg({ type: 'success', msg: 'ทดสอบสำเร็จ: เชื่อมต่อ LINE Official Account สำเร็จ (พร้อมใช้งาน)' });
     } catch (err: any) {
       setFormData(prev => ({ ...prev, lineOA: { ...prev.lineOA, isConnected: false } }));
-      setLineStatusMsg({ type: 'error', msg: err?.message || 'การเชื่อมต่อ LINE OA ล้มเหลว กรุณาตรวจสอบข้อมูล' });
+      setLineStatusMsg({ type: 'error', msg: err?.message || 'การเชื่อมต่อ LINE OA ล้มเหลว กรุณาตรวจสอบ Channel ID / Secret' });
     } finally {
       setTestingLine(false);
     }
@@ -871,9 +963,9 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
           billingDay: 25,
           dueDay: formData.deposits.dueDateDay || 5,
           waterBillingType,
-          waterRate: String(formData.utilities.waterRate ?? 18),
+          waterRate: String(formData.utilities.waterRate ?? 0),
           electricityBillingType: elecBillingType,
-          electricityRate: String(formData.utilities.electricRate ?? 7),
+          electricityRate: String(formData.utilities.electricRate ?? 0),
           commonFee: String(formData.utilities.commonFeeRate ?? 0),
           commonFeeMode: formData.utilities.commonFeeMode || 'none',
           internetFee: String(formData.utilities.internetRate ?? 0),
@@ -882,8 +974,8 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
           parkingFeeMode: formData.utilities.parkingFeeMode || 'none',
           gracePeriodDays: formData.deposits.gracePeriodDays || 0,
           advanceRentMonths: formData.deposits.advanceRentMonths || 1,
-          lateFeeType: formData.deposits.lateFeeType || 'fixed',
-          lateFeeValue: String(formData.deposits.lateFeeAmount ?? 50),
+          lateFeeType: formData.deposits.lateFeeType || 'none',
+          lateFeeValue: String(formData.deposits.lateFeeAmount ?? 0),
           rentBillingType: 'monthly',
         },
         payment: {
@@ -898,7 +990,10 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
         buildings: mappedBuildings,
         rooms: mappedRooms,
         planCode: (selectedPlan || 'free').toUpperCase(),
+        packageId: selectedPlan === 'pro' ? (selectedPackageId || undefined) : undefined,
         promoCode: appliedPromo ? promoCodeInput.trim() : undefined,
+        referralCode: referralCodeInput ? referralCodeInput.trim() : undefined,
+        coinApplied: coinToApply > 0 ? coinToApply : undefined,
         petPolicy: {
           allowed: formData.petPolicy.allowed || 'none',
           allowedTypes: formData.petPolicy.allowedTypes || [],
@@ -2087,22 +2182,6 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                     <label className="block text-xs font-bold text-slate-700">
                       ชื่อบัญชีธนาคาร <span className="text-rose-500">*</span>
                     </label>
-                    {authUserName && (
-                      <button
-                        type="button"
-                        onClick={() => setFormData(prev => ({
-                          ...prev,
-                          paymentAccount: {
-                            ...prev.paymentAccount,
-                            accountName: authUserName,
-                            bankAccountName: authUserName
-                          }
-                        }))}
-                        className="text-[10px] font-extrabold text-blue-600 bg-blue-50 hover:bg-blue-100 border border-blue-100 px-2 py-0.5 rounded-lg transition-all cursor-pointer"
-                      >
-                        ดึงชื่อเจ้าของ
-                      </button>
-                    )}
                   </div>
                   <input
                     type="text"
@@ -2154,18 +2233,19 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                         ชื่อบัญชีพร้อมเพย์
                       </label>
                       <div className="flex items-center gap-1">
-                        {authUserName && (
-                          <button
-                            type="button"
-                            onClick={() => setFormData(prev => ({
-                              ...prev,
-                              paymentAccount: { ...prev.paymentAccount, promptPayName: authUserName }
-                            }))}
-                            className="text-[10px] font-extrabold text-blue-600 bg-blue-50 hover:bg-blue-100 border border-blue-100 px-2 py-0.5 rounded-lg transition-all cursor-pointer"
-                          >
-                            ดึงชื่อเจ้าของ
-                          </button>
-                        )}
+                        <button
+                          type="button"
+                          onClick={() => setFormData(prev => ({
+                            ...prev,
+                            paymentAccount: {
+                              ...prev.paymentAccount,
+                              promptPayName: prev.paymentAccount.bankAccountName || prev.paymentAccount.accountName || authUserName
+                            }
+                          }))}
+                          className="text-[10px] font-extrabold text-blue-600 bg-blue-50 hover:bg-blue-100 border border-blue-100 px-2 py-0.5 rounded-lg transition-all cursor-pointer"
+                        >
+                          ดึงชื่อเจ้าของ
+                        </button>
                       </div>
                     </div>
                     <input
@@ -2565,15 +2645,18 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
             <Sparkles className="w-5 h-5 text-indigo-600 shrink-0" />
             <div>
               <h3 className="text-sm sm:text-base font-black text-slate-800">ขั้นตอนที่ 7: เลือกแพ็กเกจและยืนยันการเปิดใช้งาน</h3>
-              <p className="text-[11px] sm:text-xs text-slate-400 font-medium">เลือกแพ็กเกจที่เหมาะสมสำหรับหอพักของคุณ (เริ่มต้นใช้งานฟรีถาวร)</p>
+              <p className="text-[11px] sm:text-xs text-slate-400 font-medium">เลือกแพ็กเกจที่เหมาะสมสำหรับหอพักของคุณ (เริ่มต้นใช้งานฟรีถาวร หรือทดลองใช้ PRO)</p>
             </div>
           </div>
 
-          {/* 2 Plan Cards */}
+          {/* 2 Main Plan Cards (FREE vs PRO) */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {/* FREE Plan Card */}
             <div
-              onClick={() => setSelectedPlan('free')}
+              onClick={() => {
+                setSelectedPlan('free');
+                setSelectedPackageId(null);
+              }}
               className={`p-4 sm:p-5 rounded-2xl border-2 transition-all cursor-pointer relative bg-white ${selectedPlan === 'free'
                 ? 'border-indigo-600 ring-4 ring-indigo-50 shadow-xs'
                 : 'border-slate-200 hover:border-slate-300'
@@ -2581,7 +2664,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
             >
               <div className="flex items-center justify-between gap-2">
                 <span className="px-2.5 py-0.5 rounded-full text-[11px] font-black bg-emerald-100 text-emerald-800">
-                  แพ็กเกจฟรี
+                  แพ็กเกจฟรีถาวร
                 </span>
                 <div
                   className={`w-5 h-5 rounded-full flex items-center justify-center transition-all ${selectedPlan === 'free'
@@ -2625,7 +2708,12 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
 
             {/* PRO Plan Card */}
             <div
-              onClick={() => setSelectedPlan('pro')}
+              onClick={() => {
+                setSelectedPlan('pro');
+                if (!selectedPackageId && packages.length > 0) {
+                  setSelectedPackageId(packages[0].id);
+                }
+              }}
               className={`p-4 sm:p-5 rounded-2xl border-2 transition-all cursor-pointer relative bg-white ${selectedPlan === 'pro'
                 ? 'border-indigo-600 ring-4 ring-indigo-50 shadow-xs'
                 : 'border-slate-200 hover:border-slate-300'
@@ -2633,7 +2721,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
             >
               <div className="flex items-center justify-between gap-2">
                 <span className="px-2.5 py-0.5 rounded-full text-[11px] font-black bg-indigo-100 text-indigo-800">
-                  ทดลองใช้ฟรี 1 เดือน
+                  {isFirstTrialEligible ? 'สิทธิ์ทดลองใช้ PRO ฟรี 1 เดือน' : 'HorPlus PRO'}
                 </span>
                 <div
                   className={`w-5 h-5 rounded-full flex items-center justify-center transition-all ${selectedPlan === 'pro'
@@ -2647,11 +2735,29 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
 
               <div className="mt-3">
                 <h4 className="text-sm sm:text-base font-black text-slate-900">HorPlus PRO</h4>
-                <div className="mt-0.5 flex items-baseline gap-1.5 flex-wrap">
-                  <span className="text-xl sm:text-2xl font-black text-indigo-600">฿189</span>
-                  <span className="text-[11px] sm:text-xs font-semibold text-slate-500">
-                    / เดือน (ทดลองใช้งานฟรี 1 เดือนแรก)
-                  </span>
+                <div className="mt-0.5 flex items-baseline gap-2 flex-wrap">
+                  {isFirstTrialEligible && selectedDurationMonths === 1 ? (
+                    <>
+                      <span className="text-xl sm:text-2xl font-black text-emerald-600">฿0</span>
+                      <span className="text-xs line-through text-slate-400 font-bold">฿189</span>
+                      <span className="text-xs line-through text-slate-300 font-medium">฿990</span>
+                      <span className="text-[11px] sm:text-xs font-semibold text-slate-500">/ เดือนแรก (ทดลองใช้ฟรี)</span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="text-xl sm:text-2xl font-black text-indigo-600">
+                        ฿{packages.find(p => p.id === selectedPackageId)?.price || 189}
+                      </span>
+                      {packages.find(p => p.id === selectedPackageId)?.referencePrice && (
+                        <span className="text-xs line-through text-slate-400 font-bold">
+                          ฿{packages.find(p => p.id === selectedPackageId)?.referencePrice}
+                        </span>
+                      )}
+                      <span className="text-[11px] sm:text-xs font-semibold text-slate-500">
+                        / {selectedDurationMonths} เดือน
+                      </span>
+                    </>
+                  )}
                 </div>
               </div>
 
@@ -2666,16 +2772,162 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                 </li>
                 <li className="flex items-start gap-1.5">
                   <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0 mt-0.5" />
-                  <span>ฟังก์ชันระบบบริหารจัดการครบวงจร</span>
+                  <span>ฟังก์ชันระบบบริหารจัดการหอพักเต็มรูปแบบ</span>
                 </li>
               </ul>
             </div>
           </div>
 
+          {/* 5 PRO Packages Duration Selector (When PRO is selected) */}
+          {selectedPlan === 'pro' && packages.length > 0 && (
+            <div className="bg-slate-50 p-4 sm:p-5 rounded-3xl border border-slate-200 space-y-3">
+              <label className="block text-xs font-black text-slate-800">
+                เลือกระยะเวลาแพ็กเกจ HorPlus PRO:
+              </label>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5">
+                {packages.map((pkg) => {
+                  const isSelected = selectedPackageId === pkg.id;
+                  const is1moTrial = pkg.durationMonths === 1 && isFirstTrialEligible;
+                  return (
+                    <button
+                      key={pkg.id}
+                      type="button"
+                      onClick={() => {
+                        setSelectedPackageId(pkg.id);
+                        setSelectedDurationMonths(pkg.durationMonths);
+                      }}
+                      className={`p-3 rounded-2xl border text-left transition-all cursor-pointer relative flex flex-col justify-between ${isSelected
+                        ? 'bg-white border-indigo-600 ring-2 ring-indigo-100 shadow-xs'
+                        : 'bg-white/80 border-slate-200 hover:border-indigo-300'
+                        }`}
+                    >
+                      <div>
+                        <div className="flex items-center justify-between gap-1">
+                          <span className="text-xs font-black text-slate-800">{pkg.durationMonths} เดือน</span>
+                          {is1moTrial && (
+                            <span className="text-[9px] font-black px-1.5 py-0.5 bg-emerald-100 text-emerald-800 rounded-md">
+                              ทดลองใช้ฟรี
+                            </span>
+                          )}
+                        </div>
+                        <div className="mt-1 flex items-baseline gap-1.5 flex-wrap">
+                          {is1moTrial ? (
+                            <>
+                              <span className="text-sm font-black text-emerald-600">฿0</span>
+                              <span className="text-[10px] line-through text-slate-400">฿{pkg.price}</span>
+                            </>
+                          ) : (
+                            <>
+                              <span className="text-sm font-black text-indigo-600">฿{pkg.price}</span>
+                              {pkg.referencePrice && (
+                                <span className="text-[10px] line-through text-slate-400">฿{pkg.referencePrice}</span>
+                              )}
+                            </>
+                          )}
+                        </div>
+                      </div>
+                      <span className="text-[10px] font-bold text-slate-400 mt-2">
+                        เฉลี่ย ~฿{Math.round(Number(pkg.price) / pkg.durationMonths)}/เดือน
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Referral & Coins Grid */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* Referral Code (Used to register) */}
+            <div className="bg-indigo-50/50 p-4 sm:p-5 rounded-3xl border border-indigo-100 space-y-2.5">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-black text-slate-800 flex items-center gap-1.5">
+                  <Gift className="w-4 h-4 text-indigo-600" /> รหัสคำเชิญที่ใช้สมัคร (ผู้แนะนำ)
+                </label>
+                {isReferralBound && (
+                  <span className="text-[10px] font-black text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full flex items-center gap-1">
+                    <Lock className="w-3 h-3" /> ผูกสิทธิ์แล้ว
+                  </span>
+                )}
+              </div>
+              <p className="text-[11px] text-slate-500 font-medium">
+                กรอกรหัสแนะนำ 6 หลักของเพื่อน เพื่อรับ 10 HorPlus Coins (฿10) ทันที
+              </p>
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  maxLength={6}
+                  disabled={isReferralBound}
+                  value={referralCodeInput}
+                  onChange={(e) => setReferralCodeInput(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                  placeholder="เช่น 123456"
+                  className="flex-1 px-3.5 py-2 text-xs font-black tracking-widest bg-white border border-slate-200 rounded-xl outline-none focus:border-indigo-600 disabled:bg-slate-100 disabled:text-slate-500 font-mono"
+                />
+                {!isReferralBound && (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      if (referralCodeInput.length !== 6) return;
+                      try {
+                        const res = await onboardingClient.validateReferral(referralCodeInput);
+                        if (res?.data?.valid) {
+                          setIsReferralBound(true);
+                          setPromoMessage('✓ ยืนยันรหัสคำเชิญสำเร็จ! ได้รับสิทธิ์ 10 Coins');
+                        }
+                      } catch (err: any) {
+                        setValidationError(err?.message || 'รหัสคำเชิญไม่ถูกต้อง');
+                      }
+                    }}
+                    className="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-black transition-all cursor-pointer shadow-xs shrink-0"
+                  >
+                    ตรวจสอบ
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* User's Own Referral Code to Share */}
+            <div className="bg-amber-50/50 p-4 sm:p-5 rounded-3xl border border-amber-100 space-y-2.5">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-black text-slate-800 flex items-center gap-1.5">
+                  <Share2 className="w-4 h-4 text-amber-600" /> รหัสคำเชิญของคุณ
+                </label>
+                <span className="text-[10px] font-black text-amber-800 bg-amber-100 px-2 py-0.5 rounded-full">
+                  เชิญแล้ว {referralUsageCount} / 10 คน
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-500 font-medium">
+                แชร์รหัสให้เจ้าของหอพักอื่น รับ 10 Coins (฿10) เมื่อเพื่อนเปิดใช้งานหอพักแรก
+              </p>
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  readOnly
+                  value={userOwnReferralCode || '------'}
+                  className="flex-1 px-3.5 py-2 text-xs font-black tracking-widest bg-white border border-amber-200 rounded-xl outline-none font-mono text-amber-900 select-all"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!userOwnReferralCode) return;
+                    const shareUrl = `${window.location.origin}/register?ref=${userOwnReferralCode}`;
+                    navigator.clipboard.writeText(shareUrl);
+                    setIsCopiedReferral(true);
+                    setTimeout(() => setIsCopiedReferral(false), 3000);
+                  }}
+                  className="px-3.5 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer shadow-xs shrink-0"
+                >
+                  {isCopiedReferral ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                  <span>{isCopiedReferral ? 'คัดลอกแล้ว!' : 'คัดลอกลิงก์'}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+
           {/* Promo Code Box */}
           <div className="p-4 sm:p-5 bg-indigo-50/50 border border-indigo-100 rounded-3xl space-y-3">
-            <p className="text-xs font-black text-slate-800">
-              กรอกรหัสโปรโมชั่น (กรอก "HORPLUS" เพื่อรับสิทธิ์ทดลองใช้งานฟรีเพิ่ม 2 เดือน)
+            <p className="text-xs font-black text-slate-800 flex items-center gap-1.5">
+              <Tag className="w-4 h-4 text-indigo-600" /> กรอกรหัสโปรโมชั่น (กรอก "HORPLUS" เพื่อรับสิทธิ์ทดลองใช้งานฟรีเพิ่ม 2 เดือน จำกัด 100 สิทธิ์แรก)
             </p>
             <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 max-w-md">
               <input
@@ -2700,6 +2952,83 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
               </p>
             )}
           </div>
+
+          {/* Coins Wallet Discount & Quote Summary */}
+          {selectedPlan === 'pro' && (
+            <div className="bg-slate-50 p-4 sm:p-5 rounded-3xl border border-slate-200 space-y-4">
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <div className="flex items-center gap-2">
+                  <Coins className="w-5 h-5 text-amber-500" />
+                  <div>
+                    <h4 className="text-xs font-black text-slate-800">HorPlus Coin Wallet</h4>
+                    <p className="text-[11px] text-slate-500 font-medium">1 Coin = ส่วนลด ฿1 บาท</p>
+                  </div>
+                </div>
+                <span className="text-xs font-black text-amber-700 bg-amber-100 px-3 py-1 rounded-full">
+                  คงเหลือ: {coinWalletBalance} Coins
+                </span>
+              </div>
+
+              {coinWalletBalance > 0 && (
+                <div className="flex items-center gap-3 pt-1">
+                  <label className="text-xs font-bold text-slate-700">ใช้ Coins เป็นส่วนลด:</label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={coinWalletBalance}
+                    value={coinToApply}
+                    onChange={(e) => setCoinToApply(Math.min(coinWalletBalance, Math.max(0, parseInt(e.target.value) || 0)))}
+                    className="w-24 px-3 py-1.5 text-xs font-black bg-white border border-slate-200 rounded-xl outline-none focus:border-amber-500 font-mono"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setCoinToApply(coinWalletBalance)}
+                    className="text-[11px] font-black text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-200 px-2.5 py-1 rounded-xl cursor-pointer"
+                  >
+                    ใช้ทั้งหมด
+                  </button>
+                </div>
+              )}
+
+              {/* Price Calculation Breakdown */}
+              <div className="bg-white p-3.5 rounded-2xl border border-slate-200/80 space-y-2 text-xs">
+                <div className="flex items-center justify-between text-slate-600 font-bold">
+                  <span>ราคาแพ็กเกจ HorPlus PRO ({selectedDurationMonths} เดือน):</span>
+                  <span>฿{quoteSummary?.priceSnapshot || packages.find(p => p.id === selectedPackageId)?.price || 189}</span>
+                </div>
+
+                {isFirstTrialEligible && selectedDurationMonths === 1 && (
+                  <div className="flex items-center justify-between text-emerald-600 font-black">
+                    <span>ส่วนลดสิทธิ์ทดลองใช้ฟรี 1 เดือนแรก:</span>
+                    <span>- ฿{packages.find(p => p.id === selectedPackageId)?.price || 189}</span>
+                  </div>
+                )}
+
+                {appliedPromo && (
+                  <div className="flex items-center justify-between text-indigo-600 font-black">
+                    <span>สิทธิ์โปรโมชัน HORPLUS:</span>
+                    <span>+2 เดือนทดลองใช้ฟรี</span>
+                  </div>
+                )}
+
+                {coinToApply > 0 && (
+                  <div className="flex items-center justify-between text-amber-600 font-black">
+                    <span>ส่วนลด HorPlus Coins ({coinToApply} Coins):</span>
+                    <span>- ฿{coinToApply}</span>
+                  </div>
+                )}
+
+                <div className="flex items-center justify-between text-sm font-black text-slate-900 pt-2 border-t border-slate-100">
+                  <span>ยอดชำระสุทธิ:</span>
+                  <span className="text-base text-indigo-600">
+                    ฿{quoteSummary?.finalPayableAmount !== undefined
+                      ? quoteSummary.finalPayableAmount
+                      : (isFirstTrialEligible && selectedDurationMonths === 1 ? 0 : Math.max(0, (packages.find(p => p.id === selectedPackageId)?.price || 189) - coinToApply))}
+                  </span>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

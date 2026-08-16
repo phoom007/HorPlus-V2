@@ -82,6 +82,7 @@ export async function syncSubscriptionCatalog(prisma: PrismaClient, options: { d
             planId: plan.id,
             durationMonths: pkgDef.durationMonths,
             price: pkgDef.price,
+            referencePrice: pkgDef.referencePrice !== undefined ? pkgDef.referencePrice : null,
             currency: pkgDef.currency,
             enabled: pkgDef.enabled,
             catalogVersion: CANONICAL_SUBSCRIPTION_CATALOG.version,
@@ -89,22 +90,14 @@ export async function syncSubscriptionCatalog(prisma: PrismaClient, options: { d
         });
       }
     } else {
-      const existingPrice = existingPkg.price !== null ? Number(existingPkg.price) : null;
-      if (
-        existingPrice !== pkgDef.price ||
-        existingPkg.enabled !== pkgDef.enabled ||
-        existingPkg.catalogVersion !== CANONICAL_SUBSCRIPTION_CATALOG.version
-      ) {
+      // Seed mode: populate referencePrice if missing, but preserve runtime DB authority
+      if (existingPkg.referencePrice === null && pkgDef.referencePrice !== undefined) {
         changesDetected = true;
-        console.log(`[CatalogSync] Package drift detected: ${pkgDef.planCode} ${pkgDef.durationMonths}m`);
         if (!dryRun && !checkOnly) {
           await prisma.subscriptionPackage.update({
             where: { id: existingPkg.id },
             data: {
-              price: pkgDef.price,
-              currency: pkgDef.currency,
-              enabled: pkgDef.enabled,
-              catalogVersion: CANONICAL_SUBSCRIPTION_CATALOG.version,
+              referencePrice: pkgDef.referencePrice,
             },
           });
         }
@@ -130,34 +123,24 @@ export async function syncSubscriptionCatalog(prisma: PrismaClient, options: { d
             benefitType: promoDef.benefitType,
             benefitUnit: promoDef.benefitUnit,
             benefitValue: promoDef.benefitValue,
+            globalMaxRedemptions: promoDef.globalMaxRedemptions !== undefined ? promoDef.globalMaxRedemptions : null,
             enabled: promoDef.enabled,
             maximumRedemptionsPerDormitory: promoDef.maximumRedemptionsPerDormitory,
           },
         });
       }
-    } else if (
-      existingPromo.extensionDays !== promoDef.extensionDays ||
-      existingPromo.benefitType !== promoDef.benefitType ||
-      existingPromo.benefitUnit !== promoDef.benefitUnit ||
-      existingPromo.benefitValue !== promoDef.benefitValue ||
-      existingPromo.enabled !== promoDef.enabled ||
-      existingPromo.maximumRedemptionsPerDormitory !== promoDef.maximumRedemptionsPerDormitory
-    ) {
-      changesDetected = true;
-      console.log(`[CatalogSync] PromoCode drift detected for: ${promoDef.code}`);
-      if (!dryRun && !checkOnly) {
-        await prisma.promoCode.update({
-          where: { id: existingPromo.id },
-          data: {
-            normalizedCode: promoDef.normalizedCode,
-            extensionDays: promoDef.extensionDays,
-            benefitType: promoDef.benefitType,
-            benefitUnit: promoDef.benefitUnit,
-            benefitValue: promoDef.benefitValue,
-            enabled: promoDef.enabled,
-            maximumRedemptionsPerDormitory: promoDef.maximumRedemptionsPerDormitory,
-          },
-        });
+    } else {
+      // Seed globalMaxRedemptions if missing
+      if (existingPromo.globalMaxRedemptions === null && promoDef.globalMaxRedemptions !== undefined) {
+        changesDetected = true;
+        if (!dryRun && !checkOnly) {
+          await prisma.promoCode.update({
+            where: { id: existingPromo.id },
+            data: {
+              globalMaxRedemptions: promoDef.globalMaxRedemptions,
+            },
+          });
+        }
       }
     }
   }

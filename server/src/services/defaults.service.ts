@@ -171,12 +171,14 @@ export class DefaultsService {
         dormPropVer,
         (v) => (v !== null && v !== undefined ? Number(v) : null)
       ),
-      depositAmount: resolveField(
-        room.depositAmount,
-        building.depositAmount,
-        propertyDefaults?.defaultDeposit || 0,
-        dormPropVer
-      ),
+      depositAmount: (room as any).depositInheritsBuildingDefault === false && room.depositAmount !== null && room.depositAmount !== undefined
+        ? { value: Number(room.depositAmount), source: 'ROOM' as const, sourceVersion: (room as any).version || 1 }
+        : resolveField(
+            null,
+            building.depositAmount,
+            propertyDefaults?.defaultDeposit || 0,
+            dormPropVer
+          ),
       advancePaymentAmount: resolveField(
         room.advancePaymentAmount,
         building.advancePaymentAmount,
