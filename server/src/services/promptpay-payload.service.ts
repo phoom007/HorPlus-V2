@@ -29,6 +29,7 @@ function formatTlv(tag: string, value: string): string {
 
 /**
  * Format exact decimal money string without floating-point IEEE-754 precision issues
+ * Rejects excess precision (>2 fractional digits) rather than silently truncating
  */
 export function formatExactPromptPayAmount(amount?: number | string): { formattedAmount: string; isZero: boolean } {
   if (amount === undefined || amount === null || amount === '') {
@@ -36,17 +37,17 @@ export function formatExactPromptPayAmount(amount?: number | string): { formatte
   }
 
   const str = String(amount).trim();
-  if (str === '0' || str === '0.0' || str === '0.00' || str === '0.000') {
+  if (str === '0' || str === '0.0' || str === '0.00') {
     return { formattedAmount: '0.00', isZero: true };
   }
 
-  if (!/^\d+(\.\d{1,4})?$/.test(str)) {
-    throw new Error(`Invalid PromptPay amount format: "${str}". Must be a non-negative decimal string.`);
+  if (!/^\d+(\.\d{1,2})?$/.test(str)) {
+    throw new Error(`Invalid PromptPay amount format: "${str}". Must be a non-negative decimal with at most 2 decimal places.`);
   }
 
   const [whole, fraction = ''] = str.split('.');
   const wholeBigInt = BigInt(whole);
-  const fracPadded = fraction.padEnd(2, '0').slice(0, 2);
+  const fracPadded = fraction.padEnd(2, '0');
   const minorUnits = wholeBigInt * 100n + BigInt(fracPadded);
 
   if (minorUnits === 0n) {

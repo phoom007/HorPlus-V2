@@ -209,6 +209,7 @@ export function createOnboardingRouter(
         rules: parsed.data.rules,
         defaultTerms: parsed.data.defaultTerms,
         petPolicy: parsed.data.petPolicy,
+        ownerSignatureUrl: parsed.data.ownerSignatureUrl || req.body?.ownerSignatureUrl || req.body?.signatureBase64,
       });
 
       res.status(200).json({ data: result });

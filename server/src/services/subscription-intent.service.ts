@@ -14,6 +14,7 @@ import { AppError } from '../types/index.js';
 import { coinWalletService } from './coin-wallet.service.js';
 import { referralService } from './referral.service.js';
 import { promoService } from './promo.service.js';
+import { addCalendarMonths } from './subscription-entitlement.service.js';
 
 export interface CreateIntentQuoteParams {
   packageId?: string;
@@ -243,6 +244,7 @@ export class SubscriptionIntentService {
         finalPayableAmount: finalPayableAmount.toFixed(2),
         checkoutVersion: intent.checkoutVersion,
         isZeroPay,
+        isZeroPayValidated: isZeroPay,
         expiresAt: intent.expiresAt,
       };
     };
@@ -261,6 +263,9 @@ export class SubscriptionIntentService {
       await tx.$executeRaw`SELECT set_config('app.bypass_rls', 'on', true)`;
       await tx.$executeRaw`SELECT set_config('app.current_user_id', ${userId}, true)`;
 
+      // 1. Lock intent for update
+      await tx.$executeRaw`SELECT * FROM "subscription_package_intents" WHERE "id" = ${intentId}::uuid FOR UPDATE`;
+
       const intent = await tx.subscriptionPackageIntent.findUnique({
         where: { id: intentId },
         include: { package: { include: { plan: true } } },
@@ -274,8 +279,15 @@ export class SubscriptionIntentService {
         throw new AppError('ไม่มีสิทธิ์เข้าถึงรายการสั่งซื้อนี้', 403, 'FORBIDDEN_INTENT_ACCESS');
       }
 
+      // Replay idempotency check
       if (intent.status === 'ACTIVATED') {
         return { success: true, status: 'ACTIVATED', message: 'รายการนี้ได้รับการเปิดใช้งานแล้ว' };
+      }
+
+      const now = new Date();
+
+      if (intent.expiresAt && intent.expiresAt < now) {
+        throw new AppError('รายการสั่งซื้อหมดอายุแล้ว กรุณาทำรายการใหม่อีกครั้ง', 400, 'INTENT_EXPIRED');
       }
 
       // Mandatory Guard 2: Explicit checkout lifecycle and exact Decimal zero check
@@ -291,7 +303,84 @@ export class SubscriptionIntentService {
         );
       }
 
-      // 1. Claim Initial Trial if applicable
+      // 2. Lock and Debit Coin Wallet if Coin was applied
+      if (intent.coinApplied > 0) {
+        await coinWalletService.debitWallet(
+          userId,
+          intent.coinApplied,
+          'SUBSCRIPTION_DEBIT',
+          'SUBSCRIPTION_PACKAGE_INTENT',
+          intent.id,
+          `ชำระค่าแพ็กเกจ ${intent.package?.plan?.name || 'HorPlus'} (${intent.durationMonthsSnapshot} เดือน)`,
+          idempotencyKey ? `zero-pay-coin-${intent.id}-${idempotencyKey}` : `zero-pay-coin-${intent.id}`,
+          tx
+        );
+      }
+
+      // 3. Resolve Subscription Plan & Duration Mutation
+      const proPlan = await tx.subscriptionPlan.findUnique({ where: { code: 'PAID' } });
+      const freePlan = await tx.subscriptionPlan.findUnique({ where: { code: 'FREE' } });
+
+      let targetPlanId = intent.package?.planId || (intent.isFreePlanSnapshot ? freePlan.id : proPlan.id);
+      let subStatus: 'TRIAL' | 'ACTIVE' = 'ACTIVE';
+      let subExpiresAt: Date | null = null;
+      let durationMonths = 0;
+
+      if (intent.isTrialEligibleSnapshot) {
+        subStatus = 'TRIAL';
+        durationMonths = 1 + (intent.promoBonusMonthsSnapshot || 0);
+        subExpiresAt = addCalendarMonths(now, durationMonths);
+        targetPlanId = proPlan.id;
+      } else if (intent.isFreePlanSnapshot) {
+        subStatus = 'ACTIVE';
+        subExpiresAt = null;
+        targetPlanId = freePlan.id;
+      } else {
+        // Paid package (e.g. 100% coin discount or promo bonus)
+        subStatus = 'ACTIVE';
+        durationMonths = intent.durationMonthsSnapshot + (intent.promoBonusMonthsSnapshot || 0);
+        subExpiresAt = addCalendarMonths(now, durationMonths);
+        targetPlanId = proPlan.id;
+      }
+
+      const sub = await tx.dormitorySubscription.upsert({
+        where: { dormitoryId: intent.dormitoryId },
+        create: {
+          dormitoryId: intent.dormitoryId,
+          planId: targetPlanId,
+          status: subStatus,
+          startedAt: now,
+          expiresAt: subExpiresAt,
+          trialStartedAt: intent.isTrialEligibleSnapshot ? now : null,
+          trialExpiresAt: intent.isTrialEligibleSnapshot ? addCalendarMonths(now, 1) : null,
+          promoExtendedAt: intent.promoBonusMonthsSnapshot > 0 ? now : null,
+        },
+        update: {
+          planId: targetPlanId,
+          status: subStatus,
+          startedAt: now,
+          expiresAt: subExpiresAt,
+          trialStartedAt: intent.isTrialEligibleSnapshot ? now : null,
+          trialExpiresAt: intent.isTrialEligibleSnapshot ? addCalendarMonths(now, 1) : null,
+          promoExtendedAt: intent.promoBonusMonthsSnapshot > 0 ? now : null,
+          updatedAt: now,
+        },
+      });
+
+      await tx.subscriptionStatusHistory.create({
+        data: {
+          subscriptionId: sub.id,
+          dormitoryId: intent.dormitoryId,
+          previousPlanId: null,
+          newPlanId: targetPlanId,
+          previousStatus: null,
+          newStatus: subStatus,
+          reason: intent.isTrialEligibleSnapshot ? 'INITIAL_PROVISIONING_CALENDAR_MONTH_TRIAL' : 'ZERO_PAY_INTENT_ACTIVATED',
+          actorId: userId,
+        },
+      });
+
+      // 4. Claim Initial Trial if applicable
       if (intent.isTrialEligibleSnapshot) {
         await tx.accountBenefitClaim.upsert({
           where: {
@@ -304,24 +393,26 @@ export class SubscriptionIntentService {
             userId,
             benefitKey: 'INITIAL_TRIAL_V1',
             dormitoryId: intent.dormitoryId,
+            subscriptionId: sub.id,
             grantedMonths: 1,
-            newExpiresAt: new Date(Date.now() + 30 * 86400 * 1000),
+            previousExpiresAt: null,
+            newExpiresAt: addCalendarMonths(now, 1),
           },
           update: {},
         });
       }
 
-      // 2. Redeem Promo Code atomically if applicable
+      // 5. Redeem Promo Code atomically if applicable
       if (intent.promoCodeSnapshot) {
         await promoService.redeemPromoAtomic(userId, intent.dormitoryId, intent.promoCodeSnapshot, tx);
       }
 
-      // 3. Mark intent ACTIVATED
+      // 6. Mark intent ACTIVATED
       await tx.subscriptionPackageIntent.update({
         where: { id: intent.id },
         data: {
           status: 'ACTIVATED',
-          activatedAt: new Date(),
+          activatedAt: now,
           idempotencyKey: idempotencyKey || null,
         },
       });
@@ -330,6 +421,11 @@ export class SubscriptionIntentService {
         success: true,
         status: 'ACTIVATED',
         dormitoryId: intent.dormitoryId,
+        subscriptionId: sub.id,
+        planCode: intent.isFreePlanSnapshot ? 'FREE' : 'PAID',
+        durationMonths,
+        expiresAt: subExpiresAt,
+        coinDebited: intent.coinApplied,
         isTrial: intent.isTrialEligibleSnapshot,
         promoBonusMonths: intent.promoBonusMonthsSnapshot,
       };

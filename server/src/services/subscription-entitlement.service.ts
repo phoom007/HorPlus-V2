@@ -2,6 +2,7 @@ import { PrismaClient } from '@prisma/client';
 import { getPrismaClient } from '../db/prisma.js';
 import { AppError } from '../types/index.js';
 import { normalizeRolePermissions } from '../middleware/dormitory-context.js';
+import { promoService } from './promo.service.js';
 
 export function addCalendarMonths(startDate: Date, months: number): Date {
   const target = new Date(startDate.getTime());
@@ -252,119 +253,26 @@ export class SubscriptionEntitlementService {
     const executeRedeem = async (tx: any) => {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${params.dormitoryId}))`;
 
-      // 1. Fetch PromoCode from DB catalog — NO live product definition creation!
-      const promoCodeEntity = await tx.promoCode.findFirst({
-        where: {
-          OR: [{ normalizedCode }, { code: normalizedCode }],
-        },
-      });
-
-      if (!promoCodeEntity) {
-        throw new AppError('PROMO_CATALOG_NOT_CONFIGURED: Promo code definition is missing from catalog.', 404, 'PROMO_CATALOG_NOT_CONFIGURED');
-      }
-
-      if (!promoCodeEntity.enabled) {
-        throw new AppError('Promo code is disabled.', 403, 'PROMO_DISABLED');
-      }
-
-      if (promoCodeEntity.startsAt && promoCodeEntity.startsAt > now) {
-        throw new AppError('Promo code is not yet active.', 400, 'PROMO_NOT_YET_ACTIVE');
-      }
-
-      if (promoCodeEntity.endsAt && promoCodeEntity.endsAt < now) {
-        throw new AppError('Promo code has expired.', 400, 'PROMO_EXPIRED');
-      }
-
-      if (
-        promoCodeEntity.benefitType !== 'TRIAL_EXTENSION' ||
-        promoCodeEntity.benefitUnit !== 'MONTH' ||
-        typeof promoCodeEntity.benefitValue !== 'number' ||
-        promoCodeEntity.benefitValue <= 0
-      ) {
-        throw new AppError('PROMO_CATALOG_NOT_CONFIGURED: Promo code benefit configuration is invalid.', 400, 'PROMO_CONFIGURATION_INVALID');
-      }
-
-      // 2. Account-level redeemedBy uniqueness
-      const existingAccountRedemption = await tx.promoRedemption.findFirst({
-        where: {
-          promoCodeId: promoCodeEntity.id,
-          redeemedBy: params.userId,
-        },
-      });
-
-      if (existingAccountRedemption) {
-        throw new AppError(`Promo code ${promoCodeEntity.code} has already been redeemed by this account.`, 409, 'PROMO_ALREADY_REDEEMED');
-      }
-
-      // 3. Dormitory-level promo uniqueness
-      const existingDormRedemption = await tx.promoRedemption.findFirst({
-        where: {
-          dormitoryId: params.dormitoryId,
-        },
-      });
-
-      if (existingDormRedemption) {
-        throw new AppError(`A promo code has already been redeemed for this dormitory.`, 409, 'PROMO_ALREADY_REDEEMED');
-      }
-
-      // 4. Enforce account-level initial trial consumption rule
-      const initialTrialClaim = await tx.accountBenefitClaim.findFirst({
-        where: {
-          userId: params.userId,
-          benefitKey: 'INITIAL_TRIAL_V1',
-        },
-      });
-
-      if (initialTrialClaim && initialTrialClaim.dormitoryId !== params.dormitoryId) {
-        throw new AppError('Initial trial benefit has already been consumed on another dormitory by this account.', 403, 'INITIAL_TRIAL_ALREADY_CLAIMED');
-      }
+      const promoResult = await promoService.redeemPromoAtomic(
+        params.userId,
+        params.dormitoryId,
+        normalizedCode,
+        tx,
+        params.idempotencyKey,
+        now
+      );
 
       const entitlements = await this.getEffectiveEntitlements(params.dormitoryId, now, tx);
-      if (entitlements.isReadOnly || entitlements.status === 'EXPIRED') {
-        throw new AppError('Cannot redeem promo code for an expired or read-only subscription.', 403, 'SUBSCRIPTION_READ_ONLY');
-      }
-
       const currentSub = await this.getCurrentSubscription(params.dormitoryId, tx);
 
-      // Data-driven benefitValue addition in calendar months
-      const bonusMonths = promoCodeEntity.benefitValue;
-      const newTrialExpiresAt = addCalendarMonths(currentSub.trialExpiresAt || currentSub.expiresAt, bonusMonths);
-      const newExpiresAt = addCalendarMonths(currentSub.expiresAt, bonusMonths);
-
-      const updatedSub = await tx.dormitorySubscription.update({
-        where: { id: currentSub.id },
-        data: {
-          expiresAt: newExpiresAt,
-          trialExpiresAt: newTrialExpiresAt,
+      return {
+        status: 200,
+        body: {
+          message: 'Promo code redeemed successfully',
+          data: currentSub,
+          entitlements,
         },
-        include: { plan: true },
-      });
-
-      await tx.promoRedemption.create({
-        data: {
-          promoCodeId: promoCodeEntity.id,
-          dormitoryId: params.dormitoryId,
-          subscriptionId: currentSub.id,
-          redeemedBy: params.userId,
-          previousExpiresAt: currentSub.expiresAt,
-          newExpiresAt,
-        },
-      });
-
-      await tx.subscriptionStatusHistory.create({
-        data: {
-          subscriptionId: currentSub.id,
-          dormitoryId: params.dormitoryId,
-          previousPlanId: currentSub.planId,
-          newPlanId: currentSub.planId,
-          previousStatus: currentSub.status,
-          newStatus: currentSub.status,
-          actorId: params.userId,
-          reason: `PROMO_REDEEMED: ${promoCodeEntity.code} (+${bonusMonths} calendar months)`,
-        },
-      });
-
-      return updatedSub;
+      };
     };
 
     if (params.txClient) {
@@ -395,14 +303,7 @@ export class SubscriptionEntitlementService {
         };
       }
 
-      const updatedSub = await executeRedeem(tx);
-      const entitlements = await this.getEffectiveEntitlements(params.dormitoryId, now, tx);
-
-      const responseBody = {
-        message: 'Promo code redeemed successfully',
-        data: updatedSub,
-        entitlements,
-      };
+      const result = await executeRedeem(tx);
 
       await tx.idempotencyKey.create({
         data: {
@@ -411,15 +312,12 @@ export class SubscriptionEntitlementService {
           idempotencyKey: params.idempotencyKey,
           requestHash: payloadHash,
           responseStatus: 200,
-          responseBody: JSON.parse(JSON.stringify(responseBody)),
+          responseBody: JSON.parse(JSON.stringify(result.body)),
           expiresAt,
         },
       });
 
-      return {
-        status: 200,
-        body: responseBody,
-      };
+      return result;
     });
   }
 

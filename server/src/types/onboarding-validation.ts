@@ -19,9 +19,9 @@ export const OnboardingDormitoryInputSchema = z.object({
 export const OnboardingBillingInputSchema = z.object({
   billingDay: z.coerce.number().int().min(1).max(28).default(25),
   dueDay: z.coerce.number().int().min(1).max(28).default(5),
-  waterBillingType: z.enum(['per_unit', 'fixed_monthly', 'flat_rate', 'unit', 'flat']).default('per_unit'),
+  waterBillingType: z.enum(['per_unit', 'fixed_monthly', 'flat_rate', 'unit', 'flat', 'per_person', 'person', 'room']).default('per_unit'),
   waterRate: z.string().regex(/^\d+(\.\d{1,2})?$/, 'ค่าน้ำต้องเป็นตัวเลขจำนวนเงินที่ถูกต้อง').default('18.00'),
-  electricityBillingType: z.enum(['per_unit', 'fixed_monthly', 'flat_rate', 'unit', 'flat']).default('per_unit'),
+  electricityBillingType: z.enum(['per_unit', 'fixed_monthly', 'flat_rate', 'unit', 'flat', 'per_person', 'person', 'room']).default('per_unit'),
   electricityRate: z.string().regex(/^\d+(\.\d{1,2})?$/, 'ค่าไฟต้องเป็นตัวเลขจำนวนเงินที่ถูกต้อง').default('7.00'),
   commonFee: z.string().regex(/^\d+(\.\d{1,2})?$/, 'ค่าส่วนกลางต้องเป็นตัวเลขจำนวนเงินที่ถูกต้อง').default('0.00'),
   commonFeeMode: z.string().trim().optional().nullable().default('none'),
@@ -248,6 +248,7 @@ export const CompleteOnboardingInputSchema = z.object({
   }).optional(),
   signatureSaved: z.boolean().optional(),
   signatureObjectKey: z.string().optional(),
+  ownerSignatureUrl: z.string().optional(),
 });
 
 export const OnboardingDraftInputSchema = z.object({

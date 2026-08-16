@@ -6,6 +6,33 @@ ALTER TABLE "rooms" ADD COLUMN IF NOT EXISTS "deposit_inherits_building_default"
 -- 2. Extend SubscriptionPackage with reference price
 ALTER TABLE "subscription_packages" ADD COLUMN IF NOT EXISTS "reference_price" DECIMAL(12, 2);
 
+-- 2b. Forward-only upgrade of known legacy PAID subscription packages to approved LOCAL-07 catalog
+UPDATE "subscription_packages"
+SET "price" = 189.00, "reference_price" = 990.00, "enabled" = true, "catalog_version" = 2
+WHERE "duration_months" = 1 AND "plan_id" IN (SELECT "id" FROM "subscription_plans" WHERE "code" = 'PAID')
+  AND ("reference_price" IS NULL OR "catalog_version" < 2);
+
+UPDATE "subscription_packages"
+SET "price" = 529.00, "reference_price" = 2990.00, "enabled" = true, "catalog_version" = 2
+WHERE "duration_months" = 3 AND "plan_id" IN (SELECT "id" FROM "subscription_plans" WHERE "code" = 'PAID')
+  AND ("price" IS NULL OR "reference_price" IS NULL OR "catalog_version" < 2);
+
+UPDATE "subscription_packages"
+SET "price" = 999.00, "reference_price" = 5990.00, "enabled" = true, "catalog_version" = 2
+WHERE "duration_months" = 6 AND "plan_id" IN (SELECT "id" FROM "subscription_plans" WHERE "code" = 'PAID')
+  AND ("price" IS NULL OR "reference_price" IS NULL OR "catalog_version" < 2);
+
+UPDATE "subscription_packages"
+SET "price" = 1799.00, "reference_price" = 10990.00, "enabled" = true, "catalog_version" = 2
+WHERE "duration_months" = 12 AND "plan_id" IN (SELECT "id" FROM "subscription_plans" WHERE "code" = 'PAID')
+  AND ("price" IS NULL OR "reference_price" IS NULL OR "catalog_version" < 2);
+
+UPDATE "subscription_packages"
+SET "price" = 2999.00, "reference_price" = 20000.00, "enabled" = true, "catalog_version" = 2
+WHERE "duration_months" = 24 AND "plan_id" IN (SELECT "id" FROM "subscription_plans" WHERE "code" = 'PAID')
+  AND ("price" IS NULL OR "reference_price" IS NULL OR "catalog_version" < 2);
+
+
 -- 3. Extend PromoCode with global max redemptions and counter
 ALTER TABLE "promo_codes" ADD COLUMN IF NOT EXISTS "global_max_redemptions" INTEGER;
 ALTER TABLE "promo_codes" ADD COLUMN IF NOT EXISTS "current_redemptions_count" INTEGER NOT NULL DEFAULT 0;

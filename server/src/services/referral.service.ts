@@ -121,16 +121,7 @@ export class ReferralService {
       });
 
       if (existingAttribution) {
-        if (existingAttribution.referralCodeSnapshot === code) {
-          // Idempotent re-validation of same bound code
-          return {
-            valid: true,
-            referralCode: code,
-            provisionalCoin: existingAttribution.provisionalCoinGranted,
-            status: existingAttribution.status,
-            message: 'รหัสคำเชิญถูกต้อง (ผูกกับบัญชีนี้แล้ว)',
-          };
-        } else {
+        if (existingAttribution.referralCodeSnapshot !== code) {
           // Attempted replacement of immutable binding
           throw new AppError(
             'ไม่สามารถเปลี่ยนรหัสคำเชิญได้ เนื่องจากบัญชีนี้ถูกผูกกับรหัสคำเชิญอื่นแล้ว',
@@ -138,6 +129,53 @@ export class ReferralService {
             'REFERRAL_BINDING_IMMUTABLE'
           );
         }
+
+        if (existingAttribution.status === 'PENDING' || existingAttribution.status === 'QUALIFIED') {
+          // Idempotent re-validation of active/qualified binding
+          return {
+            valid: true,
+            referralCode: code,
+            provisionalCoin: existingAttribution.provisionalCoinGranted,
+            status: existingAttribution.status,
+            message: 'รหัสคำเชิญถูกต้อง (ผูกกับบัญชีนี้แล้ว)',
+          };
+        }
+
+        // Status is VOIDED: attempt to re-reserve pending capacity for the same bound inviter
+        await tx.$executeRaw`SELECT * FROM "user_referral_codes" WHERE "id" = ${refRecord.id}::uuid FOR UPDATE`;
+
+        const activeReservationsCount = await tx.referralAttribution.count({
+          where: {
+            inviterUserId: refRecord.userId,
+            status: { in: ['PENDING', 'QUALIFIED'] },
+          },
+        });
+
+        if (activeReservationsCount >= refRecord.maxUsage) {
+          throw new AppError('รหัสคำเชิญครบจำนวนสิทธิ์แล้ว', 400, 'REFERRAL_LIMIT_REACHED');
+        }
+
+        const attribution = await tx.referralAttribution.update({
+          where: { id: existingAttribution.id },
+          data: {
+            status: 'PENDING',
+            dormitoryId: dormitoryId || null,
+            updatedAt: new Date(),
+          },
+        });
+
+        await tx.userReferralCode.update({
+          where: { id: refRecord.id },
+          data: { usageCount: activeReservationsCount + 1 },
+        });
+
+        return {
+          valid: true,
+          referralCode: code,
+          provisionalCoin: attribution.provisionalCoinGranted,
+          status: 'PENDING',
+          message: 'รหัสคำเชิญถูกต้อง คุณได้รับสิทธิ์ Coin 10 บาทสำหรับการสมัครครั้งแรก',
+        };
       }
 
       // 4. Lock inviter's referral record and verify atomic capacity (< 10)
@@ -180,6 +218,50 @@ export class ReferralService {
         status: attribution.status,
         message: 'รหัสคำเชิญถูกต้อง คุณได้รับสิทธิ์ Coin 10 บาทสำหรับการสมัครครั้งแรก',
       };
+    };
+
+    if (txClient) {
+      return await runInTx(txClient);
+    }
+    return await this.prisma.$transaction(runInTx);
+  }
+
+  /**
+   * Release pending referral capacity reservation when onboarding draft is discarded or expires
+   */
+  async releasePendingReferralReservation(inviteeUserId: string, txClient?: any) {
+    const runInTx = async (tx: any) => {
+      const attribution = await tx.referralAttribution.findUnique({
+        where: { inviteeUserId },
+      });
+
+      if (!attribution || attribution.status !== 'PENDING') {
+        return { released: false, status: attribution?.status || 'NO_ATTRIBUTION' };
+      }
+
+      // 1. Transition attribution to VOIDED
+      await tx.referralAttribution.update({
+        where: { id: attribution.id },
+        data: {
+          status: 'VOIDED',
+          updatedAt: new Date(),
+        },
+      });
+
+      // 2. Recalculate inviter active usageCount
+      const activeReservationsCount = await tx.referralAttribution.count({
+        where: {
+          inviterUserId: attribution.inviterUserId,
+          status: { in: ['PENDING', 'QUALIFIED'] },
+        },
+      });
+
+      await tx.userReferralCode.update({
+        where: { id: attribution.referralCodeId },
+        data: { usageCount: activeReservationsCount },
+      });
+
+      return { released: true, status: 'VOIDED' };
     };
 
     if (txClient) {

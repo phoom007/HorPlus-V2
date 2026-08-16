@@ -9,6 +9,7 @@ import { subscriptionIntentService } from '../services/subscription-intent.servi
 import { getPrismaClient } from '../db/prisma.js';
 import { AuthenticationService } from '../services/auth.service.js';
 import { createRequireSessionMiddleware } from '../middleware/require-session.js';
+import { createCsrfMiddleware } from '../middleware/csrf.js';
 
 const createQuoteSchema = z.object({
   packageId: z.string().uuid().optional(),
@@ -26,6 +27,7 @@ const commitIntentSchema = z.object({
 export function createSubscriptionQuoteRouter(authService: AuthenticationService): Router {
   const router = Router();
   const requireSession = createRequireSessionMiddleware(authService);
+  const csrfMiddleware = createCsrfMiddleware(authService);
 
   /**
    * GET /api/v1/subscription/packages
@@ -68,7 +70,7 @@ export function createSubscriptionQuoteRouter(authService: AuthenticationService
    * POST /api/v1/subscription/quote
    * Create authoritative server-side pricing quote snapshot in SubscriptionPackageIntent
    */
-  router.post('/quote', requireSession, async (req: Request, res: Response, next: NextFunction) => {
+  router.post('/quote', requireSession, csrfMiddleware, async (req: Request, res: Response, next: NextFunction) => {
     try {
       const userId = req.auth!.userId;
       const body = createQuoteSchema.parse(req.body);
@@ -87,7 +89,7 @@ export function createSubscriptionQuoteRouter(authService: AuthenticationService
    * POST /api/v1/subscription/commit
    * Commit zero-pay intent to activate subscription (Free plan, 1-mo PRO trial, or 100% Coin discount)
    */
-  router.post('/commit', requireSession, async (req: Request, res: Response, next: NextFunction) => {
+  router.post('/commit', requireSession, csrfMiddleware, async (req: Request, res: Response, next: NextFunction) => {
     try {
       const userId = req.auth!.userId;
       const { intentId, idempotencyKey } = commitIntentSchema.parse(req.body);

@@ -4,7 +4,8 @@
  */
 
 import { PrismaClient } from '@prisma/client';
-import { AppError } from '../types/index.js';
+import { getPrismaClient } from '../db/prisma.js';
+import { referralService } from './referral.service.js';
 import {
   normalizeOnboardingDraftPayload,
   CURRENT_ONBOARDING_DRAFT_SCHEMA_VERSION,
@@ -73,6 +74,10 @@ export class OnboardingService {
       where: { userId },
     });
     if (!draft || draft.finalizedAt) return null;
+    if (draft.expiresAt && draft.expiresAt < new Date()) {
+      await this.deleteDraft(userId);
+      return null;
+    }
 
     let signatureSaved = false;
     const provDormId = draft.provisionalDormitoryId;
@@ -125,5 +130,6 @@ export class OnboardingService {
     await this.prisma.onboardingDraft.deleteMany({
       where: { userId },
     });
+    await referralService.releasePendingReferralReservation(userId);
   }
 }

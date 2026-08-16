@@ -21,6 +21,7 @@ const { PrismaClient } = require('../../server/node_modules/@prisma/client/index
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { REGISTRATION_OWNER, FRESH_DORM, COMP_DORM } from './constants.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -96,6 +97,12 @@ async function runBrowserUAT() {
     console.log(`[Request Failed] ${req.url()} - ${req.failure()?.errorText}`);
   });
 
+  page.on('response', (res) => {
+    if (res.status() >= 400) {
+      console.log(`[HTTP ${res.status()}] ${res.url()}`);
+    }
+  });
+
   try {
     // -------------------------------------------------------------------------
     // TEST 1: Owner Registration Step 1–7 UI & Absence of Removed Fields
@@ -113,11 +120,23 @@ async function runBrowserUAT() {
     console.log(`  Removed Step 1 fields absent: ${removedFieldsAbsent ? '✅ YES' : '❌ NO'}`);
 
     // Verify Step 1 core fields exist
-    const dormNameInput = await page.$('input[value*="หอพัก"], input[placeholder*="ชื่อหอพัก"]');
+    const dormNameLocator = page.locator('input[placeholder*="หอพัก HorPlus"]').first();
+    const dormNameInput = await dormNameLocator.isVisible();
     console.log(`  Dormitory name input present: ${dormNameInput ? '✅ YES' : '❌ NO'}`);
 
     if (removedFieldsAbsent && dormNameInput) {
       uatResults.step1_baseline_and_removed_fields = true;
+    }
+
+    // Fill Step 1 required fields
+    if (dormNameInput) {
+      await dormNameLocator.fill('หอพัก HorPlus UAT Registration');
+      await page.waitForTimeout(100);
+    }
+    const addressInput = page.locator('textarea[placeholder*="สุขุมวิท"]').first();
+    if (await addressInput.isVisible()) {
+      await addressInput.fill('123/45 ซอยสุขุมวิท 55 แขวงคลองตันเหนือ เขตวัฒนา กรุงเทพฯ 10110');
+      await page.waitForTimeout(100);
     }
 
     // Advance to Step 2: อาคารและประเภทห้อง
@@ -125,6 +144,9 @@ async function runBrowserUAT() {
     const nextBtn1 = page.locator('button:has-text("ถัดไป")').first();
     await nextBtn1.click();
     await page.waitForTimeout(600);
+    console.log('  Header after Step 1 Next:', (await page.locator('h3').first().textContent().catch(() => ''))?.trim());
+    const err1 = await page.locator('.text-rose-700, .bg-rose-50').textContent().catch(() => null);
+    if (err1) console.log(`  [Validation Error on Step 1] ${err1.trim()}`);
     await page.screenshot({ path: path.join(SCREENSHOTS_DIR, '02-step2-buildings.png') });
 
     // Verify "แบ่งชำระสูงสุด (งวด)" input visibly shows 2 by default
@@ -149,14 +171,48 @@ async function runBrowserUAT() {
     const nextBtn2 = page.locator('button:has-text("ถัดไป")').first();
     await nextBtn2.click();
     await page.waitForTimeout(600);
+    console.log('  Header after Step 2 Next:', (await page.locator('h3').first().textContent().catch(() => ''))?.trim());
+    const err2 = await page.locator('.text-rose-700, .bg-rose-50').textContent().catch(() => null);
+    if (err2) console.log(`  [Validation Error on Step 2] ${err2.trim()}`);
     await page.screenshot({ path: path.join(SCREENSHOTS_DIR, '03-step3-utilities.png') });
+
+    // Fill monthly rent in Step 3
+    const monthlyRentInput = page.locator('label:has-text("ค่าเช่ารายเดือน")').locator('xpath=..').locator('input').first();
+    if (await monthlyRentInput.isVisible()) {
+      await monthlyRentInput.fill('3500');
+      await page.waitForTimeout(200);
+      console.log('  Filled monthly rent: 3500 (value now: ' + await monthlyRentInput.inputValue() + ')');
+    }
 
     // Advance to Step 4: ช่องทางรับชำระเงิน
     console.log('\n--- TEST 3: Step 4 — Bank Account & PromptPay Name Autofill Helper ---');
     const nextBtn3 = page.locator('button:has-text("ถัดไป")').first();
     await nextBtn3.click();
     await page.waitForTimeout(600);
+    console.log('  Header after Step 3 Next:', (await page.locator('h3').first().textContent().catch(() => ''))?.trim());
+    const err3 = await page.locator('.text-rose-700, .bg-rose-50').textContent().catch(() => null);
+    if (err3) console.log(`  [Validation Error on Step 3] ${err3.trim()}`);
     await page.screenshot({ path: path.join(SCREENSHOTS_DIR, '04-step4-payments-initial.png') });
+
+    // Select bank in Step 4
+    const bankSelect = page.locator('select').filter({ hasText: 'เลือกธนาคาร' }).first();
+    if (await bankSelect.isVisible()) {
+      await bankSelect.selectOption('กสิกรไทย (KBank)');
+      await page.waitForTimeout(200);
+      console.log('  Selected bank: กสิกรไทย (KBank)');
+    }
+    const bankAccNum = page.locator('label:has-text("เลขที่บัญชีธนาคาร")').locator('xpath=..').locator('input').first();
+    if (await bankAccNum.isVisible()) {
+      await bankAccNum.fill('1234567890');
+      await page.waitForTimeout(100);
+      console.log('  Filled bank account number: 1234567890');
+    }
+    const promptPayNum = page.locator('label:has-text("เลขพร้อมเพย์")').locator('xpath=..').locator('input').first();
+    if (await promptPayNum.isVisible()) {
+      await promptPayNum.fill('0812345678');
+      await page.waitForTimeout(100);
+      console.log('  Filled PromptPay number: 0812345678');
+    }
 
     // Locate "ดึงชื่อเจ้าของ" buttons
     const pullNameButtons = page.locator('button:has-text("ดึงชื่อเจ้าของ")');
@@ -207,6 +263,9 @@ async function runBrowserUAT() {
     const nextBtn4 = page.locator('button:has-text("ถัดไป")').first();
     await nextBtn4.click();
     await page.waitForTimeout(600);
+    console.log('  Header after Step 4 Next:', (await page.locator('h3').first().textContent().catch(() => ''))?.trim());
+    const err4 = await page.locator('.text-rose-700, .bg-rose-50').textContent().catch(() => null);
+    if (err4) console.log(`  [Validation Error on Step 4] ${err4.trim()}`);
     await page.screenshot({ path: path.join(SCREENSHOTS_DIR, '05-step5-rules-initial.png') });
 
     // Select conditional pet policy via dropdown
@@ -218,6 +277,12 @@ async function runBrowserUAT() {
     }
 
     // Ensure canonical pet type checkboxes are checked
+    const dogPetCheckbox = page.locator('label:has-text("สุนัข") input[type="checkbox"]').first();
+    if (await dogPetCheckbox.isVisible()) {
+      await dogPetCheckbox.check();
+      await page.waitForTimeout(100);
+      console.log('  Checked "สุนัข" pet type.');
+    }
     const otherPetCheckbox = page.locator('label:has-text("อื่นๆ") input[type="checkbox"]').first();
     if (await otherPetCheckbox.isVisible()) {
       await otherPetCheckbox.check();
@@ -262,6 +327,9 @@ async function runBrowserUAT() {
     const nextBtn5 = page.locator('button:has-text("ถัดไป")').first();
     await nextBtn5.click();
     await page.waitForTimeout(1000);
+    console.log('  Header after Step 5 Next:', (await page.locator('h3').first().textContent().catch(() => ''))?.trim());
+    const err5 = await page.locator('.text-rose-700, .bg-rose-50').textContent().catch(() => null);
+    if (err5) console.log(`  [Validation Error on Step 5] ${err5.trim()}`);
     await page.screenshot({ path: path.join(SCREENSHOTS_DIR, '06-step6-line.png') });
 
     // Click "ตั้งค่าภายหลัง" (skip LINE OA setup)
@@ -274,6 +342,7 @@ async function runBrowserUAT() {
       await nextBtn6.click();
     }
     await page.waitForTimeout(1000);
+    console.log('  Header after Step 6 Skip/Next:', (await page.locator('h3').first().textContent().catch(() => ''))?.trim());
     uatResults.step6_line_skip_path = true;
 
     // Step 7: สรุปข้อมูลและเลือกแพ็กเกจ (Promo validation & finalize)
@@ -328,6 +397,16 @@ async function runBrowserUAT() {
       ]);
 
       console.log(`  Finalize API response URL: ${response ? response.url() : 'none'}`);
+      let finalizedDormId = null;
+      if (response) {
+        const bodyText = await response.text().catch(() => '{}');
+        console.log(`  Finalize API status: ${response.status()}`);
+        console.log(`  Finalize API body: ${bodyText}`);
+        try {
+          const parsed = JSON.parse(bodyText);
+          finalizedDormId = parsed.data?.dormitoryId || parsed.data?.dormitory?.id;
+        } catch (e) {}
+      }
       await page.waitForTimeout(4000);
       await page.screenshot({ path: path.join(SCREENSHOTS_DIR, '07-step7-finalized.png') });
 
@@ -342,26 +421,19 @@ async function runBrowserUAT() {
     // Verify Database Persistence Directly in PostgreSQL
     // -------------------------------------------------------------------------
     console.log('\n--- TEST 7: PostgreSQL Database Direct Verification ---');
-    const registrationUser = await prisma.user.findFirst({
-      where: { name: 'เจ้าของทดสอบ Registration Owner' },
+    const dormByName = await prisma.dormitory.findFirst({
+      where: { name: 'หอพัก HorPlus UAT Registration' },
+      orderBy: { createdAt: 'desc' },
       include: {
-        memberships: {
-          include: {
-            dormitory: {
-              include: {
-                buildings: true,
-                billingSettings: true,
-                propertyDefaults: true,
-                ownerSignatures: true,
-                subscriptions: true,
-              },
-            },
-          },
-        },
+        buildings: true,
+        billingSettings: true,
+        propertyDefaults: true,
+        ownerSignatures: true,
+        dormitorySubscription: true,
       },
     });
 
-    const activeDorm = registrationUser?.memberships[0]?.dormitory;
+    const activeDorm = dormByName;
     console.log(`  Persisted Dormitory ID: ${activeDorm?.id}`);
     console.log(`  Dormitory Phone: ${activeDorm?.phone === null ? '✅ null (Correct - Removed Step 1 Field)' : activeDorm?.phone}`);
     console.log(`  Dormitory Email: ${activeDorm?.email === null ? '✅ null (Correct - Removed Step 1 Field)' : activeDorm?.email}`);

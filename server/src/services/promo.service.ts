@@ -11,6 +11,7 @@
 import { PrismaClient } from '@prisma/client';
 import { getPrismaClient } from '../db/prisma.js';
 import { AppError } from '../types/index.js';
+import { addCalendarMonths } from './subscription-entitlement.service.js';
 
 export interface PromoValidationResult {
   valid: boolean;
@@ -231,12 +232,16 @@ export class PromoService {
    */
   public async redeemPromoAtomic(
     userId: string,
-    dormitoryId: string,
-    code: string,
-    txClient?: any
+    dormitoryId?: string,
+    code?: string,
+    txClient?: any,
+    idempotencyKey?: string,
+    nowDate?: Date
   ) {
     const runInTx = async (tx: any) => {
-      const normalizedCode = code.trim().toUpperCase();
+      const now = nowDate || new Date();
+      const rawCode = code || 'HORPLUS';
+      const normalizedCode = rawCode.trim().toUpperCase();
 
       const promo = await tx.promoCode.findFirst({
         where: {
@@ -248,7 +253,27 @@ export class PromoService {
       });
 
       if (!promo) {
-        throw new AppError('ไม่พบรหัสโปรโมชัน', 404, 'PROMO_NOT_FOUND');
+        throw new AppError('ไม่พบรหัสโปรโมชัน (PROMO_CATALOG_NOT_CONFIGURED / PROMO_NOT_FOUND)', 404, 'PROMO_CATALOG_NOT_CONFIGURED');
+      }
+
+      if (!promo.enabled) {
+        throw new AppError('รหัสโปรโมชันนี้ถูกปิดใช้งาน (PROMO_DISABLED)', 403, 'PROMO_DISABLED');
+      }
+
+      if (promo.startsAt && promo.startsAt > now) {
+        throw new AppError('รหัสโปรโมชันนี้ยังไม่ถึงเวลาเปิดใช้งาน (PROMO_NOT_YET_ACTIVE)', 400, 'PROMO_NOT_YET_ACTIVE');
+      }
+
+      if (promo.endsAt && promo.endsAt < now) {
+        throw new AppError('รหัสโปรโมชันหมดอายุแล้ว (PROMO_EXPIRED)', 400, 'PROMO_EXPIRED');
+      }
+
+      if (
+        promo.benefitType !== 'TRIAL_EXTENSION' ||
+        typeof promo.benefitValue !== 'number' ||
+        promo.benefitValue <= 0
+      ) {
+        throw new AppError('การตั้งค่าสิทธิ์โปรโมชันไม่ถูกต้อง (PROMO_CONFIGURATION_INVALID)', 400, 'PROMO_CONFIGURATION_INVALID');
       }
 
       // 1. Lock promo row for atomic capacity count update
@@ -260,25 +285,38 @@ export class PromoService {
 
       if (lockedPromo.globalMaxRedemptions !== null && lockedPromo.currentRedemptionsCount >= lockedPromo.globalMaxRedemptions) {
         throw new AppError(
-          `สิทธิ์โปรโมชันนี้ครบตามจำนวนที่กำหนดแล้ว (${lockedPromo.globalMaxRedemptions} บัญชี)`,
+          `สิทธิ์โปรโมชันนี้ครบตามจำนวนที่กำหนดแล้ว (${lockedPromo.globalMaxRedemptions} บัญชี / PROMO_GLOBAL_LIMIT_REACHED)`,
           400,
           'PROMO_GLOBAL_LIMIT_REACHED'
         );
       }
 
-      // 2. Check duplicate account redemption
-      const existingRedemption = await tx.promoRedemption.findFirst({
+      // 2. Check duplicate account redemption across all dormitories (one redemption per Google Account)
+      const existingAccountRedemption = await tx.promoRedemption.findFirst({
         where: {
           promoCodeId: lockedPromo.id,
           redeemedBy: userId,
         },
       });
 
-      if (existingRedemption) {
-        throw new AppError('บัญชีนี้เคยใช้สิทธิ์โปรโมชันนี้ไปแล้ว', 400, 'PROMO_ALREADY_REDEEMED');
+      if (existingAccountRedemption) {
+        throw new AppError('บัญชีนี้เคยใช้สิทธิ์โปรโมชันนี้ไปแล้ว (Promo code has already been redeemed by this account / PROMO_ALREADY_REDEEMED)', 409, 'PROMO_ALREADY_REDEEMED');
       }
 
-      // 3. Atomically increment capacity counter
+      // 3. Check dormitory-level redemption if dormitoryId provided
+      if (dormitoryId) {
+        const existingDormRedemption = await tx.promoRedemption.findFirst({
+          where: {
+            dormitoryId,
+            promoCodeId: lockedPromo.id,
+          },
+        });
+        if (existingDormRedemption) {
+          throw new AppError('หอพักนี้เคยใช้สิทธิ์โปรโมชันนี้ไปแล้ว (Promo code has already been redeemed for this dormitory / PROMO_ALREADY_REDEEMED)', 409, 'PROMO_ALREADY_REDEEMED');
+        }
+      }
+
+      // 4. Atomically increment capacity counter
       await tx.promoCode.update({
         where: { id: lockedPromo.id },
         data: {
@@ -286,7 +324,99 @@ export class PromoService {
         },
       });
 
-      return lockedPromo;
+      const bonusMonths = lockedPromo.benefitValue || 2;
+      let newExpiresAt = addCalendarMonths(now, bonusMonths);
+      let previousExpiresAt: Date = now;
+      let subscriptionId: string = '';
+
+      // 5. If dormitoryId provided and dormitory subscription exists, extend it
+      if (dormitoryId) {
+        let sub = await tx.dormitorySubscription.findUnique({
+          where: { dormitoryId },
+          include: { plan: true },
+        });
+
+        const proPlan = await tx.subscriptionPlan.findUnique({ where: { code: 'PAID' } });
+
+        if (sub) {
+          subscriptionId = sub.id;
+          previousExpiresAt = sub.expiresAt;
+          if (sub.expiresAt && sub.expiresAt > now) {
+            newExpiresAt = addCalendarMonths(sub.expiresAt, bonusMonths);
+          } else {
+            newExpiresAt = addCalendarMonths(now, bonusMonths);
+          }
+
+          await tx.dormitorySubscription.update({
+            where: { id: sub.id },
+            data: {
+              planId: proPlan?.id || sub.planId,
+              status: 'TRIAL',
+              expiresAt: newExpiresAt,
+              promoExtendedAt: now,
+              updatedAt: now,
+            },
+          });
+
+          await tx.subscriptionStatusHistory.create({
+            data: {
+              subscriptionId: sub.id,
+              dormitoryId,
+              previousPlanId: sub.planId,
+              newPlanId: proPlan?.id || sub.planId,
+              previousStatus: sub.status,
+              newStatus: 'TRIAL',
+              reason: 'PROMO_EXTENSION_CALENDAR_MONTHS',
+              actorId: userId,
+            },
+          });
+        } else {
+          sub = await tx.dormitorySubscription.create({
+            data: {
+              dormitoryId,
+              planId: proPlan!.id,
+              status: 'TRIAL',
+              startedAt: now,
+              expiresAt: newExpiresAt,
+              trialStartedAt: now,
+              trialExpiresAt: newExpiresAt,
+              promoExtendedAt: now,
+            },
+          });
+          previousExpiresAt = now;
+          subscriptionId = sub.id;
+        }
+
+        // Create PromoRedemption record
+        await tx.promoRedemption.create({
+          data: {
+            promoCodeId: lockedPromo.id,
+            dormitoryId,
+            subscriptionId: sub.id,
+            redeemedBy: userId,
+            previousExpiresAt,
+            newExpiresAt,
+          },
+        });
+      }
+
+      return {
+        status: 200,
+        body: {
+          success: true,
+          message: `ใช้รหัสโปรโมชัน ${lockedPromo.code} สำเร็จ (รับสิทธิ์เพิ่ม ${bonusMonths} เดือน)`,
+          data: {
+            promoCode: lockedPromo.code,
+            bonusMonths,
+            expiresAt: newExpiresAt,
+          },
+        },
+        id: lockedPromo.id,
+        promoCodeEntity: lockedPromo,
+        benefitValue: bonusMonths,
+        bonusMonths,
+        newExpiresAt,
+      };
     };
 
     if (txClient) {

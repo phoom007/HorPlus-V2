@@ -174,7 +174,7 @@ describe('Onboarding & Provisioning API (TASK 011)', () => {
 
     expect(completeRes.status).toBe(200);
     expect(completeRes.body.data.dormitory.name).toBe('Grand Sunrise Dormitory');
-    expect(completeRes.body.data.subscription.planCode).toBe('FREE');
+    expect(completeRes.body.data.subscription.planCode).toBe('PAID');
     expect(completeRes.body.data.promo.applied).toBe(true);
     expect(completeRes.body.data.promo.promoBonusMonths || completeRes.body.data.promo.bonusDays).toBeDefined();
 

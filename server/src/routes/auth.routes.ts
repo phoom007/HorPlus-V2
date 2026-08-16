@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { z } from 'zod';
 import { getEnv } from '../config/env.js';
 import { AuthenticationService } from '../services/auth.service.js';
+import { referralService } from '../services/referral.service.js';
 import { createRequireSessionMiddleware } from '../middleware/require-session.js';
 import { createCsrfMiddleware } from '../middleware/csrf.js';
 import { createRateLimiterMiddleware } from '../middleware/rate-limiter.js';
@@ -10,6 +11,7 @@ import { notFoundMiddleware } from '../middleware/not-found.js';
 const googleAuthSchema = z.object({
   idToken: z.string().min(1, 'idToken is required'),
   intent: z.enum(['owner', 'staff']).optional().default('owner'),
+  referralCode: z.string().optional(),
 });
 
 export function createAuthRouter(authService: AuthenticationService): Router {
@@ -53,6 +55,19 @@ export function createAuthRouter(authService: AuthenticationService): Router {
         requestId,
       });
 
+      // Bind referral code if provided during Google Auth
+      let boundReferral = null;
+      if (parsed.data.referralCode && /^[1-9]\d{5}$/.test(parsed.data.referralCode.trim())) {
+        try {
+          boundReferral = await referralService.validateAndBindReferral(
+            authResult.user.id,
+            parsed.data.referralCode.trim()
+          );
+        } catch (refErr) {
+          console.warn('Failed to bind referral code during Google Auth:', refErr);
+        }
+      }
+
       // Set HttpOnly Session Cookie
       res.cookie(env.SESSION_COOKIE_NAME, authResult.sessionToken, {
         httpOnly: true,
@@ -77,6 +92,7 @@ export function createAuthRouter(authService: AuthenticationService): Router {
           memberships: authResult.memberships,
           onboardingRequired: authResult.onboardingRequired,
           csrfToken: authResult.csrfToken,
+          referral: boundReferral,
         },
       });
     } catch (err: any) {

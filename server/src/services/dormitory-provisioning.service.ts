@@ -107,6 +107,7 @@ export interface CompleteOwnerOnboardingParams {
     allowed: string;
     allowedTypes?: string[];
   };
+  ownerSignatureUrl?: string;
 }
 
 export class DormitoryProvisioningService {
@@ -403,7 +404,7 @@ export class DormitoryProvisioningService {
       }
 
       if (!rawDormId) {
-        const prov = await this.prepareProvisionalDormitory(userId, { name: dormitory.name }, tx);
+        const prov = await this.prepareProvisionalDormitory(userId, { name: dormitory?.name || 'หอพักของฉัน' }, tx);
         rawDormId = prov.provisionalDormitoryId;
       }
       const dormId: string = rawDormId!;
@@ -419,9 +420,30 @@ export class DormitoryProvisioningService {
       }
 
       // 2. Validate Signature Saved (Step 4 Requirement)
-      const currentSig = await tx.ownerSignature.findFirst({
+      let currentSig = await tx.ownerSignature.findFirst({
         where: { dormitoryId: dormId, isCurrent: true },
       });
+
+      if (!currentSig && (params.ownerSignatureUrl || (params as any).signatureBase64)) {
+        const sigUrl = params.ownerSignatureUrl || (params as any).signatureBase64;
+        const base64Str = sigUrl.replace(/^data:image\/\w+;base64,/, '');
+        const buffer = Buffer.from(base64Str, 'base64');
+        const sha256 = nodeCrypto.createHash('sha256').update(buffer).digest('hex');
+        const objectKey = `dormitories/${dormId}/signatures/v1-${sha256.substring(0, 12)}.png`;
+
+        currentSig = await tx.ownerSignature.create({
+          data: {
+            dormitoryId: dormId,
+            signedByUserId: userId,
+            objectKey,
+            sha256,
+            mimeType: 'image/png',
+            byteSize: buffer.length,
+            version: 1,
+            isCurrent: true,
+          },
+        });
+      }
 
       if (!currentSig) {
         throw new AppError('กรุณาบันทึกลายเซ็นเจ้าของหอพักในขั้นตอนที่ 4 ก่อนยืนยันสร้างหอพัก', 400, 'OWNER_SIGNATURE_REQUIRED');
@@ -746,22 +768,21 @@ export class DormitoryProvisioningService {
       if (promoCode && promoCode.trim()) {
         const promoRes = await promoService.validatePromo(promoCode, userId, dormId, tx);
         if (promoRes.valid && promoRes.eligible) {
-          canonicalPromo = await promoService.redeemPromoAtomic(userId, dormId, promoCode, tx);
+          canonicalPromo = promoRes.promoCodeEntity;
           const bonusMonths = canonicalPromo.benefitValue || 2;
           finalExpiresAt = addCalendarMonths(initialTrialExpiresAt, bonusMonths);
           promoApplied = true;
         }
       }
 
-      // Mandatory Guard 1: Real HorPlus PRO entitlement during trial
+      // Mandatory Guard 1: Real HorPlus PRO entitlement during trial, otherwise FREE
       const proPlan = await tx.subscriptionPlan.findUnique({ where: { code: 'PAID' } });
       const freePlan = await tx.subscriptionPlan.findUnique({ where: { code: 'FREE' } });
 
-      const effectivePlan = (isTrialEligible || promoApplied || resolvedPlanCode === 'PAID')
-        ? (proPlan || plan)
-        : (freePlan || plan);
-
-      const subStatus = (isTrialEligible || promoApplied) ? 'TRIAL' : (resolvedPlanCode === 'PAID' ? 'ACTIVE' : 'ACTIVE');
+      const isZeroPayBenefit = isTrialEligible || promoApplied;
+      const effectivePlan = isZeroPayBenefit ? (proPlan || plan) : (freePlan || plan);
+      const subStatus = isZeroPayBenefit ? 'TRIAL' : 'ACTIVE';
+      const subExpiresAt = isZeroPayBenefit ? finalExpiresAt : addCalendarMonths(now, 1200);
 
       const sub = await tx.dormitorySubscription.upsert({
         where: { dormitoryId: dormId },
@@ -770,8 +791,8 @@ export class DormitoryProvisioningService {
           planId: effectivePlan.id,
           status: subStatus,
           startedAt: now,
-          expiresAt: (isTrialEligible || promoApplied) ? finalExpiresAt : addCalendarMonths(now, 12),
-          trialStartedAt: (isTrialEligible || promoApplied) ? now : null,
+          expiresAt: subExpiresAt,
+          trialStartedAt: isZeroPayBenefit ? now : null,
           trialExpiresAt: isTrialEligible ? initialTrialExpiresAt : null,
           promoExtendedAt: promoApplied ? now : null,
         },
@@ -779,8 +800,8 @@ export class DormitoryProvisioningService {
           planId: effectivePlan.id,
           status: subStatus,
           startedAt: now,
-          expiresAt: (isTrialEligible || promoApplied) ? finalExpiresAt : addCalendarMonths(now, 12),
-          trialStartedAt: (isTrialEligible || promoApplied) ? now : null,
+          expiresAt: subExpiresAt,
+          trialStartedAt: isZeroPayBenefit ? now : null,
           trialExpiresAt: isTrialEligible ? initialTrialExpiresAt : null,
           promoExtendedAt: promoApplied ? now : null,
           updatedAt: now,
@@ -825,6 +846,13 @@ export class DormitoryProvisioningService {
             newExpiresAt: finalExpiresAt,
           },
         });
+
+        await tx.promoCode.update({
+          where: { id: canonicalPromo.id },
+          data: {
+            currentRedemptionsCount: { increment: 1 },
+          },
+        });
       }
 
       // Settle Referral on first dormitory creation
@@ -845,11 +873,12 @@ export class DormitoryProvisioningService {
             isZeroPayValidated: false,
             currencySnapshot: selectedPackage.currency,
             catalogVersion: selectedPackage.catalogVersion || 2,
+            expiresAt: addCalendarMonths(now, 1),
           },
         });
       }
 
-      await tx.onboardingDraft.update({
+      await tx.onboardingDraft.updateMany({
         where: { userId },
         data: {
           finalizedAt: now,
@@ -873,9 +902,9 @@ export class DormitoryProvisioningService {
           },
           subscription: {
             id: sub.id,
-            planCode: plan.code,
-            status: 'TRIAL',
-            trialExpiresAt: finalExpiresAt.toISOString(),
+            planCode: effectivePlan.code,
+            status: subStatus,
+            trialExpiresAt: isZeroPayBenefit ? finalExpiresAt.toISOString() : null,
           },
           promo: {
             applied: promoApplied,
@@ -883,11 +912,12 @@ export class DormitoryProvisioningService {
             trialMonths: trialGrantedMonths,
             totalTrialMonths: trialGrantedMonths + promoBonusMonths,
           },
-          planCode: plan.code,
-          subscriptionStatus: 'TRIAL',
-          trialExpiresAt: finalExpiresAt.toISOString(),
+          planCode: effectivePlan.code,
+          subscriptionStatus: subStatus,
+          trialExpiresAt: isZeroPayBenefit ? finalExpiresAt.toISOString() : null,
           promoApplied,
           totalTrialMonths: trialGrantedMonths + promoBonusMonths,
+          packageIntentId: selectedPackage ? (await tx.subscriptionPackageIntent.findFirst({ where: { dormitoryId: dormId, userId } }))?.id : null,
         };
     });
 

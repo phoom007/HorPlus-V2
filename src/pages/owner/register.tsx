@@ -278,7 +278,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
       },
 
       paymentAccount: {
-        bankName: 'กสิกรไทย (KBank)',
+        bankName: '',
         accountNumber: '',
         accountName: '',
         bankAccountName: '',
@@ -315,8 +315,8 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
     formData.lineOA.isConnected ? { type: 'success', msg: 'เชื่อมต่อกับ LINE Official Account สำเร็จ (พร้อมใช้งาน)' } : null
   );
 
-  // Plan Selection & Promo Code states for Step 7
-  const [selectedPlan, setSelectedPlan] = useState<'free' | 'pro'>('free');
+  // Plan Selection & Promo Code states for Step 7 (Default: PRO 1-Month for Trial-Eligible Account)
+  const [selectedPlan, setSelectedPlan] = useState<'free' | 'pro'>('pro');
   const [promoCodeInput, setPromoCodeInput] = useState('HORPLUS');
   const [appliedPromo, setAppliedPromo] = useState(false);
   const [promoMessage, setPromoMessage] = useState<string | null>(null);
@@ -1000,6 +1000,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
         },
         defaultTerms: formData.rulesTemplate || undefined,
         rules: formData.rulesTemplate || undefined,
+        ownerSignatureUrl: formData.ownerSignatureUrl || undefined,
       };
 
       await onboardingClient.finalize(payload as any);
@@ -1741,7 +1742,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                           utilities: {
                             ...formData.utilities,
                             commonFeeMode: mode,
-                            commonFeeRate: mode === 'free' || mode === 'none' ? 0 : (formData.utilities.commonFeeRate || 200)
+                            commonFeeRate: mode === 'free' || mode === 'none' ? 0 : (formData.utilities.commonFeeRate || 0)
                           }
                         });
                       }}
@@ -1781,7 +1782,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                           utilities: {
                             ...formData.utilities,
                             internetFeeMode: mode,
-                            internetRate: mode === 'free' || mode === 'none' ? 0 : (formData.utilities.internetRate || 150)
+                            internetRate: mode === 'free' || mode === 'none' ? 0 : (formData.utilities.internetRate || 0)
                           }
                         });
                       }}
@@ -1821,7 +1822,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                           utilities: {
                             ...formData.utilities,
                             parkingFeeMode: mode,
-                            parkingFeeRate: mode === 'free' ? 0 : (formData.utilities.parkingFeeRate || 100)
+                            parkingFeeRate: mode === 'free' ? 0 : (formData.utilities.parkingFeeRate || 0)
                           }
                         });
                       }}
@@ -1875,12 +1876,15 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                               type="number"
                               value={rentRates.monthly}
                               onChange={(e) => {
-                                const updated = [...formData.buildings];
-                                updated[bIdx].rentRates = {
-                                  ...rentRates,
-                                  monthly: parseFloat(e.target.value) || 0
-                                };
-                                setFormData({ ...formData, buildings: updated });
+                                const val = parseFloat(e.target.value) || 0;
+                                setFormData(prev => ({
+                                  ...prev,
+                                  buildings: prev.buildings.map((bldg, idx) =>
+                                    idx === bIdx
+                                      ? { ...bldg, rentRates: { ...(bldg.rentRates || {}), monthly: val } }
+                                      : bldg
+                                  )
+                                }));
                               }}
                               className="w-full px-3.5 py-2 text-xs bg-white border border-slate-200 rounded-xl font-black text-slate-800 outline-none focus:border-blue-500"
                             />
@@ -1892,12 +1896,15 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                               type="number"
                               value={rentRates.daily}
                               onChange={(e) => {
-                                const updated = [...formData.buildings];
-                                updated[bIdx].rentRates = {
-                                  ...rentRates,
-                                  daily: parseFloat(e.target.value) || 0
-                                };
-                                setFormData({ ...formData, buildings: updated });
+                                const val = parseFloat(e.target.value) || 0;
+                                setFormData(prev => ({
+                                  ...prev,
+                                  buildings: prev.buildings.map((bldg, idx) =>
+                                    idx === bIdx
+                                      ? { ...bldg, rentRates: { ...(bldg.rentRates || {}), daily: val } }
+                                      : bldg
+                                  )
+                                }));
                               }}
                               className="w-full px-3.5 py-2 text-xs bg-white border border-slate-200 rounded-xl font-black text-slate-800 outline-none focus:border-blue-500"
                             />
@@ -1916,12 +1923,15 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                               type="number"
                               value={rentRates.term}
                               onChange={(e) => {
-                                const updated = [...formData.buildings];
-                                updated[bIdx].rentRates = {
-                                  ...rentRates,
-                                  term: parseFloat(e.target.value) || 0
-                                };
-                                setFormData({ ...formData, buildings: updated });
+                                const val = parseFloat(e.target.value) || 0;
+                                setFormData(prev => ({
+                                  ...prev,
+                                  buildings: prev.buildings.map((bldg, idx) =>
+                                    idx === bIdx
+                                      ? { ...bldg, rentRates: { ...(bldg.rentRates || {}), term: val } }
+                                      : bldg
+                                  )
+                                }));
                               }}
                               placeholder="18000"
                               className="flex-1 min-w-0 px-3 py-1.5 text-xs bg-white border border-slate-200 rounded-xl font-bold text-blue-700 outline-none focus:border-blue-500"
@@ -1934,12 +1944,15 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                                 max={12}
                                 value={rentRates.termMonths}
                                 onChange={(e) => {
-                                  const updated = [...formData.buildings];
-                                  updated[bIdx].rentRates = {
-                                    ...rentRates,
-                                    termMonths: parseInt(e.target.value) || 4
-                                  };
-                                  setFormData({ ...formData, buildings: updated });
+                                  const val = parseInt(e.target.value) || 4;
+                                  setFormData(prev => ({
+                                    ...prev,
+                                    buildings: prev.buildings.map((bldg, idx) =>
+                                      idx === bIdx
+                                        ? { ...bldg, rentRates: { ...(bldg.rentRates || {}), termMonths: val } }
+                                        : bldg
+                                    )
+                                  }));
                                 }}
                                 className="w-8 text-xs font-black text-slate-800 outline-none text-center"
                               />
@@ -2182,6 +2195,22 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                     <label className="block text-xs font-bold text-slate-700">
                       ชื่อบัญชีธนาคาร <span className="text-rose-500">*</span>
                     </label>
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => setFormData(prev => ({
+                          ...prev,
+                          paymentAccount: {
+                            ...prev.paymentAccount,
+                            accountName: authUserName,
+                            bankAccountName: authUserName
+                          }
+                        }))}
+                        className="text-[10px] font-extrabold text-blue-600 bg-blue-50 hover:bg-blue-100 border border-blue-100 px-2 py-0.5 rounded-lg transition-all cursor-pointer"
+                      >
+                        ดึงชื่อเจ้าของ
+                      </button>
+                    </div>
                   </div>
                   <input
                     type="text"
@@ -2814,7 +2843,10 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                           {is1moTrial ? (
                             <>
                               <span className="text-sm font-black text-emerald-600">฿0</span>
-                              <span className="text-[10px] line-through text-slate-400">฿{pkg.price}</span>
+                              <span className="text-[10px] line-through text-slate-400 font-bold">฿{pkg.price || 189}</span>
+                              {pkg.referencePrice && (
+                                <span className="text-[10px] line-through text-slate-300 font-medium">฿{pkg.referencePrice}</span>
+                              )}
                             </>
                           ) : (
                             <>

@@ -9,6 +9,7 @@ import { referralService } from '../services/referral.service.js';
 import { coinWalletService } from '../services/coin-wallet.service.js';
 import { AuthenticationService } from '../services/auth.service.js';
 import { createRequireSessionMiddleware } from '../middleware/require-session.js';
+import { createCsrfMiddleware } from '../middleware/csrf.js';
 
 const validateReferralSchema = z.object({
   code: z.string().min(6).max(6),
@@ -17,6 +18,7 @@ const validateReferralSchema = z.object({
 export function createReferralRouter(authService: AuthenticationService): Router {
   const router = Router();
   const requireSession = createRequireSessionMiddleware(authService);
+  const csrfMiddleware = createCsrfMiddleware(authService);
 
   /**
    * GET /api/v1/referral/me
@@ -39,7 +41,7 @@ export function createReferralRouter(authService: AuthenticationService): Router
    * POST /api/v1/referral/validate
    * Validate and bind an inviter's referral code to current authenticated user
    */
-  router.post('/validate', requireSession, async (req: Request, res: Response, next: NextFunction) => {
+  router.post('/validate', requireSession, csrfMiddleware, async (req: Request, res: Response, next: NextFunction) => {
     try {
       const userId = req.auth!.userId;
       const { code } = validateReferralSchema.parse(req.body);
