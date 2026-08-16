@@ -316,7 +316,8 @@ export class SignatureStorageService {
     }
 
     const sha256 = crypto.createHash('sha256').update(buffer).digest('hex');
-    const objectKey = `dormitories/${dormitoryId}/tenant-signatures/${sha256}.png`;
+    const randomUuid = crypto.randomUUID();
+    const objectKey = `dormitories/${dormitoryId}/tenant-signatures/${randomUuid}-${sha256.slice(0, 16)}.png`;
 
     await this.provider.save(objectKey, buffer);
 

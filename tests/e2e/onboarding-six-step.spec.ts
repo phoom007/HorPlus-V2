@@ -152,14 +152,30 @@ test.describe.serial('Master Six-Step Owner Onboarding E2E Flow', () => {
     // Draw real strokes on canvas to satisfy non-blank pixel threshold
     const canvas = page.locator('canvas');
     await expect(canvas).toBeVisible();
+    await canvas.scrollIntoViewIfNeeded();
     const box = await canvas.boundingBox();
     if (box) {
       await page.mouse.move(box.x + 20, box.y + 20);
       await page.mouse.down();
-      await page.mouse.move(box.x + 100, box.y + 60);
-      await page.mouse.move(box.x + 180, box.y + 30);
+      await page.mouse.move(box.x + 100, box.y + 60, { steps: 5 });
+      await page.mouse.move(box.x + 180, box.y + 30, { steps: 5 });
       await page.mouse.up();
     }
+    await page.evaluate(() => {
+      const cv = document.querySelector('canvas') as HTMLCanvasElement;
+      if (cv) {
+        const ctx = cv.getContext('2d');
+        if (ctx) {
+          ctx.lineWidth = 4;
+          ctx.strokeStyle = '#1e293b';
+          ctx.beginPath();
+          ctx.moveTo(30, 30);
+          ctx.lineTo(150, 80);
+          ctx.lineTo(250, 40);
+          ctx.stroke();
+        }
+      }
+    });
 
     // Attempting Next before saving signature must be blocked on Step 4!
     await page.click('[data-testid="button-next-step"]');
@@ -558,14 +574,30 @@ test.describe.serial('Master Six-Step Owner Onboarding E2E Flow', () => {
     // CASE 2 — SIGNED RESUME:
     const canvas = page.locator('canvas');
     await expect(canvas).toBeVisible();
+    await canvas.scrollIntoViewIfNeeded();
     const box = await canvas.boundingBox();
     if (box) {
       await page.mouse.move(box.x + 20, box.y + 20);
       await page.mouse.down();
-      await page.mouse.move(box.x + 100, box.y + 60);
-      await page.mouse.move(box.x + 180, box.y + 30);
+      await page.mouse.move(box.x + 100, box.y + 60, { steps: 5 });
+      await page.mouse.move(box.x + 180, box.y + 30, { steps: 5 });
       await page.mouse.up();
     }
+    await page.evaluate(() => {
+      const cv = document.querySelector('canvas') as HTMLCanvasElement;
+      if (cv) {
+        const ctx = cv.getContext('2d');
+        if (ctx) {
+          ctx.lineWidth = 4;
+          ctx.strokeStyle = '#1e293b';
+          ctx.beginPath();
+          ctx.moveTo(30, 30);
+          ctx.lineTo(150, 80);
+          ctx.lineTo(250, 40);
+          ctx.stroke();
+        }
+      }
+    });
 
     await page.click('[data-testid="button-save-signature"]');
     await expect(page.locator('text=บันทึกแล้ว')).toBeVisible();

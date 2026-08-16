@@ -332,12 +332,12 @@ export const SubscriptionPage: React.FC<SubscriptionPageProps> = ({ dormitoryId 
               value={promoCode}
               onChange={(e) => setPromoCode(e.target.value)}
               placeholder="Enter promo code"
-              disabled={promoRedeemed || status !== 'TRIAL' || promoLoading}
+              disabled={promoRedeemed || promoLoading}
               className="w-full sm:w-64 px-4 py-2.5 bg-white/10 border border-white/20 rounded-xl text-white placeholder-blue-300 text-sm font-mono font-bold focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:opacity-50"
             />
             <button
               type="submit"
-              disabled={promoRedeemed || status !== 'TRIAL' || promoLoading || !promoCode.trim()}
+              disabled={promoRedeemed || promoLoading || !promoCode.trim()}
               className="w-full sm:w-auto px-6 py-2.5 bg-white text-blue-950 font-black rounded-xl text-sm hover:bg-blue-50 transition-all shadow-md disabled:opacity-50 flex items-center justify-center gap-2"
             >
               {promoLoading ? (

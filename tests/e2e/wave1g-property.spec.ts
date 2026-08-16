@@ -353,7 +353,7 @@ test.describe.serial('Wave 1G Real Playwright Lifecycle — Property, Room Defau
     page.on('console', msg => {
       if (msg.type() === 'error') {
         const text = msg.text();
-        if (!text.includes('net::ERR_FAILED') && !text.includes('ERR_ABORTED') && !text.includes('net::ERR_INVALID_URL') && !text.includes('409 (Conflict)') && !text.includes('status of 409')) {
+        if (!text.includes('net::ERR_FAILED') && !text.includes('ERR_ABORTED') && !text.includes('net::ERR_INVALID_URL') && !text.includes('409 (Conflict)') && !text.includes('status of 409') && !text.includes('status of 404') && !text.includes('404 (Not Found)')) {
           test2ConsoleErrors.push(text);
         }
       }

@@ -1199,27 +1199,66 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                   </span>
                 </div>
 
-                <div className="p-3.5 bg-slate-50 border border-slate-200/80 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  <div>
-                    <span className="text-xs font-bold text-slate-800 block">
-                      {lineOaConfig.connected
-                        ? (lineOaConfig.lineOaId ? `LINE Basic ID: ${lineOaConfig.lineOaId}` : 'เชื่อมต่อ Messaging API เรียบร้อย')
-                        : 'ยังไม่ได้เชื่อมต่อ LINE OA'}
-                    </span>
-                    <span className="text-[11px] text-slate-500">
-                      {lineOaConfig.connected
-                        ? 'ระบบเปิดใช้งานการส่งการแจ้งเตือนอัตโนมัติแล้ว'
-                        : 'ตั้งค่า Channel ID & Secret เพื่อเปิดใช้งานการแจ้งเตือน'}
-                    </span>
+                <div className="p-4 bg-slate-50 border border-slate-200/80 rounded-2xl space-y-3">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div>
+                      <span className="text-xs font-bold text-slate-800 block">
+                        {lineOaConfig.connected
+                          ? (lineOaConfig.lineOaId ? `LINE Basic ID: ${lineOaConfig.lineOaId}` : 'เชื่อมต่อ Messaging API เรียบร้อย')
+                          : 'ยังไม่ได้เชื่อมต่อ LINE OA'}
+                      </span>
+                      <span className="text-[11px] text-slate-500">
+                        {lineOaConfig.connected
+                          ? 'ระบบเปิดใช้งานการส่งการแจ้งเตือนอัตโนมัติแล้ว'
+                          : 'ตั้งค่า Channel ID & Secret เพื่อเปิดใช้งานการแจ้งเตือน'}
+                      </span>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => setShowLineOaModal(true)}
+                      className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl transition-colors cursor-pointer shrink-0 shadow-sm"
+                    >
+                      จัดการ LINE OA
+                    </button>
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={() => setShowLineOaModal(true)}
-                    className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl transition-colors cursor-pointer shrink-0 shadow-sm"
-                  >
-                    จัดการ LINE OA
-                  </button>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-slate-200">
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-600 mb-1">LINE Channel ID</label>
+                      <input
+                        type="text"
+                        data-testid="line-channel-id-input"
+                        value={inputChannelId}
+                        onChange={(e) => setInputChannelId(e.target.value)}
+                        placeholder="1657XXXXXX"
+                        className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-semibold text-slate-800 focus:border-indigo-500 outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-600 mb-1">LINE Channel Secret</label>
+                      <input
+                        type="password"
+                        data-testid="line-channel-secret-input"
+                        value={inputChannelSecret}
+                        onChange={(e) => setInputChannelSecret(e.target.value)}
+                        placeholder={lineOaConfig.hasChannelSecret ? '••••••••••••••••' : 'Channel Secret'}
+                        className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-semibold text-slate-800 focus:border-indigo-500 outline-none"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex justify-end pt-1">
+                    <button
+                      type="button"
+                      data-testid="save-line-oa-button"
+                      onClick={handleSaveLineOaConfig}
+                      disabled={isSavingLineOa}
+                      className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl transition-all shadow-xs cursor-pointer disabled:opacity-50"
+                    >
+                      {isSavingLineOa ? 'กำลังบันทึก...' : 'บันทึกการตั้งค่า LINE OA'}
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>

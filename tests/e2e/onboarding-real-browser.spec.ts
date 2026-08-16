@@ -36,14 +36,30 @@ test.describe.serial('Real Owner Onboarding Browser E2E Lifecycle', () => {
   async function drawSignatureAndSetupLine(page: any) {
     const canvas = page.locator('canvas');
     await expect(canvas).toBeVisible();
+    await canvas.scrollIntoViewIfNeeded();
     const box = await canvas.boundingBox();
     if (box) {
       await page.mouse.move(box.x + 20, box.y + 20);
       await page.mouse.down();
-      await page.mouse.move(box.x + 100, box.y + 60);
-      await page.mouse.move(box.x + 180, box.y + 30);
+      await page.mouse.move(box.x + 100, box.y + 60, { steps: 5 });
+      await page.mouse.move(box.x + 180, box.y + 30, { steps: 5 });
       await page.mouse.up();
     }
+    await page.evaluate(() => {
+      const cv = document.querySelector('canvas') as HTMLCanvasElement;
+      if (cv) {
+        const ctx = cv.getContext('2d');
+        if (ctx) {
+          ctx.lineWidth = 4;
+          ctx.strokeStyle = '#1e293b';
+          ctx.beginPath();
+          ctx.moveTo(30, 30);
+          ctx.lineTo(150, 80);
+          ctx.lineTo(250, 40);
+          ctx.stroke();
+        }
+      }
+    });
     await page.click('[data-testid="button-save-signature"]');
     await page.waitForSelector('[data-testid="signature-status-saved"]', { state: 'visible' });
     await page.click('[data-testid="button-next-step"]'); // 4 -> 5

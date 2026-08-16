@@ -817,12 +817,32 @@ describe.sequential('LOCAL-05: Local Security & Resilience Audit Suite', () => {
       });
 
       // Submit registration request from replacement applicant Beta
+      const { PNG } = await import('pngjs');
+      const pngObj = new PNG({ width: 10, height: 10 });
+      for (let i = 0; i < 100; i++) {
+        const idx = i * 4;
+        pngObj.data[idx] = 100;
+        pngObj.data[idx + 1] = 100;
+        pngObj.data[idx + 2] = 200;
+        pngObj.data[idx + 3] = 255;
+      }
+      const validSig = `data:image/png;base64,${PNG.sync.write(pngObj).toString('base64')}`;
+
+      await prisma.dormitoryPropertyDefaults.upsert({
+        where: { dormitoryId: dormIdA },
+        create: { dormitoryId: dormIdA, version: 1, defaultTerms: 'Terms', petPolicy: { allowed: 'none', allowedTypes: [] } },
+        update: {},
+      });
+
       const regBeta = await regService.createRequest(dormIdA, {
         firstName: 'Replacement',
         lastName: 'Beta',
         phone: '0899999999',
         requestedRoomId: roomA101.id,
-        idCard: '1234567890123'
+        idCard: '1234567890123',
+        agreedTerms: true,
+        signatureBase64: validSig,
+        expectedPolicyVersion: 1,
       });
 
       const approvalPayload = {

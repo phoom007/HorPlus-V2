@@ -449,6 +449,19 @@ describe('Wave 1F - Authorization, Permission, Package & Idempotency Corrective 
       });
     }
 
+    // Set paid plan with roomLimit: 10 to test over-limit on paid plan
+    const paidPlan = await prisma.subscriptionPlan.findFirst({ where: { code: 'PAID' } });
+    if (paidPlan) {
+      await prisma.subscriptionPlan.update({
+        where: { id: paidPlan.id },
+        data: { roomLimit: 10 },
+      });
+      await prisma.dormitorySubscription.updateMany({
+        where: { dormitoryId: dormId },
+        data: { planId: paidPlan.id, status: 'ACTIVE' },
+      });
+    }
+
     const entitlements = await entitlementService.getEffectiveEntitlements(dormId);
     expect(entitlements.roomCount).toBe(11);
     expect(entitlements.isOverLimit).toBe(true);
@@ -456,6 +469,13 @@ describe('Wave 1F - Authorization, Permission, Package & Idempotency Corrective 
 
     await expect(entitlementService.assertDormitoryWritable(dormId)).rejects.toThrow('Dormitory operation restricted to read-only mode.');
     await expect(entitlementService.assertRoomCreationAllowed(dormId)).rejects.toThrow('Dormitory operation restricted to read-only mode.');
+
+    if (paidPlan) {
+      await prisma.subscriptionPlan.update({
+        where: { id: paidPlan.id },
+        data: { roomLimit: 150 },
+      });
+    }
   });
 
   // ─── Concurrent Room Creation Tests (Service Level) ───
@@ -488,16 +508,12 @@ describe('Wave 1F - Authorization, Permission, Package & Idempotency Corrective 
       roomService.createRoom(dormId, { buildingId, roomNumber: 'FREE-C-11', normalizedRoomNumber: 'FREE-C-11', floor: 1 }, ownerUserId),
     ]);
 
+    // Under LOCAL-07 / D2 specs: FREE tier allows unlimited room creation for planning (operational entitlement capped at 10)
     const fulfilled = results.filter(r => r.status === 'fulfilled');
-    const rejected = results.filter(r => r.status === 'rejected');
-    expect(fulfilled.length).toBe(1);
-    expect(rejected.length).toBe(1);
-
-    const error: any = (rejected[0] as PromiseRejectedResult).reason;
-    expect(error.errorCode || error.code).toBe('ROOM_LIMIT_REACHED');
+    expect(fulfilled.length).toBe(2);
 
     const totalRooms = await prisma.room.count({ where: { dormitoryId: dormId, status: { not: 'archived' } } });
-    expect(totalRooms).toBe(10);
+    expect(totalRooms).toBe(11);
   });
 
   it('proves real concurrent room creation on Paid boundary under PG transaction lock', async () => {
@@ -881,9 +897,10 @@ describe('Wave 1F - Authorization, Permission, Package & Idempotency Corrective 
     });
 
     it('Tenant + expired Subscription returns 403 SUBSCRIPTION_READ_ONLY', async () => {
+      const paidPlan = await prisma.subscriptionPlan.findFirst({ where: { code: 'PAID' } });
       await prisma.dormitorySubscription.updateMany({
         where: { dormitoryId: dormId },
-        data: { status: 'EXPIRED', expiresAt: new Date(Date.now() - 24 * 60 * 60 * 1000) },
+        data: { planId: paidPlan?.id, status: 'EXPIRED', expiresAt: new Date(Date.now() - 24 * 60 * 60 * 1000) },
       });
 
       const res = await request(app)
@@ -956,9 +973,10 @@ describe('Wave 1F - Authorization, Permission, Package & Idempotency Corrective 
       });
       managerPermissions = { payment: ['read', 'write'] };
 
+      const paidPlan = await prisma.subscriptionPlan.findFirst({ where: { code: 'PAID' } });
       await prisma.dormitorySubscription.updateMany({
         where: { dormitoryId: dormId },
-        data: { status: 'EXPIRED', expiresAt: new Date(Date.now() - 24 * 60 * 60 * 1000) },
+        data: { planId: paidPlan?.id, status: 'EXPIRED', expiresAt: new Date(Date.now() - 24 * 60 * 60 * 1000) },
       });
 
       const res = await request(app)
@@ -1241,22 +1259,11 @@ describe('Wave 1F - Authorization, Permission, Package & Idempotency Corrective 
       ]);
 
       const responses = [res1, res2];
-      const successResponse = responses.find((response) => response.status === 201);
-      const rejectedResponse = responses.find((response) => response.status === 409);
-
-      expect(responses.filter((r) => r.status === 201).length).toBe(1);
-      expect(responses.filter((r) => r.status === 409).length).toBe(1);
-
-      expect(successResponse).toBeDefined();
-      expect(successResponse!.status).toBe(201);
-      expect(successResponse!.body.data || successResponse!.body.roomNumber || successResponse!.body.id).toBeDefined();
-
-      expect(rejectedResponse).toBeDefined();
-      expect(rejectedResponse!.status).toBe(409);
-      expect(rejectedResponse!.body.errorCode || rejectedResponse!.body.error?.code).toBe('ROOM_LIMIT_REACHED');
+      // Under LOCAL-07 / D2 specs: FREE tier allows unlimited room creation for planning (operational entitlement capped at 10)
+      expect(responses.filter((r) => r.status === 201).length).toBe(2);
 
       const activeCount = await prisma.room.count({ where: { dormitoryId: concDormId, deletedAt: null } });
-      expect(activeCount).toBe(10);
+      expect(activeCount).toBe(11);
     });
 
     it('proves concurrent HTTP room creation on Paid boundary under PG transaction lock', async () => {

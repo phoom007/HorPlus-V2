@@ -72,12 +72,19 @@ const GENDER_TYPE_OPTIONS = [
 ];
 
 const BANK_OPTIONS = [
+  'กสิกรไทย (KBank)',
   'ธนาคารกสิกรไทย (KBANK)',
+  'ไทยพาณิชย์ (SCB)',
   'ธนาคารไทยพาณิชย์ (SCB)',
+  'กรุงเทพ (BBL)',
   'ธนาคารกรุงเทพ (BBL)',
+  'กรุงไทย (KTB)',
   'ธนาคารกรุงไทย (KTB)',
+  'กรุงศรีอยุธยา (BAY)',
   'ธนาคารกรุงศรีอยุธยา (BAY)',
+  'ทหารไทยธนชาต (TTB)',
   'ธนาคารทหารไทยธนชาต (TTB)',
+  'ออมสิน (GSB)',
   'ธนาคารออมสิน (GSB)',
   'ธนาคารเพื่อการเกษตรและสหกรณ์การเกษตร (ธ.ก.ส.)',
   'ธนาคาร ซีไอเอ็มบี ไทย (CIMBT)',
@@ -87,7 +94,7 @@ const BANK_OPTIONS = [
 ];
 
 const REFERRAL_OPTIONS = [
-  { id: 'facebook', label: 'Facebook / สื่อสังคมออนไลน์', icon: Facebook },
+  { id: 'facebook', label: 'Facebook / Social Media', icon: Facebook },
   { id: 'google', label: 'Google Search / เว็บไซต์', icon: Globe },
   { id: 'friend', label: 'เพื่อน / คนรู้จักแนะนำ', icon: Share2 },
   { id: 'other', label: 'ช่องทางอื่นๆ', icon: MessageSquare }
@@ -166,6 +173,7 @@ export function normalizeOnboardingDraftPayload(rawPayload: any, neutralInitialS
         mode: (bObj.mode ?? 'auto').toString(),
         customRooms: Array.isArray(bObj.customRooms) ? bObj.customRooms : [],
         securityDeposit,
+        hasElevator: Boolean(bObj.hasElevator ?? false),
         rentRates: {
           monthly,
           daily,
@@ -180,9 +188,9 @@ export function normalizeOnboardingDraftPayload(rawPayload: any, neutralInitialS
   const rawUtil = (p.utilities && typeof p.utilities === 'object') ? p.utilities : {};
   result.utilities = {
     waterBillingMode: (rawUtil.waterBillingMode ?? neutralInitialState.utilities?.waterBillingMode ?? 'unit').toString(),
-    waterRate: parseNum(rawUtil.waterRate, neutralInitialState.utilities?.waterRate ?? 18),
+    waterRate: parseNum(rawUtil.waterRate, neutralInitialState.utilities?.waterRate ?? 0),
     electricBillingMode: (rawUtil.electricBillingMode ?? neutralInitialState.utilities?.electricBillingMode ?? 'unit').toString(),
-    electricRate: parseNum(rawUtil.electricRate, neutralInitialState.utilities?.electricRate ?? 7),
+    electricRate: parseNum(rawUtil.electricRate, neutralInitialState.utilities?.electricRate ?? 0),
     commonFeeMode: (rawUtil.commonFeeMode ?? neutralInitialState.utilities?.commonFeeMode ?? 'none').toString(),
     commonFeeRate: parseNum(rawUtil.commonFeeRate, neutralInitialState.utilities?.commonFeeRate ?? 0),
     internetFeeMode: (rawUtil.internetFeeMode ?? neutralInitialState.utilities?.internetFeeMode ?? 'none').toString(),
@@ -194,7 +202,7 @@ export function normalizeOnboardingDraftPayload(rawPayload: any, neutralInitialS
   const rawDep = (p.deposits && typeof p.deposits === 'object') ? p.deposits : {};
   result.deposits = {
     securityDeposit: parseNum(rawDep.securityDeposit, neutralInitialState.deposits?.securityDeposit ?? 0),
-    advanceRentMonths: parseNum(rawDep.advanceRentMonths, neutralInitialState.deposits?.advanceRentMonths ?? 1),
+    advanceRentMonths: parseNum(rawDep.advanceRentMonths, neutralInitialState.deposits?.advanceRentMonths ?? 0),
     dueDateDay: parseNum(rawDep.dueDateDay, neutralInitialState.deposits?.dueDateDay ?? 5),
     gracePeriodDays: parseNum(rawDep.gracePeriodDays, neutralInitialState.deposits?.gracePeriodDays ?? 0),
     lateFeeType: (rawDep.lateFeeType ?? neutralInitialState.deposits?.lateFeeType ?? 'none').toString(),
@@ -380,9 +388,9 @@ const OwnerRegisterInner: React.FC<RegisterProps> = ({ onAddLog }) => {
     // Step 3: Utilities & Service Rates
     utilities: {
       waterBillingMode: 'unit',
-      waterRate: 18,
+      waterRate: 0,
       electricBillingMode: 'unit',
-      electricRate: 7,
+      electricRate: 0,
       commonFeeMode: 'none',
       commonFeeRate: 0,
       internetFeeMode: 'none',
@@ -394,7 +402,7 @@ const OwnerRegisterInner: React.FC<RegisterProps> = ({ onAddLog }) => {
     // Step 4: Deposits, Billing & Payment Account
     deposits: {
       securityDeposit: 0,
-      advanceRentMonths: 1,
+      advanceRentMonths: 0,
       dueDateDay: 5,
       gracePeriodDays: 0,
       lateFeeType: 'none',
@@ -505,7 +513,7 @@ const OwnerRegisterInner: React.FC<RegisterProps> = ({ onAddLog }) => {
   // When structural inputs change, discard manual customRooms automatically
   const handleBuildingStructureChange = (
     bIdx: number,
-    updates: Partial<{ totalFloors: number; roomsPerFloor: number; name: string; formatPattern: string; maxOccupants: number }>
+    updates: Partial<{ totalFloors: number; roomsPerFloor: number; name: string; formatPattern: string; maxOccupants: number; hasElevator: boolean }>
   ) => {
     const updated = [...formData.buildings];
     const target = { ...updated[bIdx] };
@@ -514,6 +522,7 @@ const OwnerRegisterInner: React.FC<RegisterProps> = ({ onAddLog }) => {
     if (updates.roomsPerFloor !== undefined) target.roomsPerFloor = updates.roomsPerFloor;
     if (updates.name !== undefined) target.name = updates.name;
     if (updates.formatPattern !== undefined) target.formatPattern = updates.formatPattern;
+    if (updates.hasElevator !== undefined) target.hasElevator = updates.hasElevator;
     if (updates.maxOccupants !== undefined) {
       target.rentRates = { ...target.rentRates, maxOccupants: updates.maxOccupants };
     }
@@ -642,13 +651,20 @@ const OwnerRegisterInner: React.FC<RegisterProps> = ({ onAddLog }) => {
   }, []);
 
   // Canvas Drawing Handlers
+  const isDrawingRef = useRef(false);
+
   const startDrawing = (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
+    isDrawingRef.current = true;
     setIsDrawing(true);
     hasDrawnRef.current = true;
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+    ctx.lineWidth = 3;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = '#1e293b';
     const rect = canvas.getBoundingClientRect();
     const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
     const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
@@ -657,7 +673,7 @@ const OwnerRegisterInner: React.FC<RegisterProps> = ({ onAddLog }) => {
   };
 
   const draw = (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
-    if (!isDrawing) return;
+    if (!isDrawingRef.current) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
@@ -670,6 +686,7 @@ const OwnerRegisterInner: React.FC<RegisterProps> = ({ onAddLog }) => {
   };
 
   const stopDrawing = () => {
+    isDrawingRef.current = false;
     setIsDrawing(false);
   };
 
@@ -708,7 +725,31 @@ const OwnerRegisterInner: React.FC<RegisterProps> = ({ onAddLog }) => {
 
   // Save Signature
   const handleSaveSignature = async () => {
-    if (!hasDrawnRef.current) {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    let hasPixels = hasDrawnRef.current;
+    if (!hasPixels) {
+      try {
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+          for (let i = 3; i < imgData.data.length; i += 4) {
+            if (imgData.data[i] > 0) {
+              hasPixels = true;
+              break;
+            }
+          }
+        }
+      } catch {}
+    }
+
+    const dataUrl = canvas.toDataURL('image/png');
+    if (!hasPixels && dataUrl && dataUrl.length > 1000) {
+      hasPixels = true;
+    }
+
+    if (!hasPixels) {
       setValidationError('กรุณาวาดลายเซ็นก่อนกดบันทึก');
       return;
     }
@@ -716,10 +757,6 @@ const OwnerRegisterInner: React.FC<RegisterProps> = ({ onAddLog }) => {
     const dormId = await ensureProvisionalDormitory();
     if (!dormId) return;
 
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const dataUrl = canvas.toDataURL('image/png');
     setSignatureUploading(true);
     setValidationError(null);
 
@@ -791,6 +828,47 @@ const OwnerRegisterInner: React.FC<RegisterProps> = ({ onAddLog }) => {
     }
   };
 
+  const handleSetLineWebhook = async () => {
+    const dormId = await ensureProvisionalDormitory();
+    if (!dormId) return;
+    try {
+      const res = await onboardingClient.setLineWebhook(dormId);
+      const raw = res.data || res;
+      const config = raw.config || raw;
+      setLineStatus(prev => ({
+        ...prev,
+        webhookEndpointSet: true,
+        webhookUrl: config.webhookUrl || prev.webhookUrl || webhookUrl,
+      }));
+      if (config.webhookUrl) {
+        setWebhookUrl(config.webhookUrl);
+      }
+    } catch (err: any) {
+      setValidationError(err.message || 'การตั้งค่า Webhook ล้มเหลว');
+    }
+  };
+
+  const handleTestLineWebhook = async () => {
+    const dormId = await ensureProvisionalDormitory();
+    if (!dormId) return;
+    try {
+      const res = await onboardingClient.testLineWebhook(dormId);
+      const raw = res.data || res;
+      const config = raw.config || raw;
+      const webhookTestSucceeded = Boolean(config.webhookTestSucceeded || config.webhookTestSucceededAt);
+      const webhookActive = Boolean(config.webhookActive);
+      const isReady = Boolean(config.isReady || (lineStatus.credentialsVerified && webhookActive));
+      setLineStatus(prev => ({
+        ...prev,
+        webhookTestSucceeded,
+        webhookActive,
+        isReady,
+      }));
+    } catch (err: any) {
+      setValidationError(err.message || 'การทดสอบ Webhook ล้มเหลว');
+    }
+  };
+
   // Step 7: Apply Promo
   const handleApplyPromoCode = async () => {
     if (!promoCodeInput.trim()) {
@@ -806,7 +884,7 @@ const OwnerRegisterInner: React.FC<RegisterProps> = ({ onAddLog }) => {
       const raw = res.data || res;
       if (raw.valid && raw.eligible) {
         setAppliedPromoResult(raw);
-        setPromoSuccess(`ใช้รหัสโปรโมชัน "${raw.code}" สำเร็จ! รับสิทธิ์ใช้งานเพิ่มเติม ${raw.promoBonusMonths || 2} เดือน`);
+        setPromoSuccess(`ใช้รหัสโปรโมชัน "${raw.code}" สำเร็จ! รับสิทธิ์ทดลองใช้งานฟรีเพิ่ม ${raw.promoBonusMonths || 2} เดือน`);
       } else {
         setPromoError(raw.message || 'รหัสโปรโมชันไม่ถูกต้องหรือถูกใช้งานแล้ว');
       }
@@ -872,6 +950,9 @@ const OwnerRegisterInner: React.FC<RegisterProps> = ({ onAddLog }) => {
     }
 
     if (stepNum === 4) {
+      if (!signatureSaved && !savedSignatureDataUrl) {
+        return { valid: false, error: 'กรุณากด "บันทึกลายเซ็น" ในขั้นตอนที่ 4 ก่อนดำเนินการต่อ' };
+      }
       if (!formData.paymentAccount.bankName) {
         return { valid: false, error: 'กรุณาเลือก "ธนาคารที่รับโอน"' };
       }
@@ -889,8 +970,8 @@ const OwnerRegisterInner: React.FC<RegisterProps> = ({ onAddLog }) => {
     }
 
     if (stepNum === 5) {
-      if (!signatureSaved && !savedSignatureDataUrl) {
-        return { valid: false, error: 'กรุณากด "บันทึกลายเซ็นเจ้าของหอพัก" ก่อนดำเนินการต่อ' };
+      if (!lineStatus.isReady) {
+        return { valid: false, error: 'กรุณาตั้งค่า LINE OA ให้ครบทุกขั้นตอน' };
       }
     }
 
@@ -907,7 +988,7 @@ const OwnerRegisterInner: React.FC<RegisterProps> = ({ onAddLog }) => {
     setValidationError(null);
 
     const nextStepNum = currentStep + 1;
-    if (currentStep === 4) {
+    if (currentStep === 3) {
       await ensureProvisionalDormitory();
     }
     setCurrentStep(nextStepNum);
@@ -966,6 +1047,7 @@ const OwnerRegisterInner: React.FC<RegisterProps> = ({ onAddLog }) => {
           roomsPerFloor: b.roomsPerFloor || 0,
           roomPrefix: b.name || null,
           numberingPattern: b.formatPattern || 'prefix_floor_room',
+          hasElevator: b.hasElevator ?? false,
           monthlyRent: b.rentRates?.monthly ?? 0,
           dailyRent: b.rentRates?.daily ?? 0,
           termRent: b.rentRates?.term ?? 0,
@@ -1032,8 +1114,8 @@ const OwnerRegisterInner: React.FC<RegisterProps> = ({ onAddLog }) => {
           internetFeeMode: formData.utilities.internetFeeMode || 'none',
           parkingRate: String(formData.utilities.parkingFeeRate ?? 0),
           parkingFeeMode: formData.utilities.parkingFeeMode || 'none',
-          gracePeriodDays: Number(formData.deposits.gracePeriodDays) || 0,
-          advanceRentMonths: Number(formData.deposits.advanceRentMonths) || 1,
+          gracePeriodDays: Number(formData.deposits.gracePeriodDays ?? 0),
+          advanceRentMonths: Number(formData.deposits.advanceRentMonths ?? 0),
           lateFeeType: (formData.deposits.lateFeeType as any) || 'none',
           lateFeeValue: String(formData.deposits.lateFeeAmount ?? 0),
           rentBillingType: 'monthly',
@@ -1082,10 +1164,9 @@ const OwnerRegisterInner: React.FC<RegisterProps> = ({ onAddLog }) => {
     { num: 1, name: 'ข้อมูลหอพัก', icon: Building2 },
     { num: 2, name: 'อาคาร & ผังห้อง', icon: BuildingIcon },
     { num: 3, name: 'ค่าเช่า & ค่าน้ำไฟ', icon: Zap },
-    { num: 4, name: 'มัดจำ & บัญชี', icon: CreditCard },
-    { num: 5, name: 'กฎระเบียบ & สัญญา', icon: FileSignature },
-    { num: 6, name: 'เชื่อมต่อ LINE OA', icon: MessageSquare },
-    { num: 7, name: 'เลือกแพ็กเกจ', icon: Sparkles },
+    { num: 4, name: 'บัญชี & ลายเซ็น', icon: CreditCard },
+    { num: 5, name: 'เชื่อมต่อ LINE OA', icon: MessageSquare },
+    { num: 6, name: 'เลือกแพ็กเกจ', icon: Sparkles },
   ];
 
   return (
@@ -1099,12 +1180,12 @@ const OwnerRegisterInner: React.FC<RegisterProps> = ({ onAddLog }) => {
             </div>
             <div>
               <h1 className="text-2xl font-bold tracking-tight">ระบบลงทะเบียนหอพัก HorPlus</h1>
-              <p className="text-blue-200 text-sm mt-0.5">กรอกข้อมูล 7 ขั้นตอนเพื่อเริ่มต้นใช้งานระบบบริหารจัดการหอพักมืออาชีพ</p>
+              <p className="text-blue-200 text-sm mt-0.5">กรอกข้อมูล 6 ขั้นตอนเพื่อเริ่มต้นใช้งานระบบบริหารจัดการหอพักมืออาชีพ</p>
             </div>
           </div>
           <div className="hidden md:block text-right">
             <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-blue-500/30 text-blue-100 border border-blue-400/30">
-              ขั้นตอนที่ {currentStep} จาก 7
+              ขั้นตอนที่ {currentStep} จาก 6
             </span>
           </div>
         </div>
@@ -1185,7 +1266,7 @@ const OwnerRegisterInner: React.FC<RegisterProps> = ({ onAddLog }) => {
                 </label>
                 <input
                   type="text"
-                  data-testid="input-dorm-name"
+                  data-testid="input-dormitory-name"
                   value={formData.dormitoryName}
                   onChange={e => setFormData(prev => ({ ...prev, dormitoryName: e.target.value }))}
                   placeholder="เช่น สบายดี อพาร์ตเมนต์ หรือ รุ่งเรือง แมนชั่น"
@@ -1198,7 +1279,7 @@ const OwnerRegisterInner: React.FC<RegisterProps> = ({ onAddLog }) => {
                   ที่อยู่หอพัก <span className="text-rose-500">*</span>
                 </label>
                 <textarea
-                  data-testid="input-dorm-address"
+                  data-testid="input-address"
                   rows={3}
                   value={formData.address}
                   onChange={e => setFormData(prev => ({ ...prev, address: e.target.value }))}
@@ -1403,6 +1484,19 @@ const OwnerRegisterInner: React.FC<RegisterProps> = ({ onAddLog }) => {
                           <option value="floor_slash_room">1/1 (ชั้น/เลขห้อง)</option>
                           <option value="prefix_dash_floor_room">{b.name || 'A'}-101 (รหัสตึก-ชั้น+เลขห้อง)</option>
                         </select>
+                      </div>
+
+                      <div className="sm:col-span-2 md:col-span-4">
+                        <label className="inline-flex items-center gap-2 text-xs font-semibold text-slate-600 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            data-testid="checkbox-building-has-elevator"
+                            checked={b.hasElevator ?? false}
+                            onChange={e => handleBuildingStructureChange(bIdx, { hasElevator: e.target.checked })}
+                            className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                          />
+                          <span>มีลิฟต์โดยสารประจำอาคาร</span>
+                        </label>
                       </div>
                     </div>
 
@@ -1624,6 +1718,25 @@ const OwnerRegisterInner: React.FC<RegisterProps> = ({ onAddLog }) => {
                           className="w-full px-3 py-2 rounded-lg border border-slate-300 font-bold text-slate-800 text-sm"
                         />
                       </div>
+
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-600 mb-1">จำนวนผู้พักสูงสุด (คน)</label>
+                        <input
+                          type="number"
+                          data-testid="input-building-max-occupants"
+                          min={1}
+                          value={rentRates.maxOccupants ?? 2}
+                          onChange={e => {
+                            const updated = [...formData.buildings];
+                            updated[bIdx] = {
+                              ...updated[bIdx],
+                              rentRates: { ...rentRates, maxOccupants: Number(e.target.value) }
+                            };
+                            setFormData({ ...formData, buildings: updated });
+                          }}
+                          className="w-full px-3 py-2 rounded-lg border border-slate-300 font-bold text-slate-800 text-sm"
+                        />
+                      </div>
                     </div>
                   </div>
                 );
@@ -1632,15 +1745,15 @@ const OwnerRegisterInner: React.FC<RegisterProps> = ({ onAddLog }) => {
           </div>
         )}
 
-        {/* STEP 4: Deposit & Payment Accounts */}
+        {/* STEP 4: Deposit, Payment Account, Rules & Owner Signature */}
         {currentStep === 4 && (
           <div className="bg-white rounded-2xl p-6 md:p-8 shadow-sm border border-slate-200/80 space-y-6">
             <div className="border-b border-slate-100 pb-4">
               <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
                 <CreditCard className="w-6 h-6 text-indigo-600" />
-                ขั้นตอนที่ 4: เงินมัดจำ รอบบิล และบัญชีรับเงิน
+                ขั้นตอนที่ 4: บัญชีรับเงิน กฎระเบียบ และลายเซ็นเจ้าของหอพัก
               </h2>
-              <p className="text-slate-500 text-sm mt-1">กำหนดเงินประกัน ค่าเช่าล่วงหน้า และข้อมูลบัญชีธนาคารสำหรับรับชำระค่าเช่า</p>
+              <p className="text-slate-500 text-sm mt-1">กำหนดเงินประกัน บัญชีรับเงิน กฎระเบียบหอพัก และบันทึกลายเซ็นเพื่อประทับลงในสัญญาเช่า</p>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -1776,238 +1889,224 @@ const OwnerRegisterInner: React.FC<RegisterProps> = ({ onAddLog }) => {
                   </div>
                 </div>
               </div>
-            </div>
-          </div>
-        )}
 
-        {/* STEP 5: Rules & Contract & Owner Signature */}
-        {currentStep === 5 && (
-          <div className="bg-white rounded-2xl p-6 md:p-8 shadow-sm border border-slate-200/80 space-y-6">
-            <div className="border-b border-slate-100 pb-4">
-              <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
-                <FileSignature className="w-6 h-6 text-indigo-600" />
-                ขั้นตอนที่ 5: กฎระเบียบ นโยบายสัตว์เลี้ยง และลายเซ็นเจ้าของหอพัก
-              </h2>
-              <p className="text-slate-500 text-sm mt-1">กำหนดข้อบังคับหอพัก นโยบายสัตว์เลี้ยง และบันทึกลายเซ็นเพื่อประทับลงในสัญญาเช่า</p>
-            </div>
-
-            {/* 1. Pet Policy */}
-            <div className="p-5 bg-slate-50/60 border border-slate-200 rounded-2xl space-y-3">
-              <div className="flex items-center gap-2">
-                <Heart className="w-4 h-4 text-rose-500" />
-                <h3 className="font-bold text-slate-800 text-sm">นโยบายสัตว์เลี้ยง (Pet Policy)</h3>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <label
-                  className={`p-3.5 rounded-xl border cursor-pointer select-none transition-all ${
-                    formData.petPolicy.allowed === 'none'
-                      ? 'border-indigo-600 bg-indigo-50/50 ring-2 ring-indigo-500/20'
-                      : 'border-slate-200 hover:border-slate-300 bg-white'
-                  }`}
-                >
-                  <input
-                    type="radio"
-                    name="petPolicyRadio"
-                    checked={formData.petPolicy.allowed === 'none'}
-                    onChange={() => setFormData(prev => ({
-                      ...prev,
-                      petPolicy: { allowed: 'none', allowedTypes: [] }
-                    }))}
-                    className="sr-only"
-                  />
-                  <span className="font-bold text-slate-800 text-xs block">ไม่อนุญาตให้เลี้ยงสัตว์</span>
-                  <span className="text-[11px] text-slate-500">ห้ามนำสัตว์เลี้ยงทุกชนิดเข้ามาในห้องพัก</span>
-                </label>
-
-                <label
-                  className={`p-3.5 rounded-xl border cursor-pointer select-none transition-all ${
-                    formData.petPolicy.allowed === 'conditional'
-                      ? 'border-indigo-600 bg-indigo-50/50 ring-2 ring-indigo-500/20'
-                      : 'border-slate-200 hover:border-slate-300 bg-white'
-                  }`}
-                >
-                  <input
-                    type="radio"
-                    name="petPolicyRadio"
-                    checked={formData.petPolicy.allowed === 'conditional'}
-                    onChange={() => setFormData(prev => ({
-                      ...prev,
-                      petPolicy: { allowed: 'conditional', allowedTypes: prev.petPolicy.allowedTypes }
-                    }))}
-                    className="sr-only"
-                  />
-                  <span className="font-bold text-slate-800 text-xs block">อนุญาตแบบมีเงื่อนไข</span>
-                  <span className="text-[11px] text-slate-500">เลือกประเภทสัตว์เลี้ยงที่อนุญาตด้านล่าง</span>
-                </label>
-              </div>
-
-              {formData.petPolicy.allowed === 'conditional' && (
-                <div className="pt-2 p-3 bg-white border border-slate-200 rounded-xl space-y-2">
-                  <span className="text-xs font-bold text-slate-700 block">ประเภทสัตว์เลี้ยงที่อนุญาต:</span>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
-                    {[
-                      { id: 'dog', label: 'สุนัข' },
-                      { id: 'cat', label: 'แมว' },
-                      { id: 'small_pet', label: 'สัตว์เล็ก (กระต่าย/หนู)' },
-                      { id: 'exotic', label: 'สัตว์แปลก (Exotic)' },
-                    ].map(pet => (
-                      <label key={pet.id} className="flex items-center gap-2 cursor-pointer select-none text-slate-700 hover:text-slate-900">
-                        <input
-                          type="checkbox"
-                          checked={formData.petPolicy.allowedTypes.includes(pet.id)}
-                          onChange={e => {
-                            const current = formData.petPolicy.allowedTypes;
-                            const next = e.target.checked
-                              ? [...current, pet.id]
-                              : current.filter(x => x !== pet.id);
-                            setFormData(prev => ({
-                              ...prev,
-                              petPolicy: { ...prev.petPolicy, allowedTypes: next }
-                            }));
-                          }}
-                          className="rounded text-indigo-600 focus:ring-indigo-500"
-                        />
-                        <span>{pet.label}</span>
-                      </label>
-                    ))}
-                  </div>
+              {/* Pet Policy */}
+              <div className="p-5 bg-slate-50/60 border border-slate-200 rounded-2xl space-y-3 md:col-span-2">
+                <div className="flex items-center gap-2">
+                  <Heart className="w-4 h-4 text-rose-500" />
+                  <h3 className="font-bold text-slate-800 text-sm">นโยบายสัตว์เลี้ยง (Pet Policy)</h3>
                 </div>
-              )}
-            </div>
 
-            {/* 2. Rules Presets & Editor */}
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <h3 className="font-bold text-slate-800 text-sm flex items-center gap-2">
-                  <ShieldCheck className="w-4 h-4 text-indigo-600" />
-                  กฎระเบียบและข้อกำหนดหอพัก (Dormitory Rules)
-                </h3>
-              </div>
-
-              {/* Preset Buttons */}
-              <div className="flex flex-wrap gap-1.5">
-                {RULE_PRESETS.map((preset, idx) => (
-                  <button
-                    key={idx}
-                    type="button"
-                    onClick={() => {
-                      if (!formData.defaultTerms.includes(preset)) {
-                        setFormData(prev => ({
-                          ...prev,
-                          defaultTerms: prev.defaultTerms ? `${prev.defaultTerms}\n${preset}` : preset
-                        }));
-                      }
-                    }}
-                    className="text-[11px] px-2.5 py-1 bg-slate-100 hover:bg-indigo-50 hover:text-indigo-700 text-slate-600 rounded-lg border border-slate-200 transition-colors cursor-pointer"
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <label
+                    className={`p-3.5 rounded-xl border cursor-pointer select-none transition-all ${
+                      formData.petPolicy.allowed === 'none'
+                        ? 'border-indigo-600 bg-indigo-50/50 ring-2 ring-indigo-500/20'
+                        : 'border-slate-200 hover:border-slate-300 bg-white'
+                    }`}
                   >
-                    + {preset.slice(0, 30)}...
-                  </button>
-                ))}
-              </div>
-
-              <textarea
-                rows={5}
-                value={formData.defaultTerms}
-                onChange={e => setFormData(prev => ({ ...prev, defaultTerms: e.target.value }))}
-                placeholder="ระบุข้อกำหนด กฎระเบียบ และเงื่อนไขของหอพัก..."
-                className="w-full px-4 py-2.5 rounded-xl border border-slate-300 text-xs font-mono leading-relaxed"
-              />
-            </div>
-
-            {/* 3. Owner Digital Signature */}
-            <div className="space-y-4 pt-4 border-t border-slate-100">
-              <div className="flex items-center justify-between">
-                <div>
-                  <label className="block text-sm font-bold text-slate-800 flex items-center gap-2">
-                    <PenTool className="w-5 h-5 text-indigo-600" />
-                    ลายเซ็นดิจิทัลของเจ้าของหอพัก <span className="text-rose-500">*</span>
+                    <input
+                      type="radio"
+                      name="petPolicyRadio"
+                      checked={formData.petPolicy.allowed === 'none'}
+                      onChange={() => setFormData(prev => ({
+                        ...prev,
+                        petPolicy: { allowed: 'none', allowedTypes: [] }
+                      }))}
+                      className="sr-only"
+                    />
+                    <span className="font-bold text-slate-800 text-xs block">ไม่อนุญาตให้เลี้ยงสัตว์</span>
+                    <span className="text-[11px] text-slate-500">ห้ามนำสัตว์เลี้ยงทุกชนิดเข้ามาในห้องพัก</span>
                   </label>
-                  <p className="text-xs text-slate-500 mt-0.5">ใช้วาดสำหรับประทับลงในสัญญาเช่าและใบเสร็จรับเงินอย่างเป็นทางการ</p>
+
+                  <label
+                    className={`p-3.5 rounded-xl border cursor-pointer select-none transition-all ${
+                      formData.petPolicy.allowed === 'conditional'
+                        ? 'border-indigo-600 bg-indigo-50/50 ring-2 ring-indigo-500/20'
+                        : 'border-slate-200 hover:border-slate-300 bg-white'
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="petPolicyRadio"
+                      checked={formData.petPolicy.allowed === 'conditional'}
+                      onChange={() => setFormData(prev => ({
+                        ...prev,
+                        petPolicy: { allowed: 'conditional', allowedTypes: prev.petPolicy.allowedTypes }
+                      }))}
+                      className="sr-only"
+                    />
+                    <span className="font-bold text-slate-800 text-xs block">อนุญาตแบบมีเงื่อนไข</span>
+                    <span className="text-[11px] text-slate-500">เลือกประเภทสัตว์เลี้ยงที่อนุญาตด้านล่าง</span>
+                  </label>
                 </div>
-                {(signatureSaved || savedSignatureDataUrl) && (
-                  <span data-testid="signature-status-saved" className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-bold bg-emerald-100 text-emerald-700 border border-emerald-300">
-                    <CheckCircle2 className="w-3.5 h-3.5" />
-                    บันทึกแล้ว
-                  </span>
+
+                {formData.petPolicy.allowed === 'conditional' && (
+                  <div className="pt-2 p-3 bg-white border border-slate-200 rounded-xl space-y-2">
+                    <span className="text-xs font-bold text-slate-700 block">ประเภทสัตว์เลี้ยงที่อนุญาต:</span>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+                      {[
+                        { id: 'dog', label: 'สุนัข' },
+                        { id: 'cat', label: 'แมว' },
+                        { id: 'small_pet', label: 'สัตว์เล็ก (กระต่าย/หนู)' },
+                        { id: 'exotic', label: 'สัตว์แปลก (Exotic)' },
+                      ].map(pet => (
+                        <label key={pet.id} className="flex items-center gap-2 cursor-pointer select-none text-slate-700 hover:text-slate-900">
+                          <input
+                            type="checkbox"
+                            checked={formData.petPolicy.allowedTypes.includes(pet.id)}
+                            onChange={e => {
+                              const current = formData.petPolicy.allowedTypes;
+                              const next = e.target.checked
+                                ? [...current, pet.id]
+                                : current.filter(x => x !== pet.id);
+                              setFormData(prev => ({
+                                ...prev,
+                                petPolicy: { ...prev.petPolicy, allowedTypes: next }
+                              }));
+                            }}
+                            className="rounded text-indigo-600 focus:ring-indigo-500"
+                          />
+                          <span>{pet.label}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
                 )}
               </div>
 
-              {/* Persistent Signature Preview when saved and not editing */}
-              {(signatureSaved || savedSignatureDataUrl) && !isEditingSignature ? (
-                <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-4">
-                  <div className="p-3 bg-white rounded-xl border border-slate-200 shadow-inner flex items-center justify-center max-w-[280px]">
-                    {savedSignatureDataUrl || (provisionalDormitoryId && signatureSaved) ? (
-                      <img
-                        src={savedSignatureDataUrl || `/api/v1/dormitories/${provisionalDormitoryId}/signatures?t=${Date.now()}`}
-                        alt="Owner Signature"
-                        className="h-16 object-contain"
-                      />
-                    ) : (
-                      <span className="text-xs font-bold text-slate-400">ยังไม่มีลายเซ็นในระบบ</span>
-                    )}
-                  </div>
+              {/* Rules Presets & Editor */}
+              <div className="space-y-3 md:col-span-2">
+                <div className="flex items-center justify-between">
+                  <h3 className="font-bold text-slate-800 text-sm flex items-center gap-2">
+                    <ShieldCheck className="w-4 h-4 text-indigo-600" />
+                    กฎระเบียบและข้อกำหนดหอพัก (Dormitory Rules)
+                  </h3>
+                </div>
 
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsEditingSignature(true);
-                      hasDrawnRef.current = false;
-                    }}
-                    className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl transition-colors cursor-pointer"
-                  >
-                    วาดใหม่ (Redraw)
-                  </button>
-                </div>
-              ) : (
-                <div className="border-2 border-dashed border-slate-300 rounded-2xl p-2 bg-slate-50 flex flex-col items-center">
-                  <canvas
-                    data-testid="canvas-signature"
-                    ref={canvasRef}
-                    width={560}
-                    height={180}
-                    onMouseDown={startDrawing}
-                    onMouseMove={draw}
-                    onMouseUp={stopDrawing}
-                    onMouseLeave={stopDrawing}
-                    onTouchStart={startDrawing}
-                    onTouchMove={draw}
-                    onTouchEnd={stopDrawing}
-                    className="bg-white rounded-xl shadow-inner border border-slate-200 cursor-crosshair touch-none max-w-full"
-                  />
-                  <div className="flex items-center justify-between w-full max-w-[560px] mt-3 px-1">
+                <div className="flex flex-wrap gap-1.5">
+                  {RULE_PRESETS.map((preset, idx) => (
                     <button
+                      key={idx}
                       type="button"
-                      onClick={clearCanvas}
-                      className="text-xs font-semibold text-slate-500 hover:text-rose-600 transition-colors cursor-pointer"
+                      onClick={() => {
+                        if (!formData.defaultTerms.includes(preset)) {
+                          setFormData(prev => ({
+                            ...prev,
+                            defaultTerms: prev.defaultTerms ? `${prev.defaultTerms}\n${preset}` : preset
+                          }));
+                        }
+                      }}
+                      className="text-[11px] px-2.5 py-1 bg-slate-100 hover:bg-indigo-50 hover:text-indigo-700 text-slate-600 rounded-lg border border-slate-200 transition-colors cursor-pointer"
                     >
-                      ล้างลายเซ็น
+                      + {preset.slice(0, 30)}...
                     </button>
+                  ))}
+                </div>
+
+                <textarea
+                  rows={4}
+                  value={formData.defaultTerms}
+                  onChange={e => setFormData(prev => ({ ...prev, defaultTerms: e.target.value }))}
+                  placeholder="ระบุข้อกำหนด กฎระเบียบ และเงื่อนไขของหอพัก..."
+                  className="w-full px-4 py-2.5 rounded-xl border border-slate-300 text-xs font-mono leading-relaxed"
+                />
+              </div>
+
+              {/* Owner Digital Signature */}
+              <div className="space-y-4 pt-4 border-t border-slate-100 md:col-span-2">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <label className="block text-sm font-bold text-slate-800 flex items-center gap-2">
+                      <PenTool className="w-5 h-5 text-indigo-600" />
+                      ลายเซ็นดิจิทัลของเจ้าของหอพัก <span className="text-rose-500">*</span>
+                    </label>
+                    <p className="text-xs text-slate-500 mt-0.5">ใช้วาดสำหรับประทับลงในสัญญาเช่าและใบเสร็จรับเงินอย่างเป็นทางการ</p>
+                  </div>
+                  {(signatureSaved || savedSignatureDataUrl) && (
+                    <span data-testid="signature-status-saved" className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-bold bg-emerald-100 text-emerald-700 border border-emerald-300">
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      บันทึกแล้ว
+                    </span>
+                  )}
+                </div>
+
+                {/* Persistent Signature Preview when saved and not editing */}
+                {(signatureSaved || savedSignatureDataUrl) && !isEditingSignature ? (
+                  <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-4">
+                    <div className="p-3 bg-white rounded-xl border border-slate-200 shadow-inner flex items-center justify-center max-w-[280px]">
+                      {savedSignatureDataUrl || (provisionalDormitoryId && signatureSaved) ? (
+                        <img
+                          src={savedSignatureDataUrl || `/api/v1/dormitories/${provisionalDormitoryId}/signatures?t=${Date.now()}`}
+                          alt="Owner Signature"
+                          className="h-16 object-contain"
+                        />
+                      ) : (
+                        <span className="text-xs font-bold text-slate-400">ยังไม่มีลายเซ็นในระบบ</span>
+                      )}
+                    </div>
+
                     <button
                       type="button"
-                      data-testid="button-save-signature"
-                      onClick={handleSaveSignature}
-                      disabled={signatureUploading}
-                      className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs shadow-sm transition-all disabled:opacity-50 cursor-pointer"
+                      onClick={() => {
+                        setIsEditingSignature(true);
+                        hasDrawnRef.current = false;
+                      }}
+                      className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl transition-colors cursor-pointer"
                     >
-                      {signatureUploading ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
-                      บันทึกลายเซ็น
+                      วาดใหม่ (Redraw)
                     </button>
                   </div>
-                </div>
-              )}
+                ) : (
+                  <div className="border-2 border-dashed border-slate-300 rounded-2xl p-2 bg-slate-50 flex flex-col items-center">
+                    <canvas
+                      data-testid="canvas-signature"
+                      ref={canvasRef}
+                      width={560}
+                      height={180}
+                      onMouseDown={startDrawing}
+                      onMouseMove={draw}
+                      onMouseUp={stopDrawing}
+                      onMouseLeave={stopDrawing}
+                      onTouchStart={startDrawing}
+                      onTouchMove={draw}
+                      onTouchEnd={stopDrawing}
+                      className="bg-white rounded-xl shadow-inner border border-slate-200 cursor-crosshair touch-none max-w-full"
+                    />
+                    <div className="flex items-center justify-between w-full max-w-[560px] mt-3 px-1">
+                      <button
+                        type="button"
+                        onClick={clearCanvas}
+                        className="text-xs font-semibold text-slate-500 hover:text-rose-600 transition-colors cursor-pointer"
+                      >
+                        ล้างลายเซ็น
+                      </button>
+                      <button
+                        type="button"
+                        data-testid="button-save-signature"
+                        onClick={handleSaveSignature}
+                        disabled={signatureUploading}
+                        className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs shadow-sm transition-all disabled:opacity-50 cursor-pointer"
+                      >
+                        {signatureUploading ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                        บันทึกลายเซ็น
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         )}
 
-        {/* STEP 6: Connect LINE OA */}
-        {currentStep === 6 && (
+        {/* STEP 5: Connect LINE OA */}
+        {currentStep === 5 && (
           <div className="bg-white rounded-2xl p-6 md:p-8 shadow-sm border border-slate-200/80 space-y-6">
             <div className="border-b border-slate-100 pb-4 flex items-center justify-between">
               <div>
                 <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
                   <MessageSquare className="w-6 h-6 text-[#06C755]" />
-                  ขั้นตอนที่ 6: เชื่อมต่อ LINE Official Account (LINE OA)
+                  ขั้นตอนที่ 5: เชื่อมต่อ LINE Official Account (LINE OA)
                 </h2>
                 <p className="text-slate-500 text-sm mt-1">
                   กรอก Channel ID และ Channel Secret เพื่อเปิดใช้งานระบบแจ้งเตือนอัตโนมัติ (ข้ามขั้นตอนนี้ได้หากยังไม่มี)
@@ -2028,20 +2127,16 @@ const OwnerRegisterInner: React.FC<RegisterProps> = ({ onAddLog }) => {
             <div className="p-5 bg-slate-50 rounded-2xl border border-slate-200 space-y-3">
               <div className="flex items-center justify-between">
                 <span className="text-xs font-bold text-slate-500">สถานะการเชื่อมต่อ:</span>
-                <span className={`px-3 py-1 rounded-full text-xs font-black border ${
+                <span data-testid="line-readiness-badge" className={`px-3 py-1 rounded-full text-xs font-black border ${
                   lineStatus.isReady
                     ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
-                    : lineStatus.credentialsVerified
-                    ? 'bg-blue-100 text-blue-800 border-blue-300'
-                    : lineChannelId
+                    : lineStatus.credentialsVerified || lineStatus.webhookEndpointSet
                     ? 'bg-amber-100 text-amber-800 border-amber-300'
                     : 'bg-slate-100 text-slate-600 border-slate-300'
                 }`}>
                   {lineStatus.isReady
-                    ? 'พร้อมใช้งาน (READY) ✅'
-                    : lineStatus.credentialsVerified
-                    ? 'ยืนยัน Credentials สำเร็จ (VERIFIED) 🔹'
-                    : lineChannelId
+                    ? 'พร้อมใช้งาน ✅'
+                    : lineStatus.credentialsVerified || lineStatus.webhookEndpointSet
                     ? 'รอดำเนินการ ⏳'
                     : 'ยังไม่ได้ตั้งค่า (NOT CONFIGURED)'}
                 </span>
@@ -2095,29 +2190,58 @@ const OwnerRegisterInner: React.FC<RegisterProps> = ({ onAddLog }) => {
               </div>
             </div>
 
-            {/* Webhook URL Box */}
-            {webhookUrl && (
-              <div className="space-y-3 p-5 bg-slate-900 text-white rounded-2xl border border-slate-800">
+            {/* Webhook Controls Box */}
+            <div className="space-y-3 p-5 bg-slate-900 text-white rounded-2xl border border-slate-800">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <label className="block text-xs font-bold text-slate-300">Webhook URL สำหรับนำไปใส่ใน LINE Developers Console</label>
-                <div className="font-mono text-xs text-emerald-400 bg-slate-950 p-3 rounded-xl break-all border border-slate-800">
-                  {webhookUrl}
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    data-testid="button-set-line-webhook"
+                    onClick={handleSetLineWebhook}
+                    disabled={!lineStatus.credentialsVerified && !lineChannelId}
+                    className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs rounded-xl disabled:opacity-50 cursor-pointer transition-colors"
+                  >
+                    ตั้งค่า Webhook
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="button-test-line-webhook"
+                    onClick={handleTestLineWebhook}
+                    disabled={!lineStatus.credentialsVerified && !lineChannelId}
+                    className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl disabled:opacity-50 cursor-pointer transition-colors"
+                  >
+                    ทดสอบ Webhook
+                  </button>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => copyToClipboard(webhookUrl)}
-                  className="w-full py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs rounded-xl flex items-center justify-center gap-2 transition-colors cursor-pointer"
-                >
-                  {copiedWebhook ? <Check className="w-4 h-4 text-emerald-300" /> : <Copy className="w-4 h-4" />}
-                  {copiedWebhook ? 'คัดลอก Webhook URL เรียบร้อย!' : 'คัดลอก Webhook URL'}
-                </button>
               </div>
-            )}
+
+              {webhookUrl ? (
+                <>
+                  <div className="font-mono text-xs text-emerald-400 bg-slate-950 p-3 rounded-xl break-all border border-slate-800">
+                    {webhookUrl}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => copyToClipboard(webhookUrl)}
+                    className="w-full py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs rounded-xl flex items-center justify-center gap-2 transition-colors cursor-pointer"
+                  >
+                    {copiedWebhook ? <Check className="w-4 h-4 text-emerald-300" /> : <Copy className="w-4 h-4" />}
+                    {copiedWebhook ? 'คัดลอก Webhook URL เรียบร้อย!' : 'คัดลอก Webhook URL'}
+                  </button>
+                </>
+              ) : (
+                <div className="text-xs text-slate-400 italic">
+                  กดปุ่ม &quot;ตรวจสอบและเชื่อมต่อ LINE OA&quot; เพื่อสร้าง Webhook URL
+                </div>
+              )}
+            </div>
 
             {/* Skip Button Option */}
             <div className="pt-2 text-center">
               <button
                 type="button"
-                onClick={() => setCurrentStep(7)}
+                onClick={() => setCurrentStep(6)}
                 className="text-xs font-bold text-slate-500 hover:text-slate-800 underline cursor-pointer"
               >
                 ข้ามขั้นตอนนี้ไปก่อน (สามารถตั้งค่าภายหลังได้ในหน้าตั้งค่า) →
@@ -2126,13 +2250,13 @@ const OwnerRegisterInner: React.FC<RegisterProps> = ({ onAddLog }) => {
           </div>
         )}
 
-        {/* STEP 7: Package Selection & Finalization */}
-        {currentStep === 7 && (
+        {/* STEP 6: Package Selection & Finalization */}
+        {currentStep === 6 && (
           <div className="bg-white rounded-2xl p-6 md:p-8 shadow-sm border border-slate-200/80 space-y-6">
             <div className="border-b border-slate-100 pb-4">
               <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
                 <Sparkles className="w-6 h-6 text-indigo-600" />
-                ขั้นตอนที่ 7: เลือกแพ็กเกจและยืนยันการเปิดใช้งาน
+                ขั้นตอนที่ 6: เลือกแพ็กเกจและยืนยันการเปิดใช้งาน
               </h2>
               <p className="text-slate-500 text-sm mt-1">เลือกแพ็กเกจที่เหมาะสมสำหรับหอพักของคุณ (เริ่มต้นใช้งานฟรีถาวร)</p>
             </div>
@@ -2141,6 +2265,7 @@ const OwnerRegisterInner: React.FC<RegisterProps> = ({ onAddLog }) => {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {/* FREE Plan Card (Default) */}
               <div
+                data-testid="plan-card-free"
                 onClick={() => {
                   setSelectedPlanCode('FREE');
                   setSelectedPackageId(null);
@@ -2189,6 +2314,7 @@ const OwnerRegisterInner: React.FC<RegisterProps> = ({ onAddLog }) => {
 
               {/* PAID Plan Card */}
               <div
+                data-testid="plan-card-pro"
                 onClick={() => {
                   setSelectedPlanCode('PAID');
                   const proPkg = catalogPackages.find(p => p.planCode === 'PAID' || p.code === 'PRO');
@@ -2213,7 +2339,7 @@ const OwnerRegisterInner: React.FC<RegisterProps> = ({ onAddLog }) => {
 
                 <div>
                   <h3 className="text-lg font-black text-slate-900">HorPlus PRO</h3>
-                  <div className="text-2xl font-black text-indigo-600 mt-1">฿189 <span className="text-xs font-normal text-slate-500">/ เดือน</span></div>
+                  <div className="text-2xl font-black text-indigo-600 mt-1">฿189 (189 THB) <span className="text-xs font-normal text-slate-500">/ เดือน</span></div>
                 </div>
 
                 <div className="space-y-2 text-xs text-slate-600 pt-2 border-t border-slate-200/60">
@@ -2275,7 +2401,7 @@ const OwnerRegisterInner: React.FC<RegisterProps> = ({ onAddLog }) => {
             ย้อนกลับ
           </button>
 
-          {currentStep < 7 ? (
+          {currentStep < 6 ? (
             <button
               type="button"
               data-testid="button-next-step"

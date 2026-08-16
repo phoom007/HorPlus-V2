@@ -401,9 +401,11 @@ describe('Wave 1F - Real-Session 14-Domain Route Audit Matrix', () => {
         expect(['FORBIDDEN', 'PERMISSION_DENIED']).toContain(forbiddenCode);
 
         // 3. Owner + Expired Subscription -> 403 SUBSCRIPTION_READ_ONLY
+        const paidPlan = await prisma.subscriptionPlan.findFirst({ where: { code: 'PAID' } });
+        const freePlan = await prisma.subscriptionPlan.findFirst({ where: { code: 'FREE' } });
         await prisma.dormitorySubscription.update({
           where: { dormitoryId: dormId },
-          data: { status: 'EXPIRED', expiresAt: new Date(Date.now() - 86400 * 1000) },
+          data: { planId: paidPlan?.id, status: 'EXPIRED', expiresAt: new Date(Date.now() - 86400 * 1000) },
         });
 
         const expiredRes = await (request(app) as any)[spec.method](targetPath)
@@ -422,11 +424,17 @@ describe('Wave 1F - Real-Session 14-Domain Route Audit Matrix', () => {
           .set('x-dormitory-id', dormId);
         expect(expiredGetRes.status).toBe(200);
 
-        // 5. Owner + Active Free Subscription + Over-Limit (> 10 active rooms) -> 403 SUBSCRIPTION_READ_ONLY
-        await prisma.dormitorySubscription.update({
-          where: { dormitoryId: dormId },
-          data: { status: 'ACTIVE', expiresAt: new Date(Date.now() + 30 * 86400 * 1000) },
-        });
+        // 5. Owner + Active Paid Subscription + Over-Limit (> 10 active rooms on 10-room paid limit) -> 403 SUBSCRIPTION_READ_ONLY
+        if (paidPlan) {
+          await prisma.subscriptionPlan.update({
+            where: { id: paidPlan.id },
+            data: { roomLimit: 10 },
+          });
+          await prisma.dormitorySubscription.update({
+            where: { dormitoryId: dormId },
+            data: { planId: paidPlan.id, status: 'ACTIVE', expiresAt: new Date(Date.now() + 30 * 86400 * 1000) },
+          });
+        }
 
         const extraRoomsData = Array.from({ length: 11 }, (_, i) => ({
           dormitoryId: dormId,
@@ -463,12 +471,26 @@ describe('Wave 1F - Real-Session 14-Domain Route Audit Matrix', () => {
           where: { dormitoryId: dormId, roomNumber: { startsWith: 'OVR-' } },
         });
 
-        // 6. Active Subscription & Compliant Limit -> Owner Mutation Returns Exact Expected Status & Code
+        if (paidPlan) {
+          await prisma.subscriptionPlan.update({
+            where: { id: paidPlan.id },
+            data: { roomLimit: 150 },
+          });
+          const freePlan = await prisma.subscriptionPlan.findFirst({ where: { code: 'FREE' } });
+          await prisma.dormitorySubscription.update({
+            where: { dormitoryId: dormId },
+            data: { planId: freePlan?.id, status: 'ACTIVE', expiresAt: new Date(Date.now() + 30 * 86400 * 1000) },
+          });
+        }
+
         const activeRes = await (request(app) as any)[spec.method](targetPath)
           .set('Cookie', [`horplus_session=${ownerSessionCookie}`, `horplus_csrf=${ownerCsrfToken}`])
           .set('x-csrf-token', ownerCsrfToken)
           .set('x-dormitory-id', dormId)
           .send(targetBody);
+        if (activeRes.status !== spec.expectedStatus) {
+          console.log('ACTIVE_RES MISMATCH:', spec.name, 'got status:', activeRes.status, 'body:', JSON.stringify(activeRes.body));
+        }
         expect(activeRes.status).toBe(spec.expectedStatus);
         if (spec.expectedCode) {
           expect(activeRes.body.errorCode || activeRes.body.error?.code || activeRes.body.code).toBe(spec.expectedCode);
@@ -564,9 +586,10 @@ describe('Wave 1F - Real-Session 14-Domain Route Audit Matrix', () => {
     });
 
     it('Manager with payment:write + expired Subscription -> exact 403 SUBSCRIPTION_READ_ONLY', async () => {
+      const paidPlan = await prisma.subscriptionPlan.findFirst({ where: { code: 'PAID' } });
       await prisma.dormitorySubscription.update({
         where: { dormitoryId: dormId },
-        data: { status: 'EXPIRED', expiresAt: new Date(Date.now() - 86400 * 1000) },
+        data: { planId: paidPlan?.id, status: 'EXPIRED', expiresAt: new Date(Date.now() - 86400 * 1000) },
       });
 
       const res = await request(app)
@@ -574,7 +597,7 @@ describe('Wave 1F - Real-Session 14-Domain Route Audit Matrix', () => {
         .set('Cookie', [`horplus_session=${managerWithPaySessionCookie}`, `horplus_csrf=${managerWithPayCsrfToken}`])
         .set('x-csrf-token', managerWithPayCsrfToken)
         .set('x-dormitory-id', dormId)
-        .send({ billId, totalAmount: 3000 });
+        .send({ billId, amount: '3000' });
 
       expect(res.status).toBe(403);
       expect(res.body.errorCode || res.body.error?.code).toBe('SUBSCRIPTION_READ_ONLY');

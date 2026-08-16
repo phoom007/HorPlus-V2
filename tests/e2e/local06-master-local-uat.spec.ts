@@ -490,6 +490,22 @@ test.describe('HORPLUS LOCAL-06 — Master Local Product Acceptance Suite', () =
     await nameInput.fill('Applicant');
     await page.locator('input[placeholder*="ใจดี"]').fill('Test');
     await page.locator('input[placeholder*="08"]').first().fill('0899999999');
+
+    const terms = page.locator('input[type="checkbox"]');
+    if (await terms.count() > 0) {
+      await terms.first().check();
+    }
+    const canvas = page.locator('canvas');
+    if (await canvas.count() > 0 && await canvas.isVisible()) {
+      const box = await canvas.boundingBox();
+      if (box) {
+        await page.mouse.move(box.x + 20, box.y + 20);
+        await page.mouse.down();
+        await page.mouse.move(box.x + 80, box.y + 40);
+        await page.mouse.up();
+      }
+    }
+
     const submitBtn = page.locator('button[type="submit"]');
     await expect(submitBtn).toBeEnabled({ timeout: 10000 });
     await submitBtn.click();

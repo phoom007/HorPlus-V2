@@ -216,6 +216,21 @@ test.describe.serial('LOCAL-01 — Tenant Onboarding & Co-Occupant Management E2
     await page.fill('input[placeholder="ใจดี"]', 'FirstSub');
     await page.fill('input[placeholder="0812345678"]', '0811110001');
 
+    const terms1 = page.locator('input[type="checkbox"]');
+    if (await terms1.count() > 0) {
+      await terms1.first().check();
+    }
+    const canvas1 = page.locator('canvas');
+    if (await canvas1.count() > 0 && await canvas1.isVisible()) {
+      const box = await canvas1.boundingBox();
+      if (box) {
+        await page.mouse.move(box.x + 20, box.y + 20);
+        await page.mouse.down();
+        await page.mouse.move(box.x + 80, box.y + 40);
+        await page.mouse.up();
+      }
+    }
+
     const submitBtn1 = page.locator('button[type="submit"]');
     await expect(submitBtn1).toBeEnabled({ timeout: 30000 });
     await submitBtn1.click();
@@ -241,6 +256,21 @@ test.describe.serial('LOCAL-01 — Tenant Onboarding & Co-Occupant Management E2
     await page.fill('input[placeholder="สมชาย"]', 'ApplicantB');
     await page.fill('input[placeholder="ใจดี"]', 'SecondSub');
     await page.fill('input[placeholder="0812345678"]', '0811110002');
+
+    const terms2 = page.locator('input[type="checkbox"]');
+    if (await terms2.count() > 0) {
+      await terms2.first().check();
+    }
+    const canvas2 = page.locator('canvas');
+    if (await canvas2.count() > 0 && await canvas2.isVisible()) {
+      const box = await canvas2.boundingBox();
+      if (box) {
+        await page.mouse.move(box.x + 20, box.y + 20);
+        await page.mouse.down();
+        await page.mouse.move(box.x + 80, box.y + 40);
+        await page.mouse.up();
+      }
+    }
 
     const submitBtn2 = page.locator('button[type="submit"]');
     await expect(submitBtn2).toBeEnabled({ timeout: 30000 });

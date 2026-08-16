@@ -171,12 +171,15 @@ export class SubscriptionEntitlementService {
     const sub = await this.getCurrentSubscription(dormitoryId, db);
 
     const isFreePlan = sub.plan.type === 'FREE' || sub.plan.code === 'FREE';
-    const isExpired = isFreePlan ? false : sub.expiresAt.getTime() <= now.getTime();
+    const isExpiredByTime = !isFreePlan && sub.expiresAt.getTime() <= now.getTime();
+    const isExpired = sub.status === 'EXPIRED' || isExpiredByTime;
     let effectiveStatus: 'TRIAL' | 'ACTIVE' | 'EXPIRED' | 'SUSPENDED' = sub.status;
-    if (isFreePlan) {
-      effectiveStatus = sub.status === 'SUSPENDED' ? 'SUSPENDED' : 'ACTIVE';
-    } else if (isExpired && (sub.status === 'TRIAL' || sub.status === 'ACTIVE')) {
+    if (isExpired) {
       effectiveStatus = 'EXPIRED';
+    } else if (sub.status === 'TRIAL') {
+      effectiveStatus = 'TRIAL';
+    } else if (isFreePlan) {
+      effectiveStatus = sub.status === 'SUSPENDED' ? 'SUSPENDED' : 'ACTIVE';
     }
 
     const roomCount = await db.room.count({
@@ -198,7 +201,7 @@ export class SubscriptionEntitlementService {
     });
 
     let reason: string | undefined;
-    if (isExpired && !isFreePlan) {
+    if (isExpired) {
       reason = 'SUBSCRIPTION_EXPIRED: Dormitory subscription has expired.';
     } else if (isOverLimit && !isFreePlan) {
       reason = `ROOM_LIMIT_EXCEEDED: Room count (${roomCount}) exceeds plan limit (${roomLimit}).`;

@@ -15,6 +15,14 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { getPrismaClient } from '../../db/prisma.js';
 import crypto from 'crypto';
+import request from 'supertest';
+import { createApp } from '../../app.js';
+import { AuthenticationService } from '../../services/auth.service.js';
+import { PrismaUserRepository } from '../../db/repositories/user.repository.js';
+import { PrismaSessionRepository } from '../../db/repositories/session.repository.js';
+import { PrismaMembershipRepository } from '../../db/repositories/membership.repository.js';
+import { PrismaRoleRepository } from '../../db/repositories/role.repository.js';
+import { getEnv } from '../../config/env.js';
 
 describe('LOCAL-07: Migration, Defaults & Persistence Proof', () => {
   const prisma = getPrismaClient();
@@ -671,6 +679,285 @@ describe('LOCAL-07: Migration, Defaults & Persistence Proof', () => {
     expect(publicPolicy.petPolicy).toEqual({ allowed: 'conditional', allowedTypes: ['cat'] });
 
     // Cleanup
+    await prisma.dormitoryPropertyDefaults.deleteMany({ where: { dormitoryId: testDorm.id } });
+    await prisma.dormitory.delete({ where: { id: testDorm.id } });
+    await prisma.user.delete({ where: { id: testUser.id } });
+  });
+
+  it('10. Immutable Tenant Signature collision regression: failure of Request B does NOT delete Request A signature', async () => {
+    const { TenantRegistrationService } = await import('../../services/tenant-registration.service.js');
+    const { SignatureStorageService } = await import('../../services/signature-storage.service.js');
+    const { PNG } = await import('pngjs');
+
+    const registrationService = new TenantRegistrationService();
+    const signatureStorage = new SignatureStorageService(prisma);
+
+    const testUser = await prisma.user.create({
+      data: {
+        googleSubject: `sub_col_test_${Date.now()}`,
+        email: `coltest_${Date.now()}@test.local`,
+        emailNormalized: `coltest_${Date.now()}@test.local`,
+        name: 'Collision Test User',
+      },
+    });
+
+    const testDorm = await prisma.dormitory.create({
+      data: { name: 'Collision Test Dorm', createdByUserId: testUser.id },
+    });
+
+    await prisma.dormitoryPropertyDefaults.create({
+      data: {
+        dormitoryId: testDorm.id,
+        defaultTerms: 'กฎระเบียบหอพักตัวอย่าง',
+        petPolicy: { allowed: 'none', allowedTypes: [] },
+        version: 1,
+      },
+    });
+
+    const bld = await prisma.building.create({
+      data: { dormitoryId: testDorm.id, name: 'B1', code: 'B1', floorCount: 1, roomsPerFloor: 1 },
+    });
+
+    const room = await prisma.room.create({
+      data: {
+        dormitoryId: testDorm.id,
+        buildingId: bld.id,
+        roomNumber: '101',
+        normalizedRoomNumber: '101',
+        roomType: 'standard',
+        floor: 1,
+        monthlyRent: 3000,
+        depositAmount: 3000,
+        status: 'vacant',
+      },
+    });
+
+    // Create a distinctive non-blank PNG binary
+    const pngObj = new PNG({ width: 10, height: 10 });
+    for (let i = 0; i < 100; i++) {
+      const idx = i * 4;
+      pngObj.data[idx] = 120;
+      pngObj.data[idx + 1] = 50;
+      pngObj.data[idx + 2] = 200;
+      pngObj.data[idx + 3] = 255;
+    }
+    const pngBuffer = PNG.sync.write(pngObj);
+    const signatureBase64 = `data:image/png;base64,${pngBuffer.toString('base64')}`;
+
+    // 1. Submit Request A successfully
+    const requestA = await registrationService.createRequest(testDorm.id, {
+      dormitoryId: testDorm.id,
+      requestedRoomId: room.id,
+      firstName: 'ก้องภพ',
+      lastName: 'สมบูรณ์',
+      phone: '0811111111',
+      agreedTerms: true,
+      signatureBase64,
+      expectedPolicyVersion: 1,
+    });
+
+    expect(requestA.id).toBeTruthy();
+    expect(requestA.tenantSignatureObjectKey).toBeTruthy();
+    const objectKeyA = requestA.tenantSignatureObjectKey!;
+
+    // Verify Request A signature exists and is readable
+    const streamA = await signatureStorage.getSignatureStream(objectKeyA);
+    expect(streamA).toBeDefined();
+
+    // 2. Submit Request B using EXACTLY THE SAME signatureBase64, but with stale expectedPolicyVersion (version mismatch rollback)
+    let failedAttemptObjectKey: string | null = null;
+    try {
+      await registrationService.createRequest(testDorm.id, {
+        dormitoryId: testDorm.id,
+        requestedRoomId: room.id,
+        firstName: 'วิชัย',
+        lastName: 'มั่งคั่ง',
+        phone: '0822222222',
+        agreedTerms: true,
+        signatureBase64,
+        expectedPolicyVersion: 999, // Stale version forces rollback and orphan cleanup
+      });
+      expect.unreachable('Request B should have thrown 409 POLICY_VERSION_MISMATCH');
+    } catch (err: any) {
+      expect(err.errorCode || err.code).toBe('POLICY_VERSION_MISMATCH');
+      expect(err.statusCode).toBe(409);
+    }
+
+    // 3. Verify Request A signature STILL exists and is completely intact
+    const streamAAfter = await signatureStorage.getSignatureStream(objectKeyA);
+    expect(streamAAfter).toBeDefined();
+
+    // Read stream content to verify byte integrity
+    const chunks: Buffer[] = [];
+    for await (const chunk of streamAAfter) {
+      chunks.push(Buffer.from(chunk));
+    }
+    const retrievedBuffer = Buffer.concat(chunks);
+    const retrievedSha256 = crypto.createHash('sha256').update(retrievedBuffer).digest('hex');
+    expect(retrievedSha256).toBe(requestA.tenantSignatureSha256);
+
+    // Cleanup
+    await prisma.tenantRegistrationRequest.deleteMany({ where: { dormitoryId: testDorm.id } });
+    await prisma.room.deleteMany({ where: { dormitoryId: testDorm.id } });
+    await prisma.building.deleteMany({ where: { dormitoryId: testDorm.id } });
+    await prisma.dormitoryPropertyDefaults.deleteMany({ where: { dormitoryId: testDorm.id } });
+    await prisma.dormitory.delete({ where: { id: testDorm.id } });
+    await prisma.user.delete({ where: { id: testUser.id } });
+  });
+
+  it('11. Real HTTP Boundary Proof for POST /api/v1/tenant-registrations', async () => {
+    const { PNG } = await import('pngjs');
+
+    const testUser = await prisma.user.create({
+      data: {
+        googleSubject: `sub_http_test_${Date.now()}`,
+        email: `httptest_${Date.now()}@test.local`,
+        emailNormalized: `httptest_${Date.now()}@test.local`,
+        name: 'HTTP Route Test User',
+      },
+    });
+
+    const testDorm = await prisma.dormitory.create({
+      data: { name: 'HTTP Test Dorm', createdByUserId: testUser.id },
+    });
+
+    await prisma.dormitoryPropertyDefaults.create({
+      data: {
+        dormitoryId: testDorm.id,
+        defaultTerms: 'กฎระเบียบหอพักสำหรับการทดสอบ HTTP',
+        petPolicy: { allowed: 'none', allowedTypes: [] },
+        version: 1,
+      },
+    });
+
+    const bld = await prisma.building.create({
+      data: { dormitoryId: testDorm.id, name: 'B1', code: 'B1', floorCount: 1, roomsPerFloor: 1 },
+    });
+
+    const room = await prisma.room.create({
+      data: {
+        dormitoryId: testDorm.id,
+        buildingId: bld.id,
+        roomNumber: '201',
+        normalizedRoomNumber: '201',
+        roomType: 'standard',
+        floor: 2,
+        monthlyRent: 3500,
+        depositAmount: 3500,
+        status: 'vacant',
+      },
+    });
+
+    const mockGoogleVerifier = {} as any;
+    const mockAuditService = { logAction: async () => {}, logSecurityEvent: async () => {} } as any;
+
+    const authService = new AuthenticationService(
+      getEnv(),
+      mockGoogleVerifier,
+      new PrismaUserRepository(prisma),
+      new PrismaSessionRepository(prisma),
+      new PrismaMembershipRepository(prisma),
+      new PrismaRoleRepository(prisma),
+      mockAuditService
+    );
+
+    const app = createApp({ customAuthService: authService, forcePrisma: true });
+
+    const pngObj = new PNG({ width: 10, height: 10 });
+    for (let i = 0; i < 100; i++) {
+      const idx = i * 4;
+      pngObj.data[idx] = 0;
+      pngObj.data[idx + 1] = 100;
+      pngObj.data[idx + 2] = 200;
+      pngObj.data[idx + 3] = 255;
+    }
+    const validSignature = `data:image/png;base64,${PNG.sync.write(pngObj).toString('base64')}`;
+
+    // 11a. Missing agreedTerms -> 400 TERMS_NOT_ACCEPTED
+    const res1 = await request(app)
+      .post('/api/v1/tenant-registrations')
+      .set('x-dormitory-id', testDorm.id)
+      .send({
+        requestedRoomId: room.id,
+        firstName: 'ธนกฤต',
+        lastName: 'พัฒนา',
+        phone: '0899999999',
+        signatureBase64: validSignature,
+        expectedPolicyVersion: 1,
+      });
+    expect(res1.status).toBe(400);
+    expect(res1.body.error?.code).toBe('TERMS_NOT_ACCEPTED');
+
+    // 11b. agreedTerms: false -> 400 TERMS_NOT_ACCEPTED
+    const res2 = await request(app)
+      .post('/api/v1/tenant-registrations')
+      .set('x-dormitory-id', testDorm.id)
+      .send({
+        requestedRoomId: room.id,
+        firstName: 'ธนกฤต',
+        lastName: 'พัฒนา',
+        phone: '0899999999',
+        agreedTerms: false,
+        signatureBase64: validSignature,
+        expectedPolicyVersion: 1,
+      });
+    expect(res2.status).toBe(400);
+    expect(res2.body.error?.code).toBe('TERMS_NOT_ACCEPTED');
+
+    // 11c. Missing signatureBase64 -> 400 SIGNATURE_REQUIRED
+    const res3 = await request(app)
+      .post('/api/v1/tenant-registrations')
+      .set('x-dormitory-id', testDorm.id)
+      .send({
+        requestedRoomId: room.id,
+        firstName: 'ธนกฤต',
+        lastName: 'พัฒนา',
+        phone: '0899999999',
+        agreedTerms: true,
+        expectedPolicyVersion: 1,
+      });
+    expect(res3.status).toBe(400);
+    expect(res3.body.error?.code).toBe('SIGNATURE_REQUIRED');
+
+    // 11d. Missing expectedPolicyVersion -> 400 INVALID_POLICY_VERSION
+    const res4 = await request(app)
+      .post('/api/v1/tenant-registrations')
+      .set('x-dormitory-id', testDorm.id)
+      .send({
+        requestedRoomId: room.id,
+        firstName: 'ธนกฤต',
+        lastName: 'พัฒนา',
+        phone: '0899999999',
+        agreedTerms: true,
+        signatureBase64: validSignature,
+      });
+    expect(res4.status).toBe(400);
+    expect(res4.body.error?.code).toBe('INVALID_POLICY_VERSION');
+
+    // 11e. Valid payload -> 201 Created
+    const resValid = await request(app)
+      .post('/api/v1/tenant-registrations')
+      .set('x-dormitory-id', testDorm.id)
+      .send({
+        requestedRoomId: room.id,
+        firstName: 'ธนกฤต',
+        lastName: 'พัฒนา',
+        phone: '0899999999',
+        agreedTerms: true,
+        signatureBase64: validSignature,
+        expectedPolicyVersion: 1,
+      });
+    expect(resValid.status).toBe(201);
+    expect(resValid.body.data?.id).toBeTruthy();
+    expect(resValid.body.data?.status).toBe('pending_owner_approval');
+    expect(resValid.body.data?.acceptanceSnapshotSha256).toHaveLength(64);
+    expect(resValid.body.data?.tenantSignatureObjectKey).toBeTruthy();
+    expect(resValid.body.data?.tenantSignatureSha256).toHaveLength(64);
+
+    // Cleanup
+    await prisma.tenantRegistrationRequest.deleteMany({ where: { dormitoryId: testDorm.id } });
+    await prisma.room.deleteMany({ where: { dormitoryId: testDorm.id } });
+    await prisma.building.deleteMany({ where: { dormitoryId: testDorm.id } });
     await prisma.dormitoryPropertyDefaults.deleteMany({ where: { dormitoryId: testDorm.id } });
     await prisma.dormitory.delete({ where: { id: testDorm.id } });
     await prisma.user.delete({ where: { id: testUser.id } });

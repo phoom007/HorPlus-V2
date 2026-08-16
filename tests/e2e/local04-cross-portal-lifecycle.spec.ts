@@ -116,6 +116,24 @@ test.describe('LOCAL-04 — Master Cross-Portal Playwright Acceptance Suite (Jou
     await page.fill('input[placeholder="ใจดี"]', lastName);
     await page.fill('input[placeholder="0812345678"]', phone);
 
+    // Accept terms
+    const termsCheckbox = page.locator('input[type="checkbox"]');
+    if (await termsCheckbox.count() > 0) {
+      await termsCheckbox.first().check();
+    }
+
+    // Draw digital signature on canvas
+    const canvas = page.locator('canvas');
+    if (await canvas.count() > 0 && await canvas.isVisible()) {
+      const box = await canvas.boundingBox();
+      if (box) {
+        await page.mouse.move(box.x + 20, box.y + 20);
+        await page.mouse.down();
+        await page.mouse.move(box.x + 80, box.y + 40);
+        await page.mouse.up();
+      }
+    }
+
     const submitBtn = page.locator('button[type="submit"]');
     await expect(submitBtn).toBeEnabled({ timeout: 30000 });
     await submitBtn.click();

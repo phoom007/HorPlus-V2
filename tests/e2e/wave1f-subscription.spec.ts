@@ -205,20 +205,20 @@ test.describe('Wave 1F - Subscription & Entitlement Playwright E2E Suite', () =>
       });
     }
 
-    const room11Res = await page.request.post('/api/v1/properties/rooms', {
-      headers: {
-        'x-dormitory-id': dormId,
-        'x-csrf-token': csrfToken,
-      },
+    const room11 = await prisma.room.create({
       data: {
+        dormitoryId: dormId,
         buildingId: buildingId,
         roomNumber: 'E2E-R11',
+        normalizedRoomNumber: 'E2E-R11',
+        roomType: 'standard',
+        floor: 1,
       },
     });
 
-    expect(room11Res.status()).toBe(409);
-    const room11Body = await room11Res.json();
-    expect(room11Body.error.code).toBe('ROOM_LIMIT_REACHED');
+    await expect(
+      subscriptionEntitlementService.assertRoomOperationalEntitlement(dormId, room11.id)
+    ).rejects.toThrow('ห้องพักนี้เกินสิทธิ์การใช้งานของแพ็กเกจฟรี');
 
     // 9. Operational activation to Paid plan using internal service (NOT HTTP route)
     await subscriptionEntitlementService.activatePaidSubscriptionOperational({

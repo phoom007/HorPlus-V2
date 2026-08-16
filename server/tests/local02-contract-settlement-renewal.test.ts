@@ -3,7 +3,21 @@ import { getPrismaClient } from '../src/db/prisma.js';
 import { contractRenewalService } from '../src/services/contract-renewal.service.js';
 import { settlementService } from '../src/services/settlement.service.js';
 import { tenantRegistrationService } from '../src/services/tenant-registration.service.js';
+import { subscriptionEntitlementService } from '../src/services/subscription-entitlement.service.js';
+import { PNG } from 'pngjs';
 import { Prisma } from '@prisma/client';
+
+function createDummySignature(): string {
+  const pngObj = new PNG({ width: 10, height: 10 });
+  for (let i = 0; i < 100; i++) {
+    const idx = i * 4;
+    pngObj.data[idx] = 100;
+    pngObj.data[idx + 1] = 100;
+    pngObj.data[idx + 2] = 200;
+    pngObj.data[idx + 3] = 255;
+  }
+  return `data:image/png;base64,${PNG.sync.write(pngObj).toString('base64')}`;
+}
 
 describe('LOCAL-02: Contract Settlement, Termination & Renewal Suite', () => {
   const prisma = getPrismaClient();
@@ -51,6 +65,12 @@ describe('LOCAL-02: Contract Settlement, Termination & Renewal Suite', () => {
       },
     });
     testDormitoryId = dorm.id;
+    await subscriptionEntitlementService.provisionInitialTrial(testDormitoryId);
+    await prisma.dormitoryPropertyDefaults.upsert({
+      where: { dormitoryId: testDormitoryId },
+      create: { dormitoryId: testDormitoryId, version: 1, defaultTerms: 'Default Terms', petPolicy: { allowed: 'none', allowedTypes: [] } },
+      update: {},
+    });
 
     // 2. Create Test Building & Room A101
     const building = await prisma.building.create({
@@ -740,6 +760,9 @@ describe('LOCAL-02: Contract Settlement, Termination & Renewal Suite', () => {
       firstName: 'Boonmee',
       lastName: 'Rakdee',
       phone: '0899999999',
+      agreedTerms: true,
+      signatureBase64: createDummySignature(),
+      expectedPolicyVersion: 1,
     });
 
     // Unconfirmed approval throws 409 REPLACEMENT_CONFIRMATION_REQUIRED
@@ -810,6 +833,9 @@ describe('LOCAL-02: Contract Settlement, Termination & Renewal Suite', () => {
       firstName: 'Boonmee',
       lastName: 'Rakdee',
       phone: '0899999999',
+      agreedTerms: true,
+      signatureBase64: createDummySignature(),
+      expectedPolicyVersion: 1,
     });
 
     await tenantRegistrationService.approveRequest(appB.id, testDormitoryId, {
@@ -854,6 +880,9 @@ describe('LOCAL-02: Contract Settlement, Termination & Renewal Suite', () => {
       firstName: 'Chai',
       lastName: 'Dee',
       phone: '0811111111',
+      agreedTerms: true,
+      signatureBase64: createDummySignature(),
+      expectedPolicyVersion: 1,
     });
 
     const bResult = await tenantRegistrationService.approveRequest(appB.id, testDormitoryId, {

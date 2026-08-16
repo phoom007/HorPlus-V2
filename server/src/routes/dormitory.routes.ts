@@ -573,10 +573,15 @@ export function createDormitoryRouter(
 
       res.status(201).json({ data: result });
     } catch (err: any) {
-      const statusCode = err.status || 500;
+      console.error('[HANDLE_POST_SIGNATURE ERROR]', {
+        message: err.message,
+        code: err.errorCode || err.code,
+        statusCode: err.statusCode || err.status,
+      });
+      const statusCode = err.statusCode || err.status || 500;
       res.status(statusCode).json({
         error: {
-          code: err.code || 'SIGNATURE_UPLOAD_FAILED',
+          code: err.errorCode || err.code || 'SIGNATURE_UPLOAD_FAILED',
           message: err.message || 'เกิดข้อผิดพลาดขณะบันทึกลายเซ็น',
           fieldErrors: null,
           requestId: (req.headers['x-request-id'] as string) || 'req-unknown',

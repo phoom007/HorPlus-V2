@@ -106,7 +106,7 @@ export function createPaymentRouter(authService: AuthenticationService) {
   const ensureTenant = async (req: Request, res: Response, dormitoryId: string) => {
     const auth = (req as any).auth;
     const membership = auth?.memberships?.find((m: any) => {
-      const code = (m.roleCode || m.role || m.roleId || '').toLowerCase();
+      const code = (m.roleCode || m.role?.code || m.role || m.roleId || '').toLowerCase();
       return m.dormitoryId === dormitoryId && code.includes('tenant');
     });
     if (!membership) return null;
@@ -117,7 +117,7 @@ export function createPaymentRouter(authService: AuthenticationService) {
   const ensureOwnerOrManager = (req: Request, res: Response, dormitoryId: string) => {
     const auth = (req as any).auth;
     const isOk = auth?.memberships?.find((m: any) => {
-      const code = (m.roleCode || m.role || m.roleId || '').toLowerCase();
+      const code = (m.roleCode || m.role?.code || m.role || m.roleId || '').toLowerCase();
       return m.dormitoryId === dormitoryId && (code.includes('owner') || code.includes('manager') || code.includes('admin'));
     });
     if (!isOk) {

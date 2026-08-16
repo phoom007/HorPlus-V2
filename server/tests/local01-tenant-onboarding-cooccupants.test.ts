@@ -10,10 +10,23 @@ import { InMemoryTenantRepository } from '../src/db/repositories/tenant.reposito
 import { InMemoryContractRepository } from '../src/db/repositories/contract.repository.js';
 import { InMemoryRoomRepository } from '../src/db/repositories/room.repository.js';
 import { SensitiveFieldService } from '../src/services/sensitive-field.service.js';
-
+import { PNG } from 'pngjs';
 import { getPrismaClient } from '../src/db/prisma.js';
 
+function createDummySignature(): string {
+  const pngObj = new PNG({ width: 10, height: 10 });
+  for (let i = 0; i < 100; i++) {
+    const idx = i * 4;
+    pngObj.data[idx] = 100;
+    pngObj.data[idx + 1] = 100;
+    pngObj.data[idx + 2] = 200;
+    pngObj.data[idx + 3] = 255;
+  }
+  return `data:image/png;base64,${PNG.sync.write(pngObj).toString('base64')}`;
+}
+
 describe('LOCAL-01 — Tenant Onboarding & Co-Occupant Management', () => {
+  const prisma = getPrismaClient();
   let tenantRepo: InMemoryTenantRepository;
   let contractRepo: InMemoryContractRepository;
   let roomRepo: InMemoryRoomRepository;
@@ -32,10 +45,15 @@ describe('LOCAL-01 — Tenant Onboarding & Co-Occupant Management', () => {
     tenantService = new TenantService(tenantRepo, contractRepo, sensitiveService);
     registrationService = new TenantRegistrationService();
 
-    const prisma = getPrismaClient();
     await prisma.dormitory.upsert({
       where: { id: dormA },
       create: { id: dormA, name: 'Dorm A', code: 'DORM-A' },
+      update: {},
+    });
+    await subscriptionEntitlementService.provisionInitialTrial(dormA);
+    await prisma.dormitoryPropertyDefaults.upsert({
+      where: { dormitoryId: dormA },
+      create: { dormitoryId: dormA, version: 1, defaultTerms: 'Terms A', petPolicy: { allowed: 'none', allowedTypes: [] } },
       update: {},
     });
   });
@@ -161,7 +179,6 @@ describe('LOCAL-01 — Tenant Onboarding & Co-Occupant Management', () => {
     const roomId = '44444444-4444-4444-8444-444444444444';
 
     beforeEach(async () => {
-      const prisma = getPrismaClient();
       // Clean up from prior runs (order respects FK constraints)
       await prisma.occupancy.deleteMany({ where: { dormitoryId: dormA } });
       await prisma.contract.deleteMany({ where: { dormitoryId: dormA } });
@@ -169,6 +186,13 @@ describe('LOCAL-01 — Tenant Onboarding & Co-Occupant Management', () => {
       await prisma.tenantRegistrationRequest.deleteMany({ where: { dormitoryId: dormA } });
       await prisma.room.deleteMany({ where: { dormitoryId: dormA } });
       await prisma.building.deleteMany({ where: { dormitoryId: dormA } });
+
+      await subscriptionEntitlementService.provisionInitialTrial(dormA);
+      await prisma.dormitoryPropertyDefaults.upsert({
+        where: { dormitoryId: dormA },
+        create: { dormitoryId: dormA, version: 1, defaultTerms: 'Terms A', petPolicy: { allowed: 'none', allowedTypes: [] } },
+        update: {},
+      });
 
       // Create shared building + room
       await prisma.building.create({
@@ -196,6 +220,9 @@ describe('LOCAL-01 — Tenant Onboarding & Co-Occupant Management', () => {
         firstName: 'Idempotent',
         lastName: 'Test',
         phone: '0819991111',
+        agreedTerms: true,
+        signatureBase64: createDummySignature(),
+        expectedPolicyVersion: 1,
       });
 
       // 2. Approve request once (with contract to exercise full path)
@@ -229,6 +256,9 @@ describe('LOCAL-01 — Tenant Onboarding & Co-Occupant Management', () => {
         firstName: 'ConcurrentA',
         lastName: 'WinnerOrLoser',
         phone: '0812221111',
+        agreedTerms: true,
+        signatureBase64: createDummySignature(),
+        expectedPolicyVersion: 1,
       });
 
       const reqB = await registrationService.createRequest(dormA, {
@@ -236,6 +266,9 @@ describe('LOCAL-01 — Tenant Onboarding & Co-Occupant Management', () => {
         firstName: 'ConcurrentB',
         lastName: 'WinnerOrLoser',
         phone: '0812222222',
+        agreedTerms: true,
+        signatureBase64: createDummySignature(),
+        expectedPolicyVersion: 1,
       });
 
       const contractPayload = {
@@ -274,6 +307,9 @@ describe('LOCAL-01 — Tenant Onboarding & Co-Occupant Management', () => {
         firstName: 'Partial',
         lastName: 'Blocked',
         phone: '0818881111',
+        agreedTerms: true,
+        signatureBase64: createDummySignature(),
+        expectedPolicyVersion: 1,
       });
 
       // Attempt approval without contract terms → must fail BEFORE any mutation
@@ -285,7 +321,6 @@ describe('LOCAL-01 — Tenant Onboarding & Co-Occupant Management', () => {
       const check = await registrationService.getRequestById(req.id, dormA);
       expect(check.status).toBe('pending_owner_approval');
 
-      const prisma = getPrismaClient();
       const tenantCount = await prisma.tenant.count({ where: { dormitoryId: dormA, firstName: 'Partial' } });
       expect(tenantCount).toBe(0);
     });
@@ -296,6 +331,9 @@ describe('LOCAL-01 — Tenant Onboarding & Co-Occupant Management', () => {
         firstName: 'Complete',
         lastName: 'State',
         phone: '0817771111',
+        agreedTerms: true,
+        signatureBase64: createDummySignature(),
+        expectedPolicyVersion: 1,
       });
 
       const result = await registrationService.approveRequest(req.id, dormA, {
@@ -316,7 +354,6 @@ describe('LOCAL-01 — Tenant Onboarding & Co-Occupant Management', () => {
       expect(result.occupancy.status).toBe('ACTIVE');
 
       // Verify Room is occupied via direct PostgreSQL query
-      const prisma = getPrismaClient();
       const room = await prisma.room.findUnique({ where: { id: roomId } });
       expect(room!.status).toBe('occupied');
       expect(room!.currentTenantId).toBe(result.tenant.id);
@@ -340,12 +377,18 @@ describe('LOCAL-01 — Tenant Onboarding & Co-Occupant Management', () => {
         firstName: 'First',
         lastName: 'Tenant',
         phone: '0816661111',
+        agreedTerms: true,
+        signatureBase64: createDummySignature(),
+        expectedPolicyVersion: 1,
       });
       const req2 = await registrationService.createRequest(dormA, {
         requestedRoomId: roomId,
         firstName: 'Second',
         lastName: 'Applicant',
         phone: '0816662222',
+        agreedTerms: true,
+        signatureBase64: createDummySignature(),
+        expectedPolicyVersion: 1,
       });
 
       // Approve the first request → room becomes occupied
@@ -559,8 +602,26 @@ describe('LOCAL-01 — Tenant Onboarding & Co-Occupant Management', () => {
     });
 
     it('Test A — Anonymous public submission succeeds without granting authority', async () => {
+      const { PNG } = await import('pngjs');
+      const pngObj = new PNG({ width: 10, height: 10 });
+      for (let i = 0; i < 100; i++) {
+        const idx = i * 4;
+        pngObj.data[idx] = 100;
+        pngObj.data[idx + 1] = 100;
+        pngObj.data[idx + 2] = 200;
+        pngObj.data[idx + 3] = 255;
+      }
+      const validSig = `data:image/png;base64,${PNG.sync.write(pngObj).toString('base64')}`;
+
+      await prisma.dormitoryPropertyDefaults.upsert({
+        where: { dormitoryId: dormAId },
+        create: { dormitoryId: dormAId, version: 1, defaultTerms: 'Terms A', petPolicy: { allowed: 'none', allowedTypes: [] } },
+        update: {},
+      });
+
       const res = await supertest(app)
         .post('/api/v1/tenant-registrations')
+        .set('x-dormitory-id', dormAId)
         .send({
           dormitoryId: dormAId,
           requestedRoomId: roomAId,
@@ -568,6 +629,9 @@ describe('LOCAL-01 — Tenant Onboarding & Co-Occupant Management', () => {
           lastName: 'Applicant',
           phone: '0899990000',
           note: 'Public submission test',
+          agreedTerms: true,
+          signatureBase64: validSig,
+          expectedPolicyVersion: 1,
         });
 
       expect(res.status).toBe(201);
