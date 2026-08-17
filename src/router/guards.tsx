@@ -55,6 +55,15 @@ export const OwnerAuthGuard: React.FC<{ children?: React.ReactNode }> = ({ child
       return <Navigate to="/owner/register" replace />;
     }
   } else {
+    // If authenticated owner is adding a new dormitory, allow access to add dorm route
+    if (location.pathname === '/owner/dormitories/new' || location.pathname.startsWith('/owner/dormitories/new')) {
+      return (
+        <AuthContext.Provider value={session}>
+          {children || <Outlet />}
+        </AuthContext.Provider>
+      );
+    }
+
     // User has completed onboarding and has 1 or more memberships -> forbid accessing initial onboarding page (/owner/register)
     if (location.pathname === '/owner/register') {
       return <Navigate to="/auth/owner" replace />;

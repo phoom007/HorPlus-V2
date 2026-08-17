@@ -80,6 +80,20 @@ export class SubscriptionIntentService {
       return draft.provisionalDormitoryId;
     }
 
+    // 2.5 Check if user has an active setup_pending provisional dormitory
+    const existingProvDorm = await db.dormitory.findFirst({
+      where: {
+        createdByUserId: userId,
+        status: 'setup_pending',
+        deletedAt: null,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    if (existingProvDorm) {
+      return existingProvDorm.id;
+    }
+
     // 3. Post-onboarding context: Check user's active memberships
     const activeMemberships = await db.dormitoryMember.findMany({
       where: {
@@ -176,24 +190,23 @@ export class SubscriptionIntentService {
       }
 
       // 2. Check 1-Month PRO Trial Eligibility for this Google Account
+      const existingTrialClaim = await tx.accountBenefitClaim.findFirst({
+        where: {
+          userId,
+          benefitKey: 'INITIAL_TRIAL_V1',
+        },
+      });
+      const accountTrialAvailable = !existingTrialClaim;
+
       let isTrialEligible = false;
       let priceAfterTrial = basePrice;
 
-      if (!isFreePlan && durationMonths === 1) {
-        const existingTrialClaim = await tx.accountBenefitClaim.findFirst({
-          where: {
-            userId,
-            benefitKey: 'INITIAL_TRIAL_V1',
-          },
-        });
-
-        if (!existingTrialClaim) {
-          isTrialEligible = true;
-          priceAfterTrial = new Prisma.Decimal(0); // First month PRO is free trial
-        } else {
-          isTrialEligible = false;
-          priceAfterTrial = basePrice; // 189.00 THB
-        }
+      if (!isFreePlan && durationMonths === 1 && accountTrialAvailable) {
+        isTrialEligible = true;
+        priceAfterTrial = new Prisma.Decimal(0); // First month PRO is free trial
+      } else {
+        isTrialEligible = false;
+        priceAfterTrial = basePrice;
       }
 
       // 3. Evaluate HORPLUS Promo Code (if provided)
@@ -298,6 +311,8 @@ export class SubscriptionIntentService {
         basePrice: basePrice.toFixed(2),
         referencePrice: referencePrice ? referencePrice.toFixed(2) : null,
         isTrialEligible,
+        accountTrialAvailable,
+        initialTrialAvailable: accountTrialAvailable,
         promoCode: validatedPromoCode,
         promoBonusMonths,
         referralCode: validatedReferralCode,

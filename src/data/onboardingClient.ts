@@ -245,6 +245,7 @@ export const onboardingClient = {
     promoCode?: string;
     referralCode?: string;
     coinRequested?: number;
+    dormitoryId?: string;
   }) {
     return httpRequest<any>('POST', '/subscription/quote', data);
   },

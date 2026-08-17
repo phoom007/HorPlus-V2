@@ -237,6 +237,7 @@ export class DormitoryProvisioningService {
           },
           update: {
             provisionalDormitoryId: existingProvDorm.id,
+            finalizedAt: null,
             updatedAt: new Date(),
           },
         });
@@ -329,6 +330,7 @@ export class DormitoryProvisioningService {
         },
         update: {
           provisionalDormitoryId: dorm.id,
+          finalizedAt: null,
           updatedAt: new Date(),
         },
       });
@@ -599,21 +601,6 @@ export class DormitoryProvisioningService {
       }
 
       await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', '', true)`;
-
-      if (plan.type === 'FREE' || plan.code === 'FREE') {
-        const existingActiveDorm = await tx.dormitoryMember.findFirst({
-          where: {
-            userId,
-            status: 'active',
-            dormitoryId: { not: dormId },
-            dormitory: { status: 'active' },
-          },
-        });
-
-        if (existingActiveDorm) {
-          throw new AppError('FREE_DORMITORY_LIMIT_REACHED: บัญชีของคุณมีหอพักแบบ Free/Trial แล้ว ไม่สามารถสร้างหอพัก Free เพิ่มเติมได้', 409, 'FREE_DORMITORY_LIMIT_REACHED');
-        }
-      }
 
       // Authoritative building & room counts
       const mappedBuildingCount = params.buildings ? params.buildings.length : (dormitory.estimatedBuildingCount || 1);

@@ -10,6 +10,11 @@ import {
   Building,
   Lock,
   Tag,
+  Gift,
+  Share2,
+  Copy,
+  Check,
+  Coins,
 } from 'lucide-react';
 
 interface SubscriptionPageProps {
@@ -25,6 +30,10 @@ export const SubscriptionPage: React.FC<SubscriptionPageProps> = ({ dormitoryId 
   const [promoLoading, setPromoLoading] = useState(false);
   const [promoSuccess, setPromoSuccess] = useState<string | null>(null);
   const [promoError, setPromoError] = useState<string | null>(null);
+
+  // Referral Program state
+  const [referralData, setReferralData] = useState<{ code: string; usageCount: number; maxUsage: number; coinsPerUsage: number } | null>(null);
+  const [isCopiedReferral, setIsCopiedReferral] = useState(false);
 
   const activeDormId =
     dormitoryId ||
@@ -72,6 +81,23 @@ export const SubscriptionPage: React.FC<SubscriptionPageProps> = ({ dormitoryId 
   useEffect(() => {
     fetchEntitlements();
   }, [activeDormId]);
+
+  useEffect(() => {
+    const fetchReferral = async () => {
+      try {
+        const res = await fetch('/api/v1/referral/me');
+        if (res.ok) {
+          const json = await res.json();
+          if (json.success && json.data) {
+            setReferralData(json.data);
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to fetch referral info:', err);
+      }
+    };
+    fetchReferral();
+  }, []);
 
   const handleRedeemPromo = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -349,6 +375,52 @@ export const SubscriptionPage: React.FC<SubscriptionPageProps> = ({ dormitoryId 
               )}
             </button>
           </form>
+        </div>
+      </div>
+
+      {/* Referral Program Section */}
+      <div className="bg-gradient-to-br from-amber-500/10 via-amber-50 to-orange-50 border border-amber-200 p-6 sm:p-8 rounded-3xl space-y-4 shadow-sm">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-amber-500 text-white flex items-center justify-center shadow-xs shrink-0">
+              <Gift className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h3 className="text-base font-black text-slate-900">โปรแกรมแนะนำเพื่อน (Referral Program)</h3>
+                <span className="text-[10px] font-black text-amber-800 bg-amber-100 px-2.5 py-0.5 rounded-full border border-amber-200">
+                  เชิญแล้ว {referralData?.usageCount || 0} / {referralData?.maxUsage || 10} คน
+                </span>
+              </div>
+              <p className="text-xs text-slate-600 font-medium mt-0.5">
+                แชร์รหัสให้เจ้าของหอพักอื่น รับ 10 HorPlus Coins (฿10) เมื่อเพื่อนเปิดใช้งานหอพักแรก
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-white p-4 rounded-2xl border border-amber-200/80 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <span className="text-xs font-black text-slate-600 shrink-0">รหัสคำเชิญของคุณ:</span>
+            <span className="px-3.5 py-1.5 bg-amber-50 border border-amber-200 rounded-xl font-mono text-sm font-black text-amber-900 tracking-widest select-all">
+              {referralData?.code || '------'}
+            </span>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => {
+              if (!referralData?.code) return;
+              const shareUrl = `${window.location.origin}/register?ref=${referralData.code}`;
+              navigator.clipboard.writeText(shareUrl);
+              setIsCopiedReferral(true);
+              setTimeout(() => setIsCopiedReferral(false), 3000);
+            }}
+            className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-black transition-all flex items-center justify-center gap-2 cursor-pointer shadow-xs shrink-0"
+          >
+            {isCopiedReferral ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+            <span>{isCopiedReferral ? 'คัดลอกลิงก์สำเร็จ!' : 'คัดลอกลิงก์แนะนำเพื่อน'}</span>
+          </button>
         </div>
       </div>
 

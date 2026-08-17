@@ -76,9 +76,9 @@ export function createSubscriptionQuoteRouter(authService: AuthenticationService
       const userId = req.auth!.userId;
       const body = createQuoteSchema.parse(req.body);
       const requestedDormId =
-        (req.headers['x-dormitory-id'] as string) ||
         body.dormitoryId ||
-        (req.query?.dormitoryId as string);
+        (req.query?.dormitoryId as string) ||
+        (req.headers['x-dormitory-id'] as string);
       const quote = await subscriptionIntentService.createIntentQuote(userId, body, undefined, requestedDormId);
 
       res.json({

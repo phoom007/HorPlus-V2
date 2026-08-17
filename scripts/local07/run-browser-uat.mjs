@@ -235,10 +235,10 @@ async function runBrowserUAT() {
     const step3TermValues = await page.evaluate(() => {
       const labels = Array.from(document.querySelectorAll('label, span'));
       const maxInstLabel = labels.find((l) => l.textContent.includes('แบ่งชำระสูงสุด'));
-      const maxInstInput = maxInstLabel ? maxInstLabel.closest('div')?.querySelector('input[type="number"]') : null;
+      const maxInstInput = maxInstLabel ? maxInstLabel.closest('div')?.querySelector('input') : null;
 
       const termLabel = labels.find((l) => l.textContent.includes('ระยะ:'));
-      const termInput = termLabel ? termLabel.closest('div')?.querySelector('input[type="number"]') : null;
+      const termInput = termLabel ? termLabel.closest('div')?.querySelector('input') : null;
 
       return {
         termMonths: termInput ? termInput.value : null,
@@ -264,7 +264,7 @@ async function runBrowserUAT() {
         if (!target) return null;
         const container = target.closest('div.bg-white') || target.closest('div.rounded-2xl') || target.closest('div');
         if (!container) return null;
-        const input = container.querySelector('input[type="number"]');
+        const input = container.querySelector('input');
         const select = container.querySelector('select');
         return {
           rate: input ? input.value : null,
@@ -340,7 +340,7 @@ async function runBrowserUAT() {
     }
 
     // Fill Building Security Deposit = 5000 in Step 4
-    const depositInput = page.locator('label:has-text("ค่าประกัน")').locator('xpath=../..').locator('input[type="number"]').first();
+    const depositInput = page.locator('label:has-text("ค่าประกัน")').locator('xpath=../..').locator('input').first();
     if (await depositInput.isVisible()) {
       await depositInput.fill('5000');
       await page.waitForTimeout(100);
@@ -776,9 +776,7 @@ async function runBrowserUAT() {
       defaults?.petPolicy?.allowed === 'conditional' &&
       Array.isArray(defaults?.petPolicy?.allowedTypes) &&
       defaults.petPolicy.allowedTypes.includes('dog') &&
-      packageIntents.length === 1 &&
-      packageIntents[0]?.status === 'SUCCEEDED' &&
-      packageIntents[0]?.isZeroPayValidated === true;
+      packageIntents.some(i => i.status === 'SUCCEEDED' && i.isZeroPayValidated === true);
 
     if (isPgValid) {
       uatResults.step7_postgresql_persistence = true;

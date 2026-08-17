@@ -204,7 +204,7 @@ describe('Onboarding & Provisioning API (TASK 011)', () => {
     expect(conflictRes.status).toBe(409);
     expect(conflictRes.body.error.code).toBe('IDEMPOTENCY_KEY_REUSED');
 
-    // 4. FREE Plan Limit Enforcement (Attempting 2nd FREE plan dormitory -> 409)
+    // 4. Option A Approved Multi-Dorm Policy: 2nd FREE plan dormitory succeeds
     const prepRes2 = await request(app)
       .post('/api/v1/onboarding/prepare')
       .set('Cookie', cookies)
@@ -239,8 +239,17 @@ describe('Onboarding & Provisioning API (TASK 011)', () => {
         planCode: 'FREE',
       });
 
-    expect(secondFreeRes.status).toBe(409);
-    expect(secondFreeRes.body.error.code).toBe('FREE_DORMITORY_LIMIT_REACHED');
+    expect(secondFreeRes.status).toBe(200);
+    expect(secondFreeRes.body.data?.dormitory?.id).toBe(provDormId2);
+
+    // Verify session has 2 active memberships
+    const sessionRes = await request(app)
+      .get('/api/v1/auth/session')
+      .set('Cookie', cookies);
+    expect(sessionRes.status).toBe(200);
+    const activeDormIds = sessionRes.body.data.memberships.map((m: any) => m.dormitoryId);
+    expect(activeDormIds).toContain(provDormId);
+    expect(activeDormIds).toContain(provDormId2);
   });
 
 });

@@ -172,7 +172,9 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
   const navigate = useNavigate();
   const location = useLocation();
 
-  const pathSegment = location.pathname.split('/')[2] || 'dashboard';
+  const pathSegment = location.pathname.startsWith('/owner/dormitories/new')
+    ? 'dormitories/new'
+    : (location.pathname.split('/')[2] || 'dashboard');
   const [activeTab, setActiveTab] = useState(onboardingRequired ? 'register' : pathSegment);
 
   useEffect(() => {
@@ -706,6 +708,14 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
       case 'register':
         return (
           <OwnerRegister
+            onAddLog={handleAddLog}
+            onNavigate={(tab) => changeTab(tab)}
+          />
+        );
+      case 'dormitories/new':
+        return (
+          <OwnerRegister
+            mode="add_dorm"
             onAddLog={handleAddLog}
             onNavigate={(tab) => changeTab(tab)}
           />

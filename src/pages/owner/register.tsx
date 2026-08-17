@@ -43,16 +43,19 @@ import {
   Coins,
   Lock,
   Gift,
-  Tag
+  Tag,
+  Bot
 } from 'lucide-react';
 
 import { onboardingClient } from '../../data/onboardingClient';
 import { AuthContext } from '../../router/guards';
 import { Dormitory, Building, Room } from '../../types';
+import { normalizeNumericInput } from '../../utils/numericInput';
 
 interface RegisterProps {
   onAddLog?: (action: string, details: string, module: string, targetId?: string) => void;
   onNavigate?: (tab: string) => void;
+  mode?: 'initial' | 'add_dorm';
 }
 
 const BANK_OPTIONS = [
@@ -327,15 +330,13 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
   const [selectedPackageId, setSelectedPackageId] = useState<string | null>(null);
   const [referralCodeInput, setReferralCodeInput] = useState('');
   const [isReferralBound, setIsReferralBound] = useState(false);
-  const [userOwnReferralCode, setUserOwnReferralCode] = useState('');
-  const [referralUsageCount, setReferralUsageCount] = useState(0);
   const [coinWalletBalance, setCoinWalletBalance] = useState(0);
   const [coinToApply, setCoinToApply] = useState(0);
-  const [isCopiedReferral, setIsCopiedReferral] = useState(false);
   const [isFirstTrialEligible, setIsFirstTrialEligible] = useState(true);
+  const [accountTrialAvailable, setAccountTrialAvailable] = useState(true);
   const [quoteSummary, setQuoteSummary] = useState<any>(null);
 
-  // Load packages, referral data, and coin balance on mount
+  // Load packages, referral param, and coin balance on mount
   React.useEffect(() => {
     const initData = async () => {
       try {
@@ -347,16 +348,6 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
         }
       } catch (err) {
         console.warn('Failed to load packages:', err);
-      }
-
-      try {
-        const refMeRes = await onboardingClient.getReferralMe();
-        if (refMeRes?.data) {
-          setUserOwnReferralCode(refMeRes.data.code);
-          setReferralUsageCount(refMeRes.data.usageCount || 0);
-        }
-      } catch (err) {
-        console.warn('Failed to load user referral code:', err);
       }
 
       try {
@@ -401,6 +392,11 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
         });
         if (quote?.data) {
           setQuoteSummary(quote.data);
+          if (quote.data.accountTrialAvailable !== undefined) {
+            setAccountTrialAvailable(quote.data.accountTrialAvailable);
+          } else if (quote.data.isTrialEligible !== undefined && selectedDurationMonths === 1) {
+            setAccountTrialAvailable(quote.data.isTrialEligible);
+          }
           if (quote.data.isTrialEligible !== undefined) {
             setIsFirstTrialEligible(quote.data.isTrialEligible);
           }
@@ -410,7 +406,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
       }
     };
     fetchQuote();
-  }, [currentStep, selectedPlan, selectedPackageId, appliedPromo, promoCodeInput, referralCodeInput, coinToApply]);
+  }, [currentStep, selectedPlan, selectedPackageId, appliedPromo, promoCodeInput, referralCodeInput, coinToApply, selectedDurationMonths]);
 
   // Signature Canvas Drawing
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -952,20 +948,15 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
       const rawPP = formData.paymentAccount.promptPayId ? formData.paymentAccount.promptPayId.replace(/\D/g, '') : null;
       const ppType = rawPP ? (rawPP.length === 13 ? 'national_id' : 'mobile_phone') : null;
 
-      let activeIntentId = quoteSummary?.intentId;
-      if (!activeIntentId) {
-        const quote = await onboardingClient.getSubscriptionQuote({
-          isFreePlan: selectedPlan === 'free',
-          packageId: selectedPlan === 'pro' ? (selectedPackageId || undefined) : undefined,
-          promoCode: appliedPromo ? promoCodeInput.trim() : undefined,
-          referralCode: referralCodeInput ? referralCodeInput.trim() : undefined,
-          coinRequested: coinToApply,
-        });
-        if (quote?.data?.intentId) {
-          activeIntentId = quote.data.intentId;
-          setQuoteSummary(quote.data);
-        }
-      }
+      const quote = await onboardingClient.getSubscriptionQuote({
+        isFreePlan: selectedPlan === 'free',
+        packageId: selectedPlan === 'pro' ? (selectedPackageId || undefined) : undefined,
+        promoCode: appliedPromo ? promoCodeInput.trim() : undefined,
+        referralCode: referralCodeInput ? referralCodeInput.trim() : undefined,
+        coinRequested: coinToApply,
+        dormitoryId: provisionalDormitoryId,
+      });
+      const activeIntentId = quote?.data?.intentId || quote?.intentId;
 
       if (!activeIntentId) {
         throw new Error('ไม่พบข้อมูลรายการคำสั่งซื้อแพ็กเกจ กรุณารีเฟรชหน้านี้และลองใหม่อีกครั้ง');
@@ -1030,7 +1021,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
       const finalizedDormitoryId = finalizeRes?.data?.dormitory?.id || (finalizeRes?.data as any)?.dormitoryId || provisionalDormitoryId;
       if (finalizedDormitoryId) {
         localStorage.setItem('selected_dormitory_id', finalizedDormitoryId);
-        localStorage.setItem('active_dormitory_selected_for_session', finalizedDormitoryId);
+        sessionStorage.setItem('active_dormitory_selected_for_session', finalizedDormitoryId);
       }
 
       setShowTermsModal(false);
@@ -1339,12 +1330,11 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                         <div>
                           <label className="block text-xs font-bold text-slate-700 mb-1">จำนวนชั้น (ชั้น)</label>
                           <input
-                            type="number"
-                            min={1}
-                            max={50}
+                            type="text"
+                            inputMode="numeric"
                             value={b.totalFloors === 0 ? '' : b.totalFloors}
                             onChange={(e) => {
-                              const val = e.target.value;
+                              const val = normalizeNumericInput(e.target.value, false);
                               const updated = [...formData.buildings];
                               updated[idx].totalFloors = val === '' ? 0 : (parseInt(val, 10) || 0);
                               setFormData({ ...formData, buildings: updated });
@@ -1357,12 +1347,11 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                         <div>
                           <label className="block text-xs font-bold text-slate-700 mb-1">ห้องต่อชั้น (ห้อง)</label>
                           <input
-                            type="number"
-                            min={1}
-                            max={50}
+                            type="text"
+                            inputMode="numeric"
                             value={b.roomsPerFloor === 0 ? '' : b.roomsPerFloor}
                             onChange={(e) => {
-                              const val = e.target.value;
+                              const val = normalizeNumericInput(e.target.value, false);
                               const updated = [...formData.buildings];
                               updated[idx].roomsPerFloor = val === '' ? 0 : (parseInt(val, 10) || 0);
                               setFormData({ ...formData, buildings: updated });
@@ -1375,12 +1364,12 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                         <div>
                           <label className="block text-xs font-bold text-slate-700 mb-1">จำนวนผู้เข้าพักสูงสุด (คน)</label>
                           <input
-                            type="number"
-                            min={1}
-                            max={20}
+                            type="text"
+                            inputMode="numeric"
                             value={b.rentRates?.maxOccupants ?? 2}
                             onChange={(e) => {
-                              const val = parseInt(e.target.value, 10);
+                              const norm = normalizeNumericInput(e.target.value, false);
+                              const val = norm === '' ? 0 : (parseInt(norm, 10) || 0);
                               const updated = [...formData.buildings];
                               updated[idx].rentRates = {
                                 ...(updated[idx].rentRates || {
@@ -1391,7 +1380,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                                   daily: 0,
                                   maxOccupants: 2
                                 }),
-                                maxOccupants: isNaN(val) ? 1 : Math.max(1, val)
+                                maxOccupants: val
                               };
                               setFormData({ ...formData, buildings: updated });
                             }}
@@ -1690,9 +1679,13 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                   <div>
                     <span className="text-[10px] text-slate-400 font-bold block mb-1">อัตรา (บาท)</span>
                     <input
-                      type="number"
+                      type="text"
+                      inputMode="decimal"
                       value={formData.utilities.waterRate}
-                      onChange={(e) => setFormData({ ...formData, utilities: { ...formData.utilities, waterRate: parseFloat(e.target.value) || 0 } })}
+                      onChange={(e) => {
+                        const norm = normalizeNumericInput(e.target.value, true);
+                        setFormData({ ...formData, utilities: { ...formData.utilities, waterRate: norm === '' ? 0 : (parseFloat(norm) || 0) } });
+                      }}
                       className="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl font-black text-slate-800 outline-none"
                     />
                   </div>
@@ -1718,9 +1711,13 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                   <div>
                     <span className="text-[10px] text-slate-400 font-bold block mb-1">อัตรา (บาท)</span>
                     <input
-                      type="number"
+                      type="text"
+                      inputMode="decimal"
                       value={formData.utilities.electricRate}
-                      onChange={(e) => setFormData({ ...formData, utilities: { ...formData.utilities, electricRate: parseFloat(e.target.value) || 0 } })}
+                      onChange={(e) => {
+                        const norm = normalizeNumericInput(e.target.value, true);
+                        setFormData({ ...formData, utilities: { ...formData.utilities, electricRate: norm === '' ? 0 : (parseFloat(norm) || 0) } });
+                      }}
                       className="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl font-black text-slate-800 outline-none"
                     />
                   </div>
@@ -1746,10 +1743,14 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                   <div>
                     <span className="text-[10px] text-slate-400 font-bold block mb-1">อัตรา (บาท)</span>
                     <input
-                      type="number"
+                      type="text"
+                      inputMode="decimal"
                       value={formData.utilities.commonFeeMode === 'free' || formData.utilities.commonFeeMode === 'none' ? 0 : formData.utilities.commonFeeRate}
                       disabled={formData.utilities.commonFeeMode === 'free' || formData.utilities.commonFeeMode === 'none'}
-                      onChange={(e) => setFormData({ ...formData, utilities: { ...formData.utilities, commonFeeRate: parseFloat(e.target.value) || 0 } })}
+                      onChange={(e) => {
+                        const norm = normalizeNumericInput(e.target.value, true);
+                        setFormData({ ...formData, utilities: { ...formData.utilities, commonFeeRate: norm === '' ? 0 : (parseFloat(norm) || 0) } });
+                      }}
                       placeholder={formData.utilities.commonFeeMode === 'free' || formData.utilities.commonFeeMode === 'none' ? 'ฟรี' : '0'}
                       className="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl font-black text-slate-800 outline-none disabled:opacity-50 disabled:bg-slate-100"
                     />
@@ -1786,10 +1787,14 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                   <div>
                     <span className="text-[10px] text-slate-400 font-bold block mb-1">อัตรา (บาท)</span>
                     <input
-                      type="number"
+                      type="text"
+                      inputMode="decimal"
                       value={formData.utilities.internetFeeMode === 'free' || formData.utilities.internetFeeMode === 'none' ? 0 : formData.utilities.internetRate}
                       disabled={formData.utilities.internetFeeMode === 'free' || formData.utilities.internetFeeMode === 'none'}
-                      onChange={(e) => setFormData({ ...formData, utilities: { ...formData.utilities, internetRate: parseFloat(e.target.value) || 0 } })}
+                      onChange={(e) => {
+                        const norm = normalizeNumericInput(e.target.value, true);
+                        setFormData({ ...formData, utilities: { ...formData.utilities, internetRate: norm === '' ? 0 : (parseFloat(norm) || 0) } });
+                      }}
                       placeholder={formData.utilities.internetFeeMode === 'free' || formData.utilities.internetFeeMode === 'none' ? 'ฟรี' : '0'}
                       className="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl font-black text-slate-800 outline-none disabled:opacity-50 disabled:bg-slate-100"
                     />
@@ -1826,10 +1831,14 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                   <div>
                     <span className="text-[10px] text-slate-400 font-bold block mb-1">อัตรา (บาท)</span>
                     <input
-                      type="number"
+                      type="text"
+                      inputMode="decimal"
                       value={formData.utilities.parkingFeeMode === 'free' ? 0 : formData.utilities.parkingFeeRate}
                       disabled={formData.utilities.parkingFeeMode === 'free'}
-                      onChange={(e) => setFormData({ ...formData, utilities: { ...formData.utilities, parkingFeeRate: parseFloat(e.target.value) || 0 } })}
+                      onChange={(e) => {
+                        const norm = normalizeNumericInput(e.target.value, true);
+                        setFormData({ ...formData, utilities: { ...formData.utilities, parkingFeeRate: norm === '' ? 0 : (parseFloat(norm) || 0) } });
+                      }}
                       placeholder={formData.utilities.parkingFeeMode === 'free' ? 'ฟรี' : '0'}
                       className="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl font-black text-slate-800 outline-none disabled:opacity-50 disabled:bg-slate-100"
                     />
@@ -1896,10 +1905,12 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                           <div>
                             <label className="block text-xs font-bold text-slate-700 mb-1">ค่าเช่ารายเดือน (บาท/เดือน)</label>
                             <input
-                              type="number"
+                              type="text"
+                              inputMode="decimal"
                               value={rentRates.monthly}
                               onChange={(e) => {
-                                const val = parseFloat(e.target.value) || 0;
+                                const norm = normalizeNumericInput(e.target.value, true);
+                                const val = norm === '' ? 0 : (parseFloat(norm) || 0);
                                 setFormData(prev => ({
                                   ...prev,
                                   buildings: prev.buildings.map((bldg, idx) =>
@@ -1916,10 +1927,12 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                           <div>
                             <label className="block text-xs font-bold text-slate-700 mb-1">ค่าเช่ารายวัน (บาท/วัน)</label>
                             <input
-                              type="number"
+                              type="text"
+                              inputMode="decimal"
                               value={rentRates.daily}
                               onChange={(e) => {
-                                const val = parseFloat(e.target.value) || 0;
+                                const norm = normalizeNumericInput(e.target.value, true);
+                                const val = norm === '' ? 0 : (parseFloat(norm) || 0);
                                 setFormData(prev => ({
                                   ...prev,
                                   buildings: prev.buildings.map((bldg, idx) =>
@@ -1943,10 +1956,12 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                           {/* Term Price and Duration on the Same Line */}
                           <div className="flex items-center gap-2">
                             <input
-                              type="number"
+                              type="text"
+                              inputMode="decimal"
                               value={rentRates.term}
                               onChange={(e) => {
-                                const val = parseFloat(e.target.value) || 0;
+                                const norm = normalizeNumericInput(e.target.value, true);
+                                const val = norm === '' ? 0 : (parseFloat(norm) || 0);
                                 setFormData(prev => ({
                                   ...prev,
                                   buildings: prev.buildings.map((bldg, idx) =>
@@ -1962,12 +1977,12 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                             <div className="flex items-center gap-1 bg-white px-2.5 py-1.5 border border-slate-200 rounded-xl shrink-0">
                               <span className="text-xs font-bold text-slate-400">ระยะ:</span>
                               <input
-                                type="number"
-                                min={1}
-                                max={12}
+                                type="text"
+                                inputMode="numeric"
                                 value={rentRates.termMonths}
                                 onChange={(e) => {
-                                  const val = parseInt(e.target.value) || 4;
+                                  const norm = normalizeNumericInput(e.target.value, false);
+                                  const val = norm === '' ? 4 : (parseInt(norm, 10) || 4);
                                   setFormData(prev => ({
                                     ...prev,
                                     buildings: prev.buildings.map((bldg, idx) =>
@@ -1988,15 +2003,16 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                             <label className="text-xs font-bold text-blue-900 shrink-0">แบ่งชำระสูงสุด:</label>
                             <div className="flex items-center gap-1.5 bg-white px-2.5 py-1 border border-blue-200 rounded-xl">
                               <input
-                                type="number"
-                                min={1}
-                                max={12}
+                                type="text"
+                                inputMode="numeric"
                                 value={rentRates.maxInstallmentMonths ?? 2}
                                 onChange={(e) => {
+                                  const norm = normalizeNumericInput(e.target.value, false);
+                                  const val = norm === '' ? 2 : (parseInt(norm, 10) || 2);
                                   const updated = [...formData.buildings];
                                   updated[bIdx].rentRates = {
                                     ...rentRates,
-                                    maxInstallmentMonths: parseInt(e.target.value) || 2
+                                    maxInstallmentMonths: val
                                   };
                                   setFormData({ ...formData, buildings: updated });
                                 }}
@@ -2057,11 +2073,12 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                         </span>
                         <div className="flex items-center gap-2 max-w-[180px] w-full">
                           <input
-                            type="number"
-                            min={0}
+                            type="text"
+                            inputMode="decimal"
                             value={depositVal}
                             onChange={(e) => {
-                              const val = parseFloat(e.target.value) || 0;
+                              const norm = normalizeNumericInput(e.target.value, true);
+                              const val = norm === '' ? 0 : (parseFloat(norm) || 0);
                               const updated = [...formData.buildings];
                               updated[bIdx].securityDeposit = val;
                               setFormData({ ...formData, buildings: updated });
@@ -2155,10 +2172,14 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                   <div className="pt-2 border-t border-amber-200/60 flex items-center gap-3 flex-wrap animate-in fade-in duration-200">
                     <div className="relative flex-1 min-w-[180px] max-w-xs">
                       <input
-                        type="number"
-                        min={0}
+                        type="text"
+                        inputMode="decimal"
                         value={formData.deposits.lateFeeAmount || ''}
-                        onChange={(e) => setFormData({ ...formData, deposits: { ...formData.deposits, lateFeeAmount: parseFloat(e.target.value) || 0 } })}
+                        onChange={(e) => {
+                          const norm = normalizeNumericInput(e.target.value, true);
+                          const val = norm === '' ? 0 : (parseFloat(norm) || 0);
+                          setFormData({ ...formData, deposits: { ...formData.deposits, lateFeeAmount: val } });
+                        }}
                         placeholder="100"
                         className="w-full pl-3.5 pr-20 py-2 text-xs bg-white border border-amber-300 focus:border-amber-500 rounded-xl font-black text-amber-950 outline-none shadow-2xs"
                       />
@@ -2550,30 +2571,53 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
           <div className="bg-emerald-50/60 p-4 sm:p-5 rounded-3xl border border-emerald-100 space-y-4">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div className="flex items-center gap-3">
-                <div className="w-11 h-11 rounded-2xl bg-[#06C755] flex items-center justify-center p-1 shrink-0 shadow-xs overflow-hidden">
-                  <img
-                    src="https://upload.wikimedia.org/wikipedia/commons/4/41/LINE_logo.svg"
-                    alt="LINE"
-                    className="w-full h-full object-contain"
-                    referrerPolicy="no-referrer"
-                  />
+                <div className="w-11 h-11 rounded-2xl bg-white border border-slate-200 flex items-center justify-center shrink-0 shadow-xs overflow-hidden">
+                  {formData.lineOA.isConnected && formData.lineOA.botPictureUrl ? (
+                    <img
+                      src={formData.lineOA.botPictureUrl}
+                      alt={formData.lineOA.botDisplayName || 'LINE OA'}
+                      className="w-full h-full object-cover"
+                      referrerPolicy="no-referrer"
+                    />
+                  ) : formData.lineOA.isConnected ? (
+                    <div className="w-full h-full bg-emerald-600 text-white flex items-center justify-center font-black text-xs">
+                      OA
+                    </div>
+                  ) : (
+                    <Bot className="w-6 h-6 text-slate-400" />
+                  )}
                 </div>
                 <div>
-                  <h4 className="text-xs sm:text-sm font-black text-slate-800">*ดึงชื่อ LINE OA*</h4>
+                  <h4 className="text-xs sm:text-sm font-black text-slate-800">
+                    {formData.lineOA.isConnected
+                      ? (formData.lineOA.botDisplayName || 'LINE Official Account')
+                      : 'ยังไม่ได้เชื่อมต่อ LINE OA'}
+                  </h4>
                   <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
                     <span className="text-[11px] sm:text-xs text-slate-500 font-bold">LINE ID:</span>
-                    <span className="text-[11px] sm:text-xs font-black text-emerald-800 bg-emerald-100/90 px-2 py-0.5 rounded-md">
-                      {formData.lineOA.oaName || (formData.dormName ? `@${formData.dormName.replace(/\s+/g, '').toLowerCase()}` : '@horplus_official')}
+                    <span className={`text-[11px] sm:text-xs font-black px-2 py-0.5 rounded-md ${
+                      formData.lineOA.isConnected
+                        ? 'text-emerald-800 bg-emerald-100/90'
+                        : 'text-slate-500 bg-slate-100'
+                    }`}>
+                      {formData.lineOA.isConnected
+                        ? (formData.lineOA.lineOaId || formData.lineOA.oaName || 'เชื่อมต่อแล้ว')
+                        : 'ยังไม่ได้ตรวจสอบ'}
                     </span>
                   </div>
                 </div>
               </div>
 
               <div className="flex items-center gap-2 shrink-0 self-start sm:self-auto">
-                <span className={`px-3 py-1 rounded-full text-xs font-black flex items-center gap-1.5 whitespace-nowrap shrink-0 ${formData.lineOA.isConnected ? 'bg-emerald-100 text-emerald-700 border border-emerald-200' : 'bg-rose-100 text-rose-700 border border-rose-200'
-                  }`}>
-                  <span className={`w-2 h-2 rounded-full shrink-0 ${formData.lineOA.isConnected ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500'}`} />
-                  {formData.lineOA.isConnected ? 'เชื่อมต่อสำเร็จ' : 'ยังไม่ได้เชื่อมต่อ'}
+                <span className={`px-3 py-1 rounded-full text-xs font-black flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
+                  formData.lineOA.isConnected
+                    ? 'bg-emerald-100 text-emerald-700 border border-emerald-200'
+                    : 'bg-slate-100 text-slate-600 border border-slate-200'
+                }`}>
+                  <span className={`w-2 h-2 rounded-full shrink-0 ${
+                    formData.lineOA.isConnected ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'
+                  }`} />
+                  {formData.lineOA.isConnected ? 'เชื่อมต่อสำเร็จ' : 'ยังไม่ได้ตรวจสอบ'}
                 </span>
               </div>
             </div>
@@ -2584,7 +2628,21 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                 <input
                   type="text"
                   value={formData.lineOA.channelId}
-                  onChange={(e) => setFormData({ ...formData, lineOA: { ...formData.lineOA, channelId: e.target.value } })}
+                  onChange={(e) => {
+                    setFormData(prev => ({
+                      ...prev,
+                      lineOA: {
+                        ...prev.lineOA,
+                        channelId: e.target.value,
+                        isConnected: false,
+                        botDisplayName: '',
+                        botPictureUrl: '',
+                        lineOaId: '',
+                        oaName: ''
+                      }
+                    }));
+                    setLineStatusMsg(null);
+                  }}
                   placeholder="เช่น 1657889900"
                   className="w-full px-3.5 py-2 text-xs bg-white border border-slate-200 rounded-xl focus:border-emerald-500 outline-none font-bold"
                 />
@@ -2595,7 +2653,21 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                 <input
                   type="password"
                   value={formData.lineOA.channelSecret}
-                  onChange={(e) => setFormData({ ...formData, lineOA: { ...formData.lineOA, channelSecret: e.target.value } })}
+                  onChange={(e) => {
+                    setFormData(prev => ({
+                      ...prev,
+                      lineOA: {
+                        ...prev.lineOA,
+                        channelSecret: e.target.value,
+                        isConnected: false,
+                        botDisplayName: '',
+                        botPictureUrl: '',
+                        lineOaId: '',
+                        oaName: ''
+                      }
+                    }));
+                    setLineStatusMsg(null);
+                  }}
                   placeholder="e4d8f9c2a1b3c4d5e6f7..."
                   className="w-full px-3.5 py-2 text-xs bg-white border border-slate-200 rounded-xl focus:border-emerald-500 outline-none font-mono text-xs"
                 />
@@ -2733,7 +2805,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
             >
               <div className="flex items-center justify-between gap-2">
                 <span className="px-2.5 py-0.5 rounded-full text-[11px] font-black bg-indigo-100 text-indigo-800">
-                  {isFirstTrialEligible ? 'สิทธิ์ทดลองใช้ PRO ฟรี 1 เดือน' : 'HorPlus PRO'}
+                  {accountTrialAvailable ? 'สิทธิ์ทดลองใช้ PRO ฟรี 1 เดือน' : 'HorPlus PRO'}
                 </span>
                 <div
                   className={`w-5 h-5 rounded-full flex items-center justify-center transition-all ${selectedPlan === 'pro'
@@ -2748,7 +2820,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
               <div className="mt-3">
                 <h4 className="text-sm sm:text-base font-black text-slate-900">HorPlus PRO</h4>
                 <div className="mt-0.5 flex items-baseline gap-2 flex-wrap">
-                  {isFirstTrialEligible && selectedDurationMonths === 1 ? (
+                  {accountTrialAvailable && selectedDurationMonths === 1 ? (
                     <>
                       <span className="text-xl sm:text-2xl font-black text-emerald-600">฿0</span>
                       <span className="text-xs line-through text-slate-400 font-bold">฿189</span>
@@ -2799,7 +2871,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5">
                 {packages.map((pkg) => {
                   const isSelected = selectedPackageId === pkg.id;
-                  const is1moTrial = pkg.durationMonths === 1 && isFirstTrialEligible;
+                  const is1moTrial = pkg.durationMonths === 1 && accountTrialAvailable;
                   return (
                     <button
                       key={pkg.id}
@@ -2851,91 +2923,51 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
             </div>
           )}
 
-          {/* Referral & Coins Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {/* Referral Code (Used to register) */}
-            <div className="bg-indigo-50/50 p-4 sm:p-5 rounded-3xl border border-indigo-100 space-y-2.5">
-              <div className="flex items-center justify-between">
-                <label className="text-xs font-black text-slate-800 flex items-center gap-1.5">
-                  <Gift className="w-4 h-4 text-indigo-600" /> รหัสคำเชิญที่ใช้สมัคร (ผู้แนะนำ)
-                </label>
-                {isReferralBound && (
-                  <span className="text-[10px] font-black text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full flex items-center gap-1">
-                    <Lock className="w-3 h-3" /> ผูกสิทธิ์แล้ว
-                  </span>
-                )}
-              </div>
-              <p className="text-[11px] text-slate-500 font-medium">
-                กรอกรหัสแนะนำ 6 หลักของเพื่อน เพื่อรับ 10 HorPlus Coins (฿10) ทันที
-              </p>
-              <div className="flex items-center gap-2">
-                <input
-                  type="text"
-                  maxLength={6}
-                  disabled={isReferralBound}
-                  value={referralCodeInput}
-                  onChange={(e) => setReferralCodeInput(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                  placeholder="เช่น 123456"
-                  className="flex-1 px-3.5 py-2 text-xs font-black tracking-widest bg-white border border-slate-200 rounded-xl outline-none focus:border-indigo-600 disabled:bg-slate-100 disabled:text-slate-500 font-mono"
-                />
-                {!isReferralBound && (
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      if (referralCodeInput.length !== 6) return;
-                      try {
-                        const res = await onboardingClient.validateReferral(referralCodeInput);
-                        if (res?.data?.valid) {
-                          setIsReferralBound(true);
-                          setPromoMessage('✓ ยืนยันรหัสคำเชิญสำเร็จ! ได้รับสิทธิ์ 10 Coins');
-                        }
-                      } catch (err: any) {
-                        setValidationError(err?.message || 'รหัสคำเชิญไม่ถูกต้อง');
-                      }
-                    }}
-                    className="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-black transition-all cursor-pointer shadow-xs shrink-0"
-                  >
-                    ตรวจสอบ
-                  </button>
-                )}
-              </div>
-            </div>
-
-            {/* User's Own Referral Code to Share */}
-            <div className="bg-amber-50/50 p-4 sm:p-5 rounded-3xl border border-amber-100 space-y-2.5">
-              <div className="flex items-center justify-between">
-                <label className="text-xs font-black text-slate-800 flex items-center gap-1.5">
-                  <Share2 className="w-4 h-4 text-amber-600" /> รหัสคำเชิญของคุณ
-                </label>
-                <span className="text-[10px] font-black text-amber-800 bg-amber-100 px-2 py-0.5 rounded-full">
-                  เชิญแล้ว {referralUsageCount} / 10 คน
+          {/* Referral Code (Used to register) */}
+          <div className="bg-indigo-50/50 p-4 sm:p-5 rounded-3xl border border-indigo-100 space-y-2.5">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-black text-slate-800 flex items-center gap-1.5">
+                <Gift className="w-4 h-4 text-indigo-600" /> รหัสคำเชิญที่ใช้สมัคร (ผู้แนะนำ)
+              </label>
+              {isReferralBound && (
+                <span className="text-[10px] font-black text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full flex items-center gap-1">
+                  <Lock className="w-3 h-3" /> ผูกสิทธิ์แล้ว
                 </span>
-              </div>
-              <p className="text-[11px] text-slate-500 font-medium">
-                แชร์รหัสให้เจ้าของหอพักอื่น รับ 10 Coins (฿10) เมื่อเพื่อนเปิดใช้งานหอพักแรก
-              </p>
-              <div className="flex items-center gap-2">
-                <input
-                  type="text"
-                  readOnly
-                  value={userOwnReferralCode || '------'}
-                  className="flex-1 px-3.5 py-2 text-xs font-black tracking-widest bg-white border border-amber-200 rounded-xl outline-none font-mono text-amber-900 select-all"
-                />
+              )}
+            </div>
+            <p className="text-[11px] text-slate-500 font-medium">
+              กรอกรหัสแนะนำ 6 หลักของเพื่อน เพื่อรับ 10 HorPlus Coins (฿10) ทันที
+            </p>
+            <div className="flex items-center gap-2 max-w-md">
+              <input
+                type="text"
+                maxLength={6}
+                disabled={isReferralBound}
+                value={referralCodeInput}
+                onChange={(e) => setReferralCodeInput(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                placeholder="เช่น 123456"
+                className="flex-1 px-3.5 py-2 text-xs font-black tracking-widest bg-white border border-slate-200 rounded-xl outline-none focus:border-indigo-600 disabled:bg-slate-100 disabled:text-slate-500 font-mono"
+              />
+              {!isReferralBound && (
                 <button
                   type="button"
-                  onClick={() => {
-                    if (!userOwnReferralCode) return;
-                    const shareUrl = `${window.location.origin}/register?ref=${userOwnReferralCode}`;
-                    navigator.clipboard.writeText(shareUrl);
-                    setIsCopiedReferral(true);
-                    setTimeout(() => setIsCopiedReferral(false), 3000);
+                  onClick={async () => {
+                    if (referralCodeInput.length !== 6) return;
+                    try {
+                      const res = await onboardingClient.validateReferral(referralCodeInput);
+                      if (res?.data?.valid) {
+                        setIsReferralBound(true);
+                        setPromoMessage('✓ ยืนยันรหัสคำเชิญสำเร็จ! ได้รับสิทธิ์ 10 Coins');
+                      }
+                    } catch (err: any) {
+                      setValidationError(err?.message || 'รหัสคำเชิญไม่ถูกต้อง');
+                    }
                   }}
-                  className="px-3.5 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer shadow-xs shrink-0"
+                  className="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-black transition-all cursor-pointer shadow-xs shrink-0"
                 >
-                  {isCopiedReferral ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                  <span>{isCopiedReferral ? 'คัดลอกแล้ว!' : 'คัดลอกลิงก์'}</span>
+                  ตรวจสอบ
                 </button>
-              </div>
+              )}
             </div>
           </div>
 
@@ -2988,11 +3020,14 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                 <div className="flex items-center gap-3 pt-1">
                   <label className="text-xs font-bold text-slate-700">ใช้ Coins เป็นส่วนลด:</label>
                   <input
-                    type="number"
-                    min={0}
-                    max={coinWalletBalance}
+                    type="text"
+                    inputMode="numeric"
                     value={coinToApply}
-                    onChange={(e) => setCoinToApply(Math.min(coinWalletBalance, Math.max(0, parseInt(e.target.value) || 0)))}
+                    onChange={(e) => {
+                      const norm = normalizeNumericInput(e.target.value, false);
+                      const parsed = norm === '' ? 0 : (parseInt(norm, 10) || 0);
+                      setCoinToApply(Math.min(coinWalletBalance, Math.max(0, parsed)));
+                    }}
                     className="w-24 px-3 py-1.5 text-xs font-black bg-white border border-slate-200 rounded-xl outline-none focus:border-amber-500 font-mono"
                   />
                   <button

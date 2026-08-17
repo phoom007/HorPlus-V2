@@ -67,7 +67,7 @@ export const OwnerLoginPage: React.FC<OwnerLoginPageProps> = ({ onLoginSuccess }
 
   const handleNewOwnerOnboarding = () => {
     if (isQuotaFull) return;
-    navigate('/owner/register');
+    navigate('/owner/dormitories/new');
   };
 
   const handleGoogleAuthSuccess = async (credentialResponse: any) => {
