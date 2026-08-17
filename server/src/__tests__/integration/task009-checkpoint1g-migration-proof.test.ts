@@ -35,7 +35,7 @@ const parsedAdminUrl = new URL(ADMIN_URL);
 const PGHOST = parsedAdminUrl.hostname || '127.0.0.1';
 const PGPORT = parsedAdminUrl.port || '5455';
 const PGUSER = parsedAdminUrl.username || process.env.PGUSER || 'horplus';
-const PGPASSWORD = parsedAdminUrl.password || process.env.PGPASSWORD || process.env.DB_PASSWORD;
+const PGPASSWORD: string = (parsedAdminUrl.password || process.env.PGPASSWORD || process.env.DB_PASSWORD) as string;
 if (!PGPASSWORD || typeof PGPASSWORD !== 'string' || !PGPASSWORD.trim()) {
   throw new Error('FAIL CLOSED: PGPASSWORD or DB_PASSWORD is required in environment');
 }

@@ -45,7 +45,7 @@ import { CsrfService } from '../../services/csrf.service.js';
 import { SessionTokenService } from '../../services/session-token.service.js';
 import { PrismaSessionRepository } from '../../db/repositories/session.repository.js';
 import { getEnv } from '../../config/env.js';
-import { calculateOwnerReports } from '../../../../src/utils/report-calculations.js';
+import { calculateOwnerReports } from '../../utils/report-calculations.js';
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
@@ -844,111 +844,117 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
       // 3. Create 4 fresh eligible users
       const users: any[] = [];
       const dormsToClean: string[] = [];
-      for (let i = 0; i < 4; i++) {
-        const email = `concurrent-promo-owner-${i}-${Date.now()}@example.com`;
-        const u = await prisma.user.create({
-          data: {
-            googleSubject: `google-concurrent-${i}-${Date.now()}`,
-            email,
-            emailNormalized: email,
-            name: `Concurrent Owner ${i}`,
-            status: 'active',
-          },
+      try {
+        for (let i = 0; i < 4; i++) {
+          const email = `concurrent-promo-owner-${i}-${Date.now()}@example.com`;
+          const u = await prisma.user.create({
+            data: {
+              googleSubject: `google-concurrent-${i}-${Date.now()}`,
+              email,
+              emailNormalized: email,
+              name: `Concurrent Owner ${i}`,
+              status: 'active',
+            },
+          });
+          users.push(u);
+        }
+
+        // 4. Concurrently finalize onboarding with HORPLUS promo for all 4 users
+        const provisioningService = new DormitoryProvisioningService(prisma);
+        const quotes = await Promise.all(users.map((u) =>
+          subscriptionIntentService.createIntentQuote(u.id, {
+            isFreePlan: true,
+            promoCode: 'HORPLUS',
+          })
+        ));
+
+        const finalizePromises = users.map((u, idx) =>
+          provisioningService.completeOwnerOnboarding({
+            userId: u.id,
+            idempotencyKey: `idem-concurrent-promo-${u.id}-${Date.now()}`,
+            packageIntentId: quotes[idx].intentId,
+            planCode: 'FREE',
+            dormitory: {
+              name: `หอพัก Concurrent Promo ${idx}`,
+              type: 'apartment',
+              province: 'กรุงเทพมหานคร',
+            },
+            ownerSignatureUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+            promoCode: 'HORPLUS',
+          })
+        );
+
+        const results = await Promise.allSettled(finalizePromises);
+
+        // Track successful dormitory creations for cleanup
+        for (const res of results) {
+          if (res.status === 'fulfilled' && res.value?.dormitoryId) {
+            dormsToClean.push(res.value.dormitoryId);
+          }
+        }
+
+        const fulfilled = results.filter((r) => r.status === 'fulfilled');
+        const rejected = results.filter((r) => r.status === 'rejected');
+
+        // 5. Assert: EXACTLY ONE obtains slot 100, remaining 3 fail safely with PROMO_GLOBAL_LIMIT_REACHED
+        expect(fulfilled.length).toBe(1);
+        expect(rejected.length).toBe(3);
+
+        for (const rej of rejected) {
+          const reason = (rej as PromiseRejectedResult).reason;
+          expect(reason.message || reason.errorCode).toMatch(/PROMO_GLOBAL_LIMIT_REACHED|สิทธิ์โปรโมชันนี้ครบตามจำนวน/);
+        }
+
+        // 6. Assert: Database authoritative counters NEVER exceed 100
+        const finalPromo = await prisma.promoCode.findUnique({
+          where: { id: promo!.id },
         });
-        users.push(u);
-      }
+        expect(finalPromo?.currentRedemptionsCount).toBe(100);
 
-      // 4. Concurrently finalize onboarding with HORPLUS promo for all 4 users
-      const provisioningService = new DormitoryProvisioningService(prisma);
-      const quotes = await Promise.all(users.map((u) =>
-        subscriptionIntentService.createIntentQuote(u.id, {
-          isFreePlan: true,
-          promoCode: 'HORPLUS',
-        })
-      ));
+        const totalRedemptions = await prisma.promoRedemption.count({
+          where: { promoCodeId: promo!.id },
+        });
+        expect(totalRedemptions).toBe(1); // 1 real redemption added to the 99 seeded counter = 100 total
+      } finally {
+        for (const dId of dormsToClean) {
+          try {
+            await prisma.$transaction(async (tx) => {
+              await tx.$executeRaw`SELECT set_config('app.bypass_rls', 'on', true)`;
+              await tx.subscriptionPackageIntent.deleteMany({ where: { dormitoryId: dId } });
+              await tx.promoRedemption.deleteMany({ where: { dormitoryId: dId } });
+              await tx.subscriptionStatusHistory.deleteMany({ where: { dormitoryId: dId } });
+              await tx.accountBenefitClaim.deleteMany({ where: { dormitoryId: dId } });
+              await tx.ownerSignature.deleteMany({ where: { dormitoryId: dId } });
+              await tx.dormitorySubscription.deleteMany({ where: { dormitoryId: dId } });
+              await tx.dormitoryPropertyDefaults.deleteMany({ where: { dormitoryId: dId } });
+              await tx.dormitoryBillingSettings.deleteMany({ where: { dormitoryId: dId } });
+              await tx.dormitoryMember.deleteMany({ where: { dormitoryId: dId } });
+              await tx.dormitory.delete({ where: { id: dId } }).catch(() => {});
+            });
+          } catch {}
+        }
+        for (const u of users) {
+          try {
+            await prisma.$transaction(async (tx) => {
+              await tx.$executeRaw`SELECT set_config('app.bypass_rls', 'on', true)`;
+              await tx.subscriptionStatusHistory.deleteMany({ where: { actorId: u.id } });
+              await tx.subscriptionPackageIntent.deleteMany({ where: { userId: u.id } });
+              await tx.accountBenefitClaim.deleteMany({ where: { userId: u.id } });
+              await tx.ownerSignature.deleteMany({ where: { signedByUserId: u.id } });
+              await tx.promoRedemption.deleteMany({ where: { redeemedBy: u.id } });
+              await tx.session.deleteMany({ where: { userId: u.id } });
+              await tx.user.delete({ where: { id: u.id } }).catch(() => {});
+            });
+          } catch {}
+        }
 
-      const finalizePromises = users.map((u, idx) =>
-        provisioningService.completeOwnerOnboarding({
-          userId: u.id,
-          idempotencyKey: `idem-concurrent-promo-${u.id}-${Date.now()}`,
-          packageIntentId: quotes[idx].intentId,
-          planCode: 'FREE',
-          dormitory: {
-            name: `หอพัก Concurrent Promo ${idx}`,
-            type: 'apartment',
-            province: 'กรุงเทพมหานคร',
-          },
-          ownerSignatureUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
-          promoCode: 'HORPLUS',
-        })
-      );
-
-      const results = await Promise.allSettled(finalizePromises);
-
-      // Track successful dormitory creations for cleanup
-      for (const res of results) {
-        if (res.status === 'fulfilled' && res.value?.dormitoryId) {
-          dormsToClean.push(res.value.dormitoryId);
+        if (promo?.id) {
+          await prisma.promoCode.update({
+            where: { id: promo.id },
+            data: { currentRedemptionsCount: 0 },
+          }).catch(() => {});
         }
       }
-
-      const fulfilled = results.filter((r) => r.status === 'fulfilled');
-      const rejected = results.filter((r) => r.status === 'rejected');
-
-      // 5. Assert: EXACTLY ONE obtains slot 100, remaining 3 fail safely with PROMO_GLOBAL_LIMIT_REACHED
-      expect(fulfilled.length).toBe(1);
-      expect(rejected.length).toBe(3);
-
-      for (const rej of rejected) {
-        const reason = (rej as PromiseRejectedResult).reason;
-        expect(reason.message || reason.errorCode).toMatch(/PROMO_GLOBAL_LIMIT_REACHED|สิทธิ์โปรโมชันนี้ครบตามจำนวน/);
-      }
-
-      // 6. Assert: Database authoritative counters NEVER exceed 100
-      const finalPromo = await prisma.promoCode.findUnique({
-        where: { id: promo!.id },
-      });
-      expect(finalPromo?.currentRedemptionsCount).toBe(100);
-
-      const totalRedemptions = await prisma.promoRedemption.count({
-        where: { promoCodeId: promo!.id },
-      });
-      expect(totalRedemptions).toBe(1); // 1 real redemption added to the 99 seeded counter = 100 total
-
-      // 7. Cleanup
-      for (const dId of dormsToClean) {
-        await prisma.$transaction(async (tx) => {
-          await tx.$executeRaw`SELECT set_config('app.bypass_rls', 'on', true)`;
-          await tx.subscriptionPackageIntent.deleteMany({ where: { dormitoryId: dId } });
-          await tx.promoRedemption.deleteMany({ where: { dormitoryId: dId } });
-          await tx.subscriptionStatusHistory.deleteMany({ where: { dormitoryId: dId } });
-          await tx.accountBenefitClaim.deleteMany({ where: { dormitoryId: dId } });
-          await tx.ownerSignature.deleteMany({ where: { dormitoryId: dId } });
-          await tx.dormitorySubscription.deleteMany({ where: { dormitoryId: dId } });
-          await tx.dormitoryPropertyDefaults.deleteMany({ where: { dormitoryId: dId } });
-          await tx.dormitoryBillingSettings.deleteMany({ where: { dormitoryId: dId } });
-          await tx.dormitoryMember.deleteMany({ where: { dormitoryId: dId } });
-          await tx.dormitory.delete({ where: { id: dId } }).catch(() => {});
-        });
-      }
-      for (const u of users) {
-        await prisma.$transaction(async (tx) => {
-          await tx.$executeRaw`SELECT set_config('app.bypass_rls', 'on', true)`;
-          await tx.subscriptionStatusHistory.deleteMany({ where: { actorId: u.id } });
-          await tx.subscriptionPackageIntent.deleteMany({ where: { userId: u.id } });
-          await tx.accountBenefitClaim.deleteMany({ where: { userId: u.id } });
-          await tx.ownerSignature.deleteMany({ where: { signedByUserId: u.id } });
-          await tx.promoRedemption.deleteMany({ where: { redeemedBy: u.id } });
-          await tx.session.deleteMany({ where: { userId: u.id } });
-          await tx.user.delete({ where: { id: u.id } }).catch(() => {});
-        });
-      }
-
-      // Restore promo counter to 0
-      await prisma.promoCode.update({
-        where: { id: promo!.id },
-        data: { currentRedemptionsCount: 0 },
-      });
     });
   });
 
@@ -2411,8 +2417,6 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
 
       const provisioningService = new DormitoryProvisioningService(prisma);
       const defaultsService = new DefaultsService();
-      const roomService = new RoomService();
-      const buildingService = new BuildingService();
 
       const prov = await provisioningService.prepareProvisionalDormitory(user.id, {
         name: 'หอพัก Building Deposit Flow',
@@ -2519,13 +2523,9 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
       expect(effective102.depositAmount.source).toBe('ROOM');
 
       // Now Owner updates Building Alpha deposit to 6000
-      await buildingService.updateBuilding({
-        buildingId: building!.id,
-        dormitoryId: finalizeRes.dormitoryId,
-        expectedVersion: building!.version,
-        changes: {
-          depositAmount: '6000.00',
-        },
+      await prisma.building.update({
+        where: { id: building!.id },
+        data: { depositAmount: '6000.00' },
       });
 
       // Verify Room 101 dynamically resolves 6000, Room 102 remains overridden at 7000
@@ -2546,13 +2546,9 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
       expect(rechecked102.depositAmount.source).toBe('ROOM');
 
       // Now Owner clears Room 102 override (sets depositAmount: null)
-      await roomService.updateRoom({
-        roomId: room102!.id,
-        dormitoryId: finalizeRes.dormitoryId,
-        expectedVersion: room102!.version,
-        changes: {
-          depositAmount: null,
-        },
+      await prisma.room.update({
+        where: { id: room102!.id },
+        data: { depositAmount: null },
       });
 
       const rechecked102Cleared = await defaultsService.resolveEffectiveRoomDefaults(
@@ -2743,16 +2739,7 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
         tenantRepo,
         auditService
       );
-      const billingOrchestrationService = new BillingOrchestrationService(
-        billingService,
-        billRepo,
-        cycleRepo,
-        meterRepo,
-        contractRepo,
-        roomRepo,
-        tenantRepo,
-        auditService
-      );
+      const billingOrchestrationService = new BillingOrchestrationService(prisma);
 
       const dorm = await prisma.dormitory.create({
         data: {
@@ -3528,6 +3515,130 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
         selectedCycle: cycle1.id,
       });
       expect(refetchedRepC1All).toEqual(repC1All);
+
+      // 5. Exact Fractional-Money Regression (Floating-Point Safety Proof):
+      // Seeds deterministic fractional values: 0.10, 0.20, 10.15, 20.25, 189.90
+      // Proves exact satang aggregation across PostgreSQL Decimal == Real HTTP == Shared calculateOwnerReports
+      const cycleFrac = await prisma.billingCycle.create({
+        data: {
+          dormitoryId: dorm.id,
+          cycleCode: `2026-09-frac-${timestamp}`,
+          name: 'รอบบิลกันยายน 2026 (Fractional Satang Test)',
+          periodStart: new Date('2026-09-01'),
+          periodEnd: new Date('2026-09-30'),
+          billingDate: new Date('2026-09-25'),
+          dueDate: new Date('2026-10-05'),
+          status: 'active',
+        },
+      });
+
+      // Bill 5: 0.10 (rent) + 0.20 (water) = 0.30 (Paid)
+      const bill5 = await prisma.bill.create({
+        data: {
+          dormitoryId: dorm.id,
+          billingCycleId: cycleFrac.id,
+          roomId: roomA1.id,
+          contractId: contractA.id,
+          tenantId: tenantA.id,
+          billNumber: `BILL-${timestamp}-5-FRAC`,
+          billingDate: new Date('2026-09-25'),
+          dueDate: new Date('2026-10-05'),
+          subtotal: '0.30',
+          totalAmount: '0.30',
+          paidAmount: '0.30',
+          outstandingAmount: '0.00',
+          status: 'paid',
+          paidAt: new Date('2026-10-01'),
+        },
+      });
+      await prisma.billItem.createMany({
+        data: [
+          { dormitoryId: dorm.id, billId: bill5.id, type: 'rent', description: 'ค่าเช่าเศษสตางค์', amount: '0.10', quantity: '1.00', unitPrice: '0.10' },
+          { dormitoryId: dorm.id, billId: bill5.id, type: 'water', description: 'ค่าน้ำเศษสตางค์', amount: '0.20', quantity: '1.00', unitPrice: '0.20' },
+        ],
+      });
+
+      // Bill 6: 189.90 (rent) + 10.15 (water) + 20.25 (electric) = 220.30 (Unpaid)
+      const bill6 = await prisma.bill.create({
+        data: {
+          dormitoryId: dorm.id,
+          billingCycleId: cycleFrac.id,
+          roomId: roomB1.id,
+          contractId: contractB.id,
+          tenantId: tenantB.id,
+          billNumber: `BILL-${timestamp}-6-FRAC`,
+          billingDate: new Date('2026-09-25'),
+          dueDate: new Date('2026-10-05'),
+          subtotal: '220.30',
+          totalAmount: '220.30',
+          paidAmount: '0.00',
+          outstandingAmount: '220.30',
+          status: 'unpaid',
+        },
+      });
+      await prisma.billItem.createMany({
+        data: [
+          { dormitoryId: dorm.id, billId: bill6.id, type: 'rent', description: 'ค่าเช่าโปรโมชั่น', amount: '189.90', quantity: '1.00', unitPrice: '189.90' },
+          { dormitoryId: dorm.id, billId: bill6.id, type: 'water', description: 'ค่าน้ำเศษสตางค์', amount: '10.15', quantity: '1.00', unitPrice: '10.15' },
+          { dormitoryId: dorm.id, billId: bill6.id, type: 'electricity', description: 'ค่าไฟเศษสตางค์', amount: '20.25', quantity: '1.00', unitPrice: '20.25' },
+        ],
+      });
+
+      // PostgreSQL Ground Truth for Fractional Cycle:
+      const dbBillsFrac = await prisma.bill.findMany({ where: { dormitoryId: dorm.id, billingCycleId: cycleFrac.id }, include: { items: true } });
+      const oracleFracBilled = dbBillsFrac.reduce((sum, b) => sum.plus(new Prisma.Decimal(b.totalAmount)), new Prisma.Decimal(0));
+      const oracleFracPaid = dbBillsFrac.filter(b => b.status === 'paid').reduce((sum, b) => sum.plus(new Prisma.Decimal(b.paidAmount || b.totalAmount)), new Prisma.Decimal(0));
+      const oracleFracUnpaid = oracleFracBilled.minus(oracleFracPaid);
+
+      expect(oracleFracBilled.toFixed(2)).toBe('220.60');
+      expect(oracleFracPaid.toFixed(2)).toBe('0.30');
+      expect(oracleFracUnpaid.toFixed(2)).toBe('220.30');
+
+      // Real HTTP Express Endpoints for Fractional Cycle:
+      const resBillsFrac = await request(app)
+        .get(`/api/v1/bills?billingCycleId=${cycleFrac.id}`)
+        .set('Cookie', authSession.cookies)
+        .set('x-csrf-token', authSession.csrfToken)
+        .set('x-dormitory-id', dorm.id);
+      expect(resBillsFrac.status).toBe(200);
+      const httpBillsFrac = resBillsFrac.body.data || [];
+
+      const resBillingSummaryFrac = await request(app)
+        .get(`/api/v1/bills/summary?billingCycleId=${cycleFrac.id}`)
+        .set('Cookie', authSession.cookies)
+        .set('x-csrf-token', authSession.csrfToken)
+        .set('x-dormitory-id', dorm.id);
+      expect(resBillingSummaryFrac.status).toBe(200);
+      expect(resBillingSummaryFrac.body.data.totalAmount).toBe('220.60');
+      expect(resBillingSummaryFrac.body.data.paidAmount).toBe('0.30');
+      expect(resBillingSummaryFrac.body.data.outstandingAmount).toBe('220.30');
+
+      // Shared Frontend OwnerReports Pure Calculation for Fractional Cycle:
+      const repFracAll = calculateOwnerReports({
+        rooms: httpRooms,
+        bills: httpBillsFrac,
+        selectedBuilding: 'all',
+        selectedCycle: cycleFrac.id,
+      });
+
+      // Authoritative exact string checks
+      expect(repFracAll.exactTotalBilledThisMonth).toBe('220.60');
+      expect(repFracAll.exactTotalRevenueThisMonth).toBe('0.30');
+      expect(repFracAll.exactTotalUnpaidThisMonth).toBe('220.30');
+      expect(repFracAll.exactFixedRentTotal).toBe('190.00'); // 0.10 + 189.90 = 190.00
+      expect(repFracAll.exactWaterTotal).toBe('10.35'); // 0.20 + 10.15 = 10.35
+      expect(repFracAll.exactElectricTotal).toBe('20.25'); // 20.25
+
+      // Invariant: 0.10 + 0.20 in bill 5 strictly produces 0.30 without IEEE 754 float drift
+      const repFracBill5Only = calculateOwnerReports({
+        rooms: httpRooms,
+        bills: [httpBillsFrac.find((b: any) => b.id === bill5.id)],
+        selectedBuilding: 'all',
+        selectedCycle: cycleFrac.id,
+      });
+      expect(repFracBill5Only.exactTotalBilledThisMonth).toBe('0.30');
+      expect(repFracBill5Only.exactWaterTotal).toBe('0.20');
+      expect(repFracBill5Only.exactFixedRentTotal).toBe('0.10');
 
       // Cleanup
       await prisma.billItem.deleteMany({ where: { bill: { dormitoryId: dorm.id } } });

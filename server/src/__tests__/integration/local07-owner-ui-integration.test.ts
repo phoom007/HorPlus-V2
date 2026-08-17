@@ -252,7 +252,6 @@ describe('LOCAL-07: Product Owner UI & Backend Integration', () => {
           allowedTypes: ['dog', 'cat', 'small_pet'],
         },
         defaultTerms: 'ห้ามส่งเสียงดังหลัง 22:00 น.',
-        planCode: 'FREE',
       });
 
       expect(result.dormitory.id).toBe(dormId);
@@ -374,7 +373,6 @@ describe('LOCAL-07: Product Owner UI & Backend Integration', () => {
           allowed: 'conditional',
           allowedTypes: ['dog', 'cat', 'small_pet'],
         },
-        planCode: 'FREE',
       });
 
       expect(result.dormitory.id).toBe(dormId);

@@ -66,9 +66,11 @@ async function runBrowserUAT() {
     step1_baseline_and_removed_fields: false,
     step2_untouched_max_installments_2: false,
     step3_field_specific_monetary_defaults: false,
+    step4_late_fee_default_none: false,
     step4_single_helper_button: false,
     step4_promptpay_copies_bank_name: false,
     step4_independent_promptpay_name: false,
+    step5_pet_policy_default_forbidden: false,
     step5_pets_rules_signature: false,
     step6_line_skip_path: false,
     step6_line_configured_status: 'NOT TESTED (No real LINE credentials provided)',
@@ -169,7 +171,7 @@ async function runBrowserUAT() {
     }
 
     // Advance to Step 2: อาคารและประเภทห้อง
-    console.log('\n--- TEST 2: Step 2 — Building Setup & maxInstallmentMonths Visible Default ---');
+    console.log('\n--- TEST 2: Step 2 — Building Setup ---');
     const nextBtn1 = page.locator('button:has-text("ถัดไป")').first();
     await nextBtn1.click();
     await page.waitForTimeout(600);
@@ -177,29 +179,6 @@ async function runBrowserUAT() {
     const err1 = await page.locator('.text-rose-700, .bg-rose-50').textContent({ timeout: 200 }).catch(() => null);
     if (err1) console.log(`  [Validation Error on Step 1] ${err1.trim()}`);
     await page.screenshot({ path: path.join(SCREENSHOTS_DIR, '02-step2-buildings.png') });
-
-    // Verify "แบ่งชำระสูงสุด (งวด)" input visibly shows 2 by default
-    const step2Values = await page.evaluate(() => {
-      const getByLabel = (txt) => {
-        const labels = Array.from(document.querySelectorAll('label'));
-        const targetLabel = labels.find(l => l.textContent.includes(txt));
-        if (!targetLabel) return null;
-        const container = targetLabel.closest('div');
-        const input = container ? container.querySelector('input[type="number"]') : null;
-        return input ? input.value : null;
-      };
-      return {
-        termMonths: getByLabel('ระยะเวลาสัญญา') || getByLabel('สัญญาขั้นต่ำ') || '4',
-        maxInstallments: getByLabel('แบ่งชำระสูงสุด') || '2',
-      };
-    });
-
-    console.log(`  Step 2 Term Duration Default: ${step2Values.termMonths} (Expected: 4)`);
-    console.log(`  Step 2 Max Installments Default: ${step2Values.maxInstallments} (Expected: 2)`);
-
-    if (step2Values.maxInstallments === '2' && step2Values.termMonths === '4') {
-      uatResults.step2_untouched_max_installments_2 = true;
-    }
 
     // Fill building name, floors, rooms per floor, prefix
     const bldPrefixInput = page.locator('label:has-text("รหัสตึก")').locator('xpath=..').locator('input').first();
@@ -221,8 +200,8 @@ async function runBrowserUAT() {
       console.log('  Filled Rooms Per Floor: 2');
     }
 
-    // Advance to Step 3: ค่าน้ำ ค่าไฟ ค่าส่วนกลาง
-    console.log('\n--- TEST 2.5: Step 3 — Field-Specific Utilities Defaults Verification ---');
+    // Advance to Step 3: ค่าเช่า & ค่าน้ำไฟ
+    console.log('\n--- TEST 2.5: Step 3 — Term Duration, Max Installments & Strict Utilities Defaults ---');
     const nextBtn2 = page.locator('button:has-text("ถัดไป")').first();
     await nextBtn2.click();
     await page.waitForTimeout(600);
@@ -231,7 +210,32 @@ async function runBrowserUAT() {
     if (err2) console.log(`  [Validation Error on Step 2] ${err2.trim()}`);
     await page.screenshot({ path: path.join(SCREENSHOTS_DIR, '03-step3-utilities.png') });
 
-    // Assert each actual control separately using stable labels and selectors
+    // Verify Term Duration (4) and Max Installments (2) in Step 3 WITHOUT FALLBACKS
+    const step3TermValues = await page.evaluate(() => {
+      const labels = Array.from(document.querySelectorAll('label, span'));
+      const maxInstLabel = labels.find((l) => l.textContent.includes('แบ่งชำระสูงสุด'));
+      const maxInstInput = maxInstLabel ? maxInstLabel.closest('div')?.querySelector('input[type="number"]') : null;
+
+      const termLabel = labels.find((l) => l.textContent.includes('ระยะ:'));
+      const termInput = termLabel ? termLabel.closest('div')?.querySelector('input[type="number"]') : null;
+
+      return {
+        termMonths: termInput ? termInput.value : null,
+        maxInstallments: maxInstInput ? maxInstInput.value : null,
+      };
+    });
+
+    console.log(`  Step 3 Term Duration Default: ${step3TermValues.termMonths} (Expected: 4)`);
+    console.log(`  Step 3 Max Installments Default: ${step3TermValues.maxInstallments} (Expected: 2)`);
+
+    const isTermMonthsStrict = step3TermValues.termMonths === '4';
+    const isMaxInstallmentsStrict = step3TermValues.maxInstallments === '2';
+
+    if (isTermMonthsStrict && isMaxInstallmentsStrict) {
+      uatResults.step2_untouched_max_installments_2 = true;
+    }
+
+    // Assert each actual utility control separately: strictly (rate === 0 AND mode === expectedMode)
     const step3Fields = await page.evaluate(() => {
       const getControlByLabel = (labelText) => {
         const labels = Array.from(document.querySelectorAll('label'));
@@ -264,15 +268,15 @@ async function runBrowserUAT() {
 
     const isWaterValid = step3Fields.water && step3Fields.water.rate === '0' && step3Fields.water.mode === 'person';
     const isElectricValid = step3Fields.electric && step3Fields.electric.rate === '0' && step3Fields.electric.mode === 'unit';
-    const isCommonValid = step3Fields.common && (step3Fields.common.rate === '0' || step3Fields.common.mode === 'free' || step3Fields.common.mode === 'room');
-    const isInternetValid = step3Fields.internet && (step3Fields.internet.rate === '0' || step3Fields.internet.mode === 'free' || step3Fields.internet.mode === 'person');
-    const isParkingValid = step3Fields.parking && (step3Fields.parking.rate === '0' || step3Fields.parking.mode === 'free' || step3Fields.parking.mode === 'room');
+    const isCommonValid = step3Fields.common && step3Fields.common.rate === '0' && step3Fields.common.mode === 'room';
+    const isInternetValid = step3Fields.internet && step3Fields.internet.rate === '0' && step3Fields.internet.mode === 'person';
+    const isParkingValid = step3Fields.parking && step3Fields.parking.rate === '0' && step3Fields.parking.mode === 'room';
 
     console.log(`  Water (0, person): ${isWaterValid ? '✅ PASS' : '❌ FAIL'}`);
     console.log(`  Electric (0, unit): ${isElectricValid ? '✅ PASS' : '❌ FAIL'}`);
-    console.log(`  Common Fee (0, room/free): ${isCommonValid ? '✅ PASS' : '❌ FAIL'}`);
-    console.log(`  Internet Fee (0, person/free): ${isInternetValid ? '✅ PASS' : '❌ FAIL'}`);
-    console.log(`  Parking Fee (0, room/free): ${isParkingValid ? '✅ PASS' : '❌ FAIL'}`);
+    console.log(`  Common Fee (0, room): ${isCommonValid ? '✅ PASS' : '❌ FAIL'}`);
+    console.log(`  Internet Fee (0, person): ${isInternetValid ? '✅ PASS' : '❌ FAIL'}`);
+    console.log(`  Parking Fee (0, room): ${isParkingValid ? '✅ PASS' : '❌ FAIL'}`);
 
     if (isWaterValid && isElectricValid && isCommonValid && isInternetValid && isParkingValid) {
       uatResults.step3_field_specific_monetary_defaults = true;
@@ -287,7 +291,7 @@ async function runBrowserUAT() {
     }
 
     // Advance to Step 4: ช่องทางรับชำระเงิน และเงินประกัน
-    console.log('\n--- TEST 3: Step 4 — Bank Account, Building Deposit (5000) & Single PromptPay Helper ---');
+    console.log('\n--- TEST 3: Step 4 — Bank Account, Building Deposit (5000), Late Fee Default & Single PromptPay Helper ---');
     const nextBtn3 = page.locator('button:has-text("ถัดไป")').first();
     await nextBtn3.click();
     await page.waitForTimeout(600);
@@ -295,6 +299,24 @@ async function runBrowserUAT() {
     const err3 = await page.locator('.text-rose-700, .bg-rose-50').textContent({ timeout: 200 }).catch(() => null);
     if (err3) console.log(`  [Validation Error on Step 3] ${err3.trim()}`);
     await page.screenshot({ path: path.join(SCREENSHOTS_DIR, '04-step4-payments-initial.png') });
+
+    // Assert Step 4 Late Fee default: type === 'none' ("ไม่มีค่าปรับ" active), amount === 0 (or no input)
+    const step4LateFee = await page.evaluate(() => {
+      const buttons = Array.from(document.querySelectorAll('button'));
+      const noneBtn = buttons.find((b) => b.textContent.includes('ไม่มีค่าปรับ'));
+      const isNoneActive = noneBtn ? (noneBtn.className.includes('border-amber-500') || noneBtn.className.includes('ring-amber') || !!noneBtn.querySelector('svg')) : false;
+      const amountInput = document.querySelector('input[placeholder="100"]');
+      return {
+        isNoneActive,
+        amountInputPresent: !!amountInput,
+      };
+    });
+
+    const isLateFeeValid = step4LateFee.isNoneActive && !step4LateFee.amountInputPresent;
+    console.log(`  Step 4 Late Fee Default (type=none, amount=0): ${isLateFeeValid ? '✅ PASS' : '❌ FAIL'}`);
+    if (isLateFeeValid) {
+      uatResults.step4_late_fee_default_none = true;
+    }
 
     // Fill Building Security Deposit = 5000 in Step 4
     const depositInput = page.locator('label:has-text("ค่าประกัน")').locator('xpath=../..').locator('input[type="number"]').first();
@@ -381,7 +403,7 @@ async function runBrowserUAT() {
     await page.screenshot({ path: path.join(SCREENSHOTS_DIR, '04-step4-payments-filled.png') });
 
     // Advance to Step 5: กฎระเบียบ สัตว์เลี้ยง และลายเซ็น
-    console.log('\n--- TEST 4: Step 5 — Pet Policy, Rules & Canvas Signature ---');
+    console.log('\n--- TEST 4: Step 5 — Pet Policy Default, Rules & Canvas Signature ---');
     const nextBtn4 = page.locator('button:has-text("ถัดไป")').first();
     await nextBtn4.click();
     await page.waitForTimeout(600);
@@ -389,6 +411,20 @@ async function runBrowserUAT() {
     const err4 = await page.locator('.text-rose-700, .bg-rose-50').textContent({ timeout: 200 }).catch(() => null);
     if (err4) console.log(`  [Validation Error on Step 4] ${err4.trim()}`);
     await page.screenshot({ path: path.join(SCREENSHOTS_DIR, '05-step5-rules-initial.png') });
+
+    // Assert Step 5 Pet Policy default: not allowed / forbidden (value === 'none')
+    const initialPetPolicy = await page.evaluate(() => {
+      const labels = Array.from(document.querySelectorAll('label, h4'));
+      const petLabel = labels.find((l) => l.textContent.includes('เงื่อนไขการเลี้ยงสัตว์'));
+      const select = petLabel?.closest('div')?.querySelector('select') || document.querySelector('select');
+      return select ? select.value : null;
+    });
+
+    const isPetPolicyDefaultValid = initialPetPolicy === 'none';
+    console.log(`  Step 5 Pet Policy Default (none / forbidden): ${isPetPolicyDefaultValid ? '✅ PASS' : '❌ FAIL'}`);
+    if (isPetPolicyDefaultValid) {
+      uatResults.step5_pet_policy_default_forbidden = true;
+    }
 
     // Select conditional pet policy via dropdown
     const petSelect = page.locator('select').filter({ hasText: 'ไม่อนุญาต' }).first();
@@ -864,9 +900,11 @@ async function runBrowserUAT() {
     'step1_baseline_and_removed_fields',
     'step2_untouched_max_installments_2',
     'step3_field_specific_monetary_defaults',
+    'step4_late_fee_default_none',
     'step4_single_helper_button',
     'step4_promptpay_copies_bank_name',
     'step4_independent_promptpay_name',
+    'step5_pet_policy_default_forbidden',
     'step5_pets_rules_signature',
     'step6_line_skip_path',
     'step7_pricing_catalog_and_trial_defaults',

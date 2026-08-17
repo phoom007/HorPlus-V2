@@ -48,6 +48,23 @@ interface OwnerReportsProps {
   onNavigate?: (tab: string, param?: string) => void;
 }
 
+const formatBaht = (val: number | string) => {
+  const num = typeof val === 'string' ? parseFloat(val) || 0 : val || 0;
+  return `฿ ${num.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+};
+
+const calcOtherFees = (b: any) => {
+  let feeSum = 0;
+  if (typeof b.otherFees === 'number') {
+    feeSum += b.otherFees;
+  } else if (Array.isArray(b.otherFees)) {
+    feeSum += b.otherFees.reduce((s: number, item: any) => s + (Number(item?.amount) || 0), 0);
+  }
+  const othItems = b.items?.filter((i: any) => ['other', 'repair', 'addon', 'cleaning'].includes(i.category || i.type))
+    .reduce((s: number, i: any) => s + (Number(i?.amount) || 0), 0) || 0;
+  return feeSum + othItems;
+};
+
 const CountUp: React.FC<{ value: number; prefix?: string }> = ({ 
   value, 
   prefix = '฿ '

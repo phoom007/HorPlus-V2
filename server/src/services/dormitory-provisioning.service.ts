@@ -102,7 +102,7 @@ export interface CompleteOwnerOnboardingParams {
     status?: string;
   }[];
 
-  planCode: string;
+  planCode?: string;
   packageId?: string;
   packageIntentId?: string;
   promoCode?: string;
