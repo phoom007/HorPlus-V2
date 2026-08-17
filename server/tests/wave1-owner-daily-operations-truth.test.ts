@@ -68,6 +68,23 @@ describe('Wave 1 — Owner Daily Operations Mandatory Acceptance Regressions Sui
     await subscriptionEntitlementService.provisionInitialTrial(dormAId);
     await subscriptionEntitlementService.provisionInitialTrial(dormBId);
 
+    await prisma.dormitoryBillingSettings.create({
+      data: {
+        dormitoryId: dormAId,
+        dueDay: 5,
+        waterRate: '0.00',
+        electricityRate: '0.00',
+      },
+    });
+    await prisma.dormitoryBillingSettings.create({
+      data: {
+        dormitoryId: dormBId,
+        dueDay: 5,
+        waterRate: '0.00',
+        electricityRate: '0.00',
+      },
+    });
+
     // Create Building in Dorm A
     const bld = await prisma.building.create({
       data: { dormitoryId: dormAId, name: 'Building A', code: 'BLD-A' },

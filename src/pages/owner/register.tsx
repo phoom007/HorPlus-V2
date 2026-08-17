@@ -756,9 +756,9 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
         }
       }
 
-      // Check due date day & late fee
-      if (!formData.deposits.dueDateDay || formData.deposits.dueDateDay < 1 || formData.deposits.dueDateDay > 31) {
-        return { valid: false, error: 'กรุณาเลือก "วันครบกำหนดชำระ"' };
+      // Check due date day & late fee (strict 1-28 range)
+      if (!formData.deposits.dueDateDay || formData.deposits.dueDateDay < 1 || formData.deposits.dueDateDay > 28) {
+        return { valid: false, error: 'กรุณาเลือก "วันครบกำหนดชำระ" (วันที่ 1 - 28)' };
       }
       if (formData.deposits.lateFeeType !== 'none') {
         if (isNaN(formData.deposits.lateFeeAmount) || formData.deposits.lateFeeAmount < 0) {
@@ -2097,7 +2097,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                   className="w-full px-3.5 py-2 text-xs bg-white border border-slate-200 rounded-xl focus:border-blue-500 outline-none font-bold"
                 >
                   <option value="">-- กรุณาเลือกวันครบกำหนดชำระ --</option>
-                  {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 25, 28].map(d => (
+                  {Array.from({ length: 28 }, (_, i) => i + 1).map(d => (
                     <option key={d} value={d}>ทุกวันที่ {d} ของเดือน</option>
                   ))}
                 </select>

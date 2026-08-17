@@ -160,6 +160,13 @@ describe('Wave 1F - Real-Session 14-Domain Route Audit Matrix', () => {
     await subscriptionEntitlementService.provisionInitialTrial(dormId);
     await subscriptionEntitlementService.provisionInitialTrial(otherDormId);
 
+    await prisma.dormitoryBillingSettings.createMany({
+      data: [
+        { dormitoryId: dormId, dueDay: 5, waterRate: '0.00', electricityRate: '0.00' },
+        { dormitoryId: otherDormId, dueDay: 5, waterRate: '0.00', electricityRate: '0.00' },
+      ],
+    });
+
     // Create Sessions in PostgreSQL
     const ownerSid = crypto.randomUUID();
     const limitedSid = crypto.randomUUID();

@@ -34,6 +34,7 @@ import { PrismaTenantRepository } from '../../db/repositories/tenant.repository.
 import { AuditService } from '../../services/audit.service.js';
 import { generatePromptPayPayload, formatExactPromptPayAmount } from '../../services/promptpay-payload.service.js';
 import { DormitoryProvisioningService } from '../../services/dormitory-provisioning.service.js';
+import { OnboardingBillingInputSchema } from '../../types/onboarding-validation.js';
 import { DefaultsService } from '../../services/defaults.service.js';
 import { OnboardingService } from '../../services/onboarding.service.js';
 import { BillingService } from '../../services/billing.service.js';
@@ -4722,6 +4723,321 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
       await prisma.billingCycle.deleteMany({ where: { dormitoryId: dorm.id } });
       await prisma.dormitoryBillingSettings.deleteMany({ where: { dormitoryId: dorm.id } });
       await prisma.dormitory.delete({ where: { id: dorm.id } });
+    });
+
+    it('proves explicit-date missing-settings HTTP bypass is strictly rejected with 400 DORMITORY_BILLING_SETTINGS_REQUIRED', async () => {
+      // 1. Create a dormitory with NO DormitoryBillingSettings
+      const timestamp = Date.now();
+      const dormId = crypto.randomUUID();
+      const userId = crypto.randomUUID();
+      const roleId = crypto.randomUUID();
+
+      await prisma.dormitory.create({
+        data: {
+          id: dormId,
+          name: `No Settings Dorm ${timestamp}`,
+          code: `NSD-${timestamp}`,
+          status: 'active',
+        },
+      });
+
+      await prisma.user.create({
+        data: {
+          id: userId,
+          googleSubject: `sub_nsd_${timestamp}`,
+          email: `nsd_${timestamp}@example.com`,
+          emailNormalized: `nsd_${timestamp}@example.com`,
+          name: 'No Settings Owner',
+        },
+      });
+
+      await prisma.role.create({
+        data: {
+          id: roleId,
+          dormitoryId: dormId,
+          code: 'OWNER',
+          name: 'Owner',
+          permissions: { '*': ['*'] },
+          isSystem: true,
+        },
+      });
+
+      await prisma.dormitoryMember.create({
+        data: {
+          dormitoryId: dormId,
+          userId: userId,
+          roleId: roleId,
+          status: 'active',
+          membershipOrigin: 'GOOGLE_BOOTSTRAP',
+        },
+      });
+
+      const freePlan = await prisma.subscriptionPlan.findFirst({ where: { code: 'FREE' } });
+      await prisma.dormitorySubscription.create({
+        data: {
+          dormitoryId: dormId,
+          planId: freePlan!.id,
+          status: 'ACTIVE',
+          expiresAt: new Date(Date.now() + 365 * 86400000),
+        },
+      });
+
+      const auth = await createTestAuthSession(userId);
+
+      // 2. Perform authenticated + CSRF POST /api/v1/billing-cycles with full explicit dates & rateSnapshot
+      const res = await request(app)
+        .post('/api/v1/billing-cycles')
+        .set('Cookie', auth.cookies)
+        .set('x-dormitory-id', dormId)
+        .set('x-csrf-token', auth.csrfToken)
+        .send({
+          cycleCode: '2026-09',
+          name: 'September 2026',
+          periodStart: '2026-09-01',
+          periodEnd: '2026-09-30',
+          billingDate: '2026-09-25',
+          dueDate: '2026-10-10',
+          rateSnapshot: {
+            waterRate: '20.00',
+            electricityRate: '8.00',
+          },
+        });
+
+      // 3. Must be rejected with 400 DORMITORY_BILLING_SETTINGS_REQUIRED
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe('DORMITORY_BILLING_SETTINGS_REQUIRED');
+
+      // 4. Assert PostgreSQL contains zero BillingCycle and zero BillingRateSnapshot records
+      const cyclesCount = await prisma.billingCycle.count({ where: { dormitoryId: dormId } });
+      const snapshotsCount = await prisma.billingRateSnapshot.count({ where: { dormitoryId: dormId } });
+      expect(cyclesCount).toBe(0);
+      expect(snapshotsCount).toBe(0);
+
+      // Cleanup
+      await prisma.dormitoryMember.deleteMany({ where: { dormitoryId: dormId } });
+      await prisma.dormitorySubscription.deleteMany({ where: { dormitoryId: dormId } });
+      await prisma.role.deleteMany({ where: { dormitoryId: dormId } });
+      await prisma.dormitory.delete({ where: { id: dormId } });
+      await prisma.user.delete({ where: { id: userId } });
+    });
+
+    it('proves client rateSnapshot tamper attempt is ignored and snapshot derives strictly from persisted DormitoryBillingSettings', async () => {
+      // 1. Create dormitory and persist canonical settings (0.00 / none / per_person / per_unit / per_room)
+      const timestamp = Date.now();
+      const dormId = crypto.randomUUID();
+      const userId = crypto.randomUUID();
+      const roleId = crypto.randomUUID();
+
+      await prisma.dormitory.create({
+        data: {
+          id: dormId,
+          name: `Tamper Proof Dorm ${timestamp}`,
+          code: `TPD-${timestamp}`,
+          status: 'active',
+        },
+      });
+
+      await prisma.user.create({
+        data: {
+          id: userId,
+          googleSubject: `sub_tpd_${timestamp}`,
+          email: `tpd_${timestamp}@example.com`,
+          emailNormalized: `tpd_${timestamp}@example.com`,
+          name: 'Tamper Owner',
+        },
+      });
+
+      await prisma.role.create({
+        data: {
+          id: roleId,
+          dormitoryId: dormId,
+          code: 'OWNER',
+          name: 'Owner',
+          permissions: { '*': ['*'] },
+          isSystem: true,
+        },
+      });
+
+      await prisma.dormitoryMember.create({
+        data: {
+          dormitoryId: dormId,
+          userId: userId,
+          roleId: roleId,
+          status: 'active',
+          membershipOrigin: 'GOOGLE_BOOTSTRAP',
+        },
+      });
+
+      const freePlan = await prisma.subscriptionPlan.findFirst({ where: { code: 'FREE' } });
+      await prisma.dormitorySubscription.create({
+        data: {
+          dormitoryId: dormId,
+          planId: freePlan!.id,
+          status: 'ACTIVE',
+          expiresAt: new Date(Date.now() + 365 * 86400000),
+        },
+      });
+
+      await prisma.dormitoryBillingSettings.create({
+        data: {
+          dormitoryId: dormId,
+          dueDay: 17,
+          waterBillingType: 'person',
+          waterRate: '0.00',
+          electricityBillingType: 'unit',
+          electricityRate: '0.00',
+          commonFee: '0.00',
+          commonFeeMode: 'room',
+          internetFee: '0.00',
+          internetFeeMode: 'person',
+          parkingRate: '0.00',
+          parkingFeeMode: 'room',
+          lateFeeType: 'none',
+          lateFeeValue: '0.00',
+        },
+      });
+
+      const auth = await createTestAuthSession(userId);
+
+      // 2. POST /api/v1/billing-cycles with malicious client rateSnapshot overrides (999 values)
+      const res = await request(app)
+        .post('/api/v1/billing-cycles')
+        .set('Cookie', auth.cookies)
+        .set('x-dormitory-id', dormId)
+        .set('x-csrf-token', auth.csrfToken)
+        .send({
+          cycleCode: '2026-10',
+          name: 'October 2026',
+          periodStart: '2026-10-01',
+          periodEnd: '2026-10-31',
+          billingDate: '2026-10-25',
+          dueDate: '2026-11-17',
+          rateSnapshot: {
+            waterRate: '999.00',
+            electricityRate: '999.00',
+            commonFee: '999.00',
+            commonFeeMode: 'fixed',
+            lateFeeType: 'fixed',
+            lateFeeValue: '999.00',
+          },
+        });
+
+      expect(res.status).toBe(201);
+
+      // 3. Assert rate snapshot in DB strictly equals persisted DormitoryBillingSettings, NOT client tampered 999 values
+      const snapInDb = await prisma.billingRateSnapshot.findFirst({
+        where: { dormitoryId: dormId, billingCycleId: res.body.data.cycle.id },
+      });
+
+      expect(snapInDb).toBeDefined();
+      expect(snapInDb?.waterBillingType).toBe('person');
+      expect(new Prisma.Decimal(snapInDb?.waterRate || 0).toFixed(2)).toBe('0.00');
+      expect(snapInDb?.electricityBillingType).toBe('unit');
+      expect(new Prisma.Decimal(snapInDb?.electricityRate || 0).toFixed(2)).toBe('0.00');
+      expect(snapInDb?.commonFeeMode).toBe('room');
+      expect(new Prisma.Decimal(snapInDb?.commonFee || 0).toFixed(2)).toBe('0.00');
+      expect(snapInDb?.internetFeeMode).toBe('person');
+      expect(new Prisma.Decimal(snapInDb?.internetFee || 0).toFixed(2)).toBe('0.00');
+      expect(snapInDb?.parkingFeeMode).toBe('room');
+      expect(new Prisma.Decimal(snapInDb?.parkingFee || 0).toFixed(2)).toBe('0.00');
+      expect(snapInDb?.lateFeeType).toBe('none');
+      expect(new Prisma.Decimal(snapInDb?.lateFeeValue || 0).toFixed(2)).toBe('0.00');
+
+      // Cleanup
+      await prisma.billingRateSnapshot.deleteMany({ where: { dormitoryId: dormId } });
+      await prisma.billingCycle.deleteMany({ where: { dormitoryId: dormId } });
+      await prisma.dormitoryBillingSettings.deleteMany({ where: { dormitoryId: dormId } });
+      await prisma.dormitoryMember.deleteMany({ where: { dormitoryId: dormId } });
+      await prisma.dormitorySubscription.deleteMany({ where: { dormitoryId: dormId } });
+      await prisma.role.deleteMany({ where: { dormitoryId: dormId } });
+      await prisma.dormitory.delete({ where: { id: dormId } });
+      await prisma.user.delete({ where: { id: userId } });
+    });
+
+    it('proves existing cycle missing rate snapshot fails closed with BILLING_RATE_SNAPSHOT_MISSING without inventing historical snapshot', async () => {
+      const timestamp = Date.now();
+      const dormId = crypto.randomUUID();
+      const billingCycleService = new BillingCycleService(new PrismaBillingCycleRepository(prisma), new AuditService());
+
+      await prisma.dormitory.create({
+        data: {
+          id: dormId,
+          name: `Missing Snapshot Dorm ${timestamp}`,
+          code: `MSD-${timestamp}`,
+          status: 'active',
+        },
+      });
+
+      await prisma.dormitoryBillingSettings.create({
+        data: {
+          dormitoryId: dormId,
+          dueDay: 15,
+          waterRate: '50.00',
+          electricityRate: '10.00',
+        },
+      });
+
+      // Insert existing cycle directly into PostgreSQL without rateSnapshot
+      const orphanCycle = await prisma.billingCycle.create({
+        data: {
+          dormitoryId: dormId,
+          cycleCode: '2026-01',
+          name: 'January 2026 Historical',
+          periodStart: new Date('2026-01-01'),
+          periodEnd: new Date('2026-01-31'),
+          billingDate: new Date('2026-01-25'),
+          dueDate: new Date('2026-02-15'),
+          status: 'locked',
+        },
+      });
+
+      // Calling createBillingCycle for this existing cycle code must FAIL CLOSED with BILLING_RATE_SNAPSHOT_MISSING
+      await expect(
+        billingCycleService.createBillingCycle(dormId, {
+          cycleCode: '2026-01',
+          name: 'January 2026 Historical',
+          periodStart: '2026-01-01',
+          periodEnd: '2026-01-31',
+          billingDate: '2026-01-25',
+          dueDate: '2026-02-15',
+        })
+      ).rejects.toThrow('BILLING_RATE_SNAPSHOT_MISSING');
+
+      // Verify no synthetic snapshot was created in DB
+      const snapshotCount = await prisma.billingRateSnapshot.count({
+        where: { billingCycleId: orphanCycle.id },
+      });
+      expect(snapshotCount).toBe(0);
+
+      // Cleanup
+      await prisma.billingCycle.deleteMany({ where: { dormitoryId: dormId } });
+      await prisma.dormitoryBillingSettings.deleteMany({ where: { dormitoryId: dormId } });
+      await prisma.dormitory.delete({ where: { id: dormId } });
+    });
+
+    it('proves Due Day registration UI renders full 1..28 range and validates 1 <= dueDay <= 28', async () => {
+      const serverDir = path.resolve(__dirname, '../../../');
+      const rootDir = path.resolve(serverDir, '../');
+      const regPath = path.join(rootDir, 'src/pages/owner/register.tsx');
+      const regContent = fs.readFileSync(regPath, 'utf-8');
+
+      // Verify range check in register.tsx is 1..28
+      expect(regContent).toContain('formData.deposits.dueDateDay > 28');
+      expect(regContent).not.toContain('formData.deposits.dueDateDay > 31');
+
+      // Verify array generation in register.tsx covers full 1..28
+      expect(regContent).toContain('Array.from({ length: 28 }, (_, i) => i + 1)');
+      expect(regContent).not.toContain('[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 25, 28]');
+
+      // Test server schema accepts 1, 11, 17, 28, rejects 0, 29, 31
+      expect(OnboardingBillingInputSchema.safeParse({ dueDay: 1 }).success).toBe(true);
+      expect(OnboardingBillingInputSchema.safeParse({ dueDay: 11 }).success).toBe(true);
+      expect(OnboardingBillingInputSchema.safeParse({ dueDay: 17 }).success).toBe(true);
+      expect(OnboardingBillingInputSchema.safeParse({ dueDay: 28 }).success).toBe(true);
+      expect(OnboardingBillingInputSchema.safeParse({ dueDay: 0 }).success).toBe(false);
+      expect(OnboardingBillingInputSchema.safeParse({ dueDay: 29 }).success).toBe(false);
+      expect(OnboardingBillingInputSchema.safeParse({ dueDay: 31 }).success).toBe(false);
+      expect(OnboardingBillingInputSchema.safeParse({}).success).toBe(false);
     });
 
     it('proves repository guard rejects any due-day fallback authority (|| 5, ?? 5, @default(5), .default(5)) in business registration & cycle code', async () => {

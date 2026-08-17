@@ -44,56 +44,42 @@ export class BillingCycleService {
   ): Promise<{ cycle: BillingCycleEntity; rateSnapshot: BillingRateSnapshotEntity }> {
     const prisma = (await import('../db/prisma.js')).getPrismaClient();
 
-    // Check existing first
+    // Invariant: EVERY new BillingCycle creation must require authoritative persisted DormitoryBillingSettings
+    const settings = await prisma.dormitoryBillingSettings.findUnique({ where: { dormitoryId } });
+    if (!settings) {
+      const err = new Error('DORMITORY_BILLING_SETTINGS_REQUIRED: Authoritative dormitory billing settings are required to create a billing cycle');
+      (err as any).statusCode = 400;
+      (err as any).code = 'DORMITORY_BILLING_SETTINGS_REQUIRED';
+      throw err;
+    }
+
+    if (settings.dueDay === null || settings.dueDay === undefined || settings.dueDay < 1 || settings.dueDay > 28) {
+      const err = new Error('DUE_DAY_REQUIRED: Authoritative billing settings must configure valid dueDay (1-28)');
+      (err as any).statusCode = 400;
+      (err as any).code = 'DUE_DAY_REQUIRED';
+      throw err;
+    }
+
+    // Check existing first: existing cycle without snapshot must NOT invent history -> fail closed
     const existing = await this.billingCycleRepo.findByCode(dormitoryId, data.cycleCode);
     if (existing) {
-      let snapshot = await this.billingCycleRepo.findRateSnapshot(existing.id, dormitoryId);
+      const snapshot = await this.billingCycleRepo.findRateSnapshot(existing.id, dormitoryId);
       if (!snapshot) {
-        // Guarantee rateSnapshot is non-null even if concurrent race created cycle without snapshot
-        const settings = await prisma.dormitoryBillingSettings.findUnique({ where: { dormitoryId } });
-        snapshot = await this.billingCycleRepo.createRateSnapshot(dormitoryId, {
-          billingCycleId: existing.id,
-          waterBillingType: settings?.waterBillingType || 'per_unit',
-          waterRate: settings ? String(settings.waterRate) : '0.00',
-          electricityBillingType: settings?.electricityBillingType || 'per_unit',
-          electricityRate: settings ? String(settings.electricityRate) : '0.00',
-          commonFee: settings ? String(settings.commonFee) : '0.00',
-          commonFeeMode: settings?.commonFeeMode || 'none',
-          internetFee: settings ? String(settings.internetFee) : '0.00',
-          internetFeeMode: settings?.internetFeeMode || 'none',
-          parkingFee: settings ? String(settings.parkingRate) : '0.00',
-          parkingFeeMode: settings?.parkingFeeMode || 'none',
-          lateFeeType: settings?.lateFeeType || 'none',
-          lateFeeValue: settings ? String(settings.lateFeeValue) : '0.00',
-          currency: 'THB',
-        });
+        const err = new Error('BILLING_RATE_SNAPSHOT_MISSING: Historical cycle is missing its rate snapshot');
+        (err as any).statusCode = 404;
+        (err as any).code = 'BILLING_RATE_SNAPSHOT_MISSING';
+        throw err;
       }
-      return { cycle: existing, rateSnapshot: snapshot! };
+      return { cycle: existing, rateSnapshot: snapshot };
     }
 
     // Determine periodStart, periodEnd, billingDate, and dueDate using configured billing settings
-    const settings = await prisma.dormitoryBillingSettings.findUnique({ where: { dormitoryId } });
-
     let pStartStr = data.periodStart;
     let pEndStr = data.periodEnd;
     let bDateStr = data.billingDate;
     let dDateStr = data.dueDate;
 
     if (!pStartStr || !pEndStr || !dDateStr) {
-      if (!settings) {
-        const err = new Error('DORMITORY_BILLING_SETTINGS_REQUIRED: Cannot derive billing cycle dates without authoritative dormitory billing settings');
-        (err as any).statusCode = 400;
-        (err as any).code = 'DORMITORY_BILLING_SETTINGS_REQUIRED';
-        throw err;
-      }
-
-      if (settings.dueDay === null || settings.dueDay === undefined) {
-        const err = new Error('DUE_DAY_REQUIRED: Authoritative billing settings must configure dueDay to derive cycle due date');
-        (err as any).statusCode = 400;
-        (err as any).code = 'DUE_DAY_REQUIRED';
-        throw err;
-      }
-
       const configuredDueDay = settings.dueDay;
       const configuredBillingDay = settings.billingDay !== null && settings.billingDay !== undefined ? settings.billingDay : 25;
 
@@ -133,21 +119,21 @@ export class BillingCycleService {
       throw err;
     }
 
-    // Rate snapshot derivation using authoritative billing settings (with approved LOCAL-07 none defaults)
+    // Rate snapshot derivation using authoritative billing settings (persisted DormitoryBillingSettings = sole business authority)
     const snapshotData = {
-      waterBillingType: settings?.waterBillingType || data.rateSnapshot?.waterBillingType || 'per_unit',
-      waterRate: settings ? new Prisma.Decimal(settings.waterRate).toFixed(2) : (data.rateSnapshot?.waterRate !== undefined ? String(data.rateSnapshot.waterRate) : '0.00'),
-      electricityBillingType: settings?.electricityBillingType || data.rateSnapshot?.electricityBillingType || 'per_unit',
-      electricityRate: settings ? new Prisma.Decimal(settings.electricityRate).toFixed(2) : (data.rateSnapshot?.electricityRate !== undefined ? String(data.rateSnapshot.electricityRate) : '0.00'),
-      commonFee: settings ? new Prisma.Decimal(settings.commonFee).toFixed(2) : (data.rateSnapshot?.commonFee !== undefined ? String(data.rateSnapshot.commonFee) : '0.00'),
-      commonFeeMode: settings?.commonFeeMode || data.rateSnapshot?.commonFeeMode || 'none',
-      internetFee: settings ? new Prisma.Decimal(settings.internetFee).toFixed(2) : (data.rateSnapshot?.internetFee !== undefined ? String(data.rateSnapshot.internetFee) : '0.00'),
-      internetFeeMode: settings?.internetFeeMode || data.rateSnapshot?.internetFeeMode || 'none',
-      parkingFee: settings ? new Prisma.Decimal(settings.parkingRate).toFixed(2) : (data.rateSnapshot?.parkingFee !== undefined ? String(data.rateSnapshot.parkingFee) : '0.00'),
-      parkingFeeMode: settings?.parkingFeeMode || data.rateSnapshot?.parkingFeeMode || 'none',
-      lateFeeType: settings?.lateFeeType || data.rateSnapshot?.lateFeeType || 'none',
-      lateFeeValue: settings ? new Prisma.Decimal(settings.lateFeeValue).toFixed(2) : (data.rateSnapshot?.lateFeeValue !== undefined ? String(data.rateSnapshot.lateFeeValue) : '0.00'),
-      currency: data.rateSnapshot?.currency || 'THB',
+      waterBillingType: settings.waterBillingType,
+      waterRate: new Prisma.Decimal(settings.waterRate).toFixed(2),
+      electricityBillingType: settings.electricityBillingType,
+      electricityRate: new Prisma.Decimal(settings.electricityRate).toFixed(2),
+      commonFee: new Prisma.Decimal(settings.commonFee).toFixed(2),
+      commonFeeMode: settings.commonFeeMode || 'none',
+      internetFee: new Prisma.Decimal(settings.internetFee).toFixed(2),
+      internetFeeMode: settings.internetFeeMode || 'none',
+      parkingFee: new Prisma.Decimal(settings.parkingRate).toFixed(2),
+      parkingFeeMode: settings.parkingFeeMode || 'none',
+      lateFeeType: settings.lateFeeType || 'none',
+      lateFeeValue: new Prisma.Decimal(settings.lateFeeValue).toFixed(2),
+      currency: 'THB',
     };
 
     try {
@@ -228,14 +214,14 @@ export class BillingCycleService {
       if (err.code === 'P2002' || (err.message && err.message.includes('unique'))) {
         const raceExisting = await this.billingCycleRepo.findByCode(dormitoryId, data.cycleCode);
         if (raceExisting) {
-          let snapshot = await this.billingCycleRepo.findRateSnapshot(raceExisting.id, dormitoryId);
+          const snapshot = await this.billingCycleRepo.findRateSnapshot(raceExisting.id, dormitoryId);
           if (!snapshot) {
-            snapshot = await this.billingCycleRepo.createRateSnapshot(dormitoryId, {
-              billingCycleId: raceExisting.id,
-              ...snapshotData,
-            });
+            const err2 = new Error('BILLING_RATE_SNAPSHOT_MISSING: Historical cycle is missing its rate snapshot');
+            (err2 as any).statusCode = 404;
+            (err2 as any).code = 'BILLING_RATE_SNAPSHOT_MISSING';
+            throw err2;
           }
-          return { cycle: raceExisting, rateSnapshot: snapshot! };
+          return { cycle: raceExisting, rateSnapshot: snapshot };
         }
       }
       throw err;
