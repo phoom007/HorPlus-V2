@@ -72,16 +72,36 @@ describe('Wave 1 — Owner Daily Operations Mandatory Acceptance Regressions Sui
       data: {
         dormitoryId: dormAId,
         dueDay: 5,
+        waterBillingType: 'unit',
         waterRate: '0.00',
+        electricityBillingType: 'unit',
         electricityRate: '0.00',
+        commonFee: '0.00',
+        commonFeeMode: 'room',
+        internetFee: '0.00',
+        internetFeeMode: 'room',
+        parkingRate: '0.00',
+        parkingFeeMode: 'room',
+        lateFeeType: 'none',
+        lateFeeValue: '0.00',
       },
     });
     await prisma.dormitoryBillingSettings.create({
       data: {
         dormitoryId: dormBId,
         dueDay: 5,
+        waterBillingType: 'unit',
         waterRate: '0.00',
+        electricityBillingType: 'unit',
         electricityRate: '0.00',
+        commonFee: '0.00',
+        commonFeeMode: 'room',
+        internetFee: '0.00',
+        internetFeeMode: 'room',
+        parkingRate: '0.00',
+        parkingFeeMode: 'room',
+        lateFeeType: 'none',
+        lateFeeValue: '0.00',
       },
     });
 

@@ -2915,6 +2915,8 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
           internetFee: '150.00',
           parkingFeeMode: 'vehicle',
           parkingFee: '250.00',
+          lateFeeType: 'none',
+          lateFeeValue: '0.00',
         },
       });
 
@@ -5038,6 +5040,359 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
       expect(OnboardingBillingInputSchema.safeParse({ dueDay: 29 }).success).toBe(false);
       expect(OnboardingBillingInputSchema.safeParse({ dueDay: 31 }).success).toBe(false);
       expect(OnboardingBillingInputSchema.safeParse({}).success).toBe(false);
+    });
+
+    it('proves end-to-end Due-Date authority across BillingCycle (Case A), Single Bill (Case B), Bulk Bills (Case C), and Readback (Case D)', async () => {
+      // 1. Create dormitory with authoritative settings (dueDay = 17)
+      const timestamp = Date.now();
+      const dormId = crypto.randomUUID();
+      const userId = crypto.randomUUID();
+      const roleId = crypto.randomUUID();
+
+      await prisma.dormitory.create({
+        data: {
+          id: dormId,
+          name: `Due Day Authority Dorm ${timestamp}`,
+          code: `DDA-${timestamp}`,
+          status: 'active',
+        },
+      });
+
+      await prisma.user.create({
+        data: {
+          id: userId,
+          googleSubject: `sub_dda_${timestamp}`,
+          email: `dda_${timestamp}@example.com`,
+          emailNormalized: `dda_${timestamp}@example.com`,
+          name: 'Due Day Owner',
+        },
+      });
+
+      await prisma.role.create({
+        data: {
+          id: roleId,
+          dormitoryId: dormId,
+          code: 'OWNER',
+          name: 'Owner',
+          permissions: { '*': ['*'] },
+          isSystem: true,
+        },
+      });
+
+      await prisma.dormitoryMember.create({
+        data: {
+          dormitoryId: dormId,
+          userId: userId,
+          roleId: roleId,
+          status: 'active',
+          membershipOrigin: 'GOOGLE_BOOTSTRAP',
+        },
+      });
+
+      const freePlan = await prisma.subscriptionPlan.findFirst({ where: { code: 'FREE' } });
+      await prisma.dormitorySubscription.create({
+        data: {
+          dormitoryId: dormId,
+          planId: freePlan!.id,
+          status: 'ACTIVE',
+          expiresAt: new Date(Date.now() + 365 * 86400000),
+        },
+      });
+
+      await prisma.dormitoryBillingSettings.create({
+        data: {
+          dormitoryId: dormId,
+          dueDay: 17,
+          waterBillingType: 'person',
+          waterRate: '0.00',
+          electricityBillingType: 'unit',
+          electricityRate: '0.00',
+          commonFee: '0.00',
+          commonFeeMode: 'room',
+          internetFee: '0.00',
+          internetFeeMode: 'person',
+          parkingRate: '0.00',
+          parkingFeeMode: 'room',
+          lateFeeType: 'none',
+          lateFeeValue: '0.00',
+        },
+      });
+
+      // Create building, rooms, tenant, and active contract
+      const bld = await prisma.building.create({
+        data: { dormitoryId: dormId, name: 'Building DDA', depositAmount: '5000.00' },
+      });
+
+      const rm1 = await prisma.room.create({
+        data: {
+          dormitoryId: dormId,
+          buildingId: bld.id,
+          roomNumber: 'DDA-101',
+          normalizedRoomNumber: 'DDA-101',
+          floor: 1,
+          monthlyRent: '4000.00',
+          roomType: 'standard',
+          status: 'occupied',
+        },
+      });
+
+      const rm2 = await prisma.room.create({
+        data: {
+          dormitoryId: dormId,
+          buildingId: bld.id,
+          roomNumber: 'DDA-102',
+          normalizedRoomNumber: 'DDA-102',
+          floor: 1,
+          monthlyRent: '4000.00',
+          roomType: 'standard',
+          status: 'occupied',
+        },
+      });
+
+      const t1 = await prisma.tenant.create({
+        data: {
+          dormitoryId: dormId,
+          tenantNumber: `TNT-DDA-1-${timestamp}`,
+          firstName: 'Tenant1',
+          lastName: 'DDA',
+          displayName: 'Tenant1 DDA',
+          phone: '0811111111',
+          status: 'active',
+        },
+      });
+
+      const t2 = await prisma.tenant.create({
+        data: {
+          dormitoryId: dormId,
+          tenantNumber: `TNT-DDA-2-${timestamp}`,
+          firstName: 'Tenant2',
+          lastName: 'DDA',
+          displayName: 'Tenant2 DDA',
+          phone: '0822222222',
+          status: 'active',
+        },
+      });
+
+      const ctr1 = await prisma.contract.create({
+        data: {
+          dormitoryId: dormId,
+          roomId: rm1.id,
+          tenantId: t1.id,
+          contractNumber: `CTR-DDA-1-${timestamp}`,
+          status: 'active',
+          startDate: new Date('2026-01-01'),
+          endDate: new Date('2026-12-31'),
+          rentAmount: '4000.00',
+          depositAmount: '5000.00',
+        },
+      });
+
+      const ctr2 = await prisma.contract.create({
+        data: {
+          dormitoryId: dormId,
+          roomId: rm2.id,
+          tenantId: t2.id,
+          contractNumber: `CTR-DDA-2-${timestamp}`,
+          status: 'active',
+          startDate: new Date('2026-01-01'),
+          endDate: new Date('2026-12-31'),
+          rentAmount: '4000.00',
+          depositAmount: '5000.00',
+        },
+      });
+
+      const auth = await createTestAuthSession(userId);
+
+      // -----------------------------------------------------------------------
+      // CASE A — Cycle Due-Date Tamper
+      // Attempt POST /api/v1/billing-cycles for October 2026 with malicious dueDate = 2026-11-25
+      // -----------------------------------------------------------------------
+      const cycleRes = await request(app)
+        .post('/api/v1/billing-cycles')
+        .set('Cookie', auth.cookies)
+        .set('x-dormitory-id', dormId)
+        .set('x-csrf-token', auth.csrfToken)
+        .send({
+          cycleCode: '2026-10',
+          name: 'ตุลาคม 2569',
+          periodStart: '2026-10-01',
+          periodEnd: '2026-10-31',
+          billingDate: '2026-10-25',
+          dueDate: '2026-11-25', // Malicious attempt to override settings.dueDay = 17
+        });
+
+      expect(cycleRes.status).toBe(201);
+      const createdCycleId = cycleRes.body.data.cycle.id;
+
+      // Verify in PostgreSQL: persisted dueDate is derived from settings.dueDay = 17 (2026-11-17), NEVER 2026-11-25
+      const cycleInDb = await prisma.billingCycle.findUnique({ where: { id: createdCycleId } });
+      expect(cycleInDb).toBeDefined();
+      const cycleDueIso = cycleInDb!.dueDate.toISOString();
+      expect(cycleDueIso).toContain('2026-11-17');
+      expect(cycleDueIso).not.toContain('2026-11-25');
+
+      // -----------------------------------------------------------------------
+      // CASE B — Single Bill Due-Date Tamper
+      // Attempt POST /api/v1/bills/generate with malicious dueDate = 2026-11-25
+      // -----------------------------------------------------------------------
+      const billRes = await request(app)
+        .post('/api/v1/bills/generate')
+        .set('Cookie', auth.cookies)
+        .set('x-dormitory-id', dormId)
+        .set('x-csrf-token', auth.csrfToken)
+        .send({
+          billingCycleId: createdCycleId,
+          contractId: ctr1.id,
+          roomId: rm1.id,
+          tenantId: t1.id,
+          dueDate: '2026-11-25', // Malicious attempt to override cycle dueDate (2026-11-17)
+        });
+
+      expect(billRes.status).toBe(201);
+      const createdBillId = billRes.body.data.bill.id;
+
+      // Verify in PostgreSQL: persisted Bill.dueDate equals cycle.dueDate (2026-11-17), NEVER 2026-11-25
+      const billInDb = await prisma.bill.findUnique({ where: { id: createdBillId } });
+      expect(billInDb).toBeDefined();
+      const billDueIso = billInDb!.dueDate.toISOString();
+      expect(billDueIso).toContain('2026-11-17');
+      expect(billDueIso).not.toContain('2026-11-25');
+      expect(billInDb!.dueDate.getTime()).toBe(cycleInDb!.dueDate.getTime());
+
+      // -----------------------------------------------------------------------
+      // CASE C — Bulk Bills Due-Date Authority
+      // Bulk generation for remaining room (rm2) must also inherit cycle.dueDate
+      // -----------------------------------------------------------------------
+      const bulkRes = await request(app)
+        .post('/api/v1/bills/generate/bulk')
+        .set('Cookie', auth.cookies)
+        .set('x-dormitory-id', dormId)
+        .set('x-csrf-token', auth.csrfToken)
+        .send({
+          billingCycleId: createdCycleId,
+          roomIds: [rm2.id],
+        });
+
+      expect(bulkRes.status).toBe(200);
+
+      // Verify all bills in this cycle have dueDate strictly matching cycle.dueDate
+      const allBillsInCycle = await prisma.bill.findMany({ where: { billingCycleId: createdCycleId } });
+      expect(allBillsInCycle.length).toBe(2);
+      for (const b of allBillsInCycle) {
+        expect(b.dueDate.toISOString().slice(0, 10)).toBe('2026-11-17');
+        expect(b.dueDate.getTime()).toBe(cycleInDb!.dueDate.getTime());
+      }
+
+      // -----------------------------------------------------------------------
+      // CASE D — F5 / Readback Persistence
+      // GET endpoints return authoritative persisted dueDate
+      // -----------------------------------------------------------------------
+      const cyclesListRes = await request(app)
+        .get('/api/v1/billing-cycles')
+        .set('Cookie', auth.cookies)
+        .set('x-dormitory-id', dormId);
+
+      expect(cyclesListRes.status).toBe(200);
+      const readCycle = cyclesListRes.body.data.find((c: any) => c.id === createdCycleId);
+      expect(readCycle).toBeDefined();
+      expect(new Date(readCycle.dueDate).toISOString().slice(0, 10)).toBe('2026-11-17');
+
+      const billsListRes = await request(app)
+        .get(`/api/v1/bills?billingCycleId=${createdCycleId}`)
+        .set('Cookie', auth.cookies)
+        .set('x-dormitory-id', dormId);
+
+      expect(billsListRes.status).toBe(200);
+      for (const b of billsListRes.body.data) {
+        expect(new Date(b.dueDate).toISOString().slice(0, 10)).toBe('2026-11-17');
+      }
+
+      // Cleanup
+      await prisma.billItem.deleteMany({ where: { bill: { dormitoryId: dormId } } });
+      await prisma.bill.deleteMany({ where: { dormitoryId: dormId } });
+      await prisma.billingRateSnapshot.deleteMany({ where: { dormitoryId: dormId } });
+      await prisma.billingCycle.deleteMany({ where: { dormitoryId: dormId } });
+      await prisma.contract.deleteMany({ where: { dormitoryId: dormId } });
+      await prisma.tenant.deleteMany({ where: { dormitoryId: dormId } });
+      await prisma.room.deleteMany({ where: { dormitoryId: dormId } });
+      await prisma.building.deleteMany({ where: { dormitoryId: dormId } });
+      await prisma.dormitoryBillingSettings.deleteMany({ where: { dormitoryId: dormId } });
+      await prisma.dormitoryMember.deleteMany({ where: { dormitoryId: dormId } });
+      await prisma.dormitorySubscription.deleteMany({ where: { dormitoryId: dormId } });
+      await prisma.role.deleteMany({ where: { dormitoryId: dormId } });
+      await prisma.dormitory.delete({ where: { id: dormId } });
+      await prisma.user.delete({ where: { id: userId } });
+    });
+
+    it('proves BillingRateSnapshot has zero legacy DB defaults and incomplete insert fails closed', async () => {
+      const serverDir = path.resolve(__dirname, '../../../');
+      const schemaPath = path.join(serverDir, 'prisma/schema.prisma');
+      const schemaContent = fs.readFileSync(schemaPath, 'utf-8');
+
+      // Inspect schema.prisma for model BillingRateSnapshot
+      const rateSnapshotBlock = schemaContent.slice(
+        schemaContent.indexOf('model BillingRateSnapshot {'),
+        schemaContent.indexOf('model RoomBillingCycleSnapshot {')
+      );
+
+      // Must not contain legacy business defaults in schema.prisma
+      expect(rateSnapshotBlock).not.toContain('@default(18.00)');
+      expect(rateSnapshotBlock).not.toContain('@default(7.00)');
+      expect(rateSnapshotBlock).not.toContain('@default(50.00)');
+      expect(rateSnapshotBlock).not.toContain('@default("per_unit")');
+      expect(rateSnapshotBlock).not.toContain('commonFeeMode          String   @default');
+      expect(rateSnapshotBlock).not.toContain('lateFeeType            String   @default');
+
+      // Inspect PostgreSQL information_schema.columns for billing_rate_snapshots
+      const columnsWithDefaults = await prisma.$queryRaw<Array<{ column_name: string; column_default: string | null }>>`
+        SELECT column_name, column_default
+        FROM information_schema.columns
+        WHERE table_name = 'billing_rate_snapshots'
+          AND column_name IN (
+            'water_billing_type', 'water_rate',
+            'electricity_billing_type', 'electricity_rate',
+            'common_fee', 'common_fee_mode',
+            'internet_fee', 'internet_fee_mode',
+            'parking_fee', 'parking_fee_mode',
+            'late_fee_type', 'late_fee_value'
+          );
+      `;
+
+      for (const col of columnsWithDefaults) {
+        expect(col.column_default).toBeNull();
+      }
+
+      // Prove direct incomplete raw insert fails closed (NOT NULL violation)
+      const dorm = await prisma.dormitory.create({
+        data: {
+          name: `Incomplete Snapshot Dorm ${Date.now()}`,
+          code: `ISD-${Date.now()}`,
+        },
+      });
+
+      const cycle = await prisma.billingCycle.create({
+        data: {
+          dormitoryId: dorm.id,
+          cycleCode: '2026-11',
+          name: 'November 2026',
+          periodStart: new Date('2026-11-01'),
+          periodEnd: new Date('2026-11-30'),
+          billingDate: new Date('2026-11-25'),
+          dueDate: new Date('2026-12-17'),
+        },
+      });
+
+      // Raw insert omitting non-null fields with no defaults must be rejected by PostgreSQL
+      await expect(
+        prisma.$executeRaw`
+          INSERT INTO "billing_rate_snapshots" ("id", "dormitory_id", "billing_cycle_id", "created_at")
+          VALUES (gen_random_uuid(), ${dorm.id}::uuid, ${cycle.id}::uuid, NOW());
+        `
+      ).rejects.toThrow();
+
+      // Cleanup
+      await prisma.billingCycle.deleteMany({ where: { dormitoryId: dorm.id } });
+      await prisma.dormitory.delete({ where: { id: dorm.id } });
     });
 
     it('proves repository guard rejects any due-day fallback authority (|| 5, ?? 5, @default(5), .default(5)) in business registration & cycle code', async () => {

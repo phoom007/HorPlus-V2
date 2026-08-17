@@ -551,10 +551,18 @@ describe('LOCAL-07: Product Owner UI & Backend Integration', () => {
         data: {
           dormitoryId: dorm.id,
           billingCycleId: cycle1.id,
+          waterBillingType: 'unit',
           waterRate: '20.00',
+          electricityBillingType: 'unit',
           electricityRate: '8.00',
           commonFee: '200.00',
           commonFeeMode: 'room',
+          internetFee: '0.00',
+          internetFeeMode: 'room',
+          parkingFee: '0.00',
+          parkingFeeMode: 'room',
+          lateFeeType: 'none',
+          lateFeeValue: '0.00',
         },
       });
 
@@ -595,10 +603,18 @@ describe('LOCAL-07: Product Owner UI & Backend Integration', () => {
         data: {
           dormitoryId: dorm.id,
           billingCycleId: cycle2.id,
+          waterBillingType: 'unit',
           waterRate: '20.00',
+          electricityBillingType: 'unit',
           electricityRate: '8.00',
           commonFee: '200.00',
           commonFeeMode: 'room',
+          internetFee: '0.00',
+          internetFeeMode: 'room',
+          parkingFee: '0.00',
+          parkingFeeMode: 'room',
+          lateFeeType: 'none',
+          lateFeeValue: '0.00',
         },
       });
 
@@ -640,10 +656,18 @@ describe('LOCAL-07: Product Owner UI & Backend Integration', () => {
         data: {
           dormitoryId: dorm.id,
           billingCycleId: cycle3.id,
+          waterBillingType: 'unit',
           waterRate: '20.00',
+          electricityBillingType: 'unit',
           electricityRate: '8.00',
           commonFee: '200.00',
           commonFeeMode: 'room',
+          internetFee: '0.00',
+          internetFeeMode: 'room',
+          parkingFee: '0.00',
+          parkingFeeMode: 'room',
+          lateFeeType: 'none',
+          lateFeeValue: '0.00',
         },
       });
 

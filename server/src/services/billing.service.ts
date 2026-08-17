@@ -446,7 +446,7 @@ export class BillingService {
     const totalDec = compareDecimals(rawTotal, '0.00') < 0 ? toDecimal('0.00') : rawTotal;
 
     const billingDate = data.billingDate ? new Date(data.billingDate) : new Date(cycle.billingDate);
-    const dueDate = data.dueDate ? new Date(data.dueDate) : new Date(cycle.dueDate);
+    const dueDate = new Date(cycle.dueDate);
 
     return this.billRepo.withTransaction(async (tx) => {
       await this.billRepo.executeRawLock(data.roomId, tx);

@@ -6,7 +6,7 @@ export const CreateBillingCycleSchema = z.object({
   periodStart: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'วันที่เริ่มต้นต้องอยู่ในรูปแบบ YYYY-MM-DD'),
   periodEnd: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'วันที่สิ้นสุดต้องอยู่ในรูปแบบ YYYY-MM-DD'),
   billingDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'วันออกบิลต้องอยู่ในรูปแบบ YYYY-MM-DD'),
-  dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'วันครบกำหนดชำระต้องอยู่ในรูปแบบ YYYY-MM-DD'),
+  dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'วันครบกำหนดชำระต้องอยู่ในรูปแบบ YYYY-MM-DD').optional(),
   rateSnapshot: z
     .object({
       waterBillingType: z.string().optional(),

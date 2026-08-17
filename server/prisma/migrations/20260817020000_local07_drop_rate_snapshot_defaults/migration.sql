@@ -1,0 +1,13 @@
+-- AlterTable: Drop legacy default values on billing_rate_snapshots
+ALTER TABLE "billing_rate_snapshots" ALTER COLUMN "water_billing_type" DROP DEFAULT;
+ALTER TABLE "billing_rate_snapshots" ALTER COLUMN "water_rate" DROP DEFAULT;
+ALTER TABLE "billing_rate_snapshots" ALTER COLUMN "electricity_billing_type" DROP DEFAULT;
+ALTER TABLE "billing_rate_snapshots" ALTER COLUMN "electricity_rate" DROP DEFAULT;
+ALTER TABLE "billing_rate_snapshots" ALTER COLUMN "common_fee" DROP DEFAULT;
+ALTER TABLE "billing_rate_snapshots" ALTER COLUMN "common_fee_mode" DROP DEFAULT;
+ALTER TABLE "billing_rate_snapshots" ALTER COLUMN "internet_fee" DROP DEFAULT;
+ALTER TABLE "billing_rate_snapshots" ALTER COLUMN "internet_fee_mode" DROP DEFAULT;
+ALTER TABLE "billing_rate_snapshots" ALTER COLUMN "parking_fee" DROP DEFAULT;
+ALTER TABLE "billing_rate_snapshots" ALTER COLUMN "parking_fee_mode" DROP DEFAULT;
+ALTER TABLE "billing_rate_snapshots" ALTER COLUMN "late_fee_type" DROP DEFAULT;
+ALTER TABLE "billing_rate_snapshots" ALTER COLUMN "late_fee_value" DROP DEFAULT;

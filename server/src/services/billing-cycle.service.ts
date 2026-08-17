@@ -13,7 +13,7 @@ export interface CreateBillingCycleDto {
   periodStart: string;
   periodEnd: string;
   billingDate: string;
-  dueDate: string;
+  dueDate?: string;
   rateSnapshot?: {
     waterBillingType?: string;
     waterRate?: string;
@@ -77,30 +77,35 @@ export class BillingCycleService {
     let pStartStr = data.periodStart;
     let pEndStr = data.periodEnd;
     let bDateStr = data.billingDate;
-    let dDateStr = data.dueDate;
 
-    if (!pStartStr || !pEndStr || !dDateStr) {
-      const configuredDueDay = settings.dueDay;
-      const configuredBillingDay = settings.billingDay !== null && settings.billingDay !== undefined ? settings.billingDay : 25;
+    const configuredDueDay = settings.dueDay;
+    const configuredBillingDay = settings.billingDay !== null && settings.billingDay !== undefined ? settings.billingDay : 25;
 
-      const parts = data.cycleCode.split('-');
-      if (parts.length === 2) {
-        const y = parseInt(parts[0], 10);
-        const m = parseInt(parts[1], 10);
-        const lastDay = new Date(y, m, 0).getDate();
-        pStartStr = pStartStr || `${y}-${String(m).padStart(2, '0')}-01`;
-        pEndStr = pEndStr || `${y}-${String(m).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+    const standardCycleMatch = data.cycleCode.match(/^(\d{4})-(\d{2})$/);
+    let y: number;
+    let m: number;
 
-        const bDayClamped = Math.min(configuredBillingDay, lastDay);
-        bDateStr = bDateStr || `${y}-${String(m).padStart(2, '0')}-${String(bDayClamped).padStart(2, '0')}`;
-
-        const nextM = m === 12 ? 1 : m + 1;
-        const nextY = m === 12 ? y + 1 : y;
-        const nextMonthLastDay = new Date(nextY, nextM, 0).getDate();
-        const dDayClamped = Math.min(configuredDueDay, nextMonthLastDay);
-        dDateStr = dDateStr || `${nextY}-${String(nextM).padStart(2, '0')}-${String(dDayClamped).padStart(2, '0')}`;
-      }
+    if (standardCycleMatch) {
+      y = parseInt(standardCycleMatch[1], 10);
+      m = parseInt(standardCycleMatch[2], 10);
+    } else {
+      const refDate = pStartStr ? new Date(pStartStr) : pEndStr ? new Date(pEndStr) : new Date();
+      y = refDate.getFullYear();
+      m = refDate.getMonth() + 1;
     }
+
+    const lastDay = new Date(y, m, 0).getDate();
+    pStartStr = pStartStr || `${y}-${String(m).padStart(2, '0')}-01`;
+    pEndStr = pEndStr || `${y}-${String(m).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+
+    const bDayClamped = Math.min(configuredBillingDay, lastDay);
+    bDateStr = bDateStr || `${y}-${String(m).padStart(2, '0')}-${String(bDayClamped).padStart(2, '0')}`;
+
+    const nextM = m === 12 ? 1 : m + 1;
+    const nextY = m === 12 ? y + 1 : y;
+    const nextMonthLastDay = new Date(nextY, nextM, 0).getDate();
+    const dDayClamped = Math.min(configuredDueDay, nextMonthLastDay);
+    const dDateStr = `${nextY}-${String(nextM).padStart(2, '0')}-${String(dDayClamped).padStart(2, '0')}`;
 
     const periodStart = new Date(pStartStr);
     const periodEnd = new Date(pEndStr);
@@ -126,12 +131,12 @@ export class BillingCycleService {
       electricityBillingType: settings.electricityBillingType,
       electricityRate: new Prisma.Decimal(settings.electricityRate).toFixed(2),
       commonFee: new Prisma.Decimal(settings.commonFee).toFixed(2),
-      commonFeeMode: settings.commonFeeMode || 'none',
+      commonFeeMode: settings.commonFeeMode,
       internetFee: new Prisma.Decimal(settings.internetFee).toFixed(2),
-      internetFeeMode: settings.internetFeeMode || 'none',
+      internetFeeMode: settings.internetFeeMode,
       parkingFee: new Prisma.Decimal(settings.parkingRate).toFixed(2),
-      parkingFeeMode: settings.parkingFeeMode || 'none',
-      lateFeeType: settings.lateFeeType || 'none',
+      parkingFeeMode: settings.parkingFeeMode,
+      lateFeeType: settings.lateFeeType,
       lateFeeValue: new Prisma.Decimal(settings.lateFeeValue).toFixed(2),
       currency: 'THB',
     };

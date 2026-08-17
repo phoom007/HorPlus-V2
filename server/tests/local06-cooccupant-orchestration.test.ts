@@ -160,6 +160,8 @@ describe('LOCAL-06 — Co-Occupant / People-Count / Auto-Bill Recalculation & Ou
         internetFeeMode: 'room',
         parkingFee: 0,
         parkingFeeMode: 'free',
+        lateFeeType: 'none',
+        lateFeeValue: '0.00',
       },
     });
   });
@@ -524,6 +526,8 @@ describe('LOCAL-06 — Co-Occupant / People-Count / Auto-Bill Recalculation & Ou
         internetFeeMode: 'room',
         parkingFee: 0,
         parkingFeeMode: 'free',
+        lateFeeType: 'none',
+        lateFeeValue: '0.00',
       },
     });
 
@@ -806,6 +810,8 @@ describe('LOCAL-06 — Co-Occupant / People-Count / Auto-Bill Recalculation & Ou
         internetFeeMode: 'room',
         parkingFee: 0,
         parkingFeeMode: 'free',
+        lateFeeType: 'none',
+        lateFeeValue: '0.00',
       },
     });
 
@@ -869,6 +875,8 @@ describe('LOCAL-06 — Co-Occupant / People-Count / Auto-Bill Recalculation & Ou
         internetFeeMode: 'room',
         parkingFee: 0,
         parkingFeeMode: 'free',
+        lateFeeType: 'none',
+        lateFeeValue: '0.00',
       },
     });
 
@@ -1589,6 +1597,12 @@ describe('LOCAL-06 — Co-Occupant / People-Count / Auto-Bill Recalculation & Ou
         electricityBillingType: 'unit',
         commonFee: 200,
         commonFeeMode: 'person',
+        internetFee: 0,
+        internetFeeMode: 'room',
+        parkingFee: 0,
+        parkingFeeMode: 'free',
+        lateFeeType: 'none',
+        lateFeeValue: '0.00',
       },
     });
 
