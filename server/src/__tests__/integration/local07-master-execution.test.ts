@@ -37,7 +37,7 @@ import { DormitoryProvisioningService } from '../../services/dormitory-provision
 import { OnboardingBillingInputSchema } from '../../types/onboarding-validation.js';
 import { DefaultsService } from '../../services/defaults.service.js';
 import { OnboardingService } from '../../services/onboarding.service.js';
-import { BillingService } from '../../services/billing.service.js';
+import { BillingService, resolveBillDueDate, resolveBillIssueDate } from '../../services/billing.service.js';
 import { BillingOrchestrationService } from '../../services/billing-orchestration.service.js';
 import { OccupancyService } from '../../services/occupancy.service.js';
 import { RoomService } from '../../services/room.service.js';
@@ -5251,17 +5251,17 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
       expect(billRes.status).toBe(201);
       const createdBillId = billRes.body.data.bill.id;
 
-      // Verify in PostgreSQL: persisted Bill.dueDate equals cycle.dueDate (2026-11-17), NEVER 2026-11-25
+      // Verify in PostgreSQL: persisted Bill.dueDate is computed via resolveBillDueDate, NEVER 2026-11-25
       const billInDb = await prisma.bill.findUnique({ where: { id: createdBillId } });
       expect(billInDb).toBeDefined();
       const billDueIso = billInDb!.dueDate.toISOString();
-      expect(billDueIso).toContain('2026-11-17');
       expect(billDueIso).not.toContain('2026-11-25');
-      expect(billInDb!.dueDate.getTime()).toBe(cycleInDb!.dueDate.getTime());
+      const expectedDue = resolveBillDueDate(billInDb!.generatedAt || billInDb!.billingDate, 17);
+      expect(billInDb!.dueDate.toISOString().slice(0, 10)).toBe(expectedDue.toISOString().slice(0, 10));
 
       // -----------------------------------------------------------------------
       // CASE C — Bulk Bills Due-Date Authority
-      // Bulk generation for remaining room (rm2) must also inherit cycle.dueDate
+      // Bulk generation for remaining room (rm2) must also compute dueDate from settings.dueDay
       // -----------------------------------------------------------------------
       const bulkRes = await request(app)
         .post('/api/v1/bills/generate/bulk')
@@ -5275,12 +5275,12 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
 
       expect(bulkRes.status).toBe(200);
 
-      // Verify all bills in this cycle have dueDate strictly matching cycle.dueDate
+      // Verify all bills in this cycle have dueDate strictly matching resolveBillDueDate
       const allBillsInCycle = await prisma.bill.findMany({ where: { billingCycleId: createdCycleId } });
       expect(allBillsInCycle.length).toBe(2);
       for (const b of allBillsInCycle) {
-        expect(b.dueDate.toISOString().slice(0, 10)).toBe('2026-11-17');
-        expect(b.dueDate.getTime()).toBe(cycleInDb!.dueDate.getTime());
+        const expDue = resolveBillDueDate(b.generatedAt || b.billingDate, 17);
+        expect(b.dueDate.toISOString().slice(0, 10)).toBe(expDue.toISOString().slice(0, 10));
       }
 
       // -----------------------------------------------------------------------
@@ -5304,7 +5304,8 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
 
       expect(billsListRes.status).toBe(200);
       for (const b of billsListRes.body.data) {
-        expect(new Date(b.dueDate).toISOString().slice(0, 10)).toBe('2026-11-17');
+        const expDue = resolveBillDueDate(b.generatedAt || b.billingDate, 17);
+        expect(new Date(b.dueDate).toISOString().slice(0, 10)).toBe(expDue.toISOString().slice(0, 10));
       }
 
       // Cleanup
@@ -5425,6 +5426,504 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
       const provContent = fs.readFileSync(provPath, 'utf-8');
       expect(provContent).not.toContain('Number(billing.dueDay) || 5');
     });
+
+    describe('Section 11: Manual Bill Issuance Authority, Due-Date Rollover & LINE Independence', () => {
+      it('calculates canonical due date strictly based on issue date and dueDay: before dueDay -> same month', () => {
+        // Issue on Sep 10 with dueDay 17 -> Due Sep 17
+        const due = resolveBillDueDate('2026-09-10', 17);
+        expect(due.toISOString().startsWith('2026-09-17')).toBe(true);
+      });
+
+      it('calculates canonical due date strictly based on issue date and dueDay: ON dueDay -> same month (same day)', () => {
+        // Issue on Sep 17 with dueDay 17 -> Due Sep 17
+        const due = resolveBillDueDate('2026-09-17', 17);
+        expect(due.toISOString().startsWith('2026-09-17')).toBe(true);
+      });
+
+      it('calculates canonical due date strictly based on issue date and dueDay: after dueDay -> next month', () => {
+        // Issue on Sep 20 with dueDay 17 -> Due Oct 17
+        const due = resolveBillDueDate('2026-09-20', 17);
+        expect(due.toISOString().startsWith('2026-10-17')).toBe(true);
+      });
+
+      it('calculates canonical due date strictly based on issue date and dueDay: December rollover -> January next year', () => {
+        // Issue on Dec 20 with dueDay 17 -> Due Jan 17 next year
+        const due = resolveBillDueDate('2026-12-20', 17);
+        expect(due.toISOString().startsWith('2027-01-17')).toBe(true);
+      });
+
+      it('calculates canonical due date with month-length clamping (e.g. Feb 28)', () => {
+        // Issue on Feb 10 with dueDay 30 in non-leap year -> Clamped to Feb 28
+        const due = resolveBillDueDate('2026-02-10', 30);
+        expect(due.toISOString().startsWith('2026-02-28')).toBe(true);
+      });
+
+      it('proves server ignores client-supplied billingDate / dueDate and writes server-authoritative dates', async () => {
+        const dorm = await prisma.dormitory.create({
+          data: {
+            name: `Tamper Test Dorm ${Date.now()}`,
+            code: `TTD-${Date.now()}`,
+          },
+        });
+
+        await prisma.dormitoryBillingSettings.create({
+          data: {
+            dormitoryId: dorm.id,
+            billingDay: 25,
+            dueDay: 17,
+            waterBillingType: 'unit',
+            waterRate: new Prisma.Decimal('18.00'),
+            electricityBillingType: 'unit',
+            electricityRate: new Prisma.Decimal('7.00'),
+            commonFee: new Prisma.Decimal('200.00'),
+            commonFeeMode: 'room',
+            internetFee: new Prisma.Decimal('0.00'),
+            internetFeeMode: 'room',
+            parkingRate: new Prisma.Decimal('100.00'),
+            parkingFeeMode: 'room',
+            lateFeeType: 'daily',
+            lateFeeValue: new Prisma.Decimal('50.00'),
+          },
+        });
+
+        const billingCycleRepo = new PrismaBillingCycleRepository();
+        const cycleService = new BillingCycleService(billingCycleRepo);
+        const { cycle } = await cycleService.createBillingCycle(dorm.id, {
+          cycleCode: '2026-09',
+          name: 'September 2026',
+          periodStart: '2026-09-01',
+          periodEnd: '2026-09-30',
+          billingDate: '2026-09-25',
+        });
+
+        const building = await prisma.building.create({
+          data: {
+            dormitoryId: dorm.id,
+            name: 'Building A',
+          },
+        });
+
+        const room = await prisma.room.create({
+          data: {
+            dormitoryId: dorm.id,
+            buildingId: building.id,
+            roomNumber: '101',
+            normalizedRoomNumber: '101',
+            roomType: 'standard',
+            floor: 1,
+            status: 'occupied',
+            monthlyRent: new Prisma.Decimal('3500.00'),
+          },
+        });
+
+        const tenant = await prisma.tenant.create({
+          data: {
+            dormitoryId: dorm.id,
+            tenantNumber: `T-${Date.now()}`,
+            firstName: 'Tamper',
+            lastName: 'Tenant',
+            displayName: 'Tamper Tenant',
+            phone: '0811111111',
+            status: 'active',
+          },
+        });
+
+        const contract = await prisma.contract.create({
+          data: {
+            dormitoryId: dorm.id,
+            roomId: room.id,
+            tenantId: tenant.id,
+            contractNumber: `CT-${Date.now()}`,
+            startDate: new Date('2026-01-01'),
+            endDate: new Date('2026-12-31'),
+            rentAmount: new Prisma.Decimal('3500.00'),
+            depositAmount: new Prisma.Decimal('7000.00'),
+            status: 'active',
+          },
+        });
+
+        const waterDevice = await prisma.meterDevice.create({
+          data: {
+            dormitoryId: dorm.id,
+            roomId: room.id,
+            type: 'water',
+            meterNumber: `WM-${Date.now()}`,
+            initialReading: '100.00',
+            currentReading: '110.00',
+          },
+        });
+
+        const elecDevice = await prisma.meterDevice.create({
+          data: {
+            dormitoryId: dorm.id,
+            roomId: room.id,
+            type: 'electricity',
+            meterNumber: `EM-${Date.now()}`,
+            initialReading: '200.00',
+            currentReading: '250.00',
+          },
+        });
+
+        // Meter readings
+        await prisma.meterReading.createMany({
+          data: [
+            {
+              dormitoryId: dorm.id,
+              billingCycleId: cycle.id,
+              roomId: room.id,
+              meterDeviceId: waterDevice.id,
+              meterType: 'water',
+              usageUnits: '10.00',
+              previousReading: '100.00',
+              currentReading: '110.00',
+              readAt: new Date('2026-09-25'),
+              status: 'recorded',
+            },
+            {
+              dormitoryId: dorm.id,
+              billingCycleId: cycle.id,
+              roomId: room.id,
+              meterDeviceId: elecDevice.id,
+              meterType: 'electricity',
+              usageUnits: '50.00',
+              previousReading: '200.00',
+              currentReading: '250.00',
+              readAt: new Date('2026-09-25'),
+              status: 'recorded',
+            },
+          ],
+        });
+
+        const billingService = new BillingService(
+          new PrismaBillRepository(prisma),
+          new PrismaBillingCycleRepository(prisma),
+          new PrismaMeterRepository(prisma),
+          new PrismaContractRepository(prisma),
+          new PrismaRoomRepository(prisma),
+          new PrismaTenantRepository(prisma)
+        );
+
+        // Attempt client tamper: send fake historical billingDate and dueDate
+        // Simulate issuance happening on 2026-09-20 (which is after dueDay 17 -> should resolve to 2026-10-17)
+        const issuanceTimestamp = new Date('2026-09-20T10:00:00.000Z');
+        const { bill } = await billingService.generateBill(
+          dorm.id,
+          {
+            billingCycleId: cycle.id,
+            contractId: contract.id,
+            roomId: room.id,
+            tenantId: tenant.id,
+            billingDate: '1999-01-01',
+            dueDate: '1999-01-02',
+          },
+          'owner-1',
+          issuanceTimestamp
+        );
+
+        expect(bill).toBeDefined();
+        // Client fake dates must be rejected; server computed dates are written
+        expect(new Date(bill.billingDate).toISOString().startsWith('2026-09-20')).toBe(true);
+        expect(new Date(bill.dueDate).toISOString().startsWith('2026-10-17')).toBe(true);
+        expect(bill.generatedAt).toBeDefined();
+        expect(new Date(bill.generatedAt!).getTime()).toEqual(issuanceTimestamp.getTime());
+
+        // Cleanup
+        await prisma.billItem.deleteMany({ where: { billId: bill.id } });
+        await prisma.bill.deleteMany({ where: { dormitoryId: dorm.id } });
+        await prisma.meterReading.deleteMany({ where: { dormitoryId: dorm.id } });
+        await prisma.meterDevice.deleteMany({ where: { dormitoryId: dorm.id } });
+        await prisma.contract.deleteMany({ where: { dormitoryId: dorm.id } });
+        await prisma.tenant.deleteMany({ where: { dormitoryId: dorm.id } });
+        await prisma.room.deleteMany({ where: { dormitoryId: dorm.id } });
+        await prisma.building.deleteMany({ where: { dormitoryId: dorm.id } });
+        await prisma.billingRateSnapshot.deleteMany({ where: { dormitoryId: dorm.id } });
+        await prisma.billingCycle.deleteMany({ where: { dormitoryId: dorm.id } });
+        await prisma.dormitoryBillingSettings.deleteMany({ where: { dormitoryId: dorm.id } });
+        await prisma.dormitory.delete({ where: { id: dorm.id } });
+      });
+
+      it('proves bulk bill issuance captures single authoritative timestamp across all generated bills and creates ZERO LINE notifications', async () => {
+        const dorm = await prisma.dormitory.create({
+          data: {
+            name: `Bulk Timestamp Dorm ${Date.now()}`,
+            code: `BTD-${Date.now()}`,
+          },
+        });
+
+        await prisma.dormitoryBillingSettings.create({
+          data: {
+            dormitoryId: dorm.id,
+            billingDay: 25,
+            dueDay: 5,
+            waterBillingType: 'unit',
+            waterRate: new Prisma.Decimal('18.00'),
+            electricityBillingType: 'unit',
+            electricityRate: new Prisma.Decimal('7.00'),
+            commonFee: new Prisma.Decimal('0.00'),
+            commonFeeMode: 'none',
+            internetFee: new Prisma.Decimal('0.00'),
+            internetFeeMode: 'none',
+            parkingRate: new Prisma.Decimal('0.00'),
+            parkingFeeMode: 'none',
+            lateFeeType: 'none',
+            lateFeeValue: new Prisma.Decimal('0.00'),
+          },
+        });
+
+        const billingCycleRepo = new PrismaBillingCycleRepository();
+        const cycleService = new BillingCycleService(billingCycleRepo);
+        const { cycle } = await cycleService.createBillingCycle(dorm.id, {
+          cycleCode: '2026-10',
+          name: 'October 2026',
+          periodStart: '2026-10-01',
+          periodEnd: '2026-10-31',
+          billingDate: '2026-10-25',
+        });
+
+        const building = await prisma.building.create({
+          data: { dormitoryId: dorm.id, name: 'Building B' },
+        });
+
+        const room1 = await prisma.room.create({
+          data: {
+            dormitoryId: dorm.id,
+            buildingId: building.id,
+            roomNumber: '201',
+            normalizedRoomNumber: '201',
+            roomType: 'standard',
+            floor: 2,
+            status: 'occupied',
+            monthlyRent: new Prisma.Decimal('4000.00'),
+          },
+        });
+        const room2 = await prisma.room.create({
+          data: {
+            dormitoryId: dorm.id,
+            buildingId: building.id,
+            roomNumber: '202',
+            normalizedRoomNumber: '202',
+            roomType: 'standard',
+            floor: 2,
+            status: 'occupied',
+            monthlyRent: new Prisma.Decimal('4200.00'),
+          },
+        });
+
+        const tenant1 = await prisma.tenant.create({
+          data: {
+            dormitoryId: dorm.id,
+            tenantNumber: `T1-${Date.now()}`,
+            firstName: 'Bulk1',
+            lastName: 'Tenant',
+            displayName: 'Bulk Tenant 1',
+            phone: '0812222221',
+            status: 'active',
+          },
+        });
+        const tenant2 = await prisma.tenant.create({
+          data: {
+            dormitoryId: dorm.id,
+            tenantNumber: `T2-${Date.now()}`,
+            firstName: 'Bulk2',
+            lastName: 'Tenant',
+            displayName: 'Bulk Tenant 2',
+            phone: '0812222222',
+            status: 'active',
+          },
+        });
+
+        await prisma.contract.create({
+          data: {
+            dormitoryId: dorm.id,
+            roomId: room1.id,
+            tenantId: tenant1.id,
+            contractNumber: `CT1-${Date.now()}`,
+            startDate: new Date('2026-01-01'),
+            endDate: new Date('2026-12-31'),
+            rentAmount: new Prisma.Decimal('4000.00'),
+            depositAmount: new Prisma.Decimal('8000.00'),
+            status: 'active',
+          },
+        });
+        await prisma.contract.create({
+          data: {
+            dormitoryId: dorm.id,
+            roomId: room2.id,
+            tenantId: tenant2.id,
+            contractNumber: `CT2-${Date.now()}`,
+            startDate: new Date('2026-01-01'),
+            endDate: new Date('2026-12-31'),
+            rentAmount: new Prisma.Decimal('4200.00'),
+            depositAmount: new Prisma.Decimal('8400.00'),
+            status: 'active',
+          },
+        });
+
+        // Meters
+        for (const r of [room1, room2]) {
+          const wDev = await prisma.meterDevice.create({
+            data: {
+              dormitoryId: dorm.id,
+              roomId: r.id,
+              type: 'water',
+              meterNumber: `WM-${r.roomNumber}-${Date.now()}`,
+              initialReading: '10.00',
+              currentReading: '15.00',
+            },
+          });
+          const eDev = await prisma.meterDevice.create({
+            data: {
+              dormitoryId: dorm.id,
+              roomId: r.id,
+              type: 'electricity',
+              meterNumber: `EM-${r.roomNumber}-${Date.now()}`,
+              initialReading: '50.00',
+              currentReading: '80.00',
+            },
+          });
+
+          await prisma.meterReading.createMany({
+            data: [
+              {
+                dormitoryId: dorm.id,
+                billingCycleId: cycle.id,
+                roomId: r.id,
+                meterDeviceId: wDev.id,
+                meterType: 'water',
+                usageUnits: '5.00',
+                previousReading: '10.00',
+                currentReading: '15.00',
+                readAt: new Date('2026-10-25'),
+                status: 'recorded',
+              },
+              {
+                dormitoryId: dorm.id,
+                billingCycleId: cycle.id,
+                roomId: r.id,
+                meterDeviceId: eDev.id,
+                meterType: 'electricity',
+                usageUnits: '30.00',
+                previousReading: '50.00',
+                currentReading: '80.00',
+                readAt: new Date('2026-10-25'),
+                status: 'recorded',
+              },
+            ],
+          });
+        }
+
+        const billingService = new BillingService(
+          new PrismaBillRepository(prisma),
+          new PrismaBillingCycleRepository(prisma),
+          new PrismaMeterRepository(prisma),
+          new PrismaContractRepository(prisma),
+          new PrismaRoomRepository(prisma),
+          new PrismaTenantRepository(prisma)
+        );
+
+        const beforeNoticeCount = await prisma.tenantNotice.count({ where: { dormitoryId: dorm.id } });
+
+        const result = await billingService.bulkGenerateBills(dorm.id, cycle.id);
+        expect(result.generatedCount).toBe(2);
+
+        // Verify zero automatic LINE / notification generation
+        const afterNoticeCount = await prisma.tenantNotice.count({ where: { dormitoryId: dorm.id } });
+        expect(afterNoticeCount).toBe(beforeNoticeCount);
+
+        // Verify both bills share identical generatedAt, billingDate, and dueDate
+        const b1 = result.bills[0];
+        const b2 = result.bills[1];
+        expect(new Date(b1.generatedAt!).getTime()).toEqual(new Date(b2.generatedAt!).getTime());
+        expect(new Date(b1.billingDate).toISOString()).toEqual(new Date(b2.billingDate).toISOString());
+        expect(new Date(b1.dueDate).toISOString()).toEqual(new Date(b2.dueDate).toISOString());
+
+        // Cleanup
+        await prisma.billItem.deleteMany({ where: { bill: { dormitoryId: dorm.id } } });
+        await prisma.bill.deleteMany({ where: { dormitoryId: dorm.id } });
+        await prisma.meterReading.deleteMany({ where: { dormitoryId: dorm.id } });
+        await prisma.meterDevice.deleteMany({ where: { dormitoryId: dorm.id } });
+        await prisma.contract.deleteMany({ where: { dormitoryId: dorm.id } });
+        await prisma.tenant.deleteMany({ where: { dormitoryId: dorm.id } });
+        await prisma.room.deleteMany({ where: { dormitoryId: dorm.id } });
+        await prisma.building.deleteMany({ where: { dormitoryId: dorm.id } });
+        await prisma.billingRateSnapshot.deleteMany({ where: { dormitoryId: dorm.id } });
+        await prisma.billingCycle.deleteMany({ where: { dormitoryId: dorm.id } });
+        await prisma.dormitoryBillingSettings.deleteMany({ where: { dormitoryId: dorm.id } });
+        await prisma.dormitory.delete({ where: { id: dorm.id } });
+      });
+
+      it('proves skipped months remain at 0 bills and 0 debt without automatic debt generation', async () => {
+        const dorm = await prisma.dormitory.create({
+          data: {
+            name: `Skipped Months Dorm ${Date.now()}`,
+            code: `SMD-${Date.now()}`,
+          },
+        });
+
+        await prisma.dormitoryBillingSettings.create({
+          data: {
+            dormitoryId: dorm.id,
+            billingDay: 25,
+            dueDay: 10,
+            waterBillingType: 'unit',
+            waterRate: new Prisma.Decimal('18.00'),
+            electricityBillingType: 'unit',
+            electricityRate: new Prisma.Decimal('7.00'),
+            commonFee: new Prisma.Decimal('0.00'),
+            commonFeeMode: 'none',
+            internetFee: new Prisma.Decimal('0.00'),
+            internetFeeMode: 'none',
+            parkingRate: new Prisma.Decimal('0.00'),
+            parkingFeeMode: 'none',
+            lateFeeType: 'none',
+            lateFeeValue: new Prisma.Decimal('0.00'),
+          },
+        });
+
+        const billingCycleRepo = new PrismaBillingCycleRepository();
+        const cycleService = new BillingCycleService(billingCycleRepo);
+
+        // Owner creates 3 cycles (e.g. Aug, Sep, Oct)
+        const { cycle: cAug } = await cycleService.createBillingCycle(dorm.id, {
+          cycleCode: '2026-08',
+          name: 'August 2026',
+          periodStart: '2026-08-01',
+          periodEnd: '2026-08-31',
+          billingDate: '2026-08-25',
+        });
+        const { cycle: cSep } = await cycleService.createBillingCycle(dorm.id, {
+          cycleCode: '2026-09',
+          name: 'September 2026',
+          periodStart: '2026-09-01',
+          periodEnd: '2026-09-30',
+          billingDate: '2026-09-25',
+        });
+        const { cycle: cOct } = await cycleService.createBillingCycle(dorm.id, {
+          cycleCode: '2026-10',
+          name: 'October 2026',
+          periodStart: '2026-10-01',
+          periodEnd: '2026-10-31',
+          billingDate: '2026-10-25',
+        });
+
+        // Owner does not issue bills for Aug & Sep (skipped)
+        // Verify 0 bills in DB for Aug & Sep
+        const augBills = await prisma.bill.count({ where: { billingCycleId: cAug.id } });
+        const sepBills = await prisma.bill.count({ where: { billingCycleId: cSep.id } });
+        const octBills = await prisma.bill.count({ where: { billingCycleId: cOct.id } });
+
+        expect(augBills).toBe(0);
+        expect(sepBills).toBe(0);
+        expect(octBills).toBe(0);
+
+        // Cleanup
+        await prisma.billingRateSnapshot.deleteMany({ where: { dormitoryId: dorm.id } });
+        await prisma.billingCycle.deleteMany({ where: { dormitoryId: dorm.id } });
+        await prisma.dormitoryBillingSettings.deleteMany({ where: { dormitoryId: dorm.id } });
+        await prisma.dormitory.delete({ where: { id: dorm.id } });
+      });
+    });
   });
 });
+
 

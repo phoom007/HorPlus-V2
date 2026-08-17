@@ -15,6 +15,87 @@ import { billingOrchestrationService } from './billing-orchestration.service.js'
 import { toDecimal, addDecimals, mulDecimals, formatDecimal, subDecimals, compareDecimals, isZeroDecimal } from '../utils/decimal-math.util.js';
 import { getPrismaClient } from '../db/prisma.js';
 
+/**
+ * Canonical helper to calculate authoritative Bill due date from actual bill issuance date and dormitory dueDay.
+ * Invariant Rule:
+ *   if issueDay <= dueDay: dueDate = dueDay in the SAME calendar month
+ *   if issueDay > dueDay:  dueDate = dueDay in the NEXT calendar month (with year rollover if month is 12)
+ */
+export function resolveBillDueDate(issueDate: Date | string, dueDay: number): Date {
+  let y: number;
+  let m: number;
+  let day: number;
+
+  if (typeof issueDate === 'string') {
+    const match = issueDate.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (match) {
+      y = parseInt(match[1], 10);
+      m = parseInt(match[2], 10);
+      day = parseInt(match[3], 10);
+    } else {
+      const parsed = new Date(issueDate);
+      y = parsed.getFullYear();
+      m = parsed.getMonth() + 1;
+      day = parsed.getDate();
+    }
+  } else {
+    y = issueDate.getFullYear();
+    m = issueDate.getMonth() + 1;
+    day = issueDate.getDate();
+  }
+
+  let dueYear: number;
+  let dueMonth: number;
+
+  if (day <= dueDay) {
+    dueYear = y;
+    dueMonth = m;
+  } else {
+    if (m === 12) {
+      dueYear = y + 1;
+      dueMonth = 1;
+    } else {
+      dueYear = y;
+      dueMonth = m + 1;
+    }
+  }
+
+  const lastDayOfDueMonth = new Date(dueYear, dueMonth, 0).getDate();
+  const clampedDueDay = Math.min(dueDay, lastDayOfDueMonth);
+  const dueIsoStr = `${dueYear}-${String(dueMonth).padStart(2, '0')}-${String(clampedDueDay).padStart(2, '0')}`;
+  return new Date(`${dueIsoStr}T00:00:00.000Z`);
+}
+
+/**
+ * Canonical helper to resolve Bill calendar issue date (billingDate) from issuance timestamp.
+ */
+export function resolveBillIssueDate(issueDate: Date | string): Date {
+  let y: number;
+  let m: number;
+  let day: number;
+
+  if (typeof issueDate === 'string') {
+    const match = issueDate.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (match) {
+      y = parseInt(match[1], 10);
+      m = parseInt(match[2], 10);
+      day = parseInt(match[3], 10);
+    } else {
+      const parsed = new Date(issueDate);
+      y = parsed.getFullYear();
+      m = parsed.getMonth() + 1;
+      day = parsed.getDate();
+    }
+  } else {
+    y = issueDate.getFullYear();
+    m = issueDate.getMonth() + 1;
+    day = issueDate.getDate();
+  }
+
+  const issueIsoStr = `${y}-${String(m).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+  return new Date(`${issueIsoStr}T00:00:00.000Z`);
+}
+
 export interface GenerateBillDto {
   billingCycleId: string;
   contractId: string;
@@ -351,7 +432,8 @@ export class BillingService {
   public async generateBill(
     dormitoryId: string,
     data: GenerateBillDto,
-    userId?: string
+    userId?: string,
+    issuanceTimestamp?: Date
   ): Promise<{ bill: BillEntity; items: BillItemEntity[]; created: boolean }> {
     const cycle = await this.billingCycleRepo.findById(data.billingCycleId, dormitoryId);
     if (!cycle) {
@@ -365,6 +447,17 @@ export class BillingService {
       const err = new Error('BILLING_CYCLE_LOCKED');
       (err as any).statusCode = 400;
       (err as any).code = 'BILLING_CYCLE_LOCKED';
+      throw err;
+    }
+
+    const prisma = getPrismaClient();
+    const settings = await prisma.dormitoryBillingSettings.findUnique({
+      where: { dormitoryId },
+    });
+    if (!settings || settings.dueDay === null || settings.dueDay === undefined) {
+      const err = new Error('DORMITORY_BILLING_SETTINGS_REQUIRED: Authoritative dormitory dueDay is required to issue bills');
+      (err as any).statusCode = 400;
+      (err as any).code = 'DORMITORY_BILLING_SETTINGS_REQUIRED';
       throw err;
     }
 
@@ -445,8 +538,9 @@ export class BillingService {
     const rawTotal = subDecimals(subtotalDec, discountDec);
     const totalDec = compareDecimals(rawTotal, '0.00') < 0 ? toDecimal('0.00') : rawTotal;
 
-    const billingDate = data.billingDate ? new Date(data.billingDate) : new Date(cycle.billingDate);
-    const dueDate = new Date(cycle.dueDate);
+    const issuanceNow = issuanceTimestamp || new Date();
+    const billingDate = resolveBillIssueDate(issuanceNow);
+    const dueDate = resolveBillDueDate(issuanceNow, settings.dueDay);
 
     return this.billRepo.withTransaction(async (tx) => {
       await this.billRepo.executeRawLock(data.roomId, tx);
@@ -485,6 +579,7 @@ export class BillingService {
             outstandingAmount: formatDecimal(totalDec),
             rateSnapshotId: rateSnapshot?.id,
             generatedByUserId: userId,
+            generatedAt: issuanceNow,
           },
           billItems,
           tx
@@ -546,6 +641,8 @@ export class BillingService {
       throw err;
     }
 
+    const issuanceNow = new Date();
+
     let targetRooms: string[] = [];
     if (roomIds && roomIds.length > 0) {
       targetRooms = roomIds;
@@ -582,7 +679,8 @@ export class BillingService {
             roomId,
             tenantId: contract.tenantId,
           },
-          userId
+          userId,
+          issuanceNow
         );
         generatedBills.push(bill);
         generated.push({ roomId, billId: bill.id, billNumber: bill.billNumber });
@@ -603,7 +701,7 @@ export class BillingService {
     if (cycle.status === 'draft' && generatedBills.length > 0) {
       await this.billingCycleRepo.update(billingCycleId, dormitoryId, {
         status: 'generated',
-        generatedAt: new Date(),
+        generatedAt: issuanceNow,
       });
     }
 

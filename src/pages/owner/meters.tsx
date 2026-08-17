@@ -1419,25 +1419,15 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                 <th id="status-column-header" className="p-4 text-center min-w-[105px]">
                   <div className="text-slate-500 mb-1">สถานะ</div>
                   <div className="flex justify-center">
-                    {meterRows.some(row => row.billStatus === 'pending') ? (
-                      <button
-                        type="button"
-                        onClick={handleIssueAllBills}
-                        className="px-2.5 py-1 rounded-xl text-[10px] font-black tracking-tight bg-rose-600 hover:bg-rose-700 text-white transition-all cursor-pointer flex items-center justify-center gap-1 leading-none whitespace-nowrap shadow-md hover:scale-[1.02] active:scale-98"
-                      >
-                        <X className="w-3 h-3 text-white shrink-0" />
-                        ยกเลิกออกบิล
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={handleIssueAllBills}
-                        className="px-2.5 py-1 rounded-xl text-[10px] font-black tracking-tight bg-emerald-600 hover:bg-emerald-700 text-white transition-all cursor-pointer flex items-center justify-center gap-1 leading-none whitespace-nowrap shadow-md hover:scale-[1.02] active:scale-98"
-                      >
-                        <Sparkles className="w-3 h-3 text-white shrink-0 animate-pulse" />
-                        ออกบิลทั้งหมด
-                      </button>
-                    )}
+                    <button
+                      type="button"
+                      disabled={isSaving || !selectedBillingCycleId}
+                      onClick={handleIssueAllBills}
+                      className="px-2.5 py-1 rounded-xl text-[10px] font-black tracking-tight bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white transition-all cursor-pointer flex items-center justify-center gap-1 leading-none whitespace-nowrap shadow-md hover:scale-[1.02] active:scale-98"
+                    >
+                      <Sparkles className="w-3 h-3 text-white shrink-0 animate-pulse" />
+                      ออกบิลทั้งหมด
+                    </button>
                   </div>
                 </th>
                 <th className="p-4">ผู้เช่า</th>

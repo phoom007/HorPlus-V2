@@ -11,40 +11,6 @@ import {
 import { Modal, formatBaht } from './GlobalComponents';
 import { Bill, Tenant, Room, Contract } from '../types';
 
-export function getStored<T>(key: string, fallback: T): T {
-  try {
-    const v = localStorage.getItem(key);
-    return v ? JSON.parse(v) : fallback;
-  } catch {
-    return fallback;
-  }
-}
-
-export function setStored<T>(key: string, val: T): void {
-  try {
-    localStorage.setItem(key, JSON.stringify(val));
-  } catch {}
-}
-
-export function getDormitoryRatesForCycle(_dorm?: any, _cycle?: string) {
-  return {
-    waterUnitRate: 18,
-    electricUnitRate: 7,
-    waterBillingMode: 'unit',
-    electricBillingMode: 'unit',
-    commonFee: 200,
-    commonFeeMode: 'room',
-    internetFee: 0,
-    internetFeeMode: 'room',
-    parkingFee: 100,
-    parkingFeeMode: 'room'
-  };
-}
-
-export function getDormitory() {
-  return {};
-}
-
 export function formatCycleThaiShort(cycle: string) {
   if (!cycle) return '';
   const [y, m] = cycle.split('-');
@@ -52,8 +18,6 @@ export function formatCycleThaiShort(cycle: string) {
   const idx = parseInt(m, 10) - 1;
   return `${months[idx] || m} ${parseInt(y, 10) + 543}`;
 }
-
-import { tempMeterRowsCache, MeterRowState } from '../pages/owner/meters';
 
 export const LineIcon: React.FC<{ className?: string }> = ({ className = "w-5 h-5" }) => (
   <svg className={className} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -118,12 +82,11 @@ interface LineNotificationModalProps {
 export const LineNotificationModal: React.FC<LineNotificationModalProps> = ({
   isOpen,
   onClose,
-  bills,
-  tenants,
-  rooms,
+  bills = [],
+  tenants = [],
+  rooms = [],
   contracts = [],
   selectedCycle,
-  onSaveBills,
   onAddLog,
   targetScrollTenantId,
   onShowToast
@@ -133,123 +96,24 @@ export const LineNotificationModal: React.FC<LineNotificationModalProps> = ({
   const [isSendingLine, setIsSendingLine] = useState(false);
   const [lineToastSuccess, setLineToastSuccess] = useState<string | null>(null);
 
-  // Persistent line notify statuses map
-  const [lineNotifyMap, setLineNotifyMap] = useState<{ [key: string]: { status: 'sent' | 'resent'; sentAt: string } }>(() => {
-    try {
-      const saved = localStorage.getItem('HorPlus_line_notify_map');
-      if (saved) return JSON.parse(saved);
-    } catch {}
-    return {
-      [`2026-07_tenant-1`]: { status: 'sent', sentAt: '14 ก.ค. 2569 - 10:30 น.' },
-      [`2026-07_tenant-2`]: { status: 'sent', sentAt: '14 ก.ค. 2569 - 10:32 น.' },
-    };
-  });
+  // In-session delivery notification status map (server-authoritative; no fake localstorage financial state)
+  const [lineNotifyMap, setLineNotifyMap] = useState<{ [key: string]: { status: 'sent' | 'resent'; sentAt: string } }>({});
 
-  useEffect(() => {
-    try {
-      localStorage.setItem('HorPlus_line_notify_map', JSON.stringify(lineNotifyMap));
-    } catch (e) {
-      console.error(e);
-    }
-  }, [lineNotifyMap]);
-
-  const contractsList = contracts && contracts.length > 0 ? contracts : [];
-
-  // Compute cycle bills sorted by room number (only unpaid bills for occupied rooms with real active tenants)
+  // Compute cycle bills from ONLY real persisted issued bills for selectedCycle (excluding draft or cancelled)
   const cycleBillsMap = new Map<string, Bill>();
 
-  const activeRooms = [...rooms].sort((a, b) =>
-    a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true, sensitivity: 'base' })
+  const realIssuedBills = (bills || []).filter(b =>
+    (b.cycleId === selectedCycle || (b as any).billingCycleId === selectedCycle) &&
+    b.status !== 'draft' &&
+    b.status !== 'cancelled'
   );
 
-  activeRooms.forEach(room => {
-    // Determine active tenant for this room in selectedCycle
-    const [cy, cm] = selectedCycle.split('-').map(Number);
-    const cycleVal = cy * 12 + (cm - 1);
-
-    const activeContract = contractsList.find(c => {
-      if (c.roomId !== room.id && c.roomId !== room.roomNumber) return false;
-      if (c.status === 'terminated') return false;
-      const [sy, sm] = c.startDate.split('-').map(Number);
-      const [ey, em] = c.endDate.split('-').map(Number);
-      const startVal = sy * 12 + (sm - 1);
-      const endVal = ey * 12 + (em - 1);
-      return cycleVal >= startVal && cycleVal <= endVal;
-    });
-
-    let activeTenant: Tenant | undefined = undefined;
-    if (activeContract) {
-      activeTenant = tenants.find(t => t.id === activeContract.tenantId && t.status !== 'inactive');
-    }
-    if (!activeTenant && room.currentTenantId) {
-      activeTenant = tenants.find(t => t.id === room.currentTenantId && t.status !== 'inactive');
-    }
-    if (!activeTenant) {
-      activeTenant = tenants.find(t => {
-        if (t.status === 'inactive') return false;
-        if ((t as any).roomId === room.id || (t as any).roomId === room.roomNumber) return true;
-        if (t.rentalHistory && t.rentalHistory.length > 0 && (t.rentalHistory[0] === room.id || t.rentalHistory[0] === room.roomNumber)) return true;
-        return false;
-      });
-    }
-
-    if (!activeTenant) return; // No active real tenant in this room
-
-    // Check if an existing bill exists for this room / active tenant in selectedCycle
-    const existingBill = bills.find(
-      b => b.cycleId === selectedCycle && (b.tenantId === activeTenant!.id || b.roomId === room.id)
-    );
-
-    if (existingBill) {
-      // Exclude paid bills (Requirement #2: แสดงสถานะ ไม่เท่ากับ 'ชำระแล้ว')
-      if (existingBill.status !== 'paid') {
-        cycleBillsMap.set(activeTenant.id, {
-          ...existingBill,
-          roomId: room.id,
-          tenantId: activeTenant.id
-        });
-      }
-    } else {
-      // Check if there is any paid bill for this room in selectedCycle
-      const hasPaidBill = bills.some(
-        b => b.cycleId === selectedCycle && (b.roomId === room.id || b.tenantId === activeTenant!.id) && b.status === 'paid'
-      );
-
-      if (!hasPaidBill) {
-        let totalAmt = room.monthlyRent || (room as any).baseRentPrice || 0;
-        if (tempMeterRowsCache[selectedCycle]) {
-          const cachedRow = tempMeterRowsCache[selectedCycle].find(cr => cr.roomId === room.id);
-          if (cachedRow) {
-            const rates = getDormitoryRatesForCycle(getDormitory(), selectedCycle);
-            const waterCost = (cachedRow.waterCurr - cachedRow.waterPrev) * (rates.waterUnitRate || 0);
-            const elecCost = (cachedRow.elecCurr - cachedRow.elecPrev) * (rates.electricUnitRate || 0);
-            const roomRent = (room.rentCycle === 'term') ? 0 : (room.monthlyRent || 0);
-            const otherTotal = (cachedRow.otherFees || []).reduce((s, f) => s + f.amount, 0);
-            const calc = roomRent + Math.max(0, waterCost) + Math.max(0, elecCost) + (cachedRow.overdueAmount || 0) + otherTotal;
-            if (calc > 0) totalAmt = calc;
-          }
-        }
-
-        cycleBillsMap.set(activeTenant.id, {
-          id: `draft-bill-${room.id}-${selectedCycle}`,
-          billNumber: `BILL-${selectedCycle.replace('-', '')}-${room.roomNumber}`,
-          cycleId: selectedCycle,
-          roomId: room.id,
-          tenantId: activeTenant.id,
-          items: [
-            {
-              id: `rent-${room.id}`,
-              description: `ค่าเช่าห้องพัก ${room.roomNumber}`,
-              amount: room.monthlyRent || (room as any).baseRentPrice || 0,
-              category: 'rent'
-            }
-          ],
-          totalAmount: totalAmt,
-          dueDate: `${selectedCycle}-30`,
-          status: 'draft',
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString()
-        });
+  realIssuedBills.forEach(bill => {
+    // Only unpaid / pending / overdue / checking / paid bills that actually exist
+    if (bill.status !== 'paid') {
+      const tid = bill.tenantId || '';
+      if (tid) {
+        cycleBillsMap.set(tid, bill);
       }
     }
   });
@@ -310,9 +174,6 @@ export const LineNotificationModal: React.FC<LineNotificationModalProps> = ({
       let newSentCount = 0;
       let resentCount = 0;
 
-      const updatedBills = [...bills];
-      let billsModified = false;
-
       selectedTenantIdsForLine.forEach(tenantId => {
         const key = `${selectedCycle}_${tenantId}`;
         const existing = newMap[key];
@@ -323,96 +184,15 @@ export const LineNotificationModal: React.FC<LineNotificationModalProps> = ({
           newMap[key] = { status: 'sent', sentAt: nowStr };
           newSentCount++;
         }
-
-        const tenant = tenants.find(t => t.id === tenantId);
-        const room = getRoomForTenant(tenantId, tenant, rooms, contracts, bills);
-        const existingBillIdx = updatedBills.findIndex(
-          b => b.cycleId === selectedCycle && (b.tenantId === tenantId || (room && (b.roomId === room.id || b.roomId === room.roomNumber)))
-        );
-
-        if (existingBillIdx >= 0) {
-          const existingBill = updatedBills[existingBillIdx];
-          if (existingBill.status !== 'paid') {
-            updatedBills[existingBillIdx] = {
-              ...existingBill,
-              status: 'pending',
-              roomId: existingBill.roomId || room?.id || '',
-              tenantId: existingBill.tenantId || tenantId,
-              updatedAt: new Date().toISOString()
-            };
-            billsModified = true;
-          }
-        } else if (room) {
-          let totalAmt = room.monthlyRent || (room as any).baseRentPrice || 0;
-          if (tempMeterRowsCache[selectedCycle]) {
-            const cachedRow = tempMeterRowsCache[selectedCycle].find(cr => cr.roomId === room.id || cr.roomNumber === room.roomNumber);
-            if (cachedRow) {
-              const rates = getDormitoryRatesForCycle(getDormitory(), selectedCycle);
-              const waterCost = (cachedRow.waterCurr - cachedRow.waterPrev) * (rates.waterUnitRate || 0);
-              const elecCost = (cachedRow.elecCurr - cachedRow.elecPrev) * (rates.electricUnitRate || 0);
-              const roomRent = (room.rentCycle === 'term') ? 0 : (room.monthlyRent || 0);
-              const otherTotal = (cachedRow.otherFees || []).reduce((s, f) => s + f.amount, 0);
-              const calc = roomRent + Math.max(0, waterCost) + Math.max(0, elecCost) + (cachedRow.overdueAmount || 0) + otherTotal;
-              if (calc > 0) totalAmt = calc;
-            }
-          }
-
-          const newBill: Bill = {
-            id: `b-${room.id}-${selectedCycle}`,
-            billNumber: `BILL-${selectedCycle.replace('-', '')}-${room.roomNumber}`,
-            cycleId: selectedCycle,
-            roomId: room.id,
-            tenantId: tenantId,
-            items: [
-              {
-                id: `b-${room.id}-rent`,
-                description: `ค่าเช่าห้องพัก ${room.roomNumber}`,
-                amount: room.monthlyRent || (room as any).baseRentPrice || 0,
-                category: 'rent'
-              }
-            ],
-            totalAmount: totalAmt,
-            dueDate: `${selectedCycle}-30`,
-            status: 'pending',
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString()
-          };
-          updatedBills.push(newBill);
-          billsModified = true;
-        }
-
-        if (room) {
-          if (!tempMeterRowsCache[selectedCycle]) {
-            const cacheKey = `meters_form_draft_${selectedCycle}`;
-            tempMeterRowsCache[selectedCycle] = getStored<MeterRowState[]>(cacheKey, []) || [];
-          }
-          if (tempMeterRowsCache[selectedCycle] && tempMeterRowsCache[selectedCycle].length > 0) {
-            tempMeterRowsCache[selectedCycle] = tempMeterRowsCache[selectedCycle].map(r => {
-              if ((r.roomId === room.id || r.roomId === room.roomNumber || r.roomNumber === room.roomNumber) && r.billStatus !== 'paid') {
-                return {
-                  ...r,
-                  billStatus: 'pending',
-                  isPaid: false
-                };
-              }
-              return r;
-            });
-            setStored(`meters_form_draft_${selectedCycle}`, tempMeterRowsCache[selectedCycle]);
-          }
-        }
       });
 
-      if (billsModified && onSaveBills) {
-        onSaveBills(updatedBills);
-      }
-
-
+      // Zero financial mutations to bills, contracts, meters, or cache!
       setLineNotifyMap(newMap);
       setIsSendingLine(false);
 
       const count = selectedTenantIdsForLine.length;
       const msg = `ส่งแจ้งเตือนผ่าน LINE เรียบร้อยแล้ว (${count} ห้อง)`;
-      
+
       if (onShowToast) {
         onShowToast(msg);
       } else {
@@ -428,7 +208,7 @@ export const LineNotificationModal: React.FC<LineNotificationModalProps> = ({
         selectedCycle
       );
 
-      // Close modal immediately so floating toast shows up on active view
+      // Close modal
       onClose();
     }, 400);
   };
@@ -560,7 +340,7 @@ export const LineNotificationModal: React.FC<LineNotificationModalProps> = ({
                 <div className="py-12 px-4 text-center bg-white rounded-2xl border border-dashed border-slate-200 space-y-2 my-2 animate-in fade-in duration-300">
                   <CheckCircle2 className="w-10 h-10 text-emerald-500 mx-auto opacity-70" />
                   <p className="font-bold text-slate-700 text-xs">ไม่มีรายการบิลในหมวดหมู่นี้</p>
-                  <p className="text-[11px] text-slate-400">ส่งแจ้งเตือนครบทุกห้องในหมวดหมู่นี้แล้ว หรือไม่พบรายการที่ตรงกับเงื่อนไข</p>
+                  <p className="text-[11px] text-slate-400">ส่งแจ้งเตือนครบทุกห้องในหมวดหมู่นี้แล้ว หรือไม่พบรายการบิลที่ออกแล้วในงวดนี้</p>
                 </div>
               );
             }

@@ -80,6 +80,7 @@ export interface CreateBillData {
   currency?: string;
   rateSnapshotId?: string | null;
   generatedByUserId?: string | null;
+  generatedAt?: Date;
 }
 
 export interface CreateBillItemData {
@@ -239,7 +240,7 @@ export class InMemoryBillRepository implements IBillRepository {
       currency: data.currency || 'THB',
       rateSnapshotId: data.rateSnapshotId || null,
       generatedByUserId: data.generatedByUserId || null,
-      generatedAt: now,
+      generatedAt: data.generatedAt || now,
       version: 1,
       createdAt: now,
       updatedAt: now,
@@ -504,6 +505,7 @@ export class PrismaBillRepository implements IBillRepository {
         currency: data.currency || 'THB',
         rateSnapshotId: isUuid(data.rateSnapshotId) ? data.rateSnapshotId : null,
         generatedByUserId: isUuid(data.generatedByUserId) ? data.generatedByUserId : null,
+        generatedAt: data.generatedAt || undefined,
       },
     });
 

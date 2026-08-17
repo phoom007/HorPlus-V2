@@ -245,12 +245,13 @@ export class InMemoryBillingCycleRepository implements IBillingCycleRepository {
 }
 
 import { PrismaClient } from '@prisma/client';
+import { getPrismaClient } from '../prisma.js';
 
 export class PrismaBillingCycleRepository implements IBillingCycleRepository {
   private prisma: PrismaClient;
 
-  constructor(prisma: PrismaClient) {
-    this.prisma = prisma;
+  constructor(prisma?: PrismaClient) {
+    this.prisma = prisma || getPrismaClient();
   }
 
   private mapCycleToEntity(c: any): BillingCycleEntity {
