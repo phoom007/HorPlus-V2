@@ -25,7 +25,7 @@ describe('normalizeNumericInput utility', () => {
     });
   });
 
-  describe('Decimal Normalization', () => {
+  describe('Decimal Normalization & Progressive Typing Simulation', () => {
     it('normalizes leading zeroes from decimal numbers', () => {
       expect(normalizeNumericInput('000.50', true)).toBe('0.50');
       expect(normalizeNumericInput('014000.25', true)).toBe('14000.25');
@@ -35,6 +35,34 @@ describe('normalizeNumericInput utility', () => {
       expect(normalizeNumericInput('000.00', true)).toBe('0.00');
       expect(normalizeNumericInput('7.00', true)).toBe('7.00');
       expect(normalizeNumericInput('018.5', true)).toBe('18.5');
+    });
+
+    it('simulates progressive keystroke-by-keystroke decimal input preserving trailing dot and decimal zeroes', () => {
+      // Keystrokes for typing "0.50"
+      let val = '';
+      val = normalizeNumericInput(val + '0', true);
+      expect(val).toBe('0');
+      val = normalizeNumericInput(val + '.', true);
+      expect(val).toBe('0.');
+      val = normalizeNumericInput(val + '5', true);
+      expect(val).toBe('0.5');
+      val = normalizeNumericInput(val + '0', true);
+      expect(val).toBe('0.50');
+
+      // Keystrokes for typing "018.50"
+      let val2 = '';
+      val2 = normalizeNumericInput(val2 + '0', true);
+      expect(val2).toBe('0');
+      val2 = normalizeNumericInput(val2 + '1', true);
+      expect(val2).toBe('1');
+      val2 = normalizeNumericInput(val2 + '8', true);
+      expect(val2).toBe('18');
+      val2 = normalizeNumericInput(val2 + '.', true);
+      expect(val2).toBe('18.');
+      val2 = normalizeNumericInput(val2 + '5', true);
+      expect(val2).toBe('18.5');
+      val2 = normalizeNumericInput(val2 + '0', true);
+      expect(val2).toBe('18.50');
     });
 
     it('prevents multiple decimal points', () => {

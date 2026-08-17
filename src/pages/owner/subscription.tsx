@@ -33,6 +33,8 @@ export const SubscriptionPage: React.FC<SubscriptionPageProps> = ({ dormitoryId 
 
   // Referral Program state
   const [referralData, setReferralData] = useState<{ code: string; usageCount: number; maxUsage: number; coinsPerUsage: number } | null>(null);
+  const [referralLoading, setReferralLoading] = useState(true);
+  const [referralError, setReferralError] = useState<string | null>(null);
   const [isCopiedReferral, setIsCopiedReferral] = useState(false);
 
   const activeDormId =
@@ -78,24 +80,34 @@ export const SubscriptionPage: React.FC<SubscriptionPageProps> = ({ dormitoryId 
     }
   };
 
+  const fetchReferral = async () => {
+    setReferralLoading(true);
+    setReferralError(null);
+    try {
+      const res = await fetch('/api/v1/referral/me');
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData?.error?.message || 'ไม่สามารถโหลดข้อมูลรหัสคำเชิญได้');
+      }
+      const json = await res.json();
+      if (json.success && json.data && json.data.code) {
+        setReferralData(json.data);
+      } else {
+        throw new Error('ไม่พบข้อมูลรหัสคำเชิญ');
+      }
+    } catch (err: any) {
+      setReferralError(err.message || 'เกิดข้อผิดพลาดในการโหลดรหัสคำเชิญ');
+      setReferralData(null);
+    } finally {
+      setReferralLoading(false);
+    }
+  };
+
   useEffect(() => {
     fetchEntitlements();
   }, [activeDormId]);
 
   useEffect(() => {
-    const fetchReferral = async () => {
-      try {
-        const res = await fetch('/api/v1/referral/me');
-        if (res.ok) {
-          const json = await res.json();
-          if (json.success && json.data) {
-            setReferralData(json.data);
-          }
-        }
-      } catch (err) {
-        console.warn('Failed to fetch referral info:', err);
-      }
-    };
     fetchReferral();
   }, []);
 
@@ -388,9 +400,11 @@ export const SubscriptionPage: React.FC<SubscriptionPageProps> = ({ dormitoryId 
             <div>
               <div className="flex items-center gap-2">
                 <h3 className="text-base font-black text-slate-900">โปรแกรมแนะนำเพื่อน (Referral Program)</h3>
-                <span className="text-[10px] font-black text-amber-800 bg-amber-100 px-2.5 py-0.5 rounded-full border border-amber-200">
-                  เชิญแล้ว {referralData?.usageCount || 0} / {referralData?.maxUsage || 10} คน
-                </span>
+                {referralData && (
+                  <span className="text-[10px] font-black text-amber-800 bg-amber-100 px-2.5 py-0.5 rounded-full border border-amber-200">
+                    เชิญแล้ว {referralData.usageCount} / {referralData.maxUsage} คน
+                  </span>
+                )}
               </div>
               <p className="text-xs text-slate-600 font-medium mt-0.5">
                 แชร์รหัสให้เจ้าของหอพักอื่น รับ 10 HorPlus Coins (฿10) เมื่อเพื่อนเปิดใช้งานหอพักแรก
@@ -399,29 +413,54 @@ export const SubscriptionPage: React.FC<SubscriptionPageProps> = ({ dormitoryId 
           </div>
         </div>
 
-        <div className="bg-white p-4 rounded-2xl border border-amber-200/80 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <span className="text-xs font-black text-slate-600 shrink-0">รหัสคำเชิญของคุณ:</span>
-            <span className="px-3.5 py-1.5 bg-amber-50 border border-amber-200 rounded-xl font-mono text-sm font-black text-amber-900 tracking-widest select-all">
-              {referralData?.code || '------'}
-            </span>
+        {referralLoading ? (
+          <div className="bg-white/80 p-4 rounded-2xl border border-amber-200/80 flex items-center justify-center gap-2 text-xs font-bold text-slate-500 py-6">
+            <RefreshCw className="w-4 h-4 animate-spin text-amber-600" />
+            <span>กำลังโหลดข้อมูลรหัสคำเชิญ...</span>
           </div>
+        ) : referralError ? (
+          <div className="bg-rose-50 border border-rose-200 p-4 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-rose-800 font-bold">
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+              <span>{referralError}</span>
+            </div>
+            <button
+              type="button"
+              onClick={fetchReferral}
+              className="px-3.5 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-black transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-xs shrink-0"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              <span>ลองใหม่อีกครั้ง</span>
+            </button>
+          </div>
+        ) : referralData ? (
+          <div className="bg-white p-4 rounded-2xl border border-amber-200/80 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <span className="text-xs font-black text-slate-600 shrink-0">รหัสคำเชิญของคุณ:</span>
+              <span
+                data-testid="referral-code-badge"
+                className="px-3.5 py-1.5 bg-amber-50 border border-amber-200 rounded-xl font-mono text-sm font-black text-amber-900 tracking-widest select-all"
+              >
+                {referralData.code}
+              </span>
+            </div>
 
-          <button
-            type="button"
-            onClick={() => {
-              if (!referralData?.code) return;
-              const shareUrl = `${window.location.origin}/register?ref=${referralData.code}`;
-              navigator.clipboard.writeText(shareUrl);
-              setIsCopiedReferral(true);
-              setTimeout(() => setIsCopiedReferral(false), 3000);
-            }}
-            className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-black transition-all flex items-center justify-center gap-2 cursor-pointer shadow-xs shrink-0"
-          >
-            {isCopiedReferral ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
-            <span>{isCopiedReferral ? 'คัดลอกลิงก์สำเร็จ!' : 'คัดลอกลิงก์แนะนำเพื่อน'}</span>
-          </button>
-        </div>
+            <button
+              type="button"
+              onClick={() => {
+                if (!referralData?.code) return;
+                const shareUrl = `${window.location.origin}/auth/owner?ref=${referralData.code}`;
+                navigator.clipboard.writeText(shareUrl);
+                setIsCopiedReferral(true);
+                setTimeout(() => setIsCopiedReferral(false), 3000);
+              }}
+              className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-black transition-all flex items-center justify-center gap-2 cursor-pointer shadow-xs shrink-0"
+            >
+              {isCopiedReferral ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+              <span>{isCopiedReferral ? 'คัดลอกลิงก์สำเร็จ!' : 'คัดลอกลิงก์แนะนำเพื่อน'}</span>
+            </button>
+          </div>
+        ) : null}
       </div>
 
       {/* Package Catalog Section */}

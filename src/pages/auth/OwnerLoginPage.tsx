@@ -38,6 +38,12 @@ export const OwnerLoginPage: React.FC<OwnerLoginPageProps> = ({ onLoginSuccess }
   const ownerUser = initialUsers.find(u => u.roleId === 'role-owner') || initialUsers[0];
 
   React.useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const refParam = urlParams.get('ref');
+    if (refParam) {
+      sessionStorage.setItem('horplus_referral_code', refParam);
+    }
+
     fetch('/api/v1/auth/session')
       .then(res => res.ok ? res.json() : null)
       .then(json => {
@@ -75,6 +81,11 @@ export const OwnerLoginPage: React.FC<OwnerLoginPageProps> = ({ onLoginSuccess }
     try {
       setIsLoading(true);
       sessionStorage.removeItem('active_dormitory_selected_for_session');
+
+      const urlParams = new URLSearchParams(window.location.search);
+      const refParam = urlParams.get('ref') || sessionStorage.getItem('horplus_referral_code') || '';
+      const refQuery = refParam ? `?ref=${encodeURIComponent(refParam)}` : '';
+
       const res = await fetch('/api/v1/auth/google', {
         method: 'POST',
         headers: {
@@ -96,7 +107,7 @@ export const OwnerLoginPage: React.FC<OwnerLoginPageProps> = ({ onLoginSuccess }
         setUserMemberships(memberships);
         setShowPicker(true);
       } else if (result.data?.onboardingRequired) {
-        navigate('/owner/register');
+        navigate(`/owner/register${refQuery}`);
       } else {
         setUserMemberships(memberships);
         setShowPicker(true);

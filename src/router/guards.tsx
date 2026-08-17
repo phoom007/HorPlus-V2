@@ -43,7 +43,7 @@ export const OwnerAuthGuard: React.FC<{ children?: React.ReactNode }> = ({ child
   }
 
   if (!session || session.userType !== 'owner' || !session.user) {
-    return <Navigate to="/auth/owner" replace />;
+    return <Navigate to={`/auth/owner${location.search}`} replace />;
   }
 
   const userMemberships = session.memberships || [];
@@ -52,7 +52,7 @@ export const OwnerAuthGuard: React.FC<{ children?: React.ReactNode }> = ({ child
 
   if (session.onboardingRequired || membershipCount === 0) {
     if (location.pathname !== '/owner/register') {
-      return <Navigate to="/owner/register" replace />;
+      return <Navigate to={`/owner/register${location.search}`} replace />;
     }
   } else {
     // If authenticated owner is adding a new dormitory, allow access to add dorm route
@@ -66,7 +66,7 @@ export const OwnerAuthGuard: React.FC<{ children?: React.ReactNode }> = ({ child
 
     // User has completed onboarding and has 1 or more memberships -> forbid accessing initial onboarding page (/owner/register)
     if (location.pathname === '/owner/register') {
-      return <Navigate to="/auth/owner" replace />;
+      return <Navigate to={`/auth/owner${location.search}`} replace />;
     }
 
     const storedDormId = sessionStorage.getItem('active_dormitory_selected_for_session') 
@@ -95,7 +95,7 @@ export const OwnerAuthGuard: React.FC<{ children?: React.ReactNode }> = ({ child
     }
 
     if (!activeDormId) {
-      return <Navigate to="/auth/owner" replace />;
+      return <Navigate to={`/auth/owner${location.search}`} replace />;
     }
   }
 
