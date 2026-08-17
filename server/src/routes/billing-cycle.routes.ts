@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { AuthenticationService } from '../services/auth.service.js';
 import { BillingCycleService } from '../services/billing-cycle.service.js';
+import { currentCycleResolverService } from '../services/current-cycle-resolver.js';
 import { createRequireSessionMiddleware } from '../middleware/require-session.js';
 import { requireDormitoryPermission } from '../middleware/permission.js';
 import { requireDormitoryWriteEntitlement } from '../middleware/entitlement.js';
@@ -78,11 +79,39 @@ export function createBillingCycleRouter(
         sortBy: req.query.sortBy as string,
         sortDirection: req.query.sortDirection as 'asc' | 'desc',
       };
-      const result = await billingCycleService.getBillingCycles(dormId, query);
+      const [result, operational] = await Promise.all([
+        billingCycleService.getBillingCycles(dormId, query),
+        currentCycleResolverService.resolveOperationalBillingCycle(dormId),
+      ]);
       res.json({
         data: result.items,
         pagination: { total: result.total, page: query.page, pageSize: query.pageSize },
+        operationalBillingCycleId: operational.billingCycleId,
+        operationalCycleCode: operational.cycleCode,
+        operationalCycle: operational,
       });
+    } catch (err) {
+      handleServiceError(res, err, req);
+    }
+  });
+
+  // GET /api/v1/billing-cycles/operational
+  router.get('/operational', async (req: Request, res: Response) => {
+    try {
+      const dormId = getDormitoryId(req);
+      const operational = await currentCycleResolverService.resolveOperationalBillingCycle(dormId);
+      res.json({ data: operational });
+    } catch (err) {
+      handleServiceError(res, err, req);
+    }
+  });
+
+  // GET /api/v1/billing-cycles/current
+  router.get('/current', async (req: Request, res: Response) => {
+    try {
+      const dormId = getDormitoryId(req);
+      const operational = await currentCycleResolverService.resolveOperationalBillingCycle(dormId);
+      res.json({ data: operational });
     } catch (err) {
       handleServiceError(res, err, req);
     }

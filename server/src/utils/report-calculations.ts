@@ -128,6 +128,7 @@ export interface ReportCalculationResult {
   exactTotalRevenueThisMonth: string;
   exactTotalUnpaidThisMonth: string;
   exactTotalOverdueAmount: string;
+  exactTotalBilledPlusDeposit: string;
   exactYearBilledTotal: string;
   exactArpu: string;
 
@@ -146,6 +147,7 @@ export interface ReportCalculationResult {
   totalRevenueThisMonth: number;
   totalUnpaidThisMonth: number;
   totalOverdueAmount: number;
+  totalBilledPlusDeposit: number;
   paidPercent: number;
   unpaidPercent: number;
   arpu: number;
@@ -456,6 +458,7 @@ export function calculateOwnerReports(params: ReportCalculationParams): ReportCa
     exactTotalRevenueThisMonth: satangsToString(totalRevenueSatangs),
     exactTotalUnpaidThisMonth: satangsToString(totalUnpaidSatangs),
     exactTotalOverdueAmount: satangsToString(totalOverdueSatangs),
+    exactTotalBilledPlusDeposit: satangsToString(totalBreakdownSatangs),
     exactYearBilledTotal: satangsToString(yearBilledSatangs),
     exactArpu: satangsToString(arpuSatangs),
 
@@ -474,6 +477,7 @@ export function calculateOwnerReports(params: ReportCalculationParams): ReportCa
     totalRevenueThisMonth: satangsToNumber(totalRevenueSatangs),
     totalUnpaidThisMonth: satangsToNumber(totalUnpaidSatangs),
     totalOverdueAmount: satangsToNumber(totalOverdueSatangs),
+    totalBilledPlusDeposit: satangsToNumber(totalBreakdownSatangs),
     paidPercent,
     unpaidPercent,
     arpu: satangsToNumber(arpuSatangs),

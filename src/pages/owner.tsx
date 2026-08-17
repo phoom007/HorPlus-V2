@@ -54,6 +54,7 @@ import { OwnerSettings } from './owner/settings';
 import { OwnerRegister } from './owner/register';
 import { PaymentsOwnerView } from './owner/payments';
 import { SubscriptionPage } from './owner/subscription';
+import { fetchAllPaginated, fetchAllPaginatedWithMeta } from '../utils/fetch-paginated';
 
 
 interface SlidableNotificationItemProps {
@@ -481,35 +482,6 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
     }
   };
 
-  // Helper to fetch all pages of a paginated API endpoint to ensure complete datasets for reports
-  const fetchAllPaginated = async <T = any>(baseUrl: string, headers: Record<string, string>): Promise<T[]> => {
-    let page = 1;
-    const pageSize = 50;
-    const allItems: T[] = [];
-
-    while (true) {
-      const separator = baseUrl.includes('?') ? '&' : '?';
-      const url = `${baseUrl}${separator}page=${page}&pageSize=${pageSize}`;
-      const res = await fetch(url, { headers, credentials: 'include' });
-      if (!res.ok) break;
-      const json = await res.json();
-      const items = Array.isArray(json.data) ? json.data : [];
-      allItems.push(...items);
-
-      const total = json.pagination?.total;
-      if (typeof total === 'number') {
-        if (allItems.length >= total || items.length === 0) {
-          break;
-        }
-      } else {
-        break;
-      }
-      page++;
-    }
-
-    return allItems;
-  };
-
   // Load centralized data
   const refreshAllData = async () => {
     if (activeTab === 'register' || onboardingRequired) return;
@@ -521,7 +493,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
     }
 
     try {
-      const loadedRooms = await fetchAllPaginated('/api/v1/properties/rooms', reqHeaders);
+      const loadedRooms = await fetchAllPaginated('/api/v1/properties/rooms', { headers: reqHeaders, credentials: 'include' });
       isApiConnected = true;
       setRooms(loadedRooms);
     } catch {
@@ -529,7 +501,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
     }
 
     try {
-      const loadedBuildings = await fetchAllPaginated('/api/v1/properties/buildings', reqHeaders);
+      const loadedBuildings = await fetchAllPaginated('/api/v1/properties/buildings', { headers: reqHeaders, credentials: 'include' });
       setBuildings(loadedBuildings);
     } catch {
       setBuildings([]);
@@ -537,13 +509,13 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
 
     if (isApiConnected) {
       try {
-        const [loadedTenants, loadedBills, loadedContracts, loadedRepairs, loadedAnnouncements, loadedCycles] = await Promise.all([
-          fetchAllPaginated('/api/v1/tenants', reqHeaders),
-          fetchAllPaginated('/api/v1/bills', reqHeaders),
-          fetchAllPaginated('/api/v1/contracts', reqHeaders),
-          fetchAllPaginated('/api/v1/maintenance', reqHeaders),
-          fetchAllPaginated('/api/v1/announcements', reqHeaders),
-          fetchAllPaginated('/api/v1/billing-cycles', reqHeaders),
+        const [loadedTenants, loadedBills, loadedContracts, loadedRepairs, loadedAnnouncements, cycleResult] = await Promise.all([
+          fetchAllPaginated('/api/v1/tenants', { headers: reqHeaders, credentials: 'include' }),
+          fetchAllPaginated('/api/v1/bills', { headers: reqHeaders, credentials: 'include' }),
+          fetchAllPaginated('/api/v1/contracts', { headers: reqHeaders, credentials: 'include' }),
+          fetchAllPaginated('/api/v1/maintenance', { headers: reqHeaders, credentials: 'include' }),
+          fetchAllPaginated('/api/v1/announcements', { headers: reqHeaders, credentials: 'include' }),
+          fetchAllPaginatedWithMeta('/api/v1/billing-cycles', { headers: reqHeaders, credentials: 'include' }),
         ]);
         setTenants(loadedTenants);
         setBills(loadedBills);
@@ -552,17 +524,16 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
         setAnnouncements(loadedAnnouncements);
         setAuditLogs([]);
 
+        const loadedCycles = cycleResult.data || [];
         setBillingCycles(loadedCycles);
-        if (loadedCycles.length > 0) {
-          const cycleWithActivity = loadedCycles.find((c: any) =>
-            (c.meterReadings && c.meterReadings.length > 0) ||
-            (c.bills && c.bills.length > 0)
-          );
-          const targetCycle = cycleWithActivity || loadedCycles[0];
-          if (!selectedBillingCycleId || !loadedCycles.some((c: any) => c.id === selectedBillingCycleId)) {
-            setSelectedBillingCycleId(targetCycle.id);
-            setSelectedCycleCode(targetCycle.cycleCode);
-          }
+
+        // Authoritatively initialize selectedBillingCycleId and selectedCycleCode from server resolver
+        if (cycleResult.operationalBillingCycleId && cycleResult.operationalCycleCode) {
+          setSelectedBillingCycleId(cycleResult.operationalBillingCycleId);
+          setSelectedCycleCode(cycleResult.operationalCycleCode);
+        } else if (loadedCycles.length > 0) {
+          setSelectedBillingCycleId(loadedCycles[0].id);
+          setSelectedCycleCode(loadedCycles[0].cycleCode);
         }
       } catch {
         setTenants([]);

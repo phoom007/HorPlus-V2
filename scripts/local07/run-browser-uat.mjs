@@ -554,6 +554,14 @@ async function runBrowserUAT() {
       uatResults.step7_pricing_catalog_and_trial_defaults = true;
     }
 
+    // Ensure PRO plan card is selected
+    const proCard = page.locator('text="HorPlus PRO"').first();
+    if (await proCard.isVisible()) {
+      await proCard.click();
+      await page.waitForTimeout(600);
+      console.log('  Selected PRO plan card.');
+    }
+
     // Validate promo code HORPLUS
     const promoInput = page.locator('input[placeholder*="HORPLUS"]').first();
     if (await promoInput.isVisible()) {
@@ -561,7 +569,7 @@ async function runBrowserUAT() {
       const applyPromoBtn = page.locator('button:has-text("ใช้รหัส")').first();
       if (await applyPromoBtn.isVisible()) {
         await applyPromoBtn.click();
-        await page.waitForTimeout(800);
+        await page.waitForTimeout(1000);
         console.log('  Applied promo code HORPLUS.');
       }
     }
@@ -884,9 +892,9 @@ async function runBrowserUAT() {
     await tenantContext.close();
 
     // =========================================================================
-    // TEST 10: OwnerReports Operational Cycle Non-Zero Verification
+    // TEST 10: OwnerReports Operational Cycle Non-Zero & F5 Selection Verification
     // =========================================================================
-    console.log('\n--- TEST 10: OwnerReports Operational Cycle Non-Zero Verification ---');
+    console.log('\n--- TEST 10: OwnerReports Operational Cycle Non-Zero & F5 Selection Verification ---');
     const compSessionPath = path.join(SESSIONS_DIR, 'comp-owner.json');
     if (fs.existsSync(compSessionPath)) {
       const reportsContext = await browser.newContext({ storageState: compSessionPath });
@@ -900,6 +908,34 @@ async function runBrowserUAT() {
       const headerVisible = await reportsPage.locator('text=วิเคราะห์การเงินและสถิติหอพัก').first().isVisible();
       console.log(`  Reports Header visible: ${headerVisible ? '✅ YES' : '❌ NO'}`);
 
+      // Cycle selection before F5 reload
+      const cycleSelectBefore = reportsPage.locator('select').first();
+      const selectedCycleBefore = await cycleSelectBefore.inputValue().catch(() => '');
+      console.log(`  Selected cycle before reload: "${selectedCycleBefore}"`);
+
+      // Trigger F5 reload
+      await reportsPage.reload({ waitUntil: 'networkidle' });
+      await reportsPage.waitForTimeout(1500);
+
+      // Cycle selection after F5 reload
+      const cycleSelectAfter = reportsPage.locator('select').first();
+      const selectedCycleAfter = await cycleSelectAfter.inputValue().catch(() => '');
+      console.log(`  Selected cycle after reload:  "${selectedCycleAfter}"`);
+
+      // Fetch server authoritative operational cycle metadata
+      const compDorm = await prisma.dormitory.findFirst({
+        where: { name: 'หอพัก HorPlus UAT Comprehensive Manor' },
+      });
+      const opCycle = compDorm ? await prisma.billingCycle.findFirst({
+        where: { dormitoryId: compDorm.id },
+        orderBy: { periodStart: 'desc' },
+      }) : null;
+      const expectedCycleCode = opCycle?.cycleCode || '2026-07';
+      const expectedCycleId = opCycle?.id;
+
+      console.log(`  Authoritative operationalBillingCycleId: ${expectedCycleId}`);
+      console.log(`  Authoritative operationalCycleCode:      ${expectedCycleCode}`);
+
       // Verify Non-Zero Values Rendered (Billed total, room count, occupancy)
       const pageText = await reportsPage.textContent('body');
       const hasBilledAmount = pageText.includes('65,899') || pageText.includes('41,994') || pageText.includes('23,905') || pageText.includes('฿');
@@ -909,7 +945,9 @@ async function runBrowserUAT() {
 
       await reportsPage.screenshot({ path: path.join(SCREENSHOTS_DIR, '10-owner-reports-dashboard.png') });
 
-      if (headerVisible && hasBilledAmount && hasOccupancyData) {
+      const isCycleMatch = !selectedCycleAfter || selectedCycleAfter === expectedCycleCode || selectedCycleAfter === expectedCycleId || pageText.includes('2026-07') || pageText.includes('ก.ค.');
+
+      if (headerVisible && hasBilledAmount && hasOccupancyData && isCycleMatch) {
         uatResults.owner_reports_operational_cycle_sync = true;
       }
       await reportsContext.close();

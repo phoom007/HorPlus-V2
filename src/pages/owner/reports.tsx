@@ -137,6 +137,7 @@ export const OwnerReports: React.FC<OwnerReportsProps> = ({
     exactFineTotal,
     exactDepositTotal,
     exactTotalBilledThisMonth,
+    exactTotalBilledPlusDeposit,
     fixedRentTotal,
     waterTotal,
     electricTotal,
@@ -148,6 +149,7 @@ export const OwnerReports: React.FC<OwnerReportsProps> = ({
     totalRevenueThisMonth,
     totalUnpaidThisMonth,
     totalOverdueAmount,
+    totalBilledPlusDeposit,
     paidPercent,
     unpaidPercent,
     occupiedPercent,
@@ -769,7 +771,7 @@ export const OwnerReports: React.FC<OwnerReportsProps> = ({
                     <div className="text-[10px] text-slate-500 font-normal">รวมรายรับบิลค่าเช่า + เงินประกัน/มัดจำสัญญา</div>
                   </td>
                   <td className="py-3.5 text-right text-[#2b64f6] font-black text-sm sm:text-base pr-3">
-                    {formatBaht(totalBilledThisMonth + depositTotal)}
+                    {formatBaht(totalBilledPlusDeposit)}
                   </td>
                   <td className="py-3.5 text-right pr-3">
                     <span className="text-emerald-600 font-extrabold text-[10px] whitespace-nowrap inline-flex items-center gap-1">

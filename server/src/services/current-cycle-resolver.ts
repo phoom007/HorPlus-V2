@@ -12,6 +12,7 @@ import { PrismaClient } from '@prisma/client';
 import { getPrismaClient } from '../db/prisma.js';
 
 export interface OperationalCycleResult {
+  billingCycleId?: string;
   cycleCode: string;
   reason: 'METER_ACTIVITY' | 'BILLING_ACTIVITY' | 'LATEST_USED' | 'ONBOARDING_START';
   cycle?: any;
@@ -26,53 +27,67 @@ export class CurrentCycleResolverService {
 
   /**
    * Authoritatively resolve current operational cycle for a dormitory
+   * Priority:
+   * 1. Latest cycle with entered/saved meter readings (ordered by billingCycle.periodStart desc)
+   * 2. Latest cycle with active bills (issued, pending, paid, unpaid, overdue, partially_paid)
+   * 3. Latest actually-used cycle (ordered by periodStart desc)
+   * 4. Dormitory creation start month cycle
    */
   async resolveOperationalBillingCycle(dormitoryId: string, txClient?: any): Promise<OperationalCycleResult> {
     const db = txClient || this.prisma;
 
     // 1. Check for latest cycle with real meter readings
-    const latestMeterReading = await db.meterReading.findFirst({
+    const readingWithCycle = await db.meterReading.findFirst({
       where: {
         dormitoryId,
       },
       include: { billingCycle: true },
-      orderBy: { createdAt: 'desc' },
+      orderBy: [
+        { billingCycle: { periodStart: 'desc' } },
+        { createdAt: 'desc' },
+      ],
     });
 
-    if (latestMeterReading?.billingCycle?.cycleCode) {
+    if (readingWithCycle?.billingCycle?.cycleCode) {
       return {
-        cycleCode: latestMeterReading.billingCycle.cycleCode,
+        billingCycleId: readingWithCycle.billingCycle.id,
+        cycleCode: readingWithCycle.billingCycle.cycleCode,
         reason: 'METER_ACTIVITY',
-        cycle: latestMeterReading.billingCycle,
+        cycle: readingWithCycle.billingCycle,
       };
     }
 
-    // 2. Check for latest cycle with active bills (issued, pending, paid, etc.)
-    const latestBill = await db.bill.findFirst({
+    // 2. Check for latest cycle with active bills (issued, pending, paid, unpaid, overdue, partially_paid)
+    const billWithCycle = await db.bill.findFirst({
       where: {
         dormitoryId,
-        status: { in: ['issued', 'pending', 'paid', 'overdue', 'partially_paid'] },
+        status: { in: ['issued', 'pending', 'paid', 'overdue', 'partially_paid', 'unpaid'] },
       },
       include: { billingCycle: true },
-      orderBy: { createdAt: 'desc' },
+      orderBy: [
+        { billingCycle: { periodStart: 'desc' } },
+        { createdAt: 'desc' },
+      ],
     });
 
-    if (latestBill?.billingCycle?.cycleCode) {
+    if (billWithCycle?.billingCycle?.cycleCode) {
       return {
-        cycleCode: latestBill.billingCycle.cycleCode,
+        billingCycleId: billWithCycle.billingCycle.id,
+        cycleCode: billWithCycle.billingCycle.cycleCode,
         reason: 'BILLING_ACTIVITY',
-        cycle: latestBill.billingCycle,
+        cycle: billWithCycle.billingCycle,
       };
     }
 
-    // 3. Check latest existing cycle that is not locked/draft empty
+    // 3. Check latest existing cycle (ordered by periodStart desc)
     const latestCycle = await db.billingCycle.findFirst({
       where: { dormitoryId },
-      orderBy: { periodStart: 'asc' },
+      orderBy: { periodStart: 'desc' },
     });
 
     if (latestCycle) {
       return {
+        billingCycleId: latestCycle.id,
         cycleCode: latestCycle.cycleCode,
         reason: 'LATEST_USED',
         cycle: latestCycle,
@@ -88,9 +103,15 @@ export class CurrentCycleResolverService {
     const created = dorm?.createdAt || new Date();
     const startCode = `${created.getFullYear()}-${String(created.getMonth() + 1).padStart(2, '0')}`;
 
+    const startCycle = await db.billingCycle.findFirst({
+      where: { dormitoryId, cycleCode: startCode },
+    });
+
     return {
+      billingCycleId: startCycle?.id,
       cycleCode: startCode,
       reason: 'ONBOARDING_START',
+      cycle: startCycle || undefined,
     };
   }
 }
