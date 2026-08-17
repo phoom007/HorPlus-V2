@@ -296,8 +296,8 @@ async function runBatch01Verification() {
     }
 
     // Assert Step 7 has incoming referral input, but no own referral share card
-    const hasIncomingReferral = await page.locator('label:has-text("รหัสคำเชิญที่ใช้สมัคร (ผู้แนะนำ)")').isVisible();
-    const hasOwnReferralShareCard = await page.locator('label:has-text("รหัสคำเชิญของคุณ")').isVisible().catch(() => false);
+    const hasIncomingReferral = (await page.locator('[data-testid="input-referral-code"]').isVisible()) || (await page.locator('text="รหัสคำเชิญ"').isVisible());
+    const hasOwnReferralShareCard = await page.locator('text="รหัสคำเชิญของคุณ"').isVisible().catch(() => false);
     console.log(`  Step 7 incoming referral input visible: ${hasIncomingReferral ? '✅ YES' : '❌ NO'}`);
     console.log(`  Step 7 own referral share card removed: ${!hasOwnReferralShareCard ? '✅ YES' : '❌ NO'}`);
 
@@ -310,20 +310,21 @@ async function runBatch01Verification() {
     await page.locator('input[type="checkbox"]').first().check();
     await page.locator('button:has-text("Facebook")').first().click();
     await page.locator('button:has-text("ยอมรับเงื่อนไข")').click();
-    await page.waitForTimeout(3500);
+    await page.waitForURL('**/owner/**', { timeout: 10000 }).catch(() => {});
+    await page.waitForTimeout(2000);
     console.log('  Dorm A Onboarding finalized successfully.');
 
     // --------------------------------------------------------------------------
     // Test 4: Referral Relocation to Subscription Page & Share Link
     // --------------------------------------------------------------------------
     console.log('\n--- 4. Testing Referral Card on Subscription Page & Share Link ---');
-    await page.goto(`${BASE_URL}/owner/subscription`);
-    await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(1000);
+    await page.goto(`${BASE_URL}/owner/subscription`, { waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(2000);
 
     const hasSubReferralCard = await page.locator('text="โปรแกรมแนะนำเพื่อน (Referral Program)"').isVisible();
     const hasSubReferralCode = await page.locator('text="รหัสคำเชิญของคุณ:"').isVisible();
     const referralCodeElem = page.locator('[data-testid="referral-code-badge"]').first();
+    await referralCodeElem.waitFor({ state: 'visible', timeout: 10000 }).catch(() => {});
     const referralCode = (await referralCodeElem.innerText()).trim();
 
     console.log(`  Subscription page referral program card visible: ${hasSubReferralCard ? '✅ YES' : '❌ NO'}`);

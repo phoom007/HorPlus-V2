@@ -22,7 +22,8 @@ import {
   CheckCircle2,
   Layers,
   Copy,
-  X
+  X,
+  Lock
 } from 'lucide-react';
 // Server-authoritative Settings page component
 
@@ -32,6 +33,7 @@ import { getDataProvider } from '../../data/dataProvider';
 import { Task009ApiAdapter } from '../../data/adapters/task009';
 import { PropagationPreviewModal } from '../../components/PropagationPreviewModal';
 import { VersionConflictModal } from '../../components/VersionConflictModal';
+import { BillingCycleCalendarPicker } from '../../components/common/BillingCycleCalendarPicker';
 import { getPaymentSettings, updatePaymentSettings, PaymentSettingsUpdatePayload } from '../../services/payment-settings.service';
 import { getDormitoryProfile, updateDormitoryProfile, UpdateDormitoryProfilePayload } from '../../services/dormitory.service';
 import { OwnerLineOaPage } from './line-oa';
@@ -116,6 +118,12 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
   const [billingVersion, setBillingVersion] = useState<number>(1);
   const selectedDormId = localStorage.getItem('selected_dormitory_id') || sessionStorage.getItem('active_dormitory_selected_for_session') || '';
 
+  const [isCycleLocked, setIsCycleLocked] = useState<boolean>(false);
+  const [cycleLockReason, setCycleLockReason] = useState<string | null>(null);
+  const [snapshotProvenance, setSnapshotProvenance] = useState<string>('TEMPLATE_DEFAULT');
+  const [snapshotVersion, setSnapshotVersion] = useState<number>(1);
+  const [currentCycleId, setCurrentCycleId] = useState<string>('');
+
   const [propertyMonthlyRent, setPropertyMonthlyRent] = useState<number>(0);
   const [propertyDepositAmount, setPropertyDepositAmount] = useState<number>(0);
 
@@ -145,6 +153,139 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
     currentVersion: number;
     onRetry?: () => void;
   } | null>(null);
+
+  const fetchCycleRateSnapshot = async (cycleCodeOrId: string) => {
+    const dormId = selectedDormId || dorm?.id;
+    if (!dormId || !cycleCodeOrId) return;
+
+    try {
+      const res = await fetch(`/api/v1/billing-cycles/by-code/${cycleCodeOrId}/rate-snapshot`, {
+        headers: { 'x-dormitory-id': dormId },
+      });
+      if (res.ok) {
+        const json = await res.json();
+        if (json.data) {
+          const { cycle, rateSnapshot, isLocked: locked, lockReason } = json.data;
+          if (cycle?.id) setCurrentCycleId(cycle.id);
+          setIsCycleLocked(Boolean(locked));
+          setCycleLockReason(lockReason || null);
+
+          if (rateSnapshot) {
+            setSnapshotVersion(rateSnapshot.version || 1);
+            setSnapshotProvenance(rateSnapshot.source || 'TEMPLATE_DEFAULT');
+
+            if (!isUserTypingRef.current) {
+              setLocalWaterUnitRate(rateSnapshot.waterRate ?? 0);
+              setWaterBillingMode(rateSnapshot.waterBillingType || 'unit');
+              setLocalElectricUnitRate(rateSnapshot.electricityRate ?? 0);
+              setElectricBillingMode(rateSnapshot.electricityBillingType || 'unit');
+              setLocalCommonFee(rateSnapshot.commonFee ?? 0);
+              setCommonFeeMode(rateSnapshot.commonFeeMode || 'room');
+              setLocalInternetFee(rateSnapshot.internetFee ?? 0);
+              setInternetFeeMode(rateSnapshot.internetFeeMode || 'room');
+              setLocalParkingFee(rateSnapshot.parkingFee ?? 0);
+              setParkingFeeMode(rateSnapshot.parkingFeeMode || 'room');
+              setLocalLateFee(rateSnapshot.lateFeeValue ?? 0);
+              setLateFeeType(rateSnapshot.lateFeeType || 'per_day');
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.error('Error fetching cycle rate snapshot:', err);
+    }
+  };
+
+  const handleSaveCycleRateSettings = async (overrides?: Record<string, any>) => {
+    const dormId = selectedDormId || dorm?.id;
+    if (!dormId || isCycleLocked) return;
+
+    const targetCycleCode = selectedCycle;
+    if (!targetCycleCode) return;
+
+    setSaveStatus('saving');
+    try {
+      const csrfMatch = document.cookie.match(/(?:csrf-token|horplus_csrf)=([^;]+)/);
+      const csrfToken = csrfMatch ? decodeURIComponent(csrfMatch[1]) : '';
+
+      const wMode = overrides?.waterBillingType ?? waterBillingMode;
+      const wRate = overrides?.waterRate ?? localWaterUnitRate;
+      const eMode = overrides?.electricityBillingType ?? electricBillingMode;
+      const eRate = overrides?.electricityRate ?? localElectricUnitRate;
+
+      const cMode = overrides?.commonFeeMode ?? commonFeeMode;
+      const cFee = cMode === 'free' ? 0 : (overrides?.commonFee ?? localCommonFee);
+
+      const iMode = overrides?.internetFeeMode ?? internetFeeMode;
+      const iFee = iMode === 'free' ? 0 : (overrides?.internetFee ?? localInternetFee);
+
+      const pMode = overrides?.parkingFeeMode ?? parkingFeeMode;
+      const pFee = pMode === 'free' ? 0 : (overrides?.parkingFee ?? localParkingFee);
+
+      const lType = overrides?.lateFeeType ?? lateFeeType;
+      const lValue = lType === 'free' ? 0 : (overrides?.lateFeeValue ?? localLateFee);
+
+      const payload = {
+        waterBillingType: wMode,
+        waterRate: wRate,
+        electricityBillingType: eMode,
+        electricityRate: eRate,
+        commonFee: cFee,
+        commonFeeMode: cMode,
+        internetFee: iFee,
+        internetFeeMode: iMode,
+        parkingFee: pFee,
+        parkingFeeMode: pMode,
+        lateFeeType: lType,
+        lateFeeValue: lValue,
+        expectedVersion: snapshotVersion,
+      };
+
+      const endpoint = currentCycleId
+        ? `/api/v1/billing-cycles/${currentCycleId}/rate-snapshot`
+        : `/api/v1/billing-cycles/by-code/${targetCycleCode}/rate-snapshot`;
+
+      const res = await fetch(endpoint, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-dormitory-id': dormId,
+          ...(csrfToken ? { 'x-csrf-token': csrfToken } : {}),
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (res.status === 409) {
+        setVersionConflictState({
+          isOpen: true,
+          entityName: `การตั้งค่ารอบบิล ${selectedCycle}`,
+          currentVersion: snapshotVersion + 1,
+          onRetry: () => fetchCycleRateSnapshot(selectedCycle),
+        });
+        setSaveStatus('idle');
+        return;
+      }
+
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson?.error?.message || 'บันทึกการตั้งค่ารอบบิลไม่สำเร็จ');
+      }
+
+      const dataJson = await res.json();
+      if (dataJson?.data?.rateSnapshot) {
+        setSnapshotVersion(dataJson.data.rateSnapshot.version || snapshotVersion + 1);
+        setSnapshotProvenance(dataJson.data.rateSnapshot.source || 'MANUAL_OVERRIDE');
+      }
+
+      isUserTypingRef.current = false;
+      setSaveStatus('saved');
+      setTimeout(() => setSaveStatus('idle'), 2000);
+      onAddLog('แก้ไขอัตราค่าบริการรอบบิล', `อัปเดตอัตราค่าบริการประจำเดือน ${selectedCycle} สำเร็จ`, 'SETTINGS', dormId);
+    } catch (err: any) {
+      console.error('Error saving cycle rate settings:', err);
+      setSaveStatus('idle');
+    }
+  };
 
   const [initialValues, setInitialValues] = useState<{
     propertyMonthlyRent?: number;
@@ -287,6 +428,12 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
       fetchOwnerSignature(selectedDormId);
     }
   }, [selectedDormId]);
+
+  useEffect(() => {
+    if (selectedCycle) {
+      fetchCycleRateSnapshot(selectedCycle);
+    }
+  }, [selectedCycle, selectedDormId]);
 
   const handleSaveRulesAndPetPolicy = async () => {
     setIsSavingRules(true);
@@ -1296,10 +1443,31 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
             <div className="space-y-5 pt-8 lg:pt-0 lg:pl-10 relative">
               {/* Heading with integrated, clean Cycle selector (same line on PC, centered below title on Mobile) */}
               <div className="flex flex-col sm:flex-row justify-between items-center gap-3 pb-3 border-b border-gray-100">
-                <h4 className="text-xs font-extrabold text-indigo-950 flex items-center gap-1.5 uppercase tracking-wider text-center sm:text-left">
-                  <DollarSign className="w-4 h-4 text-emerald-600" />
-                  การตั้งค่า
-                </h4>
+                <div>
+                  <h4 className="text-xs font-extrabold text-indigo-950 flex items-center gap-1.5 uppercase tracking-wider text-center sm:text-left">
+                    <DollarSign className="w-4 h-4 text-emerald-600" />
+                    การตั้งค่าอัตราค่าบริการตามรอบบิล
+                  </h4>
+                  <div className="flex items-center gap-1.5 mt-1">
+                    <span className="text-[10px] text-slate-500 font-bold">ที่มาของอัตรา:</span>
+                    <span
+                      data-testid="snapshot-provenance-badge"
+                      className={`text-[10px] font-black px-2 py-0.5 rounded-full ${
+                        snapshotProvenance === 'MANUAL_OVERRIDE'
+                          ? 'bg-amber-100 text-amber-800 border border-amber-200'
+                          : snapshotProvenance === 'INHERITED'
+                          ? 'bg-blue-100 text-blue-800 border border-blue-200'
+                          : 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                      }`}
+                    >
+                      {snapshotProvenance === 'MANUAL_OVERRIDE'
+                        ? 'กำหนดเองในงวดนี้ (Manual Override)'
+                        : snapshotProvenance === 'INHERITED'
+                        ? 'สืบทอดจากงวดก่อนหน้า (Inherited)'
+                        : 'แม่แบบเริ่มต้นหอพัก (Template Default)'}
+                    </span>
+                  </div>
+                </div>
 
                 <div className="flex flex-col sm:flex-row items-center gap-2">
                   <span className="text-[10px] font-extrabold text-slate-400 flex items-center gap-1 whitespace-nowrap">
@@ -1307,11 +1475,12 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                     รอบงวดการคำนวณ
                   </span>
 
-                  {/* Styled Cycle switcher with drop-modal just like in header */}
+                  {/* Styled Cycle switcher with drop-modal */}
                   <div className="relative">
                     <button
                       onClick={() => setIsCycleModalOpen(true)}
                       className="flex items-center justify-between gap-2 px-3.5 py-1.5 border border-slate-200 hover:border-indigo-500 rounded-xl bg-white text-slate-800 font-extrabold shadow-2xs text-xs cursor-pointer transition-all w-48 sm:w-auto sm:min-w-[190px] whitespace-nowrap"
+                      data-testid="button-cycle-calendar-settings"
                     >
                       <span className="flex items-center gap-1.5 whitespace-nowrap">
                         <Calendar className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
@@ -1320,104 +1489,39 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                       <ChevronDown className="w-3.5 h-3.5 text-slate-400 shrink-0" />
                     </button>
 
-                    {/* Beautiful Calendar Grid Dropdown Modal */}
-                    {isCycleModalOpen && (
-                      <>
-                        <div
-                          className="fixed inset-0 z-40 cursor-default"
-                          onClick={() => setIsCycleModalOpen(false)}
-                        />
-
-                        <div className="absolute right-1/2 translate-x-1/2 sm:translate-x-0 sm:right-0 top-full mt-2 bg-white p-5 rounded-3xl w-[300px] border border-slate-100 shadow-2xl z-50 animate-in fade-in slide-in-from-top-2 duration-200 text-left">
-                          <div className="flex justify-between items-center mb-4">
-                            <h3 className="text-xs font-black text-slate-800">เลือกงวดประจำเดือน</h3>
-                            <button
-                              onClick={() => setIsCycleModalOpen(false)}
-                              className="text-[10px] font-bold text-slate-400 hover:text-slate-600 px-2 py-1 rounded-lg hover:bg-slate-50 transition-colors cursor-pointer"
-                            >
-                              ปิด
-                            </button>
-                          </div>
-
-                          {/* Year selector with arrows */}
-                          <div className="flex items-center justify-between bg-slate-50 p-1 rounded-2xl border border-slate-100 mb-4">
-                            <button
-                              onClick={() => {
-                                const minYear = parseInt(minCycle.split('-')[0]);
-                                setTempYear(prev => prev > minYear ? prev - 1 : prev);
-                              }}
-                              disabled={tempYear <= parseInt(minCycle.split('-')[0])}
-                              className={`p-1.5 hover:bg-white text-slate-500 hover:text-slate-900 rounded-xl transition-all cursor-pointer shadow-2xs ${tempYear <= parseInt(minCycle.split('-')[0]) ? 'opacity-25 cursor-not-allowed' : ''
-                                }`}
-                            >
-                              <ChevronLeft className="w-3.5 h-3.5" />
-                            </button>
-                            <span className="text-xs font-black text-slate-800">{tempYear + 543}</span>
-                            <button
-                              onClick={() => {
-                                const maxYear = parseInt(maxCycle.split('-')[0]);
-                                setTempYear(prev => prev < maxYear ? prev + 1 : prev);
-                              }}
-                              disabled={tempYear >= parseInt(maxCycle.split('-')[0])}
-                              className={`p-1.5 hover:bg-white text-slate-500 hover:text-slate-900 rounded-xl transition-all cursor-pointer shadow-2xs ${tempYear >= parseInt(maxCycle.split('-')[0]) ? 'opacity-25 cursor-not-allowed' : ''
-                                }`}
-                            >
-                              <ChevronRight className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-
-                          {/* Grid of Months (3 columns, 4 rows) */}
-                          <div className="grid grid-cols-3 gap-1.5">
-                            {[
-                              { val: '01', label: 'มกราคม' },
-                              { val: '02', label: 'กุมภาพันธ์' },
-                              { val: '03', label: 'มีนาคม' },
-                              { val: '04', label: 'เมษายน' },
-                              { val: '05', label: 'พฤษภาคม' },
-                              { val: '06', label: 'มิถุนายน' },
-                              { val: '07', label: 'กรกฎาคม' },
-                              { val: '08', label: 'สิงหาคม' },
-                              { val: '09', label: 'กันยายน' },
-                              { val: '10', label: 'ตุลาคม' },
-                              { val: '11', label: 'พฤศจิกายน' },
-                              { val: '12', label: 'ธันวาคม' }
-                            ].map((m) => {
-                              const targetCycle = `${tempYear}-${m.val}`;
-                              const isSelected = selectedCycle === targetCycle;
-                              const isDisabled = targetCycle < minCycle || targetCycle > maxCycle;
-
-                              return (
-                                <button
-                                  key={m.val}
-                                  disabled={isDisabled}
-                                  onClick={() => {
-                                    setSelectedCycle(targetCycle);
-                                    if (onCycleChange) {
-                                      onCycleChange(targetCycle);
-                                    }
-                                    setIsCycleModalOpen(false);
-                                  }}
-                                  className={`py-1.5 px-1 text-[10px] font-bold rounded-xl transition-all text-center border ${isSelected
-                                      ? 'bg-blue-600 border-blue-650 hover:bg-blue-700 text-white shadow-sm cursor-pointer'
-                                      : isDisabled
-                                        ? 'bg-slate-50 text-slate-300 border border-slate-100/50 cursor-not-allowed opacity-40'
-                                        : 'bg-white hover:bg-slate-50 border border-slate-100 text-slate-600 hover:text-slate-800 cursor-pointer'
-                                    }`}
-                                >
-                                  {m.label}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      </>
-                    )}
+                    <BillingCycleCalendarPicker
+                      isOpen={isCycleModalOpen}
+                      onClose={() => setIsCycleModalOpen(false)}
+                      selectedCycleCode={selectedCycle}
+                      onSelectCycle={(targetCycle) => {
+                        setSelectedCycle(targetCycle);
+                        if (onCycleChange) {
+                          onCycleChange(targetCycle);
+                        }
+                      }}
+                      align="right"
+                    />
                   </div>
-
                 </div>
               </div>
 
-              {/* Property Default Rent & Deposit Settings */}
+              {/* Cycle Locked Warning Banner */}
+              {isCycleLocked && (
+                <div
+                  className="bg-amber-50 border border-amber-200 rounded-2xl p-3.5 flex items-start gap-2.5 text-amber-900"
+                  data-testid="cycle-locked-banner"
+                >
+                  <Lock className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                  <div className="text-xs">
+                    <p className="font-black">รอบบิลนี้ถูกล็อคแล้ว (อ่านอย่างเดียว)</p>
+                    <p className="text-[11px] text-amber-700 mt-0.5">
+                      {cycleLockReason || 'งวดนี้มีรายการชำระเงินแล้ว จึงไม่สามารถแก้ไขค่าที่มีผลต่อบิลย้อนหลังได้'}
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {/* Property Default Rent & Deposit Settings (Dormitory-level) */}
               <div className="grid grid-cols-2 gap-4 text-xs pt-1">
                 <div className="space-y-1">
                   <label className="block font-semibold text-slate-700 flex items-center gap-1.5">
@@ -1468,6 +1572,7 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                   <input
                     type="number"
                     required
+                    disabled={isCycleLocked}
                     value={localWaterUnitRate}
                     onChange={(e) => {
                       isUserTypingRef.current = true;
@@ -1475,14 +1580,14 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                       setSaveStatus('typing');
                     }}
                     onBlur={(e) => {
-                      handleSaveBackendDormitoryDefaults(undefined, { waterRate: Number(e.target.value) });
+                      handleSaveCycleRateSettings({ waterRate: Number(e.target.value) });
                     }}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') {
-                        handleSaveBackendDormitoryDefaults(undefined, { waterRate: Number((e.target as HTMLInputElement).value) });
+                        handleSaveCycleRateSettings({ waterRate: Number((e.target as HTMLInputElement).value) });
                       }
                     }}
-                    className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-bold focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs"
+                    className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-bold focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs disabled:opacity-50 disabled:bg-slate-100"
                     data-testid="input-water-unit-rate"
                   />
                 </div>
@@ -1491,11 +1596,13 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                   <label className="block font-semibold text-slate-700">รูปแบบค่าน้ำประปา</label>
                   <select
                     value={waterBillingMode}
+                    disabled={isCycleLocked}
                     onChange={(e) => {
                       setWaterBillingMode(e.target.value);
-                      handleSaveBackendDormitoryDefaults(undefined, { waterBillingType: e.target.value });
+                      handleSaveCycleRateSettings({ waterBillingType: e.target.value });
                     }}
-                    className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-medium focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs"
+                    className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-medium focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs disabled:opacity-50 disabled:bg-slate-100"
+                    data-testid="select-water-billing-mode"
                   >
                     <option value="unit">บาท/หน่วย</option>
                     <option value="person">บาท/คน</option>
@@ -1514,13 +1621,16 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                   <input
                     type="number"
                     required
+                    disabled={isCycleLocked}
                     value={localElectricUnitRate}
                     onChange={(e) => {
+                      isUserTypingRef.current = true;
                       setLocalElectricUnitRate(e.target.value);
                       setSaveStatus('typing');
                     }}
-                    onBlur={(e) => handleSaveBackendDormitoryDefaults(undefined, { electricityRate: Number(e.target.value) })}
-                    className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-bold focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs"
+                    onBlur={(e) => handleSaveCycleRateSettings({ electricityRate: Number(e.target.value) })}
+                    className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-bold focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs disabled:opacity-50 disabled:bg-slate-100"
+                    data-testid="input-electric-unit-rate"
                   />
                 </div>
 
@@ -1528,11 +1638,13 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                   <label className="block font-semibold text-slate-700">รูปแบบค่าไฟฟ้า</label>
                   <select
                     value={electricBillingMode}
+                    disabled={isCycleLocked}
                     onChange={(e) => {
                       setElectricBillingMode(e.target.value);
-                      handleSaveBackendDormitoryDefaults(undefined, { electricityBillingType: e.target.value });
+                      handleSaveCycleRateSettings({ electricityBillingType: e.target.value });
                     }}
-                    className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-medium focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs"
+                    className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-medium focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs disabled:opacity-50 disabled:bg-slate-100"
+                    data-testid="select-electric-billing-mode"
                   >
                     <option value="unit">บาท/หน่วย</option>
                     <option value="person">บาท/คน</option>
@@ -1551,24 +1663,33 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                   <input
                     type="number"
                     required
-                    disabled={commonFeeMode === 'free'}
+                    disabled={isCycleLocked || commonFeeMode === 'free'}
                     value={commonFeeMode === 'free' ? 0 : localCommonFee}
                     onChange={(e) => {
+                      isUserTypingRef.current = true;
                       setLocalCommonFee(e.target.value);
                       setSaveStatus('typing');
                     }}
-                    onBlur={(e) => handleSaveBackendDormitoryDefaults(undefined, { commonFee: Number(e.target.value) })}
+                    onBlur={(e) => handleSaveCycleRateSettings({ commonFee: Number(e.target.value) })}
                     placeholder={commonFeeMode === 'free' ? 'ฟรี' : '0'}
                     className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-bold focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs disabled:opacity-50 disabled:bg-slate-100"
+                    data-testid="input-common-fee"
                   />
                 </div>
 
                 <div className="space-y-1">
-                  <label className="block font-semibold text-slate-700">รูปแบบค่าส่วนกลาง ( legacy-only UI )</label>
+                  <label className="block font-semibold text-slate-700">รูปแบบค่าส่วนกลาง</label>
                   <select
                     value={commonFeeMode}
-                    disabled
-                    className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-slate-100 text-slate-500 font-medium outline-none text-xs cursor-not-allowed"
+                    disabled={isCycleLocked}
+                    onChange={(e) => {
+                      const newMode = e.target.value;
+                      setCommonFeeMode(newMode);
+                      if (newMode === 'free') setLocalCommonFee(0);
+                      handleSaveCycleRateSettings({ commonFeeMode: newMode, commonFee: newMode === 'free' ? 0 : localCommonFee });
+                    }}
+                    className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-medium focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs disabled:opacity-50 disabled:bg-slate-100 cursor-pointer"
+                    data-testid="select-common-fee-mode"
                   >
                     <option value="free">ไม่คิดค่าบริการ (ฟรี)</option>
                     <option value="room">บาท/ห้อง</option>
@@ -1587,24 +1708,33 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                   <input
                     type="number"
                     required
-                    disabled={internetFeeMode === 'free'}
+                    disabled={isCycleLocked || internetFeeMode === 'free'}
                     value={internetFeeMode === 'free' ? 0 : localInternetFee}
                     onChange={(e) => {
+                      isUserTypingRef.current = true;
                       setLocalInternetFee(e.target.value);
                       setSaveStatus('typing');
                     }}
-                    onBlur={(e) => handleSaveBackendDormitoryDefaults(undefined, { internetFee: Number(e.target.value) })}
+                    onBlur={(e) => handleSaveCycleRateSettings({ internetFee: Number(e.target.value) })}
                     placeholder={internetFeeMode === 'free' ? 'ฟรี' : '0'}
                     className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-bold focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs disabled:opacity-50 disabled:bg-slate-100"
+                    data-testid="input-internet-fee"
                   />
                 </div>
 
                 <div className="space-y-1">
-                  <label className="block font-semibold text-slate-700">รูปแบบค่าอินเทอร์เน็ต ( legacy-only UI )</label>
+                  <label className="block font-semibold text-slate-700">รูปแบบค่าอินเทอร์เน็ต</label>
                   <select
                     value={internetFeeMode}
-                    disabled
-                    className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-slate-100 text-slate-500 font-medium outline-none text-xs cursor-not-allowed"
+                    disabled={isCycleLocked}
+                    onChange={(e) => {
+                      const newMode = e.target.value;
+                      setInternetFeeMode(newMode);
+                      if (newMode === 'free') setLocalInternetFee(0);
+                      handleSaveCycleRateSettings({ internetFeeMode: newMode, internetFee: newMode === 'free' ? 0 : localInternetFee });
+                    }}
+                    className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-medium focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs disabled:opacity-50 disabled:bg-slate-100 cursor-pointer"
+                    data-testid="select-internet-fee-mode"
                   >
                     <option value="free">ไม่คิดค่าบริการ (ฟรี)</option>
                     <option value="room">บาท/ห้อง</option>
@@ -1623,27 +1753,37 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                   <input
                     type="number"
                     required
-                    disabled={parkingFeeMode === 'free'}
+                    disabled={isCycleLocked || parkingFeeMode === 'free'}
                     value={parkingFeeMode === 'free' ? 0 : localParkingFee}
                     onChange={(e) => {
+                      isUserTypingRef.current = true;
                       setLocalParkingFee(e.target.value);
                       setSaveStatus('typing');
                     }}
-                    onBlur={(e) => handleSaveBackendDormitoryDefaults({ defaultParkingFee: Number(e.target.value) }, undefined)}
+                    onBlur={(e) => handleSaveCycleRateSettings({ parkingFee: Number(e.target.value) })}
                     placeholder={parkingFeeMode === 'free' ? 'ฟรี' : '0'}
                     className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-bold focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs disabled:opacity-50 disabled:bg-slate-100"
+                    data-testid="input-parking-fee"
                   />
                 </div>
 
                 <div className="space-y-1">
-                  <label className="block font-semibold text-slate-700">รูปแบบค่าจอดรถ ( legacy-only UI )</label>
+                  <label className="block font-semibold text-slate-700">รูปแบบค่าจอดรถ</label>
                   <select
                     value={parkingFeeMode || 'room'}
-                    disabled
-                    className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-slate-100 text-slate-500 font-medium outline-none text-xs cursor-not-allowed"
+                    disabled={isCycleLocked}
+                    onChange={(e) => {
+                      const newMode = e.target.value;
+                      setParkingFeeMode(newMode);
+                      if (newMode === 'free') setLocalParkingFee(0);
+                      handleSaveCycleRateSettings({ parkingFeeMode: newMode, parkingFee: newMode === 'free' ? 0 : localParkingFee });
+                    }}
+                    className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-medium focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs disabled:opacity-50 disabled:bg-slate-100 cursor-pointer"
+                    data-testid="select-parking-fee-mode"
                   >
                     <option value="free">ไม่คิดค่าบริการ (ฟรี)</option>
                     <option value="room">บาท/ห้อง</option>
+                    <option value="person">บาท/คน</option>
                     <option value="vehicle">บาท/คัน</option>
                   </select>
                 </div>
@@ -1659,15 +1799,17 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                   <input
                     type="number"
                     required
-                    disabled={lateFeeType === 'free'}
+                    disabled={isCycleLocked || lateFeeType === 'free'}
                     value={lateFeeType === 'free' ? 0 : localLateFee}
                     onChange={(e) => {
+                      isUserTypingRef.current = true;
                       setLocalLateFee(e.target.value);
                       setSaveStatus('typing');
                     }}
-                    onBlur={(e) => handleSaveBackendDormitoryDefaults(undefined, { lateFeeValue: Number(e.target.value) })}
+                    onBlur={(e) => handleSaveCycleRateSettings({ lateFeeValue: Number(e.target.value) })}
                     placeholder={lateFeeType === 'free' ? 'ฟรี' : '0'}
                     className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-bold focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs disabled:opacity-50 disabled:bg-slate-100"
+                    data-testid="input-late-fee"
                   />
                 </div>
 
@@ -1675,11 +1817,15 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                   <label className="block font-semibold text-slate-700">รูปแบบค่าปรับเกินกำหนด</label>
                   <select
                     value={lateFeeType || 'per_day'}
+                    disabled={isCycleLocked}
                     onChange={(e) => {
-                      setLateFeeType(e.target.value);
-                      handleSaveBackendDormitoryDefaults(undefined, { lateFeeType: e.target.value });
+                      const newType = e.target.value;
+                      setLateFeeType(newType);
+                      if (newType === 'free') setLocalLateFee(0);
+                      handleSaveCycleRateSettings({ lateFeeType: newType, lateFeeValue: newType === 'free' ? 0 : localLateFee });
                     }}
-                    className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-medium focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs cursor-pointer"
+                    className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-medium focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs disabled:opacity-50 disabled:bg-slate-100 cursor-pointer"
+                    data-testid="select-late-fee-type"
                   >
                     <option value="free">ไม่คิดค่าปรับ (ฟรี)</option>
                     <option value="per_day">บาท/วัน</option>

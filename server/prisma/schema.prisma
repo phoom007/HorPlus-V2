@@ -34,19 +34,19 @@ model User {
   updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
   deletedAt       DateTime? @map("deleted_at") @db.Timestamptz()
 
-  memberships           DormitoryMember[]
-  sessions              Session[]
-  paymentUploadIntents  PaymentUploadIntent[]
-  subscriptionHistories SubscriptionStatusHistory[]
-  promoRedemptions      PromoRedemption[]
-  ownerSignatures       OwnerSignature[]
-  accountBenefitClaims  AccountBenefitClaim[]
+  memberships                DormitoryMember[]
+  sessions                   Session[]
+  paymentUploadIntents       PaymentUploadIntent[]
+  subscriptionHistories      SubscriptionStatusHistory[]
+  promoRedemptions           PromoRedemption[]
+  ownerSignatures            OwnerSignature[]
+  accountBenefitClaims       AccountBenefitClaim[]
   subscriptionPackageIntents SubscriptionPackageIntent[]
-  referralCode          UserReferralCode?
-  inviteeAttribution    ReferralAttribution? @relation("InviteeAttribution")
-  inviterAttributions   ReferralAttribution[] @relation("InviterAttributions")
-  coinWallet            CoinWallet?
-  coinLedgerEntries     CoinLedgerEntry[]
+  referralCode               UserReferralCode?
+  inviteeAttribution         ReferralAttribution?        @relation("InviteeAttribution")
+  inviterAttributions        ReferralAttribution[]       @relation("InviterAttributions")
+  coinWallet                 CoinWallet?
+  coinLedgerEntries          CoinLedgerEntry[]
 
   @@map("users")
 }
@@ -130,37 +130,37 @@ model Dormitory {
 }
 
 model DormitoryBillingSettings {
-  id                     String   @id @default(uuid()) @db.Uuid
-  dormitoryId            String   @unique @map("dormitory_id") @db.Uuid
-  billingDay             Int      @default(25) @map("billing_day")
-  dueDay                 Int      @map("due_day")
-  waterBillingType       String   @default("per_person") @map("water_billing_type") @db.VarChar(50)
-  waterRate              Decimal  @default(0.00) @map("water_rate") @db.Decimal(12, 2)
-  electricityBillingType String   @default("per_unit") @map("electricity_billing_type") @db.VarChar(50)
-  electricityRate        Decimal  @default(0.00) @map("electricity_rate") @db.Decimal(12, 2)
-  commonFee              Decimal  @default(0.00) @map("common_fee") @db.Decimal(12, 2)
-  commonFeeMode          String   @default("per_room") @map("common_fee_mode") @db.VarChar(50)
-  internetFee            Decimal  @default(0.00) @map("internet_fee") @db.Decimal(12, 2)
-  internetFeeMode        String   @default("per_person") @map("internet_fee_mode") @db.VarChar(50)
-  parkingRate            Decimal  @default(0.00) @map("parking_rate") @db.Decimal(12, 2)
-  parkingFeeMode         String   @default("per_room") @map("parking_fee_mode") @db.VarChar(50)
-  gracePeriodDays        Int      @default(0) @map("grace_period_days")
-  advanceRentMonths      Int      @default(1) @map("advance_rent_months")
-  lateFeeType            String   @default("none") @map("late_fee_type") @db.VarChar(50)
-  lateFeeValue           Decimal  @default(0.00) @map("late_fee_value") @db.Decimal(12, 2)
-  rentBillingType        String   @default("monthly") @map("rent_billing_type") @db.VarChar(50)
-  cashAccepted           Boolean  @default(true) @map("cash_accepted")
-  promptPayType          String?  @map("prompt_pay_type") @db.VarChar(50)
-  promptPayValue         String?  @map("prompt_pay_value") @db.VarChar(255)
-  promptPayValueEncrypted String? @map("prompt_pay_value_encrypted") @db.Text
-  promptPayAccountName   String?  @map("prompt_pay_account_name") @db.VarChar(255)
-  bankCode               String?  @map("bank_code") @db.VarChar(50)
-  bankAccountName        String?  @map("bank_account_name") @db.VarChar(255)
-  bankAccountNumber      String?  @map("bank_account_number") @db.VarChar(100)
-  bankAccountNumberEncrypted String? @map("bank_account_number_encrypted") @db.Text
-  version                Int      @default(1)
-  createdAt              DateTime @default(now()) @map("created_at") @db.Timestamptz()
-  updatedAt              DateTime @updatedAt @map("updated_at") @db.Timestamptz()
+  id                         String   @id @default(uuid()) @db.Uuid
+  dormitoryId                String   @unique @map("dormitory_id") @db.Uuid
+  billingDay                 Int      @default(25) @map("billing_day")
+  dueDay                     Int      @map("due_day")
+  waterBillingType           String   @default("per_person") @map("water_billing_type") @db.VarChar(50)
+  waterRate                  Decimal  @default(0.00) @map("water_rate") @db.Decimal(12, 2)
+  electricityBillingType     String   @default("per_unit") @map("electricity_billing_type") @db.VarChar(50)
+  electricityRate            Decimal  @default(0.00) @map("electricity_rate") @db.Decimal(12, 2)
+  commonFee                  Decimal  @default(0.00) @map("common_fee") @db.Decimal(12, 2)
+  commonFeeMode              String   @default("per_room") @map("common_fee_mode") @db.VarChar(50)
+  internetFee                Decimal  @default(0.00) @map("internet_fee") @db.Decimal(12, 2)
+  internetFeeMode            String   @default("per_person") @map("internet_fee_mode") @db.VarChar(50)
+  parkingRate                Decimal  @default(0.00) @map("parking_rate") @db.Decimal(12, 2)
+  parkingFeeMode             String   @default("per_room") @map("parking_fee_mode") @db.VarChar(50)
+  gracePeriodDays            Int      @default(0) @map("grace_period_days")
+  advanceRentMonths          Int      @default(1) @map("advance_rent_months")
+  lateFeeType                String   @default("none") @map("late_fee_type") @db.VarChar(50)
+  lateFeeValue               Decimal  @default(0.00) @map("late_fee_value") @db.Decimal(12, 2)
+  rentBillingType            String   @default("monthly") @map("rent_billing_type") @db.VarChar(50)
+  cashAccepted               Boolean  @default(true) @map("cash_accepted")
+  promptPayType              String?  @map("prompt_pay_type") @db.VarChar(50)
+  promptPayValue             String?  @map("prompt_pay_value") @db.VarChar(255)
+  promptPayValueEncrypted    String?  @map("prompt_pay_value_encrypted") @db.Text
+  promptPayAccountName       String?  @map("prompt_pay_account_name") @db.VarChar(255)
+  bankCode                   String?  @map("bank_code") @db.VarChar(50)
+  bankAccountName            String?  @map("bank_account_name") @db.VarChar(255)
+  bankAccountNumber          String?  @map("bank_account_number") @db.VarChar(100)
+  bankAccountNumberEncrypted String?  @map("bank_account_number_encrypted") @db.Text
+  version                    Int      @default(1)
+  createdAt                  DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt                  DateTime @updatedAt @map("updated_at") @db.Timestamptz()
 
   dormitory Dormitory @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
 
@@ -361,39 +361,39 @@ model IdempotencyKey {
 }
 
 model Building {
-  id                     String    @id @default(uuid()) @db.Uuid
-  dormitoryId            String    @map("dormitory_id") @db.Uuid
-  name                   String    @db.VarChar(255)
-  code                   String?   @db.VarChar(100)
-  floorCount             Int       @default(1) @map("floor_count")
-  roomsPerFloor          Int?      @map("rooms_per_floor")
-  roomPrefix             String?   @map("room_prefix") @db.VarChar(50)
-  hasElevator            Boolean   @default(false) @map("has_elevator")
-  numberingPattern       String?   @map("numbering_pattern") @db.VarChar(100)
-  description            String?   @db.Text
-  status                 String    @default("active") @db.VarChar(50)
-  displayOrder           Int       @default(0) @map("display_order")
-  monthlyRent            Decimal?  @map("monthly_rent") @db.Decimal(12, 2)
-  termRent               Decimal?  @map("term_rent") @db.Decimal(12, 2)
-  termMonths             Int?      @default(6) @map("term_months")
-  maxTermRentInstallments Int      @default(1) @map("max_term_rent_installments")
-  dailyRent              Decimal?  @map("daily_rent") @db.Decimal(12, 2)
-  depositAmount          Decimal?  @map("deposit_amount") @db.Decimal(12, 2)
-  advancePaymentAmount   Decimal?  @map("advance_payment_amount") @db.Decimal(12, 2)
-  waterRate              Decimal?  @map("water_rate") @db.Decimal(12, 2)
-  electricityRate        Decimal?  @map("electricity_rate") @db.Decimal(12, 2)
-  commonFee              Decimal?  @map("common_fee") @db.Decimal(12, 2)
-  internetFee            Decimal?  @map("internet_fee") @db.Decimal(12, 2)
-  parkingFee             Decimal?  @map("parking_fee") @db.Decimal(12, 2)
-  waterBillingType       String?   @map("water_billing_type") @db.VarChar(50)
-  electricityBillingType String?   @map("electricity_billing_type") @db.VarChar(50)
-  rentBillingType        String?   @map("rent_billing_type") @db.VarChar(50)
-  maximumOccupants       Int?      @map("maximum_occupants")
-  roomType               String?   @map("room_type") @db.VarChar(100)
-  version                Int       @default(1)
-  createdAt              DateTime  @default(now()) @map("created_at") @db.Timestamptz()
-  updatedAt              DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
-  deletedAt              DateTime? @map("deleted_at") @db.Timestamptz()
+  id                      String    @id @default(uuid()) @db.Uuid
+  dormitoryId             String    @map("dormitory_id") @db.Uuid
+  name                    String    @db.VarChar(255)
+  code                    String?   @db.VarChar(100)
+  floorCount              Int       @default(1) @map("floor_count")
+  roomsPerFloor           Int?      @map("rooms_per_floor")
+  roomPrefix              String?   @map("room_prefix") @db.VarChar(50)
+  hasElevator             Boolean   @default(false) @map("has_elevator")
+  numberingPattern        String?   @map("numbering_pattern") @db.VarChar(100)
+  description             String?   @db.Text
+  status                  String    @default("active") @db.VarChar(50)
+  displayOrder            Int       @default(0) @map("display_order")
+  monthlyRent             Decimal?  @map("monthly_rent") @db.Decimal(12, 2)
+  termRent                Decimal?  @map("term_rent") @db.Decimal(12, 2)
+  termMonths              Int?      @default(6) @map("term_months")
+  maxTermRentInstallments Int       @default(1) @map("max_term_rent_installments")
+  dailyRent               Decimal?  @map("daily_rent") @db.Decimal(12, 2)
+  depositAmount           Decimal?  @map("deposit_amount") @db.Decimal(12, 2)
+  advancePaymentAmount    Decimal?  @map("advance_payment_amount") @db.Decimal(12, 2)
+  waterRate               Decimal?  @map("water_rate") @db.Decimal(12, 2)
+  electricityRate         Decimal?  @map("electricity_rate") @db.Decimal(12, 2)
+  commonFee               Decimal?  @map("common_fee") @db.Decimal(12, 2)
+  internetFee             Decimal?  @map("internet_fee") @db.Decimal(12, 2)
+  parkingFee              Decimal?  @map("parking_fee") @db.Decimal(12, 2)
+  waterBillingType        String?   @map("water_billing_type") @db.VarChar(50)
+  electricityBillingType  String?   @map("electricity_billing_type") @db.VarChar(50)
+  rentBillingType         String?   @map("rent_billing_type") @db.VarChar(50)
+  maximumOccupants        Int?      @map("maximum_occupants")
+  roomType                String?   @map("room_type") @db.VarChar(100)
+  version                 Int       @default(1)
+  createdAt               DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt               DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
+  deletedAt               DateTime? @map("deleted_at") @db.Timestamptz()
 
   dormitory Dormitory @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
   rooms     Room[]
@@ -404,59 +404,59 @@ model Building {
 }
 
 model Room {
-  id                        String    @id @default(uuid()) @db.Uuid
-  dormitoryId               String    @map("dormitory_id") @db.Uuid
-  buildingId                String    @map("building_id") @db.Uuid
-  building                  Building  @relation(fields: [buildingId], references: [id], onDelete: Cascade)
-  roomNumber                String    @map("room_number") @db.VarChar(100)
-  normalizedRoomNumber      String    @map("normalized_room_number") @db.VarChar(100)
+  id                             String    @id @default(uuid()) @db.Uuid
+  dormitoryId                    String    @map("dormitory_id") @db.Uuid
+  buildingId                     String    @map("building_id") @db.Uuid
+  building                       Building  @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+  roomNumber                     String    @map("room_number") @db.VarChar(100)
+  normalizedRoomNumber           String    @map("normalized_room_number") @db.VarChar(100)
   /// @deprecated Do not use. Floor grouping is now derived dynamically from Building.numberingPattern and Room.roomNumber.
-  floor                     Int       @default(1)
-  roomType                  String?   @map("room_type") @db.VarChar(100)
-  status                    String    @default("vacant") @db.VarChar(50)
-  rentCycle                 String    @default("monthly") @map("rent_cycle") @db.VarChar(50)
-  monthlyRent               Decimal?  @map("monthly_rent") @db.Decimal(12, 2)
-  termRent                  Decimal?  @map("term_rent") @db.Decimal(12, 2)
-  termMonths                Int?      @default(6) @map("term_months")
-  dailyRent                 Decimal?  @map("daily_rent") @db.Decimal(12, 2)
-  depositAmount             Decimal?  @map("deposit_amount") @db.Decimal(12, 2)
-  depositInheritsBuildingDefault Boolean @default(true) @map("deposit_inherits_building_default")
-  advancePaymentAmount      Decimal?  @map("advance_payment_amount") @db.Decimal(12, 2)
-  waterRate                 Decimal?  @map("water_rate") @db.Decimal(12, 2)
-  electricityRate           Decimal?  @map("electricity_rate") @db.Decimal(12, 2)
-  commonFee                 Decimal?  @map("common_fee") @db.Decimal(12, 2)
-  internetFee               Decimal?  @map("internet_fee") @db.Decimal(12, 2)
-  parkingFee                Decimal?  @map("parking_fee") @db.Decimal(12, 2)
-  waterBillingType          String?   @map("water_billing_type") @db.VarChar(50)
-  electricityBillingType    String?   @map("electricity_billing_type") @db.VarChar(50)
-  rentBillingType           String?   @map("rent_billing_type") @db.VarChar(50)
-  maximumOccupants          Int?      @map("maximum_occupants")
-  waterMeterNumber          String?   @map("water_meter_number") @db.VarChar(100)
-  electricityMeterNumber    String?   @map("electricity_meter_number") @db.VarChar(100)
-  initialWaterReading       Decimal   @default(0.00) @map("initial_water_reading") @db.Decimal(12, 2)
-  initialElectricityReading Decimal   @default(0.00) @map("initial_electricity_reading") @db.Decimal(12, 2)
-  amenities                 Json?     @map("amenities")
-  images                    Json?     @map("images")
-  notes                     String?   @db.Text
-  currentTenantId           String?   @map("current_tenant_id") @db.Uuid
-  currentContractId         String?   @map("current_contract_id") @db.Uuid
-  version                   Int       @default(1)
-  createdAt                 DateTime  @default(now()) @map("created_at") @db.Timestamptz()
-  updatedAt                 DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
-  deletedAt                 DateTime? @map("deleted_at") @db.Timestamptz()
+  floor                          Int       @default(1)
+  roomType                       String?   @map("room_type") @db.VarChar(100)
+  status                         String    @default("vacant") @db.VarChar(50)
+  rentCycle                      String    @default("monthly") @map("rent_cycle") @db.VarChar(50)
+  monthlyRent                    Decimal?  @map("monthly_rent") @db.Decimal(12, 2)
+  termRent                       Decimal?  @map("term_rent") @db.Decimal(12, 2)
+  termMonths                     Int?      @default(6) @map("term_months")
+  dailyRent                      Decimal?  @map("daily_rent") @db.Decimal(12, 2)
+  depositAmount                  Decimal?  @map("deposit_amount") @db.Decimal(12, 2)
+  depositInheritsBuildingDefault Boolean   @default(true) @map("deposit_inherits_building_default")
+  advancePaymentAmount           Decimal?  @map("advance_payment_amount") @db.Decimal(12, 2)
+  waterRate                      Decimal?  @map("water_rate") @db.Decimal(12, 2)
+  electricityRate                Decimal?  @map("electricity_rate") @db.Decimal(12, 2)
+  commonFee                      Decimal?  @map("common_fee") @db.Decimal(12, 2)
+  internetFee                    Decimal?  @map("internet_fee") @db.Decimal(12, 2)
+  parkingFee                     Decimal?  @map("parking_fee") @db.Decimal(12, 2)
+  waterBillingType               String?   @map("water_billing_type") @db.VarChar(50)
+  electricityBillingType         String?   @map("electricity_billing_type") @db.VarChar(50)
+  rentBillingType                String?   @map("rent_billing_type") @db.VarChar(50)
+  maximumOccupants               Int?      @map("maximum_occupants")
+  waterMeterNumber               String?   @map("water_meter_number") @db.VarChar(100)
+  electricityMeterNumber         String?   @map("electricity_meter_number") @db.VarChar(100)
+  initialWaterReading            Decimal   @default(0.00) @map("initial_water_reading") @db.Decimal(12, 2)
+  initialElectricityReading      Decimal   @default(0.00) @map("initial_electricity_reading") @db.Decimal(12, 2)
+  amenities                      Json?     @map("amenities")
+  images                         Json?     @map("images")
+  notes                          String?   @db.Text
+  currentTenantId                String?   @map("current_tenant_id") @db.Uuid
+  currentContractId              String?   @map("current_contract_id") @db.Uuid
+  version                        Int       @default(1)
+  createdAt                      DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt                      DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
+  deletedAt                      DateTime? @map("deleted_at") @db.Timestamptz()
 
-  dormitory         Dormitory              @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
-  contracts         Contract[]
-  meterDevices      MeterDevice[]
-  meterReadings     MeterReading[]
-  meterReplacements MeterReplacement[]
-  bills             Bill[]
-  occupancies       Occupancy[]
-  moveOutRequests   TenantMoveOutRequest[]
-  renewalRequests            TenantRenewalRequest[]
-  settlements                ContractSettlement[]
-  roomBillingCycleSnapshots  RoomBillingCycleSnapshot[]
-  roomNextCycleCorrections   RoomNextCycleCorrection[]
+  dormitory                 Dormitory                  @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
+  contracts                 Contract[]
+  meterDevices              MeterDevice[]
+  meterReadings             MeterReading[]
+  meterReplacements         MeterReplacement[]
+  bills                     Bill[]
+  occupancies               Occupancy[]
+  moveOutRequests           TenantMoveOutRequest[]
+  renewalRequests           TenantRenewalRequest[]
+  settlements               ContractSettlement[]
+  roomBillingCycleSnapshots RoomBillingCycleSnapshot[]
+  roomNextCycleCorrections  RoomNextCycleCorrection[]
 
   @@unique([dormitoryId, normalizedRoomNumber], map: "dormitory_normalized_room_number_unique")
   @@map("rooms")
@@ -486,7 +486,7 @@ model Tenant {
   updatedAt           DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
   deletedAt           DateTime? @map("deleted_at") @db.Timestamptz()
 
-  dormitory            Dormitory              @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
+  dormitory            Dormitory                @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
   coOccupants          TenantCoOccupant[]
   emergencyContacts    TenantEmergencyContact[]
   vehicles             TenantVehicle[]
@@ -706,8 +706,9 @@ model BillingCycle {
   createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz()
   updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
 
-  dormitory     Dormitory             @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
-  rateSnapshots BillingRateSnapshot[]
+  dormitory                 Dormitory                  @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
+  rateSnapshot              BillingRateSnapshot?       @relation("BillingCycleRateSnapshot")
+  inheritedRateSnapshots    BillingRateSnapshot[]      @relation("SnapshotInheritance")
   meterReadings             MeterReading[]
   bills                     Bill[]
   roomBillingCycleSnapshots RoomBillingCycleSnapshot[]
@@ -717,28 +718,35 @@ model BillingCycle {
 }
 
 model BillingRateSnapshot {
-  id                     String   @id @default(uuid()) @db.Uuid
-  dormitoryId            String   @map("dormitory_id") @db.Uuid
-  billingCycleId         String   @map("billing_cycle_id") @db.Uuid
-  waterBillingType       String   @map("water_billing_type") @db.VarChar(50)
-  waterRate              Decimal  @map("water_rate") @db.Decimal(12, 2)
-  electricityBillingType String   @map("electricity_billing_type") @db.VarChar(50)
-  electricityRate        Decimal  @map("electricity_rate") @db.Decimal(12, 2)
-  commonFee              Decimal  @map("common_fee") @db.Decimal(12, 2)
-  commonFeeMode          String   @map("common_fee_mode") @db.VarChar(50)
-  internetFee            Decimal  @map("internet_fee") @db.Decimal(12, 2)
-  internetFeeMode        String   @map("internet_fee_mode") @db.VarChar(50)
-  parkingFee             Decimal  @map("parking_fee") @db.Decimal(12, 2)
-  parkingFeeMode         String   @map("parking_fee_mode") @db.VarChar(50)
-  lateFeeType            String   @map("late_fee_type") @db.VarChar(50)
-  lateFeeValue           Decimal  @map("late_fee_value") @db.Decimal(12, 2)
-  currency               String   @default("THB") @db.VarChar(10)
-  createdAt              DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  id                          String   @id @default(uuid()) @db.Uuid
+  dormitoryId                 String   @map("dormitory_id") @db.Uuid
+  billingCycleId              String   @unique @map("billing_cycle_id") @db.Uuid
+  waterBillingType            String   @map("water_billing_type") @db.VarChar(50)
+  waterRate                   Decimal  @map("water_rate") @db.Decimal(12, 2)
+  electricityBillingType      String   @map("electricity_billing_type") @db.VarChar(50)
+  electricityRate             Decimal  @map("electricity_rate") @db.Decimal(12, 2)
+  commonFee                   Decimal  @map("common_fee") @db.Decimal(12, 2)
+  commonFeeMode               String   @map("common_fee_mode") @db.VarChar(50)
+  internetFee                 Decimal  @map("internet_fee") @db.Decimal(12, 2)
+  internetFeeMode             String   @map("internet_fee_mode") @db.VarChar(50)
+  parkingFee                  Decimal  @map("parking_fee") @db.Decimal(12, 2)
+  parkingFeeMode              String   @map("parking_fee_mode") @db.VarChar(50)
+  lateFeeType                 String   @map("late_fee_type") @db.VarChar(50)
+  lateFeeValue                Decimal  @map("late_fee_value") @db.Decimal(12, 2)
+  currency                    String   @default("THB") @db.VarChar(10)
+  source                      String   @map("source") @db.VarChar(50) // TEMPLATE_DEFAULT, INHERITED, MANUAL_OVERRIDE
+  inheritedFromBillingCycleId String?  @map("inherited_from_billing_cycle_id") @db.Uuid
+  updatedByUserId             String?  @map("updated_by_user_id") @db.Uuid
+  version                     Int      @default(1)
+  createdAt                   DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt                   DateTime @updatedAt @map("updated_at") @db.Timestamptz()
 
-  dormitory    Dormitory    @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
-  billingCycle BillingCycle @relation(fields: [billingCycleId], references: [id], onDelete: Cascade)
-  bills        Bill[]
+  dormitory          Dormitory     @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
+  billingCycle       BillingCycle  @relation("BillingCycleRateSnapshot", fields: [billingCycleId], references: [id], onDelete: Cascade)
+  inheritedFromCycle BillingCycle? @relation("SnapshotInheritance", fields: [inheritedFromBillingCycleId], references: [id], onDelete: Restrict)
+  bills              Bill[]
 
+  @@index([inheritedFromBillingCycleId])
   @@map("billing_rate_snapshots")
 }
 
@@ -944,32 +952,32 @@ model BillStatusHistory {
 }
 
 model TenantRegistrationRequest {
-  id                 String    @id @default(uuid()) @db.Uuid
-  dormitoryId        String    @map("dormitory_id") @db.Uuid
-  lineFollowerId     String?   @map("line_follower_id") @db.Uuid
-  requestedRoomId    String    @map("requested_room_id") @db.Uuid
-  firstName          String    @map("first_name") @db.VarChar(255)
-  lastName           String    @map("last_name") @db.VarChar(255)
-  phone              String    @db.VarChar(50)
-  note               String?   @db.Text
-  status             String    @default("pending_owner_approval") @db.VarChar(50) // draft, pending_owner_approval, approved, rejected, resubmitted, suspended, revoked
-  submittedAt        DateTime? @map("submitted_at") @db.Timestamptz()
-  reviewedAt         DateTime? @map("reviewed_at") @db.Timestamptz()
-  reviewedByUserId   String?   @map("reviewed_by_user_id") @db.Uuid
-  rejectedReason              String?   @map("rejected_reason") @db.Text
-  approvedTenantId            String?   @map("approved_tenant_id") @db.Uuid
-  approvedContractId          String?   @map("approved_contract_id") @db.Uuid
-  approvedRoomId              String?   @map("approved_room_id") @db.Uuid
-  acceptanceSnapshot          Json?     @map("acceptance_snapshot")
-  acceptanceSnapshotSha256    String?   @map("acceptance_snapshot_sha256") @db.VarChar(64)
-  acceptedAt                  DateTime? @map("accepted_at") @db.Timestamptz()
-  tenantSignatureObjectKey    String?   @map("tenant_signature_object_key") @db.VarChar(255)
-  tenantSignatureSha256       String?   @map("tenant_signature_sha256") @db.VarChar(64)
-  tenantSignatureMimeType     String?   @map("tenant_signature_mime_type") @db.VarChar(50)
-  tenantSignatureByteSize     Int?      @map("tenant_signature_byte_size")
-  version                     Int       @default(1)
-  createdAt                   DateTime  @default(now()) @map("created_at") @db.Timestamptz()
-  updatedAt                   DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
+  id                       String    @id @default(uuid()) @db.Uuid
+  dormitoryId              String    @map("dormitory_id") @db.Uuid
+  lineFollowerId           String?   @map("line_follower_id") @db.Uuid
+  requestedRoomId          String    @map("requested_room_id") @db.Uuid
+  firstName                String    @map("first_name") @db.VarChar(255)
+  lastName                 String    @map("last_name") @db.VarChar(255)
+  phone                    String    @db.VarChar(50)
+  note                     String?   @db.Text
+  status                   String    @default("pending_owner_approval") @db.VarChar(50) // draft, pending_owner_approval, approved, rejected, resubmitted, suspended, revoked
+  submittedAt              DateTime? @map("submitted_at") @db.Timestamptz()
+  reviewedAt               DateTime? @map("reviewed_at") @db.Timestamptz()
+  reviewedByUserId         String?   @map("reviewed_by_user_id") @db.Uuid
+  rejectedReason           String?   @map("rejected_reason") @db.Text
+  approvedTenantId         String?   @map("approved_tenant_id") @db.Uuid
+  approvedContractId       String?   @map("approved_contract_id") @db.Uuid
+  approvedRoomId           String?   @map("approved_room_id") @db.Uuid
+  acceptanceSnapshot       Json?     @map("acceptance_snapshot")
+  acceptanceSnapshotSha256 String?   @map("acceptance_snapshot_sha256") @db.VarChar(64)
+  acceptedAt               DateTime? @map("accepted_at") @db.Timestamptz()
+  tenantSignatureObjectKey String?   @map("tenant_signature_object_key") @db.VarChar(255)
+  tenantSignatureSha256    String?   @map("tenant_signature_sha256") @db.VarChar(64)
+  tenantSignatureMimeType  String?   @map("tenant_signature_mime_type") @db.VarChar(50)
+  tenantSignatureByteSize  Int?      @map("tenant_signature_byte_size")
+  version                  Int       @default(1)
+  createdAt                DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt                DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
 
   dormitory   Dormitory   @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
   occupancies Occupancy[]
@@ -1118,7 +1126,6 @@ model ReceiptSequence {
   @@map("receipt_sequences")
 }
 
-
 model PaymentUploadIntent {
   id                  String    @id @default(uuid()) @db.Uuid
   authenticatedUserId String    @map("authenticated_user_id") @db.Uuid
@@ -1168,15 +1175,15 @@ enum DormitorySubscriptionStatus {
 }
 
 model SubscriptionPlan {
-  id        String               @id @default(uuid()) @db.Uuid
-  code      String               @unique @db.VarChar(50)
-  name      String               @db.VarChar(100)
-  type      SubscriptionPlanType @default(FREE)
-  roomLimit Int                  @map("room_limit")
-  messageQuotaMonthly Int @default(30) @map("message_quota_monthly")
-  enabled   Boolean              @default(true)
-  createdAt DateTime             @default(now()) @map("created_at") @db.Timestamptz()
-  updatedAt DateTime             @updatedAt @map("updated_at") @db.Timestamptz()
+  id                  String               @id @default(uuid()) @db.Uuid
+  code                String               @unique @db.VarChar(50)
+  name                String               @db.VarChar(100)
+  type                SubscriptionPlanType @default(FREE)
+  roomLimit           Int                  @map("room_limit")
+  messageQuotaMonthly Int                  @default(30) @map("message_quota_monthly")
+  enabled             Boolean              @default(true)
+  createdAt           DateTime             @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt           DateTime             @updatedAt @map("updated_at") @db.Timestamptz()
 
   packages               SubscriptionPackage[]
   dormitorySubscriptions DormitorySubscription[]
@@ -1219,8 +1226,8 @@ model DormitorySubscription {
   createdAt       DateTime                    @default(now()) @map("created_at") @db.Timestamptz()
   updatedAt       DateTime                    @updatedAt @map("updated_at") @db.Timestamptz()
 
-  dormitory            Dormitory                  @relation(fields: [dormitoryId], references: [id], onDelete: Restrict)
-  plan                 SubscriptionPlan           @relation(fields: [planId], references: [id], onDelete: Restrict)
+  dormitory            Dormitory                   @relation(fields: [dormitoryId], references: [id], onDelete: Restrict)
+  plan                 SubscriptionPlan            @relation(fields: [planId], references: [id], onDelete: Restrict)
   statusHistories      SubscriptionStatusHistory[]
   promoRedemptions     PromoRedemption[]
   accountBenefitClaims AccountBenefitClaim[]
@@ -1324,29 +1331,29 @@ model DormitoryLineFriend {
 }
 
 model DormitoryAccessGrant {
-  id                 String    @id @default(uuid()) @db.Uuid
-  dormitoryId        String    @map("dormitory_id") @db.Uuid
-  lineFriendId       String    @map("line_friend_id") @db.Uuid
-  tokenHash          String    @unique @map("token_hash") @db.VarChar(255)
-  tokenEncrypted     String?   @map("token_encrypted") @db.Text
-  tokenPrefix        String?   @map("token_prefix") @db.VarChar(20)
-  roleCode           String    @map("role_code") @db.VarChar(50)
-  version            Int       @default(1)
-  status             String    @default("ACTIVE") @db.VarChar(50)
-  createdByPrincipal String    @map("created_by_principal") @db.VarChar(255)
-  revokedByPrincipal String?   @map("revoked_by_principal") @db.VarChar(255)
-  revokedAt          DateTime? @map("revoked_at") @db.Timestamptz()
-  lastRoleChangedAt  DateTime? @map("last_role_changed_at") @db.Timestamptz()
+  id                    String    @id @default(uuid()) @db.Uuid
+  dormitoryId           String    @map("dormitory_id") @db.Uuid
+  lineFriendId          String    @map("line_friend_id") @db.Uuid
+  tokenHash             String    @unique @map("token_hash") @db.VarChar(255)
+  tokenEncrypted        String?   @map("token_encrypted") @db.Text
+  tokenPrefix           String?   @map("token_prefix") @db.VarChar(20)
+  roleCode              String    @map("role_code") @db.VarChar(50)
+  version               Int       @default(1)
+  status                String    @default("ACTIVE") @db.VarChar(50)
+  createdByPrincipal    String    @map("created_by_principal") @db.VarChar(255)
+  revokedByPrincipal    String?   @map("revoked_by_principal") @db.VarChar(255)
+  revokedAt             DateTime? @map("revoked_at") @db.Timestamptz()
+  lastRoleChangedAt     DateTime? @map("last_role_changed_at") @db.Timestamptz()
   lastDeliveryStatus    String?   @map("last_delivery_status") @db.VarChar(50)
   lastDeliveryAttemptAt DateTime? @map("last_delivery_attempt_at") @db.Timestamptz()
   lastDeliverySuccessAt DateTime? @map("last_delivery_success_at") @db.Timestamptz()
   lastDeliveryErrorCode String?   @map("last_delivery_error_code") @db.VarChar(100)
-  createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz()
-  updatedAt          DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
+  createdAt             DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt             DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
 
-  dormitory  Dormitory           @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
-  lineFriend DormitoryLineFriend @relation(fields: [lineFriendId], references: [id], onDelete: Cascade)
-  sessions   Session[]
+  dormitory        Dormitory                 @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
+  lineFriend       DormitoryLineFriend       @relation(fields: [lineFriendId], references: [id], onDelete: Cascade)
+  sessions         Session[]
   deliveryAttempts LinePushDeliveryAttempt[]
 
   @@index([dormitoryId, status])
@@ -1370,7 +1377,7 @@ model DormitoryLineConfig {
   webhookEndpointSetAt        DateTime? @map("webhook_endpoint_set_at") @db.Timestamptz()
   webhookTestSucceededAt      DateTime? @map("webhook_test_succeeded_at") @db.Timestamptz()
   webhookActive               Boolean   @default(false) @map("webhook_active")
-  webhookActiveCheckedAt       DateTime? @map("webhook_active_checked_at") @db.Timestamptz()
+  webhookActiveCheckedAt      DateTime? @map("webhook_active_checked_at") @db.Timestamptz()
   botUserId                   String?   @map("bot_user_id") @db.VarChar(100)
   botDisplayName              String?   @map("bot_display_name") @db.VarChar(255)
   botPictureUrl               String?   @map("bot_picture_url") @db.Text
@@ -1485,30 +1492,30 @@ model AccountBenefitClaim {
 }
 
 model SubscriptionPackageIntent {
-  id                         String    @id @default(uuid()) @db.Uuid
-  dormitoryId                String    @map("dormitory_id") @db.Uuid
-  userId                     String    @map("user_id") @db.Uuid
-  packageId                  String    @map("package_id") @db.Uuid
-  status                     String    @default("PENDING_PAYMENT") @db.VarChar(50)
-  durationMonthsSnapshot     Int       @map("duration_months_snapshot")
-  priceSnapshot              Decimal?  @map("price_snapshot") @db.Decimal(12, 2)
-  referencePriceSnapshot     Decimal?  @map("reference_price_snapshot") @db.Decimal(12, 2)
-  isTrialEligibleSnapshot    Boolean   @default(false) @map("is_trial_eligible_snapshot")
-  promoCodeSnapshot          String?   @map("promo_code_snapshot") @db.VarChar(50)
-  promoBonusMonthsSnapshot   Int       @default(0) @map("promo_bonus_months_snapshot")
-  referralCodeSnapshot       String?   @map("referral_code_snapshot") @db.VarChar(6)
-  coinRequested              Int       @default(0) @map("coin_requested")
-  coinApplied                Int       @default(0) @map("coin_applied")
-  finalPayableAmount         Decimal?  @map("final_payable_amount") @db.Decimal(12, 2)
-  checkoutVersion            Int       @default(1) @map("checkout_version")
-  isZeroPayValidated         Boolean   @default(false) @map("is_zero_pay_validated")
-  currencySnapshot           String    @default("THB") @map("currency_snapshot") @db.VarChar(10)
-  catalogVersion             Int       @default(1) @map("catalog_version")
-  idempotencyKey             String?   @unique @map("idempotency_key") @db.VarChar(255)
-  expiresAt                  DateTime? @map("expires_at") @db.Timestamptz()
-  activatedAt                DateTime? @map("activated_at") @db.Timestamptz()
-  createdAt                  DateTime  @default(now()) @map("created_at") @db.Timestamptz()
-  updatedAt                  DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
+  id                       String    @id @default(uuid()) @db.Uuid
+  dormitoryId              String    @map("dormitory_id") @db.Uuid
+  userId                   String    @map("user_id") @db.Uuid
+  packageId                String    @map("package_id") @db.Uuid
+  status                   String    @default("PENDING_PAYMENT") @db.VarChar(50)
+  durationMonthsSnapshot   Int       @map("duration_months_snapshot")
+  priceSnapshot            Decimal?  @map("price_snapshot") @db.Decimal(12, 2)
+  referencePriceSnapshot   Decimal?  @map("reference_price_snapshot") @db.Decimal(12, 2)
+  isTrialEligibleSnapshot  Boolean   @default(false) @map("is_trial_eligible_snapshot")
+  promoCodeSnapshot        String?   @map("promo_code_snapshot") @db.VarChar(50)
+  promoBonusMonthsSnapshot Int       @default(0) @map("promo_bonus_months_snapshot")
+  referralCodeSnapshot     String?   @map("referral_code_snapshot") @db.VarChar(6)
+  coinRequested            Int       @default(0) @map("coin_requested")
+  coinApplied              Int       @default(0) @map("coin_applied")
+  finalPayableAmount       Decimal?  @map("final_payable_amount") @db.Decimal(12, 2)
+  checkoutVersion          Int       @default(1) @map("checkout_version")
+  isZeroPayValidated       Boolean   @default(false) @map("is_zero_pay_validated")
+  currencySnapshot         String    @default("THB") @map("currency_snapshot") @db.VarChar(10)
+  catalogVersion           Int       @default(1) @map("catalog_version")
+  idempotencyKey           String?   @unique @map("idempotency_key") @db.VarChar(255)
+  expiresAt                DateTime? @map("expires_at") @db.Timestamptz()
+  activatedAt              DateTime? @map("activated_at") @db.Timestamptz()
+  createdAt                DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt                DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
 
   dormitory Dormitory           @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
   user      User                @relation(fields: [userId], references: [id], onDelete: Restrict)
@@ -1548,22 +1555,22 @@ model TenantRenewalRequest {
 }
 
 model ContractSettlement {
-  id                  String                   @id @default(uuid()) @db.Uuid
-  dormitoryId         String                   @map("dormitory_id") @db.Uuid
-  tenantId            String                   @map("tenant_id") @db.Uuid
-  contractId          String                   @map("contract_id") @db.Uuid
-  roomId              String                   @map("room_id") @db.Uuid
-  depositAmount       Decimal                  @default(0.00) @map("deposit_amount") @db.Decimal(12, 2)
-  unpaidBillAmount    Decimal                  @default(0.00) @map("unpaid_bill_amount") @db.Decimal(12, 2)
-  damageChargeTotal   Decimal                  @default(0.00) @map("damage_charge_total") @db.Decimal(12, 2)
-  netSettlement       Decimal                  @default(0.00) @map("net_settlement") @db.Decimal(12, 2)
-  settlementDirection String                   @map("settlement_direction") @db.VarChar(50) // REFUND, PAYMENT_DUE, ZERO
-  settlementStatus    String                   @default("PENDING_REFUND") @map("settlement_status") @db.VarChar(50) // PENDING_REFUND, REFUNDED, PENDING_PAYMENT, PAYMENT_RECEIVED, CLOSED_ZERO
-  confirmedAt         DateTime?                @map("confirmed_at") @db.Timestamptz()
-  confirmedByUserId   String?                  @map("confirmed_by_user_id") @db.Uuid
-  createdAt           DateTime                 @default(now()) @map("created_at") @db.Timestamptz()
-  updatedAt           DateTime                 @updatedAt @map("updated_at") @db.Timestamptz()
-  version             Int                      @default(1)
+  id                  String    @id @default(uuid()) @db.Uuid
+  dormitoryId         String    @map("dormitory_id") @db.Uuid
+  tenantId            String    @map("tenant_id") @db.Uuid
+  contractId          String    @map("contract_id") @db.Uuid
+  roomId              String    @map("room_id") @db.Uuid
+  depositAmount       Decimal   @default(0.00) @map("deposit_amount") @db.Decimal(12, 2)
+  unpaidBillAmount    Decimal   @default(0.00) @map("unpaid_bill_amount") @db.Decimal(12, 2)
+  damageChargeTotal   Decimal   @default(0.00) @map("damage_charge_total") @db.Decimal(12, 2)
+  netSettlement       Decimal   @default(0.00) @map("net_settlement") @db.Decimal(12, 2)
+  settlementDirection String    @map("settlement_direction") @db.VarChar(50) // REFUND, PAYMENT_DUE, ZERO
+  settlementStatus    String    @default("PENDING_REFUND") @map("settlement_status") @db.VarChar(50) // PENDING_REFUND, REFUNDED, PENDING_PAYMENT, PAYMENT_RECEIVED, CLOSED_ZERO
+  confirmedAt         DateTime? @map("confirmed_at") @db.Timestamptz()
+  confirmedByUserId   String?   @map("confirmed_by_user_id") @db.Uuid
+  createdAt           DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt           DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
+  version             Int       @default(1)
 
   dormitory Dormitory                @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
   tenant    Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -1746,4 +1753,3 @@ model ReferralProgramConfig {
 
   @@map("referral_program_configs")
 }
-

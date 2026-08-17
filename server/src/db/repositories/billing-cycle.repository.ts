@@ -36,7 +36,12 @@ export interface BillingRateSnapshotEntity {
   lateFeeType: string;
   lateFeeValue: string;
   currency: string;
+  source: string; // TEMPLATE_DEFAULT, INHERITED, MANUAL_OVERRIDE
+  inheritedFromBillingCycleId?: string | null;
+  updatedByUserId?: string | null;
+  version: number;
   createdAt: Date;
+  updatedAt: Date;
 }
 
 export interface CreateBillingCycleData {
@@ -67,6 +72,29 @@ export interface CreateRateSnapshotData {
   lateFeeType?: string;
   lateFeeValue?: string;
   currency?: string;
+  source?: string;
+  inheritedFromBillingCycleId?: string | null;
+  updatedByUserId?: string | null;
+  version?: number;
+}
+
+export interface UpdateRateSnapshotData {
+  waterBillingType?: string;
+  waterRate?: string;
+  electricityBillingType?: string;
+  electricityRate?: string;
+  commonFee?: string;
+  commonFeeMode?: string;
+  internetFee?: string;
+  internetFeeMode?: string;
+  parkingFee?: string;
+  parkingFeeMode?: string;
+  lateFeeType?: string;
+  lateFeeValue?: string;
+  currency?: string;
+  source?: string;
+  inheritedFromBillingCycleId?: string | null;
+  updatedByUserId?: string | null;
 }
 
 export interface BillingCycleFilterQuery {
@@ -86,6 +114,7 @@ export interface IBillingCycleRepository {
   create(dormitoryId: string, data: CreateBillingCycleData): Promise<BillingCycleEntity>;
   update(id: string, dormitoryId: string, data: Partial<BillingCycleEntity>, expectedVersion?: number): Promise<BillingCycleEntity | null>;
   createRateSnapshot(dormitoryId: string, data: CreateRateSnapshotData): Promise<BillingRateSnapshotEntity>;
+  updateRateSnapshot(id: string, dormitoryId: string, data: UpdateRateSnapshotData, expectedVersion?: number): Promise<BillingRateSnapshotEntity | null>;
   findRateSnapshot(billingCycleId: string, dormitoryId?: string): Promise<BillingRateSnapshotEntity | null>;
 }
 
@@ -230,10 +259,48 @@ export class InMemoryBillingCycleRepository implements IBillingCycleRepository {
       lateFeeType: data.lateFeeType || 'none',
       lateFeeValue: data.lateFeeValue || '0.00',
       currency: data.currency || 'THB',
+      source: data.source || 'TEMPLATE_DEFAULT',
+      inheritedFromBillingCycleId: data.inheritedFromBillingCycleId || null,
+      updatedByUserId: data.updatedByUserId || null,
+      version: data.version || 1,
       createdAt: now,
+      updatedAt: now,
     };
     this.snapshots.set(data.billingCycleId, snapshot);
     return snapshot;
+  }
+
+  public async updateRateSnapshot(
+    id: string,
+    dormitoryId: string,
+    data: UpdateRateSnapshotData,
+    expectedVersion?: number
+  ): Promise<BillingRateSnapshotEntity | null> {
+    let targetKey: string | null = null;
+    let existing: BillingRateSnapshotEntity | null = null;
+    for (const [key, snap] of this.snapshots.entries()) {
+      if (snap.id === id && snap.dormitoryId === dormitoryId) {
+        targetKey = key;
+        existing = snap;
+        break;
+      }
+    }
+    if (!existing || !targetKey) return null;
+    if (expectedVersion !== undefined && existing.version !== expectedVersion) {
+      const err = new Error('BILLING_RATE_SNAPSHOT_VERSION_CONFLICT');
+      (err as any).statusCode = 409;
+      (err as any).code = 'BILLING_RATE_SNAPSHOT_VERSION_CONFLICT';
+      throw err;
+    }
+
+    const updated: BillingRateSnapshotEntity = {
+      ...existing,
+      ...data,
+      version: existing.version + 1,
+      updatedAt: new Date(),
+    };
+    this.snapshots.set(targetKey, updated);
+    return updated;
   }
 
   public async findRateSnapshot(billingCycleId: string, dormitoryId?: string): Promise<BillingRateSnapshotEntity | null> {
@@ -291,7 +358,12 @@ export class PrismaBillingCycleRepository implements IBillingCycleRepository {
       lateFeeType: s.lateFeeType || 'none',
       lateFeeValue: fmt(s.lateFeeValue, '0.00'),
       currency: s.currency,
+      source: s.source,
+      inheritedFromBillingCycleId: s.inheritedFromBillingCycleId,
+      updatedByUserId: s.updatedByUserId,
+      version: s.version,
       createdAt: s.createdAt,
+      updatedAt: s.updatedAt,
     };
   }
 
@@ -305,8 +377,10 @@ export class PrismaBillingCycleRepository implements IBillingCycleRepository {
   }
 
   public async findByCode(dormitoryId: string, cycleCode: string): Promise<BillingCycleEntity | null> {
-    const c = await this.prisma.billingCycle.findFirst({
-      where: { dormitoryId, cycleCode },
+    const c = await this.prisma.billingCycle.findUnique({
+      where: {
+        dormitory_cycle_code_unique: { dormitoryId, cycleCode },
+      },
     });
     return c ? this.mapCycleToEntity(c) : null;
   }
@@ -322,53 +396,54 @@ export class PrismaBillingCycleRepository implements IBillingCycleRepository {
       periodStart: { lte: periodEnd },
       periodEnd: { gte: periodStart },
     };
-    if (excludeId) {
-      where.id = { not: excludeId };
-    }
-    const cycles = await this.prisma.billingCycle.findMany({ where });
-    return cycles.map((c) => this.mapCycleToEntity(c));
+    if (excludeId) where.id = { not: excludeId };
+    const items = await this.prisma.billingCycle.findMany({ where });
+    return items.map((c: any) => this.mapCycleToEntity(c));
   }
 
   public async findAll(
     dormitoryId: string,
     filter: BillingCycleFilterQuery = {}
   ): Promise<{ items: BillingCycleEntity[]; total: number }> {
+    const { status, search, page = 1, pageSize = 20, sortBy = 'periodStart', sortDirection = 'desc' } = filter;
     const where: any = { dormitoryId };
-    if (filter.status) where.status = filter.status;
-
-    const page = filter.page && filter.page > 0 ? filter.page : 1;
-    const pageSize = filter.pageSize && filter.pageSize > 0 ? filter.pageSize : 50;
-    const skip = (page - 1) * pageSize;
+    if (status) where.status = status;
+    if (search) {
+      where.OR = [
+        { cycleCode: { contains: search, mode: 'insensitive' } },
+        { name: { contains: search, mode: 'insensitive' } },
+      ];
+    }
 
     const [total, items] = await Promise.all([
       this.prisma.billingCycle.count({ where }),
       this.prisma.billingCycle.findMany({
         where,
-        skip,
+        skip: (page - 1) * pageSize,
         take: pageSize,
-        orderBy: { periodStart: 'desc' },
+        orderBy: { [sortBy]: sortDirection },
       }),
     ]);
 
     return {
-      items: items.map((c) => this.mapCycleToEntity(c)),
+      items: items.map((c: any) => this.mapCycleToEntity(c)),
       total,
     };
   }
 
   public async create(dormitoryId: string, data: CreateBillingCycleData): Promise<BillingCycleEntity> {
-    const isUuid = (str?: string | null) => !!str && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
     const c = await this.prisma.billingCycle.create({
       data: {
+        id: data.id,
         dormitoryId,
         cycleCode: data.cycleCode,
         name: data.name,
-        periodStart: new Date(data.periodStart),
-        periodEnd: new Date(data.periodEnd),
-        billingDate: new Date(data.billingDate),
-        dueDate: new Date(data.dueDate),
+        periodStart: data.periodStart,
+        periodEnd: data.periodEnd,
+        billingDate: data.billingDate,
+        dueDate: data.dueDate,
         status: data.status || 'draft',
-        createdByUserId: isUuid(data.createdByUserId) ? data.createdByUserId : null,
+        createdByUserId: data.createdByUserId,
       },
     });
     return this.mapCycleToEntity(c);
@@ -421,7 +496,56 @@ export class PrismaBillingCycleRepository implements IBillingCycleRepository {
         lateFeeType: data.lateFeeType!,
         lateFeeValue: data.lateFeeValue!,
         currency: data.currency || 'THB',
+        source: data.source!,
+        inheritedFromBillingCycleId: data.inheritedFromBillingCycleId || null,
+        updatedByUserId: data.updatedByUserId || null,
+        version: data.version || 1,
       },
+    });
+    return this.mapSnapshotToEntity(s);
+  }
+
+  public async updateRateSnapshot(
+    id: string,
+    dormitoryId: string,
+    data: UpdateRateSnapshotData,
+    expectedVersion?: number
+  ): Promise<BillingRateSnapshotEntity | null> {
+    const existing = await this.prisma.billingRateSnapshot.findFirst({
+      where: { id, dormitoryId },
+    });
+    if (!existing) return null;
+    if (expectedVersion !== undefined && existing.version !== expectedVersion) {
+      const err = new Error('BILLING_RATE_SNAPSHOT_VERSION_CONFLICT');
+      (err as any).statusCode = 409;
+      (err as any).code = 'BILLING_RATE_SNAPSHOT_VERSION_CONFLICT';
+      throw err;
+    }
+
+    const updateData: any = {
+      version: { increment: 1 },
+      updatedAt: new Date(),
+    };
+    if (data.waterBillingType !== undefined) updateData.waterBillingType = data.waterBillingType;
+    if (data.waterRate !== undefined) updateData.waterRate = data.waterRate;
+    if (data.electricityBillingType !== undefined) updateData.electricityBillingType = data.electricityBillingType;
+    if (data.electricityRate !== undefined) updateData.electricityRate = data.electricityRate;
+    if (data.commonFee !== undefined) updateData.commonFee = data.commonFee;
+    if (data.commonFeeMode !== undefined) updateData.commonFeeMode = data.commonFeeMode;
+    if (data.internetFee !== undefined) updateData.internetFee = data.internetFee;
+    if (data.internetFeeMode !== undefined) updateData.internetFeeMode = data.internetFeeMode;
+    if (data.parkingFee !== undefined) updateData.parkingFee = data.parkingFee;
+    if (data.parkingFeeMode !== undefined) updateData.parkingFeeMode = data.parkingFeeMode;
+    if (data.lateFeeType !== undefined) updateData.lateFeeType = data.lateFeeType;
+    if (data.lateFeeValue !== undefined) updateData.lateFeeValue = data.lateFeeValue;
+    if (data.currency !== undefined) updateData.currency = data.currency;
+    if (data.source !== undefined) updateData.source = data.source;
+    if (data.inheritedFromBillingCycleId !== undefined) updateData.inheritedFromBillingCycleId = data.inheritedFromBillingCycleId;
+    if (data.updatedByUserId !== undefined) updateData.updatedByUserId = data.updatedByUserId;
+
+    const s = await this.prisma.billingRateSnapshot.update({
+      where: { id },
+      data: updateData,
     });
     return this.mapSnapshotToEntity(s);
   }

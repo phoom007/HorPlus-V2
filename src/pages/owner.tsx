@@ -55,6 +55,7 @@ import { OwnerRegister } from './owner/register';
 import { PaymentsOwnerView } from './owner/payments';
 import { SubscriptionPage } from './owner/subscription';
 import { fetchAllPaginated, fetchAllPaginatedWithMeta } from '../utils/fetch-paginated';
+import { BillingCycleCalendarPicker } from '../components/common/BillingCycleCalendarPicker';
 
 
 interface SlidableNotificationItemProps {
@@ -1210,54 +1211,23 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
               </button>
             </div>
 
-            {/* Dynamic Billing Cycle Selector Dropdown */}
-            {isCycleModalOpen && (
-              <>
-                <div 
-                  className="fixed inset-0 z-40 cursor-default" 
-                  onClick={() => setIsCycleModalOpen(false)} 
-                />
-                
-                <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 bg-white p-5 rounded-3xl w-[calc(100vw-2rem)] max-w-sm border border-slate-100 shadow-2xl z-50 animate-in fade-in slide-in-from-top-2 duration-200">
-                  <div className="flex justify-between items-center mb-4">
-                    <h3 className="text-xs font-black text-slate-800">เลือกงวดประจำเดือน</h3>
-                    <button 
-                      onClick={() => setIsCycleModalOpen(false)}
-                      className="text-[10px] font-bold text-slate-400 hover:text-slate-600 px-2 py-1 rounded-lg hover:bg-slate-50 transition-colors cursor-pointer"
-                    >
-                      ปิด
-                    </button>
-                  </div>
-
-                  <div className="space-y-1 max-h-60 overflow-y-auto">
-                    {billingCycles.map((c) => {
-                      const isSelected = c.id === selectedBillingCycleId || c.cycleCode === selectedCycleCode;
-                      return (
-                        <button
-                          key={c.id || c.cycleCode}
-                          data-testid={`cycle-option-${c.cycleCode}`}
-                          data-cycle-id={c.id}
-                          data-cycle-code={c.cycleCode}
-                          onClick={() => {
-                            setSelectedBillingCycleId(c.id);
-                            setSelectedCycleCode(c.cycleCode);
-                            setIsCycleModalOpen(false);
-                          }}
-                          className={`w-full py-2 px-3 text-left text-xs font-bold rounded-xl transition-all flex items-center justify-between ${
-                            isSelected 
-                              ? 'bg-blue-600 text-white shadow-sm' 
-                              : 'bg-slate-50 hover:bg-slate-100 text-slate-700'
-                          }`}
-                        >
-                          <span>ประจำเดือน {getCycleLabel(c.cycleCode)}</span>
-                          <span className="text-[10px] opacity-75">{c.status === 'closed' ? 'ปิดรอบแล้ว' : 'เปิดรอบชำระ'}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              </>
-            )}
+            {/* Dynamic Billing Cycle Selector Calendar Grid Dropdown */}
+            <BillingCycleCalendarPicker
+              isOpen={isCycleModalOpen}
+              onClose={() => setIsCycleModalOpen(false)}
+              selectedCycleCode={selectedCycleCode}
+              availableCycles={billingCycles}
+              onSelectCycle={(code, cycle) => {
+                if (cycle?.id) {
+                  setSelectedBillingCycleId(cycle.id);
+                } else {
+                  const match = billingCycles.find((c) => c.cycleCode === code);
+                  if (match?.id) setSelectedBillingCycleId(match.id);
+                }
+                setSelectedCycleCode(code);
+              }}
+              align="center"
+            />
           </div>
 
           {/* Right Block: Desktop & Tablet Action Bar (>= sm) */}

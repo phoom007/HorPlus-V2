@@ -44,7 +44,8 @@ import {
   Lock,
   Gift,
   Tag,
-  Bot
+  Bot,
+  Loader2
 } from 'lucide-react';
 
 import { onboardingClient } from '../../data/onboardingClient';
@@ -325,6 +326,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
   const [promoCodeInput, setPromoCodeInput] = useState('HORPLUS');
   const [appliedPromo, setAppliedPromo] = useState(false);
   const [promoMessage, setPromoMessage] = useState<string | null>(null);
+  const [isCheckingPromo, setIsCheckingPromo] = useState(false);
 
   // Packages, Referral & Coin Wallet states
   const [packages, setPackages] = useState<any[]>([]);
@@ -332,9 +334,17 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
   const [selectedPackageId, setSelectedPackageId] = useState<string | null>(null);
   const [referralCodeInput, setReferralCodeInput] = useState('');
   const [isReferralBound, setIsReferralBound] = useState(false);
+  const [isCheckingReferral, setIsCheckingReferral] = useState(false);
+  const [referralInlineError, setReferralInlineError] = useState<string | null>(null);
+  const [referralInlineSuccess, setReferralInlineSuccess] = useState<string | null>(null);
   const [coinWalletBalance, setCoinWalletBalance] = useState(0);
   const [coinToApply, setCoinToApply] = useState(0);
   const [isFirstTrialEligible, setIsFirstTrialEligible] = useState<boolean | null>(null);
+
+  const formatPrice = (val: number | string | undefined | null) => {
+    if (val === undefined || val === null || isNaN(Number(val))) return '0';
+    return Number(val).toLocaleString('en-US');
+  };
 
   // Trial UI state (fails closed: unknown/loading -> available / unavailable / error)
   const [trialState, setTrialState] = useState<'unknown' | 'available' | 'unavailable' | 'error'>('unknown');
@@ -416,8 +426,8 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
         const quote = await onboardingClient.getSubscriptionQuote({
           isFreePlan: selectedPlan === 'free',
           packageId: selectedPlan === 'pro' ? (selectedPackageId || undefined) : undefined,
-          promoCode: appliedPromo ? promoCodeInput.trim() : undefined,
-          referralCode: referralCodeInput ? referralCodeInput.trim() : undefined,
+          promoCode: appliedPromo && promoCodeInput ? promoCodeInput.trim() : undefined,
+          referralCode: isReferralBound && referralCodeInput ? referralCodeInput.trim() : undefined,
           coinRequested: coinToApply,
           dormitoryId: provId,
         });
@@ -459,7 +469,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
     return () => {
       isCancelled = true;
     };
-  }, [currentStep, selectedPlan, selectedPackageId, appliedPromo, promoCodeInput, referralCodeInput, coinToApply, selectedDurationMonths]);
+  }, [currentStep, selectedPlan, selectedPackageId, appliedPromo, promoCodeInput, isReferralBound, referralCodeInput, coinToApply, selectedDurationMonths]);
 
   // Signature Canvas Drawing
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -541,11 +551,43 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
     setSignatureSavedToast(null);
   };
 
+  const handleCheckReferral = async () => {
+    if (isCheckingReferral) return;
+    if (!referralCodeInput || referralCodeInput.length !== 6) {
+      setReferralInlineError('กรุณากรอกรหัสคำเชิญ 6 หลัก');
+      setReferralInlineSuccess(null);
+      return;
+    }
+    setIsCheckingReferral(true);
+    setReferralInlineError(null);
+    setReferralInlineSuccess(null);
+    try {
+      const res = await onboardingClient.validateReferral(referralCodeInput);
+      if (res?.data?.valid) {
+        setIsReferralBound(true);
+        setReferralInlineSuccess('✓ ยืนยันรหัสคำเชิญสำเร็จ! ได้รับสิทธิ์ 10 Coins');
+        setReferralInlineError(null);
+      } else {
+        setIsReferralBound(false);
+        setReferralInlineError(res?.data?.message || 'ไม่พบรหัสคำเชิญนี้ในระบบ หรือรหัสไม่ถูกต้อง');
+        setReferralInlineSuccess(null);
+      }
+    } catch (err: any) {
+      setIsReferralBound(false);
+      setReferralInlineError(err?.message || 'ไม่พบรหัสคำเชิญนี้ในระบบ หรือรหัสไม่ถูกต้อง');
+      setReferralInlineSuccess(null);
+    } finally {
+      setIsCheckingReferral(false);
+    }
+  };
+
   const handleApplyPromo = async () => {
+    if (isCheckingPromo) return;
     if (!promoCodeInput.trim()) {
       setPromoMessage('กรุณากรอกรหัสโปรโมชั่น');
       return;
     }
+    setIsCheckingPromo(true);
     try {
       const res = await onboardingClient.validatePromo(promoCodeInput.trim(), selectedPlan.toUpperCase());
       if (res && res.valid) {
@@ -553,11 +595,13 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
         setPromoMessage(`✓ ใช้งานรหัส ${promoCodeInput.trim()} สำเร็จ! ${res.description || 'ได้รับสิทธิ์โปรโมชั่น'}`);
       } else {
         setAppliedPromo(false);
-        setPromoMessage('รหัสโปรโมชั่นไม่ถูกต้อง หรือหมดอายุแล้ว');
+        setPromoMessage(res?.message || 'รหัสโปรโมชั่นไม่ถูกต้อง หรือหมดอายุแล้ว');
       }
     } catch (err: any) {
       setAppliedPromo(false);
       setPromoMessage(err?.message || 'รหัสโปรโมชั่นไม่ถูกต้อง หรือหมดอายุแล้ว');
+    } finally {
+      setIsCheckingPromo(false);
     }
   };
 
@@ -993,8 +1037,8 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
       const quote = await onboardingClient.getSubscriptionQuote({
         isFreePlan: selectedPlan === 'free',
         packageId: selectedPlan === 'pro' ? (selectedPackageId || undefined) : undefined,
-        promoCode: appliedPromo ? promoCodeInput.trim() : undefined,
-        referralCode: referralCodeInput ? referralCodeInput.trim() : undefined,
+        promoCode: appliedPromo && promoCodeInput ? promoCodeInput.trim() : undefined,
+        referralCode: isReferralBound && referralCodeInput ? referralCodeInput.trim() : undefined,
         coinRequested: coinToApply,
         dormitoryId: provDormId,
       });
@@ -1050,8 +1094,8 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
         planCode: (selectedPlan || 'free').toUpperCase(),
         packageId: selectedPlan === 'pro' ? (selectedPackageId || undefined) : undefined,
         packageIntentId: activeIntentId,
-        promoCode: appliedPromo ? promoCodeInput.trim() : undefined,
-        referralCode: referralCodeInput ? referralCodeInput.trim() : undefined,
+        promoCode: appliedPromo && promoCodeInput ? promoCodeInput.trim() : undefined,
+        referralCode: isReferralBound && referralCodeInput ? referralCodeInput.trim() : undefined,
         coinApplied: coinToApply > 0 ? coinToApply : undefined,
         petPolicy: {
           allowed: formData.petPolicy.allowed || 'none',
@@ -2886,11 +2930,11 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                   ) : (
                     <>
                       <span className="text-xl sm:text-2xl font-black text-indigo-600">
-                        ฿{packages.find(p => p.id === selectedPackageId)?.price || 189}
+                        ฿{formatPrice(packages.find(p => p.id === selectedPackageId)?.price || 189)}
                       </span>
                       {packages.find(p => p.id === selectedPackageId)?.referencePrice && (
                         <span className="text-xs line-through text-slate-400 font-bold">
-                          ฿{packages.find(p => p.id === selectedPackageId)?.referencePrice}
+                          ฿{formatPrice(packages.find(p => p.id === selectedPackageId)?.referencePrice)}
                         </span>
                       )}
                       <span className="text-[11px] sm:text-xs font-semibold text-slate-500">
@@ -2954,23 +2998,23 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                           {is1moTrial ? (
                             <>
                               <span className="text-sm font-black text-emerald-600">฿0</span>
-                              <span className="text-[10px] line-through text-slate-400 font-bold">฿{pkg.price || 189}</span>
+                              <span className="text-[10px] line-through text-slate-400 font-bold">฿{formatPrice(pkg.price || 189)}</span>
                               {pkg.referencePrice && (
-                                <span className="text-[10px] line-through text-slate-300 font-medium">฿{pkg.referencePrice}</span>
+                                <span className="text-[10px] line-through text-slate-300 font-medium">฿{formatPrice(pkg.referencePrice)}</span>
                               )}
                             </>
                           ) : (
                             <>
-                              <span className="text-sm font-black text-indigo-600">฿{pkg.price}</span>
+                              <span className="text-sm font-black text-indigo-600">฿{formatPrice(pkg.price)}</span>
                               {pkg.referencePrice && (
-                                <span className="text-[10px] line-through text-slate-400">฿{pkg.referencePrice}</span>
+                                <span className="text-[10px] line-through text-slate-400">฿{formatPrice(pkg.referencePrice)}</span>
                               )}
                             </>
                           )}
                         </div>
                       </div>
                       <span className="text-[10px] font-bold text-slate-400 mt-2">
-                        เฉลี่ย ~฿{Math.round(Number(pkg.price) / pkg.durationMonths)}/เดือน
+                        เฉลี่ย ~฿{formatPrice(Math.round(Number(pkg.price) / pkg.durationMonths))}/เดือน
                       </span>
                     </button>
                   );
@@ -2979,81 +3023,111 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
             </div>
           )}
 
-          {/* Referral Code (Used to register) */}
-          <div className="bg-indigo-50/50 p-4 sm:p-5 rounded-3xl border border-indigo-100 space-y-2.5">
-            <div className="flex items-center justify-between">
-              <label className="text-xs font-black text-slate-800 flex items-center gap-1.5">
-                <Gift className="w-4 h-4 text-indigo-600" /> รหัสคำเชิญที่ใช้สมัคร (ผู้แนะนำ)
-              </label>
-              {isReferralBound && (
-                <span className="text-[10px] font-black text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full flex items-center gap-1">
-                  <Lock className="w-3 h-3" /> ผูกสิทธิ์แล้ว
-                </span>
-              )}
-            </div>
-            <p className="text-[11px] text-slate-500 font-medium">
-              กรอกรหัสแนะนำ 6 หลักของเพื่อน เพื่อรับ 10 HorPlus Coins (฿10) ทันที
-            </p>
-            <div className="flex items-center gap-2 max-w-md">
-              <input
-                type="text"
-                maxLength={6}
-                disabled={isReferralBound}
-                value={referralCodeInput}
-                onChange={(e) => setReferralCodeInput(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                placeholder="เช่น 123456"
-                className="flex-1 px-3.5 py-2 text-xs font-black tracking-widest bg-white border border-slate-200 rounded-xl outline-none focus:border-indigo-600 disabled:bg-slate-100 disabled:text-slate-500 font-mono"
-              />
-              {!isReferralBound && (
-                <button
-                  type="button"
-                  onClick={async () => {
-                    if (referralCodeInput.length !== 6) return;
-                    try {
-                      const res = await onboardingClient.validateReferral(referralCodeInput);
-                      if (res?.data?.valid) {
-                        setIsReferralBound(true);
-                        setPromoMessage('✓ ยืนยันรหัสคำเชิญสำเร็จ! ได้รับสิทธิ์ 10 Coins');
-                      }
-                    } catch (err: any) {
-                      setValidationError(err?.message || 'รหัสคำเชิญไม่ถูกต้อง');
-                    }
-                  }}
-                  className="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-black transition-all cursor-pointer shadow-xs shrink-0"
-                >
-                  ตรวจสอบ
-                </button>
-              )}
-            </div>
-          </div>
+          {/* Step 7 Optional Benefits: Referral Code (Left) & Promo Code (Right) in 2-Column Grid on Desktop */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* Referral Code (Optional) */}
+            <div className="bg-indigo-50/50 p-4 sm:p-5 rounded-3xl border border-indigo-100 space-y-2.5 flex flex-col justify-between" data-testid="card-referral-code">
+              <div>
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-black text-slate-800 flex items-center gap-1.5">
+                    <Gift className="w-4 h-4 text-indigo-600" /> รหัสคำเชิญที่ใช้สมัคร (ไม่บังคับ)
+                  </label>
+                  {isReferralBound && (
+                    <span className="text-[10px] font-black text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full flex items-center gap-1">
+                      <Lock className="w-3 h-3" /> ผูกสิทธิ์แล้ว
+                    </span>
+                  )}
+                </div>
+                <p className="text-[11px] text-slate-500 font-medium mt-1">
+                  กรอกรหัสแนะนำ 6 หลักของเพื่อน เพื่อรับ 10 HorPlus Coins (฿10) ทันที (เว้นว่างได้)
+                </p>
+              </div>
 
-          {/* Promo Code Box */}
-          <div className="p-4 sm:p-5 bg-indigo-50/50 border border-indigo-100 rounded-3xl space-y-3">
-            <p className="text-xs font-black text-slate-800 flex items-center gap-1.5">
-              <Tag className="w-4 h-4 text-indigo-600" /> กรอกรหัสโปรโมชั่น (กรอก "HORPLUS" เพื่อรับสิทธิ์ทดลองใช้งานฟรีเพิ่ม 2 เดือน จำกัด 100 สิทธิ์แรก)
-            </p>
-            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 max-w-md">
-              <input
-                type="text"
-                value={promoCodeInput}
-                onChange={(e) => setPromoCodeInput(e.target.value)}
-                placeholder="HORPLUS"
-                className="flex-1 px-4 py-2.5 text-xs font-black uppercase tracking-wider bg-white border border-slate-200 rounded-2xl outline-none focus:border-indigo-600"
-              />
-              <button
-                type="button"
-                onClick={handleApplyPromo}
-                className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl text-xs font-black transition-all cursor-pointer shadow-xs shrink-0"
-              >
-                ใช้รหัส
-              </button>
+              <div>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    maxLength={6}
+                    disabled={isReferralBound}
+                    value={referralCodeInput}
+                    onChange={(e) => {
+                      setReferralCodeInput(e.target.value.replace(/\D/g, '').slice(0, 6));
+                      setReferralInlineError(null);
+                    }}
+                    placeholder="เช่น 123456"
+                    className="flex-1 px-3.5 py-2 text-xs font-black tracking-widest bg-white border border-slate-200 rounded-xl outline-none focus:border-indigo-600 disabled:bg-slate-100 disabled:text-slate-500 font-mono"
+                    data-testid="input-referral-code"
+                  />
+                  {!isReferralBound && (
+                    <button
+                      type="button"
+                      disabled={isCheckingReferral || referralCodeInput.length !== 6}
+                      onClick={handleCheckReferral}
+                      className="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white rounded-xl text-xs font-black transition-all cursor-pointer shadow-xs shrink-0 flex items-center gap-1.5"
+                      data-testid="button-check-referral"
+                    >
+                      {isCheckingReferral && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                      <span>ตรวจสอบ</span>
+                    </button>
+                  )}
+                </div>
+
+                {referralInlineError && (
+                  <p className="text-xs font-bold text-rose-600 mt-2 flex items-center gap-1" data-testid="referral-inline-error">
+                    <span>✕</span> {referralInlineError}
+                  </p>
+                )}
+                {referralInlineSuccess && (
+                  <p className="text-xs font-bold text-emerald-700 mt-2 flex items-center gap-1" data-testid="referral-inline-success">
+                    <span>✓</span> {referralInlineSuccess}
+                  </p>
+                )}
+              </div>
             </div>
 
-            {promoMessage && (
-              <p className={`text-xs font-black ${appliedPromo ? 'text-emerald-700' : 'text-rose-600'}`}>
-                {promoMessage}
-              </p>
-            )}
+            {/* Promo Code Box (Optional) */}
+            <div className="p-4 sm:p-5 bg-indigo-50/50 border border-indigo-100 rounded-3xl space-y-2.5 flex flex-col justify-between" data-testid="card-promo-code">
+              <div>
+                <p className="text-xs font-black text-slate-800 flex items-center gap-1.5">
+                  <Tag className="w-4 h-4 text-indigo-600" /> กรอกรหัสโปรโมชั่น (ไม่บังคับ)
+                </p>
+                <p className="text-[11px] text-slate-500 font-medium mt-1">
+                  กรอก "HORPLUS" เพื่อรับสิทธิ์ทดลองใช้งานฟรีเพิ่ม 2 เดือน (จำกัด 100 สิทธิ์แรก, เว้นว่างได้)
+                </p>
+              </div>
+
+              <div>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={promoCodeInput}
+                    onChange={(e) => {
+                      setPromoCodeInput(e.target.value);
+                      setPromoMessage(null);
+                    }}
+                    placeholder="HORPLUS"
+                    className="flex-1 px-4 py-2 text-xs font-black uppercase tracking-wider bg-white border border-slate-200 rounded-xl outline-none focus:border-indigo-600"
+                    data-testid="input-promo-code"
+                  />
+                  <button
+                    type="button"
+                    disabled={isCheckingPromo || !promoCodeInput.trim()}
+                    onClick={handleApplyPromo}
+                    className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white rounded-xl text-xs font-black transition-all cursor-pointer shadow-xs shrink-0 flex items-center gap-1.5"
+                    data-testid="button-apply-promo"
+                  >
+                    {isCheckingPromo && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                    <span>ใช้รหัส</span>
+                  </button>
+                </div>
+
+                {promoMessage && (
+                  <p className={`text-xs font-bold mt-2 ${appliedPromo ? 'text-emerald-700' : 'text-rose-600'}`} data-testid="promo-inline-message">
+                    {promoMessage}
+                  </p>
+                )}
+              </div>
+            </div>
           </div>
 
           {/* Coins Wallet Discount & Quote Summary */}
@@ -3068,7 +3142,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                   </div>
                 </div>
                 <span className="text-xs font-black text-amber-700 bg-amber-100 px-3 py-1 rounded-full">
-                  คงเหลือ: {coinWalletBalance} Coins
+                  คงเหลือ: {formatPrice(coinWalletBalance)} Coins
                 </span>
               </div>
 
@@ -3100,13 +3174,13 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
               <div className="bg-white p-3.5 rounded-2xl border border-slate-200/80 space-y-2 text-xs">
                 <div className="flex items-center justify-between text-slate-600 font-bold">
                   <span>ราคาแพ็กเกจ HorPlus PRO ({selectedDurationMonths} เดือน):</span>
-                  <span>฿{quoteSummary?.priceSnapshot || packages.find(p => p.id === selectedPackageId)?.price || 189}</span>
+                  <span>฿{formatPrice(quoteSummary?.priceSnapshot || packages.find(p => p.id === selectedPackageId)?.price || 189)}</span>
                 </div>
 
                 {isFirstTrialEligible && selectedDurationMonths === 1 && (
                   <div className="flex items-center justify-between text-emerald-600 font-black">
                     <span>ส่วนลดสิทธิ์ทดลองใช้ฟรี 1 เดือนแรก:</span>
-                    <span>- ฿{packages.find(p => p.id === selectedPackageId)?.price || 189}</span>
+                    <span>- ฿{formatPrice(packages.find(p => p.id === selectedPackageId)?.price || 189)}</span>
                   </div>
                 )}
 
@@ -3119,17 +3193,17 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
 
                 {coinToApply > 0 && (
                   <div className="flex items-center justify-between text-amber-600 font-black">
-                    <span>ส่วนลด HorPlus Coins ({coinToApply} Coins):</span>
-                    <span>- ฿{coinToApply}</span>
+                    <span>ส่วนลด HorPlus Coins ({formatPrice(coinToApply)} Coins):</span>
+                    <span>- ฿{formatPrice(coinToApply)}</span>
                   </div>
                 )}
 
                 <div className="flex items-center justify-between text-sm font-black text-slate-900 pt-2 border-t border-slate-100">
                   <span>ยอดชำระสุทธิ:</span>
-                  <span className="text-base text-indigo-600">
-                    ฿{quoteSummary?.finalPayableAmount !== undefined
+                  <span className="text-base text-indigo-600 font-black">
+                    ฿{formatPrice(quoteSummary?.finalPayableAmount !== undefined
                       ? quoteSummary.finalPayableAmount
-                      : (isFirstTrialEligible && selectedDurationMonths === 1 ? 0 : Math.max(0, (packages.find(p => p.id === selectedPackageId)?.price || 189) - coinToApply))}
+                      : (isFirstTrialEligible && selectedDurationMonths === 1 ? 0 : Math.max(0, (packages.find(p => p.id === selectedPackageId)?.price || 189) - coinToApply)))}
                   </span>
                 </div>
               </div>

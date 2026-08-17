@@ -1,3 +1,8 @@
+/**
+ * @license Apache-2.0
+ * Billing Cycle Routes (Product Owner Manual UAT Batch 02)
+ */
+
 import { Router, Request, Response } from 'express';
 import { AuthenticationService } from '../services/auth.service.js';
 import { BillingCycleService } from '../services/billing-cycle.service.js';
@@ -23,7 +28,10 @@ export function createBillingCycleRouter(
   ];
 
   const getDormitoryId = (req: Request): string => {
-    const dormId = (req.headers['x-dormitory-id'] as string) || req.auth?.dormitoryId;
+    const dormId =
+      req.params.dormitoryId ||
+      (req.headers['x-dormitory-id'] as string) ||
+      req.auth?.dormitoryId;
     if (!dormId) {
       const err = new Error('DORMITORY_ID_REQUIRED');
       (err as any).statusCode = 400;
@@ -38,7 +46,12 @@ export function createBillingCycleRouter(
     const csrfCookie = req.cookies?.['horplus_csrf'];
     const sessionId = req.auth?.sessionId;
 
-    if (!csrfHeader || !sessionId || !authService.verifyCsrf(csrfHeader, sessionId) || (csrfCookie && csrfCookie !== csrfHeader)) {
+    if (
+      !csrfHeader ||
+      !sessionId ||
+      !authService.verifyCsrf(csrfHeader, sessionId) ||
+      (csrfCookie && csrfCookie !== csrfHeader)
+    ) {
       res.status(403).json({
         error: {
           code: 'CSRF_INVALID',
@@ -129,6 +142,98 @@ export function createBillingCycleRouter(
         operational = await currentCycleResolverService.resolveOperationalBillingCycle(dormId);
       }
       res.json({ data: operational });
+    } catch (err) {
+      handleServiceError(res, err, req);
+    }
+  });
+
+  // GET /api/v1/billing-cycles/by-code/:cycleCode/rate-snapshot
+  router.get('/by-code/:cycleCode/rate-snapshot', async (req: Request, res: Response) => {
+    try {
+      const dormId = getDormitoryId(req);
+      const result = await billingCycleService.getCycleRateSnapshot(dormId, req.params.cycleCode);
+      res.json({ data: result });
+    } catch (err) {
+      handleServiceError(res, err, req);
+    }
+  });
+
+  // GET /api/v1/billing-cycles/by-code/:cycleCode/rate-settings
+  router.get('/by-code/:cycleCode/rate-settings', async (req: Request, res: Response) => {
+    try {
+      const dormId = getDormitoryId(req);
+      const result = await billingCycleService.getCycleRateSnapshot(dormId, req.params.cycleCode);
+      res.json({ data: result });
+    } catch (err) {
+      handleServiceError(res, err, req);
+    }
+  });
+
+  // PUT /api/v1/billing-cycles/by-code/:cycleCode/rate-snapshot
+  router.put('/by-code/:cycleCode/rate-snapshot', mutationGuard('billing:write'), async (req: Request, res: Response) => {
+    if (!verifyCsrf(req, res)) return;
+    try {
+      const dormId = getDormitoryId(req);
+      const result = await billingCycleService.updateCycleRateSnapshot(dormId, req.params.cycleCode, req.body, req.auth?.userId);
+      res.json({ data: result });
+    } catch (err) {
+      handleServiceError(res, err, req);
+    }
+  });
+
+  // PUT /api/v1/billing-cycles/by-code/:cycleCode/rate-settings
+  router.put('/by-code/:cycleCode/rate-settings', mutationGuard('billing:write'), async (req: Request, res: Response) => {
+    if (!verifyCsrf(req, res)) return;
+    try {
+      const dormId = getDormitoryId(req);
+      const result = await billingCycleService.updateCycleRateSnapshot(dormId, req.params.cycleCode, req.body, req.auth?.userId);
+      res.json({ data: result });
+    } catch (err) {
+      handleServiceError(res, err, req);
+    }
+  });
+
+  // GET /api/v1/billing-cycles/:id/rate-snapshot
+  router.get('/:id/rate-snapshot', async (req: Request, res: Response) => {
+    try {
+      const dormId = getDormitoryId(req);
+      const result = await billingCycleService.getCycleRateSnapshot(dormId, req.params.id);
+      res.json({ data: result });
+    } catch (err) {
+      handleServiceError(res, err, req);
+    }
+  });
+
+  // GET /api/v1/billing-cycles/:id/rate-settings
+  router.get('/:id/rate-settings', async (req: Request, res: Response) => {
+    try {
+      const dormId = getDormitoryId(req);
+      const result = await billingCycleService.getCycleRateSnapshot(dormId, req.params.id);
+      res.json({ data: result });
+    } catch (err) {
+      handleServiceError(res, err, req);
+    }
+  });
+
+  // PUT /api/v1/billing-cycles/:id/rate-snapshot
+  router.put('/:id/rate-snapshot', mutationGuard('billing:write'), async (req: Request, res: Response) => {
+    if (!verifyCsrf(req, res)) return;
+    try {
+      const dormId = getDormitoryId(req);
+      const result = await billingCycleService.updateCycleRateSnapshot(dormId, req.params.id, req.body, req.auth?.userId);
+      res.json({ data: result });
+    } catch (err) {
+      handleServiceError(res, err, req);
+    }
+  });
+
+  // PUT /api/v1/billing-cycles/:id/rate-settings
+  router.put('/:id/rate-settings', mutationGuard('billing:write'), async (req: Request, res: Response) => {
+    if (!verifyCsrf(req, res)) return;
+    try {
+      const dormId = getDormitoryId(req);
+      const result = await billingCycleService.updateCycleRateSnapshot(dormId, req.params.id, req.body, req.auth?.userId);
+      res.json({ data: result });
     } catch (err) {
       handleServiceError(res, err, req);
     }
