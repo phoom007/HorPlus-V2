@@ -1180,9 +1180,12 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
                 }}
                 className={`flex items-center justify-center gap-1.5 px-2.5 py-1 rounded-xl font-extrabold text-xs text-slate-700 transition-all cursor-pointer flex-1 sm:flex-initial ${isCycleModalOpen ? 'bg-white shadow-xs' : 'hover:bg-white/80'}`}
                 title="คลิกเพื่อเลือกงวดประจำเดือน"
+                data-testid="selected-cycle-display-button"
+                data-cycle-id={selectedBillingCycleId}
+                data-cycle-code={selectedCycleCode}
               >
                 <CalendarIcon className="w-3.5 h-3.5 text-blue-600 shrink-0" />
-                <span className="truncate">{selectedCycleCode ? `ประจำเดือน ${getCycleLabel(selectedCycleCode)}` : 'ยังไม่ได้ตั้งค่ารอบคำนวณ'}</span>
+                <span className="truncate" data-testid="selected-cycle-label">{selectedCycleCode ? `ประจำเดือน ${getCycleLabel(selectedCycleCode)}` : 'ยังไม่ได้ตั้งค่ารอบคำนวณ'}</span>
               </button>
 
               <button 
@@ -1222,6 +1225,9 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
                       return (
                         <button
                           key={c.id || c.cycleCode}
+                          data-testid={`cycle-option-${c.cycleCode}`}
+                          data-cycle-id={c.id}
+                          data-cycle-code={c.cycleCode}
                           onClick={() => {
                             setSelectedBillingCycleId(c.id);
                             setSelectedCycleCode(c.cycleCode);

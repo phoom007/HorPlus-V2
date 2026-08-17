@@ -81,6 +81,7 @@ async function runBrowserUAT() {
     tenant_rules_and_pet_readback: false,
     tenant_acceptance_snapshot_immutability: false,
     owner_reports_operational_cycle_sync: false,
+    fresh_dorm_operational_cycle_proof: false,
     referral_preserved_google_auth_scope: 'NOT TESTED (External Google OAuth provider mock scope)',
     browser_console_errors: [],
     failed_network_requests: [],
@@ -908,33 +909,36 @@ async function runBrowserUAT() {
       const headerVisible = await reportsPage.locator('text=วิเคราะห์การเงินและสถิติหอพัก').first().isVisible();
       console.log(`  Reports Header visible: ${headerVisible ? '✅ YES' : '❌ NO'}`);
 
-      // Cycle selection before F5 reload
-      const cycleSelectBefore = reportsPage.locator('select').first();
-      const selectedCycleBefore = await cycleSelectBefore.inputValue().catch(() => '');
-      console.log(`  Selected cycle before reload: "${selectedCycleBefore}"`);
+      // Cycle selection before F5 reload via real cycle button control
+      const cycleBtn = reportsPage.locator('[data-testid="selected-cycle-display-button"]').first();
+      const selectedCycleCodeBefore = await cycleBtn.getAttribute('data-cycle-code');
+      const selectedCycleIdBefore = await cycleBtn.getAttribute('data-cycle-id');
+      console.log(`  Displayed cycle before reload: "${selectedCycleCodeBefore}"`);
 
       // Trigger F5 reload
       await reportsPage.reload({ waitUntil: 'networkidle' });
       await reportsPage.waitForTimeout(1500);
 
-      // Cycle selection after F5 reload
-      const cycleSelectAfter = reportsPage.locator('select').first();
-      const selectedCycleAfter = await cycleSelectAfter.inputValue().catch(() => '');
-      console.log(`  Selected cycle after reload:  "${selectedCycleAfter}"`);
+      // Cycle selection after F5 reload via real cycle button control
+      const selectedCycleCodeAfter = await cycleBtn.getAttribute('data-cycle-code');
+      const selectedCycleIdAfter = await cycleBtn.getAttribute('data-cycle-id');
+      console.log(`  Displayed cycle after reload:  "${selectedCycleCodeAfter}"`);
 
-      // Fetch server authoritative operational cycle metadata
+      // Fetch server authoritative operational cycle metadata from real API
       const compDorm = await prisma.dormitory.findFirst({
         where: { name: 'หอพัก HorPlus UAT Comprehensive Manor' },
       });
-      const opCycle = compDorm ? await prisma.billingCycle.findFirst({
-        where: { dormitoryId: compDorm.id },
-        orderBy: { periodStart: 'desc' },
-      }) : null;
-      const expectedCycleCode = opCycle?.cycleCode || '2026-07';
-      const expectedCycleId = opCycle?.id;
+      const compDormId = compDorm?.id || '';
 
-      console.log(`  Authoritative operationalBillingCycleId: ${expectedCycleId}`);
-      console.log(`  Authoritative operationalCycleCode:      ${expectedCycleCode}`);
+      const opApiRes = await reportsPage.request.get('http://127.0.0.1:5173/api/v1/billing-cycles/operational', {
+        headers: { 'x-dormitory-id': compDormId },
+      });
+      const opApiJson = await opApiRes.json();
+      const serverOpCode = opApiJson.data?.cycleCode;
+      const serverOpId = opApiJson.data?.billingCycleId;
+
+      console.log(`  server operationalBillingCycleId: "${serverOpId}"`);
+      console.log(`  server operationalCycleCode:      "${serverOpCode}"`);
 
       // Verify Non-Zero Values Rendered (Billed total, room count, occupancy)
       const pageText = await reportsPage.textContent('body');
@@ -945,12 +949,128 @@ async function runBrowserUAT() {
 
       await reportsPage.screenshot({ path: path.join(SCREENSHOTS_DIR, '10-owner-reports-dashboard.png') });
 
-      const isCycleMatch = !selectedCycleAfter || selectedCycleAfter === expectedCycleCode || selectedCycleAfter === expectedCycleId || pageText.includes('2026-07') || pageText.includes('ก.ค.');
+      // Exact assertion: displayed cycle after reload === server operational cycle
+      const isCycleMatch = Boolean(
+        selectedCycleCodeAfter &&
+        serverOpCode &&
+        selectedCycleCodeAfter === serverOpCode &&
+        selectedCycleIdAfter === serverOpId
+      );
 
       if (headerVisible && hasBilledAmount && hasOccupancyData && isCycleMatch) {
         uatResults.owner_reports_operational_cycle_sync = true;
       }
       await reportsContext.close();
+    }
+
+    // =========================================================================
+    // TEST 11: Real Fresh-Dorm Operational Cycle Proof (Zero-Activity & Activity Transition)
+    // =========================================================================
+    console.log('\n--- TEST 11: Real Fresh-Dorm Operational Cycle Proof ---');
+    const freshOwnerSessionPath = path.join(SESSIONS_DIR, 'fresh-owner.json');
+    if (fs.existsSync(freshOwnerSessionPath)) {
+      const freshProofContext = await browser.newContext({ storageState: freshOwnerSessionPath });
+      const freshProofPage = await freshProofContext.newPage();
+      attachPageMonitor(freshProofPage, 'FreshDormProof');
+
+      // 1. Fresh dorm with 0 meter readings and 0 bills
+      const freshDorm = await prisma.dormitory.findFirst({
+        where: { name: 'หอพัก HorPlus UAT Fresh Owner' },
+        include: { rooms: true },
+      });
+      const freshDormId = freshDorm?.id || '';
+
+      await freshProofPage.goto('http://127.0.0.1:5173/owner/dashboard', { waitUntil: 'networkidle' });
+      await freshProofPage.waitForTimeout(1500);
+
+      // Verify initial cycle selection before any activity
+      const freshCycleBtn = freshProofPage.locator('[data-testid="selected-cycle-display-button"]').first();
+      const displayedCycleBefore = await freshCycleBtn.getAttribute('data-cycle-code');
+      const displayedIdBefore = await freshCycleBtn.getAttribute('data-cycle-id');
+
+      const opApiResInitial = await freshProofPage.request.get('http://127.0.0.1:5173/api/v1/billing-cycles/operational', {
+        headers: { 'x-dormitory-id': freshDormId },
+      });
+      const opApiJsonInitial = await opApiResInitial.json();
+      const serverOpCodeInitial = opApiJsonInitial.data?.cycleCode;
+      const serverOpIdInitial = opApiJsonInitial.data?.billingCycleId;
+
+      console.log(`  [Initial Fresh Dorm - Zero Activity]`);
+      console.log(`  displayed cycle before reload: "${displayedCycleBefore}"`);
+      console.log(`  server operationalCycleCode:   "${serverOpCodeInitial}"`);
+      console.log(`  server operationalBillingCycleId: "${serverOpIdInitial}"`);
+
+      // 2. Deterministic activity fixture: Add activity to the NEXT cycle
+      // Find the rolling cycle after the onboarding start cycle
+      const cycles = await prisma.billingCycle.findMany({
+        where: { dormitoryId: freshDormId },
+        orderBy: { periodStart: 'asc' },
+      });
+      const nextCycle = cycles.length > 1 ? cycles[1] : cycles[0];
+      const targetRoom = freshDorm?.rooms[0];
+
+      let activityBill = null;
+      if (nextCycle && targetRoom) {
+        activityBill = await prisma.bill.create({
+          data: {
+            dormitoryId: freshDormId,
+            billingCycleId: nextCycle.id,
+            roomId: targetRoom.id,
+            billNumber: `BILL-PROOF-${Date.now()}`,
+            billingDate: nextCycle.billingDate,
+            dueDate: nextCycle.dueDate,
+            subtotal: '2500.00',
+            totalAmount: '2500.00',
+            paidAmount: '0.00',
+            outstandingAmount: '2500.00',
+            status: 'unpaid',
+          },
+        });
+      }
+
+      // 3. Trigger reload (F5) and observe automatic transition to the operational active cycle
+      await freshProofPage.reload({ waitUntil: 'networkidle' });
+      await freshProofPage.waitForTimeout(1500);
+
+      const displayedCycleAfter = await freshCycleBtn.getAttribute('data-cycle-code');
+      const displayedIdAfter = await freshCycleBtn.getAttribute('data-cycle-id');
+
+      const opApiResAfter = await freshProofPage.request.get('http://127.0.0.1:5173/api/v1/billing-cycles/operational', {
+        headers: { 'x-dormitory-id': freshDormId },
+      });
+      const opApiJsonAfter = await opApiResAfter.json();
+      const serverOpCodeAfter = opApiJsonAfter.data?.cycleCode;
+      const serverOpIdAfter = opApiJsonAfter.data?.billingCycleId;
+
+      console.log(`  [After Activity Added to Next Cycle]`);
+      console.log(`  displayed cycle after reload:  "${displayedCycleAfter}"`);
+      console.log(`  server operationalCycleCode:   "${serverOpCodeAfter}"`);
+      console.log(`  server operationalBillingCycleId: "${serverOpIdAfter}"`);
+
+      // Cleanup test fixture bill
+      if (activityBill?.id) {
+        await prisma.bill.delete({ where: { id: activityBill.id } });
+      }
+
+      const isInitialMatch = Boolean(
+        displayedCycleBefore &&
+        serverOpCodeInitial &&
+        displayedCycleBefore === serverOpCodeInitial &&
+        displayedIdBefore === serverOpIdInitial
+      );
+
+      const isAfterMatch = Boolean(
+        displayedCycleAfter &&
+        serverOpCodeAfter &&
+        displayedCycleAfter === serverOpCodeAfter &&
+        displayedIdAfter === serverOpIdAfter &&
+        serverOpCodeAfter === nextCycle?.cycleCode
+      );
+
+      if (isInitialMatch && isAfterMatch) {
+        uatResults.fresh_dorm_operational_cycle_proof = true;
+      }
+      await freshProofContext.close();
     }
 
   } catch (err) {
@@ -985,6 +1105,7 @@ async function runBrowserUAT() {
     'tenant_rules_and_pet_readback',
     'tenant_acceptance_snapshot_immutability',
     'owner_reports_operational_cycle_sync',
+    'fresh_dorm_operational_cycle_proof',
   ];
 
   const failedCheckpoints = requiredCheckpoints.filter((k) => !uatResults[k]);

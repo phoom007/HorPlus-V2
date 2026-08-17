@@ -35,6 +35,8 @@ import { SignatureStorageService } from '../../server/src/services/signature-sto
 import { SensitiveFieldService } from '../../server/src/services/sensitive-field.service.ts';
 import { syncSubscriptionCatalog } from '../../server/src/scripts/subscription-catalog-sync.ts';
 import { subscriptionIntentService } from '../../server/src/services/subscription-intent.service.ts';
+import { BillingCycleService } from '../../server/src/services/billing-cycle.service.ts';
+import { PrismaBillingCycleRepository } from '../../server/src/db/repositories/billing-cycle.repository.ts';
 
 const targetInfo = assertSafeDatabaseTarget();
 
@@ -233,10 +235,15 @@ export async function seedLocal07Data() {
 
   const freshDormId = onboardingResult.dormitory.id;
 
+  // Ensure rolling billing cycles for fresh dorm (August 2026 start month + 2 future rolling cycles)
+  const freshBillingCycleService = new BillingCycleService(new PrismaBillingCycleRepository(prisma));
+  await freshBillingCycleService.ensureRollingBillingCycles(freshDormId, FRESH_DORM.owner.id);
+
   console.log(`✅ Fresh Owner provisioned via REAL ONBOARDING: "${FRESH_DORM.name}"`);
   console.log(`   Dormitory ID: ${freshDormId}`);
   console.log(`   Rooms Created: 4 vacant rooms (101, 102, 201, 202)`);
   console.log(`   Subscription:  TRIAL (${onboardingResult.subscription?.benefitType || 'HORPLUS Promo'} active)`);
+  console.log(`   Rolling Cycles: 3 cycles ensured (2026-08 Onboarding start, 2026-09 draft, 2026-10 draft)`);
 
   // ==========================================================================
   // SCENARIO 2: COMPREHENSIVE OWNER

@@ -57,12 +57,12 @@ export class BillingCycleService {
           electricityBillingType: settings?.electricityBillingType || 'per_unit',
           electricityRate: settings ? String(settings.electricityRate) : '0.00',
           commonFee: settings ? String(settings.commonFee) : '0.00',
-          commonFeeMode: settings?.commonFeeMode || 'room',
+          commonFeeMode: settings?.commonFeeMode || 'none',
           internetFee: settings ? String(settings.internetFee) : '0.00',
-          internetFeeMode: settings?.internetFeeMode || 'room',
+          internetFeeMode: settings?.internetFeeMode || 'none',
           parkingFee: settings ? String(settings.parkingRate) : '0.00',
-          parkingFeeMode: settings?.parkingFeeMode || 'room',
-          lateFeeType: settings?.lateFeeType || 'fixed',
+          parkingFeeMode: settings?.parkingFeeMode || 'none',
+          lateFeeType: settings?.lateFeeType || 'none',
           lateFeeValue: settings ? String(settings.lateFeeValue) : '0.00',
           currency: 'THB',
         });
@@ -72,8 +72,6 @@ export class BillingCycleService {
 
     // Determine periodStart, periodEnd, billingDate, and dueDate using configured billing settings
     const settings = await prisma.dormitoryBillingSettings.findUnique({ where: { dormitoryId } });
-    const configuredDueDay = settings?.dueDay || 5;
-    const configuredBillingDay = settings?.billingDay || 25;
 
     let pStartStr = data.periodStart;
     let pEndStr = data.periodEnd;
@@ -81,6 +79,23 @@ export class BillingCycleService {
     let dDateStr = data.dueDate;
 
     if (!pStartStr || !pEndStr || !dDateStr) {
+      if (!settings) {
+        const err = new Error('DORMITORY_BILLING_SETTINGS_REQUIRED: Cannot derive billing cycle dates without authoritative dormitory billing settings');
+        (err as any).statusCode = 400;
+        (err as any).code = 'DORMITORY_BILLING_SETTINGS_REQUIRED';
+        throw err;
+      }
+
+      if (settings.dueDay === null || settings.dueDay === undefined) {
+        const err = new Error('DUE_DAY_REQUIRED: Authoritative billing settings must configure dueDay to derive cycle due date');
+        (err as any).statusCode = 400;
+        (err as any).code = 'DUE_DAY_REQUIRED';
+        throw err;
+      }
+
+      const configuredDueDay = settings.dueDay;
+      const configuredBillingDay = settings.billingDay !== null && settings.billingDay !== undefined ? settings.billingDay : 25;
+
       const parts = data.cycleCode.split('-');
       if (parts.length === 2) {
         const y = parseInt(parts[0], 10);
@@ -117,19 +132,19 @@ export class BillingCycleService {
       throw err;
     }
 
-    // Rate snapshot derivation using authoritative billing settings
+    // Rate snapshot derivation using authoritative billing settings (with approved LOCAL-07 none defaults)
     const snapshotData = {
       waterBillingType: settings?.waterBillingType || data.rateSnapshot?.waterBillingType || 'per_unit',
       waterRate: settings ? String(settings.waterRate) : (data.rateSnapshot?.waterRate !== undefined ? String(data.rateSnapshot.waterRate) : '0.00'),
       electricityBillingType: settings?.electricityBillingType || data.rateSnapshot?.electricityBillingType || 'per_unit',
       electricityRate: settings ? String(settings.electricityRate) : (data.rateSnapshot?.electricityRate !== undefined ? String(data.rateSnapshot.electricityRate) : '0.00'),
       commonFee: settings ? String(settings.commonFee) : (data.rateSnapshot?.commonFee !== undefined ? String(data.rateSnapshot.commonFee) : '0.00'),
-      commonFeeMode: settings?.commonFeeMode || data.rateSnapshot?.commonFeeMode || 'room',
+      commonFeeMode: settings?.commonFeeMode || data.rateSnapshot?.commonFeeMode || 'none',
       internetFee: settings ? String(settings.internetFee) : (data.rateSnapshot?.internetFee !== undefined ? String(data.rateSnapshot.internetFee) : '0.00'),
-      internetFeeMode: settings?.internetFeeMode || data.rateSnapshot?.internetFeeMode || 'room',
+      internetFeeMode: settings?.internetFeeMode || data.rateSnapshot?.internetFeeMode || 'none',
       parkingFee: settings ? String(settings.parkingRate) : (data.rateSnapshot?.parkingFee !== undefined ? String(data.rateSnapshot.parkingFee) : '0.00'),
-      parkingFeeMode: settings?.parkingFeeMode || data.rateSnapshot?.parkingFeeMode || 'room',
-      lateFeeType: settings?.lateFeeType || data.rateSnapshot?.lateFeeType || 'fixed',
+      parkingFeeMode: settings?.parkingFeeMode || data.rateSnapshot?.parkingFeeMode || 'none',
+      lateFeeType: settings?.lateFeeType || data.rateSnapshot?.lateFeeType || 'none',
       lateFeeValue: settings ? String(settings.lateFeeValue) : (data.rateSnapshot?.lateFeeValue !== undefined ? String(data.rateSnapshot.lateFeeValue) : '0.00'),
       currency: data.rateSnapshot?.currency || 'THB',
     };

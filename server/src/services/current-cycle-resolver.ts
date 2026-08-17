@@ -2,9 +2,10 @@
  * Centralized Operational Billing Cycle Resolver (LOCAL-07 Master)
  * Priority:
  * 1. Latest cycle with entered/saved meter readings
- * 2. Latest cycle with active bills (issued, pending, paid)
- * 3. Latest actually-used cycle
- * 4. Dormitory creation start month cycle
+ * 2. Latest cycle with active bills (issued, pending, paid, unpaid, overdue, partially_paid)
+ * 3. Dormitory creation start month cycle (Onboarding start cycle)
+ * 
+ * Auto-created future draft cycles are untouched and must NOT become operational.
  * @license Apache-2.0
  */
 
@@ -30,8 +31,7 @@ export class CurrentCycleResolverService {
    * Priority:
    * 1. Latest cycle with entered/saved meter readings (ordered by billingCycle.periodStart desc)
    * 2. Latest cycle with active bills (issued, pending, paid, unpaid, overdue, partially_paid)
-   * 3. Latest actually-used cycle (ordered by periodStart desc)
-   * 4. Dormitory creation start month cycle
+   * 3. Dormitory creation start month cycle (Onboarding start cycle)
    */
   async resolveOperationalBillingCycle(dormitoryId: string, txClient?: any): Promise<OperationalCycleResult> {
     const db = txClient || this.prisma;
@@ -79,22 +79,8 @@ export class CurrentCycleResolverService {
       };
     }
 
-    // 3. Check latest existing cycle (ordered by periodStart desc)
-    const latestCycle = await db.billingCycle.findFirst({
-      where: { dormitoryId },
-      orderBy: { periodStart: 'desc' },
-    });
-
-    if (latestCycle) {
-      return {
-        billingCycleId: latestCycle.id,
-        cycleCode: latestCycle.cycleCode,
-        reason: 'LATEST_USED',
-        cycle: latestCycle,
-      };
-    }
-
-    // 4. Default to dormitory creation start month
+    // 3. Fallback to onboarding / start cycle
+    // Note: Auto-created future draft rolling cycles with zero activity must NOT be chosen
     const dorm = await db.dormitory.findUnique({
       where: { id: dormitoryId },
       select: { createdAt: true },
@@ -103,13 +89,23 @@ export class CurrentCycleResolverService {
     const created = dorm?.createdAt || new Date();
     const startCode = `${created.getFullYear()}-${String(created.getMonth() + 1).padStart(2, '0')}`;
 
-    const startCycle = await db.billingCycle.findFirst({
+    let startCycle = await db.billingCycle.findFirst({
       where: { dormitoryId, cycleCode: startCode },
     });
 
+    if (!startCycle) {
+      // Find the earliest existing cycle by periodStart as the true start cycle
+      startCycle = await db.billingCycle.findFirst({
+        where: { dormitoryId },
+        orderBy: { periodStart: 'asc' },
+      });
+    }
+
+    const resolvedCode = startCycle?.cycleCode || startCode;
+
     return {
       billingCycleId: startCycle?.id,
-      cycleCode: startCode,
+      cycleCode: resolvedCode,
       reason: 'ONBOARDING_START',
       cycle: startCycle || undefined,
     };

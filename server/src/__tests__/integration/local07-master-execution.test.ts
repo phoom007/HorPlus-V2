@@ -3979,13 +3979,86 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
       };
       await expect(mockFetchMismatch()).rejects.toThrow(/Incomplete dataset/);
 
-      // 9. DEFECT 1 FIX: Wire Authoritative Operational Cycle Resolver into F5 Lifecycle
-      // Setup: Aug paid, Sep pending, Oct visible untouched
+      // 9. OPERATIONAL CYCLE RESOLVER: Fresh Dorm Zero-Activity + Activity Lifecycle
+      // Scenario A: Dorm created in Aug 2026 with rolling cycles Aug, Sep, Oct and ZERO activity
+      const dormFreshZeroActivity = await prisma.dormitory.create({
+        data: {
+          name: `หอพัก Fresh Zero Activity Test ${timestamp}`,
+          type: 'apartment',
+          status: 'active',
+          createdAt: new Date('2026-08-01T00:00:00.000Z'),
+        },
+      });
+      await prisma.dormitoryMember.createMany({
+        data: [
+          {
+            dormitoryId: dormFreshZeroActivity.id,
+            userId: ownerUser.id,
+            roleId: ownerRole!.id,
+            status: 'active',
+          },
+        ],
+      });
+
+      const cycleAugZero = await prisma.billingCycle.create({
+        data: {
+          dormitoryId: dormFreshZeroActivity.id,
+          cycleCode: '2026-08',
+          name: 'สิงหาคม 2026 (Draft)',
+          periodStart: new Date('2026-08-01'),
+          periodEnd: new Date('2026-08-31'),
+          billingDate: new Date('2026-08-25'),
+          dueDate: new Date('2026-09-05'),
+          status: 'draft',
+        },
+      });
+      const cycleSepZero = await prisma.billingCycle.create({
+        data: {
+          dormitoryId: dormFreshZeroActivity.id,
+          cycleCode: '2026-09',
+          name: 'กันยายน 2026 (Draft)',
+          periodStart: new Date('2026-09-01'),
+          periodEnd: new Date('2026-09-30'),
+          billingDate: new Date('2026-09-25'),
+          dueDate: new Date('2026-10-05'),
+          status: 'draft',
+        },
+      });
+      const cycleOctZero = await prisma.billingCycle.create({
+        data: {
+          dormitoryId: dormFreshZeroActivity.id,
+          cycleCode: '2026-10',
+          name: 'ตุลาคม 2026 (Draft Untouched)',
+          periodStart: new Date('2026-10-01'),
+          periodEnd: new Date('2026-10-31'),
+          billingDate: new Date('2026-10-25'),
+          dueDate: new Date('2026-11-05'),
+          status: 'draft',
+        },
+      });
+
+      // Assert zero-activity fresh dorm resolves to ONBOARDING_START (Aug), NOT Oct
+      const opFreshZero = await currentCycleResolverService.resolveOperationalBillingCycle(dormFreshZeroActivity.id);
+      expect(opFreshZero.billingCycleId).toBe(cycleAugZero.id);
+      expect(opFreshZero.cycleCode).toBe('2026-08');
+      expect(opFreshZero.reason).toBe('ONBOARDING_START');
+
+      const resFreshCycles = await request(app)
+        .get('/api/v1/billing-cycles')
+        .set('Cookie', authSession.cookies)
+        .set('x-csrf-token', authSession.csrfToken)
+        .set('x-dormitory-id', dormFreshZeroActivity.id);
+      expect(resFreshCycles.status).toBe(200);
+      expect(resFreshCycles.body.operationalBillingCycleId).toBe(cycleAugZero.id);
+      expect(resFreshCycles.body.operationalCycleCode).toBe('2026-08');
+
+      // Scenario B: Aug paid, Sep pending, Oct visible untouched
       const dormCycleF5 = await prisma.dormitory.create({
         data: {
           name: `หอพัก Operational Cycle F5 Test ${timestamp}`,
           type: 'apartment',
           status: 'active',
+          createdAt: new Date('2026-08-01T00:00:00.000Z'),
         },
       });
       await prisma.dormitoryMember.createMany({
@@ -4088,8 +4161,7 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
         },
       });
 
-      // State 1: Aug paid, Sep pending, Oct visible untouched
-      // F5 / Reload simulation -> Resolver resolves Sep
+      // State 1: Aug paid, Sep pending, Oct visible untouched -> Resolves Sep
       const resCyclesState1 = await request(app)
         .get('/api/v1/billing-cycles')
         .set('Cookie', authSession.cookies)
@@ -4104,7 +4176,7 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
       expect(opState1.cycleCode).toBe('2026-09');
       expect(opState1.reason).toBe('BILLING_ACTIVITY');
 
-      // State 2: Sep paid, Oct untouched -> F5 still resolves Sep
+      // State 2: Sep paid, Oct untouched -> Resolves Sep
       await prisma.bill.update({
         where: { id: billSep.id },
         data: { status: 'paid', paidAmount: '3000.00', outstandingAmount: '0.00' },
@@ -4118,7 +4190,7 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
       expect(resCyclesState2.body.operationalBillingCycleId).toBe(cycleSep.id);
       expect(resCyclesState2.body.operationalCycleCode).toBe('2026-09');
 
-      // State 3: Oct receives real meter reading activity -> F5 resolves Oct
+      // State 3: Oct receives real meter reading activity -> Resolves Oct
       const waterDeviceF5 = await prisma.meterDevice.create({
         data: {
           dormitoryId: dormCycleF5.id,
@@ -4159,7 +4231,82 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
       expect(opState3.cycleCode).toBe('2026-10');
       expect(opState3.reason).toBe('METER_ACTIVITY');
 
-      // 10. DEFECT 3 FIX: Exact-Money Total Billed + Deposit Authoritative Satang Regression
+      // 10. BILLING CYCLE SERVICE: Due Date Derivation & Missing Settings Fail-Closed
+      const billingCycleTestService = new BillingCycleService(new PrismaBillingCycleRepository(prisma));
+
+      // Scenario A: configured dueDay = 10, August cycle => due September 10
+      const dormDueDay10 = await prisma.dormitory.create({
+        data: {
+          name: `หอพัก DueDay 10 Test ${timestamp}`,
+          type: 'apartment',
+          status: 'active',
+        },
+      });
+      await prisma.dormitoryBillingSettings.create({
+        data: {
+          dormitoryId: dormDueDay10.id,
+          billingDay: 25,
+          dueDay: 10,
+          waterBillingType: 'per_unit',
+          waterRate: '18.00',
+          electricityBillingType: 'per_unit',
+          electricityRate: '7.00',
+          commonFeeMode: 'none',
+          commonFee: '0.00',
+          internetFeeMode: 'none',
+          internetFee: '0.00',
+          parkingFeeMode: 'none',
+          parkingRate: '0.00',
+          lateFeeType: 'none',
+          lateFeeValue: '0.00',
+        },
+      });
+
+      const cycleCreated10 = await billingCycleTestService.createBillingCycle(dormDueDay10.id, {
+        cycleCode: '2026-08',
+        name: 'สิงหาคม 2026 (Due 10 Test)',
+        periodStart: '',
+        periodEnd: '',
+        billingDate: '',
+        dueDate: '',
+      });
+
+      const due10Iso = cycleCreated10.cycle.dueDate.toISOString();
+      expect(due10Iso).toContain('2026-09-10');
+
+      // Scenario B: Missing billing settings throws domain error and proves NO fallback to day 5 occurs
+      const dormMissingSettings = await prisma.dormitory.create({
+        data: {
+          name: `หอพัก Missing Settings Test ${timestamp}`,
+          type: 'apartment',
+          status: 'active',
+        },
+      });
+
+      await expect(
+        billingCycleTestService.createBillingCycle(dormMissingSettings.id, {
+          cycleCode: '2026-08',
+          name: 'สิงหาคม 2026 (Fail-Closed Test)',
+          periodStart: '',
+          periodEnd: '',
+          billingDate: '',
+          dueDate: '',
+        })
+      ).rejects.toThrow(/DORMITORY_BILLING_SETTINGS_REQUIRED/);
+
+      // Cleanup dormDueDay10 & dormMissingSettings & dormFreshZeroActivity
+      await prisma.billingRateSnapshot.deleteMany({ where: { dormitoryId: dormDueDay10.id } });
+      await prisma.billingCycle.deleteMany({ where: { dormitoryId: dormDueDay10.id } });
+      await prisma.dormitoryBillingSettings.deleteMany({ where: { dormitoryId: dormDueDay10.id } });
+      await prisma.dormitory.delete({ where: { id: dormDueDay10.id } });
+
+      await prisma.dormitory.delete({ where: { id: dormMissingSettings.id } });
+
+      await prisma.billingCycle.deleteMany({ where: { dormitoryId: dormFreshZeroActivity.id } });
+      await prisma.dormitoryMember.deleteMany({ where: { dormitoryId: dormFreshZeroActivity.id } });
+      await prisma.dormitory.delete({ where: { id: dormFreshZeroActivity.id } });
+
+      // 11. DEFECT 3 FIX: Exact-Money Total Billed + Deposit Authoritative Satang Regression
       // Proves: total billed = 0.10 + deposit = 0.20 => combined authoritative amount = exactly 0.30
       const repCombinedFrac = calculateOwnerReports({
         rooms: [

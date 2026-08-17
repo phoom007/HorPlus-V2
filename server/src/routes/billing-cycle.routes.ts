@@ -79,10 +79,19 @@ export function createBillingCycleRouter(
         sortBy: req.query.sortBy as string,
         sortDirection: req.query.sortDirection as 'asc' | 'desc',
       };
-      const [result, operational] = await Promise.all([
+      let [result, operational] = await Promise.all([
         billingCycleService.getBillingCycles(dormId, query),
         currentCycleResolverService.resolveOperationalBillingCycle(dormId),
       ]);
+
+      if (result.total === 0) {
+        await billingCycleService.ensureRollingBillingCycles(dormId);
+        [result, operational] = await Promise.all([
+          billingCycleService.getBillingCycles(dormId, query),
+          currentCycleResolverService.resolveOperationalBillingCycle(dormId),
+        ]);
+      }
+
       res.json({
         data: result.items,
         pagination: { total: result.total, page: query.page, pageSize: query.pageSize },
@@ -99,7 +108,11 @@ export function createBillingCycleRouter(
   router.get('/operational', async (req: Request, res: Response) => {
     try {
       const dormId = getDormitoryId(req);
-      const operational = await currentCycleResolverService.resolveOperationalBillingCycle(dormId);
+      let operational = await currentCycleResolverService.resolveOperationalBillingCycle(dormId);
+      if (!operational.billingCycleId) {
+        await billingCycleService.ensureRollingBillingCycles(dormId);
+        operational = await currentCycleResolverService.resolveOperationalBillingCycle(dormId);
+      }
       res.json({ data: operational });
     } catch (err) {
       handleServiceError(res, err, req);
@@ -110,7 +123,11 @@ export function createBillingCycleRouter(
   router.get('/current', async (req: Request, res: Response) => {
     try {
       const dormId = getDormitoryId(req);
-      const operational = await currentCycleResolverService.resolveOperationalBillingCycle(dormId);
+      let operational = await currentCycleResolverService.resolveOperationalBillingCycle(dormId);
+      if (!operational.billingCycleId) {
+        await billingCycleService.ensureRollingBillingCycles(dormId);
+        operational = await currentCycleResolverService.resolveOperationalBillingCycle(dormId);
+      }
       res.json({ data: operational });
     } catch (err) {
       handleServiceError(res, err, req);
