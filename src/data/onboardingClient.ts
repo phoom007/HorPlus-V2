@@ -25,7 +25,6 @@ export interface CompleteOnboardingPayload {
     estimatedRoomCount?: number;
   };
   billing?: {
-    billingDay?: number;
     dueDay?: number;
     waterBillingType?: string;
     waterRate?: string;
@@ -83,7 +82,7 @@ export interface CompleteOnboardingPayload {
     status?: string;
   }[];
   planCode: string;
-  packageIntentId?: string;
+  packageIntentId: string;
   promoCode?: string;
   referralCode?: string;
   coinApplied?: number;
@@ -92,7 +91,6 @@ export interface CompleteOnboardingPayload {
   ownerSignatureUrl?: string;
   defaultTerms?: string;
   petPolicy?: any;
-  rules?: any;
 }
 
 export interface CompleteOnboardingResponse {

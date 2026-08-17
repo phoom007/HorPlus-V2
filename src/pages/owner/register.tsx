@@ -522,28 +522,27 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
     try {
       const prep = await onboardingClient.prepare({ name: formData.dormName, addressLine1: formData.dormAddress, province: formData.province });
       const provDormId = prep?.provisionalDormitoryId || prep?.data?.provisionalDormitoryId;
-      if (provDormId) {
-        const lineRes = await onboardingClient.updateLineConfig(provDormId, {
-          channelId: formData.lineOA.channelId,
-          channelSecret: formData.lineOA.channelSecret,
-        });
-        const botDisplayName = lineRes?.data?.botDisplayName || lineRes?.botDisplayName || '';
-        const botPictureUrl = lineRes?.data?.botPictureUrl || lineRes?.botPictureUrl || '';
-        const lineOaId = lineRes?.data?.lineOaId || lineRes?.lineOaId || '';
-
-        setFormData(prev => ({
-          ...prev,
-          lineOA: {
-            ...prev.lineOA,
-            isConnected: true,
-            botDisplayName,
-            botPictureUrl,
-            oaName: lineOaId || prev.lineOA.oaName
-          }
-        }));
-      } else {
-        setFormData(prev => ({ ...prev, lineOA: { ...prev.lineOA, isConnected: true } }));
+      if (!provDormId) {
+        throw new Error('ไม่สามารถเตรียมข้อมูลหอพักชั่วคราวได้ กรุณาลองใหม่อีกครั้ง');
       }
+      const lineRes = await onboardingClient.updateLineConfig(provDormId, {
+        channelId: formData.lineOA.channelId,
+        channelSecret: formData.lineOA.channelSecret,
+      });
+      const botDisplayName = lineRes?.data?.botDisplayName || lineRes?.botDisplayName || '';
+      const botPictureUrl = lineRes?.data?.botPictureUrl || lineRes?.botPictureUrl || '';
+      const lineOaId = lineRes?.data?.lineOaId || lineRes?.lineOaId || '';
+
+      setFormData(prev => ({
+        ...prev,
+        lineOA: {
+          ...prev.lineOA,
+          isConnected: true,
+          botDisplayName,
+          botPictureUrl,
+          oaName: lineOaId || prev.lineOA.oaName
+        }
+      }));
       setLineStatusMsg({ type: 'success', msg: 'ทดสอบสำเร็จ: เชื่อมต่อ LINE Official Account สำเร็จ (พร้อมใช้งาน)' });
     } catch (err: any) {
       setFormData(prev => ({ ...prev, lineOA: { ...prev.lineOA, isConnected: false } }));
@@ -886,14 +885,15 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
         province: formData.province,
       });
       const provisionalDormitoryId = prep?.provisionalDormitoryId || prep?.data?.provisionalDormitoryId;
+      if (!provisionalDormitoryId) {
+        throw new Error('ไม่สามารถสร้างรหัสหอพักชั่วคราวได้ กรุณาลองใหม่อีกครั้ง');
+      }
 
-      // 2. Upload Signature if present
-      if (formData.ownerSignatureUrl && provisionalDormitoryId) {
-        try {
-          await onboardingClient.uploadSignature(provisionalDormitoryId, formData.ownerSignatureUrl);
-        } catch (sigErr) {
-          console.warn('Owner signature upload warning:', sigErr);
-        }
+      // 2. Upload Signature (Object storage path only - fail closed)
+      if (formData.ownerSignatureUrl) {
+        await onboardingClient.uploadSignature(provisionalDormitoryId, formData.ownerSignatureUrl);
+      } else {
+        throw new Error('กรุณาวาดและบันทึกลายเซ็นเจ้าของหอพักในขั้นตอนที่ 5 ก่อนยืนยันสร้างหอพัก');
       }
 
       // 3. Map Buildings
@@ -942,6 +942,10 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
         });
       });
 
+      if (mappedBuildings.length === 0 || mappedRooms.length === 0) {
+        throw new Error('กรุณาระบุข้อมูลอาคารและห้องพักอย่างน้อย 1 ห้อง');
+      }
+
       const waterBillingType = formData.utilities.waterBillingMode === 'unit' ? 'per_unit' : (formData.utilities.waterBillingMode === 'person' ? 'per_person' : 'flat_rate');
       const elecBillingType = formData.utilities.electricBillingMode === 'unit' ? 'per_unit' : (formData.utilities.electricBillingMode === 'person' ? 'per_person' : 'flat_rate');
 
@@ -977,11 +981,10 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
           province: formData.province || null,
           phone: null,
           email: null,
-          estimatedBuildingCount: formData.buildings.length || 1,
-          estimatedRoomCount: mappedRooms.length || 10,
+          estimatedBuildingCount: mappedBuildings.length,
+          estimatedRoomCount: mappedRooms.length,
         },
         billing: {
-          billingDay: 25,
           dueDay: Number(formData.deposits.dueDateDay),
           waterBillingType,
           waterRate: String(formData.utilities.waterRate ?? 0),
@@ -1021,11 +1024,14 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
           allowedTypes: formData.petPolicy.allowedTypes || [],
         },
         defaultTerms: formData.rulesTemplate || undefined,
-        rules: formData.rulesTemplate || undefined,
-        ownerSignatureUrl: formData.ownerSignatureUrl || undefined,
       };
 
-      await onboardingClient.finalize(payload as any);
+      const finalizeRes = await onboardingClient.finalize(payload as any);
+      const finalizedDormitoryId = finalizeRes?.data?.dormitory?.id || (finalizeRes?.data as any)?.dormitoryId || provisionalDormitoryId;
+      if (finalizedDormitoryId) {
+        localStorage.setItem('selected_dormitory_id', finalizedDormitoryId);
+        localStorage.setItem('active_dormitory_selected_for_session', finalizedDormitoryId);
+      }
 
       setShowTermsModal(false);
       setSaveProgress(0);
@@ -1044,14 +1050,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
       setTimeout(() => {
         setIsSavedSuccess(false);
         setSaveProgress(0);
-        if (onNavigate) {
-          onNavigate('dashboard');
-          window.scrollTo({ top: 0, behavior: 'smooth' });
-          const scrollables2 = document.querySelectorAll('.overflow-y-auto, #owner-main-content');
-          scrollables2.forEach(el => { el.scrollTop = 0; });
-        } else {
-          window.location.href = '/owner';
-        }
+        window.location.href = '/owner/dashboard';
       }, 2800);
     } catch (e: any) {
       setValidationError(e?.message || 'เกิดข้อผิดพลาดในการบันทึกข้อมูล');
@@ -2601,41 +2600,6 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
                   className="w-full px-3.5 py-2 text-xs bg-white border border-slate-200 rounded-xl focus:border-emerald-500 outline-none font-mono text-xs"
                 />
               </div>
-            </div>
-
-            {/* Webhook URL Section underneath LINE Channel ID & Secret */}
-            <div className="bg-white/90 p-3.5 rounded-2xl border border-emerald-200/80 space-y-2">
-              <div className="flex items-center justify-between">
-                <label className="block text-xs font-black text-slate-700">
-                  Webhook URL (คัดลอกนำไปใส่ใน LINE Developers Console)
-                </label>
-              </div>
-              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
-                <input
-                  type="text"
-                  readOnly
-                  value={`https://api.horplus.com/v1/line/webhook/${formData.lineOA.channelId || '1657889900'}`}
-                  className="flex-1 px-3.5 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl font-mono text-slate-700 select-all outline-none font-bold"
-                />
-                <button
-                  type="button"
-                  onClick={() => {
-                    const url = `https://api.horplus.com/v1/line/webhook/${formData.lineOA.channelId || '1657889900'}`;
-                    navigator.clipboard.writeText(url);
-                    setWebhookCopied(true);
-                    setTimeout(() => setWebhookCopied(false), 3000);
-                  }}
-                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black transition-all flex items-center justify-center gap-1.5 cursor-pointer shrink-0 shadow-xs"
-                >
-                  {webhookCopied ? <Check className="w-3.5 h-3.5 text-white" /> : <Copy className="w-3.5 h-3.5" />}
-                  <span>{webhookCopied ? 'คัดลอกสำเร็จ!' : 'คัดลอก Webhook'}</span>
-                </button>
-              </div>
-              {webhookCopied && (
-                <p className="text-[11px] font-bold text-emerald-700 animate-in fade-in">
-                  ✓ คัดลอก Webhook URL เรียบร้อยแล้ว นำไปวางในแท็บ Messaging API &gt; Webhook URL ใน LINE Developers
-                </p>
-              )}
             </div>
 
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2">

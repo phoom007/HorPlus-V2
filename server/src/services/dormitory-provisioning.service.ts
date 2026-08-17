@@ -38,7 +38,7 @@ export interface CompleteOwnerOnboardingParams {
     estimatedRoomCount?: number;
   };
   billing?: {
-    billingDay?: number;
+    billingDay?: number | null;
     dueDay?: number;
     waterBillingType?: string;
     waterRate?: string;
@@ -421,11 +421,12 @@ export class DormitoryProvisioningService {
         throw new AppError('ไม่พบข้อมูลหอพักที่กำลังลงทะเบียน หรือท่านไม่มีสิทธิ์จัดการหอพักนี้', 403, 'PROVISIONAL_DORM_DENIED');
       }
 
-      // 2. Validate Signature Saved (Step 4 Requirement)
+      // 2. Validate Signature Saved (Step 5 Requirement - Real object storage path or direct caller legacy fallback)
       let currentSig = await tx.ownerSignature.findFirst({
         where: { dormitoryId: dormId, isCurrent: true },
       });
 
+      // LEGACY_COMPAT_ONLY: Support direct service-level callers/tests providing base64 signature
       if (!currentSig && (params.ownerSignatureUrl || (params as any).signatureBase64)) {
         const sigUrl = params.ownerSignatureUrl || (params as any).signatureBase64;
         const base64Str = sigUrl.replace(/^data:image\/\w+;base64,/, '');
@@ -448,7 +449,7 @@ export class DormitoryProvisioningService {
       }
 
       if (!currentSig) {
-        throw new AppError('กรุณาบันทึกลายเซ็นเจ้าของหอพักในขั้นตอนที่ 4 ก่อนยืนยันสร้างหอพัก', 400, 'OWNER_SIGNATURE_REQUIRED');
+        throw new AppError('กรุณาบันทึกลายเซ็นเจ้าของหอพักในขั้นตอนที่ 5 ก่อนยืนยันสร้างหอพัก', 400, 'OWNER_SIGNATURE_REQUIRED');
       }
 
       // 3. Validate LINE OA Readiness (Step 5 Requirement) - Only if configured
@@ -614,6 +615,10 @@ export class DormitoryProvisioningService {
         }
       }
 
+      // Authoritative building & room counts
+      const mappedBuildingCount = params.buildings ? params.buildings.length : (dormitory.estimatedBuildingCount || 1);
+      const mappedRoomCount = params.rooms ? params.rooms.length : (dormitory.estimatedRoomCount || 0);
+
       await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormId}, true)`;
       const activeDorm = await tx.dormitory.update({
         where: { id: dormId },
@@ -629,10 +634,46 @@ export class DormitoryProvisioningService {
           postalCode: dormitory.postalCode || null,
           phone: dormitory.phone || null,
           email: dormitory.email || null,
-          estimatedBuildingCount: dormitory.estimatedBuildingCount || 1,
-          estimatedRoomCount: dormitory.estimatedRoomCount || 10,
+          estimatedBuildingCount: mappedBuildingCount,
+          estimatedRoomCount: mappedRoomCount,
           status: 'active',
           updatedAt: now,
+        },
+      });
+
+      // Authoritative guarantee: OWNER role & active membership strictly exist for finalized dormitory
+      let ownerRole = await tx.role.findFirst({
+        where: { dormitoryId: dormId, code: 'OWNER' },
+      });
+      if (!ownerRole) {
+        ownerRole = await tx.role.create({
+          data: {
+            dormitoryId: dormId,
+            code: 'OWNER',
+            name: 'เจ้าของหอพัก',
+            isSystem: true,
+            permissions: { rooms: ['view', 'manage'], billing: ['view', 'manage'] },
+          },
+        });
+      }
+
+      await tx.dormitoryMember.upsert({
+        where: {
+          user_dormitory_unique: {
+            userId,
+            dormitoryId: dormId,
+          },
+        },
+        create: {
+          dormitoryId: dormId,
+          userId,
+          roleId: ownerRole.id,
+          status: 'active',
+          membershipOrigin: 'GOOGLE_BOOTSTRAP',
+        },
+        update: {
+          roleId: ownerRole.id,
+          status: 'active',
         },
       });
 
@@ -653,11 +694,16 @@ export class DormitoryProvisioningService {
         }
         const validatedDueDay = Number(billing.dueDay);
 
+        // LEGACY_COMPAT_ONLY: physical legacy DB column backwards compatibility (isolated in persistence)
+        const legacyCompatBillingDay = (billing.billingDay !== undefined && billing.billingDay !== null && !isNaN(Number(billing.billingDay)))
+          ? Number(billing.billingDay)
+          : validatedDueDay;
+
         await tx.dormitoryBillingSettings.upsert({
           where: { dormitoryId: dormId },
           create: {
             dormitoryId: dormId,
-            billingDay: Number(billing.billingDay) || 25,
+            billingDay: legacyCompatBillingDay,
             dueDay: validatedDueDay,
             waterBillingType: billing.waterBillingType || 'per_person',
             waterRate: waterRateStr,
@@ -676,7 +722,7 @@ export class DormitoryProvisioningService {
             rentBillingType: billing.rentBillingType || 'monthly',
           },
           update: {
-            billingDay: Number(billing.billingDay) || 25,
+            billingDay: legacyCompatBillingDay,
             dueDay: validatedDueDay,
             waterBillingType: billing.waterBillingType || 'per_person',
             waterRate: waterRateStr,

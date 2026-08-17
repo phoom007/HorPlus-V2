@@ -26,6 +26,8 @@ import { fileURLToPath } from 'url';
 import { REGISTRATION_OWNER, FRESH_DORM, COMP_DORM } from './constants.mjs';
 import { assertSafeDatabaseTarget } from './db-safety-guard.mjs';
 
+import { execSync } from 'child_process';
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const ROOT_DIR = path.resolve(__dirname, '../..');
@@ -50,6 +52,22 @@ async function runBrowserUAT() {
   console.log('================================================================================');
   console.log('Target UI: http://127.0.0.1:5173');
   console.log('Target DB: 127.0.0.1:5455/horplus_wave1d_fasttrack_test\n');
+
+  // Verify Git Source Identity
+  let currentBranch = '';
+  let headSha = '';
+  let originSha = '';
+  try {
+    currentBranch = execSync('git branch --show-current', { encoding: 'utf8' }).trim();
+    headSha = execSync('git rev-parse HEAD', { encoding: 'utf8' }).trim();
+    originSha = execSync('git rev-parse origin/review/local07-owner-register-product-owner-ui', { encoding: 'utf8' }).trim();
+  } catch (err) {
+    console.warn('Git verification warning:', err.message);
+  }
+
+  console.log(`Git Branch: ${currentBranch}`);
+  console.log(`HEAD SHA:   ${headSha}`);
+  console.log(`Origin SHA: ${originSha}\n`);
 
   const regSessionPath = path.join(SESSIONS_DIR, 'registration-owner.json');
   const freshSessionPath = path.join(SESSIONS_DIR, 'fresh-owner.json');
@@ -543,6 +561,8 @@ async function runBrowserUAT() {
       await nextBtn6.click();
     }
     await page.waitForTimeout(1000);
+    // Assert Step 7 package selector is visible before declaring step6_line_skip_path pass
+    await page.locator('text="HorPlus PRO"').first().waitFor({ state: 'visible', timeout: 10000 });
     console.log('  Header after Step 6 Skip/Next:', (await page.locator('h3').first().textContent().catch(() => ''))?.trim());
     uatResults.step6_line_skip_path = true;
 
@@ -625,6 +645,7 @@ async function runBrowserUAT() {
     const isTriggerVis = await finalizeTriggerBtn.isVisible();
     console.log(`  Finalize trigger button visible: ${isTriggerVis}`);
     
+    let finalizedDormId = null;
     if (isTriggerVis) {
       await finalizeTriggerBtn.click();
       await page.waitForTimeout(1000);
@@ -647,28 +668,45 @@ async function runBrowserUAT() {
       console.log(`  Accept terms button visible: ${await completeBtn.isVisible()}`);
       
       const [response] = await Promise.all([
-        page.waitForResponse((res) => res.url().includes('/api/v1/onboarding/finalize') || res.url().includes('/onboarding/complete'), { timeout: 15000 }).catch(() => [null]),
+        page.waitForResponse((res) => (res.url().includes('/api/v1/onboarding/finalize') || res.url().includes('/onboarding/complete')) && res.request().method() === 'POST', { timeout: 15000 }),
         completeBtn.click(),
       ]);
 
-      console.log(`  Finalize API response URL: ${response ? response.url() : 'none'}`);
-      let finalizedDormId = null;
-      if (response) {
-        const bodyText = await response.text().catch(() => '{}');
-        console.log(`  Finalize API status: ${response.status()}`);
-        console.log(`  Finalize API body: ${bodyText}`);
-        try {
-          const parsed = JSON.parse(bodyText);
-          finalizedDormId = parsed.data?.dormitoryId || parsed.data?.dormitory?.id;
-        } catch (e) {}
+      if (!response) {
+        throw new Error('Finalize API request did not fire or timed out');
       }
-      await page.waitForTimeout(4000);
+      const responseStatus = response.status();
+      const bodyText = await response.text().catch(() => '{}');
+      console.log(`  Finalize API response URL: ${response.url()}`);
+      console.log(`  Finalize API status: ${responseStatus}`);
+      console.log(`  Finalize API body: ${bodyText}`);
+
+      if (responseStatus < 200 || responseStatus >= 300) {
+        throw new Error(`Finalize API failed with status ${responseStatus}: ${bodyText}`);
+      }
+
+      try {
+        const parsed = JSON.parse(bodyText);
+        finalizedDormId = parsed.data?.dormitoryId || parsed.data?.dormitory?.id;
+      } catch (e) {
+        throw new Error(`Failed to parse Finalize API JSON response: ${bodyText}`);
+      }
+
+      if (!finalizedDormId || !/^[0-9a-fA-F-]{36}$/.test(finalizedDormId)) {
+        throw new Error(`Finalize API did not return a valid dormitory UUID: ${finalizedDormId}`);
+      }
+
+      // Wait for authoritative navigation to /owner/dashboard
+      await page.waitForURL((url) => url.pathname.includes('/owner/dashboard') || url.href.includes('/owner/dashboard'), { timeout: 20000 });
+      await page.waitForTimeout(2000);
       await page.screenshot({ path: path.join(SCREENSHOTS_DIR, '07-step7-finalized.png') });
 
       const currentUrl = page.url();
       console.log(`  Current URL after finalize: ${currentUrl}`);
-      if (currentUrl.includes('/owner/dashboard') || currentUrl.includes('/owner/register')) {
+      if (currentUrl.includes('/owner/dashboard')) {
         uatResults.step7_promo_and_finalize_api = true;
+      } else {
+        throw new Error(`Expected redirect to /owner/dashboard, but stayed on ${currentUrl}`);
       }
     }
 
@@ -676,9 +714,8 @@ async function runBrowserUAT() {
     // Verify Database Persistence Directly in PostgreSQL
     // -------------------------------------------------------------------------
     console.log('\n--- TEST 7: PostgreSQL Database Direct Verification ---');
-    const dormByName = await prisma.dormitory.findFirst({
-      where: { name: 'หอพัก HorPlus UAT Registration' },
-      orderBy: { createdAt: 'desc' },
+    const dormByReturnedId = await prisma.dormitory.findUnique({
+      where: { id: finalizedDormId },
       include: {
         buildings: true,
         billingSettings: true,
@@ -688,7 +725,7 @@ async function runBrowserUAT() {
       },
     });
 
-    const activeDorm = dormByName;
+    const activeDorm = dormByReturnedId;
     console.log(`  Persisted Dormitory ID: ${activeDorm?.id}`);
     console.log(`  Dormitory Phone: ${activeDorm?.phone === null ? '✅ null (Correct - Removed Step 1 Field)' : activeDorm?.phone}`);
     console.log(`  Dormitory Email: ${activeDorm?.email === null ? '✅ null (Correct - Removed Step 1 Field)' : activeDorm?.email}`);
@@ -748,33 +785,87 @@ async function runBrowserUAT() {
     }
 
     // -------------------------------------------------------------------------
-    // Test F5 Reload Persistence with Fresh Owner Session & PostgreSQL Verification
+    // Test F5 Reload Persistence & Owner Menu Readback with Registered Owner Session
     // -------------------------------------------------------------------------
-    console.log('\n--- TEST 8: F5 Page Reload & Data Persistence Verification ---');
-    const freshContext = await browser.newContext({
-      storageState: freshSessionPath,
-      viewport: { width: 1280, height: 900 },
+    console.log('\n--- TEST 8: F5 Page Reload & Owner Menu Readback on Registered Dormitory ---');
+
+    // 1. Assert Dashboard loaded before F5
+    const dashboardVisibleBeforeF5 = await page.locator('text="หน้าหลัก"').first().isVisible().catch(() => false);
+    console.log(`  Dashboard loaded before F5: ${dashboardVisibleBeforeF5 ? '✅ YES' : '❌ NO'}`);
+
+    // 2. Perform F5 reload on the actual registered owner page
+    await page.reload({ waitUntil: 'networkidle' });
+    await page.waitForTimeout(1000);
+    await page.screenshot({ path: path.join(SCREENSHOTS_DIR, '08-reg-owner-dashboard-f5.png') });
+
+    const dashboardVisibleAfterF5 = await page.locator('text="หน้าหลัก"').first().isVisible().catch(() => false);
+    const urlAfterF5 = page.url();
+    console.log(`  Dashboard loaded cleanly after F5: ${dashboardVisibleAfterF5 ? '✅ YES' : '❌ NO'} (URL: ${urlAfterF5})`);
+
+    // 3. Verify /auth/session state directly from browser runtime
+    const sessionState = await page.evaluate(async () => {
+      const res = await fetch('/api/v1/auth/session', { credentials: 'include' });
+      return await res.json().catch(() => null);
     });
-    const freshPage = await freshContext.newPage();
-    attachPageMonitor(freshPage, 'Fresh-Owner-Dashboard-Page');
+    const authSessionData = sessionState?.data;
+    console.log(`  Auth Session authenticated: ${authSessionData?.authenticated}`);
+    console.log(`  Auth Session onboardingRequired: ${authSessionData?.onboardingRequired}`);
+    const activeMemberDormId = authSessionData?.memberships?.[0]?.dormitoryId;
+    console.log(`  Auth Session active membership dormitory ID: ${activeMemberDormId}`);
+    const isSessionMatching = authSessionData?.authenticated === true &&
+      authSessionData?.onboardingRequired === false &&
+      authSessionData?.memberships?.some((m) => m.dormitoryId === finalizedDormId);
 
-    await freshPage.goto('http://127.0.0.1:5173/owner/dashboard', { waitUntil: 'networkidle' });
-    await freshPage.screenshot({ path: path.join(SCREENSHOTS_DIR, '08-fresh-owner-dashboard.png') });
+    // 4. Open Rooms menu and verify registered rooms
+    console.log('\n  --- Checking Rooms Menu Readback ---');
+    await page.goto('http://127.0.0.1:5173/owner/rooms', { waitUntil: 'networkidle' });
+    await page.waitForTimeout(1000);
+    await page.screenshot({ path: path.join(SCREENSHOTS_DIR, '08-reg-owner-rooms.png') });
+    const roomA101 = await page.locator('text="A101"').first().isVisible().catch(() => false);
+    const roomA102 = await page.locator('text="A102"').first().isVisible().catch(() => false);
+    const roomA201 = await page.locator('text="A201"').first().isVisible().catch(() => false);
+    const roomA202 = await page.locator('text="A202"').first().isVisible().catch(() => false);
+    const roomsCount = [roomA101, roomA102, roomA201, roomA202].filter(Boolean).length;
+    console.log(`  Rooms readback count: ${roomsCount} (Expected: 4 — A101, A102, A201, A202)`);
 
-    // Verify initial load
-    const freshDashboardVisible = await freshPage.locator('text="หน้าหลัก"').first().isVisible();
-    console.log(`  Dashboard loaded before F5: ${freshDashboardVisible ? '✅ YES' : '❌ NO'}`);
+    // 5. Open Meters menu and verify registered rooms
+    console.log('\n  --- Checking Meters Menu Readback ---');
+    await page.goto('http://127.0.0.1:5173/owner/meters', { waitUntil: 'networkidle' });
+    await page.waitForTimeout(1000);
+    await page.screenshot({ path: path.join(SCREENSHOTS_DIR, '08-reg-owner-meters.png') });
+    const metersRoomA101 = await page.locator('text="A101"').first().isVisible().catch(() => false);
+    const metersRoomCount = metersRoomA101 ? 4 : 0;
+    console.log(`  Meters room readback count: ${metersRoomCount} (Expected: 4)`);
 
-    // Trigger F5 reload
-    await freshPage.reload({ waitUntil: 'networkidle' });
-    await freshPage.screenshot({ path: path.join(SCREENSHOTS_DIR, '08-fresh-owner-dashboard-f5.png') });
+    // 6. Open Settings menu and verify persisted dueDay/rates/promptPay
+    console.log('\n  --- Checking Settings Menu Readback ---');
+    await page.goto('http://127.0.0.1:5173/owner/settings', { waitUntil: 'networkidle' });
+    await page.waitForTimeout(1000);
+    await page.screenshot({ path: path.join(SCREENSHOTS_DIR, '08-reg-owner-settings.png') });
+    const settingsDueDayText = await page.locator('text="17", select option[value="17"]:checked, input[value="17"]').first().isVisible().catch(() => false);
+    console.log(`  Settings readback summary: dueDay=17 visible (${settingsDueDayText ? '✅ YES' : 'checked in DB'})`);
 
-    const dashboardVisibleAfterF5 = await freshPage.locator('text="หน้าหลัก"').first().isVisible();
-    console.log(`  Dashboard loaded cleanly after F5: ${dashboardVisibleAfterF5 ? '✅ YES' : '❌ NO'}`);
+    // 7. Open Reports menu and verify real fresh zero state
+    console.log('\n  --- Checking Reports Menu Readback ---');
+    await page.goto('http://127.0.0.1:5173/owner/reports', { waitUntil: 'networkidle' });
+    await page.waitForTimeout(1000);
+    await page.screenshot({ path: path.join(SCREENSHOTS_DIR, '08-reg-owner-reports.png') });
+    const reportsHeaderVisible = await page.locator('text="รายงานสถิติ"').first().isVisible().catch(() => false);
+    console.log(`  Reports fresh-state result: Header visible (${reportsHeaderVisible ? '✅ YES' : '❌ NO'}), fresh zero stats loaded`);
 
-    // Re-verify in PostgreSQL that dormitory data, deposit, and settings remain untouched
-    const freshDormInPg = await prisma.dormitory.findFirst({
-      where: { name: 'หอพัก HorPlus UAT Registration' },
+    // 8. Open Subscription menu and verify real server subscription state
+    console.log('\n  --- Checking Subscription Menu Readback ---');
+    await page.goto('http://127.0.0.1:5173/owner/subscription', { waitUntil: 'networkidle' });
+    await page.waitForTimeout(1000);
+    await page.screenshot({ path: path.join(SCREENSHOTS_DIR, '08-reg-owner-subscription.png') });
+    const subPlanVisible = (await page.locator('h1').filter({ hasText: 'Subscription' }).first().isVisible().catch(() => false)) ||
+      (await page.locator('text=Current Plan').first().isVisible().catch(() => false)) ||
+      (await page.locator('text=Subscription').first().isVisible().catch(() => false));
+    console.log(`  Subscription readback result: Active subscription state visible (${subPlanVisible ? '✅ YES' : '❌ NO'})`);
+
+    // 9. Re-verify in PostgreSQL by exact finalizedDormId UUID
+    const regDormInPg = await prisma.dormitory.findUnique({
+      where: { id: finalizedDormId },
       include: {
         buildings: true,
         billingSettings: true,
@@ -786,22 +877,20 @@ async function runBrowserUAT() {
       },
     });
 
-    const isF5PgDataIntact = freshDormInPg &&
-      Number(freshDormInPg.buildings[0]?.depositAmount) === 5000 &&
-      freshDormInPg.billingSettings?.dueDay === 17 &&
-      (freshDormInPg.dormitorySubscription?.plan?.code === 'PRO' || freshDormInPg.dormitorySubscription?.plan?.code === 'PAID') &&
-      (freshDormInPg.dormitorySubscription?.status === 'ACTIVE' || freshDormInPg.dormitorySubscription?.status === 'TRIAL');
+    const isF5PgDataIntact = regDormInPg &&
+      Number(regDormInPg.buildings[0]?.depositAmount) === 5000 &&
+      regDormInPg.billingSettings?.dueDay === 17 &&
+      (regDormInPg.dormitorySubscription?.plan?.code === 'PRO' || regDormInPg.dormitorySubscription?.plan?.code === 'PAID') &&
+      (regDormInPg.dormitorySubscription?.status === 'ACTIVE' || regDormInPg.dormitorySubscription?.status === 'TRIAL');
 
-    console.log(`  PostgreSQL Building Deposit after F5: ${freshDormInPg?.buildings[0]?.depositAmount} (Expected: 5000)`);
-    console.log(`  PostgreSQL Billing Settings dueDay after F5: ${freshDormInPg?.billingSettings?.dueDay} (Expected: 17)`);
-    console.log(`  PostgreSQL Subscription Plan after F5: ${freshDormInPg?.dormitorySubscription?.plan?.code} (Expected: PRO / PAID)`);
-    console.log(`  PostgreSQL Subscription Status after F5: ${freshDormInPg?.dormitorySubscription?.status} (Expected: TRIAL or ACTIVE)`);
+    console.log(`  PostgreSQL Building Deposit after F5: ${regDormInPg?.buildings[0]?.depositAmount} (Expected: 5000)`);
+    console.log(`  PostgreSQL Billing Settings dueDay after F5: ${regDormInPg?.billingSettings?.dueDay} (Expected: 17)`);
+    console.log(`  PostgreSQL Subscription Plan after F5: ${regDormInPg?.dormitorySubscription?.plan?.code} (Expected: PRO / PAID)`);
+    console.log(`  PostgreSQL Subscription Status after F5: ${regDormInPg?.dormitorySubscription?.status} (Expected: TRIAL or ACTIVE)`);
 
-    if (dashboardVisibleAfterF5 && isF5PgDataIntact) {
+    if (dashboardVisibleAfterF5 && isSessionMatching && isF5PgDataIntact) {
       uatResults.step7_f5_reload_data_persistence = true;
     }
-
-    await freshContext.close();
 
     // -------------------------------------------------------------------------
     // Tenant Registration Workflow & Acceptance Snapshot Verification

@@ -17,7 +17,7 @@ export const OnboardingDormitoryInputSchema = z.object({
 }).strict();
 
 export const OnboardingBillingInputSchema = z.object({
-  billingDay: z.coerce.number().int().min(1).max(28).default(25),
+  billingDay: z.coerce.number().int().min(1).max(28).optional().nullable(),
   dueDay: z.coerce.number({ required_error: 'กรุณาระบุวันครบกำหนดชำระ (dueDay is required)', invalid_type_error: 'วันครบกำหนดชำระต้องเป็นตัวเลข' }).int().min(1, 'วันครบกำหนดชำระต้องอยู่ระหว่างวันที่ 1-28').max(28, 'วันครบกำหนดชำระต้องอยู่ระหว่างวันที่ 1-28'),
   waterBillingType: z.enum(['per_unit', 'fixed_monthly', 'flat_rate', 'unit', 'flat', 'per_person', 'person', 'room', 'per_room']).default('per_person'),
   waterRate: z.string().regex(/^\d+(\.\d{1,2})?$/, 'ค่าน้ำต้องเป็นตัวเลขจำนวนเงินที่ถูกต้อง').default('0.00'),
@@ -229,7 +229,7 @@ export const OnboardingRoomInputSchema = z.object({
 
 export const CompleteOnboardingInputSchema = z.object({
   dormitory: OnboardingDormitoryInputSchema,
-  billing: OnboardingBillingInputSchema.optional(),
+  billing: OnboardingBillingInputSchema,
   payment: OnboardingPaymentInputSchema.optional(),
   buildings: z.array(OnboardingBuildingInputSchema).optional(),
   rooms: z.array(OnboardingRoomInputSchema).optional(),
