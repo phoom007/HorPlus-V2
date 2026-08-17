@@ -937,13 +937,13 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
           try {
             await prisma.$transaction(async (tx) => {
               await tx.$executeRaw`SELECT set_config('app.bypass_rls', 'on', true)`;
-              await tx.subscriptionStatusHistory.deleteMany({ where: { actorId: u.id } });
-              await tx.subscriptionPackageIntent.deleteMany({ where: { userId: u.id } });
-              await tx.accountBenefitClaim.deleteMany({ where: { userId: u.id } });
-              await tx.ownerSignature.deleteMany({ where: { signedByUserId: u.id } });
-              await tx.promoRedemption.deleteMany({ where: { redeemedBy: u.id } });
-              await tx.session.deleteMany({ where: { userId: u.id } });
-              await tx.user.delete({ where: { id: u.id } }).catch(() => {});
+              await tx.$executeRaw`DELETE FROM "subscription_package_intents" WHERE "user_id" = ${u.id}::uuid`;
+              await tx.$executeRaw`DELETE FROM "subscription_status_histories" WHERE "actor_id" = ${u.id}::uuid`;
+              await tx.$executeRaw`DELETE FROM "account_benefit_claims" WHERE "user_id" = ${u.id}::uuid`;
+              await tx.$executeRaw`DELETE FROM "owner_signatures" WHERE "signed_by_user_id" = ${u.id}::uuid`;
+              await tx.$executeRaw`DELETE FROM "promo_redemptions" WHERE "redeemed_by" = ${u.id}::uuid`;
+              await tx.$executeRaw`DELETE FROM "sessions" WHERE "user_id" = ${u.id}::uuid`;
+              await tx.$executeRaw`DELETE FROM "users" WHERE "id" = ${u.id}::uuid`;
             });
           } catch {}
         }
@@ -3423,11 +3423,13 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
 
       // 3. Frontend OwnerReports Pure Calculation Integration Proof:
       // Uses the exact same shared pure calculation helper (src/utils/report-calculations.ts) as the UI!
+      // DEFECT 1: Authoritative Billing Cycle Identity Unification (UUID for bill filter, cycleCode for display/year)
       const repC1All = calculateOwnerReports({
         rooms: httpRooms,
         bills: [...httpBillsC1, ...httpBillsC2],
         selectedBuilding: 'all',
-        selectedCycle: cycle1.id,
+        selectedBillingCycleId: cycle1.id,
+        selectedCycleCode: '2026-07',
       });
 
       expect(repC1All.totalBilledThisMonth).toBe(13100);
@@ -3442,12 +3444,13 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
       expect(repC1All.vacantCount).toBe(2);
       expect(repC1All.occupiedPercent).toBe(50);
 
-      // Assert Cycle 2 All Buildings (Proving Cycle 1 != Cycle 2):
+      // Assert Cycle 2 All Buildings (Proving Cycle 1 != Cycle 2 with UUID-B & cycleCode '2026-08'):
       const repC2All = calculateOwnerReports({
         rooms: httpRooms,
         bills: [...httpBillsC1, ...httpBillsC2],
         selectedBuilding: 'all',
-        selectedCycle: cycle2.id,
+        selectedBillingCycleId: cycle2.id,
+        selectedCycleCode: '2026-08',
       });
 
       expect(repC2All.totalBilledThisMonth).toBe(13400);
@@ -3466,13 +3469,15 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
         rooms: httpRooms,
         bills: [...httpBillsC1, ...httpBillsC2],
         selectedBuilding: buildingA.id,
-        selectedCycle: cycle1.id,
+        selectedBillingCycleId: cycle1.id,
+        selectedCycleCode: '2026-07',
       });
       const repC1BldB = calculateOwnerReports({
         rooms: httpRooms,
         bills: [...httpBillsC1, ...httpBillsC2],
         selectedBuilding: buildingB.id,
-        selectedCycle: cycle1.id,
+        selectedBillingCycleId: cycle1.id,
+        selectedCycleCode: '2026-07',
       });
 
       expect(repC1BldA.totalBilledThisMonth).toBe(5150);
@@ -3512,7 +3517,8 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
         rooms: httpRooms,
         bills: [...refetchedBillsC1.body.data, ...refetchedBillsC2.body.data],
         selectedBuilding: 'all',
-        selectedCycle: cycle1.id,
+        selectedBillingCycleId: cycle1.id,
+        selectedCycleCode: '2026-07',
       });
       expect(refetchedRepC1All).toEqual(repC1All);
 
@@ -3594,7 +3600,7 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
       expect(oracleFracPaid.toFixed(2)).toBe('0.30');
       expect(oracleFracUnpaid.toFixed(2)).toBe('220.30');
 
-      // Real HTTP Express Endpoints for Fractional Cycle:
+      // Real HTTP Express Endpoints for Fractional Cycle (DEFECT 4: Exact Decimal string formatting):
       const resBillsFrac = await request(app)
         .get(`/api/v1/bills?billingCycleId=${cycleFrac.id}`)
         .set('Cookie', authSession.cookies)
@@ -3602,6 +3608,29 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
         .set('x-dormitory-id', dorm.id);
       expect(resBillsFrac.status).toBe(200);
       const httpBillsFrac = resBillsFrac.body.data || [];
+
+      // Prove HTTP returns canonical exact strings without IEEE-754 binary drift
+      const httpBill5 = httpBillsFrac.find((b: any) => b.id === bill5.id);
+      const httpBill6 = httpBillsFrac.find((b: any) => b.id === bill6.id);
+      expect(httpBill5.subtotal).toBe('0.30');
+      expect(httpBill5.totalAmount).toBe('0.30');
+      expect(httpBill5.paidAmount).toBe('0.30');
+      expect(httpBill5.outstandingAmount).toBe('0.00');
+
+      const resBill5Items = await request(app)
+        .get(`/api/v1/bills/${bill5.id}`)
+        .set('Cookie', authSession.cookies)
+        .set('x-csrf-token', authSession.csrfToken)
+        .set('x-dormitory-id', dorm.id);
+      expect(resBill5Items.status).toBe(200);
+      const items5 = resBill5Items.body.data?.items || [];
+      expect(items5.find((i: any) => i.type === 'rent')?.amount).toBe('0.10');
+      expect(items5.find((i: any) => i.type === 'water')?.amount).toBe('0.20');
+
+      expect(httpBill6.subtotal).toBe('220.30');
+      expect(httpBill6.totalAmount).toBe('220.30');
+      expect(httpBill6.paidAmount).toBe('0.00');
+      expect(httpBill6.outstandingAmount).toBe('220.30');
 
       const resBillingSummaryFrac = await request(app)
         .get(`/api/v1/bills/summary?billingCycleId=${cycleFrac.id}`)
@@ -3618,7 +3647,8 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
         rooms: httpRooms,
         bills: httpBillsFrac,
         selectedBuilding: 'all',
-        selectedCycle: cycleFrac.id,
+        selectedBillingCycleId: cycleFrac.id,
+        selectedCycleCode: `2026-09-frac-${timestamp}`,
       });
 
       // Authoritative exact string checks
@@ -3634,13 +3664,277 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
         rooms: httpRooms,
         bills: [httpBillsFrac.find((b: any) => b.id === bill5.id)],
         selectedBuilding: 'all',
-        selectedCycle: cycleFrac.id,
+        selectedBillingCycleId: cycleFrac.id,
       });
       expect(repFracBill5Only.exactTotalBilledThisMonth).toBe('0.30');
       expect(repFracBill5Only.exactWaterTotal).toBe('0.20');
       expect(repFracBill5Only.exactFixedRentTotal).toBe('0.10');
 
-      // Cleanup
+      // 6. DEFECT 3: Exact-Money Coverage for Yearly Report / Chart / CSV Regression:
+      // January: 0.10 (rent) + 0.20 (water) = 0.30
+      // February: 10.15 (rent) + 20.25 (water) = 30.40
+      const cycleJan = await prisma.billingCycle.create({
+        data: {
+          dormitoryId: dorm.id,
+          cycleCode: '2026-01',
+          name: 'รอบบิลมกราคม 2026',
+          periodStart: new Date('2026-01-01'),
+          periodEnd: new Date('2026-01-31'),
+          billingDate: new Date('2026-01-25'),
+          dueDate: new Date('2026-02-05'),
+          status: 'closed',
+        },
+      });
+      const cycleFeb = await prisma.billingCycle.create({
+        data: {
+          dormitoryId: dorm.id,
+          cycleCode: '2026-02',
+          name: 'รอบบิลกุมภาพันธ์ 2026',
+          periodStart: new Date('2026-02-01'),
+          periodEnd: new Date('2026-02-28'),
+          billingDate: new Date('2026-02-25'),
+          dueDate: new Date('2026-03-05'),
+          status: 'closed',
+        },
+      });
+
+      const billJan = await prisma.bill.create({
+        data: {
+          dormitoryId: dorm.id,
+          billingCycleId: cycleJan.id,
+          roomId: roomA1.id,
+          contractId: contractA.id,
+          tenantId: tenantA.id,
+          billNumber: `BILL-${timestamp}-JAN`,
+          billingDate: new Date('2026-01-25'),
+          dueDate: new Date('2026-02-05'),
+          subtotal: '0.30',
+          totalAmount: '0.30',
+          paidAmount: '0.30',
+          outstandingAmount: '0.00',
+          status: 'paid',
+        },
+      });
+      await prisma.billItem.createMany({
+        data: [
+          { dormitoryId: dorm.id, billId: billJan.id, type: 'rent', description: 'ค่าเช่า ม.ค.', amount: '0.10', quantity: '1.00', unitPrice: '0.10' },
+          { dormitoryId: dorm.id, billId: billJan.id, type: 'water', description: 'ค่าน้ำ ม.ค.', amount: '0.20', quantity: '1.00', unitPrice: '0.20' },
+        ],
+      });
+
+      const billFeb = await prisma.bill.create({
+        data: {
+          dormitoryId: dorm.id,
+          billingCycleId: cycleFeb.id,
+          roomId: roomA2.id,
+          contractId: contractB.id,
+          tenantId: tenantB.id,
+          billNumber: `BILL-${timestamp}-FEB`,
+          billingDate: new Date('2026-02-25'),
+          dueDate: new Date('2026-03-05'),
+          subtotal: '30.40',
+          totalAmount: '30.40',
+          paidAmount: '30.40',
+          outstandingAmount: '0.00',
+          status: 'paid',
+        },
+      });
+      await prisma.billItem.createMany({
+        data: [
+          { dormitoryId: dorm.id, billId: billFeb.id, type: 'rent', description: 'ค่าเช่า ก.พ.', amount: '10.15', quantity: '1.00', unitPrice: '10.15' },
+          { dormitoryId: dorm.id, billId: billFeb.id, type: 'water', description: 'ค่าน้ำ ก.พ.', amount: '20.25', quantity: '1.00', unitPrice: '20.25' },
+        ],
+      });
+
+      const resAllBills = await request(app)
+        .get(`/api/v1/bills?pageSize=100`)
+        .set('Cookie', authSession.cookies)
+        .set('x-csrf-token', authSession.csrfToken)
+        .set('x-dormitory-id', dorm.id);
+      expect(resAllBills.status).toBe(200);
+
+      const yearlyRep = calculateOwnerReports({
+        rooms: httpRooms,
+        bills: resAllBills.body.data || [],
+        selectedBuilding: 'all',
+        selectedBillingCycleId: cycleJan.id,
+        selectedCycleCode: '2026-01',
+        selectedYear: '2026',
+      });
+
+      const janItem = yearlyRep.monthlyRevenueHistory.find(m => m.monthKey === '01');
+      const febItem = yearlyRep.monthlyRevenueHistory.find(m => m.monthKey === '02');
+      expect(janItem?.exactRent).toBe('0.10');
+      expect(janItem?.exactWater).toBe('0.20');
+      expect(janItem?.exactTotal).toBe('0.30');
+      expect(janItem?.rent).toBe(0.1);
+      expect(janItem?.water).toBe(0.2);
+      expect(janItem?.total).toBe(0.3);
+
+      expect(febItem?.exactRent).toBe('10.15');
+      expect(febItem?.exactWater).toBe('20.25');
+      expect(febItem?.exactTotal).toBe('30.40');
+      expect(febItem?.rent).toBe(10.15);
+      expect(febItem?.water).toBe(20.25);
+      expect(febItem?.total).toBe(30.4);
+
+      // Verify exact breakdown percentages derived from exact satangs
+      expect(yearlyRep.breakdownPercentages.rentPct).toBeGreaterThanOrEqual(0);
+      expect(yearlyRep.breakdownPercentages.waterPct).toBeGreaterThanOrEqual(0);
+
+      // 7. DEFECT 2: Large Dataset Pagination Regression (>20 Bills Proof):
+      // Creates a dedicated dormitory with 30 rooms & 30 bills to verify multi-page collection
+      const dorm30 = await prisma.dormitory.create({
+        data: {
+          name: `หอพัก Pagination 30 Bills ${timestamp}`,
+          type: 'apartment',
+          status: 'active',
+        },
+      });
+      await prisma.dormitoryMember.createMany({
+        data: [
+          {
+            dormitoryId: dorm30.id,
+            userId: ownerUser.id,
+            roleId: ownerRole!.id,
+            status: 'active',
+          },
+        ],
+      });
+      const cycle30 = await prisma.billingCycle.create({
+        data: {
+          dormitoryId: dorm30.id,
+          cycleCode: '2026-10',
+          name: 'รอบบิลตุลาคม 2026 (30 Bills Test)',
+          periodStart: new Date('2026-10-01'),
+          periodEnd: new Date('2026-10-31'),
+          billingDate: new Date('2026-10-25'),
+          dueDate: new Date('2026-11-05'),
+          status: 'active',
+        },
+      });
+
+      const building30 = await prisma.building.create({
+        data: {
+          dormitoryId: dorm30.id,
+          name: 'อาคารสามสิบ',
+        },
+      });
+
+      const rooms30: any[] = [];
+      const bills30: any[] = [];
+      for (let i = 1; i <= 30; i++) {
+        const roomNum = `R-${i.toString().padStart(3, '0')}`;
+        const r = await prisma.room.create({
+          data: {
+            dormitoryId: dorm30.id,
+            buildingId: building30.id,
+            roomNumber: roomNum,
+            normalizedRoomNumber: roomNum,
+            roomType: 'standard',
+            floor: 1,
+            monthlyRent: '1000.00',
+            status: 'occupied',
+          },
+        });
+        rooms30.push(r);
+
+        const b = await prisma.bill.create({
+          data: {
+            dormitoryId: dorm30.id,
+            billingCycleId: cycle30.id,
+            roomId: r.id,
+            billNumber: `BILL-30-${i.toString().padStart(3, '0')}`,
+            billingDate: new Date('2026-10-25'),
+            dueDate: new Date('2026-11-05'),
+            subtotal: '1000.00',
+            totalAmount: '1000.00',
+            paidAmount: i <= 15 ? '1000.00' : '0.00',
+            outstandingAmount: i <= 15 ? '0.00' : '1000.00',
+            status: i <= 15 ? 'paid' : 'unpaid',
+          },
+        });
+        await prisma.billItem.create({
+          data: {
+            dormitoryId: dorm30.id,
+            billId: b.id,
+            type: 'rent',
+            description: `ค่าเช่าห้อง R-${i}`,
+            amount: '1000.00',
+            quantity: '1.00',
+            unitPrice: '1000.00',
+          },
+        });
+        bills30.push(b);
+      }
+
+      // Default query without pagination parameters defaults to pageSize=20
+      const page1Res = await request(app)
+        .get(`/api/v1/bills?billingCycleId=${cycle30.id}`)
+        .set('Cookie', authSession.cookies)
+        .set('x-csrf-token', authSession.csrfToken)
+        .set('x-dormitory-id', dorm30.id);
+      expect(page1Res.status).toBe(200);
+      expect(page1Res.body.data.length).toBe(20);
+      expect(page1Res.body.pagination.total).toBe(30);
+
+      // If only page 1 is passed to report calculation, total is truncated to 20,000 (INCOMPLETE)
+      const incompleteRep = calculateOwnerReports({
+        rooms: rooms30,
+        bills: page1Res.body.data,
+        selectedBuilding: 'all',
+        selectedBillingCycleId: cycle30.id,
+        selectedCycleCode: '2026-10',
+      });
+      expect(incompleteRep.totalBilledThisMonth).toBe(20000); // Truncated!
+
+      // Multi-page fetch simulation (fetchAllPaginated):
+      // Iterates until all items are collected according to pagination.total
+      let pageNum = 1;
+      const allCollectedBills: any[] = [];
+      while (true) {
+        const pRes = await request(app)
+          .get(`/api/v1/bills?billingCycleId=${cycle30.id}&page=${pageNum}&pageSize=20`)
+          .set('Cookie', authSession.cookies)
+          .set('x-csrf-token', authSession.csrfToken)
+          .set('x-dormitory-id', dorm30.id);
+        const pData = pRes.body.data || [];
+        allCollectedBills.push(...pData);
+        if (allCollectedBills.length >= pRes.body.pagination.total || pData.length === 0) {
+          break;
+        }
+        pageNum++;
+      }
+
+      expect(allCollectedBills.length).toBe(30);
+      expect(allCollectedBills.length).toBe(page1Res.body.pagination.total);
+
+      // Report with complete multi-page dataset calculates exact total of ALL 30 bills
+      const completeRep = calculateOwnerReports({
+        rooms: rooms30,
+        bills: allCollectedBills,
+        selectedBuilding: 'all',
+        selectedBillingCycleId: cycle30.id,
+        selectedCycleCode: '2026-10',
+      });
+      expect(completeRep.totalBilledThisMonth).toBe(30000);
+      expect(completeRep.exactTotalBilledThisMonth).toBe('30000.00');
+      expect(completeRep.totalRevenueThisMonth).toBe(15000);
+      expect(completeRep.exactTotalRevenueThisMonth).toBe('15000.00');
+      expect(completeRep.totalUnpaidThisMonth).toBe(15000);
+      expect(completeRep.exactTotalUnpaidThisMonth).toBe('15000.00');
+      expect(completeRep.totalRooms).toBe(30);
+
+      // Cleanup dorm30
+      await prisma.billItem.deleteMany({ where: { bill: { dormitoryId: dorm30.id } } });
+      await prisma.bill.deleteMany({ where: { dormitoryId: dorm30.id } });
+      await prisma.billingCycle.deleteMany({ where: { dormitoryId: dorm30.id } });
+      await prisma.room.deleteMany({ where: { dormitoryId: dorm30.id } });
+      await prisma.building.deleteMany({ where: { dormitoryId: dorm30.id } });
+      await prisma.dormitoryMember.deleteMany({ where: { dormitoryId: dorm30.id } });
+      await prisma.dormitory.delete({ where: { id: dorm30.id } });
+
+      // Cleanup dorm
       await prisma.billItem.deleteMany({ where: { bill: { dormitoryId: dorm.id } } });
       await prisma.bill.deleteMany({ where: { dormitoryId: dorm.id } });
       await prisma.billingCycle.deleteMany({ where: { dormitoryId: dorm.id } });

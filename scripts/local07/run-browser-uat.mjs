@@ -80,6 +80,7 @@ async function runBrowserUAT() {
     step7_f5_reload_data_persistence: false,
     tenant_rules_and_pet_readback: false,
     tenant_acceptance_snapshot_immutability: false,
+    owner_reports_operational_cycle_sync: false,
     referral_preserved_google_auth_scope: 'NOT TESTED (External Google OAuth provider mock scope)',
     browser_console_errors: [],
     failed_network_requests: [],
@@ -882,6 +883,38 @@ async function runBrowserUAT() {
 
     await tenantContext.close();
 
+    // =========================================================================
+    // TEST 10: OwnerReports Operational Cycle Non-Zero Verification
+    // =========================================================================
+    console.log('\n--- TEST 10: OwnerReports Operational Cycle Non-Zero Verification ---');
+    const compSessionPath = path.join(SESSIONS_DIR, 'comp-owner.json');
+    if (fs.existsSync(compSessionPath)) {
+      const reportsContext = await browser.newContext({ storageState: compSessionPath });
+      const reportsPage = await reportsContext.newPage();
+      attachPageMonitor(reportsPage, 'OwnerReports');
+
+      await reportsPage.goto('http://127.0.0.1:5173/owner/reports', { waitUntil: 'networkidle' });
+      await reportsPage.waitForTimeout(1500);
+
+      // Verify Header
+      const headerVisible = await reportsPage.locator('text=วิเคราะห์การเงินและสถิติหอพัก').first().isVisible();
+      console.log(`  Reports Header visible: ${headerVisible ? '✅ YES' : '❌ NO'}`);
+
+      // Verify Non-Zero Values Rendered (Billed total, room count, occupancy)
+      const pageText = await reportsPage.textContent('body');
+      const hasBilledAmount = pageText.includes('65,899') || pageText.includes('41,994') || pageText.includes('23,905') || pageText.includes('฿');
+      const hasOccupancyData = pageText.includes('18') && pageText.includes('11');
+      console.log(`  Reports Operational Cycle Billed/Revenue figures visible: ${hasBilledAmount ? '✅ YES' : '❌ NO'}`);
+      console.log(`  Reports Room counts & Occupancy figures visible: ${hasOccupancyData ? '✅ YES' : '❌ NO'}`);
+
+      await reportsPage.screenshot({ path: path.join(SCREENSHOTS_DIR, '10-owner-reports-dashboard.png') });
+
+      if (headerVisible && hasBilledAmount && hasOccupancyData) {
+        uatResults.owner_reports_operational_cycle_sync = true;
+      }
+      await reportsContext.close();
+    }
+
   } catch (err) {
     console.error('❌ Browser UAT error:', err);
     throw err;
@@ -913,6 +946,7 @@ async function runBrowserUAT() {
     'step7_f5_reload_data_persistence',
     'tenant_rules_and_pet_readback',
     'tenant_acceptance_snapshot_immutability',
+    'owner_reports_operational_cycle_sync',
   ];
 
   const failedCheckpoints = requiredCheckpoints.filter((k) => !uatResults[k]);

@@ -1,4 +1,4 @@
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, Prisma } from '@prisma/client';
 
 export interface BillEntity {
   id: string;
@@ -404,8 +404,26 @@ export class PrismaBillRepository implements IBillRepository {
     return tx || this.prisma;
   }
 
+  private formatDecimal(val: any): string {
+    if (val === undefined || val === null) return '0.00';
+    if (val instanceof Prisma.Decimal) return val.toFixed(2);
+    if (typeof val === 'string') {
+      try {
+        return new Prisma.Decimal(val).toFixed(2);
+      } catch {
+        return val;
+      }
+    }
+    if (typeof val === 'number') {
+      return new Prisma.Decimal(val.toString()).toFixed(2);
+    }
+    if (typeof val?.toFixed === 'function') {
+      return val.toFixed(2);
+    }
+    return new Prisma.Decimal(String(val)).toFixed(2);
+  }
+
   private mapBillToEntity(model: any): BillEntity {
-    const fmt = (val: any) => (val !== undefined && val !== null ? Number(val.toString()).toFixed(2) : '0.00');
     return {
       id: model.id,
       dormitoryId: model.dormitoryId,
@@ -417,12 +435,12 @@ export class PrismaBillRepository implements IBillRepository {
       status: model.status,
       billingDate: model.billingDate,
       dueDate: model.dueDate,
-      subtotal: fmt(model.subtotal),
-      discountAmount: fmt(model.discountAmount),
-      fineAmount: fmt(model.fineAmount),
-      totalAmount: fmt(model.totalAmount),
-      paidAmount: fmt(model.paidAmount),
-      outstandingAmount: fmt(model.outstandingAmount),
+      subtotal: this.formatDecimal(model.subtotal),
+      discountAmount: this.formatDecimal(model.discountAmount),
+      fineAmount: this.formatDecimal(model.fineAmount),
+      totalAmount: this.formatDecimal(model.totalAmount),
+      paidAmount: this.formatDecimal(model.paidAmount),
+      outstandingAmount: this.formatDecimal(model.outstandingAmount),
       currency: model.currency || 'THB',
       rateSnapshotId: model.rateSnapshotId || null,
       generatedByUserId: model.generatedByUserId || null,
@@ -438,7 +456,6 @@ export class PrismaBillRepository implements IBillRepository {
   }
 
   private mapItemToEntity(model: any): BillItemEntity {
-    const fmt = (val: any) => (val !== undefined && val !== null ? Number(val.toString()).toFixed(2) : '0.00');
     return {
       id: model.id,
       dormitoryId: model.dormitoryId,
@@ -446,10 +463,10 @@ export class PrismaBillRepository implements IBillRepository {
       type: model.type,
       code: model.code || null,
       description: model.description,
-      quantity: fmt(model.quantity),
+      quantity: this.formatDecimal(model.quantity),
       unit: model.unit || null,
-      unitPrice: fmt(model.unitPrice),
-      amount: fmt(model.amount),
+      unitPrice: this.formatDecimal(model.unitPrice),
+      amount: this.formatDecimal(model.amount),
       sourceType: model.sourceType || null,
       sourceId: model.sourceId || null,
       displayOrder: model.displayOrder,
@@ -714,9 +731,9 @@ export class PrismaBillRepository implements IBillRepository {
 
     const bills = await this.prisma.bill.findMany({ where });
 
-    let totalAmount = new (require('@prisma/client').Prisma.Decimal)('0.00');
-    let paidAmount = new (require('@prisma/client').Prisma.Decimal)('0.00');
-    let outstandingAmount = new (require('@prisma/client').Prisma.Decimal)('0.00');
+    let totalAmount = new Prisma.Decimal('0.00');
+    let paidAmount = new Prisma.Decimal('0.00');
+    let outstandingAmount = new Prisma.Decimal('0.00');
     const statusCounts: Record<string, number> = {};
 
     for (const b of bills) {

@@ -481,6 +481,35 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
     }
   };
 
+  // Helper to fetch all pages of a paginated API endpoint to ensure complete datasets for reports
+  const fetchAllPaginated = async <T = any>(baseUrl: string, headers: Record<string, string>): Promise<T[]> => {
+    let page = 1;
+    const pageSize = 50;
+    const allItems: T[] = [];
+
+    while (true) {
+      const separator = baseUrl.includes('?') ? '&' : '?';
+      const url = `${baseUrl}${separator}page=${page}&pageSize=${pageSize}`;
+      const res = await fetch(url, { headers, credentials: 'include' });
+      if (!res.ok) break;
+      const json = await res.json();
+      const items = Array.isArray(json.data) ? json.data : [];
+      allItems.push(...items);
+
+      const total = json.pagination?.total;
+      if (typeof total === 'number') {
+        if (allItems.length >= total || items.length === 0) {
+          break;
+        }
+      } else {
+        break;
+      }
+      page++;
+    }
+
+    return allItems;
+  };
+
   // Load centralized data
   const refreshAllData = async () => {
     if (activeTab === 'register' || onboardingRequired) return;
@@ -492,48 +521,37 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
     }
 
     try {
-      const res = await fetch('/api/v1/properties/rooms', { headers: reqHeaders, credentials: 'include' });
-      if (res.ok) {
-        isApiConnected = true;
-        const data = await res.json();
-        setRooms(data.data || []);
-      } else {
-        setRooms([]);
-      }
+      const loadedRooms = await fetchAllPaginated('/api/v1/properties/rooms', reqHeaders);
+      isApiConnected = true;
+      setRooms(loadedRooms);
     } catch {
       setRooms([]);
     }
 
     try {
-      const bRes = await fetch('/api/v1/properties/buildings', { headers: reqHeaders, credentials: 'include' });
-      if (bRes.ok) {
-        const bData = await bRes.json();
-        setBuildings(bData.data || []);
-      } else {
-        setBuildings([]);
-      }
+      const loadedBuildings = await fetchAllPaginated('/api/v1/properties/buildings', reqHeaders);
+      setBuildings(loadedBuildings);
     } catch {
       setBuildings([]);
     }
 
     if (isApiConnected) {
       try {
-        const [tRes, bRes, cRes, mRes, aRes, bcRes] = await Promise.all([
-          fetch('/api/v1/tenants', { headers: reqHeaders }).then(r => r.ok ? r.json() : null),
-          fetch('/api/v1/bills', { headers: reqHeaders }).then(r => r.ok ? r.json() : null),
-          fetch('/api/v1/contracts', { headers: reqHeaders }).then(r => r.ok ? r.json() : null),
-          fetch('/api/v1/maintenance', { headers: reqHeaders }).then(r => r.ok ? r.json() : null),
-          fetch('/api/v1/announcements', { headers: reqHeaders }).then(r => r.ok ? r.json() : null),
-          fetch('/api/v1/billing-cycles', { headers: reqHeaders }).then(r => r.ok ? r.json() : null),
+        const [loadedTenants, loadedBills, loadedContracts, loadedRepairs, loadedAnnouncements, loadedCycles] = await Promise.all([
+          fetchAllPaginated('/api/v1/tenants', reqHeaders),
+          fetchAllPaginated('/api/v1/bills', reqHeaders),
+          fetchAllPaginated('/api/v1/contracts', reqHeaders),
+          fetchAllPaginated('/api/v1/maintenance', reqHeaders),
+          fetchAllPaginated('/api/v1/announcements', reqHeaders),
+          fetchAllPaginated('/api/v1/billing-cycles', reqHeaders),
         ]);
-        setTenants(tRes?.data || []);
-        setBills(bRes?.data || []);
-        setContracts(cRes?.data || []);
-        setRepairs(mRes?.data || []);
-        setAnnouncements(aRes?.data || []);
+        setTenants(loadedTenants);
+        setBills(loadedBills);
+        setContracts(loadedContracts);
+        setRepairs(loadedRepairs);
+        setAnnouncements(loadedAnnouncements);
         setAuditLogs([]);
 
-        const loadedCycles = bcRes?.data || [];
         setBillingCycles(loadedCycles);
         if (loadedCycles.length > 0) {
           const cycleWithActivity = loadedCycles.find((c: any) =>
@@ -837,7 +855,9 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
             buildings={buildings}
             tenants={tenants}
             contracts={contracts}
-            selectedCycle={selectedCycle}
+            selectedBillingCycleId={selectedBillingCycleId}
+            selectedCycleCode={selectedCycleCode}
+            selectedCycle={selectedCycleCode}
             onNavigate={(tab, param) => {
               setActiveTab(tab);
               if (param) setInitialRoomId(param);

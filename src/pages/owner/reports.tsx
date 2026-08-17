@@ -44,25 +44,15 @@ interface OwnerReportsProps {
   buildings?: Building[];
   tenants?: Tenant[];
   contracts?: Contract[];
-  selectedCycle?: string;
+  selectedBillingCycleId?: string; // Authoritative UUID
+  selectedCycleCode?: string;      // Canonical YYYY-MM
+  selectedCycle?: string;          // Backward compatibility
   onNavigate?: (tab: string, param?: string) => void;
 }
 
 const formatBaht = (val: number | string) => {
   const num = typeof val === 'string' ? parseFloat(val) || 0 : val || 0;
   return `฿ ${num.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-};
-
-const calcOtherFees = (b: any) => {
-  let feeSum = 0;
-  if (typeof b.otherFees === 'number') {
-    feeSum += b.otherFees;
-  } else if (Array.isArray(b.otherFees)) {
-    feeSum += b.otherFees.reduce((s: number, item: any) => s + (Number(item?.amount) || 0), 0);
-  }
-  const othItems = b.items?.filter((i: any) => ['other', 'repair', 'addon', 'cleaning'].includes(i.category || i.type))
-    .reduce((s: number, i: any) => s + (Number(i?.amount) || 0), 0) || 0;
-  return feeSum + othItems;
 };
 
 const CountUp: React.FC<{ value: number; prefix?: string }> = ({ 
@@ -86,6 +76,8 @@ export const OwnerReports: React.FC<OwnerReportsProps> = ({
   buildings = [],
   tenants = [],
   contracts = [],
+  selectedBillingCycleId,
+  selectedCycleCode,
   selectedCycle: propSelectedCycle,
   onNavigate
 }) => {
@@ -93,24 +85,16 @@ export const OwnerReports: React.FC<OwnerReportsProps> = ({
   const currentMonthStr = String(new Date().getMonth() + 1).padStart(2, '0');
   const defaultCurrentCycle = `${currentYearStr}-${currentMonthStr}`;
 
-  const [selectedYear, setSelectedYear] = useState(propSelectedCycle ? propSelectedCycle.split('-')[0] : currentYearStr);
+  const effectiveCycleCode = selectedCycleCode || propSelectedCycle || defaultCurrentCycle;
+  const [selectedYear, setSelectedYear] = useState(effectiveCycleCode ? effectiveCycleCode.split('-')[0] : currentYearStr);
   const [selectedBuilding, setSelectedBuilding] = useState('all');
-  const [selectedCycleState, setSelectedCycleState] = useState<string>(propSelectedCycle || defaultCurrentCycle);
   const [showCsvPopover, setShowCsvPopover] = useState(false);
-
-  const selectedCycle = selectedCycleState || propSelectedCycle || defaultCurrentCycle;
 
   // Month Names Mapping
   const monthNames: Record<string, string> = {
     '01': 'ม.ค.', '02': 'ก.พ.', '03': 'มี.ค.', '04': 'เม.ย.',
     '05': 'พ.ค.', '06': 'มิ.ย.', '07': 'ก.ค.', '08': 'ส.ค.',
     '09': 'ก.ย.', '10': 'ต.ค.', '11': 'พ.ย.', '12': 'ธ.ค.'
-  };
-
-  const fullMonthNames: Record<string, string> = {
-    '01': 'มกราคม', '02': 'กุมภาพันธ์', '03': 'มีนาคม', '04': 'เมษายน',
-    '05': 'พฤษภาคม', '06': 'มิถุนายน', '07': 'กรกฎาคม', '08': 'สิงหาคม',
-    '09': 'กันยายน', '10': 'ตุลาคม', '11': 'พฤศจิกายน', '12': 'ธันวาคม'
   };
 
   // Available building options
@@ -127,10 +111,12 @@ export const OwnerReports: React.FC<OwnerReportsProps> = ({
       tenants,
       contracts,
       selectedBuilding,
-      selectedCycle,
+      selectedBillingCycleId,
+      selectedCycleCode: effectiveCycleCode,
+      selectedCycle: propSelectedCycle,
       selectedYear,
     });
-  }, [rooms, bills, buildings, tenants, contracts, selectedBuilding, selectedCycle, selectedYear]);
+  }, [rooms, bills, buildings, tenants, contracts, selectedBuilding, selectedBillingCycleId, effectiveCycleCode, propSelectedCycle, selectedYear]);
 
   const {
     filteredRooms,
@@ -143,6 +129,14 @@ export const OwnerReports: React.FC<OwnerReportsProps> = ({
     vacantCount,
     reservedCount,
     maintenanceCount,
+    exactFixedRentTotal,
+    exactWaterTotal,
+    exactElectricTotal,
+    exactCommonParkingTotal,
+    exactOtherServiceTotal,
+    exactFineTotal,
+    exactDepositTotal,
+    exactTotalBilledThisMonth,
     fixedRentTotal,
     waterTotal,
     electricTotal,
@@ -162,86 +156,47 @@ export const OwnerReports: React.FC<OwnerReportsProps> = ({
     yearBilledTotal,
     paidBillsRooms,
     unpaidBillsRooms,
+    monthlyRevenueHistory,
+    breakdownPercentages,
   } = reportData;
 
-  // Month-by-month historical data for AreaChart
-  const revenueHistory = useMemo(() => {
-    const defaultMonths = ['01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11', '12'];
-    const monthlyDataMap: Record<string, { rent: number; water: number; elec: number; other: number; total: number }> = {};
+  const {
+    rentPct,
+    elecPct,
+    waterPct,
+    commonParkingPct: commonPct,
+    otherPct,
+    finePct,
+    depositPct,
+  } = breakdownPercentages;
 
-    defaultMonths.forEach(m => {
-      const cKey = `${selectedYear}-${m}`;
-      monthlyDataMap[cKey] = { rent: 0, water: 0, elec: 0, other: 0, total: 0 };
-    });
-
-    filteredBills.forEach(b => {
-      if (b.cycleId && b.cycleId.startsWith(selectedYear)) {
-        if (!monthlyDataMap[b.cycleId]) {
-          monthlyDataMap[b.cycleId] = { rent: 0, water: 0, elec: 0, other: 0, total: 0 };
-        }
-        const rentItem = b.items?.find(i => i.category === 'rent' || i.description?.includes('ค่าเช่า'));
-        const rentVal = rentItem ? rentItem.amount : ((b as any).rentAmount || 0);
-
-        const wItem = b.items?.find(i => i.category === 'water' || i.description?.includes('ค่าน้ำ'));
-        const waterVal = wItem ? wItem.amount : ((b as any).waterAmount || 0);
-
-        const elItem = b.items?.find(i => i.category === 'electricity' || i.category === 'electric' || i.description?.includes('ค่าไฟ'));
-        const elecVal = elItem ? elItem.amount : ((b as any).electricAmount || 0);
-
-        const pkItem = b.items?.find(i => i.category === 'parking');
-        const parkingVal = pkItem ? pkItem.amount : ((b as any).parkingFee || 0);
-
-        const otherVal = parkingVal + ((b as any).internetFee || 0) + ((b as any).commonFee || 0) + calcOtherFees(b);
-
-        monthlyDataMap[b.cycleId].rent += rentVal;
-        monthlyDataMap[b.cycleId].water += waterVal;
-        monthlyDataMap[b.cycleId].elec += elecVal;
-        monthlyDataMap[b.cycleId].other += otherVal;
-        monthlyDataMap[b.cycleId].total += (b.totalAmount || (rentVal + waterVal + elecVal + otherVal));
-      }
-    });
-
-    return Object.keys(monthlyDataMap).sort().map(cKey => {
-      const mStr = cKey.split('-')[1] || '01';
-      const name = monthNames[mStr] || cKey;
-      const data = monthlyDataMap[cKey];
-      return {
-        cycleId: cKey,
-        name,
-        rent: data.rent,
-        water: data.water,
-        elec: data.elec,
-        other: data.other,
-        total: data.total
-      };
-    });
-  }, [filteredBills, selectedYear]);
+  const revenueHistory = monthlyRevenueHistory;
 
   // Export CSV Function (Mode: 'monthly' | 'yearly')
   const handleExportCSVMode = (mode: 'monthly' | 'yearly') => {
     setShowCsvPopover(false);
     const bObj = buildingOptions.find(b => b.id === selectedBuilding);
     const bName = selectedBuilding === 'all' ? 'ทุกตึก' : (bObj?.name || selectedBuilding);
-    const currentMonthNum = selectedCycle.split('-')[1] || '07';
+    const currentMonthNum = effectiveCycleCode.split('-')[1] || '07';
     const monthLabel = `${monthNames[currentMonthNum]} ${parseInt(selectedYear) + 543}`;
     const yearLabel = `${parseInt(selectedYear) + 543}`;
 
     let csv = `\uFEFFรายงานสรุปการเงินและสถิติหอพัก (${bName})\n`;
     
     if (mode === 'monthly') {
-      csv += `ประเภทรายงาน: ประจำเดือน ${monthLabel} (รอบ ${selectedCycle})\n`;
+      csv += `ประเภทรายงาน: ประจำเดือน ${monthLabel} (รอบ ${effectiveCycleCode})\n`;
       csv += `พิมพ์เมื่อวันที่: ${new Date().toLocaleString('th-TH')}\n\n`;
       csv += `ประเภทรายรับ,จำนวนเงิน (บาท)\n`;
-      csv += `"ค่าเช่าห้องพัก",${fixedRentTotal}\n`;
-      csv += `"ค่าไฟฟ้า",${electricTotal}\n`;
-      csv += `"ค่าน้ำประปา",${waterTotal}\n`;
-      csv += `"ส่วนกลาง / เน็ต / ที่จอด",${commonParkingTotal}\n`;
-      csv += `"ค่าบริการอื่นๆ",${otherServiceTotal}\n`;
-      csv += `"ค่าปรับชำระเกินกำหนด",${fineTotal}\n`;
-      csv += `"ค่าประกัน / มัดจำ",${depositTotal}\n`;
-      csv += `"รวมยอดจัดเก็บทั้งหมด",${totalBilledThisMonth}\n\n`;
+      csv += `"ค่าเช่าห้องพัก",${exactFixedRentTotal}\n`;
+      csv += `"ค่าไฟฟ้า",${exactElectricTotal}\n`;
+      csv += `"ค่าน้ำประปา",${exactWaterTotal}\n`;
+      csv += `"ส่วนกลาง / เน็ต / ที่จอด",${exactCommonParkingTotal}\n`;
+      csv += `"ค่าบริการอื่นๆ",${exactOtherServiceTotal}\n`;
+      csv += `"ค่าปรับชำระเกินกำหนด",${exactFineTotal}\n`;
+      csv += `"ค่าประกัน / มัดจำ",${exactDepositTotal}\n`;
+      csv += `"รวมยอดจัดเก็บทั้งหมด",${exactTotalBilledThisMonth}\n\n`;
 
-      csv += `สถานะการชำระเงินประจำเดือน (${selectedCycle}):\n`;
+      csv += `สถานะการชำระเงินประจำเดือน (${effectiveCycleCode}):\n`;
       csv += `เลขห้อง,สถานะ,ยอดเงินชำระ (บาท)\n`;
       currentMonthBills.forEach(b => {
         const rm = rooms.find(r => r.id === b.roomId);
@@ -252,8 +207,8 @@ export const OwnerReports: React.FC<OwnerReportsProps> = ({
       csv += `พิมพ์เมื่อวันที่: ${new Date().toLocaleString('th-TH')}\n\n`;
       csv += `เดือน,ค่าเช่าห้อง (บาท),ค่าน้ำประปา (บาท),ค่าไฟฟ้า (บาท),อื่นๆ/ส่วนกลาง (บาท),รวมจัดเก็บ (บาท)\n`;
 
-      revenueHistory.forEach(r => {
-        csv += `"${r.name}",${r.rent},${r.water},${r.elec},${r.other},${r.total}\n`;
+      monthlyRevenueHistory.forEach(r => {
+        csv += `"${r.name}",${r.exactRent},${r.exactWater},${r.exactElec},${r.exactOther},${r.exactTotal}\n`;
       });
     }
 
@@ -262,7 +217,7 @@ export const OwnerReports: React.FC<OwnerReportsProps> = ({
     const link = document.createElement('a');
     link.href = url;
     const fileName = mode === 'monthly'
-      ? `HorPlus_Report_Monthly_${selectedCycle}_${selectedBuilding}.csv`
+      ? `HorPlus_Report_Monthly_${effectiveCycleCode}_${selectedBuilding}.csv`
       : `HorPlus_Report_Yearly_${selectedYear}_${selectedBuilding}.csv`;
     link.setAttribute('download', fileName);
     document.body.appendChild(link);
@@ -270,19 +225,9 @@ export const OwnerReports: React.FC<OwnerReportsProps> = ({
     document.body.removeChild(link);
   };
 
-  // Category Percentages for Monthly Expense Breakdown
-  const totalBreakdownBase = totalBilledThisMonth + depositTotal || 1;
-  const rentPct = ((fixedRentTotal / totalBreakdownBase) * 100).toFixed(1);
-  const elecPct = ((electricTotal / totalBreakdownBase) * 100).toFixed(1);
-  const waterPct = ((waterTotal / totalBreakdownBase) * 100).toFixed(1);
-  const commonPct = ((commonParkingTotal / totalBreakdownBase) * 100).toFixed(1);
-  const otherPct = ((otherServiceTotal / totalBreakdownBase) * 100).toFixed(1);
-  const finePct = ((fineTotal / totalBreakdownBase) * 100).toFixed(1);
-  const depositPct = ((depositTotal / totalBreakdownBase) * 100).toFixed(1);
-
-  const selectedCycleMonthNum = selectedCycle.split('-')[1] || '07';
+  const selectedCycleMonthNum = effectiveCycleCode.split('-')[1] || '07';
   const displayMonthTh = monthNames[selectedCycleMonthNum] || 'ก.ค.';
-  const displayYearTh = (parseInt(selectedCycle.split('-')[0] || selectedYear) + 543).toString();
+  const displayYearTh = (parseInt(effectiveCycleCode.split('-')[0] || selectedYear) + 543).toString();
 
   return (
     <div className="space-y-6">
@@ -356,7 +301,7 @@ export const OwnerReports: React.FC<OwnerReportsProps> = ({
                       ประจำเดือน {displayMonthTh} {displayYearTh}
                     </p>
                     <p className="text-[10px] text-slate-400 font-medium">
-                      (ข้อมูลงวด {selectedCycle} ของอาคารที่เลือก)
+                      (ข้อมูลงวด {effectiveCycleCode} ของอาคารที่เลือก)
                     </p>
                   </button>
 

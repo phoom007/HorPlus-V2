@@ -66,8 +66,41 @@ export interface ReportCalculationParams {
   tenants?: any[];
   contracts?: any[];
   selectedBuilding?: string;
-  selectedCycle?: string;
+  selectedBillingCycleId?: string; // Authoritative UUID from /api/v1/billing-cycles
+  selectedCycleCode?: string;      // Canonical YYYY-MM code (e.g. "2026-08")
+  selectedCycle?: string;          // Backward compatibility (UUID or YYYY-MM)
   selectedYear?: string;
+}
+
+export interface MonthlyRevenueHistoryItem {
+  cycleId: string;    // "2026-01"
+  monthKey: string;   // "01"
+  name: string;       // "ม.ค."
+  fullName: string;   // "มกราคม"
+  exactRent: string;
+  exactWater: string;
+  exactElec: string;
+  exactCommonParking: string;
+  exactOther: string;
+  exactFine: string;
+  exactTotal: string;
+  rent: number;
+  water: number;
+  elec: number;
+  commonParking: number;
+  other: number;
+  fine: number;
+  total: number;
+}
+
+export interface BreakdownPercentages {
+  rentPct: number;
+  waterPct: number;
+  elecPct: number;
+  commonParkingPct: number;
+  otherPct: number;
+  finePct: number;
+  depositPct: number;
 }
 
 export interface ReportCalculationResult {
@@ -118,6 +151,10 @@ export interface ReportCalculationResult {
   arpu: number;
   yearBilledTotal: number;
 
+  // Month-by-month historical data for charts & CSV exports
+  monthlyRevenueHistory: MonthlyRevenueHistoryItem[];
+  breakdownPercentages: BreakdownPercentages;
+
   // Filtered Collections
   filteredRooms: any[];
   filteredBills: any[];
@@ -128,14 +165,33 @@ export interface ReportCalculationResult {
   unpaidBillsRooms: { roomNumber: string; roomId: string; amount: number; exactAmount: string }[];
 }
 
+const THAI_MONTH_ABBR: Record<string, string> = {
+  '01': 'ม.ค.', '02': 'ก.พ.', '03': 'มี.ค.', '04': 'เม.ย.',
+  '05': 'พ.ค.', '06': 'มิ.ย.', '07': 'ก.ค.', '08': 'ส.ค.',
+  '09': 'ก.ย.', '10': 'ต.ค.', '11': 'พ.ย.', '12': 'ธ.ค.'
+};
+
+const THAI_MONTH_FULL: Record<string, string> = {
+  '01': 'มกราคม', '02': 'กุมภาพันธ์', '03': 'มีนาคม', '04': 'เมษายน',
+  '05': 'พฤษภาคม', '06': 'มิถุนายน', '07': 'กรกฎาคม', '08': 'สิงหาคม',
+  '09': 'กันยายน', '10': 'ตุลาคม', '11': 'พฤศจิกายน', '12': 'ธันวาคม'
+};
+
 export function calculateOwnerReports(params: ReportCalculationParams): ReportCalculationResult {
   const rooms = params.rooms || [];
   const bills = params.bills || [];
   const contracts = params.contracts || [];
   const selectedBuilding = params.selectedBuilding || 'all';
-  const selectedCycle = params.selectedCycle || '';
   const currentYearStr = new Date().getFullYear().toString();
-  const selectedYear = params.selectedYear || (selectedCycle ? selectedCycle.split('-')[0] : currentYearStr);
+
+  // Authoritative cycle resolution
+  const selectedBillingCycleId = params.selectedBillingCycleId || '';
+  const selectedCycleCode = params.selectedCycleCode || '';
+  const selectedCycle = params.selectedCycle || '';
+
+  const selectedYear = params.selectedYear ||
+    (selectedCycleCode ? selectedCycleCode.split('-')[0] :
+    (selectedCycle && selectedCycle.length === 7 && selectedCycle.includes('-') ? selectedCycle.split('-')[0] : currentYearStr));
 
   // 1. Filtered rooms by selected building
   const filteredRooms = selectedBuilding === 'all'
@@ -149,10 +205,25 @@ export function calculateOwnerReports(params: ReportCalculationParams): ReportCa
     ? bills
     : bills.filter(b => filteredRoomIds.has(b.roomId));
 
-  // 3. Current Month Bills — matches cycleId or billingCycleId
-  const currentMonthBills = selectedCycle
-    ? filteredBills.filter(b => b.cycleId === selectedCycle || b.billingCycleId === selectedCycle)
-    : filteredBills;
+  // 3. Current Month Bills — matches selectedBillingCycleId (authoritative UUID) or cycleCode/cycleId
+  let currentMonthBills: any[];
+  if (selectedBillingCycleId) {
+    currentMonthBills = filteredBills.filter(b => b.billingCycleId === selectedBillingCycleId);
+  } else if (selectedCycleCode) {
+    currentMonthBills = filteredBills.filter(b =>
+      b.cycleCode === selectedCycleCode ||
+      b.cycleId === selectedCycleCode ||
+      b.billingCycleId === selectedCycleCode
+    );
+  } else if (selectedCycle) {
+    currentMonthBills = filteredBills.filter(b =>
+      b.billingCycleId === selectedCycle ||
+      b.cycleId === selectedCycle ||
+      b.cycleCode === selectedCycle
+    );
+  } else {
+    currentMonthBills = filteredBills;
+  }
 
   const paidBills = currentMonthBills.filter(b => b.status === 'paid');
   const unpaidBills = currentMonthBills.filter(b => b.status !== 'paid');
@@ -164,45 +235,38 @@ export function calculateOwnerReports(params: ReportCalculationParams): ReportCa
   const reservedCount = filteredRooms.filter(r => r.status === 'reserved').length;
   const maintenanceCount = filteredRooms.filter(r => r.status === 'maintenance').length;
 
-  // 5. Authoritative Exact-Satang Aggregations
-  // 5.1 Fixed Rent
-  const fixedRentSatangs: bigint = currentMonthBills.reduce((sum: bigint, b: any): bigint => {
-    const rentItem = b.items?.find((i: any) => i.category === 'rent' || i.type === 'rent');
-    return sum + (rentItem ? toSatangs(rentItem.amount) : toSatangs(b.rentAmount || 0));
-  }, 0n);
+  // 5. Helper function to extract exact satangs per bill item category
+  const getBillRentSatangs = (b: any): bigint => {
+    const rentItem = b.items?.find((i: any) => i.category === 'rent' || i.type === 'rent' || i.description?.includes('ค่าเช่า'));
+    return rentItem ? toSatangs(rentItem.amount) : toSatangs(b.rentAmount || 0);
+  };
 
-  // 5.2 Water
-  const waterSatangs: bigint = currentMonthBills.reduce((sum: bigint, b: any): bigint => {
-    const wItem = b.items?.find((i: any) => i.category === 'water' || i.type === 'water');
-    return sum + (wItem ? toSatangs(wItem.amount) : toSatangs(b.waterAmount || 0));
-  }, 0n);
+  const getBillWaterSatangs = (b: any): bigint => {
+    const wItem = b.items?.find((i: any) => i.category === 'water' || i.type === 'water' || i.description?.includes('ค่าน้ำ'));
+    return wItem ? toSatangs(wItem.amount) : toSatangs(b.waterAmount || 0);
+  };
 
-  // 5.3 Electricity
-  const electricSatangs: bigint = currentMonthBills.reduce((sum: bigint, b: any): bigint => {
-    const elItem = b.items?.find((i: any) => i.category === 'electricity' || i.type === 'electricity');
-    return sum + (elItem ? toSatangs(elItem.amount) : toSatangs(b.electricAmount || 0));
-  }, 0n);
+  const getBillElectricSatangs = (b: any): bigint => {
+    const elItem = b.items?.find((i: any) => i.category === 'electricity' || i.category === 'electric' || i.type === 'electricity' || i.description?.includes('ค่าไฟ'));
+    return elItem ? toSatangs(elItem.amount) : toSatangs(b.electricAmount || 0);
+  };
 
-  // 5.4 Common, Internet, Parking
-  const commonSatangs: bigint = currentMonthBills.reduce((sum: bigint, b: any): bigint => {
+  const getBillCommonSatangs = (b: any): bigint => {
     const commonItem = b.items?.find((i: any) => ['common_fee', 'common'].includes(i.category || i.type));
-    return sum + (commonItem ? toSatangs(commonItem.amount) : toSatangs(b.commonFee || 0));
-  }, 0n);
+    return commonItem ? toSatangs(commonItem.amount) : toSatangs(b.commonFee || 0);
+  };
 
-  const internetSatangs: bigint = currentMonthBills.reduce((sum: bigint, b: any): bigint => {
+  const getBillInternetSatangs = (b: any): bigint => {
     const internetItem = b.items?.find((i: any) => ['internet_fee', 'internet'].includes(i.category || i.type));
-    return sum + (internetItem ? toSatangs(internetItem.amount) : toSatangs(b.internetFee || 0));
-  }, 0n);
+    return internetItem ? toSatangs(internetItem.amount) : toSatangs(b.internetFee || 0);
+  };
 
-  const parkingSatangs: bigint = currentMonthBills.reduce((sum: bigint, b: any): bigint => {
+  const getBillParkingSatangs = (b: any): bigint => {
     const pkItem = b.items?.find((i: any) => i.category === 'parking' || i.type === 'parking');
-    return sum + (pkItem ? toSatangs(pkItem.amount) : toSatangs(b.parkingFee || 0));
-  }, 0n);
+    return pkItem ? toSatangs(pkItem.amount) : toSatangs(b.parkingFee || 0);
+  };
 
-  const commonParkingSatangs: bigint = commonSatangs + internetSatangs + parkingSatangs;
-
-  // 5.5 Other Services
-  const calcOtherFeesSatangs = (b: any): bigint => {
+  const getBillOtherServiceSatangs = (b: any): bigint => {
     let feeSum = 0n;
     if (typeof b.otherFees === 'number' || typeof b.otherFees === 'string') {
       feeSum += toSatangs(b.otherFees);
@@ -216,18 +280,26 @@ export function calculateOwnerReports(params: ReportCalculationParams): ReportCa
     return feeSum + othItems;
   };
 
-  const otherServiceSatangs: bigint = currentMonthBills.reduce((sum: bigint, b: any): bigint => sum + calcOtherFeesSatangs(b), 0n);
-
-  // 5.6 Fines
-  const fineSatangs: bigint = currentMonthBills.reduce((sum: bigint, b: any): bigint => {
+  const getBillFineSatangs = (b: any): bigint => {
     const fineItems: bigint = Array.isArray(b.items)
       ? b.items.filter((i: any) => i?.category === 'fine' || i?.type === 'fine')
           .reduce((s: bigint, i: any): bigint => s + toSatangs(i?.amount), 0n)
       : 0n;
-    return sum + fineItems + toSatangs(b.fineAmount || 0);
-  }, 0n);
+    return fineItems + toSatangs(b.fineAmount || 0);
+  };
 
-  // 5.7 Deposits
+  // 6. Current Month Authoritative Exact-Satang Aggregations
+  const fixedRentSatangs: bigint = currentMonthBills.reduce((sum: bigint, b: any) => sum + getBillRentSatangs(b), 0n);
+  const waterSatangs: bigint = currentMonthBills.reduce((sum: bigint, b: any) => sum + getBillWaterSatangs(b), 0n);
+  const electricSatangs: bigint = currentMonthBills.reduce((sum: bigint, b: any) => sum + getBillElectricSatangs(b), 0n);
+  const commonSatangs: bigint = currentMonthBills.reduce((sum: bigint, b: any) => sum + getBillCommonSatangs(b), 0n);
+  const internetSatangs: bigint = currentMonthBills.reduce((sum: bigint, b: any) => sum + getBillInternetSatangs(b), 0n);
+  const parkingSatangs: bigint = currentMonthBills.reduce((sum: bigint, b: any) => sum + getBillParkingSatangs(b), 0n);
+  const commonParkingSatangs: bigint = commonSatangs + internetSatangs + parkingSatangs;
+  const otherServiceSatangs: bigint = currentMonthBills.reduce((sum: bigint, b: any) => sum + getBillOtherServiceSatangs(b), 0n);
+  const fineSatangs: bigint = currentMonthBills.reduce((sum: bigint, b: any) => sum + getBillFineSatangs(b), 0n);
+
+  // Deposits
   const contractDepositSatangs: bigint = contracts
     .filter(c => c.status === 'active' || c.status === 'pending_signature')
     .reduce((sum: bigint, c: any): bigint => sum + toSatangs(c.depositAmount || 0), 0n);
@@ -238,7 +310,7 @@ export function calculateOwnerReports(params: ReportCalculationParams): ReportCa
 
   const depositSatangs: bigint = contractDepositSatangs > 0n ? contractDepositSatangs : roomDepositSatangs;
 
-  // 5.8 Authoritative Total Billed, Revenue, Unpaid
+  // Authoritative Total Billed, Revenue, Unpaid
   const sumBillsTotalSatangs: bigint = currentMonthBills.reduce((sum: bigint, b: any): bigint => sum + toSatangs(b.totalAmount), 0n);
   const sumCategoriesTotalSatangs: bigint = fixedRentSatangs + waterSatangs + electricSatangs + commonParkingSatangs + otherServiceSatangs + fineSatangs;
   const totalBilledSatangs: bigint = sumBillsTotalSatangs > 0n ? sumBillsTotalSatangs : sumCategoriesTotalSatangs;
@@ -246,18 +318,90 @@ export function calculateOwnerReports(params: ReportCalculationParams): ReportCa
   const totalRevenueSatangs: bigint = paidBills.reduce((sum: bigint, b: any): bigint => sum + toSatangs(b.paidAmount || b.totalAmount), 0n);
   const totalUnpaidSatangs: bigint = totalBilledSatangs - totalRevenueSatangs;
 
-  // 5.9 Overdue Total
+  // Overdue Total
   const totalOverdueSatangs: bigint = filteredBills
     .filter(b => b.status === 'overdue')
     .reduce((sum: bigint, b: any): bigint => sum + toSatangs(b.totalAmount), 0n);
 
-  // 5.10 Year Total
-  const yearBilledSatangs: bigint = filteredBills
-    .filter(b => (b.cycleId && b.cycleId.startsWith(selectedYear)) || (b.cycleCode && b.cycleCode.startsWith(selectedYear)))
-    .reduce((sum: bigint, b: any): bigint => sum + toSatangs(b.totalAmount), 0n);
+  // 7. Month-by-Month Historical Revenue (01 to 12) for Charts & Yearly CSV
+  const defaultMonths = ['01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11', '12'];
+  const monthlyRevenueHistory: MonthlyRevenueHistoryItem[] = defaultMonths.map(m => {
+    const cycleKey = `${selectedYear}-${m}`;
+    const monthBills = filteredBills.filter(b => {
+      if (b.cycleCode === cycleKey || b.cycleId === cycleKey) return true;
+      if (b.billingCycle?.cycleCode === cycleKey) return true;
+      if (b.billingDate) {
+        const dStr = typeof b.billingDate === 'string' ? b.billingDate : b.billingDate.toISOString?.();
+        if (dStr && dStr.startsWith(cycleKey)) return true;
+      }
+      return false;
+    });
 
-  // 5.11 ARPU
+    const mRentSat = monthBills.reduce((s: bigint, b: any) => s + getBillRentSatangs(b), 0n);
+    const mWaterSat = monthBills.reduce((s: bigint, b: any) => s + getBillWaterSatangs(b), 0n);
+    const mElecSat = monthBills.reduce((s: bigint, b: any) => s + getBillElectricSatangs(b), 0n);
+    const mCommonSat = monthBills.reduce((s: bigint, b: any) => s + getBillCommonSatangs(b), 0n);
+    const mInternetSat = monthBills.reduce((s: bigint, b: any) => s + getBillInternetSatangs(b), 0n);
+    const mParkingSat = monthBills.reduce((s: bigint, b: any) => s + getBillParkingSatangs(b), 0n);
+    const mCommonParkingSat = mCommonSat + mInternetSat + mParkingSat;
+    const mOtherSat = monthBills.reduce((s: bigint, b: any) => s + getBillOtherServiceSatangs(b), 0n);
+    const mFineSat = monthBills.reduce((s: bigint, b: any) => s + getBillFineSatangs(b), 0n);
+
+    const mSumBillsSat = monthBills.reduce((s: bigint, b: any) => s + toSatangs(b.totalAmount), 0n);
+    const mSumCatSat = mRentSat + mWaterSat + mElecSat + mCommonParkingSat + mOtherSat + mFineSat;
+    const mTotalSat = mSumBillsSat > 0n ? mSumBillsSat : mSumCatSat;
+
+    // Combined other for chart: common/parking + other + fine
+    const mChartOtherSat = mCommonParkingSat + mOtherSat + mFineSat;
+
+    return {
+      cycleId: cycleKey,
+      monthKey: m,
+      name: THAI_MONTH_ABBR[m] || m,
+      fullName: THAI_MONTH_FULL[m] || m,
+      exactRent: satangsToString(mRentSat),
+      exactWater: satangsToString(mWaterSat),
+      exactElec: satangsToString(mElecSat),
+      exactCommonParking: satangsToString(mCommonParkingSat),
+      exactOther: satangsToString(mChartOtherSat),
+      exactFine: satangsToString(mFineSat),
+      exactTotal: satangsToString(mTotalSat),
+      rent: satangsToNumber(mRentSat),
+      water: satangsToNumber(mWaterSat),
+      elec: satangsToNumber(mElecSat),
+      commonParking: satangsToNumber(mCommonParkingSat),
+      other: satangsToNumber(mChartOtherSat),
+      fine: satangsToNumber(mFineSat),
+      total: satangsToNumber(mTotalSat),
+    };
+  });
+
+  // Year Total is sum of exact satangs from all months in selectedYear
+  const yearBilledSatangs: bigint = monthlyRevenueHistory.reduce(
+    (sum: bigint, m) => sum + toSatangs(m.exactTotal),
+    0n
+  );
+
+  // ARPU
   const arpuSatangs: bigint = occupiedCount > 0 ? (totalBilledSatangs / BigInt(occupiedCount)) : 0n;
+
+  // Breakdown Percentages
+  const totalBreakdownSatangs = totalBilledSatangs + depositSatangs;
+  const calcPct = (catSatangs: bigint): number => {
+    if (totalBreakdownSatangs <= 0n) return 0;
+    const tenths = Number((catSatangs * 1000n) / totalBreakdownSatangs);
+    return tenths / 10;
+  };
+
+  const breakdownPercentages: BreakdownPercentages = {
+    rentPct: calcPct(fixedRentSatangs),
+    waterPct: calcPct(waterSatangs),
+    elecPct: calcPct(electricSatangs),
+    commonParkingPct: calcPct(commonParkingSatangs),
+    otherPct: calcPct(otherServiceSatangs),
+    finePct: calcPct(fineSatangs),
+    depositPct: calcPct(depositSatangs),
+  };
 
   // Percentages
   const paidPercent = totalBilledSatangs > 0n ? Number((totalRevenueSatangs * 100n) / totalBilledSatangs) : 0;
@@ -334,6 +478,9 @@ export function calculateOwnerReports(params: ReportCalculationParams): ReportCa
     unpaidPercent,
     arpu: satangsToNumber(arpuSatangs),
     yearBilledTotal: satangsToNumber(yearBilledSatangs),
+
+    monthlyRevenueHistory,
+    breakdownPercentages,
 
     filteredRooms,
     filteredBills,
