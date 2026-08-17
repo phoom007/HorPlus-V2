@@ -67,6 +67,7 @@ async function runBrowserUAT() {
     step2_untouched_max_installments_2: false,
     step3_field_specific_monetary_defaults: false,
     step4_late_fee_default_none: false,
+    step4_due_day_unselected_and_required: false,
     step4_single_helper_button: false,
     step4_promptpay_copies_bank_name: false,
     step4_independent_promptpay_name: false,
@@ -328,6 +329,11 @@ async function runBrowserUAT() {
       console.log('  Filled Building Security Deposit: 5000');
     }
 
+    // Verify Due Date Select starts EMPTY / UNSELECTED (Product Owner Policy: No Default Due Day)
+    const dueDateSelect = page.locator('[data-testid="due-date-select"]').first();
+    const initialDueDayVal = await dueDateSelect.inputValue();
+    console.log(`  Step 4 Due Date initial value: "${initialDueDayVal}" (Expected: "")`);
+
     // Select bank in Step 4
     const bankSelect = page.locator('select').filter({ hasText: 'เลือกธนาคาร' }).first();
     if (await bankSelect.isVisible()) {
@@ -404,9 +410,25 @@ async function runBrowserUAT() {
     }
     await page.screenshot({ path: path.join(SCREENSHOTS_DIR, '04-step4-payments-filled.png') });
 
+    // Test advancing WITHOUT choosing Due Date -> must be blocked
+    const nextBtn4 = page.locator('button:has-text("ถัดไป")').first();
+    await nextBtn4.click();
+    await page.waitForTimeout(400);
+    const dueDateValidationErr = await page.locator('.text-rose-700, .bg-rose-50, :text("วันครบกำหนดชำระ")').first().isVisible().catch(() => false);
+    console.log(`  Step 4 advancement blocked on missing Due Date: ${dueDateValidationErr ? '✅ BLOCKED' : '❌ NOT BLOCKED'}`);
+
+    // Now select valid due day 10
+    await dueDateSelect.selectOption('10');
+    await page.waitForTimeout(200);
+    const selectedDueDayVal = await dueDateSelect.inputValue();
+    console.log(`  Step 4 selected Due Date value: "${selectedDueDayVal}" (Expected: "10")`);
+
+    if (initialDueDayVal === '' && dueDateValidationErr && selectedDueDayVal === '10') {
+      uatResults.step4_due_day_unselected_and_required = true;
+    }
+
     // Advance to Step 5: กฎระเบียบ สัตว์เลี้ยง และลายเซ็น
     console.log('\n--- TEST 4: Step 5 — Pet Policy Default, Rules & Canvas Signature ---');
-    const nextBtn4 = page.locator('button:has-text("ถัดไป")').first();
     await nextBtn4.click();
     await page.waitForTimeout(600);
     console.log('  Header after Step 4 Next:', (await page.locator('h3').first().textContent().catch(() => ''))?.trim());
@@ -682,12 +704,15 @@ async function runBrowserUAT() {
     console.log(`  Package Intent isZeroPayValidated: ${packageIntents[0]?.isZeroPayValidated} (Expected: true)`);
 
     const isDeposit5000 = Number(building1?.depositAmount) === 5000;
+    const isDueDay10 = billing?.dueDay === 10;
+    console.log(`  PostgreSQL Billing Settings dueDay: ${billing?.dueDay} (Expected: 10)`);
 
     const isPgValid = activeDorm &&
       activeDorm.phone === null &&
       activeDorm.email === null &&
       building1?.maxTermRentInstallments === 2 &&
       isDeposit5000 &&
+      isDueDay10 &&
       billing?.promptPayAccountName === 'นายพร้อมเพย์ อิสระ UAT' &&
       signature?.isCurrent === true &&
       defaults?.defaultTerms !== null &&
@@ -744,10 +769,12 @@ async function runBrowserUAT() {
 
     const isF5PgDataIntact = freshDormInPg &&
       Number(freshDormInPg.buildings[0]?.depositAmount) === 5000 &&
+      freshDormInPg.billingSettings?.dueDay === 10 &&
       (freshDormInPg.dormitorySubscription?.plan?.code === 'PRO' || freshDormInPg.dormitorySubscription?.plan?.code === 'PAID') &&
       (freshDormInPg.dormitorySubscription?.status === 'ACTIVE' || freshDormInPg.dormitorySubscription?.status === 'TRIAL');
 
     console.log(`  PostgreSQL Building Deposit after F5: ${freshDormInPg?.buildings[0]?.depositAmount} (Expected: 5000)`);
+    console.log(`  PostgreSQL Billing Settings dueDay after F5: ${freshDormInPg?.billingSettings?.dueDay} (Expected: 10)`);
     console.log(`  PostgreSQL Subscription Plan after F5: ${freshDormInPg?.dormitorySubscription?.plan?.code} (Expected: PRO / PAID)`);
     console.log(`  PostgreSQL Subscription Status after F5: ${freshDormInPg?.dormitorySubscription?.status} (Expected: TRIAL or ACTIVE)`);
 
@@ -1092,6 +1119,7 @@ async function runBrowserUAT() {
     'step2_untouched_max_installments_2',
     'step3_field_specific_monetary_defaults',
     'step4_late_fee_default_none',
+    'step4_due_day_unselected_and_required',
     'step4_single_helper_button',
     'step4_promptpay_copies_bank_name',
     'step4_independent_promptpay_name',

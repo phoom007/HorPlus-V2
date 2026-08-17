@@ -133,7 +133,7 @@ model DormitoryBillingSettings {
   id                     String   @id @default(uuid()) @db.Uuid
   dormitoryId            String   @unique @map("dormitory_id") @db.Uuid
   billingDay             Int      @default(25) @map("billing_day")
-  dueDay                 Int      @default(5) @map("due_day")
+  dueDay                 Int      @map("due_day")
   waterBillingType       String   @default("per_person") @map("water_billing_type") @db.VarChar(50)
   waterRate              Decimal  @default(0.00) @map("water_rate") @db.Decimal(12, 2)
   electricityBillingType String   @default("per_unit") @map("electricity_billing_type") @db.VarChar(50)

@@ -4382,10 +4382,11 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
         },
       });
 
-      // Insert minimal row relying entirely on PostgreSQL column defaults
+      // Insert minimal row relying entirely on PostgreSQL column defaults with explicit required dueDay
       const settings = await prisma.dormitoryBillingSettings.create({
         data: {
           dormitoryId: dorm.id,
+          dueDay: 10,
         },
       });
 
@@ -4395,6 +4396,7 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
       });
 
       expect(dbRow).toBeDefined();
+      expect(dbRow?.dueDay).toBe(10);
       expect(dbRow?.waterBillingType).toBe('per_person');
       expect(new Prisma.Decimal(dbRow!.waterRate).toFixed(2)).toBe('0.00');
       expect(dbRow?.electricityBillingType).toBe('per_unit');
@@ -4453,4 +4455,305 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
       expect(violatingFiles).toEqual([]);
     });
   });
+
+  describe('29. Due Day Authority, Missing Settings Fail-Closed, & Rate Snapshot Immutability', () => {
+    let testApp: express.Express;
+
+    beforeAll(async () => {
+      testApp = createApp();
+    });
+
+    it('proves HTTP onboarding rejects missing dueDay (fail closed) and persists explicit dueDay=10', async () => {
+      const timestamp = Date.now();
+      const testOwnerUser = await prisma.user.create({
+        data: {
+          email: `onboard-duetest-${timestamp}@example.com`,
+          emailNormalized: `onboard-duetest-${timestamp}@example.com`,
+          name: 'Owner DueDay Tester',
+          phone: `08${Math.floor(10000000 + Math.random() * 90000000)}`,
+          googleSubject: `google-sub-${timestamp}`,
+        },
+      });
+
+      const provisioningService = new DormitoryProvisioningService(prisma);
+      const prov = await provisioningService.prepareProvisionalDormitory(testOwnerUser.id, {
+        name: `หอพัก Due Validation Test ${timestamp}`,
+      });
+
+      // Signature in DB for provisional dorm
+      await prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${prov.provisionalDormitoryId}, true)`;
+        await tx.ownerSignature.create({
+          data: {
+            dormitoryId: prov.provisionalDormitoryId,
+            signedByUserId: testOwnerUser.id,
+            objectKey: 'signatures/due-test-sig.png',
+            sha256: 'hash-due-test-sig',
+            byteSize: 1024,
+            isCurrent: true,
+          },
+        });
+      });
+
+      const quote = await subscriptionIntentService.createIntentQuote(testOwnerUser.id, {
+        isFreePlan: true,
+      }, undefined, prov.provisionalDormitoryId);
+
+      const authSession = await createTestAuthSession(testOwnerUser.id);
+
+      const basePayload = {
+        provisionalDormitoryId: prov.provisionalDormitoryId,
+        packageIntentId: quote.intentId,
+        planCode: 'FREE',
+        dormitory: {
+          name: `หอพัก Due Validation Test ${timestamp}`,
+          type: 'apartment',
+          genderPolicy: 'รวม',
+          estimatedBuildingCount: 1,
+          estimatedRoomCount: 5,
+        },
+        buildings: [
+          {
+            id: 'bld-due-alpha',
+            name: 'อาคาร Due Alpha',
+            floorsCount: 2,
+            monthlyRent: 4500,
+            depositAmount: 5000,
+            securityDeposit: 5000,
+            termMonths: 4,
+            maxInstallmentMonths: 2,
+          },
+        ],
+        rooms: [
+          {
+            buildingId: 'bld-due-alpha',
+            roomNumber: '101',
+            floor: 1,
+            monthlyRent: 4500,
+            depositInheritsBuildingDefault: true,
+          },
+        ],
+        payment: {
+          cashAccepted: true,
+        },
+      };
+
+      // Case A: Missing dueDay in billing payload => rejected 400
+      const resMissing = await request(app)
+        .post('/api/v1/onboarding/finalize')
+        .set('Cookie', authSession.cookies)
+        .set('x-csrf-token', authSession.csrfToken)
+        .send({
+          ...basePayload,
+          billing: {
+            billingDay: 25,
+            // dueDay is deliberately omitted
+            waterBillingType: 'per_person',
+            waterRate: '0.00',
+            electricityBillingType: 'per_unit',
+            electricityRate: '0.00',
+            commonFee: '0.00',
+            internetFee: '0.00',
+            parkingRate: '0.00',
+            lateFeeType: 'none',
+            lateFeeValue: '0.00',
+          },
+        });
+
+      expect(resMissing.status).toBe(400);
+      expect(JSON.stringify(resMissing.body)).toMatch(/dueDay|วันครบกำหนด/i);
+
+      // Verify PostgreSQL: No dormitory billing settings row was created with a defaulted 5
+      const noSettingsRow = await prisma.dormitoryBillingSettings.findFirst({
+        where: { dormitoryId: prov.provisionalDormitoryId },
+      });
+      expect(noSettingsRow).toBeNull();
+
+      // Case B: Explicit dueDay = 10 => succeeds 200 and persists 10
+      const resValid = await request(app)
+        .post('/api/v1/onboarding/finalize')
+        .set('Cookie', authSession.cookies)
+        .set('x-csrf-token', authSession.csrfToken)
+        .send({
+          ...basePayload,
+          billing: {
+            billingDay: 25,
+            dueDay: 10,
+            waterBillingType: 'per_person',
+            waterRate: '0.00',
+            electricityBillingType: 'per_unit',
+            electricityRate: '0.00',
+            commonFee: '0.00',
+            internetFee: '0.00',
+            parkingRate: '0.00',
+            lateFeeType: 'none',
+            lateFeeValue: '0.00',
+          },
+        });
+
+      expect(resValid.status).toBe(200);
+      const createdDormId = resValid.body?.data?.dormitoryId || resValid.body?.dormitoryId || prov.provisionalDormitoryId;
+
+      // Verify PostgreSQL: dueDay is strictly 10
+      const persistedSettings = await prisma.dormitoryBillingSettings.findUnique({
+        where: { dormitoryId: createdDormId },
+      });
+      expect(persistedSettings).toBeDefined();
+      expect(persistedSettings?.dueDay).toBe(10);
+
+      // Cleanup
+      await prisma.subscriptionPackageIntent.deleteMany({ where: { dormitoryId: createdDormId } });
+      await prisma.subscriptionStatusHistory.deleteMany({ where: { dormitoryId: createdDormId } });
+      await prisma.dormitorySubscription.deleteMany({ where: { dormitoryId: createdDormId } });
+      await prisma.dormitoryPropertyDefaults.deleteMany({ where: { dormitoryId: createdDormId } });
+      await prisma.dormitoryBillingSettings.deleteMany({ where: { dormitoryId: createdDormId } });
+      await prisma.billingRateSnapshot.deleteMany({ where: { dormitoryId: createdDormId } });
+      await prisma.billingCycle.deleteMany({ where: { dormitoryId: createdDormId } });
+      await prisma.room.deleteMany({ where: { dormitoryId: createdDormId } });
+      await prisma.building.deleteMany({ where: { dormitoryId: createdDormId } });
+      await prisma.dormitoryMember.deleteMany({ where: { dormitoryId: createdDormId } });
+      await prisma.dormitory.delete({ where: { id: createdDormId } });
+      await prisma.session.deleteMany({ where: { userId: testOwnerUser.id } });
+      await prisma.user.delete({ where: { id: testOwnerUser.id } });
+    });
+
+    it('proves BillingCycle rateSnapshot derives strictly from authoritative settings without legacy 18/7/50 defaults and preserves immutability', async () => {
+      const timestamp = Date.now();
+      const dorm = await prisma.dormitory.create({
+        data: {
+          name: `หอพัก Snapshot Immutability Test ${timestamp}`,
+          type: 'apartment',
+          status: 'active',
+        },
+      });
+
+      await prisma.dormitoryBillingSettings.create({
+        data: {
+          dormitoryId: dorm.id,
+          billingDay: 25,
+          dueDay: 10,
+          waterBillingType: 'per_person',
+          waterRate: '0.00',
+          electricityBillingType: 'per_unit',
+          electricityRate: '0.00',
+          commonFee: '0.00',
+          commonFeeMode: 'per_room',
+          internetFee: '0.00',
+          internetFeeMode: 'per_person',
+          parkingRate: '0.00',
+          parkingFeeMode: 'per_room',
+          lateFeeType: 'none',
+          lateFeeValue: '0.00',
+        },
+      });
+
+      const billingCycleService = new BillingCycleService(new PrismaBillingCycleRepository(prisma));
+
+      // 1. Create Cycle 1 (August 2026) -> derived strictly from persisted settings
+      const cycle1 = await billingCycleService.createBillingCycle(dorm.id, {
+        cycleCode: '2026-08',
+        name: 'สิงหาคม 2026',
+        periodStart: '',
+        periodEnd: '',
+        billingDate: '',
+        dueDate: '',
+      });
+
+      const snap1 = cycle1.rateSnapshot;
+      expect(snap1).toBeDefined();
+      expect(snap1?.waterBillingType).toBe('per_person');
+      expect(snap1?.waterRate).toBe('0.00');
+      expect(snap1?.electricityBillingType).toBe('per_unit');
+      expect(snap1?.electricityRate).toBe('0.00');
+      expect(snap1?.commonFee).toBe('0.00');
+      expect(snap1?.commonFeeMode).toBe('per_room');
+      expect(snap1?.internetFee).toBe('0.00');
+      expect(snap1?.internetFeeMode).toBe('per_person');
+      expect(snap1?.parkingFee).toBe('0.00');
+      expect(snap1?.parkingFeeMode).toBe('per_room');
+      expect(snap1?.lateFeeType).toBe('none');
+      expect(snap1?.lateFeeValue).toBe('0.00');
+
+      // Assert no legacy defaults (18, 7, 50)
+      expect(snap1?.waterRate).not.toBe('18.00');
+      expect(snap1?.electricityRate).not.toBe('7.00');
+      expect(snap1?.lateFeeValue).not.toBe('50.00');
+
+      // 2. Modify dormitory settings to new amounts
+      await prisma.dormitoryBillingSettings.update({
+        where: { dormitoryId: dorm.id },
+        data: {
+          waterRate: '25.00',
+          electricityRate: '9.00',
+          lateFeeType: 'fixed',
+          lateFeeValue: '100.00',
+        },
+      });
+
+      // 3. Create Cycle 2 (September 2026)
+      const cycle2 = await billingCycleService.createBillingCycle(dorm.id, {
+        cycleCode: '2026-09',
+        name: 'กันยายน 2026',
+        periodStart: '',
+        periodEnd: '',
+        billingDate: '',
+        dueDate: '',
+      });
+
+      const snap2 = cycle2.rateSnapshot;
+      expect(snap2?.waterRate).toBe('25.00');
+      expect(snap2?.electricityRate).toBe('9.00');
+      expect(snap2?.lateFeeType).toBe('fixed');
+      expect(snap2?.lateFeeValue).toBe('100.00');
+
+      // 4. Verify Immutability: Cycle 1 snapshot remains 0.00
+      const cycle1FromDb = await prisma.billingCycle.findUnique({
+        where: { id: cycle1.cycle.id },
+        include: { rateSnapshots: true },
+      });
+      const snap1Db = cycle1FromDb?.rateSnapshots?.[0];
+      expect(new Prisma.Decimal(snap1Db?.waterRate || 0).toFixed(2)).toBe('0.00');
+      expect(new Prisma.Decimal(snap1Db?.electricityRate || 0).toFixed(2)).toBe('0.00');
+      expect(snap1Db?.lateFeeType).toBe('none');
+      expect(new Prisma.Decimal(snap1Db?.lateFeeValue || 0).toFixed(2)).toBe('0.00');
+
+      // Cleanup
+      await prisma.billingRateSnapshot.deleteMany({ where: { dormitoryId: dorm.id } });
+      await prisma.billingCycle.deleteMany({ where: { dormitoryId: dorm.id } });
+      await prisma.dormitoryBillingSettings.deleteMany({ where: { dormitoryId: dorm.id } });
+      await prisma.dormitory.delete({ where: { id: dorm.id } });
+    });
+
+    it('proves repository guard rejects any due-day fallback authority (|| 5, ?? 5, @default(5), .default(5)) in business registration & cycle code', async () => {
+      const serverDir = path.resolve(__dirname, '../../../');
+      const rootDir = path.resolve(serverDir, '../');
+
+      // Inspect schema.prisma for @default(5) on dueDay
+      const schemaPath = path.join(serverDir, 'prisma/schema.prisma');
+      const schemaContent = fs.readFileSync(schemaPath, 'utf-8');
+      const dueDaySchemaLine = schemaContent.split(/\r?\n/).find(l => l.includes('dueDay') && l.includes('due_day'));
+      expect(dueDaySchemaLine).toBeDefined();
+      expect(dueDaySchemaLine).not.toContain('@default(5)');
+
+      // Inspect OnboardingBillingInputSchema in onboarding-validation.ts
+      const valPath = path.join(serverDir, 'src/types/onboarding-validation.ts');
+      const valContent = fs.readFileSync(valPath, 'utf-8');
+      const dueDayValLine = valContent.split(/\r?\n/).find(l => l.includes('dueDay:') && l.includes('min(1'));
+      expect(dueDayValLine).toBeDefined();
+      expect(dueDayValLine).not.toContain('.default(5)');
+
+      // Inspect register.tsx for dueDateDay || 5 or dueDay: ... || 5
+      const regPath = path.join(rootDir, 'src/pages/owner/register.tsx');
+      const regContent = fs.readFileSync(regPath, 'utf-8');
+      expect(regContent).not.toContain('dueDateDay || 5');
+      expect(regContent).not.toContain('dueDay: formData.deposits.dueDateDay || 5');
+      expect(regContent).not.toContain('dueDateDay: 5');
+
+      // Inspect dormitory-provisioning.service.ts for dueDay || 5
+      const provPath = path.join(serverDir, 'src/services/dormitory-provisioning.service.ts');
+      const provContent = fs.readFileSync(provPath, 'utf-8');
+      expect(provContent).not.toContain('Number(billing.dueDay) || 5');
+    });
+  });
 });
+

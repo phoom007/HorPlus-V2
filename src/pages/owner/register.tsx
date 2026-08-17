@@ -271,7 +271,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
       deposits: {
         securityDeposit: 0,
         advanceRentMonths: 1,
-        dueDateDay: 5,
+        dueDateDay: '',
         gracePeriodDays: 2,
         lateFeeType: 'none', // 'none' | 'per_day' | 'fixed_once' (default: none)
         lateFeeAmount: 0
@@ -982,7 +982,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
         },
         billing: {
           billingDay: 25,
-          dueDay: formData.deposits.dueDateDay || 5,
+          dueDay: Number(formData.deposits.dueDateDay),
           waterBillingType,
           waterRate: String(formData.utilities.waterRate ?? 0),
           electricityBillingType: elecBillingType,
@@ -2078,12 +2078,25 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate })
               </div>
 
               <div className="pt-2 border-t border-slate-200/60">
-                <label className="block text-xs font-bold text-slate-700 mb-1">วันครบกำหนดชำระ (ของทุกเดือน)</label>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  วันครบกำหนดชำระ (ของทุกเดือน) <span className="text-red-500">*</span>
+                </label>
                 <select
-                  value={formData.deposits.dueDateDay}
-                  onChange={(e) => setFormData({ ...formData, deposits: { ...formData.deposits, dueDateDay: parseInt(e.target.value) || 5 } })}
+                  data-testid="due-date-select"
+                  value={formData.deposits.dueDateDay || ''}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setFormData({
+                      ...formData,
+                      deposits: {
+                        ...formData.deposits,
+                        dueDateDay: val === '' ? '' : parseInt(val, 10),
+                      },
+                    });
+                  }}
                   className="w-full px-3.5 py-2 text-xs bg-white border border-slate-200 rounded-xl focus:border-blue-500 outline-none font-bold"
                 >
+                  <option value="">-- กรุณาเลือกวันครบกำหนดชำระ --</option>
                   {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 25, 28].map(d => (
                     <option key={d} value={d}>ทุกวันที่ {d} ของเดือน</option>
                   ))}

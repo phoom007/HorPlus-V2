@@ -367,6 +367,7 @@ describe('TASK-009 Checkpoint 1I — Authoritative Restored UX & LINE Config Tru
           name: 'Neutral Default Dormitory',
         },
         billing: {
+          dueDay: 10,
           waterRate: '0.00',
           electricityRate: '0.00',
         },

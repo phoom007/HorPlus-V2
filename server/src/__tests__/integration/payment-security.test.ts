@@ -478,6 +478,7 @@ describe('Payment Security & Idempotency Boundary (PS-001 to PS-010)', () => {
       await prisma.dormitoryBillingSettings.create({
         data: {
           dormitoryId: corruptDorm.id,
+          dueDay: 5,
           promptPayType: 'national_id',
           promptPayValueEncrypted: 'corrupt_invalid_ciphertext_format',
         },
@@ -542,7 +543,7 @@ describe('Payment Security & Idempotency Boundary (PS-001 to PS-010)', () => {
         provisionalDormitoryId: provDormId,
         packageIntentId: quote1.intentId,
         dormitory: { name: 'Idemp Dorm 1' },
-        billing: { billingDay: 25 },
+        billing: { billingDay: 25, dueDay: 5 },
         payment: {
           bankCode: 'กสิกรไทย (KBank)',
           bankAccountNumber: '1111111111',
@@ -556,7 +557,7 @@ describe('Payment Security & Idempotency Boundary (PS-001 to PS-010)', () => {
         provisionalDormitoryId: provDormId,
         packageIntentId: quote1.intentId,
         dormitory: { name: 'Idemp Dorm 1' },
-        billing: { billingDay: 25 },
+        billing: { billingDay: 25, dueDay: 5 },
         payment: {
           bankCode: 'กรุงเทพ (Bangkok)', // Changed payment!
           bankAccountNumber: '9999999999',
@@ -604,7 +605,7 @@ describe('Payment Security & Idempotency Boundary (PS-001 to PS-010)', () => {
       });
 
       const replayAuth = await authService.authenticateTestUser(replayUser.id);
-      const replayKey = `replay_exact_${Date.now()}`;
+      const replayKey = `replay_${Date.now()}`;
 
       const prepRes = await request(app)
         .post('/api/v1/onboarding/prepare')
@@ -637,7 +638,7 @@ describe('Payment Security & Idempotency Boundary (PS-001 to PS-010)', () => {
         provisionalDormitoryId: provDormId,
         packageIntentId: quoteReplay.intentId,
         dormitory: { name: 'Replay Dorm' },
-        billing: { billingDay: 1 },
+        billing: { billingDay: 1, dueDay: 5 },
         payment: {
           bankCode: 'กสิกรไทย (KBank)',
           bankAccountNumber: '5555555555',
@@ -713,7 +714,7 @@ describe('Payment Security & Idempotency Boundary (PS-001 to PS-010)', () => {
         provisionalDormitoryId: provDormId,
         packageIntentId: quoteMutPP.intentId,
         dormitory: { name: 'MutPP Dorm' },
-        billing: { billingDay: 10 },
+        billing: { billingDay: 10, dueDay: 5 },
         payment: {
           bankCode: 'กรุงไทย (Krungthai)',
           bankAccountNumber: '7777777777',
@@ -804,7 +805,7 @@ describe('Payment Security & Idempotency Boundary (PS-001 to PS-010)', () => {
         provisionalDormitoryId: provDormId,
         packageIntentId: quoteMutBank.intentId,
         dormitory: { name: 'MutBank Dorm' },
-        billing: { billingDay: 15 },
+        billing: { billingDay: 15, dueDay: 5 },
         payment: {
           bankCode: 'ไทยพาณิชย์ (SCB)',
           bankAccountNumber: '4444444444',
@@ -1069,6 +1070,7 @@ describe('Payment Security & Idempotency Boundary (PS-001 to PS-010)', () => {
       await prisma.dormitoryBillingSettings.create({
         data: {
           dormitoryId: nationalIdDormId,
+          dueDay: 5,
           promptPayType: 'national_id',
           promptPayValueEncrypted: encryptedNatId,
           bankCode: 'กรุงไทย (Krungthai)',
@@ -1161,6 +1163,7 @@ describe('Payment Security & Idempotency Boundary (PS-001 to PS-010)', () => {
       await prisma.dormitoryBillingSettings.create({
         data: {
           dormitoryId: corruptDormId,
+          dueDay: 5,
           promptPayType: 'mobile_phone',
           promptPayValueEncrypted: 'corrupt.ciphertext.invalidtag',
           bankCode: 'กรุงเทพ (Bangkok)',

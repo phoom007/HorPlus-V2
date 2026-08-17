@@ -203,6 +203,7 @@ describe('LOCAL-07: Product Owner UI & Backend Integration', () => {
           estimatedRoomCount: 2,
         },
         billing: {
+          dueDay: 5,
           waterRate: '18.00',
           electricityRate: '7.00',
         },
@@ -436,6 +437,7 @@ describe('LOCAL-07: Product Owner UI & Backend Integration', () => {
       await prisma.dormitoryBillingSettings.create({
         data: {
           dormitoryId: dorm.id,
+          dueDay: 5,
           waterRate: '20.00',
           electricityRate: '8.00',
           commonFee: '200.00',
@@ -876,6 +878,7 @@ describe('LOCAL-07: Product Owner UI & Backend Integration', () => {
       await prisma.dormitoryBillingSettings.create({
         data: {
           dormitoryId: dorm.id,
+          dueDay: 5,
           promptPayAccountName: 'ชื่อพร้อมเพย์ ตอนลงทะเบียน',
           bankAccountName: 'ชื่อบัญชีธนาคาร ตอนลงทะเบียน',
           bankCode: 'กสิกรไทย (KBank)',

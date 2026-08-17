@@ -301,12 +301,6 @@ export class DormitoryProvisioningService {
         },
       });
 
-      await tx.dormitoryBillingSettings.create({
-        data: {
-          dormitoryId: dorm.id,
-        },
-      });
-
       await tx.dormitoryPropertyDefaults.create({
         data: {
           dormitoryId: dorm.id,
@@ -654,12 +648,17 @@ export class DormitoryProvisioningService {
         const gracePeriodDaysNum = (billing.gracePeriodDays !== undefined && billing.gracePeriodDays !== null) ? Number(billing.gracePeriodDays) : 0;
         const advanceRentMonthsNum = (billing.advanceRentMonths !== undefined && billing.advanceRentMonths !== null) ? Number(billing.advanceRentMonths) : 1;
 
+        if (billing.dueDay === undefined || billing.dueDay === null || isNaN(Number(billing.dueDay)) || Number(billing.dueDay) < 1 || Number(billing.dueDay) > 28) {
+          throw new AppError('DUE_DAY_REQUIRED: Authoritative billing settings must configure valid dueDay (1-28)', 400, 'DUE_DAY_REQUIRED');
+        }
+        const validatedDueDay = Number(billing.dueDay);
+
         await tx.dormitoryBillingSettings.upsert({
           where: { dormitoryId: dormId },
           create: {
             dormitoryId: dormId,
             billingDay: Number(billing.billingDay) || 25,
-            dueDay: Number(billing.dueDay) || 5,
+            dueDay: validatedDueDay,
             waterBillingType: billing.waterBillingType || 'per_person',
             waterRate: waterRateStr,
             electricityBillingType: billing.electricityBillingType || 'per_unit',
@@ -678,7 +677,7 @@ export class DormitoryProvisioningService {
           },
           update: {
             billingDay: Number(billing.billingDay) || 25,
-            dueDay: Number(billing.dueDay) || 5,
+            dueDay: validatedDueDay,
             waterBillingType: billing.waterBillingType || 'per_person',
             waterRate: waterRateStr,
             electricityBillingType: billing.electricityBillingType || 'per_unit',

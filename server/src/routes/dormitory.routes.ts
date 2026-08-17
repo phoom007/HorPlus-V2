@@ -437,11 +437,22 @@ export function createDormitoryRouter(
 
     let updated: any;
     if (prisma?.dormitoryBillingSettings) {
-      updated = await prisma.dormitoryBillingSettings.upsert({
-        where: { dormitoryId },
-        update: updateData,
-        create: { dormitoryId, ...updateData },
-      });
+      if (currentSettings) {
+        updated = await prisma.dormitoryBillingSettings.update({
+          where: { dormitoryId },
+          data: updateData,
+        });
+      } else {
+        return res.status(404).json({
+          error: {
+            code: 'DORMITORY_BILLING_SETTINGS_NOT_FOUND',
+            message: 'ไม่พบการตั้งค่าการเรียกเก็บเงินของหอพัก',
+            fieldErrors: null,
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
     } else {
       updated = await billingRepo.update(dormitoryId, updateData);
     }

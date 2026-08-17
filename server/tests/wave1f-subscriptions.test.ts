@@ -1091,7 +1091,7 @@ describe('Wave 1F - Authorization, Permission, Package & Idempotency Corrective 
         packageIntentId: quote1.intentId,
         planCode: 'FREE',
         dormitory: { name: `Onboard Dorm ${timestamp}`, code: `ONB-${timestamp}`, addressLine1: '123 Onb St', postalCode: '10100', phone: '0812345678' },
-        billing: { bankName: 'Kasikorn', accountName: 'Onboard User', accountNumber: '1234567890' },
+        billing: { dueDay: 5, bankName: 'Kasikorn', accountName: 'Onboard User', accountNumber: '1234567890' },
       });
 
       expect(result.dormitory?.id).toBeDefined();
@@ -1151,7 +1151,7 @@ describe('Wave 1F - Authorization, Permission, Package & Idempotency Corrective 
           packageIntentId: quote2.intentId,
           planCode: 'FREE',
           dormitory: { name: `Rollback Dorm ${timestamp}`, code: rollbackDormCode, addressLine1: '123 Roll St', postalCode: '10100', phone: '0812345678' },
-          billing: { bankName: 'Kasikorn', accountName: 'Rollback User', accountNumber: '1234567890' },
+          billing: { dueDay: 5, bankName: 'Kasikorn', accountName: 'Rollback User', accountNumber: '1234567890' },
         })
       ).rejects.toThrow();
 

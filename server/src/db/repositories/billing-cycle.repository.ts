@@ -218,17 +218,17 @@ export class InMemoryBillingCycleRepository implements IBillingCycleRepository {
       dormitoryId,
       billingCycleId: data.billingCycleId,
       waterBillingType: data.waterBillingType || 'per_unit',
-      waterRate: data.waterRate || '18.00',
+      waterRate: data.waterRate || '0.00',
       electricityBillingType: data.electricityBillingType || 'per_unit',
-      electricityRate: data.electricityRate || '7.00',
+      electricityRate: data.electricityRate || '0.00',
       commonFee: data.commonFee || '0.00',
-      commonFeeMode: data.commonFeeMode || 'room',
+      commonFeeMode: data.commonFeeMode || 'none',
       internetFee: data.internetFee || '0.00',
-      internetFeeMode: data.internetFeeMode || 'room',
+      internetFeeMode: data.internetFeeMode || 'none',
       parkingFee: data.parkingFee || '0.00',
-      parkingFeeMode: data.parkingFeeMode || 'room',
-      lateFeeType: data.lateFeeType || 'fixed',
-      lateFeeValue: data.lateFeeValue || '50.00',
+      parkingFeeMode: data.parkingFeeMode || 'none',
+      lateFeeType: data.lateFeeType || 'none',
+      lateFeeValue: data.lateFeeValue || '0.00',
       currency: data.currency || 'THB',
       createdAt: now,
     };
@@ -278,17 +278,17 @@ export class PrismaBillingCycleRepository implements IBillingCycleRepository {
       dormitoryId: s.dormitoryId,
       billingCycleId: s.billingCycleId,
       waterBillingType: s.waterBillingType,
-      waterRate: fmt(s.waterRate, '18.00'),
+      waterRate: fmt(s.waterRate, '0.00'),
       electricityBillingType: s.electricityBillingType,
-      electricityRate: fmt(s.electricityRate, '7.00'),
+      electricityRate: fmt(s.electricityRate, '0.00'),
       commonFee: fmt(s.commonFee, '0.00'),
-      commonFeeMode: s.commonFeeMode || 'room',
+      commonFeeMode: s.commonFeeMode || 'none',
       internetFee: fmt(s.internetFee, '0.00'),
-      internetFeeMode: s.internetFeeMode || 'room',
+      internetFeeMode: s.internetFeeMode || 'none',
       parkingFee: fmt(s.parkingFee, '0.00'),
-      parkingFeeMode: s.parkingFeeMode || 'room',
-      lateFeeType: s.lateFeeType,
-      lateFeeValue: fmt(s.lateFeeValue, '50.00'),
+      parkingFeeMode: s.parkingFeeMode || 'none',
+      lateFeeType: s.lateFeeType || 'none',
+      lateFeeValue: fmt(s.lateFeeValue, '0.00'),
       currency: s.currency,
       createdAt: s.createdAt,
     };
@@ -304,7 +304,9 @@ export class PrismaBillingCycleRepository implements IBillingCycleRepository {
   }
 
   public async findByCode(dormitoryId: string, cycleCode: string): Promise<BillingCycleEntity | null> {
-    const c = await this.prisma.billingCycle.findFirst({ where: { dormitoryId, cycleCode } });
+    const c = await this.prisma.billingCycle.findFirst({
+      where: { dormitoryId, cycleCode },
+    });
     return c ? this.mapCycleToEntity(c) : null;
   }
 
@@ -314,15 +316,14 @@ export class PrismaBillingCycleRepository implements IBillingCycleRepository {
     periodEnd: Date,
     excludeId?: string
   ): Promise<BillingCycleEntity[]> {
-    const pStart = new Date(periodStart);
-    const pEnd = new Date(periodEnd);
     const where: any = {
       dormitoryId,
-      periodStart: { lte: pEnd },
-      periodEnd: { gte: pStart },
+      periodStart: { lte: periodEnd },
+      periodEnd: { gte: periodStart },
     };
-    if (excludeId) where.id = { not: excludeId };
-
+    if (excludeId) {
+      where.id = { not: excludeId };
+    }
     const cycles = await this.prisma.billingCycle.findMany({ where });
     return cycles.map((c) => this.mapCycleToEntity(c));
   }
@@ -333,16 +334,25 @@ export class PrismaBillingCycleRepository implements IBillingCycleRepository {
   ): Promise<{ items: BillingCycleEntity[]; total: number }> {
     const where: any = { dormitoryId };
     if (filter.status) where.status = filter.status;
-    const page = filter.page || 1;
-    const pageSize = filter.pageSize || 20;
+
+    const page = filter.page && filter.page > 0 ? filter.page : 1;
+    const pageSize = filter.pageSize && filter.pageSize > 0 ? filter.pageSize : 50;
     const skip = (page - 1) * pageSize;
 
-    const [items, total] = await Promise.all([
-      this.prisma.billingCycle.findMany({ where, skip, take: pageSize, orderBy: { periodStart: 'desc' } }),
+    const [total, items] = await Promise.all([
       this.prisma.billingCycle.count({ where }),
+      this.prisma.billingCycle.findMany({
+        where,
+        skip,
+        take: pageSize,
+        orderBy: { periodStart: 'desc' },
+      }),
     ]);
 
-    return { items: items.map((c) => this.mapCycleToEntity(c)), total };
+    return {
+      items: items.map((c) => this.mapCycleToEntity(c)),
+      total,
+    };
   }
 
   public async create(dormitoryId: string, data: CreateBillingCycleData): Promise<BillingCycleEntity> {
@@ -398,17 +408,17 @@ export class PrismaBillingCycleRepository implements IBillingCycleRepository {
         dormitoryId,
         billingCycleId: data.billingCycleId,
         waterBillingType: data.waterBillingType || 'per_unit',
-        waterRate: data.waterRate || '18.00',
+        waterRate: data.waterRate || '0.00',
         electricityBillingType: data.electricityBillingType || 'per_unit',
-        electricityRate: data.electricityRate || '7.00',
+        electricityRate: data.electricityRate || '0.00',
         commonFee: data.commonFee || '0.00',
-        commonFeeMode: data.commonFeeMode || 'room',
+        commonFeeMode: data.commonFeeMode || 'none',
         internetFee: data.internetFee || '0.00',
-        internetFeeMode: data.internetFeeMode || 'room',
+        internetFeeMode: data.internetFeeMode || 'none',
         parkingFee: data.parkingFee || '0.00',
-        parkingFeeMode: data.parkingFeeMode || 'room',
-        lateFeeType: data.lateFeeType || 'fixed',
-        lateFeeValue: data.lateFeeValue || '50.00',
+        parkingFeeMode: data.parkingFeeMode || 'none',
+        lateFeeType: data.lateFeeType || 'none',
+        lateFeeValue: data.lateFeeValue || '0.00',
         currency: data.currency || 'THB',
       },
     });

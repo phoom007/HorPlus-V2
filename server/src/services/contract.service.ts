@@ -899,7 +899,7 @@ export class ContractService {
       commonFee: bs?.commonFee ? bs.commonFee.toString() : '0.00',
       internetFee: (bs as any)?.internetFee ? (bs as any).internetFee.toString() : '0.00',
       billingDay: bs?.billingDay || 25,
-      dueDay: bs?.dueDay || 5,
+      dueDay: bs?.dueDay ? Number(bs.dueDay) : '-',
       lateFeeMode: (bs as any)?.lateFeeMode || 'fixed',
       lateFeeAmount: (bs as any)?.lateFeeAmount ? (bs as any).lateFeeAmount.toString() : '0.00',
       tenantSignature: contract.tenantSignature,

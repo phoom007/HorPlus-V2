@@ -9,15 +9,19 @@ export const CreateBillingCycleSchema = z.object({
   dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'วันครบกำหนดชำระต้องอยู่ในรูปแบบ YYYY-MM-DD'),
   rateSnapshot: z
     .object({
-      waterBillingType: z.enum(['per_unit', 'flat_rate', 'tiered']).default('per_unit'),
-      waterRate: z.string().regex(/^\d+(\.\d{1,2})?$/).default('18.00'),
-      electricityBillingType: z.enum(['per_unit', 'flat_rate', 'tiered']).default('per_unit'),
-      electricityRate: z.string().regex(/^\d+(\.\d{1,2})?$/).default('7.00'),
-      commonFee: z.string().regex(/^\d+(\.\d{1,2})?$/).default('0.00'),
-      internetFee: z.string().regex(/^\d+(\.\d{1,2})?$/).default('0.00'),
-      lateFeeType: z.enum(['fixed', 'daily_rate', 'percentage']).default('fixed'),
-      lateFeeValue: z.string().regex(/^\d+(\.\d{1,2})?$/).default('50.00'),
-      currency: z.string().default('THB'),
+      waterBillingType: z.string().optional(),
+      waterRate: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
+      electricityBillingType: z.string().optional(),
+      electricityRate: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
+      commonFee: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
+      commonFeeMode: z.string().optional(),
+      internetFee: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
+      internetFeeMode: z.string().optional(),
+      parkingFee: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
+      parkingFeeMode: z.string().optional(),
+      lateFeeType: z.string().optional(),
+      lateFeeValue: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
+      currency: z.string().default('THB').optional(),
     })
     .optional(),
 });

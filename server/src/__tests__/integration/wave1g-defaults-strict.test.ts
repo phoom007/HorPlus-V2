@@ -212,6 +212,7 @@ describe('Wave 1G — Strict Defaults, Propagation & Concurrency Integration Tes
         where: { dormitoryId: testDormId },
         create: {
           dormitoryId: testDormId,
+          dueDay: 5,
           waterRate: 18,
           electricityRate: 7,
           version: 1,
@@ -448,7 +449,7 @@ describe('Wave 1G — Strict Defaults, Propagation & Concurrency Integration Tes
         data: { dormitoryId: dorm.id, defaultMonthlyRent: new Prisma.Decimal(9400), version: 1 },
       });
       await prisma.dormitoryBillingSettings.create({
-        data: { dormitoryId: dorm.id, waterRate: new Prisma.Decimal(20), electricityRate: new Prisma.Decimal(8), version: 1 },
+        data: { dormitoryId: dorm.id, dueDay: 5, waterRate: new Prisma.Decimal(20), electricityRate: new Prisma.Decimal(8), version: 1 },
       });
       const bld = await prisma.building.create({
         data: { dormitoryId: dorm.id, name: 'Bld 1', code: `B1-${Date.now()}` },
@@ -500,7 +501,7 @@ describe('Wave 1G — Strict Defaults, Propagation & Concurrency Integration Tes
         data: { dormitoryId: dorm.id, defaultMonthlyRent: new Prisma.Decimal(9400), version: 1 },
       });
       await prisma.dormitoryBillingSettings.create({
-        data: { dormitoryId: dorm.id, waterRate: new Prisma.Decimal(20), electricityRate: new Prisma.Decimal(8), version: 1 },
+        data: { dormitoryId: dorm.id, dueDay: 5, waterRate: new Prisma.Decimal(20), electricityRate: new Prisma.Decimal(8), version: 1 },
       });
       const bld = await prisma.building.create({
         data: { dormitoryId: dorm.id, name: 'Bld 1', code: `B2-${Date.now()}` },
@@ -566,7 +567,7 @@ describe('Wave 1G — Strict Defaults, Propagation & Concurrency Integration Tes
         data: { dormitoryId: dorm.id, defaultMonthlyRent: new Prisma.Decimal(9400), version: 1 },
       });
       await prisma.dormitoryBillingSettings.create({
-        data: { dormitoryId: dorm.id, waterRate: new Prisma.Decimal(20), electricityRate: new Prisma.Decimal(8), version: 1 },
+        data: { dormitoryId: dorm.id, dueDay: 5, waterRate: new Prisma.Decimal(20), electricityRate: new Prisma.Decimal(8), version: 1 },
       });
 
       const applyRes = await defaultsService.applyDefaultPropagation(
@@ -609,7 +610,7 @@ describe('Wave 1G — Strict Defaults, Propagation & Concurrency Integration Tes
         data: { dormitoryId: dorm.id, defaultMonthlyRent: new Prisma.Decimal(9400), version: 1 },
       });
       await prisma.dormitoryBillingSettings.create({
-        data: { dormitoryId: dorm.id, waterRate: new Prisma.Decimal(20), electricityRate: new Prisma.Decimal(8), version: 1 },
+        data: { dormitoryId: dorm.id, dueDay: 5, waterRate: new Prisma.Decimal(20), electricityRate: new Prisma.Decimal(8), version: 1 },
       });
 
       const applyRes = await defaultsService.applyDefaultPropagation(
@@ -672,7 +673,7 @@ describe('Wave 1G — Strict Defaults, Propagation & Concurrency Integration Tes
         data: { dormitoryId: dorm.id, defaultMonthlyRent: new Prisma.Decimal(9400), version: 1 },
       });
       await prisma.dormitoryBillingSettings.create({
-        data: { dormitoryId: dorm.id, waterRate: new Prisma.Decimal(20), electricityRate: new Prisma.Decimal(8), version: 1 },
+        data: { dormitoryId: dorm.id, dueDay: 5, waterRate: new Prisma.Decimal(20), electricityRate: new Prisma.Decimal(8), version: 1 },
       });
 
       const idempotencyKey = `idem-zero-rm-${Date.now()}`;

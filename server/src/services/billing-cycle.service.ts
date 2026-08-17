@@ -4,6 +4,7 @@ import {
   BillingRateSnapshotEntity,
   BillingCycleFilterQuery,
 } from '../db/repositories/billing-cycle.repository.js';
+import { Prisma } from '@prisma/client';
 import { AuditService } from './audit.service.js';
 
 export interface CreateBillingCycleDto {
@@ -135,17 +136,17 @@ export class BillingCycleService {
     // Rate snapshot derivation using authoritative billing settings (with approved LOCAL-07 none defaults)
     const snapshotData = {
       waterBillingType: settings?.waterBillingType || data.rateSnapshot?.waterBillingType || 'per_unit',
-      waterRate: settings ? String(settings.waterRate) : (data.rateSnapshot?.waterRate !== undefined ? String(data.rateSnapshot.waterRate) : '0.00'),
+      waterRate: settings ? new Prisma.Decimal(settings.waterRate).toFixed(2) : (data.rateSnapshot?.waterRate !== undefined ? String(data.rateSnapshot.waterRate) : '0.00'),
       electricityBillingType: settings?.electricityBillingType || data.rateSnapshot?.electricityBillingType || 'per_unit',
-      electricityRate: settings ? String(settings.electricityRate) : (data.rateSnapshot?.electricityRate !== undefined ? String(data.rateSnapshot.electricityRate) : '0.00'),
-      commonFee: settings ? String(settings.commonFee) : (data.rateSnapshot?.commonFee !== undefined ? String(data.rateSnapshot.commonFee) : '0.00'),
+      electricityRate: settings ? new Prisma.Decimal(settings.electricityRate).toFixed(2) : (data.rateSnapshot?.electricityRate !== undefined ? String(data.rateSnapshot.electricityRate) : '0.00'),
+      commonFee: settings ? new Prisma.Decimal(settings.commonFee).toFixed(2) : (data.rateSnapshot?.commonFee !== undefined ? String(data.rateSnapshot.commonFee) : '0.00'),
       commonFeeMode: settings?.commonFeeMode || data.rateSnapshot?.commonFeeMode || 'none',
-      internetFee: settings ? String(settings.internetFee) : (data.rateSnapshot?.internetFee !== undefined ? String(data.rateSnapshot.internetFee) : '0.00'),
+      internetFee: settings ? new Prisma.Decimal(settings.internetFee).toFixed(2) : (data.rateSnapshot?.internetFee !== undefined ? String(data.rateSnapshot.internetFee) : '0.00'),
       internetFeeMode: settings?.internetFeeMode || data.rateSnapshot?.internetFeeMode || 'none',
-      parkingFee: settings ? String(settings.parkingRate) : (data.rateSnapshot?.parkingFee !== undefined ? String(data.rateSnapshot.parkingFee) : '0.00'),
+      parkingFee: settings ? new Prisma.Decimal(settings.parkingRate).toFixed(2) : (data.rateSnapshot?.parkingFee !== undefined ? String(data.rateSnapshot.parkingFee) : '0.00'),
       parkingFeeMode: settings?.parkingFeeMode || data.rateSnapshot?.parkingFeeMode || 'none',
       lateFeeType: settings?.lateFeeType || data.rateSnapshot?.lateFeeType || 'none',
-      lateFeeValue: settings ? String(settings.lateFeeValue) : (data.rateSnapshot?.lateFeeValue !== undefined ? String(data.rateSnapshot.lateFeeValue) : '0.00'),
+      lateFeeValue: settings ? new Prisma.Decimal(settings.lateFeeValue).toFixed(2) : (data.rateSnapshot?.lateFeeValue !== undefined ? String(data.rateSnapshot.lateFeeValue) : '0.00'),
       currency: data.rateSnapshot?.currency || 'THB',
     };
 
@@ -208,17 +209,17 @@ export class BillingCycleService {
           dormitoryId: result.rateSnapshot.dormitoryId,
           billingCycleId: result.rateSnapshot.billingCycleId,
           waterBillingType: result.rateSnapshot.waterBillingType,
-          waterRate: result.rateSnapshot.waterRate.toString(),
+          waterRate: new Prisma.Decimal(result.rateSnapshot.waterRate).toFixed(2),
           electricityBillingType: result.rateSnapshot.electricityBillingType,
-          electricityRate: result.rateSnapshot.electricityRate.toString(),
-          commonFee: result.rateSnapshot.commonFee.toString(),
+          electricityRate: new Prisma.Decimal(result.rateSnapshot.electricityRate).toFixed(2),
+          commonFee: new Prisma.Decimal(result.rateSnapshot.commonFee).toFixed(2),
           commonFeeMode: result.rateSnapshot.commonFeeMode,
-          internetFee: result.rateSnapshot.internetFee.toString(),
+          internetFee: new Prisma.Decimal(result.rateSnapshot.internetFee).toFixed(2),
           internetFeeMode: result.rateSnapshot.internetFeeMode,
-          parkingFee: result.rateSnapshot.parkingFee.toString(),
+          parkingFee: new Prisma.Decimal(result.rateSnapshot.parkingFee).toFixed(2),
           parkingFeeMode: result.rateSnapshot.parkingFeeMode,
           lateFeeType: result.rateSnapshot.lateFeeType,
-          lateFeeValue: result.rateSnapshot.lateFeeValue.toString(),
+          lateFeeValue: new Prisma.Decimal(result.rateSnapshot.lateFeeValue).toFixed(2),
           currency: result.rateSnapshot.currency,
           createdAt: result.rateSnapshot.createdAt,
         },

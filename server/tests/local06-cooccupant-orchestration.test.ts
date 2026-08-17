@@ -650,6 +650,7 @@ describe('LOCAL-06 — Co-Occupant / People-Count / Auto-Bill Recalculation & Ou
       where: { dormitoryId: dormId },
       create: {
         dormitoryId: dormId,
+        dueDay: 5,
         waterBillingType: 'person',
         waterRate: 100,
         electricityBillingType: 'unit',
