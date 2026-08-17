@@ -23,7 +23,19 @@ import { createLineOaRoutes } from '../../routes/line-oa.routes.js';
 import { hashToken, decryptText } from '../../utils/crypto-encryption.js';
 import { getEnv } from '../../config/env.js';
 
-const databaseUrl = process.env.DATABASE_URL || 'postgresql://horplus:password@127.0.0.1:5455/horplus_wave1d_fasttrack_test?schema=public';
+function getGuardedDatabaseUrl(): string {
+  const rawUrl = process.env.DATABASE_URL || process.env.DIRECT_URL;
+  if (!rawUrl || typeof rawUrl !== 'string' || !rawUrl.trim()) {
+    throw new Error('FAIL CLOSED: DATABASE_URL or DIRECT_URL is required');
+  }
+  const parsed = new URL(rawUrl);
+  if (parsed.hostname !== '127.0.0.1' || parsed.port !== '5455' || parsed.pathname.replace(/^\/+/, '') !== 'horplus_wave1d_fasttrack_test') {
+    throw new Error('FAIL CLOSED: Target must be 127.0.0.1:5455/horplus_wave1d_fasttrack_test');
+  }
+  return rawUrl;
+}
+
+const databaseUrl = getGuardedDatabaseUrl();
 const prisma = new PrismaClient({ datasources: { db: { url: databaseUrl } } });
 
 describe('TASK-009 — Comprehensive Delta Verification Suite (Checkpoint 1D)', () => {

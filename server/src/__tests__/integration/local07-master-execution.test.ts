@@ -45,9 +45,11 @@ import { CsrfService } from '../../services/csrf.service.js';
 import { SessionTokenService } from '../../services/session-token.service.js';
 import { PrismaSessionRepository } from '../../db/repositories/session.repository.js';
 import { getEnv } from '../../config/env.js';
+import { calculateOwnerReports } from '../../../../src/utils/report-calculations.js';
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
+import { execSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import request from 'supertest';
 import { createApp } from '../../app.js';
@@ -3432,66 +3434,18 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
       expect(resBillingSummaryC1.body.data.paidAmount).toBe('5150.00');
       expect(resBillingSummaryC1.body.data.outstandingAmount).toBe('7950.00');
 
-      // 3. Frontend OwnerReports Pure Calculation Integration Proof (Matching src/pages/owner/reports.tsx):
-      function calculateReports(roomsList: any[], billsList: any[], bldFilter: string, cycleFilterId: string) {
-        const filteredRooms = bldFilter === 'all' ? roomsList : roomsList.filter((r: any) => r.buildingId === bldFilter);
-        const filteredRoomIds = new Set(filteredRooms.map((r: any) => r.id));
-        const filteredBills = bldFilter === 'all' ? billsList : billsList.filter((b: any) => filteredRoomIds.has(b.roomId));
-        const currentMonthBills = filteredBills.filter((b: any) => b.billingCycleId === cycleFilterId || b.cycleId === cycleFilterId);
-        const paid = currentMonthBills.filter((b: any) => b.status === 'paid');
+      // 3. Frontend OwnerReports Pure Calculation Integration Proof:
+      // Uses the exact same shared pure calculation helper (src/utils/report-calculations.ts) as the UI!
+      const repC1All = calculateOwnerReports({
+        rooms: httpRooms,
+        bills: [...httpBillsC1, ...httpBillsC2],
+        selectedBuilding: 'all',
+        selectedCycle: cycle1.id,
+      });
 
-        const totalRooms = filteredRooms.length;
-        const occupiedCount = filteredRooms.filter((r: any) => r.status === 'occupied').length;
-        const vacantCount = filteredRooms.filter((r: any) => r.status === 'vacant').length;
-        const occupiedPercent = totalRooms > 0 ? Math.round((occupiedCount / totalRooms) * 100) : 0;
-
-        const fixedRentTotal = currentMonthBills.reduce((sum: number, b: any) => {
-          const item = b.items?.find((i: any) => i.type === 'rent' || i.category === 'rent');
-          return sum + (item ? Number(item.amount) : Number(b.rentAmount || 0));
-        }, 0);
-
-        const waterTotal = currentMonthBills.reduce((sum: number, b: any) => {
-          const item = b.items?.find((i: any) => i.type === 'water' || i.category === 'water');
-          return sum + (item ? Number(item.amount) : Number(b.waterAmount || 0));
-        }, 0);
-
-        const electricTotal = currentMonthBills.reduce((sum: number, b: any) => {
-          const item = b.items?.find((i: any) => i.type === 'electricity' || i.category === 'electricity');
-          return sum + (item ? Number(item.amount) : Number(b.electricAmount || 0));
-        }, 0);
-
-        const commonParkingTotal = currentMonthBills.reduce((sum: number, b: any) => {
-          const items = b.items?.filter((i: any) => ['common_fee', 'parking', 'internet'].includes(i.type || i.category))
-            .reduce((s: number, i: any) => s + Number(i.amount), 0) || 0;
-          return sum + items + Number(b.parkingFee || 0) + Number(b.commonFee || 0) + Number(b.internetFee || 0);
-        }, 0);
-
-        const totalBilled = currentMonthBills.reduce((sum: number, b: any) => sum + Number(b.totalAmount), 0);
-        const totalRevenue = paid.reduce((sum: number, b: any) => sum + Number(b.paidAmount || b.totalAmount), 0);
-        const totalUnpaid = totalBilled - totalRevenue;
-        const totalOverdue = filteredBills.filter((b: any) => b.status === 'overdue').reduce((sum: number, b: any) => sum + Number(b.totalAmount), 0);
-
-        return {
-          totalRooms,
-          occupiedCount,
-          vacantCount,
-          occupiedPercent,
-          fixedRentTotal,
-          waterTotal,
-          electricTotal,
-          commonParkingTotal,
-          totalBilled,
-          totalRevenue,
-          totalUnpaid,
-          totalOverdue,
-        };
-      }
-
-      // Assert Cycle 1 All Buildings:
-      const repC1All = calculateReports(httpRooms, [...httpBillsC1, ...httpBillsC2], 'all', cycle1.id);
-      expect(repC1All.totalBilled).toBe(13100);
-      expect(repC1All.totalRevenue).toBe(5150);
-      expect(repC1All.totalUnpaid).toBe(7950);
+      expect(repC1All.totalBilledThisMonth).toBe(13100);
+      expect(repC1All.totalRevenueThisMonth).toBe(5150);
+      expect(repC1All.totalUnpaidThisMonth).toBe(7950);
       expect(repC1All.fixedRentTotal).toBe(10000);
       expect(repC1All.waterTotal).toBe(500);
       expect(repC1All.electricTotal).toBe(1500);
@@ -3502,43 +3456,59 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
       expect(repC1All.occupiedPercent).toBe(50);
 
       // Assert Cycle 2 All Buildings (Proving Cycle 1 != Cycle 2):
-      const repC2All = calculateReports(httpRooms, [...httpBillsC1, ...httpBillsC2], 'all', cycle2.id);
-      expect(repC2All.totalBilled).toBe(13400);
-      expect(repC2All.totalRevenue).toBe(8100);
-      expect(repC2All.totalUnpaid).toBe(5300);
-      expect(repC2All.totalOverdue).toBe(5300);
+      const repC2All = calculateOwnerReports({
+        rooms: httpRooms,
+        bills: [...httpBillsC1, ...httpBillsC2],
+        selectedBuilding: 'all',
+        selectedCycle: cycle2.id,
+      });
+
+      expect(repC2All.totalBilledThisMonth).toBe(13400);
+      expect(repC2All.totalRevenueThisMonth).toBe(8100);
+      expect(repC2All.totalUnpaidThisMonth).toBe(5300);
+      expect(repC2All.totalOverdueAmount).toBe(5300);
       expect(repC2All.waterTotal).toBe(600);
       expect(repC2All.electricTotal).toBe(1700);
 
-      expect(repC1All.totalBilled).not.toBe(repC2All.totalBilled);
-      expect(repC1All.totalRevenue).not.toBe(repC2All.totalRevenue);
-      expect(repC1All.totalUnpaid).not.toBe(repC2All.totalUnpaid);
+      expect(repC1All.totalBilledThisMonth).not.toBe(repC2All.totalBilledThisMonth);
+      expect(repC1All.totalRevenueThisMonth).not.toBe(repC2All.totalRevenueThisMonth);
+      expect(repC1All.totalUnpaidThisMonth).not.toBe(repC2All.totalUnpaidThisMonth);
 
       // Assert Building Filter (Proving Building A != Building B):
-      const repC1BldA = calculateReports(httpRooms, [...httpBillsC1, ...httpBillsC2], buildingA.id, cycle1.id);
-      const repC1BldB = calculateReports(httpRooms, [...httpBillsC1, ...httpBillsC2], buildingB.id, cycle1.id);
+      const repC1BldA = calculateOwnerReports({
+        rooms: httpRooms,
+        bills: [...httpBillsC1, ...httpBillsC2],
+        selectedBuilding: buildingA.id,
+        selectedCycle: cycle1.id,
+      });
+      const repC1BldB = calculateOwnerReports({
+        rooms: httpRooms,
+        bills: [...httpBillsC1, ...httpBillsC2],
+        selectedBuilding: buildingB.id,
+        selectedCycle: cycle1.id,
+      });
 
-      expect(repC1BldA.totalBilled).toBe(5150);
-      expect(repC1BldA.totalRevenue).toBe(5150);
-      expect(repC1BldA.totalUnpaid).toBe(0);
+      expect(repC1BldA.totalBilledThisMonth).toBe(5150);
+      expect(repC1BldA.totalRevenueThisMonth).toBe(5150);
+      expect(repC1BldA.totalUnpaidThisMonth).toBe(0);
       expect(repC1BldA.fixedRentTotal).toBe(4000);
       expect(repC1BldA.waterTotal).toBe(200);
       expect(repC1BldA.electricTotal).toBe(600);
       expect(repC1BldA.commonParkingTotal).toBe(350);
       expect(repC1BldA.totalRooms).toBe(2);
 
-      expect(repC1BldB.totalBilled).toBe(7950);
-      expect(repC1BldB.totalRevenue).toBe(0);
-      expect(repC1BldB.totalUnpaid).toBe(7950);
+      expect(repC1BldB.totalBilledThisMonth).toBe(7950);
+      expect(repC1BldB.totalRevenueThisMonth).toBe(0);
+      expect(repC1BldB.totalUnpaidThisMonth).toBe(7950);
       expect(repC1BldB.fixedRentTotal).toBe(6000);
       expect(repC1BldB.waterTotal).toBe(300);
       expect(repC1BldB.electricTotal).toBe(900);
       expect(repC1BldB.commonParkingTotal).toBe(750);
       expect(repC1BldA.totalRooms).toBe(2);
 
-      expect(repC1BldA.totalBilled).not.toBe(repC1BldB.totalBilled);
-      expect(repC1BldA.totalRevenue).not.toBe(repC1BldB.totalRevenue);
-      expect(repC1BldA.totalUnpaid).not.toBe(repC1BldB.totalUnpaid);
+      expect(repC1BldA.totalBilledThisMonth).not.toBe(repC1BldB.totalBilledThisMonth);
+      expect(repC1BldA.totalRevenueThisMonth).not.toBe(repC1BldB.totalRevenueThisMonth);
+      expect(repC1BldA.totalUnpaidThisMonth).not.toBe(repC1BldB.totalUnpaidThisMonth);
 
       // 4. F5 Stability Proof: Re-querying yields identical results
       const refetchedBillsC1 = await request(app)
@@ -3551,7 +3521,12 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
         .set('Cookie', authSession.cookies)
         .set('x-csrf-token', authSession.csrfToken)
         .set('x-dormitory-id', dorm.id);
-      const refetchedRepC1All = calculateReports(httpRooms, [...refetchedBillsC1.body.data, ...refetchedBillsC2.body.data], 'all', cycle1.id);
+      const refetchedRepC1All = calculateOwnerReports({
+        rooms: httpRooms,
+        bills: [...refetchedBillsC1.body.data, ...refetchedBillsC2.body.data],
+        selectedBuilding: 'all',
+        selectedCycle: cycle1.id,
+      });
       expect(refetchedRepC1All).toEqual(repC1All);
 
       // Cleanup
@@ -3618,52 +3593,29 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
       const rootDir = path.resolve(serverDir, '../');
 
       const allowedExts = new Set(['.ts', '.tsx', '.js', '.mjs', '.sql', '.ps1', '.sh']);
-      const filesToScan: string[] = [];
 
-      function walk(dir: string) {
-        const entries = fs.readdirSync(dir, { withFileTypes: true });
-        for (const entry of entries) {
-          if (
-            entry.name === 'node_modules' ||
-            entry.name === '.git' ||
-            entry.name === 'dist' ||
-            entry.name === '.local07-sessions' ||
-            entry.name === '.gemini'
-          ) {
-            continue;
-          }
-          const fullPath = path.join(dir, entry.name);
-          if (entry.isDirectory()) {
-            walk(fullPath);
-          } else if (entry.isFile()) {
-            const ext = path.extname(entry.name).toLowerCase();
-            if (allowedExts.has(ext)) {
-              filesToScan.push(fullPath);
-            }
-          }
-        }
-      }
+      // Authoritative list of all tracked repository files from git
+      const gitFilesOutput = execSync('git ls-files', { cwd: rootDir, encoding: 'utf-8' });
+      const trackedFiles = gitFilesOutput
+        .split(/\r?\n/)
+        .map((f) => f.trim())
+        .filter((f) => f.length > 0 && allowedExts.has(path.extname(f).toLowerCase()))
+        .map((f) => path.join(rootDir, f));
 
-      walk(serverDir);
-      if (fs.existsSync(path.join(rootDir, 'scripts'))) {
-        walk(path.join(rootDir, 'scripts'));
-      }
+      expect(trackedFiles.length).toBeGreaterThan(50);
 
-      const thisFilePath = path.resolve(__filename);
-
-      // Build mutation regex safely with split tokens to avoid false positives
-      const kwDel = 'DELETE' + '\\s+FROM';
-      const kwUpd = 'UPDATE';
-      const kwTrunc = 'TRUNCATE' + '(?:\\s+TABLE)?';
-      const tblPrisma = '(?:public\\.)?_prisma_migrations';
-      const mutationPattern = new RegExp(`\\b(?:${kwDel}|${kwUpd}|${kwTrunc})\\s+${tblPrisma}\\b`, 'i');
+      // Build mutation regex safely with split tokens so the guard's own source does NOT match
+      const tokDel = ['D', 'E', 'L', 'E', 'T', 'E', '\\s+FROM'].join('');
+      const tokUpd = ['U', 'P', 'D', 'A', 'T', 'E'].join('');
+      const tokTrunc = ['T', 'R', 'U', 'N', 'C', 'A', 'T', 'E', '(?:\\s+TABLE)?'].join('');
+      const tokSchema = '(?:(?:"public"|public)\\s*\\.\\s*)?';
+      const tokTable = '(?:"_prisma_migrations"|_prisma_migrations)';
+      const mutationPattern = new RegExp(`\\b(?:${tokDel}|${tokUpd}|${tokTrunc})\\s+${tokSchema}${tokTable}\\b`, 'i');
 
       const violatingFiles: { file: string; match: string }[] = [];
 
-      for (const file of filesToScan) {
-        if (path.resolve(file) === thisFilePath) {
-          continue;
-        }
+      for (const file of trackedFiles) {
+        if (!fs.existsSync(file)) continue;
         const content = fs.readFileSync(file, 'utf-8');
         const match = content.match(mutationPattern);
         if (match) {

@@ -35,8 +35,8 @@ import {
   Tooltip,
   Legend
 } from 'recharts';
-import { formatBaht } from '../../components/GlobalComponents';
 import { Room, Bill, Building, Tenant, Contract } from '../../types';
+import { calculateOwnerReports } from '../../utils/report-calculations';
 
 interface OwnerReportsProps {
   rooms?: Room[];
@@ -101,130 +101,51 @@ export const OwnerReports: React.FC<OwnerReportsProps> = ({
     return buildings || [];
   }, [buildings]);
 
-  // Filtered rooms by selected building
-  const filteredRooms = useMemo(() => {
-    if (selectedBuilding === 'all') return rooms;
-
-    return rooms.filter(r => {
-      if (r.buildingId) {
-        return r.buildingId === selectedBuilding;
-      }
-      return false;
+  // Execute canonical shared report calculations
+  const reportData = useMemo(() => {
+    return calculateOwnerReports({
+      rooms,
+      bills,
+      buildings,
+      tenants,
+      contracts,
+      selectedBuilding,
+      selectedCycle,
+      selectedYear,
     });
-  }, [rooms, selectedBuilding]);
+  }, [rooms, bills, buildings, tenants, contracts, selectedBuilding, selectedCycle, selectedYear]);
 
-  const filteredRoomIds = useMemo(() => new Set(filteredRooms.map(r => r.id)), [filteredRooms]);
-
-  // Filtered bills by building
-  const filteredBills = useMemo(() => {
-    if (selectedBuilding === 'all') return bills;
-    return bills.filter(b => filteredRoomIds.has(b.roomId));
-  }, [bills, filteredRoomIds, selectedBuilding]);
-
-  // Current Month Bills - strict reference to selectedCycle
-  const currentMonthBills = useMemo(() => {
-    return filteredBills.filter(b => b.cycleId === selectedCycle);
-  }, [filteredBills, selectedCycle]);
-
-  const paidBills = useMemo(() => currentMonthBills.filter(b => b.status === 'paid'), [currentMonthBills]);
-  const unpaidBills = useMemo(() => currentMonthBills.filter(b => b.status !== 'paid'), [currentMonthBills]);
-
-  // Occupancy stats
-  const totalRooms = filteredRooms.length;
-  const occupiedCount = filteredRooms.filter(r => r.status === 'occupied').length;
-  const vacantCount = filteredRooms.filter(r => r.status === 'vacant').length;
-  const reservedCount = filteredRooms.filter(r => r.status === 'reserved').length;
-  const maintenanceCount = filteredRooms.filter(r => r.status === 'maintenance').length;
-
-  // Revenue & Expense Breakdown Calculations
-  const fixedRentTotal = currentMonthBills.reduce((sum, b) => {
-    const rentItem = b.items?.find(i => i.category === 'rent');
-    return sum + (rentItem ? rentItem.amount : (b.rentAmount || 0));
-  }, 0);
-
-  const waterTotal = currentMonthBills.reduce((sum, b) => {
-    const wItem = b.items?.find(i => i.category === 'water');
-    return sum + (wItem ? wItem.amount : (b.waterAmount || 0));
-  }, 0);
-
-  const electricTotal = currentMonthBills.reduce((sum, b) => {
-    const elItem = b.items?.find(i => i.category === 'electricity');
-    return sum + (elItem ? elItem.amount : (b.electricAmount || 0));
-  }, 0);
-
-  const commonParkingTotal = currentMonthBills.reduce((sum, b) => {
-    const pkItem = b.items?.find(i => i.category === 'parking');
-    const itemsSum = pkItem ? pkItem.amount : 0;
-    return sum + itemsSum + (b.parkingFee || 0) + (b.internetFee || 0) + (b.commonFee || 0);
-  }, 0);
-
-  const calcOtherFees = (b: any) => {
-    let feeSum = 0;
-    if (typeof b.otherFees === 'number') {
-      feeSum += b.otherFees;
-    } else if (Array.isArray(b.otherFees)) {
-      feeSum += b.otherFees.reduce((s: number, item: any) => s + (Number(item?.amount) || 0), 0);
-    }
-    const othItems = b.items?.filter((i: any) => i.category === 'other' || i.category === 'repair' || i.category === 'addon' || i.category === 'cleaning')
-      .reduce((s: number, i: any) => s + (Number(i?.amount) || 0), 0) || 0;
-    return feeSum + othItems;
-  };
-
-  // 1. ค่าบริการอื่นๆ (คือค่าใช้จ่ายอื่นๆ ในหน้าจดมิเตอร์)
-  const otherServiceTotal = currentMonthBills.reduce((sum, b) => {
-    return sum + calcOtherFees(b);
-  }, 0);
-
-  // 2. ค่าปรับชำระเกินกำหนด
-  const fineTotal = currentMonthBills.reduce((sum, b) => {
-    const fineItems = b.items?.filter(i => i.category === 'fine').reduce((s, i) => s + i.amount, 0) || 0;
-    return sum + fineItems;
-  }, 0);
-
-  // 3. ค่าประกัน / มัดจำ
-  const depositTotal = contracts
-    .filter(c => c.status === 'active' || c.status === 'pending_signature')
-    .reduce((sum, c) => sum + (c.depositAmount || 0), 0) ||
-    filteredRooms.filter(r => r.status === 'occupied').reduce((sum, r) => sum + (r.depositAmount || 0), 0);
-
-  const totalBilledThisMonth = currentMonthBills.reduce((sum, b) => sum + b.totalAmount, 0) ||
-    (fixedRentTotal + waterTotal + electricTotal + commonParkingTotal + otherServiceTotal + fineTotal);
-
-  const totalRevenueThisMonth = paidBills.reduce((sum, b) => sum + b.totalAmount, 0);
-  const totalUnpaidThisMonth = totalBilledThisMonth - totalRevenueThisMonth;
-
-  const totalOverdueAmount = filteredBills
-    .filter(b => b.status === 'overdue')
-    .reduce((sum, b) => sum + b.totalAmount, 0);
-
-  const paidPercent = totalBilledThisMonth > 0 ? Math.round((totalRevenueThisMonth / totalBilledThisMonth) * 100) : 0;
-  const unpaidPercent = totalBilledThisMonth > 0 ? 100 - paidPercent : 0;
-  const occupiedPercent = totalRooms > 0 ? Math.round((occupiedCount / totalRooms) * 100) : 0;
-  const vacantPercent = totalRooms > 0 ? Math.round((vacantCount / totalRooms) * 100) : 0;
-  const arpu = occupiedCount > 0 ? Math.round(totalBilledThisMonth / occupiedCount) : 0;
-
-  // Total Billed in selected year
-  const yearBilledTotal = useMemo(() => {
-    return filteredBills
-      .filter(b => b.cycleId && b.cycleId.startsWith(selectedYear))
-      .reduce((sum, b) => sum + b.totalAmount, 0);
-  }, [filteredBills, selectedYear]);
-
-  // Paid Bills Room List (sorted)
-  const paidBillsRooms = useMemo(() => {
-    return paidBills.map(b => {
-      const r = rooms.find(room => room.id === b.roomId);
-      return { roomNumber: r ? r.roomNumber : 'ไม่ระบุ', roomId: b.roomId, amount: b.totalAmount };
-    }).sort((a, b) => a.roomNumber.localeCompare(b.roomNumber));
-  }, [paidBills, rooms]);
-
-  // Unpaid Bills Room List (sorted)
-  const unpaidBillsRooms = useMemo(() => {
-    return unpaidBills.map(b => {
-      const r = rooms.find(room => room.id === b.roomId);
-      return { roomNumber: r ? r.roomNumber : 'ไม่ระบุ', roomId: b.roomId, amount: b.totalAmount };
-    }).sort((a, b) => a.roomNumber.localeCompare(b.roomNumber));
-  }, [unpaidBills, rooms]);
+  const {
+    filteredRooms,
+    filteredBills,
+    currentMonthBills,
+    paidBills,
+    unpaidBills,
+    totalRooms,
+    occupiedCount,
+    vacantCount,
+    reservedCount,
+    maintenanceCount,
+    fixedRentTotal,
+    waterTotal,
+    electricTotal,
+    commonParkingTotal,
+    otherServiceTotal,
+    fineTotal,
+    depositTotal,
+    totalBilledThisMonth,
+    totalRevenueThisMonth,
+    totalUnpaidThisMonth,
+    totalOverdueAmount,
+    paidPercent,
+    unpaidPercent,
+    occupiedPercent,
+    vacantPercent,
+    arpu,
+    yearBilledTotal,
+    paidBillsRooms,
+    unpaidBillsRooms,
+  } = reportData;
 
   // Month-by-month historical data for AreaChart
   const revenueHistory = useMemo(() => {

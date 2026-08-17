@@ -13,7 +13,19 @@ import { MockLinePlatformAdapter } from '../../services/line-platform-adapter.js
 import { FakeLineTokenProvider } from '../../services/line-channel-token-provider.js';
 import { OnboardingService } from '../../services/onboarding.service.js';
 
-const ADMIN_URL = process.env.DIRECT_URL || 'postgresql://horplus:password@127.0.0.1:5455/horplus_wave1d_fasttrack_test?schema=public';
+function getGuardedAdminUrl(): string {
+  const rawUrl = process.env.DIRECT_URL || process.env.DATABASE_URL;
+  if (!rawUrl || typeof rawUrl !== 'string' || !rawUrl.trim()) {
+    throw new Error('FAIL CLOSED: DIRECT_URL or DATABASE_URL is required');
+  }
+  const parsed = new URL(rawUrl);
+  if (parsed.hostname !== '127.0.0.1' || parsed.port !== '5455' || parsed.pathname.replace(/^\/+/, '') !== 'horplus_wave1d_fasttrack_test') {
+    throw new Error('FAIL CLOSED: Target must be 127.0.0.1:5455/horplus_wave1d_fasttrack_test');
+  }
+  return rawUrl;
+}
+
+const ADMIN_URL = getGuardedAdminUrl();
 
 describe('TASK-009 Checkpoint 1I — Authoritative Restored UX & LINE Config Truth Suite', () => {
   let prisma: PrismaClient;

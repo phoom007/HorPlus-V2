@@ -57,11 +57,6 @@ export type EnvConfig = {
 export function validateEnv(rawEnv: Record<string, string | undefined> = process.env): EnvConfig {
   const envToParse = { ...rawEnv };
 
-  // Only inject default fallback if validating current process.env in non-production
-  if (rawEnv === process.env && !envToParse.DATABASE_URL && envToParse.NODE_ENV !== 'production') {
-    envToParse.DATABASE_URL = 'postgresql://postgres:postgres@localhost:5432/horplus';
-  }
-
   const parsed = envSchema.safeParse(envToParse);
 
   if (!parsed.success) {

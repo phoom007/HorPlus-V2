@@ -25,12 +25,31 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as crypto from 'crypto';
 
-const ADMIN_URL = process.env.DIRECT_URL || 'postgresql://horplus:password@127.0.0.1:5455/horplus_wave1d_fasttrack_test?schema=public';
+function getGuardedAdminUrl(): string {
+  const rawUrl = process.env.DIRECT_URL || process.env.DATABASE_URL;
+  if (!rawUrl || typeof rawUrl !== 'string' || !rawUrl.trim()) {
+    throw new Error('FAIL CLOSED: DIRECT_URL or DATABASE_URL is required');
+  }
+  const parsed = new URL(rawUrl);
+  if (parsed.hostname !== '127.0.0.1' || parsed.port !== '5455' || parsed.pathname.replace(/^\/+/, '') !== 'horplus_wave1d_fasttrack_test') {
+    throw new Error('FAIL CLOSED: Target must be 127.0.0.1:5455/horplus_wave1d_fasttrack_test');
+  }
+  return rawUrl;
+}
+
+const ADMIN_URL = getGuardedAdminUrl();
 const parsedUrl = new URL(ADMIN_URL);
 const PGHOST = parsedUrl.hostname || '127.0.0.1';
 const PGPORT = parsedUrl.port || '5455';
 const PGUSER = parsedUrl.username || 'horplus';
-const PGPASSWORD = parsedUrl.password || 'horplus_dev_password';
+const PGPASSWORD = parsedUrl.password || process.env.PGPASSWORD || process.env.DB_PASSWORD;
+if (!PGPASSWORD || typeof PGPASSWORD !== 'string' || !PGPASSWORD.trim()) {
+  throw new Error('FAIL CLOSED: PGPASSWORD or DB_PASSWORD is required in environment');
+}
+const CANONICAL_APP_PASSWORD = process.env.HORPLUS_APP_DB_PASSWORD || PGPASSWORD;
+if (!CANONICAL_APP_PASSWORD || typeof CANONICAL_APP_PASSWORD !== 'string' || !CANONICAL_APP_PASSWORD.trim()) {
+  throw new Error('FAIL CLOSED: HORPLUS_APP_DB_PASSWORD is required in environment');
+}
 const SERVER_DIR = path.resolve(__dirname, '../../../');
 const ROOT_DIR = path.resolve(SERVER_DIR, '../');
 const TOTAL_MIGRATION_COUNT = fs.readdirSync(path.join(SERVER_DIR, 'prisma/migrations'))
@@ -328,7 +347,7 @@ describe('TASK-009 Checkpoint 1I — Hermetic Pre-Merge Migration & Bootstrap Pr
 
     // Deterministically restore canonical runtime-role password on main test DB
     try {
-      runCanonicalBootstrapScript('horplus_wave1d_fasttrack_test', process.env.HORPLUS_APP_DB_PASSWORD || 'horplus_dev_password');
+      runCanonicalBootstrapScript('horplus_wave1d_fasttrack_test', CANONICAL_APP_PASSWORD);
     } catch { /* ignore */ }
 
     await masterPrisma.$disconnect();
@@ -432,8 +451,7 @@ describe('TASK-009 Checkpoint 1I — Hermetic Pre-Merge Migration & Bootstrap Pr
     });
 
     it('4. Bootstrap is idempotent (second execution succeeds and preserves security posture)', async () => {
-      const canonicalPass = process.env.HORPLUS_APP_DB_PASSWORD || 'horplus_dev_password';
-      const output = runCanonicalBootstrapScript('horplus_wave1d_fasttrack_test', canonicalPass);
+      const output = runCanonicalBootstrapScript('horplus_wave1d_fasttrack_test', CANONICAL_APP_PASSWORD);
       expect(output).toContain('bootstrap complete');
 
       const roles = await mainAdminPrisma.$queryRaw<any[]>`
@@ -453,8 +471,7 @@ describe('TASK-009 Checkpoint 1I — Hermetic Pre-Merge Migration & Bootstrap Pr
         await mainAdminPrisma.$executeRawUnsafe(`ALTER ROLE horplus_app BYPASSRLS`);
       } catch { /* ignore if non-superuser */ }
 
-      const canonicalPass = process.env.HORPLUS_APP_DB_PASSWORD || 'horplus_dev_password';
-      runCanonicalBootstrapScript('horplus_wave1d_fasttrack_test', canonicalPass);
+      runCanonicalBootstrapScript('horplus_wave1d_fasttrack_test', CANONICAL_APP_PASSWORD);
 
       const roles = await mainAdminPrisma.$queryRaw<any[]>`
         SELECT rolbypassrls, rolsuper FROM pg_roles WHERE rolname = ${APP_ROLE}
@@ -473,7 +490,7 @@ describe('TASK-009 Checkpoint 1I — Hermetic Pre-Merge Migration & Bootstrap Pr
     afterAll(() => {
       // Deterministically restore canonical runtime-role password on main test DB immediately after bootstrap tests
       try {
-        runCanonicalBootstrapScript('horplus_wave1d_fasttrack_test', process.env.HORPLUS_APP_DB_PASSWORD || 'horplus_dev_password');
+        runCanonicalBootstrapScript('horplus_wave1d_fasttrack_test', CANONICAL_APP_PASSWORD);
       } catch { /* ignore */ }
     });
   });

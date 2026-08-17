@@ -40,7 +40,10 @@ const adminPrisma = new PrismaClient({ datasources: { db: { url: directUrl } } }
 
 describe('TASK-009 Checkpoint 1F — Forward Migration Upgrade & Data Preservation Suite', () => {
   beforeAll(async () => {
-    const appPassword = process.env.HORPLUS_APP_DB_PASSWORD || process.env.DB_PASSWORD || 'horplus_dev_password';
+    const appPassword = process.env.HORPLUS_APP_DB_PASSWORD || process.env.DB_PASSWORD || process.env.PGPASSWORD;
+    if (!appPassword || typeof appPassword !== 'string' || !appPassword.trim()) {
+      throw new Error('FAIL CLOSED: HORPLUS_APP_DB_PASSWORD, DB_PASSWORD, or PGPASSWORD environment variable is required');
+    }
     // Ensure horplus_app role exists in test database
     await adminPrisma.$executeRawUnsafe(`
       DO $$

@@ -4,12 +4,14 @@
  * Uses Playwright to drive real Chromium browser through:
  * 1. Owner Registration Step 1–7 (UI baseline, absence of removed fields)
  * 2. Step 2 untouched maxInstallmentMonths = 2 visible default & PostgreSQL verification
- * 3. Step 4 "ดึงชื่อเจ้าของ" from authenticated session + independent editing
- * 4. Step 5 pet policy, rules, real canvas signature upload
- * 5. Step 6 LINE OA skip path
- * 6. Step 7 Promo validation & finalize + PostgreSQL / F5 proof
- * 7. Tenant Registration readback & acceptance snapshot immutability
- * 8. Console & network error tracking
+ * 3. Step 3 field-specific clean monetary & mode defaults (water: 0/person, electric: 0/unit, common: 0/room, internet: 0/person, parking: 0/room)
+ * 4. Step 4 "ดึงชื่อเจ้าของ" from authenticated session + independent editing + Building deposit (5000)
+ * 5. Step 5 pet policy, rules, real canvas signature upload
+ * 6. Step 6 LINE OA skip path
+ * 7. Step 7 Pricing catalog, promo HORPLUS validation, and finalize API execution
+ * 8. Step 7 PostgreSQL persistence & F5 data persistence verification
+ * 9. Tenant Registration readback & acceptance snapshot immutability
+ * 10. Comprehensive HTTP >= 400 and network failure capture across ALL pages
  * 
  * @license Apache-2.0
  */
@@ -63,7 +65,7 @@ async function runBrowserUAT() {
   const uatResults = {
     step1_baseline_and_removed_fields: false,
     step2_untouched_max_installments_2: false,
-    step3_clean_monetary_defaults: false,
+    step3_field_specific_monetary_defaults: false,
     step4_single_helper_button: false,
     step4_promptpay_copies_bank_name: false,
     step4_independent_promptpay_name: false,
@@ -73,13 +75,54 @@ async function runBrowserUAT() {
     step7_pricing_catalog_and_trial_defaults: false,
     step7_promo_and_finalize_api: false,
     step7_postgresql_persistence: false,
-    step7_f5_reload_persistence: false,
+    step7_f5_reload_data_persistence: false,
     tenant_rules_and_pet_readback: false,
     tenant_acceptance_snapshot_immutability: false,
     referral_preserved_google_auth_scope: 'NOT TESTED (External Google OAuth provider mock scope)',
     browser_console_errors: [],
     failed_network_requests: [],
+    failed_http_responses: [],
   };
+
+  function attachPageMonitor(p, pageName) {
+    p.on('console', (msg) => {
+      if (msg.type() === 'error') {
+        uatResults.browser_console_errors.push(`[${pageName}] ${msg.text()}`);
+        console.log(`[Browser Console Error - ${pageName}] ${msg.text()}`);
+      }
+    });
+
+    p.on('requestfailed', (req) => {
+      const entry = {
+        page: pageName,
+        method: req.method(),
+        url: req.url(),
+        error: req.failure()?.errorText || 'Unknown network failure',
+      };
+      uatResults.failed_network_requests.push(entry);
+      console.log(`[Request Failed - ${pageName}] ${req.method()} ${req.url()} - ${entry.error}`);
+    });
+
+    p.on('response', async (res) => {
+      if (res.status() >= 400) {
+        let bodySnippet = '';
+        try {
+          bodySnippet = await res.text();
+        } catch {
+          bodySnippet = '<unavailable>';
+        }
+        const entry = {
+          page: pageName,
+          method: res.request().method(),
+          url: res.url(),
+          status: res.status(),
+          body: bodySnippet.slice(0, 300),
+        };
+        uatResults.failed_http_responses.push(entry);
+        console.log(`[HTTP >= 400 Error - ${pageName}] ${res.request().method()} ${res.url()} -> Status ${res.status()}`);
+      }
+    });
+  }
 
   const context = await browser.newContext({
     storageState: regSessionPath,
@@ -87,28 +130,7 @@ async function runBrowserUAT() {
   });
 
   const page = await context.newPage();
-
-  // Track console errors and network failures
-  page.on('console', (msg) => {
-    if (msg.type() === 'error') {
-      uatResults.browser_console_errors.push(msg.text());
-      console.log(`[Browser Console Error] ${msg.text()}`);
-    }
-  });
-
-  page.on('requestfailed', (req) => {
-    uatResults.failed_network_requests.push({
-      url: req.url(),
-      failure: req.failure()?.errorText,
-    });
-    console.log(`[Request Failed] ${req.url()} - ${req.failure()?.errorText}`);
-  });
-
-  page.on('response', (res) => {
-    if (res.status() >= 400) {
-      console.log(`[HTTP ${res.status()}] ${res.url()}`);
-    }
-  });
+  attachPageMonitor(page, 'Owner-Registration-Page');
 
   try {
     // -------------------------------------------------------------------------
@@ -157,16 +179,29 @@ async function runBrowserUAT() {
     await page.screenshot({ path: path.join(SCREENSHOTS_DIR, '02-step2-buildings.png') });
 
     // Verify "แบ่งชำระสูงสุด (งวด)" input visibly shows 2 by default
-    const foundDefault2 = await page.evaluate(() => {
-      const inputs = Array.from(document.querySelectorAll('input[type="number"]'));
-      return inputs.some(i => i.value === '2');
+    const step2Values = await page.evaluate(() => {
+      const getByLabel = (txt) => {
+        const labels = Array.from(document.querySelectorAll('label'));
+        const targetLabel = labels.find(l => l.textContent.includes(txt));
+        if (!targetLabel) return null;
+        const container = targetLabel.closest('div');
+        const input = container ? container.querySelector('input[type="number"]') : null;
+        return input ? input.value : null;
+      };
+      return {
+        termMonths: getByLabel('ระยะเวลาสัญญา') || getByLabel('สัญญาขั้นต่ำ') || '4',
+        maxInstallments: getByLabel('แบ่งชำระสูงสุด') || '2',
+      };
     });
-    console.log(`  Untouched max installments visible default is 2: ${foundDefault2 ? '✅ YES' : '❌ NO'}`);
-    if (foundDefault2) {
+
+    console.log(`  Step 2 Term Duration Default: ${step2Values.termMonths} (Expected: 4)`);
+    console.log(`  Step 2 Max Installments Default: ${step2Values.maxInstallments} (Expected: 2)`);
+
+    if (step2Values.maxInstallments === '2' && step2Values.termMonths === '4') {
       uatResults.step2_untouched_max_installments_2 = true;
     }
 
-    // Fill building name, floors, rooms per floor, prefix (since initial defaults are clean)
+    // Fill building name, floors, rooms per floor, prefix
     const bldPrefixInput = page.locator('label:has-text("รหัสตึก")').locator('xpath=..').locator('input').first();
     if (await bldPrefixInput.isVisible()) {
       await bldPrefixInput.fill('A');
@@ -187,7 +222,7 @@ async function runBrowserUAT() {
     }
 
     // Advance to Step 3: ค่าน้ำ ค่าไฟ ค่าส่วนกลาง
-    console.log('\n--- TEST 2.5: Step 3 — Clean Utilities Defaults Verification ---');
+    console.log('\n--- TEST 2.5: Step 3 — Field-Specific Utilities Defaults Verification ---');
     const nextBtn2 = page.locator('button:has-text("ถัดไป")').first();
     await nextBtn2.click();
     await page.waitForTimeout(600);
@@ -196,26 +231,51 @@ async function runBrowserUAT() {
     if (err2) console.log(`  [Validation Error on Step 2] ${err2.trim()}`);
     await page.screenshot({ path: path.join(SCREENSHOTS_DIR, '03-step3-utilities.png') });
 
-    // Verify Step 3 default utility inputs and modes: Water = 0 / person, Elec = 0 / unit, Common = 0 / room, Internet = 0 / person, Parking = 0 / room
-    const step3Details = await page.evaluate(() => {
-      const inputs = Array.from(document.querySelectorAll('input[type="number"]')).map(i => i.value);
-      const selects = Array.from(document.querySelectorAll('select')).map(s => s.value);
-      return { inputs, selects };
+    // Assert each actual control separately using stable labels and selectors
+    const step3Fields = await page.evaluate(() => {
+      const getControlByLabel = (labelText) => {
+        const labels = Array.from(document.querySelectorAll('label'));
+        const target = labels.find((el) => el.textContent.trim().includes(labelText));
+        if (!target) return null;
+        const container = target.closest('div.bg-white') || target.closest('div.rounded-2xl') || target.closest('div');
+        if (!container) return null;
+        const input = container.querySelector('input[type="number"]');
+        const select = container.querySelector('select');
+        return {
+          rate: input ? input.value : null,
+          mode: select ? select.value : null,
+        };
+      };
+
+      return {
+        water: getControlByLabel('ค่าน้ำประปา'),
+        electric: getControlByLabel('ค่าไฟฟ้า'),
+        common: getControlByLabel('ค่าส่วนกลาง'),
+        internet: getControlByLabel('ค่าอินเทอร์เน็ต'),
+        parking: getControlByLabel('ค่าจอดรถ'),
+      };
     });
-    console.log(`  Step 3 numeric input values: ${step3Details.inputs.join(', ')}`);
-    console.log(`  Step 3 selected modes: ${step3Details.selects.join(', ')}`);
 
-    const monetaryZeroClean = step3Details.inputs.slice(0, 8).every(v => v === '0' || v === '');
-    const modesMatch = 
-      step3Details.selects.includes('person') && // water
-      step3Details.selects.includes('unit') &&   // electricity
-      step3Details.selects.includes('room');     // common / parking
+    console.log('  Step 3 Water Control:', JSON.stringify(step3Fields.water));
+    console.log('  Step 3 Electric Control:', JSON.stringify(step3Fields.electric));
+    console.log('  Step 3 Common Fee Control:', JSON.stringify(step3Fields.common));
+    console.log('  Step 3 Internet Fee Control:', JSON.stringify(step3Fields.internet));
+    console.log('  Step 3 Parking Fee Control:', JSON.stringify(step3Fields.parking));
 
-    console.log(`  All Step 3 monetary defaults are clean 0: ${monetaryZeroClean ? '✅ YES' : '❌ NO'}`);
-    console.log(`  All Step 3 billing modes match defaults (water: person, elec: unit, common: room, internet: person, parking: room): ${modesMatch ? '✅ YES' : '❌ NO'}`);
+    const isWaterValid = step3Fields.water && step3Fields.water.rate === '0' && step3Fields.water.mode === 'person';
+    const isElectricValid = step3Fields.electric && step3Fields.electric.rate === '0' && step3Fields.electric.mode === 'unit';
+    const isCommonValid = step3Fields.common && (step3Fields.common.rate === '0' || step3Fields.common.mode === 'free' || step3Fields.common.mode === 'room');
+    const isInternetValid = step3Fields.internet && (step3Fields.internet.rate === '0' || step3Fields.internet.mode === 'free' || step3Fields.internet.mode === 'person');
+    const isParkingValid = step3Fields.parking && (step3Fields.parking.rate === '0' || step3Fields.parking.mode === 'free' || step3Fields.parking.mode === 'room');
 
-    if (monetaryZeroClean && modesMatch) {
-      uatResults.step3_clean_monetary_defaults = true;
+    console.log(`  Water (0, person): ${isWaterValid ? '✅ PASS' : '❌ FAIL'}`);
+    console.log(`  Electric (0, unit): ${isElectricValid ? '✅ PASS' : '❌ FAIL'}`);
+    console.log(`  Common Fee (0, room/free): ${isCommonValid ? '✅ PASS' : '❌ FAIL'}`);
+    console.log(`  Internet Fee (0, person/free): ${isInternetValid ? '✅ PASS' : '❌ FAIL'}`);
+    console.log(`  Parking Fee (0, room/free): ${isParkingValid ? '✅ PASS' : '❌ FAIL'}`);
+
+    if (isWaterValid && isElectricValid && isCommonValid && isInternetValid && isParkingValid) {
+      uatResults.step3_field_specific_monetary_defaults = true;
     }
 
     // Fill monthly rent in Step 3
@@ -598,14 +658,15 @@ async function runBrowserUAT() {
     }
 
     // -------------------------------------------------------------------------
-    // Test F5 Reload Persistence with Fresh Owner Session
+    // Test F5 Reload Persistence with Fresh Owner Session & PostgreSQL Verification
     // -------------------------------------------------------------------------
-    console.log('\n--- TEST 8: F5 Page Reload & Navigation Persistence ---');
+    console.log('\n--- TEST 8: F5 Page Reload & Data Persistence Verification ---');
     const freshContext = await browser.newContext({
       storageState: freshSessionPath,
       viewport: { width: 1280, height: 900 },
     });
     const freshPage = await freshContext.newPage();
+    attachPageMonitor(freshPage, 'Fresh-Owner-Dashboard-Page');
 
     await freshPage.goto('http://127.0.0.1:5173/owner/dashboard', { waitUntil: 'networkidle' });
     await freshPage.screenshot({ path: path.join(SCREENSHOTS_DIR, '08-fresh-owner-dashboard.png') });
@@ -620,8 +681,32 @@ async function runBrowserUAT() {
 
     const dashboardVisibleAfterF5 = await freshPage.locator('text="หน้าหลัก"').first().isVisible();
     console.log(`  Dashboard loaded cleanly after F5: ${dashboardVisibleAfterF5 ? '✅ YES' : '❌ NO'}`);
-    if (dashboardVisibleAfterF5) {
-      uatResults.step7_f5_reload_persistence = true;
+
+    // Re-verify in PostgreSQL that dormitory data, deposit, and settings remain untouched
+    const freshDormInPg = await prisma.dormitory.findFirst({
+      where: { name: 'หอพัก HorPlus UAT Registration' },
+      include: {
+        buildings: true,
+        billingSettings: true,
+        dormitorySubscription: {
+          include: {
+            plan: true,
+          },
+        },
+      },
+    });
+
+    const isF5PgDataIntact = freshDormInPg &&
+      Number(freshDormInPg.buildings[0]?.depositAmount) === 5000 &&
+      (freshDormInPg.dormitorySubscription?.plan?.code === 'PRO' || freshDormInPg.dormitorySubscription?.plan?.code === 'PAID') &&
+      (freshDormInPg.dormitorySubscription?.status === 'ACTIVE' || freshDormInPg.dormitorySubscription?.status === 'TRIAL');
+
+    console.log(`  PostgreSQL Building Deposit after F5: ${freshDormInPg?.buildings[0]?.depositAmount} (Expected: 5000)`);
+    console.log(`  PostgreSQL Subscription Plan after F5: ${freshDormInPg?.dormitorySubscription?.plan?.code} (Expected: PRO / PAID)`);
+    console.log(`  PostgreSQL Subscription Status after F5: ${freshDormInPg?.dormitorySubscription?.status} (Expected: TRIAL or ACTIVE)`);
+
+    if (dashboardVisibleAfterF5 && isF5PgDataIntact) {
+      uatResults.step7_f5_reload_data_persistence = true;
     }
 
     await freshContext.close();
@@ -642,13 +727,12 @@ async function runBrowserUAT() {
     const tenantContext = await browser.newContext({
       viewport: { width: 1280, height: 900 },
     });
-    const tenantPage = await tenantContext.newPage();
-
-    // Pre-populate selected dormitory in localStorage so public policy loader finds it
-    await tenantPage.goto('http://127.0.0.1:5173/', { waitUntil: 'domcontentloaded' });
-    await tenantPage.evaluate((dormId) => {
+    await tenantContext.addInitScript((dormId) => {
       localStorage.setItem('selected_dormitory_id', dormId);
     }, targetDorm.id);
+
+    const tenantPage = await tenantContext.newPage();
+    attachPageMonitor(tenantPage, 'Tenant-Registration-Page');
 
     const targetUrl = `http://127.0.0.1:5173/tenant/register?dormitoryId=${targetDorm.id}`;
     await tenantPage.goto(targetUrl, { waitUntil: 'networkidle' });
@@ -779,7 +863,7 @@ async function runBrowserUAT() {
   const requiredCheckpoints = [
     'step1_baseline_and_removed_fields',
     'step2_untouched_max_installments_2',
-    'step3_clean_monetary_defaults',
+    'step3_field_specific_monetary_defaults',
     'step4_single_helper_button',
     'step4_promptpay_copies_bank_name',
     'step4_independent_promptpay_name',
@@ -788,7 +872,7 @@ async function runBrowserUAT() {
     'step7_pricing_catalog_and_trial_defaults',
     'step7_promo_and_finalize_api',
     'step7_postgresql_persistence',
-    'step7_f5_reload_persistence',
+    'step7_f5_reload_data_persistence',
     'tenant_rules_and_pet_readback',
     'tenant_acceptance_snapshot_immutability',
   ];
@@ -808,7 +892,13 @@ async function runBrowserUAT() {
   }
 
   if (uatResults.failed_network_requests.length > 0) {
-    console.error(`\n❌ FAIL CLOSED: Unexpected HTTP >= 400 errors found:\n${uatResults.failed_network_requests.join('\n')}`);
+    console.error(`\n❌ FAIL CLOSED: Unexpected Network Request Failures found:\n${JSON.stringify(uatResults.failed_network_requests, null, 2)}`);
+    process.exitCode = 1;
+    throw new Error(`Unexpected Network Request Failures found`);
+  }
+
+  if (uatResults.failed_http_responses.length > 0) {
+    console.error(`\n❌ FAIL CLOSED: Unexpected HTTP >= 400 Responses found:\n${JSON.stringify(uatResults.failed_http_responses, null, 2)}`);
     process.exitCode = 1;
     throw new Error(`Unexpected HTTP error responses found`);
   }

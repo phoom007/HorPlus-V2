@@ -53,18 +53,10 @@ export const TenantRegisterPage: React.FC = () => {
 
       const activeDormId = policyRes.data?.dormitoryId || urlDormId || (typeof window !== 'undefined' ? localStorage.getItem('selected_dormitory_id') : undefined) || undefined;
 
-      try {
-        const allRooms = await getDataProvider().rooms.getAll();
-        const vacantRooms = allRooms.filter((r) => r.status === 'vacant' && (!activeDormId || (r as any).dormitoryId === activeDormId || !(r as any).dormitoryId));
-        setRooms(vacantRooms);
-        if (vacantRooms.length > 0) {
-          setRequestedRoomId(vacantRooms[0].id);
-        } else {
-          setRequestedRoomId('101');
-        }
-      } catch {
-        setRooms([]);
-        setRequestedRoomId('101');
+      // In public unauthenticated tenant registration, allow text input for room unless rooms are provided
+      setRooms([]);
+      if (!requestedRoomId) {
+        setRequestedRoomId('A101');
       }
     } catch (err: any) {
       setErrorText('ไม่สามารถโหลดข้อมูลห้องพักหรือเงื่อนไขหอพักได้');

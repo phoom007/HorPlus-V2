@@ -31,10 +31,14 @@ function getGuardedAdminUrl(): string {
 
 const ADMIN_URL = getGuardedAdminUrl();
 const RUNTIME_URL = process.env.DATABASE_URL || ADMIN_URL;
-const PGHOST = '127.0.0.1';
-const PGPORT = '5455';
-const PGUSER = 'horplus';
-const PGPASSWORD = process.env.PGPASSWORD || process.env.HORPLUS_APP_DB_PASSWORD || '';
+const parsedAdminUrl = new URL(ADMIN_URL);
+const PGHOST = parsedAdminUrl.hostname || '127.0.0.1';
+const PGPORT = parsedAdminUrl.port || '5455';
+const PGUSER = parsedAdminUrl.username || process.env.PGUSER || 'horplus';
+const PGPASSWORD = parsedAdminUrl.password || process.env.PGPASSWORD || process.env.DB_PASSWORD;
+if (!PGPASSWORD || typeof PGPASSWORD !== 'string' || !PGPASSWORD.trim()) {
+  throw new Error('FAIL CLOSED: PGPASSWORD or DB_PASSWORD is required in environment');
+}
 const SERVER_DIR = path.resolve(__dirname, '../../../');
 
 // Disposable database names
@@ -45,7 +49,7 @@ const APP_ROLE = 'horplus_app';
 
 // Admin connection to 'postgres' database for CREATE/DROP DATABASE
 const masterPrisma = new PrismaClient({
-  datasources: { db: { url: `postgresql://${PGUSER}:${PGPASSWORD}@${PGHOST}:${PGPORT}/postgres?schema=public` } }
+  datasources: { db: { url: `postgresql://${PGUSER}:${encodeURIComponent(PGPASSWORD)}@${PGHOST}:${PGPORT}/postgres?schema=public` } }
 });
 
 // Admin connection to main test database
@@ -53,10 +57,13 @@ const adminPrisma = new PrismaClient({
   datasources: { db: { url: ADMIN_URL } }
 });
 
-const CANONICAL_APP_PASSWORD = process.env.HORPLUS_APP_DB_PASSWORD || 'horplus_dev_password';
+const CANONICAL_APP_PASSWORD = process.env.HORPLUS_APP_DB_PASSWORD || PGPASSWORD;
+if (!CANONICAL_APP_PASSWORD || typeof CANONICAL_APP_PASSWORD !== 'string' || !CANONICAL_APP_PASSWORD.trim()) {
+  throw new Error('FAIL CLOSED: HORPLUS_APP_DB_PASSWORD is required in environment');
+}
 
 function dbUrl(dbName: string, user: string = PGUSER, pass: string = PGPASSWORD): string {
-  return `postgresql://${user}:${pass}@${PGHOST}:${PGPORT}/${dbName}?schema=public`;
+  return `postgresql://${user}:${encodeURIComponent(pass)}@${PGHOST}:${PGPORT}/${dbName}?schema=public`;
 }
 
 function runPrismaMigrate(dbName: string, cmd: string): string {
