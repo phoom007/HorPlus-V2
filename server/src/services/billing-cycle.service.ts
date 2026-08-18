@@ -418,8 +418,8 @@ export class BillingCycleService {
       if (paidBillsCount > 0) {
         isLocked = true;
         lockReason = 'งวดนี้มีรายการชำระเงินแล้ว จึงไม่สามารถแก้ไขค่าที่มีผลต่อบิลย้อนหลังได้';
-      } else if (cycle.status !== 'draft') {
-        // Check historical cycle relative to operational cycle
+      } else {
+        // Check historical cycle relative to authoritative operational cycle (regardless of cycle.status)
         const operational = await currentCycleResolverService.resolveOperationalBillingCycle(dormitoryId);
         if (operational.billingCycleId && operational.billingCycleId !== cycle.id) {
           const opCycle = await prisma.billingCycle.findUnique({ where: { id: operational.billingCycleId } });

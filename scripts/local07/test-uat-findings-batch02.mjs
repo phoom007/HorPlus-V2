@@ -52,6 +52,9 @@ async function runBatch02Verification() {
     paid_legacy_template_boundary_preservation: false,
     decimal_string_transport_precision: false,
     promo_authoritative_reasons: false,
+    historical_draft_locked_and_mutation_rejected: false,
+    operational_draft_editable_and_propagated: false,
+    future_draft_editable_and_override: false,
     browser_shared_calendar_gap_and_settings_persistence: false,
     browser_promo_edit_invalidation_and_step7: false,
   };
@@ -1071,7 +1074,7 @@ async function runBatch02Verification() {
         periodEnd: new Date('2027-09-30'),
         billingDate: new Date('2027-09-25'),
         dueDate: new Date('2027-10-05'),
-        status: 'draft',
+        status: 'locked',
       },
     });
     const pOct = await prisma.billingCycle.create({
@@ -1149,43 +1152,7 @@ async function runBatch02Verification() {
       ],
     });
 
-    // Create a building, room & paid bill in SEP
-    const pBuilding = await prisma.building.create({
-      data: {
-        dormitoryId: paidLegacyDormId,
-        name: 'อาคาร Legacy P',
-      },
-    });
-
-    const pRoom = await prisma.room.create({
-      data: {
-        dormitoryId: paidLegacyDormId,
-        buildingId: pBuilding.id,
-        roomNumber: 'P101',
-        normalizedRoomNumber: 'p101',
-        roomType: 'standard',
-        floor: 1,
-        status: 'occupied',
-        monthlyRent: 4000,
-      },
-    });
-
-    await prisma.bill.create({
-      data: {
-        dormitoryId: paidLegacyDormId,
-        billingCycleId: pSep.id,
-        roomId: pRoom.id,
-        billNumber: 'INV-PSEP-101',
-        billingDate: new Date('2027-09-25'),
-        dueDate: new Date('2027-10-05'),
-        totalAmount: 4000,
-        paidAmount: 4000,
-        status: 'paid',
-        paidAt: new Date(),
-      },
-    });
-
-    // Edit AUG: waterRate = "25.00"
+    // Edit AUG (operational cycle): waterRate = "25.00"
     await cycleService.updateCycleRateSnapshot(paidLegacyDormId, pAug.id, {
       waterRate: '25.00',
       expectedVersion: 1,
@@ -1199,12 +1166,12 @@ async function runBatch02Verification() {
       throw new Error('Expected pAug to be updated to 25.00');
     }
     if (pSepCheck.source !== 'TEMPLATE_DEFAULT' || Number(pSepCheck.waterRate) !== 18) {
-      throw new Error(`Propagation modified paid SEP cycle! Got: source=${pSepCheck.source}, waterRate=${pSepCheck.waterRate}`);
+      throw new Error(`Propagation modified locked SEP cycle! Got: source=${pSepCheck.source}, waterRate=${pSepCheck.waterRate}`);
     }
     if (pOctCheck.source !== 'TEMPLATE_DEFAULT' || Number(pOctCheck.waterRate) !== 18) {
-      throw new Error(`Propagation traversed past paid SEP into OCT! Got: source=${pOctCheck.source}, waterRate=${pOctCheck.waterRate}`);
+      throw new Error(`Propagation traversed past locked SEP into OCT! Got: source=${pOctCheck.source}, waterRate=${pOctCheck.waterRate}`);
     }
-    console.log('✓ Paid legacy template boundary verified: Paid bill in SEP strictly stopped forward propagation; SEP and OCT remain untouched TEMPLATE_DEFAULT.');
+    console.log('✓ Locked legacy template boundary verified: Locked SEP strictly stopped forward propagation; SEP and OCT remain untouched TEMPLATE_DEFAULT.');
     results.paid_legacy_template_boundary_preservation = true;
 
     // --------------------------------------------------------------------------
@@ -1330,9 +1297,262 @@ async function runBatch02Verification() {
     results.promo_authoritative_reasons = true;
 
     // --------------------------------------------------------------------------
-    // 11. Browser UAT: Shared Calendar Gap-Month & Settings Persistence
+    // 12. Historical Draft Cycle Lock & Operational/Future Draft Authority Tests
     // --------------------------------------------------------------------------
-    console.log('\n--- 11. Browser UAT: Shared Calendar Gap-Month & Settings Persistence ---');
+    console.log('\n--- 12. Testing Historical Draft Lock & Operational/Future Draft Precedence ---');
+    const authDormId = 'e7777777-7777-4777-a777-777777777777';
+    await prisma.dormitory.upsert({
+      where: { id: authDormId },
+      update: {},
+      create: {
+        id: authDormId,
+        name: 'Batch02 Historical Lock Test Dorm',
+        createdByUserId: testOwner.id,
+      },
+    });
+    await prisma.dormitoryBillingSettings.upsert({
+      where: { dormitoryId: authDormId },
+      update: { dueDay: 5 },
+      create: {
+        dormitoryId: authDormId,
+        billingDay: 25,
+        dueDay: 5,
+        waterRate: 18,
+        electricityRate: 7,
+      },
+    });
+
+    await prisma.billItem.deleteMany({ where: { bill: { dormitoryId: authDormId } } });
+    await prisma.bill.deleteMany({ where: { dormitoryId: authDormId } });
+    await prisma.meterReading.deleteMany({ where: { dormitoryId: authDormId } });
+    await prisma.room.deleteMany({ where: { dormitoryId: authDormId } });
+    await prisma.building.deleteMany({ where: { dormitoryId: authDormId } });
+    await prisma.billingRateSnapshot.deleteMany({ where: { dormitoryId: authDormId } });
+    await prisma.billingCycle.deleteMany({ where: { dormitoryId: authDormId } });
+
+    const authAug = await prisma.billingCycle.create({
+      data: {
+        dormitoryId: authDormId,
+        cycleCode: '2028-08',
+        name: 'สิงหาคม 2571',
+        periodStart: new Date('2028-08-01'),
+        periodEnd: new Date('2028-08-31'),
+        billingDate: new Date('2028-08-25'),
+        dueDate: new Date('2028-09-05'),
+        status: 'draft',
+      },
+    });
+    const authSep = await prisma.billingCycle.create({
+      data: {
+        dormitoryId: authDormId,
+        cycleCode: '2028-09',
+        name: 'กันยายน 2571',
+        periodStart: new Date('2028-09-01'),
+        periodEnd: new Date('2028-09-30'),
+        billingDate: new Date('2028-09-25'),
+        dueDate: new Date('2028-10-05'),
+        status: 'draft',
+      },
+    });
+    const authOct = await prisma.billingCycle.create({
+      data: {
+        dormitoryId: authDormId,
+        cycleCode: '2028-10',
+        name: 'ตุลาคม 2571',
+        periodStart: new Date('2028-10-01'),
+        periodEnd: new Date('2028-10-31'),
+        billingDate: new Date('2028-10-25'),
+        dueDate: new Date('2028-11-05'),
+        status: 'draft',
+      },
+    });
+
+    await prisma.billingRateSnapshot.createMany({
+      data: [
+        {
+          dormitoryId: authDormId,
+          billingCycleId: authAug.id,
+          waterBillingType: 'unit',
+          waterRate: 18.00,
+          electricityBillingType: 'unit',
+          electricityRate: 7.00,
+          commonFee: 100.00,
+          commonFeeMode: 'per_room',
+          internetFee: 0.00,
+          internetFeeMode: 'free',
+          parkingFee: 0.00,
+          parkingFeeMode: 'free',
+          lateFeeType: 'none',
+          lateFeeValue: 0.00,
+          currency: 'THB',
+          source: 'TEMPLATE_DEFAULT',
+          version: 1,
+        },
+        {
+          dormitoryId: authDormId,
+          billingCycleId: authSep.id,
+          waterBillingType: 'unit',
+          waterRate: 18.00,
+          electricityBillingType: 'unit',
+          electricityRate: 7.00,
+          commonFee: 100.00,
+          commonFeeMode: 'per_room',
+          internetFee: 0.00,
+          internetFeeMode: 'free',
+          parkingFee: 0.00,
+          parkingFeeMode: 'free',
+          lateFeeType: 'none',
+          lateFeeValue: 0.00,
+          currency: 'THB',
+          source: 'INHERITED',
+          inheritedFromBillingCycleId: authAug.id,
+          version: 1,
+        },
+        {
+          dormitoryId: authDormId,
+          billingCycleId: authOct.id,
+          waterBillingType: 'unit',
+          waterRate: 18.00,
+          electricityBillingType: 'unit',
+          electricityRate: 7.00,
+          commonFee: 100.00,
+          commonFeeMode: 'per_room',
+          internetFee: 0.00,
+          internetFeeMode: 'free',
+          parkingFee: 0.00,
+          parkingFeeMode: 'free',
+          lateFeeType: 'none',
+          lateFeeValue: 0.00,
+          currency: 'THB',
+          source: 'INHERITED',
+          inheritedFromBillingCycleId: authSep.id,
+          version: 1,
+        },
+      ],
+    });
+
+    // Make SEP the authoritative operational cycle by creating a building, room, and active unpaid bill in SEP
+    const authBuilding = await prisma.building.create({
+      data: {
+        dormitoryId: authDormId,
+        name: 'อาคาร Auth Test',
+      },
+    });
+    const authRoom = await prisma.room.create({
+      data: {
+        dormitoryId: authDormId,
+        buildingId: authBuilding.id,
+        roomNumber: 'A101',
+        normalizedRoomNumber: 'a101',
+        roomType: 'standard',
+        floor: 1,
+        status: 'occupied',
+        monthlyRent: 4000,
+      },
+    });
+    await prisma.bill.create({
+      data: {
+        dormitoryId: authDormId,
+        billingCycleId: authSep.id,
+        roomId: authRoom.id,
+        billNumber: 'INV-AUTHSEP-101',
+        billingDate: new Date('2028-09-25'),
+        dueDate: new Date('2028-10-05'),
+        totalAmount: 4100,
+        paidAmount: 0,
+        status: 'unpaid',
+      },
+    });
+
+    // Verify resolver authoritatively returns SEP as operational cycle
+    const { CurrentCycleResolverService } = await import('../../server/dist/services/current-cycle-resolver.js');
+    const resolverService = new CurrentCycleResolverService(prisma);
+    const opResolved = await resolverService.resolveOperationalBillingCycle(authDormId);
+    if (opResolved.billingCycleId !== authSep.id) {
+      throw new Error(`Expected operational cycle to be SEP (${authSep.id}), got: ${opResolved.billingCycleId}`);
+    }
+
+    // 12.1 Historical Draft Cycle Lock & Mutation Rejection
+    const augSnapResult = await cycleService.getCycleRateSnapshot(authDormId, authAug.id);
+    if (!augSnapResult.isLocked) {
+      throw new Error('Expected historical draft cycle AUG (earlier than operational SEP) to be isLocked=true');
+    }
+    console.log(`✓ Historical draft cycle resolved as isLocked = true with reason: "${augSnapResult.lockReason}".`);
+
+    let historicalMutationBlocked = false;
+    try {
+      await cycleService.updateCycleRateSnapshot(authDormId, authAug.id, {
+        commonFee: '999.00',
+        expectedVersion: 1,
+      }, testOwner.id);
+    } catch (err) {
+      if (err.code === 'BILLING_CYCLE_RATE_SETTINGS_LOCKED' && err.statusCode === 400) {
+        historicalMutationBlocked = true;
+      } else {
+        throw err;
+      }
+    }
+    if (!historicalMutationBlocked) {
+      throw new Error('Expected mutation on historical draft cycle to fail with 400 BILLING_CYCLE_RATE_SETTINGS_LOCKED');
+    }
+
+    // Verify AUG snapshot and version are completely untouched in DB
+    const augDbSnap = await prisma.billingRateSnapshot.findUniqueOrThrow({ where: { billingCycleId: authAug.id } });
+    if (Number(augDbSnap.commonFee) !== 100 || augDbSnap.version !== 1) {
+      throw new Error(`Historical draft AUG snapshot was mutated! commonFee=${augDbSnap.commonFee}, version=${augDbSnap.version}`);
+    }
+    console.log('✓ Historical draft cycle mutation rejected with 400 BILLING_CYCLE_RATE_SETTINGS_LOCKED; DB state untouched.');
+    results.historical_draft_locked_and_mutation_rejected = true;
+
+    // 12.2 Operational Draft Cycle Editable & Propagation
+    const sepSnapResult = await cycleService.getCycleRateSnapshot(authDormId, authSep.id);
+    if (sepSnapResult.isLocked) {
+      throw new Error(`Expected operational draft cycle SEP to be isLocked=false, got locked with reason: ${sepSnapResult.lockReason}`);
+    }
+    console.log('✓ Operational draft cycle resolved as editable (isLocked = false).');
+
+    await cycleService.updateCycleRateSnapshot(authDormId, authSep.id, {
+      commonFee: '250.00',
+      commonFeeMode: 'per_room',
+      expectedVersion: 1,
+    }, testOwner.id);
+
+    const sepDbSnap = await prisma.billingRateSnapshot.findUniqueOrThrow({ where: { billingCycleId: authSep.id } });
+    const octDbSnap = await prisma.billingRateSnapshot.findUniqueOrThrow({ where: { billingCycleId: authOct.id } });
+
+    if (sepDbSnap.source !== 'MANUAL_OVERRIDE' || Number(sepDbSnap.commonFee) !== 250 || sepDbSnap.version !== 2) {
+      throw new Error(`Expected operational SEP to be updated to 250.00 (version 2), got: ${sepDbSnap.commonFee}, v${sepDbSnap.version}`);
+    }
+    if (octDbSnap.source !== 'INHERITED' || Number(octDbSnap.commonFee) !== 250 || octDbSnap.inheritedFromBillingCycleId !== authSep.id) {
+      throw new Error(`Expected future OCT to inherit 250.00 from SEP, got: ${octDbSnap.commonFee}, source=${octDbSnap.source}`);
+    }
+    console.log('✓ Operational draft cycle update succeeded and propagated forward to OCT.');
+    results.operational_draft_editable_and_propagated = true;
+
+    // 12.3 Future Draft Cycle Editable & Manual Override
+    const octSnapResult = await cycleService.getCycleRateSnapshot(authDormId, authOct.id);
+    if (octSnapResult.isLocked) {
+      throw new Error(`Expected future draft cycle OCT to be isLocked=false, got locked with reason: ${octSnapResult.lockReason}`);
+    }
+    console.log('✓ Future draft cycle resolved as editable (isLocked = false).');
+
+    await cycleService.updateCycleRateSnapshot(authDormId, authOct.id, {
+      commonFee: '350.00',
+      commonFeeMode: 'per_room',
+      expectedVersion: 2,
+    }, testOwner.id);
+
+    const octDbSnap2 = await prisma.billingRateSnapshot.findUniqueOrThrow({ where: { billingCycleId: authOct.id } });
+    if (octDbSnap2.source !== 'MANUAL_OVERRIDE' || Number(octDbSnap2.commonFee) !== 350 || octDbSnap2.version !== 3) {
+      throw new Error(`Expected OCT to be MANUAL_OVERRIDE 350.00 (version 3), got: ${octDbSnap2.commonFee}, v${octDbSnap2.version}`);
+    }
+    console.log('✓ Future draft cycle update succeeded with MANUAL_OVERRIDE.');
+    results.future_draft_editable_and_override = true;
+
+    // --------------------------------------------------------------------------
+    // 13. Browser UAT: Shared Calendar Gap-Month & Settings Persistence
+    // --------------------------------------------------------------------------
+    console.log('\n--- 13. Browser UAT: Shared Calendar Gap-Month & Settings Persistence ---');
     const browser = await chromium.launch({ headless: true });
     const freshStorageState = path.join(SESSIONS_DIR, 'fresh-owner.json');
     const context = await browser.newContext({ storageState: freshStorageState });
@@ -1408,9 +1628,9 @@ async function runBatch02Verification() {
     results.browser_shared_calendar_gap_and_settings_persistence = true;
 
     // --------------------------------------------------------------------------
-    // 12. Browser UAT: Step 7 Promo Edit Invalidation & Non-blocking Optional Benefits
+    // 14. Browser UAT: Step 7 Promo Edit Invalidation & Non-blocking Optional Benefits
     // --------------------------------------------------------------------------
-    console.log('\n--- 12. Browser UAT: Step 7 Promo Edit Invalidation & Non-blocking Optional Benefits ---');
+    console.log('\n--- 14. Browser UAT: Step 7 Promo Edit Invalidation & Non-blocking Optional Benefits ---');
     const regStorageState = path.join(SESSIONS_DIR, 'registration-owner.json');
     const regContext = await browser.newContext({ storageState: regStorageState });
     const regPage = await regContext.newPage();
