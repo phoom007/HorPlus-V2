@@ -162,6 +162,7 @@ describe('LOCAL-06 — Co-Occupant / People-Count / Auto-Bill Recalculation & Ou
         parkingFeeMode: 'free',
         lateFeeType: 'none',
         lateFeeValue: '0.00',
+        source: 'TEMPLATE_DEFAULT',
       },
     });
   });
@@ -528,6 +529,7 @@ describe('LOCAL-06 — Co-Occupant / People-Count / Auto-Bill Recalculation & Ou
         parkingFeeMode: 'free',
         lateFeeType: 'none',
         lateFeeValue: '0.00',
+        source: 'TEMPLATE_DEFAULT',
       },
     });
 
@@ -812,6 +814,7 @@ describe('LOCAL-06 — Co-Occupant / People-Count / Auto-Bill Recalculation & Ou
         parkingFeeMode: 'free',
         lateFeeType: 'none',
         lateFeeValue: '0.00',
+        source: 'TEMPLATE_DEFAULT',
       },
     });
 
@@ -877,6 +880,7 @@ describe('LOCAL-06 — Co-Occupant / People-Count / Auto-Bill Recalculation & Ou
         parkingFeeMode: 'free',
         lateFeeType: 'none',
         lateFeeValue: '0.00',
+        source: 'TEMPLATE_DEFAULT',
       },
     });
 
@@ -1377,6 +1381,23 @@ describe('LOCAL-06 — Co-Occupant / People-Count / Auto-Bill Recalculation & Ou
   }, 15000);
 
   it('12. Complete Per-Person Recalculation: all 5 per-person modes together (water, electricity, common_fee, internet, parking) scale exactly on add (1->2) and revert on remove (2->1)', async () => {
+    // Update cycle rate snapshot to configure all 5 per-person modes
+    await prisma.billingRateSnapshot.update({
+      where: { billingCycleId: cycleId },
+      data: {
+        waterRate: 100,
+        waterBillingType: 'person',
+        electricityRate: 200,
+        electricityBillingType: 'person',
+        commonFee: 150,
+        commonFeeMode: 'person',
+        internetFee: 300,
+        internetFeeMode: 'person',
+        parkingFee: 500,
+        parkingFeeMode: 'person',
+      },
+    });
+
     // 1. Initial snapshot = 1
     await prisma.roomBillingCycleSnapshot.create({
       data: {
@@ -1603,6 +1624,7 @@ describe('LOCAL-06 — Co-Occupant / People-Count / Auto-Bill Recalculation & Ou
         parkingFeeMode: 'free',
         lateFeeType: 'none',
         lateFeeValue: '0.00',
+        source: 'TEMPLATE_DEFAULT',
       },
     });
 

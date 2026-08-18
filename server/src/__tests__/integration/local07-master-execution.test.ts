@@ -2905,6 +2905,7 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
         data: {
           dormitoryId: dorm.id,
           billingCycleId: cycle.id,
+          source: 'TEMPLATE_DEFAULT',
           waterBillingType: 'per_person',
           waterRate: '100.00',
           electricityBillingType: 'per_unit',
@@ -4693,7 +4694,7 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
         },
       });
 
-      // 3. Create Cycle 2 (September 2026)
+      // 3. Create Cycle 2 (September 2026) -> inherits from cycle 1
       const cycle2 = await billingCycleService.createBillingCycle(dorm.id, {
         cycleCode: '2026-09',
         name: 'กันยายน 2026',
@@ -4703,18 +4704,36 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
         dueDate: '',
       });
 
-      const snap2 = cycle2.rateSnapshot;
+      expect(cycle2.rateSnapshot?.source).toBe('INHERITED');
+      expect(cycle2.rateSnapshot?.inheritedFromBillingCycleId).toBe(cycle1.cycle.id);
+
+      // Manual override on Cycle 2
+      await billingCycleService.updateCycleRateSnapshot(
+        dorm.id,
+        cycle2.cycle.id,
+        {
+          waterRate: '25.00',
+          electricityRate: '9.00',
+          lateFeeType: 'fixed',
+          lateFeeValue: '100.00',
+          expectedVersion: cycle2.rateSnapshot?.version || 1,
+        },
+        testUser1.id
+      );
+
+      const snap2 = (await billingCycleService.getCycleRateSnapshot(dorm.id, cycle2.cycle.id)).rateSnapshot;
       expect(snap2?.waterRate).toBe('25.00');
       expect(snap2?.electricityRate).toBe('9.00');
       expect(snap2?.lateFeeType).toBe('fixed');
       expect(snap2?.lateFeeValue).toBe('100.00');
+      expect(snap2?.source).toBe('MANUAL_OVERRIDE');
 
       // 4. Verify Immutability: Cycle 1 snapshot remains 0.00
       const cycle1FromDb = await prisma.billingCycle.findUnique({
         where: { id: cycle1.cycle.id },
-        include: { rateSnapshots: true },
+        include: { rateSnapshot: true },
       });
-      const snap1Db = cycle1FromDb?.rateSnapshots?.[0];
+      const snap1Db = cycle1FromDb?.rateSnapshot;
       expect(new Prisma.Decimal(snap1Db?.waterRate || 0).toFixed(2)).toBe('0.00');
       expect(new Prisma.Decimal(snap1Db?.electricityRate || 0).toFixed(2)).toBe('0.00');
       expect(snap1Db?.lateFeeType).toBe('none');

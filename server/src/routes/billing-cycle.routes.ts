@@ -10,10 +10,42 @@ import { currentCycleResolverService } from '../services/current-cycle-resolver.
 import { createRequireSessionMiddleware } from '../middleware/require-session.js';
 import { requireDormitoryPermission } from '../middleware/permission.js';
 import { requireDormitoryWriteEntitlement } from '../middleware/entitlement.js';
+import { z } from 'zod';
 import {
   CreateBillingCycleSchema,
   UpdateBillingCycleSchema,
 } from '../schemas/billing-meter.schemas.js';
+
+const decimalMoneyStringSchema = z
+  .union([z.string(), z.number()])
+  .refine(
+    (val) => {
+      const num = typeof val === 'number' ? val : parseFloat(String(val).trim());
+      return !isNaN(num) && num >= 0;
+    },
+    { message: 'Monetary amount must be a valid non-negative decimal' }
+  );
+
+export const UpdateCycleRateSnapshotSchema = z
+  .object({
+    expectedVersion: z
+      .number({ required_error: 'expectedVersion is required' })
+      .int({ message: 'expectedVersion must be an integer' })
+      .positive({ message: 'expectedVersion must be a positive integer' }),
+    waterBillingType: z.enum(['per_unit', 'per_person']).optional(),
+    waterRate: decimalMoneyStringSchema.optional(),
+    electricityBillingType: z.enum(['per_unit', 'per_person']).optional(),
+    electricityRate: decimalMoneyStringSchema.optional(),
+    commonFeeMode: z.enum(['per_room', 'per_person', 'free']).optional(),
+    commonFee: decimalMoneyStringSchema.optional(),
+    internetFeeMode: z.enum(['per_room', 'per_person', 'free']).optional(),
+    internetFee: decimalMoneyStringSchema.optional(),
+    parkingFeeMode: z.enum(['per_room', 'per_person', 'per_vehicle', 'free']).optional(),
+    parkingFee: decimalMoneyStringSchema.optional(),
+    lateFeeType: z.enum(['none', 'daily', 'fixed', 'percentage']).optional(),
+    lateFeeValue: decimalMoneyStringSchema.optional(),
+  })
+  .strict();
 
 export function createBillingCycleRouter(
   authService: AuthenticationService,
@@ -174,7 +206,19 @@ export function createBillingCycleRouter(
     if (!verifyCsrf(req, res)) return;
     try {
       const dormId = getDormitoryId(req);
-      const result = await billingCycleService.updateCycleRateSnapshot(dormId, req.params.cycleCode, req.body, req.auth?.userId);
+      const parsed = UpdateCycleRateSnapshotSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'ข้อมูลอัตราค่าบริการรอบบิลไม่ถูกต้อง',
+            fieldErrors: parsed.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })),
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+      const result = await billingCycleService.updateCycleRateSnapshot(dormId, req.params.cycleCode, parsed.data, req.auth?.userId);
       res.json({ data: result });
     } catch (err) {
       handleServiceError(res, err, req);
@@ -186,7 +230,19 @@ export function createBillingCycleRouter(
     if (!verifyCsrf(req, res)) return;
     try {
       const dormId = getDormitoryId(req);
-      const result = await billingCycleService.updateCycleRateSnapshot(dormId, req.params.cycleCode, req.body, req.auth?.userId);
+      const parsed = UpdateCycleRateSnapshotSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'ข้อมูลอัตราค่าบริการรอบบิลไม่ถูกต้อง',
+            fieldErrors: parsed.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })),
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+      const result = await billingCycleService.updateCycleRateSnapshot(dormId, req.params.cycleCode, parsed.data, req.auth?.userId);
       res.json({ data: result });
     } catch (err) {
       handleServiceError(res, err, req);
@@ -220,7 +276,19 @@ export function createBillingCycleRouter(
     if (!verifyCsrf(req, res)) return;
     try {
       const dormId = getDormitoryId(req);
-      const result = await billingCycleService.updateCycleRateSnapshot(dormId, req.params.id, req.body, req.auth?.userId);
+      const parsed = UpdateCycleRateSnapshotSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'ข้อมูลอัตราค่าบริการรอบบิลไม่ถูกต้อง',
+            fieldErrors: parsed.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })),
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+      const result = await billingCycleService.updateCycleRateSnapshot(dormId, req.params.id, parsed.data, req.auth?.userId);
       res.json({ data: result });
     } catch (err) {
       handleServiceError(res, err, req);
@@ -232,7 +300,19 @@ export function createBillingCycleRouter(
     if (!verifyCsrf(req, res)) return;
     try {
       const dormId = getDormitoryId(req);
-      const result = await billingCycleService.updateCycleRateSnapshot(dormId, req.params.id, req.body, req.auth?.userId);
+      const parsed = UpdateCycleRateSnapshotSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'ข้อมูลอัตราค่าบริการรอบบิลไม่ถูกต้อง',
+            fieldErrors: parsed.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })),
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+      const result = await billingCycleService.updateCycleRateSnapshot(dormId, req.params.id, parsed.data, req.auth?.userId);
       res.json({ data: result });
     } catch (err) {
       handleServiceError(res, err, req);

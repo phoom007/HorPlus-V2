@@ -3,14 +3,6 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * HORPLUS LOCAL-07 — PRODUCT OWNER MANUAL UAT FINDINGS BATCH 02 VERIFICATION SUITE
- *
- * Validates:
- * 1. BillingRateSnapshot Database Constraints & Provenance Rules (TEMPLATE_DEFAULT, INHERITED, MANUAL_OVERRIDE)
- * 2. Forward Propagation & MANUAL_OVERRIDE boundary protection
- * 3. Paid-Bill Cycle Lock Immutability (BILLING_CYCLE_RATE_SETTINGS_LOCKED)
- * 4. Optimistic Concurrency Control (Version Conflict 409)
- * 5. Browser UAT: Shared Billing Cycle Calendar Picker & Real Mode Per-Cycle Settings
- * 6. Browser UAT: Step 7 Comma-Formatted Package Prices & Non-Blocking Optional Benefits
  */
 
 import { chromium } from '@playwright/test';
@@ -50,9 +42,15 @@ async function runBatch02Verification() {
     cycle_service_forward_propagation: false,
     manual_override_boundary_preservation: false,
     paid_bill_cycle_lock_immutability: false,
-    optimistic_concurrency_version_conflict: false,
-    browser_shared_calendar_picker_and_settings: false,
-    browser_step7_package_formatting_and_optional_benefits: false,
+    optimistic_concurrency_atomic_parallel: false,
+    required_expected_version_validation: false,
+    authoritative_people_count_unpaid_repricing: false,
+    runtime_schema_invalid_modes_rejected: false,
+    free_mode_server_zero_persistence: false,
+    decimal_string_transport_precision: false,
+    promo_authoritative_reasons: false,
+    browser_shared_calendar_gap_and_settings_persistence: false,
+    browser_promo_edit_invalidation_and_step7: false,
   };
 
   try {
@@ -464,50 +462,330 @@ async function runBatch02Verification() {
     results.paid_bill_cycle_lock_immutability = true;
 
     // --------------------------------------------------------------------------
-    // 4. Optimistic Concurrency Control (Version Conflict)
+    // 4. Optimistic Concurrency Control (Parallel 2-Caller Test)
     // --------------------------------------------------------------------------
-    console.log('\n--- 4. Testing Optimistic Concurrency Version Conflict (HTTP 409) ---');
-    let conflictThrown = false;
-    try {
-      await cycleService.updateCycleRateSnapshot(testPropDorm.id, c3.cycle.id, {
+    console.log('\n--- 4. Testing Optimistic Concurrency Control (Atomic Parallel Test) ---');
+    const snapBeforeRace = await cycleService.getCycleRateSnapshot(testPropDorm.id, c4.cycle.id);
+    const currVersion = snapBeforeRace.rateSnapshot?.version || 1;
+
+    // Two parallel callers submit mutations against the exact same expectedVersion
+    const raceResults = await Promise.allSettled([
+      cycleService.updateCycleRateSnapshot(testPropDorm.id, c4.cycle.id, {
         waterRate: 22,
-        expectedVersion: 9999, // Mismatched version
+        expectedVersion: currVersion,
+      }, testOwner.id),
+      cycleService.updateCycleRateSnapshot(testPropDorm.id, c4.cycle.id, {
+        waterRate: 24,
+        expectedVersion: currVersion,
+      }, testOwner.id),
+    ]);
+
+    const fulfilledCount = raceResults.filter(r => r.status === 'fulfilled').length;
+    const rejectedCount = raceResults.filter(r => r.status === 'rejected').length;
+
+    if (fulfilledCount !== 1 || rejectedCount !== 1) {
+      throw new Error(`Expected exactly 1 winner and 1 conflict loser in OCC race! Got fulfilled: ${fulfilledCount}, rejected: ${rejectedCount}`);
+    }
+
+    const loserRejection = raceResults.find(r => r.status === 'rejected');
+    const loserErr = loserRejection?.reason;
+    if (loserErr?.code !== 'BILLING_RATE_SNAPSHOT_VERSION_CONFLICT' && loserErr?.statusCode !== 409) {
+      throw new Error(`Expected loser error code BILLING_RATE_SNAPSHOT_VERSION_CONFLICT 409, got: ${loserErr?.code}`);
+    }
+    console.log('✓ Atomic OCC race verified: Exactly 1 caller won and 1 caller failed with 409 BILLING_RATE_SNAPSHOT_VERSION_CONFLICT.');
+    results.optimistic_concurrency_atomic_parallel = true;
+
+    // --------------------------------------------------------------------------
+    // 5. Required expectedVersion Validation
+    // --------------------------------------------------------------------------
+    console.log('\n--- 5. Testing Required expectedVersion Validation (HTTP 400) ---');
+    let missingVersionRejected = false;
+    try {
+      await cycleService.updateCycleRateSnapshot(testPropDorm.id, c4.cycle.id, {
+        waterRate: 25,
       }, testOwner.id);
     } catch (e) {
-      if (e.code === 'VERSION_CONFLICT' || e.statusCode === 409) {
-        conflictThrown = true;
+      if (e.code === 'VALIDATION_ERROR' || e.statusCode === 400) {
+        missingVersionRejected = true;
       }
     }
-    if (!conflictThrown) {
-      throw new Error('Expected update with mismatched expectedVersion to throw VERSION_CONFLICT 409');
+    if (!missingVersionRejected) {
+      throw new Error('Expected missing expectedVersion to be rejected with 400 VALIDATION_ERROR');
     }
-    console.log('✓ Version conflict rejected with 409 VERSION_CONFLICT.');
-    results.optimistic_concurrency_version_conflict = true;
+    console.log('✓ Missing expectedVersion rejected with 400 VALIDATION_ERROR.');
+    results.required_expected_version_validation = true;
 
     // --------------------------------------------------------------------------
-    // 5. Browser UAT: Shared Calendar Picker & Settings Per-Cycle Real Modes
+    // 6. Authoritative People Count Unpaid Bill Repricing (3-Person Room)
     // --------------------------------------------------------------------------
-    console.log('\n--- 5. Browser UAT: Shared Billing Cycle Calendar Picker & Settings Modes ---');
+    console.log('\n--- 6. Testing Authoritative People Count Unpaid Bill Repricing ---');
+    const { BillingService } = await import('../../server/dist/services/billing.service.js');
+    const { PrismaBillRepository } = await import('../../server/dist/db/repositories/bill.repository.js');
+    const { PrismaMeterRepository } = await import('../../server/dist/db/repositories/meter.repository.js');
+    const { PrismaContractRepository } = await import('../../server/dist/db/repositories/contract.repository.js');
+    const { PrismaRoomRepository } = await import('../../server/dist/db/repositories/room.repository.js');
+    const { PrismaTenantRepository } = await import('../../server/dist/db/repositories/tenant.repository.js');
+
+    const billRepo = new PrismaBillRepository(prisma);
+    const meterRepo = new PrismaMeterRepository(prisma);
+    const contractRepo = new PrismaContractRepository(prisma);
+    const roomRepo = new PrismaRoomRepository(prisma);
+    const tenantRepo = new PrismaTenantRepository(prisma);
+
+    const billingService = new BillingService(
+      billRepo,
+      cycleRepo,
+      meterRepo,
+      contractRepo,
+      roomRepo,
+      tenantRepo
+    );
+
+    // Create a 3-person room: 1 tenant + 2 co-occupants
+    const tenantUser = await prisma.user.upsert({
+      where: { id: '33333333-3333-4333-a333-333333333333' },
+      update: {},
+      create: {
+        id: '33333333-3333-4333-a333-333333333333',
+        googleSubject: 'google-sub-tenant-3p',
+        email: 'tenant-3p@horplus.local',
+        emailNormalized: 'tenant-3p@horplus.local',
+        phone: '0813333333',
+        name: 'นายสามคน ผู้เช่าหลัก',
+        status: 'active',
+      },
+    });
+
+    const tenantEntity = await prisma.tenant.upsert({
+      where: { id: '44444444-4444-4444-a444-444444444444' },
+      update: {},
+      create: {
+        id: '44444444-4444-4444-a444-444444444444',
+        dormitoryId: testPropDorm.id,
+        linkedUserId: tenantUser.id,
+        tenantNumber: 'TNT-3P-001',
+        firstName: 'สมชาย',
+        lastName: 'สามคน',
+        displayName: 'นายสามคน ผู้เช่าหลัก',
+        phone: '0813333333',
+        status: 'active',
+      },
+    });
+
+    // 2 co-occupants
+    await prisma.tenantCoOccupant.deleteMany({ where: { tenantId: tenantEntity.id } });
+    await prisma.tenantCoOccupant.createMany({
+      data: [
+        {
+          id: '55555555-5555-4555-a555-555555555551',
+          dormitoryId: testPropDorm.id,
+          tenantId: tenantEntity.id,
+          name: 'ผู้พักอาศัยคนที่ 1',
+          status: 'active',
+        },
+        {
+          id: '55555555-5555-4555-a555-555555555552',
+          dormitoryId: testPropDorm.id,
+          tenantId: tenantEntity.id,
+          name: 'ผู้พักอาศัยคนที่ 2',
+          status: 'active',
+        },
+      ],
+    });
+
+    await prisma.occupancy.deleteMany({ where: { roomId: testRoom.id } });
+    await prisma.occupancy.create({
+      data: {
+        id: '77777777-7777-4777-a777-777777777771',
+        dormitoryId: testPropDorm.id,
+        roomId: testRoom.id,
+        tenantId: tenantEntity.id,
+        status: 'ACTIVE',
+      },
+    });
+
+    const contract3p = await prisma.contract.upsert({
+      where: { id: '66666666-6666-4666-a666-666666666666' },
+      update: {},
+      create: {
+        id: '66666666-6666-4666-a666-666666666666',
+        dormitoryId: testPropDorm.id,
+        contractNumber: 'CTR-3P-001',
+        roomId: testRoom.id,
+        tenantId: tenantEntity.id,
+        status: 'active',
+        startDate: new Date('2027-03-01'),
+        endDate: new Date('2028-02-28'),
+        rentBillingType: 'monthly',
+        rentAmount: 4500,
+      },
+    });
+
+    // Configure cycle C3 with initial rates: commonFeeMode = per_person (100), internetFeeMode = per_person (50)
+    const snapC3Before = await cycleService.getCycleRateSnapshot(testPropDorm.id, c3.cycle.id);
+    await cycleService.updateCycleRateSnapshot(testPropDorm.id, c3.cycle.id, {
+      commonFeeMode: 'per_person',
+      commonFee: '100.00',
+      internetFeeMode: 'per_person',
+      internetFee: '50.00',
+      expectedVersion: snapC3Before.rateSnapshot?.version || 1,
+    }, testOwner.id);
+
+    // Generate unpaid bill for room in cycle C3
+    const unpaidBillRes = await billingService.generateBill(testPropDorm.id, {
+      billingCycleId: c3.cycle.id,
+      contractId: contract3p.id,
+      roomId: testRoom.id,
+      tenantId: tenantEntity.id,
+    });
+
+    const commonItemBefore = unpaidBillRes.items.find(i => i.type === 'common_fee');
+    const internetItemBefore = unpaidBillRes.items.find(i => i.type === 'internet');
+    if (Number(commonItemBefore?.amount) !== 300) {
+      throw new Error(`Expected initial common fee to be 3 x 100 = 300, got: ${commonItemBefore?.amount}`);
+    }
+    if (Number(internetItemBefore?.amount) !== 150) {
+      throw new Error(`Expected initial internet fee to be 3 x 50 = 150, got: ${internetItemBefore?.amount}`);
+    }
+    console.log('✓ Initial unpaid bill correctly priced: 3 persons x 100 common fee = 300, 3 x 50 internet = 150.');
+
+    // Owner edits rate snapshot for cycle C3: commonFee = 200/person, internetFee = 80/person
+    const snapC3Fresh = await cycleService.getCycleRateSnapshot(testPropDorm.id, c3.cycle.id);
+    await cycleService.updateCycleRateSnapshot(testPropDorm.id, c3.cycle.id, {
+      commonFeeMode: 'per_person',
+      commonFee: '200.00',
+      internetFeeMode: 'per_person',
+      internetFee: '80.00',
+      expectedVersion: snapC3Fresh.rateSnapshot?.version || 1,
+    }, testOwner.id);
+
+    // Verify recalculated unpaid bill
+    const recalculatedBill = await prisma.bill.findUniqueOrThrow({
+      where: { id: unpaidBillRes.bill.id },
+      include: { items: true },
+    });
+
+    const recalculatedCommon = recalculatedBill.items.find(i => i.type === 'common_fee');
+    const recalculatedInternet = recalculatedBill.items.find(i => i.type === 'internet');
+
+    if (Number(recalculatedCommon?.amount) !== 600) {
+      throw new Error(`CRITICAL BUG: Expected recalculated common fee = 3 x 200 = 600, but got: ${recalculatedCommon?.amount} (likely hardcoded 1 x 200)!`);
+    }
+    if (Number(recalculatedInternet?.amount) !== 240) {
+      throw new Error(`CRITICAL BUG: Expected recalculated internet fee = 3 x 80 = 240, but got: ${recalculatedInternet?.amount}!`);
+    }
+    console.log('✓ Authoritative peopleCount repricing verified: 3 persons x 200 = 600 (not 1 x 200).');
+    results.authoritative_people_count_unpaid_repricing = true;
+
+    // --------------------------------------------------------------------------
+    // 7. Runtime Schema & Burp Invalid Mode Rejections
+    // --------------------------------------------------------------------------
+    console.log('\n--- 7. Testing Runtime Schema & Burp Invalid Mode Rejections ---');
+    const { UpdateCycleRateSnapshotSchema } = await import('../../server/dist/routes/billing-cycle.routes.js');
+
+    const invalidModeCheck = UpdateCycleRateSnapshotSchema.safeParse({
+      expectedVersion: 1,
+      commonFeeMode: 'foobar',
+    });
+    if (invalidModeCheck.success) {
+      throw new Error('Expected UpdateCycleRateSnapshotSchema to reject invalid mode "foobar"');
+    }
+
+    const legacyAliasCheck = UpdateCycleRateSnapshotSchema.safeParse({
+      expectedVersion: 1,
+      commonFeeMode: 'room',
+    });
+    if (legacyAliasCheck.success) {
+      throw new Error('Expected UpdateCycleRateSnapshotSchema to reject non-canonical write alias "room"');
+    }
+    console.log('✓ Zod runtime schema strictly rejects invalid modes ("foobar") and non-canonical write aliases ("room").');
+    results.runtime_schema_invalid_modes_rejected = true;
+
+    // --------------------------------------------------------------------------
+    // 8. Free Mode Server-Side Canonical 0.00 Persistence
+    // --------------------------------------------------------------------------
+    console.log('\n--- 8. Testing Free Mode Server Canonical 0.00 Persistence ---');
+    const snapC3FreeCheck = await cycleService.getCycleRateSnapshot(testPropDorm.id, c3.cycle.id);
+    await cycleService.updateCycleRateSnapshot(testPropDorm.id, c3.cycle.id, {
+      commonFeeMode: 'free',
+      commonFee: '999.00', // Attempt tampering
+      internetFeeMode: 'free',
+      internetFee: 500,
+      expectedVersion: snapC3FreeCheck.rateSnapshot?.version || 1,
+    }, testOwner.id);
+
+    const persistedFreeSnap = await prisma.billingRateSnapshot.findUniqueOrThrow({
+      where: { billingCycleId: c3.cycle.id },
+    });
+    if (Number(persistedFreeSnap.commonFee) !== 0 || Number(persistedFreeSnap.internetFee) !== 0) {
+      throw new Error(`Expected server to persist 0.00 for free mode, got commonFee=${persistedFreeSnap.commonFee}, internetFee=${persistedFreeSnap.internetFee}`);
+    }
+    console.log('✓ Server-side canonicalization persists 0.00 for free modes regardless of client tampering.');
+    results.free_mode_server_zero_persistence = true;
+
+    // --------------------------------------------------------------------------
+    // 9. Decimal String Transport Precision
+    // --------------------------------------------------------------------------
+    console.log('\n--- 9. Testing Decimal String Transport Precision ---');
+    const snapDecCheck = await cycleService.getCycleRateSnapshot(testPropDorm.id, c3.cycle.id);
+    await cycleService.updateCycleRateSnapshot(testPropDorm.id, c3.cycle.id, {
+      waterRate: '7.25',
+      electricityRate: '18.75',
+      commonFeeMode: 'per_room',
+      commonFee: '250.50',
+      expectedVersion: snapDecCheck.rateSnapshot?.version || 1,
+    }, testOwner.id);
+
+    const persistedDecSnap = await prisma.billingRateSnapshot.findUniqueOrThrow({
+      where: { billingCycleId: c3.cycle.id },
+    });
+    if (persistedDecSnap.waterRate.toFixed(2) !== '7.25' || persistedDecSnap.electricityRate.toFixed(2) !== '18.75') {
+      throw new Error(`Decimal string precision mismatch: water=${persistedDecSnap.waterRate}, electricity=${persistedDecSnap.electricityRate}`);
+    }
+    console.log('✓ Decimal strings "7.25" and "18.75" preserved with exact database precision.');
+    results.decimal_string_transport_precision = true;
+
+    // --------------------------------------------------------------------------
+    // 10. Authoritative Promo Reason States
+    // --------------------------------------------------------------------------
+    console.log('\n--- 10. Testing Authoritative Promo Reason States ---');
+    const { PromoService } = await import('../../server/dist/services/promo.service.js');
+    const promoService = new PromoService(prisma);
+
+    // 10.1 PROMO_NOT_FOUND
+    const notFoundRes = await promoService.validatePromo('INVALID_CODE_XYZ', testOwner.id);
+    if (notFoundRes.valid || notFoundRes.errorCode !== 'PROMO_NOT_FOUND') {
+      throw new Error(`Expected PROMO_NOT_FOUND, got: ${notFoundRes.errorCode}`);
+    }
+
+    // 10.2 Valid HORPLUS Promo
+    const validPromoRes = await promoService.validatePromo('HORPLUS', testOwner.id);
+    if (!validPromoRes.valid || validPromoRes.promoBonusMonths !== 2 || validPromoRes.totalTrialMonths !== 3) {
+      throw new Error(`Expected valid HORPLUS with +2 months bonus, got valid=${validPromoRes.valid}, bonus=${validPromoRes.promoBonusMonths}`);
+    }
+    console.log('✓ Authoritative promo service returned exact reason states (PROMO_NOT_FOUND, valid bonus=2 months).');
+    results.promo_authoritative_reasons = true;
+
+    // --------------------------------------------------------------------------
+    // 11. Browser UAT: Shared Calendar Gap-Month & Settings Persistence
+    // --------------------------------------------------------------------------
+    console.log('\n--- 11. Browser UAT: Shared Calendar Gap-Month & Settings Persistence ---');
     const browser = await chromium.launch({ headless: true });
-    const compStorageState = path.join(SESSIONS_DIR, 'comp-owner.json');
-    const context = await browser.newContext({ storageState: compStorageState });
+    const freshStorageState = path.join(SESSIONS_DIR, 'fresh-owner.json');
+    const context = await browser.newContext({ storageState: freshStorageState });
     const page = await context.newPage();
 
-    // 5.1 Navigate to Owner Settings
     await page.goto(`${BASE_URL}/owner/settings`, { waitUntil: 'domcontentloaded' });
     await page.waitForTimeout(2000);
 
-    // Verify Shared Calendar Picker Button exists in Settings
     const settingsCycleBtn = page.locator('[data-testid="button-cycle-calendar-settings"]');
     await settingsCycleBtn.waitFor({ state: 'visible', timeout: 5000 });
-    console.log('✓ Settings page cycle picker button visible.');
-
-    // Open Calendar Picker Popover
     await settingsCycleBtn.click();
+
     const calendarPopover = page.locator('[data-testid="billing-cycle-calendar-picker"]');
     await calendarPopover.waitFor({ state: 'visible', timeout: 3000 });
 
-    // Check Buddhist year (+543)
+    // Verify Buddhist year (+543)
     const currentBE = new Date().getFullYear() + 543;
     const yearLabel = await page.locator('[data-testid="calendar-year-label"]').textContent();
     if (!yearLabel.includes(String(currentBE))) {
@@ -523,36 +801,53 @@ async function runBatch02Verification() {
     }
     console.log('✓ Shared Calendar Picker renders 3x4 grid of 12 Thai month buttons.');
 
-    // Close calendar picker
-    await page.locator('[data-testid="calendar-close-button"]').click();
-    await calendarPopover.waitFor({ state: 'hidden', timeout: 2000 });
+    // Verify Gap/Unseeded Month (July: 07) is DISABLED on server-authoritative fresh owner
+    const julBtn = page.locator('[data-testid="calendar-month-07"]');
+    const isJulDisabled = await julBtn.isDisabled();
+    if (!isJulDisabled) {
+      throw new Error('Expected unseeded cycle 2026-07 to be disabled in calendar picker');
+    }
+    console.log('✓ Non-existent cycle 2026-07 strictly disabled in calendar picker.');
 
-    // Verify Provenance Badge in Settings
-    const provBadge = page.locator('[data-testid="snapshot-provenance-badge"]');
-    if (await provBadge.isVisible()) {
-      const badgeText = await provBadge.textContent();
-      console.log(`✓ Snapshot Provenance Badge displayed: "${badgeText?.trim()}".`);
+    // Select August (month 08) which is an unlocked active cycle
+    const augBtn = page.locator('[data-testid="calendar-month-08"]');
+    await augBtn.click();
+    await page.waitForTimeout(1000);
+
+    // Verify water rate input is editable in August cycle
+    const waterInput = page.locator('[data-testid="input-water-unit-rate"]');
+    await waterInput.waitFor({ state: 'visible', timeout: 5000 });
+    await waterInput.fill('23.50');
+    await waterInput.press('Enter');
+    await page.waitForTimeout(1500);
+
+    // Reload page to verify persistence
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(2000);
+
+    // Re-select August in calendar picker to read back August settings
+    await page.locator('[data-testid="button-cycle-calendar-settings"]').click();
+    await page.locator('[data-testid="billing-cycle-calendar-picker"]').waitFor({ state: 'visible', timeout: 3000 });
+    await page.locator('[data-testid="calendar-month-08"]').click();
+    await page.waitForTimeout(1000);
+
+    const reloadedWaterVal = await page.locator('[data-testid="input-water-unit-rate"]').inputValue();
+    if (Number(reloadedWaterVal) !== 23.5) {
+      throw new Error(`Expected reloaded water rate for August to be 23.50, got: ${reloadedWaterVal}`);
     }
 
-    // Verify Mode selectors are enabled and selectable
-    const commonModeSelect = page.locator('[data-testid="select-common-fee-mode"]');
-    if (await commonModeSelect.isVisible()) {
-      await commonModeSelect.selectOption('free');
-      const commonFeeInput = page.locator('[data-testid="input-common-fee"]');
-      const isDisabled = await commonFeeInput.isDisabled();
-      if (!isDisabled) {
-        throw new Error('Expected common fee input to be disabled when mode is "free"');
-      }
-      console.log('✓ Mode selection works: "free" disables fee input and defaults to 0.');
+    const provBadgeText = await page.locator('[data-testid="snapshot-provenance-badge"]').textContent();
+    if (!provBadgeText?.includes('Manual Override') && !provBadgeText?.includes('กำหนดเอง')) {
+      throw new Error(`Expected provenance badge to indicate Manual Override, got: ${provBadgeText}`);
     }
+    console.log(`✓ Settings DB mutation and F5 readback verified: August water rate = ${reloadedWaterVal}, Provenance = "${provBadgeText?.trim()}".`);
 
-    results.browser_shared_calendar_picker_and_settings = true;
+    results.browser_shared_calendar_gap_and_settings_persistence = true;
 
     // --------------------------------------------------------------------------
-    // 6. Browser UAT: Step 7 Comma-Formatted Package Prices & Optional Benefits
+    // 12. Browser UAT: Step 7 Promo Edit Invalidation & Non-blocking Optional Benefits
     // --------------------------------------------------------------------------
-    console.log('\n--- 6. Browser UAT: Step 7 Comma-Formatted Prices & Optional Benefits ---');
-
+    console.log('\n--- 12. Browser UAT: Step 7 Promo Edit Invalidation & Non-blocking Optional Benefits ---');
     const regStorageState = path.join(SESSIONS_DIR, 'registration-owner.json');
     const regContext = await browser.newContext({ storageState: regStorageState });
     const regPage = await regContext.newPage();
@@ -561,21 +856,17 @@ async function runBatch02Verification() {
     await regPage.waitForLoadState('networkidle');
 
     // Step 1: Dorm Info
-    await regPage.locator('input[placeholder*="หอพัก HorPlus"]').first().fill('หอพัก Batch02 Verification');
-    await regPage.locator('textarea[placeholder*="สุขุมวิท"]').first().fill('123 ถนนสุขุมวิท กรุงเทพมหานคร');
+    await regPage.locator('input[placeholder*="หอพัก HorPlus"]').first().fill('หอพัก Batch02 Complete Suite');
+    await regPage.locator('textarea[placeholder*="สุขุมวิท"]').first().fill('456 ถนนสุขุมวิท กรุงเทพมหานคร');
     await regPage.locator('select').first().selectOption('กรุงเทพมหานคร');
     await regPage.locator('button:has-text("ถัดไป")').first().click();
     await regPage.waitForTimeout(600);
 
     // Step 2: Room Layout
     const floorsInput = regPage.locator('input[placeholder*="ระบุจำนวนชั้น"]').first();
-    if (await floorsInput.isVisible()) {
-      await floorsInput.fill('5');
-    }
+    if (await floorsInput.isVisible()) await floorsInput.fill('5');
     const roomsInput = regPage.locator('input[placeholder*="ระบุห้องต่อชั้น"]').first();
-    if (await roomsInput.isVisible()) {
-      await roomsInput.fill('4');
-    }
+    if (await roomsInput.isVisible()) await roomsInput.fill('4');
     const step2Next = regPage.locator('button:has-text("ถัดไป")').first();
     if (await step2Next.isVisible()) {
       await step2Next.click();
@@ -584,9 +875,7 @@ async function runBatch02Verification() {
 
     // Step 3: Billing Rates
     const rentInput = regPage.locator('label:has-text("ค่าเช่ารายเดือน")').locator('xpath=..').locator('input').first();
-    if (await rentInput.isVisible()) {
-      await rentInput.fill('4500');
-    }
+    if (await rentInput.isVisible()) await rentInput.fill('4500');
     const step3Next = regPage.locator('button:has-text("ถัดไป")').first();
     if (await step3Next.isVisible()) {
       await step3Next.click();
@@ -595,33 +884,19 @@ async function runBatch02Verification() {
 
     // Step 4: Due Date & Banking
     const depositInput = regPage.locator('label:has-text("ค่าประกัน")').locator('xpath=../..').locator('input').first();
-    if (await depositInput.isVisible()) {
-      await depositInput.fill('5000');
-    }
+    if (await depositInput.isVisible()) await depositInput.fill('5000');
     const bankSelect = regPage.locator('select').filter({ hasText: 'เลือกธนาคาร' }).first();
-    if (await bankSelect.isVisible()) {
-      await bankSelect.selectOption('กสิกรไทย (KBank)');
-    }
+    if (await bankSelect.isVisible()) await bankSelect.selectOption('กสิกรไทย (KBank)');
     const bankAccInput = regPage.locator('label:has-text("เลขที่บัญชีธนาคาร")').locator('xpath=..').locator('input').first();
-    if (await bankAccInput.isVisible()) {
-      await bankAccInput.fill('0012345678');
-    }
+    if (await bankAccInput.isVisible()) await bankAccInput.fill('0012345678');
     const bankNameInput = regPage.locator('input[placeholder*="บัญชีธนาคาร"]').first();
-    if (await bankNameInput.isVisible()) {
-      await bankNameInput.fill('นายทดสอบ บัญชี');
-    }
+    if (await bankNameInput.isVisible()) await bankNameInput.fill('นายทดสอบ บัญชี');
     const ppInput = regPage.locator('label:has-text("เลขพร้อมเพย์")').locator('xpath=..').locator('input').first();
-    if (await ppInput.isVisible()) {
-      await ppInput.fill('0812345678');
-    }
+    if (await ppInput.isVisible()) await ppInput.fill('0812345678');
     const ppNameInput = regPage.locator('input[placeholder*="บัญชีพร้อมเพย์"]').first();
-    if (await ppNameInput.isVisible()) {
-      await ppNameInput.fill('นายทดสอบ พร้อมเพย์');
-    }
+    if (await ppNameInput.isVisible()) await ppNameInput.fill('นายทดสอบ พร้อมเพย์');
     const dueDateSelect = regPage.locator('[data-testid="due-date-select"]').first();
-    if (await dueDateSelect.isVisible()) {
-      await dueDateSelect.selectOption('15');
-    }
+    if (await dueDateSelect.isVisible()) await dueDateSelect.selectOption('15');
     const step4Next = regPage.locator('button:has-text("ถัดไป")').first();
     if (await step4Next.isVisible()) {
       await step4Next.click();
@@ -664,39 +939,40 @@ async function runBatch02Verification() {
       await regPage.waitForTimeout(800);
     }
 
-    // Verify 2-column grid layout for Referral & Promo on desktop
-    const referralCard = regPage.locator('[data-testid="card-referral-code"]');
-    const promoCard = regPage.locator('[data-testid="card-promo-code"]');
-    await referralCard.waitFor({ state: 'visible', timeout: 5000 });
-    await promoCard.waitFor({ state: 'visible', timeout: 5000 });
-    console.log('✓ Step 7 Optional Benefits: Referral Card and Promo Card visible side-by-side.');
+    // Step 7: Test Promo Code Edit Invalidation
+    const promoInput = regPage.locator('[data-testid="input-promo-code"]');
+    await promoInput.waitFor({ state: 'visible', timeout: 5000 });
+    await promoInput.fill('HORPLUS');
+    await regPage.locator('[data-testid="button-apply-promo"]').click();
+    await regPage.waitForTimeout(1000);
 
-    // Check comma formatting in package selector buttons
-    const durationButtons = regPage.locator('button:has-text("เดือน")');
-    const btnCount = await durationButtons.count();
-    console.log(`✓ Step 7 rendered ${btnCount} package duration choices.`);
+    const inlinePromoMsg = regPage.locator('[data-testid="promo-inline-message"]');
+    const msgText = await inlinePromoMsg.textContent();
+    if (!msgText?.includes('HORPLUS') || !msgText.includes('✓')) {
+      throw new Error(`Expected successful promo message, got: ${msgText}`);
+    }
+    console.log('✓ Promo HORPLUS applied successfully.');
 
-    // Test Referral Isolation: Enter invalid referral code "999999" and check
-    const referralInput = regPage.locator('[data-testid="input-referral-code"]');
-    await referralInput.fill('999999');
-    const checkReferralBtn = regPage.locator('[data-testid="button-check-referral"]');
-    await checkReferralBtn.click();
+    // User now alters promo code to HORPLUX
+    await promoInput.fill('HORPLUX');
+    await regPage.waitForTimeout(500);
 
-    // Verify inline error appears INSIDE card
-    const inlineError = regPage.locator('[data-testid="referral-inline-error"]');
-    await inlineError.waitFor({ state: 'visible', timeout: 4000 });
-    const errText = await inlineError.textContent();
-    console.log(`✓ Invalid referral displays local inline error: "${errText?.trim()}" without crashing.`);
+    // Message must be invalidated and cleared
+    const isMsgVisible = await inlinePromoMsg.isVisible();
+    if (isMsgVisible) {
+      throw new Error('Expected promo message to be cleared immediately when promo text is edited');
+    }
+    console.log('✓ Promo edit invalidation verified: Editing promo input immediately invalidates previous validation state.');
 
-    // Verify Next button is NOT blocked by invalid optional referral
+    // Test non-blocking finalize button
     const step7NextBtn = regPage.locator('button:has-text("ยืนยันสร้างหอพัก")');
     const isNextDisabled = await step7NextBtn.isDisabled();
     if (isNextDisabled) {
-      throw new Error('Next/Finalize button must NOT be disabled by optional referral failure');
+      throw new Error('Next/Finalize button must NOT be disabled by unapplied optional promo');
     }
-    console.log('✓ Non-blocking progression verified: Owner can proceed without valid referral.');
+    console.log('✓ Non-blocking progression verified: Finalize button active.');
 
-    results.browser_step7_package_formatting_and_optional_benefits = true;
+    results.browser_promo_edit_invalidation_and_step7 = true;
 
     await browser.close();
 

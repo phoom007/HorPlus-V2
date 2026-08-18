@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import React from 'react';
-import { render, screen, cleanup } from '@testing-library/react';
+import { render, screen, cleanup, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SourceBadge } from '../components/PropertyBadges';
 import { VersionConflictModal } from '../components/VersionConflictModal';
@@ -233,15 +233,14 @@ describe('Wave 1G — Owner Property UI Component & Integration Tests', () => {
         />
       );
 
-      const waterInput = screen.getByTestId('input-water-unit-rate');
-      await user.clear(waterInput);
-      await user.type(waterInput, '20');
-      await user.tab();
+      const rentInput = screen.getByTestId('input-default-monthly-rent');
+      fireEvent.change(rentInput, { target: { value: '5000' } });
+      fireEvent.blur(rentInput);
 
       expect(updateDormitoryDefaults).toHaveBeenCalledWith({
-        billing: {
-          changes: { waterRate: 20 },
-          expectedVersion: 4,
+        property: {
+          changes: { defaultMonthlyRent: 5000 },
+          expectedVersion: 1,
         },
       });
     });

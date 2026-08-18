@@ -739,7 +739,7 @@ model BillingRateSnapshot {
   updatedByUserId             String?  @map("updated_by_user_id") @db.Uuid
   version                     Int      @default(1)
   createdAt                   DateTime @default(now()) @map("created_at") @db.Timestamptz()
-  updatedAt                   DateTime @updatedAt @map("updated_at") @db.Timestamptz()
+  updatedAt                   DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
 
   dormitory          Dormitory     @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
   billingCycle       BillingCycle  @relation("BillingCycleRateSnapshot", fields: [billingCycleId], references: [id], onDelete: Cascade)

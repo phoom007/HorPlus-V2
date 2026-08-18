@@ -324,6 +324,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
   // Plan Selection & Promo Code states for Step 7
   const [selectedPlan, setSelectedPlan] = useState<'free' | 'pro'>('pro');
   const [promoCodeInput, setPromoCodeInput] = useState('HORPLUS');
+  const [validatedPromoCode, setValidatedPromoCode] = useState<string | undefined>(undefined);
   const [appliedPromo, setAppliedPromo] = useState(false);
   const [promoMessage, setPromoMessage] = useState<string | null>(null);
   const [isCheckingPromo, setIsCheckingPromo] = useState(false);
@@ -426,7 +427,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
         const quote = await onboardingClient.getSubscriptionQuote({
           isFreePlan: selectedPlan === 'free',
           packageId: selectedPlan === 'pro' ? (selectedPackageId || undefined) : undefined,
-          promoCode: appliedPromo && promoCodeInput ? promoCodeInput.trim() : undefined,
+          promoCode: appliedPromo && validatedPromoCode ? validatedPromoCode : undefined,
           referralCode: isReferralBound && referralCodeInput ? referralCodeInput.trim() : undefined,
           coinRequested: coinToApply,
           dormitoryId: provId,
@@ -469,7 +470,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
     return () => {
       isCancelled = true;
     };
-  }, [currentStep, selectedPlan, selectedPackageId, appliedPromo, promoCodeInput, isReferralBound, referralCodeInput, coinToApply, selectedDurationMonths]);
+  }, [currentStep, selectedPlan, selectedPackageId, appliedPromo, validatedPromoCode, isReferralBound, referralCodeInput, coinToApply, selectedDurationMonths]);
 
   // Signature Canvas Drawing
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -585,19 +586,26 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
     if (isCheckingPromo) return;
     if (!promoCodeInput.trim()) {
       setPromoMessage('กรุณากรอกรหัสโปรโมชั่น');
+      setValidatedPromoCode(undefined);
+      setAppliedPromo(false);
       return;
     }
     setIsCheckingPromo(true);
     try {
-      const res = await onboardingClient.validatePromo(promoCodeInput.trim(), selectedPlan.toUpperCase());
+      const codeToTest = promoCodeInput.trim().toUpperCase();
+      const rawRes = await onboardingClient.validatePromo(codeToTest, selectedPlan.toUpperCase());
+      const res = rawRes?.data ?? rawRes;
       if (res && res.valid) {
+        setValidatedPromoCode(codeToTest);
         setAppliedPromo(true);
-        setPromoMessage(`✓ ใช้งานรหัส ${promoCodeInput.trim()} สำเร็จ! ${res.description || 'ได้รับสิทธิ์โปรโมชั่น'}`);
+        setPromoMessage(`✓ ใช้งานรหัส ${codeToTest} สำเร็จ! ${res.description || res.message || 'ได้รับสิทธิ์โปรโมชั่น'}`);
       } else {
+        setValidatedPromoCode(undefined);
         setAppliedPromo(false);
         setPromoMessage(res?.message || 'รหัสโปรโมชั่นไม่ถูกต้อง หรือหมดอายุแล้ว');
       }
     } catch (err: any) {
+      setValidatedPromoCode(undefined);
       setAppliedPromo(false);
       setPromoMessage(err?.message || 'รหัสโปรโมชั่นไม่ถูกต้อง หรือหมดอายุแล้ว');
     } finally {
@@ -1037,7 +1045,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
       const quote = await onboardingClient.getSubscriptionQuote({
         isFreePlan: selectedPlan === 'free',
         packageId: selectedPlan === 'pro' ? (selectedPackageId || undefined) : undefined,
-        promoCode: appliedPromo && promoCodeInput ? promoCodeInput.trim() : undefined,
+        promoCode: appliedPromo && validatedPromoCode ? validatedPromoCode : undefined,
         referralCode: isReferralBound && referralCodeInput ? referralCodeInput.trim() : undefined,
         coinRequested: coinToApply,
         dormitoryId: provDormId,
@@ -1094,7 +1102,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
         planCode: (selectedPlan || 'free').toUpperCase(),
         packageId: selectedPlan === 'pro' ? (selectedPackageId || undefined) : undefined,
         packageIntentId: activeIntentId,
-        promoCode: appliedPromo && promoCodeInput ? promoCodeInput.trim() : undefined,
+        promoCode: appliedPromo && validatedPromoCode ? validatedPromoCode : undefined,
         referralCode: isReferralBound && referralCodeInput ? referralCodeInput.trim() : undefined,
         coinApplied: coinToApply > 0 ? coinToApply : undefined,
         petPolicy: {
@@ -3103,6 +3111,8 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                     value={promoCodeInput}
                     onChange={(e) => {
                       setPromoCodeInput(e.target.value);
+                      setValidatedPromoCode(undefined);
+                      setAppliedPromo(false);
                       setPromoMessage(null);
                     }}
                     placeholder="HORPLUS"

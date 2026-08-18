@@ -857,6 +857,8 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
             onRefreshData={refreshAllData}
             selectedCycle={selectedCycle}
             onCycleChange={(c: string) => setSelectedCycleCode(c)}
+            availableCycles={billingCycles}
+            billingCycles={billingCycles}
           />
         );
       default:

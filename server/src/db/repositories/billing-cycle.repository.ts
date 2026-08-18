@@ -511,17 +511,6 @@ export class PrismaBillingCycleRepository implements IBillingCycleRepository {
     data: UpdateRateSnapshotData,
     expectedVersion?: number
   ): Promise<BillingRateSnapshotEntity | null> {
-    const existing = await this.prisma.billingRateSnapshot.findFirst({
-      where: { id, dormitoryId },
-    });
-    if (!existing) return null;
-    if (expectedVersion !== undefined && existing.version !== expectedVersion) {
-      const err = new Error('BILLING_RATE_SNAPSHOT_VERSION_CONFLICT');
-      (err as any).statusCode = 409;
-      (err as any).code = 'BILLING_RATE_SNAPSHOT_VERSION_CONFLICT';
-      throw err;
-    }
-
     const updateData: any = {
       version: { increment: 1 },
       updatedAt: new Date(),
@@ -543,9 +532,29 @@ export class PrismaBillingCycleRepository implements IBillingCycleRepository {
     if (data.inheritedFromBillingCycleId !== undefined) updateData.inheritedFromBillingCycleId = data.inheritedFromBillingCycleId;
     if (data.updatedByUserId !== undefined) updateData.updatedByUserId = data.updatedByUserId;
 
-    const s = await this.prisma.billingRateSnapshot.update({
-      where: { id },
+    const whereClause: any = { id, dormitoryId };
+    if (expectedVersion !== undefined) {
+      whereClause.version = expectedVersion;
+    }
+
+    const res = await this.prisma.billingRateSnapshot.updateMany({
+      where: whereClause,
       data: updateData,
+    });
+
+    if (res.count === 0) {
+      const existing = await this.prisma.billingRateSnapshot.findFirst({
+        where: { id, dormitoryId },
+      });
+      if (!existing) return null;
+      const err = new Error('BILLING_RATE_SNAPSHOT_VERSION_CONFLICT');
+      (err as any).statusCode = 409;
+      (err as any).code = 'BILLING_RATE_SNAPSHOT_VERSION_CONFLICT';
+      throw err;
+    }
+
+    const s = await this.prisma.billingRateSnapshot.findUniqueOrThrow({
+      where: { id },
     });
     return this.mapSnapshotToEntity(s);
   }

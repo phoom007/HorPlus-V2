@@ -324,6 +324,7 @@ export class BillingOrchestrationService {
       let updatedQuantity = toDecimal(item.quantity);
       let updatedDesc = item.description;
       let updatedMeta = item.metadata ? { ...(item.metadata as any) } : {};
+      let unitPrice = item.unitPrice ? toDecimal(item.unitPrice) : toDecimal('0.00');
 
       const itemMetaMode = (item.metadata as any)?.mode;
       const itemMetaBillingType = (item.metadata as any)?.billingType;
@@ -332,22 +333,70 @@ export class BillingOrchestrationService {
 
       let isPerPerson = isPerPersonUnit || isPerPersonMeta;
 
-      if (!isPerPerson && rateSnapshot) {
-        if (item.type === 'water' && (rateSnapshot.waterBillingType === 'person' || rateSnapshot.waterBillingType === 'per_person')) {
+      if (rateSnapshot) {
+        if (item.type === 'common_fee') {
+          unitPrice = toDecimal(rateSnapshot.commonFee);
+          if (rateSnapshot.commonFeeMode === 'person' || rateSnapshot.commonFeeMode === 'per_person') {
+            isPerPerson = true;
+          } else if (rateSnapshot.commonFeeMode === 'free' || rateSnapshot.commonFeeMode === 'none') {
+            isPerPerson = false;
+            unitPrice = toDecimal('0.00');
+            updatedQuantity = toDecimal(1);
+            updatedAmount = toDecimal('0.00');
+            updatedDesc = 'ค่าส่วนกลาง';
+            updatedMeta = { ...updatedMeta, mode: 'free' };
+          } else {
+            isPerPerson = false;
+            updatedQuantity = toDecimal(1);
+            updatedAmount = unitPrice;
+            updatedDesc = 'ค่าส่วนกลาง';
+            updatedMeta = { ...updatedMeta, mode: 'room' };
+          }
+        } else if (item.type === 'internet') {
+          unitPrice = toDecimal(rateSnapshot.internetFee);
+          if (rateSnapshot.internetFeeMode === 'person' || rateSnapshot.internetFeeMode === 'per_person') {
+            isPerPerson = true;
+          } else if (rateSnapshot.internetFeeMode === 'free' || rateSnapshot.internetFeeMode === 'none') {
+            isPerPerson = false;
+            unitPrice = toDecimal('0.00');
+            updatedQuantity = toDecimal(1);
+            updatedAmount = toDecimal('0.00');
+            updatedDesc = 'ค่าบริการอินเทอร์เน็ต';
+            updatedMeta = { ...updatedMeta, mode: 'free' };
+          } else {
+            isPerPerson = false;
+            updatedQuantity = toDecimal(1);
+            updatedAmount = unitPrice;
+            updatedDesc = 'ค่าบริการอินเทอร์เน็ต';
+            updatedMeta = { ...updatedMeta, mode: 'room' };
+          }
+        } else if (item.type === 'parking') {
+          unitPrice = toDecimal(rateSnapshot.parkingFee);
+          if (rateSnapshot.parkingFeeMode === 'person' || rateSnapshot.parkingFeeMode === 'per_person') {
+            isPerPerson = true;
+          } else if (rateSnapshot.parkingFeeMode === 'free' || rateSnapshot.parkingFeeMode === 'none') {
+            isPerPerson = false;
+            unitPrice = toDecimal('0.00');
+            updatedQuantity = toDecimal(1);
+            updatedAmount = toDecimal('0.00');
+            updatedDesc = 'ค่าที่จอดรถ';
+            updatedMeta = { ...updatedMeta, mode: 'free' };
+          } else {
+            isPerPerson = false;
+            updatedAmount = mulDecimals(updatedQuantity, unitPrice);
+            updatedDesc = 'ค่าที่จอดรถ';
+            updatedMeta = { ...updatedMeta, mode: rateSnapshot.parkingFeeMode };
+          }
+        } else if (item.type === 'water' && (rateSnapshot.waterBillingType === 'person' || rateSnapshot.waterBillingType === 'per_person')) {
+          unitPrice = toDecimal(rateSnapshot.waterRate);
           isPerPerson = true;
         } else if (item.type === 'electricity' && (rateSnapshot.electricityBillingType === 'person' || rateSnapshot.electricityBillingType === 'per_person')) {
-          isPerPerson = true;
-        } else if (item.type === 'common_fee' && (rateSnapshot.commonFeeMode === 'person' || rateSnapshot.commonFeeMode === 'per_person')) {
-          isPerPerson = true;
-        } else if (item.type === 'internet' && (rateSnapshot.internetFeeMode === 'person' || rateSnapshot.internetFeeMode === 'per_person')) {
-          isPerPerson = true;
-        } else if (item.type === 'parking' && (rateSnapshot.parkingFeeMode === 'person' || rateSnapshot.parkingFeeMode === 'per_person')) {
+          unitPrice = toDecimal(rateSnapshot.electricityRate);
           isPerPerson = true;
         }
       }
 
       if (isPerPerson && item.type !== 'rent') {
-        const unitPrice = item.unitPrice ? toDecimal(item.unitPrice) : toDecimal('0.00');
         updatedQuantity = peopleCountDec;
         updatedAmount = mulDecimals(peopleCountDec, unitPrice);
 
@@ -374,11 +423,13 @@ export class BillingOrchestrationService {
       if (
         !updatedAmount.equals(toDecimal(item.amount)) ||
         !updatedQuantity.equals(toDecimal(item.quantity)) ||
+        (item.unitPrice && !unitPrice.equals(toDecimal(item.unitPrice))) ||
         updatedDesc !== item.description
       ) {
         await tx.billItem.update({
           where: { id: item.id },
           data: {
+            unitPrice: formatDecimal(unitPrice),
             quantity: formatDecimal(updatedQuantity),
             amount: formatDecimal(updatedAmount),
             description: updatedDesc,

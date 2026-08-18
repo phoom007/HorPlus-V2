@@ -40,6 +40,7 @@ export interface CreateBillingCycleDto {
 }
 
 export interface UpdateCycleRateSnapshotDto {
+  expectedVersion: number;
   waterBillingType?: string;
   waterRate?: string | number;
   electricityBillingType?: string;
@@ -52,7 +53,6 @@ export interface UpdateCycleRateSnapshotDto {
   parkingFeeMode?: string;
   lateFeeType?: string;
   lateFeeValue?: string | number;
-  expectedVersion?: number;
 }
 
 export interface CycleRateSnapshotResult {
@@ -436,10 +436,10 @@ export class BillingCycleService {
       throw err;
     }
 
-    if (data.expectedVersion !== undefined && rateSnapshot.version !== data.expectedVersion) {
-      const err = new Error('BILLING_RATE_SNAPSHOT_VERSION_CONFLICT');
-      (err as any).statusCode = 409;
-      (err as any).code = 'BILLING_RATE_SNAPSHOT_VERSION_CONFLICT';
+    if (data.expectedVersion === undefined || data.expectedVersion === null || typeof data.expectedVersion !== 'number' || data.expectedVersion <= 0) {
+      const err: any = new Error('expectedVersion is required and must be a positive integer');
+      err.statusCode = 400;
+      err.code = 'VALIDATION_ERROR';
       throw err;
     }
 
@@ -486,9 +486,13 @@ export class BillingCycleService {
     };
 
     const txResult = await prisma.$transaction(async (tx) => {
-      // 1. Update target snapshot with MANUAL_OVERRIDE
-      const updatedSnap = await tx.billingRateSnapshot.update({
-        where: { id: rateSnapshot.id },
+      // 1. Atomic update of target snapshot with OCC version match
+      const updateResult = await tx.billingRateSnapshot.updateMany({
+        where: {
+          id: rateSnapshot.id,
+          dormitoryId,
+          version: data.expectedVersion,
+        },
         data: {
           ...effectiveUpdate,
           source: 'MANUAL_OVERRIDE',
@@ -499,12 +503,23 @@ export class BillingCycleService {
         },
       });
 
-      // 2. Recalculate any unpaid bills in current editable cycle
+      if (updateResult.count !== 1) {
+        const err: any = new Error('BILLING_RATE_SNAPSHOT_VERSION_CONFLICT');
+        err.statusCode = 409;
+        err.code = 'BILLING_RATE_SNAPSHOT_VERSION_CONFLICT';
+        throw err;
+      }
+
+      const updatedSnap = await tx.billingRateSnapshot.findUniqueOrThrow({
+        where: { id: rateSnapshot.id },
+      });
+
+      // 2. Recalculate any unpaid bills in current editable cycle using authoritative peopleCount
       const unpaidBills = await tx.bill.findMany({
         where: {
           dormitoryId,
           billingCycleId: cycle.id,
-          status: { notIn: ['paid', 'cancelled', 'voided', 'withdrawn', 'superseded'] },
+          status: { notIn: ['paid', 'partially_paid', 'cancelled', 'voided', 'withdrawn', 'superseded'] },
           cancelledAt: null,
         },
         include: { room: true },
@@ -521,7 +536,21 @@ export class BillingCycleService {
         );
 
         for (const b of unpaidBills) {
-          await orchestration.recalculateUnpaidBill(dormitoryId, cycle.id, b.roomId, 1, 1, tx);
+          const currentPeopleCount = await orchestration.resolveCyclePeopleCount(
+            dormitoryId,
+            cycle.id,
+            b.roomId,
+            null,
+            tx as any
+          );
+          await orchestration.recalculateUnpaidBill(
+            dormitoryId,
+            cycle.id,
+            b.roomId,
+            currentPeopleCount,
+            currentPeopleCount,
+            tx as any
+          );
         }
       }
 

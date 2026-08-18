@@ -551,6 +551,7 @@ describe('LOCAL-07: Product Owner UI & Backend Integration', () => {
         data: {
           dormitoryId: dorm.id,
           billingCycleId: cycle1.id,
+          source: 'TEMPLATE_DEFAULT',
           waterBillingType: 'unit',
           waterRate: '20.00',
           electricityBillingType: 'unit',
@@ -603,6 +604,7 @@ describe('LOCAL-07: Product Owner UI & Backend Integration', () => {
         data: {
           dormitoryId: dorm.id,
           billingCycleId: cycle2.id,
+          source: 'TEMPLATE_DEFAULT',
           waterBillingType: 'unit',
           waterRate: '20.00',
           electricityBillingType: 'unit',
@@ -656,6 +658,7 @@ describe('LOCAL-07: Product Owner UI & Backend Integration', () => {
         data: {
           dormitoryId: dorm.id,
           billingCycleId: cycle3.id,
+          source: 'TEMPLATE_DEFAULT',
           waterBillingType: 'unit',
           waterRate: '20.00',
           electricityBillingType: 'unit',

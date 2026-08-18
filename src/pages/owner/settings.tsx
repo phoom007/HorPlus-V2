@@ -45,6 +45,8 @@ interface OwnerSettingsProps {
   onRefreshData: () => void;
   selectedCycle?: string;
   onCycleChange?: (cycle: string) => void;
+  availableCycles?: any[];
+  billingCycles?: any[];
 }
 
 // Thai phone number formatter: 0XX-XXX-XXXX (strictly starts with 0)
@@ -103,20 +105,91 @@ const formatBankAccount = (val: string) => {
   return `${digits.slice(0, 3)}-${digits.slice(3, 4)}-${digits.slice(4, 9)}-${digits.slice(9)}`;
 };
 
+const toCanonicalMode = (mode: string | undefined, type: 'water' | 'electricity' | 'common' | 'internet' | 'parking' | 'late'): string => {
+  if (!mode) {
+    if (type === 'water' || type === 'electricity') return 'per_unit';
+    if (type === 'common' || type === 'internet' || type === 'parking') return 'per_room';
+    if (type === 'late') return 'none';
+  }
+  const m = String(mode).toLowerCase();
+  if (type === 'water' || type === 'electricity') {
+    if (m === 'unit' || m === 'per_unit') return 'per_unit';
+    if (m === 'person' || m === 'per_person') return 'per_person';
+    return 'per_unit';
+  }
+  if (type === 'common' || type === 'internet') {
+    if (m === 'free' || m === 'none') return 'free';
+    if (m === 'person' || m === 'per_person') return 'per_person';
+    if (m === 'room' || m === 'per_room') return 'per_room';
+    return 'per_room';
+  }
+  if (type === 'parking') {
+    if (m === 'free' || m === 'none') return 'free';
+    if (m === 'vehicle' || m === 'per_vehicle') return 'per_vehicle';
+    if (m === 'person' || m === 'per_person') return 'per_person';
+    if (m === 'room' || m === 'per_room') return 'per_room';
+    return 'per_room';
+  }
+  if (type === 'late') {
+    if (m === 'free' || m === 'none') return 'none';
+    if (m === 'per_day' || m === 'daily') return 'daily';
+    if (m === 'fixed') return 'fixed';
+    if (m === 'percentage') return 'percentage';
+    return 'none';
+  }
+  return m;
+};
+
+const toNormalizedDecimalString = (val: any): string => {
+  if (val === undefined || val === null || val === '') return '0.00';
+  const s = String(val).trim();
+  return s;
+};
+
 export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
   onAddLog,
   onRefreshData,
   selectedCycle: propSelectedCycle,
-  onCycleChange
+  onCycleChange,
+  availableCycles: propAvailableCycles,
+  billingCycles: propBillingCycles,
 }) => {
   const [dorm, setDorm] = useState<Dormitory>({ id: '', name: '' } as any);
-  const [selectedCycle, setSelectedCycle] = useState<string>(propSelectedCycle || '');
+  const [selectedCycle, setSelectedCycle] = useState<string>(propSelectedCycle || (typeof window !== 'undefined' ? sessionStorage.getItem('settings_selected_cycle') || '' : ''));
   const [isCycleModalOpen, setIsCycleModalOpen] = useState(false);
   const [tempYear, setTempYear] = useState<number>(new Date().getFullYear());
   const DataProvider = getDataProvider();
   const [propertyVersion, setPropertyVersion] = useState<number>(1);
   const [billingVersion, setBillingVersion] = useState<number>(1);
   const selectedDormId = localStorage.getItem('selected_dormitory_id') || sessionStorage.getItem('active_dormitory_selected_for_session') || '';
+
+  const [fetchedCycles, setFetchedCycles] = useState<any[]>([]);
+  const authoritativeCycles = (propAvailableCycles && propAvailableCycles.length > 0)
+    ? propAvailableCycles
+    : (propBillingCycles && propBillingCycles.length > 0)
+    ? propBillingCycles
+    : fetchedCycles;
+
+  useEffect(() => {
+    const dormId = selectedDormId || dorm?.id;
+    if (dormId && (!propAvailableCycles || propAvailableCycles.length === 0)) {
+      fetch(`/api/v1/billing-cycles`, { headers: { 'x-dormitory-id': dormId } })
+        .then((res) => res.json())
+        .then((json) => {
+          if (Array.isArray(json.data) && json.data.length > 0) {
+            setFetchedCycles(json.data);
+            const savedCycle = sessionStorage.getItem('settings_selected_cycle');
+            if (!selectedCycle && !savedCycle) {
+              const currentOrFirst = json.data.find((c: any) => c.status === 'active' || c.status === 'open') || json.data[0];
+              if (currentOrFirst?.cycleCode) {
+                setSelectedCycle(currentOrFirst.cycleCode);
+              }
+            }
+          }
+        })
+        .catch(() => {});
+    }
+  }, [selectedDormId, dorm?.id, propAvailableCycles]);
 
   const [isCycleLocked, setIsCycleLocked] = useState<boolean>(false);
   const [cycleLockReason, setCycleLockReason] = useState<string | null>(null);
@@ -127,19 +200,19 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
   const [propertyMonthlyRent, setPropertyMonthlyRent] = useState<number>(0);
   const [propertyDepositAmount, setPropertyDepositAmount] = useState<number>(0);
 
-  const [localWaterUnitRate, setLocalWaterUnitRate] = useState<string | number>(0);
-  const [localElectricUnitRate, setLocalElectricUnitRate] = useState<string | number>(0);
-  const [localCommonFee, setLocalCommonFee] = useState<string | number>(0);
-  const [localInternetFee, setLocalInternetFee] = useState<string | number>(0);
-  const [localParkingFee, setLocalParkingFee] = useState<string | number>(0);
-  const [localLateFee, setLocalLateFee] = useState<string | number>(0);
+  const [localWaterUnitRate, setLocalWaterUnitRate] = useState<string | number>('0.00');
+  const [localElectricUnitRate, setLocalElectricUnitRate] = useState<string | number>('0.00');
+  const [localCommonFee, setLocalCommonFee] = useState<string | number>('0.00');
+  const [localInternetFee, setLocalInternetFee] = useState<string | number>('0.00');
+  const [localParkingFee, setLocalParkingFee] = useState<string | number>('0.00');
+  const [localLateFee, setLocalLateFee] = useState<string | number>('0.00');
 
-  const [waterBillingMode, setWaterBillingMode] = useState<string>('unit');
-  const [electricBillingMode, setElectricBillingMode] = useState<string>('unit');
-  const [commonFeeMode, setCommonFeeMode] = useState<string>('room');
-  const [internetFeeMode, setInternetFeeMode] = useState<string>('room');
-  const [parkingFeeMode, setParkingFeeMode] = useState<string>('room');
-  const [lateFeeType, setLateFeeType] = useState<string>('per_day');
+  const [waterBillingMode, setWaterBillingMode] = useState<string>('per_unit');
+  const [electricBillingMode, setElectricBillingMode] = useState<string>('per_unit');
+  const [commonFeeMode, setCommonFeeMode] = useState<string>('per_room');
+  const [internetFeeMode, setInternetFeeMode] = useState<string>('per_room');
+  const [parkingFeeMode, setParkingFeeMode] = useState<string>('per_room');
+  const [lateFeeType, setLateFeeType] = useState<string>('none');
 
   // Propagation Preview & Conflict state
   const isPropagationPreviewOpeningRef = useRef(false);
@@ -175,18 +248,18 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
             setSnapshotProvenance(rateSnapshot.source || 'TEMPLATE_DEFAULT');
 
             if (!isUserTypingRef.current) {
-              setLocalWaterUnitRate(rateSnapshot.waterRate ?? 0);
-              setWaterBillingMode(rateSnapshot.waterBillingType || 'unit');
-              setLocalElectricUnitRate(rateSnapshot.electricityRate ?? 0);
-              setElectricBillingMode(rateSnapshot.electricityBillingType || 'unit');
-              setLocalCommonFee(rateSnapshot.commonFee ?? 0);
-              setCommonFeeMode(rateSnapshot.commonFeeMode || 'room');
-              setLocalInternetFee(rateSnapshot.internetFee ?? 0);
-              setInternetFeeMode(rateSnapshot.internetFeeMode || 'room');
-              setLocalParkingFee(rateSnapshot.parkingFee ?? 0);
-              setParkingFeeMode(rateSnapshot.parkingFeeMode || 'room');
-              setLocalLateFee(rateSnapshot.lateFeeValue ?? 0);
-              setLateFeeType(rateSnapshot.lateFeeType || 'per_day');
+              setLocalWaterUnitRate(rateSnapshot.waterRate ?? '0.00');
+              setWaterBillingMode(toCanonicalMode(rateSnapshot.waterBillingType, 'water'));
+              setLocalElectricUnitRate(rateSnapshot.electricityRate ?? '0.00');
+              setElectricBillingMode(toCanonicalMode(rateSnapshot.electricityBillingType, 'electricity'));
+              setLocalCommonFee(rateSnapshot.commonFee ?? '0.00');
+              setCommonFeeMode(toCanonicalMode(rateSnapshot.commonFeeMode, 'common'));
+              setLocalInternetFee(rateSnapshot.internetFee ?? '0.00');
+              setInternetFeeMode(toCanonicalMode(rateSnapshot.internetFeeMode, 'internet'));
+              setLocalParkingFee(rateSnapshot.parkingFee ?? '0.00');
+              setParkingFeeMode(toCanonicalMode(rateSnapshot.parkingFeeMode, 'parking'));
+              setLocalLateFee(rateSnapshot.lateFeeValue ?? '0.00');
+              setLateFeeType(toCanonicalMode(rateSnapshot.lateFeeType, 'late'));
             }
           }
         }
@@ -208,22 +281,22 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
       const csrfMatch = document.cookie.match(/(?:csrf-token|horplus_csrf)=([^;]+)/);
       const csrfToken = csrfMatch ? decodeURIComponent(csrfMatch[1]) : '';
 
-      const wMode = overrides?.waterBillingType ?? waterBillingMode;
-      const wRate = overrides?.waterRate ?? localWaterUnitRate;
-      const eMode = overrides?.electricityBillingType ?? electricBillingMode;
-      const eRate = overrides?.electricityRate ?? localElectricUnitRate;
+      const wMode = toCanonicalMode(overrides?.waterBillingType ?? waterBillingMode, 'water');
+      const wRate = toNormalizedDecimalString(overrides?.waterRate ?? localWaterUnitRate);
+      const eMode = toCanonicalMode(overrides?.electricityBillingType ?? electricBillingMode, 'electricity');
+      const eRate = toNormalizedDecimalString(overrides?.electricityRate ?? localElectricUnitRate);
 
-      const cMode = overrides?.commonFeeMode ?? commonFeeMode;
-      const cFee = cMode === 'free' ? 0 : (overrides?.commonFee ?? localCommonFee);
+      const cMode = toCanonicalMode(overrides?.commonFeeMode ?? commonFeeMode, 'common');
+      const cFee = cMode === 'free' ? '0.00' : toNormalizedDecimalString(overrides?.commonFee ?? localCommonFee);
 
-      const iMode = overrides?.internetFeeMode ?? internetFeeMode;
-      const iFee = iMode === 'free' ? 0 : (overrides?.internetFee ?? localInternetFee);
+      const iMode = toCanonicalMode(overrides?.internetFeeMode ?? internetFeeMode, 'internet');
+      const iFee = iMode === 'free' ? '0.00' : toNormalizedDecimalString(overrides?.internetFee ?? localInternetFee);
 
-      const pMode = overrides?.parkingFeeMode ?? parkingFeeMode;
-      const pFee = pMode === 'free' ? 0 : (overrides?.parkingFee ?? localParkingFee);
+      const pMode = toCanonicalMode(overrides?.parkingFeeMode ?? parkingFeeMode, 'parking');
+      const pFee = pMode === 'free' ? '0.00' : toNormalizedDecimalString(overrides?.parkingFee ?? localParkingFee);
 
-      const lType = overrides?.lateFeeType ?? lateFeeType;
-      const lValue = lType === 'free' ? 0 : (overrides?.lateFeeValue ?? localLateFee);
+      const lType = toCanonicalMode(overrides?.lateFeeType ?? lateFeeType, 'late');
+      const lValue = lType === 'none' ? '0.00' : toNormalizedDecimalString(overrides?.lateFeeValue ?? localLateFee);
 
       const payload = {
         waterBillingType: wMode,
@@ -1493,7 +1566,9 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                       isOpen={isCycleModalOpen}
                       onClose={() => setIsCycleModalOpen(false)}
                       selectedCycleCode={selectedCycle}
+                      availableCycles={authoritativeCycles}
                       onSelectCycle={(targetCycle) => {
+                        sessionStorage.setItem('settings_selected_cycle', targetCycle);
                         setSelectedCycle(targetCycle);
                         if (onCycleChange) {
                           onCycleChange(targetCycle);
@@ -1580,11 +1655,11 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                       setSaveStatus('typing');
                     }}
                     onBlur={(e) => {
-                      handleSaveCycleRateSettings({ waterRate: Number(e.target.value) });
+                      handleSaveCycleRateSettings({ waterRate: e.target.value });
                     }}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') {
-                        handleSaveCycleRateSettings({ waterRate: Number((e.target as HTMLInputElement).value) });
+                        handleSaveCycleRateSettings({ waterRate: (e.target as HTMLInputElement).value });
                       }
                     }}
                     className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-bold focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs disabled:opacity-50 disabled:bg-slate-100"
@@ -1598,15 +1673,15 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                     value={waterBillingMode}
                     disabled={isCycleLocked}
                     onChange={(e) => {
-                      setWaterBillingMode(e.target.value);
-                      handleSaveCycleRateSettings({ waterBillingType: e.target.value });
+                      const newMode = toCanonicalMode(e.target.value, 'water');
+                      setWaterBillingMode(newMode);
+                      handleSaveCycleRateSettings({ waterBillingType: newMode });
                     }}
                     className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-medium focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs disabled:opacity-50 disabled:bg-slate-100"
                     data-testid="select-water-billing-mode"
                   >
-                    <option value="unit">บาท/หน่วย</option>
-                    <option value="person">บาท/คน</option>
-                    <option value="room">บาท/ห้อง</option>
+                    <option value="per_unit">บาท/หน่วย</option>
+                    <option value="per_person">บาท/คน</option>
                   </select>
                 </div>
               </div>
@@ -1628,7 +1703,7 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                       setLocalElectricUnitRate(e.target.value);
                       setSaveStatus('typing');
                     }}
-                    onBlur={(e) => handleSaveCycleRateSettings({ electricityRate: Number(e.target.value) })}
+                    onBlur={(e) => handleSaveCycleRateSettings({ electricityRate: e.target.value })}
                     className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-bold focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs disabled:opacity-50 disabled:bg-slate-100"
                     data-testid="input-electric-unit-rate"
                   />
@@ -1640,15 +1715,15 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                     value={electricBillingMode}
                     disabled={isCycleLocked}
                     onChange={(e) => {
-                      setElectricBillingMode(e.target.value);
-                      handleSaveCycleRateSettings({ electricityBillingType: e.target.value });
+                      const newMode = toCanonicalMode(e.target.value, 'electricity');
+                      setElectricBillingMode(newMode);
+                      handleSaveCycleRateSettings({ electricityBillingType: newMode });
                     }}
                     className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-medium focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs disabled:opacity-50 disabled:bg-slate-100"
                     data-testid="select-electric-billing-mode"
                   >
-                    <option value="unit">บาท/หน่วย</option>
-                    <option value="person">บาท/คน</option>
-                    <option value="room">บาท/ห้อง</option>
+                    <option value="per_unit">บาท/หน่วย</option>
+                    <option value="per_person">บาท/คน</option>
                   </select>
                 </div>
               </div>
@@ -1664,13 +1739,13 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                     type="number"
                     required
                     disabled={isCycleLocked || commonFeeMode === 'free'}
-                    value={commonFeeMode === 'free' ? 0 : localCommonFee}
+                    value={commonFeeMode === 'free' ? '0' : localCommonFee}
                     onChange={(e) => {
                       isUserTypingRef.current = true;
                       setLocalCommonFee(e.target.value);
                       setSaveStatus('typing');
                     }}
-                    onBlur={(e) => handleSaveCycleRateSettings({ commonFee: Number(e.target.value) })}
+                    onBlur={(e) => handleSaveCycleRateSettings({ commonFee: e.target.value })}
                     placeholder={commonFeeMode === 'free' ? 'ฟรี' : '0'}
                     className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-bold focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs disabled:opacity-50 disabled:bg-slate-100"
                     data-testid="input-common-fee"
@@ -1683,17 +1758,17 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                     value={commonFeeMode}
                     disabled={isCycleLocked}
                     onChange={(e) => {
-                      const newMode = e.target.value;
+                      const newMode = toCanonicalMode(e.target.value, 'common');
                       setCommonFeeMode(newMode);
-                      if (newMode === 'free') setLocalCommonFee(0);
-                      handleSaveCycleRateSettings({ commonFeeMode: newMode, commonFee: newMode === 'free' ? 0 : localCommonFee });
+                      if (newMode === 'free') setLocalCommonFee('0.00');
+                      handleSaveCycleRateSettings({ commonFeeMode: newMode, commonFee: newMode === 'free' ? '0.00' : localCommonFee });
                     }}
                     className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-medium focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs disabled:opacity-50 disabled:bg-slate-100 cursor-pointer"
                     data-testid="select-common-fee-mode"
                   >
                     <option value="free">ไม่คิดค่าบริการ (ฟรี)</option>
-                    <option value="room">บาท/ห้อง</option>
-                    <option value="person">บาท/คน</option>
+                    <option value="per_room">บาท/ห้อง</option>
+                    <option value="per_person">บาท/คน</option>
                   </select>
                 </div>
               </div>
@@ -1709,13 +1784,13 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                     type="number"
                     required
                     disabled={isCycleLocked || internetFeeMode === 'free'}
-                    value={internetFeeMode === 'free' ? 0 : localInternetFee}
+                    value={internetFeeMode === 'free' ? '0' : localInternetFee}
                     onChange={(e) => {
                       isUserTypingRef.current = true;
                       setLocalInternetFee(e.target.value);
                       setSaveStatus('typing');
                     }}
-                    onBlur={(e) => handleSaveCycleRateSettings({ internetFee: Number(e.target.value) })}
+                    onBlur={(e) => handleSaveCycleRateSettings({ internetFee: e.target.value })}
                     placeholder={internetFeeMode === 'free' ? 'ฟรี' : '0'}
                     className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-bold focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs disabled:opacity-50 disabled:bg-slate-100"
                     data-testid="input-internet-fee"
@@ -1728,17 +1803,17 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                     value={internetFeeMode}
                     disabled={isCycleLocked}
                     onChange={(e) => {
-                      const newMode = e.target.value;
+                      const newMode = toCanonicalMode(e.target.value, 'internet');
                       setInternetFeeMode(newMode);
-                      if (newMode === 'free') setLocalInternetFee(0);
-                      handleSaveCycleRateSettings({ internetFeeMode: newMode, internetFee: newMode === 'free' ? 0 : localInternetFee });
+                      if (newMode === 'free') setLocalInternetFee('0.00');
+                      handleSaveCycleRateSettings({ internetFeeMode: newMode, internetFee: newMode === 'free' ? '0.00' : localInternetFee });
                     }}
                     className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-medium focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs disabled:opacity-50 disabled:bg-slate-100 cursor-pointer"
                     data-testid="select-internet-fee-mode"
                   >
                     <option value="free">ไม่คิดค่าบริการ (ฟรี)</option>
-                    <option value="room">บาท/ห้อง</option>
-                    <option value="person">บาท/คน</option>
+                    <option value="per_room">บาท/ห้อง</option>
+                    <option value="per_person">บาท/คน</option>
                   </select>
                 </div>
               </div>
@@ -1754,13 +1829,13 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                     type="number"
                     required
                     disabled={isCycleLocked || parkingFeeMode === 'free'}
-                    value={parkingFeeMode === 'free' ? 0 : localParkingFee}
+                    value={parkingFeeMode === 'free' ? '0' : localParkingFee}
                     onChange={(e) => {
                       isUserTypingRef.current = true;
                       setLocalParkingFee(e.target.value);
                       setSaveStatus('typing');
                     }}
-                    onBlur={(e) => handleSaveCycleRateSettings({ parkingFee: Number(e.target.value) })}
+                    onBlur={(e) => handleSaveCycleRateSettings({ parkingFee: e.target.value })}
                     placeholder={parkingFeeMode === 'free' ? 'ฟรี' : '0'}
                     className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-bold focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs disabled:opacity-50 disabled:bg-slate-100"
                     data-testid="input-parking-fee"
@@ -1770,21 +1845,21 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                 <div className="space-y-1">
                   <label className="block font-semibold text-slate-700">รูปแบบค่าจอดรถ</label>
                   <select
-                    value={parkingFeeMode || 'room'}
+                    value={parkingFeeMode || 'per_room'}
                     disabled={isCycleLocked}
                     onChange={(e) => {
-                      const newMode = e.target.value;
+                      const newMode = toCanonicalMode(e.target.value, 'parking');
                       setParkingFeeMode(newMode);
-                      if (newMode === 'free') setLocalParkingFee(0);
-                      handleSaveCycleRateSettings({ parkingFeeMode: newMode, parkingFee: newMode === 'free' ? 0 : localParkingFee });
+                      if (newMode === 'free') setLocalParkingFee('0.00');
+                      handleSaveCycleRateSettings({ parkingFeeMode: newMode, parkingFee: newMode === 'free' ? '0.00' : localParkingFee });
                     }}
                     className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-medium focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs disabled:opacity-50 disabled:bg-slate-100 cursor-pointer"
                     data-testid="select-parking-fee-mode"
                   >
                     <option value="free">ไม่คิดค่าบริการ (ฟรี)</option>
-                    <option value="room">บาท/ห้อง</option>
-                    <option value="person">บาท/คน</option>
-                    <option value="vehicle">บาท/คัน</option>
+                    <option value="per_room">บาท/ห้อง</option>
+                    <option value="per_person">บาท/คน</option>
+                    <option value="per_vehicle">บาท/คัน</option>
                   </select>
                 </div>
               </div>
@@ -1799,15 +1874,15 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                   <input
                     type="number"
                     required
-                    disabled={isCycleLocked || lateFeeType === 'free'}
-                    value={lateFeeType === 'free' ? 0 : localLateFee}
+                    disabled={isCycleLocked || lateFeeType === 'none'}
+                    value={lateFeeType === 'none' ? '0' : localLateFee}
                     onChange={(e) => {
                       isUserTypingRef.current = true;
                       setLocalLateFee(e.target.value);
                       setSaveStatus('typing');
                     }}
-                    onBlur={(e) => handleSaveCycleRateSettings({ lateFeeValue: Number(e.target.value) })}
-                    placeholder={lateFeeType === 'free' ? 'ฟรี' : '0'}
+                    onBlur={(e) => handleSaveCycleRateSettings({ lateFeeValue: e.target.value })}
+                    placeholder={lateFeeType === 'none' ? 'ฟรี' : '0'}
                     className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-bold focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs disabled:opacity-50 disabled:bg-slate-100"
                     data-testid="input-late-fee"
                   />
@@ -1816,20 +1891,21 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                 <div className="space-y-1">
                   <label className="block font-semibold text-slate-700">รูปแบบค่าปรับเกินกำหนด</label>
                   <select
-                    value={lateFeeType || 'per_day'}
+                    value={lateFeeType || 'none'}
                     disabled={isCycleLocked}
                     onChange={(e) => {
-                      const newType = e.target.value;
+                      const newType = toCanonicalMode(e.target.value, 'late');
                       setLateFeeType(newType);
-                      if (newType === 'free') setLocalLateFee(0);
-                      handleSaveCycleRateSettings({ lateFeeType: newType, lateFeeValue: newType === 'free' ? 0 : localLateFee });
+                      if (newType === 'none') setLocalLateFee('0.00');
+                      handleSaveCycleRateSettings({ lateFeeType: newType, lateFeeValue: newType === 'none' ? '0.00' : localLateFee });
                     }}
                     className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-medium focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs disabled:opacity-50 disabled:bg-slate-100 cursor-pointer"
                     data-testid="select-late-fee-type"
                   >
-                    <option value="free">ไม่คิดค่าปรับ (ฟรี)</option>
-                    <option value="per_day">บาท/วัน</option>
-                    <option value="fixed_once">คิดครั้งเดียว</option>
+                    <option value="none">ไม่คิดค่าปรับ (ฟรี)</option>
+                    <option value="daily">บาท/วัน</option>
+                    <option value="fixed">คิดครั้งเดียว</option>
+                    <option value="percentage">ร้อยละ (%)</option>
                   </select>
                 </div>
               </div>

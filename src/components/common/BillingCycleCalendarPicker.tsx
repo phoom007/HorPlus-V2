@@ -143,8 +143,10 @@ export const BillingCycleCalendarPicker: React.FC<BillingCycleCalendarPickerProp
             const isSelected = selectedCycleCode === targetCycle;
             const matchingCycle = availableCycles.find((c) => c.cycleCode === targetCycle);
 
-            const isOutOfRange = (minCycle && targetCycle < minCycle) || (maxCycle && targetCycle > maxCycle);
-            const isDisabled = isOutOfRange && !matchingCycle;
+            const isServerAuthoritative = availableCycles && availableCycles.length > 0;
+            const isDisabled = isServerAuthoritative
+              ? !matchingCycle
+              : Boolean((minCycle && targetCycle < minCycle) || (maxCycle && targetCycle > maxCycle));
 
             return (
               <button
