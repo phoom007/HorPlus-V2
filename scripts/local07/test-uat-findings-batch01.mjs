@@ -57,6 +57,7 @@ async function runBatch01Verification() {
     referral_ui_relocation_and_public_link: false,
     fresh_context_referral_link_traversal: false,
     add_dorm_option_a_and_postgres_intent_match: false,
+    registration_workspace_isolation: false,
   };
 
   try {
@@ -91,6 +92,22 @@ async function runBatch01Verification() {
 
     await page.goto(`${BASE_URL}/owner/register`);
     await page.waitForLoadState('networkidle');
+
+    // Verify Finding A & B: Workspace Gate during initial onboarding
+    const regNavItem = page.locator('[data-testid="nav-item-register"]');
+    const roomsNavItem = page.locator('[data-testid="nav-item-rooms"]');
+    const settingsNavItem = page.locator('[data-testid="nav-item-settings"]');
+    const hasOnlyRegisterMenu = (await regNavItem.count() > 0) && (await roomsNavItem.count() === 0) && (await settingsNavItem.count() === 0);
+    console.log(`  Initial onboarding menu shows only 'ลงทะเบียน': ${hasOnlyRegisterMenu ? '✅ YES' : '❌ NO'}`);
+
+    // Click profile avatar button and verify it does NOT navigate to settings
+    const avatarBtns = page.locator('button[title*="ลงทะเบียน"]');
+    if (await avatarBtns.count() > 0) {
+      await avatarBtns.first().click({ force: true }).catch(() => {});
+      await page.waitForTimeout(300);
+    }
+    const staysOnRegisterUrl = page.url().includes('/owner/register');
+    console.log(`  Profile avatar click locked to registration: ${staysOnRegisterUrl ? '✅ YES' : '❌ NO'}`);
 
     // Fill Step 1
     await page.locator('input[placeholder*="หอพัก HorPlus"]').first().fill('หอพัก Batch01 Real Typing Test');
@@ -367,20 +384,27 @@ async function runBatch01Verification() {
     console.log('\n--- 6. Testing Add Dormitory Option A & PostgreSQL Intent Matching ---');
     let capturedProvDormIdB = null;
     let capturedQuoteIntentIdB = null;
+    const unexpectedOperationalCallsB = [];
 
     page.on('response', async res => {
-      if (res.url().includes('/api/v1/')) {
-        if (res.url().includes('/onboarding/prepare')) {
+      const url = res.url();
+      if (url.includes('/api/v1/')) {
+        if (url.includes('/onboarding/prepare')) {
           try {
             const data = await res.json();
             capturedProvDormIdB = data?.data?.provisionalDormitoryId || data?.provisionalDormitoryId;
           } catch {}
         }
-        if (res.url().includes('/subscription/quote')) {
+        if (url.includes('/subscription/quote')) {
           try {
             const data = await res.json();
             capturedQuoteIntentIdB = data?.data?.intentId;
           } catch {}
+        }
+        if (page.url().includes('/owner/dormitories/new')) {
+          if (url.includes('/properties/rooms') || url.includes('/tenants') || url.includes('/bills') || url.includes('/notifications')) {
+            unexpectedOperationalCallsB.push(url);
+          }
         }
       }
     });
@@ -388,6 +412,34 @@ async function runBatch01Verification() {
     await page.goto(`${BASE_URL}/owner/dormitories/new`);
     await page.waitForLoadState('networkidle');
     await page.waitForTimeout(800);
+
+    // Assert Workspace Gate for Add-Dorm registration mode
+    const regNavItemB = page.locator('[data-testid="nav-item-register"]');
+    const roomsNavItemB = page.locator('[data-testid="nav-item-rooms"]');
+    const settingsNavItemB = page.locator('[data-testid="nav-item-settings"]');
+    const hasOnlyRegisterMenuB = (await regNavItemB.count() > 0) && (await roomsNavItemB.count() === 0) && (await settingsNavItemB.count() === 0);
+    console.log(`  Add-dorm registration menu shows only 'ลงทะเบียน': ${hasOnlyRegisterMenuB ? '✅ YES' : '❌ NO'}`);
+
+    const avatarBtnsB = page.locator('button[title*="ลงทะเบียน"]');
+    if (await avatarBtnsB.count() > 0) {
+      await avatarBtnsB.first().click({ force: true }).catch(() => {});
+      await page.waitForTimeout(300);
+    }
+    const staysOnAddDormUrl = page.url().includes('/owner/dormitories/new');
+    console.log(`  Add-dorm profile avatar click locked to registration: ${staysOnAddDormUrl ? '✅ YES' : '❌ NO'}`);
+
+    console.log(`  Add-dorm background operational data queries suppressed: ${unexpectedOperationalCallsB.length === 0 ? '✅ YES' : '❌ NO'} (Count: ${unexpectedOperationalCallsB.length})`);
+
+    // Verify F5 reload maintains add_dorm registration mode
+    await page.reload();
+    await page.waitForLoadState('networkidle');
+    await page.waitForTimeout(600);
+    const staysOnAddDormAfterF5 = page.url().includes('/owner/dormitories/new') && (await regNavItemB.count() > 0) && (await roomsNavItemB.count() === 0);
+    console.log(`  Add-dorm F5 reload preserves isolated registration workspace: ${staysOnAddDormAfterF5 ? '✅ YES' : '❌ NO'}`);
+
+    if (hasOnlyRegisterMenu && staysOnRegisterUrl && hasOnlyRegisterMenuB && staysOnAddDormUrl && unexpectedOperationalCallsB.length === 0 && staysOnAddDormAfterF5) {
+      results.registration_workspace_isolation = true;
+    }
 
     // Fill Step 1 for Dorm B
     await page.locator('input[placeholder*="หอพัก HorPlus"]').first().fill('หอพัก Batch01 Dorm B (FREE)');
@@ -480,7 +532,14 @@ async function runBatch01Verification() {
     await page.locator('input[type="checkbox"]').first().check();
     await page.locator('button:has-text("Facebook")').first().click();
     await page.locator('button:has-text("ยอมรับเงื่อนไข")').click();
-    await page.waitForTimeout(3500);
+    await page.waitForURL('**/owner/dashboard', { timeout: 15000 }).catch(() => {});
+    await page.waitForLoadState('networkidle').catch(() => {});
+    await page.waitForTimeout(2000);
+
+    // Verify operational menus are restored after finalization
+    const restoredRoomsNavItem = page.locator('[data-testid="nav-item-rooms"]');
+    const hasRestoredOperationalMenu = await restoredRoomsNavItem.count() > 0;
+    console.log(`  Operational menus restored after Dorm B finalization: ${hasRestoredOperationalMenu ? '✅ YES' : '❌ NO'}`);
 
     // Query PostgreSQL directly for verification
     const sessionRes = await page.evaluate(async () => {

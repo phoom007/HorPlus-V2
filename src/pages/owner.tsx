@@ -173,10 +173,15 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
   const navigate = useNavigate();
   const location = useLocation();
 
-  const pathSegment = location.pathname.startsWith('/owner/dormitories/new')
+  const isAddDormRegistrationMode = location.pathname.startsWith('/owner/dormitories/new');
+  const isRegistrationMode = Boolean(onboardingRequired) || isAddDormRegistrationMode;
+
+  const pathSegment = isAddDormRegistrationMode
     ? 'dormitories/new'
-    : (location.pathname.split('/')[2] || 'dashboard');
-  const [activeTab, setActiveTab] = useState(onboardingRequired ? 'register' : pathSegment);
+    : (onboardingRequired ? 'register' : (location.pathname.split('/')[2] || 'dashboard'));
+  const [activeTab, setActiveTab] = useState(
+    isRegistrationMode ? (isAddDormRegistrationMode ? 'dormitories/new' : 'register') : pathSegment
+  );
 
   useEffect(() => {
     console.log('[DEBUG] OwnerWorkspace activeTab updated to:', activeTab);
@@ -186,10 +191,18 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
     if (onboardingRequired && pathSegment !== 'register') {
       navigate('/owner/register', { replace: true });
       setActiveTab('register');
-    } else if (!onboardingRequired && pathSegment && pathSegment !== activeTab) {
+    } else if (isAddDormRegistrationMode && pathSegment !== 'dormitories/new') {
+      navigate('/owner/dormitories/new', { replace: true });
+      setActiveTab('dormitories/new');
+    } else if (!isRegistrationMode && pathSegment && pathSegment !== activeTab) {
       setActiveTab(pathSegment);
+    } else if (isRegistrationMode) {
+      const target = isAddDormRegistrationMode ? 'dormitories/new' : 'register';
+      if (activeTab !== target) {
+        setActiveTab(target);
+      }
     }
-  }, [pathSegment, onboardingRequired, navigate, activeTab]);
+  }, [pathSegment, onboardingRequired, isAddDormRegistrationMode, isRegistrationMode, navigate, activeTab]);
 
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -200,6 +213,23 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
   }, [activeTab, location.pathname]);
 
   const changeTab = (tabId: string) => {
+    if (isRegistrationMode) {
+      if (isAddDormRegistrationMode) {
+        if (tabId === 'register' || tabId === 'dormitories/new') {
+          navigate('/owner/dormitories/new');
+          setActiveTab('dormitories/new');
+        }
+        return;
+      }
+      if (onboardingRequired) {
+        if (tabId === 'register') {
+          navigate('/owner/register');
+          setActiveTab('register');
+        }
+        return;
+      }
+      return;
+    }
     setActiveTab(tabId);
     navigate(`/owner/${tabId}`);
   };
@@ -314,13 +344,13 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
   }, [headerSearchQuery, tenants, rooms]);
 
   const handleSelectHeaderSearchResult = (result: typeof headerSearchResults[0]) => {
-    if (!result) return;
+    if (!result || isRegistrationMode) return;
     if (result.tenantId) {
       setInitialTenantId(result.tenantId);
-      setActiveTab('tenants');
+      changeTab('tenants');
     } else if (result.roomId) {
       setInitialRoomId(result.roomId);
-      setActiveTab('rooms');
+      changeTab('rooms');
     }
     setHeaderSearchQuery('');
     setIsSearchDropdownOpen(false);
@@ -396,6 +426,11 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
   const isSettingsIncomplete = false;
 
   const handleTabChange = (tabId: string) => {
+    if (isRegistrationMode) {
+      changeTab(tabId);
+      setIsSidebarOpen(false);
+      return;
+    }
     if (tabId === 'tenants') {
       const allTIds = (tenants || []).map(t => t.id);
       setSeenTenantIds(allTIds);
@@ -415,7 +450,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
   const [isNotificationOpen, setIsNotificationOpen] = useState(false);
 
   const fetchStaffNotifications = async () => {
-    if (activeTab === 'register' || onboardingRequired) return;
+    if (isRegistrationMode) return;
     const reqHeaders: Record<string, string> = {};
     const savedId = localStorage.getItem('selected_dormitory_id');
     if (savedId) reqHeaders['x-dormitory-id'] = savedId;
@@ -430,8 +465,10 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
   };
 
   useEffect(() => {
-    fetchStaffNotifications();
-  }, [activeTab]);
+    if (!isRegistrationMode) {
+      fetchStaffNotifications();
+    }
+  }, [activeTab, isRegistrationMode]);
 
   const hasUnreadNotifications = staffUnreadCount > 0;
 
@@ -487,7 +524,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
 
   // Load centralized data
   const refreshAllData = async () => {
-    if (activeTab === 'register' || onboardingRequired) return;
+    if (isRegistrationMode) return;
     let isApiConnected = false;
     const reqHeaders: Record<string, string> = {};
     const savedId = localStorage.getItem('selected_dormitory_id');
@@ -559,11 +596,13 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
   };
 
   useEffect(() => {
-    refreshAllData();
+    if (!isRegistrationMode) {
+      refreshAllData();
+    }
 
     // Listen to localStorage changes to sync in real-time if multiple tabs/frames are open
     const handleStorageChange = (e: StorageEvent) => {
-      if (e.key && e.key.includes('HorPlus_')) {
+      if (e.key && e.key.includes('HorPlus_') && !isRegistrationMode) {
         refreshAllData();
       }
     };
@@ -572,7 +611,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
     return () => {
       window.removeEventListener('storage', handleStorageChange);
     };
-  }, []);
+  }, [isRegistrationMode]);
 
   const handleAddLog = (action: string, details: string, type: string, id: string) => {
     
@@ -662,15 +701,18 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
   const userRole = normalizeRole(rawRole);
 
   // Fail-closed menu filtering: empty list if role is unmapped/unresolved
-  let allowedMenuItems = userRole ? menuItems.filter(item => item.roles.includes(userRole)) : [];
-  if (!onboardingRequired) {
-    allowedMenuItems = allowedMenuItems.filter(item => item.id !== 'register');
-  }
+  let allowedMenuItems = isRegistrationMode
+    ? menuItems.filter(item => item.id === 'register')
+    : (userRole ? menuItems.filter(item => item.roles.includes(userRole) && item.id !== 'register') : []);
 
   // Determine current component to render
   const [meterReadings, setMeterReadings] = useState<any[]>([]);
 
   useEffect(() => {
+    if (isRegistrationMode) {
+      setMeterReadings([]);
+      return;
+    }
     if (selectedBillingCycleId) {
       const reqHeaders: Record<string, string> = {};
       const savedId = localStorage.getItem('selected_dormitory_id');
@@ -682,9 +724,27 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
     } else {
       setMeterReadings([]);
     }
-  }, [selectedBillingCycleId]);
+  }, [selectedBillingCycleId, isRegistrationMode]);
 
   const renderSubView = () => {
+    if (isRegistrationMode) {
+      if (isAddDormRegistrationMode) {
+        return (
+          <OwnerRegister
+            mode="add_dorm"
+            onAddLog={handleAddLog}
+            onNavigate={(tab) => changeTab(tab)}
+          />
+        );
+      }
+      return (
+        <OwnerRegister
+          onAddLog={handleAddLog}
+          onNavigate={(tab) => changeTab(tab)}
+        />
+      );
+    }
+
     switch (activeTab) {
       case 'dashboard':
         return (
@@ -841,7 +901,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
             selectedCycleCode={selectedCycleCode}
             selectedCycle={selectedCycleCode}
             onNavigate={(tab, param) => {
-              setActiveTab(tab);
+              changeTab(tab);
               if (param) setInitialRoomId(param);
             }}
           />
@@ -905,10 +965,10 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
               {/* Navigation links */}
               <nav className="flex-1 space-y-1 p-3 overflow-y-auto custom-scrollbar-thin">
                 {allowedMenuItems.map((item) => {
-                  const isDisabled = onboardingRequired && item.id !== 'register';
+                  const isDisabled = isRegistrationMode && item.id !== 'register';
                   const Icon = item.icon;
-                  const isActive = activeTab === item.id;
-                  const hasItemBadge = (
+                  const isActive = isRegistrationMode ? item.id === 'register' : activeTab === item.id;
+                  const hasItemBadge = !isRegistrationMode && (
                     (item.id === 'meters' && hasUnissuedMeters) ||
                     (item.id === 'payments' && hasPendingSlips) ||
                     (item.id === 'tenants' && hasUnviewedTenants) ||
@@ -920,7 +980,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
                     <button
                       key={item.id}
                       data-testid={`nav-item-${item.id}`}
-                      onClick={() => { if (!isDisabled) handleTabChange(item.id) }}
+                      onClick={() => { if (!isDisabled) handleTabChange(item.id); }}
                       title={isDisabled ? 'กรุณาลงทะเบียนหอพักให้เสร็จก่อนใช้งานเมนูนี้' : ''}
                       disabled={isDisabled}
                       className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-bold transition-all ${
@@ -986,10 +1046,10 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
           {/* Navigation links */}
           <nav className="space-y-1">
             {allowedMenuItems.map((item) => {
-              const isDisabled = onboardingRequired && item.id !== 'register';
+              const isDisabled = isRegistrationMode && item.id !== 'register';
               const Icon = item.icon;
-              const isActive = activeTab === item.id;
-              const hasItemBadge = (
+              const isActive = isRegistrationMode ? item.id === 'register' : activeTab === item.id;
+              const hasItemBadge = !isRegistrationMode && (
                 (item.id === 'meters' && hasUnissuedMeters) ||
                 (item.id === 'payments' && hasPendingSlips) ||
                 (item.id === 'tenants' && hasUnviewedTenants) ||
@@ -1001,7 +1061,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
                 <button
                   key={item.id}
                   data-testid={`nav-item-${item.id}`}
-                  onClick={() => { if (!isDisabled) handleTabChange(item.id) }}
+                  onClick={() => { if (!isDisabled) handleTabChange(item.id); }}
                   title={isDisabled ? 'กรุณาลงทะเบียนหอพักให้เสร็จก่อนใช้งานเมนูนี้' : ''}
                   disabled={isDisabled}
                   className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-semibold transition-all ${
@@ -1076,7 +1136,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
                   <h1 className="text-xs sm:text-sm font-black text-slate-800 tracking-tight leading-tight flex items-center gap-1 min-w-0">
                     <span className="shrink-0 font-extrabold text-blue-600">HorPlus</span>
                     <span className="text-[8px] sm:text-[9px] font-black bg-blue-50 text-blue-600 border border-blue-100 px-1 py-0.5 rounded-md uppercase truncate max-w-[85px] sm:max-w-none shrink-0">
-                      {menuItems.find(m => m.id === activeTab)?.label}
+                      {isRegistrationMode ? 'ลงทะเบียน' : (menuItems.find(m => m.id === activeTab)?.label || 'ลงทะเบียน')}
                     </span>
                   </h1>
                   <span className="text-[9px] text-slate-400 font-bold hidden xs:block mt-0.5 leading-none truncate">
@@ -1088,12 +1148,169 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
 
             {/* Mobile Actions Right Side on XS screen (< sm) */}
             <div className="flex items-center gap-1.5 sm:hidden relative shrink-0">
+              {!isRegistrationMode && (
+                <div className="relative">
+                  <button
+                    onClick={() => setIsSearchDropdownOpen(!isSearchDropdownOpen)}
+                    className="p-1.5 text-slate-400 hover:text-slate-800 rounded-xl hover:bg-slate-50 transition-colors cursor-pointer"
+                    title="ค้นหา"
+                  >
+                    <Search className="w-4 h-4" />
+                  </button>
 
+                  {isSearchDropdownOpen && (
+                    <>
+                      <div className="fixed inset-0 z-40" onClick={() => setIsSearchDropdownOpen(false)} />
+                      <div className="absolute right-0 top-full mt-2 w-72 bg-white p-2.5 rounded-2xl border border-slate-100 shadow-2xl z-50 animate-in fade-in slide-in-from-top-2 duration-150">
+                        <div className="relative mb-2">
+                          <Search className="absolute left-3 top-2.5 w-3.5 h-3.5 text-slate-400 pointer-events-none" />
+                          <input
+                            type="text"
+                            autoFocus
+                            value={headerSearchQuery}
+                            onChange={(e) => setHeaderSearchQuery(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter' && headerSearchResults.length > 0) {
+                                handleSelectHeaderSearchResult(headerSearchResults[0]);
+                              }
+                            }}
+                            placeholder="ค้นหาชื่อผู้เช่า / เลขห้อง..."
+                            className="pl-8 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-200/80 rounded-xl w-full focus:bg-white focus:border-blue-500 transition-all outline-none text-slate-700 font-medium"
+                          />
+                        </div>
+                        <div className="max-h-60 overflow-y-auto space-y-1">
+                          {headerSearchResults.map((res) => (
+                            <button
+                              key={`xs-${res.type}-${res.id}`}
+                              onClick={() => handleSelectHeaderSearchResult(res)}
+                              className="w-full text-left p-2 hover:bg-blue-50/70 rounded-xl transition-colors flex items-center justify-between group cursor-pointer"
+                            >
+                              <div className="min-w-0 pr-2">
+                                <p className="text-xs font-black text-slate-800 group-hover:text-blue-600 truncate">
+                                  {res.title}
+                                </p>
+                                <p className="text-[10px] text-slate-400 font-medium truncate">
+                                  {res.subtitle} {res.phone ? `• ${res.phone}` : ''}
+                                </p>
+                              </div>
+                              <span className="text-[9px] font-black text-blue-600 bg-blue-50 group-hover:bg-blue-100 px-2 py-0.5 rounded-lg shrink-0">
+                                ดูข้อมูล
+                              </span>
+                            </button>
+                          ))}
+                          {headerSearchQuery.trim().length > 0 && headerSearchResults.length === 0 && (
+                            <div className="p-3 text-center text-xs text-slate-400 font-medium">
+                              ไม่พบข้อมูล
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+
+              {!isRegistrationMode && (
+                <div className="relative">
+                  <button 
+                    onClick={handleOpenNotifications}
+                    data-testid="button-staff-notification-bell"
+                    aria-label="การแจ้งเตือนพนักงาน"
+                    className="p-1.5 text-slate-400 hover:text-slate-800 rounded-xl relative hover:bg-slate-50 transition-colors cursor-pointer"
+                  >
+                    <Bell className="w-4 h-4" />
+                    {hasUnreadNotifications && (
+                      <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 bg-rose-500 rounded-full animate-pulse" />
+                    )}
+                  </button>
+                </div>
+              )}
+
+              <button 
+                onClick={() => {
+                  if (!isRegistrationMode) {
+                    changeTab(userRole === 'owner' ? 'settings' : 'dashboard');
+                  }
+                }}
+                disabled={isRegistrationMode}
+                className={`focus:outline-none flex items-center shrink-0 ${isRegistrationMode ? 'cursor-not-allowed opacity-80' : 'hover:opacity-80 transition-opacity cursor-pointer'}`}
+                title={isRegistrationMode ? 'กรุณาลงทะเบียนให้เสร็จสิ้นก่อน' : (userRole === 'owner' ? 'ตั้งค่าระบบ' : 'หน้าหลัก')}
+              >
+                <UserAvatar user={user} className="w-7 h-7 rounded-full border border-slate-100" />
+              </button>
+            </div>
+          </div>
+
+          {/* Center Block: Month Selector Switcher Tab bar */}
+          {!isRegistrationMode && (
+            <div className="relative flex items-center justify-center w-full sm:w-auto shrink-0 z-20">
+              <div className="flex items-center justify-between bg-slate-100/80 p-1 rounded-2xl border border-slate-200/50 w-full sm:w-auto sm:min-w-[260px] gap-1">
+                <button 
+                  onClick={handlePrevCycle}
+                  disabled={billingCycles.length === 0 || billingCycles.findIndex(c => c.id === selectedBillingCycleId || c.cycleCode === selectedCycleCode) >= billingCycles.length - 1}
+                  className={`p-1.5 hover:bg-white text-slate-500 hover:text-slate-900 rounded-xl transition-all cursor-pointer ${
+                    billingCycles.length === 0 || billingCycles.findIndex(c => c.id === selectedBillingCycleId || c.cycleCode === selectedCycleCode) >= billingCycles.length - 1 ? 'opacity-25 cursor-not-allowed' : ''
+                  }`}
+                  aria-label="ก่อนหน้า"
+                >
+                  <ChevronLeft className="w-3.5 h-3.5" />
+                </button>
+                
+                <button 
+                  onClick={() => {
+                    setIsCycleModalOpen(!isCycleModalOpen);
+                  }}
+                  className={`flex items-center justify-center gap-1.5 px-2.5 py-1 rounded-xl font-extrabold text-xs text-slate-700 transition-all cursor-pointer flex-1 sm:flex-initial ${isCycleModalOpen ? 'bg-white shadow-xs' : 'hover:bg-white/80'}`}
+                  title="คลิกเพื่อเลือกงวดประจำเดือน"
+                  data-testid="selected-cycle-display-button"
+                  data-cycle-id={selectedBillingCycleId}
+                  data-cycle-code={selectedCycleCode}
+                >
+                  <CalendarIcon className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                  <span className="truncate" data-testid="selected-cycle-label">{selectedCycleCode ? `ประจำเดือน ${getCycleLabel(selectedCycleCode)}` : 'ยังไม่ได้ตั้งค่ารอบคำนวณ'}</span>
+                </button>
+
+                <button 
+                  onClick={handleNextCycle}
+                  disabled={billingCycles.length === 0 || billingCycles.findIndex(c => c.id === selectedBillingCycleId || c.cycleCode === selectedCycleCode) <= 0}
+                  className={`p-1.5 hover:bg-white text-slate-500 hover:text-slate-900 rounded-xl transition-all cursor-pointer ${
+                    billingCycles.length === 0 || billingCycles.findIndex(c => c.id === selectedBillingCycleId || c.cycleCode === selectedCycleCode) <= 0 ? 'opacity-25 cursor-not-allowed' : ''
+                  }`}
+                  aria-label="ถัดไป"
+                >
+                  <ChevronRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
+
+              {/* Dynamic Billing Cycle Selector Calendar Grid Dropdown */}
+              <BillingCycleCalendarPicker
+                isOpen={isCycleModalOpen}
+                onClose={() => setIsCycleModalOpen(false)}
+                selectedCycleCode={selectedCycleCode}
+                availableCycles={billingCycles}
+                onSelectCycle={(code, cycle) => {
+                  if (cycle?.id) {
+                    setSelectedBillingCycleId(cycle.id);
+                  } else {
+                    const match = billingCycles.find((c) => c.cycleCode === code);
+                    if (match?.id) setSelectedBillingCycleId(match.id);
+                  }
+                  setSelectedCycleCode(code);
+                }}
+                align="center"
+              />
+            </div>
+          )}
+
+          {/* Right Block: Desktop & Tablet Action Bar (>= sm) */}
+          <div className="hidden sm:flex items-center gap-2 shrink-0">
+            {/* Search Icon Button */}
+            {!isRegistrationMode && (
               <div className="relative">
                 <button
                   onClick={() => setIsSearchDropdownOpen(!isSearchDropdownOpen)}
-                  className="p-1.5 text-slate-400 hover:text-slate-800 rounded-xl hover:bg-slate-50 transition-colors cursor-pointer"
-                  title="ค้นหา"
+                  className="p-2 text-slate-400 hover:text-slate-800 rounded-xl hover:bg-slate-50 transition-colors cursor-pointer"
+                  title="ค้นหาผู้เช่า / เลขห้อง"
                 >
                   <Search className="w-4 h-4" />
                 </button>
@@ -1101,8 +1318,8 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
                 {isSearchDropdownOpen && (
                   <>
                     <div className="fixed inset-0 z-40" onClick={() => setIsSearchDropdownOpen(false)} />
-                    <div className="absolute right-0 top-full mt-2 w-72 bg-white p-2.5 rounded-2xl border border-slate-100 shadow-2xl z-50 animate-in fade-in slide-in-from-top-2 duration-150">
-                      <div className="relative mb-2">
+                    <div className="absolute right-0 top-full mt-2 w-72 sm:w-80 bg-white p-3 rounded-2xl border border-slate-100 shadow-2xl z-50 animate-in fade-in slide-in-from-top-2 duration-150">
+                      <div className="relative mb-2.5">
                         <Search className="absolute left-3 top-2.5 w-3.5 h-3.5 text-slate-400 pointer-events-none" />
                         <input
                           type="text"
@@ -1118,18 +1335,18 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
                           className="pl-8 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-200/80 rounded-xl w-full focus:bg-white focus:border-blue-500 transition-all outline-none text-slate-700 font-medium"
                         />
                       </div>
-                      <div className="max-h-60 overflow-y-auto space-y-1">
+                      <div className="max-h-64 overflow-y-auto space-y-1">
                         {headerSearchResults.map((res) => (
                           <button
-                            key={`xs-${res.type}-${res.id}`}
+                            key={`sm-${res.type}-${res.id}`}
                             onClick={() => handleSelectHeaderSearchResult(res)}
-                            className="w-full text-left p-2 hover:bg-blue-50/70 rounded-xl transition-colors flex items-center justify-between group cursor-pointer"
+                            className="w-full text-left p-2.5 hover:bg-blue-50/70 rounded-xl transition-colors flex items-center justify-between group cursor-pointer"
                           >
                             <div className="min-w-0 pr-2">
                               <p className="text-xs font-black text-slate-800 group-hover:text-blue-600 truncate">
                                 {res.title}
                               </p>
-                              <p className="text-[10px] text-slate-400 font-medium truncate">
+                              <p className="text-[10px] text-slate-400 font-medium truncate mt-0.5">
                                 {res.subtitle} {res.phone ? `• ${res.phone}` : ''}
                               </p>
                             </div>
@@ -1139,8 +1356,8 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
                           </button>
                         ))}
                         {headerSearchQuery.trim().length > 0 && headerSearchResults.length === 0 && (
-                          <div className="p-3 text-center text-xs text-slate-400 font-medium">
-                            ไม่พบข้อมูล
+                          <div className="p-4 text-center text-xs text-slate-400 font-medium">
+                            ไม่พบข้อมูลผู้เช่าหรือห้องพัก
                           </div>
                         )}
                       </div>
@@ -1148,236 +1365,96 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
                   </>
                 )}
               </div>
+            )}
 
+            {/* Notification Bell */}
+            {!isRegistrationMode && (
               <div className="relative">
                 <button 
                   onClick={handleOpenNotifications}
                   data-testid="button-staff-notification-bell"
                   aria-label="การแจ้งเตือนพนักงาน"
-                  className="p-1.5 text-slate-400 hover:text-slate-800 rounded-xl relative hover:bg-slate-50 transition-colors cursor-pointer"
+                  className="p-2 text-slate-400 hover:text-slate-800 rounded-xl relative hover:bg-slate-50 transition-colors cursor-pointer"
                 >
                   <Bell className="w-4 h-4" />
                   {hasUnreadNotifications && (
                     <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 bg-rose-500 rounded-full animate-pulse" />
                   )}
                 </button>
-              </div>
 
-              <button 
-                onClick={() => setActiveTab(userRole === 'owner' ? 'settings' : 'dashboard')}
-                className="focus:outline-none hover:opacity-80 transition-opacity cursor-pointer flex items-center shrink-0"
-                title={userRole === 'owner' ? "ตั้งค่าระบบ" : "หน้าหลัก"}
-              >
-                <UserAvatar user={user} className="w-7 h-7 rounded-full border border-slate-100" />
-              </button>
-            </div>
-          </div>
-
-          {/* Center Block: Month Selector Switcher Tab bar */}
-          <div className="relative flex items-center justify-center w-full sm:w-auto shrink-0 z-20">
-            <div className="flex items-center justify-between bg-slate-100/80 p-1 rounded-2xl border border-slate-200/50 w-full sm:w-auto sm:min-w-[260px] gap-1">
-              <button 
-                onClick={handlePrevCycle}
-                disabled={billingCycles.length === 0 || billingCycles.findIndex(c => c.id === selectedBillingCycleId || c.cycleCode === selectedCycleCode) >= billingCycles.length - 1}
-                className={`p-1.5 hover:bg-white text-slate-500 hover:text-slate-900 rounded-xl transition-all cursor-pointer ${
-                  billingCycles.length === 0 || billingCycles.findIndex(c => c.id === selectedBillingCycleId || c.cycleCode === selectedCycleCode) >= billingCycles.length - 1 ? 'opacity-25 cursor-not-allowed' : ''
-                }`}
-                aria-label="ก่อนหน้า"
-              >
-                <ChevronLeft className="w-3.5 h-3.5" />
-              </button>
-              
-              <button 
-                onClick={() => {
-                  setIsCycleModalOpen(!isCycleModalOpen);
-                }}
-                className={`flex items-center justify-center gap-1.5 px-2.5 py-1 rounded-xl font-extrabold text-xs text-slate-700 transition-all cursor-pointer flex-1 sm:flex-initial ${isCycleModalOpen ? 'bg-white shadow-xs' : 'hover:bg-white/80'}`}
-                title="คลิกเพื่อเลือกงวดประจำเดือน"
-                data-testid="selected-cycle-display-button"
-                data-cycle-id={selectedBillingCycleId}
-                data-cycle-code={selectedCycleCode}
-              >
-                <CalendarIcon className="w-3.5 h-3.5 text-blue-600 shrink-0" />
-                <span className="truncate" data-testid="selected-cycle-label">{selectedCycleCode ? `ประจำเดือน ${getCycleLabel(selectedCycleCode)}` : 'ยังไม่ได้ตั้งค่ารอบคำนวณ'}</span>
-              </button>
-
-              <button 
-                onClick={handleNextCycle}
-                disabled={billingCycles.length === 0 || billingCycles.findIndex(c => c.id === selectedBillingCycleId || c.cycleCode === selectedCycleCode) <= 0}
-                className={`p-1.5 hover:bg-white text-slate-500 hover:text-slate-900 rounded-xl transition-all cursor-pointer ${
-                  billingCycles.length === 0 || billingCycles.findIndex(c => c.id === selectedBillingCycleId || c.cycleCode === selectedCycleCode) <= 0 ? 'opacity-25 cursor-not-allowed' : ''
-                }`}
-                aria-label="ถัดไป"
-              >
-                <ChevronRight className="w-3.5 h-3.5" />
-              </button>
-            </div>
-
-            {/* Dynamic Billing Cycle Selector Calendar Grid Dropdown */}
-            <BillingCycleCalendarPicker
-              isOpen={isCycleModalOpen}
-              onClose={() => setIsCycleModalOpen(false)}
-              selectedCycleCode={selectedCycleCode}
-              availableCycles={billingCycles}
-              onSelectCycle={(code, cycle) => {
-                if (cycle?.id) {
-                  setSelectedBillingCycleId(cycle.id);
-                } else {
-                  const match = billingCycles.find((c) => c.cycleCode === code);
-                  if (match?.id) setSelectedBillingCycleId(match.id);
-                }
-                setSelectedCycleCode(code);
-              }}
-              align="center"
-            />
-          </div>
-
-          {/* Right Block: Desktop & Tablet Action Bar (>= sm) */}
-          <div className="hidden sm:flex items-center gap-2 shrink-0">
-            {/* LINE Push Quota Badge (Compact) */}
-
-            {/* Search Icon Button (like mobile view, opens popup dropdown) */}
-            <div className="relative">
-              <button
-                onClick={() => setIsSearchDropdownOpen(!isSearchDropdownOpen)}
-                className="p-2 text-slate-400 hover:text-slate-800 rounded-xl hover:bg-slate-50 transition-colors cursor-pointer"
-                title="ค้นหาผู้เช่า / เลขห้อง"
-              >
-                <Search className="w-4 h-4" />
-              </button>
-
-              {isSearchDropdownOpen && (
-                <>
-                  <div className="fixed inset-0 z-40" onClick={() => setIsSearchDropdownOpen(false)} />
-                  <div className="absolute right-0 top-full mt-2 w-72 sm:w-80 bg-white p-3 rounded-2xl border border-slate-100 shadow-2xl z-50 animate-in fade-in slide-in-from-top-2 duration-150">
-                    <div className="relative mb-2.5">
-                      <Search className="absolute left-3 top-2.5 w-3.5 h-3.5 text-slate-400 pointer-events-none" />
-                      <input
-                        type="text"
-                        autoFocus
-                        value={headerSearchQuery}
-                        onChange={(e) => setHeaderSearchQuery(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter' && headerSearchResults.length > 0) {
-                            handleSelectHeaderSearchResult(headerSearchResults[0]);
-                          }
-                        }}
-                        placeholder="ค้นหาชื่อผู้เช่า / เลขห้อง..."
-                        className="pl-8 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-200/80 rounded-xl w-full focus:bg-white focus:border-blue-500 transition-all outline-none text-slate-700 font-medium"
-                      />
-                    </div>
-                    <div className="max-h-64 overflow-y-auto space-y-1">
-                      {headerSearchResults.map((res) => (
-                        <button
-                          key={`sm-${res.type}-${res.id}`}
-                          onClick={() => handleSelectHeaderSearchResult(res)}
-                          className="w-full text-left p-2.5 hover:bg-blue-50/70 rounded-xl transition-colors flex items-center justify-between group cursor-pointer"
+                {isNotificationOpen && (
+                  <>
+                    <div className="fixed inset-0 z-[60]" onClick={() => setIsNotificationOpen(false)} />
+                    <div className="absolute right-0 mt-2 w-80 bg-white rounded-2xl border border-slate-100 shadow-xl z-[70] p-4 animate-in fade-in slide-in-from-top-2 duration-150">
+                      <div className="flex justify-between items-center pb-2.5 border-b border-slate-100 mb-3">
+                        <h4 className="text-xs font-extrabold text-slate-800 flex items-center gap-1.5">
+                          <Bell className="w-3.5 h-3.5 text-blue-600" />
+                          การแจ้งเตือน
+                        </h4>
+                        <button 
+                          onClick={() => setIsNotificationOpen(false)}
+                          className="text-[10px] font-bold text-slate-400 hover:text-slate-600"
                         >
-                          <div className="min-w-0 pr-2">
-                            <p className="text-xs font-black text-slate-800 group-hover:text-blue-600 truncate">
-                              {res.title}
-                            </p>
-                            <p className="text-[10px] text-slate-400 font-medium truncate mt-0.5">
-                              {res.subtitle} {res.phone ? `• ${res.phone}` : ''}
-                            </p>
-                          </div>
-                          <span className="text-[9px] font-black text-blue-600 bg-blue-50 group-hover:bg-blue-100 px-2 py-0.5 rounded-lg shrink-0">
-                            ดูข้อมูล
-                          </span>
+                          ปิด
                         </button>
-                      ))}
-                      {headerSearchQuery.trim().length > 0 && headerSearchResults.length === 0 && (
-                        <div className="p-4 text-center text-xs text-slate-400 font-medium">
-                          ไม่พบข้อมูลผู้เช่าหรือห้องพัก
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </>
-              )}
-            </div>
+                      </div>
 
-            {/* Notification Bell */}
-            <div className="relative">
-              <button 
-                onClick={handleOpenNotifications}
-                data-testid="button-staff-notification-bell"
-                aria-label="การแจ้งเตือนพนักงาน"
-                className="p-2 text-slate-400 hover:text-slate-800 rounded-xl relative hover:bg-slate-50 transition-colors cursor-pointer"
-              >
-                <Bell className="w-4 h-4" />
-                {hasUnreadNotifications && (
-                  <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 bg-rose-500 rounded-full animate-pulse" />
+                      <div className="text-[10px] font-medium text-amber-800 bg-amber-50 p-2 rounded-xl border border-amber-200 flex items-center justify-between mb-2">
+                        <span>💡 <strong>คำแนะนำ:</strong> ปัดซ้ายที่รายการแจ้งเตือนเพื่อลบข้อความ</span>
+                      </div>
+
+                      <div className="space-y-2 max-h-[320px] overflow-y-auto pr-1">
+                        {staffNotices.map((notif) => (
+                          <div key={notif.id} data-testid={`staff-notice-item-${notif.id}`}>
+                            <SlidableNotificationItem
+                              notif={{
+                                id: notif.id,
+                                title: notif.title,
+                                description: notif.body,
+                                time: new Date(notif.createdAt).toLocaleDateString('th-TH'),
+                                tag: notif.category || 'แจ้งเตือน',
+                                tagColor: 'bg-blue-100 text-blue-800 border-blue-200',
+                              }}
+                              onDelete={handleDeleteNotification}
+                            />
+                            {!notif.isRead && (
+                              <div className="flex justify-end pt-1 pr-1">
+                                <button
+                                  type="button"
+                                  data-testid={`button-staff-notice-read-${notif.id}`}
+                                  onClick={() => handleMarkStaffNoticeAsRead(notif.id)}
+                                  className="px-2 py-0.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-[9px] font-extrabold transition-all cursor-pointer"
+                                >
+                                  อ่านแล้ว
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                        {staffNotices.length === 0 && (
+                          <div className="text-center py-10 text-slate-400 text-xs font-medium">
+                            ไม่มีข้อความแจ้งเตือนใหม่
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </>
                 )}
-              </button>
+              </div>
+            )}
 
-              {isNotificationOpen && (
-                <>
-                  <div className="fixed inset-0 z-[60]" onClick={() => setIsNotificationOpen(false)} />
-                  <div className="absolute right-0 mt-2 w-80 bg-white rounded-2xl border border-slate-100 shadow-xl z-[70] p-4 animate-in fade-in slide-in-from-top-2 duration-150">
-                    <div className="flex justify-between items-center pb-2.5 border-b border-slate-100 mb-3">
-                      <h4 className="text-xs font-extrabold text-slate-800 flex items-center gap-1.5">
-                        <Bell className="w-3.5 h-3.5 text-blue-600" />
-                        การแจ้งเตือน
-                      </h4>
-                      <button 
-                        onClick={() => setIsNotificationOpen(false)}
-                        className="text-[10px] font-bold text-slate-400 hover:text-slate-600"
-                      >
-                        ปิด
-                      </button>
-                    </div>
-
-                    <div className="text-[10px] font-medium text-amber-800 bg-amber-50 p-2 rounded-xl border border-amber-200 flex items-center justify-between mb-2">
-                      <span>💡 <strong>คำแนะนำ:</strong> ปัดซ้ายที่รายการแจ้งเตือนเพื่อลบข้อความ</span>
-                    </div>
-
-                    <div className="space-y-2 max-h-[320px] overflow-y-auto pr-1">
-                      {staffNotices.map((notif) => (
-                        <div key={notif.id} data-testid={`staff-notice-item-${notif.id}`}>
-                          <SlidableNotificationItem
-                            notif={{
-                              id: notif.id,
-                              title: notif.title,
-                              description: notif.body,
-                              time: new Date(notif.createdAt).toLocaleDateString('th-TH'),
-                              tag: notif.category || 'แจ้งเตือน',
-                              tagColor: 'bg-blue-100 text-blue-800 border-blue-200',
-                            }}
-                            onDelete={handleDeleteNotification}
-                          />
-                          {!notif.isRead && (
-                            <div className="flex justify-end pt-1 pr-1">
-                              <button
-                                type="button"
-                                data-testid={`button-staff-notice-read-${notif.id}`}
-                                onClick={() => handleMarkStaffNoticeAsRead(notif.id)}
-                                className="px-2 py-0.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-[9px] font-extrabold transition-all cursor-pointer"
-                              >
-                                อ่านแล้ว
-                              </button>
-                            </div>
-                          )}
-                        </div>
-                      ))}
-                      {staffNotices.length === 0 && (
-                        <div className="text-center py-10 text-slate-400 text-xs font-medium">
-                          ไม่มีข้อความแจ้งเตือนใหม่
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </>
-              )}
-            </div>
-
-            <div className="h-5 w-px bg-slate-100 my-auto" />
+            {!isRegistrationMode && <div className="h-5 w-px bg-slate-100 my-auto" />}
             
             {/* User Profile Avatar */}
             <button
-              onClick={() => setActiveTab(userRole === 'owner' ? 'settings' : 'dashboard')}
-              className="flex items-center gap-2 hover:opacity-80 transition-opacity cursor-pointer focus:outline-none text-left"
-              title={userRole === 'owner' ? "ตั้งค่าระบบ" : "หน้าหลัก"}
+              onClick={() => {
+                if (!isRegistrationMode) {
+                  changeTab(userRole === 'owner' ? 'settings' : 'dashboard');
+                }
+              }}
+              disabled={isRegistrationMode}
+              className={`flex items-center gap-2 focus:outline-none text-left ${isRegistrationMode ? 'cursor-not-allowed opacity-80' : 'hover:opacity-80 transition-opacity cursor-pointer'}`}
+              title={isRegistrationMode ? 'กรุณาลงทะเบียนให้เสร็จสิ้นก่อน' : (userRole === 'owner' ? 'ตั้งค่าระบบ' : 'หน้าหลัก')}
             >
               <UserAvatar user={user} className="w-7.5 h-7.5 rounded-full border border-slate-100" />
               <div className="hidden xl:block leading-none text-left">
@@ -1395,51 +1472,53 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
       </div>
 
       {/* Mobile Bottom Navigation Bar (Responsive & Role-based) */}
-      <div className="md:hidden fixed bottom-0 left-0 right-0 bg-white/95 backdrop-blur-md border-t border-slate-100 z-40 py-2 pb-safe px-4 shadow-[0_-4px_12px_rgba(0,0,0,0.03)]">
-        <div className="flex justify-around items-center">
-          {(() => {
-            const maxItems = 5;
-            const showMore = allowedMenuItems.length > maxItems;
-            let itemsToRender = allowedMenuItems;
-            if (showMore) {
-              const selectedIds = ['dashboard', 'meters', 'payments', 'rooms'];
-              itemsToRender = selectedIds
-                .map(id => allowedMenuItems.find(item => item.id === id))
-                .filter((item): item is typeof allowedMenuItems[number] => !!item);
-            }
+      {!isRegistrationMode && (
+        <div className="md:hidden fixed bottom-0 left-0 right-0 bg-white/95 backdrop-blur-md border-t border-slate-100 z-40 py-2 pb-safe px-4 shadow-[0_-4px_12px_rgba(0,0,0,0.03)]">
+          <div className="flex justify-around items-center">
+            {(() => {
+              const maxItems = 5;
+              const showMore = allowedMenuItems.length > maxItems;
+              let itemsToRender = allowedMenuItems;
+              if (showMore) {
+                const selectedIds = ['dashboard', 'meters', 'payments', 'rooms'];
+                itemsToRender = selectedIds
+                  .map(id => allowedMenuItems.find(item => item.id === id))
+                  .filter((item): item is typeof allowedMenuItems[number] => !!item);
+              }
 
-            return (
-              <>
-                {itemsToRender.map((item) => {
-                  const Icon = item.icon;
-                  const isActive = activeTab === item.id;
-                  return (
+              return (
+                <>
+                  {itemsToRender.map((item) => {
+                    const Icon = item.icon;
+                    const isActive = activeTab === item.id;
+                    return (
+                      <button
+                        key={item.id}
+                        onClick={() => handleTabChange(item.id)}
+                        className={`flex flex-col items-center gap-1 py-1 px-3 rounded-xl transition-all ${
+                          isActive ? 'text-[#2b64f6] font-extrabold scale-105' : 'text-slate-400 hover:text-slate-600'
+                        }`}
+                      >
+                        <Icon className={`w-5 h-5 ${isActive ? 'stroke-[2.5px]' : 'stroke-[2px]'}`} />
+                        <span className="text-[9px] font-bold tracking-tight">{item.label}</span>
+                      </button>
+                    );
+                  })}
+                  {showMore && (
                     <button
-                      key={item.id}
-                      onClick={() => setActiveTab(item.id)}
-                      className={`flex flex-col items-center gap-1 py-1 px-3 rounded-xl transition-all ${
-                        isActive ? 'text-[#2b64f6] font-extrabold scale-105' : 'text-slate-400 hover:text-slate-600'
-                      }`}
+                      onClick={() => setIsSidebarOpen(true)}
+                      className="flex flex-col items-center gap-1 py-1 px-3 rounded-xl text-slate-400 hover:text-slate-600"
                     >
-                      <Icon className={`w-5 h-5 ${isActive ? 'stroke-[2.5px]' : 'stroke-[2px]'}`} />
-                      <span className="text-[9px] font-bold tracking-tight">{item.label}</span>
+                      <Menu className="w-5 h-5 stroke-[2px]" />
+                      <span className="text-[9px] font-bold tracking-tight">เมนูทั้งหมด</span>
                     </button>
-                  );
-                })}
-                {showMore && (
-                  <button
-                    onClick={() => setIsSidebarOpen(true)}
-                    className="flex flex-col items-center gap-1 py-1 px-3 rounded-xl text-slate-400 hover:text-slate-600"
-                  >
-                    <Menu className="w-5 h-5 stroke-[2px]" />
-                    <span className="text-[9px] font-bold tracking-tight">เมนูทั้งหมด</span>
-                  </button>
-                )}
-              </>
-            );
-          })()}
+                  )}
+                </>
+              );
+            })()}
+          </div>
         </div>
-      </div>
+      )}
 
     </div>
   );
