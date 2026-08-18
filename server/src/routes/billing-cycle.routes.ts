@@ -17,13 +17,10 @@ import {
 } from '../schemas/billing-meter.schemas.js';
 
 const decimalMoneyStringSchema = z
-  .union([z.string(), z.number()])
-  .refine(
-    (val) => {
-      const num = typeof val === 'number' ? val : parseFloat(String(val).trim());
-      return !isNaN(num) && num >= 0;
-    },
-    { message: 'Monetary amount must be a valid non-negative decimal' }
+  .string({ required_error: 'Monetary amount must be a decimal string' })
+  .regex(
+    /^\d{1,10}(\.\d{1,2})?$/,
+    'Monetary amount must be a valid non-negative decimal string (up to 10 integer digits and 2 decimal places)'
   );
 
 export const UpdateCycleRateSnapshotSchema = z

@@ -160,7 +160,8 @@ async function runBrowserUAT() {
     // TEST 1: Owner Registration Step 1–7 UI & Absence of Removed Fields
     // -------------------------------------------------------------------------
     console.log('--- TEST 1: Owner Registration Wizard — Step 1 Verification ---');
-    await page.goto('http://127.0.0.1:5173/owner/register', { waitUntil: 'networkidle' });
+    await page.goto('http://127.0.0.1:5173/owner/register');
+    await page.waitForLoadState('networkidle');
     await page.screenshot({ path: path.join(SCREENSHOTS_DIR, '01-step1-initial.png') });
 
     // Verify absence of removed Step 1 inputs (owner phone, owner email, owner id card)
@@ -173,6 +174,7 @@ async function runBrowserUAT() {
 
     // Verify Step 1 core fields exist
     const dormNameLocator = page.locator('input[placeholder*="หอพัก HorPlus"]').first();
+    await dormNameLocator.waitFor({ state: 'visible', timeout: 5000 }).catch(() => null);
     const dormNameInput = await dormNameLocator.isVisible();
     console.log(`  Dormitory name input present: ${dormNameInput ? '✅ YES' : '❌ NO'}`);
 

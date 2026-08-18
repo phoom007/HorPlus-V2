@@ -42,17 +42,17 @@ export interface CreateBillingCycleDto {
 export interface UpdateCycleRateSnapshotDto {
   expectedVersion: number;
   waterBillingType?: string;
-  waterRate?: string | number;
+  waterRate?: string;
   electricityBillingType?: string;
-  electricityRate?: string | number;
-  commonFee?: string | number;
+  electricityRate?: string;
+  commonFee?: string;
   commonFeeMode?: string;
-  internetFee?: string | number;
+  internetFee?: string;
   internetFeeMode?: string;
-  parkingFee?: string | number;
+  parkingFee?: string;
   parkingFeeMode?: string;
   lateFeeType?: string;
-  lateFeeValue?: string | number;
+  lateFeeValue?: string;
 }
 
 export interface CycleRateSnapshotResult {
@@ -65,12 +65,37 @@ export interface CycleRateSnapshotResult {
 const isUuid = (str?: string | null) =>
   !!str && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
 
-const cleanDec = (val: any, dflt = '0.00'): string => {
-  if (val === undefined || val === null || val === '') return dflt;
+const STRICT_DECIMAL_REGEX = /^\d{1,10}(\.\d{1,2})?$/;
+
+const cleanDec = (val: any, fieldNameOrDflt = 'Monetary field'): string => {
+  if (val === undefined || val === null || val === '') {
+    if (STRICT_DECIMAL_REGEX.test(String(fieldNameOrDflt))) {
+      return new Prisma.Decimal(fieldNameOrDflt).toFixed(2);
+    }
+    return '0.00';
+  }
+  const strVal = String(val).trim();
+  if (!STRICT_DECIMAL_REGEX.test(strVal)) {
+    const err: any = new Error(`${fieldNameOrDflt} must be a valid non-negative decimal string with at most 10 integer digits and 2 decimal places`);
+    err.statusCode = 400;
+    err.code = 'VALIDATION_ERROR';
+    throw err;
+  }
   try {
-    return new Prisma.Decimal(val.toString()).toFixed(2);
-  } catch {
-    return dflt;
+    const dec = new Prisma.Decimal(strVal);
+    if (dec.isNegative() || !dec.isFinite()) {
+      const err: any = new Error(`${fieldNameOrDflt} must be a valid non-negative decimal`);
+      err.statusCode = 400;
+      err.code = 'VALIDATION_ERROR';
+      throw err;
+    }
+    return dec.toFixed(2);
+  } catch (err: any) {
+    if (err.statusCode) throw err;
+    const validationErr: any = new Error(`${fieldNameOrDflt} must be a valid non-negative decimal`);
+    validationErr.statusCode = 400;
+    validationErr.code = 'VALIDATION_ERROR';
+    throw validationErr;
   }
 };
 
@@ -393,7 +418,7 @@ export class BillingCycleService {
       if (paidBillsCount > 0) {
         isLocked = true;
         lockReason = 'งวดนี้มีรายการชำระเงินแล้ว จึงไม่สามารถแก้ไขค่าที่มีผลต่อบิลย้อนหลังได้';
-      } else {
+      } else if (cycle.status !== 'draft') {
         // Check historical cycle relative to operational cycle
         const operational = await currentCycleResolverService.resolveOperationalBillingCycle(dormitoryId);
         if (operational.billingCycleId && operational.billingCycleId !== cycle.id) {
@@ -449,26 +474,28 @@ export class BillingCycleService {
     const commonMode = data.commonFeeMode || rateSnapshot.commonFeeMode;
     const commonFee = commonMode === 'free' || commonMode === 'none'
       ? '0.00'
-      : (data.commonFee !== undefined ? cleanDec(data.commonFee) : rateSnapshot.commonFee);
+      : (data.commonFee !== undefined ? cleanDec(data.commonFee, 'commonFee') : rateSnapshot.commonFee);
 
     const internetMode = data.internetFeeMode || rateSnapshot.internetFeeMode;
     const internetFee = internetMode === 'free' || internetMode === 'none'
       ? '0.00'
-      : (data.internetFee !== undefined ? cleanDec(data.internetFee) : rateSnapshot.internetFee);
+      : (data.internetFee !== undefined ? cleanDec(data.internetFee, 'internetFee') : rateSnapshot.internetFee);
 
     const parkingMode = data.parkingFeeMode || rateSnapshot.parkingFeeMode;
     const parkingFee = parkingMode === 'free' || parkingMode === 'none'
       ? '0.00'
-      : (data.parkingFee !== undefined ? cleanDec(data.parkingFee) : rateSnapshot.parkingFee);
+      : (data.parkingFee !== undefined ? cleanDec(data.parkingFee, 'parkingFee') : rateSnapshot.parkingFee);
 
     const waterType = data.waterBillingType || rateSnapshot.waterBillingType;
-    const waterRate = data.waterRate !== undefined ? cleanDec(data.waterRate) : rateSnapshot.waterRate;
+    const waterRate = data.waterRate !== undefined ? cleanDec(data.waterRate, 'waterRate') : rateSnapshot.waterRate;
 
     const electricityType = data.electricityBillingType || rateSnapshot.electricityBillingType;
-    const electricityRate = data.electricityRate !== undefined ? cleanDec(data.electricityRate) : rateSnapshot.electricityRate;
+    const electricityRate = data.electricityRate !== undefined ? cleanDec(data.electricityRate, 'electricityRate') : rateSnapshot.electricityRate;
 
     const lateType = data.lateFeeType || rateSnapshot.lateFeeType;
-    const lateValue = data.lateFeeValue !== undefined ? cleanDec(data.lateFeeValue) : rateSnapshot.lateFeeValue;
+    const lateValue = lateType === 'none'
+      ? '0.00'
+      : (data.lateFeeValue !== undefined ? cleanDec(data.lateFeeValue, 'lateFeeValue') : rateSnapshot.lateFeeValue);
 
     const effectiveUpdate = {
       waterBillingType: waterType,
@@ -554,7 +581,7 @@ export class BillingCycleService {
         }
       }
 
-      // 3. Forward Propagation to subsequent INHERITED cycles
+      // 3. Forward Propagation to subsequent INHERITED and eligible legacy TEMPLATE_DEFAULT cycles
       const futureCycles = await tx.billingCycle.findMany({
         where: {
           dormitoryId,
@@ -575,15 +602,16 @@ export class BillingCycleService {
           break;
         }
 
-        if (fc.rateSnapshot.source === 'INHERITED') {
-          // Stop propagation if future cycle is locked or has paid bills
-          const fcPaidCount = await tx.bill.count({
-            where: { dormitoryId, billingCycleId: fc.id, status: 'paid' },
-          });
-          if (fc.status === 'locked' || fc.status === 'completed' || fcPaidCount > 0) {
-            break;
-          }
+        // Stop propagation if future cycle is locked, completed, or has paid bills
+        const fcPaidCount = await tx.bill.count({
+          where: { dormitoryId, billingCycleId: fc.id, status: 'paid' },
+        });
+        if (fc.status === 'locked' || fc.status === 'completed' || fcPaidCount > 0) {
+          break;
+        }
 
+        // Forward propagation traverses INHERITED or eligible legacy TEMPLATE_DEFAULT snapshots
+        if (fc.rateSnapshot.source === 'INHERITED' || fc.rateSnapshot.source === 'TEMPLATE_DEFAULT') {
           await tx.billingRateSnapshot.update({
             where: { id: fc.rateSnapshot.id },
             data: {

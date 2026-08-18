@@ -46,7 +46,10 @@ async function runBatch02Verification() {
     required_expected_version_validation: false,
     authoritative_people_count_unpaid_repricing: false,
     runtime_schema_invalid_modes_rejected: false,
-    free_mode_server_zero_persistence: false,
+    strict_exact_money_validation_and_tamper_proofing: false,
+    free_and_none_mode_zeroing: false,
+    legacy_template_default_forward_propagation: false,
+    paid_legacy_template_boundary_preservation: false,
     decimal_string_transport_precision: false,
     promo_authoritative_reasons: false,
     browser_shared_calendar_gap_and_settings_persistence: false,
@@ -678,11 +681,90 @@ async function runBatch02Verification() {
     results.authoritative_people_count_unpaid_repricing = true;
 
     // --------------------------------------------------------------------------
-    // 7. Runtime Schema & Burp Invalid Mode Rejections
+    // 7. Strict Exact-Money Runtime Validation & Tamper-Proofing (Section 4)
     // --------------------------------------------------------------------------
-    console.log('\n--- 7. Testing Runtime Schema & Burp Invalid Mode Rejections ---');
+    console.log('\n--- 7. Testing Strict Exact-Money Runtime Validation & Tamper-Proofing ---');
     const { UpdateCycleRateSnapshotSchema } = await import('../../server/dist/routes/billing-cycle.routes.js');
 
+    // 7.1 Malformed money formats must be strictly rejected
+    const malformedMoneyValues = [
+      '1abc',
+      '23.50xyz',
+      '1.234',
+      '1e3',
+      '-1',
+      '',
+      ' ',
+      '.50',
+      '1.',
+      '99999999999.99', // 11 integer digits exceeds DECIMAL(12,2)
+    ];
+
+    for (const badVal of malformedMoneyValues) {
+      const parsedWater = UpdateCycleRateSnapshotSchema.safeParse({ expectedVersion: 1, waterRate: badVal });
+      if (parsedWater.success) throw new Error(`Expected UpdateCycleRateSnapshotSchema to reject malformed waterRate: "${badVal}"`);
+
+      const parsedCommon = UpdateCycleRateSnapshotSchema.safeParse({ expectedVersion: 1, commonFee: badVal });
+      if (parsedCommon.success) throw new Error(`Expected UpdateCycleRateSnapshotSchema to reject malformed commonFee: "${badVal}"`);
+
+      const parsedLate = UpdateCycleRateSnapshotSchema.safeParse({ expectedVersion: 1, lateFeeValue: badVal });
+      if (parsedLate.success) throw new Error(`Expected UpdateCycleRateSnapshotSchema to reject malformed lateFeeValue: "${badVal}"`);
+    }
+
+    // Numbers must also not be accepted as monetary string authority
+    const numberAsRateCheck = UpdateCycleRateSnapshotSchema.safeParse({ expectedVersion: 1, waterRate: 18.5 });
+    if (numberAsRateCheck.success) {
+      throw new Error('Expected UpdateCycleRateSnapshotSchema to reject JavaScript number for monetary field (must be string)');
+    }
+
+    // Canonical write modes and valid decimal strings must pass
+    const validMoneyValues = ['0', '0.00', '0.50', '7.25', '18', '18.75', '9999999999.99'];
+    for (const goodVal of validMoneyValues) {
+      const validParsed = UpdateCycleRateSnapshotSchema.safeParse({
+        expectedVersion: 1,
+        waterRate: goodVal,
+        electricityRate: goodVal,
+        commonFee: goodVal,
+        internetFee: goodVal,
+        parkingFee: goodVal,
+        lateFeeValue: goodVal,
+      });
+      if (!validParsed.success) {
+        throw new Error(`Expected UpdateCycleRateSnapshotSchema to accept valid monetary decimal string: "${goodVal}"`);
+      }
+    }
+
+    // Prove DB snapshot remains completely unchanged when malformed request is submitted
+    const snapBeforeTamper = await prisma.billingRateSnapshot.findUniqueOrThrow({
+      where: { billingCycleId: c3.cycle.id },
+    });
+    const versionBeforeTamper = snapBeforeTamper.version;
+
+    let malformedServiceRejected = false;
+    try {
+      await cycleService.updateCycleRateSnapshot(testPropDorm.id, c3.cycle.id, {
+        waterRate: '1abc',
+        expectedVersion: versionBeforeTamper,
+      }, testOwner.id);
+    } catch (err) {
+      if (err.code === 'VALIDATION_ERROR' || err.statusCode === 400) {
+        malformedServiceRejected = true;
+      }
+    }
+    if (!malformedServiceRejected) {
+      throw new Error('Expected service to fail closed on malformed decimal input "1abc"');
+    }
+
+    const snapAfterTamper = await prisma.billingRateSnapshot.findUniqueOrThrow({
+      where: { billingCycleId: c3.cycle.id },
+    });
+    if (snapAfterTamper.version !== versionBeforeTamper || snapAfterTamper.waterRate.toFixed(2) !== snapBeforeTamper.waterRate.toFixed(2)) {
+      throw new Error('Database state changed despite malformed input rejection!');
+    }
+    console.log('✓ Strict decimal validation verified: Malformed strings ("1abc", "23.50xyz", "1.234", "-1") rejected with HTTP 400; DB snapshot, version, and propagation remain completely untouched.');
+    results.strict_exact_money_validation_and_tamper_proofing = true;
+
+    // 7.2 Invalid mode rejections
     const invalidModeCheck = UpdateCycleRateSnapshotSchema.safeParse({
       expectedVersion: 1,
       commonFeeMode: 'foobar',
@@ -702,31 +784,433 @@ async function runBatch02Verification() {
     results.runtime_schema_invalid_modes_rejected = true;
 
     // --------------------------------------------------------------------------
-    // 8. Free Mode Server-Side Canonical 0.00 Persistence
+    // 8. Server-Side Zeroing for Free/None Semantics (Section 3)
     // --------------------------------------------------------------------------
-    console.log('\n--- 8. Testing Free Mode Server Canonical 0.00 Persistence ---');
-    const snapC3FreeCheck = await cycleService.getCycleRateSnapshot(testPropDorm.id, c3.cycle.id);
+    console.log('\n--- 8. Testing Free Mode & None Type Server Zeroing ---');
+    const snapC3ZeroCheck = await cycleService.getCycleRateSnapshot(testPropDorm.id, c3.cycle.id);
     await cycleService.updateCycleRateSnapshot(testPropDorm.id, c3.cycle.id, {
       commonFeeMode: 'free',
       commonFee: '999.00', // Attempt tampering
       internetFeeMode: 'free',
-      internetFee: 500,
-      expectedVersion: snapC3FreeCheck.rateSnapshot?.version || 1,
+      internetFee: '500.00',
+      parkingFeeMode: 'free',
+      parkingFee: '300.00',
+      lateFeeType: 'none',
+      lateFeeValue: '999.00', // Attempt tampering on lateFee
+      expectedVersion: snapC3ZeroCheck.rateSnapshot?.version || 1,
     }, testOwner.id);
 
-    const persistedFreeSnap = await prisma.billingRateSnapshot.findUniqueOrThrow({
+    const persistedZeroSnap = await prisma.billingRateSnapshot.findUniqueOrThrow({
       where: { billingCycleId: c3.cycle.id },
     });
-    if (Number(persistedFreeSnap.commonFee) !== 0 || Number(persistedFreeSnap.internetFee) !== 0) {
-      throw new Error(`Expected server to persist 0.00 for free mode, got commonFee=${persistedFreeSnap.commonFee}, internetFee=${persistedFreeSnap.internetFee}`);
+    if (
+      Number(persistedZeroSnap.commonFee) !== 0 ||
+      Number(persistedZeroSnap.internetFee) !== 0 ||
+      Number(persistedZeroSnap.parkingFee) !== 0 ||
+      Number(persistedZeroSnap.lateFeeValue) !== 0
+    ) {
+      throw new Error(
+        `Expected server to persist 0.00 for free/none modes, got commonFee=${persistedZeroSnap.commonFee}, internetFee=${persistedZeroSnap.internetFee}, lateFeeValue=${persistedZeroSnap.lateFeeValue}`
+      );
     }
-    console.log('✓ Server-side canonicalization persists 0.00 for free modes regardless of client tampering.');
-    results.free_mode_server_zero_persistence = true;
+    console.log('✓ Server-side canonicalization persists 0.00 for free/none modes (including lateFeeType="none") regardless of client tampering.');
+    results.free_and_none_mode_zeroing = true;
 
     // --------------------------------------------------------------------------
-    // 9. Decimal String Transport Precision
+    // 9. Legacy TEMPLATE_DEFAULT Forward Propagation & Override Boundary (Section 8 & 9)
     // --------------------------------------------------------------------------
-    console.log('\n--- 9. Testing Decimal String Transport Precision ---');
+    console.log('\n--- 9. Testing Legacy TEMPLATE_DEFAULT Forward Propagation & Paid Boundary ---');
+    const legacyDormId = 'f7777777-7777-4777-b777-777777777777';
+    await prisma.dormitory.upsert({
+      where: { id: legacyDormId },
+      update: {},
+      create: {
+        id: legacyDormId,
+        name: 'Batch02 Legacy Migration Dorm',
+        createdByUserId: testOwner.id,
+      },
+    });
+
+    await prisma.dormitoryBillingSettings.upsert({
+      where: { dormitoryId: legacyDormId },
+      update: { dueDay: 5 },
+      create: {
+        dormitoryId: legacyDormId,
+        billingDay: 25,
+        dueDay: 5,
+        waterBillingType: 'unit',
+        waterRate: 18,
+        electricityBillingType: 'unit',
+        electricityRate: 7,
+      },
+    });
+
+    await prisma.bill.deleteMany({ where: { dormitoryId: legacyDormId } });
+    await prisma.billingRateSnapshot.deleteMany({ where: { dormitoryId: legacyDormId } });
+    await prisma.billingCycle.deleteMany({ where: { dormitoryId: legacyDormId } });
+
+    // Seed 3 legacy cycles: AUG (2027-08), SEP (2027-09), OCT (2027-10) all in TEMPLATE_DEFAULT state (as created by pre-Batch02 migration)
+    const legAug = await prisma.billingCycle.create({
+      data: {
+        dormitoryId: legacyDormId,
+        cycleCode: '2027-08',
+        name: 'สิงหาคม 2570',
+        periodStart: new Date('2027-08-01'),
+        periodEnd: new Date('2027-08-31'),
+        billingDate: new Date('2027-08-25'),
+        dueDate: new Date('2027-09-05'),
+        status: 'draft',
+      },
+    });
+
+    const legSep = await prisma.billingCycle.create({
+      data: {
+        dormitoryId: legacyDormId,
+        cycleCode: '2027-09',
+        name: 'กันยายน 2570',
+        periodStart: new Date('2027-09-01'),
+        periodEnd: new Date('2027-09-30'),
+        billingDate: new Date('2027-09-25'),
+        dueDate: new Date('2027-10-05'),
+        status: 'draft',
+      },
+    });
+
+    const legOct = await prisma.billingCycle.create({
+      data: {
+        dormitoryId: legacyDormId,
+        cycleCode: '2027-10',
+        name: 'ตุลาคม 2570',
+        periodStart: new Date('2027-10-01'),
+        periodEnd: new Date('2027-10-31'),
+        billingDate: new Date('2027-10-25'),
+        dueDate: new Date('2027-11-05'),
+        status: 'draft',
+      },
+    });
+
+    // Create 3 TEMPLATE_DEFAULT snapshots directly representing the migrated state
+    await prisma.billingRateSnapshot.createMany({
+      data: [
+        {
+          dormitoryId: legacyDormId,
+          billingCycleId: legAug.id,
+          waterBillingType: 'unit',
+          waterRate: 18.00,
+          electricityBillingType: 'unit',
+          electricityRate: 7.00,
+          commonFee: 0.00,
+          commonFeeMode: 'free',
+          internetFee: 0.00,
+          internetFeeMode: 'free',
+          parkingFee: 0.00,
+          parkingFeeMode: 'free',
+          lateFeeType: 'none',
+          lateFeeValue: 0.00,
+          currency: 'THB',
+          source: 'TEMPLATE_DEFAULT',
+          inheritedFromBillingCycleId: null,
+          updatedByUserId: null,
+          version: 1,
+        },
+        {
+          dormitoryId: legacyDormId,
+          billingCycleId: legSep.id,
+          waterBillingType: 'unit',
+          waterRate: 18.00,
+          electricityBillingType: 'unit',
+          electricityRate: 7.00,
+          commonFee: 0.00,
+          commonFeeMode: 'free',
+          internetFee: 0.00,
+          internetFeeMode: 'free',
+          parkingFee: 0.00,
+          parkingFeeMode: 'free',
+          lateFeeType: 'none',
+          lateFeeValue: 0.00,
+          currency: 'THB',
+          source: 'TEMPLATE_DEFAULT',
+          inheritedFromBillingCycleId: null,
+          updatedByUserId: null,
+          version: 1,
+        },
+        {
+          dormitoryId: legacyDormId,
+          billingCycleId: legOct.id,
+          waterBillingType: 'unit',
+          waterRate: 18.00,
+          electricityBillingType: 'unit',
+          electricityRate: 7.00,
+          commonFee: 0.00,
+          commonFeeMode: 'free',
+          internetFee: 0.00,
+          internetFeeMode: 'free',
+          parkingFee: 0.00,
+          parkingFeeMode: 'free',
+          lateFeeType: 'none',
+          lateFeeValue: 0.00,
+          currency: 'THB',
+          source: 'TEMPLATE_DEFAULT',
+          inheritedFromBillingCycleId: null,
+          updatedByUserId: null,
+          version: 1,
+        },
+      ],
+    });
+
+    console.log('✓ Legacy state initialized in PostgreSQL: AUG=TEMPLATE_DEFAULT, SEP=TEMPLATE_DEFAULT, OCT=TEMPLATE_DEFAULT.');
+
+    // 9.1 Owner edits AUG: commonFee = "150.00", commonFeeMode = "per_person"
+    await cycleService.updateCycleRateSnapshot(legacyDormId, legAug.id, {
+      commonFee: '150.00',
+      commonFeeMode: 'per_person',
+      expectedVersion: 1,
+    }, testOwner.id);
+
+    const legAugAfter = await prisma.billingRateSnapshot.findUniqueOrThrow({ where: { billingCycleId: legAug.id } });
+    const legSepAfter = await prisma.billingRateSnapshot.findUniqueOrThrow({ where: { billingCycleId: legSep.id } });
+    const legOctAfter = await prisma.billingRateSnapshot.findUniqueOrThrow({ where: { billingCycleId: legOct.id } });
+
+    if (legAugAfter.source !== 'MANUAL_OVERRIDE' || Number(legAugAfter.commonFee) !== 150 || legAugAfter.commonFeeMode !== 'per_person') {
+      throw new Error(`Expected AUG to be MANUAL_OVERRIDE with commonFee=150/per_person, got: ${legAugAfter.source}, ${legAugAfter.commonFee}`);
+    }
+    if (legSepAfter.source !== 'INHERITED' || Number(legSepAfter.commonFee) !== 150 || legSepAfter.inheritedFromBillingCycleId !== legAug.id) {
+      throw new Error(`Expected SEP to inherit commonFee=150 from AUG, got: ${legSepAfter.source}, parent=${legSepAfter.inheritedFromBillingCycleId}`);
+    }
+    if (legOctAfter.source !== 'INHERITED' || Number(legOctAfter.commonFee) !== 150 || legOctAfter.inheritedFromBillingCycleId !== legSep.id) {
+      throw new Error(`Expected OCT to inherit commonFee=150 from SEP, got: ${legOctAfter.source}, parent=${legOctAfter.inheritedFromBillingCycleId}`);
+    }
+    console.log('✓ Legacy TEMPLATE_DEFAULT forward propagation verified: AUG edit converted SEP and OCT from TEMPLATE_DEFAULT to INHERITED with accurate parent chain.');
+
+    // 9.2 Owner edits SEP: commonFee = "200.00", commonFeeMode = "per_room"
+    await cycleService.updateCycleRateSnapshot(legacyDormId, legSep.id, {
+      commonFee: '200.00',
+      commonFeeMode: 'per_room',
+      expectedVersion: legSepAfter.version,
+    }, testOwner.id);
+
+    const legSepAfter2 = await prisma.billingRateSnapshot.findUniqueOrThrow({ where: { billingCycleId: legSep.id } });
+    const legOctAfter2 = await prisma.billingRateSnapshot.findUniqueOrThrow({ where: { billingCycleId: legOct.id } });
+
+    if (legSepAfter2.source !== 'MANUAL_OVERRIDE' || Number(legSepAfter2.commonFee) !== 200) {
+      throw new Error(`Expected SEP to be MANUAL_OVERRIDE with 200, got: ${legSepAfter2.source}, ${legSepAfter2.commonFee}`);
+    }
+    if (legOctAfter2.source !== 'INHERITED' || Number(legOctAfter2.commonFee) !== 200 || legOctAfter2.inheritedFromBillingCycleId !== legSep.id) {
+      throw new Error(`Expected OCT to inherit 200 from SEP, got: ${legOctAfter2.source}, ${legOctAfter2.commonFee}`);
+    }
+
+    // 9.3 Edit AUG again: commonFee = "300.00"
+    await cycleService.updateCycleRateSnapshot(legacyDormId, legAug.id, {
+      commonFee: '300.00',
+      expectedVersion: legAugAfter.version,
+    }, testOwner.id);
+
+    const legAugAfter3 = await prisma.billingRateSnapshot.findUniqueOrThrow({ where: { billingCycleId: legAug.id } });
+    const legSepAfter3 = await prisma.billingRateSnapshot.findUniqueOrThrow({ where: { billingCycleId: legSep.id } });
+    const legOctAfter3 = await prisma.billingRateSnapshot.findUniqueOrThrow({ where: { billingCycleId: legOct.id } });
+
+    if (Number(legAugAfter3.commonFee) !== 300) throw new Error('Expected AUG commonFee=300');
+    if (legSepAfter3.source !== 'MANUAL_OVERRIDE' || Number(legSepAfter3.commonFee) !== 200) {
+      throw new Error(`Propagation breached MANUAL_OVERRIDE boundary at SEP! Got: ${legSepAfter3.commonFee}`);
+    }
+    if (legOctAfter3.source !== 'INHERITED' || Number(legOctAfter3.commonFee) !== 200) {
+      throw new Error(`OCT was overwritten by AUG propagation through SEP boundary! Got: ${legOctAfter3.commonFee}`);
+    }
+    console.log('✓ Manual override boundary strictly preserved: AUG edit stopped at SEP, SEP and OCT remain 200.00.');
+    results.legacy_template_default_forward_propagation = true;
+
+    // 9.4 Paid Legacy Template Boundary Test (Section 9)
+    const paidLegacyDormId = 'f8888888-8888-4888-b888-888888888888';
+    await prisma.dormitory.upsert({
+      where: { id: paidLegacyDormId },
+      update: {},
+      create: {
+        id: paidLegacyDormId,
+        name: 'Batch02 Paid Legacy Dorm',
+        createdByUserId: testOwner.id,
+      },
+    });
+    await prisma.dormitoryBillingSettings.upsert({
+      where: { dormitoryId: paidLegacyDormId },
+      update: { dueDay: 5 },
+      create: {
+        dormitoryId: paidLegacyDormId,
+        billingDay: 25,
+        dueDay: 5,
+        waterRate: 18,
+        electricityRate: 7,
+      },
+    });
+
+    await prisma.billItem.deleteMany({ where: { bill: { dormitoryId: paidLegacyDormId } } });
+    await prisma.bill.deleteMany({ where: { dormitoryId: paidLegacyDormId } });
+    await prisma.meterReading.deleteMany({ where: { dormitoryId: paidLegacyDormId } });
+    await prisma.room.deleteMany({ where: { dormitoryId: paidLegacyDormId } });
+    await prisma.building.deleteMany({ where: { dormitoryId: paidLegacyDormId } });
+    await prisma.billingRateSnapshot.deleteMany({ where: { dormitoryId: paidLegacyDormId } });
+    await prisma.billingCycle.deleteMany({ where: { dormitoryId: paidLegacyDormId } });
+
+    const pAug = await prisma.billingCycle.create({
+      data: {
+        dormitoryId: paidLegacyDormId,
+        cycleCode: '2027-08',
+        name: 'สิงหาคม 2570',
+        periodStart: new Date('2027-08-01'),
+        periodEnd: new Date('2027-08-31'),
+        billingDate: new Date('2027-08-25'),
+        dueDate: new Date('2027-09-05'),
+        status: 'draft',
+      },
+    });
+    const pSep = await prisma.billingCycle.create({
+      data: {
+        dormitoryId: paidLegacyDormId,
+        cycleCode: '2027-09',
+        name: 'กันยายน 2570',
+        periodStart: new Date('2027-09-01'),
+        periodEnd: new Date('2027-09-30'),
+        billingDate: new Date('2027-09-25'),
+        dueDate: new Date('2027-10-05'),
+        status: 'draft',
+      },
+    });
+    const pOct = await prisma.billingCycle.create({
+      data: {
+        dormitoryId: paidLegacyDormId,
+        cycleCode: '2027-10',
+        name: 'ตุลาคม 2570',
+        periodStart: new Date('2027-10-01'),
+        periodEnd: new Date('2027-10-31'),
+        billingDate: new Date('2027-10-25'),
+        dueDate: new Date('2027-11-05'),
+        status: 'draft',
+      },
+    });
+
+    await prisma.billingRateSnapshot.createMany({
+      data: [
+        {
+          dormitoryId: paidLegacyDormId,
+          billingCycleId: pAug.id,
+          waterBillingType: 'unit',
+          waterRate: 18.00,
+          electricityBillingType: 'unit',
+          electricityRate: 7.00,
+          commonFee: 0.00,
+          commonFeeMode: 'free',
+          internetFee: 0.00,
+          internetFeeMode: 'free',
+          parkingFee: 0.00,
+          parkingFeeMode: 'free',
+          lateFeeType: 'none',
+          lateFeeValue: 0.00,
+          currency: 'THB',
+          source: 'TEMPLATE_DEFAULT',
+          version: 1,
+        },
+        {
+          dormitoryId: paidLegacyDormId,
+          billingCycleId: pSep.id,
+          waterBillingType: 'unit',
+          waterRate: 18.00,
+          electricityBillingType: 'unit',
+          electricityRate: 7.00,
+          commonFee: 0.00,
+          commonFeeMode: 'free',
+          internetFee: 0.00,
+          internetFeeMode: 'free',
+          parkingFee: 0.00,
+          parkingFeeMode: 'free',
+          lateFeeType: 'none',
+          lateFeeValue: 0.00,
+          currency: 'THB',
+          source: 'TEMPLATE_DEFAULT',
+          version: 1,
+        },
+        {
+          dormitoryId: paidLegacyDormId,
+          billingCycleId: pOct.id,
+          waterBillingType: 'unit',
+          waterRate: 18.00,
+          electricityBillingType: 'unit',
+          electricityRate: 7.00,
+          commonFee: 0.00,
+          commonFeeMode: 'free',
+          internetFee: 0.00,
+          internetFeeMode: 'free',
+          parkingFee: 0.00,
+          parkingFeeMode: 'free',
+          lateFeeType: 'none',
+          lateFeeValue: 0.00,
+          currency: 'THB',
+          source: 'TEMPLATE_DEFAULT',
+          version: 1,
+        },
+      ],
+    });
+
+    // Create a building, room & paid bill in SEP
+    const pBuilding = await prisma.building.create({
+      data: {
+        dormitoryId: paidLegacyDormId,
+        name: 'อาคาร Legacy P',
+      },
+    });
+
+    const pRoom = await prisma.room.create({
+      data: {
+        dormitoryId: paidLegacyDormId,
+        buildingId: pBuilding.id,
+        roomNumber: 'P101',
+        normalizedRoomNumber: 'p101',
+        roomType: 'standard',
+        floor: 1,
+        status: 'occupied',
+        monthlyRent: 4000,
+      },
+    });
+
+    await prisma.bill.create({
+      data: {
+        dormitoryId: paidLegacyDormId,
+        billingCycleId: pSep.id,
+        roomId: pRoom.id,
+        billNumber: 'INV-PSEP-101',
+        billingDate: new Date('2027-09-25'),
+        dueDate: new Date('2027-10-05'),
+        totalAmount: 4000,
+        paidAmount: 4000,
+        status: 'paid',
+        paidAt: new Date(),
+      },
+    });
+
+    // Edit AUG: waterRate = "25.00"
+    await cycleService.updateCycleRateSnapshot(paidLegacyDormId, pAug.id, {
+      waterRate: '25.00',
+      expectedVersion: 1,
+    }, testOwner.id);
+
+    const pAugCheck = await prisma.billingRateSnapshot.findUniqueOrThrow({ where: { billingCycleId: pAug.id } });
+    const pSepCheck = await prisma.billingRateSnapshot.findUniqueOrThrow({ where: { billingCycleId: pSep.id } });
+    const pOctCheck = await prisma.billingRateSnapshot.findUniqueOrThrow({ where: { billingCycleId: pOct.id } });
+
+    if (pAugCheck.source !== 'MANUAL_OVERRIDE' || Number(pAugCheck.waterRate) !== 25) {
+      throw new Error('Expected pAug to be updated to 25.00');
+    }
+    if (pSepCheck.source !== 'TEMPLATE_DEFAULT' || Number(pSepCheck.waterRate) !== 18) {
+      throw new Error(`Propagation modified paid SEP cycle! Got: source=${pSepCheck.source}, waterRate=${pSepCheck.waterRate}`);
+    }
+    if (pOctCheck.source !== 'TEMPLATE_DEFAULT' || Number(pOctCheck.waterRate) !== 18) {
+      throw new Error(`Propagation traversed past paid SEP into OCT! Got: source=${pOctCheck.source}, waterRate=${pOctCheck.waterRate}`);
+    }
+    console.log('✓ Paid legacy template boundary verified: Paid bill in SEP strictly stopped forward propagation; SEP and OCT remain untouched TEMPLATE_DEFAULT.');
+    results.paid_legacy_template_boundary_preservation = true;
+
+    // --------------------------------------------------------------------------
+    // 10. Decimal String Transport Precision
+    // --------------------------------------------------------------------------
+    console.log('\n--- 10. Testing Decimal String Transport Precision ---');
     const snapDecCheck = await cycleService.getCycleRateSnapshot(testPropDorm.id, c3.cycle.id);
     await cycleService.updateCycleRateSnapshot(testPropDorm.id, c3.cycle.id, {
       waterRate: '7.25',
@@ -746,24 +1230,103 @@ async function runBatch02Verification() {
     results.decimal_string_transport_precision = true;
 
     // --------------------------------------------------------------------------
-    // 10. Authoritative Promo Reason States
+    // 11. Authoritative Promo Reason States (Section 12)
     // --------------------------------------------------------------------------
-    console.log('\n--- 10. Testing Authoritative Promo Reason States ---');
+    console.log('\n--- 11. Testing Authoritative Promo Reason States ---');
     const { PromoService } = await import('../../server/dist/services/promo.service.js');
     const promoService = new PromoService(prisma);
 
-    // 10.1 PROMO_NOT_FOUND
+    // 11.1 PROMO_NOT_FOUND
     const notFoundRes = await promoService.validatePromo('INVALID_CODE_XYZ', testOwner.id);
     if (notFoundRes.valid || notFoundRes.errorCode !== 'PROMO_NOT_FOUND') {
       throw new Error(`Expected PROMO_NOT_FOUND, got: ${notFoundRes.errorCode}`);
     }
 
-    // 10.2 Valid HORPLUS Promo
+    // 11.2 Valid HORPLUS Promo
     const validPromoRes = await promoService.validatePromo('HORPLUS', testOwner.id);
     if (!validPromoRes.valid || validPromoRes.promoBonusMonths !== 2 || validPromoRes.totalTrialMonths !== 3) {
       throw new Error(`Expected valid HORPLUS with +2 months bonus, got valid=${validPromoRes.valid}, bonus=${validPromoRes.promoBonusMonths}`);
     }
-    console.log('✓ Authoritative promo service returned exact reason states (PROMO_NOT_FOUND, valid bonus=2 months).');
+
+    // 11.3 PROMO_ALREADY_REDEEMED
+    const redeemedUserId = 'b3333333-3333-4333-b333-333333333333';
+    const redeemedUser = await prisma.user.upsert({
+      where: { id: redeemedUserId },
+      update: {},
+      create: {
+        id: redeemedUserId,
+        googleSubject: 'google-sub-redeemed-user',
+        email: 'redeemed-user@horplus.local',
+        emailNormalized: 'redeemed-user@horplus.local',
+        name: 'Redeemed User',
+        status: 'active',
+      },
+    });
+
+    const horplusPromo = await prisma.promoCode.findFirst({ where: { normalizedCode: 'HORPLUS' } });
+    if (horplusPromo) {
+      const promoDormId = 'd9999999-9999-4999-b999-999999999999';
+      await prisma.promoRedemption.deleteMany({ where: { OR: [{ redeemedBy: redeemedUser.id }, { dormitoryId: promoDormId }] } });
+      await prisma.dormitorySubscription.deleteMany({ where: { dormitoryId: promoDormId } });
+      await prisma.dormitory.deleteMany({ where: { id: promoDormId } });
+
+      await prisma.dormitory.create({
+        data: {
+          id: promoDormId,
+          name: 'Promo Test Dorm',
+          createdByUserId: redeemedUser.id,
+        },
+      });
+
+      const defaultPlan = await prisma.subscriptionPlan.findFirstOrThrow();
+      const promoSub = await prisma.dormitorySubscription.create({
+        data: {
+          dormitoryId: promoDormId,
+          planId: defaultPlan.id,
+          status: 'TRIAL',
+          expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+        },
+      });
+
+      await prisma.promoRedemption.create({
+        data: {
+          promoCodeId: horplusPromo.id,
+          redeemedBy: redeemedUser.id,
+          dormitoryId: promoDormId,
+          subscriptionId: promoSub.id,
+          previousExpiresAt: new Date(),
+          newExpiresAt: new Date(Date.now() + 60 * 24 * 60 * 60 * 1000),
+        },
+      });
+
+      const alreadyRedeemedRes = await promoService.validatePromo('HORPLUS', redeemedUser.id);
+      if (alreadyRedeemedRes.valid || alreadyRedeemedRes.errorCode !== 'PROMO_ALREADY_REDEEMED') {
+        throw new Error(`Expected PROMO_ALREADY_REDEEMED, got: ${alreadyRedeemedRes.errorCode}`);
+      }
+      console.log('✓ PROMO_ALREADY_REDEEMED verified: User with existing redemption rejected.');
+    }
+
+    // 11.4 PROMO_GLOBAL_LIMIT_REACHED
+    const cappedPromo = await prisma.promoCode.upsert({
+      where: { code: 'TEST_CAPPED_PROMO' },
+      update: { globalMaxRedemptions: 1, currentRedemptionsCount: 1, enabled: true },
+      create: {
+        code: 'TEST_CAPPED_PROMO',
+        normalizedCode: 'TEST_CAPPED_PROMO',
+        benefitType: 'TRIAL_EXTENSION',
+        benefitValue: 1,
+        globalMaxRedemptions: 1,
+        currentRedemptionsCount: 1,
+        enabled: true,
+      },
+    });
+
+    const limitReachedRes = await promoService.validatePromo('TEST_CAPPED_PROMO', testOwner.id);
+    if (limitReachedRes.valid || limitReachedRes.errorCode !== 'PROMO_GLOBAL_LIMIT_REACHED') {
+      throw new Error(`Expected PROMO_GLOBAL_LIMIT_REACHED, got: ${limitReachedRes.errorCode}`);
+    }
+    console.log('✓ PROMO_GLOBAL_LIMIT_REACHED verified: Global capacity reached promo rejected.');
+    console.log('✓ Authoritative promo service returned exact reason states (PROMO_NOT_FOUND, valid bonus=2 months, PROMO_ALREADY_REDEEMED, PROMO_GLOBAL_LIMIT_REACHED).');
     results.promo_authoritative_reasons = true;
 
     // --------------------------------------------------------------------------
