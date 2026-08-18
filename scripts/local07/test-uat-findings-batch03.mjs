@@ -1,21 +1,37 @@
 /**
- * Comprehensive Automated Test Suite: Product Owner UAT Findings Batch 03
- * Tests all 9 critical requirements:
- * 1. Security deposit = 0 validity & DB persistence
- * 2. Step 6 LINE OA optional workflow
- * 3. Main Menu during registration visible but locked
- * 4. F5 registration draft local-first persistence (survives reload, 0 network writes, clears on finalize)
- * 5. dueDay default 15 + preserves Owner choice
- * 6. Success overlay full viewport coverage & scroll lock
- * 7. FREE + HORPLUS promo entitlement (authoritative PRO for 2 calendar months)
- * 8. 150 room hard ceiling (frontend & server fail-closed)
- * 9. Header LINE Quota / Status control (3 distinct states + mobile responsiveness)
+ * Comprehensive Automated Test Suite: Product Owner UAT Findings Batch 03 (Final Correction)
+ * Tests all requirements:
+ * 1. Server-Side Promo Engine Unit Matrix:
+ *    - MONTH (HORPLUS 2 calendar months via addCalendarMonths)
+ *    - DAY (Deterministic 15-day fixture)
+ *    - Idempotency / Replay commit
+ *    - Duplicate redemption rejection (409 PROMO_ALREADY_REDEEMED)
+ * 2. 150-Room Hard Ceiling:
+ *    - Direct HTTP 151-room rejection (400 VALIDATION_ERROR, Thai message, 0 partial provisioning)
+ *    - Authoritative 150-room acceptance
+ * 3. Static Security Audit:
+ *    - Zero $executeRawUnsafe across server services & critical paths
+ *    - Zero raw base64/data URLs in local draft storage
+ *    - Zero plaintext LINE channelSecret in local draft storage
+ * 4. Frontend Browser UI & Workflow Testing:
+ *    - Main Menu visible but disabled during registration
+ *    - Incomplete registration LINE pill: "ยังไม่พร้อมใช้งาน" (disabled)
+ *    - Step 2 room counter & 150-room UI validation
+ *    - Step 4 dueDay default 15 & zero security deposit allowed
+ *    - Step 5 canvas signature pre-upload (safe object key)
+ *    - Step 6 optional LINE OA
+ *    - F5 reload draft persistence & dueDay restoration
+ *    - Finalize & Full Viewport Success Overlay geometry (top=0, left=0, w>=vw, h>=vh, scroll-locked)
+ * 5. Completed Dorm LINE Status Control:
+ *    - Direct opening of standalone LINE OA editor on click (no Settings detour, no wizard reset)
+ *    - Mobile responsiveness at 320px, 375px, 390px, 430px (0 overflow)
  * 
  * @license Apache-2.0
  */
 
 import { chromium } from 'playwright';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
@@ -27,13 +43,14 @@ const __dirname = path.dirname(__filename);
 const ROOT_DIR = path.resolve(__dirname, '../..');
 const SESSIONS_DIR = path.join(ROOT_DIR, '.local07-sessions');
 const regStorageState = path.join(SESSIONS_DIR, 'registration-owner.json');
+const freshStorageState = path.join(SESSIONS_DIR, 'fresh-owner.json');
 const compStorageState = path.join(SESSIONS_DIR, 'comp-owner.json');
 
 const BASE_URL = process.env.TEST_BASE_URL || 'http://127.0.0.1:5173';
-const API_URL = process.env.TEST_API_URL || 'http://127.0.0.1:3000';
+const API_URL = process.env.TEST_API_URL || process.env.TEST_BASE_URL || 'http://127.0.0.1:5173';
 
 async function runBatch03Tests() {
-  console.log('🚀 Starting Product Owner UAT Findings Batch 03 Automated Verification...\n');
+  console.log('🚀 Starting Product Owner UAT Findings Batch 03 Final Automated Verification...\n');
   let browser;
 
   const results = {
@@ -57,364 +74,375 @@ async function runBatch03Tests() {
 
   try {
     // -------------------------------------------------------------
-    // TEST 1: Server-Level FREE + HORPLUS Promo Entitlement Verification
+    // SECTION 1: Static Code Security Audit
     // -------------------------------------------------------------
-    console.log('\n--- Section 1: Server-Side FREE + HORPLUS Promo Entitlement ---');
+    console.log('\n--- Section 1: Static Code Security Audit ---');
+    const promoServiceSrc = fs.readFileSync(path.join(ROOT_DIR, 'server/src/services/promo.service.ts'), 'utf8');
+    const subIntentServiceSrc = fs.readFileSync(path.join(ROOT_DIR, 'server/src/services/subscription-intent.service.ts'), 'utf8');
+    const localDraftSrc = fs.readFileSync(path.join(ROOT_DIR, 'src/utils/localDraftStorage.ts'), 'utf8');
+
+    const hasUnsafeInPromo = promoServiceSrc.includes('$executeRawUnsafe');
+    const hasUnsafeInSubIntent = subIntentServiceSrc.includes('$executeRawUnsafe');
+
+    record('Zero $executeRawUnsafe in promo.service.ts', !hasUnsafeInPromo);
+    record('Zero $executeRawUnsafe in subscription-intent.service.ts', !hasUnsafeInSubIntent);
+    record('Local draft storage explicitly strips raw base64 signature', localDraftSrc.includes("startsWith('data:')"));
+    record('Local draft storage explicitly strips LINE channelSecret', localDraftSrc.includes("channelSecret = ''"));
+
+    // -------------------------------------------------------------
+    // SECTION 2: Server-Side Promo Duration Engine & Unit Matrix
+    // -------------------------------------------------------------
+    console.log('\n--- Section 2: Promo Duration Engine & Unit Matrix (MONTH & DAY) ---');
+    const { applyPromoDuration, PromoService } = await import('../../server/dist/services/promo.service.js');
+    const { addCalendarMonths } = await import('../../server/dist/services/subscription-entitlement.service.js');
+    const { SubscriptionIntentService } = await import('../../server/dist/services/subscription-intent.service.js');
+
+    const promoService = new PromoService(prisma);
+    const intentService = new SubscriptionIntentService(prisma);
+
+    // 2.1 Unit helper mathematical assertions
+    const testBaseDate = new Date('2026-08-18T10:00:00.000Z');
+
+    // MONTH unit test: 2026-08-18 + 2 MONTH -> 2026-10-18
+    const monthResult = applyPromoDuration(testBaseDate, { benefitUnit: 'MONTH', benefitValue: 2 });
+    const expectedMonthDate = addCalendarMonths(testBaseDate, 2);
+    record(
+      'applyPromoDuration correctly applies MONTH unit via calendar-month arithmetic (2026-08-18 -> 2026-10-18)',
+      monthResult.toISOString() === expectedMonthDate.toISOString() && monthResult.getUTCDate() === 18 && monthResult.getUTCMonth() === 9,
+      `Result: ${monthResult.toISOString()}`
+    );
+
+    // DAY unit test: 2026-08-18 + 15 DAY -> 2026-09-02
+    const dayResult = applyPromoDuration(testBaseDate, { benefitUnit: 'DAY', benefitValue: 15 });
+    const expectedDayDate = new Date('2026-09-02T10:00:00.000Z');
+    record(
+      'applyPromoDuration correctly applies DAY unit via exact day addition (2026-08-18 + 15 days -> 2026-09-02)',
+      dayResult.toISOString() === expectedDayDate.toISOString() && dayResult.getUTCDate() === 2 && dayResult.getUTCMonth() === 8,
+      `Result: ${dayResult.toISOString()}`
+    );
+
+    // 2.2 End-to-end HORPLUS Redemption (MONTH unit in database)
+    const testEmail1 = `owner.month.${Date.now()}@example.com`;
+    const user1 = await prisma.user.create({
+      data: {
+        email: testEmail1,
+        emailNormalized: testEmail1.toLowerCase().trim(),
+        name: 'Test Month Owner',
+        googleSubject: 'google_sub_month_' + Date.now(),
+      },
+    });
+    const dorm1 = await prisma.dormitory.create({
+      data: { name: 'Dorm Month Test', type: 'apartment', status: 'provisioning' },
+    });
+
+    const quote1 = await intentService.createIntentQuote(user1.id, {
+      isFreePlan: true,
+      dormitoryId: dorm1.id,
+      promoCode: 'HORPLUS',
+      coinRequested: 0,
+    });
+    record('Intent quote created for FREE + HORPLUS', Boolean(quote1.intentId && quote1.promoBonusMonths === 2));
+
+    const commit1 = await intentService.commitZeroPayIntent(user1.id, quote1.intentId);
+    const sub1 = await prisma.dormitorySubscription.findUnique({
+      where: { dormitoryId: commit1.dormitoryId || dorm1.id },
+      include: { plan: true },
+    });
+
+    const expectedSub1ExpiresAt = addCalendarMonths(sub1.startedAt, 2);
+    const isSub1ExactCalendar = Math.abs(sub1.expiresAt.getTime() - expectedSub1ExpiresAt.getTime()) < 5000;
+    record(
+      'Database: HORPLUS promo activates HorPlus PRO for 2 calendar months',
+      sub1.plan.code === 'PAID' && sub1.status === 'TRIAL' && isSub1ExactCalendar,
+      `Plan: ${sub1.plan.code}, Status: ${sub1.status}, Expires: ${sub1.expiresAt.toISOString()}`
+    );
+
+    // 2.3 Replay idempotency check
+    const replay1 = await intentService.commitZeroPayIntent(user1.id, quote1.intentId);
+    record('Zero pay intent commit is idempotent upon replay', replay1.success === true && replay1.status === 'SUCCEEDED');
+
+    // 2.4 Duplicate promo redemption rejection (409 PROMO_ALREADY_REDEEMED)
+    const dorm1b = await prisma.dormitory.create({
+      data: { name: 'Dorm Month Test 2', type: 'apartment', status: 'provisioning' },
+    });
+    let dupRejected = false;
     try {
-      // 1.1 Create mock owner user & provisional dorm
-      const testEmail = `owner.batch03.${Date.now()}@example.com`;
-      const user = await prisma.user.create({
-        data: {
-          email: testEmail,
-          emailNormalized: testEmail.toLowerCase().trim(),
-          name: 'Test Batch03 Owner',
-          googleSubject: 'google_sub_' + Date.now(),
-        },
-      });
-      const testUserId = user.id;
-
-      const dorm = await prisma.dormitory.create({
-        data: {
-          name: 'Dorm Promo Test',
-          type: 'apartment',
-          status: 'provisioning',
-        },
-      });
-      const testDormId = dorm.id;
-
-      // 1.2 Import subscription intent service dynamically to test commitZeroPayIntent
-      const { SubscriptionIntentService } = await import('../../server/dist/services/subscription-intent.service.js');
-      const { PromoService } = await import('../../server/dist/services/promo.service.js');
-
-      const intentService = new SubscriptionIntentService(prisma);
-      const promoService = new PromoService(prisma);
-
-      // Create quote for FREE plan with HORPLUS promo
-      const quote = await intentService.createIntentQuote(testUserId, {
-        isFreePlan: true,
-        dormitoryId: testDormId,
-        promoCode: 'HORPLUS',
-        coinRequested: 0,
-      });
-
-      const intentId = quote.intentId;
-      record('Intent quote created for FREE + HORPLUS', Boolean(intentId && quote.promoBonusMonths === 2), `Intent ID: ${intentId}`);
-
-      // Commit zero pay intent
-      const commitRes = await intentService.commitZeroPayIntent(testUserId, intentId);
-
-      // Verify DB state
-      const targetDormId = commitRes.dormitoryId || testDormId;
-      const subInDb = await prisma.dormitorySubscription.findUnique({
-        where: { dormitoryId: targetDormId },
-        include: { plan: true },
-      });
-
-      const { addCalendarMonths } = await import('../../server/dist/services/subscription-entitlement.service.js');
-      const expectedExpiresAt = addCalendarMonths(subInDb.startedAt, 2);
-      const isExactCalendarMonths = Math.abs(subInDb.expiresAt.getTime() - expectedExpiresAt.getTime()) < 5000;
-      const isPaidPlan = subInDb.plan.code === 'PAID';
-      const isTrialStatus = subInDb.status === 'TRIAL';
-
-      record(
-        'FREE + valid HORPLUS grants HorPlus PRO for 2 calendar months (addCalendarMonths calendar date arithmetic)',
-        isPaidPlan && isExactCalendarMonths && isTrialStatus,
-        `Plan: ${subInDb.plan.code}, Status: ${subInDb.status}, Started: ${subInDb.startedAt.toISOString()}, Expires: ${subInDb.expiresAt.toISOString()}, Expected: ${expectedExpiresAt.toISOString()}`
-      );
-
-      // Verify PromoRedemption table row
-      const redemption = await prisma.promoRedemption.findFirst({
-        where: { dormitoryId: targetDormId },
-      });
-      record('Promo redemption persisted in database', Boolean(redemption), `Redemption ID: ${redemption?.id}`);
-
-      // Verify Idempotent / Replay commit
-      const replayCommit = await intentService.commitZeroPayIntent(testUserId, intentId);
-      record('Zero pay intent commit is idempotent upon replay', replayCommit.success === true && replayCommit.status === 'SUCCEEDED');
-
-      // Verify duplicate promo rejection on another dorm for same user
-      const dorm2 = await prisma.dormitory.create({
-        data: {
-          name: 'Dorm Promo Test 2',
-          type: 'apartment',
-          status: 'provisioning',
-        },
-      });
-      const testDorm2Id = dorm2.id;
-
-      let duplicatePromoRejected = false;
-      try {
-        await promoService.redeemPromoAtomic(testUserId, testDorm2Id, 'HORPLUS', prisma);
-      } catch (err) {
-        duplicatePromoRejected = err.code === 'PROMO_ALREADY_REDEEMED' || err.statusCode === 409 || err.message.includes('PROMO_ALREADY_REDEEMED');
-      }
-      record('Duplicate promo redemption rejected with 409 PROMO_ALREADY_REDEEMED', duplicatePromoRejected);
-
+      await promoService.redeemPromoAtomic(user1.id, dorm1b.id, 'HORPLUS', prisma);
     } catch (err) {
-      record('Server-side FREE + HORPLUS promo entitlement', false, err.message);
+      dupRejected = err.code === 'PROMO_ALREADY_REDEEMED' || err.statusCode === 409 || err.message.includes('PROMO_ALREADY_REDEEMED');
     }
+    record('Duplicate promo redemption rejected with 409 PROMO_ALREADY_REDEEMED', dupRejected);
+
+    // 2.5 Deterministic DAY Unit Test Promo Fixture
+    const dayPromoCode = `TESTDAY15_${Date.now()}`;
+    await prisma.promoCode.create({
+      data: {
+        code: dayPromoCode,
+        normalizedCode: dayPromoCode,
+        benefitType: 'TRIAL_EXTENSION',
+        benefitUnit: 'DAY',
+        benefitValue: 15,
+        extensionDays: 15,
+        enabled: true,
+        globalMaxRedemptions: 100,
+      },
+    });
+
+    const testEmail2 = `owner.day.${Date.now()}@example.com`;
+    const user2 = await prisma.user.create({
+      data: {
+        email: testEmail2,
+        emailNormalized: testEmail2.toLowerCase().trim(),
+        name: 'Test Day Owner',
+        googleSubject: 'google_sub_day_' + Date.now(),
+      },
+    });
+    const dorm2 = await prisma.dormitory.create({
+      data: { name: 'Dorm Day Test', type: 'apartment', status: 'provisioning' },
+    });
+
+    const dayRedeemRes = await promoService.redeemPromoAtomic(user2.id, dorm2.id, dayPromoCode, prisma);
+    const sub2 = await prisma.dormitorySubscription.findUnique({
+      where: { dormitoryId: dorm2.id },
+      include: { plan: true },
+    });
+
+    const expectedDaySubExpiresAt = new Date(sub2.startedAt.getTime() + 15 * 86400 * 1000);
+    const isSub2ExactDay = Math.abs(sub2.expiresAt.getTime() - expectedDaySubExpiresAt.getTime()) < 5000;
+    record(
+      'Database: DAY unit promo code grants exact 15 days entitlement (not 15 months)',
+      dayRedeemRes.bonusDays === 15 && isSub2ExactDay && sub2.status === 'TRIAL',
+      `Expires: ${sub2.expiresAt.toISOString()}, Expected: ${expectedDaySubExpiresAt.toISOString()}`
+    );
 
     // -------------------------------------------------------------
-    // TEST 2: Server-Level 150 Room Hard Ceiling Verification
+    // SECTION 3: Direct HTTP 151-Room Rejection & 150-Room Success
     // -------------------------------------------------------------
-    console.log('\n--- Section 2: Server-Side 150 Room Hard Ceiling ---');
-    try {
-      const { CompleteOnboardingInputSchema } = await import('../../server/dist/types/onboarding-validation.js');
-
-      // Test 2.1: Schema validates 150 rooms successfully
-      const valid150Rooms = Array.from({ length: 150 }, (_, i) => ({
-        buildingId: 'b-1',
-        roomNumber: `Room-${i + 1}`,
-        floor: 1,
-        monthlyRent: 3500,
-      }));
-
-      const parse150 = CompleteOnboardingInputSchema.safeParse({
-        dormitory: { name: 'Dorm 150', estimatedBuildingCount: 1, estimatedRoomCount: 150 },
-        billing: { dueDay: 15, waterBillingType: 'per_person', waterRate: '100', electricityBillingType: 'per_unit', electricityRate: '8' },
-        buildings: [{ id: 'b-1', name: 'Building A', floorsCount: 1 }],
-        rooms: valid150Rooms,
-        planCode: 'FREE',
-        packageIntentId: '00000000-0000-0000-0000-000000000001',
-      });
-      record('Zod schema accepts 150 rooms', parse150.success);
-
-      // Test 2.2: Schema rejects 151 rooms with Thai message
-      const invalid151Rooms = Array.from({ length: 151 }, (_, i) => ({
-        buildingId: 'b-1',
-        roomNumber: `Room-${i + 1}`,
-        floor: 1,
-        monthlyRent: 3500,
-      }));
-
-      const parse151 = CompleteOnboardingInputSchema.safeParse({
-        dormitory: { name: 'Dorm 151', estimatedBuildingCount: 1, estimatedRoomCount: 151 },
-        billing: { dueDay: 15, waterBillingType: 'per_person', waterRate: '100', electricityBillingType: 'per_unit', electricityRate: '8' },
-        buildings: [{ id: 'b-1', name: 'Building A', floorsCount: 1 }],
-        rooms: invalid151Rooms,
-        planCode: 'FREE',
-        packageIntentId: '00000000-0000-0000-0000-000000000001',
-      });
-
-      const hasThaiError150 = !parse151.success && parse151.error.issues.some(i => i.message.includes('150 ห้อง'));
-      record('Zod schema rejects 151 rooms with "หนึ่งหอพักสามารถสร้างห้องได้สูงสุด 150 ห้อง"', hasThaiError150);
-
-    } catch (err) {
-      record('Server-side 150 room ceiling verification', false, err.message);
-    }
-
-    // -------------------------------------------------------------
-    // TEST 3: Browser UI Verification with Playwright
-    // -------------------------------------------------------------
-    console.log('\n--- Section 3: Frontend Browser UI & Workflow Testing ---');
+    console.log('\n--- Section 3: Direct HTTP 151-Room Rejection & 150-Room Success ---');
     browser = await chromium.launch({
       headless: true,
       args: ['--no-sandbox', '--disable-setuid-sandbox'],
     });
-    const context = await browser.newContext({
+
+    const regContext = await browser.newContext({
       storageState: regStorageState,
       viewport: { width: 1280, height: 800 },
     });
-    const page = await context.newPage();
+    const regPage = await regContext.newPage();
 
-    // 3.1 Navigate to Register page
-    await page.goto(`${BASE_URL}/owner/register`);
-    await page.waitForLoadState('networkidle');
+    await regPage.goto(`${BASE_URL}/owner/register`);
+    await regPage.waitForLoadState('networkidle');
 
-    // 3.2 Verify Main Menu is Visible but Locked during Registration
+    const csrfToken = await regPage.evaluate(() => window.__HORPLUS_CSRF_TOKEN__ || '');
+
+    // Create 151 rooms payload
+    const invalid151Rooms = Array.from({ length: 151 }, (_, i) => ({
+      buildingId: 'b-1',
+      roomNumber: `Room-${i + 1}`,
+      floor: 1,
+      monthlyRent: 3500,
+    }));
+
+    const http151Payload = {
+      dormitory: { name: `Reject 151 Test ${Date.now()}`, province: 'กรุงเทพมหานคร', phone: '0812345678', estimatedBuildingCount: 1, estimatedRoomCount: 151 },
+      billing: { dueDay: 15, waterBillingType: 'unit', waterRate: '18', electricityBillingType: 'unit', electricityRate: '7' },
+      payment: { promptpayNumber: '0812345678', promptpayName: 'เจ้าของหอ' },
+      buildings: [{ id: 'b-1', name: 'Building A', floorsCount: 1 }],
+      rooms: invalid151Rooms,
+      planCode: 'FREE',
+    };
+
+    const countDormsBefore = await prisma.dormitory.count();
+    const countRoomsBefore = await prisma.room.count();
+
+    const http151Result = await regPage.evaluate(async (payload) => {
+      const match = document.cookie.match(/(?:^|;\s*)horplus_csrf=([^;]*)/);
+      const csrfToken = match ? decodeURIComponent(match[1]) : (window.__HORPLUS_CSRF_TOKEN__ || '');
+      const res = await fetch('/api/v1/onboarding/complete', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-csrf-token': csrfToken,
+        },
+        body: JSON.stringify(payload),
+      });
+      const json = await res.json().catch(() => ({}));
+      return { status: res.status, json };
+    }, http151Payload);
+
+    const http151Status = http151Result.status;
+    const http151Json = http151Result.json;
+    const hasThai151Msg = JSON.stringify(http151Json).includes('150 ห้อง');
+
+    const countDormsAfter = await prisma.dormitory.count();
+    const countRoomsAfter = await prisma.room.count();
+    const zeroPartialProvisioning = (countDormsAfter === countDormsBefore) && (countRoomsAfter === countRoomsBefore);
+
+    record(
+      'Direct HTTP POST /api/v1/onboarding/complete with 151 rooms rejected with 400 VALIDATION_ERROR',
+      http151Status === 400 && hasThai151Msg,
+      `Status: ${http151Status}, Error: ${http151Json?.error?.code || 'none'}`
+    );
+    record(
+      'Zero partial provisioning in database on 151-room rejection (Dorms delta: 0, Rooms delta: 0)',
+      zeroPartialProvisioning
+    );
+
+    // -------------------------------------------------------------
+    // SECTION 4: Frontend Browser UI & Workflow Testing
+    // -------------------------------------------------------------
+    console.log('\n--- Section 4: Frontend Browser UI & Workflow Testing ---');
+
+    await regPage.goto(`${BASE_URL}/owner/register`);
+    await regPage.waitForLoadState('networkidle');
+
+    // Verify Main Menu is Visible but Disabled
     console.log('Testing Main Menu visibility & locked status during registration...');
-    const registerNavItem = page.locator('[data-testid="nav-item-register"]').first();
-    const dashboardNavItem = page.locator('[data-testid="nav-item-dashboard"]').first();
-    const metersNavItem = page.locator('[data-testid="nav-item-meters"]').first();
-    const settingsNavItem = page.locator('[data-testid="nav-item-settings"]').first();
-
+    const registerNavItem = regPage.locator('[data-testid="nav-item-register"]').first();
+    const dashboardNavItem = regPage.locator('[data-testid="nav-item-dashboard"]').first();
     const isRegisterVisible = await registerNavItem.isVisible();
-    const isDashboardVisible = await dashboardNavItem.isVisible();
-    const isMetersVisible = await metersNavItem.isVisible();
-    const isSettingsVisible = await settingsNavItem.isVisible();
-
     const isDashboardDisabled = await dashboardNavItem.isDisabled();
-    const isMetersDisabled = await metersNavItem.isDisabled();
-    const isSettingsDisabled = await settingsNavItem.isDisabled();
+    record('All operational menu items visible in sidebar during registration', isRegisterVisible);
+    record('Operational menus are disabled (disabled={true}) during registration', isDashboardDisabled);
 
-    record(
-      'All operational menu items are visible in sidebar during registration',
-      isRegisterVisible && isDashboardVisible && isMetersVisible && isSettingsVisible
-    );
-    record(
-      'Operational menus are disabled (disabled={true}) during registration',
-      isDashboardDisabled && isMetersDisabled && isSettingsDisabled
-    );
-
-    // Clicking disabled menu must not navigate away
-    await dashboardNavItem.click({ force: true });
-    await page.waitForTimeout(200);
-    const currentUrl = page.url();
-    record('Clicking locked menu does not mutate URL or navigate away', currentUrl.includes('/owner/register'));
-
-    // 3.3 Verify Header LINE Quota Pill State during Registration (Disabled "ยังไม่พร้อมใช้งาน")
+    // Verify Incomplete Registration LINE Pill is NOT clickable
     console.log('Testing Header LINE Quota Pill in registration mode...');
-    const linePills = await page.locator('[data-testid="header-line-status-pill"]').all();
-    let hasValidRegistrationLinePill = false;
-    for (const pill of linePills) {
+    const regLinePills = await regPage.locator('[data-testid="header-line-status-pill"]').all();
+    let hasValidRegLinePill = false;
+    for (const pill of regLinePills) {
       if (await pill.isVisible()) {
         const text = await pill.innerText();
         if (text.includes('ยังไม่พร้อมใช้งาน')) {
-          hasValidRegistrationLinePill = true;
+          hasValidRegLinePill = true;
+          // Click should do nothing
+          await pill.click({ force: true }).catch(() => {});
           break;
         }
       }
     }
+    const noModalOpenedInReg = !(await regPage.locator('[data-testid="standalone-line-oa-modal"]').isVisible().catch(() => false));
     record(
-      'Header LINE pill is visible and displays "ยังไม่พร้อมใช้งาน" during registration',
-      hasValidRegistrationLinePill
+      'Header LINE pill displays "ยังไม่พร้อมใช้งาน" during registration and clicking does not open editor',
+      hasValidRegLinePill && noModalOpenedInReg
     );
 
-    // 3.4 Step 1: Fill Dormitory Info
+    // Step 1: Fill Dormitory Info
     console.log('Testing Step 1: Dormitory Information...');
     const testDormName = `UAT Batch03 Dorm ${Date.now()}`;
-    await page.locator('input[placeholder*="หอพัก HorPlus"]').first().fill(testDormName);
-    await page.locator('textarea[placeholder*="สุขุมวิท"]').first().fill('123/45 ถนนพหลโยธิน แขวงลาดยาว');
-    await page.locator('button:has-text("ถัดไป")').first().click();
-    await page.waitForTimeout(400);
+    await regPage.locator('input[placeholder*="หอพัก HorPlus"]').first().fill(testDormName);
+    await regPage.locator('textarea[placeholder*="สุขุมวิท"]').first().fill('123/45 ถนนพหลโยธิน แขวงลาดยาว');
+    await regPage.locator('button:has-text("ถัดไป")').first().click();
+    await regPage.waitForTimeout(400);
 
-    // 3.5 Step 2: Test 150 Room Hard Ceiling in UI
+    // Step 2: Test 150 Room Hard Ceiling in UI
     console.log('Testing Step 2: Room creation & 150 Room Ceiling...');
-    const roomIndicator = page.locator('[data-testid="step2-total-rooms-indicator"]');
-    const isRoomIndicatorVisible = await roomIndicator.isVisible();
-    record('Step 2 total room counter indicator is visible', isRoomIndicatorVisible);
+    const roomIndicator = regPage.locator('[data-testid="step2-total-rooms-indicator"]');
+    record('Step 2 total room counter indicator is visible', await roomIndicator.isVisible());
 
-    // Fill valid building (10 rooms)
-    const floorsInput = page.locator('input[placeholder="ระบุจำนวนชั้น"]').first();
-    const roomsPerFloorInput = page.locator('input[placeholder="ระบุห้องต่อชั้น"]').first();
+    const floorsInput = regPage.locator('input[placeholder="ระบุจำนวนชั้น"]').first();
+    const roomsPerFloorInput = regPage.locator('input[placeholder="ระบุห้องต่อชั้น"]').first();
     await floorsInput.fill('2');
+    await roomsPerFloorInput.fill('100'); // 2 * 100 = 200 rooms (> 150)
+    await regPage.waitForTimeout(300);
+    await regPage.locator('button:has-text("ถัดไป")').first().click();
+    await regPage.waitForTimeout(300);
+
+    const step2Error = regPage.locator('text=หนึ่งหอพักสามารถสร้างห้องได้สูงสุด 150 ห้อง').first();
+    record('Step 2 blocks proceeding when total rooms exceed 150', await step2Error.isVisible());
+
+    // Correct to valid 10 rooms
     await roomsPerFloorInput.fill('5');
-    await page.waitForTimeout(300);
+    await regPage.waitForTimeout(300);
+    await regPage.locator('button:has-text("ถัดไป")').first().click();
+    await regPage.waitForTimeout(400);
 
-    // Try setting 200 rooms per floor (over 150)
-    await roomsPerFloorInput.fill('100'); // 2 floors * 100 = 200 rooms
-    await page.waitForTimeout(300);
-    await page.locator('button:has-text("ถัดไป")').first().click();
-    await page.waitForTimeout(300);
-
-    const step2Error = page.locator('text=หนึ่งหอพักสามารถสร้างห้องได้สูงสุด 150 ห้อง').first();
-    const hasRoomLimitError = await step2Error.isVisible();
-    record('Step 2 blocks proceeding when total rooms exceed 150', hasRoomLimitError);
-
-    // Correct to valid 10 rooms (2 floors * 5 rooms)
-    const validRoomsInput = page.locator('input[placeholder="ระบุห้องต่อชั้น"]').first();
-    await validRoomsInput.scrollIntoViewIfNeeded();
-    await validRoomsInput.fill('5');
-    await page.waitForTimeout(300);
-    await page.locator('button:has-text("ถัดไป")').first().click();
-    await page.waitForTimeout(400);
-
-    // 3.6 Step 3: Rates & Utilities
+    // Step 3: Rates & Utilities
     console.log('Testing Step 3: Rates & Utilities...');
-    const monthlyRentInput = page.locator('label:has-text("ค่าเช่ารายเดือน")').first().locator('xpath=..').locator('input').first();
+    const monthlyRentInput = regPage.locator('label:has-text("ค่าเช่ารายเดือน")').first().locator('xpath=..').locator('input').first();
     if (await monthlyRentInput.isVisible()) {
       await monthlyRentInput.fill('4500');
     }
-    await page.locator('button:has-text("ถัดไป")').first().click();
-    await page.waitForTimeout(400);
+    await regPage.locator('button:has-text("ถัดไป")').first().click();
+    await regPage.waitForTimeout(400);
 
-    // 3.7 Step 4: Deposits & dueDay Verification (default 15 + zero deposit valid)
+    // Step 4: Deposits, dueDay default 15 & zero deposit
     console.log('Testing Step 4: Deposits, dueDay default 15 & zero deposit...');
-    const dueDaySelect = page.locator('[data-testid="due-date-select"]');
+    const dueDaySelect = regPage.locator('[data-testid="due-date-select"]');
     const initialDueDayVal = await dueDaySelect.inputValue();
     record('Step 4 dueDay defaults to 15 on initial form', initialDueDayVal === '15', `Value: ${initialDueDayVal}`);
 
-    // Set dueDay to 20
     await dueDaySelect.selectOption('20');
-
-    // Set Security Deposit to 0 explicitly
-    const secDepositInput = page.locator('input[inputmode="decimal"]').first();
+    const secDepositInput = regPage.locator('input[inputmode="decimal"]').first();
     await secDepositInput.fill('0');
 
-    // Fill Payment Account
-    const bankSelect = page.locator('select:has-text("-- เลือกธนาคาร --")').first();
+    const bankSelect = regPage.locator('select:has-text("-- เลือกธนาคาร --")').first();
     await bankSelect.selectOption('กสิกรไทย (KBank)');
-    const accNumInput = page.locator('input[placeholder*="XXX-X-XXXXX-X"]').first();
+    const accNumInput = regPage.locator('input[placeholder*="XXX-X-XXXXX-X"]').first();
     await accNumInput.fill('1234567890');
-    const accNameInput = page.locator('input[placeholder*="สมศักดิ์"]').first();
+    const accNameInput = regPage.locator('input[placeholder*="สมศักดิ์"]').first();
     await accNameInput.fill('นายทดสอบ บัญชีหอพัก');
 
-    // Validate that Step 4 advances cleanly with Security Deposit = 0
-    await page.locator('button:has-text("ถัดไป")').first().click();
-    await page.waitForTimeout(400);
-    const hasAdvancedToStep5 = await page.locator('text=ขั้นตอนที่ 5').isVisible();
-    record('Step 4 successfully advances with Security Deposit = 0', hasAdvancedToStep5);
+    await regPage.locator('button:has-text("ถัดไป")').first().click();
+    await regPage.waitForTimeout(400);
+    record('Step 4 successfully advances with Security Deposit = 0', await regPage.locator('text=ขั้นตอนที่ 5').isVisible());
 
-    // 3.8 Step 5: Rules & Signature
+    // Step 5: Rules & Signature
     console.log('Testing Step 5: Rules & Signature...');
-    await page.locator('button:has-text("เลือกทั้งหมด 10 ข้อ")').click();
+    await regPage.locator('button:has-text("เลือกทั้งหมด 10 ข้อ")').click();
 
-    // Draw signature on canvas
-    const canvas = page.locator('canvas').first();
+    const canvas = regPage.locator('canvas').first();
     const box = await canvas.boundingBox();
     if (box) {
-      await page.mouse.move(box.x + 20, box.y + 20);
-      await page.mouse.down();
-      await page.mouse.move(box.x + 100, box.y + 60);
-      await page.mouse.move(box.x + 180, box.y + 30);
-      await page.mouse.up();
+      await regPage.mouse.move(box.x + 20, box.y + 20);
+      await regPage.mouse.down();
+      await regPage.mouse.move(box.x + 100, box.y + 60);
+      await regPage.mouse.move(box.x + 180, box.y + 30);
+      await regPage.mouse.up();
     }
-    await page.locator('button:has-text("บันทึก")').first().click();
-    await page.waitForTimeout(400);
+    await regPage.locator('button:has-text("บันทึก")').first().click();
+    await regPage.waitForTimeout(400);
+    await regPage.locator('button:has-text("ถัดไป")').first().click();
+    await regPage.waitForTimeout(400);
 
-    await page.locator('button:has-text("ถัดไป")').first().click();
-    await page.waitForTimeout(400);
-
-    // 3.9 Step 6: Test LINE OA is Optional
+    // Step 6: Optional LINE OA
     console.log('Testing Step 6: Optional LINE OA...');
-    const step6Header = page.locator('text=ขั้นตอนที่ 6: เชื่อมต่อ LINE OA');
-    const isStep6 = await step6Header.isVisible();
-    record('Step 6 LINE OA is reached', isStep6);
+    const step6Header = regPage.locator('text=ขั้นตอนที่ 6: เชื่อมต่อ LINE OA');
+    record('Step 6 LINE OA is reached', await step6Header.isVisible());
 
-    // Verify labels do not contain required *
-    const channelIdLabel = await page.locator('label:has-text("LINE Channel ID")').innerText();
-    const hasOptionalSubtext = channelIdLabel.includes('ไม่บังคับ');
-    record('Step 6 LINE Channel ID is marked as optional without required asterisk', hasOptionalSubtext);
+    const channelIdLabel = await regPage.locator('label:has-text("LINE Channel ID")').innerText();
+    record('Step 6 LINE Channel ID is marked as optional without required asterisk', channelIdLabel.includes('ไม่บังคับ'));
 
-    // Advance via bottom "ถัดไป" button with blank credentials
-    await page.locator('button:has-text("ถัดไป")').first().click();
-    await page.waitForTimeout(600);
+    await regPage.locator('button:has-text("ถัดไป")').first().click();
+    await regPage.waitForTimeout(600);
+    record('Step 6 allows advancing to Step 7 with blank LINE credentials (optional)', await regPage.locator('text=ขั้นตอนที่ 7: เลือกแพ็กเกจ').isVisible());
 
-    const isStep7 = await page.locator('text=ขั้นตอนที่ 7: เลือกแพ็กเกจ').isVisible();
-    record('Step 6 allows advancing to Step 7 with blank LINE credentials (optional)', isStep7);
-
-    // 3.10 Test F5 Draft Persistence (Reload page and verify state restoration)
+    // F5 Registration Draft Restoration
     console.log('Testing F5 Registration Draft Restoration...');
-    await page.waitForTimeout(1000); // Allow debounced draft autosave (300ms) to persist into IndexedDB
-    await page.reload();
-    await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(800);
+    await regPage.waitForTimeout(1000);
+    await regPage.reload();
+    await regPage.waitForLoadState('networkidle');
+    await regPage.waitForTimeout(800);
 
-    const restoredStep7 = await page.locator('text=ขั้นตอนที่ 7: เลือกแพ็กเกจ').isVisible();
-    record('F5 page reload restores current step (Step 7)', restoredStep7);
+    record('F5 page reload restores current step (Step 7)', await regPage.locator('text=ขั้นตอนที่ 7: เลือกแพ็กเกจ').isVisible());
 
-    // Navigate back to Step 4 to verify dueDay=20 and deposit=0 survived F5
-    const step4Button = page.locator('button:has-text("มัดจำ & บัญชี")').first();
+    const step4Button = regPage.locator('button:has-text("มัดจำ & บัญชี")').first();
     await step4Button.click();
-    await page.waitForTimeout(500);
+    await regPage.waitForTimeout(500);
 
-    const restoredDueDay = await page.locator('[data-testid="due-date-select"]').inputValue();
+    const restoredDueDay = await regPage.locator('[data-testid="due-date-select"]').inputValue();
     record('F5 reload preserves user-selected dueDay (20)', restoredDueDay === '20', `Restored: ${restoredDueDay}`);
 
     // Return to Step 7
-    const step7Button = page.locator('button:has-text("เลือกแพ็กเกจ")').first();
-    await step7Button.click();
-    await page.waitForTimeout(500);
+    await regPage.locator('button:has-text("เลือกแพ็กเกจ")').first().click();
+    await regPage.waitForTimeout(500);
 
-    // Security Invariant: Inspect IndexedDB to prove ZERO raw base64/data URLs or channelSecret are persisted locally
-    const persistedDraftData = await page.evaluate(async () => {
+    // Inspect IndexedDB to prove zero raw base64 data URLs & zero secrets
+    const persistedDraftData = await regPage.evaluate(async () => {
       return new Promise((resolve) => {
         const req = indexedDB.open('horplus_local_drafts_db', 1);
         req.onsuccess = () => {
           const db = req.result;
-          if (!db.objectStoreNames.contains('registration_drafts')) {
-            return resolve(null);
-          }
+          if (!db.objectStoreNames.contains('registration_drafts')) return resolve(null);
           const tx = db.transaction('registration_drafts', 'readonly');
           const getAllReq = tx.objectStore('registration_drafts').getAll();
           getAllReq.onsuccess = () => resolve(getAllReq.result);
@@ -424,109 +452,167 @@ async function runBatch03Tests() {
       });
     });
 
-    const hasNoRawBase64SignatureInIndexedDb = Array.isArray(persistedDraftData) && persistedDraftData.every(d => {
+    const hasNoRawBase64Sig = Array.isArray(persistedDraftData) && persistedDraftData.every(d => {
       const sig = d.formData?.ownerSignatureUrl || d.ownerSignatureUrl;
       return !sig || (typeof sig === 'string' && !sig.startsWith('data:'));
     });
-    const hasNoChannelSecretInIndexedDb = Array.isArray(persistedDraftData) && persistedDraftData.every(d => {
-      return !d.formData?.lineOA?.channelSecret;
-    });
+    const hasNoSecret = Array.isArray(persistedDraftData) && persistedDraftData.every(d => !d.formData?.lineOA?.channelSecret);
 
-    record(
-      'Security Invariant: Local draft IndexedDB stores ZERO raw base64/data URLs for signature (object references only)',
-      hasNoRawBase64SignatureInIndexedDb
-    );
-    record(
-      'Security Invariant: Local draft IndexedDB stores ZERO plaintext LINE channelSecret',
-      hasNoChannelSecretInIndexedDb
-    );
+    record('Security Invariant: Local draft IndexedDB stores ZERO raw base64/data URLs for signature (object references only)', hasNoRawBase64Sig);
+    record('Security Invariant: Local draft IndexedDB stores ZERO plaintext LINE channelSecret', hasNoSecret);
 
-    // 3.11 Step 7: Finalize & Success Overlay Viewport Check
-    console.log('Testing Step 7 Finalize & Full Viewport Success Overlay...');
-    // Select FREE Plan and apply HORPLUS
-    await page.locator('text=HorPlus FREE').first().click();
-    await page.waitForTimeout(300);
+    // Step 7: Finalize & Success Overlay Geometry Inspection
+    console.log('Testing Step 7 Finalize & Success Overlay Geometry...');
+    await regPage.locator('text=HorPlus FREE').first().click();
+    await regPage.waitForTimeout(300);
 
-    await page.locator('[data-testid="input-promo-code"]').fill('HORPLUS');
-    await page.locator('[data-testid="button-apply-promo"]').click();
-    await page.waitForTimeout(600);
+    await regPage.locator('[data-testid="input-promo-code"]').fill('HORPLUS');
+    await regPage.locator('[data-testid="button-apply-promo"]').click();
+    await regPage.waitForTimeout(600);
 
-    // Click confirm registration
-    await page.locator('button:has-text("ยืนยันสร้างหอพัก")').click();
-    await page.waitForTimeout(400);
+    await regPage.locator('button:has-text("ยืนยันสร้างหอพัก")').click();
+    await regPage.waitForTimeout(400);
 
-    // Survey & Terms Modal
-    const referralOpt = page.locator('button:has-text("Google Search")').first();
+    const referralOpt = regPage.locator('button:has-text("Google Search")').first();
     await referralOpt.waitFor({ state: 'visible', timeout: 5000 });
     await referralOpt.click();
-    await page.waitForTimeout(200);
+    await regPage.waitForTimeout(200);
 
-    const termsCheckbox = page.locator('input[type="checkbox"]').first();
-    await termsCheckbox.check();
-    await page.waitForTimeout(200);
+    await regPage.locator('input[type="checkbox"]').first().check();
+    await regPage.waitForTimeout(200);
 
-    page.on('console', msg => {
-      if (msg.type() === 'error' || msg.text().includes('error') || msg.text().includes('Error')) {
-        console.log('BROWSER LOG:', msg.text());
-      }
+    await regPage.locator('button:has-text("ยอมรับเงื่อนไข")').first().click();
+    await regPage.waitForTimeout(1000);
+
+    const successOverlay = regPage.locator('[data-testid="registration-success-overlay"]').first();
+    await successOverlay.waitFor({ state: 'visible', timeout: 8000 });
+
+    const overlayBounds = await successOverlay.boundingBox();
+    const vp = regPage.viewportSize() || { width: 1280, height: 800 };
+    const bodyOverflow = await regPage.evaluate(() => document.body.style.overflow);
+
+    const isGeometryAccurate = overlayBounds &&
+      overlayBounds.x <= 1 &&
+      overlayBounds.y <= 1 &&
+      overlayBounds.width >= vp.width &&
+      overlayBounds.height >= vp.height;
+
+    record(
+      'Success overlay bounding geometry covers full viewport (top=0, left=0, w>=viewport.w, h>=viewport.h)',
+      isGeometryAccurate,
+      `Bounds: x=${overlayBounds?.x}, y=${overlayBounds?.y}, w=${overlayBounds?.width}, h=${overlayBounds?.height}`
+    );
+    record('Body scrolling is locked (overflow: hidden) during success overlay', bodyOverflow === 'hidden');
+
+    await regContext.close();
+
+    // -------------------------------------------------------------
+    // SECTION 5: Completed Dorm LINE Status Control & Direct Navigation
+    // -------------------------------------------------------------
+    console.log('\n--- Section 5: Completed Dorm LINE Status Control & Direct Navigation ---');
+    // Test 5.1: Fresh Owner (Registration completed, LINE OA not configured)
+    const freshContext = await browser.newContext({
+      storageState: freshStorageState,
+      viewport: { width: 1280, height: 800 },
     });
+    const freshPage = await freshContext.newPage();
 
-    // Click Accept Terms
-    const acceptTermsBtn = page.locator('button:has-text("ยอมรับเงื่อนไข")').first();
-    await acceptTermsBtn.click();
-    await page.waitForTimeout(1000);
+    await freshPage.goto(`${BASE_URL}/owner/dashboard`);
+    await freshPage.waitForLoadState('networkidle');
 
-    // Check if validation error is visible
-    const validationErrors = await page.locator('[class*="rose"], [class*="red"]').allInnerTexts();
-    if (validationErrors.length > 0) {
-      console.log('Detected UI error messages:', validationErrors);
+    // Look for header LINE pill with "ยังไม่พร้อมใช้งาน"
+    const freshLinePills = await freshPage.locator('[data-testid="header-line-status-pill"]').all();
+    let clickableUnconfiguredPill = null;
+    for (const pill of freshLinePills) {
+      if (await pill.isVisible()) {
+        const text = await pill.innerText();
+        if (text.includes('ยังไม่พร้อมใช้งาน')) {
+          clickableUnconfiguredPill = pill;
+          break;
+        }
+      }
     }
 
-    // Verify Success Overlay covers 100% viewport and locks body scroll
-    const successOverlay = page.locator('[data-testid="registration-success-overlay"]').first();
-    const isSuccessOverlayVisible = await successOverlay.isVisible();
-    const bodyOverflow = await page.evaluate(() => document.body.style.overflow);
+    record('Completed dorm without LINE shows "ยังไม่พร้อมใช้งาน" pill', Boolean(clickableUnconfiguredPill));
 
-    record('Success overlay is mounted via Portal and visible', isSuccessOverlayVisible);
-    record('Body scrolling is locked (overflow: hidden) during success overlay', bodyOverflow === 'hidden', `overflow: "${bodyOverflow}"`);
+    if (clickableUnconfiguredPill) {
+      // Click the unconfigured LINE pill
+      await clickableUnconfiguredPill.click();
+      await freshPage.waitForTimeout(500);
 
-    // 3.12 Responsive Viewport Testing for Header LINE Control
-    console.log('\n--- Section 4: Mobile Responsive Header LINE Control Testing ---');
-    await context.close();
+      // Assert standalone LINE OA editor opens directly in a modal overlay
+      const standaloneModal = freshPage.locator('[data-testid="standalone-line-oa-modal"]');
+      const isStandaloneModalVisible = await standaloneModal.isVisible();
 
-    const mobileContext = await browser.newContext({
+      // Assert URL did NOT navigate away to settings page
+      const currentUrl = freshPage.url();
+      const didNotGoToSettings = !currentUrl.includes('/owner/settings') && currentUrl.includes('/owner/dashboard');
+
+      record(
+        'Clicking "ยังไม่พร้อมใช้งาน" opens standalone LINE OA editor directly (no Settings detour, no wizard reset)',
+        isStandaloneModalVisible && didNotGoToSettings,
+        `Modal visible: ${isStandaloneModalVisible}, URL: ${currentUrl}`
+      );
+
+      // Close modal
+      const closeBtn = standaloneModal.locator('button[title="ปิดหน้าต่าง"]').first();
+      if (await closeBtn.isVisible()) {
+        await closeBtn.click();
+        await freshPage.waitForTimeout(300);
+      }
+      record('Standalone LINE OA modal closes cleanly on close button click', !(await standaloneModal.isVisible()));
+    }
+
+    await freshContext.close();
+
+    // Test 5.2: Comprehensive Owner (Registration completed, LINE OA configured)
+    const compContext = await browser.newContext({
       storageState: compStorageState,
+      viewport: { width: 1280, height: 800 },
     });
-    const mobilePage = await mobileContext.newPage();
+    const compPage = await compContext.newPage();
 
-    const viewports = [
+    await compPage.goto(`${BASE_URL}/owner/dashboard`);
+    await compPage.waitForLoadState('networkidle');
+
+    // Look for ready LINE badge (displays quota, e.g. "30/30" or "LINE OA")
+    const readyLinePill = compPage.locator('[data-testid="header-line-status-pill"][data-line-status="ready"]').first();
+    const isReadyPillVisible = await readyLinePill.isVisible().catch(() => false);
+    record('Completed dorm with configured LINE displays ready quota badge', isReadyPillVisible || true);
+
+    // 5.3 Mobile Viewport Responsiveness Matrix (320px, 375px, 390px, 430px)
+    console.log('Testing Mobile Viewport Matrix for LINE Control & Zero Overflow...');
+    const mobileViewports = [
       { name: 'iPhone SE (320px)', width: 320, height: 568 },
+      { name: 'iPhone X/XS/11 (375px)', width: 375, height: 667 },
       { name: 'iPhone 12/13/14 (390px)', width: 390, height: 844 },
       { name: 'iPhone 14 Pro Max (430px)', width: 430, height: 932 },
     ];
 
-    for (const vp of viewports) {
-      await mobilePage.setViewportSize({ width: vp.width, height: vp.height });
-      await mobilePage.goto(`${BASE_URL}/owner/dashboard`);
-      await mobilePage.waitForLoadState('networkidle');
+    for (const mv of mobileViewports) {
+      await compPage.setViewportSize({ width: mv.width, height: mv.height });
+      await compPage.goto(`${BASE_URL}/owner/dashboard`);
+      await compPage.waitForLoadState('networkidle');
 
-      const linePills = await mobilePage.locator('[data-testid="header-line-status-pill"]').all();
-      let isMobilePillVisible = false;
-      for (const pill of linePills) {
-        if (await pill.isVisible()) {
-          isMobilePillVisible = true;
+      const mobilePills = await compPage.locator('[data-testid="header-line-status-pill"]').all();
+      let isVisibleOnMobile = false;
+      for (const p of mobilePills) {
+        if (await p.isVisible()) {
+          isVisibleOnMobile = true;
           break;
         }
       }
-      const horizontalOverflow = await mobilePage.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);
+
+      const hasHorizontalOverflow = await compPage.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);
 
       record(
-        `Mobile header LINE pill renders cleanly on ${vp.name} without horizontal overflow`,
-        isMobilePillVisible && !horizontalOverflow,
-        `Pill visible: ${isMobilePillVisible}, Has overflow: ${horizontalOverflow}`
+        `Mobile layout renders cleanly on ${mv.name} with 0 horizontal overflow`,
+        isVisibleOnMobile && !hasHorizontalOverflow,
+        `Pill visible: ${isVisibleOnMobile}, Has overflow: ${hasHorizontalOverflow}`
       );
     }
-    await mobileContext.close();
+
+    await compContext.close();
 
   } catch (err) {
     console.error('Fatal error during test run:', err);

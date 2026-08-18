@@ -342,7 +342,7 @@ export class SubscriptionIntentService {
       await tx.$executeRaw`SELECT set_config('app.current_user_id', ${userId}, true)`;
 
       // 1. Lock intent for update
-      await tx.$executeRawUnsafe(`SELECT * FROM "subscription_package_intents" WHERE "id" = '${intentId}'::uuid FOR UPDATE`);
+      await tx.$executeRaw`SELECT * FROM "subscription_package_intents" WHERE "id" = ${intentId}::uuid FOR UPDATE`;
 
       const intent = await tx.subscriptionPackageIntent.findUnique({
         where: { id: intentId },

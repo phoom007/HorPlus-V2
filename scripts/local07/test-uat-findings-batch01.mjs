@@ -93,12 +93,12 @@ async function runBatch01Verification() {
     await page.goto(`${BASE_URL}/owner/register`);
     await page.waitForLoadState('networkidle');
 
-    // Verify Finding A & B: Workspace Gate during initial onboarding
+    // Verify Finding A & B: Workspace Gate during initial onboarding (Batch 03: all menus visible, operational menus disabled)
     const regNavItem = page.locator('[data-testid="nav-item-register"]');
     const roomsNavItem = page.locator('[data-testid="nav-item-rooms"]');
     const settingsNavItem = page.locator('[data-testid="nav-item-settings"]');
-    const hasOnlyRegisterMenu = (await regNavItem.count() > 0) && (await roomsNavItem.count() === 0) && (await settingsNavItem.count() === 0);
-    console.log(`  Initial onboarding menu shows only 'ลงทะเบียน': ${hasOnlyRegisterMenu ? '✅ YES' : '❌ NO'}`);
+    const isRegistrationSidebarIsolated = (await regNavItem.count() > 0) && (await roomsNavItem.first().isDisabled()) && (await settingsNavItem.first().isDisabled());
+    console.log(`  Initial onboarding menu has operational items disabled: ${isRegistrationSidebarIsolated ? '✅ YES' : '❌ NO'}`);
 
     // Click profile avatar button and verify it does NOT navigate to settings
     const avatarBtns = page.locator('button[title*="ลงทะเบียน"]');
@@ -413,12 +413,12 @@ async function runBatch01Verification() {
     await page.waitForLoadState('networkidle');
     await page.waitForTimeout(800);
 
-    // Assert Workspace Gate for Add-Dorm registration mode
+    // Assert Workspace Gate for Add-Dorm registration mode (Batch 03: all menus visible, operational menus disabled)
     const regNavItemB = page.locator('[data-testid="nav-item-register"]');
     const roomsNavItemB = page.locator('[data-testid="nav-item-rooms"]');
     const settingsNavItemB = page.locator('[data-testid="nav-item-settings"]');
-    const hasOnlyRegisterMenuB = (await regNavItemB.count() > 0) && (await roomsNavItemB.count() === 0) && (await settingsNavItemB.count() === 0);
-    console.log(`  Add-dorm registration menu shows only 'ลงทะเบียน': ${hasOnlyRegisterMenuB ? '✅ YES' : '❌ NO'}`);
+    const isAddDormSidebarIsolated = (await regNavItemB.count() > 0) && (await roomsNavItemB.first().isDisabled()) && (await settingsNavItemB.first().isDisabled());
+    console.log(`  Add-dorm registration menu has operational items disabled: ${isAddDormSidebarIsolated ? '✅ YES' : '❌ NO'}`);
 
     const avatarBtnsB = page.locator('button[title*="ลงทะเบียน"]');
     if (await avatarBtnsB.count() > 0) {
@@ -434,10 +434,10 @@ async function runBatch01Verification() {
     await page.reload();
     await page.waitForLoadState('networkidle');
     await page.waitForTimeout(600);
-    const staysOnAddDormAfterF5 = page.url().includes('/owner/dormitories/new') && (await regNavItemB.count() > 0) && (await roomsNavItemB.count() === 0);
+    const staysOnAddDormAfterF5 = page.url().includes('/owner/dormitories/new') && (await regNavItemB.count() > 0) && (await roomsNavItemB.first().isDisabled());
     console.log(`  Add-dorm F5 reload preserves isolated registration workspace: ${staysOnAddDormAfterF5 ? '✅ YES' : '❌ NO'}`);
 
-    if (hasOnlyRegisterMenu && staysOnRegisterUrl && hasOnlyRegisterMenuB && staysOnAddDormUrl && unexpectedOperationalCallsB.length === 0 && staysOnAddDormAfterF5) {
+    if (isRegistrationSidebarIsolated && staysOnRegisterUrl && isAddDormSidebarIsolated && staysOnAddDormUrl && unexpectedOperationalCallsB.length === 0 && staysOnAddDormAfterF5) {
       results.registration_workspace_isolation = true;
     }
 

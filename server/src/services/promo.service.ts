@@ -13,6 +13,26 @@ import { getPrismaClient } from '../db/prisma.js';
 import { AppError } from '../types/index.js';
 import { addCalendarMonths } from './subscription-entitlement.service.js';
 
+/**
+ * Generic promo duration application helper supporting both 'MONTH' (calendar arithmetic) and 'DAY' (exact days)
+ */
+export function applyPromoDuration(
+  baseDate: Date,
+  promo: { benefitUnit?: string | null; benefitValue?: number | null; extensionDays?: number | null }
+): Date {
+  const unit = (promo.benefitUnit || 'MONTH').toUpperCase();
+  const value = promo.benefitValue ?? (unit === 'DAY' ? (promo.extensionDays ?? 60) : 2);
+
+  if (unit === 'DAY') {
+    const result = new Date(baseDate.getTime());
+    result.setDate(result.getDate() + value);
+    return result;
+  }
+
+  // Default: MONTH (using authoritative addCalendarMonths)
+  return addCalendarMonths(baseDate, value);
+}
+
 export interface PromoValidationResult {
   valid: boolean;
   eligible: boolean;
@@ -209,8 +229,11 @@ export class PromoService {
     // Dual-State Promo Calculation:
     // If trial unused: 1 mo trial + 2 mo HORPLUS = 3 mo
     // If trial consumed: 0 mo trial + 2 mo HORPLUS = 2 mo
-    const promoBonusMonths = promo.benefitValue;
+    const promoUnit = (promo.benefitUnit || 'MONTH').toUpperCase();
+    const promoValue = promo.benefitValue;
+    const promoBonusMonths = promoUnit === 'MONTH' ? promoValue : Math.round(promoValue / 30);
     const totalTrialMonths = initialTrialMonths + promoBonusMonths;
+    const unitLabel = promoUnit === 'DAY' ? `${promoValue} วัน` : `${promoValue} เดือน`;
 
     return {
       valid: true,
@@ -222,7 +245,7 @@ export class PromoService {
       trialMonths: initialTrialMonths,
       promoBonusMonths: promoBonusMonths,
       totalTrialMonths: totalTrialMonths,
-      message: `ใช้รหัสโปรโมชัน ${normalizedCode} สำเร็จ (รับสิทธิ์เพิ่ม ${promoBonusMonths} เดือน)`,
+      message: `ใช้รหัสโปรโมชัน ${normalizedCode} สำเร็จ (รับสิทธิ์เพิ่ม ${unitLabel})`,
       promoCodeEntity: promo,
     };
   }
@@ -277,7 +300,7 @@ export class PromoService {
       }
 
       // 1. Lock promo row for atomic capacity count update
-      await tx.$executeRawUnsafe(`SELECT * FROM "promo_codes" WHERE "id" = '${promo.id}'::uuid FOR UPDATE`);
+      await tx.$executeRaw`SELECT * FROM "promo_codes" WHERE "id" = ${promo.id}::uuid FOR UPDATE`;
 
       const lockedPromo = await tx.promoCode.findUniqueOrThrow({
         where: { id: promo.id },
@@ -324,8 +347,12 @@ export class PromoService {
         },
       });
 
-      const bonusMonths = lockedPromo.benefitValue || 2;
-      let newExpiresAt = addCalendarMonths(now, bonusMonths);
+      const promoUnit = (lockedPromo.benefitUnit || 'MONTH').toUpperCase();
+      const promoValue = lockedPromo.benefitValue ?? (promoUnit === 'DAY' ? (lockedPromo.extensionDays ?? 60) : 2);
+      const bonusMonths = promoUnit === 'MONTH' ? promoValue : Math.round(promoValue / 30);
+      const bonusDays = promoUnit === 'DAY' ? promoValue : (lockedPromo.extensionDays ?? 60);
+
+      let newExpiresAt = applyPromoDuration(now, lockedPromo);
       let previousExpiresAt: Date = now;
       let subscriptionId: string = '';
 
@@ -345,9 +372,9 @@ export class PromoService {
           const isSyntheticFreeExpiry = sub.plan?.code === 'FREE' || (sub.expiresAt && (sub.expiresAt.getTime() - now.getTime() > 365 * 10 * 86400 * 1000));
 
           if (!isSyntheticFreeExpiry && sub.expiresAt && sub.expiresAt > now) {
-            newExpiresAt = addCalendarMonths(sub.expiresAt, bonusMonths);
+            newExpiresAt = applyPromoDuration(sub.expiresAt, lockedPromo);
           } else {
-            newExpiresAt = addCalendarMonths(now, bonusMonths);
+            newExpiresAt = applyPromoDuration(now, lockedPromo);
           }
 
           const currentStatus = (sub.status === 'ACTIVE' || sub.status === 'TRIAL') ? sub.status : 'TRIAL';
@@ -371,7 +398,7 @@ export class PromoService {
               newPlanId: proPlan?.id || sub.planId,
               previousStatus: sub.status,
               newStatus: currentStatus,
-              reason: 'PROMO_EXTENSION_CALENDAR_MONTHS',
+              reason: promoUnit === 'DAY' ? 'PROMO_EXTENSION_DAYS' : 'PROMO_EXTENSION_CALENDAR_MONTHS',
               actorId: userId,
             },
           });
@@ -405,21 +432,28 @@ export class PromoService {
         });
       }
 
+      const unitText = promoUnit === 'DAY' ? `${promoValue} วัน` : `${promoValue} เดือน`;
+
       return {
         status: 200,
         body: {
           success: true,
-          message: `ใช้รหัสโปรโมชัน ${lockedPromo.code} สำเร็จ (รับสิทธิ์เพิ่ม ${bonusMonths} เดือน)`,
+          message: `ใช้รหัสโปรโมชัน ${lockedPromo.code} สำเร็จ (รับสิทธิ์เพิ่ม ${unitText})`,
           data: {
             promoCode: lockedPromo.code,
+            benefitUnit: lockedPromo.benefitUnit,
+            benefitValue: lockedPromo.benefitValue,
             bonusMonths,
+            bonusDays,
             expiresAt: newExpiresAt,
           },
         },
         id: lockedPromo.id,
         promoCodeEntity: lockedPromo,
-        benefitValue: bonusMonths,
+        benefitUnit: lockedPromo.benefitUnit,
+        benefitValue: lockedPromo.benefitValue,
         bonusMonths,
+        bonusDays,
         newExpiresAt,
       };
     };

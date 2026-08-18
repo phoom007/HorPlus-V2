@@ -52,6 +52,7 @@ import { OwnerReports } from './owner/reports';
 import { OwnerUsers } from './owner/users';
 import { OwnerSettings } from './owner/settings';
 import { OwnerRegister } from './owner/register';
+import { OwnerLineOaPage } from './owner/line-oa';
 import { PaymentsOwnerView } from './owner/payments';
 import { SubscriptionPage } from './owner/subscription';
 import { fetchAllPaginated, fetchAllPaginatedWithMeta } from '../utils/fetch-paginated';
@@ -297,6 +298,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
   // Header Search State & Safe Calculation
   const [headerSearchQuery, setHeaderSearchQuery] = useState('');
   const [isSearchDropdownOpen, setIsSearchDropdownOpen] = useState(false);
+  const [showDirectLineOaModal, setShowDirectLineOaModal] = useState(false);
 
   const headerSearchResults = React.useMemo(() => {
     const query = headerSearchQuery.trim().toLowerCase();
@@ -1155,7 +1157,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
                 dormitoryId={activeDormitoryId}
                 isRegistrationMode={isRegistrationMode}
                 hideLabelText={true}
-                onNavigateToLineConfig={() => changeTab('settings')}
+                onNavigateToLineConfig={() => setShowDirectLineOaModal(true)}
               />
 
               {!isRegistrationMode && (
@@ -1317,7 +1319,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
             <LineQuotaBadge
               dormitoryId={activeDormitoryId}
               isRegistrationMode={isRegistrationMode}
-              onNavigateToLineConfig={() => changeTab('settings')}
+              onNavigateToLineConfig={() => setShowDirectLineOaModal(true)}
             />
 
             {/* Search Icon Button */}
@@ -1532,6 +1534,29 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
                 </>
               );
             })()}
+          </div>
+        </div>
+      )}
+
+      {/* Standalone Direct LINE OA Modal */}
+      {showDirectLineOaModal && (
+        <div
+          data-testid="standalone-line-oa-modal"
+          className="fixed inset-0 z-[120] bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4 overflow-y-auto"
+        >
+          <div className="relative w-full max-w-4xl bg-slate-50 rounded-3xl shadow-2xl overflow-hidden my-4 sm:my-8 max-h-[95vh] overflow-y-auto">
+            <button
+              onClick={() => setShowDirectLineOaModal(false)}
+              className="absolute top-4 right-4 z-10 p-2 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-700 transition-colors cursor-pointer"
+              title="ปิดหน้าต่าง"
+            >
+              <X className="w-5 h-5" />
+            </button>
+            <OwnerLineOaPage
+              dormitoryId={activeDormitoryId}
+              onNavigateBack={() => setShowDirectLineOaModal(false)}
+              onAddLog={handleAddLog}
+            />
           </div>
         </div>
       )}

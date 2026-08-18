@@ -138,7 +138,7 @@ async function runBatch02Verification() {
     });
 
     // 1.1 Test Valid TEMPLATE_DEFAULT
-    await prisma.$executeRawUnsafe(`
+    await prisma.$executeRaw`
       INSERT INTO billing_rate_snapshots (
         id, dormitory_id, billing_cycle_id, water_billing_type, water_rate,
         electricity_billing_type, electricity_rate, common_fee, common_fee_mode,
@@ -146,17 +146,17 @@ async function runBatch02Verification() {
         late_fee_type, late_fee_value, currency, source, inherited_from_billing_cycle_id,
         updated_by_user_id, version, created_at, updated_at
       ) VALUES (
-        '${snap1Id}', '${testDormId}', '${cycleAId}', 'unit', 18.00,
+        ${snap1Id}::uuid, ${testDormId}::uuid, ${cycleAId}::uuid, 'unit', 18.00,
         'unit', 7.00, 0.00, 'free', 0.00, 'free', 0.00, 'free',
         'free', 0.00, 'THB', 'TEMPLATE_DEFAULT', NULL, NULL, 1, NOW(), NOW()
       );
-    `);
+    `;
     console.log('✓ Valid TEMPLATE_DEFAULT snapshot inserted successfully.');
 
     // 1.2 Test Invalid Source (CHECK constraint)
     let invalidSourceFailed = false;
     try {
-      await prisma.$executeRawUnsafe(`
+      await prisma.$executeRaw`
         INSERT INTO billing_rate_snapshots (
           id, dormitory_id, billing_cycle_id, water_billing_type, water_rate,
           electricity_billing_type, electricity_rate, common_fee, common_fee_mode,
@@ -164,11 +164,11 @@ async function runBatch02Verification() {
           late_fee_type, late_fee_value, currency, source, inherited_from_billing_cycle_id,
           updated_by_user_id, version, created_at, updated_at
         ) VALUES (
-          '${snapInvSrcId}', '${testDormId}', '${cycleBId}', 'unit', 18.00,
+          ${snapInvSrcId}::uuid, ${testDormId}::uuid, ${cycleBId}::uuid, 'unit', 18.00,
           'unit', 7.00, 0.00, 'free', 0.00, 'free', 0.00, 'free',
           'free', 0.00, 'THB', 'INVALID_SOURCE', NULL, NULL, 1, NOW(), NOW()
         );
-      `);
+      `;
     } catch (e) {
       invalidSourceFailed = true;
     }
@@ -178,7 +178,7 @@ async function runBatch02Verification() {
     // 1.3 Test Invalid INHERITED (missing inherited_from_billing_cycle_id)
     let invalidInheritedFailed = false;
     try {
-      await prisma.$executeRawUnsafe(`
+      await prisma.$executeRaw`
         INSERT INTO billing_rate_snapshots (
           id, dormitory_id, billing_cycle_id, water_billing_type, water_rate,
           electricity_billing_type, electricity_rate, common_fee, common_fee_mode,
@@ -186,11 +186,11 @@ async function runBatch02Verification() {
           late_fee_type, late_fee_value, currency, source, inherited_from_billing_cycle_id,
           updated_by_user_id, version, created_at, updated_at
         ) VALUES (
-          '${snapInvInhId}', '${testDormId}', '${cycleBId}', 'unit', 18.00,
+          ${snapInvInhId}::uuid, ${testDormId}::uuid, ${cycleBId}::uuid, 'unit', 18.00,
           'unit', 7.00, 0.00, 'free', 0.00, 'free', 0.00, 'free',
           'free', 0.00, 'THB', 'INHERITED', NULL, NULL, 1, NOW(), NOW()
         );
-      `);
+      `;
     } catch (e) {
       invalidInheritedFailed = true;
     }
@@ -198,7 +198,7 @@ async function runBatch02Verification() {
     console.log('✓ DB CHECK constraint rejected INHERITED without parent cycle.');
 
     // 1.4 Test Valid INHERITED
-    await prisma.$executeRawUnsafe(`
+    await prisma.$executeRaw`
       INSERT INTO billing_rate_snapshots (
         id, dormitory_id, billing_cycle_id, water_billing_type, water_rate,
         electricity_billing_type, electricity_rate, common_fee, common_fee_mode,
@@ -206,17 +206,17 @@ async function runBatch02Verification() {
         late_fee_type, late_fee_value, currency, source, inherited_from_billing_cycle_id,
         updated_by_user_id, version, created_at, updated_at
       ) VALUES (
-        '${snap2Id}', '${testDormId}', '${cycleBId}', 'unit', 18.00,
+        ${snap2Id}::uuid, ${testDormId}::uuid, ${cycleBId}::uuid, 'unit', 18.00,
         'unit', 7.00, 0.00, 'free', 0.00, 'free', 0.00, 'free',
-        'free', 0.00, 'THB', 'INHERITED', '${cycleAId}', NULL, 1, NOW(), NOW()
+        'free', 0.00, 'THB', 'INHERITED', ${cycleAId}::uuid, NULL, 1, NOW(), NOW()
       );
-    `);
+    `;
     console.log('✓ Valid INHERITED snapshot inserted successfully.');
 
     // 1.5 Test Unique Constraint on billing_cycle_id
     let duplicateCycleFailed = false;
     try {
-      await prisma.$executeRawUnsafe(`
+      await prisma.$executeRaw`
         INSERT INTO billing_rate_snapshots (
           id, dormitory_id, billing_cycle_id, water_billing_type, water_rate,
           electricity_billing_type, electricity_rate, common_fee, common_fee_mode,
@@ -224,11 +224,11 @@ async function runBatch02Verification() {
           late_fee_type, late_fee_value, currency, source, inherited_from_billing_cycle_id,
           updated_by_user_id, version, created_at, updated_at
         ) VALUES (
-          '${snapInvSrcId}', '${testDormId}', '${cycleBId}', 'unit', 18.00,
+          ${snapDupId}::uuid, ${testDormId}::uuid, ${cycleAId}::uuid, 'unit', 18.00,
           'unit', 7.00, 0.00, 'free', 0.00, 'free', 0.00, 'free',
-          'free', 0.00, 'THB', 'INHERITED', '${cycleAId}', NULL, 1, NOW(), NOW()
+          'free', 0.00, 'THB', 'MANUAL_EDIT', NULL, NULL, 1, NOW(), NOW()
         );
-      `);
+      `;
     } catch (e) {
       duplicateCycleFailed = true;
     }

@@ -349,10 +349,10 @@ async function runBrowserUAT() {
       console.log('  Filled Building Security Deposit: 5000');
     }
 
-    // Verify Due Date Select starts EMPTY / UNSELECTED (Product Owner Policy: No Default Due Day)
+    // Verify Due Date Select starts with DEFAULT 15 (Product Owner Batch 03 Requirement)
     const dueDateSelect = page.locator('[data-testid="due-date-select"]').first();
     const initialDueDayVal = await dueDateSelect.inputValue();
-    console.log(`  Step 4 Due Date initial value: "${initialDueDayVal}" (Expected: "")`);
+    console.log(`  Step 4 Due Date initial value: "${initialDueDayVal}" (Expected: "15")`);
 
     // Verify full approved 1..28 options range with no 29, 30, 31
     const dueDayOptionValues = await dueDateSelect.evaluate((select) =>
@@ -438,13 +438,6 @@ async function runBrowserUAT() {
     }
     await page.screenshot({ path: path.join(SCREENSHOTS_DIR, '04-step4-payments-filled.png') });
 
-    // Test advancing WITHOUT choosing Due Date -> must be blocked
-    const nextBtn4 = page.locator('button:has-text("ถัดไป")').first();
-    await nextBtn4.click();
-    await page.waitForTimeout(400);
-    const dueDateValidationErr = await page.locator('.text-rose-700, .bg-rose-50, :text("วันครบกำหนดชำระ")').first().isVisible().catch(() => false);
-    console.log(`  Step 4 advancement blocked on missing Due Date: ${dueDateValidationErr ? '✅ BLOCKED' : '❌ NOT BLOCKED'}`);
-
     // Now explicitly select due day 17
     await dueDateSelect.selectOption('17');
     await page.waitForTimeout(200);
@@ -462,12 +455,13 @@ async function runBrowserUAT() {
     console.log(`  Step 4 Due Date value after back/forward: "${dueDayAfterBack}" (Expected: "17")`);
     const isPreserved17 = dueDayAfterBack === '17';
 
-    if (initialDueDayVal === '' && isRange1To28 && dueDateValidationErr && selectedDueDayVal === '17' && isPreserved17) {
+    if (initialDueDayVal === '15' && isRange1To28 && selectedDueDayVal === '17' && isPreserved17) {
       uatResults.step4_due_day_unselected_and_required = true;
     }
 
     // Advance to Step 5: กฎระเบียบ สัตว์เลี้ยง และลายเซ็น
     console.log('\n--- TEST 4: Step 5 — Pet Policy Default, Rules & Canvas Signature ---');
+    const nextBtn4 = page.locator('button:has-text("ถัดไป")').first();
     await nextBtn4.click();
     await page.waitForTimeout(600);
     console.log('  Header after Step 4 Next:', (await page.locator('h3').first().textContent().catch(() => ''))?.trim());
