@@ -103,7 +103,7 @@ export function normalizeOnboardingDraftPayload(rawPayload: any): Record<string,
   const deposits = {
     securityDeposit: parseNum(rawDep.securityDeposit, 0),
     advanceRentMonths: parseNum(rawDep.advanceRentMonths, 1),
-    dueDateDay: parseNum(rawDep.dueDateDay, 5),
+    dueDateDay: parseNum(rawDep.dueDateDay, 15),
     gracePeriodDays: parseNum(rawDep.gracePeriodDays, 0),
     lateFeeType: (rawDep.lateFeeType ?? 'none').toString(),
     lateFeeAmount: parseNum(rawDep.lateFeeAmount, 0),

@@ -3,6 +3,7 @@ import { MessageSquare, X, AlertTriangle, Settings, Sparkles, Check } from 'luci
 
 interface LineQuotaBadgeProps {
   dormitoryId?: string;
+  isRegistrationMode?: boolean;
   hideIcon?: boolean;
   hideLabelText?: boolean;
   className?: string;
@@ -11,6 +12,7 @@ interface LineQuotaBadgeProps {
 
 export const LineQuotaBadge: React.FC<LineQuotaBadgeProps> = ({
   dormitoryId,
+  isRegistrationMode = false,
   hideIcon = false,
   hideLabelText = false,
   className = '',
@@ -47,7 +49,7 @@ export const LineQuotaBadge: React.FC<LineQuotaBadgeProps> = ({
   });
 
   const fetchLineStatus = async () => {
-    if (!dormitoryId) return;
+    if (!dormitoryId || isRegistrationMode) return;
     try {
       setLoading(true);
       const res = await fetch(`/api/v1/dormitories/${dormitoryId}/line-oa`, {
@@ -59,7 +61,7 @@ export const LineQuotaBadge: React.FC<LineQuotaBadgeProps> = ({
         if (data) {
           setLineConfig({
             connected: Boolean(data.connected),
-            isReady: Boolean(data.isReady),
+            isReady: Boolean(data.isReady || (data.connected && data.credentialsVerified)),
             credentialsVerified: Boolean(data.credentialsVerified),
             monthlyQuota: data.monthlyQuota ?? 30,
             usedQuota: data.usedQuota ?? 0,
@@ -80,8 +82,10 @@ export const LineQuotaBadge: React.FC<LineQuotaBadgeProps> = ({
   };
 
   useEffect(() => {
-    fetchLineStatus();
-  }, [dormitoryId]);
+    if (!isRegistrationMode) {
+      fetchLineStatus();
+    }
+  }, [dormitoryId, isRegistrationMode]);
 
   const handleTogglePref = async (key: 'notifyRepairRequest' | 'notifyRepairCompleted' | 'notifyPaymentReceived' | 'notifyTenantRegister' | 'notifyTenantApproved') => {
     if (!dormitoryId || !lineConfig.connected) return;
@@ -106,9 +110,9 @@ export const LineQuotaBadge: React.FC<LineQuotaBadgeProps> = ({
     }
   };
 
-  const isConfigured = lineConfig.connected;
-  const isExhausted = lineConfig.remainingQuota <= 0;
-  const isWarning = lineConfig.remainingQuota <= 5 && !isExhausted;
+  const isConfigured = !isRegistrationMode && lineConfig.connected && lineConfig.isReady;
+  const isExhausted = isConfigured && lineConfig.remainingQuota <= 0;
+  const isWarning = isConfigured && lineConfig.remainingQuota <= 5 && !isExhausted;
   const usagePercent = Math.min(100, Math.round((lineConfig.usedQuota / lineConfig.monthlyQuota) * 100));
 
   // Next 1st of month calculation
@@ -116,13 +120,50 @@ export const LineQuotaBadge: React.FC<LineQuotaBadgeProps> = ({
   const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
   const nextResetDateStr = `1 ${nextMonth.toLocaleDateString('th-TH', { month: 'short', year: '2-digit' })}`;
 
+  // 1. REGISTRATION NOT COMPLETED: display "ยังไม่พร้อมใช้งาน", NOT clickable
+  if (isRegistrationMode) {
+    return (
+      <div
+        data-testid="header-line-status-pill"
+        data-line-status="registration_pending"
+        className={`group relative inline-flex items-center gap-1 sm:gap-1.5 shrink-0 whitespace-nowrap px-2 sm:px-2.5 py-0.5 sm:py-1 rounded-full border border-slate-200 bg-slate-100 text-slate-500 cursor-not-allowed select-none opacity-85 ${className}`}
+        title="ยังไม่พร้อมใช้งาน (กรุณาลงทะเบียนหอพักให้เสร็จก่อน)"
+      >
+        {!hideIcon && (
+          <div className="w-3.5 h-3.5 sm:w-4 sm:h-4 rounded-full bg-slate-400 text-white flex items-center justify-center font-bold shadow-2xs shrink-0">
+            <MessageSquare className="w-2 h-2 sm:w-2.5 sm:h-2.5 fill-white/20 text-white" />
+          </div>
+        )}
+        <div className="flex items-center gap-1 text-[10px] sm:text-xs shrink-0 whitespace-nowrap">
+          {!hideLabelText && (
+            <span className="font-bold hidden xs:inline text-slate-500 whitespace-nowrap">
+              LINE OA:
+            </span>
+          )}
+          <span className="font-extrabold px-1.5 py-0.5 rounded-md leading-none whitespace-nowrap text-[9px] sm:text-[10.5px] bg-slate-200 text-slate-700">
+            ยังไม่พร้อมใช้งาน
+          </span>
+        </div>
+      </div>
+    );
+  }
+
+  // 2. REGISTRATION COMPLETED: Clickable pill (shows quota if ready, or "ยังไม่พร้อมใช้งาน" taking owner to settings)
   return (
     <>
       {/* LINE Quota Counter Button */}
       <button
-        onClick={() => setIsOpen(true)}
+        onClick={() => {
+          if (!isConfigured && onNavigateToLineConfig) {
+            onNavigateToLineConfig();
+          } else {
+            setIsOpen(true);
+          }
+        }}
         type="button"
-        className={`group relative inline-flex items-center gap-1.5 shrink-0 whitespace-nowrap px-2.5 py-1 rounded-full border transition-all cursor-pointer select-none active:scale-95 ${
+        data-testid="header-line-status-pill"
+        data-line-status={isConfigured ? 'ready' : 'unconfigured'}
+        className={`group relative inline-flex items-center gap-1 sm:gap-1.5 shrink-0 whitespace-nowrap px-2 sm:px-2.5 py-0.5 sm:py-1 rounded-full border transition-all cursor-pointer select-none active:scale-95 ${
           !isConfigured
             ? 'bg-amber-50/90 border-amber-200/80 hover:bg-amber-100/90 text-amber-800'
             : isExhausted
@@ -137,11 +178,11 @@ export const LineQuotaBadge: React.FC<LineQuotaBadgeProps> = ({
         {!hideIcon && (
           <div className="relative flex items-center justify-center shrink-0">
             <div
-              className={`w-4 h-4 rounded-full flex items-center justify-center font-bold shadow-2xs ${
+              className={`w-3.5 h-3.5 sm:w-4 sm:h-4 rounded-full flex items-center justify-center font-bold shadow-2xs ${
                 isConfigured ? 'bg-[#06C755] text-white' : 'bg-amber-500 text-white'
               }`}
             >
-              <MessageSquare className="w-2.5 h-2.5 fill-white/20 text-white" />
+              <MessageSquare className="w-2 h-2 sm:w-2.5 sm:h-2.5 fill-white/20 text-white" />
             </div>
             <span
               className={`absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full border border-white ${
@@ -158,15 +199,15 @@ export const LineQuotaBadge: React.FC<LineQuotaBadgeProps> = ({
         )}
 
         {/* Text Label & Badge */}
-        <div className="flex items-center gap-1 text-xs shrink-0 whitespace-nowrap">
+        <div className="flex items-center gap-1 text-[10px] sm:text-xs shrink-0 whitespace-nowrap">
           {!hideLabelText && (
-            <span className="font-bold tracking-tight text-slate-700 whitespace-nowrap">
+            <span className="font-bold hidden xs:inline text-slate-700 whitespace-nowrap">
               {isConfigured ? 'โควตา LINE:' : 'LINE OA:'}
             </span>
           )}
           {isConfigured ? (
             <span
-              className={`font-black px-1.5 py-0.5 rounded-md leading-none whitespace-nowrap text-[10.5px] ${
+              className={`font-black px-1.5 py-0.5 rounded-md leading-none whitespace-nowrap text-[9px] sm:text-[10.5px] ${
                 isExhausted
                   ? 'bg-rose-600 text-white'
                   : isWarning
@@ -177,7 +218,7 @@ export const LineQuotaBadge: React.FC<LineQuotaBadgeProps> = ({
               {lineConfig.remainingQuota}/{lineConfig.monthlyQuota}
             </span>
           ) : (
-            <span className="font-bold px-1.5 py-0.5 rounded-md leading-none whitespace-nowrap text-[10.5px] bg-amber-200 text-amber-900 animate-pulse">
+            <span className="font-bold px-1.5 py-0.5 rounded-md leading-none whitespace-nowrap text-[9px] sm:text-[10.5px] bg-amber-200 text-amber-900 animate-pulse">
               ยังไม่พร้อมใช้งาน
             </span>
           )}

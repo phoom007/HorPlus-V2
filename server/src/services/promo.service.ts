@@ -277,7 +277,7 @@ export class PromoService {
       }
 
       // 1. Lock promo row for atomic capacity count update
-      await tx.$executeRaw`SELECT * FROM "promo_codes" WHERE "id" = ${promo.id}::uuid FOR UPDATE`;
+      await tx.$executeRawUnsafe(`SELECT * FROM "promo_codes" WHERE "id" = '${promo.id}'::uuid FOR UPDATE`);
 
       const lockedPromo = await tx.promoCode.findUniqueOrThrow({
         where: { id: promo.id },
@@ -341,7 +341,10 @@ export class PromoService {
         if (sub) {
           subscriptionId = sub.id;
           previousExpiresAt = sub.expiresAt;
-          if (sub.expiresAt && sub.expiresAt > now) {
+
+          const isSyntheticFreeExpiry = sub.plan?.code === 'FREE' || (sub.expiresAt && (sub.expiresAt.getTime() - now.getTime() > 365 * 10 * 86400 * 1000));
+
+          if (!isSyntheticFreeExpiry && sub.expiresAt && sub.expiresAt > now) {
             newExpiresAt = addCalendarMonths(sub.expiresAt, bonusMonths);
           } else {
             newExpiresAt = addCalendarMonths(now, bonusMonths);
@@ -354,6 +357,7 @@ export class PromoService {
               planId: proPlan?.id || sub.planId,
               status: currentStatus,
               expiresAt: newExpiresAt,
+              trialExpiresAt: currentStatus === 'TRIAL' ? newExpiresAt : sub.trialExpiresAt,
               promoExtendedAt: now,
               updatedAt: now,
             },

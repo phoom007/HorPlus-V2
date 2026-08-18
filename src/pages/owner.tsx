@@ -56,7 +56,7 @@ import { PaymentsOwnerView } from './owner/payments';
 import { SubscriptionPage } from './owner/subscription';
 import { fetchAllPaginated, fetchAllPaginatedWithMeta } from '../utils/fetch-paginated';
 import { BillingCycleCalendarPicker } from '../components/common/BillingCycleCalendarPicker';
-
+import { LineQuotaBadge } from '../components/LineQuotaBadge';
 
 interface SlidableNotificationItemProps {
   notif: {
@@ -700,9 +700,12 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
   const rawRole = activeMembership?.roleCode || (typeof activeMembership?.role === 'object' ? activeMembership?.role?.code : activeMembership?.role) || authCtx.user?.roleCode || (typeof authCtx.user?.role === 'object' ? authCtx.user?.role?.code : authCtx.user?.role) || user?.roleId || user?.role || (authCtx.userType === 'owner' ? 'OWNER' : undefined) || 'OWNER';
   const userRole = normalizeRole(rawRole);
 
-  // Fail-closed menu filtering: empty list if role is unmapped/unresolved
+  // Fail-closed menu filtering: during registration mode, show ALL normal owner menus so owner can see what HorPlus contains, but disable them
   let allowedMenuItems = isRegistrationMode
-    ? menuItems.filter(item => item.id === 'register')
+    ? [
+        menuItems.find(item => item.id === 'register')!,
+        ...menuItems.filter(item => item.roles.includes('owner') && item.id !== 'register')
+      ].filter(Boolean)
     : (userRole ? menuItems.filter(item => item.roles.includes(userRole) && item.id !== 'register') : []);
 
   // Determine current component to render
@@ -1147,7 +1150,14 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
             </div>
 
             {/* Mobile Actions Right Side on XS screen (< sm) */}
-            <div className="flex items-center gap-1.5 sm:hidden relative shrink-0">
+            <div className="flex items-center gap-1 sm:hidden relative shrink-0">
+              <LineQuotaBadge
+                dormitoryId={activeDormitoryId}
+                isRegistrationMode={isRegistrationMode}
+                hideLabelText={true}
+                onNavigateToLineConfig={() => changeTab('settings')}
+              />
+
               {!isRegistrationMode && (
                 <div className="relative">
                   <button
@@ -1304,6 +1314,12 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
 
           {/* Right Block: Desktop & Tablet Action Bar (>= sm) */}
           <div className="hidden sm:flex items-center gap-2 shrink-0">
+            <LineQuotaBadge
+              dormitoryId={activeDormitoryId}
+              isRegistrationMode={isRegistrationMode}
+              onNavigateToLineConfig={() => changeTab('settings')}
+            />
+
             {/* Search Icon Button */}
             {!isRegistrationMode && (
               <div className="relative">

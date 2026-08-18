@@ -52,6 +52,8 @@ import { onboardingClient } from '../../data/onboardingClient';
 import { AuthContext } from '../../router/guards';
 import { Dormitory, Building, Room } from '../../types';
 import { normalizeNumericInput } from '../../utils/numericInput';
+import { createPortal } from 'react-dom';
+import { saveRegistrationDraft, getRegistrationDraft, clearRegistrationDraft } from '../../utils/localDraftStorage';
 
 interface RegisterProps {
   onAddLog?: (action: string, details: string, module: string, targetId?: string) => void;
@@ -277,7 +279,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
       deposits: {
         securityDeposit: 0 as number | string,
         advanceRentMonths: 1,
-        dueDateDay: '' as number | string,
+        dueDateDay: 15 as number | string,
         gracePeriodDays: 2,
         lateFeeType: 'none', // 'none' | 'per_day' | 'fixed_once' (default: none)
         lateFeeAmount: 0 as number | string
@@ -354,8 +356,93 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
   const [quoteLoading, setQuoteLoading] = useState(false);
   const [quoteError, setQuoteError] = useState<string | null>(null);
 
-  // Single Authoritative Provisional Dormitory ID for the entire registration / add-dorm attempt
   const [provisionalDormitoryId, setProvisionalDormitoryId] = useState<string | null>(null);
+
+  const userId = authContext?.user?.id || 'current_user';
+  const [draftLoaded, setDraftLoaded] = useState(false);
+
+  // Restore local draft on mount (survives F5)
+  React.useEffect(() => {
+    let isMounted = true;
+    const loadDraft = async () => {
+      try {
+        const draft = await getRegistrationDraft(userId, mode || 'initial');
+        if (!isMounted || !draft) {
+          setDraftLoaded(true);
+          return;
+        }
+
+        if (draft.currentStep && draft.currentStep >= 1 && draft.currentStep <= 7) {
+          setCurrentStep(draft.currentStep);
+        }
+        if (draft.formData) {
+          setFormData(prev => ({
+            ...prev,
+            ...draft.formData,
+            // Never restore sensitive channelSecret
+            lineOA: {
+              ...prev.lineOA,
+              ...(draft.formData.lineOA || {}),
+              channelSecret: '',
+            },
+            // Preserve user-selected dueDateDay if present, else fallback to 15
+            deposits: {
+              ...prev.deposits,
+              ...(draft.formData.deposits || {}),
+              dueDateDay: (draft.formData.deposits?.dueDateDay !== undefined && draft.formData.deposits?.dueDateDay !== '' && !isNaN(Number(draft.formData.deposits?.dueDateDay)))
+                ? Number(draft.formData.deposits.dueDateDay)
+                : (prev.deposits.dueDateDay || 15),
+            },
+          }));
+        }
+        if (draft.selectedPlan) setSelectedPlan(draft.selectedPlan);
+        if (draft.selectedDurationMonths) setSelectedDurationMonths(draft.selectedDurationMonths);
+        if (draft.selectedPackageId) setSelectedPackageId(draft.selectedPackageId);
+        if (draft.promoCodeInput) setPromoCodeInput(draft.promoCodeInput);
+        if (draft.referralCodeInput) setReferralCodeInput(draft.referralCodeInput);
+        if (draft.provisionalDormitoryId) setProvisionalDormitoryId(draft.provisionalDormitoryId);
+      } catch (err) {
+        console.warn('Failed to restore local draft:', err);
+      } finally {
+        if (isMounted) setDraftLoaded(true);
+      }
+    };
+    loadDraft();
+    return () => { isMounted = false; };
+  }, [userId, mode]);
+
+  // Debounced auto-save of registration draft (local-first, 0 network requests)
+  React.useEffect(() => {
+    if (!draftLoaded) return;
+    const timer = setTimeout(() => {
+      saveRegistrationDraft(userId, mode || 'initial', {
+        currentStep,
+        formData,
+        selectedPlan,
+        selectedDurationMonths,
+        selectedPackageId,
+        promoCodeInput,
+        referralCodeInput,
+        provisionalDormitoryId,
+      });
+    }, 300);
+
+    return () => clearTimeout(timer);
+  }, [currentStep, formData, selectedPlan, selectedDurationMonths, selectedPackageId, promoCodeInput, referralCodeInput, provisionalDormitoryId, userId, mode, draftLoaded]);
+
+  // Prevent background scrolling while success overlay is shown
+  React.useEffect(() => {
+    if (isSavedSuccess && typeof document !== 'undefined') {
+      document.body.style.overflow = 'hidden';
+    } else if (typeof document !== 'undefined') {
+      document.body.style.overflow = '';
+    }
+    return () => {
+      if (typeof document !== 'undefined') {
+        document.body.style.overflow = '';
+      }
+    };
+  }, [isSavedSuccess]);
 
   const ensureProvisionalDormitoryId = async (): Promise<string> => {
     if (provisionalDormitoryId) return provisionalDormitoryId;
@@ -533,13 +620,26 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
     }
   };
 
-  const handleSaveSignature = () => {
+  const handleSaveSignature = async () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const dataUrl = canvas.toDataURL('image/png');
     setFormData(prev => ({ ...prev, ownerSignatureUrl: dataUrl }));
     setSignatureSavedToast('บันทึกลายเซ็นเรียบร้อยแล้ว!');
     setTimeout(() => setSignatureSavedToast(null), 3000);
+
+    try {
+      const provDormId = await ensureProvisionalDormitoryId();
+      if (provDormId) {
+        const uploadRes = await onboardingClient.uploadSignature(provDormId, dataUrl);
+        const safeRef = uploadRes?.data?.url || uploadRes?.url || uploadRes?.data?.objectKey || uploadRes?.objectKey;
+        if (safeRef) {
+          setFormData(prev => ({ ...prev, ownerSignatureUrl: safeRef }));
+        }
+      }
+    } catch (err) {
+      console.warn('Pre-uploading signature failed (will retry at finalization):', err);
+    }
   };
 
   const clearCanvas = () => {
@@ -791,6 +891,12 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
           return { valid: false, error: `${bLabel} ยังไม่มีเลขห้องพัก กรุณาสร้างอัตโนมัติหรือระบุเลขห้อง` };
         }
       }
+
+      // Hard ceiling: max 150 rooms per dormitory across all buildings
+      const totalRooms = formData.buildings.reduce((sum, b) => sum + getGeneratedRooms(b).length, 0);
+      if (totalRooms > 150) {
+        return { valid: false, error: 'หนึ่งหอพักสามารถสร้างห้องได้สูงสุด 150 ห้อง' };
+      }
     }
 
     if (stepNum === 3) {
@@ -842,12 +948,12 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
     }
 
     if (stepNum === 4) {
-      // Check security deposit per building
+      // Check security deposit per building (0 is explicitly valid)
       for (let i = 0; i < formData.buildings.length; i++) {
         const b = formData.buildings[i];
         const bLabel = b.roomPrefix ? `อาคาร ${b.roomPrefix}` : (b.name || `อาคารที่ ${i + 1}`);
-        const deposit = b.securityDeposit !== undefined ? b.securityDeposit : formData.deposits.securityDeposit;
-        if (deposit === undefined || isNaN(deposit) || deposit < 0) {
+        const deposit = (b.securityDeposit !== undefined && b.securityDeposit !== '') ? b.securityDeposit : formData.deposits.securityDeposit;
+        if (deposit === undefined || deposit === '' || isNaN(Number(deposit)) || Number(deposit) < 0) {
           return { valid: false, error: `กรุณากรอก "ค่าประกันความเสียหาย" ของ ${bLabel} ให้ถูกต้อง` };
         }
       }
@@ -908,13 +1014,10 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
     }
 
     if (stepNum === 6) {
-      if (!formData.lineOA.channelId || !formData.lineOA.channelId.trim()) {
-        return { valid: false, error: 'กรุณากรอก "LINE Channel ID"' };
-      }
-      if (!formData.lineOA.channelSecret || !formData.lineOA.channelSecret.trim()) {
-        return { valid: false, error: 'กรุณากรอก "LINE Channel Secret"' };
-      }
+      // Step 6 LINE OA is optional. Blank credentials can advance to Step 7 without error.
+      return { valid: true };
     }
+
 
     if (stepNum === 7) {
       return { valid: true };
@@ -980,7 +1083,13 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
 
       // 2. Upload Signature (Object storage path only - fail closed)
       if (formData.ownerSignatureUrl) {
-        await onboardingClient.uploadSignature(provDormId, formData.ownerSignatureUrl);
+        if (formData.ownerSignatureUrl.startsWith('data:')) {
+          const uploadRes = await onboardingClient.uploadSignature(provDormId, formData.ownerSignatureUrl);
+          const safeRef = uploadRes?.data?.url || uploadRes?.url || uploadRes?.data?.objectKey || uploadRes?.objectKey;
+          if (safeRef) {
+            setFormData(prev => ({ ...prev, ownerSignatureUrl: safeRef }));
+          }
+        }
       } else {
         throw new Error('กรุณาวาดและบันทึกลายเซ็นเจ้าของหอพักในขั้นตอนที่ 5 ก่อนยืนยันสร้างหอพัก');
       }
@@ -1133,6 +1242,9 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
         onAddLog('บันทึกการลงทะเบียนหอพักและยอมรับเงื่อนไขเรียบร้อยแล้ว', 'system', 'onboarding');
       }
 
+      // Clear local registration draft upon successful completion
+      await clearRegistrationDraft(userId, mode || 'initial');
+
       setTimeout(() => {
         setIsSavedSuccess(false);
         setSaveProgress(0);
@@ -1165,8 +1277,11 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
   return (
     <div className="p-3 sm:p-6 max-w-6xl mx-auto space-y-6 pb-20">
       {/* Full-Screen Success Overlay (Transparent Backdrop & Minimal Icon + Text) */}
-      {isSavedSuccess && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex flex-col items-center justify-center p-4 animate-in fade-in duration-200 pointer-events-auto">
+      {isSavedSuccess && typeof document !== 'undefined' && createPortal(
+        <div
+          data-testid="registration-success-overlay"
+          className="fixed inset-0 w-screen h-screen min-h-screen z-[9999] bg-slate-900/80 backdrop-blur-md flex flex-col items-center justify-center p-4 animate-in fade-in duration-200 pointer-events-auto"
+        >
           <div className="flex flex-col items-center justify-center text-center space-y-3.5 max-w-sm w-full animate-in zoom-in-90 duration-300">
             {/* Animated Checkmark Circle */}
             <div className="relative">
@@ -1186,7 +1301,8 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
               </p>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* Step Navigation Bar */}
@@ -1338,6 +1454,36 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
               เพิ่มอาคารใหม่
             </button>
           </div>
+
+          {/* Total Room Counter Indicator (Hard limit 150) */}
+          {(() => {
+            const totalRoomsCount = formData.buildings.reduce((sum, b) => sum + getGeneratedRooms(b).length, 0);
+            const isOverLimit = totalRoomsCount > 150;
+            return (
+              <div
+                data-testid="step2-total-rooms-indicator"
+                className={`p-3.5 rounded-2xl border flex items-center justify-between flex-wrap gap-2 ${
+                  isOverLimit ? 'bg-rose-50 border-rose-200 text-rose-800' : 'bg-blue-50/70 border-blue-100 text-blue-900'
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <Building2 className={`w-4 h-4 ${isOverLimit ? 'text-rose-600' : 'text-blue-600'}`} />
+                  <span className="text-xs font-black">
+                    รวมห้องพักทุกอาคาร: {totalRoomsCount} / 150 ห้อง
+                  </span>
+                </div>
+                {isOverLimit ? (
+                  <span className="text-xs font-black text-rose-600 animate-pulse">
+                    ⚠️ หนึ่งหอพักสามารถสร้างห้องได้สูงสุด 150 ห้อง (เกินขีดจำกัด)
+                  </span>
+                ) : (
+                  <span className="text-[11px] font-bold text-blue-600">
+                    (สร้างห้องได้สูงสุด 150 ห้องต่อหอพัก)
+                  </span>
+                )}
+              </div>
+            );
+          })()}
 
           <div className="space-y-6">
             {formData.buildings.map((b, idx) => {
@@ -2711,7 +2857,9 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">LINE Channel ID <span className="text-rose-500">*</span></label>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  LINE Channel ID <span className="text-[11px] font-normal text-slate-400">(ไม่บังคับ - สามารถตั้งค่าภายหลังได้)</span>
+                </label>
                 <input
                   type="text"
                   value={formData.lineOA.channelId}
@@ -2736,7 +2884,9 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">LINE Channel Secret <span className="text-rose-500">*</span></label>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  LINE Channel Secret <span className="text-[11px] font-normal text-slate-400">(ไม่บังคับ - สามารถตั้งค่าภายหลังได้)</span>
+                </label>
                 <input
                   type="password"
                   value={formData.lineOA.channelSecret}

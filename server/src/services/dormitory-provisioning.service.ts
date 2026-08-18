@@ -949,14 +949,14 @@ export class DormitoryProvisioningService {
           promo: {
             applied: commitRes.promoBonusMonths > 0,
             promoBonusMonths: commitRes.promoBonusMonths,
-            trialMonths: commitRes.isTrial ? 1 : 0,
-            totalTrialMonths: (commitRes.isTrial ? 1 : 0) + commitRes.promoBonusMonths,
+            trialMonths: commitRes.isTrialEligible ? 1 : 0,
+            totalTrialMonths: (commitRes.isTrialEligible ? 1 : 0) + commitRes.promoBonusMonths,
           },
           planCode: commitRes.planCode,
           subscriptionStatus: commitRes.isTrial ? 'TRIAL' : 'ACTIVE',
           trialExpiresAt: commitRes.isTrial && commitRes.expiresAt ? commitRes.expiresAt.toISOString() : null,
           promoApplied: commitRes.promoBonusMonths > 0,
-          totalTrialMonths: (commitRes.isTrial ? 1 : 0) + commitRes.promoBonusMonths,
+          totalTrialMonths: (commitRes.isTrialEligible ? 1 : 0) + commitRes.promoBonusMonths,
           packageIntentId: authoritativeIntent.id,
         };
       } else {

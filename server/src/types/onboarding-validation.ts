@@ -13,7 +13,7 @@ export const OnboardingDormitoryInputSchema = z.object({
   phone: z.string().trim().optional().nullable(),
   email: z.string().trim().email('อีเมลหอพักไม่ถูกต้อง').optional().nullable().or(z.literal('')),
   estimatedBuildingCount: z.coerce.number().int().min(1, 'จำนวนอาคารต้องอย่างน้อย 1').max(100).default(1),
-  estimatedRoomCount: z.coerce.number().int().min(1, 'จำนวนห้องต้องอย่างน้อย 1').max(10000).default(10),
+  estimatedRoomCount: z.coerce.number().int().min(1, 'จำนวนห้องต้องอย่างน้อย 1').max(150, 'หนึ่งหอพักสามารถสร้างห้องได้สูงสุด 150 ห้อง').default(10),
 }).strict();
 
 export const OnboardingBillingInputSchema = z.object({
@@ -232,7 +232,7 @@ export const CompleteOnboardingInputSchema = z.object({
   billing: OnboardingBillingInputSchema,
   payment: OnboardingPaymentInputSchema.optional(),
   buildings: z.array(OnboardingBuildingInputSchema).optional(),
-  rooms: z.array(OnboardingRoomInputSchema).optional(),
+  rooms: z.array(OnboardingRoomInputSchema).max(150, 'หนึ่งหอพักสามารถสร้างห้องได้สูงสุด 150 ห้อง').optional(),
   planCode: z.string().trim().min(1, 'กรุณาเลือกแพ็กเกจ'),
   packageId: z.string().trim().optional(),
   packageIntentId: z.string({ required_error: 'กรุณาระบุรหัสรายการคำสั่งซื้อแพ็กเกจ (packageIntentId is required)' }).uuid({ message: 'รูปแบบ packageIntentId ไม่ถูกต้อง' }),

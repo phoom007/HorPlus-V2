@@ -342,7 +342,7 @@ export class SubscriptionIntentService {
       await tx.$executeRaw`SELECT set_config('app.current_user_id', ${userId}, true)`;
 
       // 1. Lock intent for update
-      await tx.$executeRaw`SELECT * FROM "subscription_package_intents" WHERE "id" = ${intentId}::uuid FOR UPDATE`;
+      await tx.$executeRawUnsafe(`SELECT * FROM "subscription_package_intents" WHERE "id" = '${intentId}'::uuid FOR UPDATE`);
 
       const intent = await tx.subscriptionPackageIntent.findUnique({
         where: { id: intentId },
@@ -437,8 +437,10 @@ export class SubscriptionIntentService {
       const proPlan = await tx.subscriptionPlan.findUnique({ where: { code: 'PAID' } });
       const freePlan = await tx.subscriptionPlan.findUnique({ where: { code: 'FREE' } });
 
-      const isFree = intent.durationMonthsSnapshot === 0 && !intent.isTrialEligibleSnapshot;
-      let targetPlanId = isFree ? freePlan.id : (intent.package?.planId || proPlan.id);
+      const isFreeWithoutPromo = intent.durationMonthsSnapshot === 0 && !intent.isTrialEligibleSnapshot && !intent.promoCodeSnapshot;
+      const isFreeWithPromo = intent.durationMonthsSnapshot === 0 && !intent.isTrialEligibleSnapshot && Boolean(intent.promoCodeSnapshot);
+
+      let targetPlanId = isFreeWithoutPromo ? freePlan.id : (intent.package?.planId || proPlan.id);
       let subStatus: 'TRIAL' | 'ACTIVE' = 'ACTIVE';
       let subExpiresAt: Date | null = null;
       let durationMonths = 0;
@@ -448,7 +450,13 @@ export class SubscriptionIntentService {
         durationMonths = 1;
         subExpiresAt = addCalendarMonths(now, 1);
         targetPlanId = proPlan.id;
-      } else if (isFree) {
+      } else if (isFreeWithPromo) {
+        // FREE plan chosen + valid promo (HORPLUS): initial sub starts at now, redeemPromoAtomic will extend by 2 calendar months
+        subStatus = 'TRIAL';
+        durationMonths = 0;
+        subExpiresAt = now;
+        targetPlanId = proPlan.id;
+      } else if (isFreeWithoutPromo) {
         subStatus = 'ACTIVE';
         subExpiresAt = addCalendarMonths(now, 1200);
         targetPlanId = freePlan.id;
@@ -539,11 +547,13 @@ export class SubscriptionIntentService {
         status: 'SUCCEEDED',
         dormitoryId: intent.dormitoryId,
         subscriptionId: sub.id,
-        planCode: intent.isFreePlanSnapshot ? 'FREE' : 'PAID',
+        planCode: isFreeWithoutPromo ? 'FREE' : 'PAID',
         durationMonths,
         expiresAt: subExpiresAt,
         coinDebited: intent.coinApplied,
-        isTrial: intent.isTrialEligibleSnapshot,
+        isTrial: intent.isTrialEligibleSnapshot || isFreeWithPromo,
+        isTrialEligible: Boolean(intent.isTrialEligibleSnapshot),
+        isFreeWithPromo: Boolean(isFreeWithPromo),
         promoBonusMonths,
         promoApplied,
       };
