@@ -853,6 +853,8 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
         return (
           <OwnerMeters
             rooms={rooms}
+            buildings={buildings}
+            dormitoryId={activeDormitoryId}
             bills={bills}
             tenants={tenants}
             contracts={contracts}

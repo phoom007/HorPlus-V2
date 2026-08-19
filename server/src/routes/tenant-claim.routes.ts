@@ -9,6 +9,7 @@ import { z } from 'zod';
 import { AuthenticationService } from '../services/auth.service.js';
 import { TenantClaimService } from '../services/tenant-claim.service.js';
 import { createRequireSessionMiddleware } from '../middleware/require-session.js';
+import { createCsrfMiddleware } from '../middleware/csrf.js';
 import { InMemoryRateLimiterStore } from '../middleware/rate-limiter.js';
 import { getRedisClient } from '../db/redis.js';
 
@@ -55,6 +56,7 @@ export function createTenantClaimRouter(
 ): Router {
   const router = Router();
   const requireSession = createRequireSessionMiddleware(authService);
+  const requireCsrf = createCsrfMiddleware(authService);
 
   // Composite & Actor-level dual rate limiter:
   // 1. Room-scoped: max 5 attempts per 15 minutes per room/user/IP
@@ -149,7 +151,7 @@ export function createTenantClaimRouter(
     claimInput: z.string().trim().min(1, 'กรุณาระบุชื่อ-นามสกุล หรือ เบอร์โทรศัพท์'),
   });
 
-  router.post('/claim', requireSession, claimRateLimiter, async (req: Request, res: Response) => {
+  router.post('/claim', requireSession, requireCsrf, claimRateLimiter, async (req: Request, res: Response) => {
     try {
       const parsed = ClaimSchema.parse(req.body);
       const userId = req.auth!.userId;

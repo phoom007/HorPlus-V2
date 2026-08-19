@@ -8,6 +8,7 @@ import { z } from 'zod';
 import { AuthenticationService } from '../services/auth.service.js';
 import { DailyStayService } from '../services/daily-stay.service.js';
 import { createRequireSessionMiddleware } from '../middleware/require-session.js';
+import { createCsrfMiddleware } from '../middleware/csrf.js';
 import { resolveDormitoryContextMiddleware, requireDormitoryPermission } from '../middleware/permission.js';
 import { requireDormitoryWriteEntitlement } from '../middleware/entitlement.js';
 
@@ -17,6 +18,7 @@ export function createDailyStayRouter(
 ): Router {
   const router = Router();
   const requireSession = createRequireSessionMiddleware(authService);
+  const requireCsrf = createCsrfMiddleware(authService);
 
   const getDormitoryId = (req: Request): string => {
     const dormId =
@@ -35,34 +37,6 @@ export function createDailyStayRouter(
     return dormId;
   };
 
-  const verifyCsrf = (req: Request, res: Response): boolean => {
-    const csrfHeader = req.headers['x-csrf-token'] as string | undefined;
-    const csrfCookie = req.cookies?.['horplus_csrf'];
-    const sessionId = req.auth?.sessionId;
-
-    // If CSRF header or cookie is present, or if session requires CSRF verification
-    if (csrfHeader || csrfCookie) {
-      if (
-        !csrfHeader ||
-        !sessionId ||
-        !authService.verifyCsrf(csrfHeader, sessionId) ||
-        (csrfCookie && csrfCookie !== csrfHeader)
-      ) {
-        res.status(403).json({
-          error: {
-            code: 'CSRF_INVALID',
-            message: 'CSRF Token ไม่ถูกต้องหรือหมดอายุแล้ว',
-            fieldErrors: null,
-            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
-            timestamp: new Date().toISOString(),
-          },
-        });
-        return false;
-      }
-    }
-    return true;
-  };
-
   const handleServiceError = (res: Response, err: any, req: Request) => {
     const statusCode = err.statusCode || err.status || 500;
     res.status(statusCode).json({
@@ -76,7 +50,7 @@ export function createDailyStayRouter(
     });
   };
 
-  // 1. Tenant-submitted Daily Stay request (Option 2A - Authenticated Pre-link User)
+  // 1. Tenant-submitted Daily Stay request (Option 2A - Authenticated Pre-link User with canonical CSRF)
   const TenantDailyRequestSchema = z.object({
     dormitoryId: z.string().uuid().optional(),
     roomId: z.string().min(1, 'กรุณาระบุห้องพัก'),
@@ -89,8 +63,7 @@ export function createDailyStayRouter(
     depositDeclaredStatus: z.enum(['PAID', 'UNPAID']).optional(),
   });
 
-  router.post('/request', requireSession, async (req: Request, res: Response) => {
-    if (!verifyCsrf(req, res)) return;
+  router.post('/request', requireSession, requireCsrf, async (req: Request, res: Response) => {
     try {
       const dormId = getDormitoryId(req);
       const parsed = TenantDailyRequestSchema.parse(req.body);
@@ -138,11 +111,11 @@ export function createDailyStayRouter(
   router.post(
     '/owner-quick-add',
     requireSession,
+    requireCsrf,
     resolveDormitoryContextMiddleware,
     requireDormitoryPermission('rooms:write'),
     requireDormitoryWriteEntitlement,
     async (req: Request, res: Response) => {
-      if (!verifyCsrf(req, res)) return;
       try {
         const dormId = getDormitoryId(req);
         const parsed = OwnerQuickAddSchema.parse(req.body);
@@ -181,11 +154,11 @@ export function createDailyStayRouter(
   router.patch(
     '/:id/edit-pending',
     requireSession,
+    requireCsrf,
     resolveDormitoryContextMiddleware,
     requireDormitoryPermission('rooms:write'),
     requireDormitoryWriteEntitlement,
     async (req: Request, res: Response) => {
-      if (!verifyCsrf(req, res)) return;
       try {
         const dormId = getDormitoryId(req);
         const stayId = req.params.id;
@@ -219,11 +192,11 @@ export function createDailyStayRouter(
   router.post(
     '/:id/approve',
     requireSession,
+    requireCsrf,
     resolveDormitoryContextMiddleware,
     requireDormitoryPermission('rooms:write'),
     requireDormitoryWriteEntitlement,
     async (req: Request, res: Response) => {
-      if (!verifyCsrf(req, res)) return;
       try {
         const dormId = getDormitoryId(req);
         const stayId = req.params.id;
@@ -245,11 +218,11 @@ export function createDailyStayRouter(
   router.post(
     '/:id/reject',
     requireSession,
+    requireCsrf,
     resolveDormitoryContextMiddleware,
     requireDormitoryPermission('rooms:write'),
     requireDormitoryWriteEntitlement,
     async (req: Request, res: Response) => {
-      if (!verifyCsrf(req, res)) return;
       try {
         const dormId = getDormitoryId(req);
         const stayId = req.params.id;
@@ -271,11 +244,11 @@ export function createDailyStayRouter(
   router.post(
     '/:id/checkout',
     requireSession,
+    requireCsrf,
     resolveDormitoryContextMiddleware,
     requireDormitoryPermission('rooms:write'),
     requireDormitoryWriteEntitlement,
     async (req: Request, res: Response) => {
-      if (!verifyCsrf(req, res)) return;
       try {
         const dormId = getDormitoryId(req);
         const stayId = req.params.id;

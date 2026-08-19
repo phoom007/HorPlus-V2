@@ -71,8 +71,37 @@ export interface Building {
   name: string; // e.g. "อาคาร A", "อาคาร B"
   floorsCount: number;
   description?: string;
+  termMonths?: number;
+  maxTermRentInstallments?: number;
+  monthlyRent?: number;
+  termRent?: number;
+  dailyRent?: number;
+  depositAmount?: number;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface QuickAddBuildingContext {
+  id: string;
+  name?: string;
+  termMonths?: number;
+  maxTermRentInstallments?: number;
+  monthlyRent?: number;
+  termRent?: number;
+  dailyRent?: number;
+  depositAmount?: number;
+}
+
+export interface QuickAddRoomContext {
+  roomId: string;
+  dormitoryId: string;
+  roomNumber: string;
+  buildingId?: string | null;
+  monthlyRent?: number;
+  termRent?: number;
+  dailyRent?: number;
+  depositAmount?: number;
+  building?: QuickAddBuildingContext | null;
 }
 
 export type RoomStatus = 'vacant' | 'occupied' | 'reserved' | 'maintenance';

@@ -912,7 +912,9 @@ describe('LOCAL-07 Batch 02: Daily Stay Domain, Invoicing & Tenant Self-Claim', 
     let httpApp: any;
     let authService: any;
     let ownerSessionCookie: string;
+    let ownerCsrfToken: string;
     let tenantSessionCookie: string;
+    let tenantCsrfToken: string;
     let httpRoomId: string;
     let httpStayId: string;
 
@@ -944,10 +946,12 @@ describe('LOCAL-07 Batch 02: Daily Stay Domain, Invoicing & Tenant Self-Claim', 
       httpApp = createApp({ customAuthService: authService, forcePrisma: true });
 
       const ownerAuth = await authService.authenticateTestUser(ownerUserId);
-      ownerSessionCookie = `horplus_session=${ownerAuth.sessionToken}`;
+      ownerSessionCookie = `horplus_session=${ownerAuth.sessionToken}; horplus_csrf=${ownerAuth.csrfToken}`;
+      ownerCsrfToken = ownerAuth.csrfToken;
 
       const tenantAuth = await authService.authenticateTestUser(tenantUserId);
-      tenantSessionCookie = `horplus_session=${tenantAuth.sessionToken}`;
+      tenantSessionCookie = `horplus_session=${tenantAuth.sessionToken}; horplus_csrf=${tenantAuth.csrfToken}`;
+      tenantCsrfToken = tenantAuth.csrfToken;
 
       const httpRoom = await prisma.room.create({
         data: {
@@ -966,8 +970,8 @@ describe('LOCAL-07 Batch 02: Daily Stay Domain, Invoicing & Tenant Self-Claim', 
       httpRoomId = httpRoom.id;
     });
 
-    it('1. POST /api/v1/daily-stays/request requires authenticated session and creates PENDING_APPROVAL request', async () => {
-      // Unauthenticated -> 401
+    it('1. POST /api/v1/daily-stays/request CSRF Matrix: unauth (401), no csrf (403), bad csrf (403), valid csrf (201)', async () => {
+      // A. No session -> 401
       const unauthRes = await request(httpApp)
         .post('/api/v1/daily-stays/request')
         .set('x-dormitory-id', dormitoryId)
@@ -979,10 +983,40 @@ describe('LOCAL-07 Batch 02: Daily Stay Domain, Invoicing & Tenant Self-Claim', 
         });
       expect(unauthRes.status).toBe(401);
 
-      // Authenticated with session -> 201
+      // B. Valid session, NO X-CSRF-Token header -> 403 CSRF_TOKEN_REQUIRED
+      const noCsrfRes = await request(httpApp)
+        .post('/api/v1/daily-stays/request')
+        .set('Cookie', tenantSessionCookie)
+        .set('x-dormitory-id', dormitoryId)
+        .send({
+          roomId: httpRoomId,
+          applicantFullName: 'นายทดสอบ เอชทีทีพี',
+          startDate: '2026-10-01',
+          endDate: '2026-10-03',
+        });
+      expect(noCsrfRes.status).toBe(403);
+      expect(noCsrfRes.body.error.code).toBe('CSRF_TOKEN_REQUIRED');
+
+      // C. Valid session, invalid X-CSRF-Token -> 403 CSRF_TOKEN_INVALID
+      const badCsrfRes = await request(httpApp)
+        .post('/api/v1/daily-stays/request')
+        .set('Cookie', tenantSessionCookie)
+        .set('x-csrf-token', 'invalid-csrf-token-12345')
+        .set('x-dormitory-id', dormitoryId)
+        .send({
+          roomId: httpRoomId,
+          applicantFullName: 'นายทดสอบ เอชทีทีพี',
+          startDate: '2026-10-01',
+          endDate: '2026-10-03',
+        });
+      expect(badCsrfRes.status).toBe(403);
+      expect(badCsrfRes.body.error.code).toBe('CSRF_TOKEN_INVALID');
+
+      // D. Valid session, valid X-CSRF-Token -> 201 PENDING_APPROVAL
       const res = await request(httpApp)
         .post('/api/v1/daily-stays/request')
         .set('Cookie', tenantSessionCookie)
+        .set('x-csrf-token', tenantCsrfToken)
         .set('x-dormitory-id', dormitoryId)
         .send({
           roomId: httpRoomId,
@@ -998,6 +1032,7 @@ describe('LOCAL-07 Batch 02: Daily Stay Domain, Invoicing & Tenant Self-Claim', 
       expect(res.status).toBe(201);
       expect(res.body.data).toBeDefined();
       expect(res.body.data.status).toBe('PENDING_APPROVAL');
+      // E. requesterUserId matches authenticated user.id
       expect(res.body.data.requesterUserId).toBe(tenantUserId);
       expect(res.body.data.inclusiveDayCount).toBe(3);
       expect(Number(res.body.data.totalRentAmount)).toBe(2100.0);
@@ -1005,10 +1040,11 @@ describe('LOCAL-07 Batch 02: Daily Stay Domain, Invoicing & Tenant Self-Claim', 
       httpStayId = res.body.data.id;
     });
 
-    it('2. PATCH /api/v1/daily-stays/:id/edit-pending edits pending values by owner', async () => {
+    it('2. PATCH /api/v1/daily-stays/:id/edit-pending edits pending values by owner with canonical CSRF', async () => {
       const res = await request(httpApp)
         .patch(`/api/v1/daily-stays/${httpStayId}/edit-pending`)
         .set('Cookie', ownerSessionCookie)
+        .set('x-csrf-token', ownerCsrfToken)
         .set('x-dormitory-id', dormitoryId)
         .send({
           dailyRateAmount: 600.0,
@@ -1022,10 +1058,11 @@ describe('LOCAL-07 Batch 02: Daily Stay Domain, Invoicing & Tenant Self-Claim', 
       expect(Number(res.body.data.depositAmount)).toBe(0.0);
     });
 
-    it('3. POST /api/v1/daily-stays/:id/approve approves request and returns frozen invoice', async () => {
+    it('3. POST /api/v1/daily-stays/:id/approve approves request and returns frozen invoice with canonical CSRF', async () => {
       const res = await request(httpApp)
         .post(`/api/v1/daily-stays/${httpStayId}/approve`)
         .set('Cookie', ownerSessionCookie)
+        .set('x-csrf-token', ownerCsrfToken)
         .set('x-dormitory-id', dormitoryId);
 
       expect(res.status).toBe(200);
@@ -1049,6 +1086,7 @@ describe('LOCAL-07 Batch 02: Daily Stay Domain, Invoicing & Tenant Self-Claim', 
       const createRes = await request(httpApp)
         .post('/api/v1/daily-stays/request')
         .set('Cookie', tenantSessionCookie)
+        .set('x-csrf-token', tenantCsrfToken)
         .set('x-dormitory-id', dormitoryId)
         .send({
           roomId: httpRoomId,
@@ -1065,6 +1103,7 @@ describe('LOCAL-07 Batch 02: Daily Stay Domain, Invoicing & Tenant Self-Claim', 
       const rejRes = await request(httpApp)
         .post(`/api/v1/daily-stays/${rejStayId}/reject`)
         .set('Cookie', ownerSessionCookie)
+        .set('x-csrf-token', ownerCsrfToken)
         .set('x-dormitory-id', dormitoryId);
 
       expect(rejRes.status).toBe(200);
@@ -1090,6 +1129,7 @@ describe('LOCAL-07 Batch 02: Daily Stay Domain, Invoicing & Tenant Self-Claim', 
       const res = await request(httpApp)
         .post('/api/v1/daily-stays/owner-quick-add')
         .set('Cookie', ownerSessionCookie)
+        .set('x-csrf-token', ownerCsrfToken)
         .set('x-dormitory-id', dormitoryId)
         .send({
           roomId: httpRoomId,
@@ -1136,6 +1176,7 @@ describe('LOCAL-07 Batch 02: Daily Stay Domain, Invoicing & Tenant Self-Claim', 
       const res = await request(httpApp)
         .post(`/api/v1/daily-stays/${activeStay!.id}/checkout`)
         .set('Cookie', ownerSessionCookie)
+        .set('x-csrf-token', ownerCsrfToken)
         .set('x-dormitory-id', dormitoryId);
 
       expect(res.status).toBe(200);
@@ -1207,6 +1248,7 @@ describe('LOCAL-07 Batch 02: Daily Stay Domain, Invoicing & Tenant Self-Claim', 
         await request(httpApp)
           .post('/api/v1/tenant-claims/claim')
           .set('Cookie', tenantSessionCookie)
+          .set('x-csrf-token', tenantCsrfToken)
           .send({
             dormitoryId,
             roomId: rateLimitRoom.id,
@@ -1218,6 +1260,7 @@ describe('LOCAL-07 Batch 02: Daily Stay Domain, Invoicing & Tenant Self-Claim', 
       const res6 = await request(httpApp)
         .post('/api/v1/tenant-claims/claim')
         .set('Cookie', tenantSessionCookie)
+        .set('x-csrf-token', tenantCsrfToken)
         .send({
           dormitoryId,
           roomId: rateLimitRoom.id,
@@ -1422,6 +1465,79 @@ describe('LOCAL-07 Batch 02: Daily Stay Domain, Invoicing & Tenant Self-Claim', 
 
       expect(Number(result.depositAmount)).toBe(0);
       expect(Number(result.invoice.depositAmount)).toBe(0);
+    });
+
+    it('durationMonths > 36 (e.g. 37 and 60) is accepted and persisted without arbitrary 36-month cap', async () => {
+      const { ProvisionalRentalTermService } = await import('../../services/provisional-rental-term.service.js');
+      const provService = new ProvisionalRentalTermService(prisma);
+
+      const longDorm = await prisma.dormitory.create({
+        data: { name: 'หอพัก Long Duration Test', status: 'active' },
+      });
+      const longBld = await prisma.building.create({
+        data: { dormitoryId: longDorm.id, name: 'Bld Long' },
+      });
+
+      const longRoom37 = await prisma.room.create({
+        data: {
+          dormitoryId: longDorm.id,
+          buildingId: longBld.id,
+          roomNumber: 'LONG-37',
+          normalizedRoomNumber: 'LONG-37',
+          roomType: 'standard',
+          floor: 1,
+          status: 'vacant',
+          monthlyRent: 3000,
+        },
+      });
+
+      const today = new Date().toISOString().slice(0, 10);
+
+      const result37 = await provService.createProvisionalTenantAndTerm(
+        longDorm.id,
+        {
+          roomId: longRoom37.id,
+          fullName: 'นายทดสอบ สามสิบเจ็ดเดือน',
+          rentalType: 'MONTHLY',
+          startDate: today,
+          durationMonths: 37,
+          unitRentAmount: '3000.00',
+          totalRentAmount: '111000.00',
+        },
+        ownerUserId
+      );
+
+      expect(result37.provisionalTerm.durationMonths).toBe(37);
+
+      // Test 60 months
+      const longRoom60 = await prisma.room.create({
+        data: {
+          dormitoryId: longDorm.id,
+          buildingId: longBld.id,
+          roomNumber: 'LONG-60',
+          normalizedRoomNumber: 'LONG-60',
+          roomType: 'standard',
+          floor: 1,
+          status: 'vacant',
+          monthlyRent: 3000,
+        },
+      });
+
+      const result60 = await provService.createProvisionalTenantAndTerm(
+        longDorm.id,
+        {
+          roomId: longRoom60.id,
+          fullName: 'นายทดสอบ หกสิบเดือน',
+          rentalType: 'MONTHLY',
+          startDate: today,
+          durationMonths: 60,
+          unitRentAmount: '3000.00',
+          totalRentAmount: '180000.00',
+        },
+        ownerUserId
+      );
+
+      expect(result60.provisionalTerm.durationMonths).toBe(60);
     });
   });
 });
