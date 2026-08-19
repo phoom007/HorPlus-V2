@@ -49,8 +49,19 @@ const compStorageState = path.join(SESSIONS_DIR, 'comp-owner.json');
 const BASE_URL = process.env.TEST_BASE_URL || 'http://127.0.0.1:5173';
 const API_URL = process.env.TEST_API_URL || process.env.TEST_BASE_URL || 'http://127.0.0.1:5173';
 
+const sectionArgIndex = process.argv.findIndex(arg => arg === '--section' || arg === '-s' || arg.startsWith('--section='));
+let targetSection = null;
+if (sectionArgIndex !== -1) {
+  const arg = process.argv[sectionArgIndex];
+  if (arg.startsWith('--section=')) {
+    targetSection = arg.split('=')[1].toLowerCase().trim();
+  } else if (process.argv[sectionArgIndex + 1]) {
+    targetSection = process.argv[sectionArgIndex + 1].toLowerCase().trim();
+  }
+}
+
 async function runBatch03Tests() {
-  console.log('🚀 Starting Product Owner UAT Findings Batch 03 Final Automated Verification...\n');
+  console.log(`🚀 Starting Product Owner UAT Findings Batch 03 Automated Verification${targetSection ? ` [Section: ${targetSection}]` : ' [Full Batch]' }...\n`);
   let browser;
 
   const results = {
@@ -76,23 +87,26 @@ async function runBatch03Tests() {
     // -------------------------------------------------------------
     // SECTION 1: Static Code Security Audit
     // -------------------------------------------------------------
-    console.log('\n--- Section 1: Static Code Security Audit ---');
-    const promoServiceSrc = fs.readFileSync(path.join(ROOT_DIR, 'server/src/services/promo.service.ts'), 'utf8');
-    const subIntentServiceSrc = fs.readFileSync(path.join(ROOT_DIR, 'server/src/services/subscription-intent.service.ts'), 'utf8');
-    const localDraftSrc = fs.readFileSync(path.join(ROOT_DIR, 'src/utils/localDraftStorage.ts'), 'utf8');
+    if (!targetSection || targetSection === 'security' || targetSection === '1') {
+      console.log('\n--- Section 1: Static Code Security Audit ---');
+      const promoServiceSrc = fs.readFileSync(path.join(ROOT_DIR, 'server/src/services/promo.service.ts'), 'utf8');
+      const subIntentServiceSrc = fs.readFileSync(path.join(ROOT_DIR, 'server/src/services/subscription-intent.service.ts'), 'utf8');
+      const localDraftSrc = fs.readFileSync(path.join(ROOT_DIR, 'src/utils/localDraftStorage.ts'), 'utf8');
 
-    const hasUnsafeInPromo = promoServiceSrc.includes('$executeRawUnsafe');
-    const hasUnsafeInSubIntent = subIntentServiceSrc.includes('$executeRawUnsafe');
+      const hasUnsafeInPromo = promoServiceSrc.includes('$executeRawUnsafe');
+      const hasUnsafeInSubIntent = subIntentServiceSrc.includes('$executeRawUnsafe');
 
-    record('Zero $executeRawUnsafe in promo.service.ts', !hasUnsafeInPromo);
-    record('Zero $executeRawUnsafe in subscription-intent.service.ts', !hasUnsafeInSubIntent);
-    record('Local draft storage explicitly strips raw base64 signature', localDraftSrc.includes("startsWith('data:')"));
-    record('Local draft storage explicitly strips LINE channelSecret', localDraftSrc.includes("channelSecret = ''"));
+      record('Zero $executeRawUnsafe in promo.service.ts', !hasUnsafeInPromo);
+      record('Zero $executeRawUnsafe in subscription-intent.service.ts', !hasUnsafeInSubIntent);
+      record('Local draft storage explicitly strips raw base64 signature', localDraftSrc.includes("startsWith('data:')"));
+      record('Local draft storage explicitly strips LINE channelSecret', localDraftSrc.includes("channelSecret = ''"));
+    }
 
     // -------------------------------------------------------------
     // SECTION 2: Server-Side Promo Duration Engine & Unit Matrix
     // -------------------------------------------------------------
-    console.log('\n--- Section 2: Promo Duration Engine & Unit Matrix (MONTH & DAY) ---');
+    if (!targetSection || targetSection === 'promo' || targetSection === '2') {
+      console.log('\n--- Section 2: Promo Duration Engine & Unit Matrix (MONTH & DAY) ---');
     const { applyPromoDuration, PromoService } = await import('../../server/dist/services/promo.service.js');
     const { addCalendarMonths } = await import('../../server/dist/services/subscription-entitlement.service.js');
     const { SubscriptionIntentService } = await import('../../server/dist/services/subscription-intent.service.js');
@@ -132,8 +146,14 @@ async function runBatch03Tests() {
       },
     });
     const dorm1 = await prisma.dormitory.create({
-      data: { name: 'Dorm Month Test', type: 'apartment', status: 'provisioning' },
+      data: { name: 'Dorm Month Test', type: 'apartment', status: 'setup_pending', createdByUserId: user1.id },
     });
+
+    const val1 = await promoService.validatePromo('HORPLUS', user1.id);
+    record(
+      'PromoService.validatePromo for HORPLUS returns MONTH unit and 2 months benefit',
+      val1.valid === true && val1.benefitUnit === 'MONTH' && val1.benefitValue === 2 && val1.benefitLabel === '2 เดือน' && val1.promoBonusMonths === 2
+    );
 
     const quote1 = await intentService.createIntentQuote(user1.id, {
       isFreePlan: true,
@@ -141,9 +161,17 @@ async function runBatch03Tests() {
       promoCode: 'HORPLUS',
       coinRequested: 0,
     });
-    record('Intent quote created for FREE + HORPLUS', Boolean(quote1.intentId && quote1.promoBonusMonths === 2));
+    record(
+      'Intent quote for FREE + HORPLUS returns promoBenefitUnit=MONTH, value=2, label="2 เดือน"',
+      Boolean(quote1.intentId && quote1.promoBonusMonths === 2 && quote1.promoBenefitUnit === 'MONTH' && quote1.promoBenefitValue === 2 && quote1.promoBenefitLabel === '2 เดือน')
+    );
 
     const commit1 = await intentService.commitZeroPayIntent(user1.id, quote1.intentId);
+    record(
+      'commitZeroPayIntent for FREE + HORPLUS preserves promoBenefitUnit=MONTH and value=2',
+      commit1.success === true && commit1.promoBenefitUnit === 'MONTH' && commit1.promoBenefitValue === 2
+    );
+
     const sub1 = await prisma.dormitorySubscription.findUnique({
       where: { dormitoryId: commit1.dormitoryId || dorm1.id },
       include: { plan: true },
@@ -163,7 +191,7 @@ async function runBatch03Tests() {
 
     // 2.4 Duplicate promo redemption rejection (409 PROMO_ALREADY_REDEEMED)
     const dorm1b = await prisma.dormitory.create({
-      data: { name: 'Dorm Month Test 2', type: 'apartment', status: 'provisioning' },
+      data: { name: 'Dorm Month Test 2', type: 'apartment', status: 'setup_pending', createdByUserId: user1.id },
     });
     let dupRejected = false;
     try {
@@ -173,7 +201,7 @@ async function runBatch03Tests() {
     }
     record('Duplicate promo redemption rejected with 409 PROMO_ALREADY_REDEEMED', dupRejected);
 
-    // 2.5 Deterministic DAY Unit Test Promo Fixture
+    // 2.5 Deterministic DAY Unit Test Promo Fixture — Full Lifecycle (Validation -> Quote -> Intent -> Activation -> DB)
     const dayPromoCode = `TESTDAY15_${Date.now()}`;
     await prisma.promoCode.create({
       data: {
@@ -198,10 +226,50 @@ async function runBatch03Tests() {
       },
     });
     const dorm2 = await prisma.dormitory.create({
-      data: { name: 'Dorm Day Test', type: 'apartment', status: 'provisioning' },
+      data: { name: 'Dorm Day Test', type: 'apartment', status: 'setup_pending', createdByUserId: user2.id },
     });
 
-    const dayRedeemRes = await promoService.redeemPromoAtomic(user2.id, dorm2.id, dayPromoCode, prisma);
+    // Step A: validatePromo for DAY promo
+    const dayValRes = await promoService.validatePromo(dayPromoCode, user2.id);
+    record(
+      'PromoService.validatePromo for DAY promo returns benefitUnit=DAY, value=15, label="15 วัน", promoBonusMonths=0 (no fabricated 1 month)',
+      dayValRes.valid === true && dayValRes.benefitUnit === 'DAY' && dayValRes.benefitValue === 15 && dayValRes.benefitLabel === '15 วัน' && dayValRes.promoBonusMonths === 0
+    );
+
+    // Step B: createIntentQuote for DAY promo
+    const dayQuote = await intentService.createIntentQuote(user2.id, {
+      isFreePlan: true,
+      dormitoryId: dorm2.id,
+      promoCode: dayPromoCode,
+      coinRequested: 0,
+    });
+    record(
+      'Subscription quote for DAY promo returns promoBenefitUnit=DAY, value=15, label="15 วัน", promoBonusMonths=0',
+      dayQuote.promoCode === dayPromoCode && dayQuote.promoBenefitUnit === 'DAY' && dayQuote.promoBenefitValue === 15 && dayQuote.promoBenefitLabel === '15 วัน' && dayQuote.promoBonusMonths === 0
+    );
+
+    // Step C: Inspect DB intent snapshot
+    const dayIntentDb = await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dorm2.id}, true)`;
+      await tx.$executeRaw`SELECT set_config('app.current_user_id', ${user2.id}, true)`;
+      return await tx.subscriptionPackageIntent.findUnique({
+        where: { id: dayQuote.intentId },
+      });
+    });
+    record(
+      'DB SubscriptionPackageIntent promoBonusMonthsSnapshot stores 0 for DAY promo (no fabricated 1 month)',
+      dayIntentDb?.promoBonusMonthsSnapshot === 0,
+      `Actual: ${dayIntentDb?.promoBonusMonthsSnapshot}`
+    );
+
+    // Step D: commitZeroPayIntent for DAY promo
+    const dayCommit = await intentService.commitZeroPayIntent(user2.id, dayQuote.intentId);
+    record(
+      'commitZeroPayIntent for DAY promo returns promoBenefitUnit=DAY, value=15, label="15 วัน", promoBonusMonths=0',
+      dayCommit.success === true && dayCommit.promoBenefitUnit === 'DAY' && dayCommit.promoBenefitValue === 15 && dayCommit.promoBenefitLabel === '15 วัน' && dayCommit.promoBonusMonths === 0
+    );
+
+    // Step E: Inspect DB subscription for exact 15-day entitlement
     const sub2 = await prisma.dormitorySubscription.findUnique({
       where: { dormitoryId: dorm2.id },
       include: { plan: true },
@@ -209,92 +277,109 @@ async function runBatch03Tests() {
 
     const expectedDaySubExpiresAt = new Date(sub2.startedAt.getTime() + 15 * 86400 * 1000);
     const isSub2ExactDay = Math.abs(sub2.expiresAt.getTime() - expectedDaySubExpiresAt.getTime()) < 5000;
-    record(
-      'Database: DAY unit promo code grants exact 15 days entitlement (not 15 months)',
-      dayRedeemRes.bonusDays === 15 && isSub2ExactDay && sub2.status === 'TRIAL',
-      `Expires: ${sub2.expiresAt.toISOString()}, Expected: ${expectedDaySubExpiresAt.toISOString()}`
-    );
+      record(
+        'Database: DAY unit promo code grants exact 15 days entitlement (not 15 months / not 1 month)',
+        sub2.plan.code === 'PAID' && sub2.status === 'TRIAL' && isSub2ExactDay,
+        `Expires: ${sub2.expiresAt.toISOString()}, Expected: ${expectedDaySubExpiresAt.toISOString()}`
+      );
+    }
 
     // -------------------------------------------------------------
     // SECTION 3: Direct HTTP 151-Room Rejection & 150-Room Success
     // -------------------------------------------------------------
-    console.log('\n--- Section 3: Direct HTTP 151-Room Rejection & 150-Room Success ---');
-    browser = await chromium.launch({
-      headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox'],
-    });
-
-    const regContext = await browser.newContext({
-      storageState: regStorageState,
-      viewport: { width: 1280, height: 800 },
-    });
-    const regPage = await regContext.newPage();
-
-    await regPage.goto(`${BASE_URL}/owner/register`);
-    await regPage.waitForLoadState('networkidle');
-
-    const csrfToken = await regPage.evaluate(() => window.__HORPLUS_CSRF_TOKEN__ || '');
-
-    // Create 151 rooms payload
-    const invalid151Rooms = Array.from({ length: 151 }, (_, i) => ({
-      buildingId: 'b-1',
-      roomNumber: `Room-${i + 1}`,
-      floor: 1,
-      monthlyRent: 3500,
-    }));
-
-    const http151Payload = {
-      dormitory: { name: `Reject 151 Test ${Date.now()}`, province: 'กรุงเทพมหานคร', phone: '0812345678', estimatedBuildingCount: 1, estimatedRoomCount: 151 },
-      billing: { dueDay: 15, waterBillingType: 'unit', waterRate: '18', electricityBillingType: 'unit', electricityRate: '7' },
-      payment: { promptpayNumber: '0812345678', promptpayName: 'เจ้าของหอ' },
-      buildings: [{ id: 'b-1', name: 'Building A', floorsCount: 1 }],
-      rooms: invalid151Rooms,
-      planCode: 'FREE',
-    };
-
-    const countDormsBefore = await prisma.dormitory.count();
-    const countRoomsBefore = await prisma.room.count();
-
-    const http151Result = await regPage.evaluate(async (payload) => {
-      const match = document.cookie.match(/(?:^|;\s*)horplus_csrf=([^;]*)/);
-      const csrfToken = match ? decodeURIComponent(match[1]) : (window.__HORPLUS_CSRF_TOKEN__ || '');
-      const res = await fetch('/api/v1/onboarding/complete', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-csrf-token': csrfToken,
-        },
-        body: JSON.stringify(payload),
+    if (!targetSection || targetSection === 'rooms' || targetSection === '3') {
+      console.log('\n--- Section 3: Direct HTTP 151-Room Rejection & 150-Room Success ---');
+      browser = await chromium.launch({
+        headless: true,
+        args: ['--no-sandbox', '--disable-setuid-sandbox'],
       });
-      const json = await res.json().catch(() => ({}));
-      return { status: res.status, json };
-    }, http151Payload);
 
-    const http151Status = http151Result.status;
-    const http151Json = http151Result.json;
-    const hasThai151Msg = JSON.stringify(http151Json).includes('150 ห้อง');
+      const regContext = await browser.newContext({
+        storageState: regStorageState,
+        viewport: { width: 1280, height: 800 },
+      });
+      const regPage = await regContext.newPage();
 
-    const countDormsAfter = await prisma.dormitory.count();
-    const countRoomsAfter = await prisma.room.count();
-    const zeroPartialProvisioning = (countDormsAfter === countDormsBefore) && (countRoomsAfter === countRoomsBefore);
+      await regPage.goto(`${BASE_URL}/owner/register`);
+      await regPage.waitForLoadState('networkidle');
 
-    record(
-      'Direct HTTP POST /api/v1/onboarding/complete with 151 rooms rejected with 400 VALIDATION_ERROR',
-      http151Status === 400 && hasThai151Msg,
-      `Status: ${http151Status}, Error: ${http151Json?.error?.code || 'none'}`
-    );
-    record(
-      'Zero partial provisioning in database on 151-room rejection (Dorms delta: 0, Rooms delta: 0)',
-      zeroPartialProvisioning
-    );
+      const csrfToken = await regPage.evaluate(() => window.__HORPLUS_CSRF_TOKEN__ || '');
+
+      // Create 151 rooms payload
+      const invalid151Rooms = Array.from({ length: 151 }, (_, i) => ({
+        buildingId: 'b-1',
+        roomNumber: `Room-${i + 1}`,
+        floor: 1,
+        monthlyRent: 3500,
+      }));
+
+      const http151Payload = {
+        dormitory: { name: `Reject 151 Test ${Date.now()}`, province: 'กรุงเทพมหานคร', phone: '0812345678', estimatedBuildingCount: 1, estimatedRoomCount: 151 },
+        billing: { dueDay: 15, waterBillingType: 'unit', waterRate: '18', electricityBillingType: 'unit', electricityRate: '7' },
+        payment: { promptpayNumber: '0812345678', promptpayName: 'เจ้าของหอ' },
+        buildings: [{ id: 'b-1', name: 'Building A', floorsCount: 1 }],
+        rooms: invalid151Rooms,
+        planCode: 'FREE',
+      };
+
+      const countDormsBefore = await prisma.dormitory.count();
+      const countRoomsBefore = await prisma.room.count();
+
+      const http151Result = await regPage.evaluate(async (payload) => {
+        const match = document.cookie.match(/(?:^|;\s*)horplus_csrf=([^;]*)/);
+        const csrfToken = match ? decodeURIComponent(match[1]) : (window.__HORPLUS_CSRF_TOKEN__ || '');
+        const res = await fetch('/api/v1/onboarding/complete', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-csrf-token': csrfToken,
+          },
+          body: JSON.stringify(payload),
+        });
+        const json = await res.json().catch(() => ({}));
+        return { status: res.status, json };
+      }, http151Payload);
+
+      const http151Status = http151Result.status;
+      const http151Json = http151Result.json;
+      const hasThai151Msg = JSON.stringify(http151Json).includes('150 ห้อง');
+
+      const countDormsAfter = await prisma.dormitory.count();
+      const countRoomsAfter = await prisma.room.count();
+      const zeroPartialProvisioning = (countDormsAfter === countDormsBefore) && (countRoomsAfter === countRoomsBefore);
+
+      record(
+        'Direct HTTP POST /api/v1/onboarding/complete with 151 rooms rejected with 400 VALIDATION_ERROR',
+        http151Status === 400 && hasThai151Msg,
+        `Status: ${http151Status}, Error: ${http151Json?.error?.code || 'none'}`
+      );
+      record(
+        'Zero partial provisioning in database on 151-room rejection (Dorms delta: 0, Rooms delta: 0)',
+        zeroPartialProvisioning
+      );
+      await regContext.close();
+    }
 
     // -------------------------------------------------------------
     // SECTION 4: Frontend Browser UI & Workflow Testing
     // -------------------------------------------------------------
-    console.log('\n--- Section 4: Frontend Browser UI & Workflow Testing ---');
+    if (!targetSection || targetSection === 'ui' || targetSection === 'browser' || targetSection === '4') {
+      console.log('\n--- Section 4: Frontend Browser UI & Workflow Testing ---');
+      if (!browser) {
+        browser = await chromium.launch({
+          headless: true,
+          args: ['--no-sandbox', '--disable-setuid-sandbox'],
+        });
+      }
 
-    await regPage.goto(`${BASE_URL}/owner/register`);
-    await regPage.waitForLoadState('networkidle');
+      const regContext = await browser.newContext({
+        storageState: regStorageState,
+        viewport: { width: 1280, height: 800 },
+      });
+      const regPage = await regContext.newPage();
+
+      await regPage.goto(`${BASE_URL}/owner/register`);
+      await regPage.waitForLoadState('networkidle');
 
     // Verify Main Menu is Visible but Disabled
     console.log('Testing Main Menu visibility & locked status during registration...');
@@ -461,13 +546,60 @@ async function runBatch03Tests() {
     record('Security Invariant: Local draft IndexedDB stores ZERO raw base64/data URLs for signature (object references only)', hasNoRawBase64Sig);
     record('Security Invariant: Local draft IndexedDB stores ZERO plaintext LINE channelSecret', hasNoSecret);
 
-    // Step 7: Finalize & Success Overlay Geometry Inspection
-    console.log('Testing Step 7 Finalize & Success Overlay Geometry...');
+    // Step 7: Finalize & Success Overlay Geometry Inspection (Testing HORPLUS and DAY-15 in UI)
+    console.log('Testing Step 7 Promo UI & Finalize Overlay Geometry...');
+
+    // 7.1 Test HORPLUS on PRO plan in UI
+    const promoInput = regPage.locator('[data-testid="input-promo-code"]');
+    const applyPromoBtn = regPage.locator('[data-testid="button-apply-promo"]');
+    await promoInput.fill('HORPLUS');
+    await applyPromoBtn.click();
+    await regPage.waitForTimeout(600);
+
+    const promoMsgText = await regPage.locator('[data-testid="promo-inline-message"]').textContent();
+    const quoteBreakdownText = await regPage.locator('.bg-white.p-3\\.5.rounded-2xl').textContent().catch(() => '');
+
+    record(
+      'Registration Step 7 UI displays authoritative "+2 เดือน HorPlus PRO" when HORPLUS applied',
+      promoMsgText?.includes('2 เดือน') && quoteBreakdownText?.includes('สิทธิ์โปรโมชัน HORPLUS:') && quoteBreakdownText?.includes('+2 เดือน HorPlus PRO')
+    );
+
+    // 7.2 Test DAY-15 Promo on PRO plan in UI
+    const uiDayPromoCode = `TEST_UI_DAY15_${Date.now()}`;
+    await prisma.promoCode.create({
+      data: {
+        code: uiDayPromoCode,
+        normalizedCode: uiDayPromoCode,
+        benefitType: 'TRIAL_EXTENSION',
+        benefitUnit: 'DAY',
+        benefitValue: 15,
+        extensionDays: 15,
+        enabled: true,
+        globalMaxRedemptions: 100,
+      },
+    });
+
+    await promoInput.fill(uiDayPromoCode);
+    await applyPromoBtn.click();
+    await regPage.waitForTimeout(600);
+
+    const dayPromoMsgText = await regPage.locator('[data-testid="promo-inline-message"]').textContent();
+    const dayQuoteBreakdownText = await regPage.locator('.bg-white.p-3\\.5.rounded-2xl').textContent().catch(() => '');
+
+    const hasDayLabel = dayPromoMsgText?.includes('15 วัน') && dayQuoteBreakdownText?.includes(`สิทธิ์โปรโมชัน ${uiDayPromoCode}:`) && dayQuoteBreakdownText?.includes('+15 วัน HorPlus PRO');
+    const hasNoMonthLeak = !dayQuoteBreakdownText?.includes('+2 เดือน') && !dayQuoteBreakdownText?.includes('+1 เดือน') && !dayQuoteBreakdownText?.includes('สิทธิ์โปรโมชัน HORPLUS:');
+
+    record(
+      'Registration Step 7 UI displays authoritative "+15 วัน HorPlus PRO" for DAY promo and does not leak hard-coded month labels',
+      hasDayLabel && hasNoMonthLeak
+    );
+
+    // 7.3 Switch to FREE plan and finalize with HORPLUS
     await regPage.locator('text=HorPlus FREE').first().click();
     await regPage.waitForTimeout(300);
 
-    await regPage.locator('[data-testid="input-promo-code"]').fill('HORPLUS');
-    await regPage.locator('[data-testid="button-apply-promo"]').click();
+    await promoInput.fill('HORPLUS');
+    await applyPromoBtn.click();
     await regPage.waitForTimeout(600);
 
     await regPage.locator('button:has-text("ยืนยันสร้างหอพัก")').click();
@@ -505,19 +637,27 @@ async function runBatch03Tests() {
     record('Body scrolling is locked (overflow: hidden) during success overlay', bodyOverflow === 'hidden');
 
     await regContext.close();
+    }
 
     // -------------------------------------------------------------
     // SECTION 5: Completed Dorm LINE Status Control & Direct Navigation
     // -------------------------------------------------------------
-    console.log('\n--- Section 5: Completed Dorm LINE Status Control & Direct Navigation ---');
-    // Test 5.1: Fresh Owner (Registration completed, LINE OA not configured)
-    const freshContext = await browser.newContext({
-      storageState: freshStorageState,
-      viewport: { width: 1280, height: 800 },
-    });
-    const freshPage = await freshContext.newPage();
+    if (!targetSection || targetSection === 'line' || targetSection === '5') {
+      console.log('\n--- Section 5: Completed Dorm LINE Status Control & Direct Navigation ---');
+      if (!browser) {
+        browser = await chromium.launch({
+          headless: true,
+          args: ['--no-sandbox', '--disable-setuid-sandbox'],
+        });
+      }
+      // Test 5.1: Fresh Owner (Registration completed, LINE OA not configured)
+      const freshContext = await browser.newContext({
+        storageState: freshStorageState,
+        viewport: { width: 1280, height: 800 },
+      });
+      const freshPage = await freshContext.newPage();
 
-    await freshPage.goto(`${BASE_URL}/owner/dashboard`);
+      await freshPage.goto(`${BASE_URL}/owner/dashboard`);
     await freshPage.waitForLoadState('networkidle');
 
     // Look for header LINE pill with "ยังไม่พร้อมใช้งาน"
@@ -612,7 +752,8 @@ async function runBatch03Tests() {
       );
     }
 
-    await compContext.close();
+      await compContext.close();
+    }
 
   } catch (err) {
     console.error('Fatal error during test run:', err);

@@ -163,6 +163,7 @@ export function createOnboardingRouter(
         benefitType: result.benefitType,
         benefitUnit: result.benefitUnit,
         benefitValue: result.benefitValue,
+        benefitLabel: result.benefitLabel,
         trialMonths: result.trialMonths,
         promoBonusMonths: result.promoBonusMonths,
         totalTrialMonths: result.totalTrialMonths,

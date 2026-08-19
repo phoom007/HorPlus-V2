@@ -40,6 +40,7 @@ export interface PromoValidationResult {
   benefitType?: string;
   benefitUnit?: string;
   benefitValue?: number;
+  benefitLabel?: string;
   trialMonths: number;
   promoBonusMonths: number;
   totalTrialMonths: number;
@@ -226,12 +227,12 @@ export class PromoService {
       };
     }
 
-    // Dual-State Promo Calculation:
-    // If trial unused: 1 mo trial + 2 mo HORPLUS = 3 mo
-    // If trial consumed: 0 mo trial + 2 mo HORPLUS = 2 mo
+    // Canonical Promo Unit Calculation:
+    // If unit is MONTH: promoBonusMonths equals benefitValue (e.g. 2 months)
+    // If unit is DAY: promoBonusMonths is 0 (exact days duration applied during activation, no fabricated rounded months)
     const promoUnit = (promo.benefitUnit || 'MONTH').toUpperCase();
     const promoValue = promo.benefitValue;
-    const promoBonusMonths = promoUnit === 'MONTH' ? promoValue : Math.round(promoValue / 30);
+    const promoBonusMonths = promoUnit === 'MONTH' ? promoValue : 0;
     const totalTrialMonths = initialTrialMonths + promoBonusMonths;
     const unitLabel = promoUnit === 'DAY' ? `${promoValue} วัน` : `${promoValue} เดือน`;
 
@@ -242,6 +243,7 @@ export class PromoService {
       benefitType: promo.benefitType,
       benefitUnit: promo.benefitUnit,
       benefitValue: promo.benefitValue,
+      benefitLabel: unitLabel,
       trialMonths: initialTrialMonths,
       promoBonusMonths: promoBonusMonths,
       totalTrialMonths: totalTrialMonths,
@@ -348,9 +350,9 @@ export class PromoService {
       });
 
       const promoUnit = (lockedPromo.benefitUnit || 'MONTH').toUpperCase();
-      const promoValue = lockedPromo.benefitValue ?? (promoUnit === 'DAY' ? (lockedPromo.extensionDays ?? 60) : 2);
-      const bonusMonths = promoUnit === 'MONTH' ? promoValue : Math.round(promoValue / 30);
-      const bonusDays = promoUnit === 'DAY' ? promoValue : (lockedPromo.extensionDays ?? 60);
+      const promoValue = lockedPromo.benefitValue ?? (promoUnit === 'DAY' ? (lockedPromo.extensionDays ?? 15) : 2);
+      const bonusMonths = promoUnit === 'MONTH' ? promoValue : 0;
+      const bonusDays = promoUnit === 'DAY' ? promoValue : 0;
 
       let newExpiresAt = applyPromoDuration(now, lockedPromo);
       let previousExpiresAt: Date = now;
@@ -443,6 +445,7 @@ export class PromoService {
             promoCode: lockedPromo.code,
             benefitUnit: lockedPromo.benefitUnit,
             benefitValue: lockedPromo.benefitValue,
+            benefitLabel: unitText,
             bonusMonths,
             bonusDays,
             expiresAt: newExpiresAt,
@@ -452,6 +455,7 @@ export class PromoService {
         promoCodeEntity: lockedPromo,
         benefitUnit: lockedPromo.benefitUnit,
         benefitValue: lockedPromo.benefitValue,
+        benefitLabel: unitText,
         bonusMonths,
         bonusDays,
         newExpiresAt,

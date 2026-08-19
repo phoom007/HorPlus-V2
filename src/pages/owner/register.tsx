@@ -327,6 +327,9 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
   const [selectedPlan, setSelectedPlan] = useState<'free' | 'pro'>('pro');
   const [promoCodeInput, setPromoCodeInput] = useState('HORPLUS');
   const [validatedPromoCode, setValidatedPromoCode] = useState<string | undefined>(undefined);
+  const [promoBenefitUnit, setPromoBenefitUnit] = useState<string | null>(null);
+  const [promoBenefitValue, setPromoBenefitValue] = useState<number | null>(null);
+  const [promoBenefitLabel, setPromoBenefitLabel] = useState<string | null>(null);
   const [appliedPromo, setAppliedPromo] = useState(false);
   const [promoMessage, setPromoMessage] = useState<string | null>(null);
   const [isCheckingPromo, setIsCheckingPromo] = useState(false);
@@ -522,6 +525,11 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
         if (isCancelled) return;
         if (quote?.data) {
           setQuoteSummary(quote.data);
+          if (quote.data.promoBenefitUnit || quote.data.promoBenefitLabel) {
+            setPromoBenefitUnit(quote.data.promoBenefitUnit || 'MONTH');
+            setPromoBenefitValue(quote.data.promoBenefitValue ?? (quote.data.promoBenefitUnit === 'DAY' ? 0 : 2));
+            setPromoBenefitLabel(quote.data.promoBenefitLabel || (quote.data.promoBenefitUnit === 'DAY' ? `${quote.data.promoBenefitValue} วัน` : `${quote.data.promoBenefitValue || 2} เดือน`));
+          }
           if (quote.data.accountTrialAvailable !== undefined) {
             const isAvail = Boolean(quote.data.accountTrialAvailable);
             setAccountTrialAvailable(isAvail);
@@ -697,15 +705,27 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
       const res = rawRes?.data ?? rawRes;
       if (res && res.valid) {
         setValidatedPromoCode(codeToTest);
+        const unit = res.benefitUnit || 'MONTH';
+        const val = res.benefitValue ?? (unit === 'DAY' ? 0 : 2);
+        const label = res.benefitLabel || (unit === 'DAY' ? `${val} วัน` : `${val} เดือน`);
+        setPromoBenefitUnit(unit);
+        setPromoBenefitValue(val);
+        setPromoBenefitLabel(label);
         setAppliedPromo(true);
         setPromoMessage(`✓ ใช้งานรหัส ${codeToTest} สำเร็จ! ${res.description || res.message || 'ได้รับสิทธิ์โปรโมชั่น'}`);
       } else {
         setValidatedPromoCode(undefined);
+        setPromoBenefitUnit(null);
+        setPromoBenefitValue(null);
+        setPromoBenefitLabel(null);
         setAppliedPromo(false);
         setPromoMessage(res?.message || 'รหัสโปรโมชั่นไม่ถูกต้อง หรือหมดอายุแล้ว');
       }
     } catch (err: any) {
       setValidatedPromoCode(undefined);
+      setPromoBenefitUnit(null);
+      setPromoBenefitValue(null);
+      setPromoBenefitLabel(null);
       setAppliedPromo(false);
       setPromoMessage(err?.message || 'รหัสโปรโมชั่นไม่ถูกต้อง หรือหมดอายุแล้ว');
     } finally {
@@ -3261,9 +3281,14 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                     value={promoCodeInput}
                     onChange={(e) => {
                       setPromoCodeInput(e.target.value);
-                      setValidatedPromoCode(undefined);
-                      setAppliedPromo(false);
-                      setPromoMessage(null);
+                      if (appliedPromo) {
+                        setValidatedPromoCode(undefined);
+                        setPromoBenefitUnit(null);
+                        setPromoBenefitValue(null);
+                        setPromoBenefitLabel(null);
+                        setAppliedPromo(false);
+                        setPromoMessage(null);
+                      }
                     }}
                     placeholder="HORPLUS"
                     className="flex-1 px-4 py-2 text-xs font-black uppercase tracking-wider bg-white border border-slate-200 rounded-xl outline-none focus:border-indigo-600"
@@ -3346,8 +3371,8 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
 
                 {appliedPromo && (
                   <div className="flex items-center justify-between text-indigo-600 font-black">
-                    <span>สิทธิ์โปรโมชัน HORPLUS:</span>
-                    <span>+2 เดือนทดลองใช้ฟรี</span>
+                    <span>สิทธิ์โปรโมชัน {validatedPromoCode || 'HORPLUS'}:</span>
+                    <span>+{promoBenefitLabel || (promoBenefitUnit === 'DAY' ? `${promoBenefitValue} วัน` : `${promoBenefitValue || 2} เดือน`)} HorPlus PRO</span>
                   </div>
                 )}
 

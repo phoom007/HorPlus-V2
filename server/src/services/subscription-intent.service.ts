@@ -22,6 +22,7 @@ export interface CreateIntentQuoteParams {
   promoCode?: string;
   referralCode?: string;
   coinRequested?: number;
+  dormitoryId?: string;
 }
 
 export class SubscriptionIntentService {
@@ -113,10 +114,10 @@ export class SubscriptionIntentService {
       );
     }
 
-    // 4. If no draft or existing dorms, create provisional draft & dormitory
+    // 4. Fallback: create fresh provisional dormitory & draft
     const provisionalDorm = await db.dormitory.create({
       data: {
-        name: 'หอพักใหม่',
+        name: 'หอพักของฉัน (Provisional)',
         type: 'apartment',
         status: 'setup_pending',
         createdByUserId: userId,
@@ -145,7 +146,7 @@ export class SubscriptionIntentService {
    */
   async createIntentQuote(userId: string, params: CreateIntentQuoteParams, txClient?: any, requestedDormitoryId?: string) {
     const runInTx = async (tx: any) => {
-      const dormitoryId = await this.resolveOnboardingDormitoryId(userId, tx, requestedDormitoryId);
+      const dormitoryId = await this.resolveOnboardingDormitoryId(userId, tx, requestedDormitoryId || params.dormitoryId);
       await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormitoryId}, true)`;
       await tx.$executeRaw`SELECT set_config('app.current_user_id', ${userId}, true)`;
 
@@ -209,13 +210,19 @@ export class SubscriptionIntentService {
         priceAfterTrial = basePrice;
       }
 
-      // 3. Evaluate HORPLUS Promo Code (if provided)
+      // 3. Evaluate Promo Code (if provided)
       let promoBonusMonths = 0;
+      let promoBenefitUnit: string | null = null;
+      let promoBenefitValue: number | null = null;
+      let promoBenefitLabel: string | null = null;
       let validatedPromoCode: string | null = null;
       if (params.promoCode && params.promoCode.trim()) {
         const promoRes = await promoService.validatePromo(params.promoCode, userId, dormitoryId, tx);
         if (promoRes.valid && promoRes.eligible) {
           promoBonusMonths = promoRes.promoBonusMonths;
+          promoBenefitUnit = promoRes.benefitUnit || 'MONTH';
+          promoBenefitValue = promoRes.benefitValue ?? (promoBenefitUnit === 'MONTH' ? promoRes.promoBonusMonths : 0);
+          promoBenefitLabel = promoRes.benefitLabel || (promoBenefitUnit === 'DAY' ? `${promoBenefitValue} วัน` : `${promoBenefitValue} เดือน`);
           validatedPromoCode = promoRes.code;
         }
       }
@@ -315,6 +322,9 @@ export class SubscriptionIntentService {
         initialTrialAvailable: accountTrialAvailable,
         promoCode: validatedPromoCode,
         promoBonusMonths,
+        promoBenefitUnit,
+        promoBenefitValue,
+        promoBenefitLabel,
         referralCode: validatedReferralCode,
         totalAvailableCoin,
         coinApplied,
@@ -519,13 +529,19 @@ export class SubscriptionIntentService {
         });
       }
 
-      // 5. Redeem Promo Code atomically if applicable (PromoService performs the single +2 months bonus extension)
+      // 5. Redeem Promo Code atomically if applicable (PromoService performs duration extension)
       let promoApplied = false;
       let promoBonusMonths = 0;
+      let promoBenefitUnit: string | null = null;
+      let promoBenefitValue: number | null = null;
+      let promoBenefitLabel: string | null = null;
       if (intent.promoCodeSnapshot) {
         const promoRes = await promoService.redeemPromoAtomic(userId, intent.dormitoryId, intent.promoCodeSnapshot, tx);
         promoApplied = Boolean((promoRes as any).success ?? promoRes.body?.success ?? promoRes.id);
-        promoBonusMonths = promoRes.bonusMonths || promoRes.body?.data?.bonusMonths || 2;
+        promoBonusMonths = promoRes.bonusMonths ?? promoRes.body?.data?.bonusMonths ?? 0;
+        promoBenefitUnit = promoRes.benefitUnit || promoRes.body?.data?.benefitUnit || (promoBonusMonths > 0 ? 'MONTH' : 'DAY');
+        promoBenefitValue = promoRes.benefitValue ?? promoRes.body?.data?.benefitValue ?? (promoBenefitUnit === 'DAY' ? (promoRes.bonusDays || promoRes.body?.data?.bonusDays || 0) : promoBonusMonths);
+        promoBenefitLabel = promoRes.benefitLabel || (promoBenefitUnit === 'DAY' ? `${promoBenefitValue} วัน` : `${promoBenefitValue} เดือน`);
         const updatedSub = await tx.dormitorySubscription.findUnique({ where: { id: sub.id } });
         if (updatedSub) {
           subExpiresAt = updatedSub.expiresAt;
@@ -555,6 +571,9 @@ export class SubscriptionIntentService {
         isTrialEligible: Boolean(intent.isTrialEligibleSnapshot),
         isFreeWithPromo: Boolean(isFreeWithPromo),
         promoBonusMonths,
+        promoBenefitUnit,
+        promoBenefitValue,
+        promoBenefitLabel,
         promoApplied,
       };
     };
