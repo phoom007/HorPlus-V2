@@ -157,6 +157,45 @@ export class BillingService {
     private auditService?: AuditService
   ) {}
 
+  /**
+   * Authoritative canonical resolver for provisional billing source.
+   * Enforces:
+   * 1. status = 'ACTIVE'
+   * 2. deletedAt = null
+   * 3. startDate <= billingCycle.periodEnd
+   * 4. endDate >= billingCycle.periodStart
+   * 5. Deterministic ordering: [{ startDate: 'asc' }, { createdAt: 'desc' }]
+   * Rejects RESERVED, CONVERTED, ENDED, CANCELLED, and non-overlapping terms.
+   */
+  public async resolveProvisionalBillingSource(
+    dormitoryId: string,
+    roomId: string,
+    billingCycle: { periodStart: Date | string; periodEnd: Date | string },
+    tx?: any
+  ): Promise<any | null> {
+    const prisma = getPrismaClient();
+    const client = tx || prisma;
+    const cycleStart = new Date(billingCycle.periodStart);
+    const cycleEnd = new Date(billingCycle.periodEnd);
+
+    const term = await client.provisionalRentalTerm.findFirst({
+      where: {
+        dormitoryId,
+        roomId,
+        status: 'ACTIVE',
+        deletedAt: null,
+        startDate: { lte: cycleEnd },
+        endDate: { gte: cycleStart },
+      },
+      orderBy: [
+        { startDate: 'asc' },
+        { createdAt: 'desc' },
+      ],
+    });
+
+    return term;
+  }
+
   public async generateBillPreview(
     dormitoryId: string,
     billingCycleId: string,
@@ -208,34 +247,29 @@ export class BillingService {
     const client = tx || prisma;
 
     if (!contract) {
-      provisionalTerm = await client.provisionalRentalTerm.findFirst({
-        where: {
-          dormitoryId,
-          roomId,
-          status: 'ACTIVE',
-          deletedAt: null,
-        },
-      });
+      provisionalTerm = await this.resolveProvisionalBillingSource(dormitoryId, roomId, cycle, tx);
 
       if (!provisionalTerm) {
+        // Check if there is an active provisional term out of cycle range
+        const anyActive = await client.provisionalRentalTerm.findFirst({
+          where: {
+            dormitoryId,
+            roomId,
+            status: 'ACTIVE',
+            deletedAt: null,
+          },
+        });
+        if (anyActive) {
+          const err = new Error('PROVISIONAL_TERM_NOT_ELIGIBLE_FOR_CYCLE');
+          (err as any).statusCode = 400;
+          (err as any).code = 'PROVISIONAL_TERM_NOT_ELIGIBLE_FOR_CYCLE';
+          (err as any).message = 'ข้อตกลงเช่าชั่วคราวไม่อยู่ในช่วงเวลาของรอบบิลนี้';
+          throw err;
+        }
         const err = new Error('NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM');
         (err as any).statusCode = 404;
         (err as any).code = 'NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM';
         (err as any).message = 'ห้องพักไม่มีสัญญาหรือข้อตกลงเช่าที่พร้อมออกบิลสำหรับงวดนี้';
-        throw err;
-      }
-
-      // Check date overlap with cycle
-      const cycleStart = new Date(cycle.periodStart);
-      const cycleEnd = new Date(cycle.periodEnd);
-      const termStart = new Date(provisionalTerm.startDate);
-      const termEnd = new Date(provisionalTerm.endDate);
-
-      if (termStart > cycleEnd || termEnd < cycleStart) {
-        const err = new Error('PROVISIONAL_TERM_NOT_ELIGIBLE_FOR_CYCLE');
-        (err as any).statusCode = 400;
-        (err as any).code = 'PROVISIONAL_TERM_NOT_ELIGIBLE_FOR_CYCLE';
-        (err as any).message = 'ข้อตกลงเช่าชั่วคราวไม่อยู่ในช่วงเวลาของรอบบิลนี้';
         throw err;
       }
     }
@@ -662,16 +696,24 @@ export class BillingService {
     let provisionalTerm: any = null;
 
     if (!contract) {
-      provisionalTerm = await prisma.provisionalRentalTerm.findFirst({
-        where: {
-          dormitoryId,
-          roomId: data.roomId,
-          status: 'ACTIVE',
-          deletedAt: null,
-        },
-      });
+      provisionalTerm = await this.resolveProvisionalBillingSource(dormitoryId, data.roomId, cycle, existingTx);
 
       if (!provisionalTerm) {
+        const anyActive = await (existingTx || prisma).provisionalRentalTerm.findFirst({
+          where: {
+            dormitoryId,
+            roomId: data.roomId,
+            status: 'ACTIVE',
+            deletedAt: null,
+          },
+        });
+        if (anyActive) {
+          const err = new Error('PROVISIONAL_TERM_NOT_ELIGIBLE_FOR_CYCLE');
+          (err as any).statusCode = 400;
+          (err as any).code = 'PROVISIONAL_TERM_NOT_ELIGIBLE_FOR_CYCLE';
+          (err as any).message = 'ข้อตกลงเช่าชั่วคราวไม่อยู่ในช่วงเวลาของรอบบิลนี้';
+          throw err;
+        }
         const err = new Error('NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM');
         (err as any).statusCode = 404;
         (err as any).code = 'NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM';
@@ -920,14 +962,7 @@ export class BillingService {
         let provisionalTerm: any = null;
 
         if (!contract) {
-          provisionalTerm = await prisma.provisionalRentalTerm.findFirst({
-            where: {
-              dormitoryId,
-              roomId,
-              status: 'ACTIVE',
-              deletedAt: null,
-            },
-          });
+          provisionalTerm = await this.resolveProvisionalBillingSource(dormitoryId, roomId, cycle);
         }
 
         if (!contract && !provisionalTerm) {

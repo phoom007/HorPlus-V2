@@ -5,6 +5,7 @@ import { Prisma } from '@prisma/client';
 import { outboxService } from './outbox.service.js';
 import { SignatureStorageService } from './signature-storage.service.js';
 import { subscriptionEntitlementService } from './subscription-entitlement.service.js';
+import { generateNextTenantNumber } from './tenant-number.service.js';
 import crypto from 'crypto';
 
 export interface CreateRegistrationDto {
@@ -637,8 +638,7 @@ export class TenantRegistrationService {
       }
 
       // 3. Create Tenant B
-      const tenantCount = await tx.tenant.count({ where: { dormitoryId } });
-      const tenantNumber = `TNT-${Date.now()}-${(tenantCount + 1).toString().padStart(4, '0')}`;
+      const tenantNumber = await generateNextTenantNumber(dormitoryId, tx);
       const displayName = `${req.firstName} ${req.lastName}`.trim();
 
       const tenant = await tx.tenant.create({

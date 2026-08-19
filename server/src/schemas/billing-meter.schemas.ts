@@ -81,22 +81,25 @@ export const UpdateCyclePeopleCountSchema = z.object({
 });
 
 export const OtherFeeItemSchema = z.object({
-  description: z.string().trim().min(1, 'ชื่อรายการค่าใช้จ่ายต้องไม่เป็นค่าว่าง').max(100, 'ชื่อรายการต้องไม่เกิน 100 ตัวอักษร'),
-  amount: z.union([
-    z.string().regex(/^\d{1,10}(\.\d{1,2})?$/, 'จำนวนเงินต้องเป็นตัวเลขที่ถูกต้อง (>= 0)'),
-    z.number().nonnegative('จำนวนเงินต้องไม่ติดลบ').finite('จำนวนเงินต้องเป็นตัวเลขที่ถูกต้อง')
-  ]),
+  description: z
+    .string()
+    .trim()
+    .min(1, 'ชื่อรายการค่าใช้จ่ายต้องไม่เป็นค่าว่าง')
+    .max(100, 'ชื่อรายการต้องไม่เกิน 100 ตัวอักษร'),
+  amount: z
+    .string()
+    .regex(/^\d+(\.\d{1,2})?$/, 'จำนวนเงินต้องเป็นตัวเลขทศนิยมไม่เกิน 2 ตำแหน่งและไม่ติดลบ'),
 });
 
 export const SaveMeterWorkspaceRowSchema = z.object({
   roomId: z.string().min(1, 'Room ID จำเป็นต้องระบุ'),
-  waterPrev: z.union([z.string().regex(/^\d+(\.\d{1,2})?$/), z.number().nonnegative().finite()]).optional(),
-  waterCurr: z.union([z.string().regex(/^\d+(\.\d{1,2})?$/), z.number().nonnegative().finite()]).optional(),
-  elecPrev: z.union([z.string().regex(/^\d+(\.\d{1,2})?$/), z.number().nonnegative().finite()]).optional(),
-  elecCurr: z.union([z.string().regex(/^\d+(\.\d{1,2})?$/), z.number().nonnegative().finite()]).optional(),
+  waterPrev: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
+  waterCurr: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
+  elecPrev: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
+  elecCurr: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
   isReplaced: z.boolean().optional(),
   peopleCount: z.number().int().min(0).optional(),
-  manualOutstandingAmount: z.union([z.string().regex(/^\d+(\.\d{1,2})?$/), z.number().nonnegative().finite()]).optional(),
+  manualOutstandingAmount: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
   otherFees: z.array(OtherFeeItemSchema).max(20, 'ไม่สามารถเพิ่มค่าใช้จ่ายอื่นๆ เกิน 20 รายการต่อห้องได้').optional(),
   expectedVersion: z.number().int().optional(),
 });
@@ -159,8 +162,8 @@ export const CreateProvisionalRentalTermSchema = z
     rentalType: z.enum(['MONTHLY', 'TERM']),
     startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'วันที่เริ่มต้นต้องอยู่ในรูปแบบ YYYY-MM-DD'),
     durationMonths: z.number().int().min(1).max(36).optional(),
-    unitRentAmount: z.union([z.string().regex(/^\d+(\.\d{1,2})?$/), z.number().nonnegative()]),
-    totalRentAmount: z.union([z.string().regex(/^\d+(\.\d{1,2})?$/), z.number().nonnegative()]).optional(),
+    unitRentAmount: z.string().regex(/^\d+(\.\d{1,2})?$/, 'ค่าเช่าต้องเป็นตัวเลขทศนิยมไม่เกิน 2 ตำแหน่งและไม่ติดลบ'),
+    totalRentAmount: z.string().regex(/^\d+(\.\d{1,2})?$/, 'ค่าเช่ารวมต้องเป็นตัวเลขทศนิยมไม่เกิน 2 ตำแหน่งและไม่ติดลบ').optional(),
     termInstallmentCount: z.number().int().min(1).max(12).optional(),
   })
   .superRefine((val, ctx) => {

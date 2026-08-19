@@ -30,6 +30,11 @@ import { PrismaTenantRepository } from '../../db/repositories/tenant.repository.
 import { PrismaBuildingRepository } from '../../db/repositories/building.repository.js';
 import { AuditService } from '../../services/audit.service.js';
 import { toDecimal, formatDecimal } from '../../utils/decimal-math.util.js';
+import {
+  OtherFeeItemSchema,
+  SaveMeterWorkspaceRowSchema,
+  CreateProvisionalRentalTermSchema,
+} from '../../schemas/billing-meter.schemas.js';
 import crypto from 'crypto';
 
 describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite', () => {
@@ -392,59 +397,253 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
     ).rejects.toThrow();
   });
 
-  it('7. Canonical Tenant Number Concurrency: concurrent Quick-Adds produce unique tenant numbers', async () => {
-    // Create 2 additional temporary rooms for concurrency test
-    const cRoomA = await prisma.room.create({
+  it('7. Canonical Tenant Number Concurrency: 10 concurrent creations in same dormitory produce unique sequential tenant numbers', async () => {
+    // Create 10 temporary rooms for concurrency stress test
+    const rooms = await Promise.all(
+      Array.from({ length: 10 }, (_, i) =>
+        prisma.room.create({
+          data: {
+            dormitoryId: testDormitoryId,
+            buildingId: testBuildingId,
+            roomNumber: `CONC-10-${i + 1}`,
+            normalizedRoomNumber: `CONC-10-${i + 1}`,
+            roomType: 'standard',
+            monthlyRent: toDecimal('4000.00'),
+            status: 'vacant',
+          },
+        })
+      )
+    );
+
+    // Concurrently create 10 tenants in parallel via shared authority
+    const results = await Promise.all(
+      rooms.map((r, i) =>
+        provisionalRentalTermService.createProvisionalTenantAndTerm(
+          testDormitoryId,
+          {
+            roomId: r.id,
+            fullName: `ผู้เช่า คู่ขนาน ${i + 1}`,
+            rentalType: 'MONTHLY',
+            unitRentAmount: '4000.00',
+            startDate: '2026-06-01',
+          },
+          'user-owner-1'
+        )
+      )
+    );
+
+    expect(results).toHaveLength(10);
+    const tenantNumbers = results.map((res) => res.tenant.tenantNumber);
+    const uniqueSet = new Set(tenantNumbers);
+
+    expect(uniqueSet.size).toBe(10);
+    for (const num of tenantNumbers) {
+      expect(num).toMatch(/^TNT-\d{4,}$/);
+    }
+
+    // Static verification: ensure shared authority is used and no duplicate Date.now numbering algorithms remain
+    const fs = await import('fs');
+    const path = await import('path');
+    const provCode = fs.readFileSync(path.resolve(process.cwd(), 'src/services/provisional-rental-term.service.ts'), 'utf-8');
+    const regCode = fs.readFileSync(path.resolve(process.cwd(), 'src/services/tenant-registration.service.ts'), 'utf-8');
+    expect(provCode).toContain('generateNextTenantNumber');
+    expect(regCode).toContain('generateNextTenantNumber');
+    expect(provCode).not.toContain('TNT-${Date.now');
+    expect(regCode).not.toContain('TNT-${Date.now');
+  });
+
+  it('7b. Sequential Provisional Terms: selects correct overlapping active term and ignores prior/subsequent non-overlapping terms', async () => {
+    const seqDorm = await prisma.dormitory.create({
       data: {
-        dormitoryId: testDormitoryId,
-        buildingId: testBuildingId,
-        roomNumber: 'CONC-1',
-        normalizedRoomNumber: 'CONC-1',
-        roomType: 'standard',
-        monthlyRent: toDecimal('4000.00'),
-        status: 'vacant',
+        name: 'หอพักทดสอบลำดับสัญญาชั่วคราว',
+        addressLine1: '99/99',
+        status: 'active',
       },
     });
-    const cRoomB = await prisma.room.create({
+
+    const seqBuilding = await prisma.building.create({
       data: {
-        dormitoryId: testDormitoryId,
-        buildingId: testBuildingId,
-        roomNumber: 'CONC-2',
-        normalizedRoomNumber: 'CONC-2',
+        dormitoryId: seqDorm.id,
+        name: 'ตึกทดสอบ',
+        floorCount: 1,
+        status: 'active',
+      },
+    });
+
+    const seqRoom = await prisma.room.create({
+      data: {
+        dormitoryId: seqDorm.id,
+        buildingId: seqBuilding.id,
+        roomNumber: 'SEQ-TERM-1',
+        normalizedRoomNumber: 'SEQ-TERM-1',
         roomType: 'standard',
         monthlyRent: toDecimal('4000.00'),
         status: 'vacant',
       },
     });
 
-    const [t1, t2] = await Promise.all([
-      provisionalRentalTermService.createProvisionalTenantAndTerm(
-        testDormitoryId,
-        {
-          roomId: cRoomA.id,
-          fullName: 'ผู้เช่า คู่ขนาน หนึ่ง',
-          rentalType: 'MONTHLY',
-          unitRentAmount: '4000.00',
-          startDate: '2026-06-01',
-        },
-        'user-owner-1'
-      ),
-      provisionalRentalTermService.createProvisionalTenantAndTerm(
-        testDormitoryId,
-        {
-          roomId: cRoomB.id,
-          fullName: 'ผู้เช่า คู่ขนาน สอง',
-          rentalType: 'MONTHLY',
-          unitRentAmount: '4000.00',
-          startDate: '2026-06-01',
-        },
-        'user-owner-1'
-      ),
-    ]);
+    const tenantA = await prisma.tenant.create({
+      data: {
+        dormitoryId: seqDorm.id,
+        tenantNumber: `TNT-SEQ-A-${Date.now()}`,
+        firstName: 'ผู้เช่า งวดแรก',
+        displayName: 'ผู้เช่า งวดแรก',
+        phone: '0811111111',
+        status: 'active',
+      },
+    });
 
-    expect(t1.tenant.tenantNumber).toBeDefined();
-    expect(t2.tenant.tenantNumber).toBeDefined();
-    expect(t1.tenant.tenantNumber).not.toBe(t2.tenant.tenantNumber);
+    const tenantB = await prisma.tenant.create({
+      data: {
+        dormitoryId: seqDorm.id,
+        tenantNumber: `TNT-SEQ-B-${Date.now()}`,
+        firstName: 'ผู้เช่า งวดสอง',
+        displayName: 'ผู้เช่า งวดสอง',
+        phone: '0822222222',
+        status: 'active',
+      },
+    });
+
+    // Term A: Jan - Apr (2026-01-01 to 2026-04-30), Rent = 3500.00
+    const termA = await prisma.provisionalRentalTerm.create({
+      data: {
+        dormitoryId: seqDorm.id,
+        roomId: seqRoom.id,
+        tenantId: tenantA.id,
+        rentalType: 'MONTHLY',
+        startDate: new Date('2026-01-01T00:00:00.000Z'),
+        endDate: new Date('2026-04-30T23:59:59.000Z'),
+        durationMonths: 4,
+        unitRentAmount: toDecimal('3500.00'),
+        status: 'ACTIVE',
+      },
+    });
+
+    // Term B: May - Aug (2026-05-01 to 2026-08-31), Rent = 4500.00
+    const termB = await prisma.provisionalRentalTerm.create({
+      data: {
+        dormitoryId: seqDorm.id,
+        roomId: seqRoom.id,
+        tenantId: tenantB.id,
+        rentalType: 'MONTHLY',
+        startDate: new Date('2026-05-01T00:00:00.000Z'),
+        endDate: new Date('2026-08-31T23:59:59.000Z'),
+        durationMonths: 4,
+        unitRentAmount: toDecimal('4500.00'),
+        status: 'ACTIVE',
+      },
+    });
+
+    // Create March cycle (overlaps Term A)
+    const marchCycle = await prisma.billingCycle.create({
+      data: {
+        dormitoryId: seqDorm.id,
+        cycleCode: '2026-03',
+        name: 'รอบ มี.ค. 2026',
+        periodStart: new Date('2026-03-01T00:00:00.000Z'),
+        periodEnd: new Date('2026-03-31T23:59:59.000Z'),
+        billingDate: new Date('2026-03-25T00:00:00.000Z'),
+        dueDate: new Date('2026-04-05T00:00:00.000Z'),
+        status: 'draft',
+      },
+    });
+
+    // Create June cycle (overlaps Term B)
+    const juneCycle = await prisma.billingCycle.create({
+      data: {
+        dormitoryId: seqDorm.id,
+        cycleCode: '2026-06',
+        name: 'รอบ มิ.ย. 2026',
+        periodStart: new Date('2026-06-01T00:00:00.000Z'),
+        periodEnd: new Date('2026-06-30T23:59:59.000Z'),
+        billingDate: new Date('2026-06-25T00:00:00.000Z'),
+        dueDate: new Date('2026-07-05T00:00:00.000Z'),
+        status: 'draft',
+      },
+    });
+
+    // Create September cycle (outside both Term A and Term B)
+    const septCycle = await prisma.billingCycle.create({
+      data: {
+        dormitoryId: seqDorm.id,
+        cycleCode: '2026-09',
+        name: 'รอบ ก.ย. 2026',
+        periodStart: new Date('2026-09-01T00:00:00.000Z'),
+        periodEnd: new Date('2026-09-30T23:59:59.000Z'),
+        billingDate: new Date('2026-09-25T00:00:00.000Z'),
+        dueDate: new Date('2026-10-05T00:00:00.000Z'),
+        status: 'draft',
+      },
+    });
+
+    // 1. In June cycle, resolveProvisionalBillingSource must return Term B (and ignore Term A)
+    const resolvedJune = await billingService.resolveProvisionalBillingSource(
+      seqDorm.id,
+      seqRoom.id,
+      juneCycle
+    );
+    expect(resolvedJune).toBeDefined();
+    expect(resolvedJune?.id).toBe(termB.id);
+    expect(resolvedJune?.tenantId).toBe(tenantB.id);
+
+    // 2. In March cycle, resolveProvisionalBillingSource must return Term A (and ignore Term B)
+    const resolvedMarch = await billingService.resolveProvisionalBillingSource(
+      seqDorm.id,
+      seqRoom.id,
+      marchCycle
+    );
+    expect(resolvedMarch).toBeDefined();
+    expect(resolvedMarch?.id).toBe(termA.id);
+    expect(resolvedMarch?.tenantId).toBe(tenantA.id);
+
+    // 3. In September cycle (outside both), resolveProvisionalBillingSource must return null
+    const resolvedSept = await billingService.resolveProvisionalBillingSource(
+      seqDorm.id,
+      seqRoom.id,
+      septCycle
+    );
+    expect(resolvedSept).toBeNull();
+  });
+
+  it('7c. Money Decimal-String Schema Boundary: accepts valid canonical decimal strings and strictly rejects numbers/scientific/NaN/negative', () => {
+    // 1. OtherFeeItemSchema
+    expect(OtherFeeItemSchema.safeParse({ description: 'ค่าบริการ', amount: '0' }).success).toBe(true);
+    expect(OtherFeeItemSchema.safeParse({ description: 'ค่าบริการ', amount: '0.00' }).success).toBe(true);
+    expect(OtherFeeItemSchema.safeParse({ description: 'ค่าบริการ', amount: '10.50' }).success).toBe(true);
+    expect(OtherFeeItemSchema.safeParse({ description: 'ค่าบริการ', amount: '500.25' }).success).toBe(true);
+
+    // Reject number types
+    expect(OtherFeeItemSchema.safeParse({ description: 'ค่าบริการ', amount: 10.5 }).success).toBe(false);
+    expect(OtherFeeItemSchema.safeParse({ description: 'ค่าบริการ', amount: 500 }).success).toBe(false);
+
+    // Reject invalid strings
+    expect(OtherFeeItemSchema.safeParse({ description: 'ค่าบริการ', amount: '10.505' }).success).toBe(false);
+    expect(OtherFeeItemSchema.safeParse({ description: 'ค่าบริการ', amount: '1e3' }).success).toBe(false);
+    expect(OtherFeeItemSchema.safeParse({ description: 'ค่าบริการ', amount: '-10.00' }).success).toBe(false);
+    expect(OtherFeeItemSchema.safeParse({ description: 'ค่าบริการ', amount: 'NaN' }).success).toBe(false);
+    expect(OtherFeeItemSchema.safeParse({ description: 'ค่าบริการ', amount: 'Infinity' }).success).toBe(false);
+
+    // 2. SaveMeterWorkspaceRowSchema
+    expect(SaveMeterWorkspaceRowSchema.safeParse({ roomId: 'r1', manualOutstandingAmount: '150.00' }).success).toBe(true);
+    expect(SaveMeterWorkspaceRowSchema.safeParse({ roomId: 'r1', manualOutstandingAmount: 150 }).success).toBe(false);
+    expect(SaveMeterWorkspaceRowSchema.safeParse({ roomId: 'r1', manualOutstandingAmount: '150.999' }).success).toBe(false);
+
+    // 3. CreateProvisionalRentalTermSchema
+    expect(CreateProvisionalRentalTermSchema.safeParse({
+      roomId: 'r1',
+      fullName: 'นายทดสอบ',
+      rentalType: 'MONTHLY',
+      startDate: '2026-06-01',
+      unitRentAmount: '4500.00',
+    }).success).toBe(true);
+
+    expect(CreateProvisionalRentalTermSchema.safeParse({
+      roomId: 'r1',
+      fullName: 'นายทดสอบ',
+      rentalType: 'MONTHLY',
+      startDate: '2026-06-01',
+      unitRentAmount: 4500,
+    }).success).toBe(false);
   });
 
   it('8. TERM Authority: enforces explicit installment requirement and Building.termMonths duration', async () => {
@@ -528,7 +727,7 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
             manualOutstandingAmount: '150.00',
             otherFees: [
               { description: ' ค่าทำความสะอาดแอร์ ', amount: '500.00' },
-              { description: 'ค่ากุญแจสำรอง', amount: 100 },
+              { description: 'ค่ากุญแจสำรอง', amount: '100.00' },
             ],
           },
         ],
@@ -794,13 +993,40 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
   // --------------------------------------------------------------------------
   // TEST 7: Bulk Issue-All One-Command & Partial Success Semantics
   // --------------------------------------------------------------------------
-  it('16. Bulk Issue-All: single command with dirtyRows executes per-room transactions and handles partial success', async () => {
-    // Room 103 has zero usage readings and active term -> should generate successfully with dirty row
-    // Create an un-metered room that has active term but no readings -> should be excluded cleanly without aborting Room 103
+  it('16. Bulk Issue-All: single command with dirtyRows executes per-room transactions with real partial success across multiple rooms', async () => {
+    // Room A (testRoom3Id): Has active term + zero-usage readings -> valid dirty readings provided -> should generate bill
+    // Room B: Create a separate room with active term BUT no meter readings and no readings provided -> should fail eligibility and be excluded without rolling back Room A
+    const roomB = await prisma.room.create({
+      data: {
+        dormitoryId: testDormitoryId,
+        buildingId: testBuildingId,
+        roomNumber: 'BULK-FAIL-B',
+        normalizedRoomNumber: 'BULK-FAIL-B',
+        roomType: 'standard',
+        monthlyRent: toDecimal('3000.00'),
+        status: 'vacant',
+      },
+    });
+
+    await provisionalRentalTermService.createProvisionalTenantAndTerm(
+      testDormitoryId,
+      {
+        roomId: roomB.id,
+        fullName: 'ผู้เช่า ห้องบี',
+        rentalType: 'MONTHLY',
+        unitRentAmount: '3000.00',
+        startDate: '2026-06-01',
+      },
+      'user-owner-1'
+    );
+
+    // Dispatch ONE bulk command for [testRoom3Id, roomB.id] with dirty rows for both:
+    // Room A: full meter readings + manualOutstandingAmount '50.00'
+    // Room B: manualOutstandingAmount '999.00' BUT NO meter readings (will fail meter check)
     const bulkRes = await billingService.bulkGenerateBills(
       testDormitoryId,
       cycle1Id,
-      [testRoom3Id],
+      [testRoom3Id, roomB.id],
       'user-owner-1',
       [
         {
@@ -812,14 +1038,26 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
           peopleCount: 1,
           manualOutstandingAmount: '50.00',
         },
+        {
+          roomId: roomB.id,
+          manualOutstandingAmount: '999.00',
+        },
       ]
     );
 
+    // Assert: Generated count = 1 (Room A)
     expect(bulkRes.generatedCount).toBe(1);
-    expect(bulkRes.generated[0].roomId).toBe(testRoom3Id);
+    expect(bulkRes.generated.map((g) => g.roomId)).toContain(testRoom3Id);
 
-    // Verify room 103 bill and snapshot persisted together
-    const snap = await prisma.roomBillingCycleSnapshot.findUnique({
+    // Assert: Room B was excluded/failed due to missing readings
+    const excludedOrFailedRoomIds = [
+      ...bulkRes.excluded.map((e) => e.roomId),
+      ...bulkRes.failed.map((f) => f.roomId),
+    ];
+    expect(excludedOrFailedRoomIds).toContain(roomB.id);
+
+    // Assert: Room A bill and snapshot were committed successfully
+    const snapA = await prisma.roomBillingCycleSnapshot.findUnique({
       where: {
         dormitory_billing_cycle_room_unique: {
           dormitoryId: testDormitoryId,
@@ -828,11 +1066,29 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
         },
       },
     });
-    expect(formatDecimal(toDecimal(snap?.manualOutstandingAmount))).toBe('50.00');
+    expect(formatDecimal(toDecimal(snapA?.manualOutstandingAmount))).toBe('50.00');
 
-    const bill = await prisma.bill.findFirst({
+    const billA = await prisma.bill.findFirst({
       where: { dormitoryId: testDormitoryId, billingCycleId: cycle1Id, roomId: testRoom3Id, status: 'unpaid' },
     });
-    expect(bill).toBeDefined();
+    expect(billA).toBeDefined();
+
+    // Assert: Room B bill was NOT created
+    const billB = await prisma.bill.findFirst({
+      where: { dormitoryId: testDormitoryId, billingCycleId: cycle1Id, roomId: roomB.id },
+    });
+    expect(billB).toBeNull();
+
+    // Assert: Room B dirty snapshot was ROLLED BACK (did NOT commit 999.00)
+    const snapB = await prisma.roomBillingCycleSnapshot.findUnique({
+      where: {
+        dormitory_billing_cycle_room_unique: {
+          dormitoryId: testDormitoryId,
+          billingCycleId: cycle1Id,
+          roomId: roomB.id,
+        },
+      },
+    });
+    expect(snapB?.manualOutstandingAmount ? formatDecimal(toDecimal(snapB.manualOutstandingAmount)) : '0.00').toBe('0.00');
   });
 });

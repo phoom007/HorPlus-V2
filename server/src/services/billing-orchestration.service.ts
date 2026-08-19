@@ -230,14 +230,24 @@ export class BillingOrchestrationService {
         if (activeContract) {
           householdCount = await this.getHouseholdCount(dormitoryId, activeContract.tenantId, client);
         } else {
-          // Check ACTIVE ProvisionalRentalTerm (future RESERVED terms do NOT count!)
+          // Check ACTIVE ProvisionalRentalTerm (must overlap cycle period!)
           const activeProvisional = await client.provisionalRentalTerm.findFirst({
             where: {
               dormitoryId,
               roomId,
               status: 'ACTIVE',
               deletedAt: null,
+              ...(targetCycle
+                ? {
+                    startDate: { lte: targetCycle.periodEnd },
+                    endDate: { gte: targetCycle.periodStart },
+                  }
+                : {}),
             },
+            orderBy: [
+              { startDate: 'asc' },
+              { createdAt: 'desc' },
+            ],
           });
           if (activeProvisional) {
             householdCount = await this.getHouseholdCount(dormitoryId, activeProvisional.tenantId, client);

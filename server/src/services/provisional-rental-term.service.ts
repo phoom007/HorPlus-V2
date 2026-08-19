@@ -7,6 +7,7 @@
 import { PrismaClient, Prisma } from '@prisma/client';
 import { getPrismaClient } from '../db/prisma.js';
 import { AuditService } from './audit.service.js';
+import { generateNextTenantNumber } from './tenant-number.service.js';
 import { toDecimal, mulDecimals, formatDecimal } from '../utils/decimal-math.util.js';
 
 export interface CreateProvisionalRentalTermDto {
@@ -192,9 +193,8 @@ export class ProvisionalRentalTermService {
         }
       }
 
-      // Canonical tenant number generation (lock-safe)
-      const tenantCount = await tx.tenant.count({ where: { dormitoryId } });
-      const tenantNumber = `TNT-${Date.now().toString().slice(-6)}-${(tenantCount + 1).toString().padStart(4, '0')}`;
+      // Canonical tenant number generation (shared authority & dormitory lock-safe)
+      const tenantNumber = await generateNextTenantNumber(dormitoryId, tx);
 
       // 1. Create Tenant losslessly
       const tenant = await tx.tenant.create({
