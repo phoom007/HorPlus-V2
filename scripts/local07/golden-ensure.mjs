@@ -22,6 +22,7 @@ import { GOLDEN_DORM } from './constants.mjs';
 import { syncSubscriptionCatalog } from '../../server/src/scripts/subscription-catalog-sync.ts';
 import { SensitiveFieldService } from '../../server/src/services/sensitive-field.service.ts';
 import { createGoldenOwnerSession } from './login-helper.mjs';
+import { ensureGoldenBillingTimeline } from './golden-billing-ensure.mjs';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -47,7 +48,7 @@ export async function ensureGoldenDormData() {
   console.log('================================================================================');
   console.log(`Target: ${targetInfo.host}:${targetInfo.port}/${targetInfo.database}\n`);
 
-  // 1. Idempotency Check: Verify if Golden Dorm already exists with 24 rooms and full dataset
+  // 1. Idempotency Check: Verify if Golden Dorm already exists with 24 rooms and full 4-cycle dataset
   const existingDorm = await prisma.dormitory.findUnique({
     where: { id: GOLDEN_DORM.id },
     include: {
@@ -60,8 +61,8 @@ export async function ensureGoldenDormData() {
   const billingCycleCount = existingDorm ? await prisma.billingCycle.count({ where: { dormitoryId: GOLDEN_DORM.id } }) : 0;
   const billCount = existingDorm ? await prisma.bill.count({ where: { dormitoryId: GOLDEN_DORM.id } }) : 0;
 
-  if (existingDorm && existingDorm.rooms.length === 24 && billingCycleCount > 0 && billCount === 16) {
-    console.log(`✅ [IDEMPOTENT] Golden Dormitory "${existingDorm.name}" already exists with ${existingDorm.rooms.length} rooms and full billing dataset.`);
+  if (existingDorm && existingDorm.rooms.length === 24 && billingCycleCount === 4 && billCount === 16) {
+    console.log(`✅ [IDEMPOTENT] Golden Dormitory "${existingDorm.name}" already exists with ${existingDorm.rooms.length} rooms and full 4-cycle billing dataset.`);
     console.log(`   Leaving existing Product Owner manual test mutations intact.`);
     
     // Ensure session state file is present
@@ -71,7 +72,7 @@ export async function ensureGoldenDormData() {
     return;
   }
 
-  if (existingDorm && (existingDorm.rooms.length !== 24 || billingCycleCount === 0 || billCount !== 16)) {
+  if (existingDorm && (existingDorm.rooms.length !== 24 || billingCycleCount !== 4 || billCount !== 16)) {
     console.log(`⚠️ Existing Golden Dormitory is incomplete (rooms: ${existingDorm.rooms.length}, billing cycles: ${billingCycleCount}, bills: ${billCount}). Re-provisioning Golden fixture...`);
     await prisma.$transaction(async (tx) => {
       await tx.receipt.deleteMany({ where: { dormitoryId: GOLDEN_DORM.id } });
@@ -618,7 +619,10 @@ export async function ensureGoldenDormData() {
     billSeq++;
   }
 
-  // 12. Create Session & Manifest
+  // 12. Ensure Complete Billing Timeline (2026-07 -> 2026-10)
+  await ensureGoldenBillingTimeline();
+
+  // 13. Create Session & Manifest
   console.log('--- 7. Generating Authenticated Session & Scenario Manifest ---');
   await createGoldenOwnerSession();
   await generateGoldenManifest();

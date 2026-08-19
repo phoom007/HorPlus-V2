@@ -124,27 +124,57 @@ export async function verifyGoldenDormData() {
   console.log(`✅ Active Contracts: ${activeContracts}`);
   if (activeContracts < 16) failures.push(`Expected at least 16 active contracts, found ${activeContracts}`);
 
-  // 8. Verify Billing Cycles, Bills & Meters
+  // 8. Verify Billing Cycles, Rate Snapshots & Operational Timeline
   const cycles = await prisma.billingCycle.findMany({
     where: { dormitoryId: dorm.id },
-    include: { bills: true },
+    include: { bills: true, rateSnapshot: true, meterReadings: true },
+    orderBy: { periodStart: 'asc' },
   });
 
+  const cycleCodes = cycles.map((c) => c.cycleCode);
+  console.log(`✅ Billing Timeline: Found ${cycles.length} cycles: [${cycleCodes.join(', ')}]`);
+
+  const expectedCycles = ['2026-07', '2026-08', '2026-09', '2026-10'];
+  for (const exp of expectedCycles) {
+    const c = cycles.find((cy) => cy.cycleCode === exp);
+    if (!c) {
+      failures.push(`Missing expected billing cycle: ${exp}`);
+    } else {
+      if (!c.rateSnapshot) {
+        failures.push(`Cycle ${exp} is missing BillingRateSnapshot.`);
+      } else {
+        console.log(`   - Cycle ${exp}: Rate Snapshot Source = ${c.rateSnapshot.source} (${c.bills.length} bills, ${c.meterReadings.length} meter readings)`);
+      }
+    }
+  }
+
+  // July historical checks
   const julyCycle = cycles.find((c) => c.cycleCode === '2026-07');
-  if (!julyCycle) {
-    failures.push('Missing 2026-07 billing cycle.');
-  } else {
-    console.log(`✅ July 2026 Billing Cycle: ${julyCycle.bills.length} bills generated.`);
+  if (julyCycle) {
     const paidBills = julyCycle.bills.filter((b) => b.status === 'PAID').length;
     const sentBills = julyCycle.bills.filter((b) => b.status === 'SENT').length;
     const overdueBills = julyCycle.bills.filter((b) => b.status === 'OVERDUE').length;
-    console.log(`   Bills Breakdown: ${paidBills} Paid, ${sentBills} Sent (Unpaid), ${overdueBills} Overdue.`);
+    console.log(`   July 2026 Breakdown: ${paidBills} Paid, ${sentBills} Sent, ${overdueBills} Overdue.`);
   }
 
-  const meterReadings = await prisma.meterReading.count({
-    where: { dormitoryId: dorm.id },
-  });
-  console.log(`✅ Meter Readings: ${meterReadings} readings recorded across occupied rooms.`);
+  // Operational Cycle Resolver Check (must resolve to August 2026-08)
+  const { CurrentCycleResolverService } = await import('../../server/src/services/current-cycle-resolver.ts');
+  const resolver = new CurrentCycleResolverService(prisma);
+  const resolved = await resolver.resolveOperationalBillingCycle(dorm.id);
+  console.log(`✅ Operational Cycle Resolution: ${resolved.cycleCode} (Reason: ${resolved.reason})`);
+
+  if (resolved.cycleCode !== '2026-08') {
+    failures.push(`Expected operational cycle 2026-08, but resolver returned ${resolved.cycleCode}`);
+  }
+
+  // Verify Future Drafts (2026-09, 2026-10) have zero meter activity and zero bills
+  for (const draftCode of ['2026-09', '2026-10']) {
+    const c = cycles.find((cy) => cy.cycleCode === draftCode);
+    if (c) {
+      if (c.bills.length > 0) failures.push(`Future draft cycle ${draftCode} must have 0 bills, found ${c.bills.length}`);
+      if (c.meterReadings.length > 0) failures.push(`Future draft cycle ${draftCode} must have 0 meter readings, found ${c.meterReadings.length}`);
+    }
+  }
 
   // 9. Verify Session & Manifest Files
   const sessionPath = path.join(SESSIONS_DIR, 'golden-owner.json');

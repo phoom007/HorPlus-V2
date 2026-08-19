@@ -25,7 +25,6 @@ import {
   Moon,
   Sun,
   Bell,
-  Sparkles,
   Menu,
   X,
   Search,
@@ -1113,14 +1112,6 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
 
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-        {/* Pilot Disclosure Banner */}
-        <div className="bg-amber-500/10 border-b border-amber-200/50 px-4 py-1.5 text-center text-[11px] font-medium text-amber-900 flex items-center justify-center gap-2 shrink-0">
-          <Sparkles className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-          <span>
-            <strong>ระบบทดลองใช้งาน HorPlus Pilot</strong> — เซิร์ฟเวอร์นี้ต้องมีผู้ดูแลเปิด Docker Desktop หลัง Windows Restart | SlipOK Live ยังไม่เปิดใช้งาน
-          </span>
-        </div>
-
         {/* Top bar header */}
         <header className="bg-white border-b border-slate-100 flex flex-col sm:flex-row items-center justify-between px-3.5 sm:px-6 py-2.5 sm:py-3 shrink-0 z-30 gap-2.5 sm:gap-3">
           {/* Left Block: Hamburger & Logo */}

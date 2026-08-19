@@ -32,6 +32,7 @@
     "uat:open:manager": "tsx scripts/local07/open-browser.mjs manager",
     "uat:open:tech": "tsx scripts/local07/open-browser.mjs tech",
     "uat:golden:ensure": "tsx scripts/local07/golden-ensure.mjs",
+    "uat:golden:billing:ensure": "tsx scripts/local07/golden-billing-ensure.mjs",
     "uat:golden:verify": "tsx scripts/local07/golden-verify.mjs",
     "uat:open:golden-owner": "tsx scripts/local07/open-browser.mjs golden-owner"
   },
