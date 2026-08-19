@@ -25,6 +25,10 @@ import {
 } from '../../contracts';
 
 import { httpRequest, HttpClientError } from '../../httpClient';
+import {
+  serializeMeterWorkspaceDirtyRow,
+  serializeMeterWorkspaceDirtyRows,
+} from '../../../utils/meter-serializer';
 
 import {
   Dormitory,
@@ -759,9 +763,10 @@ export class ApiMeterAdapter implements MeterDataSource {
 
   async saveBulkWorkspace(billingCycleId: string, rows: any[]): Promise<DataResult<{ savedCount: number }>> {
     try {
+      const serializedRows = serializeMeterWorkspaceDirtyRows(rows);
       const data = await httpRequest<{ success: boolean; savedCount: number }>('POST', '/meters/workspace/bulk', {
         billingCycleId,
-        rows
+        rows: serializedRows,
       });
       return { success: true, data: { savedCount: data.savedCount ?? rows.length } };
     } catch (err: any) {
@@ -774,14 +779,37 @@ export class ApiMeterAdapter implements MeterDataSource {
 
   async toggleRoomBillSwitch(billingCycleId: string, roomId: string, action: 'issue' | 'cancel', dirtyRow?: any, cancellationReason?: string): Promise<DataResult<any>> {
     try {
+      const serializedDirtyRow = dirtyRow ? serializeMeterWorkspaceDirtyRow(dirtyRow) : undefined;
       const data = await httpRequest<any>('POST', '/meters/switch', {
         billingCycleId,
         roomId,
         action,
-        dirtyRow,
+        dirtyRow: serializedDirtyRow,
         cancellationReason
       });
       return { success: true, data };
+    } catch (err: any) {
+      return {
+        success: false,
+        error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message }
+      };
+    }
+  }
+
+  async pullPreviousWorkspace(billingCycleId: string): Promise<DataResult<{
+    hasPreviousCycle: boolean;
+    previousCycleId?: string;
+    previousCycleCode?: string;
+    rooms: Array<{
+      roomId: string;
+      previousWaterCurrentReading: string | null;
+      previousElectricityCurrentReading: string | null;
+      currentHouseholdPeopleCount: number;
+    }>;
+  }>> {
+    try {
+      const res = await httpRequest<{ success: boolean; data: any }>('GET', `/meters/workspace/pull-previous?billingCycleId=${billingCycleId}`);
+      return { success: true, data: res.data || res };
     } catch (err: any) {
       return {
         success: false,
@@ -841,10 +869,11 @@ export class ApiBillingAdapter implements BillingDataSource {
 
   async generateBulkBills(cycleId: string, roomIds?: string[], dirtyRows?: any[]): Promise<DataResult<any>> {
     try {
+      const serializedDirtyRows = dirtyRows ? serializeMeterWorkspaceDirtyRows(dirtyRows) : undefined;
       const res = await httpRequest<any>('POST', '/bills/generate/bulk', {
         billingCycleId: cycleId,
         roomIds,
-        dirtyRows,
+        dirtyRows: serializedDirtyRows,
       }, {
         idempotencyKey: `gen_bulk_bills_${cycleId}_${Date.now()}`
       });

@@ -35,6 +35,8 @@ import {
   OtherFeeItemSchema,
   SaveMeterWorkspaceRowSchema,
   CreateProvisionalRentalTermSchema,
+  BulkSaveMeterWorkspaceSchema,
+  ToggleRoomBillSwitchSchema,
 } from '../../schemas/billing-meter.schemas.js';
 import crypto from 'crypto';
 
@@ -1238,5 +1240,92 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
       },
     });
     expect(snapB?.manualOutstandingAmount ? formatDecimal(toDecimal(snapB.manualOutstandingAmount)) : '0.00').toBe('0.00');
+  });
+
+  // --------------------------------------------------------------------------
+  // TEST 8: Pull Previous Authority & Strict Server HTTP Boundary
+  // --------------------------------------------------------------------------
+  it('17. Pull Previous Authority: pulls authoritative MeterReading records from previous cycle without bill existence', async () => {
+    // 1. Create a fresh room with no prior bills
+    const freshRoom = await prisma.room.create({
+      data: {
+        dormitoryId: testDormitoryId,
+        buildingId: testBuildingId,
+        roomNumber: 'PULL-NOBILL-1',
+        normalizedRoomNumber: 'PULL-NOBILL-1',
+        roomType: 'standard',
+        monthlyRent: toDecimal('4500.00'),
+        status: 'vacant',
+      },
+    });
+
+    // Save June readings for freshRoom without creating any bill
+    await meterService.saveBulkMeterWorkspace(
+      testDormitoryId,
+      {
+        billingCycleId: cycle1Id,
+        rows: [
+          {
+            roomId: freshRoom.id,
+            waterCurr: '1234.00',
+            elecCurr: '5678.00',
+          },
+        ],
+      },
+      'user-owner-1'
+    );
+
+    // Verify readings exist
+    const waterRead = await meterRepo.findReadingByCycleRoomAndType(testDormitoryId, cycle1Id, freshRoom.id, 'water');
+    const elecRead = await meterRepo.findReadingByCycleRoomAndType(testDormitoryId, cycle1Id, freshRoom.id, 'electricity');
+    expect(waterRead?.currentReading).toBe('1234.00');
+    expect(elecRead?.currentReading).toBe('5678.00');
+
+    // Verify NO bill was issued for freshRoom in cycle1
+    const noBill = await prisma.bill.findFirst({
+      where: { dormitoryId: testDormitoryId, billingCycleId: cycle1Id, roomId: freshRoom.id },
+    });
+    expect(noBill).toBeNull();
+
+    // 2. Call pullPreviousWorkspaceData for cycle2Id (July 2026)
+    const pullData = await meterService.pullPreviousWorkspaceData(testDormitoryId, cycle2Id);
+    expect(pullData.hasPreviousCycle).toBe(true);
+    expect(pullData.previousCycleId).toBe(cycle1Id);
+
+    const freshRoomPull = pullData.rooms.find((r) => r.roomId === freshRoom.id);
+    expect(freshRoomPull).toBeDefined();
+    expect(freshRoomPull?.previousWaterCurrentReading).toBe('1234.00');
+    expect(freshRoomPull?.previousElectricityCurrentReading).toBe('5678.00');
+    expect(freshRoomPull?.currentHouseholdPeopleCount).toBe(0); // Vacant room
+  });
+
+  it('18. Strict Server HTTP Boundary: rejects raw numeric JSON money inputs', async () => {
+    const rawNumberPayload = {
+      billingCycleId: cycle1Id,
+      rows: [
+        {
+          roomId: testRoom1Id,
+          manualOutstandingAmount: 150, // Number type -> must reject
+        },
+      ],
+    };
+
+    const parsedBulk = BulkSaveMeterWorkspaceSchema.safeParse(rawNumberPayload);
+    expect(parsedBulk.success).toBe(false);
+
+    const rawOtherFeeNumber = {
+      billingCycleId: cycle1Id,
+      roomId: testRoom1Id,
+      action: 'issue',
+      dirtyRow: {
+        roomId: testRoom1Id,
+        otherFees: [
+          { description: 'ค่าบริการ', amount: 500 }, // Number type -> must reject
+        ],
+      },
+    };
+
+    const parsedSwitch = ToggleRoomBillSwitchSchema.safeParse(rawOtherFeeNumber);
+    expect(parsedSwitch.success).toBe(false);
   });
 });

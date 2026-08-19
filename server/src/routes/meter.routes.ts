@@ -268,6 +268,28 @@ export function createMeterRouter(
     }
   });
 
+  // GET /api/v1/meters/workspace/pull-previous
+  router.get('/workspace/pull-previous', async (req: Request, res: Response) => {
+    try {
+      const dormId = getDormitoryId(req);
+      const billingCycleId = req.query.billingCycleId as string;
+      if (!billingCycleId) {
+        return res.status(400).json({
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'Billing Cycle ID จำเป็นต้องระบุ',
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+          },
+        });
+      }
+
+      const result = await meterService.pullPreviousWorkspaceData(dormId, billingCycleId);
+      res.json({ success: true, data: result });
+    } catch (err) {
+      handleServiceError(res, err, req);
+    }
+  });
+
   // POST /api/v1/meters/workspace/bulk
   router.post('/workspace/bulk', mutationGuard('meter:write'), async (req: Request, res: Response) => {
     if (!verifyCsrf(req, res)) return;

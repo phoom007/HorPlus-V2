@@ -10,6 +10,7 @@ import { IBillingCycleRepository, PrismaBillingCycleRepository } from '../db/rep
 import { IRoomRepository, PrismaRoomRepository } from '../db/repositories/room.repository.js';
 import { IBillRepository, PrismaBillRepository } from '../db/repositories/bill.repository.js';
 import { AuditService } from './audit.service.js';
+import { billingOrchestrationService } from './billing-orchestration.service.js';
 import { getPrismaClient } from '../db/prisma.js';
 import { toDecimal, formatDecimal, compareDecimals } from '../utils/decimal-math.util.js';
 
@@ -899,6 +900,94 @@ export class MeterService {
         status: 'cancelled',
       };
     }
+  }
+
+  /**
+   * Bounded aggregate READ for Pull Previous data.
+   * Returns authoritative previous meter readings (from MeterReading.currentReading, regardless of bill existence)
+   * and authoritative current household people count in one single server response without any database mutation.
+   */
+  public async pullPreviousWorkspaceData(
+    dormitoryId: string,
+    billingCycleId: string
+  ): Promise<{
+    hasPreviousCycle: boolean;
+    previousCycleId?: string;
+    previousCycleCode?: string;
+    rooms: Array<{
+      roomId: string;
+      previousWaterCurrentReading: string | null;
+      previousElectricityCurrentReading: string | null;
+      currentHouseholdPeopleCount: number;
+    }>;
+  }> {
+    const currentCycle = await this.billingCycleRepo.findById(billingCycleId, dormitoryId);
+    if (!currentCycle) {
+      const err = new Error('BILLING_CYCLE_NOT_FOUND');
+      (err as any).statusCode = 404;
+      (err as any).code = 'BILLING_CYCLE_NOT_FOUND';
+      throw err;
+    }
+
+    const prisma = getPrismaClient();
+
+    // Find the immediately preceding billing cycle for this dormitory
+    const previousCycle = await prisma.billingCycle.findFirst({
+      where: {
+        dormitoryId,
+        periodStart: { lt: currentCycle.periodStart },
+      },
+      orderBy: { periodStart: 'desc' },
+    });
+
+    const roomsResult = await this.roomRepo.findAll(dormitoryId);
+    const rooms = roomsResult.items || [];
+
+    // If there is a previous cycle, load its authoritative meter readings
+    const readingMap: Record<string, { waterCurr?: string; elecCurr?: string }> = {};
+    if (previousCycle) {
+      const prevReadings = await prisma.meterReading.findMany({
+        where: {
+          dormitoryId,
+          billingCycleId: previousCycle.id,
+        },
+      });
+
+      for (const r of prevReadings) {
+        if (!readingMap[r.roomId]) readingMap[r.roomId] = {};
+        if (r.meterType === 'water') {
+          readingMap[r.roomId].waterCurr = formatDecimal(toDecimal(r.currentReading.toString()));
+        } else if (r.meterType === 'electricity') {
+          readingMap[r.roomId].elecCurr = formatDecimal(toDecimal(r.currentReading.toString()));
+        }
+      }
+    }
+
+    // For each room, resolve current household count
+    const roomResults = await Promise.all(
+      rooms.map(async (room) => {
+        const householdCount = await billingOrchestrationService.resolveCyclePeopleCount(
+          dormitoryId,
+          billingCycleId,
+          room.id,
+          undefined
+        );
+
+        return {
+          roomId: room.id,
+          previousWaterCurrentReading: readingMap[room.id]?.waterCurr || null,
+          previousElectricityCurrentReading: readingMap[room.id]?.elecCurr || null,
+          currentHouseholdPeopleCount: householdCount,
+        };
+      })
+    );
+
+    return {
+      hasPreviousCycle: !!previousCycle,
+      previousCycleId: previousCycle?.id,
+      previousCycleCode: previousCycle?.cycleCode,
+      rooms: roomResults,
+    };
   }
 }
 

@@ -101,6 +101,17 @@ export interface MeterDataSource {
   updateCyclePeopleCount(cycleId: string, roomId: string, peopleCount: number): Promise<DataResult<any>>;
   saveBulkWorkspace?(billingCycleId: string, rows: any[]): Promise<DataResult<{ savedCount: number }>>;
   toggleRoomBillSwitch?(billingCycleId: string, roomId: string, action: 'issue' | 'cancel', dirtyRow?: any, cancellationReason?: string): Promise<DataResult<any>>;
+  pullPreviousWorkspace?(billingCycleId: string): Promise<DataResult<{
+    hasPreviousCycle: boolean;
+    previousCycleId?: string;
+    previousCycleCode?: string;
+    rooms: Array<{
+      roomId: string;
+      previousWaterCurrentReading: string | null;
+      previousElectricityCurrentReading: string | null;
+      currentHouseholdPeopleCount: number;
+    }>;
+  }>>;
 }
 
 export interface BillingDataSource {

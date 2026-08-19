@@ -34,6 +34,10 @@ import { httpRequest } from '../../data/httpClient';
 import { formatBaht, Modal } from '../../components/GlobalComponents';
 
 import { LineNotificationModal } from '../../components/LineNotificationModal';
+import {
+  serializeMeterWorkspaceDirtyRow,
+  serializeMeterWorkspaceDirtyRows,
+} from '../../utils/meter-serializer';
 
 export function getStored<T>(key: string, fallback: T): T {
   try {
@@ -354,76 +358,90 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   });
 
   const handlePullPreviousData = async () => {
-    const [cy, cm] = selectedCycle.split('-').map(Number);
-    let prevYear = cy;
-    let prevMonth = cm - 1;
-    if (prevMonth === 0) {
-      prevMonth = 12;
-      prevYear -= 1;
-    }
-    const targetPrevCycleId = `${prevYear}-${String(prevMonth).padStart(2, '0')}`;
-
-    const newFlashing: { [key: string]: boolean } = {};
-    const peopleDeltas: string[] = [];
-
-    const updatedRows = meterRows.map(row => {
-      const prevData = getPrevCycleNewReadings(row.roomId);
-      const prevBillingPeople = getPrevCycleBillingPeopleCount(row.roomId, targetPrevCycleId);
-      const currentHouseholdPeople = getCurrentHouseholdPeopleCount(row.roomId);
-
-      const nextRow = { ...row };
-      if (prevData) {
-        if (isWaterUnit) {
-          nextRow.waterPrev = prevData.waterCurr;
-          newFlashing[`${row.roomId}-waterPrev`] = true;
-        }
-        if (isElecUnit) {
-          nextRow.elecPrev = prevData.elecCurr;
-          newFlashing[`${row.roomId}-elecPrev`] = true;
-        }
-      }
-
-      if (prevBillingPeople !== currentHouseholdPeople) {
-        peopleDeltas.push(`${row.roomNumber}: จำนวนคน ${prevBillingPeople} → ${currentHouseholdPeople}`);
-      }
-      nextRow.peopleCount = currentHouseholdPeople;
-      newFlashing[`${row.roomId}-peopleCount`] = true;
-      return nextRow;
-    });
-
-    setMeterRows(updatedRows);
-
-    // Persist snapshot & recalculate if cycle selected
-    if (selectedBillingCycleId) {
-      for (const r of updatedRows) {
-        const orig = (originalRowsRef.current || []).find(o => o.roomId === r.roomId);
-        if (!orig || orig.peopleCount !== r.peopleCount) {
-          await getDataProvider().meters.updateCyclePeopleCount(
-            selectedBillingCycleId,
-            r.roomId,
-            r.peopleCount
-          );
-        }
-      }
+    if (!selectedBillingCycleId) {
+      showToast('ยังไม่ได้ตั้งค่ารอบคำนวณ');
+      return;
     }
 
-    if (Object.keys(newFlashing).length > 0) {
-      setFlashingCells(prev => ({ ...prev, ...newFlashing }));
-      setTimeout(() => {
-        setFlashingCells(prev => {
-          const next = { ...prev };
-          Object.keys(newFlashing).forEach(k => {
-            delete next[k];
+    setIsSaving(true);
+    try {
+      const pullRes = await getDataProvider().meters.pullPreviousWorkspace?.(selectedBillingCycleId);
+      setIsSaving(false);
+
+      if (!pullRes || !pullRes.success || !pullRes.data) {
+        showToast(pullRes?.error?.message || 'ไม่สามารถดึงข้อมูลจากงวดก่อนหน้าได้');
+        return;
+      }
+
+      const pullData = pullRes.data;
+      const roomMap = new Map((pullData.rooms || []).map((r: any) => [r.roomId, r]));
+
+      const newFlashing: { [key: string]: boolean } = {};
+      const peopleChanges: Array<{ roomNumber: string; prev: number; curr: number }> = [];
+
+      const updatedRows = meterRows.map((row) => {
+        const pRoom: any = roomMap.get(row.roomId);
+        const nextRow = { ...row };
+
+        if (pRoom) {
+          if (isWaterUnit && pRoom.previousWaterCurrentReading !== null && pRoom.previousWaterCurrentReading !== undefined) {
+            const nextWaterPrev = Number(pRoom.previousWaterCurrentReading);
+            if (row.waterPrev !== nextWaterPrev) {
+              nextRow.waterPrev = nextWaterPrev;
+              newFlashing[`${row.roomId}-waterPrev`] = true;
+            }
+          }
+
+          if (isElecUnit && pRoom.previousElectricityCurrentReading !== null && pRoom.previousElectricityCurrentReading !== undefined) {
+            const nextElecPrev = Number(pRoom.previousElectricityCurrentReading);
+            if (row.elecPrev !== nextElecPrev) {
+              nextRow.elecPrev = nextElecPrev;
+              newFlashing[`${row.roomId}-elecPrev`] = true;
+            }
+          }
+
+          const currHousehold = pRoom.currentHouseholdPeopleCount ?? 0;
+          if (row.peopleCount !== currHousehold) {
+            peopleChanges.push({
+              roomNumber: row.roomNumber,
+              prev: row.peopleCount,
+              curr: currHousehold,
+            });
+            nextRow.peopleCount = currHousehold;
+            newFlashing[`${row.roomId}-peopleCount`] = true;
+          }
+        }
+
+        return nextRow;
+      });
+
+      setMeterRows(updatedRows);
+
+      if (Object.keys(newFlashing).length > 0) {
+        setFlashingCells((prev) => ({ ...prev, ...newFlashing }));
+        setTimeout(() => {
+          setFlashingCells((prev) => {
+            const next = { ...prev };
+            Object.keys(newFlashing).forEach((k) => {
+              delete next[k];
+            });
+            return next;
           });
-          return next;
-        });
-      }, 1500);
-    }
+        }, 1500);
+      }
 
-    if (peopleDeltas.length === 0) {
-      showToast(`ดึงข้อมูลจากงวดก่อนหน้าเรียบร้อย`);
-    } else {
-      showToast(`ดึงข้อมูลจากงวดก่อนหน้าเรียบร้อย\n${peopleDeltas.join('\n')}`);
+      // Concise toast notification (Section 13)
+      if (peopleChanges.length === 0) {
+        showToast('ดึงข้อมูลก่อนหน้าเรียบร้อย');
+      } else if (peopleChanges.length === 1) {
+        const c = peopleChanges[0];
+        showToast(`${c.roomNumber}: ผู้พัก ${c.prev} → ${c.curr} คน`);
+      } else {
+        showToast(`ดึงข้อมูลแล้ว • ผู้พักเปลี่ยน ${peopleChanges.length} ห้อง (ใช้จำนวนปัจจุบัน)`);
+      }
+    } catch (err: any) {
+      setIsSaving(false);
+      showToast(err.message || 'เกิดข้อผิดพลาดในการดึงข้อมูลก่อนหน้า');
     }
   };
 
@@ -431,7 +449,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     const sampleRoom = meterRows[0]?.roomNumber || "A101";
     const sampleElec = meterRows[0]?.elecPrev || 500;
     const sampleWater = meterRows[0]?.waterPrev || 500;
-    const samplePeople = meterRows[0]?.peopleCount || 1;
+    const samplePeople = meterRows[0]?.peopleCount ?? 0;
     const sampleOverdue = meterRows[0]?.overdueAmount || 50;
 
     if (isElecUnit && isWaterUnit) {
@@ -1136,7 +1154,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       if (!orig || row.isReplaced !== orig.isReplaced) { dirtyObj.isReplaced = row.isReplaced; hasChanges = true; }
 
       if (hasChanges) {
-        dirtyRowData = dirtyObj;
+        dirtyRowData = serializeMeterWorkspaceDirtyRow(dirtyObj);
       }
     }
 
@@ -1171,7 +1189,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     setIsSaving(true);
     try {
       // Collect dirty rows using dirty-field semantics (only actually changed fields)
-      const dirtyRows = meterRows.filter(r => {
+      const rawDirtyRows = meterRows.filter(r => {
         const orig = (originalRowsRef.current || []).find(o => o.roomId === r.roomId);
         if (!orig) return true;
         return (
@@ -1197,6 +1215,8 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
         if (!orig || r.isReplaced !== orig.isReplaced) dirtyObj.isReplaced = r.isReplaced;
         return dirtyObj;
       });
+
+      const dirtyRows = serializeMeterWorkspaceDirtyRows(rawDirtyRows);
 
       // ONE HTTP COMMAND to generate bulk bills with dirty rows atomically
       const res = await getDataProvider().billing.generateBulkBills(
@@ -1282,7 +1302,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     }
 
     // Extract dirty fields only
-    const dirtyRows = meterRows.filter(r => {
+    const rawDirtyRows = meterRows.filter(r => {
       const orig = (originalRowsRef.current || []).find(o => o.roomId === r.roomId);
       if (!orig) return true;
       return (
@@ -1308,6 +1328,8 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       if (!orig || r.isReplaced !== orig.isReplaced) dirtyObj.isReplaced = r.isReplaced;
       return dirtyObj;
     });
+
+    const dirtyRows = serializeMeterWorkspaceDirtyRows(rawDirtyRows);
 
     if (dirtyRows.length === 0) {
       showToast('บันทึกข้อมูลเรียบร้อยแล้ว (ไม่มีข้อมูลเปลี่ยนแปลง)');
