@@ -126,6 +126,8 @@ model Dormitory {
   roomBillingCycleSnapshots  RoomBillingCycleSnapshot[]
   roomNextCycleCorrections   RoomNextCycleCorrection[]
   provisionalRentalTerms     ProvisionalRentalTerm[]
+  dailyStays                 DailyStay[]
+  dailyStayInvoices          DailyStayInvoice[]
 
   @@map("dormitories")
 }
@@ -459,6 +461,7 @@ model Room {
   roomBillingCycleSnapshots RoomBillingCycleSnapshot[]
   roomNextCycleCorrections  RoomNextCycleCorrection[]
   provisionalRentalTerms    ProvisionalRentalTerm[]
+  dailyStays                DailyStay[]
 
   @@unique([dormitoryId, normalizedRoomNumber], map: "dormitory_normalized_room_number_unique")
   @@map("rooms")
@@ -502,6 +505,7 @@ model Tenant {
   settlements            ContractSettlement[]
   notices                TenantNotice[]
   provisionalRentalTerms ProvisionalRentalTerm[]
+  dailyStays             DailyStay[]
 
   @@unique([dormitoryId, tenantNumber], name: "dormitory_tenant_number_unique")
   @@map("tenants")
@@ -1017,6 +1021,7 @@ model Occupancy {
   registration           TenantRegistrationRequest? @relation(fields: [registrationId], references: [id], onDelete: SetNull)
   moveOutRequests        TenantMoveOutRequest[]
   provisionalRentalTerms ProvisionalRentalTerm[]
+  dailyStays             DailyStay[]
 
   @@index([roomId, status], name: "occupancies_room_status_idx")
   @@map("occupancies")
@@ -1798,4 +1803,90 @@ model ReferralProgramConfig {
   updatedAt            DateTime @updatedAt @map("updated_at") @db.Timestamptz()
 
   @@map("referral_program_configs")
+}
+
+// ==========================================
+// LOCAL-07 Batch 02: Daily Stay & Invoicing Domain
+// ==========================================
+
+model DailyStay {
+  id                    String    @id @default(uuid()) @db.Uuid
+  dormitoryId           String    @map("dormitory_id") @db.Uuid
+  roomId                String    @map("room_id") @db.Uuid
+  tenantId              String?   @map("tenant_id") @db.Uuid
+  occupancyId           String?   @map("occupancy_id") @db.Uuid
+  requestSource         String    @default("OWNER") @map("request_source") @db.VarChar(50) // OWNER | TENANT
+  applicantFullName     String?   @map("applicant_full_name") @db.VarChar(255)
+  applicantPhone        String?   @map("applicant_phone") @db.VarChar(50)
+  requesterUserId       String?   @map("requester_user_id") @db.Uuid
+  startDate             DateTime  @map("start_date") @db.Date
+  endDate               DateTime  @map("end_date") @db.Date
+  inclusiveDayCount     Int       @map("inclusive_day_count")
+  dailyRateAmount       Decimal   @default(0.00) @map("daily_rate_amount") @db.Decimal(12, 2)
+  totalRentAmount       Decimal   @default(0.00) @map("total_rent_amount") @db.Decimal(12, 2)
+  depositAmount         Decimal   @default(0.00) @map("deposit_amount") @db.Decimal(12, 2)
+  depositDeclaredStatus String    @default("UNPAID") @map("deposit_declared_status") @db.VarChar(50) // PAID | UNPAID
+  status                String    @default("PENDING_APPROVAL") @db.VarChar(50) // PENDING_APPROVAL | RESERVED | ACTIVE | CHECKED_OUT | COMPLETED | CANCELLED | REJECTED
+  approvedAt            DateTime? @map("approved_at") @db.Timestamptz()
+  approvedByUserId      String?   @map("approved_by_user_id") @db.Uuid
+  actualCheckedOutAt    DateTime? @map("actual_checked_out_at") @db.Timestamptz()
+  checkedOutByUserId    String?   @map("checked_out_by_user_id") @db.Uuid
+  version               Int       @default(1)
+  createdAt             DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt             DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
+  deletedAt             DateTime? @map("deleted_at") @db.Timestamptz()
+
+  dormitory Dormitory         @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
+  room      Room              @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  tenant    Tenant?           @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+  occupancy Occupancy?        @relation(fields: [occupancyId], references: [id], onDelete: SetNull)
+  invoice   DailyStayInvoice?
+
+  @@index([dormitoryId])
+  @@index([roomId])
+  @@index([tenantId])
+  @@index([dormitoryId, roomId, status])
+  @@map("daily_stays")
+}
+
+model DailyStayInvoice {
+  id                    String    @id @default(uuid()) @db.Uuid
+  dormitoryId           String    @map("dormitory_id") @db.Uuid
+  dailyStayId           String    @unique @map("daily_stay_id") @db.Uuid
+  invoiceNumber         String    @map("invoice_number") @db.VarChar(100)
+  totalRentAmount       Decimal   @default(0.00) @map("total_rent_amount") @db.Decimal(12, 2)
+  depositAmount         Decimal   @default(0.00) @map("deposit_amount") @db.Decimal(12, 2)
+  totalAgreedAmount     Decimal   @default(0.00) @map("total_agreed_amount") @db.Decimal(12, 2)
+  outstandingAmount     Decimal   @default(0.00) @map("outstanding_amount") @db.Decimal(12, 2)
+  depositDeclaredStatus String    @default("UNPAID") @map("deposit_declared_status") @db.VarChar(50) // PAID | UNPAID
+  status                String    @default("ISSUED") @db.VarChar(50) // ISSUED | CANCELLED | SETTLED
+  issuedAt              DateTime  @default(now()) @map("issued_at") @db.Timestamptz()
+  createdAt             DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt             DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
+  deletedAt             DateTime? @map("deleted_at") @db.Timestamptz()
+
+  dormitory Dormitory              @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
+  dailyStay DailyStay              @relation(fields: [dailyStayId], references: [id], onDelete: Cascade)
+  items     DailyStayInvoiceItem[]
+
+  @@unique([dormitoryId, invoiceNumber], name: "dormitory_daily_invoice_number_unique")
+  @@index([dormitoryId])
+  @@index([dailyStayId])
+  @@map("daily_stay_invoices")
+}
+
+model DailyStayInvoiceItem {
+  id          String   @id @default(uuid()) @db.Uuid
+  invoiceId   String   @map("invoice_id") @db.Uuid
+  itemType    String   @map("item_type") @db.VarChar(50) // DAILY_RENT | DEPOSIT
+  description String   @db.VarChar(255)
+  amount      Decimal  @default(0.00) @map("amount") @db.Decimal(12, 2)
+  status      String   @default("OUTSTANDING") @db.VarChar(50) // OUTSTANDING | DECLARED_PAID | SETTLED
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz()
+
+  invoice DailyStayInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId])
+  @@map("daily_stay_invoice_items")
 }

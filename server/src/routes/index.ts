@@ -48,6 +48,10 @@ import { createSettlementRouter } from './settlement.routes.js';
 import { createRequireActiveDormitoryMiddleware } from '../middleware/require-dormitory.js';
 import { createReferralRouter } from './referral.routes.js';
 import { createSubscriptionQuoteRouter } from './subscription-quote.routes.js';
+import { createDailyStayRouter } from './daily-stay.routes.js';
+import { dailyStayService } from '../services/daily-stay.service.js';
+import { createTenantClaimRouter } from './tenant-claim.routes.js';
+import { tenantClaimService } from '../services/tenant-claim.service.js';
 
 export interface AppApiDependencies {
   authService: AuthenticationService;
@@ -185,6 +189,8 @@ export function createApiRouter(deps: AppApiDependencies | AuthenticationService
     protectedRouter.use('/receipts', createReceiptRouter(fullDeps.authService));
     protectedRouter.use('/notifications', createNotificationRouter(undefined, fullDeps.authService));
 
+    router.use('/daily-stays', createDailyStayRouter(fullDeps.authService, dailyStayService));
+    router.use('/tenant-claims', createTenantClaimRouter(fullDeps.authService, tenantClaimService));
     router.use('/', protectedRouter);
     router.use('/', staffRoutes.protectedRouter);
     router.use('/', lineOaRoutes.protectedRouter);

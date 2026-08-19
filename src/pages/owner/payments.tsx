@@ -50,6 +50,7 @@ export function PaymentsOwnerView({
 
   const [payments, setPayments] = useState<PaymentRecord[]>([]);
   const [bills, setBills] = useState<Bill[]>(initialBills);
+  const [dailyInvoices, setDailyInvoices] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -110,11 +111,23 @@ export function PaymentsOwnerView({
         setError(errData.error || 'ไม่สามารถโหลดข้อมูลบิลได้');
         setBills([]);
       }
+
+      // 3. Fetch authoritative daily stay invoices from API
+      const dRes = await fetch(`/api/v1/daily-stays/invoices?dormitoryId=${dormitoryId}`, {
+        headers: { 'Accept': 'application/json' }
+      });
+      if (dRes.ok) {
+        const dData = await dRes.json();
+        setDailyInvoices(Array.isArray(dData?.data) ? dData.data : (Array.isArray(dData) ? dData : []));
+      } else {
+        setDailyInvoices([]);
+      }
     } catch (err: any) {
       console.error('Failed to load payments data:', err);
       setError('เกิดข้อผิดพลาดในการเชื่อมต่อเซิร์ฟเวอร์');
       setPayments([]);
       setBills([]);
+      setDailyInvoices([]);
     } finally {
       setLoading(false);
     }
@@ -436,31 +449,97 @@ export function PaymentsOwnerView({
 
             {/* 2. Cash Recording Tab */}
             {activeTab === 'cash' && (
-              <div className="p-6">
-                <h3 className="font-extrabold text-slate-800 mb-4 text-base">บิลที่ยังไม่ชำระ (บันทึกรับเงินสด)</h3>
-                {unpaidBills.length === 0 ? (
-                  <div className="text-center py-16 text-slate-400">
-                    <p className="font-bold text-sm">ไม่มีบิลค้างชำระ</p>
-                  </div>
-                ) : (
-                  <div className="space-y-4">
-                    {unpaidBills.map(bill => (
-                      <div key={bill.id} className="border border-slate-200 rounded-2xl p-5 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 hover:border-indigo-200 transition-all bg-white">
-                        <div className="space-y-1">
-                          <p className="font-black text-slate-900 text-base">บิลเลขที่: {bill.billNumber || bill.id.substring(0, 8)}</p>
-                          <p className="text-xs font-bold text-slate-500">
-                            ยอดเงิน: <span className="text-indigo-600 font-extrabold text-sm">{formatBaht(bill.totalAmount)}</span>
-                          </p>
+              <div className="p-6 space-y-6">
+                <div>
+                  <h3 className="font-extrabold text-slate-800 mb-4 text-base">บิลรายเดือนที่ยังไม่ชำระ (บันทึกรับเงินสด)</h3>
+                  {unpaidBills.length === 0 ? (
+                    <div className="text-center py-8 text-slate-400">
+                      <p className="font-bold text-sm">ไม่มีบิลค้างชำระ</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      {unpaidBills.map(bill => (
+                        <div key={bill.id} className="border border-slate-200 rounded-2xl p-5 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 hover:border-indigo-200 transition-all bg-white">
+                          <div className="space-y-1">
+                            <p className="font-black text-slate-900 text-base">บิลเลขที่: {bill.billNumber || bill.id.substring(0, 8)}</p>
+                            <p className="text-xs font-bold text-slate-500">
+                              ยอดเงิน: <span className="text-indigo-600 font-extrabold text-sm">{formatBaht(bill.totalAmount)}</span>
+                            </p>
+                          </div>
+                          <button
+                            disabled={actionLoading !== null}
+                            onClick={() => handleRecordCash(bill)}
+                            className="bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2.5 rounded-xl text-xs font-black shadow-xs transition-all active:scale-95 disabled:opacity-50"
+                          >
+                            {actionLoading === bill.id ? 'กำลังบันทึก...' : 'รับเงินสด'}
+                          </button>
                         </div>
-                        <button
-                          disabled={actionLoading !== null}
-                          onClick={() => handleRecordCash(bill)}
-                          className="bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2.5 rounded-xl text-xs font-black shadow-xs transition-all active:scale-95 disabled:opacity-50"
-                        >
-                          {actionLoading === bill.id ? 'กำลังบันทึก...' : 'รับเงินสด'}
-                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Daily Stay Invoices (Presentation Only - LOCAL-07 Batch 02) */}
+                {dailyInvoices.length > 0 && (
+                  <div className="pt-6 border-t border-slate-200 space-y-4">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <span className="px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-amber-100 text-amber-800 border border-amber-200">
+                          รายวัน
+                        </span>
+                        <h3 className="font-extrabold text-slate-800 text-base">
+                          ใบแจ้งหนี้ห้องพักรายวัน ({dailyInvoices.length})
+                        </h3>
                       </div>
-                    ))}
+                      <span className="text-xs text-slate-400 font-medium">แสดงยอดตามข้อตกลงและยอดค้างชำระ</span>
+                    </div>
+
+                    <div className="space-y-3">
+                      {dailyInvoices.map((inv: any) => (
+                        <div
+                          key={inv.id}
+                          className="border border-amber-200/80 bg-amber-50/30 rounded-2xl p-5 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 hover:border-amber-300 transition-all"
+                        >
+                          <div className="space-y-1.5 flex-1">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="font-black text-slate-900 text-base">
+                                ใบแจ้งหนี้: {inv.invoiceNumber}
+                              </span>
+                              <span className="px-2.5 py-0.5 rounded-full text-[11px] font-extrabold bg-amber-100 text-amber-800 border border-amber-200">
+                                รายวัน
+                              </span>
+                              <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold ${
+                                inv.depositDeclaredStatus === 'PAID'
+                                  ? 'bg-emerald-100 text-emerald-800'
+                                  : 'bg-slate-100 text-slate-700'
+                              }`}>
+                                มัดจำ: {inv.depositDeclaredStatus === 'PAID' ? 'จ่ายแล้ว (แจ้งไว้)' : 'ยังไม่จ่าย'}
+                              </span>
+                            </div>
+
+                            <p className="text-xs font-bold text-slate-600">
+                              ห้อง: <span className="text-indigo-600 font-extrabold">{inv.dailyStay?.room?.roomNumber || '-'}</span> • ผู้พัก: <span className="text-slate-800 font-extrabold">{inv.dailyStay?.tenant?.displayName || inv.dailyStay?.applicantFullName || '-'}</span>
+                              {inv.dailyStay && (
+                                <span className="text-slate-500 font-normal ml-2">
+                                  (วันที่ {inv.dailyStay.startDate?.slice(0, 10)} ถึง {inv.dailyStay.endDate?.slice(0, 10)} รวม {inv.dailyStay.inclusiveDayCount} วัน)
+                                </span>
+                              )}
+                            </p>
+
+                            <div className="flex items-center gap-4 text-xs font-semibold text-slate-600 pt-1 flex-wrap">
+                              <span>ค่าเช่ารายวัน: <strong className="text-slate-800">{formatBaht(Number(inv.totalRentAmount))}</strong></span>
+                              <span>เงินประกัน/มัดจำ: <strong className="text-slate-800">{formatBaht(Number(inv.depositAmount))}</strong></span>
+                              <span>ยอดตามข้อตกลง: <strong className="text-amber-900">{formatBaht(Number(inv.totalAgreedAmount))}</strong></span>
+                            </div>
+                          </div>
+
+                          <div className="text-right shrink-0">
+                            <span className="text-[11px] font-bold text-slate-500 block">ยอดคงเหลือที่ต้องชำระ</span>
+                            <span className="text-lg font-black text-indigo-700">{formatBaht(Number(inv.outstandingAmount))}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 )}
               </div>

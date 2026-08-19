@@ -113,8 +113,12 @@ export class CleanupService {
 
         const { provisionalRentalTermService } = await import('./provisional-rental-term.service.js');
         await provisionalRentalTermService.activateScheduledProvisionalTerms(undefined, new Date(), 'system-scheduled-job');
+
+        const { dailyStayService } = await import('./daily-stay.service.js');
+        await dailyStayService.activateScheduledDailyStays(undefined, new Date(), 'system-scheduled-job');
+        await dailyStayService.completeEndedDailyStays(undefined, new Date(), 'system-scheduled-job');
       } catch (err) {
-        console.error('[CleanupService] Error during automatic scheduled contract/provisional activation', err);
+        console.error('[CleanupService] Error during automatic scheduled contract/provisional/daily activation', err);
       }
 
       // Phase 5: Outbox Event Reconciliation & Dispatch

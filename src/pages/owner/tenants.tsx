@@ -42,6 +42,8 @@ import {
   rejectTenantRegistrationRequest,
   updateTenantRegistrationRoom,
 } from '../../data/adapters/api';
+import { httpRequest } from '../../data/httpClient';
+import { DailyStayApprovalModal } from '../../components/DailyStayApprovalModal';
 export const getDormitory = (): any => null;
 import { convertImageToWebP, UPLOAD_DROPZONE_TEXT } from '../../utils/imageUtils';
 
@@ -171,8 +173,11 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
 
   // Registration requests & co-occupants state
   const [regRequests, setRegRequests] = useState<any[]>([]);
+  const [dailyRequests, setDailyRequests] = useState<any[]>([]);
   const [isRegModalOpen, setIsRegModalOpen] = useState(false);
   const [selectedRegReq, setSelectedRegReq] = useState<any | null>(null);
+  const [selectedDailyStayForApproval, setSelectedDailyStayForApproval] = useState<any | null>(null);
+  const [isDailyApprovalModalOpen, setIsDailyApprovalModalOpen] = useState(false);
 
   // Reject modal state
   const [isRejectModalOpen, setIsRejectModalOpen] = useState(false);
@@ -193,19 +198,35 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
   const [newCoPhone, setNewCoPhone] = useState('');
   const [newCoRelation, setNewCoRelation] = useState('ผู้ร่วมพัก');
 
+  const resolvedDormId = rooms[0]?.dormitoryId || tenants[0]?.dormitoryId || (typeof window !== 'undefined' ? localStorage.getItem('selected_dormitory_id') || localStorage.getItem('horplus_current_dormitory_id') : '') || '';
+
   const fetchRegRequests = async () => {
     try {
+      // 1. Monthly & Term registration requests
       const res = await getTenantRegistrationRequests();
       if (res.success && res.data) {
         const list = Array.isArray(res.data) ? res.data : (res.data as any).data || [];
         setRegRequests(list);
       }
     } catch {}
+
+    try {
+      // 2. Daily stay requests pending approval
+      if (resolvedDormId) {
+        const dailyRes: any = await httpRequest<any>('GET', '/api/v1/daily-stays?status=PENDING_APPROVAL', undefined, {
+          headers: { 'x-dormitory-id': resolvedDormId },
+        });
+        const dList = Array.isArray(dailyRes?.data) ? dailyRes.data : Array.isArray(dailyRes) ? dailyRes : [];
+        setDailyRequests(dList);
+      }
+    } catch {
+      setDailyRequests([]);
+    }
   };
 
   React.useEffect(() => {
     fetchRegRequests();
-  }, []);
+  }, [resolvedDormId]);
 
   const [replacementWarningData, setReplacementWarningData] = useState<any>(null);
 
@@ -832,13 +853,13 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                 setIsRegModalOpen(true);
               }}
               className="relative flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-xs font-bold transition-all cursor-pointer shadow-xs shrink-0"
-              title="คำขอลงทะเบียนรออนุมัติ"
+              title="รายการคำขอเช่ารออนุมัติ (รายเทอม, รายเดือน, รายวัน)"
             >
               <Clock className="w-4 h-4" />
-              <span>คำขอลงทะเบียน</span>
-              {regRequests.filter(r => r.status === 'pending_owner_approval').length > 0 && (
+              <span>คำขอรออนุมัติ</span>
+              {(regRequests.filter(r => r.status === 'pending_owner_approval').length + dailyRequests.filter(r => r.status === 'PENDING_APPROVAL').length) > 0 && (
                 <span className="ml-1 px-1.5 py-0.5 bg-white text-amber-800 rounded-full text-[10px] font-black">
-                  {regRequests.filter(r => r.status === 'pending_owner_approval').length}
+                  {regRequests.filter(r => r.status === 'pending_owner_approval').length + dailyRequests.filter(r => r.status === 'PENDING_APPROVAL').length}
                 </span>
               )}
             </button>
@@ -2387,16 +2408,18 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
         </div>
       </Modal>
 
-      {/* Modal: Registration Requests List */}
+      {/* Modal: Unified Pending Tenant Approval Requests List */}
       <Modal
         isOpen={isRegModalOpen}
         onClose={() => setIsRegModalOpen(false)}
-        title="รายการคำขอลงทะเบียนสมัครเช่าห้องพัก (Local Registration Requests)"
+        title="รายการคำขอเช่าห้องพักรออนุมัติ (Unified Tenant Approval Requests)"
         maxWidth="max-w-2xl"
       >
         <div className="space-y-4">
           <div className="flex justify-between items-center pb-2 border-b border-gray-100">
-            <span className="text-xs text-slate-500">คำขอทั้งหมด ({regRequests.length} รายการ)</span>
+            <span className="text-xs text-slate-500">
+              คำขอทั้งหมด ({regRequests.length + dailyRequests.length} รายการ: รายเดือน/เทอม {regRequests.length}, รายวัน {dailyRequests.length})
+            </span>
             <button
               type="button"
               onClick={fetchRegRequests}
@@ -2406,8 +2429,69 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
             </button>
           </div>
 
-          {regRequests.length > 0 ? (
+          {(regRequests.length > 0 || dailyRequests.length > 0) ? (
             <div className="space-y-3 max-h-96 overflow-y-auto pr-1">
+              {/* 1. Daily Stay Requests */}
+              {dailyRequests.map((dReq) => {
+                const reqRoom = rooms.find((r) => r.id === dReq.roomId || r.roomNumber === dReq.room?.roomNumber);
+
+                return (
+                  <div
+                    key={dReq.id}
+                    className="p-4 border rounded-2xl space-y-2 bg-amber-50/40 border-amber-200"
+                  >
+                    <div className="flex justify-between items-start">
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <h4 className="font-bold text-slate-900 text-sm">
+                            {dReq.applicantFullName || dReq.tenant?.displayName || 'ผู้เข้าพักรายวัน'}
+                          </h4>
+                          <span className="px-2 py-0.5 text-[10px] font-black rounded-md bg-amber-100 text-amber-800 border border-amber-300">
+                            รายวัน
+                          </span>
+                          <span className={`px-2 py-0.5 text-[10px] font-bold rounded-md ${
+                            dReq.depositDeclaredStatus === 'PAID' ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-700'
+                          }`}>
+                            มัดจำ: {dReq.depositDeclaredStatus === 'PAID' ? 'จ่ายแล้ว (แจ้งไว้)' : 'ยังไม่จ่าย'}
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-600">
+                          เบอร์โทร: <span className="font-mono font-semibold">{dReq.applicantPhone || dReq.tenant?.phone || '-'}</span>
+                        </p>
+                        <p className="text-xs text-slate-600">
+                          ห้องที่ขอ: <span className="font-bold text-indigo-700">{reqRoom ? `ห้อง ${reqRoom.roomNumber}` : dReq.room?.roomNumber || dReq.roomId}</span>
+                        </p>
+                        <p className="text-xs text-slate-600">
+                          ช่วงวันที่: <span className="font-semibold">{dReq.startDate?.slice(0, 10)} ถึง {dReq.endDate?.slice(0, 10)}</span> ({dReq.inclusiveDayCount} วัน)
+                        </p>
+                        <div className="flex items-center gap-3 text-xs font-semibold text-slate-600 pt-1 flex-wrap">
+                          <span>ค่าเช่ารายวัน: <strong>{formatBaht(Number(dReq.totalRentAmount))}</strong></span>
+                          <span>เงินประกัน: <strong>{formatBaht(Number(dReq.depositAmount))}</strong></span>
+                          <span>ยอดตามข้อตกลง: <strong className="text-amber-900">{formatBaht(Number(dReq.totalRentAmount) + Number(dReq.depositAmount))}</strong></span>
+                        </div>
+                      </div>
+                      <span className="px-2.5 py-1 text-[10px] font-black rounded-lg uppercase bg-amber-100 text-amber-800 border border-amber-300">
+                        รออนุมัติ
+                      </span>
+                    </div>
+
+                    <div className="flex justify-end gap-2 pt-2 border-t border-amber-200/60">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedDailyStayForApproval(dReq);
+                          setIsDailyApprovalModalOpen(true);
+                        }}
+                        className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl shadow-xs flex items-center gap-1"
+                      >
+                        ตรวจสอบ / แก้ไข / อนุมัติ
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+
+              {/* 2. Monthly & Term Registration Requests */}
               {regRequests.map((req) => {
                 const reqRoom = rooms.find((r) => r.id === req.requestedRoomId || r.roomNumber === req.requestedRoomId);
                 const isOccupied = reqRoom?.status === 'occupied';
@@ -2417,17 +2501,22 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                     key={req.id}
                     className={`p-4 border rounded-2xl space-y-2 transition-all ${
                       req.status === 'pending_owner_approval'
-                        ? 'bg-amber-50/50 border-amber-200'
+                        ? 'bg-blue-50/40 border-blue-200'
                         : req.status === 'approved'
                         ? 'bg-emerald-50/30 border-emerald-200'
                         : 'bg-rose-50/30 border-rose-200'
                     }`}
                   >
                     <div className="flex justify-between items-start">
-                      <div>
-                        <h4 className="font-bold text-slate-900 text-sm">
-                          {req.firstName} {req.lastName}
-                        </h4>
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <h4 className="font-bold text-slate-900 text-sm">
+                            {req.firstName} {req.lastName}
+                          </h4>
+                          <span className="px-2 py-0.5 text-[10px] font-black rounded-md bg-blue-100 text-blue-800 border border-blue-300">
+                            รายเดือน / รายเทอม
+                          </span>
+                        </div>
                         <p className="text-xs text-slate-600">
                           เบอร์โทร: <span className="font-mono font-semibold">{req.phone}</span>
                         </p>
@@ -2504,10 +2593,27 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
               })}
             </div>
           ) : (
-            <p className="text-center text-xs text-gray-400 py-8 italic">ยังไม่มีคำขอลงทะเบียนในระบบ</p>
+            <p className="text-center text-xs text-gray-400 py-8 italic">ยังไม่มีคำขอเช่าห้องพักในระบบ</p>
           )}
         </div>
       </Modal>
+
+      {/* Daily Stay Approval Modal (Launched from Unified Approval Workspace) */}
+      <DailyStayApprovalModal
+        isOpen={isDailyApprovalModalOpen}
+        onClose={() => {
+          setIsDailyApprovalModalOpen(false);
+          setSelectedDailyStayForApproval(null);
+        }}
+        stay={selectedDailyStayForApproval}
+        dormitoryId={resolvedDormId}
+        onSuccess={(msg) => {
+          fetchRegRequests();
+          if (typeof window !== 'undefined') {
+            alert(msg);
+          }
+        }}
+      />
 
       {/* Modal: Reassign Room for Registration Request */}
       <Modal

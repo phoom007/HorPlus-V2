@@ -34,6 +34,7 @@ import { httpRequest } from '../../data/httpClient';
 import { formatBaht, Modal } from '../../components/GlobalComponents';
 
 import { LineNotificationModal } from '../../components/LineNotificationModal';
+import { QuickAddTenantModal } from '../../components/QuickAddTenantModal';
 import {
   serializeMeterWorkspaceDirtyRow,
   serializeMeterWorkspaceDirtyRows,
@@ -157,6 +158,8 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   const [isQuickFillOpen, setIsQuickFillOpen] = useState(false);
   const [quickFillText, setQuickFillText] = useState('');
   const [templateUsed, setTemplateUsed] = useState(false);
+  const [quickAddModalOpen, setQuickAddModalOpen] = useState(false);
+  const [selectedQuickAddRoom, setSelectedQuickAddRoom] = useState<Room | null>(null);
   const [allowEditAllElecPrev, setAllowEditAllElecPrev] = useState(false);
   const [allowEditAllWaterPrev, setAllowEditAllWaterPrev] = useState(false);
   const [flashingCells, setFlashingCells] = useState<{ [key: string]: boolean }>({});
@@ -1893,6 +1896,18 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                           <span className="truncate max-w-[100px]">{tenant.name}</span>
                           <ArrowRight className="w-3 h-3 opacity-60" />
                         </button>
+                      ) : row.isOperational ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedQuickAddRoom(row.room);
+                            setQuickAddModalOpen(true);
+                          }}
+                          className="inline-flex items-center gap-1 text-[11px] font-bold text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 px-2 py-1 rounded-lg border border-indigo-200 transition-all cursor-pointer shadow-2xs"
+                        >
+                          <Plus className="w-3 h-3" />
+                          <span>เพิ่มผู้เช่า</span>
+                        </button>
                       ) : (
                         <span className="text-gray-400">ไม่มีข้อมูล</span>
                       )}
@@ -2103,6 +2118,21 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
         onSaveBills={onSaveBills}
         onAddLog={onAddLog}
         onShowToast={showToast}
+      />
+
+      {/* Quick Add Tenant Modal (3 Types: TERM, MONTHLY, DAILY) */}
+      <QuickAddTenantModal
+        isOpen={quickAddModalOpen}
+        onClose={() => {
+          setQuickAddModalOpen(false);
+          setSelectedQuickAddRoom(null);
+        }}
+        room={selectedQuickAddRoom}
+        dormitoryId={selectedQuickAddRoom?.dormitoryId || rooms[0]?.dormitoryId || localStorage.getItem('horplus_current_dormitory_id') || localStorage.getItem('selected_dormitory_id') || ''}
+        onSuccess={(msg) => {
+          showToast(msg);
+          onRefetchData?.();
+        }}
       />
     </div>
   );
