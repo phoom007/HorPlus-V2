@@ -12,6 +12,8 @@ import { IBillRepository, PrismaBillRepository } from '../db/repositories/bill.r
 import { AuditService } from './audit.service.js';
 import { billingOrchestrationService } from './billing-orchestration.service.js';
 import { ENTITLEMENT_ROOM_LIMITS } from './entitlement.service.js';
+import { subscriptionEntitlementService } from './subscription-entitlement.service.js';
+import { AppError } from '../types/index.js';
 import { getPrismaClient } from '../db/prisma.js';
 import { toDecimal, formatDecimal, compareDecimals } from '../utils/decimal-math.util.js';
 
@@ -471,6 +473,14 @@ export class MeterService {
     rateSnapshot?: any,
     isFirstCycle?: boolean
   ): Promise<void> {
+    // 0. Assert room operational entitlement before saving workspace state
+    await subscriptionEntitlementService.assertRoomOperationalEntitlement(
+      dormitoryId,
+      row.roomId,
+      new Date(),
+      tx
+    );
+
     const prisma = getPrismaClient();
     const client = tx || prisma;
 
@@ -609,14 +619,14 @@ export class MeterService {
         const currVal = Number(row.elecCurr);
 
         if (isNaN(prevVal) || isNaN(currVal) || prevVal < 0 || currVal < 0) {
-          const err = new Error(`ค่ามิเตอร์ไฟฟ้าต้องเป็นตัวเลขที่มากกว่าหรือเท่ากับ 0`);
+          const err = new Error(`ค่ามิเตอร์ไฟต้องเป็นตัวเลขที่มากกว่าหรือเท่ากับ 0`);
           (err as any).statusCode = 400;
           (err as any).code = 'INVALID_METER_READING';
           throw err;
         }
 
         if (currVal < prevVal) {
-          const err = new Error(`ค่ามิเตอร์ไฟฟ้าปัจจุบัน (${currVal}) ต้องไม่น้อยกว่าค่ามิเตอร์เดิม (${prevVal})`);
+          const err = new Error(`ค่ามิเตอร์ไฟปัจจุบัน (${currVal}) ต้องไม่น้อยกว่าค่ามิเตอร์เดิม (${prevVal})`);
           (err as any).statusCode = 400;
           (err as any).code = 'INVALID_METER_READING';
           throw err;
@@ -779,6 +789,23 @@ export class MeterService {
     const isFirstCycle = earliest ? earliest.id === data.billingCycleId : false;
 
     return this.meterRepo.withTransaction(async (tx) => {
+      // 0. Assert batch operational room entitlement upfront (O(1) in-memory check per row)
+      const entitlementSet = await subscriptionEntitlementService.resolveOperationalRoomEntitlementSet(
+        dormitoryId,
+        new Date(),
+        tx
+      );
+
+      for (const row of data.rows) {
+        if (entitlementSet.lockedRoomIds.has(row.roomId)) {
+          throw new AppError(
+            `ห้องพักนี้เกินสิทธิ์การใช้งานของแพ็กเกจฟรี (จำกัด ${entitlementSet.roomLimit} ห้องที่เปิดใช้งานพร้อมกัน) กรุณาอัปเกรดแพ็กเกจเพื่อเปิดใช้งานห้องนี้`,
+            403,
+            'ROOM_ENTITLEMENT_LOCKED'
+          );
+        }
+      }
+
       const sortedRoomIds = [...new Set(data.rows.map((r) => r.roomId))].sort();
       for (const roomId of sortedRoomIds) {
         await this.meterRepo.executeRawLock(roomId, tx);
@@ -838,6 +865,14 @@ export class MeterService {
     if (data.action === 'issue') {
       return this.meterRepo.withTransaction(async (tx) => {
         await this.meterRepo.executeRawLock(data.roomId, tx);
+
+        // 0. Assert room operational entitlement before any mutation/issue
+        await subscriptionEntitlementService.assertRoomOperationalEntitlement(
+          dormitoryId,
+          data.roomId,
+          new Date(),
+          tx
+        );
 
         // 1. Save dirty workspace row if present within this transaction
         if (data.dirtyRow) {

@@ -39,6 +39,14 @@ export interface EffectiveEntitlements {
   reason?: string;
 }
 
+export interface OperationalRoomEntitlementSet {
+  roomLimit: number;
+  operationalRoomIds: Set<string>;
+  lockedRoomIds: Set<string>;
+  planCode: string;
+  isReadOnly: boolean;
+}
+
 export class SubscriptionEntitlementService {
   private db: PrismaClient;
 
@@ -170,7 +178,43 @@ export class SubscriptionEntitlementService {
    */
   async getEffectiveEntitlements(dormitoryId: string, now: Date = new Date(), txClient?: any): Promise<EffectiveEntitlements> {
     const db = txClient || this.db;
-    const sub = await this.getCurrentSubscription(dormitoryId, db);
+    let sub: any = null;
+    try {
+      sub = await this.getCurrentSubscription(dormitoryId, db);
+    } catch {
+      // Fallback to canonical FREE plan for dormitories without an explicit subscription record
+    }
+
+    if (!sub) {
+      const freePlan = await db.subscriptionPlan.findUnique({ where: { code: 'FREE' } });
+      const roomLimit = freePlan?.roomLimit || 10;
+      const roomCount = await db.room.count({
+        where: {
+          dormitoryId,
+          status: { not: 'archived' },
+        },
+      });
+
+      return {
+        dormitoryId,
+        plan: {
+          code: 'FREE',
+          name: freePlan?.name || 'HorPlus Free',
+          type: 'FREE',
+          roomLimit,
+        },
+        status: 'ACTIVE',
+        isActive: true,
+        isReadOnly: false,
+        isOverLimit: false,
+        roomCount,
+        roomLimit,
+        remainingRooms: Math.max(0, roomLimit - roomCount),
+        remainingDays: null,
+        expiresAt: new Date(Date.now() + 365 * 24 * 3600 * 1000),
+        promoRedeemed: false,
+      };
+    }
 
     const isFreePlan = sub.plan.type === 'FREE' || sub.plan.code === 'FREE';
     const isExpiredByTime = !isFreePlan && sub.expiresAt.getTime() <= now.getTime();
@@ -385,17 +429,19 @@ export class SubscriptionEntitlementService {
   }
 
   /**
-   * Assert operational entitlement for a specific room.
-   * Under FREE tier, the first 10 non-archived rooms (by createdAt ASC, id ASC) are operational.
-   * Rooms #11+ cannot perform operational actions (assigning tenant, active contracts, billing, meters).
+   * Bounded batch authority to resolve operational vs locked rooms for a dormitory.
+   * - FREE tier: first 10 non-archived rooms (by createdAt ASC, id ASC) are operational, 11+ are locked.
+   * - PAID tier: up to 150 non-archived rooms are operational.
+   * - Bounded by canonical provisioning ceiling (150).
    */
-  async assertRoomOperationalEntitlement(dormitoryId: string, roomId: string, now: Date = new Date(), txClient?: any): Promise<void> {
+  async resolveOperationalRoomEntitlementSet(
+    dormitoryId: string,
+    now: Date = new Date(),
+    txClient?: any
+  ): Promise<OperationalRoomEntitlementSet> {
     const db = txClient || this.db;
-    await this.assertDormitoryWritable(dormitoryId, now, db);
     const entitlement = await this.getEffectiveEntitlements(dormitoryId, now, db);
     const roomLimit = entitlement.roomLimit; // 10 for FREE, 150 for PAID
-
-    if (!roomLimit || roomLimit >= 1000) return;
 
     const eligibleRooms = await db.room.findMany({
       where: {
@@ -407,16 +453,42 @@ export class SubscriptionEntitlementService {
         { id: 'asc' },
       ],
       select: { id: true },
+      take: 150, // bounded by canonical provisioning ceiling
     });
 
-    const roomIndex = eligibleRooms.findIndex((r: any) => r.id === roomId);
-    if (roomIndex === -1) {
-      return; // Room might not exist or is archived
-    }
+    const operationalRoomIds = new Set<string>();
+    const lockedRoomIds = new Set<string>();
 
-    if (roomIndex >= roomLimit) {
+    eligibleRooms.forEach((r: { id: string }, index: number) => {
+      if (index < roomLimit) {
+        operationalRoomIds.add(r.id);
+      } else {
+        lockedRoomIds.add(r.id);
+      }
+    });
+
+    return {
+      roomLimit,
+      operationalRoomIds,
+      lockedRoomIds,
+      planCode: entitlement.plan.code,
+      isReadOnly: entitlement.isReadOnly,
+    };
+  }
+
+  /**
+   * Assert operational entitlement for a specific room.
+   * Under FREE tier, the first 10 non-archived rooms (by createdAt ASC, id ASC) are operational.
+   * Rooms #11+ cannot perform operational actions (assigning tenant, active contracts, billing, meters).
+   */
+  async assertRoomOperationalEntitlement(dormitoryId: string, roomId: string, now: Date = new Date(), txClient?: any): Promise<void> {
+    const db = txClient || this.db;
+    await this.assertDormitoryWritable(dormitoryId, now, db);
+    const set = await this.resolveOperationalRoomEntitlementSet(dormitoryId, now, db);
+
+    if (set.lockedRoomIds.has(roomId)) {
       throw new AppError(
-        `ห้องพักนี้เกินสิทธิ์การใช้งานของแพ็กเกจฟรี (จำกัด ${roomLimit} ห้องที่เปิดใช้งานพร้อมกัน) กรุณาอัปเกรดแพ็กเกจเพื่อเปิดใช้งานห้องนี้`,
+        `ห้องพักนี้เกินสิทธิ์การใช้งานของแพ็กเกจฟรี (จำกัด ${set.roomLimit} ห้องที่เปิดใช้งานพร้อมกัน) กรุณาอัปเกรดแพ็กเกจเพื่อเปิดใช้งานห้องนี้`,
         403,
         'ROOM_ENTITLEMENT_LOCKED'
       );

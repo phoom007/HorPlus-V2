@@ -40,6 +40,8 @@ import request from 'supertest';
 import express from 'express';
 import { cookieParserMiddleware } from '../../middleware/cookie-parser.middleware.js';
 import { createMeterRouter } from '../../routes/meter.routes.js';
+import { createBillingRouter } from '../../routes/billing.routes.js';
+import { SubscriptionEntitlementService } from '../../services/subscription-entitlement.service.js';
 import crypto from 'crypto';
 
 describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite', () => {
@@ -98,6 +100,9 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
         },
       },
     });
+
+    const entService = new SubscriptionEntitlementService();
+    await entService.provisionInitialTrial(testDormitoryId);
 
     // Create Building
     const building = await prisma.building.create({
@@ -268,6 +273,7 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
       next();
     });
     testApp.use('/api/v1/meters', createMeterRouter(mockAuthService, meterService, billingService));
+    testApp.use('/api/v1/bills', createBillingRouter(mockAuthService, billingService));
   });
 
   afterAll(async () => {
@@ -284,6 +290,8 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
     await prisma.billingCycle.deleteMany({ where: { dormitoryId: testDormitoryId } });
     await prisma.room.deleteMany({ where: { dormitoryId: testDormitoryId } });
     await prisma.building.deleteMany({ where: { dormitoryId: testDormitoryId } });
+    await prisma.subscriptionStatusHistory.deleteMany({ where: { dormitoryId: testDormitoryId } });
+    await prisma.dormitorySubscription.deleteMany({ where: { dormitoryId: testDormitoryId } });
     await prisma.dormitoryBillingSettings.deleteMany({ where: { dormitoryId: testDormitoryId } });
     await prisma.dormitory.deleteMany({ where: { id: testDormitoryId } });
   });
@@ -1588,6 +1596,9 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
       },
     });
 
+    const entService = new SubscriptionEntitlementService();
+    await entService.provisionInitialTrial(dorm150Id);
+
     // 2. Create Billing Cycles (Cycle 1: June 2026, Cycle 2: July 2026)
     const cycle1_150 = await prisma.billingCycle.create({
       data: {
@@ -1599,6 +1610,24 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
         billingDate: new Date('2026-06-30T00:00:00Z'),
         dueDate: new Date('2026-07-05T00:00:00Z'),
         status: 'draft',
+        rateSnapshot: {
+          create: {
+            dormitoryId: dorm150Id,
+            waterBillingType: 'per_unit',
+            waterRate: toDecimal('18.00'),
+            electricityBillingType: 'per_unit',
+            electricityRate: toDecimal('8.00'),
+            commonFee: toDecimal('200.00'),
+            commonFeeMode: 'per_room',
+            internetFee: toDecimal('0.00'),
+            internetFeeMode: 'flat',
+            parkingFee: toDecimal('0.00'),
+            parkingFeeMode: 'flat',
+            lateFeeType: 'flat',
+            lateFeeValue: toDecimal('0.00'),
+            source: 'TEMPLATE_DEFAULT',
+          },
+        },
       },
     });
 
@@ -1612,6 +1641,24 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
         billingDate: new Date('2026-07-31T00:00:00Z'),
         dueDate: new Date('2026-08-05T00:00:00Z'),
         status: 'draft',
+        rateSnapshot: {
+          create: {
+            dormitoryId: dorm150Id,
+            waterBillingType: 'per_unit',
+            waterRate: toDecimal('18.00'),
+            electricityBillingType: 'per_unit',
+            electricityRate: toDecimal('8.00'),
+            commonFee: toDecimal('200.00'),
+            commonFeeMode: 'per_room',
+            internetFee: toDecimal('0.00'),
+            internetFeeMode: 'flat',
+            parkingFee: toDecimal('0.00'),
+            parkingFeeMode: 'flat',
+            lateFeeType: 'flat',
+            lateFeeValue: toDecimal('0.00'),
+            source: 'TEMPLATE_DEFAULT',
+          },
+        },
       },
     });
 
@@ -1763,8 +1810,461 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
       await prisma.room.deleteMany({ where: { dormitoryId: dorm150Id } });
       await prisma.billingCycle.deleteMany({ where: { dormitoryId: dorm150Id } });
       await prisma.building.deleteMany({ where: { dormitoryId: dorm150Id } });
+      await prisma.subscriptionStatusHistory.deleteMany({ where: { dormitoryId: dorm150Id } });
+      await prisma.dormitorySubscription.deleteMany({ where: { dormitoryId: dorm150Id } });
       await prisma.dormitoryBillingSettings.deleteMany({ where: { dormitoryId: dorm150Id } });
       await prisma.dormitory.deleteMany({ where: { id: dorm150Id } });
+    }
+  });
+
+  it('22. FREE Dormitory Operational Entitlement Boundary: allows rooms 1-10, strictly locks rooms 11+ on single bill issue, meter switch, workspace save, and bulk issue', async () => {
+    // 1. Create a dedicated disposable FREE dormitory (no active subscription -> defaults to FREE, limit = 10)
+    const freeDormId = crypto.randomUUID();
+    const suffixFree = crypto.randomBytes(4).toString('hex');
+    await prisma.dormitory.create({
+      data: {
+        id: freeDormId,
+        name: `Free Entitlement Dorm ${suffixFree}`,
+        code: `FREE-${suffixFree.toUpperCase()}`,
+        billingSettings: {
+          create: {
+            waterBillingType: 'per_unit',
+            waterRate: toDecimal('18.00'),
+            electricityBillingType: 'per_unit',
+            electricityRate: toDecimal('8.00'),
+            commonFee: toDecimal('200.00'),
+            billingDay: 1,
+            dueDay: 5,
+          },
+        },
+      },
+    });
+
+    const bldFree = await prisma.building.create({
+      data: {
+        dormitoryId: freeDormId,
+        name: 'Building Free',
+      },
+    });
+
+    const cycleFree = await prisma.billingCycle.create({
+      data: {
+        dormitoryId: freeDormId,
+        cycleCode: '2026-08',
+        name: 'สิงหาคม 2026',
+        periodStart: new Date('2026-08-01T00:00:00Z'),
+        periodEnd: new Date('2026-08-31T23:59:59Z'),
+        billingDate: new Date('2026-08-31T00:00:00Z'),
+        dueDate: new Date('2026-09-05T00:00:00Z'),
+        status: 'draft',
+        rateSnapshot: {
+          create: {
+            dormitoryId: freeDormId,
+            waterBillingType: 'per_unit',
+            waterRate: toDecimal('18.00'),
+            electricityBillingType: 'per_unit',
+            electricityRate: toDecimal('8.00'),
+            commonFee: toDecimal('200.00'),
+            commonFeeMode: 'per_room',
+            internetFee: toDecimal('0.00'),
+            internetFeeMode: 'flat',
+            parkingFee: toDecimal('0.00'),
+            parkingFeeMode: 'flat',
+            lateFeeType: 'flat',
+            lateFeeValue: toDecimal('0.00'),
+            source: 'TEMPLATE_DEFAULT',
+          },
+        },
+      },
+    });
+
+    // 2. Create 12 provisioned rooms (R-01 to R-12)
+    const createdRooms = [];
+    for (let i = 1; i <= 12; i++) {
+      const roomNum = `FR-${String(i).padStart(2, '0')}`;
+      const r = await prisma.room.create({
+        data: {
+          dormitoryId: freeDormId,
+          buildingId: bldFree.id,
+          roomNumber: roomNum,
+          normalizedRoomNumber: roomNum,
+          roomType: 'standard',
+          floor: 1,
+          monthlyRent: toDecimal('3500.00'),
+          status: 'vacant',
+        },
+      });
+      createdRooms.push(r);
+    }
+
+    const r1 = createdRooms[0];   // Room 1 (Allowed)
+    const r10 = createdRooms[9];  // Room 10 (Allowed)
+    const r11 = createdRooms[10]; // Room 11 (Locked)
+    const r12 = createdRooms[11]; // Room 12 (Locked)
+
+    // Set up active tenants + contracts for Room 1, 10, 11, 12
+    for (const targetRoom of [r1, r10, r11, r12]) {
+      const tenant = await prisma.tenant.create({
+        data: {
+          dormitoryId: freeDormId,
+          tenantNumber: `T-${targetRoom.roomNumber}-${Date.now()}`,
+          firstName: `Tenant-${targetRoom.roomNumber}`,
+          displayName: `Tenant ${targetRoom.roomNumber}`,
+          status: 'active',
+        },
+      });
+      await prisma.contract.create({
+        data: {
+          dormitoryId: freeDormId,
+          roomId: targetRoom.id,
+          tenantId: tenant.id,
+          contractNumber: `CTR-${targetRoom.roomNumber}-${Date.now()}`,
+          status: 'active',
+          startDate: cycleFree.periodStart,
+          endDate: cycleFree.periodEnd,
+          rentAmount: toDecimal('3500.00'),
+        },
+      });
+    }
+
+    try {
+      // 3. Test Room 1: Meter switch OFF -> ON (with dirty readings) -> Allowed
+      const switchR1 = await meterService.toggleRoomBillSwitch(
+        freeDormId,
+        {
+          billingCycleId: cycleFree.id,
+          roomId: r1.id,
+          action: 'issue',
+          dirtyRow: { roomId: r1.id, waterCurr: '100.00', elecCurr: '200.00' },
+        },
+        'user-owner-1',
+        billingService
+      );
+      expect(switchR1.action).toBe('issue');
+      expect((switchR1 as any).created).toBe(true);
+      expect(switchR1.bill).toBeDefined();
+
+      // 4. Test Room 10: Meter switch OFF -> ON (with dirty readings) -> Allowed
+      const switchR10 = await meterService.toggleRoomBillSwitch(
+        freeDormId,
+        {
+          billingCycleId: cycleFree.id,
+          roomId: r10.id,
+          action: 'issue',
+          dirtyRow: { roomId: r10.id, waterCurr: '110.00', elecCurr: '210.00' },
+        },
+        'user-owner-1',
+        billingService
+      );
+      expect(switchR10.action).toBe('issue');
+      expect((switchR10 as any).created).toBe(true);
+      expect(switchR10.bill).toBeDefined();
+
+      // 5. Test Room 11: Single Bill Generation -> Fails with ROOM_ENTITLEMENT_LOCKED
+      await expect(
+        billingService.generateBill(
+          freeDormId,
+          { billingCycleId: cycleFree.id, roomId: r11.id },
+          'user-owner-1'
+        )
+      ).rejects.toMatchObject({
+        statusCode: 403,
+        code: 'ROOM_ENTITLEMENT_LOCKED',
+      });
+      const billsR11 = await prisma.bill.findMany({ where: { dormitoryId: freeDormId, roomId: r11.id } });
+      expect(billsR11).toHaveLength(0);
+
+      // 6. Test Room 11: Meter Switch OFF -> ON -> Fails with ROOM_ENTITLEMENT_LOCKED
+      await expect(
+        meterService.toggleRoomBillSwitch(
+          freeDormId,
+          {
+            billingCycleId: cycleFree.id,
+            roomId: r11.id,
+            action: 'issue',
+            dirtyRow: { roomId: r11.id, waterCurr: '120.00', elecCurr: '220.00' },
+          },
+          'user-owner-1',
+          billingService
+        )
+      ).rejects.toMatchObject({
+        statusCode: 403,
+        code: 'ROOM_ENTITLEMENT_LOCKED',
+      });
+      // Assert: No workspace mutation (no readings, no snapshots, no bills)
+      const readR11 = await prisma.meterReading.findMany({ where: { dormitoryId: freeDormId, roomId: r11.id } });
+      expect(readR11).toHaveLength(0);
+      const snapR11 = await prisma.roomBillingCycleSnapshot.findMany({ where: { dormitoryId: freeDormId, roomId: r11.id } });
+      expect(snapR11).toHaveLength(0);
+
+      // 7. Test Room 11: Real HTTP route POST /api/v1/meters/switch -> Returns HTTP 403
+      const httpSwitchRes = await request(testApp)
+        .post('/api/v1/meters/switch')
+        .set('x-dormitory-id', freeDormId)
+        .set('x-csrf-token', 'csrf-test-token')
+        .send({
+          billingCycleId: cycleFree.id,
+          roomId: r11.id,
+          action: 'issue',
+          dirtyRow: { roomId: r11.id, waterCurr: '120.00', elecCurr: '220.00' },
+        });
+      expect(httpSwitchRes.status).toBe(403);
+      expect(httpSwitchRes.body.error.code).toBe('ROOM_ENTITLEMENT_LOCKED');
+
+      // 8. Test Room 12: Single Bill Generation -> Fails with ROOM_ENTITLEMENT_LOCKED
+      await expect(
+        billingService.generateBill(
+          freeDormId,
+          { billingCycleId: cycleFree.id, roomId: r12.id },
+          'user-owner-1'
+        )
+      ).rejects.toMatchObject({
+        statusCode: 403,
+        code: 'ROOM_ENTITLEMENT_LOCKED',
+      });
+
+      // 9. Test Mixed Bulk Workspace Save (Room 1 and Room 11) -> Rejects atomically
+      await expect(
+        meterService.saveBulkMeterWorkspace(
+          freeDormId,
+          {
+            billingCycleId: cycleFree.id,
+            rows: [
+              { roomId: r1.id, waterCurr: '105.00', elecCurr: '205.00' },
+              { roomId: r11.id, waterCurr: '115.00', elecCurr: '215.00' },
+            ],
+          },
+          'user-owner-1'
+        )
+      ).rejects.toMatchObject({
+        statusCode: 403,
+        code: 'ROOM_ENTITLEMENT_LOCKED',
+      });
+
+      // Test Real HTTP route POST /api/v1/meters/workspace/bulk with Room 11
+      const httpBulkWorkspaceRes = await request(testApp)
+        .post('/api/v1/meters/workspace/bulk')
+        .set('x-dormitory-id', freeDormId)
+        .set('x-csrf-token', 'csrf-test-token')
+        .send({
+          billingCycleId: cycleFree.id,
+          rows: [
+            { roomId: r1.id, waterCurr: '105.00', elecCurr: '205.00' },
+            { roomId: r11.id, waterCurr: '115.00', elecCurr: '215.00' },
+          ],
+        });
+      expect(httpBulkWorkspaceRes.status).toBe(403);
+      expect(httpBulkWorkspaceRes.body.error.code).toBe('ROOM_ENTITLEMENT_LOCKED');
+
+      // 10. Test Bulk Bill Generation (ออกบิลทุกห้อง) on 12-room FREE dorm
+      const bulkRes = await billingService.bulkGenerateBills(
+        freeDormId,
+        cycleFree.id,
+        undefined, // target all provisioned rooms
+        'user-owner-1'
+      );
+
+      // Verify: Rooms 11 and 12 are excluded with reason ROOM_ENTITLEMENT_LOCKED
+      const excludedR11 = bulkRes.excluded.find((e) => e.roomId === r11.id);
+      expect(excludedR11).toBeDefined();
+      expect(excludedR11?.reason).toBe('ROOM_ENTITLEMENT_LOCKED');
+
+      const excludedR12 = bulkRes.excluded.find((e) => e.roomId === r12.id);
+      expect(excludedR12).toBeDefined();
+      expect(excludedR12?.reason).toBe('ROOM_ENTITLEMENT_LOCKED');
+
+      // Assert 0 bills for Room 11 and 12 in DB
+      const billsLocked = await prisma.bill.findMany({
+        where: { dormitoryId: freeDormId, roomId: { in: [r11.id, r12.id] } },
+      });
+      expect(billsLocked).toHaveLength(0);
+
+      // Test Real HTTP route POST /api/v1/bills/generate/bulk on FREE dorm
+      const httpBulkRes = await request(testApp)
+        .post('/api/v1/bills/generate/bulk')
+        .set('x-dormitory-id', freeDormId)
+        .set('x-csrf-token', 'csrf-test-token')
+        .send({
+          billingCycleId: cycleFree.id,
+        });
+      expect(httpBulkRes.status).toBe(200);
+      expect(httpBulkRes.body.data.excluded.some((e: any) => e.roomId === r11.id && e.reason === 'ROOM_ENTITLEMENT_LOCKED')).toBe(true);
+      expect(httpBulkRes.body.data.excluded.some((e: any) => e.roomId === r12.id && e.reason === 'ROOM_ENTITLEMENT_LOCKED')).toBe(true);
+    } finally {
+      // Cleanup
+      await prisma.billItem.deleteMany({ where: { bill: { dormitoryId: freeDormId } } });
+      await prisma.bill.deleteMany({ where: { dormitoryId: freeDormId } });
+      await prisma.contract.deleteMany({ where: { dormitoryId: freeDormId } });
+      await prisma.tenantCoOccupant.deleteMany({ where: { dormitoryId: freeDormId } });
+      await prisma.tenant.deleteMany({ where: { dormitoryId: freeDormId } });
+      await prisma.roomBillingCycleSnapshot.deleteMany({ where: { dormitoryId: freeDormId } });
+      await prisma.meterReading.deleteMany({ where: { dormitoryId: freeDormId } });
+      await prisma.meterDevice.deleteMany({ where: { dormitoryId: freeDormId } });
+      await prisma.room.deleteMany({ where: { dormitoryId: freeDormId } });
+      await prisma.billingCycle.deleteMany({ where: { dormitoryId: freeDormId } });
+      await prisma.building.deleteMany({ where: { dormitoryId: freeDormId } });
+      await prisma.dormitoryBillingSettings.deleteMany({ where: { dormitoryId: freeDormId } });
+      await prisma.dormitory.deleteMany({ where: { id: freeDormId } });
+    }
+  });
+
+  it('23. PAID Dormitory Scale Operational Entitlement: Room 150 remains fully operational for switch, workspace save, and bill generation', async () => {
+    // 1. Create a dedicated PAID dormitory (provisionInitialTrial or active PAID subscription -> limit = 150)
+    const paidDormId = crypto.randomUUID();
+    const suffixPaid = crypto.randomBytes(4).toString('hex');
+    await prisma.dormitory.create({
+      data: {
+        id: paidDormId,
+        name: `Paid Entitlement Dorm ${suffixPaid}`,
+        code: `PAID-${suffixPaid.toUpperCase()}`,
+        billingSettings: {
+          create: {
+            waterBillingType: 'per_unit',
+            waterRate: toDecimal('18.00'),
+            electricityBillingType: 'per_unit',
+            electricityRate: toDecimal('8.00'),
+            commonFee: toDecimal('200.00'),
+            billingDay: 1,
+            dueDay: 5,
+          },
+        },
+      },
+    });
+
+    const entService = new SubscriptionEntitlementService();
+    await entService.provisionInitialTrial(paidDormId);
+
+    const bldPaid = await prisma.building.create({
+      data: {
+        dormitoryId: paidDormId,
+        name: 'Paid Building',
+      },
+    });
+
+    const cyclePaid = await prisma.billingCycle.create({
+      data: {
+        dormitoryId: paidDormId,
+        cycleCode: '2026-08',
+        name: 'สิงหาคม 2026',
+        periodStart: new Date('2026-08-01T00:00:00Z'),
+        periodEnd: new Date('2026-08-31T23:59:59Z'),
+        billingDate: new Date('2026-08-31T00:00:00Z'),
+        dueDate: new Date('2026-09-05T00:00:00Z'),
+        status: 'draft',
+        rateSnapshot: {
+          create: {
+            dormitoryId: paidDormId,
+            waterBillingType: 'per_unit',
+            waterRate: toDecimal('18.00'),
+            electricityBillingType: 'per_unit',
+            electricityRate: toDecimal('8.00'),
+            commonFee: toDecimal('200.00'),
+            commonFeeMode: 'per_room',
+            internetFee: toDecimal('0.00'),
+            internetFeeMode: 'flat',
+            parkingFee: toDecimal('0.00'),
+            parkingFeeMode: 'flat',
+            lateFeeType: 'flat',
+            lateFeeValue: toDecimal('0.00'),
+            source: 'TEMPLATE_DEFAULT',
+          },
+        },
+      },
+    });
+
+    // Create 150 rooms
+    const roomRows = Array.from({ length: 150 }, (_, i) => {
+      const num = i + 1;
+      const roomNumber = `PR-${String(num).padStart(3, '0')}`;
+      return {
+        dormitoryId: paidDormId,
+        buildingId: bldPaid.id,
+        roomNumber,
+        normalizedRoomNumber: roomNumber,
+        roomType: 'standard',
+        floor: Math.floor(i / 20) + 1,
+        monthlyRent: toDecimal('4000.00'),
+        status: 'vacant',
+      };
+    });
+    await prisma.room.createMany({ data: roomRows });
+
+    const allPaidRooms = await prisma.room.findMany({
+      where: { dormitoryId: paidDormId },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    });
+    expect(allPaidRooms).toHaveLength(150);
+    const r150 = allPaidRooms[149]; // Room 150
+
+    // Setup active tenant & contract on Room 150
+    const tenant150 = await prisma.tenant.create({
+      data: {
+        dormitoryId: paidDormId,
+        tenantNumber: `T-P150-${Date.now()}`,
+        firstName: 'PaidTenant150',
+        displayName: 'PaidTenant 150',
+        status: 'active',
+      },
+    });
+    await prisma.contract.create({
+      data: {
+        dormitoryId: paidDormId,
+        roomId: r150.id,
+        tenantId: tenant150.id,
+        contractNumber: `CTR-P150-${Date.now()}`,
+        status: 'active',
+        startDate: cyclePaid.periodStart,
+        endDate: cyclePaid.periodEnd,
+        rentAmount: toDecimal('4000.00'),
+      },
+    });
+
+    try {
+      // 2. Save workspace on Room 150 -> Allowed
+      const saveRes = await meterService.saveBulkMeterWorkspace(
+        paidDormId,
+        {
+          billingCycleId: cyclePaid.id,
+          rows: [{ roomId: r150.id, waterCurr: '750.00', elecCurr: '850.00', peopleCount: 2 }],
+        },
+        'user-owner-1'
+      );
+      expect(saveRes.savedCount).toBe(1);
+
+      // 3. Single Bill generation on Room 150 -> Allowed
+      const billRes = await billingService.generateBill(
+        paidDormId,
+        { billingCycleId: cyclePaid.id, roomId: r150.id },
+        'user-owner-1'
+      );
+      expect(billRes.created).toBe(true);
+      expect(billRes.bill).toBeDefined();
+      expect(billRes.bill.roomId).toBe(r150.id);
+
+      // 4. Bulk bill generation should not exclude Room 150 for entitlement lock
+      const bulkRes = await billingService.bulkGenerateBills(
+        paidDormId,
+        cyclePaid.id,
+        [r150.id],
+        'user-owner-1'
+      );
+      expect(bulkRes.excluded.some(e => e.roomId === r150.id && e.reason === 'ROOM_ENTITLEMENT_LOCKED')).toBe(false);
+    } finally {
+      // Cleanup
+      await prisma.billItem.deleteMany({ where: { bill: { dormitoryId: paidDormId } } });
+      await prisma.bill.deleteMany({ where: { dormitoryId: paidDormId } });
+      await prisma.contract.deleteMany({ where: { dormitoryId: paidDormId } });
+      await prisma.tenant.deleteMany({ where: { dormitoryId: paidDormId } });
+      await prisma.roomBillingCycleSnapshot.deleteMany({ where: { dormitoryId: paidDormId } });
+      await prisma.meterReading.deleteMany({ where: { dormitoryId: paidDormId } });
+      await prisma.meterDevice.deleteMany({ where: { dormitoryId: paidDormId } });
+      await prisma.room.deleteMany({ where: { dormitoryId: paidDormId } });
+      await prisma.billingCycle.deleteMany({ where: { dormitoryId: paidDormId } });
+      await prisma.building.deleteMany({ where: { dormitoryId: paidDormId } });
+      await prisma.subscriptionStatusHistory.deleteMany({ where: { dormitoryId: paidDormId } });
+      await prisma.dormitorySubscription.deleteMany({ where: { dormitoryId: paidDormId } });
+      await prisma.dormitoryBillingSettings.deleteMany({ where: { dormitoryId: paidDormId } });
+      await prisma.dormitory.deleteMany({ where: { id: paidDormId } });
     }
   });
 });

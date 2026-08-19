@@ -14,6 +14,7 @@ import { AuditService } from './audit.service.js';
 import { billingOrchestrationService } from './billing-orchestration.service.js';
 import { resolveProvisionalBillingSource as sharedResolveProvisionalBillingSource } from './provisional-billing-source.service.js';
 import { ENTITLEMENT_ROOM_LIMITS } from './entitlement.service.js';
+import { subscriptionEntitlementService } from './subscription-entitlement.service.js';
 import { toDecimal, addDecimals, mulDecimals, divDecimals, formatDecimal, subDecimals, compareDecimals, isZeroDecimal } from '../utils/decimal-math.util.js';
 import { getPrismaClient } from '../db/prisma.js';
 
@@ -666,6 +667,16 @@ export class BillingService {
       throw err;
     }
 
+    const issuanceNow = issuanceTimestamp || new Date();
+
+    // Assert room operational entitlement before any operational bill issuance
+    await subscriptionEntitlementService.assertRoomOperationalEntitlement(
+      dormitoryId,
+      data.roomId,
+      issuanceNow,
+      existingTx
+    );
+
     const prisma = existingTx || getPrismaClient();
     const settings = await prisma.dormitoryBillingSettings.findUnique({
       where: { dormitoryId },
@@ -728,7 +739,6 @@ export class BillingService {
       throw err;
     }
 
-    const issuanceNow = issuanceTimestamp || new Date();
     const billingDate = resolveBillIssueDate(issuanceNow);
     const dueDate = resolveBillDueDate(issuanceNow, settings.dueDay);
 
@@ -898,6 +908,12 @@ export class BillingService {
       }
     }
 
+    // Resolve authoritative operational room entitlement set once (O(1) in-memory check per room)
+    const entitlementSet = await subscriptionEntitlementService.resolveOperationalRoomEntitlementSet(
+      dormitoryId,
+      issuanceNow
+    );
+
     const generatedBills: BillEntity[] = [];
     const generated: Array<{ roomId: string; billId: string; billNumber: string }> = [];
     const excluded: Array<{ roomId: string; reason: string }> = [];
@@ -906,6 +922,11 @@ export class BillingService {
     const { meterService } = await import('./meter.service.js');
 
     for (const roomId of targetRooms) {
+      if (entitlementSet.lockedRoomIds.has(roomId)) {
+        excluded.push({ roomId, reason: 'ROOM_ENTITLEMENT_LOCKED' });
+        continue;
+      }
+
       const dirtyRow = dirtyRowsMap.get(roomId);
 
       if (dirtyRow) {
@@ -933,7 +954,8 @@ export class BillingService {
             err.code === 'MISSING_METER_READING' ||
             err.code === 'NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM' ||
             err.code === 'PROVISIONAL_TERM_NOT_ELIGIBLE_FOR_CYCLE' ||
-            err.code === 'BILL_ALREADY_EXISTS'
+            err.code === 'BILL_ALREADY_EXISTS' ||
+            err.code === 'ROOM_ENTITLEMENT_LOCKED'
           ) {
             excluded.push({ roomId, reason: err.code });
           } else {
@@ -985,7 +1007,9 @@ export class BillingService {
           if (
             err.code === 'MISSING_METER_READING' ||
             err.code === 'NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM' ||
-            err.code === 'PROVISIONAL_TERM_NOT_ELIGIBLE_FOR_CYCLE'
+            err.code === 'PROVISIONAL_TERM_NOT_ELIGIBLE_FOR_CYCLE' ||
+            err.code === 'BILL_ALREADY_EXISTS' ||
+            err.code === 'ROOM_ENTITLEMENT_LOCKED'
           ) {
             excluded.push({ roomId, reason: err.code });
           } else {

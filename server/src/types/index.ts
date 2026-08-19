@@ -13,6 +13,7 @@ export interface StandardErrorEnvelope {
 export class AppError extends Error {
   public readonly statusCode: number;
   public readonly errorCode: string;
+  public readonly code: string;
   public readonly fieldErrors?: Record<string, string[]> | null;
 
   constructor(message: string, statusCode = 500, errorCode = 'INTERNAL_ERROR', fieldErrors?: Record<string, string[]> | null) {
@@ -20,6 +21,7 @@ export class AppError extends Error {
     this.name = this.constructor.name;
     this.statusCode = statusCode;
     this.errorCode = errorCode;
+    this.code = errorCode;
     this.fieldErrors = fieldErrors;
     Error.captureStackTrace(this, this.constructor);
   }
