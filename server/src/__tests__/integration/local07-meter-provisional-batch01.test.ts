@@ -2267,4 +2267,329 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
       await prisma.dormitory.deleteMany({ where: { id: paidDormId } });
     }
   });
+
+  it('24. Cross-Dormitory Tenant Isolation & Fail-Closed Boundary: strictly rejects foreign rooms, archived rooms, and nonexistent UUIDs with HTTP 404 and 0 side effects', async () => {
+    // 1. Create Dormitory A and Dormitory B
+    const dormAId = crypto.randomUUID();
+    const dormBId = crypto.randomUUID();
+    const suffixA = crypto.randomBytes(4).toString('hex');
+    const suffixB = crypto.randomBytes(4).toString('hex');
+
+    await prisma.dormitory.create({
+      data: {
+        id: dormAId,
+        name: `Dorm A ${suffixA}`,
+        code: `DORM-A-${suffixA.toUpperCase()}`,
+        billingSettings: {
+          create: {
+            waterBillingType: 'per_unit',
+            waterRate: toDecimal('18.00'),
+            electricityBillingType: 'per_unit',
+            electricityRate: toDecimal('8.00'),
+            commonFee: toDecimal('200.00'),
+            billingDay: 1,
+            dueDay: 5,
+          },
+        },
+      },
+    });
+
+    await prisma.dormitory.create({
+      data: {
+        id: dormBId,
+        name: `Dorm B ${suffixB}`,
+        code: `DORM-B-${suffixB.toUpperCase()}`,
+        billingSettings: {
+          create: {
+            waterBillingType: 'per_unit',
+            waterRate: toDecimal('18.00'),
+            electricityBillingType: 'per_unit',
+            electricityRate: toDecimal('8.00'),
+            commonFee: toDecimal('200.00'),
+            billingDay: 1,
+            dueDay: 5,
+          },
+        },
+      },
+    });
+
+    const bldA = await prisma.building.create({ data: { dormitoryId: dormAId, name: 'Bld A' } });
+    const bldB = await prisma.building.create({ data: { dormitoryId: dormBId, name: 'Bld B' } });
+
+    const cycleA = await prisma.billingCycle.create({
+      data: {
+        dormitoryId: dormAId,
+        cycleCode: '2026-08',
+        name: 'สิงหาคม 2026',
+        periodStart: new Date('2026-08-01T00:00:00Z'),
+        periodEnd: new Date('2026-08-31T23:59:59Z'),
+        billingDate: new Date('2026-08-31T00:00:00Z'),
+        dueDate: new Date('2026-09-05T00:00:00Z'),
+        status: 'draft',
+        rateSnapshot: {
+          create: {
+            dormitoryId: dormAId,
+            waterBillingType: 'per_unit',
+            waterRate: toDecimal('18.00'),
+            electricityBillingType: 'per_unit',
+            electricityRate: toDecimal('8.00'),
+            commonFee: toDecimal('200.00'),
+            commonFeeMode: 'per_room',
+            internetFee: toDecimal('0.00'),
+            internetFeeMode: 'flat',
+            parkingFee: toDecimal('0.00'),
+            parkingFeeMode: 'flat',
+            lateFeeType: 'flat',
+            lateFeeValue: toDecimal('0.00'),
+            source: 'TEMPLATE_DEFAULT',
+          },
+        },
+      },
+    });
+
+    const roomA = await prisma.room.create({
+      data: {
+        dormitoryId: dormAId,
+        buildingId: bldA.id,
+        roomNumber: 'A-101',
+        normalizedRoomNumber: 'A-101',
+        roomType: 'standard',
+        floor: 1,
+        monthlyRent: toDecimal('4000.00'),
+        status: 'vacant',
+      },
+    });
+
+    const roomB = await prisma.room.create({
+      data: {
+        dormitoryId: dormBId,
+        buildingId: bldB.id,
+        roomNumber: 'B-201',
+        normalizedRoomNumber: 'B-201',
+        roomType: 'standard',
+        floor: 1,
+        monthlyRent: toDecimal('4500.00'),
+        status: 'vacant',
+      },
+    });
+
+    const roomArchived = await prisma.room.create({
+      data: {
+        dormitoryId: dormAId,
+        buildingId: bldA.id,
+        roomNumber: 'A-ARCHIVED',
+        normalizedRoomNumber: 'A-ARCHIVED',
+        roomType: 'standard',
+        floor: 1,
+        monthlyRent: toDecimal('4000.00'),
+        status: 'archived',
+      },
+    });
+
+    const nonExistentRoomId = crypto.randomUUID();
+
+    // Set up active tenant + contract in Dorm A for roomA
+    const tenantA = await prisma.tenant.create({
+      data: {
+        dormitoryId: dormAId,
+        tenantNumber: `T-A101-${Date.now()}`,
+        firstName: 'TenantA',
+        displayName: 'Tenant A',
+        status: 'active',
+      },
+    });
+    await prisma.contract.create({
+      data: {
+        dormitoryId: dormAId,
+        roomId: roomA.id,
+        tenantId: tenantA.id,
+        contractNumber: `CTR-A101-${Date.now()}`,
+        status: 'active',
+        startDate: cycleA.periodStart,
+        endDate: cycleA.periodEnd,
+        rentAmount: toDecimal('4000.00'),
+      },
+    });
+
+    try {
+      // 2. Cross-Dorm Workspace Bulk Save: under Dorm A context, submit dirty row with roomB.id
+      const httpBulkForeignRes = await request(testApp)
+        .post('/api/v1/meters/workspace/bulk')
+        .set('x-dormitory-id', dormAId)
+        .set('x-csrf-token', 'csrf-test-token')
+        .send({
+          billingCycleId: cycleA.id,
+          rows: [
+            { roomId: roomB.id, waterCurr: '150.00', elecCurr: '250.00' },
+          ],
+        });
+      expect(httpBulkForeignRes.status).toBe(404);
+      expect(httpBulkForeignRes.body.error.code).toBe('ROOM_NOT_FOUND');
+
+      // Verify zero DB mutations in Dorm A or B
+      const devicesB = await prisma.meterDevice.findMany({ where: { roomId: roomB.id } });
+      expect(devicesB).toHaveLength(0);
+      const readingsB = await prisma.meterReading.findMany({ where: { roomId: roomB.id } });
+      expect(readingsB).toHaveLength(0);
+      const snapsB = await prisma.roomBillingCycleSnapshot.findMany({ where: { roomId: roomB.id } });
+      expect(snapsB).toHaveLength(0);
+
+      // 3. Cross-Dorm Single Switch: under Dorm A context, toggle switch with roomB.id
+      const httpSwitchForeignRes = await request(testApp)
+        .post('/api/v1/meters/switch')
+        .set('x-dormitory-id', dormAId)
+        .set('x-csrf-token', 'csrf-test-token')
+        .send({
+          billingCycleId: cycleA.id,
+          roomId: roomB.id,
+          action: 'issue',
+          dirtyRow: { roomId: roomB.id, waterCurr: '150.00', elecCurr: '250.00' },
+        });
+      expect(httpSwitchForeignRes.status).toBe(404);
+      expect(httpSwitchForeignRes.body.error.code).toBe('ROOM_NOT_FOUND');
+
+      const billsB = await prisma.bill.findMany({ where: { roomId: roomB.id } });
+      expect(billsB).toHaveLength(0);
+
+      // 4. Cross-Dorm Single Bill Generation: under Dorm A, call generateBill with roomB.id
+      await expect(
+        billingService.generateBill(
+          dormAId,
+          { billingCycleId: cycleA.id, roomId: roomB.id },
+          'user-owner-1'
+        )
+      ).rejects.toMatchObject({
+        statusCode: 404,
+        code: 'ROOM_NOT_FOUND',
+      });
+
+      // 5. Bulk Bill Generation with Explicit roomIds: [roomA.id, roomB.id]
+      const bulkRes = await billingService.bulkGenerateBills(
+        dormAId,
+        cycleA.id,
+        [roomA.id, roomB.id],
+        'user-owner-1',
+        [{ roomId: roomA.id, waterCurr: '100.00', elecCurr: '200.00' }]
+      );
+      expect(bulkRes.generated.some(g => g.roomId === roomA.id)).toBe(true);
+      const excludedRoomB = bulkRes.excluded.find(e => e.roomId === roomB.id);
+      expect(excludedRoomB).toBeDefined();
+      expect(excludedRoomB?.reason).toBe('ROOM_NOT_FOUND');
+
+      // Assert no bills for roomB in DB
+      const billsForeign = await prisma.bill.findMany({ where: { roomId: roomB.id } });
+      expect(billsForeign).toHaveLength(0);
+
+      // 6. Archived Room Fail-Closed Proof:
+      // (a) Single bill generation on archived room -> 404 ROOM_NOT_FOUND
+      await expect(
+        billingService.generateBill(
+          dormAId,
+          { billingCycleId: cycleA.id, roomId: roomArchived.id },
+          'user-owner-1'
+        )
+      ).rejects.toMatchObject({
+        statusCode: 404,
+        code: 'ROOM_NOT_FOUND',
+      });
+
+      // (b) Single switch on archived room -> 404 ROOM_NOT_FOUND
+      await expect(
+        meterService.toggleRoomBillSwitch(
+          dormAId,
+          {
+            billingCycleId: cycleA.id,
+            roomId: roomArchived.id,
+            action: 'issue',
+            dirtyRow: { roomId: roomArchived.id, waterCurr: '100.00', elecCurr: '200.00' },
+          },
+          'user-owner-1',
+          billingService
+        )
+      ).rejects.toMatchObject({
+        statusCode: 404,
+        code: 'ROOM_NOT_FOUND',
+      });
+
+      // (c) Bulk workspace save with archived room -> 404 ROOM_NOT_FOUND
+      await expect(
+        meterService.saveBulkMeterWorkspace(
+          dormAId,
+          {
+            billingCycleId: cycleA.id,
+            rows: [{ roomId: roomArchived.id, waterCurr: '100.00', elecCurr: '200.00' }],
+          },
+          'user-owner-1'
+        )
+      ).rejects.toMatchObject({
+        statusCode: 404,
+        code: 'ROOM_NOT_FOUND',
+      });
+
+      // 7. Nonexistent UUID Fail-Closed Proof:
+      // (a) Single bill generation on random UUID -> 404 ROOM_NOT_FOUND
+      await expect(
+        billingService.generateBill(
+          dormAId,
+          { billingCycleId: cycleA.id, roomId: nonExistentRoomId },
+          'user-owner-1'
+        )
+      ).rejects.toMatchObject({
+        statusCode: 404,
+        code: 'ROOM_NOT_FOUND',
+      });
+
+      // (b) Single switch on random UUID -> 404 ROOM_NOT_FOUND
+      await expect(
+        meterService.toggleRoomBillSwitch(
+          dormAId,
+          {
+            billingCycleId: cycleA.id,
+            roomId: nonExistentRoomId,
+            action: 'issue',
+          },
+          'user-owner-1',
+          billingService
+        )
+      ).rejects.toMatchObject({
+        statusCode: 404,
+        code: 'ROOM_NOT_FOUND',
+      });
+
+      // (c) Workspace bulk save on random UUID -> 404 ROOM_NOT_FOUND
+      await expect(
+        meterService.saveBulkMeterWorkspace(
+          dormAId,
+          {
+            billingCycleId: cycleA.id,
+            rows: [{ roomId: nonExistentRoomId, waterCurr: '100.00', elecCurr: '200.00' }],
+          },
+          'user-owner-1'
+        )
+      ).rejects.toMatchObject({
+        statusCode: 404,
+        code: 'ROOM_NOT_FOUND',
+      });
+
+      // Assert 0 mutations in DB for nonExistentRoomId or roomArchived
+      const readingsArchived = await prisma.meterReading.findMany({ where: { roomId: roomArchived.id } });
+      expect(readingsArchived).toHaveLength(0);
+      const billsArchived = await prisma.bill.findMany({ where: { roomId: roomArchived.id } });
+      expect(billsArchived).toHaveLength(0);
+    } finally {
+      // Cleanup Dorm A and Dorm B
+      await prisma.billItem.deleteMany({ where: { bill: { dormitoryId: { in: [dormAId, dormBId] } } } });
+      await prisma.bill.deleteMany({ where: { dormitoryId: { in: [dormAId, dormBId] } } });
+      await prisma.contract.deleteMany({ where: { dormitoryId: { in: [dormAId, dormBId] } } });
+      await prisma.tenant.deleteMany({ where: { dormitoryId: { in: [dormAId, dormBId] } } });
+      await prisma.roomBillingCycleSnapshot.deleteMany({ where: { dormitoryId: { in: [dormAId, dormBId] } } });
+      await prisma.meterReading.deleteMany({ where: { dormitoryId: { in: [dormAId, dormBId] } } });
+      await prisma.meterDevice.deleteMany({ where: { dormitoryId: { in: [dormAId, dormBId] } } });
+      await prisma.room.deleteMany({ where: { dormitoryId: { in: [dormAId, dormBId] } } });
+      await prisma.billingCycle.deleteMany({ where: { dormitoryId: { in: [dormAId, dormBId] } } });
+      await prisma.building.deleteMany({ where: { dormitoryId: { in: [dormAId, dormBId] } } });
+      await prisma.dormitoryBillingSettings.deleteMany({ where: { dormitoryId: { in: [dormAId, dormBId] } } });
+      await prisma.dormitory.deleteMany({ where: { id: { in: [dormAId, dormBId] } } });
+    }
+  });
 });

@@ -922,8 +922,14 @@ export class BillingService {
     const { meterService } = await import('./meter.service.js');
 
     for (const roomId of targetRooms) {
-      if (entitlementSet.lockedRoomIds.has(roomId)) {
+      if (entitlementSet.operationalRoomIds.has(roomId)) {
+        // Operational room -> proceed
+      } else if (entitlementSet.lockedRoomIds.has(roomId)) {
         excluded.push({ roomId, reason: 'ROOM_ENTITLEMENT_LOCKED' });
+        continue;
+      } else {
+        // Foreign room, archived room, or nonexistent room UUID
+        excluded.push({ roomId, reason: 'ROOM_NOT_FOUND' });
         continue;
       }
 
@@ -955,7 +961,8 @@ export class BillingService {
             err.code === 'NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM' ||
             err.code === 'PROVISIONAL_TERM_NOT_ELIGIBLE_FOR_CYCLE' ||
             err.code === 'BILL_ALREADY_EXISTS' ||
-            err.code === 'ROOM_ENTITLEMENT_LOCKED'
+            err.code === 'ROOM_ENTITLEMENT_LOCKED' ||
+            err.code === 'ROOM_NOT_FOUND'
           ) {
             excluded.push({ roomId, reason: err.code });
           } else {
@@ -1009,7 +1016,8 @@ export class BillingService {
             err.code === 'NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM' ||
             err.code === 'PROVISIONAL_TERM_NOT_ELIGIBLE_FOR_CYCLE' ||
             err.code === 'BILL_ALREADY_EXISTS' ||
-            err.code === 'ROOM_ENTITLEMENT_LOCKED'
+            err.code === 'ROOM_ENTITLEMENT_LOCKED' ||
+            err.code === 'ROOM_NOT_FOUND'
           ) {
             excluded.push({ roomId, reason: err.code });
           } else {

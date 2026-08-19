@@ -797,6 +797,9 @@ export class MeterService {
       );
 
       for (const row of data.rows) {
+        if (entitlementSet.operationalRoomIds.has(row.roomId)) {
+          continue;
+        }
         if (entitlementSet.lockedRoomIds.has(row.roomId)) {
           throw new AppError(
             `ห้องพักนี้เกินสิทธิ์การใช้งานของแพ็กเกจฟรี (จำกัด ${entitlementSet.roomLimit} ห้องที่เปิดใช้งานพร้อมกัน) กรุณาอัปเกรดแพ็กเกจเพื่อเปิดใช้งานห้องนี้`,
@@ -804,6 +807,7 @@ export class MeterService {
             'ROOM_ENTITLEMENT_LOCKED'
           );
         }
+        throw new AppError('ไม่พบข้อมูลห้องพัก', 404, 'ROOM_NOT_FOUND');
       }
 
       const sortedRoomIds = [...new Set(data.rows.map((r) => r.roomId))].sort();

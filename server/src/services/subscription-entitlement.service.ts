@@ -486,6 +486,10 @@ export class SubscriptionEntitlementService {
     await this.assertDormitoryWritable(dormitoryId, now, db);
     const set = await this.resolveOperationalRoomEntitlementSet(dormitoryId, now, db);
 
+    if (set.operationalRoomIds.has(roomId)) {
+      return;
+    }
+
     if (set.lockedRoomIds.has(roomId)) {
       throw new AppError(
         `ห้องพักนี้เกินสิทธิ์การใช้งานของแพ็กเกจฟรี (จำกัด ${set.roomLimit} ห้องที่เปิดใช้งานพร้อมกัน) กรุณาอัปเกรดแพ็กเกจเพื่อเปิดใช้งานห้องนี้`,
@@ -493,6 +497,8 @@ export class SubscriptionEntitlementService {
         'ROOM_ENTITLEMENT_LOCKED'
       );
     }
+
+    throw new AppError('ไม่พบข้อมูลห้องพัก', 404, 'ROOM_NOT_FOUND');
   }
 
   /**
