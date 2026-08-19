@@ -12,6 +12,7 @@ import { PrismaClient, Prisma } from '@prisma/client';
 import { getPrismaClient } from '../db/prisma.js';
 import { OutboxService } from './outbox.service.js';
 import { AuditService } from './audit.service.js';
+import { resolveProvisionalBillingSource } from './provisional-billing-source.service.js';
 import {
   toDecimal,
   addDecimals,
@@ -230,25 +231,16 @@ export class BillingOrchestrationService {
         if (activeContract) {
           householdCount = await this.getHouseholdCount(dormitoryId, activeContract.tenantId, client);
         } else {
-          // Check ACTIVE ProvisionalRentalTerm (must overlap cycle period!)
-          const activeProvisional = await client.provisionalRentalTerm.findFirst({
-            where: {
-              dormitoryId,
-              roomId,
-              status: 'ACTIVE',
-              deletedAt: null,
-              ...(targetCycle
-                ? {
-                    startDate: { lte: targetCycle.periodEnd },
-                    endDate: { gte: targetCycle.periodStart },
-                  }
-                : {}),
-            },
-            orderBy: [
-              { startDate: 'asc' },
-              { createdAt: 'desc' },
-            ],
-          });
+          // Resolve ACTIVE ProvisionalRentalTerm via shared canonical authority
+          const activeProvisional = targetCycle
+            ? await resolveProvisionalBillingSource({
+                dormitoryId,
+                roomId,
+                billingCycle: targetCycle,
+                tx: client,
+              })
+            : null;
+
           if (activeProvisional) {
             householdCount = await this.getHouseholdCount(dormitoryId, activeProvisional.tenantId, client);
           } else {

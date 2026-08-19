@@ -29,7 +29,8 @@ import { PrismaContractRepository } from '../../db/repositories/contract.reposit
 import { PrismaTenantRepository } from '../../db/repositories/tenant.repository.js';
 import { PrismaBuildingRepository } from '../../db/repositories/building.repository.js';
 import { AuditService } from '../../services/audit.service.js';
-import { toDecimal, formatDecimal } from '../../utils/decimal-math.util.js';
+import { toDecimal, formatDecimal, addDecimals } from '../../utils/decimal-math.util.js';
+import { TenantNumberService } from '../../services/tenant-number.service.js';
 import {
   OtherFeeItemSchema,
   SaveMeterWorkspaceRowSchema,
@@ -438,8 +439,14 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
 
     expect(uniqueSet.size).toBe(10);
     for (const num of tenantNumbers) {
-      expect(num).toMatch(/^TNT-\d{4,}$/);
+      // Legacy-compatible format: TNT-<timestamp>-<zero-padded-seq>
+      expect(num).toMatch(/^TNT-\d+-\d{4,}$/);
     }
+
+    // Assert: allocateNextTenantNumber requires an active transaction client
+    await expect(
+      TenantNumberService.allocateNextTenantNumber(testDormitoryId, undefined as any)
+    ).rejects.toThrow('TENANT_NUMBER_ALLOCATION_REQUIRES_TRANSACTION');
 
     // Static verification: ensure shared authority is used and no duplicate Date.now numbering algorithms remain
     const fs = await import('fs');
@@ -576,7 +583,8 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
       },
     });
 
-    // 1. In June cycle, resolveProvisionalBillingSource must return Term B (and ignore Term A)
+    // 1. In June cycle:
+    // Billing source must resolve Tenant B
     const resolvedJune = await billingService.resolveProvisionalBillingSource(
       seqDorm.id,
       seqRoom.id,
@@ -586,7 +594,17 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
     expect(resolvedJune?.id).toBe(termB.id);
     expect(resolvedJune?.tenantId).toBe(tenantB.id);
 
-    // 2. In March cycle, resolveProvisionalBillingSource must return Term A (and ignore Term B)
+    // Orchestration peopleCount must resolve Tenant B (1 occupant)
+    const junePeople = await billingOrchestrationService.resolveCyclePeopleCount(
+      seqDorm.id,
+      juneCycle.id,
+      seqRoom.id,
+      undefined
+    );
+    expect(junePeople).toBe(1);
+
+    // 2. In March cycle:
+    // Billing source must resolve Tenant A
     const resolvedMarch = await billingService.resolveProvisionalBillingSource(
       seqDorm.id,
       seqRoom.id,
@@ -596,13 +614,32 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
     expect(resolvedMarch?.id).toBe(termA.id);
     expect(resolvedMarch?.tenantId).toBe(tenantA.id);
 
-    // 3. In September cycle (outside both), resolveProvisionalBillingSource must return null
+    // Orchestration peopleCount must resolve Tenant A (1 occupant)
+    const marchPeople = await billingOrchestrationService.resolveCyclePeopleCount(
+      seqDorm.id,
+      marchCycle.id,
+      seqRoom.id,
+      undefined
+    );
+    expect(marchPeople).toBe(1);
+
+    // 3. In September cycle (outside both):
+    // Billing source must return null
     const resolvedSept = await billingService.resolveProvisionalBillingSource(
       seqDorm.id,
       seqRoom.id,
       septCycle
     );
     expect(resolvedSept).toBeNull();
+
+    // Orchestration peopleCount must resolve 0
+    const septPeople = await billingOrchestrationService.resolveCyclePeopleCount(
+      seqDorm.id,
+      septCycle.id,
+      seqRoom.id,
+      undefined
+    );
+    expect(septPeople).toBe(0);
   });
 
   it('7c. Money Decimal-String Schema Boundary: accepts valid canonical decimal strings and strictly rejects numbers/scientific/NaN/negative', () => {
@@ -921,6 +958,106 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
     expect(keyFee?.amount).toBe('100.00');
   });
 
+  it('12b. Transaction Visibility: Single switch with dirty manual charges includes them in bill items and total without prior save', async () => {
+    // Create fresh room and tenant
+    const freshRoom = await prisma.room.create({
+      data: {
+        dormitoryId: testDormitoryId,
+        buildingId: testBuildingId,
+        roomNumber: 'TX-VIS-101',
+        normalizedRoomNumber: 'TX-VIS-101',
+        roomType: 'standard',
+        monthlyRent: toDecimal('4000.00'),
+        status: 'vacant',
+      },
+    });
+
+    await provisionalRentalTermService.createProvisionalTenantAndTerm(
+      testDormitoryId,
+      {
+        roomId: freshRoom.id,
+        fullName: 'ผู้เช่า สดใหม่',
+        rentalType: 'MONTHLY',
+        unitRentAmount: '4000.00',
+        startDate: '2026-06-01',
+      },
+      'user-owner-1'
+    );
+
+    // Verify snapshot does NOT exist or has 0 manual charges before toggle
+    const preSnap = await prisma.roomBillingCycleSnapshot.findUnique({
+      where: {
+        dormitory_billing_cycle_room_unique: {
+          dormitoryId: testDormitoryId,
+          billingCycleId: cycle1Id,
+          roomId: freshRoom.id,
+        },
+      },
+    });
+    expect(preSnap?.manualOutstandingAmount ?? toDecimal('0.00')).toEqual(toDecimal('0.00'));
+
+    // In ONE toggleRoomBillSwitch command: send dirtyRow with manualOutstandingAmount + otherFees + meter readings
+    const toggleRes = await meterService.toggleRoomBillSwitch(
+      testDormitoryId,
+      {
+        billingCycleId: cycle1Id,
+        roomId: freshRoom.id,
+        action: 'issue',
+        dirtyRow: {
+          roomId: freshRoom.id,
+          waterPrev: '100.00',
+          waterCurr: '110.00',
+          elecPrev: '500.00',
+          elecCurr: '550.00',
+          peopleCount: 1,
+          manualOutstandingAmount: '150.00',
+          otherFees: [
+            { description: 'ค่าทำความสะอาด', amount: '500.00' },
+          ],
+        },
+      },
+      'user-owner-1',
+      billingService
+    );
+
+    expect(toggleRes.action).toBe('issue');
+    expect(toggleRes.bill).toBeDefined();
+
+    // 1. Snapshot committed with 150.00 and 500.00
+    const postSnap = await prisma.roomBillingCycleSnapshot.findUnique({
+      where: {
+        dormitory_billing_cycle_room_unique: {
+          dormitoryId: testDormitoryId,
+          billingCycleId: cycle1Id,
+          roomId: freshRoom.id,
+        },
+      },
+    });
+    expect(formatDecimal(toDecimal(postSnap?.manualOutstandingAmount))).toBe('150.00');
+    expect(postSnap?.otherFees).toEqual([
+      { description: 'ค่าทำความสะอาด', amount: '500.00' },
+    ]);
+
+    // 2. Bill Items must contain both charges
+    const billItems = await prisma.billItem.findMany({
+      where: { billId: toggleRes.bill.id },
+    });
+    const manualOut = billItems.find((i) => i.type === 'manual_outstanding');
+    const cleanFee = billItems.find((i) => i.type === 'other_fee' && i.description === 'ค่าทำความสะอาด');
+
+    expect(manualOut).toBeDefined();
+    expect(formatDecimal(toDecimal(manualOut!.amount.toString()))).toBe('150.00');
+    expect(cleanFee).toBeDefined();
+    expect(formatDecimal(toDecimal(cleanFee!.amount.toString()))).toBe('500.00');
+
+    // 3. Bill total must include both charges exactly
+    let sumDec = toDecimal('0.00');
+    for (const item of billItems) {
+      sumDec = addDecimals(sumDec, item.amount.toString());
+    }
+    expect(formatDecimal(sumDec)).toBe(formatDecimal(toDecimal(toggleRes.bill.totalAmount.toString())));
+  });
+
   it('13. Status Switch Authority: Toggle ON -> OFF cancels unpaid bill with OWNER_METER_SWITCH_OFF', async () => {
     const cancelRes = await meterService.toggleRoomBillSwitch(
       testDormitoryId,
@@ -1072,6 +1209,17 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
       where: { dormitoryId: testDormitoryId, billingCycleId: cycle1Id, roomId: testRoom3Id, status: 'unpaid' },
     });
     expect(billA).toBeDefined();
+
+    // Verify Room A bill items include manual_outstanding (transaction-visible)
+    const billAItems = await prisma.billItem.findMany({
+      where: { billId: billA!.id },
+    });
+    const manualOutItem = billAItems.find((i) => i.type === 'manual_outstanding');
+    expect(manualOutItem).toBeDefined();
+    expect(formatDecimal(toDecimal(manualOutItem!.amount.toString()))).toBe('50.00');
+
+    // Total must include the 50.00
+    expect(toDecimal(billA!.totalAmount.toString()).toNumber()).toBeGreaterThanOrEqual(50.0);
 
     // Assert: Room B bill was NOT created
     const billB = await prisma.bill.findFirst({

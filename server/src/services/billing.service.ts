@@ -12,6 +12,7 @@ import { IRoomRepository } from '../db/repositories/room.repository.js';
 import { ITenantRepository } from '../db/repositories/tenant.repository.js';
 import { AuditService } from './audit.service.js';
 import { billingOrchestrationService } from './billing-orchestration.service.js';
+import { resolveProvisionalBillingSource as sharedResolveProvisionalBillingSource } from './provisional-billing-source.service.js';
 import { toDecimal, addDecimals, mulDecimals, divDecimals, formatDecimal, subDecimals, compareDecimals, isZeroDecimal } from '../utils/decimal-math.util.js';
 import { getPrismaClient } from '../db/prisma.js';
 
@@ -173,27 +174,12 @@ export class BillingService {
     billingCycle: { periodStart: Date | string; periodEnd: Date | string },
     tx?: any
   ): Promise<any | null> {
-    const prisma = getPrismaClient();
-    const client = tx || prisma;
-    const cycleStart = new Date(billingCycle.periodStart);
-    const cycleEnd = new Date(billingCycle.periodEnd);
-
-    const term = await client.provisionalRentalTerm.findFirst({
-      where: {
-        dormitoryId,
-        roomId,
-        status: 'ACTIVE',
-        deletedAt: null,
-        startDate: { lte: cycleEnd },
-        endDate: { gte: cycleStart },
-      },
-      orderBy: [
-        { startDate: 'asc' },
-        { createdAt: 'desc' },
-      ],
+    return sharedResolveProvisionalBillingSource({
+      dormitoryId,
+      roomId,
+      billingCycle,
+      tx,
     });
-
-    return term;
   }
 
   public async generateBillPreview(
@@ -564,8 +550,8 @@ export class BillingService {
       }
     }
 
-    // Query RoomBillingCycleSnapshot for manual outstanding and other fees
-    const cycleSnapshot = await prisma.roomBillingCycleSnapshot.findUnique({
+    // Query RoomBillingCycleSnapshot for manual outstanding and other fees (transaction-visible)
+    const cycleSnapshot = await client.roomBillingCycleSnapshot.findUnique({
       where: {
         dormitory_billing_cycle_room_unique: {
           dormitoryId,
