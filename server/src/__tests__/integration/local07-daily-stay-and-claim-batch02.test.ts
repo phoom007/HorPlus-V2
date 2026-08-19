@@ -458,8 +458,31 @@ describe('LOCAL-07 Batch 02: Daily Stay Domain, Invoicing & Tenant Self-Claim', 
   describe('Tenant Self-Claim (Option 1A)', () => {
     let unlinkedTenantId: string;
     let claimRoomId: string;
+    let claimUser1Id: string;
+    let claimUser2Id: string;
 
     beforeAll(async () => {
+      // Create dedicated test users for claim tests
+      const u1 = await prisma.user.create({
+        data: {
+          googleSubject: `sub-claim-u1-${Date.now()}`,
+          email: `claim-u1-${Date.now()}@example.com`,
+          emailNormalized: `claim-u1-${Date.now()}@example.com`,
+          name: 'นายสมชาย ใจดี ผู้เช่า1',
+        },
+      });
+      claimUser1Id = u1.id;
+
+      const u2 = await prisma.user.create({
+        data: {
+          googleSubject: `sub-claim-u2-${Date.now()}`,
+          email: `claim-u2-${Date.now()}@example.com`,
+          emailNormalized: `claim-u2-${Date.now()}@example.com`,
+          name: 'นางสาวสมศรี สดใส ผู้เช่า2',
+        },
+      });
+      claimUser2Id = u2.id;
+
       // Create a dedicated room and unlinked tenant
       const claimRoom = await prisma.room.create({
         data: {
@@ -517,7 +540,7 @@ describe('LOCAL-07 Batch 02: Daily Stay Domain, Invoicing & Tenant Self-Claim', 
             roomId: claimRoomId,
             claimInput: 'นายวิชัย กล้าหาญ',
           },
-          tenantUserId
+          claimUser1Id
         )
       ).rejects.toThrow();
 
@@ -533,7 +556,7 @@ describe('LOCAL-07 Batch 02: Daily Stay Domain, Invoicing & Tenant Self-Claim', 
           roomId: claimRoomId,
           claimInput: 'สมชาย ใจดี', // stripped "นาย"
         },
-        tenantUserId
+        claimUser1Id
       );
 
       expect(claimResult.success).toBe(true);
@@ -541,13 +564,13 @@ describe('LOCAL-07 Batch 02: Daily Stay Domain, Invoicing & Tenant Self-Claim', 
 
       // Verify Tenant.linkedUserId is set to User.id (NOT LineFriend id)
       const updatedTenant = await prisma.tenant.findUnique({ where: { id: unlinkedTenantId } });
-      expect(updatedTenant?.linkedUserId).toBe(tenantUserId);
+      expect(updatedTenant?.linkedUserId).toBe(claimUser1Id);
 
       // Verify DormitoryMember TENANT created/ensured for claimed user
       const membership = await prisma.dormitoryMember.findUnique({
         where: {
           user_dormitory_unique: {
-            userId: tenantUserId,
+            userId: claimUser1Id,
             dormitoryId,
           },
         },
@@ -567,13 +590,13 @@ describe('LOCAL-07 Batch 02: Daily Stay Domain, Invoicing & Tenant Self-Claim', 
             roomId: claimRoomId,
             claimInput: 'นายสมชาย ใจดี',
           },
-          tenantUser2Id
+          claimUser2Id
         )
       ).rejects.toThrow();
 
       // Original link preserved
       const t = await prisma.tenant.findUnique({ where: { id: unlinkedTenantId } });
-      expect(t?.linkedUserId).toBe(tenantUserId);
+      expect(t?.linkedUserId).toBe(claimUser1Id);
     });
 
     it('E. Phone exact match successfully claims unlinked placeholder', async () => {
@@ -618,14 +641,14 @@ describe('LOCAL-07 Batch 02: Daily Stay Domain, Invoicing & Tenant Self-Claim', 
           roomId: claimRoom2.id,
           claimInput: '+66897654321',
         },
-        tenantUser2Id
+        claimUser2Id
       );
 
       expect(res.success).toBe(true);
       expect(res.tenantId).toBe(t2.id);
 
       const updatedT2 = await prisma.tenant.findUnique({ where: { id: t2.id } });
-      expect(updatedT2?.linkedUserId).toBe(tenantUser2Id);
+      expect(updatedT2?.linkedUserId).toBe(claimUser2Id);
     });
 
     // ── Decision 2A Explicit Priority Tests ─────────────────────────────
@@ -1242,6 +1265,179 @@ describe('LOCAL-07 Batch 02: Daily Stay Domain, Invoicing & Tenant Self-Claim', 
 
       expect(pendingRes.status).toBe(200);
       expect(pendingRes.body.data.some((s: any) => s.id === res.body.data.id)).toBe(false);
+    });
+
+    it('4b. Owner Daily Quick Add Rate Matrix: configured fallback, explicit rate, missing rate fail-closed (409), explicit 0.00 rate', async () => {
+      const today = new Date().toISOString().slice(0, 10);
+      const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+
+      // Setup fresh Dormitory with OWNER role and active member
+      const matrixDorm = await prisma.dormitory.create({
+        data: {
+          code: `QA-${Date.now()}`,
+          name: 'Dormitory Quick Add Matrix',
+          status: 'active',
+        },
+      });
+      const ownerRole = await prisma.role.create({
+        data: {
+          dormitoryId: matrixDorm.id,
+          code: 'OWNER',
+          name: 'เจ้าของหอพัก',
+          permissions: ['*'],
+          isSystem: true,
+        },
+      });
+      await prisma.dormitoryMember.create({
+        data: {
+          userId: ownerUserId,
+          dormitoryId: matrixDorm.id,
+          roleId: ownerRole.id,
+          status: 'active',
+          membershipOrigin: 'MANUAL_GRANT',
+        },
+      });
+      const matrixBld = await prisma.building.create({
+        data: {
+          dormitoryId: matrixDorm.id,
+          name: 'Building Matrix',
+          floorCount: 2,
+        },
+      });
+
+      const matrixAuth = await authService.authenticateTestUser(ownerUserId);
+      const matrixCookie = `horplus_session=${matrixAuth.sessionToken}; horplus_csrf=${matrixAuth.csrfToken}`;
+      const matrixCsrf = matrixAuth.csrfToken;
+
+      // Case A: Room with configured daily rate = 350.00, Owner payload omits dailyRateAmount
+      const roomA = await prisma.room.create({
+        data: {
+          dormitoryId: matrixDorm.id,
+          buildingId: matrixBld.id,
+          roomNumber: 'QA-A',
+          normalizedRoomNumber: 'QA-A',
+          roomType: 'standard',
+          floor: 1,
+          status: 'vacant',
+          dailyRent: 350.0,
+        },
+      });
+
+      const resA = await request(httpApp)
+        .post('/api/v1/daily-stays/owner-quick-add')
+        .set('Cookie', matrixCookie)
+        .set('x-csrf-token', matrixCsrf)
+        .set('x-dormitory-id', matrixDorm.id)
+        .send({
+          roomId: roomA.id,
+          fullName: 'นายทดสอบ เคสเอ',
+          startDate: today,
+          endDate: tomorrow,
+        });
+
+      expect(resA.status).toBe(201);
+      expect(Number(resA.body.data.dailyRateAmount)).toBe(350.0);
+
+      // Case B: Room with unconfigured daily rate (null), Owner explicitly supplies dailyRateAmount = "500.00"
+      const roomB = await prisma.room.create({
+        data: {
+          dormitoryId: matrixDorm.id,
+          buildingId: matrixBld.id,
+          roomNumber: 'QA-B',
+          normalizedRoomNumber: 'QA-B',
+          roomType: 'standard',
+          floor: 1,
+          status: 'vacant',
+          dailyRent: null,
+        },
+      });
+
+      const resB = await request(httpApp)
+        .post('/api/v1/daily-stays/owner-quick-add')
+        .set('Cookie', matrixCookie)
+        .set('x-csrf-token', matrixCsrf)
+        .set('x-dormitory-id', matrixDorm.id)
+        .send({
+          roomId: roomB.id,
+          fullName: 'นายทดสอบ เคสบี',
+          startDate: today,
+          endDate: tomorrow,
+          dailyRateAmount: '500.00',
+        });
+
+      expect(resB.status).toBe(201);
+      expect(Number(resB.body.data.dailyRateAmount)).toBe(500.0);
+
+      // Case C: Room with unconfigured daily rate (null), Owner omits dailyRateAmount -> Fails closed 409
+      const roomC = await prisma.room.create({
+        data: {
+          dormitoryId: matrixDorm.id,
+          buildingId: matrixBld.id,
+          roomNumber: 'QA-C',
+          normalizedRoomNumber: 'QA-C',
+          roomType: 'standard',
+          floor: 1,
+          status: 'vacant',
+          dailyRent: null,
+        },
+      });
+
+      const tenantCountBefore = await prisma.tenant.count({ where: { dormitoryId: matrixDorm.id } });
+      const occCountBefore = await prisma.occupancy.count({ where: { dormitoryId: matrixDorm.id } });
+      const invCountBefore = await prisma.dailyStayInvoice.count({ where: { dormitoryId: matrixDorm.id } });
+      const stayCountBefore = await prisma.dailyStay.count({ where: { dormitoryId: matrixDorm.id } });
+
+      const resC = await request(httpApp)
+        .post('/api/v1/daily-stays/owner-quick-add')
+        .set('Cookie', matrixCookie)
+        .set('x-csrf-token', matrixCsrf)
+        .set('x-dormitory-id', matrixDorm.id)
+        .send({
+          roomId: roomC.id,
+          fullName: 'นายทดสอบ เคสซี ไม่ผ่าน',
+          startDate: today,
+          endDate: tomorrow,
+          // dailyRateAmount omitted
+        });
+
+      expect(resC.status).toBe(409);
+      expect(resC.body.error.code).toBe('DAILY_RATE_NOT_CONFIGURED');
+
+      // Assert 0 partial mutations
+      expect(await prisma.tenant.count({ where: { dormitoryId: matrixDorm.id } })).toBe(tenantCountBefore);
+      expect(await prisma.occupancy.count({ where: { dormitoryId: matrixDorm.id } })).toBe(occCountBefore);
+      expect(await prisma.dailyStayInvoice.count({ where: { dormitoryId: matrixDorm.id } })).toBe(invCountBefore);
+      expect(await prisma.dailyStay.count({ where: { dormitoryId: matrixDorm.id } })).toBe(stayCountBefore);
+
+      // Case D: Room with unconfigured daily rate (null), Owner explicitly supplies "0.00" -> valid intentional zero
+      const roomD = await prisma.room.create({
+        data: {
+          dormitoryId: matrixDorm.id,
+          buildingId: matrixBld.id,
+          roomNumber: 'QA-D',
+          normalizedRoomNumber: 'QA-D',
+          roomType: 'standard',
+          floor: 1,
+          status: 'vacant',
+          dailyRent: null,
+        },
+      });
+
+      const resD = await request(httpApp)
+        .post('/api/v1/daily-stays/owner-quick-add')
+        .set('Cookie', matrixCookie)
+        .set('x-csrf-token', matrixCsrf)
+        .set('x-dormitory-id', matrixDorm.id)
+        .send({
+          roomId: roomD.id,
+          fullName: 'นายทดสอบ เคสดี ศูนย์บาท',
+          startDate: today,
+          endDate: tomorrow,
+          dailyRateAmount: '0.00',
+        });
+
+      expect(resD.status).toBe(201);
+      expect(Number(resD.body.data.dailyRateAmount)).toBe(0.0);
     });
 
     it('5. GET /api/v1/daily-stays/invoices returns daily invoices for payments view', async () => {
@@ -2721,6 +2917,481 @@ describe('LOCAL-07 Batch 02: Daily Stay Domain, Invoicing & Tenant Self-Claim', 
         });
         expect(updatedTenant?.linkedUserId).toBe(users[i].id);
       }
+    });
+
+    it('25. One User / One Tenant per Dormitory Claim Cardinality: Existing same-dorm link blocks second claim with generic 404', async () => {
+      // 1. Setup Dormitory and 2 rooms
+      const cardDorm = await prisma.dormitory.create({
+        data: {
+          code: `CARD-${Date.now()}`,
+          name: 'Dormitory Cardinality Test',
+        },
+      });
+      const cardBld = await prisma.building.create({
+        data: {
+          dormitoryId: cardDorm.id,
+          name: 'Building Card',
+          floorCount: 2,
+        },
+      });
+      const room1 = await prisma.room.create({
+        data: {
+          dormitoryId: cardDorm.id,
+          buildingId: cardBld.id,
+          roomNumber: 'CR-101',
+          normalizedRoomNumber: 'CR-101',
+          roomType: 'standard',
+          floor: 1,
+          status: 'vacant',
+        },
+      });
+      const room2 = await prisma.room.create({
+        data: {
+          dormitoryId: cardDorm.id,
+          buildingId: cardBld.id,
+          roomNumber: 'CR-102',
+          normalizedRoomNumber: 'CR-102',
+          roomType: 'standard',
+          floor: 1,
+          status: 'vacant',
+        },
+      });
+
+      // 2. User U is already linked to Tenant T1 in Room 1
+      const userU = await prisma.user.create({
+        data: {
+          googleSubject: `sub-card-${Date.now()}`,
+          email: `card-${Date.now()}@example.com`,
+          emailNormalized: `card-${Date.now()}@example.com`,
+          name: 'นายผู้ใช้ คนเดียวในหอ',
+        },
+      });
+
+      const tenant1 = await prisma.tenant.create({
+        data: {
+          dormitoryId: cardDorm.id,
+          tenantNumber: `T-CR1-${Date.now()}`,
+          firstName: 'ผู้เช่า',
+          lastName: 'ห้องหนึ่ง',
+          displayName: 'ผู้เช่า ห้องหนึ่ง',
+          phone: '0811111111',
+          status: 'active',
+          linkedUserId: userU.id, // ALREADY LINKED
+        },
+      });
+
+      await prisma.occupancy.create({
+        data: {
+          dormitoryId: cardDorm.id,
+          tenantId: tenant1.id,
+          roomId: room1.id,
+          status: 'ACTIVE',
+        },
+      });
+
+      // 3. Room 2 has an eligible unlinked Tenant T2
+      const tenant2 = await prisma.tenant.create({
+        data: {
+          dormitoryId: cardDorm.id,
+          tenantNumber: `T-CR2-${Date.now()}`,
+          firstName: 'ผู้เช่า',
+          lastName: 'ห้องสอง',
+          displayName: 'ผู้เช่า ห้องสอง',
+          phone: '0822222222',
+          status: 'active',
+          linkedUserId: null,
+        },
+      });
+
+      await prisma.occupancy.create({
+        data: {
+          dormitoryId: cardDorm.id,
+          tenantId: tenant2.id,
+          roomId: room2.id,
+          status: 'ACTIVE',
+        },
+      });
+
+      const userAuth = await authService.authenticateTestUser(userU.id);
+      const userCookie = `horplus_session=${userAuth.sessionToken}; horplus_csrf=${userAuth.csrfToken}`;
+      const userCsrf = userAuth.csrfToken;
+
+      // 4. User U attempts to claim Tenant T2 in Room 2
+      const claimRes = await request(httpApp)
+        .post('/api/v1/tenant-claims/claim')
+        .set('Cookie', userCookie)
+        .set('x-csrf-token', userCsrf)
+        .send({
+          dormitoryId: cardDorm.id,
+          roomNumber: 'CR-102',
+          claimInput: '0822222222',
+        });
+
+      // Must fail closed with generic 404 CLAIM_UNAVAILABLE
+      expect(claimRes.status).toBe(404);
+      expect(claimRes.body.error.code).toBe('CLAIM_UNAVAILABLE');
+      expect(claimRes.body.error.message).toBe('ไม่พบข้อมูลผู้เช่าที่ตรงกับข้อมูลที่ระบุ หรือห้องพักนี้ไม่สามารถยืนยันสิทธิ์ได้ในขณะนี้');
+
+      // Database invariants: T1 remains linked to U, T2 remains unlinked (null)
+      const checkT1 = await prisma.tenant.findUnique({ where: { id: tenant1.id } });
+      expect(checkT1?.linkedUserId).toBe(userU.id);
+
+      const checkT2 = await prisma.tenant.findUnique({ where: { id: tenant2.id } });
+      expect(checkT2?.linkedUserId).toBeNull();
+    });
+
+    it('26. Concurrent Double-Claim by Same User Across Two Rooms: Serialized by user+dormitory lock so exactly ONE succeeds and DB count = 1', async () => {
+      // 1. Setup Dormitory and 2 rooms
+      const raceDorm = await prisma.dormitory.create({
+        data: {
+          code: `RACE-${Date.now()}`,
+          name: 'Dormitory Double Claim Race',
+        },
+      });
+      const raceBld = await prisma.building.create({
+        data: {
+          dormitoryId: raceDorm.id,
+          name: 'Building Race',
+          floorCount: 2,
+        },
+      });
+      const roomA = await prisma.room.create({
+        data: {
+          dormitoryId: raceDorm.id,
+          buildingId: raceBld.id,
+          roomNumber: 'RC-101',
+          normalizedRoomNumber: 'RC-101',
+          roomType: 'standard',
+          floor: 1,
+          status: 'vacant',
+        },
+      });
+      const roomB = await prisma.room.create({
+        data: {
+          dormitoryId: raceDorm.id,
+          buildingId: raceBld.id,
+          roomNumber: 'RC-102',
+          normalizedRoomNumber: 'RC-102',
+          roomType: 'standard',
+          floor: 1,
+          status: 'vacant',
+        },
+      });
+
+      const tenA = await prisma.tenant.create({
+        data: {
+          dormitoryId: raceDorm.id,
+          tenantNumber: `T-RCA-${Date.now()}`,
+          firstName: 'ผู้เช่า',
+          lastName: 'เอ',
+          displayName: 'ผู้เช่า เอ',
+          phone: '0833333333',
+          status: 'active',
+          linkedUserId: null,
+        },
+      });
+      await prisma.occupancy.create({
+        data: {
+          dormitoryId: raceDorm.id,
+          tenantId: tenA.id,
+          roomId: roomA.id,
+          status: 'ACTIVE',
+        },
+      });
+
+      const tenB = await prisma.tenant.create({
+        data: {
+          dormitoryId: raceDorm.id,
+          tenantNumber: `T-RCB-${Date.now()}`,
+          firstName: 'ผู้เช่า',
+          lastName: 'บี',
+          displayName: 'ผู้เช่า บี',
+          phone: '0844444444',
+          status: 'active',
+          linkedUserId: null,
+        },
+      });
+      await prisma.occupancy.create({
+        data: {
+          dormitoryId: raceDorm.id,
+          tenantId: tenB.id,
+          roomId: roomB.id,
+          status: 'ACTIVE',
+        },
+      });
+
+      // 2. Fresh User not linked to any tenant
+      const freshUser = await prisma.user.create({
+        data: {
+          googleSubject: `sub-race-${Date.now()}`,
+          email: `race-${Date.now()}@example.com`,
+          emailNormalized: `race-${Date.now()}@example.com`,
+          name: 'นายแข่งเคลม สองห้องพร้อมกัน',
+        },
+      });
+
+      const { tenantClaimService } = await import('../../services/tenant-claim.service.js');
+
+      // 3. Concurrently execute two valid claims for Room A and Room B
+      const claim1 = tenantClaimService
+        .claimTenant(
+          {
+            dormitoryId: raceDorm.id,
+            roomId: roomA.id,
+            claimInput: '0833333333',
+          },
+          freshUser.id
+        )
+        .then((res) => ({ success: true, res }))
+        .catch((err) => ({ success: false, err }));
+
+      const claim2 = tenantClaimService
+        .claimTenant(
+          {
+            dormitoryId: raceDorm.id,
+            roomId: roomB.id,
+            claimInput: '0844444444',
+          },
+          freshUser.id
+        )
+        .then((res) => ({ success: true, res }))
+        .catch((err) => ({ success: false, err }));
+
+      const [res1, res2] = await Promise.all([claim1, claim2]);
+
+      // Exactly one succeeds, the other fails
+      const successCount = (res1.success ? 1 : 0) + (res2.success ? 1 : 0);
+      expect(successCount).toBe(1);
+
+      const failedResult = (!res1.success ? res1 : res2) as { success: false; err: any };
+      expect(failedResult.err?.code).toBe('CLAIM_USER_ALREADY_LINKED_IN_DORM');
+
+      // Database assertion: exactly 1 Tenant in raceDorm has linkedUserId = freshUser.id
+      const linkedTenantsCount = await prisma.tenant.count({
+        where: {
+          dormitoryId: raceDorm.id,
+          linkedUserId: freshUser.id,
+          deletedAt: null,
+        },
+      });
+      expect(linkedTenantsCount).toBe(1);
+    });
+
+    it('27. Cross-Dorm User Link Cardinality: User may be linked to one Tenant in Dorm A and one Tenant in Dorm B', async () => {
+      // 1. Dorm A setup
+      const dormA = await prisma.dormitory.create({
+        data: {
+          code: `CD-A-${Date.now()}`,
+          name: 'Dormitory Cross A',
+        },
+      });
+      const bldA = await prisma.building.create({
+        data: {
+          dormitoryId: dormA.id,
+          name: 'Building A',
+          floorCount: 2,
+        },
+      });
+      const roomA = await prisma.room.create({
+        data: {
+          dormitoryId: dormA.id,
+          buildingId: bldA.id,
+          roomNumber: 'CD-A1',
+          normalizedRoomNumber: 'CD-A1',
+          roomType: 'standard',
+          floor: 1,
+          status: 'vacant',
+        },
+      });
+      const tenA = await prisma.tenant.create({
+        data: {
+          dormitoryId: dormA.id,
+          tenantNumber: `T-CDA-${Date.now()}`,
+          firstName: 'ผู้เช่า',
+          lastName: 'หอเอ',
+          displayName: 'ผู้เช่า หอเอ',
+          phone: '0855551111',
+          status: 'active',
+          linkedUserId: null,
+        },
+      });
+      await prisma.occupancy.create({
+        data: {
+          dormitoryId: dormA.id,
+          tenantId: tenA.id,
+          roomId: roomA.id,
+          status: 'ACTIVE',
+        },
+      });
+
+      // 2. Dorm B setup
+      const dormB = await prisma.dormitory.create({
+        data: {
+          code: `CD-B-${Date.now()}`,
+          name: 'Dormitory Cross B',
+        },
+      });
+      const bldB = await prisma.building.create({
+        data: {
+          dormitoryId: dormB.id,
+          name: 'Building B',
+          floorCount: 2,
+        },
+      });
+      const roomB = await prisma.room.create({
+        data: {
+          dormitoryId: dormB.id,
+          buildingId: bldB.id,
+          roomNumber: 'CD-B1',
+          normalizedRoomNumber: 'CD-B1',
+          roomType: 'standard',
+          floor: 1,
+          status: 'vacant',
+        },
+      });
+      const tenB = await prisma.tenant.create({
+        data: {
+          dormitoryId: dormB.id,
+          tenantNumber: `T-CDB-${Date.now()}`,
+          firstName: 'ผู้เช่า',
+          lastName: 'หอบี',
+          displayName: 'ผู้เช่า หอบี',
+          phone: '0866662222',
+          status: 'active',
+          linkedUserId: null,
+        },
+      });
+      await prisma.occupancy.create({
+        data: {
+          dormitoryId: dormB.id,
+          tenantId: tenB.id,
+          roomId: roomB.id,
+          status: 'ACTIVE',
+        },
+      });
+
+      // 3. User U claims Tenant in Dorm A
+      const userMulti = await prisma.user.create({
+        data: {
+          googleSubject: `sub-cd-${Date.now()}`,
+          email: `cd-${Date.now()}@example.com`,
+          emailNormalized: `cd-${Date.now()}@example.com`,
+          name: 'นายพักสองหอ สองจังหวัด',
+        },
+      });
+
+      const { tenantClaimService } = await import('../../services/tenant-claim.service.js');
+
+      const claimResA = await tenantClaimService.claimTenant(
+        {
+          dormitoryId: dormA.id,
+          roomId: roomA.id,
+          claimInput: '0855551111',
+        },
+        userMulti.id
+      );
+      expect(claimResA.success).toBe(true);
+
+      // 4. User U claims Tenant in Dorm B (cross-dorm link is allowed)
+      const claimResB = await tenantClaimService.claimTenant(
+        {
+          dormitoryId: dormB.id,
+          roomId: roomB.id,
+          claimInput: '0866662222',
+        },
+        userMulti.id
+      );
+      expect(claimResB.success).toBe(true);
+
+      // Assert DB state: exactly 1 linked tenant in Dorm A, and exactly 1 in Dorm B
+      const countA = await prisma.tenant.count({
+        where: { dormitoryId: dormA.id, linkedUserId: userMulti.id, deletedAt: null },
+      });
+      expect(countA).toBe(1);
+
+      const countB = await prisma.tenant.count({
+        where: { dormitoryId: dormB.id, linkedUserId: userMulti.id, deletedAt: null },
+      });
+      expect(countB).toBe(1);
+    });
+
+    it('28. Tenant Portal Determinism: Deterministically resolves single linked Tenant and validates DB count invariant', async () => {
+      // 1. Setup single claimed tenant
+      const portRoom = await prisma.room.create({
+        data: {
+          dormitoryId,
+          buildingId,
+          roomNumber: `DET-${Date.now().toString().slice(-4)}`,
+          normalizedRoomNumber: `DET-${Date.now().toString().slice(-4)}`,
+          roomType: 'standard',
+          floor: 1,
+          status: 'vacant',
+        },
+      });
+
+      const portUser = await prisma.user.create({
+        data: {
+          googleSubject: `sub-det-${Date.now()}`,
+          email: `det-${Date.now()}@example.com`,
+          emailNormalized: `det-${Date.now()}@example.com`,
+          name: 'นายเด่น ชัดเจน',
+        },
+      });
+
+      const portTenant = await prisma.tenant.create({
+        data: {
+          dormitoryId,
+          tenantNumber: `T-DET-${Date.now()}`,
+          firstName: 'เด่น',
+          lastName: 'ชัดเจน',
+          displayName: 'นายเด่น ชัดเจน',
+          phone: '0877778888',
+          status: 'active',
+          linkedUserId: null,
+        },
+      });
+
+      await prisma.occupancy.create({
+        data: {
+          dormitoryId,
+          tenantId: portTenant.id,
+          roomId: portRoom.id,
+          status: 'ACTIVE',
+        },
+      });
+
+      const { tenantClaimService } = await import('../../services/tenant-claim.service.js');
+      const claimRes = await tenantClaimService.claimTenant(
+        {
+          dormitoryId,
+          roomId: portRoom.id,
+          claimInput: '0877778888',
+        },
+        portUser.id
+      );
+      expect(claimRes.success).toBe(true);
+
+      // 2. Query Tenant Portal Profile
+      const portAuth = await authService.authenticateTestUser(portUser.id);
+      const portCookie = `horplus_session=${portAuth.sessionToken}; horplus_csrf=${portAuth.csrfToken}`;
+
+      const res = await request(httpApp)
+        .get('/api/v1/tenant-portal/profile')
+        .set('Cookie', portCookie)
+        .set('x-dormitory-id', dormitoryId);
+
+      expect(res.status).toBe(200);
+      expect(res.body.id).toBe(portTenant.id);
+
+      // Invariant assertion: Exactly 1 linked tenant exists for this user in this dormitory
+      const totalLinked = await prisma.tenant.count({
+        where: {
+          dormitoryId,
+          linkedUserId: portUser.id,
+          deletedAt: null,
+        },
+      });
+      expect(totalLinked).toBe(1);
     });
   });
 

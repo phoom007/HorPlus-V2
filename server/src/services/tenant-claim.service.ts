@@ -297,7 +297,10 @@ export class TenantClaimService {
     }
 
     return this.prisma.$transaction(async (tx) => {
-      // 1. Verify room exists and belongs to dormitory
+      // 1. User+Dormitory claim advisory lock (Order 1: serializes claims by the same user in this dormitory)
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${'tenant_claim_user:' + userId + ':' + dormitoryId}))`;
+
+      // 2. Verify room exists and belongs to dormitory
       const roomWhere: any = {
         dormitoryId,
         deletedAt: null,
@@ -327,10 +330,37 @@ export class TenantClaimService {
         throw err;
       }
 
-      // 2. Room lock to protect against concurrency
+      // 3. Room authority lock (Order 2: protects against concurrent claims in the same room)
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${dormitoryId + ':' + room.id}))`;
 
-      // 3. Find authoritative candidate using Decision 2A Priority
+      // 4. One User / One Tenant per Dormitory Cardinality Check (Locked Product Decision)
+      const existingLinkedTenant = await tx.tenant.findFirst({
+        where: {
+          dormitoryId,
+          linkedUserId: userId,
+          deletedAt: null,
+        },
+      });
+
+      if (existingLinkedTenant) {
+        if (this.auditService) {
+          await this.auditService.logSecurityEvent({
+            action: 'tenant.claim.user_already_linked',
+            dormitoryId,
+            userId,
+            details: {
+              existingTenantId: existingLinkedTenant.id,
+              attemptedRoomId: room.id,
+            },
+          });
+        }
+        const err = new Error('ไม่พบข้อมูลผู้เช่าที่ตรงกับข้อมูลที่ระบุ');
+        (err as any).statusCode = 404;
+        (err as any).code = 'CLAIM_USER_ALREADY_LINKED_IN_DORM';
+        throw err;
+      }
+
+      // 5. Find authoritative candidate using Decision 2A Priority
       const candidate = await this.selectAuthoritativeCandidate(dormitoryId, room.id, tx, effectiveDate);
 
       if (!candidate) {
@@ -340,7 +370,7 @@ export class TenantClaimService {
         throw err;
       }
 
-      // 4. Test match
+      // 6. Test match
       let isMatched = false;
       const inputPhone = normalizeThaiPhone(trimmedInput);
 
@@ -368,7 +398,7 @@ export class TenantClaimService {
         throw err;
       }
 
-      // 5. Re-check under lock that tenant.linkedUserId is still null
+      // 7. Re-check under lock that candidate tenant.linkedUserId is still null
       const freshTenant = await tx.tenant.findUnique({
         where: { id: candidate.id },
       });
@@ -376,11 +406,11 @@ export class TenantClaimService {
       if (!freshTenant || freshTenant.linkedUserId !== null) {
         const err = new Error('ไม่พบข้อมูลผู้เช่าที่ตรงกับข้อมูลที่ระบุ');
         (err as any).statusCode = 400;
-        (err as any).code = 'CLAIM_MATCH_FAILED';
+        (err as any).code = 'CLAIM_ALREADY_LINKED';
         throw err;
       }
 
-      // 6. Look up target or global TENANT role (Strictly no cross-dorm role leakage, concurrency-safe)
+      // 8. Look up target or global TENANT role (Strictly no cross-dorm role leakage, concurrency-safe)
       let tenantRole = await tx.role.findFirst({
         where: {
           code: 'TENANT',

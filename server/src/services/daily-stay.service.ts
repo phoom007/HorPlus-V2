@@ -613,12 +613,17 @@ export class DailyStayService {
         tx
       );
 
-      // Default daily rate from canonical DefaultsService authority
-      let dailyRate = '0.00';
-      if (data.dailyRateAmount !== undefined && data.dailyRateAmount !== null) {
+      // Default daily rate from canonical DefaultsService authority (Fail closed if unconfigured and not supplied)
+      let dailyRate: string;
+      if (data.dailyRateAmount !== undefined && data.dailyRateAmount !== null && String(data.dailyRateAmount).trim() !== '') {
         dailyRate = formatDecimal(toDecimal(String(data.dailyRateAmount)));
       } else if (effective.dailyRent?.value !== null && effective.dailyRent?.value !== undefined) {
         dailyRate = formatDecimal(toDecimal(String(effective.dailyRent.value)));
+      } else {
+        const err = new Error('ยังไม่ได้กำหนดอัตราค่าเช่ารายวันสำหรับห้องพักนี้ กรุณาระบุอัตราค่าเช่ารายวัน');
+        (err as any).statusCode = 409;
+        (err as any).code = 'DAILY_RATE_NOT_CONFIGURED';
+        throw err;
       }
 
       // Default deposit amount from canonical DefaultsService authority (0 is explicitly valid)
