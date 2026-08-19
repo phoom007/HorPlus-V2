@@ -45,7 +45,7 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
 
   // Daily fields
   const [dailyEndDate, setDailyEndDate] = useState(() => new Date().toISOString().slice(0, 10));
-  const [dailyRate, setDailyRate] = useState<number>(0);
+  const [dailyRate, setDailyRate] = useState<number | null>(null);
   const [dailyDeposit, setDailyDeposit] = useState<number>(0);
   const [depositDeclaredStatus, setDepositDeclaredStatus] = useState<'PAID' | 'UNPAID'>('UNPAID');
 
@@ -121,8 +121,8 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
         setTermEndDate('');
       }
 
-      // 3. Daily defaults: strictly from authoritative server context (preserves explicit 0 deposit)
-      const dRent = eff?.dailyRent !== null && eff?.dailyRent !== undefined ? Number(eff.dailyRent) : 0;
+      // 3. Daily defaults: strictly from authoritative server context (preserves null vs 0, and explicit 0 deposit)
+      const dRent = eff?.dailyRent !== null && eff?.dailyRent !== undefined ? Number(eff.dailyRent) : null;
       const dDep = eff?.depositAmount !== null && eff?.depositAmount !== undefined ? Number(eff.depositAmount) : 0;
 
       setDailyRate(dRent);
@@ -149,13 +149,19 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
   if (!isOpen || !context) return null;
 
   const inclusiveDays = calculateInclusiveDays(startDate, dailyEndDate);
-  const dailyTotalRent = dailyRate * inclusiveDays;
+  const dailyTotalRent = (dailyRate ?? 0) * inclusiveDays;
   const dailyTotalAgreed = dailyTotalRent + dailyDeposit;
   const dailyOutstanding = depositDeclaredStatus === 'PAID' ? dailyTotalRent : dailyTotalAgreed;
 
   const isTermDisabled =
     activeTab === 'TERM' &&
     (!termMonths || termMonths < 1 || termRent === null || termRent === undefined || isNaN(Number(termRent)) || Number(termRent) <= 0);
+
+  const isDailyDisabled =
+    activeTab === 'DAILY' &&
+    (dailyRate === null || dailyRate === undefined || isNaN(Number(dailyRate)) || Number(dailyRate) < 0);
+
+  const isSubmitDisabled = isTermDisabled || isDailyDisabled;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -171,6 +177,13 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
       }
       if (termRent === null || termRent === undefined || isNaN(Number(termRent)) || Number(termRent) <= 0) {
         setErrorText('กรุณาระบุค่าเช่ารายเทอม');
+        return;
+      }
+    }
+
+    if (activeTab === 'DAILY') {
+      if (dailyRate === null || dailyRate === undefined || isNaN(Number(dailyRate)) || Number(dailyRate) < 0) {
+        setErrorText('กรุณาระบุค่าเช่ารายวัน');
         return;
       }
     }
@@ -526,17 +539,30 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">
-                    อัตราค่าเช่าต่อวัน (บาท)
+                    อัตราค่าเช่าต่อวัน (บาท) <span className="text-rose-500">*</span>
                   </label>
                   <input
                     type="number"
                     min="0"
                     step="0.01"
                     required
-                    value={dailyRate}
-                    onChange={(e) => setDailyRate(parseFloat(e.target.value) || 0)}
+                    placeholder="ยังไม่ได้กำหนดค่าเช่ารายวัน"
+                    value={dailyRate === null || dailyRate === undefined ? '' : dailyRate}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (val === '') {
+                        setDailyRate(null);
+                      } else {
+                        setDailyRate(parseFloat(val) || 0);
+                      }
+                    }}
                     className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold"
                   />
+                  {dailyRate === null && (
+                    <p className="text-[11px] text-amber-600 font-medium mt-1">
+                      ยังไม่ได้กำหนดค่าเช่ารายวัน กรุณาระบุราคาที่ตกลงกัน
+                    </p>
+                  )}
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">
@@ -618,9 +644,9 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
             </button>
             <button
               type="submit"
-              disabled={loading || isTermDisabled}
+              disabled={loading || isSubmitDisabled}
               className={`px-4 py-2 text-xs font-bold rounded-xl shadow-xs transition-colors flex items-center gap-1.5 ${
-                isTermDisabled
+                isSubmitDisabled
                   ? 'bg-slate-300 text-slate-500 cursor-not-allowed'
                   : 'bg-indigo-600 hover:bg-indigo-700 text-white cursor-pointer'
               }`}

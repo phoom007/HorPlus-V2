@@ -102,7 +102,19 @@ export function createDailyStayRouter(
       if (roomNumber) {
         roomWhere.roomNumber = roomNumber;
       } else if (roomId) {
-        roomWhere.id = roomId;
+        const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(roomId);
+        if (isUuid) {
+          roomWhere.id = roomId;
+        } else {
+          return res.status(404).json({
+            error: {
+              code: 'ROOM_NOT_FOUND',
+              message: 'ไม่พบข้อมูลห้องพักที่ระบุในหอพักนี้',
+              requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+              timestamp: new Date().toISOString(),
+            },
+          });
+        }
       }
 
       const room = await prisma.room.findFirst({
@@ -140,10 +152,18 @@ export function createDailyStayRouter(
         prisma
       );
 
-      const dailyRateAmount =
-        effective.dailyRent?.value !== null && effective.dailyRent?.value !== undefined
-          ? Number(effective.dailyRent.value).toFixed(2)
-          : '0.00';
+      if (effective.dailyRent?.value === null || effective.dailyRent?.value === undefined) {
+        return res.status(409).json({
+          error: {
+            code: 'DAILY_RATE_NOT_CONFIGURED',
+            message: 'ยังไม่ได้กำหนดอัตราค่าเช่ารายวันสำหรับห้องพักนี้',
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+
+      const dailyRateAmount = Number(effective.dailyRent.value).toFixed(2);
 
       const depositDefaultAmount =
         effective.depositAmount?.value !== null && effective.depositAmount?.value !== undefined
@@ -167,7 +187,7 @@ export function createDailyStayRouter(
   const TenantDailyRequestSchema = z
     .object({
       dormitoryId: z.string().uuid().optional(),
-      roomId: z.string().optional(),
+      roomId: z.string().uuid().optional(),
       roomNumber: z.string().optional(),
       applicantFullName: z.string().trim().min(1, 'กรุณาระบุชื่อ-นามสกุล'),
       applicantPhone: z.string().trim().max(50).optional().nullable(),

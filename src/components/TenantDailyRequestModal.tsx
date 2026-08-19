@@ -123,7 +123,6 @@ export const TenantDailyRequestModal: React.FC<TenantDailyRequestModalProps> = (
         applicantPhone: applicantPhone.trim() || undefined,
         startDate,
         endDate,
-        dailyRateAmount: dailyRate.toFixed(2),
         depositAmount: safeDeposit.toFixed(2),
         depositDeclaredStatus,
       }, {

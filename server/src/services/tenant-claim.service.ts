@@ -56,7 +56,8 @@ export class TenantClaimService {
   public async selectAuthoritativeCandidate(
     dormitoryId: string,
     roomId: string,
-    prismaClient: any = this.prisma
+    prismaClient: any = this.prisma,
+    effectiveDate?: string | Date
   ): Promise<any | null> {
     const unlinkedTenants = await prismaClient.tenant.findMany({
       where: {
@@ -110,6 +111,10 @@ export class TenantClaimService {
       return null;
     }
 
+    const nowThreshold = effectiveDate
+      ? (typeof effectiveDate === 'string' ? new Date(effectiveDate) : effectiveDate)
+      : new Date();
+
     // Evaluate each tenant's active/reserved status on this room
     const evaluated: EvaluatedTenantCandidate[] = unlinkedTenants.map((t: any) => {
       const activeOcc = t.occupancies.some((o: any) => o.status === 'ACTIVE');
@@ -120,13 +125,29 @@ export class TenantClaimService {
       const reservedOccs = t.occupancies.filter((o: any) => o.status === 'RESERVED');
       const reservedProvs = t.provisionalRentalTerms.filter((p: any) => p.status === 'RESERVED');
       const reservedDailies = t.dailyStays.filter((d: any) => d.status === 'RESERVED');
-      const isReserved = reservedOccs.length > 0 || reservedProvs.length > 0 || reservedDailies.length > 0;
 
+      // Filter reserved dates to strictly future dates (relative to effectiveDate threshold)
       const reservedDates: Date[] = [];
-      reservedOccs.forEach((o: any) => { if (o.startedAt) reservedDates.push(new Date(o.startedAt)); });
-      reservedProvs.forEach((p: any) => { if (p.startDate) reservedDates.push(new Date(p.startDate)); });
-      reservedDailies.forEach((d: any) => { if (d.startDate) reservedDates.push(new Date(d.startDate)); });
+      reservedOccs.forEach((o: any) => {
+        if (o.startedAt) {
+          const d = new Date(o.startedAt);
+          if (d.getTime() > nowThreshold.getTime()) reservedDates.push(d);
+        }
+      });
+      reservedProvs.forEach((p: any) => {
+        if (p.startDate) {
+          const d = new Date(p.startDate);
+          if (d.getTime() > nowThreshold.getTime()) reservedDates.push(d);
+        }
+      });
+      reservedDailies.forEach((daily: any) => {
+        if (daily.startDate) {
+          const dt = new Date(daily.startDate);
+          if (dt.getTime() > nowThreshold.getTime()) reservedDates.push(dt);
+        }
+      });
 
+      const isReserved = reservedDates.length > 0;
       let earliestReservedDate: Date | null = null;
       if (reservedDates.length > 0) {
         earliestReservedDate = new Date(Math.min(...reservedDates.map((d) => d.getTime())));
@@ -195,7 +216,8 @@ export class TenantClaimService {
    */
   public async getCandidateForRoom(
     dormitoryId: string,
-    roomRef: string | { roomId?: string; roomNumber?: string }
+    roomRef: string | { roomId?: string; roomNumber?: string },
+    effectiveDate?: string | Date
   ): Promise<ClaimCandidateResult> {
     const roomWhere: any = {
       dormitoryId,
@@ -203,10 +225,22 @@ export class TenantClaimService {
       status: { not: 'archived' },
     };
     if (typeof roomRef === 'string') {
-      roomWhere.id = roomRef;
+      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(roomRef);
+      if (isUuid) {
+        roomWhere.id = roomRef;
+      } else {
+        return { hasCandidate: false };
+      }
     } else {
       if (roomRef.roomNumber) roomWhere.roomNumber = roomRef.roomNumber;
-      if (roomRef.roomId) roomWhere.id = roomRef.roomId;
+      if (roomRef.roomId) {
+        const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(roomRef.roomId);
+        if (isUuid) {
+          roomWhere.id = roomRef.roomId;
+        } else if (!roomRef.roomNumber) {
+          return { hasCandidate: false };
+        }
+      }
     }
 
     const room = await this.prisma.room.findFirst({
@@ -217,7 +251,7 @@ export class TenantClaimService {
       return { hasCandidate: false };
     }
 
-    const tenant = await this.selectAuthoritativeCandidate(dormitoryId, room.id, this.prisma);
+    const tenant = await this.selectAuthoritativeCandidate(dormitoryId, room.id, this.prisma, effectiveDate);
 
     if (!tenant) {
       return { hasCandidate: false };
@@ -239,14 +273,18 @@ export class TenantClaimService {
    * 1. Room advisory lock
    * 2. Select authoritative candidate under Decision 2A
    * 3. Match against claimInput (exact phone or Thai name similarity >= 0.90)
-   * 4. Update Tenant.linkedUserId = userId
-   * 5. Ensure DormitoryMember TENANT membership
+   * 4. Verify existing DormitoryMember membership:
+   *    - If no membership: create membership with target/global TENANT role
+   *    - If existing membership is TENANT: ensure active
+   *    - If existing membership is non-TENANT (OWNER/MANAGER/STAFF): fail closed with CLAIM_MEMBERSHIP_CONFLICT
+   * 5. Update Tenant.linkedUserId = userId
    * 6. Audit log event
    */
   public async claimTenant(
     data: ClaimTenantDto,
     userId: string,
-    ipAddress?: string
+    ipAddress?: string,
+    effectiveDate?: string | Date
   ) {
     const { dormitoryId, roomId, roomNumber, claimInput } = data;
 
@@ -266,7 +304,17 @@ export class TenantClaimService {
         status: { not: 'archived' },
       };
       if (roomNumber) roomWhere.roomNumber = roomNumber;
-      if (roomId) roomWhere.id = roomId;
+      if (roomId) {
+        const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(roomId);
+        if (isUuid) {
+          roomWhere.id = roomId;
+        } else if (!roomNumber) {
+          const err = new Error('ไม่พบข้อมูลผู้เช่าที่ตรงกับข้อมูลที่ระบุ');
+          (err as any).statusCode = 404;
+          (err as any).code = 'CLAIM_MATCH_FAILED';
+          throw err;
+        }
+      }
 
       const room = await tx.room.findFirst({
         where: roomWhere,
@@ -283,7 +331,7 @@ export class TenantClaimService {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${dormitoryId + ':' + room.id}))`;
 
       // 3. Find authoritative candidate using Decision 2A Priority
-      const candidate = await this.selectAuthoritativeCandidate(dormitoryId, room.id, tx);
+      const candidate = await this.selectAuthoritativeCandidate(dormitoryId, room.id, tx, effectiveDate);
 
       if (!candidate) {
         const err = new Error('ไม่พบข้อมูลผู้เช่าที่ตรงกับข้อมูลที่ระบุ');
@@ -332,21 +380,13 @@ export class TenantClaimService {
         throw err;
       }
 
-      // 6. Link User to Tenant
-      const updatedTenant = await tx.tenant.update({
-        where: { id: candidate.id },
-        data: {
-          linkedUserId: userId,
-        },
-      });
-
-      // 7. Ensure TENANT DormitoryMember
+      // 6. Look up target or global TENANT role (Strictly no cross-dorm role leakage)
       let tenantRole = await tx.role.findFirst({
         where: {
+          code: 'TENANT',
           OR: [
-            { dormitoryId, code: 'TENANT' },
-            { dormitoryId: null, code: 'TENANT' },
-            { code: 'TENANT' },
+            { dormitoryId },
+            { dormitoryId: null },
           ],
         },
       });
@@ -363,27 +403,66 @@ export class TenantClaimService {
         });
       }
 
-      await tx.dormitoryMember.upsert({
+      // 7. Check existing DormitoryMember membership
+      const existingMember = await tx.dormitoryMember.findUnique({
         where: {
           user_dormitory_unique: {
             userId,
             dormitoryId,
           },
         },
-        create: {
-          userId,
-          dormitoryId,
-          roleId: tenantRole.id,
-          status: 'active',
-          membershipOrigin: 'MANUAL_GRANT',
-          acceptedAt: new Date(),
-        },
-        update: {
-          status: 'active',
+        include: { role: true },
+      });
+
+      if (existingMember) {
+        if (existingMember.role?.code !== 'TENANT') {
+          if (this.auditService) {
+            await this.auditService.logSecurityEvent({
+              action: 'tenant.claim.membership_conflict',
+              dormitoryId,
+              userId,
+              details: {
+                reason: 'existing_non_tenant_membership',
+                existingRoleId: existingMember.roleId,
+                existingRoleCode: existingMember.role?.code,
+                roomId: room.id,
+              },
+            });
+          }
+          const err = new Error('ไม่พบข้อมูลผู้เช่าที่ตรงกับข้อมูลที่ระบุ');
+          (err as any).statusCode = 409;
+          (err as any).code = 'CLAIM_MEMBERSHIP_CONFLICT';
+          throw err;
+        }
+
+        if (existingMember.status !== 'active') {
+          await tx.dormitoryMember.update({
+            where: { id: existingMember.id },
+            data: { status: 'active' },
+          });
+        }
+      } else {
+        await tx.dormitoryMember.create({
+          data: {
+            userId,
+            dormitoryId,
+            roleId: tenantRole.id,
+            status: 'active',
+            membershipOrigin: 'MANUAL_GRANT',
+            acceptedAt: new Date(),
+          },
+        });
+      }
+
+      // 8. Link User to Tenant (ONLY after membership is verified/created)
+      const updatedTenant = await tx.tenant.update({
+        where: { id: candidate.id },
+        data: {
+          linkedUserId: userId,
         },
       });
 
-      // 8. Audit event
+      // 9. Audit event
       if (this.auditService) {
         await this.auditService.logSecurityEvent({
           action: 'tenant.claim',

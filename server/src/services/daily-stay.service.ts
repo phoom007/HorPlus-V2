@@ -239,13 +239,16 @@ export class DailyStayService {
       this.prisma
     );
 
-    // Default daily rate from canonical DefaultsService authority
-    let dailyRate = '0.00';
-    if (data.dailyRateAmount !== undefined && data.dailyRateAmount !== null) {
-      dailyRate = formatDecimal(toDecimal(String(data.dailyRateAmount)));
-    } else if (effective.dailyRent?.value !== null && effective.dailyRent?.value !== undefined) {
-      dailyRate = formatDecimal(toDecimal(String(effective.dailyRent.value)));
+    // Fail closed if daily rate is unconfigured (null / undefined)
+    if (effective.dailyRent?.value === null || effective.dailyRent?.value === undefined) {
+      const err = new Error('ยังไม่ได้กำหนดอัตราค่าเช่ารายวันสำหรับห้องพักนี้');
+      (err as any).statusCode = 409;
+      (err as any).code = 'DAILY_RATE_NOT_CONFIGURED';
+      throw err;
     }
+
+    // Authoritative daily rate strictly from DefaultsService authority (Tenant cannot author or override this)
+    const dailyRate = formatDecimal(toDecimal(String(effective.dailyRent.value)));
 
     // Default deposit amount from canonical DefaultsService authority (0 is explicitly valid)
     let deposit = '0.00';

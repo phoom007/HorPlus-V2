@@ -113,10 +113,13 @@ export function createTenantClaimRouter(
 
   const handleServiceError = (res: Response, err: any, req: Request) => {
     const statusCode = err.statusCode || err.status || 500;
+    const isPublicGeneric = err.code === 'CLAIM_MATCH_FAILED' || err.code === 'CLAIM_MEMBERSHIP_CONFLICT';
     res.status(statusCode).json({
       error: {
         code: err.code || 'CLAIM_OPERATION_FAILED',
-        message: err.message || 'เกิดข้อผิดพลาดในการยืนยันสิทธิ์ผู้เช่า',
+        message: isPublicGeneric
+          ? 'ไม่พบข้อมูลผู้เช่าที่ตรงกับข้อมูลที่ระบุ หรือห้องพักนี้ไม่สามารถยืนยันสิทธิ์ได้ในขณะนี้'
+          : (err.message || 'เกิดข้อผิดพลาดในการยืนยันสิทธิ์ผู้เช่า'),
         fieldErrors: err.fieldErrors || null,
         requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
         timestamp: new Date().toISOString(),
@@ -154,7 +157,7 @@ export function createTenantClaimRouter(
   const ClaimSchema = z
     .object({
       dormitoryId: z.string().uuid('รหัสหอพักไม่ถูกต้อง'),
-      roomId: z.string().optional(),
+      roomId: z.string().uuid('รหัสห้องพักไม่ถูกต้อง').optional(),
       roomNumber: z.string().optional(),
       claimInput: z.string().trim().min(1, 'กรุณาระบุชื่อ-นามสกุล หรือ เบอร์โทรศัพท์'),
     })

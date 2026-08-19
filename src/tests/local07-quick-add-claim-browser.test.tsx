@@ -660,5 +660,84 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
         );
       });
     });
+
+    it('Owner Quick Add: unconfigured dailyRent (null) disables submit until Owner inputs agreed rate', async () => {
+      const nullDailyContext: QuickAddRoomContext = {
+        ...mockContext,
+        effective: {
+          ...mockContext.effective,
+          dailyRent: null as any,
+        },
+      };
+
+      render(
+        <QuickAddTenantModal
+          isOpen={true}
+          onClose={() => {}}
+          context={nullDailyContext}
+          onSuccess={() => {}}
+        />
+      );
+
+      // Switch to DAILY tab
+      const dailyTab = screen.getByRole('button', { name: /รายวัน/ });
+      fireEvent.click(dailyTab);
+
+      // Name input
+      const nameInput = screen.getByPlaceholderText('เช่น นายสมชาย ใจดี');
+      fireEvent.change(nameInput, { target: { value: 'นายทดสอบ รายวัน' } });
+
+      // Daily rate input should have empty value with placeholder
+      const dailyInput = screen.getByPlaceholderText('ยังไม่ได้กำหนดค่าเช่ารายวัน');
+      expect((dailyInput as HTMLInputElement).value).toBe('');
+
+      // Warning text should be visible
+      expect(screen.getByText(/ยังไม่ได้กำหนดค่าเช่ารายวัน กรุณาระบุราคาที่ตกลงกัน/)).toBeDefined();
+
+      // Submit button must be disabled
+      const submitBtn = screen.getByRole('button', { name: /ยืนยันเพิ่มผู้เช่า/ });
+      expect((submitBtn as HTMLButtonElement).disabled).toBe(true);
+
+      // Owner enters agreed daily rate 450
+      fireEvent.change(dailyInput, { target: { value: '450' } });
+
+      // Submit button becomes enabled
+      expect((submitBtn as HTMLButtonElement).disabled).toBe(false);
+    });
+
+    it('Owner Quick Add: configured 0.00 dailyRent is strictly preserved as valid money', async () => {
+      const zeroDailyContext: QuickAddRoomContext = {
+        ...mockContext,
+        effective: {
+          ...mockContext.effective,
+          dailyRent: 0,
+        },
+      };
+
+      render(
+        <QuickAddTenantModal
+          isOpen={true}
+          onClose={() => {}}
+          context={zeroDailyContext}
+          onSuccess={() => {}}
+        />
+      );
+
+      // Switch to DAILY tab
+      const dailyTab = screen.getByRole('button', { name: /รายวัน/ });
+      fireEvent.click(dailyTab);
+
+      // Name input
+      const nameInput = screen.getByPlaceholderText('เช่น นายสมชาย ใจดี');
+      fireEvent.change(nameInput, { target: { value: 'นายพักฟรี ศูนย์บาท' } });
+
+      // Daily rate input should have '0'
+      const dailyInput = screen.getByPlaceholderText('ยังไม่ได้กำหนดค่าเช่ารายวัน');
+      expect((dailyInput as HTMLInputElement).value).toBe('0');
+
+      // Submit button is enabled
+      const submitBtn = screen.getByRole('button', { name: /ยืนยันเพิ่มผู้เช่า/ });
+      expect((submitBtn as HTMLButtonElement).disabled).toBe(false);
+    });
   });
 });
