@@ -110,7 +110,7 @@ export interface BillingDataSource {
   getByRoomId(roomId: string): Promise<Bill[]>;
   getByCycle(cycleId: string): Promise<Bill[]>;
   generateBillForRoom(roomId: string, cycleId: string, actorUserId?: string): Promise<DataResult<Bill>>;
-  generateBulkBills(cycleId: string, actorUserId?: string): Promise<DataResult<Bill[]>>;
+  generateBulkBills(cycleId: string, roomIds?: string[], dirtyRows?: any[]): Promise<DataResult<any>>;
   updateBillStatus(billId: string, status: Bill['status'], actorUserId?: string): Promise<DataResult<Bill>>;
 }
 

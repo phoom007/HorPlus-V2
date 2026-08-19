@@ -105,13 +105,16 @@ export class CleanupService {
       });
       consumedMetadataPurged = consumedRes.count;
 
-      // Phase 4: Automatic Scheduled Contract Activation (Asia/Bangkok effective dates)
+      // Phase 4: Automatic Scheduled Contract & Provisional Term Activation (Asia/Bangkok effective dates)
       try {
         const { ContractRenewalService } = await import('./contract-renewal.service.js');
         const renewalService = new ContractRenewalService();
         await renewalService.activateAllScheduledContracts();
+
+        const { provisionalRentalTermService } = await import('./provisional-rental-term.service.js');
+        await provisionalRentalTermService.activateScheduledProvisionalTerms(undefined, new Date(), 'system-scheduled-job');
       } catch (err) {
-        console.error('[CleanupService] Error during automatic scheduled contract activation', err);
+        console.error('[CleanupService] Error during automatic scheduled contract/provisional activation', err);
       }
 
       // Phase 5: Outbox Event Reconciliation & Dispatch

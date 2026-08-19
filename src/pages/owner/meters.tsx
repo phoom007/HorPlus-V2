@@ -571,7 +571,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     if (mode === 'unit') {
       return units * rate;
     } else if (mode === 'person') {
-      return (Number(row.peopleCount) || 1) * rate;
+      return (Number(row.peopleCount) || 0) * rate;
     } else { // 'room'
       return rate;
     }
@@ -588,7 +588,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     if (mode === 'unit') {
       return units * rate;
     } else if (mode === 'person') {
-      return (Number(row.peopleCount) || 1) * rate;
+      return (Number(row.peopleCount) || 0) * rate;
     } else { // 'room'
       return rate;
     }
@@ -893,7 +893,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
           const rawVal = cells[cellIdx].trim();
 
           let cleaned = rawVal.replace(/[^0-9]/g, '');
-          const numVal = field === 'peopleCount' ? Math.max(1, Number(cleaned) || 1) : (Number(cleaned) || 0);
+          const numVal = field === 'peopleCount' ? Math.max(0, Number(cleaned) || 0) : (Number(cleaned) || 0);
           if (row[field] !== numVal) {
             row[field] = numVal;
             newFlashing[`${row.roomId}-${field}`] = true;
@@ -1123,17 +1123,21 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     let dirtyRowData: any = undefined;
     if (targetAction === 'issue') {
       const orig = (originalRowsRef.current || []).find(o => o.roomId === row.roomId);
-      dirtyRowData = {
-        roomId: row.roomId,
-        waterCurr: row.waterCurr,
-        waterPrev: row.waterPrev,
-        elecCurr: row.elecCurr,
-        elecPrev: row.elecPrev,
-        peopleCount: row.peopleCount,
-        manualOutstandingAmount: row.overdueAmount,
-        otherFees: row.otherFees,
-        isReplaced: row.isReplaced,
-      };
+      const dirtyObj: any = { roomId: row.roomId };
+      let hasChanges = false;
+
+      if (!orig || row.waterCurr !== orig.waterCurr) { dirtyObj.waterCurr = row.waterCurr; hasChanges = true; }
+      if (!orig || (isFirstCycle && row.waterPrev !== orig.waterPrev)) { dirtyObj.waterPrev = row.waterPrev; hasChanges = true; }
+      if (!orig || row.elecCurr !== orig.elecCurr) { dirtyObj.elecCurr = row.elecCurr; hasChanges = true; }
+      if (!orig || (isFirstCycle && row.elecPrev !== orig.elecPrev)) { dirtyObj.elecPrev = row.elecPrev; hasChanges = true; }
+      if (!orig || row.peopleCount !== orig.peopleCount) { dirtyObj.peopleCount = row.peopleCount; hasChanges = true; }
+      if (!orig || row.overdueAmount !== orig.overdueAmount) { dirtyObj.manualOutstandingAmount = row.overdueAmount; hasChanges = true; }
+      if (!orig || JSON.stringify(row.otherFees || []) !== JSON.stringify(orig.otherFees || [])) { dirtyObj.otherFees = row.otherFees; hasChanges = true; }
+      if (!orig || row.isReplaced !== orig.isReplaced) { dirtyObj.isReplaced = row.isReplaced; hasChanges = true; }
+
+      if (hasChanges) {
+        dirtyRowData = dirtyObj;
+      }
     }
 
     setIsSaving(true);
@@ -1166,15 +1170,15 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     }
     setIsSaving(true);
     try {
-      // 1. If there are dirty rows, save them first
+      // Collect dirty rows using dirty-field semantics (only actually changed fields)
       const dirtyRows = meterRows.filter(r => {
         const orig = (originalRowsRef.current || []).find(o => o.roomId === r.roomId);
         if (!orig) return true;
         return (
           r.waterCurr !== orig.waterCurr ||
-          r.waterPrev !== orig.waterPrev ||
+          (isFirstCycle && r.waterPrev !== orig.waterPrev) ||
           r.elecCurr !== orig.elecCurr ||
-          r.elecPrev !== orig.elecPrev ||
+          (isFirstCycle && r.elecPrev !== orig.elecPrev) ||
           r.peopleCount !== orig.peopleCount ||
           r.overdueAmount !== orig.overdueAmount ||
           JSON.stringify(r.otherFees || []) !== JSON.stringify(orig.otherFees || []) ||
@@ -1184,9 +1188,9 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
         const orig = (originalRowsRef.current || []).find(o => o.roomId === r.roomId);
         const dirtyObj: any = { roomId: r.roomId };
         if (!orig || r.waterCurr !== orig.waterCurr) dirtyObj.waterCurr = r.waterCurr;
-        if (!orig || r.waterPrev !== orig.waterPrev) dirtyObj.waterPrev = r.waterPrev;
+        if (!orig || (isFirstCycle && r.waterPrev !== orig.waterPrev)) dirtyObj.waterPrev = r.waterPrev;
         if (!orig || r.elecCurr !== orig.elecCurr) dirtyObj.elecCurr = r.elecCurr;
-        if (!orig || r.elecPrev !== orig.elecPrev) dirtyObj.elecPrev = r.elecPrev;
+        if (!orig || (isFirstCycle && r.elecPrev !== orig.elecPrev)) dirtyObj.elecPrev = r.elecPrev;
         if (!orig || r.peopleCount !== orig.peopleCount) dirtyObj.peopleCount = r.peopleCount;
         if (!orig || r.overdueAmount !== orig.overdueAmount) dirtyObj.manualOutstandingAmount = r.overdueAmount;
         if (!orig || JSON.stringify(r.otherFees || []) !== JSON.stringify(orig.otherFees || [])) dirtyObj.otherFees = r.otherFees;
@@ -1194,13 +1198,14 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
         return dirtyObj;
       });
 
-      if (dirtyRows.length > 0) {
-        await getDataProvider().meters.saveBulkWorkspace?.(selectedBillingCycleId, dirtyRows);
-      }
-
-      const res = await getDataProvider().billing.generateBulkBills(selectedBillingCycleId);
+      // ONE HTTP COMMAND to generate bulk bills with dirty rows atomically
+      const res = await getDataProvider().billing.generateBulkBills(
+        selectedBillingCycleId,
+        undefined,
+        dirtyRows.length > 0 ? dirtyRows : undefined
+      );
       setIsSaving(false);
-      if (res.success) {
+      if (res && res.success) {
         showToast('ออกบิลสำหรับรอบบันทึกเรียบร้อยแล้ว');
         if (onSaveBills) {
           const freshBills = await getDataProvider().billing.getByCycle(selectedBillingCycleId);
@@ -1222,7 +1227,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
         fetchAuthoritativeReadings(selectedBillingCycleId);
         onRefetchData?.();
       } else {
-        showToast(res.error?.message || 'เกิดข้อผิดพลาดในการออกบิล');
+        showToast(res?.error?.message || 'เกิดข้อผิดพลาดในการออกบิล');
       }
     } catch (err: any) {
       setIsSaving(false);
@@ -1282,9 +1287,9 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       if (!orig) return true;
       return (
         r.waterCurr !== orig.waterCurr ||
-        r.waterPrev !== orig.waterPrev ||
+        (isFirstCycle && r.waterPrev !== orig.waterPrev) ||
         r.elecCurr !== orig.elecCurr ||
-        r.elecPrev !== orig.elecPrev ||
+        (isFirstCycle && r.elecPrev !== orig.elecPrev) ||
         r.peopleCount !== orig.peopleCount ||
         r.overdueAmount !== orig.overdueAmount ||
         JSON.stringify(r.otherFees || []) !== JSON.stringify(orig.otherFees || []) ||
@@ -1294,9 +1299,9 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       const orig = (originalRowsRef.current || []).find(o => o.roomId === r.roomId);
       const dirtyObj: any = { roomId: r.roomId };
       if (!orig || r.waterCurr !== orig.waterCurr) dirtyObj.waterCurr = r.waterCurr;
-      if (!orig || r.waterPrev !== orig.waterPrev) dirtyObj.waterPrev = r.waterPrev;
+      if (!orig || (isFirstCycle && r.waterPrev !== orig.waterPrev)) dirtyObj.waterPrev = r.waterPrev;
       if (!orig || r.elecCurr !== orig.elecCurr) dirtyObj.elecCurr = r.elecCurr;
-      if (!orig || r.elecPrev !== orig.elecPrev) dirtyObj.elecPrev = r.elecPrev;
+      if (!orig || (isFirstCycle && r.elecPrev !== orig.elecPrev)) dirtyObj.elecPrev = r.elecPrev;
       if (!orig || r.peopleCount !== orig.peopleCount) dirtyObj.peopleCount = r.peopleCount;
       if (!orig || r.overdueAmount !== orig.overdueAmount) dirtyObj.manualOutstandingAmount = r.overdueAmount;
       if (!orig || JSON.stringify(r.otherFees || []) !== JSON.stringify(orig.otherFees || [])) dirtyObj.otherFees = r.otherFees;
@@ -1331,7 +1336,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   const autofillMeters = () => {
     setMeterRows(prev => prev.map(row => {
       const cycleTenant = getTenantForRoomAndCycle(row.roomId, selectedCycle);
-      const tenantDefaultPeople = cycleTenant ? (1 + (cycleTenant.coOccupants?.length || 0)) : 1;
+      const tenantDefaultPeople = cycleTenant ? (1 + (cycleTenant.coOccupants?.length || 0)) : 0;
       return {
         ...row,
         waterCurr: row.waterPrev,

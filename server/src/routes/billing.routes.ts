@@ -132,7 +132,8 @@ export function createBillingRouter(
         dormId,
         parsed.data.billingCycleId,
         parsed.data.roomIds,
-        req.auth?.userId
+        req.auth?.userId,
+        parsed.data.dirtyRows
       );
       res.json({ data: result });
     } catch (err) {

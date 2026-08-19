@@ -151,14 +151,24 @@ export const CancelBillSchema = z.object({
   reason: z.string().min(1, 'เหตุผลในการยกเลิกจำเป็นต้องระบุ'),
 });
 
-export const CreateProvisionalRentalTermSchema = z.object({
-  roomId: z.string().min(1, 'Room ID จำเป็นต้องระบุ'),
-  fullName: z.string().trim().min(1, 'ชื่อ-นามสกุลจำเป็นต้องระบุ').max(255),
-  phone: z.string().trim().max(50).optional().nullable(),
-  rentalType: z.enum(['MONTHLY', 'TERM']),
-  startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'วันที่เริ่มต้นต้องอยู่ในรูปแบบ YYYY-MM-DD'),
-  durationMonths: z.number().int().min(1).max(36).optional().default(1),
-  unitRentAmount: z.union([z.string().regex(/^\d+(\.\d{1,2})?$/), z.number().nonnegative()]),
-  totalRentAmount: z.union([z.string().regex(/^\d+(\.\d{1,2})?$/), z.number().nonnegative()]).optional(),
-  termInstallmentCount: z.number().int().min(1).max(12).optional(),
-});
+export const CreateProvisionalRentalTermSchema = z
+  .object({
+    roomId: z.string().min(1, 'Room ID จำเป็นต้องระบุ'),
+    fullName: z.string().trim().min(1, 'ชื่อ-นามสกุลจำเป็นต้องระบุ').max(255),
+    phone: z.string().trim().max(50).optional().nullable(),
+    rentalType: z.enum(['MONTHLY', 'TERM']),
+    startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'วันที่เริ่มต้นต้องอยู่ในรูปแบบ YYYY-MM-DD'),
+    durationMonths: z.number().int().min(1).max(36).optional(),
+    unitRentAmount: z.union([z.string().regex(/^\d+(\.\d{1,2})?$/), z.number().nonnegative()]),
+    totalRentAmount: z.union([z.string().regex(/^\d+(\.\d{1,2})?$/), z.number().nonnegative()]).optional(),
+    termInstallmentCount: z.number().int().min(1).max(12).optional(),
+  })
+  .superRefine((val, ctx) => {
+    if (val.rentalType === 'TERM' && (val.termInstallmentCount === undefined || val.termInstallmentCount === null)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'กรุณาระบุจำนวนงวดชำระสำหรับสัญญาแบบเทอม (termInstallmentCount)',
+        path: ['termInstallmentCount'],
+      });
+    }
+  });

@@ -839,14 +839,14 @@ export class ApiBillingAdapter implements BillingDataSource {
     }
   }
 
-  async generateBulkBills(cycleId: string, actorUserIdOrRoomIds?: any): Promise<DataResult<any>> {
+  async generateBulkBills(cycleId: string, roomIds?: string[], dirtyRows?: any[]): Promise<DataResult<any>> {
     try {
-      const roomIds = Array.isArray(actorUserIdOrRoomIds) ? actorUserIdOrRoomIds : undefined;
       const res = await httpRequest<any>('POST', '/bills/generate/bulk', {
         billingCycleId: cycleId,
-        roomIds
+        roomIds,
+        dirtyRows,
       }, {
-        idempotencyKey: `gen_bulk_bills_${cycleId}`
+        idempotencyKey: `gen_bulk_bills_${cycleId}_${Date.now()}`
       });
       return { success: true, data: res.data || res };
     } catch (err: any) {

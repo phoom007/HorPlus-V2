@@ -667,6 +667,6 @@ export class PrismaMeterRepository implements IMeterRepository {
   }
 
   public async withTransaction<T>(fn: (tx: any) => Promise<T>): Promise<T> {
-    return this.prisma.$transaction(fn, { timeout: 10000 });
+    return this.prisma.$transaction(fn, { timeout: 30000 });
   }
 }

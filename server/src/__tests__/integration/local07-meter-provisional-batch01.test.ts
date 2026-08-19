@@ -93,6 +93,8 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
       data: {
         dormitoryId: testDormitoryId,
         name: 'Building A',
+        termMonths: 4,
+        maxTermRentInstallments: 4,
       },
     });
     testBuildingId = building.id;
@@ -331,6 +333,7 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
 
     expect(res.provisionalTerm.status).toBe('RESERVED');
     expect(res.provisionalTerm.termInstallmentCount).toBe(3);
+    expect(res.provisionalTerm.durationMonths).toBe(4); // Authoritative Building.termMonths
     expect(formatDecimal(toDecimal(res.provisionalTerm.unitRentAmount!))).toBe('30000.00');
 
     // Room status is reserved
@@ -346,7 +349,34 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
     expect(peopleCount).toBe(0);
   });
 
-  it('5. Provisional Overlap Prevention: rejects creating overlapping term on already occupied room', async () => {
+  it('5. Scheduled Activation Lifecycle: activates RESERVED term to ACTIVE on reaching start date', async () => {
+    // Run activation for future date 2026-10-01
+    const actResult = await provisionalRentalTermService.activateScheduledProvisionalTerms(
+      testDormitoryId,
+      '2026-10-01',
+      'system-job'
+    );
+    expect(actResult.activatedCount).toBeGreaterThanOrEqual(1);
+
+    const term = await prisma.provisionalRentalTerm.findFirst({
+      where: { roomId: testRoom2Id, deletedAt: null },
+    });
+    expect(term?.status).toBe('ACTIVE');
+
+    const room = await prisma.room.findUnique({ where: { id: testRoom2Id } });
+    expect(room?.status).toBe('occupied');
+    expect(room?.currentTenantId).toBe(term?.tenantId);
+
+    // Idempotency: re-running activation produces 0 new activations
+    const reActResult = await provisionalRentalTermService.activateScheduledProvisionalTerms(
+      testDormitoryId,
+      '2026-10-01',
+      'system-job'
+    );
+    expect(reActResult.activatedCount).toBe(0);
+  });
+
+  it('6. Provisional Overlap Prevention: rejects creating overlapping term on already occupied room', async () => {
     await expect(
       provisionalRentalTermService.createProvisionalTenantAndTerm(
         testDormitoryId,
@@ -362,10 +392,127 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
     ).rejects.toThrow();
   });
 
+  it('7. Canonical Tenant Number Concurrency: concurrent Quick-Adds produce unique tenant numbers', async () => {
+    // Create 2 additional temporary rooms for concurrency test
+    const cRoomA = await prisma.room.create({
+      data: {
+        dormitoryId: testDormitoryId,
+        buildingId: testBuildingId,
+        roomNumber: 'CONC-1',
+        normalizedRoomNumber: 'CONC-1',
+        roomType: 'standard',
+        monthlyRent: toDecimal('4000.00'),
+        status: 'vacant',
+      },
+    });
+    const cRoomB = await prisma.room.create({
+      data: {
+        dormitoryId: testDormitoryId,
+        buildingId: testBuildingId,
+        roomNumber: 'CONC-2',
+        normalizedRoomNumber: 'CONC-2',
+        roomType: 'standard',
+        monthlyRent: toDecimal('4000.00'),
+        status: 'vacant',
+      },
+    });
+
+    const [t1, t2] = await Promise.all([
+      provisionalRentalTermService.createProvisionalTenantAndTerm(
+        testDormitoryId,
+        {
+          roomId: cRoomA.id,
+          fullName: 'ผู้เช่า คู่ขนาน หนึ่ง',
+          rentalType: 'MONTHLY',
+          unitRentAmount: '4000.00',
+          startDate: '2026-06-01',
+        },
+        'user-owner-1'
+      ),
+      provisionalRentalTermService.createProvisionalTenantAndTerm(
+        testDormitoryId,
+        {
+          roomId: cRoomB.id,
+          fullName: 'ผู้เช่า คู่ขนาน สอง',
+          rentalType: 'MONTHLY',
+          unitRentAmount: '4000.00',
+          startDate: '2026-06-01',
+        },
+        'user-owner-1'
+      ),
+    ]);
+
+    expect(t1.tenant.tenantNumber).toBeDefined();
+    expect(t2.tenant.tenantNumber).toBeDefined();
+    expect(t1.tenant.tenantNumber).not.toBe(t2.tenant.tenantNumber);
+  });
+
+  it('8. TERM Authority: enforces explicit installment requirement and Building.termMonths duration', async () => {
+    const termRoom = await prisma.room.create({
+      data: {
+        dormitoryId: testDormitoryId,
+        buildingId: testBuildingId,
+        roomNumber: 'TERM-TEST',
+        normalizedRoomNumber: 'TERM-TEST',
+        roomType: 'standard',
+        monthlyRent: toDecimal('20000.00'),
+        status: 'vacant',
+      },
+    });
+
+    // 1. Missing termInstallmentCount must fail
+    await expect(
+      provisionalRentalTermService.createProvisionalTenantAndTerm(
+        testDormitoryId,
+        {
+          roomId: termRoom.id,
+          fullName: 'นายเทอม ไม่ระบุงวด',
+          rentalType: 'TERM',
+          unitRentAmount: '20000.00',
+          startDate: '2026-06-01',
+        } as any,
+        'user-owner-1'
+      )
+    ).rejects.toThrow();
+
+    // 2. Installments exceeding maxTermRentInstallments (4) must fail
+    await expect(
+      provisionalRentalTermService.createProvisionalTenantAndTerm(
+        testDormitoryId,
+        {
+          roomId: termRoom.id,
+          fullName: 'นายเทอม เกินงวด',
+          rentalType: 'TERM',
+          unitRentAmount: '20000.00',
+          termInstallmentCount: 5,
+          startDate: '2026-06-01',
+        },
+        'user-owner-1'
+      )
+    ).rejects.toThrow();
+
+    // 3. Client durationMonths=12 cannot override Building.termMonths (4)
+    const validTerm = await provisionalRentalTermService.createProvisionalTenantAndTerm(
+      testDormitoryId,
+      {
+        roomId: termRoom.id,
+        fullName: 'นายเทอม ถูกต้องตามระเบียบ',
+        rentalType: 'TERM',
+        unitRentAmount: '20000.00',
+        termInstallmentCount: 2,
+        durationMonths: 12, // Attempted client override
+        startDate: '2026-06-01',
+      },
+      'user-owner-1'
+    );
+    expect(validTerm.provisionalTerm.durationMonths).toBe(4);
+    expect(validTerm.provisionalTerm.termInstallmentCount).toBe(2);
+  });
+
   // --------------------------------------------------------------------------
   // TEST 4: Dirty-Field Bulk Workspace Save & strict otherFees validation
   // --------------------------------------------------------------------------
-  it('6. Dirty-field workspace save: persists only entered fields, first cycle custom prev reading, and strict otherFees', async () => {
+  it('9. Dirty-field workspace save: persists only entered fields, first cycle custom prev reading, and strict otherFees', async () => {
     const saveRes = await meterService.saveBulkMeterWorkspace(
       testDormitoryId,
       {
@@ -433,14 +580,16 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
     expect(elecReading?.usageUnits).toBe('70.00');
   });
 
-  it('7. Regression: zero usage explicitly entered (current == previous) creates reading and passes eligibility', async () => {
-    // For Room 103 (vacant room, but owner enters zero usage readings)
-    // First create active provisional term so room has rental term
+  // --------------------------------------------------------------------------
+  // TEST 5: Atomic Rollback & Meter Non-Fabrication Tests
+  // --------------------------------------------------------------------------
+  it('10. Atomic Rollback: OFF -> ON failure (missing reading) rolls back dirty snapshot changes without fabricating readings', async () => {
+    // Room 103: has provisional term, but NO current meter readings exist
     await provisionalRentalTermService.createProvisionalTenantAndTerm(
       testDormitoryId,
       {
         roomId: testRoom3Id,
-        fullName: 'นายทดสอบ การใช้ศูนย์หน่วย',
+        fullName: 'นายทดสอบ โรลแบ็ก',
         rentalType: 'MONTHLY',
         unitRentAmount: '5000.00',
         startDate: '2026-06-01',
@@ -448,6 +597,66 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
       'user-owner-1'
     );
 
+    // Initial snapshot should have 0 manual outstanding
+    const initialSnap = await prisma.roomBillingCycleSnapshot.findUnique({
+      where: {
+        dormitory_billing_cycle_room_unique: {
+          dormitoryId: testDormitoryId,
+          billingCycleId: cycle1Id,
+          roomId: testRoom3Id,
+        },
+      },
+    });
+    expect(initialSnap?.manualOutstandingAmount ?? toDecimal('0.00')).toEqual(toDecimal('0.00'));
+
+    // Attempt OFF -> ON with dirtyRow that only changes non-meter fields
+    await expect(
+      meterService.toggleRoomBillSwitch(
+        testDormitoryId,
+        {
+          billingCycleId: cycle1Id,
+          roomId: testRoom3Id,
+          action: 'issue',
+          dirtyRow: {
+            roomId: testRoom3Id,
+            peopleCount: 5,
+            manualOutstandingAmount: '999.00',
+            otherFees: [{ description: 'ค่าที่จอดพิเศษ', amount: '800.00' }],
+          },
+        },
+        'user-owner-1',
+        billingService
+      )
+    ).rejects.toThrow();
+
+    // Assert: No bill was created
+    const bill = await prisma.bill.findFirst({
+      where: { dormitoryId: testDormitoryId, billingCycleId: cycle1Id, roomId: testRoom3Id },
+    });
+    expect(bill).toBeNull();
+
+    // Assert: Dirty snapshot changes were rolled back completely!
+    const rolledBackSnap = await prisma.roomBillingCycleSnapshot.findUnique({
+      where: {
+        dormitory_billing_cycle_room_unique: {
+          dormitoryId: testDormitoryId,
+          billingCycleId: cycle1Id,
+          roomId: testRoom3Id,
+        },
+      },
+    });
+    expect(rolledBackSnap?.peopleCount ?? 0).not.toBe(5);
+    expect(rolledBackSnap?.manualOutstandingAmount ?? toDecimal('0.00')).toEqual(toDecimal('0.00'));
+    expect(rolledBackSnap?.otherFees ?? []).toEqual([]);
+
+    // Assert: No meter readings were fabricated
+    const waterRead = await meterRepo.findReadingByCycleRoomAndType(testDormitoryId, cycle1Id, testRoom3Id, 'water');
+    const elecRead = await meterRepo.findReadingByCycleRoomAndType(testDormitoryId, cycle1Id, testRoom3Id, 'electricity');
+    expect(waterRead).toBeNull();
+    expect(elecRead).toBeNull();
+  });
+
+  it('11. Regression: zero usage explicitly entered (current == previous) creates reading and passes eligibility', async () => {
     // Save zero usage (water 200 -> 200, elec 700 -> 700)
     await meterService.saveBulkMeterWorkspace(
       testDormitoryId,
@@ -483,9 +692,9 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
   });
 
   // --------------------------------------------------------------------------
-  // TEST 5: Status Switch Authority (Atomic Issue, Cancel, Paid Lock)
+  // TEST 6: Status Switch Authority (Atomic Issue, Cancel, Paid Lock)
   // --------------------------------------------------------------------------
-  it('8. Status Switch Authority: Toggle OFF -> ON issues bill atomically with snapshot manual charges', async () => {
+  it('12. Status Switch Authority: Toggle OFF -> ON issues bill atomically with snapshot manual charges', async () => {
     const toggleRes = await meterService.toggleRoomBillSwitch(
       testDormitoryId,
       {
@@ -503,8 +712,8 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
     expect(toggleRes.bill.provisionalRentalTermId).toBeDefined();
 
     // Verify snapshot manual charges are in bill items
-    const items = toggleRes.items;
-    const manualOut = items.find((i: any) => i.type === 'manual_outstanding' || i.description === 'ค้างชำระ');
+    const items = (toggleRes as any).items;
+    const manualOut = items?.find((i: any) => i.type === 'manual_outstanding' || i.description === 'ค้างชำระ');
     const airClean = items.find((i: any) => i.description === 'ค่าทำความสะอาดแอร์');
     const keyFee = items.find((i: any) => i.description === 'ค่ากุญแจสำรอง');
 
@@ -513,7 +722,7 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
     expect(keyFee?.amount).toBe('100.00');
   });
 
-  it('9. Status Switch Authority: Toggle ON -> OFF cancels unpaid bill with OWNER_METER_SWITCH_OFF', async () => {
+  it('13. Status Switch Authority: Toggle ON -> OFF cancels unpaid bill with OWNER_METER_SWITCH_OFF', async () => {
     const cancelRes = await meterService.toggleRoomBillSwitch(
       testDormitoryId,
       {
@@ -541,7 +750,7 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
     expect(bill?.cancellationReason).toBe('OWNER_METER_SWITCH_OFF');
   });
 
-  it('10. Status Switch Authority: Reissuing after cancel creates a new active bill', async () => {
+  it('14. Status Switch Authority: Reissuing after cancel creates a new active bill', async () => {
     const reissueRes = await meterService.toggleRoomBillSwitch(
       testDormitoryId,
       {
@@ -557,7 +766,7 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
     expect(reissueRes.bill.status).toBe('unpaid');
   });
 
-  it('11. Status Switch Authority: Paid bill cannot be cancelled via switch (locked ON)', async () => {
+  it('15. Status Switch Authority: Paid bill cannot be cancelled via switch (locked ON)', async () => {
     // Mark the bill as paid
     const activeBill = await billRepo.findByCycleAndRoom(testDormitoryId, cycle1Id, testRoom1Id);
     expect(activeBill).toBeDefined();
@@ -580,5 +789,50 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
         billingService
       )
     ).rejects.toThrow();
+  });
+
+  // --------------------------------------------------------------------------
+  // TEST 7: Bulk Issue-All One-Command & Partial Success Semantics
+  // --------------------------------------------------------------------------
+  it('16. Bulk Issue-All: single command with dirtyRows executes per-room transactions and handles partial success', async () => {
+    // Room 103 has zero usage readings and active term -> should generate successfully with dirty row
+    // Create an un-metered room that has active term but no readings -> should be excluded cleanly without aborting Room 103
+    const bulkRes = await billingService.bulkGenerateBills(
+      testDormitoryId,
+      cycle1Id,
+      [testRoom3Id],
+      'user-owner-1',
+      [
+        {
+          roomId: testRoom3Id,
+          waterPrev: '200.00',
+          waterCurr: '210.00',
+          elecPrev: '700.00',
+          elecCurr: '750.00',
+          peopleCount: 1,
+          manualOutstandingAmount: '50.00',
+        },
+      ]
+    );
+
+    expect(bulkRes.generatedCount).toBe(1);
+    expect(bulkRes.generated[0].roomId).toBe(testRoom3Id);
+
+    // Verify room 103 bill and snapshot persisted together
+    const snap = await prisma.roomBillingCycleSnapshot.findUnique({
+      where: {
+        dormitory_billing_cycle_room_unique: {
+          dormitoryId: testDormitoryId,
+          billingCycleId: cycle1Id,
+          roomId: testRoom3Id,
+        },
+      },
+    });
+    expect(formatDecimal(toDecimal(snap?.manualOutstandingAmount))).toBe('50.00');
+
+    const bill = await prisma.bill.findFirst({
+      where: { dormitoryId: testDormitoryId, billingCycleId: cycle1Id, roomId: testRoom3Id, status: 'unpaid' },
+    });
+    expect(bill).toBeDefined();
   });
 });

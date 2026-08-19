@@ -86,15 +86,17 @@ export class ProvisionalRentalTermService {
         ? formatDecimal(toDecimal(String(data.totalRentAmount)))
         : formatDecimal(mulDecimals(toDecimal(unitRent), durationMonths.toString()));
     } else {
-      // TERM
+      // TERM: termInstallmentCount is strictly required
+      if (data.termInstallmentCount === undefined || data.termInstallmentCount === null) {
+        const err = new Error('กรุณาระบุจำนวนงวดชำระสำหรับสัญญาแบบเทอม (termInstallmentCount)');
+        (err as any).statusCode = 400;
+        (err as any).code = 'TERM_INSTALLMENT_COUNT_REQUIRED';
+        throw err;
+      }
       unitRent = formatDecimal(toDecimal(String(data.unitRentAmount)));
       totalRent = data.totalRentAmount !== undefined
         ? formatDecimal(toDecimal(String(data.totalRentAmount)))
         : unitRent;
-      termInstallmentCount = data.termInstallmentCount || 1;
-      termMonthsSnapshot = data.durationMonths || null;
-      durationMonths = data.durationMonths || 1;
-      endDate = calculateRentalEndDate(data.startDate, durationMonths);
     }
 
     return this.prisma.$transaction(async (tx) => {
@@ -114,10 +116,25 @@ export class ProvisionalRentalTermService {
 
       if (data.rentalType === 'TERM') {
         const building = room.buildingId ? await tx.building.findUnique({ where: { id: room.buildingId } }) : null;
-        termMonthsSnapshot = data.durationMonths || building?.termMonths || 6;
-        termInstallmentCount = data.termInstallmentCount || building?.maxTermRentInstallments || 1;
-        durationMonths = termMonthsSnapshot;
-        endDate = calculateRentalEndDate(data.startDate, termMonthsSnapshot);
+        if (!building || !building.termMonths || building.termMonths < 1) {
+          const err = new Error('อาคารยังไม่ได้กำหนดระยะเวลาสัญญาแบบเทอม (termMonths)');
+          (err as any).statusCode = 400;
+          (err as any).code = 'BUILDING_TERM_CONFIG_INVALID';
+          throw err;
+        }
+
+        const maxInstallments = building.maxTermRentInstallments || 1;
+        if (data.termInstallmentCount! < 1 || data.termInstallmentCount! > maxInstallments) {
+          const err = new Error(`จำนวนงวดชำระต้องอยู่ระหว่าง 1 ถึง ${maxInstallments} งวด`);
+          (err as any).statusCode = 400;
+          (err as any).code = 'TERM_INSTALLMENTS_EXCEED_MAX';
+          throw err;
+        }
+
+        termInstallmentCount = data.termInstallmentCount!;
+        termMonthsSnapshot = building.termMonths;
+        durationMonths = building.termMonths;
+        endDate = calculateRentalEndDate(data.startDate, durationMonths);
       }
 
       // Check overlap with active/reserved contracts
@@ -175,9 +192,9 @@ export class ProvisionalRentalTermService {
         }
       }
 
-      // Authoritative tenant number generation
+      // Canonical tenant number generation (lock-safe)
       const tenantCount = await tx.tenant.count({ where: { dormitoryId } });
-      const tenantNumber = `TNT-${Date.now()}-${(tenantCount + 1).toString().padStart(4, '0')}`;
+      const tenantNumber = `TNT-${Date.now().toString().slice(-6)}-${(tenantCount + 1).toString().padStart(4, '0')}`;
 
       // 1. Create Tenant losslessly
       const tenant = await tx.tenant.create({
@@ -258,7 +275,8 @@ export class ProvisionalRentalTermService {
             rentalType: data.rentalType,
             status: termStatus,
             startDate: data.startDate,
-            endDate: endDate.toISOString().slice(0, 10),
+            durationMonths,
+            unitRent,
           },
         });
       }
@@ -295,6 +313,136 @@ export class ProvisionalRentalTermService {
     });
   }
 
+  /**
+   * Authoritative Scheduled Activation for Provisional Rental Terms:
+   * Transitions RESERVED -> ACTIVE when startDate is reached on or before effectiveDate.
+   */
+  public async activateScheduledProvisionalTerms(
+    dormitoryId?: string,
+    effectiveDate?: Date | string,
+    actorUserId?: string
+  ) {
+    const evalDate = effectiveDate
+      ? (typeof effectiveDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(effectiveDate)
+          ? new Date(effectiveDate)
+          : new Date(effectiveDate))
+      : new Date();
+
+    const evalDateOnly = new Date(Date.UTC(evalDate.getUTCFullYear(), evalDate.getUTCMonth(), evalDate.getUTCDate()));
+
+    const whereClause: any = {
+      deletedAt: null,
+      status: 'RESERVED',
+      startDate: { lte: evalDateOnly },
+    };
+    if (dormitoryId) {
+      whereClause.dormitoryId = dormitoryId;
+    }
+
+    const reservedTerms = await this.prisma.provisionalRentalTerm.findMany({
+      where: whereClause,
+      include: { room: true, tenant: true },
+      orderBy: { startDate: 'asc' },
+    });
+
+    const activated: any[] = [];
+    const skipped: any[] = [];
+
+    for (const term of reservedTerms) {
+      try {
+        const result = await this.prisma.$transaction(async (tx) => {
+          await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${term.dormitoryId + ':' + term.roomId}))`;
+
+          // Re-verify status
+          const freshTerm = await tx.provisionalRentalTerm.findFirst({
+            where: { id: term.id, deletedAt: null },
+          });
+          if (!freshTerm || freshTerm.status !== 'RESERVED') {
+            return { activated: false, reason: 'TERM_NOT_RESERVED' };
+          }
+
+          // Check conflict with active contract for another tenant
+          const conflictingContract = await tx.contract.findFirst({
+            where: {
+              dormitoryId: term.dormitoryId,
+              roomId: term.roomId,
+              status: { in: ['active', 'expiring_soon', 'pending_signature', 'waiting_extension', 'checking_out'] },
+              tenantId: { not: term.tenantId },
+              deletedAt: null,
+            },
+          });
+          if (conflictingContract) {
+            return { activated: false, reason: 'ROOM_OCCUPIED_BY_CONTRACT' };
+          }
+
+          // Check conflict with active occupancy for another tenant
+          const conflictingOccupancy = await tx.occupancy.findFirst({
+            where: {
+              dormitoryId: term.dormitoryId,
+              roomId: term.roomId,
+              status: 'ACTIVE',
+              tenantId: { not: term.tenantId },
+            },
+          });
+          if (conflictingOccupancy) {
+            return { activated: false, reason: 'ROOM_OCCUPIED_BY_OTHER_TENANT' };
+          }
+
+          // Activate term
+          const updatedTerm = await tx.provisionalRentalTerm.update({
+            where: { id: term.id },
+            data: {
+              status: 'ACTIVE',
+              version: { increment: 1 },
+              updatedAt: new Date(),
+            },
+          });
+
+          // Activate occupancy if exists
+          if (term.occupancyId) {
+            await tx.occupancy.update({
+              where: { id: term.occupancyId },
+              data: {
+                status: 'ACTIVE',
+              },
+            });
+          }
+
+          // Update room
+          await tx.room.update({
+            where: { id: term.roomId },
+            data: {
+              status: 'occupied',
+              currentTenantId: term.tenantId,
+            },
+          });
+
+          return { activated: true, term: updatedTerm };
+        });
+
+        if (result.activated) {
+          activated.push(result.term);
+          if (this.auditService) {
+            await this.auditService.log({
+              dormitoryId: term.dormitoryId,
+              actorUserId: actorUserId || 'system',
+              action: 'provisional_rental_term.activate',
+              resourceType: 'provisional_rental_term',
+              resourceId: term.id,
+              details: { roomId: term.roomId, tenantId: term.tenantId },
+            });
+          }
+        } else {
+          skipped.push({ termId: term.id, reason: result.reason });
+        }
+      } catch (err: any) {
+        skipped.push({ termId: term.id, reason: err.message });
+      }
+    }
+
+    return { activatedCount: activated.length, skippedCount: skipped.length, activated, skipped };
+  }
+
   public async findProvisionalTermById(
     id: string,
     dormitoryId: string,
@@ -312,3 +460,4 @@ export class ProvisionalRentalTermService {
 }
 
 export const provisionalRentalTermService = new ProvisionalRentalTermService();
+

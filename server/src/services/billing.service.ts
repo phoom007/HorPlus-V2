@@ -160,7 +160,8 @@ export class BillingService {
   public async generateBillPreview(
     dormitoryId: string,
     billingCycleId: string,
-    roomId: string
+    roomId: string,
+    tx?: any
   ): Promise<BillPreviewResult> {
     const cycle = await this.billingCycleRepo.findById(billingCycleId, dormitoryId);
     if (!cycle) {
@@ -190,15 +191,24 @@ export class BillingService {
     const internetMode = (rateSnapshot as any).internetFeeMode || 'room';
     const parkingMode = (rateSnapshot as any).parkingFeeMode || 'room';
 
+    const room = await this.roomRepo.findById(roomId, dormitoryId);
+    if (!room) {
+      const err = new Error('ROOM_NOT_FOUND');
+      (err as any).statusCode = 404;
+      (err as any).code = 'ROOM_NOT_FOUND';
+      throw err;
+    }
+
     // 1. Resolve Contract (Priority 1) or ACTIVE ProvisionalRentalTerm (Priority 2)
     const activeContracts = await this.contractRepo.findActiveContractsForRoom(dormitoryId, roomId);
     let contract = activeContracts.length > 0 ? activeContracts[0] : null;
     let provisionalTerm: any = null;
 
     const prisma = getPrismaClient();
+    const client = tx || prisma;
 
     if (!contract) {
-      provisionalTerm = await prisma.provisionalRentalTerm.findFirst({
+      provisionalTerm = await client.provisionalRentalTerm.findFirst({
         where: {
           dormitoryId,
           roomId,
@@ -231,88 +241,23 @@ export class BillingService {
     }
 
     const tenantId = contract ? contract.tenantId : provisionalTerm.tenantId;
+    const tenant = tenantId ? await this.tenantRepo.findById(tenantId, dormitoryId) : null;
 
-    // Authoritative billing-cycle peopleCount snapshot resolution
+    // Resolve People Count
     const peopleCount = await billingOrchestrationService.resolveCyclePeopleCount(
       dormitoryId,
       billingCycleId,
       roomId,
-      tenantId
+      tenantId,
+      tx
     );
     const peopleCountDec = toDecimal(peopleCount.toString());
 
-    // Find meter readings
-    const waterReading = await this.meterRepo.findReadingByCycleRoomAndType(
-      dormitoryId,
-      billingCycleId,
-      roomId,
-      'water'
-    );
-    const elecReading = await this.meterRepo.findReadingByCycleRoomAndType(
-      dormitoryId,
-      billingCycleId,
-      roomId,
-      'electricity'
-    );
+    const items: Array<{ type: string; description: string; quantity: string; unit?: string; unitPrice: string; amount: string; metadata?: any }> = [];
 
-    if (waterMode === 'per_unit' && !waterReading) {
-      const err = new Error('MISSING_WATER_METER_READING');
-      (err as any).statusCode = 400;
-      (err as any).code = 'MISSING_METER_READING';
-      (err as any).message = 'กรุณากรอกเลขมิเตอร์น้ำของงวดนี้ก่อนออกบิล';
-      throw err;
-    }
-
-    if (elecMode === 'per_unit' && !elecReading) {
-      const err = new Error('MISSING_ELECTRICITY_METER_READING');
-      (err as any).statusCode = 400;
-      (err as any).code = 'MISSING_METER_READING';
-      (err as any).message = 'กรุณากรอกเลขมิเตอร์ไฟฟ้าของงวดนี้ก่อนออกบิล';
-      throw err;
-    }
-
-    const waterUsage = toDecimal(waterReading?.usageUnits || '0.00');
-    const elecUsage = toDecimal(elecReading?.usageUnits || '0.00');
-
-    let waterQuantity = waterUsage;
-    let waterAmount = mulDecimals(waterUsage, waterRate);
-    let waterDesc = `ค่าน้ำประปา (${formatDecimal(waterUsage)} หน่วย)`;
-    let waterUnit = 'unit';
-
-    if (waterMode === 'per_person' || waterMode === 'person') {
-      waterQuantity = peopleCountDec;
-      waterAmount = mulDecimals(peopleCountDec, waterRate);
-      waterDesc = `ค่าน้ำประปา (${peopleCount} คน)`;
-      waterUnit = 'person';
-    } else if (waterMode === 'flat_rate' || waterMode === 'per_room' || waterMode === 'room') {
-      waterQuantity = toDecimal('1.00');
-      waterAmount = waterRate;
-      waterDesc = `ค่าน้ำประปา (เหมาจ่าย)`;
-      waterUnit = 'room';
-    }
-
-    let elecQuantity = elecUsage;
-    let elecAmount = mulDecimals(elecUsage, elecRate);
-    let elecDesc = `ค่าไฟฟ้า (${formatDecimal(elecUsage)} หน่วย)`;
-    let elecUnit = 'unit';
-
-    if (elecMode === 'per_person' || elecMode === 'person') {
-      elecQuantity = peopleCountDec;
-      elecAmount = mulDecimals(peopleCountDec, elecRate);
-      elecDesc = `ค่าไฟฟ้า (${peopleCount} คน)`;
-      elecUnit = 'person';
-    } else if (elecMode === 'flat_rate' || elecMode === 'per_room' || elecMode === 'room') {
-      elecQuantity = toDecimal('1.00');
-      elecAmount = elecRate;
-      elecDesc = `ค่าไฟฟ้า (เหมาจ่าย)`;
-      elecUnit = 'room';
-    }
-
-    // Resolve Rent Item
-    let rentItem: { type: string; description: string; quantity: string; unit?: string; unitPrice: string; amount: string; metadata?: any } | null = null;
-
+    // Rent Fee
     if (contract) {
-      const contractSnapshot = await prisma.contractSnapshot.findUnique({
+      const contractSnapshot = await client.contractSnapshot.findUnique({
         where: { contractId: contract.id },
       });
       const rentAmount = toDecimal(contract.rentAmount);
@@ -324,7 +269,7 @@ export class BillingService {
 
         const scheduleItem = installmentConfig.installmentSchedule.find((s: any) => s.cycleOffset === cycleOffset);
         if (scheduleItem) {
-          rentItem = {
+          items.push({
             type: 'rent',
             description: scheduleItem.description || `ค่าเช่าห้องพัก (งวดที่ ${scheduleItem.installmentNo}/${installmentConfig.selectedInstallments})`,
             quantity: '1.00',
@@ -338,31 +283,35 @@ export class BillingService {
               cycleOffset,
               isFinalInstallment: scheduleItem.installmentNo === installmentConfig.selectedInstallments,
             },
-          };
-        } else {
-          rentItem = null;
+          });
         }
       } else {
-        rentItem = {
+        items.push({
           type: 'rent',
           description: 'ค่าเช่าห้องพัก',
           quantity: '1.00',
           unit: 'month',
           unitPrice: formatDecimal(rentAmount),
           amount: formatDecimal(rentAmount),
-        };
+        });
       }
     } else if (provisionalTerm) {
       if (provisionalTerm.rentalType === 'MONTHLY') {
         const unitRent = toDecimal(provisionalTerm.unitRentAmount.toString());
-        rentItem = {
-          type: 'rent',
-          description: 'ค่าเช่าห้องพัก',
-          quantity: '1.00',
-          unit: 'month',
-          unitPrice: formatDecimal(unitRent),
-          amount: formatDecimal(unitRent),
-        };
+        if (!isZeroDecimal(unitRent)) {
+          items.push({
+            type: 'rent',
+            description: 'ค่าเช่าห้องพัก',
+            quantity: '1.00',
+            unit: 'month',
+            unitPrice: formatDecimal(unitRent),
+            amount: formatDecimal(unitRent),
+            metadata: {
+              provisionalRentalTermId: provisionalTerm.id,
+              rentalType: 'MONTHLY',
+            },
+          });
+        }
       } else {
         // TERM
         const totalRent = toDecimal(provisionalTerm.totalRentAmount.toString());
@@ -376,50 +325,140 @@ export class BillingService {
           const isLast = cycleOffset === installments - 1;
           const priorSum = mulDecimals(installmentBase, (installments - 1).toString());
           const installmentAmt = isLast ? subDecimals(totalRent, priorSum) : installmentBase;
-          rentItem = {
+          items.push({
             type: 'rent',
             description: `ค่าเช่าห้องพัก (งวดที่ ${cycleOffset + 1}/${installments})`,
             quantity: '1.00',
             unit: 'installment',
             unitPrice: formatDecimal(installmentAmt),
             amount: formatDecimal(installmentAmt),
-          };
-        } else {
-          rentItem = null;
+            metadata: {
+              provisionalRentalTermId: provisionalTerm.id,
+              rentalType: 'TERM',
+              installmentNo: cycleOffset + 1,
+              totalInstallments: installments,
+            },
+          });
         }
       }
     }
 
-    const items: Array<{ type: string; description: string; quantity: string; unit?: string; unitPrice: string; amount: string; metadata?: any }> = [];
-    if (rentItem) {
-      items.push(rentItem);
-    }
-
-    if (!isZeroDecimal(waterAmount) || !isZeroDecimal(waterRate)) {
+    // Water Fee
+    if (waterMode === 'per_unit') {
+      const waterReading = await this.meterRepo.findReadingByCycleRoomAndType(
+        dormitoryId,
+        billingCycleId,
+        roomId,
+        'water',
+        tx
+      );
+      if (!waterReading) {
+        const err = new Error('MISSING_WATER_METER_READING');
+        (err as any).statusCode = 400;
+        (err as any).code = 'MISSING_METER_READING';
+        (err as any).message = 'กรุณากรอกเลขมิเตอร์น้ำของงวดนี้ก่อนออกบิล';
+        throw err;
+      }
+      const units = toDecimal(waterReading.usageUnits);
+      const amount = mulDecimals(units, waterRate);
       items.push({
         type: 'water',
-        description: waterDesc,
-        quantity: formatDecimal(waterQuantity),
-        unit: waterUnit,
+        description: `ค่าน้ำประปา (${waterReading.previousReading} - ${waterReading.currentReading})`,
+        quantity: formatDecimal(units),
+        unit: 'unit',
         unitPrice: formatDecimal(waterRate),
-        amount: formatDecimal(waterAmount),
-        metadata: waterUnit === 'person' ? { mode: 'person', peopleCount } : undefined,
+        amount: formatDecimal(amount),
+        metadata: {
+          previousReading: waterReading.previousReading,
+          currentReading: waterReading.currentReading,
+          usageUnits: waterReading.usageUnits,
+          mode: 'per_unit',
+        },
       });
+    } else if (waterMode === 'per_person' || waterMode === 'person') {
+      const amount = mulDecimals(peopleCountDec, waterRate);
+      items.push({
+        type: 'water',
+        description: `ค่าน้ำประปา (${peopleCount} คน)`,
+        quantity: formatDecimal(peopleCountDec),
+        unit: 'person',
+        unitPrice: formatDecimal(waterRate),
+        amount: formatDecimal(amount),
+        metadata: { mode: 'per_person', peopleCount },
+      });
+    } else if (waterMode === 'fixed' || waterMode === 'per_room' || waterMode === 'room') {
+      if (!isZeroDecimal(waterRate)) {
+        items.push({
+          type: 'water',
+          description: 'ค่าน้ำประปา (เหมาจ่าย)',
+          quantity: '1.00',
+          unit: 'room',
+          unitPrice: formatDecimal(waterRate),
+          amount: formatDecimal(waterRate),
+          metadata: { mode: 'fixed' },
+        });
+      }
     }
 
-    if (!isZeroDecimal(elecAmount) || !isZeroDecimal(elecRate)) {
+    // Electricity Fee
+    if (elecMode === 'per_unit') {
+      const elecReading = await this.meterRepo.findReadingByCycleRoomAndType(
+        dormitoryId,
+        billingCycleId,
+        roomId,
+        'electricity',
+        tx
+      );
+      if (!elecReading) {
+        const err = new Error('MISSING_ELECTRICITY_METER_READING');
+        (err as any).statusCode = 400;
+        (err as any).code = 'MISSING_METER_READING';
+        (err as any).message = 'กรุณากรอกเลขมิเตอร์ไฟฟ้าของงวดนี้ก่อนออกบิล';
+        throw err;
+      }
+      const units = toDecimal(elecReading.usageUnits);
+      const amount = mulDecimals(units, elecRate);
       items.push({
         type: 'electricity',
-        description: elecDesc,
-        quantity: formatDecimal(elecQuantity),
-        unit: elecUnit,
+        description: `ค่าไฟฟ้า (${elecReading.previousReading} - ${elecReading.currentReading})`,
+        quantity: formatDecimal(units),
+        unit: 'unit',
         unitPrice: formatDecimal(elecRate),
-        amount: formatDecimal(elecAmount),
-        metadata: elecUnit === 'person' ? { mode: 'person', peopleCount } : undefined,
+        amount: formatDecimal(amount),
+        metadata: {
+          previousReading: elecReading.previousReading,
+          currentReading: elecReading.currentReading,
+          usageUnits: elecReading.usageUnits,
+          mode: 'per_unit',
+        },
       });
+    } else if (elecMode === 'per_person') {
+      const amount = mulDecimals(peopleCountDec, elecRate);
+      items.push({
+        type: 'electricity',
+        description: `ค่าไฟฟ้า (${peopleCount} คน)`,
+        quantity: formatDecimal(peopleCountDec),
+        unit: 'person',
+        unitPrice: formatDecimal(elecRate),
+        amount: formatDecimal(amount),
+        metadata: { mode: 'per_person', peopleCount },
+      });
+    } else if (elecMode === 'fixed' || elecMode === 'per_room' || elecMode === 'room') {
+      if (!isZeroDecimal(elecRate)) {
+        items.push({
+          type: 'electricity',
+          description: 'ค่าไฟฟ้า (เหมาจ่าย)',
+          quantity: '1.00',
+          unit: 'room',
+          unitPrice: formatDecimal(elecRate),
+          amount: formatDecimal(elecRate),
+          metadata: { mode: 'fixed' },
+        });
+      }
     }
 
-    if (!isZeroDecimal(commonFee) && commonMode !== 'none' && commonMode !== 'free') {
+    // Common Fee
+    if (!isZeroDecimal(commonFee) && commonMode !== 'free' && commonMode !== 'none') {
       const isPerPerson = commonMode === 'person' || commonMode === 'per_person';
       const q = isPerPerson ? peopleCountDec : toDecimal('1.00');
       const amt = isPerPerson ? mulDecimals(peopleCountDec, commonFee) : commonFee;
@@ -430,25 +469,27 @@ export class BillingService {
         unit: isPerPerson ? 'person' : 'room',
         unitPrice: formatDecimal(commonFee),
         amount: formatDecimal(amt),
-        metadata: isPerPerson ? { mode: 'person', peopleCount } : undefined,
+        metadata: { mode: commonMode, peopleCount: isPerPerson ? peopleCount : undefined },
       });
     }
 
-    if (!isZeroDecimal(internetFee) && internetMode !== 'none' && internetMode !== 'free') {
+    // Internet Fee
+    if (!isZeroDecimal(internetFee) && internetMode !== 'free' && internetMode !== 'none') {
       const isPerPerson = internetMode === 'person' || internetMode === 'per_person';
       const q = isPerPerson ? peopleCountDec : toDecimal('1.00');
       const amt = isPerPerson ? mulDecimals(peopleCountDec, internetFee) : internetFee;
       items.push({
         type: 'internet',
-        description: isPerPerson ? `ค่าบริการอินเทอร์เน็ต (${peopleCount} คน)` : 'ค่าบริการอินเทอร์เน็ต',
+        description: isPerPerson ? `ค่าอินเทอร์เน็ต (${peopleCount} คน)` : 'ค่าอินเทอร์เน็ต',
         quantity: formatDecimal(q),
         unit: isPerPerson ? 'person' : 'room',
         unitPrice: formatDecimal(internetFee),
         amount: formatDecimal(amt),
-        metadata: isPerPerson ? { mode: 'person', peopleCount } : undefined,
+        metadata: { mode: internetMode, peopleCount: isPerPerson ? peopleCount : undefined },
       });
     }
 
+    // Parking Fee
     if (!isZeroDecimal(parkingFee) && parkingMode !== 'free' && parkingMode !== 'none') {
       const isPerPerson = parkingMode === 'person' || parkingMode === 'per_person';
       const isPerVehicle = parkingMode === 'vehicle' || parkingMode === 'per_vehicle';
@@ -518,54 +559,66 @@ export class BillingService {
           });
         }
       }
+
       if (cycleSnapshot.otherFees && Array.isArray(cycleSnapshot.otherFees)) {
-        for (const fee of cycleSnapshot.otherFees as any[]) {
-          if (fee && fee.description && fee.amount !== undefined) {
-            const feeAmt = toDecimal(String(fee.amount));
+        for (const f of cycleSnapshot.otherFees as any[]) {
+          if (f && f.description && f.amount) {
+            const feeAmt = toDecimal(String(f.amount));
             if (!isZeroDecimal(feeAmt)) {
-              const feeDesc = String(fee.description).trim();
-              const feeFormatted = formatDecimal(feeAmt);
-              otherFeesList.push({ description: feeDesc, amount: feeFormatted });
               items.push({
-                type: 'other',
-                description: feeDesc,
+                type: 'other_fee',
+                description: String(f.description).trim(),
                 quantity: '1.00',
-                unit: 'item',
-                unitPrice: feeFormatted,
-                amount: feeFormatted,
+                unit: 'charge',
+                unitPrice: formatDecimal(feeAmt),
+                amount: formatDecimal(feeAmt),
               });
+              otherFeesList.push({ description: String(f.description).trim(), amount: formatDecimal(feeAmt) });
             }
           }
         }
       }
     }
 
-    let subtotal = toDecimal('0.00');
+    let subtotalDec = toDecimal('0.00');
     for (const item of items) {
-      subtotal = addDecimals(subtotal, item.amount);
+      subtotalDec = addDecimals(subtotalDec, item.amount);
     }
 
+    const rentItemAmount = items.find((i) => i.type === 'rent')?.amount || '0.00';
+    const waterItem = items.find((i) => i.type === 'water');
+    const waterItemAmount = waterItem?.amount || '0.00';
+    const waterUsageStr = waterItem?.quantity || '0.00';
+
+    const elecItem = items.find((i) => i.type === 'electricity');
+    const elecItemAmount = elecItem?.amount || '0.00';
+    const elecUsageStr = elecItem?.quantity || '0.00';
+
+    const commonItemAmount = items.find((i) => i.type === 'common_fee')?.amount || '0.00';
+    const internetItemAmount = items.find((i) => i.type === 'internet')?.amount || '0.00';
+    const parkingItemAmount = items.find((i) => i.type === 'parking')?.amount || '0.00';
+
     return {
-      contractId: contract?.id || null,
-      provisionalRentalTermId: provisionalTerm?.id || null,
+      contractId: contract ? contract.id : null,
+      provisionalRentalTermId: provisionalTerm ? provisionalTerm.id : null,
       roomId,
-      tenantId,
-      rentAmount: rentItem ? rentItem.amount : '0.00',
-      waterUsage: formatDecimal(waterUsage),
+      tenantId: tenantId || (tenant ? tenant.id : ''),
+      rentAmount: rentItemAmount,
+      waterUsage: waterUsageStr,
       waterRate: formatDecimal(waterRate),
-      waterAmount: formatDecimal(waterAmount),
-      electricityUsage: formatDecimal(elecUsage),
+      waterAmount: waterItemAmount,
+      electricityUsage: elecUsageStr,
       electricityRate: formatDecimal(elecRate),
-      electricityAmount: formatDecimal(elecAmount),
-      commonFee: formatDecimal(commonFee),
-      internetFee: formatDecimal(internetFee),
-      parkingFee: formatDecimal(parkingFee),
+      electricityAmount: elecItemAmount,
+      commonFee: commonItemAmount,
+      internetFee: internetItemAmount,
+      parkingFee: parkingItemAmount,
       manualOutstandingAmount: manualOutstandingStr,
       otherFees: otherFeesList,
       peopleCount,
-      subtotal: formatDecimal(subtotal),
+      subtotal: formatDecimal(subtotalDec),
       discountAmount: '0.00',
-      totalAmount: formatDecimal(subtotal),
+      totalAmount: formatDecimal(subtotalDec),
       items,
     };
   }
@@ -574,7 +627,8 @@ export class BillingService {
     dormitoryId: string,
     data: GenerateBillDto,
     userId?: string,
-    issuanceTimestamp?: Date
+    issuanceTimestamp?: Date,
+    existingTx?: any
   ): Promise<{ bill: BillEntity; items: BillItemEntity[]; created: boolean }> {
     const cycle = await this.billingCycleRepo.findById(data.billingCycleId, dormitoryId);
     if (!cycle) {
@@ -591,7 +645,7 @@ export class BillingService {
       throw err;
     }
 
-    const prisma = getPrismaClient();
+    const prisma = existingTx || getPrismaClient();
     const settings = await prisma.dormitoryBillingSettings.findUnique({
       where: { dormitoryId },
     });
@@ -645,60 +699,11 @@ export class BillingService {
       throw err;
     }
 
-    // Check existing non-cancelled current bill for this room & cycle
-    const existingBillBefore = await this.billRepo.findByCycleAndRoom(
-      dormitoryId,
-      data.billingCycleId,
-      data.roomId
-    );
-    if (existingBillBefore) {
-      const items = await this.billRepo.getBillItems(existingBillBefore.id, dormitoryId);
-      return { bill: existingBillBefore, items, created: false };
-    }
-
-    const preview = await this.generateBillPreview(dormitoryId, data.billingCycleId, data.roomId);
-    const rateSnapshot = await this.billingCycleRepo.findRateSnapshot(data.billingCycleId, dormitoryId);
-
-    const billItems: CreateBillItemData[] = preview.items.map((i, idx) => ({
-      type: i.type,
-      description: i.description,
-      quantity: i.quantity,
-      unit: i.unit || null,
-      unitPrice: i.unitPrice,
-      amount: i.amount,
-      metadata: i.metadata || null,
-      displayOrder: idx,
-    }));
-
-    if (data.customItems) {
-      data.customItems.forEach((ci, idx) => {
-        billItems.push({
-          type: ci.type,
-          description: ci.description,
-          quantity: ci.quantity,
-          unit: (ci as any).unit || null,
-          unitPrice: ci.unitPrice,
-          amount: ci.amount,
-          metadata: (ci as any).metadata || null,
-          displayOrder: preview.items.length + idx,
-        });
-      });
-    }
-
-    let subtotalDec = toDecimal('0.00');
-    for (const item of billItems) {
-      subtotalDec = addDecimals(subtotalDec, item.amount);
-    }
-
-    const discountDec = toDecimal(data.discountAmount || '0.00');
-    const rawTotal = subDecimals(subtotalDec, discountDec);
-    const totalDec = compareDecimals(rawTotal, '0.00') < 0 ? toDecimal('0.00') : rawTotal;
-
     const issuanceNow = issuanceTimestamp || new Date();
     const billingDate = resolveBillIssueDate(issuanceNow);
     const dueDate = resolveBillDueDate(issuanceNow, settings.dueDay);
 
-    return this.billRepo.withTransaction(async (tx) => {
+    const executeInTx = async (tx: any) => {
       await this.billRepo.executeRawLock(data.roomId, tx);
 
       const existingBill = await this.billRepo.findByCycleAndRoom(
@@ -711,6 +716,44 @@ export class BillingService {
         const items = await this.billRepo.getBillItems(existingBill.id, dormitoryId, tx);
         return { bill: existingBill, items, created: false };
       }
+
+      const preview = await this.generateBillPreview(dormitoryId, data.billingCycleId, data.roomId, tx);
+      const rateSnapshot = await this.billingCycleRepo.findRateSnapshot(data.billingCycleId, dormitoryId);
+
+      const billItems: CreateBillItemData[] = preview.items.map((i, idx) => ({
+        type: i.type,
+        description: i.description,
+        quantity: i.quantity,
+        unit: i.unit || null,
+        unitPrice: i.unitPrice,
+        amount: i.amount,
+        metadata: i.metadata || null,
+        displayOrder: idx,
+      }));
+
+      if (data.customItems) {
+        data.customItems.forEach((ci, idx) => {
+          billItems.push({
+            type: ci.type,
+            description: ci.description,
+            quantity: ci.quantity,
+            unit: (ci as any).unit || null,
+            unitPrice: ci.unitPrice,
+            amount: ci.amount,
+            metadata: (ci as any).metadata || null,
+            displayOrder: preview.items.length + idx,
+          });
+        });
+      }
+
+      let subtotalDec = toDecimal('0.00');
+      for (const item of billItems) {
+        subtotalDec = addDecimals(subtotalDec, item.amount);
+      }
+
+      const discountDec = toDecimal(data.discountAmount || '0.00');
+      const rawTotal = subDecimals(subtotalDec, discountDec);
+      const totalDec = compareDecimals(rawTotal, '0.00') < 0 ? toDecimal('0.00') : rawTotal;
 
       const countRes = await this.billRepo.findAll(dormitoryId, { billingCycleId: data.billingCycleId }, tx);
       const billSeq = (countRes.total + 1).toString().padStart(4, '0');
@@ -775,14 +818,20 @@ export class BillingService {
       }
 
       return { bill, items, created: true };
-    });
+    };
+
+    if (existingTx) {
+      return executeInTx(existingTx);
+    }
+    return this.billRepo.withTransaction(executeInTx);
   }
 
   public async bulkGenerateBills(
     dormitoryId: string,
     billingCycleId: string,
     roomIds?: string[],
-    userId?: string
+    userId?: string,
+    dirtyRows?: any[]
   ): Promise<{
     generatedCount: number;
     bills: BillEntity[];
@@ -809,59 +858,119 @@ export class BillingService {
       targetRooms = roomRes.items.map((r) => r.id);
     }
 
+    const dirtyRowsMap = new Map<string, any>();
+    if (dirtyRows && Array.isArray(dirtyRows)) {
+      for (const dr of dirtyRows) {
+        if (dr && dr.roomId) {
+          dirtyRowsMap.set(dr.roomId, dr);
+        }
+      }
+    }
+
     const generatedBills: BillEntity[] = [];
     const generated: Array<{ roomId: string; billId: string; billNumber: string }> = [];
     const excluded: Array<{ roomId: string; reason: string }> = [];
     const failed: Array<{ roomId: string; error: string; code: string }> = [];
 
+    const { meterService } = await import('./meter.service.js');
+
     for (const roomId of targetRooms) {
-      const activeContracts = await this.contractRepo.findActiveContractsForRoom(dormitoryId, roomId);
-      let contract = activeContracts.length > 0 ? activeContracts[0] : null;
-      let provisionalTerm: any = null;
+      const dirtyRow = dirtyRowsMap.get(roomId);
 
-      if (!contract) {
-        provisionalTerm = await prisma.provisionalRentalTerm.findFirst({
-          where: {
-            dormitoryId,
-            roomId,
-            status: 'ACTIVE',
-            deletedAt: null,
-          },
-        });
-      }
-
-      if (!contract && !provisionalTerm) {
-        excluded.push({ roomId, reason: 'NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM' });
-        continue;
-      }
-
-      const existing = await this.billRepo.findByCycleAndRoom(dormitoryId, billingCycleId, roomId);
-      if (existing) {
-        excluded.push({ roomId, reason: 'BILL_ALREADY_EXISTS' });
-        continue;
-      }
-
-      try {
-        const { bill } = await this.generateBill(
-          dormitoryId,
-          {
-            billingCycleId,
-            roomId,
-          },
-          userId,
-          issuanceNow
-        );
-        generatedBills.push(bill);
-        generated.push({ roomId, billId: bill.id, billNumber: bill.billNumber });
-      } catch (err: any) {
-        if (err.code === 'MISSING_METER_READING' || err.code === 'NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM' || err.code === 'PROVISIONAL_TERM_NOT_ELIGIBLE_FOR_CYCLE') {
-          excluded.push({ roomId, reason: err.code });
-        } else {
-          failed.push({
-            roomId,
-            error: err.message || 'Error generating bill',
-            code: err.code || 'BILL_GENERATION_FAILED',
+      if (dirtyRow) {
+        // Atomic per-room transaction: save dirty row + issue bill
+        try {
+          await this.meterRepo.withTransaction(async (tx) => {
+            await this.meterRepo.executeRawLock(roomId, tx);
+            await meterService.saveSingleRoomWorkspaceInTx(dormitoryId, billingCycleId, dirtyRow, userId, tx);
+            const { bill, created } = await this.generateBill(
+              dormitoryId,
+              { billingCycleId, roomId },
+              userId,
+              issuanceNow,
+              tx
+            );
+            if (created) {
+              generatedBills.push(bill);
+              generated.push({ roomId, billId: bill.id, billNumber: bill.billNumber });
+            } else {
+              excluded.push({ roomId, reason: 'BILL_ALREADY_EXISTS' });
+            }
           });
+        } catch (err: any) {
+          if (
+            err.code === 'MISSING_METER_READING' ||
+            err.code === 'NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM' ||
+            err.code === 'PROVISIONAL_TERM_NOT_ELIGIBLE_FOR_CYCLE' ||
+            err.code === 'BILL_ALREADY_EXISTS'
+          ) {
+            excluded.push({ roomId, reason: err.code });
+          } else {
+            failed.push({
+              roomId,
+              error: err.message || 'Error generating bill',
+              code: err.code || 'BILL_GENERATION_FAILED',
+            });
+          }
+        }
+      } else {
+        // Standard room issuance without dirty row
+        const activeContracts = await this.contractRepo.findActiveContractsForRoom(dormitoryId, roomId);
+        let contract = activeContracts.length > 0 ? activeContracts[0] : null;
+        let provisionalTerm: any = null;
+
+        if (!contract) {
+          provisionalTerm = await prisma.provisionalRentalTerm.findFirst({
+            where: {
+              dormitoryId,
+              roomId,
+              status: 'ACTIVE',
+              deletedAt: null,
+            },
+          });
+        }
+
+        if (!contract && !provisionalTerm) {
+          excluded.push({ roomId, reason: 'NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM' });
+          continue;
+        }
+
+        const existing = await this.billRepo.findByCycleAndRoom(dormitoryId, billingCycleId, roomId);
+        if (existing) {
+          excluded.push({ roomId, reason: 'BILL_ALREADY_EXISTS' });
+          continue;
+        }
+
+        try {
+          const { bill, created } = await this.generateBill(
+            dormitoryId,
+            {
+              billingCycleId,
+              roomId,
+            },
+            userId,
+            issuanceNow
+          );
+          if (created) {
+            generatedBills.push(bill);
+            generated.push({ roomId, billId: bill.id, billNumber: bill.billNumber });
+          } else {
+            excluded.push({ roomId, reason: 'BILL_ALREADY_EXISTS' });
+          }
+        } catch (err: any) {
+          if (
+            err.code === 'MISSING_METER_READING' ||
+            err.code === 'NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM' ||
+            err.code === 'PROVISIONAL_TERM_NOT_ELIGIBLE_FOR_CYCLE'
+          ) {
+            excluded.push({ roomId, reason: err.code });
+          } else {
+            failed.push({
+              roomId,
+              error: err.message || 'Error generating bill',
+              code: err.code || 'BILL_GENERATION_FAILED',
+            });
+          }
         }
       }
     }

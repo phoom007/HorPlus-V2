@@ -298,11 +298,14 @@ export class DemoBillingAdapter implements BillingDataSource {
     };
   }
 
-  async generateBulkBills(cycleId: string, actorUserId?: string): Promise<DataResult<Bill[]>> {
-    const rooms = roomRepository.getAll().filter(r => r.status === 'occupied');
+  async generateBulkBills(cycleId: string, roomIds?: string[], dirtyRows?: any[]): Promise<DataResult<any>> {
+    const allRooms = roomRepository.getAll();
+    const rooms = roomIds && roomIds.length > 0
+      ? allRooms.filter(r => roomIds.includes(r.id))
+      : allRooms.filter(r => r.status === 'occupied');
     const created: Bill[] = [];
     for (const r of rooms) {
-      const res = billingRepository.generateBillForRoom(r.id, cycleId, actorUserId);
+      const res = billingRepository.generateBillForRoom(r.id, cycleId);
       if (res.success && res.bill) created.push(res.bill);
     }
     return { success: true, data: created };

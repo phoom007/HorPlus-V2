@@ -4,10 +4,11 @@ import {
   MeterReadingEntity,
   MeterReplacementEntity,
   MeterReadingFilterQuery,
+  PrismaMeterRepository,
 } from '../db/repositories/meter.repository.js';
-import { IBillingCycleRepository } from '../db/repositories/billing-cycle.repository.js';
-import { IRoomRepository } from '../db/repositories/room.repository.js';
-import { IBillRepository } from '../db/repositories/bill.repository.js';
+import { IBillingCycleRepository, PrismaBillingCycleRepository } from '../db/repositories/billing-cycle.repository.js';
+import { IRoomRepository, PrismaRoomRepository } from '../db/repositories/room.repository.js';
+import { IBillRepository, PrismaBillRepository } from '../db/repositories/bill.repository.js';
 import { AuditService } from './audit.service.js';
 import { getPrismaClient } from '../db/prisma.js';
 import { toDecimal, formatDecimal, compareDecimals } from '../utils/decimal-math.util.js';
@@ -47,9 +48,9 @@ export interface BulkMeterReadingDto {
 
 export class MeterService {
   constructor(
-    private meterRepo: IMeterRepository,
-    private billingCycleRepo: IBillingCycleRepository,
-    private roomRepo: IRoomRepository,
+    private meterRepo: IMeterRepository = new PrismaMeterRepository(getPrismaClient()),
+    private billingCycleRepo: IBillingCycleRepository = new PrismaBillingCycleRepository(getPrismaClient()),
+    private roomRepo: IRoomRepository = new PrismaRoomRepository(getPrismaClient()),
     private billRepo?: IBillRepository,
     private auditService?: AuditService
   ) {}
@@ -833,39 +834,43 @@ export class MeterService {
     billingService?: any
   ) {
     if (data.action === 'issue') {
-      // 1. Save dirty workspace row if present
-      if (data.dirtyRow) {
-        await this.meterRepo.withTransaction(async (tx) => {
-          await this.saveSingleRoomWorkspaceInTx(dormitoryId, data.billingCycleId, data.dirtyRow!, userId, tx);
-        });
-      }
+      return this.meterRepo.withTransaction(async (tx) => {
+        await this.meterRepo.executeRawLock(data.roomId, tx);
 
-      // 2. Check if bill already exists
-      if (this.billRepo) {
-        const existing = await this.billRepo.findByCycleAndRoom(dormitoryId, data.billingCycleId, data.roomId);
-        if (existing) {
-          const items = await this.billRepo.getBillItems(existing.id, dormitoryId);
-          return { action: 'issue', bill: existing, items, created: false, status: existing.status };
+        // 1. Save dirty workspace row if present within this transaction
+        if (data.dirtyRow) {
+          await this.saveSingleRoomWorkspaceInTx(dormitoryId, data.billingCycleId, data.dirtyRow, userId, tx);
         }
-      }
 
-      // 3. Generate bill atomically (generateBill executes within its own transactional lock)
-      const result = await billingService.generateBill(
-        dormitoryId,
-        {
-          billingCycleId: data.billingCycleId,
-          roomId: data.roomId,
-        },
-        userId
-      );
+        // 2. Check if bill already exists
+        if (this.billRepo) {
+          const existing = await this.billRepo.findByCycleAndRoom(dormitoryId, data.billingCycleId, data.roomId, tx);
+          if (existing) {
+            const items = await this.billRepo.getBillItems(existing.id, dormitoryId, tx);
+            return { action: 'issue', bill: existing, items, created: false, status: existing.status };
+          }
+        }
 
-      return {
-        action: 'issue',
-        bill: result.bill,
-        items: result.items,
-        created: result.created,
-        status: result.bill.status,
-      };
+        // 3. Generate bill atomically inside the same transaction
+        const result = await billingService.generateBill(
+          dormitoryId,
+          {
+            billingCycleId: data.billingCycleId,
+            roomId: data.roomId,
+          },
+          userId,
+          undefined,
+          tx
+        );
+
+        return {
+          action: 'issue',
+          bill: result.bill,
+          items: result.items,
+          created: result.created,
+          status: result.bill.status,
+        };
+      });
     } else {
       // Cancel bill
       const activeBill = await this.billRepo?.findByCycleAndRoom(dormitoryId, data.billingCycleId, data.roomId);
@@ -909,4 +914,6 @@ export interface SaveMeterWorkspaceRowDto {
   otherFees?: Array<{ description: string; amount: string | number }>;
   expectedVersion?: number;
 }
+
+export const meterService = new MeterService();
 
