@@ -347,6 +347,12 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   const [lineToastSuccess, setLineToastSuccess] = useState<string | null>(null);
   const [isSendingLine, setIsSendingLine] = useState(false);
   const originalRowsRef = React.useRef<MeterRowState[]>(initialBuilt?.originalRows || []);
+  const meterRowsRef = React.useRef<MeterRowState[]>(meterRows);
+  useEffect(() => {
+    meterRowsRef.current = meterRows;
+  }, [meterRows]);
+
+  const [pendingFeeRooms, setPendingFeeRooms] = useState<{ [roomId: string]: boolean }>({});
   const tableContainerRef = React.useRef<HTMLDivElement>(null);
   const quickFillInputRef = React.useRef<HTMLTextAreaElement>(null);
 
@@ -434,6 +440,8 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   };
 
   const handleAddOtherFee = async (roomId: string) => {
+    if (pendingFeeRooms[roomId]) return;
+
     const input = newFeeInputs[roomId];
     const cleanDesc = (input?.description || '').trim();
     const amtStr = (input?.amount || '').trim();
@@ -447,13 +455,15 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       return;
     }
 
-    const targetRow = meterRows.find(r => r.roomId === roomId);
-    if (!targetRow) return;
+    const currentRow = meterRowsRef.current.find(r => r.roomId === roomId) || meterRows.find(r => r.roomId === roomId);
+    if (!currentRow) return;
 
-    const prevFees = targetRow.otherFees || [];
+    const prevFees = currentRow.otherFees || [];
     const formattedAmt = String(amtStr);
     const nextFees = [...prevFees, { description: cleanDesc, amount: formattedAmt }];
-    const expectedVersion = targetRow.snapshotVersion ?? 0;
+    const expectedVersion = currentRow.snapshotVersion ?? 0;
+
+    setPendingFeeRooms(prev => ({ ...prev, [roomId]: true }));
 
     // Optimistic update
     setMeterRows(prev => prev.map(r => r.roomId === roomId ? { ...r, otherFees: nextFees } : r));
@@ -476,9 +486,8 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       const savedMeta = res?.savedRows?.find(r => r.roomId === roomId);
       const nextVer = savedMeta?.version ?? (expectedVersion + 1);
 
-      // 1. Update React meterRows state
-      const updatedRows = meterRows.map(r => r.roomId === roomId ? { ...r, otherFees: nextFees, snapshotVersion: nextVer } : r);
-      setMeterRows(updatedRows);
+      // 1. Update React meterRows state using functional updater to preserve in-flight local edits
+      setMeterRows(prev => prev.map(r => r.roomId === roomId ? { ...r, otherFees: nextFees, snapshotVersion: nextVer } : r));
 
       // 2. Synchronously patch ONLY otherFees and snapshotVersion in originalRowsRef baseline
       if (originalRowsRef.current) {
@@ -492,9 +501,10 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
         }
       }
 
-      // 3. Recompute sparse draft patches (persisted Other Fee is no longer a draft delta)
+      // 3. Recompute sparse draft patches using latest row state merged with confirmed fee and version
       if (currentDormId && selectedBillingCycleId && originalRowsRef.current) {
-        const patches = deriveMeterDraftPatches(updatedRows, originalRowsRef.current);
+        const latestRows = meterRowsRef.current.map(r => r.roomId === roomId ? { ...r, otherFees: nextFees, snapshotVersion: nextVer } : r);
+        const patches = deriveMeterDraftPatches(latestRows, originalRowsRef.current);
         meterDraftStore.setDraft(currentDormId, selectedBillingCycleId, patches);
       }
 
@@ -532,7 +542,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       queryClient.invalidateQueries({ queryKey: queryKeys.meterWorkspace(currentDormId, selectedBillingCycleId) });
       queryClient.invalidateQueries({ queryKey: queryKeys.meterPreviewContext(currentDormId, selectedBillingCycleId) });
     } catch (err: any) {
-      // Rollback
+      // Rollback ONLY otherFees on error, preserving in-flight meter reading edits
       setMeterRows(prev => prev.map(r => r.roomId === roomId ? { ...r, otherFees: prevFees } : r));
       const isStale = err?.status === 409 || err?.domainError?.code === 'STALE_VERSION' || err?.message?.includes('STALE_VERSION') || err?.message?.includes('เปลี่ยนแปลงโดยผู้ใช้อื่น');
       if (isStale) {
@@ -542,16 +552,22 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       } else {
         showToast(err.message || 'ไม่สามารถบันทึกค่าใช้จ่ายเพิ่มเติมได้');
       }
+    } finally {
+      setPendingFeeRooms(prev => ({ ...prev, [roomId]: false }));
     }
   };
 
   const handleRemoveOtherFee = async (roomId: string, feeIdx: number) => {
-    const targetRow = meterRows.find(r => r.roomId === roomId);
-    if (!targetRow) return;
+    if (pendingFeeRooms[roomId]) return;
 
-    const prevFees = targetRow.otherFees || [];
+    const currentRow = meterRowsRef.current.find(r => r.roomId === roomId) || meterRows.find(r => r.roomId === roomId);
+    if (!currentRow) return;
+
+    const prevFees = currentRow.otherFees || [];
     const nextFees = prevFees.filter((_, idx) => idx !== feeIdx);
-    const expectedVersion = targetRow.snapshotVersion ?? 0;
+    const expectedVersion = currentRow.snapshotVersion ?? 0;
+
+    setPendingFeeRooms(prev => ({ ...prev, [roomId]: true }));
 
     // Optimistic update
     setMeterRows(prev => prev.map(r => r.roomId === roomId ? { ...r, otherFees: nextFees } : r));
@@ -574,9 +590,8 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       const savedMeta = res?.savedRows?.find(r => r.roomId === roomId);
       const nextVer = savedMeta?.version ?? (expectedVersion + 1);
 
-      // 1. Update React meterRows state
-      const updatedRows = meterRows.map(r => r.roomId === roomId ? { ...r, otherFees: nextFees, snapshotVersion: nextVer } : r);
-      setMeterRows(updatedRows);
+      // 1. Update React meterRows state using functional updater to preserve in-flight edits
+      setMeterRows(prev => prev.map(r => r.roomId === roomId ? { ...r, otherFees: nextFees, snapshotVersion: nextVer } : r));
 
       // 2. Synchronously patch ONLY otherFees and snapshotVersion in originalRowsRef baseline
       if (originalRowsRef.current) {
@@ -590,13 +605,14 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
         }
       }
 
-      // 3. Recompute sparse draft patches (persisted Other Fee is no longer a draft delta)
+      // 3. Recompute sparse draft patches
       if (currentDormId && selectedBillingCycleId && originalRowsRef.current) {
-        const patches = deriveMeterDraftPatches(updatedRows, originalRowsRef.current);
+        const latestRows = meterRowsRef.current.map(r => r.roomId === roomId ? { ...r, otherFees: nextFees, snapshotVersion: nextVer } : r);
+        const patches = deriveMeterDraftPatches(latestRows, originalRowsRef.current);
         meterDraftStore.setDraft(currentDormId, selectedBillingCycleId, patches);
       }
 
-      // 3. Optimistically update TanStack Query cache
+      // 4. Optimistically update TanStack Query cache
       queryClient.setQueryData(queryKeys.meterWorkspace(currentDormId, selectedBillingCycleId), (oldData: any) => {
         if (!oldData) return oldData;
         const existingSnapshots = Array.isArray(oldData.cyclePeopleRes?.data) ? [...oldData.cyclePeopleRes.data] : [];
@@ -624,7 +640,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       queryClient.invalidateQueries({ queryKey: queryKeys.meterWorkspace(currentDormId, selectedBillingCycleId) });
       queryClient.invalidateQueries({ queryKey: queryKeys.meterPreviewContext(currentDormId, selectedBillingCycleId) });
     } catch (err: any) {
-      // Rollback
+      // Rollback ONLY otherFees
       setMeterRows(prev => prev.map(r => r.roomId === roomId ? { ...r, otherFees: prevFees } : r));
       const isStale = err?.status === 409 || err?.domainError?.code === 'STALE_VERSION' || err?.message?.includes('STALE_VERSION') || err?.message?.includes('เปลี่ยนแปลงโดยผู้ใช้อื่น');
       if (isStale) {
@@ -634,6 +650,8 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       } else {
         showToast(err.message || 'ไม่สามารถลบค่าใช้จ่ายเพิ่มเติมได้');
       }
+    } finally {
+      setPendingFeeRooms(prev => ({ ...prev, [roomId]: false }));
     }
   };
 
@@ -2194,7 +2212,12 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                                 <button
                                   type="button"
                                   onClick={() => handleRemoveOtherFee(row.roomId, feeIdx)}
-                                  className="text-rose-500 hover:text-rose-700 p-0.5 cursor-pointer"
+                                  disabled={!!pendingFeeRooms[row.roomId]}
+                                  className={`p-0.5 ${
+                                    pendingFeeRooms[row.roomId]
+                                      ? 'text-gray-300 cursor-not-allowed'
+                                      : 'text-rose-500 hover:text-rose-700 cursor-pointer'
+                                  }`}
                                   title="ลบและบันทึกทันที"
                                 >
                                   <X className="w-3 h-3" />
@@ -2235,7 +2258,12 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                             <button
                               type="button"
                               onClick={() => handleAddOtherFee(row.roomId)}
-                              className="p-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 rounded-lg transition-all cursor-pointer flex items-center justify-center shrink-0 border border-indigo-100/50"
+                              disabled={!!pendingFeeRooms[row.roomId]}
+                              className={`p-1 rounded-lg transition-all flex items-center justify-center shrink-0 border ${
+                                pendingFeeRooms[row.roomId]
+                                  ? 'bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed opacity-50'
+                                  : 'bg-indigo-50 hover:bg-indigo-100 text-indigo-600 border-indigo-100/50 cursor-pointer'
+                              }`}
                               title="เพิ่มรายการและบันทึกทันที"
                             >
                               <Plus className="w-3.5 h-3.5" />
