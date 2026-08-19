@@ -35,6 +35,8 @@ import {
 } from 'lucide-react';
 
 import { User, Room, Tenant, Bill, Contract, MaintenanceRequest, Announcement, AuditLog, Building } from '../types';
+import { clearDormitoryQueryCache } from '../lib/queryClient';
+import { clearMeterDraftStore } from '../lib/meterDraftStore';
 
 // Import sub-modules
 import { OwnerDashboard } from './owner/dashboard';
@@ -691,6 +693,8 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
   useEffect(() => {
     if (activeDormitoryId && activeDormitoryId !== 'dorm-1' && activeDormitoryId !== 'dorm-001') {
       localStorage.setItem('selected_dormitory_id', activeDormitoryId);
+      clearDormitoryQueryCache();
+      clearMeterDraftStore();
     }
   }, [activeDormitoryId]);
 

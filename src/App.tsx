@@ -32,6 +32,10 @@ import { TenantRegisterPage } from './pages/tenant/TenantRegisterPage';
 
 import { OwnerAuthGuard, TenantAuthGuard, AuthContext } from './router/guards';
 
+import { QueryClientProvider } from '@tanstack/react-query';
+import { queryClient, clearDormitoryQueryCache } from './lib/queryClient';
+import { meterDraftStore } from './lib/meterDraftStore';
+
 import { User } from './types';
 import { ShieldAlert, Copy } from 'lucide-react';
 
@@ -47,6 +51,8 @@ const OwnerWorkspaceContainer: React.FC = () => {
     localStorage.removeItem('selected_dormitory_id');
     localStorage.removeItem('registered_dorm_profile');
     sessionStorage.removeItem('active_dormitory_selected_for_session');
+    clearDormitoryQueryCache();
+    meterDraftStore.clearAllDrafts();
     try {
       await fetch('/api/v1/auth/logout', { method: 'POST', credentials: 'include' });
     } catch {}
@@ -83,76 +89,78 @@ export default function App() {
     (import.meta as any).env?.MODE !== 'production';
 
   return (
-    <BrowserRouter>
-      <Routes>
-        {/* Public Pages */}
-        <Route path="/" element={<LandingPage />} />
-        <Route path="/features" element={<FeaturesPage />} />
-        <Route path="/pricing" element={<PricingPage />} />
-        <Route path="/how-it-works" element={<HowItWorksPage />} />
-        <Route path="/help" element={<HelpPage />} />
-        <Route path="/terms" element={<TermsPage />} />
-        <Route path="/privacy" element={<PrivacyPage />} />
-        <Route
-          path="/demo"
-          element={
-            isDemoAllowed ? (
-              <React.Suspense fallback={<div>Loading...</div>}>
+    <QueryClientProvider client={queryClient}>
+      <BrowserRouter>
+        <Routes>
+          {/* Public Pages */}
+          <Route path="/" element={<LandingPage />} />
+          <Route path="/features" element={<FeaturesPage />} />
+          <Route path="/pricing" element={<PricingPage />} />
+          <Route path="/how-it-works" element={<HowItWorksPage />} />
+          <Route path="/help" element={<HelpPage />} />
+          <Route path="/terms" element={<TermsPage />} />
+          <Route path="/privacy" element={<PrivacyPage />} />
+          <Route
+            path="/demo"
+            element={
+              isDemoAllowed ? (
+                <React.Suspense fallback={<div>Loading...</div>}>
+                  <Navigate to="/" replace />
+                </React.Suspense>
+              ) : (
                 <Navigate to="/" replace />
-              </React.Suspense>
-            ) : (
-              <Navigate to="/" replace />
-            )
-          }
-        />
+              )
+            }
+          />
 
-        {/* Authentication Routes */}
-        <Route
-          path="/auth/owner"
-          element={
-            <OwnerLoginPage
-              onLoginSuccess={() => {
-                // Handled via server session
-              }}
-            />
-          }
-        />
-        <Route path="/register" element={<Navigate to="/auth/owner" replace />} />
-        <Route path="/tenant/login" element={<Navigate to="/" replace />} />
-        <Route path="/tenant/register" element={<TenantRegisterPage />} />
-        <Route path="/tenant/claim" element={<TenantRegisterPage />} />
-        <Route path="/tenant/daily-request" element={<TenantRegisterPage />} />
-        <Route path="/staff-access" element={<StaffAccessPage />} />
+          {/* Authentication Routes */}
+          <Route
+            path="/auth/owner"
+            element={
+              <OwnerLoginPage
+                onLoginSuccess={() => {
+                  // Handled via server session
+                }}
+              />
+            }
+          />
+          <Route path="/register" element={<Navigate to="/auth/owner" replace />} />
+          <Route path="/tenant/login" element={<Navigate to="/" replace />} />
+          <Route path="/tenant/register" element={<TenantRegisterPage />} />
+          <Route path="/tenant/claim" element={<TenantRegisterPage />} />
+          <Route path="/tenant/daily-request" element={<TenantRegisterPage />} />
+          <Route path="/staff-access" element={<StaffAccessPage />} />
 
-        {/* Owner Onboarding Redirect to Owner Register */}
-        <Route path="/onboarding/*" element={<Navigate to="/owner/register" replace />} />
+          {/* Owner Onboarding Redirect to Owner Register */}
+          <Route path="/onboarding/*" element={<Navigate to="/owner/register" replace />} />
 
-        {/* Owner Workspace (Protected) */}
-        <Route path="/owner" element={<Navigate to="/owner/dashboard" replace />} />
-        <Route
-          path="/owner/*"
-          element={
-            <OwnerAuthGuard>
-              <OwnerWorkspaceContainer />
-            </OwnerAuthGuard>
-          }
-        />
+          {/* Owner Workspace (Protected) */}
+          <Route path="/owner" element={<Navigate to="/owner/dashboard" replace />} />
+          <Route
+            path="/owner/*"
+            element={
+              <OwnerAuthGuard>
+                <OwnerWorkspaceContainer />
+              </OwnerAuthGuard>
+            }
+          />
 
-        {/* Tenant Workspace (Protected) */}
-        <Route path="/tenant" element={<Navigate to="/tenant/dashboard" replace />} />
-        <Route
-          path="/tenant/*"
-          element={
-            <TenantAuthGuard>
-              <TenantWorkspaceContainer />
-            </TenantAuthGuard>
-          }
-        />
+          {/* Tenant Workspace (Protected) */}
+          <Route path="/tenant" element={<Navigate to="/tenant/dashboard" replace />} />
+          <Route
+            path="/tenant/*"
+            element={
+              <TenantAuthGuard>
+                <TenantWorkspaceContainer />
+              </TenantAuthGuard>
+            }
+          />
 
-        {/* Fallback */}
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
-    </BrowserRouter>
+          {/* Fallback */}
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </BrowserRouter>
+    </QueryClientProvider>
   );
 }
 

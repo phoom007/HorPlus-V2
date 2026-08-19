@@ -15,7 +15,7 @@ import { ENTITLEMENT_ROOM_LIMITS } from './entitlement.service.js';
 import { subscriptionEntitlementService } from './subscription-entitlement.service.js';
 import { AppError } from '../types/index.js';
 import { getPrismaClient } from '../db/prisma.js';
-import { toDecimal, formatDecimal, compareDecimals } from '../utils/decimal-math.util.js';
+import { toDecimal, formatDecimal, compareDecimals, divDecimals, mulDecimals, subDecimals } from '../utils/decimal-math.util.js';
 
 export interface CreateMeterDeviceDto {
   roomId: string;
@@ -728,6 +728,13 @@ export class MeterService {
       });
 
       if (existingSnap) {
+        if (row.expectedVersion !== undefined && row.expectedVersion !== null && existingSnap.version !== row.expectedVersion) {
+          const err: any = new Error('ข้อมูลมิเตอร์ของห้องนี้ถูกเปลี่ยนแปลงโดยผู้ใช้อื่น กรุณารีเฟรชก่อนทำรายการ');
+          err.statusCode = 409;
+          err.code = 'STALE_VERSION';
+          throw err;
+        }
+
         const updateData: any = {
           updatedByUserId: userId && /^[0-9a-fA-F-]{36}$/.test(userId) ? userId : null,
           version: existingSnap.version + 1,
@@ -744,6 +751,13 @@ export class MeterService {
           data: updateData,
         });
       } else {
+        if (row.expectedVersion !== undefined && row.expectedVersion !== null && row.expectedVersion > 0) {
+          const err: any = new Error('ข้อมูลมิเตอร์ของห้องนี้ถูกเปลี่ยนแปลงโดยผู้ใช้อื่น กรุณารีเฟรชก่อนทำรายการ');
+          err.statusCode = 409;
+          err.code = 'STALE_VERSION';
+          throw err;
+        }
+
         await client.roomBillingCycleSnapshot.create({
           data: {
             dormitoryId,
@@ -754,6 +768,7 @@ export class MeterService {
             otherFees: cleanOtherFees,
             source: 'MANUAL',
             updatedByUserId: userId && /^[0-9a-fA-F-]{36}$/.test(userId) ? userId : null,
+            version: 1,
           },
         });
       }
@@ -943,6 +958,350 @@ export class MeterService {
   }
 
   /**
+   * Bounded aggregate read for current household counts across all rooms in the cycle.
+   */
+  public async getHouseholdCountsByCycle(
+    dormitoryId: string,
+    billingCycleId: string
+  ): Promise<Array<{ roomId: string; currentHouseholdPeopleCount: number }>> {
+    const currentCycle = await this.billingCycleRepo.findById(billingCycleId, dormitoryId);
+    if (!currentCycle) {
+      const err = new Error('BILLING_CYCLE_NOT_FOUND');
+      (err as any).statusCode = 404;
+      (err as any).code = 'BILLING_CYCLE_NOT_FOUND';
+      throw err;
+    }
+
+    const prisma = getPrismaClient();
+    const roomsResult = await this.roomRepo.findAll(dormitoryId, {
+      pageSize: ENTITLEMENT_ROOM_LIMITS.PAID,
+    });
+    const rooms = roomsResult.items || [];
+
+    const activeContracts = await prisma.contract.findMany({
+      where: {
+        dormitoryId,
+        status: { in: ['active', 'expiring_soon', 'pending_signature', 'waiting_extension', 'checking_out'] },
+        deletedAt: null,
+        startDate: { lte: currentCycle.periodEnd },
+        endDate: { gte: currentCycle.periodStart },
+      },
+      include: { tenant: true },
+      orderBy: [{ startDate: 'asc' }, { createdAt: 'desc' }],
+    });
+
+    const activeProvisionalTerms = await prisma.provisionalRentalTerm.findMany({
+      where: {
+        dormitoryId,
+        status: 'ACTIVE',
+        deletedAt: null,
+        startDate: { lte: currentCycle.periodEnd },
+        endDate: { gte: currentCycle.periodStart },
+      },
+      include: { tenant: true },
+      orderBy: [{ startDate: 'asc' }, { createdAt: 'desc' }],
+    });
+
+    const allTenantIds = Array.from(
+      new Set([
+        ...activeContracts.map((c) => c.tenantId),
+        ...activeProvisionalTerms.map((p) => p.tenantId),
+      ])
+    );
+
+    const coOccupants = allTenantIds.length > 0
+      ? await prisma.tenantCoOccupant.findMany({
+          where: {
+            dormitoryId,
+            tenantId: { in: allTenantIds },
+            deletedAt: null,
+            status: 'active',
+          },
+        })
+      : [];
+
+    const coOccupantCountMap = new Map<string, number>();
+    for (const co of coOccupants) {
+      coOccupantCountMap.set(co.tenantId, (coOccupantCountMap.get(co.tenantId) || 0) + 1);
+    }
+
+    const roomContractMap = new Map<string, typeof activeContracts[0]>();
+    for (const c of activeContracts) {
+      if (!roomContractMap.has(c.roomId)) roomContractMap.set(c.roomId, c);
+    }
+
+    const roomProvisionalMap = new Map<string, typeof activeProvisionalTerms[0]>();
+    for (const p of activeProvisionalTerms) {
+      if (!roomProvisionalMap.has(p.roomId)) roomProvisionalMap.set(p.roomId, p);
+    }
+
+    return rooms.map((room) => {
+      let householdCount = 0;
+      const contract = roomContractMap.get(room.id);
+      if (contract) {
+        if (contract.tenant && contract.tenant.status === 'reserved') {
+          householdCount = 0;
+        } else {
+          householdCount = 1 + (coOccupantCountMap.get(contract.tenantId) || 0);
+        }
+      } else {
+        const prov = roomProvisionalMap.get(room.id);
+        if (prov) {
+          if (prov.tenant && prov.tenant.status === 'reserved') {
+            householdCount = 0;
+          } else {
+            householdCount = 1 + (coOccupantCountMap.get(prov.tenantId) || 0);
+          }
+        } else {
+          householdCount = 0;
+        }
+      }
+      return {
+        roomId: room.id,
+        currentHouseholdPeopleCount: householdCount,
+      };
+    });
+  }
+
+  /**
+   * Bounded aggregate read for Meter Billing Preview Context.
+   * Produces all fixed, server-resolved authorities required by the frontend live calculator
+   * in ONE bounded read without per-room HTTP fanout.
+   */
+  public async getMeterBillingPreviewContext(
+    dormitoryId: string,
+    billingCycleId: string
+  ): Promise<{
+    billingCycleId: string;
+    cycleCode: string;
+    rateSnapshot: any;
+    rooms: Array<{
+      roomId: string;
+      roomNumber: string;
+      tenantId: string | null;
+      tenantName: string | null;
+      billingSource: 'CONTRACT' | 'PROVISIONAL_MONTHLY' | 'PROVISIONAL_TERM' | 'NONE';
+      rentAmount: string;
+      rentDescription: string;
+      parkingQuantity: string;
+      snapshotVersion: number;
+      snapshotOtherFees: Array<{ description: string; amount: string }>;
+      snapshotManualOutstanding: string;
+      snapshotPeopleCount: number | null;
+      currentHouseholdPeopleCount: number;
+    }>;
+  }> {
+    const cycle = await this.billingCycleRepo.findById(billingCycleId, dormitoryId);
+    if (!cycle) {
+      const err = new Error('BILLING_CYCLE_NOT_FOUND');
+      (err as any).statusCode = 404;
+      (err as any).code = 'BILLING_CYCLE_NOT_FOUND';
+      throw err;
+    }
+
+    const rateSnapshot = await this.billingCycleRepo.findRateSnapshot(billingCycleId, dormitoryId);
+    if (!rateSnapshot) {
+      const err = new Error('MISSING_RATE_SNAPSHOT');
+      (err as any).statusCode = 422;
+      (err as any).code = 'MISSING_RATE_SNAPSHOT';
+      throw err;
+    }
+
+    const prisma = getPrismaClient();
+    const roomsResult = await this.roomRepo.findAll(dormitoryId, {
+      pageSize: ENTITLEMENT_ROOM_LIMITS.PAID,
+    });
+    const rooms = roomsResult.items || [];
+
+    // Load active contracts with snapshots
+    const activeContracts = await prisma.contract.findMany({
+      where: {
+        dormitoryId,
+        status: { in: ['active', 'expiring_soon', 'pending_signature', 'waiting_extension', 'checking_out'] },
+        deletedAt: null,
+        startDate: { lte: cycle.periodEnd },
+        endDate: { gte: cycle.periodStart },
+      },
+      include: {
+        tenant: true,
+        snapshot: true,
+      },
+      orderBy: [{ startDate: 'asc' }, { createdAt: 'desc' }],
+    });
+
+    const activeProvisionalTerms = await prisma.provisionalRentalTerm.findMany({
+      where: {
+        dormitoryId,
+        status: 'ACTIVE',
+        deletedAt: null,
+        startDate: { lte: cycle.periodEnd },
+        endDate: { gte: cycle.periodStart },
+      },
+      include: {
+        tenant: true,
+      },
+      orderBy: [{ startDate: 'asc' }, { createdAt: 'desc' }],
+    });
+
+    // Load snapshots for this cycle
+    const snapshots = await prisma.roomBillingCycleSnapshot.findMany({
+      where: {
+        dormitoryId,
+        billingCycleId,
+      },
+    });
+    const snapshotMap = new Map(snapshots.map((s) => [s.roomId, s]));
+
+    // Household counts
+    const householdCounts = await this.getHouseholdCountsByCycle(dormitoryId, billingCycleId);
+    const householdMap = new Map(householdCounts.map((h) => [h.roomId, h.currentHouseholdPeopleCount]));
+
+    // Vehicles for per-vehicle parking mode
+    const allTenantIds = Array.from(
+      new Set([
+        ...activeContracts.map((c) => c.tenantId),
+        ...activeProvisionalTerms.map((p) => p.tenantId),
+      ])
+    );
+    const vehicles = allTenantIds.length > 0
+      ? await prisma.tenantVehicle.findMany({
+          where: {
+            dormitoryId,
+            tenantId: { in: allTenantIds },
+            deletedAt: null,
+          },
+        })
+      : [];
+    const vehicleCountMap = new Map<string, number>();
+    for (const v of vehicles) {
+      vehicleCountMap.set(v.tenantId, (vehicleCountMap.get(v.tenantId) || 0) + 1);
+    }
+
+    const roomContractMap = new Map<string, typeof activeContracts[0]>();
+    for (const c of activeContracts) {
+      if (!roomContractMap.has(c.roomId)) roomContractMap.set(c.roomId, c);
+    }
+
+    const roomProvisionalMap = new Map<string, typeof activeProvisionalTerms[0]>();
+    for (const p of activeProvisionalTerms) {
+      if (!roomProvisionalMap.has(p.roomId)) roomProvisionalMap.set(p.roomId, p);
+    }
+
+    const roomContexts = rooms.map((room) => {
+      let billingSource: 'CONTRACT' | 'PROVISIONAL_MONTHLY' | 'PROVISIONAL_TERM' | 'NONE' = 'NONE';
+      let rentAmount = '0.00';
+      let rentDescription = 'ค่าเช่าห้องพัก';
+      let tenantId: string | null = null;
+      let tenantName: string | null = null;
+      let parkingQuantity = '1.00';
+
+      const contract = roomContractMap.get(room.id);
+      if (contract) {
+        billingSource = 'CONTRACT';
+        tenantId = contract.tenantId;
+        tenantName = contract.tenant ? (contract.tenant.displayName || `${contract.tenant.firstName || ''} ${contract.tenant.lastName || ''}`.trim()) : null;
+
+        const contractSnapshot = contract.snapshot as any;
+        const installmentConfig = contractSnapshot?.installmentConfig;
+        if (installmentConfig && Array.isArray(installmentConfig.installmentSchedule) && installmentConfig.installmentSchedule.length > 0) {
+          const contractStart = new Date(contract.startDate);
+          const cycleStart = new Date(cycle.periodStart);
+          const cycleOffset = (cycleStart.getFullYear() - contractStart.getFullYear()) * 12 + (cycleStart.getMonth() - contractStart.getMonth());
+          const scheduleItem = installmentConfig.installmentSchedule.find((s: any) => s.cycleOffset === cycleOffset);
+          if (scheduleItem) {
+            rentAmount = formatDecimal(toDecimal(scheduleItem.amount));
+            rentDescription = scheduleItem.description || `ค่าเช่าห้องพัก (งวดที่ ${scheduleItem.installmentNo}/${installmentConfig.selectedInstallments})`;
+          } else {
+            rentAmount = '0.00';
+          }
+        } else {
+          rentAmount = formatDecimal(toDecimal(contract.rentAmount));
+        }
+      } else {
+        const prov = roomProvisionalMap.get(room.id);
+        if (prov) {
+          tenantId = prov.tenantId;
+          tenantName = prov.tenant ? (prov.tenant.displayName || `${prov.tenant.firstName || ''} ${prov.tenant.lastName || ''}`.trim()) : null;
+          if (prov.rentalType === 'MONTHLY') {
+            billingSource = 'PROVISIONAL_MONTHLY';
+            rentAmount = formatDecimal(toDecimal(prov.unitRentAmount.toString()));
+          } else {
+            billingSource = 'PROVISIONAL_TERM';
+            const totalRent = toDecimal(prov.totalRentAmount.toString());
+            const installments = prov.termInstallmentCount || 1;
+            const termStart = new Date(prov.startDate);
+            const cycleStart = new Date(cycle.periodStart);
+            const cycleOffset = (cycleStart.getFullYear() - termStart.getFullYear()) * 12 + (cycleStart.getMonth() - termStart.getMonth());
+
+            if (cycleOffset >= 0 && cycleOffset < installments) {
+              const installmentBase = divDecimals(totalRent, installments.toString());
+              const isLast = cycleOffset === installments - 1;
+              const priorSum = mulDecimals(installmentBase, (installments - 1).toString());
+              const installmentAmt = isLast ? subDecimals(totalRent, priorSum) : installmentBase;
+              rentAmount = formatDecimal(installmentAmt);
+              rentDescription = `ค่าเช่าห้องพัก (งวดที่ ${cycleOffset + 1}/${installments})`;
+            } else {
+              rentAmount = '0.00';
+            }
+          }
+        } else {
+          billingSource = 'NONE';
+          rentAmount = '0.00';
+        }
+      }
+
+      // Parking quantity calculation
+      const parkingMode = (rateSnapshot as any).parkingFeeMode || 'per_room';
+      if (parkingMode === 'per_vehicle' || parkingMode === 'vehicle') {
+        const vCount = tenantId ? (vehicleCountMap.get(tenantId) || 0) : 0;
+        parkingQuantity = vCount.toFixed(2);
+      } else if (parkingMode === 'per_person' || parkingMode === 'person') {
+        parkingQuantity = 'per_person';
+      } else if (parkingMode === 'free' || parkingMode === 'none') {
+        parkingQuantity = '0.00';
+      } else {
+        parkingQuantity = '1.00';
+      }
+
+      const snap = snapshotMap.get(room.id);
+      const snapshotVersion = snap ? snap.version : 0;
+      const snapshotOtherFees: Array<{ description: string; amount: string }> =
+        snap && Array.isArray(snap.otherFees)
+          ? (snap.otherFees as any[]).map((f: any) => ({
+              description: String(f?.description || ''),
+              amount: formatDecimal(toDecimal(f?.amount)),
+            }))
+          : [];
+      const snapshotManualOutstanding = snap && snap.manualOutstandingAmount ? formatDecimal(toDecimal(snap.manualOutstandingAmount.toString())) : '0.00';
+      const snapshotPeopleCount = snap ? snap.peopleCount : null;
+      const currentHouseholdPeopleCount = householdMap.get(room.id) ?? 0;
+
+      return {
+        roomId: room.id,
+        roomNumber: room.roomNumber,
+        tenantId,
+        tenantName,
+        billingSource,
+        rentAmount,
+        rentDescription,
+        parkingQuantity,
+        snapshotVersion,
+        snapshotOtherFees,
+        snapshotManualOutstanding,
+        snapshotPeopleCount,
+        currentHouseholdPeopleCount,
+      };
+    });
+
+    return {
+      billingCycleId: cycle.id,
+      cycleCode: cycle.cycleCode,
+      rateSnapshot,
+      rooms: roomContexts,
+    };
+  }
+
+  /**
    * Bounded aggregate READ for Pull Previous data.
    * Returns authoritative previous meter readings (from MeterReading.currentReading, regardless of bill existence)
    * and authoritative current household people count in one single server response without any database mutation.
@@ -1021,108 +1380,16 @@ export class MeterService {
       }
     }
 
-    // 5. Bounded Aggregate Read for Current Household Truth (ZERO writes, ZERO pending correction consumption)
-    // Priority 1: Qualifying active contracts for the dormitory overlapping the current cycle
-    const activeContracts = await prisma.contract.findMany({
-      where: {
-        dormitoryId,
-        status: { in: ['active', 'expiring_soon', 'pending_signature', 'waiting_extension', 'checking_out'] },
-        deletedAt: null,
-        startDate: { lte: currentCycle.periodEnd },
-        endDate: { gte: currentCycle.periodStart },
-      },
-      include: {
-        tenant: true,
-      },
-      orderBy: [
-        { startDate: 'asc' },
-        { createdAt: 'desc' },
-      ],
-    });
-
-    // Priority 2: Qualifying ACTIVE provisional rental terms overlapping the current cycle
-    const activeProvisionalTerms = await prisma.provisionalRentalTerm.findMany({
-      where: {
-        dormitoryId,
-        status: 'ACTIVE',
-        deletedAt: null,
-        startDate: { lte: currentCycle.periodEnd },
-        endDate: { gte: currentCycle.periodStart },
-      },
-      include: {
-        tenant: true,
-      },
-      orderBy: [
-        { startDate: 'asc' },
-        { createdAt: 'desc' },
-      ],
-    });
-
-    // Collect all relevant tenant IDs for batch co-occupant lookup
-    const allTenantIds = Array.from(
-      new Set([
-        ...activeContracts.map((c) => c.tenantId),
-        ...activeProvisionalTerms.map((p) => p.tenantId),
-      ])
-    );
-
-    const coOccupants = allTenantIds.length > 0
-      ? await prisma.tenantCoOccupant.findMany({
-          where: {
-            dormitoryId,
-            tenantId: { in: allTenantIds },
-            deletedAt: null,
-            status: 'active',
-          },
-        })
-      : [];
-
-    const coOccupantCountMap = new Map<string, number>();
-    for (const co of coOccupants) {
-      coOccupantCountMap.set(co.tenantId, (coOccupantCountMap.get(co.tenantId) || 0) + 1);
-    }
-
-    const roomContractMap = new Map<string, typeof activeContracts[0]>();
-    for (const c of activeContracts) {
-      if (!roomContractMap.has(c.roomId)) {
-        roomContractMap.set(c.roomId, c);
-      }
-    }
-
-    const roomProvisionalMap = new Map<string, typeof activeProvisionalTerms[0]>();
-    for (const p of activeProvisionalTerms) {
-      if (!roomProvisionalMap.has(p.roomId)) {
-        roomProvisionalMap.set(p.roomId, p);
-      }
-    }
+    // 5. Bounded Aggregate Read for Current Household Truth
+    const householdCounts = await this.getHouseholdCountsByCycle(dormitoryId, billingCycleId);
+    const householdMap = new Map(householdCounts.map((h) => [h.roomId, h.currentHouseholdPeopleCount]));
 
     // 6. Map in-memory without any per-room DB query or mutation
     const roomResults = rooms.map((room) => {
-      let householdCount = 0;
-
-      const contract = roomContractMap.get(room.id);
-      if (contract) {
-        if (contract.tenant && contract.tenant.status === 'reserved') {
-          householdCount = 0; // RESERVED future tenant before activation
-        } else {
-          householdCount = 1 + (coOccupantCountMap.get(contract.tenantId) || 0);
-        }
-      } else {
-        const prov = roomProvisionalMap.get(room.id);
-        if (prov) {
-          if (prov.tenant && prov.tenant.status === 'reserved') {
-            householdCount = 0;
-          } else {
-            householdCount = 1 + (coOccupantCountMap.get(prov.tenantId) || 0);
-          }
-        } else {
-          householdCount = 0; // Vacant
-        }
-      }
-
       const prevWater = readingMap[room.id]?.waterCurr || null;
       const prevElec = readingMap[room.id]?.elecCurr || null;
       const prevPeople = prevSnapshotMap.has(room.id) ? prevSnapshotMap.get(room.id)! : null;
+      const householdCount = householdMap.get(room.id) ?? 0;
 
       return {
         roomId: room.id,

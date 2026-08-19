@@ -10,10 +10,25 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import React from 'react';
 import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { QuickAddTenantModal } from '../components/QuickAddTenantModal';
 import { OwnerMeters } from '../pages/owner/meters';
 import * as httpClient from '../data/httpClient';
 import { Room, Building, QuickAddRoomContext } from '../types';
+
+const createTestQueryClient = () =>
+  new QueryClient({
+    defaultOptions: {
+      queries: {
+        retry: false,
+      },
+    },
+  });
+
+const renderWithClient = (ui: React.ReactElement) => {
+  const client = createTestQueryClient();
+  return render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>);
+};
 
 describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () => {
   beforeEach(() => {
@@ -94,7 +109,7 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
         return { success: true, data: [] };
       });
 
-      render(
+      renderWithClient(
         <OwnerMeters
           rooms={[mockRoom]}
           buildings={[mockBuilding]}
@@ -142,7 +157,7 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
         return { success: true, data: [] };
       });
 
-      render(
+      renderWithClient(
         <OwnerMeters
           rooms={[mockRoom]}
           buildings={[mockBuilding]}
@@ -171,7 +186,7 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
       // Mock delayed response
       vi.spyOn(httpClient, 'httpRequest').mockImplementation(() => new Promise(() => {}));
 
-      render(
+      renderWithClient(
         <OwnerMeters
           rooms={[mockRoom]}
           buildings={[mockBuilding]}
@@ -197,7 +212,7 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
     it('Matrix D: /billing-cycles request fails -> Quick Add hidden (fail-closed)', async () => {
       vi.spyOn(httpClient, 'httpRequest').mockRejectedValue(new Error('Network error'));
 
-      render(
+      renderWithClient(
         <OwnerMeters
           rooms={[mockRoom]}
           buildings={[mockBuilding]}
