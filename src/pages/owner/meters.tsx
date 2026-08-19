@@ -94,6 +94,152 @@ export interface MeterRowState {
   snapshotVersion?: number;
 }
 
+export function getTenantForRoomAndCycleHelper(
+  roomId: string,
+  cycle: string,
+  contracts: Contract[] = [],
+  rooms: Room[] = [],
+  tenants: Tenant[] = []
+): Tenant | undefined {
+  if (!cycle) return undefined;
+  const activeContract = (contracts || []).find(c => {
+    if (c.roomId !== roomId) return false;
+    const [cy, cm] = cycle.split('-').map(Number);
+    const startValStr = typeof c.startDate === 'string' ? c.startDate : new Date(c.startDate).toISOString().slice(0, 10);
+    const endValStr = typeof c.endDate === 'string' ? c.endDate : new Date(c.endDate).toISOString().slice(0, 10);
+    const [sy, sm] = startValStr.split('-').map(Number);
+    const [ey, em] = endValStr.split('-').map(Number);
+    const cycleVal = cy * 12 + (cm - 1);
+    const startVal = sy * 12 + (sm - 1);
+    const endVal = ey * 12 + (em - 1);
+    return cycleVal >= startVal && cycleVal <= endVal;
+  });
+
+  const tenantId = activeContract ? activeContract.tenantId : rooms.find(r => r.id === roomId)?.currentTenantId;
+  return tenants.find(t => t.id === tenantId);
+}
+
+export function buildRowsFromWorkspace(params: {
+  workspaceData: any;
+  rooms: Room[];
+  bills: Bill[];
+  contracts?: Contract[];
+  tenants?: Tenant[];
+  selectedBillingCycleId?: string;
+  selectedCycleCode?: string;
+  selectedCycle?: string;
+  currentDormId?: string;
+}): { rows: MeterRowState[]; originalRows: MeterRowState[] } {
+  const { workspaceData, rooms, bills, contracts = [], tenants = [], selectedBillingCycleId, selectedCycleCode, selectedCycle, currentDormId } = params;
+  if (!workspaceData) {
+    return { rows: [], originalRows: [] };
+  }
+
+  const { serverReadings, cyclePeopleRes } = workspaceData;
+
+  const readingsByRoom: { [roomId: string]: { waterPrev?: string; waterCurr?: string; elecPrev?: string; elecCurr?: string } } = {};
+  (serverReadings || []).forEach((r: any) => {
+    if (!readingsByRoom[r.roomId]) {
+      readingsByRoom[r.roomId] = {};
+    }
+    if (r.meterType === 'water') {
+      readingsByRoom[r.roomId].waterPrev = r.previousReading !== undefined && r.previousReading !== null ? String(r.previousReading) : undefined;
+      readingsByRoom[r.roomId].waterCurr = r.currentReading !== undefined && r.currentReading !== null ? String(r.currentReading) : undefined;
+    } else if (r.meterType === 'electricity') {
+      readingsByRoom[r.roomId].elecPrev = r.previousReading !== undefined && r.previousReading !== null ? String(r.previousReading) : undefined;
+      readingsByRoom[r.roomId].elecCurr = r.currentReading !== undefined && r.currentReading !== null ? String(r.currentReading) : undefined;
+    }
+  });
+
+  const snapshots = (cyclePeopleRes && cyclePeopleRes.success && Array.isArray(cyclePeopleRes.data)) ? cyclePeopleRes.data : [];
+  const snapshotMap: { [roomId: string]: { peopleCount?: number; manualOutstandingAmount?: string; otherFees?: any[]; version?: number } } = {};
+  snapshots.forEach((s: any) => {
+    if (s.roomId) {
+      snapshotMap[s.roomId] = {
+        peopleCount: s.peopleCount !== undefined ? Number(s.peopleCount) : undefined,
+        manualOutstandingAmount: s.manualOutstandingAmount ? String(s.manualOutstandingAmount) : '0.00',
+        otherFees: Array.isArray(s.otherFees) ? s.otherFees.map((f: any) => ({ description: f.description, amount: String(f.amount) })) : [],
+        version: typeof s.version === 'number' ? s.version : 0,
+      };
+    }
+  });
+
+  const activeRooms = [...rooms].sort((a, b) => 
+    a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true, sensitivity: 'base' })
+  );
+
+  const rows: MeterRowState[] = activeRooms.map(r => {
+    const roomReadings = readingsByRoom[r.id] || {};
+    const cycleTenant = getTenantForRoomAndCycleHelper(r.id, selectedCycleCode || selectedCycle || '', contracts, rooms, tenants);
+    
+    const rawWaterBaseline = r.initialWaterMeter !== undefined && r.initialWaterMeter !== null ? String(r.initialWaterMeter) : (r as any).initialWaterReading !== undefined ? String((r as any).initialWaterReading) : '0.00';
+    const rawElecBaseline = r.initialElectricMeter !== undefined && r.initialElectricMeter !== null ? String(r.initialElectricMeter) : (r as any).initialElectricityReading !== undefined ? String((r as any).initialElectricityReading) : '0.00';
+
+    const waterPrev = roomReadings.waterPrev ?? rawWaterBaseline;
+    const waterCurr = roomReadings.waterCurr ?? waterPrev;
+
+    const elecPrev = roomReadings.elecPrev ?? rawElecBaseline;
+    const elecCurr = roomReadings.elecCurr ?? elecPrev;
+
+    const tenantDefaultPeople = cycleTenant ? (1 + (cycleTenant.coOccupants?.length || 0)) : 0;
+    const snap = snapshotMap[r.id];
+    const rowPeople = snap?.peopleCount !== undefined ? snap.peopleCount : tenantDefaultPeople;
+    
+    const existingBill = (bills || []).find(b => 
+      (b.cycleId === selectedBillingCycleId || b.cycleId === selectedCycleCode || (b as any).billingCycleId === selectedBillingCycleId) && 
+      (b.roomId === r.id || b.roomId === r.roomNumber) &&
+      (b.status as string) !== 'cancelled' && (b.status as string) !== 'void'
+    );
+    const billStatus: BillStatus = existingBill ? existingBill.status : 'draft';
+    const isPaid = billStatus === 'paid';
+
+    return {
+      roomId: r.id,
+      roomNumber: r.roomNumber,
+      waterPrev,
+      waterCurr,
+      elecPrev,
+      elecCurr,
+      isReplaced: false,
+      peopleCount: rowPeople,
+      overdueAmount: snap?.manualOutstandingAmount || '0.00',
+      isPaid,
+      billStatus,
+      editWaterPrev: false,
+      editElecPrev: false,
+      otherFees: snap?.otherFees || [],
+      snapshotVersion: snap?.version || 0,
+    };
+  });
+
+  const originalRows = JSON.parse(JSON.stringify(rows));
+
+  const localDraft = currentDormId && selectedBillingCycleId ? meterDraftStore.getDraft(currentDormId, selectedBillingCycleId) : null;
+  if (localDraft) {
+    const merged = rows.map(serverRow => {
+      const draftRow = localDraft.find(d => d.roomId === serverRow.roomId);
+      if (draftRow) {
+        return {
+          ...serverRow,
+          waterCurr: draftRow.waterCurr,
+          waterPrev: draftRow.waterPrev,
+          elecCurr: draftRow.elecCurr,
+          elecPrev: draftRow.elecPrev,
+          peopleCount: draftRow.peopleCount,
+          overdueAmount: draftRow.overdueAmount,
+          isReplaced: draftRow.isReplaced,
+          otherFees: draftRow.otherFees,
+          snapshotVersion: serverRow.snapshotVersion,
+        };
+      }
+      return serverRow;
+    });
+    return { rows: merged, originalRows };
+  }
+
+  return { rows, originalRows };
+}
+
 export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   rooms,
   buildings = [],
@@ -110,9 +256,34 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   selectedCycle = selectedCycleCode,
   onRefetchData
 }) => {
+  const queryClient = useQueryClient();
+  const currentDormId = dormitoryId || '';
+
+  // Synchronous cached first-paint initialization
+  const initialCachedData = currentDormId && selectedBillingCycleId
+    ? queryClient.getQueryData<any>(queryKeys.meterWorkspace(currentDormId, selectedBillingCycleId))
+    : null;
+
+  const initialBuilt = React.useMemo(() => {
+    if (initialCachedData && rooms.length > 0) {
+      return buildRowsFromWorkspace({
+        workspaceData: initialCachedData,
+        rooms,
+        bills,
+        contracts,
+        tenants,
+        selectedBillingCycleId,
+        selectedCycleCode,
+        selectedCycle,
+        currentDormId,
+      });
+    }
+    return null;
+  }, []);
+
   const [searchQuery, setSearchQuery] = useState('');
-  const [meterRows, setMeterRows] = useState<MeterRowState[]>([]);
-  const [loadedCycle, setLoadedCycle] = useState<string>('');
+  const [meterRows, setMeterRows] = useState<MeterRowState[]>(() => initialBuilt?.rows || []);
+  const [loadedCycle, setLoadedCycle] = useState<string>(() => (initialBuilt ? selectedBillingCycleId || '' : ''));
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -139,12 +310,33 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   const [isQuickFillOpen, setIsQuickFillOpen] = useState(false);
   const [quickFillText, setQuickFillText] = useState('');
   const [templateUsed, setTemplateUsed] = useState(false);
-  const [isFirstCycle, setIsFirstCycle] = useState(false);
+  const [isFirstCycle, setIsFirstCycle] = useState<boolean>(() => {
+    if (initialCachedData?.cyclesRes) {
+      const cyclesRes = initialCachedData.cyclesRes;
+      return Boolean(
+        cyclesRes.firstBillingCycleId === selectedBillingCycleId ||
+        cyclesRes.data?.find((c: any) => (c.id === selectedBillingCycleId || c.cycleCode === selectedCycleCode || c.cycleCode === selectedCycle))?.isFirstCycle
+      );
+    }
+    return false;
+  });
   const [quickAddModalOpen, setQuickAddModalOpen] = useState(false);
   const [selectedQuickAddContext, setSelectedQuickAddContext] = useState<QuickAddRoomContext | null>(null);
   const [quickAddLoadingRoomId, setQuickAddLoadingRoomId] = useState<string | null>(null);
-  const [operationalCycleAuthorityLoaded, setOperationalCycleAuthorityLoaded] = useState(false);
-  const [operationalCycleCode, setOperationalCycleCode] = useState<string | null>(null);
+  const [operationalCycleAuthorityLoaded, setOperationalCycleAuthorityLoaded] = useState<boolean>(() => {
+    return Boolean(initialCachedData?.cyclesRes);
+  });
+  const [operationalCycleCode, setOperationalCycleCode] = useState<string | null>(() => {
+    if (initialCachedData?.cyclesRes) {
+      const cyclesRes = initialCachedData.cyclesRes;
+      if (cyclesRes.operationalCycleCode) return cyclesRes.operationalCycleCode;
+      if (cyclesRes.data && Array.isArray(cyclesRes.data)) {
+        const op = cyclesRes.data.find((c: any) => c.status === 'draft' || c.status === 'open' || c.isCurrent);
+        return op?.cycleCode || null;
+      }
+    }
+    return null;
+  });
   const [allowEditAllElecPrev, setAllowEditAllElecPrev] = useState(false);
   const [allowEditAllWaterPrev, setAllowEditAllWaterPrev] = useState(false);
   const [flashingCells, setFlashingCells] = useState<{ [key: string]: boolean }>({});
@@ -154,7 +346,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   const [selectedTenantIdsForLine, setSelectedTenantIdsForLine] = useState<string[]>([]);
   const [lineToastSuccess, setLineToastSuccess] = useState<string | null>(null);
   const [isSendingLine, setIsSendingLine] = useState(false);
-  const originalRowsRef = React.useRef<MeterRowState[]>([]);
+  const originalRowsRef = React.useRef<MeterRowState[]>(initialBuilt?.originalRows || []);
   const tableContainerRef = React.useRef<HTMLDivElement>(null);
   const quickFillInputRef = React.useRef<HTMLTextAreaElement>(null);
 
@@ -162,9 +354,6 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     setToastMessage(msg);
     setTimeout(() => setToastMessage(null), 3000);
   };
-
-  const queryClient = useQueryClient();
-  const currentDormId = dormitoryId || '';
 
   // Server Preview Context Query (Bounded Aggregate Read)
   const previewContextQuery = useQuery({
@@ -287,17 +476,55 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       const savedMeta = res?.savedRows?.find(r => r.roomId === roomId);
       const nextVer = savedMeta?.version ?? (expectedVersion + 1);
 
+      // 1. Update React meterRows state and draft store
       setMeterRows(prev => {
         const updated = prev.map(r => r.roomId === roomId ? { ...r, otherFees: nextFees, snapshotVersion: nextVer } : r);
         meterDraftStore.setDraft(currentDormId, selectedBillingCycleId, updated as any);
         return updated;
       });
 
-      // Clear controlled inputs on success
+      // 2. Synchronously patch ONLY otherFees and snapshotVersion in originalRowsRef baseline
+      if (originalRowsRef.current) {
+        const origIdx = originalRowsRef.current.findIndex(r => r.roomId === roomId);
+        if (origIdx !== -1) {
+          originalRowsRef.current[origIdx] = {
+            ...originalRowsRef.current[origIdx],
+            otherFees: nextFees,
+            snapshotVersion: nextVer,
+          };
+        }
+      }
+
+      // 3. Clear controlled inputs on success
       setNewFeeInputs(prev => ({
         ...prev,
         [roomId]: { description: '', amount: '' },
       }));
+
+      // 4. Optimistically update TanStack Query cache
+      queryClient.setQueryData(queryKeys.meterWorkspace(currentDormId, selectedBillingCycleId), (oldData: any) => {
+        if (!oldData) return oldData;
+        const existingSnapshots = Array.isArray(oldData.cyclePeopleRes?.data) ? [...oldData.cyclePeopleRes.data] : [];
+        const snapIdx = existingSnapshots.findIndex((s: any) => s.roomId === roomId);
+        const updatedSnapshot = {
+          ...(snapIdx !== -1 ? existingSnapshots[snapIdx] : { roomId }),
+          otherFees: nextFees.map(f => ({ description: f.description, amount: String(f.amount) })),
+          version: nextVer,
+        };
+        if (snapIdx !== -1) {
+          existingSnapshots[snapIdx] = updatedSnapshot;
+        } else {
+          existingSnapshots.push(updatedSnapshot);
+        }
+        return {
+          ...oldData,
+          cyclePeopleRes: {
+            ...oldData.cyclePeopleRes,
+            success: true,
+            data: existingSnapshots,
+          },
+        };
+      });
 
       queryClient.invalidateQueries({ queryKey: queryKeys.meterWorkspace(currentDormId, selectedBillingCycleId) });
       queryClient.invalidateQueries({ queryKey: queryKeys.meterPreviewContext(currentDormId, selectedBillingCycleId) });
@@ -344,10 +571,48 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       const savedMeta = res?.savedRows?.find(r => r.roomId === roomId);
       const nextVer = savedMeta?.version ?? (expectedVersion + 1);
 
+      // 1. Update React meterRows state and draft store
       setMeterRows(prev => {
         const updated = prev.map(r => r.roomId === roomId ? { ...r, otherFees: nextFees, snapshotVersion: nextVer } : r);
         meterDraftStore.setDraft(currentDormId, selectedBillingCycleId, updated as any);
         return updated;
+      });
+
+      // 2. Synchronously patch ONLY otherFees and snapshotVersion in originalRowsRef baseline
+      if (originalRowsRef.current) {
+        const origIdx = originalRowsRef.current.findIndex(r => r.roomId === roomId);
+        if (origIdx !== -1) {
+          originalRowsRef.current[origIdx] = {
+            ...originalRowsRef.current[origIdx],
+            otherFees: nextFees,
+            snapshotVersion: nextVer,
+          };
+        }
+      }
+
+      // 3. Optimistically update TanStack Query cache
+      queryClient.setQueryData(queryKeys.meterWorkspace(currentDormId, selectedBillingCycleId), (oldData: any) => {
+        if (!oldData) return oldData;
+        const existingSnapshots = Array.isArray(oldData.cyclePeopleRes?.data) ? [...oldData.cyclePeopleRes.data] : [];
+        const snapIdx = existingSnapshots.findIndex((s: any) => s.roomId === roomId);
+        const updatedSnapshot = {
+          ...(snapIdx !== -1 ? existingSnapshots[snapIdx] : { roomId }),
+          otherFees: nextFees.map(f => ({ description: f.description, amount: String(f.amount) })),
+          version: nextVer,
+        };
+        if (snapIdx !== -1) {
+          existingSnapshots[snapIdx] = updatedSnapshot;
+        } else {
+          existingSnapshots.push(updatedSnapshot);
+        }
+        return {
+          ...oldData,
+          cyclePeopleRes: {
+            ...oldData.cyclePeopleRes,
+            success: true,
+            data: existingSnapshots,
+          },
+        };
       });
 
       queryClient.invalidateQueries({ queryKey: queryKeys.meterWorkspace(currentDormId, selectedBillingCycleId) });
@@ -877,111 +1142,38 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       setOperationalCycleAuthorityLoaded(false);
       setOperationalCycleCode(null);
     }
-    
-    const readingsByRoom: { [roomId: string]: { waterPrev?: string; waterCurr?: string; elecPrev?: string; elecCurr?: string } } = {};
-    (serverReadings || []).forEach((r: any) => {
-      if (!readingsByRoom[r.roomId]) {
-        readingsByRoom[r.roomId] = {};
-      }
-      if (r.meterType === 'water') {
-        readingsByRoom[r.roomId].waterPrev = r.previousReading !== undefined && r.previousReading !== null ? String(r.previousReading) : undefined;
-        readingsByRoom[r.roomId].waterCurr = r.currentReading !== undefined && r.currentReading !== null ? String(r.currentReading) : undefined;
-      } else if (r.meterType === 'electricity') {
-        readingsByRoom[r.roomId].elecPrev = r.previousReading !== undefined && r.previousReading !== null ? String(r.previousReading) : undefined;
-        readingsByRoom[r.roomId].elecCurr = r.currentReading !== undefined && r.currentReading !== null ? String(r.currentReading) : undefined;
-      }
+
+    const built = buildRowsFromWorkspace({
+      workspaceData: meterWorkspaceQuery.data,
+      rooms,
+      bills,
+      contracts,
+      tenants,
+      selectedBillingCycleId,
+      selectedCycleCode,
+      selectedCycle,
+      currentDormId,
     });
 
-    const snapshots = (cyclePeopleRes && cyclePeopleRes.success && Array.isArray(cyclePeopleRes.data)) ? cyclePeopleRes.data : [];
-    const snapshotMap: { [roomId: string]: { peopleCount?: number; manualOutstandingAmount?: string; otherFees?: any[]; version?: number } } = {};
-    snapshots.forEach((s: any) => {
-      if (s.roomId) {
-        snapshotMap[s.roomId] = {
-          peopleCount: s.peopleCount !== undefined ? Number(s.peopleCount) : undefined,
-          manualOutstandingAmount: s.manualOutstandingAmount ? String(s.manualOutstandingAmount) : '0.00',
-          otherFees: Array.isArray(s.otherFees) ? s.otherFees.map((f: any) => ({ description: f.description, amount: String(f.amount) })) : [],
-          version: typeof s.version === 'number' ? s.version : 0,
-        };
-      }
-    });
-
-    const activeRooms = [...rooms].sort((a, b) => 
-      a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true, sensitivity: 'base' })
-    );
-
-    const rows: MeterRowState[] = activeRooms.map(r => {
-      const roomReadings = readingsByRoom[r.id] || {};
-      const cycleTenant = getTenantForRoomAndCycle(r.id, selectedCycleCode || selectedCycle);
-      
-      const rawWaterBaseline = r.initialWaterMeter !== undefined && r.initialWaterMeter !== null ? String(r.initialWaterMeter) : (r as any).initialWaterReading !== undefined ? String((r as any).initialWaterReading) : '0.00';
-      const rawElecBaseline = r.initialElectricMeter !== undefined && r.initialElectricMeter !== null ? String(r.initialElectricMeter) : (r as any).initialElectricityReading !== undefined ? String((r as any).initialElectricityReading) : '0.00';
-
-      const waterPrev = roomReadings.waterPrev ?? rawWaterBaseline;
-      const waterCurr = roomReadings.waterCurr ?? waterPrev;
-
-      const elecPrev = roomReadings.elecPrev ?? rawElecBaseline;
-      const elecCurr = roomReadings.elecCurr ?? elecPrev;
-
-      const tenantDefaultPeople = cycleTenant ? (1 + (cycleTenant.coOccupants?.length || 0)) : 0;
-      const snap = snapshotMap[r.id];
-      const rowPeople = snap?.peopleCount !== undefined ? snap.peopleCount : tenantDefaultPeople;
-      
-      const existingBill = (bills || []).find(b => 
-        (b.cycleId === selectedBillingCycleId || b.cycleId === selectedCycleCode || (b as any).billingCycleId === selectedBillingCycleId) && 
-        (b.roomId === r.id || b.roomId === r.roomNumber) &&
-        b.status !== 'cancelled' && b.status !== 'void'
-      );
-      const billStatus: BillStatus = existingBill ? existingBill.status : 'draft';
-      const isPaid = billStatus === 'paid';
-
-      return {
-        roomId: r.id,
-        roomNumber: r.roomNumber,
-        waterPrev,
-        waterCurr,
-        elecPrev,
-        elecCurr,
-        isReplaced: false,
-        peopleCount: rowPeople,
-        overdueAmount: snap?.manualOutstandingAmount || '0.00',
-        isPaid,
-        billStatus,
-        editWaterPrev: false,
-        editElecPrev: false,
-        otherFees: snap?.otherFees || [],
-        snapshotVersion: snap?.version || 0,
-      };
-    });
-
-    originalRowsRef.current = JSON.parse(JSON.stringify(rows));
-
-    const localDraft = currentDormId && selectedBillingCycleId ? meterDraftStore.getDraft(currentDormId, selectedBillingCycleId) : null;
-    if (localDraft) {
-      const merged = rows.map(serverRow => {
-        const draftRow = localDraft.find(d => d.roomId === serverRow.roomId);
-        if (draftRow) {
+    // Merge any locally confirmed snapshotVersions in originalRowsRef to prevent stale background refetch overwrite
+    if (originalRowsRef.current && originalRowsRef.current.length > 0) {
+      built.originalRows = built.originalRows.map(serverOrig => {
+        const localOrig = originalRowsRef.current.find(o => o.roomId === serverOrig.roomId);
+        if (localOrig && (localOrig.snapshotVersion ?? 0) > (serverOrig.snapshotVersion ?? 0)) {
           return {
-            ...serverRow,
-            waterCurr: draftRow.waterCurr,
-            waterPrev: draftRow.waterPrev,
-            elecCurr: draftRow.elecCurr,
-            elecPrev: draftRow.elecPrev,
-            peopleCount: draftRow.peopleCount,
-            overdueAmount: draftRow.overdueAmount,
-            isReplaced: draftRow.isReplaced,
-            otherFees: draftRow.otherFees,
-            snapshotVersion: serverRow.snapshotVersion,
+            ...serverOrig,
+            otherFees: localOrig.otherFees,
+            snapshotVersion: localOrig.snapshotVersion,
           };
         }
-        return serverRow;
+        return serverOrig;
       });
-      setMeterRows(merged);
-    } else {
-      setMeterRows(rows);
     }
 
+    originalRowsRef.current = built.originalRows;
+    setMeterRows(built.rows);
     setLoadedCycle(selectedBillingCycleId);
-  }, [meterWorkspaceQuery.data, selectedBillingCycleId, rooms, bills]);
+  }, [meterWorkspaceQuery.data, selectedBillingCycleId, rooms, bills, contracts, tenants]);
 
   // Synchronize state changes to isolated in-memory draft store
   useEffect(() => {

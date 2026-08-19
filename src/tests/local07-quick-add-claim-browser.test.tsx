@@ -15,6 +15,9 @@ import { QuickAddTenantModal } from '../components/QuickAddTenantModal';
 import { OwnerMeters } from '../pages/owner/meters';
 import * as httpClient from '../data/httpClient';
 import { Room, Building, QuickAddRoomContext } from '../types';
+import { queryKeys } from '../lib/queryClient';
+import { calculateMeterRowPreview } from '../utils/meterBillingCalculator';
+import { meterDraftStore } from '../lib/meterDraftStore';
 
 const createTestQueryClient = () =>
   new QueryClient({
@@ -33,6 +36,7 @@ const renderWithClient = (ui: React.ReactElement) => {
 describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    meterDraftStore.clearDormitoryDrafts('dorm-001-uuid');
   });
 
   afterEach(() => {
@@ -904,5 +908,380 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
       const textarea = screen.getByPlaceholderText('วางข้อมูลหลายห้องที่นี่ . . .') as HTMLTextAreaElement;
       expect(textarea.value).toBe('');
     });
+
+    it('CASE A: Immediate Other Fee persistence establishes clean baseline without global Save button', async () => {
+      let currentSnapshots: any[] = [];
+      const httpSpy = vi.spyOn(httpClient, 'httpRequest').mockImplementation(async (method, url, data) => {
+        if (url === '/billing-cycles') {
+          return {
+            data: [{ id: 'cycle-2026-08', cycleCode: '2026-08', status: 'open', isCurrent: true }],
+            operationalCycleCode: '2026-08',
+            firstBillingCycleId: 'cycle-2026-08',
+          };
+        }
+        if (url.includes('/meters/workspace/preview-context')) {
+          return {
+            success: true,
+            data: {
+              rateSnapshot: {
+                waterBillingType: 'per_unit',
+                waterRate: '18.00',
+                electricityBillingType: 'per_unit',
+                electricityRate: '8.00',
+              },
+              rooms: [{ roomId: 'room-101-uuid', roomNumber: '101', rentAmount: '4500.00', billingSource: 'CONTRACT' }],
+            },
+          };
+        }
+        if (url.includes('/meters/cycle-people-count')) {
+          return {
+            success: true,
+            data: currentSnapshots,
+          };
+        }
+        if (url === '/api/v1/meters/workspace/bulk') {
+          const rowData = (data as any)?.rows?.[0];
+          currentSnapshots = [{
+            roomId: 'room-101-uuid',
+            version: 2,
+            peopleCount: 1,
+            manualOutstandingAmount: '0.00',
+            otherFees: rowData?.otherFees || [{ description: 'คีย์การ์ด', amount: '50.50' }],
+          }];
+          return {
+            success: true,
+            savedCount: 1,
+            savedRows: [{ roomId: 'room-101-uuid', version: 2, peopleCount: 1, manualOutstandingAmount: '0.00', otherFees: rowData?.otherFees || [{ description: 'คีย์การ์ด', amount: '50.50' }] }],
+          };
+        }
+        return { success: true, data: [] };
+      });
+
+      renderWithClient(
+        <OwnerMeters
+          rooms={[mockRoom]}
+          buildings={[mockBuilding]}
+          dormitoryId="dorm-001-uuid"
+          bills={[]}
+          tenants={[]}
+          contracts={[]}
+          onSaveBills={() => {}}
+          onSelectTenant={() => {}}
+          onAddLog={() => {}}
+          selectedBillingCycleId="cycle-2026-08"
+          selectedCycleCode="2026-08"
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText('101')).toBeDefined();
+      });
+
+      // Add an other fee
+      const descInput = screen.getByPlaceholderText('ชื่อรายการ') as HTMLInputElement;
+      const amtInput = screen.getByPlaceholderText('บาท') as HTMLInputElement;
+
+      fireEvent.change(descInput, { target: { value: 'คีย์การ์ด' } });
+      fireEvent.change(amtInput, { target: { value: '50.50' } });
+
+      const addFeeBtn = screen.getByTitle('เพิ่มรายการและบันทึกทันที');
+      fireEvent.click(addFeeBtn);
+
+      // Verify fee added, inputs cleared, and global Save button disappears once mutation resolves
+      await waitFor(() => {
+        expect(screen.getByText('คีย์การ์ด')).toBeDefined();
+        expect(descInput.value).toBe('');
+        expect(amtInput.value).toBe('');
+        expect(screen.queryByRole('button', { name: /บันทึกข้อมูล/ })).toBeNull();
+      });
+    });
+
+    it('CASE B: Unrelated unsaved meter edit remains dirty after Other Fee is persisted', async () => {
+      let currentSnapshots: any[] = [];
+      const httpSpy = vi.spyOn(httpClient, 'httpRequest').mockImplementation(async (method, url, data) => {
+        if (url === '/billing-cycles') {
+          return {
+            data: [{ id: 'cycle-2026-08', cycleCode: '2026-08', status: 'open', isCurrent: true }],
+            operationalCycleCode: '2026-08',
+            firstBillingCycleId: 'cycle-2026-08',
+          };
+        }
+        if (url.includes('/meters/workspace/preview-context')) {
+          return {
+            success: true,
+            data: {
+              rateSnapshot: {
+                waterBillingType: 'per_unit',
+                waterRate: '18.00',
+                electricityBillingType: 'per_unit',
+                electricityRate: '8.00',
+              },
+              rooms: [{ roomId: 'room-101-uuid', roomNumber: '101', rentAmount: '4500.00', billingSource: 'CONTRACT' }],
+            },
+          };
+        }
+        if (url.includes('/meters/cycle-people-count')) {
+          return {
+            success: true,
+            data: currentSnapshots,
+          };
+        }
+        if (url === '/api/v1/meters/workspace/bulk') {
+          const rowData = (data as any)?.rows?.[0];
+          currentSnapshots = [{
+            roomId: 'room-101-uuid',
+            version: 2,
+            peopleCount: 1,
+            manualOutstandingAmount: '0.00',
+            otherFees: rowData?.otherFees || [{ description: 'คีย์การ์ด', amount: '50.50' }],
+          }];
+          return {
+            success: true,
+            savedCount: 1,
+            savedRows: [{ roomId: 'room-101-uuid', version: 2, peopleCount: 1, manualOutstandingAmount: '0.00', otherFees: rowData?.otherFees || [{ description: 'คีย์การ์ด', amount: '50.50' }] }],
+          };
+        }
+        return { success: true, data: [] };
+      });
+
+      renderWithClient(
+        <OwnerMeters
+          rooms={[mockRoom]}
+          buildings={[mockBuilding]}
+          dormitoryId="dorm-001-uuid"
+          bills={[]}
+          tenants={[]}
+          contracts={[]}
+          onSaveBills={() => {}}
+          onSelectTenant={() => {}}
+          onAddLog={() => {}}
+          selectedBillingCycleId="cycle-2026-08"
+          selectedCycleCode="2026-08"
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText('101')).toBeDefined();
+      });
+
+      // 1. Make an unrelated unsaved meter edit (waterCurr)
+      const waterCurrInput = document.querySelector('input[data-col="waterCurr"]') as HTMLInputElement;
+      expect(waterCurrInput).toBeDefined();
+      fireEvent.change(waterCurrInput, { target: { value: '10.5' } });
+
+      // Global Save button is now visible
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /บันทึกข้อมูล/ })).toBeDefined();
+      });
+
+      // 2. Add Other Fee immediately
+      const descInput = screen.getByPlaceholderText('ชื่อรายการ') as HTMLInputElement;
+      const amtInput = screen.getByPlaceholderText('บาท') as HTMLInputElement;
+      fireEvent.change(descInput, { target: { value: 'คีย์การ์ด' } });
+      fireEvent.change(amtInput, { target: { value: '50.50' } });
+
+      const addFeeBtn = screen.getByTitle('เพิ่มรายการและบันทึกทันที');
+      fireEvent.click(addFeeBtn);
+
+      await waitFor(() => {
+        expect(screen.getByText('คีย์การ์ด')).toBeDefined();
+      });
+
+      // Global Save button REMAINS visible solely because waterCurr is still unsaved/dirty
+      expect(screen.getByRole('button', { name: /บันทึกข้อมูล/ })).toBeDefined();
+    });
+
+    it('CASE C: Removing persisted Other Fee establishes clean baseline without global Save button', async () => {
+      let currentSnapshots: any[] = [
+        {
+          roomId: 'room-101-uuid',
+          version: 1,
+          peopleCount: 1,
+          manualOutstandingAmount: '0.00',
+          otherFees: [{ description: 'ค่าที่จอดรถพิเศษ', amount: '100.00' }],
+        },
+      ];
+
+      const httpSpy = vi.spyOn(httpClient, 'httpRequest').mockImplementation(async (method, url, data) => {
+        if (url === '/billing-cycles') {
+          return {
+            data: [{ id: 'cycle-2026-08', cycleCode: '2026-08', status: 'open', isCurrent: true }],
+            operationalCycleCode: '2026-08',
+            firstBillingCycleId: 'cycle-2026-08',
+          };
+        }
+        if (url.includes('/meters/workspace/preview-context')) {
+          return {
+            success: true,
+            data: {
+              rateSnapshot: {
+                waterBillingType: 'per_unit',
+                waterRate: '18.00',
+                electricityBillingType: 'per_unit',
+                electricityRate: '8.00',
+              },
+              rooms: [{ roomId: 'room-101-uuid', roomNumber: '101', rentAmount: '4500.00', billingSource: 'CONTRACT' }],
+            },
+          };
+        }
+        if (url.includes('/meters/cycle-people-count')) {
+          return {
+            success: true,
+            data: currentSnapshots,
+          };
+        }
+        if (url === '/api/v1/meters/workspace/bulk') {
+          const rowData = (data as any)?.rows?.[0];
+          currentSnapshots = [{
+            roomId: 'room-101-uuid',
+            version: 2,
+            peopleCount: 1,
+            manualOutstandingAmount: '0.00',
+            otherFees: rowData?.otherFees || [],
+          }];
+          return {
+            success: true,
+            savedCount: 1,
+            savedRows: [{ roomId: 'room-101-uuid', version: 2, peopleCount: 1, manualOutstandingAmount: '0.00', otherFees: rowData?.otherFees || [] }],
+          };
+        }
+        return { success: true, data: [] };
+      });
+
+      renderWithClient(
+        <OwnerMeters
+          rooms={[mockRoom]}
+          buildings={[mockBuilding]}
+          dormitoryId="dorm-001-uuid"
+          bills={[]}
+          tenants={[]}
+          contracts={[]}
+          onSaveBills={() => {}}
+          onSelectTenant={() => {}}
+          onAddLog={() => {}}
+          selectedBillingCycleId="cycle-2026-08"
+          selectedCycleCode="2026-08"
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText('ค่าที่จอดรถพิเศษ')).toBeDefined();
+      });
+
+      // Click remove Other Fee
+      const removeBtn = screen.getByTitle('ลบและบันทึกทันที');
+      fireEvent.click(removeBtn);
+
+      // Verify fee is removed
+      await waitFor(() => {
+        expect(screen.queryByText('ค่าที่จอดรถพิเศษ')).toBeNull();
+      });
+
+      // Global Save button must NOT appear
+      expect(screen.queryByRole('button', { name: /บันทึกข้อมูล/ })).toBeNull();
+    });
+  });
+
+  it('Meter Cached Remount: renders room rows on first paint without empty-room flash and requires no fresh fetch', async () => {
+    const client = createTestQueryClient();
+
+    // Pre-seed cached data in QueryClient
+    client.setQueryData(queryKeys.meterWorkspace('dorm-001-uuid', 'cycle-2026-08'), {
+      serverReadings: [{ roomId: 'room-101-uuid', meterType: 'water', previousReading: '100.00', currentReading: '105.00' }],
+      cyclePeopleRes: { success: true, data: [{ roomId: 'room-101-uuid', peopleCount: 2, version: 1, manualOutstandingAmount: '0.00', otherFees: [] }] },
+      cyclesRes: {
+        data: [{ id: 'cycle-2026-08', cycleCode: '2026-08', status: 'open', isCurrent: true }],
+        firstBillingCycleId: 'cycle-2026-08',
+        operationalCycleCode: '2026-08',
+      },
+    });
+
+    const httpSpy = vi.spyOn(httpClient, 'httpRequest');
+
+    // Mount OwnerMeters with the seeded QueryClient
+    const { unmount } = render(
+      <QueryClientProvider client={client}>
+        <OwnerMeters
+          rooms={[mockRoom]}
+          buildings={[mockBuilding]}
+          dormitoryId="dorm-001-uuid"
+          bills={[]}
+          tenants={[]}
+          contracts={[]}
+          onSaveBills={() => {}}
+          onSelectTenant={() => {}}
+          onAddLog={() => {}}
+          selectedBillingCycleId="cycle-2026-08"
+          selectedCycleCode="2026-08"
+        />
+      </QueryClientProvider>
+    );
+
+    // Verify room row 101 is immediately present on synchronous first paint
+    expect(screen.getByText('101')).toBeDefined();
+    expect(screen.queryByText('ไม่พบข้อมูลห้องพักพักอาศัยที่ต้องการ')).toBeNull();
+
+    // Simulate tab switch: unmount Meter
+    unmount();
+
+    // Remount Meter with the SAME QueryClient
+    render(
+      <QueryClientProvider client={client}>
+        <OwnerMeters
+          rooms={[mockRoom]}
+          buildings={[mockBuilding]}
+          dormitoryId="dorm-001-uuid"
+          bills={[]}
+          tenants={[]}
+          contracts={[]}
+          onSaveBills={() => {}}
+          onSelectTenant={() => {}}
+          onAddLog={() => {}}
+          selectedBillingCycleId="cycle-2026-08"
+          selectedCycleCode="2026-08"
+        />
+      </QueryClientProvider>
+    );
+
+    // On first synchronous paint of remount, room 101 is immediately present
+    expect(screen.getByText('101')).toBeDefined();
+    expect(screen.queryByText('ไม่พบข้อมูลห้องพักพักอาศัยที่ต้องการ')).toBeNull();
+
+    // Verify no fresh network calls were made for meter workspace
+    expect(httpSpy).not.toHaveBeenCalledWith('GET', '/billing-cycles', expect.anything(), expect.anything());
+  });
+});
+
+// ==========================================
+// Section 12: Production Client Fractional Calculator Direct Proof
+// ==========================================
+describe('Production Client Fractional Calculator Direct Proof', () => {
+  it('verifies exact 2-decimal fractional calculations on client calculator without floating drift', () => {
+    const preview = calculateMeterRowPreview(
+      { roomId: 'room-101-uuid', rentAmount: '3500.00', billingSource: 'CONTRACT' },
+      {
+        waterBillingType: 'per_unit',
+        waterRate: '18.00',
+        electricityBillingType: 'per_unit',
+        electricityRate: '8.00',
+      },
+      {
+        waterPrev: '100.25',
+        waterCurr: '105.75',
+        elecPrev: '500.10',
+        elecCurr: '501.35',
+        peopleCount: 1,
+        overdueAmount: '0.00',
+        otherFees: [],
+      }
+    );
+
+    expect(preview.rentAmount).toBe('3500.00');
+    expect(preview.waterUsage).toBe('5.50');
+    expect(preview.waterAmount).toBe('99.00');
+    expect(preview.elecUsage).toBe('1.25');
+    expect(preview.elecAmount).toBe('10.00');
+    expect(preview.totalAmount).toBe('3609.00');
+    expect(preview.formattedTotal).toBe('3,609.00');
   });
 });
