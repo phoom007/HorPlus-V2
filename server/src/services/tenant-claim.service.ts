@@ -380,7 +380,7 @@ export class TenantClaimService {
         throw err;
       }
 
-      // 6. Look up target or global TENANT role (Strictly no cross-dorm role leakage)
+      // 6. Look up target or global TENANT role (Strictly no cross-dorm role leakage, concurrency-safe)
       let tenantRole = await tx.role.findFirst({
         where: {
           code: 'TENANT',
@@ -392,15 +392,29 @@ export class TenantClaimService {
       });
 
       if (!tenantRole) {
-        tenantRole = await tx.role.create({
-          data: {
-            dormitoryId,
+        // Dormitory-level advisory lock to serialize concurrent role creation
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${'role_create:' + dormitoryId}))`;
+        tenantRole = await tx.role.findFirst({
+          where: {
             code: 'TENANT',
-            name: 'ผู้เช่า',
-            permissions: ['tenant:read', 'tenant:pay'],
-            isSystem: true,
+            OR: [
+              { dormitoryId },
+              { dormitoryId: null },
+            ],
           },
         });
+
+        if (!tenantRole) {
+          tenantRole = await tx.role.create({
+            data: {
+              dormitoryId,
+              code: 'TENANT',
+              name: 'ผู้เช่า',
+              permissions: ['tenant:read', 'tenant:pay'],
+              isSystem: true,
+            },
+          });
+        }
       }
 
       // 7. Check existing DormitoryMember membership
@@ -415,22 +429,31 @@ export class TenantClaimService {
       });
 
       if (existingMember) {
-        if (existingMember.role?.code !== 'TENANT') {
+        // Existing membership is valid ONLY if role is TENANT and belongs to target dormitory or is global
+        const isTargetOrGlobalTenant =
+          existingMember.role?.code === 'TENANT' &&
+          (existingMember.role?.dormitoryId === dormitoryId || existingMember.role?.dormitoryId === null);
+
+        if (!isTargetOrGlobalTenant) {
           if (this.auditService) {
             await this.auditService.logSecurityEvent({
               action: 'tenant.claim.membership_conflict',
               dormitoryId,
               userId,
               details: {
-                reason: 'existing_non_tenant_membership',
+                reason:
+                  existingMember.role?.code !== 'TENANT'
+                    ? 'existing_non_tenant_membership'
+                    : 'existing_foreign_tenant_role',
                 existingRoleId: existingMember.roleId,
                 existingRoleCode: existingMember.role?.code,
+                existingRoleDormitoryId: existingMember.role?.dormitoryId,
                 roomId: room.id,
               },
             });
           }
           const err = new Error('ไม่พบข้อมูลผู้เช่าที่ตรงกับข้อมูลที่ระบุ');
-          (err as any).statusCode = 409;
+          (err as any).statusCode = 404;
           (err as any).code = 'CLAIM_MEMBERSHIP_CONFLICT';
           throw err;
         }

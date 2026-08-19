@@ -112,14 +112,37 @@ export function createTenantClaimRouter(
   };
 
   const handleServiceError = (res: Response, err: any, req: Request) => {
+    const internalCode = err.code || 'CLAIM_OPERATION_FAILED';
+
+    // List of standard claim business-denial / identity failure codes that must NOT be enumerated
+    const isClaimDenial = [
+      'CLAIM_MATCH_FAILED',
+      'CLAIM_MEMBERSHIP_CONFLICT',
+      'CLAIM_CORRUPTED_MEMBERSHIP_ROLE',
+      'CLAIM_ALREADY_LINKED',
+      'CLAIM_CANDIDATE_UNAVAILABLE',
+      'CLAIM_AMBIGUOUS_CANDIDATE',
+      'CLAIM_UNAVAILABLE',
+      'ROOM_NOT_FOUND',
+    ].includes(internalCode);
+
+    if (isClaimDenial) {
+      return res.status(404).json({
+        error: {
+          code: 'CLAIM_UNAVAILABLE',
+          message: 'ไม่พบข้อมูลผู้เช่าที่ตรงกับข้อมูลที่ระบุ หรือห้องพักนี้ไม่สามารถยืนยันสิทธิ์ได้ในขณะนี้',
+          fieldErrors: null,
+          requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+          timestamp: new Date().toISOString(),
+        },
+      });
+    }
+
     const statusCode = err.statusCode || err.status || 500;
-    const isPublicGeneric = err.code === 'CLAIM_MATCH_FAILED' || err.code === 'CLAIM_MEMBERSHIP_CONFLICT';
     res.status(statusCode).json({
       error: {
-        code: err.code || 'CLAIM_OPERATION_FAILED',
-        message: isPublicGeneric
-          ? 'ไม่พบข้อมูลผู้เช่าที่ตรงกับข้อมูลที่ระบุ หรือห้องพักนี้ไม่สามารถยืนยันสิทธิ์ได้ในขณะนี้'
-          : (err.message || 'เกิดข้อผิดพลาดในการยืนยันสิทธิ์ผู้เช่า'),
+        code: internalCode,
+        message: err.message || 'เกิดข้อผิดพลาดในการยืนยันสิทธิ์ผู้เช่า',
         fieldErrors: err.fieldErrors || null,
         requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
         timestamp: new Date().toISOString(),
@@ -130,7 +153,21 @@ export function createTenantClaimRouter(
   // 1. Candidate Discovery (Pre-link authenticated + rate limited)
   router.get('/candidate', requireSession, claimRateLimiter, async (req: Request, res: Response) => {
     try {
-      const dormitoryId = (req.query.dormitoryId as string)?.trim();
+      const queryDormId = (req.query.dormitoryId as string)?.trim();
+      const headerDormId = (req.headers['x-dormitory-id'] as string)?.trim();
+
+      if (queryDormId && headerDormId && queryDormId !== headerDormId) {
+        return res.status(400).json({
+          error: {
+            code: 'DORMITORY_ID_MISMATCH',
+            message: 'รหัสหอพักใน Header และ Query parameter ไม่ตรงกัน',
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+
+      const dormitoryId = queryDormId || headerDormId;
       const roomId = (req.query.roomId as string)?.trim();
       const roomNumber = (req.query.roomNumber as string)?.trim();
 
@@ -169,6 +206,19 @@ export function createTenantClaimRouter(
   router.post('/claim', requireSession, requireCsrf, claimRateLimiter, async (req: Request, res: Response) => {
     try {
       const parsed = ClaimSchema.parse(req.body);
+      const headerDormId = (req.headers['x-dormitory-id'] as string)?.trim();
+
+      if (headerDormId && headerDormId !== parsed.dormitoryId) {
+        return res.status(400).json({
+          error: {
+            code: 'DORMITORY_ID_MISMATCH',
+            message: 'รหัสหอพักใน Header และ Body ไม่ตรงกัน',
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+
       const userId = req.auth!.userId;
       const ip = req.ip || (req.headers['x-forwarded-for'] as string) || '127.0.0.1';
 

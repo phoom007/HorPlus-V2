@@ -59,12 +59,21 @@ export function createDailyStayRouter(
   // 0. Pre-Link Daily Stay Request Context (Option 2A - Authenticated Pre-link User, non-enumerating)
   router.get('/request-context', requireSession, async (req: Request, res: Response) => {
     try {
-      const dormId =
-        (req.query?.dormitoryId as string) ||
-        (req.headers['x-dormitory-id'] as string) ||
-        (req as any).dormitoryContext?.dormitoryId ||
-        req.auth?.dormitoryId;
+      const queryDormId = (req.query?.dormitoryId as string)?.trim();
+      const headerDormId = (req.headers['x-dormitory-id'] as string)?.trim();
 
+      if (queryDormId && headerDormId && queryDormId !== headerDormId) {
+        return res.status(400).json({
+          error: {
+            code: 'DORMITORY_ID_MISMATCH',
+            message: 'รหัสหอพักใน Header และ Query parameter ไม่ตรงกัน',
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+
+      const dormId = queryDormId || headerDormId;
       const roomNumber = (req.query?.roomNumber as string)?.trim();
       const roomId = (req.query?.roomId as string)?.trim();
 
@@ -186,8 +195,8 @@ export function createDailyStayRouter(
   // 1. Tenant-submitted Daily Stay request (Option 2A - Authenticated Pre-link User with canonical CSRF)
   const TenantDailyRequestSchema = z
     .object({
-      dormitoryId: z.string().uuid().optional(),
-      roomId: z.string().uuid().optional(),
+      dormitoryId: z.string().uuid('รหัสหอพักไม่ถูกต้อง'),
+      roomId: z.string().uuid('รหัสห้องพักไม่ถูกต้อง').optional(),
       roomNumber: z.string().optional(),
       applicantFullName: z.string().trim().min(1, 'กรุณาระบุชื่อ-นามสกุล'),
       applicantPhone: z.string().trim().max(50).optional().nullable(),
@@ -204,12 +213,24 @@ export function createDailyStayRouter(
 
   router.post('/request', requireSession, requireCsrf, async (req: Request, res: Response) => {
     try {
-      const dormId = getDormitoryId(req);
       const parsed = TenantDailyRequestSchema.parse(req.body);
+      const headerDormId = (req.headers['x-dormitory-id'] as string)?.trim();
+
+      if (headerDormId && headerDormId !== parsed.dormitoryId) {
+        return res.status(400).json({
+          error: {
+            code: 'DORMITORY_ID_MISMATCH',
+            message: 'รหัสหอพักใน Header และ Body ไม่ตรงกัน',
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+
       const requesterUserId = req.auth!.userId;
 
       const stay = await dailyStayService.createTenantDailyStayRequest(
-        dormId,
+        parsed.dormitoryId,
         parsed,
         requesterUserId
       );
