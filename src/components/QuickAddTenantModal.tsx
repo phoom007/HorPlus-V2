@@ -38,7 +38,7 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
 
   // Term fields (Strictly Building-authoritative)
   const [termMonths, setTermMonths] = useState<number | null>(null);
-  const [termRent, setTermRent] = useState<number>(0);
+  const [termRent, setTermRent] = useState<number | null>(null);
   const [termInstallmentCount, setTermInstallmentCount] = useState(1);
   const [maxInstallments, setMaxInstallments] = useState(1);
   const [termEndDate, setTermEndDate] = useState('');
@@ -108,14 +108,14 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
         setTermMonths(bldTermMonths);
         const tRent = eff?.termRent !== null && eff?.termRent !== undefined
           ? Number(eff.termRent)
-          : (mRent * bldTermMonths);
+          : null;
         setTermRent(tRent);
         setMaxInstallments(bldMaxInstallments);
         setTermInstallmentCount(1);
         setTermEndDate(calculateMonthEndDate(today, bldTermMonths));
       } else {
         setTermMonths(null);
-        setTermRent(0);
+        setTermRent(null);
         setMaxInstallments(1);
         setTermInstallmentCount(1);
         setTermEndDate('');
@@ -153,7 +153,9 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
   const dailyTotalAgreed = dailyTotalRent + dailyDeposit;
   const dailyOutstanding = depositDeclaredStatus === 'PAID' ? dailyTotalRent : dailyTotalAgreed;
 
-  const isTermDisabled = activeTab === 'TERM' && (!termMonths || termMonths < 1);
+  const isTermDisabled =
+    activeTab === 'TERM' &&
+    (!termMonths || termMonths < 1 || termRent === null || termRent === undefined || isNaN(Number(termRent)) || Number(termRent) <= 0);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -162,9 +164,15 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
       return;
     }
 
-    if (activeTab === 'TERM' && (!termMonths || termMonths < 1)) {
-      setErrorText('ไม่พบข้อมูลระยะเวลาสัญญาแบบเทอมของอาคาร (termMonths) กรุณากำหนดการตั้งค่าอาคารก่อนทำสัญญาแบบเทอม');
-      return;
+    if (activeTab === 'TERM') {
+      if (!termMonths || termMonths < 1) {
+        setErrorText('ไม่พบข้อมูลระยะเวลาสัญญาแบบเทอมของอาคาร (termMonths) กรุณากำหนดการตั้งค่าอาคารก่อนทำสัญญาแบบเทอม');
+        return;
+      }
+      if (termRent === null || termRent === undefined || isNaN(Number(termRent)) || Number(termRent) <= 0) {
+        setErrorText('กรุณาระบุค่าเช่ารายเทอม');
+        return;
+      }
     }
 
     setLoading(true);
@@ -197,8 +205,8 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
           phone: phone.trim() || undefined,
           rentalType: 'TERM',
           startDate,
-          unitRentAmount: termRent.toFixed(2),
-          totalRentAmount: termRent.toFixed(2),
+          unitRentAmount: Number(termRent).toFixed(2),
+          totalRentAmount: Number(termRent).toFixed(2),
           termInstallmentCount: Number(termInstallmentCount),
         };
 
@@ -445,15 +453,19 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className="block text-xs font-bold text-slate-700 mb-1">
-                        ค่าเช่ารายเทอม (บาท)
+                        ค่าเช่ารายเทอม (บาท) <span className="text-rose-500">*</span>
                       </label>
                       <input
                         type="number"
                         min="0"
                         step="0.01"
                         required
-                        value={termRent}
-                        onChange={(e) => setTermRent(parseFloat(e.target.value) || 0)}
+                        placeholder="ระบุค่าเช่ารายเทอม"
+                        value={termRent !== null && termRent !== undefined ? termRent : ''}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setTermRent(val === '' ? null : parseFloat(val) || 0);
+                        }}
                         className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold"
                       />
                     </div>
@@ -477,7 +489,7 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
 
                   <div className="p-3 bg-indigo-50 border border-indigo-100 rounded-2xl flex items-center justify-between text-xs">
                     <span className="font-bold text-indigo-900">ยอดรวมทั้งเทอม:</span>
-                    <span className="font-extrabold text-indigo-700 text-sm">{formatBaht(termRent)}</span>
+                    <span className="font-extrabold text-indigo-700 text-sm">{formatBaht(termRent || 0)}</span>
                   </div>
                 </>
               )}

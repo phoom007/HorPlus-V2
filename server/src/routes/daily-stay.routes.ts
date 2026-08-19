@@ -56,18 +56,131 @@ export function createDailyStayRouter(
     })
     .regex(/^\d+(\.\d{1,2})?$/, 'รูปแบบจำนวนเงินไม่ถูกต้อง (ต้องเป็นตัวเลขทศนิยมไม่เกิน 2 ตำแหน่ง)');
 
-  // 1. Tenant-submitted Daily Stay request (Option 2A - Authenticated Pre-link User with canonical CSRF)
-  const TenantDailyRequestSchema = z.object({
-    dormitoryId: z.string().uuid().optional(),
-    roomId: z.string().min(1, 'กรุณาระบุห้องพัก'),
-    applicantFullName: z.string().trim().min(1, 'กรุณาระบุชื่อ-นามสกุล'),
-    applicantPhone: z.string().trim().max(50).optional().nullable(),
-    startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'รูปแบบวันที่ไม่ถูกต้อง (YYYY-MM-DD)'),
-    endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'รูปแบบวันที่ไม่ถูกต้อง (YYYY-MM-DD)'),
-    dailyRateAmount: MoneyDecimalStringSchema.optional(),
-    depositAmount: MoneyDecimalStringSchema.optional(),
-    depositDeclaredStatus: z.enum(['PAID', 'UNPAID']).optional(),
+  // 0. Pre-Link Daily Stay Request Context (Option 2A - Authenticated Pre-link User, non-enumerating)
+  router.get('/request-context', requireSession, async (req: Request, res: Response) => {
+    try {
+      const dormId =
+        (req.query?.dormitoryId as string) ||
+        (req.headers['x-dormitory-id'] as string) ||
+        (req as any).dormitoryContext?.dormitoryId ||
+        req.auth?.dormitoryId;
+
+      const roomNumber = (req.query?.roomNumber as string)?.trim();
+      const roomId = (req.query?.roomId as string)?.trim();
+
+      if (!dormId) {
+        return res.status(400).json({
+          error: {
+            code: 'DORMITORY_ID_REQUIRED',
+            message: 'กรุณาระบุรหัสหอพัก (dormitoryId)',
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+
+      if (!roomNumber && !roomId) {
+        return res.status(400).json({
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'กรุณาระบุหมายเลขห้องพัก (roomNumber) หรือ รหัสห้องพัก (roomId)',
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+
+      const { getPrismaClient } = await import('../db/prisma.js');
+      const prisma = getPrismaClient();
+
+      const roomWhere: any = {
+        dormitoryId: dormId,
+        deletedAt: null,
+        status: { not: 'archived' },
+      };
+
+      if (roomNumber) {
+        roomWhere.roomNumber = roomNumber;
+      } else if (roomId) {
+        roomWhere.id = roomId;
+      }
+
+      const room = await prisma.room.findFirst({
+        where: roomWhere,
+        include: { building: true },
+      });
+
+      if (!room) {
+        return res.status(404).json({
+          error: {
+            code: 'ROOM_NOT_FOUND',
+            message: 'ไม่พบข้อมูลห้องพักที่ระบุในหอพักนี้',
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+
+      if (!room.building || room.building.deletedAt !== null) {
+        return res.status(404).json({
+          error: {
+            code: 'BUILDING_NOT_FOUND',
+            message: 'ไม่พบข้อมูลอาคารของห้องพักที่ระบุ',
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+
+      const { defaultsService } = await import('../services/defaults.service.js');
+      const effective = await defaultsService.resolveEffectiveRoomDefaults(
+        dormId,
+        room.buildingId,
+        room.id,
+        prisma
+      );
+
+      const dailyRateAmount =
+        effective.dailyRent?.value !== null && effective.dailyRent?.value !== undefined
+          ? Number(effective.dailyRent.value).toFixed(2)
+          : '0.00';
+
+      const depositDefaultAmount =
+        effective.depositAmount?.value !== null && effective.depositAmount?.value !== undefined
+          ? Number(effective.depositAmount.value).toFixed(2)
+          : '0.00';
+
+      res.json({
+        data: {
+          roomId: room.id,
+          roomNumber: room.roomNumber,
+          dailyRateAmount,
+          depositDefaultAmount,
+        },
+      });
+    } catch (err: any) {
+      handleServiceError(res, err, req);
+    }
   });
+
+  // 1. Tenant-submitted Daily Stay request (Option 2A - Authenticated Pre-link User with canonical CSRF)
+  const TenantDailyRequestSchema = z
+    .object({
+      dormitoryId: z.string().uuid().optional(),
+      roomId: z.string().optional(),
+      roomNumber: z.string().optional(),
+      applicantFullName: z.string().trim().min(1, 'กรุณาระบุชื่อ-นามสกุล'),
+      applicantPhone: z.string().trim().max(50).optional().nullable(),
+      startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'รูปแบบวันที่ไม่ถูกต้อง (YYYY-MM-DD)'),
+      endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'รูปแบบวันที่ไม่ถูกต้อง (YYYY-MM-DD)'),
+      dailyRateAmount: MoneyDecimalStringSchema.optional(),
+      depositAmount: MoneyDecimalStringSchema.optional(),
+      depositDeclaredStatus: z.enum(['PAID', 'UNPAID']).optional(),
+    })
+    .refine((data) => !!data.roomId || !!data.roomNumber, {
+      message: 'กรุณาระบุห้องพัก (roomId หรือ roomNumber)',
+      path: ['roomNumber'],
+    });
 
   router.post('/request', requireSession, requireCsrf, async (req: Request, res: Response) => {
     try {

@@ -13,8 +13,8 @@ interface TenantClaimModalProps {
   isOpen: boolean;
   onClose: () => void;
   dormitoryId: string;
-  roomId: string;
-  roomNumber?: string;
+  roomNumber: string;
+  roomId?: string;
   onSuccess: (message: string) => void;
 }
 
@@ -22,8 +22,8 @@ export const TenantClaimModal: React.FC<TenantClaimModalProps> = ({
   isOpen,
   onClose,
   dormitoryId,
-  roomId,
   roomNumber,
+  roomId,
   onSuccess,
 }) => {
   const [loadingCandidate, setLoadingCandidate] = useState(false);
@@ -34,14 +34,18 @@ export const TenantClaimModal: React.FC<TenantClaimModalProps> = ({
 
   // Fetch candidate discovery
   useEffect(() => {
-    if (isOpen && roomId) {
+    if (isOpen && (roomNumber || roomId)) {
       setClaimInput('');
       setErrorText(null);
       setCandidate(null);
       setLoadingCandidate(true);
       const dormId = dormitoryId || (typeof localStorage !== 'undefined' ? localStorage.getItem('selected_dormitory_id') || '' : '');
+      const query = new URLSearchParams();
+      if (dormId) query.set('dormitoryId', dormId);
+      if (roomNumber) query.set('roomNumber', roomNumber);
+      if (roomId) query.set('roomId', roomId);
 
-      httpRequest<any>('GET', `/api/v1/tenant-claims/candidate?dormitoryId=${dormId}&roomId=${roomId}`)
+      httpRequest<any>('GET', `/api/v1/tenant-claims/candidate?${query.toString()}`)
         .then((res: any) => {
           if (res.data?.hasCandidate) {
             setCandidate(res.data);
@@ -56,7 +60,7 @@ export const TenantClaimModal: React.FC<TenantClaimModalProps> = ({
           setLoadingCandidate(false);
         });
     }
-  }, [isOpen, dormitoryId, roomId]);
+  }, [isOpen, dormitoryId, roomNumber, roomId]);
 
   if (!isOpen) return null;
 
@@ -73,7 +77,8 @@ export const TenantClaimModal: React.FC<TenantClaimModalProps> = ({
     try {
       await httpRequest('POST', '/api/v1/tenant-claims/claim', {
         dormitoryId,
-        roomId,
+        roomNumber,
+        roomId: roomId || undefined,
         claimInput: claimInput.trim(),
       });
 

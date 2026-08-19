@@ -34,12 +34,13 @@ export const TenantRegisterPage: React.FC = () => {
     version: 1,
   });
 
-  const [requestedRoomId, setRequestedRoomId] = useState('A101');
+  const [requestedRoomNumber, setRequestedRoomNumber] = useState('A101');
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [phone, setPhone] = useState('');
   const [note, setNote] = useState('');
   const [agreedTerms, setAgreedTerms] = useState(false);
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
 
   const [hasSigned, setHasSigned] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -56,21 +57,40 @@ export const TenantRegisterPage: React.FC = () => {
         setPolicyData(policyRes.data);
       }
 
-      const activeDormId = policyRes.data?.dormitoryId || urlDormId || (typeof window !== 'undefined' ? localStorage.getItem('selected_dormitory_id') : undefined) || undefined;
-
       // In public unauthenticated tenant registration, allow text input for room unless rooms are provided
       setRooms([]);
-      if (!requestedRoomId) {
-        setRequestedRoomId('A101');
+      if (!requestedRoomNumber) {
+        setRequestedRoomNumber('A101');
       }
+
+      // Check pre-link User session
+      let userAuthed = false;
+      try {
+        const sessionRes = await fetch('/api/v1/auth/session', { credentials: 'include' });
+        if (sessionRes.ok) {
+          const sessionJson = await sessionRes.json();
+          userAuthed = !!sessionJson?.data?.user;
+        }
+      } catch {
+        userAuthed = false;
+      }
+      setIsAuthenticated(userAuthed);
 
       // Check URL parameters for direct action opening
       if (typeof window !== 'undefined') {
         const action = urlParams?.get('action');
         if (action === 'daily' || window.location.pathname.includes('daily-request')) {
-          setIsDailyModalOpen(true);
+          if (userAuthed) {
+            setIsDailyModalOpen(true);
+          } else {
+            setErrorText('กรุณาเข้าสู่ระบบก่อนทำรายการขอเข้าพักรายวัน');
+          }
         } else if (action === 'claim' || window.location.pathname.includes('claim')) {
-          setIsClaimModalOpen(true);
+          if (userAuthed) {
+            setIsClaimModalOpen(true);
+          } else {
+            setErrorText('กรุณาเข้าสู่ระบบก่อนทำรายการยืนยันสิทธิ์ผู้เช่า');
+          }
         }
       }
     } catch (err: any) {
@@ -128,7 +148,7 @@ export const TenantRegisterPage: React.FC = () => {
     e.preventDefault();
     setErrorText(null);
 
-    if (!requestedRoomId || !firstName.trim() || !lastName.trim() || !phone.trim()) {
+    if (!requestedRoomNumber || !firstName.trim() || !lastName.trim() || !phone.trim()) {
       setErrorText('กรุณากรอกข้อมูลที่จำเป็น (*) ให้ครบถ้วน');
       return;
     }
@@ -149,7 +169,7 @@ export const TenantRegisterPage: React.FC = () => {
     try {
       const res = await submitTenantRegistrationRequest({
         dormitoryId: policyData.dormitoryId,
-        requestedRoomId,
+        requestedRoomId: requestedRoomNumber,
         firstName: firstName.trim(),
         lastName: lastName.trim(),
         phone: phone.trim(),
@@ -172,6 +192,22 @@ export const TenantRegisterPage: React.FC = () => {
     } catch (err: any) {
       setErrorText(err.message || 'เกิดข้อผิดพลาดในการเชื่อมต่อระบบ');
     }
+  };
+
+  const handleOpenDailyModal = () => {
+    if (isAuthenticated === false) {
+      setErrorText('กรุณาเข้าสู่ระบบก่อนทำการขอเข้าพักรายวัน');
+      return;
+    }
+    setIsDailyModalOpen(true);
+  };
+
+  const handleOpenClaimModal = () => {
+    if (isAuthenticated === false) {
+      setErrorText('กรุณาเข้าสู่ระบบก่อนทำการยืนยันสิทธิ์ผู้เช่า');
+      return;
+    }
+    setIsClaimModalOpen(true);
   };
 
   if (loading) {
@@ -218,7 +254,7 @@ export const TenantRegisterPage: React.FC = () => {
             <button
               type="button"
               data-testid="tenant-daily-request-btn"
-              onClick={() => setIsDailyModalOpen(true)}
+              onClick={handleOpenDailyModal}
               className="p-3 bg-amber-50 hover:bg-amber-100/70 border border-amber-200 rounded-2xl flex flex-col items-center gap-1.5 text-amber-900 transition-all cursor-pointer text-center group shadow-2xs"
             >
               <div className="w-8 h-8 rounded-xl bg-amber-100 group-hover:bg-amber-200/80 flex items-center justify-center transition-all">
@@ -230,7 +266,7 @@ export const TenantRegisterPage: React.FC = () => {
             <button
               type="button"
               data-testid="tenant-self-claim-btn"
-              onClick={() => setIsClaimModalOpen(true)}
+              onClick={handleOpenClaimModal}
               className="p-3 bg-indigo-50 hover:bg-indigo-100/70 border border-indigo-200 rounded-2xl flex flex-col items-center gap-1.5 text-indigo-900 transition-all cursor-pointer text-center group shadow-2xs"
             >
               <div className="w-8 h-8 rounded-xl bg-indigo-100 group-hover:bg-indigo-200/80 flex items-center justify-center transition-all">
@@ -287,12 +323,12 @@ export const TenantRegisterPage: React.FC = () => {
                 <label className="block text-xs font-bold text-slate-700 mb-1">เลือกห้องพักที่ต้องการจอง *</label>
                 {rooms.length > 0 ? (
                   <select
-                    value={requestedRoomId}
-                    onChange={(e) => setRequestedRoomId(e.target.value)}
+                    value={requestedRoomNumber}
+                    onChange={(e) => setRequestedRoomNumber(e.target.value)}
                     className="w-full px-3.5 py-2.5 text-xs border border-gray-300 rounded-xl bg-white font-medium focus:ring-2 focus:ring-indigo-500"
                   >
                     {rooms.map((r) => (
-                      <option key={r.id} value={r.id}>
+                      <option key={r.id} value={r.roomNumber}>
                         ห้อง {r.roomNumber} (ชั้น {r.floor || 1}) - ค่าเช่า ฿{(r.monthlyRent || (r as any).price)?.toLocaleString() || 4500}/เดือน
                       </option>
                     ))}
@@ -301,9 +337,9 @@ export const TenantRegisterPage: React.FC = () => {
                   <input
                     type="text"
                     required
-                    value={requestedRoomId}
-                    onChange={(e) => setRequestedRoomId(e.target.value)}
-                    placeholder="ระบุรหัสห้องพัก (เช่น A101)"
+                    value={requestedRoomNumber}
+                    onChange={(e) => setRequestedRoomNumber(e.target.value)}
+                    placeholder="ระบุหมายเลขห้องพัก (เช่น A101)"
                     className="w-full px-3.5 py-2.5 text-xs border border-gray-300 rounded-xl bg-white font-medium focus:ring-2 focus:ring-indigo-500"
                   />
                 )}
@@ -440,7 +476,7 @@ export const TenantRegisterPage: React.FC = () => {
               {/* Submit */}
               <button
                 type="submit"
-                disabled={!requestedRoomId || !firstName || !lastName || !phone || !agreedTerms || !hasSigned}
+                disabled={!requestedRoomNumber || !firstName || !lastName || !phone || !agreedTerms || !hasSigned}
                 className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow-lg transition-all flex items-center justify-center gap-2 cursor-pointer disabled:cursor-not-allowed"
               >
                 <Send className="w-4 h-4" />
@@ -456,8 +492,7 @@ export const TenantRegisterPage: React.FC = () => {
         isOpen={isDailyModalOpen}
         onClose={() => setIsDailyModalOpen(false)}
         dormitoryId={policyData.dormitoryId || (typeof localStorage !== 'undefined' ? localStorage.getItem('selected_dormitory_id') || '' : '')}
-        roomId={requestedRoomId}
-        roomNumber={requestedRoomId}
+        roomNumber={requestedRoomNumber}
         onSuccess={(msg) => {
           setToastMessage(msg);
           setTimeout(() => setToastMessage(null), 6000);
@@ -469,8 +504,7 @@ export const TenantRegisterPage: React.FC = () => {
         isOpen={isClaimModalOpen}
         onClose={() => setIsClaimModalOpen(false)}
         dormitoryId={policyData.dormitoryId || (typeof localStorage !== 'undefined' ? localStorage.getItem('selected_dormitory_id') || '' : '')}
-        roomId={requestedRoomId}
-        roomNumber={requestedRoomId}
+        roomNumber={requestedRoomNumber}
         onSuccess={(msg) => {
           setToastMessage(msg);
           setTimeout(() => {

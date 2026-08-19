@@ -460,14 +460,62 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
       const submitBtn = screen.getByText('ยืนยันเพิ่มผู้เช่า');
       expect(submitBtn.closest('button')?.disabled).toBe(true);
     });
+
+    it('Proof L: TERM null termRent does not derive from monthly rent and requires Owner input before submit', async () => {
+      const nullTermContext: QuickAddRoomContext = {
+        roomId: 'room-nullterm',
+        dormitoryId: 'dorm-001-uuid',
+        roomNumber: '104',
+        buildingId: 'bld-001-uuid',
+        effective: {
+          monthlyRent: 5000,
+          termRent: null, // Unconfigured
+          dailyRent: null,
+          depositAmount: 0,
+        },
+        building: {
+          id: 'bld-001-uuid',
+          name: 'Building A',
+          termMonths: 4,
+          maxTermRentInstallments: 2,
+        },
+      };
+
+      render(
+        <QuickAddTenantModal
+          isOpen={true}
+          onClose={vi.fn()}
+          context={nullTermContext}
+          onSuccess={vi.fn()}
+        />
+      );
+
+      fireEvent.click(screen.getByText('รายเทอม (Term)'));
+
+      // Invariant: Does not auto-derive 5000 * 4 = 20000. Shows empty placeholder.
+      const termRentInput = screen.getByPlaceholderText('ระบุค่าเช่ารายเทอม') as HTMLInputElement;
+      expect(termRentInput.value).toBe('');
+
+      // Submit is disabled
+      const submitBtn = screen.getByText('ยืนยันเพิ่มผู้เช่า');
+      expect(submitBtn.closest('button')?.disabled).toBe(true);
+
+      // Fill Full Name
+      fireEvent.change(screen.getByPlaceholderText('เช่น นายสมชาย ใจดี'), { target: { value: 'สมศักดิ์ เทอมตรง' } });
+      expect(submitBtn.closest('button')?.disabled).toBe(true);
+
+      // Once Owner explicitly enters agreed term rent, submit becomes enabled
+      fireEvent.change(termRentInput, { target: { value: '19000' } });
+      expect(submitBtn.closest('button')?.disabled).toBe(false);
+    });
   });
 
   // ==========================================
   // Real Tenant Entry Surface Navigation Tests
   // ==========================================
   describe('Real Tenant Entry Surface Navigation Proofs', () => {
-    it('Authenticated pre-link user can open Daily Request modal from TenantRegisterPage', async () => {
-      vi.spyOn(httpClient, 'httpRequest').mockImplementation(async (method, url) => {
+    it('Authenticated pre-link user can open Daily Request modal with roomNumber and request-context endpoint', async () => {
+      const httpSpy = vi.spyOn(httpClient, 'httpRequest').mockImplementation(async (method, url) => {
         if (url.includes('public-policy')) {
           return {
             dormitoryId: 'dorm-001-uuid',
@@ -477,10 +525,28 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
             version: 1,
           };
         }
-        if (url.includes('quick-add-context')) {
-          return { data: mockContext };
+        if (url.includes('/daily-stays/request-context')) {
+          return {
+            data: {
+              roomId: 'room-101-uuid',
+              roomNumber: 'A101',
+              dailyRateAmount: '350.00',
+              depositDefaultAmount: '0.00',
+            },
+          };
         }
         return { success: true, data: [] };
+      });
+
+      // Mock session endpoint
+      vi.spyOn(global, 'fetch').mockImplementation(async (url: any) => {
+        if (String(url).includes('/auth/session')) {
+          return {
+            ok: true,
+            json: async () => ({ data: { user: { id: 'user-prelink-1', name: 'Prelink User' } } }),
+          } as any;
+        }
+        return { ok: true, json: async () => ({}) } as any;
       });
 
       const { TenantRegisterPage } = await import('../pages/tenant/TenantRegisterPage');
@@ -492,12 +558,64 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
 
       const modalHeader = await screen.findByText(/ขอเข้าพักรายวันห้อง/);
       expect(modalHeader).toBeDefined();
+
+      await waitFor(() => {
+        expect(httpSpy).toHaveBeenCalledWith(
+          'GET',
+          expect.stringContaining('/api/v1/daily-stays/request-context'),
+          undefined,
+          expect.anything()
+        );
+      });
+
       const submitBtn = await screen.findByTestId('tenant-daily-submit-btn');
       expect(submitBtn).toBeDefined();
     });
 
-    it('Authenticated pre-link user can open Self-Claim modal from TenantRegisterPage', async () => {
+    it('Tenant Daily Request Modal fails closed and disables submit button when context fetch fails', async () => {
       vi.spyOn(httpClient, 'httpRequest').mockImplementation(async (method, url) => {
+        if (url.includes('public-policy')) {
+          return {
+            dormitoryId: 'dorm-001-uuid',
+            dormitoryName: 'HorPlus Dormitory',
+            defaultTerms: '',
+            petPolicy: { allowed: 'none', allowedTypes: [] },
+            version: 1,
+          };
+        }
+        if (url.includes('/daily-stays/request-context')) {
+          throw new Error('ไม่พบข้อมูลห้องพักที่ระบุ');
+        }
+        return { success: true, data: [] };
+      });
+
+      vi.spyOn(global, 'fetch').mockImplementation(async (url: any) => {
+        if (String(url).includes('/auth/session')) {
+          return {
+            ok: true,
+            json: async () => ({ data: { user: { id: 'user-prelink-1', name: 'Prelink User' } } }),
+          } as any;
+        }
+        return { ok: true, json: async () => ({}) } as any;
+      });
+
+      const { TenantRegisterPage } = await import('../pages/tenant/TenantRegisterPage');
+
+      render(<TenantRegisterPage />);
+
+      const dailyBtn = await screen.findByTestId('tenant-daily-request-btn');
+      fireEvent.click(dailyBtn);
+
+      await waitFor(() => {
+        expect(screen.getByText(/ไม่สามารถโหลดข้อมูลห้องพักหรืออัตราค่าเช่าได้/)).toBeDefined();
+      });
+
+      const submitBtn = screen.getByTestId('tenant-daily-submit-btn');
+      expect((submitBtn as HTMLButtonElement).disabled).toBe(true);
+    });
+
+    it('Authenticated pre-link user can open Self-Claim modal with roomNumber parameter', async () => {
+      const httpSpy = vi.spyOn(httpClient, 'httpRequest').mockImplementation(async (method, url) => {
         if (url.includes('public-policy')) {
           return {
             dormitoryId: 'dorm-001-uuid',
@@ -515,6 +633,16 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
         return { success: true, data: [] };
       });
 
+      vi.spyOn(global, 'fetch').mockImplementation(async (url: any) => {
+        if (String(url).includes('/auth/session')) {
+          return {
+            ok: true,
+            json: async () => ({ data: { user: { id: 'user-prelink-1', name: 'Prelink User' } } }),
+          } as any;
+        }
+        return { ok: true, json: async () => ({}) } as any;
+      });
+
       const { TenantRegisterPage } = await import('../pages/tenant/TenantRegisterPage');
 
       render(<TenantRegisterPage />);
@@ -524,8 +652,13 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
 
       const claimHeader = await screen.findByText(/ยืนยันสิทธิ์ผู้เช่าห้อง/);
       expect(claimHeader).toBeDefined();
-      const submitBtn = await screen.findByTestId('tenant-claim-submit-btn');
-      expect(submitBtn).toBeDefined();
+
+      await waitFor(() => {
+        expect(httpSpy).toHaveBeenCalledWith(
+          'GET',
+          expect.stringContaining('/api/v1/tenant-claims/candidate?dormitoryId=dorm-001-uuid&roomNumber=A101')
+        );
+      });
     });
   });
 });

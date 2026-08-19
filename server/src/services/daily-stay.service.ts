@@ -17,7 +17,8 @@ import {
 } from '../utils/decimal-math.util.js';
 
 export interface CreateTenantDailyStayRequestDto {
-  roomId: string;
+  roomId?: string;
+  roomNumber?: string;
   applicantFullName: string;
   applicantPhone?: string | null;
   startDate: string; // YYYY-MM-DD
@@ -196,9 +197,6 @@ export class DailyStayService {
 
     const phoneClean = data.applicantPhone && data.applicantPhone.trim() !== '' ? data.applicantPhone.trim() : null;
 
-    // Validate operational room entitlement & existence
-    await this.entitlementService.assertRoomOperationalEntitlement(dormitoryId, data.roomId);
-
     const [sy, sm, sd] = data.startDate.split('-').map(Number);
     const [ey, em, ed] = data.endDate.split('-').map(Number);
     const startDate = new Date(Date.UTC(sy, sm - 1, sd));
@@ -206,8 +204,20 @@ export class DailyStayService {
 
     const inclusiveDayCount = calculateInclusiveDays(data.startDate, data.endDate);
 
+    const roomWhere: any = {
+      dormitoryId,
+      deletedAt: null,
+      status: { not: 'archived' },
+    };
+    if (data.roomNumber) {
+      roomWhere.roomNumber = data.roomNumber;
+    }
+    if (data.roomId) {
+      roomWhere.id = data.roomId;
+    }
+
     const room = await this.prisma.room.findFirst({
-      where: { id: data.roomId, dormitoryId, deletedAt: null },
+      where: roomWhere,
       include: { building: true },
     });
 
@@ -217,6 +227,9 @@ export class DailyStayService {
       (err as any).code = 'ROOM_NOT_FOUND';
       throw err;
     }
+
+    // Validate operational room entitlement & existence
+    await this.entitlementService.assertRoomOperationalEntitlement(dormitoryId, room.id);
 
     const { defaultsService } = await import('./defaults.service.js');
     const effective = await defaultsService.resolveEffectiveRoomDefaults(
@@ -248,7 +261,7 @@ export class DailyStayService {
     return this.prisma.dailyStay.create({
       data: {
         dormitoryId,
-        roomId: data.roomId,
+        roomId: room.id,
         requestSource: 'TENANT',
         applicantFullName: fullNameClean,
         applicantPhone: phoneClean,

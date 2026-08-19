@@ -28,7 +28,8 @@ export interface ClaimCandidateResult {
 
 export interface ClaimTenantDto {
   dormitoryId: string;
-  roomId: string;
+  roomId?: string;
+  roomNumber?: string;
   claimInput: string; // phone or full name
 }
 
@@ -109,78 +110,55 @@ export class TenantClaimService {
       return null;
     }
 
-    const evaluated: EvaluatedTenantCandidate[] = [];
+    // Evaluate each tenant's active/reserved status on this room
+    const evaluated: EvaluatedTenantCandidate[] = unlinkedTenants.map((t: any) => {
+      const activeOcc = t.occupancies.some((o: any) => o.status === 'ACTIVE');
+      const activeProv = t.provisionalRentalTerms.some((p: any) => p.status === 'ACTIVE');
+      const activeDaily = t.dailyStays.some((d: any) => d.status === 'ACTIVE');
+      const isActive = activeOcc || activeProv || activeDaily;
 
-    for (const tenant of unlinkedTenants) {
-      let isActive = false;
-      let isReserved = false;
+      const reservedOccs = t.occupancies.filter((o: any) => o.status === 'RESERVED');
+      const reservedProvs = t.provisionalRentalTerms.filter((p: any) => p.status === 'RESERVED');
+      const reservedDailies = t.dailyStays.filter((d: any) => d.status === 'RESERVED');
+      const isReserved = reservedOccs.length > 0 || reservedProvs.length > 0 || reservedDailies.length > 0;
+
       const reservedDates: Date[] = [];
+      reservedOccs.forEach((o: any) => { if (o.startedAt) reservedDates.push(new Date(o.startedAt)); });
+      reservedProvs.forEach((p: any) => { if (p.startDate) reservedDates.push(new Date(p.startDate)); });
+      reservedDailies.forEach((d: any) => { if (d.startDate) reservedDates.push(new Date(d.startDate)); });
 
-      // Check Occupancies
-      for (const occ of tenant.occupancies || []) {
-        if (occ.status === 'ACTIVE') {
-          isActive = true;
-        } else if (occ.status === 'RESERVED') {
-          isReserved = true;
-          if (occ.startedAt) reservedDates.push(new Date(occ.startedAt));
-        }
+      let earliestReservedDate: Date | null = null;
+      if (reservedDates.length > 0) {
+        earliestReservedDate = new Date(Math.min(...reservedDates.map((d) => d.getTime())));
       }
 
-      // Check Provisional Terms
-      for (const term of tenant.provisionalRentalTerms || []) {
-        if (term.status === 'ACTIVE') {
-          isActive = true;
-        } else if (term.status === 'RESERVED') {
-          isReserved = true;
-          if (term.startDate) reservedDates.push(new Date(term.startDate));
-        }
-      }
+      return {
+        tenant: t,
+        isActive,
+        isReserved,
+        earliestReservedDate,
+      };
+    });
 
-      // Check Daily Stays
-      for (const stay of tenant.dailyStays || []) {
-        if (stay.status === 'ACTIVE') {
-          isActive = true;
-        } else if (stay.status === 'RESERVED') {
-          isReserved = true;
-          if (stay.startDate) reservedDates.push(new Date(stay.startDate));
-        }
-      }
-
-      if (isActive || isReserved) {
-        let earliestReservedDate: Date | null = null;
-        if (reservedDates.length > 0) {
-          reservedDates.sort((a, b) => a.getTime() - b.getTime());
-          earliestReservedDate = reservedDates[0];
-        }
-
-        evaluated.push({
-          tenant,
-          isActive,
-          isReserved,
-          earliestReservedDate,
-        });
-      }
-    }
-
-    // ── Priority 1: Current ACTIVE Tenant ──────────────────────────────
+    // Decision 2A Priority 1: Check for ACTIVE candidates
     const activeCandidates = evaluated.filter((e) => e.isActive);
     if (activeCandidates.length === 1) {
       return activeCandidates[0].tenant;
     }
     if (activeCandidates.length > 1) {
-      // Priority 3: Ambiguity across multiple active candidates -> Fail closed
+      // Priority 3: Ambiguity fail closed
       if (this.auditService) {
         await this.auditService.logSecurityEvent({
           action: 'tenant.claim.ambiguity_detected',
           dormitoryId,
-          details: { roomId, reason: 'multiple_active_candidates', count: activeCandidates.length },
+          details: { roomId, reason: 'multiple_active_unlinked_candidates', count: activeCandidates.length },
         });
       }
       return null;
     }
 
-    // ── Priority 2: Nearest Future RESERVED Tenant ─────────────────────
-    const reservedCandidates = evaluated.filter((e) => !e.isActive && e.isReserved && e.earliestReservedDate !== null);
+    // Decision 2A Priority 2: Check for nearest future RESERVED candidates (when 0 active)
+    const reservedCandidates = evaluated.filter((e) => e.isReserved && e.earliestReservedDate !== null);
     if (reservedCandidates.length === 0) {
       return null;
     }
@@ -189,10 +167,8 @@ export class TenantClaimService {
       return reservedCandidates[0].tenant;
     }
 
-    // Sort by earliest reserved start date ascending
-    reservedCandidates.sort(
-      (a, b) => a.earliestReservedDate!.getTime() - b.earliestReservedDate!.getTime()
-    );
+    // Sort by earliest reserved start date
+    reservedCandidates.sort((a, b) => a.earliestReservedDate!.getTime() - b.earliestReservedDate!.getTime());
 
     const first = reservedCandidates[0];
     const second = reservedCandidates[1];
@@ -219,17 +195,29 @@ export class TenantClaimService {
    */
   public async getCandidateForRoom(
     dormitoryId: string,
-    roomId: string
+    roomRef: string | { roomId?: string; roomNumber?: string }
   ): Promise<ClaimCandidateResult> {
+    const roomWhere: any = {
+      dormitoryId,
+      deletedAt: null,
+      status: { not: 'archived' },
+    };
+    if (typeof roomRef === 'string') {
+      roomWhere.id = roomRef;
+    } else {
+      if (roomRef.roomNumber) roomWhere.roomNumber = roomRef.roomNumber;
+      if (roomRef.roomId) roomWhere.id = roomRef.roomId;
+    }
+
     const room = await this.prisma.room.findFirst({
-      where: { id: roomId, dormitoryId, deletedAt: null },
+      where: roomWhere,
     });
 
     if (!room) {
       return { hasCandidate: false };
     }
 
-    const tenant = await this.selectAuthoritativeCandidate(dormitoryId, roomId, this.prisma);
+    const tenant = await this.selectAuthoritativeCandidate(dormitoryId, room.id, this.prisma);
 
     if (!tenant) {
       return { hasCandidate: false };
@@ -260,7 +248,7 @@ export class TenantClaimService {
     userId: string,
     ipAddress?: string
   ) {
-    const { dormitoryId, roomId, claimInput } = data;
+    const { dormitoryId, roomId, roomNumber, claimInput } = data;
 
     const trimmedInput = claimInput?.trim();
     if (!trimmedInput) {
@@ -271,12 +259,17 @@ export class TenantClaimService {
     }
 
     return this.prisma.$transaction(async (tx) => {
-      // 1. Room lock to protect against concurrency
-      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${dormitoryId + ':' + roomId}))`;
+      // 1. Verify room exists and belongs to dormitory
+      const roomWhere: any = {
+        dormitoryId,
+        deletedAt: null,
+        status: { not: 'archived' },
+      };
+      if (roomNumber) roomWhere.roomNumber = roomNumber;
+      if (roomId) roomWhere.id = roomId;
 
-      // 2. Verify room exists and belongs to dormitory
       const room = await tx.room.findFirst({
-        where: { id: roomId, dormitoryId, deletedAt: null },
+        where: roomWhere,
       });
 
       if (!room) {
@@ -286,8 +279,11 @@ export class TenantClaimService {
         throw err;
       }
 
+      // 2. Room lock to protect against concurrency
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${dormitoryId + ':' + room.id}))`;
+
       // 3. Find authoritative candidate using Decision 2A Priority
-      const candidate = await this.selectAuthoritativeCandidate(dormitoryId, roomId, tx);
+      const candidate = await this.selectAuthoritativeCandidate(dormitoryId, room.id, tx);
 
       if (!candidate) {
         const err = new Error('ไม่พบข้อมูลผู้เช่าที่ตรงกับข้อมูลที่ระบุ');
@@ -396,7 +392,7 @@ export class TenantClaimService {
           details: {
             tenantId: updatedTenant.id,
             tenantNumber: updatedTenant.tenantNumber,
-            roomId,
+            roomId: room.id,
             ip: ipAddress || null,
           },
         });

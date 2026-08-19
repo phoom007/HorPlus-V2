@@ -66,9 +66,14 @@ export function createTenantClaimRouter(
       const ip = req.ip || (req.headers['x-forwarded-for'] as string) || '127.0.0.1';
       const userId = req.auth?.userId || 'anonymous';
       const dormId = (req.body?.dormitoryId as string) || (req.query?.dormitoryId as string) || 'global';
-      const roomId = (req.body?.roomId as string) || (req.query?.roomId as string) || 'global';
+      const roomRef =
+        (req.body?.roomId as string) ||
+        (req.body?.roomNumber as string) ||
+        (req.query?.roomId as string) ||
+        (req.query?.roomNumber as string) ||
+        'global';
 
-      const roomKey = `rate_limit:tenant_claim:room:${dormId}:${roomId}:${userId}:${ip}`;
+      const roomKey = `rate_limit:tenant_claim:room:${dormId}:${roomRef}:${userId}:${ip}`;
       const actorKey = `rate_limit:tenant_claim:actor:${userId}:${ip}`;
 
       const [roomAllowed, actorAllowed] = await Promise.all([
@@ -122,21 +127,22 @@ export function createTenantClaimRouter(
   // 1. Candidate Discovery (Pre-link authenticated + rate limited)
   router.get('/candidate', requireSession, claimRateLimiter, async (req: Request, res: Response) => {
     try {
-      const dormitoryId = req.query.dormitoryId as string;
-      const roomId = req.query.roomId as string;
+      const dormitoryId = (req.query.dormitoryId as string)?.trim();
+      const roomId = (req.query.roomId as string)?.trim();
+      const roomNumber = (req.query.roomNumber as string)?.trim();
 
-      if (!dormitoryId || !roomId) {
+      if (!dormitoryId || (!roomId && !roomNumber)) {
         return res.status(400).json({
           error: {
             code: 'VALIDATION_ERROR',
-            message: 'กรุณาระบุ dormitoryId และ roomId',
+            message: 'กรุณาระบุ dormitoryId และ roomId หรือ roomNumber',
             requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
             timestamp: new Date().toISOString(),
           },
         });
       }
 
-      const result = await claimService.getCandidateForRoom(dormitoryId, roomId);
+      const result = await claimService.getCandidateForRoom(dormitoryId, { roomId, roomNumber });
 
       res.json({ data: result });
     } catch (err) {
@@ -145,11 +151,17 @@ export function createTenantClaimRouter(
   });
 
   // 2. Execute Claim (Pre-link authenticated + rate limited)
-  const ClaimSchema = z.object({
-    dormitoryId: z.string().uuid('รหัสหอพักไม่ถูกต้อง'),
-    roomId: z.string().min(1, 'กรุณาระบุห้องพัก'),
-    claimInput: z.string().trim().min(1, 'กรุณาระบุชื่อ-นามสกุล หรือ เบอร์โทรศัพท์'),
-  });
+  const ClaimSchema = z
+    .object({
+      dormitoryId: z.string().uuid('รหัสหอพักไม่ถูกต้อง'),
+      roomId: z.string().optional(),
+      roomNumber: z.string().optional(),
+      claimInput: z.string().trim().min(1, 'กรุณาระบุชื่อ-นามสกุล หรือ เบอร์โทรศัพท์'),
+    })
+    .refine((data) => !!data.roomId || !!data.roomNumber, {
+      message: 'กรุณาระบุห้องพัก (roomId หรือ roomNumber)',
+      path: ['roomNumber'],
+    });
 
   router.post('/claim', requireSession, requireCsrf, claimRateLimiter, async (req: Request, res: Response) => {
     try {

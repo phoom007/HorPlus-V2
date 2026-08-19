@@ -15,8 +15,8 @@ interface TenantDailyRequestModalProps {
   isOpen: boolean;
   onClose: () => void;
   dormitoryId: string;
-  roomId: string;
-  roomNumber?: string;
+  roomNumber: string;
+  roomId?: string;
   onSuccess: (message: string) => void;
 }
 
@@ -24,8 +24,8 @@ export const TenantDailyRequestModal: React.FC<TenantDailyRequestModalProps> = (
   isOpen,
   onClose,
   dormitoryId,
-  roomId,
   roomNumber,
+  roomId,
   onSuccess,
 }) => {
   const [applicantFullName, setApplicantFullName] = useState('');
@@ -38,37 +38,48 @@ export const TenantDailyRequestModal: React.FC<TenantDailyRequestModalProps> = (
   const [depositAmount, setDepositAmount] = useState<number>(0);
   const [depositDeclaredStatus, setDepositDeclaredStatus] = useState<'PAID' | 'UNPAID'>('UNPAID');
 
-  const [loadingContext, setLoadingContext] = useState(false);
+  const [contextState, setContextState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
   const [submitting, setSubmitting] = useState(false);
   const [errorText, setErrorText] = useState<string | null>(null);
 
-  // Fetch authoritative rates from property context
+  // Fetch authoritative rates from pre-link daily request context
   useEffect(() => {
-    if (isOpen && roomId) {
+    if (isOpen && (roomNumber || roomId)) {
       setErrorText(null);
-      setLoadingContext(true);
+      setContextState('loading');
       const dormId = dormitoryId || (typeof localStorage !== 'undefined' ? localStorage.getItem('selected_dormitory_id') || '' : '');
-      httpRequest<{ data: QuickAddRoomContext }>(
+      const query = new URLSearchParams();
+      if (dormId) query.set('dormitoryId', dormId);
+      if (roomNumber) query.set('roomNumber', roomNumber);
+      if (roomId) query.set('roomId', roomId);
+
+      httpRequest<{ data: { roomId: string; roomNumber: string; dailyRateAmount: string; depositDefaultAmount: string } }>(
         'GET',
-        `/api/v1/properties/rooms/${roomId}/quick-add-context`,
+        `/api/v1/daily-stays/request-context?${query.toString()}`,
         undefined,
         { headers: dormId ? { 'x-dormitory-id': dormId } : {} }
       )
         .then((res) => {
-          if (res?.data?.effective) {
-            const eff = res.data.effective;
-            setDailyRate(eff.dailyRent !== null && eff.dailyRent !== undefined ? Number(eff.dailyRent) : 0);
-            setDepositAmount(eff.depositAmount !== null && eff.depositAmount !== undefined ? Number(eff.depositAmount) : 0);
+          if (res?.data) {
+            const data = res.data;
+            const rate = data.dailyRateAmount ? Number(data.dailyRateAmount) : 0;
+            const dep = data.depositDefaultAmount ? Number(data.depositDefaultAmount) : 0;
+            setDailyRate(rate);
+            setDepositAmount(dep);
+            setContextState('ready');
+          } else {
+            setContextState('error');
+            setErrorText('ไม่พบข้อมูลห้องพักหรืออัตราค่าเช่ารายวัน');
           }
         })
-        .catch(() => {
-          // If context fetch fails, keep defaults
-        })
-        .finally(() => {
-          setLoadingContext(false);
+        .catch((err: any) => {
+          setContextState('error');
+          setErrorText(err.message || 'ไม่สามารถโหลดข้อมูลห้องพักหรืออัตราค่าเช่ารายวันได้');
         });
+    } else if (!isOpen) {
+      setContextState('idle');
     }
-  }, [isOpen, roomId, dormitoryId]);
+  }, [isOpen, roomNumber, roomId, dormitoryId]);
 
   if (!isOpen) return null;
 
@@ -95,13 +106,19 @@ export const TenantDailyRequestModal: React.FC<TenantDailyRequestModalProps> = (
       return;
     }
 
+    if (contextState !== 'ready') {
+      setErrorText('ไม่สามารถส่งคำขอได้ เนื่องจากข้อมูลห้องพักไม่พร้อมใช้งาน');
+      return;
+    }
+
     setSubmitting(true);
     setErrorText(null);
 
     try {
       await httpRequest('POST', '/api/v1/daily-stays/request', {
         dormitoryId,
-        roomId,
+        roomNumber,
+        roomId: roomId || undefined,
         applicantFullName: applicantFullName.trim(),
         applicantPhone: applicantPhone.trim() || undefined,
         startDate,
@@ -154,10 +171,16 @@ export const TenantDailyRequestModal: React.FC<TenantDailyRequestModalProps> = (
         )}
 
         <form onSubmit={handleSubmit} className="p-5 space-y-4 overflow-y-auto flex-1 text-xs">
-          {loadingContext ? (
+          {contextState === 'loading' ? (
             <div className="p-6 text-center text-slate-400 flex flex-col items-center gap-2">
               <Loader2 className="w-5 h-5 animate-spin text-amber-600" />
               <span>กำลังโหลดข้อมูลค่าเช่าห้องพัก...</span>
+            </div>
+          ) : contextState === 'error' ? (
+            <div className="p-6 text-center text-rose-600 flex flex-col items-center gap-2 bg-rose-50/50 rounded-2xl border border-rose-100">
+              <AlertCircle className="w-6 h-6 text-rose-500" />
+              <span className="font-bold">ไม่สามารถโหลดข้อมูลห้องพักหรืออัตราค่าเช่าได้</span>
+              <span className="text-xs text-rose-500">{errorText || 'กรุณาลองใหม่อีกครั้งหรือติดต่อเจ้าหน้าที่'}</span>
             </div>
           ) : (
             <>
@@ -318,8 +341,8 @@ export const TenantDailyRequestModal: React.FC<TenantDailyRequestModalProps> = (
             <button
               type="submit"
               data-testid="tenant-daily-submit-btn"
-              disabled={submitting || loadingContext}
-              className="px-5 py-2 text-xs font-bold text-white bg-amber-600 hover:bg-amber-700 rounded-xl shadow-md shadow-amber-600/10 transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+              disabled={submitting || contextState !== 'ready'}
+              className="px-5 py-2 text-xs font-bold text-white bg-amber-600 hover:bg-amber-700 rounded-xl shadow-md shadow-amber-600/10 transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {submitting ? (
                 <>

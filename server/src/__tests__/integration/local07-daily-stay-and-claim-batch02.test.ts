@@ -1472,6 +1472,198 @@ describe('LOCAL-07 Batch 02: Daily Stay Domain, Invoicing & Tenant Self-Claim', 
       expect(Number(provResult.provisionalTerm.unitRentAmount)).toBe(4500.0);
       expect(Number(provResult.provisionalTerm.totalRentAmount)).toBe(4500.0);
     });
+
+    it('13. Pre-Link Room Reference Authority & Pre-Link Daily Context Endpoint (roomNumber A101)', async () => {
+      // 1. Create independent Dormitory
+      const dorm = await prisma.dormitory.create({
+        data: {
+          name: 'หอพักพรีลิงก์ A101',
+          status: 'active',
+        },
+      });
+      const prelinkDormId = dorm.id;
+
+      // 2. Create Building with dailyRent = 350, depositAmount = 0
+      const bld = await prisma.building.create({
+        data: {
+          dormitoryId: prelinkDormId,
+          code: 'A',
+          name: 'อาคาร A',
+          floorCount: 2,
+          roomsPerFloor: 5,
+          monthlyRent: 4500.0,
+          dailyRent: 350.0,
+          depositAmount: 0.0,
+          termMonths: 6,
+          maxTermRentInstallments: 3,
+        },
+      });
+      const prelinkBldId = bld.id;
+
+      // 3. Create active Room A101
+      const roomA101 = await prisma.room.create({
+        data: {
+          dormitoryId: prelinkDormId,
+          buildingId: prelinkBldId,
+          roomNumber: 'A101',
+          normalizedRoomNumber: 'A101',
+          roomType: 'standard',
+          floor: 1,
+          status: 'vacant',
+          monthlyRent: 4500.0,
+          dailyRent: 350.0,
+          depositAmount: 0.0,
+        },
+      });
+      const prelinkRoomA101Id = roomA101.id;
+
+      // 4. Create archived Room A102
+      const roomA102 = await prisma.room.create({
+        data: {
+          dormitoryId: prelinkDormId,
+          buildingId: prelinkBldId,
+          roomNumber: 'A102',
+          normalizedRoomNumber: 'A102',
+          roomType: 'standard',
+          floor: 1,
+          status: 'archived',
+          monthlyRent: 4500.0,
+        },
+      });
+
+      // 5. Create unlinked User with NO DormitoryMember
+      const prelinkEmail = `prelink-user-${Date.now()}@example.com`;
+      const prelinkUser = await prisma.user.create({
+        data: {
+          googleSubject: `sub-prelink-${Date.now()}`,
+          email: prelinkEmail,
+          emailNormalized: prelinkEmail.toLowerCase(),
+          name: 'นายสมัครใจ ดีจริง',
+        },
+      });
+
+      const prelinkAuth = await authService.authenticateTestUser(prelinkUser.id);
+      const prelinkUserCookie = `horplus_session=${prelinkAuth.sessionToken}; horplus_csrf=${prelinkAuth.csrfToken}`;
+      const prelinkCsrfToken = prelinkAuth.csrfToken;
+
+      // Proof 1 & 2: GET /api/v1/daily-stays/request-context resolves exact roomNumber A101 with authoritative rates for pre-link User
+      const res = await request(httpApp)
+        .get(`/api/v1/daily-stays/request-context?dormitoryId=${prelinkDormId}&roomNumber=A101`)
+        .set('Cookie', prelinkUserCookie);
+
+      expect(res.status).toBe(200);
+      expect(res.body.data).toBeDefined();
+      expect(res.body.data.roomId).toBe(prelinkRoomA101Id);
+      expect(res.body.data.roomNumber).toBe('A101');
+      expect(res.body.data.dailyRateAmount).toBe('350.00');
+      expect(res.body.data.depositDefaultAmount).toBe('0.00');
+
+      // Proof 3: GET /api/v1/daily-stays/request-context fails closed on invalid roomNumber, archived room, or foreign dormitory
+      // A. Non-existent room number
+      const notFoundRes = await request(httpApp)
+        .get(`/api/v1/daily-stays/request-context?dormitoryId=${prelinkDormId}&roomNumber=Z999`)
+        .set('Cookie', prelinkUserCookie);
+      expect(notFoundRes.status).toBe(404);
+      expect(notFoundRes.body.error.code).toBe('ROOM_NOT_FOUND');
+
+      // B. Archived room A102
+      const archRes = await request(httpApp)
+        .get(`/api/v1/daily-stays/request-context?dormitoryId=${prelinkDormId}&roomNumber=A102`)
+        .set('Cookie', prelinkUserCookie);
+      expect(archRes.status).toBe(404);
+      expect(archRes.body.error.code).toBe('ROOM_NOT_FOUND');
+
+      // C. Foreign dormitory
+      const foreignRes = await request(httpApp)
+        .get(`/api/v1/daily-stays/request-context?dormitoryId=${dormitoryId}&roomNumber=A101`)
+        .set('Cookie', prelinkUserCookie);
+      expect(foreignRes.status).toBe(404);
+      expect(foreignRes.body.error.code).toBe('ROOM_NOT_FOUND');
+
+      // D. Missing session -> 401
+      const unauthRes = await request(httpApp)
+        .get(`/api/v1/daily-stays/request-context?dormitoryId=${prelinkDormId}&roomNumber=A101`);
+      expect(unauthRes.status).toBe(401);
+
+      // Proof 4: POST /api/v1/daily-stays/request accepts roomNumber A101 directly without client supplying internal UUID
+      const reqRes = await request(httpApp)
+        .post('/api/v1/daily-stays/request')
+        .set('Cookie', prelinkUserCookie)
+        .set('x-csrf-token', prelinkCsrfToken)
+        .send({
+          dormitoryId: prelinkDormId,
+          roomNumber: 'A101',
+          applicantFullName: 'นายสมัครใจ ดีจริง',
+          applicantPhone: '0899998888',
+          startDate: '2026-11-01',
+          endDate: '2026-11-03',
+          dailyRateAmount: '350.00',
+          depositAmount: '0.00',
+          depositDeclaredStatus: 'UNPAID',
+        });
+
+      expect(reqRes.status).toBe(201);
+      expect(reqRes.body.data).toBeDefined();
+      expect(reqRes.body.data.status).toBe('PENDING_APPROVAL');
+      expect(reqRes.body.data.roomId).toBe(prelinkRoomA101Id);
+      expect(Number(reqRes.body.data.dailyRateAmount)).toBe(350);
+
+      // Proof 5: Candidate discovery and self-claim resolve exact roomNumber in dormitory
+      // Create active provisional term tenant in A101
+      const occTenant = await prisma.tenant.create({
+        data: {
+          dormitoryId: prelinkDormId,
+          tenantNumber: `T-A101-CLAIM-${Date.now()}`,
+          firstName: 'สมชาย',
+          lastName: 'ผู้เช่าเดิม',
+          displayName: 'นายสมชาย ผู้เช่าเดิม',
+          phone: '0812345678',
+          status: 'active',
+          linkedUserId: null,
+        },
+      });
+
+      await prisma.occupancy.create({
+        data: {
+          dormitoryId: prelinkDormId,
+          tenantId: occTenant.id,
+          roomId: prelinkRoomA101Id,
+          status: 'ACTIVE',
+        },
+      });
+
+      // Discover candidate using roomNumber=A101
+      const candRes = await request(httpApp)
+        .get(`/api/v1/tenant-claims/candidate?dormitoryId=${prelinkDormId}&roomNumber=A101`)
+        .set('Cookie', prelinkUserCookie);
+
+      expect(candRes.status).toBe(200);
+      expect(candRes.body.data.hasCandidate).toBe(true);
+      expect(candRes.body.data.roomId).toBe(prelinkRoomA101Id);
+      expect(candRes.body.data.roomNumber).toBe('A101');
+      expect(candRes.body.data.maskedName).toBe('นายสมชาย ผXXX');
+
+      // Claim tenant using roomNumber=A101
+      const claimRes = await request(httpApp)
+        .post('/api/v1/tenant-claims/claim')
+        .set('Cookie', prelinkUserCookie)
+        .set('x-csrf-token', prelinkCsrfToken)
+        .send({
+          dormitoryId: prelinkDormId,
+          roomNumber: 'A101',
+          claimInput: '0812345678',
+        });
+
+      expect(claimRes.status).toBe(200);
+      expect(claimRes.body.data.success).toBe(true);
+      expect(claimRes.body.data.tenantId).toBe(occTenant.id);
+
+      // Verify linked
+      const updatedTenant = await prisma.tenant.findUnique({
+        where: { id: occTenant.id },
+      });
+      expect(updatedTenant?.linkedUserId).toBe(prelinkUser.id);
+    });
   });
 
   // ==========================================
