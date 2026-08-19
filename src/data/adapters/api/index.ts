@@ -756,6 +756,39 @@ export class ApiMeterAdapter implements MeterDataSource {
       };
     }
   }
+
+  async saveBulkWorkspace(billingCycleId: string, rows: any[]): Promise<DataResult<{ savedCount: number }>> {
+    try {
+      const data = await httpRequest<{ success: boolean; savedCount: number }>('POST', '/meters/workspace/bulk', {
+        billingCycleId,
+        rows
+      });
+      return { success: true, data: { savedCount: data.savedCount ?? rows.length } };
+    } catch (err: any) {
+      return {
+        success: false,
+        error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message }
+      };
+    }
+  }
+
+  async toggleRoomBillSwitch(billingCycleId: string, roomId: string, action: 'issue' | 'cancel', dirtyRow?: any, cancellationReason?: string): Promise<DataResult<any>> {
+    try {
+      const data = await httpRequest<any>('POST', '/meters/switch', {
+        billingCycleId,
+        roomId,
+        action,
+        dirtyRow,
+        cancellationReason
+      });
+      return { success: true, data };
+    } catch (err: any) {
+      return {
+        success: false,
+        error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message }
+      };
+    }
+  }
 }
 
 export class ApiBillingAdapter implements BillingDataSource {

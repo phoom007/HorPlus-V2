@@ -22,6 +22,10 @@ export function mulDecimals(a: string | number | Prisma.Decimal, b: string | num
   return toDecimal(a).mul(toDecimal(b));
 }
 
+export function divDecimals(a: string | number | Prisma.Decimal, b: string | number | Prisma.Decimal): Prisma.Decimal {
+  return toDecimal(a).div(toDecimal(b));
+}
+
 export function formatDecimal(val: string | number | Prisma.Decimal | null | undefined): string {
   return toDecimal(val).toFixed(2);
 }

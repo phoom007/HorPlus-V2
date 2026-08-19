@@ -77,7 +77,41 @@ export const UpdateMeterReadingSchema = z.object({
 export const UpdateCyclePeopleCountSchema = z.object({
   billingCycleId: z.string().min(1, 'Billing Cycle ID จำเป็นต้องระบุ'),
   roomId: z.string().min(1, 'Room ID จำเป็นต้องระบุ'),
-  peopleCount: z.number().int().min(1, 'จำนวนคนต้องมีอย่างน้อย 1 คน'),
+  peopleCount: z.number().int().min(0, 'จำนวนคนต้องมีอย่างน้อย 0 คน'),
+});
+
+export const OtherFeeItemSchema = z.object({
+  description: z.string().trim().min(1, 'ชื่อรายการค่าใช้จ่ายต้องไม่เป็นค่าว่าง').max(100, 'ชื่อรายการต้องไม่เกิน 100 ตัวอักษร'),
+  amount: z.union([
+    z.string().regex(/^\d{1,10}(\.\d{1,2})?$/, 'จำนวนเงินต้องเป็นตัวเลขที่ถูกต้อง (>= 0)'),
+    z.number().nonnegative('จำนวนเงินต้องไม่ติดลบ').finite('จำนวนเงินต้องเป็นตัวเลขที่ถูกต้อง')
+  ]),
+});
+
+export const SaveMeterWorkspaceRowSchema = z.object({
+  roomId: z.string().min(1, 'Room ID จำเป็นต้องระบุ'),
+  waterPrev: z.union([z.string().regex(/^\d+(\.\d{1,2})?$/), z.number().nonnegative().finite()]).optional(),
+  waterCurr: z.union([z.string().regex(/^\d+(\.\d{1,2})?$/), z.number().nonnegative().finite()]).optional(),
+  elecPrev: z.union([z.string().regex(/^\d+(\.\d{1,2})?$/), z.number().nonnegative().finite()]).optional(),
+  elecCurr: z.union([z.string().regex(/^\d+(\.\d{1,2})?$/), z.number().nonnegative().finite()]).optional(),
+  isReplaced: z.boolean().optional(),
+  peopleCount: z.number().int().min(0).optional(),
+  manualOutstandingAmount: z.union([z.string().regex(/^\d+(\.\d{1,2})?$/), z.number().nonnegative().finite()]).optional(),
+  otherFees: z.array(OtherFeeItemSchema).max(20, 'ไม่สามารถเพิ่มค่าใช้จ่ายอื่นๆ เกิน 20 รายการต่อห้องได้').optional(),
+  expectedVersion: z.number().int().optional(),
+});
+
+export const BulkSaveMeterWorkspaceSchema = z.object({
+  billingCycleId: z.string().min(1, 'Billing Cycle ID จำเป็นต้องระบุ'),
+  rows: z.array(SaveMeterWorkspaceRowSchema).min(1, 'ต้องระบุข้อมูลห้องอย่างน้อย 1 ห้อง'),
+});
+
+export const ToggleRoomBillSwitchSchema = z.object({
+  billingCycleId: z.string().min(1, 'Billing Cycle ID จำเป็นต้องระบุ'),
+  roomId: z.string().min(1, 'Room ID จำเป็นต้องระบุ'),
+  action: z.enum(['issue', 'cancel']),
+  dirtyRow: SaveMeterWorkspaceRowSchema.optional(),
+  cancellationReason: z.string().optional(),
 });
 
 export const CreateBillPreviewSchema = z.object({
@@ -87,9 +121,10 @@ export const CreateBillPreviewSchema = z.object({
 
 export const GenerateBillSchema = z.object({
   billingCycleId: z.string().min(1, 'Billing Cycle ID จำเป็นต้องระบุ'),
-  contractId: z.string().min(1, 'Contract ID จำเป็นต้องระบุ'),
+  contractId: z.string().optional(),
+  provisionalRentalTermId: z.string().optional(),
   roomId: z.string().min(1, 'Room ID จำเป็นต้องระบุ'),
-  tenantId: z.string().min(1, 'Tenant ID จำเป็นต้องระบุ'),
+  tenantId: z.string().optional(),
   billingDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   customItems: z
@@ -109,8 +144,21 @@ export const GenerateBillSchema = z.object({
 export const BulkGenerateBillSchema = z.object({
   billingCycleId: z.string().min(1, 'Billing Cycle ID จำเป็นต้องระบุ'),
   roomIds: z.array(z.string()).optional(),
+  dirtyRows: z.array(SaveMeterWorkspaceRowSchema).optional(),
 });
 
 export const CancelBillSchema = z.object({
   reason: z.string().min(1, 'เหตุผลในการยกเลิกจำเป็นต้องระบุ'),
+});
+
+export const CreateProvisionalRentalTermSchema = z.object({
+  roomId: z.string().min(1, 'Room ID จำเป็นต้องระบุ'),
+  fullName: z.string().trim().min(1, 'ชื่อ-นามสกุลจำเป็นต้องระบุ').max(255),
+  phone: z.string().trim().max(50).optional().nullable(),
+  rentalType: z.enum(['MONTHLY', 'TERM']),
+  startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'วันที่เริ่มต้นต้องอยู่ในรูปแบบ YYYY-MM-DD'),
+  durationMonths: z.number().int().min(1).max(36).optional().default(1),
+  unitRentAmount: z.union([z.string().regex(/^\d+(\.\d{1,2})?$/), z.number().nonnegative()]),
+  totalRentAmount: z.union([z.string().regex(/^\d+(\.\d{1,2})?$/), z.number().nonnegative()]).optional(),
+  termInstallmentCount: z.number().int().min(1).max(12).optional(),
 });

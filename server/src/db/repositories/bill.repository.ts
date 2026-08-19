@@ -5,6 +5,7 @@ export interface BillEntity {
   dormitoryId: string;
   billingCycleId: string;
   contractId?: string | null;
+  provisionalRentalTermId?: string | null;
   roomId: string;
   tenantId?: string | null;
   billNumber: string;
@@ -65,6 +66,7 @@ export interface CreateBillData {
   id?: string;
   billingCycleId: string;
   contractId?: string | null;
+  provisionalRentalTermId?: string | null;
   roomId: string;
   tenantId?: string | null;
   billNumber?: string;
@@ -225,6 +227,7 @@ export class InMemoryBillRepository implements IBillRepository {
       dormitoryId,
       billingCycleId: data.billingCycleId,
       contractId: data.contractId,
+      provisionalRentalTermId: data.provisionalRentalTermId || null,
       roomId: data.roomId,
       tenantId: data.tenantId,
       billNumber,
@@ -430,6 +433,7 @@ export class PrismaBillRepository implements IBillRepository {
       dormitoryId: model.dormitoryId,
       billingCycleId: model.billingCycleId,
       contractId: model.contractId,
+      provisionalRentalTermId: model.provisionalRentalTermId || null,
       roomId: model.roomId,
       tenantId: model.tenantId,
       billNumber: model.billNumber,
@@ -490,6 +494,7 @@ export class PrismaBillRepository implements IBillRepository {
         dormitoryId,
         billingCycleId: data.billingCycleId,
         contractId: isUuid(data.contractId) ? data.contractId : null,
+        provisionalRentalTermId: isUuid(data.provisionalRentalTermId) ? data.provisionalRentalTermId : null,
         roomId: data.roomId,
         tenantId: isUuid(data.tenantId) ? data.tenantId : null,
         billNumber: data.billNumber || `BILL-${Date.now()}`,
@@ -641,8 +646,9 @@ export class PrismaBillRepository implements IBillRepository {
     if (data.totalAmount !== undefined) updateData.totalAmount = data.totalAmount;
     if (data.paidAmount !== undefined) updateData.paidAmount = data.paidAmount;
     if (data.outstandingAmount !== undefined) updateData.outstandingAmount = data.outstandingAmount;
+    const isUuid = (str?: string | null) => !!str && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
     if (data.cancelledAt !== undefined) updateData.cancelledAt = data.cancelledAt;
-    if (data.cancelledByUserId !== undefined) updateData.cancelledByUserId = data.cancelledByUserId;
+    if (data.cancelledByUserId !== undefined) updateData.cancelledByUserId = isUuid(data.cancelledByUserId) ? data.cancelledByUserId : null;
     if (data.cancellationReason !== undefined) updateData.cancellationReason = data.cancellationReason;
 
     const updated = await client.bill.update({
@@ -671,6 +677,7 @@ export class PrismaBillRepository implements IBillRepository {
     changedByUserId?: string,
     metadata?: any
   ): Promise<BillStatusHistoryEntity> {
+    const isUuid = (str?: string | null) => !!str && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
     const history = await this.prisma.billStatusHistory.create({
       data: {
         dormitoryId,
@@ -678,7 +685,7 @@ export class PrismaBillRepository implements IBillRepository {
         fromStatus: fromStatus || null,
         toStatus,
         reason: reason || null,
-        changedByUserId: changedByUserId || null,
+        changedByUserId: isUuid(changedByUserId) ? changedByUserId : null,
         metadata: metadata || null,
       },
     });

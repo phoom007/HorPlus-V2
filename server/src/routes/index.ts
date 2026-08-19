@@ -169,7 +169,7 @@ export function createApiRouter(deps: AppApiDependencies | AuthenticationService
       protectedRouter.use('/billing-cycles', createBillingCycleRouter(fullDeps.authService, fullDeps.billingCycleService));
     }
     if (fullDeps.meterService) {
-      protectedRouter.use('/meters', createMeterRouter(fullDeps.authService, fullDeps.meterService));
+      protectedRouter.use('/meters', createMeterRouter(fullDeps.authService, fullDeps.meterService, fullDeps.billingService));
     }
     if (fullDeps.billingService) {
       protectedRouter.use('/bills', createBillingRouter(fullDeps.authService, fullDeps.billingService));

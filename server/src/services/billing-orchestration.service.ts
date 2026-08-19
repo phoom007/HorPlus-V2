@@ -207,7 +207,7 @@ export class BillingOrchestrationService {
     }
 
     if (isEligibleNextCycle && pendingCorrection) {
-      seedCount = Math.max(1, pendingCorrection.peopleCount);
+      seedCount = Math.max(0, pendingCorrection.peopleCount);
       seedSource = 'METER_CORRECTION';
       await client.roomNextCycleCorrection.update({
         where: { id: pendingCorrection.id },
@@ -215,7 +215,7 @@ export class BillingOrchestrationService {
       });
     } else {
       // 2. Resolve from household truth
-      let householdCount = 1;
+      let householdCount = 0;
       if (tenantId) {
         householdCount = await this.getHouseholdCount(dormitoryId, tenantId, client);
       } else {
@@ -229,6 +229,21 @@ export class BillingOrchestrationService {
         });
         if (activeContract) {
           householdCount = await this.getHouseholdCount(dormitoryId, activeContract.tenantId, client);
+        } else {
+          // Check ACTIVE ProvisionalRentalTerm (future RESERVED terms do NOT count!)
+          const activeProvisional = await client.provisionalRentalTerm.findFirst({
+            where: {
+              dormitoryId,
+              roomId,
+              status: 'ACTIVE',
+              deletedAt: null,
+            },
+          });
+          if (activeProvisional) {
+            householdCount = await this.getHouseholdCount(dormitoryId, activeProvisional.tenantId, client);
+          } else {
+            householdCount = 0;
+          }
         }
       }
       seedCount = householdCount;
@@ -988,7 +1003,11 @@ export class BillingOrchestrationService {
         },
       });
 
-      const prevPeopleCount = existingSnapshot ? existingSnapshot.peopleCount : 1;
+      let defaultPeople = 0;
+      if (room.currentTenantId) {
+        defaultPeople = await this.getHouseholdCount(dormitoryId, room.currentTenantId, tx);
+      }
+      const prevPeopleCount = existingSnapshot ? existingSnapshot.peopleCount : defaultPeople;
 
       // Check authoritative current bill
       const currentBill = await tx.bill.findFirst({

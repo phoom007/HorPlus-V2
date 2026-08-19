@@ -125,6 +125,7 @@ model Dormitory {
   staffNotices               StaffNotification[]
   roomBillingCycleSnapshots  RoomBillingCycleSnapshot[]
   roomNextCycleCorrections   RoomNextCycleCorrection[]
+  provisionalRentalTerms     ProvisionalRentalTerm[]
 
   @@map("dormitories")
 }
@@ -457,6 +458,7 @@ model Room {
   settlements               ContractSettlement[]
   roomBillingCycleSnapshots RoomBillingCycleSnapshot[]
   roomNextCycleCorrections  RoomNextCycleCorrection[]
+  provisionalRentalTerms    ProvisionalRentalTerm[]
 
   @@unique([dormitoryId, normalizedRoomNumber], map: "dormitory_normalized_room_number_unique")
   @@map("rooms")
@@ -470,7 +472,7 @@ model Tenant {
   firstName           String    @map("first_name") @db.VarChar(255)
   lastName            String?   @map("last_name") @db.VarChar(255)
   displayName         String    @map("display_name") @db.VarChar(255)
-  phone               String    @db.VarChar(50)
+  phone               String?   @db.VarChar(50)
   email               String?   @db.VarChar(255)
   nationalIdEncrypted String?   @map("national_id_encrypted") @db.Text
   nationalIdMasked    String?   @map("national_id_masked") @db.VarChar(255)
@@ -486,19 +488,20 @@ model Tenant {
   updatedAt           DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
   deletedAt           DateTime? @map("deleted_at") @db.Timestamptz()
 
-  dormitory            Dormitory                @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
-  coOccupants          TenantCoOccupant[]
-  emergencyContacts    TenantEmergencyContact[]
-  vehicles             TenantVehicle[]
-  contracts            Contract[]
-  bills                Bill[]
-  occupancies          Occupancy[]
-  moveOutRequests      TenantMoveOutRequest[]
-  Payment              Payment[]
-  paymentUploadIntents PaymentUploadIntent[]
-  renewalRequests      TenantRenewalRequest[]
-  settlements          ContractSettlement[]
-  notices              TenantNotice[]
+  dormitory              Dormitory                @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
+  coOccupants            TenantCoOccupant[]
+  emergencyContacts      TenantEmergencyContact[]
+  vehicles               TenantVehicle[]
+  contracts              Contract[]
+  bills                  Bill[]
+  occupancies            Occupancy[]
+  moveOutRequests        TenantMoveOutRequest[]
+  Payment                Payment[]
+  paymentUploadIntents   PaymentUploadIntent[]
+  renewalRequests        TenantRenewalRequest[]
+  settlements            ContractSettlement[]
+  notices                TenantNotice[]
+  provisionalRentalTerms ProvisionalRentalTerm[]
 
   @@unique([dormitoryId, tenantNumber], name: "dormitory_tenant_number_unique")
   @@map("tenants")
@@ -607,6 +610,7 @@ model Contract {
   snapshot         ContractSnapshot?
   settlements      ContractSettlement[]
   renewalRequests  TenantRenewalRequest[]
+  provisionalTerms ProvisionalRentalTerm[] @relation("ProvisionalConvertedContract")
 
   @@unique([dormitoryId, contractNumber], name: "dormitory_contract_number_unique")
   @@map("contracts")
@@ -751,16 +755,18 @@ model BillingRateSnapshot {
 }
 
 model RoomBillingCycleSnapshot {
-  id              String   @id @default(uuid()) @db.Uuid
-  dormitoryId     String   @map("dormitory_id") @db.Uuid
-  billingCycleId  String   @map("billing_cycle_id") @db.Uuid
-  roomId          String   @map("room_id") @db.Uuid
-  peopleCount     Int      @default(1) @map("people_count")
-  source          String   @default("HOUSEHOLD_SYNC") @map("source") @db.VarChar(50) // HOUSEHOLD_SYNC, METER_CORRECTION, CYCLE_CARRY_FORWARD, MANUAL
-  updatedByUserId String?  @map("updated_by_user_id") @db.Uuid
-  version         Int      @default(1)
-  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz()
-  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz()
+  id                      String   @id @default(uuid()) @db.Uuid
+  dormitoryId             String   @map("dormitory_id") @db.Uuid
+  billingCycleId          String   @map("billing_cycle_id") @db.Uuid
+  roomId                  String   @map("room_id") @db.Uuid
+  peopleCount             Int      @default(0) @map("people_count")
+  manualOutstandingAmount Decimal  @default(0.00) @map("manual_outstanding_amount") @db.Decimal(12, 2)
+  otherFees               Json     @default("[]") @map("other_fees")
+  source                  String   @default("HOUSEHOLD_SYNC") @map("source") @db.VarChar(50) // HOUSEHOLD_SYNC, METER_CORRECTION, CYCLE_CARRY_FORWARD, MANUAL
+  updatedByUserId         String?  @map("updated_by_user_id") @db.Uuid
+  version                 Int      @default(1)
+  createdAt               DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt               DateTime @updatedAt @map("updated_at") @db.Timestamptz()
 
   dormitory    Dormitory    @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
   billingCycle BillingCycle @relation(fields: [billingCycleId], references: [id], onDelete: Cascade)
@@ -890,24 +896,27 @@ model Bill {
   generatedAt        DateTime  @default(now()) @map("generated_at") @db.Timestamptz()
   cancelledAt        DateTime? @map("cancelled_at") @db.Timestamptz()
   cancelledByUserId  String?   @map("cancelled_by_user_id") @db.Uuid
-  cancellationReason String?   @map("cancellation_reason") @db.Text
-  version            Int       @default(1)
-  createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz()
-  updatedAt          DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
+  cancellationReason       String?                @map("cancellation_reason") @db.Text
+  provisionalRentalTermId  String?                @map("provisional_rental_term_id") @db.Uuid
+  version                  Int                    @default(1)
+  createdAt                DateTime               @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt                DateTime               @updatedAt @map("updated_at") @db.Timestamptz()
 
-  dormitory            Dormitory             @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
-  billingCycle         BillingCycle          @relation(fields: [billingCycleId], references: [id], onDelete: Cascade)
-  contract             Contract?             @relation(fields: [contractId], references: [id], onDelete: Restrict)
-  room                 Room                  @relation(fields: [roomId], references: [id], onDelete: Restrict)
-  tenant               Tenant?               @relation(fields: [tenantId], references: [id], onDelete: Restrict)
-  rateSnapshot         BillingRateSnapshot?  @relation(fields: [rateSnapshotId], references: [id], onDelete: SetNull)
-  items                BillItem[]
-  statusHistories      BillStatusHistory[]
-  Payment              Payment[]
-  Receipt              Receipt[]
-  paymentUploadIntents PaymentUploadIntent[]
+  dormitory             Dormitory              @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
+  billingCycle          BillingCycle           @relation(fields: [billingCycleId], references: [id], onDelete: Cascade)
+  contract              Contract?              @relation(fields: [contractId], references: [id], onDelete: Restrict)
+  room                  Room                   @relation(fields: [roomId], references: [id], onDelete: Restrict)
+  tenant                Tenant?                @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  rateSnapshot          BillingRateSnapshot?   @relation(fields: [rateSnapshotId], references: [id], onDelete: SetNull)
+  provisionalRentalTerm ProvisionalRentalTerm? @relation(fields: [provisionalRentalTermId], references: [id], onDelete: Restrict)
+  items                 BillItem[]
+  statusHistories       BillStatusHistory[]
+  Payment               Payment[]
+  Receipt               Receipt[]
+  paymentUploadIntents  PaymentUploadIntent[]
 
   @@unique([dormitoryId, billNumber], name: "dormitory_bill_number_unique")
+  @@index([provisionalRentalTermId])
   @@map("bills")
 }
 
@@ -1005,11 +1014,48 @@ model Occupancy {
   room            Room                       @relation(fields: [roomId], references: [id], onDelete: Cascade)
   tenant          Tenant                     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   contract        Contract?                  @relation(fields: [contractId], references: [id], onDelete: SetNull)
-  registration    TenantRegistrationRequest? @relation(fields: [registrationId], references: [id], onDelete: SetNull)
-  moveOutRequests TenantMoveOutRequest[]
+  registration           TenantRegistrationRequest? @relation(fields: [registrationId], references: [id], onDelete: SetNull)
+  moveOutRequests        TenantMoveOutRequest[]
+  provisionalRentalTerms ProvisionalRentalTerm[]
 
   @@index([roomId, status], name: "occupancies_room_status_idx")
   @@map("occupancies")
+}
+
+model ProvisionalRentalTerm {
+  id                   String    @id @default(uuid()) @db.Uuid
+  dormitoryId          String    @map("dormitory_id") @db.Uuid
+  roomId               String    @map("room_id") @db.Uuid
+  tenantId             String    @map("tenant_id") @db.Uuid
+  occupancyId          String?   @map("occupancy_id") @db.Uuid
+  rentalType           String    @map("rental_type") @db.VarChar(50) // MONTHLY | TERM
+  startDate            DateTime  @map("start_date") @db.Date
+  endDate              DateTime  @map("end_date") @db.Date
+  durationMonths       Int       @default(1) @map("duration_months")
+  unitRentAmount       Decimal   @default(0.00) @map("unit_rent_amount") @db.Decimal(12, 2)
+  totalRentAmount      Decimal   @default(0.00) @map("total_rent_amount") @db.Decimal(12, 2)
+  termMonthsSnapshot   Int?      @map("term_months_snapshot")
+  termInstallmentCount Int?      @map("term_installment_count")
+  status               String    @default("ACTIVE") @db.VarChar(50) // RESERVED, ACTIVE, CONVERTED, ENDED, CANCELLED
+  createdByUserId      String?   @map("created_by_user_id") @db.Uuid
+  convertedContractId  String?   @map("converted_contract_id") @db.Uuid
+  version              Int       @default(1)
+  createdAt            DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt            DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
+  deletedAt            DateTime? @map("deleted_at") @db.Timestamptz()
+
+  dormitory         Dormitory  @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
+  room              Room       @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  tenant            Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  occupancy         Occupancy? @relation(fields: [occupancyId], references: [id], onDelete: SetNull)
+  convertedContract Contract?  @relation("ProvisionalConvertedContract", fields: [convertedContractId], references: [id], onDelete: SetNull)
+  bills             Bill[]
+
+  @@index([dormitoryId])
+  @@index([roomId])
+  @@index([tenantId])
+  @@index([dormitoryId, roomId, status])
+  @@map("provisional_rental_terms")
 }
 
 model TenantMoveOutRequest {

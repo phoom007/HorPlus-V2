@@ -137,6 +137,7 @@ export function createBillingCycleRouter(
       res.json({
         data: result.items,
         pagination: { total: result.total, page: query.page, pageSize: query.pageSize },
+        firstBillingCycleId: result.firstBillingCycleId,
         operationalBillingCycleId: operational.billingCycleId,
         operationalCycleCode: operational.cycleCode,
         operationalCycle: operational,

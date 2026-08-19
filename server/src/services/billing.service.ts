@@ -12,7 +12,7 @@ import { IRoomRepository } from '../db/repositories/room.repository.js';
 import { ITenantRepository } from '../db/repositories/tenant.repository.js';
 import { AuditService } from './audit.service.js';
 import { billingOrchestrationService } from './billing-orchestration.service.js';
-import { toDecimal, addDecimals, mulDecimals, formatDecimal, subDecimals, compareDecimals, isZeroDecimal } from '../utils/decimal-math.util.js';
+import { toDecimal, addDecimals, mulDecimals, divDecimals, formatDecimal, subDecimals, compareDecimals, isZeroDecimal } from '../utils/decimal-math.util.js';
 import { getPrismaClient } from '../db/prisma.js';
 
 /**
@@ -98,9 +98,10 @@ export function resolveBillIssueDate(issueDate: Date | string): Date {
 
 export interface GenerateBillDto {
   billingCycleId: string;
-  contractId: string;
+  contractId?: string;
+  provisionalRentalTermId?: string;
   roomId: string;
-  tenantId: string;
+  tenantId?: string;
   billingDate?: string;
   dueDate?: string;
   customItems?: Array<{
@@ -114,7 +115,8 @@ export interface GenerateBillDto {
 }
 
 export interface BillPreviewResult {
-  contractId: string;
+  contractId?: string | null;
+  provisionalRentalTermId?: string | null;
   roomId: string;
   tenantId: string;
   rentAmount: string;
@@ -127,6 +129,8 @@ export interface BillPreviewResult {
   commonFee: string;
   internetFee: string;
   parkingFee?: string;
+  manualOutstandingAmount?: string;
+  otherFees?: Array<{ description: string; amount: string }>;
   peopleCount: number;
   subtotal: string;
   discountAmount: string;
@@ -186,22 +190,54 @@ export class BillingService {
     const internetMode = (rateSnapshot as any).internetFeeMode || 'room';
     const parkingMode = (rateSnapshot as any).parkingFeeMode || 'room';
 
-    // Find active contract for room
+    // 1. Resolve Contract (Priority 1) or ACTIVE ProvisionalRentalTerm (Priority 2)
     const activeContracts = await this.contractRepo.findActiveContractsForRoom(dormitoryId, roomId);
-    if (activeContracts.length === 0) {
-      const err = new Error('NO_ACTIVE_CONTRACT_FOR_ROOM');
-      (err as any).statusCode = 404;
-      (err as any).code = 'NO_ACTIVE_CONTRACT_FOR_ROOM';
-      throw err;
+    let contract = activeContracts.length > 0 ? activeContracts[0] : null;
+    let provisionalTerm: any = null;
+
+    const prisma = getPrismaClient();
+
+    if (!contract) {
+      provisionalTerm = await prisma.provisionalRentalTerm.findFirst({
+        where: {
+          dormitoryId,
+          roomId,
+          status: 'ACTIVE',
+          deletedAt: null,
+        },
+      });
+
+      if (!provisionalTerm) {
+        const err = new Error('NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM');
+        (err as any).statusCode = 404;
+        (err as any).code = 'NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM';
+        (err as any).message = 'ห้องพักไม่มีสัญญาหรือข้อตกลงเช่าที่พร้อมออกบิลสำหรับงวดนี้';
+        throw err;
+      }
+
+      // Check date overlap with cycle
+      const cycleStart = new Date(cycle.periodStart);
+      const cycleEnd = new Date(cycle.periodEnd);
+      const termStart = new Date(provisionalTerm.startDate);
+      const termEnd = new Date(provisionalTerm.endDate);
+
+      if (termStart > cycleEnd || termEnd < cycleStart) {
+        const err = new Error('PROVISIONAL_TERM_NOT_ELIGIBLE_FOR_CYCLE');
+        (err as any).statusCode = 400;
+        (err as any).code = 'PROVISIONAL_TERM_NOT_ELIGIBLE_FOR_CYCLE';
+        (err as any).message = 'ข้อตกลงเช่าชั่วคราวไม่อยู่ในช่วงเวลาของรอบบิลนี้';
+        throw err;
+      }
     }
-    const contract = activeContracts[0];
+
+    const tenantId = contract ? contract.tenantId : provisionalTerm.tenantId;
 
     // Authoritative billing-cycle peopleCount snapshot resolution
     const peopleCount = await billingOrchestrationService.resolveCyclePeopleCount(
       dormitoryId,
       billingCycleId,
       roomId,
-      contract.tenantId
+      tenantId
     );
     const peopleCountDec = toDecimal(peopleCount.toString());
 
@@ -219,9 +255,24 @@ export class BillingService {
       'electricity'
     );
 
+    if (waterMode === 'per_unit' && !waterReading) {
+      const err = new Error('MISSING_WATER_METER_READING');
+      (err as any).statusCode = 400;
+      (err as any).code = 'MISSING_METER_READING';
+      (err as any).message = 'กรุณากรอกเลขมิเตอร์น้ำของงวดนี้ก่อนออกบิล';
+      throw err;
+    }
+
+    if (elecMode === 'per_unit' && !elecReading) {
+      const err = new Error('MISSING_ELECTRICITY_METER_READING');
+      (err as any).statusCode = 400;
+      (err as any).code = 'MISSING_METER_READING';
+      (err as any).message = 'กรุณากรอกเลขมิเตอร์ไฟฟ้าของงวดนี้ก่อนออกบิล';
+      throw err;
+    }
+
     const waterUsage = toDecimal(waterReading?.usageUnits || '0.00');
     const elecUsage = toDecimal(elecReading?.usageUnits || '0.00');
-    const rentAmount = toDecimal(contract.rentAmount);
 
     let waterQuantity = waterUsage;
     let waterAmount = mulDecimals(waterUsage, waterRate);
@@ -257,50 +308,86 @@ export class BillingService {
       elecUnit = 'room';
     }
 
-    // Resolve Rent Item: Check if Contract has immutable installmentConfig snapshot
-    const prisma = getPrismaClient();
-    const contractSnapshot = await prisma.contractSnapshot.findUnique({
-      where: { contractId: contract.id },
-    });
-
+    // Resolve Rent Item
     let rentItem: { type: string; description: string; quantity: string; unit?: string; unitPrice: string; amount: string; metadata?: any } | null = null;
 
-    const installmentConfig = contractSnapshot?.installmentConfig as any;
-    if (installmentConfig && Array.isArray(installmentConfig.installmentSchedule) && installmentConfig.installmentSchedule.length > 0) {
-      const contractStart = new Date(contract.startDate);
-      const cycleStart = new Date(cycle.periodStart);
-      const cycleOffset = (cycleStart.getFullYear() - contractStart.getFullYear()) * 12 + (cycleStart.getMonth() - contractStart.getMonth());
+    if (contract) {
+      const contractSnapshot = await prisma.contractSnapshot.findUnique({
+        where: { contractId: contract.id },
+      });
+      const rentAmount = toDecimal(contract.rentAmount);
+      const installmentConfig = contractSnapshot?.installmentConfig as any;
+      if (installmentConfig && Array.isArray(installmentConfig.installmentSchedule) && installmentConfig.installmentSchedule.length > 0) {
+        const contractStart = new Date(contract.startDate);
+        const cycleStart = new Date(cycle.periodStart);
+        const cycleOffset = (cycleStart.getFullYear() - contractStart.getFullYear()) * 12 + (cycleStart.getMonth() - contractStart.getMonth());
 
-      const scheduleItem = installmentConfig.installmentSchedule.find((s: any) => s.cycleOffset === cycleOffset);
-      if (scheduleItem) {
+        const scheduleItem = installmentConfig.installmentSchedule.find((s: any) => s.cycleOffset === cycleOffset);
+        if (scheduleItem) {
+          rentItem = {
+            type: 'rent',
+            description: scheduleItem.description || `ค่าเช่าห้องพัก (งวดที่ ${scheduleItem.installmentNo}/${installmentConfig.selectedInstallments})`,
+            quantity: '1.00',
+            unit: 'installment',
+            unitPrice: scheduleItem.amount,
+            amount: scheduleItem.amount,
+            metadata: {
+              installmentNo: scheduleItem.installmentNo,
+              totalInstallments: installmentConfig.selectedInstallments,
+              termRentTotal: installmentConfig.termRentTotal,
+              cycleOffset,
+              isFinalInstallment: scheduleItem.installmentNo === installmentConfig.selectedInstallments,
+            },
+          };
+        } else {
+          rentItem = null;
+        }
+      } else {
         rentItem = {
           type: 'rent',
-          description: scheduleItem.description || `ค่าเช่าห้องพัก (งวดที่ ${scheduleItem.installmentNo}/${installmentConfig.selectedInstallments})`,
+          description: 'ค่าเช่าห้องพัก',
           quantity: '1.00',
-          unit: 'installment',
-          unitPrice: scheduleItem.amount,
-          amount: scheduleItem.amount,
-          metadata: {
-            installmentNo: scheduleItem.installmentNo,
-            totalInstallments: installmentConfig.selectedInstallments,
-            termRentTotal: installmentConfig.termRentTotal,
-            cycleOffset,
-            isFinalInstallment: scheduleItem.installmentNo === installmentConfig.selectedInstallments,
-          },
+          unit: 'month',
+          unitPrice: formatDecimal(rentAmount),
+          amount: formatDecimal(rentAmount),
+        };
+      }
+    } else if (provisionalTerm) {
+      if (provisionalTerm.rentalType === 'MONTHLY') {
+        const unitRent = toDecimal(provisionalTerm.unitRentAmount.toString());
+        rentItem = {
+          type: 'rent',
+          description: 'ค่าเช่าห้องพัก',
+          quantity: '1.00',
+          unit: 'month',
+          unitPrice: formatDecimal(unitRent),
+          amount: formatDecimal(unitRent),
         };
       } else {
-        // After final installment: omit rent line item entirely! (No zero-value rent line)
-        rentItem = null;
+        // TERM
+        const totalRent = toDecimal(provisionalTerm.totalRentAmount.toString());
+        const installments = provisionalTerm.termInstallmentCount || 1;
+        const termStart = new Date(provisionalTerm.startDate);
+        const cycleStart = new Date(cycle.periodStart);
+        const cycleOffset = (cycleStart.getFullYear() - termStart.getFullYear()) * 12 + (cycleStart.getMonth() - termStart.getMonth());
+
+        if (cycleOffset >= 0 && cycleOffset < installments) {
+          const installmentBase = divDecimals(totalRent, installments.toString());
+          const isLast = cycleOffset === installments - 1;
+          const priorSum = mulDecimals(installmentBase, (installments - 1).toString());
+          const installmentAmt = isLast ? subDecimals(totalRent, priorSum) : installmentBase;
+          rentItem = {
+            type: 'rent',
+            description: `ค่าเช่าห้องพัก (งวดที่ ${cycleOffset + 1}/${installments})`,
+            quantity: '1.00',
+            unit: 'installment',
+            unitPrice: formatDecimal(installmentAmt),
+            amount: formatDecimal(installmentAmt),
+          };
+        } else {
+          rentItem = null;
+        }
       }
-    } else {
-      rentItem = {
-        type: 'rent',
-        description: 'ค่าเช่าห้องพัก',
-        quantity: '1.00',
-        unit: 'month',
-        unitPrice: formatDecimal(rentAmount),
-        amount: formatDecimal(rentAmount),
-      };
     }
 
     const items: Array<{ type: string; description: string; quantity: string; unit?: string; unitPrice: string; amount: string; metadata?: any }> = [];
@@ -379,7 +466,7 @@ export class BillingService {
         desc = `ค่าที่จอดรถ (${peopleCount} คน)`;
         meta = { mode: 'person', peopleCount };
       } else if (isPerVehicle) {
-        const vehicles = await this.tenantRepo.findVehicles(contract.tenantId, dormitoryId);
+        const vehicles = await this.tenantRepo.findVehicles(tenantId, dormitoryId);
         const vehicleCount = vehicles.length;
         const vehicleCountDec = toDecimal(vehicleCount.toString());
         q = vehicleCountDec;
@@ -402,15 +489,67 @@ export class BillingService {
       }
     }
 
+    // Query RoomBillingCycleSnapshot for manual outstanding and other fees
+    const cycleSnapshot = await prisma.roomBillingCycleSnapshot.findUnique({
+      where: {
+        dormitory_billing_cycle_room_unique: {
+          dormitoryId,
+          billingCycleId,
+          roomId,
+        },
+      },
+    });
+
+    let manualOutstandingStr = '0.00';
+    let otherFeesList: Array<{ description: string; amount: string }> = [];
+
+    if (cycleSnapshot) {
+      if (cycleSnapshot.manualOutstandingAmount) {
+        const outAmt = toDecimal(cycleSnapshot.manualOutstandingAmount.toString());
+        manualOutstandingStr = formatDecimal(outAmt);
+        if (!isZeroDecimal(outAmt)) {
+          items.push({
+            type: 'manual_outstanding',
+            description: 'ค้างชำระ',
+            quantity: '1.00',
+            unit: 'charge',
+            unitPrice: formatDecimal(outAmt),
+            amount: formatDecimal(outAmt),
+          });
+        }
+      }
+      if (cycleSnapshot.otherFees && Array.isArray(cycleSnapshot.otherFees)) {
+        for (const fee of cycleSnapshot.otherFees as any[]) {
+          if (fee && fee.description && fee.amount !== undefined) {
+            const feeAmt = toDecimal(String(fee.amount));
+            if (!isZeroDecimal(feeAmt)) {
+              const feeDesc = String(fee.description).trim();
+              const feeFormatted = formatDecimal(feeAmt);
+              otherFeesList.push({ description: feeDesc, amount: feeFormatted });
+              items.push({
+                type: 'other',
+                description: feeDesc,
+                quantity: '1.00',
+                unit: 'item',
+                unitPrice: feeFormatted,
+                amount: feeFormatted,
+              });
+            }
+          }
+        }
+      }
+    }
+
     let subtotal = toDecimal('0.00');
     for (const item of items) {
       subtotal = addDecimals(subtotal, item.amount);
     }
 
     return {
-      contractId: contract.id,
+      contractId: contract?.id || null,
+      provisionalRentalTermId: provisionalTerm?.id || null,
       roomId,
-      tenantId: contract.tenantId,
+      tenantId,
       rentAmount: rentItem ? rentItem.amount : '0.00',
       waterUsage: formatDecimal(waterUsage),
       waterRate: formatDecimal(waterRate),
@@ -421,6 +560,8 @@ export class BillingService {
       commonFee: formatDecimal(commonFee),
       internetFee: formatDecimal(internetFee),
       parkingFee: formatDecimal(parkingFee),
+      manualOutstandingAmount: manualOutstandingStr,
+      otherFees: otherFeesList,
       peopleCount,
       subtotal: formatDecimal(subtotal),
       discountAmount: '0.00',
@@ -461,17 +602,34 @@ export class BillingService {
       throw err;
     }
 
-    // Derive/validate active contract and tenant for room
+    // Derive/validate active contract or active provisional rental term for room
     const activeContracts = await this.contractRepo.findActiveContractsForRoom(dormitoryId, data.roomId);
-    if (activeContracts.length === 0) {
-      const err = new Error('NO_ACTIVE_CONTRACT_FOR_ROOM');
-      (err as any).statusCode = 404;
-      (err as any).code = 'NO_ACTIVE_CONTRACT_FOR_ROOM';
-      throw err;
-    }
-    const contract = activeContracts[0];
+    let contract = activeContracts.length > 0 ? activeContracts[0] : null;
+    let provisionalTerm: any = null;
 
-    if (data.contractId && data.contractId !== contract.id) {
+    if (!contract) {
+      provisionalTerm = await prisma.provisionalRentalTerm.findFirst({
+        where: {
+          dormitoryId,
+          roomId: data.roomId,
+          status: 'ACTIVE',
+          deletedAt: null,
+        },
+      });
+
+      if (!provisionalTerm) {
+        const err = new Error('NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM');
+        (err as any).statusCode = 404;
+        (err as any).code = 'NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM';
+        throw err;
+      }
+    }
+
+    const effectiveContractId = contract ? contract.id : null;
+    const effectiveProvisionalRentalTermId = provisionalTerm ? provisionalTerm.id : null;
+    const effectiveTenantId = contract ? contract.tenantId : provisionalTerm.tenantId;
+
+    if (data.contractId && effectiveContractId && data.contractId !== effectiveContractId) {
       const err = new Error('CONTRACT_ROOM_MISMATCH');
       (err as any).statusCode = 400;
       (err as any).code = 'CONTRACT_ROOM_MISMATCH';
@@ -479,21 +637,19 @@ export class BillingService {
       throw err;
     }
 
-    if (data.tenantId && data.tenantId !== contract.tenantId) {
+    if (data.tenantId && data.tenantId !== effectiveTenantId) {
       const err = new Error('TENANT_CONTRACT_MISMATCH');
       (err as any).statusCode = 400;
       (err as any).code = 'TENANT_CONTRACT_MISMATCH';
-      (err as any).message = 'ผู้เช่าที่ระบุไม่ตรงกับผู้เช่าในสัญญา';
+      (err as any).message = 'ผู้เช่าที่ระบุไม่ตรงกับผู้เช่าในห้องพัก';
       throw err;
     }
 
-    const effectiveContractId = contract.id;
-    const effectiveTenantId = contract.tenantId;
-
-    const existingBillBefore = await this.billRepo.findByCycleAndContract(
+    // Check existing non-cancelled current bill for this room & cycle
+    const existingBillBefore = await this.billRepo.findByCycleAndRoom(
       dormitoryId,
       data.billingCycleId,
-      effectiveContractId
+      data.roomId
     );
     if (existingBillBefore) {
       const items = await this.billRepo.getBillItems(existingBillBefore.id, dormitoryId);
@@ -545,10 +701,10 @@ export class BillingService {
     return this.billRepo.withTransaction(async (tx) => {
       await this.billRepo.executeRawLock(data.roomId, tx);
 
-      const existingBill = await this.billRepo.findByCycleAndContract(
+      const existingBill = await this.billRepo.findByCycleAndRoom(
         dormitoryId,
         data.billingCycleId,
-        effectiveContractId,
+        data.roomId,
         tx
       );
       if (existingBill) {
@@ -567,6 +723,7 @@ export class BillingService {
           {
             billingCycleId: data.billingCycleId,
             contractId: effectiveContractId,
+            provisionalRentalTermId: effectiveProvisionalRentalTermId,
             roomId: data.roomId,
             tenantId: effectiveTenantId,
             billNumber,
@@ -586,19 +743,19 @@ export class BillingService {
         );
       } catch (err: any) {
         if (err.code === 'P2002') {
-          const doubleCheckExisting = await this.billRepo.findByCycleAndContract(
+          const doubleCheckExisting = await this.billRepo.findByCycleAndRoom(
             dormitoryId,
             data.billingCycleId,
-            effectiveContractId,
+            data.roomId,
             tx
           );
           if (doubleCheckExisting) {
             const items = await this.billRepo.getBillItems(doubleCheckExisting.id, dormitoryId, tx);
             return { bill: doubleCheckExisting, items, created: false };
           }
-          const e = new Error('BILL_ALREADY_EXISTS_FOR_CONTRACT');
+          const e = new Error('BILL_ALREADY_EXISTS_FOR_ROOM');
           (e as any).statusCode = 409;
-          (e as any).code = 'BILL_ALREADY_EXISTS_FOR_CONTRACT';
+          (e as any).code = 'BILL_ALREADY_EXISTS_FOR_ROOM';
           throw e;
         }
         throw err;
@@ -613,7 +770,7 @@ export class BillingService {
           action: 'bill.generate',
           resourceType: 'bill',
           resourceId: bill.id,
-          details: { billNumber, cycle: cycle.cycleCode },
+          details: { billNumber, cycle: cycle.cycleCode, roomId: data.roomId },
         });
       }
 
@@ -642,13 +799,14 @@ export class BillingService {
     }
 
     const issuanceNow = new Date();
+    const prisma = getPrismaClient();
 
     let targetRooms: string[] = [];
     if (roomIds && roomIds.length > 0) {
       targetRooms = roomIds;
     } else {
       const roomRes = await this.roomRepo.findAll(dormitoryId);
-      targetRooms = roomRes.items.filter((r) => r.status === 'occupied').map((r) => r.id);
+      targetRooms = roomRes.items.map((r) => r.id);
     }
 
     const generatedBills: BillEntity[] = [];
@@ -658,13 +816,26 @@ export class BillingService {
 
     for (const roomId of targetRooms) {
       const activeContracts = await this.contractRepo.findActiveContractsForRoom(dormitoryId, roomId);
-      if (activeContracts.length === 0) {
-        excluded.push({ roomId, reason: 'NO_ACTIVE_CONTRACT' });
+      let contract = activeContracts.length > 0 ? activeContracts[0] : null;
+      let provisionalTerm: any = null;
+
+      if (!contract) {
+        provisionalTerm = await prisma.provisionalRentalTerm.findFirst({
+          where: {
+            dormitoryId,
+            roomId,
+            status: 'ACTIVE',
+            deletedAt: null,
+          },
+        });
+      }
+
+      if (!contract && !provisionalTerm) {
+        excluded.push({ roomId, reason: 'NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM' });
         continue;
       }
 
-      const contract = activeContracts[0];
-      const existing = await this.billRepo.findByCycleAndContract(dormitoryId, billingCycleId, contract.id);
+      const existing = await this.billRepo.findByCycleAndRoom(dormitoryId, billingCycleId, roomId);
       if (existing) {
         excluded.push({ roomId, reason: 'BILL_ALREADY_EXISTS' });
         continue;
@@ -675,9 +846,7 @@ export class BillingService {
           dormitoryId,
           {
             billingCycleId,
-            contractId: contract.id,
             roomId,
-            tenantId: contract.tenantId,
           },
           userId,
           issuanceNow
@@ -685,7 +854,7 @@ export class BillingService {
         generatedBills.push(bill);
         generated.push({ roomId, billId: bill.id, billNumber: bill.billNumber });
       } catch (err: any) {
-        if (err.code === 'MISSING_METER_READING' || err.code === 'NO_ACTIVE_CONTRACT_FOR_ROOM') {
+        if (err.code === 'MISSING_METER_READING' || err.code === 'NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM' || err.code === 'PROVISIONAL_TERM_NOT_ELIGIBLE_FOR_CYCLE') {
           excluded.push({ roomId, reason: err.code });
         } else {
           failed.push({

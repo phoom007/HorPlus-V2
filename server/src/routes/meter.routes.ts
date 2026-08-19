@@ -4,19 +4,25 @@ import { MeterService } from '../services/meter.service.js';
 import { createRequireSessionMiddleware } from '../middleware/require-session.js';
 import { requireDormitoryPermission } from '../middleware/permission.js';
 import { requireDormitoryWriteEntitlement } from '../middleware/entitlement.js';
+import { BillingService } from '../services/billing.service.js';
+import { provisionalRentalTermService } from '../services/provisional-rental-term.service.js';
 import {
   CreateMeterDeviceSchema,
   ReplaceMeterSchema,
   BulkMeterReadingSchema,
   UpdateMeterReadingSchema,
   UpdateCyclePeopleCountSchema,
+  BulkSaveMeterWorkspaceSchema,
+  ToggleRoomBillSwitchSchema,
+  CreateProvisionalRentalTermSchema,
 } from '../schemas/billing-meter.schemas.js';
 import { billingOrchestrationService } from '../services/billing-orchestration.service.js';
 import { getPrismaClient } from '../db/prisma.js';
 
 export function createMeterRouter(
   authService: AuthenticationService,
-  meterService: MeterService
+  meterService: MeterService,
+  billingService?: BillingService
 ): Router {
   const router = Router();
   const requireSession = createRequireSessionMiddleware(authService);
@@ -257,6 +263,90 @@ export function createMeterRouter(
       });
 
       res.json({ data: snapshots });
+    } catch (err) {
+      handleServiceError(res, err, req);
+    }
+  });
+
+  // POST /api/v1/meters/workspace/bulk
+  router.post('/workspace/bulk', mutationGuard('meter:write'), async (req: Request, res: Response) => {
+    if (!verifyCsrf(req, res)) return;
+    try {
+      const dormId = getDormitoryId(req);
+      const parsed = BulkSaveMeterWorkspaceSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'ข้อมูลตารางมิเตอร์ไม่ถูกต้อง',
+            fieldErrors: parsed.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })),
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+
+      const result = await meterService.saveBulkMeterWorkspace(dormId, parsed.data, req.auth?.userId);
+      res.json({ success: true, savedCount: result.savedCount });
+    } catch (err) {
+      handleServiceError(res, err, req);
+    }
+  });
+
+  // POST /api/v1/meters/switch
+  router.post('/switch', mutationGuard('meter:write'), async (req: Request, res: Response) => {
+    if (!verifyCsrf(req, res)) return;
+    try {
+      const dormId = getDormitoryId(req);
+      const parsed = ToggleRoomBillSwitchSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'ข้อมูลการเปิดปิดสถานะบิลไม่ถูกต้อง',
+            fieldErrors: parsed.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })),
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+
+      const result = await meterService.toggleRoomBillSwitch(
+        dormId,
+        parsed.data,
+        req.auth?.userId,
+        billingService
+      );
+      res.json({ success: true, ...result });
+    } catch (err) {
+      handleServiceError(res, err, req);
+    }
+  });
+
+  // POST /api/v1/meters/provisional-terms
+  router.post('/provisional-terms', mutationGuard('meter:write'), async (req: Request, res: Response) => {
+    if (!verifyCsrf(req, res)) return;
+    try {
+      const dormId = getDormitoryId(req);
+      const parsed = CreateProvisionalRentalTermSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'ข้อมูลการสร้างผู้เช่าชั่วคราวไม่ถูกต้อง',
+            fieldErrors: parsed.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })),
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+
+      const result = await provisionalRentalTermService.createProvisionalTenantAndTerm(
+        dormId,
+        parsed.data,
+        req.auth?.userId
+      );
+      res.status(201).json({ success: true, data: result });
     } catch (err) {
       handleServiceError(res, err, req);
     }

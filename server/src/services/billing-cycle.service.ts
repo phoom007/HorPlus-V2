@@ -346,17 +346,47 @@ export class BillingCycleService {
     }
   }
 
+  public async getFirstBillingCycle(dormitoryId: string): Promise<BillingCycleEntity | null> {
+    const prisma = (await import('../db/prisma.js')).getPrismaClient();
+    const earliest = await prisma.billingCycle.findFirst({
+      where: { dormitoryId },
+      orderBy: { periodStart: 'asc' },
+    });
+    if (!earliest) return null;
+    return this.billingCycleRepo.findById(earliest.id, dormitoryId);
+  }
+
+  public async isFirstBillingCycle(dormitoryId: string, cycleIdOrCode: string): Promise<boolean> {
+    const prisma = (await import('../db/prisma.js')).getPrismaClient();
+    const earliest = await prisma.billingCycle.findFirst({
+      where: { dormitoryId },
+      orderBy: { periodStart: 'asc' },
+    });
+    if (!earliest) return false;
+    return earliest.id === cycleIdOrCode || earliest.cycleCode === cycleIdOrCode;
+  }
+
   public async getBillingCycles(
     dormitoryId: string,
     filter: BillingCycleFilterQuery = {}
-  ): Promise<{ items: BillingCycleEntity[]; total: number }> {
-    return this.billingCycleRepo.findAll(dormitoryId, filter);
+  ): Promise<{ items: (BillingCycleEntity & { isFirstCycle?: boolean })[]; total: number; firstBillingCycleId?: string | null }> {
+    const res = await this.billingCycleRepo.findAll(dormitoryId, filter);
+    const prisma = (await import('../db/prisma.js')).getPrismaClient();
+    const earliest = await prisma.billingCycle.findFirst({
+      where: { dormitoryId },
+      orderBy: { periodStart: 'asc' },
+    });
+    const items = res.items.map((item) => ({
+      ...item,
+      isFirstCycle: earliest ? earliest.id === item.id : false,
+    }));
+    return { items, total: res.total, firstBillingCycleId: earliest?.id || null };
   }
 
   public async getBillingCycleById(
     id: string,
     dormitoryId: string
-  ): Promise<{ cycle: BillingCycleEntity; rateSnapshot: BillingRateSnapshotEntity | null }> {
+  ): Promise<{ cycle: BillingCycleEntity & { isFirstCycle?: boolean }; rateSnapshot: BillingRateSnapshotEntity | null; isFirstCycle: boolean }> {
     const cycle = await this.billingCycleRepo.findById(id, dormitoryId);
     if (!cycle) {
       const err = new Error('BILLING_CYCLE_NOT_FOUND');
@@ -365,8 +395,15 @@ export class BillingCycleService {
       throw err;
     }
 
+    const prisma = (await import('../db/prisma.js')).getPrismaClient();
+    const earliest = await prisma.billingCycle.findFirst({
+      where: { dormitoryId },
+      orderBy: { periodStart: 'asc' },
+    });
+    const isFirstCycle = earliest ? earliest.id === cycle.id : false;
+
     const rateSnapshot = await this.billingCycleRepo.findRateSnapshot(cycle.id, dormitoryId);
-    return { cycle, rateSnapshot };
+    return { cycle: { ...cycle, isFirstCycle }, rateSnapshot, isFirstCycle };
   }
 
   public async getCycleRateSnapshot(
