@@ -35,9 +35,11 @@ import {
   OtherFeeItemSchema,
   SaveMeterWorkspaceRowSchema,
   CreateProvisionalRentalTermSchema,
-  BulkSaveMeterWorkspaceSchema,
-  ToggleRoomBillSwitchSchema,
 } from '../../schemas/billing-meter.schemas.js';
+import request from 'supertest';
+import express from 'express';
+import { cookieParserMiddleware } from '../../middleware/cookie-parser.middleware.js';
+import { createMeterRouter } from '../../routes/meter.routes.js';
 import crypto from 'crypto';
 
 describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite', () => {
@@ -71,6 +73,7 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
   let testRoom3Id: string;
   let cycle1Id: string;
   let cycle2Id: string;
+  let testApp: express.Express;
 
   beforeAll(async () => {
     const suffix = crypto.randomBytes(4).toString('hex');
@@ -220,6 +223,50 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
       },
     });
     cycle2Id = c2.id;
+
+    // Setup test Express app for real HTTP route boundary testing
+    const mockAuthService: any = {
+      verifyCsrf: () => true,
+      validateSession: async () => ({
+        userId: 'user-owner-1',
+        sessionId: 'session-test-123',
+        tokenVersion: 1,
+        user: { id: 'user-owner-1', email: 'owner@example.com' },
+        session: { id: 'session-test-123', userId: 'user-owner-1' },
+        memberships: [{ id: 'mem-1', dormitoryId: testDormitoryId, roleCode: 'OWNER', status: 'active', permissions: ['*'] }],
+        dormitoryId: testDormitoryId,
+        role: 'OWNER',
+      }),
+    };
+
+    testApp = express();
+    testApp.use(express.json());
+    testApp.use((req: any, _res: any, next: any) => {
+      req.auth = {
+        userId: 'user-owner-1',
+        sessionId: 'session-test-123',
+        tokenVersion: 1,
+        user: { id: 'user-owner-1', email: 'owner@example.com' },
+        session: { id: 'session-test-123', userId: 'user-owner-1' },
+        memberships: [{ id: 'mem-1', dormitoryId: testDormitoryId, roleCode: 'OWNER', status: 'active', permissions: ['*'] }],
+        dormitoryId: testDormitoryId,
+        role: 'OWNER',
+        permissions: ['*'],
+      };
+      req.dormitoryContext = {
+        dormitoryId: testDormitoryId,
+        roleCode: 'OWNER',
+        permissions: ['*'],
+      };
+      req.cookies = {
+        horplus_session: 'session-cookie-123',
+        horplus_csrf: 'csrf-test-token',
+      };
+      req.headers['x-dormitory-id'] = testDormitoryId;
+      req.headers['x-csrf-token'] = 'csrf-test-token';
+      next();
+    });
+    testApp.use('/api/v1/meters', createMeterRouter(mockAuthService, meterService, billingService));
   });
 
   afterAll(async () => {
@@ -1245,7 +1292,7 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
   // --------------------------------------------------------------------------
   // TEST 8: Pull Previous Authority & Strict Server HTTP Boundary
   // --------------------------------------------------------------------------
-  it('17. Pull Previous Authority: pulls authoritative MeterReading records from previous cycle without bill existence', async () => {
+  it('17. Pull Previous Authority: pulls authoritative MeterReading records from previous cycle without bill existence and returns previousCyclePeopleCount', async () => {
     // 1. Create a fresh room with no prior bills
     const freshRoom = await prisma.room.create({
       data: {
@@ -1296,36 +1343,217 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
     expect(freshRoomPull).toBeDefined();
     expect(freshRoomPull?.previousWaterCurrentReading).toBe('1234.00');
     expect(freshRoomPull?.previousElectricityCurrentReading).toBe('5678.00');
+    expect(freshRoomPull?.previousCyclePeopleCount).toBeNull(); // No cycle1 snapshot existed for freshRoom
     expect(freshRoomPull?.currentHouseholdPeopleCount).toBe(0); // Vacant room
   });
 
-  it('18. Strict Server HTTP Boundary: rejects raw numeric JSON money inputs', async () => {
-    const rawNumberPayload = {
-      billingCycleId: cycle1Id,
-      rows: [
-        {
-          roomId: testRoom1Id,
-          manualOutstandingAmount: 150, // Number type -> must reject
-        },
-      ],
-    };
-
-    const parsedBulk = BulkSaveMeterWorkspaceSchema.safeParse(rawNumberPayload);
-    expect(parsedBulk.success).toBe(false);
-
-    const rawOtherFeeNumber = {
-      billingCycleId: cycle1Id,
-      roomId: testRoom1Id,
-      action: 'issue',
-      dirtyRow: {
-        roomId: testRoom1Id,
-        otherFees: [
-          { description: 'ค่าบริการ', amount: 500 }, // Number type -> must reject
-        ],
+  it('18. Real HTTP Route Boundary Proof: verifies real router/Zod rejection of raw numeric JSON money', async () => {
+    const httpRoom = await prisma.room.create({
+      data: {
+        dormitoryId: testDormitoryId,
+        buildingId: testBuildingId,
+        roomNumber: 'HTTP-ROUTE-1',
+        normalizedRoomNumber: 'HTTP-ROUTE-1',
+        roomType: 'standard',
+        monthlyRent: toDecimal('4500.00'),
+        status: 'vacant',
       },
-    };
+    });
 
-    const parsedSwitch = ToggleRoomBillSwitchSchema.safeParse(rawOtherFeeNumber);
-    expect(parsedSwitch.success).toBe(false);
+    // 1. Valid canonical decimal payload passes HTTP 200
+    const validRes = await request(testApp)
+      .post('/api/v1/meters/workspace/bulk')
+      .set('x-dormitory-id', testDormitoryId)
+      .set('x-csrf-token', 'csrf-test-token')
+      .send({
+        billingCycleId: cycle1Id,
+        rows: [
+          {
+            roomId: httpRoom.id,
+            waterCurr: '100.00',
+            manualOutstandingAmount: '150.00',
+            otherFees: [
+              { description: 'ค่าทำความสะอาด', amount: '500.00' },
+            ],
+          },
+        ],
+      });
+    expect(validRes.status).toBe(200);
+    expect(validRes.body.success).toBe(true);
+
+    // 2. Invalid raw numeric manualOutstandingAmount fails HTTP 400 with VALIDATION_ERROR
+    const invalidMoneyRes = await request(testApp)
+      .post('/api/v1/meters/workspace/bulk')
+      .set('x-dormitory-id', testDormitoryId)
+      .set('x-csrf-token', 'csrf-test-token')
+      .send({
+        billingCycleId: cycle1Id,
+        rows: [
+          {
+            roomId: httpRoom.id,
+            manualOutstandingAmount: 150, // raw number -> must be rejected
+          },
+        ],
+      });
+    expect(invalidMoneyRes.status).toBe(400);
+    expect(invalidMoneyRes.body.error?.code).toBe('VALIDATION_ERROR');
+
+    // 3. Invalid raw numeric otherFee amount fails HTTP 400 with VALIDATION_ERROR
+    const invalidFeeRes = await request(testApp)
+      .post('/api/v1/meters/workspace/bulk')
+      .set('x-dormitory-id', testDormitoryId)
+      .set('x-csrf-token', 'csrf-test-token')
+      .send({
+        billingCycleId: cycle1Id,
+        rows: [
+          {
+            roomId: httpRoom.id,
+            otherFees: [
+              { description: 'ค่าทำความสะอาด', amount: 500 }, // raw number -> must be rejected
+            ],
+          },
+        ],
+      });
+    expect(invalidFeeRes.status).toBe(400);
+    expect(invalidFeeRes.body.error?.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('19. Pull Previous DB-Mutation Proof: strictly read-only, zero DB writes, and zero pending correction consumption', async () => {
+    // 1. Create a fresh room with pending correction
+    const roomWithCorrection = await prisma.room.create({
+      data: {
+        dormitoryId: testDormitoryId,
+        buildingId: testBuildingId,
+        roomNumber: 'PULL-MUT-1',
+        normalizedRoomNumber: 'PULL-MUT-1',
+        roomType: 'standard',
+        monthlyRent: toDecimal('4500.00'),
+        status: 'vacant',
+      },
+    });
+
+    const pendingCorrection = await prisma.roomNextCycleCorrection.create({
+      data: {
+        dormitoryId: testDormitoryId,
+        roomId: roomWithCorrection.id,
+        sourceBillingCycleId: cycle1Id,
+        peopleCount: 3,
+        consumedAt: null,
+      },
+    });
+
+    // 2. Measure before-call counts of all relevant tables
+    const snapshotCountBefore = await prisma.roomBillingCycleSnapshot.count({ where: { dormitoryId: testDormitoryId } });
+    const correctionCountBefore = await prisma.roomNextCycleCorrection.count({ where: { dormitoryId: testDormitoryId } });
+    const meterReadingCountBefore = await prisma.meterReading.count({ where: { dormitoryId: testDormitoryId } });
+    const billCountBefore = await prisma.bill.count({ where: { dormitoryId: testDormitoryId } });
+    const provisionalCountBefore = await prisma.provisionalRentalTerm.count({ where: { dormitoryId: testDormitoryId } });
+    const occupancyCountBefore = await prisma.occupancy.count({ where: { dormitoryId: testDormitoryId } });
+
+    // 3. Call pullPreviousWorkspaceData
+    const pullResult = await meterService.pullPreviousWorkspaceData(testDormitoryId, cycle2Id);
+    expect(pullResult.hasPreviousCycle).toBe(true);
+
+    // 4. Measure after-call counts
+    const snapshotCountAfter = await prisma.roomBillingCycleSnapshot.count({ where: { dormitoryId: testDormitoryId } });
+    const correctionCountAfter = await prisma.roomNextCycleCorrection.count({ where: { dormitoryId: testDormitoryId } });
+    const meterReadingCountAfter = await prisma.meterReading.count({ where: { dormitoryId: testDormitoryId } });
+    const billCountAfter = await prisma.bill.count({ where: { dormitoryId: testDormitoryId } });
+    const provisionalCountAfter = await prisma.provisionalRentalTerm.count({ where: { dormitoryId: testDormitoryId } });
+    const occupancyCountAfter = await prisma.occupancy.count({ where: { dormitoryId: testDormitoryId } });
+
+    // Assert: ZERO insertions, ZERO deletions
+    expect(snapshotCountAfter).toBe(snapshotCountBefore);
+    expect(correctionCountAfter).toBe(correctionCountBefore);
+    expect(meterReadingCountAfter).toBe(meterReadingCountBefore);
+    expect(billCountAfter).toBe(billCountBefore);
+    expect(provisionalCountAfter).toBe(provisionalCountBefore);
+    expect(occupancyCountAfter).toBe(occupancyCountBefore);
+
+    // Assert: Pending correction was NOT consumed (consumedAt is strictly null)
+    const freshCorrection = await prisma.roomNextCycleCorrection.findUnique({
+      where: { id: pendingCorrection.id },
+    });
+    expect(freshCorrection?.consumedAt).toBeNull();
+  });
+
+  it('20. Stale Snapshot Household Authority: returns current household truth (2) when snapshot is stale (1) and leaves snapshot untouched', async () => {
+    // 1. Create a room with an active tenant + 1 active co-occupant (household truth = 2)
+    const staleRoom = await prisma.room.create({
+      data: {
+        dormitoryId: testDormitoryId,
+        buildingId: testBuildingId,
+        roomNumber: 'STALE-SNAP-1',
+        normalizedRoomNumber: 'STALE-SNAP-1',
+        roomType: 'standard',
+        monthlyRent: toDecimal('4500.00'),
+        status: 'occupied',
+      },
+    });
+
+    const tenant = await prisma.tenant.create({
+      data: {
+        dormitoryId: testDormitoryId,
+        tenantNumber: `T-STALE-${Date.now()}`,
+        firstName: 'Somchai',
+        displayName: 'Somchai S.',
+        status: 'active',
+      },
+    });
+
+    await prisma.tenantCoOccupant.create({
+      data: {
+        dormitoryId: testDormitoryId,
+        tenantId: tenant.id,
+        name: 'Co-occupant 1',
+        status: 'active',
+      },
+    });
+
+    const cycle2 = await billingCycleRepo.findById(cycle2Id, testDormitoryId);
+
+    await prisma.contract.create({
+      data: {
+        dormitoryId: testDormitoryId,
+        roomId: staleRoom.id,
+        tenantId: tenant.id,
+        contractNumber: `CTR-STALE-${Date.now()}`,
+        status: 'active',
+        startDate: cycle2!.periodStart,
+        endDate: cycle2!.periodEnd,
+        rentAmount: toDecimal('4500.00'),
+      },
+    });
+
+    // 2. Insert stale snapshot with peopleCount = 1 for cycle2Id
+    await prisma.roomBillingCycleSnapshot.create({
+      data: {
+        dormitoryId: testDormitoryId,
+        billingCycleId: cycle2Id,
+        roomId: staleRoom.id,
+        peopleCount: 1,
+        source: 'MANUAL_STALE',
+      },
+    });
+
+    // 3. Call pullPreviousWorkspaceData
+    const pullData = await meterService.pullPreviousWorkspaceData(testDormitoryId, cycle2Id);
+    const staleRoomPull = pullData.rooms.find((r) => r.roomId === staleRoom.id);
+
+    expect(staleRoomPull).toBeDefined();
+    // Assert: Returns current household truth (2), NOT the stale snapshot (1)
+    expect(staleRoomPull?.currentHouseholdPeopleCount).toBe(2);
+
+    // Assert: Snapshot in DB was NOT rewritten/mutated (still 1)
+    const snapInDb = await prisma.roomBillingCycleSnapshot.findUnique({
+      where: {
+        dormitory_billing_cycle_room_unique: {
+          dormitoryId: testDormitoryId,
+          billingCycleId: cycle2Id,
+          roomId: staleRoom.id,
+        },
+      },
+    });
+    expect(snapInDb?.peopleCount).toBe(1);
   });
 });

@@ -13,21 +13,44 @@
  * Only fields that are actually defined/present in the dirty row are emitted.
  * Missing fields are NOT filled with "0" or default values.
  * 
+ * Fail-Closed Invariant:
+ * Invalid/empty/negative/scientific numbers are rejected with validation errors;
+ * fee amounts are NEVER silently converted into "0.00".
+ * 
  * @license Apache-2.0
  */
 
-export function formatCanonicalDecimalString(val: unknown): string | undefined {
+const CANONICAL_DECIMAL_REGEX = /^\d+(\.\d{1,2})?$/;
+
+export function formatCanonicalDecimalString(val: unknown, fieldName: string = 'จำนวน'): string | undefined {
   if (val === undefined || val === null) return undefined;
+
+  if (typeof val === 'number') {
+    if (isNaN(val) || !isFinite(val) || val < 0) {
+      throw new Error(`ฟิลด์ ${fieldName} ไม่ถูกต้อง: ต้องเป็นตัวเลขจำนวนบวก`);
+    }
+    const str = String(val);
+    if (str.includes('e') || str.includes('E')) {
+      throw new Error(`ฟิลด์ ${fieldName} ไม่ถูกต้อง: ห้ามใช้สัญกรณ์วิทยาศาสตร์`);
+    }
+    if (!CANONICAL_DECIMAL_REGEX.test(str)) {
+      throw new Error(`ฟิลด์ ${fieldName} ไม่ถูกต้อง: ต้องเป็นตัวเลขทศนิยมไม่เกิน 2 ตำแหน่ง (${str})`);
+    }
+    return str;
+  }
+
   if (typeof val === 'string') {
     const trimmed = val.trim();
-    if (!trimmed) return undefined;
+    if (!trimmed) {
+      throw new Error(`ฟิลด์ ${fieldName} ไม่สามารถเป็นค่าว่างได้`);
+    }
+    if (!CANONICAL_DECIMAL_REGEX.test(trimmed)) {
+      throw new Error(`ฟิลด์ ${fieldName} ไม่ถูกต้อง: ต้องเป็นตัวเลขทศนิยมไม่เกิน 2 ตำแหน่ง (${trimmed})`);
+    }
     return trimmed;
   }
-  if (typeof val === 'number') {
-    if (isNaN(val) || !isFinite(val)) return undefined;
-    return String(val);
-  }
-  return String(val);
+
+  throw new Error(`ฟิลด์ ${fieldName} ต้องเป็นตัวเลขหรือข้อความตัวเลข`);
 }
 
 export interface RawMeterDirtyRowInput {
@@ -51,44 +74,71 @@ export function serializeMeterWorkspaceDirtyRow(
     roomId: row.roomId,
   };
 
-  const waterPrevStr = formatCanonicalDecimalString(row.waterPrev);
-  if (waterPrevStr !== undefined) {
-    result.waterPrev = waterPrevStr;
+  if (row.waterPrev !== undefined && row.waterPrev !== null) {
+    const waterPrevStr = formatCanonicalDecimalString(row.waterPrev, 'เลขอ่านค่าน้ำเดิม');
+    if (waterPrevStr !== undefined) {
+      result.waterPrev = waterPrevStr;
+    }
   }
 
-  const waterCurrStr = formatCanonicalDecimalString(row.waterCurr);
-  if (waterCurrStr !== undefined) {
-    result.waterCurr = waterCurrStr;
+  if (row.waterCurr !== undefined && row.waterCurr !== null) {
+    const waterCurrStr = formatCanonicalDecimalString(row.waterCurr, 'เลขอ่านค่าน้ำใหม่');
+    if (waterCurrStr !== undefined) {
+      result.waterCurr = waterCurrStr;
+    }
   }
 
-  const elecPrevStr = formatCanonicalDecimalString(row.elecPrev);
-  if (elecPrevStr !== undefined) {
-    result.elecPrev = elecPrevStr;
+  if (row.elecPrev !== undefined && row.elecPrev !== null) {
+    const elecPrevStr = formatCanonicalDecimalString(row.elecPrev, 'เลขอ่านค่าไฟเดิม');
+    if (elecPrevStr !== undefined) {
+      result.elecPrev = elecPrevStr;
+    }
   }
 
-  const elecCurrStr = formatCanonicalDecimalString(row.elecCurr);
-  if (elecCurrStr !== undefined) {
-    result.elecCurr = elecCurrStr;
+  if (row.elecCurr !== undefined && row.elecCurr !== null) {
+    const elecCurrStr = formatCanonicalDecimalString(row.elecCurr, 'เลขอ่านค่าไฟใหม่');
+    if (elecCurrStr !== undefined) {
+      result.elecCurr = elecCurrStr;
+    }
   }
 
   if (row.peopleCount !== undefined && row.peopleCount !== null) {
-    result.peopleCount = Math.floor(Number(row.peopleCount));
+    const num = Number(row.peopleCount);
+    if (isNaN(num) || num < 0) {
+      throw new Error('จำนวนผู้พักอาศัยต้องเป็นตัวเลขจำนวนเต็มบวกหรือ 0');
+    }
+    result.peopleCount = Math.floor(num);
   }
 
   const manualAmount =
-    row.manualOutstandingAmount !== undefined
+    row.manualOutstandingAmount !== undefined && row.manualOutstandingAmount !== null
       ? row.manualOutstandingAmount
       : row.overdueAmount;
-  const manualAmountStr = formatCanonicalDecimalString(manualAmount);
-  if (manualAmountStr !== undefined) {
-    result.manualOutstandingAmount = manualAmountStr;
+  if (manualAmount !== undefined && manualAmount !== null) {
+    const manualAmountStr = formatCanonicalDecimalString(manualAmount, 'ยอดค้างชำระ');
+    if (manualAmountStr !== undefined) {
+      result.manualOutstandingAmount = manualAmountStr;
+    }
   }
 
-  if (row.otherFees && Array.isArray(row.otherFees)) {
-    result.otherFees = row.otherFees.map((f) => ({
-      description: String(f.description || '').trim(),
-      amount: formatCanonicalDecimalString(f.amount) || '0.00',
-    }));
+  if (row.otherFees !== undefined && row.otherFees !== null) {
+    if (!Array.isArray(row.otherFees)) {
+      throw new Error('ค่าใช้จ่ายอื่นๆ ต้องเป็นรายการ (array)');
+    }
+    result.otherFees = row.otherFees.map((f, idx) => {
+      const desc = String(f.description || '').trim();
+      if (!desc) {
+        throw new Error(`รายการค่าใช้จ่ายอื่นๆ ลำดับที่ ${idx + 1} ต้องระบุชื่อรายการ`);
+      }
+      const amtStr = formatCanonicalDecimalString(f.amount, `ค่าใช้จ่ายอื่นๆ "${desc}"`);
+      if (amtStr === undefined) {
+        throw new Error(`รายการค่าใช้จ่ายอื่นๆ ลำดับที่ ${idx + 1} ต้องระบุจำนวนเงิน`);
+      }
+      return {
+        description: desc,
+        amount: amtStr,
+      };
+    });
   }
 
   if (row.isReplaced !== undefined && row.isReplaced !== null) {

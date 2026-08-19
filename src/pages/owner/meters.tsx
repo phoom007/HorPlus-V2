@@ -279,83 +279,9 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     return tenants.find(t => t.id === tenantId);
   };
 
-  const getPrevCycleNewReadings = (roomId: string) => {
-    const [cy, cm] = selectedCycle.split('-').map(Number);
-    let prevYear = cy;
-    let prevMonth = cm - 1;
-    if (prevMonth === 0) {
-      prevMonth = 12;
-      prevYear -= 1;
-    }
-    const targetPrevCycleId = `${prevYear}-${String(prevMonth).padStart(2, '0')}`;
-    return getCycleNewReadings(roomId, targetPrevCycleId);
-  };
-
-  const getPrevCycleBillingPeopleCount = (roomId: string, prevCycleId: string): number => {
-    const compactPrevCycle = prevCycleId.replace('-', '');
-    // 1. Check previous bill
-    const bill = bills.find(b => {
-      const matchRoom = b.roomId === roomId || (b as any).roomNumber === roomId;
-      if (!matchRoom) return false;
-      return Boolean(
-        b.cycleId === prevCycleId ||
-        (b as any).billingCycleId === prevCycleId ||
-        (b as any).cycleCode === prevCycleId ||
-        (b.billNumber && (b.billNumber.includes(prevCycleId) || b.billNumber.includes(compactPrevCycle))) ||
-        (b.billingDate && String(b.billingDate).startsWith(prevCycleId))
-      );
-    });
-
-    if (bill && Array.isArray(bill.items)) {
-      for (const item of bill.items) {
-        const match = item.description?.match(/\((\d+)\s*คน\)/);
-        if (match) {
-          return Number(match[1]);
-        }
-        if (item.metadata?.peopleCount) {
-          return Number(item.metadata.peopleCount);
-        }
-      }
-    }
-
-    // 2. Check previous cycle tenant
-    const prevTenant = getTenantForRoomAndCycle(roomId, prevCycleId);
-    if (prevTenant) {
-      return 1 + (prevTenant.coOccupants?.length || 0);
-    }
-
-    return 0;
-  };
-
-  const getCurrentHouseholdPeopleCount = (roomId: string): number => {
-    const currentTenant = getTenantForRoomAndCycle(roomId, selectedCycle);
-    if (currentTenant) {
-      return 1 + (currentTenant.coOccupants?.length || 0);
-    }
-    return 0;
-  };
-
   const isCycleLoaded = Boolean(loadedCycle && (loadedCycle === selectedCycle || loadedCycle === selectedBillingCycleId || loadedCycle === selectedCycleCode));
 
-  const showPullButton = !isFirstCycle && isCycleLoaded && meterRows.some(row => {
-    const prevData = getPrevCycleNewReadings(row.roomId);
-    const [cy, cm] = selectedCycle.split('-').map(Number);
-    let prevYear = cy;
-    let prevMonth = cm - 1;
-    if (prevMonth === 0) {
-      prevMonth = 12;
-      prevYear -= 1;
-    }
-    const targetPrevCycleId = `${prevYear}-${String(prevMonth).padStart(2, '0')}`;
-    const prevBillingPeople = getPrevCycleBillingPeopleCount(row.roomId, targetPrevCycleId);
-    const currentHouseholdPeople = getCurrentHouseholdPeopleCount(row.roomId);
-
-    const waterMismatch = prevData && isWaterUnit && row.waterPrev !== prevData.waterCurr;
-    const elecMismatch = prevData && isElecUnit && row.elecPrev !== prevData.elecCurr;
-    const peopleMismatch = row.peopleCount !== currentHouseholdPeople || row.peopleCount !== prevBillingPeople || prevBillingPeople !== currentHouseholdPeople;
-
-    return Boolean(waterMismatch || elecMismatch || peopleMismatch);
-  });
+  const showPullButton = !isFirstCycle && isCycleLoaded;
 
   const handlePullPreviousData = async () => {
     if (!selectedBillingCycleId) {
@@ -402,13 +328,19 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
 
           const currHousehold = pRoom.currentHouseholdPeopleCount ?? 0;
           if (row.peopleCount !== currHousehold) {
-            peopleChanges.push({
-              roomNumber: row.roomNumber,
-              prev: row.peopleCount,
-              curr: currHousehold,
-            });
             nextRow.peopleCount = currHousehold;
             newFlashing[`${row.roomId}-peopleCount`] = true;
+          }
+
+          // Compare previousCyclePeopleCount vs currentHouseholdPeopleCount for toast (Section 5)
+          if (pRoom.previousCyclePeopleCount !== null && pRoom.previousCyclePeopleCount !== undefined) {
+            if (pRoom.previousCyclePeopleCount !== currHousehold) {
+              peopleChanges.push({
+                roomNumber: row.roomNumber,
+                prev: pRoom.previousCyclePeopleCount,
+                curr: currHousehold,
+              });
+            }
           }
         }
 
@@ -430,7 +362,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
         }, 1500);
       }
 
-      // Concise toast notification (Section 13)
+      // Concise toast notification comparing previous cycle vs current household (Section 5)
       if (peopleChanges.length === 0) {
         showToast('ดึงข้อมูลก่อนหน้าเรียบร้อย');
       } else if (peopleChanges.length === 1) {

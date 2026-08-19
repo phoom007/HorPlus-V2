@@ -804,6 +804,7 @@ export class ApiMeterAdapter implements MeterDataSource {
       roomId: string;
       previousWaterCurrentReading: string | null;
       previousElectricityCurrentReading: string | null;
+      previousCyclePeopleCount: number | null;
       currentHouseholdPeopleCount: number;
     }>;
   }>> {

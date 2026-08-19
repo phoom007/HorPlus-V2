@@ -71,16 +71,46 @@ describe('LOCAL-07 Batch 01 — Browser/HTTP Boundary & Pull Previous Suite', ()
       expect(serialized.otherFees).toBeUndefined();
     });
 
-    it('formatCanonicalDecimalString handles null, undefined, string, number, and rejects NaN', () => {
+    it('formatCanonicalDecimalString handles null/undefined as omission and formats valid decimals', () => {
       expect(formatCanonicalDecimalString(undefined)).toBeUndefined();
       expect(formatCanonicalDecimalString(null)).toBeUndefined();
-      expect(formatCanonicalDecimalString('')).toBeUndefined();
-      expect(formatCanonicalDecimalString('   ')).toBeUndefined();
-      expect(formatCanonicalDecimalString(NaN)).toBeUndefined();
-      expect(formatCanonicalDecimalString(Infinity)).toBeUndefined();
       expect(formatCanonicalDecimalString(0)).toBe('0');
       expect(formatCanonicalDecimalString('150.00')).toBe('150.00');
       expect(formatCanonicalDecimalString(250.75)).toBe('250.75');
+    });
+
+    it('formatCanonicalDecimalString rejects invalid inputs (fail-closed)', () => {
+      expect(() => formatCanonicalDecimalString('')).toThrow();
+      expect(() => formatCanonicalDecimalString('   ')).toThrow();
+      expect(() => formatCanonicalDecimalString(NaN)).toThrow();
+      expect(() => formatCanonicalDecimalString(Infinity)).toThrow();
+      expect(() => formatCanonicalDecimalString(-1)).toThrow();
+      expect(() => formatCanonicalDecimalString('1e3')).toThrow();
+      expect(() => formatCanonicalDecimalString(10.505)).toThrow();
+      expect(() => formatCanonicalDecimalString('invalid-str')).toThrow();
+    });
+
+    it('fail-closed: does not silently convert invalid/empty fee amounts into "0.00"', () => {
+      expect(() =>
+        serializeMeterWorkspaceDirtyRow({
+          roomId: 'room-103',
+          otherFees: [{ description: 'ค่าบริการ', amount: '' as any }],
+        })
+      ).toThrow();
+
+      expect(() =>
+        serializeMeterWorkspaceDirtyRow({
+          roomId: 'room-103',
+          otherFees: [{ description: 'ค่าบริการ', amount: -50 }],
+        })
+      ).toThrow();
+
+      expect(() =>
+        serializeMeterWorkspaceDirtyRow({
+          roomId: 'room-103',
+          otherFees: [{ description: 'ค่าบริการ', amount: '10.555' }],
+        })
+      ).toThrow();
     });
 
     it('serializeMeterWorkspaceDirtyRows converts multiple rows properly', () => {
@@ -108,6 +138,7 @@ describe('LOCAL-07 Batch 01 — Browser/HTTP Boundary & Pull Previous Suite', ()
             roomId: `room-${i + 1}`,
             previousWaterCurrentReading: '100.00',
             previousElectricityCurrentReading: '500.00',
+            previousCyclePeopleCount: 1,
             currentHouseholdPeopleCount: 1,
           })),
         },
@@ -179,32 +210,88 @@ describe('LOCAL-07 Batch 01 — Browser/HTTP Boundary & Pull Previous Suite', ()
   });
 
   describe('3. Concise Household Toast Formatting Invariants', () => {
-    function formatPullPreviousToast(changes: Array<{ roomNumber: string; prev: number; curr: number }>): string {
-      if (changes.length === 0) {
+    function computePullPreviousToast(
+      rooms: Array<{
+        roomNumber: string;
+        previousCyclePeopleCount: number | null;
+        currentHouseholdPeopleCount: number;
+      }>
+    ): string {
+      const peopleChanges: Array<{ roomNumber: string; prev: number; curr: number }> = [];
+
+      for (const r of rooms) {
+        if (r.previousCyclePeopleCount !== null && r.previousCyclePeopleCount !== undefined) {
+          if (r.previousCyclePeopleCount !== r.currentHouseholdPeopleCount) {
+            peopleChanges.push({
+              roomNumber: r.roomNumber,
+              prev: r.previousCyclePeopleCount,
+              curr: r.currentHouseholdPeopleCount,
+            });
+          }
+        }
+      }
+
+      if (peopleChanges.length === 0) {
         return 'ดึงข้อมูลก่อนหน้าเรียบร้อย';
       }
-      if (changes.length === 1) {
-        const c = changes[0];
+      if (peopleChanges.length === 1) {
+        const c = peopleChanges[0];
         return `${c.roomNumber}: ผู้พัก ${c.prev} → ${c.curr} คน`;
       }
-      return `ดึงข้อมูลแล้ว • ผู้พักเปลี่ยน ${changes.length} ห้อง (ใช้จำนวนปัจจุบัน)`;
+      return `ดึงข้อมูลแล้ว • ผู้พักเปลี่ยน ${peopleChanges.length} ห้อง (ใช้จำนวนปัจจุบัน)`;
     }
 
     it('formats toast with zero changes', () => {
-      expect(formatPullPreviousToast([])).toBe('ดึงข้อมูลก่อนหน้าเรียบร้อย');
+      expect(
+        computePullPreviousToast([
+          { roomNumber: 'A101', previousCyclePeopleCount: 1, currentHouseholdPeopleCount: 1 },
+        ])
+      ).toBe('ดึงข้อมูลก่อนหน้าเรียบร้อย');
     });
 
-    it('formats concise toast with single room change', () => {
-      expect(formatPullPreviousToast([{ roomNumber: 'A103', prev: 1, curr: 2 }])).toBe('A103: ผู้พัก 1 → 2 คน');
+    it('formats concise toast with single room change (previous 1 -> current 2)', () => {
+      expect(
+        computePullPreviousToast([
+          { roomNumber: 'A103', previousCyclePeopleCount: 1, currentHouseholdPeopleCount: 2 },
+        ])
+      ).toBe('A103: ผู้พัก 1 → 2 คน');
+    });
+
+    it('does not invent delta when previousCyclePeopleCount is null/unavailable', () => {
+      expect(
+        computePullPreviousToast([
+          { roomNumber: 'A104', previousCyclePeopleCount: null, currentHouseholdPeopleCount: 2 },
+        ])
+      ).toBe('ดึงข้อมูลก่อนหน้าเรียบร้อย');
     });
 
     it('formats bounded concise toast with multiple room changes without 150 newlines', () => {
       const multiChanges = Array.from({ length: 12 }, (_, i) => ({
         roomNumber: `A${100 + i}`,
-        prev: 1,
-        curr: 2,
+        previousCyclePeopleCount: 1,
+        currentHouseholdPeopleCount: 2,
       }));
-      expect(formatPullPreviousToast(multiChanges)).toBe('ดึงข้อมูลแล้ว • ผู้พักเปลี่ยน 12 ห้อง (ใช้จำนวนปัจจุบัน)');
+      expect(computePullPreviousToast(multiChanges)).toBe(
+        'ดึงข้อมูลแล้ว • ผู้พักเปลี่ยน 12 ห้อง (ใช้จำนวนปัจจุบัน)'
+      );
+    });
+  });
+
+  describe('4. Button Visibility Invariant', () => {
+    function computeShowPullButton(isFirstCycle: boolean, isCycleLoaded: boolean): boolean {
+      return !isFirstCycle && isCycleLoaded;
+    }
+
+    it('hides pull button on first cycle', () => {
+      expect(computeShowPullButton(true, true)).toBe(false);
+    });
+
+    it('shows pull button on non-first cycle when cycle is loaded, without requiring previous bills or precomputed mismatch', () => {
+      expect(computeShowPullButton(false, true)).toBe(true);
+    });
+
+    it('hides pull button when cycle is not loaded', () => {
+      expect(computeShowPullButton(false, false)).toBe(false);
     });
   });
 });

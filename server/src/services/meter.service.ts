@@ -918,6 +918,7 @@ export class MeterService {
       roomId: string;
       previousWaterCurrentReading: string | null;
       previousElectricityCurrentReading: string | null;
+      previousCyclePeopleCount: number | null;
       currentHouseholdPeopleCount: number;
     }>;
   }> {
@@ -931,7 +932,7 @@ export class MeterService {
 
     const prisma = getPrismaClient();
 
-    // Find the immediately preceding billing cycle for this dormitory
+    // 1. Find the immediately preceding billing cycle for this dormitory
     const previousCycle = await prisma.billingCycle.findFirst({
       where: {
         dormitoryId,
@@ -940,10 +941,11 @@ export class MeterService {
       orderBy: { periodStart: 'desc' },
     });
 
+    // 2. Fetch all rooms for this dormitory
     const roomsResult = await this.roomRepo.findAll(dormitoryId);
     const rooms = roomsResult.items || [];
 
-    // If there is a previous cycle, load its authoritative meter readings
+    // 3. Load authoritative previous cycle meter readings (if previous cycle exists)
     const readingMap: Record<string, { waterCurr?: string; elecCurr?: string }> = {};
     if (previousCycle) {
       const prevReadings = await prisma.meterReading.findMany({
@@ -963,24 +965,131 @@ export class MeterService {
       }
     }
 
-    // For each room, resolve current household count
-    const roomResults = await Promise.all(
-      rooms.map(async (room) => {
-        const householdCount = await billingOrchestrationService.resolveCyclePeopleCount(
+    // 4. Load previous cycle snapshots (if previous cycle exists) - STRICTLY READ ONLY
+    const prevSnapshotMap = new Map<string, number>();
+    if (previousCycle) {
+      const prevSnapshots = await prisma.roomBillingCycleSnapshot.findMany({
+        where: {
           dormitoryId,
-          billingCycleId,
-          room.id,
-          undefined
-        );
+          billingCycleId: previousCycle.id,
+        },
+      });
+      for (const snap of prevSnapshots) {
+        prevSnapshotMap.set(snap.roomId, snap.peopleCount);
+      }
+    }
 
-        return {
-          roomId: room.id,
-          previousWaterCurrentReading: readingMap[room.id]?.waterCurr || null,
-          previousElectricityCurrentReading: readingMap[room.id]?.elecCurr || null,
-          currentHouseholdPeopleCount: householdCount,
-        };
-      })
+    // 5. Bounded Aggregate Read for Current Household Truth (ZERO writes, ZERO pending correction consumption)
+    // Priority 1: Qualifying active contracts for the dormitory overlapping the current cycle
+    const activeContracts = await prisma.contract.findMany({
+      where: {
+        dormitoryId,
+        status: { in: ['active', 'expiring_soon', 'pending_signature', 'waiting_extension', 'checking_out'] },
+        deletedAt: null,
+        startDate: { lte: currentCycle.periodEnd },
+        endDate: { gte: currentCycle.periodStart },
+      },
+      include: {
+        tenant: true,
+      },
+      orderBy: [
+        { startDate: 'asc' },
+        { createdAt: 'desc' },
+      ],
+    });
+
+    // Priority 2: Qualifying ACTIVE provisional rental terms overlapping the current cycle
+    const activeProvisionalTerms = await prisma.provisionalRentalTerm.findMany({
+      where: {
+        dormitoryId,
+        status: 'ACTIVE',
+        deletedAt: null,
+        startDate: { lte: currentCycle.periodEnd },
+        endDate: { gte: currentCycle.periodStart },
+      },
+      include: {
+        tenant: true,
+      },
+      orderBy: [
+        { startDate: 'asc' },
+        { createdAt: 'desc' },
+      ],
+    });
+
+    // Collect all relevant tenant IDs for batch co-occupant lookup
+    const allTenantIds = Array.from(
+      new Set([
+        ...activeContracts.map((c) => c.tenantId),
+        ...activeProvisionalTerms.map((p) => p.tenantId),
+      ])
     );
+
+    const coOccupants = allTenantIds.length > 0
+      ? await prisma.tenantCoOccupant.findMany({
+          where: {
+            dormitoryId,
+            tenantId: { in: allTenantIds },
+            deletedAt: null,
+            status: 'active',
+          },
+        })
+      : [];
+
+    const coOccupantCountMap = new Map<string, number>();
+    for (const co of coOccupants) {
+      coOccupantCountMap.set(co.tenantId, (coOccupantCountMap.get(co.tenantId) || 0) + 1);
+    }
+
+    const roomContractMap = new Map<string, typeof activeContracts[0]>();
+    for (const c of activeContracts) {
+      if (!roomContractMap.has(c.roomId)) {
+        roomContractMap.set(c.roomId, c);
+      }
+    }
+
+    const roomProvisionalMap = new Map<string, typeof activeProvisionalTerms[0]>();
+    for (const p of activeProvisionalTerms) {
+      if (!roomProvisionalMap.has(p.roomId)) {
+        roomProvisionalMap.set(p.roomId, p);
+      }
+    }
+
+    // 6. Map in-memory without any per-room DB query or mutation
+    const roomResults = rooms.map((room) => {
+      let householdCount = 0;
+
+      const contract = roomContractMap.get(room.id);
+      if (contract) {
+        if (contract.tenant && contract.tenant.status === 'reserved') {
+          householdCount = 0; // RESERVED future tenant before activation
+        } else {
+          householdCount = 1 + (coOccupantCountMap.get(contract.tenantId) || 0);
+        }
+      } else {
+        const prov = roomProvisionalMap.get(room.id);
+        if (prov) {
+          if (prov.tenant && prov.tenant.status === 'reserved') {
+            householdCount = 0;
+          } else {
+            householdCount = 1 + (coOccupantCountMap.get(prov.tenantId) || 0);
+          }
+        } else {
+          householdCount = 0; // Vacant
+        }
+      }
+
+      const prevWater = readingMap[room.id]?.waterCurr || null;
+      const prevElec = readingMap[room.id]?.elecCurr || null;
+      const prevPeople = prevSnapshotMap.has(room.id) ? prevSnapshotMap.get(room.id)! : null;
+
+      return {
+        roomId: room.id,
+        previousWaterCurrentReading: prevWater,
+        previousElectricityCurrentReading: prevElec,
+        previousCyclePeopleCount: prevPeople,
+        currentHouseholdPeopleCount: householdCount,
+      };
+    });
 
     return {
       hasPreviousCycle: !!previousCycle,
