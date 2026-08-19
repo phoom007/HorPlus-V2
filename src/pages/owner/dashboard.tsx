@@ -40,7 +40,6 @@ import {
 } from 'lucide-react';
 import { formatBaht } from '../../components/GlobalComponents';
 import { LineNotificationModal } from '../../components/LineNotificationModal';
-import { tempMeterRowsCache } from './meters';
 import {
   Bill,
   Room,
@@ -811,9 +810,8 @@ export const OwnerDashboard: React.FC<OwnerDashboardProps> = ({
           {sortedRooms.slice(0, visibleRoomsCount).map((room) => {
             let meterBillStatus: 'draft' | 'pending' | 'paid' = 'draft';
             if (room.status === 'occupied') {
-              const cachedRow = tempMeterRowsCache[selectedCycle]?.find(r => r.roomId === room.id);
-              const existingBill = bills.find(b => b.roomId === room.id && b.cycleId === selectedCycle);
-              const rawStatus = existingBill ? existingBill.status : (cachedRow?.billStatus ?? 'draft');
+              const existingBill = bills.find(b => b.roomId === room.id && (b.cycleId === selectedCycle || (b as any).billingCycleId === selectedCycle));
+              const rawStatus = existingBill ? existingBill.status : 'draft';
               if (rawStatus === 'paid') {
                 meterBillStatus = 'paid';
               } else if (rawStatus === 'draft') {

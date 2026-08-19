@@ -35,7 +35,8 @@ import {
 } from 'lucide-react';
 
 import { User, Room, Tenant, Bill, Contract, MaintenanceRequest, Announcement, AuditLog, Building } from '../types';
-import { clearDormitoryQueryCache } from '../lib/queryClient';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { queryKeys, STALE_TIMES, clearDormitoryQueryCache } from '../lib/queryClient';
 import { clearMeterDraftStore } from '../lib/meterDraftStore';
 
 // Import sub-modules
@@ -171,7 +172,8 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
   user,
   onLogout
 }) => {
-  const { userType, user: sessionUser, onboardingRequired } = React.useContext(AuthContext) || {};
+  const authCtx = React.useContext(AuthContext) || {};
+  const { userType, user: sessionUser, onboardingRequired } = authCtx;
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -241,13 +243,119 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
   const [initialContractId, setInitialContractId] = useState<string | undefined>(undefined);
   
   // Authoritative Billing Cycle State
-  const [billingCycles, setBillingCycles] = useState<any[]>([]);
   const [selectedBillingCycleId, setSelectedBillingCycleId] = useState<string>('');
   const [selectedCycleCode, setSelectedCycleCode] = useState<string>('');
   const [isCycleModalOpen, setIsCycleModalOpen] = useState(false);
   const [tempYear, setTempYear] = useState(new Date().getFullYear());
 
   const selectedCycle = selectedCycleCode;
+
+  // Dynamic Active Dormitory Context Resolution
+  const memberships: any[] = authCtx.memberships || authCtx.user?.memberships || [];
+  const savedDormId = sessionStorage.getItem('active_dormitory_selected_for_session') || localStorage.getItem('selected_dormitory_id');
+  const activeMemberships = memberships.filter((m: any) => !m.status || String(m.status).toLowerCase() === 'active');
+  
+  const validDormId = activeMemberships.find((m: any) => m.dormitoryId === savedDormId)?.dormitoryId 
+    || activeMemberships[0]?.dormitoryId 
+    || authCtx.dormitoryId;
+
+  const activeDormitoryId = (validDormId && validDormId !== 'dorm-1' && validDormId !== 'dorm-001')
+    ? validDormId
+    : (activeMemberships[0]?.dormitoryId || validDormId);
+
+  useEffect(() => {
+    if (activeDormitoryId && activeDormitoryId !== 'dorm-1' && activeDormitoryId !== 'dorm-001') {
+      localStorage.setItem('selected_dormitory_id', activeDormitoryId);
+      clearDormitoryQueryCache();
+      clearMeterDraftStore();
+    }
+  }, [activeDormitoryId]);
+
+  const queryClient = useQueryClient();
+  const dormHeader = activeDormitoryId ? { 'x-dormitory-id': activeDormitoryId } : undefined;
+  const isQueryEnabled = Boolean(activeDormitoryId && !isRegistrationMode);
+
+  // Authoritative Server State Queries (Single Server-State Authority)
+  const roomsQuery = useQuery({
+    queryKey: queryKeys.rooms(activeDormitoryId),
+    queryFn: () => fetchAllPaginated<Room>('/api/v1/properties/rooms', { headers: dormHeader, credentials: 'include' }),
+    enabled: isQueryEnabled,
+    staleTime: STALE_TIMES.ROOMS,
+  });
+
+  const buildingsQuery = useQuery({
+    queryKey: queryKeys.buildings(activeDormitoryId),
+    queryFn: () => fetchAllPaginated<Building>('/api/v1/properties/buildings', { headers: dormHeader, credentials: 'include' }),
+    enabled: isQueryEnabled,
+    staleTime: STALE_TIMES.BUILDINGS,
+  });
+
+  const tenantsQuery = useQuery({
+    queryKey: queryKeys.tenants(activeDormitoryId),
+    queryFn: () => fetchAllPaginated<Tenant>('/api/v1/tenants', { headers: dormHeader, credentials: 'include' }),
+    enabled: isQueryEnabled,
+    staleTime: STALE_TIMES.TENANTS,
+  });
+
+  const contractsQuery = useQuery({
+    queryKey: queryKeys.contracts(activeDormitoryId),
+    queryFn: () => fetchAllPaginated<Contract>('/api/v1/contracts', { headers: dormHeader, credentials: 'include' }),
+    enabled: isQueryEnabled,
+    staleTime: STALE_TIMES.CONTRACTS,
+  });
+
+  const billsQuery = useQuery({
+    queryKey: queryKeys.bills(activeDormitoryId),
+    queryFn: () => fetchAllPaginated<Bill>('/api/v1/bills', { headers: dormHeader, credentials: 'include' }),
+    enabled: isQueryEnabled,
+    staleTime: STALE_TIMES.BILLS,
+  });
+
+  const billingCyclesQuery = useQuery({
+    queryKey: queryKeys.billingCycles(activeDormitoryId),
+    queryFn: () => fetchAllPaginatedWithMeta('/api/v1/billing-cycles', { headers: dormHeader, credentials: 'include' }),
+    enabled: isQueryEnabled,
+    staleTime: STALE_TIMES.BILLING_CYCLES,
+  });
+
+  const maintenanceQuery = useQuery({
+    queryKey: queryKeys.maintenance(activeDormitoryId),
+    queryFn: () => fetchAllPaginated('/api/v1/maintenance', { headers: dormHeader, credentials: 'include' }),
+    enabled: isQueryEnabled,
+    staleTime: STALE_TIMES.MAINTENANCE,
+  });
+
+  const announcementsQuery = useQuery({
+    queryKey: queryKeys.announcements(activeDormitoryId),
+    queryFn: () => fetchAllPaginated<Announcement>('/api/v1/announcements', { headers: dormHeader, credentials: 'include' }),
+    enabled: isQueryEnabled,
+    staleTime: STALE_TIMES.ANNOUNCEMENTS,
+  });
+
+  const rooms: Room[] = roomsQuery.data || [];
+  const buildings: Building[] = buildingsQuery.data || [];
+  const tenants: Tenant[] = tenantsQuery.data || [];
+  const contracts: Contract[] = contractsQuery.data || [];
+  const bills: Bill[] = billsQuery.data || [];
+  const billingCycles: any[] = billingCyclesQuery.data?.data || [];
+  const repairs: any[] = maintenanceQuery.data || [];
+  const announcements: Announcement[] = announcementsQuery.data || [];
+  const auditLogs: AuditLog[] = [];
+
+  useEffect(() => {
+    const cycleResult = billingCyclesQuery.data;
+    if (!cycleResult) return;
+    const loadedCycles = cycleResult.data || [];
+    if (!selectedBillingCycleId || !loadedCycles.some((c: any) => c.id === selectedBillingCycleId)) {
+      if (cycleResult.operationalBillingCycleId && cycleResult.operationalCycleCode) {
+        setSelectedBillingCycleId(cycleResult.operationalBillingCycleId);
+        setSelectedCycleCode(cycleResult.operationalCycleCode);
+      } else if (loadedCycles.length > 0) {
+        setSelectedBillingCycleId(loadedCycles[0].id);
+        setSelectedCycleCode(loadedCycles[0].cycleCode);
+      }
+    }
+  }, [billingCyclesQuery.data, selectedBillingCycleId]);
 
   const handlePrevCycle = () => {
     if (billingCycles.length === 0) return;
@@ -286,16 +394,6 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
     return cycle;
   };
 
-  // Centralized state
-  const [rooms, setRooms] = useState<Room[]>([]);
-  const [tenants, setTenants] = useState<Tenant[]>([]);
-  const [bills, setBills] = useState<Bill[]>([]);
-  const [contracts, setContracts] = useState<Contract[]>([]);
-  const [repairs, setRepairs] = useState<any[]>([]);
-  const [announcements, setAnnouncements] = useState<Announcement[]>([]);
-  const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
-  const [buildings, setBuildings] = useState<Building[]>([]);
-
   // Header Search State & Safe Calculation
   const [headerSearchQuery, setHeaderSearchQuery] = useState('');
   const [isSearchDropdownOpen, setIsSearchDropdownOpen] = useState(false);
@@ -309,7 +407,9 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
     const matchedTenants = (tenants || []).filter(t => {
       if (!t) return false;
       const name = (t.name || '').toLowerCase();
-      const roomNumber = (t.roomNumber || '').toLowerCase();
+      const activeContract = (contracts || []).find(c => c.tenantId === t.id && (c.status === 'active' || c.status === 'scheduled'));
+      const room = activeContract ? (rooms || []).find(r => r.id === activeContract.roomId) : undefined;
+      const roomNumber = (room?.roomNumber || '').toLowerCase();
       const phone = t.phone || '';
       return name.includes(query) || roomNumber.includes(query) || phone.includes(query);
     });
@@ -317,22 +417,26 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
     const matchedRooms = (rooms || []).filter(r => {
       if (!r) return false;
       const roomNumber = (r.roomNumber || '').toLowerCase();
-      return roomNumber.includes(query) &&
-        !matchedTenants.some(t => (t.roomId && t.roomId === r.id) || (t.roomNumber && t.roomNumber === r.roomNumber));
+      return roomNumber.includes(query);
     });
 
     return [
-      ...matchedTenants.map(t => ({
-        type: 'tenant' as const,
-        id: t.id,
-        tenantId: t.id,
-        roomId: t.roomId,
-        title: t.name || `ผู้เช่า ${t.id}`,
-        subtitle: `ห้อง ${t.roomNumber || '-'}`,
-        phone: t.phone || ''
-      })),
+      ...matchedTenants.map(t => {
+        const activeContract = (contracts || []).find(c => c.tenantId === t.id && (c.status === 'active' || c.status === 'scheduled'));
+        const room = activeContract ? (rooms || []).find(r => r.id === activeContract.roomId) : undefined;
+        return {
+          type: 'tenant' as const,
+          id: t.id,
+          tenantId: t.id,
+          roomId: room?.id,
+          title: t.name || `ผู้เช่า ${t.id}`,
+          subtitle: `ห้อง ${room?.roomNumber || '-'}`,
+          phone: t.phone || ''
+        };
+      }),
       ...matchedRooms.map(r => {
-        const occupant = (tenants || []).find(t => (t.roomId && t.roomId === r.id) || (t.roomNumber && t.roomNumber === r.roomNumber));
+        const activeContract = (contracts || []).find(c => c.roomId === r.id && (c.status === 'active' || c.status === 'scheduled'));
+        const occupant = activeContract ? (tenants || []).find(t => t.id === activeContract.tenantId) : undefined;
         return {
           type: occupant ? ('tenant' as const) : ('room' as const),
           id: occupant ? occupant.id : r.id,
@@ -344,7 +448,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
         };
       })
     ].slice(0, 6);
-  }, [headerSearchQuery, tenants, rooms]);
+  }, [headerSearchQuery, tenants, rooms, contracts]);
 
   const handleSelectHeaderSearchResult = (result: typeof headerSearchResults[0]) => {
     if (!result || isRegistrationMode) return;
@@ -447,31 +551,25 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
     setIsSidebarOpen(false);
   };
 
-  // Notification Bell State (PostgreSQL persistent)
-  const [staffNotices, setStaffNotices] = useState<any[]>([]);
-  const [staffUnreadCount, setStaffUnreadCount] = useState<number>(0);
-  const [isNotificationOpen, setIsNotificationOpen] = useState(false);
-
-  const fetchStaffNotifications = async () => {
-    if (isRegistrationMode) return;
-    const reqHeaders: Record<string, string> = {};
-    const savedId = localStorage.getItem('selected_dormitory_id');
-    if (savedId) reqHeaders['x-dormitory-id'] = savedId;
-    try {
-      const res = await fetch('/api/v1/notifications', { headers: reqHeaders, credentials: 'include' });
+  // Notification Bell Query
+  const notificationsQuery = useQuery({
+    queryKey: queryKeys.notifications(activeDormitoryId),
+    queryFn: async () => {
+      if (isRegistrationMode || !activeDormitoryId) return { notifications: [], unreadCount: 0 };
+      const res = await fetch('/api/v1/notifications', { headers: dormHeader, credentials: 'include' });
       if (res.ok) {
         const data = await res.json();
-        setStaffNotices(data.notifications || []);
-        setStaffUnreadCount(data.unreadCount || 0);
+        return { notifications: data.notifications || [], unreadCount: data.unreadCount || 0 };
       }
-    } catch (e) {}
-  };
+      return { notifications: [], unreadCount: 0 };
+    },
+    enabled: Boolean(activeDormitoryId && !isRegistrationMode),
+    staleTime: 15_000,
+  });
 
-  useEffect(() => {
-    if (!isRegistrationMode) {
-      fetchStaffNotifications();
-    }
-  }, [activeTab, isRegistrationMode]);
+  const staffNotices = notificationsQuery.data?.notifications || [];
+  const staffUnreadCount = notificationsQuery.data?.unreadCount || 0;
+  const [isNotificationOpen, setIsNotificationOpen] = useState(false);
 
   const hasUnreadNotifications = staffUnreadCount > 0;
 
@@ -479,181 +577,73 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
     const nextState = !isNotificationOpen;
     setIsNotificationOpen(nextState);
     if (nextState) {
-      fetchStaffNotifications();
+      notificationsQuery.refetch();
     }
   };
 
   const handleMarkStaffNoticeAsRead = async (id: string) => {
-    const reqHeaders: Record<string, string> = {};
-    const savedId = localStorage.getItem('selected_dormitory_id');
-    if (savedId) reqHeaders['x-dormitory-id'] = savedId;
     try {
-      const res = await fetch(`/api/v1/notifications/${id}/read`, { method: 'POST', headers: reqHeaders, credentials: 'include' });
+      const res = await fetch(`/api/v1/notifications/${id}/read`, { method: 'POST', headers: dormHeader, credentials: 'include' });
       if (res.ok) {
-        setStaffNotices(prev => prev.map(n => n.id === id ? { ...n, isRead: true } : n));
-        setStaffUnreadCount(prev => Math.max(0, prev - 1));
+        queryClient.invalidateQueries({ queryKey: queryKeys.notifications(activeDormitoryId) });
       }
     } catch (e) {}
   };
 
   const handleMarkAllStaffNoticesAsRead = async () => {
-    const reqHeaders: Record<string, string> = {};
-    const savedId = localStorage.getItem('selected_dormitory_id');
-    if (savedId) reqHeaders['x-dormitory-id'] = savedId;
     try {
-      const res = await fetch('/api/v1/notifications/read-all', { method: 'POST', headers: reqHeaders, credentials: 'include' });
+      const res = await fetch('/api/v1/notifications/read-all', { method: 'POST', headers: dormHeader, credentials: 'include' });
       if (res.ok) {
-        setStaffNotices(prev => prev.map(n => ({ ...n, isRead: true })));
-        setStaffUnreadCount(0);
+        queryClient.invalidateQueries({ queryKey: queryKeys.notifications(activeDormitoryId) });
       }
     } catch (e) {}
   };
 
   const handleDeleteNotification = async (id: string | number) => {
     const noticeId = String(id);
-    const reqHeaders: Record<string, string> = {};
-    const savedId = localStorage.getItem('selected_dormitory_id');
-    if (savedId) reqHeaders['x-dormitory-id'] = savedId;
     try {
-      const res = await fetch(`/api/v1/notifications/${noticeId}/dismiss`, { method: 'POST', headers: reqHeaders, credentials: 'include' });
+      const res = await fetch(`/api/v1/notifications/${noticeId}/dismiss`, { method: 'POST', headers: dormHeader, credentials: 'include' });
       if (res.ok) {
-        setStaffNotices(prev => prev.filter(n => n.id !== noticeId));
-        setStaffUnreadCount(prev => Math.max(0, prev - 1));
+        queryClient.invalidateQueries({ queryKey: queryKeys.notifications(activeDormitoryId) });
       }
     } catch (e) {
       console.error('[OwnerWorkspace] Error dismissing notification:', e);
     }
   };
 
-  // Load centralized data
-  const refreshAllData = async () => {
-    if (isRegistrationMode) return;
-    let isApiConnected = false;
-    const reqHeaders: Record<string, string> = {};
-    const savedId = localStorage.getItem('selected_dormitory_id');
-    if (savedId) {
-      reqHeaders['x-dormitory-id'] = savedId;
-    }
+  const handleAddLog = (_action: string, _details: string, _type: string, _id: string) => {};
 
-    try {
-      const loadedRooms = await fetchAllPaginated('/api/v1/properties/rooms', { headers: reqHeaders, credentials: 'include' });
-      isApiConnected = true;
-      setRooms(loadedRooms);
-    } catch {
-      setRooms([]);
-    }
+  // State saving handlers with targeted query invalidation
+  const handleSaveRooms = (_newRooms: Room[]) => {
+    queryClient.invalidateQueries({ queryKey: queryKeys.rooms(activeDormitoryId) });
+  };
 
-    try {
-      const loadedBuildings = await fetchAllPaginated('/api/v1/properties/buildings', { headers: reqHeaders, credentials: 'include' });
-      setBuildings(loadedBuildings);
-    } catch {
-      setBuildings([]);
-    }
+  const handleSaveBuildings = (_newBuildings: Building[]) => {
+    queryClient.invalidateQueries({ queryKey: queryKeys.buildings(activeDormitoryId) });
+  };
 
-    if (isApiConnected) {
-      try {
-        const [loadedTenants, loadedBills, loadedContracts, loadedRepairs, loadedAnnouncements, cycleResult] = await Promise.all([
-          fetchAllPaginated('/api/v1/tenants', { headers: reqHeaders, credentials: 'include' }),
-          fetchAllPaginated('/api/v1/bills', { headers: reqHeaders, credentials: 'include' }),
-          fetchAllPaginated('/api/v1/contracts', { headers: reqHeaders, credentials: 'include' }),
-          fetchAllPaginated('/api/v1/maintenance', { headers: reqHeaders, credentials: 'include' }),
-          fetchAllPaginated('/api/v1/announcements', { headers: reqHeaders, credentials: 'include' }),
-          fetchAllPaginatedWithMeta('/api/v1/billing-cycles', { headers: reqHeaders, credentials: 'include' }),
-        ]);
-        setTenants(loadedTenants);
-        setBills(loadedBills);
-        setContracts(loadedContracts);
-        setRepairs(loadedRepairs);
-        setAnnouncements(loadedAnnouncements);
-        setAuditLogs([]);
+  const handleSaveTenants = (_newTenants: Tenant[]) => {
+    queryClient.invalidateQueries({ queryKey: queryKeys.tenants(activeDormitoryId) });
+  };
 
-        const loadedCycles = cycleResult.data || [];
-        setBillingCycles(loadedCycles);
-
-        // Authoritatively initialize selectedBillingCycleId and selectedCycleCode from server resolver
-        if (cycleResult.operationalBillingCycleId && cycleResult.operationalCycleCode) {
-          setSelectedBillingCycleId(cycleResult.operationalBillingCycleId);
-          setSelectedCycleCode(cycleResult.operationalCycleCode);
-        } else if (loadedCycles.length > 0) {
-          setSelectedBillingCycleId(loadedCycles[0].id);
-          setSelectedCycleCode(loadedCycles[0].cycleCode);
-        }
-      } catch {
-        setTenants([]);
-        setBills([]);
-        setContracts([]);
-        setRepairs([]);
-        setAnnouncements([]);
-        setAuditLogs([]);
-        setBillingCycles([]);
-      }
-    } else {
-      setTenants([]);
-      setBills([]);
-      setContracts([]);
-      setRepairs([]);
-      setAnnouncements([]);
-      setAuditLogs([]);
-      setBillingCycles([]);
+  const handleSaveBills = (_newBills: Bill[]) => {
+    queryClient.invalidateQueries({ queryKey: queryKeys.bills(activeDormitoryId) });
+    if (selectedBillingCycleId) {
+      queryClient.invalidateQueries({ queryKey: queryKeys.meterWorkspace(activeDormitoryId, selectedBillingCycleId) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.meterPreviewContext(activeDormitoryId, selectedBillingCycleId) });
     }
   };
 
-  useEffect(() => {
-    if (!isRegistrationMode) {
-      refreshAllData();
-    }
-
-    // Listen to localStorage changes to sync in real-time if multiple tabs/frames are open
-    const handleStorageChange = (e: StorageEvent) => {
-      if (e.key && e.key.includes('HorPlus_') && !isRegistrationMode) {
-        refreshAllData();
-      }
-    };
-    
-    window.addEventListener('storage', handleStorageChange);
-    return () => {
-      window.removeEventListener('storage', handleStorageChange);
-    };
-  }, [isRegistrationMode]);
-
-  const handleAddLog = (action: string, details: string, type: string, id: string) => {
-    
-    setAuditLogs([]);
+  const handleSaveContracts = (_newContracts: Contract[]) => {
+    queryClient.invalidateQueries({ queryKey: queryKeys.contracts(activeDormitoryId) });
   };
 
-  // State saving handlers
-  const handleSaveRooms = (newRooms: Room[]) => {
-    
-    setRooms(newRooms);
+  const handleSaveRepairs = (_newRepairs: any[]) => {
+    queryClient.invalidateQueries({ queryKey: queryKeys.maintenance(activeDormitoryId) });
   };
 
-  const handleSaveBuildings = (newBuildings: Building[]) => {
-    setBuildings(newBuildings);
-  };
-
-  const handleSaveTenants = (newTenants: Tenant[]) => {
-    
-    setTenants(newTenants);
-  };
-
-  const handleSaveBills = (newBills: Bill[]) => {
-    
-    setBills(newBills);
-  };
-
-  const handleSaveContracts = (newContracts: Contract[]) => {
-    
-    setContracts(newContracts);
-  };
-
-  const handleSaveRepairs = (newRepairs: any[]) => {
-    
-    setRepairs(newRepairs);
-  };
-
-  const handleSaveAnnouncements = (newAnnouncements: Announcement[]) => {
-    
-    setAnnouncements(newAnnouncements);
+  const handleSaveAnnouncements = (_newAnnouncements: Announcement[]) => {
+    queryClient.invalidateQueries({ queryKey: queryKeys.announcements(activeDormitoryId) });
   };
 
   // Sidebar Menu Items with role boundaries
@@ -673,31 +663,6 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
     { id: 'settings', label: 'ตั้งค่าระบบ', icon: Settings, roles: ['owner'] }
   ];
 
-  // Dynamic Active Dormitory Context Resolution
-  const authCtx = React.useContext(AuthContext) || {};
-  const memberships: any[] = authCtx.memberships || authCtx.user?.memberships || [];
-  
-  // Resolve selected dormitory ID dynamically from authorized memberships
-  const savedDormId = sessionStorage.getItem('active_dormitory_selected_for_session') || localStorage.getItem('selected_dormitory_id');
-  const activeMemberships = memberships.filter((m: any) => !m.status || String(m.status).toLowerCase() === 'active');
-  
-  const validDormId = activeMemberships.find((m: any) => m.dormitoryId === savedDormId)?.dormitoryId 
-    || activeMemberships[0]?.dormitoryId 
-    || authCtx.dormitoryId;
-
-  // Ensure invalid placeholder defaults are cleared
-  const activeDormitoryId = (validDormId && validDormId !== 'dorm-1' && validDormId !== 'dorm-001')
-    ? validDormId
-    : (activeMemberships[0]?.dormitoryId || validDormId);
-
-  useEffect(() => {
-    if (activeDormitoryId && activeDormitoryId !== 'dorm-1' && activeDormitoryId !== 'dorm-001') {
-      localStorage.setItem('selected_dormitory_id', activeDormitoryId);
-      clearDormitoryQueryCache();
-      clearMeterDraftStore();
-    }
-  }, [activeDormitoryId]);
-
   // Find membership for active dormitory
   const activeMembership = activeMemberships.find((m: any) => m.dormitoryId === activeDormitoryId) || activeMemberships[0];
 
@@ -713,26 +678,24 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
       ].filter(Boolean)
     : (userRole ? menuItems.filter(item => item.roles.includes(userRole) && item.id !== 'register') : []);
 
-  // Determine current component to render
-  const [meterReadings, setMeterReadings] = useState<any[]>([]);
+  // Meter readings query
+  const meterReadingsQuery = useQuery({
+    queryKey: queryKeys.meterReadings(activeDormitoryId, selectedBillingCycleId),
+    queryFn: async () => {
+      if (!selectedBillingCycleId || isRegistrationMode || !activeDormitoryId) return [];
+      const res = await fetch(`/api/v1/meters/readings?billingCycleId=${selectedBillingCycleId}&pageSize=200`, {
+        headers: dormHeader,
+        credentials: 'include',
+      });
+      if (!res.ok) return [];
+      const data = await res.json();
+      return data?.data || [];
+    },
+    enabled: Boolean(activeDormitoryId && selectedBillingCycleId && !isRegistrationMode),
+    staleTime: STALE_TIMES.METER_WORKSPACE,
+  });
 
-  useEffect(() => {
-    if (isRegistrationMode) {
-      setMeterReadings([]);
-      return;
-    }
-    if (selectedBillingCycleId) {
-      const reqHeaders: Record<string, string> = {};
-      const savedId = localStorage.getItem('selected_dormitory_id');
-      if (savedId) reqHeaders['x-dormitory-id'] = savedId;
-      fetch(`/api/v1/meters/readings?billingCycleId=${selectedBillingCycleId}&pageSize=200`, { headers: reqHeaders, credentials: 'include' })
-        .then(r => r.ok ? r.json() : null)
-        .then(data => setMeterReadings(data?.data || []))
-        .catch(() => setMeterReadings([]));
-    } else {
-      setMeterReadings([]);
-    }
-  }, [selectedBillingCycleId, isRegistrationMode]);
+  const meterReadings = meterReadingsQuery.data || [];
 
   const renderSubView = () => {
     if (isRegistrationMode) {
@@ -872,11 +835,10 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
             selectedCycle={selectedCycleCode}
             selectedBillingCycleId={selectedBillingCycleId || billingCycles.find(c => c.cycleCode === selectedCycleCode)?.id}
             selectedCycleCode={selectedCycleCode}
-            onRefetchData={refreshAllData}
           />
         );
       case 'payments':
-        return <PaymentsOwnerView bills={bills} rooms={rooms} dormitoryId={activeDormitoryId} onUpdateBills={refreshAllData} />;
+        return <PaymentsOwnerView bills={bills} rooms={rooms} dormitoryId={activeDormitoryId} onUpdateBills={() => queryClient.invalidateQueries({ queryKey: queryKeys.bills(activeDormitoryId) })} />;
 
       case 'maintenance':
         return (
@@ -924,7 +886,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
         return (
           <OwnerSettings
             onAddLog={handleAddLog}
-            onRefreshData={refreshAllData}
+            onRefreshData={() => queryClient.invalidateQueries({ queryKey: queryKeys.owner(activeDormitoryId) })}
             selectedCycle={selectedCycle}
             onCycleChange={(c: string) => setSelectedCycleCode(c)}
             availableCycles={billingCycles}

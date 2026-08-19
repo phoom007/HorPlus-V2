@@ -50,6 +50,14 @@ export interface BulkMeterReadingDto {
   readings: BulkMeterReadingItemDto[];
 }
 
+export interface SavedRoomSnapshotMeta {
+  roomId: string;
+  version: number;
+  peopleCount: number;
+  manualOutstandingAmount: string;
+  otherFees: Array<{ description: string; amount: string }>;
+}
+
 export class MeterService {
   constructor(
     private meterRepo: IMeterRepository = new PrismaMeterRepository(getPrismaClient()),
@@ -472,7 +480,7 @@ export class MeterService {
     tx: any,
     rateSnapshot?: any,
     isFirstCycle?: boolean
-  ): Promise<void> {
+  ): Promise<SavedRoomSnapshotMeta> {
     // 0. Assert room operational entitlement before saving workspace state
     await subscriptionEntitlementService.assertRoomOperationalEntitlement(
       dormitoryId,
@@ -717,6 +725,11 @@ export class MeterService {
         }
       }
 
+      let savedVersion = 1;
+      let finalPeopleCount = row.peopleCount !== undefined ? Math.max(0, row.peopleCount) : 0;
+      let finalManualOutstanding = row.manualOutstandingAmount !== undefined ? formatDecimal(toDecimal(String(row.manualOutstandingAmount))) : '0.00';
+      let finalOtherFees = cleanOtherFees;
+
       const existingSnap = await client.roomBillingCycleSnapshot.findUnique({
         where: {
           dormitory_billing_cycle_room_unique: {
@@ -737,19 +750,47 @@ export class MeterService {
 
         const updateData: any = {
           updatedByUserId: userId && /^[0-9a-fA-F-]{36}$/.test(userId) ? userId : null,
-          version: existingSnap.version + 1,
+          version: { increment: 1 },
         };
-        if (row.peopleCount !== undefined) updateData.peopleCount = Math.max(0, row.peopleCount);
+        if (row.peopleCount !== undefined) {
+          updateData.peopleCount = Math.max(0, row.peopleCount);
+          finalPeopleCount = updateData.peopleCount;
+        } else {
+          finalPeopleCount = existingSnap.peopleCount;
+        }
         if (row.manualOutstandingAmount !== undefined) {
           updateData.manualOutstandingAmount = toDecimal(String(row.manualOutstandingAmount));
+          finalManualOutstanding = formatDecimal(updateData.manualOutstandingAmount);
+        } else if (existingSnap.manualOutstandingAmount) {
+          finalManualOutstanding = formatDecimal(toDecimal(existingSnap.manualOutstandingAmount.toString()));
         }
         if (row.otherFees !== undefined) {
           updateData.otherFees = cleanOtherFees;
+          finalOtherFees = cleanOtherFees;
+        } else if (Array.isArray(existingSnap.otherFees)) {
+          finalOtherFees = (existingSnap.otherFees as any[]).map((f: any) => ({
+            description: String(f?.description || ''),
+            amount: formatDecimal(toDecimal(f?.amount)),
+          }));
         }
-        await client.roomBillingCycleSnapshot.update({
-          where: { id: existingSnap.id },
+
+        const expectedVer = row.expectedVersion !== undefined && row.expectedVersion !== null ? row.expectedVersion : existingSnap.version;
+        const updateResult = await client.roomBillingCycleSnapshot.updateMany({
+          where: {
+            id: existingSnap.id,
+            version: expectedVer,
+          },
           data: updateData,
         });
+
+        if (updateResult.count === 0) {
+          const err: any = new Error('ข้อมูลมิเตอร์ของห้องนี้ถูกเปลี่ยนแปลงโดยผู้ใช้อื่น กรุณารีเฟรชก่อนทำรายการ');
+          err.statusCode = 409;
+          err.code = 'STALE_VERSION';
+          throw err;
+        }
+
+        savedVersion = existingSnap.version + 1;
       } else {
         if (row.expectedVersion !== undefined && row.expectedVersion !== null && row.expectedVersion > 0) {
           const err: any = new Error('ข้อมูลมิเตอร์ของห้องนี้ถูกเปลี่ยนแปลงโดยผู้ใช้อื่น กรุณารีเฟรชก่อนทำรายการ');
@@ -758,28 +799,65 @@ export class MeterService {
           throw err;
         }
 
-        await client.roomBillingCycleSnapshot.create({
-          data: {
-            dormitoryId,
-            billingCycleId,
-            roomId: row.roomId,
-            peopleCount: row.peopleCount !== undefined ? Math.max(0, row.peopleCount) : 0,
-            manualOutstandingAmount: row.manualOutstandingAmount !== undefined ? toDecimal(String(row.manualOutstandingAmount)) : toDecimal('0.00'),
-            otherFees: cleanOtherFees,
-            source: 'MANUAL',
-            updatedByUserId: userId && /^[0-9a-fA-F-]{36}$/.test(userId) ? userId : null,
-            version: 1,
-          },
-        });
+        try {
+          const createdSnap = await client.roomBillingCycleSnapshot.create({
+            data: {
+              dormitoryId,
+              billingCycleId,
+              roomId: row.roomId,
+              peopleCount: row.peopleCount !== undefined ? Math.max(0, row.peopleCount) : 0,
+              manualOutstandingAmount: row.manualOutstandingAmount !== undefined ? toDecimal(String(row.manualOutstandingAmount)) : toDecimal('0.00'),
+              otherFees: cleanOtherFees,
+              source: 'MANUAL',
+              updatedByUserId: userId && /^[0-9a-fA-F-]{36}$/.test(userId) ? userId : null,
+              version: 1,
+            },
+          });
+          savedVersion = createdSnap.version;
+        } catch (createErr: any) {
+          if (createErr?.code === 'P2002' || createErr?.message?.includes('Unique constraint failed') || createErr?.message?.includes('unique constraint')) {
+            const err: any = new Error('ข้อมูลมิเตอร์ของห้องนี้ถูกเปลี่ยนแปลงโดยผู้ใช้อื่น กรุณารีเฟรชก่อนทำรายการ');
+            err.statusCode = 409;
+            err.code = 'STALE_VERSION';
+            throw err;
+          }
+          throw createErr;
+        }
       }
+
+      return {
+        roomId: row.roomId,
+        version: savedVersion,
+        peopleCount: finalPeopleCount,
+        manualOutstandingAmount: finalManualOutstanding,
+        otherFees: finalOtherFees,
+      };
     }
+
+    const existingSnap = await client.roomBillingCycleSnapshot.findUnique({
+      where: {
+        dormitory_billing_cycle_room_unique: {
+          dormitoryId,
+          billingCycleId,
+          roomId: row.roomId,
+        },
+      },
+    });
+
+    return {
+      roomId: row.roomId,
+      version: existingSnap?.version ?? 1,
+      peopleCount: existingSnap?.peopleCount ?? (row.peopleCount !== undefined ? Math.max(0, row.peopleCount) : 0),
+      manualOutstandingAmount: existingSnap ? formatDecimal(toDecimal(String(existingSnap.manualOutstandingAmount))) : '0.00',
+      otherFees: existingSnap && Array.isArray(existingSnap.otherFees) ? (existingSnap.otherFees as any[]) : [],
+    };
   }
 
   public async saveBulkMeterWorkspace(
     dormitoryId: string,
     data: { billingCycleId: string; rows: SaveMeterWorkspaceRowDto[] },
     userId?: string
-  ): Promise<{ savedCount: number }> {
+  ): Promise<{ savedCount: number; savedRows: SavedRoomSnapshotMeta[] }> {
     const cycle = await this.billingCycleRepo.findById(data.billingCycleId, dormitoryId);
     if (!cycle) {
       const err = new Error('BILLING_CYCLE_NOT_FOUND');
@@ -830,6 +908,8 @@ export class MeterService {
         await this.meterRepo.executeRawLock(roomId, tx);
       }
 
+      const savedRows: SavedRoomSnapshotMeta[] = [];
+
       for (const row of data.rows) {
         if (this.billRepo) {
           const activeBill = await this.billRepo.findByCycleAndRoom(dormitoryId, data.billingCycleId, row.roomId, tx);
@@ -842,7 +922,7 @@ export class MeterService {
           }
         }
 
-        await this.saveSingleRoomWorkspaceInTx(
+        const savedMeta = await this.saveSingleRoomWorkspaceInTx(
           dormitoryId,
           data.billingCycleId,
           row,
@@ -851,9 +931,12 @@ export class MeterService {
           rateSnapshot,
           isFirstCycle
         );
+        if (savedMeta) {
+          savedRows.push(savedMeta);
+        }
       }
 
-      return { savedCount: data.rows.length };
+      return { savedCount: data.rows.length, savedRows };
     }).then(async (res) => {
       if (this.auditService) {
         await this.auditService.log({

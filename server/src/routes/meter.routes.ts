@@ -353,7 +353,7 @@ export function createMeterRouter(
       }
 
       const result = await meterService.saveBulkMeterWorkspace(dormId, parsed.data, req.auth?.userId);
-      res.json({ success: true, savedCount: result.savedCount });
+      res.json({ success: true, savedCount: result.savedCount, savedRows: result.savedRows });
     } catch (err) {
       handleServiceError(res, err, req);
     }

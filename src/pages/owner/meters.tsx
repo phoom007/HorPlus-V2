@@ -59,31 +59,6 @@ export function setStored<T>(key: string, val: T): void {
   } catch {}
 }
 
-export function getDormitoryRatesForCycle(dorm?: any, cycle?: string) {
-  if (dorm && dorm.cycleSettings && cycle && dorm.cycleSettings[cycle]) {
-    return dorm.cycleSettings[cycle];
-  }
-  return {
-    waterUnitRate: 0,
-    electricUnitRate: 0,
-    waterBillingMode: 'unit',
-    electricBillingMode: 'unit',
-    commonFee: 0,
-    commonFeeMode: 'room',
-    internetFee: 0,
-    internetFeeMode: 'room',
-    parkingFee: 0,
-    parkingFeeMode: 'room',
-    lateFeeDaily: 0,
-    lateFeeType: 'per_day'
-  };
-}
-
-export function getDormitory() {
-  return {};
-}
-
-
 interface OwnerMetersProps {
   rooms: Room[];
   buildings?: Building[];
@@ -118,9 +93,6 @@ export interface MeterRowState {
   otherFees?: { description: string; amount: number }[];
   snapshotVersion?: number;
 }
-
-// Module-level temporary memory cache to survive tab navigation without page reload
-export let tempMeterRowsCache: { [cycle: string]: MeterRowState[] } = {};
 
 export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   rooms,
@@ -185,16 +157,6 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   const originalRowsRef = React.useRef<MeterRowState[]>([]);
   const tableContainerRef = React.useRef<HTMLDivElement>(null);
   const quickFillInputRef = React.useRef<HTMLTextAreaElement>(null);
-  const dorm = getDormitory();
-  const cycleRates = getDormitoryRatesForCycle(dorm, selectedCycle);
-
-  const isCurrentOperationalCycle = Boolean(
-    operationalCycleAuthorityLoaded &&
-    operationalCycleCode &&
-    (selectedCycle === operationalCycleCode || selectedCycleCode === operationalCycleCode)
-  );
-  const isWaterUnit = (cycleRates.waterBillingMode || 'unit') === 'unit';
-  const isElecUnit = (cycleRates.electricBillingMode || 'unit') === 'unit';
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
@@ -202,7 +164,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   };
 
   const queryClient = useQueryClient();
-  const currentDormId = dormitoryId || localStorage.getItem('horplus_current_dormitory_id') || localStorage.getItem('selected_dormitory_id') || '';
+  const currentDormId = dormitoryId || '';
 
   // Server Preview Context Query (Bounded Aggregate Read)
   const previewContextQuery = useQuery({
@@ -222,12 +184,40 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   });
 
   const previewContext = previewContextQuery.data;
+  const rateSnapshot = previewContext?.rateSnapshot;
+
+  const isCurrentOperationalCycle = Boolean(
+    operationalCycleAuthorityLoaded &&
+    operationalCycleCode &&
+    (selectedCycle === operationalCycleCode || selectedCycleCode === operationalCycleCode)
+  );
+
+  // Authoritative billing mode derived from rateSnapshot (fail-closed)
+  const isWaterUnit = rateSnapshot ? (rateSnapshot.waterBillingType === 'per_unit') : false;
+  const isElecUnit = rateSnapshot ? (rateSnapshot.electricityBillingType === 'per_unit') : false;
+
+  // Controlled input state for adding other fees per room
+  const [newFeeInputs, setNewFeeInputs] = useState<Record<string, { description: string; amount: string }>>({});
+
+  const sanitizeMoneyTyping = (val: string): string => {
+    if (!val) return '';
+    let cleaned = val.replace(/[^0-9.]/g, '');
+    const parts = cleaned.split('.');
+    if (parts.length > 2) {
+      cleaned = `${parts[0]}.${parts.slice(1).join('')}`;
+    }
+    const [intPart, fracPart] = cleaned.split('.');
+    if (fracPart !== undefined) {
+      return `${intPart}.${fracPart.slice(0, 2)}`;
+    }
+    return intPart;
+  };
 
   const handleAddOtherFee = async (roomId: string, desc: string, amtStr: string) => {
     const cleanDesc = desc.trim();
     if (!cleanDesc) return;
-    if (!/^\d+(\.\d{1,2})?$/.test(amtStr) || Number(amtStr) <= 0) {
-      showToast('กรุณาระบุจำนวนเงินเป็นตัวเลขที่ถูกต้อง');
+    if (!/^\d+(\.\d{1,2})?$/.test(amtStr) || amtStr === '0' || amtStr === '0.0' || amtStr === '0.00') {
+      showToast('กรุณาระบุจำนวนเงินเป็นตัวเลขที่มากกว่า 0');
       return;
     }
     const amt = Number(amtStr);
@@ -242,14 +232,28 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     setMeterRows(prev => prev.map(r => r.roomId === roomId ? { ...r, otherFees: nextFees } : r));
 
     try {
-      await httpRequest('POST', '/api/v1/meters/workspace/bulk', {
-        billingCycleId: selectedBillingCycleId,
-        rows: [{
-          roomId,
-          otherFees: nextFees.map(f => ({ description: f.description, amount: f.amount.toFixed(2) })),
-          expectedVersion,
-        }],
-      }, { headers: currentDormId ? { 'x-dormitory-id': currentDormId } : {} });
+      const res = await httpRequest<{ success: boolean; savedRows?: Array<{ roomId: string; version: number }> }>(
+        'POST',
+        '/api/v1/meters/workspace/bulk',
+        {
+          billingCycleId: selectedBillingCycleId,
+          rows: [{
+            roomId,
+            otherFees: nextFees.map(f => ({ description: f.description, amount: f.amount.toFixed(2) })),
+            expectedVersion,
+          }],
+        },
+        { headers: currentDormId ? { 'x-dormitory-id': currentDormId } : {} }
+      );
+
+      const savedMeta = res?.savedRows?.find(r => r.roomId === roomId);
+      const nextVer = savedMeta?.version ?? (expectedVersion + 1);
+
+      setMeterRows(prev => {
+        const updated = prev.map(r => r.roomId === roomId ? { ...r, otherFees: nextFees, snapshotVersion: nextVer } : r);
+        meterDraftStore.setDraft(currentDormId, selectedBillingCycleId, updated as any);
+        return updated;
+      });
 
       queryClient.invalidateQueries({ queryKey: queryKeys.meterWorkspace(currentDormId, selectedBillingCycleId) });
       queryClient.invalidateQueries({ queryKey: queryKeys.meterPreviewContext(currentDormId, selectedBillingCycleId) });
@@ -279,14 +283,28 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     setMeterRows(prev => prev.map(r => r.roomId === roomId ? { ...r, otherFees: nextFees } : r));
 
     try {
-      await httpRequest('POST', '/api/v1/meters/workspace/bulk', {
-        billingCycleId: selectedBillingCycleId,
-        rows: [{
-          roomId,
-          otherFees: nextFees.map(f => ({ description: f.description, amount: f.amount.toFixed(2) })),
-          expectedVersion,
-        }],
-      }, { headers: currentDormId ? { 'x-dormitory-id': currentDormId } : {} });
+      const res = await httpRequest<{ success: boolean; savedRows?: Array<{ roomId: string; version: number }> }>(
+        'POST',
+        '/api/v1/meters/workspace/bulk',
+        {
+          billingCycleId: selectedBillingCycleId,
+          rows: [{
+            roomId,
+            otherFees: nextFees.map(f => ({ description: f.description, amount: f.amount.toFixed(2) })),
+            expectedVersion,
+          }],
+        },
+        { headers: currentDormId ? { 'x-dormitory-id': currentDormId } : {} }
+      );
+
+      const savedMeta = res?.savedRows?.find(r => r.roomId === roomId);
+      const nextVer = savedMeta?.version ?? (expectedVersion + 1);
+
+      setMeterRows(prev => {
+        const updated = prev.map(r => r.roomId === roomId ? { ...r, otherFees: nextFees, snapshotVersion: nextVer } : r);
+        meterDraftStore.setDraft(currentDormId, selectedBillingCycleId, updated as any);
+        return updated;
+      });
 
       queryClient.invalidateQueries({ queryKey: queryKeys.meterWorkspace(currentDormId, selectedBillingCycleId) });
       queryClient.invalidateQueries({ queryKey: queryKeys.meterPreviewContext(currentDormId, selectedBillingCycleId) });
@@ -346,16 +364,15 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     let elecCurr = elecPrev;
 
     if (bill && Array.isArray(bill.items)) {
-      const billRates = getDormitoryRatesForCycle(dorm, cycleId);
       const waterItem = bill.items.find(item => item.category === 'water' || (item as any).type === 'water');
       if (waterItem) {
         const match = waterItem.description?.match(/\((\d+)\s*หน่วย\)/);
         if (match) {
           waterCurr = waterPrev + Number(match[1]);
         } else {
-          const mode = billRates.waterBillingMode || 'unit';
-          if (mode === 'unit') {
-            const rate = billRates.waterUnitRate || 0;
+          const isUnit = rateSnapshot ? (rateSnapshot.waterBillingType === 'per_unit') : false;
+          if (isUnit) {
+            const rate = rateSnapshot?.waterRate ? Number(rateSnapshot.waterRate) : 0;
             waterCurr = rate > 0 ? waterPrev + Math.round(Number(waterItem.amount) / rate) : waterPrev;
           } else {
             waterCurr = waterPrev;
@@ -369,9 +386,9 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
         if (match) {
           elecCurr = elecPrev + Number(match[1]);
         } else {
-          const mode = billRates.electricBillingMode || 'unit';
-          if (mode === 'unit') {
-            const rate = billRates.electricUnitRate || 0;
+          const isUnit = rateSnapshot ? (rateSnapshot.electricityBillingType === 'per_unit') : false;
+          if (isUnit) {
+            const rate = rateSnapshot?.electricityRate ? Number(rateSnapshot.electricityRate) : 0;
             elecCurr = rate > 0 ? elecPrev + Math.round(Number(elecItem.amount) / rate) : elecPrev;
           } else {
             elecCurr = elecPrev;
@@ -518,7 +535,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     }
   };
 
-  const generateTemplateText = () => {
+  const generateTemplateText = (freshHouseholdMap?: Map<string, number>) => {
     const sortedRows = [...meterRows].sort((a, b) => a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true, sensitivity: 'base' }));
     
     return sortedRows.map(row => {
@@ -529,8 +546,9 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       if (isWaterUnit) {
         parts.push(`น้ำ ${row.waterPrev}`);
       }
+      const freshCount = freshHouseholdMap?.get(row.roomId);
       const roomCtx = previewContext?.rooms?.find(r => r.roomId === row.roomId);
-      const householdCount = roomCtx?.currentHouseholdPeopleCount !== undefined ? roomCtx.currentHouseholdPeopleCount : row.peopleCount;
+      const householdCount = freshCount !== undefined ? freshCount : (roomCtx?.currentHouseholdPeopleCount !== undefined ? roomCtx.currentHouseholdPeopleCount : row.peopleCount);
       parts.push(`${householdCount} คน`);
       if (row.overdueAmount > 0) {
         parts.push(`ค้าง ${row.overdueAmount}`);
@@ -636,80 +654,90 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   };
 
   const getWaterCost = (row: MeterRowState) => {
-    const mode = cycleRates.waterBillingMode || 'unit';
-    const rateVal = cycleRates.waterUnitRate;
-    const rate = rateVal !== undefined && rateVal !== null && Number.isFinite(Number(rateVal)) ? Number(rateVal) : 0;
+    const mode = rateSnapshot?.waterBillingType || 'per_unit';
+    const rate = Number(rateSnapshot?.waterRate) || 0;
     const wCurr = Number(row.waterCurr) || 0;
     const wPrev = Number(row.waterPrev) || 0;
     const units = row.isReplaced ? wCurr : Math.max(0, wCurr - wPrev);
     
-    if (mode === 'unit') {
+    if (mode === 'per_unit' || mode === 'unit') {
       return units * rate;
-    } else if (mode === 'person') {
+    } else if (mode === 'per_person' || mode === 'person') {
       return (Number(row.peopleCount) || 0) * rate;
-    } else { // 'room'
+    } else {
       return rate;
     }
   };
 
   const getElectricCost = (row: MeterRowState) => {
-    const mode = cycleRates.electricBillingMode || 'unit';
-    const rateVal = cycleRates.electricUnitRate;
-    const rate = rateVal !== undefined && rateVal !== null && Number.isFinite(Number(rateVal)) ? Number(rateVal) : 0;
+    const mode = rateSnapshot?.electricityBillingType || 'per_unit';
+    const rate = Number(rateSnapshot?.electricityRate) || 0;
     const eCurr = Number(row.elecCurr) || 0;
     const ePrev = Number(row.elecPrev) || 0;
     const units = row.isReplaced ? eCurr : Math.max(0, eCurr - ePrev);
     
-    if (mode === 'unit') {
+    if (mode === 'per_unit' || mode === 'unit') {
       return units * rate;
-    } else if (mode === 'person') {
+    } else if (mode === 'per_person' || mode === 'person') {
       return (Number(row.peopleCount) || 0) * rate;
-    } else { // 'room'
+    } else {
       return rate;
     }
   };
 
   const getCommonFeeCost = (row: MeterRowState) => {
     if (row.peopleCount === 0) return 0;
-    const mode = cycleRates.commonFeeMode || 'room';
-    const fee = cycleRates.commonFee !== undefined ? cycleRates.commonFee : 0;
+    const mode = rateSnapshot?.commonFeeMode || 'per_room';
+    const fee = Number(rateSnapshot?.commonFee) || 0;
     
-    if (mode === 'person') {
+    if (mode === 'per_person' || mode === 'person') {
       return (row.peopleCount || 0) * fee;
-    } else { // 'room'
+    } else if (mode === 'free' || mode === 'none') {
+      return 0;
+    } else {
       return fee;
     }
   };
 
   const getInternetCost = (row: MeterRowState) => {
     if (row.peopleCount === 0) return 0;
-    const mode = cycleRates.internetFeeMode || 'room';
-    const fee = cycleRates.internetFee !== undefined ? cycleRates.internetFee : 0;
-    if (fee <= 0) return 0;
+    const mode = rateSnapshot?.internetFeeMode || 'per_room';
+    const fee = Number(rateSnapshot?.internetFee) || 0;
+    if (fee <= 0 || mode === 'free' || mode === 'none') return 0;
     
-    if (mode === 'person') {
+    if (mode === 'per_person' || mode === 'person') {
       return (row.peopleCount || 0) * fee;
-    } else { // 'room'
+    } else {
       return fee;
     }
   };
 
   const getParkingCost = (row: MeterRowState) => {
     if (row.peopleCount === 0) return 0;
-    const mode = cycleRates.parkingFeeMode || 'room';
-    if (mode === 'free') return 0;
-    const fee = cycleRates.parkingFee !== undefined ? cycleRates.parkingFee : 0;
+    const mode = rateSnapshot?.parkingFeeMode || 'per_room';
+    if (mode === 'free' || mode === 'none') return 0;
+    const fee = Number(rateSnapshot?.parkingFee) || 0;
     if (fee <= 0) return 0;
 
-    if (mode === 'vehicle') {
+    if (mode === 'per_vehicle' || mode === 'vehicle') {
       const tenant = getTenantForRoomAndCycle(row.roomId, selectedCycle);
-      if (tenant && tenant.vehicle && tenant.vehicle.type && tenant.vehicle.type !== 'none') {
+      if (tenant && (tenant as any).vehicle && (tenant as any).vehicle.type && (tenant as any).vehicle.type !== 'none') {
         return fee;
       }
       return 0;
-    } else { // 'room'
+    } else if (mode === 'per_person' || mode === 'person') {
+      return (row.peopleCount || 0) * fee;
+    } else {
       return fee;
     }
+  };
+
+  const getSampleTemplateFormat = () => {
+    const parts = ['[เลขห้อง]'];
+    if (isElecUnit) parts.push('[มิเตอร์ไฟล่าสุด]');
+    if (isWaterUnit) parts.push('[มิเตอร์น้ำล่าสุด]');
+    parts.push('[จำนวนคน(ถ้ามี)]', '[ค้างชำระ(ถ้ามี)]');
+    return parts.join(' ');
   };
 
   // Initialize meter rows based on rooms list, stored states, and bills
@@ -1248,7 +1276,9 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       if (res && res.success) {
         showToast(targetAction === 'issue' ? `ออกบิลห้อง ${row.roomNumber} เรียบร้อยแล้ว` : `ยกเลิกบิลห้อง ${row.roomNumber} เรียบร้อยแล้ว`);
         fetchAuthoritativeReadings(selectedBillingCycleId);
-        onRefetchData?.();
+        queryClient.invalidateQueries({ queryKey: queryKeys.meterWorkspace(currentDormId, selectedBillingCycleId) });
+        queryClient.invalidateQueries({ queryKey: queryKeys.meterPreviewContext(currentDormId, selectedBillingCycleId) });
+        queryClient.invalidateQueries({ queryKey: queryKeys.bills(currentDormId) });
       } else {
         showToast(res?.error?.message || 'เกิดข้อผิดพลาดในการเปลี่ยนสถานะบิล');
       }
@@ -1322,7 +1352,9 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
         }
 
         fetchAuthoritativeReadings(selectedBillingCycleId);
-        onRefetchData?.();
+        queryClient.invalidateQueries({ queryKey: queryKeys.meterWorkspace(currentDormId, selectedBillingCycleId) });
+        queryClient.invalidateQueries({ queryKey: queryKeys.meterPreviewContext(currentDormId, selectedBillingCycleId) });
+        queryClient.invalidateQueries({ queryKey: queryKeys.bills(currentDormId) });
       } else {
         showToast(res?.error?.message || 'เกิดข้อผิดพลาดในการออกบิล');
       }
@@ -1419,10 +1451,11 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       setIsSaving(false);
       if (res && res.success) {
         originalRowsRef.current = JSON.parse(JSON.stringify(meterRows));
-        delete tempMeterRowsCache[selectedBillingCycleId];
+        meterDraftStore.clearDraft(currentDormId, selectedBillingCycleId);
         showToast('บันทึกข้อมูลค่ามิเตอร์เรียบร้อยแล้ว');
         fetchAuthoritativeReadings(selectedBillingCycleId);
-        onRefetchData?.();
+        queryClient.invalidateQueries({ queryKey: queryKeys.meterWorkspace(currentDormId, selectedBillingCycleId) });
+        queryClient.invalidateQueries({ queryKey: queryKeys.meterPreviewContext(currentDormId, selectedBillingCycleId) });
       } else {
         showToast(res?.error?.message || 'เกิดข้อผิดพลาดในการบันทึกค่ามิเตอร์');
       }
@@ -2128,51 +2161,34 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
         )}
       </div>
 
-      {/* Quick Fill Modal / กล่องข้อความกรอกข้อมูลด่วน */}
+      {/* Quick Fill Modal Popup */}
       {isQuickFillOpen && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md flex items-center justify-center p-4 z-[9999] animate-in fade-in duration-200">
-          <div className="bg-white border border-gray-100 rounded-[32px] shadow-2xl w-full max-w-xl p-6 md:p-8 relative flex flex-col gap-6 animate-in zoom-in-95 duration-200">
-            
-            {/* Header */}
-            <div className="flex items-center justify-between gap-4">
-              <div className="flex items-center gap-3.5">
-                <div className="bg-emerald-500 text-white rounded-full flex items-center justify-center w-11 h-11 shadow-md shadow-emerald-500/20">
-                  <Zap className="w-5 h-5 fill-white text-emerald-300" />
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl p-4 sm:p-6 max-w-2xl w-full shadow-2xl border border-gray-100 flex flex-col max-h-[90vh]">
+            <div className="flex items-center justify-between pb-3 border-b border-gray-100">
+              <div className="flex items-center gap-2">
+                <div className="p-2 bg-indigo-50 text-indigo-600 rounded-xl">
+                  <Sparkles className="w-5 h-5" />
                 </div>
                 <div>
-                  <h4 className="text-base font-extrabold text-slate-900 leading-tight">กรอกแบบรวดเร็ว</h4>
-                  <p className="text-[11px] text-gray-400 font-bold mt-0.5 leading-none">วางข้อมูลหลายห้อง ระบบจะใส่ลงตารางให้</p>
+                  <h3 className="text-base font-bold text-slate-800">กรอกข้อมูลด่วน (Quick Fill)</h3>
+                  <p className="text-xs text-gray-400">คัดลอกหรือวางข้อความเพื่ออัปเดตเลขอ่านมิเตอร์หลายห้องพร้อมกัน</p>
                 </div>
               </div>
               <button
                 type="button"
                 onClick={() => setIsQuickFillOpen(false)}
-                className="text-rose-500 bg-rose-50 hover:bg-rose-100 border border-rose-100 rounded-full p-2 cursor-pointer flex items-center justify-center transition-all shadow-sm"
+                className="p-1.5 text-gray-400 hover:text-slate-600 hover:bg-gray-100 rounded-xl transition-all"
               >
-                <X className="w-4 h-4" />
+                <X className="w-5 h-5" />
               </button>
             </div>
 
-            {/* Template Section & Textarea Container with stable, non-jittery height */}
-            <div className="flex flex-col gap-4 h-[320px] justify-between shrink-0">
-              {/* Template Section: only show if text is <= 1 line */}
-              {quickFillText.split('\n').filter(l => l.trim()).length <= 1 && (
-                <div className="bg-slate-50 border border-slate-100 rounded-2xl p-4 flex flex-col gap-2 shrink-0 h-[112px] justify-center">
-                  <span className="text-xs font-black text-slate-800 leading-none text-left">รูปแบบ</span>
-                  <div className="bg-white border border-gray-200 rounded-xl p-3 font-mono text-xs text-slate-600 flex items-center justify-start text-left shadow-2xs leading-relaxed whitespace-nowrap overflow-x-auto select-all no-scrollbar">
-                    {getTemplateFormatString()}
-                  </div>
-                  <span className="text-[10px] text-gray-400 font-bold leading-none mt-0.5 text-left">ถ้าไม่มีค้าง ไม่ต้องใส่ช่องสุดท้าย</span>
-                </div>
-              )}
-
-              {/* Input Text Area - Single, Persistent to preserve focus */}
-              <div 
-                className="flex flex-col gap-1 w-full shrink-0 transition-all duration-300"
-                style={{
-                  height: quickFillText.split('\n').filter(l => l.trim()).length <= 1 ? '192px' : '320px'
-                }}
-              >
+            <div className="py-3 flex-1 flex flex-col min-h-0">
+              <p className="text-xs font-semibold text-slate-600 mb-1.5">
+                รูปแบบ: <span className="font-mono text-indigo-600">{getSampleTemplateFormat()}</span>
+              </p>
+              <div className="flex-1 min-h-[220px]">
                 <textarea
                   ref={quickFillInputRef}
                   value={quickFillText}
@@ -2184,8 +2200,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
               </div>
             </div>
 
-            {/* Footer Buttons */}
-            <div className="flex items-center justify-between gap-2.5 mt-2 flex-nowrap">
+            <div className="flex items-center justify-between gap-2.5 mt-2 flex-nowrap pt-3 border-t border-gray-100">
               {templateUsed ? (
                 <button
                   type="button"
@@ -2198,8 +2213,21 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
               ) : (
                 <button
                   type="button"
-                  onClick={() => {
-                    const txt = generateTemplateText();
+                  onClick={async () => {
+                    let freshHouseholdMap = new Map<string, number>();
+                    try {
+                      const res = await httpRequest<{ success: boolean; data: Array<{ roomId: string; currentHouseholdPeopleCount: number }> }>(
+                        'GET',
+                        `/api/v1/meters/workspace/household-counts?billingCycleId=${selectedBillingCycleId}`,
+                        undefined,
+                        { headers: currentDormId ? { 'x-dormitory-id': currentDormId } : {} }
+                      );
+                      if (res?.data && Array.isArray(res.data)) {
+                        res.data.forEach(h => freshHouseholdMap.set(h.roomId, h.currentHouseholdPeopleCount));
+                      }
+                    } catch {}
+
+                    const txt = generateTemplateText(freshHouseholdMap);
                     setQuickFillText(txt);
                     setTemplateUsed(true);
                     setTimeout(() => {
@@ -2277,8 +2305,9 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
         isOpen={isLineModalOpen}
         onClose={() => {
           setIsLineModalOpen(false);
-          if (tempMeterRowsCache[selectedCycle]) {
-            setMeterRows([...tempMeterRowsCache[selectedCycle]]);
+          const draft = meterDraftStore.getDraft(currentDormId, selectedBillingCycleId);
+          if (draft) {
+            setMeterRows([...draft as any]);
           }
         }}
         bills={bills}
@@ -2301,7 +2330,11 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
         context={selectedQuickAddContext}
         onSuccess={(msg) => {
           showToast(msg);
-          onRefetchData?.();
+          queryClient.invalidateQueries({ queryKey: queryKeys.rooms(currentDormId) });
+          queryClient.invalidateQueries({ queryKey: queryKeys.tenants(currentDormId) });
+          queryClient.invalidateQueries({ queryKey: queryKeys.contracts(currentDormId) });
+          queryClient.invalidateQueries({ queryKey: queryKeys.meterPreviewContext(currentDormId, selectedBillingCycleId) });
+          queryClient.invalidateQueries({ queryKey: queryKeys.meterWorkspace(currentDormId, selectedBillingCycleId) });
         }}
       />
     </div>

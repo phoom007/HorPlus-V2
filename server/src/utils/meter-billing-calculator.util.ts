@@ -6,16 +6,6 @@
  * 1. ZERO floating-point operations. All financial amounts calculated in exact integer satangs (BigInt).
  * 2. Exact two-decimal canonical strings ("0.00", "3500.00", "4200.50").
  * 3. 100% Mathematical Parity with server BillingService.generateBillPreview & decimal-math.util.
- * 4. Supports all rate modes:
- *    - Contract monthly rent & Term installment schedule
- *    - Provisional Monthly & Provisional Term installment
- *    - Water: per_unit, per_person, fixed/per_room
- *    - Electricity: per_unit, per_person, fixed/per_room
- *    - Common fee: per_person, per_room, free
- *    - Internet fee: per_person, per_room, free
- *    - Parking fee: per_person, per_vehicle, per_room, free
- *    - Manual outstanding amount (overdue)
- *    - Other fees (direct per-room sum)
  */
 
 export interface RateSnapshotContext {
