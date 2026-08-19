@@ -16,6 +16,7 @@ export interface CreateProvisionalRentalTermDto {
   phone?: string | null;
   rentalType: 'MONTHLY' | 'TERM';
   startDate: string;
+  endDate?: string;
   durationMonths?: number;
   unitRentAmount: string | number;
   totalRentAmount?: string | number;
@@ -81,7 +82,18 @@ export class ProvisionalRentalTermService {
 
     if (data.rentalType === 'MONTHLY') {
       durationMonths = Math.max(1, data.durationMonths || 1);
-      endDate = calculateRentalEndDate(data.startDate, durationMonths);
+      if (data.endDate && /^\d{4}-\d{2}-\d{2}$/.test(data.endDate)) {
+        const [ey, em, ed] = data.endDate.split('-').map(Number);
+        endDate = new Date(Date.UTC(ey, em - 1, ed));
+        if (endDate < startDate) {
+          const err = new Error('วันที่สิ้นสุดต้องไม่น้อยกว่าวันที่เริ่มต้น');
+          (err as any).statusCode = 400;
+          (err as any).code = 'VALIDATION_ERROR';
+          throw err;
+        }
+      } else {
+        endDate = calculateRentalEndDate(data.startDate, durationMonths);
+      }
       unitRent = formatDecimal(toDecimal(String(data.unitRentAmount)));
       totalRent = data.totalRentAmount !== undefined
         ? formatDecimal(toDecimal(String(data.totalRentAmount)))

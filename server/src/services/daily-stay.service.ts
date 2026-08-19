@@ -86,6 +86,9 @@ export class DailyStayService {
     const month = String(now.getUTCMonth() + 1).padStart(2, '0');
     const prefix = `INV-D-${year}-${month}-`;
 
+    // Transaction-safe dormitory/month namespace lock to serialize invoice numbers across all rooms
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${'daily_invoice:' + dormitoryId + ':' + year + '-' + month}))`;
+
     const lastInvoice = await tx.dailyStayInvoice.findFirst({
       where: {
         dormitoryId,
@@ -219,9 +222,9 @@ export class DailyStayService {
     let dailyRate = '0.00';
     if (data.dailyRateAmount !== undefined && data.dailyRateAmount !== null) {
       dailyRate = formatDecimal(toDecimal(String(data.dailyRateAmount)));
-    } else if (room.dailyRent) {
+    } else if (room.dailyRent !== null && room.dailyRent !== undefined) {
       dailyRate = formatDecimal(room.dailyRent);
-    } else if (room.building?.dailyRent) {
+    } else if (room.building?.dailyRent !== null && room.building?.dailyRent !== undefined) {
       dailyRate = formatDecimal(room.building.dailyRent);
     }
 
@@ -229,9 +232,9 @@ export class DailyStayService {
     let deposit = '0.00';
     if (data.depositAmount !== undefined && data.depositAmount !== null) {
       deposit = formatDecimal(toDecimal(String(data.depositAmount)));
-    } else if (room.depositAmount) {
+    } else if (room.depositAmount !== null && room.depositAmount !== undefined) {
       deposit = formatDecimal(room.depositAmount);
-    } else if (room.building?.depositAmount) {
+    } else if (room.building?.depositAmount !== null && room.building?.depositAmount !== undefined) {
       deposit = formatDecimal(room.building.depositAmount);
     }
 
@@ -419,38 +422,46 @@ export class DailyStayService {
           ? totalRent
           : totalAgreed;
 
-      const invoiceNumber = await this.generateNextDailyInvoiceNumber(dormitoryId, tx);
-
-      const invoice = await tx.dailyStayInvoice.create({
-        data: {
-          dormitoryId,
-          dailyStayId: stay.id,
-          invoiceNumber,
-          totalRentAmount: toDecimal(totalRent),
-          depositAmount: toDecimal(deposit),
-          totalAgreedAmount: toDecimal(totalAgreed),
-          outstandingAmount: toDecimal(outstanding),
-          depositDeclaredStatus: stay.depositDeclaredStatus,
-          status: 'ISSUED',
-          items: {
-            create: [
-              {
-                itemType: 'DAILY_RENT',
-                description: `ค่าเช่าห้องพักรายวัน (${stay.inclusiveDayCount} วัน)`,
-                amount: toDecimal(totalRent),
-                status: 'OUTSTANDING',
-              },
-              {
-                itemType: 'DEPOSIT',
-                description: 'เงินประกัน/มัดจำรายวัน',
-                amount: toDecimal(deposit),
-                status: stay.depositDeclaredStatus === 'PAID' ? 'DECLARED_PAID' : 'OUTSTANDING',
-              },
-            ],
-          },
-        },
+      let invoice = await tx.dailyStayInvoice.findUnique({
+        where: { dailyStayId: stay.id },
         include: { items: true },
       });
+
+      let invoiceNumber = invoice?.invoiceNumber;
+      if (!invoice) {
+        invoiceNumber = await this.generateNextDailyInvoiceNumber(dormitoryId, tx);
+
+        invoice = await tx.dailyStayInvoice.create({
+          data: {
+            dormitoryId,
+            dailyStayId: stay.id,
+            invoiceNumber,
+            totalRentAmount: toDecimal(totalRent),
+            depositAmount: toDecimal(deposit),
+            totalAgreedAmount: toDecimal(totalAgreed),
+            outstandingAmount: toDecimal(outstanding),
+            depositDeclaredStatus: stay.depositDeclaredStatus,
+            status: 'ISSUED',
+            items: {
+              create: [
+                {
+                  itemType: 'DAILY_RENT',
+                  description: `ค่าเช่าห้องพักรายวัน (${stay.inclusiveDayCount} วัน)`,
+                  amount: toDecimal(totalRent),
+                  status: 'OUTSTANDING',
+                },
+                {
+                  itemType: 'DEPOSIT',
+                  description: 'เงินประกัน/มัดจำรายวัน',
+                  amount: toDecimal(deposit),
+                  status: stay.depositDeclaredStatus === 'PAID' ? 'DECLARED_PAID' : 'OUTSTANDING',
+                },
+              ],
+            },
+          },
+          include: { items: true },
+        });
+      }
 
       // 7. Update DailyStay record
       const updatedStay = await tx.dailyStay.update({
@@ -578,9 +589,9 @@ export class DailyStayService {
       let dailyRate = '0.00';
       if (data.dailyRateAmount !== undefined && data.dailyRateAmount !== null) {
         dailyRate = formatDecimal(toDecimal(String(data.dailyRateAmount)));
-      } else if (room.dailyRent) {
+      } else if (room.dailyRent !== null && room.dailyRent !== undefined) {
         dailyRate = formatDecimal(room.dailyRent);
-      } else if (room.building?.dailyRent) {
+      } else if (room.building?.dailyRent !== null && room.building?.dailyRent !== undefined) {
         dailyRate = formatDecimal(room.building.dailyRent);
       }
 
@@ -588,9 +599,9 @@ export class DailyStayService {
       let deposit = '0.00';
       if (data.depositAmount !== undefined && data.depositAmount !== null) {
         deposit = formatDecimal(toDecimal(String(data.depositAmount)));
-      } else if (room.depositAmount) {
+      } else if (room.depositAmount !== null && room.depositAmount !== undefined) {
         deposit = formatDecimal(room.depositAmount);
-      } else if (room.building?.depositAmount) {
+      } else if (room.building?.depositAmount !== null && room.building?.depositAmount !== undefined) {
         deposit = formatDecimal(room.building.depositAmount);
       }
 

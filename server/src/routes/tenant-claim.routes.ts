@@ -1,7 +1,7 @@
 /**
  * @license Apache-2.0
  * Tenant Claim Routes (LOCAL-07 Batch 02)
- * Pre-link authenticated candidate discovery & self-claim execution with durable composite rate limiting.
+ * Pre-link authenticated candidate discovery & self-claim execution with durable composite & actor-level rate limiting.
  */
 
 import { Router, Request, Response, NextFunction } from 'express';
@@ -16,6 +16,7 @@ class DistributedClaimRateLimiter {
   private memoryStore = new InMemoryRateLimiterStore();
 
   public async isAllowed(key: string, maxRequests: number, windowMs: number): Promise<boolean> {
+    const isProduction = process.env.NODE_ENV === 'production';
     try {
       const redis = getRedisClient();
       if (redis && redis.status === 'ready') {
@@ -26,8 +27,22 @@ class DistributedClaimRateLimiter {
         return count <= maxRequests;
       }
     } catch (_err) {
-      // Graceful fallback to memory store
+      if (isProduction) {
+        const err = new Error('Durable rate limiter is temporarily unavailable');
+        (err as any).statusCode = 503;
+        (err as any).code = 'RATE_LIMITER_UNAVAILABLE';
+        throw err;
+      }
     }
+
+    if (isProduction) {
+      const err = new Error('Durable rate limiter is required in production');
+      (err as any).statusCode = 503;
+      (err as any).code = 'RATE_LIMITER_UNAVAILABLE';
+      throw err;
+    }
+
+    // Explicit non-production fallback for tests & local dev
     return this.memoryStore.isAllowed(key, maxRequests, windowMs);
   }
 }
@@ -41,30 +56,52 @@ export function createTenantClaimRouter(
   const router = Router();
   const requireSession = createRequireSessionMiddleware(authService);
 
-  // Composite rate limiter: max 5 claim attempts per 15 minutes per user/IP/dorm/room
+  // Composite & Actor-level dual rate limiter:
+  // 1. Room-scoped: max 5 attempts per 15 minutes per room/user/IP
+  // 2. Actor-scoped: max 15 attempts per 15 minutes per user/IP across all rooms
   const claimRateLimiter = async (req: Request, res: Response, next: NextFunction) => {
-    const ip = req.ip || (req.headers['x-forwarded-for'] as string) || '127.0.0.1';
-    const userId = req.auth?.userId || 'anonymous';
-    const dormId = (req.body?.dormitoryId as string) || (req.query?.dormitoryId as string) || 'global';
-    const roomId = (req.body?.roomId as string) || (req.query?.roomId as string) || 'global';
+    try {
+      const ip = req.ip || (req.headers['x-forwarded-for'] as string) || '127.0.0.1';
+      const userId = req.auth?.userId || 'anonymous';
+      const dormId = (req.body?.dormitoryId as string) || (req.query?.dormitoryId as string) || 'global';
+      const roomId = (req.body?.roomId as string) || (req.query?.roomId as string) || 'global';
 
-    const key = `rate_limit:tenant_claim:${dormId}:${roomId}:${userId}:${ip}`;
-    const allowed = await claimRateLimiterStore.isAllowed(key, 5, 15 * 60 * 1000);
+      const roomKey = `rate_limit:tenant_claim:room:${dormId}:${roomId}:${userId}:${ip}`;
+      const actorKey = `rate_limit:tenant_claim:actor:${userId}:${ip}`;
 
-    if (!allowed) {
-      const requestId = (req.headers['x-request-id'] as string) || 'req-unknown';
-      return res.status(429).json({
-        error: {
-          code: 'RATE_LIMIT_EXCEEDED',
-          message: 'คุณได้พยายามยืนยันสิทธิ์เกินจำนวนครั้งที่กำหนด กรุณารอ 15 นาทีแล้วลองใหม่อีกครั้ง',
-          fieldErrors: null,
-          requestId,
-          timestamp: new Date().toISOString(),
-        },
-      });
+      const [roomAllowed, actorAllowed] = await Promise.all([
+        claimRateLimiterStore.isAllowed(roomKey, 5, 15 * 60 * 1000),
+        claimRateLimiterStore.isAllowed(actorKey, 15, 15 * 60 * 1000),
+      ]);
+
+      if (!roomAllowed || !actorAllowed) {
+        const requestId = (req.headers['x-request-id'] as string) || 'req-unknown';
+        return res.status(429).json({
+          error: {
+            code: 'RATE_LIMIT_EXCEEDED',
+            message: 'คุณได้พยายามยืนยันสิทธิ์เกินจำนวนครั้งที่กำหนด กรุณารอ 15 นาทีแล้วลองใหม่อีกครั้ง',
+            fieldErrors: null,
+            requestId,
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+
+      next();
+    } catch (err: any) {
+      if (err.statusCode === 503 || err.code === 'RATE_LIMITER_UNAVAILABLE') {
+        return res.status(503).json({
+          error: {
+            code: 'SERVICE_UNAVAILABLE',
+            message: 'ระบบรักษาความปลอดภัยชั่วคราวไม่พร้อมใช้งาน กรุณาลองใหม่อีกครั้ง',
+            fieldErrors: null,
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+      next(err);
     }
-
-    next();
   };
 
   const handleServiceError = (res: Response, err: any, req: Request) => {

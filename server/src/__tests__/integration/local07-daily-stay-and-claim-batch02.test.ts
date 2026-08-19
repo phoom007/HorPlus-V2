@@ -944,10 +944,10 @@ describe('LOCAL-07 Batch 02: Daily Stay Domain, Invoicing & Tenant Self-Claim', 
       httpApp = createApp({ customAuthService: authService, forcePrisma: true });
 
       const ownerAuth = await authService.authenticateTestUser(ownerUserId);
-      ownerSessionCookie = `horplus_session=${ownerAuth.sessionToken}; horplus_csrf=${ownerAuth.csrfToken}`;
+      ownerSessionCookie = `horplus_session=${ownerAuth.sessionToken}`;
 
       const tenantAuth = await authService.authenticateTestUser(tenantUserId);
-      tenantSessionCookie = `horplus_session=${tenantAuth.sessionToken}; horplus_csrf=${tenantAuth.csrfToken}`;
+      tenantSessionCookie = `horplus_session=${tenantAuth.sessionToken}`;
 
       const httpRoom = await prisma.room.create({
         data: {
@@ -966,9 +966,23 @@ describe('LOCAL-07 Batch 02: Daily Stay Domain, Invoicing & Tenant Self-Claim', 
       httpRoomId = httpRoom.id;
     });
 
-    it('1. POST /api/v1/daily-stays/request creates PENDING_APPROVAL request over HTTP', async () => {
+    it('1. POST /api/v1/daily-stays/request requires authenticated session and creates PENDING_APPROVAL request', async () => {
+      // Unauthenticated -> 401
+      const unauthRes = await request(httpApp)
+        .post('/api/v1/daily-stays/request')
+        .set('x-dormitory-id', dormitoryId)
+        .send({
+          roomId: httpRoomId,
+          applicantFullName: 'นายทดสอบ เอชทีทีพี',
+          startDate: '2026-10-01',
+          endDate: '2026-10-03',
+        });
+      expect(unauthRes.status).toBe(401);
+
+      // Authenticated with session -> 201
       const res = await request(httpApp)
         .post('/api/v1/daily-stays/request')
+        .set('Cookie', tenantSessionCookie)
         .set('x-dormitory-id', dormitoryId)
         .send({
           roomId: httpRoomId,
@@ -984,6 +998,7 @@ describe('LOCAL-07 Batch 02: Daily Stay Domain, Invoicing & Tenant Self-Claim', 
       expect(res.status).toBe(201);
       expect(res.body.data).toBeDefined();
       expect(res.body.data.status).toBe('PENDING_APPROVAL');
+      expect(res.body.data.requesterUserId).toBe(tenantUserId);
       expect(res.body.data.inclusiveDayCount).toBe(3);
       expect(Number(res.body.data.totalRentAmount)).toBe(2100.0);
 
@@ -1033,6 +1048,7 @@ describe('LOCAL-07 Batch 02: Daily Stay Domain, Invoicing & Tenant Self-Claim', 
 
       const createRes = await request(httpApp)
         .post('/api/v1/daily-stays/request')
+        .set('Cookie', tenantSessionCookie)
         .set('x-dormitory-id', dormitoryId)
         .send({
           roomId: httpRoomId,
@@ -1235,5 +1251,179 @@ describe('LOCAL-07 Batch 02: Daily Stay Domain, Invoicing & Tenant Self-Claim', 
       expect(dailyInvoices.length).toBeGreaterThanOrEqual(1);
     });
   });
+
+  // ==========================================
+  // High-Concurrency Invoice Number & Advisory Lock Tests
+  // ==========================================
+  describe('High-Concurrency Daily Invoice Number Allocation', () => {
+    it('10 concurrent approved Daily stays in 10 different rooms in the same dormitory/month generate 10 unique sequential invoice numbers', async () => {
+      const concDorm = await prisma.dormitory.create({
+        data: {
+          name: 'หอพัก Concurrency Test',
+          status: 'active',
+        },
+      });
+
+      const concBld = await prisma.building.create({
+        data: {
+          dormitoryId: concDorm.id,
+          name: 'Building Conc',
+          dailyRent: 500,
+          depositAmount: 200,
+        },
+      });
+
+      // Create 10 distinct rooms in fresh dormitory
+      const rooms = await Promise.all(
+        Array.from({ length: 10 }, (_, i) =>
+          prisma.room.create({
+            data: {
+              dormitoryId: concDorm.id,
+              buildingId: concBld.id,
+              roomNumber: `CONC-${100 + i}`,
+              normalizedRoomNumber: `CONC-${100 + i}`,
+              roomType: 'standard',
+              floor: 1,
+              status: 'vacant',
+              dailyRent: 500,
+              depositAmount: 200,
+            },
+          })
+        )
+      );
+
+      const today = new Date().toISOString().slice(0, 10);
+
+      // Concurrently execute 10 quick adds
+      const results = await Promise.all(
+        rooms.map((r, i) =>
+          dailyStayService.ownerQuickAddDailyStay(
+            concDorm.id,
+            {
+              roomId: r.id,
+              fullName: `ผู้เข้าพักพร้อมกัน ${i + 1}`,
+              startDate: today,
+              endDate: today,
+              dailyRateAmount: '500.00',
+              depositAmount: '200.00',
+              depositDeclaredStatus: 'UNPAID',
+            },
+            ownerUserId
+          )
+        )
+      );
+
+      expect(results.length).toBe(10);
+
+      // Collect all 10 invoice numbers
+      const invoiceNumbers = results.map((res) => res.invoice.invoiceNumber);
+      const uniqueNumbers = new Set(invoiceNumbers);
+
+      // Invariant: exactly 10 unique invoice numbers, no duplicates or collisions
+      expect(uniqueNumbers.size).toBe(10);
+      results.forEach((res) => {
+        expect(res.invoice.items.length).toBe(2);
+        const rentItem = res.invoice.items.find((it: any) => it.itemType === 'DAILY_RENT');
+        const depItem = res.invoice.items.find((it: any) => it.itemType === 'DEPOSIT');
+        expect(rentItem).toBeDefined();
+        expect(depItem).toBeDefined();
+      });
+    });
+  });
+
+  // ==========================================
+  // Monthly Edited End Date & Financial Invariant Tests
+  // ==========================================
+  describe('Monthly Edited End Date Persistence & Defaults', () => {
+    it('persists explicitly approved edited endDate instead of recomputing it', async () => {
+      const { ProvisionalRentalTermService } = await import('../../services/provisional-rental-term.service.js');
+      const provService = new ProvisionalRentalTermService(prisma);
+
+      const editDorm = await prisma.dormitory.create({
+        data: { name: 'หอพัก Edit Date Test', status: 'active' },
+      });
+      const editBld = await prisma.building.create({
+        data: { dormitoryId: editDorm.id, name: 'Bld Edit' },
+      });
+
+      const editRoom = await prisma.room.create({
+        data: {
+          dormitoryId: editDorm.id,
+          buildingId: editBld.id,
+          roomNumber: 'EDIT-END-01',
+          normalizedRoomNumber: 'EDIT-END-01',
+          roomType: 'standard',
+          floor: 1,
+          status: 'vacant',
+          monthlyRent: 4000,
+        },
+      });
+
+      const today = new Date().toISOString().slice(0, 10);
+      const customEndDate = '2026-12-31';
+
+      const result = await provService.createProvisionalTenantAndTerm(
+        editDorm.id,
+        {
+          roomId: editRoom.id,
+          fullName: 'นายทดสอบ แก้ไขวันสิ้นสุด',
+          rentalType: 'MONTHLY',
+          startDate: today,
+          endDate: customEndDate, // Explicitly edited end date
+          durationMonths: 1,
+          unitRentAmount: '4000.00',
+          totalRentAmount: '4000.00',
+        },
+        ownerUserId
+      );
+
+      expect(result.provisionalTerm.endDate.toISOString().slice(0, 10)).toBe(customEndDate);
+    });
+
+    it('deposit amount 0 is strictly preserved and not overwritten by building deposit', async () => {
+      const zeroDorm = await prisma.dormitory.create({
+        data: { name: 'หอพัก Zero Dep Test', status: 'active' },
+      });
+      const zeroBld = await prisma.building.create({
+        data: {
+          dormitoryId: zeroDorm.id,
+          name: 'Bld Zero',
+          dailyRent: 300,
+          depositAmount: 300, // Building configured 300
+        },
+      });
+
+      const zeroDepRoom = await prisma.room.create({
+        data: {
+          dormitoryId: zeroDorm.id,
+          buildingId: zeroBld.id,
+          roomNumber: 'ZERO-DEP-01',
+          normalizedRoomNumber: 'ZERO-DEP-01',
+          roomType: 'standard',
+          floor: 1,
+          status: 'vacant',
+          dailyRent: 300,
+          depositAmount: 0, // Configured 0 strictly preserved
+        },
+      });
+
+      const today = new Date().toISOString().slice(0, 10);
+
+      const result = await dailyStayService.ownerQuickAddDailyStay(
+        zeroDorm.id,
+        {
+          roomId: zeroDepRoom.id,
+          fullName: 'นายทดสอบ มัดจำศูนย์',
+          startDate: today,
+          endDate: today,
+        },
+        ownerUserId
+      );
+
+      expect(Number(result.depositAmount)).toBe(0);
+      expect(Number(result.invoice.depositAmount)).toBe(0);
+    });
+  });
 });
+
 

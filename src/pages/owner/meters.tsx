@@ -158,8 +158,10 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   const [isQuickFillOpen, setIsQuickFillOpen] = useState(false);
   const [quickFillText, setQuickFillText] = useState('');
   const [templateUsed, setTemplateUsed] = useState(false);
+  const [isFirstCycle, setIsFirstCycle] = useState(false);
   const [quickAddModalOpen, setQuickAddModalOpen] = useState(false);
   const [selectedQuickAddRoom, setSelectedQuickAddRoom] = useState<Room | null>(null);
+  const [operationalCycleCode, setOperationalCycleCode] = useState<string>('');
   const [allowEditAllElecPrev, setAllowEditAllElecPrev] = useState(false);
   const [allowEditAllWaterPrev, setAllowEditAllWaterPrev] = useState(false);
   const [flashingCells, setFlashingCells] = useState<{ [key: string]: boolean }>({});
@@ -175,7 +177,11 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   const dorm = getDormitory();
   const cycleRates = getDormitoryRatesForCycle(dorm, selectedCycle);
 
-  const [isFirstCycle, setIsFirstCycle] = useState(false);
+  const isCurrentOperationalCycle = Boolean(
+    operationalCycleCode
+      ? (selectedCycle === operationalCycleCode || selectedCycleCode === operationalCycleCode)
+      : true
+  );
   const isWaterUnit = (cycleRates.waterBillingMode || 'unit') === 'unit';
   const isElecUnit = (cycleRates.electricBillingMode || 'unit') === 'unit';
 
@@ -645,6 +651,14 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
         const isFirst = cyclesRes.firstBillingCycleId === cycleId ||
           cyclesRes.data?.find((c: any) => (c.id === cycleId || c.cycleCode === selectedCycleCode || c.cycleCode === selectedCycle))?.isFirstCycle;
         setIsFirstCycle(Boolean(isFirst));
+        if ((cyclesRes as any).operationalCycleCode) {
+          setOperationalCycleCode((cyclesRes as any).operationalCycleCode);
+        } else if (cyclesRes.data && Array.isArray(cyclesRes.data)) {
+          const op = cyclesRes.data.find((c: any) => c.status === 'draft' || c.status === 'open' || c.isCurrent);
+          if (op?.cycleCode) {
+            setOperationalCycleCode(op.cycleCode);
+          }
+        }
       }
       
       const readingsByRoom: { [roomId: string]: { waterPrev?: number; waterCurr?: number; elecPrev?: number; elecCurr?: number } } = {};
@@ -1896,11 +1910,11 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                           <span className="truncate max-w-[100px]">{tenant.name}</span>
                           <ArrowRight className="w-3 h-3 opacity-60" />
                         </button>
-                      ) : row.isOperational ? (
+                      ) : (isCurrentOperationalCycle && room && room.status !== 'archived') ? (
                         <button
                           type="button"
                           onClick={() => {
-                            setSelectedQuickAddRoom(row.room);
+                            setSelectedQuickAddRoom(room);
                             setQuickAddModalOpen(true);
                           }}
                           className="inline-flex items-center gap-1 text-[11px] font-bold text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 px-2 py-1 rounded-lg border border-indigo-200 transition-all cursor-pointer shadow-2xs"

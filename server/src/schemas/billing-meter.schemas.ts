@@ -161,6 +161,7 @@ export const CreateProvisionalRentalTermSchema = z
     phone: z.string().trim().max(50).optional().nullable(),
     rentalType: z.enum(['MONTHLY', 'TERM']),
     startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'วันที่เริ่มต้นต้องอยู่ในรูปแบบ YYYY-MM-DD'),
+    endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'วันที่สิ้นสุดต้องอยู่ในรูปแบบ YYYY-MM-DD').optional(),
     durationMonths: z.number().int().min(1).max(36).optional(),
     unitRentAmount: z.string().regex(/^\d+(\.\d{1,2})?$/, 'ค่าเช่าต้องเป็นตัวเลขทศนิยมไม่เกิน 2 ตำแหน่งและไม่ติดลบ'),
     totalRentAmount: z.string().regex(/^\d+(\.\d{1,2})?$/, 'ค่าเช่ารวมต้องเป็นตัวเลขทศนิยมไม่เกิน 2 ตำแหน่งและไม่ติดลบ').optional(),
