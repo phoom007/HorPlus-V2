@@ -49,6 +49,18 @@ function sanitizeDraftForStorage(draft: any): any {
     safe.ownerSignatureUrl = '';
   }
 
+  // 3. Building Code Invariant: English characters in roomPrefix/code are canonicalized to uppercase
+  if (Array.isArray(safe.formData?.buildings)) {
+    safe.formData.buildings.forEach((b: any) => {
+      if (b && typeof b.roomPrefix === 'string') {
+        b.roomPrefix = b.roomPrefix.toUpperCase();
+      }
+      if (b && typeof b.code === 'string') {
+        b.code = b.code.toUpperCase();
+      }
+    });
+  }
+
   return safe;
 }
 

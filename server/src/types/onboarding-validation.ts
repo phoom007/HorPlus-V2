@@ -182,7 +182,7 @@ export const PaymentSettingsInputSchema = PaymentSettingsPatchInputSchema;
 
 export const BuildingSchema = z.object({
   name: z.string().min(1, 'Building name is required').max(255),
-  code: z.string().max(100).optional().nullable(),
+  code: z.string().trim().max(100).transform(val => val ? val.toUpperCase() : val).optional().nullable(),
   floorCount: z.number().int().min(1, 'Minimum 1 floor').default(1),
   roomsPerFloor: z.number().int().min(0).optional().nullable(),
   numberingPattern: z.string().max(100).optional().nullable(),
@@ -192,10 +192,10 @@ export const BuildingSchema = z.object({
 export const OnboardingBuildingInputSchema = z.object({
   id: z.string().trim().min(1),
   name: z.string().trim().min(1, 'กรุณาระบุชื่ออาคาร').max(255),
-  code: z.string().max(100).optional().nullable(),
+  code: z.string().trim().max(100).transform(val => val ? val.toUpperCase() : val).optional().nullable(),
   floorsCount: z.coerce.number().int().min(1, 'จำนวนชั้นต้องอย่างน้อย 1').max(200).default(1),
   roomsPerFloor: z.coerce.number().int().min(0).optional().nullable(),
-  roomPrefix: z.string().trim().optional().nullable(),
+  roomPrefix: z.string().trim().max(100).transform(val => val ? val.toUpperCase() : val).optional().nullable(),
   hasElevator: z.boolean().optional().nullable().default(false),
   numberingPattern: z.string().max(100).optional().nullable(),
   formatPattern: z.string().max(100).optional().nullable(),

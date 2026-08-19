@@ -189,7 +189,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
     }
 
     const rooms: string[] = [];
-    const prefix = b.roomPrefix ? b.roomPrefix.trim() : '';
+    const prefix = b.roomPrefix ? b.roomPrefix.trim().toUpperCase() : '';
     const maxFloors = Number(b.totalFloors) || 0;
     const maxRooms = Number(b.roomsPerFloor) || 0;
 
@@ -379,9 +379,24 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
           setCurrentStep(draft.currentStep);
         }
         if (draft.formData) {
+          const restoredBuildings = Array.isArray(draft.formData.buildings)
+            ? draft.formData.buildings.map((b: any) => {
+                const rawPrefix = (typeof b.roomPrefix === 'string' ? b.roomPrefix : '').trim();
+                const pfx = rawPrefix.toUpperCase();
+                return {
+                  ...b,
+                  roomPrefix: pfx,
+                  name: (b.name && b.name.trim())
+                    ? (rawPrefix ? b.name.replace(new RegExp(`(อาคาร\\s*)${rawPrefix}`, 'i'), `$1${pfx}`) : b.name)
+                    : (pfx ? `อาคาร ${pfx}` : 'อาคาร '),
+                };
+              })
+            : undefined;
+
           setFormData(prev => ({
             ...prev,
             ...draft.formData,
+            ...(restoredBuildings ? { buildings: restoredBuildings } : {}),
             // Never restore sensitive channelSecret
             lineOA: {
               ...prev.lineOA,
@@ -1115,25 +1130,28 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
       }
 
       // 3. Map Buildings
-      const mappedBuildings = formData.buildings.map((b, idx) => ({
-        id: b.id || `bld-${idx + 1}`,
-        name: (b.name && b.name.trim()) ? b.name.trim() : (b.roomPrefix ? `อาคาร ${b.roomPrefix.trim()}` : `อาคาร ${idx + 1}`),
-        code: b.roomPrefix || null,
-        floorsCount: Number(b.totalFloors) || 1,
-        roomsPerFloor: b.roomsPerFloor !== '' ? Number(b.roomsPerFloor) : null,
-        roomPrefix: b.roomPrefix || null,
-        hasElevator: b.hasElevator ?? false,
-        numberingPattern: b.formatPattern || null,
-        description: `อาคาร ${(b.name && b.name.trim()) ? b.name.trim() : (b.roomPrefix ? b.roomPrefix.trim() : idx + 1)}`,
-        monthlyRent: Number(b.rentRates?.monthly) || 0,
-        dailyRent: b.rentRates?.daily ? Number(b.rentRates.daily) : null,
-        termRent: b.rentRates?.term ? Number(b.rentRates.term) : null,
-        termMonths: Number(b.rentRates?.termMonths) || 4,
-        maxInstallmentMonths: Number(b.rentRates?.maxInstallmentMonths) || 2,
-        depositAmount: b.securityDeposit !== undefined && b.securityDeposit !== '' ? (Number(b.securityDeposit) || 0) : (Number(formData.deposits.securityDeposit) || 0),
-        securityDeposit: b.securityDeposit !== undefined && b.securityDeposit !== '' ? (Number(b.securityDeposit) || 0) : (Number(formData.deposits.securityDeposit) || 0),
-        maximumOccupants: Number(b.rentRates?.maxOccupants) || 2,
-      }));
+      const mappedBuildings = formData.buildings.map((b, idx) => {
+        const normalizedPrefix = (b.roomPrefix ? b.roomPrefix.trim() : '').toUpperCase();
+        return {
+          id: b.id || `bld-${idx + 1}`,
+          name: (b.name && b.name.trim()) ? b.name.trim() : (normalizedPrefix ? `อาคาร ${normalizedPrefix}` : `อาคาร ${idx + 1}`),
+          code: normalizedPrefix || null,
+          floorsCount: Number(b.totalFloors) || 1,
+          roomsPerFloor: b.roomsPerFloor !== '' ? Number(b.roomsPerFloor) : null,
+          roomPrefix: normalizedPrefix || null,
+          hasElevator: b.hasElevator ?? false,
+          numberingPattern: b.formatPattern || null,
+          description: `อาคาร ${(b.name && b.name.trim()) ? b.name.trim() : (normalizedPrefix ? normalizedPrefix : idx + 1)}`,
+          monthlyRent: Number(b.rentRates?.monthly) || 0,
+          dailyRent: b.rentRates?.daily ? Number(b.rentRates.daily) : null,
+          termRent: b.rentRates?.term ? Number(b.rentRates.term) : null,
+          termMonths: Number(b.rentRates?.termMonths) || 4,
+          maxInstallmentMonths: Number(b.rentRates?.maxInstallmentMonths) || 2,
+          depositAmount: b.securityDeposit !== undefined && b.securityDeposit !== '' ? (Number(b.securityDeposit) || 0) : (Number(formData.deposits.securityDeposit) || 0),
+          securityDeposit: b.securityDeposit !== undefined && b.securityDeposit !== '' ? (Number(b.securityDeposit) || 0) : (Number(formData.deposits.securityDeposit) || 0),
+          maximumOccupants: Number(b.rentRates?.maxOccupants) || 2,
+        };
+      });
 
       // 4. Map Rooms
       const mappedRooms: any[] = [];
@@ -1577,7 +1595,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                             type="text"
                             value={b.roomPrefix}
                             onChange={(e) => {
-                              const val = e.target.value;
+                              const val = e.target.value.toUpperCase();
                               const updated = [...formData.buildings];
                               updated[idx].roomPrefix = val;
                               updated[idx].name = val ? `อาคาร ${val}` : 'อาคาร ';
@@ -1652,7 +1670,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                         <div>
                           <label className="block text-xs font-bold text-slate-700 mb-1">รูปแบบเลขห้อง</label>
                           {(() => {
-                            const pfx = b.roomPrefix ? b.roomPrefix.trim() : 'A';
+                            const pfx = b.roomPrefix ? b.roomPrefix.trim().toUpperCase() : 'A';
                             return (
                               <select
                                 value={b.formatPattern || 'prefix_floor_room'}
