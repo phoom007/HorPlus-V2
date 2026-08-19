@@ -524,18 +524,18 @@ export class MeterService {
           );
         }
 
-        const prevVal = Number(authPrev);
-        const currVal = Number(row.waterCurr);
+        const prevDec = toDecimal(authPrev);
+        const currDec = toDecimal(String(row.waterCurr));
 
-        if (isNaN(prevVal) || isNaN(currVal) || prevVal < 0 || currVal < 0) {
+        if (compareDecimals(prevDec, '0.00') < 0 || compareDecimals(currDec, '0.00') < 0) {
           const err = new Error(`ค่ามิเตอร์น้ำต้องเป็นตัวเลขที่มากกว่าหรือเท่ากับ 0`);
           (err as any).statusCode = 400;
           (err as any).code = 'INVALID_METER_READING';
           throw err;
         }
 
-        if (currVal < prevVal) {
-          const err = new Error(`ค่ามิเตอร์น้ำปัจจุบัน (${currVal}) ต้องไม่น้อยกว่าค่ามิเตอร์เดิม (${prevVal})`);
+        if (compareDecimals(currDec, prevDec) < 0) {
+          const err = new Error(`ค่ามิเตอร์น้ำปัจจุบัน (${row.waterCurr}) ต้องไม่น้อยกว่าค่ามิเตอร์เดิม (${authPrev})`);
           (err as any).statusCode = 400;
           (err as any).code = 'INVALID_METER_READING';
           throw err;
@@ -563,7 +563,7 @@ export class MeterService {
           );
         }
 
-        const usageUnits = (currVal - prevVal).toFixed(2);
+        const usageUnits = formatDecimal(subDecimals(currDec, prevDec));
         const existingReading = await this.meterRepo.findReadingByCycleRoomAndType(
           dormitoryId,
           billingCycleId,
@@ -578,7 +578,7 @@ export class MeterService {
             dormitoryId,
             {
               previousReading: authPrev,
-              currentReading: formatDecimal(toDecimal(String(row.waterCurr))),
+              currentReading: formatDecimal(currDec),
               usageUnits,
               readAt: new Date(),
               readByUserId: userId,
@@ -595,7 +595,7 @@ export class MeterService {
               meterDeviceId: device.id,
               meterType: 'water',
               previousReading: authPrev,
-              currentReading: formatDecimal(toDecimal(String(row.waterCurr))),
+              currentReading: formatDecimal(currDec),
               usageUnits,
               readAt: new Date(),
               readByUserId: userId,
@@ -623,18 +623,18 @@ export class MeterService {
           );
         }
 
-        const prevVal = Number(authPrev);
-        const currVal = Number(row.elecCurr);
+        const prevDec = toDecimal(authPrev);
+        const currDec = toDecimal(String(row.elecCurr));
 
-        if (isNaN(prevVal) || isNaN(currVal) || prevVal < 0 || currVal < 0) {
+        if (compareDecimals(prevDec, '0.00') < 0 || compareDecimals(currDec, '0.00') < 0) {
           const err = new Error(`ค่ามิเตอร์ไฟต้องเป็นตัวเลขที่มากกว่าหรือเท่ากับ 0`);
           (err as any).statusCode = 400;
           (err as any).code = 'INVALID_METER_READING';
           throw err;
         }
 
-        if (currVal < prevVal) {
-          const err = new Error(`ค่ามิเตอร์ไฟปัจจุบัน (${currVal}) ต้องไม่น้อยกว่าค่ามิเตอร์เดิม (${prevVal})`);
+        if (compareDecimals(currDec, prevDec) < 0) {
+          const err = new Error(`ค่ามิเตอร์ไฟปัจจุบัน (${row.elecCurr}) ต้องไม่น้อยกว่าค่ามิเตอร์เดิม (${authPrev})`);
           (err as any).statusCode = 400;
           (err as any).code = 'INVALID_METER_READING';
           throw err;
@@ -662,7 +662,7 @@ export class MeterService {
           );
         }
 
-        const usageUnits = (currVal - prevVal).toFixed(2);
+        const usageUnits = formatDecimal(subDecimals(currDec, prevDec));
         const existingReading = await this.meterRepo.findReadingByCycleRoomAndType(
           dormitoryId,
           billingCycleId,
@@ -677,7 +677,7 @@ export class MeterService {
             dormitoryId,
             {
               previousReading: authPrev,
-              currentReading: formatDecimal(toDecimal(String(row.elecCurr))),
+              currentReading: formatDecimal(currDec),
               usageUnits,
               readAt: new Date(),
               readByUserId: userId,
@@ -694,7 +694,7 @@ export class MeterService {
               meterDeviceId: device.id,
               meterType: 'electricity',
               previousReading: authPrev,
-              currentReading: formatDecimal(toDecimal(String(row.elecCurr))),
+              currentReading: formatDecimal(currDec),
               usageUnits,
               readAt: new Date(),
               readByUserId: userId,

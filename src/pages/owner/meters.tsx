@@ -79,18 +79,18 @@ interface OwnerMetersProps {
 export interface MeterRowState {
   roomId: string;
   roomNumber: string;
-  waterPrev: number;
-  waterCurr: number;
-  elecPrev: number;
-  elecCurr: number;
+  waterPrev: number | string;
+  waterCurr: number | string;
+  elecPrev: number | string;
+  elecCurr: number | string;
   isReplaced: boolean;
   peopleCount: number;
-  overdueAmount: number;
+  overdueAmount: number | string;
   isPaid: boolean;
   billStatus: BillStatus;
   editWaterPrev?: boolean;
   editElecPrev?: boolean;
-  otherFees?: { description: string; amount: number }[];
+  otherFees?: { description: string; amount: number | string }[];
   snapshotVersion?: number;
 }
 
@@ -199,33 +199,71 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   // Controlled input state for adding other fees per room
   const [newFeeInputs, setNewFeeInputs] = useState<Record<string, { description: string; amount: string }>>({});
 
+  const handleFeeDescriptionChange = (roomId: string, desc: string) => {
+    setNewFeeInputs(prev => ({
+      ...prev,
+      [roomId]: {
+        description: desc,
+        amount: prev[roomId]?.amount ?? '',
+      }
+    }));
+  };
+
+  const handleFeeAmountChange = (roomId: string, rawAmt: string) => {
+    const sanitized = sanitizeMoneyTyping(rawAmt);
+    setNewFeeInputs(prev => ({
+      ...prev,
+      [roomId]: {
+        description: prev[roomId]?.description ?? '',
+        amount: sanitized,
+      }
+    }));
+  };
+
+  const sanitizeMeterReadingTyping = (val: string): string => {
+    if (!val) return '';
+    let cleaned = val.replace(/[^0-9.]/g, '');
+    const firstDot = cleaned.indexOf('.');
+    if (firstDot !== -1) {
+      const intPart = cleaned.slice(0, firstDot);
+      const fracPart = cleaned.slice(firstDot + 1).replace(/\./g, '').slice(0, 2);
+      cleaned = `${intPart}.${fracPart}`;
+    }
+    return cleaned;
+  };
+
   const sanitizeMoneyTyping = (val: string): string => {
     if (!val) return '';
     let cleaned = val.replace(/[^0-9.]/g, '');
-    const parts = cleaned.split('.');
-    if (parts.length > 2) {
-      cleaned = `${parts[0]}.${parts.slice(1).join('')}`;
+    const firstDot = cleaned.indexOf('.');
+    if (firstDot !== -1) {
+      const intPart = cleaned.slice(0, firstDot);
+      const fracPart = cleaned.slice(firstDot + 1).replace(/\./g, '').slice(0, 2);
+      cleaned = `${intPart}.${fracPart}`;
     }
-    const [intPart, fracPart] = cleaned.split('.');
-    if (fracPart !== undefined) {
-      return `${intPart}.${fracPart.slice(0, 2)}`;
-    }
-    return intPart;
+    return cleaned;
   };
 
-  const handleAddOtherFee = async (roomId: string, desc: string, amtStr: string) => {
-    const cleanDesc = desc.trim();
-    if (!cleanDesc) return;
+  const handleAddOtherFee = async (roomId: string) => {
+    const input = newFeeInputs[roomId];
+    const cleanDesc = (input?.description || '').trim();
+    const amtStr = (input?.amount || '').trim();
+
+    if (!cleanDesc) {
+      showToast('กรุณาระบุชื่อรายการค่าใช้จ่าย');
+      return;
+    }
     if (!/^\d+(\.\d{1,2})?$/.test(amtStr) || amtStr === '0' || amtStr === '0.0' || amtStr === '0.00') {
       showToast('กรุณาระบุจำนวนเงินเป็นตัวเลขที่มากกว่า 0');
       return;
     }
-    const amt = Number(amtStr);
+
     const targetRow = meterRows.find(r => r.roomId === roomId);
     if (!targetRow) return;
 
     const prevFees = targetRow.otherFees || [];
-    const nextFees = [...prevFees, { description: cleanDesc, amount: amt }];
+    const formattedAmt = String(amtStr);
+    const nextFees = [...prevFees, { description: cleanDesc, amount: formattedAmt }];
     const expectedVersion = targetRow.snapshotVersion ?? 0;
 
     // Optimistic update
@@ -239,7 +277,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
           billingCycleId: selectedBillingCycleId,
           rows: [{
             roomId,
-            otherFees: nextFees.map(f => ({ description: f.description, amount: f.amount.toFixed(2) })),
+            otherFees: nextFees.map(f => ({ description: f.description, amount: String(f.amount) })),
             expectedVersion,
           }],
         },
@@ -254,6 +292,12 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
         meterDraftStore.setDraft(currentDormId, selectedBillingCycleId, updated as any);
         return updated;
       });
+
+      // Clear controlled inputs on success
+      setNewFeeInputs(prev => ({
+        ...prev,
+        [roomId]: { description: '', amount: '' },
+      }));
 
       queryClient.invalidateQueries({ queryKey: queryKeys.meterWorkspace(currentDormId, selectedBillingCycleId) });
       queryClient.invalidateQueries({ queryKey: queryKeys.meterPreviewContext(currentDormId, selectedBillingCycleId) });
@@ -290,7 +334,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
           billingCycleId: selectedBillingCycleId,
           rows: [{
             roomId,
-            otherFees: nextFees.map(f => ({ description: f.description, amount: f.amount.toFixed(2) })),
+            otherFees: nextFees.map(f => ({ description: f.description, amount: String(f.amount) })),
             expectedVersion,
           }],
         },
@@ -366,14 +410,14 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     if (bill && Array.isArray(bill.items)) {
       const waterItem = bill.items.find(item => item.category === 'water' || (item as any).type === 'water');
       if (waterItem) {
-        const match = waterItem.description?.match(/\((\d+)\s*หน่วย\)/);
+        const match = waterItem.description?.match(/\(([\d.]+)\s*หน่วย\)/);
         if (match) {
           waterCurr = waterPrev + Number(match[1]);
         } else {
           const isUnit = rateSnapshot ? (rateSnapshot.waterBillingType === 'per_unit') : false;
           if (isUnit) {
             const rate = rateSnapshot?.waterRate ? Number(rateSnapshot.waterRate) : 0;
-            waterCurr = rate > 0 ? waterPrev + Math.round(Number(waterItem.amount) / rate) : waterPrev;
+            waterCurr = rate > 0 ? (waterPrev + Number(waterItem.amount) / rate) : waterPrev;
           } else {
             waterCurr = waterPrev;
           }
@@ -382,14 +426,14 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
 
       const elecItem = bill.items.find(item => item.category === 'electricity' || (item as any).type === 'electricity');
       if (elecItem) {
-        const match = elecItem.description?.match(/\((\d+)\s*หน่วย\)/);
+        const match = elecItem.description?.match(/\(([\d.]+)\s*หน่วย\)/);
         if (match) {
           elecCurr = elecPrev + Number(match[1]);
         } else {
           const isUnit = rateSnapshot ? (rateSnapshot.electricityBillingType === 'per_unit') : false;
           if (isUnit) {
             const rate = rateSnapshot?.electricityRate ? Number(rateSnapshot.electricityRate) : 0;
-            elecCurr = rate > 0 ? elecPrev + Math.round(Number(elecItem.amount) / rate) : elecPrev;
+            elecCurr = rate > 0 ? (elecPrev + Number(elecItem.amount) / rate) : elecPrev;
           } else {
             elecCurr = elecPrev;
           }
@@ -397,7 +441,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       }
     }
 
-    return { waterCurr: Math.round(waterCurr), elecCurr: Math.round(elecCurr) };
+    return { waterCurr, elecCurr };
   };
 
   const getTenantForRoomAndCycle = (roomId: string, cycle: string) => {
@@ -588,20 +632,20 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
 
       parts.forEach(part => {
         if (part.includes('ไฟ')) {
-          const match = part.match(/\d+/);
-          if (match) elecCurr = Number(match[0]);
+          const match = part.match(/\d+(\.\d{1,2})?/);
+          if (match) elecCurr = match[0];
         }
         if (part.includes('น้ำ')) {
-          const match = part.match(/\d+/);
-          if (match) waterCurr = Number(match[0]);
+          const match = part.match(/\d+(\.\d{1,2})?/);
+          if (match) waterCurr = match[0];
         }
         if (part.includes('คน')) {
           const match = part.match(/\d+/);
-          if (match) peopleCount = Number(match[0]);
+          if (match) peopleCount = parseInt(match[0], 10);
         }
         if (part.includes('ค้าง') || part.includes('ค้างชำระ')) {
-          const match = part.match(/\d+/);
-          if (match) overdueAmount = Number(match[0]);
+          const match = part.match(/\d+(\.\d{1,2})?/);
+          if (match) overdueAmount = match[0];
         }
       });
 
@@ -782,150 +826,162 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     }
   }, [selectedCycle]);
 
-  const fetchAuthoritativeReadings = async (cycleId: string) => {
-    if (!cycleId) return;
-    try {
+  // Meter Workspace Query (Canonical observed query)
+  const meterWorkspaceQuery = useQuery({
+    queryKey: queryKeys.meterWorkspace(currentDormId, selectedBillingCycleId),
+    queryFn: async () => {
+      if (!currentDormId || !selectedBillingCycleId) return null;
       const [serverReadings, cyclePeopleRes, cyclesRes] = await Promise.all([
-        getDataProvider().meters.getByCycle(cycleId),
-        getDataProvider().meters.getCyclePeopleCount(cycleId),
-        httpRequest<{ data: any[]; firstBillingCycleId?: string }>('GET', '/billing-cycles').catch(() => null)
+        getDataProvider().meters.getByCycle(selectedBillingCycleId),
+        getDataProvider().meters.getCyclePeopleCount(selectedBillingCycleId),
+        httpRequest<{ data: any[]; firstBillingCycleId?: string }>('GET', '/billing-cycles', undefined, {
+          headers: currentDormId ? { 'x-dormitory-id': currentDormId } : {},
+        }).catch(() => null)
       ]);
+      return { serverReadings, cyclePeopleRes, cyclesRes };
+    },
+    enabled: Boolean(currentDormId && selectedBillingCycleId),
+    staleTime: STALE_TIMES.METER_WORKSPACE,
+  });
 
-      if (cyclesRes) {
-        const isFirst = cyclesRes.firstBillingCycleId === cycleId ||
-          cyclesRes.data?.find((c: any) => (c.id === cycleId || c.cycleCode === selectedCycleCode || c.cycleCode === selectedCycle))?.isFirstCycle;
-        setIsFirstCycle(Boolean(isFirst));
-        if ((cyclesRes as any).operationalCycleCode) {
-          setOperationalCycleCode((cyclesRes as any).operationalCycleCode);
+  useEffect(() => {
+    if (!selectedBillingCycleId || !meterWorkspaceQuery.data) {
+      if (!selectedBillingCycleId) {
+        setMeterRows([]);
+        setLoadedCycle('');
+      }
+      return;
+    }
+
+    const { serverReadings, cyclePeopleRes, cyclesRes } = meterWorkspaceQuery.data;
+
+    if (cyclesRes) {
+      const isFirst = cyclesRes.firstBillingCycleId === selectedBillingCycleId ||
+        cyclesRes.data?.find((c: any) => (c.id === selectedBillingCycleId || c.cycleCode === selectedCycleCode || c.cycleCode === selectedCycle))?.isFirstCycle;
+      setIsFirstCycle(Boolean(isFirst));
+      if ((cyclesRes as any).operationalCycleCode) {
+        setOperationalCycleCode((cyclesRes as any).operationalCycleCode);
+        setOperationalCycleAuthorityLoaded(true);
+      } else if (cyclesRes.data && Array.isArray(cyclesRes.data)) {
+        const op = cyclesRes.data.find((c: any) => c.status === 'draft' || c.status === 'open' || c.isCurrent);
+        if (op?.cycleCode) {
+          setOperationalCycleCode(op.cycleCode);
           setOperationalCycleAuthorityLoaded(true);
-        } else if (cyclesRes.data && Array.isArray(cyclesRes.data)) {
-          const op = cyclesRes.data.find((c: any) => c.status === 'draft' || c.status === 'open' || c.isCurrent);
-          if (op?.cycleCode) {
-            setOperationalCycleCode(op.cycleCode);
-            setOperationalCycleAuthorityLoaded(true);
-          } else {
-            setOperationalCycleAuthorityLoaded(false);
-          }
         } else {
           setOperationalCycleAuthorityLoaded(false);
         }
       } else {
         setOperationalCycleAuthorityLoaded(false);
-        setOperationalCycleCode(null);
       }
-      
-      const readingsByRoom: { [roomId: string]: { waterPrev?: number; waterCurr?: number; elecPrev?: number; elecCurr?: number } } = {};
-      (serverReadings || []).forEach((r: any) => {
-        if (!readingsByRoom[r.roomId]) {
-          readingsByRoom[r.roomId] = {};
-        }
-        if (r.meterType === 'water') {
-          readingsByRoom[r.roomId].waterPrev = Number(r.previousReading ?? 0);
-          readingsByRoom[r.roomId].waterCurr = Number(r.currentReading ?? 0);
-        } else if (r.meterType === 'electricity') {
-          readingsByRoom[r.roomId].elecPrev = Number(r.previousReading ?? 0);
-          readingsByRoom[r.roomId].elecCurr = Number(r.currentReading ?? 0);
-        }
-      });
+    } else {
+      setOperationalCycleAuthorityLoaded(false);
+      setOperationalCycleCode(null);
+    }
+    
+    const readingsByRoom: { [roomId: string]: { waterPrev?: string; waterCurr?: string; elecPrev?: string; elecCurr?: string } } = {};
+    (serverReadings || []).forEach((r: any) => {
+      if (!readingsByRoom[r.roomId]) {
+        readingsByRoom[r.roomId] = {};
+      }
+      if (r.meterType === 'water') {
+        readingsByRoom[r.roomId].waterPrev = r.previousReading !== undefined && r.previousReading !== null ? String(r.previousReading) : undefined;
+        readingsByRoom[r.roomId].waterCurr = r.currentReading !== undefined && r.currentReading !== null ? String(r.currentReading) : undefined;
+      } else if (r.meterType === 'electricity') {
+        readingsByRoom[r.roomId].elecPrev = r.previousReading !== undefined && r.previousReading !== null ? String(r.previousReading) : undefined;
+        readingsByRoom[r.roomId].elecCurr = r.currentReading !== undefined && r.currentReading !== null ? String(r.currentReading) : undefined;
+      }
+    });
 
-      const snapshots = (cyclePeopleRes && cyclePeopleRes.success && Array.isArray(cyclePeopleRes.data)) ? cyclePeopleRes.data : [];
-      const snapshotMap: { [roomId: string]: { peopleCount?: number; manualOutstandingAmount?: number; otherFees?: any[]; version?: number } } = {};
-      snapshots.forEach((s: any) => {
-        if (s.roomId) {
-          snapshotMap[s.roomId] = {
-            peopleCount: s.peopleCount !== undefined ? Number(s.peopleCount) : undefined,
-            manualOutstandingAmount: s.manualOutstandingAmount ? Number(s.manualOutstandingAmount) : 0,
-            otherFees: Array.isArray(s.otherFees) ? s.otherFees.map((f: any) => ({ description: f.description, amount: Number(f.amount) })) : [],
-            version: typeof s.version === 'number' ? s.version : 0,
+    const snapshots = (cyclePeopleRes && cyclePeopleRes.success && Array.isArray(cyclePeopleRes.data)) ? cyclePeopleRes.data : [];
+    const snapshotMap: { [roomId: string]: { peopleCount?: number; manualOutstandingAmount?: string; otherFees?: any[]; version?: number } } = {};
+    snapshots.forEach((s: any) => {
+      if (s.roomId) {
+        snapshotMap[s.roomId] = {
+          peopleCount: s.peopleCount !== undefined ? Number(s.peopleCount) : undefined,
+          manualOutstandingAmount: s.manualOutstandingAmount ? String(s.manualOutstandingAmount) : '0.00',
+          otherFees: Array.isArray(s.otherFees) ? s.otherFees.map((f: any) => ({ description: f.description, amount: String(f.amount) })) : [],
+          version: typeof s.version === 'number' ? s.version : 0,
+        };
+      }
+    });
+
+    const activeRooms = [...rooms].sort((a, b) => 
+      a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true, sensitivity: 'base' })
+    );
+
+    const rows: MeterRowState[] = activeRooms.map(r => {
+      const roomReadings = readingsByRoom[r.id] || {};
+      const cycleTenant = getTenantForRoomAndCycle(r.id, selectedCycleCode || selectedCycle);
+      
+      const rawWaterBaseline = r.initialWaterMeter !== undefined && r.initialWaterMeter !== null ? String(r.initialWaterMeter) : (r as any).initialWaterReading !== undefined ? String((r as any).initialWaterReading) : '0.00';
+      const rawElecBaseline = r.initialElectricMeter !== undefined && r.initialElectricMeter !== null ? String(r.initialElectricMeter) : (r as any).initialElectricityReading !== undefined ? String((r as any).initialElectricityReading) : '0.00';
+
+      const waterPrev = roomReadings.waterPrev ?? rawWaterBaseline;
+      const waterCurr = roomReadings.waterCurr ?? waterPrev;
+
+      const elecPrev = roomReadings.elecPrev ?? rawElecBaseline;
+      const elecCurr = roomReadings.elecCurr ?? elecPrev;
+
+      const tenantDefaultPeople = cycleTenant ? (1 + (cycleTenant.coOccupants?.length || 0)) : 0;
+      const snap = snapshotMap[r.id];
+      const rowPeople = snap?.peopleCount !== undefined ? snap.peopleCount : tenantDefaultPeople;
+      
+      const existingBill = (bills || []).find(b => 
+        (b.cycleId === selectedBillingCycleId || b.cycleId === selectedCycleCode || (b as any).billingCycleId === selectedBillingCycleId) && 
+        (b.roomId === r.id || b.roomId === r.roomNumber) &&
+        b.status !== 'cancelled' && b.status !== 'void'
+      );
+      const billStatus: BillStatus = existingBill ? existingBill.status : 'draft';
+      const isPaid = billStatus === 'paid';
+
+      return {
+        roomId: r.id,
+        roomNumber: r.roomNumber,
+        waterPrev,
+        waterCurr,
+        elecPrev,
+        elecCurr,
+        isReplaced: false,
+        peopleCount: rowPeople,
+        overdueAmount: snap?.manualOutstandingAmount || '0.00',
+        isPaid,
+        billStatus,
+        editWaterPrev: false,
+        editElecPrev: false,
+        otherFees: snap?.otherFees || [],
+        snapshotVersion: snap?.version || 0,
+      };
+    });
+
+    originalRowsRef.current = JSON.parse(JSON.stringify(rows));
+
+    const localDraft = currentDormId && selectedBillingCycleId ? meterDraftStore.getDraft(currentDormId, selectedBillingCycleId) : null;
+    if (localDraft) {
+      const merged = rows.map(serverRow => {
+        const draftRow = localDraft.find(d => d.roomId === serverRow.roomId);
+        if (draftRow) {
+          return {
+            ...serverRow,
+            waterCurr: draftRow.waterCurr,
+            waterPrev: draftRow.waterPrev,
+            elecCurr: draftRow.elecCurr,
+            elecPrev: draftRow.elecPrev,
+            peopleCount: draftRow.peopleCount,
+            overdueAmount: draftRow.overdueAmount,
+            isReplaced: draftRow.isReplaced,
+            otherFees: draftRow.otherFees,
+            snapshotVersion: serverRow.snapshotVersion,
           };
         }
+        return serverRow;
       });
-
-      const activeRooms = [...rooms].sort((a, b) => 
-        a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true, sensitivity: 'base' })
-      );
-
-      const rows: MeterRowState[] = activeRooms.map(r => {
-        const roomReadings = readingsByRoom[r.id] || {};
-        const cycleTenant = getTenantForRoomAndCycle(r.id, selectedCycleCode || selectedCycle);
-        
-        const rawWaterBaseline = Number(r.initialWaterMeter ?? (r as any).initialWaterReading) || 0;
-        const rawElecBaseline = Number(r.initialElectricMeter ?? (r as any).initialElectricityReading) || 0;
-
-        const waterPrev = roomReadings.waterPrev ?? rawWaterBaseline;
-        const waterCurr = roomReadings.waterCurr ?? waterPrev;
-
-        const elecPrev = roomReadings.elecPrev ?? rawElecBaseline;
-        const elecCurr = roomReadings.elecCurr ?? elecPrev;
-
-        const tenantDefaultPeople = cycleTenant ? (1 + (cycleTenant.coOccupants?.length || 0)) : 0;
-        const snap = snapshotMap[r.id];
-        const rowPeople = snap?.peopleCount !== undefined ? snap.peopleCount : tenantDefaultPeople;
-        
-        const existingBill = (bills || []).find(b => 
-          (b.cycleId === cycleId || b.cycleId === selectedCycleCode || (b as any).billingCycleId === cycleId) && 
-          (b.roomId === r.id || b.roomId === r.roomNumber) &&
-          b.status !== 'cancelled' && b.status !== 'void'
-        );
-        const billStatus: BillStatus = existingBill ? existingBill.status : 'draft';
-        const isPaid = billStatus === 'paid';
-
-        return {
-          roomId: r.id,
-          roomNumber: r.roomNumber,
-          waterPrev: Math.round(waterPrev),
-          waterCurr: Math.round(waterCurr),
-          elecPrev: Math.round(elecPrev),
-          elecCurr: Math.round(elecCurr),
-          isReplaced: false,
-          peopleCount: rowPeople,
-          overdueAmount: snap?.manualOutstandingAmount || 0,
-          isPaid,
-          billStatus,
-          editWaterPrev: false,
-          editElecPrev: false,
-          otherFees: snap?.otherFees || [],
-          snapshotVersion: snap?.version || 0,
-        };
-      });
-
-      originalRowsRef.current = JSON.parse(JSON.stringify(rows));
-
-      const localDraft = currentDormId && cycleId ? meterDraftStore.getDraft(currentDormId, cycleId) : null;
-      if (localDraft) {
-        const merged = rows.map(serverRow => {
-          const draftRow = localDraft.find(d => d.roomId === serverRow.roomId);
-          if (draftRow) {
-            return {
-              ...serverRow,
-              waterCurr: draftRow.waterCurr,
-              elecCurr: draftRow.elecCurr,
-              peopleCount: draftRow.peopleCount,
-              isReplaced: draftRow.isReplaced,
-              otherFees: draftRow.otherFees,
-              snapshotVersion: serverRow.snapshotVersion,
-            };
-          }
-          return serverRow;
-        });
-        setMeterRows(merged);
-      } else {
-        setMeterRows(rows);
-      }
-
-      setLoadedCycle(cycleId);
-    } catch (err) {
-      console.error("Failed to load meter readings:", err);
-    }
-  };
-
-  useEffect(() => {
-    if (selectedBillingCycleId) {
-      fetchAuthoritativeReadings(selectedBillingCycleId);
+      setMeterRows(merged);
     } else {
-      setMeterRows([]);
+      setMeterRows(rows);
     }
-  }, [selectedBillingCycleId, rooms, bills]);
+
+    setLoadedCycle(selectedBillingCycleId);
+  }, [meterWorkspaceQuery.data, selectedBillingCycleId, rooms, bills]);
 
   // Synchronize state changes to isolated in-memory draft store
   useEffect(() => {
@@ -934,16 +990,43 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     }
   }, [meterRows, selectedBillingCycleId, isCycleLoaded, currentDormId]);
 
-  const handleNumberChange = (roomId: string, field: 'waterCurr' | 'elecCurr' | 'peopleCount' | 'overdueAmount' | 'waterPrev' | 'elecPrev', value: number) => {
+  const handleMeterReadingChange = (
+    roomId: string,
+    field: 'waterCurr' | 'elecCurr' | 'waterPrev' | 'elecPrev' | 'overdueAmount',
+    rawVal: string
+  ) => {
+    const sanitized = sanitizeMeterReadingTyping(rawVal);
     setMeterRows(prev => prev.map(row => {
       if (row.roomId === roomId) {
         return {
           ...row,
-          [field]: value
+          [field]: sanitized
         };
       }
       return row;
     }));
+  };
+
+  const handlePeopleCountChange = (roomId: string, rawVal: string) => {
+    const cleaned = rawVal.replace(/[^0-9]/g, '');
+    const count = cleaned === '' ? 0 : Math.max(0, parseInt(cleaned, 10));
+    setMeterRows(prev => prev.map(row => {
+      if (row.roomId === roomId) {
+        return {
+          ...row,
+          peopleCount: count
+        };
+      }
+      return row;
+    }));
+  };
+
+  const handleNumberChange = (roomId: string, field: 'waterCurr' | 'elecCurr' | 'peopleCount' | 'overdueAmount' | 'waterPrev' | 'elecPrev', value: number | string) => {
+    if (field === 'peopleCount') {
+      handlePeopleCountChange(roomId, String(value));
+    } else {
+      handleMeterReadingChange(roomId, field, String(value));
+    }
   };
 
   const getRowEditableFields = (row: MeterRowState) => {
@@ -1015,10 +1098,11 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
           const field = editableFields[fieldIdx];
           const rawVal = cells[cellIdx].trim();
 
-          let cleaned = rawVal.replace(/[^0-9]/g, '');
-          const numVal = field === 'peopleCount' ? Math.max(0, Number(cleaned) || 0) : (Number(cleaned) || 0);
-          if (row[field] !== numVal) {
-            row[field] = numVal;
+          const val = field === 'peopleCount'
+            ? Math.max(0, parseInt(rawVal.replace(/[^0-9]/g, ''), 10) || 0)
+            : sanitizeMeterReadingTyping(rawVal);
+          if (row[field] !== val) {
+            (row as any)[field] = val;
             newFlashing[`${row.roomId}-${field}`] = true;
           }
         }
@@ -1275,7 +1359,6 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       setIsSaving(false);
       if (res && res.success) {
         showToast(targetAction === 'issue' ? `ออกบิลห้อง ${row.roomNumber} เรียบร้อยแล้ว` : `ยกเลิกบิลห้อง ${row.roomNumber} เรียบร้อยแล้ว`);
-        fetchAuthoritativeReadings(selectedBillingCycleId);
         queryClient.invalidateQueries({ queryKey: queryKeys.meterWorkspace(currentDormId, selectedBillingCycleId) });
         queryClient.invalidateQueries({ queryKey: queryKeys.meterPreviewContext(currentDormId, selectedBillingCycleId) });
         queryClient.invalidateQueries({ queryKey: queryKeys.bills(currentDormId) });
@@ -1351,7 +1434,6 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
           setIsLineModalOpen(true);
         }
 
-        fetchAuthoritativeReadings(selectedBillingCycleId);
         queryClient.invalidateQueries({ queryKey: queryKeys.meterWorkspace(currentDormId, selectedBillingCycleId) });
         queryClient.invalidateQueries({ queryKey: queryKeys.meterPreviewContext(currentDormId, selectedBillingCycleId) });
         queryClient.invalidateQueries({ queryKey: queryKeys.bills(currentDormId) });
@@ -1453,7 +1535,6 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
         originalRowsRef.current = JSON.parse(JSON.stringify(meterRows));
         meterDraftStore.clearDraft(currentDormId, selectedBillingCycleId);
         showToast('บันทึกข้อมูลค่ามิเตอร์เรียบร้อยแล้ว');
-        fetchAuthoritativeReadings(selectedBillingCycleId);
         queryClient.invalidateQueries({ queryKey: queryKeys.meterWorkspace(currentDormId, selectedBillingCycleId) });
         queryClient.invalidateQueries({ queryKey: queryKeys.meterPreviewContext(currentDormId, selectedBillingCycleId) });
       } else {
@@ -1701,8 +1782,8 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
             </thead>
             <tbody className="divide-y divide-gray-100 font-semibold">
               {filteredRows.map((row, idx) => {
-                const waterUnits = row.isReplaced ? row.waterCurr : (row.waterCurr - row.waterPrev);
-                const elecUnits = row.isReplaced ? row.elecCurr : (row.elecCurr - row.elecPrev);
+                const waterUnits = row.isReplaced ? Number(row.waterCurr) : (Number(row.waterCurr) - Number(row.waterPrev));
+                const elecUnits = row.isReplaced ? Number(row.elecCurr) : (Number(row.elecCurr) - Number(row.elecPrev));
 
                 const waterCost = getWaterCost(row);
                 const elecCost = getElectricCost(row);
@@ -1711,9 +1792,9 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                 const parkingCost = getParkingCost(row);
                 const room = rooms.find(r => r.id === row.roomId);
                 const roomRent = (room?.rentCycle === 'term') ? 0 : (room?.monthlyRent || 0);
-                const otherFeesTotal = (row.otherFees || []).reduce((sum, item) => sum + item.amount, 0);
+                const otherFeesTotal = (row.otherFees || []).reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
                 
-                const calculatedTotal = roomRent + waterCost + elecCost + commonCost + internetCost + parkingCost + (row.overdueAmount || 0) + otherFeesTotal;
+                const calculatedTotal = roomRent + waterCost + elecCost + commonCost + internetCost + parkingCost + (Number(row.overdueAmount) || 0) + otherFeesTotal;
 
                 const tenant = getTenantForRoomAndCycle(row.roomId, selectedCycle);
 
@@ -1735,12 +1816,10 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                           {canEditElecPrev ? (
                             <input
                               type="text"
-                              inputMode="numeric"
-                              pattern="[0-9]*"
+                              inputMode="decimal"
                               value={row.elecPrev}
                               onChange={(e) => {
-                                const cleaned = e.target.value.replace(/[^0-9]/g, '');
-                                handleNumberChange(row.roomId, 'elecPrev', Number(cleaned) || 0);
+                                handleMeterReadingChange(row.roomId, 'elecPrev', e.target.value);
                               }}
                               onPaste={(e) => handlePaste(row.roomId, 'elecPrev', e)}
                               data-row={idx}
@@ -1773,13 +1852,11 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                         <div className="flex items-center justify-center gap-1">
                           <input
                             type="text"
-                            inputMode="numeric"
-                            pattern="[0-9]*"
+                            inputMode="decimal"
                             disabled={isRowLocked}
                             value={row.elecCurr}
                             onChange={(e) => {
-                              const val = e.target.value.replace(/[^0-9]/g, '');
-                              handleNumberChange(row.roomId, 'elecCurr', Number(val) || 0);
+                              handleMeterReadingChange(row.roomId, 'elecCurr', e.target.value);
                             }}
                             onPaste={(e) => handlePaste(row.roomId, 'elecCurr', e)}
                             data-row={idx}
@@ -1803,12 +1880,10 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                           {canEditWaterPrev ? (
                             <input
                               type="text"
-                              inputMode="numeric"
-                              pattern="[0-9]*"
+                              inputMode="decimal"
                               value={row.waterPrev}
                               onChange={(e) => {
-                                const cleaned = e.target.value.replace(/[^0-9]/g, '');
-                                handleNumberChange(row.roomId, 'waterPrev', Number(cleaned) || 0);
+                                handleMeterReadingChange(row.roomId, 'waterPrev', e.target.value);
                               }}
                               onPaste={(e) => handlePaste(row.roomId, 'waterPrev', e)}
                               data-row={idx}
@@ -1841,13 +1916,11 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                         <div className="flex items-center justify-center gap-1">
                           <input
                             type="text"
-                            inputMode="numeric"
-                            pattern="[0-9]*"
+                            inputMode="decimal"
                             disabled={isRowLocked}
                             value={row.waterCurr}
                             onChange={(e) => {
-                              const val = e.target.value.replace(/[^0-9]/g, '');
-                              handleNumberChange(row.roomId, 'waterCurr', Number(val) || 0);
+                              handleMeterReadingChange(row.roomId, 'waterCurr', e.target.value);
                             }}
                             onPaste={(e) => handlePaste(row.roomId, 'waterCurr', e)}
                             data-row={idx}
@@ -1873,8 +1946,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                         disabled={isRowLocked}
                         value={row.peopleCount}
                         onChange={(e) => {
-                          const val = e.target.value.replace(/[^0-9]/g, '');
-                          handleNumberChange(row.roomId, 'peopleCount', val === '' ? 0 : Math.max(0, Number(val)));
+                          handlePeopleCountChange(row.roomId, e.target.value);
                         }}
                         onPaste={(e) => handlePaste(row.roomId, 'peopleCount', e)}
                         data-row={idx}
@@ -1892,13 +1964,11 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                       <div className="flex items-center justify-center">
                         <input
                           type="text"
-                          inputMode="numeric"
-                          pattern="[0-9]*"
+                          inputMode="decimal"
                           disabled={isRowLocked}
                           value={row.overdueAmount}
                           onChange={(e) => {
-                            const val = e.target.value.replace(/[^0-9]/g, '');
-                            handleNumberChange(row.roomId, 'overdueAmount', Number(val) || 0);
+                            handleMeterReadingChange(row.roomId, 'overdueAmount', e.target.value);
                           }}
                           onPaste={(e) => handlePaste(row.roomId, 'overdueAmount', e)}
                           data-row={idx}
@@ -1941,50 +2011,31 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                             <input
                               type="text"
                               placeholder="ชื่อรายการ"
-                              id={`fee-desc-${row.roomId}`}
-                              className="w-16 px-1.5 py-1 text-[10px] border border-gray-200 rounded-lg bg-white text-slate-800 font-medium focus:outline-indigo-500"
+                              value={newFeeInputs[row.roomId]?.description ?? ''}
+                              onChange={(e) => handleFeeDescriptionChange(row.roomId, e.target.value)}
                               onKeyDown={(e) => {
                                 if (e.key === 'Enter') {
-                                  const descEl = document.getElementById(`fee-desc-${row.roomId}`) as HTMLInputElement | null;
-                                  const amtEl = document.getElementById(`fee-amt-${row.roomId}`) as HTMLInputElement | null;
-                                  if (descEl && amtEl) {
-                                    handleAddOtherFee(row.roomId, descEl.value, amtEl.value);
-                                    descEl.value = '';
-                                    amtEl.value = '';
-                                  }
+                                  handleAddOtherFee(row.roomId);
                                 }
                               }}
+                              className="w-16 px-1.5 py-1 text-[10px] border border-gray-200 rounded-lg bg-white text-slate-800 font-medium focus:outline-indigo-500"
                             />
                             <input
                               type="text"
-                              inputMode="numeric"
-                              pattern="[0-9]*"
+                              inputMode="decimal"
                               placeholder="บาท"
-                              id={`fee-amt-${row.roomId}`}
-                              className="w-12 px-1.5 py-1 text-[10px] border border-gray-200 rounded-lg bg-white text-slate-800 text-center font-medium focus:outline-indigo-500"
+                              value={newFeeInputs[row.roomId]?.amount ?? ''}
+                              onChange={(e) => handleFeeAmountChange(row.roomId, e.target.value)}
                               onKeyDown={(e) => {
                                 if (e.key === 'Enter') {
-                                  const descEl = document.getElementById(`fee-desc-${row.roomId}`) as HTMLInputElement | null;
-                                  const amtEl = document.getElementById(`fee-amt-${row.roomId}`) as HTMLInputElement | null;
-                                  if (descEl && amtEl) {
-                                    handleAddOtherFee(row.roomId, descEl.value, amtEl.value);
-                                    descEl.value = '';
-                                    amtEl.value = '';
-                                  }
+                                  handleAddOtherFee(row.roomId);
                                 }
                               }}
+                              className="w-12 px-1.5 py-1 text-[10px] border border-gray-200 rounded-lg bg-white text-slate-800 text-center font-medium focus:outline-indigo-500"
                             />
                             <button
                               type="button"
-                              onClick={() => {
-                                const descEl = document.getElementById(`fee-desc-${row.roomId}`) as HTMLInputElement | null;
-                                const amtEl = document.getElementById(`fee-amt-${row.roomId}`) as HTMLInputElement | null;
-                                if (descEl && amtEl) {
-                                  handleAddOtherFee(row.roomId, descEl.value, amtEl.value);
-                                  descEl.value = '';
-                                  amtEl.value = '';
-                                }
-                              }}
+                              onClick={() => handleAddOtherFee(row.roomId)}
                               className="p-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 rounded-lg transition-all cursor-pointer flex items-center justify-center shrink-0 border border-indigo-100/50"
                               title="เพิ่มรายการและบันทึกทันที"
                             >
@@ -2224,8 +2275,14 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                       );
                       if (res?.data && Array.isArray(res.data)) {
                         res.data.forEach(h => freshHouseholdMap.set(h.roomId, h.currentHouseholdPeopleCount));
+                      } else {
+                        showToast('ไม่สามารถดึงจำนวนคนปัจจุบันได้ กรุณาลองอีกครั้ง');
+                        return;
                       }
-                    } catch {}
+                    } catch {
+                      showToast('ไม่สามารถดึงจำนวนคนปัจจุบันได้ กรุณาลองอีกครั้ง');
+                      return;
+                    }
 
                     const txt = generateTemplateText(freshHouseholdMap);
                     setQuickFillText(txt);

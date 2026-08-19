@@ -37,7 +37,7 @@ import {
 import { User, Room, Tenant, Bill, Contract, MaintenanceRequest, Announcement, AuditLog, Building } from '../types';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { queryKeys, STALE_TIMES, clearDormitoryQueryCache } from '../lib/queryClient';
-import { clearMeterDraftStore } from '../lib/meterDraftStore';
+import { meterDraftStore, clearMeterDraftStore } from '../lib/meterDraftStore';
 
 // Import sub-modules
 import { OwnerDashboard } from './owner/dashboard';
@@ -263,17 +263,30 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
     ? validDormId
     : (activeMemberships[0]?.dormitoryId || validDormId);
 
+  const prevDormitoryIdRef = React.useRef<string | null>(null);
+
   useEffect(() => {
     if (activeDormitoryId && activeDormitoryId !== 'dorm-1' && activeDormitoryId !== 'dorm-001') {
       localStorage.setItem('selected_dormitory_id', activeDormitoryId);
-      clearDormitoryQueryCache();
-      clearMeterDraftStore();
+      const prevDorm = prevDormitoryIdRef.current;
+      if (prevDorm && prevDorm !== activeDormitoryId) {
+        clearDormitoryQueryCache(prevDorm);
+        meterDraftStore.clearDormitoryDrafts(prevDorm);
+      }
+      prevDormitoryIdRef.current = activeDormitoryId;
     }
   }, [activeDormitoryId]);
 
   const queryClient = useQueryClient();
   const dormHeader = activeDormitoryId ? { 'x-dormitory-id': activeDormitoryId } : undefined;
   const isQueryEnabled = Boolean(activeDormitoryId && !isRegistrationMode);
+
+  // Tab-refined enabled states to avoid eager network fan-out
+  const isMaintenanceNeeded = isQueryEnabled && (activeTab === 'maintenance' || activeTab === 'dashboard');
+  const isAnnouncementsNeeded = isQueryEnabled && (activeTab === 'announcements' || activeTab === 'dashboard');
+  const isBillsNeeded = isQueryEnabled && (activeTab === 'meters' || activeTab === 'bills' || activeTab === 'dashboard' || activeTab === 'reports');
+  const isTenantsNeeded = isQueryEnabled && (activeTab === 'tenants' || activeTab === 'meters' || activeTab === 'dashboard' || activeTab === 'contracts');
+  const isContractsNeeded = isQueryEnabled && (activeTab === 'contracts' || activeTab === 'tenants' || activeTab === 'meters' || activeTab === 'dashboard');
 
   // Authoritative Server State Queries (Single Server-State Authority)
   const roomsQuery = useQuery({
@@ -293,21 +306,21 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
   const tenantsQuery = useQuery({
     queryKey: queryKeys.tenants(activeDormitoryId),
     queryFn: () => fetchAllPaginated<Tenant>('/api/v1/tenants', { headers: dormHeader, credentials: 'include' }),
-    enabled: isQueryEnabled,
+    enabled: isTenantsNeeded,
     staleTime: STALE_TIMES.TENANTS,
   });
 
   const contractsQuery = useQuery({
     queryKey: queryKeys.contracts(activeDormitoryId),
     queryFn: () => fetchAllPaginated<Contract>('/api/v1/contracts', { headers: dormHeader, credentials: 'include' }),
-    enabled: isQueryEnabled,
+    enabled: isContractsNeeded,
     staleTime: STALE_TIMES.CONTRACTS,
   });
 
   const billsQuery = useQuery({
     queryKey: queryKeys.bills(activeDormitoryId),
     queryFn: () => fetchAllPaginated<Bill>('/api/v1/bills', { headers: dormHeader, credentials: 'include' }),
-    enabled: isQueryEnabled,
+    enabled: isBillsNeeded,
     staleTime: STALE_TIMES.BILLS,
   });
 
@@ -321,14 +334,14 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
   const maintenanceQuery = useQuery({
     queryKey: queryKeys.maintenance(activeDormitoryId),
     queryFn: () => fetchAllPaginated('/api/v1/maintenance', { headers: dormHeader, credentials: 'include' }),
-    enabled: isQueryEnabled,
+    enabled: isMaintenanceNeeded,
     staleTime: STALE_TIMES.MAINTENANCE,
   });
 
   const announcementsQuery = useQuery({
     queryKey: queryKeys.announcements(activeDormitoryId),
     queryFn: () => fetchAllPaginated<Announcement>('/api/v1/announcements', { headers: dormHeader, credentials: 'include' }),
-    enabled: isQueryEnabled,
+    enabled: isAnnouncementsNeeded,
     staleTime: STALE_TIMES.ANNOUNCEMENTS,
   });
 
@@ -678,7 +691,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
       ].filter(Boolean)
     : (userRole ? menuItems.filter(item => item.roles.includes(userRole) && item.id !== 'register') : []);
 
-  // Meter readings query
+  // Meter readings query (only for Dashboard summary if needed)
   const meterReadingsQuery = useQuery({
     queryKey: queryKeys.meterReadings(activeDormitoryId, selectedBillingCycleId),
     queryFn: async () => {
@@ -691,7 +704,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
       const data = await res.json();
       return data?.data || [];
     },
-    enabled: Boolean(activeDormitoryId && selectedBillingCycleId && !isRegistrationMode),
+    enabled: Boolean(activeDormitoryId && selectedBillingCycleId && !isRegistrationMode && activeTab === 'dashboard'),
     staleTime: STALE_TIMES.METER_WORKSPACE,
   });
 

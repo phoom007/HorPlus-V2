@@ -755,4 +755,154 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
       expect((submitBtn as HTMLButtonElement).disabled).toBe(false);
     });
   });
+
+  // ==========================================
+  // Section 11: Controlled Other Fee & Decimal Meter Workspace
+  // ==========================================
+  describe('Controlled Other Fee & Decimal Meter Workspace Authority', () => {
+    it('Controlled Other Fee input accepts numeric decimal strings and resets state on success', async () => {
+      const httpSpy = vi.spyOn(httpClient, 'httpRequest').mockImplementation(async (method, url, data) => {
+        if (url === '/billing-cycles') {
+          return {
+            data: [{ id: 'cycle-2026-08', cycleCode: '2026-08', status: 'open', isCurrent: true }],
+            operationalCycleCode: '2026-08',
+            firstBillingCycleId: 'cycle-2026-08',
+          };
+        }
+        if (url.includes('/meters/workspace/preview-context')) {
+          return {
+            success: true,
+            data: {
+              rateSnapshot: {
+                waterBillingType: 'per_unit',
+                waterRate: '18.00',
+                electricityBillingType: 'per_unit',
+                electricityRate: '8.00',
+              },
+              rooms: [{ roomId: 'room-101-uuid', roomNumber: '101', rentAmount: '4500.00', billingSource: 'CONTRACT' }],
+            },
+          };
+        }
+        if (url === '/api/v1/meters/workspace/bulk') {
+          return {
+            success: true,
+            savedCount: 1,
+            savedRows: [{ roomId: 'room-101-uuid', version: 2, peopleCount: 1, manualOutstandingAmount: '0.00', otherFees: [{ description: 'คีย์การ์ด', amount: '50.50' }] }],
+          };
+        }
+        return { success: true, data: [] };
+      });
+
+      renderWithClient(
+        <OwnerMeters
+          rooms={[mockRoom]}
+          buildings={[mockBuilding]}
+          dormitoryId="dorm-001-uuid"
+          bills={[]}
+          tenants={[]}
+          contracts={[]}
+          onSaveBills={() => {}}
+          onSelectTenant={() => {}}
+          onAddLog={() => {}}
+          selectedBillingCycleId="cycle-2026-08"
+          selectedCycleCode="2026-08"
+        />
+      );
+
+      // Wait for table to render
+      await waitFor(() => {
+        expect(screen.getByText('101')).toBeDefined();
+      });
+
+      // Find the other fee inputs
+      const descInput = screen.getByPlaceholderText('ชื่อรายการ') as HTMLInputElement;
+      const amtInput = screen.getByPlaceholderText('บาท') as HTMLInputElement;
+
+      // Type into controlled inputs
+      fireEvent.change(descInput, { target: { value: 'คีย์การ์ด' } });
+      expect(descInput.value).toBe('คีย์การ์ด');
+
+      // Test sanitizer: reject letters and excess dots
+      fireEvent.change(amtInput, { target: { value: 'abc50.50.9' } });
+      expect(amtInput.value).toBe('50.50');
+
+      // Click add other fee button
+      const addFeeBtn = screen.getByTitle('เพิ่มรายการและบันทึกทันที');
+      fireEvent.click(addFeeBtn);
+
+      await waitFor(() => {
+        expect(httpSpy).toHaveBeenCalledWith(
+          'POST',
+          '/api/v1/meters/workspace/bulk',
+          expect.objectContaining({
+            billingCycleId: 'cycle-2026-08',
+            rows: [expect.objectContaining({ roomId: 'room-101-uuid', otherFees: [{ description: 'คีย์การ์ด', amount: '50.50' }] })],
+          }),
+          expect.any(Object)
+        );
+      });
+
+      // Assert inputs are reset on success
+      await waitFor(() => {
+        expect(descInput.value).toBe('');
+        expect(amtInput.value).toBe('');
+      });
+    });
+
+    it('Quick Fill template generation fails closed with toast when household-counts fails', async () => {
+      const httpSpy = vi.spyOn(httpClient, 'httpRequest').mockImplementation(async (method, url) => {
+        if (url === '/billing-cycles') {
+          return {
+            data: [{ id: 'cycle-2026-08', cycleCode: '2026-08', status: 'open', isCurrent: true }],
+            operationalCycleCode: '2026-08',
+          };
+        }
+        if (url.includes('/meters/workspace/household-counts')) {
+          throw new Error('Network error');
+        }
+        return { success: true, data: [] };
+      });
+
+      renderWithClient(
+        <OwnerMeters
+          rooms={[mockRoom]}
+          buildings={[mockBuilding]}
+          dormitoryId="dorm-001-uuid"
+          bills={[]}
+          tenants={[]}
+          contracts={[]}
+          onSaveBills={() => {}}
+          onSelectTenant={() => {}}
+          onAddLog={() => {}}
+          selectedBillingCycleId="cycle-2026-08"
+          selectedCycleCode="2026-08"
+        />
+      );
+
+      // Wait for table to render
+      await waitFor(() => {
+        expect(screen.getByText('101')).toBeDefined();
+      });
+
+      // Open Quick Fill modal
+      const quickFillBtn = screen.getAllByRole('button', { name: /กรอกแบบรวดเร็ว/ })[0];
+      fireEvent.click(quickFillBtn);
+
+      await waitFor(() => {
+        expect(screen.getByText('กรอกข้อมูลด่วน (Quick Fill)')).toBeDefined();
+      });
+
+      // Click "ใช้แม่แบบ"
+      const useTemplateBtn = screen.getByRole('button', { name: /ใช้แม่แบบ/ });
+      fireEvent.click(useTemplateBtn);
+
+      // Verify fail-closed error toast and template text area remains empty
+      await waitFor(() => {
+        expect(screen.getByText('ไม่สามารถดึงจำนวนคนปัจจุบันได้ กรุณาลองอีกครั้ง')).toBeDefined();
+      });
+
+      const textarea = screen.getByPlaceholderText('วางข้อมูลหลายห้องที่นี่ . . .') as HTMLTextAreaElement;
+      expect(textarea.value).toBe('');
+    });
+  });
 });

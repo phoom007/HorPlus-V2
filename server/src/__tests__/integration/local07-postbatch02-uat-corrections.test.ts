@@ -637,7 +637,7 @@ describe('LOCAL-07 Post-Batch02 UAT Corrections: OCC, Preview Context & Househol
       expect(r2Household.currentHouseholdPeopleCount).toBe(0); // Vacant room
     });
 
-    it('verifies exact calculation parity between calculateMeterRowPreview, BillingService, and persisted Bill', async () => {
+    it('verifies exact calculation parity with fractional 2-decimal meter readings between calculateMeterRowPreview, BillingService, and persisted Bill', async () => {
       const ctxRes = await request(app)
         .get(`/api/v1/meters/workspace/preview-context?billingCycleId=${billingCycleId}`)
         .set('Cookie', ownerSessionCookie)
@@ -648,39 +648,34 @@ describe('LOCAL-07 Post-Batch02 UAT Corrections: OCC, Preview Context & Househol
       const { rateSnapshot, rooms: previewRooms } = ctxRes.body.data;
       const r1Ctx = previewRooms.find((r: any) => r.roomId === roomId);
 
-      // Run calculateMeterRowPreview
+      // Fractional fixture:
+      // water: previous 100.25, current 105.75 -> usage 5.50 * 18.00 = 99.00
+      // electric: previous 500.10, current 501.35 -> usage 1.25 * 8.00 = 10.00
       const preview = calculateMeterRowPreview(r1Ctx, rateSnapshot, {
-        waterPrev: 100,
-        waterCurr: 105,
-        elecPrev: 500,
-        elecCurr: 520,
+        waterPrev: '100.25',
+        waterCurr: '105.75',
+        elecPrev: '500.10',
+        elecCurr: '501.35',
         peopleCount: 2,
-        overdueAmount: 50,
-        otherFees: [{ description: 'ค่าขยะ', amount: 40 }],
+        overdueAmount: '50.00',
+        otherFees: [{ description: 'ค่าขยะ', amount: '40.00' }],
       });
 
-      // Assert expected calculations:
-      // Rent: 3500.00
-      // Water: (105 - 100) = 5 units * 18.00 = 90.00
-      // Elec: (520 - 500) = 20 units * 8.00 = 160.00
-      // Common Fee: 150.00
-      // Internet Fee: 200.00
-      // Parking Fee: 100.00
-      // Overdue: 50.00
-      // Other fees: 40.00
-      // Total: 3500 + 90 + 160 + 150 + 200 + 100 + 50 + 40 = 4290.00
       expect(preview.rentAmount).toBe('3500.00');
-      expect(preview.waterAmount).toBe('90.00');
-      expect(preview.elecAmount).toBe('160.00');
+      expect(preview.waterUsage).toBe('5.50');
+      expect(preview.waterAmount).toBe('99.00');
+      expect(preview.elecUsage).toBe('1.25');
+      expect(preview.elecAmount).toBe('10.00');
       expect(preview.commonAmount).toBe('150.00');
       expect(preview.internetAmount).toBe('200.00');
       expect(preview.parkingAmount).toBe('100.00');
       expect(preview.overdueAmount).toBe('50.00');
       expect(preview.otherFeesAmount).toBe('40.00');
-      expect(preview.totalAmount).toBe('4290.00');
-      expect(preview.formattedTotal).toBe('4,290.00');
+      // Total: 3500.00 + 99.00 + 10.00 + 150.00 + 200.00 + 100.00 + 50.00 + 40.00 = 4149.00
+      expect(preview.totalAmount).toBe('4149.00');
+      expect(preview.formattedTotal).toBe('4,149.00');
 
-      // Issue bill via API with these exact meter workspace inputs
+      // Issue bill via API with these exact fractional readings
       const issueRes = await request(app)
         .post('/api/v1/bills/generate/bulk')
         .set('Cookie', ownerSessionCookie)
@@ -691,8 +686,10 @@ describe('LOCAL-07 Post-Batch02 UAT Corrections: OCC, Preview Context & Househol
           dirtyRows: [
             {
               roomId,
-              waterCurr: '105.00',
-              elecCurr: '520.00',
+              waterPrev: '100.25',
+              waterCurr: '105.75',
+              elecPrev: '500.10',
+              elecCurr: '501.35',
               peopleCount: 2,
               manualOutstandingAmount: '50.00',
               otherFees: [{ description: 'ค่าขยะ', amount: '40.00' }],
@@ -715,15 +712,91 @@ describe('LOCAL-07 Post-Batch02 UAT Corrections: OCC, Preview Context & Househol
       });
 
       expect(dbBill).toBeDefined();
-      expect(dbBill?.totalAmount.toString()).toBe('4290');
+      expect(dbBill?.totalAmount.toString()).toBe('4149');
       expect(dbBill?.items.find((i: any) => i.type === 'rent')?.amount.toString()).toBe('3500');
-      expect(dbBill?.items.find((i: any) => i.type === 'water')?.amount.toString()).toBe('90');
-      expect(dbBill?.items.find((i: any) => i.type === 'electricity')?.amount.toString()).toBe('160');
+      expect(dbBill?.items.find((i: any) => i.type === 'water')?.amount.toString()).toBe('99');
+      expect(dbBill?.items.find((i: any) => i.type === 'electricity')?.amount.toString()).toBe('10');
       expect(dbBill?.items.find((i: any) => i.type === 'common_fee')?.amount.toString()).toBe('150');
       expect(dbBill?.items.find((i: any) => i.type === 'internet')?.amount.toString()).toBe('200');
       expect(dbBill?.items.find((i: any) => i.type === 'parking')?.amount.toString()).toBe('100');
       expect(dbBill?.items.find((i: any) => i.type === 'manual_outstanding')?.amount.toString()).toBe('50');
       expect(dbBill?.items.find((i: any) => i.type === 'other_fee')?.amount.toString()).toBe('40');
+    });
+
+    it('table-driven cross-mode parity vector suite verifies all billing modes without floating drift', () => {
+      // 1. Contract Monthly + PER_PERSON utilities
+      const v1 = calculateMeterRowPreview(
+        { roomId: 'r1', billingSource: 'CONTRACT', rentAmount: '4000.00' },
+        {
+          waterBillingType: 'per_person',
+          waterRate: '100.00',
+          electricityBillingType: 'per_person',
+          electricityRate: '200.00',
+          commonFeeMode: 'per_person',
+          commonFee: '50.00',
+          internetFeeMode: 'per_person',
+          internetFee: '100.00',
+          parkingFeeMode: 'per_person',
+          parkingFee: '150.00',
+        },
+        { peopleCount: 3 }
+      );
+      // 4000 + (3*100) + (3*200) + (3*50) + (3*100) + (3*150) = 4000 + 300 + 600 + 150 + 300 + 450 = 5800.00
+      expect(v1.totalAmount).toBe('5800.00');
+
+      // 2. Provisional Monthly + FIXED / PER_ROOM modes
+      const v2 = calculateMeterRowPreview(
+        { roomId: 'r2', billingSource: 'PROVISIONAL_MONTHLY', rentAmount: '3200.00' },
+        {
+          waterBillingType: 'fixed',
+          waterRate: '150.00',
+          electricityBillingType: 'fixed',
+          electricityRate: '350.00',
+          commonFeeMode: 'per_room',
+          commonFee: '100.00',
+          internetFeeMode: 'per_room',
+          internetFee: '150.00',
+          parkingFeeMode: 'per_room',
+          parkingFee: '200.00',
+        },
+        { peopleCount: 1 }
+      );
+      // 3200 + 150 + 350 + 100 + 150 + 200 = 4150.00
+      expect(v2.totalAmount).toBe('4150.00');
+
+      // 3. Provisional TERM Installment + PER_VEHICLE parking + multiple other fees + overdue
+      const v3 = calculateMeterRowPreview(
+        { roomId: 'r3', billingSource: 'PROVISIONAL_TERM', rentAmount: '12000.00', parkingQuantity: '2' },
+        {
+          waterBillingType: 'per_unit',
+          waterRate: '20.00',
+          electricityBillingType: 'per_unit',
+          electricityRate: '7.50',
+          parkingFeeMode: 'per_vehicle',
+          parkingFee: '100.00',
+        },
+        {
+          waterPrev: '200.50',
+          waterCurr: '210.75', // usage 10.25 * 20.00 = 205.00
+          elecPrev: '1000.20',
+          elecCurr: '1050.60', // usage 50.40 * 7.50 = 378.00
+          overdueAmount: '150.25',
+          otherFees: [
+            { description: 'คีย์การ์ด', amount: '100.50' },
+            { description: 'ทำความสะอาด', amount: '200.00' },
+          ],
+        }
+      );
+      // 12000 + 205.00 + 378.00 + (2*100) + 150.25 + 100.50 + 200.00 = 13233.75
+      expect(v3.waterUsage).toBe('10.25');
+      expect(v3.waterAmount).toBe('205.00');
+      expect(v3.elecUsage).toBe('50.40');
+      expect(v3.elecAmount).toBe('378.00');
+      expect(v3.parkingAmount).toBe('200.00');
+      expect(v3.overdueAmount).toBe('150.25');
+      expect(v3.otherFeesAmount).toBe('300.50');
+      expect(v3.totalAmount).toBe('13233.75');
+      expect(v3.formattedTotal).toBe('13,233.75');
     });
   });
 

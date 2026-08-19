@@ -6,6 +6,7 @@
  * 1. ZERO floating-point operations. All financial amounts calculated in exact integer satangs (BigInt).
  * 2. Exact two-decimal canonical strings ("0.00", "3500.00", "4200.50").
  * 3. 100% Mathematical Parity with server BillingService.generateBillPreview & decimal-math.util.
+ * 4. Meter usage preserves exact 2-decimal fractional units without integer rounding (e.g. 105.75 - 100.25 = 5.50).
  */
 
 export interface RateSnapshotContext {
@@ -38,10 +39,10 @@ export interface RoomPreviewContext {
 }
 
 export interface TransientRowDraft {
-  waterCurr?: number;
-  waterPrev?: number;
-  elecCurr?: number;
-  elecPrev?: number;
+  waterCurr?: number | string;
+  waterPrev?: number | string;
+  elecCurr?: number | string;
+  elecPrev?: number | string;
   peopleCount?: number;
   overdueAmount?: number | string;
   otherFees?: Array<{ description: string; amount: number | string }>;
@@ -63,10 +64,10 @@ export interface CalculatedMeterPreview {
 }
 
 /**
- * Converts a monetary string or number into exact integer satangs (BigInt).
- * Examples: "3500" -> 350000n, "3500.5" -> 350050n, "3500.50" -> 350050n, "-10.00" -> -1000n.
+ * Exact scaled 2-decimal integer parser (scaled by 100).
+ * Examples: "100.25" -> 10025n, "105.75" -> 10575n, "3500.50" -> 350050n, "-10.00" -> -1000n.
  */
-export function parseSatang(val: string | number | null | undefined): bigint {
+export function parseScaled2(val: string | number | null | undefined): bigint {
   if (val === null || val === undefined || val === '') return 0n;
   const str = String(val).trim();
   if (!str || str === '0' || str === '0.0' || str === '0.00') return 0n;
@@ -75,32 +76,42 @@ export function parseSatang(val: string | number | null | undefined): bigint {
   const [intPart = '0', fracPart = ''] = clean.split('.');
   const cleanInt = intPart.replace(/\D/g, '') || '0';
   const cleanFrac = (fracPart.replace(/\D/g, '') + '00').slice(0, 2);
-  const satang = BigInt(cleanInt) * 100n + BigInt(cleanFrac);
-  return isNegative ? -satang : satang;
+  const scaled = BigInt(cleanInt) * 100n + BigInt(cleanFrac);
+  return isNegative ? -scaled : scaled;
 }
 
 /**
- * Converts exact integer satangs (BigInt) into a canonical two-decimal monetary string ("3500.00").
+ * Formats a scaled 2-decimal BigInt into a canonical string ("5.50", "100.25", "3500.00").
  */
-export function formatSatang(satang: bigint): string {
-  const isNegative = satang < 0n;
-  const abs = isNegative ? -satang : satang;
+export function formatScaled2(scaled: bigint): string {
+  const isNegative = scaled < 0n;
+  const abs = isNegative ? -scaled : scaled;
   const intPart = abs / 100n;
   const fracPart = (abs % 100n).toString().padStart(2, '0');
   return `${isNegative ? '-' : ''}${intPart.toString()}.${fracPart}`;
 }
 
 /**
- * Multiplies a satang rate by a decimal or integer quantity with exact Round-Half-Up satang rounding.
- * Examples: 1800n (18.00 ฿) * "5" -> 9000n (90.00 ฿)
+ * Subtracts previous reading from current reading, ensuring non-negative (>= 0).
  */
-export function multiplySatangByQuantity(satangRate: bigint, quantity: string | number | null | undefined): bigint {
+export function subtractScaled2(curr: string | number | null | undefined, prev: string | number | null | undefined): bigint {
+  const c = parseScaled2(curr);
+  const p = parseScaled2(prev);
+  const diff = c - p;
+  return diff > 0n ? diff : 0n;
+}
+
+/**
+ * Multiplies money rate (in satang, scaled 100) by a decimal quantity (scaled 100) with Round-Half-Up.
+ * Examples: 1800n (18.00 ฿) * "5.50" -> 9900n (99.00 ฿)
+ */
+export function multiplyMoneyByQuantity(satangRate: bigint, quantity: string | number | null | undefined): bigint {
   if (satangRate === 0n || quantity === null || quantity === undefined || quantity === '' || quantity === 0) {
     return 0n;
   }
-  const qSatang = parseSatang(quantity);
-  // satangRate * (qSatang / 100) -> (satangRate * qSatang) / 100 with round-half-up
-  const product = satangRate * qSatang;
+  const qScaled = parseScaled2(quantity);
+  // satangRate * (qScaled / 100) -> (satangRate * qScaled) / 100 with round-half-up
+  const product = satangRate * qScaled;
   const quotient = product / 100n;
   const remainder = product % 100n;
   const absRemainder = remainder < 0n ? -remainder : remainder;
@@ -109,6 +120,11 @@ export function multiplySatangByQuantity(satangRate: bigint, quantity: string | 
   }
   return quotient;
 }
+
+// Aliases for monetary semantics
+export const parseSatang = parseScaled2;
+export const formatSatang = formatScaled2;
+export const multiplySatangByQuantity = multiplyMoneyByQuantity;
 
 /**
  * Formats a canonical two-decimal string into Thai display format with commas.
@@ -133,48 +149,48 @@ export function calculateMeterRowPreview(
   const peopleCount = Math.max(0, draft.peopleCount ?? roomCtx?.currentHouseholdPeopleCount ?? roomCtx?.snapshotPeopleCount ?? 0);
   const peopleCountStr = peopleCount.toString();
 
-  const waterPrev = draft.waterPrev !== undefined ? Number(draft.waterPrev) : 0;
-  const waterCurr = draft.waterCurr !== undefined ? Number(draft.waterCurr) : waterPrev;
+  const waterPrev = draft.waterPrev !== undefined ? String(draft.waterPrev) : '0.00';
+  const waterCurr = draft.waterCurr !== undefined ? String(draft.waterCurr) : waterPrev;
 
-  const elecPrev = draft.elecPrev !== undefined ? Number(draft.elecPrev) : 0;
-  const elecCurr = draft.elecCurr !== undefined ? Number(draft.elecCurr) : elecPrev;
+  const elecPrev = draft.elecPrev !== undefined ? String(draft.elecPrev) : '0.00';
+  const elecCurr = draft.elecCurr !== undefined ? String(draft.elecCurr) : elecPrev;
 
   // 1. Water Calculation
   const waterMode = rates?.waterBillingType || 'per_unit';
   const waterRateSatang = parseSatang(rates?.waterRate);
-  let waterUsageSatang = 0n;
+  let waterUsageScaled = 0n;
   let waterAmountSatang = 0n;
 
   if (waterMode === 'per_person' || waterMode === 'person') {
-    waterAmountSatang = multiplySatangByQuantity(waterRateSatang, peopleCountStr);
-    waterUsageSatang = parseSatang(peopleCountStr);
+    waterAmountSatang = multiplyMoneyByQuantity(waterRateSatang, peopleCountStr);
+    waterUsageScaled = parseScaled2(peopleCountStr);
   } else if (waterMode === 'fixed' || waterMode === 'per_room' || waterMode === 'room') {
     waterAmountSatang = waterRateSatang;
-    waterUsageSatang = 100n; // 1.00 room
+    waterUsageScaled = 100n; // 1.00 room
   } else {
-    // per_unit
-    const usage = Math.max(0, Math.round(waterCurr - waterPrev));
-    waterUsageSatang = BigInt(usage) * 100n;
-    waterAmountSatang = multiplySatangByQuantity(waterRateSatang, usage.toString());
+    // per_unit: exact 2-decimal fractional difference
+    waterUsageScaled = subtractScaled2(waterCurr, waterPrev);
+    const usageStr = formatScaled2(waterUsageScaled);
+    waterAmountSatang = multiplyMoneyByQuantity(waterRateSatang, usageStr);
   }
 
   // 2. Electricity Calculation
   const elecMode = rates?.electricityBillingType || 'per_unit';
   const elecRateSatang = parseSatang(rates?.electricityRate);
-  let elecUsageSatang = 0n;
+  let elecUsageScaled = 0n;
   let elecAmountSatang = 0n;
 
   if (elecMode === 'per_person' || elecMode === 'person') {
-    elecAmountSatang = multiplySatangByQuantity(elecRateSatang, peopleCountStr);
-    elecUsageSatang = parseSatang(peopleCountStr);
+    elecAmountSatang = multiplyMoneyByQuantity(elecRateSatang, peopleCountStr);
+    elecUsageScaled = parseScaled2(peopleCountStr);
   } else if (elecMode === 'fixed' || elecMode === 'per_room' || elecMode === 'room') {
     elecAmountSatang = elecRateSatang;
-    elecUsageSatang = 100n; // 1.00 room
+    elecUsageScaled = 100n; // 1.00 room
   } else {
-    // per_unit
-    const usage = Math.max(0, Math.round(elecCurr - elecPrev));
-    elecUsageSatang = BigInt(usage) * 100n;
-    elecAmountSatang = multiplySatangByQuantity(elecRateSatang, usage.toString());
+    // per_unit: exact 2-decimal fractional difference
+    elecUsageScaled = subtractScaled2(elecCurr, elecPrev);
+    const usageStr = formatScaled2(elecUsageScaled);
+    elecAmountSatang = multiplyMoneyByQuantity(elecRateSatang, usageStr);
   }
 
   // 3. Common Fee Calculation
@@ -185,7 +201,7 @@ export function calculateMeterRowPreview(
   if (commonMode === 'free' || commonMode === 'none' || (peopleCount === 0 && roomCtx?.billingSource === 'NONE')) {
     commonAmountSatang = 0n;
   } else if (commonMode === 'per_person' || commonMode === 'person') {
-    commonAmountSatang = multiplySatangByQuantity(commonFeeSatang, peopleCountStr);
+    commonAmountSatang = multiplyMoneyByQuantity(commonFeeSatang, peopleCountStr);
   } else {
     commonAmountSatang = commonFeeSatang;
   }
@@ -198,7 +214,7 @@ export function calculateMeterRowPreview(
   if (internetMode === 'free' || internetMode === 'none' || (peopleCount === 0 && roomCtx?.billingSource === 'NONE')) {
     internetAmountSatang = 0n;
   } else if (internetMode === 'per_person' || internetMode === 'person') {
-    internetAmountSatang = multiplySatangByQuantity(internetFeeSatang, peopleCountStr);
+    internetAmountSatang = multiplyMoneyByQuantity(internetFeeSatang, peopleCountStr);
   } else {
     internetAmountSatang = internetFeeSatang;
   }
@@ -211,11 +227,11 @@ export function calculateMeterRowPreview(
   if (parkingMode === 'free' || parkingMode === 'none' || (peopleCount === 0 && roomCtx?.billingSource === 'NONE')) {
     parkingAmountSatang = 0n;
   } else if (parkingMode === 'per_person' || parkingMode === 'person') {
-    parkingAmountSatang = multiplySatangByQuantity(parkingFeeSatang, peopleCountStr);
+    parkingAmountSatang = multiplyMoneyByQuantity(parkingFeeSatang, peopleCountStr);
   } else if (parkingMode === 'per_vehicle' || parkingMode === 'vehicle') {
     const rawQty = roomCtx?.parkingQuantity;
     const qty = rawQty === 'per_person' ? peopleCountStr : (rawQty ?? '0.00');
-    parkingAmountSatang = multiplySatangByQuantity(parkingFeeSatang, qty);
+    parkingAmountSatang = multiplyMoneyByQuantity(parkingFeeSatang, qty);
   } else {
     parkingAmountSatang = parkingFeeSatang;
   }
@@ -245,9 +261,9 @@ export function calculateMeterRowPreview(
   return {
     rentAmount: formatSatang(rentSatang),
     waterAmount: formatSatang(waterAmountSatang),
-    waterUsage: formatSatang(waterUsageSatang),
+    waterUsage: formatScaled2(waterUsageScaled),
     elecAmount: formatSatang(elecAmountSatang),
-    elecUsage: formatSatang(elecUsageSatang),
+    elecUsage: formatScaled2(elecUsageScaled),
     commonAmount: formatSatang(commonAmountSatang),
     internetAmount: formatSatang(internetAmountSatang),
     parkingAmount: formatSatang(parkingAmountSatang),

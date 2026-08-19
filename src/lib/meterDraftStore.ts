@@ -12,18 +12,18 @@
 export interface MeterRowDraft {
   roomId: string;
   roomNumber: string;
-  waterPrev: number;
-  waterCurr: number;
-  elecPrev: number;
-  elecCurr: number;
+  waterPrev: number | string;
+  waterCurr: number | string;
+  elecPrev: number | string;
+  elecCurr: number | string;
   isReplaced: boolean;
   peopleCount: number;
-  overdueAmount: number;
+  overdueAmount: number | string;
   isPaid: boolean;
   billStatus: 'draft' | 'issued' | 'paid' | 'cancelled' | 'overdue' | 'void';
   editWaterPrev: boolean;
   editElecPrev: boolean;
-  otherFees: Array<{ description: string; amount: number }>;
+  otherFees: Array<{ description: string; amount: number | string }>;
   snapshotVersion?: number;
 }
 
