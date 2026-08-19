@@ -39,6 +39,7 @@ import { formatBaht, Modal } from '../../components/GlobalComponents';
 
 import { LineNotificationModal } from '../../components/LineNotificationModal';
 import { QuickAddTenantModal } from '../../components/QuickAddTenantModal';
+import { fetchAllPaginatedWithMeta } from '../../utils/fetch-paginated';
 import {
   serializeMeterWorkspaceDirtyRow,
   serializeMeterWorkspaceDirtyRows,
@@ -59,7 +60,7 @@ export function setStored<T>(key: string, val: T): void {
   } catch {}
 }
 
-interface OwnerMetersProps {
+export interface OwnerMetersProps {
   rooms: Room[];
   buildings?: Building[];
   dormitoryId?: string;
@@ -73,6 +74,7 @@ interface OwnerMetersProps {
   selectedBillingCycleId: string;
   selectedCycleCode: string;
   selectedCycle?: string;
+  billingCycles?: any[];
   onRefetchData?: () => void;
 }
 
@@ -254,6 +256,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   selectedBillingCycleId,
   selectedCycleCode,
   selectedCycle = selectedCycleCode,
+  billingCycles: propBillingCycles,
   onRefetchData
 }) => {
   const queryClient = useQueryClient();
@@ -310,33 +313,56 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   const [isQuickFillOpen, setIsQuickFillOpen] = useState(false);
   const [quickFillText, setQuickFillText] = useState('');
   const [templateUsed, setTemplateUsed] = useState(false);
-  const [isFirstCycle, setIsFirstCycle] = useState<boolean>(() => {
-    if (initialCachedData?.cyclesRes) {
-      const cyclesRes = initialCachedData.cyclesRes;
-      return Boolean(
-        cyclesRes.firstBillingCycleId === selectedBillingCycleId ||
-        cyclesRes.data?.find((c: any) => (c.id === selectedBillingCycleId || c.cycleCode === selectedCycleCode || c.cycleCode === selectedCycle))?.isFirstCycle
-      );
-    }
-    return false;
-  });
   const [quickAddModalOpen, setQuickAddModalOpen] = useState(false);
   const [selectedQuickAddContext, setSelectedQuickAddContext] = useState<QuickAddRoomContext | null>(null);
   const [quickAddLoadingRoomId, setQuickAddLoadingRoomId] = useState<string | null>(null);
-  const [operationalCycleAuthorityLoaded, setOperationalCycleAuthorityLoaded] = useState<boolean>(() => {
-    return Boolean(initialCachedData?.cyclesRes);
+
+  const dormHeader = currentDormId ? { 'x-dormitory-id': currentDormId } : undefined;
+
+  // Canonical Billing Cycles Query (Unified Single Authority)
+  const billingCyclesQuery = useQuery({
+    queryKey: queryKeys.billingCycles(currentDormId),
+    queryFn: () => fetchAllPaginatedWithMeta('/api/v1/billing-cycles', { headers: dormHeader, credentials: 'include' }),
+    enabled: Boolean(currentDormId),
+    staleTime: STALE_TIMES.BILLING_CYCLES,
   });
-  const [operationalCycleCode, setOperationalCycleCode] = useState<string | null>(() => {
-    if (initialCachedData?.cyclesRes) {
-      const cyclesRes = initialCachedData.cyclesRes;
-      if (cyclesRes.operationalCycleCode) return cyclesRes.operationalCycleCode;
-      if (cyclesRes.data && Array.isArray(cyclesRes.data)) {
-        const op = cyclesRes.data.find((c: any) => c.status === 'draft' || c.status === 'open' || c.isCurrent);
-        return op?.cycleCode || null;
-      }
-    }
-    return null;
-  });
+
+  const billingCyclesData = billingCyclesQuery.data;
+  const billingCycles: any[] = billingCyclesData?.data || propBillingCycles || [];
+  const cycleAuthorityStatus: 'loading' | 'ready' | 'error' = (billingCyclesQuery.isSuccess || (propBillingCycles && propBillingCycles.length > 0))
+    ? 'ready'
+    : (billingCyclesQuery.isLoading ? 'loading' : (billingCyclesQuery.isError ? 'error' : 'ready'));
+  const cycleAuthorityReady = cycleAuthorityStatus === 'ready';
+
+  const firstBillingCycleId = billingCyclesData?.firstBillingCycleId || (billingCycles.length > 0 ? billingCycles[billingCycles.length - 1]?.id : null);
+  const operationalBillingCycleId = billingCyclesData?.operationalBillingCycleId || billingCycles.find((c: any) => c.status === 'draft' || c.status === 'open' || c.isCurrent)?.id;
+  const operationalCycleCode = billingCyclesData?.operationalCycleCode || billingCycles.find((c: any) => c.status === 'draft' || c.status === 'open' || c.isCurrent)?.cycleCode;
+
+  const isFirstCycle = cycleAuthorityReady
+    ? Boolean(
+        firstBillingCycleId && (
+          firstBillingCycleId === selectedBillingCycleId ||
+          billingCycles.find((c: any) => c.id === selectedBillingCycleId)?.isFirstCycle
+        )
+      )
+    : false;
+
+  const isCurrentOperationalCycle = cycleAuthorityReady
+    ? Boolean(
+        (operationalBillingCycleId && operationalBillingCycleId === selectedBillingCycleId) ||
+        (operationalCycleCode && (selectedCycle === operationalCycleCode || selectedCycleCode === operationalCycleCode))
+      )
+    : false;
+
+  const previousCycleExists = Boolean(
+    cycleAuthorityReady &&
+    billingCycles.length > 0 &&
+    (() => {
+      const idx = billingCycles.findIndex((c: any) => c.id === selectedBillingCycleId || c.cycleCode === selectedCycleCode || c.cycleCode === selectedCycle);
+      return idx !== -1 && idx < billingCycles.length - 1;
+    })()
+  );
+
   const [allowEditAllElecPrev, setAllowEditAllElecPrev] = useState(false);
   const [allowEditAllWaterPrev, setAllowEditAllWaterPrev] = useState(false);
   const [flashingCells, setFlashingCells] = useState<{ [key: string]: boolean }>({});
@@ -378,18 +404,27 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     staleTime: STALE_TIMES.PREVIEW_CONTEXT,
   });
 
+  // Meter Workspace Query (Canonical observed query)
+  const meterWorkspaceQuery = useQuery({
+    queryKey: queryKeys.meterWorkspace(currentDormId, selectedBillingCycleId),
+    queryFn: async () => {
+      if (!currentDormId || !selectedBillingCycleId) return null;
+      const [serverReadings, cyclePeopleRes] = await Promise.all([
+        getDataProvider().meters.getByCycle(selectedBillingCycleId),
+        getDataProvider().meters.getCyclePeopleCount(selectedBillingCycleId),
+      ]);
+      return { serverReadings, cyclePeopleRes };
+    },
+    enabled: Boolean(currentDormId && selectedBillingCycleId),
+    staleTime: STALE_TIMES.METER_WORKSPACE,
+  });
+
   const previewContext = previewContextQuery.data;
   const rateSnapshot = previewContext?.rateSnapshot;
 
-  const isCurrentOperationalCycle = Boolean(
-    operationalCycleAuthorityLoaded &&
-    operationalCycleCode &&
-    (selectedCycle === operationalCycleCode || selectedCycleCode === operationalCycleCode)
-  );
-
-  // Authoritative billing mode derived from rateSnapshot (fail-closed)
-  const isWaterUnit = rateSnapshot ? (rateSnapshot.waterBillingType === 'per_unit') : false;
-  const isElecUnit = rateSnapshot ? (rateSnapshot.electricityBillingType === 'per_unit') : false;
+  // Authoritative billing mode derived from rateSnapshot (fail-closed, defaults to per_unit)
+  const isWaterUnit = rateSnapshot ? (rateSnapshot.waterBillingType === 'per_unit') : true;
+  const isElecUnit = rateSnapshot ? (rateSnapshot.electricityBillingType === 'per_unit') : true;
 
   // Controlled input state for adding other fees per room
   const [newFeeInputs, setNewFeeInputs] = useState<Record<string, { description: string; amount: string }>>({});
@@ -754,7 +789,12 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
 
   const isCycleLoaded = Boolean(loadedCycle && (loadedCycle === selectedCycle || loadedCycle === selectedBillingCycleId || loadedCycle === selectedCycleCode));
 
-  const showPullButton = !isFirstCycle && isCycleLoaded;
+  const showPullButton = Boolean(
+    cycleAuthorityReady &&
+    isFirstCycle === false &&
+    previousCycleExists &&
+    meterWorkspaceQuery.isSuccess
+  );
 
   const handlePullPreviousData = async () => {
     if (!selectedBillingCycleId) {
@@ -1115,24 +1155,6 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     }
   }, [selectedCycle]);
 
-  // Meter Workspace Query (Canonical observed query)
-  const meterWorkspaceQuery = useQuery({
-    queryKey: queryKeys.meterWorkspace(currentDormId, selectedBillingCycleId),
-    queryFn: async () => {
-      if (!currentDormId || !selectedBillingCycleId) return null;
-      const [serverReadings, cyclePeopleRes, cyclesRes] = await Promise.all([
-        getDataProvider().meters.getByCycle(selectedBillingCycleId),
-        getDataProvider().meters.getCyclePeopleCount(selectedBillingCycleId),
-        httpRequest<{ data: any[]; firstBillingCycleId?: string }>('GET', '/billing-cycles', undefined, {
-          headers: currentDormId ? { 'x-dormitory-id': currentDormId } : {},
-        }).catch(() => null)
-      ]);
-      return { serverReadings, cyclePeopleRes, cyclesRes };
-    },
-    enabled: Boolean(currentDormId && selectedBillingCycleId),
-    staleTime: STALE_TIMES.METER_WORKSPACE,
-  });
-
   useEffect(() => {
     if (!selectedBillingCycleId || !meterWorkspaceQuery.data) {
       if (!selectedBillingCycleId) {
@@ -1140,31 +1162,6 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
         setLoadedCycle('');
       }
       return;
-    }
-
-    const { serverReadings, cyclePeopleRes, cyclesRes } = meterWorkspaceQuery.data;
-
-    if (cyclesRes) {
-      const isFirst = cyclesRes.firstBillingCycleId === selectedBillingCycleId ||
-        cyclesRes.data?.find((c: any) => (c.id === selectedBillingCycleId || c.cycleCode === selectedCycleCode || c.cycleCode === selectedCycle))?.isFirstCycle;
-      setIsFirstCycle(Boolean(isFirst));
-      if ((cyclesRes as any).operationalCycleCode) {
-        setOperationalCycleCode((cyclesRes as any).operationalCycleCode);
-        setOperationalCycleAuthorityLoaded(true);
-      } else if (cyclesRes.data && Array.isArray(cyclesRes.data)) {
-        const op = cyclesRes.data.find((c: any) => c.status === 'draft' || c.status === 'open' || c.isCurrent);
-        if (op?.cycleCode) {
-          setOperationalCycleCode(op.cycleCode);
-          setOperationalCycleAuthorityLoaded(true);
-        } else {
-          setOperationalCycleAuthorityLoaded(false);
-        }
-      } else {
-        setOperationalCycleAuthorityLoaded(false);
-      }
-    } else {
-      setOperationalCycleAuthorityLoaded(false);
-      setOperationalCycleCode(null);
     }
 
     const built = buildRowsFromWorkspace({

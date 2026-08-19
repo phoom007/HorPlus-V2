@@ -80,7 +80,6 @@ export function PaymentsOwnerView({
   };
 
   const fetchPaymentsAndBills = useCallback(async () => {
-    console.log('[DEBUG] fetchPaymentsAndBills called with dormitoryId:', dormitoryId);
     if (!dormitoryId) return;
     
     setLoading(true);
@@ -134,7 +133,6 @@ export function PaymentsOwnerView({
   }, [dormitoryId]);
 
   useEffect(() => {
-    console.log('[DEBUG] PaymentsOwnerView useEffect mounting');
     fetchPaymentsAndBills();
   }, [fetchPaymentsAndBills]);
 

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard,
@@ -31,13 +31,16 @@ import {
   Droplet,
   Trash2,
   Gauge,
-  CreditCard
+  CreditCard,
+  AlertTriangle
 } from 'lucide-react';
 
 import { User, Room, Tenant, Bill, Contract, MaintenanceRequest, Announcement, AuditLog, Building } from '../types';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { queryKeys, STALE_TIMES, clearDormitoryQueryCache } from '../lib/queryClient';
 import { meterDraftStore, clearMeterDraftStore } from '../lib/meterDraftStore';
+import { getDataProvider } from '../data/dataProvider';
+import { httpRequest } from '../data/httpClient';
 
 // Import sub-modules
 import { OwnerDashboard } from './owner/dashboard';
@@ -163,6 +166,99 @@ export const UserAvatar: React.FC<{ user: { name?: string; avatar?: string; avat
   );
 };
 
+export function getTargetQueriesForTab(targetTab: string, dormId: string, cycleId?: string) {
+  const dormHeader = dormId ? { 'x-dormitory-id': dormId } : undefined;
+  switch (targetTab) {
+    case 'dashboard':
+      return [
+        { queryKey: queryKeys.rooms(dormId), queryFn: () => fetchAllPaginated<Room>('/api/v1/properties/rooms', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.ROOMS },
+        { queryKey: queryKeys.buildings(dormId), queryFn: () => fetchAllPaginated<Building>('/api/v1/properties/buildings', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.BUILDINGS },
+        { queryKey: queryKeys.billingCycles(dormId), queryFn: () => fetchAllPaginatedWithMeta('/api/v1/billing-cycles', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.BILLING_CYCLES },
+      ];
+    case 'rooms':
+      return [
+        { queryKey: queryKeys.rooms(dormId), queryFn: () => fetchAllPaginated<Room>('/api/v1/properties/rooms', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.ROOMS },
+        { queryKey: queryKeys.buildings(dormId), queryFn: () => fetchAllPaginated<Building>('/api/v1/properties/buildings', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.BUILDINGS },
+      ];
+    case 'tenants':
+      return [
+        { queryKey: queryKeys.tenants(dormId), queryFn: () => fetchAllPaginated<Tenant>('/api/v1/tenants', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.TENANTS },
+        { queryKey: queryKeys.rooms(dormId), queryFn: () => fetchAllPaginated<Room>('/api/v1/properties/rooms', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.ROOMS },
+        { queryKey: queryKeys.contracts(dormId), queryFn: () => fetchAllPaginated<Contract>('/api/v1/contracts', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.CONTRACTS },
+      ];
+    case 'contracts':
+      return [
+        { queryKey: queryKeys.contracts(dormId), queryFn: () => fetchAllPaginated<Contract>('/api/v1/contracts', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.CONTRACTS },
+        { queryKey: queryKeys.rooms(dormId), queryFn: () => fetchAllPaginated<Room>('/api/v1/properties/rooms', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.ROOMS },
+        { queryKey: queryKeys.tenants(dormId), queryFn: () => fetchAllPaginated<Tenant>('/api/v1/tenants', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.TENANTS },
+      ];
+    case 'meters': {
+      const queries: any[] = [
+        { queryKey: queryKeys.rooms(dormId), queryFn: () => fetchAllPaginated<Room>('/api/v1/properties/rooms', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.ROOMS },
+        { queryKey: queryKeys.buildings(dormId), queryFn: () => fetchAllPaginated<Building>('/api/v1/properties/buildings', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.BUILDINGS },
+        { queryKey: queryKeys.billingCycles(dormId), queryFn: () => fetchAllPaginatedWithMeta('/api/v1/billing-cycles', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.BILLING_CYCLES },
+        { queryKey: queryKeys.bills(dormId), queryFn: () => fetchAllPaginated<Bill>('/api/v1/bills', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.BILLS },
+        { queryKey: queryKeys.tenants(dormId), queryFn: () => fetchAllPaginated<Tenant>('/api/v1/tenants', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.TENANTS },
+        { queryKey: queryKeys.contracts(dormId), queryFn: () => fetchAllPaginated<Contract>('/api/v1/contracts', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.CONTRACTS },
+      ];
+      if (cycleId) {
+        queries.push({
+          queryKey: queryKeys.meterWorkspace(dormId, cycleId),
+          queryFn: async () => {
+            const [serverReadings, cyclePeopleRes] = await Promise.all([
+              getDataProvider().meters.getByCycle(cycleId),
+              getDataProvider().meters.getCyclePeopleCount(cycleId),
+            ]);
+            return { serverReadings, cyclePeopleRes };
+          },
+          staleTime: STALE_TIMES.METER_WORKSPACE,
+        });
+        queries.push({
+          queryKey: queryKeys.meterPreviewContext(dormId, cycleId),
+          queryFn: async () => {
+            const res = await httpRequest<{ success: boolean; data: any }>(
+              'GET',
+              `/api/v1/meters/workspace/preview-context?billingCycleId=${cycleId}`,
+              undefined,
+              { headers: dormHeader }
+            );
+            return res.data;
+          },
+          staleTime: STALE_TIMES.PREVIEW_CONTEXT,
+        });
+      }
+      return queries;
+    }
+    case 'payments':
+      return [
+        { queryKey: queryKeys.bills(dormId), queryFn: () => fetchAllPaginated<Bill>('/api/v1/bills', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.BILLS },
+        { queryKey: queryKeys.rooms(dormId), queryFn: () => fetchAllPaginated<Room>('/api/v1/properties/rooms', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.ROOMS },
+      ];
+    case 'maintenance':
+      return [
+        { queryKey: queryKeys.maintenance(dormId), queryFn: () => fetchAllPaginated('/api/v1/maintenance', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.MAINTENANCE },
+        { queryKey: queryKeys.rooms(dormId), queryFn: () => fetchAllPaginated<Room>('/api/v1/properties/rooms', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.ROOMS },
+        { queryKey: queryKeys.tenants(dormId), queryFn: () => fetchAllPaginated<Tenant>('/api/v1/tenants', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.TENANTS },
+      ];
+    case 'announcements':
+      return [
+        { queryKey: queryKeys.announcements(dormId), queryFn: () => fetchAllPaginated<Announcement>('/api/v1/announcements', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.ANNOUNCEMENTS },
+        { queryKey: queryKeys.rooms(dormId), queryFn: () => fetchAllPaginated<Room>('/api/v1/properties/rooms', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.ROOMS },
+        { queryKey: queryKeys.buildings(dormId), queryFn: () => fetchAllPaginated<Building>('/api/v1/properties/buildings', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.BUILDINGS },
+      ];
+    case 'reports':
+      return [
+        { queryKey: queryKeys.rooms(dormId), queryFn: () => fetchAllPaginated<Room>('/api/v1/properties/rooms', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.ROOMS },
+        { queryKey: queryKeys.bills(dormId), queryFn: () => fetchAllPaginated<Bill>('/api/v1/bills', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.BILLS },
+        { queryKey: queryKeys.buildings(dormId), queryFn: () => fetchAllPaginated<Building>('/api/v1/properties/buildings', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.BUILDINGS },
+        { queryKey: queryKeys.tenants(dormId), queryFn: () => fetchAllPaginated<Tenant>('/api/v1/tenants', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.TENANTS },
+        { queryKey: queryKeys.contracts(dormId), queryFn: () => fetchAllPaginated<Contract>('/api/v1/contracts', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.CONTRACTS },
+      ];
+    default:
+      return [];
+  }
+}
+
 interface OwnerWorkspaceProps {
   user: User;
   onLogout: () => void;
@@ -186,10 +282,6 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
   const [activeTab, setActiveTab] = useState(
     isRegistrationMode ? (isAddDormRegistrationMode ? 'dormitories/new' : 'register') : pathSegment
   );
-
-  useEffect(() => {
-    console.log('[DEBUG] OwnerWorkspace activeTab updated to:', activeTab);
-  }, [activeTab]);
 
   useEffect(() => {
     if (onboardingRequired && pathSegment !== 'register') {
@@ -545,7 +637,30 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
   // Settings completeness status (suppressed until authoritative API settings completeness contract exists)
   const isSettingsIncomplete = false;
 
-  const handleTabChange = (tabId: string) => {
+  const [navToast, setNavToast] = useState<string | null>(null);
+
+  const showNavToast = (msg: string) => {
+    setNavToast(msg);
+    setTimeout(() => setNavToast(null), 3500);
+  };
+
+  const prefetchTab = useCallback((targetTab: string) => {
+    if (!activeDormitoryId || isRegistrationMode) return;
+    const targetCycleId = selectedBillingCycleId || billingCyclesQuery.data?.operationalBillingCycleId || billingCyclesQuery.data?.data?.[0]?.id;
+    const queries = getTargetQueriesForTab(targetTab, activeDormitoryId, targetCycleId);
+    for (const q of queries) {
+      const p = queryClient.prefetchQuery({
+        queryKey: q.queryKey,
+        queryFn: q.queryFn,
+        staleTime: q.staleTime,
+      });
+      if (p && typeof (p as any).catch === 'function') {
+        (p as any).catch(() => {});
+      }
+    }
+  }, [activeDormitoryId, isRegistrationMode, selectedBillingCycleId, billingCyclesQuery.data, queryClient, getTargetQueriesForTab]);
+
+  const handleTabChange = async (tabId: string) => {
     if (isRegistrationMode) {
       changeTab(tabId);
       setIsSidebarOpen(false);
@@ -560,9 +675,65 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
       setSeenContractIds(allCIds);
       localStorage.setItem(`HorPlus_seen_contracts_${selectedCycle}`, JSON.stringify(allCIds));
     }
-    changeTab(tabId);
-    setIsSidebarOpen(false);
+
+    if (tabId === activeTab) {
+      setIsSidebarOpen(false);
+      return;
+    }
+
+    const targetCycleId = selectedBillingCycleId || billingCyclesQuery.data?.operationalBillingCycleId || billingCyclesQuery.data?.data?.[0]?.id;
+    const queries = getTargetQueriesForTab(tabId, activeDormitoryId, targetCycleId);
+
+    // If all required target queries are already cached, swap immediately
+    const allCached = queries.every(q => queryClient.getQueryData(q.queryKey) !== undefined);
+
+    if (allCached) {
+      React.startTransition(() => {
+        changeTab(tabId);
+        setIsSidebarOpen(false);
+      });
+      return;
+    }
+
+    // If uncached, keep current page visible while target queries resolve in background
+    try {
+      await Promise.all(
+        queries.map(q => queryClient.ensureQueryData({
+          queryKey: q.queryKey,
+          queryFn: q.queryFn,
+          staleTime: q.staleTime,
+        }))
+      );
+      React.startTransition(() => {
+        changeTab(tabId);
+        setIsSidebarOpen(false);
+      });
+    } catch (err: any) {
+      showNavToast('ไม่สามารถโหลดข้อมูลหน้านี้ได้ กรุณาลองอีกครั้ง');
+    }
   };
+
+  useEffect(() => {
+    if (!activeDormitoryId || isRegistrationMode) return;
+    const idleCallback = (typeof window !== 'undefined' && (window as any).requestIdleCallback)
+      ? (window as any).requestIdleCallback
+      : ((cb: () => void) => setTimeout(cb, 100));
+
+    const handle = idleCallback(() => {
+      prefetchTab('meters');
+      prefetchTab('tenants');
+      prefetchTab('payments');
+      prefetchTab('rooms');
+    });
+
+    return () => {
+      if (typeof window !== 'undefined' && (window as any).cancelIdleCallback) {
+        (window as any).cancelIdleCallback(handle);
+      } else {
+        clearTimeout(handle);
+      }
+    };
+  }, [activeDormitoryId, isRegistrationMode, prefetchTab]);
 
   // Notification Bell Query
   const notificationsQuery = useQuery({
@@ -848,6 +1019,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
             selectedCycle={selectedCycleCode}
             selectedBillingCycleId={selectedBillingCycleId || billingCycles.find(c => c.cycleCode === selectedCycleCode)?.id}
             selectedCycleCode={selectedCycleCode}
+            billingCycles={billingCycles}
           />
         );
       case 'payments':
@@ -966,6 +1138,9 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
                       key={item.id}
                       data-testid={`nav-item-${item.id}`}
                       onClick={() => { if (!isDisabled) handleTabChange(item.id); }}
+                      onMouseEnter={() => { if (!isDisabled) prefetchTab(item.id); }}
+                      onFocus={() => { if (!isDisabled) prefetchTab(item.id); }}
+                      onTouchStart={() => { if (!isDisabled) prefetchTab(item.id); }}
                       title={isDisabled ? 'กรุณาลงทะเบียนหอพักให้เสร็จก่อนใช้งานเมนูนี้' : ''}
                       disabled={isDisabled}
                       className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-bold transition-all ${
@@ -1047,6 +1222,9 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
                   key={item.id}
                   data-testid={`nav-item-${item.id}`}
                   onClick={() => { if (!isDisabled) handleTabChange(item.id); }}
+                  onMouseEnter={() => { if (!isDisabled) prefetchTab(item.id); }}
+                  onFocus={() => { if (!isDisabled) prefetchTab(item.id); }}
+                  onTouchStart={() => { if (!isDisabled) prefetchTab(item.id); }}
                   title={isDisabled ? 'กรุณาลงทะเบียนหอพักให้เสร็จก่อนใช้งานเมนูนี้' : ''}
                   disabled={isDisabled}
                   className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-semibold transition-all ${
@@ -1485,6 +1663,9 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
                       <button
                         key={item.id}
                         onClick={() => handleTabChange(item.id)}
+                        onMouseEnter={() => prefetchTab(item.id)}
+                        onFocus={() => prefetchTab(item.id)}
+                        onTouchStart={() => prefetchTab(item.id)}
                         className={`flex flex-col items-center gap-1 py-1 px-3 rounded-xl transition-all ${
                           isActive ? 'text-[#2b64f6] font-extrabold scale-105' : 'text-slate-400 hover:text-slate-600'
                         }`}
@@ -1530,6 +1711,14 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
               onAddLog={handleAddLog}
             />
           </div>
+        </div>
+      )}
+
+      {/* Navigation Failure Toast */}
+      {navToast && (
+        <div className="fixed top-5 right-5 z-[150] bg-rose-600 text-white px-4 py-2.5 rounded-2xl shadow-xl flex items-center gap-2 text-xs font-bold animate-in fade-in slide-in-from-top-2">
+          <AlertTriangle className="w-4 h-4 text-white shrink-0" />
+          <span>{navToast}</span>
         </div>
       )}
 

@@ -13,6 +13,7 @@ import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/re
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { QuickAddTenantModal } from '../components/QuickAddTenantModal';
 import { OwnerMeters } from '../pages/owner/meters';
+import { getTargetQueriesForTab } from '../pages/owner';
 import * as httpClient from '../data/httpClient';
 import { Room, Building, QuickAddRoomContext } from '../types';
 import { queryKeys } from '../lib/queryClient';
@@ -128,6 +129,7 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
           selectedBillingCycleId="cycle-2026-08"
           selectedCycleCode="2026-08"
           selectedCycle="2026-08"
+          billingCycles={[{ id: 'cycle-2026-08', cycleCode: '2026-08', status: 'open', isCurrent: true }]}
         />
       );
 
@@ -151,11 +153,10 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
     });
 
     it('Matrix B: authority loaded + historical cycle -> Quick Add hidden', async () => {
-      vi.spyOn(httpClient, 'httpRequest').mockImplementation(async (method, url) => {
-        if (url === '/billing-cycles') {
+      const httpSpy = vi.spyOn(httpClient, 'httpRequest').mockImplementation(async (method, url) => {
+        if (url.includes('/quick-add-context')) {
           return {
-            data: [{ id: 'cycle-2026-08', cycleCode: '2026-08', status: 'open', isCurrent: true }],
-            operationalCycleCode: '2026-08',
+            data: mockContext,
           };
         }
         return { success: true, data: [] };
@@ -176,6 +177,7 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
           selectedBillingCycleId="cycle-2025-12"
           selectedCycleCode="2025-12"
           selectedCycle="2025-12"
+          billingCycles={[{ id: 'cycle-2026-08', cycleCode: '2026-08', status: 'open', isCurrent: true }]}
         />
       );
 
@@ -2013,5 +2015,185 @@ describe('Production Client Fractional Calculator Direct Proof', () => {
     expect(preview.elecAmount).toBe('10.00');
     expect(preview.totalAmount).toBe('3609.00');
     expect(preview.formattedTotal).toBe('3,609.00');
+  });
+});
+
+// ==========================================
+// Section 13: Cycle Authority & Data-Ready Navigation Proofs
+// ==========================================
+describe('Cycle Authority & Data-Ready Navigation Proofs', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    meterDraftStore.clearDormitoryDrafts('dorm-fresh');
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  const freshOwnerRooms: Room[] = [
+    { id: 'r-101', buildingId: 'bld-1', roomNumber: '101', floor: 1, status: 'vacant', monthlyRent: 4000, dailyRent: 400, depositAmount: 0, maxOccupants: 2, initialWaterMeter: 0, initialElectricMeter: 0, images: [], createdAt: '2026-08-01', updatedAt: '2026-08-01' },
+    { id: 'r-102', buildingId: 'bld-1', roomNumber: '102', floor: 1, status: 'vacant', monthlyRent: 4000, dailyRent: 400, depositAmount: 0, maxOccupants: 2, initialWaterMeter: 0, initialElectricMeter: 0, images: [], createdAt: '2026-08-01', updatedAt: '2026-08-01' },
+    { id: 'r-201', buildingId: 'bld-1', roomNumber: '201', floor: 2, status: 'vacant', monthlyRent: 4000, dailyRent: 400, depositAmount: 0, maxOccupants: 2, initialWaterMeter: 0, initialElectricMeter: 0, images: [], createdAt: '2026-08-01', updatedAt: '2026-08-01' },
+    { id: 'r-202', buildingId: 'bld-1', roomNumber: '202', floor: 2, status: 'vacant', monthlyRent: 4000, dailyRent: 400, depositAmount: 0, maxOccupants: 2, initialWaterMeter: 0, initialElectricMeter: 0, images: [], createdAt: '2026-08-01', updatedAt: '2026-08-01' },
+  ];
+
+  const freshOwnerCycles = [
+    { id: 'cycle-aug', cycleCode: '2026-08', status: 'draft', isCurrent: true, isFirstCycle: true },
+    { id: 'cycle-sep', cycleCode: '2026-09', status: 'draft', isCurrent: false, isFirstCycle: false },
+    { id: 'cycle-oct', cycleCode: '2026-10', status: 'draft', isCurrent: false, isFirstCycle: false },
+  ];
+
+  it('Fresh Owner August (First Billing Cycle): Hides "ดึงข้อมูลก่อนหน้า", enables previous reading edits with "เปิดแก้ไข", and displays "+ เพิ่มผู้เช่า" on all 4 vacant rooms', async () => {
+    vi.spyOn(httpClient, 'httpRequest').mockImplementation(async (method, url) => {
+      if (url.includes('/meters/workspace/preview-context')) {
+        return {
+          success: true,
+          data: {
+            rateSnapshot: {
+              waterBillingType: 'per_unit',
+              waterRate: '18.00',
+              electricityBillingType: 'per_unit',
+              electricityRate: '8.00',
+            },
+            rooms: freshOwnerRooms.map(r => ({ roomId: r.id, roomNumber: r.roomNumber, rentAmount: '4000.00', billingSource: 'DEFAULT' })),
+          },
+        };
+      }
+      return { success: true, data: [] };
+    });
+
+    renderWithClient(
+      <OwnerMeters
+        rooms={freshOwnerRooms}
+        buildings={[{ id: 'bld-1', dormitoryId: 'dorm-fresh', name: 'อาคาร A', totalFloors: 2, roomsPerFloor: 2, createdAt: '2026-08-01' }]}
+        dormitoryId="dorm-fresh"
+        bills={[]}
+        tenants={[]}
+        contracts={[]}
+        onSaveBills={vi.fn()}
+        onSelectTenant={vi.fn()}
+        onAddLog={vi.fn()}
+        onNavigate={vi.fn()}
+        selectedBillingCycleId="cycle-aug"
+        selectedCycleCode="2026-08"
+        selectedCycle="2026-08"
+        billingCycles={freshOwnerCycles}
+      />
+    );
+
+    // 1. Wait for table to render all 4 rooms
+    await waitFor(() => {
+      expect(screen.getByText('101')).toBeDefined();
+      expect(screen.getByText('102')).toBeDefined();
+      expect(screen.getByText('201')).toBeDefined();
+      expect(screen.getByText('202')).toBeDefined();
+    });
+
+    // 2. "ดึงข้อมูลก่อนหน้า" MUST NOT be rendered on First Billing Cycle (August)
+    expect(screen.queryByText('ดึงข้อมูลก่อนหน้า')).toBeNull();
+
+    // 3. Header shows "เปิดแก้ไข" for water and electricity previous readings
+    const openEditBadges = screen.getAllByText('เปิดแก้ไข');
+    expect(openEditBadges.length).toBeGreaterThanOrEqual(2);
+
+    // 4. All four vacant rooms show "+ เพิ่มผู้เช่า"
+    const quickAddButtons = screen.getAllByText('เพิ่มผู้เช่า');
+    expect(quickAddButtons.length).toBe(4);
+  });
+
+  it('Fresh Owner September (Future Cycle): Hides Quick Add "+ เพิ่มผู้เช่า" and shows "ไม่มีข้อมูล" for vacant rooms', async () => {
+    vi.spyOn(httpClient, 'httpRequest').mockImplementation(async (method, url) => {
+      if (url.includes('/meters/workspace/preview-context')) {
+        return {
+          success: true,
+          data: {
+            rateSnapshot: {
+              waterBillingType: 'per_unit',
+              waterRate: '18.00',
+              electricityBillingType: 'per_unit',
+              electricityRate: '8.00',
+            },
+            rooms: freshOwnerRooms.map(r => ({ roomId: r.id, roomNumber: r.roomNumber, rentAmount: '4000.00', billingSource: 'DEFAULT' })),
+          },
+        };
+      }
+      return { success: true, data: [] };
+    });
+
+    renderWithClient(
+      <OwnerMeters
+        rooms={freshOwnerRooms}
+        buildings={[{ id: 'bld-1', dormitoryId: 'dorm-fresh', name: 'อาคาร A', totalFloors: 2, roomsPerFloor: 2, createdAt: '2026-08-01' }]}
+        dormitoryId="dorm-fresh"
+        bills={[]}
+        tenants={[]}
+        contracts={[]}
+        onSaveBills={vi.fn()}
+        onSelectTenant={vi.fn()}
+        onAddLog={vi.fn()}
+        onNavigate={vi.fn()}
+        selectedBillingCycleId="cycle-sep"
+        selectedCycleCode="2026-09"
+        selectedCycle="2026-09"
+        billingCycles={freshOwnerCycles}
+      />
+    );
+
+    // 1. Wait for table to render
+    await waitFor(() => {
+      expect(screen.getByText('101')).toBeDefined();
+    });
+
+    // 2. Quick Add "+ เพิ่มผู้เช่า" MUST NOT be rendered on September (non-operational cycle)
+    expect(screen.queryByText('เพิ่มผู้เช่า')).toBeNull();
+
+    // 3. All 4 vacant rooms display "ไม่มีข้อมูล" in the tenant column
+    const noDataLabels = screen.getAllByText('ไม่มีข้อมูล');
+    expect(noDataLabels.length).toBe(4);
+  });
+
+  it('Data-Ready Navigation Contract: getTargetQueriesForTab specifies correct canonical query dependencies for all tabs', () => {
+    const dormId = 'dorm-fresh';
+    const cycleId = 'cycle-aug';
+
+    // 1. Meters tab queries
+    const meterQueries = getTargetQueriesForTab('meters', dormId, cycleId);
+    const meterKeys = meterQueries.map(q => JSON.stringify(q.queryKey));
+    expect(meterKeys).toContain(JSON.stringify(queryKeys.rooms(dormId)));
+    expect(meterKeys).toContain(JSON.stringify(queryKeys.buildings(dormId)));
+    expect(meterKeys).toContain(JSON.stringify(queryKeys.billingCycles(dormId)));
+    expect(meterKeys).toContain(JSON.stringify(queryKeys.bills(dormId)));
+    expect(meterKeys).toContain(JSON.stringify(queryKeys.tenants(dormId)));
+    expect(meterKeys).toContain(JSON.stringify(queryKeys.contracts(dormId)));
+    expect(meterKeys).toContain(JSON.stringify(queryKeys.meterWorkspace(dormId, cycleId)));
+    expect(meterKeys).toContain(JSON.stringify(queryKeys.meterPreviewContext(dormId, cycleId)));
+
+    // 2. Rooms tab queries
+    const roomQueries = getTargetQueriesForTab('rooms', dormId);
+    const roomKeys = roomQueries.map(q => JSON.stringify(q.queryKey));
+    expect(roomKeys).toContain(JSON.stringify(queryKeys.rooms(dormId)));
+    expect(roomKeys).toContain(JSON.stringify(queryKeys.buildings(dormId)));
+
+    // 3. Tenants tab queries
+    const tenantQueries = getTargetQueriesForTab('tenants', dormId);
+    const tenantKeys = tenantQueries.map(q => JSON.stringify(q.queryKey));
+    expect(tenantKeys).toContain(JSON.stringify(queryKeys.tenants(dormId)));
+    expect(tenantKeys).toContain(JSON.stringify(queryKeys.rooms(dormId)));
+    expect(tenantKeys).toContain(JSON.stringify(queryKeys.contracts(dormId)));
+
+    // 4. Payments tab queries
+    const paymentQueries = getTargetQueriesForTab('payments', dormId);
+    const paymentKeys = paymentQueries.map(q => JSON.stringify(q.queryKey));
+    expect(paymentKeys).toContain(JSON.stringify(queryKeys.bills(dormId)));
+    expect(paymentKeys).toContain(JSON.stringify(queryKeys.rooms(dormId)));
+
+    // 5. Maintenance tab queries
+    const maintenanceQueries = getTargetQueriesForTab('maintenance', dormId);
+    const maintenanceKeys = maintenanceQueries.map(q => JSON.stringify(q.queryKey));
+    expect(maintenanceKeys).toContain(JSON.stringify(queryKeys.maintenance(dormId)));
+    expect(maintenanceKeys).toContain(JSON.stringify(queryKeys.rooms(dormId)));
+    expect(maintenanceKeys).toContain(JSON.stringify(queryKeys.tenants(dormId)));
   });
 });

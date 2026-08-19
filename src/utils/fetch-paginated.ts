@@ -12,6 +12,7 @@
 
 export interface PaginatedFetchResult<T = any> {
   data: T[];
+  firstBillingCycleId?: string;
   operationalBillingCycleId?: string;
   operationalCycleCode?: string;
   operationalCycle?: any;
@@ -33,6 +34,7 @@ export async function fetchAllPaginatedWithMeta<T = any>(
   const pageSize = 50;
   const allItems: T[] = [];
   let expectedTotal: number | undefined;
+  let firstBillingCycleId: string | undefined;
   let operationalBillingCycleId: string | undefined;
   let operationalCycleCode: string | undefined;
   let operationalCycle: any;
@@ -48,6 +50,7 @@ export async function fetchAllPaginatedWithMeta<T = any>(
 
     const json: any = await res.json();
     if (page === 1) {
+      firstBillingCycleId = json.firstBillingCycleId;
       operationalBillingCycleId = json.operationalBillingCycleId;
       operationalCycleCode = json.operationalCycleCode;
       operationalCycle = json.operationalCycle;
@@ -75,6 +78,7 @@ export async function fetchAllPaginatedWithMeta<T = any>(
 
   return {
     data: allItems,
+    firstBillingCycleId,
     operationalBillingCycleId,
     operationalCycleCode,
     operationalCycle,
