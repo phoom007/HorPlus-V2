@@ -285,6 +285,73 @@ export function createPropertyRouter(
     }
   });
 
+  // GET /api/v1/properties/rooms/:id/quick-add-context
+  router.get('/rooms/:id/quick-add-context', async (req: Request, res: Response) => {
+    try {
+      const dormId = getDormitoryId(req);
+      const roomId = req.params.id;
+
+      const { getPrismaClient } = await import('../db/prisma.js');
+      const prisma = getPrismaClient();
+
+      const room = await prisma.room.findFirst({
+        where: {
+          id: roomId,
+          dormitoryId: dormId,
+          deletedAt: null,
+          status: { not: 'archived' },
+        },
+      });
+
+      if (!room) {
+        throw new AppError('ไม่พบข้อมูลห้องพักที่ระบุ', 404, 'ROOM_NOT_FOUND');
+      }
+
+      const building = await prisma.building.findFirst({
+        where: {
+          id: room.buildingId,
+          dormitoryId: dormId,
+          deletedAt: null,
+        },
+      });
+
+      if (!building) {
+        throw new AppError('ไม่พบข้อมูลอาคารที่ระบุ', 404, 'BUILDING_NOT_FOUND');
+      }
+
+      const { defaultsService } = await import('../services/defaults.service.js');
+      const effective = await defaultsService.resolveEffectiveRoomDefaults(
+        dormId,
+        room.buildingId,
+        room.id,
+        prisma
+      );
+
+      res.json({
+        data: {
+          roomId: room.id,
+          dormitoryId: dormId,
+          roomNumber: room.roomNumber,
+          buildingId: room.buildingId,
+          effective: {
+            monthlyRent: Number(effective.monthlyRent.value ?? 0),
+            termRent: effective.termRent.value !== null && effective.termRent.value !== undefined ? Number(effective.termRent.value) : null,
+            dailyRent: effective.dailyRent.value !== null && effective.dailyRent.value !== undefined ? Number(effective.dailyRent.value) : null,
+            depositAmount: Number(effective.depositAmount.value ?? 0),
+          },
+          building: {
+            id: building.id,
+            name: building.name,
+            termMonths: building.termMonths,
+            maxTermRentInstallments: building.maxTermRentInstallments,
+          },
+        },
+      });
+    } catch (err) {
+      handleServiceError(res, err, req);
+    }
+  });
+
   // GET /api/v1/properties/rooms/:id
   router.get('/rooms/:id', async (req: Request, res: Response) => {
     try {

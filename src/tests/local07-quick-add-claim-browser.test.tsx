@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -58,17 +59,17 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
     dormitoryId: 'dorm-001-uuid',
     roomNumber: '101',
     buildingId: 'bld-001-uuid',
-    monthlyRent: 4500,
-    dailyRent: 350,
-    depositAmount: 0,
+    effective: {
+      monthlyRent: 4500,
+      termRent: 18000,
+      dailyRent: 350,
+      depositAmount: 0,
+    },
     building: {
       id: 'bld-001-uuid',
       name: 'Building A',
       termMonths: 4,
       maxTermRentInstallments: 3,
-      monthlyRent: 4500,
-      dailyRent: 400,
-      depositAmount: 500,
     },
   };
 
@@ -76,13 +77,18 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
   // Section 10: Operational-Cycle Test Matrix
   // ==========================================
   describe('Operational-Cycle Fail-Closed Matrix', () => {
-    it('Matrix A: authority loaded + current cycle -> Quick Add visible', async () => {
-      vi.spyOn(httpClient, 'httpRequest').mockImplementation(async (method, url) => {
+    it('Matrix A: authority loaded + current cycle -> Quick Add visible and fetches real context on click', async () => {
+      const httpSpy = vi.spyOn(httpClient, 'httpRequest').mockImplementation(async (method, url) => {
         if (url === '/billing-cycles') {
           return {
             data: [{ id: 'cycle-2026-08', cycleCode: '2026-08', status: 'open', isCurrent: true }],
             operationalCycleCode: '2026-08',
             operationalBillingCycleId: 'cycle-2026-08',
+          };
+        }
+        if (url.includes('/quick-add-context')) {
+          return {
+            data: mockContext,
           };
         }
         return { success: true, data: [] };
@@ -109,6 +115,19 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
       await waitFor(() => {
         const quickAddBtn = screen.queryByText('เพิ่มผู้เช่า');
         expect(quickAddBtn).not.toBeNull();
+      });
+
+      // Click Quick Add button -> triggers real endpoint fetch
+      const quickAddBtn = screen.getByText('เพิ่มผู้เช่า');
+      fireEvent.click(quickAddBtn);
+
+      await waitFor(() => {
+        expect(httpSpy).toHaveBeenCalledWith(
+          'GET',
+          `/api/v1/properties/rooms/${mockRoom.id}/quick-add-context`,
+          undefined,
+          expect.anything()
+        );
       });
     });
 
@@ -235,6 +254,7 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
         expect(payload.rentalType).toBe('MONTHLY');
         expect(payload.fullName).toBe('สมชาย ใจดี');
         expect(payload.roomId).toBe(mockContext.roomId);
+        expect(payload.unitRentAmount).toBe('4500.00'); // Authoritative effective rate
         expect(onSuccess).toHaveBeenCalled();
       });
     });
@@ -302,6 +322,8 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
         expect(payload.dormitoryId).toBe('dorm-001-uuid');
         expect(payload.roomId).toBe(mockContext.roomId);
         expect(payload.fullName).toBe('นักท่องเที่ยว ใจดี');
+        expect(payload.dailyRateAmount).toBe('350.00');
+        expect(payload.depositAmount).toBe('0.00');
       });
     });
   });
@@ -344,7 +366,7 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
         <QuickAddTenantModal
           isOpen={true}
           onClose={vi.fn()}
-          context={mockContext} // context.depositAmount is 0, building.depositAmount is 500
+          context={mockContext} // context.effective.depositAmount is 0
           onSuccess={vi.fn()}
         />
       );
@@ -361,7 +383,13 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
         roomId: 'room-empty',
         dormitoryId: 'dorm-001-uuid',
         roomNumber: '102',
-        dailyRent: undefined,
+        buildingId: 'bld-001-uuid',
+        effective: {
+          monthlyRent: 0,
+          termRent: null,
+          dailyRent: null,
+          depositAmount: 0,
+        },
         building: null,
       };
 
@@ -402,6 +430,13 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
         roomId: 'room-noterm',
         dormitoryId: 'dorm-001-uuid',
         roomNumber: '103',
+        buildingId: 'bld-no-term',
+        effective: {
+          monthlyRent: 4000,
+          termRent: null,
+          dailyRent: null,
+          depositAmount: 0,
+        },
         building: {
           id: 'bld-no-term',
           name: 'Building No Term',
@@ -424,6 +459,73 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
       expect(screen.getByText(/ไม่พบข้อมูลระยะเวลาสัญญาแบบเทอมของอาคาร/)).toBeDefined();
       const submitBtn = screen.getByText('ยืนยันเพิ่มผู้เช่า');
       expect(submitBtn.closest('button')?.disabled).toBe(true);
+    });
+  });
+
+  // ==========================================
+  // Real Tenant Entry Surface Navigation Tests
+  // ==========================================
+  describe('Real Tenant Entry Surface Navigation Proofs', () => {
+    it('Authenticated pre-link user can open Daily Request modal from TenantRegisterPage', async () => {
+      vi.spyOn(httpClient, 'httpRequest').mockImplementation(async (method, url) => {
+        if (url.includes('public-policy')) {
+          return {
+            dormitoryId: 'dorm-001-uuid',
+            dormitoryName: 'HorPlus Dormitory',
+            defaultTerms: '',
+            petPolicy: { allowed: 'none', allowedTypes: [] },
+            version: 1,
+          };
+        }
+        if (url.includes('quick-add-context')) {
+          return { data: mockContext };
+        }
+        return { success: true, data: [] };
+      });
+
+      const { TenantRegisterPage } = await import('../pages/tenant/TenantRegisterPage');
+
+      render(<TenantRegisterPage />);
+
+      const dailyBtn = await screen.findByTestId('tenant-daily-request-btn');
+      fireEvent.click(dailyBtn);
+
+      const modalHeader = await screen.findByText(/ขอเข้าพักรายวันห้อง/);
+      expect(modalHeader).toBeDefined();
+      const submitBtn = await screen.findByTestId('tenant-daily-submit-btn');
+      expect(submitBtn).toBeDefined();
+    });
+
+    it('Authenticated pre-link user can open Self-Claim modal from TenantRegisterPage', async () => {
+      vi.spyOn(httpClient, 'httpRequest').mockImplementation(async (method, url) => {
+        if (url.includes('public-policy')) {
+          return {
+            dormitoryId: 'dorm-001-uuid',
+            dormitoryName: 'HorPlus Dormitory',
+            defaultTerms: '',
+            petPolicy: { allowed: 'none', allowedTypes: [] },
+            version: 1,
+          };
+        }
+        if (url.includes('candidate')) {
+          return {
+            data: { hasCandidate: true, roomNumber: 'A101', maskedName: 'สม***', maskedPhone: '081-***-1234' },
+          };
+        }
+        return { success: true, data: [] };
+      });
+
+      const { TenantRegisterPage } = await import('../pages/tenant/TenantRegisterPage');
+
+      render(<TenantRegisterPage />);
+
+      const claimBtn = await screen.findByTestId('tenant-self-claim-btn');
+      fireEvent.click(claimBtn);
+
+      const claimHeader = await screen.findByText(/ยืนยันสิทธิ์ผู้เช่าห้อง/);
+      expect(claimHeader).toBeDefined();
+      const submitBtn = await screen.findByTestId('tenant-claim-submit-btn');
+      expect(submitBtn).toBeDefined();
     });
   });
 });

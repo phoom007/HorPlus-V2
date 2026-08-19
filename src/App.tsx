@@ -120,6 +120,8 @@ export default function App() {
         <Route path="/register" element={<Navigate to="/auth/owner" replace />} />
         <Route path="/tenant/login" element={<Navigate to="/" replace />} />
         <Route path="/tenant/register" element={<TenantRegisterPage />} />
+        <Route path="/tenant/claim" element={<TenantRegisterPage />} />
+        <Route path="/tenant/daily-request" element={<TenantRegisterPage />} />
         <Route path="/staff-access" element={<StaffAccessPage />} />
 
         {/* Owner Onboarding Redirect to Owner Register */}

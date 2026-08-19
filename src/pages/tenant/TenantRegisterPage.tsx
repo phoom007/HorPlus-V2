@@ -4,16 +4,21 @@
  */
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Building2, CheckCircle2, User, Phone, FileText, Send, AlertCircle, ArrowLeft, ShieldCheck, Heart } from 'lucide-react';
+import { Building2, CheckCircle2, User, Phone, FileText, Send, AlertCircle, ArrowLeft, ShieldCheck, Heart, BedDouble } from 'lucide-react';
 import { getDataProvider } from '../../data/dataProvider';
 import { Room } from '../../types';
 import { submitTenantRegistrationRequest, getPublicDormitoryPolicy } from '../../data/adapters/api';
+import { TenantDailyRequestModal } from '../../components/TenantDailyRequestModal';
+import { TenantClaimModal } from '../../components/TenantClaimModal';
 
 export const TenantRegisterPage: React.FC = () => {
   const [rooms, setRooms] = useState<Room[]>([]);
   const [loading, setLoading] = useState(true);
   const [errorText, setErrorText] = useState<string | null>(null);
   const [successData, setSuccessData] = useState<any | null>(null);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [isDailyModalOpen, setIsDailyModalOpen] = useState(false);
+  const [isClaimModalOpen, setIsClaimModalOpen] = useState(false);
 
   const [policyData, setPolicyData] = useState<{
     dormitoryId: string;
@@ -29,7 +34,7 @@ export const TenantRegisterPage: React.FC = () => {
     version: 1,
   });
 
-  const [requestedRoomId, setRequestedRoomId] = useState('');
+  const [requestedRoomId, setRequestedRoomId] = useState('A101');
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [phone, setPhone] = useState('');
@@ -57,6 +62,16 @@ export const TenantRegisterPage: React.FC = () => {
       setRooms([]);
       if (!requestedRoomId) {
         setRequestedRoomId('A101');
+      }
+
+      // Check URL parameters for direct action opening
+      if (typeof window !== 'undefined') {
+        const action = urlParams?.get('action');
+        if (action === 'daily' || window.location.pathname.includes('daily-request')) {
+          setIsDailyModalOpen(true);
+        } else if (action === 'claim' || window.location.pathname.includes('claim')) {
+          setIsClaimModalOpen(true);
+        }
       }
     } catch (err: any) {
       setErrorText('ไม่สามารถโหลดข้อมูลห้องพักหรือเงื่อนไขหอพักได้');
@@ -191,6 +206,41 @@ export const TenantRegisterPage: React.FC = () => {
 
         {/* Content */}
         <div className="p-6 sm:p-8">
+          {toastMessage && (
+            <div className="mb-4 p-4 bg-emerald-50 border border-emerald-200 rounded-2xl flex items-center gap-2 text-emerald-800 text-xs font-bold animate-in fade-in">
+              <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+              <span>{toastMessage}</span>
+            </div>
+          )}
+
+          {/* Alternative Tenant Actions (Daily Stay & Self-Claim) */}
+          <div className="grid grid-cols-2 gap-2.5 mb-6">
+            <button
+              type="button"
+              data-testid="tenant-daily-request-btn"
+              onClick={() => setIsDailyModalOpen(true)}
+              className="p-3 bg-amber-50 hover:bg-amber-100/70 border border-amber-200 rounded-2xl flex flex-col items-center gap-1.5 text-amber-900 transition-all cursor-pointer text-center group shadow-2xs"
+            >
+              <div className="w-8 h-8 rounded-xl bg-amber-100 group-hover:bg-amber-200/80 flex items-center justify-center transition-all">
+                <BedDouble className="w-4 h-4 text-amber-700" />
+              </div>
+              <span className="font-extrabold text-xs">ขอเข้าพักรายวัน</span>
+              <span className="text-[10px] text-amber-700/80">จองห้องพักแบบรายวัน</span>
+            </button>
+            <button
+              type="button"
+              data-testid="tenant-self-claim-btn"
+              onClick={() => setIsClaimModalOpen(true)}
+              className="p-3 bg-indigo-50 hover:bg-indigo-100/70 border border-indigo-200 rounded-2xl flex flex-col items-center gap-1.5 text-indigo-900 transition-all cursor-pointer text-center group shadow-2xs"
+            >
+              <div className="w-8 h-8 rounded-xl bg-indigo-100 group-hover:bg-indigo-200/80 flex items-center justify-center transition-all">
+                <ShieldCheck className="w-4 h-4 text-indigo-700" />
+              </div>
+              <span className="font-extrabold text-xs">ยืนยันสิทธิ์ผู้เช่าเดิม</span>
+              <span className="text-[10px] text-indigo-700/80">เชื่อมต่อบัญชีเข้าห้องพัก</span>
+            </button>
+          </div>
+
           {successData ? (
             <div className="text-center space-y-4 py-6">
               <CheckCircle2 className="w-16 h-16 text-emerald-500 mx-auto animate-bounce" />
@@ -400,6 +450,34 @@ export const TenantRegisterPage: React.FC = () => {
           )}
         </div>
       </div>
+
+      {/* Tenant Daily Stay Request Modal */}
+      <TenantDailyRequestModal
+        isOpen={isDailyModalOpen}
+        onClose={() => setIsDailyModalOpen(false)}
+        dormitoryId={policyData.dormitoryId || (typeof localStorage !== 'undefined' ? localStorage.getItem('selected_dormitory_id') || '' : '')}
+        roomId={requestedRoomId}
+        roomNumber={requestedRoomId}
+        onSuccess={(msg) => {
+          setToastMessage(msg);
+          setTimeout(() => setToastMessage(null), 6000);
+        }}
+      />
+
+      {/* Tenant Claim Modal */}
+      <TenantClaimModal
+        isOpen={isClaimModalOpen}
+        onClose={() => setIsClaimModalOpen(false)}
+        dormitoryId={policyData.dormitoryId || (typeof localStorage !== 'undefined' ? localStorage.getItem('selected_dormitory_id') || '' : '')}
+        roomId={requestedRoomId}
+        roomNumber={requestedRoomId}
+        onSuccess={(msg) => {
+          setToastMessage(msg);
+          setTimeout(() => {
+            window.location.href = '/tenant';
+          }, 1000);
+        }}
+      />
     </div>
   );
 };

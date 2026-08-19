@@ -34,13 +34,14 @@ export const TenantClaimModal: React.FC<TenantClaimModalProps> = ({
 
   // Fetch candidate discovery
   useEffect(() => {
-    if (isOpen && dormitoryId && roomId) {
+    if (isOpen && roomId) {
       setClaimInput('');
       setErrorText(null);
       setCandidate(null);
       setLoadingCandidate(true);
+      const dormId = dormitoryId || (typeof localStorage !== 'undefined' ? localStorage.getItem('selected_dormitory_id') || '' : '');
 
-      httpRequest<any>('GET', `/api/v1/tenant-claims/candidate?dormitoryId=${dormitoryId}&roomId=${roomId}`)
+      httpRequest<any>('GET', `/api/v1/tenant-claims/candidate?dormitoryId=${dormId}&roomId=${roomId}`)
         .then((res: any) => {
           if (res.data?.hasCandidate) {
             setCandidate(res.data);
@@ -173,6 +174,7 @@ export const TenantClaimModal: React.FC<TenantClaimModalProps> = ({
                   </button>
                   <button
                     type="submit"
+                    data-testid="tenant-claim-submit-btn"
                     disabled={submitting}
                     className="px-5 py-2 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl shadow-md shadow-indigo-600/10 transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
                   >

@@ -1024,8 +1024,8 @@ describe('LOCAL-07 Batch 02: Daily Stay Domain, Invoicing & Tenant Self-Claim', 
           applicantPhone: '085-555-5555',
           startDate: '2026-10-01',
           endDate: '2026-10-03',
-          dailyRateAmount: 700.0,
-          depositAmount: 500.0,
+          dailyRateAmount: '700.00',
+          depositAmount: '500.00',
           depositDeclaredStatus: 'UNPAID',
         });
 
@@ -1040,6 +1040,85 @@ describe('LOCAL-07 Batch 02: Daily Stay Domain, Invoicing & Tenant Self-Claim', 
       httpStayId = res.body.data.id;
     });
 
+    it('1b. POST /api/v1/daily-stays/request rejects raw numeric money and invalid formats with HTTP 400', async () => {
+      // A. Raw number dailyRateAmount -> 400 VALIDATION_ERROR
+      const numRateRes = await request(httpApp)
+        .post('/api/v1/daily-stays/request')
+        .set('Cookie', tenantSessionCookie)
+        .set('x-csrf-token', tenantCsrfToken)
+        .set('x-dormitory-id', dormitoryId)
+        .send({
+          roomId: httpRoomId,
+          applicantFullName: 'นายตัวเลข ดิบ',
+          startDate: '2026-10-01',
+          endDate: '2026-10-03',
+          dailyRateAmount: 350, // raw number
+          depositAmount: '0.00',
+        });
+      expect(numRateRes.status).toBe(400);
+      expect(numRateRes.body.error.code).toBe('VALIDATION_ERROR');
+
+      // B. Raw number depositAmount -> 400 VALIDATION_ERROR
+      const numDepRes = await request(httpApp)
+        .post('/api/v1/daily-stays/request')
+        .set('Cookie', tenantSessionCookie)
+        .set('x-csrf-token', tenantCsrfToken)
+        .set('x-dormitory-id', dormitoryId)
+        .send({
+          roomId: httpRoomId,
+          applicantFullName: 'นายตัวเลข ดิบ',
+          startDate: '2026-10-01',
+          endDate: '2026-10-03',
+          dailyRateAmount: '350.00',
+          depositAmount: 0, // raw number
+        });
+      expect(numDepRes.status).toBe(400);
+      expect(numDepRes.body.error.code).toBe('VALIDATION_ERROR');
+
+      // C. Negative string -> 400 VALIDATION_ERROR
+      const negRes = await request(httpApp)
+        .post('/api/v1/daily-stays/request')
+        .set('Cookie', tenantSessionCookie)
+        .set('x-csrf-token', tenantCsrfToken)
+        .set('x-dormitory-id', dormitoryId)
+        .send({
+          roomId: httpRoomId,
+          applicantFullName: 'นายค่าลบ',
+          startDate: '2026-10-01',
+          endDate: '2026-10-03',
+          dailyRateAmount: '-350.00',
+        });
+      expect(negRes.status).toBe(400);
+      expect(negRes.body.error.code).toBe('VALIDATION_ERROR');
+
+      // D. Valid decimal string with 0 deposit -> 201 PENDING_APPROVAL without creating Tenant/Occupancy/Invoice
+      const tenantCountBefore = await prisma.tenant.count({ where: { dormitoryId } });
+      const validZeroRes = await request(httpApp)
+        .post('/api/v1/daily-stays/request')
+        .set('Cookie', tenantSessionCookie)
+        .set('x-csrf-token', tenantCsrfToken)
+        .set('x-dormitory-id', dormitoryId)
+        .send({
+          roomId: httpRoomId,
+          applicantFullName: 'นายมัดจำ ศูนย์',
+          startDate: '2026-10-01',
+          endDate: '2026-10-03',
+          dailyRateAmount: '350.00',
+          depositAmount: '0.00',
+          depositDeclaredStatus: 'PAID',
+        });
+      expect(validZeroRes.status).toBe(201);
+      expect(validZeroRes.body.data.status).toBe('PENDING_APPROVAL');
+      expect(Number(validZeroRes.body.data.depositAmount)).toBe(0.0);
+      expect(validZeroRes.body.data.depositDeclaredStatus).toBe('PAID');
+
+      // Verify no Tenant, no Occupancy, no invoice created for pending request
+      const tenantCountAfter = await prisma.tenant.count({ where: { dormitoryId } });
+      expect(tenantCountAfter).toBe(tenantCountBefore);
+      const invCount = await prisma.dailyStayInvoice.count({ where: { dailyStayId: validZeroRes.body.data.id } });
+      expect(invCount).toBe(0);
+    });
+
     it('2. PATCH /api/v1/daily-stays/:id/edit-pending edits pending values by owner with canonical CSRF', async () => {
       const res = await request(httpApp)
         .patch(`/api/v1/daily-stays/${httpStayId}/edit-pending`)
@@ -1047,8 +1126,8 @@ describe('LOCAL-07 Batch 02: Daily Stay Domain, Invoicing & Tenant Self-Claim', 
         .set('x-csrf-token', ownerCsrfToken)
         .set('x-dormitory-id', dormitoryId)
         .send({
-          dailyRateAmount: 600.0,
-          depositAmount: 0.0,
+          dailyRateAmount: '600.00',
+          depositAmount: '0.00',
           depositDeclaredStatus: 'PAID',
         });
 
@@ -1093,7 +1172,7 @@ describe('LOCAL-07 Batch 02: Daily Stay Domain, Invoicing & Tenant Self-Claim', 
           applicantFullName: 'นายถูกปฏิเสธ ทดสอบ',
           startDate: '2026-11-10',
           endDate: '2026-11-12',
-          dailyRateAmount: 500.0,
+          dailyRateAmount: '500.00',
         });
 
       expect(createRes.status).toBe(201);
@@ -1137,8 +1216,8 @@ describe('LOCAL-07 Batch 02: Daily Stay Domain, Invoicing & Tenant Self-Claim', 
           phone: '087-777-7777',
           startDate: today,
           endDate: tomorrow,
-          dailyRateAmount: 700.0,
-          depositAmount: 200.0,
+          dailyRateAmount: '700.00',
+          depositAmount: '200.00',
           depositDeclaredStatus: 'PAID',
         });
 
@@ -1269,6 +1348,129 @@ describe('LOCAL-07 Batch 02: Daily Stay Domain, Invoicing & Tenant Self-Claim', 
 
       expect(res6.status).toBe(429);
       expect(res6.body.error.code).toBe('RATE_LIMIT_EXCEEDED');
+    });
+
+    it('12. GET /api/v1/properties/rooms/:roomId/quick-add-context returns authoritative rates, real building term settings, and fails closed', async () => {
+      // 1. Setup building with termMonths = 4, maxTermRentInstallments = 3, dailyRent = 400, depositAmount = 500
+      const testBld = await prisma.building.create({
+        data: {
+          dormitoryId,
+          name: 'อาคาร Authority Test',
+          termMonths: 4,
+          maxTermRentInstallments: 3,
+          dailyRent: 400.0,
+          depositAmount: 500.0,
+        },
+      });
+
+      // 2. Setup room with monthlyRent = 4500, dailyRent = 400, explicit depositAmount = 0
+      const testRoom = await prisma.room.create({
+        data: {
+          dormitoryId,
+          buildingId: testBld.id,
+          roomNumber: 'AUTH-101',
+          normalizedRoomNumber: 'AUTH-101',
+          roomType: 'standard',
+          floor: 1,
+          status: 'vacant',
+          monthlyRent: 4500.0,
+          dailyRent: 400.0,
+          depositAmount: 0.0, // explicit 0 override
+          depositInheritsBuildingDefault: false,
+        },
+      });
+
+      // 3. Setup archived room
+      const archivedRoom = await prisma.room.create({
+        data: {
+          dormitoryId,
+          buildingId: testBld.id,
+          roomNumber: 'ARCH-102',
+          normalizedRoomNumber: 'ARCH-102',
+          roomType: 'standard',
+          floor: 1,
+          status: 'archived',
+          monthlyRent: 4500.0,
+        },
+      });
+
+      // 4. Setup foreign room
+      const foreignDorm = await prisma.dormitory.create({
+        data: { name: 'หอพัก Foreign Test', status: 'active' },
+      });
+      const foreignBld = await prisma.building.create({
+        data: { dormitoryId: foreignDorm.id, name: 'Foreign Bld' },
+      });
+      const foreignRoom = await prisma.room.create({
+        data: {
+          dormitoryId: foreignDorm.id,
+          buildingId: foreignBld.id,
+          roomNumber: 'FOR-103',
+          normalizedRoomNumber: 'FOR-103',
+          roomType: 'standard',
+          floor: 1,
+          status: 'vacant',
+          monthlyRent: 4500.0,
+        },
+      });
+
+      // A. Valid Quick Add context read
+      const res = await request(httpApp)
+        .get(`/api/v1/properties/rooms/${testRoom.id}/quick-add-context`)
+        .set('Cookie', ownerSessionCookie)
+        .set('x-dormitory-id', dormitoryId);
+
+      expect(res.status).toBe(200);
+      expect(res.body.data).toBeDefined();
+      expect(res.body.data.roomId).toBe(testRoom.id);
+      expect(res.body.data.roomNumber).toBe('AUTH-101');
+      expect(res.body.data.buildingId).toBe(testBld.id);
+
+      // Financial defaults
+      expect(Number(res.body.data.effective.monthlyRent)).toBe(4500.0);
+      expect(Number(res.body.data.effective.dailyRent)).toBe(400.0);
+      expect(Number(res.body.data.effective.depositAmount)).toBe(0.0); // explicit 0 preserved
+
+      // Real Building settings
+      expect(res.body.data.building).toBeDefined();
+      expect(res.body.data.building.id).toBe(testBld.id);
+      expect(res.body.data.building.termMonths).toBe(4);
+      expect(res.body.data.building.maxTermRentInstallments).toBe(3);
+
+      // B. Fail-closed: Archived room -> 404 ROOM_NOT_FOUND
+      const archRes = await request(httpApp)
+        .get(`/api/v1/properties/rooms/${archivedRoom.id}/quick-add-context`)
+        .set('Cookie', ownerSessionCookie)
+        .set('x-dormitory-id', dormitoryId);
+      expect(archRes.status).toBe(404);
+      expect(archRes.body.error.code).toBe('ROOM_NOT_FOUND');
+
+      // C. Fail-closed: Foreign room -> 404 ROOM_NOT_FOUND (not found in current dorm)
+      const forRes = await request(httpApp)
+        .get(`/api/v1/properties/rooms/${foreignRoom.id}/quick-add-context`)
+        .set('Cookie', ownerSessionCookie)
+        .set('x-dormitory-id', dormitoryId);
+      expect(forRes.status).toBe(404);
+      expect(forRes.body.error.code).toBe('ROOM_NOT_FOUND');
+
+      // D. Financial regression: Monthly Quick Add persists unitRentAmount = 4500.00
+      const { ProvisionalRentalTermService } = await import('../../services/provisional-rental-term.service.js');
+      const provService = new ProvisionalRentalTermService(prisma);
+      const provResult = await provService.createProvisionalTenantAndTerm(
+        dormitoryId,
+        {
+          roomId: testRoom.id,
+          fullName: 'นายผู้เช่า 4500 บาท',
+          rentalType: 'MONTHLY',
+          startDate: '2026-10-01',
+          durationMonths: 1,
+          unitRentAmount: Number(res.body.data.effective.monthlyRent).toFixed(2),
+          totalRentAmount: Number(res.body.data.effective.monthlyRent).toFixed(2),
+        },
+        ownerUserId
+      );
+      expect(Number(provResult.provisionalTerm.unitRentAmount)).toBe(4500.0);
+      expect(Number(provResult.provisionalTerm.totalRentAmount)).toBe(4500.0);
     });
   });
 
@@ -1447,6 +1649,7 @@ describe('LOCAL-07 Batch 02: Daily Stay Domain, Invoicing & Tenant Self-Claim', 
           status: 'vacant',
           dailyRent: 300,
           depositAmount: 0, // Configured 0 strictly preserved
+          depositInheritsBuildingDefault: false,
         },
       });
 
@@ -1541,5 +1744,6 @@ describe('LOCAL-07 Batch 02: Daily Stay Domain, Invoicing & Tenant Self-Claim', 
     });
   });
 });
+
 
 

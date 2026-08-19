@@ -89,14 +89,11 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
       const today = new Date().toISOString().slice(0, 10);
       setStartDate(today);
 
+      const eff = context.effective;
       const bld = context.building;
 
-      // 1. Monthly defaults: Room -> Building -> 0
-      const mRent = context.monthlyRent !== undefined && context.monthlyRent !== null
-        ? Number(context.monthlyRent)
-        : bld?.monthlyRent !== undefined && bld?.monthlyRent !== null
-        ? Number(bld.monthlyRent)
-        : 0;
+      // 1. Monthly defaults: from authoritative server context
+      const mRent = eff && typeof eff.monthlyRent === 'number' ? Number(eff.monthlyRent) : 0;
       setMonthlyRent(mRent);
       setDurationMonths(1);
       setMonthlyEndDate(calculateMonthEndDate(today, 1));
@@ -109,10 +106,8 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
 
       if (bldTermMonths) {
         setTermMonths(bldTermMonths);
-        const tRent = context.termRent !== undefined && context.termRent !== null
-          ? Number(context.termRent)
-          : bld?.termRent !== undefined && bld?.termRent !== null
-          ? Number(bld.termRent)
+        const tRent = eff?.termRent !== null && eff?.termRent !== undefined
+          ? Number(eff.termRent)
           : (mRent * bldTermMonths);
         setTermRent(tRent);
         setMaxInstallments(bldMaxInstallments);
@@ -126,18 +121,9 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
         setTermEndDate('');
       }
 
-      // 3. Daily defaults: strictly Room -> Building -> 0 (preserves explicit 0 deposit)
-      const dRent = context.dailyRent !== undefined && context.dailyRent !== null
-        ? Number(context.dailyRent)
-        : bld?.dailyRent !== undefined && bld?.dailyRent !== null
-        ? Number(bld.dailyRent)
-        : 0;
-
-      const dDep = context.depositAmount !== undefined && context.depositAmount !== null
-        ? Number(context.depositAmount)
-        : bld?.depositAmount !== undefined && bld?.depositAmount !== null
-        ? Number(bld.depositAmount)
-        : 0;
+      // 3. Daily defaults: strictly from authoritative server context (preserves explicit 0 deposit)
+      const dRent = eff?.dailyRent !== null && eff?.dailyRent !== undefined ? Number(eff.dailyRent) : 0;
+      const dDep = eff?.depositAmount !== null && eff?.depositAmount !== undefined ? Number(eff.depositAmount) : 0;
 
       setDailyRate(dRent);
       setDailyDeposit(dDep);

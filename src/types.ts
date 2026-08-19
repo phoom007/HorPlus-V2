@@ -81,26 +81,26 @@ export interface Building {
   updatedAt: string;
 }
 
+export interface QuickAddEffectiveRates {
+  monthlyRent: number;
+  termRent: number | null;
+  dailyRent: number | null;
+  depositAmount: number;
+}
+
 export interface QuickAddBuildingContext {
   id: string;
-  name?: string;
-  termMonths?: number;
-  maxTermRentInstallments?: number;
-  monthlyRent?: number;
-  termRent?: number;
-  dailyRent?: number;
-  depositAmount?: number;
+  name: string;
+  termMonths?: number | null;
+  maxTermRentInstallments?: number | null;
 }
 
 export interface QuickAddRoomContext {
   roomId: string;
   dormitoryId: string;
   roomNumber: string;
-  buildingId?: string | null;
-  monthlyRent?: number;
-  termRent?: number;
-  dailyRent?: number;
-  depositAmount?: number;
+  buildingId: string;
+  effective: QuickAddEffectiveRates;
   building?: QuickAddBuildingContext | null;
 }
 

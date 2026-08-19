@@ -2,12 +2,14 @@
  * @license
  * SPDX-License-Identifier: Apache-2.0
  * TenantDailyRequestModal (LOCAL-07 Batch 02)
- * Minimal additive modal for tenants/applicants to submit a Daily Stay Request (Option 2A).
+ * Complete financial context for tenants/applicants to submit a Daily Stay Request (Option 2A).
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { X, Calendar, User, Phone, CheckCircle, AlertCircle, Loader2, BedDouble } from 'lucide-react';
 import { httpRequest } from '../data/httpClient';
+import { QuickAddRoomContext } from '../types';
+import { formatBaht } from './GlobalComponents';
 
 interface TenantDailyRequestModalProps {
   isOpen: boolean;
@@ -31,8 +33,42 @@ export const TenantDailyRequestModal: React.FC<TenantDailyRequestModalProps> = (
   const [startDate, setStartDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [endDate, setEndDate] = useState(() => new Date().toISOString().slice(0, 10));
 
-  const [loading, setLoading] = useState(false);
+  // Authoritative financial state
+  const [dailyRate, setDailyRate] = useState<number>(0);
+  const [depositAmount, setDepositAmount] = useState<number>(0);
+  const [depositDeclaredStatus, setDepositDeclaredStatus] = useState<'PAID' | 'UNPAID'>('UNPAID');
+
+  const [loadingContext, setLoadingContext] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const [errorText, setErrorText] = useState<string | null>(null);
+
+  // Fetch authoritative rates from property context
+  useEffect(() => {
+    if (isOpen && roomId) {
+      setErrorText(null);
+      setLoadingContext(true);
+      const dormId = dormitoryId || (typeof localStorage !== 'undefined' ? localStorage.getItem('selected_dormitory_id') || '' : '');
+      httpRequest<{ data: QuickAddRoomContext }>(
+        'GET',
+        `/api/v1/properties/rooms/${roomId}/quick-add-context`,
+        undefined,
+        { headers: dormId ? { 'x-dormitory-id': dormId } : {} }
+      )
+        .then((res) => {
+          if (res?.data?.effective) {
+            const eff = res.data.effective;
+            setDailyRate(eff.dailyRent !== null && eff.dailyRent !== undefined ? Number(eff.dailyRent) : 0);
+            setDepositAmount(eff.depositAmount !== null && eff.depositAmount !== undefined ? Number(eff.depositAmount) : 0);
+          }
+        })
+        .catch(() => {
+          // If context fetch fails, keep defaults
+        })
+        .finally(() => {
+          setLoadingContext(false);
+        });
+    }
+  }, [isOpen, roomId, dormitoryId]);
 
   if (!isOpen) return null;
 
@@ -47,6 +83,10 @@ export const TenantDailyRequestModal: React.FC<TenantDailyRequestModalProps> = (
   };
 
   const daysCount = calculateDays(startDate, endDate);
+  const totalRent = dailyRate * daysCount;
+  const safeDeposit = isNaN(depositAmount) || depositAmount < 0 ? 0 : depositAmount;
+  const totalAgreed = totalRent + safeDeposit;
+  const outstanding = depositDeclaredStatus === 'PAID' ? totalRent : totalAgreed;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -55,7 +95,7 @@ export const TenantDailyRequestModal: React.FC<TenantDailyRequestModalProps> = (
       return;
     }
 
-    setLoading(true);
+    setSubmitting(true);
     setErrorText(null);
 
     try {
@@ -66,6 +106,11 @@ export const TenantDailyRequestModal: React.FC<TenantDailyRequestModalProps> = (
         applicantPhone: applicantPhone.trim() || undefined,
         startDate,
         endDate,
+        dailyRateAmount: dailyRate.toFixed(2),
+        depositAmount: safeDeposit.toFixed(2),
+        depositDeclaredStatus,
+      }, {
+        headers: dormitoryId ? { 'x-dormitory-id': dormitoryId } : {},
       });
 
       onSuccess('ส่งคำขอเข้าพักรายวันเรียบร้อยแล้ว รอการอนุมัติจากเจ้าของหอพัก');
@@ -73,7 +118,7 @@ export const TenantDailyRequestModal: React.FC<TenantDailyRequestModalProps> = (
     } catch (err: any) {
       setErrorText(err.message || 'เกิดข้อผิดพลาดในการส่งคำขอ');
     } finally {
-      setLoading(false);
+      setSubmitting(false);
     }
   };
 
@@ -109,83 +154,162 @@ export const TenantDailyRequestModal: React.FC<TenantDailyRequestModalProps> = (
         )}
 
         <form onSubmit={handleSubmit} className="p-5 space-y-4 overflow-y-auto flex-1 text-xs">
-          <div>
-            <label className="block text-xs font-bold text-slate-700 mb-1">
-              ชื่อ-นามสกุล ผู้ขอเข้าพัก <span className="text-rose-500">*</span>
-            </label>
-            <div className="relative">
-              <User className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
-              <input
-                type="text"
-                required
-                placeholder="เช่น นายสมชาย ใจดี"
-                value={applicantFullName}
-                onChange={(e) => setApplicantFullName(e.target.value)}
-                className="w-full pl-9 pr-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-amber-600 bg-white text-slate-800 font-semibold"
-              />
+          {loadingContext ? (
+            <div className="p-6 text-center text-slate-400 flex flex-col items-center gap-2">
+              <Loader2 className="w-5 h-5 animate-spin text-amber-600" />
+              <span>กำลังโหลดข้อมูลค่าเช่าห้องพัก...</span>
             </div>
-          </div>
-
-          <div>
-            <label className="block text-xs font-bold text-slate-700 mb-1">
-              เบอร์โทรศัพท์ติดต่อ <span className="text-slate-400 font-normal">(ไม่บังคับ)</span>
-            </label>
-            <div className="relative">
-              <Phone className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
-              <input
-                type="tel"
-                placeholder="08X-XXX-XXXX"
-                value={applicantPhone}
-                onChange={(e) => setApplicantPhone(e.target.value)}
-                className="w-full pl-9 pr-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-amber-600 bg-white text-slate-800 font-semibold"
-              />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">
-                วันที่เริ่มพัก <span className="text-rose-500">*</span>
-              </label>
-              <div className="relative">
-                <Calendar className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
-                <input
-                  type="date"
-                  required
-                  value={startDate}
-                  onChange={(e) => setStartDate(e.target.value)}
-                  className="w-full pl-9 pr-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-amber-600 bg-white text-slate-800 font-semibold"
-                />
+          ) : (
+            <>
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  ชื่อ-นามสกุล ผู้ขอเข้าพัก <span className="text-rose-500">*</span>
+                </label>
+                <div className="relative">
+                  <User className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+                  <input
+                    type="text"
+                    required
+                    placeholder="เช่น นายสมชาย ใจดี"
+                    value={applicantFullName}
+                    onChange={(e) => setApplicantFullName(e.target.value)}
+                    className="w-full pl-9 pr-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-amber-600 bg-white text-slate-800 font-semibold"
+                  />
+                </div>
               </div>
-            </div>
 
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">
-                วันที่สิ้นสุด <span className="text-rose-500">*</span>
-              </label>
-              <div className="relative">
-                <Calendar className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
-                <input
-                  type="date"
-                  required
-                  min={startDate}
-                  value={endDate}
-                  onChange={(e) => setEndDate(e.target.value)}
-                  className="w-full pl-9 pr-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-amber-600 bg-white text-slate-800 font-semibold"
-                />
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  เบอร์โทรศัพท์ติดต่อ <span className="text-slate-400 font-normal">(ไม่บังคับ)</span>
+                </label>
+                <div className="relative">
+                  <Phone className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+                  <input
+                    type="tel"
+                    placeholder="08X-XXX-XXXX"
+                    value={applicantPhone}
+                    onChange={(e) => setApplicantPhone(e.target.value)}
+                    className="w-full pl-9 pr-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-amber-600 bg-white text-slate-800 font-semibold"
+                  />
+                </div>
               </div>
-            </div>
-          </div>
 
-          <div className="p-3 bg-amber-50 border border-amber-200 rounded-2xl flex items-center justify-between font-bold text-amber-900">
-            <span>จำนวนวันพักอาศัย (รวม):</span>
-            <span>{daysCount} วัน</span>
-          </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    วันที่เริ่มพัก <span className="text-rose-500">*</span>
+                  </label>
+                  <div className="relative">
+                    <Calendar className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+                    <input
+                      type="date"
+                      required
+                      value={startDate}
+                      onChange={(e) => setStartDate(e.target.value)}
+                      className="w-full pl-9 pr-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-amber-600 bg-white text-slate-800 font-semibold"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    วันที่สิ้นสุด <span className="text-rose-500">*</span>
+                  </label>
+                  <div className="relative">
+                    <Calendar className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+                    <input
+                      type="date"
+                      required
+                      min={startDate}
+                      value={endDate}
+                      onChange={(e) => setEndDate(e.target.value)}
+                      className="w-full pl-9 pr-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-amber-600 bg-white text-slate-800 font-semibold"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Financial Context & Calculations */}
+              <div className="p-3.5 bg-amber-50/60 border border-amber-200 rounded-2xl space-y-2 text-xs">
+                <div className="flex items-center justify-between font-medium text-slate-700">
+                  <span>อัตราค่าเช่ารายวัน (ตามที่หอพักกำหนด):</span>
+                  <span className="font-extrabold text-slate-900">{formatBaht(dailyRate)} / วัน</span>
+                </div>
+                <div className="flex items-center justify-between font-medium text-slate-700">
+                  <span>จำนวนวันเข้าพัก (รวม):</span>
+                  <span className="font-bold text-amber-800">{daysCount} วัน</span>
+                </div>
+                <div className="flex items-center justify-between font-medium text-slate-700">
+                  <span>รวมค่าเช่า:</span>
+                  <span className="font-extrabold text-slate-900">{formatBaht(totalRent)}</span>
+                </div>
+
+                {/* Editable Deposit */}
+                <div className="pt-2 border-t border-amber-200/60 flex items-center justify-between gap-2">
+                  <div>
+                    <label className="font-bold text-slate-700 block">เงินมัดจำ/ประกัน (บาท):</label>
+                    <span className="text-[10px] text-slate-400">ระบุ 0 ได้หากไม่มีมัดจำ</span>
+                  </div>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={depositAmount}
+                    onChange={(e) => setDepositAmount(Number(e.target.value))}
+                    className="w-28 px-2.5 py-1 text-right border border-amber-300 rounded-lg bg-white font-bold text-slate-800 focus:outline-none focus:border-amber-600"
+                  />
+                </div>
+
+                {/* Deposit Declared Status */}
+                <div className="pt-2 border-t border-amber-200/60 space-y-1">
+                  <span className="text-[11px] font-bold text-slate-700 block">
+                    แจ้งสถานะการชำระเงินมัดจำ (แจ้งล่วงหน้า):
+                  </span>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setDepositDeclaredStatus('UNPAID')}
+                      className={`py-1.5 px-2 rounded-lg text-[11px] font-bold border transition-all cursor-pointer ${
+                        depositDeclaredStatus === 'UNPAID'
+                          ? 'bg-amber-600 text-white border-amber-600 shadow-xs'
+                          : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                      }`}
+                    >
+                      ยังไม่ชำระมัดจำ
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setDepositDeclaredStatus('PAID')}
+                      className={`py-1.5 px-2 rounded-lg text-[11px] font-bold border transition-all cursor-pointer ${
+                        depositDeclaredStatus === 'PAID'
+                          ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
+                          : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                      }`}
+                    >
+                      ชำระมัดจำแล้ว (แจ้งสถานะ)
+                    </button>
+                  </div>
+                </div>
+
+                {/* Financial Summary */}
+                <div className="pt-2 border-t border-amber-200 space-y-1">
+                  <div className="flex items-center justify-between font-bold text-slate-800">
+                    <span>ยอดรวมทั้งหมด (ค่าเช่า + มัดจำ):</span>
+                    <span className="text-sm font-black text-amber-900">{formatBaht(totalAgreed)}</span>
+                  </div>
+                  <div className="flex items-center justify-between text-[11px] font-bold text-slate-600">
+                    <span>ยอดที่ต้องชำระเมื่อเช็คอิน:</span>
+                    <span className="font-extrabold text-slate-800">{formatBaht(outstanding)}</span>
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
 
           <div className="pt-2 flex items-center justify-end gap-2">
             <button
               type="button"
-              disabled={loading}
+              disabled={submitting}
               onClick={onClose}
               className="px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl transition-all cursor-pointer"
             >
@@ -193,10 +317,11 @@ export const TenantDailyRequestModal: React.FC<TenantDailyRequestModalProps> = (
             </button>
             <button
               type="submit"
-              disabled={loading}
+              data-testid="tenant-daily-submit-btn"
+              disabled={submitting || loadingContext}
               className="px-5 py-2 text-xs font-bold text-white bg-amber-600 hover:bg-amber-700 rounded-xl shadow-md shadow-amber-600/10 transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
             >
-              {loading ? (
+              {submitting ? (
                 <>
                   <Loader2 className="w-3.5 h-3.5 animate-spin" />
                   <span>กำลังส่งคำขอ...</span>

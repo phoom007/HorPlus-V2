@@ -50,6 +50,12 @@ export function createDailyStayRouter(
     });
   };
 
+  const MoneyDecimalStringSchema = z
+    .string({
+      invalid_type_error: 'จำนวนเงินต้องระบุเป็นข้อความตัวเลขทศนิยม (string)',
+    })
+    .regex(/^\d+(\.\d{1,2})?$/, 'รูปแบบจำนวนเงินไม่ถูกต้อง (ต้องเป็นตัวเลขทศนิยมไม่เกิน 2 ตำแหน่ง)');
+
   // 1. Tenant-submitted Daily Stay request (Option 2A - Authenticated Pre-link User with canonical CSRF)
   const TenantDailyRequestSchema = z.object({
     dormitoryId: z.string().uuid().optional(),
@@ -58,8 +64,8 @@ export function createDailyStayRouter(
     applicantPhone: z.string().trim().max(50).optional().nullable(),
     startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'รูปแบบวันที่ไม่ถูกต้อง (YYYY-MM-DD)'),
     endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'รูปแบบวันที่ไม่ถูกต้อง (YYYY-MM-DD)'),
-    dailyRateAmount: z.union([z.string(), z.number()]).optional(),
-    depositAmount: z.union([z.string(), z.number()]).optional(),
+    dailyRateAmount: MoneyDecimalStringSchema.optional(),
+    depositAmount: MoneyDecimalStringSchema.optional(),
     depositDeclaredStatus: z.enum(['PAID', 'UNPAID']).optional(),
   });
 
@@ -103,8 +109,8 @@ export function createDailyStayRouter(
     phone: z.string().trim().max(50).optional().nullable(),
     startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'รูปแบบวันที่ไม่ถูกต้อง (YYYY-MM-DD)'),
     endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'รูปแบบวันที่ไม่ถูกต้อง (YYYY-MM-DD)'),
-    dailyRateAmount: z.union([z.string(), z.number()]).optional(),
-    depositAmount: z.union([z.string(), z.number()]).optional(),
+    dailyRateAmount: MoneyDecimalStringSchema.optional(),
+    depositAmount: MoneyDecimalStringSchema.optional(),
     depositDeclaredStatus: z.enum(['PAID', 'UNPAID']).optional(),
   });
 
@@ -146,8 +152,8 @@ export function createDailyStayRouter(
 
   // 3. Owner Edit Pending Daily Stay (Edit-Before-Approve)
   const UpdatePendingSchema = z.object({
-    dailyRateAmount: z.union([z.string(), z.number()]).optional(),
-    depositAmount: z.union([z.string(), z.number()]).optional(),
+    dailyRateAmount: MoneyDecimalStringSchema.optional(),
+    depositAmount: MoneyDecimalStringSchema.optional(),
     depositDeclaredStatus: z.enum(['PAID', 'UNPAID']).optional(),
   });
 

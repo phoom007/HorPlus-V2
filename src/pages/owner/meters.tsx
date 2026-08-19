@@ -165,6 +165,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   const [isFirstCycle, setIsFirstCycle] = useState(false);
   const [quickAddModalOpen, setQuickAddModalOpen] = useState(false);
   const [selectedQuickAddContext, setSelectedQuickAddContext] = useState<QuickAddRoomContext | null>(null);
+  const [quickAddLoadingRoomId, setQuickAddLoadingRoomId] = useState<string | null>(null);
   const [operationalCycleAuthorityLoaded, setOperationalCycleAuthorityLoaded] = useState(false);
   const [operationalCycleCode, setOperationalCycleCode] = useState<string | null>(null);
   const [allowEditAllElecPrev, setAllowEditAllElecPrev] = useState(false);
@@ -1927,37 +1928,37 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                       ) : (isCurrentOperationalCycle && room) ? (
                         <button
                           type="button"
-                          onClick={() => {
-                            const dormId = dormitoryId || localStorage.getItem('horplus_current_dormitory_id') || localStorage.getItem('selected_dormitory_id') || '';
-                            const bld = (buildings || []).find((b) => b.id === room.buildingId) || null;
-                            const ctx: QuickAddRoomContext = {
-                              roomId: room.id,
-                              dormitoryId: dormId,
-                              roomNumber: room.roomNumber,
-                              buildingId: room.buildingId,
-                              monthlyRent: room.monthlyRent,
-                              termRent: room.termRent,
-                              dailyRent: room.dailyRent,
-                              depositAmount: room.depositAmount,
-                              building: bld
-                                ? {
-                                    id: bld.id,
-                                    name: bld.name,
-                                    termMonths: bld.termMonths,
-                                    maxTermRentInstallments: bld.maxTermRentInstallments,
-                                    monthlyRent: bld.monthlyRent,
-                                    termRent: bld.termRent,
-                                    dailyRent: bld.dailyRent,
-                                    depositAmount: bld.depositAmount,
-                                  }
-                                : null,
-                            };
-                            setSelectedQuickAddContext(ctx);
-                            setQuickAddModalOpen(true);
+                          disabled={quickAddLoadingRoomId === room.id}
+                          onClick={async () => {
+                            try {
+                              setQuickAddLoadingRoomId(room.id);
+                              const dormId = dormitoryId || localStorage.getItem('horplus_current_dormitory_id') || localStorage.getItem('selected_dormitory_id') || '';
+                              const res = await httpRequest<{ data: QuickAddRoomContext }>(
+                                'GET',
+                                `/api/v1/properties/rooms/${room.id}/quick-add-context`,
+                                undefined,
+                                { headers: dormId ? { 'x-dormitory-id': dormId } : {} }
+                              );
+
+                              if (!res.data || !res.data.effective) {
+                                throw new Error('ไม่สามารถโหลดข้อมูลสิทธิ์และค่าเช่าห้องพักได้');
+                              }
+
+                              setSelectedQuickAddContext(res.data);
+                              setQuickAddModalOpen(true);
+                            } catch (err: any) {
+                              showToast(err.message || 'ไม่สามารถโหลดข้อมูลห้องพักได้ กรุณาลองใหม่อีกครั้ง');
+                            } finally {
+                              setQuickAddLoadingRoomId(null);
+                            }
                           }}
-                          className="inline-flex items-center gap-1 text-[11px] font-bold text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 px-2 py-1 rounded-lg border border-indigo-200 transition-all cursor-pointer shadow-2xs"
+                          className="inline-flex items-center gap-1 text-[11px] font-bold text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 px-2 py-1 rounded-lg border border-indigo-200 transition-all cursor-pointer shadow-2xs disabled:opacity-50"
                         >
-                          <Plus className="w-3 h-3" />
+                          {quickAddLoadingRoomId === room.id ? (
+                            <Loader2 className="w-3 h-3 animate-spin" />
+                          ) : (
+                            <Plus className="w-3 h-3" />
+                          )}
                           <span>เพิ่มผู้เช่า</span>
                         </button>
                       ) : (

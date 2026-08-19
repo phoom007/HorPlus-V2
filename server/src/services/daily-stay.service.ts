@@ -218,24 +218,28 @@ export class DailyStayService {
       throw err;
     }
 
-    // Default daily rate from Room -> Building
+    const { defaultsService } = await import('./defaults.service.js');
+    const effective = await defaultsService.resolveEffectiveRoomDefaults(
+      dormitoryId,
+      room.buildingId,
+      room.id,
+      this.prisma
+    );
+
+    // Default daily rate from canonical DefaultsService authority
     let dailyRate = '0.00';
     if (data.dailyRateAmount !== undefined && data.dailyRateAmount !== null) {
       dailyRate = formatDecimal(toDecimal(String(data.dailyRateAmount)));
-    } else if (room.dailyRent !== null && room.dailyRent !== undefined) {
-      dailyRate = formatDecimal(room.dailyRent);
-    } else if (room.building?.dailyRent !== null && room.building?.dailyRent !== undefined) {
-      dailyRate = formatDecimal(room.building.dailyRent);
+    } else if (effective.dailyRent?.value !== null && effective.dailyRent?.value !== undefined) {
+      dailyRate = formatDecimal(toDecimal(String(effective.dailyRent.value)));
     }
 
-    // Default deposit amount from Room -> Building (0 is explicitly valid)
+    // Default deposit amount from canonical DefaultsService authority (0 is explicitly valid)
     let deposit = '0.00';
     if (data.depositAmount !== undefined && data.depositAmount !== null) {
       deposit = formatDecimal(toDecimal(String(data.depositAmount)));
-    } else if (room.depositAmount !== null && room.depositAmount !== undefined) {
-      deposit = formatDecimal(room.depositAmount);
-    } else if (room.building?.depositAmount !== null && room.building?.depositAmount !== undefined) {
-      deposit = formatDecimal(room.building.depositAmount);
+    } else if (effective.depositAmount?.value !== null && effective.depositAmount?.value !== undefined) {
+      deposit = formatDecimal(toDecimal(String(effective.depositAmount.value)));
     }
 
     const totalRent = formatDecimal(mulDecimals(toDecimal(dailyRate), inclusiveDayCount.toString()));
@@ -585,24 +589,28 @@ export class DailyStayService {
       const todayStr = new Date().toISOString().slice(0, 10);
       const isFuture = data.startDate > todayStr;
 
-      // Default daily rate from Room -> Building
+      const { defaultsService } = await import('./defaults.service.js');
+      const effective = await defaultsService.resolveEffectiveRoomDefaults(
+        dormitoryId,
+        room.buildingId,
+        room.id,
+        tx
+      );
+
+      // Default daily rate from canonical DefaultsService authority
       let dailyRate = '0.00';
       if (data.dailyRateAmount !== undefined && data.dailyRateAmount !== null) {
         dailyRate = formatDecimal(toDecimal(String(data.dailyRateAmount)));
-      } else if (room.dailyRent !== null && room.dailyRent !== undefined) {
-        dailyRate = formatDecimal(room.dailyRent);
-      } else if (room.building?.dailyRent !== null && room.building?.dailyRent !== undefined) {
-        dailyRate = formatDecimal(room.building.dailyRent);
+      } else if (effective.dailyRent?.value !== null && effective.dailyRent?.value !== undefined) {
+        dailyRate = formatDecimal(toDecimal(String(effective.dailyRent.value)));
       }
 
-      // Default deposit amount from Room -> Building (0 is explicitly valid)
+      // Default deposit amount from canonical DefaultsService authority (0 is explicitly valid)
       let deposit = '0.00';
       if (data.depositAmount !== undefined && data.depositAmount !== null) {
         deposit = formatDecimal(toDecimal(String(data.depositAmount)));
-      } else if (room.depositAmount !== null && room.depositAmount !== undefined) {
-        deposit = formatDecimal(room.depositAmount);
-      } else if (room.building?.depositAmount !== null && room.building?.depositAmount !== undefined) {
-        deposit = formatDecimal(room.building.depositAmount);
+      } else if (effective.depositAmount?.value !== null && effective.depositAmount?.value !== undefined) {
+        deposit = formatDecimal(toDecimal(String(effective.depositAmount.value)));
       }
 
       const totalRent = formatDecimal(mulDecimals(toDecimal(dailyRate), inclusiveDayCount.toString()));
