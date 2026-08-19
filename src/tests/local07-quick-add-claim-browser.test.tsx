@@ -994,6 +994,9 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
         expect(amtInput.value).toBe('');
         expect(screen.queryByRole('button', { name: /บันทึกข้อมูล/ })).toBeNull();
       });
+
+      // Assert meterDraftStore is clean
+      expect(meterDraftStore.getDraft('dorm-001-uuid', 'cycle-2026-08')).toBeNull();
     });
 
     it('CASE B: Unrelated unsaved meter edit remains dirty after Other Fee is persisted', async () => {
@@ -1089,6 +1092,11 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
 
       // Global Save button REMAINS visible solely because waterCurr is still unsaved/dirty
       expect(screen.getByRole('button', { name: /บันทึกข้อมูล/ })).toBeDefined();
+
+      // Assert meterDraftStore contains ONLY the dirty waterCurr patch
+      expect(meterDraftStore.getDraft('dorm-001-uuid', 'cycle-2026-08')).toEqual([
+        { roomId: 'room-101-uuid', waterCurr: '10.5' }
+      ]);
     });
 
     it('CASE C: Removing persisted Other Fee establishes clean baseline without global Save button', async () => {
@@ -1179,6 +1187,397 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
 
       // Global Save button must NOT appear
       expect(screen.queryByRole('button', { name: /บันทึกข้อมูล/ })).toBeNull();
+
+      // Assert draft store is clean
+      expect(meterDraftStore.getDraft('dorm-001-uuid', 'cycle-2026-08')).toBeNull();
+    });
+
+    it('SWR Multi-Writer: preserves local dirty field while reflecting untouched server updates without erasing remote fees', async () => {
+      const client = createTestQueryClient();
+
+      let currentServerWorkspace = {
+        serverReadings: [{ roomId: 'room-101-uuid', meterType: 'water', previousReading: '100.00', currentReading: '100.00' }],
+        cyclePeopleRes: {
+          success: true,
+          data: [{
+            roomId: 'room-101-uuid',
+            version: 1,
+            peopleCount: 1,
+            manualOutstandingAmount: '0.00',
+            otherFees: [{ description: 'Fee A', amount: '10.00' }],
+          }],
+        },
+        cyclesRes: {
+          data: [{ id: 'cycle-2026-08', cycleCode: '2026-08', status: 'open', isCurrent: true }],
+          firstBillingCycleId: 'cycle-2026-08',
+          operationalCycleCode: '2026-08',
+        },
+      };
+
+      let capturedBulkPayload: any = null;
+
+      vi.spyOn(httpClient, 'httpRequest').mockImplementation(async (method, url, data) => {
+        if (url === '/billing-cycles') {
+          return currentServerWorkspace.cyclesRes;
+        }
+        if (url.includes('/meters/workspace/preview-context')) {
+          return {
+            success: true,
+            data: {
+              rateSnapshot: {
+                waterBillingType: 'per_unit',
+                waterRate: '18.00',
+                electricityBillingType: 'per_unit',
+                electricityRate: '8.00',
+              },
+              rooms: [{ roomId: 'room-101-uuid', roomNumber: '101', rentAmount: '4500.00', billingSource: 'CONTRACT' }],
+            },
+          };
+        }
+        if (url.includes('/meters/cycle-people-count')) {
+          return currentServerWorkspace.cyclePeopleRes;
+        }
+        if (url.includes('/meters/readings')) {
+          return { success: true, data: currentServerWorkspace.serverReadings };
+        }
+        if (url === '/api/v1/meters/workspace/bulk') {
+          capturedBulkPayload = data;
+          const rowData = (data as any)?.rows?.[0];
+          const newFees = rowData?.otherFees || [];
+          currentServerWorkspace = {
+            ...currentServerWorkspace,
+            cyclePeopleRes: {
+              success: true,
+              data: [{
+                roomId: 'room-101-uuid',
+                version: 3,
+                peopleCount: 3,
+                manualOutstandingAmount: '0.00',
+                otherFees: newFees,
+              }],
+            },
+          };
+          return {
+            success: true,
+            savedCount: 1,
+            savedRows: [{ roomId: 'room-101-uuid', version: 3, peopleCount: 3, manualOutstandingAmount: '0.00', otherFees: newFees }],
+          };
+        }
+        return { success: true, data: [] };
+      });
+
+      render(
+        <QueryClientProvider client={client}>
+          <OwnerMeters
+            rooms={[mockRoom]}
+            buildings={[mockBuilding]}
+            dormitoryId="dorm-001-uuid"
+            bills={[]}
+            tenants={[]}
+            contracts={[]}
+            onSaveBills={() => {}}
+            onSelectTenant={() => {}}
+            onAddLog={() => {}}
+            selectedBillingCycleId="cycle-2026-08"
+            selectedCycleCode="2026-08"
+          />
+        </QueryClientProvider>
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText('101')).toBeDefined();
+        expect(screen.getByText('Fee A')).toBeDefined();
+      });
+
+      // 1. Local user modifies ONLY waterCurr
+      const waterCurrInput = document.querySelector('input[data-col="waterCurr"]') as HTMLInputElement;
+      fireEvent.change(waterCurrInput, { target: { value: '105.00' } });
+
+      // Verify sparse draft in store contains ONLY waterCurr
+      await waitFor(() => {
+        expect(meterDraftStore.getDraft('dorm-001-uuid', 'cycle-2026-08')).toEqual([
+          { roomId: 'room-101-uuid', waterCurr: '105.00' }
+        ]);
+      });
+
+      // 2. Simulate remote writer update via SWR / query cache update:
+      // Remote writer changed peopleCount to 3, added Fee B, and incremented version to 2
+      currentServerWorkspace = {
+        serverReadings: [{ roomId: 'room-101-uuid', meterType: 'water', previousReading: '100.00', currentReading: '100.00' }],
+        cyclePeopleRes: {
+          success: true,
+          data: [{
+            roomId: 'room-101-uuid',
+            version: 2,
+            peopleCount: 3,
+            manualOutstandingAmount: '0.00',
+            otherFees: [
+              { description: 'Fee A', amount: '10.00' },
+              { description: 'Fee B', amount: '20.00' }
+            ],
+          }],
+        },
+        cyclesRes: currentServerWorkspace.cyclesRes,
+      };
+
+      // Invalidate / update query cache to trigger SWR reconciliation
+      client.setQueryData(queryKeys.meterWorkspace('dorm-001-uuid', 'cycle-2026-08'), currentServerWorkspace);
+
+      // Verify rendered UI:
+      // - waterCurr "105.00" preserved from local sparse draft
+      // - peopleCount "3" updated from fresh server data
+      // - both Fee A and Fee B visible (remote update not shadowed by stale draft)
+      await waitFor(() => {
+        const input = document.querySelector('input[data-col="waterCurr"]') as HTMLInputElement;
+        expect(input.value).toBe('105.00');
+        expect(screen.getByText('Fee A')).toBeDefined();
+        expect(screen.getByText('Fee B')).toBeDefined();
+        const peopleInput = document.querySelector('input[data-col="peopleCount"]') as HTMLInputElement;
+        if (peopleInput) {
+          expect(peopleInput.value).toBe('3');
+        }
+      });
+
+      // 3. User adds Fee C on top of remote state
+      const descInput = screen.getByPlaceholderText('ชื่อรายการ') as HTMLInputElement;
+      const amtInput = screen.getByPlaceholderText('บาท') as HTMLInputElement;
+      fireEvent.change(descInput, { target: { value: 'Fee C' } });
+      fireEvent.change(amtInput, { target: { value: '30.00' } });
+
+      const addFeeBtn = screen.getByTitle('เพิ่มรายการและบันทึกทันที');
+      fireEvent.click(addFeeBtn);
+
+      await waitFor(() => {
+        expect(screen.getByText('Fee C')).toBeDefined();
+      });
+
+      // Verify OCC payload preserved remote Fee B and passed expectedVersion 2
+      expect(capturedBulkPayload).toBeDefined();
+      expect(capturedBulkPayload.rows[0].expectedVersion).toBe(2);
+      expect(capturedBulkPayload.rows[0].otherFees).toEqual([
+        { description: 'Fee A', amount: '10.00' },
+        { description: 'Fee B', amount: '20.00' },
+        { description: 'Fee C', amount: '30.00' }
+      ]);
+
+      // Verify sparse draft store still retains ONLY the unsaved waterCurr
+      expect(meterDraftStore.getDraft('dorm-001-uuid', 'cycle-2026-08')).toEqual([
+        { roomId: 'room-101-uuid', waterCurr: '105.00' }
+      ]);
+    });
+
+    it('Clean Row Background Refresh: immediately reflects server updates without full-row shadow when no local edits exist', async () => {
+      const client = createTestQueryClient();
+
+      let currentServerWorkspace = {
+        serverReadings: [{ roomId: 'room-101-uuid', meterType: 'water', previousReading: '100.00', currentReading: '100.00' }],
+        cyclePeopleRes: {
+          success: true,
+          data: [{
+            roomId: 'room-101-uuid',
+            version: 1,
+            peopleCount: 1,
+            manualOutstandingAmount: '0.00',
+            otherFees: [{ description: 'Fee A', amount: '10.00' }],
+          }],
+        },
+        cyclesRes: {
+          data: [{ id: 'cycle-2026-08', cycleCode: '2026-08', status: 'open', isCurrent: true }],
+          firstBillingCycleId: 'cycle-2026-08',
+          operationalCycleCode: '2026-08',
+        },
+      };
+
+      vi.spyOn(httpClient, 'httpRequest').mockImplementation(async (method, url) => {
+        if (url === '/billing-cycles') return currentServerWorkspace.cyclesRes;
+        if (url.includes('/meters/cycle-people-count')) return currentServerWorkspace.cyclePeopleRes;
+        if (url.includes('/meters/readings')) return { success: true, data: currentServerWorkspace.serverReadings };
+        if (url.includes('/meters/workspace/preview-context')) {
+          return {
+            success: true,
+            data: {
+              rateSnapshot: {
+                waterBillingType: 'per_unit',
+                waterRate: '18.00',
+                electricityBillingType: 'per_unit',
+                electricityRate: '8.00',
+              },
+              rooms: [{ roomId: 'room-101-uuid', roomNumber: '101', rentAmount: '4500.00', billingSource: 'CONTRACT' }],
+            },
+          };
+        }
+        return { success: true, data: [] };
+      });
+
+      render(
+        <QueryClientProvider client={client}>
+          <OwnerMeters
+            rooms={[mockRoom]}
+            buildings={[mockBuilding]}
+            dormitoryId="dorm-001-uuid"
+            bills={[]}
+            tenants={[]}
+            contracts={[]}
+            onSaveBills={() => {}}
+            onSelectTenant={() => {}}
+            onAddLog={() => {}}
+            selectedBillingCycleId="cycle-2026-08"
+            selectedCycleCode="2026-08"
+          />
+        </QueryClientProvider>
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText('101')).toBeDefined();
+        expect(screen.getByText('Fee A')).toBeDefined();
+      });
+
+      // Assert draft store is empty for clean state
+      expect(meterDraftStore.getDraft('dorm-001-uuid', 'cycle-2026-08')).toBeNull();
+
+      // Remote update happens: peopleCount -> 2, Fee B added
+      currentServerWorkspace = {
+        serverReadings: [{ roomId: 'room-101-uuid', meterType: 'water', previousReading: '100.00', currentReading: '100.00' }],
+        cyclePeopleRes: {
+          success: true,
+          data: [{
+            roomId: 'room-101-uuid',
+            version: 2,
+            peopleCount: 2,
+            manualOutstandingAmount: '0.00',
+            otherFees: [
+              { description: 'Fee A', amount: '10.00' },
+              { description: 'Fee B', amount: '20.00' }
+            ],
+          }],
+        },
+        cyclesRes: currentServerWorkspace.cyclesRes,
+      };
+
+      // Trigger SWR cache update
+      client.setQueryData(queryKeys.meterWorkspace('dorm-001-uuid', 'cycle-2026-08'), currentServerWorkspace);
+
+      await waitFor(() => {
+        expect(screen.getByText('Fee B')).toBeDefined();
+        const peopleInput = document.querySelector('input[data-col="peopleCount"]') as HTMLInputElement;
+        if (peopleInput) {
+          expect(peopleInput.value).toBe('2');
+        }
+      });
+
+      expect(meterDraftStore.getDraft('dorm-001-uuid', 'cycle-2026-08')).toBeNull();
+    });
+
+    it('Navigation Dirty Survival: only genuinely dirty fields survive navigation while clean fields follow server', async () => {
+      const client = createTestQueryClient();
+
+      const serverWorkspace = {
+        serverReadings: [{ roomId: 'room-101-uuid', meterType: 'water', previousReading: '100.00', currentReading: '100.00' }],
+        cyclePeopleRes: {
+          success: true,
+          data: [{
+            roomId: 'room-101-uuid',
+            version: 1,
+            peopleCount: 2,
+            manualOutstandingAmount: '0.00',
+            otherFees: [{ description: 'Fee A', amount: '10.00' }],
+          }],
+        },
+        cyclesRes: {
+          data: [{ id: 'cycle-2026-08', cycleCode: '2026-08', status: 'open', isCurrent: true }],
+          firstBillingCycleId: 'cycle-2026-08',
+          operationalCycleCode: '2026-08',
+        },
+      };
+
+      client.setQueryData(queryKeys.meterWorkspace('dorm-001-uuid', 'cycle-2026-08'), serverWorkspace);
+
+      vi.spyOn(httpClient, 'httpRequest').mockImplementation(async (method, url) => {
+        if (url === '/billing-cycles') return serverWorkspace.cyclesRes;
+        if (url.includes('/meters/cycle-people-count')) return serverWorkspace.cyclePeopleRes;
+        if (url.includes('/meters/readings')) return { success: true, data: serverWorkspace.serverReadings };
+        if (url.includes('/meters/workspace/preview-context')) {
+          return {
+            success: true,
+            data: {
+              rateSnapshot: {
+                waterBillingType: 'per_unit',
+                waterRate: '18.00',
+                electricityBillingType: 'per_unit',
+                electricityRate: '8.00',
+              },
+              rooms: [{ roomId: 'room-101-uuid', roomNumber: '101', rentAmount: '4500.00', billingSource: 'CONTRACT' }],
+            },
+          };
+        }
+        return { success: true, data: [] };
+      });
+
+      const { unmount } = render(
+        <QueryClientProvider client={client}>
+          <OwnerMeters
+            rooms={[mockRoom]}
+            buildings={[mockBuilding]}
+            dormitoryId="dorm-001-uuid"
+            bills={[]}
+            tenants={[]}
+            contracts={[]}
+            onSaveBills={() => {}}
+            onSelectTenant={() => {}}
+            onAddLog={() => {}}
+            selectedBillingCycleId="cycle-2026-08"
+            selectedCycleCode="2026-08"
+          />
+        </QueryClientProvider>
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText('101')).toBeDefined();
+        expect(document.querySelector('input[data-col="waterCurr"]')).not.toBeNull();
+      });
+
+      // User changes waterCurr to 110.00
+      const waterCurrInput = document.querySelector('input[data-col="waterCurr"]') as HTMLInputElement;
+      fireEvent.change(waterCurrInput, { target: { value: '110.00' } });
+
+      await waitFor(() => {
+        expect(meterDraftStore.getDraft('dorm-001-uuid', 'cycle-2026-08')).toEqual([
+          { roomId: 'room-101-uuid', waterCurr: '110.00' }
+        ]);
+      });
+
+      // Navigate away: unmount
+      unmount();
+
+      // Remount
+      render(
+        <QueryClientProvider client={client}>
+          <OwnerMeters
+            rooms={[mockRoom]}
+            buildings={[mockBuilding]}
+            dormitoryId="dorm-001-uuid"
+            bills={[]}
+            tenants={[]}
+            contracts={[]}
+            onSaveBills={() => {}}
+            onSelectTenant={() => {}}
+            onAddLog={() => {}}
+            selectedBillingCycleId="cycle-2026-08"
+            selectedCycleCode="2026-08"
+          />
+        </QueryClientProvider>
+      );
+
+      // waterCurr is restored from sparse draft, while otherFees and peopleCount come from server
+      await waitFor(() => {
+        const input = document.querySelector('input[data-col="waterCurr"]') as HTMLInputElement;
+        expect(input.value).toBe('110.00');
+        expect(screen.getByText('Fee A')).toBeDefined();
+        const peopleInput = document.querySelector('input[data-col="peopleCount"]') as HTMLInputElement;
+        if (peopleInput) {
+          expect(peopleInput.value).toBe('2');
+        }
+      });
     });
   });
 

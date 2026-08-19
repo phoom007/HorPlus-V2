@@ -30,7 +30,7 @@ import {
 } from 'lucide-react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { queryKeys, STALE_TIMES } from '../../lib/queryClient';
-import { meterDraftStore } from '../../lib/meterDraftStore';
+import { meterDraftStore, deriveMeterDraftPatches } from '../../lib/meterDraftStore';
 import { calculateMeterRowPreview, RoomPreviewContext } from '../../utils/meterBillingCalculator';
 import { Room, Building, QuickAddRoomContext, Bill, BillItem, Tenant, Contract, BillStatus, calculateRoomRentForCycle } from '../../types';
 import { getDataProvider } from '../../data/dataProvider';
@@ -215,21 +215,21 @@ export function buildRowsFromWorkspace(params: {
   const originalRows = JSON.parse(JSON.stringify(rows));
 
   const localDraft = currentDormId && selectedBillingCycleId ? meterDraftStore.getDraft(currentDormId, selectedBillingCycleId) : null;
-  if (localDraft) {
+  if (localDraft && localDraft.length > 0) {
     const merged = rows.map(serverRow => {
-      const draftRow = localDraft.find(d => d.roomId === serverRow.roomId);
-      if (draftRow) {
+      const draftPatch = localDraft.find(d => d.roomId === serverRow.roomId);
+      if (draftPatch) {
         return {
           ...serverRow,
-          waterCurr: draftRow.waterCurr,
-          waterPrev: draftRow.waterPrev,
-          elecCurr: draftRow.elecCurr,
-          elecPrev: draftRow.elecPrev,
-          peopleCount: draftRow.peopleCount,
-          overdueAmount: draftRow.overdueAmount,
-          isReplaced: draftRow.isReplaced,
-          otherFees: draftRow.otherFees,
-          snapshotVersion: serverRow.snapshotVersion,
+          waterCurr: draftPatch.waterCurr !== undefined ? draftPatch.waterCurr : serverRow.waterCurr,
+          waterPrev: draftPatch.waterPrev !== undefined ? draftPatch.waterPrev : serverRow.waterPrev,
+          elecCurr: draftPatch.elecCurr !== undefined ? draftPatch.elecCurr : serverRow.elecCurr,
+          elecPrev: draftPatch.elecPrev !== undefined ? draftPatch.elecPrev : serverRow.elecPrev,
+          peopleCount: draftPatch.peopleCount !== undefined ? draftPatch.peopleCount : serverRow.peopleCount,
+          overdueAmount: draftPatch.overdueAmount !== undefined ? draftPatch.overdueAmount : serverRow.overdueAmount,
+          isReplaced: draftPatch.isReplaced !== undefined ? draftPatch.isReplaced : serverRow.isReplaced,
+          // serverRow.otherFees is authoritative from server query
+          // serverRow.snapshotVersion is authoritative from server query
         };
       }
       return serverRow;
@@ -476,12 +476,9 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       const savedMeta = res?.savedRows?.find(r => r.roomId === roomId);
       const nextVer = savedMeta?.version ?? (expectedVersion + 1);
 
-      // 1. Update React meterRows state and draft store
-      setMeterRows(prev => {
-        const updated = prev.map(r => r.roomId === roomId ? { ...r, otherFees: nextFees, snapshotVersion: nextVer } : r);
-        meterDraftStore.setDraft(currentDormId, selectedBillingCycleId, updated as any);
-        return updated;
-      });
+      // 1. Update React meterRows state
+      const updatedRows = meterRows.map(r => r.roomId === roomId ? { ...r, otherFees: nextFees, snapshotVersion: nextVer } : r);
+      setMeterRows(updatedRows);
 
       // 2. Synchronously patch ONLY otherFees and snapshotVersion in originalRowsRef baseline
       if (originalRowsRef.current) {
@@ -495,13 +492,19 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
         }
       }
 
-      // 3. Clear controlled inputs on success
+      // 3. Recompute sparse draft patches (persisted Other Fee is no longer a draft delta)
+      if (currentDormId && selectedBillingCycleId && originalRowsRef.current) {
+        const patches = deriveMeterDraftPatches(updatedRows, originalRowsRef.current);
+        meterDraftStore.setDraft(currentDormId, selectedBillingCycleId, patches);
+      }
+
+      // 4. Clear controlled inputs on success
       setNewFeeInputs(prev => ({
         ...prev,
         [roomId]: { description: '', amount: '' },
       }));
 
-      // 4. Optimistically update TanStack Query cache
+      // 5. Optimistically update TanStack Query cache
       queryClient.setQueryData(queryKeys.meterWorkspace(currentDormId, selectedBillingCycleId), (oldData: any) => {
         if (!oldData) return oldData;
         const existingSnapshots = Array.isArray(oldData.cyclePeopleRes?.data) ? [...oldData.cyclePeopleRes.data] : [];
@@ -571,12 +574,9 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       const savedMeta = res?.savedRows?.find(r => r.roomId === roomId);
       const nextVer = savedMeta?.version ?? (expectedVersion + 1);
 
-      // 1. Update React meterRows state and draft store
-      setMeterRows(prev => {
-        const updated = prev.map(r => r.roomId === roomId ? { ...r, otherFees: nextFees, snapshotVersion: nextVer } : r);
-        meterDraftStore.setDraft(currentDormId, selectedBillingCycleId, updated as any);
-        return updated;
-      });
+      // 1. Update React meterRows state
+      const updatedRows = meterRows.map(r => r.roomId === roomId ? { ...r, otherFees: nextFees, snapshotVersion: nextVer } : r);
+      setMeterRows(updatedRows);
 
       // 2. Synchronously patch ONLY otherFees and snapshotVersion in originalRowsRef baseline
       if (originalRowsRef.current) {
@@ -588,6 +588,12 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
             snapshotVersion: nextVer,
           };
         }
+      }
+
+      // 3. Recompute sparse draft patches (persisted Other Fee is no longer a draft delta)
+      if (currentDormId && selectedBillingCycleId && originalRowsRef.current) {
+        const patches = deriveMeterDraftPatches(updatedRows, originalRowsRef.current);
+        meterDraftStore.setDraft(currentDormId, selectedBillingCycleId, patches);
       }
 
       // 3. Optimistically update TanStack Query cache
@@ -1175,10 +1181,11 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     setLoadedCycle(selectedBillingCycleId);
   }, [meterWorkspaceQuery.data, selectedBillingCycleId, rooms, bills, contracts, tenants]);
 
-  // Synchronize state changes to isolated in-memory draft store
+  // Synchronize unsaved deltas to isolated in-memory draft store
   useEffect(() => {
-    if (meterRows && meterRows.length > 0 && isCycleLoaded && currentDormId && selectedBillingCycleId) {
-      meterDraftStore.setDraft(currentDormId, selectedBillingCycleId, meterRows);
+    if (meterRows && meterRows.length > 0 && isCycleLoaded && currentDormId && selectedBillingCycleId && originalRowsRef.current) {
+      const patches = deriveMeterDraftPatches(meterRows, originalRowsRef.current);
+      meterDraftStore.setDraft(currentDormId, selectedBillingCycleId, patches);
     }
   }, [meterRows, selectedBillingCycleId, isCycleLoaded, currentDormId]);
 
@@ -2554,10 +2561,6 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
         isOpen={isLineModalOpen}
         onClose={() => {
           setIsLineModalOpen(false);
-          const draft = meterDraftStore.getDraft(currentDormId, selectedBillingCycleId);
-          if (draft) {
-            setMeterRows([...draft as any]);
-          }
         }}
         bills={bills}
         tenants={tenants}
