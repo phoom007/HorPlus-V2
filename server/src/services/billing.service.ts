@@ -13,6 +13,7 @@ import { ITenantRepository } from '../db/repositories/tenant.repository.js';
 import { AuditService } from './audit.service.js';
 import { billingOrchestrationService } from './billing-orchestration.service.js';
 import { resolveProvisionalBillingSource as sharedResolveProvisionalBillingSource } from './provisional-billing-source.service.js';
+import { ENTITLEMENT_ROOM_LIMITS } from './entitlement.service.js';
 import { toDecimal, addDecimals, mulDecimals, divDecimals, formatDecimal, subDecimals, compareDecimals, isZeroDecimal } from '../utils/decimal-math.util.js';
 import { getPrismaClient } from '../db/prisma.js';
 
@@ -882,7 +883,9 @@ export class BillingService {
     if (roomIds && roomIds.length > 0) {
       targetRooms = roomIds;
     } else {
-      const roomRes = await this.roomRepo.findAll(dormitoryId);
+      const roomRes = await this.roomRepo.findAll(dormitoryId, {
+        pageSize: ENTITLEMENT_ROOM_LIMITS.PAID,
+      });
       targetRooms = roomRes.items.map((r) => r.id);
     }
 

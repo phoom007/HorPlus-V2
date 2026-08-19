@@ -242,19 +242,20 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
     testApp = express();
     testApp.use(express.json());
     testApp.use((req: any, _res: any, next: any) => {
+      const dormId = (req.headers['x-dormitory-id'] as string) || testDormitoryId;
       req.auth = {
         userId: 'user-owner-1',
         sessionId: 'session-test-123',
         tokenVersion: 1,
         user: { id: 'user-owner-1', email: 'owner@example.com' },
         session: { id: 'session-test-123', userId: 'user-owner-1' },
-        memberships: [{ id: 'mem-1', dormitoryId: testDormitoryId, roleCode: 'OWNER', status: 'active', permissions: ['*'] }],
-        dormitoryId: testDormitoryId,
+        memberships: [{ id: 'mem-1', dormitoryId: dormId, roleCode: 'OWNER', status: 'active', permissions: ['*'] }],
+        dormitoryId: dormId,
         role: 'OWNER',
         permissions: ['*'],
       };
       req.dormitoryContext = {
-        dormitoryId: testDormitoryId,
+        dormitoryId: dormId,
         roleCode: 'OWNER',
         permissions: ['*'],
       };
@@ -262,7 +263,7 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
         horplus_session: 'session-cookie-123',
         horplus_csrf: 'csrf-test-token',
       };
-      req.headers['x-dormitory-id'] = testDormitoryId;
+      req.headers['x-dormitory-id'] = dormId;
       req.headers['x-csrf-token'] = 'csrf-test-token';
       next();
     });
@@ -1555,5 +1556,215 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
       },
     });
     expect(snapInDb?.peopleCount).toBe(1);
+  });
+
+  it('21. 150-Room Scale Proof: Pull Previous returns all 150 rooms up to approved dormitory ceiling with accurate data on rooms 1, 50, 51, 100, 150', async () => {
+    // 1. Create a dedicated disposable dormitory for 150-room scale test
+    const dorm150Id = crypto.randomUUID();
+    const suffix150 = crypto.randomBytes(4).toString('hex');
+    await prisma.dormitory.create({
+      data: {
+        id: dorm150Id,
+        name: `Scale 150 Dorm ${suffix150}`,
+        code: `SCALE-${suffix150.toUpperCase()}`,
+        billingSettings: {
+          create: {
+            waterBillingType: 'per_unit',
+            waterRate: toDecimal('18.00'),
+            electricityBillingType: 'per_unit',
+            electricityRate: toDecimal('8.00'),
+            commonFee: toDecimal('200.00'),
+            billingDay: 1,
+            dueDay: 5,
+          },
+        },
+      },
+    });
+
+    const bld150 = await prisma.building.create({
+      data: {
+        dormitoryId: dorm150Id,
+        name: 'Scale Building A',
+      },
+    });
+
+    // 2. Create Billing Cycles (Cycle 1: June 2026, Cycle 2: July 2026)
+    const cycle1_150 = await prisma.billingCycle.create({
+      data: {
+        dormitoryId: dorm150Id,
+        cycleCode: '2026-06',
+        name: 'มิถุนายน 2026',
+        periodStart: new Date('2026-06-01T00:00:00Z'),
+        periodEnd: new Date('2026-06-30T23:59:59Z'),
+        billingDate: new Date('2026-06-30T00:00:00Z'),
+        dueDate: new Date('2026-07-05T00:00:00Z'),
+        status: 'draft',
+      },
+    });
+
+    const cycle2_150 = await prisma.billingCycle.create({
+      data: {
+        dormitoryId: dorm150Id,
+        cycleCode: '2026-07',
+        name: 'กรกฎาคม 2026',
+        periodStart: new Date('2026-07-01T00:00:00Z'),
+        periodEnd: new Date('2026-07-31T23:59:59Z'),
+        billingDate: new Date('2026-07-31T00:00:00Z'),
+        dueDate: new Date('2026-08-05T00:00:00Z'),
+        status: 'draft',
+      },
+    });
+
+    // 3. Create exactly 150 rooms
+    const roomRows = Array.from({ length: 150 }, (_, i) => {
+      const num = i + 1;
+      const roomNumber = `R-${String(num).padStart(3, '0')}`;
+      return {
+        dormitoryId: dorm150Id,
+        buildingId: bld150.id,
+        roomNumber,
+        normalizedRoomNumber: roomNumber,
+        roomType: 'standard',
+        floor: Math.floor(i / 20) + 1,
+        monthlyRent: toDecimal('4000.00'),
+        status: 'vacant',
+      };
+    });
+    await prisma.room.createMany({ data: roomRows });
+
+    const allRooms = await prisma.room.findMany({
+      where: { dormitoryId: dorm150Id },
+      orderBy: { roomNumber: 'asc' },
+    });
+    expect(allRooms).toHaveLength(150);
+
+    const r1 = allRooms[0];     // index 0: R-001
+    const r50 = allRooms[49];   // index 49: R-050
+    const r51 = allRooms[50];   // index 50: R-051 (crucial boundary beyond default pageSize=50)
+    const r100 = allRooms[99];  // index 99: R-100
+    const r150 = allRooms[149]; // index 149: R-150
+
+    // 4. Pre-seed representative readings and snapshots for cycle 1 using saveBulkMeterWorkspace
+    await meterService.saveBulkMeterWorkspace(
+      dorm150Id,
+      {
+        billingCycleId: cycle1_150.id,
+        rows: [
+          { roomId: r1.id, waterCurr: '101.00', elecCurr: '201.00', peopleCount: 1 },
+          { roomId: r50.id, waterCurr: '150.00', elecCurr: '250.00', peopleCount: 2 },
+          { roomId: r51.id, waterCurr: '351.00', elecCurr: '451.00', peopleCount: 3 },
+          { roomId: r100.id, waterCurr: '500.00', elecCurr: '600.00', peopleCount: 1 },
+          { roomId: r150.id, waterCurr: '750.00', elecCurr: '850.00', peopleCount: 2 },
+        ],
+      },
+      'user-owner-1'
+    );
+
+    // For room 150 in cycle 2: active tenant + 2 co-occupants (household = 3)
+    const tenant150 = await prisma.tenant.create({
+      data: {
+        dormitoryId: dorm150Id,
+        tenantNumber: `T-150-${Date.now()}`,
+        firstName: 'ScaleTenant',
+        displayName: 'ScaleTenant 150',
+        status: 'active',
+      },
+    });
+    await prisma.tenantCoOccupant.createMany({
+      data: [
+        { dormitoryId: dorm150Id, tenantId: tenant150.id, name: 'Co 1', status: 'active' },
+        { dormitoryId: dorm150Id, tenantId: tenant150.id, name: 'Co 2', status: 'active' },
+      ],
+    });
+    await prisma.contract.create({
+      data: {
+        dormitoryId: dorm150Id,
+        roomId: r150.id,
+        tenantId: tenant150.id,
+        contractNumber: `CTR-150-${Date.now()}`,
+        status: 'active',
+        startDate: cycle2_150.periodStart,
+        endDate: cycle2_150.periodEnd,
+        rentAmount: toDecimal('4000.00'),
+      },
+    });
+
+    try {
+      // 5. Execute Service Call: pullPreviousWorkspaceData
+      const pullResult = await meterService.pullPreviousWorkspaceData(dorm150Id, cycle2_150.id);
+
+      // Verify overall scale: exactly 150 rooms returned
+      expect(pullResult.hasPreviousCycle).toBe(true);
+      expect(pullResult.previousCycleId).toBe(cycle1_150.id);
+      expect(pullResult.rooms).toHaveLength(150);
+
+      // Verify Room 1 (R-001)
+      const pullR1 = pullResult.rooms.find((r) => r.roomId === r1.id);
+      expect(pullR1).toBeDefined();
+      expect(pullR1?.previousWaterCurrentReading).toBe('101.00');
+      expect(pullR1?.previousElectricityCurrentReading).toBe('201.00');
+      expect(pullR1?.previousCyclePeopleCount).toBe(1);
+      expect(pullR1?.currentHouseholdPeopleCount).toBe(0);
+
+      // Verify Room 50 (R-050)
+      const pullR50 = pullResult.rooms.find((r) => r.roomId === r50.id);
+      expect(pullR50).toBeDefined();
+      expect(pullR50?.previousWaterCurrentReading).toBe('150.00');
+      expect(pullR50?.previousElectricityCurrentReading).toBe('250.00');
+      expect(pullR50?.previousCyclePeopleCount).toBe(2);
+
+      // Verify Room 51 (R-051) — boundary beyond default pageSize=50
+      const pullR51 = pullResult.rooms.find((r) => r.roomId === r51.id);
+      expect(pullR51).toBeDefined();
+      expect(pullR51?.previousWaterCurrentReading).toBe('351.00');
+      expect(pullR51?.previousElectricityCurrentReading).toBe('451.00');
+      expect(pullR51?.previousCyclePeopleCount).toBe(3);
+
+      // Verify Room 100 (R-100)
+      const pullR100 = pullResult.rooms.find((r) => r.roomId === r100.id);
+      expect(pullR100).toBeDefined();
+      expect(pullR100?.previousWaterCurrentReading).toBe('500.00');
+      expect(pullR100?.previousElectricityCurrentReading).toBe('600.00');
+      expect(pullR100?.previousCyclePeopleCount).toBe(1);
+
+      // Verify Room 150 (R-150) — ceiling room
+      const pullR150 = pullResult.rooms.find((r) => r.roomId === r150.id);
+      expect(pullR150).toBeDefined();
+      expect(pullR150?.previousWaterCurrentReading).toBe('750.00');
+      expect(pullR150?.previousElectricityCurrentReading).toBe('850.00');
+      expect(pullR150?.previousCyclePeopleCount).toBe(2);
+      expect(pullR150?.currentHouseholdPeopleCount).toBe(3); // 1 active tenant + 2 co-occupants
+
+      // 6. Execute Real HTTP Route Proof
+      const httpRes = await request(testApp)
+        .get(`/api/v1/meters/workspace/pull-previous?billingCycleId=${cycle2_150.id}`)
+        .set('x-dormitory-id', dorm150Id)
+        .set('x-csrf-token', 'csrf-test-token');
+
+      expect(httpRes.status).toBe(200);
+      expect(httpRes.body.success).toBe(true);
+      expect(httpRes.body.data.rooms).toHaveLength(150);
+
+      const httpR150 = httpRes.body.data.rooms.find((r: any) => r.roomId === r150.id);
+      expect(httpR150).toMatchObject({
+        roomId: r150.id,
+        previousWaterCurrentReading: '750.00',
+        previousElectricityCurrentReading: '850.00',
+        previousCyclePeopleCount: 2,
+        currentHouseholdPeopleCount: 3,
+      });
+    } finally {
+      // 7. Clean up disposable scale fixture
+      await prisma.contract.deleteMany({ where: { dormitoryId: dorm150Id } });
+      await prisma.tenantCoOccupant.deleteMany({ where: { dormitoryId: dorm150Id } });
+      await prisma.tenant.deleteMany({ where: { dormitoryId: dorm150Id } });
+      await prisma.roomBillingCycleSnapshot.deleteMany({ where: { dormitoryId: dorm150Id } });
+      await prisma.meterReading.deleteMany({ where: { dormitoryId: dorm150Id } });
+      await prisma.room.deleteMany({ where: { dormitoryId: dorm150Id } });
+      await prisma.billingCycle.deleteMany({ where: { dormitoryId: dorm150Id } });
+      await prisma.building.deleteMany({ where: { dormitoryId: dorm150Id } });
+      await prisma.dormitoryBillingSettings.deleteMany({ where: { dormitoryId: dorm150Id } });
+      await prisma.dormitory.deleteMany({ where: { id: dorm150Id } });
+    }
   });
 });

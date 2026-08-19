@@ -113,6 +113,36 @@ describe('LOCAL-07 Batch 01 — Browser/HTTP Boundary & Pull Previous Suite', ()
       ).toThrow();
     });
 
+    it('rejects non-integer or negative peopleCount and expectedVersion', () => {
+      expect(() =>
+        serializeMeterWorkspaceDirtyRow({
+          roomId: 'room-104',
+          peopleCount: 1.5,
+        })
+      ).toThrow();
+
+      expect(() =>
+        serializeMeterWorkspaceDirtyRow({
+          roomId: 'room-104',
+          peopleCount: -1,
+        })
+      ).toThrow();
+
+      expect(() =>
+        serializeMeterWorkspaceDirtyRow({
+          roomId: 'room-104',
+          expectedVersion: 2.3,
+        })
+      ).toThrow();
+
+      expect(() =>
+        serializeMeterWorkspaceDirtyRow({
+          roomId: 'room-104',
+          expectedVersion: -1,
+        })
+      ).toThrow();
+    });
+
     it('serializeMeterWorkspaceDirtyRows converts multiple rows properly', () => {
       const rows = [
         { roomId: 'r1', waterCurr: 10 },

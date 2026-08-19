@@ -104,10 +104,10 @@ export function serializeMeterWorkspaceDirtyRow(
 
   if (row.peopleCount !== undefined && row.peopleCount !== null) {
     const num = Number(row.peopleCount);
-    if (isNaN(num) || num < 0) {
+    if (isNaN(num) || !Number.isInteger(num) || num < 0) {
       throw new Error('จำนวนผู้พักอาศัยต้องเป็นตัวเลขจำนวนเต็มบวกหรือ 0');
     }
-    result.peopleCount = Math.floor(num);
+    result.peopleCount = num;
   }
 
   const manualAmount =
@@ -146,7 +146,11 @@ export function serializeMeterWorkspaceDirtyRow(
   }
 
   if (row.expectedVersion !== undefined && row.expectedVersion !== null) {
-    result.expectedVersion = Math.floor(Number(row.expectedVersion));
+    const num = Number(row.expectedVersion);
+    if (isNaN(num) || !Number.isInteger(num) || num < 0) {
+      throw new Error('expectedVersion ต้องเป็นตัวเลขจำนวนเต็มบวกหรือ 0');
+    }
+    result.expectedVersion = num;
   }
 
   return result;

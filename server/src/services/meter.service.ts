@@ -11,6 +11,7 @@ import { IRoomRepository, PrismaRoomRepository } from '../db/repositories/room.r
 import { IBillRepository, PrismaBillRepository } from '../db/repositories/bill.repository.js';
 import { AuditService } from './audit.service.js';
 import { billingOrchestrationService } from './billing-orchestration.service.js';
+import { ENTITLEMENT_ROOM_LIMITS } from './entitlement.service.js';
 import { getPrismaClient } from '../db/prisma.js';
 import { toDecimal, formatDecimal, compareDecimals } from '../utils/decimal-math.util.js';
 
@@ -941,8 +942,10 @@ export class MeterService {
       orderBy: { periodStart: 'desc' },
     });
 
-    // 2. Fetch all rooms for this dormitory
-    const roomsResult = await this.roomRepo.findAll(dormitoryId);
+    // 2. Fetch all rooms for this dormitory (bounded by canonical ceiling)
+    const roomsResult = await this.roomRepo.findAll(dormitoryId, {
+      pageSize: ENTITLEMENT_ROOM_LIMITS.PAID,
+    });
     const rooms = roomsResult.items || [];
 
     // 3. Load authoritative previous cycle meter readings (if previous cycle exists)
