@@ -25,7 +25,7 @@ if (process.env.NODE_ENV === 'production') {
 
 import { chromium } from 'playwright';
 import { assertSafeDatabaseTarget } from './db-safety-guard.mjs';
-import { createAllSessions } from './login-helper.mjs';
+import { createAllSessions, createGoldenOwnerSession } from './login-helper.mjs';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -36,6 +36,8 @@ const ROOT_DIR = path.resolve(__dirname, '../..');
 const SESSIONS_DIR = path.join(ROOT_DIR, '.local07-sessions');
 
 const PERSONA_MAP = {
+  'golden-owner': { file: 'golden-owner.json', url: 'http://127.0.0.1:5173/owner/dashboard', name: 'Golden Owner (หอพัก Golden Manor 24 ห้อง)' },
+  'golden': { file: 'golden-owner.json', url: 'http://127.0.0.1:5173/owner/dashboard', name: 'Golden Owner (หอพัก Golden Manor 24 ห้อง)' },
   'registration-owner': { file: 'registration-owner.json', url: 'http://127.0.0.1:5173/owner/register', name: 'Registration Owner (กรอก Onboarding UI ด้วยตนเอง)' },
   'register': { file: 'registration-owner.json', url: 'http://127.0.0.1:5173/owner/register', name: 'Registration Owner (กรอก Onboarding UI ด้วยตนเอง)' },
   'fresh-owner': { file: 'fresh-owner.json', url: 'http://127.0.0.1:5173/owner/dashboard', name: 'Fresh Owner (เพิ่งเสร็จสิ้น Onboarding - Service Oracle)' },
@@ -61,13 +63,14 @@ async function main() {
   if (!persona) {
     console.error(`\n❌ Unknown persona "${rawArg}"!`);
     console.log('Available personas:');
+    console.log('  - golden-owner       (alias: golden)');
     console.log('  - registration-owner (alias: register)');
     console.log('  - fresh-owner        (alias: fresh)');
     console.log('  - comp-owner         (aliases: comp, owner)');
     console.log('  - tenant-somchai     (aliases: tenant, somchai)');
     console.log('  - manager');
     console.log('  - tech\n');
-    console.log('Example: npm run uat:open -- registration-owner\n');
+    console.log('Example: npm run uat:open -- golden-owner\n');
     process.exit(1);
   }
 
@@ -81,8 +84,12 @@ async function main() {
 
   // 3. Ensure Session Exists
   if (!fs.existsSync(sessionFile)) {
-    console.log(`⚠️ Session state ${persona.file} not found. Generating sessions now...`);
-    await createAllSessions();
+    console.log(`⚠️ Session state ${persona.file} not found. Generating session now...`);
+    if (rawArg === 'golden-owner' || rawArg === 'golden') {
+      await createGoldenOwnerSession();
+    } else {
+      await createAllSessions();
+    }
   }
 
   if (!fs.existsSync(sessionFile)) {

@@ -23,7 +23,7 @@ if (process.env.NODE_ENV === 'production') {
 }
 
 import { assertSafeDatabaseTarget } from './db-safety-guard.mjs';
-import { FRESH_DORM, COMP_DORM, REGISTRATION_OWNER } from './constants.mjs';
+import { FRESH_DORM, COMP_DORM, REGISTRATION_OWNER, GOLDEN_DORM } from './constants.mjs';
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
@@ -229,8 +229,102 @@ export async function createAllSessions() {
   fs.writeFileSync(manifestPath, JSON.stringify(sessionManifest, null, 2), 'utf8');
 
   console.log(`✅ All 5 sessions generated and saved in .local07-sessions/manifest.json\n`);
-  await prisma.$disconnect();
   return sessionManifest;
+}
+
+export async function createGoldenOwnerSession() {
+  if (!fs.existsSync(SESSIONS_DIR)) {
+    fs.mkdirSync(SESSIONS_DIR, { recursive: true });
+  }
+
+  const member = await prisma.dormitoryMember.findFirst({
+    where: { userId: GOLDEN_DORM.owner.id, status: 'active' },
+  });
+  const effectiveDormId = member?.dormitoryId || GOLDEN_DORM.id;
+
+  const sessionId = crypto.randomUUID();
+  const sessionIdHash = SessionTokenService.hashSessionId(sessionId);
+  const expiresAt = new Date(Date.now() + 86400 * 1000);
+
+  // Save session in DB
+  await prisma.session.create({
+    data: {
+      id: sessionId,
+      userId: GOLDEN_DORM.owner.id,
+      sessionIdHash,
+      tokenVersion: 1,
+      status: 'active',
+      expiresAt,
+      ipMetadata: '127.0.0.1',
+    },
+  });
+
+  const sessionToken = sessionTokenService.encryptToken({
+    sub: GOLDEN_DORM.owner.id,
+    sid: sessionId,
+    type: 'session',
+    version: 1,
+    dormitoryId: effectiveDormId,
+    role: 'OWNER',
+  }, 86400);
+
+  const csrfToken = csrfService.generateCsrfToken(sessionId);
+
+  const storageState = {
+    cookies: [
+      {
+        name: 'horplus_session',
+        value: sessionToken,
+        domain: '127.0.0.1',
+        path: '/',
+        httpOnly: true,
+        secure: false,
+        sameSite: 'Lax',
+      },
+      {
+        name: 'horplus_csrf',
+        value: csrfToken,
+        domain: '127.0.0.1',
+        path: '/',
+        httpOnly: false,
+        secure: false,
+        sameSite: 'Lax',
+      },
+      {
+        name: 'horplus_session',
+        value: sessionToken,
+        domain: 'localhost',
+        path: '/',
+        httpOnly: true,
+        secure: false,
+        sameSite: 'Lax',
+      },
+      {
+        name: 'horplus_csrf',
+        value: csrfToken,
+        domain: 'localhost',
+        path: '/',
+        httpOnly: false,
+        secure: false,
+        sameSite: 'Lax',
+      },
+    ],
+    origins: [
+      {
+        origin: 'http://127.0.0.1:5173',
+        localStorage: [{ name: 'selected_dormitory_id', value: effectiveDormId }],
+      },
+      {
+        origin: 'http://localhost:5173',
+        localStorage: [{ name: 'selected_dormitory_id', value: effectiveDormId }],
+      },
+    ],
+  };
+
+  const filePath = path.join(SESSIONS_DIR, 'golden-owner.json');
+  fs.writeFileSync(filePath, JSON.stringify(storageState, null, 2), 'utf8');
+  console.log(`✅ Golden Owner session generated and saved in .local07-sessions/golden-owner.json`);
+  return { sessionToken, csrfToken, storageState, filePath };
 }
 
 if (process.argv[1] === new URL(import.meta.url).pathname || process.argv[1]?.endsWith('login-helper.mjs')) {

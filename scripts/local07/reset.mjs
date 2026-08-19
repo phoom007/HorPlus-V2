@@ -14,7 +14,7 @@ import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 const { PrismaClient } = require('../../server/node_modules/@prisma/client/index.js');
 import { assertSafeDatabaseTarget } from './db-safety-guard.mjs';
-import { FRESH_DORM, COMP_DORM, REGISTRATION_OWNER } from './constants.mjs';
+import { FRESH_DORM, COMP_DORM, REGISTRATION_OWNER, GOLDEN_DORM } from './constants.mjs';
 
 const targetInfo = assertSafeDatabaseTarget();
 
@@ -39,9 +39,13 @@ export async function resetLocal07Data() {
     COMP_DORM.tenantSomchai.id,
   ];
 
-  // 1. Discover all UAT dormitories
+  // 1. Discover all UAT dormitories (strictly excluding persistent GOLDEN_DORM)
   const existingDorms = await prisma.dormitory.findMany({
     where: {
+      AND: [
+        { id: { not: GOLDEN_DORM.id } },
+        { NOT: { name: { contains: 'Golden' } } },
+      ],
       OR: [
         { id: { in: targetDormIds } },
         { name: { startsWith: 'หอพัก HorPlus UAT' } },
@@ -52,11 +56,17 @@ export async function resetLocal07Data() {
     select: { id: true, name: true },
   });
 
-  const allDormIds = Array.from(new Set([...targetDormIds, ...existingDorms.map((d) => d.id)]));
+  const allDormIds = Array.from(new Set([...targetDormIds, ...existingDorms.map((d) => d.id)])).filter(id => id !== GOLDEN_DORM.id);
 
-  // 2. Discover all UAT users
+  // 2. Discover all UAT users (strictly excluding persistent GOLDEN_OWNER and golden accounts)
   const existingUsers = await prisma.user.findMany({
     where: {
+      AND: [
+        { id: { not: GOLDEN_DORM.owner.id } },
+        { NOT: { email: { endsWith: '@horplus-golden.local' } } },
+        { NOT: { emailNormalized: { endsWith: '@horplus-golden.local' } } },
+        { NOT: { googleSubject: { startsWith: 'mock_golden_' } } },
+      ],
       OR: [
         { id: { in: targetUserIds } },
         { email: { endsWith: '@horplus-uat.local' } },
@@ -69,7 +79,7 @@ export async function resetLocal07Data() {
     select: { id: true, email: true },
   });
 
-  const allUserIds = Array.from(new Set([...targetUserIds, ...existingUsers.map((u) => u.id)]));
+  const allUserIds = Array.from(new Set([...targetUserIds, ...existingUsers.map((u) => u.id)])).filter(id => id !== GOLDEN_DORM.owner.id);
 
   console.log(`[LOCAL-07 RESET] Found ${allDormIds.length} UAT dormitories and ${allUserIds.length} UAT users to clean.`);
 

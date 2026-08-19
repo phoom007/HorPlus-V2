@@ -30,7 +30,10 @@
     "uat:open:owner": "tsx scripts/local07/open-browser.mjs comp-owner",
     "uat:open:tenant": "tsx scripts/local07/open-browser.mjs tenant-somchai",
     "uat:open:manager": "tsx scripts/local07/open-browser.mjs manager",
-    "uat:open:tech": "tsx scripts/local07/open-browser.mjs tech"
+    "uat:open:tech": "tsx scripts/local07/open-browser.mjs tech",
+    "uat:golden:ensure": "tsx scripts/local07/golden-ensure.mjs",
+    "uat:golden:verify": "tsx scripts/local07/golden-verify.mjs",
+    "uat:open:golden-owner": "tsx scripts/local07/open-browser.mjs golden-owner"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

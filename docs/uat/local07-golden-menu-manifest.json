@@ -1,0 +1,267 @@
+{
+  "metadata": {
+    "title": "HorPlus Persistent Golden Menu UAT Manifest",
+    "createdAt": "2026-08-19",
+    "purpose": "Stable 24-room reference dormitory for Product Owner iterative Owner/Tenant menu UAT",
+    "protection": "Persistent across normal uat:refresh; immune from deletion"
+  },
+  "dormitory": {
+    "id": "30000001-0000-4000-8000-000000000001",
+    "name": "หอพัก HorPlus Golden Manor",
+    "address": "888/99 ถนนรัชดาภิเษก ซอย 19, จอมพล, จตุจักร, กรุงเทพมหานคร 10900",
+    "phone": "0891112233",
+    "email": "contact.golden@horplus-golden.local",
+    "owner": {
+      "id": "30000002-0000-4000-8000-000000000001",
+      "name": "เจ้าของหอพัก Golden Owner",
+      "email": "owner.golden@horplus-golden.local",
+      "phone": "0891112233"
+    },
+    "subscription": {
+      "tier": "PRO",
+      "planCode": "PAID",
+      "status": "ACTIVE",
+      "effectiveLimit": 150
+    },
+    "integrations": {
+      "lineOA": "not_configured",
+      "slipOK": "not_configured"
+    }
+  },
+  "buildings": [
+    {
+      "id": "30000003-0000-4000-8000-000000000001",
+      "name": "อาคาร A",
+      "code": "A",
+      "floorCount": 4,
+      "roomsPerFloor": 3,
+      "roomCount": 12,
+      "rooms": [
+        "A101",
+        "A102",
+        "A103",
+        "A201",
+        "A202",
+        "A203",
+        "A301",
+        "A302",
+        "A303",
+        "A401",
+        "A402",
+        "A403"
+      ]
+    },
+    {
+      "id": "30000003-0000-4000-8000-000000000002",
+      "name": "อาคาร B",
+      "code": "B",
+      "floorCount": 4,
+      "roomsPerFloor": 3,
+      "roomCount": 12,
+      "rooms": [
+        "B101",
+        "B102",
+        "B103",
+        "B201",
+        "B202",
+        "B203",
+        "B301",
+        "B302",
+        "B303",
+        "B401",
+        "B402",
+        "B403"
+      ]
+    }
+  ],
+  "roomSummary": {
+    "totalRooms": 24,
+    "occupied": 16,
+    "vacant": 6,
+    "reserved": 1,
+    "maintenance": 1
+  },
+  "scenarioMapping": [
+    {
+      "room": "A101",
+      "building": "A",
+      "status": "occupied",
+      "tenant": "นายกิตติศักดิ์ มั่งมี",
+      "billing": "SENT (unpaid)",
+      "meters": "recorded"
+    },
+    {
+      "room": "A102",
+      "building": "A",
+      "status": "occupied",
+      "tenant": "นางสาวมณีวรรณ สดใส",
+      "billing": "PAID (receipt issued)",
+      "meters": "recorded"
+    },
+    {
+      "room": "A103",
+      "building": "A",
+      "status": "occupied",
+      "tenant": "นายสมศักดิ์ รักสงบ",
+      "coOccupants": [
+        "นายสมชาย รักสงบ"
+      ],
+      "billing": "PAID",
+      "meters": "recorded"
+    },
+    {
+      "room": "A201",
+      "building": "A",
+      "status": "occupied",
+      "tenant": "นายธนพล รุ่งเรือง",
+      "billing": "OVERDUE (unpaid)",
+      "meters": "recorded"
+    },
+    {
+      "room": "A202",
+      "building": "A",
+      "status": "occupied",
+      "tenant": "นางสาวปิยะดา สวยงาม",
+      "billing": "PAID",
+      "meters": "recorded"
+    },
+    {
+      "room": "A203",
+      "building": "A",
+      "status": "occupied",
+      "tenant": "นายวรวิทย์ สิทธิโชค",
+      "renewal": "PENDING_OWNER_APPROVAL",
+      "billing": "PAID",
+      "meters": "recorded"
+    },
+    {
+      "room": "A301",
+      "building": "A",
+      "status": "occupied",
+      "tenant": "นางสาวนภาพร เพ็ญแข",
+      "moveOut": "pending_move_out",
+      "billing": "PAID",
+      "meters": "recorded"
+    },
+    {
+      "room": "A302",
+      "building": "A",
+      "status": "occupied",
+      "tenant": "นายชวลิต เด่นดวง",
+      "billing": "PAID",
+      "meters": "recorded"
+    },
+    {
+      "room": "A303",
+      "building": "A",
+      "status": "reserved",
+      "scenario": "จองห้องพักล่วงหน้า (นายอานนท์ ใจบุญ)"
+    },
+    {
+      "room": "A401",
+      "building": "A",
+      "status": "vacant",
+      "applicant": "pending registration request (นายอนิรุธ สมานฉันท์)"
+    },
+    {
+      "room": "A402",
+      "building": "A",
+      "status": "vacant",
+      "scenario": "พร้อมให้เช่า"
+    },
+    {
+      "room": "A403",
+      "building": "A",
+      "status": "maintenance",
+      "scenario": "ห้องพักอยู่ระหว่างทาสีและปรับปรุง"
+    },
+    {
+      "room": "B101",
+      "building": "B",
+      "status": "occupied",
+      "tenant": "นายธีรเดช เก่งกล้า",
+      "billing": "PAID",
+      "meters": "recorded"
+    },
+    {
+      "room": "B102",
+      "building": "B",
+      "status": "occupied",
+      "tenant": "นางสาววรรณภา แสนสุข",
+      "billing": "SENT (unpaid)",
+      "meters": "recorded"
+    },
+    {
+      "room": "B103",
+      "building": "B",
+      "status": "occupied",
+      "tenant": "นายศิริชัย เลิศล้ำ",
+      "billing": "PAID",
+      "meters": "recorded"
+    },
+    {
+      "room": "B201",
+      "building": "B",
+      "status": "occupied",
+      "tenant": "นางสาวสิริกร มงคล",
+      "billing": "PAID",
+      "meters": "recorded"
+    },
+    {
+      "room": "B202",
+      "building": "B",
+      "status": "occupied",
+      "tenant": "นายอัครพล ยิ่งเจริญ",
+      "billing": "PAID",
+      "meters": "recorded"
+    },
+    {
+      "room": "B203",
+      "building": "B",
+      "status": "occupied",
+      "tenant": "นางสาวจันทิมา แสงจันทร์",
+      "billing": "SENT (unpaid)",
+      "meters": "recorded"
+    },
+    {
+      "room": "B301",
+      "building": "B",
+      "status": "occupied",
+      "tenant": "นายพงศธร เด่นงาม",
+      "billing": "PAID",
+      "meters": "recorded"
+    },
+    {
+      "room": "B302",
+      "building": "B",
+      "status": "occupied",
+      "tenant": "นางสาวลลิตา มีสุข",
+      "billing": "PAID",
+      "meters": "recorded"
+    },
+    {
+      "room": "B303",
+      "building": "B",
+      "status": "vacant",
+      "scenario": "พร้อมให้เช่า"
+    },
+    {
+      "room": "B401",
+      "building": "B",
+      "status": "vacant",
+      "scenario": "พร้อมให้เช่า"
+    },
+    {
+      "room": "B402",
+      "building": "B",
+      "status": "vacant",
+      "scenario": "พร้อมให้เช่า"
+    },
+    {
+      "room": "B403",
+      "building": "B",
+      "status": "vacant",
+      "scenario": "พร้อมให้เช่า"
+    }
+  ]
+}
