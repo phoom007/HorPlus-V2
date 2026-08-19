@@ -2386,6 +2386,20 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
       },
     });
 
+    const roomSoftDeleted = await prisma.room.create({
+      data: {
+        dormitoryId: dormAId,
+        buildingId: bldA.id,
+        roomNumber: 'A-DELETED',
+        normalizedRoomNumber: 'A-DELETED',
+        roomType: 'standard',
+        floor: 1,
+        monthlyRent: toDecimal('4000.00'),
+        status: 'vacant',
+        deletedAt: new Date(),
+      },
+    });
+
     const nonExistentRoomId = crypto.randomUUID();
 
     // Set up active tenant + contract in Dorm A for roomA
@@ -2571,11 +2585,85 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
         code: 'ROOM_NOT_FOUND',
       });
 
-      // Assert 0 mutations in DB for nonExistentRoomId or roomArchived
+      // 8. Soft-Deleted Room (deletedAt != null, status != archived) Fail-Closed Proof:
+      // (a) Single bill generation on soft-deleted room -> 404 ROOM_NOT_FOUND
+      await expect(
+        billingService.generateBill(
+          dormAId,
+          { billingCycleId: cycleA.id, roomId: roomSoftDeleted.id },
+          'user-owner-1'
+        )
+      ).rejects.toMatchObject({
+        statusCode: 404,
+        code: 'ROOM_NOT_FOUND',
+      });
+
+      // (b) Single switch on soft-deleted room -> 404 ROOM_NOT_FOUND
+      await expect(
+        meterService.toggleRoomBillSwitch(
+          dormAId,
+          {
+            billingCycleId: cycleA.id,
+            roomId: roomSoftDeleted.id,
+            action: 'issue',
+            dirtyRow: { roomId: roomSoftDeleted.id, waterCurr: '100.00', elecCurr: '200.00' },
+          },
+          'user-owner-1',
+          billingService
+        )
+      ).rejects.toMatchObject({
+        statusCode: 404,
+        code: 'ROOM_NOT_FOUND',
+      });
+
+      // (c) Workspace bulk save on soft-deleted room -> 404 ROOM_NOT_FOUND
+      await expect(
+        meterService.saveBulkMeterWorkspace(
+          dormAId,
+          {
+            billingCycleId: cycleA.id,
+            rows: [{ roomId: roomSoftDeleted.id, waterCurr: '100.00', elecCurr: '200.00' }],
+          },
+          'user-owner-1'
+        )
+      ).rejects.toMatchObject({
+        statusCode: 404,
+        code: 'ROOM_NOT_FOUND',
+      });
+
+      // (d) Real HTTP route POST /api/v1/meters/workspace/bulk with soft-deleted room -> 404 ROOM_NOT_FOUND
+      const httpBulkSoftDelRes = await request(testApp)
+        .post('/api/v1/meters/workspace/bulk')
+        .set('x-dormitory-id', dormAId)
+        .set('x-csrf-token', 'csrf-test-token')
+        .send({
+          billingCycleId: cycleA.id,
+          rows: [{ roomId: roomSoftDeleted.id, waterCurr: '100.00', elecCurr: '200.00' }],
+        });
+      expect(httpBulkSoftDelRes.status).toBe(404);
+      expect(httpBulkSoftDelRes.body.error.code).toBe('ROOM_NOT_FOUND');
+
+      // (e) Explicit bulkGenerateBills with soft-deleted room -> excluded with ROOM_NOT_FOUND
+      const bulkSoftDelRes = await billingService.bulkGenerateBills(
+        dormAId,
+        cycleA.id,
+        [roomA.id, roomSoftDeleted.id],
+        'user-owner-1',
+        [{ roomId: roomA.id, waterCurr: '100.00', elecCurr: '200.00' }]
+      );
+      const excludedSoftDel = bulkSoftDelRes.excluded.find(e => e.roomId === roomSoftDeleted.id);
+      expect(excludedSoftDel).toBeDefined();
+      expect(excludedSoftDel?.reason).toBe('ROOM_NOT_FOUND');
+
+      // Assert 0 mutations in DB for nonExistentRoomId, roomArchived, or roomSoftDeleted
       const readingsArchived = await prisma.meterReading.findMany({ where: { roomId: roomArchived.id } });
       expect(readingsArchived).toHaveLength(0);
       const billsArchived = await prisma.bill.findMany({ where: { roomId: roomArchived.id } });
       expect(billsArchived).toHaveLength(0);
+      const readingsSoftDel = await prisma.meterReading.findMany({ where: { roomId: roomSoftDeleted.id } });
+      expect(readingsSoftDel).toHaveLength(0);
+      const billsSoftDel = await prisma.bill.findMany({ where: { roomId: roomSoftDeleted.id } });
+      expect(billsSoftDel).toHaveLength(0);
     } finally {
       // Cleanup Dorm A and Dorm B
       await prisma.billItem.deleteMany({ where: { bill: { dormitoryId: { in: [dormAId, dormBId] } } } });
@@ -2590,6 +2678,139 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
       await prisma.building.deleteMany({ where: { dormitoryId: { in: [dormAId, dormBId] } } });
       await prisma.dormitoryBillingSettings.deleteMany({ where: { dormitoryId: { in: [dormAId, dormBId] } } });
       await prisma.dormitory.deleteMany({ where: { id: { in: [dormAId, dormBId] } } });
+    }
+  });
+
+  it('25. Soft-Deleted Room Entitlement Ordering Regression: soft-deleted rooms do not consume FREE operational slots', async () => {
+    const freeDormId = crypto.randomUUID();
+    const suffixFree = crypto.randomBytes(4).toString('hex');
+    await prisma.dormitory.create({
+      data: {
+        id: freeDormId,
+        name: `Soft Delete Ordering Dorm ${suffixFree}`,
+        code: `SD-${suffixFree.toUpperCase()}`,
+        billingSettings: {
+          create: {
+            waterBillingType: 'per_unit',
+            waterRate: toDecimal('18.00'),
+            electricityBillingType: 'per_unit',
+            electricityRate: toDecimal('8.00'),
+            commonFee: toDecimal('200.00'),
+            billingDay: 1,
+            dueDay: 5,
+          },
+        },
+      },
+    });
+
+    const bldFree = await prisma.building.create({
+      data: {
+        dormitoryId: freeDormId,
+        name: 'Building SD',
+      },
+    });
+
+    const cycleFree = await prisma.billingCycle.create({
+      data: {
+        dormitoryId: freeDormId,
+        cycleCode: '2026-08',
+        name: 'สิงหาคม 2026',
+        periodStart: new Date('2026-08-01T00:00:00Z'),
+        periodEnd: new Date('2026-08-31T23:59:59Z'),
+        billingDate: new Date('2026-08-31T00:00:00Z'),
+        dueDate: new Date('2026-09-05T00:00:00Z'),
+        status: 'draft',
+        rateSnapshot: {
+          create: {
+            dormitoryId: freeDormId,
+            waterBillingType: 'per_unit',
+            waterRate: toDecimal('18.00'),
+            electricityBillingType: 'per_unit',
+            electricityRate: toDecimal('8.00'),
+            commonFee: toDecimal('200.00'),
+            commonFeeMode: 'per_room',
+            internetFee: toDecimal('0.00'),
+            internetFeeMode: 'flat',
+            parkingFee: toDecimal('0.00'),
+            parkingFeeMode: 'flat',
+            lateFeeType: 'flat',
+            lateFeeValue: toDecimal('0.00'),
+            source: 'TEMPLATE_DEFAULT',
+          },
+        },
+      },
+    });
+
+    // 1. Create an older soft-deleted room created first (earlier timestamp)
+    const baseTime = Date.now() - 100000;
+    const deletedRoom = await prisma.room.create({
+      data: {
+        dormitoryId: freeDormId,
+        buildingId: bldFree.id,
+        roomNumber: 'SD-00',
+        normalizedRoomNumber: 'SD-00',
+        roomType: 'standard',
+        floor: 1,
+        monthlyRent: toDecimal('3000.00'),
+        status: 'vacant',
+        createdAt: new Date(baseTime),
+        deletedAt: new Date(baseTime + 1000),
+      },
+    });
+
+    // 2. Create 10 active live rooms
+    const liveRooms = [];
+    for (let i = 1; i <= 10; i++) {
+      const roomNum = `SD-${String(i).padStart(2, '0')}`;
+      const r = await prisma.room.create({
+        data: {
+          dormitoryId: freeDormId,
+          buildingId: bldFree.id,
+          roomNumber: roomNum,
+          normalizedRoomNumber: roomNum,
+          roomType: 'standard',
+          floor: 1,
+          monthlyRent: toDecimal('3500.00'),
+          status: 'vacant',
+          createdAt: new Date(baseTime + 2000 + i * 1000),
+          deletedAt: null,
+        },
+      });
+      liveRooms.push(r);
+    }
+
+    try {
+      const entService = new SubscriptionEntitlementService();
+
+      // Assert: Deleted room throws 404 ROOM_NOT_FOUND
+      await expect(
+        entService.assertRoomOperationalEntitlement(freeDormId, deletedRoom.id)
+      ).rejects.toMatchObject({
+        statusCode: 404,
+        code: 'ROOM_NOT_FOUND',
+      });
+
+      // Assert: All 10 live rooms remain fully operational (none locked)
+      for (const liveRoom of liveRooms) {
+        await expect(
+          entService.assertRoomOperationalEntitlement(freeDormId, liveRoom.id)
+        ).resolves.not.toThrow();
+      }
+
+      // Assert: The 10th live room (Room 10, which is the 11th room record in DB) is allowed
+      const room10 = liveRooms[9];
+      const entitlementSet = await entService.resolveOperationalRoomEntitlementSet(freeDormId);
+      expect(entitlementSet.operationalRoomIds.has(room10.id)).toBe(true);
+      expect(entitlementSet.lockedRoomIds.has(room10.id)).toBe(false);
+      expect(entitlementSet.operationalRoomIds.size).toBe(10);
+      expect(entitlementSet.lockedRoomIds.size).toBe(0);
+    } finally {
+      // Cleanup
+      await prisma.room.deleteMany({ where: { dormitoryId: freeDormId } });
+      await prisma.billingCycle.deleteMany({ where: { dormitoryId: freeDormId } });
+      await prisma.building.deleteMany({ where: { dormitoryId: freeDormId } });
+      await prisma.dormitoryBillingSettings.deleteMany({ where: { dormitoryId: freeDormId } });
+      await prisma.dormitory.deleteMany({ where: { id: freeDormId } });
     }
   });
 });

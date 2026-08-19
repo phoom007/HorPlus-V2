@@ -191,6 +191,7 @@ export class SubscriptionEntitlementService {
       const roomCount = await db.room.count({
         where: {
           dormitoryId,
+          deletedAt: null,
           status: { not: 'archived' },
         },
       });
@@ -231,6 +232,7 @@ export class SubscriptionEntitlementService {
     const roomCount = await db.room.count({
       where: {
         dormitoryId,
+        deletedAt: null,
         status: { not: 'archived' },
       },
     });
@@ -446,6 +448,7 @@ export class SubscriptionEntitlementService {
     const eligibleRooms = await db.room.findMany({
       where: {
         dormitoryId,
+        deletedAt: null,
         status: { not: 'archived' },
       },
       orderBy: [
