@@ -1,9 +1,12 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useRef } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Bill, Room } from '../../types';
+import { queryKeys, STALE_TIMES } from '../../lib/queryClient';
+import { fetchAllPaginated } from '../../utils/fetch-paginated';
 import { formatBaht } from '../../components/GlobalComponents';
 import { CheckCircle, XCircle, FileText, Image as ImageIcon, RotateCcw, AlertCircle, Loader2 } from 'lucide-react';
 
-interface PaymentRecord {
+export interface PaymentRecord {
   id: string;
   dormitoryId: string;
   billId: string;
@@ -33,6 +36,32 @@ interface PaymentRecord {
   };
 }
 
+export async function fetchPayments(dormitoryId: string): Promise<PaymentRecord[]> {
+  const pRes = await fetch(`/api/v1/payments?dormitoryId=${dormitoryId}`, {
+    headers: { 'Accept': 'application/json', 'x-dormitory-id': dormitoryId },
+    credentials: 'include',
+  });
+  if (!pRes.ok) {
+    const errData = await pRes.json().catch(() => ({}));
+    throw new Error(errData.error || `ไม่สามารถโหลดข้อมูลการชำระเงินได้ (HTTP ${pRes.status})`);
+  }
+  const pData = await pRes.json();
+  return Array.isArray(pData) ? pData : (pData.data || []);
+}
+
+export async function fetchDailyInvoices(dormitoryId: string): Promise<any[]> {
+  const dRes = await fetch(`/api/v1/daily-stays/invoices?dormitoryId=${dormitoryId}`, {
+    headers: { 'Accept': 'application/json', 'x-dormitory-id': dormitoryId },
+    credentials: 'include',
+  });
+  if (!dRes.ok) {
+    const errData = await dRes.json().catch(() => ({}));
+    throw new Error(errData.error || `ไม่สามารถโหลดข้อมูลบิลรายวันได้ (HTTP ${dRes.status})`);
+  }
+  const dData = await dRes.json();
+  return Array.isArray(dData?.data) ? dData.data : (Array.isArray(dData) ? dData : []);
+}
+
 export function PaymentsOwnerView({
   bills: initialBills,
   rooms: _rooms,
@@ -44,17 +73,45 @@ export function PaymentsOwnerView({
   dormitoryId: string;
   onUpdateBills?: () => void;
 }) {
+  const queryClient = useQueryClient();
+  const dormHeader = dormitoryId ? { 'x-dormitory-id': dormitoryId } : undefined;
+
   const [activeTab, setActiveTab] = useState<'checking' | 'cash' | 'paid'>(() => {
     return (localStorage.getItem('payments_active_tab') as any) || 'checking';
   });
 
-  const [payments, setPayments] = useState<PaymentRecord[]>([]);
-  const [bills, setBills] = useState<Bill[]>(initialBills);
-  const [dailyInvoices, setDailyInvoices] = useState<any[]>([]);
-  const [loading, setLoading] = useState(false);
+  const paymentsQuery = useQuery({
+    queryKey: queryKeys.payments(dormitoryId),
+    queryFn: () => fetchPayments(dormitoryId),
+    enabled: Boolean(dormitoryId),
+    staleTime: STALE_TIMES.PAYMENTS,
+  });
+
+  const billsQuery = useQuery({
+    queryKey: queryKeys.bills(dormitoryId),
+    queryFn: () => fetchAllPaginated<Bill>('/api/v1/bills', { headers: dormHeader, credentials: 'include' }),
+    enabled: Boolean(dormitoryId),
+    staleTime: STALE_TIMES.BILLS,
+  });
+
+  const dailyInvoicesQuery = useQuery({
+    queryKey: queryKeys.dailyInvoices(dormitoryId),
+    queryFn: () => fetchDailyInvoices(dormitoryId),
+    enabled: Boolean(dormitoryId),
+    staleTime: STALE_TIMES.DAILY_INVOICES,
+  });
+
+  const payments: PaymentRecord[] = paymentsQuery.data || [];
+  const bills: Bill[] = billsQuery.data || initialBills || [];
+  const dailyInvoices: any[] = dailyInvoicesQuery.data || [];
+  const loading = (paymentsQuery.isLoading && !paymentsQuery.data) || (billsQuery.isLoading && !billsQuery.data) || (dailyInvoicesQuery.isLoading && !dailyInvoicesQuery.data);
+  const queryError = paymentsQuery.error ? (paymentsQuery.error as Error).message : billsQuery.error ? (billsQuery.error as Error).message : dailyInvoicesQuery.error ? (dailyInvoicesQuery.error as Error).message : null;
+
   const [actionLoading, setActionLoading] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+
+  const error = actionError || queryError;
 
   // Modal States
   const [rejectModalOpen, setRejectModalOpen] = useState(false);
@@ -79,62 +136,13 @@ export function PaymentsOwnerView({
     delete idempotencyKeysRef.current[opId];
   };
 
-  const fetchPaymentsAndBills = useCallback(async () => {
-    if (!dormitoryId) return;
-    
-    setLoading(true);
-    setError(null);
-    try {
-      // 1. Fetch authoritative payments from API
-      const pRes = await fetch(`/api/v1/payments?dormitoryId=${dormitoryId}`, {
-        headers: { 'Accept': 'application/json' }
-      });
-      if (pRes.ok) {
-        const pData = await pRes.json();
-        setPayments(Array.isArray(pData) ? pData : (pData.data || []));
-      } else {
-        const errData = await pRes.json().catch(() => ({}));
-        setError(errData.error || 'ไม่สามารถโหลดข้อมูลการชำระเงินได้');
-        setPayments([]);
-      }
-
-      // 2. Fetch authoritative bills from API
-      const bRes = await fetch(`/api/v1/bills?dormitoryId=${dormitoryId}`, {
-        headers: { 'Accept': 'application/json' }
-      });
-      if (bRes.ok) {
-        const bData = await bRes.json();
-        setBills(Array.isArray(bData) ? bData : (Array.isArray(bData?.data) ? bData.data : []));
-      } else {
-        const errData = await bRes.json().catch(() => ({}));
-        setError(errData.error || 'ไม่สามารถโหลดข้อมูลบิลได้');
-        setBills([]);
-      }
-
-      // 3. Fetch authoritative daily stay invoices from API
-      const dRes = await fetch(`/api/v1/daily-stays/invoices?dormitoryId=${dormitoryId}`, {
-        headers: { 'Accept': 'application/json' }
-      });
-      if (dRes.ok) {
-        const dData = await dRes.json();
-        setDailyInvoices(Array.isArray(dData?.data) ? dData.data : (Array.isArray(dData) ? dData : []));
-      } else {
-        setDailyInvoices([]);
-      }
-    } catch (err: any) {
-      console.error('Failed to load payments data:', err);
-      setError('เกิดข้อผิดพลาดในการเชื่อมต่อเซิร์ฟเวอร์');
-      setPayments([]);
-      setBills([]);
-      setDailyInvoices([]);
-    } finally {
-      setLoading(false);
-    }
-  }, [dormitoryId]);
-
-  useEffect(() => {
-    fetchPaymentsAndBills();
-  }, [fetchPaymentsAndBills]);
+  const refetchPaymentsAndBills = async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: queryKeys.payments(dormitoryId) }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.bills(dormitoryId) }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.dailyInvoices(dormitoryId) }),
+    ]);
+  };
 
   const showToast = (msg: string) => {
     setSuccessMessage(msg);
@@ -145,13 +153,12 @@ export function PaymentsOwnerView({
     const match = document.cookie.match(/(?:csrf-token|horplus_csrf)=([^;]+)/);
     return match ? decodeURIComponent(match[1]) : '';
   };
-
   // 1. Approve Payment (Server-confirmed only, stable idempotency key)
   const handleApprove = async (paymentId: string) => {
     const opKey = `approve-${paymentId}`;
     const idempKey = getIdempotencyKey(opKey);
     setActionLoading(paymentId);
-    setError(null);
+    setActionError(null);
 
     try {
       const res = await fetch(`/api/v1/payments/${paymentId}/approve`, {
@@ -170,10 +177,10 @@ export function PaymentsOwnerView({
 
       clearIdempotencyKey(opKey);
       showToast('อนุมัติการชำระเงินและออกใบเสร็จรับเงินเรียบร้อยแล้ว');
-      await fetchPaymentsAndBills();
+      await refetchPaymentsAndBills();
       if (onUpdateBills) onUpdateBills();
     } catch (err: any) {
-      setError(err.message || 'เกิดข้อผิดพลาดในการอนุมัติ');
+      setActionError(err.message || 'เกิดข้อผิดพลาดในการอนุมัติ');
     } finally {
       setActionLoading(null);
     }
@@ -186,7 +193,7 @@ export function PaymentsOwnerView({
     const opKey = `reject-${paymentId}`;
     const idempKey = getIdempotencyKey(opKey);
     setActionLoading(paymentId);
-    setError(null);
+    setActionError(null);
 
     try {
       const res = await fetch(`/api/v1/payments/${paymentId}/reject`, {
@@ -209,10 +216,10 @@ export function PaymentsOwnerView({
       setRejectModalOpen(false);
       setSelectedPayment(null);
       setRejectReason('');
-      await fetchPaymentsAndBills();
+      await refetchPaymentsAndBills();
       if (onUpdateBills) onUpdateBills();
     } catch (err: any) {
-      setError(err.message || 'เกิดข้อผิดพลาดในการปฏิเสธ');
+      setActionError(err.message || 'เกิดข้อผิดพลาดในการปฏิเสธ');
     } finally {
       setActionLoading(null);
     }
@@ -223,7 +230,7 @@ export function PaymentsOwnerView({
     const opKey = `cash-${bill.id}`;
     const idempKey = getIdempotencyKey(opKey);
     setActionLoading(bill.id);
-    setError(null);
+    setActionError(null);
 
     try {
       const res = await fetch('/api/v1/payments/cash', {
@@ -247,10 +254,10 @@ export function PaymentsOwnerView({
 
       clearIdempotencyKey(opKey);
       showToast('บันทึกรับเงินสดและออกใบเสร็จรับเงินสำเร็จ');
-      await fetchPaymentsAndBills();
+      await refetchPaymentsAndBills();
       if (onUpdateBills) onUpdateBills();
     } catch (err: any) {
-      setError(err.message || 'เกิดข้อผิดพลาดในการบันทึกเงินสด');
+      setActionError(err.message || 'เกิดข้อผิดพลาดในการบันทึกเงินสด');
     } finally {
       setActionLoading(null);
     }
@@ -263,7 +270,7 @@ export function PaymentsOwnerView({
     const opKey = `reverse-${paymentId}`;
     const idempKey = getIdempotencyKey(opKey);
     setActionLoading(paymentId);
-    setError(null);
+    setActionError(null);
 
     try {
       const res = await fetch(`/api/v1/payments/${paymentId}/reverse`, {
@@ -286,10 +293,10 @@ export function PaymentsOwnerView({
       setReverseModalOpen(false);
       setSelectedPayment(null);
       setReverseReason('');
-      await fetchPaymentsAndBills();
+      await refetchPaymentsAndBills();
       if (onUpdateBills) onUpdateBills();
     } catch (err: any) {
-      setError(err.message || 'เกิดข้อผิดพลาดในการย้อนกลับรายการ');
+      setActionError(err.message || 'เกิดข้อผิดพลาดในการย้อนกลับรายการ');
     } finally {
       setActionLoading(null);
     }
@@ -344,7 +351,7 @@ export function PaymentsOwnerView({
             <span>{error}</span>
           </div>
           <button
-            onClick={() => fetchPaymentsAndBills()}
+            onClick={() => refetchPaymentsAndBills()}
             className="px-3 py-1 bg-rose-100 hover:bg-rose-200 text-rose-900 text-xs font-black rounded-lg transition-colors border border-rose-300 shrink-0"
           >
             ลองใหม่ (Retry)

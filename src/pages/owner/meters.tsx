@@ -335,8 +335,8 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   const cycleAuthorityReady = cycleAuthorityStatus === 'ready';
 
   const firstBillingCycleId = billingCyclesData?.firstBillingCycleId || (billingCycles.length > 0 ? billingCycles[billingCycles.length - 1]?.id : null);
-  const operationalBillingCycleId = billingCyclesData?.operationalBillingCycleId || billingCycles.find((c: any) => c.status === 'draft' || c.status === 'open' || c.isCurrent)?.id;
-  const operationalCycleCode = billingCyclesData?.operationalCycleCode || billingCycles.find((c: any) => c.status === 'draft' || c.status === 'open' || c.isCurrent)?.cycleCode;
+  const operationalBillingCycleId = billingCyclesData?.operationalBillingCycleId || (propBillingCycles && propBillingCycles.length > 0 ? (billingCycles.find((c: any) => c.isCurrent || c.status === 'open' || c.status === 'draft')?.id || null) : null);
+  const operationalCycleCode = billingCyclesData?.operationalCycleCode || (propBillingCycles && propBillingCycles.length > 0 ? (billingCycles.find((c: any) => c.isCurrent || c.status === 'open' || c.status === 'draft')?.cycleCode || null) : null);
 
   const isFirstCycle = cycleAuthorityReady
     ? Boolean(
@@ -392,12 +392,15 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     queryKey: queryKeys.meterPreviewContext(currentDormId, selectedBillingCycleId),
     queryFn: async () => {
       if (!selectedBillingCycleId || !currentDormId) return null;
-      const res = await httpRequest<{ success: boolean; data: any }>(
+      const res = await httpRequest<{ success: boolean; data: any; error?: string }>(
         'GET',
         `/api/v1/meters/workspace/preview-context?billingCycleId=${selectedBillingCycleId}`,
         undefined,
         { headers: { 'x-dormitory-id': currentDormId } }
       );
+      if (!res || res.success === false) {
+        throw new Error(res?.error || 'ไม่สามารถโหลดข้อมูลอัตราค่าน้ำค่าไฟได้');
+      }
       return res.data;
     },
     enabled: !!selectedBillingCycleId && !!currentDormId,
@@ -413,6 +416,11 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
         getDataProvider().meters.getByCycle(selectedBillingCycleId),
         getDataProvider().meters.getCyclePeopleCount(selectedBillingCycleId),
       ]);
+      if (cyclePeopleRes && cyclePeopleRes.success === false) {
+        const err = cyclePeopleRes.error;
+        const errMsg = typeof err === 'object' && err !== null ? (err as any).message : (typeof err === 'string' ? err : 'ไม่สามารถโหลดข้อมูลจำนวนผู้พักอาศัยได้');
+        throw new Error(errMsg);
+      }
       return { serverReadings, cyclePeopleRes };
     },
     enabled: Boolean(currentDormId && selectedBillingCycleId),
@@ -422,9 +430,18 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   const previewContext = previewContextQuery.data;
   const rateSnapshot = previewContext?.rateSnapshot;
 
-  // Authoritative billing mode derived from rateSnapshot (fail-closed, defaults to per_unit)
-  const isWaterUnit = rateSnapshot ? (rateSnapshot.waterBillingType === 'per_unit') : true;
-  const isElecUnit = rateSnapshot ? (rateSnapshot.electricityBillingType === 'per_unit') : true;
+  // Authoritative billing mode derived strictly from rateSnapshot (fail-closed, no default assumption)
+  const isRateSnapshotReady = Boolean(previewContextQuery.isSuccess && rateSnapshot);
+  const isWaterUnit = isRateSnapshotReady ? (rateSnapshot.waterBillingType === 'per_unit') : false;
+  const isElecUnit = isRateSnapshotReady ? (rateSnapshot.electricityBillingType === 'per_unit') : false;
+
+  const showPullButton = Boolean(
+    cycleAuthorityReady &&
+    isFirstCycle === false &&
+    previousCycleExists &&
+    meterWorkspaceQuery.isSuccess &&
+    isRateSnapshotReady
+  );
 
   // Controlled input state for adding other fees per room
   const [newFeeInputs, setNewFeeInputs] = useState<Record<string, { description: string; amount: string }>>({});
@@ -788,13 +805,6 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   };
 
   const isCycleLoaded = Boolean(loadedCycle && (loadedCycle === selectedCycle || loadedCycle === selectedBillingCycleId || loadedCycle === selectedCycleCode));
-
-  const showPullButton = Boolean(
-    cycleAuthorityReady &&
-    isFirstCycle === false &&
-    previousCycleExists &&
-    meterWorkspaceQuery.isSuccess
-  );
 
   const handlePullPreviousData = async () => {
     if (!selectedBillingCycleId) {
@@ -1843,8 +1853,9 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
               {showPullButton && (
                 <button
                   type="button"
+                  disabled={isSaving || !selectedBillingCycleId || !isRateSnapshotReady || !meterWorkspaceQuery.isSuccess}
                   onClick={handlePullPreviousData}
-                  className="px-3 py-2 bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200 text-xs font-bold rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-2xs whitespace-nowrap shrink-0"
+                  className="px-3 py-2 bg-amber-50 hover:bg-amber-100 disabled:opacity-50 text-amber-700 border border-amber-200 text-xs font-bold rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-2xs whitespace-nowrap shrink-0"
                 >
                   <RefreshCw className="w-3.5 h-3.5" />
                   ดึงข้อมูลก่อนหน้า
@@ -1852,7 +1863,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
               )}
               <button
                 type="button"
-                disabled={isSaving || !selectedBillingCycleId}
+                disabled={isSaving || !selectedBillingCycleId || !isRateSnapshotReady || !meterWorkspaceQuery.isSuccess}
                 onClick={handleIssueAllBills}
                 className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-bold rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-md shadow-emerald-600/10 whitespace-nowrap shrink-0"
               >
@@ -1861,6 +1872,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
               </button>
               <button
                 type="button"
+                disabled={!selectedBillingCycleId || isSaving}
                 onClick={() => {
                   setIsQuickFillOpen(true);
                   setTemplateUsed(false);
@@ -1868,7 +1880,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                     quickFillInputRef.current?.focus();
                   }, 100);
                 }}
-                className="px-4 py-2 bg-slate-700 hover:bg-slate-800 text-white text-xs font-bold rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-md whitespace-nowrap shrink-0"
+                className="px-4 py-2 bg-slate-700 hover:bg-slate-800 disabled:opacity-50 text-white text-xs font-bold rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-md whitespace-nowrap shrink-0"
               >
                 <Zap className="w-3.5 h-3.5 text-amber-300 fill-amber-300" />
                 กรอกแบบรวดเร็ว
@@ -1880,8 +1892,9 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
               {showPullButton && (
                 <button
                   type="button"
+                  disabled={isSaving || !selectedBillingCycleId || !isRateSnapshotReady || !meterWorkspaceQuery.isSuccess}
                   onClick={handlePullPreviousData}
-                  className="w-full px-3 py-2 bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200 text-xs font-bold rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-2xs"
+                  className="w-full px-3 py-2 bg-amber-50 hover:bg-amber-100 disabled:opacity-50 text-amber-700 border border-amber-200 text-xs font-bold rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-2xs"
                 >
                   <RefreshCw className="w-3.5 h-3.5" />
                   ดึงข้อมูลก่อนหน้า
@@ -1890,7 +1903,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
               <div className="grid grid-cols-2 gap-2 w-full">
                 <button
                   type="button"
-                  disabled={isSaving || !selectedBillingCycleId}
+                  disabled={isSaving || !selectedBillingCycleId || !isRateSnapshotReady || !meterWorkspaceQuery.isSuccess}
                   onClick={handleIssueAllBills}
                   className="w-full px-3 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-bold rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-md shadow-emerald-600/10"
                 >
@@ -1899,6 +1912,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                 </button>
                 <button
                   type="button"
+                  disabled={!selectedBillingCycleId || isSaving}
                   onClick={() => {
                     setIsQuickFillOpen(true);
                     setTemplateUsed(false);
@@ -1906,7 +1920,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                       quickFillInputRef.current?.focus();
                     }, 100);
                   }}
-                  className="w-full px-3 py-2 bg-slate-700 hover:bg-slate-800 text-white text-xs font-bold rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-md"
+                  className="w-full px-3 py-2 bg-slate-700 hover:bg-slate-800 disabled:opacity-50 text-white text-xs font-bold rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-md"
                 >
                   <Zap className="w-3.5 h-3.5 text-amber-300 fill-amber-300" />
                   กรอกแบบรวดเร็ว

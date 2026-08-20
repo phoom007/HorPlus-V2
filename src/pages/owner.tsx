@@ -32,11 +32,13 @@ import {
   Trash2,
   Gauge,
   CreditCard,
-  AlertTriangle
+  AlertTriangle,
+  AlertCircle,
+  Loader2
 } from 'lucide-react';
 
 import { User, Room, Tenant, Bill, Contract, MaintenanceRequest, Announcement, AuditLog, Building } from '../types';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient, QueryClient } from '@tanstack/react-query';
 import { queryKeys, STALE_TIMES, clearDormitoryQueryCache } from '../lib/queryClient';
 import { meterDraftStore, clearMeterDraftStore } from '../lib/meterDraftStore';
 import { getDataProvider } from '../data/dataProvider';
@@ -58,11 +60,32 @@ import { OwnerUsers } from './owner/users';
 import { OwnerSettings } from './owner/settings';
 import { OwnerRegister } from './owner/register';
 import { OwnerLineOaPage } from './owner/line-oa';
-import { PaymentsOwnerView } from './owner/payments';
+import { PaymentsOwnerView, fetchPayments, fetchDailyInvoices } from './owner/payments';
 import { SubscriptionPage } from './owner/subscription';
 import { fetchAllPaginated, fetchAllPaginatedWithMeta } from '../utils/fetch-paginated';
 import { BillingCycleCalendarPicker } from '../components/common/BillingCycleCalendarPicker';
 import { LineQuotaBadge } from '../components/LineQuotaBadge';
+
+export function isQueryReady(queryClient: QueryClient, queryKey: readonly unknown[], staleTime?: number): boolean {
+  const state = queryClient.getQueryState(queryKey);
+  if (!state || state.status !== 'success' || state.data === undefined || state.isInvalidated) {
+    return false;
+  }
+  if (staleTime !== undefined && staleTime > 0) {
+    const age = Date.now() - state.dataUpdatedAt;
+    if (age > staleTime) {
+      return false;
+    }
+  }
+  return true;
+}
+
+export function areQueriesReady(
+  queryClient: QueryClient,
+  queries: { queryKey: readonly unknown[]; staleTime?: number }[]
+): boolean {
+  return queries.every(q => isQueryReady(queryClient, q.queryKey, q.staleTime));
+}
 
 interface SlidableNotificationItemProps {
   notif: {
@@ -169,28 +192,56 @@ export const UserAvatar: React.FC<{ user: { name?: string; avatar?: string; avat
 export function getTargetQueriesForTab(targetTab: string, dormId: string, cycleId?: string) {
   const dormHeader = dormId ? { 'x-dormitory-id': dormId } : undefined;
   switch (targetTab) {
-    case 'dashboard':
-      return [
+    case 'dashboard': {
+      const queries: any[] = [
         { queryKey: queryKeys.rooms(dormId), queryFn: () => fetchAllPaginated<Room>('/api/v1/properties/rooms', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.ROOMS },
         { queryKey: queryKeys.buildings(dormId), queryFn: () => fetchAllPaginated<Building>('/api/v1/properties/buildings', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.BUILDINGS },
         { queryKey: queryKeys.billingCycles(dormId), queryFn: () => fetchAllPaginatedWithMeta('/api/v1/billing-cycles', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.BILLING_CYCLES },
+        { queryKey: queryKeys.bills(dormId), queryFn: () => fetchAllPaginated<Bill>('/api/v1/bills', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.BILLS },
+        { queryKey: queryKeys.maintenance(dormId), queryFn: () => fetchAllPaginated('/api/v1/maintenance', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.MAINTENANCE },
+        { queryKey: queryKeys.tenants(dormId), queryFn: () => fetchAllPaginated<Tenant>('/api/v1/tenants', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.TENANTS },
+        { queryKey: queryKeys.contracts(dormId), queryFn: () => fetchAllPaginated<Contract>('/api/v1/contracts', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.CONTRACTS },
       ];
+      if (cycleId) {
+        queries.push({
+          queryKey: queryKeys.meterReadings(dormId, cycleId),
+          queryFn: async () => {
+            const res = await fetch(`/api/v1/meters/readings?billingCycleId=${cycleId}&pageSize=200`, {
+              headers: dormHeader,
+              credentials: 'include',
+            });
+            if (!res.ok) {
+              throw new Error(`Failed to load meter readings: HTTP ${res.status}`);
+            }
+            const data = await res.json();
+            return data?.data || [];
+          },
+          staleTime: STALE_TIMES.METER_WORKSPACE,
+        });
+      }
+      return queries;
+    }
     case 'rooms':
       return [
         { queryKey: queryKeys.rooms(dormId), queryFn: () => fetchAllPaginated<Room>('/api/v1/properties/rooms', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.ROOMS },
         { queryKey: queryKeys.buildings(dormId), queryFn: () => fetchAllPaginated<Building>('/api/v1/properties/buildings', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.BUILDINGS },
+        { queryKey: queryKeys.tenants(dormId), queryFn: () => fetchAllPaginated<Tenant>('/api/v1/tenants', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.TENANTS },
+        { queryKey: queryKeys.contracts(dormId), queryFn: () => fetchAllPaginated<Contract>('/api/v1/contracts', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.CONTRACTS },
+        { queryKey: queryKeys.bills(dormId), queryFn: () => fetchAllPaginated<Bill>('/api/v1/bills', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.BILLS },
       ];
     case 'tenants':
       return [
         { queryKey: queryKeys.tenants(dormId), queryFn: () => fetchAllPaginated<Tenant>('/api/v1/tenants', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.TENANTS },
         { queryKey: queryKeys.rooms(dormId), queryFn: () => fetchAllPaginated<Room>('/api/v1/properties/rooms', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.ROOMS },
         { queryKey: queryKeys.contracts(dormId), queryFn: () => fetchAllPaginated<Contract>('/api/v1/contracts', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.CONTRACTS },
+        { queryKey: queryKeys.bills(dormId), queryFn: () => fetchAllPaginated<Bill>('/api/v1/bills', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.BILLS },
       ];
     case 'contracts':
       return [
         { queryKey: queryKeys.contracts(dormId), queryFn: () => fetchAllPaginated<Contract>('/api/v1/contracts', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.CONTRACTS },
         { queryKey: queryKeys.rooms(dormId), queryFn: () => fetchAllPaginated<Room>('/api/v1/properties/rooms', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.ROOMS },
         { queryKey: queryKeys.tenants(dormId), queryFn: () => fetchAllPaginated<Tenant>('/api/v1/tenants', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.TENANTS },
+        { queryKey: queryKeys.bills(dormId), queryFn: () => fetchAllPaginated<Bill>('/api/v1/bills', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.BILLS },
       ];
     case 'meters': {
       const queries: any[] = [
@@ -209,6 +260,11 @@ export function getTargetQueriesForTab(targetTab: string, dormId: string, cycleI
               getDataProvider().meters.getByCycle(cycleId),
               getDataProvider().meters.getCyclePeopleCount(cycleId),
             ]);
+            if (cyclePeopleRes && cyclePeopleRes.success === false) {
+              const err = cyclePeopleRes.error;
+              const errMsg = typeof err === 'object' && err !== null ? (err as any).message : (typeof err === 'string' ? err : 'ไม่สามารถโหลดข้อมูลจำนวนผู้พักอาศัยได้');
+              throw new Error(errMsg);
+            }
             return { serverReadings, cyclePeopleRes };
           },
           staleTime: STALE_TIMES.METER_WORKSPACE,
@@ -216,12 +272,15 @@ export function getTargetQueriesForTab(targetTab: string, dormId: string, cycleI
         queries.push({
           queryKey: queryKeys.meterPreviewContext(dormId, cycleId),
           queryFn: async () => {
-            const res = await httpRequest<{ success: boolean; data: any }>(
+            const res = await httpRequest<{ success: boolean; data: any; error?: string }>(
               'GET',
               `/api/v1/meters/workspace/preview-context?billingCycleId=${cycleId}`,
               undefined,
               { headers: dormHeader }
             );
+            if (!res || res.success === false) {
+              throw new Error(res?.error || 'ไม่สามารถโหลดข้อมูลอัตราค่าน้ำค่าไฟได้');
+            }
             return res.data;
           },
           staleTime: STALE_TIMES.PREVIEW_CONTEXT,
@@ -231,7 +290,9 @@ export function getTargetQueriesForTab(targetTab: string, dormId: string, cycleI
     }
     case 'payments':
       return [
+        { queryKey: queryKeys.payments(dormId), queryFn: () => fetchPayments(dormId), staleTime: STALE_TIMES.PAYMENTS },
         { queryKey: queryKeys.bills(dormId), queryFn: () => fetchAllPaginated<Bill>('/api/v1/bills', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.BILLS },
+        { queryKey: queryKeys.dailyInvoices(dormId), queryFn: () => fetchDailyInvoices(dormId), staleTime: STALE_TIMES.DAILY_INVOICES },
         { queryKey: queryKeys.rooms(dormId), queryFn: () => fetchAllPaginated<Room>('/api/v1/properties/rooms', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.ROOMS },
       ];
     case 'maintenance':
@@ -253,6 +314,7 @@ export function getTargetQueriesForTab(targetTab: string, dormId: string, cycleI
         { queryKey: queryKeys.buildings(dormId), queryFn: () => fetchAllPaginated<Building>('/api/v1/properties/buildings', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.BUILDINGS },
         { queryKey: queryKeys.tenants(dormId), queryFn: () => fetchAllPaginated<Tenant>('/api/v1/tenants', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.TENANTS },
         { queryKey: queryKeys.contracts(dormId), queryFn: () => fetchAllPaginated<Contract>('/api/v1/contracts', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.CONTRACTS },
+        { queryKey: queryKeys.billingCycles(dormId), queryFn: () => fetchAllPaginatedWithMeta('/api/v1/billing-cycles', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.BILLING_CYCLES },
       ];
     default:
       return [];
@@ -376,9 +438,9 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
   // Tab-refined enabled states to avoid eager network fan-out
   const isMaintenanceNeeded = isQueryEnabled && (activeTab === 'maintenance' || activeTab === 'dashboard');
   const isAnnouncementsNeeded = isQueryEnabled && (activeTab === 'announcements' || activeTab === 'dashboard');
-  const isBillsNeeded = isQueryEnabled && (activeTab === 'meters' || activeTab === 'bills' || activeTab === 'dashboard' || activeTab === 'reports');
-  const isTenantsNeeded = isQueryEnabled && (activeTab === 'tenants' || activeTab === 'meters' || activeTab === 'dashboard' || activeTab === 'contracts');
-  const isContractsNeeded = isQueryEnabled && (activeTab === 'contracts' || activeTab === 'tenants' || activeTab === 'meters' || activeTab === 'dashboard');
+  const isBillsNeeded = isQueryEnabled && (activeTab === 'meters' || activeTab === 'bills' || activeTab === 'dashboard' || activeTab === 'reports' || activeTab === 'rooms' || activeTab === 'tenants' || activeTab === 'contracts');
+  const isTenantsNeeded = isQueryEnabled && (activeTab === 'tenants' || activeTab === 'meters' || activeTab === 'dashboard' || activeTab === 'contracts' || activeTab === 'rooms' || activeTab === 'maintenance' || activeTab === 'reports');
+  const isContractsNeeded = isQueryEnabled && (activeTab === 'contracts' || activeTab === 'tenants' || activeTab === 'meters' || activeTab === 'dashboard' || activeTab === 'rooms' || activeTab === 'reports');
 
   // Authoritative Server State Queries (Single Server-State Authority)
   const roomsQuery = useQuery({
@@ -660,21 +722,32 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
     }
   }, [activeDormitoryId, isRegistrationMode, selectedBillingCycleId, billingCyclesQuery.data, queryClient, getTargetQueriesForTab]);
 
+  const navIntentRef = React.useRef<number>(0);
+
+  const applyPostNavigationSideEffects = (tabId: string) => {
+    if (tabId === 'tenants') {
+      const allTIds = (queryClient.getQueryData<Tenant[]>(queryKeys.tenants(activeDormitoryId)) || tenants || []).map(t => t.id);
+      setSeenTenantIds(allTIds);
+      try {
+        localStorage.setItem(`HorPlus_seen_tenants_${selectedCycle}`, JSON.stringify(allTIds));
+      } catch {}
+    } else if (tabId === 'contracts') {
+      const allCIds = (queryClient.getQueryData<Contract[]>(queryKeys.contracts(activeDormitoryId)) || contracts || []).map(c => c.id);
+      setSeenContractIds(allCIds);
+      try {
+        localStorage.setItem(`HorPlus_seen_contracts_${selectedCycle}`, JSON.stringify(allCIds));
+      } catch {}
+    }
+  };
+
   const handleTabChange = async (tabId: string) => {
     if (isRegistrationMode) {
       changeTab(tabId);
       setIsSidebarOpen(false);
       return;
     }
-    if (tabId === 'tenants') {
-      const allTIds = (tenants || []).map(t => t.id);
-      setSeenTenantIds(allTIds);
-      localStorage.setItem(`HorPlus_seen_tenants_${selectedCycle}`, JSON.stringify(allTIds));
-    } else if (tabId === 'contracts') {
-      const allCIds = (contracts || []).map(c => c.id);
-      setSeenContractIds(allCIds);
-      localStorage.setItem(`HorPlus_seen_contracts_${selectedCycle}`, JSON.stringify(allCIds));
-    }
+
+    const currentIntent = ++navIntentRef.current;
 
     if (tabId === activeTab) {
       setIsSidebarOpen(false);
@@ -684,18 +757,19 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
     const targetCycleId = selectedBillingCycleId || billingCyclesQuery.data?.operationalBillingCycleId || billingCyclesQuery.data?.data?.[0]?.id;
     const queries = getTargetQueriesForTab(tabId, activeDormitoryId, targetCycleId);
 
-    // If all required target queries are already cached, swap immediately
-    const allCached = queries.every(q => queryClient.getQueryData(q.queryKey) !== undefined);
+    // If all required target queries are already cached and fresh, transition immediately
+    const allReady = areQueriesReady(queryClient, queries);
 
-    if (allCached) {
+    if (allReady) {
       React.startTransition(() => {
         changeTab(tabId);
         setIsSidebarOpen(false);
+        applyPostNavigationSideEffects(tabId);
       });
       return;
     }
 
-    // If uncached, keep current page visible while target queries resolve in background
+    // If cold or stale, keep current page visible while target queries resolve in background
     try {
       await Promise.all(
         queries.map(q => queryClient.ensureQueryData({
@@ -704,36 +778,17 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
           staleTime: q.staleTime,
         }))
       );
+      if (navIntentRef.current !== currentIntent) return;
       React.startTransition(() => {
         changeTab(tabId);
         setIsSidebarOpen(false);
+        applyPostNavigationSideEffects(tabId);
       });
     } catch (err: any) {
+      if (navIntentRef.current !== currentIntent) return;
       showNavToast('ไม่สามารถโหลดข้อมูลหน้านี้ได้ กรุณาลองอีกครั้ง');
     }
   };
-
-  useEffect(() => {
-    if (!activeDormitoryId || isRegistrationMode) return;
-    const idleCallback = (typeof window !== 'undefined' && (window as any).requestIdleCallback)
-      ? (window as any).requestIdleCallback
-      : ((cb: () => void) => setTimeout(cb, 100));
-
-    const handle = idleCallback(() => {
-      prefetchTab('meters');
-      prefetchTab('tenants');
-      prefetchTab('payments');
-      prefetchTab('rooms');
-    });
-
-    return () => {
-      if (typeof window !== 'undefined' && (window as any).cancelIdleCallback) {
-        (window as any).cancelIdleCallback(handle);
-      } else {
-        clearTimeout(handle);
-      }
-    };
-  }, [activeDormitoryId, isRegistrationMode, prefetchTab]);
 
   // Notification Bell Query
   const notificationsQuery = useQuery({
@@ -881,6 +936,14 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
 
   const meterReadings = meterReadingsQuery.data || [];
 
+  const targetCycleIdForActiveTab = selectedBillingCycleId || billingCyclesQuery.data?.operationalBillingCycleId || billingCyclesQuery.data?.data?.[0]?.id;
+  const activeTabQueries = getTargetQueriesForTab(activeTab, activeDormitoryId, targetCycleIdForActiveTab);
+  const activeTabHasError = activeTabQueries.some(q => queryClient.getQueryState(q.queryKey)?.status === 'error');
+  const activeTabIsLoading = activeTabQueries.length > 0 && activeTabQueries.some(q => {
+    const s = queryClient.getQueryState(q.queryKey);
+    return !s || s.status === 'pending';
+  });
+
   const renderSubView = () => {
     if (isRegistrationMode) {
       if (isAddDormRegistrationMode) {
@@ -897,6 +960,34 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
           onAddLog={handleAddLog}
           onNavigate={(tab) => changeTab(tab)}
         />
+      );
+    }
+
+    if (activeTabHasError) {
+      return (
+        <div data-testid="tab-error-state" className="bg-white border border-rose-100 rounded-3xl p-8 text-center space-y-3 shadow-xs max-w-xl mx-auto my-12">
+          <AlertTriangle className="w-8 h-8 text-rose-500 mx-auto" />
+          <h3 className="text-sm font-bold text-slate-800">ไม่สามารถโหลดข้อมูลหน้านี้ได้</h3>
+          <p className="text-xs text-slate-500">เกิดข้อผิดพลาดในการดึงข้อมูลจากเซิร์ฟเวอร์ กรุณาลองใหม่อีกครั้ง</p>
+          <button
+            type="button"
+            onClick={() => {
+              activeTabQueries.forEach(q => queryClient.refetchQueries({ queryKey: q.queryKey }));
+            }}
+            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl transition-all cursor-pointer shadow-md"
+          >
+            ลองใหม่อีกครั้ง
+          </button>
+        </div>
+      );
+    }
+
+    if (activeTabIsLoading) {
+      return (
+        <div data-testid="tab-loading-shell" className="flex flex-col items-center justify-center py-24 gap-3">
+          <Loader2 className="w-8 h-8 text-blue-600 animate-spin" />
+          <span className="text-xs font-bold text-slate-500">กำลังโหลดข้อมูล...</span>
+        </div>
       );
     }
 

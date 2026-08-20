@@ -38,6 +38,8 @@ export const queryKeys = {
   contracts: (dormId: string) => ['owner', dormId, 'contracts'] as const,
   bills: (dormId: string) => ['owner', dormId, 'bills'] as const,
   billingCycles: (dormId: string) => ['owner', dormId, 'billing-cycles'] as const,
+  payments: (dormId: string) => ['owner', dormId, 'payments'] as const,
+  dailyInvoices: (dormId: string) => ['owner', dormId, 'daily-invoices'] as const,
   maintenance: (dormId: string) => ['owner', dormId, 'maintenance'] as const,
   announcements: (dormId: string) => ['owner', dormId, 'announcements'] as const,
   notifications: (dormId: string) => ['owner', dormId, 'notifications'] as const,
@@ -58,6 +60,8 @@ export const STALE_TIMES = {
   TENANTS: 60_000,       // 1 minute
   CONTRACTS: 60_000,     // 1 minute
   BILLS: 30_000,         // 30 seconds
+  PAYMENTS: 30_000,      // 30 seconds
+  DAILY_INVOICES: 30_000,// 30 seconds
   MAINTENANCE: 60_000,   // 1 minute
   ANNOUNCEMENTS: 60_000, // 1 minute
   METER_WORKSPACE: 30_000, // 30 seconds

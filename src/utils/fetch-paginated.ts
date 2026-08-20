@@ -61,7 +61,7 @@ export async function fetchAllPaginatedWithMeta<T = any>(
     const total = json.pagination?.total;
     if (typeof total === 'number') {
       expectedTotal = total;
-      if (allItems.length >= total || items.length === 0) {
+      if (allItems.length >= total || items.length === 0 || items.length < pageSize) {
         break;
       }
     } else {

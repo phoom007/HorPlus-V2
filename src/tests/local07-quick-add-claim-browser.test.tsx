@@ -2175,6 +2175,9 @@ describe('Cycle Authority & Data-Ready Navigation Proofs', () => {
     const roomKeys = roomQueries.map(q => JSON.stringify(q.queryKey));
     expect(roomKeys).toContain(JSON.stringify(queryKeys.rooms(dormId)));
     expect(roomKeys).toContain(JSON.stringify(queryKeys.buildings(dormId)));
+    expect(roomKeys).toContain(JSON.stringify(queryKeys.tenants(dormId)));
+    expect(roomKeys).toContain(JSON.stringify(queryKeys.contracts(dormId)));
+    expect(roomKeys).toContain(JSON.stringify(queryKeys.bills(dormId)));
 
     // 3. Tenants tab queries
     const tenantQueries = getTargetQueriesForTab('tenants', dormId);
@@ -2182,11 +2185,14 @@ describe('Cycle Authority & Data-Ready Navigation Proofs', () => {
     expect(tenantKeys).toContain(JSON.stringify(queryKeys.tenants(dormId)));
     expect(tenantKeys).toContain(JSON.stringify(queryKeys.rooms(dormId)));
     expect(tenantKeys).toContain(JSON.stringify(queryKeys.contracts(dormId)));
+    expect(tenantKeys).toContain(JSON.stringify(queryKeys.bills(dormId)));
 
     // 4. Payments tab queries
     const paymentQueries = getTargetQueriesForTab('payments', dormId);
     const paymentKeys = paymentQueries.map(q => JSON.stringify(q.queryKey));
+    expect(paymentKeys).toContain(JSON.stringify(queryKeys.payments(dormId)));
     expect(paymentKeys).toContain(JSON.stringify(queryKeys.bills(dormId)));
+    expect(paymentKeys).toContain(JSON.stringify(queryKeys.dailyInvoices(dormId)));
     expect(paymentKeys).toContain(JSON.stringify(queryKeys.rooms(dormId)));
 
     // 5. Maintenance tab queries
