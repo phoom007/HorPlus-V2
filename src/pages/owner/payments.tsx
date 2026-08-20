@@ -1,6 +1,6 @@
 import React, { useState, useRef } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Bill, Room } from '../../types';
+import { Bill } from '../../types';
 import { queryKeys, STALE_TIMES } from '../../lib/queryClient';
 import { fetchAllPaginated } from '../../utils/fetch-paginated';
 import { formatBaht } from '../../components/GlobalComponents';
@@ -64,12 +64,10 @@ export async function fetchDailyInvoices(dormitoryId: string): Promise<any[]> {
 
 export function PaymentsOwnerView({
   bills: initialBills,
-  rooms: _rooms,
   dormitoryId,
   onUpdateBills
 }: {
   bills: Bill[];
-  rooms: Room[];
   dormitoryId: string;
   onUpdateBills?: () => void;
 }) {

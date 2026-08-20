@@ -2,7 +2,7 @@
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
- * 
+ *
  * LOCAL-07 Batch 02 — Frontend Boundary & Quick Add UI Test Suite
  * Proofs covering Meter Quick Add button fail-closed cycle matrix, Route alignment, End Date persistence, and Authority defaults.
  */
@@ -863,6 +863,19 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
             operationalCycleCode: '2026-08',
           };
         }
+        if (url.includes('/meters/workspace/preview-context')) {
+          return {
+            success: true,
+            data: {
+              rateSnapshot: {
+                waterBillingType: 'per_unit',
+                waterRate: '18.00',
+                electricityBillingType: 'per_unit',
+                electricityRate: '8.00',
+              },
+            },
+          };
+        }
         if (url.includes('/meters/workspace/household-counts')) {
           throw new Error('Network error');
         }
@@ -882,6 +895,7 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
           onAddLog={() => {}}
           selectedBillingCycleId="cycle-2026-08"
           selectedCycleCode="2026-08"
+          billingCycles={[{ id: 'cycle-2026-08', cycleCode: '2026-08' }]}
         />
       );
 
@@ -2193,7 +2207,8 @@ describe('Cycle Authority & Data-Ready Navigation Proofs', () => {
     expect(paymentKeys).toContain(JSON.stringify(queryKeys.payments(dormId)));
     expect(paymentKeys).toContain(JSON.stringify(queryKeys.bills(dormId)));
     expect(paymentKeys).toContain(JSON.stringify(queryKeys.dailyInvoices(dormId)));
-    expect(paymentKeys).toContain(JSON.stringify(queryKeys.rooms(dormId)));
+    expect(paymentKeys).not.toContain(JSON.stringify(queryKeys.rooms(dormId)));
+    expect(paymentKeys).toHaveLength(3);
 
     // 5. Maintenance tab queries
     const maintenanceQueries = getTargetQueriesForTab('maintenance', dormId);

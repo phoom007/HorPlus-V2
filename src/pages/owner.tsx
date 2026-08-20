@@ -38,7 +38,7 @@ import {
 } from 'lucide-react';
 
 import { User, Room, Tenant, Bill, Contract, MaintenanceRequest, Announcement, AuditLog, Building } from '../types';
-import { useQuery, useQueryClient, QueryClient } from '@tanstack/react-query';
+import { useQuery, useQueries, useQueryClient, QueryClient } from '@tanstack/react-query';
 import { queryKeys, STALE_TIMES, clearDormitoryQueryCache } from '../lib/queryClient';
 import { meterDraftStore, clearMeterDraftStore } from '../lib/meterDraftStore';
 import { getDataProvider } from '../data/dataProvider';
@@ -129,7 +129,7 @@ const SlidableNotificationItem: React.FC<SlidableNotificationItemProps> = ({ not
   return (
     <div className="relative overflow-hidden rounded-xl bg-slate-150 border border-transparent select-none group">
       {/* Background deletion panel revealed upon swipe */}
-      <div 
+      <div
         className="absolute inset-y-0 right-0 flex items-center pr-4 text-slate-600 font-extrabold text-xs transition-opacity duration-200 pointer-events-none"
         style={{ opacity: offsetX < -15 ? 1 : 0 }}
       >
@@ -293,7 +293,6 @@ export function getTargetQueriesForTab(targetTab: string, dormId: string, cycleI
         { queryKey: queryKeys.payments(dormId), queryFn: () => fetchPayments(dormId), staleTime: STALE_TIMES.PAYMENTS },
         { queryKey: queryKeys.bills(dormId), queryFn: () => fetchAllPaginated<Bill>('/api/v1/bills', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.BILLS },
         { queryKey: queryKeys.dailyInvoices(dormId), queryFn: () => fetchDailyInvoices(dormId), staleTime: STALE_TIMES.DAILY_INVOICES },
-        { queryKey: queryKeys.rooms(dormId), queryFn: () => fetchAllPaginated<Room>('/api/v1/properties/rooms', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.ROOMS },
       ];
     case 'maintenance':
       return [
@@ -345,6 +344,24 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
     isRegistrationMode ? (isAddDormRegistrationMode ? 'dormitories/new' : 'register') : pathSegment
   );
 
+  const navIntentRef = React.useRef<number>(0);
+
+  const applyPostNavigationSideEffects = (tabId: string) => {
+    if (tabId === 'tenants') {
+      const allTIds = (queryClient.getQueryData<Tenant[]>(queryKeys.tenants(activeDormitoryId)) || []).map(t => t.id);
+      setSeenTenantIds(allTIds);
+      try {
+        localStorage.setItem(`HorPlus_seen_tenants_${selectedCycle}`, JSON.stringify(allTIds));
+      } catch {}
+    } else if (tabId === 'contracts') {
+      const allCIds = (queryClient.getQueryData<Contract[]>(queryKeys.contracts(activeDormitoryId)) || []).map(c => c.id);
+      setSeenContractIds(allCIds);
+      try {
+        localStorage.setItem(`HorPlus_seen_contracts_${selectedCycle}`, JSON.stringify(allCIds));
+      } catch {}
+    }
+  };
+
   useEffect(() => {
     if (onboardingRequired && pathSegment !== 'register') {
       navigate('/owner/register', { replace: true });
@@ -353,7 +370,9 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
       navigate('/owner/dormitories/new', { replace: true });
       setActiveTab('dormitories/new');
     } else if (!isRegistrationMode && pathSegment && pathSegment !== activeTab) {
+      navIntentRef.current++;
       setActiveTab(pathSegment);
+      applyPostNavigationSideEffects(pathSegment);
     } else if (isRegistrationMode) {
       const target = isAddDormRegistrationMode ? 'dormitories/new' : 'register';
       if (activeTab !== target) {
@@ -395,7 +414,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
   const [initialRoomId, setInitialRoomId] = useState<string | undefined>(undefined);
   const [initialTenantId, setInitialTenantId] = useState<string | undefined>(undefined);
   const [initialContractId, setInitialContractId] = useState<string | undefined>(undefined);
-  
+
   // Authoritative Billing Cycle State
   const [selectedBillingCycleId, setSelectedBillingCycleId] = useState<string>('');
   const [selectedCycleCode, setSelectedCycleCode] = useState<string>('');
@@ -408,9 +427,9 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
   const memberships: any[] = authCtx.memberships || authCtx.user?.memberships || [];
   const savedDormId = sessionStorage.getItem('active_dormitory_selected_for_session') || localStorage.getItem('selected_dormitory_id');
   const activeMemberships = memberships.filter((m: any) => !m.status || String(m.status).toLowerCase() === 'active');
-  
-  const validDormId = activeMemberships.find((m: any) => m.dormitoryId === savedDormId)?.dormitoryId 
-    || activeMemberships[0]?.dormitoryId 
+
+  const validDormId = activeMemberships.find((m: any) => m.dormitoryId === savedDormId)?.dormitoryId
+    || activeMemberships[0]?.dormitoryId
     || authCtx.dormitoryId;
 
   const activeDormitoryId = (validDormId && validDormId !== 'dorm-1' && validDormId !== 'dorm-001')
@@ -435,49 +454,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
   const dormHeader = activeDormitoryId ? { 'x-dormitory-id': activeDormitoryId } : undefined;
   const isQueryEnabled = Boolean(activeDormitoryId && !isRegistrationMode);
 
-  // Tab-refined enabled states to avoid eager network fan-out
-  const isMaintenanceNeeded = isQueryEnabled && (activeTab === 'maintenance' || activeTab === 'dashboard');
-  const isAnnouncementsNeeded = isQueryEnabled && (activeTab === 'announcements' || activeTab === 'dashboard');
-  const isBillsNeeded = isQueryEnabled && (activeTab === 'meters' || activeTab === 'bills' || activeTab === 'dashboard' || activeTab === 'reports' || activeTab === 'rooms' || activeTab === 'tenants' || activeTab === 'contracts');
-  const isTenantsNeeded = isQueryEnabled && (activeTab === 'tenants' || activeTab === 'meters' || activeTab === 'dashboard' || activeTab === 'contracts' || activeTab === 'rooms' || activeTab === 'maintenance' || activeTab === 'reports');
-  const isContractsNeeded = isQueryEnabled && (activeTab === 'contracts' || activeTab === 'tenants' || activeTab === 'meters' || activeTab === 'dashboard' || activeTab === 'rooms' || activeTab === 'reports');
-
-  // Authoritative Server State Queries (Single Server-State Authority)
-  const roomsQuery = useQuery({
-    queryKey: queryKeys.rooms(activeDormitoryId),
-    queryFn: () => fetchAllPaginated<Room>('/api/v1/properties/rooms', { headers: dormHeader, credentials: 'include' }),
-    enabled: isQueryEnabled,
-    staleTime: STALE_TIMES.ROOMS,
-  });
-
-  const buildingsQuery = useQuery({
-    queryKey: queryKeys.buildings(activeDormitoryId),
-    queryFn: () => fetchAllPaginated<Building>('/api/v1/properties/buildings', { headers: dormHeader, credentials: 'include' }),
-    enabled: isQueryEnabled,
-    staleTime: STALE_TIMES.BUILDINGS,
-  });
-
-  const tenantsQuery = useQuery({
-    queryKey: queryKeys.tenants(activeDormitoryId),
-    queryFn: () => fetchAllPaginated<Tenant>('/api/v1/tenants', { headers: dormHeader, credentials: 'include' }),
-    enabled: isTenantsNeeded,
-    staleTime: STALE_TIMES.TENANTS,
-  });
-
-  const contractsQuery = useQuery({
-    queryKey: queryKeys.contracts(activeDormitoryId),
-    queryFn: () => fetchAllPaginated<Contract>('/api/v1/contracts', { headers: dormHeader, credentials: 'include' }),
-    enabled: isContractsNeeded,
-    staleTime: STALE_TIMES.CONTRACTS,
-  });
-
-  const billsQuery = useQuery({
-    queryKey: queryKeys.bills(activeDormitoryId),
-    queryFn: () => fetchAllPaginated<Bill>('/api/v1/bills', { headers: dormHeader, credentials: 'include' }),
-    enabled: isBillsNeeded,
-    staleTime: STALE_TIMES.BILLS,
-  });
-
+  // Authoritative Billing Cycles Query (Global for Dormitory)
   const billingCyclesQuery = useQuery({
     queryKey: queryKeys.billingCycles(activeDormitoryId),
     queryFn: () => fetchAllPaginatedWithMeta('/api/v1/billing-cycles', { headers: dormHeader, credentials: 'include' }),
@@ -485,28 +462,36 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
     staleTime: STALE_TIMES.BILLING_CYCLES,
   });
 
-  const maintenanceQuery = useQuery({
-    queryKey: queryKeys.maintenance(activeDormitoryId),
-    queryFn: () => fetchAllPaginated('/api/v1/maintenance', { headers: dormHeader, credentials: 'include' }),
-    enabled: isMaintenanceNeeded,
-    staleTime: STALE_TIMES.MAINTENANCE,
-  });
-
-  const announcementsQuery = useQuery({
-    queryKey: queryKeys.announcements(activeDormitoryId),
-    queryFn: () => fetchAllPaginated<Announcement>('/api/v1/announcements', { headers: dormHeader, credentials: 'include' }),
-    enabled: isAnnouncementsNeeded,
-    staleTime: STALE_TIMES.ANNOUNCEMENTS,
-  });
-
-  const rooms: Room[] = roomsQuery.data || [];
-  const buildings: Building[] = buildingsQuery.data || [];
-  const tenants: Tenant[] = tenantsQuery.data || [];
-  const contracts: Contract[] = contractsQuery.data || [];
-  const bills: Bill[] = billsQuery.data || [];
   const billingCycles: any[] = billingCyclesQuery.data?.data || [];
-  const repairs: any[] = maintenanceQuery.data || [];
-  const announcements: Announcement[] = announcementsQuery.data || [];
+
+  // Active Route Query Coordinator (Single canonical query dependency authority)
+  const targetCycleIdForActiveTab = selectedBillingCycleId || billingCyclesQuery.data?.operationalBillingCycleId || null;
+  const activeTabQueriesSpec = React.useMemo(() => {
+    if (!activeDormitoryId || isRegistrationMode) return [];
+    return getTargetQueriesForTab(activeTab, activeDormitoryId, targetCycleIdForActiveTab);
+  }, [activeTab, activeDormitoryId, isRegistrationMode, targetCycleIdForActiveTab]);
+
+  const activeTabQueryResults = useQueries({
+    queries: activeTabQueriesSpec.map(q => ({
+      queryKey: q.queryKey,
+      queryFn: q.queryFn,
+      staleTime: q.staleTime,
+      enabled: isQueryEnabled,
+    })),
+  });
+
+  const activeTabHasError = activeTabQueryResults.some(r => r.isError);
+  const activeTabIsLoading = activeTabQueriesSpec.length > 0 && activeTabQueryResults.some(r => r.isLoading || r.isPending);
+
+  // Authoritative server state for tab consumption
+  const rooms: Room[] = queryClient.getQueryData<Room[]>(queryKeys.rooms(activeDormitoryId)) || [];
+  const buildings: Building[] = queryClient.getQueryData<Building[]>(queryKeys.buildings(activeDormitoryId)) || [];
+  const tenants: Tenant[] = queryClient.getQueryData<Tenant[]>(queryKeys.tenants(activeDormitoryId)) || [];
+  const contracts: Contract[] = queryClient.getQueryData<Contract[]>(queryKeys.contracts(activeDormitoryId)) || [];
+  const bills: Bill[] = queryClient.getQueryData<Bill[]>(queryKeys.bills(activeDormitoryId)) || [];
+  const repairs: any[] = queryClient.getQueryData(queryKeys.maintenance(activeDormitoryId)) || [];
+  const announcements: Announcement[] = queryClient.getQueryData<Announcement[]>(queryKeys.announcements(activeDormitoryId)) || [];
+  const meterReadings: any[] = (selectedBillingCycleId ? queryClient.getQueryData<any[]>(queryKeys.meterReadings(activeDormitoryId, selectedBillingCycleId)) : null) || [];
   const auditLogs: AuditLog[] = [];
 
   useEffect(() => {
@@ -517,9 +502,6 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
       if (cycleResult.operationalBillingCycleId && cycleResult.operationalCycleCode) {
         setSelectedBillingCycleId(cycleResult.operationalBillingCycleId);
         setSelectedCycleCode(cycleResult.operationalCycleCode);
-      } else if (loadedCycles.length > 0) {
-        setSelectedBillingCycleId(loadedCycles[0].id);
-        setSelectedCycleCode(loadedCycles[0].cycleCode);
       }
     }
   }, [billingCyclesQuery.data, selectedBillingCycleId]);
@@ -708,7 +690,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
 
   const prefetchTab = useCallback((targetTab: string) => {
     if (!activeDormitoryId || isRegistrationMode) return;
-    const targetCycleId = selectedBillingCycleId || billingCyclesQuery.data?.operationalBillingCycleId || billingCyclesQuery.data?.data?.[0]?.id;
+    const targetCycleId = selectedBillingCycleId || billingCyclesQuery.data?.operationalBillingCycleId || null;
     const queries = getTargetQueriesForTab(targetTab, activeDormitoryId, targetCycleId);
     for (const q of queries) {
       const p = queryClient.prefetchQuery({
@@ -720,25 +702,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
         (p as any).catch(() => {});
       }
     }
-  }, [activeDormitoryId, isRegistrationMode, selectedBillingCycleId, billingCyclesQuery.data, queryClient, getTargetQueriesForTab]);
-
-  const navIntentRef = React.useRef<number>(0);
-
-  const applyPostNavigationSideEffects = (tabId: string) => {
-    if (tabId === 'tenants') {
-      const allTIds = (queryClient.getQueryData<Tenant[]>(queryKeys.tenants(activeDormitoryId)) || tenants || []).map(t => t.id);
-      setSeenTenantIds(allTIds);
-      try {
-        localStorage.setItem(`HorPlus_seen_tenants_${selectedCycle}`, JSON.stringify(allTIds));
-      } catch {}
-    } else if (tabId === 'contracts') {
-      const allCIds = (queryClient.getQueryData<Contract[]>(queryKeys.contracts(activeDormitoryId)) || contracts || []).map(c => c.id);
-      setSeenContractIds(allCIds);
-      try {
-        localStorage.setItem(`HorPlus_seen_contracts_${selectedCycle}`, JSON.stringify(allCIds));
-      } catch {}
-    }
-  };
+  }, [activeDormitoryId, isRegistrationMode, selectedBillingCycleId, billingCyclesQuery.data?.operationalBillingCycleId, queryClient]);
 
   const handleTabChange = async (tabId: string) => {
     if (isRegistrationMode) {
@@ -754,7 +718,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
       return;
     }
 
-    const targetCycleId = selectedBillingCycleId || billingCyclesQuery.data?.operationalBillingCycleId || billingCyclesQuery.data?.data?.[0]?.id;
+    const targetCycleId = selectedBillingCycleId || billingCyclesQuery.data?.operationalBillingCycleId || null;
     const queries = getTargetQueriesForTab(tabId, activeDormitoryId, targetCycleId);
 
     // If all required target queries are already cached and fresh, transition immediately
@@ -772,13 +736,22 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
     // If cold or stale, keep current page visible while target queries resolve in background
     try {
       await Promise.all(
-        queries.map(q => queryClient.ensureQueryData({
-          queryKey: q.queryKey,
-          queryFn: q.queryFn,
-          staleTime: q.staleTime,
-        }))
+        queries.map(q => {
+          if (!isQueryReady(queryClient, q.queryKey, q.staleTime)) {
+            return queryClient.fetchQuery({
+              queryKey: q.queryKey,
+              queryFn: q.queryFn,
+              staleTime: q.staleTime,
+            });
+          }
+          return Promise.resolve();
+        })
       );
       if (navIntentRef.current !== currentIntent) return;
+      if (!areQueriesReady(queryClient, queries)) {
+        showNavToast('ไม่สามารถโหลดข้อมูลหน้านี้ได้ กรุณาลองอีกครั้ง');
+        return;
+      }
       React.startTransition(() => {
         changeTab(tabId);
         setIsSidebarOpen(false);
@@ -917,33 +890,6 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
       ].filter(Boolean)
     : (userRole ? menuItems.filter(item => item.roles.includes(userRole) && item.id !== 'register') : []);
 
-  // Meter readings query (only for Dashboard summary if needed)
-  const meterReadingsQuery = useQuery({
-    queryKey: queryKeys.meterReadings(activeDormitoryId, selectedBillingCycleId),
-    queryFn: async () => {
-      if (!selectedBillingCycleId || isRegistrationMode || !activeDormitoryId) return [];
-      const res = await fetch(`/api/v1/meters/readings?billingCycleId=${selectedBillingCycleId}&pageSize=200`, {
-        headers: dormHeader,
-        credentials: 'include',
-      });
-      if (!res.ok) return [];
-      const data = await res.json();
-      return data?.data || [];
-    },
-    enabled: Boolean(activeDormitoryId && selectedBillingCycleId && !isRegistrationMode && activeTab === 'dashboard'),
-    staleTime: STALE_TIMES.METER_WORKSPACE,
-  });
-
-  const meterReadings = meterReadingsQuery.data || [];
-
-  const targetCycleIdForActiveTab = selectedBillingCycleId || billingCyclesQuery.data?.operationalBillingCycleId || billingCyclesQuery.data?.data?.[0]?.id;
-  const activeTabQueries = getTargetQueriesForTab(activeTab, activeDormitoryId, targetCycleIdForActiveTab);
-  const activeTabHasError = activeTabQueries.some(q => queryClient.getQueryState(q.queryKey)?.status === 'error');
-  const activeTabIsLoading = activeTabQueries.length > 0 && activeTabQueries.some(q => {
-    const s = queryClient.getQueryState(q.queryKey);
-    return !s || s.status === 'pending';
-  });
-
   const renderSubView = () => {
     if (isRegistrationMode) {
       if (isAddDormRegistrationMode) {
@@ -972,7 +918,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
           <button
             type="button"
             onClick={() => {
-              activeTabQueries.forEach(q => queryClient.refetchQueries({ queryKey: q.queryKey }));
+              activeTabQueryResults.forEach(r => r.refetch());
             }}
             className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl transition-all cursor-pointer shadow-md"
           >
@@ -1114,7 +1060,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
           />
         );
       case 'payments':
-        return <PaymentsOwnerView bills={bills} rooms={rooms} dormitoryId={activeDormitoryId} onUpdateBills={() => queryClient.invalidateQueries({ queryKey: queryKeys.bills(activeDormitoryId) })} />;
+        return <PaymentsOwnerView bills={bills} dormitoryId={activeDormitoryId} onUpdateBills={() => queryClient.invalidateQueries({ queryKey: queryKeys.bills(activeDormitoryId) })} />;
 
       case 'maintenance':
         return (
@@ -1180,11 +1126,11 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
       {isSidebarOpen && (
         <div className="fixed inset-0 z-[100] flex lg:hidden">
           {/* Backdrop overlay */}
-          <div 
+          <div
             className="fixed inset-0 bg-slate-950/40 backdrop-blur-xs transition-opacity duration-300"
             onClick={() => setIsSidebarOpen(false)}
           />
-          
+
           {/* Drawer container */}
           <aside className="relative flex w-64 max-w-[280px] h-full flex-col justify-between bg-white p-4 text-slate-600 border-r border-slate-100 animate-in slide-in-from-left duration-200">
             <div className="flex-1 overflow-y-auto space-y-6 pr-1 pb-4">
@@ -1199,7 +1145,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
                     <span className="text-[10px] text-slate-400 font-bold block mt-1 leading-none">ระบบจัดการที่พักครบวงจร</span>
                   </div>
                 </div>
-                <button 
+                <button
                   onClick={() => setIsSidebarOpen(false)}
                   className="p-1.5 rounded-lg text-slate-400 hover:text-slate-800 hover:bg-slate-50 transition-colors"
                   aria-label="ปิดเมนู"
@@ -1235,8 +1181,8 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
                       title={isDisabled ? 'กรุณาลงทะเบียนหอพักให้เสร็จก่อนใช้งานเมนูนี้' : ''}
                       disabled={isDisabled}
                       className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-bold transition-all ${
-                        isActive 
-                          ? 'bg-[#2b64f6] text-white shadow-md shadow-blue-500/20' 
+                        isActive
+                          ? 'bg-[#2b64f6] text-white shadow-md shadow-blue-500/20'
                           : isDisabled
                             ? 'text-slate-300 cursor-not-allowed opacity-60'
                             : 'hover:bg-slate-50 hover:text-slate-900 text-slate-500'
@@ -1319,8 +1265,8 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
                   title={isDisabled ? 'กรุณาลงทะเบียนหอพักให้เสร็จก่อนใช้งานเมนูนี้' : ''}
                   disabled={isDisabled}
                   className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-semibold transition-all ${
-                    isActive 
-                      ? 'bg-blue-600 text-white shadow-md shadow-blue-600/20' 
+                    isActive
+                      ? 'bg-blue-600 text-white shadow-md shadow-blue-600/20'
                       : isDisabled
                         ? 'text-slate-300 cursor-not-allowed opacity-60'
                         : 'hover:bg-slate-50 hover:text-slate-900 text-slate-500'
@@ -1375,7 +1321,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
               >
                 <Menu className="w-5 h-5" />
               </button>
-              
+
               {/* HorPlus Logo block */}
               <div className="flex items-center gap-1.5 min-w-0">
                 <div className="min-w-0">
@@ -1465,7 +1411,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
 
               {!isRegistrationMode && (
                 <div className="relative">
-                  <button 
+                  <button
                     onClick={handleOpenNotifications}
                     data-testid="button-staff-notification-bell"
                     aria-label="การแจ้งเตือนพนักงาน"
@@ -1479,7 +1425,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
                 </div>
               )}
 
-              <button 
+              <button
                 onClick={() => {
                   if (!isRegistrationMode) {
                     changeTab(userRole === 'owner' ? 'settings' : 'dashboard');
@@ -1498,7 +1444,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
           {!isRegistrationMode && (
             <div className="relative flex items-center justify-center w-full sm:w-auto shrink-0 z-20">
               <div className="flex items-center justify-between bg-slate-100/80 p-1 rounded-2xl border border-slate-200/50 w-full sm:w-auto sm:min-w-[260px] gap-1">
-                <button 
+                <button
                   onClick={handlePrevCycle}
                   disabled={billingCycles.length === 0 || billingCycles.findIndex(c => c.id === selectedBillingCycleId || c.cycleCode === selectedCycleCode) >= billingCycles.length - 1}
                   className={`p-1.5 hover:bg-white text-slate-500 hover:text-slate-900 rounded-xl transition-all cursor-pointer ${
@@ -1508,8 +1454,8 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
                 >
                   <ChevronLeft className="w-3.5 h-3.5" />
                 </button>
-                
-                <button 
+
+                <button
                   onClick={() => {
                     setIsCycleModalOpen(!isCycleModalOpen);
                   }}
@@ -1523,7 +1469,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
                   <span className="truncate" data-testid="selected-cycle-label">{selectedCycleCode ? `ประจำเดือน ${getCycleLabel(selectedCycleCode)}` : 'ยังไม่ได้ตั้งค่ารอบคำนวณ'}</span>
                 </button>
 
-                <button 
+                <button
                   onClick={handleNextCycle}
                   disabled={billingCycles.length === 0 || billingCycles.findIndex(c => c.id === selectedBillingCycleId || c.cycleCode === selectedCycleCode) <= 0}
                   className={`p-1.5 hover:bg-white text-slate-500 hover:text-slate-900 rounded-xl transition-all cursor-pointer ${
@@ -1629,7 +1575,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
             {/* Notification Bell */}
             {!isRegistrationMode && (
               <div className="relative">
-                <button 
+                <button
                   onClick={handleOpenNotifications}
                   data-testid="button-staff-notification-bell"
                   aria-label="การแจ้งเตือนพนักงาน"
@@ -1650,7 +1596,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
                           <Bell className="w-3.5 h-3.5 text-blue-600" />
                           การแจ้งเตือน
                         </h4>
-                        <button 
+                        <button
                           onClick={() => setIsNotificationOpen(false)}
                           className="text-[10px] font-bold text-slate-400 hover:text-slate-600"
                         >
@@ -1703,7 +1649,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
             )}
 
             {!isRegistrationMode && <div className="h-5 w-px bg-slate-100 my-auto" />}
-            
+
             {/* User Profile Avatar */}
             <button
               onClick={() => {
@@ -1816,4 +1762,3 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
     </div>
   );
 };
-
