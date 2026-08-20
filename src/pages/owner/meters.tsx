@@ -1033,6 +1033,20 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     return matchedCount;
   };
 
+  const handleApplyQuickFill = () => {
+    if (!isMutationReady) {
+      showToast('ข้อมูลหรือสิทธิ์การคิดรอบบิลยังไม่พร้อมใช้งาน');
+      return;
+    }
+    const count = parseQuickFillText(quickFillText);
+    if (count > 0) {
+      showToast(`กรอกข้อมูลด่วนสำเร็จ! อัปเดตข้อมูล ${count} ห้อง`);
+    } else {
+      showToast("ไม่พบข้อมูลห้องพักที่ตรงกัน กรุณาตรวจสอบรูปแบบ");
+    }
+    setIsQuickFillOpen(false);
+  };
+
   // DEVELOPER NOTE / บันทึกผู้พัฒนา:
   // สำหรับระบบ SaaS ในอนาคต หากหอพักตั้งค่ารูปแบบค่าน้ำประปา หรือค่าไฟฟ้า เป็น "ไม่ใช่ บาท/หน่วย"
   // (เช่น เป็นรูปแบบ 'person' หรือ 'room' ซึ่งเป็นระบบเหมาจ่ายรายคนหรือรายห้อง)
@@ -2574,19 +2588,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                   <button
                     type="button"
                     disabled={!isMutationReady}
-                    onClick={() => {
-                      if (!isMutationReady) {
-                        showToast('ข้อมูลหรือสิทธิ์การคิดรอบบิลยังไม่พร้อมใช้งาน');
-                        return;
-                      }
-                      const count = parseQuickFillText(quickFillText);
-                      if (count > 0) {
-                        showToast(`กรอกข้อมูลด่วนสำเร็จ! อัปเดตข้อมูล ${count} ห้อง`);
-                      } else {
-                        showToast("ไม่พบข้อมูลห้องพักที่ตรงกัน กรุณาตรวจสอบรูปแบบ");
-                      }
-                      setIsQuickFillOpen(false);
-                    }}
+                    onClick={handleApplyQuickFill}
                     className="bg-slate-950 hover:bg-slate-900 disabled:opacity-50 text-white font-bold text-[10px] sm:text-xs px-3 sm:px-5 py-2.5 rounded-xl transition-all shadow-md shadow-slate-950/10 cursor-pointer active:scale-98 flex items-center gap-1 whitespace-nowrap shrink-0"
                   >
                     ต่อไป

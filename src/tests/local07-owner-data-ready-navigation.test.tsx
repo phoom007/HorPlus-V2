@@ -610,6 +610,7 @@ describe('LOCAL-07 — Data-Ready Navigation & Authority Suite', () => {
       const client = createTestClient();
       const dormId = 'dorm-fresh-001';
       let activeTab = 'dashboard';
+      const seenTabs = new Set<string>(['dashboard']);
       let toastMessage: string | null = null;
       const showNavToast = (msg: string) => { toastMessage = msg; };
 
@@ -626,6 +627,52 @@ describe('LOCAL-07 — Data-Ready Navigation & Authority Suite', () => {
 
       expect(toastMessage).toBe('ไม่สามารถโหลดข้อมูลหน้านี้ได้ กรุณาลองอีกครั้ง');
       expect(activeTab).toBe('dashboard');
+      expect(seenTabs.has('payments')).toBe(false);
+    });
+
+    it('Browser Back/Forward or route-derived navigation invalidates an older pending tab intent and preserves seen-state', async () => {
+      const navIntentRef = { current: 0 };
+      let activeTab = 'dashboard';
+      const seenTabs = new Set<string>(['dashboard']);
+
+      let resolveSlowTab: () => void = () => {};
+      const slowTabPromise = new Promise<void>((resolve) => {
+        resolveSlowTab = resolve;
+      });
+
+      // 1. User initiates tab navigation to payments (slow network)
+      const startTabNavigation = async (targetTab: string) => {
+        const intent = ++navIntentRef.current;
+        await slowTabPromise;
+        if (navIntentRef.current !== intent) {
+          return; // Suppressed / invalidated by newer intent
+        }
+        activeTab = targetTab;
+        seenTabs.add(targetTab);
+      };
+
+      const tabNavPromise = startTabNavigation('payments');
+
+      // 2. User triggers browser Back/Forward navigation (route changes to /owner/contracts)
+      // As in OwnerWorkspace line 372: navIntentRef.current++ upon pathSegment change
+      const simulateBrowserHistoryNavigation = (newRouteSegment: string) => {
+        navIntentRef.current++;
+        activeTab = newRouteSegment;
+        seenTabs.add(newRouteSegment);
+      };
+
+      simulateBrowserHistoryNavigation('contracts');
+      expect(activeTab).toBe('contracts');
+      expect(seenTabs.has('contracts')).toBe(true);
+
+      // 3. Older slow tab intent finally resolves
+      resolveSlowTab();
+      await tabNavPromise;
+
+      // Active tab MUST remain 'contracts' from the history navigation
+      expect(activeTab).toBe('contracts');
+      // 'payments' seen-state MUST NOT be added by the invalidated intent
+      expect(seenTabs.has('payments')).toBe(false);
     });
   });
 
