@@ -7,7 +7,7 @@ export interface RolePermissions {
 export interface RoleEntity {
   id: string;
   dormitoryId?: string | null;
-  code: 'OWNER' | 'MANAGER' | 'FINANCE' | 'STAFF' | 'TECH' | string;
+  code: 'OWNER' | 'MANAGER' | 'STAFF' | string;
   name: string;
   permissions: RolePermissions;
   isSystem: boolean;
@@ -49,24 +49,11 @@ export class InMemoryRoleRepository implements IRoleRepository {
         name: 'ผู้จัดการ',
         permissions: {
           rooms: ['view', 'create', 'update'],
-          tenants: ['view', 'create', 'update'],
+          tenants: ['view', 'create', 'update', 'document:read'],
           contracts: ['view', 'create', 'update'],
           bills: ['view', 'generate'],
-          maintenance: ['view', 'update'],
-        },
-        isSystem: true,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      },
-      {
-        id: 'role-finance',
-        dormitoryId: null,
-        code: 'FINANCE',
-        name: 'การเงิน',
-        permissions: {
-          bills: ['view', 'generate', 'update'],
-          payments: ['view', 'approve', 'reject'],
-          receipts: ['view'],
+          maintenance: ['view', 'update', 'close'],
+          meters: ['view', 'record'],
         },
         isSystem: true,
         createdAt: new Date(),
@@ -82,19 +69,6 @@ export class InMemoryRoleRepository implements IRoleRepository {
           tenants: ['view'],
           meters: ['view', 'record'],
           maintenance: ['view', 'update'],
-        },
-        isSystem: true,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      },
-      {
-        id: 'role-tech',
-        dormitoryId: null,
-        code: 'TECH',
-        name: 'ช่างเทคนิค',
-        permissions: {
-          maintenance: ['view', 'update'],
-          meters: ['view', 'record'],
         },
         isSystem: true,
         createdAt: new Date(),

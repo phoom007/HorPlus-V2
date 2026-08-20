@@ -212,6 +212,10 @@ export async function seedLocal07Data() {
         roomsPerFloor: FRESH_DORM.building.roomsPerFloor,
         monthlyRent: FRESH_DORM.building.monthlyRent,
         depositAmount: FRESH_DORM.building.depositAmount,
+        termRent: FRESH_DORM.building.termRent,
+        dailyRent: FRESH_DORM.building.dailyRent,
+        termMonths: FRESH_DORM.building.termMonths,
+        maxInstallmentMonths: FRESH_DORM.building.maxTermRentInstallments,
         maximumOccupants: FRESH_DORM.building.maximumOccupants,
       },
     ],
@@ -338,14 +342,16 @@ export async function seedLocal07Data() {
     },
   });
 
-  const techRole = await prisma.role.create({
+  const staffRole = await prisma.role.create({
     data: {
       dormitoryId: compDorm.id,
-      code: 'TECH',
-      name: 'ช่างเทคนิค',
+      code: 'STAFF',
+      name: 'พนักงานทั่วไป',
       isSystem: true,
       permissions: {
-        maintenance: ['view', 'manage'],
+        rooms: ['view'],
+        tenants: ['view'],
+        maintenance: ['view', 'update'],
         meters: ['view', 'record'],
       },
     },
@@ -366,7 +372,7 @@ export async function seedLocal07Data() {
     data: [
       { dormitoryId: compDorm.id, userId: compOwner.id, roleId: ownerRole.id, status: 'active' },
       { dormitoryId: compDorm.id, userId: compManager.id, roleId: managerRole.id, status: 'active' },
-      { dormitoryId: compDorm.id, userId: compTech.id, roleId: techRole.id, status: 'active' },
+      { dormitoryId: compDorm.id, userId: compTech.id, roleId: staffRole.id, status: 'active' },
       { dormitoryId: compDorm.id, userId: tenantSomchaiUser.id, roleId: tenantRole.id, status: 'active' },
     ],
   });
@@ -445,6 +451,12 @@ export async function seedLocal07Data() {
       floorCount: 3,
       roomsPerFloor: 6,
       hasElevator: true,
+      monthlyRent: 4500,
+      depositAmount: 4500,
+      termRent: 18000,
+      dailyRent: 500,
+      termMonths: 4,
+      maxTermRentInstallments: 2,
     },
   });
 
@@ -456,6 +468,12 @@ export async function seedLocal07Data() {
       floorCount: 2,
       roomsPerFloor: 1,
       hasElevator: false,
+      monthlyRent: 5500,
+      depositAmount: 5500,
+      termRent: 22000,
+      dailyRent: 600,
+      termMonths: 4,
+      maxTermRentInstallments: 2,
       waterRate: 20.0,
       electricityRate: 8.0,
     },
@@ -464,27 +482,27 @@ export async function seedLocal07Data() {
   // 18 Rooms
   const roomData = [
     // Floor 1 (Building A)
-    { roomNumber: '101', floor: 1, rent: 4500, status: 'occupied', bldId: bldA.id },
-    { roomNumber: '102', floor: 1, rent: 4500, status: 'occupied', bldId: bldA.id },
-    { roomNumber: '103', floor: 1, rent: 4500, status: 'occupied', bldId: bldA.id },
-    { roomNumber: '104', floor: 1, rent: 4500, status: 'occupied', bldId: bldA.id },
-    { roomNumber: '105', floor: 1, rent: 4500, status: 'vacant', bldId: bldA.id },
-    { roomNumber: '106', floor: 1, rent: 4500, status: 'vacant', bldId: bldA.id },
+    { roomNumber: '101', floor: 1, rent: 4500, termRent: 18000, dailyRent: 500, status: 'occupied', bldId: bldA.id },
+    { roomNumber: '102', floor: 1, rent: 4500, termRent: 17500, dailyRent: 450, status: 'occupied', bldId: bldA.id },
+    { roomNumber: '103', floor: 1, rent: 4500, termRent: 18000, dailyRent: 500, status: 'occupied', bldId: bldA.id },
+    { roomNumber: '104', floor: 1, rent: 4500, termRent: 18000, dailyRent: 500, status: 'occupied', bldId: bldA.id },
+    { roomNumber: '105', floor: 1, rent: 4500, termRent: 18000, dailyRent: 500, status: 'vacant', bldId: bldA.id },
+    { roomNumber: '106', floor: 1, rent: 4500, termRent: 18000, dailyRent: 500, status: 'vacant', bldId: bldA.id },
     // Floor 2 (Building A)
-    { roomNumber: '201', floor: 2, rent: 4800, status: 'occupied', bldId: bldA.id },
-    { roomNumber: '202', floor: 2, rent: 4800, status: 'occupied', bldId: bldA.id },
-    { roomNumber: '203', floor: 2, rent: 4800, status: 'occupied', bldId: bldA.id },
-    { roomNumber: '204', floor: 2, rent: 4800, status: 'vacant', bldId: bldA.id }, // Moved out 2026-07-31, settlement pending
-    { roomNumber: '205', floor: 2, rent: 4800, status: 'vacant', bldId: bldA.id },
-    { roomNumber: '206', floor: 2, rent: 4800, status: 'maintenance', bldId: bldA.id },
+    { roomNumber: '201', floor: 2, rent: 4800, termRent: 19200, dailyRent: 550, status: 'occupied', bldId: bldA.id },
+    { roomNumber: '202', floor: 2, rent: 4800, termRent: 19200, dailyRent: 550, status: 'occupied', bldId: bldA.id },
+    { roomNumber: '203', floor: 2, rent: 4800, termRent: 19200, dailyRent: 550, status: 'occupied', bldId: bldA.id },
+    { roomNumber: '204', floor: 2, rent: 4800, termRent: 19200, dailyRent: 550, status: 'vacant', bldId: bldA.id }, // Moved out 2026-07-31, settlement pending
+    { roomNumber: '205', floor: 2, rent: 4800, termRent: 19200, dailyRent: 550, status: 'vacant', bldId: bldA.id },
+    { roomNumber: '206', floor: 2, rent: 4800, termRent: 19200, dailyRent: 550, status: 'maintenance', bldId: bldA.id },
     // Floor 3 (Building A)
-    { roomNumber: '301', floor: 3, rent: 5000, status: 'occupied', bldId: bldA.id },
-    { roomNumber: '302', floor: 3, rent: 5000, status: 'occupied', bldId: bldA.id },
-    { roomNumber: '303', floor: 3, rent: 5000, status: 'occupied', bldId: bldA.id },
-    { roomNumber: '304', floor: 3, rent: 5000, status: 'reserved', bldId: bldA.id },
+    { roomNumber: '301', floor: 3, rent: 5000, termRent: 20000, dailyRent: 600, status: 'occupied', bldId: bldA.id },
+    { roomNumber: '302', floor: 3, rent: 5000, termRent: 20000, dailyRent: 600, status: 'occupied', bldId: bldA.id },
+    { roomNumber: '303', floor: 3, rent: 5000, termRent: 20000, dailyRent: 600, status: 'occupied', bldId: bldA.id },
+    { roomNumber: '304', floor: 3, rent: 5000, termRent: 20000, dailyRent: 600, status: 'reserved', bldId: bldA.id },
     // Building B
-    { roomNumber: 'B101', floor: 1, rent: 5500, status: 'occupied', bldId: bldB.id },
-    { roomNumber: 'B102', floor: 2, rent: 5500, status: 'vacant', bldId: bldB.id },
+    { roomNumber: 'B101', floor: 1, rent: 5500, termRent: 22000, dailyRent: 600, status: 'occupied', bldId: bldB.id },
+    { roomNumber: 'B102', floor: 2, rent: 5500, termRent: 22000, dailyRent: 600, status: 'vacant', bldId: bldB.id },
   ];
 
   const createdRooms = {};
@@ -499,6 +517,8 @@ export async function seedLocal07Data() {
         roomType: 'standard',
         monthlyRent: r.rent,
         depositAmount: r.rent,
+        termRent: r.termRent,
+        dailyRent: r.dailyRent,
         status: r.status,
       },
     });

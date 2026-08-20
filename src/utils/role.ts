@@ -35,14 +35,10 @@ export function normalizeRole(roleInput?: any): WorkspaceRole | null {
   // MANAGER
   if (
     rUpper === 'MANAGER' ||
-    rUpper === 'FINANCE' ||
     r === 'role-manager' ||
-    r === 'role-finance' ||
     rUpper === 'ROLE-MANAGER' ||
-    rUpper === 'ROLE-FINANCE' ||
     r === 'manager' ||
-    r === 'ผู้จัดการ' ||
-    r === 'เจ้าหน้าที่การเงิน'
+    r === 'ผู้จัดการ'
   ) {
     return 'manager';
   }

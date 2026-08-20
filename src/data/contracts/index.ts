@@ -157,7 +157,7 @@ export interface AuditDataSource {
 
 export interface StaffRoleDataSource {
   getFollowers(params?: { friendStatus?: string; search?: string }): Promise<DataResult<any[]>>;
-  assignRole(params: { followerId: string; roleCode: 'OWNER' | 'MANAGER' | 'TECH' }): Promise<DataResult<any>>;
+  assignRole(params: { followerId: string; roleCode: 'OWNER' | 'MANAGER' | 'STAFF' }): Promise<DataResult<any>>;
   revokeRole(assignmentId: string, reason?: string): Promise<DataResult<any>>;
 }
 

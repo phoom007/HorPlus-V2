@@ -138,7 +138,7 @@ export function createMaintenanceRouter(maintenanceService: MaintenanceService =
         return res.status(400).json({ error: { code: 'INVALID_INPUT', message: 'Missing status' } });
       }
 
-      const actorType = actor?.roleCode === 'TECH' ? 'tech' : (actor?.roleCode === 'MANAGER' ? 'manager' : 'owner');
+      const actorType = actor?.roleCode === 'STAFF' ? 'staff' : (actor?.roleCode === 'MANAGER' ? 'manager' : 'owner');
 
       const updated = await maintenanceService.updateStatus({
         dormitoryId,
@@ -162,8 +162,8 @@ export function createMaintenanceRouter(maintenanceService: MaintenanceService =
       const { actor, dormitoryId } = getContext(req);
       const { note } = req.body;
 
-      if (actor?.roleCode === 'TECH') {
-        return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'TECH role is not permitted to close maintenance requests' } });
+      if (actor?.roleCode === 'STAFF') {
+        return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'STAFF role is not permitted to close maintenance requests' } });
       }
 
       const updated = await maintenanceService.updateStatus({

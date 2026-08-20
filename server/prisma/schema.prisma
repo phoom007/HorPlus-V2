@@ -195,7 +195,7 @@ model DormitoryPropertyDefaults {
 model Role {
   id          String   @id @default(uuid()) @db.Uuid
   dormitoryId String?  @map("dormitory_id") @db.Uuid
-  code        String   @db.VarChar(50) // OWNER, MANAGER, FINANCE, STAFF, TECH
+  code        String   @db.VarChar(50) // OWNER, MANAGER, STAFF
   name        String   @db.VarChar(100)
   permissions Json     @map("permissions")
   isSystem    Boolean  @default(false) @map("is_system")

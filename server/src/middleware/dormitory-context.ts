@@ -139,9 +139,23 @@ export async function resolveAuthoritativeDormitoryContext(req: Request): Promis
     throw new AppError('Dormitory membership role is invalid or unassigned.', 403, 'MEMBERSHIP_ROLE_INVALID');
   }
 
-  const roleCode = String(rawRoleCode || '').toUpperCase();
+  let roleCode = String(rawRoleCode || '').toUpperCase();
   if (!roleCode) {
     throw new AppError('Dormitory membership role code is invalid.', 403, 'MEMBERSHIP_ROLE_INVALID');
+  }
+
+  // Defend against deprecated role claims in stale sessions
+  if (roleCode === 'FINANCE') {
+    throw new AppError('The FINANCE role has been deprecated and revoked. Please contact the dormitory owner.', 403, 'ROLE_DEPRECATED');
+  }
+
+  // Remap legacy TECH session claims to STAFF
+  if (roleCode === 'TECH') {
+    roleCode = 'STAFF';
+  }
+
+  if (!['OWNER', 'MANAGER', 'STAFF', 'TENANT'].includes(roleCode)) {
+    throw new AppError('Dormitory membership role is unrecognized.', 403, 'MEMBERSHIP_ROLE_INVALID');
   }
 
   const rawPerms = mem.rolePermissions ?? roleObj?.permissions ?? (mem as any).permissions;

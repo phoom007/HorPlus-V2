@@ -34,7 +34,7 @@ export const OwnerUsers: React.FC<OwnerUsersProps> = ({ onAddLog }) => {
   });
 
   const [selectedFriendId, setSelectedFriendId] = useState<string>('');
-  const [grantRole, setGrantRole] = useState<'OWNER' | 'MANAGER' | 'TECH'>('MANAGER');
+  const [grantRole, setGrantRole] = useState<'OWNER' | 'MANAGER' | 'STAFF'>('MANAGER');
   const [isCreating, setIsCreating] = useState(false);
   const [createdGrantResult, setCreatedGrantResult] = useState<{
     bearerUrl: string;
@@ -134,7 +134,7 @@ export const OwnerUsers: React.FC<OwnerUsersProps> = ({ onAddLog }) => {
     }
   };
 
-  const handleRoleChange = async (grantId: string, newRole: 'OWNER' | 'MANAGER' | 'TECH') => {
+  const handleRoleChange = async (grantId: string, newRole: 'OWNER' | 'MANAGER' | 'STAFF') => {
     const dormId = getDormId();
     if (!dormId) return;
 
@@ -381,7 +381,7 @@ export const OwnerUsers: React.FC<OwnerUsersProps> = ({ onAddLog }) => {
               >
                 <option value="OWNER">OWNER (เจ้าของร่วม - ดูแลได้ทุกอย่าง)</option>
                 <option value="MANAGER">MANAGER (ผู้จัดการ - ดูแลคนพัก สัญญา บิล)</option>
-                <option value="TECH">TECH (ช่าง / แม่บ้าน - จดมิเตอร์ บันทึกงานซ่อม)</option>
+                <option value="STAFF">STAFF (พนักงานทั่วไป - แม่บ้าน / ช่าง)</option>
               </select>
             </div>
 
@@ -498,7 +498,7 @@ export const OwnerUsers: React.FC<OwnerUsersProps> = ({ onAddLog }) => {
                         >
                           <option value="OWNER">OWNER</option>
                           <option value="MANAGER">MANAGER</option>
-                          <option value="TECH">TECH</option>
+                          <option value="STAFF">STAFF</option>
                         </select>
                       </td>
 

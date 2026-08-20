@@ -13,7 +13,7 @@ export interface StaffMember {
   displayName: string;
   email?: string;
   pictureUrl?: string;
-  roleCode: 'OWNER' | 'MANAGER' | 'TECH';
+  roleCode: 'OWNER' | 'MANAGER' | 'STAFF';
   roleName?: string;
   membershipOrigin?: string;
   label?: string;
@@ -105,7 +105,7 @@ export const Task009ApiAdapter = {
   async createAccessGrant(
     propertyId: string,
     lineFriendId: string,
-    roleCode: 'OWNER' | 'MANAGER' | 'TECH'
+    roleCode: 'OWNER' | 'MANAGER' | 'STAFF'
   ): Promise<{ success: boolean; data?: { bearerUrl: string; grant: any; pushed?: boolean; deliveryStatus?: string }; error?: any }> {
     try {
       const res = await httpRequest<any>('POST', `/properties/${propertyId}/access-grants`, {
@@ -144,7 +144,7 @@ export const Task009ApiAdapter = {
   async updateAccessGrantRole(
     propertyId: string,
     grantId: string,
-    roleCode: 'OWNER' | 'MANAGER' | 'TECH'
+    roleCode: 'OWNER' | 'MANAGER' | 'STAFF'
   ): Promise<{ success: boolean; data?: any; error?: any }> {
     try {
       const res = await httpRequest<any>('PATCH', `/properties/${propertyId}/access-grants/${grantId}/role`, {

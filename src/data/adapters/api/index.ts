@@ -1036,7 +1036,7 @@ export class ApiStaffRoleAdapter implements StaffRoleDataSource {
     }
   }
 
-  async assignRole(params: { followerId: string; roleCode: 'OWNER' | 'MANAGER' | 'TECH' }): Promise<DataResult<any>> {
+  async assignRole(params: { followerId: string; roleCode: 'OWNER' | 'MANAGER' | 'STAFF' }): Promise<DataResult<any>> {
     try {
       const data = await httpRequest<any>('POST', '/staff-role-assignments', params);
       return { success: true, data };

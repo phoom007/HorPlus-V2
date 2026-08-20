@@ -7,7 +7,7 @@ export interface AuthenticatedActor {
   userId?: string;
   dormitoryId: string;
   dormitoryMemberId?: string;
-  roleCode?: 'OWNER' | 'MANAGER' | 'TECH' | 'STAFF';
+  roleCode?: 'OWNER' | 'MANAGER' | 'STAFF';
   tenantId?: string;
   contractId?: string;
   roomId?: string;
@@ -150,7 +150,7 @@ export function requireTechAccess() {
       });
     }
     const role = req.actor.roleCode;
-    if (role !== 'OWNER' && role !== 'MANAGER' && role !== 'TECH') {
+    if (role !== 'OWNER' && role !== 'MANAGER' && role !== 'STAFF') {
       return res.status(403).json({
         error: {
           code: 'INSUFFICIENT_PERMISSION',

@@ -84,11 +84,11 @@ export class AccessGrantService {
   async createAccessGrant(
     dormitoryId: string,
     lineFriendId: string,
-    roleCode: 'OWNER' | 'MANAGER' | 'TECH',
+    roleCode: 'OWNER' | 'MANAGER' | 'STAFF',
     createdByPrincipal: string
   ) {
-    if (!['OWNER', 'MANAGER', 'TECH'].includes(roleCode)) {
-      throw new AppError('Role must be OWNER, MANAGER, or TECH', 400, 'INVALID_ROLE_CODE');
+    if (!['OWNER', 'MANAGER', 'STAFF'].includes(roleCode)) {
+      throw new AppError('Role must be OWNER, MANAGER, or STAFF', 400, 'INVALID_ROLE_CODE');
     }
 
     const grantResult = await this.prisma.$transaction(async (tx) => {
@@ -506,11 +506,11 @@ export class AccessGrantService {
   async changeGrantRole(
     dormitoryId: string,
     grantId: string,
-    newRoleCode: 'OWNER' | 'MANAGER' | 'TECH',
+    newRoleCode: 'OWNER' | 'MANAGER' | 'STAFF',
     updatedByPrincipal: string
   ) {
-    if (!['OWNER', 'MANAGER', 'TECH'].includes(newRoleCode)) {
-      throw new AppError('Role must be OWNER, MANAGER, or TECH', 400, 'INVALID_ROLE_CODE');
+    if (!['OWNER', 'MANAGER', 'STAFF'].includes(newRoleCode)) {
+      throw new AppError('Role must be OWNER, MANAGER, or STAFF', 400, 'INVALID_ROLE_CODE');
     }
 
     return await this.prisma.$transaction(async (tx) => {
