@@ -547,7 +547,15 @@ export class DailyStayService {
   public async ownerQuickAddDailyStay(
     dormitoryId: string,
     data: OwnerQuickAddDailyStayDto,
-    userId: string
+    userId: string,
+    idCardData?: {
+      idCardObjectKey?: string | null;
+      idCardSha256?: string | null;
+      idCardMimeType?: string | null;
+      idCardByteSize?: number | null;
+      idCardUploadedAt?: Date | null;
+      idCardUploadedByUserId?: string | null;
+    } | null
   ) {
     const fullNameClean = data.fullName?.trim();
     if (!fullNameClean) {
@@ -649,6 +657,12 @@ export class DailyStayService {
           phone: phoneClean,
           status: 'active',
           linkedUserId: null,
+          idCardObjectKey: idCardData?.idCardObjectKey || null,
+          idCardSha256: idCardData?.idCardSha256 || null,
+          idCardMimeType: idCardData?.idCardMimeType || null,
+          idCardByteSize: idCardData?.idCardByteSize || null,
+          idCardUploadedAt: idCardData?.idCardUploadedAt || null,
+          idCardUploadedByUserId: idCardData?.idCardUploadedByUserId || null,
         },
       });
 

@@ -55,7 +55,15 @@ export class ProvisionalRentalTermService {
   public async createProvisionalTenantAndTerm(
     dormitoryId: string,
     data: CreateProvisionalRentalTermDto,
-    userId?: string
+    userId?: string,
+    idCardData?: {
+      idCardObjectKey?: string | null;
+      idCardSha256?: string | null;
+      idCardMimeType?: string | null;
+      idCardByteSize?: number | null;
+      idCardUploadedAt?: Date | null;
+      idCardUploadedByUserId?: string | null;
+    } | null
   ) {
     const fullNameClean = data.fullName.trim();
     if (!fullNameClean) {
@@ -218,6 +226,12 @@ export class ProvisionalRentalTermService {
           displayName: fullNameClean,
           phone: phoneClean,
           status: 'active',
+          idCardObjectKey: idCardData?.idCardObjectKey || null,
+          idCardSha256: idCardData?.idCardSha256 || null,
+          idCardMimeType: idCardData?.idCardMimeType || null,
+          idCardByteSize: idCardData?.idCardByteSize || null,
+          idCardUploadedAt: idCardData?.idCardUploadedAt || null,
+          idCardUploadedByUserId: idCardData?.idCardUploadedByUserId || null,
         },
       });
 

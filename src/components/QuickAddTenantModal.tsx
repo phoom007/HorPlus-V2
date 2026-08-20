@@ -6,10 +6,11 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { X, Calendar, User, Phone, DollarSign, Clock, Shield, CheckCircle, AlertCircle, Loader2 } from 'lucide-react';
+import { X, Calendar, User, Phone, DollarSign, Clock, Shield, CheckCircle, AlertCircle, Loader2, Image as ImageIcon, Trash2 } from 'lucide-react';
 import { QuickAddRoomContext } from '../types';
 import { httpRequest } from '../data/httpClient';
-import { formatBaht } from './GlobalComponents';
+import { formatBaht, formatThaiDate, normalizeMoneyInput, OwnerDateInput } from './GlobalComponents';
+import { calculateInstallmentSchedule } from '../utils/installmentCalculator';
 
 interface QuickAddTenantModalProps {
   isOpen: boolean;
@@ -26,10 +27,15 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
   context,
   onSuccess,
 }) => {
-  const [activeTab, setActiveTab] = useState<RentalTypeTab>('MONTHLY');
+  const [activeTab, setActiveTab] = useState<RentalTypeTab>('TERM');
   const [fullName, setFullName] = useState('');
   const [phone, setPhone] = useState('');
   const [startDate, setStartDate] = useState(() => new Date().toISOString().slice(0, 10));
+
+  // Identity Card Document upload (0 or 1 image, max 5 MB, JPEG/PNG/WebP only, no PDF)
+  const [idCardFile, setIdCardFile] = useState<File | null>(null);
+  const [idCardPreview, setIdCardPreview] = useState<string | null>(null);
+  const [idCardError, setIdCardError] = useState<string | null>(null);
 
   // Monthly fields
   const [durationMonths, setDurationMonths] = useState(1);
@@ -111,7 +117,7 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
           : null;
         setTermRent(tRent);
         setMaxInstallments(bldMaxInstallments);
-        setTermInstallmentCount(1);
+        setTermInstallmentCount(bldMaxInstallments);
         setTermEndDate(calculateMonthEndDate(today, bldTermMonths));
       } else {
         setTermMonths(null);
@@ -129,8 +135,41 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
       setDailyDeposit(dDep);
       setDailyEndDate(today);
       setDepositDeclaredStatus('UNPAID');
+
+      // Clear ID card attachment on open
+      if (idCardPreview) {
+        URL.revokeObjectURL(idCardPreview);
+      }
+      setIdCardFile(null);
+      setIdCardPreview(null);
+      setIdCardError(null);
     }
-  }, [context, isOpen]);
+  }, [context?.roomId, context, isOpen]);
+
+  const handleFileSelect = (file: File | null) => {
+    setIdCardError(null);
+    if (!file) {
+      if (idCardPreview) URL.revokeObjectURL(idCardPreview);
+      setIdCardFile(null);
+      setIdCardPreview(null);
+      return;
+    }
+
+    const allowedTypes = ['image/jpeg', 'image/png', 'image/webp'];
+    if (!allowedTypes.includes(file.type)) {
+      setIdCardError('รองรับเฉพาะไฟล์รูปภาพ (JPEG, PNG, WebP) เท่านั้น ไม่รองรับไฟล์ PDF');
+      return;
+    }
+
+    if (file.size > 5 * 1024 * 1024) {
+      setIdCardError(`ขนาดไฟล์รูปภาพเกิน 5 MB (${(file.size / (1024 * 1024)).toFixed(2)} MB) กรุณาเลือกไฟล์ขนาดไม่เกิน 5 MB`);
+      return;
+    }
+
+    if (idCardPreview) URL.revokeObjectURL(idCardPreview);
+    setIdCardFile(file);
+    setIdCardPreview(URL.createObjectURL(file));
+  };
 
   // Recalculate monthly end date on start or duration change
   useEffect(() => {
@@ -205,9 +244,20 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
           totalRentAmount: (monthlyRent * durationMonths).toFixed(2),
         };
 
-        await httpRequest('POST', '/api/v1/meters/provisional-terms', payload, {
-          headers: { 'x-dormitory-id': context.dormitoryId },
-        });
+        if (idCardFile) {
+          const formData = new FormData();
+          formData.append('data', JSON.stringify(payload));
+          formData.append('idCardImage', idCardFile);
+          await httpRequest('POST', '/api/v1/meters/provisional-terms', formData, {
+            headers: {
+              'x-dormitory-id': context.dormitoryId,
+            },
+          });
+        } else {
+          await httpRequest('POST', '/api/v1/meters/provisional-terms', payload, {
+            headers: { 'x-dormitory-id': context.dormitoryId },
+          });
+        }
 
         onSuccess(`เพิ่มผู้เช่ารายเดือน (${context.roomNumber}) เรียบร้อยแล้ว`);
         onClose();
@@ -223,9 +273,20 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
           termInstallmentCount: Number(termInstallmentCount),
         };
 
-        await httpRequest('POST', '/api/v1/meters/provisional-terms', payload, {
-          headers: { 'x-dormitory-id': context.dormitoryId },
-        });
+        if (idCardFile) {
+          const formData = new FormData();
+          formData.append('data', JSON.stringify(payload));
+          formData.append('idCardImage', idCardFile);
+          await httpRequest('POST', '/api/v1/meters/provisional-terms', formData, {
+            headers: {
+              'x-dormitory-id': context.dormitoryId,
+            },
+          });
+        } else {
+          await httpRequest('POST', '/api/v1/meters/provisional-terms', payload, {
+            headers: { 'x-dormitory-id': context.dormitoryId },
+          });
+        }
 
         onSuccess(`เพิ่มผู้เช่ารายเทอม (${context.roomNumber}) เรียบร้อยแล้ว`);
         onClose();
@@ -242,9 +303,20 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
           depositDeclaredStatus,
         };
 
-        await httpRequest('POST', '/api/v1/daily-stays/owner-quick-add', payload, {
-          headers: { 'x-dormitory-id': context.dormitoryId },
-        });
+        if (idCardFile) {
+          const formData = new FormData();
+          formData.append('data', JSON.stringify(payload));
+          formData.append('idCardImage', idCardFile);
+          await httpRequest('POST', '/api/v1/daily-stays/owner-quick-add', formData, {
+            headers: {
+              'x-dormitory-id': context.dormitoryId,
+            },
+          });
+        } else {
+          await httpRequest('POST', '/api/v1/daily-stays/owner-quick-add', payload, {
+            headers: { 'x-dormitory-id': context.dormitoryId },
+          });
+        }
 
         onSuccess(`เพิ่มผู้เช่ารายวัน (${context.roomNumber}) และออกใบแจ้งหนี้เรียบร้อยแล้ว`);
         onClose();
@@ -263,7 +335,7 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
         <div className="p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
           <div>
             <h3 className="font-extrabold text-slate-900 text-base">
-              เพิ่มผู้เช่าด่วน (Quick Add)
+              เพิ่มผู้เช่าด่วน
             </h3>
             <p className="text-xs text-slate-500 mt-0.5">
               ห้อง <span className="font-bold text-indigo-600">{context.roomNumber}</span> — สร้างสัญญาชั่วคราว/รายวันใน 1 ขั้นตอน
@@ -277,20 +349,9 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
           </button>
         </div>
 
-        {/* 3-Type Rental Mode Tabs */}
+        {/* 3-Type Rental Mode Tabs: TERM -> MONTHLY -> DAILY */}
         <div className="p-4 bg-slate-50 border-b border-slate-100">
           <div className="flex bg-slate-200/80 p-1 rounded-2xl gap-1">
-            <button
-              type="button"
-              onClick={() => setActiveTab('MONTHLY')}
-              className={`flex-1 py-2 text-xs font-extrabold rounded-xl transition-all ${
-                activeTab === 'MONTHLY'
-                  ? 'bg-white text-indigo-600 shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              รายเดือน (Monthly)
-            </button>
             <button
               type="button"
               onClick={() => setActiveTab('TERM')}
@@ -300,7 +361,18 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              รายเทอม (Term)
+              รายเทอม
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('MONTHLY')}
+              className={`flex-1 py-2 text-xs font-extrabold rounded-xl transition-all ${
+                activeTab === 'MONTHLY'
+                  ? 'bg-white text-indigo-600 shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              รายเดือน
             </button>
             <button
               type="button"
@@ -311,7 +383,7 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              รายวัน (Daily)
+              รายวัน
             </button>
           </div>
         </div>
@@ -360,81 +432,76 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
               </div>
             </div>
 
+            {/* Optional ID-Card Document Attachment */}
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">
+                รูปเอกสารสำเนาบัตรประชาชน (ถ้ามี)
+              </label>
+              <div className="space-y-2">
+                {!idCardFile ? (
+                  <label className="border-2 border-dashed border-slate-200 hover:border-indigo-400 bg-slate-50/60 hover:bg-indigo-50/30 rounded-2xl p-3.5 flex flex-col items-center justify-center cursor-pointer transition-all group">
+                    <input
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp"
+                      className="hidden"
+                      onChange={(e) => {
+                        const f = e.target.files?.[0] || null;
+                        handleFileSelect(f);
+                      }}
+                    />
+                    <div className="flex items-center gap-2 text-slate-500 group-hover:text-indigo-600">
+                      <ImageIcon className="w-4 h-4" />
+                      <span className="text-xs font-bold">แนบรูปภาพบัตรประชาชน (JPG, PNG, WebP)</span>
+                    </div>
+                    <span className="text-[10px] text-slate-400 mt-0.5">สูงสุด 1 รูป ขนาดไม่เกิน 5 MB (ไม่บังคับ)</span>
+                  </label>
+                ) : (
+                  <div className="flex items-center justify-between p-2.5 bg-indigo-50/60 border border-indigo-100 rounded-2xl">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      {idCardPreview && (
+                        <img
+                          src={idCardPreview}
+                          alt="ID Card Preview"
+                          className="w-10 h-10 object-cover rounded-xl border border-indigo-200 shrink-0"
+                        />
+                      )}
+                      <div className="min-w-0">
+                        <p className="text-xs font-bold text-slate-800 truncate">{idCardFile.name}</p>
+                        <p className="text-[10px] text-slate-500">{(idCardFile.size / 1024).toFixed(0)} KB</p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleFileSelect(null)}
+                      className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-colors shrink-0 cursor-pointer"
+                      title="ลบไฟล์รูปภาพ"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                )}
+                {idCardError && (
+                  <p className="text-[11px] font-bold text-rose-600 flex items-center gap-1">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                    {idCardError}
+                  </p>
+                )}
+              </div>
+            </div>
+
             <div>
               <label className="block text-xs font-bold text-slate-700 mb-1">
                 วันที่เริ่มเข้าพัก / เริ่มสัญญา <span className="text-rose-500">*</span>
               </label>
-              <div className="relative">
-                <Calendar className="w-4 h-4 absolute left-3 top-2.5 text-slate-400" />
-                <input
-                  type="date"
-                  required
-                  value={startDate}
-                  onChange={(e) => setStartDate(e.target.value)}
-                  className="w-full pl-9 pr-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold"
-                />
-              </div>
+              <OwnerDateInput
+                required
+                value={startDate}
+                onChange={(iso) => setStartDate(iso)}
+              />
             </div>
           </div>
 
-          {/* TAB 1: MONTHLY */}
-          {activeTab === 'MONTHLY' && (
-            <div className="space-y-3 pt-2 border-t border-slate-100">
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    ระยะเวลาสัญญา (เดือน) <span className="text-rose-500">*</span>
-                  </label>
-                  <input
-                    type="number"
-                    min="1"
-                    required
-                    value={durationMonths}
-                    onChange={(e) => setDurationMonths(Math.max(1, parseInt(e.target.value) || 1))}
-                    className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    วันที่สิ้นสุด (แก้ไขได้)
-                  </label>
-                  <input
-                    type="date"
-                    value={monthlyEndDate}
-                    onChange={(e) => setMonthlyEndDate(e.target.value)}
-                    className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    ค่าเช่ารายเดือน (บาท)
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    required
-                    value={monthlyRent}
-                    onChange={(e) => setMonthlyRent(parseFloat(e.target.value) || 0)}
-                    className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    ค่าเช่ารวม (บาท)
-                  </label>
-                  <div className="px-3 py-2 text-xs bg-indigo-50 border border-indigo-100 rounded-xl text-indigo-700 font-extrabold flex items-center justify-between">
-                    <span>{formatBaht(monthlyRent * durationMonths)}</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* TAB 2: TERM */}
+          {/* TAB 1: TERM */}
           {activeTab === 'TERM' && (
             <div className="space-y-3 pt-2 border-t border-slate-100">
               {!termMonths ? (
@@ -458,7 +525,7 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
                         วันที่สิ้นสุด
                       </label>
                       <div className="px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl text-slate-700 font-bold">
-                        {termEndDate}
+                        {formatThaiDate(termEndDate)}
                       </div>
                     </div>
                   </div>
@@ -477,7 +544,7 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
                         value={termRent !== null && termRent !== undefined ? termRent : ''}
                         onChange={(e) => {
                           const val = e.target.value;
-                          setTermRent(val === '' ? null : parseFloat(val) || 0);
+                          setTermRent(val === '' ? null : normalizeMoneyInput(val));
                         }}
                         className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold"
                       />
@@ -500,12 +567,95 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
                     </div>
                   </div>
 
-                  <div className="p-3 bg-indigo-50 border border-indigo-100 rounded-2xl flex items-center justify-between text-xs">
-                    <span className="font-bold text-indigo-900">ยอดรวมทั้งเทอม:</span>
-                    <span className="font-extrabold text-indigo-700 text-sm">{formatBaht(termRent || 0)}</span>
-                  </div>
+                  {/* Live Installment Breakdown Preview & Total Term Rent */}
+                  {(() => {
+                    const schedule = calculateInstallmentSchedule(termRent || 0, termInstallmentCount);
+                    return (
+                      <div className="p-3 bg-indigo-50/70 border border-indigo-100 rounded-2xl space-y-2.5">
+                        <div className="flex items-center justify-between text-xs pb-2 border-b border-indigo-100/70">
+                          <span className="font-bold text-indigo-900">ค่าเช่ารายเทอมทั้งหมด:</span>
+                          <span className="font-extrabold text-indigo-700 text-sm">{formatBaht(termRent || 0)}</span>
+                        </div>
+
+                        <div className="space-y-1">
+                          <div className="text-[11px] font-bold text-slate-500 flex items-center justify-between">
+                            <span>ตารางแบ่งชำระรายงวด ({termInstallmentCount} งวด):</span>
+                            {termInstallmentCount === 1 && (
+                              <span className="text-[10px] text-indigo-600 font-semibold bg-indigo-100/60 px-2 py-0.5 rounded-md">ชำระเต็มจำนวน</span>
+                            )}
+                          </div>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 pt-1">
+                            {schedule.map((inst) => (
+                              <div
+                                key={inst.installmentNo}
+                                className="flex items-center justify-between bg-white px-2.5 py-1.5 rounded-xl border border-indigo-100/80 text-xs shadow-2xs"
+                              >
+                                <span className="font-bold text-slate-600">งวดที่ {inst.installmentNo}:</span>
+                                <span className="font-extrabold text-slate-900 font-mono">฿{inst.formattedAmount}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </>
               )}
+            </div>
+          )}
+
+          {/* TAB 2: MONTHLY */}
+          {activeTab === 'MONTHLY' && (
+            <div className="space-y-3 pt-2 border-t border-slate-100">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    ระยะเวลาสัญญา (เดือน) <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    required
+                    value={durationMonths}
+                    onChange={(e) => setDurationMonths(Math.max(1, parseInt(e.target.value) || 1))}
+                    className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    วันที่สิ้นสุด (แก้ไขได้)
+                  </label>
+                  <OwnerDateInput
+                    value={monthlyEndDate}
+                    onChange={(iso) => setMonthlyEndDate(iso)}
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    ค่าเช่ารายเดือน (บาท)
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    required
+                    value={monthlyRent}
+                    onChange={(e) => setMonthlyRent(normalizeMoneyInput(e.target.value))}
+                    className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    ค่าเช่ารวม (บาท)
+                  </label>
+                  <div className="px-3 py-2 text-xs bg-indigo-50 border border-indigo-100 rounded-xl text-indigo-700 font-extrabold flex items-center justify-between">
+                    <span>{formatBaht(monthlyRent * durationMonths)}</span>
+                  </div>
+                </div>
+              </div>
             </div>
           )}
 
@@ -517,13 +667,11 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
                   <label className="block text-xs font-bold text-slate-700 mb-1">
                     วันที่สิ้นสุด (เช็คเอาท์) <span className="text-rose-500">*</span>
                   </label>
-                  <input
-                    type="date"
+                  <OwnerDateInput
                     required
                     min={startDate}
                     value={dailyEndDate}
-                    onChange={(e) => setDailyEndDate(e.target.value)}
-                    className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold"
+                    onChange={(iso) => setDailyEndDate(iso)}
                   />
                 </div>
                 <div>
@@ -553,7 +701,7 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
                       if (val === '') {
                         setDailyRate(null);
                       } else {
-                        setDailyRate(parseFloat(val) || 0);
+                        setDailyRate(normalizeMoneyInput(val));
                       }
                     }}
                     className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold"
@@ -573,7 +721,7 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
                     min="0"
                     step="0.01"
                     value={dailyDeposit}
-                    onChange={(e) => setDailyDeposit(parseFloat(e.target.value) || 0)}
+                    onChange={(e) => setDailyDeposit(normalizeMoneyInput(e.target.value))}
                     className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold"
                   />
                 </div>

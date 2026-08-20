@@ -9,6 +9,10 @@ import { AuthenticationService } from '../services/auth.service.js';
 import { DailyStayService } from '../services/daily-stay.service.js';
 import { createRequireSessionMiddleware } from '../middleware/require-session.js';
 import { createCsrfMiddleware } from '../middleware/csrf.js';
+import multer from 'multer';
+import { v4 as uuidv4 } from 'uuid';
+import { LocalStorageProvider } from '../services/local-storage.service.js';
+import { processAndSecureTenantIdCardImage } from '../services/image-security.service.js';
 import { resolveDormitoryContextMiddleware, requireDormitoryPermission } from '../middleware/permission.js';
 import { requireDormitoryWriteEntitlement } from '../middleware/entitlement.js';
 
@@ -268,26 +272,73 @@ export function createDailyStayRouter(
     depositDeclaredStatus: z.enum(['PAID', 'UNPAID']).optional(),
   });
 
+  const upload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 5 * 1024 * 1024 },
+  });
+  const localStorageProvider = new LocalStorageProvider();
+
   router.post(
     '/owner-quick-add',
+    upload.single('idCardImage'),
     requireSession,
     requireCsrf,
     resolveDormitoryContextMiddleware,
     requireDormitoryPermission('rooms:write'),
     requireDormitoryWriteEntitlement,
     async (req: Request, res: Response) => {
+      let writtenObjectKey: string | null = null;
       try {
         const dormId = getDormitoryId(req);
-        const parsed = OwnerQuickAddSchema.parse(req.body);
+        let rawBody = req.body;
+        if (typeof req.body?.data === 'string') {
+          try {
+            rawBody = JSON.parse(req.body.data);
+          } catch {}
+        }
+
+        const parsed = OwnerQuickAddSchema.parse(rawBody);
         const userId = req.auth!.userId;
 
-        const result = await dailyStayService.ownerQuickAddDailyStay(dormId, parsed, userId);
+        let idCardData: {
+          idCardObjectKey: string;
+          idCardSha256: string;
+          idCardMimeType: string;
+          idCardByteSize: number;
+          idCardUploadedAt: Date;
+          idCardUploadedByUserId: string | null;
+        } | null = null;
+
+        if (req.file && req.file.buffer && req.file.buffer.length > 0) {
+          const secured = await processAndSecureTenantIdCardImage(req.file.buffer);
+          const objectKey = `tenants/${dormId}/${uuidv4()}${secured.extension}`;
+          await localStorageProvider.saveFile(objectKey, secured.buffer);
+          writtenObjectKey = objectKey;
+
+          idCardData = {
+            idCardObjectKey: objectKey,
+            idCardSha256: secured.sha256,
+            idCardMimeType: secured.mimeType,
+            idCardByteSize: secured.byteSize,
+            idCardUploadedAt: new Date(),
+            idCardUploadedByUserId: req.auth?.userId || null,
+          };
+        }
+
+        const result = await dailyStayService.ownerQuickAddDailyStay(dormId, parsed, userId, idCardData);
 
         res.status(201).json({
           data: result,
           message: 'บันทึกข้อมูลผู้เช่ารายวันและออกใบแจ้งหนี้สำเร็จ',
         });
       } catch (err: any) {
+        if (writtenObjectKey) {
+          try {
+            await localStorageProvider.deleteFile(writtenObjectKey);
+          } catch (delErr) {
+            console.error('[COMPENSATING CLEANUP ERROR] Failed to unlink tenant ID card file:', delErr);
+          }
+        }
         if (err instanceof z.ZodError) {
           return res.status(400).json({
             error: {

@@ -18,6 +18,12 @@ export interface TenantEntity {
   address?: string | null;
   status: string; // prospect, active, moving_out, former, inactive, archived
   photoUrl?: string | null;
+  idCardObjectKey?: string | null;
+  idCardSha256?: string | null;
+  idCardMimeType?: string | null;
+  idCardByteSize?: number | null;
+  idCardUploadedAt?: Date | null;
+  idCardUploadedByUserId?: string | null;
   petInfo?: any;
   notes?: string | null;
   coOccupants?: TenantCoOccupantEntity[];
@@ -87,6 +93,12 @@ export interface CreateTenantData {
   address?: string | null;
   status?: string;
   photoUrl?: string | null;
+  idCardObjectKey?: string | null;
+  idCardSha256?: string | null;
+  idCardMimeType?: string | null;
+  idCardByteSize?: number | null;
+  idCardUploadedAt?: Date | null;
+  idCardUploadedByUserId?: string | null;
   petInfo?: any;
   notes?: string | null;
 }

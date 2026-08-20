@@ -483,8 +483,14 @@ model Tenant {
   gender              String?   @db.VarChar(50)
   address             String?   @db.Text
   status              String    @default("active") @db.VarChar(50)
-  photoUrl            String?   @map("photo_url") @db.Text
-  petInfo             Json?     @map("pet_info")
+  photoUrl               String?   @map("photo_url") @db.Text
+  idCardObjectKey        String?   @map("id_card_object_key") @db.VarChar(255)
+  idCardSha256           String?   @map("id_card_sha256") @db.VarChar(64)
+  idCardMimeType         String?   @map("id_card_mime_type") @db.VarChar(50)
+  idCardByteSize         Int?      @map("id_card_byte_size")
+  idCardUploadedAt       DateTime? @map("id_card_uploaded_at") @db.Timestamptz()
+  idCardUploadedByUserId String?   @map("id_card_uploaded_by_user_id") @db.Uuid
+  petInfo                Json?     @map("pet_info")
   notes               String?   @db.Text
   version             Int       @default(1)
   createdAt           DateTime  @default(now()) @map("created_at") @db.Timestamptz()

@@ -50,11 +50,30 @@ export function requireDormitoryPermission(requiredPermission: string) {
         return next();
       }
 
+      // Check singular/plural aliases (e.g. tenant:document:read vs tenants:document:read)
+      const altPermission = requiredPermission.startsWith('tenant:')
+        ? requiredPermission.replace('tenant:', 'tenants:')
+        : requiredPermission.startsWith('tenants:')
+        ? requiredPermission.replace('tenants:', 'tenant:')
+        : null;
+
+      if (altPermission && normalizedPerms.includes(altPermission)) {
+        return next();
+      }
+
       // Domain wildcard (e.g. "room:*" covers "room:write")
       const colonIdx = requiredPermission.indexOf(':');
       if (colonIdx > 0) {
         const domain = requiredPermission.substring(0, colonIdx);
         if (normalizedPerms.includes(`${domain}:*`)) {
+          return next();
+        }
+      }
+
+      if (altPermission) {
+        const altColonIdx = altPermission.indexOf(':');
+        const altDomain = altPermission.substring(0, altColonIdx);
+        if (normalizedPerms.includes(`${altDomain}:*`)) {
           return next();
         }
       }

@@ -35,7 +35,16 @@ import { calculateMeterRowPreview, RoomPreviewContext } from '../../utils/meterB
 import { Room, Building, QuickAddRoomContext, Bill, BillItem, Tenant, Contract, BillStatus, calculateRoomRentForCycle } from '../../types';
 import { getDataProvider } from '../../data/dataProvider';
 import { httpRequest } from '../../data/httpClient';
-import { formatBaht, Modal } from '../../components/GlobalComponents';
+import {
+  formatBaht,
+  formatThaiDate,
+  formatOwnerDate,
+  formatOwnerMonthYear,
+  formatMeterReadingDisplay,
+  formatCountDisplay,
+  normalizeSingleDigitCount,
+  Modal
+} from '../../components/GlobalComponents';
 
 import { LineNotificationModal } from '../../components/LineNotificationModal';
 import { QuickAddTenantModal } from '../../components/QuickAddTenantModal';
@@ -174,18 +183,18 @@ export function buildRowsFromWorkspace(params: {
     const roomReadings = readingsByRoom[r.id] || {};
     const cycleTenant = getTenantForRoomAndCycleHelper(r.id, selectedCycleCode || selectedCycle || '', contracts, rooms, tenants);
 
-    const rawWaterBaseline = r.initialWaterMeter !== undefined && r.initialWaterMeter !== null ? String(r.initialWaterMeter) : (r as any).initialWaterReading !== undefined ? String((r as any).initialWaterReading) : '0.00';
-    const rawElecBaseline = r.initialElectricMeter !== undefined && r.initialElectricMeter !== null ? String(r.initialElectricMeter) : (r as any).initialElectricityReading !== undefined ? String((r as any).initialElectricityReading) : '0.00';
+    const rawWaterBaseline = r.initialWaterMeter !== undefined && r.initialWaterMeter !== null ? String(r.initialWaterMeter) : (r as any).initialWaterReading !== undefined ? String((r as any).initialWaterReading) : '0';
+    const rawElecBaseline = r.initialElectricMeter !== undefined && r.initialElectricMeter !== null ? String(r.initialElectricMeter) : (r as any).initialElectricityReading !== undefined ? String((r as any).initialElectricityReading) : '0';
 
-    const waterPrev = roomReadings.waterPrev ?? rawWaterBaseline;
-    const waterCurr = roomReadings.waterCurr ?? waterPrev;
+    const waterPrev = formatMeterReadingDisplay(roomReadings.waterPrev ?? rawWaterBaseline);
+    const waterCurr = formatMeterReadingDisplay(roomReadings.waterCurr ?? waterPrev);
 
-    const elecPrev = roomReadings.elecPrev ?? rawElecBaseline;
-    const elecCurr = roomReadings.elecCurr ?? elecPrev;
+    const elecPrev = formatMeterReadingDisplay(roomReadings.elecPrev ?? rawElecBaseline);
+    const elecCurr = formatMeterReadingDisplay(roomReadings.elecCurr ?? elecPrev);
 
     const tenantDefaultPeople = cycleTenant ? (1 + (cycleTenant.coOccupants?.length || 0)) : 0;
     const snap = snapshotMap[r.id];
-    const rowPeople = snap?.peopleCount !== undefined ? snap.peopleCount : tenantDefaultPeople;
+    const rowPeople = snap?.peopleCount !== undefined ? Math.max(0, snap.peopleCount) : tenantDefaultPeople;
 
     const existingBill = (bills || []).find(b =>
       (b.cycleId === selectedBillingCycleId || b.cycleId === selectedCycleCode || (b as any).billingCycleId === selectedBillingCycleId) &&
@@ -204,7 +213,11 @@ export function buildRowsFromWorkspace(params: {
       elecCurr,
       isReplaced: false,
       peopleCount: rowPeople,
-      overdueAmount: snap?.manualOutstandingAmount || '0.00',
+      overdueAmount: snap?.manualOutstandingAmount !== undefined && snap?.manualOutstandingAmount !== null && String(snap.manualOutstandingAmount).trim() !== '' && String(snap.manualOutstandingAmount) !== '0.00' && String(snap.manualOutstandingAmount) !== '0'
+        ? String(snap.manualOutstandingAmount)
+        : snap?.manualOutstandingAmount === '0' || snap?.manualOutstandingAmount === '0.00'
+        ? '0'
+        : '',
       isPaid,
       billStatus,
       editWaterPrev: false,
@@ -378,13 +391,92 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     meterRowsRef.current = meterRows;
   }, [meterRows]);
 
+  // Undo / Redo History Stack for unsaved meter draft edits
+  const historyRef = React.useRef<MeterRowState[][]>(initialBuilt?.rows ? [JSON.parse(JSON.stringify(initialBuilt.rows))] : []);
+  const historyIndexRef = React.useRef<number>(initialBuilt?.rows ? 0 : -1);
+  const isUndoRedoingRef = React.useRef<boolean>(false);
+
+  const pushHistory = (newRows: MeterRowState[]) => {
+    if (isUndoRedoingRef.current) return;
+    const cloned = JSON.parse(JSON.stringify(newRows));
+    const currentIndex = historyIndexRef.current;
+
+    if (currentIndex >= 0 && historyRef.current[currentIndex]) {
+      const current = historyRef.current[currentIndex];
+      if (current.length === cloned.length) {
+        let isSame = true;
+        for (let i = 0; i < current.length; i++) {
+          if (
+            current[i].waterCurr !== cloned[i].waterCurr ||
+            current[i].waterPrev !== cloned[i].waterPrev ||
+            current[i].elecCurr !== cloned[i].elecCurr ||
+            current[i].elecPrev !== cloned[i].elecPrev ||
+            current[i].peopleCount !== cloned[i].peopleCount ||
+            current[i].overdueAmount !== cloned[i].overdueAmount
+          ) {
+            isSame = false;
+            break;
+          }
+        }
+        if (isSame) return;
+      }
+    }
+
+    const nextHistory = historyRef.current.slice(0, currentIndex + 1);
+    nextHistory.push(cloned);
+    if (nextHistory.length > 50) {
+      nextHistory.shift();
+    }
+    historyRef.current = nextHistory;
+    historyIndexRef.current = nextHistory.length - 1;
+  };
+
+  const handleUndo = () => {
+    if (historyIndexRef.current > 0) {
+      historyIndexRef.current -= 1;
+      const targetState = historyRef.current[historyIndexRef.current];
+      if (targetState) {
+        isUndoRedoingRef.current = true;
+        setMeterRows(JSON.parse(JSON.stringify(targetState)));
+        isUndoRedoingRef.current = false;
+      }
+    }
+  };
+
+  const handleRedo = () => {
+    if (historyIndexRef.current < historyRef.current.length - 1) {
+      historyIndexRef.current += 1;
+      const targetState = historyRef.current[historyIndexRef.current];
+      if (targetState) {
+        isUndoRedoingRef.current = true;
+        setMeterRows(JSON.parse(JSON.stringify(targetState)));
+        isUndoRedoingRef.current = false;
+      }
+    }
+  };
+
+  const resetHistory = (initialRows: MeterRowState[]) => {
+    const cloned = JSON.parse(JSON.stringify(initialRows));
+    historyRef.current = [cloned];
+    historyIndexRef.current = 0;
+  };
+
   const [pendingFeeRooms, setPendingFeeRooms] = useState<{ [roomId: string]: boolean }>({});
   const tableContainerRef = React.useRef<HTMLDivElement>(null);
   const quickFillInputRef = React.useRef<HTMLTextAreaElement>(null);
+  const [toastType, setToastType] = useState<'success' | 'error'>('success');
 
-  const showToast = (msg: string) => {
+  const showToast = (msg: string, type?: 'success' | 'error') => {
+    const isError =
+      type === 'error' ||
+      msg.includes('ไม่น้อยกว่า') ||
+      msg.includes('ไม่ถูกต้อง') ||
+      msg.includes('ผิดพลาด') ||
+      msg.includes('ไม่สามารถ') ||
+      msg.includes('ยังไม่ได้') ||
+      msg.includes('ขัดข้อง');
+    setToastType(isError ? 'error' : 'success');
     setToastMessage(msg);
-    setTimeout(() => setToastMessage(null), 3000);
   };
 
   // Preview Context Query (Canonical observed query)
@@ -492,6 +584,27 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       cleaned = `${intPart}.${fracPart}`;
     }
     return cleaned;
+  };
+
+  const normalizeMeterValueOnBlur = (val: string): string => {
+    if (!val || val.trim() === '') return '';
+    const trimmed = val.trim();
+    if (trimmed.includes('.')) {
+      const [intPart, fracPart] = trimmed.split('.');
+      const cleanInt = intPart.replace(/^0+(?=\d)/, '') || '0';
+      return `${cleanInt}.${fracPart}`;
+    }
+    // Integer: normalize leading zeros, e.g. 0500 -> 500, 000 -> 0
+    return trimmed.replace(/^0+(?=\d)/, '');
+  };
+
+  const formatOtherFeeAmountDisplay = (amount: number | string): string => {
+    const num = typeof amount === 'number' ? amount : parseFloat(String(amount).replace(/,/g, ''));
+    if (isNaN(num)) return `${amount} ฿`;
+    if (Number.isInteger(num)) {
+      return `${num} ฿`;
+    }
+    return `${num.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ฿`;
   };
 
   const sanitizeMoneyTyping = (val: string): string => {
@@ -847,7 +960,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
 
         if (pRoom) {
           if (isWaterUnit && pRoom.previousWaterCurrentReading !== null && pRoom.previousWaterCurrentReading !== undefined) {
-            const nextWaterPrev = Number(pRoom.previousWaterCurrentReading);
+            const nextWaterPrev = formatMeterReadingDisplay(pRoom.previousWaterCurrentReading);
             if (row.waterPrev !== nextWaterPrev) {
               nextRow.waterPrev = nextWaterPrev;
               newFlashing[`${row.roomId}-waterPrev`] = true;
@@ -855,7 +968,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
           }
 
           if (isElecUnit && pRoom.previousElectricityCurrentReading !== null && pRoom.previousElectricityCurrentReading !== undefined) {
-            const nextElecPrev = Number(pRoom.previousElectricityCurrentReading);
+            const nextElecPrev = formatMeterReadingDisplay(pRoom.previousElectricityCurrentReading);
             if (row.elecPrev !== nextElecPrev) {
               nextRow.elecPrev = nextElecPrev;
               newFlashing[`${row.roomId}-elecPrev`] = true;
@@ -884,6 +997,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       });
 
       setMeterRows(updatedRows);
+      pushHistory(updatedRows);
 
       if (Object.keys(newFlashing).length > 0) {
         setFlashingCells((prev) => ({ ...prev, ...newFlashing }));
@@ -915,10 +1029,10 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
 
   const getTemplateFormatString = () => {
     const sampleRoom = meterRows[0]?.roomNumber || "A101";
-    const sampleElec = meterRows[0]?.elecPrev || 500;
-    const sampleWater = meterRows[0]?.waterPrev || 500;
-    const samplePeople = meterRows[0]?.peopleCount ?? 0;
-    const sampleOverdue = meterRows[0]?.overdueAmount || 50;
+    const sampleElec = formatMeterReadingDisplay(meterRows[0]?.elecPrev || 500);
+    const sampleWater = formatMeterReadingDisplay(meterRows[0]?.waterPrev || 500);
+    const samplePeople = formatCountDisplay(meterRows[0]?.peopleCount ?? 0);
+    const sampleOverdue = formatMeterReadingDisplay(meterRows[0]?.overdueAmount || 50);
 
     if (isElecUnit && isWaterUnit) {
       return `${sampleRoom} : ไฟ ${sampleElec} : น้ำ ${sampleWater} : ${samplePeople} คน : ค้าง ${sampleOverdue}`;
@@ -937,17 +1051,17 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     return sortedRows.map(row => {
       const parts = [row.roomNumber];
       if (isElecUnit) {
-        parts.push(`ไฟ ${row.elecPrev}`);
+        parts.push(`ไฟ ${formatMeterReadingDisplay(row.elecPrev)}`);
       }
       if (isWaterUnit) {
-        parts.push(`น้ำ ${row.waterPrev}`);
+        parts.push(`น้ำ ${formatMeterReadingDisplay(row.waterPrev)}`);
       }
       const freshCount = freshHouseholdMap?.get(row.roomId);
       const roomCtx = previewContext?.rooms?.find(r => r.roomId === row.roomId);
       const householdCount = freshCount !== undefined ? freshCount : (roomCtx?.currentHouseholdPeopleCount !== undefined ? roomCtx.currentHouseholdPeopleCount : row.peopleCount);
-      parts.push(`${householdCount} คน`);
-      if (row.overdueAmount > 0) {
-        parts.push(`ค้าง ${row.overdueAmount}`);
+      parts.push(`${formatCountDisplay(householdCount)} คน`);
+      if (Number(row.overdueAmount) > 0) {
+        parts.push(`ค้าง ${formatMeterReadingDisplay(row.overdueAmount)}`);
       } else {
         parts.push(`ค้าง `);
       }
@@ -993,7 +1107,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
         }
         if (part.includes('คน')) {
           const match = part.match(/\d+/);
-          if (match) peopleCount = parseInt(match[0], 10);
+          if (match) peopleCount = normalizeSingleDigitCount(match[0]);
         }
         if (part.includes('ค้าง') || part.includes('ค้างชำระ')) {
           const match = part.match(/\d+(\.\d{1,2})?/);
@@ -1016,6 +1130,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     });
 
     setMeterRows(updatedRows);
+    pushHistory(updatedRows);
 
     if (Object.keys(newFlashing).length > 0) {
       setFlashingCells(prev => ({ ...prev, ...newFlashing }));
@@ -1142,14 +1257,6 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     }
   };
 
-  const getSampleTemplateFormat = () => {
-    const parts = ['[เลขห้อง]'];
-    if (isElecUnit) parts.push('[มิเตอร์ไฟล่าสุด]');
-    if (isWaterUnit) parts.push('[มิเตอร์น้ำล่าสุด]');
-    parts.push('[จำนวนคน(ถ้ามี)]', '[ค้างชำระ(ถ้ามี)]');
-    return parts.join(' ');
-  };
-
   // Initialize meter rows based on rooms list, stored states, and bills
   useEffect(() => {
     try {
@@ -1230,6 +1337,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
 
     originalRowsRef.current = built.originalRows;
     setMeterRows(built.rows);
+    resetHistory(built.rows);
     setLoadedCycle(selectedBillingCycleId);
   }, [meterWorkspaceQuery.data, selectedBillingCycleId, rooms, bills, contracts, tenants]);
 
@@ -1247,29 +1355,61 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     rawVal: string
   ) => {
     const sanitized = sanitizeMeterReadingTyping(rawVal);
-    setMeterRows(prev => prev.map(row => {
-      if (row.roomId === roomId) {
-        return {
-          ...row,
-          [field]: sanitized
-        };
+    setMeterRows(prev => {
+      const nextRows = prev.map(row => {
+        if (row.roomId === roomId) {
+          return {
+            ...row,
+            [field]: sanitized
+          };
+        }
+        return row;
+      });
+      pushHistory(nextRows);
+      return nextRows;
+    });
+  };
+
+  const handleMeterReadingBlur = (
+    roomId: string,
+    field: 'waterCurr' | 'elecCurr' | 'waterPrev' | 'elecPrev' | 'overdueAmount'
+  ) => {
+    setMeterRows(prev => {
+      let changed = false;
+      const nextRows = prev.map(row => {
+        if (row.roomId === roomId) {
+          const currentVal = row[field];
+          const normalized = normalizeMeterValueOnBlur(String(currentVal ?? ''));
+          if (normalized !== currentVal) {
+            changed = true;
+            return { ...row, [field]: normalized };
+          }
+        }
+        return row;
+      });
+      if (changed) {
+        pushHistory(nextRows);
+        return nextRows;
       }
-      return row;
-    }));
+      return prev;
+    });
   };
 
   const handlePeopleCountChange = (roomId: string, rawVal: string) => {
-    const cleaned = rawVal.replace(/[^0-9]/g, '');
-    const count = cleaned === '' ? 0 : Math.max(0, parseInt(cleaned, 10));
-    setMeterRows(prev => prev.map(row => {
-      if (row.roomId === roomId) {
-        return {
-          ...row,
-          peopleCount: count
-        };
-      }
-      return row;
-    }));
+    const count = normalizeSingleDigitCount(rawVal);
+    setMeterRows(prev => {
+      const nextRows = prev.map(row => {
+        if (row.roomId === roomId) {
+          return {
+            ...row,
+            peopleCount: count
+          };
+        }
+        return row;
+      });
+      pushHistory(nextRows);
+      return nextRows;
+    });
   };
 
   const handleNumberChange = (roomId: string, field: 'waterCurr' | 'elecCurr' | 'peopleCount' | 'overdueAmount' | 'waterPrev' | 'elecPrev', value: number | string) => {
@@ -1350,7 +1490,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
           const rawVal = cells[cellIdx].trim();
 
           const val = field === 'peopleCount'
-            ? Math.max(0, parseInt(rawVal.replace(/[^0-9]/g, ''), 10) || 0)
+            ? normalizeSingleDigitCount(rawVal)
             : sanitizeMeterReadingTyping(rawVal);
           if (row[field] !== val) {
             (row as any)[field] = val;
@@ -1374,6 +1514,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
         }, 1500);
       }
 
+      pushHistory(updated);
       return updated;
     });
   };
@@ -1398,9 +1539,6 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       const orig = originalRowsRef.current.find(o => o.roomId === cur.roomId);
       if (!orig) return true;
 
-      const curOtherFeesStr = JSON.stringify(cur.otherFees || []);
-      const origOtherFeesStr = JSON.stringify(orig.otherFees || []);
-
       if (
         cur.waterPrev !== orig.waterPrev ||
         cur.waterCurr !== orig.waterCurr ||
@@ -1410,8 +1548,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
         cur.overdueAmount !== orig.overdueAmount ||
         cur.isPaid !== orig.isPaid ||
         cur.billStatus !== orig.billStatus ||
-        cur.isReplaced !== orig.isReplaced ||
-        curOtherFeesStr !== origOtherFeesStr
+        cur.isReplaced !== orig.isReplaced
       ) {
         return true;
       }
@@ -1421,21 +1558,38 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
 
   const isDirty = checkIsDirty();
 
-  // Global Enter Key handler to save meters when isDirty is true
+  // Global Key handler for Enter to save, Ctrl+Z for Undo, Ctrl+Shift+Z / Ctrl+Y for Redo
   useEffect(() => {
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      const isCtrlOrMeta = e.ctrlKey || e.metaKey;
+      const active = document.activeElement;
+      const activeTagName = active ? active.tagName.toUpperCase() : '';
+      const isTextarea = activeTagName === 'TEXTAREA';
+      const activeId = active?.id || '';
+      const isModalInput = activeId.startsWith('fee-desc-') || activeId.startsWith('fee-amt-') || activeId.startsWith('quick-fill-');
+
+      // Undo: Ctrl+Z (without shift)
+      if (isCtrlOrMeta && (e.key === 'z' || e.key === 'Z') && !e.shiftKey) {
+        if (!isTextarea && !isModalInput) {
+          e.preventDefault();
+          handleUndo();
+          return;
+        }
+      }
+
+      // Redo: Ctrl+Shift+Z or Ctrl+Y
+      if (isCtrlOrMeta && (((e.key === 'z' || e.key === 'Z') && e.shiftKey) || e.key === 'y' || e.key === 'Y')) {
+        if (!isTextarea && !isModalInput) {
+          e.preventDefault();
+          handleRedo();
+          return;
+        }
+      }
+
+      // Enter to save if dirty
       if (e.key === 'Enter' && isDirty && !isSaving) {
-        const active = document.activeElement;
-        if (active) {
-          const id = active.id || '';
-          if (
-            id.startsWith('fee-desc-') ||
-            id.startsWith('fee-amt-') ||
-            id.startsWith('quick-fill-') ||
-            active.tagName === 'TEXTAREA'
-          ) {
-            return;
-          }
+        if (isModalInput || isTextarea) {
+          return;
         }
         e.preventDefault();
         handleSaveMeters();
@@ -1771,6 +1925,8 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       if (res && res.success) {
         setSaveSuccess(true);
         setTimeout(() => setSaveSuccess(false), 3000);
+        originalRowsRef.current = JSON.parse(JSON.stringify(meterRowsRef.current));
+        resetHistory(meterRowsRef.current);
         queryClient.invalidateQueries({ queryKey: queryKeys.meterWorkspace(currentDormId, selectedBillingCycleId) });
         queryClient.invalidateQueries({ queryKey: queryKeys.meterPreviewContext(currentDormId, selectedBillingCycleId) });
         queryClient.invalidateQueries({ queryKey: queryKeys.bills(currentDormId) });
@@ -1784,17 +1940,21 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   };
 
   const autofillMeters = () => {
-    setMeterRows(prev => prev.map(row => {
-      const cycleTenant = getTenantForRoomAndCycle(row.roomId, selectedCycle);
-      const tenantDefaultPeople = cycleTenant ? (1 + (cycleTenant.coOccupants?.length || 0)) : 0;
-      return {
-        ...row,
-        waterCurr: row.waterPrev,
-        elecCurr: row.elecPrev,
-        peopleCount: tenantDefaultPeople,
-        overdueAmount: 0
-      };
-    }));
+    setMeterRows(prev => {
+      const nextRows = prev.map(row => {
+        const cycleTenant = getTenantForRoomAndCycle(row.roomId, selectedCycle);
+        const tenantDefaultPeople = cycleTenant ? (1 + (cycleTenant.coOccupants?.length || 0)) : 0;
+        return {
+          ...row,
+          waterCurr: row.waterPrev,
+          elecCurr: row.elecPrev,
+          peopleCount: tenantDefaultPeople,
+          overdueAmount: '0.00'
+        };
+      });
+      pushHistory(nextRows);
+      return nextRows;
+    });
   };
 
   const filteredRows = meterRows.filter(row =>
@@ -1808,16 +1968,24 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
           <span>ยังไม่ได้ตั้งค่ารอบคำนวณ</span>
         </div>
       )}
-      {/* Floating Toast Notification (Mobile: Centered above bottom nav, White bg, Smooth Fade) */}
+      {/* Floating Toast Notification (Mobile: Centered above bottom nav, White/Red bg, Smooth Fade) */}
       {(saveSuccess || toastMessage) && (
         <div
-          className={`fixed bottom-20 left-1/2 -translate-x-1/2 sm:bottom-8 sm:right-8 sm:left-auto sm:translate-x-0 z-[9999] bg-white text-slate-800 px-4.5 py-3 rounded-2xl shadow-2xl border border-slate-200/90 flex items-center gap-2.5 text-xs font-bold transition-all duration-500 ease-in-out ${
+          className={`fixed bottom-20 left-1/2 -translate-x-1/2 sm:bottom-8 sm:right-8 sm:left-auto sm:translate-x-0 z-[9999] px-4.5 py-3 rounded-2xl shadow-2xl border flex items-center gap-2.5 text-xs font-bold transition-all duration-500 ease-in-out ${
+            toastType === 'error'
+              ? 'bg-rose-50 border-rose-200 text-rose-800'
+              : 'bg-white border-slate-200/90 text-slate-800'
+          } ${
             isToastFading
               ? 'opacity-0 translate-y-3 pointer-events-none'
               : 'opacity-100 translate-y-0 animate-in fade-in slide-in-from-bottom-3 duration-300'
           }`}
         >
-          <CheckCircle className="w-4.5 h-4.5 text-emerald-500 shrink-0" />
+          {toastType === 'error' ? (
+            <AlertTriangle className="w-4.5 h-4.5 text-rose-500 shrink-0" />
+          ) : (
+            <CheckCircle className="w-4.5 h-4.5 text-emerald-500 shrink-0" />
+          )}
           <span className="whitespace-pre-line">{toastMessage || "บันทึกข้อมูลสำเร็จ"}</span>
         </div>
       )}
@@ -1953,7 +2121,8 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                     <div className="text-slate-500 mb-1">มิเตอร์ไฟเดิม</div>
                     <div className="flex justify-center">
                       {isFirstCycle ? (
-                        <span className="px-2 py-0.5 rounded-lg text-[10px] font-black tracking-tight bg-indigo-50 border border-indigo-200 text-indigo-600 select-none">
+                        <span className="px-2 py-0.5 rounded-lg text-[10px] font-black tracking-tight bg-indigo-50 border border-indigo-250 text-indigo-600 select-none flex items-center justify-center gap-1 leading-none">
+                          <span className="w-1.5 h-1.5 rounded-full bg-indigo-600"></span>
                           เปิดแก้ไข
                         </span>
                       ) : (
@@ -1979,7 +2148,8 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                     <div className="text-slate-500 mb-1">มิเตอร์น้ำเดิม</div>
                     <div className="flex justify-center">
                       {isFirstCycle ? (
-                        <span className="px-2 py-0.5 rounded-lg text-[10px] font-black tracking-tight bg-indigo-50 border border-indigo-200 text-indigo-600 select-none">
+                        <span className="px-2 py-0.5 rounded-lg text-[10px] font-black tracking-tight bg-indigo-50 border border-indigo-250 text-indigo-600 select-none flex items-center justify-center gap-1 leading-none">
+                          <span className="w-1.5 h-1.5 rounded-full bg-indigo-600"></span>
                           เปิดแก้ไข
                         </span>
                       ) : (
@@ -2062,6 +2232,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                               onChange={(e) => {
                                 handleMeterReadingChange(row.roomId, 'elecPrev', e.target.value);
                               }}
+                              onBlur={() => handleMeterReadingBlur(row.roomId, 'elecPrev')}
                               onPaste={(e) => handlePaste(row.roomId, 'elecPrev', e)}
                               data-row={idx}
                               data-col="elecPrev"
@@ -2099,6 +2270,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                             onChange={(e) => {
                               handleMeterReadingChange(row.roomId, 'elecCurr', e.target.value);
                             }}
+                            onBlur={() => handleMeterReadingBlur(row.roomId, 'elecCurr')}
                             onPaste={(e) => handlePaste(row.roomId, 'elecCurr', e)}
                             data-row={idx}
                             data-col="elecCurr"
@@ -2126,6 +2298,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                               onChange={(e) => {
                                 handleMeterReadingChange(row.roomId, 'waterPrev', e.target.value);
                               }}
+                              onBlur={() => handleMeterReadingBlur(row.roomId, 'waterPrev')}
                               onPaste={(e) => handlePaste(row.roomId, 'waterPrev', e)}
                               data-row={idx}
                               data-col="waterPrev"
@@ -2163,6 +2336,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                             onChange={(e) => {
                               handleMeterReadingChange(row.roomId, 'waterCurr', e.target.value);
                             }}
+                            onBlur={() => handleMeterReadingBlur(row.roomId, 'waterCurr')}
                             onPaste={(e) => handlePaste(row.roomId, 'waterCurr', e)}
                             data-row={idx}
                             data-col="waterCurr"
@@ -2211,6 +2385,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                           onChange={(e) => {
                             handleMeterReadingChange(row.roomId, 'overdueAmount', e.target.value);
                           }}
+                          onBlur={() => handleMeterReadingBlur(row.roomId, 'overdueAmount')}
                           onPaste={(e) => handlePaste(row.roomId, 'overdueAmount', e)}
                           data-row={idx}
                           data-col="overdueAmount"
@@ -2231,7 +2406,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                           <div key={feeIdx} className="flex items-center justify-between gap-1 bg-slate-50 border border-slate-100 rounded-lg px-2 py-0.5 text-[10px] text-slate-600 font-bold">
                             <span className="truncate max-w-[80px]" title={fee.description}>{fee.description}</span>
                             <div className="flex items-center gap-1 shrink-0">
-                              <span className="text-indigo-600">{fee.amount} ฿</span>
+                              <span className="text-indigo-600">{formatOtherFeeAmountDisplay(fee.amount)}</span>
                               {!isRowLocked && (
                                 <button
                                   type="button"
@@ -2463,34 +2638,54 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
         )}
       </div>
 
-      {/* Quick Fill Modal Popup */}
+      {/* Quick Fill Modal */}
       {isQuickFillOpen && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl p-4 sm:p-6 max-w-2xl w-full shadow-2xl border border-gray-100 flex flex-col max-h-[90vh]">
-            <div className="flex items-center justify-between pb-3 border-b border-gray-100">
-              <div className="flex items-center gap-2">
-                <div className="p-2 bg-indigo-50 text-indigo-600 rounded-xl">
-                  <Sparkles className="w-5 h-5" />
+          <div className="bg-white rounded-3xl p-6 max-w-lg w-full shadow-2xl border border-gray-100 flex flex-col gap-5 animate-in fade-in zoom-in-95 duration-200">
+
+            {/* Header */}
+            <div className="flex items-center justify-between gap-4">
+              <div className="flex items-center gap-3.5">
+                <div className="bg-emerald-500 text-white rounded-full flex items-center justify-center w-11 h-11 shadow-md shadow-emerald-500/20">
+                  <Zap className="w-5 h-5 fill-white text-emerald-300" />
                 </div>
                 <div>
-                  <h3 className="text-base font-bold text-slate-800">กรอกข้อมูลด่วน (Quick Fill)</h3>
-                  <p className="text-xs text-gray-400">คัดลอกหรือวางข้อความเพื่ออัปเดตเลขอ่านมิเตอร์หลายห้องพร้อมกัน</p>
+                  <h4 className="text-base font-extrabold text-slate-900 leading-tight">กรอกแบบรวดเร็ว</h4>
+                  <p className="text-[11px] text-gray-400 font-bold mt-0.5 leading-none">วางข้อมูลหลายห้อง ระบบจะใส่ลงตารางให้</p>
                 </div>
               </div>
               <button
                 type="button"
-                onClick={() => setIsQuickFillOpen(false)}
-                className="p-1.5 text-gray-400 hover:text-slate-600 hover:bg-gray-100 rounded-xl transition-all"
+                onClick={() => {
+                  setIsQuickFillOpen(false);
+                  setTemplateUsed(false);
+                }}
+                className="text-rose-500 bg-rose-50 hover:bg-rose-100 border border-rose-100 rounded-full p-2 cursor-pointer flex items-center justify-center transition-all shadow-sm"
               >
-                <X className="w-5 h-5" />
+                <X className="w-4 h-4" />
               </button>
             </div>
 
-            <div className="py-3 flex-1 flex flex-col min-h-0">
-              <p className="text-xs font-semibold text-slate-600 mb-1.5">
-                รูปแบบ: <span className="font-mono text-indigo-600">{getSampleTemplateFormat()}</span>
-              </p>
-              <div className="flex-1 min-h-[220px]">
+            {/* Template Section & Textarea Container with stable, non-jittery height */}
+            <div className="flex flex-col gap-4 h-[320px] justify-between shrink-0">
+              {/* Template Section: only show if text is <= 1 line */}
+              {quickFillText.split('\n').filter(l => l.trim()).length <= 1 && (
+                <div className="bg-slate-50 border border-slate-100 rounded-2xl p-4 flex flex-col gap-2 shrink-0 h-[112px] justify-center">
+                  <span className="text-xs font-black text-slate-800 leading-none text-left">รูปแบบ</span>
+                  <div className="bg-white border border-gray-200 rounded-xl p-3 font-mono text-xs text-slate-600 flex items-center justify-start text-left shadow-2xs leading-relaxed whitespace-nowrap overflow-x-auto select-all no-scrollbar">
+                    {getTemplateFormatString()}
+                  </div>
+                  <span className="text-[10px] text-gray-400 font-bold leading-none mt-0.5 text-left">ถ้าไม่มีค้าง ไม่ต้องใส่ข้อมูลค้างก็ได้</span>
+                </div>
+              )}
+
+              {/* Input Text Area - Single, Persistent to preserve focus */}
+              <div
+                className="flex flex-col gap-1 w-full shrink-0 transition-all duration-300"
+                style={{
+                  height: quickFillText.split('\n').filter(l => l.trim()).length <= 1 ? '192px' : '320px'
+                }}
+              >
                 <textarea
                   ref={quickFillInputRef}
                   value={quickFillText}
@@ -2502,7 +2697,8 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
               </div>
             </div>
 
-            <div className="flex items-center justify-between gap-2.5 mt-2 flex-nowrap pt-3 border-t border-gray-100">
+            {/* Footer Buttons */}
+            <div className="flex items-center justify-between gap-2.5 mt-2 flex-nowrap">
               {templateUsed ? (
                 <button
                   type="button"
@@ -2552,7 +2748,10 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
               <div className="flex items-center gap-1.5 flex-nowrap shrink-0">
                 <button
                   type="button"
-                  onClick={() => setIsQuickFillOpen(false)}
+                  onClick={() => {
+                    setIsQuickFillOpen(false);
+                    setTemplateUsed(false);
+                  }}
                   className="border border-gray-200 hover:bg-gray-50 text-slate-600 px-2.5 sm:px-4 py-2.5 rounded-xl text-[10px] sm:text-xs font-bold transition-all cursor-pointer active:scale-98 whitespace-nowrap shrink-0"
                 >
                   ยกเลิก

@@ -38,7 +38,7 @@ export interface UpdateMaintenanceStatusInput {
   requestId: string;
   status: MaintenanceStatus;
   note?: string;
-  actorType: 'owner' | 'manager' | 'tech' | 'tenant';
+  actorType: 'owner' | 'manager' | 'staff' | 'tech' | 'tenant';
   actorUserId?: string;
   actorTenantId?: string;
   actorRoleCode?: string;

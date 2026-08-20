@@ -261,6 +261,9 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
         />
       );
 
+      // Switch to MONTHLY tab
+      fireEvent.click(screen.getByRole('button', { name: 'รายเดือน' }));
+
       const nameInput = screen.getByPlaceholderText('เช่น นายสมชาย ใจดี');
       fireEvent.change(nameInput, { target: { value: 'สมชาย ใจดี' } });
 
@@ -293,7 +296,7 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
       );
 
       // Switch to TERM tab
-      fireEvent.click(screen.getByText('รายเทอม (Term)'));
+      fireEvent.click(screen.getByRole('button', { name: 'รายเทอม' }));
 
       // Fill Full Name
       fireEvent.change(screen.getByPlaceholderText('เช่น นายสมชาย ใจดี'), { target: { value: 'สมหญิง รักเรียน' } });
@@ -309,7 +312,7 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
         expect(url).toBe('/api/v1/meters/provisional-terms');
         expect(payload.rentalType).toBe('TERM');
         expect(payload.fullName).toBe('สมหญิง รักเรียน');
-        expect(payload.termInstallmentCount).toBe(1);
+        expect(payload.termInstallmentCount).toBe(3);
       });
     });
 
@@ -326,7 +329,7 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
       );
 
       // Switch to DAILY tab
-      fireEvent.click(screen.getByText('รายวัน (Daily)'));
+      fireEvent.click(screen.getByRole('button', { name: 'รายวัน' }));
 
       // Fill Full Name
       fireEvent.change(screen.getByPlaceholderText('เช่น นายสมชาย ใจดี'), { target: { value: 'นักท่องเที่ยว ใจดี' } });
@@ -340,11 +343,10 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
         const [method, url, payload] = httpSpy.mock.calls[0];
         expect(method).toBe('POST');
         expect(url).toBe('/api/v1/daily-stays/owner-quick-add');
-        expect(payload.dormitoryId).toBe('dorm-001-uuid');
+        expect(payload.dormitoryId).toBe(mockContext.dormitoryId);
         expect(payload.roomId).toBe(mockContext.roomId);
         expect(payload.fullName).toBe('นักท่องเที่ยว ใจดี');
-        expect(payload.dailyRateAmount).toBe('350.00');
-        expect(payload.depositAmount).toBe('0.00');
+        expect(payload.dailyRateAmount).toBe('350.00'); // Authoritative effective rate
       });
     });
   });
@@ -353,7 +355,7 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
   // Financial Integrity & Building Authority Invariants
   // ==========================================
   describe('Financial Integrity & Building Authority Invariants', () => {
-    it('Proof G: edited MONTHLY endDate is explicitly passed in payload', async () => {
+    it('Proof G: custom lease end date on MONTHLY preserves exact YYYY-MM-DD input', async () => {
       const httpSpy = vi.spyOn(httpClient, 'httpRequest').mockResolvedValue({ success: true, data: { id: 'term-g' } });
 
       render(
@@ -365,11 +367,14 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
         />
       );
 
+      // Switch to MONTHLY tab
+      fireEvent.click(screen.getByRole('button', { name: 'รายเดือน' }));
+
       fireEvent.change(screen.getByPlaceholderText('เช่น นายสมชาย ใจดี'), { target: { value: 'ผู้เช่า แก้ไขวัน' } });
 
-      const dateInputs = screen.getAllByDisplayValue(/2026-\d{2}-\d{2}/);
+      const dateInputs = screen.getAllByPlaceholderText('วว/ดด/ปปปป');
       if (dateInputs.length > 1) {
-        fireEvent.change(dateInputs[1], { target: { value: '2026-12-31' } });
+        fireEvent.change(dateInputs[1], { target: { value: '31/12/2569' } });
       }
 
       const submitBtn = screen.getByText('ยืนยันเพิ่มผู้เช่า');
@@ -392,7 +397,7 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
         />
       );
 
-      fireEvent.click(screen.getByText('รายวัน (Daily)'));
+      fireEvent.click(screen.getByRole('button', { name: 'รายวัน' }));
 
       const depositInputs = screen.getAllByRole('spinbutton');
       const depositInput = depositInputs.find((input: any) => input.value === '0');
@@ -423,7 +428,7 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
         />
       );
 
-      fireEvent.click(screen.getByText('รายวัน (Daily)'));
+      fireEvent.click(screen.getByRole('button', { name: 'รายวัน' }));
 
       const spinInputs = screen.getAllByRole('spinbutton');
       const has500 = spinInputs.some((input: any) => input.value === '500');
@@ -440,7 +445,7 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
         />
       );
 
-      fireEvent.click(screen.getByText('รายเทอม (Term)'));
+      fireEvent.click(screen.getByRole('button', { name: 'รายเทอม' }));
 
       const select = screen.getByRole('combobox');
       expect(select.children.length).toBe(3); // Options: 1, 2, 3
@@ -474,7 +479,7 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
         />
       );
 
-      fireEvent.click(screen.getByText('รายเทอม (Term)'));
+      fireEvent.click(screen.getByRole('button', { name: 'รายเทอม' }));
 
       // Invariant: Shows clear warning banner and disables submit
       expect(screen.getByText(/ไม่พบข้อมูลระยะเวลาสัญญาแบบเทอมของอาคาร/)).toBeDefined();
@@ -511,7 +516,7 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
         />
       );
 
-      fireEvent.click(screen.getByText('รายเทอม (Term)'));
+      fireEvent.click(screen.getByRole('button', { name: 'รายเทอม' }));
 
       // Invariant: Does not auto-derive 5000 * 4 = 20000. Shows empty placeholder.
       const termRentInput = screen.getByPlaceholderText('ระบุค่าเช่ารายเทอม') as HTMLInputElement;
@@ -909,7 +914,7 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
       fireEvent.click(quickFillBtn);
 
       await waitFor(() => {
-        expect(screen.getByText('กรอกข้อมูลด่วน (Quick Fill)')).toBeDefined();
+        expect(screen.getByPlaceholderText('วางข้อมูลหลายห้องที่นี่ . . .')).toBeDefined();
       });
 
       // Click "ใช้แม่แบบ"

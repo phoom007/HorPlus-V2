@@ -5,6 +5,10 @@ import { createRequireSessionMiddleware } from '../middleware/require-session.js
 import { requireDormitoryPermission } from '../middleware/permission.js';
 import { requireDormitoryWriteEntitlement } from '../middleware/entitlement.js';
 import { BillingService } from '../services/billing.service.js';
+import multer from 'multer';
+import { v4 as uuidv4 } from 'uuid';
+import { LocalStorageProvider } from '../services/local-storage.service.js';
+import { processAndSecureTenantIdCardImage } from '../services/image-security.service.js';
 import { provisionalRentalTermService } from '../services/provisional-rental-term.service.js';
 import {
   CreateMeterDeviceSchema,
@@ -389,34 +393,94 @@ export function createMeterRouter(
     }
   });
 
-  // POST /api/v1/meters/provisional-terms
-  router.post('/provisional-terms', mutationGuard('meter:write'), async (req: Request, res: Response) => {
-    if (!verifyCsrf(req, res)) return;
-    try {
-      const dormId = getDormitoryId(req);
-      const parsed = CreateProvisionalRentalTermSchema.safeParse(req.body);
-      if (!parsed.success) {
-        return res.status(400).json({
-          error: {
-            code: 'VALIDATION_ERROR',
-            message: 'ข้อมูลการสร้างผู้เช่าชั่วคราวไม่ถูกต้อง',
-            fieldErrors: parsed.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })),
-            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
-            timestamp: new Date().toISOString(),
-          },
-        });
-      }
-
-      const result = await provisionalRentalTermService.createProvisionalTenantAndTerm(
-        dormId,
-        parsed.data,
-        req.auth?.userId
-      );
-      res.status(201).json({ success: true, data: result });
-    } catch (err) {
-      handleServiceError(res, err, req);
-    }
+  const upload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 5 * 1024 * 1024 },
   });
+  const localStorageProvider = new LocalStorageProvider();
+
+  // POST /api/v1/meters/provisional-terms
+  router.post(
+    '/provisional-terms',
+    upload.single('idCardImage'),
+    mutationGuard('meter:write'),
+    async (req: Request, res: Response) => {
+      if (!verifyCsrf(req, res)) return;
+      let writtenObjectKey: string | null = null;
+      try {
+        const dormId = getDormitoryId(req);
+        let rawBody = req.body;
+        if (typeof req.body?.data === 'string') {
+          try {
+            rawBody = JSON.parse(req.body.data);
+          } catch {}
+        } else if (rawBody && typeof rawBody === 'object') {
+          // Normalize form strings if needed
+          if (rawBody.durationMonths !== undefined && typeof rawBody.durationMonths === 'string') {
+            rawBody.durationMonths = parseInt(rawBody.durationMonths, 10);
+          }
+          if (rawBody.termInstallmentCount !== undefined && typeof rawBody.termInstallmentCount === 'string') {
+            rawBody.termInstallmentCount = parseInt(rawBody.termInstallmentCount, 10);
+          }
+        }
+
+        const parsed = CreateProvisionalRentalTermSchema.safeParse(rawBody);
+        if (!parsed.success) {
+          return res.status(400).json({
+            error: {
+              code: 'VALIDATION_ERROR',
+              message: 'ข้อมูลการสร้างผู้เช่าชั่วคราวไม่ถูกต้อง',
+              fieldErrors: parsed.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })),
+              requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+              timestamp: new Date().toISOString(),
+            },
+          });
+        }
+
+        let idCardData: {
+          idCardObjectKey: string;
+          idCardSha256: string;
+          idCardMimeType: string;
+          idCardByteSize: number;
+          idCardUploadedAt: Date;
+          idCardUploadedByUserId: string | null;
+        } | null = null;
+
+        if (req.file && req.file.buffer && req.file.buffer.length > 0) {
+          const secured = await processAndSecureTenantIdCardImage(req.file.buffer);
+          const objectKey = `tenants/${dormId}/${uuidv4()}${secured.extension}`;
+          await localStorageProvider.saveFile(objectKey, secured.buffer);
+          writtenObjectKey = objectKey;
+
+          idCardData = {
+            idCardObjectKey: objectKey,
+            idCardSha256: secured.sha256,
+            idCardMimeType: secured.mimeType,
+            idCardByteSize: secured.byteSize,
+            idCardUploadedAt: new Date(),
+            idCardUploadedByUserId: req.auth?.userId || null,
+          };
+        }
+
+        const result = await provisionalRentalTermService.createProvisionalTenantAndTerm(
+          dormId,
+          parsed.data,
+          req.auth?.userId,
+          idCardData
+        );
+        res.status(201).json({ success: true, data: result });
+      } catch (err: any) {
+        if (writtenObjectKey) {
+          try {
+            await localStorageProvider.deleteFile(writtenObjectKey);
+          } catch (delErr) {
+            console.error('[COMPENSATING CLEANUP ERROR] Failed to unlink tenant ID card file:', delErr);
+          }
+        }
+        handleServiceError(res, err, req);
+      }
+    }
+  );
 
   return router;
 }

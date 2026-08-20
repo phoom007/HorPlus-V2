@@ -32,7 +32,11 @@ import {
   Modal,
   Stepper,
   formatBaht,
-  formatThaiDate
+  formatThaiDate,
+  formatOwnerDate,
+  formatOwnerDateTime,
+  renderOptionalText,
+  OwnerDateInput
 } from '../../components/GlobalComponents';
 import { Tenant, Room, CoOccupant, EmergencyContact, Contract, Bill, BillItem, BLOCKING_CONTRACT_STATUSES } from '../../types';
 import { getDataProvider } from '../../data/dataProvider';
@@ -133,7 +137,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
   const [coName, setCoName] = useState('');
   const [coPhone, setCoPhone] = useState('');
   const [coCitizen, setCoCitizen] = useState('');
-  
+
   const [emergencyName, setEmergencyName] = useState('');
   const [emergencyRelation, setEmergencyRelation] = useState('');
   const [emergencyPhone, setEmergencyPhone] = useState('');
@@ -166,7 +170,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
     setHasPet(false);
     setPetType('');
     setPetName('');
-    
+
     setCurrentStep(0);
     setIsAddOpen(true);
   };
@@ -474,7 +478,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
       if (isNaN(start.getTime())) return 'ไม่ทราบวันที่เข้าพัก';
       const diffTime = Math.abs(today.getTime() - start.getTime());
       const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-      
+
       if (diffDays < 30) {
         return `${diffDays} วัน`;
       }
@@ -494,10 +498,10 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
 
     setErrorText(null);
     setIsSuccessAnimating(true);
-    
+
     const tenantId = selectedTenant.id;
     const room = rooms.find(r => r.currentTenantId === tenantId);
-    
+
     if (room) {
       try {
         const moveOutDate = additionalNote?.match(/\d{4}-\d{2}-\d{2}/)?.[0] || new Date().toISOString().split('T')[0];
@@ -531,13 +535,13 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
 
   const handleConfirmTransfer = async () => {
     if (!selectedTenant || !transferTargetRoom) return;
-    
+
     setErrorText(null);
     setIsSuccessAnimating(true);
-    
+
     const tenantId = selectedTenant.id;
     const currentRoom = rooms.find(r => r.currentTenantId === tenantId);
-    
+
     if (currentRoom) {
       try {
         const transferDate = additionalNote?.match(/\d{4}-\d{2}-\d{2}/)?.[0] || new Date().toISOString().split('T')[0];
@@ -559,7 +563,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
       const tenantName = selectedTenant.name;
       const oldRoom = rooms.find(r => r.currentTenantId === tenantId);
       const newRoom = rooms.find(r => r.id === transferTargetRoom);
-      
+
       if (!oldRoom || !newRoom) {
         setIsSuccessAnimating(false);
         setIsTransferOpen(false);
@@ -582,7 +586,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
       if (oldRoom.currentContractId) {
         updatedContracts = updatedContracts.map(c => {
           if (c.id === oldRoom.currentContractId) {
-            return { ...c, roomId: newRoom.id, updatedAt: new Date().toISOString(), terms: `${c.terms || ''}\n[ระบบนิติ] ย้ายห้องพักจากห้อง ${oldRoom.roomNumber} ไปยังห้อง ${newRoom.roomNumber} เมื่อ ${new Date().toLocaleDateString('th-TH')}${additionalNote ? ` / หมายเหตุ: ${additionalNote}` : ''}` };
+            return { ...c, roomId: newRoom.id, updatedAt: new Date().toISOString(), terms: `${c.terms || ''}\n[ระบบนิติ] ย้ายห้องพักจากห้อง ${oldRoom.roomNumber} ไปยังห้อง ${newRoom.roomNumber} เมื่อ ${formatThaiDate(new Date().toISOString())}${additionalNote ? ` / หมายเหตุ: ${additionalNote}` : ''}` };
           }
           return c;
         });
@@ -713,12 +717,12 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
   };
 
   const formatPhone = (val: string) => {
-    if (!val) return '';
+    if (!val) return '-';
     return formatPhoneInput(val);
   };
 
   const formatCitizenId = (val: string) => {
-    if (!val) return '';
+    if (!val) return '-';
     return formatCitizenIdInput(val);
   };
 
@@ -762,11 +766,11 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
       const [cy, cm] = selectedCycle.split('-').map(Number);
       const [sy, sm] = c.startDate.split('-').map(Number);
       const [ey, em] = c.endDate.split('-').map(Number);
-      
+
       const cycleVal = cy * 12 + (cm - 1);
       const startVal = sy * 12 + (sm - 1);
       const endVal = ey * 12 + (em - 1);
-      
+
       return cycleVal >= startVal && cycleVal <= endVal;
     });
     if (hasContract) return true;
@@ -812,11 +816,11 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
         const [cy, cm] = selectedCycle.split('-').map(Number);
         const [sy, sm] = c.startDate.split('-').map(Number);
         const [ey, em] = c.endDate.split('-').map(Number);
-        
+
         const cycleVal = cy * 12 + (cm - 1);
         const startVal = sy * 12 + (sm - 1);
         const endVal = ey * 12 + (em - 1);
-        
+
         return cycleVal >= startVal && cycleVal <= endVal;
       });
       if (activeContract) {
@@ -831,7 +835,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
 
   return (
     <div className="grid lg:grid-cols-3 gap-6">
-      
+
       {/* Left column: List of tenants */}
       <div className={`lg:col-span-1 bg-white p-5 rounded-3xl border border-gray-100 shadow-xs flex flex-col h-[700px] ${
         selectedTenant ? 'hidden lg:flex' : 'flex'
@@ -1020,7 +1024,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
 
               {/* Content Panel */}
               <div className="py-6 overflow-y-auto max-h-[420px] pr-1">
-                
+
                 {profileTab === 'info' && (
                   <div className="space-y-6">
                     {/* General */}
@@ -1036,7 +1040,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                         <span className="text-gray-400 font-medium text-[10px] uppercase tracking-wider">อีเมลติดต่อ</span>
                         <p className="font-extrabold text-slate-800 flex items-center gap-1.5 text-xs sm:text-sm min-w-0">
                           <Mail className="w-3.5 h-3.5 text-indigo-600 animate-pulse shrink-0" />
-                          <span className="break-all truncate" title={selectedTenant.email}>{selectedTenant.email || 'ไม่มีข้อมูล'}</span>
+                          <span className="break-all truncate" title={selectedTenant.email}>{renderOptionalText(selectedTenant.email)}</span>
                         </p>
                       </div>
                     </div>
@@ -1050,15 +1054,15 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
                         <div className="flex flex-col gap-1">
                           <span className="text-gray-400 font-medium text-[10px]">ชื่อผู้ติดต่อ:</span>
-                          <p className="font-extrabold text-slate-800 text-[11px] sm:text-xs break-all">{selectedTenant.emergencyContact?.name || 'ไม่มีข้อมูล'}</p>
+                          <p className="font-extrabold text-slate-800 text-[11px] sm:text-xs break-all">{renderOptionalText(selectedTenant.emergencyContact?.name)}</p>
                         </div>
                         <div className="flex flex-col gap-1">
                           <span className="text-gray-400 font-medium text-[10px]">ความสัมพันธ์:</span>
-                          <p className="font-extrabold text-slate-800 text-[11px] sm:text-xs break-all">{selectedTenant.emergencyContact?.relationship || 'ไม่มีข้อมูล'}</p>
+                          <p className="font-extrabold text-slate-800 text-[11px] sm:text-xs break-all">{renderOptionalText(selectedTenant.emergencyContact?.relationship)}</p>
                         </div>
                         <div className="flex flex-col gap-1">
                           <span className="text-gray-400 font-medium text-[10px]">เบอร์โทรติดต่อ:</span>
-                          <p className="font-extrabold text-indigo-600 text-[11px] sm:text-xs break-all">{formatPhone(selectedTenant.emergencyContact?.phone)}</p>
+                          <p className="font-extrabold text-indigo-600 text-[11px] sm:text-xs break-all">{renderOptionalText(formatPhone(selectedTenant.emergencyContact?.phone))}</p>
                         </div>
                       </div>
                     </div>
@@ -1160,12 +1164,13 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                       <h4 className="font-black text-slate-800 pb-2 border-b border-gray-100">ประวัติเอกสารสำคัญ</h4>
                       {(() => {
                         const hasIdCard = !!(
-                          selectedTenant.idCardPhotoMock && 
-                          selectedTenant.idCardPhotoMock.trim() !== '' && 
-                          selectedTenant.idCardPhotoMock !== 'MOCK_ID_CARD_BASE64'
+                          (selectedTenant.idCardObjectKey && selectedTenant.idCardObjectKey.trim() !== '') ||
+                          (selectedTenant.idCardPhotoMock &&
+                            selectedTenant.idCardPhotoMock.trim() !== '' &&
+                            selectedTenant.idCardPhotoMock !== 'MOCK_ID_CARD_BASE64')
                         );
                         return (
-                          <div 
+                          <div
                             onClick={() => { setIsIdCardOpen(true); }}
                             className="p-3 bg-slate-50 hover:bg-indigo-50/50 border border-gray-100 hover:border-indigo-150 rounded-xl flex items-center justify-between cursor-pointer transition-all group"
                             title={hasIdCard ? "คลิกเพื่อเปิดดูภาพสำเนาบัตรประชาชน" : "คลิกเพื่ออัปโหลดหรือจัดการเอกสาร"}
@@ -1188,7 +1193,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                               </span>
                             ) : (
                               <span className="text-[9px] font-bold text-amber-700 bg-amber-50 border border-amber-100 px-2 py-0.5 rounded-md shrink-0">
-                                Unverified
+                                ยังไม่ได้อัปโหลด
                               </span>
                             )}
                           </div>
@@ -1319,10 +1324,10 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
 
       {/* Thai National ID Card Viewer Modal */}
       {selectedTenant && (
-        <Modal 
-          isOpen={isIdCardOpen} 
-          onClose={() => setIsIdCardOpen(false)} 
-          title="เอกสารสำเนาบัตรประจำตัวประชาชนผู้เช่า" 
+        <Modal
+          isOpen={isIdCardOpen}
+          onClose={() => setIsIdCardOpen(false)}
+          title="เอกสารสำเนาบัตรประจำตัวประชาชนผู้เช่า"
           size="md"
         >
           <div className="flex flex-col items-center justify-center p-1 sm:p-4 space-y-4">
@@ -1330,31 +1335,43 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
               <p className="text-xs text-slate-500 font-medium">ภาพสำเนาบัตรประจำตัวประชาชนผู้เช่าที่ได้รับการตรวจสอบแล้ว</p>
             </div>
 
-            {selectedTenant.idCardPhotoMock && selectedTenant.idCardPhotoMock !== 'MOCK_ID_CARD_BASE64' ? (
-              <div className="w-full max-w-[420px] bg-slate-50 border border-gray-200 rounded-2xl overflow-hidden p-2 relative shadow-md">
-                <img src={selectedTenant.idCardPhotoMock} alt="เอกสารประจำตัวผู้เช่า" className="w-full h-auto max-h-[280px] object-contain rounded-lg mx-auto" />
-                <div className="absolute top-4 right-4 bg-emerald-600 text-white text-[9px] font-bold px-2 py-1 rounded-md shadow">
-                  เอกสารจริงจากระบบ
+            {(() => {
+              const hasRealDoc = !!(selectedTenant.idCardObjectKey && selectedTenant.idCardObjectKey.trim() !== '');
+              const hasMockDoc = !!(selectedTenant.idCardPhotoMock && selectedTenant.idCardPhotoMock.trim() !== '' && selectedTenant.idCardPhotoMock !== 'MOCK_ID_CARD_BASE64');
+              const docSrc = hasRealDoc ? `/api/v1/tenants/${selectedTenant.id}/identity-document` : hasMockDoc ? selectedTenant.idCardPhotoMock : null;
+
+              if (docSrc) {
+                return (
+                  <div className="w-full max-w-[420px] bg-slate-50 border border-gray-200 rounded-2xl overflow-hidden p-2 relative shadow-md">
+                    <img src={docSrc} alt="เอกสารประจำตัวผู้เช่า" className="w-full h-auto max-h-[280px] object-contain rounded-lg mx-auto" />
+                    <div className="absolute top-4 right-4 bg-emerald-600 text-white text-[9px] font-bold px-2 py-1 rounded-md shadow">
+                      เอกสารจริงจากระบบ
+                    </div>
+                  </div>
+                );
+              }
+
+              return (
+                <div className="w-full max-w-[420px] p-8 border-2 border-dashed border-gray-200 rounded-2xl bg-slate-50 flex flex-col items-center justify-center text-center space-y-3">
+                  <FileText className="w-12 h-12 text-slate-400" />
+                  <div className="space-y-1">
+                    <p className="text-xs font-bold text-slate-700">ยังไม่ได้อัปโหลดไฟล์ภาพบัตรประชาชน</p>
+                    <p className="text-[10px] text-gray-400">คุณสามารถแก้ไขข้อมูลผู้เช่าเพื่อทำการอัปโหลดไฟล์สำเนาจริงได้</p>
+                  </div>
                 </div>
-              </div>
-            ) : (
-              <div className="w-full max-w-[420px] p-8 border-2 border-dashed border-gray-200 rounded-2xl bg-slate-50 flex flex-col items-center justify-center text-center space-y-3">
-                <FileText className="w-12 h-12 text-slate-400" />
-                <div className="space-y-1">
-                  <p className="text-xs font-bold text-slate-700">ยังไม่ได้อัปโหลดไฟล์ภาพบัตรประชาชน</p>
-                  <p className="text-[10px] text-gray-400">คุณสามารถแก้ไขข้อมูลผู้เช่าเพื่อทำการอัปโหลดไฟล์สำเนาจริงได้</p>
-                </div>
-              </div>
-            )}
+              );
+            })()}
 
             {/* Action buttons */}
             <div className="flex gap-3 pt-2 w-full">
-              <button 
+              <button
                 onClick={() => {
                   const printWindow = window.open('', '_blank');
                   if (!printWindow) return;
-                  const hasPhoto = selectedTenant.idCardPhotoMock && selectedTenant.idCardPhotoMock !== 'MOCK_ID_CARD_BASE64';
-                  const photoUrl = hasPhoto ? `data:image/jpeg;base64,${selectedTenant.idCardPhotoMock}` : '';
+                  const hasRealDoc = !!(selectedTenant.idCardObjectKey && selectedTenant.idCardObjectKey.trim() !== '');
+                  const hasMockDoc = !!(selectedTenant.idCardPhotoMock && selectedTenant.idCardPhotoMock.trim() !== '' && selectedTenant.idCardPhotoMock !== 'MOCK_ID_CARD_BASE64');
+                  const photoUrl = hasRealDoc ? `/api/v1/tenants/${selectedTenant.id}/identity-document` : hasMockDoc ? (selectedTenant.idCardPhotoMock.startsWith('data:') ? selectedTenant.idCardPhotoMock : `data:image/jpeg;base64,${selectedTenant.idCardPhotoMock}`) : '';
+                  const hasPhoto = Boolean(photoUrl && photoUrl.trim() !== '');
                   const escapeHtml = (val?: string | null) => {
                     if (!val) return '-';
                     return String(val)
@@ -1398,23 +1415,23 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                           <div class="title">เอกสารสำเนาบัตรประจำตัวประชาชนผู้เช่า</div>
                           <div class="subtitle">ระบบบริหารจัดการหอพัก HorPlus</div>
                         </div>
-                        
+
                         <div class="card-frame">
-                          ${hasPhoto 
-                            ? `<img src="${photoUrl}" class="card-img" alt="สำเนาบัตรประชาชน" />` 
+                          ${hasPhoto
+                            ? `<img src="${photoUrl}" class="card-img" alt="สำเนาบัตรประชาชน" />`
                             : `<div class="no-img">( ไม่ได้แนบไฟล์ภาพถ่ายสำเนาบัตรประชาชน )</div>`}
                         </div>
 
                         <div class="section-title">ข้อมูลส่วนตัวผู้เช่า</div>
                         <table class="info-grid">
                           <tr><td class="label">ชื่อ-นามสกุล:</td><td class="value">${escapeHtml(selectedTenant.name)}</td></tr>
-                          <tr><td class="label">เลขประจำตัวประชาชน:</td><td class="value">${escapeHtml(selectedTenant.citizenId)}</td></tr>
-                          <tr><td class="label">เบอร์โทรศัพท์:</td><td class="value">${escapeHtml(selectedTenant.phone)}</td></tr>
-                          <tr><td class="label">อีเมล:</td><td class="value">${escapeHtml(selectedTenant.email)}</td></tr>
-                          <tr><td class="label">ผู้ติดต่อฉุกเฉิน:</td><td class="value">${escapeHtml(selectedTenant.emergencyContact?.name)} (${escapeHtml(selectedTenant.emergencyContact?.relationship)}) เบอร์: ${escapeHtml(selectedTenant.emergencyContact?.phone)}</td></tr>
+                          <tr><td class="label">เลขประจำตัวประชาชน:</td><td class="value">${escapeHtml(selectedTenant.citizenId || '-')}</td></tr>
+                          <tr><td class="label">เบอร์โทรศัพท์:</td><td class="value">${escapeHtml(selectedTenant.phone || '-')}</td></tr>
+                          <tr><td class="label">อีเมล:</td><td class="value">${escapeHtml(selectedTenant.email || '-')}</td></tr>
+                          <tr><td class="label">ผู้ติดต่อฉุกเฉิน:</td><td class="value">${selectedTenant.emergencyContact?.name ? `${escapeHtml(selectedTenant.emergencyContact.name)} (${escapeHtml(selectedTenant.emergencyContact.relationship || '-')}) เบอร์: ${escapeHtml(selectedTenant.emergencyContact.phone || '-')}` : '-'}</td></tr>
                         </table>
 
-                        <div class="footer-note">เอกสารนี้พิมพ์จากระบบบริหารจัดการหอพัก เมื่อ ${new Date().toLocaleDateString('th-TH', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' })} น.</div>
+                        <div class="footer-note">เอกสารนี้พิมพ์จากระบบบริหารจัดการหอพัก เมื่อ ${formatThaiDate(new Date().toISOString(), true)}</div>
                       </div>
                       <script>
                         window.onload = function() {
@@ -1433,7 +1450,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                 <Printer className="w-3.5 h-3.5" />
                 <span>พิมพ์เอกสาร</span>
               </button>
-              <button 
+              <button
                 onClick={() => setIsIdCardOpen(false)}
                 className="flex-1 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl transition-all cursor-pointer text-center"
               >
@@ -1514,7 +1531,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
           {/* Step 1: Co-occupants, Pets, Vehicles */}
           {currentStep === 1 && (
             <div className="space-y-6">
-              
+
               {/* Emergency */}
               <div className="p-4 bg-slate-50 border border-gray-200 rounded-2xl space-y-3">
                 <h4 className="font-bold text-xs text-slate-800">ผู้ติดต่อกรณีฉุกเฉิน *</h4>
@@ -1890,12 +1907,11 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                         <label className="block text-[11px] font-bold text-slate-800 mb-1" htmlFor="actualEndDateInput">
                           วันที่สิ้นสุดการเช่าจริง (Actual Tenancy End Date) *
                         </label>
-                        <input
+                        <OwnerDateInput
                           id="actualEndDateInput"
-                          type="date"
                           value={additionalNote?.match(/\d{4}-\d{2}-\d{2}/)?.[0] || new Date().toISOString().split('T')[0]}
-                          onChange={(e) => setAdditionalNote(`วันที่สิ้นสุดจริง: ${e.target.value}`)}
-                          className="w-full px-3 py-1.5 text-xs border border-slate-300 rounded-xl bg-white text-slate-900 font-semibold"
+                          onChange={(iso) => setAdditionalNote(`วันที่สิ้นสุดจริง: ${iso}`)}
+                          className="py-1.5"
                         />
                         <p className="text-[10px] text-slate-500 mt-1">
                           * วันที่ย้ายออกจริงแยกต่างหากจากวันที่ผู้เช่าแจ้งประสงค์ ยืนยันแล้วสัญญาและการพักอาศัยจะสิ้นสุดลงทันที
@@ -2017,17 +2033,16 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                       ))}
                     </select>
                   </div>
-                  
+
                   <div className="space-y-2 pt-2 border-t border-amber-200/60">
                     <label className="block text-[11px] font-bold text-slate-700">วันที่ย้ายห้อง</label>
-                    <input
-                      type="date"
+                    <OwnerDateInput
                       value={additionalNote?.match(/\d{4}-\d{2}-\d{2}/)?.[0] || new Date().toISOString().split('T')[0]}
-                      onChange={(e) => setAdditionalNote(`วันที่ย้าย: ${e.target.value}`)}
-                      className="w-full px-3 py-1.5 text-xs border border-slate-300 rounded-xl bg-white text-slate-900 font-semibold"
+                      onChange={(iso) => setAdditionalNote(`วันที่ย้าย: ${iso}`)}
+                      className="py-1.5"
                     />
                   </div>
-                  
+
                   <div className="space-y-2 pt-2 border-t border-amber-200/60">
                     <label className="block text-[11px] font-bold text-slate-700">หมายเหตุเพิ่มเติม</label>
                     <textarea
@@ -2685,20 +2700,18 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="block font-bold text-slate-700 mb-1">วันเริ่มสัญญา *</label>
-                <input
-                  type="date"
+                <OwnerDateInput
+                  required
                   value={approveStartDate}
-                  onChange={(e) => setApproveStartDate(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-200 rounded-xl"
+                  onChange={(iso) => setApproveStartDate(iso)}
                 />
               </div>
               <div>
                 <label className="block font-bold text-slate-700 mb-1">วันสิ้นสุดสัญญา *</label>
-                <input
-                  type="date"
+                <OwnerDateInput
+                  required
                   value={approveEndDate}
-                  onChange={(e) => setApproveEndDate(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-200 rounded-xl"
+                  onChange={(iso) => setApproveEndDate(iso)}
                 />
               </div>
             </div>

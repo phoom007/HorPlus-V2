@@ -112,7 +112,7 @@ describe('TASK-009 — Comprehensive Delta Verification Suite (Checkpoint 1D)', 
 
     const rOwner = await getOrCreateRole('OWNER', 'Owner', ['*']);
     const rMgr = await getOrCreateRole('MANAGER', 'Manager', ['room:*', 'billing:*']);
-    const rTch = await getOrCreateRole('TECH', 'Technician', ['meter:*']);
+    const rTch = await getOrCreateRole('STAFF', 'Technician', ['meter:*']);
 
     rOwnerId = rOwner.id;
     rManagerId = rMgr.id;
@@ -187,12 +187,12 @@ describe('TASK-009 — Comprehensive Delta Verification Suite (Checkpoint 1D)', 
     expect(valA1).not.toBeNull();
     expect(valA1?.memberships[0].roleCode).toBe('MANAGER');
 
-    await grantService.changeGrantRole(testDormitoryId, grantRes.grant.id, 'TECH', `usr_${testOwnerUserId}`);
+    await grantService.changeGrantRole(testDormitoryId, grantRes.grant.id, 'STAFF', `usr_${testOwnerUserId}`);
 
     const valA2 = await authService.validateSession(redeemA.sessionToken);
     const valB2 = await authService.validateSession(redeemB.sessionToken);
-    expect(valA2?.memberships[0].roleCode).toBe('TECH');
-    expect(valB2?.memberships[0].roleCode).toBe('TECH');
+    expect(valA2?.memberships[0].roleCode).toBe('STAFF');
+    expect(valB2?.memberships[0].roleCode).toBe('STAFF');
 
     await grantService.revokeAccessGrant(testDormitoryId, grantRes.grant.id, `usr_${testOwnerUserId}`);
 
@@ -203,7 +203,7 @@ describe('TASK-009 — Comprehensive Delta Verification Suite (Checkpoint 1D)', 
   it('5. Actual LINE User ID Passed to Push Adapter Spy with Retry Key', async () => {
     mockAdapter.pushCalls = [];
     const friend = await friendService.upsertFriendFromWebhook(testDormitoryId, 'U_RAW_LINE_ID_99', 'Raw Line User');
-    const grantRes = await grantService.createAccessGrant(testDormitoryId, friend.id, 'TECH', `usr_${testOwnerUserId}`);
+    const grantRes = await grantService.createAccessGrant(testDormitoryId, friend.id, 'STAFF', `usr_${testOwnerUserId}`);
 
     expect(grantRes.pushed).toBe(true);
     expect(mockAdapter.pushCalls.length).toBe(1);
@@ -250,7 +250,7 @@ describe('TASK-009 — Comprehensive Delta Verification Suite (Checkpoint 1D)', 
     const friend = await friendService.upsertFriendFromWebhook(testDormitoryId, 'U_QUOTA_TEST_1', 'Quota User 1');
 
     mockAdapter.pushCalls = [];
-    const grantRes = await grantService.createAccessGrant(testDormitoryId, friend.id, 'TECH', `usr_${testOwnerUserId}`);
+    const grantRes = await grantService.createAccessGrant(testDormitoryId, friend.id, 'STAFF', `usr_${testOwnerUserId}`);
     expect(grantRes.deliveryStatus).toBe('sent');
 
     const status = await pushUsageService.getQuotaStatus(testDormitoryId);
@@ -384,7 +384,7 @@ describe('TASK-009 — Comprehensive Delta Verification Suite (Checkpoint 1D)', 
     // 1. 409 WITH x-line-accepted-request-id header -> ALREADY_ACCEPTED
     mockAdapter.simulate409WithAcceptedId = true;
     mockAdapter.simulate409WithoutAcceptedId = false;
-    const res1 = await grantService.createAccessGrant(testDormitoryId, friend.id, 'TECH', `usr_${testOwnerUserId}`);
+    const res1 = await grantService.createAccessGrant(testDormitoryId, friend.id, 'STAFF', `usr_${testOwnerUserId}`);
     expect(res1.deliveryStatus).toBe('sent'); // ALREADY_ACCEPTED maps to sent delivery status
 
     // Revoke grant to free slot
@@ -394,7 +394,7 @@ describe('TASK-009 — Comprehensive Delta Verification Suite (Checkpoint 1D)', 
     mockAdapter.simulate409WithAcceptedId = false;
     mockAdapter.simulate409WithoutAcceptedId = true;
     const friend2 = await friendService.upsertFriendFromWebhook(testDormitoryId, 'U_409_FAIL_CLOSED', '409 Fail User');
-    const res2 = await grantService.createAccessGrant(testDormitoryId, friend2.id, 'TECH', `usr_${testOwnerUserId}`);
+    const res2 = await grantService.createAccessGrant(testDormitoryId, friend2.id, 'STAFF', `usr_${testOwnerUserId}`);
     expect(res2.deliveryStatus).toBe('failed');
     expect(res2.pushed).toBe(false);
 
@@ -411,7 +411,7 @@ describe('TASK-009 — Comprehensive Delta Verification Suite (Checkpoint 1D)', 
     });
 
     const friend = await friendService.upsertFriendFromWebhook(dormExp.id, 'U_EXPIRY_IDEM_USER', 'Expiry Idem User');
-    const grantRes = await grantService.createAccessGrant(dormExp.id, friend.id, 'TECH', `usr_${testOwnerUserId}`);
+    const grantRes = await grantService.createAccessGrant(dormExp.id, friend.id, 'STAFF', `usr_${testOwnerUserId}`);
 
     const attempts = await prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormExp.id}, true)`;

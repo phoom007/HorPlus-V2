@@ -4,6 +4,7 @@ import { TenantService } from '../services/tenant.service.js';
 import { createRequireSessionMiddleware } from '../middleware/require-session.js';
 import { requireDormitoryPermission } from '../middleware/permission.js';
 import { requireDormitoryWriteEntitlement } from '../middleware/entitlement.js';
+import { LocalStorageProvider } from '../services/local-storage.service.js';
 import {
   CreateTenantSchema,
   UpdateTenantSchema,
@@ -82,6 +83,8 @@ export function createTenantRouter(
     }
   });
 
+  const localStorageProvider = new LocalStorageProvider();
+
   // GET /api/v1/tenants/:id
   router.get('/:id', async (req: Request, res: Response) => {
     try {
@@ -92,6 +95,62 @@ export function createTenantRouter(
       handleServiceError(res, err, req);
     }
   });
+
+  // GET /api/v1/tenants/:id/identity-document
+  router.get(
+    '/:id/identity-document',
+    requireSession,
+    requireDormitoryPermission('tenant:document:read'),
+    async (req: Request, res: Response) => {
+      try {
+        const dormId = getDormitoryId(req);
+        const tenant = await tenantService.getTenantById(req.params.id, dormId);
+        if (!tenant || tenant.dormitoryId !== dormId) {
+          return res.status(404).json({
+            error: {
+              code: 'TENANT_NOT_FOUND',
+              message: 'ไม่พบข้อมูลผู้เช่า',
+              requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+              timestamp: new Date().toISOString(),
+            },
+          });
+        }
+
+        if (!tenant.idCardObjectKey) {
+          return res.status(404).json({
+            error: {
+              code: 'IDENTITY_DOCUMENT_NOT_FOUND',
+              message: 'ผู้เช่ารายนี้ยังไม่ได้อัปโหลดเอกสารสำเนาบัตรประชาชน',
+              requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+              timestamp: new Date().toISOString(),
+            },
+          });
+        }
+
+        const fileBuffer = await localStorageProvider.getFile(tenant.idCardObjectKey);
+        res.setHeader('Content-Type', tenant.idCardMimeType || 'image/webp');
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        res.setHeader('Cache-Control', 'private, no-store, no-cache, must-revalidate');
+        res.setHeader('Pragma', 'no-cache');
+        res.setHeader('Expires', '0');
+        res.setHeader('Content-Disposition', 'inline; filename="tenant-id-document.webp"');
+
+        return res.send(fileBuffer);
+      } catch (err: any) {
+        if (err?.code === 'FILE_NOT_FOUND' || err?.message?.includes('not found')) {
+          return res.status(404).json({
+            error: {
+              code: 'IDENTITY_DOCUMENT_NOT_FOUND',
+              message: 'ไม่พบไฟล์เอกสารสำเนาบัตรประชาชน',
+              requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+              timestamp: new Date().toISOString(),
+            },
+          });
+        }
+        handleServiceError(res, err, req);
+      }
+    }
+  );
 
   // POST /api/v1/tenants
   router.post('/', mutationGuard('tenant:write'), async (req: Request, res: Response) => {

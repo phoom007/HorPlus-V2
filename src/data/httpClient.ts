@@ -141,11 +141,8 @@ export async function httpRequest<T>(
   const dormId =
     options.dormitoryId ||
     callerDormId ||
-    (typeof localStorage !== 'undefined'
-      ? localStorage.getItem('selected_dormitory_id') ||
-        sessionStorage.getItem('active_dormitory_selected_for_session') ||
-        undefined
-      : undefined);
+    (typeof localStorage !== 'undefined' ? localStorage.getItem('selected_dormitory_id') : undefined) ||
+    (typeof sessionStorage !== 'undefined' ? sessionStorage.getItem('active_dormitory_selected_for_session') : undefined);
 
   if (dormId) {
     headers['X-Dormitory-Id'] = dormId;

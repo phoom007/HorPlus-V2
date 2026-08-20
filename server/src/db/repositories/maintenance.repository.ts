@@ -80,7 +80,7 @@ export interface MaintenanceUpdateEntity {
   id: string;
   dormitoryId: string;
   maintenanceRequestId: string;
-  actorType: 'owner' | 'manager' | 'tech' | 'tenant';
+  actorType: 'owner' | 'manager' | 'staff' | 'tech' | 'tenant';
   actorUserId?: string | null;
   actorMemberId?: string | null;
   actorTenantId?: string | null;
@@ -130,7 +130,7 @@ export interface MaintenanceStatusHistoryEntity {
   fromStatus: MaintenanceStatus;
   toStatus: MaintenanceStatus;
   reason?: string | null;
-  changedByActorType: 'owner' | 'manager' | 'tech' | 'tenant';
+  changedByActorType: 'owner' | 'manager' | 'staff' | 'tech' | 'tenant';
   changedByUserId?: string | null;
   changedByTenantId?: string | null;
   createdAt: Date;
