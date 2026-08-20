@@ -260,6 +260,28 @@ describe('LOCAL-07 — Data-Ready Navigation & Authority Suite', () => {
       expect(queries).toHaveLength(8);
     });
 
+    it('meterPreviewContext query function passes canonical dormitoryId option to httpRequest', async () => {
+      const queries = getTargetQueriesForTab('meters', dormId, cycleId);
+      const previewQuery = queries.find(
+        q => JSON.stringify(q.queryKey) === JSON.stringify(queryKeys.meterPreviewContext(dormId, cycleId))
+      );
+      expect(previewQuery).toBeDefined();
+
+      const httpSpy = vi.spyOn(httpClient, 'httpRequest').mockResolvedValueOnce({
+        success: true,
+        data: { rateSnapshot: { waterRate: 18 } },
+      } as any);
+
+      await previewQuery!.queryFn();
+
+      expect(httpSpy).toHaveBeenCalledWith(
+        'GET',
+        `/api/v1/meters/workspace/preview-context?billingCycleId=${cycleId}`,
+        undefined,
+        { dormitoryId: dormId }
+      );
+    });
+
     it('defines exact query dependencies for payments (3 queries, NO rooms dependency)', () => {
       const queries = getTargetQueriesForTab('payments', dormId);
       const keys = queries.map(q => JSON.stringify(q.queryKey));

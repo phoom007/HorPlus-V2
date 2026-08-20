@@ -276,7 +276,7 @@ export function getTargetQueriesForTab(targetTab: string, dormId: string, cycleI
               'GET',
               `/api/v1/meters/workspace/preview-context?billingCycleId=${cycleId}`,
               undefined,
-              { headers: dormHeader }
+              { dormitoryId: dormId }
             );
             if (!res || res.success === false) {
               throw new Error(res?.error || 'ไม่สามารถโหลดข้อมูลอัตราค่าน้ำค่าไฟได้');

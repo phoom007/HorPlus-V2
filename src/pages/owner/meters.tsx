@@ -396,7 +396,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
         'GET',
         `/api/v1/meters/workspace/preview-context?billingCycleId=${selectedBillingCycleId}`,
         undefined,
-        { headers: dormHeader }
+        { dormitoryId: currentDormId }
       );
       if (!res || res.success === false) {
         throw new Error(res?.error || 'ไม่สามารถโหลดข้อมูลอัตราค่าน้ำค่าไฟได้');

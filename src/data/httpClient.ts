@@ -114,27 +114,58 @@ export async function httpRequest<T>(
 
   const isFormData = typeof FormData !== 'undefined' && body instanceof FormData;
 
+  const rawCallerHeaders = options.headers || {};
   const headers: Record<string, string> = {
     ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
     Accept: 'application/json',
     'X-Request-Id': `req_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-    ...options.headers
   };
 
-  const dormId = options.dormitoryId || (typeof localStorage !== 'undefined' ? (localStorage.getItem('selected_dormitory_id') || sessionStorage.getItem('active_dormitory_selected_for_session') || undefined) : undefined);
+  // Extract any caller-supplied dormitory header case-insensitively and strip duplicate keys
+  let callerDormId: string | undefined;
+  for (const [k, v] of Object.entries(rawCallerHeaders)) {
+    if (k.toLowerCase() === 'x-dormitory-id') {
+      callerDormId = v;
+    } else {
+      headers[k] = v;
+    }
+  }
+
+  // Authoritative dormitory resolution with fail-fast on conflicting non-empty IDs
+  if (options.dormitoryId && callerDormId && options.dormitoryId !== callerDormId) {
+    throw new Error(
+      `Conflicting dormitory IDs provided in options.dormitoryId ("${options.dormitoryId}") and headers ("${callerDormId}")`
+    );
+  }
+
+  const dormId =
+    options.dormitoryId ||
+    callerDormId ||
+    (typeof localStorage !== 'undefined'
+      ? localStorage.getItem('selected_dormitory_id') ||
+        sessionStorage.getItem('active_dormitory_selected_for_session') ||
+        undefined
+      : undefined);
+
   if (dormId) {
     headers['X-Dormitory-Id'] = dormId;
   }
 
   if (options.idempotencyKey && ['POST', 'PUT', 'PATCH'].includes(method)) {
+    for (const k of Object.keys(headers)) {
+      if (k.toLowerCase() === 'x-idempotency-key') delete headers[k];
+    }
     headers['X-Idempotency-Key'] = options.idempotencyKey;
   }
 
   // Automatic CSRF token injection for mutation operations
-  if (!['GET', 'HEAD', 'OPTIONS'].includes(method) && !headers['X-CSRF-Token']) {
-    const csrfToken = getCsrfTokenFromCookie();
-    if (csrfToken) {
-      headers['X-CSRF-Token'] = csrfToken;
+  if (!['GET', 'HEAD', 'OPTIONS'].includes(method)) {
+    const hasCsrf = Object.keys(headers).some((k) => k.toLowerCase() === 'x-csrf-token');
+    if (!hasCsrf) {
+      const csrfToken = getCsrfTokenFromCookie();
+      if (csrfToken) {
+        headers['X-CSRF-Token'] = csrfToken;
+      }
     }
   }
 

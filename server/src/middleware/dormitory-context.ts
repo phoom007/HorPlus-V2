@@ -56,11 +56,26 @@ export async function resolveAuthoritativeDormitoryContext(req: Request): Promis
   const urlUuidMatch = (req.originalUrl || req.url || '').match(/\/(?:properties|dormitories)\/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})/);
   const urlDormId = urlUuidMatch ? urlUuidMatch[1] : undefined;
 
-  const requestedDormId =
+  const rawHeader = req.headers['x-dormitory-id'];
+  const headerDormId = Array.isArray(rawHeader) ? rawHeader.join(',') : (rawHeader as string | undefined);
+
+  const rawRequested =
     urlDormId ||
     (req.params?.dormitoryId as string) ||
-    (req.headers['x-dormitory-id'] as string) ||
+    headerDormId ||
     (req.query?.dormitoryId as string);
+
+  let requestedDormId: string | undefined;
+
+  if (rawRequested !== undefined && rawRequested !== '') {
+    const trimmed = String(rawRequested).trim();
+    // Strict UUID format verification: rejects malformed strings, comma-separated duplicates, and non-UUID input
+    const UUID_REGEX = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+    if (!UUID_REGEX.test(trimmed)) {
+      throw new AppError('รหัสระบุตัวตน (ID) ไม่ถูกต้องตามรูปแบบ UUID', 400, 'INVALID_ID_FORMAT');
+    }
+    requestedDormId = trimmed;
+  }
 
   const activeMemberships = auth.memberships.filter((m) => (m.status || '').toLowerCase() === 'active');
 

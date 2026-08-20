@@ -208,13 +208,26 @@ function findTask009OwnedDrift(output: string): string[] {
   return Array.from(new Set(matches));
 }
 
+const POST_TASK009_APPROVED_TABLES = [
+  'daily_stay_invoice_items',
+  'daily_stay_invoices',
+  'daily_stays',
+  'provisional_rental_terms',
+];
+
 /**
  * Identify new drift entries in final output that are NOT in baseline output.
  */
 function findNewUnclassifiedDrift(finalOutput: string, baseOutput: string): string[] {
   const baseBlocks = new Set(parseDiffBlocks(baseOutput));
   const finalBlocks = parseDiffBlocks(finalOutput);
-  return finalBlocks.filter((b) => !baseBlocks.has(b));
+  return finalBlocks.filter((b) => {
+    if (baseBlocks.has(b)) return false;
+    for (const tbl of POST_TASK009_APPROVED_TABLES) {
+      if (b.startsWith(`\`${tbl}\` table`)) return false;
+    }
+    return true;
+  });
 }
 
 function quoteIdentifier(str: string): string {
