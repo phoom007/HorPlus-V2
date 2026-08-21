@@ -299,6 +299,9 @@ export interface Bill {
   id: string;
   billNumber: string;
   cycleId: string; // "YYYY-MM" e.g. "2026-07"
+  billingCycleId?: string;
+  billKind?: 'MONTHLY_UTILITY' | 'DEPOSIT' | 'RENT' | string;
+  outstandingAmount?: number | string;
   roomId: string;
   tenantId: string;
   items: BillItem[];

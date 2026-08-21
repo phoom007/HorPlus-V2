@@ -213,13 +213,7 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
     activeTab === 'MONTHLY' &&
     (monthlyRent === null || monthlyRent === undefined || isNaN(Number(monthlyRent)) || Number(monthlyRent) < 0);
 
-  const todayBangkok = (() => {
-    const d = new Date();
-    const bkk = new Date(d.getTime() + 7 * 60 * 60 * 1000);
-    return `${bkk.getUTCFullYear()}-${String(bkk.getUTCMonth() + 1).padStart(2, '0')}-${String(bkk.getUTCDate()).padStart(2, '0')}`;
-  })();
-
-  const isDailyDateInvalid = dailyEndDate < startDate || dailyEndDate < todayBangkok;
+  const isDailyDateInvalid = dailyEndDate < startDate;
 
   const isDailyDisabled =
     activeTab === 'DAILY' &&
@@ -240,7 +234,7 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
         return;
       }
       if (termRent === null || termRent === undefined || isNaN(Number(termRent)) || Number(termRent) < 0) {
-        setErrorText('กรุณาระบุค่าเช่ารายเทอม');
+        setErrorText('กรุณาระบุค่าเช่ารวมตลอดสัญญาแบบเทอม');
         return;
       }
     }
@@ -259,10 +253,6 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
       }
       if (dailyEndDate < startDate) {
         setErrorText('วันที่สิ้นสุดต้องไม่น้อยกว่าวันที่เริ่มพัก');
-        return;
-      }
-      if (dailyEndDate < todayBangkok) {
-        setErrorText('วันที่สิ้นสุดต้องไม่น้อยกว่าวันที่ปัจจุบัน');
         return;
       }
     }
@@ -733,32 +723,74 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
                 </div>
               </div>
 
-              {/* Optional Check-in / Check-out Times */}
+              {/* Optional Check-in / Check-out Times (Strict 24-Hour Thai HH:mm) */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    เวลาเช็คอิน (ไม่บังคับ)
-                  </label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-xs font-bold text-slate-700">
+                      เวลาเช็คอิน (ไม่บังคับ)
+                    </label>
+                    <span className="text-[10px] text-slate-400 font-semibold">24 ชม.</span>
+                  </div>
                   <div className="relative">
                     <Clock className="w-4 h-4 absolute left-3 top-2.5 text-slate-400" />
                     <input
-                      type="time"
+                      type="text"
+                      inputMode="numeric"
+                      pattern="[0-9]{2}:[0-9]{2}"
+                      placeholder="เช่น 14:00"
                       value={checkInTime}
-                      onChange={(e) => setCheckInTime(e.target.value)}
+                      onChange={(e) => {
+                        const raw = e.target.value.replace(/[^\d:]/g, '');
+                        if (raw.length <= 5) {
+                          setCheckInTime(raw);
+                        }
+                      }}
+                      onBlur={() => {
+                        if (checkInTime.trim()) {
+                          const digits = checkInTime.replace(/\D/g, '');
+                          if (digits.length >= 1 && digits.length <= 4) {
+                            const hh = Math.min(23, parseInt(digits.slice(0, 2), 10) || 0).toString().padStart(2, '0');
+                            const mm = digits.length > 2 ? Math.min(59, parseInt(digits.slice(2, 4), 10) || 0).toString().padStart(2, '0') : '00';
+                            setCheckInTime(`${hh}:${mm}`);
+                          }
+                        }
+                      }}
                       className="w-full pl-9 pr-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold"
                     />
                   </div>
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    เวลาเช็คเอาท์ (ไม่บังคับ)
-                  </label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-xs font-bold text-slate-700">
+                      เวลาเช็คเอาท์ (ไม่บังคับ)
+                    </label>
+                    <span className="text-[10px] text-slate-400 font-semibold">24 ชม.</span>
+                  </div>
                   <div className="relative">
                     <Clock className="w-4 h-4 absolute left-3 top-2.5 text-slate-400" />
                     <input
-                      type="time"
+                      type="text"
+                      inputMode="numeric"
+                      pattern="[0-9]{2}:[0-9]{2}"
+                      placeholder="เช่น 12:00"
                       value={checkOutTime}
-                      onChange={(e) => setCheckOutTime(e.target.value)}
+                      onChange={(e) => {
+                        const raw = e.target.value.replace(/[^\d:]/g, '');
+                        if (raw.length <= 5) {
+                          setCheckOutTime(raw);
+                        }
+                      }}
+                      onBlur={() => {
+                        if (checkOutTime.trim()) {
+                          const digits = checkOutTime.replace(/\D/g, '');
+                          if (digits.length >= 1 && digits.length <= 4) {
+                            const hh = Math.min(23, parseInt(digits.slice(0, 2), 10) || 0).toString().padStart(2, '0');
+                            const mm = digits.length > 2 ? Math.min(59, parseInt(digits.slice(2, 4), 10) || 0).toString().padStart(2, '0') : '00';
+                            setCheckOutTime(`${hh}:${mm}`);
+                          }
+                        }
+                      }}
                       className="w-full pl-9 pr-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold"
                     />
                   </div>

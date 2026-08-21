@@ -1534,10 +1534,14 @@ export class MeterService {
         const billTotal = toDecimal(bill.totalAmount.toString());
         const billKind = bill.billKind || 'MONTHLY_UTILITY';
 
-        let label = 'ค่าใช้จ่ายประจำงวด';
-        if (billKind === 'RENT') label = 'ค่าเช่าห้องพัก';
-        else if (billKind === 'DEPOSIT') label = 'ค่าประกันห้องพัก';
-        else if (billKind === 'MONTHLY_UTILITY') label = 'ค่าน้ำ-ไฟ-ส่วนกลาง';
+        let label = 'บิลรายเดือน';
+        if (billKind === 'RENT') {
+          label = billingSource === 'PROVISIONAL_TERM' ? 'ค่าเช่า (เทอม)' : 'ค่าเช่า (เดือน)';
+        } else if (billKind === 'DEPOSIT') {
+          label = 'ค่าประกัน';
+        } else if (billKind === 'MONTHLY_UTILITY') {
+          label = 'บิลรายเดือน';
+        }
 
         const isUnpaid = !isPaid;
         if (isUnpaid) {

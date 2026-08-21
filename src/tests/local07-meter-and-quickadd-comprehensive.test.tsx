@@ -237,4 +237,134 @@ describe('LOCAL-07 Meter Workspace & Quick Add Comprehensive Frontend Suite', ()
       });
     });
   });
+
+  describe('4. PO UAT Round 3 Operational Breakdown & Exact Copy Semantics', () => {
+    it('proves Owner Amount Due includes unissued preview (5,150.00 ฿) as PREVIEW before issue', async () => {
+      const { getOwnerFinancialBreakdown } = await import('../pages/owner/meters');
+      const row = {
+        roomId: 'r-1',
+        roomNumber: '101',
+        waterCurr: '10',
+        waterPrev: '0',
+        elecCurr: '100',
+        elecPrev: '0',
+        peopleCount: '1',
+        overdueAmount: '0',
+        otherFees: [],
+        billStatus: 'draft',
+      };
+      const roomCtx = {
+        roomId: 'r-1',
+        billingSource: 'PROVISIONAL_MONTHLY',
+        rentAmount: '4000.00',
+        depositAmount: '0.00',
+        isDepositPaid: false,
+      };
+      const rateSnapshot = {
+        waterBillingType: 'per_unit',
+        waterRate: '15.00',
+        electricityBillingType: 'per_unit',
+        electricityRate: '10.00',
+      };
+      // Preview = 4000 (rent) + 150 (water) + 1000 (elec) = 5150.00
+      const breakdown = getOwnerFinancialBreakdown(row as any, roomCtx, rateSnapshot, [], 'cycle-1');
+      expect(breakdown.operationalAmount).toBe(5150);
+      expect(breakdown.formattedAmount).toBe('5,150.00');
+      expect(breakdown.components.length).toBe(1);
+      expect(breakdown.components[0].label).toBe('บิลรายเดือน');
+      expect(breakdown.components[0].status).toBe('PREVIEW');
+      expect(breakdown.components[0].formattedAmount).toBe('5,150.00');
+    });
+
+    it('proves Owner Amount Due remains same after issue and changes status to UNPAID', async () => {
+      const { getOwnerFinancialBreakdown } = await import('../pages/owner/meters');
+      const row = {
+        roomId: 'r-1',
+        roomNumber: '101',
+        waterCurr: '10',
+        waterPrev: '0',
+        elecCurr: '100',
+        elecPrev: '0',
+        peopleCount: '1',
+        overdueAmount: '0',
+        otherFees: [],
+        billStatus: 'issued',
+      };
+      const roomCtx = {
+        roomId: 'r-1',
+        billingSource: 'PROVISIONAL_MONTHLY',
+        rentAmount: '4000.00',
+      };
+      const rateSnapshot = {
+        waterBillingType: 'per_unit',
+        waterRate: '15.00',
+        electricityBillingType: 'per_unit',
+        electricityRate: '10.00',
+      };
+      const bills = [
+        {
+          id: 'b-1',
+          roomId: 'r-1',
+          billingCycleId: 'cycle-1',
+          billKind: 'MONTHLY_UTILITY' as const,
+          totalAmount: '5150.00',
+          outstandingAmount: '5150.00',
+          status: 'ISSUED' as const,
+        }
+      ];
+      const breakdown = getOwnerFinancialBreakdown(row as any, roomCtx, rateSnapshot, bills as any, 'cycle-1');
+      expect(breakdown.operationalAmount).toBe(5150);
+      expect(breakdown.formattedAmount).toBe('5,150.00');
+      expect(breakdown.components[0].label).toBe('บิลรายเดือน');
+      expect(breakdown.components[0].status).toBe('UNPAID');
+    });
+
+    it('proves Owner Amount Due drops to 0.00 when Monthly bill is paid and status becomes PAID', async () => {
+      const { getOwnerFinancialBreakdown } = await import('../pages/owner/meters');
+      const row = {
+        roomId: 'r-1',
+        roomNumber: '101',
+        waterCurr: '10',
+        waterPrev: '0',
+        elecCurr: '100',
+        elecPrev: '0',
+        peopleCount: '1',
+        overdueAmount: '0',
+        otherFees: [],
+        billStatus: 'paid',
+      };
+      const roomCtx = {
+        roomId: 'r-1',
+        billingSource: 'PROVISIONAL_MONTHLY',
+        rentAmount: '4000.00',
+      };
+      const rateSnapshot = {
+        waterBillingType: 'per_unit',
+        waterRate: '15.00',
+        electricityBillingType: 'per_unit',
+        electricityRate: '10.00',
+      };
+      const bills = [
+        {
+          id: 'b-1',
+          roomId: 'r-1',
+          billingCycleId: 'cycle-1',
+          billKind: 'MONTHLY_UTILITY' as const,
+          totalAmount: '5150.00',
+          outstandingAmount: '0.00',
+          status: 'PAID' as const,
+        }
+      ];
+      const breakdown = getOwnerFinancialBreakdown(row as any, roomCtx, rateSnapshot, bills as any, 'cycle-1');
+      expect(breakdown.operationalAmount).toBe(0);
+      expect(breakdown.formattedAmount).toBe('0.00');
+      expect(breakdown.components[0].status).toBe('PAID');
+    });
+
+    it('maps error NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM to ไม่พบผู้เช่า', async () => {
+      const { mapErrorMessageToThai } = await import('../pages/owner/meters');
+      expect(mapErrorMessageToThai('Error: NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM')).toBe('ไม่พบผู้เช่า');
+      expect(mapErrorMessageToThai('ROOM_LOCKED_PAID')).toBe('บิลนี้ชำระเงินแล้ว ไม่สามารถยกเลิกหรือแก้ไขได้');
+    });
+  });
 });

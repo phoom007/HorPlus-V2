@@ -28,12 +28,16 @@ import {
   CheckCircle2,
   FileText,
   Shield,
-  ChevronDown
+  ChevronDown,
+  Circle,
+  AlertCircle,
+  Info,
+  Clock
 } from 'lucide-react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { queryKeys, STALE_TIMES } from '../../lib/queryClient';
 import { meterDraftStore, deriveMeterDraftPatches } from '../../lib/meterDraftStore';
-import { calculateMeterRowPreview, calculateMeterUsageUnits, RoomPreviewContext } from '../../utils/meterBillingCalculator';
+import { calculateMeterRowPreview, calculateMeterUsageUnits, RoomPreviewContext, parseScaled2, formatScaled2, formatMoneyDisplay } from '../../utils/meterBillingCalculator';
 import { Room, Building, QuickAddRoomContext, Bill, BillItem, Tenant, Contract, BillStatus, calculateRoomRentForCycle } from '../../types';
 import { getDataProvider } from '../../data/dataProvider';
 import { httpRequest } from '../../data/httpClient';
@@ -79,7 +83,9 @@ export interface OwnerMetersProps {
   tenants: Tenant[];
   contracts: Contract[];
   onSaveBills: (bills: Bill[]) => void;
-  onSelectTenant: (tenantId: string) => void;
+  onSelectTenant: (tenantId: string, roomId?: string) => void;
+  targetScrollRoomId?: string;
+  onClearTargetScrollRoomId?: () => void;
   onAddLog: (action: string, details: string, type: string, id: string) => void;
   onNavigate?: (tab: string) => void;
   selectedBillingCycleId: string;
@@ -265,6 +271,176 @@ export function buildRowsFromWorkspace(params: {
   return { rows, originalRows };
 }
 
+export interface TopLevelFinancialComponent {
+  label: string;
+  amount: number;
+  formattedAmount: string;
+  status: 'PREVIEW' | 'UNPAID' | 'PAID';
+  title: string;
+}
+
+export interface OwnerFinancialBreakdown {
+  operationalAmount: number;
+  formattedAmount: string;
+  components: TopLevelFinancialComponent[];
+}
+
+export function getOwnerFinancialBreakdown(
+  row: MeterRowState,
+  roomCtx: any,
+  rateSnapshot: any,
+  bills: Bill[] = [],
+  selectedBillingCycleId: string
+): OwnerFinancialBreakdown {
+  if (roomCtx?.billingSource === 'DAILY_STAY') {
+    const baseRent = Number(roomCtx.rentAmount) || 0;
+    const depositDue = (roomCtx.showDailyDepositLine && !roomCtx.isDailyDepositPaidInDisplayedPeriod)
+      ? (Number(roomCtx.dailyDepositAmount) || 0)
+      : 0;
+    const totalDailyDue = baseRent + depositDue;
+
+    const components: TopLevelFinancialComponent[] = [];
+    if (roomCtx.showDailyDepositLine) {
+      const isPaid = Boolean(roomCtx.isDailyDepositPaidInDisplayedPeriod);
+      const depAmt = Number(roomCtx.dailyDepositAmount || 0);
+      components.push({
+        label: 'ค่าประกัน',
+        amount: depAmt,
+        formattedAmount: formatMoneyDisplay(formatScaled2(parseScaled2(depAmt))),
+        status: isPaid ? 'PAID' : 'UNPAID',
+        title: isPaid ? 'ชำระแล้ว' : 'รอชำระเงิน',
+      });
+    }
+
+    if (baseRent > 0) {
+      components.push({
+        label: 'ค่าเช่า (รายวัน)',
+        amount: baseRent,
+        formattedAmount: formatMoneyDisplay(formatScaled2(parseScaled2(baseRent))),
+        status: 'UNPAID',
+        title: 'รอชำระเงิน',
+      });
+    }
+
+    const opStr = formatScaled2(parseScaled2(totalDailyDue));
+    return {
+      operationalAmount: totalDailyDue,
+      formattedAmount: formatMoneyDisplay(opStr),
+      components,
+    };
+  }
+
+  const preview = calculateMeterRowPreview(roomCtx, rateSnapshot, {
+    waterCurr: row.waterCurr,
+    waterPrev: row.waterPrev,
+    elecCurr: row.elecCurr,
+    elecPrev: row.elecPrev,
+    peopleCount: row.peopleCount,
+    overdueAmount: row.overdueAmount,
+    otherFees: row.otherFees || [],
+  });
+
+  const previewSatang = parseScaled2(preview.totalAmount);
+
+  const roomBills = (bills || []).filter(b => b.roomId === row.roomId && (b.billingCycleId === selectedBillingCycleId || b.cycleId === selectedBillingCycleId) && b.status !== 'cancelled' && (b.status as string) !== 'void');
+  const monthlyBill = roomBills.find(b => !b.billKind || b.billKind === 'MONTHLY_UTILITY');
+  const depositBill = roomBills.find(b => b.billKind === 'DEPOSIT');
+  const rentBill = roomBills.find(b => b.billKind === 'RENT');
+
+  const components: TopLevelFinancialComponent[] = [];
+  let operationalSatang = 0n;
+
+  if (monthlyBill) {
+    const isPaid = (monthlyBill.status as string) === 'paid' || (monthlyBill.status as string) === 'PAID';
+    const bTotal = parseScaled2(monthlyBill.totalAmount);
+    const bOutstanding = parseScaled2(monthlyBill.outstandingAmount ?? (isPaid ? '0.00' : monthlyBill.totalAmount));
+    if (!isPaid) {
+      operationalSatang += bOutstanding;
+    }
+    components.push({
+      label: 'บิลรายเดือน',
+      amount: Number(formatScaled2(bTotal)),
+      formattedAmount: formatMoneyDisplay(formatScaled2(bTotal)),
+      status: isPaid ? 'PAID' : 'UNPAID',
+      title: isPaid ? 'ชำระแล้ว' : 'รอชำระเงิน',
+    });
+  } else {
+    const amtStr = preview.totalAmount;
+    const pSatang = previewSatang;
+    operationalSatang += pSatang;
+    if (pSatang > 0n || roomCtx?.billingSource !== 'NONE') {
+      components.push({
+        label: 'บิลรายเดือน',
+        amount: Number(amtStr),
+        formattedAmount: formatMoneyDisplay(amtStr),
+        status: 'PREVIEW',
+        title: 'ยังไม่ออกบิล (พรีวิว)',
+      });
+    }
+  }
+
+  if (depositBill) {
+    const isPaid = (depositBill.status as string) === 'paid' || (depositBill.status as string) === 'PAID';
+    const bTotal = parseScaled2(depositBill.totalAmount);
+    const bOutstanding = parseScaled2(depositBill.outstandingAmount ?? (isPaid ? '0.00' : depositBill.totalAmount));
+    if (!isPaid) {
+      operationalSatang += bOutstanding;
+    }
+    components.push({
+      label: 'ค่าประกัน',
+      amount: Number(formatScaled2(bTotal)),
+      formattedAmount: formatMoneyDisplay(formatScaled2(bTotal)),
+      status: isPaid ? 'PAID' : 'UNPAID',
+      title: isPaid ? 'ชำระแล้ว' : 'รอชำระเงิน',
+    });
+  } else if (Number(roomCtx?.depositAmount || 0) > 0) {
+    const isPaid = Boolean(roomCtx?.isDepositPaid);
+    const dSatang = parseScaled2(roomCtx.depositAmount);
+    if (!isPaid) {
+      operationalSatang += dSatang;
+    }
+    components.push({
+      label: 'ค่าประกัน',
+      amount: Number(roomCtx.depositAmount),
+      formattedAmount: formatMoneyDisplay(formatScaled2(dSatang)),
+      status: isPaid ? 'PAID' : 'UNPAID',
+      title: isPaid ? 'ชำระแล้ว' : 'รอชำระเงิน',
+    });
+  }
+
+  if (rentBill) {
+    const isPaid = (rentBill.status as string) === 'paid' || (rentBill.status as string) === 'PAID';
+    const bTotal = parseScaled2(rentBill.totalAmount);
+    const bOutstanding = parseScaled2(rentBill.outstandingAmount ?? (isPaid ? '0.00' : rentBill.totalAmount));
+    if (!isPaid) {
+      operationalSatang += bOutstanding;
+    }
+    const isTerm = roomCtx?.billingSource === 'PROVISIONAL_TERM';
+    components.push({
+      label: isTerm ? 'ค่าเช่า (เทอม)' : 'ค่าเช่า (เดือน)',
+      amount: Number(formatScaled2(bTotal)),
+      formattedAmount: formatMoneyDisplay(formatScaled2(bTotal)),
+      status: isPaid ? 'PAID' : 'UNPAID',
+      title: isPaid ? 'ชำระแล้ว' : 'รอชำระเงิน',
+    });
+  }
+
+  const opStr = formatScaled2(operationalSatang);
+  return {
+    operationalAmount: Number(opStr),
+    formattedAmount: formatMoneyDisplay(opStr),
+    components,
+  };
+}
+
+export function mapErrorMessageToThai(raw: string | undefined): string {
+  if (!raw) return 'เกิดข้อผิดพลาดในการดำเนินการ';
+  if (raw.includes('NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM')) return 'ไม่พบผู้เช่า';
+  if (raw.includes('ROOM_LOCKED_PAID')) return 'บิลนี้ชำระเงินแล้ว ไม่สามารถยกเลิกหรือแก้ไขได้';
+  if (raw.includes('BILLING_CYCLE_NOT_FOUND')) return 'ไม่พบข้อมูลรอบบิล';
+  return raw;
+}
+
 export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   rooms,
   buildings = [],
@@ -274,6 +450,8 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   contracts,
   onSaveBills,
   onSelectTenant,
+  targetScrollRoomId,
+  onClearTargetScrollRoomId,
   onAddLog,
   onNavigate,
   selectedBillingCycleId,
@@ -285,7 +463,6 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   const queryClient = useQueryClient();
   const currentDormId = dormitoryId || '';
 
-  // Synchronous cached first-paint initialization
   const initialCachedData = currentDormId && selectedBillingCycleId
     ? queryClient.getQueryData<any>(queryKeys.meterWorkspace(currentDormId, selectedBillingCycleId))
     : null;
@@ -313,6 +490,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [toastType, setToastType] = useState<'success' | 'error' | 'warning' | 'info'>('success');
   const [isToastFading, setIsToastFading] = useState(false);
 
   useEffect(() => {
@@ -333,6 +511,20 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       };
     }
   }, [saveSuccess, toastMessage]);
+
+  useEffect(() => {
+    if (targetScrollRoomId) {
+      const timer = setTimeout(() => {
+        const el = document.getElementById(`room-row-${targetScrollRoomId}`);
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+        onClearTargetScrollRoomId?.();
+      }, 200);
+      return () => clearTimeout(timer);
+    }
+  }, [targetScrollRoomId, onClearTargetScrollRoomId]);
+
   const [isQuickFillOpen, setIsQuickFillOpen] = useState(false);
   const [quickFillText, setQuickFillText] = useState('');
   const [templateUsed, setTemplateUsed] = useState(false);
@@ -342,7 +534,6 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
 
   const dormHeader = currentDormId ? { 'x-dormitory-id': currentDormId } : undefined;
 
-  // Canonical Billing Cycles Query (Unified Single Authority)
   const billingCyclesQuery = useQuery({
     queryKey: queryKeys.billingCycles(currentDormId),
     queryFn: () => fetchAllPaginatedWithMeta('/api/v1/billing-cycles', { headers: dormHeader, credentials: 'include' }),
@@ -401,67 +592,53 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     meterRowsRef.current = meterRows;
   }, [meterRows]);
 
-  // Undo / Redo History Stack for unsaved meter draft edits
-  const historyRef = React.useRef<MeterRowState[][]>(initialBuilt?.rows ? [JSON.parse(JSON.stringify(initialBuilt.rows))] : []);
-  const historyIndexRef = React.useRef<number>(initialBuilt?.rows ? 0 : -1);
-  const isUndoRedoingRef = React.useRef<boolean>(false);
+  const historyRef = React.useRef<MeterRowState[][]>([JSON.parse(JSON.stringify(initialBuilt?.rows || []))]);
+  const historyIndexRef = React.useRef<number>(0);
+  const isPerformingHistoryActionRef = React.useRef<boolean>(false);
+
+  const [expandedBreakdowns, setExpandedBreakdowns] = useState<{ [roomId: string]: boolean }>({});
+
+  const [canUndo, setCanUndo] = useState(false);
+  const [canRedo, setCanRedo] = useState(false);
+
+  const updateHistoryButtons = () => {
+    setCanUndo(historyIndexRef.current > 0);
+    setCanRedo(historyIndexRef.current < historyRef.current.length - 1);
+  };
 
   const pushHistory = (newRows: MeterRowState[]) => {
-    if (isUndoRedoingRef.current) return;
+    if (isPerformingHistoryActionRef.current) return;
     const cloned = JSON.parse(JSON.stringify(newRows));
-    const currentIndex = historyIndexRef.current;
-
-    if (currentIndex >= 0 && historyRef.current[currentIndex]) {
-      const current = historyRef.current[currentIndex];
-      if (current.length === cloned.length) {
-        let isSame = true;
-        for (let i = 0; i < current.length; i++) {
-          if (
-            current[i].waterCurr !== cloned[i].waterCurr ||
-            current[i].waterPrev !== cloned[i].waterPrev ||
-            current[i].elecCurr !== cloned[i].elecCurr ||
-            current[i].elecPrev !== cloned[i].elecPrev ||
-            current[i].peopleCount !== cloned[i].peopleCount ||
-            current[i].overdueAmount !== cloned[i].overdueAmount
-          ) {
-            isSame = false;
-            break;
-          }
-        }
-        if (isSame) return;
-      }
-    }
-
-    const nextHistory = historyRef.current.slice(0, currentIndex + 1);
-    nextHistory.push(cloned);
-    if (nextHistory.length > 50) {
-      nextHistory.shift();
-    }
-    historyRef.current = nextHistory;
-    historyIndexRef.current = nextHistory.length - 1;
+    const newHistory = historyRef.current.slice(0, historyIndexRef.current + 1);
+    newHistory.push(cloned);
+    historyRef.current = newHistory;
+    historyIndexRef.current = newHistory.length - 1;
+    updateHistoryButtons();
   };
 
-  const handleUndo = () => {
+  const undo = () => {
     if (historyIndexRef.current > 0) {
+      isPerformingHistoryActionRef.current = true;
       historyIndexRef.current -= 1;
-      const targetState = historyRef.current[historyIndexRef.current];
-      if (targetState) {
-        isUndoRedoingRef.current = true;
-        setMeterRows(JSON.parse(JSON.stringify(targetState)));
-        isUndoRedoingRef.current = false;
-      }
+      const targetState = JSON.parse(JSON.stringify(historyRef.current[historyIndexRef.current]));
+      setMeterRows(targetState);
+      updateHistoryButtons();
+      setTimeout(() => {
+        isPerformingHistoryActionRef.current = false;
+      }, 0);
     }
   };
 
-  const handleRedo = () => {
+  const redo = () => {
     if (historyIndexRef.current < historyRef.current.length - 1) {
+      isPerformingHistoryActionRef.current = true;
       historyIndexRef.current += 1;
-      const targetState = historyRef.current[historyIndexRef.current];
-      if (targetState) {
-        isUndoRedoingRef.current = true;
-        setMeterRows(JSON.parse(JSON.stringify(targetState)));
-        isUndoRedoingRef.current = false;
-      }
+      const targetState = JSON.parse(JSON.stringify(historyRef.current[historyIndexRef.current]));
+      setMeterRows(targetState);
+      updateHistoryButtons();
+      setTimeout(() => {
+        isPerformingHistoryActionRef.current = false;
+      }, 0);
     }
   };
 
@@ -474,22 +651,32 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   const [pendingFeeRooms, setPendingFeeRooms] = useState<{ [roomId: string]: boolean }>({});
   const tableContainerRef = React.useRef<HTMLDivElement>(null);
   const quickFillInputRef = React.useRef<HTMLTextAreaElement>(null);
-  const [toastType, setToastType] = useState<'success' | 'error'>('success');
 
-  const showToast = (msg: string, type?: 'success' | 'error') => {
-    const isError =
-      type === 'error' ||
-      msg.includes('ไม่น้อยกว่า') ||
-      msg.includes('ไม่ถูกต้อง') ||
-      msg.includes('ผิดพลาด') ||
-      msg.includes('ไม่สามารถ') ||
-      msg.includes('ยังไม่ได้') ||
-      msg.includes('ขัดข้อง');
-    setToastType(isError ? 'error' : 'success');
+  const showToast = (msg: string, type?: 'success' | 'error' | 'warning' | 'info') => {
+    let resolvedType = type;
+    if (!resolvedType) {
+      if (
+        msg.includes('ไม่น้อยกว่า') ||
+        msg.includes('ไม่ถูกต้อง') ||
+        msg.includes('ผิดพลาด') ||
+        msg.includes('ไม่สามารถ') ||
+        msg.includes('ยังไม่ได้') ||
+        msg.includes('ขัดข้อง') ||
+        msg.includes('ไม่พบ')
+      ) {
+        resolvedType = 'error';
+      } else if (msg.includes('สำเร็จ') || msg.includes('เรียบร้อย') || msg.includes('แล้ว!')) {
+        resolvedType = 'success';
+      } else if (msg.includes('เตือน') || msg.includes('ตรวจสอบ') || msg.includes('ว่างเปล่า')) {
+        resolvedType = 'warning';
+      } else {
+        resolvedType = 'info';
+      }
+    }
+    setToastType(resolvedType);
     setToastMessage(msg);
   };
 
-  // Preview Context Query (Canonical observed query)
   const previewContextQuery = useQuery({
     queryKey: queryKeys.meterPreviewContext(currentDormId, selectedBillingCycleId),
     queryFn: async () => {
@@ -562,7 +749,6 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
 
   // Controlled input state for adding other fees per room
   const [newFeeInputs, setNewFeeInputs] = useState<Record<string, { description: string; amount: string }>>({});
-  const [expandedBreakdowns, setExpandedBreakdowns] = useState<Record<string, boolean>>({});
 
   const handleFeeDescriptionChange = (roomId: string, desc: string) => {
     setNewFeeInputs(prev => ({
@@ -1111,9 +1297,19 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
         } else if (trimmedPart.includes('คน')) {
           const match = trimmedPart.match(/\d+/);
           if (match) peopleCount = normalizeSingleDigitCount(match[0]);
-        } else if (trimmedPart.startsWith('ค้าง') || trimmedPart.includes('ค้างชำระ')) {
+        } else if (trimmedPart.startsWith('ค้างชำระ') || trimmedPart.startsWith('ค้าง')) {
+          // Alias rule: "ค้าง <amount>" or "ค้างชำระ <amount>" -> description = 'ค้างชำระ', amount = <amount>
           const match = trimmedPart.match(/\d+(\.\d{1,2})?/);
-          if (match) overdueAmount = match[0];
+          if (match) {
+            const amt = match[0];
+            const desc = 'ค้างชำระ';
+            const existingIdx = otherFees.findIndex(f => f.description === desc);
+            if (existingIdx >= 0) {
+              otherFees[existingIdx] = { ...otherFees[existingIdx], amount: amt };
+            } else {
+              otherFees.push({ description: desc, amount: amt });
+            }
+          }
         } else {
           // Arbitrary other fee: e.g. "ค่าทำความสะอาด 50", "ค่าปรับ 100"
           const numMatch = trimmedPart.match(/(\d+(\.\d{1,2})?)$/);
@@ -1168,14 +1364,14 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
 
   const handleApplyQuickFill = () => {
     if (!isMutationReady) {
-      showToast('ข้อมูลหรือสิทธิ์การคิดรอบบิลยังไม่พร้อมใช้งาน');
+      showToast('ข้อมูลหรือสิทธิ์การคิดรอบบิลยังไม่พร้อมใช้งาน', 'error');
       return;
     }
     const count = parseQuickFillText(quickFillText);
     if (count > 0) {
-      showToast(`กรอกข้อมูลด่วนสำเร็จ! อัปเดตข้อมูล ${count} ห้อง`);
+      showToast(`กรอกข้อมูลด่วนสำเร็จ! อัปเดตข้อมูล ${count} ห้อง`, 'success');
     } else {
-      showToast("ไม่พบข้อมูลห้องพักที่ตรงกัน กรุณาตรวจสอบรูปแบบ");
+      showToast("ไม่พบข้อมูลห้องพักที่ตรงกัน กรุณาตรวจสอบรูปแบบ", 'warning');
     }
     setIsQuickFillOpen(false);
   };
@@ -1590,7 +1786,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       if (isCtrlOrMeta && (e.key === 'z' || e.key === 'Z') && !e.shiftKey) {
         if (!isTextarea && !isModalInput) {
           e.preventDefault();
-          handleUndo();
+          undo();
           return;
         }
       }
@@ -1599,7 +1795,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       if (isCtrlOrMeta && (((e.key === 'z' || e.key === 'Z') && e.shiftKey) || e.key === 'y' || e.key === 'Y')) {
         if (!isTextarea && !isModalInput) {
           e.preventDefault();
-          handleRedo();
+          redo();
           return;
         }
       }
@@ -1800,13 +1996,16 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
 
   const handleIssueAllBills = async () => {
     if (!isMutationReady) {
-      showToast('ข้อมูลหรือสิทธิ์การคิดรอบบิลยังไม่พร้อมใช้งาน');
+      showToast('ข้อมูลหรือสิทธิ์การคิดรอบบิลยังไม่พร้อมใช้งาน', 'error');
       return;
     }
     setIsSaving(true);
     try {
-      // Collect dirty rows using dirty-field semantics (only actually changed fields)
+      // Exclude Daily rows from dirty rows payload for monthly bulk billing
       const rawDirtyRows = meterRows.filter(r => {
+        const roomCtx = previewContext?.rooms?.find((ctx: any) => ctx.roomId === r.roomId);
+        if (roomCtx?.billingSource === 'DAILY_STAY') return false;
+
         const orig = (originalRowsRef.current || []).find(o => o.roomId === r.roomId);
         if (!orig) return true;
         return (
@@ -1835,7 +2034,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
 
       const dirtyRows = serializeMeterWorkspaceDirtyRows(rawDirtyRows);
 
-      // ONE HTTP COMMAND to generate bulk bills with dirty rows atomically
+      // Single real backend operation
       const res = await getDataProvider().billing.generateBulkBills(
         selectedBillingCycleId,
         undefined,
@@ -1843,33 +2042,47 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       );
       setIsSaving(false);
       if (res && res.success) {
-        showToast('ออกบิลสำหรับรอบบันทึกเรียบร้อยแล้ว');
         if (onSaveBills) {
           const freshBills = await getDataProvider().billing.getByCycle(selectedBillingCycleId);
           onSaveBills(freshBills);
         }
 
-        // Open LINE modal with ONLY newly generated bills
         const generatedList = (res.data as any)?.generated || [];
-        const generatedTenantIds = generatedList.map((g: any) => {
-          const cycleTenant = getTenantForRoomAndCycle(g.roomId, selectedCycleCode || selectedCycle);
-          return cycleTenant?.id;
-        }).filter(Boolean);
+        const skippedList = (res.data as any)?.skipped || [];
+        const genCount = generatedList.length;
+        const skipCount = skippedList.length;
 
-        if (generatedTenantIds.length > 0) {
-          setSelectedTenantIdsForLine(generatedTenantIds);
+        // Filter LINE recipients using canonical Tenant.linkedUserId
+        const linkedTenantIds = generatedList
+          .map((g: any) => {
+            const cycleTenant = getTenantForRoomAndCycle(g.roomId, selectedCycleCode || selectedCycle);
+            const tenantObj = tenants.find(t => t.id === cycleTenant?.id);
+            return tenantObj?.linkedUserId ? tenantObj.id : null;
+          })
+          .filter(Boolean) as string[];
+
+        const baseSummary = skipCount > 0
+          ? `ออกบิลสำเร็จ ${genCount} ห้อง ข้าม ${skipCount} ห้อง`
+          : `ออกบิลสำหรับรอบบันทึกเรียบร้อยแล้ว (${genCount} ห้อง)`;
+
+        if (linkedTenantIds.length > 0) {
+          showToast(baseSummary, 'success');
+          setSelectedTenantIdsForLine(linkedTenantIds);
           setIsLineModalOpen(true);
+        } else {
+          // Zero LINE-linked tenants: do NOT open empty modal
+          showToast(`${baseSummary} (ยังไม่มีผู้เช่าที่เชื่อมต่อ LINE สำหรับส่งแจ้งเตือน)`, 'info');
         }
 
         queryClient.invalidateQueries({ queryKey: queryKeys.meterWorkspace(currentDormId, selectedBillingCycleId) });
         queryClient.invalidateQueries({ queryKey: queryKeys.meterPreviewContext(currentDormId, selectedBillingCycleId) });
         queryClient.invalidateQueries({ queryKey: queryKeys.bills(currentDormId) });
       } else {
-        showToast(res?.error?.message || 'เกิดข้อผิดพลาดในการออกบิล');
+        showToast(mapErrorMessageToThai(res?.error?.message), 'error');
       }
     } catch (err: any) {
       setIsSaving(false);
-      showToast(err.message || 'เกิดข้อผิดพลาดในการออกบิล');
+      showToast(mapErrorMessageToThai(err.message), 'error');
     }
   };
 
@@ -1996,13 +2209,17 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
           <span>ยังไม่ได้ตั้งค่ารอบคำนวณ</span>
         </div>
       )}
-      {/* Floating Toast Notification (Mobile: Centered above bottom nav, White/Red bg, Smooth Fade) */}
+      {/* Floating Toast Notification (Mobile: Centered above bottom nav, White/Red/Green/Amber bg, Smooth Fade) */}
       {(saveSuccess || toastMessage) && (
         <div
           className={`fixed bottom-20 left-1/2 -translate-x-1/2 sm:bottom-8 sm:right-8 sm:left-auto sm:translate-x-0 z-[9999] px-4.5 py-3 rounded-2xl shadow-2xl border flex items-center gap-2.5 text-xs font-bold transition-all duration-500 ease-in-out ${
             toastType === 'error'
               ? 'bg-rose-50 border-rose-200 text-rose-800'
-              : 'bg-white border-slate-200/90 text-slate-800'
+              : toastType === 'warning'
+              ? 'bg-amber-50 border-amber-200 text-amber-800'
+              : toastType === 'success'
+              ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+              : 'bg-sky-50 border-sky-200 text-sky-800'
           } ${
             isToastFading
               ? 'opacity-0 translate-y-3 pointer-events-none'
@@ -2010,9 +2227,13 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
           }`}
         >
           {toastType === 'error' ? (
-            <AlertTriangle className="w-4.5 h-4.5 text-rose-500 shrink-0" />
+            <AlertCircle className="w-4.5 h-4.5 text-rose-500 shrink-0" />
+          ) : toastType === 'warning' ? (
+            <AlertTriangle className="w-4.5 h-4.5 text-amber-500 shrink-0" />
+          ) : toastType === 'success' ? (
+            <CheckCircle2 className="w-4.5 h-4.5 text-emerald-500 shrink-0" />
           ) : (
-            <CheckCircle className="w-4.5 h-4.5 text-emerald-500 shrink-0" />
+            <Info className="w-4.5 h-4.5 text-sky-500 shrink-0" />
           )}
           <span className="whitespace-pre-line">{toastMessage || "บันทึกข้อมูลสำเร็จ"}</span>
         </div>
@@ -2235,8 +2456,10 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                 const calculatedTotal = roomRent + waterCost + elecCost + commonCost + internetCost + parkingCost + (Number(row.overdueAmount) || 0) + otherFeesTotal;
 
                 const tenant = getTenantForRoomAndCycle(row.roomId, selectedCycle);
+                const roomCtx = previewContext?.rooms?.find((r: any) => r.roomId === row.roomId);
+                const isDaily = roomCtx?.billingSource === 'DAILY_STAY';
 
-                const isRowLocked = row.billStatus !== 'draft' && row.billStatus !== 'cancelled';
+                const isRowLocked = (row.billStatus !== 'draft' && row.billStatus !== 'cancelled') || isDaily;
                 const canEditElecPrev = !isRowLocked && (isFirstCycle || row.editElecPrev || allowEditAllElecPrev);
                 const canEditWaterPrev = !isRowLocked && (isFirstCycle || row.editWaterPrev || allowEditAllWaterPrev);
 
@@ -2295,7 +2518,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                             disabled={isRowLocked}
                             value={row.elecCurr}
                             onChange={(e) => {
-                              handleMeterReadingChange(row.roomId, 'elecCurr', e.target.value);
+                                handleMeterReadingChange(row.roomId, 'elecCurr', e.target.value);
                             }}
                             onBlur={() => handleMeterReadingBlur(row.roomId, 'elecCurr')}
                             onPaste={(e) => handlePaste(row.roomId, 'elecCurr', e)}
@@ -2478,72 +2701,45 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                     {/* Total / Amount Due Output */}
                     <td className="p-4 text-right text-indigo-600 font-extrabold text-sm whitespace-nowrap">
                       {(() => {
-                        const roomCtx = previewContext?.rooms?.find((r: any) => r.roomId === row.roomId);
-                        if (roomCtx?.billingSource === 'DAILY_STAY') {
-                          const baseRent = Number(roomCtx.rentAmount) || 0;
-                          const depositDue = (roomCtx.showDailyDepositLine && !roomCtx.isDailyDepositPaidInDisplayedPeriod)
-                            ? (Number(roomCtx.dailyDepositAmount) || 0)
-                            : 0;
-                          const totalDailyDue = baseRent + depositDue;
-                          const formattedMain = totalDailyDue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-
-                          return (
-                            <div className="flex flex-col items-end">
-                              <span>{formattedMain} ฿</span>
-                              {roomCtx.showDailyDepositLine && (
-                                <div className={`text-[10px] font-semibold flex items-center gap-1 mt-0.5 ${
-                                  roomCtx.isDailyDepositPaidInDisplayedPeriod ? 'text-emerald-600' : 'text-amber-600'
-                                }`}>
-                                  <Shield className="w-3 h-3 shrink-0" />
-                                  <span>
-                                    ค่าประกัน {Number(roomCtx.dailyDepositAmount || 0).toLocaleString()} ฿ · {roomCtx.isDailyDepositPaidInDisplayedPeriod ? 'จ่ายแล้ว' : 'ยังไม่จ่าย'}
-                                  </span>
-                                </div>
-                              )}
-                            </div>
-                          );
-                        }
-
-                        const preview = calculateMeterRowPreview(roomCtx, previewContext?.rateSnapshot, {
-                          waterCurr: row.waterCurr,
-                          waterPrev: row.waterPrev,
-                          elecCurr: row.elecCurr,
-                          elecPrev: row.elecPrev,
-                          peopleCount: row.peopleCount,
-                          overdueAmount: row.overdueAmount,
-                          otherFees: row.otherFees || [],
-                        });
-
+                        const financial = getOwnerFinancialBreakdown(row, roomCtx, previewContext?.rateSnapshot, bills, selectedBillingCycleId);
                         const isExpanded = !!expandedBreakdowns[row.roomId];
-                        const detailsCount = roomCtx?.periodDetailCount || 0;
-                        const chargeComponents = roomCtx?.chargeComponents || [];
 
                         return (
                           <div className="flex flex-col items-end">
-                            <span>{preview.formattedTotal} ฿</span>
-                            {detailsCount > 0 && (
+                            <span>{financial.formattedAmount} ฿</span>
+                            {financial.components.length > 0 && (
                               <button
                                 type="button"
                                 onClick={() => setExpandedBreakdowns(prev => ({ ...prev, [row.roomId]: !prev[row.roomId] }))}
                                 className="text-[10px] text-slate-400 hover:text-indigo-600 font-medium cursor-pointer transition-colors mt-0.5 flex items-center gap-0.5"
                               >
-                                <span>ดูรายละเอียด +{detailsCount}</span>
+                                <span>ดูรายละเอียด</span>
                                 <ChevronDown className={`w-2.5 h-2.5 transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`} />
                               </button>
                             )}
-                            {isExpanded && chargeComponents.length > 0 && (
-                              <div className="mt-1.5 p-2 bg-slate-50 border border-slate-200 rounded-lg text-left shadow-sm min-w-[170px] space-y-1">
-                                {chargeComponents.map((c: any, cIdx: number) => (
-                                  <div key={cIdx} className="flex items-center justify-between gap-2 text-[10px]">
-                                    <span className="text-slate-600 truncate">{c.label}</span>
-                                    <div className="flex items-center gap-1 shrink-0">
-                                      <span className="font-semibold text-slate-700">{Number(c.amount).toLocaleString('en-US', { minimumFractionDigits: 2 })} ฿</span>
+                            {isExpanded && financial.components.length > 0 && (
+                              <div className="mt-1.5 p-2 bg-slate-50 border border-slate-200 rounded-lg text-left shadow-2xs min-w-[170px] space-y-1">
+                                {financial.components.map((c, cIdx) => (
+                                  <div key={cIdx} className="flex items-center justify-between gap-2 text-[10px]" title={c.title}>
+                                    <div className="flex items-center gap-1.5 truncate">
                                       {c.status === 'PAID' ? (
-                                        <span className="px-1 py-0.2 rounded text-[9px] font-bold bg-emerald-100 text-emerald-700">จ่ายแล้ว</span>
+                                        <CheckCircle2 className="w-3 h-3 text-emerald-600 shrink-0" aria-label="ชำระแล้ว" />
+                                      ) : c.status === 'UNPAID' ? (
+                                        <AlertCircle className="w-3 h-3 text-amber-500 shrink-0" aria-label="รอชำระเงิน" />
                                       ) : (
-                                        <span className="px-1 py-0.2 rounded text-[9px] font-bold bg-amber-100 text-amber-700">ยังไม่จ่าย</span>
+                                        <Circle className="w-3 h-3 text-slate-400 shrink-0" aria-label="ยังไม่ออกบิล (พรีวิว)" />
                                       )}
+                                      <span className={`truncate font-medium ${
+                                        c.status === 'PAID' ? 'text-emerald-800' : c.status === 'UNPAID' ? 'text-amber-800' : 'text-slate-600'
+                                      }`}>
+                                        {c.label}
+                                      </span>
                                     </div>
+                                    <span className={`font-bold shrink-0 ${
+                                      c.status === 'PAID' ? 'text-emerald-700' : c.status === 'UNPAID' ? 'text-amber-700' : 'text-slate-700'
+                                    }`}>
+                                      {c.formattedAmount} ฿
+                                    </span>
                                   </div>
                                 ))}
                               </div>
@@ -2560,8 +2756,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                         : ''
                     }`}>
                       {(() => {
-                        const roomCtx = previewContext?.rooms?.find((r: any) => r.roomId === row.roomId);
-                        if (roomCtx?.billingSource === 'DAILY_STAY') {
+                        if (isDaily) {
                           return (
                             <div className="flex items-center justify-center min-w-[85px]">
                               <span className="inline-flex items-center px-2 py-1 bg-slate-100 text-slate-700 text-xs font-bold rounded-lg border border-slate-200">
@@ -2622,20 +2817,24 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                     {/* Tenant Clickable Link */}
                     <td className="p-4 whitespace-nowrap">
                       {(() => {
-                        const roomCtx = previewContext?.rooms?.find((r: any) => r.roomId === row.roomId);
                         const effectiveTenantId = roomCtx?.tenantId || tenant?.id;
                         const effectiveTenantName = roomCtx?.tenantName || tenant?.name;
                         const isLineLinked = roomCtx ? roomCtx.isLineLinked : Boolean(tenant?.linkedUserId);
+                        const peopleCountVal = Number(row.peopleCount ?? roomCtx?.currentHouseholdPeopleCount ?? roomCtx?.snapshotPeopleCount ?? 1);
 
                         if (effectiveTenantId && effectiveTenantName) {
                           return (
                             <div className="flex flex-col items-start gap-0.5">
                               <button
                                 type="button"
-                                onClick={() => onSelectTenant(effectiveTenantId)}
+                                onClick={() => onSelectTenant(effectiveTenantId, row.roomId)}
                                 className="inline-flex items-center gap-1.5 text-indigo-600 hover:text-indigo-800 hover:underline transition-all cursor-pointer font-bold whitespace-nowrap"
                               >
-                                <User className="w-3.5 h-3.5 shrink-0" />
+                                {peopleCountVal > 1 ? (
+                                  <Users className="w-3.5 h-3.5 shrink-0" />
+                                ) : (
+                                  <User className="w-3.5 h-3.5 shrink-0" />
+                                )}
                                 <span className="truncate max-w-[100px]">{effectiveTenantName}</span>
                                 <ArrowRight className="w-3 h-3 opacity-60 shrink-0" />
                               </button>

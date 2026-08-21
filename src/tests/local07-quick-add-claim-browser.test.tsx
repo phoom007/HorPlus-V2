@@ -2351,25 +2351,29 @@ describe('Daily Stay Meter Semantics, Financial Exclusion & Exact Deposit Copy',
       expect(screen.getByText('D101')).toBeDefined();
     });
 
-    // A. Verify meter inputs (elecCurr, waterCurr) are enabled (not disabled)
+    // A. Verify meter inputs (elecCurr, waterCurr) are disabled/read-only for DAILY_STAY per PO UAT Round 3
     const elecCurrInput = screen.getByDisplayValue('520') as HTMLInputElement;
     expect(elecCurrInput).toBeDefined();
-    expect(elecCurrInput.disabled).toBe(false);
+    expect(elecCurrInput.disabled).toBe(true);
 
     const waterCurrInput = screen.getByDisplayValue('105') as HTMLInputElement;
     expect(waterCurrInput).toBeDefined();
-    expect(waterCurrInput.disabled).toBe(false);
+    expect(waterCurrInput.disabled).toBe(true);
 
     // H. Status cell contains locked badge "รายวัน" and NO toggle switch button
     expect(screen.getByText('รายวัน')).toBeDefined();
     expect(screen.queryByRole('switch')).toBeNull();
 
-    // I. Unpaid deposit copy is exactly: ค่าประกัน 500 ฿ · ยังไม่จ่าย
-    expect(screen.getByText(/ค่าประกัน 500 ฿ · ยังไม่จ่าย/)).toBeDefined();
-    expect(screen.queryByText(/ยังไม่ชำระ/)).toBeNull();
+    // Total due is 2,000.00 ฿ (rent 1500 + unpaid deposit 500)
+    expect(screen.getByText('2,000.00 ฿')).toBeDefined();
+    const detailBtn = screen.getByRole('button', { name: /ดูรายละเอียด/ });
+    expect(detailBtn).toBeDefined();
+    fireEvent.click(detailBtn);
+    expect(screen.getByText('ค่าประกัน')).toBeDefined();
+    expect(screen.getByText('500.00 ฿')).toBeDefined();
   });
 
-  it('Proves I: Paid in displayed period deposit copy is exactly "ค่าประกัน <amount> ฿ · จ่ายแล้ว"', async () => {
+  it('Proves I: Paid in displayed period deposit excludes deposit from total and shows in details as PAID', async () => {
     vi.spyOn(httpClient, 'httpRequest').mockImplementation(async (method, url) => {
       if (url.includes('/meters/workspace/preview-context')) {
         return {
@@ -2423,11 +2427,12 @@ describe('Daily Stay Meter Semantics, Financial Exclusion & Exact Deposit Copy',
       expect(screen.getByText('D101')).toBeDefined();
     });
 
-    // I. Paid deposit copy is exactly: ค่าประกัน 500 ฿ · จ่ายแล้ว
-    expect(screen.getByText(/ค่าประกัน 500 ฿ · จ่ายแล้ว/)).toBeDefined();
-    expect(screen.queryByText(/ชำระแล้ว/)).toBeNull();
-    // Paid deposit is not added to total due (total is strictly rent 1,500.00)
+    // Paid deposit is not added to total due (total is strictly rent 1,500.00 ฿)
     expect(screen.getByText('1,500.00 ฿')).toBeDefined();
+    const detailBtn = screen.getByRole('button', { name: /ดูรายละเอียด/ });
+    fireEvent.click(detailBtn);
+    expect(screen.getByText('ค่าประกัน')).toBeDefined();
+    expect(screen.getByText('500.00 ฿')).toBeDefined();
   });
 
   it('Proves C, D, E, F, G: Client calculator enforces strict DAILY_STAY financial exclusion while computing usage', () => {

@@ -415,6 +415,8 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
   const [initialRoomId, setInitialRoomId] = useState<string | undefined>(undefined);
   const [initialTenantId, setInitialTenantId] = useState<string | undefined>(undefined);
   const [initialContractId, setInitialContractId] = useState<string | undefined>(undefined);
+  const [cameFromMetersContext, setCameFromMetersContext] = useState<{ roomId?: string; cycleId?: string } | null>(null);
+  const [targetScrollRoomId, setTargetScrollRoomId] = useState<string | undefined>(undefined);
 
   // Authoritative Billing Cycle State
   const [selectedBillingCycleId, setSelectedBillingCycleId] = useState<string>('');
@@ -1014,7 +1016,21 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
             onAddLog={handleAddLog}
             initialTenantId={initialTenantId}
             onClearInitialTenantId={() => setInitialTenantId(undefined)}
-            onBackToMeters={() => changeTab('meters')}
+            cameFromMeters={Boolean(cameFromMetersContext)}
+            onBackToMeters={() => {
+              if (cameFromMetersContext?.cycleId) {
+                setSelectedBillingCycleId(cameFromMetersContext.cycleId);
+                const targetCycle = billingCycles.find(c => c.id === cameFromMetersContext.cycleId);
+                if (targetCycle?.cycleCode) {
+                  setSelectedCycleCode(targetCycle.cycleCode);
+                }
+              }
+              if (cameFromMetersContext?.roomId) {
+                setTargetScrollRoomId(cameFromMetersContext.roomId);
+              }
+              setCameFromMetersContext(null);
+              changeTab('meters');
+            }}
             onViewContract={(contractId, tenantId) => {
               setInitialContractId(contractId);
               if (tenantId) {
@@ -1057,10 +1073,16 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
             tenants={tenants}
             contracts={contracts}
             onSaveBills={handleSaveBills}
-            onSelectTenant={(tId) => {
+            onSelectTenant={(tId, rId) => {
               setInitialTenantId(tId);
+              setCameFromMetersContext({
+                roomId: rId,
+                cycleId: selectedBillingCycleId || billingCycles.find(c => c.cycleCode === selectedCycleCode)?.id,
+              });
               changeTab('tenants');
             }}
+            targetScrollRoomId={targetScrollRoomId}
+            onClearTargetScrollRoomId={() => setTargetScrollRoomId(undefined)}
             onAddLog={handleAddLog}
             onNavigate={(tab) => changeTab(tab)}
             selectedCycle={selectedCycleCode}

@@ -64,6 +64,7 @@ interface OwnerTenantsProps {
   onAddLog: (action: string, details: string, type: string, id: string) => void;
   initialTenantId?: string;
   onClearInitialTenantId?: () => void;
+  cameFromMeters?: boolean;
   onBackToMeters?: () => void;
   onViewContract?: (contractId: string, tenantId?: string) => void;
 }
@@ -85,12 +86,19 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
   onAddLog,
   initialTenantId,
   onClearInitialTenantId,
+  cameFromMeters: propCameFromMeters,
   onBackToMeters,
   onViewContract
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedTenant, setSelectedTenant] = useState<Tenant | null>(null);
-  const [cameFromMeters, setCameFromMeters] = useState(false);
+  const [cameFromMeters, setCameFromMeters] = useState(Boolean(propCameFromMeters));
+
+  React.useEffect(() => {
+    if (propCameFromMeters) {
+      setCameFromMeters(true);
+    }
+  }, [propCameFromMeters]);
 
   // Auto select tenant on mount if initialTenantId provided
   React.useEffect(() => {
@@ -99,12 +107,17 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
       if (tenant) {
         setSelectedTenant(tenant);
         setProfileTab('info');
+        if (propCameFromMeters !== undefined) {
+          setCameFromMeters(Boolean(propCameFromMeters));
+        } else {
+          setCameFromMeters(true);
+        }
       }
       if (onClearInitialTenantId) {
         onClearInitialTenantId();
       }
     }
-  }, [initialTenantId, tenants, onClearInitialTenantId]);
+  }, [initialTenantId, tenants, onClearInitialTenantId, propCameFromMeters]);
 
   const [profileTab, setProfileTab] = useState<'info' | 'history'>('info');
   const [isIdCardOpen, setIsIdCardOpen] = useState(false);
@@ -882,6 +895,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
               {/* Context-Aware Back Button */}
               {cameFromMeters ? (
                 <button
+                  data-testid="back-to-meters-btn"
                   onClick={() => {
                     setCameFromMeters(false);
                     setSelectedTenant(null);
@@ -892,7 +906,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                   className="flex items-center gap-2 text-indigo-600 hover:text-indigo-700 font-extrabold text-xs mb-4 transition-all pb-2 border-b border-gray-100 w-full cursor-pointer"
                 >
                   <ArrowLeft className="w-4 h-4 animate-pulse text-indigo-500" />
-                  <span>กลับไปยังหน้าบันทึก "จดมิเตอร์"</span>
+                  <span>กลับหน้าจดมิเตอร์</span>
                 </button>
               ) : (
                 <button
