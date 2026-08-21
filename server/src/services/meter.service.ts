@@ -15,7 +15,7 @@ import { ENTITLEMENT_ROOM_LIMITS } from './entitlement.service.js';
 import { subscriptionEntitlementService } from './subscription-entitlement.service.js';
 import { AppError } from '../types/index.js';
 import { getPrismaClient } from '../db/prisma.js';
-import { toDecimal, formatDecimal, compareDecimals, divDecimals, mulDecimals, subDecimals } from '../utils/decimal-math.util.js';
+import { toDecimal, formatDecimal, compareDecimals, divDecimals, mulDecimals, subDecimals, addDecimals } from '../utils/decimal-math.util.js';
 import { calculateInstallmentSchedule } from '../utils/installment-calculator.util.js';
 import { currentBusinessDateInBangkok, toBangkokDateString } from '../utils/calendar-date.util.js';
 import { calculateMeterUsageUnits, parseMeterIntegerReading } from '../utils/meter-billing-calculator.util.js';
@@ -1235,9 +1235,10 @@ export class MeterService {
       orderBy: [{ startDate: 'asc' }, { createdAt: 'desc' }],
     });
 
-    // Load active daily stays for today (Bangkok timezone)
+    // Load active daily stays for today (Bangkok timezone) ONLY if current operational cycle
     const todayBangkok = currentBusinessDateInBangkok();
-    const activeDailyStays = await prisma.dailyStay.findMany({
+    const isCycleCurrentOrFuture = cycle.status === 'open' || cycle.periodEnd >= new Date(todayBangkok);
+    const activeDailyStays = isCycleCurrentOrFuture ? await prisma.dailyStay.findMany({
       where: {
         dormitoryId,
         status: 'ACTIVE',
@@ -1252,6 +1253,34 @@ export class MeterService {
             items: true,
           },
         },
+      },
+      orderBy: [{ startDate: 'asc' }, { createdAt: 'desc' }],
+    }) : [];
+
+    // Load future contracts for vacant rooms
+    const futureContracts = await prisma.contract.findMany({
+      where: {
+        dormitoryId,
+        status: { in: ['active', 'expiring_soon', 'pending_signature', 'waiting_extension'] },
+        deletedAt: null,
+        startDate: { gt: cycle.periodEnd },
+      },
+      include: {
+        tenant: true,
+      },
+      orderBy: [{ startDate: 'asc' }, { createdAt: 'desc' }],
+    });
+
+    // Load future provisional terms for vacant rooms
+    const futureProvisionalTerms = await prisma.provisionalRentalTerm.findMany({
+      where: {
+        dormitoryId,
+        status: 'ACTIVE',
+        deletedAt: null,
+        startDate: { gt: cycle.periodEnd },
+      },
+      include: {
+        tenant: true,
       },
       orderBy: [{ startDate: 'asc' }, { createdAt: 'desc' }],
     });
@@ -1275,6 +1304,8 @@ export class MeterService {
         ...activeContracts.map((c) => c.tenantId),
         ...activeProvisionalTerms.map((p) => p.tenantId),
         ...(activeDailyStays.map((d) => d.tenantId).filter(Boolean) as string[]),
+        ...futureContracts.map((c) => c.tenantId),
+        ...futureProvisionalTerms.map((p) => p.tenantId),
       ])
     );
     const vehicles = allTenantIds.length > 0
@@ -1306,6 +1337,34 @@ export class MeterService {
       if (!roomDailyStayMap.has(d.roomId)) roomDailyStayMap.set(d.roomId, d);
     }
 
+    const roomFutureContractMap = new Map<string, typeof futureContracts[0]>();
+    for (const c of futureContracts) {
+      if (!roomFutureContractMap.has(c.roomId)) roomFutureContractMap.set(c.roomId, c);
+    }
+
+    const roomFutureProvisionalMap = new Map<string, typeof futureProvisionalTerms[0]>();
+    for (const p of futureProvisionalTerms) {
+      if (!roomFutureProvisionalMap.has(p.roomId)) roomFutureProvisionalMap.set(p.roomId, p);
+    }
+
+    // Load active bills for this cycle
+    const billsInCycle = await prisma.bill.findMany({
+      where: {
+        dormitoryId,
+        billingCycleId,
+        status: { notIn: ['cancelled', 'void'] },
+      },
+      include: {
+        items: true,
+      },
+    });
+    const billsByRoomMap = new Map<string, typeof billsInCycle>();
+    for (const b of billsInCycle) {
+      const list = billsByRoomMap.get(b.roomId) || [];
+      list.push(b);
+      billsByRoomMap.set(b.roomId, list);
+    }
+
     const roomContexts = rooms.map((room) => {
       let billingSource: 'CONTRACT' | 'PROVISIONAL_MONTHLY' | 'PROVISIONAL_TERM' | 'DAILY_STAY' | 'NONE' = 'NONE';
       let rentAmount = '0.00';
@@ -1314,6 +1373,7 @@ export class MeterService {
       let tenantName: string | null = null;
       let parkingQuantity = '1.00';
       let isLineLinked = false;
+      let isFutureReservation = false;
       let dailyDepositAmount = '0.00';
       let dailyDepositStatus: 'PAID' | 'UNPAID' | null = null;
       let dailyDepositPaidAt: string | null = null;
@@ -1409,6 +1469,20 @@ export class MeterService {
               }
             }
           } else {
+            // Check future reservation
+            const futureC = roomFutureContractMap.get(room.id);
+            const futureP = roomFutureProvisionalMap.get(room.id);
+            if (futureC) {
+              isFutureReservation = true;
+              tenantId = futureC.tenantId;
+              tenantName = futureC.tenant ? (futureC.tenant.displayName || `${futureC.tenant.firstName || ''} ${futureC.tenant.lastName || ''}`.trim()) : null;
+              isLineLinked = Boolean(futureC.tenant?.linkedUserId);
+            } else if (futureP) {
+              isFutureReservation = true;
+              tenantId = futureP.tenantId;
+              tenantName = futureP.tenant ? (futureP.tenant.displayName || `${futureP.tenant.firstName || ''} ${futureP.tenant.lastName || ''}`.trim()) : null;
+              isLineLinked = Boolean(futureP.tenant?.linkedUserId);
+            }
             billingSource = 'NONE';
             rentAmount = '0.00';
           }
@@ -1441,6 +1515,48 @@ export class MeterService {
       const snapshotPeopleCount = snap ? snap.peopleCount : null;
       const currentHouseholdPeopleCount = householdMap.get(room.id) ?? 0;
 
+      // Charge Components & Amount Due Breakdown
+      const roomBills = billsByRoomMap.get(room.id) || [];
+      const chargeComponents: Array<{
+        type: string;
+        label: string;
+        amount: string;
+        status: 'PAID' | 'UNPAID' | 'DRAFT';
+        paidAt?: string | null;
+        occurredInDisplayedPeriod: boolean;
+        includedInAmountDue: boolean;
+      }> = [];
+
+      let amountDueDec = toDecimal('0.00');
+
+      for (const bill of roomBills) {
+        const isPaid = bill.status === 'paid' || bill.status === 'PAID';
+        const billTotal = toDecimal(bill.totalAmount.toString());
+        const billKind = bill.billKind || 'MONTHLY_UTILITY';
+
+        let label = 'ค่าใช้จ่ายประจำงวด';
+        if (billKind === 'RENT') label = 'ค่าเช่าห้องพัก';
+        else if (billKind === 'DEPOSIT') label = 'ค่าประกันห้องพัก';
+        else if (billKind === 'MONTHLY_UTILITY') label = 'ค่าน้ำ-ไฟ-ส่วนกลาง';
+
+        const isUnpaid = !isPaid;
+        if (isUnpaid) {
+          amountDueDec = addDecimals(amountDueDec, billTotal);
+        }
+
+        chargeComponents.push({
+          type: billKind.toLowerCase(),
+          label,
+          amount: formatDecimal(billTotal),
+          status: isPaid ? 'PAID' : 'UNPAID',
+          paidAt: bill.paidAt ? bill.paidAt.toISOString() : null,
+          occurredInDisplayedPeriod: true,
+          includedInAmountDue: isUnpaid,
+        });
+      }
+
+      const periodDetailCount = chargeComponents.filter((c) => c.occurredInDisplayedPeriod).length;
+
       return {
         roomId: room.id,
         roomNumber: room.roomNumber,
@@ -1450,6 +1566,7 @@ export class MeterService {
         rentAmount,
         rentDescription,
         isLineLinked,
+        isFutureReservation,
         dailyDepositAmount,
         dailyDepositStatus,
         dailyDepositPaidAt,
@@ -1461,6 +1578,9 @@ export class MeterService {
         snapshotManualOutstanding,
         snapshotPeopleCount,
         currentHouseholdPeopleCount,
+        amountDue: formatDecimal(amountDueDec),
+        periodDetailCount,
+        chargeComponents,
       };
     });
 
@@ -1529,9 +1649,9 @@ export class MeterService {
 
       for (const r of prevReadings) {
         if (!readingMap[r.roomId]) readingMap[r.roomId] = {};
-        if (r.meterType === 'water') {
+        if (r.meterType === 'water' && r.currentReading !== null && r.currentReading !== undefined) {
           readingMap[r.roomId].waterCurr = formatDecimal(toDecimal(r.currentReading.toString()));
-        } else if (r.meterType === 'electricity') {
+        } else if (r.meterType === 'electricity' && r.currentReading !== null && r.currentReading !== undefined) {
           readingMap[r.roomId].elecCurr = formatDecimal(toDecimal(r.currentReading.toString()));
         }
       }
@@ -1582,10 +1702,10 @@ export class MeterService {
 
 export interface SaveMeterWorkspaceRowDto {
   roomId: string;
-  waterPrev?: string | number;
-  waterCurr?: string | number;
-  elecPrev?: string | number;
-  elecCurr?: string | number;
+  waterPrev?: string | number | null;
+  waterCurr?: string | number | null;
+  elecPrev?: string | number | null;
+  elecCurr?: string | number | null;
   isReplaced?: boolean;
   peopleCount?: number;
   manualOutstandingAmount?: string | number;

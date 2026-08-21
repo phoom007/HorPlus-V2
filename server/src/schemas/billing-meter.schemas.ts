@@ -93,10 +93,10 @@ export const OtherFeeItemSchema = z.object({
 
 export const SaveMeterWorkspaceRowSchema = z.object({
   roomId: z.string().min(1, 'Room ID จำเป็นต้องระบุ'),
-  waterPrev: z.string().regex(/^\d{1,5}$/, 'ค่ามิเตอร์น้ำเดิมต้องเป็นตัวเลขจำนวนเต็ม 0 ถึง 99999').optional(),
-  waterCurr: z.string().regex(/^\d{1,5}$/, 'ค่ามิเตอร์น้ำใหม่ต้องเป็นตัวเลขจำนวนเต็ม 0 ถึง 99999').optional(),
-  elecPrev: z.string().regex(/^\d{1,5}$/, 'ค่ามิเตอร์ไฟเดิมต้องเป็นตัวเลขจำนวนเต็ม 0 ถึง 99999').optional(),
-  elecCurr: z.string().regex(/^\d{1,5}$/, 'ค่ามิเตอร์ไฟใหม่ต้องเป็นตัวเลขจำนวนเต็ม 0 ถึง 99999').optional(),
+  waterPrev: z.string().regex(/^\d{1,5}$/, 'ค่ามิเตอร์น้ำเดิมต้องเป็นตัวเลขจำนวนเต็ม 0 ถึง 99999').or(z.literal('')).nullable().optional(),
+  waterCurr: z.string().regex(/^\d{1,5}$/, 'ค่ามิเตอร์น้ำใหม่ต้องเป็นตัวเลขจำนวนเต็ม 0 ถึง 99999').or(z.literal('')).nullable().optional(),
+  elecPrev: z.string().regex(/^\d{1,5}$/, 'ค่ามิเตอร์ไฟเดิมต้องเป็นตัวเลขจำนวนเต็ม 0 ถึง 99999').or(z.literal('')).nullable().optional(),
+  elecCurr: z.string().regex(/^\d{1,5}$/, 'ค่ามิเตอร์ไฟใหม่ต้องเป็นตัวเลขจำนวนเต็ม 0 ถึง 99999').or(z.literal('')).nullable().optional(),
   isReplaced: z.boolean().optional(),
   peopleCount: z.number().int().min(0).optional(),
   manualOutstandingAmount: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
