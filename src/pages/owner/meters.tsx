@@ -1762,7 +1762,8 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
         cur.overdueAmount !== orig.overdueAmount ||
         cur.isPaid !== orig.isPaid ||
         cur.billStatus !== orig.billStatus ||
-        cur.isReplaced !== orig.isReplaced
+        cur.isReplaced !== orig.isReplaced ||
+        JSON.stringify(cur.otherFees || []) !== JSON.stringify(orig.otherFees || [])
       ) {
         return true;
       }
@@ -2458,10 +2459,11 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                 const tenant = getTenantForRoomAndCycle(row.roomId, selectedCycle);
                 const roomCtx = previewContext?.rooms?.find((r: any) => r.roomId === row.roomId);
                 const isDaily = roomCtx?.billingSource === 'DAILY_STAY';
-
-                const isRowLocked = (row.billStatus !== 'draft' && row.billStatus !== 'cancelled') || isDaily;
-                const canEditElecPrev = !isRowLocked && (isFirstCycle || row.editElecPrev || allowEditAllElecPrev);
-                const canEditWaterPrev = !isRowLocked && (isFirstCycle || row.editWaterPrev || allowEditAllWaterPrev);
+                const isBillIssued = row.billStatus !== 'draft' && row.billStatus !== 'cancelled';
+                const isMeterLocked = isBillIssued || isDaily;
+                const isRowLocked = isBillIssued;
+                const canEditElecPrev = !isMeterLocked && (isFirstCycle || row.editElecPrev || allowEditAllElecPrev);
+                const canEditWaterPrev = !isMeterLocked && (isFirstCycle || row.editWaterPrev || allowEditAllWaterPrev);
 
                 return (
                   <tr key={row.roomId} id={`room-row-${row.roomId}`} className="hover:bg-slate-50/50 transition-colors">
@@ -2515,7 +2517,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                           <input
                             type="text"
                             inputMode="decimal"
-                            disabled={isRowLocked}
+                            disabled={isMeterLocked}
                             value={row.elecCurr}
                             onChange={(e) => {
                                 handleMeterReadingChange(row.roomId, 'elecCurr', e.target.value);
@@ -2581,7 +2583,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                           <input
                             type="text"
                             inputMode="decimal"
-                            disabled={isRowLocked}
+                            disabled={isMeterLocked}
                             value={row.waterCurr}
                             onChange={(e) => {
                               handleMeterReadingChange(row.roomId, 'waterCurr', e.target.value);

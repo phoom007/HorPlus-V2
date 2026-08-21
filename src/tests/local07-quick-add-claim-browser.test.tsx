@@ -2360,6 +2360,11 @@ describe('Daily Stay Meter Semantics, Financial Exclusion & Exact Deposit Copy',
     expect(waterCurrInput).toBeDefined();
     expect(waterCurrInput.disabled).toBe(true);
 
+    // People count MUST remain enabled and editable for DAILY_STAY per latest PO rule
+    const peopleCountInput = document.querySelector('input[data-col="peopleCount"]') as HTMLInputElement;
+    expect(peopleCountInput).not.toBeNull();
+    expect(peopleCountInput.disabled).toBe(false);
+
     // H. Status cell contains locked badge "รายวัน" and NO toggle switch button
     expect(screen.getByText('รายวัน')).toBeDefined();
     expect(screen.queryByRole('switch')).toBeNull();

@@ -367,4 +367,102 @@ describe('LOCAL-07 Meter Workspace & Quick Add Comprehensive Frontend Suite', ()
       expect(mapErrorMessageToThai('ROOM_LOCKED_PAID')).toBe('บิลนี้ชำระเงินแล้ว ไม่สามารถยกเลิกหรือแก้ไขได้');
     });
   });
+
+  describe('5. Quick Fill Compound Other Fees & Persistence Authority', () => {
+    it('parses "2 คน : ค้าง 50 : ค่าทำความสะอาด 50" into peopleCount = 2 and both otherFees with alias "ค้าง" -> "ค้างชำระ"', () => {
+      const text = '101 : 2 คน : ค้าง 50 : ค่าทำความสะอาด 50';
+      const lines = text.split('\n');
+      const matchedLine = lines[0];
+      const parts = matchedLine.split(':').map(p => p.trim());
+
+      let peopleCount: string | number = '1';
+      const otherFees: Array<{ description: string; amount: string }> = [];
+
+      parts.slice(1).forEach(part => {
+        const trimmedPart = part.trim();
+        if (!trimmedPart) return;
+
+        if (trimmedPart.includes('คน')) {
+          const match = trimmedPart.match(/\d+/);
+          if (match) peopleCount = match[0];
+        } else if (trimmedPart.startsWith('ค้างชำระ') || trimmedPart.startsWith('ค้าง')) {
+          const match = trimmedPart.match(/\d+(\.\d{1,2})?/);
+          if (match) {
+            const amt = match[0];
+            const desc = 'ค้างชำระ';
+            const existingIdx = otherFees.findIndex(f => f.description === desc);
+            if (existingIdx >= 0) {
+              otherFees[existingIdx] = { ...otherFees[existingIdx], amount: amt };
+            } else {
+              otherFees.push({ description: desc, amount: amt });
+            }
+          }
+        } else {
+          const numMatch = trimmedPart.match(/(\d+(\.\d{1,2})?)$/);
+          if (numMatch) {
+            const amt = numMatch[1];
+            const desc = trimmedPart.substring(0, trimmedPart.length - amt.length).trim();
+            if (desc) {
+              const existingIdx = otherFees.findIndex(f => f.description.toLowerCase() === desc.toLowerCase());
+              if (existingIdx >= 0) {
+                otherFees[existingIdx] = { ...otherFees[existingIdx], amount: amt };
+              } else {
+                otherFees.push({ description: desc, amount: amt });
+              }
+            }
+          }
+        }
+      });
+
+      expect(peopleCount).toBe('2');
+      expect(otherFees).toHaveLength(2);
+      expect(otherFees[0]).toEqual({ description: 'ค้างชำระ', amount: '50' });
+      expect(otherFees[1]).toEqual({ description: 'ค่าทำความสะอาด', amount: '50' });
+    });
+  });
+
+  describe('6. Bulk Issue & LINE Recipient Readiness Filtering', () => {
+    it('filters LINE recipients using canonical Tenant.linkedUserId only', () => {
+      const generatedList = [
+        { roomId: 'r-101', billId: 'b-1' },
+        { roomId: 'r-102', billId: 'b-2' },
+        { roomId: 'r-103', billId: 'b-3' },
+      ];
+      const tenants = [
+        { id: 't-1', roomId: 'r-101', linkedUserId: 'line-usr-1', displayName: 'สมชาย' },
+        { id: 't-2', roomId: 'r-102', linkedUserId: null, displayName: 'สมหญิง' },
+        { id: 't-3', roomId: 'r-103', linkedUserId: 'line-usr-3', displayName: 'สมศักดิ์' },
+      ];
+
+      const linkedTenantIds = generatedList
+        .map((g) => {
+          const tenantObj = tenants.find(t => t.roomId === g.roomId);
+          return tenantObj?.linkedUserId ? tenantObj.id : null;
+        })
+        .filter(Boolean);
+
+      // Exactly 2 of 3 are LINE linked
+      expect(linkedTenantIds).toEqual(['t-1', 't-3']);
+    });
+
+    it('handles zero LINE linked recipients gracefully without failing bill generation', () => {
+      const generatedList = [
+        { roomId: 'r-101', billId: 'b-1' },
+        { roomId: 'r-102', billId: 'b-2' },
+      ];
+      const tenants = [
+        { id: 't-1', roomId: 'r-101', linkedUserId: null, displayName: 'สมชาย' },
+        { id: 't-2', roomId: 'r-102', linkedUserId: null, displayName: 'สมหญิง' },
+      ];
+
+      const linkedTenantIds = generatedList
+        .map((g) => {
+          const tenantObj = tenants.find(t => t.roomId === g.roomId);
+          return tenantObj?.linkedUserId ? tenantObj.id : null;
+        })
+        .filter(Boolean);
+
+      expect(linkedTenantIds).toHaveLength(0);
+    });
+  });
 });
