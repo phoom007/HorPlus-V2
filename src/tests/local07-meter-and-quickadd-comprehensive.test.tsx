@@ -71,8 +71,8 @@ describe('LOCAL-07 Meter Workspace & Quick Add Comprehensive Frontend Suite', ()
 
     it('preview calculation handles blank inputs without NaN', () => {
       const preview = calculateMeterRowPreview(
-        { roomId: 'r-1', roomNumber: '101' },
-        { waterRate: '20.00', elecRate: '8.00', waterBillingType: 'per_unit', electricityBillingType: 'per_unit' },
+        { roomId: 'r-1', roomNumber: '101', billingSource: 'PROVISIONAL_MONTHLY', rentAmount: '3500.00' },
+        { waterRate: '20.00', electricityRate: '8.00', waterBillingType: 'per_unit', electricityBillingType: 'per_unit' },
         { waterPrev: '', waterCurr: '', elecPrev: '', elecCurr: '' }
       );
       expect(preview.waterUsage).toBe('0.00');

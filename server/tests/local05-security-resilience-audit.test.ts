@@ -66,6 +66,7 @@ describe.sequential('LOCAL-05: Local Security & Resilience Audit Suite', () => {
       'receipts',
       'receipt_sequences',
       'payments',
+      'combined_payment_groups',
       'bill_items',
       'bill_status_histories',
       'bills',
