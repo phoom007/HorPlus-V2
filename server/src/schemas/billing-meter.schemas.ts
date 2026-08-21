@@ -57,8 +57,8 @@ export const MeterReadingItemSchema = z.object({
   roomId: z.string().min(1, 'Room ID จำเป็นต้องระบุ'),
   meterType: z.enum(['water', 'electricity']),
   meterDeviceId: z.string().optional(),
-  previousReading: z.string().regex(/^\d+(\.\d{1,2})?$/),
-  currentReading: z.string().regex(/^\d+(\.\d{1,2})?$/),
+  previousReading: z.string().regex(/^\d{1,5}$/, 'ค่ามิเตอร์เดิมต้องเป็นตัวเลขจำนวนเต็ม 0 ถึง 99999'),
+  currentReading: z.string().regex(/^\d{1,5}$/, 'ค่ามิเตอร์ใหม่ต้องเป็นตัวเลขจำนวนเต็ม 0 ถึง 99999'),
   readAt: z.string().optional(),
   notes: z.string().optional(),
 });
@@ -69,7 +69,7 @@ export const BulkMeterReadingSchema = z.object({
 });
 
 export const UpdateMeterReadingSchema = z.object({
-  currentReading: z.string().regex(/^\d+(\.\d{1,2})?$/),
+  currentReading: z.string().regex(/^\d{1,5}$/, 'ค่ามิเตอร์ใหม่ต้องเป็นตัวเลขจำนวนเต็ม 0 ถึง 99999'),
   notes: z.string().optional(),
   version: z.number().int().optional(),
 });
@@ -93,10 +93,10 @@ export const OtherFeeItemSchema = z.object({
 
 export const SaveMeterWorkspaceRowSchema = z.object({
   roomId: z.string().min(1, 'Room ID จำเป็นต้องระบุ'),
-  waterPrev: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
-  waterCurr: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
-  elecPrev: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
-  elecCurr: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
+  waterPrev: z.string().regex(/^\d{1,5}$/, 'ค่ามิเตอร์น้ำเดิมต้องเป็นตัวเลขจำนวนเต็ม 0 ถึง 99999').optional(),
+  waterCurr: z.string().regex(/^\d{1,5}$/, 'ค่ามิเตอร์น้ำใหม่ต้องเป็นตัวเลขจำนวนเต็ม 0 ถึง 99999').optional(),
+  elecPrev: z.string().regex(/^\d{1,5}$/, 'ค่ามิเตอร์ไฟเดิมต้องเป็นตัวเลขจำนวนเต็ม 0 ถึง 99999').optional(),
+  elecCurr: z.string().regex(/^\d{1,5}$/, 'ค่ามิเตอร์ไฟใหม่ต้องเป็นตัวเลขจำนวนเต็ม 0 ถึง 99999').optional(),
   isReplaced: z.boolean().optional(),
   peopleCount: z.number().int().min(0).optional(),
   manualOutstandingAmount: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),

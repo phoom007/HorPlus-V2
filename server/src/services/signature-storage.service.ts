@@ -180,9 +180,11 @@ export function decodePngAndValidatePixels(buffer: Buffer): { width: number; hei
 }
 
 export class SignatureStorageService {
+  private prisma: PrismaClient;
   private provider: OwnerSignatureStorageProvider;
 
-  constructor(private prisma: PrismaClient, provider?: OwnerSignatureStorageProvider) {
+  constructor(prisma: PrismaClient, provider?: OwnerSignatureStorageProvider) {
+    this.prisma = prisma;
     if (provider) {
       this.provider = provider;
     } else if (process.env.NODE_ENV === 'production') {

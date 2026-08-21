@@ -1,7 +1,7 @@
 /**
  * @license Apache-2.0
  * LOCAL-07 POST-BATCH02 PRODUCT OWNER MANUAL UAT CORRECTION TESTS
- * 
+ *
  * Verifies:
  * 1. Fresh Owner authoritative Room UUID resolution & /properties/rooms/:id/quick-add-context
  * 2. RoomBillingCycleSnapshot Optimistic Concurrency Control (OCC 409 STALE_VERSION)
@@ -637,7 +637,7 @@ describe('LOCAL-07 Post-Batch02 UAT Corrections: OCC, Preview Context & Househol
       expect(r2Household.currentHouseholdPeopleCount).toBe(0); // Vacant room
     });
 
-    it('verifies exact calculation parity with fractional 2-decimal meter readings between calculateMeterRowPreview, BillingService, and persisted Bill', async () => {
+    it('verifies exact calculation parity with integer meter readings between calculateMeterRowPreview, BillingService, and persisted Bill', async () => {
       const ctxRes = await request(app)
         .get(`/api/v1/meters/workspace/preview-context?billingCycleId=${billingCycleId}`)
         .set('Cookie', ownerSessionCookie)
@@ -648,34 +648,31 @@ describe('LOCAL-07 Post-Batch02 UAT Corrections: OCC, Preview Context & Househol
       const { rateSnapshot, rooms: previewRooms } = ctxRes.body.data;
       const r1Ctx = previewRooms.find((r: any) => r.roomId === roomId);
 
-      // Fractional fixture:
-      // water: previous 100.25, current 105.75 -> usage 5.50 * 18.00 = 99.00
-      // electric: previous 500.10, current 501.35 -> usage 1.25 * 8.00 = 10.00
       const preview = calculateMeterRowPreview(r1Ctx, rateSnapshot, {
-        waterPrev: '100.25',
-        waterCurr: '105.75',
-        elecPrev: '500.10',
-        elecCurr: '501.35',
+        waterPrev: '100',
+        waterCurr: '105',
+        elecPrev: '500',
+        elecCurr: '502',
         peopleCount: 2,
         overdueAmount: '50.00',
         otherFees: [{ description: 'ค่าขยะ', amount: '40.00' }],
       });
 
       expect(preview.rentAmount).toBe('3500.00');
-      expect(preview.waterUsage).toBe('5.50');
-      expect(preview.waterAmount).toBe('99.00');
-      expect(preview.elecUsage).toBe('1.25');
-      expect(preview.elecAmount).toBe('10.00');
+      expect(preview.waterUsage).toBe('5.00');
+      expect(preview.waterAmount).toBe('90.00');
+      expect(preview.elecUsage).toBe('2.00');
+      expect(preview.elecAmount).toBe('16.00');
       expect(preview.commonAmount).toBe('150.00');
       expect(preview.internetAmount).toBe('200.00');
       expect(preview.parkingAmount).toBe('100.00');
       expect(preview.overdueAmount).toBe('50.00');
       expect(preview.otherFeesAmount).toBe('40.00');
-      // Total: 3500.00 + 99.00 + 10.00 + 150.00 + 200.00 + 100.00 + 50.00 + 40.00 = 4149.00
-      expect(preview.totalAmount).toBe('4149.00');
-      expect(preview.formattedTotal).toBe('4,149.00');
+      // Total: 3500.00 + 90.00 + 16.00 + 150.00 + 200.00 + 100.00 + 50.00 + 40.00 = 4146.00
+      expect(preview.totalAmount).toBe('4146.00');
+      expect(preview.formattedTotal).toBe('4,146.00');
 
-      // Issue bill via API with these exact fractional readings
+      // Issue bill via API with these exact integer readings
       const issueRes = await request(app)
         .post('/api/v1/bills/generate/bulk')
         .set('Cookie', ownerSessionCookie)
@@ -686,10 +683,10 @@ describe('LOCAL-07 Post-Batch02 UAT Corrections: OCC, Preview Context & Househol
           dirtyRows: [
             {
               roomId,
-              waterPrev: '100.25',
-              waterCurr: '105.75',
-              elecPrev: '500.10',
-              elecCurr: '501.35',
+              waterPrev: '100',
+              waterCurr: '105',
+              elecPrev: '500',
+              elecCurr: '502',
               peopleCount: 2,
               manualOutstandingAmount: '50.00',
               otherFees: [{ description: 'ค่าขยะ', amount: '40.00' }],
@@ -699,7 +696,7 @@ describe('LOCAL-07 Post-Batch02 UAT Corrections: OCC, Preview Context & Househol
 
       expect(issueRes.status).toBe(200);
 
-      // Verify persisted Bill in DB matches exact totals down to the satang
+      // Verify persisted Bill in DB matches exact totals down to the unit
       const dbBill = await prisma.bill.findFirst({
         where: {
           dormitoryId,
@@ -712,15 +709,15 @@ describe('LOCAL-07 Post-Batch02 UAT Corrections: OCC, Preview Context & Househol
       });
 
       expect(dbBill).toBeDefined();
-      expect(dbBill?.totalAmount.toString()).toBe('4149');
-      expect(dbBill?.items.find((i: any) => i.type === 'rent')?.amount.toString()).toBe('3500');
-      expect(dbBill?.items.find((i: any) => i.type === 'water')?.amount.toString()).toBe('99');
-      expect(dbBill?.items.find((i: any) => i.type === 'electricity')?.amount.toString()).toBe('10');
-      expect(dbBill?.items.find((i: any) => i.type === 'common_fee')?.amount.toString()).toBe('150');
-      expect(dbBill?.items.find((i: any) => i.type === 'internet')?.amount.toString()).toBe('200');
-      expect(dbBill?.items.find((i: any) => i.type === 'parking')?.amount.toString()).toBe('100');
-      expect(dbBill?.items.find((i: any) => i.type === 'manual_outstanding')?.amount.toString()).toBe('50');
-      expect(dbBill?.items.find((i: any) => i.type === 'other_fee')?.amount.toString()).toBe('40');
+      expect(Number(dbBill?.totalAmount)).toBe(4146);
+      expect(Number(dbBill?.items.find((i: any) => i.type === 'rent')?.amount)).toBe(3500);
+      expect(Number(dbBill?.items.find((i: any) => i.type === 'water')?.amount)).toBe(90);
+      expect(Number(dbBill?.items.find((i: any) => i.type === 'electricity')?.amount)).toBe(16);
+      expect(Number(dbBill?.items.find((i: any) => i.type === 'common_fee')?.amount)).toBe(150);
+      expect(Number(dbBill?.items.find((i: any) => i.type === 'internet')?.amount)).toBe(200);
+      expect(Number(dbBill?.items.find((i: any) => i.type === 'parking')?.amount)).toBe(100);
+      expect(Number(dbBill?.items.find((i: any) => i.type === 'manual_outstanding')?.amount)).toBe(50);
+      expect(Number(dbBill?.items.find((i: any) => i.type === 'other_fee')?.amount)).toBe(40);
     });
 
     it('table-driven cross-mode parity vector suite verifies all billing modes without floating drift', () => {

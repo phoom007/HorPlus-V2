@@ -746,48 +746,13 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
     if (activeCyclesWithBills.length === 0) {
       return Array.from(new Set(bills.map(b => b.cycleId))).sort().reverse().slice(0, 2);
     }
-
     return activeCyclesWithBills.slice(0, 2);
   };
 
-  const isLatestCycle = !selectedCycle || selectedCycle === getLatestCycle();
   const isRecent2Cycles = !selectedCycle || getRecent2Cycles().includes(selectedCycle);
 
-  const isTenantInCycle = (tenant: Tenant) => {
-    if (!selectedCycle) return true;
-
-    // 1. Check if there is a bill in this cycle for this tenant
-    const hasBill = bills?.some(b => b.tenantId === tenant.id && b.cycleId === selectedCycle);
-    if (hasBill) return true;
-
-    // 2. Check if there is a contract active during this cycle
-    const tenantContracts = contracts?.filter(c => c.tenantId === tenant.id);
-    const hasContract = tenantContracts?.some(c => {
-      const [cy, cm] = selectedCycle.split('-').map(Number);
-      const [sy, sm] = c.startDate.split('-').map(Number);
-      const [ey, em] = c.endDate.split('-').map(Number);
-
-      const cycleVal = cy * 12 + (cm - 1);
-      const startVal = sy * 12 + (sm - 1);
-      const endVal = ey * 12 + (em - 1);
-
-      return cycleVal >= startVal && cycleVal <= endVal;
-    });
-    if (hasContract) return true;
-
-    // 3. Fallback: If they are active now, and this is the latest cycle, they are in!
-    const isCurrentResident = rooms?.some(r => r.currentTenantId === tenant.id);
-    if (isCurrentResident && tenant.status === 'active' && isLatestCycle) {
-      return true;
-    }
-
-    return false;
-  };
-
-  // Filter tenants by search query and billing cycle
+  // Filter tenants by search query (Master Registry - shows all registered tenants in dormitory)
   const filteredTenants = tenants.filter(t => {
-    if (!isTenantInCycle(t)) return false;
-
     const name = (t?.name || '').toLowerCase();
     const phone = t?.phone || '';
     const email = (t?.email || '').toLowerCase();
@@ -801,36 +766,28 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
   });
 
   const getRoomNumber = (tenantId: string) => {
-    // 1. Check if there is a bill in the selectedCycle for this tenant
-    if (selectedCycle && bills) {
-      const cycleBill = bills.find(b => b.tenantId === tenantId && b.cycleId === selectedCycle);
-      if (cycleBill) {
-        const r = rooms.find(room => room.id === cycleBill.roomId);
-        if (r) return r.roomNumber;
-      }
-    }
-    // 2. Check if there is a contract active in the selectedCycle for this tenant
-    if (selectedCycle && contracts) {
-      const cycleContracts = contracts.filter(c => c.tenantId === tenantId);
-      const activeContract = cycleContracts.find(c => {
-        const [cy, cm] = selectedCycle.split('-').map(Number);
-        const [sy, sm] = c.startDate.split('-').map(Number);
-        const [ey, em] = c.endDate.split('-').map(Number);
-
-        const cycleVal = cy * 12 + (cm - 1);
-        const startVal = sy * 12 + (sm - 1);
-        const endVal = ey * 12 + (em - 1);
-
-        return cycleVal >= startVal && cycleVal <= endVal;
-      });
+    // 1. Check if there is an active contract for this tenant
+    if (contracts && contracts.length > 0) {
+      const activeContract = contracts.find(c => c.tenantId === tenantId && (c.status === 'ACTIVE' || c.status === 'active'));
       if (activeContract) {
         const r = rooms.find(room => room.id === activeContract.roomId);
         if (r) return r.roomNumber;
       }
     }
-    // 3. Fallback to current room
+    // 2. Check if there is a room currently assigned to this tenant
     const currentRoom = rooms.find(r => r.currentTenantId === tenantId);
-    return currentRoom ? currentRoom.roomNumber : 'ไม่ระบุห้อง';
+    if (currentRoom) return currentRoom.roomNumber;
+
+    // 3. Check any bill
+    if (bills && bills.length > 0) {
+      const b = bills.find(b => b.tenantId === tenantId);
+      if (b) {
+        const r = rooms.find(room => room.id === b.roomId);
+        if (r) return r.roomNumber;
+      }
+    }
+
+    return 'ไม่ระบุห้อง';
   };
 
   return (

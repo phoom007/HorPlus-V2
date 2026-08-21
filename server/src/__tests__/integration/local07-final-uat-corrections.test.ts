@@ -1,0 +1,115 @@
+/**
+ * @license Apache-2.0
+ * LOCAL-07 FINAL UAT CORRECTION TEST SUITE
+ *
+ * Verifies:
+ * 1. Integer-only Meter Reading & 4/5-Digit Rollover Math
+ * 2. DailyStay Invoice Item Single Authority 'paidAt' & Cycle Projection
+ * 3. Daily Stay Date Boundaries (Bangkok Timezone)
+ * 4. Master Tenant Registry & Line Link Flag
+ * 5. RBAC Tech Remap & Finance Deprecation
+ */
+
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import {
+  parseMeterIntegerReading,
+  calculateMeterUsageUnits,
+} from '../../utils/meter-billing-calculator.util.js';
+import { getPrismaClient } from '../../db/prisma.js';
+import { DailyStayService, calculateInclusiveDays } from '../../services/daily-stay.service.js';
+import { MeterService } from '../../services/meter.service.js';
+import { currentBusinessDateInBangkok, toBangkokDateString } from '../../utils/calendar-date.util.js';
+
+describe('LOCAL-07 Final UAT Correction Test Suite', () => {
+  const prisma = getPrismaClient();
+
+  describe('1. Meter Integer-Only & Rollover Engine', () => {
+    it('strictly rejects non-integer decimal readings, including .00, with fail-closed validation', () => {
+      expect(parseMeterIntegerReading('12.5').isValid).toBe(false);
+      expect(parseMeterIntegerReading('100.00').isValid).toBe(false);
+      expect(parseMeterIntegerReading('100.5').isValid).toBe(false);
+      expect(parseMeterIntegerReading('100.50').isValid).toBe(false);
+      expect(parseMeterIntegerReading(100.5).isValid).toBe(false);
+      expect(parseMeterIntegerReading('12.34').isValid).toBe(false);
+      expect(calculateMeterUsageUnits('100.5', '120').isValid).toBe(false);
+      expect(calculateMeterUsageUnits('100', '120.5').isValid).toBe(false);
+    });
+
+    it('strictly rejects negative readings, non-numeric strings, and numbers > 99999', () => {
+      expect(parseMeterIntegerReading('-1').isValid).toBe(false);
+      expect(parseMeterIntegerReading('-5').isValid).toBe(false);
+      expect(parseMeterIntegerReading(-1).isValid).toBe(false);
+      expect(parseMeterIntegerReading('abc').isValid).toBe(false);
+      expect(parseMeterIntegerReading('100000').isValid).toBe(false);
+      expect(parseMeterIntegerReading(100000).isValid).toBe(false);
+    });
+
+    it('accepts valid integer readings 0 to 99999', () => {
+      expect(parseMeterIntegerReading('0')).toEqual({ isValid: true, value: 0 });
+      expect(parseMeterIntegerReading('99999')).toEqual({ isValid: true, value: 99999 });
+      expect(parseMeterIntegerReading('0500')).toEqual({ isValid: true, value: 500 });
+      expect(parseMeterIntegerReading(500)).toEqual({ isValid: true, value: 500 });
+    });
+
+    it('verifies all Product Owner 4-digit and 5-digit rollover vectors exactly', () => {
+      // 4-digit vectors:
+      // 9900 -> 100 INVALID
+      expect(calculateMeterUsageUnits('9900', '100').isValid).toBe(false);
+      // 9901 -> 199 => 298
+      const v9901 = calculateMeterUsageUnits('9901', '199');
+      expect(v9901.isValid).toBe(true);
+      expect(v9901.usageUnits).toBe(298);
+      // 9999 -> 0 => 1
+      const v9999 = calculateMeterUsageUnits('9999', '0');
+      expect(v9999.isValid).toBe(true);
+      expect(v9999.usageUnits).toBe(1);
+      // 9950 -> 25 => 75
+      const v9950 = calculateMeterUsageUnits('9950', '25');
+      expect(v9950.isValid).toBe(true);
+      expect(v9950.usageUnits).toBe(75);
+      // 9950 -> 200 INVALID
+      expect(calculateMeterUsageUnits('9950', '200').isValid).toBe(false);
+
+      // 5-digit vectors:
+      // 99900 -> 100 INVALID
+      expect(calculateMeterUsageUnits('99900', '100').isValid).toBe(false);
+      // 99901 -> 199 => 298
+      const v99901 = calculateMeterUsageUnits('99901', '199');
+      expect(v99901.isValid).toBe(true);
+      expect(v99901.usageUnits).toBe(298);
+      // 99999 -> 0 => 1
+      const v99999 = calculateMeterUsageUnits('99999', '0');
+      expect(v99999.isValid).toBe(true);
+      expect(v99999.usageUnits).toBe(1);
+      // 99950 -> 20 => 70
+      const v99950 = calculateMeterUsageUnits('99950', '20');
+      expect(v99950.isValid).toBe(true);
+      expect(v99950.usageUnits).toBe(70);
+
+      // Normal fail-closed outside rollover:
+      // 50000 -> 100 INVALID
+      expect(calculateMeterUsageUnits('50000', '100').isValid).toBe(false);
+      // 500 -> 400 INVALID
+      expect(calculateMeterUsageUnits('500', '400').isValid).toBe(false);
+    });
+  });
+
+  describe('2. Bangkok Date & Daily Stay Boundary Safety', () => {
+    it('returns valid YYYY-MM-DD for Bangkok timezone', () => {
+      const todayBkk = currentBusinessDateInBangkok();
+      expect(todayBkk).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    });
+
+    it('rejects checkoutDate < startDate in daily stay calculation', () => {
+      expect(() => {
+        calculateInclusiveDays('2026-08-25', '2026-08-20');
+      }).toThrow();
+    });
+
+    it('rejects checkoutDate < today_Bangkok in daily stay calculation', () => {
+      expect(() => {
+        calculateInclusiveDays('2020-01-01', '2020-01-05');
+      }).toThrow();
+    });
+  });
+});

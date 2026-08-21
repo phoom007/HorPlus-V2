@@ -136,6 +136,13 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
       setDailyEndDate(today);
       setDepositDeclaredStatus('UNPAID');
 
+      // Set initial active tab based on Term availability
+      if (bldTermMonths && eff?.termRent && Number(eff.termRent) > 0) {
+        setActiveTab('TERM');
+      } else {
+        setActiveTab('MONTHLY');
+      }
+
       // Clear ID card attachment on open
       if (idCardPreview) {
         URL.revokeObjectURL(idCardPreview);
@@ -187,6 +194,8 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
 
   if (!isOpen || !context) return null;
 
+  const isTermTabDisabled = !context.effective?.termRent || Number(context.effective?.termRent) <= 0;
+
   const inclusiveDays = calculateInclusiveDays(startDate, dailyEndDate);
   const dailyTotalRent = (dailyRate ?? 0) * inclusiveDays;
   const dailyTotalAgreed = dailyTotalRent + dailyDeposit;
@@ -194,13 +203,25 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
 
   const isTermDisabled =
     activeTab === 'TERM' &&
-    (!termMonths || termMonths < 1 || termRent === null || termRent === undefined || isNaN(Number(termRent)) || Number(termRent) <= 0);
+    (!termMonths || termMonths < 1 || termRent === null || termRent === undefined || isNaN(Number(termRent)) || Number(termRent) < 0);
+
+  const isMonthlyDisabled =
+    activeTab === 'MONTHLY' &&
+    (monthlyRent === null || monthlyRent === undefined || isNaN(Number(monthlyRent)) || Number(monthlyRent) < 0);
+
+  const todayBangkok = (() => {
+    const d = new Date();
+    const bkk = new Date(d.getTime() + 7 * 60 * 60 * 1000);
+    return `${bkk.getUTCFullYear()}-${String(bkk.getUTCMonth() + 1).padStart(2, '0')}-${String(bkk.getUTCDate()).padStart(2, '0')}`;
+  })();
+
+  const isDailyDateInvalid = dailyEndDate < startDate || dailyEndDate < todayBangkok;
 
   const isDailyDisabled =
     activeTab === 'DAILY' &&
-    (dailyRate === null || dailyRate === undefined || isNaN(Number(dailyRate)) || Number(dailyRate) < 0);
+    (isDailyDateInvalid || dailyRate === null || dailyRate === undefined || isNaN(Number(dailyRate)) || Number(dailyRate) < 0);
 
-  const isSubmitDisabled = isTermDisabled || isDailyDisabled;
+  const isSubmitDisabled = isTermDisabled || isMonthlyDisabled || isDailyDisabled;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -214,8 +235,15 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
         setErrorText('ไม่พบข้อมูลระยะเวลาสัญญาแบบเทอมของอาคาร (termMonths) กรุณากำหนดการตั้งค่าอาคารก่อนทำสัญญาแบบเทอม');
         return;
       }
-      if (termRent === null || termRent === undefined || isNaN(Number(termRent)) || Number(termRent) <= 0) {
+      if (termRent === null || termRent === undefined || isNaN(Number(termRent)) || Number(termRent) < 0) {
         setErrorText('กรุณาระบุค่าเช่ารายเทอม');
+        return;
+      }
+    }
+
+    if (activeTab === 'MONTHLY') {
+      if (monthlyRent === null || monthlyRent === undefined || isNaN(Number(monthlyRent)) || Number(monthlyRent) < 0) {
+        setErrorText('กรุณาระบุค่าเช่ารายเดือน');
         return;
       }
     }
@@ -223,6 +251,14 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
     if (activeTab === 'DAILY') {
       if (dailyRate === null || dailyRate === undefined || isNaN(Number(dailyRate)) || Number(dailyRate) < 0) {
         setErrorText('กรุณาระบุค่าเช่ารายวัน');
+        return;
+      }
+      if (dailyEndDate < startDate) {
+        setErrorText('วันที่สิ้นสุดต้องไม่น้อยกว่าวันที่เริ่มพัก');
+        return;
+      }
+      if (dailyEndDate < todayBangkok) {
+        setErrorText('วันที่สิ้นสุดต้องไม่น้อยกว่าวันที่ปัจจุบัน');
         return;
       }
     }
@@ -354,12 +390,16 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
           <div className="flex bg-slate-200/80 p-1 rounded-2xl gap-1">
             <button
               type="button"
-              onClick={() => setActiveTab('TERM')}
+              disabled={isTermTabDisabled}
+              onClick={() => !isTermTabDisabled && setActiveTab('TERM')}
               className={`flex-1 py-2 text-xs font-extrabold rounded-xl transition-all ${
-                activeTab === 'TERM'
+                isTermTabDisabled
+                  ? 'opacity-40 cursor-not-allowed text-slate-400 bg-slate-100'
+                  : activeTab === 'TERM'
                   ? 'bg-white text-indigo-600 shadow-xs'
                   : 'text-slate-600 hover:text-slate-900'
               }`}
+              title={isTermTabDisabled ? 'ยังไม่ได้กำหนดค่าเช่ารายเทอมของห้องพัก' : undefined}
             >
               รายเทอม
             </button>
@@ -623,11 +663,14 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">
-                    วันที่สิ้นสุด (แก้ไขได้)
+                    วันที่สิ้นสุด
                   </label>
-                  <OwnerDateInput
+                  <input
+                    type="date"
+                    disabled
+                    readOnly
                     value={monthlyEndDate}
-                    onChange={(iso) => setMonthlyEndDate(iso)}
+                    className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl bg-slate-100 text-slate-500 font-semibold cursor-not-allowed"
                   />
                 </div>
               </div>

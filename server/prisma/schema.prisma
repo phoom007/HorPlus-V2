@@ -1887,9 +1887,10 @@ model DailyStayInvoiceItem {
   itemType    String   @map("item_type") @db.VarChar(50) // DAILY_RENT | DEPOSIT
   description String   @db.VarChar(255)
   amount      Decimal  @default(0.00) @map("amount") @db.Decimal(12, 2)
-  status      String   @default("OUTSTANDING") @db.VarChar(50) // OUTSTANDING | DECLARED_PAID | SETTLED
-  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz()
-  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz()
+  status      String    @default("OUTSTANDING") @db.VarChar(50) // OUTSTANDING | DECLARED_PAID | SETTLED
+  paidAt      DateTime? @map("paid_at") @db.Timestamptz()
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
 
   invoice DailyStayInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
 

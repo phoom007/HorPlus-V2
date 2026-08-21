@@ -15,6 +15,7 @@ import {
   mulDecimals,
   formatDecimal,
 } from '../utils/decimal-math.util.js';
+import { currentBusinessDateInBangkok } from '../utils/calendar-date.util.js';
 
 export interface CreateTenantDailyStayRequestDto {
   roomId?: string;
@@ -58,6 +59,14 @@ export function calculateInclusiveDays(startDateStr: string, endDateStr: string)
 
   if (endUtc < startUtc) {
     const err = new Error('วันที่สิ้นสุดต้องไม่น้อยกว่าวันที่เริ่มพัก');
+    (err as any).statusCode = 400;
+    (err as any).code = 'INVALID_DATE_RANGE';
+    throw err;
+  }
+
+  const todayBangkok = currentBusinessDateInBangkok();
+  if (endDateStr < todayBangkok) {
+    const err = new Error('วันที่สิ้นสุดต้องไม่น้อยกว่าวันที่ปัจจุบัน');
     (err as any).statusCode = 400;
     (err as any).code = 'INVALID_DATE_RANGE';
     throw err;
@@ -475,6 +484,7 @@ export class DailyStayService {
                   description: 'เงินประกัน/มัดจำรายวัน',
                   amount: toDecimal(deposit),
                   status: stay.depositDeclaredStatus === 'PAID' ? 'DECLARED_PAID' : 'OUTSTANDING',
+                  paidAt: stay.depositDeclaredStatus === 'PAID' ? new Date() : null,
                 },
               ],
             },
@@ -734,6 +744,7 @@ export class DailyStayService {
                 description: 'เงินประกัน/มัดจำรายวัน',
                 amount: toDecimal(deposit),
                 status: depositDeclaredStatus === 'PAID' ? 'DECLARED_PAID' : 'OUTSTANDING',
+                paidAt: depositDeclaredStatus === 'PAID' ? new Date() : null,
               },
             ],
           },

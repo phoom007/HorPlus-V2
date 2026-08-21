@@ -100,10 +100,16 @@ const cleanDec = (val: any, fieldNameOrDflt = 'Monetary field'): string => {
 };
 
 export class BillingCycleService {
+  private billingCycleRepo: IBillingCycleRepository;
+  private auditService?: AuditService;
+
   constructor(
-    private billingCycleRepo: IBillingCycleRepository,
-    private auditService?: AuditService
-  ) {}
+    billingCycleRepo: IBillingCycleRepository,
+    auditService?: AuditService
+  ) {
+    this.billingCycleRepo = billingCycleRepo;
+    this.auditService = auditService;
+  }
 
   public async createBillingCycle(
     dormitoryId: string,

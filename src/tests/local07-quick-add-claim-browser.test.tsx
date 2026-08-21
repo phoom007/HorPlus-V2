@@ -355,7 +355,7 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
   // Financial Integrity & Building Authority Invariants
   // ==========================================
   describe('Financial Integrity & Building Authority Invariants', () => {
-    it('Proof G: custom lease end date on MONTHLY preserves exact YYYY-MM-DD input', async () => {
+    it('Proof G: lease end date on MONTHLY is read-only and derived via calculateMonthEndDate', async () => {
       const httpSpy = vi.spyOn(httpClient, 'httpRequest').mockResolvedValue({ success: true, data: { id: 'term-g' } });
 
       render(
@@ -372,18 +372,14 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
 
       fireEvent.change(screen.getByPlaceholderText('เช่น นายสมชาย ใจดี'), { target: { value: 'ผู้เช่า แก้ไขวัน' } });
 
-      const dateInputs = screen.getAllByPlaceholderText('วว/ดด/ปปปป');
-      if (dateInputs.length > 1) {
-        fireEvent.change(dateInputs[1], { target: { value: '31/12/2569' } });
-      }
-
       const submitBtn = screen.getByText('ยืนยันเพิ่มผู้เช่า');
       fireEvent.submit(submitBtn.closest('form')!);
 
       await waitFor(() => {
         expect(httpSpy).toHaveBeenCalledTimes(1);
         const payload = httpSpy.mock.calls[0][2];
-        expect(payload.endDate).toBe('2026-12-31');
+        // 1 month duration from mockContext default startDate 2026-08-21 derives 2026-09-20
+        expect(payload.endDate).toBe('2026-09-20');
       });
     });
 
@@ -451,7 +447,7 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
       expect(select.children.length).toBe(3); // Options: 1, 2, 3
     });
 
-    it('Proof K: TERM fails closed when Building termMonths is unconfigured (no fake 6 months default)', () => {
+    it('Proof K: TERM tab remains visible but is disabled when building termMonths is not configured', () => {
       const noTermBldContext: QuickAddRoomContext = {
         roomId: 'room-noterm',
         dormitoryId: 'dorm-001-uuid',
@@ -479,15 +475,13 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
         />
       );
 
-      fireEvent.click(screen.getByRole('button', { name: 'รายเทอม' }));
-
-      // Invariant: Shows clear warning banner and disables submit
-      expect(screen.getByText(/ไม่พบข้อมูลระยะเวลาสัญญาแบบเทอมของอาคาร/)).toBeDefined();
-      const submitBtn = screen.getByText('ยืนยันเพิ่มผู้เช่า');
-      expect(submitBtn.closest('button')?.disabled).toBe(true);
+      const termTab = screen.getByRole('button', { name: 'รายเทอม' }) as HTMLButtonElement;
+      expect(termTab).toBeDefined();
+      expect(termTab.disabled).toBe(true);
+      expect(termTab.title).toBe('ยังไม่ได้กำหนดค่าเช่ารายเทอมของห้องพัก');
     });
 
-    it('Proof L: TERM null termRent does not derive from monthly rent and requires Owner input before submit', async () => {
+    it('Proof L: TERM tab remains visible but disabled when room configured termRent <= 0 or null, and enabled when > 0', async () => {
       const nullTermContext: QuickAddRoomContext = {
         roomId: 'room-nullterm',
         dormitoryId: 'dorm-001-uuid',
@@ -507,7 +501,7 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
         },
       };
 
-      render(
+      const { rerender } = render(
         <QuickAddTenantModal
           isOpen={true}
           onClose={vi.fn()}
@@ -516,23 +510,35 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
         />
       );
 
-      fireEvent.click(screen.getByRole('button', { name: 'รายเทอม' }));
+      // Invariant: Term tab is disabled when termRent is null / unconfigured
+      const termTab = screen.getByRole('button', { name: 'รายเทอม' }) as HTMLButtonElement;
+      expect(termTab.disabled).toBe(true);
+      expect(termTab.title).toBe('ยังไม่ได้กำหนดค่าเช่ารายเทอมของห้องพัก');
 
-      // Invariant: Does not auto-derive 5000 * 4 = 20000. Shows empty placeholder.
-      const termRentInput = screen.getByPlaceholderText('ระบุค่าเช่ารายเทอม') as HTMLInputElement;
-      expect(termRentInput.value).toBe('');
+      // When configured with termRent > 0, Term tab becomes enabled
+      const configuredTermContext: QuickAddRoomContext = {
+        ...nullTermContext,
+        effective: {
+          ...nullTermContext.effective,
+          termRent: 19000,
+        },
+      };
 
-      // Submit is disabled
-      const submitBtn = screen.getByText('ยืนยันเพิ่มผู้เช่า');
-      expect(submitBtn.closest('button')?.disabled).toBe(true);
+      rerender(
+        <QuickAddTenantModal
+          isOpen={true}
+          onClose={vi.fn()}
+          context={configuredTermContext}
+          onSuccess={vi.fn()}
+        />
+      );
 
-      // Fill Full Name
-      fireEvent.change(screen.getByPlaceholderText('เช่น นายสมชาย ใจดี'), { target: { value: 'สมศักดิ์ เทอมตรง' } });
-      expect(submitBtn.closest('button')?.disabled).toBe(true);
+      const enabledTermTab = screen.getByRole('button', { name: 'รายเทอม' }) as HTMLButtonElement;
+      expect(enabledTermTab.disabled).toBe(false);
+      fireEvent.click(enabledTermTab);
 
-      // Once Owner explicitly enters agreed term rent, submit becomes enabled
-      fireEvent.change(termRentInput, { target: { value: '19000' } });
-      expect(submitBtn.closest('button')?.disabled).toBe(false);
+      // Live breakdown rendered
+      expect(screen.getByText(/19,000\.00/)).toBeDefined();
     });
   });
 
@@ -1091,7 +1097,7 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
       // 1. Make an unrelated unsaved meter edit (waterCurr)
       const waterCurrInput = document.querySelector('input[data-col="waterCurr"]') as HTMLInputElement;
       expect(waterCurrInput).toBeDefined();
-      fireEvent.change(waterCurrInput, { target: { value: '10.5' } });
+      fireEvent.change(waterCurrInput, { target: { value: '105' } });
 
       // Global Save button is now visible
       await waitFor(() => {
@@ -1116,7 +1122,7 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
 
       // Assert meterDraftStore contains ONLY the dirty waterCurr patch
       expect(meterDraftStore.getDraft('dorm-001-uuid', 'cycle-2026-08')).toEqual([
-        { roomId: 'room-101-uuid', waterCurr: '10.5' }
+        { roomId: 'room-101-uuid', waterCurr: '105' }
       ]);
     });
 
@@ -1312,12 +1318,12 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
 
       // 1. Local user modifies ONLY waterCurr
       const waterCurrInput = document.querySelector('input[data-col="waterCurr"]') as HTMLInputElement;
-      fireEvent.change(waterCurrInput, { target: { value: '105.00' } });
+      fireEvent.change(waterCurrInput, { target: { value: '105' } });
 
       // Verify sparse draft in store contains ONLY waterCurr
       await waitFor(() => {
         expect(meterDraftStore.getDraft('dorm-001-uuid', 'cycle-2026-08')).toEqual([
-          { roomId: 'room-101-uuid', waterCurr: '105.00' }
+          { roomId: 'room-101-uuid', waterCurr: '105' }
         ]);
       });
 
@@ -1345,12 +1351,15 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
       client.setQueryData(queryKeys.meterWorkspace('dorm-001-uuid', 'cycle-2026-08'), currentServerWorkspace);
 
       // Verify rendered UI:
-      // - waterCurr "105.00" preserved from local sparse draft
+      // - waterCurr "105" preserved from local sparse draft
+      // - peopleCount "3" updated from fresh server data
+      // Verify rendered UI:
+      // - waterCurr "105" preserved from local sparse draft
       // - peopleCount "3" updated from fresh server data
       // - both Fee A and Fee B visible (remote update not shadowed by stale draft)
       await waitFor(() => {
         const input = document.querySelector('input[data-col="waterCurr"]') as HTMLInputElement;
-        expect(input.value).toBe('105.00');
+        expect(input.value).toBe('105');
         expect(screen.getByText('Fee A')).toBeDefined();
         expect(screen.getByText('Fee B')).toBeDefined();
         const peopleInput = document.querySelector('input[data-col="peopleCount"]') as HTMLInputElement;
@@ -1383,7 +1392,7 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
 
       // Verify sparse draft store still retains ONLY the unsaved waterCurr
       expect(meterDraftStore.getDraft('dorm-001-uuid', 'cycle-2026-08')).toEqual([
-        { roomId: 'room-101-uuid', waterCurr: '105.00' }
+        { roomId: 'room-101-uuid', waterCurr: '105' }
       ]);
     });
 
@@ -1557,13 +1566,13 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
         expect(document.querySelector('input[data-col="waterCurr"]')).not.toBeNull();
       });
 
-      // User changes waterCurr to 110.00
+      // User changes waterCurr to 110
       const waterCurrInput = document.querySelector('input[data-col="waterCurr"]') as HTMLInputElement;
-      fireEvent.change(waterCurrInput, { target: { value: '110.00' } });
+      fireEvent.change(waterCurrInput, { target: { value: '110' } });
 
       await waitFor(() => {
         expect(meterDraftStore.getDraft('dorm-001-uuid', 'cycle-2026-08')).toEqual([
-          { roomId: 'room-101-uuid', waterCurr: '110.00' }
+          { roomId: 'room-101-uuid', waterCurr: '110' }
         ]);
       });
 
@@ -1592,7 +1601,7 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
       // waterCurr is restored from sparse draft, while otherFees and peopleCount come from server
       await waitFor(() => {
         const input = document.querySelector('input[data-col="waterCurr"]') as HTMLInputElement;
-        expect(input.value).toBe('110.00');
+        expect(input.value).toBe('110');
         expect(screen.getByText('Fee A')).toBeDefined();
         const peopleInput = document.querySelector('input[data-col="peopleCount"]') as HTMLInputElement;
         if (peopleInput) {
@@ -1688,20 +1697,20 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
       const addFeeBtn = screen.getByTitle('เพิ่มรายการและบันทึกทันที');
       fireEvent.click(addFeeBtn);
 
-      // 2. While request is in-flight / pending, user edits waterCurr to 105.50
+      // 2. While request is in-flight / pending, user edits waterCurr to 105
       const waterCurrInput = document.querySelector('input[data-col="waterCurr"]') as HTMLInputElement;
-      fireEvent.change(waterCurrInput, { target: { value: '105.50' } });
+      fireEvent.change(waterCurrInput, { target: { value: '105' } });
 
-      expect(waterCurrInput.value).toBe('105.50');
+      expect(waterCurrInput.value).toBe('105');
 
       // 3. Resolve the deferred HTTP response
       resolveDeferred!({ success: true });
 
-      // 4. After resolution, fee is persisted AND waterCurr STILL has value 105.50 (not reverted to 100.00)
+      // 4. After resolution, fee is persisted AND waterCurr STILL has value 105 (not reverted to 100.00)
       await waitFor(() => {
         expect(screen.getByText('Fee A')).toBeDefined();
         const input = document.querySelector('input[data-col="waterCurr"]') as HTMLInputElement;
-        expect(input.value).toBe('105.50');
+        expect(input.value).toBe('105');
       });
 
       // 5. Global Save remains visible solely for unsaved waterCurr
@@ -1709,7 +1718,7 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
 
       // 6. Sparse draft contains only the dirty waterCurr
       expect(meterDraftStore.getDraft('dorm-001-uuid', 'cycle-2026-08')).toEqual([
-        { roomId: 'room-101-uuid', waterCurr: '105.50' }
+        { roomId: 'room-101-uuid', waterCurr: '105' }
       ]);
     });
 
@@ -1795,19 +1804,19 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
       const removeBtn = screen.getByTitle('ลบและบันทึกทันที');
       fireEvent.click(removeBtn);
 
-      // 2. While pending, user types elecCurr = 205.50
+      // 2. While pending, user types elecCurr = 205
       const elecCurrInput = document.querySelector('input[data-col="elecCurr"]') as HTMLInputElement;
-      fireEvent.change(elecCurrInput, { target: { value: '205.50' } });
-      expect(elecCurrInput.value).toBe('205.50');
+      fireEvent.change(elecCurrInput, { target: { value: '205' } });
+      expect(elecCurrInput.value).toBe('205');
 
       // 3. Resolve removal
       resolveDeferred!({ success: true });
 
-      // 4. After resolution, Fee A is removed and elecCurr remains 205.50
+      // 4. After resolution, Fee A is removed and elecCurr remains 205
       await waitFor(() => {
         expect(screen.queryByText('Fee A')).toBeNull();
         const input = document.querySelector('input[data-col="elecCurr"]') as HTMLInputElement;
-        expect(input.value).toBe('205.50');
+        expect(input.value).toBe('205');
       });
 
       // 5. Global Save remains visible for elecCurr
@@ -1815,7 +1824,7 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
 
       // 6. Sparse draft contains only elecCurr
       expect(meterDraftStore.getDraft('dorm-001-uuid', 'cycle-2026-08')).toEqual([
-        { roomId: 'room-101-uuid', elecCurr: '205.50' }
+        { roomId: 'room-101-uuid', elecCurr: '205' }
       ]);
     });
 

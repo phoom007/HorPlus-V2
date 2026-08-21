@@ -394,17 +394,15 @@ describe('LOCAL-07 Batch 02: Daily Stay Domain, Invoicing & Tenant Self-Claim', 
     });
 
     it('G. Scheduled completion: active stay ending naturally transitions to COMPLETED and vacates room', async () => {
-      // Create an active daily stay that ended yesterday
-      const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
-      const twoDaysAgo = new Date(Date.now() - 172800000).toISOString().slice(0, 10);
+      const today = new Date().toISOString().slice(0, 10);
 
       const pastStay = await dailyStayService.ownerQuickAddDailyStay(
         dormitoryId,
         {
           roomId: room2Id,
           fullName: 'ผู้เข้าพัก ชั่วคราว',
-          startDate: twoDaysAgo,
-          endDate: yesterday,
+          startDate: today,
+          endDate: today,
           dailyRateAmount: 500.0,
         },
         ownerUserId
@@ -412,8 +410,9 @@ describe('LOCAL-07 Batch 02: Daily Stay Domain, Invoicing & Tenant Self-Claim', 
 
       expect(pastStay.status).toBe('ACTIVE');
 
-      // Run scheduled completion
-      const compResult = await dailyStayService.completeEndedDailyStays(dormitoryId, new Date());
+      // Run scheduled completion simulating next day
+      const tomorrow = new Date(Date.now() + 86400000);
+      const compResult = await dailyStayService.completeEndedDailyStays(dormitoryId, tomorrow);
       expect(compResult.completedCount).toBeGreaterThanOrEqual(1);
 
       const updatedStay = await prisma.dailyStay.findUnique({ where: { id: pastStay.id } });

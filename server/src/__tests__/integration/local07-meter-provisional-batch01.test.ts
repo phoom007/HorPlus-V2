@@ -10,7 +10,7 @@
  * 7. Status Switch Authority (atomic issue with dirty data, canonical cancellation, paid bill lock)
  * 8. Snapshot manual charges (manualOutstandingAmount, otherFees) included in bill items
  * 9. Provisional Rental Terms (MONTHLY/TERM, future RESERVED vs ACTIVE, overlap prevention, contract priority)
- * 
+ *
  * @license Apache-2.0
  */
 
@@ -509,8 +509,14 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
     // Static verification: ensure shared authority is used and no duplicate Date.now numbering algorithms remain
     const fs = await import('fs');
     const path = await import('path');
-    const provCode = fs.readFileSync(path.resolve(process.cwd(), 'src/services/provisional-rental-term.service.ts'), 'utf-8');
-    const regCode = fs.readFileSync(path.resolve(process.cwd(), 'src/services/tenant-registration.service.ts'), 'utf-8');
+    const provPath = fs.existsSync(path.resolve(process.cwd(), 'server/src/services/provisional-rental-term.service.ts'))
+      ? path.resolve(process.cwd(), 'server/src/services/provisional-rental-term.service.ts')
+      : path.resolve(process.cwd(), 'src/services/provisional-rental-term.service.ts');
+    const regPath = fs.existsSync(path.resolve(process.cwd(), 'server/src/services/tenant-registration.service.ts'))
+      ? path.resolve(process.cwd(), 'server/src/services/tenant-registration.service.ts')
+      : path.resolve(process.cwd(), 'src/services/tenant-registration.service.ts');
+    const provCode = fs.readFileSync(provPath, 'utf-8');
+    const regCode = fs.readFileSync(regPath, 'utf-8');
     expect(provCode).toContain('generateNextTenantNumber');
     expect(regCode).toContain('generateNextTenantNumber');
     expect(provCode).not.toContain('TNT-${Date.now');
@@ -814,10 +820,10 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
         rows: [
           {
             roomId: testRoom1Id,
-            waterPrev: '110.00', // First-cycle edited prev reading
-            waterCurr: '130.00',
-            elecPrev: '520.00',
-            elecCurr: '590.00',
+            waterPrev: '110', // First-cycle edited prev reading
+            waterCurr: '130',
+            elecPrev: '520',
+            elecCurr: '590',
             peopleCount: 2, // 2 people
             manualOutstandingAmount: '150.00',
             otherFees: [
@@ -858,9 +864,9 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
       'water'
     );
     expect(waterReading).toBeDefined();
-    expect(waterReading?.previousReading).toBe('110.00');
-    expect(waterReading?.currentReading).toBe('130.00');
-    expect(waterReading?.usageUnits).toBe('20.00');
+    expect(Number(waterReading?.previousReading)).toBe(110);
+    expect(Number(waterReading?.currentReading)).toBe(130);
+    expect(Number(waterReading?.usageUnits)).toBe(20);
 
     const elecReading = await meterRepo.findReadingByCycleRoomAndType(
       testDormitoryId,
@@ -869,9 +875,9 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
       'electricity'
     );
     expect(elecReading).toBeDefined();
-    expect(elecReading?.previousReading).toBe('520.00');
-    expect(elecReading?.currentReading).toBe('590.00');
-    expect(elecReading?.usageUnits).toBe('70.00');
+    expect(Number(elecReading?.previousReading)).toBe(520);
+    expect(Number(elecReading?.currentReading)).toBe(590);
+    expect(Number(elecReading?.usageUnits)).toBe(70);
   });
 
   // --------------------------------------------------------------------------
@@ -959,10 +965,10 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
         rows: [
           {
             roomId: testRoom3Id,
-            waterPrev: '200.00',
-            waterCurr: '200.00',
-            elecPrev: '700.00',
-            elecCurr: '700.00',
+            waterPrev: '200',
+            waterCurr: '200',
+            elecPrev: '700',
+            elecCurr: '700',
             peopleCount: 1,
           },
         ],
@@ -976,7 +982,7 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
       testRoom3Id,
       'water'
     );
-    expect(waterReading?.usageUnits).toBe('0.00');
+    expect(Number(waterReading?.usageUnits)).toBe(0);
 
     // Bill generation preview passes with 0.00 meter charges
     const preview = await billingService.generateBillPreview(testDormitoryId, cycle1Id, testRoom3Id);
@@ -1063,10 +1069,10 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
         action: 'issue',
         dirtyRow: {
           roomId: freshRoom.id,
-          waterPrev: '100.00',
-          waterCurr: '110.00',
-          elecPrev: '500.00',
-          elecCurr: '550.00',
+          waterPrev: '100',
+          waterCurr: '110',
+          elecPrev: '500',
+          elecCurr: '550',
           peopleCount: 1,
           manualOutstandingAmount: '150.00',
           otherFees: [
@@ -1226,10 +1232,10 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
       [
         {
           roomId: testRoom3Id,
-          waterPrev: '200.00',
-          waterCurr: '210.00',
-          elecPrev: '700.00',
-          elecCurr: '750.00',
+          waterPrev: '200',
+          waterCurr: '210',
+          elecPrev: '700',
+          elecCurr: '750',
           peopleCount: 1,
           manualOutstandingAmount: '50.00',
         },
@@ -1323,8 +1329,8 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
         rows: [
           {
             roomId: freshRoom.id,
-            waterCurr: '1234.00',
-            elecCurr: '5678.00',
+            waterCurr: '1234',
+            elecCurr: '5678',
           },
         ],
       },
@@ -1379,7 +1385,7 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
         rows: [
           {
             roomId: httpRoom.id,
-            waterCurr: '100.00',
+            waterCurr: '100',
             manualOutstandingAmount: '150.00',
             otherFees: [
               { description: 'ค่าทำความสะอาด', amount: '500.00' },
@@ -1697,11 +1703,11 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
       {
         billingCycleId: cycle1_150.id,
         rows: [
-          { roomId: r1.id, waterCurr: '101.00', elecCurr: '201.00', peopleCount: 1 },
-          { roomId: r50.id, waterCurr: '150.00', elecCurr: '250.00', peopleCount: 2 },
-          { roomId: r51.id, waterCurr: '351.00', elecCurr: '451.00', peopleCount: 3 },
-          { roomId: r100.id, waterCurr: '500.00', elecCurr: '600.00', peopleCount: 1 },
-          { roomId: r150.id, waterCurr: '750.00', elecCurr: '850.00', peopleCount: 2 },
+          { roomId: r1.id, waterCurr: '101', elecCurr: '201', peopleCount: 1 },
+          { roomId: r50.id, waterCurr: '150', elecCurr: '250', peopleCount: 2 },
+          { roomId: r51.id, waterCurr: '351', elecCurr: '451', peopleCount: 3 },
+          { roomId: r100.id, waterCurr: '500', elecCurr: '600', peopleCount: 1 },
+          { roomId: r150.id, waterCurr: '750', elecCurr: '850', peopleCount: 2 },
         ],
       },
       'user-owner-1'
@@ -1935,7 +1941,7 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
           billingCycleId: cycleFree.id,
           roomId: r1.id,
           action: 'issue',
-          dirtyRow: { roomId: r1.id, waterCurr: '100.00', elecCurr: '200.00' },
+          dirtyRow: { roomId: r1.id, waterCurr: '100', elecCurr: '200' },
         },
         'user-owner-1',
         billingService
@@ -1951,7 +1957,7 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
           billingCycleId: cycleFree.id,
           roomId: r10.id,
           action: 'issue',
-          dirtyRow: { roomId: r10.id, waterCurr: '110.00', elecCurr: '210.00' },
+          dirtyRow: { roomId: r10.id, waterCurr: '110', elecCurr: '210' },
         },
         'user-owner-1',
         billingService
@@ -1982,7 +1988,7 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
             billingCycleId: cycleFree.id,
             roomId: r11.id,
             action: 'issue',
-            dirtyRow: { roomId: r11.id, waterCurr: '120.00', elecCurr: '220.00' },
+            dirtyRow: { roomId: r11.id, waterCurr: '120', elecCurr: '220' },
           },
           'user-owner-1',
           billingService
@@ -2006,7 +2012,7 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
           billingCycleId: cycleFree.id,
           roomId: r11.id,
           action: 'issue',
-          dirtyRow: { roomId: r11.id, waterCurr: '120.00', elecCurr: '220.00' },
+          dirtyRow: { roomId: r11.id, waterCurr: '120', elecCurr: '220' },
         });
       expect(httpSwitchRes.status).toBe(403);
       expect(httpSwitchRes.body.error.code).toBe('ROOM_ENTITLEMENT_LOCKED');
@@ -2030,8 +2036,8 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
           {
             billingCycleId: cycleFree.id,
             rows: [
-              { roomId: r1.id, waterCurr: '105.00', elecCurr: '205.00' },
-              { roomId: r11.id, waterCurr: '115.00', elecCurr: '215.00' },
+              { roomId: r1.id, waterCurr: '105', elecCurr: '205' },
+              { roomId: r11.id, waterCurr: '115', elecCurr: '215' },
             ],
           },
           'user-owner-1'
@@ -2049,8 +2055,8 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
         .send({
           billingCycleId: cycleFree.id,
           rows: [
-            { roomId: r1.id, waterCurr: '105.00', elecCurr: '205.00' },
-            { roomId: r11.id, waterCurr: '115.00', elecCurr: '215.00' },
+            { roomId: r1.id, waterCurr: '105', elecCurr: '205' },
+            { roomId: r11.id, waterCurr: '115', elecCurr: '215' },
           ],
         });
       expect(httpBulkWorkspaceRes.status).toBe(403);
@@ -2225,7 +2231,7 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
         paidDormId,
         {
           billingCycleId: cyclePaid.id,
-          rows: [{ roomId: r150.id, waterCurr: '750.00', elecCurr: '850.00', peopleCount: 2 }],
+          rows: [{ roomId: r150.id, waterCurr: '750', elecCurr: '850', peopleCount: 2 }],
         },
         'user-owner-1'
       );
@@ -2434,7 +2440,7 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
         .send({
           billingCycleId: cycleA.id,
           rows: [
-            { roomId: roomB.id, waterCurr: '150.00', elecCurr: '250.00' },
+            { roomId: roomB.id, waterCurr: '150', elecCurr: '250' },
           ],
         });
       expect(httpBulkForeignRes.status).toBe(404);
@@ -2457,7 +2463,7 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
           billingCycleId: cycleA.id,
           roomId: roomB.id,
           action: 'issue',
-          dirtyRow: { roomId: roomB.id, waterCurr: '150.00', elecCurr: '250.00' },
+          dirtyRow: { roomId: roomB.id, waterCurr: '150', elecCurr: '250' },
         });
       expect(httpSwitchForeignRes.status).toBe(404);
       expect(httpSwitchForeignRes.body.error.code).toBe('ROOM_NOT_FOUND');
@@ -2483,7 +2489,7 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
         cycleA.id,
         [roomA.id, roomB.id],
         'user-owner-1',
-        [{ roomId: roomA.id, waterCurr: '100.00', elecCurr: '200.00' }]
+        [{ roomId: roomA.id, waterCurr: '100', elecCurr: '200' }]
       );
       expect(bulkRes.generated.some(g => g.roomId === roomA.id)).toBe(true);
       const excludedRoomB = bulkRes.excluded.find(e => e.roomId === roomB.id);
@@ -2515,7 +2521,7 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
             billingCycleId: cycleA.id,
             roomId: roomArchived.id,
             action: 'issue',
-            dirtyRow: { roomId: roomArchived.id, waterCurr: '100.00', elecCurr: '200.00' },
+            dirtyRow: { roomId: roomArchived.id, waterCurr: '100', elecCurr: '200' },
           },
           'user-owner-1',
           billingService
@@ -2531,7 +2537,7 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
           dormAId,
           {
             billingCycleId: cycleA.id,
-            rows: [{ roomId: roomArchived.id, waterCurr: '100.00', elecCurr: '200.00' }],
+            rows: [{ roomId: roomArchived.id, waterCurr: '100', elecCurr: '200' }],
           },
           'user-owner-1'
         )
@@ -2576,7 +2582,7 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
           dormAId,
           {
             billingCycleId: cycleA.id,
-            rows: [{ roomId: nonExistentRoomId, waterCurr: '100.00', elecCurr: '200.00' }],
+            rows: [{ roomId: nonExistentRoomId, waterCurr: '100', elecCurr: '200' }],
           },
           'user-owner-1'
         )
@@ -2606,7 +2612,7 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
             billingCycleId: cycleA.id,
             roomId: roomSoftDeleted.id,
             action: 'issue',
-            dirtyRow: { roomId: roomSoftDeleted.id, waterCurr: '100.00', elecCurr: '200.00' },
+            dirtyRow: { roomId: roomSoftDeleted.id, waterCurr: '100', elecCurr: '200' },
           },
           'user-owner-1',
           billingService
@@ -2622,7 +2628,7 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
           dormAId,
           {
             billingCycleId: cycleA.id,
-            rows: [{ roomId: roomSoftDeleted.id, waterCurr: '100.00', elecCurr: '200.00' }],
+            rows: [{ roomId: roomSoftDeleted.id, waterCurr: '100', elecCurr: '200' }],
           },
           'user-owner-1'
         )
@@ -2638,7 +2644,7 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
         .set('x-csrf-token', 'csrf-test-token')
         .send({
           billingCycleId: cycleA.id,
-          rows: [{ roomId: roomSoftDeleted.id, waterCurr: '100.00', elecCurr: '200.00' }],
+          rows: [{ roomId: roomSoftDeleted.id, waterCurr: '100', elecCurr: '200' }],
         });
       expect(httpBulkSoftDelRes.status).toBe(404);
       expect(httpBulkSoftDelRes.body.error.code).toBe('ROOM_NOT_FOUND');
@@ -2649,7 +2655,7 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
         cycleA.id,
         [roomA.id, roomSoftDeleted.id],
         'user-owner-1',
-        [{ roomId: roomA.id, waterCurr: '100.00', elecCurr: '200.00' }]
+        [{ roomId: roomA.id, waterCurr: '100', elecCurr: '200' }]
       );
       const excludedSoftDel = bulkSoftDelRes.excluded.find(e => e.roomId === roomSoftDeleted.id);
       expect(excludedSoftDel).toBeDefined();

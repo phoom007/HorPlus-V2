@@ -220,15 +220,15 @@ describe('Wave 1 — Owner Daily Operations Mandatory Acceptance Regressions Sui
       expect(waterReading?.previousReading).toBe('100.00');
       expect(waterReading?.usageUnits).toBe('20.00');
 
-      // Next, tamper client previousReading to 0.00 and submit current = 150.00
+      // Next, tamper client previousReading to 0 and submit current = 150
       await meterService.submitBulkReadings(dormAId, {
         billingCycleId: cycleA1Id,
         readings: [
           {
             roomId: roomA1Id,
             meterType: 'water',
-            previousReading: '0.00', // TAMPERED BY CLIENT
-            currentReading: '150.00',
+            previousReading: '0', // TAMPERED BY CLIENT
+            currentReading: '150',
           },
         ],
       });
@@ -236,8 +236,8 @@ describe('Wave 1 — Owner Daily Operations Mandatory Acceptance Regressions Sui
       // Server must derive authoritative previousReading = 100.00 (from room initial or previous cycle) -> usage = 50.00
       const updatedReadings = await meterService.getMeterReadings(dormAId, { billingCycleId: cycleA1Id, roomId: roomA1Id });
       const updatedWater = updatedReadings.items.find((r) => r.meterType === 'water');
-      expect(updatedWater?.previousReading).toBe('100.00');
-      expect(updatedWater?.usageUnits).toBe('50.00');
+      expect(Number(updatedWater?.previousReading)).toBe(100);
+      expect(Number(updatedWater?.usageUnits)).toBe(50);
     });
 
     it('1.2 Stale MeterReading version produces controlled conflict (409 STALE_VERSION)', async () => {
@@ -245,7 +245,7 @@ describe('Wave 1 — Owner Daily Operations Mandatory Acceptance Regressions Sui
       const waterReading = readings.items.find((r) => r.meterType === 'water')!;
 
       await expect(
-        meterService.updateMeterReading(waterReading.id, dormAId, '160.00', 'stale test', 999)
+        meterService.updateMeterReading(waterReading.id, dormAId, '160', 'stale test', 999)
       ).rejects.toThrow(/STALE_VERSION|RESOURCE_VERSION_CONFLICT|ข้อมูลถูกแก้ไข/);
     });
   });

@@ -26,7 +26,8 @@ import {
   Calendar,
   Users,
   CheckCircle2,
-  FileText
+  FileText,
+  Shield
 } from 'lucide-react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { queryKeys, STALE_TIMES } from '../../lib/queryClient';
@@ -576,24 +577,14 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
 
   const sanitizeMeterReadingTyping = (val: string): string => {
     if (!val) return '';
-    let cleaned = val.replace(/[^0-9.]/g, '');
-    const firstDot = cleaned.indexOf('.');
-    if (firstDot !== -1) {
-      const intPart = cleaned.slice(0, firstDot);
-      const fracPart = cleaned.slice(firstDot + 1).replace(/\./g, '').slice(0, 2);
-      cleaned = `${intPart}.${fracPart}`;
-    }
-    return cleaned;
+    // Integer only: digits 0-9, max 5 digits
+    return val.replace(/[^0-9]/g, '').slice(0, 5);
   };
 
   const normalizeMeterValueOnBlur = (val: string): string => {
     if (!val || val.trim() === '') return '';
-    const trimmed = val.trim();
-    if (trimmed.includes('.')) {
-      const [intPart, fracPart] = trimmed.split('.');
-      const cleanInt = intPart.replace(/^0+(?=\d)/, '') || '0';
-      return `${cleanInt}.${fracPart}`;
-    }
+    const trimmed = val.trim().replace(/[^0-9]/g, '').slice(0, 5);
+    if (!trimmed) return '';
     // Integer: normalize leading zeros, e.g. 0500 -> 500, 000 -> 0
     return trimmed.replace(/^0+(?=\d)/, '');
   };
@@ -2476,6 +2467,31 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                     <td className="p-4 text-right text-indigo-600 font-extrabold text-sm whitespace-nowrap">
                       {(() => {
                         const roomCtx = previewContext?.rooms?.find((r: any) => r.roomId === row.roomId);
+                        if (roomCtx?.billingSource === 'DAILY_STAY') {
+                          const baseRent = Number(roomCtx.rentAmount) || 0;
+                          const depositDue = (roomCtx.showDailyDepositLine && !roomCtx.isDailyDepositPaidInDisplayedPeriod)
+                            ? (Number(roomCtx.dailyDepositAmount) || 0)
+                            : 0;
+                          const totalDailyDue = baseRent + depositDue;
+                          const formattedMain = totalDailyDue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+                          return (
+                            <div className="flex flex-col items-end">
+                              <span>{formattedMain} ฿</span>
+                              {roomCtx.showDailyDepositLine && (
+                                <div className={`text-[10px] font-semibold flex items-center gap-1 mt-0.5 ${
+                                  roomCtx.isDailyDepositPaidInDisplayedPeriod ? 'text-emerald-600' : 'text-amber-600'
+                                }`}>
+                                  <Shield className="w-3 h-3 shrink-0" />
+                                  <span>
+                                    ค่าประกัน {Number(roomCtx.dailyDepositAmount || 0).toLocaleString()} ฿ · {roomCtx.isDailyDepositPaidInDisplayedPeriod ? 'จ่ายแล้ว' : 'ยังไม่จ่าย'}
+                                  </span>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        }
+
                         const preview = calculateMeterRowPreview(roomCtx, previewContext?.rateSnapshot, {
                           waterCurr: row.waterCurr,
                           waterPrev: row.waterPrev,
@@ -2495,103 +2511,140 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                         ? 'animate-vibrant-flash rounded-lg shadow-md z-10'
                         : ''
                     }`}>
-                      <div className="flex flex-col items-center justify-center gap-1 min-w-[85px]">
-                        <button
-                          type="button"
-                          role="switch"
-                          aria-checked={row.billStatus !== 'draft' && row.billStatus !== 'cancelled'}
-                          disabled={isSaving || row.isPaid || row.billStatus === 'paid' || !selectedBillingCycleId}
-                          onClick={() => handleToggleStatusSwitch(row)}
-                          className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none disabled:cursor-not-allowed disabled:opacity-60 ${
-                            row.billStatus === 'paid'
-                              ? 'bg-emerald-600'
-                              : row.billStatus !== 'draft' && row.billStatus !== 'cancelled'
-                              ? 'bg-amber-500'
-                              : 'bg-slate-300'
-                          }`}
-                          title={
-                            row.billStatus === 'paid'
-                              ? 'ชำระแล้ว (ล็อค)'
-                              : row.billStatus !== 'draft' && row.billStatus !== 'cancelled'
-                              ? 'คลิกเพื่อยกเลิกบิล'
-                              : 'คลิกเพื่อออกบิล'
-                          }
-                        >
-                          <span
-                            aria-hidden="true"
-                            className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out ${
-                              row.billStatus !== 'draft' && row.billStatus !== 'cancelled' ? 'translate-x-4' : 'translate-x-0'
-                            }`}
-                          />
-                        </button>
-                        <span className={`text-[10px] font-extrabold leading-none ${
-                          row.billStatus === 'paid'
-                            ? 'text-emerald-700'
-                            : row.billStatus === 'draft' || row.billStatus === 'cancelled'
-                            ? 'text-slate-500'
-                            : 'text-amber-700'
-                        }`}>
-                          {row.billStatus === 'paid'
-                            ? 'ชำระแล้ว'
-                            : row.billStatus === 'draft' || row.billStatus === 'cancelled'
-                            ? 'ยังไม่ออกบิล'
-                            : 'รอชำระเงิน'}
-                        </span>
-                      </div>
+                      {(() => {
+                        const roomCtx = previewContext?.rooms?.find((r: any) => r.roomId === row.roomId);
+                        if (roomCtx?.billingSource === 'DAILY_STAY') {
+                          return (
+                            <div className="flex items-center justify-center min-w-[85px]">
+                              <span className="inline-flex items-center px-2 py-1 bg-slate-100 text-slate-700 text-xs font-bold rounded-lg border border-slate-200">
+                                รายวัน
+                              </span>
+                            </div>
+                          );
+                        }
+
+                        return (
+                          <div className="flex flex-col items-center justify-center gap-1 min-w-[85px]">
+                            <button
+                              type="button"
+                              role="switch"
+                              aria-checked={row.billStatus !== 'draft' && row.billStatus !== 'cancelled'}
+                              disabled={isSaving || row.isPaid || row.billStatus === 'paid' || !selectedBillingCycleId}
+                              onClick={() => handleToggleStatusSwitch(row)}
+                              className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none disabled:cursor-not-allowed disabled:opacity-60 ${
+                                row.billStatus === 'paid'
+                                  ? 'bg-emerald-600'
+                                  : row.billStatus !== 'draft' && row.billStatus !== 'cancelled'
+                                  ? 'bg-amber-500'
+                                  : 'bg-slate-300'
+                              }`}
+                              title={
+                                row.billStatus === 'paid'
+                                  ? 'ชำระแล้ว (ล็อค)'
+                                  : row.billStatus !== 'draft' && row.billStatus !== 'cancelled'
+                                  ? 'คลิกเพื่อยกเลิกบิล'
+                                  : 'คลิกเพื่อออกบิล'
+                              }
+                            >
+                              <span
+                                aria-hidden="true"
+                                className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out ${
+                                  row.billStatus !== 'draft' && row.billStatus !== 'cancelled' ? 'translate-x-4' : 'translate-x-0'
+                                }`}
+                              />
+                            </button>
+                            <span className={`text-[10px] font-extrabold leading-none ${
+                              row.billStatus === 'paid'
+                                ? 'text-emerald-700'
+                                : row.billStatus === 'draft' || row.billStatus === 'cancelled'
+                                ? 'text-slate-500'
+                                : 'text-amber-700'
+                            }`}>
+                              {row.billStatus === 'paid'
+                                ? 'ชำระแล้ว'
+                                : row.billStatus === 'draft' || row.billStatus === 'cancelled'
+                                ? 'ยังไม่ออกบิล'
+                                : 'รอชำระเงิน'}
+                            </span>
+                          </div>
+                        );
+                      })()}
                     </td>
 
                     {/* Tenant Clickable Link */}
                     <td className="p-4 whitespace-nowrap">
-                      {tenant ? (
-                        <button
-                          type="button"
-                          onClick={() => onSelectTenant(tenant.id)}
-                          className="inline-flex items-center gap-1.5 text-indigo-600 hover:text-indigo-800 hover:underline transition-all cursor-pointer font-bold whitespace-nowrap"
-                        >
-                          <User className="w-3.5 h-3.5 shrink-0" />
-                          <span className="truncate max-w-[100px]">{tenant.name}</span>
-                          <ArrowRight className="w-3 h-3 opacity-60 shrink-0" />
-                        </button>
-                      ) : (isCurrentOperationalCycle && (room || row.roomId)) ? (
-                        <button
-                          type="button"
-                          disabled={quickAddLoadingRoomId === (room?.id || row.roomId)}
-                          onClick={async () => {
-                            const targetRoomId = room?.id || row.roomId;
-                            try {
-                              setQuickAddLoadingRoomId(targetRoomId);
-                              const dormId = dormitoryId || localStorage.getItem('horplus_current_dormitory_id') || localStorage.getItem('selected_dormitory_id') || '';
-                              const res = await httpRequest<{ data: QuickAddRoomContext }>(
-                                'GET',
-                                `/api/v1/properties/rooms/${targetRoomId}/quick-add-context`,
-                                undefined,
-                                { headers: dormId ? { 'x-dormitory-id': dormId } : {} }
-                              );
+                      {(() => {
+                        const roomCtx = previewContext?.rooms?.find((r: any) => r.roomId === row.roomId);
+                        const effectiveTenantId = roomCtx?.tenantId || tenant?.id;
+                        const effectiveTenantName = roomCtx?.tenantName || tenant?.name;
+                        const isLineLinked = roomCtx ? roomCtx.isLineLinked : Boolean(tenant?.linkedUserId);
 
-                              if (!res.data || !res.data.effective) {
-                                throw new Error('ไม่สามารถโหลดข้อมูลสิทธิ์และค่าเช่าห้องพักได้');
-                              }
+                        if (effectiveTenantId && effectiveTenantName) {
+                          return (
+                            <div className="flex flex-col items-start gap-0.5">
+                              <button
+                                type="button"
+                                onClick={() => onSelectTenant(effectiveTenantId)}
+                                className="inline-flex items-center gap-1.5 text-indigo-600 hover:text-indigo-800 hover:underline transition-all cursor-pointer font-bold whitespace-nowrap"
+                              >
+                                <User className="w-3.5 h-3.5 shrink-0" />
+                                <span className="truncate max-w-[100px]">{effectiveTenantName}</span>
+                                <ArrowRight className="w-3 h-3 opacity-60 shrink-0" />
+                              </button>
+                              {!isLineLinked && (
+                                <span className="text-[10px] text-slate-400 font-normal leading-tight">
+                                  (ยังไม่ได้เชื่อม LINE)
+                                </span>
+                              )}
+                            </div>
+                          );
+                        }
 
-                              setSelectedQuickAddContext(res.data);
-                              setQuickAddModalOpen(true);
-                            } catch (err: any) {
-                              showToast(err.message || 'ไม่สามารถโหลดข้อมูลห้องพักได้ กรุณาลองใหม่อีกครั้ง');
-                            } finally {
-                              setQuickAddLoadingRoomId(null);
-                            }
-                          }}
-                          className="inline-flex items-center gap-1 text-[11px] font-bold text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 px-2 py-1 rounded-lg border border-indigo-200 transition-all cursor-pointer shadow-2xs disabled:opacity-50 whitespace-nowrap shrink-0"
-                        >
-                          {quickAddLoadingRoomId === (room?.id || row.roomId) ? (
-                            <Loader2 className="w-3 h-3 animate-spin shrink-0" />
-                          ) : (
-                            <Plus className="w-3 h-3 shrink-0" />
-                          )}
-                          <span className="whitespace-nowrap">เพิ่มผู้เช่า</span>
-                        </button>
-                      ) : (
-                        <span className="text-gray-400">ไม่มีข้อมูล</span>
-                      )}
+                        if (isCurrentOperationalCycle && (room || row.roomId)) {
+                          return (
+                            <button
+                              type="button"
+                              disabled={quickAddLoadingRoomId === (room?.id || row.roomId)}
+                              onClick={async () => {
+                                const targetRoomId = room?.id || row.roomId;
+                                try {
+                                  setQuickAddLoadingRoomId(targetRoomId);
+                                  const dormId = dormitoryId || localStorage.getItem('horplus_current_dormitory_id') || localStorage.getItem('selected_dormitory_id') || '';
+                                  const res = await httpRequest<{ data: QuickAddRoomContext }>(
+                                    'GET',
+                                    `/api/v1/properties/rooms/${targetRoomId}/quick-add-context`,
+                                    undefined,
+                                    { headers: dormId ? { 'x-dormitory-id': dormId } : {} }
+                                  );
+
+                                  if (!res.data || !res.data.effective) {
+                                    throw new Error('ไม่สามารถโหลดข้อมูลสิทธิ์และค่าเช่าห้องพักได้');
+                                  }
+
+                                  setSelectedQuickAddContext(res.data);
+                                  setQuickAddModalOpen(true);
+                                } catch (err: any) {
+                                  showToast(err.message || 'ไม่สามารถโหลดข้อมูลห้องพักได้ กรุณาลองใหม่อีกครั้ง');
+                                } finally {
+                                  setQuickAddLoadingRoomId(null);
+                                }
+                              }}
+                              className="inline-flex items-center gap-1 text-[11px] font-bold text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 px-2 py-1 rounded-lg border border-indigo-200 transition-all cursor-pointer shadow-2xs disabled:opacity-50 whitespace-nowrap shrink-0"
+                            >
+                              {quickAddLoadingRoomId === (room?.id || row.roomId) ? (
+                                <Loader2 className="w-3 h-3 animate-spin shrink-0" />
+                              ) : (
+                                <Plus className="w-3 h-3 shrink-0" />
+                              )}
+                              <span className="whitespace-nowrap">เพิ่มผู้เช่า</span>
+                            </button>
+                          );
+                        }
+
+                        return (
+                          <span className="text-gray-400">ไม่มีข้อมูล</span>
+                        );
+                      })()}
                     </td>
                   </tr>
                 );
@@ -2824,13 +2877,15 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
           setSelectedQuickAddContext(null);
         }}
         context={selectedQuickAddContext}
-        onSuccess={(msg) => {
+        onSuccess={async (msg) => {
           showToast(msg);
-          queryClient.invalidateQueries({ queryKey: queryKeys.rooms(currentDormId) });
-          queryClient.invalidateQueries({ queryKey: queryKeys.tenants(currentDormId) });
-          queryClient.invalidateQueries({ queryKey: queryKeys.contracts(currentDormId) });
-          queryClient.invalidateQueries({ queryKey: queryKeys.meterPreviewContext(currentDormId, selectedBillingCycleId) });
-          queryClient.invalidateQueries({ queryKey: queryKeys.meterWorkspace(currentDormId, selectedBillingCycleId) });
+          await Promise.all([
+            queryClient.invalidateQueries({ queryKey: queryKeys.meterPreviewContext(currentDormId, selectedBillingCycleId), refetchType: 'active' }),
+            queryClient.invalidateQueries({ queryKey: queryKeys.meterWorkspace(currentDormId, selectedBillingCycleId), refetchType: 'active' }),
+            queryClient.invalidateQueries({ queryKey: queryKeys.rooms(currentDormId), refetchType: 'active' }),
+            queryClient.invalidateQueries({ queryKey: queryKeys.tenants(currentDormId), refetchType: 'active' }),
+            queryClient.invalidateQueries({ queryKey: queryKeys.contracts(currentDormId), refetchType: 'active' }),
+          ]);
         }}
       />
     </div>

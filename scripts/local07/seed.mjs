@@ -765,32 +765,40 @@ export async function seedLocal07Data() {
     tCount++;
   }
 
-  // Billing Cycles: June (Closed) and July (Active Current Cycle)
-  await prisma.billingCycle.create({
-    data: {
-      dormitoryId: compDorm.id,
-      cycleCode: '2026-06',
-      name: 'รอบบิล มิถุนายน 2569',
-      periodStart: new Date('2026-06-01'),
-      periodEnd: new Date('2026-06-30'),
-      billingDate: new Date('2026-06-25'),
-      dueDate: new Date('2026-07-05'),
-      status: 'closed',
-    },
+  // Billing Cycles: June (Closed), July (Active Current Cycle), August (Rolling Cycle) with canonical rate snapshots
+  const compBillingCycleService = new BillingCycleService(new PrismaBillingCycleRepository(prisma));
+
+  const cycleJuneRes = await compBillingCycleService.createBillingCycle(compDorm.id, {
+    cycleCode: '2026-06',
+    name: 'รอบบิล มิถุนายน 2569',
+    periodStart: '2026-06-01',
+    periodEnd: '2026-06-30',
+    billingDate: '2026-06-25',
+    dueDate: '2026-07-05',
+  }, COMP_DORM.owner.id);
+  await prisma.billingCycle.update({
+    where: { id: cycleJuneRes.cycle.id },
+    data: { status: 'closed' },
   });
 
-  const cycleJuly = await prisma.billingCycle.create({
-    data: {
-      dormitoryId: compDorm.id,
-      cycleCode: '2026-07',
-      name: 'รอบบิล กรกฎาคม 2569',
-      periodStart: new Date('2026-07-01'),
-      periodEnd: new Date('2026-07-31'),
-      billingDate: new Date('2026-07-25'),
-      dueDate: new Date('2026-08-05'),
-      status: 'open',
-    },
-  });
+  const cycleJulyRes = await compBillingCycleService.createBillingCycle(compDorm.id, {
+    cycleCode: '2026-07',
+    name: 'รอบบิล กรกฎาคม 2569',
+    periodStart: '2026-07-01',
+    periodEnd: '2026-07-31',
+    billingDate: '2026-07-25',
+    dueDate: '2026-08-05',
+  }, COMP_DORM.owner.id);
+  const cycleJuly = cycleJulyRes.cycle;
+
+  await compBillingCycleService.createBillingCycle(compDorm.id, {
+    cycleCode: '2026-08',
+    name: 'รอบบิล สิงหาคม 2569',
+    periodStart: '2026-08-01',
+    periodEnd: '2026-08-31',
+    billingDate: '2026-08-25',
+    dueDate: '2026-09-05',
+  }, COMP_DORM.owner.id);
 
   // Meter Readings for July 2026
   const meterFacts = [

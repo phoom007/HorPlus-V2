@@ -193,10 +193,17 @@ export function calculateMeterRowPreview(
     waterAmountSatang = waterRateSatang;
     waterUsageScaled = 100n; // 1.00 room
   } else {
-    // per_unit: exact 2-decimal fractional difference
-    waterUsageScaled = subtractScaled2(waterCurr, waterPrev);
-    const usageStr = formatScaled2(waterUsageScaled);
-    waterAmountSatang = multiplyMoneyByQuantity(waterRateSatang, usageStr);
+    // per_unit: calculate usage units with 4/5-digit rollover support
+    const usageRes = calculateMeterUsageUnits(waterPrev, waterCurr);
+    if (usageRes.isValid) {
+      waterUsageScaled = BigInt(usageRes.usageUnits) * 100n;
+      const usageStr = formatScaled2(waterUsageScaled);
+      waterAmountSatang = multiplyMoneyByQuantity(waterRateSatang, usageStr);
+    } else {
+      waterUsageScaled = subtractScaled2(waterCurr, waterPrev);
+      const usageStr = formatScaled2(waterUsageScaled);
+      waterAmountSatang = multiplyMoneyByQuantity(waterRateSatang, usageStr);
+    }
   }
 
   // 2. Electricity Calculation
@@ -212,10 +219,17 @@ export function calculateMeterRowPreview(
     elecAmountSatang = elecRateSatang;
     elecUsageScaled = 100n; // 1.00 room
   } else {
-    // per_unit: exact 2-decimal fractional difference
-    elecUsageScaled = subtractScaled2(elecCurr, elecPrev);
-    const usageStr = formatScaled2(elecUsageScaled);
-    elecAmountSatang = multiplyMoneyByQuantity(elecRateSatang, usageStr);
+    // per_unit: calculate usage units with 4/5-digit rollover support
+    const usageRes = calculateMeterUsageUnits(elecPrev, elecCurr);
+    if (usageRes.isValid) {
+      elecUsageScaled = BigInt(usageRes.usageUnits) * 100n;
+      const usageStr = formatScaled2(elecUsageScaled);
+      elecAmountSatang = multiplyMoneyByQuantity(elecRateSatang, usageStr);
+    } else {
+      elecUsageScaled = subtractScaled2(elecCurr, elecPrev);
+      const usageStr = formatScaled2(elecUsageScaled);
+      elecAmountSatang = multiplyMoneyByQuantity(elecRateSatang, usageStr);
+    }
   }
 
   // 3. Common Fee Calculation
@@ -296,5 +310,120 @@ export function calculateMeterRowPreview(
     overdueAmount: formatSatang(overdueSatang),
     totalAmount: totalStr,
     formattedTotal: formatMoneyDisplay(totalStr),
+  };
+}
+
+export interface MeterUsageResult {
+  isValid: boolean;
+  isRollover: boolean;
+  rolloverType: '4_DIGIT' | '5_DIGIT' | null;
+  usageUnits: number;
+  errorMessage?: string;
+}
+
+/**
+ * Validates whether an input represents a non-negative integer between 0 and 99999 (maximum 5 digits).
+ * Strictly rejects decimals, negatives, non-numeric strings, and numbers > 99999.
+ */
+export function parseMeterIntegerReading(val: string | number | null | undefined): { isValid: boolean; value: number; errorMessage?: string } {
+  if (val === null || val === undefined || val === '') {
+    return { isValid: false, value: 0, errorMessage: 'กรุณาระบุค่ามิเตอร์' };
+  }
+
+  if (typeof val === 'number') {
+    if (!Number.isInteger(val) || val < 0 || val > 99999) {
+      return { isValid: false, value: 0, errorMessage: 'ค่ามิเตอร์ต้องเป็นจำนวนเต็มระหว่าง 0 ถึง 99999 (สูงสุด 5 หลัก)' };
+    }
+    return { isValid: true, value: val };
+  }
+
+  const str = String(val).trim();
+  if (!/^\d{1,5}$/.test(str)) {
+    return { isValid: false, value: 0, errorMessage: 'ค่ามิเตอร์ต้องเป็นตัวเลขจำนวนเต็ม 0 ถึง 99999 (สูงสุด 5 หลัก)' };
+  }
+
+  const parsed = parseInt(str, 10);
+  if (isNaN(parsed) || parsed < 0 || parsed > 99999) {
+    return { isValid: false, value: 0, errorMessage: 'ค่ามิเตอร์ต้องเป็นจำนวนเต็มระหว่าง 0 ถึง 99999' };
+  }
+
+  return { isValid: true, value: parsed };
+}
+
+/**
+ * Canonical Meter Usage & Rollover Calculator
+ *
+ * Order of Evaluation:
+ * 1. 5-digit Rollover: 99900 < prev <= 99999 AND curr < 200 => (100000 - prev) + curr
+ * 2. 4-digit Rollover: 9900 < prev <= 9999 AND curr < 200 => (10000 - prev) + curr
+ * 3. Normal Progressive: curr >= prev => curr - prev
+ * 4. Fail-Closed Lower Reading outside rollover => invalid
+ */
+export function calculateMeterUsageUnits(
+  previousReading: string | number | null | undefined,
+  currentReading: string | number | null | undefined
+): MeterUsageResult {
+  const prevParsed = parseMeterIntegerReading(previousReading);
+  if (!prevParsed.isValid) {
+    return {
+      isValid: false,
+      isRollover: false,
+      rolloverType: null,
+      usageUnits: 0,
+      errorMessage: `ค่ามิเตอร์เดิมไม่ถูกต้อง: ${prevParsed.errorMessage}`,
+    };
+  }
+
+  const currParsed = parseMeterIntegerReading(currentReading);
+  if (!currParsed.isValid) {
+    return {
+      isValid: false,
+      isRollover: false,
+      rolloverType: null,
+      usageUnits: 0,
+      errorMessage: `ค่ามิเตอร์ปัจจุบันไม่ถูกต้อง: ${currParsed.errorMessage}`,
+    };
+  }
+
+  const prev = prevParsed.value;
+  const curr = currParsed.value;
+
+  // 1. Test 5-digit rollover: 99900 < prev <= 99999 AND curr < 200
+  if (prev > 99900 && prev <= 99999 && curr < 200) {
+    return {
+      isValid: true,
+      isRollover: true,
+      rolloverType: '5_DIGIT',
+      usageUnits: (100000 - prev) + curr,
+    };
+  }
+
+  // 2. Test 4-digit rollover: 9900 < prev <= 9999 AND curr < 200
+  if (prev > 9900 && prev <= 9999 && curr < 200) {
+    return {
+      isValid: true,
+      isRollover: true,
+      rolloverType: '4_DIGIT',
+      usageUnits: (10000 - prev) + curr,
+    };
+  }
+
+  // 3. Normal progressive reading: curr >= prev
+  if (curr >= prev) {
+    return {
+      isValid: true,
+      isRollover: false,
+      rolloverType: null,
+      usageUnits: curr - prev,
+    };
+  }
+
+  // 4. Fail-closed lower reading outside rollover
+  return {
+    isValid: false,
+    isRollover: false,
+    rolloverType: null,
+    usageUnits: 0,
+    errorMessage: `ค่ามิเตอร์ปัจจุบัน (${curr}) ต้องไม่น้อยกว่าค่ามิเตอร์เดิม (${prev})`,
   };
 }
