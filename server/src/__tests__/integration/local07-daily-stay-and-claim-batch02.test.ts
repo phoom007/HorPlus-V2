@@ -164,10 +164,11 @@ describe('LOCAL-07 Batch 02: Daily Stay Domain, Invoicing & Tenant Self-Claim', 
   // Unit & Pure Formula Tests
   // ==========================================
   describe('Thai Identity & Date Math Pure Functions', () => {
-    it('calculates inclusive calendar day counts correctly (1 Sep - 3 Sep = 3 days)', () => {
-      expect(calculateInclusiveDays('2026-09-01', '2026-09-03')).toBe(3);
+    it('calculates inclusive calendar day counts correctly (1 Sep - 3 Sep = 2 days, 15 Sep - 18 Sep = 3 days)', () => {
+      expect(calculateInclusiveDays('2026-09-01', '2026-09-03')).toBe(2);
       expect(calculateInclusiveDays('2026-09-01', '2026-09-01')).toBe(1);
-      expect(calculateInclusiveDays('2026-08-31', '2026-09-02')).toBe(3);
+      expect(calculateInclusiveDays('2026-08-31', '2026-09-02')).toBe(2);
+      expect(calculateInclusiveDays('2026-09-15', '2026-09-18')).toBe(3);
     });
 
     it('throws error when endDate < startDate', () => {
@@ -243,8 +244,8 @@ describe('LOCAL-07 Batch 02: Daily Stay Domain, Invoicing & Tenant Self-Claim', 
       expect(stay.status).toBe('PENDING_APPROVAL');
       expect(stay.tenantId).toBeNull();
       expect(stay.occupancyId).toBeNull();
-      expect(stay.inclusiveDayCount).toBe(3);
-      expect(Number(stay.totalRentAmount)).toBe(1800.0);
+      expect(stay.inclusiveDayCount).toBe(2);
+      expect(Number(stay.totalRentAmount)).toBe(1200.0);
 
       // Verify NO orphan records created
       const finalTenantCount = await prisma.tenant.count({ where: { dormitoryId } });
@@ -269,7 +270,7 @@ describe('LOCAL-07 Batch 02: Daily Stay Domain, Invoicing & Tenant Self-Claim', 
       );
 
       expect(Number(updated.dailyRateAmount)).toBe(500.0);
-      expect(Number(updated.totalRentAmount)).toBe(1500.0); // 500 * 3
+      expect(Number(updated.totalRentAmount)).toBe(1000.0); // 500 * 2
       expect(Number(updated.depositAmount)).toBe(0.0);
       expect(updated.depositDeclaredStatus).toBe('PAID');
 
@@ -295,10 +296,10 @@ describe('LOCAL-07 Batch 02: Daily Stay Domain, Invoicing & Tenant Self-Claim', 
       // Check frozen invoice
       const invoice = approved.invoice!;
       expect(invoice.invoiceNumber).toMatch(/^INV-D-\d{4}-\d{2}-\d{4}$/);
-      expect(Number(invoice.totalRentAmount)).toBe(1500.0);
+      expect(Number(invoice.totalRentAmount)).toBe(1000.0);
       expect(Number(invoice.depositAmount)).toBe(0.0);
-      expect(Number(invoice.totalAgreedAmount)).toBe(1500.0);
-      expect(Number(invoice.outstandingAmount)).toBe(1500.0);
+      expect(Number(invoice.totalAgreedAmount)).toBe(1000.0);
+      expect(Number(invoice.outstandingAmount)).toBe(1000.0);
 
       // Check items: exactly 1 DAILY_RENT and 1 DEPOSIT
       expect(invoice.items.length).toBe(2);
@@ -306,7 +307,7 @@ describe('LOCAL-07 Batch 02: Daily Stay Domain, Invoicing & Tenant Self-Claim', 
       const depItem = invoice.items.find((i: any) => i.itemType === 'DEPOSIT');
 
       expect(rentItem).toBeDefined();
-      expect(Number(rentItem.amount)).toBe(1500.0);
+      expect(Number(rentItem.amount)).toBe(1000.0);
       expect(depItem).toBeDefined();
       expect(Number(depItem.amount)).toBe(0.0);
 
@@ -349,15 +350,15 @@ describe('LOCAL-07 Batch 02: Daily Stay Domain, Invoicing & Tenant Self-Claim', 
       );
 
       expect(quickAddResult.status).toBe('ACTIVE');
-      expect(quickAddResult.inclusiveDayCount).toBe(2);
-      expect(Number(quickAddResult.totalRentAmount)).toBe(1200.0);
+      expect(quickAddResult.inclusiveDayCount).toBe(1);
+      expect(Number(quickAddResult.totalRentAmount)).toBe(600.0);
       expect(quickAddResult.tenant).toBeDefined();
       expect(quickAddResult.occupancy).toBeDefined();
       expect(quickAddResult.invoice).toBeDefined();
 
       // Outstanding calculation: declared paid excludes deposit from outstanding balance
-      expect(Number(quickAddResult.invoice.totalAgreedAmount)).toBe(1500.0); // 1200 + 300
-      expect(Number(quickAddResult.invoice.outstandingAmount)).toBe(1200.0); // only rent outstanding
+      expect(Number(quickAddResult.invoice.totalAgreedAmount)).toBe(900.0); // 600 + 300
+      expect(Number(quickAddResult.invoice.outstandingAmount)).toBe(600.0); // only rent outstanding
 
       // Room status should be occupied
       const updatedRoom = await prisma.room.findUnique({ where: { id: room2Id } });
@@ -389,8 +390,8 @@ describe('LOCAL-07 Batch 02: Daily Stay Domain, Invoicing & Tenant Self-Claim', 
       const freshInvoice = await prisma.dailyStayInvoice.findUnique({
         where: { dailyStayId: activeStay!.id },
       });
-      expect(Number(freshInvoice?.totalAgreedAmount)).toBe(1500.0);
-      expect(Number(freshInvoice?.outstandingAmount)).toBe(1200.0);
+      expect(Number(freshInvoice?.totalAgreedAmount)).toBe(900.0);
+      expect(Number(freshInvoice?.outstandingAmount)).toBe(600.0);
     });
 
     it('G. Scheduled completion: active stay ending naturally transitions to COMPLETED and vacates room', async () => {
@@ -1060,8 +1061,8 @@ describe('LOCAL-07 Batch 02: Daily Stay Domain, Invoicing & Tenant Self-Claim', 
       expect(res.body.data.status).toBe('PENDING_APPROVAL');
       // E. requesterUserId matches authenticated user.id
       expect(res.body.data.requesterUserId).toBe(tenantUserId);
-      expect(res.body.data.inclusiveDayCount).toBe(3);
-      expect(Number(res.body.data.totalRentAmount)).toBe(2100.0);
+      expect(res.body.data.inclusiveDayCount).toBe(2);
+      expect(Number(res.body.data.totalRentAmount)).toBe(1400.0);
 
       httpStayId = res.body.data.id;
     });
@@ -1163,7 +1164,7 @@ describe('LOCAL-07 Batch 02: Daily Stay Domain, Invoicing & Tenant Self-Claim', 
 
       expect(res.status).toBe(200);
       expect(Number(res.body.data.dailyRateAmount)).toBe(600.0);
-      expect(Number(res.body.data.totalRentAmount)).toBe(1800.0);
+      expect(Number(res.body.data.totalRentAmount)).toBe(1200.0);
       expect(Number(res.body.data.depositAmount)).toBe(0.0);
     });
 
@@ -1985,7 +1986,7 @@ describe('LOCAL-07 Batch 02: Daily Stay Domain, Invoicing & Tenant Self-Claim', 
       expect(tamperRes.body.data).toBeDefined();
       // Must be authoritative 700.00, NOT tampered 1.00
       expect(Number(tamperRes.body.data.dailyRateAmount)).toBe(700.0);
-      expect(Number(tamperRes.body.data.totalRentAmount)).toBe(2100.0); // 3 days * 700
+      expect(Number(tamperRes.body.data.totalRentAmount)).toBe(1400.0); // 2 days * 700
     });
 
     it('16. Claim Decision 2A Time Authority: Stale Past RESERVED Ignored, Strictly Future RESERVED Selected', async () => {

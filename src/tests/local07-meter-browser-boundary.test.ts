@@ -15,13 +15,13 @@ import { ApiMeterAdapter, ApiBillingAdapter } from '../data/adapters/api';
 
 describe('LOCAL-07 Batch 01 — Browser/HTTP Boundary & Pull Previous Suite', () => {
   describe('1. Canonical Frontend Meter Workspace Serializer', () => {
-    it('serializes browser numeric inputs into canonical decimal strings', () => {
+    it('serializes browser numeric inputs into canonical integer and decimal strings', () => {
       const rawDirtyUIState = {
         roomId: 'room-101',
         waterPrev: 100,
-        waterCurr: 110.5,
+        waterCurr: 110,
         elecPrev: 500,
-        elecCurr: 550.25,
+        elecCurr: 550,
         peopleCount: 2,
         overdueAmount: 150, // UI alias
         otherFees: [
@@ -37,9 +37,9 @@ describe('LOCAL-07 Batch 01 — Browser/HTTP Boundary & Pull Previous Suite', ()
       expect(serialized).toEqual({
         roomId: 'room-101',
         waterPrev: '100',
-        waterCurr: '110.5',
+        waterCurr: '110',
         elecPrev: '500',
-        elecCurr: '550.25',
+        elecCurr: '550',
         peopleCount: 2,
         manualOutstandingAmount: '150',
         otherFees: [

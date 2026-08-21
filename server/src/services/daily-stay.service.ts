@@ -93,7 +93,7 @@ export function resolveDailyTimestampsAndPricing(
   const startUtc = Date.UTC(sy, sm - 1, sd);
   const endUtc = Date.UTC(ey, em - 1, ed);
   const diffDays = Math.round((endUtc - startUtc) / (24 * 3600 * 1000));
-  const inclusiveDayCount = Math.max(1, diffDays + 1);
+  const inclusiveDayCount = Math.max(1, diffDays);
 
   return { checkInAt, checkOutAt, inclusiveDayCount };
 }
@@ -135,7 +135,7 @@ export function calculateInclusiveDays(
   }
 
   const diffDays = Math.round((endUtc - startUtc) / (24 * 3600 * 1000));
-  return Math.max(1, diffDays + 1);
+  return Math.max(1, diffDays);
 }
 
 export class DailyStayService {

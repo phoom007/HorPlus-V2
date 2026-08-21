@@ -21,6 +21,38 @@
  */
 
 const CANONICAL_DECIMAL_REGEX = /^\d+(\.\d{1,2})?$/;
+const METER_INTEGER_REGEX = /^\d{1,5}$/;
+
+export function formatCanonicalMeterIntegerString(val: unknown, fieldName: string = 'ค่ามิเตอร์'): string | undefined {
+  if (val === undefined || val === null) return undefined;
+
+  if (typeof val === 'number') {
+    if (isNaN(val) || !isFinite(val) || val < 0 || !Number.isInteger(val) || val > 99999) {
+      throw new Error(`ฟิลด์ ${fieldName} ไม่ถูกต้อง: ต้องเป็นตัวเลขจำนวนเต็ม 0 ถึง 99999`);
+    }
+    return String(val);
+  }
+
+  if (typeof val === 'string') {
+    const trimmed = val.trim();
+    if (!trimmed) {
+      return undefined;
+    }
+    if (trimmed.includes('.')) {
+      throw new Error(`ฟิลด์ ${fieldName} ไม่ถูกต้อง: ต้องเป็นตัวเลขจำนวนเต็ม 0 ถึง 99999 ห้ามมีทศนิยม (${trimmed})`);
+    }
+    if (!METER_INTEGER_REGEX.test(trimmed)) {
+      throw new Error(`ฟิลด์ ${fieldName} ไม่ถูกต้อง: ต้องเป็นตัวเลขจำนวนเต็ม 0 ถึง 99999 (${trimmed})`);
+    }
+    const parsed = parseInt(trimmed, 10);
+    if (isNaN(parsed) || parsed < 0 || parsed > 99999) {
+      throw new Error(`ฟิลด์ ${fieldName} ไม่ถูกต้อง: ต้องเป็นตัวเลขจำนวนเต็ม 0 ถึง 99999`);
+    }
+    return String(parsed);
+  }
+
+  throw new Error(`ฟิลด์ ${fieldName} ต้องเป็นตัวเลขหรือข้อความตัวเลข`);
+}
 
 export function formatCanonicalDecimalString(val: unknown, fieldName: string = 'จำนวน'): string | undefined {
   if (val === undefined || val === null) return undefined;
@@ -78,7 +110,7 @@ export function serializeMeterWorkspaceDirtyRow(
     if (row.waterPrev === null || (typeof row.waterPrev === 'string' && row.waterPrev.trim() === '')) {
       result.waterPrev = null;
     } else {
-      const waterPrevStr = formatCanonicalDecimalString(row.waterPrev, 'เลขอ่านค่าน้ำเดิม');
+      const waterPrevStr = formatCanonicalMeterIntegerString(row.waterPrev, 'เลขอ่านค่าน้ำเดิม');
       if (waterPrevStr !== undefined) {
         result.waterPrev = waterPrevStr;
       }
@@ -89,7 +121,7 @@ export function serializeMeterWorkspaceDirtyRow(
     if (row.waterCurr === null || (typeof row.waterCurr === 'string' && row.waterCurr.trim() === '')) {
       result.waterCurr = null;
     } else {
-      const waterCurrStr = formatCanonicalDecimalString(row.waterCurr, 'เลขอ่านค่าน้ำใหม่');
+      const waterCurrStr = formatCanonicalMeterIntegerString(row.waterCurr, 'เลขอ่านค่าน้ำใหม่');
       if (waterCurrStr !== undefined) {
         result.waterCurr = waterCurrStr;
       }
@@ -100,7 +132,7 @@ export function serializeMeterWorkspaceDirtyRow(
     if (row.elecPrev === null || (typeof row.elecPrev === 'string' && row.elecPrev.trim() === '')) {
       result.elecPrev = null;
     } else {
-      const elecPrevStr = formatCanonicalDecimalString(row.elecPrev, 'เลขอ่านค่าไฟเดิม');
+      const elecPrevStr = formatCanonicalMeterIntegerString(row.elecPrev, 'เลขอ่านค่าไฟเดิม');
       if (elecPrevStr !== undefined) {
         result.elecPrev = elecPrevStr;
       }
@@ -111,7 +143,7 @@ export function serializeMeterWorkspaceDirtyRow(
     if (row.elecCurr === null || (typeof row.elecCurr === 'string' && row.elecCurr.trim() === '')) {
       result.elecCurr = null;
     } else {
-      const elecCurrStr = formatCanonicalDecimalString(row.elecCurr, 'เลขอ่านค่าไฟใหม่');
+      const elecCurrStr = formatCanonicalMeterIntegerString(row.elecCurr, 'เลขอ่านค่าไฟใหม่');
       if (elecCurrStr !== undefined) {
         result.elecCurr = elecCurrStr;
       }
