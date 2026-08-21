@@ -352,6 +352,281 @@ export class PaymentService {
   }
 
   /**
+   * Tenant creates upload intent for paying multiple bills combined with 1 slip
+   */
+  async createCombinedUploadIntent(input: {
+    dormitoryId: string;
+    tenantId: string;
+    actorUserId: string;
+    billIds: string[];
+    mimeType: string;
+    fileSize: number;
+  }) {
+    const bills = await this.client.bill.findMany({
+      where: { id: { in: input.billIds }, dormitoryId: input.dormitoryId },
+      include: { items: true },
+    });
+
+    if (bills.length !== input.billIds.length) {
+      throw new Error('NOT_FOUND: One or more bills not found');
+    }
+
+    for (const bill of bills) {
+      if (bill.tenantId !== input.tenantId) throw new Error('FORBIDDEN_BILL_OWNERSHIP');
+      if (bill.status === 'PAID') throw new Error('ALREADY_PAID');
+    }
+
+    Decimal.set({ rounding: Decimal.ROUND_HALF_UP });
+    let totalGroupAmount = new Decimal(0);
+    for (const bill of bills) {
+      const billTotal = bill.totalAmount !== undefined && bill.totalAmount !== null
+        ? new Decimal(bill.totalAmount)
+        : bill.items.reduce((sum, item) => sum.plus(new Decimal(item.amount)), new Decimal(0));
+      totalGroupAmount = totalGroupAmount.plus(billTotal);
+    }
+
+    const expiresAt = new Date(Date.now() + 15 * 60 * 1000);
+
+    return await this.client.$transaction(async (tx) => {
+      const group = await tx.combinedPaymentGroup.create({
+        data: {
+          dormitoryId: input.dormitoryId,
+          tenantId: input.tenantId,
+          totalAmount: totalGroupAmount,
+          method: 'BANK_TRANSFER',
+          status: 'PENDING',
+          paymentDate: new Date(),
+        },
+      });
+
+      // Link bills to paymentGroupId
+      for (const bill of bills) {
+        await tx.bill.update({
+          where: { id: bill.id },
+          data: { paymentGroupId: group.id },
+        });
+      }
+
+      const intent = await tx.paymentUploadIntent.create({
+        data: {
+          authenticatedUserId: input.actorUserId,
+          tenantId: input.tenantId,
+          dormitoryId: input.dormitoryId,
+          paymentGroupId: group.id,
+          expectedMimeType: input.mimeType,
+          expectedSize: input.fileSize,
+          expiresAt,
+          status: 'CREATED',
+        },
+      });
+
+      return {
+        groupId: group.id,
+        intentId: intent.id,
+        totalAmount: totalGroupAmount.toFixed(2),
+        uploadUrl: `/api/v1/payments/slip/upload/${intent.id}`,
+        expiresAt,
+      };
+    });
+  }
+
+  /**
+   * Tenant submits combined slip payment referencing intent
+   */
+  async submitCombinedSlipPayment(input: {
+    dormitoryId: string;
+    tenantId: string;
+    intentId: string;
+    paymentDate: Date;
+    amount: string | number;
+    actorUserId: string;
+    idempotencyKey?: string | null;
+  }) {
+    return await idempotencyService.runWithIdempotency({
+      actorUserId: input.actorUserId,
+      operation: 'submitCombinedSlipPayment',
+      idempotencyKey: input.idempotencyKey,
+      payload: { intentId: input.intentId },
+      fn: async () => {
+        return await this.client.$transaction(async (tx) => {
+          const intent = await tx.paymentUploadIntent.findUnique({
+            where: { id: input.intentId },
+            include: { paymentGroup: true },
+          });
+
+          if (!intent) throw new Error('INTENT_NOT_FOUND');
+          if (intent.status !== 'UPLOADED') throw new Error('INTENT_INVALID_STATE');
+          if (intent.authenticatedUserId !== input.actorUserId || intent.tenantId !== input.tenantId) {
+            throw new Error('FORBIDDEN_INTENT_MISMATCH');
+          }
+          if (!intent.paymentGroupId || !intent.paymentGroup) {
+            throw new Error('INTENT_NOT_COMBINED');
+          }
+          if (intent.expiresAt < new Date()) throw new Error('INTENT_EXPIRED');
+
+          const group = intent.paymentGroup;
+          const submitAmount = new Decimal(input.amount);
+          if (!new Decimal(group.totalAmount).equals(submitAmount)) {
+            throw new Error('UNSUPPORTED_AMOUNT');
+          }
+
+          const bills = await tx.bill.findMany({
+            where: { paymentGroupId: group.id },
+            include: { items: true },
+          });
+
+          const now = new Date();
+
+          for (const bill of bills) {
+            const billTotal = bill.totalAmount !== undefined && bill.totalAmount !== null
+              ? new Decimal(bill.totalAmount)
+              : bill.items.reduce((sum, item) => sum.plus(new Decimal(item.amount)), new Decimal(0));
+
+            const payment = await tx.payment.create({
+              data: {
+                dormitoryId: input.dormitoryId,
+                billId: bill.id,
+                tenantId: input.tenantId,
+                paymentGroupId: group.id,
+                method: 'BANK_TRANSFER',
+                amount: billTotal,
+                status: 'PENDING',
+                paymentDate: input.paymentDate,
+                evidenceUrl: intent.objectKey,
+                fileHash: intent.sha256 ? `${intent.sha256}-${bill.id}` : null,
+                metadata: { intentId: input.intentId, groupId: group.id },
+              },
+            });
+
+            await tx.paymentStatusHistory.create({
+              data: {
+                dormitoryId: input.dormitoryId,
+                paymentId: payment.id,
+                fromStatus: null,
+                toStatus: 'PENDING',
+                changedByUserId: input.actorUserId,
+              },
+            });
+
+            const preReviewStatus = bill.status;
+            await tx.billStatusHistory.create({
+              data: {
+                dormitoryId: input.dormitoryId,
+                billId: bill.id,
+                fromStatus: preReviewStatus,
+                toStatus: 'UNDER_REVIEW',
+                changedByUserId: input.actorUserId,
+              },
+            });
+
+            await tx.bill.update({
+              where: { id: bill.id },
+              data: {
+                status: 'UNDER_REVIEW',
+                previousStatus: preReviewStatus,
+              },
+            });
+          }
+
+          await tx.combinedPaymentGroup.update({
+            where: { id: group.id },
+            data: {
+              status: 'UNDER_REVIEW',
+              paymentDate: input.paymentDate,
+            },
+          });
+
+          await tx.paymentUploadIntent.update({
+            where: { id: intent.id },
+            data: {
+              status: 'CONSUMED',
+              consumedAt: now,
+            },
+          });
+
+          return { success: true, groupId: group.id };
+        });
+      },
+    });
+  }
+
+  /**
+   * Owner approves combined payment group atomically
+   */
+  async approvePaymentGroup(input: {
+    dormitoryId: string;
+    groupId: string;
+    userId: string;
+    notes?: string;
+  }) {
+    return await this.client.$transaction(async (tx) => {
+      const group = await tx.combinedPaymentGroup.findUnique({
+        where: { id: input.groupId },
+        include: {
+          payments: true,
+        },
+      });
+
+      if (!group || group.dormitoryId !== input.dormitoryId) {
+        throw new Error('COMBINED_GROUP_NOT_FOUND');
+      }
+
+      if (group.status === 'APPROVED') {
+        return { success: true, group };
+      }
+
+      const now = new Date();
+
+      await tx.combinedPaymentGroup.update({
+        where: { id: group.id },
+        data: {
+          status: 'APPROVED',
+          recordedByUserId: input.userId,
+          notes: input.notes || group.notes,
+        },
+      });
+
+      for (const p of group.payments) {
+        if (p.status !== 'APPROVED') {
+          await tx.payment.update({
+            where: { id: p.id },
+            data: {
+              status: 'APPROVED',
+              reviewedByUserId: input.userId,
+              reviewedAt: now,
+            },
+          });
+
+          await tx.paymentStatusHistory.create({
+            data: {
+              dormitoryId: input.dormitoryId,
+              paymentId: p.id,
+              fromStatus: p.status,
+              toStatus: 'APPROVED',
+              changedByUserId: input.userId,
+            },
+          });
+
+          await tx.bill.update({
+            where: { id: p.billId },
+            data: {
+              status: 'PAID',
+              paidAt: now,
+              paidAmount: p.amount,
+              outstandingAmount: new Decimal(0),
+              paymentGroupId: group.id,
+            },
+          });
+
+          await this.generateReceiptTx(tx, p.id, input.dormitoryId, p.billId, input.userId);
+        }
+      }
+
+      return { success: true, groupId: group.id };
+    });
+  }
+
+  /**
    * Owner approves pending payment
    */
   async approvePayment(input: {

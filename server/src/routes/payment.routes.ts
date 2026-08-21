@@ -592,6 +592,94 @@ export function createPaymentRouter(authService: AuthenticationService) {
       res.status(400).json({ error: err.message });
     }
   });
+  // Tenant: Create upload intent for multiple bills combined with 1 slip
+  router.post('/combined-slip-intent', requireAuth, async (req, res) => {
+    try {
+      const auth = (req as any).auth;
+      const context = (req as any).dormitoryContext || (await resolveAuthoritativeDormitoryContext(req));
+      const dormitoryId = context.dormitoryId;
+      const { billIds, mimeType, fileSize } = req.body;
+
+      if (!billIds || !Array.isArray(billIds) || billIds.length === 0) {
+        return res.status(400).json({ error: 'billIds array is required' });
+      }
+
+      const tenant = await prisma.tenant.findFirst({
+        where: { dormitoryId, linkedUserId: auth.userId, status: 'active' }
+      });
+      if (!tenant) return res.status(403).json({ error: 'Tenant profile not found' });
+
+      const result = await paymentService.createCombinedUploadIntent({
+        dormitoryId,
+        tenantId: tenant.id,
+        actorUserId: auth.userId,
+        billIds,
+        mimeType: mimeType || 'image/jpeg',
+        fileSize: Number(fileSize) || 0,
+      });
+
+      res.json(result);
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  // Tenant: Submit combined slip payment referencing intent
+  router.post('/submit-combined-slip', requireAuth, requireCsrf, async (req, res) => {
+    try {
+      const auth = (req as any).auth;
+      const context = (req as any).dormitoryContext || (await resolveAuthoritativeDormitoryContext(req));
+      const dormitoryId = context.dormitoryId;
+      const { intentId, amount, paymentDate } = req.body;
+
+      if (!intentId || !amount) {
+        return res.status(400).json({ error: 'intentId and amount are required' });
+      }
+
+      const tenant = await prisma.tenant.findFirst({
+        where: { dormitoryId, linkedUserId: auth.userId, status: 'active' }
+      });
+      if (!tenant) return res.status(403).json({ error: 'Tenant profile not found' });
+
+      const result = await paymentService.submitCombinedSlipPayment({
+        dormitoryId,
+        tenantId: tenant.id,
+        intentId,
+        paymentDate: paymentDate ? new Date(paymentDate) : new Date(),
+        amount,
+        actorUserId: auth.userId,
+        idempotencyKey: req.headers['idempotency-key'] as string | undefined,
+      });
+
+      res.json(result);
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  // Owner: Approve combined payment group atomically
+  router.post('/combined-groups/:id/approve', requireAuth, requireCsrf, async (req, res) => {
+    try {
+      const auth = (req as any).auth;
+      const context = (req as any).dormitoryContext || (await resolveAuthoritativeDormitoryContext(req));
+      const dormitoryId = context.dormitoryId;
+
+      if (!ensureOwnerOrManager(req, res, dormitoryId)) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+
+      const result = await paymentService.approvePaymentGroup({
+        dormitoryId,
+        groupId: req.params.id,
+        userId: auth.userId,
+        notes: req.body?.notes,
+      });
+
+      res.json(result);
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
+  });
 
   return router;
 }

@@ -267,6 +267,8 @@ export function createDailyStayRouter(
     phone: z.string().trim().max(50).optional().nullable(),
     startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'รูปแบบวันที่ไม่ถูกต้อง (YYYY-MM-DD)'),
     endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'รูปแบบวันที่ไม่ถูกต้อง (YYYY-MM-DD)'),
+    checkInTime: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/, 'รูปแบบเวลาไม่ถูกต้อง (HH:mm)').optional().nullable(),
+    checkOutTime: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/, 'รูปแบบเวลาไม่ถูกต้อง (HH:mm)').optional().nullable(),
     dailyRateAmount: MoneyDecimalStringSchema.optional(),
     depositAmount: MoneyDecimalStringSchema.optional(),
     depositDeclaredStatus: z.enum(['PAID', 'UNPAID']).optional(),

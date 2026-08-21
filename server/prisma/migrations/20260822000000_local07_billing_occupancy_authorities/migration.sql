@@ -77,6 +77,9 @@ ALTER TABLE "payment_upload_intents"
 
 ALTER TABLE "payment_upload_intents" ADD CONSTRAINT "payment_upload_intents_payment_group_id_fkey" FOREIGN KEY ("payment_group_id") REFERENCES "combined_payment_groups"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
+-- Drop legacy non-kind unique index to allow multiple bills of distinct kinds in the same billing cycle & room
+DROP INDEX IF EXISTS "billing_cycle_room_current_unique";
+
 -- Phase 2: Database-Level Partial Unique Indexes to prevent duplicate ACTIVE bills
 -- Active Monthly Utility: at most 1 active per (dormitory_id, billing_cycle_id, room_id)
 CREATE UNIQUE INDEX "bills_monthly_utility_active_unique"

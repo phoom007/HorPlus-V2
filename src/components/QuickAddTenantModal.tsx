@@ -51,6 +51,8 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
 
   // Daily fields
   const [dailyEndDate, setDailyEndDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [checkInTime, setCheckInTime] = useState('');
+  const [checkOutTime, setCheckOutTime] = useState('');
   const [dailyRate, setDailyRate] = useState<number | null>(null);
   const [dailyDeposit, setDailyDeposit] = useState<number>(0);
   const [depositDeclaredStatus, setDepositDeclaredStatus] = useState<'PAID' | 'UNPAID'>('UNPAID');
@@ -134,6 +136,8 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
       setDailyRate(dRent);
       setDailyDeposit(dDep);
       setDailyEndDate(today);
+      setCheckInTime('');
+      setCheckOutTime('');
       setDepositDeclaredStatus('UNPAID');
 
       // Set initial active tab based on Term availability
@@ -334,6 +338,8 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
           phone: phone.trim() || undefined,
           startDate,
           endDate: dailyEndDate,
+          checkInTime: checkInTime.trim() || undefined,
+          checkOutTime: checkOutTime.trim() || undefined,
           dailyRateAmount: dailyRate.toFixed(2),
           depositAmount: dailyDeposit.toFixed(2),
           depositDeclaredStatus,
@@ -723,6 +729,38 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
                   </label>
                   <div className="px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl text-slate-700 font-bold">
                     {inclusiveDays} วัน
+                  </div>
+                </div>
+              </div>
+
+              {/* Optional Check-in / Check-out Times */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    เวลาเช็คอิน (ไม่บังคับ)
+                  </label>
+                  <div className="relative">
+                    <Clock className="w-4 h-4 absolute left-3 top-2.5 text-slate-400" />
+                    <input
+                      type="time"
+                      value={checkInTime}
+                      onChange={(e) => setCheckInTime(e.target.value)}
+                      className="w-full pl-9 pr-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    เวลาเช็คเอาท์ (ไม่บังคับ)
+                  </label>
+                  <div className="relative">
+                    <Clock className="w-4 h-4 absolute left-3 top-2.5 text-slate-400" />
+                    <input
+                      type="time"
+                      value={checkOutTime}
+                      onChange={(e) => setCheckOutTime(e.target.value)}
+                      className="w-full pl-9 pr-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold"
+                    />
                   </div>
                 </div>
               </div>

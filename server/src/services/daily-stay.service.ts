@@ -24,6 +24,8 @@ export interface CreateTenantDailyStayRequestDto {
   applicantPhone?: string | null;
   startDate: string; // YYYY-MM-DD
   endDate: string; // YYYY-MM-DD
+  checkInTime?: string | null;
+  checkOutTime?: string | null;
   dailyRateAmount?: string | number;
   depositAmount?: string | number;
   depositDeclaredStatus?: 'PAID' | 'UNPAID';
@@ -35,6 +37,8 @@ export interface OwnerQuickAddDailyStayDto {
   phone?: string | null;
   startDate: string; // YYYY-MM-DD
   endDate: string; // YYYY-MM-DD
+  checkInTime?: string | null;
+  checkOutTime?: string | null;
   dailyRateAmount?: string | number;
   depositAmount?: string | number;
   depositDeclaredStatus?: 'PAID' | 'UNPAID';
@@ -47,10 +51,63 @@ export interface UpdatePendingDailyStayDto {
 }
 
 /**
+ * Resolves Bangkok canonical checkInAt/checkOutAt timestamps and pricing day count:
+ * - Default check-in: startDate 00:00:00+07:00
+ * - Default check-out: day after endDate 00:00:00+07:00
+ * - Optional checkInTime (e.g. 14:00) / checkOutTime (e.g. 18:00)
+ * - Pricing days = Math.max(1, dateDiff(endDate, startDate))
+ */
+export function resolveDailyTimestampsAndPricing(
+  startDateStr: string,
+  endDateStr: string,
+  checkInTimeStr?: string | null,
+  checkOutTimeStr?: string | null
+): { checkInAt: Date; checkOutAt: Date; inclusiveDayCount: number } {
+  const inTime = checkInTimeStr && /^\d{2}:\d{2}(:\d{2})?$/.test(checkInTimeStr.trim())
+    ? (checkInTimeStr.trim().length === 5 ? `${checkInTimeStr.trim()}:00` : checkInTimeStr.trim())
+    : '00:00:00';
+
+  const checkInAt = new Date(`${startDateStr}T${inTime}+07:00`);
+
+  let checkOutAt: Date;
+  if (checkOutTimeStr && /^\d{2}:\d{2}(:\d{2})?$/.test(checkOutTimeStr.trim())) {
+    const outTime = checkOutTimeStr.trim().length === 5 ? `${checkOutTimeStr.trim()}:00` : checkOutTimeStr.trim();
+    checkOutAt = new Date(`${endDateStr}T${outTime}+07:00`);
+  } else {
+    // Default checkout: day AFTER endDate at 00:00:00 Asia/Bangkok
+    const [ey, em, ed] = endDateStr.split('-').map(Number);
+    const nextDay = new Date(Date.UTC(ey, em - 1, ed + 1));
+    const nextDayStr = nextDay.toISOString().slice(0, 10);
+    checkOutAt = new Date(`${nextDayStr}T00:00:00+07:00`);
+  }
+
+  if (checkOutAt.getTime() <= checkInAt.getTime()) {
+    const err = new Error('วันและเวลาเช็คเอาท์ต้องมากกว่าวันและเวลาเช็คอิน');
+    (err as any).statusCode = 400;
+    (err as any).code = 'INVALID_DATE_RANGE';
+    throw err;
+  }
+
+  const [sy, sm, sd] = startDateStr.split('-').map(Number);
+  const [ey, em, ed] = endDateStr.split('-').map(Number);
+  const startUtc = Date.UTC(sy, sm - 1, sd);
+  const endUtc = Date.UTC(ey, em - 1, ed);
+  const diffDays = Math.round((endUtc - startUtc) / (24 * 3600 * 1000));
+  const inclusiveDayCount = Math.max(1, diffDays + 1);
+
+  return { checkInAt, checkOutAt, inclusiveDayCount };
+}
+
+/**
  * Calculates calendar inclusive day count:
  * e.g., 2026-09-01 to 2026-09-03 = 3 days.
  */
-export function calculateInclusiveDays(startDateStr: string, endDateStr: string): number {
+export function calculateInclusiveDays(
+  startDateStr: string,
+  endDateStr: string,
+  checkInTimeStr?: string | null,
+  checkOutTimeStr?: string | null
+): number {
   const [sy, sm, sd] = startDateStr.split('-').map(Number);
   const [ey, em, ed] = endDateStr.split('-').map(Number);
 
@@ -72,8 +129,13 @@ export function calculateInclusiveDays(startDateStr: string, endDateStr: string)
     throw err;
   }
 
+  if (checkInTimeStr || checkOutTimeStr) {
+    const { inclusiveDayCount } = resolveDailyTimestampsAndPricing(startDateStr, endDateStr, checkInTimeStr, checkOutTimeStr);
+    return inclusiveDayCount;
+  }
+
   const diffDays = Math.round((endUtc - startUtc) / (24 * 3600 * 1000));
-  return diffDays + 1;
+  return Math.max(1, diffDays + 1);
 }
 
 export class DailyStayService {
@@ -206,12 +268,12 @@ export class DailyStayService {
 
     const phoneClean = data.applicantPhone && data.applicantPhone.trim() !== '' ? data.applicantPhone.trim() : null;
 
-    const [sy, sm, sd] = data.startDate.split('-').map(Number);
-    const [ey, em, ed] = data.endDate.split('-').map(Number);
-    const startDate = new Date(Date.UTC(sy, sm - 1, sd));
-    const endDate = new Date(Date.UTC(ey, em - 1, ed));
-
-    const inclusiveDayCount = calculateInclusiveDays(data.startDate, data.endDate);
+    const { checkInAt, checkOutAt, inclusiveDayCount } = resolveDailyTimestampsAndPricing(
+      data.startDate,
+      data.endDate,
+      data.checkInTime,
+      data.checkOutTime
+    );
 
     const roomWhere: any = {
       dormitoryId,
@@ -270,6 +332,11 @@ export class DailyStayService {
     const totalRent = formatDecimal(mulDecimals(toDecimal(dailyRate), inclusiveDayCount.toString()));
     const depositDeclaredStatus = data.depositDeclaredStatus || 'UNPAID';
 
+    const [sy, sm, sd] = data.startDate.split('-').map(Number);
+    const [ey, em, ed] = data.endDate.split('-').map(Number);
+    const startDate = new Date(Date.UTC(sy, sm - 1, sd));
+    const endDate = new Date(Date.UTC(ey, em - 1, ed));
+
     return this.prisma.dailyStay.create({
       data: {
         dormitoryId,
@@ -280,6 +347,8 @@ export class DailyStayService {
         requesterUserId: requesterUserId || null,
         startDate,
         endDate,
+        checkInAt,
+        checkOutAt,
         inclusiveDayCount,
         dailyRateAmount: toDecimal(dailyRate),
         totalRentAmount: toDecimal(totalRent),
@@ -596,19 +665,19 @@ export class DailyStayService {
         throw err;
       }
 
-      const [sy, sm, sd] = data.startDate.split('-').map(Number);
-      const [ey, em, ed] = data.endDate.split('-').map(Number);
-      const startDate = new Date(Date.UTC(sy, sm - 1, sd));
-      const endDate = new Date(Date.UTC(ey, em - 1, ed));
-
-      const inclusiveDayCount = calculateInclusiveDays(data.startDate, data.endDate);
+      const { checkInAt, checkOutAt, inclusiveDayCount } = resolveDailyTimestampsAndPricing(
+        data.startDate,
+        data.endDate,
+        data.checkInTime,
+        data.checkOutTime
+      );
 
       // Check room availability
       const availability = await this.checkRoomAvailability(
         dormitoryId,
         data.roomId,
-        startDate,
-        endDate,
+        checkInAt,
+        checkOutAt,
         undefined,
         tx
       );
@@ -683,9 +752,14 @@ export class DailyStayService {
           roomId: data.roomId,
           tenantId: tenant.id,
           status: isFuture ? 'RESERVED' : 'ACTIVE',
-          startedAt: isFuture ? startDate : new Date(),
+          startedAt: isFuture ? checkInAt : new Date(),
         },
       });
+
+      const [sy, sm, sd] = data.startDate.split('-').map(Number);
+      const [ey, em, ed] = data.endDate.split('-').map(Number);
+      const startDate = new Date(Date.UTC(sy, sm - 1, sd));
+      const endDate = new Date(Date.UTC(ey, em - 1, ed));
 
       // 5. Create DailyStay (approved directly)
       const dailyStay = await tx.dailyStay.create({
@@ -700,6 +774,8 @@ export class DailyStayService {
           requesterUserId: userId,
           startDate,
           endDate,
+          checkInAt,
+          checkOutAt,
           inclusiveDayCount,
           dailyRateAmount: toDecimal(dailyRate),
           totalRentAmount: toDecimal(totalRent),
