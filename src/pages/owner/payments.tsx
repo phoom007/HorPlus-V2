@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Bill } from '../../types';
 import { queryKeys, STALE_TIMES } from '../../lib/queryClient';
 import { fetchAllPaginated } from '../../utils/fetch-paginated';
-import { formatBaht } from '../../components/GlobalComponents';
+import { formatBaht, formatThaiDate } from '../../components/GlobalComponents';
 import { CheckCircle, XCircle, FileText, Image as ImageIcon, RotateCcw, AlertCircle, Loader2 } from 'lucide-react';
 
 export interface PaymentRecord {
@@ -415,7 +415,7 @@ export function PaymentsOwnerView({
                             ห้อง: <span className="text-slate-700">{p.bill?.room?.roomNumber || 'N/A'}</span> • ผู้เช่า: <span className="text-slate-700">{p.bill?.tenant?.name || p.bill?.tenant?.displayName || 'ผู้เช่า'}</span>
                           </p>
                           <p className="text-xs font-bold text-slate-500">
-                            ยอดเงิน: <span className="text-indigo-600 font-extrabold text-sm">{formatBaht(Number(p.amount))}</span> • วันที่โอน: {new Date(p.paymentDate).toLocaleDateString('th-TH')}
+                            ยอดเงิน: <span className="text-indigo-600 font-extrabold text-sm">{formatBaht(Number(p.amount))}</span> • วันที่โอน: {formatThaiDate(p.paymentDate)}
                           </p>
                         </div>
 

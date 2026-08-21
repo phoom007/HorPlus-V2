@@ -34,16 +34,16 @@ export const formatThaiDate = (isoString?: string, showTime = false): string => 
   if (!isoString) return '-';
   const date = new Date(isoString);
   if (isNaN(date.getTime())) return '-';
-  
+
   const months = [
     'ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.',
     'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'
   ];
-  
+
   const day = date.getDate();
   const month = months[date.getMonth()];
   const year = date.getFullYear() + 543; // Buddhist Era
-  
+
   let formatted = `${day} ${month} ${year}`;
   if (showTime) {
     const hours = String(date.getHours()).padStart(2, '0');
@@ -51,6 +51,67 @@ export const formatThaiDate = (isoString?: string, showTime = false): string => 
     formatted += ` ${hours}:${minutes} น.`;
   }
   return formatted;
+};
+
+export const formatOwnerDate = (isoString?: string, showTime = false): string => {
+  return formatThaiDate(isoString, showTime);
+};
+
+export const formatOwnerDateTime = (isoString?: string): string => {
+  return formatThaiDate(isoString, true);
+};
+
+export const formatOwnerMonthYear = (cycleCodeOrIso?: string): string => {
+  if (!cycleCodeOrIso) return '-';
+  const parts = cycleCodeOrIso.split('-');
+  if (parts.length < 2) return cycleCodeOrIso;
+  const year = parseInt(parts[0], 10);
+  const month = parseInt(parts[1], 10);
+  if (isNaN(year) || isNaN(month) || month < 1 || month > 12) return cycleCodeOrIso;
+  const months = [
+    'มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน',
+    'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'
+  ];
+  return `${months[month - 1]} ${year + 543}`;
+};
+
+export const renderOptionalText = (val: any, fallback = '-'): string => {
+  if (val === null || val === undefined) return fallback;
+  const s = String(val).trim();
+  return s === '' || s === 'ไม่มีข้อมูล' || s === 'ไม่มีบันทึกเพิ่มเติม' ? fallback : s;
+};
+
+export const formatMeterReadingDisplay = (val: string | number | null | undefined): string => {
+  if (val === null || val === undefined || val === '') return '0';
+  const num = typeof val === 'number' ? val : parseFloat(String(val).replace(/,/g, ''));
+  if (isNaN(num)) return '0';
+  if (Number.isInteger(num)) {
+    return num.toString();
+  }
+  const str = num.toFixed(2);
+  return str.replace(/\.00$/, '').replace(/(\.[0-9]*[1-9])0+$/, '$1');
+};
+
+export const formatCountDisplay = (val: string | number | null | undefined): string => {
+  if (val === null || val === undefined || val === '') return '0';
+  const num = typeof val === 'number' ? val : parseInt(String(val).replace(/,/g, ''), 10);
+  return isNaN(num) ? '0' : Math.max(0, num).toString();
+};
+
+export const normalizeMoneyInput = (val: string | number): number => {
+  if (typeof val === 'number') return isNaN(val) ? 0 : val;
+  const clean = String(val).replace(/[^0-9.]/g, '');
+  const parsed = parseFloat(clean);
+  return isNaN(parsed) ? 0 : parsed;
+};
+
+export const normalizeSingleDigitCount = (input: string | number): number => {
+  if (typeof input === 'number') return Math.min(9, Math.max(0, Math.floor(input)));
+  const digits = String(input).replace(/[^0-9]/g, '');
+  if (!digits) return 0;
+  const lastDigit = digits[digits.length - 1];
+  const parsed = parseInt(lastDigit, 10);
+  return isNaN(parsed) ? 0 : Math.min(9, Math.max(0, parsed));
 };
 
 // Toast State Controller
@@ -424,7 +485,7 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
     <div className="fixed inset-0 z-[1000] flex items-center justify-center p-4">
       {/* Overlay */}
       <div className="absolute inset-0 bg-slate-900/45 backdrop-blur-xs" onClick={onClose} />
-      
+
       {/* Panel */}
       <div className="bg-white rounded-3xl p-5 sm:p-6 shadow-2xl border border-slate-100 max-w-md w-full relative z-10 animate-in fade-in zoom-in-95 duration-150">
         <div className="flex gap-3.5 items-start">
@@ -495,7 +556,7 @@ export const Modal: React.FC<ModalProps> = ({ isOpen, onClose, title, children, 
     <div className={`fixed inset-0 ${zIndex} flex items-center justify-center p-4 overflow-hidden`}>
       {/* Overlay */}
       <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }} />
-      
+
       {/* Content wrapper */}
       <div className={`${transparentBg ? 'bg-transparent border-transparent shadow-none' : 'bg-white border-gray-100 shadow-2xl'} rounded-3xl overflow-hidden w-full relative z-10 flex flex-col ${sizes[size]} animate-in fade-in duration-200 transform zoom-in-95 max-h-[90vh]`}>
         {/* Header */}
@@ -507,7 +568,7 @@ export const Modal: React.FC<ModalProps> = ({ isOpen, onClose, title, children, 
             </button>
           </div>
         )}
-        
+
         {/* Body */}
         <div className={`${transparentBg ? 'p-0' : 'p-6'} overflow-y-auto flex-1 min-h-0`}>
           {children}
@@ -559,7 +620,7 @@ export const SignaturePad: React.FC<SignaturePadProps> = ({
     const canvas = canvasRef.current;
     if (!canvas) return { x: 0, y: 0 };
     const rect = canvas.getBoundingClientRect();
-    
+
     // Support Touch & Mouse coordinates correctly inside iframe
     if ('touches' in e) {
       if (e.touches.length === 0) return { x: 0, y: 0 };
@@ -761,49 +822,47 @@ export const Timeline: React.FC<{ items: TimelineItem[] }> = ({ items }) => {
   );
 };
 
-// Thai DatePicker Wrapper
+export { OwnerDateInput, isoToThaiBe, thaiBeToIso } from './OwnerDateInput';
+import { OwnerDateInput } from './OwnerDateInput';
+
+// Thai DatePicker Wrapper (Buddhist Era)
 interface ThaiDatePickerProps {
   value: string; // ISO date format YYYY-MM-DD
   onChange: (value: string) => void;
   label?: string;
   required?: boolean;
+  min?: string;
+  max?: string;
+  disabled?: boolean;
+  className?: string;
 }
 
-export const ThaiDatePicker: React.FC<ThaiDatePickerProps> = ({ value, onChange, label, required = false }) => {
-  const handleDateChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    onChange(e.target.value);
-  };
-
-  const getBuddaYearText = (isoStr: string) => {
-    if (!isoStr) return '';
-    const date = new Date(isoStr);
-    if (isNaN(date.getTime())) return '';
-    return `(พ.ศ. ${date.getFullYear() + 543})`;
-  };
-
+export const ThaiDatePicker: React.FC<ThaiDatePickerProps> = ({
+  value,
+  onChange,
+  label,
+  required = false,
+  min,
+  max,
+  disabled = false,
+  className,
+}) => {
   return (
     <div className="space-y-1">
-      <div className="flex items-center justify-between gap-1">
-        {label ? (
-          <label className="block text-xs font-medium text-gray-700 truncate">
-            {label} {required && <span className="text-rose-500">*</span>}
-          </label>
-        ) : <div />}
-        {value && (
-          <span className="text-[11px] text-indigo-600 font-bold shrink-0 bg-indigo-50/80 px-2 py-0.5 rounded-md border border-indigo-100 whitespace-nowrap">
-            {getBuddaYearText(value)}
-          </span>
-        )}
-      </div>
-      <div className="relative">
-        <input
-          type="date"
-          value={value}
-          onChange={handleDateChange}
-          required={required}
-          className="block w-full px-3 py-2 border border-gray-200 rounded-xl focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-600 bg-white text-gray-800 text-sm placeholder-gray-400"
-        />
-      </div>
+      {label && (
+        <label className="block text-xs font-medium text-gray-700 truncate">
+          {label} {required && <span className="text-rose-500">*</span>}
+        </label>
+      )}
+      <OwnerDateInput
+        value={value}
+        onChange={onChange}
+        required={required}
+        min={min}
+        max={max}
+        disabled={disabled}
+        className={className}
+      />
     </div>
   );
 };
@@ -880,10 +939,10 @@ export const PrintView: React.FC<PrintViewProps> = ({ children, title = 'พิ�
       }
     `;
     document.head.appendChild(style);
-    
+
     // Trigger browser print
     window.print();
-    
+
     // Clean up
     setTimeout(() => {
       document.head.removeChild(style);
@@ -903,7 +962,7 @@ export const PrintView: React.FC<PrintViewProps> = ({ children, title = 'พิ�
           {title}
         </button>
       </div>
-      <div 
+      <div
         ref={contentRef}
         className="printable-area print:bg-white print:p-0 print:m-0 print:shadow-none bg-slate-50 p-6 rounded-3xl border border-gray-100 shadow-inner overflow-hidden max-w-[21cm] mx-auto text-gray-900 font-sans"
       >

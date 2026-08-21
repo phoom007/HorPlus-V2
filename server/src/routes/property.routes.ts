@@ -338,6 +338,16 @@ export function createPropertyRouter(
             termRent: effective.termRent.value !== null && effective.termRent.value !== undefined ? Number(effective.termRent.value) : null,
             dailyRent: effective.dailyRent.value !== null && effective.dailyRent.value !== undefined ? Number(effective.dailyRent.value) : null,
             depositAmount: Number(effective.depositAmount.value ?? 0),
+            advancePaymentAmount: Number(effective.advancePaymentAmount.value ?? 0),
+            parkingFee: Number(effective.parkingFee.value ?? 0),
+          },
+          sources: {
+            monthlyRent: effective.monthlyRent.source,
+            termRent: effective.termRent.source,
+            dailyRent: effective.dailyRent.source,
+            depositAmount: effective.depositAmount.source,
+            advancePaymentAmount: effective.advancePaymentAmount.source,
+            parkingFee: effective.parkingFee.source,
           },
           building: {
             id: building.id,

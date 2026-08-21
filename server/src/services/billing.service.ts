@@ -16,6 +16,7 @@ import { resolveProvisionalBillingSource as sharedResolveProvisionalBillingSourc
 import { ENTITLEMENT_ROOM_LIMITS } from './entitlement.service.js';
 import { subscriptionEntitlementService } from './subscription-entitlement.service.js';
 import { toDecimal, addDecimals, mulDecimals, divDecimals, formatDecimal, subDecimals, compareDecimals, isZeroDecimal } from '../utils/decimal-math.util.js';
+import { calculateInstallmentSchedule } from '../utils/installment-calculator.util.js';
 import { getPrismaClient } from '../db/prisma.js';
 
 /**
@@ -336,17 +337,15 @@ export class BillingService {
         }
       } else {
         // TERM
-        const totalRent = toDecimal(provisionalTerm.totalRentAmount.toString());
         const installments = provisionalTerm.termInstallmentCount || 1;
         const termStart = new Date(provisionalTerm.startDate);
         const cycleStart = new Date(cycle.periodStart);
         const cycleOffset = (cycleStart.getFullYear() - termStart.getFullYear()) * 12 + (cycleStart.getMonth() - termStart.getMonth());
 
         if (cycleOffset >= 0 && cycleOffset < installments) {
-          const installmentBase = divDecimals(totalRent, installments.toString());
-          const isLast = cycleOffset === installments - 1;
-          const priorSum = mulDecimals(installmentBase, (installments - 1).toString());
-          const installmentAmt = isLast ? subDecimals(totalRent, priorSum) : installmentBase;
+          const schedule = calculateInstallmentSchedule(Number(provisionalTerm.totalRentAmount), installments);
+          const currentInstallment = schedule[cycleOffset];
+          const installmentAmt = toDecimal(currentInstallment.formattedAmount);
           items.push({
             type: 'rent',
             description: `ค่าเช่าห้องพัก (งวดที่ ${cycleOffset + 1}/${installments})`,

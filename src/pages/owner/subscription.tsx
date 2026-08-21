@@ -16,6 +16,7 @@ import {
   Check,
   Coins,
 } from 'lucide-react';
+import { formatThaiDate } from '../../components/GlobalComponents';
 
 interface SubscriptionPageProps {
   dormitoryId?: string;
@@ -139,7 +140,7 @@ export const SubscriptionPage: React.FC<SubscriptionPageProps> = ({ dormitoryId 
         throw new Error(data?.error?.message || data?.message || 'Failed to redeem promo code');
       }
 
-      setPromoSuccess(`Promo code HORPLUS redeemed! Trial extended by 60 days. New expiry: ${new Date(data.entitlements.expiresAt).toLocaleDateString('th-TH')}`);
+      setPromoSuccess(`Promo code HORPLUS redeemed! Trial extended by 60 days. New expiry: ${formatThaiDate(data.entitlements.expiresAt)}`);
       setEntitlements((prev: any) => ({ ...prev, ...data.entitlements }));
       setPromoCode('');
     } catch (err: any) {
@@ -279,7 +280,7 @@ export const SubscriptionPage: React.FC<SubscriptionPageProps> = ({ dormitoryId 
                 {plan?.code === 'FREE'
                   ? 'ต่ออายุอัตโนมัติ'
                   : expiresAt
-                  ? new Date(expiresAt).toLocaleDateString('th-TH')
+                  ? formatThaiDate(expiresAt)
                   : '-'}
               </h3>
               <p className="text-xs text-slate-500 mt-1 font-medium">

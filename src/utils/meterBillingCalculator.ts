@@ -1,7 +1,7 @@
 /**
  * @license Apache-2.0
  * Canonical Meter Live Billing Preview Calculator
- * 
+ *
  * Exact Decimal / Satang Monetary Authority:
  * 1. ZERO floating-point operations. All financial amounts calculated in exact integer satangs (BigInt).
  * 2. Exact two-decimal canonical strings ("0.00", "3500.00", "4200.50").
@@ -135,6 +135,31 @@ export function formatMoneyDisplay(decimalStr: string): string {
   const [intPart = '0', fracPart = '00'] = decimalStr.split('.');
   const formattedInt = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
   return `${formattedInt}.${fracPart}`;
+}
+
+/**
+ * Formats a meter reading or unit value for clean display without trailing .00 for integers.
+ * Example: "500.00" -> "500", 500 -> "500", "500.50" -> "500.5", 105.75 -> "105.75"
+ */
+export function formatMeterReadingDisplay(val: string | number | null | undefined): string {
+  if (val === null || val === undefined || val === '') return '0';
+  const num = typeof val === 'number' ? val : parseFloat(String(val).replace(/,/g, ''));
+  if (isNaN(num)) return '0';
+  if (Number.isInteger(num)) {
+    return num.toString();
+  }
+  const str = num.toFixed(2);
+  return str.replace(/\.00$/, '').replace(/(\.[0-9]*[1-9])0+$/, '$1');
+}
+
+/**
+ * Formats an integer count value for display.
+ * Example: 2 -> "2", "2.00" -> "2", 0 -> "0"
+ */
+export function formatCountDisplay(val: string | number | null | undefined): string {
+  if (val === null || val === undefined || val === '') return '0';
+  const num = typeof val === 'number' ? val : parseInt(String(val).replace(/,/g, ''), 10);
+  return isNaN(num) ? '0' : Math.max(0, num).toString();
 }
 
 /**

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { MessageSquare, X, AlertTriangle, Settings, Sparkles, Check } from 'lucide-react';
+import { formatThaiDate } from './GlobalComponents';
 
 interface LineQuotaBadgeProps {
   dormitoryId?: string;
@@ -118,7 +119,7 @@ export const LineQuotaBadge: React.FC<LineQuotaBadgeProps> = ({
   // Next 1st of month calculation
   const now = new Date();
   const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
-  const nextResetDateStr = `1 ${nextMonth.toLocaleDateString('th-TH', { month: 'short', year: '2-digit' })}`;
+  const nextResetDateStr = formatThaiDate(nextMonth.toISOString());
 
   // 1. REGISTRATION NOT COMPLETED: display "ยังไม่พร้อมใช้งาน", NOT clickable
   if (isRegistrationMode) {

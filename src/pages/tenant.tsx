@@ -193,7 +193,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
     if (seg === 'announcements' || querySub === 'announcements') return { tab: 'announcements' as const, sub: null };
     if (seg === 'profile' || querySub === 'profile') return { tab: 'profile' as const, sub: null };
     if (seg === 'payments_tab' || querySub === 'payments_tab') return { tab: 'payments_tab' as const, sub: null };
-    
+
     if (seg === 'bills' || seg === 'invoice' || querySub === 'bills' || querySub === 'invoice') return { tab: 'home' as const, sub: 'invoice' as const };
     if (seg === 'payments' || seg === 'pay' || querySub === 'pay' || querySub === 'payment') return { tab: 'home' as const, sub: 'payment' as const };
     if (seg === 'maintenance' || seg === 'repairs' || querySub === 'repairs') return { tab: 'home' as const, sub: 'repairs' as const };
@@ -226,7 +226,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
   const [repairs, setRepairs] = useState<RepairRequest[]>([]);
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [buildings, setBuildings] = useState<Building[]>([]);
-  
+
   // Local tenant state to handle co-occupants editing reactively
   const [localTenant, setLocalTenant] = useState<Tenant>(tenant);
   const [isCoOccupantsModalOpen, setIsCoOccupantsModalOpen] = useState(false);
@@ -546,17 +546,17 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
   const hasRoom = !financialLoading && !!tenantRoom?.roomNumber;
   const tenantBills = [...bills]
     .filter(b => b.status !== 'draft' && b.status !== 'DRAFT')
-    .sort((a, b) => (b.cycleId || b.billingCycleId || '').localeCompare(a.cycleId || a.billingCycleId || '') || (b.createdAt || '').localeCompare(a.createdAt || '')); 
+    .sort((a, b) => (b.cycleId || b.billingCycleId || '').localeCompare(a.cycleId || a.billingCycleId || '') || (b.createdAt || '').localeCompare(a.createdAt || ''));
   const tenantRepairs = repairs.filter(r => r.roomId === tenantRoom?.id || r.tenantId === tenant.id);
   const tenantContracts = contracts;
-  
+
   // Filter announcements for this tenant's building or all
   const filteredAnnouncements = announcements.filter(ann => {
     // 1. If target is all, everyone sees it
     if (!ann.targetType || ann.targetType === 'all') {
       return true;
     }
-    
+
     // 2. If target is specific building (e.g. ตึก B)
     if (ann.targetType === 'building') {
       const bldId = ann.targetBuildingId;
@@ -574,26 +574,26 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
       }
       return false;
     }
-    
+
     // 3. If target is specific rooms (custom room numbers selection)
     if (ann.targetType === 'rooms') {
       if (tenantRoom?.roomNumber) {
         const cleanRoom = tenantRoom.roomNumber.trim().toUpperCase();
-        
+
         // Check in targetRooms array first
         if (ann.targetRooms && ann.targetRooms.some(r => (r || '').trim().toUpperCase() === cleanRoom)) {
           return true;
         }
-        
+
         // Fallback: check customTarget text
         if (ann.customTarget) {
           const cleanCustom = (ann.customTarget || '').toUpperCase();
           const tokens = cleanCustom.split(/[,\s]+/).map(t => t.trim().replace(/^ห้อง\s*/, ''));
-          
+
           if (tokens.includes(cleanRoom) || tokens.some(t => t === cleanRoom)) {
             return true;
           }
-          
+
           // Also handle exact substring matching like "ห้อง A101" or "A101" with boundaries
           if (cleanCustom.includes(cleanRoom)) {
             return true;
@@ -602,7 +602,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
       }
       return false;
     }
-    
+
     return true; // default fallback
   });
 
@@ -853,7 +853,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
   const handleCreateRepair = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!repairTitle.trim() || !tenantRoom || isSubmittingRepair) return;
-    
+
     setIsSubmittingRepair(true);
     try {
       const res = await fetch('/api/v1/tenant-portal/maintenance', {
@@ -889,7 +889,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
   // Helper to render consistent back-arrow sub-view header matching iOS/Android style
   const renderSubViewHeader = (title: string, rightAction?: React.ReactNode) => (
     <div className="flex items-center justify-between px-4 py-3 bg-white border-b border-gray-200/50 sticky top-0 z-30 shrink-0">
-      <button 
+      <button
         onClick={() => setSubView(null)}
         className="p-1 hover:bg-slate-100 text-slate-700 rounded-xl transition-all"
         aria-label="ย้อนกลับ"
@@ -995,13 +995,13 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
 
   return (
     <div className="h-screen w-full bg-slate-100 flex justify-center overflow-hidden">
-      
+
       {/* Main Container */}
       <div className="bg-slate-50 w-full max-w-md h-full flex flex-col font-sans text-xs relative select-none shadow-md border-x border-slate-200">
-        
+
         {/* Main scrollable body area */}
         <div className="flex-1 overflow-y-auto pb-16 bg-slate-50/50">
-            
+
             {/* Status alerts */}
             {false && (
               <div className="mx-4 mt-3 p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl flex items-center gap-2 animate-in zoom-in-95">
@@ -1037,7 +1037,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                           </div>
                         </div>
                         {/* Translucent notification bell badge */}
-                        <button 
+                        <button
                           onClick={() => setIsNotificationModalOpen(true)}
                           className="relative p-2 bg-white/10 rounded-full hover:bg-white/20 transition-all text-white shrink-0 cursor-pointer"
                           aria-label="การแจ้งเตือน"
@@ -1093,8 +1093,8 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                               {financialError && (
                                 <div className="bg-rose-50 border border-rose-200 rounded-xl p-2.5 text-xs text-rose-700 flex items-center justify-between mt-2">
                                   <span>{financialError}</span>
-                                  <button 
-                                    type="button" 
+                                  <button
+                                    type="button"
                                     onClick={() => refreshData()}
                                     className="px-2 py-1 bg-rose-600 text-white font-bold rounded-lg hover:bg-rose-700 text-[10px]"
                                   >
@@ -1168,7 +1168,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                       <h4 className="text-xs font-black text-slate-900 mb-3 px-5">เมนูหลัก</h4>
                       <div className="grid grid-cols-3 gap-3 px-4">
                         {/* 1. ใบแจ้งหนี้ */}
-                        <div 
+                        <div
                           onClick={() => setSubView('invoice')}
                           className="bg-white rounded-2xl border border-slate-100/80 p-3.5 flex flex-col items-center justify-center text-center gap-2 hover:bg-slate-50 transition-all cursor-pointer shadow-2xs"
                         >
@@ -1179,7 +1179,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                         </div>
 
                         {/* 2. ชำระค่าเช่า */}
-                        <div 
+                        <div
                           onClick={() => setSubView('invoice')}
                           className="bg-white rounded-2xl border border-slate-100/80 p-3.5 flex flex-col items-center justify-center text-center gap-2 hover:bg-slate-50 transition-all cursor-pointer shadow-2xs"
                         >
@@ -1190,7 +1190,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                         </div>
 
                         {/* 3. แจ้งซ่อมบำรุง */}
-                        <div 
+                        <div
                           onClick={() => setSubView('repairs')}
                           className="bg-white rounded-2xl border border-slate-100/80 p-3.5 flex flex-col items-center justify-center text-center gap-2 hover:bg-slate-50 transition-all cursor-pointer shadow-2xs"
                         >
@@ -1201,7 +1201,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                         </div>
 
                         {/* 4. ค่าน้ำ / ค่าไฟ */}
-                        <div 
+                        <div
                           onClick={() => setSubView('utilities')}
                           className="bg-white rounded-2xl border border-slate-100/80 p-3.5 flex flex-col items-center justify-center text-center gap-2 hover:bg-slate-50 transition-all cursor-pointer shadow-2xs"
                         >
@@ -1212,7 +1212,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                         </div>
 
                         {/* 5. เอกสารสัญญา */}
-                        <div 
+                        <div
                           onClick={() => setSubView('contract')}
                           className="bg-white rounded-2xl border border-slate-100/80 p-3.5 flex flex-col items-center justify-center text-center gap-2 hover:bg-slate-50 transition-all cursor-pointer shadow-2xs"
                         >
@@ -1223,7 +1223,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                         </div>
 
                         {/* 6. ประวัติการชำระ */}
-                        <div 
+                        <div
                           onClick={() => setSubView('invoice')}
                           className="bg-white rounded-2xl border border-slate-100/80 p-3.5 flex flex-col items-center justify-center text-center gap-2 hover:bg-slate-50 transition-all cursor-pointer shadow-2xs"
                         >
@@ -1264,7 +1264,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                           const authorRole = getAuthorRoleName(ann.author);
                           const authorInitial = authorRole.substring(0, 2);
                           const authorBg = authorRole.includes('ช่าง') ? 'bg-emerald-500 text-white' : 'bg-violet-600 text-white';
-                          
+
                           let badgeBg = 'bg-indigo-50 text-indigo-700 border-indigo-100';
                           let badgeLabel = 'ทั่วไป';
                           let badgeIcon = <Megaphone className="w-3 h-3 text-indigo-500" />;
@@ -1294,10 +1294,10 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                           return (
                             <div className="bg-white border border-slate-100 rounded-[24px] overflow-hidden shadow-2xs hover:shadow-xs transition-all">
                               {ann.attachmentUrl && (
-                                <img 
-                                  src={ann.attachmentUrl} 
-                                  alt="announcement" 
-                                  className="w-full h-32 object-cover border-b border-slate-50 cursor-zoom-in hover:brightness-95 transition-all" 
+                                <img
+                                  src={ann.attachmentUrl}
+                                  alt="announcement"
+                                  className="w-full h-32 object-cover border-b border-slate-50 cursor-zoom-in hover:brightness-95 transition-all"
                                   referrerPolicy="no-referrer"
                                   onClick={() => setZoomedImage(ann.attachmentUrl)}
                                 />
@@ -1331,7 +1331,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
 
                                 <h5 className="font-extrabold text-slate-900 text-xs tracking-tight line-clamp-1">{ann.title}</h5>
                                 <p className="text-[10px] text-slate-500 line-clamp-2 leading-relaxed">{ann.content}</p>
-                                
+
                                 {ann.linkUrl && (
                                   <div className="pt-0.5">
                                     <a
@@ -1344,7 +1344,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                                     </a>
                                   </div>
                                 )}
-                                
+
                                 <div className="border-t border-slate-100 pt-2 flex items-center justify-between text-[8px] text-slate-400">
                                   <div className="flex items-center gap-1">
                                     <div className={`w-4 h-4 rounded-full flex items-center justify-center text-[7px] font-black ${authorBg}`}>
@@ -1369,13 +1369,13 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                 {activeTab === 'announcements' && (
                   <div className="p-4 space-y-4">
                     <h4 className="text-xs font-black text-slate-900 uppercase tracking-wider">ข่าวสารและประกาศนิติบุคคล ({filteredAnnouncements.length})</h4>
-                    
+
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       {filteredAnnouncements.map((ann) => {
                         const authorRole = getAuthorRoleName(ann.author);
                         const authorInitial = authorRole.substring(0, 2);
                         const authorBg = authorRole.includes('ช่าง') ? 'bg-emerald-500 text-white' : 'bg-violet-600 text-white';
-                        
+
                         let badgeBg = 'bg-indigo-50 text-indigo-700 border-indigo-100';
                         let badgeLabel = 'ทั่วไป';
                         let badgeIcon = <Megaphone className="w-3 h-3 text-indigo-500" />;
@@ -1406,9 +1406,9 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                           <div key={ann.id} className="bg-white border border-slate-100 rounded-[24px] overflow-hidden shadow-2xs hover:shadow-xs transition-all flex flex-col justify-between">
                             <div>
                               {ann.attachmentUrl && (
-                                <img 
-                                  src={ann.attachmentUrl} 
-                                  alt={ann.title} 
+                                <img
+                                  src={ann.attachmentUrl}
+                                  alt={ann.title}
                                   className="w-full h-36 object-cover border-b border-slate-50 cursor-zoom-in hover:brightness-95 transition-all"
                                   referrerPolicy="no-referrer"
                                   onClick={() => setZoomedImage(ann.attachmentUrl)}
@@ -1443,7 +1443,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
 
                                 <h5 className="font-extrabold text-slate-900 text-xs tracking-tight">{ann.title}</h5>
                                 <p className="text-[10px] text-slate-500 leading-relaxed whitespace-pre-line">{ann.content}</p>
-                                
+
                                 {ann.linkUrl && (
                                   <div className="pt-1">
                                     <a
@@ -1485,7 +1485,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                 {activeTab === 'payments_tab' && (
                   <div className="p-4 space-y-4">
                     <h4 className="text-xs font-black text-slate-900">บิลและสถานะการชำระเงิน</h4>
-                    
+
                     <div className="space-y-3">
                       {tenantBills.map((b) => {
                         const paymentsList = b.payments || b.Payment || [];
@@ -1561,7 +1561,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                 {activeTab === 'profile' && (
                   <div className="p-4 space-y-4">
                     <h4 className="text-xs font-black text-slate-900 font-sans">ข้อมูลและโปรไฟล์ผู้เช่า</h4>
-                    
+
                     {/* User ID card card layout */}
                     <div className="bg-white p-4 border border-slate-100 rounded-2xl space-y-4 shadow-2xs">
                       <div className="flex gap-3.5 items-center">
@@ -1670,10 +1670,10 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                 {subView === 'invoice' && (
                   <div className="flex flex-col h-full bg-slate-50">
                     {renderSubViewHeader('ใบแจ้งหนี้', <Calendar className="w-5 h-5 text-slate-400" />)}
-                    
+
                     {/* Invoice Tabs below header */}
                     <div className="flex border-b border-gray-100 bg-white sticky top-[45px] z-20 shrink-0">
-                      <button 
+                      <button
                         onClick={() => setInvoiceTab('current')}
                         className={`flex-1 py-2.5 text-center text-[10px] font-black transition-colors ${
                           invoiceTab === 'current' ? 'border-b-2 border-indigo-600 text-indigo-600' : 'text-slate-400 hover:text-slate-600'
@@ -1681,7 +1681,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                       >
                         เดือนปัจจุบัน
                       </button>
-                      <button 
+                      <button
                         onClick={() => setInvoiceTab('history')}
                         className={`flex-1 py-2.5 text-center text-[10px] font-black transition-colors ${
                           invoiceTab === 'history' ? 'border-b-2 border-indigo-600 text-indigo-600' : 'text-slate-400 hover:text-slate-600'
@@ -1717,7 +1717,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                                   <span className="font-extrabold text-slate-800">฿ {item.amount.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                                 </div>
                               ))}
-                              
+
                               <div className="border-t border-slate-100 pt-3 flex justify-between items-center text-[11px] font-black text-indigo-600">
                                 <span>ยอดรวมทั้งสิ้น</span>
                                 <span>฿ {Number(activeUnpaidBill.totalAmount).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
@@ -1734,10 +1734,10 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                       ) : (
                         <div className="space-y-3">
                           {tenantBills.filter(b => b.status === 'paid').map((b) => (
-                            <div 
-                              key={b.id} 
+                            <div
+                              key={b.id}
                               onClick={() => {
-                                
+
                                 setSubView('invoice');
                               }}
                               className="bg-white p-4 border border-slate-100 rounded-2xl flex justify-between items-center cursor-pointer hover:bg-slate-50 transition-colors shadow-2xs"
@@ -1775,12 +1775,12 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                   </div>
                 )}
 
-                
+
                 {/* B. SUBVIEW: แจ้งชำระเงิน (IMAGE 9) */}
                 {(subView === 'payment' || subView === 'pay') && (activeUnpaidBill || true) && (
                   <div className="flex flex-col h-full bg-slate-50 relative">
                     {renderSubViewHeader('แจ้งชำระเงิน', <DollarSign className="w-5 h-5 text-slate-400" />)}
-                    
+
                     <div className="p-4 space-y-4 pb-24 overflow-y-auto">
                       <div className="bg-white rounded-3xl p-5 border border-slate-100 shadow-xs space-y-4">
                         <div className="text-center">
@@ -1797,14 +1797,14 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                       {/* PromptPay QR & Instructions */}
                       <div className="bg-white rounded-3xl p-5 border border-slate-100 shadow-xs space-y-3 text-center">
                         <h3 className="font-extrabold text-slate-800 text-[11px] text-left">ช่องทางการชำระเงิน</h3>
-                        
+
                         {(paymentOptions?.promptPayConfigured || paymentOptions?.configured) && (paymentOptions?.qrUrl || paymentOptions?.promptPayDisplay) ? (
                           <div className="space-y-3">
                             {paymentOptions?.qrUrl && (
                               <div className="p-3 bg-slate-50 rounded-2xl border border-slate-100 inline-block">
-                                <img 
-                                  src={paymentOptions.qrUrl} 
-                                  alt="PromptPay QR Code" 
+                                <img
+                                  src={paymentOptions.qrUrl}
+                                  alt="PromptPay QR Code"
                                   className="w-48 h-48 mx-auto rounded-xl shadow-xs"
                                 />
                               </div>
@@ -1889,8 +1889,8 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                 {subView === 'repairs' && (
                   <div className="flex flex-col h-full bg-slate-50 relative">
                     {renderSubViewHeader(
-                      'แจ้งซ่อมบำรุง', 
-                      <button 
+                      'แจ้งซ่อมบำรุง',
+                      <button
                         onClick={() => setIsNewRepairOpen(true)}
                         className="p-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 rounded-full transition-colors"
                         aria-label="แจ้งซ่อมใหม่"
@@ -1901,7 +1901,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
 
                     {/* Tabs for My Requests and History */}
                     <div className="flex border-b border-gray-100 bg-white sticky top-[45px] z-20 shrink-0">
-                      <button 
+                      <button
                         onClick={() => setRepairTab('mine')}
                         className={`flex-1 py-2.5 text-center text-[10px] font-black transition-colors ${
                           repairTab === 'mine' ? 'border-b-2 border-indigo-600 text-indigo-600' : 'text-slate-400 hover:text-slate-600'
@@ -1909,7 +1909,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                       >
                         รายการของฉัน
                       </button>
-                      <button 
+                      <button
                         onClick={() => setRepairTab('history')}
                         className={`flex-1 py-2.5 text-center text-[10px] font-black transition-colors ${
                           repairTab === 'history' ? 'border-b-2 border-indigo-600 text-indigo-600' : 'text-slate-400 hover:text-slate-600'
@@ -1932,9 +1932,9 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                               <p className="text-[10px] text-slate-500 leading-relaxed">{rep.description}</p>
                               {rep.imageBefore && (
                                 <div className="mt-2 flex gap-2 items-center">
-                                  <img 
-                                    src={rep.imageBefore} 
-                                    alt="Repair site" 
+                                  <img
+                                    src={rep.imageBefore}
+                                    alt="Repair site"
                                     onClick={() => setZoomedImage(rep.imageBefore!)}
                                     className="w-12 h-12 rounded-xl object-cover cursor-pointer hover:opacity-90 border border-slate-150 transition-all"
                                     referrerPolicy="no-referrer"
@@ -1969,9 +1969,9 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                               {rep.imageBefore && (
                                 <div className="mt-2 flex gap-2 items-center">
                                   <span className="text-[8px] text-slate-400 font-semibold">รูปแนบ:</span>
-                                  <img 
-                                    src={rep.imageBefore} 
-                                    alt="Repair site" 
+                                  <img
+                                    src={rep.imageBefore}
+                                    alt="Repair site"
                                     onClick={() => setZoomedImage(rep.imageBefore!)}
                                     className="w-12 h-12 rounded-xl object-cover cursor-pointer hover:opacity-90 border border-slate-150 transition-all"
                                     referrerPolicy="no-referrer"
@@ -2003,7 +2003,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                     {isNewRepairOpen && (
                       <div className="absolute inset-0 z-50 flex flex-col justify-end">
                         {/* Backdrop overlay */}
-                        <div 
+                        <div
                           className="absolute inset-0 bg-slate-900/40 backdrop-blur-2xs"
                           onClick={() => setIsNewRepairOpen(false)}
                         />
@@ -2011,7 +2011,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                         <div className="bg-white rounded-t-3xl border-t border-slate-200 p-5 shadow-2xl relative z-10 max-h-[90%] overflow-y-auto space-y-4 animate-in slide-in-from-bottom duration-250">
                           <div className="flex justify-between items-center">
                             <h3 className="font-black text-slate-900 text-xs">รายละเอียดแจ้งซ่อม</h3>
-                            <button 
+                            <button
                               onClick={() => setIsNewRepairOpen(false)}
                               className="p-1.5 hover:bg-slate-100 text-slate-400 hover:text-slate-700 rounded-full transition-colors"
                             >
@@ -2044,7 +2044,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
 
                             <div className="space-y-1.5">
                               <label className="block font-bold text-slate-700 text-[10px]">แนบรูปถ่ายสถานที่หรือปัญหา (ไม่บังคับ)</label>
-                              
+
                               <input
                                 type="file"
                                 ref={repairFileInputRef}
@@ -2107,7 +2107,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                 {subView === 'utilities' && (
                   <div className="flex flex-col h-full bg-slate-50">
                     {renderSubViewHeader('ค่าน้ำ / ค่าไฟ')}
-                    
+
                     <div className="p-4 space-y-4">
                       <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-2xs text-center space-y-2">
                         <Droplet className="w-8 h-8 text-slate-300 mx-auto" />
@@ -2126,7 +2126,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                     <div className="p-4 space-y-4">
                       {tenantContracts.map((con) => (
                         <div key={con.id} className="space-y-4">
-                          
+
                           {/* Main Contract Spec Card */}
                           <div className="bg-white p-5 border border-slate-100 rounded-3xl space-y-4 shadow-xs">
                             <div className="flex items-center gap-3">
@@ -2239,7 +2239,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                           {/* Action downloadable attachments section */}
                           <div className="space-y-3.5">
                             <h4 className="text-[10px] font-black text-slate-900 px-1">เอกสารของฉัน</h4>
-                            
+
                             <div className="space-y-2.5">
                               {[
                                 {
@@ -2264,7 +2264,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                                   content: `=== สำเนาบัตรประจำตัวประชาชนผู้เช่า ===\nชื่อ-นามสกุล: ${tenant.name}\nเลขประจำตัวประชาชน: ${tenant.citizenId}\nเบอร์โทรศัพท์: ${tenant.phone}\nอีเมล: ${tenant.email}\nสถานะ: รับรองสำเนาถูกต้องสำหรับใช้ในการทำสัญญาเช่าพักอาศัยห้อง ${tenantRoom?.roomNumber || 'ไม่ระบุ'} เท่านั้น`
                                 }
                               ].map((doc, idx) => (
-                                <div 
+                                <div
                                   key={idx}
                                   className="bg-white p-3.5 border border-slate-100 rounded-2xl flex justify-between items-center shadow-2xs hover:border-indigo-200 transition-all cursor-pointer group"
                                   onClick={() => setSelectedDocModal(doc)}
@@ -2278,7 +2278,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                                       <p className="text-[8px] text-slate-400 truncate">{doc.subtitle}</p>
                                     </div>
                                   </div>
-                                  <button 
+                                  <button
                                     onClick={(e) => {
                                       e.stopPropagation();
                                       handleDownloadDoc(doc.title, doc.fileName, doc.content);
@@ -2345,8 +2345,8 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                     setSubView(null);
                   }}
                   className={`flex-1 py-1 flex flex-col items-center justify-center gap-1 transition-all ${
-                    isSelected 
-                      ? 'text-indigo-600 font-black scale-105' 
+                    isSelected
+                      ? 'text-indigo-600 font-black scale-105'
                       : 'text-slate-400 hover:text-slate-600'
                   }`}
                 >
@@ -2360,14 +2360,14 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
         </div>
 
       {/* Edit Co-occupants Modal */}
-      <Modal 
-        isOpen={isCoOccupantsModalOpen} 
-        onClose={() => setIsCoOccupantsModalOpen(false)} 
+      <Modal
+        isOpen={isCoOccupantsModalOpen}
+        onClose={() => setIsCoOccupantsModalOpen(false)}
         title="รายชื่อผู้พักอาศัยร่วม"
         size="md"
       >
         <div className="space-y-4">
-          
+
           {/* Current co-occupants list */}
           <div className="space-y-2 max-h-[180px] overflow-y-auto pr-1">
             {editCoOccupants.map((co, index) => {
@@ -2498,7 +2498,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
           <div className="space-y-3">
             <div>
               <label className="block text-[10px] text-slate-600 font-bold mb-1">วันที่ประสงค์จะย้ายออก *</label>
-              <input 
+              <input
                 type="date"
                 value={moveOutDate}
                 onChange={(e) => setMoveOutDate(e.target.value)}
@@ -2509,7 +2509,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
             <div className="grid grid-cols-2 gap-2">
               <div>
                 <label className="block text-[10px] text-slate-600 font-bold mb-1">ธนาคารสำหรับรับเงินประกันคืน</label>
-                <input 
+                <input
                   type="text"
                   placeholder="เช่น กสิกรไทย, ไทยพาณิชย์"
                   value={moveOutBank}
@@ -2519,7 +2519,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
               </div>
               <div>
                 <label className="block text-[10px] text-slate-600 font-bold mb-1">เลขที่บัญชี / พร้อมเพย์</label>
-                <input 
+                <input
                   type="text"
                   placeholder="เช่น 123-4-56789-0"
                   value={moveOutAccount}
@@ -2531,7 +2531,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
 
             <div>
               <label className="block text-[10px] text-slate-600 font-bold mb-1">เหตุผลในการย้ายออก (ถ้ามี)</label>
-              <textarea 
+              <textarea
                 rows={2}
                 placeholder="ระบุเหตุผลสั้นๆ เช่น ย้ายสถานที่ทำงาน, เรียนจบการศึกษา"
                 value={moveOutReason}
@@ -2703,7 +2703,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                   <div className="space-y-0.5 min-w-0">
                     <h5 className="font-extrabold text-[11px] truncate">{n.title}</h5>
                     <p className="text-[10px] leading-relaxed line-clamp-2">{n.message}</p>
-                    <span className="text-[9px] opacity-75">{new Date(n.createdAt).toLocaleDateString('th-TH')}</span>
+                    <span className="text-[9px] opacity-75">{formatThaiDate(n.createdAt)}</span>
                   </div>
                 </div>
                 {!n.isRead && (
@@ -2738,16 +2738,16 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
 
       {/* Zoomed Image Popup */}
       {zoomedImage && (
-        <div 
+        <div
           className="fixed inset-0 bg-black/85 z-[9999] flex items-center justify-center p-4 animate-in fade-in duration-150"
           onClick={() => setZoomedImage(null)}
         >
-          <div 
+          <div
             className="relative"
             onClick={(e) => e.stopPropagation()}
           >
             {/* Elegant close button positioned outside the top-right of the image itself */}
-            <button 
+            <button
               type="button"
               className="absolute -top-10 right-0 z-[10000] text-white/75 hover:text-white transition-all cursor-pointer p-1 hover:scale-110 active:scale-95 flex items-center justify-center"
               onClick={() => setZoomedImage(null)}
@@ -2756,9 +2756,9 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
               <X className="w-8 h-8 stroke-[1.5]" />
             </button>
 
-            <img 
-              src={zoomedImage} 
-              alt="Zoomed announcement" 
+            <img
+              src={zoomedImage}
+              alt="Zoomed announcement"
               className="max-w-[90vw] md:max-w-4xl max-h-[80vh] md:max-h-[85vh] h-auto w-auto rounded-2xl shadow-2xl border border-white/10 select-none cursor-zoom-out transition-transform duration-300 hover:scale-[1.01]"
               onClick={() => setZoomedImage(null)}
               referrerPolicy="no-referrer"
@@ -2769,10 +2769,10 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
 
       {/* Floating Success Toast Notification with Smooth Fade */}
       {toast && toast.visible && (
-        <div 
+        <div
           className={`fixed bottom-20 left-1/2 -translate-x-1/2 sm:bottom-8 sm:right-8 sm:left-auto sm:translate-x-0 z-[9999] bg-white text-slate-800 px-4.5 py-3 rounded-2xl shadow-2xl border border-slate-200/90 flex items-center gap-2.5 text-xs font-bold transition-all duration-500 ease-in-out ${
-            isToastFading 
-              ? 'opacity-0 translate-y-3 pointer-events-none' 
+            isToastFading
+              ? 'opacity-0 translate-y-3 pointer-events-none'
               : 'opacity-100 translate-y-0 animate-in fade-in slide-in-from-bottom-3 duration-300'
           }`}
         >
@@ -2783,9 +2783,9 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
             <h4 className="font-extrabold text-slate-800 text-xs leading-tight">{toast.title}</h4>
             {toast.message && <p className="text-[10px] text-slate-500 mt-0.5 leading-normal font-medium">{toast.message}</p>}
           </div>
-          <button 
+          <button
             type="button"
-            onClick={() => setToast(prev => prev ? { ...prev, visible: false } : null)} 
+            onClick={() => setToast(prev => prev ? { ...prev, visible: false } : null)}
             className="text-slate-400 hover:text-slate-600 transition-colors cursor-pointer p-0.5"
           >
             <X className="w-3.5 h-3.5" />
@@ -2804,4 +2804,3 @@ const ClockIcon = (props: React.SVGProps<SVGSVGElement>) => (
     <polyline points="12 6 12 12 16 14" />
   </svg>
 );
-

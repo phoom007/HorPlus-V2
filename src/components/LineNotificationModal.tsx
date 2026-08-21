@@ -8,7 +8,7 @@ import {
   RotateCw,
   Send
 } from 'lucide-react';
-import { Modal, formatBaht } from './GlobalComponents';
+import { Modal, formatBaht, formatThaiDate } from './GlobalComponents';
 import { Bill, Tenant, Room, Contract } from '../types';
 
 export function formatCycleThaiShort(cycle: string) {
@@ -168,7 +168,7 @@ export const LineNotificationModal: React.FC<LineNotificationModalProps> = ({
     setIsSendingLine(true);
 
     setTimeout(() => {
-      const nowStr = `${new Date().toLocaleDateString('th-TH', { day: 'numeric', month: 'short' })} - ${new Date().toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })} น.`;
+      const nowStr = formatThaiDate(new Date().toISOString(), true);
 
       const newMap = { ...lineNotifyMap };
       let newSentCount = 0;
@@ -214,9 +214,9 @@ export const LineNotificationModal: React.FC<LineNotificationModalProps> = ({
   };
 
   return (
-    <Modal 
-      isOpen={isOpen} 
-      onClose={onClose} 
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
       title={
         <div className="flex flex-col sm:flex-row sm:items-center justify-between w-full pr-8 gap-2 sm:gap-4">
           <div className="flex items-center gap-3">
@@ -236,11 +236,11 @@ export const LineNotificationModal: React.FC<LineNotificationModalProps> = ({
             </span>
           </div>
         </div>
-      } 
+      }
       size="lg"
     >
       <div className="flex flex-col max-h-[75vh] font-sans text-xs -m-1 p-1">
-        
+
         {/* Short Toast Notification */}
         {lineToastSuccess && (
           <div className="p-3 mb-2.5 bg-emerald-600 text-white font-extrabold rounded-2xl flex items-center justify-between shadow-lg animate-in fade-in slide-in-from-top-2 duration-300 shrink-0 border border-emerald-500">

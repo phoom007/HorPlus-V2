@@ -22,7 +22,8 @@ import {
 import {
   formatBaht,
   Modal,
-  ConfirmDialog
+  ConfirmDialog,
+  OwnerDateInput
 } from '../../components/GlobalComponents';
 import { getDataProvider } from '../../data/dataProvider';
 import { Room, Building, RoomStatus, Tenant, Contract, Bill, BLOCKING_CONTRACT_STATUSES } from '../../types';
@@ -715,24 +716,20 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
           </div>
           <div>
             <label className="block text-[11px] font-bold text-indigo-200 mb-1">วันเริ่มต้นสัญญา *</label>
-            <input
-              type="date"
+            <OwnerDateInput
               data-testid="input-avail-start-date"
-              aria-label="วันเริ่มต้นสัญญา"
               value={availStartDate}
-              onChange={(e) => setAvailStartDate(e.target.value)}
-              className="w-full px-3 py-2 text-xs border border-indigo-700 bg-indigo-950/80 rounded-xl text-white font-bold focus:outline-none"
+              onChange={(iso) => setAvailStartDate(iso)}
+              className="border-indigo-700 bg-indigo-950/80 text-white"
             />
           </div>
           <div>
             <label className="block text-[11px] font-bold text-indigo-200 mb-1">วันสิ้นสุดสัญญา *</label>
-            <input
-              type="date"
+            <OwnerDateInput
               data-testid="input-avail-end-date"
-              aria-label="วันสิ้นสุดสัญญา"
               value={availEndDate}
-              onChange={(e) => setAvailEndDate(e.target.value)}
-              className="w-full px-3 py-2 text-xs border border-indigo-700 bg-indigo-950/80 rounded-xl text-white font-bold focus:outline-none"
+              onChange={(iso) => setAvailEndDate(iso)}
+              className="border-indigo-700 bg-indigo-950/80 text-white"
             />
           </div>
           <div>

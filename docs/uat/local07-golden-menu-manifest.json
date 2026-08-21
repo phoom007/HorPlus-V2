@@ -263,52 +263,5 @@
       "status": "vacant",
       "scenario": "พร้อมให้เช่า"
     }
-  ],
-  "billingTimeline": {
-    "canonicalCycles": [
-      {
-        "cycleCode": "2026-07",
-        "name": "รอบบิล กรกฎาคม 2569",
-        "type": "historical",
-        "status": "open",
-        "rateSnapshotSource": "TEMPLATE_DEFAULT",
-        "billsCount": 16,
-        "paidBills": 12,
-        "unpaidBills": 3,
-        "overdueBills": 1,
-        "meterReadingsCount": 32
-      },
-      {
-        "cycleCode": "2026-08",
-        "name": "รอบบิล สิงหาคม 2569",
-        "type": "operational",
-        "status": "open",
-        "rateSnapshotSource": "INHERITED",
-        "inheritedFrom": "2026-07",
-        "billsCount": 0,
-        "meterReadingsCount": 32,
-        "notes": "Operational cycle with confirmed meter readings; bills ready for PO issuance testing"
-      },
-      {
-        "cycleCode": "2026-09",
-        "name": "รอบบิล กันยายน 2569",
-        "type": "future_draft",
-        "status": "draft",
-        "rateSnapshotSource": "INHERITED",
-        "inheritedFrom": "2026-08",
-        "billsCount": 0,
-        "meterReadingsCount": 0
-      },
-      {
-        "cycleCode": "2026-10",
-        "name": "รอบบิล ตุลาคม 2569",
-        "type": "future_draft",
-        "status": "draft",
-        "rateSnapshotSource": "INHERITED",
-        "inheritedFrom": "2026-09",
-        "billsCount": 0,
-        "meterReadingsCount": 0
-      }
-    ]
-  }
+  ]
 }

@@ -16,6 +16,7 @@ import { subscriptionEntitlementService } from './subscription-entitlement.servi
 import { AppError } from '../types/index.js';
 import { getPrismaClient } from '../db/prisma.js';
 import { toDecimal, formatDecimal, compareDecimals, divDecimals, mulDecimals, subDecimals } from '../utils/decimal-math.util.js';
+import { calculateInstallmentSchedule } from '../utils/installment-calculator.util.js';
 
 export interface CreateMeterDeviceDto {
   roomId: string;
@@ -1310,18 +1311,16 @@ export class MeterService {
             rentAmount = formatDecimal(toDecimal(prov.unitRentAmount.toString()));
           } else {
             billingSource = 'PROVISIONAL_TERM';
-            const totalRent = toDecimal(prov.totalRentAmount.toString());
+            const totalRent = Number(prov.totalRentAmount);
             const installments = prov.termInstallmentCount || 1;
             const termStart = new Date(prov.startDate);
             const cycleStart = new Date(cycle.periodStart);
             const cycleOffset = (cycleStart.getFullYear() - termStart.getFullYear()) * 12 + (cycleStart.getMonth() - termStart.getMonth());
 
             if (cycleOffset >= 0 && cycleOffset < installments) {
-              const installmentBase = divDecimals(totalRent, installments.toString());
-              const isLast = cycleOffset === installments - 1;
-              const priorSum = mulDecimals(installmentBase, (installments - 1).toString());
-              const installmentAmt = isLast ? subDecimals(totalRent, priorSum) : installmentBase;
-              rentAmount = formatDecimal(installmentAmt);
+              const schedule = calculateInstallmentSchedule(totalRent, installments);
+              const currentInstallment = schedule[cycleOffset];
+              rentAmount = currentInstallment.formattedAmount;
               rentDescription = `ค่าเช่าห้องพัก (งวดที่ ${cycleOffset + 1}/${installments})`;
             } else {
               rentAmount = '0.00';
@@ -1506,4 +1505,3 @@ export interface SaveMeterWorkspaceRowDto {
 }
 
 export const meterService = new MeterService();
-

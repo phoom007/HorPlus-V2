@@ -1,6 +1,6 @@
 /**
  * HorPlus LOCAL-07 — Persistent Golden Menu UAT Dataset Seeder
- * 
+ *
  * Provisions and ensures the 24-room Persistent Golden Menu UAT environment:
  * - 2 Buildings (Building A, Building B)
  * - 4 Floors per building, 3 Rooms per floor
@@ -10,7 +10,7 @@
  *   Active Tenants, Co-occupants, Move-out, Renewal, Pending applicant,
  *   Paid bills, Unpaid bills, Overdue bills, Meter readings)
  * - Idempotent: If Golden Dorm exists and has 24 rooms, leaves user data intact!
- * 
+ *
  * @license Apache-2.0
  */
 
@@ -63,8 +63,63 @@ export async function ensureGoldenDormData() {
 
   if (existingDorm && existingDorm.rooms.length === 24 && billingCycleCount === 4 && billCount === 16) {
     console.log(`✅ [IDEMPOTENT] Golden Dormitory "${existingDorm.name}" already exists with ${existingDorm.rooms.length} rooms and full 4-cycle billing dataset.`);
+
+    // Sync pricing defaults to ensure termRent, dailyRent, and maxTermRentInstallments are up to date
+    const bldAConfig = GOLDEN_DORM.buildings[0];
+    const bldBConfig = GOLDEN_DORM.buildings[1];
+    await prisma.building.update({
+      where: { id: bldAConfig.id },
+      data: {
+        termRent: bldAConfig.termRent,
+        dailyRent: bldAConfig.dailyRent,
+        termMonths: bldAConfig.termMonths,
+        maxTermRentInstallments: bldAConfig.maxTermRentInstallments,
+      },
+    });
+    await prisma.building.update({
+      where: { id: bldBConfig.id },
+      data: {
+        termRent: bldBConfig.termRent,
+        dailyRent: bldBConfig.dailyRent,
+        termMonths: bldBConfig.termMonths,
+        maxTermRentInstallments: bldBConfig.maxTermRentInstallments,
+      },
+    });
+    await prisma.dormitoryPropertyDefaults.upsert({
+      where: { dormitoryId: GOLDEN_DORM.id },
+      update: {
+        defaultTermRent: 18000.0,
+        defaultDailyRent: 500.0,
+      },
+      create: {
+        dormitoryId: GOLDEN_DORM.id,
+        defaultMonthlyRent: 4500.0,
+        defaultDeposit: 4500.0,
+        defaultTermRent: 18000.0,
+        defaultDailyRent: 500.0,
+        defaultParkingFee: 300.0,
+        defaultMaxOccupants: 2,
+      },
+    });
+    await prisma.room.updateMany({
+      where: { dormitoryId: GOLDEN_DORM.id, buildingId: bldAConfig.id },
+      data: { termRent: 18000.0, dailyRent: 500.0 },
+    });
+    await prisma.room.updateMany({
+      where: { dormitoryId: GOLDEN_DORM.id, buildingId: bldBConfig.id },
+      data: { termRent: 20000.0, dailyRent: 600.0 },
+    });
+    await prisma.room.update({
+      where: { dormitoryId_normalizedRoomNumber: { dormitoryId: GOLDEN_DORM.id, normalizedRoomNumber: 'a102' } },
+      data: { termRent: 17500.0, dailyRent: 450.0 },
+    });
+    await prisma.room.update({
+      where: { dormitoryId_normalizedRoomNumber: { dormitoryId: GOLDEN_DORM.id, normalizedRoomNumber: 'b102' } },
+      data: { termRent: 21000.0, dailyRent: 650.0 },
+    });
+
     console.log(`   Leaving existing Product Owner manual test mutations intact.`);
-    
+
     // Ensure session state file is present
     await createGoldenOwnerSession();
     await generateGoldenManifest();
@@ -216,11 +271,20 @@ export async function ensureGoldenDormData() {
 
   await prisma.dormitoryPropertyDefaults.upsert({
     where: { dormitoryId: dorm.id },
-    update: {},
+    update: {
+      defaultMonthlyRent: 4500.0,
+      defaultDeposit: 4500.0,
+      defaultTermRent: 18000.0,
+      defaultDailyRent: 500.0,
+      defaultParkingFee: 300.0,
+      defaultMaxOccupants: 2,
+    },
     create: {
       dormitoryId: dorm.id,
       defaultMonthlyRent: 4500.0,
       defaultDeposit: 4500.0,
+      defaultTermRent: 18000.0,
+      defaultDailyRent: 500.0,
       defaultParkingFee: 300.0,
       defaultMaxOccupants: 2,
       defaultRoomType: 'standard',
@@ -255,7 +319,14 @@ export async function ensureGoldenDormData() {
 
   const bldA = await prisma.building.upsert({
     where: { id: bldAConfig.id },
-    update: {},
+    update: {
+      monthlyRent: bldAConfig.monthlyRent,
+      depositAmount: bldAConfig.depositAmount,
+      termRent: bldAConfig.termRent,
+      dailyRent: bldAConfig.dailyRent,
+      termMonths: bldAConfig.termMonths,
+      maxTermRentInstallments: bldAConfig.maxTermRentInstallments,
+    },
     create: {
       id: bldAConfig.id,
       dormitoryId: dorm.id,
@@ -267,12 +338,23 @@ export async function ensureGoldenDormData() {
       hasElevator: true,
       monthlyRent: bldAConfig.monthlyRent,
       depositAmount: bldAConfig.depositAmount,
+      termRent: bldAConfig.termRent,
+      dailyRent: bldAConfig.dailyRent,
+      termMonths: bldAConfig.termMonths,
+      maxTermRentInstallments: bldAConfig.maxTermRentInstallments,
     },
   });
 
   const bldB = await prisma.building.upsert({
     where: { id: bldBConfig.id },
-    update: {},
+    update: {
+      monthlyRent: bldBConfig.monthlyRent,
+      depositAmount: bldBConfig.depositAmount,
+      termRent: bldBConfig.termRent,
+      dailyRent: bldBConfig.dailyRent,
+      termMonths: bldBConfig.termMonths,
+      maxTermRentInstallments: bldBConfig.maxTermRentInstallments,
+    },
     create: {
       id: bldBConfig.id,
       dormitoryId: dorm.id,
@@ -284,37 +366,41 @@ export async function ensureGoldenDormData() {
       hasElevator: false,
       monthlyRent: bldBConfig.monthlyRent,
       depositAmount: bldBConfig.depositAmount,
+      termRent: bldBConfig.termRent,
+      dailyRent: bldBConfig.dailyRent,
+      termMonths: bldBConfig.termMonths,
+      maxTermRentInstallments: bldBConfig.maxTermRentInstallments,
     },
   });
 
   // 9. Provision 24 Rooms
   const roomDefinitions = [
     // Building A (12 rooms)
-    { roomNumber: 'A101', floor: 1, rent: 4500, status: 'occupied', bldId: bldA.id },
-    { roomNumber: 'A102', floor: 1, rent: 4500, status: 'occupied', bldId: bldA.id },
-    { roomNumber: 'A103', floor: 1, rent: 4500, status: 'occupied', bldId: bldA.id },
-    { roomNumber: 'A201', floor: 2, rent: 4500, status: 'occupied', bldId: bldA.id },
-    { roomNumber: 'A202', floor: 2, rent: 4500, status: 'occupied', bldId: bldA.id },
-    { roomNumber: 'A203', floor: 2, rent: 4500, status: 'occupied', bldId: bldA.id },
-    { roomNumber: 'A301', floor: 3, rent: 4500, status: 'occupied', bldId: bldA.id },
-    { roomNumber: 'A302', floor: 3, rent: 4500, status: 'occupied', bldId: bldA.id },
-    { roomNumber: 'A303', floor: 3, rent: 4500, status: 'reserved', bldId: bldA.id },
-    { roomNumber: 'A401', floor: 4, rent: 4500, status: 'vacant', bldId: bldA.id },
-    { roomNumber: 'A402', floor: 4, rent: 4500, status: 'vacant', bldId: bldA.id },
-    { roomNumber: 'A403', floor: 4, rent: 4500, status: 'maintenance', bldId: bldA.id },
+    { roomNumber: 'A101', floor: 1, rent: 4500, termRent: 18000, dailyRent: 500, status: 'occupied', bldId: bldA.id },
+    { roomNumber: 'A102', floor: 1, rent: 4500, termRent: 17500, dailyRent: 450, status: 'occupied', bldId: bldA.id },
+    { roomNumber: 'A103', floor: 1, rent: 4500, termRent: 18000, dailyRent: 500, status: 'occupied', bldId: bldA.id },
+    { roomNumber: 'A201', floor: 2, rent: 4500, termRent: 18000, dailyRent: 500, status: 'occupied', bldId: bldA.id },
+    { roomNumber: 'A202', floor: 2, rent: 4500, termRent: 18000, dailyRent: 500, status: 'occupied', bldId: bldA.id },
+    { roomNumber: 'A203', floor: 2, rent: 4500, termRent: 18000, dailyRent: 500, status: 'occupied', bldId: bldA.id },
+    { roomNumber: 'A301', floor: 3, rent: 4500, termRent: 18000, dailyRent: 500, status: 'occupied', bldId: bldA.id },
+    { roomNumber: 'A302', floor: 3, rent: 4500, termRent: 18000, dailyRent: 500, status: 'occupied', bldId: bldA.id },
+    { roomNumber: 'A303', floor: 3, rent: 4500, termRent: 18000, dailyRent: 500, status: 'reserved', bldId: bldA.id },
+    { roomNumber: 'A401', floor: 4, rent: 4500, termRent: 18000, dailyRent: 500, status: 'vacant', bldId: bldA.id },
+    { roomNumber: 'A402', floor: 4, rent: 4500, termRent: 18000, dailyRent: 500, status: 'vacant', bldId: bldA.id },
+    { roomNumber: 'A403', floor: 4, rent: 4500, termRent: 18000, dailyRent: 500, status: 'maintenance', bldId: bldA.id },
     // Building B (12 rooms)
-    { roomNumber: 'B101', floor: 1, rent: 5000, status: 'occupied', bldId: bldB.id },
-    { roomNumber: 'B102', floor: 1, rent: 5000, status: 'occupied', bldId: bldB.id },
-    { roomNumber: 'B103', floor: 1, rent: 5000, status: 'occupied', bldId: bldB.id },
-    { roomNumber: 'B201', floor: 2, rent: 5000, status: 'occupied', bldId: bldB.id },
-    { roomNumber: 'B202', floor: 2, rent: 5000, status: 'occupied', bldId: bldB.id },
-    { roomNumber: 'B203', floor: 2, rent: 5000, status: 'occupied', bldId: bldB.id },
-    { roomNumber: 'B301', floor: 3, rent: 5000, status: 'occupied', bldId: bldB.id },
-    { roomNumber: 'B302', floor: 3, rent: 5000, status: 'occupied', bldId: bldB.id },
-    { roomNumber: 'B303', floor: 3, rent: 5000, status: 'vacant', bldId: bldB.id },
-    { roomNumber: 'B401', floor: 4, rent: 5000, status: 'vacant', bldId: bldB.id },
-    { roomNumber: 'B402', floor: 4, rent: 5000, status: 'vacant', bldId: bldB.id },
-    { roomNumber: 'B403', floor: 4, rent: 5000, status: 'vacant', bldId: bldB.id },
+    { roomNumber: 'B101', floor: 1, rent: 5000, termRent: 20000, dailyRent: 600, status: 'occupied', bldId: bldB.id },
+    { roomNumber: 'B102', floor: 1, rent: 5000, termRent: 21000, dailyRent: 650, status: 'occupied', bldId: bldB.id },
+    { roomNumber: 'B103', floor: 1, rent: 5000, termRent: 20000, dailyRent: 600, status: 'occupied', bldId: bldB.id },
+    { roomNumber: 'B201', floor: 2, rent: 5000, termRent: 20000, dailyRent: 600, status: 'occupied', bldId: bldB.id },
+    { roomNumber: 'B202', floor: 2, rent: 5000, termRent: 20000, dailyRent: 600, status: 'occupied', bldId: bldB.id },
+    { roomNumber: 'B203', floor: 2, rent: 5000, termRent: 20000, dailyRent: 600, status: 'occupied', bldId: bldB.id },
+    { roomNumber: 'B301', floor: 3, rent: 5000, termRent: 20000, dailyRent: 600, status: 'occupied', bldId: bldB.id },
+    { roomNumber: 'B302', floor: 3, rent: 5000, termRent: 20000, dailyRent: 600, status: 'occupied', bldId: bldB.id },
+    { roomNumber: 'B303', floor: 3, rent: 5000, termRent: 20000, dailyRent: 600, status: 'vacant', bldId: bldB.id },
+    { roomNumber: 'B401', floor: 4, rent: 5000, termRent: 20000, dailyRent: 600, status: 'vacant', bldId: bldB.id },
+    { roomNumber: 'B402', floor: 4, rent: 5000, termRent: 20000, dailyRent: 600, status: 'vacant', bldId: bldB.id },
+    { roomNumber: 'B403', floor: 4, rent: 5000, termRent: 20000, dailyRent: 600, status: 'vacant', bldId: bldB.id },
   ];
 
   const createdRooms = {};
@@ -331,6 +417,8 @@ export async function ensureGoldenDormData() {
         status: rd.status,
         monthlyRent: rd.rent,
         depositAmount: rd.rent,
+        termRent: rd.termRent,
+        dailyRent: rd.dailyRent,
       },
       create: {
         dormitoryId: dorm.id,
@@ -341,6 +429,8 @@ export async function ensureGoldenDormData() {
         roomType: 'standard',
         monthlyRent: rd.rent,
         depositAmount: rd.rent,
+        termRent: rd.termRent,
+        dailyRent: rd.dailyRent,
         status: rd.status,
       },
     });

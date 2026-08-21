@@ -443,18 +443,18 @@ export class BillingCycleService {
       isLocked = true;
       lockReason = 'งวดนี้ถูกล็อคแล้ว จึงไม่สามารถแก้ไขค่าที่มีผลต่อบิลได้';
     } else {
-      // Check paid bills in cycle
-      const paidBillsCount = await prisma.bill.count({
+      // STRICT ALL-ROOM UNISSUED GATE: Rates are editable ONLY IF every room in cycle is still in unissued state
+      const nonUnissuedBillsCount = await prisma.bill.count({
         where: {
           dormitoryId,
           billingCycleId: cycle.id,
-          status: 'paid',
+          status: { notIn: ['draft', 'cancelled', 'voided', 'withdrawn', 'superseded'] },
         },
       });
 
-      if (paidBillsCount > 0) {
+      if (nonUnissuedBillsCount > 0) {
         isLocked = true;
-        lockReason = 'งวดนี้มีรายการชำระเงินแล้ว จึงไม่สามารถแก้ไขค่าที่มีผลต่อบิลย้อนหลังได้';
+        lockReason = 'งวดนี้มีห้องพักที่ออกบิลแล้ว จึงไม่สามารถแก้ไขอัตราค่าบริการที่ส่งผลต่อการคำนวณบิลได้';
       } else {
         // Check historical cycle relative to authoritative operational cycle (regardless of cycle.status)
         const operational = await currentCycleResolverService.resolveOperationalBillingCycle(dormitoryId);
@@ -550,6 +550,21 @@ export class BillingCycleService {
     };
 
     const txResult = await prisma.$transaction(async (tx) => {
+      // 0. Transactional race-safe verification: ensure no room in cycle has progressed beyond unissued
+      const nonUnissuedCount = await tx.bill.count({
+        where: {
+          dormitoryId,
+          billingCycleId: cycle.id,
+          status: { notIn: ['draft', 'cancelled', 'voided', 'withdrawn', 'superseded'] },
+        },
+      });
+      if (nonUnissuedCount > 0) {
+        const err: any = new Error('BILLING_CYCLE_RATE_SETTINGS_LOCKED: งวดนี้มีห้องพักที่ออกบิลแล้ว จึงไม่สามารถแก้ไขอัตราค่าบริการได้');
+        err.statusCode = 409;
+        err.code = 'BILLING_CYCLE_RATE_SETTINGS_LOCKED';
+        throw err;
+      }
+
       // 1. Atomic update of target snapshot with OCC version match
       const updateResult = await tx.billingRateSnapshot.updateMany({
         where: {

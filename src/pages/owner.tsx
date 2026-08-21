@@ -43,6 +43,7 @@ import { queryKeys, STALE_TIMES, clearDormitoryQueryCache } from '../lib/queryCl
 import { meterDraftStore, clearMeterDraftStore } from '../lib/meterDraftStore';
 import { getDataProvider } from '../data/dataProvider';
 import { httpRequest } from '../data/httpClient';
+import { formatThaiDate } from '../components/GlobalComponents';
 
 // Import sub-modules
 import { OwnerDashboard } from './owner/dashboard';
@@ -1616,7 +1617,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
                                 id: notif.id,
                                 title: notif.title,
                                 description: notif.body,
-                                time: new Date(notif.createdAt).toLocaleDateString('th-TH'),
+                                time: formatThaiDate(notif.createdAt),
                                 tag: notif.category || 'แจ้งเตือน',
                                 tagColor: 'bg-blue-100 text-blue-800 border-blue-200',
                               }}

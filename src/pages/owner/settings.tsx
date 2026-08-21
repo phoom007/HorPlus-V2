@@ -37,7 +37,7 @@ import { BillingCycleCalendarPicker } from '../../components/common/BillingCycle
 import { getPaymentSettings, updatePaymentSettings, PaymentSettingsUpdatePayload } from '../../services/payment-settings.service';
 import { getDormitoryProfile, updateDormitoryProfile, UpdateDormitoryProfilePayload } from '../../services/dormitory.service';
 import { OwnerLineOaPage } from './line-oa';
-
+import { queryClient, queryKeys } from '../../lib/queryClient';
 import { Dormitory, CycleRates } from '../../types';
 
 interface OwnerSettingsProps {
@@ -354,6 +354,12 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
       setSaveStatus('saved');
       setTimeout(() => setSaveStatus('idle'), 2000);
       onAddLog('แก้ไขอัตราค่าบริการรอบบิล', `อัปเดตอัตราค่าบริการประจำเดือน ${selectedCycle} สำเร็จ`, 'SETTINGS', dormId);
+
+      // Targeted cache invalidation to propagate updated rates to Meter workspace live
+      if (dormId) {
+        queryClient.invalidateQueries({ queryKey: queryKeys.billingCycles(dormId) });
+        queryClient.invalidateQueries({ queryKey: ['meter', dormId] });
+      }
     } catch (err: any) {
       console.error('Error saving cycle rate settings:', err);
       setSaveStatus('idle');
@@ -773,6 +779,14 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
       await fetchDormitoryDefaults();
       setSaveStatus('saved');
       setTimeout(() => setSaveStatus('idle'), 2000);
+
+      const dormId = selectedDormId || dorm?.id;
+      if (dormId) {
+        queryClient.invalidateQueries({ queryKey: queryKeys.billingCycles(dormId) });
+        queryClient.invalidateQueries({ queryKey: ['meter', dormId] });
+        queryClient.invalidateQueries({ queryKey: queryKeys.rooms(dormId) });
+        queryClient.invalidateQueries({ queryKey: queryKeys.buildings(dormId) });
+      }
     } catch (err: any) {
       console.error('Error saving backend dormitory defaults:', err);
       setSaveStatus('idle');

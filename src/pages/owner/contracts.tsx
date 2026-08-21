@@ -48,7 +48,8 @@ import {
   PrintView,
   Modal,
   ThaiDatePicker,
-  CurrencyInput
+  CurrencyInput,
+  OwnerDateInput
 } from '../../components/GlobalComponents';
 import { Contract, Tenant, Room, Bill, BillItem, BLOCKING_CONTRACT_STATUSES } from '../../types';
 import { getDataProvider } from '../../data/dataProvider';
@@ -981,11 +982,9 @@ export const OwnerContracts: React.FC<OwnerContractsProps> = ({
 
                 <div className="space-y-1.5">
                   <label className="text-[10px] font-bold text-slate-500 block">วันเริ่มเข้าพัก</label>
-                  <input
-                    type="date"
+                  <OwnerDateInput
                     value={stayDate}
-                    onChange={(e) => setStayDate(e.target.value)}
-                    className="w-full px-3.5 py-2 border border-slate-150 rounded-xl bg-slate-50/50 text-xs font-semibold text-slate-800 focus:bg-white focus:border-blue-500 outline-none"
+                    onChange={(iso) => setStayDate(iso)}
                   />
                 </div>
 
@@ -1001,11 +1000,9 @@ export const OwnerContracts: React.FC<OwnerContractsProps> = ({
 
                 <div className="space-y-1.5">
                   <label className="text-[10px] font-bold text-slate-500 block">วันที่เริ่มต้นสัญญา</label>
-                  <input
-                    type="date"
+                  <OwnerDateInput
                     value={startDate}
-                    onChange={(e) => setStartDate(e.target.value)}
-                    className="w-full px-3.5 py-2 border border-slate-150 rounded-xl bg-slate-50/50 text-xs font-semibold text-slate-800 focus:bg-white focus:border-blue-500 outline-none"
+                    onChange={(iso) => setStartDate(iso)}
                   />
                 </div>
 
