@@ -24,9 +24,9 @@ export interface MeterReadingEntity {
   roomId: string;
   meterDeviceId: string;
   meterType: string; // water, electricity
-  previousReading: string; // Decimal string
-  currentReading: string; // Decimal string
-  usageUnits: string; // Decimal string
+  previousReading?: string | null;
+  currentReading?: string | null;
+  usageUnits?: string | null;
   isReplacement: boolean;
   replacementId?: string | null;
   readAt: Date;
@@ -70,9 +70,9 @@ export interface CreateMeterReadingData {
   roomId: string;
   meterDeviceId: string;
   meterType: string;
-  previousReading: string;
-  currentReading: string;
-  usageUnits: string;
+  previousReading?: string | null;
+  currentReading?: string | null;
+  usageUnits?: string | null;
   isReplacement?: boolean;
   replacementId?: string | null;
   readAt?: Date;
@@ -396,7 +396,7 @@ export class PrismaMeterRepository implements IMeterRepository {
   }
 
   private mapReadingToEntity(model: any): MeterReadingEntity {
-    const fmt = (val: any) => (val !== undefined && val !== null ? Number(val.toString()).toFixed(2) : '0.00');
+    const fmt = (val: any) => (val !== undefined && val !== null ? Number(val.toString()).toFixed(2) : null);
     return {
       id: model.id,
       dormitoryId: model.dormitoryId,
@@ -511,11 +511,13 @@ export class PrismaMeterRepository implements IMeterRepository {
       },
     });
 
-    // Update current reading on meter device
-    await client.meterDevice.update({
-      where: { id: data.meterDeviceId },
-      data: { currentReading: data.currentReading },
-    });
+    // Update current reading on meter device if provided
+    if (data.currentReading !== undefined && data.currentReading !== null) {
+      await client.meterDevice.update({
+        where: { id: data.meterDeviceId },
+        data: { currentReading: data.currentReading },
+      });
+    }
 
     return this.mapReadingToEntity(reading);
   }
@@ -571,7 +573,7 @@ export class PrismaMeterRepository implements IMeterRepository {
       data: { ...updateData, version: { increment: 1 } },
     });
 
-    if (data.currentReading !== undefined) {
+    if (data.currentReading !== undefined && data.currentReading !== null) {
       await client.meterDevice.update({
         where: { id: existing.meterDeviceId },
         data: { currentReading: data.currentReading },

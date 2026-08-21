@@ -128,6 +128,7 @@ model Dormitory {
   provisionalRentalTerms     ProvisionalRentalTerm[]
   dailyStays                 DailyStay[]
   dailyStayInvoices          DailyStayInvoice[]
+  combinedPaymentGroups      CombinedPaymentGroup[]
 
   @@map("dormitories")
 }
@@ -512,6 +513,7 @@ model Tenant {
   notices                TenantNotice[]
   provisionalRentalTerms ProvisionalRentalTerm[]
   dailyStays             DailyStay[]
+  combinedPaymentGroups  CombinedPaymentGroup[]
 
   @@unique([dormitoryId, tenantNumber], name: "dormitory_tenant_number_unique")
   @@map("tenants")
@@ -839,9 +841,9 @@ model MeterReading {
   roomId          String   @map("room_id") @db.Uuid
   meterDeviceId   String   @map("meter_device_id") @db.Uuid
   meterType       String   @map("meter_type") @db.VarChar(50)
-  previousReading Decimal  @map("previous_reading") @db.Decimal(12, 2)
-  currentReading  Decimal  @map("current_reading") @db.Decimal(12, 2)
-  usageUnits      Decimal  @map("usage_units") @db.Decimal(12, 2)
+  previousReading Decimal? @map("previous_reading") @db.Decimal(12, 2)
+  currentReading  Decimal? @map("current_reading") @db.Decimal(12, 2)
+  usageUnits      Decimal? @map("usage_units") @db.Decimal(12, 2)
   isReplacement   Boolean  @default(false) @map("is_replacement")
   replacementId   String?  @map("replacement_id") @db.Uuid
   readAt          DateTime @default(now()) @map("read_at") @db.Timestamptz()
@@ -908,6 +910,8 @@ model Bill {
   cancelledByUserId  String?   @map("cancelled_by_user_id") @db.Uuid
   cancellationReason       String?                @map("cancellation_reason") @db.Text
   provisionalRentalTermId  String?                @map("provisional_rental_term_id") @db.Uuid
+  billKind                 String                 @default("MONTHLY_UTILITY") @map("bill_kind") @db.VarChar(50)
+  paymentGroupId           String?                @map("payment_group_id") @db.Uuid
   version                  Int                    @default(1)
   createdAt                DateTime               @default(now()) @map("created_at") @db.Timestamptz()
   updatedAt                DateTime               @updatedAt @map("updated_at") @db.Timestamptz()
@@ -919,6 +923,7 @@ model Bill {
   tenant                Tenant?                @relation(fields: [tenantId], references: [id], onDelete: Restrict)
   rateSnapshot          BillingRateSnapshot?   @relation(fields: [rateSnapshotId], references: [id], onDelete: SetNull)
   provisionalRentalTerm ProvisionalRentalTerm? @relation(fields: [provisionalRentalTermId], references: [id], onDelete: Restrict)
+  paymentGroup          CombinedPaymentGroup?  @relation(fields: [paymentGroupId], references: [id], onDelete: SetNull)
   items                 BillItem[]
   statusHistories       BillStatusHistory[]
   Payment               Payment[]
@@ -927,6 +932,7 @@ model Bill {
 
   @@unique([dormitoryId, billNumber], name: "dormitory_bill_number_unique")
   @@index([provisionalRentalTermId])
+  @@index([dormitoryId, billingCycleId, roomId, billKind], name: "bills_dorm_cycle_room_kind_idx")
   @@map("bills")
 }
 
@@ -1103,6 +1109,7 @@ model Payment {
   dormitoryId      String    @map("dormitory_id") @db.Uuid
   billId           String    @map("bill_id") @db.Uuid
   tenantId         String?   @map("tenant_id") @db.Uuid
+  paymentGroupId   String?   @map("payment_group_id") @db.Uuid
   method           String    @db.VarChar(50)
   amount           Decimal   @db.Decimal(12, 2)
   status           String    @default("PENDING") @db.VarChar(50)
@@ -1123,6 +1130,7 @@ model Payment {
   dormitory       Dormitory              @relation(fields: [dormitoryId], references: [id], onDelete: Restrict)
   bill            Bill                   @relation(fields: [billId], references: [id], onDelete: Restrict)
   tenant          Tenant?                @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  paymentGroup    CombinedPaymentGroup?  @relation(fields: [paymentGroupId], references: [id], onDelete: SetNull)
   statusHistories PaymentStatusHistory[]
   receipt         Receipt?
 
@@ -1184,28 +1192,30 @@ model ReceiptSequence {
 }
 
 model PaymentUploadIntent {
-  id                  String    @id @default(uuid()) @db.Uuid
-  authenticatedUserId String    @map("authenticated_user_id") @db.Uuid
-  tenantId            String    @map("tenant_id") @db.Uuid
-  dormitoryId         String    @map("dormitory_id") @db.Uuid
-  billId              String    @map("bill_id") @db.Uuid
-  status              String    @default("CREATED") @db.VarChar(50)
-  expiresAt           DateTime  @map("expires_at") @db.Timestamptz()
-  expectedMimeType    String?   @map("expected_mime_type") @db.VarChar(100)
-  expectedSize        Int?      @map("expected_size")
-  verifiedMimeType    String?   @map("verified_mime_type") @db.VarChar(100)
-  verifiedSize        Int?      @map("verified_size")
-  objectKey           String?   @map("object_key") @db.Text
-  sha256              String?   @map("sha256") @db.VarChar(255)
-  uploadedAt          DateTime? @map("uploaded_at") @db.Timestamptz()
-  consumedAt          DateTime? @map("consumed_at") @db.Timestamptz()
-  createdAt           DateTime  @default(now()) @map("created_at") @db.Timestamptz()
-  updatedAt           DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
+  id                  String                @id @default(uuid()) @db.Uuid
+  authenticatedUserId String                @map("authenticated_user_id") @db.Uuid
+  tenantId            String                @map("tenant_id") @db.Uuid
+  dormitoryId         String                @map("dormitory_id") @db.Uuid
+  billId              String?               @map("bill_id") @db.Uuid
+  paymentGroupId      String?               @map("payment_group_id") @db.Uuid
+  status              String                @default("CREATED") @db.VarChar(50)
+  expiresAt           DateTime              @map("expires_at") @db.Timestamptz()
+  expectedMimeType    String?               @map("expected_mime_type") @db.VarChar(100)
+  expectedSize        Int?                  @map("expected_size")
+  verifiedMimeType    String?               @map("verified_mime_type") @db.VarChar(100)
+  verifiedSize        Int?                  @map("verified_size")
+  objectKey           String?               @map("object_key") @db.Text
+  sha256              String?               @map("sha256") @db.VarChar(255)
+  uploadedAt          DateTime?             @map("uploaded_at") @db.Timestamptz()
+  consumedAt          DateTime?             @map("consumed_at") @db.Timestamptz()
+  createdAt           DateTime              @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt           DateTime              @updatedAt @map("updated_at") @db.Timestamptz()
 
-  authenticatedUser User      @relation(fields: [authenticatedUserId], references: [id], onDelete: Restrict)
-  tenant            Tenant    @relation(fields: [tenantId], references: [id], onDelete: Restrict)
-  dormitory         Dormitory @relation(fields: [dormitoryId], references: [id], onDelete: Restrict)
-  bill              Bill      @relation(fields: [billId], references: [id], onDelete: Restrict)
+  authenticatedUser User                  @relation(fields: [authenticatedUserId], references: [id], onDelete: Restrict)
+  tenant            Tenant                @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  dormitory         Dormitory             @relation(fields: [dormitoryId], references: [id], onDelete: Restrict)
+  bill              Bill?                 @relation(fields: [billId], references: [id], onDelete: Restrict)
+  paymentGroup      CombinedPaymentGroup? @relation(fields: [paymentGroupId], references: [id], onDelete: SetNull)
 
   @@index([authenticatedUserId], name: "idx_intent_actor")
   @@index([tenantId], name: "idx_intent_tenant")
@@ -1213,6 +1223,30 @@ model PaymentUploadIntent {
   @@index([billId], name: "idx_intent_bill")
   @@index([status, expiresAt], name: "idx_intent_status_expires")
   @@map("payment_upload_intents")
+}
+
+model CombinedPaymentGroup {
+  id                 String    @id @default(uuid()) @db.Uuid
+  dormitoryId        String    @map("dormitory_id") @db.Uuid
+  tenantId           String?   @map("tenant_id") @db.Uuid
+  totalAmount        Decimal   @map("total_amount") @db.Decimal(12, 2)
+  method             String    @db.VarChar(50) // CASH | BANK_TRANSFER | PROMPTPAY
+  status             String    @default("APPROVED") @db.VarChar(50) // APPROVED | UNDER_REVIEW | REJECTED
+  paymentDate        DateTime  @default(now()) @map("payment_date") @db.Timestamptz()
+  recordedByUserId   String?   @map("recorded_by_user_id") @db.Uuid
+  idempotencyKey     String?   @unique @map("idempotency_key") @db.VarChar(100)
+  metadata           Json?
+  notes              String?   @db.Text
+  createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt          DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
+
+  dormitory            Dormitory             @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
+  tenant               Tenant?               @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  payments             Payment[]
+  paymentUploadIntents PaymentUploadIntent[]
+  bills                Bill[]
+
+  @@map("combined_payment_groups")
 }
 
 // ----------------------------------------------------------------------
@@ -1827,6 +1861,8 @@ model DailyStay {
   requesterUserId       String?   @map("requester_user_id") @db.Uuid
   startDate             DateTime  @map("start_date") @db.Date
   endDate               DateTime  @map("end_date") @db.Date
+  checkInAt             DateTime? @map("check_in_at") @db.Timestamptz()
+  checkOutAt            DateTime? @map("check_out_at") @db.Timestamptz()
   inclusiveDayCount     Int       @map("inclusive_day_count")
   dailyRateAmount       Decimal   @default(0.00) @map("daily_rate_amount") @db.Decimal(12, 2)
   totalRentAmount       Decimal   @default(0.00) @map("total_rent_amount") @db.Decimal(12, 2)

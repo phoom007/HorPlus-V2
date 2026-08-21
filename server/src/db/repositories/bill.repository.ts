@@ -9,6 +9,8 @@ export interface BillEntity {
   roomId: string;
   tenantId?: string | null;
   billNumber: string;
+  billKind?: string; // MONTHLY_UTILITY | RENT | DEPOSIT | LEGACY_COMBINED
+  paymentGroupId?: string | null;
   status: string; // draft, unpaid, partially_paid, paid, overdue, cancelled
   billingDate: Date;
   dueDate: Date;
@@ -70,6 +72,8 @@ export interface CreateBillData {
   roomId: string;
   tenantId?: string | null;
   billNumber?: string;
+  billKind?: string;
+  paymentGroupId?: string | null;
   status?: string;
   billingDate: Date;
   dueDate: Date;
@@ -105,6 +109,7 @@ export interface BillFilterQuery {
   roomId?: string;
   tenantId?: string;
   contractId?: string;
+  billKind?: string;
   status?: string;
   buildingId?: string;
   search?: string;
@@ -117,8 +122,8 @@ export interface BillFilterQuery {
 export interface IBillRepository {
   findById(id: string, dormitoryId?: string): Promise<BillEntity | null>;
   findByNumber(dormitoryId: string, billNumber: string, tx?: any): Promise<BillEntity | null>;
-  findByCycleAndContract(dormitoryId: string, billingCycleId: string, contractId: string, tx?: any): Promise<BillEntity | null>;
-  findByCycleAndRoom(dormitoryId: string, billingCycleId: string, roomId: string, tx?: any): Promise<BillEntity | null>;
+  findByCycleAndContract(dormitoryId: string, billingCycleId: string, contractId: string, billKind?: string, tx?: any): Promise<BillEntity | null>;
+  findByCycleAndRoom(dormitoryId: string, billingCycleId: string, roomId: string, billKind?: string, tx?: any): Promise<BillEntity | null>;
   findAll(dormitoryId: string, filter?: BillFilterQuery, tx?: any): Promise<{ items: BillEntity[]; total: number }>;
   create(dormitoryId: string, data: CreateBillData, items: CreateBillItemData[], tx?: any): Promise<{ bill: BillEntity; items: BillItemEntity[] }>;
   update(id: string, dormitoryId: string, data: Partial<BillEntity>, expectedVersion?: number, tx?: any): Promise<BillEntity | null>;
@@ -155,20 +160,24 @@ export class InMemoryBillRepository implements IBillRepository {
     dormitoryId: string,
     billingCycleId: string,
     contractId: string,
+    billKindOrTx?: string | any,
     tx?: any
   ): Promise<BillEntity | null> {
+    const billKind = typeof billKindOrTx === 'string' ? billKindOrTx : undefined;
     const list = Array.from(this.bills.values());
-    return list.find((b) => b.dormitoryId === dormitoryId && b.billingCycleId === billingCycleId && b.contractId === contractId && b.status !== 'cancelled' && b.status !== 'void') || null;
+    return list.find((b) => b.dormitoryId === dormitoryId && b.billingCycleId === billingCycleId && b.contractId === contractId && (!billKind || (b.billKind || 'MONTHLY_UTILITY') === billKind) && b.status !== 'cancelled' && b.status !== 'void') || null;
   }
 
   public async findByCycleAndRoom(
     dormitoryId: string,
     billingCycleId: string,
     roomId: string,
+    billKindOrTx?: string | any,
     tx?: any
   ): Promise<BillEntity | null> {
+    const billKind = typeof billKindOrTx === 'string' ? billKindOrTx : undefined;
     const list = Array.from(this.bills.values());
-    return list.find((b) => b.dormitoryId === dormitoryId && b.billingCycleId === billingCycleId && b.roomId === roomId && b.status !== 'cancelled' && b.status !== 'void') || null;
+    return list.find((b) => b.dormitoryId === dormitoryId && b.billingCycleId === billingCycleId && b.roomId === roomId && (!billKind || (b.billKind || 'MONTHLY_UTILITY') === billKind) && b.status !== 'cancelled' && b.status !== 'void') || null;
   }
 
   public async findAll(dormitoryId: string, filter: BillFilterQuery = {}): Promise<{ items: BillEntity[]; total: number }> {
@@ -437,6 +446,8 @@ export class PrismaBillRepository implements IBillRepository {
       roomId: model.roomId,
       tenantId: model.tenantId,
       billNumber: model.billNumber,
+      billKind: model.billKind || 'MONTHLY_UTILITY',
+      paymentGroupId: model.paymentGroupId || null,
       status: model.status,
       billingDate: model.billingDate,
       dueDate: model.dueDate,
@@ -498,6 +509,8 @@ export class PrismaBillRepository implements IBillRepository {
         roomId: data.roomId,
         tenantId: isUuid(data.tenantId) ? data.tenantId : null,
         billNumber: data.billNumber || `BILL-${Date.now()}`,
+        billKind: data.billKind || 'MONTHLY_UTILITY',
+        paymentGroupId: isUuid(data.paymentGroupId) ? data.paymentGroupId : null,
         status: data.status || 'unpaid',
         billingDate: new Date(data.billingDate),
         dueDate: new Date(data.dueDate),
@@ -560,17 +573,26 @@ export class PrismaBillRepository implements IBillRepository {
     dormitoryId: string,
     billingCycleId: string,
     contractId: string,
+    billKindOrTx?: string | any,
     tx?: any
   ): Promise<BillEntity | null> {
-    const client = this.getClient(tx);
-    const bill = await client.bill.findFirst({
-      where: { 
-        dormitoryId, 
-        billingCycleId, 
-        contractId,
-        status: { notIn: ['cancelled', 'void'] }
-      },
-    });
+    let billKind: string | undefined = undefined;
+    let actualTx: any = tx;
+    if (typeof billKindOrTx === 'string') {
+      billKind = billKindOrTx;
+    } else if (billKindOrTx && typeof billKindOrTx === 'object') {
+      actualTx = billKindOrTx;
+    }
+
+    const client = this.getClient(actualTx);
+    const where: any = { 
+      dormitoryId, 
+      billingCycleId, 
+      contractId,
+      status: { notIn: ['cancelled', 'void'] }
+    };
+    if (billKind) where.billKind = billKind;
+    const bill = await client.bill.findFirst({ where });
     return bill ? this.mapBillToEntity(bill) : null;
   }
 
@@ -578,17 +600,26 @@ export class PrismaBillRepository implements IBillRepository {
     dormitoryId: string,
     billingCycleId: string,
     roomId: string,
+    billKindOrTx?: string | any,
     tx?: any
   ): Promise<BillEntity | null> {
-    const client = this.getClient(tx);
-    const bill = await client.bill.findFirst({
-      where: { 
-        dormitoryId, 
-        billingCycleId, 
-        roomId,
-        status: { notIn: ['cancelled', 'void'] }
-      },
-    });
+    let billKind: string | undefined = undefined;
+    let actualTx: any = tx;
+    if (typeof billKindOrTx === 'string') {
+      billKind = billKindOrTx;
+    } else if (billKindOrTx && typeof billKindOrTx === 'object') {
+      actualTx = billKindOrTx;
+    }
+
+    const client = this.getClient(actualTx);
+    const where: any = { 
+      dormitoryId, 
+      billingCycleId, 
+      roomId,
+      status: { notIn: ['cancelled', 'void'] }
+    };
+    if (billKind) where.billKind = billKind;
+    const bill = await client.bill.findFirst({ where });
     return bill ? this.mapBillToEntity(bill) : null;
   }
 
