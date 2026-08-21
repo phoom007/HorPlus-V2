@@ -17,8 +17,8 @@ import { getTargetQueriesForTab } from '../pages/owner';
 import * as httpClient from '../data/httpClient';
 import { Room, Building, QuickAddRoomContext } from '../types';
 import { queryKeys } from '../lib/queryClient';
-import { calculateMeterRowPreview } from '../utils/meterBillingCalculator';
 import { meterDraftStore } from '../lib/meterDraftStore';
+import { calculateMeterRowPreview, RoomPreviewContext } from '../utils/meterBillingCalculator';
 
 const createTestQueryClient = () =>
   new QueryClient({
@@ -2230,5 +2230,278 @@ describe('Cycle Authority & Data-Ready Navigation Proofs', () => {
     expect(maintenanceKeys).toContain(JSON.stringify(queryKeys.maintenance(dormId)));
     expect(maintenanceKeys).toContain(JSON.stringify(queryKeys.rooms(dormId)));
     expect(maintenanceKeys).toContain(JSON.stringify(queryKeys.tenants(dormId)));
+  });
+});
+
+// ==========================================
+// Section 14: Daily Stay Meter Semantics, Financial Exclusion & Exact Deposit Copy
+// ==========================================
+describe('Daily Stay Meter Semantics, Financial Exclusion & Exact Deposit Copy', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    meterDraftStore.clearDormitoryDrafts('dorm-daily-test');
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  const dailyRoom: Room = {
+    id: 'room-daily-1',
+    buildingId: 'bld-daily',
+    roomNumber: 'D101',
+    floor: 1,
+    status: 'occupied',
+    monthlyRent: 4000,
+    dailyRent: 500,
+    depositAmount: 500,
+    maxOccupants: 2,
+    initialWaterMeter: 100,
+    initialElectricMeter: 500,
+    images: [],
+    createdAt: '2026-08-01',
+    updatedAt: '2026-08-01',
+  };
+
+  const dailyCycles = [
+    { id: 'cycle-daily-aug', cycleCode: '2026-08', status: 'draft', isCurrent: true, isFirstCycle: false },
+  ];
+
+  it('Proves A & H: DAILY_STAY meter inputs are ENABLED, while status cell remains locked as "รายวัน"', async () => {
+    vi.spyOn(httpClient, 'httpRequest').mockImplementation(async (method, url) => {
+      if (url.includes('/meters/workspace/preview-context')) {
+        return {
+          success: true,
+          data: {
+            rateSnapshot: {
+              waterBillingType: 'per_unit',
+              waterRate: '18.00',
+              electricityBillingType: 'per_unit',
+              electricityRate: '8.00',
+            },
+            rooms: [
+              {
+                roomId: 'room-daily-1',
+                roomNumber: 'D101',
+                tenantName: 'ผู้พัก รายวัน',
+                billingSource: 'DAILY_STAY',
+                rentAmount: '1500.00',
+                dailyDepositAmount: '500.00',
+                showDailyDepositLine: true,
+                isDailyDepositPaidInDisplayedPeriod: false,
+                isLineLinked: false,
+              },
+            ],
+          },
+        };
+      }
+      if (url.includes('/meters/readings')) {
+        return {
+          success: true,
+          data: [
+            {
+              id: 'read-water-1',
+              billingCycleId: 'cycle-daily-aug',
+              roomId: 'room-daily-1',
+              meterType: 'water',
+              previousReading: '100',
+              currentReading: '105',
+            },
+            {
+              id: 'read-elec-1',
+              billingCycleId: 'cycle-daily-aug',
+              roomId: 'room-daily-1',
+              meterType: 'electricity',
+              previousReading: '500',
+              currentReading: '520',
+            },
+          ],
+        };
+      }
+      if (url.includes('/meters/workspace/household-counts')) {
+        return {
+          success: true,
+          data: [{ roomId: 'room-daily-1', currentHouseholdPeopleCount: 1 }],
+        };
+      }
+      return { success: true, data: [] };
+    });
+
+    renderWithClient(
+      <OwnerMeters
+        rooms={[dailyRoom]}
+        buildings={[{ id: 'bld-daily', dormitoryId: 'dorm-daily-test', name: 'อาคาร Daily', totalFloors: 1, roomsPerFloor: 1, createdAt: '2026-08-01' }]}
+        dormitoryId="dorm-daily-test"
+        bills={[]}
+        tenants={[]}
+        contracts={[]}
+        onSaveBills={vi.fn()}
+        onSelectTenant={vi.fn()}
+        onAddLog={vi.fn()}
+        onNavigate={vi.fn()}
+        selectedBillingCycleId="cycle-daily-aug"
+        selectedCycleCode="2026-08"
+        selectedCycle="2026-08"
+        billingCycles={dailyCycles}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('D101')).toBeDefined();
+    });
+
+    // A. Verify meter inputs (elecCurr, waterCurr) are enabled (not disabled)
+    const elecCurrInput = screen.getByDisplayValue('520') as HTMLInputElement;
+    expect(elecCurrInput).toBeDefined();
+    expect(elecCurrInput.disabled).toBe(false);
+
+    const waterCurrInput = screen.getByDisplayValue('105') as HTMLInputElement;
+    expect(waterCurrInput).toBeDefined();
+    expect(waterCurrInput.disabled).toBe(false);
+
+    // H. Status cell contains locked badge "รายวัน" and NO toggle switch button
+    expect(screen.getByText('รายวัน')).toBeDefined();
+    expect(screen.queryByRole('switch')).toBeNull();
+
+    // I. Unpaid deposit copy is exactly: ค่าประกัน 500 ฿ · ยังไม่จ่าย
+    expect(screen.getByText(/ค่าประกัน 500 ฿ · ยังไม่จ่าย/)).toBeDefined();
+    expect(screen.queryByText(/ยังไม่ชำระ/)).toBeNull();
+  });
+
+  it('Proves I: Paid in displayed period deposit copy is exactly "ค่าประกัน <amount> ฿ · จ่ายแล้ว"', async () => {
+    vi.spyOn(httpClient, 'httpRequest').mockImplementation(async (method, url) => {
+      if (url.includes('/meters/workspace/preview-context')) {
+        return {
+          success: true,
+          data: {
+            rateSnapshot: {
+              waterBillingType: 'per_unit',
+              waterRate: '18.00',
+              electricityBillingType: 'per_unit',
+              electricityRate: '8.00',
+            },
+            rooms: [
+              {
+                roomId: 'room-daily-1',
+                roomNumber: 'D101',
+                tenantName: 'ผู้พัก รายวัน',
+                billingSource: 'DAILY_STAY',
+                rentAmount: '1500.00',
+                dailyDepositAmount: '500.00',
+                showDailyDepositLine: true,
+                isDailyDepositPaidInDisplayedPeriod: true, // Paid in current period
+                isLineLinked: false,
+              },
+            ],
+          },
+        };
+      }
+      return { success: true, data: [] };
+    });
+
+    renderWithClient(
+      <OwnerMeters
+        rooms={[dailyRoom]}
+        buildings={[{ id: 'bld-daily', dormitoryId: 'dorm-daily-test', name: 'อาคาร Daily', totalFloors: 1, roomsPerFloor: 1, createdAt: '2026-08-01' }]}
+        dormitoryId="dorm-daily-test"
+        bills={[]}
+        tenants={[]}
+        contracts={[]}
+        onSaveBills={vi.fn()}
+        onSelectTenant={vi.fn()}
+        onAddLog={vi.fn()}
+        onNavigate={vi.fn()}
+        selectedBillingCycleId="cycle-daily-aug"
+        selectedCycleCode="2026-08"
+        selectedCycle="2026-08"
+        billingCycles={dailyCycles}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('D101')).toBeDefined();
+    });
+
+    // I. Paid deposit copy is exactly: ค่าประกัน 500 ฿ · จ่ายแล้ว
+    expect(screen.getByText(/ค่าประกัน 500 ฿ · จ่ายแล้ว/)).toBeDefined();
+    expect(screen.queryByText(/ชำระแล้ว/)).toBeNull();
+    // Paid deposit is not added to total due (total is strictly rent 1,500.00)
+    expect(screen.getByText('1,500.00 ฿')).toBeDefined();
+  });
+
+  it('Proves C, D, E, F, G: Client calculator enforces strict DAILY_STAY financial exclusion while computing usage', () => {
+    const dailyCtx: RoomPreviewContext = {
+      roomId: 'room-daily-1',
+      billingSource: 'DAILY_STAY',
+      rentAmount: '1500.00',
+      dailyDepositAmount: '500.00',
+      showDailyDepositLine: true,
+      isDailyDepositPaidInDisplayedPeriod: false, // Unpaid -> total is 1500 + 500 = 2000.00
+    };
+
+    const rates = {
+      waterBillingType: 'per_unit' as const,
+      waterRate: '18.00',
+      electricityBillingType: 'per_unit' as const,
+      electricityRate: '8.00',
+    };
+
+    // Baseline calculation with 10 units water, 20 units electricity
+    const basePreview = calculateMeterRowPreview(dailyCtx, rates, {
+      waterPrev: '100',
+      waterCurr: '110',
+      elecPrev: '500',
+      elecCurr: '520',
+    });
+
+    // F. Total contains strictly rent + deposit due = 2,000.00
+    expect(basePreview.rentAmount).toBe('1500.00');
+    expect(basePreview.totalAmount).toBe('2000.00');
+    expect(basePreview.formattedTotal).toBe('2,000.00');
+    // Financial charges for water and electricity are strictly 0.00
+    expect(basePreview.waterAmount).toBe('0.00');
+    expect(basePreview.elecAmount).toBe('0.00');
+    // Usage is recorded for history
+    expect(basePreview.waterUsage).toBe('10.00');
+    expect(basePreview.elecUsage).toBe('20.00');
+
+    // D. Changing electricity reading from 520 to 990 (huge usage) does NOT change Daily total
+    const highElecPreview = calculateMeterRowPreview(dailyCtx, rates, {
+      waterPrev: '100',
+      waterCurr: '110',
+      elecPrev: '500',
+      elecCurr: '990',
+    });
+    expect(highElecPreview.totalAmount).toBe('2000.00');
+    expect(highElecPreview.elecAmount).toBe('0.00');
+    expect(highElecPreview.elecUsage).toBe('490.00');
+
+    // E. Changing water reading from 110 to 9999 (rollover usage) does NOT change Daily total
+    const highWaterPreview = calculateMeterRowPreview(dailyCtx, rates, {
+      waterPrev: '9980',
+      waterCurr: '10', // 4-digit rollover -> 30 units
+      elecPrev: '500',
+      elecCurr: '520',
+    });
+    expect(highWaterPreview.totalAmount).toBe('2000.00');
+    expect(highWaterPreview.waterAmount).toBe('0.00');
+    expect(highWaterPreview.waterUsage).toBe('30.00');
+
+    // G. Monthly/Term room meter charges continue to calculate normally
+    const monthlyCtx: RoomPreviewContext = {
+      roomId: 'room-monthly-1',
+      billingSource: 'CONTRACT',
+      rentAmount: '3500.00',
+    };
+    const monthlyPreview = calculateMeterRowPreview(monthlyCtx, rates, {
+      waterPrev: '100',
+      waterCurr: '110', // 10 units * 18 = 180.00
+      elecPrev: '500',
+      elecCurr: '520', // 20 units * 8 = 160.00
+    });
+    expect(monthlyPreview.waterAmount).toBe('180.00');
+    expect(monthlyPreview.elecAmount).toBe('160.00');
+    expect(monthlyPreview.totalAmount).toBe('3840.00'); // 3500 + 180 + 160 = 3840.00
   });
 });

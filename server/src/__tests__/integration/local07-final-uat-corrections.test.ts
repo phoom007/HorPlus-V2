@@ -14,6 +14,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import {
   parseMeterIntegerReading,
   calculateMeterUsageUnits,
+  calculateMeterRowPreview,
 } from '../../utils/meter-billing-calculator.util.js';
 import { getPrismaClient } from '../../db/prisma.js';
 import { DailyStayService, calculateInclusiveDays } from '../../services/daily-stay.service.js';
@@ -110,6 +111,97 @@ describe('LOCAL-07 Final UAT Correction Test Suite', () => {
       expect(() => {
         calculateInclusiveDays('2020-01-01', '2020-01-05');
       }).toThrow();
+    });
+  });
+
+  describe('3. DAILY_STAY Meter Semantics, Financial Exclusion & Exact Deposit Copy', () => {
+    const rates = {
+      waterBillingType: 'per_unit' as const,
+      waterRate: '18.00',
+      electricityBillingType: 'per_unit' as const,
+      electricityRate: '8.00',
+    };
+
+    it('proves DAILY_STAY total contains strictly Daily rent + deposit due and excludes utilities', () => {
+      const dailyCtx = {
+        roomId: 'room-d1',
+        billingSource: 'DAILY_STAY' as const,
+        rentAmount: '1200.00',
+        dailyDepositAmount: '500.00',
+        showDailyDepositLine: true,
+        isDailyDepositPaidInDisplayedPeriod: false, // Unpaid
+      };
+
+      const preview = calculateMeterRowPreview(dailyCtx, rates, {
+        waterPrev: '100',
+        waterCurr: '120',
+        elecPrev: '500',
+        elecCurr: '560',
+      });
+
+      // Total strictly: 1200 + 500 = 1700.00
+      expect(preview.rentAmount).toBe('1200.00');
+      expect(preview.totalAmount).toBe('1700.00');
+      expect(preview.formattedTotal).toBe('1,700.00');
+      // Utilities financial amounts are 0.00
+      expect(preview.waterAmount).toBe('0.00');
+      expect(preview.elecAmount).toBe('0.00');
+      // Usage is recorded for history
+      expect(preview.waterUsage).toBe('20.00');
+      expect(preview.elecUsage).toBe('60.00');
+    });
+
+    it('proves changing Daily electricity or water readings does NOT change Daily total', () => {
+      const dailyCtx = {
+        roomId: 'room-d1',
+        billingSource: 'DAILY_STAY' as const,
+        rentAmount: '1200.00',
+        dailyDepositAmount: '500.00',
+        showDailyDepositLine: true,
+        isDailyDepositPaidInDisplayedPeriod: false,
+      };
+
+      const p1 = calculateMeterRowPreview(dailyCtx, rates, {
+        waterPrev: '100',
+        waterCurr: '100',
+        elecPrev: '500',
+        elecCurr: '500',
+      });
+
+      const p2 = calculateMeterRowPreview(dailyCtx, rates, {
+        waterPrev: '100',
+        waterCurr: '990',
+        elecPrev: '500',
+        elecCurr: '999',
+      });
+
+      expect(p1.totalAmount).toBe('1700.00');
+      expect(p2.totalAmount).toBe('1700.00');
+      expect(p2.waterAmount).toBe('0.00');
+      expect(p2.elecAmount).toBe('0.00');
+    });
+
+    it('proves paid deposit in displayed period is excluded from total', () => {
+      const dailyCtx = {
+        roomId: 'room-d1',
+        billingSource: 'DAILY_STAY' as const,
+        rentAmount: '1200.00',
+        dailyDepositAmount: '500.00',
+        showDailyDepositLine: true,
+        isDailyDepositPaidInDisplayedPeriod: true, // Paid in current period
+      };
+
+      const preview = calculateMeterRowPreview(dailyCtx, rates, {
+        waterPrev: '100',
+        waterCurr: '120',
+        elecPrev: '500',
+        elecCurr: '560',
+      });
+
+      // Total strictly: 1200.00 (paid deposit excluded from total)
+      expect(preview.rentAmount).toBe('1200.00');
+      expect(preview.totalAmount).toBe('1200.00');
+      expect(preview.formattedTotal).toBe('1,200.00');
     });
   });
 });

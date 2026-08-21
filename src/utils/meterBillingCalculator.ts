@@ -27,7 +27,7 @@ export interface RoomPreviewContext {
   roomNumber?: string;
   tenantId?: string | null;
   tenantName?: string | null;
-  billingSource: 'CONTRACT' | 'PROVISIONAL_MONTHLY' | 'PROVISIONAL_TERM' | 'NONE';
+  billingSource: 'CONTRACT' | 'PROVISIONAL_MONTHLY' | 'PROVISIONAL_TERM' | 'DAILY_STAY' | 'NONE';
   rentAmount: string | number;
   rentDescription?: string;
   parkingQuantity?: string | number;
@@ -36,6 +36,9 @@ export interface RoomPreviewContext {
   snapshotManualOutstanding?: string | number;
   snapshotPeopleCount?: number | null;
   currentHouseholdPeopleCount?: number;
+  dailyDepositAmount?: string | number;
+  showDailyDepositLine?: boolean;
+  isDailyDepositPaidInDisplayedPeriod?: boolean;
 }
 
 export interface TransientRowDraft {
@@ -284,7 +287,34 @@ export function calculateMeterRowPreview(
   // 7. Overdue Amount Calculation
   const overdueSatang = parseSatang(draft.overdueAmount);
 
-  // 8. Total Amount
+  // 8. Special Financial Rule for DAILY_STAY:
+  // Meter readings for electricity/water are recorded for history/record purposes only,
+  // but MUST NOT be added to the Daily amount due or total.
+  // The Daily total contains strictly: rentAmount + (deposit still due in the displayed period).
+  if (roomCtx?.billingSource === 'DAILY_STAY') {
+    const depositDueSatang = (roomCtx.showDailyDepositLine && !roomCtx.isDailyDepositPaidInDisplayedPeriod)
+      ? parseSatang(roomCtx.dailyDepositAmount)
+      : 0n;
+    const totalDailySatang = rentSatang + depositDueSatang;
+    const totalStr = formatSatang(totalDailySatang);
+
+    return {
+      rentAmount: formatSatang(rentSatang),
+      waterAmount: '0.00',
+      waterUsage: formatScaled2(waterUsageScaled),
+      elecAmount: '0.00',
+      elecUsage: formatScaled2(elecUsageScaled),
+      commonAmount: '0.00',
+      internetAmount: '0.00',
+      parkingAmount: '0.00',
+      otherFeesAmount: '0.00',
+      overdueAmount: '0.00',
+      totalAmount: totalStr,
+      formattedTotal: formatMoneyDisplay(totalStr),
+    };
+  }
+
+  // 9. Standard Monthly/Term Total Amount
   const totalSatang =
     rentSatang +
     waterAmountSatang +
