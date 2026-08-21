@@ -365,6 +365,44 @@ export function createPaymentRouter(authService: AuthenticationService) {
     }
   });
 
+  // Owner: Record Cash Payment for Multiple Bills Atomically
+  router.post('/combined-cash', requireAuth, requireDormitoryPermission('payment:write'), requireDormitoryWriteEntitlement, requireCsrf, async (req, res) => {
+    try {
+      const auth = (req as any).auth;
+      const context = (req as any).dormitoryContext || (await resolveAuthoritativeDormitoryContext(req));
+      const dormitoryId = context.dormitoryId;
+
+      if (!ensureOwnerOrManager(req, res, dormitoryId)) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+
+      const schema = z.object({
+        billIds: z.array(z.string().uuid()).min(1, 'ต้องระบุรายการบิลอย่างน้อย 1 รายการ'),
+        notes: z.string().optional(),
+      });
+      const data = schema.parse(req.body);
+      const idempotencyKey = (req.headers['x-idempotency-key'] || req.headers['idempotency-key']) as string | undefined;
+
+      const result = await paymentService.recordCombinedCash({
+        dormitoryId,
+        billIds: data.billIds,
+        userId: auth.userId,
+        notes: data.notes,
+        idempotencyKey,
+      });
+
+      res.json(result);
+    } catch (err: any) {
+      if (err.message === 'IDEMPOTENCY_MISMATCH') {
+        return res.status(422).json({ error: 'IDEMPOTENCY_MISMATCH' });
+      }
+      if (err.message === 'CONCURRENT_REQUEST_IN_PROGRESS') {
+        return res.status(409).json({ error: 'CONCURRENT_REQUEST_IN_PROGRESS' });
+      }
+      res.status(400).json({ error: err.message });
+    }
+  });
+
   // Owner: Approve
   router.post('/:paymentId/approve', requireAuth, requireDormitoryPermission('payment:write'), requireDormitoryWriteEntitlement, requireCsrf, async (req, res) => {
     try {

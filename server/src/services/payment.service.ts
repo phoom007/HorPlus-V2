@@ -222,6 +222,136 @@ export class PaymentService {
   }
 
   /**
+   * Owner records cash payment for multiple bills atomically under a CombinedPaymentGroup
+   */
+  async recordCombinedCash(input: {
+    dormitoryId: string;
+    billIds: string[];
+    userId: string;
+    notes?: string;
+    idempotencyKey?: string | null;
+  }) {
+    return await idempotencyService.runWithIdempotency({
+      actorUserId: input.userId,
+      operation: 'recordCombinedCash',
+      idempotencyKey: input.idempotencyKey,
+      payload: { billIds: input.billIds },
+      fn: async () => {
+        return await this.client.$transaction(async (tx) => {
+          if (!input.billIds || input.billIds.length === 0) {
+            throw new Error('ต้องระบุรายการบิลอย่างน้อย 1 รายการ');
+          }
+
+          const bills = await tx.bill.findMany({
+            where: { id: { in: input.billIds }, dormitoryId: input.dormitoryId },
+            include: { items: true },
+          });
+
+          if (bills.length !== input.billIds.length) {
+            throw new Error('พบรายการบิลไม่ครบถ้วน');
+          }
+
+          for (const bill of bills) {
+            if (bill.status === 'PAID') {
+              throw new Error(`บิลหมายเลข ${bill.billNumber} ได้รับการชำระเงินแล้ว`);
+            }
+          }
+
+          Decimal.set({ rounding: Decimal.ROUND_HALF_UP });
+          let totalGroupAmount = new Decimal(0);
+          const billAmounts: Map<string, Decimal> = new Map();
+
+          for (const bill of bills) {
+            const billTotal = bill.totalAmount !== undefined && bill.totalAmount !== null
+              ? new Decimal(bill.totalAmount)
+              : bill.items.reduce((sum, item) => sum.plus(new Decimal(item.amount)), new Decimal(0));
+            billAmounts.set(bill.id, billTotal);
+            totalGroupAmount = totalGroupAmount.plus(billTotal);
+          }
+
+          const now = new Date();
+          const primaryTenantId = bills.find(b => b.tenantId)?.tenantId || null;
+
+          // Create CombinedPaymentGroup
+          const group = await tx.combinedPaymentGroup.create({
+            data: {
+              dormitoryId: input.dormitoryId,
+              tenantId: primaryTenantId,
+              totalAmount: totalGroupAmount,
+              method: 'CASH',
+              status: 'APPROVED',
+              paymentDate: now,
+              recordedByUserId: input.userId,
+              notes: input.notes || null,
+              idempotencyKey: input.idempotencyKey,
+            },
+          });
+
+          const createdPayments = [];
+
+          for (const bill of bills) {
+            const amount = billAmounts.get(bill.id)!;
+
+            const payment = await tx.payment.create({
+              data: {
+                dormitoryId: input.dormitoryId,
+                billId: bill.id,
+                tenantId: bill.tenantId,
+                paymentGroupId: group.id,
+                method: 'CASH',
+                amount,
+                status: 'APPROVED',
+                paymentDate: now,
+                reviewedByUserId: input.userId,
+                reviewedAt: now,
+                idempotencyKey: input.idempotencyKey ? `${input.idempotencyKey}-${bill.id}` : undefined,
+              },
+            });
+
+            await tx.paymentStatusHistory.create({
+              data: {
+                dormitoryId: input.dormitoryId,
+                paymentId: payment.id,
+                fromStatus: null,
+                toStatus: 'APPROVED',
+                changedByUserId: input.userId,
+              },
+            });
+
+            const prePaymentStatus = bill.status;
+            await tx.billStatusHistory.create({
+              data: {
+                dormitoryId: input.dormitoryId,
+                billId: bill.id,
+                fromStatus: prePaymentStatus,
+                toStatus: 'PAID',
+                changedByUserId: input.userId,
+              },
+            });
+
+            await tx.bill.update({
+              where: { id: bill.id },
+              data: {
+                status: 'PAID',
+                previousStatus: prePaymentStatus,
+                paidAt: now,
+                paidAmount: amount,
+                outstandingAmount: new Decimal(0),
+                paymentGroupId: group.id,
+              },
+            });
+
+            await this.generateReceiptTx(tx, payment.id, input.dormitoryId, bill.id, input.userId);
+            createdPayments.push(payment);
+          }
+
+          return { group, payments: createdPayments };
+        });
+      },
+    });
+  }
+
+  /**
    * Owner approves pending payment
    */
   async approvePayment(input: {
