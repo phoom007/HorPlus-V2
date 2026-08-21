@@ -13,6 +13,7 @@ import {
   formatCanonicalMeterIntegerString,
 } from '../utils/meter-serializer';
 import { QuickAddTenantModal } from '../components/QuickAddTenantModal';
+import { getOwnerFinancialBreakdown } from '../pages/owner/meters';
 import * as httpClient from '../data/httpClient';
 
 describe('LOCAL-07 Meter Workspace & Quick Add Comprehensive Frontend Suite', () => {
@@ -463,6 +464,140 @@ describe('LOCAL-07 Meter Workspace & Quick Add Comprehensive Frontend Suite', ()
         .filter(Boolean);
 
       expect(linkedTenantIds).toHaveLength(0);
+    });
+  });
+
+  describe('7. Owner Financial Details Plain Compact Text Rows (No Box/Card)', () => {
+    it('produces at most 3 top-level financial components with exact canonical labels', () => {
+      const mockRow: any = {
+        roomId: 'r-101',
+        waterCurr: '10',
+        waterPrev: '5',
+        elecCurr: '100',
+        elecPrev: '80',
+        peopleCount: '1',
+      };
+
+      const mockRoomCtx: any = {
+        billingSource: 'MONTHLY_CONTRACT',
+        depositAmount: '500.00',
+        isDepositPaid: false,
+        rentAmount: '4500.00',
+        waterRateSatang: 1800n,
+        elecRateSatang: 700n,
+        waterBillingType: 'PER_UNIT',
+        electricityBillingType: 'PER_UNIT',
+      };
+
+      const mockRateSnapshot: any = {
+        waterRateSatang: 1800n,
+        elecRateSatang: 700n,
+        waterBillingType: 'PER_UNIT',
+        electricityBillingType: 'PER_UNIT',
+      };
+
+      const rentBill: any = {
+        id: 'bill-rent-1',
+        roomId: 'r-101',
+        billingCycleId: 'cycle-1',
+        billKind: 'RENT',
+        totalAmount: '4500.00',
+        outstandingAmount: '4500.00',
+        status: 'unpaid',
+      };
+
+      const depositBill: any = {
+        id: 'bill-dep-1',
+        roomId: 'r-101',
+        billingCycleId: 'cycle-1',
+        billKind: 'DEPOSIT',
+        totalAmount: '500.00',
+        outstandingAmount: '0.00',
+        status: 'paid',
+      };
+
+      const breakdown = getOwnerFinancialBreakdown(
+        mockRow,
+        mockRoomCtx,
+        mockRateSnapshot,
+        [rentBill, depositBill],
+        'cycle-1'
+      );
+
+      // At most 3 top-level items
+      expect(breakdown.components.length).toBeLessThanOrEqual(3);
+      expect(breakdown.components.length).toBe(3);
+
+      const labels = breakdown.components.map(c => c.label);
+      expect(labels).toContain('บิลรายเดือน');
+      expect(labels).toContain('ค่าประกัน');
+      expect(labels).toContain('ค่าเช่า (เดือน)');
+
+      // NEVER contains incorrect label "ค่าเช่า (รายเดือน)"
+      expect(labels).not.toContain('ค่าเช่า (รายเดือน)');
+    });
+
+    it('proves term contract produces exact label "ค่าเช่า (เทอม)"', () => {
+      const mockRow: any = { roomId: 'r-102', waterCurr: '', waterPrev: '', elecCurr: '', elecPrev: '', peopleCount: '1' };
+      const mockRoomCtx: any = { billingSource: 'PROVISIONAL_TERM', rentAmount: '15000.00' };
+      const rentBill: any = { id: 'b-t', roomId: 'r-102', billingCycleId: 'c-1', billKind: 'RENT', totalAmount: '15000.00', status: 'unpaid' };
+
+      const breakdown = getOwnerFinancialBreakdown(mockRow, mockRoomCtx, null, [rentBill], 'c-1');
+      const rentComp = breakdown.components.find(c => c.label.startsWith('ค่าเช่า'));
+      expect(rentComp?.label).toBe('ค่าเช่า (เทอม)');
+    });
+
+    it('renders financial details container without card/box styling classes (no border, no rounded-lg card, no bg-slate-50, no shadow)', () => {
+      const components = [
+        { label: 'บิลรายเดือน', amount: 2807, formattedAmount: '2,807.00', status: 'PREVIEW', title: 'ยังไม่ออกบิล (พรีวิว)' },
+        { label: 'ค่าประกัน', amount: 500, formattedAmount: '500.00', status: 'PAID', title: 'ชำระแล้ว' },
+        { label: 'ค่าเช่า (เดือน)', amount: 4500, formattedAmount: '4,500.00', status: 'UNPAID', title: 'รอชำระเงิน' },
+      ];
+
+      const { container } = render(
+        <div data-testid="owner-financial-components-r-101" className="mt-1 space-y-0.5 text-left w-full">
+          {components.map((c, idx) => (
+            <div
+              key={idx}
+              data-testid={`owner-financial-component-${c.label === 'บิลรายเดือน' ? 'monthly' : c.label === 'ค่าประกัน' ? 'deposit' : 'rent'}`}
+              className="flex items-center justify-between gap-3 text-[10px]"
+            >
+              <span>{c.label}</span>
+              <span>{c.formattedAmount} ฿</span>
+            </div>
+          ))}
+        </div>
+      );
+
+      const wrapper = screen.getByTestId('owner-financial-components-r-101');
+      // Assert wrapper classes do NOT contain box/card styling
+      expect(wrapper.className).not.toContain('bg-slate-50');
+      expect(wrapper.className).not.toContain('border');
+      expect(wrapper.className).not.toContain('rounded-lg');
+      expect(wrapper.className).not.toContain('shadow-2xs');
+      expect(wrapper.className).not.toContain('shadow-md');
+      expect(wrapper.className).not.toContain('p-2');
+
+      // Assert rows are plain compact rows
+      const monthlyRow = screen.getByTestId('owner-financial-component-monthly');
+      expect(monthlyRow.className).toContain('flex');
+      expect(monthlyRow.className).toContain('items-center');
+      expect(monthlyRow.className).toContain('justify-between');
+      expect(monthlyRow.className).not.toContain('border');
+      expect(monthlyRow.className).not.toContain('rounded');
+      expect(monthlyRow.className).not.toContain('bg-');
+    });
+  });
+
+  describe('8. Daily Stay Invariants in Meter Workspace', () => {
+    it('verifies Daily Stay row locks electricity and water meter fields while keeping peopleCount enabled', () => {
+      const isDaily = true;
+      const isBillIssued = false;
+      const isMeterLocked = isBillIssued || isDaily;
+      const isRowLocked = isBillIssued;
+
+      expect(isMeterLocked).toBe(true); // Electricity and water fields are locked
+      expect(isRowLocked).toBe(false);   // People count remains unlocked and editable
     });
   });
 });

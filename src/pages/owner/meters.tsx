@@ -2720,9 +2720,17 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                               </button>
                             )}
                             {isExpanded && financial.components.length > 0 && (
-                              <div className="mt-1.5 p-2 bg-slate-50 border border-slate-200 rounded-lg text-left shadow-2xs min-w-[170px] space-y-1">
+                              <div
+                                data-testid={`owner-financial-components-${row.roomId}`}
+                                className="mt-1 space-y-0.5 text-left w-full"
+                              >
                                 {financial.components.map((c, cIdx) => (
-                                  <div key={cIdx} className="flex items-center justify-between gap-2 text-[10px]" title={c.title}>
+                                  <div
+                                    key={cIdx}
+                                    data-testid={`owner-financial-component-${c.label === 'บิลรายเดือน' ? 'monthly' : c.label === 'ค่าประกัน' ? 'deposit' : 'rent'}`}
+                                    className="flex items-center justify-between gap-3 text-[10px]"
+                                    title={c.title}
+                                  >
                                     <div className="flex items-center gap-1.5 truncate">
                                       {c.status === 'PAID' ? (
                                         <CheckCircle2 className="w-3 h-3 text-emerald-600 shrink-0" aria-label="ชำระแล้ว" />

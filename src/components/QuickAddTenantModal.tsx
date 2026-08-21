@@ -10,6 +10,7 @@ import { X, Calendar, User, Phone, DollarSign, Clock, Shield, CheckCircle, Alert
 import { QuickAddRoomContext } from '../types';
 import { httpRequest } from '../data/httpClient';
 import { formatBaht, formatThaiDate, normalizeMoneyInput, OwnerDateInput } from './GlobalComponents';
+import { TimeWheelPicker } from './TimeWheelPicker';
 import { calculateInstallmentSchedule } from '../utils/installmentCalculator';
 
 interface QuickAddTenantModalProps {
@@ -723,7 +724,7 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
                 </div>
               </div>
 
-              {/* Optional Check-in / Check-out Times (Strict 24-Hour Thai HH:mm) */}
+              {/* Optional Check-in / Check-out Times (Strict 24-Hour Thai HH:mm Wheel Picker) */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <div className="flex items-center justify-between mb-1">
@@ -732,33 +733,13 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
                     </label>
                     <span className="text-[10px] text-slate-400 font-semibold">24 ชม.</span>
                   </div>
-                  <div className="relative">
-                    <Clock className="w-4 h-4 absolute left-3 top-2.5 text-slate-400" />
-                    <input
-                      type="text"
-                      inputMode="numeric"
-                      pattern="[0-9]{2}:[0-9]{2}"
-                      placeholder="เช่น 14:00"
-                      value={checkInTime}
-                      onChange={(e) => {
-                        const raw = e.target.value.replace(/[^\d:]/g, '');
-                        if (raw.length <= 5) {
-                          setCheckInTime(raw);
-                        }
-                      }}
-                      onBlur={() => {
-                        if (checkInTime.trim()) {
-                          const digits = checkInTime.replace(/\D/g, '');
-                          if (digits.length >= 1 && digits.length <= 4) {
-                            const hh = Math.min(23, parseInt(digits.slice(0, 2), 10) || 0).toString().padStart(2, '0');
-                            const mm = digits.length > 2 ? Math.min(59, parseInt(digits.slice(2, 4), 10) || 0).toString().padStart(2, '0') : '00';
-                            setCheckInTime(`${hh}:${mm}`);
-                          }
-                        }
-                      }}
-                      className="w-full pl-9 pr-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold"
-                    />
-                  </div>
+                  <TimeWheelPicker
+                    value={checkInTime}
+                    onChange={setCheckInTime}
+                    onClear={() => setCheckInTime('')}
+                    placeholder="เช่น 14:00"
+                    data-testid="daily-checkin-time-picker"
+                  />
                 </div>
                 <div>
                   <div className="flex items-center justify-between mb-1">
@@ -767,33 +748,13 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
                     </label>
                     <span className="text-[10px] text-slate-400 font-semibold">24 ชม.</span>
                   </div>
-                  <div className="relative">
-                    <Clock className="w-4 h-4 absolute left-3 top-2.5 text-slate-400" />
-                    <input
-                      type="text"
-                      inputMode="numeric"
-                      pattern="[0-9]{2}:[0-9]{2}"
-                      placeholder="เช่น 12:00"
-                      value={checkOutTime}
-                      onChange={(e) => {
-                        const raw = e.target.value.replace(/[^\d:]/g, '');
-                        if (raw.length <= 5) {
-                          setCheckOutTime(raw);
-                        }
-                      }}
-                      onBlur={() => {
-                        if (checkOutTime.trim()) {
-                          const digits = checkOutTime.replace(/\D/g, '');
-                          if (digits.length >= 1 && digits.length <= 4) {
-                            const hh = Math.min(23, parseInt(digits.slice(0, 2), 10) || 0).toString().padStart(2, '0');
-                            const mm = digits.length > 2 ? Math.min(59, parseInt(digits.slice(2, 4), 10) || 0).toString().padStart(2, '0') : '00';
-                            setCheckOutTime(`${hh}:${mm}`);
-                          }
-                        }
-                      }}
-                      className="w-full pl-9 pr-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold"
-                    />
-                  </div>
+                  <TimeWheelPicker
+                    value={checkOutTime}
+                    onChange={setCheckOutTime}
+                    onClear={() => setCheckOutTime('')}
+                    placeholder="เช่น 12:00"
+                    data-testid="daily-checkout-time-picker"
+                  />
                 </div>
               </div>
 
