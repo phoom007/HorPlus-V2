@@ -112,7 +112,7 @@ describe('Wave 1F - Real-Session 14-Domain Route Audit Matrix', () => {
     const limitedRole = await prisma.role.create({
       data: {
         dormitoryId: dormId,
-        code: 'LIMITED_STAFF',
+        code: 'STAFF',
         name: 'Limited Staff',
         permissions: ['building:read', 'room:read', 'tenant:read', 'contract:read', 'occupancy:read', 'billing:read', 'meter:read', 'maintenance:read', 'announcement:read', 'payment:read', 'moveout:read', 'dormitory:view'],
       },
@@ -120,9 +120,9 @@ describe('Wave 1F - Real-Session 14-Domain Route Audit Matrix', () => {
 
     const managerRole = await prisma.role.create({
       data: {
-        dormitoryId: dormId,
+        dormitoryId: otherDormId,
         code: 'MANAGER',
-        name: 'Manager',
+        name: 'Manager Other',
         permissions: ['building:read', 'room:read', 'tenant:read', 'payment:read'],
       },
     });
@@ -130,7 +130,7 @@ describe('Wave 1F - Real-Session 14-Domain Route Audit Matrix', () => {
     const managerWithPayRole = await prisma.role.create({
       data: {
         dormitoryId: dormId,
-        code: 'MANAGER_WRITE',
+        code: 'MANAGER',
         name: 'Manager Pay',
         permissions: ['payment:write', 'payment:read'],
       },
@@ -150,7 +150,7 @@ describe('Wave 1F - Real-Session 14-Domain Route Audit Matrix', () => {
       data: [
         { dormitoryId: dormId, userId: ownerUserId, roleId: ownerRole.id, status: 'active' },
         { dormitoryId: dormId, userId: limitedUserId, roleId: limitedRole.id, status: 'active' },
-        { dormitoryId: dormId, userId: managerUserId, roleId: managerRole.id, status: 'active' },
+        { dormitoryId: otherDormId, userId: managerUserId, roleId: managerRole.id, status: 'active' },
         { dormitoryId: dormId, userId: managerWithPayUserId, roleId: managerWithPayRole.id, status: 'active' },
         { dormitoryId: dormId, userId: tenantUserId, roleId: tenantRole.id, status: 'active' },
       ],

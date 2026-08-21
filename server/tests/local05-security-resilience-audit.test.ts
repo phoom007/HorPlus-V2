@@ -126,7 +126,7 @@ describe.sequential('LOCAL-05: Local Security & Resilience Audit Suite', () => {
     const roles = [
       { code: 'OWNER', name: 'Owner', isSystem: true, permissions: ['*'] },
       { code: 'MANAGER', name: 'Manager', isSystem: true, permissions: ['room:read', 'room:write', 'tenant:read', 'tenant:write', 'contract:read', 'contract:write', 'bill:read', 'bill:write', 'meter:read', 'meter:write'] },
-      { code: 'TECH', name: 'Technician', isSystem: true, permissions: ['maintenance:read', 'maintenance:write', 'meter:read', 'meter:write'] },
+      { code: 'STAFF', name: 'Technician', isSystem: true, permissions: ['maintenance:read', 'maintenance:write', 'meter:read', 'meter:write'] },
       { code: 'TENANT', name: 'Tenant', isSystem: true, permissions: ['contract:read', 'bill:read'] }
     ];
 
@@ -138,7 +138,7 @@ describe.sequential('LOCAL-05: Local Security & Resilience Audit Suite', () => {
     }
 
     const ownerRole = (await prisma.role.findFirst({ where: { code: 'OWNER' } }))!;
-    const techRole = (await prisma.role.findFirst({ where: { code: 'TECH' } }))!;
+    const techRole = (await prisma.role.findFirst({ where: { code: 'STAFF' } }))!;
     const tenantRole = (await prisma.role.findFirst({ where: { code: 'TENANT' } }))!;
 
     // Create Dormitories
@@ -631,7 +631,7 @@ describe.sequential('LOCAL-05: Local Security & Resilience Audit Suite', () => {
         .set('Cookie', `horplus_session=${sessionTokenTechA}; horplus_csrf=${csrfTokenTechA}`)
         .set('x-csrf-token', csrfTokenTechA)
         .set('x-dormitory-id', dormIdA)
-        .send({ lineFriendId: crypto.randomUUID(), roleCode: 'TECH' });
+        .send({ lineFriendId: crypto.randomUUID(), roleCode: 'STAFF' });
 
       expect(res.status).toBe(403);
     });
@@ -713,7 +713,7 @@ describe.sequential('LOCAL-05: Local Security & Resilience Audit Suite', () => {
       const grant = await grantService.createAccessGrant(
         dormIdA,
         friend.id,
-        'TECH',
+        'STAFF',
         ownerUserA.id
       );
 
@@ -751,7 +751,7 @@ describe.sequential('LOCAL-05: Local Security & Resilience Audit Suite', () => {
       const grant = await grantService.createAccessGrant(
         dormIdA,
         friend.id,
-        'TECH',
+        'STAFF',
         ownerUserA.id
       );
 
@@ -790,7 +790,7 @@ describe.sequential('LOCAL-05: Local Security & Resilience Audit Suite', () => {
       }
 
       const creationPromises = friends.map(f =>
-        grantService.createAccessGrant(dormIdA, f.id, 'TECH', ownerUserA.id)
+        grantService.createAccessGrant(dormIdA, f.id, 'STAFF', ownerUserA.id)
           .then(() => 'created')
           .catch(() => 'rejected')
       );
@@ -953,7 +953,7 @@ describe.sequential('LOCAL-05: Local Security & Resilience Audit Suite', () => {
       const outbox = new OutboxService(prisma);
 
       // Create 2 active TECH members in Dorm A
-      const techRole = (await prisma.role.findFirst({ where: { code: 'TECH' } }))!;
+      const techRole = (await prisma.role.findFirst({ where: { code: 'STAFF' } }))!;
       const techUser2 = await prisma.user.create({
         data: {
           email: `tech2-${Date.now()}@example.com`,
@@ -975,7 +975,7 @@ describe.sequential('LOCAL-05: Local Security & Resilience Audit Suite', () => {
           aggregateType: 'MAINTENANCE',
           aggregateId: crypto.randomUUID(),
           recipientType: 'STAFF',
-          recipientRoleCode: 'TECH',
+          recipientRoleCode: 'STAFF',
           title: 'Pipe Leak Alert',
           body: 'Emergency leak in room 101',
           status: 'PENDING',

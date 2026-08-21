@@ -116,7 +116,7 @@ describe('Wave 1F - Authorization, Permission, Package & Idempotency Corrective 
 
     const ownerRole = await prisma.role.create({ data: { dormitoryId: dormId, name: 'Owner', code: 'OWNER', permissions: { '*': ['*'] } } });
     const managerRole = await prisma.role.create({ data: { dormitoryId: dormId, name: 'Manager', code: 'MANAGER', permissions: { subscription: ['read', 'write'], promo: ['redeem'] } } });
-    const techRole = await prisma.role.create({ data: { dormitoryId: dormId, name: 'Technician', code: 'TECHNICIAN', permissions: { maintenance: ['read', 'write'] } } });
+    const techRole = await prisma.role.create({ data: { dormitoryId: dormId, name: 'Technician', code: 'STAFF', permissions: { maintenance: ['read', 'write'] } } });
 
     ownerRoleId = ownerRole.id;
     managerRoleId = managerRole.id;
@@ -209,7 +209,7 @@ describe('Wave 1F - Authorization, Permission, Package & Idempotency Corrective 
     const memberships = await membershipRepo.findByUserId(techUserId);
     const techMem = memberships.find(m => m.dormitoryId === dormId);
     expect(techMem).toBeDefined();
-    expect(techMem!.roleCode).toBe('TECHNICIAN');
+    expect(techMem!.roleCode).toBe('STAFF');
 
     const req: any = {
       auth: { userId: techUserId, user: { id: techUserId }, memberships },
@@ -344,16 +344,16 @@ describe('Wave 1F - Authorization, Permission, Package & Idempotency Corrective 
   it('redeems promo code HORPLUS with persistent idempotency and rejects Manager without promo permissions', async () => {
     const idempotencyKey = `key-promo-${Date.now()}`;
 
-    // Manager without promo:redeem – create role without promo permission
-    const noPromoRole = await prisma.role.create({ data: { dormitoryId: dormId, name: 'Limited Manager', code: 'MANAGER_LIMITED', permissions: { subscription: ['read'] } } });
+    // Manager without promo:redeem – create role without promo permission in otherDormId
+    const noPromoRole = await prisma.role.create({ data: { dormitoryId: otherDormId, name: 'Limited Manager', code: 'MANAGER', permissions: { subscription: ['read'] } } });
     const noPromoMgrId = crypto.randomUUID();
     await prisma.user.create({ data: { id: noPromoMgrId, googleSubject: `sub-nopromgr-${Date.now()}`, email: `nopromgr-${Date.now()}@test.com`, emailNormalized: `nopromgr-${Date.now()}@test.com`, name: 'No-Promo Manager' } });
-    await prisma.dormitoryMember.create({ data: { userId: noPromoMgrId, dormitoryId: dormId, roleId: noPromoRole.id, status: 'active' } });
+    await prisma.dormitoryMember.create({ data: { userId: noPromoMgrId, dormitoryId: otherDormId, roleId: noPromoRole.id, status: 'active' } });
 
     const noPromoMemberships = await membershipRepo.findByUserId(noPromoMgrId);
     const reqMgr: any = {
       auth: { userId: noPromoMgrId, user: { id: noPromoMgrId }, memberships: noPromoMemberships },
-      headers: { 'x-dormitory-id': dormId },
+      headers: { 'x-dormitory-id': otherDormId },
     };
     const ctxMgr = await resolveAuthoritativeDormitoryContext(reqMgr);
     const hasPromoPerm = (ctxMgr.permissions || []).some((p) =>
@@ -831,7 +831,7 @@ describe('Wave 1F - Authorization, Permission, Package & Idempotency Corrective 
             rolePermissions = managerPermissions;
           } else if (userIdHeader === techUserId) {
             roleId = techRoleId;
-            roleCode = 'TECHNICIAN';
+            roleCode = 'STAFF';
             rolePermissions = {};
           } else if (userIdHeader === tenantUserId) {
             roleId = tenantRoleId;

@@ -85,9 +85,9 @@ export class MaintenanceService {
     }
 
     // Role restrictions
-    if (roleCode === 'STAFF') {
+    if (roleCode === 'STAFF' || roleCode === 'TECH') {
       if (next === 'closed') {
-        throw new Error('FORBIDDEN: STAFF role is not permitted to close maintenance requests');
+        throw new Error(`FORBIDDEN: ${roleCode} role is not permitted to close maintenance requests`);
       }
     }
 
