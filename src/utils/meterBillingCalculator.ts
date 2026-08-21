@@ -145,9 +145,9 @@ export function formatMoneyDisplay(decimalStr: string): string {
  * Example: "500.00" -> "500", 500 -> "500", "500.50" -> "500.5", 105.75 -> "105.75"
  */
 export function formatMeterReadingDisplay(val: string | number | null | undefined): string {
-  if (val === null || val === undefined || val === '') return '0';
+  if (val === null || val === undefined || val === '') return '';
   const num = typeof val === 'number' ? val : parseFloat(String(val).replace(/,/g, ''));
-  if (isNaN(num)) return '0';
+  if (isNaN(num)) return '';
   if (Number.isInteger(num)) {
     return num.toString();
   }
@@ -177,11 +177,11 @@ export function calculateMeterRowPreview(
   const peopleCount = Math.max(0, draft.peopleCount ?? roomCtx?.currentHouseholdPeopleCount ?? roomCtx?.snapshotPeopleCount ?? 0);
   const peopleCountStr = peopleCount.toString();
 
-  const waterPrev = draft.waterPrev !== undefined ? String(draft.waterPrev) : '0.00';
-  const waterCurr = draft.waterCurr !== undefined ? String(draft.waterCurr) : waterPrev;
+  const rawWaterPrev = draft.waterPrev !== undefined && draft.waterPrev !== null ? String(draft.waterPrev).trim() : '';
+  const rawWaterCurr = draft.waterCurr !== undefined && draft.waterCurr !== null ? String(draft.waterCurr).trim() : '';
 
-  const elecPrev = draft.elecPrev !== undefined ? String(draft.elecPrev) : '0.00';
-  const elecCurr = draft.elecCurr !== undefined ? String(draft.elecCurr) : elecPrev;
+  const rawElecPrev = draft.elecPrev !== undefined && draft.elecPrev !== null ? String(draft.elecPrev).trim() : '';
+  const rawElecCurr = draft.elecCurr !== undefined && draft.elecCurr !== null ? String(draft.elecCurr).trim() : '';
 
   // 1. Water Calculation
   const waterMode = rates?.waterBillingType || 'per_unit';
@@ -197,15 +197,21 @@ export function calculateMeterRowPreview(
     waterUsageScaled = 100n; // 1.00 room
   } else {
     // per_unit: calculate usage units with 4/5-digit rollover support
-    const usageRes = calculateMeterUsageUnits(waterPrev, waterCurr);
-    if (usageRes.isValid) {
-      waterUsageScaled = BigInt(usageRes.usageUnits) * 100n;
-      const usageStr = formatScaled2(waterUsageScaled);
-      waterAmountSatang = multiplyMoneyByQuantity(waterRateSatang, usageStr);
-    } else {
-      waterUsageScaled = subtractScaled2(waterCurr, waterPrev);
-      const usageStr = formatScaled2(waterUsageScaled);
-      waterAmountSatang = multiplyMoneyByQuantity(waterRateSatang, usageStr);
+    if (rawWaterPrev !== '' && rawWaterCurr !== '') {
+      const usageRes = calculateMeterUsageUnits(rawWaterPrev, rawWaterCurr);
+      if (usageRes.isValid) {
+        waterUsageScaled = BigInt(usageRes.usageUnits) * 100n;
+      } else {
+        const prevScaled = parseScaled2(rawWaterPrev);
+        const currScaled = parseScaled2(rawWaterCurr);
+        if (currScaled >= prevScaled) {
+          waterUsageScaled = currScaled - prevScaled;
+        }
+      }
+      if (waterUsageScaled > 0n) {
+        const usageStr = formatScaled2(waterUsageScaled);
+        waterAmountSatang = multiplyMoneyByQuantity(waterRateSatang, usageStr);
+      }
     }
   }
 
@@ -223,15 +229,21 @@ export function calculateMeterRowPreview(
     elecUsageScaled = 100n; // 1.00 room
   } else {
     // per_unit: calculate usage units with 4/5-digit rollover support
-    const usageRes = calculateMeterUsageUnits(elecPrev, elecCurr);
-    if (usageRes.isValid) {
-      elecUsageScaled = BigInt(usageRes.usageUnits) * 100n;
-      const usageStr = formatScaled2(elecUsageScaled);
-      elecAmountSatang = multiplyMoneyByQuantity(elecRateSatang, usageStr);
-    } else {
-      elecUsageScaled = subtractScaled2(elecCurr, elecPrev);
-      const usageStr = formatScaled2(elecUsageScaled);
-      elecAmountSatang = multiplyMoneyByQuantity(elecRateSatang, usageStr);
+    if (rawElecPrev !== '' && rawElecCurr !== '') {
+      const usageRes = calculateMeterUsageUnits(rawElecPrev, rawElecCurr);
+      if (usageRes.isValid) {
+        elecUsageScaled = BigInt(usageRes.usageUnits) * 100n;
+      } else {
+        const prevScaled = parseScaled2(rawElecPrev);
+        const currScaled = parseScaled2(rawElecCurr);
+        if (currScaled >= prevScaled) {
+          elecUsageScaled = currScaled - prevScaled;
+        }
+      }
+      if (elecUsageScaled > 0n) {
+        const usageStr = formatScaled2(elecUsageScaled);
+        elecAmountSatang = multiplyMoneyByQuantity(elecRateSatang, usageStr);
+      }
     }
   }
 

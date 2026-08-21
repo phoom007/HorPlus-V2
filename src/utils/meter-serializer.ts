@@ -74,31 +74,47 @@ export function serializeMeterWorkspaceDirtyRow(
     roomId: row.roomId,
   };
 
-  if (row.waterPrev !== undefined && row.waterPrev !== null) {
-    const waterPrevStr = formatCanonicalDecimalString(row.waterPrev, 'เลขอ่านค่าน้ำเดิม');
-    if (waterPrevStr !== undefined) {
-      result.waterPrev = waterPrevStr;
+  if (row.waterPrev !== undefined) {
+    if (row.waterPrev === null || (typeof row.waterPrev === 'string' && row.waterPrev.trim() === '')) {
+      result.waterPrev = null;
+    } else {
+      const waterPrevStr = formatCanonicalDecimalString(row.waterPrev, 'เลขอ่านค่าน้ำเดิม');
+      if (waterPrevStr !== undefined) {
+        result.waterPrev = waterPrevStr;
+      }
     }
   }
 
-  if (row.waterCurr !== undefined && row.waterCurr !== null) {
-    const waterCurrStr = formatCanonicalDecimalString(row.waterCurr, 'เลขอ่านค่าน้ำใหม่');
-    if (waterCurrStr !== undefined) {
-      result.waterCurr = waterCurrStr;
+  if (row.waterCurr !== undefined) {
+    if (row.waterCurr === null || (typeof row.waterCurr === 'string' && row.waterCurr.trim() === '')) {
+      result.waterCurr = null;
+    } else {
+      const waterCurrStr = formatCanonicalDecimalString(row.waterCurr, 'เลขอ่านค่าน้ำใหม่');
+      if (waterCurrStr !== undefined) {
+        result.waterCurr = waterCurrStr;
+      }
     }
   }
 
-  if (row.elecPrev !== undefined && row.elecPrev !== null) {
-    const elecPrevStr = formatCanonicalDecimalString(row.elecPrev, 'เลขอ่านค่าไฟเดิม');
-    if (elecPrevStr !== undefined) {
-      result.elecPrev = elecPrevStr;
+  if (row.elecPrev !== undefined) {
+    if (row.elecPrev === null || (typeof row.elecPrev === 'string' && row.elecPrev.trim() === '')) {
+      result.elecPrev = null;
+    } else {
+      const elecPrevStr = formatCanonicalDecimalString(row.elecPrev, 'เลขอ่านค่าไฟเดิม');
+      if (elecPrevStr !== undefined) {
+        result.elecPrev = elecPrevStr;
+      }
     }
   }
 
-  if (row.elecCurr !== undefined && row.elecCurr !== null) {
-    const elecCurrStr = formatCanonicalDecimalString(row.elecCurr, 'เลขอ่านค่าไฟใหม่');
-    if (elecCurrStr !== undefined) {
-      result.elecCurr = elecCurrStr;
+  if (row.elecCurr !== undefined) {
+    if (row.elecCurr === null || (typeof row.elecCurr === 'string' && row.elecCurr.trim() === '')) {
+      result.elecCurr = null;
+    } else {
+      const elecCurrStr = formatCanonicalDecimalString(row.elecCurr, 'เลขอ่านค่าไฟใหม่');
+      if (elecCurrStr !== undefined) {
+        result.elecCurr = elecCurrStr;
+      }
     }
   }
 

@@ -27,12 +27,13 @@ import {
   Users,
   CheckCircle2,
   FileText,
-  Shield
+  Shield,
+  ChevronDown
 } from 'lucide-react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { queryKeys, STALE_TIMES } from '../../lib/queryClient';
 import { meterDraftStore, deriveMeterDraftPatches } from '../../lib/meterDraftStore';
-import { calculateMeterRowPreview, RoomPreviewContext } from '../../utils/meterBillingCalculator';
+import { calculateMeterRowPreview, calculateMeterUsageUnits, RoomPreviewContext } from '../../utils/meterBillingCalculator';
 import { Room, Building, QuickAddRoomContext, Bill, BillItem, Tenant, Contract, BillStatus, calculateRoomRentForCycle } from '../../types';
 import { getDataProvider } from '../../data/dataProvider';
 import { httpRequest } from '../../data/httpClient';
@@ -184,14 +185,22 @@ export function buildRowsFromWorkspace(params: {
     const roomReadings = readingsByRoom[r.id] || {};
     const cycleTenant = getTenantForRoomAndCycleHelper(r.id, selectedCycleCode || selectedCycle || '', contracts, rooms, tenants);
 
-    const rawWaterBaseline = r.initialWaterMeter !== undefined && r.initialWaterMeter !== null ? String(r.initialWaterMeter) : (r as any).initialWaterReading !== undefined ? String((r as any).initialWaterReading) : '0';
-    const rawElecBaseline = r.initialElectricMeter !== undefined && r.initialElectricMeter !== null ? String(r.initialElectricMeter) : (r as any).initialElectricityReading !== undefined ? String((r as any).initialElectricityReading) : '0';
+    const rawWaterBaseline = r.initialWaterMeter !== undefined && r.initialWaterMeter !== null && String(r.initialWaterMeter).trim() !== '' ? String(r.initialWaterMeter) : (r as any).initialWaterReading !== undefined && (r as any).initialWaterReading !== null && String((r as any).initialWaterReading).trim() !== '' ? String((r as any).initialWaterReading) : '';
+    const rawElecBaseline = r.initialElectricMeter !== undefined && r.initialElectricMeter !== null && String(r.initialElectricMeter).trim() !== '' ? String(r.initialElectricMeter) : (r as any).initialElectricityReading !== undefined && (r as any).initialElectricityReading !== null && String((r as any).initialElectricityReading).trim() !== '' ? String((r as any).initialElectricityReading) : '';
 
-    const waterPrev = formatMeterReadingDisplay(roomReadings.waterPrev ?? rawWaterBaseline);
-    const waterCurr = formatMeterReadingDisplay(roomReadings.waterCurr ?? waterPrev);
+    const waterPrev = roomReadings.waterPrev !== undefined && roomReadings.waterPrev !== null && String(roomReadings.waterPrev).trim() !== ''
+      ? formatMeterReadingDisplay(roomReadings.waterPrev)
+      : (rawWaterBaseline ? formatMeterReadingDisplay(rawWaterBaseline) : '');
+    const waterCurr = roomReadings.waterCurr !== undefined && roomReadings.waterCurr !== null && String(roomReadings.waterCurr).trim() !== ''
+      ? formatMeterReadingDisplay(roomReadings.waterCurr)
+      : '';
 
-    const elecPrev = formatMeterReadingDisplay(roomReadings.elecPrev ?? rawElecBaseline);
-    const elecCurr = formatMeterReadingDisplay(roomReadings.elecCurr ?? elecPrev);
+    const elecPrev = roomReadings.elecPrev !== undefined && roomReadings.elecPrev !== null && String(roomReadings.elecPrev).trim() !== ''
+      ? formatMeterReadingDisplay(roomReadings.elecPrev)
+      : (rawElecBaseline ? formatMeterReadingDisplay(rawElecBaseline) : '');
+    const elecCurr = roomReadings.elecCurr !== undefined && roomReadings.elecCurr !== null && String(roomReadings.elecCurr).trim() !== ''
+      ? formatMeterReadingDisplay(roomReadings.elecCurr)
+      : '';
 
     const tenantDefaultPeople = cycleTenant ? (1 + (cycleTenant.coOccupants?.length || 0)) : 0;
     const snap = snapshotMap[r.id];
@@ -553,6 +562,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
 
   // Controlled input state for adding other fees per room
   const [newFeeInputs, setNewFeeInputs] = useState<Record<string, { description: string; amount: string }>>({});
+  const [expandedBreakdowns, setExpandedBreakdowns] = useState<Record<string, boolean>>({});
 
   const handleFeeDescriptionChange = (roomId: string, desc: string) => {
     setNewFeeInputs(prev => ({
@@ -1086,23 +1096,39 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       let elecCurr = row.elecCurr;
       let peopleCount = row.peopleCount;
       let overdueAmount = row.overdueAmount;
+      let otherFees = [...(row.otherFees || [])];
 
-      parts.forEach(part => {
-        if (part.includes('ไฟ')) {
-          const match = part.match(/\d+(\.\d{1,2})?/);
+      parts.slice(1).forEach(part => {
+        const trimmedPart = part.trim();
+        if (!trimmedPart) return;
+
+        if (trimmedPart.startsWith('ไฟ') || trimmedPart.includes('ไฟ')) {
+          const match = trimmedPart.match(/\d+(\.\d{1,2})?/);
           if (match) elecCurr = match[0];
-        }
-        if (part.includes('น้ำ')) {
-          const match = part.match(/\d+(\.\d{1,2})?/);
+        } else if (trimmedPart.startsWith('น้ำ') || trimmedPart.includes('น้ำ')) {
+          const match = trimmedPart.match(/\d+(\.\d{1,2})?/);
           if (match) waterCurr = match[0];
-        }
-        if (part.includes('คน')) {
-          const match = part.match(/\d+/);
+        } else if (trimmedPart.includes('คน')) {
+          const match = trimmedPart.match(/\d+/);
           if (match) peopleCount = normalizeSingleDigitCount(match[0]);
-        }
-        if (part.includes('ค้าง') || part.includes('ค้างชำระ')) {
-          const match = part.match(/\d+(\.\d{1,2})?/);
+        } else if (trimmedPart.startsWith('ค้าง') || trimmedPart.includes('ค้างชำระ')) {
+          const match = trimmedPart.match(/\d+(\.\d{1,2})?/);
           if (match) overdueAmount = match[0];
+        } else {
+          // Arbitrary other fee: e.g. "ค่าทำความสะอาด 50", "ค่าปรับ 100"
+          const numMatch = trimmedPart.match(/(\d+(\.\d{1,2})?)$/);
+          if (numMatch) {
+            const amt = numMatch[1];
+            const desc = trimmedPart.substring(0, trimmedPart.length - amt.length).trim();
+            if (desc) {
+              const existingIdx = otherFees.findIndex(f => f.description.toLowerCase() === desc.toLowerCase());
+              if (existingIdx >= 0) {
+                otherFees[existingIdx] = { ...otherFees[existingIdx], amount: amt };
+              } else {
+                otherFees.push({ description: desc, amount: amt });
+              }
+            }
+          }
         }
       });
 
@@ -1116,7 +1142,8 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
         waterCurr,
         elecCurr,
         peopleCount,
-        overdueAmount
+        overdueAmount,
+        otherFees,
       };
     });
 
@@ -1853,13 +1880,23 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       return;
     }
 
-    // Lower reading check
+    // Lower reading check with rollover support
     let lowerReadingError = false;
     for (const row of meterRows) {
       if (!row.isReplaced) {
-        if ((isWaterUnit && row.waterCurr < row.waterPrev) || (isElecUnit && row.elecCurr < row.elecPrev)) {
-          lowerReadingError = true;
-          break;
+        if (isWaterUnit && row.waterCurr !== '' && row.waterPrev !== '') {
+          const res = calculateMeterUsageUnits(row.waterPrev, row.waterCurr);
+          if (!res.isValid) {
+            lowerReadingError = true;
+            break;
+          }
+        }
+        if (isElecUnit && row.elecCurr !== '' && row.elecPrev !== '') {
+          const res = calculateMeterUsageUnits(row.elecPrev, row.elecCurr);
+          if (!res.isValid) {
+            lowerReadingError = true;
+            break;
+          }
         }
       }
     }
@@ -2162,9 +2199,8 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                 )}
                 {isWaterUnit && <th className="p-4 text-center">มิเตอร์น้ำใหม่</th>}
                 <th className="p-4 text-center">จำนวนคน</th>
-                <th className="p-4 text-center">ค้างชำระ</th>
                 <th className="p-4">ค่าใช้จ่ายอื่นๆ</th>
-                <th className="p-4 text-right">ยอดรวม</th>
+                <th className="p-4 text-right">ยอดที่ต้องชำระ</th>
                 <th id="status-column-header" className="p-4 text-center min-w-[105px]">
                   <div className="text-slate-500 mb-1">สถานะ</div>
                   <div className="flex justify-center">
@@ -2365,30 +2401,6 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                       />
                     </td>
 
-                    {/* Overdue Amount Input */}
-                    <td className="p-4 text-center">
-                      <div className="flex items-center justify-center">
-                        <input
-                          type="text"
-                          inputMode="decimal"
-                          disabled={isRowLocked}
-                          value={row.overdueAmount}
-                          onChange={(e) => {
-                            handleMeterReadingChange(row.roomId, 'overdueAmount', e.target.value);
-                          }}
-                          onBlur={() => handleMeterReadingBlur(row.roomId, 'overdueAmount')}
-                          onPaste={(e) => handlePaste(row.roomId, 'overdueAmount', e)}
-                          data-row={idx}
-                          data-col="overdueAmount"
-                          className={`w-20 px-2 py-1 text-xs border rounded-lg bg-white text-slate-800 text-center font-bold focus:outline-indigo-500 transition-all duration-300 disabled:bg-slate-50 disabled:text-slate-500 disabled:border-transparent ${
-                            flashingCells[`${row.roomId}-overdueAmount`]
-                              ? 'animate-vibrant-flash shadow-md z-10'
-                              : 'border-gray-200'
-                          }`}
-                        />
-                      </div>
-                    </td>
-
                     {/* Custom Other Fees Column */}
                     <td className="p-4">
                       <div className="flex flex-col gap-1.5 min-w-[150px]">
@@ -2463,7 +2475,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                       </div>
                     </td>
 
-                    {/* Total Amount Output */}
+                    {/* Total / Amount Due Output */}
                     <td className="p-4 text-right text-indigo-600 font-extrabold text-sm whitespace-nowrap">
                       {(() => {
                         const roomCtx = previewContext?.rooms?.find((r: any) => r.roomId === row.roomId);
@@ -2501,7 +2513,43 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                           overdueAmount: row.overdueAmount,
                           otherFees: row.otherFees || [],
                         });
-                        return `${preview.formattedTotal} ฿`;
+
+                        const isExpanded = !!expandedBreakdowns[row.roomId];
+                        const detailsCount = roomCtx?.periodDetailCount || 0;
+                        const chargeComponents = roomCtx?.chargeComponents || [];
+
+                        return (
+                          <div className="flex flex-col items-end">
+                            <span>{preview.formattedTotal} ฿</span>
+                            {detailsCount > 0 && (
+                              <button
+                                type="button"
+                                onClick={() => setExpandedBreakdowns(prev => ({ ...prev, [row.roomId]: !prev[row.roomId] }))}
+                                className="text-[10px] text-slate-400 hover:text-indigo-600 font-medium cursor-pointer transition-colors mt-0.5 flex items-center gap-0.5"
+                              >
+                                <span>ดูรายละเอียด +{detailsCount}</span>
+                                <ChevronDown className={`w-2.5 h-2.5 transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`} />
+                              </button>
+                            )}
+                            {isExpanded && chargeComponents.length > 0 && (
+                              <div className="mt-1.5 p-2 bg-slate-50 border border-slate-200 rounded-lg text-left shadow-sm min-w-[170px] space-y-1">
+                                {chargeComponents.map((c: any, cIdx: number) => (
+                                  <div key={cIdx} className="flex items-center justify-between gap-2 text-[10px]">
+                                    <span className="text-slate-600 truncate">{c.label}</span>
+                                    <div className="flex items-center gap-1 shrink-0">
+                                      <span className="font-semibold text-slate-700">{Number(c.amount).toLocaleString('en-US', { minimumFractionDigits: 2 })} ฿</span>
+                                      {c.status === 'PAID' ? (
+                                        <span className="px-1 py-0.2 rounded text-[9px] font-bold bg-emerald-100 text-emerald-700">จ่ายแล้ว</span>
+                                      ) : (
+                                        <span className="px-1 py-0.2 rounded text-[9px] font-bold bg-amber-100 text-amber-700">ยังไม่จ่าย</span>
+                                      )}
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        );
                       })()}
                     </td>
 
@@ -2591,7 +2639,12 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                                 <span className="truncate max-w-[100px]">{effectiveTenantName}</span>
                                 <ArrowRight className="w-3 h-3 opacity-60 shrink-0" />
                               </button>
-                              {!isLineLinked && (
+                              {roomCtx?.isFutureReservation && (
+                                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
+                                  จองล่วงหน้า
+                                </span>
+                              )}
+                              {!isLineLinked && !roomCtx?.isFutureReservation && (
                                 <span className="text-[10px] text-slate-400 font-normal leading-tight">
                                   (ยังไม่ได้เชื่อม LINE)
                                 </span>

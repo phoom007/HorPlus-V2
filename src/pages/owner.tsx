@@ -484,14 +484,23 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
   const activeTabHasError = activeTabQueryResults.some(r => r.isError);
   const activeTabIsLoading = activeTabQueriesSpec.length > 0 && activeTabQueryResults.some(r => r.isLoading || r.isPending);
 
-  // Authoritative server state for tab consumption
-  const rooms: Room[] = queryClient.getQueryData<Room[]>(queryKeys.rooms(activeDormitoryId)) || [];
-  const buildings: Building[] = queryClient.getQueryData<Building[]>(queryKeys.buildings(activeDormitoryId)) || [];
-  const tenants: Tenant[] = queryClient.getQueryData<Tenant[]>(queryKeys.tenants(activeDormitoryId)) || [];
-  const contracts: Contract[] = queryClient.getQueryData<Contract[]>(queryKeys.contracts(activeDormitoryId)) || [];
-  const bills: Bill[] = queryClient.getQueryData<Bill[]>(queryKeys.bills(activeDormitoryId)) || [];
-  const repairs: any[] = queryClient.getQueryData(queryKeys.maintenance(activeDormitoryId)) || [];
-  const announcements: Announcement[] = queryClient.getQueryData<Announcement[]>(queryKeys.announcements(activeDormitoryId)) || [];
+  const queryResultMap = React.useMemo(() => {
+    const map = new Map<string, any>();
+    activeTabQueriesSpec.forEach((spec, idx) => {
+      const keyStr = JSON.stringify(spec.queryKey);
+      map.set(keyStr, activeTabQueryResults[idx]?.data);
+    });
+    return map;
+  }, [activeTabQueriesSpec, activeTabQueryResults]);
+
+  // Authoritative server state for tab consumption (reactive to query cache updates)
+  const rooms: Room[] = queryResultMap.get(JSON.stringify(queryKeys.rooms(activeDormitoryId))) || queryClient.getQueryData<Room[]>(queryKeys.rooms(activeDormitoryId)) || [];
+  const buildings: Building[] = queryResultMap.get(JSON.stringify(queryKeys.buildings(activeDormitoryId))) || queryClient.getQueryData<Building[]>(queryKeys.buildings(activeDormitoryId)) || [];
+  const tenants: Tenant[] = queryResultMap.get(JSON.stringify(queryKeys.tenants(activeDormitoryId))) || queryClient.getQueryData<Tenant[]>(queryKeys.tenants(activeDormitoryId)) || [];
+  const contracts: Contract[] = queryResultMap.get(JSON.stringify(queryKeys.contracts(activeDormitoryId))) || queryClient.getQueryData<Contract[]>(queryKeys.contracts(activeDormitoryId)) || [];
+  const bills: Bill[] = queryResultMap.get(JSON.stringify(queryKeys.bills(activeDormitoryId))) || queryClient.getQueryData<Bill[]>(queryKeys.bills(activeDormitoryId)) || [];
+  const repairs: any[] = queryResultMap.get(JSON.stringify(queryKeys.maintenance(activeDormitoryId))) || queryClient.getQueryData(queryKeys.maintenance(activeDormitoryId)) || [];
+  const announcements: Announcement[] = queryResultMap.get(JSON.stringify(queryKeys.announcements(activeDormitoryId))) || queryClient.getQueryData<Announcement[]>(queryKeys.announcements(activeDormitoryId)) || [];
   const meterReadings: any[] = (selectedBillingCycleId ? queryClient.getQueryData<any[]>(queryKeys.meterReadings(activeDormitoryId, selectedBillingCycleId)) : null) || [];
   const auditLogs: AuditLog[] = [];
 
