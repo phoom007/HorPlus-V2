@@ -814,7 +814,7 @@ describe('LOCAL-07 Source-Reviewed Meter Workspace Correction Suite', () => {
       expect(handleClearInitial).toHaveBeenCalledTimes(1);
     });
 
-    it('Proof 2G: Authority editability matrix — RENT / DEPOSIT / Daily paid remain EDITABLE; only MONTHLY_UTILITY paid is LOCKED', async () => {
+    it('Proof 2G: Authority editability matrix — RENT / DEPOSIT / LEGACY_COMBINED / missing-kind paid remain EDITABLE; only MONTHLY_UTILITY paid is LOCKED', async () => {
       const mixedBills = [
         // r1: RENT is PAID, but MONTHLY_UTILITY is UNPAID -> row must be EDITABLE
         { id: 'b-rent-1', dormitoryId: 'dorm-1', cycleId: 'cycle-aug', roomId: 'r1', billKind: 'RENT', status: 'paid', totalAmount: 4000, outstandingAmount: 0 } as any,
@@ -824,9 +824,9 @@ describe('LOCAL-07 Source-Reviewed Meter Workspace Correction Suite', () => {
         { id: 'b-dep-2', dormitoryId: 'dorm-1', cycleId: 'cycle-aug', roomId: 'r2', billKind: 'DEPOSIT', status: 'paid', totalAmount: 5000, outstandingAmount: 0 } as any,
         { id: 'b-util-2', dormitoryId: 'dorm-1', cycleId: 'cycle-aug', roomId: 'r2', billKind: 'MONTHLY_UTILITY', status: 'unpaid', totalAmount: 850, outstandingAmount: 850 } as any,
 
-        // r3: RENT and DEPOSIT both PAID, MONTHLY_UTILITY unissued -> row must be EDITABLE (ยังไม่ออกบิล)
-        { id: 'b-rent-3', dormitoryId: 'dorm-1', cycleId: 'cycle-aug', roomId: 'r3', billKind: 'RENT', status: 'paid', totalAmount: 4000, outstandingAmount: 0 } as any,
-        { id: 'b-dep-3', dormitoryId: 'dorm-1', cycleId: 'cycle-aug', roomId: 'r3', billKind: 'DEPOSIT', status: 'paid', totalAmount: 5000, outstandingAmount: 0 } as any,
+        // r3: LEGACY_COMBINED is PAID, but MONTHLY_UTILITY is UNPAID -> row must be EDITABLE
+        { id: 'b-leg-3', dormitoryId: 'dorm-1', cycleId: 'cycle-aug', roomId: 'r3', billKind: 'LEGACY_COMBINED', status: 'paid', totalAmount: 4700, outstandingAmount: 0 } as any,
+        { id: 'b-util-3', dormitoryId: 'dorm-1', cycleId: 'cycle-aug', roomId: 'r3', billKind: 'MONTHLY_UTILITY', status: 'unpaid', totalAmount: 700, outstandingAmount: 700 } as any,
 
         // r4: MONTHLY_UTILITY is PAID -> row must be LOCKED (ชำระแล้ว)
         { id: 'b-util-4', dormitoryId: 'dorm-1', cycleId: 'cycle-aug', roomId: 'r4', billKind: 'MONTHLY_UTILITY', status: 'paid', totalAmount: 970, outstandingAmount: 0 } as any,
@@ -889,16 +889,77 @@ describe('LOCAL-07 Source-Reviewed Meter Workspace Correction Suite', () => {
       const elecCurr102 = row102?.querySelectorAll('input[type="text"]')[1] as HTMLInputElement;
       expect(elecCurr102.disabled).toBe(false);
 
-      // D: Room 103 (Daily stay with Daily rent paid) -> visible status 'รายวัน' and EDITABLE
+      // C: Room 103 (Daily stay with Daily rent paid / LEGACY_COMBINED paid) -> visible status 'รายวัน' and EDITABLE
       const row103 = container.querySelector('#room-row-r3');
       expect(row103?.textContent).toContain('รายวัน');
       const elecCurr103 = row103?.querySelectorAll('input[type="text"]')[1] as HTMLInputElement;
       expect(elecCurr103.disabled).toBe(false);
 
-      // E: Room 104 (MONTHLY_UTILITY paid) -> LOCKED (disabled)
+      // D: Room 104 (MONTHLY_UTILITY paid) -> LOCKED (disabled)
       const row104 = container.querySelector('#room-row-r4');
       const elecCurr104 = row104?.querySelectorAll('input[type="text"]')[1] as HTMLInputElement;
       expect(elecCurr104.disabled).toBe(true);
+    });
+
+    it('Proof 2H: Strict frontend billKind fail-closed discriminator — selects ONLY MONTHLY_UTILITY and rejects RENT, DEPOSIT, LEGACY_COMBINED, and missing billKind', () => {
+      const testRow = { roomId: 'r1', roomNumber: '101', waterCurr: '110', waterPrev: '100', elecCurr: '250', elecPrev: '200', peopleCount: 1 } as any;
+      const testRoomCtx = { billingSource: 'MONTHLY_CONTRACT', rentAmount: 4000 };
+      const testRateSnapshot = {
+        waterBillingType: 'per_unit',
+        waterRate: '18.00',
+        electricityBillingType: 'per_unit',
+        electricityRate: '7.00',
+      };
+
+      // 1. MONTHLY_UTILITY -> Selected
+      const breakdownUtil = getOwnerFinancialBreakdown(
+        testRow,
+        testRoomCtx,
+        testRateSnapshot,
+        [{ id: 'b1', roomId: 'r1', billingCycleId: 'cycle-aug', billKind: 'MONTHLY_UTILITY', status: 'unpaid', totalAmount: 730 } as any],
+        'cycle-aug'
+      );
+      expect(breakdownUtil.components.some(c => c.label === 'บิลรายเดือน')).toBe(true);
+
+      // 2. RENT -> Not selected as monthly bill
+      const breakdownRent = getOwnerFinancialBreakdown(
+        testRow,
+        testRoomCtx,
+        testRateSnapshot,
+        [{ id: 'b2', roomId: 'r1', billingCycleId: 'cycle-aug', billKind: 'RENT', status: 'paid', totalAmount: 4000 } as any],
+        'cycle-aug'
+      );
+      expect(breakdownRent.components.some(c => c.label === 'บิลรายเดือน' && c.status === 'PAID')).toBe(false);
+
+      // 3. DEPOSIT -> Not selected as monthly bill
+      const breakdownDep = getOwnerFinancialBreakdown(
+        testRow,
+        testRoomCtx,
+        testRateSnapshot,
+        [{ id: 'b3', roomId: 'r1', billingCycleId: 'cycle-aug', billKind: 'DEPOSIT', status: 'paid', totalAmount: 5000 } as any],
+        'cycle-aug'
+      );
+      expect(breakdownDep.components.some(c => c.label === 'บิลรายเดือน' && c.status === 'PAID')).toBe(false);
+
+      // 4. LEGACY_COMBINED -> Not selected as monthly utility bill
+      const breakdownLegacy = getOwnerFinancialBreakdown(
+        testRow,
+        testRoomCtx,
+        testRateSnapshot,
+        [{ id: 'b4', roomId: 'r1', billingCycleId: 'cycle-aug', billKind: 'LEGACY_COMBINED', status: 'paid', totalAmount: 4730 } as any],
+        'cycle-aug'
+      );
+      expect(breakdownLegacy.components.some(c => c.label === 'บิลรายเดือน' && c.status === 'PAID')).toBe(false);
+
+      // 5. Missing / undefined billKind -> Not selected (fails closed)
+      const breakdownUndefined = getOwnerFinancialBreakdown(
+        testRow,
+        testRoomCtx,
+        testRateSnapshot,
+        [{ id: 'b5', roomId: 'r1', billingCycleId: 'cycle-aug', status: 'paid', totalAmount: 4730 } as any],
+        'cycle-aug'
+      );
+      expect(breakdownUndefined.components.some(c => c.label === 'บิลรายเดือน' && c.status === 'PAID')).toBe(false);
     });
   });
 
@@ -929,7 +990,7 @@ describe('LOCAL-07 Source-Reviewed Meter Workspace Correction Suite', () => {
       expect(screen.queryByText(/PM/i)).toBeNull();
     });
 
-    it('Proof 3B: TimeWheel interactive time selection — selecting 15:47 updates output correctly', () => {
+    it('Proof 3B: TimeWheel interactive time selection via CLICK — selecting 15:47 updates output correctly', () => {
       const handleChange = vi.fn();
       render(
         <TimeWheelPicker
@@ -990,6 +1051,40 @@ describe('LOCAL-07 Source-Reviewed Meter Workspace Correction Suite', () => {
       fireEvent.click(cancelBtn);
       // Cancel does NOT invoke onChange with draft changes
       expect(handleChange).not.toHaveBeenCalled();
+    });
+
+    it('Proof 3D: TimeWheel interactive time selection via SCROLL ONLY — scrolling to 15 and 47 without clicking sets 15:47', () => {
+      const handleChange = vi.fn();
+      const { container } = render(
+        <TimeWheelPicker
+          value="12:00"
+          onChange={handleChange}
+          data-testid="timewheel-test-scroll"
+        />
+      );
+
+      // Click trigger to open
+      const trigger = screen.getByTestId('timewheel-test-scroll').firstElementChild as HTMLElement;
+      fireEvent.click(trigger);
+
+      // 1. Scroll Desktop hour list to 15 (15 * 32px) WITHOUT clicking
+      const hourList = container.querySelector('[aria-label="ชั่วโมง"]') as HTMLDivElement;
+      expect(hourList).toBeTruthy();
+      fireEvent.scroll(hourList, { target: { scrollTop: 15 * 32 } });
+
+      // 2. Scroll Desktop minute list to 47 (47 * 32px) WITHOUT clicking
+      const minuteList = container.querySelector('[aria-label="นาที"]') as HTMLDivElement;
+      expect(minuteList).toBeTruthy();
+      fireEvent.scroll(minuteList, { target: { scrollTop: 47 * 32 } });
+
+      // 3. Click Confirm
+      const confirmBtns = screen.getAllByText('ตกลง');
+      for (const btn of confirmBtns) {
+        fireEvent.click(btn);
+      }
+
+      // Assert onChange called with 15:47 selected purely by scroll
+      expect(handleChange).toHaveBeenCalledWith('15:47');
     });
   });
 });

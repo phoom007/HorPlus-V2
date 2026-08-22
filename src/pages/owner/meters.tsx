@@ -215,7 +215,7 @@ export function buildRowsFromWorkspace(params: {
     const existingMonthlyUtilityBill = (bills || []).find(b =>
       (b.cycleId === selectedBillingCycleId || b.cycleId === selectedCycleCode || (b as any).billingCycleId === selectedBillingCycleId) &&
       (b.roomId === r.id || b.roomId === r.roomNumber) &&
-      (b.billKind ? b.billKind === 'MONTHLY_UTILITY' : ((b as any).type !== 'rent' && (b as any).type !== 'deposit' && (b as any).billType !== 'rent' && (b as any).billType !== 'deposit')) &&
+      b.billKind === 'MONTHLY_UTILITY' &&
       (b.status as string) !== 'cancelled' && (b.status as string) !== 'void'
     );
     const billStatus: BillStatus = existingMonthlyUtilityBill ? existingMonthlyUtilityBill.status : 'draft';
@@ -346,7 +346,7 @@ export function getOwnerFinancialBreakdown(
   const previewSatang = parseScaled2(preview.totalAmount);
 
   const roomBills = (bills || []).filter(b => b.roomId === row.roomId && (b.billingCycleId === selectedBillingCycleId || b.cycleId === selectedBillingCycleId) && b.status !== 'cancelled' && (b.status as string) !== 'void');
-  const monthlyBill = roomBills.find(b => !b.billKind || b.billKind === 'MONTHLY_UTILITY');
+  const monthlyBill = roomBills.find(b => b.billKind === 'MONTHLY_UTILITY');
   const depositBill = roomBills.find(b => b.billKind === 'DEPOSIT');
   const rentBill = roomBills.find(b => b.billKind === 'RENT');
 

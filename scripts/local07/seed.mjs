@@ -765,21 +765,8 @@ export async function seedLocal07Data() {
     tCount++;
   }
 
-  // Billing Cycles: June (Closed), July (Active Current Cycle), August (Rolling Cycle) with canonical rate snapshots
+  // Billing Cycles: July (2026-07), August (2026-08 Current), September (2026-09 Rolling)
   const compBillingCycleService = new BillingCycleService(new PrismaBillingCycleRepository(prisma));
-
-  const cycleJuneRes = await compBillingCycleService.createBillingCycle(compDorm.id, {
-    cycleCode: '2026-06',
-    name: 'รอบบิล มิถุนายน 2569',
-    periodStart: '2026-06-01',
-    periodEnd: '2026-06-30',
-    billingDate: '2026-06-25',
-    dueDate: '2026-07-05',
-  }, COMP_DORM.owner.id);
-  await prisma.billingCycle.update({
-    where: { id: cycleJuneRes.cycle.id },
-    data: { status: 'closed' },
-  });
 
   const cycleJulyRes = await compBillingCycleService.createBillingCycle(compDorm.id, {
     cycleCode: '2026-07',

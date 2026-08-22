@@ -111,6 +111,42 @@ export const TimeWheelPicker: React.FC<TimeWheelPickerProps> = ({
     setIsOpen(false);
   };
 
+  const syncScrollSelection = (
+    listEl: HTMLDivElement | null,
+    items: string[],
+    setSelected: (val: string) => void
+  ) => {
+    if (!listEl) return;
+    const { scrollTop, clientHeight } = listEl;
+    const centerY = scrollTop + clientHeight / 2;
+
+    let closestItem = items[0];
+    let minDistance = Infinity;
+    let hasGeometry = false;
+
+    for (let i = 0; i < listEl.children.length; i++) {
+      const child = listEl.children[i] as HTMLElement;
+      if (!child) continue;
+      if (child.offsetHeight > 0) {
+        hasGeometry = true;
+        const childCenter = child.offsetTop + child.offsetHeight / 2;
+        const distance = Math.abs(centerY - childCenter);
+        if (distance < minDistance) {
+          minDistance = distance;
+          closestItem = items[i];
+        }
+      }
+    }
+
+    if (!hasGeometry) {
+      // In headless test environments (happy-dom/jsdom) without layout engine, calculate index via standard row unit (32px)
+      const approxIndex = Math.min(items.length - 1, Math.max(0, Math.round(scrollTop / 32)));
+      closestItem = items[approxIndex];
+    }
+
+    setSelected(closestItem);
+  };
+
   const handleHourSelect = (h: string) => {
     setSelectedHour(h);
     const hourIndex = HOURS.indexOf(h);
@@ -202,6 +238,7 @@ export const TimeWheelPicker: React.FC<TimeWheelPickerProps> = ({
               <div className="text-[11px] font-bold text-slate-500 mb-1">ชั่วโมง (00-23)</div>
               <div
                 ref={hourListRef}
+                onScroll={() => syncScrollSelection(hourListRef.current, HOURS, setSelectedHour)}
                 className="h-40 overflow-y-auto rounded-xl bg-slate-50 border border-slate-100 p-1 space-y-1 scrollbar-thin scroll-smooth snap-y snap-mandatory"
                 role="listbox"
                 aria-label="ชั่วโมง"
@@ -233,6 +270,7 @@ export const TimeWheelPicker: React.FC<TimeWheelPickerProps> = ({
               <div className="text-[11px] font-bold text-slate-500 mb-1">นาที (00-59)</div>
               <div
                 ref={minuteListRef}
+                onScroll={() => syncScrollSelection(minuteListRef.current, MINUTES, setSelectedMinute)}
                 className="h-40 overflow-y-auto rounded-xl bg-slate-50 border border-slate-100 p-1 space-y-1 scrollbar-thin scroll-smooth snap-y snap-mandatory"
                 role="listbox"
                 aria-label="นาที"
@@ -321,6 +359,7 @@ export const TimeWheelPicker: React.FC<TimeWheelPickerProps> = ({
                 <div className="text-xs font-bold text-slate-500 mb-1.5">ชั่วโมง (00-23)</div>
                 <div
                   ref={hourListRefMobile}
+                  onScroll={() => syncScrollSelection(hourListRefMobile.current, HOURS, setSelectedHour)}
                   className="h-48 overflow-y-auto rounded-2xl bg-slate-50 border border-slate-100 p-1.5 space-y-1.5 scrollbar-thin snap-y snap-mandatory touch-pan-y"
                   role="listbox"
                   aria-label="ชั่วโมง (มือถือ)"
@@ -352,6 +391,7 @@ export const TimeWheelPicker: React.FC<TimeWheelPickerProps> = ({
                 <div className="text-xs font-bold text-slate-500 mb-1.5">นาที (00-59)</div>
                 <div
                   ref={minuteListRefMobile}
+                  onScroll={() => syncScrollSelection(minuteListRefMobile.current, MINUTES, setSelectedMinute)}
                   className="h-48 overflow-y-auto rounded-2xl bg-slate-50 border border-slate-100 p-1.5 space-y-1.5 scrollbar-thin snap-y snap-mandatory touch-pan-y"
                   role="listbox"
                   aria-label="นาที (มือถือ)"
