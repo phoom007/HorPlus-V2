@@ -800,6 +800,15 @@ export async function seedLocal07Data() {
     dueDate: '2026-09-05',
   }, COMP_DORM.owner.id);
 
+  await compBillingCycleService.createBillingCycle(compDorm.id, {
+    cycleCode: '2026-09',
+    name: 'รอบบิล กันยายน 2569',
+    periodStart: '2026-09-01',
+    periodEnd: '2026-09-30',
+    billingDate: '2026-09-25',
+    dueDate: '2026-10-05',
+  }, COMP_DORM.owner.id);
+
   // Meter Readings for July 2026
   const meterFacts = [
     { roomNum: '101', prevWater: 100, curWater: 110, prevElec: 500, curElec: 560 }, // W: 10, E: 60

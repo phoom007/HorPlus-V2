@@ -1745,6 +1745,12 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     setMeterRows(prev => prev.map(row => ({ ...row, editWaterPrev: nextVal })));
   };
 
+  const filterMeaningfulFees = (fees?: Array<{ description?: string; amount?: number | string }>) => {
+    return (fees || [])
+      .filter(f => f && (String(f.description || '').trim() !== '' || (f.amount !== '' && f.amount !== undefined && f.amount !== null && Number(f.amount) > 0)))
+      .map(f => ({ description: String(f.description || '').trim(), amount: String(f.amount || '') }));
+  };
+
   const checkIsDirty = () => {
     if (!originalRowsRef.current || originalRowsRef.current.length === 0) return false;
     if (meterRows.length !== originalRowsRef.current.length) return true;
@@ -1763,7 +1769,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
         cur.isPaid !== orig.isPaid ||
         cur.billStatus !== orig.billStatus ||
         cur.isReplaced !== orig.isReplaced ||
-        JSON.stringify(cur.otherFees || []) !== JSON.stringify(orig.otherFees || [])
+        JSON.stringify(filterMeaningfulFees(cur.otherFees)) !== JSON.stringify(filterMeaningfulFees(orig.otherFees))
       ) {
         return true;
       }
@@ -2460,10 +2466,9 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                 const roomCtx = previewContext?.rooms?.find((r: any) => r.roomId === row.roomId);
                 const isDaily = roomCtx?.billingSource === 'DAILY_STAY';
                 const isBillIssued = row.billStatus !== 'draft' && row.billStatus !== 'cancelled';
-                const isMeterLocked = isBillIssued || isDaily;
-                const isRowLocked = isBillIssued;
-                const canEditElecPrev = !isMeterLocked && (isFirstCycle || row.editElecPrev || allowEditAllElecPrev);
-                const canEditWaterPrev = !isMeterLocked && (isFirstCycle || row.editWaterPrev || allowEditAllWaterPrev);
+                const isRowPaid = row.isPaid || row.billStatus === 'paid';
+                const canEditElecPrev = !isRowPaid && (isFirstCycle || row.editElecPrev || allowEditAllElecPrev);
+                const canEditWaterPrev = !isRowPaid && (isFirstCycle || row.editWaterPrev || allowEditAllWaterPrev);
 
                 return (
                   <tr key={row.roomId} id={`room-row-${row.roomId}`} className="hover:bg-slate-50/50 transition-colors">
@@ -2475,7 +2480,15 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                     {/* Elec Prev with conditional edit */}
                     {isElecUnit && (
                       <td className="p-4 text-center">
-                        <div className="flex items-center justify-center min-w-[80px]">
+                        <div
+                          onClick={(e) => {
+                            if (canEditElecPrev) {
+                              const input = e.currentTarget.querySelector('input') as HTMLInputElement | null;
+                              input?.focus();
+                            }
+                          }}
+                          className={`flex items-center justify-center min-w-[80px] min-h-[32px] w-full ${canEditElecPrev ? 'cursor-text' : 'cursor-default'}`}
+                        >
                           {canEditElecPrev ? (
                             <input
                               type="text"
@@ -2513,11 +2526,19 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                     {/* Elec Curr Input */}
                     {isElecUnit && (
                       <td className="p-4 text-center">
-                        <div className="flex items-center justify-center gap-1">
+                        <div
+                          onClick={(e) => {
+                            if (!isRowPaid) {
+                              const input = e.currentTarget.querySelector('input') as HTMLInputElement | null;
+                              input?.focus();
+                            }
+                          }}
+                          className={`flex items-center justify-center gap-1 min-h-[32px] w-full ${!isRowPaid ? 'cursor-text' : 'cursor-default'}`}
+                        >
                           <input
                             type="text"
                             inputMode="decimal"
-                            disabled={isMeterLocked}
+                            disabled={isRowPaid}
                             value={row.elecCurr}
                             onChange={(e) => {
                                 handleMeterReadingChange(row.roomId, 'elecCurr', e.target.value);
@@ -2541,7 +2562,15 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                     {/* Water Prev with conditional edit */}
                     {isWaterUnit && (
                       <td className="p-4 text-center">
-                        <div className="flex items-center justify-center min-w-[80px]">
+                        <div
+                          onClick={(e) => {
+                            if (canEditWaterPrev) {
+                              const input = e.currentTarget.querySelector('input') as HTMLInputElement | null;
+                              input?.focus();
+                            }
+                          }}
+                          className={`flex items-center justify-center min-w-[80px] min-h-[32px] w-full ${canEditWaterPrev ? 'cursor-text' : 'cursor-default'}`}
+                        >
                           {canEditWaterPrev ? (
                             <input
                               type="text"
@@ -2579,11 +2608,19 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                     {/* Water Curr Input */}
                     {isWaterUnit && (
                       <td className="p-4 text-center">
-                        <div className="flex items-center justify-center gap-1">
+                        <div
+                          onClick={(e) => {
+                            if (!isRowPaid) {
+                              const input = e.currentTarget.querySelector('input') as HTMLInputElement | null;
+                              input?.focus();
+                            }
+                          }}
+                          className={`flex items-center justify-center gap-1 min-h-[32px] w-full ${!isRowPaid ? 'cursor-text' : 'cursor-default'}`}
+                        >
                           <input
                             type="text"
                             inputMode="decimal"
-                            disabled={isMeterLocked}
+                            disabled={isRowPaid}
                             value={row.waterCurr}
                             onChange={(e) => {
                               handleMeterReadingChange(row.roomId, 'waterCurr', e.target.value);
@@ -2606,24 +2643,34 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
 
                     {/* People Count Input */}
                     <td className="p-4 text-center">
-                      <input
-                        type="text"
-                        inputMode="numeric"
-                        pattern="[0-9]*"
-                        disabled={isRowLocked}
-                        value={row.peopleCount}
-                        onChange={(e) => {
-                          handlePeopleCountChange(row.roomId, e.target.value);
+                      <div
+                        onClick={(e) => {
+                          if (!isRowPaid) {
+                            const input = e.currentTarget.querySelector('input') as HTMLInputElement | null;
+                            input?.focus();
+                          }
                         }}
-                        onPaste={(e) => handlePaste(row.roomId, 'peopleCount', e)}
-                        data-row={idx}
-                        data-col="peopleCount"
-                        className={`w-14 px-2 py-1 text-xs border rounded-lg bg-white text-slate-800 text-center font-bold focus:outline-indigo-500 transition-all duration-300 disabled:bg-slate-50 disabled:text-slate-500 disabled:border-transparent ${
-                          flashingCells[`${row.roomId}-peopleCount`]
-                            ? 'animate-vibrant-flash shadow-md z-10'
-                            : 'border-gray-200'
-                        }`}
-                      />
+                        className={`flex items-center justify-center min-h-[32px] w-full ${!isRowPaid ? 'cursor-text' : 'cursor-default'}`}
+                      >
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          pattern="[0-9]*"
+                          disabled={isRowPaid}
+                          value={row.peopleCount}
+                          onChange={(e) => {
+                            handlePeopleCountChange(row.roomId, e.target.value);
+                          }}
+                          onPaste={(e) => handlePaste(row.roomId, 'peopleCount', e)}
+                          data-row={idx}
+                          data-col="peopleCount"
+                          className={`w-14 px-2 py-1 text-xs border rounded-lg bg-white text-slate-800 text-center font-bold focus:outline-indigo-500 transition-all duration-300 disabled:bg-slate-50 disabled:text-slate-500 disabled:border-transparent ${
+                            flashingCells[`${row.roomId}-peopleCount`]
+                              ? 'animate-vibrant-flash shadow-md z-10'
+                              : 'border-gray-200'
+                          }`}
+                        />
+                      </div>
                     </td>
 
                     {/* Custom Other Fees Column */}
@@ -2635,7 +2682,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                             <span className="truncate max-w-[80px]" title={fee.description}>{fee.description}</span>
                             <div className="flex items-center gap-1 shrink-0">
                               <span className="text-indigo-600">{formatOtherFeeAmountDisplay(fee.amount)}</span>
-                              {!isRowLocked && (
+                              {!isRowPaid && (
                                 <button
                                   type="button"
                                   onClick={() => handleRemoveOtherFee(row.roomId, feeIdx)}
@@ -2655,7 +2702,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                         ))}
 
                         {/* Form to add a new other fee inline */}
-                        {!isRowLocked && (
+                        {!isRowPaid && (
                           <div className="flex items-center gap-1 mt-1">
                             <input
                               type="text"
@@ -2709,7 +2756,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                         return (
                           <div className="flex flex-col items-end">
                             <span>{financial.formattedAmount} ฿</span>
-                            {financial.components.length > 0 && (
+                            {financial.components.length > 1 && (
                               <button
                                 type="button"
                                 onClick={() => setExpandedBreakdowns(prev => ({ ...prev, [row.roomId]: !prev[row.roomId] }))}
@@ -2719,7 +2766,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                                 <ChevronDown className={`w-2.5 h-2.5 transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`} />
                               </button>
                             )}
-                            {isExpanded && financial.components.length > 0 && (
+                            {isExpanded && financial.components.length > 1 && (
                               <div
                                 data-testid={`owner-financial-components-${row.roomId}`}
                                 className="mt-1 space-y-0.5 text-left w-full"

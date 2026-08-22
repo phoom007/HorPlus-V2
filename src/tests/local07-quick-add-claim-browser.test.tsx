@@ -20,6 +20,15 @@ import { queryKeys } from '../lib/queryClient';
 import { meterDraftStore } from '../lib/meterDraftStore';
 import { calculateMeterRowPreview, RoomPreviewContext } from '../utils/meterBillingCalculator';
 
+const calculateMonthEndDate = (start: string, months: number): string => {
+  if (!start) return '';
+  const d = new Date(start);
+  if (isNaN(d.getTime())) return '';
+  d.setMonth(d.getMonth() + months);
+  d.setDate(d.getDate() - 1);
+  return d.toISOString().slice(0, 10);
+};
+
 const createTestQueryClient = () =>
   new QueryClient({
     defaultOptions: {
@@ -378,8 +387,8 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
       await waitFor(() => {
         expect(httpSpy).toHaveBeenCalledTimes(1);
         const payload = httpSpy.mock.calls[0][2];
-        // 1 month duration from mockContext default startDate 2026-08-21 derives 2026-09-20
-        expect(payload.endDate).toBe('2026-09-20');
+        const todayStr = new Date().toISOString().slice(0, 10);
+        expect(payload.endDate).toBe(calculateMonthEndDate(todayStr, 1));
       });
     });
 
@@ -2351,14 +2360,14 @@ describe('Daily Stay Meter Semantics, Financial Exclusion & Exact Deposit Copy',
       expect(screen.getByText('D101')).toBeDefined();
     });
 
-    // A. Verify meter inputs (elecCurr, waterCurr) are disabled/read-only for DAILY_STAY per PO UAT Round 3
+    // A. Verify meter inputs (elecCurr, waterCurr) are ENABLED and editable for DAILY_STAY per latest PO rule
     const elecCurrInput = screen.getByDisplayValue('520') as HTMLInputElement;
     expect(elecCurrInput).toBeDefined();
-    expect(elecCurrInput.disabled).toBe(true);
+    expect(elecCurrInput.disabled).toBe(false);
 
     const waterCurrInput = screen.getByDisplayValue('105') as HTMLInputElement;
     expect(waterCurrInput).toBeDefined();
-    expect(waterCurrInput.disabled).toBe(true);
+    expect(waterCurrInput.disabled).toBe(false);
 
     // People count MUST remain enabled and editable for DAILY_STAY per latest PO rule
     const peopleCountInput = document.querySelector('input[data-col="peopleCount"]') as HTMLInputElement;

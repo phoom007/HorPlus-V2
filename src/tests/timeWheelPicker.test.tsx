@@ -31,9 +31,9 @@ describe('TimeWheelPicker & Daily Time Selection Suite', () => {
     const trigger = screen.getByTestId('time-picker').firstElementChild as HTMLElement;
     fireEvent.click(trigger);
 
-    expect(screen.getByText('เลือกเวลา (24 ชม.)')).toBeDefined();
-    expect(screen.getByText('ชั่วโมง (00-23)')).toBeDefined();
-    expect(screen.getByText('นาที (00-59)')).toBeDefined();
+    expect(screen.getAllByText('เลือกเวลา (24 ชม.)').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('ชั่วโมง (00-23)').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('นาที (00-59)').length).toBeGreaterThan(0);
 
     // Verify all 24 hours 00..23 exist as options
     const hourList = screen.getByRole('listbox', { name: 'ชั่วโมง' });
@@ -72,7 +72,7 @@ describe('TimeWheelPicker & Daily Time Selection Suite', () => {
     fireEvent.click(min47Btn);
 
     // Click confirm "ตกลง"
-    const confirmBtn = screen.getByRole('button', { name: /ตกลง/i });
+    const confirmBtn = screen.getAllByRole('button', { name: /ตกลง/i })[0];
     fireEvent.click(confirmBtn);
 
     expect(onChange).toHaveBeenCalledWith('15:47');
@@ -100,7 +100,7 @@ describe('TimeWheelPicker & Daily Time Selection Suite', () => {
     const trigger = screen.getByTestId('time-picker').firstElementChild as HTMLElement;
     fireEvent.click(trigger);
 
-    const clearActionBtn = screen.getByRole('button', { name: 'ล้างค่า' });
+    const clearActionBtn = screen.getAllByRole('button', { name: 'ล้างค่า' })[0];
     fireEvent.click(clearActionBtn);
 
     expect(onChange).toHaveBeenCalledWith('');
@@ -155,7 +155,7 @@ describe('TimeWheelPicker & Daily Time Selection Suite', () => {
     const minuteList = screen.getByRole('listbox', { name: 'นาที' });
     fireEvent.click(within(hourList).getByRole('option', { name: '15' }));
     fireEvent.click(within(minuteList).getByRole('option', { name: '47' }));
-    fireEvent.click(screen.getByRole('button', { name: /ตกลง/i }));
+    fireEvent.click(screen.getAllByRole('button', { name: /ตกลง/i })[0]);
 
     // Verify Check-In now displays 15:47
     expect(screen.getByTestId('daily-checkin-time-picker').textContent).toContain('15:47');

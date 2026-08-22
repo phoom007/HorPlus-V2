@@ -855,10 +855,92 @@ export class MeterService {
     };
   }
 
+  public async syncIssuedUnpaidBillInTx(
+    dormitoryId: string,
+    billingCycleId: string,
+    roomId: string,
+    activeBill: any,
+    billingService: any,
+    userId?: string,
+    tx?: any
+  ): Promise<void> {
+    if (activeBill.status === 'paid' || activeBill.status === 'PAID') {
+      return;
+    }
+
+    const preview = await billingService.generateBillPreview(dormitoryId, billingCycleId, roomId, tx);
+    const prisma = tx || getPrismaClient();
+
+    // 1. Delete old items and insert updated items
+    await prisma.billItem.deleteMany({
+      where: {
+        billId: activeBill.id,
+        dormitoryId,
+      },
+    });
+
+    const newItems = preview.items.map((i: any, idx: number) => ({
+      dormitoryId,
+      billId: activeBill.id,
+      type: i.type,
+      code: i.code || null,
+      description: i.description,
+      quantity: i.quantity || '1.00',
+      unit: i.unit || null,
+      unitPrice: i.unitPrice,
+      amount: i.amount,
+      sourceType: i.sourceType || null,
+      sourceId: i.sourceId || null,
+      displayOrder: idx,
+      metadata: i.metadata || null,
+    }));
+
+    for (const item of newItems) {
+      await prisma.billItem.create({
+        data: item,
+      });
+    }
+
+    // 2. Compute new totals
+    let subtotalDec = toDecimal('0.00');
+    for (const item of newItems) {
+      subtotalDec = addDecimals(subtotalDec, item.amount);
+    }
+    const discountDec = toDecimal(activeBill.discountAmount || '0.00');
+    const rawTotal = subDecimals(subtotalDec, discountDec);
+    const totalDec = compareDecimals(rawTotal, '0.00') < 0 ? toDecimal('0.00') : rawTotal;
+    const paidDec = toDecimal(activeBill.paidAmount || '0.00');
+    const outstandingDec = subDecimals(totalDec, paidDec);
+    const finalOutstanding = compareDecimals(outstandingDec, '0.00') < 0 ? toDecimal('0.00') : outstandingDec;
+
+    // 3. Update Bill header
+    await prisma.bill.update({
+      where: { id: activeBill.id },
+      data: {
+        subtotal: formatDecimal(subtotalDec),
+        totalAmount: formatDecimal(totalDec),
+        outstandingAmount: formatDecimal(finalOutstanding),
+        version: { increment: 1 },
+      },
+    });
+
+    if (this.auditService) {
+      await this.auditService.log({
+        dormitoryId,
+        actorUserId: userId || 'system',
+        action: 'bill.sync_on_meter_save',
+        resourceType: 'bill',
+        resourceId: activeBill.id,
+        details: { roomId, newTotal: formatDecimal(totalDec) },
+      });
+    }
+  }
+
   public async saveBulkMeterWorkspace(
     dormitoryId: string,
     data: { billingCycleId: string; rows: SaveMeterWorkspaceRowDto[] },
-    userId?: string
+    userId?: string,
+    billingService?: any
   ): Promise<{ savedCount: number; savedRows: SavedRoomSnapshotMeta[] }> {
     const cycle = await this.billingCycleRepo.findById(data.billingCycleId, dormitoryId);
     if (!cycle) {
@@ -913,14 +995,17 @@ export class MeterService {
       const savedRows: SavedRoomSnapshotMeta[] = [];
 
       for (const row of data.rows) {
+        let activeBill: any = null;
         if (this.billRepo) {
-          const activeBill = await this.billRepo.findByCycleAndRoom(dormitoryId, data.billingCycleId, row.roomId, tx);
+          activeBill = await this.billRepo.findByCycleAndRoom(dormitoryId, data.billingCycleId, row.roomId, tx);
           if (activeBill && activeBill.status !== 'cancelled' && activeBill.status !== 'void') {
-            const err = new Error('METER_MODIFICATION_BLOCKED_BY_BILL');
-            (err as any).statusCode = 400;
-            (err as any).code = 'METER_MODIFICATION_BLOCKED_BY_BILL';
-            (err as any).message = 'ไม่สามารถแก้ไขข้อมูลมิเตอร์ได้เนื่องจากมีการออกบิลแล้ว';
-            throw err;
+            if (activeBill.status === 'paid' || activeBill.status === 'PAID') {
+              const err = new Error('ROOM_LOCKED_PAID');
+              (err as any).statusCode = 400;
+              (err as any).code = 'ROOM_LOCKED_PAID';
+              (err as any).message = 'บิลนี้ชำระเงินแล้ว ไม่สามารถแก้ไขข้อมูลมิเตอร์ได้';
+              throw err;
+            }
           }
         }
 
@@ -935,6 +1020,25 @@ export class MeterService {
         );
         if (savedMeta) {
           savedRows.push(savedMeta);
+        }
+
+        if (
+          activeBill &&
+          activeBill.status !== 'cancelled' &&
+          activeBill.status !== 'void' &&
+          activeBill.status !== 'paid' &&
+          activeBill.status !== 'PAID' &&
+          billingService
+        ) {
+          await this.syncIssuedUnpaidBillInTx(
+            dormitoryId,
+            data.billingCycleId,
+            row.roomId,
+            activeBill,
+            billingService,
+            userId,
+            tx
+          );
         }
       }
 

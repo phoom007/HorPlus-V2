@@ -51,6 +51,9 @@ export const TimeWheelPicker: React.FC<TimeWheelPickerProps> = ({
     }
   }, [value]);
 
+  const hourListRefMobile = useRef<HTMLDivElement>(null);
+  const minuteListRefMobile = useRef<HTMLDivElement>(null);
+
   useEffect(() => {
     if (isOpen) {
       const initial = parseTime(value || '12:00');
@@ -58,20 +61,19 @@ export const TimeWheelPicker: React.FC<TimeWheelPickerProps> = ({
       setSelectedMinute(initial.minute);
 
       setTimeout(() => {
-        if (hourListRef.current) {
-          const hourIndex = HOURS.indexOf(initial.hour);
-          if (hourIndex >= 0) {
-            const el = hourListRef.current.children[hourIndex] as HTMLElement;
+        const scrollList = (listEl: HTMLElement | null, items: string[], target: string) => {
+          if (!listEl) return;
+          const idx = items.indexOf(target);
+          if (idx >= 0) {
+            const el = listEl.children[idx] as HTMLElement;
             el?.scrollIntoView({ block: 'center', behavior: 'instant' as any });
           }
-        }
-        if (minuteListRef.current) {
-          const minuteIndex = MINUTES.indexOf(initial.minute);
-          if (minuteIndex >= 0) {
-            const el = minuteListRef.current.children[minuteIndex] as HTMLElement;
-            el?.scrollIntoView({ block: 'center', behavior: 'instant' as any });
-          }
-        }
+        };
+
+        scrollList(hourListRef.current, HOURS, initial.hour);
+        scrollList(minuteListRef.current, MINUTES, initial.minute);
+        scrollList(hourListRefMobile.current, HOURS, initial.hour);
+        scrollList(minuteListRefMobile.current, MINUTES, initial.minute);
       }, 50);
     }
   }, [isOpen, value]);
@@ -116,6 +118,10 @@ export const TimeWheelPicker: React.FC<TimeWheelPickerProps> = ({
       const el = hourListRef.current.children[hourIndex] as HTMLElement;
       el?.scrollIntoView({ block: 'center', behavior: 'smooth' });
     }
+    if (hourListRefMobile.current && hourIndex >= 0) {
+      const el = hourListRefMobile.current.children[hourIndex] as HTMLElement;
+      el?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    }
   };
 
   const handleMinuteSelect = (m: string) => {
@@ -123,6 +129,10 @@ export const TimeWheelPicker: React.FC<TimeWheelPickerProps> = ({
     const minuteIndex = MINUTES.indexOf(m);
     if (minuteListRef.current && minuteIndex >= 0) {
       const el = minuteListRef.current.children[minuteIndex] as HTMLElement;
+      el?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    }
+    if (minuteListRefMobile.current && minuteIndex >= 0) {
+      const el = minuteListRefMobile.current.children[minuteIndex] as HTMLElement;
       el?.scrollIntoView({ block: 'center', behavior: 'smooth' });
     }
   };
@@ -174,9 +184,9 @@ export const TimeWheelPicker: React.FC<TimeWheelPickerProps> = ({
       {/* Hidden input for standard form submission if needed */}
       {name && <input type="hidden" name={name} value={value} />}
 
-      {/* 24-Hour Wheel Picker Popover */}
+      {/* Desktop 24-Hour Wheel Picker Popover (sm and larger) */}
       {isOpen && (
-        <div className="absolute z-50 mt-1.5 left-0 right-0 sm:left-auto sm:right-auto sm:w-64 bg-white border border-slate-200 rounded-2xl shadow-xl p-3 animate-in fade-in zoom-in-95 duration-150">
+        <div className="hidden sm:block absolute z-50 mt-1.5 left-0 right-0 sm:left-auto sm:right-auto sm:w-64 bg-white border border-slate-200 rounded-2xl shadow-xl p-3 animate-in fade-in zoom-in-95 duration-150">
           {/* Header */}
           <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-100">
             <span className="text-xs font-bold text-slate-700">เลือกเวลา (24 ชม.)</span>
@@ -276,6 +286,126 @@ export const TimeWheelPicker: React.FC<TimeWheelPickerProps> = ({
                 <Check className="w-3.5 h-3.5" />
                 <span>ตกลง</span>
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Mobile 24-Hour Wheel Picker Bottom Sheet (< sm) */}
+      {isOpen && (
+        <div
+          data-testid="mobile-timewheel-sheet"
+          className="sm:hidden fixed inset-0 z-[9999] flex items-end justify-center bg-slate-900/60 backdrop-blur-xs p-0 animate-in fade-in duration-200"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) {
+              setIsOpen(false);
+            }
+          }}
+        >
+          <div className="w-full bg-white rounded-t-3xl shadow-2xl p-5 space-y-4 animate-in slide-in-from-bottom duration-200 max-h-[85vh] overflow-y-auto">
+            {/* Grab Handle */}
+            <div className="w-12 h-1 bg-slate-300 rounded-full mx-auto" />
+
+            {/* Sheet Header */}
+            <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+              <span className="text-sm font-bold text-slate-800">เลือกเวลา (24 ชม.)</span>
+              <span className="text-sm font-extrabold text-indigo-600 px-3 py-1 bg-indigo-50 rounded-xl">
+                {selectedHour}:{selectedMinute}
+              </span>
+            </div>
+
+            {/* Mobile Two Large Scroll Columns */}
+            <div className="grid grid-cols-2 gap-3 text-center select-none">
+              {/* Hour Column */}
+              <div>
+                <div className="text-xs font-bold text-slate-500 mb-1.5">ชั่วโมง (00-23)</div>
+                <div
+                  ref={hourListRefMobile}
+                  className="h-48 overflow-y-auto rounded-2xl bg-slate-50 border border-slate-100 p-1.5 space-y-1.5 scrollbar-thin snap-y snap-mandatory touch-pan-y"
+                  role="listbox"
+                  aria-label="ชั่วโมง (มือถือ)"
+                >
+                  {HOURS.map((h) => {
+                    const isSelected = h === selectedHour;
+                    return (
+                      <button
+                        key={h}
+                        type="button"
+                        role="option"
+                        aria-selected={isSelected}
+                        onClick={() => handleHourSelect(h)}
+                        className={`w-full py-2 text-sm font-bold rounded-xl transition-all snap-center cursor-pointer ${
+                          isSelected
+                            ? 'bg-indigo-600 text-white shadow-md'
+                            : 'text-slate-600 hover:bg-slate-200/70'
+                        }`}
+                      >
+                        {h}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Minute Column */}
+              <div>
+                <div className="text-xs font-bold text-slate-500 mb-1.5">นาที (00-59)</div>
+                <div
+                  ref={minuteListRefMobile}
+                  className="h-48 overflow-y-auto rounded-2xl bg-slate-50 border border-slate-100 p-1.5 space-y-1.5 scrollbar-thin snap-y snap-mandatory touch-pan-y"
+                  role="listbox"
+                  aria-label="นาที (มือถือ)"
+                >
+                  {MINUTES.map((m) => {
+                    const isSelected = m === selectedMinute;
+                    return (
+                      <button
+                        key={m}
+                        type="button"
+                        role="option"
+                        aria-selected={isSelected}
+                        onClick={() => handleMinuteSelect(m)}
+                        className={`w-full py-2 text-sm font-bold rounded-xl transition-all snap-center cursor-pointer ${
+                          isSelected
+                            ? 'bg-indigo-600 text-white shadow-md'
+                            : 'text-slate-600 hover:bg-slate-200/70'
+                        }`}
+                      >
+                        {m}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+
+            {/* Mobile Sheet Action Footer */}
+            <div className="flex items-center justify-between gap-3 pt-3 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={handleClear}
+                className="px-4 py-2.5 text-xs font-bold text-slate-500 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-colors cursor-pointer"
+              >
+                ล้างค่า
+              </button>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsOpen(false)}
+                  className="px-4 py-2.5 text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors cursor-pointer"
+                >
+                  ยกเลิก
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirm}
+                  className="px-5 py-2.5 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition-colors flex items-center gap-1.5 shadow-md cursor-pointer"
+                >
+                  <Check className="w-4 h-4" />
+                  <span>ตกลง</span>
+                </button>
+              </div>
             </div>
           </div>
         </div>
