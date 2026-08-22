@@ -91,7 +91,12 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
   onViewContract
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedTenant, setSelectedTenant] = useState<Tenant | null>(null);
+  const [selectedTenant, setSelectedTenant] = useState<Tenant | null>(() => {
+    if (initialTenantId && tenants && tenants.length > 0) {
+      return tenants.find(t => t.id === initialTenantId) || null;
+    }
+    return null;
+  });
   const [cameFromMeters, setCameFromMeters] = useState(Boolean(propCameFromMeters));
 
   React.useEffect(() => {

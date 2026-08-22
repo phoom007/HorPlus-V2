@@ -2172,9 +2172,9 @@ describe('Cycle Authority & Data-Ready Navigation Proofs', () => {
         onSelectTenant={vi.fn()}
         onAddLog={vi.fn()}
         onNavigate={vi.fn()}
-        selectedBillingCycleId="cycle-sep"
-        selectedCycleCode="2026-09"
-        selectedCycle="2026-09"
+        selectedBillingCycleId="cycle-oct"
+        selectedCycleCode="2026-10"
+        selectedCycle="2026-10"
         billingCycles={freshOwnerCycles}
       />
     );
@@ -2184,7 +2184,7 @@ describe('Cycle Authority & Data-Ready Navigation Proofs', () => {
       expect(screen.getByText('101')).toBeDefined();
     });
 
-    // 2. Quick Add "+ เพิ่มผู้เช่า" MUST NOT be rendered on September (non-operational cycle)
+    // 2. Quick Add "+ เพิ่มผู้เช่า" MUST NOT be rendered on October (outside rolling 3-month window)
     expect(screen.queryByText('เพิ่มผู้เช่า')).toBeNull();
 
     // 3. All 4 vacant rooms display "ไม่มีข้อมูล" in the tenant column

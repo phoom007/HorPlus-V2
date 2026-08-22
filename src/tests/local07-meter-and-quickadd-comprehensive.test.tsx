@@ -256,8 +256,8 @@ describe('LOCAL-07 Meter Workspace & Quick Add Comprehensive Frontend Suite', ()
       };
       const roomCtx = {
         roomId: 'r-1',
-        billingSource: 'PROVISIONAL_MONTHLY',
-        rentAmount: '4000.00',
+        billingSource: 'NONE',
+        rentAmount: '0.00',
         depositAmount: '0.00',
         isDepositPaid: false,
       };
@@ -293,8 +293,8 @@ describe('LOCAL-07 Meter Workspace & Quick Add Comprehensive Frontend Suite', ()
       };
       const roomCtx = {
         roomId: 'r-1',
-        billingSource: 'PROVISIONAL_MONTHLY',
-        rentAmount: '4000.00',
+        billingSource: 'NONE',
+        rentAmount: '0.00',
       };
       const rateSnapshot = {
         waterBillingType: 'per_unit',
@@ -351,7 +351,16 @@ describe('LOCAL-07 Meter Workspace & Quick Add Comprehensive Frontend Suite', ()
           roomId: 'r-1',
           billingCycleId: 'cycle-1',
           billKind: 'MONTHLY_UTILITY' as const,
-          totalAmount: '5150.00',
+          totalAmount: '1150.00',
+          outstandingAmount: '0.00',
+          status: 'PAID' as const,
+        },
+        {
+          id: 'b-2',
+          roomId: 'r-1',
+          billingCycleId: 'cycle-1',
+          billKind: 'RENT' as const,
+          totalAmount: '4000.00',
           outstandingAmount: '0.00',
           status: 'PAID' as const,
         }
@@ -360,6 +369,7 @@ describe('LOCAL-07 Meter Workspace & Quick Add Comprehensive Frontend Suite', ()
       expect(breakdown.operationalAmount).toBe(0);
       expect(breakdown.formattedAmount).toBe('0.00');
       expect(breakdown.components[0].status).toBe('PAID');
+      expect(breakdown.components[1].status).toBe('PAID');
     });
 
     it('maps error NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM to ไม่พบผู้เช่า', async () => {

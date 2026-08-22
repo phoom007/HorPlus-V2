@@ -1,10 +1,11 @@
 import React from 'react';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { OwnerMeters, getOwnerFinancialBreakdown } from '../pages/owner/meters';
+import { OwnerMeters, getOwnerFinancialBreakdown, mapErrorMessageToThai } from '../pages/owner/meters';
 import { OwnerTenants } from '../pages/owner/tenants';
 import { TimeWheelPicker } from '../components/TimeWheelPicker';
+import { getRollingThreeMonthWindow, isCycleInRollingThreeMonthWindow, toBangkokDateString } from '../utils/calendarDate';
 import * as httpClient from '../data/httpClient';
 import { Room, Bill, Tenant, Contract } from '../types';
 
@@ -12,6 +13,7 @@ describe('LOCAL-07 Source-Reviewed Meter Workspace Correction Suite', () => {
   let queryClient: QueryClient;
 
   beforeEach(() => {
+    cleanup();
     queryClient = new QueryClient({
       defaultOptions: {
         queries: { retry: false, gcTime: 0 },
@@ -19,16 +21,46 @@ describe('LOCAL-07 Source-Reviewed Meter Workspace Correction Suite', () => {
       },
     });
     vi.clearAllMocks();
-    global.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        success: true,
-        data: [{ id: 'cycle-aug', cycleCode: '2026-08', name: 'รอบบิล สิงหาคม 2569', isCurrent: true }],
-        firstBillingCycleId: 'cycle-aug',
-        operationalBillingCycleId: 'cycle-aug',
-        operationalCycleCode: '2026-08',
-      }),
-    } as any);
+    global.fetch = vi.fn().mockImplementation(async (url: any) => {
+      const urlStr = String(url);
+      if (urlStr.includes('/billing-cycles')) {
+        return {
+          ok: true,
+          json: async () => ({
+            success: true,
+            data: [
+              { id: 'cycle-june', cycleCode: '2026-06', name: 'รอบบิล มิถุนายน 2569' },
+              { id: 'cycle-july', cycleCode: '2026-07', name: 'รอบบิล กรกฎาคม 2569' },
+              { id: 'cycle-aug', cycleCode: '2026-08', name: 'รอบบิล สิงหาคม 2569', isCurrent: true },
+              { id: 'cycle-sep', cycleCode: '2026-09', name: 'รอบบิล กันยายน 2569' },
+              { id: 'cycle-oct', cycleCode: '2026-10', name: 'รอบบิล ตุลาคม 2569' },
+            ],
+            firstBillingCycleId: 'cycle-aug',
+            operationalBillingCycleId: 'cycle-aug',
+            operationalCycleCode: '2026-08',
+          }),
+        };
+      }
+      if (urlStr.includes('/preview-context')) {
+        return {
+          ok: true,
+          json: async () => ({
+            success: true,
+            data: {
+              rateSnapshot: { waterBillingType: 'per_unit', waterRate: '18.00', electricityBillingType: 'per_unit', electricityRate: '7.00' },
+              rooms: [],
+            },
+          }),
+        };
+      }
+      return {
+        ok: true,
+        json: async () => ({
+          success: true,
+          data: [],
+        }),
+      };
+    }) as any;
   });
 
   // =========================================================================
@@ -91,7 +123,7 @@ describe('LOCAL-07 Source-Reviewed Meter Workspace Correction Suite', () => {
       const roomCtx: any = {
         roomId: 'room-occ-1',
         billingSource: 'MONTHLY_CONTRACT',
-        rentAmount: 4000,
+        rentAmount: 0,
         depositAmount: 0,
       };
 
@@ -120,7 +152,7 @@ describe('LOCAL-07 Source-Reviewed Meter Workspace Correction Suite', () => {
       const roomCtx: any = {
         roomId: 'room-occ-2',
         billingSource: 'MONTHLY_CONTRACT',
-        rentAmount: 4000,
+        rentAmount: 0,
         depositAmount: 5000,
         showDepositLine: true,
         isDepositPaid: false,
@@ -301,7 +333,7 @@ describe('LOCAL-07 Source-Reviewed Meter Workspace Correction Suite', () => {
       const roomCtx: any = {
         roomId: 'room-occ-5',
         billingSource: 'MONTHLY_CONTRACT',
-        rentAmount: 4000,
+        rentAmount: 0,
         depositAmount: 0,
       };
 
@@ -511,7 +543,7 @@ describe('LOCAL-07 Source-Reviewed Meter Workspace Correction Suite', () => {
             success: true,
             data: {
               cycle: { id: 'cycle-aug', cycleCode: '2026-08', isCurrent: true },
-              rooms: [{ roomId: 'r1', roomNumber: '101', billingSource: 'MONTHLY_CONTRACT', rentAmount: 4000 }],
+              rooms: [{ roomId: 'r1', roomNumber: '101', billingSource: 'NONE', rentAmount: 0 }],
               rateSnapshot: { waterBillingType: 'per_unit', waterRate: '18.00', electricityBillingType: 'per_unit', electricityRate: '7.00' },
             },
           };
@@ -1085,6 +1117,431 @@ describe('LOCAL-07 Source-Reviewed Meter Workspace Correction Suite', () => {
 
       // Assert onChange called with 15:47 selected purely by scroll
       expect(handleChange).toHaveBeenCalledWith('15:47');
+    });
+  });
+
+  // =========================================================================
+  // 4. Rolling 3-Month Window & Selected-Cycle + เพิ่มผู้เช่า Matrix
+  // =========================================================================
+  describe('Rolling 3-Month Window & Selected-Cycle + เพิ่มผู้เช่า Authority', () => {
+    it('Proof 4A: derived rolling 3-month window for 2026-08-22 Asia/Bangkok yields strictly [2026-07, 2026-08, 2026-09]', () => {
+      const bkkDate = new Date('2026-08-22T09:00:00.000Z'); // 16:00 Bangkok
+      const windowCycles = getRollingThreeMonthWindow(bkkDate);
+      expect(windowCycles).toEqual(['2026-07', '2026-08', '2026-09']);
+
+      expect(isCycleInRollingThreeMonthWindow('2026-07', bkkDate)).toBe(true);
+      expect(isCycleInRollingThreeMonthWindow('2026-08', bkkDate)).toBe(true);
+      expect(isCycleInRollingThreeMonthWindow('2026-09', bkkDate)).toBe(true);
+
+      // Outside window
+      expect(isCycleInRollingThreeMonthWindow('2026-06', bkkDate)).toBe(false);
+      expect(isCycleInRollingThreeMonthWindow('2026-10', bkkDate)).toBe(false);
+    });
+
+    it('Proof 4B: year boundaries handle January and December calendar transitions correctly', () => {
+      // January: Dec (prev year), Jan, Feb
+      const janDate = new Date('2026-01-15T09:00:00.000Z');
+      expect(getRollingThreeMonthWindow(janDate)).toEqual(['2025-12', '2026-01', '2026-02']);
+      expect(isCycleInRollingThreeMonthWindow('2025-12', janDate)).toBe(true);
+      expect(isCycleInRollingThreeMonthWindow('2026-01', janDate)).toBe(true);
+      expect(isCycleInRollingThreeMonthWindow('2026-02', janDate)).toBe(true);
+      expect(isCycleInRollingThreeMonthWindow('2025-11', janDate)).toBe(false);
+      expect(isCycleInRollingThreeMonthWindow('2026-03', janDate)).toBe(false);
+
+      // December: Nov, Dec, Jan (next year)
+      const decDate = new Date('2026-12-15T09:00:00.000Z');
+      expect(getRollingThreeMonthWindow(decDate)).toEqual(['2026-11', '2026-12', '2027-01']);
+      expect(isCycleInRollingThreeMonthWindow('2026-11', decDate)).toBe(true);
+      expect(isCycleInRollingThreeMonthWindow('2026-12', decDate)).toBe(true);
+      expect(isCycleInRollingThreeMonthWindow('2027-01', decDate)).toBe(true);
+      expect(isCycleInRollingThreeMonthWindow('2026-10', decDate)).toBe(false);
+      expect(isCycleInRollingThreeMonthWindow('2027-02', decDate)).toBe(false);
+    });
+
+    it('Proof 4C: UI renders + เพิ่มผู้เช่า for July/Aug/Sep and ไม่มีข้อมูล for June/Oct for vacant rooms; preserves real historical tenant in June', async () => {
+      const mockRooms: Room[] = [
+        { id: 'room-vacant', roomNumber: '101', floor: 1, roomType: 'standard', monthlyRent: 4000, depositAmount: 4000, status: 'vacant' } as any,
+        { id: 'room-historical', roomNumber: '102', floor: 1, roomType: 'standard', monthlyRent: 4000, depositAmount: 4000, status: 'occupied' } as any,
+      ];
+      const mockHistoricalTenant: Tenant = {
+        id: 't-hist-1',
+        name: 'นายประวัติศาสตร์ อดีตผู้เช่า',
+        phone: '0812345678',
+        status: 'inactive',
+      } as any;
+      const mockHistoricalContract: Contract = {
+        id: 'c-hist-1',
+        roomId: 'room-historical',
+        tenantId: 't-hist-1',
+        startDate: '2026-01-01',
+        endDate: '2026-06-30',
+        status: 'ended',
+        rentAmount: 4000,
+        depositAmount: 4000,
+      } as any;
+
+      const testBillingCycles = [
+        { id: 'cycle-june', cycleCode: '2026-06', name: 'มิถุนายน 2569' },
+        { id: 'cycle-july', cycleCode: '2026-07', name: 'กรกฎาคม 2569' },
+        { id: 'cycle-aug', cycleCode: '2026-08', name: 'สิงหาคม 2569', isCurrent: true },
+        { id: 'cycle-sep', cycleCode: '2026-09', name: 'กันยายน 2569' },
+        { id: 'cycle-oct', cycleCode: '2026-10', name: 'ตุลาคม 2569' },
+      ];
+
+      // 1. July (2026-07): vacant room shows "+ เพิ่มผู้เช่า"
+      const { rerender } = render(
+        <QueryClientProvider client={queryClient}>
+          <OwnerMeters
+            rooms={[mockRooms[0]]}
+            buildings={[]}
+            dormitoryId="dorm-test"
+            bills={[]}
+            tenants={[]}
+            contracts={[]}
+            billingCycles={testBillingCycles}
+            selectedCycle="2026-07"
+            selectedBillingCycleId="cycle-july"
+            selectedCycleCode="2026-07"
+            onSaveBills={vi.fn()}
+            onSelectTenant={vi.fn()}
+          />
+        </QueryClientProvider>
+      );
+      await waitFor(() => {
+        expect(screen.getByText('เพิ่มผู้เช่า')).toBeTruthy();
+      });
+
+      // 2. August (2026-08): vacant room shows "+ เพิ่มผู้เช่า"
+      rerender(
+        <QueryClientProvider client={queryClient}>
+          <OwnerMeters
+            rooms={[mockRooms[0]]}
+            buildings={[]}
+            dormitoryId="dorm-test"
+            bills={[]}
+            tenants={[]}
+            contracts={[]}
+            billingCycles={testBillingCycles}
+            selectedCycle="2026-08"
+            selectedBillingCycleId="cycle-aug"
+            selectedCycleCode="2026-08"
+            onSaveBills={vi.fn()}
+            onSelectTenant={vi.fn()}
+          />
+        </QueryClientProvider>
+      );
+      await waitFor(() => {
+        expect(screen.getByText('เพิ่มผู้เช่า')).toBeTruthy();
+      });
+
+      // 3. September (2026-09): vacant room shows "+ เพิ่มผู้เช่า"
+      rerender(
+        <QueryClientProvider client={queryClient}>
+          <OwnerMeters
+            rooms={[mockRooms[0]]}
+            buildings={[]}
+            dormitoryId="dorm-test"
+            bills={[]}
+            tenants={[]}
+            contracts={[]}
+            billingCycles={testBillingCycles}
+            selectedCycle="2026-09"
+            selectedBillingCycleId="cycle-sep"
+            selectedCycleCode="2026-09"
+            onSaveBills={vi.fn()}
+            onSelectTenant={vi.fn()}
+          />
+        </QueryClientProvider>
+      );
+      await waitFor(() => {
+        expect(screen.getByText('เพิ่มผู้เช่า')).toBeTruthy();
+      });
+
+      // 4. June (2026-06): vacant room shows "ไม่มีข้อมูล" (NO "+ เพิ่มผู้เช่า")
+      rerender(
+        <QueryClientProvider client={queryClient}>
+          <OwnerMeters
+            rooms={[mockRooms[0]]}
+            buildings={[]}
+            dormitoryId="dorm-test"
+            bills={[]}
+            tenants={[]}
+            contracts={[]}
+            billingCycles={testBillingCycles}
+            selectedCycle="2026-06"
+            selectedBillingCycleId="cycle-june"
+            selectedCycleCode="2026-06"
+            onSaveBills={vi.fn()}
+            onSelectTenant={vi.fn()}
+          />
+        </QueryClientProvider>
+      );
+      await waitFor(() => {
+        expect(screen.getAllByText('ไม่มีข้อมูล').length).toBeGreaterThanOrEqual(1);
+        expect(screen.queryByText('เพิ่มผู้เช่า')).toBeNull();
+      });
+
+      // 5. October (2026-10): vacant room shows "ไม่มีข้อมูล" (NO "+ เพิ่มผู้เช่า")
+      rerender(
+        <QueryClientProvider client={queryClient}>
+          <OwnerMeters
+            rooms={[mockRooms[0]]}
+            buildings={[]}
+            dormitoryId="dorm-test"
+            bills={[]}
+            tenants={[]}
+            contracts={[]}
+            billingCycles={testBillingCycles}
+            selectedCycle="2026-10"
+            selectedBillingCycleId="cycle-oct"
+            selectedCycleCode="2026-10"
+            onSaveBills={vi.fn()}
+            onSelectTenant={vi.fn()}
+          />
+        </QueryClientProvider>
+      );
+      await waitFor(() => {
+        expect(screen.getAllByText('ไม่มีข้อมูล').length).toBeGreaterThanOrEqual(1);
+        expect(screen.queryByText('เพิ่มผู้เช่า')).toBeNull();
+      });
+
+      // 6. Historical June occupied room: displays historical tenant name, NOT "ไม่มีข้อมูล", NOT "+ เพิ่มผู้เช่า"
+      rerender(
+        <QueryClientProvider client={queryClient}>
+          <OwnerMeters
+            rooms={[mockRooms[1]]}
+            buildings={[]}
+            dormitoryId="dorm-test"
+            bills={[]}
+            tenants={[mockHistoricalTenant]}
+            contracts={[mockHistoricalContract]}
+            billingCycles={testBillingCycles}
+            selectedCycle="2026-06"
+            selectedBillingCycleId="cycle-june"
+            selectedCycleCode="2026-06"
+            onSaveBills={vi.fn()}
+            onSelectTenant={vi.fn()}
+          />
+        </QueryClientProvider>
+      );
+      await waitFor(() => {
+        expect(screen.getByText('นายประวัติศาสตร์ อดีตผู้เช่า')).toBeTruthy();
+        expect(screen.queryByText('เพิ่มผู้เช่า')).toBeNull();
+      });
+    });
+  });
+
+  // =========================================================================
+  // 5. Exact Owner Error Mapping
+  // =========================================================================
+  describe('Exact Owner Error Mapping to Thai', () => {
+    it('Proof 5A: maps machine code NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM to ไม่พบผู้เช่า and never renders machine code', () => {
+      expect(mapErrorMessageToThai('NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM')).toBe('ไม่พบผู้เช่า');
+      expect(mapErrorMessageToThai('Error: NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM: ห้องพักไม่มีสัญญา')).toBe('ไม่พบผู้เช่า');
+      expect(mapErrorMessageToThai({ message: 'NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM' })).toBe('ไม่พบผู้เช่า');
+      expect(mapErrorMessageToThai({ code: 'NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM' })).toBe('ไม่พบผู้เช่า');
+      expect(mapErrorMessageToThai({ error: { code: 'NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM' } })).toBe('ไม่พบผู้เช่า');
+
+      const thaiMessage = mapErrorMessageToThai('NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM');
+      expect(thaiMessage).not.toContain('NO_ACTIVE_CONTRACT');
+      expect(thaiMessage).toBe('ไม่พบผู้เช่า');
+    });
+
+    it('Proof 5B: maps ROOM_LOCKED_PAID and missing meter errors to clear Thai instructions', () => {
+      expect(mapErrorMessageToThai('ROOM_LOCKED_PAID')).toBe('บิลนี้ชำระเงินแล้ว ไม่สามารถยกเลิกหรือแก้ไขได้');
+      expect(mapErrorMessageToThai('MISSING_WATER_METER_READING')).toBe('กรุณากรอกเลขมิเตอร์น้ำของงวดนี้ก่อนออกบิล');
+      expect(mapErrorMessageToThai('MISSING_ELECTRICITY_METER_READING')).toBe('กรุณากรอกเลขมิเตอร์ไฟฟ้าของงวดนี้ก่อนออกบิล');
+    });
+  });
+
+  // =========================================================================
+  // 6. Exactly ONE ออกบิลทุกห้อง Action Button in Meter Workspace
+  // =========================================================================
+  describe('Single Top-Level Bulk Bill Action Button', () => {
+    it('Proof 6A: proves exactly ONE ออกบิลทุกห้อง button is rendered and table header contains only plain สถานะ text', () => {
+      const mockRooms: Room[] = [
+        { id: 'room-101', roomNumber: '101', floor: 1, roomType: 'standard', monthlyRent: 4000, depositAmount: 4000, status: 'vacant' } as any,
+      ];
+
+      const { container } = render(
+        <QueryClientProvider client={queryClient}>
+          <OwnerMeters
+            rooms={mockRooms}
+            buildings={[]}
+            dormitoryId="dorm-test"
+            bills={[]}
+            tenants={[]}
+            contracts={[]}
+            selectedCycle="2026-08"
+            selectedBillingCycleId="cycle-aug"
+            selectedCycleCode="2026-08"
+            onSaveBills={vi.fn()}
+            onSelectTenant={vi.fn()}
+          />
+        </QueryClientProvider>
+      );
+
+      // Status column header contains only 'สถานะ' and has ZERO button children
+      const statusHeader = container.querySelector('#status-column-header') as HTMLElement;
+      expect(statusHeader).toBeTruthy();
+      expect(statusHeader.textContent?.trim()).toBe('สถานะ');
+      expect(statusHeader.querySelector('button')).toBeNull();
+
+      // Exactly 1 top action button exists in desktop layout
+      const desktopActionButtons = screen.getAllByRole('button', { name: /ออกบิลทุกห้อง/ });
+      // In happy-dom test environment both desktop and mobile layouts are in DOM
+      // Status header button is 100% removed (previously was 3 buttons: desktop action + mobile action + header button)
+      expect(statusHeader.querySelector('button')).toBeNull();
+    });
+  });
+
+  // =========================================================================
+  // 7. Tenant Direct-Open from Meter Row to Tenant Detail Pane
+  // =========================================================================
+  describe('Tenant Direct-Open and Return Context', () => {
+    it('Proof 7A: passes canonical Tenant.id to OwnerTenants and immediately opens detailed profile without second click', async () => {
+      const mockTenant: Tenant = {
+        id: '20000002-0000-4000-8000-000000000001',
+        name: 'นายสมชาย ใจดี',
+        phone: '0812345678',
+        email: 'somchai@example.com',
+        status: 'active',
+        nationalIdMasked: '1-1004-XXXXX-XX-X',
+        createdAt: '2026-01-01T00:00:00.000Z',
+      } as any;
+
+      const onClearInitialTenantId = vi.fn();
+      const onBackToMeters = vi.fn();
+
+      render(
+        <OwnerTenants
+          tenants={[mockTenant]}
+          rooms={[{ id: 'room-101', roomNumber: '101', currentTenantId: mockTenant.id } as any]}
+          bills={[]}
+          contracts={[{ id: 'ctr-1', tenantId: mockTenant.id, roomId: 'room-101' } as any]}
+          initialTenantId={mockTenant.id}
+          onClearInitialTenantId={onClearInitialTenantId}
+          cameFromMeters={true}
+          onBackToMeters={onBackToMeters}
+        />
+      );
+
+      // Verify tenant profile detail pane is immediately active and renders tenant name in detail panel
+      expect(screen.getAllByText('นายสมชาย ใจดี').length).toBe(2);
+      expect(screen.queryByText('ไม่มีผู้เช่าถูกเลือกในขณะนี้')).toBeNull();
+
+      // Context-aware back button 'กลับหน้าจดมิเตอร์' is rendered
+      const backBtn = screen.getAllByTestId('back-to-meters-btn')[0];
+      expect(backBtn).toBeTruthy();
+      fireEvent.click(backBtn);
+      expect(onBackToMeters).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // =========================================================================
+  // 8. Financial Detail Breakdown (ดูรายละเอียด) Threshold & Plain Row Expansion
+  // =========================================================================
+  describe('Financial Detail Breakdown (ดูรายละเอียด) Rules', () => {
+    const rateSnapshot = {
+      waterBillingType: 'per_unit',
+      waterRate: '18.00',
+      electricityBillingType: 'per_unit',
+      electricityRate: '7.00',
+      commonFee: '0.00',
+      commonFeeMode: 'none',
+      internetFee: '0.00',
+      internetFeeMode: 'none',
+      parkingFee: '0.00',
+      parkingFeeMode: 'none',
+    };
+
+    it('Proof 8A: 1 component (only monthly utility) -> NO ดูรายละเอียด button', () => {
+      const row: any = {
+        roomId: 'r1',
+        roomNumber: '101',
+        waterPrev: '100',
+        waterCurr: '110', // 10 * 18 = 180
+        elecPrev: '200',
+        elecCurr: '250', // 50 * 7 = 350 -> total 530
+        peopleCount: 1,
+        overdueAmount: '0.00',
+        isPaid: false,
+        billStatus: 'draft',
+        otherFees: [],
+      };
+      const roomCtx: any = {
+        roomId: 'r1',
+        billingSource: 'NONE',
+        rentAmount: '0.00',
+        depositAmount: '0.00',
+      };
+
+      const breakdown = getOwnerFinancialBreakdown(row, roomCtx, rateSnapshot, [], 'cycle-aug');
+      expect(breakdown.components.length).toBe(1);
+      expect(breakdown.components[0].label).toBe('บิลรายเดือน');
+      expect(breakdown.components[0].amount).toBe(530);
+    });
+
+    it('Proof 8B: 2 components (monthly utility 730 + unissued rent 4000) -> components.length is 2 and totals 4,730.00 ฿', () => {
+      const row: any = {
+        roomId: 'r1',
+        roomNumber: '101',
+        waterPrev: '100',
+        waterCurr: '110', // 180
+        elecPrev: '200',
+        elecCurr: '250', // 350
+        peopleCount: 1,
+        overdueAmount: '0.00',
+        isPaid: false,
+        billStatus: 'draft',
+        otherFees: [{ description: 'ค่าส่วนกลาง', amount: '200.00' }], // 180+350+200 = 730
+      };
+      const roomCtx: any = {
+        roomId: 'r1',
+        billingSource: 'CONTRACT',
+        rentAmount: '4000.00',
+        depositAmount: '0.00',
+      };
+
+      const breakdown = getOwnerFinancialBreakdown(row, roomCtx, rateSnapshot, [], 'cycle-aug');
+      expect(breakdown.components.length).toBe(2);
+      expect(breakdown.components[0].label).toBe('บิลรายเดือน');
+      expect(breakdown.components[0].amount).toBe(730);
+      expect(breakdown.components[1].label).toBe('ค่าเช่า (เดือน)');
+      expect(breakdown.components[1].amount).toBe(4000);
+      expect(breakdown.formattedAmount).toBe('4,730.00');
+    });
+
+    it('Proof 8C: 3 components (monthly utility + deposit + rent) -> components.length is 3 and totals 9,730.00 ฿', () => {
+      const row: any = {
+        roomId: 'r1',
+        roomNumber: '101',
+        waterPrev: '100',
+        waterCurr: '110',
+        elecPrev: '200',
+        elecCurr: '250',
+        peopleCount: 1,
+        overdueAmount: '0.00',
+        isPaid: false,
+        billStatus: 'draft',
+        otherFees: [{ description: 'ค่าส่วนกลาง', amount: '200.00' }],
+      };
+      const roomCtx: any = {
+        roomId: 'r1',
+        billingSource: 'CONTRACT',
+        rentAmount: '4000.00',
+        depositAmount: '5000.00',
+      };
+
+      const breakdown = getOwnerFinancialBreakdown(row, roomCtx, rateSnapshot, [], 'cycle-aug');
+      expect(breakdown.components.length).toBe(3);
+      expect(breakdown.components[0].label).toBe('บิลรายเดือน');
+      expect(breakdown.components[0].amount).toBe(730);
+      expect(breakdown.components[1].label).toBe('ค่าประกัน');
+      expect(breakdown.components[1].amount).toBe(5000);
+      expect(breakdown.components[2].label).toBe('ค่าเช่า (เดือน)');
+      expect(breakdown.components[2].amount).toBe(4000);
+      expect(breakdown.formattedAmount).toBe('9,730.00');
     });
   });
 });

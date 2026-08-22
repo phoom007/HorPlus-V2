@@ -38,6 +38,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { queryKeys, STALE_TIMES } from '../../lib/queryClient';
 import { meterDraftStore, deriveMeterDraftPatches } from '../../lib/meterDraftStore';
 import { calculateMeterRowPreview, calculateMeterUsageUnits, RoomPreviewContext, parseScaled2, formatScaled2, formatMoneyDisplay } from '../../utils/meterBillingCalculator';
+import { isCycleInRollingThreeMonthWindow } from '../../utils/calendarDate';
 import { Room, Building, QuickAddRoomContext, Bill, BillItem, Tenant, Contract, BillStatus, calculateRoomRentForCycle } from '../../types';
 import { getDataProvider } from '../../data/dataProvider';
 import { httpRequest } from '../../data/httpClient';
@@ -426,6 +427,17 @@ export function getOwnerFinancialBreakdown(
       status: isPaid ? 'PAID' : 'UNPAID',
       title: isPaid ? 'ชำระแล้ว' : 'รอชำระเงิน',
     });
+  } else if (Number(roomCtx?.rentAmount || 0) > 0) {
+    const rSatang = parseScaled2(roomCtx.rentAmount);
+    operationalSatang += rSatang;
+    const isTerm = roomCtx?.billingSource === 'PROVISIONAL_TERM';
+    components.push({
+      label: isTerm ? 'ค่าเช่า (เทอม)' : 'ค่าเช่า (เดือน)',
+      amount: Number(roomCtx.rentAmount),
+      formattedAmount: formatMoneyDisplay(formatScaled2(rSatang)),
+      status: 'PREVIEW',
+      title: 'ยังไม่ออกบิล (พรีวิว)',
+    });
   }
 
   const opStr = formatScaled2(operationalSatang);
@@ -436,12 +448,19 @@ export function getOwnerFinancialBreakdown(
   };
 }
 
-export function mapErrorMessageToThai(raw: string | undefined): string {
+export function mapErrorMessageToThai(raw: any): string {
   if (!raw) return 'เกิดข้อผิดพลาดในการดำเนินการ';
-  if (raw.includes('NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM')) return 'ไม่พบผู้เช่า';
-  if (raw.includes('ROOM_LOCKED_PAID')) return 'บิลนี้ชำระเงินแล้ว ไม่สามารถยกเลิกหรือแก้ไขได้';
-  if (raw.includes('BILLING_CYCLE_NOT_FOUND')) return 'ไม่พบข้อมูลรอบบิล';
-  return raw;
+  const str = typeof raw === 'string' ? raw : (raw.message || raw.code || raw.error?.message || raw.error?.code || JSON.stringify(raw));
+  if (typeof str === 'string') {
+    if (str.includes('NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM') || str.includes('NO_ACTIVE_CONTRACT')) return 'ไม่พบผู้เช่า';
+    if (str.includes('ROOM_LOCKED_PAID')) return 'บิลนี้ชำระเงินแล้ว ไม่สามารถยกเลิกหรือแก้ไขได้';
+    if (str.includes('BILLING_CYCLE_NOT_FOUND')) return 'ไม่พบข้อมูลรอบบิล';
+    if (str.includes('MISSING_WATER_METER_READING') || str.includes('MISSING_METER_READING')) return 'กรุณากรอกเลขมิเตอร์น้ำของงวดนี้ก่อนออกบิล';
+    if (str.includes('MISSING_ELECTRICITY_METER_READING')) return 'กรุณากรอกเลขมิเตอร์ไฟฟ้าของงวดนี้ก่อนออกบิล';
+    if (str.includes('STALE_VERSION')) return 'ข้อมูลถูกแก้ไขโดยผู้อื่น กรุณารีเฟรชหน้านี้';
+    return str;
+  }
+  return 'เกิดข้อผิดพลาดในการดำเนินการ';
 }
 
 export const OwnerMeters: React.FC<OwnerMetersProps> = ({
@@ -2224,18 +2243,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                 <th className="p-4">ค่าใช้จ่ายอื่นๆ</th>
                 <th className="p-4 text-right">ยอดที่ต้องชำระ</th>
                 <th id="status-column-header" className="p-4 text-center min-w-[105px]">
-                  <div className="text-slate-500 mb-1">สถานะ</div>
-                  <div className="flex justify-center">
-                    <button
-                      type="button"
-                      disabled={!isMutationReady}
-                      onClick={handleIssueAllBills}
-                      className="px-2.5 py-1 rounded-xl text-[10px] font-black tracking-tight bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white transition-all cursor-pointer flex items-center justify-center gap-1 leading-none whitespace-nowrap shadow-md hover:scale-[1.02] active:scale-98"
-                    >
-                      <FileText className="w-3 h-3 text-white shrink-0" />
-                      ออกบิลทุกห้อง
-                    </button>
-                  </div>
+                  สถานะ
                 </th>
                 <th className="p-4">ผู้เช่า</th>
               </tr>
@@ -2676,7 +2684,18 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                           );
                         }
 
-                        if (isCurrentOperationalCycle && (room || row.roomId)) {
+                        if (roomCtx?.isFutureReservation) {
+                          return (
+                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
+                              จองล่วงหน้า
+                            </span>
+                          );
+                        }
+
+                        const activeCycleCode = selectedCycleCode || selectedCycle || billingCycles?.find((c: any) => c.id === selectedBillingCycleId)?.cycleCode || '';
+                        const isEligibleAddTenantCycle = isCycleInRollingThreeMonthWindow(activeCycleCode);
+
+                        if (isEligibleAddTenantCycle && (room || row.roomId)) {
                           return (
                             <button
                               type="button"
@@ -2700,7 +2719,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                                   setSelectedQuickAddContext(res.data);
                                   setQuickAddModalOpen(true);
                                 } catch (err: any) {
-                                  showToast(err.message || 'ไม่สามารถโหลดข้อมูลห้องพักได้ กรุณาลองใหม่อีกครั้ง');
+                                  showToast(mapErrorMessageToThai(err.message || 'ไม่สามารถโหลดข้อมูลห้องพักได้ กรุณาลองใหม่อีกครั้ง'));
                                 } finally {
                                   setQuickAddLoadingRoomId(null);
                                 }
