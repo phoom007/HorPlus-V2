@@ -341,9 +341,9 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
   const pathSegment = isAddDormRegistrationMode
     ? 'dormitories/new'
     : (onboardingRequired ? 'register' : (location.pathname.split('/')[2] || 'dashboard'));
-  const [activeTab, setActiveTab] = useState(
-    isRegistrationMode ? (isAddDormRegistrationMode ? 'dormitories/new' : 'register') : pathSegment
-  );
+  const activeTab = isRegistrationMode
+    ? (isAddDormRegistrationMode ? 'dormitories/new' : 'register')
+    : pathSegment;
 
   const navIntentRef = React.useRef<number>(0);
 
@@ -366,21 +366,13 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
   useEffect(() => {
     if (onboardingRequired && pathSegment !== 'register') {
       navigate('/owner/register', { replace: true });
-      setActiveTab('register');
     } else if (isAddDormRegistrationMode && pathSegment !== 'dormitories/new') {
       navigate('/owner/dormitories/new', { replace: true });
-      setActiveTab('dormitories/new');
-    } else if (!isRegistrationMode && pathSegment && pathSegment !== activeTab) {
+    } else if (!isRegistrationMode && pathSegment) {
       navIntentRef.current++;
-      setActiveTab(pathSegment);
       applyPostNavigationSideEffects(pathSegment);
-    } else if (isRegistrationMode) {
-      const target = isAddDormRegistrationMode ? 'dormitories/new' : 'register';
-      if (activeTab !== target) {
-        setActiveTab(target);
-      }
     }
-  }, [pathSegment, onboardingRequired, isAddDormRegistrationMode, isRegistrationMode, navigate, activeTab]);
+  }, [pathSegment, onboardingRequired, isAddDormRegistrationMode, isRegistrationMode, navigate]);
 
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -395,21 +387,19 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
       if (isAddDormRegistrationMode) {
         if (tabId === 'register' || tabId === 'dormitories/new') {
           navigate('/owner/dormitories/new');
-          setActiveTab('dormitories/new');
         }
         return;
       }
       if (onboardingRequired) {
         if (tabId === 'register') {
           navigate('/owner/register');
-          setActiveTab('register');
         }
         return;
       }
       return;
     }
-    setActiveTab(tabId);
     navigate(`/owner/${tabId}`);
+    applyPostNavigationSideEffects(tabId);
   };
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [initialRoomId, setInitialRoomId] = useState<string | undefined>(undefined);
@@ -484,7 +474,9 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
   });
 
   const activeTabHasError = activeTabQueryResults.some(r => r.isError);
-  const activeTabIsLoading = activeTabQueriesSpec.length > 0 && activeTabQueryResults.some(r => r.isLoading || r.isPending);
+  const activeTabIsLoading = activeTabQueriesSpec.length > 0 && activeTabQueriesSpec.some((spec) => {
+    return queryClient.getQueryData(spec.queryKey) === undefined;
+  });
 
   const queryResultMap = React.useMemo(() => {
     const map = new Map<string, any>();

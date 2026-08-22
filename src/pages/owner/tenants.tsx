@@ -861,6 +861,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
             <div
               key={tenant.id}
               onClick={() => {
+                onClearInitialTenantId?.();
                 setSelectedTenant(tenant);
                 setProfileTab('info');
               }}
@@ -902,6 +903,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                   onClick={() => {
                     setCameFromMeters(false);
                     setSelectedTenant(null);
+                    onClearInitialTenantId?.();
                     if (onBackToMeters) {
                       onBackToMeters();
                     }
