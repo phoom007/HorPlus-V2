@@ -419,7 +419,7 @@ export function getOwnerFinancialBreakdown(
     if (!isPaid) {
       operationalSatang += bOutstanding;
     }
-    const isTerm = roomCtx?.billingSource === 'PROVISIONAL_TERM';
+    const isTerm = roomCtx?.billingSource === 'PROVISIONAL_TERM' || roomCtx?.billingSource === 'TERM_CONTRACT';
     components.push({
       label: isTerm ? 'ค่าเช่า (เทอม)' : 'ค่าเช่า (เดือน)',
       amount: Number(formatScaled2(bTotal)),
@@ -427,10 +427,10 @@ export function getOwnerFinancialBreakdown(
       status: isPaid ? 'PAID' : 'UNPAID',
       title: isPaid ? 'ชำระแล้ว' : 'รอชำระเงิน',
     });
-  } else if (Number(roomCtx?.rentAmount || 0) > 0) {
+  } else if (Number(roomCtx?.rentAmount || 0) > 0 && roomCtx?.billingSource !== 'NONE' && !roomCtx?.isFutureReservation) {
     const rSatang = parseScaled2(roomCtx.rentAmount);
     operationalSatang += rSatang;
-    const isTerm = roomCtx?.billingSource === 'PROVISIONAL_TERM';
+    const isTerm = roomCtx?.billingSource === 'PROVISIONAL_TERM' || roomCtx?.billingSource === 'TERM_CONTRACT';
     components.push({
       label: isTerm ? 'ค่าเช่า (เทอม)' : 'ค่าเช่า (เดือน)',
       amount: Number(roomCtx.rentAmount),
@@ -450,17 +450,70 @@ export function getOwnerFinancialBreakdown(
 
 export function mapErrorMessageToThai(raw: any): string {
   if (!raw) return 'เกิดข้อผิดพลาดในการดำเนินการ';
-  const str = typeof raw === 'string' ? raw : (raw.message || raw.code || raw.error?.message || raw.error?.code || JSON.stringify(raw));
-  if (typeof str === 'string') {
-    if (str.includes('NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM') || str.includes('NO_ACTIVE_CONTRACT')) return 'ไม่พบผู้เช่า';
-    if (str.includes('ROOM_LOCKED_PAID')) return 'บิลนี้ชำระเงินแล้ว ไม่สามารถยกเลิกหรือแก้ไขได้';
-    if (str.includes('BILLING_CYCLE_NOT_FOUND')) return 'ไม่พบข้อมูลรอบบิล';
-    if (str.includes('MISSING_WATER_METER_READING') || str.includes('MISSING_METER_READING')) return 'กรุณากรอกเลขมิเตอร์น้ำของงวดนี้ก่อนออกบิล';
-    if (str.includes('MISSING_ELECTRICITY_METER_READING')) return 'กรุณากรอกเลขมิเตอร์ไฟฟ้าของงวดนี้ก่อนออกบิล';
-    if (str.includes('STALE_VERSION')) return 'ข้อมูลถูกแก้ไขโดยผู้อื่น กรุณารีเฟรชหน้านี้';
-    return str;
+
+  // 1. Extract machine error code first (envelope / response object / error object)
+  const rawCode =
+    (typeof raw === 'object' && raw !== null
+      ? raw.response?.data?.error?.code ??
+        raw.response?.data?.code ??
+        raw.error?.code ??
+        raw.code
+      : undefined);
+
+  const code = typeof rawCode === 'string' ? rawCode.trim() : '';
+
+  if (code === 'NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM' || code === 'NO_ACTIVE_CONTRACT') {
+    return 'ไม่พบผู้เช่า';
   }
-  return 'เกิดข้อผิดพลาดในการดำเนินการ';
+  if (code === 'ROOM_LOCKED_PAID') {
+    return 'บิลนี้ชำระเงินแล้ว ไม่สามารถยกเลิกหรือแก้ไขได้';
+  }
+  if (code === 'BILLING_CYCLE_NOT_FOUND') {
+    return 'ไม่พบข้อมูลรอบบิล';
+  }
+  if (code === 'MISSING_WATER_METER_READING' || code === 'MISSING_METER_READING') {
+    return 'กรุณากรอกเลขมิเตอร์น้ำของงวดนี้ก่อนออกบิล';
+  }
+  if (code === 'MISSING_ELECTRICITY_METER_READING') {
+    return 'กรุณากรอกเลขมิเตอร์ไฟฟ้าของงวดนี้ก่อนออกบิล';
+  }
+  if (code === 'STALE_VERSION') {
+    return 'ข้อมูลถูกแก้ไขโดยผู้อื่น กรุณารีเฟรชหน้านี้';
+  }
+
+  // 2. Fallback to message or string inspection if machine code was not explicitly provided
+  const rawMessage =
+    typeof raw === 'string'
+      ? raw
+      : (typeof raw === 'object' && raw !== null
+          ? raw.response?.data?.error?.message ??
+            raw.response?.data?.message ??
+            raw.error?.message ??
+            raw.message
+          : '');
+
+  const msg = typeof rawMessage === 'string' ? rawMessage.trim() : '';
+
+  if (msg.includes('NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM') || msg.includes('NO_ACTIVE_CONTRACT')) {
+    return 'ไม่พบผู้เช่า';
+  }
+  if (msg.includes('ROOM_LOCKED_PAID')) {
+    return 'บิลนี้ชำระเงินแล้ว ไม่สามารถยกเลิกหรือแก้ไขได้';
+  }
+  if (msg.includes('BILLING_CYCLE_NOT_FOUND')) {
+    return 'ไม่พบข้อมูลรอบบิล';
+  }
+  if (msg.includes('MISSING_WATER_METER_READING') || msg.includes('MISSING_METER_READING')) {
+    return 'กรุณากรอกเลขมิเตอร์น้ำของงวดนี้ก่อนออกบิล';
+  }
+  if (msg.includes('MISSING_ELECTRICITY_METER_READING')) {
+    return 'กรุณากรอกเลขมิเตอร์ไฟฟ้าของงวดนี้ก่อนออกบิล';
+  }
+  if (msg.includes('STALE_VERSION')) {
+    return 'ข้อมูลถูกแก้ไขโดยผู้อื่น กรุณารีเฟรชหน้านี้';
+  }
+
+  return msg || 'เกิดข้อผิดพลาดในการดำเนินการ';
 }
 
 export const OwnerMeters: React.FC<OwnerMetersProps> = ({
@@ -2146,29 +2199,28 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
             </div>
           </div>
 
-          {/* Action buttons (Option A2 Layout) */}
-          <div className="w-full sm:w-auto">
-            {/* Desktop layout: Single row with order [ ดึงข้อมูลก่อนหน้า ] [ ออกบิลทุกห้อง ] [ กรอกแบบรวดเร็ว ] */}
-            <div className="hidden sm:flex items-center gap-2 justify-end">
-              {showPullButton && (
-                <button
-                  type="button"
-                  disabled={!isMutationReady}
-                  onClick={handlePullPreviousData}
-                  className="px-3 py-2 bg-amber-50 hover:bg-amber-100 disabled:opacity-50 text-amber-700 border border-amber-200 text-xs font-bold rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-2xs whitespace-nowrap shrink-0"
-                >
-                  <RefreshCw className="w-3.5 h-3.5" />
-                  ดึงข้อมูลก่อนหน้า
-                </button>
-              )}
+          {/* Action buttons */}
+          <div className="w-full sm:w-auto flex flex-col sm:flex-row items-stretch sm:items-center gap-2 justify-end">
+            {showPullButton && (
+              <button
+                type="button"
+                disabled={!isMutationReady}
+                onClick={handlePullPreviousData}
+                className="w-full sm:w-auto px-3 sm:px-4 py-2 bg-amber-50 hover:bg-amber-100 disabled:opacity-50 text-amber-700 border border-amber-200 text-xs font-bold rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-2xs whitespace-nowrap shrink-0"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>ดึงข้อมูลก่อนหน้า</span>
+              </button>
+            )}
+            <div className="grid grid-cols-2 sm:flex sm:items-center gap-2 w-full sm:w-auto">
               <button
                 type="button"
                 disabled={!isMutationReady}
                 onClick={handleIssueAllBills}
-                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-bold rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-md shadow-emerald-600/10 whitespace-nowrap shrink-0"
+                className="w-full sm:w-auto px-3 sm:px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-bold rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-md shadow-emerald-600/10 whitespace-nowrap shrink-0"
               >
                 <FileText className="w-3.5 h-3.5" />
-                ออกบิลทุกห้อง
+                <span>ออกบิลทุกห้อง</span>
               </button>
               <button
                 type="button"
@@ -2180,52 +2232,11 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                     quickFillInputRef.current?.focus();
                   }, 100);
                 }}
-                className="px-4 py-2 bg-slate-700 hover:bg-slate-800 disabled:opacity-50 text-white text-xs font-bold rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-md whitespace-nowrap shrink-0"
+                className="w-full sm:w-auto px-3 sm:px-4 py-2 bg-slate-700 hover:bg-slate-800 disabled:opacity-50 text-white text-xs font-bold rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-md whitespace-nowrap shrink-0"
               >
                 <Zap className="w-3.5 h-3.5 text-amber-300 fill-amber-300" />
-                กรอกแบบรวดเร็ว
+                <span>กรอกแบบรวดเร็ว</span>
               </button>
-            </div>
-
-            {/* Mobile layout: Row 1 full-width [ ดึงข้อมูลก่อนหน้า ], Row 2 2-column [ ออกบิลทุกห้อง ][ กรอกแบบรวดเร็ว ] */}
-            <div className="flex sm:hidden flex-col gap-2 w-full">
-              {showPullButton && (
-                <button
-                  type="button"
-                  disabled={!isMutationReady}
-                  onClick={handlePullPreviousData}
-                  className="w-full px-3 py-2 bg-amber-50 hover:bg-amber-100 disabled:opacity-50 text-amber-700 border border-amber-200 text-xs font-bold rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-2xs"
-                >
-                  <RefreshCw className="w-3.5 h-3.5" />
-                  ดึงข้อมูลก่อนหน้า
-                </button>
-              )}
-              <div className="grid grid-cols-2 gap-2 w-full">
-                <button
-                  type="button"
-                  disabled={!isMutationReady}
-                  onClick={handleIssueAllBills}
-                  className="w-full px-3 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-bold rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-md shadow-emerald-600/10"
-                >
-                  <FileText className="w-3.5 h-3.5" />
-                  ออกบิลทุกห้อง
-                </button>
-                <button
-                  type="button"
-                  disabled={!isMutationReady}
-                  onClick={() => {
-                    setIsQuickFillOpen(true);
-                    setTemplateUsed(false);
-                    setTimeout(() => {
-                      quickFillInputRef.current?.focus();
-                    }, 100);
-                  }}
-                  className="w-full px-3 py-2 bg-slate-700 hover:bg-slate-800 disabled:opacity-50 text-white text-xs font-bold rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-md"
-                >
-                  <Zap className="w-3.5 h-3.5 text-amber-300 fill-amber-300" />
-                  กรอกแบบรวดเร็ว
-                </button>
-              </div>
             </div>
           </div>
         </div>

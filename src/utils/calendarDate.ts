@@ -1,15 +1,31 @@
-﻿export const BANGKOK_TIMEZONE = 'Asia/Bangkok';
-export const BANGKOK_OFFSET_MS = 7 * 60 * 60 * 1000;
+export const BANGKOK_TIMEZONE = 'Asia/Bangkok';
 
 /**
  * Returns YYYY-MM-DD date string in Asia/Bangkok timezone (+07:00).
+ * Throws an invariant error if date is invalid or parts cannot be formatted.
  */
 export function toBangkokDateString(instant: Date | string = new Date()): string {
   const d = typeof instant === 'string' ? new Date(instant) : instant;
-  const bangkokLocal = new Date(d.getTime() + BANGKOK_OFFSET_MS);
-  const year = bangkokLocal.getUTCFullYear();
-  const month = String(bangkokLocal.getUTCMonth() + 1).padStart(2, '0');
-  const day = String(bangkokLocal.getUTCDate()).padStart(2, '0');
+  if (!d || isNaN(d.getTime())) {
+    throw new Error(`Invalid Date passed to toBangkokDateString: ${String(instant)}`);
+  }
+
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: BANGKOK_TIMEZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+
+  const parts = formatter.formatToParts(d);
+  const year = parts.find(p => p.type === 'year')?.value;
+  const month = parts.find(p => p.type === 'month')?.value;
+  const day = parts.find(p => p.type === 'day')?.value;
+
+  if (!year || !month || !day) {
+    throw new Error('Failed to format date in Asia/Bangkok timezone: missing required date parts');
+  }
+
   return `${year}-${month}-${day}`;
 }
 

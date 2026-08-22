@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, cleanup, within } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { OwnerMeters, getOwnerFinancialBreakdown, mapErrorMessageToThai } from '../pages/owner/meters';
@@ -1124,8 +1124,10 @@ describe('LOCAL-07 Source-Reviewed Meter Workspace Correction Suite', () => {
   // 4. Rolling 3-Month Window & Selected-Cycle + เพิ่มผู้เช่า Matrix
   // =========================================================================
   describe('Rolling 3-Month Window & Selected-Cycle + เพิ่มผู้เช่า Authority', () => {
-    it('Proof 4A: derived rolling 3-month window for 2026-08-22 Asia/Bangkok yields strictly [2026-07, 2026-08, 2026-09]', () => {
+    it('Proof 4A: derived rolling 3-month window for 2026-08-22 Asia/Bangkok yields strictly [2026-07, 2026-08, 2026-09] and throws on invalid date', () => {
       const bkkDate = new Date('2026-08-22T09:00:00.000Z'); // 16:00 Bangkok
+      expect(toBangkokDateString(bkkDate)).toBe('2026-08-22');
+
       const windowCycles = getRollingThreeMonthWindow(bkkDate);
       expect(windowCycles).toEqual(['2026-07', '2026-08', '2026-09']);
 
@@ -1136,6 +1138,10 @@ describe('LOCAL-07 Source-Reviewed Meter Workspace Correction Suite', () => {
       // Outside window
       expect(isCycleInRollingThreeMonthWindow('2026-06', bkkDate)).toBe(false);
       expect(isCycleInRollingThreeMonthWindow('2026-10', bkkDate)).toBe(false);
+
+      // Invariant check: throws loudly on invalid date without fixed fallbacks
+      expect(() => toBangkokDateString(new Date('invalid-date'))).toThrow(/Invalid Date/);
+      expect(() => toBangkokDateString('not-a-date')).toThrow(/Invalid Date/);
     });
 
     it('Proof 4B: year boundaries handle January and December calendar transitions correctly', () => {
@@ -1332,25 +1338,84 @@ describe('LOCAL-07 Source-Reviewed Meter Workspace Correction Suite', () => {
   });
 
   // =========================================================================
-  // 5. Exact Owner Error Mapping
+  // 5. Exact Owner Error Mapping (Code-First Precedence)
   // =========================================================================
   describe('Exact Owner Error Mapping to Thai', () => {
-    it('Proof 5A: maps machine code NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM to ไม่พบผู้เช่า and never renders machine code', () => {
+    it('Proof 5A: maps machine code NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM to ไม่พบผู้เช่า and code wins over generic message', () => {
       expect(mapErrorMessageToThai('NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM')).toBe('ไม่พบผู้เช่า');
       expect(mapErrorMessageToThai('Error: NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM: ห้องพักไม่มีสัญญา')).toBe('ไม่พบผู้เช่า');
       expect(mapErrorMessageToThai({ message: 'NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM' })).toBe('ไม่พบผู้เช่า');
       expect(mapErrorMessageToThai({ code: 'NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM' })).toBe('ไม่พบผู้เช่า');
       expect(mapErrorMessageToThai({ error: { code: 'NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM' } })).toBe('ไม่พบผู้เช่า');
 
+      // Axios-style error envelope with code taking precedence over generic message
+      expect(mapErrorMessageToThai({
+        response: {
+          data: {
+            message: 'Unable to perform operation',
+            code: 'NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM',
+          },
+        },
+      })).toBe('ไม่พบผู้เช่า');
+
+      expect(mapErrorMessageToThai({
+        response: {
+          data: {
+            message: 'Some generic message',
+            error: {
+              code: 'NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM',
+            },
+          },
+        },
+      })).toBe('ไม่พบผู้เช่า');
+
       const thaiMessage = mapErrorMessageToThai('NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM');
       expect(thaiMessage).not.toContain('NO_ACTIVE_CONTRACT');
       expect(thaiMessage).toBe('ไม่พบผู้เช่า');
     });
 
-    it('Proof 5B: maps ROOM_LOCKED_PAID and missing meter errors to clear Thai instructions', () => {
-      expect(mapErrorMessageToThai('ROOM_LOCKED_PAID')).toBe('บิลนี้ชำระเงินแล้ว ไม่สามารถยกเลิกหรือแก้ไขได้');
-      expect(mapErrorMessageToThai('MISSING_WATER_METER_READING')).toBe('กรุณากรอกเลขมิเตอร์น้ำของงวดนี้ก่อนออกบิล');
-      expect(mapErrorMessageToThai('MISSING_ELECTRICITY_METER_READING')).toBe('กรุณากรอกเลขมิเตอร์ไฟฟ้าของงวดนี้ก่อนออกบิล');
+    it('Proof 5B: maps ROOM_LOCKED_PAID, STALE_VERSION, and missing meter errors to clear Thai instructions from envelope', () => {
+      expect(mapErrorMessageToThai({
+        response: {
+          data: {
+            message: 'Internal server error',
+            code: 'ROOM_LOCKED_PAID',
+          },
+        },
+      })).toBe('บิลนี้ชำระเงินแล้ว ไม่สามารถยกเลิกหรือแก้ไขได้');
+
+      expect(mapErrorMessageToThai({
+        response: {
+          data: {
+            message: 'Validation failed',
+            error: {
+              code: 'MISSING_WATER_METER_READING',
+            },
+          },
+        },
+      })).toBe('กรุณากรอกเลขมิเตอร์น้ำของงวดนี้ก่อนออกบิล');
+
+      expect(mapErrorMessageToThai({
+        response: {
+          data: {
+            message: 'Validation failed',
+            error: {
+              code: 'MISSING_ELECTRICITY_METER_READING',
+            },
+          },
+        },
+      })).toBe('กรุณากรอกเลขมิเตอร์ไฟฟ้าของงวดนี้ก่อนออกบิล');
+
+      expect(mapErrorMessageToThai({
+        response: {
+          data: {
+            message: 'Conflict',
+            error: {
+              code: 'STALE_VERSION',
+            },
+          },
+        },
+      })).toBe('ข้อมูลถูกแก้ไขโดยผู้อื่น กรุณารีเฟรชหน้านี้');
     });
   });
 
@@ -1387,11 +1452,9 @@ describe('LOCAL-07 Source-Reviewed Meter Workspace Correction Suite', () => {
       expect(statusHeader.textContent?.trim()).toBe('สถานะ');
       expect(statusHeader.querySelector('button')).toBeNull();
 
-      // Exactly 1 top action button exists in desktop layout
-      const desktopActionButtons = screen.getAllByRole('button', { name: /ออกบิลทุกห้อง/ });
-      // In happy-dom test environment both desktop and mobile layouts are in DOM
-      // Status header button is 100% removed (previously was 3 buttons: desktop action + mobile action + header button)
-      expect(statusHeader.querySelector('button')).toBeNull();
+      // Exactly 1 action button exists in entire DOM
+      const bulkButtons = screen.getAllByRole('button', { name: /ออกบิลทุกห้อง/ });
+      expect(bulkButtons).toHaveLength(1);
     });
   });
 
@@ -1399,47 +1462,136 @@ describe('LOCAL-07 Source-Reviewed Meter Workspace Correction Suite', () => {
   // 7. Tenant Direct-Open from Meter Row to Tenant Detail Pane
   // =========================================================================
   describe('Tenant Direct-Open and Return Context', () => {
-    it('Proof 7A: passes canonical Tenant.id to OwnerTenants and immediately opens detailed profile without second click', async () => {
-      const mockTenant: Tenant = {
-        id: '20000002-0000-4000-8000-000000000001',
-        name: 'นายสมชาย ใจดี',
-        phone: '0812345678',
-        email: 'somchai@example.com',
-        status: 'active',
-        nationalIdMasked: '1-1004-XXXXX-XX-X',
-        createdAt: '2026-01-01T00:00:00.000Z',
-      } as any;
+    const mockTenant1: Tenant = {
+      id: '20000002-0000-4000-8000-000000000001',
+      name: 'นายสมชาย ใจดี',
+      phone: '0812345678',
+      email: 'somchai@example.com',
+      status: 'active',
+      nationalIdMasked: '1-1004-XXXXX-XX-X',
+      createdAt: '2026-01-01T00:00:00.000Z',
+    } as any;
 
+    const mockTenant2: Tenant = {
+      id: '20000002-0000-4000-8000-000000000002',
+      name: 'นางสาวสมศรี มีสุข',
+      phone: '0898765432',
+      email: 'somsri@example.com',
+      status: 'active',
+      nationalIdMasked: '1-1004-XXXXX-YY-Y',
+      createdAt: '2026-02-01T00:00:00.000Z',
+    } as any;
+
+    it('Proof 7A: passes canonical Tenant.id to OwnerTenants and immediately opens detailed profile on mount without second click', async () => {
       const onClearInitialTenantId = vi.fn();
       const onBackToMeters = vi.fn();
 
-      render(
+      const { container } = render(
         <OwnerTenants
-          tenants={[mockTenant]}
-          rooms={[{ id: 'room-101', roomNumber: '101', currentTenantId: mockTenant.id } as any]}
+          tenants={[mockTenant1]}
+          rooms={[{ id: 'room-101', roomNumber: '101', currentTenantId: mockTenant1.id } as any]}
           bills={[]}
-          contracts={[{ id: 'ctr-1', tenantId: mockTenant.id, roomId: 'room-101' } as any]}
-          initialTenantId={mockTenant.id}
+          contracts={[{ id: 'ctr-1', tenantId: mockTenant1.id, roomId: 'room-101' } as any]}
+          initialTenantId={mockTenant1.id}
           onClearInitialTenantId={onClearInitialTenantId}
           cameFromMeters={true}
           onBackToMeters={onBackToMeters}
         />
       );
 
-      // Verify tenant profile detail pane is immediately active and renders tenant name in detail panel
-      expect(screen.getAllByText('นายสมชาย ใจดี').length).toBe(2);
-      expect(screen.queryByText('ไม่มีผู้เช่าถูกเลือกในขณะนี้')).toBeNull();
+      // Verify tenant profile detail pane is immediately active and renders tenant name
+      expect(within(container).getAllByText('นายสมชาย ใจดี').length).toBe(2);
+      expect(within(container).queryByText('ไม่มีผู้เช่าถูกเลือกในขณะนี้')).toBeNull();
 
       // Context-aware back button 'กลับหน้าจดมิเตอร์' is rendered
-      const backBtn = screen.getAllByTestId('back-to-meters-btn')[0];
+      const backBtn = container.querySelector('[data-testid="back-to-meters-btn"]') as HTMLElement;
       expect(backBtn).toBeTruthy();
       fireEvent.click(backBtn);
       expect(onBackToMeters).toHaveBeenCalledTimes(1);
     });
+
+    it('Proof 7B: already-mounted OwnerTenants handles initialTenantId changing from undefined to real Tenant.id', () => {
+      const onClearInitialTenantId = vi.fn();
+      const onBackToMeters = vi.fn();
+
+      const { container, rerender } = render(
+        <OwnerTenants
+          tenants={[mockTenant1, mockTenant2]}
+          rooms={[{ id: 'room-101', roomNumber: '101', currentTenantId: mockTenant1.id } as any]}
+          bills={[]}
+          contracts={[{ id: 'ctr-1', tenantId: mockTenant1.id, roomId: 'room-101' } as any]}
+          initialTenantId={undefined}
+          onClearInitialTenantId={onClearInitialTenantId}
+          cameFromMeters={false}
+          onBackToMeters={onBackToMeters}
+        />
+      );
+
+      // Initially no tenant is selected
+      expect(within(container).getByText('ไม่มีผู้เช่าถูกเลือกในขณะนี้')).toBeTruthy();
+
+      // User navigates from Meters with mockTenant2 ID while tab was already mounted
+      rerender(
+        <OwnerTenants
+          tenants={[mockTenant1, mockTenant2]}
+          rooms={[{ id: 'room-102', roomNumber: '102', currentTenantId: mockTenant2.id } as any]}
+          bills={[]}
+          contracts={[{ id: 'ctr-2', tenantId: mockTenant2.id, roomId: 'room-102' } as any]}
+          initialTenantId={mockTenant2.id}
+          onClearInitialTenantId={onClearInitialTenantId}
+          cameFromMeters={true}
+          onBackToMeters={onBackToMeters}
+        />
+      );
+
+      // mockTenant2 is immediately selected without second click
+      expect(within(container).getAllByText('นางสาวสมศรี มีสุข').length).toBe(2);
+      expect(within(container).queryByText('ไม่มีผู้เช่าถูกเลือกในขณะนี้')).toBeNull();
+      expect(onClearInitialTenantId).toHaveBeenCalled();
+    });
+
+    it('Proof 7C: initialTenantId exists while tenants array is initially empty (async loading), auto-selects when populated', () => {
+      const onClearInitialTenantId = vi.fn();
+      const onBackToMeters = vi.fn();
+
+      const { container, rerender } = render(
+        <OwnerTenants
+          tenants={[]}
+          rooms={[]}
+          bills={[]}
+          contracts={[]}
+          initialTenantId={mockTenant1.id}
+          onClearInitialTenantId={onClearInitialTenantId}
+          cameFromMeters={true}
+          onBackToMeters={onBackToMeters}
+        />
+      );
+
+      // initialTenantId was NOT cleared while tenants was empty
+      expect(onClearInitialTenantId).not.toHaveBeenCalled();
+
+      // tenants query completes and populates tenants array
+      rerender(
+        <OwnerTenants
+          tenants={[mockTenant1]}
+          rooms={[{ id: 'room-101', roomNumber: '101', currentTenantId: mockTenant1.id } as any]}
+          bills={[]}
+          contracts={[{ id: 'ctr-1', tenantId: mockTenant1.id, roomId: 'room-101' } as any]}
+          initialTenantId={mockTenant1.id}
+          onClearInitialTenantId={onClearInitialTenantId}
+          cameFromMeters={true}
+          onBackToMeters={onBackToMeters}
+        />
+      );
+
+      expect(within(container).getAllByText('นายสมชาย ใจดี').length).toBe(2);
+      expect(within(container).queryByText('ไม่มีผู้เช่าถูกเลือกในขณะนี้')).toBeNull();
+      expect(onClearInitialTenantId).toHaveBeenCalled();
+    });
   });
 
   // =========================================================================
-  // 8. Financial Detail Breakdown (ดูรายละเอียด) Threshold & Plain Row Expansion
+  // 8. Financial Detail Breakdown (ดูรายละเอียด) & Authority Rules
   // =========================================================================
   describe('Financial Detail Breakdown (ดูรายละเอียด) Rules', () => {
     const rateSnapshot = {
@@ -1542,6 +1694,76 @@ describe('LOCAL-07 Source-Reviewed Meter Workspace Correction Suite', () => {
       expect(breakdown.components[2].label).toBe('ค่าเช่า (เดือน)');
       expect(breakdown.components[2].amount).toBe(4000);
       expect(breakdown.formattedAmount).toBe('9,730.00');
+    });
+
+    it('Proof 8D: Canonical Term billingSource PROVISIONAL_TERM maps to ค่าเช่า (เทอม)', () => {
+      const row: any = {
+        roomId: 'r-term',
+        roomNumber: '201',
+        waterPrev: '0',
+        waterCurr: '0',
+        elecPrev: '0',
+        elecCurr: '0',
+        peopleCount: 1,
+        overdueAmount: '0.00',
+        isPaid: false,
+        billStatus: 'draft',
+        otherFees: [],
+      };
+      const roomCtx: any = {
+        roomId: 'r-term',
+        billingSource: 'PROVISIONAL_TERM',
+        rentAmount: '12000.00',
+        depositAmount: '0.00',
+      };
+
+      const breakdown = getOwnerFinancialBreakdown(row, roomCtx, rateSnapshot, [], 'cycle-aug');
+      expect(breakdown.components.length).toBe(2);
+      expect(breakdown.components[1].label).toBe('ค่าเช่า (เทอม)');
+      expect(breakdown.components[1].amount).toBe(12000);
+    });
+
+    it('Proof 8E: Future reservation before start (August for Sept 10 tenant): Rent payable = 0, no ค่าเช่า component, primary amount is utility/deposit only', () => {
+      const row: any = {
+        roomId: 'r-future',
+        roomNumber: '301',
+        waterPrev: '10',
+        waterCurr: '15', // 5 * 18 = 90
+        elecPrev: '20',
+        elecCurr: '30', // 10 * 7 = 70 -> total 160
+        peopleCount: 0,
+        overdueAmount: '0.00',
+        isPaid: false,
+        billStatus: 'draft',
+        otherFees: [],
+      };
+      // Pre-start August projection from server: isFutureReservation = true, billingSource = 'NONE', rentAmount = '0.00'
+      const roomCtxAugust: any = {
+        roomId: 'r-future',
+        billingSource: 'NONE',
+        isFutureReservation: true,
+        rentAmount: '0.00',
+        depositAmount: '5000.00',
+      };
+
+      const breakdownAugust = getOwnerFinancialBreakdown(row, roomCtxAugust, rateSnapshot, [], 'cycle-aug');
+      // Must NOT include payable 'ค่าเช่า (เดือน)' or 'ค่าเช่า (เทอม)'
+      expect(breakdownAugust.components.some(c => c.label.includes('ค่าเช่า'))).toBe(false);
+      // Primary operational amount is utility (160) + deposit (5000) = 5160, rent is 0
+      expect(breakdownAugust.operationalAmount).toBe(5160);
+
+      // Post-start September projection from server: contract starts, billingSource = 'CONTRACT', rentAmount = '4000.00'
+      const roomCtxSeptember: any = {
+        roomId: 'r-future',
+        billingSource: 'CONTRACT',
+        isFutureReservation: false,
+        rentAmount: '4000.00',
+        depositAmount: '0.00',
+      };
+
+      const breakdownSeptember = getOwnerFinancialBreakdown(row, roomCtxSeptember, rateSnapshot, [], 'cycle-sep');
+      expect(breakdownSeptember.components.some(c => c.label === 'ค่าเช่า (เดือน)')).toBe(true);
+      expect(breakdownSeptember.operationalAmount).toBe(4160); // 160 + 4000
     });
   });
 });
