@@ -1824,7 +1824,7 @@ export class MeterService {
       const blockingIntervals: Array<{ start: Date; end: Date }> = [];
 
       // A. Contracts on this room
-      for (const c of allContracts.filter((c) => c.roomId === room.id && ['active', 'ACTIVE', 'approved', 'expiring_soon', 'pending_signature', 'waiting_extension', 'checking_out', 'draft'].includes(c.status))) {
+      for (const c of allContracts.filter((c) => c.roomId === room.id && ['active', 'ACTIVE', 'approved', 'expiring_soon', 'pending_signature', 'waiting_extension', 'checking_out'].includes(c.status))) {
         blockingIntervals.push(getContractPhysicalInterval(c));
       }
 

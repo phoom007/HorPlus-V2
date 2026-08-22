@@ -208,7 +208,7 @@ export class DailyStayService {
         dormitoryId,
         roomId,
         status: {
-          in: ['active', 'ACTIVE', 'approved', 'expiring_soon', 'pending_signature', 'waiting_extension', 'checking_out', 'draft'],
+          in: ['active', 'ACTIVE', 'approved', 'expiring_soon', 'pending_signature', 'waiting_extension', 'checking_out'],
         },
         deletedAt: null,
       },
