@@ -2657,4 +2657,181 @@ describe('Daily Stay Meter Semantics, Financial Exclusion & Exact Deposit Copy',
     fireEvent.keyDown(input101WaterCurr, { key: 'ArrowLeft', code: 'ArrowLeft' });
     expect(document.activeElement).toBe(input101ElecCurr);
   });
+
+  it('26. Tenant Cell 4-Branch Rendering Matrix: handles tenant/gap combinations correctly', async () => {
+    const testRooms: Room[] = [
+      { id: 'r-branch-1', buildingId: 'b-1', roomNumber: 'B101', floor: 1, status: 'occupied', monthlyRent: 4000, dailyRent: 0, depositAmount: 0, maxOccupants: 1, initialWaterMeter: 0, initialElectricMeter: 0, images: [], createdAt: '', updatedAt: '' },
+      { id: 'r-branch-2', buildingId: 'b-1', roomNumber: 'B102', floor: 1, status: 'occupied', monthlyRent: 4000, dailyRent: 0, depositAmount: 0, maxOccupants: 1, initialWaterMeter: 0, initialElectricMeter: 0, images: [], createdAt: '', updatedAt: '' },
+      { id: 'r-branch-3', buildingId: 'b-1', roomNumber: 'B103', floor: 1, status: 'vacant', monthlyRent: 4000, dailyRent: 0, depositAmount: 0, maxOccupants: 1, initialWaterMeter: 0, initialElectricMeter: 0, images: [], createdAt: '', updatedAt: '' },
+      { id: 'r-branch-4', buildingId: 'b-1', roomNumber: 'B104', floor: 1, status: 'vacant', monthlyRent: 4000, dailyRent: 0, depositAmount: 0, maxOccupants: 1, initialWaterMeter: 0, initialElectricMeter: 0, images: [], createdAt: '', updatedAt: '' },
+    ];
+
+    const branchCycles = [
+      { id: 'cycle-branch-1', cycleCode: '2026-08', name: 'สิงหาคม 2569', status: 'draft', periodStart: '2026-08-01', periodEnd: '2026-08-31', isFirstCycle: false },
+    ];
+
+    // Mock previewContext with the 4 cases:
+    // B101: tenant + hasBookableGap=true -> tenant AND + เพิ่มผู้เช่า
+    // B102: tenant + hasBookableGap=false -> tenant ONLY
+    // B103: no tenant + hasBookableGap=true -> + เพิ่มผู้เช่า ONLY
+    // B104: no tenant + hasBookableGap=false -> ไม่มีข้อมูล ONLY
+    vi.spyOn(httpClient, 'httpRequest').mockImplementation(async (method: string, url: string) => {
+      if (url.includes('/workspace-preview-context') || url.includes('/preview-context')) {
+        return {
+          success: true,
+          data: {
+            rateSnapshot: {
+              waterBillingType: 'per_unit',
+              waterRate: '18.00',
+              electricityBillingType: 'per_unit',
+              electricityRate: '7.00',
+            },
+            rooms: [
+              { roomId: 'r-branch-1', tenantId: 't-1', tenantName: 'ผู้เช่า มีแก๊ป', hasBookableGap: true, isDailyUnpaid: false },
+              { roomId: 'r-branch-2', tenantId: 't-2', tenantName: 'ผู้เช่า เต็มเดือน', hasBookableGap: false, isDailyUnpaid: false },
+              { roomId: 'r-branch-3', tenantId: null, tenantName: null, hasBookableGap: true, isDailyUnpaid: false },
+              { roomId: 'r-branch-4', tenantId: null, tenantName: null, hasBookableGap: false, isDailyUnpaid: false },
+            ],
+          },
+        };
+      }
+      return { success: true, data: [] };
+    });
+
+    const { container } = renderWithClient(
+      <OwnerMeters
+        rooms={testRooms}
+        buildings={[{ id: 'b-1', dormitoryId: 'dorm-branch-1', name: 'อาคาร A', totalFloors: 1, roomsPerFloor: 4, createdAt: '2026-08-01' }]}
+        waterRate={18}
+        electricRate={7}
+        dormitoryId="dorm-branch-1"
+        bills={[]}
+        tenants={[]}
+        contracts={[]}
+        onSaveBills={vi.fn()}
+        onSelectTenant={vi.fn()}
+        onAddLog={vi.fn()}
+        onNavigate={vi.fn()}
+        selectedBillingCycleId="cycle-branch-1"
+        selectedCycleCode="2026-08"
+        selectedCycle="2026-08"
+        billingCycles={branchCycles}
+        initialCachedData={{
+          serverReadings: [
+            { id: 'm-b1-e', billingCycleId: 'cycle-branch-1', roomId: 'r-branch-1', meterType: 'electricity', previousReading: '0', currentReading: '0' },
+            { id: 'm-b2-e', billingCycleId: 'cycle-branch-1', roomId: 'r-branch-2', meterType: 'electricity', previousReading: '0', currentReading: '0' },
+            { id: 'm-b3-e', billingCycleId: 'cycle-branch-1', roomId: 'r-branch-3', meterType: 'electricity', previousReading: '0', currentReading: '0' },
+            { id: 'm-b4-e', billingCycleId: 'cycle-branch-1', roomId: 'r-branch-4', meterType: 'electricity', previousReading: '0', currentReading: '0' },
+          ],
+          cyclePeopleRes: { success: true, data: [] },
+        }}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('ผู้เช่า มีแก๊ป')).toBeDefined();
+      expect(screen.getByText('ผู้เช่า เต็มเดือน')).toBeDefined();
+      expect(screen.getByText('ไม่มีข้อมูล')).toBeDefined();
+    });
+
+    const row1 = container.querySelector('#room-row-r-branch-1');
+    const row2 = container.querySelector('#room-row-r-branch-2');
+    const row3 = container.querySelector('#room-row-r-branch-3');
+    const row4 = container.querySelector('#room-row-r-branch-4');
+
+    // Row 1 (B101): Has tenant AND '+ เพิ่มผู้เช่า'
+    expect(row1?.textContent).toContain('ผู้เช่า มีแก๊ป');
+    expect(row1?.textContent).toContain('เพิ่มผู้เช่า');
+
+    // Row 2 (B102): Has tenant ONLY, NO '+ เพิ่มผู้เช่า'
+    expect(row2?.textContent).toContain('ผู้เช่า เต็มเดือน');
+    expect(row2?.textContent).not.toContain('เพิ่มผู้เช่า');
+
+    // Row 3 (B103): No tenant, HAS '+ เพิ่มผู้เช่า'
+    expect(row3?.textContent).toContain('เพิ่มผู้เช่า');
+    expect(row3?.textContent).not.toContain('ไม่มีข้อมูล');
+
+    // Row 4 (B104): No tenant, NO gap -> renders 'ไม่มีข้อมูล' ONLY
+    expect(row4?.textContent).toContain('ไม่มีข้อมูล');
+    expect(row4?.textContent).not.toContain('เพิ่มผู้เช่า');
+  });
+
+  it('27. Daily Status Badges: renders red for unpaid tail, slate for paid stay', async () => {
+    const testRooms: Room[] = [
+      { id: 'r-daily-1', buildingId: 'b-1', roomNumber: 'D101', floor: 1, status: 'vacant', monthlyRent: 4000, dailyRent: 500, depositAmount: 0, maxOccupants: 1, initialWaterMeter: 0, initialElectricMeter: 0, images: [], createdAt: '', updatedAt: '' },
+      { id: 'r-daily-2', buildingId: 'b-1', roomNumber: 'D102', floor: 1, status: 'occupied', monthlyRent: 4000, dailyRent: 500, depositAmount: 0, maxOccupants: 1, initialWaterMeter: 0, initialElectricMeter: 0, images: [], createdAt: '', updatedAt: '' },
+    ];
+
+    const dailyCycles = [
+      { id: 'cycle-daily-1', cycleCode: '2026-08', name: 'สิงหาคม 2569', status: 'draft', periodStart: '2026-08-01', periodEnd: '2026-08-31', isFirstCycle: false },
+    ];
+
+    vi.spyOn(httpClient, 'httpRequest').mockImplementation(async (method: string, url: string) => {
+      if (url.includes('/workspace-preview-context') || url.includes('/preview-context')) {
+        return {
+          success: true,
+          data: {
+            rateSnapshot: {
+              waterBillingType: 'per_unit',
+              waterRate: '18.00',
+              electricityBillingType: 'per_unit',
+              electricityRate: '7.00',
+            },
+            rooms: [
+              { roomId: 'r-daily-1', tenantId: 't-d1', tenantName: 'ผู้พัก ค้างจ่าย', billingSource: 'NONE', isDailyUnpaid: true, hasBookableGap: true },
+              { roomId: 'r-daily-2', tenantId: 't-d2', tenantName: 'ผู้พัก จ่ายแล้ว', billingSource: 'DAILY_STAY', isDailyUnpaid: false, hasBookableGap: false },
+            ],
+          },
+        };
+      }
+      return { success: true, data: [] };
+    });
+
+    const { container } = renderWithClient(
+      <OwnerMeters
+        rooms={testRooms}
+        buildings={[{ id: 'b-1', dormitoryId: 'dorm-daily-1', name: 'อาคาร A', totalFloors: 1, roomsPerFloor: 2, createdAt: '2026-08-01' }]}
+        waterRate={18}
+        electricRate={7}
+        dormitoryId="dorm-daily-1"
+        bills={[]}
+        tenants={[]}
+        contracts={[]}
+        onSaveBills={vi.fn()}
+        onSelectTenant={vi.fn()}
+        onAddLog={vi.fn()}
+        onNavigate={vi.fn()}
+        selectedBillingCycleId="cycle-daily-1"
+        selectedCycleCode="2026-08"
+        selectedCycle="2026-08"
+        billingCycles={dailyCycles}
+        initialCachedData={{
+          serverReadings: [
+            { id: 'm-d1-e', billingCycleId: 'cycle-daily-1', roomId: 'r-daily-1', meterType: 'electricity', previousReading: '0', currentReading: '0' },
+            { id: 'm-d2-e', billingCycleId: 'cycle-daily-1', roomId: 'r-daily-2', meterType: 'electricity', previousReading: '0', currentReading: '0' },
+          ],
+          cyclePeopleRes: { success: true, data: [] },
+        }}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('ผู้พัก ค้างจ่าย')).toBeDefined();
+      expect(screen.getByText('ผู้พัก จ่ายแล้ว')).toBeDefined();
+    });
+
+    const row1 = container.querySelector('#room-row-r-daily-1');
+    const row2 = container.querySelector('#room-row-r-daily-2');
+
+    // Row 1 (unpaid Daily tail): red 'รายวัน' badge + tenant name + '+ เพิ่มผู้เช่า'
+    expect(row1?.innerHTML).toContain('text-rose-700');
+    expect(row1?.textContent).toContain('รายวัน');
+    expect(row1?.textContent).toContain('ผู้พัก ค้างจ่าย');
+    expect(row1?.textContent).toContain('เพิ่มผู้เช่า');
+
+    // Row 2 (paid active Daily stay): slate 'รายวัน' badge
+    expect(row2?.innerHTML).toContain('text-slate-700');
+    expect(row2?.textContent).toContain('รายวัน');
+    expect(row2?.textContent).toContain('ผู้พัก จ่ายแล้ว');
+  });
 });

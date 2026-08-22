@@ -17,9 +17,15 @@ import { AppError } from '../types/index.js';
 import { getPrismaClient } from '../db/prisma.js';
 import { toDecimal, formatDecimal, compareDecimals, divDecimals, mulDecimals, subDecimals, addDecimals } from '../utils/decimal-math.util.js';
 import { calculateInstallmentSchedule } from '../utils/installment-calculator.util.js';
-import { currentBusinessDateInBangkok, toBangkokDateString, normalizeBangkokDate } from '../utils/calendar-date.util.js';
+import { currentBusinessDateInBangkok, toBangkokDateString, normalizeBangkokDate, getBangkokStartOfDayUtc } from '../utils/calendar-date.util.js';
 import { calculateMeterUsageUnits, parseMeterIntegerReading } from '../utils/meter-billing-calculator.util.js';
 import { resolveDailyTimestampsAndPricing } from './daily-stay.service.js';
+
+function addDays(dateStr: string, days: number): string {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d + days));
+  return `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, '0')}-${String(dt.getUTCDate()).padStart(2, '0')}`;
+}
 
 export interface CreateMeterDeviceDto {
   roomId: string;
@@ -528,7 +534,13 @@ export class MeterService {
         let authPrev = '0';
         if (row.waterPrev !== undefined && row.waterPrev !== null && String(row.waterPrev).trim() !== '') {
           const parsed = parseMeterIntegerReading(row.waterPrev);
-          authPrev = parsed.isValid ? String(parsed.value) : '0';
+          if (!parsed.isValid) {
+            const err = new Error(parsed.errorMessage || `ค่ามิเตอร์น้ำเดิมไม่ถูกต้อง: ${row.waterPrev}`);
+            (err as any).statusCode = 400;
+            (err as any).code = 'INVALID_METER_READING';
+            throw err;
+          }
+          authPrev = String(parsed.value);
         } else {
           const existingReading = await this.meterRepo.findReadingByCycleRoomAndType(
             dormitoryId,
@@ -560,9 +572,19 @@ export class MeterService {
           tx
         );
 
-        let currWaterInt = row.waterCurr !== undefined && row.waterCurr !== null && String(row.waterCurr).trim() !== ''
-          ? String(parseMeterIntegerReading(row.waterCurr).value)
-          : (existingReading?.currentReading ? String(existingReading.currentReading).replace(/\.00$/, '') : null);
+        let currWaterInt: string | null = null;
+        if (row.waterCurr !== undefined && row.waterCurr !== null && String(row.waterCurr).trim() !== '') {
+          const parsedCurr = parseMeterIntegerReading(row.waterCurr);
+          if (!parsedCurr.isValid) {
+            const err = new Error(parsedCurr.errorMessage || `ค่ามิเตอร์น้ำปัจจุบันไม่ถูกต้อง: ${row.waterCurr}`);
+            (err as any).statusCode = 400;
+            (err as any).code = 'INVALID_METER_READING';
+            throw err;
+          }
+          currWaterInt = String(parsedCurr.value);
+        } else if (existingReading?.currentReading) {
+          currWaterInt = String(existingReading.currentReading).replace(/\.00$/, '');
+        }
 
         let usageUnits = '0.00';
         if (currWaterInt !== null && currWaterInt !== undefined && currWaterInt !== '') {
@@ -642,7 +664,13 @@ export class MeterService {
         let authPrev = '0';
         if (row.elecPrev !== undefined && row.elecPrev !== null && String(row.elecPrev).trim() !== '') {
           const parsed = parseMeterIntegerReading(row.elecPrev);
-          authPrev = parsed.isValid ? String(parsed.value) : '0';
+          if (!parsed.isValid) {
+            const err = new Error(parsed.errorMessage || `ค่ามิเตอร์ไฟฟ้าเดิมไม่ถูกต้อง: ${row.elecPrev}`);
+            (err as any).statusCode = 400;
+            (err as any).code = 'INVALID_METER_READING';
+            throw err;
+          }
+          authPrev = String(parsed.value);
         } else {
           const existingReading = await this.meterRepo.findReadingByCycleRoomAndType(
             dormitoryId,
@@ -674,9 +702,19 @@ export class MeterService {
           tx
         );
 
-        let currElecInt = row.elecCurr !== undefined && row.elecCurr !== null && String(row.elecCurr).trim() !== ''
-          ? String(parseMeterIntegerReading(row.elecCurr).value)
-          : (existingReading?.currentReading ? String(existingReading.currentReading).replace(/\.00$/, '') : null);
+        let currElecInt: string | null = null;
+        if (row.elecCurr !== undefined && row.elecCurr !== null && String(row.elecCurr).trim() !== '') {
+          const parsedCurr = parseMeterIntegerReading(row.elecCurr);
+          if (!parsedCurr.isValid) {
+            const err = new Error(parsedCurr.errorMessage || `ค่ามิเตอร์ไฟฟ้าปัจจุบันไม่ถูกต้อง: ${row.elecCurr}`);
+            (err as any).statusCode = 400;
+            (err as any).code = 'INVALID_METER_READING';
+            throw err;
+          }
+          currElecInt = String(parsedCurr.value);
+        } else if (existingReading?.currentReading) {
+          currElecInt = String(existingReading.currentReading).replace(/\.00$/, '');
+        }
 
         let usageUnits = '0.00';
         if (currElecInt !== null && currElecInt !== undefined && currElecInt !== '') {
@@ -1327,6 +1365,9 @@ export class MeterService {
       snapshotManualOutstanding: string;
       snapshotPeopleCount: number | null;
       currentHouseholdPeopleCount: number;
+      historicalDailyCount: number;
+      isDailyUnpaid: boolean;
+      hasBookableGap: boolean;
     }>;
   }> {
     const cycle = await this.billingCycleRepo.findById(billingCycleId, dormitoryId);
@@ -1351,8 +1392,12 @@ export class MeterService {
     });
     const rooms = roomsResult.items || [];
 
-    const cycleStartStr = normalizeBangkokDate(cycle.periodStart);
+    const [cYear, cMonth] = cycle.cycleCode.split('-').map(Number);
+    const cycleStartStr = `${cYear}-${String(cMonth).padStart(2, '0')}-01`;
     const cycleEndStr = normalizeBangkokDate(cycle.periodEnd);
+    const nextMonthStr = cMonth === 12 ? `${cYear + 1}-01-01` : `${cYear}-${String(cMonth + 1).padStart(2, '0')}-01`;
+    const cycleStart = getBangkokStartOfDayUtc(cycleStartStr);
+    const cycleEndExclusive = getBangkokStartOfDayUtc(nextMonthStr);
     const now = new Date();
 
     // 1. Load active & historical contracts
@@ -1422,12 +1467,6 @@ export class MeterService {
     const futureDailyStays: typeof allDailyStays = [];
 
     for (const d of allDailyStays) {
-      const stayStartStr = toBangkokDateString(d.checkInAt || d.startDate);
-      const stayEndStr = toBangkokDateString(d.checkOutAt ? new Date(d.checkOutAt.getTime() - 1) : d.endDate);
-      const belongsToCycle = stayStartStr <= cycleEndStr && stayEndStr >= cycleStartStr;
-
-      if (!belongsToCycle) continue;
-
       const checkInAt = d.checkInAt ? new Date(d.checkInAt) : new Date(`${toBangkokDateString(d.startDate)}T00:00:00+07:00`);
       let effectiveCheckOutAt: Date;
       if (d.actualCheckedOutAt) {
@@ -1438,7 +1477,10 @@ export class MeterService {
         effectiveCheckOutAt = resolveDailyTimestampsAndPricing(toBangkokDateString(d.startDate), toBangkokDateString(d.endDate)).checkOutAt;
       }
 
-      if (now.getTime() < checkInAt.getTime()) {
+      const belongsToCycle = checkInAt.getTime() < cycleEndExclusive.getTime() && effectiveCheckOutAt.getTime() > cycleStart.getTime();
+      if (!belongsToCycle) continue;
+
+      if (now.getTime() < checkInAt.getTime() && (d.status === 'ACTIVE' || d.status === 'RESERVED')) {
         futureDailyStays.push(d);
       } else if (checkInAt.getTime() <= now.getTime() && now.getTime() < effectiveCheckOutAt.getTime() && (d.status === 'ACTIVE' || d.status === 'RESERVED')) {
         activeDailyStays.push(d);
@@ -1741,46 +1783,162 @@ export class MeterService {
 
       const periodDetailCount = chargeComponents.filter((c) => c.occurredInDisplayedPeriod).length;
 
-      // Calculate distinct daily stays in cycle
+      // Calculate distinct daily stays in cycle using half-open boundaries
       const roomDailyStaysInCycle = allDailyStays.filter((d) => {
         if (d.roomId !== room.id) return false;
-        const stayStartStr = toBangkokDateString(d.checkInAt || d.startDate);
-        const stayEndStr = toBangkokDateString(d.checkOutAt ? new Date(d.checkOutAt.getTime() - 1) : d.endDate);
-        return stayStartStr <= cycleEndStr && stayEndStr >= cycleStartStr;
+        const checkInAt = d.checkInAt ? new Date(d.checkInAt) : new Date(`${toBangkokDateString(d.startDate)}T00:00:00+07:00`);
+        let effectiveCheckOutAt: Date;
+        if (d.actualCheckedOutAt) {
+          effectiveCheckOutAt = new Date(d.actualCheckedOutAt);
+        } else if (d.checkOutAt) {
+          effectiveCheckOutAt = new Date(d.checkOutAt);
+        } else {
+          effectiveCheckOutAt = resolveDailyTimestampsAndPricing(toBangkokDateString(d.startDate), toBangkokDateString(d.endDate)).checkOutAt;
+        }
+        return checkInAt.getTime() < cycleEndExclusive.getTime() && effectiveCheckOutAt.getTime() > cycleStart.getTime();
       });
-      const historicalDailyCount = roomDailyStaysInCycle.length;
+
+      const distinctDailyStayIds = new Set(roomDailyStaysInCycle.map((d) => d.id));
+      const historicalDailyCount = distinctDailyStayIds.size;
 
       let isDailyUnpaid = false;
+      let unpaidDailyStay: typeof allDailyStays[0] | null = null;
       for (const d of roomDailyStaysInCycle) {
-        const rentItem = d.invoice?.items.find((i) => i.itemType === 'RENT');
-        const isPaid = (rentItem && (rentItem.status === 'SETTLED' || rentItem.status === 'DECLARED_PAID')) || d.status === 'COMPLETED';
-        if (!isPaid) {
+        const rentItem = d.invoice?.items.find((i) => i.itemType === 'RENT' || i.itemType === 'DAILY_RENT');
+        const isRentPaid = rentItem
+          ? (rentItem.status === 'SETTLED' || rentItem.status === 'DECLARED_PAID' || d.invoice?.status === 'PAID')
+          : (d.status === 'COMPLETED' || d.invoice?.status === 'PAID');
+        if (!isRentPaid) {
           isDailyUnpaid = true;
-          break;
+          if (!unpaidDailyStay) unpaidDailyStay = d;
         }
       }
 
-      // Calculate if room has any bookable interval in this cycle
+      // If checked out with unpaid daily rent tail in this cycle, retain Daily tenant identity in this cycle
+      if (billingSource === 'NONE' && unpaidDailyStay) {
+        tenantId = unpaidDailyStay.tenantId || null;
+        tenantName = unpaidDailyStay.applicantFullName || (unpaidDailyStay.tenant ? (unpaidDailyStay.tenant.displayName || `${unpaidDailyStay.tenant.firstName || ''} ${unpaidDailyStay.tenant.lastName || ''}`.trim()) : 'ผู้พักรายวัน');
+        isLineLinked = Boolean(unpaidDailyStay.tenant?.linkedUserId);
+      }
+
+      // Calculate if room has any bookable interval in this cycle using canonical physical intervals
+      const blockingIntervals: Array<{ start: number; end: number }> = [];
+
+      // A. Contracts on this room
+      for (const c of allContracts.filter((c) => c.roomId === room.id && ['active', 'ACTIVE', 'expiring_soon', 'pending_signature', 'waiting_extension'].includes(c.status))) {
+        const cStart = new Date(`${normalizeBangkokDate(c.startDate)}T00:00:00+07:00`);
+        const nextDayStr = addDays(normalizeBangkokDate(c.endDate), 1);
+        const effEnd = new Date(`${nextDayStr}T00:00:00+07:00`);
+
+        const ivStart = Math.max(cStart.getTime(), cycleStart.getTime());
+        const ivEnd = Math.min(effEnd.getTime(), cycleEndExclusive.getTime());
+        if (ivStart < ivEnd) {
+          blockingIntervals.push({ start: ivStart, end: ivEnd });
+        }
+      }
+
+      // B. Provisional Rental Terms on this room
+      for (const p of allProvisionalTerms.filter((p) => p.roomId === room.id && ['ACTIVE', 'active'].includes(p.status))) {
+        const pStart = new Date(`${normalizeBangkokDate(p.startDate)}T00:00:00+07:00`);
+        const nextDayStr = addDays(normalizeBangkokDate(p.endDate), 1);
+        const effEnd = new Date(`${nextDayStr}T00:00:00+07:00`);
+
+        const ivStart = Math.max(pStart.getTime(), cycleStart.getTime());
+        const ivEnd = Math.min(effEnd.getTime(), cycleEndExclusive.getTime());
+        if (ivStart < ivEnd) {
+          blockingIntervals.push({ start: ivStart, end: ivEnd });
+        }
+      }
+
+      // C. Daily Stays on this room
+      for (const d of allDailyStays.filter((d) => d.roomId === room.id && ['ACTIVE', 'RESERVED', 'CHECKED_OUT', 'COMPLETED'].includes(d.status))) {
+        const checkInAt = d.checkInAt ? new Date(d.checkInAt) : new Date(`${toBangkokDateString(d.startDate)}T00:00:00+07:00`);
+        let effectiveCheckOutAt: Date;
+        if (d.actualCheckedOutAt) {
+          effectiveCheckOutAt = new Date(d.actualCheckedOutAt);
+        } else if (d.checkOutAt) {
+          effectiveCheckOutAt = new Date(d.checkOutAt);
+        } else {
+          effectiveCheckOutAt = resolveDailyTimestampsAndPricing(toBangkokDateString(d.startDate), toBangkokDateString(d.endDate)).checkOutAt;
+        }
+
+        const ivStart = Math.max(checkInAt.getTime(), cycleStart.getTime());
+        const ivEnd = Math.min(effectiveCheckOutAt.getTime(), cycleEndExclusive.getTime());
+        if (ivStart < ivEnd) {
+          blockingIntervals.push({ start: ivStart, end: ivEnd });
+        }
+      }
+
+      // D. Future reservations starting during this cycle
+      const futureC = roomFutureContractMap.get(room.id);
+      if (futureC && ['active', 'ACTIVE', 'expiring_soon', 'pending_signature', 'waiting_extension'].includes(futureC.status)) {
+        const cStart = new Date(`${normalizeBangkokDate(futureC.startDate)}T00:00:00+07:00`);
+        const nextDayStr = addDays(normalizeBangkokDate(futureC.endDate), 1);
+        const cEnd = new Date(`${nextDayStr}T00:00:00+07:00`);
+        const ivStart = Math.max(cStart.getTime(), cycleStart.getTime());
+        const ivEnd = Math.min(cEnd.getTime(), cycleEndExclusive.getTime());
+        if (ivStart < ivEnd) {
+          blockingIntervals.push({ start: ivStart, end: ivEnd });
+        }
+      }
+
+      const futureP = roomFutureProvisionalMap.get(room.id);
+      if (futureP && ['ACTIVE', 'active'].includes(futureP.status)) {
+        const pStart = new Date(`${normalizeBangkokDate(futureP.startDate)}T00:00:00+07:00`);
+        const nextDayStr = addDays(normalizeBangkokDate(futureP.endDate), 1);
+        const pEnd = new Date(`${nextDayStr}T00:00:00+07:00`);
+        const ivStart = Math.max(pStart.getTime(), cycleStart.getTime());
+        const ivEnd = Math.min(pEnd.getTime(), cycleEndExclusive.getTime());
+        if (ivStart < ivEnd) {
+          blockingIntervals.push({ start: ivStart, end: ivEnd });
+        }
+      }
+
+      const futureD = roomFutureDailyMap.get(room.id);
+      if (futureD && ['ACTIVE', 'RESERVED'].includes(futureD.status)) {
+        const dStart = futureD.checkInAt ? new Date(futureD.checkInAt) : new Date(`${toBangkokDateString(futureD.startDate)}T00:00:00+07:00`);
+        const dEnd = futureD.checkOutAt ? new Date(futureD.checkOutAt) : resolveDailyTimestampsAndPricing(toBangkokDateString(futureD.startDate), toBangkokDateString(futureD.endDate)).checkOutAt;
+        const ivStart = Math.max(dStart.getTime(), cycleStart.getTime());
+        const ivEnd = Math.min(dEnd.getTime(), cycleEndExclusive.getTime());
+        if (ivStart < ivEnd) {
+          blockingIntervals.push({ start: ivStart, end: ivEnd });
+        }
+      }
+
+      // E. Merge overlapping intervals
+      blockingIntervals.sort((a, b) => a.start - b.start);
+      const mergedIntervals: Array<{ start: number; end: number }> = [];
+      for (const iv of blockingIntervals) {
+        if (mergedIntervals.length === 0) {
+          mergedIntervals.push({ ...iv });
+        } else {
+          const last = mergedIntervals[mergedIntervals.length - 1];
+          if (iv.start <= last.end) {
+            if (iv.end > last.end) last.end = iv.end;
+          } else {
+            mergedIntervals.push({ ...iv });
+          }
+        }
+      }
+
+      // F. Determine if bookable gap exists
       let hasBookableGap = true;
-      if (contract) {
-        const cStart = toBangkokDateString(contract.startDate);
-        const cEnd = toBangkokDateString(contract.endDate);
-        const createdStr = (contract as any).createdAt ? toBangkokDateString((contract as any).createdAt) : cStart;
-        const effStart = cStart > createdStr ? cStart : createdStr;
-        if (effStart <= cycleStartStr && cEnd >= cycleEndStr) {
+      if (mergedIntervals.length === 1) {
+        if (mergedIntervals[0].start <= cycleStart.getTime() && mergedIntervals[0].end >= cycleEndExclusive.getTime()) {
           hasBookableGap = false;
         }
-      } else if (prov) {
-        const pStart = toBangkokDateString(prov.startDate);
-        const pEnd = toBangkokDateString(prov.endDate);
-        if (pStart <= cycleStartStr && pEnd >= cycleEndStr) {
-          hasBookableGap = false;
-        }
-      } else if (dailyStay) {
-        const dStart = toBangkokDateString(dailyStay.checkInAt || dailyStay.startDate);
-        const dEnd = toBangkokDateString(dailyStay.checkOutAt || dailyStay.endDate);
-        if (dStart <= cycleStartStr && dEnd >= cycleEndStr) {
-          hasBookableGap = false;
+      } else if (mergedIntervals.length > 1) {
+        if (mergedIntervals[0].start <= cycleStart.getTime() && mergedIntervals[mergedIntervals.length - 1].end >= cycleEndExclusive.getTime()) {
+          let hasInternalGap = false;
+          for (let i = 1; i < mergedIntervals.length; i++) {
+            if (mergedIntervals[i].start > mergedIntervals[i - 1].end) {
+              hasInternalGap = true;
+              break;
+            }
+          }
+          if (!hasInternalGap) {
+            hasBookableGap = false;
+          }
         }
       }
 

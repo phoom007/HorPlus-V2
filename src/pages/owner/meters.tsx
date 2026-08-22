@@ -469,8 +469,7 @@ export function mapErrorMessageToThai(raw: any): string {
 
   const exactNoActiveCodes = [
     'NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM',
-    'NO_ACTIVE_CONTRACT',
-    'NO_ACTIVE_TENANT',
+    'NO_ACTIVE_TENANCY',
   ];
 
   if (exactNoActiveCodes.includes(code)) {
@@ -507,8 +506,7 @@ export function mapErrorMessageToThai(raw: any): string {
 
   if (
     msg.includes('NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM') ||
-    msg.includes('NO_ACTIVE_CONTRACT') ||
-    msg.includes('NO_ACTIVE_TENANT')
+    msg.includes('NO_ACTIVE_TENANCY')
   ) {
     return 'ไม่พบผู้เช่า';
   }
@@ -2297,9 +2295,9 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
 
                 const tenant = getTenantForRoomAndCycle(row.roomId, selectedCycle);
                 const roomCtx = previewContext?.rooms?.find((r: any) => r.roomId === row.roomId);
-                const isDaily = roomCtx?.billingSource === 'DAILY_STAY';
+                const isDailyContext = roomCtx?.billingSource === 'DAILY_STAY' || Boolean(roomCtx?.isDailyUnpaid);
                 const isBillIssued = row.billStatus !== 'draft' && row.billStatus !== 'cancelled';
-                const isRowPaid = !isDaily && (row.isPaid || row.billStatus === 'paid');
+                const isRowPaid = !isDailyContext && (row.isPaid || row.billStatus === 'paid');
 
                 return (
                   <tr key={row.roomId} id={`room-row-${row.roomId}`} className="hover:bg-slate-50/50 transition-colors">
@@ -2696,7 +2694,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                         : ''
                     }`}>
                       {(() => {
-                        if (isDaily) {
+                        if (isDailyContext) {
                           const isDailyUnpaid = roomCtx?.isDailyUnpaid;
                           return (
                             <div className="flex items-center justify-center min-w-[85px]">
@@ -2797,9 +2795,10 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                         }
 
                         if (isEligibleAddTenantCycle) {
+                          const hasTenant = Boolean(effectiveTenantId && effectiveTenantName);
                           return (
                             <div className="flex items-center gap-2">
-                              {effectiveTenantId && effectiveTenantName && (
+                              {hasTenant && (
                                 <div className="flex flex-col items-start gap-0.5">
                                   <button
                                     type="button"
@@ -2859,7 +2858,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                                   <span className="whitespace-nowrap">เพิ่มผู้เช่า</span>
                                 </button>
                               )}
-                              {!effectiveTenantId && !hasBookableGap && (
+                              {!hasTenant && !hasBookableGap && (
                                 <span className="text-gray-400">ไม่มีข้อมูล</span>
                               )}
                             </div>
