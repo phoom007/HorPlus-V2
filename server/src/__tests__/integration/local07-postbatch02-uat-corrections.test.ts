@@ -668,9 +668,9 @@ describe('LOCAL-07 Post-Batch02 UAT Corrections: OCC, Preview Context & Househol
       expect(preview.parkingAmount).toBe('100.00');
       expect(preview.overdueAmount).toBe('50.00');
       expect(preview.otherFeesAmount).toBe('40.00');
-      // Total: 3500.00 + 90.00 + 16.00 + 150.00 + 200.00 + 100.00 + 50.00 + 40.00 = 4146.00
-      expect(preview.totalAmount).toBe('4146.00');
-      expect(preview.formattedTotal).toBe('4,146.00');
+      // Utility Total: 90.00 + 16.00 + 150.00 + 200.00 + 100.00 + 50.00 + 40.00 = 646.00
+      expect(preview.totalAmount).toBe('646.00');
+      expect(preview.formattedTotal).toBe('646.00');
 
       // Issue bill via API with these exact integer readings
       const issueRes = await request(app)
@@ -709,8 +709,9 @@ describe('LOCAL-07 Post-Batch02 UAT Corrections: OCC, Preview Context & Househol
       });
 
       expect(dbBill).toBeDefined();
-      expect(Number(dbBill?.totalAmount)).toBe(4146);
-      expect(Number(dbBill?.items.find((i: any) => i.type === 'rent')?.amount)).toBe(3500);
+      expect(dbBill?.billKind).toBe('MONTHLY_UTILITY');
+      expect(Number(dbBill?.totalAmount)).toBe(646);
+      expect(dbBill?.items.find((i: any) => i.type === 'rent')).toBeUndefined();
       expect(Number(dbBill?.items.find((i: any) => i.type === 'water')?.amount)).toBe(90);
       expect(Number(dbBill?.items.find((i: any) => i.type === 'electricity')?.amount)).toBe(16);
       expect(Number(dbBill?.items.find((i: any) => i.type === 'common_fee')?.amount)).toBe(150);
@@ -738,8 +739,8 @@ describe('LOCAL-07 Post-Batch02 UAT Corrections: OCC, Preview Context & Househol
         },
         { peopleCount: 3 }
       );
-      // 4000 + (3*100) + (3*200) + (3*50) + (3*100) + (3*150) = 4000 + 300 + 600 + 150 + 300 + 450 = 5800.00
-      expect(v1.totalAmount).toBe('5800.00');
+      // Utilities: (3*100) + (3*200) + (3*50) + (3*100) + (3*150) = 300 + 600 + 150 + 300 + 450 = 1800.00
+      expect(v1.totalAmount).toBe('1800.00');
 
       // 2. Provisional Monthly + FIXED / PER_ROOM modes
       const v2 = calculateMeterRowPreview(
@@ -758,8 +759,8 @@ describe('LOCAL-07 Post-Batch02 UAT Corrections: OCC, Preview Context & Househol
         },
         { peopleCount: 1 }
       );
-      // 3200 + 150 + 350 + 100 + 150 + 200 = 4150.00
-      expect(v2.totalAmount).toBe('4150.00');
+      // Utilities: 150 + 350 + 100 + 150 + 200 = 950.00
+      expect(v2.totalAmount).toBe('950.00');
 
       // 3. Provisional TERM Installment + PER_VEHICLE parking + multiple other fees + overdue
       const v3 = calculateMeterRowPreview(
@@ -784,7 +785,7 @@ describe('LOCAL-07 Post-Batch02 UAT Corrections: OCC, Preview Context & Househol
           ],
         }
       );
-      // 12000 + 205.00 + 378.00 + (2*100) + 150.25 + 100.50 + 200.00 = 13233.75
+      // Utilities: 205.00 + 378.00 + (2*100) + 150.25 + 100.50 + 200.00 = 1233.75
       expect(v3.waterUsage).toBe('10.25');
       expect(v3.waterAmount).toBe('205.00');
       expect(v3.elecUsage).toBe('50.40');
@@ -792,8 +793,8 @@ describe('LOCAL-07 Post-Batch02 UAT Corrections: OCC, Preview Context & Househol
       expect(v3.parkingAmount).toBe('200.00');
       expect(v3.overdueAmount).toBe('150.25');
       expect(v3.otherFeesAmount).toBe('300.50');
-      expect(v3.totalAmount).toBe('13233.75');
-      expect(v3.formattedTotal).toBe('13,233.75');
+      expect(v3.totalAmount).toBe('1233.75');
+      expect(v3.formattedTotal).toBe('1,233.75');
     });
   });
 
