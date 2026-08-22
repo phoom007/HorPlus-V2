@@ -132,4 +132,20 @@ describe('LOCAL-07: Daily Stay Pricing & Integer-Only Meter Authority', () => {
       expect(usage.errorMessage).toContain('ต้องไม่น้อยกว่าค่ามิเตอร์เดิม');
     });
   });
+
+  describe('3. Daily Stay Explicit vs Omitted Checkout Times and Cycle Assignment', () => {
+    it('explicit checkout at 00:00 (2026-08-20 00:00 to 2026-08-23 00:00): checkOutAt is exactly 2026-08-23 00:00 BKK', () => {
+      const res = resolveDailyTimestampsAndPricing('2026-08-20', '2026-08-23', '00:00', '00:00');
+      expect(res.checkInAt.toISOString()).toBe('2026-08-19T17:00:00.000Z'); // 20 Aug 00:00 BKK
+      expect(res.checkOutAt.toISOString()).toBe('2026-08-22T17:00:00.000Z'); // 23 Aug 00:00 BKK
+      expect(res.inclusiveDayCount).toBe(3);
+    });
+
+    it('omitted checkout time (2026-08-20 to 2026-08-23): checkOutAt defaults to 2026-08-24 00:00 BKK', () => {
+      const res = resolveDailyTimestampsAndPricing('2026-08-20', '2026-08-23');
+      expect(res.checkInAt.toISOString()).toBe('2026-08-19T17:00:00.000Z'); // 20 Aug 00:00 BKK
+      expect(res.checkOutAt.toISOString()).toBe('2026-08-23T17:00:00.000Z'); // 24 Aug 00:00 BKK
+      expect(res.inclusiveDayCount).toBe(3);
+    });
+  });
 });

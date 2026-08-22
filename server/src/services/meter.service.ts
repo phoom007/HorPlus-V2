@@ -19,6 +19,7 @@ import { toDecimal, formatDecimal, compareDecimals, divDecimals, mulDecimals, su
 import { calculateInstallmentSchedule } from '../utils/installment-calculator.util.js';
 import { currentBusinessDateInBangkok, toBangkokDateString } from '../utils/calendar-date.util.js';
 import { calculateMeterUsageUnits, parseMeterIntegerReading } from '../utils/meter-billing-calculator.util.js';
+import { resolveDailyTimestampsAndPricing } from './daily-stay.service.js';
 
 export interface CreateMeterDeviceDto {
   roomId: string;
@@ -1311,14 +1312,16 @@ export class MeterService {
     });
     const rooms = roomsResult.items || [];
 
-    // Load active contracts with snapshots
-    const activeContracts = await prisma.contract.findMany({
+    const cycleStartStr = toBangkokDateString(cycle.periodStart);
+    const cycleEndStr = toBangkokDateString(cycle.periodEnd);
+    const now = new Date();
+
+    // 1. Load active & historical contracts
+    const allContracts = await prisma.contract.findMany({
       where: {
         dormitoryId,
-        status: { in: ['active', 'expiring_soon', 'pending_signature', 'waiting_extension', 'checking_out'] },
+        status: { in: ['active', 'expiring_soon', 'pending_signature', 'waiting_extension', 'checking_out', 'ended'] },
         deletedAt: null,
-        startDate: { lte: cycle.periodEnd },
-        endDate: { gte: cycle.periodStart },
       },
       include: {
         tenant: true,
@@ -1327,14 +1330,21 @@ export class MeterService {
       orderBy: [{ startDate: 'asc' }, { createdAt: 'desc' }],
     });
 
-    // Load active provisional rental terms for this cycle
-    const activeProvisionalTerms = await prisma.provisionalRentalTerm.findMany({
+    const visibleContracts = allContracts.filter((c) => {
+      const occStartStr = toBangkokDateString(c.startDate);
+      const occEndStr = toBangkokDateString(c.endDate);
+      const recordVisibleFromStr = toBangkokDateString(c.createdAt || c.startDate);
+      const effectiveStartStr = occStartStr > recordVisibleFromStr ? occStartStr : recordVisibleFromStr;
+
+      return effectiveStartStr <= cycleEndStr && occEndStr >= cycleStartStr;
+    });
+
+    // 2. Load active & historical provisional rental terms for this cycle
+    const allProvisionalTerms = await prisma.provisionalRentalTerm.findMany({
       where: {
         dormitoryId,
-        status: 'ACTIVE',
+        status: { in: ['ACTIVE', 'ENDED', 'CONVERTED'] },
         deletedAt: null,
-        startDate: { lte: cycle.periodEnd },
-        endDate: { gte: cycle.periodStart },
       },
       include: {
         tenant: true,
@@ -1342,16 +1352,21 @@ export class MeterService {
       orderBy: [{ startDate: 'asc' }, { createdAt: 'desc' }],
     });
 
-    // Load active daily stays for today (Bangkok timezone) ONLY if current operational cycle
-    const todayBangkok = currentBusinessDateInBangkok();
-    const isCycleCurrentOrFuture = cycle.status === 'open' || cycle.periodEnd >= new Date(todayBangkok);
-    const activeDailyStays = isCycleCurrentOrFuture ? await prisma.dailyStay.findMany({
+    const visibleProvisionalTerms = allProvisionalTerms.filter((p) => {
+      const occStartStr = toBangkokDateString(p.startDate);
+      const occEndStr = toBangkokDateString(p.endDate);
+      const recordVisibleFromStr = toBangkokDateString(p.createdAt || p.startDate);
+      const effectiveStartStr = occStartStr > recordVisibleFromStr ? occStartStr : recordVisibleFromStr;
+
+      return effectiveStartStr <= cycleEndStr && occEndStr >= cycleStartStr;
+    });
+
+    // 3. Load daily stays and evaluate real-time occupancy for this cycle
+    const allDailyStays = await prisma.dailyStay.findMany({
       where: {
         dormitoryId,
-        status: 'ACTIVE',
         deletedAt: null,
-        startDate: { lte: new Date(todayBangkok) },
-        endDate: { gte: new Date(todayBangkok) },
+        status: { in: ['ACTIVE', 'RESERVED', 'CHECKED_OUT', 'COMPLETED'] },
       },
       include: {
         tenant: true,
@@ -1362,34 +1377,44 @@ export class MeterService {
         },
       },
       orderBy: [{ startDate: 'asc' }, { createdAt: 'desc' }],
-    }) : [];
-
-    // Load future contracts for vacant rooms
-    const futureContracts = await prisma.contract.findMany({
-      where: {
-        dormitoryId,
-        status: { in: ['active', 'expiring_soon', 'pending_signature', 'waiting_extension'] },
-        deletedAt: null,
-        startDate: { gt: cycle.periodEnd },
-      },
-      include: {
-        tenant: true,
-      },
-      orderBy: [{ startDate: 'asc' }, { createdAt: 'desc' }],
     });
 
-    // Load future provisional terms for vacant rooms
-    const futureProvisionalTerms = await prisma.provisionalRentalTerm.findMany({
-      where: {
-        dormitoryId,
-        status: 'ACTIVE',
-        deletedAt: null,
-        startDate: { gt: cycle.periodEnd },
-      },
-      include: {
-        tenant: true,
-      },
-      orderBy: [{ startDate: 'asc' }, { createdAt: 'desc' }],
+    const activeDailyStays: typeof allDailyStays = [];
+    const futureDailyStays: typeof allDailyStays = [];
+
+    for (const d of allDailyStays) {
+      const stayStartStr = toBangkokDateString(d.checkInAt || d.startDate);
+      const stayEndStr = toBangkokDateString(d.checkOutAt ? new Date(d.checkOutAt.getTime() - 1) : d.endDate);
+      const belongsToCycle = stayStartStr <= cycleEndStr && stayEndStr >= cycleStartStr;
+
+      if (!belongsToCycle) continue;
+
+      const checkInAt = d.checkInAt ? new Date(d.checkInAt) : new Date(`${toBangkokDateString(d.startDate)}T00:00:00+07:00`);
+      let effectiveCheckOutAt: Date;
+      if (d.actualCheckedOutAt) {
+        effectiveCheckOutAt = new Date(d.actualCheckedOutAt);
+      } else if (d.checkOutAt) {
+        effectiveCheckOutAt = new Date(d.checkOutAt);
+      } else {
+        effectiveCheckOutAt = resolveDailyTimestampsAndPricing(toBangkokDateString(d.startDate), toBangkokDateString(d.endDate)).checkOutAt;
+      }
+
+      if (now.getTime() < checkInAt.getTime()) {
+        futureDailyStays.push(d);
+      } else if (checkInAt.getTime() <= now.getTime() && now.getTime() < effectiveCheckOutAt.getTime() && (d.status === 'ACTIVE' || d.status === 'RESERVED')) {
+        activeDailyStays.push(d);
+      }
+    }
+
+    // 4. Future contracts & provisional terms for vacant rooms
+    const futureContracts = allContracts.filter((c) => {
+      const startStr = toBangkokDateString(c.startDate);
+      return startStr > cycleEndStr && ['active', 'expiring_soon', 'pending_signature', 'waiting_extension'].includes(c.status);
+    });
+
+    const futureProvisionalTerms = allProvisionalTerms.filter((p) => {
+      const startStr = toBangkokDateString(p.startDate);
+      return startStr > cycleEndStr && p.status === 'ACTIVE';
     });
 
     // Load snapshots for this cycle
@@ -1408,11 +1433,12 @@ export class MeterService {
     // Vehicles for per-vehicle parking mode
     const allTenantIds = Array.from(
       new Set([
-        ...activeContracts.map((c) => c.tenantId),
-        ...activeProvisionalTerms.map((p) => p.tenantId),
+        ...visibleContracts.map((c) => c.tenantId),
+        ...visibleProvisionalTerms.map((p) => p.tenantId),
         ...(activeDailyStays.map((d) => d.tenantId).filter(Boolean) as string[]),
         ...futureContracts.map((c) => c.tenantId),
         ...futureProvisionalTerms.map((p) => p.tenantId),
+        ...(futureDailyStays.map((d) => d.tenantId).filter(Boolean) as string[]),
       ])
     );
     const vehicles = allTenantIds.length > 0
@@ -1429,13 +1455,13 @@ export class MeterService {
       vehicleCountMap.set(v.tenantId, (vehicleCountMap.get(v.tenantId) || 0) + 1);
     }
 
-    const roomContractMap = new Map<string, typeof activeContracts[0]>();
-    for (const c of activeContracts) {
+    const roomContractMap = new Map<string, typeof visibleContracts[0]>();
+    for (const c of visibleContracts) {
       if (!roomContractMap.has(c.roomId)) roomContractMap.set(c.roomId, c);
     }
 
-    const roomProvisionalMap = new Map<string, typeof activeProvisionalTerms[0]>();
-    for (const p of activeProvisionalTerms) {
+    const roomProvisionalMap = new Map<string, typeof visibleProvisionalTerms[0]>();
+    for (const p of visibleProvisionalTerms) {
       if (!roomProvisionalMap.has(p.roomId)) roomProvisionalMap.set(p.roomId, p);
     }
 
@@ -1452,6 +1478,11 @@ export class MeterService {
     const roomFutureProvisionalMap = new Map<string, typeof futureProvisionalTerms[0]>();
     for (const p of futureProvisionalTerms) {
       if (!roomFutureProvisionalMap.has(p.roomId)) roomFutureProvisionalMap.set(p.roomId, p);
+    }
+
+    const roomFutureDailyMap = new Map<string, typeof futureDailyStays[0]>();
+    for (const d of futureDailyStays) {
+      if (!roomFutureDailyMap.has(d.roomId)) roomFutureDailyMap.set(d.roomId, d);
     }
 
     // Load active bills for this cycle
@@ -1579,6 +1610,7 @@ export class MeterService {
             // Check future reservation
             const futureC = roomFutureContractMap.get(room.id);
             const futureP = roomFutureProvisionalMap.get(room.id);
+            const futureD = roomFutureDailyMap.get(room.id);
             if (futureC) {
               isFutureReservation = true;
               tenantId = futureC.tenantId;
@@ -1589,6 +1621,11 @@ export class MeterService {
               tenantId = futureP.tenantId;
               tenantName = futureP.tenant ? (futureP.tenant.displayName || `${futureP.tenant.firstName || ''} ${futureP.tenant.lastName || ''}`.trim()) : null;
               isLineLinked = Boolean(futureP.tenant?.linkedUserId);
+            } else if (futureD) {
+              isFutureReservation = true;
+              tenantId = futureD.tenantId || null;
+              tenantName = futureD.applicantFullName || (futureD.tenant ? (futureD.tenant.displayName || `${futureD.tenant.firstName || ''} ${futureD.tenant.lastName || ''}`.trim()) : 'ผู้พักรายวัน');
+              isLineLinked = Boolean(futureD.tenant?.linkedUserId);
             }
             billingSource = 'NONE';
             rentAmount = '0.00';

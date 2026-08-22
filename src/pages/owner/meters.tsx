@@ -38,7 +38,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { queryKeys, STALE_TIMES } from '../../lib/queryClient';
 import { meterDraftStore, deriveMeterDraftPatches } from '../../lib/meterDraftStore';
 import { calculateMeterRowPreview, calculateMeterUsageUnits, RoomPreviewContext, parseScaled2, formatScaled2, formatMoneyDisplay } from '../../utils/meterBillingCalculator';
-import { isCycleInRollingThreeMonthWindow } from '../../utils/calendarDate';
+import { isCycleInRollingThreeMonthWindow, toBangkokDateString } from '../../utils/calendarDate';
 import { Room, Building, QuickAddRoomContext, Bill, BillItem, Tenant, Contract, BillStatus, calculateRoomRentForCycle } from '../../types';
 import { getDataProvider } from '../../data/dataProvider';
 import { httpRequest } from '../../data/httpClient';
@@ -122,21 +122,25 @@ export function getTenantForRoomAndCycleHelper(
   tenants: Tenant[] = []
 ): Tenant | undefined {
   if (!cycle) return undefined;
+  const [cy, cm] = cycle.split('-').map(Number);
+  if (isNaN(cy) || isNaN(cm)) return undefined;
+
+  const cycleStartStr = `${cycle}-01`;
+  const daysInMonth = new Date(cy, cm, 0).getDate();
+  const cycleEndStr = `${cycle}-${String(daysInMonth).padStart(2, '0')}`;
+
   const activeContract = (contracts || []).find(c => {
     if (c.roomId !== roomId) return false;
-    const [cy, cm] = cycle.split('-').map(Number);
-    const startValStr = typeof c.startDate === 'string' ? c.startDate : new Date(c.startDate).toISOString().slice(0, 10);
-    const endValStr = typeof c.endDate === 'string' ? c.endDate : new Date(c.endDate).toISOString().slice(0, 10);
-    const [sy, sm] = startValStr.split('-').map(Number);
-    const [ey, em] = endValStr.split('-').map(Number);
-    const cycleVal = cy * 12 + (cm - 1);
-    const startVal = sy * 12 + (sm - 1);
-    const endVal = ey * 12 + (em - 1);
-    return cycleVal >= startVal && cycleVal <= endVal;
+    const startValStr = typeof c.startDate === 'string' ? c.startDate.slice(0, 10) : toBangkokDateString(c.startDate);
+    const endValStr = typeof c.endDate === 'string' ? c.endDate.slice(0, 10) : toBangkokDateString(c.endDate);
+    const createdStr = (c as any).createdAt ? (typeof (c as any).createdAt === 'string' ? (c as any).createdAt.slice(0, 10) : toBangkokDateString((c as any).createdAt)) : startValStr;
+    const effectiveStartStr = startValStr > createdStr ? startValStr : createdStr;
+
+    return effectiveStartStr <= cycleEndStr && endValStr >= cycleStartStr;
   });
 
-  const tenantId = activeContract ? activeContract.tenantId : rooms.find(r => r.id === roomId)?.currentTenantId;
-  return tenants.find(t => t.id === tenantId);
+  if (!activeContract) return undefined;
+  return tenants.find(t => t.id === activeContract.tenantId);
 }
 
 export function buildRowsFromWorkspace(params: {
@@ -1023,22 +1027,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   };
 
   const getTenantForRoomAndCycle = (roomId: string, cycle: string) => {
-    // Find contract active during this cycle for this room
-    const activeContract = (contracts || []).find(c => {
-      if (c.roomId !== roomId) return false;
-      const [cy, cm] = cycle.split('-').map(Number);
-      const startValStr = typeof c.startDate === 'string' ? c.startDate : new Date(c.startDate).toISOString().slice(0, 10);
-      const endValStr = typeof c.endDate === 'string' ? c.endDate : new Date(c.endDate).toISOString().slice(0, 10);
-      const [sy, sm] = startValStr.split('-').map(Number);
-      const [ey, em] = endValStr.split('-').map(Number);
-      const cycleVal = cy * 12 + (cm - 1);
-      const startVal = sy * 12 + (sm - 1);
-      const endVal = ey * 12 + (em - 1);
-      return cycleVal >= startVal && cycleVal <= endVal;
-    });
-
-    const tenantId = activeContract ? activeContract.tenantId : rooms.find(r => r.id === roomId)?.currentTenantId;
-    return tenants.find(t => t.id === tenantId);
+    return getTenantForRoomAndCycleHelper(roomId, cycle, contracts, rooms, tenants);
   };
 
   const handlePullPreviousData = async () => {
@@ -2660,12 +2649,13 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                     {/* Tenant Clickable Link */}
                     <td className="p-4 whitespace-nowrap">
                       {(() => {
-                        const effectiveTenantId = roomCtx?.tenantId || tenant?.id;
-                        const effectiveTenantName = roomCtx?.tenantName || tenant?.name;
-                        const isLineLinked = roomCtx ? roomCtx.isLineLinked : Boolean(tenant?.linkedUserId);
+                        const effectiveTenantId = roomCtx ? roomCtx.tenantId : tenant?.id;
+                        const effectiveTenantName = roomCtx ? roomCtx.tenantName : tenant?.name;
+                        const isFuture = Boolean(roomCtx?.isFutureReservation);
+                        const isLineLinked = roomCtx ? roomCtx.isLineLinked : Boolean((tenant as any)?.linkedUserId);
                         const peopleCountVal = Number(row.peopleCount ?? roomCtx?.currentHouseholdPeopleCount ?? roomCtx?.snapshotPeopleCount ?? 1);
 
-                        if (effectiveTenantId && effectiveTenantName) {
+                        if (effectiveTenantId && effectiveTenantName && !isFuture) {
                           return (
                             <div className="flex flex-col items-start gap-0.5">
                               <button
@@ -2681,12 +2671,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                                 <span className="truncate max-w-[100px]">{effectiveTenantName}</span>
                                 <ArrowRight className="w-3 h-3 opacity-60 shrink-0" />
                               </button>
-                              {roomCtx?.isFutureReservation && (
-                                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
-                                  จองล่วงหน้า
-                                </span>
-                              )}
-                              {!isLineLinked && !roomCtx?.isFutureReservation && (
+                              {!isLineLinked && (
                                 <span className="text-[10px] text-slate-400 font-normal leading-tight">
                                   (ยังไม่ได้เชื่อม LINE)
                                 </span>
@@ -2695,11 +2680,24 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                           );
                         }
 
-                        if (roomCtx?.isFutureReservation) {
+                        if (isFuture) {
                           return (
-                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
-                              จองล่วงหน้า
-                            </span>
+                            <div className="flex flex-col items-start gap-0.5">
+                              {effectiveTenantId && effectiveTenantName ? (
+                                <button
+                                  type="button"
+                                  onClick={() => onSelectTenant(effectiveTenantId, row.roomId)}
+                                  className="inline-flex items-center gap-1.5 text-indigo-600 hover:text-indigo-800 hover:underline transition-all cursor-pointer font-bold whitespace-nowrap"
+                                >
+                                  <User className="w-3.5 h-3.5 shrink-0" />
+                                  <span className="truncate max-w-[100px]">{effectiveTenantName}</span>
+                                  <ArrowRight className="w-3 h-3 opacity-60 shrink-0" />
+                                </button>
+                              ) : null}
+                              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
+                                จองล่วงหน้า
+                              </span>
+                            </div>
                           );
                         }
 

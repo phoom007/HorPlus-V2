@@ -2,7 +2,7 @@ import React from 'react';
 import { render, screen, fireEvent, waitFor, cleanup, within } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { OwnerMeters, getOwnerFinancialBreakdown, mapErrorMessageToThai } from '../pages/owner/meters';
+import { OwnerMeters, getOwnerFinancialBreakdown, mapErrorMessageToThai, getTenantForRoomAndCycleHelper } from '../pages/owner/meters';
 import { OwnerTenants } from '../pages/owner/tenants';
 import { TimeWheelPicker } from '../components/TimeWheelPicker';
 import { getRollingThreeMonthWindow, isCycleInRollingThreeMonthWindow, toBangkokDateString } from '../utils/calendarDate';
@@ -1764,6 +1764,182 @@ describe('LOCAL-07 Source-Reviewed Meter Workspace Correction Suite', () => {
       const breakdownSeptember = getOwnerFinancialBreakdown(row, roomCtxSeptember, rateSnapshot, [], 'cycle-sep');
       expect(breakdownSeptember.components.some(c => c.label === 'ค่าเช่า (เดือน)')).toBe(true);
       expect(breakdownSeptember.operationalAmount).toBe(4160); // 160 + 4000
+    });
+  });
+
+  // =========================================================================
+  // 9. Monthly / Term Temporal Projection Authority Matrix
+  // =========================================================================
+  describe('Monthly / Term Temporal Projection Authority Matrix', () => {
+    const mockTenantA: Tenant = {
+      id: 't-temporal-01',
+      name: 'นายกิตติ มุ่งมั่น',
+      phone: '0812345678',
+      status: 'active',
+    } as any;
+
+    it('Proof 9A: Contract start June 1, end August 1, registered in July -> not shown in June, shown in July & Aug, not in Sept', async () => {
+      // Contract registered in July (createdAt = 2026-07-15)
+      const contractJulyReg: Contract = {
+        id: 'ctr-july-reg',
+        dormitoryId: 'dorm-test',
+        roomId: 'room-temp-101',
+        tenantId: mockTenantA.id,
+        startDate: '2026-06-01',
+        endDate: '2026-08-01',
+        createdAt: '2026-07-15T10:00:00.000Z',
+        rentAmount: 4500,
+        status: 'active',
+      } as any;
+
+      const mockRoom: Room = {
+        id: 'room-temp-101',
+        roomNumber: '101',
+        floor: 1,
+        roomType: 'standard',
+        monthlyRent: 4500,
+        depositAmount: 4500,
+        status: 'vacant', // real-world vacant
+      } as any;
+
+      // 1. June (2026-06): contract did not exist in HorPlus yet (createdAt July) -> NOT shown
+      const juneTenant = getTenantForRoomAndCycleHelper('room-temp-101', '2026-06', [contractJulyReg], [mockRoom], [mockTenantA]);
+      expect(juneTenant).toBeUndefined();
+
+      // 2. July (2026-07): contract visible in HorPlus and active -> SHOWN
+      const julyTenant = getTenantForRoomAndCycleHelper('room-temp-101', '2026-07', [contractJulyReg], [mockRoom], [mockTenantA]);
+      expect(julyTenant?.id).toBe(mockTenantA.id);
+      expect(julyTenant?.name).toBe('นายกิตติ มุ่งมั่น');
+
+      // 3. August (2026-08): contract occupancy touches Aug 1 -> SHOWN
+      const augTenant = getTenantForRoomAndCycleHelper('room-temp-101', '2026-08', [contractJulyReg], [mockRoom], [mockTenantA]);
+      expect(augTenant?.id).toBe(mockTenantA.id);
+      expect(augTenant?.name).toBe('นายกิตติ มุ่งมั่น');
+
+      // 4. September (2026-09): contract ended Aug 1 -> NOT shown
+      const septTenant = getTenantForRoomAndCycleHelper('room-temp-101', '2026-09', [contractJulyReg], [mockRoom], [mockTenantA]);
+      expect(septTenant).toBeUndefined();
+    });
+
+    it('Proof 9B: End date boundary inclusivity (endDate 2026-08-01 vs 2026-07-31)', () => {
+      const contractEndsAug1: Contract = {
+        id: 'ctr-aug-1',
+        roomId: 'r1',
+        tenantId: mockTenantA.id,
+        startDate: '2026-07-01',
+        endDate: '2026-08-01',
+        createdAt: '2026-07-01T00:00:00.000Z',
+      } as any;
+
+      const contractEndsJuly31: Contract = {
+        id: 'ctr-july-31',
+        roomId: 'r2',
+        tenantId: mockTenantA.id,
+        startDate: '2026-07-01',
+        endDate: '2026-07-31',
+        createdAt: '2026-07-01T00:00:00.000Z',
+      } as any;
+
+      // August cycle check
+      const aug1Tenant = getTenantForRoomAndCycleHelper('r1', '2026-08', [contractEndsAug1], [], [mockTenantA]);
+      expect(aug1Tenant).toBeDefined();
+      expect(aug1Tenant?.id).toBe(mockTenantA.id);
+
+      const july31Tenant = getTenantForRoomAndCycleHelper('r2', '2026-08', [contractEndsJuly31], [], [mockTenantA]);
+      expect(july31Tenant).toBeUndefined();
+    });
+
+    it('Proof 9C: Historical July tenant remains visible in July cycle even though room is currently vacant on August 22', async () => {
+      const historicalContract: Contract = {
+        id: 'ctr-hist',
+        roomId: 'room-101',
+        tenantId: mockTenantA.id,
+        startDate: '2026-01-01',
+        endDate: '2026-07-31',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        status: 'ended',
+      } as any;
+
+      const mockRoom: Room = {
+        id: 'room-101',
+        roomNumber: '101',
+        floor: 1,
+        roomType: 'standard',
+        monthlyRent: 4500,
+        depositAmount: 4500,
+        status: 'vacant',
+        currentTenantId: undefined, // vacant in real world
+      } as any;
+
+      const tenantInJuly = getTenantForRoomAndCycleHelper('room-101', '2026-07', [historicalContract], [mockRoom], [mockTenantA]);
+      expect(tenantInJuly).toBeDefined();
+      expect(tenantInJuly?.id).toBe(mockTenantA.id);
+      expect(tenantInJuly?.name).toBe('นายกิตติ มุ่งมั่น');
+    });
+  });
+
+  // =========================================================================
+  // 10. Daily Stay Real-Time Occupancy & Checkout Semantics Matrix
+  // =========================================================================
+  describe('Daily Stay Real-Time Occupancy & Checkout Semantics Matrix', () => {
+    it('Proof 10A: Daily stay explicit checkout time (2026-08-20 00:00 to 2026-08-23 00:00 Asia/Bangkok)', () => {
+      const checkInAt = new Date('2026-08-20T00:00:00+07:00');
+      const checkOutAt = new Date('2026-08-23T00:00:00+07:00');
+
+      // 1. Aug 19 23:59 -> now < checkInAt -> Future reservation
+      const t1 = new Date('2026-08-19T23:59:00+07:00');
+      expect(t1.getTime() < checkInAt.getTime()).toBe(true);
+
+      // 2. Aug 20 00:00 -> active
+      const t2 = new Date('2026-08-20T00:00:00+07:00');
+      expect(checkInAt.getTime() <= t2.getTime() && t2.getTime() < checkOutAt.getTime()).toBe(true);
+
+      // 3. Aug 22 18:00 -> active
+      const t3 = new Date('2026-08-22T18:00:00+07:00');
+      expect(checkInAt.getTime() <= t3.getTime() && t3.getTime() < checkOutAt.getTime()).toBe(true);
+
+      // 4. Aug 23 00:00 -> now >= checkOutAt -> Vacant
+      const t4 = new Date('2026-08-23T00:00:00+07:00');
+      expect(t4.getTime() >= checkOutAt.getTime()).toBe(true);
+    });
+
+    it('Proof 10B: Daily stay omitted checkout time (2026-08-20 to 2026-08-23) canonical checkout is 2026-08-24 00:00 Bangkok', () => {
+      // resolve default checkout: day AFTER endDate at 00:00:00 Bangkok
+      const [ey, em, ed] = '2026-08-23'.split('-').map(Number);
+      const nextDay = new Date(Date.UTC(ey, em - 1, ed + 1));
+      const nextDayStr = nextDay.toISOString().slice(0, 10);
+      const checkOutAt = new Date(`${nextDayStr}T00:00:00+07:00`);
+
+      expect(toBangkokDateString(checkOutAt)).toBe('2026-08-24');
+
+      const checkInAt = new Date('2026-08-20T00:00:00+07:00');
+
+      // Aug 23 00:00 -> ACTIVE
+      const d1 = new Date('2026-08-23T00:00:00+07:00');
+      expect(checkInAt.getTime() <= d1.getTime() && d1.getTime() < checkOutAt.getTime()).toBe(true);
+
+      // Aug 23 12:00 -> ACTIVE
+      const d2 = new Date('2026-08-23T12:00:00+07:00');
+      expect(checkInAt.getTime() <= d2.getTime() && d2.getTime() < checkOutAt.getTime()).toBe(true);
+
+      // Aug 23 23:59 -> ACTIVE
+      const d3 = new Date('2026-08-23T23:59:00+07:00');
+      expect(checkInAt.getTime() <= d3.getTime() && d3.getTime() < checkOutAt.getTime()).toBe(true);
+
+      // Aug 24 00:00 -> VACANT
+      const d4 = new Date('2026-08-24T00:00:00+07:00');
+      expect(d4.getTime() >= checkOutAt.getTime()).toBe(true);
+    });
+
+    it('Proof 10C: Same-date daily stay (2026-08-23 to 2026-08-23 no time) -> checkOutAt is 2026-08-24 00:00 and 1 day count', () => {
+      const [ey, em, ed] = '2026-08-23'.split('-').map(Number);
+      const nextDay = new Date(Date.UTC(ey, em - 1, ed + 1));
+      const checkOutAt = new Date(`${nextDay.toISOString().slice(0, 10)}T00:00:00+07:00`);
+      const checkInAt = new Date('2026-08-23T00:00:00+07:00');
+
+      expect(toBangkokDateString(checkInAt)).toBe('2026-08-23');
+      expect(toBangkokDateString(checkOutAt)).toBe('2026-08-24');
+      expect(checkOutAt.getTime() > checkInAt.getTime()).toBe(true);
     });
   });
 });

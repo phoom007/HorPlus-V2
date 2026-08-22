@@ -204,4 +204,174 @@ describe('LOCAL-07 Final UAT Correction Test Suite', () => {
       expect(preview.formattedTotal).toBe('1,200.00');
     });
   });
+
+  describe('4. Temporal Projection Authority (Monthly & Daily)', () => {
+    let dormitoryId: string;
+    let juneCycle: any;
+    let julyCycle: any;
+    let augCycle: any;
+    let septCycle: any;
+    let testRoom: any;
+    let testTenant: any;
+    let testContract: any;
+
+    beforeAll(async () => {
+      const dorm = await prisma.dormitory.findFirst({
+        where: { name: { contains: 'Comprehensive' } },
+      });
+      if (!dorm) return;
+      dormitoryId = dorm.id;
+
+      julyCycle = await prisma.billingCycle.findFirst({
+        where: { dormitoryId, cycleCode: '2026-07' },
+      });
+      augCycle = await prisma.billingCycle.findFirst({
+        where: { dormitoryId, cycleCode: '2026-08' },
+      });
+      septCycle = await prisma.billingCycle.findFirst({
+        where: { dormitoryId, cycleCode: '2026-09' },
+      });
+
+      juneCycle = await prisma.billingCycle.findFirst({
+        where: { dormitoryId, cycleCode: '2026-06' },
+      });
+
+      const augSnapshot = augCycle
+        ? await prisma.billingRateSnapshot.findFirst({
+            where: { dormitoryId, billingCycleId: augCycle.id },
+          })
+        : null;
+
+      if (!juneCycle) {
+        juneCycle = await prisma.billingCycle.create({
+          data: {
+            dormitoryId,
+            cycleCode: '2026-06',
+            name: 'รอบบิล มิถุนายน 2569',
+            periodStart: new Date('2026-06-01T00:00:00.000Z'),
+            periodEnd: new Date('2026-06-30T00:00:00.000Z'),
+            billingDate: new Date('2026-06-25T00:00:00.000Z'),
+            dueDate: new Date('2026-07-05T00:00:00.000Z'),
+            status: 'closed',
+          },
+        });
+      }
+
+      const existingJuneSnapshot = await prisma.billingRateSnapshot.findFirst({
+        where: { dormitoryId, billingCycleId: juneCycle.id },
+      });
+      if (!existingJuneSnapshot && augSnapshot) {
+        const { id, createdAt, updatedAt, billingCycleId, ...rest } = augSnapshot;
+        await prisma.billingRateSnapshot.create({
+          data: {
+            ...rest,
+            dormitoryId,
+            billingCycleId: juneCycle.id,
+          },
+        });
+      }
+
+      const building = await prisma.building.findFirst({
+        where: { dormitoryId },
+      });
+
+      testRoom = await prisma.room.create({
+        data: {
+          dormitoryId,
+          buildingId: building!.id,
+          roomNumber: 'TEMP-901',
+          normalizedRoomNumber: 'temp-901',
+          floor: 9,
+          roomType: 'standard',
+          monthlyRent: 5000,
+          depositAmount: 5000,
+          status: 'vacant',
+        },
+      });
+
+      testTenant = await prisma.tenant.create({
+        data: {
+          dormitoryId,
+          tenantNumber: 'TNT-TEMP-901',
+          firstName: 'กิตติ',
+          lastName: 'มุ่งมั่น',
+          displayName: 'นายกิตติ มุ่งมั่น',
+          phone: '0899999999',
+          nationalIdMasked: '1-1004-XXXXX-99-9',
+          status: 'active',
+          createdAt: new Date('2026-07-15T08:00:00.000Z'),
+        },
+      });
+
+      testContract = await prisma.contract.create({
+        data: {
+          dormitoryId,
+          roomId: testRoom.id,
+          tenantId: testTenant.id,
+          contractNumber: 'CTR-TEMP-901',
+          startDate: new Date('2026-06-01T00:00:00.000Z'),
+          endDate: new Date('2026-08-01T00:00:00.000Z'),
+          rentAmount: 5000,
+          depositAmount: 5000,
+          status: 'ended',
+          createdAt: new Date('2026-07-15T08:00:00.000Z'),
+        },
+      });
+    });
+
+    afterAll(async () => {
+      if (testContract) {
+        await prisma.contract.delete({ where: { id: testContract.id } }).catch(() => {});
+      }
+      if (testTenant) {
+        await prisma.tenant.delete({ where: { id: testTenant.id } }).catch(() => {});
+      }
+      if (testRoom) {
+        await prisma.room.delete({ where: { id: testRoom.id } }).catch(() => {});
+      }
+    });
+
+    it('proves contract registered in July does not project into June, projects in July and August, absent in September', async () => {
+      if (!dormitoryId || !juneCycle || !julyCycle || !augCycle || !septCycle) return;
+      const { PrismaMeterRepository } = await import('../../db/repositories/meter.repository.js');
+      const { PrismaBillingCycleRepository } = await import('../../db/repositories/billing-cycle.repository.js');
+      const { PrismaRoomRepository } = await import('../../db/repositories/room.repository.js');
+      const { PrismaBillRepository } = await import('../../db/repositories/bill.repository.js');
+      const { AuditService } = await import('../../services/audit.service.js');
+
+      const meterService = new MeterService(
+        new PrismaMeterRepository(prisma),
+        new PrismaBillingCycleRepository(prisma),
+        new PrismaRoomRepository(prisma),
+        new PrismaBillRepository(prisma),
+        new AuditService()
+      );
+
+      // 1. June: contract registered in July must NOT backfill into June
+      const junePreview = await meterService.getMeterBillingPreviewContext(dormitoryId, juneCycle.id);
+      const juneRoom = junePreview.rooms.find(r => r.roomId === testRoom.id);
+      expect(juneRoom?.tenantId).toBeNull();
+      expect(juneRoom?.billingSource).toBe('NONE');
+
+      // 2. July: contract intersects July and is registered -> visible
+      const julyPreview = await meterService.getMeterBillingPreviewContext(dormitoryId, julyCycle.id);
+      const julyRoom = julyPreview.rooms.find(r => r.roomId === testRoom.id);
+      expect(julyRoom?.tenantId).toBe(testTenant.id);
+      expect(julyRoom?.tenantName).toBe('นายกิตติ มุ่งมั่น');
+      expect(julyRoom?.billingSource).toBe('CONTRACT');
+
+      // 3. August: contract endDate 2026-08-01 intersects August -> visible
+      const augPreview = await meterService.getMeterBillingPreviewContext(dormitoryId, augCycle.id);
+      const augRoom = augPreview.rooms.find(r => r.roomId === testRoom.id);
+      expect(augRoom?.tenantId).toBe(testTenant.id);
+      expect(augRoom?.tenantName).toBe('นายกิตติ มุ่งมั่น');
+      expect(augRoom?.billingSource).toBe('CONTRACT');
+
+      // 4. September: contract ended on 2026-08-01 -> absent
+      const septPreview = await meterService.getMeterBillingPreviewContext(dormitoryId, septCycle.id);
+      const septRoom = septPreview.rooms.find(r => r.roomId === testRoom.id);
+      expect(septRoom?.tenantId).toBeNull();
+      expect(septRoom?.billingSource).toBe('NONE');
+    });
+  });
 });
