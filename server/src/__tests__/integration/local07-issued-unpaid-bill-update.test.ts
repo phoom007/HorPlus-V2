@@ -188,8 +188,79 @@ describe('LOCAL-07 Issued Unpaid Bill Update on Save Integration Proof', () => {
     await prisma.user.deleteMany({ where: { id: testUserId } });
   });
 
-  it('Proof A: saving meter workspace updates existing UNPAID bill amount and billItems atomically without duplicate bills', async () => {
-    // 1. Initial meter save: water 10 units (10 * 18 = 180), elec 50 units (50 * 7 = 350)
+  it('Proof A: independent financial authorities — saving meter workspace updates MONTHLY_UTILITY (730 -> 970) without touching RENT (4,000)', async () => {
+    // 1. Create independent RENT bill (4,000.00)
+    const rentBillRes = await billingService.generateBill(
+      testDormId,
+      { billingCycleId, roomId, billKind: 'RENT' },
+      testUserId
+    );
+    expect(rentBillRes.created).toBe(true);
+    expect(Number(rentBillRes.bill.totalAmount)).toBe(4000);
+    expect(rentBillRes.bill.billKind).toBe('RENT');
+    const rentBillId = rentBillRes.bill.id;
+
+    // Create coexisting DEPOSIT bill (5,000.00)
+    const depositBill = await prisma.bill.create({
+      data: {
+        dormitoryId: testDormId,
+        billingCycleId,
+        roomId,
+        tenantId,
+        contractId,
+        billNumber: `DEP-${Date.now()}`,
+        billKind: 'DEPOSIT',
+        subtotal: toDecimal('5000.00'),
+        totalAmount: toDecimal('5000.00'),
+        paidAmount: toDecimal('5000.00'),
+        outstandingAmount: toDecimal('0.00'),
+        status: 'paid',
+        billingDate: new Date(),
+        dueDate: new Date(),
+        items: {
+          create: [{
+            dormitoryId: testDormId,
+            type: 'deposit',
+            description: 'เงินประกันความเสียหาย',
+            quantity: toDecimal('1.00'),
+            unitPrice: toDecimal('5000.00'),
+            amount: toDecimal('5000.00'),
+          }],
+        },
+      },
+    });
+
+    // Create coexisting historical LEGACY_COMBINED bill (3,000.00)
+    const legacyBill = await prisma.bill.create({
+      data: {
+        dormitoryId: testDormId,
+        billingCycleId,
+        roomId,
+        tenantId,
+        contractId,
+        billNumber: `LEG-${Date.now()}`,
+        billKind: 'LEGACY_COMBINED',
+        subtotal: toDecimal('3000.00'),
+        totalAmount: toDecimal('3000.00'),
+        paidAmount: toDecimal('3000.00'),
+        outstandingAmount: toDecimal('0.00'),
+        status: 'paid',
+        billingDate: new Date(),
+        dueDate: new Date(),
+        items: {
+          create: [{
+            dormitoryId: testDormId,
+            type: 'other',
+            description: 'ยอดบิลเดิม',
+            quantity: toDecimal('1.00'),
+            unitPrice: toDecimal('3000.00'),
+            amount: toDecimal('3000.00'),
+          }],
+        },
+      },
+    });
+
+    // 2. Initial meter save: water 10 units (10 * 18 = 180), elec 50 units (50 * 7 = 350)
     await meterService.saveBulkMeterWorkspace(
       testDormId,
       {
@@ -200,18 +271,19 @@ describe('LOCAL-07 Issued Unpaid Bill Update on Save Integration Proof', () => {
       billingService
     );
 
-    // 2. Issue Monthly Bill: 4000 rent + 180 water + 350 elec + 200 common = 4,730.00
-    const genRes = await billingService.generateBill(
+    // 3. Issue Monthly Utility Bill: 180 water + 350 elec + 200 common = 730.00 (NO RENT)
+    const utilityBillRes = await billingService.generateBill(
       testDormId,
-      { billingCycleId, roomId },
+      { billingCycleId, roomId, billKind: 'MONTHLY_UTILITY' },
       testUserId
     );
-    expect(genRes.created).toBe(true);
-    expect(Number(genRes.bill.totalAmount)).toBe(4730);
-    expect(genRes.bill.status).toBe('unpaid');
-    const originalBillId = genRes.bill.id;
+    expect(utilityBillRes.created).toBe(true);
+    expect(Number(utilityBillRes.bill.totalAmount)).toBe(730);
+    expect(utilityBillRes.bill.billKind).toBe('MONTHLY_UTILITY');
+    expect(utilityBillRes.bill.status).toBe('unpaid');
+    const utilityBillId = utilityBillRes.bill.id;
 
-    // 3. Owner updates meter reading (elecCurr -> 270: 70 * 7 = 490) AND adds otherFee 100
+    // 4. Owner updates meter reading (elecCurr -> 270: 70 * 7 = 490, +140) AND adds otherFee 100
     const saveRes = await meterService.saveBulkMeterWorkspace(
       testDormId,
       {
@@ -230,29 +302,119 @@ describe('LOCAL-07 Issued Unpaid Bill Update on Save Integration Proof', () => {
     );
     expect(saveRes.savedCount).toBe(1);
 
-    // 4. Verify existing unpaid bill updated to 4,970.00 (4730 + 140 + 100)
-    const updatedBill = await prisma.bill.findUnique({
-      where: { id: originalBillId },
+    // 5. Verify MONTHLY_UTILITY bill updated from 730 to 970 (730 + 140 + 100) with SAME ID
+    const updatedUtilityBill = await prisma.bill.findUnique({
+      where: { id: utilityBillId },
       include: { items: true },
     });
-    expect(updatedBill).toBeTruthy();
-    expect(Number(updatedBill!.totalAmount)).toBe(4970);
-    expect(Number(updatedBill!.outstandingAmount)).toBe(4970);
+    expect(updatedUtilityBill).toBeTruthy();
+    expect(updatedUtilityBill!.id).toBe(utilityBillId);
+    expect(Number(updatedUtilityBill!.totalAmount)).toBe(970);
+    expect(Number(updatedUtilityBill!.outstandingAmount)).toBe(970);
+    expect(updatedUtilityBill!.billKind).toBe('MONTHLY_UTILITY');
 
-    // Verify only ONE bill exists for this room in this cycle (no duplicates)
-    const allBills = await prisma.bill.findMany({
-      where: { dormitoryId: testDormId, billingCycleId, roomId },
-    });
-    expect(allBills.length).toBe(1);
-
-    // Verify updated bill items contain other fee
-    const cleaningItem = updatedBill!.items.find((i) => i.description === 'ค่าทำความสะอาด');
+    const cleaningItem = updatedUtilityBill!.items.find((i) => i.description === 'ค่าทำความสะอาด');
     expect(cleaningItem).toBeTruthy();
     expect(Number(cleaningItem!.amount)).toBe(100);
+
+    // 6. Verify RENT bill remains completely untouched (4,000.00) with SAME ID
+    const updatedRentBill = await prisma.bill.findUnique({
+      where: { id: rentBillId },
+      include: { items: true },
+    });
+    expect(updatedRentBill).toBeTruthy();
+    expect(updatedRentBill!.id).toBe(rentBillId);
+    expect(Number(updatedRentBill!.totalAmount)).toBe(4000);
+    expect(Number(updatedRentBill!.outstandingAmount)).toBe(4000);
+    expect(updatedRentBill!.billKind).toBe('RENT');
+    expect(updatedRentBill!.items.length).toBe(1);
+    expect(updatedRentBill!.items[0].type).toBe('rent');
+
+    // Verify DEPOSIT and LEGACY_COMBINED bills remain completely untouched
+    const checkDeposit = await prisma.bill.findUnique({ where: { id: depositBill.id } });
+    expect(Number(checkDeposit!.totalAmount)).toBe(5000);
+    expect(checkDeposit!.billKind).toBe('DEPOSIT');
+
+    const checkLegacy = await prisma.bill.findUnique({ where: { id: legacyBill.id } });
+    expect(Number(checkLegacy!.totalAmount)).toBe(3000);
+    expect(checkLegacy!.billKind).toBe('LEGACY_COMBINED');
+
+    // 7. Verify exactly 1 active RENT bill and exactly 1 active MONTHLY_UTILITY bill exist
+    const activeRentBills = await prisma.bill.findMany({
+      where: { dormitoryId: testDormId, billingCycleId, roomId, billKind: 'RENT', status: { notIn: ['cancelled', 'void'] } },
+    });
+    expect(activeRentBills.length).toBe(1);
+
+    const activeMonthlyUtilityBills = await prisma.bill.findMany({
+      where: { dormitoryId: testDormId, billingCycleId, roomId, billKind: 'MONTHLY_UTILITY', status: { notIn: ['cancelled', 'void'] } },
+    });
+    expect(activeMonthlyUtilityBills.length).toBe(1);
   });
 
-  it('Proof B: saving meter workspace on a PAID bill is strictly rejected with 400 ROOM_LOCKED_PAID', async () => {
-    // 1. Initial save & issue bill
+  it('Proof B: defense-in-depth guard in syncIssuedUnpaidBillInTx rejects non-MONTHLY_UTILITY bills and undefined billKind', async () => {
+    // 1. RENT -> reject
+    await expect(
+      meterService.syncIssuedUnpaidBillInTx(
+        testDormId,
+        billingCycleId,
+        roomId,
+        { id: randomUUID(), billKind: 'RENT', status: 'unpaid', totalAmount: '4000.00' },
+        billingService,
+        testUserId
+      )
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      code: 'INVALID_BILL_KIND_FOR_METER_SYNC',
+    });
+
+    // 2. DEPOSIT -> reject
+    await expect(
+      meterService.syncIssuedUnpaidBillInTx(
+        testDormId,
+        billingCycleId,
+        roomId,
+        { id: randomUUID(), billKind: 'DEPOSIT', status: 'unpaid', totalAmount: '5000.00' },
+        billingService,
+        testUserId
+      )
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      code: 'INVALID_BILL_KIND_FOR_METER_SYNC',
+    });
+
+    // 3. LEGACY_COMBINED -> reject
+    await expect(
+      meterService.syncIssuedUnpaidBillInTx(
+        testDormId,
+        billingCycleId,
+        roomId,
+        { id: randomUUID(), billKind: 'LEGACY_COMBINED', status: 'unpaid', totalAmount: '4700.00' },
+        billingService,
+        testUserId
+      )
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      code: 'INVALID_BILL_KIND_FOR_METER_SYNC',
+    });
+
+    // 4. Undefined / missing billKind -> reject (fail closed)
+    await expect(
+      meterService.syncIssuedUnpaidBillInTx(
+        testDormId,
+        billingCycleId,
+        roomId,
+        { id: randomUUID(), status: 'unpaid', totalAmount: '730.00' },
+        billingService,
+        testUserId
+      )
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      code: 'INVALID_BILL_KIND_FOR_METER_SYNC',
+    });
+  });
+
+  it('Proof C: saving meter workspace on a PAID MONTHLY_UTILITY bill is strictly rejected with 400 ROOM_LOCKED_PAID', async () => {
+    // 1. Initial save & issue MONTHLY_UTILITY bill
     await meterService.saveBulkMeterWorkspace(
       testDormId,
       {
@@ -264,11 +426,11 @@ describe('LOCAL-07 Issued Unpaid Bill Update on Save Integration Proof', () => {
     );
     const genRes = await billingService.generateBill(
       testDormId,
-      { billingCycleId, roomId },
+      { billingCycleId, roomId, billKind: 'MONTHLY_UTILITY' },
       testUserId
     );
 
-    // 2. Mark bill as PAID
+    // 2. Mark MONTHLY_UTILITY bill as PAID
     await prisma.bill.update({
       where: { id: genRes.bill.id },
       data: { status: 'paid', paidAmount: genRes.bill.totalAmount, outstandingAmount: 0 },
@@ -289,5 +451,55 @@ describe('LOCAL-07 Issued Unpaid Bill Update on Save Integration Proof', () => {
       statusCode: 400,
       code: 'ROOM_LOCKED_PAID',
     });
+  });
+
+  it('Proof D: if RENT bill is PAID but MONTHLY_UTILITY is UNPAID, meter workspace updates MONTHLY_UTILITY without lock collision', async () => {
+    // 1. Create PAID RENT bill
+    const rentRes = await billingService.generateBill(
+      testDormId,
+      { billingCycleId, roomId, billKind: 'RENT' },
+      testUserId
+    );
+    await prisma.bill.update({
+      where: { id: rentRes.bill.id },
+      data: { status: 'paid', paidAmount: rentRes.bill.totalAmount, outstandingAmount: 0 },
+    });
+
+    // 2. Create UNPAID MONTHLY_UTILITY bill (730)
+    await meterService.saveBulkMeterWorkspace(
+      testDormId,
+      {
+        billingCycleId,
+        rows: [{ roomId, waterCurr: '110', elecCurr: '250' }],
+      },
+      testUserId,
+      billingService
+    );
+    const utilityRes = await billingService.generateBill(
+      testDormId,
+      { billingCycleId, roomId, billKind: 'MONTHLY_UTILITY' },
+      testUserId
+    );
+    expect(utilityRes.bill.status).toBe('unpaid');
+
+    // 3. Save meter workspace (elecCurr -> 270) -> MUST SUCCEED because active monthly utility bill is unpaid
+    const saveRes = await meterService.saveBulkMeterWorkspace(
+      testDormId,
+      {
+        billingCycleId,
+        rows: [{ roomId, waterCurr: '110', elecCurr: '270' }],
+      },
+      testUserId,
+      billingService
+    );
+    expect(saveRes.savedCount).toBe(1);
+
+    // 4. Verify MONTHLY_UTILITY updated to 870 (730 + 140) and RENT is still PAID 4000
+    const updatedUtility = await prisma.bill.findUnique({ where: { id: utilityRes.bill.id } });
+    expect(Number(updatedUtility!.totalAmount)).toBe(870);
+
+    const rentCheck = await prisma.bill.findUnique({ where: { id: rentRes.bill.id } });
+    expect(rentCheck!.status).toBe('paid');
+    expect(Number(rentCheck!.totalAmount)).toBe(4000);
   });
 });

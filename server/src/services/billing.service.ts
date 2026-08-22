@@ -108,6 +108,7 @@ export interface GenerateBillDto {
   tenantId?: string;
   billingDate?: string;
   dueDate?: string;
+  billKind?: 'MONTHLY_UTILITY' | 'RENT' | 'DEPOSIT' | 'LEGACY_COMBINED' | string;
   customItems?: Array<{
     type: string;
     description: string;
@@ -189,7 +190,8 @@ export class BillingService {
     dormitoryId: string,
     billingCycleId: string,
     roomId: string,
-    tx?: any
+    tx?: any,
+    billKind: string = 'MONTHLY_UTILITY'
   ): Promise<BillPreviewResult> {
     const cycle = await this.billingCycleRepo.findById(billingCycleId, dormitoryId);
     if (!cycle) {
@@ -278,94 +280,100 @@ export class BillingService {
 
     const items: Array<{ type: string; description: string; quantity: string; unit?: string; unitPrice: string; amount: string; metadata?: any }> = [];
 
-    // Rent Fee
-    if (contract) {
-      const contractSnapshot = await client.contractSnapshot.findUnique({
-        where: { contractId: contract.id },
-      });
-      const rentAmount = toDecimal(contract.rentAmount);
-      const installmentConfig = contractSnapshot?.installmentConfig as any;
-      if (installmentConfig && Array.isArray(installmentConfig.installmentSchedule) && installmentConfig.installmentSchedule.length > 0) {
-        const contractStart = new Date(contract.startDate);
-        const cycleStart = new Date(cycle.periodStart);
-        const cycleOffset = (cycleStart.getFullYear() - contractStart.getFullYear()) * 12 + (cycleStart.getMonth() - contractStart.getMonth());
-
-        const scheduleItem = installmentConfig.installmentSchedule.find((s: any) => s.cycleOffset === cycleOffset);
-        if (scheduleItem) {
-          items.push({
-            type: 'rent',
-            description: scheduleItem.description || `ค่าเช่าห้องพัก (งวดที่ ${scheduleItem.installmentNo}/${installmentConfig.selectedInstallments})`,
-            quantity: '1.00',
-            unit: 'installment',
-            unitPrice: scheduleItem.amount,
-            amount: scheduleItem.amount,
-            metadata: {
-              installmentNo: scheduleItem.installmentNo,
-              totalInstallments: installmentConfig.selectedInstallments,
-              termRentTotal: installmentConfig.termRentTotal,
-              cycleOffset,
-              isFinalInstallment: scheduleItem.installmentNo === installmentConfig.selectedInstallments,
-            },
-          });
-        }
-      } else {
-        items.push({
-          type: 'rent',
-          description: 'ค่าเช่าห้องพัก',
-          quantity: '1.00',
-          unit: 'month',
-          unitPrice: formatDecimal(rentAmount),
-          amount: formatDecimal(rentAmount),
+    // Rent Fee: ONLY include when billKind is 'RENT' or 'LEGACY_COMBINED' (MONTHLY_UTILITY never absorbs rent)
+    const shouldIncludeRent = billKind === 'RENT' || billKind === 'LEGACY_COMBINED';
+    if (shouldIncludeRent) {
+      if (contract) {
+        const contractSnapshot = await client.contractSnapshot.findUnique({
+          where: { contractId: contract.id },
         });
-      }
-    } else if (provisionalTerm) {
-      if (provisionalTerm.rentalType === 'MONTHLY') {
-        const unitRent = toDecimal(provisionalTerm.unitRentAmount.toString());
-        if (!isZeroDecimal(unitRent)) {
+        const rentAmount = toDecimal(contract.rentAmount);
+        const installmentConfig = contractSnapshot?.installmentConfig as any;
+        if (installmentConfig && Array.isArray(installmentConfig.installmentSchedule) && installmentConfig.installmentSchedule.length > 0) {
+          const contractStart = new Date(contract.startDate);
+          const cycleStart = new Date(cycle.periodStart);
+          const cycleOffset = (cycleStart.getFullYear() - contractStart.getFullYear()) * 12 + (cycleStart.getMonth() - contractStart.getMonth());
+
+          const scheduleItem = installmentConfig.installmentSchedule.find((s: any) => s.cycleOffset === cycleOffset);
+          if (scheduleItem) {
+            items.push({
+              type: 'rent',
+              description: scheduleItem.description || `ค่าเช่าห้องพัก (งวดที่ ${scheduleItem.installmentNo}/${installmentConfig.selectedInstallments})`,
+              quantity: '1.00',
+              unit: 'installment',
+              unitPrice: scheduleItem.amount,
+              amount: scheduleItem.amount,
+              metadata: {
+                installmentNo: scheduleItem.installmentNo,
+                totalInstallments: installmentConfig.selectedInstallments,
+                termRentTotal: installmentConfig.termRentTotal,
+                cycleOffset,
+                isFinalInstallment: scheduleItem.installmentNo === installmentConfig.selectedInstallments,
+              },
+            });
+          }
+        } else {
           items.push({
             type: 'rent',
             description: 'ค่าเช่าห้องพัก',
             quantity: '1.00',
             unit: 'month',
-            unitPrice: formatDecimal(unitRent),
-            amount: formatDecimal(unitRent),
-            metadata: {
-              provisionalRentalTermId: provisionalTerm.id,
-              rentalType: 'MONTHLY',
-            },
+            unitPrice: formatDecimal(rentAmount),
+            amount: formatDecimal(rentAmount),
           });
         }
-      } else {
-        // TERM
-        const installments = provisionalTerm.termInstallmentCount || 1;
-        const termStart = new Date(provisionalTerm.startDate);
-        const cycleStart = new Date(cycle.periodStart);
-        const cycleOffset = (cycleStart.getFullYear() - termStart.getFullYear()) * 12 + (cycleStart.getMonth() - termStart.getMonth());
+      } else if (provisionalTerm) {
+        if (provisionalTerm.rentalType === 'MONTHLY') {
+          const unitRent = toDecimal(provisionalTerm.unitRentAmount.toString());
+          if (!isZeroDecimal(unitRent)) {
+            items.push({
+              type: 'rent',
+              description: 'ค่าเช่าห้องพัก',
+              quantity: '1.00',
+              unit: 'month',
+              unitPrice: formatDecimal(unitRent),
+              amount: formatDecimal(unitRent),
+              metadata: {
+                provisionalRentalTermId: provisionalTerm.id,
+                rentalType: 'MONTHLY',
+              },
+            });
+          }
+        } else {
+          // TERM
+          const installments = provisionalTerm.termInstallmentCount || 1;
+          const termStart = new Date(provisionalTerm.startDate);
+          const cycleStart = new Date(cycle.periodStart);
+          const cycleOffset = (cycleStart.getFullYear() - termStart.getFullYear()) * 12 + (cycleStart.getMonth() - termStart.getMonth());
 
-        if (cycleOffset >= 0 && cycleOffset < installments) {
-          const schedule = calculateInstallmentSchedule(Number(provisionalTerm.totalRentAmount), installments);
-          const currentInstallment = schedule[cycleOffset];
-          const installmentAmt = toDecimal(currentInstallment.formattedAmount);
-          items.push({
-            type: 'rent',
-            description: `ค่าเช่าห้องพัก (งวดที่ ${cycleOffset + 1}/${installments})`,
-            quantity: '1.00',
-            unit: 'installment',
-            unitPrice: formatDecimal(installmentAmt),
-            amount: formatDecimal(installmentAmt),
-            metadata: {
-              provisionalRentalTermId: provisionalTerm.id,
-              rentalType: 'TERM',
-              installmentNo: cycleOffset + 1,
-              totalInstallments: installments,
-            },
-          });
+          if (cycleOffset >= 0 && cycleOffset < installments) {
+            const schedule = calculateInstallmentSchedule(Number(provisionalTerm.totalRentAmount), installments);
+            const currentInstallment = schedule[cycleOffset];
+            const installmentAmt = toDecimal(currentInstallment.formattedAmount);
+            items.push({
+              type: 'rent',
+              description: `ค่าเช่าห้องพัก (งวดที่ ${cycleOffset + 1}/${installments})`,
+              quantity: '1.00',
+              unit: 'installment',
+              unitPrice: formatDecimal(installmentAmt),
+              amount: formatDecimal(installmentAmt),
+              metadata: {
+                provisionalRentalTermId: provisionalTerm.id,
+                rentalType: 'TERM',
+                installmentNo: cycleOffset + 1,
+                totalInstallments: installments,
+              },
+            });
+          }
         }
       }
     }
 
+    // Utility Charges: ONLY include when billKind is 'MONTHLY_UTILITY' or 'LEGACY_COMBINED'
+    const shouldIncludeUtilities = billKind === 'MONTHLY_UTILITY' || billKind === 'LEGACY_COMBINED';
+
     // Water Fee
-    if (waterMode === 'per_unit') {
+    if (shouldIncludeUtilities && waterMode === 'per_unit') {
       const waterReading = await this.meterRepo.findReadingByCycleRoomAndType(
         dormitoryId,
         billingCycleId,
@@ -740,6 +748,7 @@ export class BillingService {
 
     const billingDate = resolveBillIssueDate(issuanceNow);
     const dueDate = resolveBillDueDate(issuanceNow, settings.dueDay);
+    const billKind = data.billKind || 'MONTHLY_UTILITY';
 
     const executeInTx = async (tx: any) => {
       await this.billRepo.executeRawLock(data.roomId, tx);
@@ -748,6 +757,7 @@ export class BillingService {
         dormitoryId,
         data.billingCycleId,
         data.roomId,
+        billKind,
         tx
       );
       if (existingBill) {
@@ -755,7 +765,7 @@ export class BillingService {
         return { bill: existingBill, items, created: false };
       }
 
-      const preview = await this.generateBillPreview(dormitoryId, data.billingCycleId, data.roomId, tx);
+      const preview = await this.generateBillPreview(dormitoryId, data.billingCycleId, data.roomId, tx, billKind);
       const rateSnapshot = await this.billingCycleRepo.findRateSnapshot(data.billingCycleId, dormitoryId);
 
       const billItems: CreateBillItemData[] = preview.items.map((i, idx) => ({
@@ -807,6 +817,7 @@ export class BillingService {
             provisionalRentalTermId: effectiveProvisionalRentalTermId,
             roomId: data.roomId,
             tenantId: effectiveTenantId,
+            billKind,
             billNumber,
             status: 'unpaid',
             billingDate,
@@ -828,6 +839,7 @@ export class BillingService {
             dormitoryId,
             data.billingCycleId,
             data.roomId,
+            billKind,
             tx
           );
           if (doubleCheckExisting) {
@@ -942,7 +954,7 @@ export class BillingService {
             await meterService.saveSingleRoomWorkspaceInTx(dormitoryId, billingCycleId, dirtyRow, userId, tx);
             const { bill, created } = await this.generateBill(
               dormitoryId,
-              { billingCycleId, roomId },
+              { billingCycleId, roomId, billKind: 'MONTHLY_UTILITY' },
               userId,
               issuanceNow,
               tx
@@ -987,7 +999,7 @@ export class BillingService {
           continue;
         }
 
-        const existing = await this.billRepo.findByCycleAndRoom(dormitoryId, billingCycleId, roomId);
+        const existing = await this.billRepo.findActiveMonthlyUtilityByRoomAndCycle(dormitoryId, billingCycleId, roomId);
         if (existing) {
           excluded.push({ roomId, reason: 'BILL_ALREADY_EXISTS' });
           continue;
@@ -999,6 +1011,7 @@ export class BillingService {
             {
               billingCycleId,
               roomId,
+              billKind: 'MONTHLY_UTILITY',
             },
             userId,
             issuanceNow

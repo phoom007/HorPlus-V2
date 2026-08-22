@@ -140,7 +140,7 @@ describe('LOCAL-07 Meter Workspace & Quick Add Comprehensive Frontend Suite', ()
       expect(preview.elecUsage).toBe('0.00');
       expect(preview.waterAmount).toBe('0.00');
       expect(preview.elecAmount).toBe('0.00');
-      expect(preview.totalAmount).toBe('3500.00');
+      expect(preview.totalAmount).toBe('0.00');
     });
   });
 
@@ -267,14 +267,14 @@ describe('LOCAL-07 Meter Workspace & Quick Add Comprehensive Frontend Suite', ()
         electricityBillingType: 'per_unit',
         electricityRate: '10.00',
       };
-      // Preview = 4000 (rent) + 150 (water) + 1000 (elec) = 5150.00
+      // Utility Preview = 150 (water) + 1000 (elec) = 1150.00 (Rent is independent)
       const breakdown = getOwnerFinancialBreakdown(row as any, roomCtx, rateSnapshot, [], 'cycle-1');
-      expect(breakdown.operationalAmount).toBe(5150);
-      expect(breakdown.formattedAmount).toBe('5,150.00');
+      expect(breakdown.operationalAmount).toBe(1150);
+      expect(breakdown.formattedAmount).toBe('1,150.00');
       expect(breakdown.components.length).toBe(1);
       expect(breakdown.components[0].label).toBe('บิลรายเดือน');
       expect(breakdown.components[0].status).toBe('PREVIEW');
-      expect(breakdown.components[0].formattedAmount).toBe('5,150.00');
+      expect(breakdown.components[0].formattedAmount).toBe('1,150.00');
     });
 
     it('proves Owner Amount Due remains same after issue and changes status to UNPAID', async () => {
@@ -308,14 +308,14 @@ describe('LOCAL-07 Meter Workspace & Quick Add Comprehensive Frontend Suite', ()
           roomId: 'r-1',
           billingCycleId: 'cycle-1',
           billKind: 'MONTHLY_UTILITY' as const,
-          totalAmount: '5150.00',
-          outstandingAmount: '5150.00',
+          totalAmount: '1150.00',
+          outstandingAmount: '1150.00',
           status: 'ISSUED' as const,
         }
       ];
       const breakdown = getOwnerFinancialBreakdown(row as any, roomCtx, rateSnapshot, bills as any, 'cycle-1');
-      expect(breakdown.operationalAmount).toBe(5150);
-      expect(breakdown.formattedAmount).toBe('5,150.00');
+      expect(breakdown.operationalAmount).toBe(1150);
+      expect(breakdown.formattedAmount).toBe('1,150.00');
       expect(breakdown.components[0].label).toBe('บิลรายเดือน');
       expect(breakdown.components[0].status).toBe('UNPAID');
     });

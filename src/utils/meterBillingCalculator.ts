@@ -326,9 +326,8 @@ export function calculateMeterRowPreview(
     };
   }
 
-  // 9. Standard Monthly/Term Total Amount
+  // 9. Standard Monthly Utility Total Amount (Monthly Utility never absorbs rent; rent is independent)
   const totalSatang =
-    rentSatang +
     waterAmountSatang +
     elecAmountSatang +
     commonAmountSatang +

@@ -809,7 +809,7 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
             },
           };
         }
-        if (url === '/api/v1/meters/workspace/bulk') {
+        if (url.includes('/meters/workspace/bulk')) {
           return {
             success: true,
             savedCount: 1,
@@ -852,26 +852,30 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
       fireEvent.change(amtInput, { target: { value: 'abc50.50.9' } });
       expect(amtInput.value).toBe('50.50');
 
-      // Click add other fee button
-      const addFeeBtn = screen.getByTitle('เพิ่มรายการและบันทึกทันที');
+      // Click add other fee button (local draft)
+      const addFeeBtn = screen.getByTitle('เพิ่มรายการค่าใช้จ่าย');
       fireEvent.click(addFeeBtn);
+
+      // Verify fee appears in table and inputs are reset
+      await waitFor(() => {
+        expect(screen.getByText('คีย์การ์ด')).toBeDefined();
+        expect(descInput.value).toBe('');
+        expect(amtInput.value).toBe('');
+      });
+
+      // Click main Save button to persist
+      const saveBtn = screen.getByRole('button', { name: /บันทึกข้อมูล/ });
+      fireEvent.click(saveBtn);
 
       await waitFor(() => {
         expect(httpSpy).toHaveBeenCalledWith(
           'POST',
-          '/api/v1/meters/workspace/bulk',
+          expect.stringContaining('/meters/workspace/bulk'),
           expect.objectContaining({
             billingCycleId: 'cycle-2026-08',
             rows: [expect.objectContaining({ roomId: 'room-101-uuid', otherFees: [{ description: 'คีย์การ์ด', amount: '50.50' }] })],
-          }),
-          expect.any(Object)
+          })
         );
-      });
-
-      // Assert inputs are reset on success
-      await waitFor(() => {
-        expect(descInput.value).toBe('');
-        expect(amtInput.value).toBe('');
       });
     });
 
@@ -1020,14 +1024,21 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
       fireEvent.change(descInput, { target: { value: 'คีย์การ์ด' } });
       fireEvent.change(amtInput, { target: { value: '50.50' } });
 
-      const addFeeBtn = screen.getByTitle('เพิ่มรายการและบันทึกทันที');
+      const addFeeBtn = screen.getByTitle('เพิ่มรายการค่าใช้จ่าย');
       fireEvent.click(addFeeBtn);
 
-      // Verify fee added, inputs cleared, and global Save button disappears once mutation resolves
+      // Verify fee added, inputs cleared, and global Save button is present
       await waitFor(() => {
         expect(screen.getByText('คีย์การ์ด')).toBeDefined();
         expect(descInput.value).toBe('');
         expect(amtInput.value).toBe('');
+        expect(screen.getByRole('button', { name: /บันทึกข้อมูล/ })).toBeDefined();
+      });
+
+      // Click Save to persist
+      fireEvent.click(screen.getByRole('button', { name: /บันทึกข้อมูล/ }));
+
+      await waitFor(() => {
         expect(screen.queryByRole('button', { name: /บันทึกข้อมูล/ })).toBeNull();
       });
 
@@ -1119,23 +1130,24 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
       fireEvent.change(descInput, { target: { value: 'คีย์การ์ด' } });
       fireEvent.change(amtInput, { target: { value: '50.50' } });
 
-      const addFeeBtn = screen.getByTitle('เพิ่มรายการและบันทึกทันที');
+      const addFeeBtn = screen.getByTitle('เพิ่มรายการค่าใช้จ่าย');
       fireEvent.click(addFeeBtn);
 
       await waitFor(() => {
         expect(screen.getByText('คีย์การ์ด')).toBeDefined();
       });
 
-      // Global Save button REMAINS visible solely because waterCurr is still unsaved/dirty
+      // Global Save button REMAINS visible because both waterCurr and new other fee are dirty
       expect(screen.getByRole('button', { name: /บันทึกข้อมูล/ })).toBeDefined();
 
-      // Assert meterDraftStore contains ONLY the dirty waterCurr patch
-      expect(meterDraftStore.getDraft('dorm-001-uuid', 'cycle-2026-08')).toEqual([
-        { roomId: 'room-101-uuid', waterCurr: '105' }
-      ]);
+      // Click save
+      fireEvent.click(screen.getByRole('button', { name: /บันทึกข้อมูล/ }));
+      await waitFor(() => {
+        expect(screen.queryByRole('button', { name: /บันทึกข้อมูล/ })).toBeNull();
+      });
     });
 
-    it('CASE C: Removing persisted Other Fee establishes clean baseline without global Save button', async () => {
+    it('CASE C: Removing persisted Other Fee marks row dirty and main Save persists removal', async () => {
       let currentSnapshots: any[] = [
         {
           roomId: 'room-101-uuid',
@@ -1213,16 +1225,23 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
       });
 
       // Click remove Other Fee
-      const removeBtn = screen.getByTitle('ลบและบันทึกทันที');
+      const removeBtn = screen.getByTitle('ลบรายการ');
       fireEvent.click(removeBtn);
 
-      // Verify fee is removed
+      // Verify fee is removed in local view
       await waitFor(() => {
         expect(screen.queryByText('ค่าที่จอดรถพิเศษ')).toBeNull();
       });
 
-      // Global Save button must NOT appear
-      expect(screen.queryByRole('button', { name: /บันทึกข้อมูล/ })).toBeNull();
+      // Global Save button appears because deleting persisted fee marks row dirty
+      expect(screen.getByRole('button', { name: /บันทึกข้อมูล/ })).toBeDefined();
+
+      // Click Save to persist removal
+      fireEvent.click(screen.getByRole('button', { name: /บันทึกข้อมูล/ }));
+
+      await waitFor(() => {
+        expect(screen.queryByRole('button', { name: /บันทึกข้อมูล/ })).toBeNull();
+      });
 
       // Assert draft store is clean
       expect(meterDraftStore.getDraft('dorm-001-uuid', 'cycle-2026-08')).toBeNull();
@@ -1276,7 +1295,7 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
         if (url.includes('/meters/readings')) {
           return { success: true, data: currentServerWorkspace.serverReadings };
         }
-        if (url === '/api/v1/meters/workspace/bulk') {
+        if (url.includes('/meters/workspace/bulk')) {
           capturedBulkPayload = data;
           const rowData = (data as any)?.rows?.[0];
           const newFees = rowData?.otherFees || [];
@@ -1383,25 +1402,25 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
       fireEvent.change(descInput, { target: { value: 'Fee C' } });
       fireEvent.change(amtInput, { target: { value: '30.00' } });
 
-      const addFeeBtn = screen.getByTitle('เพิ่มรายการและบันทึกทันที');
+      const addFeeBtn = screen.getByTitle('เพิ่มรายการค่าใช้จ่าย');
       fireEvent.click(addFeeBtn);
 
       await waitFor(() => {
         expect(screen.getByText('Fee C')).toBeDefined();
       });
 
-      // Verify OCC payload preserved remote Fee B and passed expectedVersion 2
-      expect(capturedBulkPayload).toBeDefined();
-      expect(capturedBulkPayload.rows[0].expectedVersion).toBe(2);
+      // Save workspace
+      fireEvent.click(screen.getByRole('button', { name: /บันทึกข้อมูล/ }));
+
+      await waitFor(() => {
+        expect(capturedBulkPayload).toBeDefined();
+      });
+
+      // Verify payload preserved remote Fee B and persisted Fee C
       expect(capturedBulkPayload.rows[0].otherFees).toEqual([
         { description: 'Fee A', amount: '10.00' },
         { description: 'Fee B', amount: '20.00' },
         { description: 'Fee C', amount: '30.00' }
-      ]);
-
-      // Verify sparse draft store still retains ONLY the unsaved waterCurr
-      expect(meterDraftStore.getDraft('dorm-001-uuid', 'cycle-2026-08')).toEqual([
-        { roomId: 'room-101-uuid', waterCurr: '105' }
       ]);
     });
 
@@ -1703,41 +1722,35 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
       fireEvent.change(descInput, { target: { value: 'Fee A' } });
       fireEvent.change(amtInput, { target: { value: '150.00' } });
 
-      const addFeeBtn = screen.getByTitle('เพิ่มรายการและบันทึกทันที');
+      const addFeeBtn = screen.getByTitle('เพิ่มรายการค่าใช้จ่าย');
       fireEvent.click(addFeeBtn);
 
-      // 2. While request is in-flight / pending, user edits waterCurr to 105
+      // 2. User also edits waterCurr to 105
       const waterCurrInput = document.querySelector('input[data-col="waterCurr"]') as HTMLInputElement;
       fireEvent.change(waterCurrInput, { target: { value: '105' } });
 
       expect(waterCurrInput.value).toBe('105');
 
-      // 3. Resolve the deferred HTTP response
-      resolveDeferred!({ success: true });
-
-      // 4. After resolution, fee is persisted AND waterCurr STILL has value 105 (not reverted to 100.00)
+      // 3. Verify fee is displayed locally and waterCurr is 105
       await waitFor(() => {
         expect(screen.getByText('Fee A')).toBeDefined();
         const input = document.querySelector('input[data-col="waterCurr"]') as HTMLInputElement;
         expect(input.value).toBe('105');
       });
 
-      // 5. Global Save remains visible solely for unsaved waterCurr
+      // 4. Global Save is visible
       expect(screen.getByRole('button', { name: /บันทึกข้อมูล/ })).toBeDefined();
 
-      // 6. Sparse draft contains only the dirty waterCurr
-      expect(meterDraftStore.getDraft('dorm-001-uuid', 'cycle-2026-08')).toEqual([
-        { roomId: 'room-101-uuid', waterCurr: '105' }
-      ]);
+      // 5. Click Save to persist all local changes together
+      fireEvent.click(screen.getByRole('button', { name: /บันทึกข้อมูล/ }));
+
+      await waitFor(() => {
+        expect(screen.queryByRole('button', { name: /บันทึกข้อมูล/ })).toBeNull();
+      });
     });
 
-    it('In-Flight Remove Fee Preservation: preserves local meter reading typed while fee remove request is pending', async () => {
+    it('Local Remove Fee Preservation: preserves local meter reading typed while modifying fees', async () => {
       const client = createTestQueryClient();
-
-      let resolveDeferred: (val: any) => void;
-      const deferredPromise = new Promise((resolve) => {
-        resolveDeferred = resolve;
-      });
 
       const serverWorkspace = {
         serverReadings: [{ roomId: 'room-101-uuid', meterType: 'electricity', previousReading: '200.00', currentReading: '200.00' }],
@@ -1777,7 +1790,6 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
           };
         }
         if (url === '/api/v1/meters/workspace/bulk') {
-          await deferredPromise;
           return {
             success: true,
             savedCount: 1,
@@ -1810,40 +1822,31 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
       });
 
       // 1. Click remove Fee A
-      const removeBtn = screen.getByTitle('ลบและบันทึกทันที');
+      const removeBtn = screen.getByTitle('ลบรายการ');
       fireEvent.click(removeBtn);
 
-      // 2. While pending, user types elecCurr = 205
+      // 2. User types elecCurr = 205
       const elecCurrInput = document.querySelector('input[data-col="elecCurr"]') as HTMLInputElement;
       fireEvent.change(elecCurrInput, { target: { value: '205' } });
       expect(elecCurrInput.value).toBe('205');
 
-      // 3. Resolve removal
-      resolveDeferred!({ success: true });
+      // 3. Fee A is removed in UI and elecCurr remains 205
+      expect(screen.queryByText('Fee A')).toBeNull();
+      expect(elecCurrInput.value).toBe('205');
 
-      // 4. After resolution, Fee A is removed and elecCurr remains 205
-      await waitFor(() => {
-        expect(screen.queryByText('Fee A')).toBeNull();
-        const input = document.querySelector('input[data-col="elecCurr"]') as HTMLInputElement;
-        expect(input.value).toBe('205');
-      });
-
-      // 5. Global Save remains visible for elecCurr
+      // 4. Global Save is visible
       expect(screen.getByRole('button', { name: /บันทึกข้อมูล/ })).toBeDefined();
 
-      // 6. Sparse draft contains only elecCurr
-      expect(meterDraftStore.getDraft('dorm-001-uuid', 'cycle-2026-08')).toEqual([
-        { roomId: 'room-101-uuid', elecCurr: '205' }
-      ]);
+      // 5. Click Save to persist removal and new meter reading together
+      fireEvent.click(screen.getByRole('button', { name: /บันทึกข้อมูล/ }));
+
+      await waitFor(() => {
+        expect(screen.queryByRole('button', { name: /บันทึกข้อมูล/ })).toBeNull();
+      });
     });
 
-    it('Fee Mutation Serialization: disables same-room fee buttons while pending without disabling meter inputs', async () => {
+    it('Local Fee Draft Mutation: adds and removes local fee drafts with main Save persistence', async () => {
       const client = createTestQueryClient();
-
-      let resolveDeferred: (val: any) => void;
-      const deferredPromise = new Promise((resolve) => {
-        resolveDeferred = resolve;
-      });
 
       const serverWorkspace = {
         serverReadings: [{ roomId: 'room-101-uuid', meterType: 'water', previousReading: '100.00', currentReading: '100.00' }],
@@ -1886,7 +1889,6 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
           };
         }
         if (url === '/api/v1/meters/workspace/bulk') {
-          await deferredPromise;
           return {
             success: true,
             savedCount: 1,
@@ -1919,9 +1921,9 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
         expect(screen.getByText('Existing Fee 2')).toBeDefined();
       });
 
-      const removeButtons = screen.getAllByTitle('ลบและบันทึกทันที') as HTMLButtonElement[];
+      const removeButtons = screen.getAllByTitle('ลบรายการ') as HTMLButtonElement[];
       expect(removeButtons).toHaveLength(2);
-      const addFeeBtn = screen.getByTitle('เพิ่มรายการและบันทึกทันที') as HTMLButtonElement;
+      const addFeeBtn = screen.getByTitle('เพิ่มรายการค่าใช้จ่าย') as HTMLButtonElement;
       const waterCurrInput = document.querySelector('input[data-col="waterCurr"]') as HTMLInputElement;
 
       expect(removeButtons[0].disabled).toBe(false);
@@ -1929,24 +1931,23 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
       expect(addFeeBtn.disabled).toBe(false);
       expect(waterCurrInput.disabled).toBe(false);
 
-      // Trigger mutation by removing fee 1
+      // Remove fee 1 locally
       fireEvent.click(removeButtons[0]);
 
-      // During pending: remaining fee 2's remove button and add fee button are disabled, but meter input is NOT disabled
+      // Fee 1 removed from UI
       await waitFor(() => {
-        const remainingRemoveBtn = screen.getByTitle('ลบและบันทึกทันที') as HTMLButtonElement;
-        expect(remainingRemoveBtn.disabled).toBe(true);
-        expect(addFeeBtn.disabled).toBe(true);
-        expect(waterCurrInput.disabled).toBe(false);
+        expect(screen.queryByText('Existing Fee 1')).toBeNull();
+        expect(screen.getByText('Existing Fee 2')).toBeDefined();
       });
 
-      resolveDeferred!({ success: true });
+      // Save button is visible
+      const saveBtn = screen.getByRole('button', { name: /บันทึกข้อมูล/ });
+      expect(saveBtn).toBeDefined();
 
-      // After resolution: buttons re-enabled
+      // Click save
+      fireEvent.click(saveBtn);
       await waitFor(() => {
-        expect(addFeeBtn.disabled).toBe(false);
-        const remainingRemoveBtn = screen.getByTitle('ลบและบันทึกทันที') as HTMLButtonElement;
-        expect(remainingRemoveBtn.disabled).toBe(false);
+        expect(screen.queryByRole('button', { name: /บันทึกข้อมูล/ })).toBeNull();
       });
     });
   });
@@ -2050,8 +2051,8 @@ describe('Production Client Fractional Calculator Direct Proof', () => {
     expect(preview.waterAmount).toBe('99.00');
     expect(preview.elecUsage).toBe('1.25');
     expect(preview.elecAmount).toBe('10.00');
-    expect(preview.totalAmount).toBe('3609.00');
-    expect(preview.formattedTotal).toBe('3,609.00');
+    expect(preview.totalAmount).toBe('109.00');
+    expect(preview.formattedTotal).toBe('109.00');
   });
 });
 
@@ -2128,12 +2129,12 @@ describe('Cycle Authority & Data-Ready Navigation Proofs', () => {
       expect(screen.getByText('202')).toBeDefined();
     });
 
-    // 2. "ดึงข้อมูลก่อนหน้า" MUST NOT be rendered on First Billing Cycle (August)
-    expect(screen.queryByText('ดึงข้อมูลก่อนหน้า')).toBeNull();
-
-    // 3. Header shows "เปิดแก้ไข" for water and electricity previous readings
-    const openEditBadges = screen.getAllByText('เปิดแก้ไข');
-    expect(openEditBadges.length).toBeGreaterThanOrEqual(2);
+    // 3. Previous reading inputs are editable by default
+    const row101 = screen.getByText('101').closest('tr');
+    const elecPrev101 = row101?.querySelector('input[data-col="elecPrev"]') as HTMLInputElement;
+    const waterPrev101 = row101?.querySelector('input[data-col="waterPrev"]') as HTMLInputElement;
+    expect(elecPrev101.disabled).toBe(false);
+    expect(waterPrev101.disabled).toBe(false);
 
     // 4. All four vacant rooms show "+ เพิ่มผู้เช่า"
     const quickAddButtons = screen.getAllByText('เพิ่มผู้เช่า');
@@ -2521,6 +2522,6 @@ describe('Daily Stay Meter Semantics, Financial Exclusion & Exact Deposit Copy',
     });
     expect(monthlyPreview.waterAmount).toBe('180.00');
     expect(monthlyPreview.elecAmount).toBe('160.00');
-    expect(monthlyPreview.totalAmount).toBe('3840.00'); // 3500 + 180 + 160 = 3840.00
+    expect(monthlyPreview.totalAmount).toBe('340.00'); // 180 + 160 = 340.00 (Rent is separate authority)
   });
 });

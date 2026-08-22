@@ -294,31 +294,33 @@ export function getOwnerFinancialBreakdown(
 ): OwnerFinancialBreakdown {
   if (roomCtx?.billingSource === 'DAILY_STAY') {
     const baseRent = Number(roomCtx.rentAmount) || 0;
-    const depositDue = (roomCtx.showDailyDepositLine && !roomCtx.isDailyDepositPaidInDisplayedPeriod)
+    const isDailyRentPaid = Boolean(roomCtx?.isDailyRentPaid || roomCtx?.isDailyPaid || roomCtx?.isPaid);
+    const isDailyDepositPaid = Boolean(roomCtx?.isDailyDepositPaidInDisplayedPeriod || roomCtx?.isDepositPaid);
+    const depositDue = (roomCtx.showDailyDepositLine && !isDailyDepositPaid)
       ? (Number(roomCtx.dailyDepositAmount) || 0)
       : 0;
-    const totalDailyDue = baseRent + depositDue;
+    const rentDue = isDailyRentPaid ? 0 : baseRent;
+    const totalDailyDue = rentDue + depositDue;
 
     const components: TopLevelFinancialComponent[] = [];
     if (roomCtx.showDailyDepositLine) {
-      const isPaid = Boolean(roomCtx.isDailyDepositPaidInDisplayedPeriod);
       const depAmt = Number(roomCtx.dailyDepositAmount || 0);
       components.push({
         label: 'ค่าประกัน',
         amount: depAmt,
         formattedAmount: formatMoneyDisplay(formatScaled2(parseScaled2(depAmt))),
-        status: isPaid ? 'PAID' : 'UNPAID',
-        title: isPaid ? 'ชำระแล้ว' : 'รอชำระเงิน',
+        status: isDailyDepositPaid ? 'PAID' : 'UNPAID',
+        title: isDailyDepositPaid ? 'ชำระแล้ว' : 'รอชำระเงิน',
       });
     }
 
     if (baseRent > 0) {
       components.push({
-        label: 'ค่าเช่า (รายวัน)',
+        label: 'ค่าเช่า (วัน)',
         amount: baseRent,
         formattedAmount: formatMoneyDisplay(formatScaled2(parseScaled2(baseRent))),
-        status: 'UNPAID',
-        title: 'รอชำระเงิน',
+        status: isDailyRentPaid ? 'PAID' : 'UNPAID',
+        title: isDailyRentPaid ? 'ชำระแล้ว' : 'รอชำระเงิน',
       });
     }
 
@@ -577,8 +579,6 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     })()
   );
 
-  const [allowEditAllElecPrev, setAllowEditAllElecPrev] = useState(false);
-  const [allowEditAllWaterPrev, setAllowEditAllWaterPrev] = useState(false);
   const [flashingCells, setFlashingCells] = useState<{ [key: string]: boolean }>({});
   const [issuedRoomsFromHeader, setIssuedRoomsFromHeader] = useState<string[]>([]);
   const [wasIssueAllPressed, setWasIssueAllPressed] = useState(false);
@@ -806,9 +806,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     return cleaned;
   };
 
-  const handleAddOtherFee = async (roomId: string) => {
-    if (pendingFeeRooms[roomId]) return;
-
+  const handleAddOtherFee = (roomId: string) => {
     const input = newFeeInputs[roomId];
     const cleanDesc = (input?.description || '').trim();
     const amtStr = (input?.amount || '').trim();
@@ -828,197 +826,39 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     const prevFees = currentRow.otherFees || [];
     const formattedAmt = String(amtStr);
     const nextFees = [...prevFees, { description: cleanDesc, amount: formattedAmt }];
-    const expectedVersion = currentRow.snapshotVersion ?? 0;
 
-    setPendingFeeRooms(prev => ({ ...prev, [roomId]: true }));
-
-    // Optimistic update
+    // 1. Update React meterRows state
     setMeterRows(prev => prev.map(r => r.roomId === roomId ? { ...r, otherFees: nextFees } : r));
 
-    try {
-      const res = await httpRequest<{ success: boolean; savedRows?: Array<{ roomId: string; version: number }> }>(
-        'POST',
-        '/api/v1/meters/workspace/bulk',
-        {
-          billingCycleId: selectedBillingCycleId,
-          rows: [{
-            roomId,
-            otherFees: nextFees.map(f => ({ description: f.description, amount: String(f.amount) })),
-            expectedVersion,
-          }],
-        },
-        { headers: currentDormId ? { 'x-dormitory-id': currentDormId } : {} }
-      );
+    // 2. Clear input fields
+    setNewFeeInputs(prev => ({
+      ...prev,
+      [roomId]: { description: '', amount: '' },
+    }));
 
-      const savedMeta = res?.savedRows?.find(r => r.roomId === roomId);
-      const nextVer = savedMeta?.version ?? (expectedVersion + 1);
-
-      // 1. Update React meterRows state using functional updater to preserve in-flight local edits
-      setMeterRows(prev => prev.map(r => r.roomId === roomId ? { ...r, otherFees: nextFees, snapshotVersion: nextVer } : r));
-
-      // 2. Synchronously patch ONLY otherFees and snapshotVersion in originalRowsRef baseline
-      if (originalRowsRef.current) {
-        const origIdx = originalRowsRef.current.findIndex(r => r.roomId === roomId);
-        if (origIdx !== -1) {
-          originalRowsRef.current[origIdx] = {
-            ...originalRowsRef.current[origIdx],
-            otherFees: nextFees,
-            snapshotVersion: nextVer,
-          };
-        }
-      }
-
-      // 3. Recompute sparse draft patches using latest row state merged with confirmed fee and version
-      if (currentDormId && selectedBillingCycleId && originalRowsRef.current) {
-        const latestRows = meterRowsRef.current.map(r => r.roomId === roomId ? { ...r, otherFees: nextFees, snapshotVersion: nextVer } : r);
-        const patches = deriveMeterDraftPatches(latestRows, originalRowsRef.current);
-        meterDraftStore.setDraft(currentDormId, selectedBillingCycleId, patches);
-      }
-
-      // 4. Clear controlled inputs on success
-      setNewFeeInputs(prev => ({
-        ...prev,
-        [roomId]: { description: '', amount: '' },
-      }));
-
-      // 5. Optimistically update TanStack Query cache
-      queryClient.setQueryData(queryKeys.meterWorkspace(currentDormId, selectedBillingCycleId), (oldData: any) => {
-        if (!oldData) return oldData;
-        const existingSnapshots = Array.isArray(oldData.cyclePeopleRes?.data) ? [...oldData.cyclePeopleRes.data] : [];
-        const snapIdx = existingSnapshots.findIndex((s: any) => s.roomId === roomId);
-        const updatedSnapshot = {
-          ...(snapIdx !== -1 ? existingSnapshots[snapIdx] : { roomId }),
-          otherFees: nextFees.map(f => ({ description: f.description, amount: String(f.amount) })),
-          version: nextVer,
-        };
-        if (snapIdx !== -1) {
-          existingSnapshots[snapIdx] = updatedSnapshot;
-        } else {
-          existingSnapshots.push(updatedSnapshot);
-        }
-        return {
-          ...oldData,
-          cyclePeopleRes: {
-            ...oldData.cyclePeopleRes,
-            success: true,
-            data: existingSnapshots,
-          },
-        };
-      });
-
-      queryClient.invalidateQueries({ queryKey: queryKeys.meterWorkspace(currentDormId, selectedBillingCycleId) });
-      queryClient.invalidateQueries({ queryKey: queryKeys.meterPreviewContext(currentDormId, selectedBillingCycleId) });
-    } catch (err: any) {
-      // Rollback ONLY otherFees on error, preserving in-flight meter reading edits
-      setMeterRows(prev => prev.map(r => r.roomId === roomId ? { ...r, otherFees: prevFees } : r));
-      const isStale = err?.status === 409 || err?.domainError?.code === 'STALE_VERSION' || err?.message?.includes('STALE_VERSION') || err?.message?.includes('เปลี่ยนแปลงโดยผู้ใช้อื่น');
-      if (isStale) {
-        showToast('ข้อมูลมิเตอร์ของห้องนี้ถูกเปลี่ยนแปลงโดยผู้ใช้อื่น ระบบกำลังโหลดข้อมูลล่าสุด');
-        queryClient.invalidateQueries({ queryKey: queryKeys.meterWorkspace(currentDormId, selectedBillingCycleId) });
-        queryClient.invalidateQueries({ queryKey: queryKeys.meterPreviewContext(currentDormId, selectedBillingCycleId) });
-      } else {
-        showToast(err.message || 'ไม่สามารถบันทึกค่าใช้จ่ายเพิ่มเติมได้');
-      }
-    } finally {
-      setPendingFeeRooms(prev => ({ ...prev, [roomId]: false }));
+    // 3. Update localStorage drafts
+    if (currentDormId && selectedBillingCycleId && originalRowsRef.current) {
+      const latestRows = meterRowsRef.current.map(r => r.roomId === roomId ? { ...r, otherFees: nextFees } : r);
+      const patches = deriveMeterDraftPatches(latestRows, originalRowsRef.current);
+      meterDraftStore.setDraft(currentDormId, selectedBillingCycleId, patches);
     }
   };
 
-  const handleRemoveOtherFee = async (roomId: string, feeIdx: number) => {
-    if (pendingFeeRooms[roomId]) return;
-
+  const handleRemoveOtherFee = (roomId: string, feeIdx: number) => {
     const currentRow = meterRowsRef.current.find(r => r.roomId === roomId) || meterRows.find(r => r.roomId === roomId);
     if (!currentRow) return;
 
     const prevFees = currentRow.otherFees || [];
     const nextFees = prevFees.filter((_, idx) => idx !== feeIdx);
-    const expectedVersion = currentRow.snapshotVersion ?? 0;
 
-    setPendingFeeRooms(prev => ({ ...prev, [roomId]: true }));
-
-    // Optimistic update
+    // 1. Update React meterRows state
     setMeterRows(prev => prev.map(r => r.roomId === roomId ? { ...r, otherFees: nextFees } : r));
 
-    try {
-      const res = await httpRequest<{ success: boolean; savedRows?: Array<{ roomId: string; version: number }> }>(
-        'POST',
-        '/api/v1/meters/workspace/bulk',
-        {
-          billingCycleId: selectedBillingCycleId,
-          rows: [{
-            roomId,
-            otherFees: nextFees.map(f => ({ description: f.description, amount: String(f.amount) })),
-            expectedVersion,
-          }],
-        },
-        { headers: currentDormId ? { 'x-dormitory-id': currentDormId } : {} }
-      );
-
-      const savedMeta = res?.savedRows?.find(r => r.roomId === roomId);
-      const nextVer = savedMeta?.version ?? (expectedVersion + 1);
-
-      // 1. Update React meterRows state using functional updater to preserve in-flight edits
-      setMeterRows(prev => prev.map(r => r.roomId === roomId ? { ...r, otherFees: nextFees, snapshotVersion: nextVer } : r));
-
-      // 2. Synchronously patch ONLY otherFees and snapshotVersion in originalRowsRef baseline
-      if (originalRowsRef.current) {
-        const origIdx = originalRowsRef.current.findIndex(r => r.roomId === roomId);
-        if (origIdx !== -1) {
-          originalRowsRef.current[origIdx] = {
-            ...originalRowsRef.current[origIdx],
-            otherFees: nextFees,
-            snapshotVersion: nextVer,
-          };
-        }
-      }
-
-      // 3. Recompute sparse draft patches
-      if (currentDormId && selectedBillingCycleId && originalRowsRef.current) {
-        const latestRows = meterRowsRef.current.map(r => r.roomId === roomId ? { ...r, otherFees: nextFees, snapshotVersion: nextVer } : r);
-        const patches = deriveMeterDraftPatches(latestRows, originalRowsRef.current);
-        meterDraftStore.setDraft(currentDormId, selectedBillingCycleId, patches);
-      }
-
-      // 4. Optimistically update TanStack Query cache
-      queryClient.setQueryData(queryKeys.meterWorkspace(currentDormId, selectedBillingCycleId), (oldData: any) => {
-        if (!oldData) return oldData;
-        const existingSnapshots = Array.isArray(oldData.cyclePeopleRes?.data) ? [...oldData.cyclePeopleRes.data] : [];
-        const snapIdx = existingSnapshots.findIndex((s: any) => s.roomId === roomId);
-        const updatedSnapshot = {
-          ...(snapIdx !== -1 ? existingSnapshots[snapIdx] : { roomId }),
-          otherFees: nextFees.map(f => ({ description: f.description, amount: String(f.amount) })),
-          version: nextVer,
-        };
-        if (snapIdx !== -1) {
-          existingSnapshots[snapIdx] = updatedSnapshot;
-        } else {
-          existingSnapshots.push(updatedSnapshot);
-        }
-        return {
-          ...oldData,
-          cyclePeopleRes: {
-            ...oldData.cyclePeopleRes,
-            success: true,
-            data: existingSnapshots,
-          },
-        };
-      });
-
-      queryClient.invalidateQueries({ queryKey: queryKeys.meterWorkspace(currentDormId, selectedBillingCycleId) });
-      queryClient.invalidateQueries({ queryKey: queryKeys.meterPreviewContext(currentDormId, selectedBillingCycleId) });
-    } catch (err: any) {
-      // Rollback ONLY otherFees
-      setMeterRows(prev => prev.map(r => r.roomId === roomId ? { ...r, otherFees: prevFees } : r));
-      const isStale = err?.status === 409 || err?.domainError?.code === 'STALE_VERSION' || err?.message?.includes('STALE_VERSION') || err?.message?.includes('เปลี่ยนแปลงโดยผู้ใช้อื่น');
-      if (isStale) {
-        showToast('ข้อมูลมิเตอร์ของห้องนี้ถูกเปลี่ยนแปลงโดยผู้ใช้อื่น ระบบกำลังโหลดข้อมูลล่าสุด');
-        queryClient.invalidateQueries({ queryKey: queryKeys.meterWorkspace(currentDormId, selectedBillingCycleId) });
-        queryClient.invalidateQueries({ queryKey: queryKeys.meterPreviewContext(currentDormId, selectedBillingCycleId) });
-      } else {
-        showToast(err.message || 'ไม่สามารถลบค่าใช้จ่ายเพิ่มเติมได้');
-      }
-    } finally {
-      setPendingFeeRooms(prev => ({ ...prev, [roomId]: false }));
+    // 2. Update localStorage drafts
+    if (currentDormId && selectedBillingCycleId && originalRowsRef.current) {
+      const latestRows = meterRowsRef.current.map(r => r.roomId === roomId ? { ...r, otherFees: nextFees } : r);
+      const patches = deriveMeterDraftPatches(latestRows, originalRowsRef.current);
+      meterDraftStore.setDraft(currentDormId, selectedBillingCycleId, patches);
     }
   };
 
@@ -1635,17 +1475,15 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   };
 
   const getRowEditableFields = (row: MeterRowState) => {
+    const isRowPaid = row.isPaid || row.billStatus === 'paid';
+    if (isRowPaid) return [];
     const fields: ('elecPrev' | 'elecCurr' | 'waterPrev' | 'waterCurr' | 'peopleCount' | 'overdueAmount')[] = [];
     if (isElecUnit) {
-      if (isFirstCycle || row.editElecPrev || allowEditAllElecPrev) {
-        fields.push('elecPrev');
-      }
+      fields.push('elecPrev');
       fields.push('elecCurr');
     }
     if (isWaterUnit) {
-      if (isFirstCycle || row.editWaterPrev || allowEditAllWaterPrev) {
-        fields.push('waterPrev');
-      }
+      fields.push('waterPrev');
       fields.push('waterCurr');
     }
     fields.push('peopleCount');
@@ -1733,21 +1571,14 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     });
   };
 
-  const handleToggleEditAllElec = () => {
-    const nextVal = !allowEditAllElecPrev;
-    setAllowEditAllElecPrev(nextVal);
-    setMeterRows(prev => prev.map(row => ({ ...row, editElecPrev: nextVal })));
-  };
-
-  const handleToggleEditAllWater = () => {
-    const nextVal = !allowEditAllWaterPrev;
-    setAllowEditAllWaterPrev(nextVal);
-    setMeterRows(prev => prev.map(row => ({ ...row, editWaterPrev: nextVal })));
-  };
-
   const filterMeaningfulFees = (fees?: Array<{ description?: string; amount?: number | string }>) => {
     return (fees || [])
-      .filter(f => f && (String(f.description || '').trim() !== '' || (f.amount !== '' && f.amount !== undefined && f.amount !== null && Number(f.amount) > 0)))
+      .filter(f => {
+        if (!f) return false;
+        const desc = String(f.description || '').trim();
+        const amtStr = String(f.amount || '').trim();
+        return desc !== '' && amtStr !== '' && !isNaN(Number(amtStr)) && Number(amtStr) > 0;
+      })
       .map(f => ({ description: String(f.description || '').trim(), amount: String(f.amount || '') }));
   };
 
@@ -2372,59 +2203,9 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
             <thead className="bg-slate-50 text-slate-400 font-bold uppercase border-b border-gray-100">
               <tr className="whitespace-nowrap">
                 <th className="p-4 sticky left-0 bg-slate-50 z-20 min-w-[80px] shadow-[2px_0_5px_rgba(0,0,0,0.02)]">ห้อง</th>
-                {isElecUnit && (
-                  <th className="p-4 text-center">
-                    <div className="text-slate-500 mb-1">มิเตอร์ไฟเดิม</div>
-                    <div className="flex justify-center">
-                      {isFirstCycle ? (
-                        <span className="px-2 py-0.5 rounded-lg text-[10px] font-black tracking-tight bg-indigo-50 border border-indigo-250 text-indigo-600 select-none flex items-center justify-center gap-1 leading-none">
-                          <span className="w-1.5 h-1.5 rounded-full bg-indigo-600"></span>
-                          เปิดแก้ไข
-                        </span>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={handleToggleEditAllElec}
-                          className={`px-2 py-0.5 rounded-lg text-[10px] font-black tracking-tight transition-all cursor-pointer border flex items-center justify-center gap-1 leading-none ${
-                            allowEditAllElecPrev
-                              ? 'bg-indigo-50 border-indigo-250 text-indigo-600 hover:bg-indigo-100'
-                              : 'bg-white border-slate-200 text-slate-400 hover:bg-slate-50'
-                          }`}
-                        >
-                          <span className={`w-1.5 h-1.5 rounded-full ${allowEditAllElecPrev ? 'bg-indigo-600' : 'bg-slate-300'}`}></span>
-                          {allowEditAllElecPrev ? 'เปิดแก้ไข' : 'ปิดแก้ไข'}
-                        </button>
-                      )}
-                    </div>
-                  </th>
-                )}
+                {isElecUnit && <th className="p-4 text-center">มิเตอร์ไฟเดิม</th>}
                 {isElecUnit && <th className="p-4 text-center">มิเตอร์ไฟใหม่</th>}
-                {isWaterUnit && (
-                  <th className="p-4 text-center">
-                    <div className="text-slate-500 mb-1">มิเตอร์น้ำเดิม</div>
-                    <div className="flex justify-center">
-                      {isFirstCycle ? (
-                        <span className="px-2 py-0.5 rounded-lg text-[10px] font-black tracking-tight bg-indigo-50 border border-indigo-250 text-indigo-600 select-none flex items-center justify-center gap-1 leading-none">
-                          <span className="w-1.5 h-1.5 rounded-full bg-indigo-600"></span>
-                          เปิดแก้ไข
-                        </span>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={handleToggleEditAllWater}
-                          className={`px-2 py-0.5 rounded-lg text-[10px] font-black tracking-tight transition-all cursor-pointer border flex items-center justify-center gap-1 leading-none ${
-                            allowEditAllWaterPrev
-                              ? 'bg-indigo-50 border-indigo-250 text-indigo-600 hover:bg-indigo-100'
-                              : 'bg-white border-slate-200 text-slate-400 hover:bg-slate-50'
-                          }`}
-                        >
-                          <span className={`w-1.5 h-1.5 rounded-full ${allowEditAllWaterPrev ? 'bg-indigo-600' : 'bg-slate-300'}`}></span>
-                          {allowEditAllWaterPrev ? 'เปิดแก้ไข' : 'ปิดแก้ไข'}
-                        </button>
-                      )}
-                    </div>
-                  </th>
-                )}
+                {isWaterUnit && <th className="p-4 text-center">มิเตอร์น้ำเดิม</th>}
                 {isWaterUnit && <th className="p-4 text-center">มิเตอร์น้ำใหม่</th>}
                 <th className="p-4 text-center">จำนวนคน</th>
                 <th className="p-4">ค่าใช้จ่ายอื่นๆ</th>
@@ -2467,8 +2248,6 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                 const isDaily = roomCtx?.billingSource === 'DAILY_STAY';
                 const isBillIssued = row.billStatus !== 'draft' && row.billStatus !== 'cancelled';
                 const isRowPaid = row.isPaid || row.billStatus === 'paid';
-                const canEditElecPrev = !isRowPaid && (isFirstCycle || row.editElecPrev || allowEditAllElecPrev);
-                const canEditWaterPrev = !isRowPaid && (isFirstCycle || row.editWaterPrev || allowEditAllWaterPrev);
 
                 return (
                   <tr key={row.roomId} id={`room-row-${row.roomId}`} className="hover:bg-slate-50/50 transition-colors">
@@ -2477,48 +2256,37 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                       {row.roomNumber}
                     </td>
 
-                    {/* Elec Prev with conditional edit */}
+                    {/* Elec Prev Input */}
                     {isElecUnit && (
                       <td className="p-4 text-center">
                         <div
                           onClick={(e) => {
-                            if (canEditElecPrev) {
+                            if (!isRowPaid) {
                               const input = e.currentTarget.querySelector('input') as HTMLInputElement | null;
                               input?.focus();
                             }
                           }}
-                          className={`flex items-center justify-center min-w-[80px] min-h-[32px] w-full ${canEditElecPrev ? 'cursor-text' : 'cursor-default'}`}
+                          className={`flex items-center justify-center min-w-[80px] min-h-[32px] w-full ${!isRowPaid ? 'cursor-text' : 'cursor-default'}`}
                         >
-                          {canEditElecPrev ? (
-                            <input
-                              type="text"
-                              inputMode="decimal"
-                              value={row.elecPrev}
-                              onChange={(e) => {
-                                handleMeterReadingChange(row.roomId, 'elecPrev', e.target.value);
-                              }}
-                              onBlur={() => handleMeterReadingBlur(row.roomId, 'elecPrev')}
-                              onPaste={(e) => handlePaste(row.roomId, 'elecPrev', e)}
-                              data-row={idx}
-                              data-col="elecPrev"
-                              className={`w-16 px-1.5 py-0.5 text-xs border rounded bg-white text-slate-800 text-center font-bold transition-all duration-300 ${
-                                flashingCells[`${row.roomId}-elecPrev`]
-                                  ? 'animate-vibrant-flash shadow-md z-10'
-                                  : 'border-indigo-300'
-                              }`}
-                            />
-                          ) : (
-                            <input
-                              type="text"
-                              readOnly
-                              value={row.elecPrev}
-                              className={`w-16 px-1.5 py-0.5 text-xs border rounded text-center font-bold outline-none pointer-events-none transition-all duration-300 ${
-                                flashingCells[`${row.roomId}-elecPrev`]
-                                  ? 'animate-vibrant-flash shadow-md z-10'
-                                  : 'border-transparent bg-transparent text-slate-500'
-                              }`}
-                            />
-                          )}
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            pattern="[0-9]*"
+                            disabled={isRowPaid}
+                            value={row.elecPrev}
+                            onChange={(e) => {
+                              handleMeterReadingChange(row.roomId, 'elecPrev', e.target.value);
+                            }}
+                            onBlur={() => handleMeterReadingBlur(row.roomId, 'elecPrev')}
+                            onPaste={(e) => handlePaste(row.roomId, 'elecPrev', e)}
+                            data-row={idx}
+                            data-col="elecPrev"
+                            className={`w-20 px-2 py-1 text-xs border rounded-lg bg-white text-slate-800 text-center font-bold focus:outline-indigo-500 transition-all duration-300 disabled:bg-slate-50 disabled:text-slate-500 disabled:border-transparent ${
+                              flashingCells[`${row.roomId}-elecPrev`]
+                                ? 'animate-vibrant-flash shadow-md z-10'
+                                : 'border-gray-200'
+                            }`}
+                          />
                         </div>
                       </td>
                     )}
@@ -2537,11 +2305,12 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                         >
                           <input
                             type="text"
-                            inputMode="decimal"
+                            inputMode="numeric"
+                            pattern="[0-9]*"
                             disabled={isRowPaid}
                             value={row.elecCurr}
                             onChange={(e) => {
-                                handleMeterReadingChange(row.roomId, 'elecCurr', e.target.value);
+                              handleMeterReadingChange(row.roomId, 'elecCurr', e.target.value);
                             }}
                             onBlur={() => handleMeterReadingBlur(row.roomId, 'elecCurr')}
                             onPaste={(e) => handlePaste(row.roomId, 'elecCurr', e)}
@@ -2559,48 +2328,37 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                       </td>
                     )}
 
-                    {/* Water Prev with conditional edit */}
+                    {/* Water Prev Input */}
                     {isWaterUnit && (
                       <td className="p-4 text-center">
                         <div
                           onClick={(e) => {
-                            if (canEditWaterPrev) {
+                            if (!isRowPaid) {
                               const input = e.currentTarget.querySelector('input') as HTMLInputElement | null;
                               input?.focus();
                             }
                           }}
-                          className={`flex items-center justify-center min-w-[80px] min-h-[32px] w-full ${canEditWaterPrev ? 'cursor-text' : 'cursor-default'}`}
+                          className={`flex items-center justify-center min-w-[80px] min-h-[32px] w-full ${!isRowPaid ? 'cursor-text' : 'cursor-default'}`}
                         >
-                          {canEditWaterPrev ? (
-                            <input
-                              type="text"
-                              inputMode="decimal"
-                              value={row.waterPrev}
-                              onChange={(e) => {
-                                handleMeterReadingChange(row.roomId, 'waterPrev', e.target.value);
-                              }}
-                              onBlur={() => handleMeterReadingBlur(row.roomId, 'waterPrev')}
-                              onPaste={(e) => handlePaste(row.roomId, 'waterPrev', e)}
-                              data-row={idx}
-                              data-col="waterPrev"
-                              className={`w-16 px-1.5 py-0.5 text-xs border rounded bg-white text-slate-800 text-center font-bold transition-all duration-300 ${
-                                flashingCells[`${row.roomId}-waterPrev`]
-                                  ? 'animate-vibrant-flash shadow-md z-10'
-                                  : 'border-indigo-300'
-                              }`}
-                            />
-                          ) : (
-                            <input
-                              type="text"
-                              readOnly
-                              value={row.waterPrev}
-                              className={`w-16 px-1.5 py-0.5 text-xs border rounded text-center font-bold outline-none pointer-events-none transition-all duration-300 ${
-                                flashingCells[`${row.roomId}-waterPrev`]
-                                  ? 'animate-vibrant-flash shadow-md z-10'
-                                  : 'border-transparent bg-transparent text-slate-500'
-                              }`}
-                            />
-                          )}
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            pattern="[0-9]*"
+                            disabled={isRowPaid}
+                            value={row.waterPrev}
+                            onChange={(e) => {
+                              handleMeterReadingChange(row.roomId, 'waterPrev', e.target.value);
+                            }}
+                            onBlur={() => handleMeterReadingBlur(row.roomId, 'waterPrev')}
+                            onPaste={(e) => handlePaste(row.roomId, 'waterPrev', e)}
+                            data-row={idx}
+                            data-col="waterPrev"
+                            className={`w-20 px-2 py-1 text-xs border rounded-lg bg-white text-slate-800 text-center font-bold focus:outline-indigo-500 transition-all duration-300 disabled:bg-slate-50 disabled:text-slate-500 disabled:border-transparent ${
+                              flashingCells[`${row.roomId}-waterPrev`]
+                                ? 'animate-vibrant-flash shadow-md z-10'
+                                : 'border-gray-200'
+                            }`}
+                          />
                         </div>
                       </td>
                     )}
@@ -2619,7 +2377,8 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                         >
                           <input
                             type="text"
-                            inputMode="decimal"
+                            inputMode="numeric"
+                            pattern="[0-9]*"
                             disabled={isRowPaid}
                             value={row.waterCurr}
                             onChange={(e) => {
@@ -2686,13 +2445,8 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                                 <button
                                   type="button"
                                   onClick={() => handleRemoveOtherFee(row.roomId, feeIdx)}
-                                  disabled={!!pendingFeeRooms[row.roomId]}
-                                  className={`p-0.5 ${
-                                    pendingFeeRooms[row.roomId]
-                                      ? 'text-gray-300 cursor-not-allowed'
-                                      : 'text-rose-500 hover:text-rose-700 cursor-pointer'
-                                  }`}
-                                  title="ลบและบันทึกทันที"
+                                  className="p-0.5 text-rose-500 hover:text-rose-700 cursor-pointer"
+                                  title="ลบรายการ"
                                 >
                                   <X className="w-3 h-3" />
                                 </button>
@@ -2701,49 +2455,49 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                           </div>
                         ))}
 
-                        {/* Form to add a new other fee inline */}
-                        {!isRowPaid && (
-                          <div className="flex items-center gap-1 mt-1">
-                            <input
-                              type="text"
-                              placeholder="ชื่อรายการ"
-                              value={newFeeInputs[row.roomId]?.description ?? ''}
-                              onChange={(e) => handleFeeDescriptionChange(row.roomId, e.target.value)}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter') {
-                                  handleAddOtherFee(row.roomId);
-                                }
-                              }}
-                              className="w-16 px-1.5 py-1 text-[10px] border border-gray-200 rounded-lg bg-white text-slate-800 font-medium focus:outline-indigo-500"
-                            />
-                            <input
-                              type="text"
-                              inputMode="decimal"
-                              placeholder="บาท"
-                              value={newFeeInputs[row.roomId]?.amount ?? ''}
-                              onChange={(e) => handleFeeAmountChange(row.roomId, e.target.value)}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter') {
-                                  handleAddOtherFee(row.roomId);
-                                }
-                              }}
-                              className="w-12 px-1.5 py-1 text-[10px] border border-gray-200 rounded-lg bg-white text-slate-800 text-center font-medium focus:outline-indigo-500"
-                            />
-                            <button
-                              type="button"
-                              onClick={() => handleAddOtherFee(row.roomId)}
-                              disabled={!!pendingFeeRooms[row.roomId]}
-                              className={`p-1 rounded-lg transition-all flex items-center justify-center shrink-0 border ${
-                                pendingFeeRooms[row.roomId]
-                                  ? 'bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed opacity-50'
-                                  : 'bg-indigo-50 hover:bg-indigo-100 text-indigo-600 border-indigo-100/50 cursor-pointer'
-                              }`}
-                              title="เพิ่มรายการและบันทึกทันที"
-                            >
-                              <Plus className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-                        )}
+                        {/* Form to add a new other fee inline (visible even if PAID with disabled controls) */}
+                        <div className="flex items-center gap-1 mt-1">
+                          <input
+                            type="text"
+                            placeholder="ชื่อรายการ"
+                            disabled={isRowPaid}
+                            value={newFeeInputs[row.roomId]?.description ?? ''}
+                            onChange={(e) => handleFeeDescriptionChange(row.roomId, e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter' && !isRowPaid) {
+                                handleAddOtherFee(row.roomId);
+                              }
+                            }}
+                            className="w-16 px-1.5 py-1 text-[10px] border border-gray-200 rounded-lg bg-white text-slate-800 font-medium focus:outline-indigo-500 disabled:bg-slate-50 disabled:text-slate-400"
+                          />
+                          <input
+                            type="text"
+                            inputMode="decimal"
+                            placeholder="บาท"
+                            disabled={isRowPaid}
+                            value={newFeeInputs[row.roomId]?.amount ?? ''}
+                            onChange={(e) => handleFeeAmountChange(row.roomId, e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter' && !isRowPaid) {
+                                handleAddOtherFee(row.roomId);
+                              }
+                            }}
+                            className="w-12 px-1.5 py-1 text-[10px] border border-gray-200 rounded-lg bg-white text-slate-800 text-center font-medium focus:outline-indigo-500 disabled:bg-slate-50 disabled:text-slate-400"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => handleAddOtherFee(row.roomId)}
+                            disabled={isRowPaid}
+                            className={`p-1 rounded-lg transition-all flex items-center justify-center shrink-0 border ${
+                              isRowPaid
+                                ? 'bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed opacity-50'
+                                : 'bg-indigo-50 hover:bg-indigo-100 text-indigo-600 border-indigo-100/50 cursor-pointer'
+                            }`}
+                            title="เพิ่มรายการค่าใช้จ่าย"
+                          >
+                            <Plus className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </div>
                     </td>
 

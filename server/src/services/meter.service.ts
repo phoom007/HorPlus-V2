@@ -864,11 +864,18 @@ export class MeterService {
     userId?: string,
     tx?: any
   ): Promise<void> {
+    if (activeBill.billKind !== 'MONTHLY_UTILITY') {
+      const err = new Error('INVALID_BILL_KIND_FOR_METER_SYNC: Only MONTHLY_UTILITY bills can be synchronized from Meter Workspace');
+      (err as any).statusCode = 400;
+      (err as any).code = 'INVALID_BILL_KIND_FOR_METER_SYNC';
+      throw err;
+    }
+
     if (activeBill.status === 'paid' || activeBill.status === 'PAID') {
       return;
     }
 
-    const preview = await billingService.generateBillPreview(dormitoryId, billingCycleId, roomId, tx);
+    const preview = await billingService.generateBillPreview(dormitoryId, billingCycleId, roomId, tx, 'MONTHLY_UTILITY');
     const prisma = tx || getPrismaClient();
 
     // 1. Delete old items and insert updated items
@@ -966,7 +973,6 @@ export class MeterService {
     const isFirstCycle = earliest ? earliest.id === data.billingCycleId : false;
 
     return this.meterRepo.withTransaction(async (tx) => {
-      // 0. Assert batch operational room entitlement upfront (O(1) in-memory check per row)
       const entitlementSet = await subscriptionEntitlementService.resolveOperationalRoomEntitlementSet(
         dormitoryId,
         new Date(),
@@ -974,9 +980,6 @@ export class MeterService {
       );
 
       for (const row of data.rows) {
-        if (entitlementSet.operationalRoomIds.has(row.roomId)) {
-          continue;
-        }
         if (entitlementSet.lockedRoomIds.has(row.roomId)) {
           throw new AppError(
             `ห้องพักนี้เกินสิทธิ์การใช้งานของแพ็กเกจฟรี (จำกัด ${entitlementSet.roomLimit} ห้องที่เปิดใช้งานพร้อมกัน) กรุณาอัปเกรดแพ็กเกจเพื่อเปิดใช้งานห้องนี้`,
@@ -984,7 +987,6 @@ export class MeterService {
             'ROOM_ENTITLEMENT_LOCKED'
           );
         }
-        throw new AppError('ไม่พบข้อมูลห้องพัก', 404, 'ROOM_NOT_FOUND');
       }
 
       const sortedRoomIds = [...new Set(data.rows.map((r) => r.roomId))].sort();
@@ -997,7 +999,7 @@ export class MeterService {
       for (const row of data.rows) {
         let activeBill: any = null;
         if (this.billRepo) {
-          activeBill = await this.billRepo.findByCycleAndRoom(dormitoryId, data.billingCycleId, row.roomId, tx);
+          activeBill = await this.billRepo.findActiveMonthlyUtilityByRoomAndCycle(dormitoryId, data.billingCycleId, row.roomId, tx);
           if (activeBill && activeBill.status !== 'cancelled' && activeBill.status !== 'void') {
             if (activeBill.status === 'paid' || activeBill.status === 'PAID') {
               const err = new Error('ROOM_LOCKED_PAID');
@@ -1089,7 +1091,7 @@ export class MeterService {
 
         // 2. Check if bill already exists
         if (this.billRepo) {
-          const existing = await this.billRepo.findByCycleAndRoom(dormitoryId, data.billingCycleId, data.roomId, tx);
+          const existing = await this.billRepo.findActiveMonthlyUtilityByRoomAndCycle(dormitoryId, data.billingCycleId, data.roomId, tx);
           if (existing) {
             const items = await this.billRepo.getBillItems(existing.id, dormitoryId, tx);
             return { action: 'issue', bill: existing, items, created: false, status: existing.status };
@@ -1102,6 +1104,7 @@ export class MeterService {
           {
             billingCycleId: data.billingCycleId,
             roomId: data.roomId,
+            billKind: 'MONTHLY_UTILITY',
           },
           userId,
           undefined,
@@ -1118,7 +1121,7 @@ export class MeterService {
       });
     } else {
       // Cancel bill
-      const activeBill = await this.billRepo?.findByCycleAndRoom(dormitoryId, data.billingCycleId, data.roomId);
+      const activeBill = await this.billRepo?.findActiveMonthlyUtilityByRoomAndCycle(dormitoryId, data.billingCycleId, data.roomId);
       if (!activeBill) {
         return { action: 'cancel', cancelled: true, status: 'cancelled' };
       }

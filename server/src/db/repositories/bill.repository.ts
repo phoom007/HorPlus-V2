@@ -124,6 +124,7 @@ export interface IBillRepository {
   findByNumber(dormitoryId: string, billNumber: string, tx?: any): Promise<BillEntity | null>;
   findByCycleAndContract(dormitoryId: string, billingCycleId: string, contractId: string, billKind?: string, tx?: any): Promise<BillEntity | null>;
   findByCycleAndRoom(dormitoryId: string, billingCycleId: string, roomId: string, billKind?: string, tx?: any): Promise<BillEntity | null>;
+  findActiveMonthlyUtilityByRoomAndCycle(dormitoryId: string, billingCycleId: string, roomId: string, tx?: any): Promise<BillEntity | null>;
   findAll(dormitoryId: string, filter?: BillFilterQuery, tx?: any): Promise<{ items: BillEntity[]; total: number }>;
   create(dormitoryId: string, data: CreateBillData, items: CreateBillItemData[], tx?: any): Promise<{ bill: BillEntity; items: BillItemEntity[] }>;
   update(id: string, dormitoryId: string, data: Partial<BillEntity>, expectedVersion?: number, tx?: any): Promise<BillEntity | null>;
@@ -148,12 +149,8 @@ export class InMemoryBillRepository implements IBillRepository {
   }
 
   public async findByNumber(dormitoryId: string, billNumber: string): Promise<BillEntity | null> {
-    for (const b of this.bills.values()) {
-      if (b.dormitoryId === dormitoryId && b.billNumber === billNumber) {
-        return b;
-      }
-    }
-    return null;
+    const list = Array.from(this.bills.values());
+    return list.find((b) => b.dormitoryId === dormitoryId && b.billNumber === billNumber) || null;
   }
 
   public async findByCycleAndContract(
@@ -165,7 +162,7 @@ export class InMemoryBillRepository implements IBillRepository {
   ): Promise<BillEntity | null> {
     const billKind = typeof billKindOrTx === 'string' ? billKindOrTx : undefined;
     const list = Array.from(this.bills.values());
-    return list.find((b) => b.dormitoryId === dormitoryId && b.billingCycleId === billingCycleId && b.contractId === contractId && (!billKind || (b.billKind || 'MONTHLY_UTILITY') === billKind) && b.status !== 'cancelled' && b.status !== 'void') || null;
+    return list.find((b) => b.dormitoryId === dormitoryId && b.billingCycleId === billingCycleId && b.contractId === contractId && (!billKind || b.billKind === billKind) && b.status !== 'cancelled' && b.status !== 'void') || null;
   }
 
   public async findByCycleAndRoom(
@@ -177,7 +174,27 @@ export class InMemoryBillRepository implements IBillRepository {
   ): Promise<BillEntity | null> {
     const billKind = typeof billKindOrTx === 'string' ? billKindOrTx : undefined;
     const list = Array.from(this.bills.values());
-    return list.find((b) => b.dormitoryId === dormitoryId && b.billingCycleId === billingCycleId && b.roomId === roomId && (!billKind || (b.billKind || 'MONTHLY_UTILITY') === billKind) && b.status !== 'cancelled' && b.status !== 'void') || null;
+    return list.find((b) => b.dormitoryId === dormitoryId && b.billingCycleId === billingCycleId && b.roomId === roomId && (!billKind || b.billKind === billKind) && b.status !== 'cancelled' && b.status !== 'void') || null;
+  }
+
+  public async findActiveMonthlyUtilityByRoomAndCycle(
+    dormitoryId: string,
+    billingCycleId: string,
+    roomId: string,
+    _tx?: any
+  ): Promise<BillEntity | null> {
+    const list = Array.from(this.bills.values());
+    return (
+      list.find(
+        (b) =>
+          b.dormitoryId === dormitoryId &&
+          b.billingCycleId === billingCycleId &&
+          b.roomId === roomId &&
+          b.billKind === 'MONTHLY_UTILITY' &&
+          b.status !== 'cancelled' &&
+          b.status !== 'void'
+      ) || null
+    );
   }
 
   public async findAll(dormitoryId: string, filter: BillFilterQuery = {}): Promise<{ items: BillEntity[]; total: number }> {
@@ -585,9 +602,9 @@ export class PrismaBillRepository implements IBillRepository {
     }
 
     const client = this.getClient(actualTx);
-    const where: any = { 
-      dormitoryId, 
-      billingCycleId, 
+    const where: any = {
+      dormitoryId,
+      billingCycleId,
       contractId,
       status: { notIn: ['cancelled', 'void'] }
     };
@@ -612,14 +629,33 @@ export class PrismaBillRepository implements IBillRepository {
     }
 
     const client = this.getClient(actualTx);
-    const where: any = { 
-      dormitoryId, 
-      billingCycleId, 
+    const where: any = {
+      dormitoryId,
+      billingCycleId,
       roomId,
       status: { notIn: ['cancelled', 'void'] }
     };
     if (billKind) where.billKind = billKind;
     const bill = await client.bill.findFirst({ where });
+    return bill ? this.mapBillToEntity(bill) : null;
+  }
+
+  public async findActiveMonthlyUtilityByRoomAndCycle(
+    dormitoryId: string,
+    billingCycleId: string,
+    roomId: string,
+    tx?: any
+  ): Promise<BillEntity | null> {
+    const client = this.getClient(tx);
+    const bill = await client.bill.findFirst({
+      where: {
+        dormitoryId,
+        billingCycleId,
+        roomId,
+        billKind: 'MONTHLY_UTILITY',
+        status: { notIn: ['cancelled', 'void'] },
+      },
+    });
     return bill ? this.mapBillToEntity(bill) : null;
   }
 
