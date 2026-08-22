@@ -208,7 +208,7 @@ export class DailyStayService {
         dormitoryId,
         roomId,
         status: {
-          in: ['active', 'ACTIVE', 'expiring_soon', 'pending_signature', 'waiting_extension', 'checking_out', 'draft'],
+          in: ['active', 'ACTIVE', 'approved', 'expiring_soon', 'pending_signature', 'waiting_extension', 'checking_out', 'draft'],
         },
         deletedAt: null,
       },
@@ -226,7 +226,7 @@ export class DailyStayService {
       where: {
         dormitoryId,
         roomId,
-        status: { in: ['RESERVED', 'ACTIVE', 'reserved', 'active'] },
+        status: { in: ['RESERVED', 'ACTIVE', 'reserved', 'active', 'CONVERTED', 'ENDED'] },
         deletedAt: null,
       },
     });

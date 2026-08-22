@@ -37,6 +37,13 @@ import {
   SaveMeterWorkspaceRowSchema,
   CreateProvisionalRentalTermSchema,
 } from '../../schemas/billing-meter.schemas.js';
+import {
+  getDailyStayPhysicalInterval,
+  getContractPhysicalInterval,
+  getProvisionalTermPhysicalInterval,
+  hasBookableGapInCycle,
+  doHalfOpenIntervalsOverlap,
+} from '../../utils/occupancy-interval.util.js';
 import request from 'supertest';
 import express from 'express';
 import { cookieParserMiddleware } from '../../middleware/cookie-parser.middleware.js';
@@ -5252,6 +5259,416 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
       await prisma.room.deleteMany({ where: { dormitoryId: dId } });
       await prisma.building.deleteMany({ where: { dormitoryId: dId } });
       await prisma.dormitoryBillingSettings.deleteMany({ where: { dormitoryId: dId } });
+      await prisma.dormitory.deleteMany({ where: { id: dId } });
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // TEST 45: Daily ACTIVE occupies and blocks during its active interval
+  // --------------------------------------------------------------------------
+  it('45. Daily ACTIVE status occupies and blocks overlapping requests', async () => {
+    const dId = crypto.randomUUID();
+    const bldId = crypto.randomUUID();
+    const roomId = crypto.randomUUID();
+
+    await prisma.dormitory.create({ data: { id: dId, name: 'Dorm Daily Active Test' } });
+    await prisma.building.create({ data: { id: bldId, dormitoryId: dId, name: 'Bld A' } });
+    await prisma.room.create({
+      data: {
+        id: roomId,
+        dormitoryId: dId,
+        buildingId: bldId,
+        roomNumber: 'A-45',
+        normalizedRoomNumber: 'A-45',
+        roomType: 'standard',
+        monthlyRent: 4000,
+        status: 'occupied',
+      },
+    });
+
+    const activeStay = await prisma.dailyStay.create({
+      data: {
+        dormitoryId: dId,
+        roomId,
+        applicantFullName: 'Active Guest 45',
+        startDate: new Date('2026-08-10T00:00:00.000Z'),
+        endDate: new Date('2026-08-15T00:00:00.000Z'),
+        checkInAt: new Date('2026-08-10T07:00:00.000Z'), // 14:00 Bangkok
+        inclusiveDayCount: 6,
+        status: 'ACTIVE',
+      },
+    });
+
+    try {
+      // Overlapping request -> blocked
+      const overlapRes = await dailyStayService.checkRoomAvailability(
+        dId,
+        roomId,
+        new Date('2026-08-12T00:00:00.000Z'),
+        new Date('2026-08-14T00:00:00.000Z')
+      );
+      expect(overlapRes.available).toBe(false);
+      expect(overlapRes.reason).toBe('ROOM_OCCUPIED_BY_DAILY_STAY');
+
+      // Non-overlapping future request -> allowed
+      const futureRes = await dailyStayService.checkRoomAvailability(
+        dId,
+        roomId,
+        new Date('2026-08-16T00:00:00.000Z'),
+        new Date('2026-08-20T00:00:00.000Z')
+      );
+      expect(futureRes.available).toBe(true);
+    } finally {
+      await prisma.dailyStay.deleteMany({ where: { id: activeStay.id } });
+      await prisma.room.deleteMany({ where: { id: roomId } });
+      await prisma.building.deleteMany({ where: { id: bldId } });
+      await prisma.dormitory.deleteMany({ where: { id: dId } });
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // TEST 46: Daily RESERVED blocks its reservation interval
+  // --------------------------------------------------------------------------
+  it('46. Daily RESERVED status blocks its reservation interval', async () => {
+    const dId = crypto.randomUUID();
+    const bldId = crypto.randomUUID();
+    const roomId = crypto.randomUUID();
+
+    await prisma.dormitory.create({ data: { id: dId, name: 'Dorm Daily Reserved Test' } });
+    await prisma.building.create({ data: { id: bldId, dormitoryId: dId, name: 'Bld A' } });
+    await prisma.room.create({
+      data: {
+        id: roomId,
+        dormitoryId: dId,
+        buildingId: bldId,
+        roomNumber: 'A-46',
+        normalizedRoomNumber: 'A-46',
+        roomType: 'standard',
+        monthlyRent: 4000,
+        status: 'vacant',
+      },
+    });
+
+    const reservedStay = await prisma.dailyStay.create({
+      data: {
+        dormitoryId: dId,
+        roomId,
+        applicantFullName: 'Reserved Guest 46',
+        startDate: new Date('2026-09-01T00:00:00.000Z'),
+        endDate: new Date('2026-09-05T00:00:00.000Z'),
+        inclusiveDayCount: 5,
+        status: 'RESERVED',
+      },
+    });
+
+    try {
+      const overlapRes = await dailyStayService.checkRoomAvailability(
+        dId,
+        roomId,
+        new Date('2026-09-03T00:00:00.000Z'),
+        new Date('2026-09-04T00:00:00.000Z')
+      );
+      expect(overlapRes.available).toBe(false);
+      expect(overlapRes.reason).toBe('ROOM_OCCUPIED_BY_DAILY_STAY');
+
+      const nonOverlapRes = await dailyStayService.checkRoomAvailability(
+        dId,
+        roomId,
+        new Date('2026-09-06T00:00:00.000Z'),
+        new Date('2026-09-10T00:00:00.000Z')
+      );
+      expect(nonOverlapRes.available).toBe(true);
+    } finally {
+      await prisma.dailyStay.deleteMany({ where: { id: reservedStay.id } });
+      await prisma.room.deleteMany({ where: { id: roomId } });
+      await prisma.building.deleteMany({ where: { id: bldId } });
+      await prisma.dormitory.deleteMany({ where: { id: dId } });
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // TEST 47: Daily checked-out only blocks until effective checkout; debt does not extend occupancy
+  // --------------------------------------------------------------------------
+  it('47. Daily CHECKED_OUT only blocks until actualCheckedOutAt; unpaid debt does not extend physical occupancy', async () => {
+    const dId = crypto.randomUUID();
+    const bldId = crypto.randomUUID();
+    const roomId = crypto.randomUUID();
+
+    await prisma.dormitory.create({ data: { id: dId, name: 'Dorm Daily Early Checkout Test' } });
+    await prisma.building.create({ data: { id: bldId, dormitoryId: dId, name: 'Bld A' } });
+    await prisma.room.create({
+      data: {
+        id: roomId,
+        dormitoryId: dId,
+        buildingId: bldId,
+        roomNumber: 'A-47',
+        normalizedRoomNumber: 'A-47',
+        roomType: 'standard',
+        monthlyRent: 4000,
+        status: 'vacant',
+      },
+    });
+
+    const earlyStay = await prisma.dailyStay.create({
+      data: {
+        dormitoryId: dId,
+        roomId,
+        applicantFullName: 'Early Checkout Guest 47',
+        startDate: new Date('2026-08-01T00:00:00.000Z'),
+        endDate: new Date('2026-08-10T00:00:00.000Z'),
+        checkInAt: new Date('2026-08-01T07:00:00.000Z'),
+        actualCheckedOutAt: new Date('2026-08-05T03:00:00.000Z'), // 10:00 Bangkok on Aug 5
+        inclusiveDayCount: 10,
+        status: 'CHECKED_OUT',
+      },
+    });
+
+    const invoice = await prisma.dailyStayInvoice.create({
+      data: {
+        dormitoryId: dId,
+        dailyStayId: earlyStay.id,
+        invoiceNumber: 'D-INV-47',
+        totalRentAmount: toDecimal('5000.00'),
+        outstandingAmount: toDecimal('2500.00'),
+        status: 'ISSUED',
+      },
+    });
+
+    try {
+      // 1. Exact physical interval reflects actualCheckedOutAt, NOT the original scheduled endDate
+      const physicalInterval = getDailyStayPhysicalInterval(earlyStay);
+      expect(physicalInterval.start.toISOString()).toBe('2026-08-01T07:00:00.000Z');
+      expect(physicalInterval.end.toISOString()).toBe('2026-08-05T03:00:00.000Z');
+
+      // 2. Dates after actualCheckedOutAt (Aug 6 -> Aug 10) are physically AVAILABLE despite unpaid invoice
+      const postCheckoutRes = await dailyStayService.checkRoomAvailability(
+        dId,
+        roomId,
+        new Date('2026-08-06T00:00:00.000Z'),
+        new Date('2026-08-10T00:00:00.000Z')
+      );
+      expect(postCheckoutRes.available).toBe(true);
+
+      // 3. In August billing cycle, the early checkout creates a bookable gap from Aug 5 onwards
+      const augStart = new Date('2026-07-31T17:00:00.000Z'); // 2026-08-01 00:00 Bangkok
+      const augEnd = new Date('2026-08-31T17:00:00.000Z');   // 2026-09-01 00:00 Bangkok
+      const hasGap = hasBookableGapInCycle(augStart, augEnd, [physicalInterval]);
+      expect(hasGap).toBe(true);
+    } finally {
+      await prisma.dailyStayInvoice.deleteMany({ where: { id: invoice.id } });
+      await prisma.dailyStay.deleteMany({ where: { id: earlyStay.id } });
+      await prisma.room.deleteMany({ where: { id: roomId } });
+      await prisma.building.deleteMany({ where: { id: bldId } });
+      await prisma.dormitory.deleteMany({ where: { id: dId } });
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // TEST 48: Provisional ACTIVE blocks
+  // --------------------------------------------------------------------------
+  it('48. ProvisionalRentalTerm ACTIVE status blocks overlapping occupancy', async () => {
+    const dId = crypto.randomUUID();
+    const bldId = crypto.randomUUID();
+    const roomId = crypto.randomUUID();
+    const tenantId = crypto.randomUUID();
+
+    await prisma.dormitory.create({ data: { id: dId, name: 'Dorm Prov Active Test' } });
+    await prisma.building.create({ data: { id: bldId, dormitoryId: dId, name: 'Bld A' } });
+    await prisma.room.create({
+      data: {
+        id: roomId,
+        dormitoryId: dId,
+        buildingId: bldId,
+        roomNumber: 'A-48',
+        normalizedRoomNumber: 'A-48',
+        roomType: 'standard',
+        monthlyRent: 4000,
+        status: 'occupied',
+      },
+    });
+    await prisma.tenant.create({
+      data: {
+        id: tenantId,
+        dormitoryId: dId,
+        tenantNumber: 'T-48',
+        firstName: 'Tenant',
+        lastName: '48',
+        displayName: 'Tenant 48',
+      },
+    });
+
+    const prov = await prisma.provisionalRentalTerm.create({
+      data: {
+        dormitoryId: dId,
+        roomId,
+        tenantId,
+        rentalType: 'MONTHLY',
+        startDate: new Date('2026-08-01T00:00:00.000Z'),
+        endDate: new Date('2026-08-31T00:00:00.000Z'),
+        durationMonths: 1,
+        status: 'ACTIVE',
+      },
+    });
+
+    try {
+      const overlapRes = await dailyStayService.checkRoomAvailability(
+        dId,
+        roomId,
+        new Date('2026-08-15T00:00:00.000Z'),
+        new Date('2026-08-20T00:00:00.000Z')
+      );
+      expect(overlapRes.available).toBe(false);
+      expect(overlapRes.reason).toBe('ROOM_OCCUPIED_BY_PROVISIONAL_TERM');
+    } finally {
+      await prisma.provisionalRentalTerm.deleteMany({ where: { id: prov.id } });
+      await prisma.tenant.deleteMany({ where: { id: tenantId } });
+      await prisma.room.deleteMany({ where: { id: roomId } });
+      await prisma.building.deleteMany({ where: { id: bldId } });
+      await prisma.dormitory.deleteMany({ where: { id: dId } });
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // TEST 49: Soft-deleted Provisional (deletedAt != null) does not block
+  // --------------------------------------------------------------------------
+  it('49. Soft-deleted ProvisionalRentalTerm (deletedAt != null) does not block', async () => {
+    const dId = crypto.randomUUID();
+    const bldId = crypto.randomUUID();
+    const roomId = crypto.randomUUID();
+    const tenantId = crypto.randomUUID();
+
+    await prisma.dormitory.create({ data: { id: dId, name: 'Dorm Prov Soft-Delete Test' } });
+    await prisma.building.create({ data: { id: bldId, dormitoryId: dId, name: 'Bld A' } });
+    await prisma.room.create({
+      data: {
+        id: roomId,
+        dormitoryId: dId,
+        buildingId: bldId,
+        roomNumber: 'A-49',
+        normalizedRoomNumber: 'A-49',
+        roomType: 'standard',
+        monthlyRent: 4000,
+        status: 'vacant',
+      },
+    });
+    await prisma.tenant.create({
+      data: {
+        id: tenantId,
+        dormitoryId: dId,
+        tenantNumber: 'T-49',
+        firstName: 'Tenant',
+        lastName: '49',
+        displayName: 'Tenant 49',
+      },
+    });
+
+    const deletedProv = await prisma.provisionalRentalTerm.create({
+      data: {
+        dormitoryId: dId,
+        roomId,
+        tenantId,
+        rentalType: 'MONTHLY',
+        startDate: new Date('2026-08-01T00:00:00.000Z'),
+        endDate: new Date('2026-08-31T00:00:00.000Z'),
+        durationMonths: 1,
+        status: 'ACTIVE',
+        deletedAt: new Date(),
+      },
+    });
+
+    try {
+      const availRes = await dailyStayService.checkRoomAvailability(
+        dId,
+        roomId,
+        new Date('2026-08-15T00:00:00.000Z'),
+        new Date('2026-08-20T00:00:00.000Z')
+      );
+      expect(availRes.available).toBe(true);
+    } finally {
+      await prisma.provisionalRentalTerm.deleteMany({ where: { id: deletedProv.id } });
+      await prisma.tenant.deleteMany({ where: { id: tenantId } });
+      await prisma.room.deleteMany({ where: { id: roomId } });
+      await prisma.building.deleteMany({ where: { id: bldId } });
+      await prisma.dormitory.deleteMany({ where: { id: dId } });
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // TEST 50: Cancelled or Soft-Deleted Contract does not block
+  // --------------------------------------------------------------------------
+  it('50. Cancelled or soft-deleted Contract does not block occupancy', async () => {
+    const dId = crypto.randomUUID();
+    const bldId = crypto.randomUUID();
+    const roomId = crypto.randomUUID();
+    const tenantId = crypto.randomUUID();
+
+    await prisma.dormitory.create({ data: { id: dId, name: 'Dorm Contract Cancel Test' } });
+    await prisma.building.create({ data: { id: bldId, dormitoryId: dId, name: 'Bld A' } });
+    await prisma.room.create({
+      data: {
+        id: roomId,
+        dormitoryId: dId,
+        buildingId: bldId,
+        roomNumber: 'A-50',
+        normalizedRoomNumber: 'A-50',
+        roomType: 'standard',
+        monthlyRent: 4000,
+        status: 'vacant',
+      },
+    });
+    await prisma.tenant.create({
+      data: {
+        id: tenantId,
+        dormitoryId: dId,
+        tenantNumber: 'T-50',
+        firstName: 'Tenant',
+        lastName: '50',
+        displayName: 'Tenant 50',
+      },
+    });
+
+    // 1. Cancelled contract
+    const cancelledContract = await prisma.contract.create({
+      data: {
+        dormitoryId: dId,
+        contractNumber: 'CTR-CANCELLED-50',
+        roomId,
+        tenantId,
+        status: 'cancelled',
+        startDate: new Date('2026-08-01T00:00:00.000Z'),
+        endDate: new Date('2026-08-31T00:00:00.000Z'),
+        durationMonths: 1,
+      },
+    });
+
+    // 2. Soft-deleted active contract
+    const softDeletedContract = await prisma.contract.create({
+      data: {
+        dormitoryId: dId,
+        contractNumber: 'CTR-DELETED-50',
+        roomId,
+        tenantId,
+        status: 'active',
+        startDate: new Date('2026-08-01T00:00:00.000Z'),
+        endDate: new Date('2026-08-31T00:00:00.000Z'),
+        durationMonths: 1,
+        deletedAt: new Date(),
+      },
+    });
+
+    try {
+      const availRes = await dailyStayService.checkRoomAvailability(
+        dId,
+        roomId,
+        new Date('2026-08-15T00:00:00.000Z'),
+        new Date('2026-08-20T00:00:00.000Z')
+      );
+      expect(availRes.available).toBe(true);
+    } finally {
+      await prisma.contract.deleteMany({ where: { id: { in: [cancelledContract.id, softDeletedContract.id] } } });
+      await prisma.tenant.deleteMany({ where: { id: tenantId } });
+      await prisma.room.deleteMany({ where: { id: roomId } });
+      await prisma.building.deleteMany({ where: { id: bldId } });
       await prisma.dormitory.deleteMany({ where: { id: dId } });
     }
   });

@@ -1824,12 +1824,12 @@ export class MeterService {
       const blockingIntervals: Array<{ start: Date; end: Date }> = [];
 
       // A. Contracts on this room
-      for (const c of allContracts.filter((c) => c.roomId === room.id && ['active', 'ACTIVE', 'expiring_soon', 'pending_signature', 'waiting_extension', 'checking_out'].includes(c.status))) {
+      for (const c of allContracts.filter((c) => c.roomId === room.id && ['active', 'ACTIVE', 'approved', 'expiring_soon', 'pending_signature', 'waiting_extension', 'checking_out', 'draft'].includes(c.status))) {
         blockingIntervals.push(getContractPhysicalInterval(c));
       }
 
       // B. Provisional Rental Terms on this room
-      for (const p of allProvisionalTerms.filter((p) => p.roomId === room.id && ['ACTIVE', 'active', 'RESERVED', 'reserved'].includes(p.status))) {
+      for (const p of allProvisionalTerms.filter((p) => p.roomId === room.id && ['ACTIVE', 'active', 'RESERVED', 'reserved', 'CONVERTED', 'ENDED'].includes(p.status))) {
         blockingIntervals.push(getProvisionalTermPhysicalInterval(p));
       }
 
@@ -1840,17 +1840,17 @@ export class MeterService {
 
       // D. Future reservations
       const futureC = roomFutureContractMap.get(room.id);
-      if (futureC && ['active', 'ACTIVE', 'expiring_soon', 'pending_signature', 'waiting_extension'].includes(futureC.status)) {
+      if (futureC && ['active', 'ACTIVE', 'approved', 'expiring_soon', 'pending_signature', 'waiting_extension'].includes(futureC.status)) {
         blockingIntervals.push(getContractPhysicalInterval(futureC));
       }
 
       const futureP = roomFutureProvisionalMap.get(room.id);
-      if (futureP && ['ACTIVE', 'active', 'RESERVED', 'reserved'].includes(futureP.status)) {
+      if (futureP && ['ACTIVE', 'active', 'RESERVED', 'reserved', 'CONVERTED', 'ENDED'].includes(futureP.status)) {
         blockingIntervals.push(getProvisionalTermPhysicalInterval(futureP));
       }
 
       const futureD = roomFutureDailyMap.get(room.id);
-      if (futureD && ['ACTIVE', 'active', 'RESERVED', 'reserved'].includes(futureD.status)) {
+      if (futureD && ['ACTIVE', 'active', 'RESERVED', 'reserved', 'CHECKED_OUT', 'checked_out', 'COMPLETED', 'completed'].includes(futureD.status)) {
         blockingIntervals.push(getDailyStayPhysicalInterval(futureD));
       }
 

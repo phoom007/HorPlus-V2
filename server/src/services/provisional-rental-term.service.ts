@@ -173,7 +173,7 @@ export class ProvisionalRentalTermService {
         where: {
           dormitoryId,
           roomId: data.roomId,
-          status: { in: ['active', 'ACTIVE', 'expiring_soon', 'pending_signature', 'waiting_extension', 'checking_out', 'draft'] },
+          status: { in: ['active', 'ACTIVE', 'approved', 'expiring_soon', 'pending_signature', 'waiting_extension', 'checking_out', 'draft'] },
           deletedAt: null,
         },
       });
@@ -192,7 +192,7 @@ export class ProvisionalRentalTermService {
         where: {
           dormitoryId,
           roomId: data.roomId,
-          status: { in: ['RESERVED', 'ACTIVE', 'reserved', 'active'] },
+          status: { in: ['RESERVED', 'ACTIVE', 'reserved', 'active', 'CONVERTED', 'ENDED'] },
           deletedAt: null,
         },
       });
