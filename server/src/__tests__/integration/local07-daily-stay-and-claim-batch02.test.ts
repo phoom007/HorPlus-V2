@@ -19,6 +19,9 @@ import {
   maskPhone,
 } from '../../utils/thai-identity.util.js';
 
+const getBangkokToday = () => new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
+const getBangkokTomorrow = () => new Date(Date.now() + 7 * 3600 * 1000 + 86400000).toISOString().slice(0, 10);
+
 describe('LOCAL-07 Batch 02: Daily Stay Domain, Invoicing & Tenant Self-Claim', () => {
   const prisma = getPrismaClient();
   let app: any;
@@ -331,8 +334,8 @@ describe('LOCAL-07 Batch 02: Daily Stay Domain, Invoicing & Tenant Self-Claim', 
     });
 
     it('E. Owner Daily Quick Add atomically creates and approves in 1 step for active stay', async () => {
-      const today = new Date().toISOString().slice(0, 10);
-      const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+      const today = getBangkokToday();
+      const tomorrow = getBangkokTomorrow();
 
       const quickAddResult = await dailyStayService.ownerQuickAddDailyStay(
         dormitoryId,
@@ -395,7 +398,7 @@ describe('LOCAL-07 Batch 02: Daily Stay Domain, Invoicing & Tenant Self-Claim', 
     });
 
     it('G. Scheduled completion: active stay ending naturally transitions to COMPLETED and vacates room', async () => {
-      const today = new Date().toISOString().slice(0, 10);
+      const today = getBangkokToday();
 
       const pastStay = await dailyStayService.ownerQuickAddDailyStay(
         dormitoryId,
@@ -412,7 +415,7 @@ describe('LOCAL-07 Batch 02: Daily Stay Domain, Invoicing & Tenant Self-Claim', 
       expect(pastStay.status).toBe('ACTIVE');
 
       // Run scheduled completion simulating next day
-      const tomorrow = new Date(Date.now() + 86400000);
+      const tomorrow = new Date(Date.now() + 7 * 3600 * 1000 + 86400000);
       const compResult = await dailyStayService.completeEndedDailyStays(dormitoryId, tomorrow);
       expect(compResult.completedCount).toBeGreaterThanOrEqual(1);
 
@@ -1234,8 +1237,8 @@ describe('LOCAL-07 Batch 02: Daily Stay Domain, Invoicing & Tenant Self-Claim', 
     });
 
     it('4. POST /api/v1/daily-stays/owner-quick-add creates and approves in 1 step, NOT appearing in pending query', async () => {
-      const today = new Date().toISOString().slice(0, 10);
-      const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+      const today = getBangkokToday();
+      const tomorrow = getBangkokTomorrow();
 
       const res = await request(httpApp)
         .post('/api/v1/daily-stays/owner-quick-add')
@@ -1268,8 +1271,8 @@ describe('LOCAL-07 Batch 02: Daily Stay Domain, Invoicing & Tenant Self-Claim', 
     });
 
     it('4b. Owner Daily Quick Add Rate Matrix: configured fallback, explicit rate, missing rate fail-closed (409), explicit 0.00 rate', async () => {
-      const today = new Date().toISOString().slice(0, 10);
-      const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+      const today = getBangkokToday();
+      const tomorrow = getBangkokTomorrow();
 
       // Setup fresh Dormitory with OWNER role and active member
       const matrixDorm = await prisma.dormitory.create({
@@ -3458,7 +3461,7 @@ describe('LOCAL-07 Batch 02: Daily Stay Domain, Invoicing & Tenant Self-Claim', 
         )
       );
 
-      const today = new Date().toISOString().slice(0, 10);
+      const today = getBangkokToday();
 
       // Concurrently execute 10 quick adds
       const results = await Promise.all(
@@ -3525,7 +3528,7 @@ describe('LOCAL-07 Batch 02: Daily Stay Domain, Invoicing & Tenant Self-Claim', 
         },
       });
 
-      const today = new Date().toISOString().slice(0, 10);
+      const today = getBangkokToday();
       const customEndDate = '2026-12-31';
 
       const result = await provService.createProvisionalTenantAndTerm(
@@ -3574,7 +3577,7 @@ describe('LOCAL-07 Batch 02: Daily Stay Domain, Invoicing & Tenant Self-Claim', 
         },
       });
 
-      const today = new Date().toISOString().slice(0, 10);
+      const today = getBangkokToday();
 
       const result = await dailyStayService.ownerQuickAddDailyStay(
         zeroDorm.id,
@@ -3615,7 +3618,7 @@ describe('LOCAL-07 Batch 02: Daily Stay Domain, Invoicing & Tenant Self-Claim', 
         },
       });
 
-      const today = new Date().toISOString().slice(0, 10);
+      const today = getBangkokToday();
 
       const result37 = await provService.createProvisionalTenantAndTerm(
         longDorm.id,

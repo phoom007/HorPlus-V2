@@ -646,7 +646,7 @@ export class ApiMeterAdapter implements MeterDataSource {
         roomId: r.roomId,
         roomNumber: r.room?.roomNumber || r.roomId,
         waterReading: Number(r.meterType === 'water' ? r.currentReading : 0),
-        electricityReading: Number(r.meterType === 'electricity' ? r.currentReading : 0),
+        electricityReading: Number(r.meterType === 'electricity' || r.meterType === 'electric' ? r.currentReading : 0),
         recordedAt: r.readAt || r.createdAt,
         ...r
       }));

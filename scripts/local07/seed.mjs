@@ -837,6 +837,247 @@ export async function seedLocal07Data() {
     dueDate: '2026-10-05',
   }, COMP_DORM.owner.id);
 
+  // --- Seed Realistic Daily Stays & Future Reservation Scenarios ---
+  // 1. Room 106: Active & Unpaid Daily Stay in August 2026
+  const tenantDaily106 = await prisma.tenant.create({
+    data: {
+      dormitoryId: compDorm.id,
+      tenantNumber: 'TNT-D-106',
+      firstName: 'เอกชัย',
+      lastName: 'รายวันสิงหา',
+      displayName: 'เอกชัย รายวันสิงหา',
+      phone: '088-777-1111',
+      status: 'active',
+    },
+  });
+
+  const dailyStay106 = await prisma.dailyStay.create({
+    data: {
+      dormitoryId: compDorm.id,
+      roomId: createdRooms['106'].id,
+      tenantId: tenantDaily106.id,
+      requestSource: 'OWNER',
+      applicantFullName: 'เอกชัย รายวันสิงหา',
+      applicantPhone: '088-777-1111',
+      startDate: new Date('2026-08-20T00:00:00.000Z'),
+      endDate: new Date('2026-08-25T00:00:00.000Z'),
+      checkInAt: new Date('2026-08-20T14:00:00.000+07:00'),
+      checkOutAt: new Date('2026-08-26T00:00:00.000+07:00'),
+      inclusiveDayCount: 6,
+      dailyRateAmount: 500.0,
+      totalRentAmount: 3000.0,
+      depositAmount: 500.0,
+      depositDeclaredStatus: 'UNPAID',
+      status: 'ACTIVE',
+      approvedAt: new Date('2026-08-20T14:00:00.000+07:00'),
+      approvedByUserId: COMP_DORM.owner.id,
+    },
+  });
+
+  const dailyInvoice106 = await prisma.dailyStayInvoice.create({
+    data: {
+      dormitoryId: compDorm.id,
+      dailyStayId: dailyStay106.id,
+      invoiceNumber: 'DINV-202608-001',
+      totalRentAmount: 3000.0,
+      depositAmount: 500.0,
+      totalAgreedAmount: 3500.0,
+      outstandingAmount: 3500.0,
+      status: 'ISSUED',
+    },
+  });
+
+  await prisma.dailyStayInvoiceItem.createMany({
+    data: [
+      {
+        invoiceId: dailyInvoice106.id,
+        itemType: 'DAILY_RENT',
+        description: 'ค่าเช่าห้องพักรายวัน 6 คืน',
+        amount: 3000.0,
+        status: 'OUTSTANDING',
+      },
+      {
+        invoiceId: dailyInvoice106.id,
+        itemType: 'DEPOSIT',
+        description: 'เงินประกันห้องพักรายวัน',
+        amount: 500.0,
+        status: 'OUTSTANDING',
+      },
+    ],
+  });
+
+  // 2. Room 205: Checked-out & Unpaid Daily Tail in July 2026 (checked out 2026-07-28, rent unpaid)
+  const tenantDaily205 = await prisma.tenant.create({
+    data: {
+      dormitoryId: compDorm.id,
+      tenantNumber: 'TNT-D-205',
+      firstName: 'วรพจน์',
+      lastName: 'ติดค้างรายวัน',
+      displayName: 'วรพจน์ ติดค้างรายวัน',
+      phone: '088-777-2222',
+      status: 'checked_out',
+    },
+  });
+
+  const dailyStay205 = await prisma.dailyStay.create({
+    data: {
+      dormitoryId: compDorm.id,
+      roomId: createdRooms['205'].id,
+      tenantId: tenantDaily205.id,
+      requestSource: 'OWNER',
+      applicantFullName: 'วรพจน์ ติดค้างรายวัน',
+      applicantPhone: '088-777-2222',
+      startDate: new Date('2026-07-25T00:00:00.000Z'),
+      endDate: new Date('2026-07-28T00:00:00.000Z'),
+      checkInAt: new Date('2026-07-25T14:00:00.000+07:00'),
+      checkOutAt: new Date('2026-07-29T00:00:00.000+07:00'),
+      actualCheckedOutAt: new Date('2026-07-28T11:00:00.000+07:00'),
+      checkedOutByUserId: COMP_DORM.owner.id,
+      inclusiveDayCount: 4,
+      dailyRateAmount: 550.0,
+      totalRentAmount: 2200.0,
+      depositAmount: 500.0,
+      depositDeclaredStatus: 'UNPAID',
+      status: 'CHECKED_OUT',
+      approvedAt: new Date('2026-07-25T14:00:00.000+07:00'),
+      approvedByUserId: COMP_DORM.owner.id,
+    },
+  });
+
+  const dailyInvoice205 = await prisma.dailyStayInvoice.create({
+    data: {
+      dormitoryId: compDorm.id,
+      dailyStayId: dailyStay205.id,
+      invoiceNumber: 'DINV-202607-001',
+      totalRentAmount: 2200.0,
+      depositAmount: 500.0,
+      totalAgreedAmount: 2700.0,
+      outstandingAmount: 2200.0,
+      status: 'ISSUED',
+    },
+  });
+
+  await prisma.dailyStayInvoiceItem.createMany({
+    data: [
+      {
+        invoiceId: dailyInvoice205.id,
+        itemType: 'DAILY_RENT',
+        description: 'ค่าเช่าห้องพักรายวัน 4 คืน (ค้างชำระ)',
+        amount: 2200.0,
+        status: 'OUTSTANDING',
+      },
+      {
+        invoiceId: dailyInvoice205.id,
+        itemType: 'DEPOSIT',
+        description: 'เงินประกันห้องพักรายวัน',
+        amount: 500.0,
+        status: 'DECLARED_PAID',
+        paidAt: new Date('2026-07-25T14:00:00.000+07:00'),
+      },
+    ],
+  });
+
+  // 3. Room B102: Historical Paid Daily Stay in July 2026 (checked out 2026-07-20, fully paid)
+  const tenantDailyB102 = await prisma.tenant.create({
+    data: {
+      dormitoryId: compDorm.id,
+      tenantNumber: 'TNT-D-B102',
+      firstName: 'ชาตรี',
+      lastName: 'จ่ายครบรายวัน',
+      displayName: 'ชาตรี จ่ายครบรายวัน',
+      phone: '088-777-3333',
+      status: 'checked_out',
+    },
+  });
+
+  const dailyStayB102 = await prisma.dailyStay.create({
+    data: {
+      dormitoryId: compDorm.id,
+      roomId: createdRooms['B102'].id,
+      tenantId: tenantDailyB102.id,
+      requestSource: 'OWNER',
+      applicantFullName: 'ชาตรี จ่ายครบรายวัน',
+      applicantPhone: '088-777-3333',
+      startDate: new Date('2026-07-15T00:00:00.000Z'),
+      endDate: new Date('2026-07-20T00:00:00.000Z'),
+      checkInAt: new Date('2026-07-15T14:00:00.000+07:00'),
+      checkOutAt: new Date('2026-07-21T00:00:00.000+07:00'),
+      actualCheckedOutAt: new Date('2026-07-20T10:00:00.000+07:00'),
+      checkedOutByUserId: COMP_DORM.owner.id,
+      inclusiveDayCount: 6,
+      dailyRateAmount: 600.0,
+      totalRentAmount: 3600.0,
+      depositAmount: 600.0,
+      depositDeclaredStatus: 'PAID',
+      status: 'COMPLETED',
+      approvedAt: new Date('2026-07-15T14:00:00.000+07:00'),
+      approvedByUserId: COMP_DORM.owner.id,
+    },
+  });
+
+  const dailyInvoiceB102 = await prisma.dailyStayInvoice.create({
+    data: {
+      dormitoryId: compDorm.id,
+      dailyStayId: dailyStayB102.id,
+      invoiceNumber: 'DINV-202607-002',
+      totalRentAmount: 3600.0,
+      depositAmount: 600.0,
+      totalAgreedAmount: 4200.0,
+      outstandingAmount: 0.0,
+      status: 'SETTLED',
+    },
+  });
+
+  await prisma.dailyStayInvoiceItem.createMany({
+    data: [
+      {
+        invoiceId: dailyInvoiceB102.id,
+        itemType: 'DAILY_RENT',
+        description: 'ค่าเช่าห้องพักรายวัน 6 คืน (ชำระแล้ว)',
+        amount: 3600.0,
+        status: 'SETTLED',
+        paidAt: new Date('2026-07-15T14:30:00.000+07:00'),
+      },
+      {
+        invoiceId: dailyInvoiceB102.id,
+        itemType: 'DEPOSIT',
+        description: 'เงินประกันห้องพักรายวัน (ชำระแล้ว)',
+        amount: 600.0,
+        status: 'SETTLED',
+        paidAt: new Date('2026-07-15T14:30:00.000+07:00'),
+      },
+    ],
+  });
+
+  // 4. Future Reservation on Room 205 starting Sept 15 (leaving Aug and Sept 1–14 as bookable gaps)
+  const tenantResv205 = await prisma.tenant.create({
+    data: {
+      dormitoryId: compDorm.id,
+      tenantNumber: 'TNT-RESV-205',
+      firstName: 'มนัส',
+      lastName: 'จองล่วงหน้า',
+      displayName: 'มนัส จองล่วงหน้า',
+      phone: '088-777-4444',
+      status: 'active',
+    },
+  });
+
+  await prisma.provisionalRentalTerm.create({
+    data: {
+      dormitoryId: compDorm.id,
+      roomId: createdRooms['205'].id,
+      tenantId: tenantResv205.id,
+      rentalType: 'MONTHLY',
+      startDate: new Date('2026-09-15T00:00:00.000Z'),
+      endDate: new Date('2027-01-14T00:00:00.000Z'),
+      durationMonths: 4,
+      unitRentAmount: 4800.0,
+      totalRentAmount: 19200.0,
+      status: 'RESERVED',
+      createdByUserId: COMP_DORM.owner.id,
+    },
+  });
+
   // Meter Readings for July 2026
   const meterFacts = [
     { roomNum: '101', prevWater: 100, curWater: 110, prevElec: 500, curElec: 560 }, // W: 10, E: 60

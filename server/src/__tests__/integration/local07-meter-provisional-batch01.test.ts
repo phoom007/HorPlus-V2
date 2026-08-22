@@ -791,7 +791,7 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
       )
     ).rejects.toThrow();
 
-    // 3. Client durationMonths=12 cannot override Building.termMonths (4)
+    // 3. Owner-editable term duration: durationMonths=12 is accepted and persisted (per Section 11)
     const validTerm = await provisionalRentalTermService.createProvisionalTenantAndTerm(
       testDormitoryId,
       {
@@ -800,12 +800,12 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
         rentalType: 'TERM',
         unitRentAmount: '20000.00',
         termInstallmentCount: 2,
-        durationMonths: 12, // Attempted client override
+        durationMonths: 12,
         startDate: '2026-06-01',
       },
       'user-owner-1'
     );
-    expect(validTerm.provisionalTerm.durationMonths).toBe(4);
+    expect(validTerm.provisionalTerm.durationMonths).toBe(12);
     expect(validTerm.provisionalTerm.termInstallmentCount).toBe(2);
   });
 
@@ -2817,6 +2817,152 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
       await prisma.building.deleteMany({ where: { dormitoryId: freeDormId } });
       await prisma.dormitoryBillingSettings.deleteMany({ where: { dormitoryId: freeDormId } });
       await prisma.dormitory.deleteMany({ where: { id: freeDormId } });
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // TEST 25: Section 2 Snapshot Independence Proof
+  // --------------------------------------------------------------------------
+  // --------------------------------------------------------------------------
+  // TEST 25: Section 2 Snapshot Independence Proof
+  // --------------------------------------------------------------------------
+  it('25. Meter Cycle Snapshot Independence: August elecPrev=10/elecCurr=20 saves cleanly and leaves July elecCurr=110 untouched', async () => {
+    const snapRoom = await prisma.room.create({
+      data: {
+        dormitoryId: testDormitoryId,
+        buildingId: testBuildingId,
+        roomNumber: 'SNAP-201',
+        normalizedRoomNumber: 'SNAP-201',
+        roomType: 'standard',
+        status: 'vacant',
+        floor: 2,
+        monthlyRent: 4000,
+        initialWaterReading: 0,
+        initialElectricityReading: 0,
+      },
+    });
+
+    try {
+      // 1. Setup July (cycle 1) reading
+      await meterService.saveBulkMeterWorkspace(
+        testDormitoryId,
+        {
+          billingCycleId: cycle1Id,
+          rows: [
+            {
+              roomId: snapRoom.id,
+              elecPrev: '100',
+              elecCurr: '110',
+              waterPrev: '70',
+              waterCurr: '80',
+            },
+          ],
+        },
+        'user-owner-1'
+      );
+
+      const julyElec = await meterRepo.findReadingByCycleRoomAndType(testDormitoryId, cycle1Id, snapRoom.id, 'electricity');
+      const julyWater = await meterRepo.findReadingByCycleRoomAndType(testDormitoryId, cycle1Id, snapRoom.id, 'water');
+      expect(Number(julyElec?.currentReading)).toBe(110);
+      expect(Number(julyWater?.currentReading)).toBe(80);
+
+      // 2. Save August (cycle 2) with custom snapshot prev=10, curr=20
+      const augSaveRes = await meterService.saveBulkMeterWorkspace(
+        testDormitoryId,
+        {
+          billingCycleId: cycle2Id,
+          rows: [
+            {
+              roomId: snapRoom.id,
+              elecPrev: '10',
+              elecCurr: '20',
+              waterPrev: '15',
+              waterCurr: '25',
+            },
+          ],
+        },
+        'user-owner-1'
+      );
+      expect(augSaveRes.savedCount).toBe(1);
+
+      // 3. Verify August owns its snapshot values
+      const augElec = await meterRepo.findReadingByCycleRoomAndType(testDormitoryId, cycle2Id, snapRoom.id, 'electricity');
+      const augWater = await meterRepo.findReadingByCycleRoomAndType(testDormitoryId, cycle2Id, snapRoom.id, 'water');
+      expect(Number(augElec?.previousReading)).toBe(10);
+      expect(Number(augElec?.currentReading)).toBe(20);
+      expect(Number(augElec?.usageUnits)).toBe(10);
+      expect(Number(augWater?.previousReading)).toBe(15);
+      expect(Number(augWater?.currentReading)).toBe(25);
+      expect(Number(augWater?.usageUnits)).toBe(10);
+
+      // 4. Verify July current readings remain untouched
+      const julyElecAfter = await meterRepo.findReadingByCycleRoomAndType(testDormitoryId, cycle1Id, snapRoom.id, 'electricity');
+      const julyWaterAfter = await meterRepo.findReadingByCycleRoomAndType(testDormitoryId, cycle1Id, snapRoom.id, 'water');
+      expect(Number(julyElecAfter?.currentReading)).toBe(110);
+      expect(Number(julyWaterAfter?.currentReading)).toBe(80);
+    } finally {
+      await prisma.meterReading.deleteMany({ where: { roomId: snapRoom.id } });
+      await prisma.room.deleteMany({ where: { id: snapRoom.id } });
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // TEST 26: Section 4 First-Cycle Detection Proof (Distinct Dormitory Starting in November)
+  // --------------------------------------------------------------------------
+  it('26. First-Cycle Detection: A distinct dormitory starting in November (2026-11) has isFirstCycle=true on 2026-11 and isFirstCycle=false on 2026-12', async () => {
+    const novDorm = await prisma.dormitory.create({
+      data: {
+        id: '99999999-0000-4000-8000-000000000099',
+        name: 'หอพักเริ่มเดือนพฤศจิกายน',
+        phone: '0812345678',
+        province: 'Bangkok',
+      },
+    });
+
+    try {
+      const novCycle = await prisma.billingCycle.create({
+        data: {
+          dormitoryId: novDorm.id,
+          cycleCode: '2026-11',
+          name: 'พฤศจิกายน 2569',
+          periodStart: new Date('2026-11-01T00:00:00.000Z'),
+          periodEnd: new Date('2026-11-30T23:59:59.999Z'),
+          dueDate: new Date('2026-12-05T23:59:59.999Z'),
+          billingDate: new Date('2026-11-01T00:00:00.000Z'),
+          status: 'open',
+        },
+      });
+
+      const decCycle = await prisma.billingCycle.create({
+        data: {
+          dormitoryId: novDorm.id,
+          cycleCode: '2026-12',
+          name: 'ธันวาคม 2569',
+          periodStart: new Date('2026-12-01T00:00:00.000Z'),
+          periodEnd: new Date('2026-12-31T23:59:59.999Z'),
+          dueDate: new Date('2027-01-05T23:59:59.999Z'),
+          billingDate: new Date('2026-12-01T00:00:00.000Z'),
+          status: 'draft',
+        },
+      });
+
+      const cyclesRes = await billingCycleService.getBillingCycles(novDorm.id);
+      expect(cyclesRes.firstBillingCycleId).toBe(novCycle.id);
+
+      const novItem = cyclesRes.items.find((c) => c.id === novCycle.id);
+      const decItem = cyclesRes.items.find((c) => c.id === decCycle.id);
+
+      expect(novItem?.isFirstCycle).toBe(true);
+      expect(decItem?.isFirstCycle).toBe(false);
+
+      const singleNov = await billingCycleService.getBillingCycleById(novCycle.id, novDorm.id);
+      const singleDec = await billingCycleService.getBillingCycleById(decCycle.id, novDorm.id);
+
+      expect(singleNov.isFirstCycle).toBe(true);
+      expect(singleDec.isFirstCycle).toBe(false);
+    } finally {
+      await prisma.billingCycle.deleteMany({ where: { dormitoryId: novDorm.id } });
+      await prisma.dormitory.deleteMany({ where: { id: novDorm.id } });
     }
   });
 });

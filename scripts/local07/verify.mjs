@@ -265,6 +265,50 @@ export async function runVerification() {
     assert(Boolean(r105Sept?.tenantId) && r105Sept?.billingSource === 'PROVISIONAL_TERM', 'Room 105 (Term) is visible in September 2026 (term ends October 31)');
   }
 
+  // 7. Daily Stay Domain & Financial Tail Verification
+  console.log('\n--- 7. Daily Stay Domain & Financial Tail Verification ---');
+  const room106Db = allRooms.find(r => r.roomNumber === '106');
+  const room205Db = allRooms.find(r => r.roomNumber === '205');
+  const roomB102Db = allRooms.find(r => r.roomNumber === 'B102');
+
+  if (cycleAugDb && room106Db) {
+    const augPreview = await meterService.getMeterBillingPreviewContext(COMP_DORM.id, cycleAugDb.id);
+    const r106Aug = augPreview.rooms.find(r => r.roomId === room106Db.id);
+    assert(r106Aug?.billingSource === 'DAILY_STAY', 'Room 106 is ACTIVE Daily stay in August 2026');
+    assert(r106Aug?.isDailyUnpaid === true, 'Room 106 has isDailyUnpaid = true in August 2026');
+  }
+
+  if (cycleJulyDb && room205Db) {
+    const julyPreview = await meterService.getMeterBillingPreviewContext(COMP_DORM.id, cycleJulyDb.id);
+    const r205July = julyPreview.rooms.find(r => r.roomId === room205Db.id);
+    assert(r205July?.isDailyUnpaid === true, 'Room 205 has isDailyUnpaid = true in July 2026 (checked-out unpaid tail)');
+  }
+
+  if (cycleAugDb && room205Db) {
+    const augPreview = await meterService.getMeterBillingPreviewContext(COMP_DORM.id, cycleAugDb.id);
+    const r205Aug = augPreview.rooms.find(r => r.roomId === room205Db.id);
+    assert(r205Aug?.billingSource === 'NONE', 'Room 205 physical availability is free (NONE) in August 2026 despite July unpaid tail');
+  }
+
+  if (cycleJulyDb && roomB102Db) {
+    const julyPreview = await meterService.getMeterBillingPreviewContext(COMP_DORM.id, cycleJulyDb.id);
+    const rB102July = julyPreview.rooms.find(r => r.roomId === roomB102Db.id);
+    assert(rB102July?.isDailyUnpaid === false, 'Room B102 has isDailyUnpaid = false in July 2026 (historical settled stay)');
+    assert(Number(rB102July?.historicalDailyCount) >= 1, 'Room B102 has historicalDailyCount >= 1 in July 2026');
+  }
+
+  if (cycleAugDb && room204Db) {
+    const augPreview = await meterService.getMeterBillingPreviewContext(COMP_DORM.id, cycleAugDb.id);
+    const r204Aug = augPreview.rooms.find(r => r.roomId === room204Db.id);
+    assert(r204Aug?.hasBookableGap === true, 'Room 204 has hasBookableGap = true in August 2026 (partial cycle after Aug 1)');
+  }
+
+  if (cycleSeptDb && room205Db) {
+    const septPreview = await meterService.getMeterBillingPreviewContext(COMP_DORM.id, cycleSeptDb.id);
+    const r205Sept = septPreview.rooms.find(r => r.roomId === room205Db.id);
+    assert(r205Sept?.hasBookableGap === true, 'Room 205 has hasBookableGap = true in September 2026 (future reservation starts Sept 15)');
+  }
+
   console.log('\n================================================================================');
   if (failures === 0) {
     console.log('🎉 ALL LOCAL-07 SANDBOX INTEGRITY CHECKS PASSED PERFECTLY (0 FAILURES)');

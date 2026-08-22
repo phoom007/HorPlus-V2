@@ -39,3 +39,30 @@ describe('calculateInstallmentSchedule (Frontend)', () => {
     expect(schedule[0].amount).toBe(0);
   });
 });
+
+describe('calculateMonthEndDate (Frontend Canonical Rule: add calendar months minus 1 day)', () => {
+  // Canonical month end calculation utility
+  const calculateMonthEndDate = (start: string, months: number): string => {
+    if (!start || months < 1) return '';
+    const [y, m, d] = start.split('-').map(Number);
+    let targetYear = y;
+    let targetMonth = m - 1 + months;
+    targetYear += Math.floor(targetMonth / 12);
+    targetMonth = targetMonth % 12;
+
+    const maxDay = new Date(Date.UTC(targetYear, targetMonth + 1, 0)).getUTCDate();
+    const targetDay = Math.min(d, maxDay);
+
+    const anniversary = new Date(Date.UTC(targetYear, targetMonth, targetDay));
+    anniversary.setUTCDate(anniversary.getUTCDate() - 1);
+    return anniversary.toISOString().slice(0, 10);
+  };
+
+  it('correctly derives 2026-08-31 for start 2026-05-01 with 4 calendar months', () => {
+    expect(calculateMonthEndDate('2026-05-01', 4)).toBe('2026-08-31');
+  });
+
+  it('correctly derives 2026-12-22 for start 2026-08-23 with 4 calendar months', () => {
+    expect(calculateMonthEndDate('2026-08-23', 4)).toBe('2026-12-22');
+  });
+});

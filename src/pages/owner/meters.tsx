@@ -32,7 +32,8 @@ import {
   Circle,
   AlertCircle,
   Info,
-  Clock
+  Clock,
+  Pencil
 } from 'lucide-react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { queryKeys, STALE_TIMES } from '../../lib/queryClient';
@@ -169,7 +170,7 @@ export function buildRowsFromWorkspace(params: {
     if (r.meterType === 'water') {
       readingsByRoom[r.roomId].waterPrev = r.previousReading !== undefined && r.previousReading !== null ? String(r.previousReading) : undefined;
       readingsByRoom[r.roomId].waterCurr = r.currentReading !== undefined && r.currentReading !== null ? String(r.currentReading) : undefined;
-    } else if (r.meterType === 'electricity') {
+    } else if (r.meterType === 'electricity' || r.meterType === 'electric') {
       readingsByRoom[r.roomId].elecPrev = r.previousReading !== undefined && r.previousReading !== null ? String(r.previousReading) : undefined;
       readingsByRoom[r.roomId].elecCurr = r.currentReading !== undefined && r.currentReading !== null ? String(r.currentReading) : undefined;
     }
@@ -466,7 +467,7 @@ export function mapErrorMessageToThai(raw: any): string {
 
   const code = typeof rawCode === 'string' ? rawCode.trim() : '';
 
-  if (code === 'NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM' || code === 'NO_ACTIVE_CONTRACT') {
+  if (code.startsWith('NO_ACTIVE') || code.includes('NO_ACTIVE_CONTRACT') || code.includes('NO_ACTIVE')) {
     return 'ไม่พบผู้เช่า';
   }
   if (code === 'ROOM_LOCKED_PAID') {
@@ -498,7 +499,7 @@ export function mapErrorMessageToThai(raw: any): string {
 
   const msg = typeof rawMessage === 'string' ? rawMessage.trim() : '';
 
-  if (msg.includes('NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM') || msg.includes('NO_ACTIVE_CONTRACT')) {
+  if (msg.includes('NO_ACTIVE') || msg.includes('NO_ACTIVE_CONTRACT')) {
     return 'ไม่พบผู้เช่า';
   }
   if (msg.includes('ROOM_LOCKED_PAID')) {
@@ -571,6 +572,13 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [toastType, setToastType] = useState<'success' | 'error' | 'warning' | 'info'>('success');
   const [isToastFading, setIsToastFading] = useState(false);
+  const [unlockedElecPrev, setUnlockedElecPrev] = useState<{ [roomId: string]: boolean }>({});
+  const [unlockedWaterPrev, setUnlockedWaterPrev] = useState<{ [roomId: string]: boolean }>({});
+
+  useEffect(() => {
+    setUnlockedElecPrev({});
+    setUnlockedWaterPrev({});
+  }, [selectedBillingCycleId]);
 
   useEffect(() => {
     if (saveSuccess || toastMessage) {
@@ -1761,12 +1769,24 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       let targetColName = colName;
 
       if (e.key === 'ArrowUp') {
-        if (rowIndex > 0) {
-          targetRowIndex = rowIndex - 1;
+        let r = rowIndex - 1;
+        while (r >= 0) {
+          const rowInput = tbody.querySelector(`input[data-row="${r}"]:not([disabled]):not([readonly])`);
+          if (rowInput) {
+            targetRowIndex = r;
+            break;
+          }
+          r--;
         }
       } else if (e.key === 'ArrowDown') {
-        if (rowIndex < filteredRows.length - 1) {
-          targetRowIndex = rowIndex + 1;
+        let r = rowIndex + 1;
+        while (r < filteredRows.length) {
+          const rowInput = tbody.querySelector(`input[data-row="${r}"]:not([disabled]):not([readonly])`);
+          if (rowInput) {
+            targetRowIndex = r;
+            break;
+          }
+          r++;
         }
       } else if (e.key === 'ArrowLeft') {
         let prevColIdx = colIdx - 1;
@@ -1868,9 +1888,9 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       let hasChanges = false;
 
       if (!orig || row.waterCurr !== orig.waterCurr) { dirtyObj.waterCurr = row.waterCurr; hasChanges = true; }
-      if (!orig || (isFirstCycle && row.waterPrev !== orig.waterPrev)) { dirtyObj.waterPrev = row.waterPrev; hasChanges = true; }
+      if (!orig || row.waterPrev !== orig.waterPrev) { dirtyObj.waterPrev = row.waterPrev; hasChanges = true; }
       if (!orig || row.elecCurr !== orig.elecCurr) { dirtyObj.elecCurr = row.elecCurr; hasChanges = true; }
-      if (!orig || (isFirstCycle && row.elecPrev !== orig.elecPrev)) { dirtyObj.elecPrev = row.elecPrev; hasChanges = true; }
+      if (!orig || row.elecPrev !== orig.elecPrev) { dirtyObj.elecPrev = row.elecPrev; hasChanges = true; }
       if (!orig || row.peopleCount !== orig.peopleCount) { dirtyObj.peopleCount = row.peopleCount; hasChanges = true; }
       if (!orig || row.overdueAmount !== orig.overdueAmount) { dirtyObj.manualOutstandingAmount = row.overdueAmount; hasChanges = true; }
       if (!orig || JSON.stringify(row.otherFees || []) !== JSON.stringify(orig.otherFees || [])) { dirtyObj.otherFees = row.otherFees; hasChanges = true; }
@@ -1892,16 +1912,16 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       );
       setIsSaving(false);
       if (res && res.success) {
-        showToast(targetAction === 'issue' ? `ออกบิลห้อง ${row.roomNumber} เรียบร้อยแล้ว` : `ยกเลิกบิลห้อง ${row.roomNumber} เรียบร้อยแล้ว`);
+        showToast(targetAction === 'issue' ? `ออกบิลห้อง ${row.roomNumber} เรียบร้อยแล้ว` : `ยกเลิกบิลห้อง ${row.roomNumber} เรียบร้อยแล้ว`, 'success');
         queryClient.invalidateQueries({ queryKey: queryKeys.meterWorkspace(currentDormId, selectedBillingCycleId) });
         queryClient.invalidateQueries({ queryKey: queryKeys.meterPreviewContext(currentDormId, selectedBillingCycleId) });
         queryClient.invalidateQueries({ queryKey: queryKeys.bills(currentDormId) });
       } else {
-        showToast(res?.error?.message || 'เกิดข้อผิดพลาดในการเปลี่ยนสถานะบิล');
+        showToast(mapErrorMessageToThai(res?.error?.message) || 'เกิดข้อผิดพลาดในการเปลี่ยนสถานะบิล', 'error');
       }
     } catch (err: any) {
       setIsSaving(false);
-      showToast(err.message || 'เกิดข้อผิดพลาดในการเปลี่ยนสถานะบิล');
+      showToast(mapErrorMessageToThai(err.message) || 'เกิดข้อผิดพลาดในการเปลี่ยนสถานะบิล', 'error');
     }
   };
 
@@ -1921,9 +1941,9 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
         if (!orig) return true;
         return (
           r.waterCurr !== orig.waterCurr ||
-          (isFirstCycle && r.waterPrev !== orig.waterPrev) ||
+          r.waterPrev !== orig.waterPrev ||
           r.elecCurr !== orig.elecCurr ||
-          (isFirstCycle && r.elecPrev !== orig.elecPrev) ||
+          r.elecPrev !== orig.elecPrev ||
           r.peopleCount !== orig.peopleCount ||
           r.overdueAmount !== orig.overdueAmount ||
           JSON.stringify(r.otherFees || []) !== JSON.stringify(orig.otherFees || []) ||
@@ -1933,9 +1953,9 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
         const orig = (originalRowsRef.current || []).find(o => o.roomId === r.roomId);
         const dirtyObj: any = { roomId: r.roomId };
         if (!orig || r.waterCurr !== orig.waterCurr) dirtyObj.waterCurr = r.waterCurr;
-        if (!orig || (isFirstCycle && r.waterPrev !== orig.waterPrev)) dirtyObj.waterPrev = r.waterPrev;
+        if (!orig || r.waterPrev !== orig.waterPrev) dirtyObj.waterPrev = r.waterPrev;
         if (!orig || r.elecCurr !== orig.elecCurr) dirtyObj.elecCurr = r.elecCurr;
-        if (!orig || (isFirstCycle && r.elecPrev !== orig.elecPrev)) dirtyObj.elecPrev = r.elecPrev;
+        if (!orig || r.elecPrev !== orig.elecPrev) dirtyObj.elecPrev = r.elecPrev;
         if (!orig || r.peopleCount !== orig.peopleCount) dirtyObj.peopleCount = r.peopleCount;
         if (!orig || r.overdueAmount !== orig.overdueAmount) dirtyObj.manualOutstandingAmount = r.overdueAmount;
         if (!orig || JSON.stringify(r.otherFees || []) !== JSON.stringify(orig.otherFees || [])) dirtyObj.otherFees = r.otherFees;
@@ -2000,7 +2020,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   const handleSaveMeters = async () => {
     if (isSaving) return;
     if (!selectedBillingCycleId) {
-      showToast('ยังไม่ได้ตั้งค่ารอบคำนวณ');
+      showToast('ยังไม่ได้ตั้งค่ารอบคำนวณ', 'error');
       return;
     }
 
@@ -2025,7 +2045,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       }
     }
     if (lowerReadingError) {
-      showToast('เลขอ่านมิเตอร์ใหม่ต้องไม่น้อยกว่าเลขอ่านครั้งก่อน');
+      showToast('เลขอ่านมิเตอร์ใหม่ต้องไม่น้อยกว่าเลขอ่านครั้งก่อน', 'error');
       return;
     }
 
@@ -2059,9 +2079,9 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
         const orig = (originalRowsRef.current || []).find(o => o.roomId === r.roomId);
         const dirtyObj: any = { roomId: r.roomId };
         if (!orig || r.waterCurr !== orig.waterCurr) dirtyObj.waterCurr = r.waterCurr;
-        if (!orig || (isFirstCycle && r.waterPrev !== orig.waterPrev)) dirtyObj.waterPrev = r.waterPrev;
+        if (!orig || r.waterPrev !== orig.waterPrev) dirtyObj.waterPrev = r.waterPrev;
         if (!orig || r.elecCurr !== orig.elecCurr) dirtyObj.elecCurr = r.elecCurr;
-        if (!orig || (isFirstCycle && r.elecPrev !== orig.elecPrev)) dirtyObj.elecPrev = r.elecPrev;
+        if (!orig || r.elecPrev !== orig.elecPrev) dirtyObj.elecPrev = r.elecPrev;
         if (!orig || r.peopleCount !== orig.peopleCount) dirtyObj.peopleCount = r.peopleCount;
         if (!orig || r.overdueAmount !== orig.overdueAmount) dirtyObj.manualOutstandingAmount = r.overdueAmount;
         if (!orig || JSON.stringify(r.otherFees || []) !== JSON.stringify(orig.otherFees || [])) dirtyObj.otherFees = r.otherFees;
@@ -2075,6 +2095,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       setIsSaving(false);
 
       if (res && res.success) {
+        showToast('บันทึกข้อมูลสำเร็จ', 'success');
         setSaveSuccess(true);
         if (saveSuccessTimeoutRef.current) clearTimeout(saveSuccessTimeoutRef.current);
         saveSuccessTimeoutRef.current = setTimeout(() => setSaveSuccess(false), 3000);
@@ -2084,11 +2105,11 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
         queryClient.invalidateQueries({ queryKey: queryKeys.meterPreviewContext(currentDormId, selectedBillingCycleId) });
         queryClient.invalidateQueries({ queryKey: queryKeys.bills(currentDormId) });
       } else {
-        showToast(res?.error?.message || 'เกิดข้อผิดพลาดในการบันทึกข้อมูลมิเตอร์');
+        showToast(mapErrorMessageToThai(res?.error?.message) || 'เกิดข้อผิดพลาดในการบันทึกข้อมูลมิเตอร์', 'error');
       }
     } catch (err: any) {
       setIsSaving(false);
-      showToast(err.message || 'เกิดข้อผิดพลาดในการบันทึกข้อมูลมิเตอร์');
+      showToast(mapErrorMessageToThai(err.message) || 'เกิดข้อผิดพลาดในการบันทึกข้อมูลมิเตอร์', 'error');
     }
   };
 
@@ -2280,35 +2301,89 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                     {/* Elec Prev Input */}
                     {isElecUnit && (
                       <td className="p-4 text-center">
-                        <div
-                          onClick={(e) => {
-                            if (!isRowPaid) {
-                              const input = e.currentTarget.querySelector('input') as HTMLInputElement | null;
-                              input?.focus();
-                            }
-                          }}
-                          className={`flex items-center justify-center min-w-[80px] min-h-[32px] w-full ${!isRowPaid ? 'cursor-text' : 'cursor-default'}`}
-                        >
-                          <input
-                            type="text"
-                            inputMode="numeric"
-                            pattern="[0-9]*"
-                            disabled={isRowPaid}
-                            value={row.elecPrev}
-                            onChange={(e) => {
-                              handleMeterReadingChange(row.roomId, 'elecPrev', e.target.value);
+                        {isFirstCycle ? (
+                          <div
+                            onClick={(e) => {
+                              if (!isRowPaid) {
+                                const input = e.currentTarget.querySelector('input') as HTMLInputElement | null;
+                                input?.focus();
+                              }
                             }}
-                            onBlur={() => handleMeterReadingBlur(row.roomId, 'elecPrev')}
-                            onPaste={(e) => handlePaste(row.roomId, 'elecPrev', e)}
-                            data-row={idx}
-                            data-col="elecPrev"
-                            className={`w-20 px-2 py-1 text-xs border rounded-lg bg-white text-slate-800 text-center font-bold focus:outline-indigo-500 transition-all duration-300 disabled:bg-slate-50 disabled:text-slate-500 disabled:border-transparent ${
-                              flashingCells[`${row.roomId}-elecPrev`]
-                                ? 'animate-vibrant-flash shadow-md z-10'
-                                : 'border-gray-200'
-                            }`}
-                          />
-                        </div>
+                            className={`flex items-center justify-center min-w-[80px] min-h-[32px] w-full ${!isRowPaid ? 'cursor-text' : 'cursor-default'}`}
+                          >
+                            <input
+                              type="text"
+                              inputMode="numeric"
+                              pattern="[0-9]*"
+                              disabled={isRowPaid}
+                              value={row.elecPrev}
+                              onChange={(e) => {
+                                handleMeterReadingChange(row.roomId, 'elecPrev', e.target.value);
+                              }}
+                              onBlur={() => handleMeterReadingBlur(row.roomId, 'elecPrev')}
+                              onPaste={(e) => handlePaste(row.roomId, 'elecPrev', e)}
+                              data-row={idx}
+                              data-col="elecPrev"
+                              className={`w-20 px-2 py-1 text-xs border rounded-lg bg-white text-slate-800 text-center font-bold focus:outline-indigo-500 transition-all duration-300 disabled:bg-slate-50 disabled:text-slate-500 disabled:border-transparent ${
+                                flashingCells[`${row.roomId}-elecPrev`]
+                                  ? 'animate-vibrant-flash shadow-md z-10'
+                                  : 'border-gray-200'
+                              }`}
+                            />
+                          </div>
+                        ) : isRowPaid ? (
+                          <div className="flex items-center justify-center min-w-[80px] min-h-[32px] w-full">
+                            <span className="text-xs font-bold text-slate-400">{formatMeterReadingDisplay(row.elecPrev)}</span>
+                          </div>
+                        ) : unlockedElecPrev[row.roomId] ? (
+                          <div className="flex items-center justify-center gap-1 min-w-[80px] min-h-[32px] w-full">
+                            <input
+                              type="text"
+                              inputMode="numeric"
+                              pattern="[0-9]*"
+                              autoFocus
+                              value={row.elecPrev}
+                              onChange={(e) => {
+                                handleMeterReadingChange(row.roomId, 'elecPrev', e.target.value);
+                              }}
+                              onBlur={() => handleMeterReadingBlur(row.roomId, 'elecPrev')}
+                              onPaste={(e) => handlePaste(row.roomId, 'elecPrev', e)}
+                              data-row={idx}
+                              data-col="elecPrev"
+                              className="w-16 px-2 py-1 text-xs border border-indigo-300 rounded-lg bg-white text-slate-800 text-center font-bold focus:outline-indigo-500"
+                            />
+                            <button
+                              type="button"
+                              data-testid={`cancel-elec-prev-${row.roomId}`}
+                              title="ยกเลิกการแก้ไข"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                const orig = (originalRowsRef.current || []).find((o) => o.roomId === row.roomId);
+                                handleMeterReadingChange(row.roomId, 'elecPrev', orig ? orig.elecPrev : row.elecPrev);
+                                setUnlockedElecPrev((prev) => ({ ...prev, [row.roomId]: false }));
+                              }}
+                              className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="flex items-center justify-center gap-1.5 min-w-[80px] min-h-[32px] w-full group">
+                            <span className="text-xs font-bold text-slate-700">{formatMeterReadingDisplay(row.elecPrev)}</span>
+                            <button
+                              type="button"
+                              data-testid={`unlock-elec-prev-${row.roomId}`}
+                              title="แก้ไขเลขอ่านเดิม"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setUnlockedElecPrev((prev) => ({ ...prev, [row.roomId]: true }));
+                              }}
+                              className="p-1 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors cursor-pointer"
+                            >
+                              <Pencil className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        )}
                       </td>
                     )}
 
@@ -2352,35 +2427,89 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                     {/* Water Prev Input */}
                     {isWaterUnit && (
                       <td className="p-4 text-center">
-                        <div
-                          onClick={(e) => {
-                            if (!isRowPaid) {
-                              const input = e.currentTarget.querySelector('input') as HTMLInputElement | null;
-                              input?.focus();
-                            }
-                          }}
-                          className={`flex items-center justify-center min-w-[80px] min-h-[32px] w-full ${!isRowPaid ? 'cursor-text' : 'cursor-default'}`}
-                        >
-                          <input
-                            type="text"
-                            inputMode="numeric"
-                            pattern="[0-9]*"
-                            disabled={isRowPaid}
-                            value={row.waterPrev}
-                            onChange={(e) => {
-                              handleMeterReadingChange(row.roomId, 'waterPrev', e.target.value);
+                        {isFirstCycle ? (
+                          <div
+                            onClick={(e) => {
+                              if (!isRowPaid) {
+                                const input = e.currentTarget.querySelector('input') as HTMLInputElement | null;
+                                input?.focus();
+                              }
                             }}
-                            onBlur={() => handleMeterReadingBlur(row.roomId, 'waterPrev')}
-                            onPaste={(e) => handlePaste(row.roomId, 'waterPrev', e)}
-                            data-row={idx}
-                            data-col="waterPrev"
-                            className={`w-20 px-2 py-1 text-xs border rounded-lg bg-white text-slate-800 text-center font-bold focus:outline-indigo-500 transition-all duration-300 disabled:bg-slate-50 disabled:text-slate-500 disabled:border-transparent ${
-                              flashingCells[`${row.roomId}-waterPrev`]
-                                ? 'animate-vibrant-flash shadow-md z-10'
-                                : 'border-gray-200'
-                            }`}
-                          />
-                        </div>
+                            className={`flex items-center justify-center min-w-[80px] min-h-[32px] w-full ${!isRowPaid ? 'cursor-text' : 'cursor-default'}`}
+                          >
+                            <input
+                              type="text"
+                              inputMode="numeric"
+                              pattern="[0-9]*"
+                              disabled={isRowPaid}
+                              value={row.waterPrev}
+                              onChange={(e) => {
+                                handleMeterReadingChange(row.roomId, 'waterPrev', e.target.value);
+                              }}
+                              onBlur={() => handleMeterReadingBlur(row.roomId, 'waterPrev')}
+                              onPaste={(e) => handlePaste(row.roomId, 'waterPrev', e)}
+                              data-row={idx}
+                              data-col="waterPrev"
+                              className={`w-20 px-2 py-1 text-xs border rounded-lg bg-white text-slate-800 text-center font-bold focus:outline-indigo-500 transition-all duration-300 disabled:bg-slate-50 disabled:text-slate-500 disabled:border-transparent ${
+                                flashingCells[`${row.roomId}-waterPrev`]
+                                  ? 'animate-vibrant-flash shadow-md z-10'
+                                  : 'border-gray-200'
+                              }`}
+                            />
+                          </div>
+                        ) : isRowPaid ? (
+                          <div className="flex items-center justify-center min-w-[80px] min-h-[32px] w-full">
+                            <span className="text-xs font-bold text-slate-400">{formatMeterReadingDisplay(row.waterPrev)}</span>
+                          </div>
+                        ) : unlockedWaterPrev[row.roomId] ? (
+                          <div className="flex items-center justify-center gap-1 min-w-[80px] min-h-[32px] w-full">
+                            <input
+                              type="text"
+                              inputMode="numeric"
+                              pattern="[0-9]*"
+                              autoFocus
+                              value={row.waterPrev}
+                              onChange={(e) => {
+                                handleMeterReadingChange(row.roomId, 'waterPrev', e.target.value);
+                              }}
+                              onBlur={() => handleMeterReadingBlur(row.roomId, 'waterPrev')}
+                              onPaste={(e) => handlePaste(row.roomId, 'waterPrev', e)}
+                              data-row={idx}
+                              data-col="waterPrev"
+                              className="w-16 px-2 py-1 text-xs border border-indigo-300 rounded-lg bg-white text-slate-800 text-center font-bold focus:outline-indigo-500"
+                            />
+                            <button
+                              type="button"
+                              data-testid={`cancel-water-prev-${row.roomId}`}
+                              title="ยกเลิกการแก้ไข"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                const orig = (originalRowsRef.current || []).find((o) => o.roomId === row.roomId);
+                                handleMeterReadingChange(row.roomId, 'waterPrev', orig ? orig.waterPrev : row.waterPrev);
+                                setUnlockedWaterPrev((prev) => ({ ...prev, [row.roomId]: false }));
+                              }}
+                              className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="flex items-center justify-center gap-1.5 min-w-[80px] min-h-[32px] w-full group">
+                            <span className="text-xs font-bold text-slate-700">{formatMeterReadingDisplay(row.waterPrev)}</span>
+                            <button
+                              type="button"
+                              data-testid={`unlock-water-prev-${row.roomId}`}
+                              title="แก้ไขเลขอ่านเดิม"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setUnlockedWaterPrev((prev) => ({ ...prev, [row.roomId]: true }));
+                              }}
+                              className="p-1 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors cursor-pointer"
+                            >
+                              <Pencil className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        )}
                       </td>
                     )}
 
@@ -2522,55 +2651,24 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                       </div>
                     </td>
 
-                    {/* Total / Amount Due Output */}
-                    <td className="p-4 text-right text-indigo-600 font-extrabold text-sm whitespace-nowrap">
+                    {/* Calculated Total & Financial Breakdown */}
+                    <td className="p-4 text-right">
                       {(() => {
-                        const financial = getOwnerFinancialBreakdown(row, roomCtx, previewContext?.rateSnapshot, bills, selectedBillingCycleId);
-                        const isExpanded = !!expandedBreakdowns[row.roomId];
+                        const amountDue = roomCtx ? roomCtx.amountDue : calculatedTotal.toFixed(2);
+                        const chargeComponents = roomCtx?.chargeComponents || [];
 
                         return (
-                          <div className="flex flex-col items-end">
-                            <span>{financial.formattedAmount} ฿</span>
-                            {financial.components.length > 1 && (
-                              <button
-                                type="button"
-                                onClick={() => setExpandedBreakdowns(prev => ({ ...prev, [row.roomId]: !prev[row.roomId] }))}
-                                className="text-[10px] text-slate-400 hover:text-indigo-600 font-medium cursor-pointer transition-colors mt-0.5 flex items-center gap-0.5"
-                              >
-                                <span>ดูรายละเอียด</span>
-                                <ChevronDown className={`w-2.5 h-2.5 transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`} />
-                              </button>
-                            )}
-                            {isExpanded && financial.components.length > 1 && (
-                              <div
-                                data-testid={`owner-financial-components-${row.roomId}`}
-                                className="mt-1 space-y-0.5 text-left w-full"
-                              >
-                                {financial.components.map((c, cIdx) => (
-                                  <div
-                                    key={cIdx}
-                                    data-testid={`owner-financial-component-${c.label === 'บิลรายเดือน' ? 'monthly' : c.label === 'ค่าประกัน' ? 'deposit' : 'rent'}`}
-                                    className="flex items-center justify-between gap-3 text-[10px]"
-                                    title={c.title}
-                                  >
-                                    <div className="flex items-center gap-1.5 truncate">
-                                      {c.status === 'PAID' ? (
-                                        <CheckCircle2 className="w-3 h-3 text-emerald-600 shrink-0" aria-label="ชำระแล้ว" />
-                                      ) : c.status === 'UNPAID' ? (
-                                        <AlertCircle className="w-3 h-3 text-amber-500 shrink-0" aria-label="รอชำระเงิน" />
-                                      ) : (
-                                        <Circle className="w-3 h-3 text-slate-400 shrink-0" aria-label="ยังไม่ออกบิล (พรีวิว)" />
-                                      )}
-                                      <span className={`truncate font-medium ${
-                                        c.status === 'PAID' ? 'text-emerald-800' : c.status === 'UNPAID' ? 'text-amber-800' : 'text-slate-600'
-                                      }`}>
-                                        {c.label}
-                                      </span>
-                                    </div>
-                                    <span className={`font-bold shrink-0 ${
-                                      c.status === 'PAID' ? 'text-emerald-700' : c.status === 'UNPAID' ? 'text-amber-700' : 'text-slate-700'
-                                    }`}>
-                                      {c.formattedAmount} ฿
+                          <div className="flex flex-col items-end gap-1">
+                            <span className="font-extrabold text-sm text-slate-900">
+                              {formatMoneyDisplay(amountDue)} ฿
+                            </span>
+                            {chargeComponents.length > 0 && (
+                              <div className="flex flex-col items-end gap-0.5 mt-0.5">
+                                {chargeComponents.map((c: any, i: number) => (
+                                  <div key={i} className="flex items-center gap-1 text-[11px] text-slate-500">
+                                    <span>{c.label}:</span>
+                                    <span className={`font-bold ${c.status === 'PAID' ? 'text-emerald-600' : 'text-amber-600'}`}>
+                                      {c.amount} ฿
                                     </span>
                                   </div>
                                 ))}
@@ -2589,11 +2687,19 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                     }`}>
                       {(() => {
                         if (isDaily) {
+                          const isDailyUnpaid = roomCtx?.isDailyUnpaid;
                           return (
                             <div className="flex items-center justify-center min-w-[85px]">
-                              <span className="inline-flex items-center px-2 py-1 bg-slate-100 text-slate-700 text-xs font-bold rounded-lg border border-slate-200">
-                                รายวัน
-                              </span>
+                              {isDailyUnpaid ? (
+                                <span className="inline-flex items-center px-2 py-1 bg-rose-50 text-rose-700 text-xs font-bold rounded-lg border border-rose-200">
+                                  <AlertCircle className="w-3 h-3 text-rose-500 mr-1 shrink-0" />
+                                  รายวัน
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center px-2 py-1 bg-slate-100 text-slate-700 text-xs font-bold rounded-lg border border-slate-200">
+                                  รายวัน
+                                </span>
+                              )}
                             </div>
                           );
                         }
@@ -2639,7 +2745,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                                 ? 'ชำระแล้ว'
                                 : row.billStatus === 'draft' || row.billStatus === 'cancelled'
                                 ? 'ยังไม่ออกบิล'
-                                : 'รอชำระเงิน'}
+                                : 'รอชำระ'}
                             </span>
                           </div>
                         );
@@ -2654,31 +2760,10 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                         const isFuture = Boolean(roomCtx?.isFutureReservation);
                         const isLineLinked = roomCtx ? roomCtx.isLineLinked : Boolean((tenant as any)?.linkedUserId);
                         const peopleCountVal = Number(row.peopleCount ?? roomCtx?.currentHouseholdPeopleCount ?? roomCtx?.snapshotPeopleCount ?? 1);
-
-                        if (effectiveTenantId && effectiveTenantName && !isFuture) {
-                          return (
-                            <div className="flex flex-col items-start gap-0.5">
-                              <button
-                                type="button"
-                                onClick={() => onSelectTenant(effectiveTenantId, row.roomId)}
-                                className="inline-flex items-center gap-1.5 text-indigo-600 hover:text-indigo-800 hover:underline transition-all cursor-pointer font-bold whitespace-nowrap"
-                              >
-                                {peopleCountVal > 1 ? (
-                                  <Users className="w-3.5 h-3.5 shrink-0" />
-                                ) : (
-                                  <User className="w-3.5 h-3.5 shrink-0" />
-                                )}
-                                <span className="truncate max-w-[100px]">{effectiveTenantName}</span>
-                                <ArrowRight className="w-3 h-3 opacity-60 shrink-0" />
-                              </button>
-                              {!isLineLinked && (
-                                <span className="text-[10px] text-slate-400 font-normal leading-tight">
-                                  (ยังไม่ได้เชื่อม LINE)
-                                </span>
-                              )}
-                            </div>
-                          );
-                        }
+                        const activeCycleCode = selectedCycleCode || selectedCycle || billingCycles?.find((c: any) => c.id === selectedBillingCycleId)?.cycleCode || '';
+                        const isEligibleAddTenantCycle = isCycleInRollingThreeMonthWindow(activeCycleCode);
+                        const hasBookableGap = roomCtx?.hasBookableGap ?? true;
+                        const historicalDailyCount = roomCtx?.historicalDailyCount || 0;
 
                         if (isFuture) {
                           return (
@@ -2701,53 +2786,126 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                           );
                         }
 
-                        const activeCycleCode = selectedCycleCode || selectedCycle || billingCycles?.find((c: any) => c.id === selectedBillingCycleId)?.cycleCode || '';
-                        const isEligibleAddTenantCycle = isCycleInRollingThreeMonthWindow(activeCycleCode);
+                        if (isEligibleAddTenantCycle) {
+                          return (
+                            <div className="flex items-center gap-2">
+                              {effectiveTenantId && effectiveTenantName && (
+                                <div className="flex flex-col items-start gap-0.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => onSelectTenant(effectiveTenantId, row.roomId)}
+                                    className="inline-flex items-center gap-1.5 text-indigo-600 hover:text-indigo-800 hover:underline transition-all cursor-pointer font-bold whitespace-nowrap"
+                                  >
+                                    {peopleCountVal > 1 ? (
+                                      <Users className="w-3.5 h-3.5 shrink-0" />
+                                    ) : (
+                                      <User className="w-3.5 h-3.5 shrink-0" />
+                                    )}
+                                    <span className="truncate max-w-[100px]">{effectiveTenantName}</span>
+                                    <ArrowRight className="w-3 h-3 opacity-60 shrink-0" />
+                                  </button>
+                                  {!isLineLinked && (
+                                    <span className="text-[10px] text-slate-400 font-normal leading-tight">
+                                      (ยังไม่ได้เชื่อม LINE)
+                                    </span>
+                                  )}
+                                </div>
+                              )}
+                              {hasBookableGap && (room || row.roomId) && (
+                                <button
+                                  type="button"
+                                  disabled={quickAddLoadingRoomId === (room?.id || row.roomId)}
+                                  onClick={async () => {
+                                    const targetRoomId = room?.id || row.roomId;
+                                    try {
+                                      setQuickAddLoadingRoomId(targetRoomId);
+                                      const dormId = dormitoryId || localStorage.getItem('horplus_current_dormitory_id') || localStorage.getItem('selected_dormitory_id') || '';
+                                      const res = await httpRequest<{ data: QuickAddRoomContext }>(
+                                        'GET',
+                                        `/api/v1/properties/rooms/${targetRoomId}/quick-add-context`,
+                                        undefined,
+                                        { headers: dormId ? { 'x-dormitory-id': dormId } : {} }
+                                      );
 
-                        if (isEligibleAddTenantCycle && (room || row.roomId)) {
+                                      if (!res.data || !res.data.effective) {
+                                        throw new Error('ไม่สามารถโหลดข้อมูลสิทธิ์และค่าเช่าห้องพักได้');
+                                      }
+
+                                      setSelectedQuickAddContext(res.data);
+                                      setQuickAddModalOpen(true);
+                                    } catch (err: any) {
+                                      showToast(mapErrorMessageToThai(err.message || 'ไม่สามารถโหลดข้อมูลห้องพักได้ กรุณาลองใหม่อีกครั้ง'), 'error');
+                                    } finally {
+                                      setQuickAddLoadingRoomId(null);
+                                    }
+                                  }}
+                                  className="inline-flex items-center gap-1 text-[11px] font-bold text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 px-2 py-1 rounded-lg border border-indigo-200 transition-all cursor-pointer shadow-2xs disabled:opacity-50 whitespace-nowrap shrink-0"
+                                >
+                                  {quickAddLoadingRoomId === (room?.id || row.roomId) ? (
+                                    <Loader2 className="w-3 h-3 animate-spin shrink-0" />
+                                  ) : (
+                                    <Plus className="w-3 h-3 shrink-0" />
+                                  )}
+                                  <span className="whitespace-nowrap">เพิ่มผู้เช่า</span>
+                                </button>
+                              )}
+                              {!effectiveTenantId && !hasBookableGap && (
+                                <span className="text-gray-400">ไม่มีข้อมูล</span>
+                              )}
+                            </div>
+                          );
+                        }
+
+                        // Historical cycles outside rolling action window
+                        const hasMonthly = Boolean(effectiveTenantId && effectiveTenantName);
+                        const hasDaily = historicalDailyCount > 0;
+
+                        if (hasMonthly && hasDaily) {
+                          return (
+                            <div className="flex flex-col items-start gap-1">
+                              <button
+                                type="button"
+                                onClick={() => onSelectTenant(effectiveTenantId, row.roomId)}
+                                className="inline-flex items-center gap-1.5 text-indigo-600 hover:text-indigo-800 hover:underline transition-all cursor-pointer font-bold whitespace-nowrap"
+                              >
+                                <User className="w-3.5 h-3.5 shrink-0" />
+                                <span className="truncate max-w-[100px]">{effectiveTenantName}</span>
+                                <ArrowRight className="w-3 h-3 opacity-60 shrink-0" />
+                              </button>
+                              <span className="text-xs font-bold text-slate-700">
+                                ผู้เช่ารายวัน {historicalDailyCount} คน
+                              </span>
+                            </div>
+                          );
+                        }
+
+                        if (hasMonthly) {
                           return (
                             <button
                               type="button"
-                              disabled={quickAddLoadingRoomId === (room?.id || row.roomId)}
-                              onClick={async () => {
-                                const targetRoomId = room?.id || row.roomId;
-                                try {
-                                  setQuickAddLoadingRoomId(targetRoomId);
-                                  const dormId = dormitoryId || localStorage.getItem('horplus_current_dormitory_id') || localStorage.getItem('selected_dormitory_id') || '';
-                                  const res = await httpRequest<{ data: QuickAddRoomContext }>(
-                                    'GET',
-                                    `/api/v1/properties/rooms/${targetRoomId}/quick-add-context`,
-                                    undefined,
-                                    { headers: dormId ? { 'x-dormitory-id': dormId } : {} }
-                                  );
-
-                                  if (!res.data || !res.data.effective) {
-                                    throw new Error('ไม่สามารถโหลดข้อมูลสิทธิ์และค่าเช่าห้องพักได้');
-                                  }
-
-                                  setSelectedQuickAddContext(res.data);
-                                  setQuickAddModalOpen(true);
-                                } catch (err: any) {
-                                  showToast(mapErrorMessageToThai(err.message || 'ไม่สามารถโหลดข้อมูลห้องพักได้ กรุณาลองใหม่อีกครั้ง'));
-                                } finally {
-                                  setQuickAddLoadingRoomId(null);
-                                }
-                              }}
-                              className="inline-flex items-center gap-1 text-[11px] font-bold text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 px-2 py-1 rounded-lg border border-indigo-200 transition-all cursor-pointer shadow-2xs disabled:opacity-50 whitespace-nowrap shrink-0"
+                              onClick={() => onSelectTenant(effectiveTenantId, row.roomId)}
+                              className="inline-flex items-center gap-1.5 text-indigo-600 hover:text-indigo-800 hover:underline transition-all cursor-pointer font-bold whitespace-nowrap"
                             >
-                              {quickAddLoadingRoomId === (room?.id || row.roomId) ? (
-                                <Loader2 className="w-3 h-3 animate-spin shrink-0" />
+                              {peopleCountVal > 1 ? (
+                                <Users className="w-3.5 h-3.5 shrink-0" />
                               ) : (
-                                <Plus className="w-3 h-3 shrink-0" />
+                                <User className="w-3.5 h-3.5 shrink-0" />
                               )}
-                              <span className="whitespace-nowrap">เพิ่มผู้เช่า</span>
+                              <span className="truncate max-w-[100px]">{effectiveTenantName}</span>
+                              <ArrowRight className="w-3 h-3 opacity-60 shrink-0" />
                             </button>
                           );
                         }
 
-                        return (
-                          <span className="text-gray-400">ไม่มีข้อมูล</span>
-                        );
+                        if (hasDaily) {
+                          return (
+                            <span className="text-xs font-bold text-slate-700">
+                              ผู้เช่ารายวัน {historicalDailyCount} คน
+                            </span>
+                          );
+                        }
+
+                        return <span className="text-gray-400">ไม่มีข้อมูล</span>;
                       })()}
                     </td>
                   </tr>

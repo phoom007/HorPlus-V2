@@ -37,3 +37,17 @@ describe('calculateInstallmentSchedule (Backend)', () => {
     expect(schedule[0].formattedAmount).toBe('0.00');
   });
 });
+
+describe('calculateRentalEndDate (Backend Canonical Rule: add calendar months minus 1 day)', () => {
+  it('correctly derives 2026-08-31 for start 2026-05-01 with 4 calendar months', async () => {
+    const { calculateRentalEndDate } = await import('../services/provisional-rental-term.service.js');
+    const endDate = calculateRentalEndDate('2026-05-01', 4);
+    expect(endDate.toISOString().slice(0, 10)).toBe('2026-08-31');
+  });
+
+  it('correctly derives 2026-12-22 for start 2026-08-23 with 4 calendar months', async () => {
+    const { calculateRentalEndDate } = await import('../services/provisional-rental-term.service.js');
+    const endDate = calculateRentalEndDate('2026-08-23', 4);
+    expect(endDate.toISOString().slice(0, 10)).toBe('2026-12-22');
+  });
+});

@@ -520,31 +520,61 @@ export class MeterService {
     }
 
     // 1. Water reading if entered and per_unit
-    if (row.waterCurr !== undefined && row.waterCurr !== null && String(row.waterCurr).trim() !== '') {
+    if (
+      (row.waterCurr !== undefined && row.waterCurr !== null && String(row.waterCurr).trim() !== '') ||
+      (row.waterPrev !== undefined && row.waterPrev !== null && String(row.waterPrev).trim() !== '')
+    ) {
       if (waterMode === 'per_unit') {
         let authPrev = '0';
-        if (firstCycle && row.waterPrev !== undefined && row.waterPrev !== null && String(row.waterPrev).trim() !== '') {
+        if (row.waterPrev !== undefined && row.waterPrev !== null && String(row.waterPrev).trim() !== '') {
           const parsed = parseMeterIntegerReading(row.waterPrev);
           authPrev = parsed.isValid ? String(parsed.value) : '0';
         } else {
-          const raw = await this.resolveAuthoritativePreviousReading(
+          const existingReading = await this.meterRepo.findReadingByCycleRoomAndType(
             dormitoryId,
             billingCycleId,
             row.roomId,
             'water',
             tx
           );
-          const num = Number(raw);
-          authPrev = isNaN(num) ? '0' : Math.round(num).toString();
+          if (existingReading && existingReading.previousReading !== undefined && existingReading.previousReading !== null) {
+            authPrev = String(existingReading.previousReading).replace(/\.00$/, '');
+          } else {
+            const raw = await this.resolveAuthoritativePreviousReading(
+              dormitoryId,
+              billingCycleId,
+              row.roomId,
+              'water',
+              tx
+            );
+            const num = Number(raw);
+            authPrev = isNaN(num) ? '0' : Math.round(num).toString();
+          }
         }
 
-        const usageRes = calculateMeterUsageUnits(authPrev, row.waterCurr);
-        if (!usageRes.isValid) {
-          const err = new Error(usageRes.errorMessage || `ค่ามิเตอร์น้ำปัจจุบัน (${row.waterCurr}) ต้องไม่น้อยกว่าค่ามิเตอร์เดิม (${authPrev})`);
-          (err as any).statusCode = 400;
-          (err as any).code = 'INVALID_METER_READING';
-          (err as any).message = usageRes.errorMessage || `ค่ามิเตอร์น้ำปัจจุบัน (${row.waterCurr}) ต้องไม่น้อยกว่าค่ามิเตอร์เดิม (${authPrev})`;
-          throw err;
+        const existingReading = await this.meterRepo.findReadingByCycleRoomAndType(
+          dormitoryId,
+          billingCycleId,
+          row.roomId,
+          'water',
+          tx
+        );
+
+        let currWaterInt = row.waterCurr !== undefined && row.waterCurr !== null && String(row.waterCurr).trim() !== ''
+          ? String(parseMeterIntegerReading(row.waterCurr).value)
+          : (existingReading?.currentReading ? String(existingReading.currentReading).replace(/\.00$/, '') : null);
+
+        let usageUnits = '0.00';
+        if (currWaterInt !== null && currWaterInt !== undefined && currWaterInt !== '') {
+          const usageRes = calculateMeterUsageUnits(authPrev, currWaterInt);
+          if (!usageRes.isValid) {
+            const err = new Error(usageRes.errorMessage || `ค่ามิเตอร์น้ำปัจจุบัน (${currWaterInt}) ต้องไม่น้อยกว่าค่ามิเตอร์เดิม (${authPrev})`);
+            (err as any).statusCode = 400;
+            (err as any).code = 'INVALID_METER_READING';
+            (err as any).message = usageRes.errorMessage || `ค่ามิเตอร์น้ำปัจจุบัน (${currWaterInt}) ต้องไม่น้อยกว่าค่ามิเตอร์เดิม (${authPrev})`;
+            throw err;
+          }
+          usageUnits = String(usageRes.usageUnits);
         }
 
         let device = await this.meterRepo.findDeviceByRoomAndType(dormitoryId, row.roomId, 'water', tx);
@@ -569,24 +599,13 @@ export class MeterService {
           );
         }
 
-        const usageUnits = String(usageRes.usageUnits);
-        const currWaterInt = String(parseMeterIntegerReading(row.waterCurr).value);
-        const existingReading = await this.meterRepo.findReadingByCycleRoomAndType(
-          dormitoryId,
-          billingCycleId,
-          row.roomId,
-          'water',
-          tx
-        );
-
         if (existingReading) {
           await this.meterRepo.updateReading(
             existingReading.id,
             dormitoryId,
             {
               previousReading: authPrev,
-              currentReading: currWaterInt,
-              usageUnits,
+              ...(currWaterInt !== null ? { currentReading: currWaterInt, usageUnits } : {}),
               readAt: new Date(),
               readByUserId: userId,
             },
@@ -602,7 +621,7 @@ export class MeterService {
               meterDeviceId: device.id,
               meterType: 'water',
               previousReading: authPrev,
-              currentReading: currWaterInt,
+              currentReading: currWaterInt || authPrev,
               usageUnits,
               readAt: new Date(),
               readByUserId: userId,
@@ -615,31 +634,61 @@ export class MeterService {
     }
 
     // 2. Electricity reading if entered and per_unit
-    if (row.elecCurr !== undefined && row.elecCurr !== null && String(row.elecCurr).trim() !== '') {
+    if (
+      (row.elecCurr !== undefined && row.elecCurr !== null && String(row.elecCurr).trim() !== '') ||
+      (row.elecPrev !== undefined && row.elecPrev !== null && String(row.elecPrev).trim() !== '')
+    ) {
       if (elecMode === 'per_unit') {
         let authPrev = '0';
-        if (firstCycle && row.elecPrev !== undefined && row.elecPrev !== null && String(row.elecPrev).trim() !== '') {
+        if (row.elecPrev !== undefined && row.elecPrev !== null && String(row.elecPrev).trim() !== '') {
           const parsed = parseMeterIntegerReading(row.elecPrev);
           authPrev = parsed.isValid ? String(parsed.value) : '0';
         } else {
-          const raw = await this.resolveAuthoritativePreviousReading(
+          const existingReading = await this.meterRepo.findReadingByCycleRoomAndType(
             dormitoryId,
             billingCycleId,
             row.roomId,
             'electricity',
             tx
           );
-          const num = Number(raw);
-          authPrev = isNaN(num) ? '0' : Math.round(num).toString();
+          if (existingReading && existingReading.previousReading !== undefined && existingReading.previousReading !== null) {
+            authPrev = String(existingReading.previousReading).replace(/\.00$/, '');
+          } else {
+            const raw = await this.resolveAuthoritativePreviousReading(
+              dormitoryId,
+              billingCycleId,
+              row.roomId,
+              'electricity',
+              tx
+            );
+            const num = Number(raw);
+            authPrev = isNaN(num) ? '0' : Math.round(num).toString();
+          }
         }
 
-        const usageRes = calculateMeterUsageUnits(authPrev, row.elecCurr);
-        if (!usageRes.isValid) {
-          const err = new Error(usageRes.errorMessage || `ค่ามิเตอร์ไฟปัจจุบัน (${row.elecCurr}) ต้องไม่น้อยกว่าค่ามิเตอร์เดิม (${authPrev})`);
-          (err as any).statusCode = 400;
-          (err as any).code = 'INVALID_METER_READING';
-          (err as any).message = usageRes.errorMessage || `ค่ามิเตอร์ไฟปัจจุบัน (${row.elecCurr}) ต้องไม่น้อยกว่าค่ามิเตอร์เดิม (${authPrev})`;
-          throw err;
+        const existingReading = await this.meterRepo.findReadingByCycleRoomAndType(
+          dormitoryId,
+          billingCycleId,
+          row.roomId,
+          'electricity',
+          tx
+        );
+
+        let currElecInt = row.elecCurr !== undefined && row.elecCurr !== null && String(row.elecCurr).trim() !== ''
+          ? String(parseMeterIntegerReading(row.elecCurr).value)
+          : (existingReading?.currentReading ? String(existingReading.currentReading).replace(/\.00$/, '') : null);
+
+        let usageUnits = '0.00';
+        if (currElecInt !== null && currElecInt !== undefined && currElecInt !== '') {
+          const usageRes = calculateMeterUsageUnits(authPrev, currElecInt);
+          if (!usageRes.isValid) {
+            const err = new Error(usageRes.errorMessage || `ค่ามิเตอร์ไฟปัจจุบัน (${currElecInt}) ต้องไม่น้อยกว่าค่ามิเตอร์เดิม (${authPrev})`);
+            (err as any).statusCode = 400;
+            (err as any).code = 'INVALID_METER_READING';
+            (err as any).message = usageRes.errorMessage || `ค่ามิเตอร์ไฟปัจจุบัน (${currElecInt}) ต้องไม่น้อยกว่าค่ามิเตอร์เดิม (${authPrev})`;
+            throw err;
+          }
+          usageUnits = String(usageRes.usageUnits);
         }
 
         let device = await this.meterRepo.findDeviceByRoomAndType(dormitoryId, row.roomId, 'electricity', tx);
@@ -664,24 +713,13 @@ export class MeterService {
           );
         }
 
-        const usageUnits = String(usageRes.usageUnits);
-        const currElecInt = String(parseMeterIntegerReading(row.elecCurr).value);
-        const existingReading = await this.meterRepo.findReadingByCycleRoomAndType(
-          dormitoryId,
-          billingCycleId,
-          row.roomId,
-          'electricity',
-          tx
-        );
-
         if (existingReading) {
           await this.meterRepo.updateReading(
             existingReading.id,
             dormitoryId,
             {
               previousReading: authPrev,
-              currentReading: currElecInt,
-              usageUnits,
+              ...(currElecInt !== null ? { currentReading: currElecInt, usageUnits } : {}),
               readAt: new Date(),
               readByUserId: userId,
             },
@@ -697,7 +735,7 @@ export class MeterService {
               meterDeviceId: device.id,
               meterType: 'electricity',
               previousReading: authPrev,
-              currentReading: currElecInt,
+              currentReading: currElecInt || authPrev,
               usageUnits,
               readAt: new Date(),
               readByUserId: userId,
@@ -708,6 +746,7 @@ export class MeterService {
         }
       }
     }
+
 
     // 3. RoomBillingCycleSnapshot (peopleCount, manualOutstandingAmount, otherFees)
     if (
@@ -1519,6 +1558,9 @@ export class MeterService {
       let isDailyDepositPaidInDisplayedPeriod = false;
 
       const contract = roomContractMap.get(room.id);
+      const prov = roomProvisionalMap.get(room.id);
+      const dailyStay = roomDailyStayMap.get(room.id);
+
       if (contract) {
         billingSource = 'CONTRACT';
         tenantId = contract.tenantId;
@@ -1541,41 +1583,37 @@ export class MeterService {
         } else {
           rentAmount = formatDecimal(toDecimal(contract.rentAmount));
         }
-      } else {
-        const prov = roomProvisionalMap.get(room.id);
-        if (prov) {
-          tenantId = prov.tenantId;
-          tenantName = prov.tenant ? (prov.tenant.displayName || `${prov.tenant.firstName || ''} ${prov.tenant.lastName || ''}`.trim()) : null;
-          isLineLinked = Boolean(prov.tenant?.linkedUserId);
-          if (prov.rentalType === 'MONTHLY') {
-            billingSource = 'PROVISIONAL_MONTHLY';
-            rentAmount = formatDecimal(toDecimal(prov.unitRentAmount.toString()));
-          } else {
-            billingSource = 'PROVISIONAL_TERM';
-            const totalRent = Number(prov.totalRentAmount);
-            const installments = prov.termInstallmentCount || 1;
-            const termStart = new Date(prov.startDate);
-            const cycleStart = new Date(cycle.periodStart);
-            const cycleOffset = (cycleStart.getFullYear() - termStart.getFullYear()) * 12 + (cycleStart.getMonth() - termStart.getMonth());
-
-            if (cycleOffset >= 0 && cycleOffset < installments) {
-              const schedule = calculateInstallmentSchedule(totalRent, installments);
-              const currentInstallment = schedule[cycleOffset];
-              rentAmount = currentInstallment.formattedAmount;
-              rentDescription = `ค่าเช่าห้องพัก (งวดที่ ${cycleOffset + 1}/${installments})`;
-            } else {
-              rentAmount = '0.00';
-            }
-          }
+      } else if (prov) {
+        tenantId = prov.tenantId;
+        tenantName = prov.tenant ? (prov.tenant.displayName || `${prov.tenant.firstName || ''} ${prov.tenant.lastName || ''}`.trim()) : null;
+        isLineLinked = Boolean(prov.tenant?.linkedUserId);
+        if (prov.rentalType === 'MONTHLY') {
+          billingSource = 'PROVISIONAL_MONTHLY';
+          rentAmount = formatDecimal(toDecimal(prov.unitRentAmount.toString()));
         } else {
-          const dailyStay = roomDailyStayMap.get(room.id);
-          if (dailyStay) {
-            billingSource = 'DAILY_STAY';
-            tenantId = dailyStay.tenantId;
-            tenantName = dailyStay.applicantFullName || (dailyStay.tenant ? (dailyStay.tenant.displayName || `${dailyStay.tenant.firstName || ''} ${dailyStay.tenant.lastName || ''}`.trim()) : 'ผู้พักรายวัน');
-            rentAmount = formatDecimal(toDecimal(dailyStay.totalRentAmount.toString()));
-            rentDescription = `ค่าเช่าห้องพักรายวัน (${dailyStay.inclusiveDayCount} วัน)`;
-            isLineLinked = Boolean(dailyStay.tenant?.linkedUserId);
+          billingSource = 'PROVISIONAL_TERM';
+          const totalRent = Number(prov.totalRentAmount);
+          const installments = prov.termInstallmentCount || 1;
+          const termStart = new Date(prov.startDate);
+          const cycleStart = new Date(cycle.periodStart);
+          const cycleOffset = (cycleStart.getFullYear() - termStart.getFullYear()) * 12 + (cycleStart.getMonth() - termStart.getMonth());
+
+          if (cycleOffset >= 0 && cycleOffset < installments) {
+            const schedule = calculateInstallmentSchedule(totalRent, installments);
+            const currentInstallment = schedule[cycleOffset];
+            rentAmount = currentInstallment.formattedAmount;
+            rentDescription = `ค่าเช่าห้องพัก (งวดที่ ${cycleOffset + 1}/${installments})`;
+          } else {
+            rentAmount = '0.00';
+          }
+        }
+      } else if (dailyStay) {
+        billingSource = 'DAILY_STAY';
+        tenantId = dailyStay.tenantId;
+        tenantName = dailyStay.applicantFullName || (dailyStay.tenant ? (dailyStay.tenant.displayName || `${dailyStay.tenant.firstName || ''} ${dailyStay.tenant.lastName || ''}`.trim()) : 'ผู้พักรายวัน');
+        rentAmount = formatDecimal(toDecimal(dailyStay.totalRentAmount.toString()));
+        rentDescription = `ค่าเช่าห้องพักรายวัน (${dailyStay.inclusiveDayCount} วัน)`;
+        isLineLinked = Boolean(dailyStay.tenant?.linkedUserId);
 
             const depositItem = dailyStay.invoice?.items.find((i) => i.itemType === 'DEPOSIT');
             dailyDepositAmount = depositItem ? formatDecimal(depositItem.amount) : formatDecimal(dailyStay.depositAmount);
@@ -1630,8 +1668,6 @@ export class MeterService {
             billingSource = 'NONE';
             rentAmount = '0.00';
           }
-        }
-      }
 
       // Parking quantity calculation
       const parkingMode = (rateSnapshot as any).parkingFeeMode || 'per_room';
@@ -1705,6 +1741,49 @@ export class MeterService {
 
       const periodDetailCount = chargeComponents.filter((c) => c.occurredInDisplayedPeriod).length;
 
+      // Calculate distinct daily stays in cycle
+      const roomDailyStaysInCycle = allDailyStays.filter((d) => {
+        if (d.roomId !== room.id) return false;
+        const stayStartStr = toBangkokDateString(d.checkInAt || d.startDate);
+        const stayEndStr = toBangkokDateString(d.checkOutAt ? new Date(d.checkOutAt.getTime() - 1) : d.endDate);
+        return stayStartStr <= cycleEndStr && stayEndStr >= cycleStartStr;
+      });
+      const historicalDailyCount = roomDailyStaysInCycle.length;
+
+      let isDailyUnpaid = false;
+      for (const d of roomDailyStaysInCycle) {
+        const rentItem = d.invoice?.items.find((i) => i.itemType === 'RENT');
+        const isPaid = (rentItem && (rentItem.status === 'SETTLED' || rentItem.status === 'DECLARED_PAID')) || d.status === 'COMPLETED';
+        if (!isPaid) {
+          isDailyUnpaid = true;
+          break;
+        }
+      }
+
+      // Calculate if room has any bookable interval in this cycle
+      let hasBookableGap = true;
+      if (contract) {
+        const cStart = toBangkokDateString(contract.startDate);
+        const cEnd = toBangkokDateString(contract.endDate);
+        const createdStr = (contract as any).createdAt ? toBangkokDateString((contract as any).createdAt) : cStart;
+        const effStart = cStart > createdStr ? cStart : createdStr;
+        if (effStart <= cycleStartStr && cEnd >= cycleEndStr) {
+          hasBookableGap = false;
+        }
+      } else if (prov) {
+        const pStart = toBangkokDateString(prov.startDate);
+        const pEnd = toBangkokDateString(prov.endDate);
+        if (pStart <= cycleStartStr && pEnd >= cycleEndStr) {
+          hasBookableGap = false;
+        }
+      } else if (dailyStay) {
+        const dStart = toBangkokDateString(dailyStay.checkInAt || dailyStay.startDate);
+        const dEnd = toBangkokDateString(dailyStay.checkOutAt || dailyStay.endDate);
+        if (dStart <= cycleStartStr && dEnd >= cycleEndStr) {
+          hasBookableGap = false;
+        }
+      }
+
       return {
         roomId: room.id,
         roomNumber: room.roomNumber,
@@ -1729,6 +1808,9 @@ export class MeterService {
         amountDue: formatDecimal(amountDueDec),
         periodDetailCount,
         chargeComponents,
+        hasBookableGap,
+        historicalDailyCount,
+        isDailyUnpaid,
       };
     });
 

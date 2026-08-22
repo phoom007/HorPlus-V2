@@ -78,7 +78,7 @@ export class ProvisionalRentalTermService {
     const [sy, sm, sd] = data.startDate.split('-').map(Number);
     const startDate = new Date(Date.UTC(sy, sm - 1, sd));
 
-    const todayStr = new Date().toISOString().slice(0, 10);
+    const todayStr = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
     const isFuture = data.startDate > todayStr;
 
     let durationMonths = 1;
@@ -152,9 +152,10 @@ export class ProvisionalRentalTermService {
           throw err;
         }
 
+        const inputMonths = data.durationMonths && Number(data.durationMonths) >= 1 ? Number(data.durationMonths) : building.termMonths;
         termInstallmentCount = data.termInstallmentCount!;
-        termMonthsSnapshot = building.termMonths;
-        durationMonths = building.termMonths;
+        termMonthsSnapshot = inputMonths;
+        durationMonths = inputMonths;
         endDate = calculateRentalEndDate(data.startDate, durationMonths);
       }
 
@@ -196,21 +197,23 @@ export class ProvisionalRentalTermService {
         throw err;
       }
 
-      // If starting now/past, check active occupancy
-      if (!isFuture) {
-        const activeOccupancy = await tx.occupancy.findFirst({
-          where: {
-            dormitoryId,
-            roomId: data.roomId,
-            status: 'ACTIVE',
-          },
-        });
-        if (activeOccupancy) {
-          const err = new Error('ห้องพักมีผู้พักอาศัยอยู่แล้วในปัจจุบัน');
-          (err as any).statusCode = 409;
-          (err as any).code = 'ROOM_OCCUPIED_OR_HAS_ACTIVE_AGREEMENT';
-          throw err;
-        }
+      // Check overlap with active/reserved daily stays
+      const overlappingDaily = await tx.dailyStay.findFirst({
+        where: {
+          dormitoryId,
+          roomId: data.roomId,
+          status: { in: ['RESERVED', 'ACTIVE'] },
+          deletedAt: null,
+          startDate: { lte: endDate },
+          endDate: { gte: startDate },
+        },
+      });
+
+      if (overlappingDaily) {
+        const err = new Error('ห้องพักมีผู้พักอาศัยรายวันที่ทับซ้อนกับช่วงเวลาดังกล่าว');
+        (err as any).statusCode = 409;
+        (err as any).code = 'ROOM_OCCUPIED_OR_HAS_ACTIVE_AGREEMENT';
+        throw err;
       }
 
       // Canonical tenant number generation (shared authority & dormitory lock-safe)

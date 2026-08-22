@@ -275,6 +275,13 @@ export class DailyStayService {
       data.checkOutTime
     );
 
+    if (checkOutAt.getTime() <= Date.now()) {
+      const err = new Error('วันและเวลาเช็คเอาท์ต้องอยู่ในอนาคต');
+      (err as any).statusCode = 400;
+      (err as any).code = 'INVALID_DATE_RANGE';
+      throw err;
+    }
+
     const roomWhere: any = {
       dormitoryId,
       deletedAt: null,
@@ -477,7 +484,7 @@ export class DailyStayService {
         throw err;
       }
 
-      const todayStr = new Date().toISOString().slice(0, 10);
+      const todayStr = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
       const stayStartStr = stay.startDate.toISOString().slice(0, 10);
       const isFuture = stayStartStr > todayStr;
 
@@ -672,6 +679,13 @@ export class DailyStayService {
         data.checkOutTime
       );
 
+      if (checkOutAt.getTime() <= Date.now()) {
+        const err = new Error('วันและเวลาเช็คเอาท์ต้องอยู่ในอนาคต');
+        (err as any).statusCode = 400;
+        (err as any).code = 'INVALID_DATE_RANGE';
+        throw err;
+      }
+
       // Check room availability
       const availability = await this.checkRoomAvailability(
         dormitoryId,
@@ -689,7 +703,7 @@ export class DailyStayService {
         throw err;
       }
 
-      const todayStr = new Date().toISOString().slice(0, 10);
+      const todayStr = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
       const isFuture = data.startDate > todayStr;
 
       const { defaultsService } = await import('./defaults.service.js');

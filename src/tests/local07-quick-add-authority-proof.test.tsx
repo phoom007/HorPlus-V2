@@ -66,7 +66,7 @@ describe('LOCAL-07: Frontend Quick Add UI Authority & Installment Parity Proof',
     );
 
     // 1. Initial active tab is TERM
-    fireEvent.click(screen.getByRole('button', { name: 'รายเทอม' }));
+    fireEvent.click(screen.getByRole('button', { name: /รายเทอม/ }));
 
     // 2. Visible initial term rent input is 12,000
     const termRentInput = screen.getByDisplayValue('12000') as HTMLInputElement;

@@ -6,7 +6,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { X, Calendar, User, Phone, DollarSign, Clock, Shield, CheckCircle, AlertCircle, Loader2, Image as ImageIcon, Trash2 } from 'lucide-react';
+import { X, Calendar, User, Phone, DollarSign, Clock, Shield, CheckCircle, AlertCircle, Loader2, Image as ImageIcon, Trash2, Building2 } from 'lucide-react';
 import { QuickAddRoomContext } from '../types';
 import { httpRequest } from '../data/httpClient';
 import { formatBaht, formatThaiDate, normalizeMoneyInput, OwnerDateInput } from './GlobalComponents';
@@ -199,7 +199,10 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
 
   if (!isOpen || !context) return null;
 
-  const isTermTabDisabled = !context.effective?.termRent || Number(context.effective?.termRent) <= 0;
+  const isTermTabDisabled =
+    !context.building?.termMonths ||
+    !context.effective?.termRent ||
+    Number(context.effective?.termRent) <= 0;
 
   const inclusiveDays = calculateInclusiveDays(startDate, dailyEndDate);
   const dailyTotalRent = (dailyRate ?? 0) * inclusiveDays;
@@ -280,9 +283,7 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
           formData.append('data', JSON.stringify(payload));
           formData.append('idCardImage', idCardFile);
           await httpRequest('POST', '/api/v1/meters/provisional-terms', formData, {
-            headers: {
-              'x-dormitory-id': context.dormitoryId,
-            },
+            headers: { 'x-dormitory-id': context.dormitoryId },
           });
         } else {
           await httpRequest('POST', '/api/v1/meters/provisional-terms', payload, {
@@ -299,6 +300,8 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
           phone: phone.trim() || undefined,
           rentalType: 'TERM',
           startDate,
+          endDate: termEndDate || undefined,
+          durationMonths: termMonths ? Number(termMonths) : undefined,
           unitRentAmount: Number(termRent).toFixed(2),
           totalRentAmount: Number(termRent).toFixed(2),
           termInstallmentCount: Number(termInstallmentCount),
@@ -309,9 +312,7 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
           formData.append('data', JSON.stringify(payload));
           formData.append('idCardImage', idCardFile);
           await httpRequest('POST', '/api/v1/meters/provisional-terms', formData, {
-            headers: {
-              'x-dormitory-id': context.dormitoryId,
-            },
+            headers: { 'x-dormitory-id': context.dormitoryId },
           });
         } else {
           await httpRequest('POST', '/api/v1/meters/provisional-terms', payload, {
@@ -329,10 +330,10 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
           phone: phone.trim() || undefined,
           startDate,
           endDate: dailyEndDate,
-          checkInTime: checkInTime.trim() || undefined,
-          checkOutTime: checkOutTime.trim() || undefined,
-          dailyRateAmount: dailyRate.toFixed(2),
-          depositAmount: dailyDeposit.toFixed(2),
+          checkInTime: checkInTime || undefined,
+          checkOutTime: checkOutTime || undefined,
+          dailyRateAmount: Number(dailyRate).toFixed(2),
+          depositAmount: Number(dailyDeposit || 0).toFixed(2),
           depositDeclaredStatus,
         };
 
@@ -341,9 +342,7 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
           formData.append('data', JSON.stringify(payload));
           formData.append('idCardImage', idCardFile);
           await httpRequest('POST', '/api/v1/daily-stays/owner-quick-add', formData, {
-            headers: {
-              'x-dormitory-id': context.dormitoryId,
-            },
+            headers: { 'x-dormitory-id': context.dormitoryId },
           });
         } else {
           await httpRequest('POST', '/api/v1/daily-stays/owner-quick-add', payload, {
@@ -351,61 +350,73 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
           });
         }
 
-        onSuccess(`เพิ่มผู้เช่ารายวัน (${context.roomNumber}) และออกใบแจ้งหนี้เรียบร้อยแล้ว`);
+        onSuccess(`เพิ่มผู้เข้าพักรายวัน (${context.roomNumber}) เรียบร้อยแล้ว`);
         onClose();
       }
     } catch (err: any) {
-      setErrorText(err.message || 'เกิดข้อผิดพลาดในการบันทึกข้อมูล');
+      setErrorText(err.message || 'เกิดข้อผิดพลาดในการเพิ่มผู้เช่า');
     } finally {
       setLoading(false);
     }
   };
 
+
+  if (!isOpen || !context) return null;
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-200">
-      <div className="bg-white rounded-3xl shadow-2xl max-w-lg w-full overflow-hidden border border-slate-100 max-h-[90vh] flex flex-col">
+    <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+      <div className="bg-white rounded-3xl shadow-2xl max-w-lg w-full overflow-hidden border border-slate-100 flex flex-col max-h-[90vh] animate-in fade-in zoom-in-95 duration-200">
         {/* Modal Header */}
-        <div className="p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
-          <div>
-            <h3 className="font-extrabold text-slate-900 text-base">
-              เพิ่มผู้เช่าด่วน
-            </h3>
-            <p className="text-xs text-slate-500 mt-0.5">
-              ห้อง <span className="font-bold text-indigo-600">{context.roomNumber}</span> — สร้างสัญญาชั่วคราว/รายวันใน 1 ขั้นตอน
-            </p>
+        <div className="p-5 bg-gradient-to-r from-indigo-900 to-indigo-800 text-white flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-white/10 flex items-center justify-center border border-white/20">
+              <Building2 className="w-5 h-5 text-indigo-200" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h3 className="font-extrabold text-base tracking-tight">เพิ่มผู้เช่าด่วน</h3>
+                <span className="px-2 py-0.5 rounded-lg bg-indigo-500/40 text-[11px] font-bold border border-indigo-300/30">
+                  ห้อง {context.roomNumber}
+                </span>
+              </div>
+              <p className="text-xs text-indigo-200 mt-0.5">
+                {context.building?.name || ''} {context.roomType ? `(${context.roomType})` : ''}
+              </p>
+            </div>
           </div>
           <button
+            type="button"
             onClick={onClose}
-            className="p-2 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-100 transition-colors"
+            className="w-8 h-8 rounded-xl bg-white/10 hover:bg-white/20 flex items-center justify-center transition-colors cursor-pointer"
           >
-            <X className="w-5 h-5" />
+            <X className="w-4 h-4 text-white" />
           </button>
         </div>
 
-        {/* 3-Type Rental Mode Tabs: TERM -> MONTHLY -> DAILY */}
-        <div className="p-4 bg-slate-50 border-b border-slate-100">
-          <div className="flex bg-slate-200/80 p-1 rounded-2xl gap-1">
+        {/* Tab Navigation */}
+        <div className="px-5 pt-3 bg-slate-50 border-b border-slate-200">
+          <div className="flex gap-2">
             <button
               type="button"
               disabled={isTermTabDisabled}
-              onClick={() => !isTermTabDisabled && setActiveTab('TERM')}
-              className={`flex-1 py-2 text-xs font-extrabold rounded-xl transition-all ${
-                isTermTabDisabled
-                  ? 'opacity-40 cursor-not-allowed text-slate-400 bg-slate-100'
-                  : activeTab === 'TERM'
-                  ? 'bg-white text-indigo-600 shadow-xs'
+              title={isTermTabDisabled ? 'ยังไม่ได้กำหนดค่าเช่ารายเทอมของห้องพัก' : undefined}
+              onClick={() => setActiveTab('TERM')}
+              className={`px-4 py-2 text-xs font-bold rounded-xl transition-all ${
+                activeTab === 'TERM'
+                  ? 'bg-white text-indigo-700 shadow-2xs border border-slate-200/80'
+                  : isTermTabDisabled
+                  ? 'text-slate-400 opacity-50 cursor-not-allowed'
                   : 'text-slate-600 hover:text-slate-900'
               }`}
-              title={isTermTabDisabled ? 'ยังไม่ได้กำหนดค่าเช่ารายเทอมของห้องพัก' : undefined}
             >
-              รายเทอม
+              รายเทอม (เหมาจ่าย)
             </button>
             <button
               type="button"
               onClick={() => setActiveTab('MONTHLY')}
-              className={`flex-1 py-2 text-xs font-extrabold rounded-xl transition-all ${
+              className={`px-4 py-2 text-xs font-bold rounded-xl transition-all ${
                 activeTab === 'MONTHLY'
-                  ? 'bg-white text-indigo-600 shadow-xs'
+                  ? 'bg-white text-indigo-700 shadow-2xs border border-slate-200/80'
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
@@ -551,19 +562,31 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className="block text-xs font-bold text-slate-700 mb-1">
-                        ระยะเวลาตามเทอม (อาคาร)
+                        ระยะเวลาตามเทอม (เดือน) <span className="text-rose-500">*</span>
                       </label>
-                      <div className="px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl text-slate-700 font-bold">
-                        {termMonths} เดือน
-                      </div>
+                      <input
+                        type="number"
+                        min="1"
+                        required
+                        value={termMonths || ''}
+                        onChange={(e) => {
+                          const val = parseInt(e.target.value);
+                          setTermMonths(isNaN(val) || val < 1 ? 1 : val);
+                        }}
+                        className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold"
+                      />
                     </div>
                     <div>
                       <label className="block text-xs font-bold text-slate-700 mb-1">
                         วันที่สิ้นสุด
                       </label>
-                      <div className="px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl text-slate-700 font-bold">
-                        {formatThaiDate(termEndDate)}
-                      </div>
+                      <input
+                        type="date"
+                        disabled
+                        readOnly
+                        value={termEndDate}
+                        className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl bg-slate-100 text-slate-500 font-semibold cursor-not-allowed"
+                      />
                     </div>
                   </div>
 
@@ -851,6 +874,14 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
                   <span className="text-rose-600">{formatBaht(dailyOutstanding)}</span>
                 </div>
               </div>
+            </div>
+          )}
+
+          {/* Form-level validation / business error */}
+          {errorText && (
+            <div data-testid="quick-add-error-box" className="p-3 bg-rose-50 border border-rose-200 rounded-2xl text-rose-700 text-xs font-bold flex items-start gap-2 animate-in fade-in duration-200">
+              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+              <span>{errorText}</span>
             </div>
           )}
 

@@ -305,7 +305,7 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
       );
 
       // Switch to TERM tab
-      fireEvent.click(screen.getByRole('button', { name: 'รายเทอม' }));
+      fireEvent.click(screen.getByRole('button', { name: /รายเทอม/ }));
 
       // Fill Full Name
       fireEvent.change(screen.getByPlaceholderText('เช่น นายสมชาย ใจดี'), { target: { value: 'สมหญิง รักเรียน' } });
@@ -450,7 +450,7 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
         />
       );
 
-      fireEvent.click(screen.getByRole('button', { name: 'รายเทอม' }));
+      fireEvent.click(screen.getByRole('button', { name: /รายเทอม/ }));
 
       const select = screen.getByRole('combobox');
       expect(select.children.length).toBe(3); // Options: 1, 2, 3
@@ -484,7 +484,7 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
         />
       );
 
-      const termTab = screen.getByRole('button', { name: 'รายเทอม' }) as HTMLButtonElement;
+      const termTab = screen.getByRole('button', { name: /รายเทอม/ }) as HTMLButtonElement;
       expect(termTab).toBeDefined();
       expect(termTab.disabled).toBe(true);
       expect(termTab.title).toBe('ยังไม่ได้กำหนดค่าเช่ารายเทอมของห้องพัก');
@@ -520,7 +520,7 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
       );
 
       // Invariant: Term tab is disabled when termRent is null / unconfigured
-      const termTab = screen.getByRole('button', { name: 'รายเทอม' }) as HTMLButtonElement;
+      const termTab = screen.getByRole('button', { name: /รายเทอม/ }) as HTMLButtonElement;
       expect(termTab.disabled).toBe(true);
       expect(termTab.title).toBe('ยังไม่ได้กำหนดค่าเช่ารายเทอมของห้องพัก');
 
@@ -542,7 +542,7 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
         />
       );
 
-      const enabledTermTab = screen.getByRole('button', { name: 'รายเทอม' }) as HTMLButtonElement;
+      const enabledTermTab = screen.getByRole('button', { name: /รายเทอม/ }) as HTMLButtonElement;
       expect(enabledTermTab.disabled).toBe(false);
       fireEvent.click(enabledTermTab);
 
@@ -2301,6 +2301,11 @@ describe('Daily Stay Meter Semantics, Financial Exclusion & Exact Deposit Copy',
                 showDailyDepositLine: true,
                 isDailyDepositPaidInDisplayedPeriod: false,
                 isLineLinked: false,
+                amountDue: '2000.00',
+                chargeComponents: [
+                  { label: 'ค่าเช่าห้องพักรายวัน (1 วัน)', amount: '1,500.00', status: 'UNPAID' },
+                  { label: 'ค่าประกัน', amount: '500.00', status: 'UNPAID' },
+                ],
               },
             ],
           },
@@ -2322,7 +2327,7 @@ describe('Daily Stay Meter Semantics, Financial Exclusion & Exact Deposit Copy',
               id: 'read-elec-1',
               billingCycleId: 'cycle-daily-aug',
               roomId: 'room-daily-1',
-              meterType: 'electricity',
+              meterType: 'electric',
               previousReading: '500',
               currentReading: '520',
             },
@@ -2362,8 +2367,11 @@ describe('Daily Stay Meter Semantics, Financial Exclusion & Exact Deposit Copy',
     });
 
     // A. Verify meter inputs (elecCurr, waterCurr) are ENABLED and editable for DAILY_STAY per latest PO rule
-    const elecCurrInput = screen.getByDisplayValue('520') as HTMLInputElement;
-    expect(elecCurrInput).toBeDefined();
+    let elecCurrInput!: HTMLInputElement;
+    await waitFor(() => {
+      elecCurrInput = screen.getByDisplayValue('520') as HTMLInputElement;
+      expect(elecCurrInput).toBeDefined();
+    });
     expect(elecCurrInput.disabled).toBe(false);
 
     const waterCurrInput = screen.getByDisplayValue('105') as HTMLInputElement;
@@ -2381,10 +2389,7 @@ describe('Daily Stay Meter Semantics, Financial Exclusion & Exact Deposit Copy',
 
     // Total due is 2,000.00 ฿ (rent 1500 + unpaid deposit 500)
     expect(screen.getByText('2,000.00 ฿')).toBeDefined();
-    const detailBtn = screen.getByRole('button', { name: /ดูรายละเอียด/ });
-    expect(detailBtn).toBeDefined();
-    fireEvent.click(detailBtn);
-    expect(screen.getByText('ค่าประกัน')).toBeDefined();
+    expect(screen.getByText('ค่าประกัน:')).toBeDefined();
     expect(screen.getByText('500.00 ฿')).toBeDefined();
   });
 
@@ -2411,6 +2416,11 @@ describe('Daily Stay Meter Semantics, Financial Exclusion & Exact Deposit Copy',
                 showDailyDepositLine: true,
                 isDailyDepositPaidInDisplayedPeriod: true, // Paid in current period
                 isLineLinked: false,
+                amountDue: '1500.00',
+                chargeComponents: [
+                  { label: 'ค่าเช่าห้องพักรายวัน (1 วัน)', amount: '1,500.00', status: 'UNPAID' },
+                  { label: 'ค่าประกัน', amount: '500.00', status: 'PAID' },
+                ],
               },
             ],
           },
@@ -2443,10 +2453,8 @@ describe('Daily Stay Meter Semantics, Financial Exclusion & Exact Deposit Copy',
     });
 
     // Paid deposit is not added to total due (total is strictly rent 1,500.00 ฿)
-    expect(screen.getByText('1,500.00 ฿')).toBeDefined();
-    const detailBtn = screen.getByRole('button', { name: /ดูรายละเอียด/ });
-    fireEvent.click(detailBtn);
-    expect(screen.getByText('ค่าประกัน')).toBeDefined();
+    expect(screen.getAllByText('1,500.00 ฿').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText('ค่าประกัน:')).toBeDefined();
     expect(screen.getByText('500.00 ฿')).toBeDefined();
   });
 
@@ -2523,5 +2531,130 @@ describe('Daily Stay Meter Semantics, Financial Exclusion & Exact Deposit Copy',
     expect(monthlyPreview.waterAmount).toBe('180.00');
     expect(monthlyPreview.elecAmount).toBe('160.00');
     expect(monthlyPreview.totalAmount).toBe('340.00'); // 180 + 160 = 340.00 (Rent is separate authority)
+  });
+
+  it('Vertical Navigation: ArrowDown and ArrowUp skip paid rows (101 editable -> 102 paid -> 103 paid -> 104 editable)', async () => {
+    const navRooms = [
+      { id: 'r-101', dormitoryId: 'd-nav', buildingId: 'b-1', roomNumber: '101', floor: 1, type: 'standard', status: 'occupied' as const, monthlyRent: 4000 },
+      { id: 'r-102', dormitoryId: 'd-nav', buildingId: 'b-1', roomNumber: '102', floor: 1, type: 'standard', status: 'occupied' as const, monthlyRent: 4000 },
+      { id: 'r-103', dormitoryId: 'd-nav', buildingId: 'b-1', roomNumber: '103', floor: 1, type: 'standard', status: 'occupied' as const, monthlyRent: 4000 },
+      { id: 'r-104', dormitoryId: 'd-nav', buildingId: 'b-1', roomNumber: '104', floor: 1, type: 'standard', status: 'occupied' as const, monthlyRent: 4000 },
+    ];
+
+    const navCycles = [
+      { id: 'cycle-nav-1', cycleCode: '2026-08', name: 'สิงหาคม 2569', status: 'open', isCurrent: true, isFirstCycle: false },
+    ];
+
+    vi.spyOn(httpClient, 'httpRequest').mockImplementation(async (_method: string, url: string) => {
+      if (url.includes('/meters/workspace/preview-context')) {
+        return {
+          success: true,
+          data: {
+            billingCycleId: 'cycle-nav-1',
+            rateSnapshot: {
+              waterBillingType: 'per_unit',
+              waterRate: '18.00',
+              electricityBillingType: 'per_unit',
+              electricityRate: '8.00',
+            },
+            rooms: [
+              { roomId: 'r-101', billingSource: 'CONTRACT', billStatus: 'draft', chargeComponents: [{ label: 'บิลรายเดือน', status: 'PREVIEW' }] },
+              { roomId: 'r-102', billingSource: 'CONTRACT', billStatus: 'paid', chargeComponents: [{ label: 'บิลรายเดือน', status: 'PAID' }] },
+              { roomId: 'r-103', billingSource: 'CONTRACT', billStatus: 'paid', chargeComponents: [{ label: 'บิลรายเดือน', status: 'PAID' }] },
+              { roomId: 'r-104', billingSource: 'CONTRACT', billStatus: 'draft', chargeComponents: [{ label: 'บิลรายเดือน', status: 'PREVIEW' }] },
+            ],
+          },
+        };
+      }
+      if (url.includes('/meters/readings')) {
+        return {
+          success: true,
+          data: [
+            { id: 'm-101-e', billingCycleId: 'cycle-nav-1', roomId: 'r-101', meterType: 'electricity', previousReading: '100', currentReading: '120' },
+            { id: 'm-101-w', billingCycleId: 'cycle-nav-1', roomId: 'r-101', meterType: 'water', previousReading: '50', currentReading: '60' },
+            { id: 'm-102-e', billingCycleId: 'cycle-nav-1', roomId: 'r-102', meterType: 'electricity', previousReading: '200', currentReading: '220' },
+            { id: 'm-103-e', billingCycleId: 'cycle-nav-1', roomId: 'r-103', meterType: 'electricity', previousReading: '300', currentReading: '330' },
+            { id: 'm-104-e', billingCycleId: 'cycle-nav-1', roomId: 'r-104', meterType: 'electricity', previousReading: '400', currentReading: '440' },
+            { id: 'm-104-w', billingCycleId: 'cycle-nav-1', roomId: 'r-104', meterType: 'water', previousReading: '70', currentReading: '80' },
+          ],
+        };
+      }
+      if (url.includes('/meters/workspace/household-counts')) {
+        return { success: true, data: [] };
+      }
+      return { success: true, data: [] };
+    });
+
+    const { container } = renderWithClient(
+      <OwnerMeters
+        rooms={navRooms}
+        buildings={[{ id: 'b-1', dormitoryId: 'd-nav', name: 'อาคาร A', totalFloors: 1, roomsPerFloor: 4, createdAt: '2026-08-01' }]}
+        dormitoryId="d-nav"
+        bills={[
+          { id: 'b-102', dormitoryId: 'd-nav', billingCycleId: 'cycle-nav-1', roomId: 'r-102', status: 'paid', billNumber: 'B-102', totalAmount: 4000, paidAmount: 4000, outstandingAmount: 0, billKind: 'MONTHLY_UTILITY' } as any,
+          { id: 'b-103', dormitoryId: 'd-nav', billingCycleId: 'cycle-nav-1', roomId: 'r-103', status: 'paid', billNumber: 'B-103', totalAmount: 4000, paidAmount: 4000, outstandingAmount: 0, billKind: 'MONTHLY_UTILITY' } as any,
+        ]}
+        tenants={[]}
+        contracts={[]}
+        onSaveBills={vi.fn()}
+        onSelectTenant={vi.fn()}
+        onAddLog={vi.fn()}
+        onNavigate={vi.fn()}
+        selectedBillingCycleId="cycle-nav-1"
+        selectedCycleCode="2026-08"
+        selectedCycle="2026-08"
+        billingCycles={navCycles}
+        initialCachedData={{
+          serverReadings: [
+            { id: 'm-101-e', billingCycleId: 'cycle-nav-1', roomId: 'r-101', meterType: 'electricity', previousReading: '100', currentReading: '120' },
+            { id: 'm-101-w', billingCycleId: 'cycle-nav-1', roomId: 'r-101', meterType: 'water', previousReading: '50', currentReading: '60' },
+            { id: 'm-102-e', billingCycleId: 'cycle-nav-1', roomId: 'r-102', meterType: 'electricity', previousReading: '200', currentReading: '220' },
+            { id: 'm-103-e', billingCycleId: 'cycle-nav-1', roomId: 'r-103', meterType: 'electricity', previousReading: '300', currentReading: '330' },
+            { id: 'm-104-e', billingCycleId: 'cycle-nav-1', roomId: 'r-104', meterType: 'electricity', previousReading: '400', currentReading: '440' },
+            { id: 'm-104-w', billingCycleId: 'cycle-nav-1', roomId: 'r-104', meterType: 'water', previousReading: '70', currentReading: '80' },
+          ],
+          cyclePeopleRes: { success: true, data: [] },
+        }}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue('120')).toBeDefined();
+      expect(screen.getByDisplayValue('440')).toBeDefined();
+    });
+
+    const input101ElecCurr = container.querySelector('input[data-row="0"][data-col="elecCurr"]') as HTMLInputElement;
+    const input104ElecCurr = container.querySelector('input[data-row="3"][data-col="elecCurr"]') as HTMLInputElement;
+
+    expect(input101ElecCurr).toBeTruthy();
+    expect(input104ElecCurr).toBeTruthy();
+    expect(input101ElecCurr.disabled).toBe(false);
+    expect(input104ElecCurr.disabled).toBe(false);
+
+    // Verify 102 and 103 are disabled (paid)
+    const input102ElecCurr = container.querySelector('input[data-row="1"][data-col="elecCurr"]') as HTMLInputElement;
+    const input103ElecCurr = container.querySelector('input[data-row="2"][data-col="elecCurr"]') as HTMLInputElement;
+    expect(input102ElecCurr?.disabled).toBe(true);
+    expect(input103ElecCurr?.disabled).toBe(true);
+
+    // Focus on 101 elecCurr and press ArrowDown
+    input101ElecCurr.focus();
+    fireEvent.keyDown(input101ElecCurr, { key: 'ArrowDown', code: 'ArrowDown' });
+
+    // ArrowDown must skip 102 and 103 (both paid) and focus directly on 104 elecCurr
+    expect(document.activeElement).toBe(input104ElecCurr);
+
+    // Press ArrowUp from 104 elecCurr -> should skip 103 and 102 and focus back on 101 elecCurr
+    fireEvent.keyDown(input104ElecCurr, { key: 'ArrowUp', code: 'ArrowUp' });
+    expect(document.activeElement).toBe(input101ElecCurr);
+
+    // Press ArrowRight from 101 elecCurr -> focuses on 101 waterCurr
+    const input101WaterCurr = container.querySelector('input[data-row="0"][data-col="waterCurr"]') as HTMLInputElement;
+    fireEvent.keyDown(input101ElecCurr, { key: 'ArrowRight', code: 'ArrowRight' });
+    expect(document.activeElement).toBe(input101WaterCurr);
+
+    // Press ArrowLeft from 101 waterCurr -> focuses back on 101 elecCurr
+    fireEvent.keyDown(input101WaterCurr, { key: 'ArrowLeft', code: 'ArrowLeft' });
+    expect(document.activeElement).toBe(input101ElecCurr);
   });
 });
