@@ -17,7 +17,7 @@ import { AppError } from '../types/index.js';
 import { getPrismaClient } from '../db/prisma.js';
 import { toDecimal, formatDecimal, compareDecimals, divDecimals, mulDecimals, subDecimals, addDecimals } from '../utils/decimal-math.util.js';
 import { calculateInstallmentSchedule } from '../utils/installment-calculator.util.js';
-import { currentBusinessDateInBangkok, toBangkokDateString } from '../utils/calendar-date.util.js';
+import { currentBusinessDateInBangkok, toBangkokDateString, normalizeBangkokDate } from '../utils/calendar-date.util.js';
 import { calculateMeterUsageUnits, parseMeterIntegerReading } from '../utils/meter-billing-calculator.util.js';
 import { resolveDailyTimestampsAndPricing } from './daily-stay.service.js';
 
@@ -1312,8 +1312,8 @@ export class MeterService {
     });
     const rooms = roomsResult.items || [];
 
-    const cycleStartStr = toBangkokDateString(cycle.periodStart);
-    const cycleEndStr = toBangkokDateString(cycle.periodEnd);
+    const cycleStartStr = normalizeBangkokDate(cycle.periodStart);
+    const cycleEndStr = normalizeBangkokDate(cycle.periodEnd);
     const now = new Date();
 
     // 1. Load active & historical contracts
@@ -1331,9 +1331,9 @@ export class MeterService {
     });
 
     const visibleContracts = allContracts.filter((c) => {
-      const occStartStr = toBangkokDateString(c.startDate);
-      const occEndStr = toBangkokDateString(c.endDate);
-      const recordVisibleFromStr = toBangkokDateString(c.createdAt || c.startDate);
+      const occStartStr = normalizeBangkokDate(c.startDate);
+      const occEndStr = normalizeBangkokDate(c.endDate);
+      const recordVisibleFromStr = normalizeBangkokDate(c.createdAt || c.startDate);
       const effectiveStartStr = occStartStr > recordVisibleFromStr ? occStartStr : recordVisibleFromStr;
 
       return effectiveStartStr <= cycleEndStr && occEndStr >= cycleStartStr;
@@ -1353,9 +1353,9 @@ export class MeterService {
     });
 
     const visibleProvisionalTerms = allProvisionalTerms.filter((p) => {
-      const occStartStr = toBangkokDateString(p.startDate);
-      const occEndStr = toBangkokDateString(p.endDate);
-      const recordVisibleFromStr = toBangkokDateString(p.createdAt || p.startDate);
+      const occStartStr = normalizeBangkokDate(p.startDate);
+      const occEndStr = normalizeBangkokDate(p.endDate);
+      const recordVisibleFromStr = normalizeBangkokDate(p.createdAt || p.startDate);
       const effectiveStartStr = occStartStr > recordVisibleFromStr ? occStartStr : recordVisibleFromStr;
 
       return effectiveStartStr <= cycleEndStr && occEndStr >= cycleStartStr;

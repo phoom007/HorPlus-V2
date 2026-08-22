@@ -608,6 +608,9 @@ export async function seedLocal07Data() {
       rent: 4800,
       deposit: 4800,
       isMovedOut: true,
+      startDate: '2026-06-01',
+      endDate: '2026-08-01',
+      createdAt: '2026-07-15T08:30:00.000Z',
     },
     {
       num: '301',
@@ -653,6 +656,11 @@ export async function seedLocal07Data() {
     const tCode = `TNT-${String(tCount).padStart(3, '0')}`;
     const room = createdRooms[tc.num];
 
+    const tenantCreatedAt = tc.createdAt ? new Date(tc.createdAt) : (tc.isMovedOut ? new Date('2025-08-01T08:00:00.000Z') : new Date('2026-01-01T08:00:00.000Z'));
+    const contractCreatedAt = tc.createdAt ? new Date(tc.createdAt) : (tc.isMovedOut ? new Date('2025-08-01T08:00:00.000Z') : new Date('2026-01-01T08:00:00.000Z'));
+    const contractStartDate = tc.startDate ? new Date(tc.startDate) : (tc.isMovedOut ? new Date('2025-08-01') : new Date('2026-01-01'));
+    const contractEndDate = tc.endDate ? new Date(tc.endDate) : (tc.isMovedOut ? new Date('2026-07-31') : new Date('2026-12-31'));
+
     const tenant = await prisma.tenant.create({
       data: {
         dormitoryId: compDorm.id,
@@ -664,6 +672,7 @@ export async function seedLocal07Data() {
         nationalIdMasked: '1-1004-XXXXX-XX-X',
         status: tc.isMovedOut ? 'inactive' : 'active',
         linkedUserId: tc.userId || null,
+        createdAt: tenantCreatedAt,
       },
     });
     createdTenants[tc.num] = tenant;
@@ -675,11 +684,12 @@ export async function seedLocal07Data() {
         roomId: room.id,
         tenantId: tenant.id,
         contractNumber: `CTR-2026-${tc.num}`,
-        startDate: tc.isMovedOut ? new Date('2025-08-01') : new Date('2026-01-01'),
-        endDate: tc.isMovedOut ? new Date('2026-07-31') : new Date('2026-12-31'),
+        startDate: contractStartDate,
+        endDate: contractEndDate,
         rentAmount: tc.rent,
         depositAmount: tc.deposit,
         status: tc.isMovedOut ? 'ended' : 'active',
+        createdAt: contractCreatedAt,
       },
     });
 
@@ -764,6 +774,37 @@ export async function seedLocal07Data() {
 
     tCount++;
   }
+
+  // Seed a Term Provisional Rental Term (Room 105) with historical July createdAt
+  const tenantPimpa = await prisma.tenant.create({
+    data: {
+      dormitoryId: compDorm.id,
+      tenantNumber: 'TNT-013',
+      firstName: 'พิมพา',
+      lastName: 'สดใส',
+      displayName: 'นางสาวพิมพา สดใส',
+      phone: '0898887766',
+      nationalIdMasked: '1-1004-XXXXX-88-8',
+      status: 'active',
+      createdAt: new Date('2026-07-01T09:00:00.000Z'),
+    },
+  });
+
+  await prisma.provisionalRentalTerm.create({
+    data: {
+      dormitoryId: compDorm.id,
+      roomId: createdRooms['105'].id,
+      tenantId: tenantPimpa.id,
+      rentalType: 'TERM',
+      unitRentAmount: 4500,
+      totalRentAmount: 18000,
+      termInstallmentCount: 2,
+      startDate: new Date('2026-07-01T00:00:00.000Z'),
+      endDate: new Date('2026-10-31T00:00:00.000Z'),
+      status: 'ACTIVE',
+      createdAt: new Date('2026-07-01T09:00:00.000Z'),
+    },
+  });
 
   // Billing Cycles: July (2026-07), August (2026-08 Current), September (2026-09 Rolling)
   const compBillingCycleService = new BillingCycleService(new PrismaBillingCycleRepository(prisma));

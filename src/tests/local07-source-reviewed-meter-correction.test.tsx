@@ -5,7 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { OwnerMeters, getOwnerFinancialBreakdown, mapErrorMessageToThai, getTenantForRoomAndCycleHelper } from '../pages/owner/meters';
 import { OwnerTenants } from '../pages/owner/tenants';
 import { TimeWheelPicker } from '../components/TimeWheelPicker';
-import { getRollingThreeMonthWindow, isCycleInRollingThreeMonthWindow, toBangkokDateString } from '../utils/calendarDate';
+import { getRollingThreeMonthWindow, isCycleInRollingThreeMonthWindow, toBangkokDateString, normalizeBangkokDate } from '../utils/calendarDate';
 import * as httpClient from '../data/httpClient';
 import { Room, Bill, Tenant, Contract } from '../types';
 
@@ -1875,6 +1875,58 @@ describe('LOCAL-07 Source-Reviewed Meter Workspace Correction Suite', () => {
       expect(tenantInJuly).toBeDefined();
       expect(tenantInJuly?.id).toBe(mockTenantA.id);
       expect(tenantInJuly?.name).toBe('นายกิตติ มุ่งมั่น');
+    });
+
+    it('Proof 9D: Timezone boundary regression - ISO timestamp createdAt 2026-06-30T18:30:00.000Z normalizes to Bangkok 2026-07-01', () => {
+      const isoCreatedAt = '2026-06-30T18:30:00.000Z'; // 2026-07-01 01:30:00 Bangkok (+07:00)
+      expect(normalizeBangkokDate(isoCreatedAt)).toBe('2026-07-01');
+
+      const contractTz: Contract = {
+        id: 'ctr-tz-july',
+        dormitoryId: 'dorm-test',
+        roomId: 'room-tz-1',
+        tenantId: mockTenantA.id,
+        startDate: '2026-06-01',
+        endDate: '2026-08-01',
+        createdAt: isoCreatedAt,
+        status: 'active',
+      } as any;
+
+      // June 2026: NOT visible (contract registered in July in Bangkok)
+      const juneTenant = getTenantForRoomAndCycleHelper('room-tz-1', '2026-06', [contractTz], [], [mockTenantA]);
+      expect(juneTenant).toBeUndefined();
+
+      // July 2026: visible
+      const julyTenant = getTenantForRoomAndCycleHelper('room-tz-1', '2026-07', [contractTz], [], [mockTenantA]);
+      expect(julyTenant?.id).toBe(mockTenantA.id);
+
+      // August 2026: visible
+      const augTenant = getTenantForRoomAndCycleHelper('room-tz-1', '2026-08', [contractTz], [], [mockTenantA]);
+      expect(augTenant?.id).toBe(mockTenantA.id);
+    });
+
+    it('Proof 9E: Timezone boundary regression - ISO timestamp createdAt 2026-07-31T18:30:00.000Z normalizes to Bangkok 2026-08-01', () => {
+      const isoCreatedAt = '2026-07-31T18:30:00.000Z'; // 2026-08-01 01:30:00 Bangkok (+07:00)
+      expect(normalizeBangkokDate(isoCreatedAt)).toBe('2026-08-01');
+
+      const contractTzAug: Contract = {
+        id: 'ctr-tz-aug',
+        dormitoryId: 'dorm-test',
+        roomId: 'room-tz-2',
+        tenantId: mockTenantA.id,
+        startDate: '2026-07-01',
+        endDate: '2026-09-01',
+        createdAt: isoCreatedAt,
+        status: 'active',
+      } as any;
+
+      // July 2026: NOT visible (contract registered in August in Bangkok)
+      const julyTenant = getTenantForRoomAndCycleHelper('room-tz-2', '2026-07', [contractTzAug], [], [mockTenantA]);
+      expect(julyTenant).toBeUndefined();
+
+      // August 2026: visible
+      const augTenant = getTenantForRoomAndCycleHelper('room-tz-2', '2026-08', [contractTzAug], [], [mockTenantA]);
+      expect(augTenant?.id).toBe(mockTenantA.id);
     });
   });
 

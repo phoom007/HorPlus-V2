@@ -38,7 +38,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { queryKeys, STALE_TIMES } from '../../lib/queryClient';
 import { meterDraftStore, deriveMeterDraftPatches } from '../../lib/meterDraftStore';
 import { calculateMeterRowPreview, calculateMeterUsageUnits, RoomPreviewContext, parseScaled2, formatScaled2, formatMoneyDisplay } from '../../utils/meterBillingCalculator';
-import { isCycleInRollingThreeMonthWindow, toBangkokDateString } from '../../utils/calendarDate';
+import { isCycleInRollingThreeMonthWindow, toBangkokDateString, normalizeBangkokDate } from '../../utils/calendarDate';
 import { Room, Building, QuickAddRoomContext, Bill, BillItem, Tenant, Contract, BillStatus, calculateRoomRentForCycle } from '../../types';
 import { getDataProvider } from '../../data/dataProvider';
 import { httpRequest } from '../../data/httpClient';
@@ -131,9 +131,9 @@ export function getTenantForRoomAndCycleHelper(
 
   const activeContract = (contracts || []).find(c => {
     if (c.roomId !== roomId) return false;
-    const startValStr = typeof c.startDate === 'string' ? c.startDate.slice(0, 10) : toBangkokDateString(c.startDate);
-    const endValStr = typeof c.endDate === 'string' ? c.endDate.slice(0, 10) : toBangkokDateString(c.endDate);
-    const createdStr = (c as any).createdAt ? (typeof (c as any).createdAt === 'string' ? (c as any).createdAt.slice(0, 10) : toBangkokDateString((c as any).createdAt)) : startValStr;
+    const startValStr = normalizeBangkokDate(c.startDate);
+    const endValStr = normalizeBangkokDate(c.endDate);
+    const createdStr = (c as any).createdAt ? normalizeBangkokDate((c as any).createdAt) : startValStr;
     const effectiveStartStr = startValStr > createdStr ? startValStr : createdStr;
 
     return effectiveStartStr <= cycleEndStr && endValStr >= cycleStartStr;

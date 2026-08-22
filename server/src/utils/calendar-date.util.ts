@@ -31,6 +31,45 @@ export function toBangkokDateString(instant: Date | string = new Date()): string
 }
 
 /**
+ * Canonical date normalizer that converts any date input (date-only string, ISO timestamp string, or Date instance)
+ * into a YYYY-MM-DD string in Asia/Bangkok timezone.
+ *
+ * Rules:
+ * 1. Pure date-only string (/^\d{4}-\d{2}-\d{2}$/): Returns as-is ("YYYY-MM-DD") preserving date-only calendar semantics.
+ * 2. ISO timestamp / datetime string / Date object: Normalizes through Asia/Bangkok (+07:00) using toBangkokDateString.
+ * 3. Invalid or empty value: Throws an invariant error.
+ */
+export function normalizeBangkokDate(input: Date | string): string {
+  if (!input) {
+    throw new Error('normalizeBangkokDate: input cannot be null, undefined, or empty');
+  }
+
+  if (typeof input === 'string') {
+    const trimmed = input.trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+      const [y, m, d] = trimmed.split('-').map(Number);
+      const testDate = new Date(Date.UTC(y, m - 1, d));
+      if (
+        testDate.getUTCFullYear() === y &&
+        testDate.getUTCMonth() === m - 1 &&
+        testDate.getUTCDate() === d
+      ) {
+        return trimmed;
+      }
+      throw new Error(`Invalid calendar date string: ${trimmed}`);
+    }
+    // For ISO timestamps (e.g. "2026-06-30T18:30:00.000Z"):
+    return toBangkokDateString(new Date(trimmed));
+  }
+
+  if (input instanceof Date) {
+    return toBangkokDateString(input);
+  }
+
+  throw new Error(`Invalid date input type: ${typeof input}`);
+}
+
+/**
  * Returns current business date string in Asia/Bangkok timezone (YYYY-MM-DD).
  */
 export function currentBusinessDateInBangkok(instant: Date | string = new Date()): string {

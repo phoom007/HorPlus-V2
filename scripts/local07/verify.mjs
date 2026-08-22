@@ -205,6 +205,66 @@ export async function runVerification() {
   assert(fs.existsSync(oracleJsonPath), 'docs/uat/local07-expected-results.json exists');
   assert(fs.existsSync(oracleMdPath), 'docs/uat/LOCAL07_EXPECTED_RESULTS_TH.md exists');
 
+  // 6. Temporal Projection Authority Verification (Monthly & Term)
+  console.log('\n--- 6. Temporal Projection Authority Verification ---');
+  const weeraContract = compDormDb?.contracts.find(c => c.contractNumber === 'CTR-2026-204');
+  assert(Boolean(weeraContract), 'Comprehensive Monthly contract CTR-2026-204 exists');
+  assert(weeraContract?.createdAt?.toISOString().startsWith('2026-07'), 'Room 204 Contract.createdAt is strictly in July 2026', weeraContract?.createdAt?.toISOString());
+  assert(weeraContract?.startDate?.toISOString().startsWith('2026-06-01'), 'Room 204 Contract startDate is 2026-06-01', weeraContract?.startDate?.toISOString());
+  assert(weeraContract?.endDate?.toISOString().startsWith('2026-08-01'), 'Room 204 Contract endDate is 2026-08-01', weeraContract?.endDate?.toISOString());
+
+  const { MeterService } = require('../../server/dist/services/meter.service.js');
+  const { PrismaMeterRepository } = require('../../server/dist/db/repositories/meter.repository.js');
+  const { PrismaBillingCycleRepository } = require('../../server/dist/db/repositories/billing-cycle.repository.js');
+  const { PrismaRoomRepository } = require('../../server/dist/db/repositories/room.repository.js');
+  const { PrismaBillRepository } = require('../../server/dist/db/repositories/bill.repository.js');
+  const { AuditService } = require('../../server/dist/services/audit.service.js');
+
+  const meterService = new MeterService(
+    new PrismaMeterRepository(prisma),
+    new PrismaBillingCycleRepository(prisma),
+    new PrismaRoomRepository(prisma),
+    new PrismaBillRepository(prisma),
+    new AuditService()
+  );
+
+  const cycleJulyDb = compDormDb?.billingCycles.find(c => c.cycleCode === '2026-07');
+  const cycleAugDb = compDormDb?.billingCycles.find(c => c.cycleCode === '2026-08');
+  const cycleSeptDb = compDormDb?.billingCycles.find(c => c.cycleCode === '2026-09');
+
+  const room204Db = allRooms.find(r => r.roomNumber === '204');
+  const room105Db = allRooms.find(r => r.roomNumber === '105');
+
+  if (cycleJulyDb && room204Db) {
+    const julyPreview = await meterService.getMeterBillingPreviewContext(COMP_DORM.id, cycleJulyDb.id);
+    const r204July = julyPreview.rooms.find(r => r.roomId === room204Db.id);
+    assert(r204July?.tenantId === weeraContract?.tenantId, 'Room 204 (Weera) is visible in July 2026 (intersects July & registered July)');
+    assert(r204July?.tenantName === 'นายวีระ กล้าหาญ', 'Room 204 tenant name is นายวีระ กล้าหาญ in July');
+
+    const r105July = julyPreview.rooms.find(r => r.roomId === room105Db?.id);
+    assert(Boolean(r105July?.tenantId) && r105July?.billingSource === 'PROVISIONAL_TERM', 'Room 105 (Term) is visible in July 2026 as PROVISIONAL_TERM');
+    assert(r105July?.tenantName === 'นางสาวพิมพา สดใส', 'Room 105 tenant name is นางสาวพิมพา สดใส in July');
+  }
+
+  if (cycleAugDb && room204Db) {
+    const augPreview = await meterService.getMeterBillingPreviewContext(COMP_DORM.id, cycleAugDb.id);
+    const r204Aug = augPreview.rooms.find(r => r.roomId === room204Db.id);
+    assert(r204Aug?.tenantId === weeraContract?.tenantId, 'Room 204 (Weera) is visible in August 2026 (endDate 2026-08-01 intersects August)');
+    assert(r204Aug?.tenantName === 'นายวีระ กล้าหาญ', 'Room 204 tenant name is นายวีระ กล้าหาญ in August');
+
+    const r105Aug = augPreview.rooms.find(r => r.roomId === room105Db?.id);
+    assert(Boolean(r105Aug?.tenantId) && r105Aug?.billingSource === 'PROVISIONAL_TERM', 'Room 105 (Term) is visible in August 2026 as PROVISIONAL_TERM');
+  }
+
+  if (cycleSeptDb && room204Db) {
+    const septPreview = await meterService.getMeterBillingPreviewContext(COMP_DORM.id, cycleSeptDb.id);
+    const r204Sept = septPreview.rooms.find(r => r.roomId === room204Db.id);
+    assert(r204Sept?.tenantId === null && r204Sept?.billingSource === 'NONE', 'Room 204 (Weera) is absent in September 2026 (contract ended August 1)');
+
+    const r105Sept = septPreview.rooms.find(r => r.roomId === room105Db?.id);
+    assert(Boolean(r105Sept?.tenantId) && r105Sept?.billingSource === 'PROVISIONAL_TERM', 'Room 105 (Term) is visible in September 2026 (term ends October 31)');
+  }
+
   console.log('\n================================================================================');
   if (failures === 0) {
     console.log('🎉 ALL LOCAL-07 SANDBOX INTEGRITY CHECKS PASSED PERFECTLY (0 FAILURES)');
