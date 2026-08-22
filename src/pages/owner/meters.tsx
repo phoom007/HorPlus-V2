@@ -467,7 +467,13 @@ export function mapErrorMessageToThai(raw: any): string {
 
   const code = typeof rawCode === 'string' ? rawCode.trim() : '';
 
-  if (code.startsWith('NO_ACTIVE') || code.includes('NO_ACTIVE_CONTRACT') || code.includes('NO_ACTIVE')) {
+  const exactNoActiveCodes = [
+    'NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM',
+    'NO_ACTIVE_CONTRACT',
+    'NO_ACTIVE_TENANT',
+  ];
+
+  if (exactNoActiveCodes.includes(code)) {
     return 'ไม่พบผู้เช่า';
   }
   if (code === 'ROOM_LOCKED_PAID') {
@@ -499,7 +505,11 @@ export function mapErrorMessageToThai(raw: any): string {
 
   const msg = typeof rawMessage === 'string' ? rawMessage.trim() : '';
 
-  if (msg.includes('NO_ACTIVE') || msg.includes('NO_ACTIVE_CONTRACT')) {
+  if (
+    msg.includes('NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM') ||
+    msg.includes('NO_ACTIVE_CONTRACT') ||
+    msg.includes('NO_ACTIVE_TENANT')
+  ) {
     return 'ไม่พบผู้เช่า';
   }
   if (msg.includes('ROOM_LOCKED_PAID')) {

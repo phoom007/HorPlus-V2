@@ -2965,4 +2965,241 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
       await prisma.dormitory.deleteMany({ where: { id: novDorm.id } });
     }
   });
+
+  // --------------------------------------------------------------------------
+  // TEST 27: Snapshot Previous Reading Preserved when Locked Previous Field is Omitted in Payload
+  // --------------------------------------------------------------------------
+  it('27. Snapshot Independence: Existing selected-cycle previous readings are preserved when payload omits locked previous fields', async () => {
+    const persistRoom = await prisma.room.create({
+      data: {
+        dormitoryId: testDormitoryId,
+        buildingId: testBuildingId,
+        roomNumber: 'PERSIST-301',
+        normalizedRoomNumber: 'PERSIST-301',
+        floor: 3,
+        roomType: 'standard',
+        status: 'vacant',
+        initialWaterReading: 10,
+        initialElectricityReading: 20,
+      },
+    });
+
+    try {
+      // Step 1: Initial Save with August existing values: elecPrev=80, elecCurr=90, waterPrev=60, waterCurr=70
+      await meterService.saveBulkMeterWorkspace(
+        testDormitoryId,
+        {
+          billingCycleId: cycle2Id,
+          rows: [
+            {
+              roomId: persistRoom.id,
+              elecPrev: '80',
+              elecCurr: '90',
+              waterPrev: '60',
+              waterCurr: '70',
+            },
+          ],
+        },
+        'user-owner-1'
+      );
+
+      const readingElec1 = await meterRepo.findReadingByCycleRoomAndType(testDormitoryId, cycle2Id, persistRoom.id, 'electricity');
+      const readingWater1 = await meterRepo.findReadingByCycleRoomAndType(testDormitoryId, cycle2Id, persistRoom.id, 'water');
+      expect(Number(readingElec1?.previousReading)).toBe(80);
+      expect(Number(readingElec1?.currentReading)).toBe(90);
+      expect(Number(readingWater1?.previousReading)).toBe(60);
+      expect(Number(readingWater1?.currentReading)).toBe(70);
+
+      // Step 2: Second Save sending ONLY elecCurr=95, waterCurr=75 (omitting elecPrev and waterPrev)
+      await meterService.saveBulkMeterWorkspace(
+        testDormitoryId,
+        {
+          billingCycleId: cycle2Id,
+          rows: [
+            {
+              roomId: persistRoom.id,
+              elecCurr: '95',
+              waterCurr: '75',
+            },
+          ],
+        },
+        'user-owner-1'
+      );
+
+      // Step 3: Refetch and verify previousReading remains 80/60 (NOT initial room values 20/10)
+      const readingElec2 = await meterRepo.findReadingByCycleRoomAndType(testDormitoryId, cycle2Id, persistRoom.id, 'electricity');
+      const readingWater2 = await meterRepo.findReadingByCycleRoomAndType(testDormitoryId, cycle2Id, persistRoom.id, 'water');
+      expect(Number(readingElec2?.previousReading)).toBe(80);
+      expect(Number(readingElec2?.currentReading)).toBe(95);
+      expect(Number(readingElec2?.usageUnits)).toBe(15);
+      expect(Number(readingWater2?.previousReading)).toBe(60);
+      expect(Number(readingWater2?.currentReading)).toBe(75);
+      expect(Number(readingWater2?.usageUnits)).toBe(15);
+    } finally {
+      await prisma.meterReading.deleteMany({ where: { roomId: persistRoom.id } });
+      await prisma.room.deleteMany({ where: { id: persistRoom.id } });
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // TEST 28: Canonical Rollover & Lower Reading Validation
+  // --------------------------------------------------------------------------
+  it('28. Canonical Rollover: 4-digit rollover (9999->1) and 5-digit rollover (99999->1) save correctly, while invalid lower reading rejects', async () => {
+    const rollRoom = await prisma.room.create({
+      data: {
+        dormitoryId: testDormitoryId,
+        buildingId: testBuildingId,
+        roomNumber: 'ROLL-401',
+        normalizedRoomNumber: 'ROLL-401',
+        floor: 4,
+        roomType: 'standard',
+        status: 'vacant',
+        initialWaterReading: 0,
+        initialElectricityReading: 0,
+      },
+    });
+
+    try {
+      // 1. 4-digit rollover: prev=9999, curr=1 -> usage=(10000 - 9999) + 1 = 2
+      const roll4Res = await meterService.saveBulkMeterWorkspace(
+        testDormitoryId,
+        {
+          billingCycleId: cycle2Id,
+          rows: [
+            {
+              roomId: rollRoom.id,
+              elecPrev: '9999',
+              elecCurr: '1',
+              waterPrev: '9999',
+              waterCurr: '1',
+            },
+          ],
+        },
+        'user-owner-1'
+      );
+      expect(roll4Res.savedCount).toBe(1);
+
+      const roll4Elec = await meterRepo.findReadingByCycleRoomAndType(testDormitoryId, cycle2Id, rollRoom.id, 'electricity');
+      expect(Number(roll4Elec?.previousReading)).toBe(9999);
+      expect(Number(roll4Elec?.currentReading)).toBe(1);
+      expect(Number(roll4Elec?.usageUnits)).toBe(2);
+
+      // 2. 5-digit rollover: prev=99999, curr=1 -> usage=(100000 - 99999) + 1 = 2
+      const roll5Res = await meterService.saveBulkMeterWorkspace(
+        testDormitoryId,
+        {
+          billingCycleId: cycle2Id,
+          rows: [
+            {
+              roomId: rollRoom.id,
+              elecPrev: '99999',
+              elecCurr: '1',
+              waterPrev: '99999',
+              waterCurr: '1',
+            },
+          ],
+        },
+        'user-owner-1'
+      );
+      expect(roll5Res.savedCount).toBe(1);
+
+      const roll5Elec = await meterRepo.findReadingByCycleRoomAndType(testDormitoryId, cycle2Id, rollRoom.id, 'electricity');
+      expect(Number(roll5Elec?.previousReading)).toBe(99999);
+      expect(Number(roll5Elec?.currentReading)).toBe(1);
+      expect(Number(roll5Elec?.usageUnits)).toBe(2);
+
+      // 3. Invalid lower reading outside rollover: prev=500, curr=400 -> rejected with INVALID_METER_READING
+      await expect(
+        meterService.saveBulkMeterWorkspace(
+          testDormitoryId,
+          {
+            billingCycleId: cycle2Id,
+            rows: [
+              {
+                roomId: rollRoom.id,
+                elecPrev: '500',
+                elecCurr: '400',
+              },
+            ],
+          },
+          'user-owner-1'
+        )
+      ).rejects.toThrow();
+    } finally {
+      await prisma.meterReading.deleteMany({ where: { roomId: rollRoom.id } });
+      await prisma.room.deleteMany({ where: { id: rollRoom.id } });
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // TEST 29: Billing Cycle Ordering Invariance
+  // --------------------------------------------------------------------------
+  it('29. Cycle Ordering Invariance: First-cycle detection is invariant to query array ordering', async () => {
+    const sortDorm = await prisma.dormitory.create({
+      data: {
+        id: '88888888-0000-4000-8000-000000000088',
+        name: 'หอพักทดสอบลำดับรอบบิล',
+        phone: '0812345679',
+        province: 'Bangkok',
+      },
+    });
+
+    try {
+      const julCycle = await prisma.billingCycle.create({
+        data: {
+          dormitoryId: sortDorm.id,
+          cycleCode: '2026-07',
+          name: 'กรกฎาคม 2569',
+          periodStart: new Date('2026-07-01T00:00:00.000Z'),
+          periodEnd: new Date('2026-07-31T23:59:59.999Z'),
+          dueDate: new Date('2026-08-05T23:59:59.999Z'),
+          billingDate: new Date('2026-07-01T00:00:00.000Z'),
+          status: 'open',
+        },
+      });
+
+      const augCycle = await prisma.billingCycle.create({
+        data: {
+          dormitoryId: sortDorm.id,
+          cycleCode: '2026-08',
+          name: 'สิงหาคม 2569',
+          periodStart: new Date('2026-08-01T00:00:00.000Z'),
+          periodEnd: new Date('2026-08-31T23:59:59.999Z'),
+          dueDate: new Date('2026-09-05T23:59:59.999Z'),
+          billingDate: new Date('2026-08-01T00:00:00.000Z'),
+          status: 'draft',
+        },
+      });
+
+      const sepCycle = await prisma.billingCycle.create({
+        data: {
+          dormitoryId: sortDorm.id,
+          cycleCode: '2026-09',
+          name: 'กันยายน 2569',
+          periodStart: new Date('2026-09-01T00:00:00.000Z'),
+          periodEnd: new Date('2026-09-30T23:59:59.999Z'),
+          dueDate: new Date('2026-10-05T23:59:59.999Z'),
+          billingDate: new Date('2026-09-01T00:00:00.000Z'),
+          status: 'draft',
+        },
+      });
+
+      // Query newest-first (desc)
+      const descRes = await billingCycleService.getBillingCycles(sortDorm.id, { sortDirection: 'desc' });
+      expect(descRes.firstBillingCycleId).toBe(julCycle.id);
+      expect(descRes.items.find(c => c.id === julCycle.id)?.isFirstCycle).toBe(true);
+      expect(descRes.items.find(c => c.id === augCycle.id)?.isFirstCycle).toBe(false);
+      expect(descRes.items.find(c => c.id === sepCycle.id)?.isFirstCycle).toBe(false);
+
+      // Query oldest-first (asc)
+      const ascRes = await billingCycleService.getBillingCycles(sortDorm.id, { sortDirection: 'asc' });
+      expect(ascRes.firstBillingCycleId).toBe(julCycle.id);
+      expect(ascRes.items.find(c => c.id === julCycle.id)?.isFirstCycle).toBe(true);
+      expect(ascRes.items.find(c => c.id === augCycle.id)?.isFirstCycle).toBe(false);
+      expect(ascRes.items.find(c => c.id === sepCycle.id)?.isFirstCycle).toBe(false);
+    } finally {
+      await prisma.billingCycle.deleteMany({ where: { dormitoryId: sortDorm.id } });
+      await prisma.dormitory.deleteMany({ where: { id: sortDorm.id } });
+    }
+  });
 });
