@@ -502,4 +502,73 @@ describe('LOCAL-07 Issued Unpaid Bill Update on Save Integration Proof', () => {
     expect(rentCheck!.status).toBe('paid');
     expect(Number(rentCheck!.totalAmount)).toBe(4000);
   });
+
+  it('Proof E: if DEPOSIT bill is PAID but MONTHLY_UTILITY is UNPAID, meter workspace updates MONTHLY_UTILITY without lock collision', async () => {
+    // 1. Create PAID DEPOSIT bill
+    const depositBill = await prisma.bill.create({
+      data: {
+        dormitoryId: testDormId,
+        billingCycleId,
+        roomId,
+        tenantId,
+        contractId,
+        billNumber: `DEP-${Date.now()}`,
+        billKind: 'DEPOSIT',
+        subtotal: toDecimal('5000.00'),
+        totalAmount: toDecimal('5000.00'),
+        paidAmount: toDecimal('5000.00'),
+        outstandingAmount: toDecimal('0.00'),
+        status: 'paid',
+        billingDate: new Date(),
+        dueDate: new Date(),
+        items: {
+          create: [{
+            dormitoryId: testDormId,
+            type: 'deposit',
+            description: 'เงินประกันความเสียหาย',
+            quantity: toDecimal('1.00'),
+            unitPrice: toDecimal('5000.00'),
+            amount: toDecimal('5000.00'),
+          }],
+        },
+      },
+    });
+
+    // 2. Create UNPAID MONTHLY_UTILITY bill (730)
+    await meterService.saveBulkMeterWorkspace(
+      testDormId,
+      {
+        billingCycleId,
+        rows: [{ roomId, waterCurr: '110', elecCurr: '250' }],
+      },
+      testUserId,
+      billingService
+    );
+    const utilityRes = await billingService.generateBill(
+      testDormId,
+      { billingCycleId, roomId, billKind: 'MONTHLY_UTILITY' },
+      testUserId
+    );
+    expect(utilityRes.bill.status).toBe('unpaid');
+
+    // 3. Save meter workspace (elecCurr -> 260) -> MUST SUCCEED because active monthly utility bill is unpaid
+    const saveRes = await meterService.saveBulkMeterWorkspace(
+      testDormId,
+      {
+        billingCycleId,
+        rows: [{ roomId, waterCurr: '110', elecCurr: '260' }],
+      },
+      testUserId,
+      billingService
+    );
+    expect(saveRes.savedCount).toBe(1);
+
+    // 4. Verify MONTHLY_UTILITY updated to 800 (730 + 70) and DEPOSIT is still PAID 5000
+    const updatedUtility = await prisma.bill.findUnique({ where: { id: utilityRes.bill.id } });
+    expect(Number(updatedUtility!.totalAmount)).toBe(800);
+
+    const depositCheck = await prisma.bill.findUnique({ where: { id: depositBill.id } });
+    expect(depositCheck!.status).toBe('paid');
+    expect(Number(depositCheck!.totalAmount)).toBe(5000);
+  });
 });

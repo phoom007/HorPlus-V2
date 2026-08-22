@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { OwnerMeters, getOwnerFinancialBreakdown } from '../pages/owner/meters';
+import { OwnerTenants } from '../pages/owner/tenants';
 import { TimeWheelPicker } from '../components/TimeWheelPicker';
 import * as httpClient from '../data/httpClient';
 import { Room, Bill, Tenant, Contract } from '../types';
@@ -769,6 +770,136 @@ describe('LOCAL-07 Source-Reviewed Meter Workspace Correction Suite', () => {
         expect(screen.getByText('150 ฿')).toBeDefined();
       });
     });
+
+    it('Proof 2F: Tenant async direct-open race regression — does not clear initialTenantId while tenants is empty, auto-opens when populated', async () => {
+      const handleClearInitial = vi.fn();
+      const mockTenantsWithDates = mockTenants.map(t => ({ ...t, createdAt: '2026-08-01T00:00:00.000Z' }));
+
+      // 1. Initial mount with empty tenants (loading state)
+      const { rerender } = render(
+        <OwnerTenants
+          tenants={[]}
+          rooms={mockRooms}
+          onSaveTenants={vi.fn()}
+          onSaveRooms={vi.fn()}
+          onAddLog={vi.fn()}
+          initialTenantId="t1"
+          onClearInitialTenantId={handleClearInitial}
+        />
+      );
+
+      // Verify not cleared prematurely while tenants list is empty
+      expect(handleClearInitial).not.toHaveBeenCalled();
+
+      // 2. Tenants query asynchronously succeeds and delivers populated tenants array
+      rerender(
+        <OwnerTenants
+          tenants={mockTenantsWithDates}
+          rooms={mockRooms}
+          onSaveTenants={vi.fn()}
+          onSaveRooms={vi.fn()}
+          onAddLog={vi.fn()}
+          initialTenantId="t1"
+          onClearInitialTenantId={handleClearInitial}
+        />
+      );
+
+      // Verify exact tenant detail drawer opened automatically without second click
+      await waitFor(() => {
+        expect(screen.getByTestId('back-to-meters-btn')).toBeDefined();
+        expect(screen.getAllByText('สมชาย ใจดี').length).toBeGreaterThan(0);
+      });
+
+      // Verify initialTenantId cleared after successful open
+      expect(handleClearInitial).toHaveBeenCalledTimes(1);
+    });
+
+    it('Proof 2G: Authority editability matrix — RENT / DEPOSIT / Daily paid remain EDITABLE; only MONTHLY_UTILITY paid is LOCKED', async () => {
+      const mixedBills = [
+        // r1: RENT is PAID, but MONTHLY_UTILITY is UNPAID -> row must be EDITABLE
+        { id: 'b-rent-1', dormitoryId: 'dorm-1', cycleId: 'cycle-aug', roomId: 'r1', billKind: 'RENT', status: 'paid', totalAmount: 4000, outstandingAmount: 0 } as any,
+        { id: 'b-util-1', dormitoryId: 'dorm-1', cycleId: 'cycle-aug', roomId: 'r1', billKind: 'MONTHLY_UTILITY', status: 'unpaid', totalAmount: 730, outstandingAmount: 730 } as any,
+
+        // r2: DEPOSIT is PAID, but MONTHLY_UTILITY is UNPAID -> row must be EDITABLE
+        { id: 'b-dep-2', dormitoryId: 'dorm-1', cycleId: 'cycle-aug', roomId: 'r2', billKind: 'DEPOSIT', status: 'paid', totalAmount: 5000, outstandingAmount: 0 } as any,
+        { id: 'b-util-2', dormitoryId: 'dorm-1', cycleId: 'cycle-aug', roomId: 'r2', billKind: 'MONTHLY_UTILITY', status: 'unpaid', totalAmount: 850, outstandingAmount: 850 } as any,
+
+        // r3: RENT and DEPOSIT both PAID, MONTHLY_UTILITY unissued -> row must be EDITABLE (ยังไม่ออกบิล)
+        { id: 'b-rent-3', dormitoryId: 'dorm-1', cycleId: 'cycle-aug', roomId: 'r3', billKind: 'RENT', status: 'paid', totalAmount: 4000, outstandingAmount: 0 } as any,
+        { id: 'b-dep-3', dormitoryId: 'dorm-1', cycleId: 'cycle-aug', roomId: 'r3', billKind: 'DEPOSIT', status: 'paid', totalAmount: 5000, outstandingAmount: 0 } as any,
+
+        // r4: MONTHLY_UTILITY is PAID -> row must be LOCKED (ชำระแล้ว)
+        { id: 'b-util-4', dormitoryId: 'dorm-1', cycleId: 'cycle-aug', roomId: 'r4', billKind: 'MONTHLY_UTILITY', status: 'paid', totalAmount: 970, outstandingAmount: 0 } as any,
+      ];
+
+      vi.spyOn(httpClient, 'httpRequest').mockImplementation(async (method: string, url: string) => {
+        if (url.includes('/meters/workspace/preview-context')) {
+          return {
+            success: true,
+            data: {
+              cycle: { id: 'cycle-aug', cycleCode: '2026-08', isCurrent: true },
+              rooms: mockRooms.map((r, i) => ({
+                roomId: r.id,
+                roomNumber: r.roomNumber,
+                billingSource: i === 2 ? 'DAILY_STAY' : 'MONTHLY_CONTRACT',
+                isDailyRentPaid: i === 2,
+                dailyRentStatus: i === 2 ? 'PAID' : 'UNPAID',
+                rentAmount: 4000,
+              })),
+              rateSnapshot: { waterBillingType: 'per_unit', waterRate: '18.00', electricityBillingType: 'per_unit', electricityRate: '7.00' },
+            },
+          };
+        }
+        return { success: true, data: [] };
+      });
+
+      const { container } = render(
+        <QueryClientProvider client={queryClient}>
+          <OwnerMeters
+            rooms={mockRooms}
+            bills={mixedBills}
+            tenants={mockTenants}
+            contracts={mockContracts}
+            dormitoryId="dorm-1"
+            selectedBillingCycleId="cycle-aug"
+            selectedCycleCode="2026-08"
+            selectedCycle="2026-08"
+            billingCycles={mockCycles}
+            onSaveBills={vi.fn()}
+            onSelectTenant={vi.fn()}
+            onAddLog={vi.fn()}
+          />
+        </QueryClientProvider>
+      );
+
+      await waitFor(() => {
+        expect(container.querySelector('#room-row-r1')).toBeTruthy();
+        expect(container.querySelector('#room-row-r2')).toBeTruthy();
+        expect(container.querySelector('#room-row-r3')).toBeTruthy();
+        expect(container.querySelector('#room-row-r4')).toBeTruthy();
+      });
+
+      // A: Room 101 (RENT paid + Utility unpaid) -> EDITABLE
+      const row101 = container.querySelector('#room-row-r1');
+      const elecCurr101 = row101?.querySelectorAll('input[type="text"]')[1] as HTMLInputElement;
+      expect(elecCurr101.disabled).toBe(false);
+
+      // B: Room 102 (DEPOSIT paid + Utility unpaid) -> EDITABLE
+      const row102 = container.querySelector('#room-row-r2');
+      const elecCurr102 = row102?.querySelectorAll('input[type="text"]')[1] as HTMLInputElement;
+      expect(elecCurr102.disabled).toBe(false);
+
+      // D: Room 103 (Daily stay with Daily rent paid) -> visible status 'รายวัน' and EDITABLE
+      const row103 = container.querySelector('#room-row-r3');
+      expect(row103?.textContent).toContain('รายวัน');
+      const elecCurr103 = row103?.querySelectorAll('input[type="text"]')[1] as HTMLInputElement;
+      expect(elecCurr103.disabled).toBe(false);
+
+      // E: Room 104 (MONTHLY_UTILITY paid) -> LOCKED (disabled)
+      const row104 = container.querySelector('#room-row-r4');
+      const elecCurr104 = row104?.querySelectorAll('input[type="text"]')[1] as HTMLInputElement;
+      expect(elecCurr104.disabled).toBe(true);
+    });
   });
 
   // =========================================================================
@@ -830,6 +961,35 @@ describe('LOCAL-07 Source-Reviewed Meter Workspace Correction Suite', () => {
         fireEvent.click(btn);
       }
       expect(handleChange).toHaveBeenCalledWith('15:47');
+    });
+
+    it('Proof 3C: TimeWheel Clear and Cancel interactions — Clear resets to empty, Cancel leaves value unchanged', () => {
+      const handleChange = vi.fn();
+      const handleClear = vi.fn();
+
+      const { container } = render(
+        <TimeWheelPicker
+          value="09:15"
+          onChange={handleChange}
+          onClear={handleClear}
+          data-testid="timewheel-test-3"
+        />
+      );
+
+      // 1. Clear button directly on trigger
+      const clearTriggerBtn = container.querySelector('button[title="ล้างเวลา"]') as HTMLButtonElement;
+      expect(clearTriggerBtn).toBeTruthy();
+      fireEvent.click(clearTriggerBtn);
+      expect(handleClear).toHaveBeenCalledTimes(1);
+
+      // 2. Open popover and click Cancel
+      const trigger = screen.getByTestId('timewheel-test-3').firstElementChild as HTMLElement;
+      fireEvent.click(trigger);
+
+      const cancelBtn = screen.getAllByText('ยกเลิก')[0];
+      fireEvent.click(cancelBtn);
+      // Cancel does NOT invoke onChange with draft changes
+      expect(handleChange).not.toHaveBeenCalled();
     });
   });
 });

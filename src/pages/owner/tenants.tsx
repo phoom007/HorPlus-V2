@@ -102,20 +102,18 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
 
   // Auto select tenant on mount if initialTenantId provided
   React.useEffect(() => {
-    if (initialTenantId) {
-      const tenant = tenants.find(t => t.id === initialTenantId);
-      if (tenant) {
-        setSelectedTenant(tenant);
-        setProfileTab('info');
-        if (propCameFromMeters !== undefined) {
-          setCameFromMeters(Boolean(propCameFromMeters));
-        } else {
-          setCameFromMeters(true);
-        }
+    if (!initialTenantId) return;
+
+    const tenant = (tenants || []).find(t => t.id === initialTenantId);
+    if (tenant) {
+      setSelectedTenant(tenant);
+      setProfileTab('info');
+      if (propCameFromMeters !== undefined) {
+        setCameFromMeters(Boolean(propCameFromMeters));
+      } else {
+        setCameFromMeters(true);
       }
-      if (onClearInitialTenantId) {
-        onClearInitialTenantId();
-      }
+      onClearInitialTenantId?.();
     }
   }, [initialTenantId, tenants, onClearInitialTenantId, propCameFromMeters]);
 
@@ -1831,10 +1829,11 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                         {(() => {
                           const tContracts = (contracts || []).filter(c => c.tenantId === selectedTenant.id);
                           const activeCon = tContracts.find(c => c.status === 'active' || c.status === 'expiring_soon') || tContracts[0];
-                          if (activeCon) {
-                            return `${formatThaiDate(activeCon.startDate)} ถึง ${formatThaiDate(activeCon.endDate)} (รวม ${activeCon.durationMonths} เดือน)`;
+                          if (activeCon && activeCon.startDate && activeCon.endDate) {
+                            return `${formatThaiDate(activeCon.startDate)} ถึง ${formatThaiDate(activeCon.endDate)} (รวม ${activeCon.durationMonths || 1} เดือน)`;
                           }
-                          return `เริ่มเข้าพักเมื่อ: ${formatThaiDate(selectedTenant.createdAt.split('T')[0])}`;
+                          const cDate = selectedTenant.createdAt ? selectedTenant.createdAt.split('T')[0] : '';
+                          return cDate ? `เริ่มเข้าพักเมื่อ: ${formatThaiDate(cDate)}` : '-';
                         })()}
                       </p>
                     </div>
@@ -1844,7 +1843,8 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                         {(() => {
                           const tContracts = (contracts || []).filter(c => c.tenantId === selectedTenant.id);
                           const activeCon = tContracts.find(c => c.status === 'active' || c.status === 'expiring_soon') || tContracts[0];
-                          const start = activeCon ? activeCon.startDate : selectedTenant.createdAt.split('T')[0];
+                          const start = activeCon?.startDate || (selectedTenant.createdAt ? selectedTenant.createdAt.split('T')[0] : '');
+                          if (!start) return '-';
                           return getStayDurationText(start);
                         })()}
                       </p>

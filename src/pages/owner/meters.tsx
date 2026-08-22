@@ -212,12 +212,13 @@ export function buildRowsFromWorkspace(params: {
     const snap = snapshotMap[r.id];
     const rowPeople = snap?.peopleCount !== undefined ? Math.max(0, snap.peopleCount) : tenantDefaultPeople;
 
-    const existingBill = (bills || []).find(b =>
+    const existingMonthlyUtilityBill = (bills || []).find(b =>
       (b.cycleId === selectedBillingCycleId || b.cycleId === selectedCycleCode || (b as any).billingCycleId === selectedBillingCycleId) &&
       (b.roomId === r.id || b.roomId === r.roomNumber) &&
+      (b.billKind ? b.billKind === 'MONTHLY_UTILITY' : ((b as any).type !== 'rent' && (b as any).type !== 'deposit' && (b as any).billType !== 'rent' && (b as any).billType !== 'deposit')) &&
       (b.status as string) !== 'cancelled' && (b.status as string) !== 'void'
     );
-    const billStatus: BillStatus = existingBill ? existingBill.status : 'draft';
+    const billStatus: BillStatus = existingMonthlyUtilityBill ? existingMonthlyUtilityBill.status : 'draft';
     const isPaid = billStatus === 'paid';
 
     return {
@@ -595,6 +596,15 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   const historyRef = React.useRef<MeterRowState[][]>([JSON.parse(JSON.stringify(initialBuilt?.rows || []))]);
   const historyIndexRef = React.useRef<number>(0);
   const isPerformingHistoryActionRef = React.useRef<boolean>(false);
+  const saveSuccessTimeoutRef = React.useRef<any>(null);
+
+  useEffect(() => {
+    return () => {
+      if (saveSuccessTimeoutRef.current) {
+        clearTimeout(saveSuccessTimeoutRef.current);
+      }
+    };
+  }, []);
 
   const [expandedBreakdowns, setExpandedBreakdowns] = useState<{ [roomId: string]: boolean }>({});
 
@@ -1475,7 +1485,9 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   };
 
   const getRowEditableFields = (row: MeterRowState) => {
-    const isRowPaid = row.isPaid || row.billStatus === 'paid';
+    const roomCtx = previewContext?.rooms?.find((r: any) => r.roomId === row.roomId);
+    const isDaily = roomCtx?.billingSource === 'DAILY_STAY';
+    const isRowPaid = !isDaily && (row.isPaid || row.billStatus === 'paid');
     if (isRowPaid) return [];
     const fields: ('elecPrev' | 'elecCurr' | 'waterPrev' | 'waterCurr' | 'peopleCount' | 'overdueAmount')[] = [];
     if (isElecUnit) {
@@ -2003,7 +2015,8 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
 
       if (res && res.success) {
         setSaveSuccess(true);
-        setTimeout(() => setSaveSuccess(false), 3000);
+        if (saveSuccessTimeoutRef.current) clearTimeout(saveSuccessTimeoutRef.current);
+        saveSuccessTimeoutRef.current = setTimeout(() => setSaveSuccess(false), 3000);
         originalRowsRef.current = JSON.parse(JSON.stringify(meterRowsRef.current));
         resetHistory(meterRowsRef.current);
         queryClient.invalidateQueries({ queryKey: queryKeys.meterWorkspace(currentDormId, selectedBillingCycleId) });
@@ -2247,7 +2260,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                 const roomCtx = previewContext?.rooms?.find((r: any) => r.roomId === row.roomId);
                 const isDaily = roomCtx?.billingSource === 'DAILY_STAY';
                 const isBillIssued = row.billStatus !== 'draft' && row.billStatus !== 'cancelled';
-                const isRowPaid = row.isPaid || row.billStatus === 'paid';
+                const isRowPaid = !isDaily && (row.isPaid || row.billStatus === 'paid');
 
                 return (
                   <tr key={row.roomId} id={`room-row-${row.roomId}`} className="hover:bg-slate-50/50 transition-colors">
