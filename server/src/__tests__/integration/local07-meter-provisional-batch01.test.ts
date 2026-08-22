@@ -21,6 +21,7 @@ import { BillingService } from '../../services/billing.service.js';
 import { BillingCycleService } from '../../services/billing-cycle.service.js';
 import { billingOrchestrationService } from '../../services/billing-orchestration.service.js';
 import { provisionalRentalTermService } from '../../services/provisional-rental-term.service.js';
+import { dailyStayService } from '../../services/daily-stay.service.js';
 import { PrismaMeterRepository } from '../../db/repositories/meter.repository.js';
 import { PrismaBillingCycleRepository } from '../../db/repositories/billing-cycle.repository.js';
 import { PrismaBillRepository } from '../../db/repositories/bill.repository.js';
@@ -3907,6 +3908,1345 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
         )
       ).rejects.toThrow();
     } finally {
+      await prisma.billingRateSnapshot.deleteMany({ where: { dormitoryId: dId } });
+      await prisma.billingCycle.deleteMany({ where: { dormitoryId: dId } });
+      await prisma.room.deleteMany({ where: { dormitoryId: dId } });
+      await prisma.building.deleteMany({ where: { dormitoryId: dId } });
+      await prisma.dormitoryBillingSettings.deleteMany({ where: { dormitoryId: dId } });
+      await prisma.dormitory.deleteMany({ where: { id: dId } });
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // TEST 35: Monthly Contract: Date-Only Inclusive End Date -> Exclusive +1 Day
+  // --------------------------------------------------------------------------
+  it('35. Monthly Contract: Inclusive end-date converts to exclusive +1 day Bangkok boundary', async () => {
+    const dId = crypto.randomUUID();
+    await prisma.dormitory.create({
+      data: {
+        id: dId,
+        name: 'Dorm Inclusive End Test',
+        billingSettings: {
+          create: {
+            waterBillingType: 'per_unit',
+            waterRate: toDecimal('18.00'),
+            electricityBillingType: 'per_unit',
+            electricityRate: toDecimal('8.00'),
+            dueDay: 5,
+          },
+        },
+      },
+    });
+
+    const bld = await prisma.building.create({
+      data: { dormitoryId: dId, name: 'Bld 1' },
+    });
+
+    const defaultRateSnapshot = (dormId: string) => ({
+      create: {
+        dormitoryId: dormId,
+        waterBillingType: 'per_unit',
+        electricityBillingType: 'per_unit',
+        waterRate: toDecimal('18.00'),
+        electricityRate: toDecimal('7.00'),
+        commonFee: toDecimal('0.00'),
+        commonFeeMode: 'per_room',
+        internetFee: toDecimal('0.00'),
+        internetFeeMode: 'flat',
+        parkingFee: toDecimal('0.00'),
+        parkingFeeMode: 'flat',
+        lateFeeType: 'flat',
+        lateFeeValue: toDecimal('0.00'),
+        source: 'TEMPLATE_DEFAULT',
+      },
+    });
+
+    // September 2026 cycle: 2026-09-01 00:00 to 2026-09-30 23:59:59 (exclusive upper bound = 2026-10-01 00:00 Bangkok)
+    const sepCycle = await prisma.billingCycle.create({
+      data: {
+        dormitoryId: dId,
+        cycleCode: '2026-09',
+        name: 'กันยายน 2569',
+        periodStart: new Date('2026-09-01T00:00:00.000Z'),
+        periodEnd: new Date('2026-09-30T23:59:59.999Z'),
+        dueDate: new Date('2026-10-05T23:59:59.999Z'),
+        billingDate: new Date('2026-09-01T00:00:00.000Z'),
+        status: 'draft',
+        rateSnapshot: defaultRateSnapshot(dId),
+      },
+    });
+
+    const rFull = await prisma.room.create({
+      data: {
+        dormitoryId: dId,
+        buildingId: bld.id,
+        roomNumber: 'R-FULL-SEP',
+        normalizedRoomNumber: 'R-FULL-SEP',
+        roomType: 'standard',
+        monthlyRent: 4000,
+        status: 'occupied',
+      },
+    });
+
+    const rPart = await prisma.room.create({
+      data: {
+        dormitoryId: dId,
+        buildingId: bld.id,
+        roomNumber: 'R-PART-SEP',
+        normalizedRoomNumber: 'R-PART-SEP',
+        roomType: 'standard',
+        monthlyRent: 4000,
+        status: 'occupied',
+      },
+    });
+
+    const tenant = await prisma.tenant.create({
+      data: {
+        dormitoryId: dId,
+        tenantNumber: `TN-${crypto.randomUUID().slice(0, 8)}`,
+        firstName: 'ทดสอบ',
+        lastName: 'สัญญารายเดือน',
+        displayName: 'ทดสอบ สัญญารายเดือน',
+        status: 'active',
+      },
+    });
+
+    try {
+      // Full September contract: 2026-09-01 to 2026-09-30 inclusive -> [2026-09-01 00:00, 2026-10-01 00:00 Bangkok)
+      // Completely covers September -> hasBookableGap = false
+      await prisma.contract.create({
+        data: {
+          dormitoryId: dId,
+          roomId: rFull.id,
+          tenantId: tenant.id,
+          contractNumber: 'CTR-FULL-SEP',
+          rentAmount: 4000,
+          depositAmount: 4000,
+          startDate: new Date('2026-09-01T00:00:00.000Z'),
+          endDate: new Date('2026-09-30T00:00:00.000Z'),
+          status: 'active',
+        },
+      });
+
+      // Partial September contract: 2026-09-01 to 2026-09-14 inclusive -> [2026-09-01 00:00, 2026-09-15 00:00 Bangkok)
+      // Sep 14 is occupied for the whole day, but Sep 15-30 is free -> hasBookableGap = true
+      await prisma.contract.create({
+        data: {
+          dormitoryId: dId,
+          roomId: rPart.id,
+          tenantId: tenant.id,
+          contractNumber: 'CTR-PART-SEP',
+          rentAmount: 4000,
+          depositAmount: 4000,
+          startDate: new Date('2026-09-01T00:00:00.000Z'),
+          endDate: new Date('2026-09-14T00:00:00.000Z'),
+          status: 'active',
+        },
+      });
+
+      const preview = await meterService.getMeterBillingPreviewContext(dId, sepCycle.id);
+      const resFull = preview.rooms.find(r => r.roomId === rFull.id);
+      const resPart = preview.rooms.find(r => r.roomId === rPart.id);
+
+      expect(resFull?.hasBookableGap).toBe(false);
+      expect(resPart?.hasBookableGap).toBe(true);
+    } finally {
+      await prisma.contract.deleteMany({ where: { dormitoryId: dId } });
+      await prisma.tenant.deleteMany({ where: { id: tenant.id } });
+      await prisma.billingRateSnapshot.deleteMany({ where: { dormitoryId: dId } });
+      await prisma.billingCycle.deleteMany({ where: { dormitoryId: dId } });
+      await prisma.room.deleteMany({ where: { dormitoryId: dId } });
+      await prisma.building.deleteMany({ where: { dormitoryId: dId } });
+      await prisma.dormitoryBillingSettings.deleteMany({ where: { dormitoryId: dId } });
+      await prisma.dormitory.deleteMany({ where: { id: dId } });
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // TEST 36: Provisional Rental Term: Date-Only Inclusive End Date -> Exclusive +1 Day
+  // --------------------------------------------------------------------------
+  it('36. Provisional Rental Term: Inclusive end-date converts to exclusive +1 day Bangkok boundary', async () => {
+    const dId = crypto.randomUUID();
+    await prisma.dormitory.create({
+      data: {
+        id: dId,
+        name: 'Dorm Term End Test',
+        billingSettings: {
+          create: {
+            waterBillingType: 'per_unit',
+            waterRate: toDecimal('18.00'),
+            electricityBillingType: 'per_unit',
+            electricityRate: toDecimal('8.00'),
+            dueDay: 5,
+          },
+        },
+      },
+    });
+
+    const bld = await prisma.building.create({
+      data: { dormitoryId: dId, name: 'Bld 1' },
+    });
+
+    const defaultRateSnapshot = (dormId: string) => ({
+      create: {
+        dormitoryId: dormId,
+        waterBillingType: 'per_unit',
+        electricityBillingType: 'per_unit',
+        waterRate: toDecimal('18.00'),
+        electricityRate: toDecimal('7.00'),
+        commonFee: toDecimal('0.00'),
+        commonFeeMode: 'per_room',
+        internetFee: toDecimal('0.00'),
+        internetFeeMode: 'flat',
+        parkingFee: toDecimal('0.00'),
+        parkingFeeMode: 'flat',
+        lateFeeType: 'flat',
+        lateFeeValue: toDecimal('0.00'),
+        source: 'TEMPLATE_DEFAULT',
+      },
+    });
+
+    const sepCycle = await prisma.billingCycle.create({
+      data: {
+        dormitoryId: dId,
+        cycleCode: '2026-09',
+        name: 'กันยายน 2569',
+        periodStart: new Date('2026-09-01T00:00:00.000Z'),
+        periodEnd: new Date('2026-09-30T23:59:59.999Z'),
+        dueDate: new Date('2026-10-05T23:59:59.999Z'),
+        billingDate: new Date('2026-09-01T00:00:00.000Z'),
+        status: 'draft',
+        rateSnapshot: defaultRateSnapshot(dId),
+      },
+    });
+
+    const rFull = await prisma.room.create({
+      data: {
+        dormitoryId: dId,
+        buildingId: bld.id,
+        roomNumber: 'R-TERM-FULL',
+        normalizedRoomNumber: 'R-TERM-FULL',
+        roomType: 'standard',
+        monthlyRent: 4000,
+        status: 'occupied',
+      },
+    });
+
+    const rPart = await prisma.room.create({
+      data: {
+        dormitoryId: dId,
+        buildingId: bld.id,
+        roomNumber: 'R-TERM-PART',
+        normalizedRoomNumber: 'R-TERM-PART',
+        roomType: 'standard',
+        monthlyRent: 4000,
+        status: 'occupied',
+      },
+    });
+
+    const tenant = await prisma.tenant.create({
+      data: {
+        dormitoryId: dId,
+        tenantNumber: `TN-${crypto.randomUUID().slice(0, 8)}`,
+        firstName: 'ทดสอบ',
+        lastName: 'ข้อตกลงชั่วคราว',
+        displayName: 'ทดสอบ ข้อตกลงชั่วคราว',
+        status: 'active',
+      },
+    });
+
+    try {
+      // Full September Term: 2026-09-01 to 2026-09-30 inclusive -> hasBookableGap = false
+      await prisma.provisionalRentalTerm.create({
+        data: {
+          dormitoryId: dId,
+          roomId: rFull.id,
+          tenantId: tenant.id,
+          rentalType: 'MONTHLY',
+          startDate: new Date('2026-09-01T00:00:00.000Z'),
+          endDate: new Date('2026-09-30T00:00:00.000Z'),
+          durationMonths: 1,
+          unitRentAmount: 4000,
+          totalRentAmount: 4000,
+          status: 'ACTIVE',
+        },
+      });
+
+      // Partial September Term: 2026-09-01 to 2026-09-14 inclusive -> hasBookableGap = true
+      await prisma.provisionalRentalTerm.create({
+        data: {
+          dormitoryId: dId,
+          roomId: rPart.id,
+          tenantId: tenant.id,
+          rentalType: 'MONTHLY',
+          startDate: new Date('2026-09-01T00:00:00.000Z'),
+          endDate: new Date('2026-09-14T00:00:00.000Z'),
+          durationMonths: 1,
+          unitRentAmount: 4000,
+          totalRentAmount: 4000,
+          status: 'ACTIVE',
+        },
+      });
+
+      const preview = await meterService.getMeterBillingPreviewContext(dId, sepCycle.id);
+      const resFull = preview.rooms.find(r => r.roomId === rFull.id);
+      const resPart = preview.rooms.find(r => r.roomId === rPart.id);
+
+      expect(resFull?.hasBookableGap).toBe(false);
+      expect(resPart?.hasBookableGap).toBe(true);
+    } finally {
+      await prisma.provisionalRentalTerm.deleteMany({ where: { dormitoryId: dId } });
+      await prisma.tenant.deleteMany({ where: { id: tenant.id } });
+      await prisma.billingRateSnapshot.deleteMany({ where: { dormitoryId: dId } });
+      await prisma.billingCycle.deleteMany({ where: { dormitoryId: dId } });
+      await prisma.room.deleteMany({ where: { dormitoryId: dId } });
+      await prisma.building.deleteMany({ where: { dormitoryId: dId } });
+      await prisma.dormitoryBillingSettings.deleteMany({ where: { dormitoryId: dId } });
+      await prisma.dormitory.deleteMany({ where: { id: dId } });
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // TEST 37: Daily Stay Sub-day Overlap into Future Reservation Rejected
+  // --------------------------------------------------------------------------
+  it('37. Daily Stay: Sub-day overlap into subsequent contract/reservation is rejected', async () => {
+    const dId = crypto.randomUUID();
+    await prisma.dormitory.create({
+      data: {
+        id: dId,
+        name: 'Dorm Subday Test',
+        billingSettings: {
+          create: {
+            waterBillingType: 'per_unit',
+            waterRate: toDecimal('18.00'),
+            electricityBillingType: 'per_unit',
+            electricityRate: toDecimal('8.00'),
+            dueDay: 5,
+          },
+        },
+      },
+    });
+
+    const bld = await prisma.building.create({
+      data: { dormitoryId: dId, name: 'Bld 1' },
+    });
+
+    const room = await prisma.room.create({
+      data: {
+        dormitoryId: dId,
+        buildingId: bld.id,
+        roomNumber: 'R-SUBDAY-1',
+        normalizedRoomNumber: 'R-SUBDAY-1',
+        roomType: 'standard',
+        monthlyRent: 4000,
+        status: 'vacant',
+      },
+    });
+
+    const tenant = await prisma.tenant.create({
+      data: {
+        dormitoryId: dId,
+        tenantNumber: `TN-${crypto.randomUUID().slice(0, 8)}`,
+        firstName: 'สัญญาล่วงหน้า',
+        lastName: 'ตุลาคม',
+        displayName: 'สัญญาล่วงหน้า ตุลาคม',
+        status: 'active',
+      },
+    });
+
+    try {
+      // Contract A starts Oct 01 00:00:00 Bangkok
+      await prisma.contract.create({
+        data: {
+          dormitoryId: dId,
+          roomId: room.id,
+          tenantId: tenant.id,
+          contractNumber: 'CTR-OCT-01',
+          rentAmount: 4000,
+          depositAmount: 4000,
+          startDate: new Date('2026-10-01T00:00:00.000Z'),
+          endDate: new Date('2026-10-31T00:00:00.000Z'),
+          status: 'active',
+        },
+      });
+
+      // Daily Stay B requests Sep 30 18:00 to Oct 01 12:00 (overlaps Oct 01 00:00 to 12:00)
+      const overlapCheck = await dailyStayService.checkRoomAvailability(
+        dId,
+        room.id,
+        new Date('2026-09-30T11:00:00.000Z'), // Sep 30 18:00 Bangkok
+        new Date('2026-10-01T05:00:00.000Z')  // Oct 01 12:00 Bangkok
+      );
+
+      expect(overlapCheck.available).toBe(false);
+      expect(overlapCheck.reason).toBe('ROOM_OCCUPIED_BY_CONTRACT');
+    } finally {
+      await prisma.contract.deleteMany({ where: { dormitoryId: dId } });
+      await prisma.tenant.deleteMany({ where: { id: tenant.id } });
+      await prisma.room.deleteMany({ where: { dormitoryId: dId } });
+      await prisma.building.deleteMany({ where: { dormitoryId: dId } });
+      await prisma.dormitoryBillingSettings.deleteMany({ where: { dormitoryId: dId } });
+      await prisma.dormitory.deleteMany({ where: { id: dId } });
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // TEST 38: Daily Stay Exact Boundary Non-Overlap Allowed
+  // --------------------------------------------------------------------------
+  it('38. Daily Stay: Exact boundary non-overlap ([Sep 29 14:00, Oct 01 00:00) vs Oct 01 00:00) is available', async () => {
+    const dId = crypto.randomUUID();
+    await prisma.dormitory.create({
+      data: {
+        id: dId,
+        name: 'Dorm Boundary Test',
+        billingSettings: {
+          create: {
+            waterBillingType: 'per_unit',
+            waterRate: toDecimal('18.00'),
+            electricityBillingType: 'per_unit',
+            electricityRate: toDecimal('8.00'),
+            dueDay: 5,
+          },
+        },
+      },
+    });
+
+    const bld = await prisma.building.create({
+      data: { dormitoryId: dId, name: 'Bld 1' },
+    });
+
+    const room = await prisma.room.create({
+      data: {
+        dormitoryId: dId,
+        buildingId: bld.id,
+        roomNumber: 'R-BOUND-1',
+        normalizedRoomNumber: 'R-BOUND-1',
+        roomType: 'standard',
+        monthlyRent: 4000,
+        status: 'vacant',
+      },
+    });
+
+    const tenant = await prisma.tenant.create({
+      data: {
+        dormitoryId: dId,
+        tenantNumber: `TN-${crypto.randomUUID().slice(0, 8)}`,
+        firstName: 'สัญญาล่วงหน้า',
+        lastName: 'ตุลาคม',
+        displayName: 'สัญญาล่วงหน้า ตุลาคม',
+        status: 'active',
+      },
+    });
+
+    try {
+      // Contract A starts Oct 01 00:00:00 Bangkok
+      await prisma.contract.create({
+        data: {
+          dormitoryId: dId,
+          roomId: room.id,
+          tenantId: tenant.id,
+          contractNumber: 'CTR-OCT-02',
+          rentAmount: 4000,
+          depositAmount: 4000,
+          startDate: new Date('2026-10-01T00:00:00.000Z'),
+          endDate: new Date('2026-10-31T00:00:00.000Z'),
+          status: 'active',
+        },
+      });
+
+      // Daily Stay B requests Sep 29 14:00 to Oct 01 00:00 Bangkok
+      const boundaryCheck = await dailyStayService.checkRoomAvailability(
+        dId,
+        room.id,
+        new Date('2026-09-29T07:00:00.000Z'), // Sep 29 14:00 Bangkok
+        new Date('2026-09-30T17:00:00.000Z')  // Oct 01 00:00 Bangkok
+      );
+
+      // In half-open interval [Sep 29 14:00, Oct 01 00:00) vs [Oct 01 00:00, ...), no overlap!
+      expect(boundaryCheck.available).toBe(true);
+    } finally {
+      await prisma.contract.deleteMany({ where: { dormitoryId: dId } });
+      await prisma.tenant.deleteMany({ where: { id: tenant.id } });
+      await prisma.room.deleteMany({ where: { dormitoryId: dId } });
+      await prisma.building.deleteMany({ where: { dormitoryId: dId } });
+      await prisma.dormitoryBillingSettings.deleteMany({ where: { dormitoryId: dId } });
+      await prisma.dormitory.deleteMany({ where: { id: dId } });
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // TEST 39: hasBookableGap Uses Exact Daily Timestamps
+  // --------------------------------------------------------------------------
+  it('39. Daily Stay: hasBookableGap uses exact Daily timestamps without gaps', async () => {
+    const dId = crypto.randomUUID();
+    await prisma.dormitory.create({
+      data: {
+        id: dId,
+        name: 'Dorm Daily Gap Test',
+        billingSettings: {
+          create: {
+            waterBillingType: 'per_unit',
+            waterRate: toDecimal('18.00'),
+            electricityBillingType: 'per_unit',
+            electricityRate: toDecimal('8.00'),
+            dueDay: 5,
+          },
+        },
+      },
+    });
+
+    const bld = await prisma.building.create({
+      data: { dormitoryId: dId, name: 'Bld 1' },
+    });
+
+    const defaultRateSnapshot = (dormId: string) => ({
+      create: {
+        dormitoryId: dormId,
+        waterBillingType: 'per_unit',
+        electricityBillingType: 'per_unit',
+        waterRate: toDecimal('18.00'),
+        electricityRate: toDecimal('7.00'),
+        commonFee: toDecimal('0.00'),
+        commonFeeMode: 'per_room',
+        internetFee: toDecimal('0.00'),
+        internetFeeMode: 'flat',
+        parkingFee: toDecimal('0.00'),
+        parkingFeeMode: 'flat',
+        lateFeeType: 'flat',
+        lateFeeValue: toDecimal('0.00'),
+        source: 'TEMPLATE_DEFAULT',
+      },
+    });
+
+    const sepCycle = await prisma.billingCycle.create({
+      data: {
+        dormitoryId: dId,
+        cycleCode: '2026-09',
+        name: 'กันยายน 2569',
+        periodStart: new Date('2026-09-01T00:00:00.000Z'),
+        periodEnd: new Date('2026-09-30T23:59:59.999Z'),
+        dueDate: new Date('2026-10-05T23:59:59.999Z'),
+        billingDate: new Date('2026-09-01T00:00:00.000Z'),
+        status: 'draft',
+        rateSnapshot: defaultRateSnapshot(dId),
+      },
+    });
+
+    const room = await prisma.room.create({
+      data: {
+        dormitoryId: dId,
+        buildingId: bld.id,
+        roomNumber: 'R-DAILY-CONT',
+        normalizedRoomNumber: 'R-DAILY-CONT',
+        roomType: 'standard',
+        monthlyRent: 4000,
+        status: 'occupied',
+      },
+    });
+
+    const tenant = await prisma.tenant.create({
+      data: {
+        dormitoryId: dId,
+        tenantNumber: `TN-${crypto.randomUUID().slice(0, 8)}`,
+        firstName: 'สมชาย',
+        lastName: 'รายวันเต็มเดือน',
+        displayName: 'สมชาย รายวันเต็มเดือน',
+        status: 'active',
+      },
+    });
+
+    try {
+      // Stay 1: Sep 1 00:00 Bangkok to Sep 15 12:00 Bangkok
+      await prisma.dailyStay.create({
+        data: {
+          dormitoryId: dId,
+          roomId: room.id,
+          tenantId: tenant.id,
+          requestSource: 'OWNER',
+          applicantFullName: 'สมชาย รายวันเต็มเดือน',
+          startDate: new Date('2026-09-01T00:00:00.000Z'),
+          endDate: new Date('2026-09-15T00:00:00.000Z'),
+          checkInAt: new Date('2026-08-31T17:00:00.000Z'), // Sep 1 00:00 Bangkok
+          checkOutAt: new Date('2026-09-15T05:00:00.000Z'), // Sep 15 12:00 Bangkok
+          inclusiveDayCount: 15,
+          dailyRateAmount: 500,
+          totalRentAmount: 7500,
+          depositAmount: 0,
+          status: 'ACTIVE',
+        },
+      });
+
+      // Stay 2: Sep 15 12:00 Bangkok to Oct 1 00:00 Bangkok
+      await prisma.dailyStay.create({
+        data: {
+          dormitoryId: dId,
+          roomId: room.id,
+          tenantId: tenant.id,
+          requestSource: 'OWNER',
+          applicantFullName: 'สมชาย รายวันเต็มเดือน',
+          startDate: new Date('2026-09-15T00:00:00.000Z'),
+          endDate: new Date('2026-09-30T00:00:00.000Z'),
+          checkInAt: new Date('2026-09-15T05:00:00.000Z'), // Sep 15 12:00 Bangkok
+          checkOutAt: new Date('2026-09-30T17:00:00.000Z'), // Oct 1 00:00 Bangkok
+          inclusiveDayCount: 16,
+          dailyRateAmount: 500,
+          totalRentAmount: 8000,
+          depositAmount: 0,
+          status: 'ACTIVE',
+        },
+      });
+
+      const preview = await meterService.getMeterBillingPreviewContext(dId, sepCycle.id);
+      const res = preview.rooms.find(r => r.roomId === room.id);
+
+      // Continuous coverage across September -> hasBookableGap = false
+      expect(res?.hasBookableGap).toBe(false);
+    } finally {
+      await prisma.dailyStay.deleteMany({ where: { dormitoryId: dId } });
+      await prisma.tenant.deleteMany({ where: { id: tenant.id } });
+      await prisma.billingRateSnapshot.deleteMany({ where: { dormitoryId: dId } });
+      await prisma.billingCycle.deleteMany({ where: { dormitoryId: dId } });
+      await prisma.room.deleteMany({ where: { dormitoryId: dId } });
+      await prisma.building.deleteMany({ where: { dormitoryId: dId } });
+      await prisma.dormitoryBillingSettings.deleteMany({ where: { dormitoryId: dId } });
+      await prisma.dormitory.deleteMany({ where: { id: dId } });
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // TEST 40: Canonical Payment Flow Clears Daily Red Tail on Meter Preview
+  // --------------------------------------------------------------------------
+  it('40. Canonical Payment: Settle DAILY_RENT clears unpaid red tail on Meter preview', async () => {
+    const dId = crypto.randomUUID();
+    await prisma.dormitory.create({
+      data: {
+        id: dId,
+        name: 'Dorm Payment Flow Test',
+        billingSettings: {
+          create: {
+            waterBillingType: 'per_unit',
+            waterRate: toDecimal('18.00'),
+            electricityBillingType: 'per_unit',
+            electricityRate: toDecimal('8.00'),
+            dueDay: 5,
+          },
+        },
+      },
+    });
+
+    const bld = await prisma.building.create({
+      data: { dormitoryId: dId, name: 'Bld 1' },
+    });
+
+    const defaultRateSnapshot = (dormId: string) => ({
+      create: {
+        dormitoryId: dormId,
+        waterBillingType: 'per_unit',
+        electricityBillingType: 'per_unit',
+        waterRate: toDecimal('18.00'),
+        electricityRate: toDecimal('7.00'),
+        commonFee: toDecimal('0.00'),
+        commonFeeMode: 'per_room',
+        internetFee: toDecimal('0.00'),
+        internetFeeMode: 'flat',
+        parkingFee: toDecimal('0.00'),
+        parkingFeeMode: 'flat',
+        lateFeeType: 'flat',
+        lateFeeValue: toDecimal('0.00'),
+        source: 'TEMPLATE_DEFAULT',
+      },
+    });
+
+    const augCycle = await prisma.billingCycle.create({
+      data: {
+        dormitoryId: dId,
+        cycleCode: '2026-08',
+        name: 'สิงหาคม 2569',
+        periodStart: new Date('2026-08-01T00:00:00.000Z'),
+        periodEnd: new Date('2026-08-31T23:59:59.999Z'),
+        dueDate: new Date('2026-09-05T23:59:59.999Z'),
+        billingDate: new Date('2026-08-01T00:00:00.000Z'),
+        status: 'draft',
+        rateSnapshot: defaultRateSnapshot(dId),
+      },
+    });
+
+    const room = await prisma.room.create({
+      data: {
+        dormitoryId: dId,
+        buildingId: bld.id,
+        roomNumber: 'R-PAY-TAIL',
+        normalizedRoomNumber: 'R-PAY-TAIL',
+        roomType: 'standard',
+        monthlyRent: 4000,
+        status: 'vacant',
+      },
+    });
+
+    const tenant = await prisma.tenant.create({
+      data: {
+        dormitoryId: dId,
+        tenantNumber: `TN-${crypto.randomUUID().slice(0, 8)}`,
+        firstName: 'ก้องเกียรติ',
+        lastName: 'ชำระค่าเช่า',
+        displayName: 'ก้องเกียรติ ชำระค่าเช่า',
+        status: 'active',
+      },
+    });
+
+    try {
+      const stay = await prisma.dailyStay.create({
+        data: {
+          dormitoryId: dId,
+          roomId: room.id,
+          tenantId: tenant.id,
+          requestSource: 'OWNER',
+          applicantFullName: 'ก้องเกียรติ ชำระค่าเช่า',
+          startDate: new Date('2026-08-05T00:00:00.000Z'),
+          endDate: new Date('2026-08-07T00:00:00.000Z'),
+          checkInAt: new Date('2026-08-05T07:00:00.000Z'),
+          checkOutAt: new Date('2026-08-07T05:00:00.000Z'),
+          inclusiveDayCount: 2,
+          dailyRateAmount: 600,
+          totalRentAmount: 1200,
+          depositAmount: 500,
+          depositDeclaredStatus: 'PAID',
+          status: 'CHECKED_OUT',
+        },
+      });
+
+      const inv = await prisma.dailyStayInvoice.create({
+        data: {
+          dormitoryId: dId,
+          dailyStayId: stay.id,
+          invoiceNumber: `INV-D-PAY-01`,
+          totalAgreedAmount: toDecimal('1700.00'),
+          totalRentAmount: toDecimal('1200.00'),
+          depositAmount: toDecimal('500.00'),
+          outstandingAmount: toDecimal('1200.00'),
+          status: 'ISSUED',
+        },
+      });
+
+      await prisma.dailyStayInvoiceItem.create({
+        data: {
+          invoiceId: inv.id,
+          itemType: 'DAILY_RENT',
+          description: 'ค่าเช่ารายวัน 2 วัน',
+          amount: 1200,
+          status: 'OUTSTANDING',
+        },
+      });
+
+      await prisma.dailyStayInvoiceItem.create({
+        data: {
+          invoiceId: inv.id,
+          itemType: 'DEPOSIT',
+          description: 'เงินประกันห้องพัก',
+          amount: 500,
+          status: 'DECLARED_PAID',
+          paidAt: new Date('2026-08-05T07:00:00.000Z'),
+        },
+      });
+
+      // Starting state: DAILY_RENT = OUTSTANDING -> preview shows isDailyUnpaid = true
+      const previewBefore = await meterService.getMeterBillingPreviewContext(dId, augCycle.id);
+      const roomBefore = previewBefore.rooms.find(r => r.roomId === room.id);
+      expect(roomBefore?.isDailyUnpaid).toBe(true);
+      expect(roomBefore?.tenantName).toBe('ก้องเกียรติ ชำระค่าเช่า');
+
+      // Canonical payment action
+      const settleResult = await dailyStayService.settleDailyStayInvoiceItem(
+        dId,
+        inv.id,
+        'DAILY_RENT',
+        'user-owner-test'
+      );
+
+      // Verify DB: DAILY_RENT is SETTLED, invoice status is PAID, paidAt is set
+      expect(settleResult.status).toBe('PAID');
+      const rentItem = settleResult.items.find((i: any) => i.itemType === 'DAILY_RENT');
+      expect(rentItem?.status).toBe('SETTLED');
+      expect(rentItem?.paidAt).toBeInstanceOf(Date);
+
+      // Verify Meter preview: isDailyUnpaid = false
+      const previewAfter = await meterService.getMeterBillingPreviewContext(dId, augCycle.id);
+      const roomAfter = previewAfter.rooms.find(r => r.roomId === room.id);
+      expect(roomAfter?.isDailyUnpaid).toBe(false);
+    } finally {
+      await prisma.dailyStayInvoiceItem.deleteMany({ where: { invoice: { dormitoryId: dId } } });
+      await prisma.dailyStayInvoice.deleteMany({ where: { dormitoryId: dId } });
+      await prisma.dailyStay.deleteMany({ where: { dormitoryId: dId } });
+      await prisma.tenant.deleteMany({ where: { id: tenant.id } });
+      await prisma.billingRateSnapshot.deleteMany({ where: { dormitoryId: dId } });
+      await prisma.billingCycle.deleteMany({ where: { dormitoryId: dId } });
+      await prisma.room.deleteMany({ where: { dormitoryId: dId } });
+      await prisma.building.deleteMany({ where: { dormitoryId: dId } });
+      await prisma.dormitoryBillingSettings.deleteMany({ where: { dormitoryId: dId } });
+      await prisma.dormitory.deleteMany({ where: { id: dId } });
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // TEST 41: paidAt First-Write Immutability
+  // --------------------------------------------------------------------------
+  it('41. paidAt Immutability: First payment sets paidAt; repeated operation preserves original timestamp', async () => {
+    const dId = crypto.randomUUID();
+    await prisma.dormitory.create({
+      data: {
+        id: dId,
+        name: 'Dorm Immutability Test',
+        billingSettings: {
+          create: {
+            waterBillingType: 'per_unit',
+            waterRate: toDecimal('18.00'),
+            electricityBillingType: 'per_unit',
+            electricityRate: toDecimal('8.00'),
+            dueDay: 5,
+          },
+        },
+      },
+    });
+
+    const bld = await prisma.building.create({
+      data: { dormitoryId: dId, name: 'Bld 1' },
+    });
+
+    const room = await prisma.room.create({
+      data: {
+        dormitoryId: dId,
+        buildingId: bld.id,
+        roomNumber: 'R-IMMUT-1',
+        normalizedRoomNumber: 'R-IMMUT-1',
+        roomType: 'standard',
+        monthlyRent: 4000,
+        status: 'vacant',
+      },
+    });
+
+    try {
+      const originalTime = new Date('2026-08-01T10:00:00.000Z');
+
+      const stay = await prisma.dailyStay.create({
+        data: {
+          dormitoryId: dId,
+          roomId: room.id,
+          requestSource: 'OWNER',
+          applicantFullName: 'นรินทร์ ไม่เขียนทับเวลา',
+          startDate: new Date('2026-08-01T00:00:00.000Z'),
+          endDate: new Date('2026-08-02T00:00:00.000Z'),
+          inclusiveDayCount: 1,
+          status: 'ACTIVE',
+        },
+      });
+
+      const inv = await prisma.dailyStayInvoice.create({
+        data: {
+          dormitoryId: dId,
+          dailyStayId: stay.id,
+          invoiceNumber: `INV-IMMUT-01`,
+          totalAgreedAmount: toDecimal('500.00'),
+          totalRentAmount: toDecimal('500.00'),
+          status: 'ISSUED',
+        },
+      });
+
+      await prisma.dailyStayInvoiceItem.create({
+        data: {
+          invoiceId: inv.id,
+          itemType: 'DAILY_RENT',
+          description: 'ค่าเช่ารายวัน',
+          amount: 500,
+          status: 'OUTSTANDING',
+          paidAt: originalTime, // Already recorded timestamp
+        },
+      });
+
+      // Settle again
+      const result = await dailyStayService.settleDailyStayInvoiceItem(
+        dId,
+        inv.id,
+        'DAILY_RENT',
+        'user-owner-test'
+      );
+
+      const rentItem = result.items.find((i: any) => i.itemType === 'DAILY_RENT');
+      expect(rentItem?.paidAt?.toISOString()).toBe(originalTime.toISOString());
+    } finally {
+      await prisma.dailyStayInvoiceItem.deleteMany({ where: { invoice: { dormitoryId: dId } } });
+      await prisma.dailyStayInvoice.deleteMany({ where: { dormitoryId: dId } });
+      await prisma.dailyStay.deleteMany({ where: { dormitoryId: dId } });
+      await prisma.room.deleteMany({ where: { dormitoryId: dId } });
+      await prisma.building.deleteMany({ where: { dormitoryId: dId } });
+      await prisma.dormitoryBillingSettings.deleteMany({ where: { dormitoryId: dId } });
+      await prisma.dormitory.deleteMany({ where: { id: dId } });
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // TEST 42: Legacy Financially Paid Record with paidAt: null Recognized as Paid
+  // --------------------------------------------------------------------------
+  it('42. Legacy Paid Record: Financially SETTLED with paidAt: null is recognized as paid without fabricating timestamp', async () => {
+    const dId = crypto.randomUUID();
+    await prisma.dormitory.create({
+      data: {
+        id: dId,
+        name: 'Dorm Legacy Paid Test',
+        billingSettings: {
+          create: {
+            waterBillingType: 'per_unit',
+            waterRate: toDecimal('18.00'),
+            electricityBillingType: 'per_unit',
+            electricityRate: toDecimal('8.00'),
+            dueDay: 5,
+          },
+        },
+      },
+    });
+
+    const bld = await prisma.building.create({
+      data: { dormitoryId: dId, name: 'Bld 1' },
+    });
+
+    const defaultRateSnapshot = (dormId: string) => ({
+      create: {
+        dormitoryId: dormId,
+        waterBillingType: 'per_unit',
+        electricityBillingType: 'per_unit',
+        waterRate: toDecimal('18.00'),
+        electricityRate: toDecimal('7.00'),
+        commonFee: toDecimal('0.00'),
+        commonFeeMode: 'per_room',
+        internetFee: toDecimal('0.00'),
+        internetFeeMode: 'flat',
+        parkingFee: toDecimal('0.00'),
+        parkingFeeMode: 'flat',
+        lateFeeType: 'flat',
+        lateFeeValue: toDecimal('0.00'),
+        source: 'TEMPLATE_DEFAULT',
+      },
+    });
+
+    const augCycle = await prisma.billingCycle.create({
+      data: {
+        dormitoryId: dId,
+        cycleCode: '2026-08',
+        name: 'สิงหาคม 2569',
+        periodStart: new Date('2026-08-01T00:00:00.000Z'),
+        periodEnd: new Date('2026-08-31T23:59:59.999Z'),
+        dueDate: new Date('2026-09-05T23:59:59.999Z'),
+        billingDate: new Date('2026-08-01T00:00:00.000Z'),
+        status: 'draft',
+        rateSnapshot: defaultRateSnapshot(dId),
+      },
+    });
+
+    const room = await prisma.room.create({
+      data: {
+        dormitoryId: dId,
+        buildingId: bld.id,
+        roomNumber: 'R-LEGACY-PAID',
+        normalizedRoomNumber: 'R-LEGACY-PAID',
+        roomType: 'standard',
+        monthlyRent: 4000,
+        status: 'vacant',
+      },
+    });
+
+    try {
+      const stay = await prisma.dailyStay.create({
+        data: {
+          dormitoryId: dId,
+          roomId: room.id,
+          requestSource: 'OWNER',
+          applicantFullName: 'ประดิษฐ์ ระบบเก่า',
+          startDate: new Date('2026-08-01T00:00:00.000Z'),
+          endDate: new Date('2026-08-02T00:00:00.000Z'),
+          inclusiveDayCount: 1,
+          status: 'CHECKED_OUT',
+        },
+      });
+
+      const inv = await prisma.dailyStayInvoice.create({
+        data: {
+          dormitoryId: dId,
+          dailyStayId: stay.id,
+          invoiceNumber: `INV-LEGACY-01`,
+          totalAgreedAmount: toDecimal('500.00'),
+          totalRentAmount: toDecimal('500.00'),
+          status: 'PAID',
+        },
+      });
+
+      await prisma.dailyStayInvoiceItem.create({
+        data: {
+          invoiceId: inv.id,
+          itemType: 'DAILY_RENT',
+          description: 'ค่าเช่ารายวัน',
+          amount: 500,
+          status: 'SETTLED',
+          paidAt: null, // Legacy null paidAt
+        },
+      });
+
+      const preview = await meterService.getMeterBillingPreviewContext(dId, augCycle.id);
+      const res = preview.rooms.find(r => r.roomId === room.id);
+
+      // Must be recognized as paid (isDailyUnpaid = false)
+      expect(res?.isDailyUnpaid).toBe(false);
+
+      // Verify DB paidAt remained null (did not fabricate timestamp)
+      const dbItem = await prisma.dailyStayInvoiceItem.findFirst({ where: { invoiceId: inv.id } });
+      expect(dbItem?.paidAt).toBeNull();
+    } finally {
+      await prisma.dailyStayInvoiceItem.deleteMany({ where: { invoice: { dormitoryId: dId } } });
+      await prisma.dailyStayInvoice.deleteMany({ where: { dormitoryId: dId } });
+      await prisma.dailyStay.deleteMany({ where: { dormitoryId: dId } });
+      await prisma.billingRateSnapshot.deleteMany({ where: { dormitoryId: dId } });
+      await prisma.billingCycle.deleteMany({ where: { dormitoryId: dId } });
+      await prisma.room.deleteMany({ where: { dormitoryId: dId } });
+      await prisma.building.deleteMany({ where: { dormitoryId: dId } });
+      await prisma.dormitoryBillingSettings.deleteMany({ where: { dormitoryId: dId } });
+      await prisma.dormitory.deleteMany({ where: { id: dId } });
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // TEST 43: Deposit / Rent Independence
+  // --------------------------------------------------------------------------
+  it('43. Deposit / Rent Independence: Deposit status does not decide red Daily Rent badge', async () => {
+    const dId = crypto.randomUUID();
+    await prisma.dormitory.create({
+      data: {
+        id: dId,
+        name: 'Dorm Independence Test',
+        billingSettings: {
+          create: {
+            waterBillingType: 'per_unit',
+            waterRate: toDecimal('18.00'),
+            electricityBillingType: 'per_unit',
+            electricityRate: toDecimal('8.00'),
+            dueDay: 5,
+          },
+        },
+      },
+    });
+
+    const bld = await prisma.building.create({
+      data: { dormitoryId: dId, name: 'Bld 1' },
+    });
+
+    const defaultRateSnapshot = (dormId: string) => ({
+      create: {
+        dormitoryId: dormId,
+        waterBillingType: 'per_unit',
+        electricityBillingType: 'per_unit',
+        waterRate: toDecimal('18.00'),
+        electricityRate: toDecimal('7.00'),
+        commonFee: toDecimal('0.00'),
+        commonFeeMode: 'per_room',
+        internetFee: toDecimal('0.00'),
+        internetFeeMode: 'flat',
+        parkingFee: toDecimal('0.00'),
+        parkingFeeMode: 'flat',
+        lateFeeType: 'flat',
+        lateFeeValue: toDecimal('0.00'),
+        source: 'TEMPLATE_DEFAULT',
+      },
+    });
+
+    const augCycle = await prisma.billingCycle.create({
+      data: {
+        dormitoryId: dId,
+        cycleCode: '2026-08',
+        name: 'สิงหาคม 2569',
+        periodStart: new Date('2026-08-01T00:00:00.000Z'),
+        periodEnd: new Date('2026-08-31T23:59:59.999Z'),
+        dueDate: new Date('2026-09-05T23:59:59.999Z'),
+        billingDate: new Date('2026-08-01T00:00:00.000Z'),
+        status: 'draft',
+        rateSnapshot: defaultRateSnapshot(dId),
+      },
+    });
+
+    const rDepPaidRentUnpaid = await prisma.room.create({
+      data: {
+        dormitoryId: dId,
+        buildingId: bld.id,
+        roomNumber: 'R-INDEP-1',
+        normalizedRoomNumber: 'R-INDEP-1',
+        roomType: 'standard',
+        monthlyRent: 4000,
+        status: 'vacant',
+      },
+    });
+
+    const rRentPaidDepUnpaid = await prisma.room.create({
+      data: {
+        dormitoryId: dId,
+        buildingId: bld.id,
+        roomNumber: 'R-INDEP-2',
+        normalizedRoomNumber: 'R-INDEP-2',
+        roomType: 'standard',
+        monthlyRent: 4000,
+        status: 'vacant',
+      },
+    });
+
+    try {
+      // Case A: Deposit = DECLARED_PAID, Rent = OUTSTANDING -> isDailyUnpaid = true
+      const stayA = await prisma.dailyStay.create({
+        data: {
+          dormitoryId: dId,
+          roomId: rDepPaidRentUnpaid.id,
+          requestSource: 'OWNER',
+          applicantFullName: 'เคสเอ มัดจำจ่ายแล้วค่าเช่าค้าง',
+          startDate: new Date('2026-08-01T00:00:00.000Z'),
+          endDate: new Date('2026-08-02T00:00:00.000Z'),
+          inclusiveDayCount: 1,
+          status: 'CHECKED_OUT',
+        },
+      });
+
+      const invA = await prisma.dailyStayInvoice.create({
+        data: {
+          dormitoryId: dId,
+          dailyStayId: stayA.id,
+          invoiceNumber: `INV-INDEP-A`,
+          totalAgreedAmount: toDecimal('1000.00'),
+          totalRentAmount: toDecimal('500.00'),
+          depositAmount: toDecimal('500.00'),
+          status: 'ISSUED',
+        },
+      });
+
+      await prisma.dailyStayInvoiceItem.create({
+        data: {
+          invoiceId: invA.id,
+          itemType: 'DAILY_RENT',
+          description: 'ค่าเช่ารายวัน',
+          amount: 500,
+          status: 'OUTSTANDING',
+        },
+      });
+
+      await prisma.dailyStayInvoiceItem.create({
+        data: {
+          invoiceId: invA.id,
+          itemType: 'DEPOSIT',
+          description: 'เงินประกัน',
+          amount: 500,
+          status: 'DECLARED_PAID',
+          paidAt: new Date(),
+        },
+      });
+
+      // Case B: Rent = SETTLED, Deposit = OUTSTANDING -> isDailyUnpaid = false
+      const stayB = await prisma.dailyStay.create({
+        data: {
+          dormitoryId: dId,
+          roomId: rRentPaidDepUnpaid.id,
+          requestSource: 'OWNER',
+          applicantFullName: 'เคสบี ค่าเช่าจ่ายแล้วมัดจำค้าง',
+          startDate: new Date('2026-08-01T00:00:00.000Z'),
+          endDate: new Date('2026-08-02T00:00:00.000Z'),
+          inclusiveDayCount: 1,
+          status: 'CHECKED_OUT',
+        },
+      });
+
+      const invB = await prisma.dailyStayInvoice.create({
+        data: {
+          dormitoryId: dId,
+          dailyStayId: stayB.id,
+          invoiceNumber: `INV-INDEP-B`,
+          totalAgreedAmount: toDecimal('1000.00'),
+          totalRentAmount: toDecimal('500.00'),
+          depositAmount: toDecimal('500.00'),
+          status: 'ISSUED',
+        },
+      });
+
+      await prisma.dailyStayInvoiceItem.create({
+        data: {
+          invoiceId: invB.id,
+          itemType: 'DAILY_RENT',
+          description: 'ค่าเช่ารายวัน',
+          amount: 500,
+          status: 'SETTLED',
+          paidAt: new Date(),
+        },
+      });
+
+      await prisma.dailyStayInvoiceItem.create({
+        data: {
+          invoiceId: invB.id,
+          itemType: 'DEPOSIT',
+          description: 'เงินประกัน',
+          amount: 500,
+          status: 'OUTSTANDING',
+        },
+      });
+
+      const preview = await meterService.getMeterBillingPreviewContext(dId, augCycle.id);
+      const resA = preview.rooms.find(r => r.roomId === rDepPaidRentUnpaid.id);
+      const resB = preview.rooms.find(r => r.roomId === rRentPaidDepUnpaid.id);
+
+      // Proof:
+      expect(resA?.isDailyUnpaid).toBe(true);  // Deposit paid, Rent unpaid -> unpaid red tail
+      expect(resB?.isDailyUnpaid).toBe(false); // Rent paid, Deposit unpaid -> no red tail
+    } finally {
+      await prisma.dailyStayInvoiceItem.deleteMany({ where: { invoice: { dormitoryId: dId } } });
+      await prisma.dailyStayInvoice.deleteMany({ where: { dormitoryId: dId } });
+      await prisma.dailyStay.deleteMany({ where: { dormitoryId: dId } });
+      await prisma.billingRateSnapshot.deleteMany({ where: { dormitoryId: dId } });
+      await prisma.billingCycle.deleteMany({ where: { dormitoryId: dId } });
+      await prisma.room.deleteMany({ where: { dormitoryId: dId } });
+      await prisma.building.deleteMany({ where: { dormitoryId: dId } });
+      await prisma.dormitoryBillingSettings.deleteMany({ where: { dormitoryId: dId } });
+      await prisma.dormitory.deleteMany({ where: { id: dId } });
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // TEST 44: Realistic Room 104 Zero-Payable Fixture with Complete Snapshot Readings
+  // --------------------------------------------------------------------------
+  it('44. Realistic Zero-Payable Fixture: Populated meter snapshot values yield 0.00 ฿ utility contribution', async () => {
+    const dId = crypto.randomUUID();
+    await prisma.dormitory.create({
+      data: {
+        id: dId,
+        name: 'Dorm Zero Payable Test',
+        billingSettings: {
+          create: {
+            waterBillingType: 'per_unit',
+            waterRate: toDecimal('18.00'),
+            electricityBillingType: 'per_unit',
+            electricityRate: toDecimal('7.00'),
+            dueDay: 5,
+          },
+        },
+      },
+    });
+
+    const bld = await prisma.building.create({
+      data: { dormitoryId: dId, name: 'Bld 1' },
+    });
+
+    const defaultRateSnapshot = (dormId: string) => ({
+      create: {
+        dormitoryId: dormId,
+        waterBillingType: 'per_unit',
+        electricityBillingType: 'per_unit',
+        waterRate: toDecimal('18.00'),
+        electricityRate: toDecimal('7.00'),
+        commonFee: toDecimal('0.00'),
+        commonFeeMode: 'per_room',
+        internetFee: toDecimal('0.00'),
+        internetFeeMode: 'flat',
+        parkingFee: toDecimal('0.00'),
+        parkingFeeMode: 'flat',
+        lateFeeType: 'flat',
+        lateFeeValue: toDecimal('0.00'),
+        source: 'TEMPLATE_DEFAULT',
+      },
+    });
+
+    const augCycle = await prisma.billingCycle.create({
+      data: {
+        dormitoryId: dId,
+        cycleCode: '2026-08',
+        name: 'สิงหาคม 2569',
+        periodStart: new Date('2026-08-01T00:00:00.000Z'),
+        periodEnd: new Date('2026-08-31T23:59:59.999Z'),
+        dueDate: new Date('2026-09-05T23:59:59.999Z'),
+        billingDate: new Date('2026-08-01T00:00:00.000Z'),
+        status: 'draft',
+        rateSnapshot: defaultRateSnapshot(dId),
+      },
+    });
+
+    const room104 = await prisma.room.create({
+      data: {
+        dormitoryId: dId,
+        buildingId: bld.id,
+        roomNumber: '104',
+        normalizedRoomNumber: '104',
+        roomType: 'standard',
+        monthlyRent: 4500,
+        status: 'occupied',
+      },
+    });
+
+    const waterDev = await prisma.meterDevice.create({
+      data: {
+        dormitoryId: dId,
+        roomId: room104.id,
+        type: 'water',
+        meterNumber: 'WM-104',
+        initialReading: 120,
+        currentReading: 138,
+      },
+    });
+
+    const elecDev = await prisma.meterDevice.create({
+      data: {
+        dormitoryId: dId,
+        roomId: room104.id,
+        type: 'electricity',
+        meterNumber: 'EM-104',
+        initialReading: 600,
+        currentReading: 720,
+      },
+    });
+
+    try {
+      // Save workspace row for Room 104 with complete snapshot readings (water 35 -> 35, elec 120 -> 120)
+      const saveRes = await meterService.saveBulkMeterWorkspace(
+        dId,
+        {
+          billingCycleId: augCycle.id,
+          rows: [
+            {
+              roomId: room104.id,
+              waterPrev: '35',
+              waterCurr: '35',
+              elecPrev: '120',
+              elecCurr: '120',
+              otherFees: [],
+            },
+          ],
+        },
+        'user-owner-1'
+      );
+
+      expect(saveRes.savedCount).toBe(1);
+
+      // Verify meter readings in DB are fully populated
+      const waterReading = await prisma.meterReading.findFirst({
+        where: { roomId: room104.id, meterDeviceId: waterDev.id, billingCycleId: augCycle.id },
+      });
+      const elecReading = await prisma.meterReading.findFirst({
+        where: { roomId: room104.id, meterDeviceId: elecDev.id, billingCycleId: augCycle.id },
+      });
+
+      expect(Number(waterReading?.previousReading)).toBe(35);
+      expect(Number(waterReading?.currentReading)).toBe(35);
+      expect(Number(waterReading?.usageUnits)).toBe(0);
+
+      expect(Number(elecReading?.previousReading)).toBe(120);
+      expect(Number(elecReading?.currentReading)).toBe(120);
+      expect(Number(elecReading?.usageUnits)).toBe(0);
+
+      // Verify preview calculation fields for Room 104
+      const preview = await meterService.getMeterBillingPreviewContext(dId, augCycle.id);
+      const r104Preview = preview.rooms.find(r => r.roomId === room104.id);
+
+      expect(r104Preview?.rentAmount).toBe('0.00');
+      expect(r104Preview?.snapshotOtherFees).toEqual([]);
+    } finally {
+      await prisma.meterReading.deleteMany({ where: { dormitoryId: dId } });
+      await prisma.meterDevice.deleteMany({ where: { dormitoryId: dId } });
       await prisma.billingRateSnapshot.deleteMany({ where: { dormitoryId: dId } });
       await prisma.billingCycle.deleteMany({ where: { dormitoryId: dId } });
       await prisma.room.deleteMany({ where: { dormitoryId: dId } });

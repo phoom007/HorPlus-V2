@@ -819,7 +819,7 @@ export async function seedLocal07Data() {
   }, COMP_DORM.owner.id);
   const cycleJuly = cycleJulyRes.cycle;
 
-  await compBillingCycleService.createBillingCycle(compDorm.id, {
+  const cycleAugRes = await compBillingCycleService.createBillingCycle(compDorm.id, {
     cycleCode: '2026-08',
     name: 'รอบบิล สิงหาคม 2569',
     periodStart: '2026-08-01',
@@ -827,8 +827,9 @@ export async function seedLocal07Data() {
     billingDate: '2026-08-25',
     dueDate: '2026-09-05',
   }, COMP_DORM.owner.id);
+  const cycleAug = cycleAugRes.cycle;
 
-  await compBillingCycleService.createBillingCycle(compDorm.id, {
+  const cycleSeptRes = await compBillingCycleService.createBillingCycle(compDorm.id, {
     cycleCode: '2026-09',
     name: 'รอบบิล กันยายน 2569',
     periodStart: '2026-09-01',
@@ -836,6 +837,7 @@ export async function seedLocal07Data() {
     billingDate: '2026-09-25',
     dueDate: '2026-10-05',
   }, COMP_DORM.owner.id);
+  const cycleSept = cycleSeptRes.cycle;
 
   // --- Seed Realistic Daily Stays & Future Reservation Scenarios ---
   // 1. Room 106: Active & Unpaid Daily Stay in August 2026
@@ -1148,6 +1150,37 @@ export async function seedLocal07Data() {
         readAt: new Date('2026-07-24'),
       },
     });
+
+    // Seed realistic zero-payable meter reading for Room 104 in August 2026 (draft cycle with complete readings)
+    if (mf.roomNum === '104') {
+      await prisma.meterReading.create({
+        data: {
+          dormitoryId: compDorm.id,
+          roomId: room.id,
+          meterDeviceId: waterDevice.id,
+          billingCycleId: cycleAug.id,
+          meterType: 'water',
+          previousReading: mf.curWater,
+          currentReading: mf.curWater,
+          usageUnits: 0,
+          readAt: new Date('2026-08-24'),
+        },
+      });
+
+      await prisma.meterReading.create({
+        data: {
+          dormitoryId: compDorm.id,
+          roomId: room.id,
+          meterDeviceId: elecDevice.id,
+          billingCycleId: cycleAug.id,
+          meterType: 'electric',
+          previousReading: mf.curElec,
+          currentReading: mf.curElec,
+          usageUnits: 0,
+          readAt: new Date('2026-08-24'),
+        },
+      });
+    }
   }
 
   // July 2026 Bills

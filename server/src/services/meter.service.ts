@@ -20,6 +20,13 @@ import { calculateInstallmentSchedule } from '../utils/installment-calculator.ut
 import { currentBusinessDateInBangkok, toBangkokDateString, normalizeBangkokDate, getBangkokStartOfDayUtc } from '../utils/calendar-date.util.js';
 import { calculateMeterUsageUnits, parseMeterIntegerReading } from '../utils/meter-billing-calculator.util.js';
 import { resolveDailyTimestampsAndPricing } from './daily-stay.service.js';
+import {
+  getContractPhysicalInterval,
+  getProvisionalTermPhysicalInterval,
+  getDailyStayPhysicalInterval,
+  doHalfOpenIntervalsOverlap,
+  hasBookableGapInCycle,
+} from '../utils/occupancy-interval.util.js';
 
 function addDays(dateStr: string, days: number): string {
   const [y, m, d] = dateStr.split('-').map(Number);
@@ -1783,19 +1790,11 @@ export class MeterService {
 
       const periodDetailCount = chargeComponents.filter((c) => c.occurredInDisplayedPeriod).length;
 
-      // Calculate distinct daily stays in cycle using half-open boundaries
+      // Calculate distinct daily stays in cycle using canonical half-open boundaries
       const roomDailyStaysInCycle = allDailyStays.filter((d) => {
         if (d.roomId !== room.id) return false;
-        const checkInAt = d.checkInAt ? new Date(d.checkInAt) : new Date(`${toBangkokDateString(d.startDate)}T00:00:00+07:00`);
-        let effectiveCheckOutAt: Date;
-        if (d.actualCheckedOutAt) {
-          effectiveCheckOutAt = new Date(d.actualCheckedOutAt);
-        } else if (d.checkOutAt) {
-          effectiveCheckOutAt = new Date(d.checkOutAt);
-        } else {
-          effectiveCheckOutAt = resolveDailyTimestampsAndPricing(toBangkokDateString(d.startDate), toBangkokDateString(d.endDate)).checkOutAt;
-        }
-        return checkInAt.getTime() < cycleEndExclusive.getTime() && effectiveCheckOutAt.getTime() > cycleStart.getTime();
+        const dIv = getDailyStayPhysicalInterval(d);
+        return doHalfOpenIntervalsOverlap({ start: cycleStart, end: cycleEndExclusive }, dIv);
       });
 
       const distinctDailyStayIds = new Set(roomDailyStaysInCycle.map((d) => d.id));
@@ -1806,7 +1805,7 @@ export class MeterService {
       for (const d of roomDailyStaysInCycle) {
         const rentItem = d.invoice?.items.find((i) => i.itemType === 'RENT' || i.itemType === 'DAILY_RENT');
         const isRentPaid = rentItem
-          ? (rentItem.status === 'SETTLED' || rentItem.status === 'DECLARED_PAID' || d.invoice?.status === 'PAID')
+          ? (rentItem.status === 'SETTLED' || rentItem.status === 'DECLARED_PAID')
           : (d.status === 'COMPLETED' || d.invoice?.status === 'PAID');
         if (!isRentPaid) {
           isDailyUnpaid = true;
@@ -1822,125 +1821,40 @@ export class MeterService {
       }
 
       // Calculate if room has any bookable interval in this cycle using canonical physical intervals
-      const blockingIntervals: Array<{ start: number; end: number }> = [];
+      const blockingIntervals: Array<{ start: Date; end: Date }> = [];
 
       // A. Contracts on this room
-      for (const c of allContracts.filter((c) => c.roomId === room.id && ['active', 'ACTIVE', 'expiring_soon', 'pending_signature', 'waiting_extension'].includes(c.status))) {
-        const cStart = new Date(`${normalizeBangkokDate(c.startDate)}T00:00:00+07:00`);
-        const nextDayStr = addDays(normalizeBangkokDate(c.endDate), 1);
-        const effEnd = new Date(`${nextDayStr}T00:00:00+07:00`);
-
-        const ivStart = Math.max(cStart.getTime(), cycleStart.getTime());
-        const ivEnd = Math.min(effEnd.getTime(), cycleEndExclusive.getTime());
-        if (ivStart < ivEnd) {
-          blockingIntervals.push({ start: ivStart, end: ivEnd });
-        }
+      for (const c of allContracts.filter((c) => c.roomId === room.id && ['active', 'ACTIVE', 'expiring_soon', 'pending_signature', 'waiting_extension', 'checking_out'].includes(c.status))) {
+        blockingIntervals.push(getContractPhysicalInterval(c));
       }
 
       // B. Provisional Rental Terms on this room
-      for (const p of allProvisionalTerms.filter((p) => p.roomId === room.id && ['ACTIVE', 'active'].includes(p.status))) {
-        const pStart = new Date(`${normalizeBangkokDate(p.startDate)}T00:00:00+07:00`);
-        const nextDayStr = addDays(normalizeBangkokDate(p.endDate), 1);
-        const effEnd = new Date(`${nextDayStr}T00:00:00+07:00`);
-
-        const ivStart = Math.max(pStart.getTime(), cycleStart.getTime());
-        const ivEnd = Math.min(effEnd.getTime(), cycleEndExclusive.getTime());
-        if (ivStart < ivEnd) {
-          blockingIntervals.push({ start: ivStart, end: ivEnd });
-        }
+      for (const p of allProvisionalTerms.filter((p) => p.roomId === room.id && ['ACTIVE', 'active', 'RESERVED', 'reserved'].includes(p.status))) {
+        blockingIntervals.push(getProvisionalTermPhysicalInterval(p));
       }
 
-      // C. Daily Stays on this room
-      for (const d of allDailyStays.filter((d) => d.roomId === room.id && ['ACTIVE', 'RESERVED', 'CHECKED_OUT', 'COMPLETED'].includes(d.status))) {
-        const checkInAt = d.checkInAt ? new Date(d.checkInAt) : new Date(`${toBangkokDateString(d.startDate)}T00:00:00+07:00`);
-        let effectiveCheckOutAt: Date;
-        if (d.actualCheckedOutAt) {
-          effectiveCheckOutAt = new Date(d.actualCheckedOutAt);
-        } else if (d.checkOutAt) {
-          effectiveCheckOutAt = new Date(d.checkOutAt);
-        } else {
-          effectiveCheckOutAt = resolveDailyTimestampsAndPricing(toBangkokDateString(d.startDate), toBangkokDateString(d.endDate)).checkOutAt;
-        }
-
-        const ivStart = Math.max(checkInAt.getTime(), cycleStart.getTime());
-        const ivEnd = Math.min(effectiveCheckOutAt.getTime(), cycleEndExclusive.getTime());
-        if (ivStart < ivEnd) {
-          blockingIntervals.push({ start: ivStart, end: ivEnd });
-        }
+      // C. Daily Stays on this room (checked-out stays only block their physical duration; debt does not extend physical occupancy)
+      for (const d of allDailyStays.filter((d) => d.roomId === room.id && ['ACTIVE', 'active', 'RESERVED', 'reserved', 'CHECKED_OUT', 'checked_out', 'COMPLETED', 'completed'].includes(d.status))) {
+        blockingIntervals.push(getDailyStayPhysicalInterval(d));
       }
 
-      // D. Future reservations starting during this cycle
+      // D. Future reservations
       const futureC = roomFutureContractMap.get(room.id);
       if (futureC && ['active', 'ACTIVE', 'expiring_soon', 'pending_signature', 'waiting_extension'].includes(futureC.status)) {
-        const cStart = new Date(`${normalizeBangkokDate(futureC.startDate)}T00:00:00+07:00`);
-        const nextDayStr = addDays(normalizeBangkokDate(futureC.endDate), 1);
-        const cEnd = new Date(`${nextDayStr}T00:00:00+07:00`);
-        const ivStart = Math.max(cStart.getTime(), cycleStart.getTime());
-        const ivEnd = Math.min(cEnd.getTime(), cycleEndExclusive.getTime());
-        if (ivStart < ivEnd) {
-          blockingIntervals.push({ start: ivStart, end: ivEnd });
-        }
+        blockingIntervals.push(getContractPhysicalInterval(futureC));
       }
 
       const futureP = roomFutureProvisionalMap.get(room.id);
-      if (futureP && ['ACTIVE', 'active'].includes(futureP.status)) {
-        const pStart = new Date(`${normalizeBangkokDate(futureP.startDate)}T00:00:00+07:00`);
-        const nextDayStr = addDays(normalizeBangkokDate(futureP.endDate), 1);
-        const pEnd = new Date(`${nextDayStr}T00:00:00+07:00`);
-        const ivStart = Math.max(pStart.getTime(), cycleStart.getTime());
-        const ivEnd = Math.min(pEnd.getTime(), cycleEndExclusive.getTime());
-        if (ivStart < ivEnd) {
-          blockingIntervals.push({ start: ivStart, end: ivEnd });
-        }
+      if (futureP && ['ACTIVE', 'active', 'RESERVED', 'reserved'].includes(futureP.status)) {
+        blockingIntervals.push(getProvisionalTermPhysicalInterval(futureP));
       }
 
       const futureD = roomFutureDailyMap.get(room.id);
-      if (futureD && ['ACTIVE', 'RESERVED'].includes(futureD.status)) {
-        const dStart = futureD.checkInAt ? new Date(futureD.checkInAt) : new Date(`${toBangkokDateString(futureD.startDate)}T00:00:00+07:00`);
-        const dEnd = futureD.checkOutAt ? new Date(futureD.checkOutAt) : resolveDailyTimestampsAndPricing(toBangkokDateString(futureD.startDate), toBangkokDateString(futureD.endDate)).checkOutAt;
-        const ivStart = Math.max(dStart.getTime(), cycleStart.getTime());
-        const ivEnd = Math.min(dEnd.getTime(), cycleEndExclusive.getTime());
-        if (ivStart < ivEnd) {
-          blockingIntervals.push({ start: ivStart, end: ivEnd });
-        }
+      if (futureD && ['ACTIVE', 'active', 'RESERVED', 'reserved'].includes(futureD.status)) {
+        blockingIntervals.push(getDailyStayPhysicalInterval(futureD));
       }
 
-      // E. Merge overlapping intervals
-      blockingIntervals.sort((a, b) => a.start - b.start);
-      const mergedIntervals: Array<{ start: number; end: number }> = [];
-      for (const iv of blockingIntervals) {
-        if (mergedIntervals.length === 0) {
-          mergedIntervals.push({ ...iv });
-        } else {
-          const last = mergedIntervals[mergedIntervals.length - 1];
-          if (iv.start <= last.end) {
-            if (iv.end > last.end) last.end = iv.end;
-          } else {
-            mergedIntervals.push({ ...iv });
-          }
-        }
-      }
-
-      // F. Determine if bookable gap exists
-      let hasBookableGap = true;
-      if (mergedIntervals.length === 1) {
-        if (mergedIntervals[0].start <= cycleStart.getTime() && mergedIntervals[0].end >= cycleEndExclusive.getTime()) {
-          hasBookableGap = false;
-        }
-      } else if (mergedIntervals.length > 1) {
-        if (mergedIntervals[0].start <= cycleStart.getTime() && mergedIntervals[mergedIntervals.length - 1].end >= cycleEndExclusive.getTime()) {
-          let hasInternalGap = false;
-          for (let i = 1; i < mergedIntervals.length; i++) {
-            if (mergedIntervals[i].start > mergedIntervals[i - 1].end) {
-              hasInternalGap = true;
-              break;
-            }
-          }
-          if (!hasInternalGap) {
-            hasBookableGap = false;
-          }
-        }
-      }
+      const hasBookableGap = hasBookableGapInCycle(cycleStart, cycleEndExclusive, blockingIntervals);
 
       return {
         roomId: room.id,

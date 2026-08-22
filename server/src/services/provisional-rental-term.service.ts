@@ -9,6 +9,12 @@ import { getPrismaClient } from '../db/prisma.js';
 import { AuditService } from './audit.service.js';
 import { generateNextTenantNumber } from './tenant-number.service.js';
 import { toDecimal, mulDecimals, formatDecimal } from '../utils/decimal-math.util.js';
+import {
+  getContractPhysicalInterval,
+  getProvisionalTermPhysicalInterval,
+  getDailyStayPhysicalInterval,
+  doHalfOpenIntervalsOverlap,
+} from '../utils/occupancy-interval.util.js';
 
 export interface CreateProvisionalRentalTermDto {
   roomId: string;
@@ -159,61 +165,64 @@ export class ProvisionalRentalTermService {
         endDate = calculateRentalEndDate(data.startDate, durationMonths);
       }
 
-      // Check overlap with active/reserved contracts
-      const overlappingContract = await tx.contract.findFirst({
+      // Check overlap using canonical half-open physical intervals [start, end)
+      const targetInterval = getProvisionalTermPhysicalInterval({ startDate: data.startDate, endDate });
+
+      // 1. Check contracts
+      const candidateContracts = await tx.contract.findMany({
         where: {
           dormitoryId,
           roomId: data.roomId,
-          status: { in: ['active', 'expiring_soon', 'pending_signature', 'waiting_extension', 'checking_out', 'draft'] },
+          status: { in: ['active', 'ACTIVE', 'expiring_soon', 'pending_signature', 'waiting_extension', 'checking_out', 'draft'] },
           deletedAt: null,
-          startDate: { lte: endDate },
-          endDate: { gte: startDate },
         },
       });
 
-      if (overlappingContract) {
-        const err = new Error('ห้องพักมีสัญญาที่ทับซ้อนกับช่วงเวลาดังกล่าว');
-        (err as any).statusCode = 409;
-        (err as any).code = 'ROOM_OCCUPIED_OR_HAS_ACTIVE_AGREEMENT';
-        throw err;
+      for (const c of candidateContracts) {
+        if (doHalfOpenIntervalsOverlap(targetInterval, getContractPhysicalInterval(c))) {
+          const err = new Error('ห้องพักมีสัญญาที่ทับซ้อนกับช่วงเวลาดังกล่าว');
+          (err as any).statusCode = 409;
+          (err as any).code = 'ROOM_OCCUPIED_OR_HAS_ACTIVE_AGREEMENT';
+          throw err;
+        }
       }
 
-      // Check overlap with active/reserved provisional rental terms
-      const overlappingProvisional = await tx.provisionalRentalTerm.findFirst({
+      // 2. Check provisional rental terms
+      const candidateProvisionals = await tx.provisionalRentalTerm.findMany({
         where: {
           dormitoryId,
           roomId: data.roomId,
-          status: { in: ['RESERVED', 'ACTIVE'] },
+          status: { in: ['RESERVED', 'ACTIVE', 'reserved', 'active'] },
           deletedAt: null,
-          startDate: { lte: endDate },
-          endDate: { gte: startDate },
         },
       });
 
-      if (overlappingProvisional) {
-        const err = new Error('ห้องพักมีการจองหรือข้อตกลงชั่วคราวที่ทับซ้อนกับช่วงเวลาดังกล่าว');
-        (err as any).statusCode = 409;
-        (err as any).code = 'ROOM_OCCUPIED_OR_HAS_ACTIVE_AGREEMENT';
-        throw err;
+      for (const p of candidateProvisionals) {
+        if (doHalfOpenIntervalsOverlap(targetInterval, getProvisionalTermPhysicalInterval(p))) {
+          const err = new Error('ห้องพักมีการจองหรือข้อตกลงชั่วคราวที่ทับซ้อนกับช่วงเวลาดังกล่าว');
+          (err as any).statusCode = 409;
+          (err as any).code = 'ROOM_OCCUPIED_OR_HAS_ACTIVE_AGREEMENT';
+          throw err;
+        }
       }
 
-      // Check overlap with active/reserved daily stays
-      const overlappingDaily = await tx.dailyStay.findFirst({
+      // 3. Check daily stays
+      const candidateDaily = await tx.dailyStay.findMany({
         where: {
           dormitoryId,
           roomId: data.roomId,
-          status: { in: ['RESERVED', 'ACTIVE'] },
+          status: { in: ['RESERVED', 'ACTIVE', 'reserved', 'active'] },
           deletedAt: null,
-          startDate: { lte: endDate },
-          endDate: { gte: startDate },
         },
       });
 
-      if (overlappingDaily) {
-        const err = new Error('ห้องพักมีผู้พักอาศัยรายวันที่ทับซ้อนกับช่วงเวลาดังกล่าว');
-        (err as any).statusCode = 409;
-        (err as any).code = 'ROOM_OCCUPIED_OR_HAS_ACTIVE_AGREEMENT';
-        throw err;
+      for (const d of candidateDaily) {
+        if (doHalfOpenIntervalsOverlap(targetInterval, getDailyStayPhysicalInterval(d))) {
+          const err = new Error('ห้องพักมีผู้พักอาศัยรายวันที่ทับซ้อนกับช่วงเวลาดังกล่าว');
+          (err as any).statusCode = 409;
+          (err as any).code = 'ROOM_OCCUPIED_OR_HAS_ACTIVE_AGREEMENT';
+          throw err;
+        }
       }
 
       // Canonical tenant number generation (shared authority & dormitory lock-safe)

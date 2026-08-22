@@ -517,5 +517,52 @@ export function createDailyStayRouter(
     }
   );
 
+  // 9. Settle Daily Stay Invoice Item (Canonical Payment / Cash Collection Action)
+  const SettleItemSchema = z.object({
+    itemType: z.enum(['DAILY_RENT', 'RENT', 'DEPOSIT']),
+  });
+
+  router.post(
+    '/invoices/:id/settle-item',
+    requireSession,
+    requireCsrf,
+    resolveDormitoryContextMiddleware,
+    requireDormitoryPermission('bills:write'),
+    requireDormitoryWriteEntitlement,
+    async (req: Request, res: Response) => {
+      try {
+        const dormId = getDormitoryId(req);
+        const invoiceId = req.params.id;
+        const parsed = SettleItemSchema.parse(req.body);
+        const userId = req.auth!.userId;
+
+        const result = await dailyStayService.settleDailyStayInvoiceItem(
+          dormId,
+          invoiceId,
+          parsed.itemType,
+          userId
+        );
+
+        res.json({
+          data: result,
+          message: `บันทึกการชำระเงิน ${parsed.itemType} สำเร็จ`,
+        });
+      } catch (err: any) {
+        if (err instanceof z.ZodError) {
+          return res.status(400).json({
+            error: {
+              code: 'VALIDATION_ERROR',
+              message: err.errors[0]?.message || 'ข้อมูลไม่ถูกต้อง',
+              fieldErrors: err.errors,
+              requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+              timestamp: new Date().toISOString(),
+            },
+          });
+        }
+        handleServiceError(res, err, req);
+      }
+    }
+  );
+
   return router;
 }

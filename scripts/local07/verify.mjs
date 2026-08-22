@@ -309,6 +309,19 @@ export async function runVerification() {
     assert(r205Sept?.hasBookableGap === true, 'Room 205 has hasBookableGap = true in September 2026 (future reservation starts Sept 15)');
   }
 
+  // 8. Room 104 Complete Realistic Zero-Payable Meter Fixture Verification
+  console.log('\n--- 8. Realistic Zero-Payable Meter Fixture Verification ---');
+  const room104Db = allRooms.find(r => r.roomNumber === '104');
+  if (cycleAugDb && room104Db) {
+    const augReadings = await prisma.meterReading.findMany({
+      where: { roomId: room104Db.id, billingCycleId: cycleAugDb.id },
+    });
+    const waterR = augReadings.find(r => r.meterType === 'water');
+    const elecR = augReadings.find(r => r.meterType === 'electric');
+    assert(Number(waterR?.previousReading) === 138 && Number(waterR?.currentReading) === 138, 'Room 104 has populated water meter readings (138 -> 138) in August 2026');
+    assert(Number(elecR?.previousReading) === 720 && Number(elecR?.currentReading) === 720, 'Room 104 has populated electric meter readings (720 -> 720) in August 2026');
+  }
+
   console.log('\n================================================================================');
   if (failures === 0) {
     console.log('🎉 ALL LOCAL-07 SANDBOX INTEGRITY CHECKS PASSED PERFECTLY (0 FAILURES)');

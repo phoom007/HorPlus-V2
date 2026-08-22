@@ -16,6 +16,12 @@ import {
   formatDecimal,
 } from '../utils/decimal-math.util.js';
 import { currentBusinessDateInBangkok } from '../utils/calendar-date.util.js';
+import {
+  getContractPhysicalInterval,
+  getProvisionalTermPhysicalInterval,
+  getDailyStayPhysicalInterval,
+  doHalfOpenIntervalsOverlap,
+} from '../utils/occupancy-interval.util.js';
 
 export interface CreateTenantDailyStayRequestDto {
   roomId?: string;
@@ -183,6 +189,7 @@ export class DailyStayService {
 
   /**
    * Helper: check date-range overlap with active contracts, provisional terms, and daily stays
+   * Uses canonical half-open interval algebra [start, end) and exact timestamps.
    */
   public async checkRoomAvailability(
     dormitoryId: string,
@@ -193,56 +200,60 @@ export class DailyStayService {
     txClient?: any
   ): Promise<{ available: boolean; reason?: string }> {
     const db = txClient || this.prisma;
+    const targetInterval = { start: startDate, end: endDate };
 
     // 1. Check contracts
-    const contractOverlap = await db.contract.findFirst({
+    const candidateContracts = await db.contract.findMany({
       where: {
         dormitoryId,
         roomId,
         status: {
-          in: ['active', 'expiring_soon', 'pending_signature', 'waiting_extension', 'checking_out', 'draft'],
+          in: ['active', 'ACTIVE', 'expiring_soon', 'pending_signature', 'waiting_extension', 'checking_out', 'draft'],
         },
         deletedAt: null,
-        startDate: { lte: endDate },
-        endDate: { gte: startDate },
       },
     });
 
-    if (contractOverlap) {
-      return { available: false, reason: 'ROOM_OCCUPIED_BY_CONTRACT' };
+    for (const c of candidateContracts) {
+      const cInterval = getContractPhysicalInterval(c);
+      if (doHalfOpenIntervalsOverlap(targetInterval, cInterval)) {
+        return { available: false, reason: 'ROOM_OCCUPIED_BY_CONTRACT' };
+      }
     }
 
     // 2. Check provisional rental terms
-    const provisionalOverlap = await db.provisionalRentalTerm.findFirst({
+    const candidateProvisionals = await db.provisionalRentalTerm.findMany({
       where: {
         dormitoryId,
         roomId,
-        status: { in: ['RESERVED', 'ACTIVE'] },
+        status: { in: ['RESERVED', 'ACTIVE', 'reserved', 'active'] },
         deletedAt: null,
-        startDate: { lte: endDate },
-        endDate: { gte: startDate },
       },
     });
 
-    if (provisionalOverlap) {
-      return { available: false, reason: 'ROOM_OCCUPIED_BY_PROVISIONAL_TERM' };
+    for (const p of candidateProvisionals) {
+      const pInterval = getProvisionalTermPhysicalInterval(p);
+      if (doHalfOpenIntervalsOverlap(targetInterval, pInterval)) {
+        return { available: false, reason: 'ROOM_OCCUPIED_BY_PROVISIONAL_TERM' };
+      }
     }
 
     // 3. Check daily stays
-    const dailyOverlap = await db.dailyStay.findFirst({
+    const candidateDailyStays = await db.dailyStay.findMany({
       where: {
         dormitoryId,
         roomId,
-        status: { in: ['RESERVED', 'ACTIVE'] },
+        status: { in: ['RESERVED', 'ACTIVE', 'reserved', 'active'] },
         deletedAt: null,
         ...(excludeDailyStayId ? { id: { not: excludeDailyStayId } } : {}),
-        startDate: { lte: endDate },
-        endDate: { gte: startDate },
       },
     });
 
-    if (dailyOverlap) {
-      return { available: false, reason: 'ROOM_OCCUPIED_BY_DAILY_STAY' };
+    for (const d of candidateDailyStays) {
+      const dInterval = getDailyStayPhysicalInterval(d);
+      if (doHalfOpenIntervalsOverlap(targetInterval, dInterval)) {
+        return { available: false, reason: 'ROOM_OCCUPIED_BY_DAILY_STAY' };
+      }
     }
 
     return { available: true };
@@ -1201,6 +1212,93 @@ export class DailyStayService {
       },
       orderBy: { issuedAt: 'desc' },
     });
+  }
+
+  /**
+   * Settles a specific daily stay invoice item (e.g. DAILY_RENT or DEPOSIT) canonically.
+   * Updates item status to 'SETTLED', sets paidAt if not already populated (first-write immutability),
+   * recalculates outstandingAmount, and updates invoice status to 'PAID' if all items are settled.
+   */
+  public async settleDailyStayInvoiceItem(
+    dormitoryId: string,
+    invoiceId: string,
+    itemType: 'DAILY_RENT' | 'RENT' | 'DEPOSIT',
+    actorUserId?: string,
+    txClient?: any
+  ) {
+    const execute = async (tx: any) => {
+      const invoice = await tx.dailyStayInvoice.findFirst({
+        where: { id: invoiceId, dormitoryId, deletedAt: null },
+        include: { items: true, dailyStay: true },
+      });
+
+      if (!invoice) {
+        const err = new Error('ไม่พบใบแจ้งหนี้รายวัน');
+        (err as any).statusCode = 404;
+        (err as any).code = 'INVOICE_NOT_FOUND';
+        throw err;
+      }
+
+      const targetItems = invoice.items.filter(
+        (it: any) => it.itemType === itemType || (itemType === 'DAILY_RENT' && it.itemType === 'RENT')
+      );
+
+      if (targetItems.length === 0) {
+        const err = new Error(`ไม่พบรายการ ${itemType} ในใบแจ้งหนี้`);
+        (err as any).statusCode = 404;
+        (err as any).code = 'INVOICE_ITEM_NOT_FOUND';
+        throw err;
+      }
+
+      const now = new Date();
+      for (const item of targetItems) {
+        await tx.dailyStayInvoiceItem.update({
+          where: { id: item.id },
+          data: {
+            status: 'SETTLED',
+            paidAt: item.paidAt || now, // First paid event sets paidAt; subsequent payment does not rewrite
+          },
+        });
+      }
+
+      // Fetch fresh items to re-evaluate aggregate invoice status
+      const updatedItems = await tx.dailyStayInvoiceItem.findMany({
+        where: { invoiceId: invoice.id },
+      });
+
+      const hasUnsettled = updatedItems.some(
+        (it: any) => it.status !== 'SETTLED' && it.status !== 'DECLARED_PAID'
+      );
+
+      const remainingOutstanding = updatedItems
+        .filter((it: any) => it.status !== 'SETTLED' && it.status !== 'DECLARED_PAID')
+        .reduce((sum: number, it: any) => sum + Number(it.amount), 0);
+
+      const updatedInvoice = await tx.dailyStayInvoice.update({
+        where: { id: invoice.id },
+        data: {
+          status: hasUnsettled ? 'PARTIALLY_PAID' : 'PAID',
+          outstandingAmount: toDecimal(remainingOutstanding.toFixed(2)),
+        },
+        include: {
+          items: true,
+          dailyStay: {
+            include: {
+              room: true,
+              tenant: true,
+            },
+          },
+        },
+      });
+
+      return updatedInvoice;
+    };
+
+    if (txClient) {
+      return execute(txClient);
+    } else {
+      return this.prisma.$transaction(execute);
+    }
   }
 }
 
