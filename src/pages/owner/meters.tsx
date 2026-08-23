@@ -754,12 +754,24 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   // Durable Pull completion state: local session tracker + server-persisted baseline
   const [pulledCycles, setPulledCycles] = useState<Record<string, boolean>>({});
 
+  // Utility-aware and mode-aware persisted completion authority:
+  // All applicable utility baselines for the selected cycle must be satisfied.
+  const serverReadings = meterWorkspaceQuery.data?.serverReadings || [];
+  const hasWaterBaseline = serverReadings.some(
+    (r: any) => r.meterType === 'water' && r.previousReading !== null && r.previousReading !== undefined && String(r.previousReading).trim() !== ''
+  );
+  const hasElecBaseline = serverReadings.some(
+    (r: any) => (r.meterType === 'electricity' || r.meterType === 'electric') && r.previousReading !== null && r.previousReading !== undefined && String(r.previousReading).trim() !== ''
+  );
+
+  const isWaterBaselineSatisfied = !isWaterUnit || hasWaterBaseline;
+  const isElecBaselineSatisfied = !isElecUnit || hasElecBaseline;
+
   const hasPersistedBaseline = Boolean(
-    meterWorkspaceQuery.data?.serverReadings &&
-    meterWorkspaceQuery.data.serverReadings.length > 0 &&
-    meterWorkspaceQuery.data.serverReadings.some(
-      (r: any) => r.previousReading !== null && r.previousReading !== undefined && String(r.previousReading).trim() !== ''
-    )
+    isMeterWorkspaceReady &&
+    isRateSnapshotReady &&
+    isWaterBaselineSatisfied &&
+    isElecBaselineSatisfied
   );
 
   const isPullCompleted = Boolean(
@@ -2679,20 +2691,30 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                                       title={isInvalid ? (c.errorMessage || 'ข้อมูลไม่ถูกต้อง') : undefined}
                                     >
                                       {isPaid ? (
-                                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                                        <>
+                                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                                          <span className="text-emerald-700 font-medium">{c.label}</span>
+                                          <span className="text-emerald-800 font-bold">{formatComponentDetailAmount(c.amount)}</span>
+                                        </>
                                       ) : isInvalid ? (
-                                        <AlertCircle className="w-3.5 h-3.5 text-rose-500 shrink-0" />
+                                        <>
+                                          <AlertCircle className="w-3.5 h-3.5 text-rose-500 shrink-0" />
+                                          <span className="text-rose-600 font-medium">{c.label}</span>
+                                          <span className="text-rose-600 font-bold">{formatComponentDetailAmount(c.amount)}</span>
+                                        </>
                                       ) : isUnpaid ? (
-                                        <Clock className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                                        <>
+                                          <Clock className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                                          <span className="text-amber-700 font-medium">{c.label}</span>
+                                          <span className="text-amber-800 font-bold">{formatComponentDetailAmount(c.amount)}</span>
+                                        </>
                                       ) : (
-                                        <Clock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                                        <>
+                                          <Clock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                                          <span className="text-slate-500 font-medium">{c.label}</span>
+                                          <span className="text-slate-600 font-semibold">{formatComponentDetailAmount(c.amount)}</span>
+                                        </>
                                       )}
-                                      <span className={isInvalid ? 'text-rose-600 font-medium' : isPreview ? 'text-slate-500' : isUnpaid ? 'text-amber-800' : 'text-slate-700 font-medium'}>
-                                        {c.label}
-                                      </span>
-                                      <span className={isInvalid ? 'text-rose-600 font-bold' : isPreview ? 'text-slate-500 font-semibold' : isUnpaid ? 'text-amber-900 font-bold' : 'text-slate-800 font-bold'}>
-                                        {formatComponentDetailAmount(c.amount)}
-                                      </span>
                                     </div>
                                   );
                                 })}

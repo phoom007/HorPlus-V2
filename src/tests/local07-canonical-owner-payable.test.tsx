@@ -815,6 +815,14 @@ describe('LOCAL-07 Backend Canonical Owner Payable Preview Suite', () => {
               previousReading: '110.00',
               currentReading: '120.00',
             },
+            {
+              id: 'mr-2',
+              billingCycleId: 'cycle-2026-08',
+              roomId: 'r-101',
+              meterType: 'electricity',
+              previousReading: '560.00',
+              currentReading: '600.00',
+            },
           ],
         };
       }
@@ -884,7 +892,7 @@ describe('LOCAL-07 Backend Canonical Owner Payable Preview Suite', () => {
 
     await waitFor(() => {
       expect(screen.getByText('101')).toBeDefined();
-      // Since server already has persisted baseline, Pull button must be ABSENT
+      // Since server has both required baselines, Pull button must be ABSENT
       expect(screen.queryByRole('button', { name: /ดึงข้อมูลก่อนหน้า/ })).toBeNull();
     });
   });
@@ -946,7 +954,7 @@ describe('LOCAL-07 Backend Canonical Owner Payable Preview Suite', () => {
       updatedAt: '2026-08-01',
     };
 
-    const { container } = renderWithClient(
+    renderWithClient(
       <OwnerMeters
         rooms={[sampleRoom103]}
         buildings={[{ id: 'b-1', dormitoryId: 'dorm-1', name: 'อาคาร A', totalFloors: 1, roomsPerFloor: 1, createdAt: '2026-08-01' }]}
@@ -985,5 +993,236 @@ describe('LOCAL-07 Backend Canonical Owner Payable Preview Suite', () => {
     expect(rowEl.parentElement?.className).not.toContain('bg-slate-50');
     expect(rowEl.parentElement?.className).not.toContain('border');
     expect(rowEl.parentElement?.className).not.toContain('shadow');
+  });
+
+  it('20. Entire inline row follows unified status color family for PREVIEW, UNPAID, PAID, and INVALID', async () => {
+    const httpRequestSpy = vi.spyOn(httpClient, 'httpRequest');
+    httpRequestSpy.mockImplementation(async (method: string, url: string) => {
+      if (url.includes('/preview-context')) {
+        return {
+          success: true,
+          data: {
+            rateSnapshot: {
+              waterBillingType: 'per_unit',
+              waterRate: '18.00',
+              electricityBillingType: 'per_unit',
+              electricityRate: '7.00',
+            },
+            rooms: [
+              {
+                roomId: 'r-104',
+                roomNumber: '104',
+                tenantName: 'ทดสอบ',
+                billingSource: 'CONTRACT',
+                amountDue: '10250.00',
+                chargeComponents: [
+                  { type: 'monthly_utility', label: 'บิลรายเดือน', amount: '650.00', status: 'PREVIEW', occurredInDisplayedPeriod: true, includedInAmountDue: true },
+                  { type: 'rent', label: 'ค่าเช่า', amount: '4800.00', status: 'UNPAID', occurredInDisplayedPeriod: true, includedInAmountDue: true },
+                  { type: 'deposit', label: 'ค่าประกัน', amount: '4800.00', status: 'PAID', paidAt: '2026-08-25T10:00:00Z', occurredInDisplayedPeriod: true, includedInAmountDue: false },
+                  { type: 'custom', label: 'ค่าบริการเสริม', amount: '0.00', status: 'INVALID', errorMessage: 'สูตรคำนวณไม่ถูกต้อง', occurredInDisplayedPeriod: true, includedInAmountDue: false },
+                ],
+              },
+            ],
+          },
+        };
+      }
+      if (url.includes('/meters/workspace')) {
+        return {
+          success: true,
+          data: {
+            serverReadings: [],
+            cyclePeopleRes: { success: true, data: [] },
+          },
+        };
+      }
+      return { success: true, data: [] };
+    });
+
+    const sampleRoom104: Room = {
+      id: 'r-104',
+      buildingId: 'b-1',
+      roomNumber: '104',
+      floor: 1,
+      status: 'occupied',
+      monthlyRent: 4000,
+      dailyRent: 0,
+      depositAmount: 4000,
+      maxOccupants: 2,
+      initialWaterMeter: 0,
+      initialElectricMeter: 0,
+      images: [],
+      createdAt: '2026-08-01',
+      updatedAt: '2026-08-01',
+    };
+
+    renderWithClient(
+      <OwnerMeters
+        rooms={[sampleRoom104]}
+        buildings={[{ id: 'b-1', dormitoryId: 'dorm-1', name: 'อาคาร A', totalFloors: 1, roomsPerFloor: 1, createdAt: '2026-08-01' }]}
+        dormitoryId="dorm-1"
+        bills={[]}
+        tenants={[]}
+        contracts={[]}
+        onSaveBills={vi.fn()}
+        onSelectTenant={vi.fn()}
+        onAddLog={vi.fn()}
+        onNavigate={vi.fn()}
+        selectedBillingCycleId="cycle-2026-08"
+        selectedCycleCode="2026-08"
+        selectedCycle="2026-08"
+        billingCycles={sampleCycle}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('104')).toBeDefined();
+    });
+
+    const detailBtn = screen.getByRole('button', { name: /ดูรายละเอียด \+4/ });
+    expect(detailBtn).toBeDefined();
+    fireEvent.click(detailBtn);
+
+    // Row 0: PREVIEW -> gray semantic family (text-slate-400, text-slate-500, text-slate-600)
+    const previewRow = screen.getByTestId('charge-component-row-r-104-0');
+    expect(previewRow.innerHTML).toContain('text-slate-400');
+    expect(previewRow.innerHTML).toContain('text-slate-500');
+    expect(previewRow.innerHTML).toContain('text-slate-600');
+    expect(previewRow.textContent).toContain('บิลรายเดือน');
+    expect(previewRow.textContent).toContain('650.-');
+
+    // Row 1: UNPAID -> orange/amber semantic family (text-amber-500, text-amber-700, text-amber-800)
+    const unpaidRow = screen.getByTestId('charge-component-row-r-104-1');
+    expect(unpaidRow.innerHTML).toContain('text-amber-500');
+    expect(unpaidRow.innerHTML).toContain('text-amber-700');
+    expect(unpaidRow.innerHTML).toContain('text-amber-800');
+    expect(unpaidRow.textContent).toContain('ค่าเช่า');
+    expect(unpaidRow.textContent).toContain('4,800.-');
+
+    // Row 2: PAID -> green/emerald semantic family (text-emerald-600, text-emerald-700, text-emerald-800)
+    const paidRow = screen.getByTestId('charge-component-row-r-104-2');
+    expect(paidRow.innerHTML).toContain('text-emerald-600');
+    expect(paidRow.innerHTML).toContain('text-emerald-700');
+    expect(paidRow.innerHTML).toContain('text-emerald-800');
+    expect(paidRow.textContent).toContain('ค่าประกัน');
+    expect(paidRow.textContent).toContain('4,800.-');
+
+    // Row 3: INVALID -> red/rose semantic family (text-rose-500, text-rose-600)
+    const invalidRow = screen.getByTestId('charge-component-row-r-104-3');
+    expect(invalidRow.innerHTML).toContain('text-rose-500');
+    expect(invalidRow.innerHTML).toContain('text-rose-600');
+    expect(invalidRow.textContent).toContain('ค่าบริการเสริม');
+    expect(invalidRow.textContent).toContain('0.-');
+
+    // No visible status pills or text
+    expect(screen.queryByText('ชำระแล้ว')).toBeNull();
+    expect(screen.queryByText('ยังไม่จ่าย')).toBeNull();
+    expect(screen.queryByText('รอชำระ')).toBeNull();
+  });
+
+  it('21. When both per_unit and only water baseline exists on server, Pull button remains available for missing electricity baseline', async () => {
+    const httpRequestSpy = vi.spyOn(httpClient, 'httpRequest');
+    httpRequestSpy.mockImplementation(async (method: string, url: string) => {
+      if (url.includes('/preview-context')) {
+        return {
+          success: true,
+          data: {
+            rateSnapshot: {
+              waterBillingType: 'per_unit',
+              waterRate: '18.00',
+              electricityBillingType: 'per_unit',
+              electricityRate: '7.00',
+            },
+            rooms: [],
+          },
+        };
+      }
+      if (url.includes('/meters/readings')) {
+        return {
+          success: true,
+          data: [
+            {
+              id: 'mr-1',
+              billingCycleId: 'cycle-2026-08',
+              roomId: 'r-105',
+              meterType: 'water',
+              previousReading: '110.00',
+              currentReading: '120.00',
+            },
+            // Note: electricity baseline is missing!
+          ],
+        };
+      }
+      return { success: true, data: [] };
+    });
+
+    const sampleRoom105: Room = {
+      id: 'r-105',
+      buildingId: 'b-1',
+      roomNumber: '105',
+      floor: 1,
+      status: 'occupied',
+      monthlyRent: 4000,
+      dailyRent: 0,
+      depositAmount: 4000,
+      maxOccupants: 2,
+      initialWaterMeter: 0,
+      initialElectricMeter: 0,
+      images: [],
+      createdAt: '2026-08-01',
+      updatedAt: '2026-08-01',
+    };
+
+    const cyclesWithPrev = [
+      {
+        id: 'cycle-2026-08',
+        cycleCode: '2026-08',
+        name: 'รอบบิล สิงหาคม 2569',
+        status: 'draft' as const,
+        periodStart: '2026-08-01',
+        periodEnd: '2026-08-31',
+        billingDate: '2026-08-25',
+        dueDate: '2026-09-05',
+        isFirstCycle: false,
+      },
+      {
+        id: 'cycle-2026-07',
+        cycleCode: '2026-07',
+        name: 'รอบบิล กรกฎาคม 2569',
+        status: 'closed' as const,
+        periodStart: '2026-07-01',
+        periodEnd: '2026-07-31',
+        billingDate: '2026-07-25',
+        dueDate: '2026-08-05',
+        isFirstCycle: false,
+      },
+    ];
+
+    renderWithClient(
+      <OwnerMeters
+        rooms={[sampleRoom105]}
+        buildings={[{ id: 'b-1', dormitoryId: 'dorm-1', name: 'อาคาร A', totalFloors: 1, roomsPerFloor: 1, createdAt: '2026-08-01' }]}
+        dormitoryId="dorm-1"
+        bills={[]}
+        tenants={[]}
+        contracts={[]}
+        onSaveBills={vi.fn()}
+        onSelectTenant={vi.fn()}
+        onAddLog={vi.fn()}
+        onNavigate={vi.fn()}
+        selectedBillingCycleId="cycle-2026-08"
+        selectedCycleCode="2026-08"
+        selectedCycle="2026-08"
+        billingCycles={cyclesWithPrev}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('105')).toBeDefined();
+    });
+
+    // Since electric baseline is still missing, Pull button MUST remain visible!
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /ดึงข้อมูลก่อนหน้า/ })).toBeDefined();
+    });
   });
 });

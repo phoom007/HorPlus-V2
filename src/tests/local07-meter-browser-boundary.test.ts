@@ -307,7 +307,33 @@ describe('LOCAL-07 Batch 01 — Browser/HTTP Boundary & Pull Previous Suite', ()
     });
   });
 
-  describe('4. Button Visibility & Completion Invariant', () => {
+  describe('4. Button Visibility & Utility-Aware Completion Invariant', () => {
+    function computeHasPersistedBaseline(params: {
+      isWaterUnit: boolean;
+      isElecUnit: boolean;
+      serverReadings: Array<{ meterType: string; previousReading?: string | number | null }>;
+      isMeterWorkspaceReady: boolean;
+      isRateSnapshotReady: boolean;
+    }): boolean {
+      const { isWaterUnit, isElecUnit, serverReadings, isMeterWorkspaceReady, isRateSnapshotReady } = params;
+      const hasWaterBaseline = serverReadings.some(
+        (r) => r.meterType === 'water' && r.previousReading !== null && r.previousReading !== undefined && String(r.previousReading).trim() !== ''
+      );
+      const hasElecBaseline = serverReadings.some(
+        (r) => (r.meterType === 'electricity' || r.meterType === 'electric') && r.previousReading !== null && r.previousReading !== undefined && String(r.previousReading).trim() !== ''
+      );
+
+      const isWaterBaselineSatisfied = !isWaterUnit || hasWaterBaseline;
+      const isElecBaselineSatisfied = !isElecUnit || hasElecBaseline;
+
+      return Boolean(
+        isMeterWorkspaceReady &&
+        isRateSnapshotReady &&
+        isWaterBaselineSatisfied &&
+        isElecBaselineSatisfied
+      );
+    }
+
     function computeShowPullButton(params: {
       isFirstCycle: boolean;
       previousCycleExists: boolean;
@@ -325,6 +351,73 @@ describe('LOCAL-07 Batch 01 — Browser/HTTP Boundary & Pull Previous Suite', ()
         !params.isPullCompleted
       );
     }
+
+    it('1. both per_unit, only water baseline exists -> Pull not completed', () => {
+      const persisted = computeHasPersistedBaseline({
+        isWaterUnit: true,
+        isElecUnit: true,
+        serverReadings: [{ meterType: 'water', previousReading: '110.00' }],
+        isMeterWorkspaceReady: true,
+        isRateSnapshotReady: true,
+      });
+      expect(persisted).toBe(false);
+    });
+
+    it('2. both per_unit, only electric baseline exists -> Pull not completed', () => {
+      const persisted = computeHasPersistedBaseline({
+        isWaterUnit: true,
+        isElecUnit: true,
+        serverReadings: [{ meterType: 'electricity', previousReading: '560.00' }],
+        isMeterWorkspaceReady: true,
+        isRateSnapshotReady: true,
+      });
+      expect(persisted).toBe(false);
+    });
+
+    it('3. both per_unit, both applicable baselines exist -> Pull completed', () => {
+      const persisted = computeHasPersistedBaseline({
+        isWaterUnit: true,
+        isElecUnit: true,
+        serverReadings: [
+          { meterType: 'water', previousReading: '110.00' },
+          { meterType: 'electricity', previousReading: '560.00' },
+        ],
+        isMeterWorkspaceReady: true,
+        isRateSnapshotReady: true,
+      });
+      expect(persisted).toBe(true);
+    });
+
+    it('4. fixed water + per_unit electric -> only electric baseline controls completion', () => {
+      const missingElec = computeHasPersistedBaseline({
+        isWaterUnit: false,
+        isElecUnit: true,
+        serverReadings: [{ meterType: 'water', previousReading: '110.00' }],
+        isMeterWorkspaceReady: true,
+        isRateSnapshotReady: true,
+      });
+      expect(missingElec).toBe(false);
+
+      const hasElec = computeHasPersistedBaseline({
+        isWaterUnit: false,
+        isElecUnit: true,
+        serverReadings: [{ meterType: 'electricity', previousReading: '560.00' }],
+        isMeterWorkspaceReady: true,
+        isRateSnapshotReady: true,
+      });
+      expect(hasElec).toBe(true);
+    });
+
+    it('5. non-meter modes (per_person water + fixed electric) do not require meter baseline', () => {
+      const nonMeter = computeHasPersistedBaseline({
+        isWaterUnit: false,
+        isElecUnit: false,
+        serverReadings: [],
+        isMeterWorkspaceReady: true,
+        isRateSnapshotReady: true,
+      });
+      expect(nonMeter).toBe(true);
+    });
 
     it('hides pull button on first cycle', () => {
       expect(
