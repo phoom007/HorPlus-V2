@@ -1225,4 +1225,138 @@ describe('LOCAL-07 Backend Canonical Owner Payable Preview Suite', () => {
       expect(screen.getByRole('button', { name: /ดึงข้อมูลก่อนหน้า/ })).toBeDefined();
     });
   });
+
+  it('22. Cross-room baseline distribution (Room 101 has water only, Room 102 has electric only) does NOT complete baseline -> Pull button remains visible', async () => {
+    const httpRequestSpy = vi.spyOn(httpClient, 'httpRequest');
+    httpRequestSpy.mockImplementation(async (method: string, url: string) => {
+      if (url.includes('/preview-context')) {
+        return {
+          success: true,
+          data: {
+            rateSnapshot: {
+              waterBillingType: 'per_unit',
+              waterRate: '18.00',
+              electricityBillingType: 'per_unit',
+              electricityRate: '7.00',
+            },
+            rooms: [],
+          },
+        };
+      }
+      if (url.includes('/meters/readings')) {
+        return {
+          success: true,
+          data: [
+            // Room 101 has water baseline, but missing electric
+            {
+              id: 'mr-1',
+              billingCycleId: 'cycle-2026-08',
+              roomId: 'r-101',
+              meterType: 'water',
+              previousReading: '110.00',
+              currentReading: '120.00',
+            },
+            // Room 102 has electric baseline, but missing water
+            {
+              id: 'mr-2',
+              billingCycleId: 'cycle-2026-08',
+              roomId: 'r-102',
+              meterType: 'electricity',
+              previousReading: '460.00',
+              currentReading: '500.00',
+            },
+          ],
+        };
+      }
+      return { success: true, data: [] };
+    });
+
+    const sampleRoom101: Room = {
+      id: 'r-101',
+      buildingId: 'b-1',
+      roomNumber: '101',
+      floor: 1,
+      status: 'occupied',
+      monthlyRent: 4000,
+      dailyRent: 0,
+      depositAmount: 4000,
+      maxOccupants: 2,
+      initialWaterMeter: 0,
+      initialElectricMeter: 0,
+      images: [],
+      createdAt: '2026-08-01',
+      updatedAt: '2026-08-01',
+    };
+
+    const sampleRoom102: Room = {
+      id: 'r-102',
+      buildingId: 'b-1',
+      roomNumber: '102',
+      floor: 1,
+      status: 'occupied',
+      monthlyRent: 4000,
+      dailyRent: 0,
+      depositAmount: 4000,
+      maxOccupants: 2,
+      initialWaterMeter: 0,
+      initialElectricMeter: 0,
+      images: [],
+      createdAt: '2026-08-01',
+      updatedAt: '2026-08-01',
+    };
+
+    const cyclesWithPrev = [
+      {
+        id: 'cycle-2026-08',
+        cycleCode: '2026-08',
+        name: 'รอบบิล สิงหาคม 2569',
+        status: 'draft' as const,
+        periodStart: '2026-08-01',
+        periodEnd: '2026-08-31',
+        billingDate: '2026-08-25',
+        dueDate: '2026-09-05',
+        isFirstCycle: false,
+      },
+      {
+        id: 'cycle-2026-07',
+        cycleCode: '2026-07',
+        name: 'รอบบิล กรกฎาคม 2569',
+        status: 'closed' as const,
+        periodStart: '2026-07-01',
+        periodEnd: '2026-07-31',
+        billingDate: '2026-07-25',
+        dueDate: '2026-08-05',
+        isFirstCycle: false,
+      },
+    ];
+
+    renderWithClient(
+      <OwnerMeters
+        rooms={[sampleRoom101, sampleRoom102]}
+        buildings={[{ id: 'b-1', dormitoryId: 'dorm-1', name: 'อาคาร A', totalFloors: 1, roomsPerFloor: 1, createdAt: '2026-08-01' }]}
+        dormitoryId="dorm-1"
+        bills={[]}
+        tenants={[]}
+        contracts={[]}
+        onSaveBills={vi.fn()}
+        onSelectTenant={vi.fn()}
+        onAddLog={vi.fn()}
+        onNavigate={vi.fn()}
+        selectedBillingCycleId="cycle-2026-08"
+        selectedCycleCode="2026-08"
+        selectedCycle="2026-08"
+        billingCycles={cyclesWithPrev}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('101')).toBeDefined();
+      expect(screen.getByText('102')).toBeDefined();
+    });
+
+    // In cross-room distribution, neither room is fully resolved -> Pull button MUST be visible!
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /ดึงข้อมูลก่อนหน้า/ })).toBeDefined();
+    });
+  });
 });

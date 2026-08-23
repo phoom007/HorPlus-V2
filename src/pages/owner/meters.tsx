@@ -439,6 +439,79 @@ export function mapErrorMessageToThai(raw: any): string {
   return msg || 'เกิดข้อผิดพลาดในการดำเนินการ';
 }
 
+export function isResolvedBaseline(val: any): boolean {
+  if (val === null || val === undefined) return false;
+  const str = String(val).trim();
+  if (str === '') return false;
+  const num = Number(str);
+  return !isNaN(num) && num >= 0;
+}
+
+export function computeHasPersistedBaseline(params: {
+  isRateSnapshotReady: boolean;
+  isMeterWorkspaceReady: boolean;
+  isWaterUnit: boolean;
+  isElecUnit: boolean;
+  rooms: Array<{ id: string; status?: string; rentCycle?: string }>;
+  serverReadings: any[];
+  previewRooms?: Array<{ roomId: string; billingSource?: string; isDailyUnpaid?: boolean }>;
+}): boolean {
+  const { isRateSnapshotReady, isMeterWorkspaceReady, isWaterUnit, isElecUnit, rooms = [], serverReadings = [], previewRooms } = params;
+  if (!isRateSnapshotReady || !isMeterWorkspaceReady) {
+    return false;
+  }
+
+  // Non-meter modes: if neither utility is per_unit, no meter baseline is required
+  if (!isWaterUnit && !isElecUnit) {
+    return true;
+  }
+
+  const applicableRooms = rooms.filter((room) => {
+    if ((room.status as string) === 'archived') return false;
+    if (room.rentCycle === 'daily') return false;
+    if (previewRooms && previewRooms.length > 0) {
+      const ctx = previewRooms.find((p) => p.roomId === room.id);
+      if (ctx) {
+        if (ctx.billingSource === 'DAILY_STAY' || ctx.isDailyUnpaid) return false;
+        if (ctx.billingSource === 'NONE') return false;
+        return true;
+      }
+    }
+    return true;
+  });
+
+  if (applicableRooms.length === 0) {
+    return true;
+  }
+
+  const waterBaselineByRoom = new Map<string, any>();
+  const elecBaselineByRoom = new Map<string, any>();
+
+  for (const r of serverReadings) {
+    if (!r) continue;
+    // Format A: { roomId, meterType: 'water' | 'electricity', previousReading }
+    if (r.meterType === 'water') {
+      waterBaselineByRoom.set(r.roomId, r.previousReading);
+    } else if (r.meterType === 'electricity' || r.meterType === 'electric') {
+      elecBaselineByRoom.set(r.roomId, r.previousReading);
+    }
+    // Format B: { roomId, waterPrevious, electricPrevious } (legacy / combined DTO)
+    if (r.waterPrevious !== undefined && r.waterPrevious !== null) {
+      waterBaselineByRoom.set(r.roomId, r.waterPrevious);
+    }
+    if (r.electricPrevious !== undefined && r.electricPrevious !== null) {
+      elecBaselineByRoom.set(r.roomId, r.electricPrevious);
+    }
+  }
+
+  // Every applicable room must satisfy applicable utility baseline requirements
+  return applicableRooms.every((room) => {
+    const isWaterSatisfied = !isWaterUnit || isResolvedBaseline(waterBaselineByRoom.get(room.id));
+    const isElecSatisfied = !isElecUnit || isResolvedBaseline(elecBaselineByRoom.get(room.id));
+    return isWaterSatisfied && isElecSatisfied;
+  });
+}
+
 export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   rooms,
   buildings = [],
@@ -754,25 +827,18 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   // Durable Pull completion state: local session tracker + server-persisted baseline
   const [pulledCycles, setPulledCycles] = useState<Record<string, boolean>>({});
 
-  // Utility-aware and mode-aware persisted completion authority:
-  // All applicable utility baselines for the selected cycle must be satisfied.
+  // Utility-aware, mode-aware, and per-room persisted completion authority:
+  // All applicable rooms must have their required utility baselines satisfied.
   const serverReadings = meterWorkspaceQuery.data?.serverReadings || [];
-  const hasWaterBaseline = serverReadings.some(
-    (r: any) => r.meterType === 'water' && r.previousReading !== null && r.previousReading !== undefined && String(r.previousReading).trim() !== ''
-  );
-  const hasElecBaseline = serverReadings.some(
-    (r: any) => (r.meterType === 'electricity' || r.meterType === 'electric') && r.previousReading !== null && r.previousReading !== undefined && String(r.previousReading).trim() !== ''
-  );
-
-  const isWaterBaselineSatisfied = !isWaterUnit || hasWaterBaseline;
-  const isElecBaselineSatisfied = !isElecUnit || hasElecBaseline;
-
-  const hasPersistedBaseline = Boolean(
-    isMeterWorkspaceReady &&
-    isRateSnapshotReady &&
-    isWaterBaselineSatisfied &&
-    isElecBaselineSatisfied
-  );
+  const hasPersistedBaseline = computeHasPersistedBaseline({
+    isRateSnapshotReady,
+    isMeterWorkspaceReady,
+    isWaterUnit,
+    isElecUnit,
+    rooms,
+    serverReadings,
+    previewRooms: previewContext?.rooms,
+  });
 
   const isPullCompleted = Boolean(
     (selectedBillingCycleId && pulledCycles[selectedBillingCycleId]) ||

@@ -307,33 +307,7 @@ describe('LOCAL-07 Batch 01 — Browser/HTTP Boundary & Pull Previous Suite', ()
     });
   });
 
-  describe('4. Button Visibility & Utility-Aware Completion Invariant', () => {
-    function computeHasPersistedBaseline(params: {
-      isWaterUnit: boolean;
-      isElecUnit: boolean;
-      serverReadings: Array<{ meterType: string; previousReading?: string | number | null }>;
-      isMeterWorkspaceReady: boolean;
-      isRateSnapshotReady: boolean;
-    }): boolean {
-      const { isWaterUnit, isElecUnit, serverReadings, isMeterWorkspaceReady, isRateSnapshotReady } = params;
-      const hasWaterBaseline = serverReadings.some(
-        (r) => r.meterType === 'water' && r.previousReading !== null && r.previousReading !== undefined && String(r.previousReading).trim() !== ''
-      );
-      const hasElecBaseline = serverReadings.some(
-        (r) => (r.meterType === 'electricity' || r.meterType === 'electric') && r.previousReading !== null && r.previousReading !== undefined && String(r.previousReading).trim() !== ''
-      );
-
-      const isWaterBaselineSatisfied = !isWaterUnit || hasWaterBaseline;
-      const isElecBaselineSatisfied = !isElecUnit || hasElecBaseline;
-
-      return Boolean(
-        isMeterWorkspaceReady &&
-        isRateSnapshotReady &&
-        isWaterBaselineSatisfied &&
-        isElecBaselineSatisfied
-      );
-    }
-
+  describe('4. Button Visibility & Per-Room Utility-Aware Completion Invariant', () => {
     function computeShowPullButton(params: {
       isFirstCycle: boolean;
       previousCycleExists: boolean;
@@ -352,71 +326,148 @@ describe('LOCAL-07 Batch 01 — Browser/HTTP Boundary & Pull Previous Suite', ()
       );
     }
 
-    it('1. both per_unit, only water baseline exists -> Pull not completed', () => {
+    it('1. global water exists + global electric exists but on different rooms -> NOT completed', async () => {
+      const { computeHasPersistedBaseline } = await import('../pages/owner/meters');
       const persisted = computeHasPersistedBaseline({
-        isWaterUnit: true,
-        isElecUnit: true,
-        serverReadings: [{ meterType: 'water', previousReading: '110.00' }],
-        isMeterWorkspaceReady: true,
         isRateSnapshotReady: true,
-      });
-      expect(persisted).toBe(false);
-    });
-
-    it('2. both per_unit, only electric baseline exists -> Pull not completed', () => {
-      const persisted = computeHasPersistedBaseline({
-        isWaterUnit: true,
-        isElecUnit: true,
-        serverReadings: [{ meterType: 'electricity', previousReading: '560.00' }],
         isMeterWorkspaceReady: true,
-        isRateSnapshotReady: true,
-      });
-      expect(persisted).toBe(false);
-    });
-
-    it('3. both per_unit, both applicable baselines exist -> Pull completed', () => {
-      const persisted = computeHasPersistedBaseline({
         isWaterUnit: true,
         isElecUnit: true,
+        rooms: [{ id: 'r-101' }, { id: 'r-102' }],
         serverReadings: [
-          { meterType: 'water', previousReading: '110.00' },
-          { meterType: 'electricity', previousReading: '560.00' },
+          { roomId: 'r-101', meterType: 'water', previousReading: '110.00' },
+          { roomId: 'r-102', meterType: 'electricity', previousReading: '460.00' },
         ],
-        isMeterWorkspaceReady: true,
+      });
+      expect(persisted).toBe(false);
+    });
+
+    it('2. one room missing water -> NOT completed', async () => {
+      const { computeHasPersistedBaseline } = await import('../pages/owner/meters');
+      const persisted = computeHasPersistedBaseline({
         isRateSnapshotReady: true,
+        isMeterWorkspaceReady: true,
+        isWaterUnit: true,
+        isElecUnit: true,
+        rooms: [{ id: 'r-101' }, { id: 'r-102' }],
+        serverReadings: [
+          { roomId: 'r-101', meterType: 'water', previousReading: '110.00' },
+          { roomId: 'r-101', meterType: 'electricity', previousReading: '560.00' },
+          { roomId: 'r-102', meterType: 'electricity', previousReading: '460.00' },
+        ],
+      });
+      expect(persisted).toBe(false);
+    });
+
+    it('3. one room missing electricity -> NOT completed', async () => {
+      const { computeHasPersistedBaseline } = await import('../pages/owner/meters');
+      const persisted = computeHasPersistedBaseline({
+        isRateSnapshotReady: true,
+        isMeterWorkspaceReady: true,
+        isWaterUnit: true,
+        isElecUnit: true,
+        rooms: [{ id: 'r-101' }, { id: 'r-102' }],
+        serverReadings: [
+          { roomId: 'r-101', meterType: 'water', previousReading: '110.00' },
+          { roomId: 'r-101', meterType: 'electricity', previousReading: '560.00' },
+          { roomId: 'r-102', meterType: 'water', previousReading: '90.00' },
+        ],
+      });
+      expect(persisted).toBe(false);
+    });
+
+    it('4. all required baselines on all applicable rooms -> completed', async () => {
+      const { computeHasPersistedBaseline } = await import('../pages/owner/meters');
+      const persisted = computeHasPersistedBaseline({
+        isRateSnapshotReady: true,
+        isMeterWorkspaceReady: true,
+        isWaterUnit: true,
+        isElecUnit: true,
+        rooms: [{ id: 'r-101' }, { id: 'r-102' }],
+        serverReadings: [
+          { roomId: 'r-101', meterType: 'water', previousReading: '110.00' },
+          { roomId: 'r-101', meterType: 'electricity', previousReading: '560.00' },
+          { roomId: 'r-102', meterType: 'water', previousReading: '90.00' },
+          { roomId: 'r-102', meterType: 'electricity', previousReading: '460.00' },
+        ],
       });
       expect(persisted).toBe(true);
     });
 
-    it('4. fixed water + per_unit electric -> only electric baseline controls completion', () => {
+    it('5. explicit zero counts resolved (0, "0", "0.00")', async () => {
+      const { computeHasPersistedBaseline, isResolvedBaseline } = await import('../pages/owner/meters');
+      expect(isResolvedBaseline(0)).toBe(true);
+      expect(isResolvedBaseline('0')).toBe(true);
+      expect(isResolvedBaseline('0.00')).toBe(true);
+      expect(isResolvedBaseline(null)).toBe(false);
+      expect(isResolvedBaseline(undefined)).toBe(false);
+      expect(isResolvedBaseline('')).toBe(false);
+
+      const persisted = computeHasPersistedBaseline({
+        isRateSnapshotReady: true,
+        isMeterWorkspaceReady: true,
+        isWaterUnit: true,
+        isElecUnit: true,
+        rooms: [{ id: 'r-101' }],
+        serverReadings: [
+          { roomId: 'r-101', meterType: 'water', previousReading: 0 },
+          { roomId: 'r-101', meterType: 'electricity', previousReading: '0.00' },
+        ],
+      });
+      expect(persisted).toBe(true);
+    });
+
+    it('6. fixed water + per_unit electric -> only per_unit electricity requirement', async () => {
+      const { computeHasPersistedBaseline } = await import('../pages/owner/meters');
       const missingElec = computeHasPersistedBaseline({
+        isRateSnapshotReady: true,
+        isMeterWorkspaceReady: true,
         isWaterUnit: false,
         isElecUnit: true,
-        serverReadings: [{ meterType: 'water', previousReading: '110.00' }],
-        isMeterWorkspaceReady: true,
-        isRateSnapshotReady: true,
+        rooms: [{ id: 'r-101' }],
+        serverReadings: [{ roomId: 'r-101', meterType: 'water', previousReading: '110.00' }],
       });
       expect(missingElec).toBe(false);
 
       const hasElec = computeHasPersistedBaseline({
+        isRateSnapshotReady: true,
+        isMeterWorkspaceReady: true,
         isWaterUnit: false,
         isElecUnit: true,
-        serverReadings: [{ meterType: 'electricity', previousReading: '560.00' }],
-        isMeterWorkspaceReady: true,
-        isRateSnapshotReady: true,
+        rooms: [{ id: 'r-101' }],
+        serverReadings: [{ roomId: 'r-101', meterType: 'electricity', previousReading: '560.00' }],
       });
       expect(hasElec).toBe(true);
     });
 
-    it('5. non-meter modes (per_person water + fixed electric) do not require meter baseline', () => {
+    it('7. non-meter modes (per_person water + fixed electric) do not require meter baseline', async () => {
+      const { computeHasPersistedBaseline } = await import('../pages/owner/meters');
       const nonMeter = computeHasPersistedBaseline({
+        isRateSnapshotReady: true,
+        isMeterWorkspaceReady: true,
         isWaterUnit: false,
         isElecUnit: false,
+        rooms: [{ id: 'r-101' }],
         serverReadings: [],
-        isMeterWorkspaceReady: true,
-        isRateSnapshotReady: true,
       });
       expect(nonMeter).toBe(true);
+    });
+
+    it('8. manual direct baseline save and Pencil override count resolved', async () => {
+      const { computeHasPersistedBaseline } = await import('../pages/owner/meters');
+      // Direct entry: owner typed 0 for electric and saved -> persisted on server
+      const directSave = computeHasPersistedBaseline({
+        isRateSnapshotReady: true,
+        isMeterWorkspaceReady: true,
+        isWaterUnit: true,
+        isElecUnit: true,
+        rooms: [{ id: 'r-101' }],
+        serverReadings: [
+          { roomId: 'r-101', meterType: 'water', previousReading: '120.00' },
+          { roomId: 'r-101', meterType: 'electricity', previousReading: '0' },
+        ],
+      });
+      expect(directSave).toBe(true);
     });
 
     it('hides pull button on first cycle', () => {
