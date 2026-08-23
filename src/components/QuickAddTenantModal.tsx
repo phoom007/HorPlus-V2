@@ -6,7 +6,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { X, Calendar, User, Phone, DollarSign, Clock, Shield, CheckCircle, AlertCircle, Loader2, Image as ImageIcon, Trash2, Building2 } from 'lucide-react';
+import { X, Calendar, User, Phone, DollarSign, Clock, Shield, CheckCircle, AlertCircle, Loader2, Image as ImageIcon, Trash2, Building2, GraduationCap, CalendarDays } from 'lucide-react';
 import { QuickAddRoomContext } from '../types';
 import { httpRequest } from '../data/httpClient';
 import { formatBaht, formatThaiDate, normalizeMoneyInput, OwnerDateInput } from './GlobalComponents';
@@ -393,7 +393,7 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
               disabled={isTermTabDisabled}
               title={isTermTabDisabled ? 'ยังไม่ได้กำหนดค่าเช่ารายเทอมของห้องพัก' : undefined}
               onClick={() => !isTermTabDisabled && setActiveTab('TERM')}
-              className={`flex-1 py-2 text-xs font-extrabold rounded-xl transition-all ${
+              className={`flex-1 py-2 text-xs font-extrabold rounded-xl transition-all flex items-center justify-center gap-1.5 ${
                 isTermTabDisabled
                   ? 'opacity-40 cursor-not-allowed text-slate-400 bg-slate-100'
                   : activeTab === 'TERM'
@@ -401,29 +401,32 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              รายเทอม
+              <GraduationCap className="w-3.5 h-3.5 shrink-0" />
+              <span>รายเทอม</span>
             </button>
             <button
               type="button"
               onClick={() => setActiveTab('MONTHLY')}
-              className={`flex-1 py-2 text-xs font-extrabold rounded-xl transition-all ${
+              className={`flex-1 py-2 text-xs font-extrabold rounded-xl transition-all flex items-center justify-center gap-1.5 ${
                 activeTab === 'MONTHLY'
                   ? 'bg-white text-indigo-600 shadow-xs'
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              รายเดือน
+              <CalendarDays className="w-3.5 h-3.5 shrink-0" />
+              <span>รายเดือน</span>
             </button>
             <button
               type="button"
               onClick={() => setActiveTab('DAILY')}
-              className={`flex-1 py-2 text-xs font-extrabold rounded-xl transition-all ${
+              className={`flex-1 py-2 text-xs font-extrabold rounded-xl transition-all flex items-center justify-center gap-1.5 ${
                 activeTab === 'DAILY'
                   ? 'bg-white text-indigo-600 shadow-xs'
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              รายวัน
+              <Clock className="w-3.5 h-3.5 shrink-0" />
+              <span>รายวัน</span>
             </button>
           </div>
         </div>

@@ -655,6 +655,7 @@ export class PrismaBillRepository implements IBillRepository {
         billKind: 'MONTHLY_UTILITY',
         status: { notIn: ['cancelled', 'void'] },
       },
+      orderBy: { createdAt: 'desc' },
     });
     return bill ? this.mapBillToEntity(bill) : null;
   }

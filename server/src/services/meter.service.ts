@@ -341,13 +341,15 @@ export class MeterService {
 
       for (const item of data.readings) {
         if (this.billRepo) {
-          const activeBill = await this.billRepo.findByCycleAndRoom(dormitoryId, data.billingCycleId, item.roomId);
+          const activeBill = await this.billRepo.findActiveMonthlyUtilityByRoomAndCycle(dormitoryId, data.billingCycleId, item.roomId, tx);
           if (activeBill && activeBill.status !== 'cancelled' && activeBill.status !== 'void') {
-            const err = new Error('METER_MODIFICATION_BLOCKED_BY_BILL');
-            (err as any).statusCode = 400;
-            (err as any).code = 'METER_MODIFICATION_BLOCKED_BY_BILL';
-            (err as any).message = 'ไม่สามารถแก้ไขค่ามิเตอร์ได้เนื่องจากมีการออกบิลแล้ว';
-            throw err;
+            if (activeBill.status === 'paid' || activeBill.status === 'PAID') {
+              const err = new Error('ROOM_LOCKED_PAID');
+              (err as any).statusCode = 400;
+              (err as any).code = 'ROOM_LOCKED_PAID';
+              (err as any).message = 'บิลนี้ชำระเงินแล้ว ไม่สามารถแก้ไขข้อมูลมิเตอร์ได้';
+              throw err;
+            }
           }
         }
 
@@ -512,13 +514,15 @@ export class MeterService {
     }
 
     if (this.billRepo) {
-      const activeBill = await this.billRepo.findByCycleAndRoom(dormitoryId, reading.billingCycleId, reading.roomId);
+      const activeBill = await this.billRepo.findActiveMonthlyUtilityByRoomAndCycle(dormitoryId, reading.billingCycleId, reading.roomId);
       if (activeBill && activeBill.status !== 'cancelled' && activeBill.status !== 'void') {
-        const err = new Error('METER_MODIFICATION_BLOCKED_BY_BILL');
-        (err as any).statusCode = 400;
-        (err as any).code = 'METER_MODIFICATION_BLOCKED_BY_BILL';
-        (err as any).message = 'ไม่สามารถแก้ไขค่ามิเตอร์ได้เนื่องจากมีการออกบิลแล้ว';
-        throw err;
+        if (activeBill.status === 'paid' || activeBill.status === 'PAID') {
+          const err = new Error('ROOM_LOCKED_PAID');
+          (err as any).statusCode = 400;
+          (err as any).code = 'ROOM_LOCKED_PAID';
+          (err as any).message = 'บิลนี้ชำระเงินแล้ว ไม่สามารถแก้ไขข้อมูลมิเตอร์ได้';
+          throw err;
+        }
       }
     }
 

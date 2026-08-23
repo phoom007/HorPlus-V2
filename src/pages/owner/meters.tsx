@@ -1082,6 +1082,11 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
         const pRoom: any = roomMap.get(row.roomId);
         const nextRow = { ...row };
 
+        // Explicitly preserve current readings and other fees
+        nextRow.waterCurr = row.waterCurr;
+        nextRow.elecCurr = row.elecCurr;
+        nextRow.otherFees = row.otherFees;
+
         if (pRoom) {
           if (isWaterUnit && pRoom.previousWaterCurrentReading !== null && pRoom.previousWaterCurrentReading !== undefined) {
             const nextWaterPrev = formatMeterReadingDisplay(pRoom.previousWaterCurrentReading);
@@ -2170,6 +2175,14 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     (row?.roomNumber || '').toLowerCase().includes((searchQuery || '').toLowerCase())
   );
 
+  const eligibleUnissuedRows = meterRows.filter((r) => {
+    const roomCtx = previewContext?.rooms?.find((ctx: any) => ctx.roomId === r.roomId);
+    if (roomCtx?.billingSource === 'DAILY_STAY') return false;
+    if (r.billStatus !== 'draft' && r.billStatus !== 'cancelled') return false;
+    return true;
+  });
+  const hasEligibleUnissuedBills = eligibleUnissuedRows.length > 0;
+
   return (
     <div className="space-y-6">
       {!selectedBillingCycleId && (
@@ -2260,9 +2273,14 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
             <div className="grid grid-cols-2 sm:flex sm:items-center gap-2 w-full sm:w-auto">
               <button
                 type="button"
-                disabled={!isMutationReady}
+                disabled={!isMutationReady || isSaving || !hasEligibleUnissuedBills}
                 onClick={handleIssueAllBills}
-                className="w-full sm:w-auto px-3 sm:px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-bold rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-md shadow-emerald-600/10 whitespace-nowrap shrink-0"
+                className={`w-full sm:w-auto px-3 sm:px-4 py-2 text-xs font-bold rounded-xl flex items-center justify-center gap-1.5 transition-all shadow-md whitespace-nowrap shrink-0 ${
+                  !hasEligibleUnissuedBills
+                    ? 'bg-gray-100 text-gray-400 border border-gray-200 cursor-not-allowed shadow-none'
+                    : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-600/10 cursor-pointer'
+                }`}
+                title={!hasEligibleUnissuedBills ? 'ออกบิลครบทุกห้องแล้ว' : 'ออกบิลทุกห้อง'}
               >
                 <FileText className="w-3.5 h-3.5" />
                 <span>ออกบิลทุกห้อง</span>
@@ -2306,8 +2324,10 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
             </thead>
             <tbody className="divide-y divide-gray-100 font-semibold">
               {filteredRows.map((row, idx) => {
-                const waterUnits = row.isReplaced ? Number(row.waterCurr) : (Number(row.waterCurr) - Number(row.waterPrev));
-                const elecUnits = row.isReplaced ? Number(row.elecCurr) : (Number(row.elecCurr) - Number(row.elecPrev));
+                const waterUsageRes = (row.waterPrev !== '' && row.waterCurr !== '') ? calculateMeterUsageUnits(row.waterPrev, row.waterCurr) : { isValid: true, usageUnits: 0 };
+                const elecUsageRes = (row.elecPrev !== '' && row.elecCurr !== '') ? calculateMeterUsageUnits(row.elecPrev, row.elecCurr) : { isValid: true, usageUnits: 0 };
+                const waterUnits = row.isReplaced ? Number(row.waterCurr) : (waterUsageRes.isValid ? waterUsageRes.usageUnits : -1);
+                const elecUnits = row.isReplaced ? Number(row.elecCurr) : (elecUsageRes.isValid ? elecUsageRes.usageUnits : -1);
 
                 const waterCost = getWaterCost(row);
                 const elecCost = getElectricCost(row);
@@ -2699,8 +2719,9 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                     {/* Calculated Total & Financial Breakdown */}
                     <td className="p-4 text-right">
                       {(() => {
-                        const amountDue = roomCtx ? roomCtx.amountDue : calculatedTotal.toFixed(2);
-                        const chargeComponents = roomCtx?.chargeComponents || [];
+                        const breakdown = getOwnerFinancialBreakdown(row, roomCtx, rateSnapshot, bills, selectedBillingCycleId);
+                        const amountDue = breakdown.formattedAmount;
+                        const chargeComponents = breakdown.components;
                         const isExpanded = Boolean(expandedBreakdowns[row.roomId]);
 
                         return (
@@ -2712,9 +2733,13 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                               <button
                                 type="button"
                                 onClick={() => setExpandedBreakdowns(prev => ({ ...prev, [row.roomId]: !prev[row.roomId] }))}
-                                className="text-[10px] text-slate-400 hover:text-indigo-600 font-medium cursor-pointer transition-colors mt-0.5 flex items-center gap-0.5"
+                                className="text-[10px] text-slate-400 hover:text-indigo-600 font-medium cursor-pointer transition-colors mt-0.5 whitespace-nowrap flex items-center gap-0.5"
                               >
-                                <span>ดูรายละเอียด +{chargeComponents.length}</span>
+                                <span>
+                                  {chargeComponents.length === 1
+                                    ? 'ดูรายละเอียด'
+                                    : `ดูรายละเอียด +${chargeComponents.length}`}
+                                </span>
                                 <ChevronDown className={`w-2.5 h-2.5 transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`} />
                               </button>
                             )}
@@ -2726,9 +2751,11 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                                     <div className="flex items-center gap-1 shrink-0">
                                       <span className="font-semibold text-slate-700">{formatMoneyDisplay(c.amount)} ฿</span>
                                       {c.status === 'PAID' ? (
-                                        <span className="px-1 py-0.2 rounded text-[9px] font-bold bg-emerald-100 text-emerald-700">จ่ายแล้ว</span>
+                                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" title="ชำระแล้ว" />
+                                      ) : c.status === 'INVALID' ? (
+                                        <AlertCircle className="w-3.5 h-3.5 text-rose-500 shrink-0" title="ไม่ถูกต้อง" />
                                       ) : (
-                                        <span className="px-1 py-0.2 rounded text-[9px] font-bold bg-amber-100 text-amber-700">ยังไม่จ่าย</span>
+                                        <Clock className="w-3.5 h-3.5 text-amber-500 shrink-0" title="ยังไม่ชำระ / รอดำเนินการ" />
                                       )}
                                     </div>
                                   </div>
@@ -2855,21 +2882,61 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
 
                         if (isFuture) {
                           return (
-                            <div className="flex flex-col items-start gap-0.5">
-                              {effectiveTenantId && effectiveTenantName ? (
+                            <div className="flex items-center gap-2">
+                              <div className="flex flex-col items-start gap-0.5">
+                                {effectiveTenantId && effectiveTenantName ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => onSelectTenant(effectiveTenantId, row.roomId)}
+                                    className="inline-flex items-center gap-1.5 text-indigo-600 hover:text-indigo-800 hover:underline transition-all cursor-pointer font-bold whitespace-nowrap"
+                                  >
+                                    <User className="w-3.5 h-3.5 shrink-0" />
+                                    <span className="truncate max-w-[100px]">{effectiveTenantName}</span>
+                                    <ArrowRight className="w-3 h-3 opacity-60 shrink-0" />
+                                  </button>
+                                ) : null}
+                                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
+                                  จองล่วงหน้า
+                                </span>
+                              </div>
+                              {isEligibleAddTenantCycle && hasBookableGap && (room || row.roomId) && (
                                 <button
                                   type="button"
-                                  onClick={() => onSelectTenant(effectiveTenantId, row.roomId)}
-                                  className="inline-flex items-center gap-1.5 text-indigo-600 hover:text-indigo-800 hover:underline transition-all cursor-pointer font-bold whitespace-nowrap"
+                                  disabled={quickAddLoadingRoomId === (room?.id || row.roomId)}
+                                  onClick={async () => {
+                                    const targetRoomId = room?.id || row.roomId;
+                                    try {
+                                      setQuickAddLoadingRoomId(targetRoomId);
+                                      const dormId = dormitoryId || localStorage.getItem('horplus_current_dormitory_id') || localStorage.getItem('selected_dormitory_id') || '';
+                                      const res = await httpRequest<{ data: QuickAddRoomContext }>(
+                                        'GET',
+                                        `/api/v1/properties/rooms/${targetRoomId}/quick-add-context`,
+                                        undefined,
+                                        { headers: dormId ? { 'x-dormitory-id': dormId } : {} }
+                                      );
+
+                                      if (!res.data || !res.data.effective) {
+                                        throw new Error('ไม่สามารถโหลดข้อมูลสิทธิ์และค่าเช่าห้องพักได้');
+                                      }
+
+                                      setSelectedQuickAddContext(res.data);
+                                      setQuickAddModalOpen(true);
+                                    } catch (err: any) {
+                                      showToast(mapErrorMessageToThai(err.message || 'ไม่สามารถโหลดข้อมูลห้องพักได้ กรุณาลองใหม่อีกครั้ง'), 'error');
+                                    } finally {
+                                      setQuickAddLoadingRoomId(null);
+                                    }
+                                  }}
+                                  className="inline-flex items-center gap-1 text-[11px] font-bold text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 px-2 py-1 rounded-lg border border-indigo-200 transition-all cursor-pointer shadow-2xs disabled:opacity-50 whitespace-nowrap shrink-0"
                                 >
-                                  <User className="w-3.5 h-3.5 shrink-0" />
-                                  <span className="truncate max-w-[100px]">{effectiveTenantName}</span>
-                                  <ArrowRight className="w-3 h-3 opacity-60 shrink-0" />
+                                  {quickAddLoadingRoomId === (room?.id || row.roomId) ? (
+                                    <Loader2 className="w-3 h-3 animate-spin shrink-0" />
+                                  ) : (
+                                    <Plus className="w-3 h-3 shrink-0" />
+                                  )}
+                                  <span className="whitespace-nowrap">เพิ่มผู้เช่า</span>
                                 </button>
-                              ) : null}
-                              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
-                                จองล่วงหน้า
-                              </span>
+                              )}
                             </div>
                           );
                         }

@@ -141,11 +141,12 @@ export const multiplySatangByQuantity = multiplyMoneyByQuantity;
  * Formats a canonical two-decimal string into Thai display format with commas.
  * Example: "3500.00" -> "3,500.00"
  */
-export function formatMoneyDisplay(decimalStr: string): string {
-  if (!decimalStr) return '0.00';
+export function formatMoneyDisplay(val: string | number | null | undefined): string {
+  if (val === null || val === undefined || val === '') return '0.00';
+  const decimalStr = typeof val === 'number' ? (Number.isInteger(val) ? `${val}.00` : val.toFixed(2)) : String(val);
   const [intPart = '0', fracPart = '00'] = decimalStr.split('.');
   const formattedInt = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-  return `${formattedInt}.${fracPart}`;
+  return `${formattedInt}.${(fracPart + '00').slice(0, 2)}`;
 }
 
 /**
