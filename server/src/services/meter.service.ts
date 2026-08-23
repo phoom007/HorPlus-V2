@@ -15,10 +15,10 @@ import { ENTITLEMENT_ROOM_LIMITS } from './entitlement.service.js';
 import { subscriptionEntitlementService } from './subscription-entitlement.service.js';
 import { AppError } from '../types/index.js';
 import { getPrismaClient } from '../db/prisma.js';
-import { toDecimal, formatDecimal, compareDecimals, divDecimals, mulDecimals, subDecimals, addDecimals } from '../utils/decimal-math.util.js';
+import { toDecimal, formatDecimal, compareDecimals, divDecimals, mulDecimals, subDecimals, addDecimals, isZeroDecimal } from '../utils/decimal-math.util.js';
 import { calculateInstallmentSchedule } from '../utils/installment-calculator.util.js';
 import { currentBusinessDateInBangkok, toBangkokDateString, normalizeBangkokDate, getBangkokStartOfDayUtc } from '../utils/calendar-date.util.js';
-import { calculateMeterUsageUnits, parseMeterIntegerReading } from '../utils/meter-billing-calculator.util.js';
+import { calculateMeterUsageUnits, parseMeterIntegerReading, calculateMeterRowPreview, TransientRowDraft, RoomPreviewContext } from '../utils/meter-billing-calculator.util.js';
 import { normalizeUtilityBillingMode } from '../utils/billing-mode-normalizer.util.js';
 import { resolveDailyTimestampsAndPricing } from './daily-stay.service.js';
 import {
@@ -1483,6 +1483,14 @@ export class MeterService {
       throw err;
     }
 
+    const canonicalRateSnapshot = rateSnapshot
+      ? {
+          ...rateSnapshot,
+          waterBillingType: normalizeUtilityBillingMode(rateSnapshot.waterBillingType),
+          electricityBillingType: normalizeUtilityBillingMode(rateSnapshot.electricityBillingType),
+        }
+      : null;
+
     const prisma = getPrismaClient();
     const roomsResult = await this.roomRepo.findAll(dormitoryId, {
       pageSize: ENTITLEMENT_ROOM_LIMITS.PAID,
@@ -1681,6 +1689,20 @@ export class MeterService {
       billsByRoomMap.set(b.roomId, list);
     }
 
+    // Load meter readings for this cycle
+    const cycleReadings = await prisma.meterReading.findMany({
+      where: {
+        dormitoryId,
+        billingCycleId,
+      },
+    });
+    const readingsByRoomMap = new Map<string, typeof cycleReadings>();
+    for (const r of cycleReadings) {
+      const list = readingsByRoomMap.get(r.roomId) || [];
+      list.push(r);
+      readingsByRoomMap.set(r.roomId, list);
+    }
+
     const roomContexts = rooms.map((room) => {
       let billingSource: 'CONTRACT' | 'PROVISIONAL_MONTHLY' | 'PROVISIONAL_TERM' | 'DAILY_STAY' | 'NONE' = 'NONE';
       let rentAmount = '0.00';
@@ -1834,52 +1856,6 @@ export class MeterService {
       const snapshotPeopleCount = snap ? snap.peopleCount : null;
       const currentHouseholdPeopleCount = householdMap.get(room.id) ?? 0;
 
-      // Charge Components & Amount Due Breakdown
-      const roomBills = billsByRoomMap.get(room.id) || [];
-      const chargeComponents: Array<{
-        type: string;
-        label: string;
-        amount: string;
-        status: 'PAID' | 'UNPAID' | 'DRAFT';
-        paidAt?: string | null;
-        occurredInDisplayedPeriod: boolean;
-        includedInAmountDue: boolean;
-      }> = [];
-
-      let amountDueDec = toDecimal('0.00');
-
-      for (const bill of roomBills) {
-        const isPaid = bill.status === 'paid' || bill.status === 'PAID';
-        const billTotal = toDecimal(bill.totalAmount.toString());
-        const billKind = bill.billKind || 'MONTHLY_UTILITY';
-
-        let label = 'บิลรายเดือน';
-        if (billKind === 'RENT') {
-          label = billingSource === 'PROVISIONAL_TERM' ? 'ค่าเช่า (เทอม)' : 'ค่าเช่า (เดือน)';
-        } else if (billKind === 'DEPOSIT') {
-          label = 'ค่าประกัน';
-        } else if (billKind === 'MONTHLY_UTILITY') {
-          label = 'บิลรายเดือน';
-        }
-
-        const isUnpaid = !isPaid;
-        if (isUnpaid) {
-          amountDueDec = addDecimals(amountDueDec, billTotal);
-        }
-
-        chargeComponents.push({
-          type: billKind.toLowerCase(),
-          label,
-          amount: formatDecimal(billTotal),
-          status: isPaid ? 'PAID' : 'UNPAID',
-          paidAt: bill.paidAt ? bill.paidAt.toISOString() : null,
-          occurredInDisplayedPeriod: true,
-          includedInAmountDue: isUnpaid,
-        });
-      }
-
-      const periodDetailCount = chargeComponents.filter((c) => c.occurredInDisplayedPeriod).length;
-
       // Calculate distinct daily stays in cycle using canonical half-open boundaries
       const roomDailyStaysInCycle = allDailyStays.filter((d) => {
         if (d.roomId !== room.id) return false;
@@ -1941,6 +1917,150 @@ export class MeterService {
         isLineLinked = Boolean(unpaidDailyStay.tenant?.linkedUserId);
         isDailyFinancialTail = true;
       }
+
+      // Charge Components & Amount Due Breakdown
+      const roomBills = billsByRoomMap.get(room.id) || [];
+      const chargeComponents: Array<{
+        type: string;
+        label: string;
+        amount: string;
+        status: 'PAID' | 'UNPAID' | 'PREVIEW' | 'INVALID';
+        paidAt?: string | null;
+        occurredInDisplayedPeriod: boolean;
+        includedInAmountDue: boolean;
+      }> = [];
+
+      let amountDueDec = toDecimal('0.00');
+
+      if (billingSource === 'DAILY_STAY') {
+        if (showDailyDepositLine) {
+          const depAmt = toDecimal(dailyDepositAmount || '0.00');
+          const isDepositPaid = Boolean(isDailyDepositPaidInDisplayedPeriod);
+          if (!isZeroDecimal(depAmt)) {
+            chargeComponents.push({
+              type: 'deposit',
+              label: 'ค่าประกัน',
+              amount: formatDecimal(depAmt),
+              status: isDepositPaid ? 'PAID' : 'UNPAID',
+              paidAt: dailyDepositPaidAt,
+              occurredInDisplayedPeriod: true,
+              includedInAmountDue: !isDepositPaid,
+            });
+            if (!isDepositPaid) {
+              amountDueDec = addDecimals(amountDueDec, depAmt);
+            }
+          }
+        }
+
+        const rentAmt = toDecimal(rentAmount || '0.00');
+        if (!isZeroDecimal(rentAmt)) {
+          chargeComponents.push({
+            type: 'rent',
+            label: 'ค่าเช่า (วัน)',
+            amount: formatDecimal(rentAmt),
+            status: isDailyRentPaid ? 'PAID' : 'UNPAID',
+            paidAt: null,
+            occurredInDisplayedPeriod: true,
+            includedInAmountDue: !isDailyRentPaid,
+          });
+          if (!isDailyRentPaid) {
+            amountDueDec = addDecimals(amountDueDec, rentAmt);
+          }
+        }
+      } else {
+        let hasMonthlyUtilityBill = false;
+
+        for (const bill of roomBills) {
+          const isPaid = bill.status === 'paid' || bill.status === 'PAID';
+          const billTotal = toDecimal(bill.totalAmount.toString());
+          const billOutstanding = toDecimal((bill.outstandingAmount ?? (isPaid ? '0.00' : bill.totalAmount)).toString());
+          const billKind = bill.billKind || 'MONTHLY_UTILITY';
+
+          if (billKind === 'MONTHLY_UTILITY' || billKind === 'LEGACY_COMBINED') {
+            hasMonthlyUtilityBill = true;
+          }
+
+          let label = 'บิลรายเดือน';
+          if (billKind === 'RENT') {
+            label = billingSource === 'PROVISIONAL_TERM' ? 'ค่าเช่า (เทอม)' : 'ค่าเช่า (เดือน)';
+          } else if (billKind === 'DEPOSIT') {
+            label = 'ค่าประกัน';
+          } else if (billKind === 'MONTHLY_UTILITY') {
+            label = 'บิลรายเดือน';
+          }
+
+          const isUnpaid = !isPaid;
+          if (isUnpaid) {
+            amountDueDec = addDecimals(amountDueDec, billOutstanding);
+          }
+
+          chargeComponents.push({
+            type: billKind.toLowerCase(),
+            label,
+            amount: formatDecimal(billTotal),
+            status: isPaid ? 'PAID' : 'UNPAID',
+            paidAt: bill.paidAt ? bill.paidAt.toISOString() : null,
+            occurredInDisplayedPeriod: true,
+            includedInAmountDue: isUnpaid,
+          });
+        }
+
+        // Derive unissued Monthly Utility PREVIEW if no persisted bill exists and room is eligible
+        const roomReadings = readingsByRoomMap.get(room.id) || [];
+        const waterReading = roomReadings.find((r) => r.meterType === 'water');
+        const elecReading = roomReadings.find((r) => r.meterType === 'electricity');
+
+        if (!hasMonthlyUtilityBill && !isFutureReservation && roomReadings.length > 0) {
+          const draft: TransientRowDraft = {
+            waterPrev: waterReading?.previousReading != null ? waterReading.previousReading.toString() : undefined,
+            waterCurr: waterReading?.currentReading != null ? waterReading.currentReading.toString() : undefined,
+            elecPrev: elecReading?.previousReading != null ? elecReading.previousReading.toString() : undefined,
+            elecCurr: elecReading?.currentReading != null ? elecReading.currentReading.toString() : undefined,
+            peopleCount: snapshotPeopleCount ?? currentHouseholdPeopleCount ?? 0,
+            overdueAmount: snapshotManualOutstanding ?? '0.00',
+            otherFees: snapshotOtherFees ?? [],
+          };
+
+          const roomCtxLike: RoomPreviewContext = {
+            roomId: room.id,
+            roomNumber: room.roomNumber,
+            rentAmount: rentAmount || '0.00',
+            billingSource,
+            currentHouseholdPeopleCount,
+            snapshotPeopleCount,
+            parkingQuantity,
+          };
+
+          try {
+            const preview = calculateMeterRowPreview(roomCtxLike, (canonicalRateSnapshot as any) ?? undefined, draft);
+            const previewTotalDec = toDecimal(preview.totalAmount);
+            if (!isZeroDecimal(previewTotalDec)) {
+              amountDueDec = addDecimals(amountDueDec, previewTotalDec);
+              chargeComponents.push({
+                type: 'monthly_utility',
+                label: 'บิลรายเดือน',
+                amount: formatDecimal(previewTotalDec),
+                status: 'PREVIEW',
+                paidAt: null,
+                occurredInDisplayedPeriod: true,
+                includedInAmountDue: true,
+              });
+            }
+          } catch {
+            chargeComponents.push({
+              type: 'monthly_utility',
+              label: 'บิลรายเดือน',
+              amount: '0.00',
+              status: 'INVALID',
+              paidAt: null,
+              occurredInDisplayedPeriod: true,
+              includedInAmountDue: false,
+            });
+          }
+        }
+      }
+
+      const periodDetailCount = chargeComponents.filter((c) => c.occurredInDisplayedPeriod).length;
 
       // Calculate if room has any bookable interval in this cycle using canonical physical intervals
       const blockingIntervals: Array<{ start: Date; end: Date }> = [];
@@ -2011,14 +2131,6 @@ export class MeterService {
         isDailyFinancialTail,
       };
     });
-
-    const canonicalRateSnapshot = rateSnapshot
-      ? {
-          ...rateSnapshot,
-          waterBillingType: normalizeUtilityBillingMode(rateSnapshot.waterBillingType),
-          electricityBillingType: normalizeUtilityBillingMode(rateSnapshot.electricityBillingType),
-        }
-      : null;
 
     return {
       billingCycleId: cycle.id,

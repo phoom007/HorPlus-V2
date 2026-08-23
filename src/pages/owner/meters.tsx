@@ -293,172 +293,37 @@ export interface OwnerFinancialBreakdown {
 }
 
 export function getOwnerFinancialBreakdown(
-  row: MeterRowState,
-  roomCtx: any,
-  rateSnapshot: any,
-  bills: Bill[] = [],
-  selectedBillingCycleId: string
+  roomCtxOrRow: any,
+  roomCtxIfSecond?: any,
+  _rateSnapshot?: any,
+  _bills?: any,
+  _selectedBillingCycleId?: any
 ): OwnerFinancialBreakdown {
-  if (roomCtx?.billingSource === 'DAILY_STAY') {
-    const baseRent = Number(roomCtx.rentAmount) || 0;
-    const isDailyRentPaid = Boolean(roomCtx?.isDailyRentPaid || roomCtx?.isDailyPaid || roomCtx?.isPaid);
-    const isDailyDepositPaid = Boolean(roomCtx?.isDailyDepositPaidInDisplayedPeriod || roomCtx?.isDepositPaid);
-    const depositDue = (roomCtx.showDailyDepositLine && !isDailyDepositPaid)
-      ? (Number(roomCtx.dailyDepositAmount) || 0)
-      : 0;
-    const rentDue = isDailyRentPaid ? 0 : baseRent;
-    const totalDailyDue = rentDue + depositDue;
+  const roomCtx = (roomCtxIfSecond && (roomCtxIfSecond.chargeComponents || roomCtxIfSecond.amountDue !== undefined || roomCtxIfSecond.roomId))
+    ? roomCtxIfSecond
+    : roomCtxOrRow;
 
-    const components: TopLevelFinancialComponent[] = [];
-    if (roomCtx.showDailyDepositLine) {
-      const depAmt = Number(roomCtx.dailyDepositAmount || 0);
-      components.push({
-        label: 'ค่าประกัน',
-        amount: depAmt,
-        formattedAmount: formatMoneyDisplay(formatScaled2(parseScaled2(depAmt))),
-        status: isDailyDepositPaid ? 'PAID' : 'UNPAID',
-        title: isDailyDepositPaid ? 'ชำระแล้ว' : 'รอชำระเงิน',
-      });
-    }
+  const amountDue = roomCtx?.amountDue ?? '0.00';
+  const components: TopLevelFinancialComponent[] = (roomCtx?.chargeComponents || []).map((c: any) => {
+    const rawAmt = c.amount ?? '0.00';
+    const status = (c.status || 'UNPAID') as TopLevelFinancialComponent['status'];
+    let title = 'รอชำระเงิน';
+    if (status === 'PAID') title = 'ชำระแล้ว';
+    else if (status === 'PREVIEW') title = 'ยังไม่ออกบิล (พรีวิว)';
+    else if (status === 'INVALID') title = 'รูปแบบการคิดค่าบริการไม่ถูกต้อง';
 
-    if (baseRent > 0) {
-      components.push({
-        label: 'ค่าเช่า (วัน)',
-        amount: baseRent,
-        formattedAmount: formatMoneyDisplay(formatScaled2(parseScaled2(baseRent))),
-        status: isDailyRentPaid ? 'PAID' : 'UNPAID',
-        title: isDailyRentPaid ? 'ชำระแล้ว' : 'รอชำระเงิน',
-      });
-    }
-
-    const opStr = formatScaled2(parseScaled2(totalDailyDue));
     return {
-      operationalAmount: totalDailyDue,
-      formattedAmount: formatMoneyDisplay(opStr),
-      components,
+      label: c.label || 'บิลรายเดือน',
+      amount: typeof rawAmt === 'number' ? rawAmt : parseFloat(String(rawAmt).replace(/,/g, '')) || 0,
+      formattedAmount: formatMoneyDisplay(rawAmt),
+      status,
+      title,
     };
-  }
-
-  const preview = calculateMeterRowPreview(roomCtx, rateSnapshot, {
-    waterCurr: row.waterCurr,
-    waterPrev: row.waterPrev,
-    elecCurr: row.elecCurr,
-    elecPrev: row.elecPrev,
-    peopleCount: row.peopleCount,
-    overdueAmount: row.overdueAmount,
-    otherFees: row.otherFees || [],
   });
 
-  const previewSatang = preview.status === 'VALID' ? parseScaled2(preview.totalAmount) : 0n;
-
-  const roomBills = (bills || []).filter(b => b.roomId === row.roomId && (b.billingCycleId === selectedBillingCycleId || b.cycleId === selectedBillingCycleId) && b.status !== 'cancelled' && (b.status as string) !== 'void');
-  const monthlyBill = roomBills.find(b => b.billKind === 'MONTHLY_UTILITY');
-  const depositBill = roomBills.find(b => b.billKind === 'DEPOSIT');
-  const rentBill = roomBills.find(b => b.billKind === 'RENT');
-
-  const components: TopLevelFinancialComponent[] = [];
-  let operationalSatang = 0n;
-
-  if (monthlyBill) {
-    const isPaid = (monthlyBill.status as string) === 'paid' || (monthlyBill.status as string) === 'PAID';
-    const bTotal = parseScaled2(monthlyBill.totalAmount);
-    const bOutstanding = parseScaled2(monthlyBill.outstandingAmount ?? (isPaid ? '0.00' : monthlyBill.totalAmount));
-    if (!isPaid) {
-      operationalSatang += bOutstanding;
-    }
-    components.push({
-      label: 'บิลรายเดือน',
-      amount: Number(formatScaled2(bTotal)),
-      formattedAmount: formatMoneyDisplay(formatScaled2(bTotal)),
-      status: isPaid ? 'PAID' : 'UNPAID',
-      title: isPaid ? 'ชำระแล้ว' : 'รอชำระเงิน',
-    });
-  } else {
-    if (preview.status === 'INVALID') {
-      components.push({
-        label: 'บิลรายเดือน',
-        amount: 0,
-        formattedAmount: 'รูปแบบคิดเงินไม่ถูกต้อง',
-        status: 'INVALID',
-        title: 'รูปแบบการคิดค่าบริการไม่ถูกต้อง',
-      });
-    } else {
-      const amtStr = preview.totalAmount;
-      const pSatang = previewSatang;
-      operationalSatang += pSatang;
-      if (pSatang > 0n || roomCtx?.billingSource !== 'NONE') {
-        components.push({
-          label: 'บิลรายเดือน',
-          amount: Number(amtStr),
-          formattedAmount: formatMoneyDisplay(amtStr),
-          status: 'PREVIEW',
-          title: 'ยังไม่ออกบิล (พรีวิว)',
-        });
-      }
-    }
-  }
-
-  if (depositBill) {
-    const isPaid = (depositBill.status as string) === 'paid' || (depositBill.status as string) === 'PAID';
-    const bTotal = parseScaled2(depositBill.totalAmount);
-    const bOutstanding = parseScaled2(depositBill.outstandingAmount ?? (isPaid ? '0.00' : depositBill.totalAmount));
-    if (!isPaid) {
-      operationalSatang += bOutstanding;
-    }
-    components.push({
-      label: 'ค่าประกัน',
-      amount: Number(formatScaled2(bTotal)),
-      formattedAmount: formatMoneyDisplay(formatScaled2(bTotal)),
-      status: isPaid ? 'PAID' : 'UNPAID',
-      title: isPaid ? 'ชำระแล้ว' : 'รอชำระเงิน',
-    });
-  } else if (Number(roomCtx?.depositAmount || 0) > 0) {
-    const isPaid = Boolean(roomCtx?.isDepositPaid);
-    const dSatang = parseScaled2(roomCtx.depositAmount);
-    if (!isPaid) {
-      operationalSatang += dSatang;
-    }
-    components.push({
-      label: 'ค่าประกัน',
-      amount: Number(roomCtx.depositAmount),
-      formattedAmount: formatMoneyDisplay(formatScaled2(dSatang)),
-      status: isPaid ? 'PAID' : 'UNPAID',
-      title: isPaid ? 'ชำระแล้ว' : 'รอชำระเงิน',
-    });
-  }
-
-  if (rentBill) {
-    const isPaid = (rentBill.status as string) === 'paid' || (rentBill.status as string) === 'PAID';
-    const bTotal = parseScaled2(rentBill.totalAmount);
-    const bOutstanding = parseScaled2(rentBill.outstandingAmount ?? (isPaid ? '0.00' : rentBill.totalAmount));
-    if (!isPaid) {
-      operationalSatang += bOutstanding;
-    }
-    const isTerm = roomCtx?.billingSource === 'PROVISIONAL_TERM' || roomCtx?.billingSource === 'TERM_CONTRACT';
-    components.push({
-      label: isTerm ? 'ค่าเช่า (เทอม)' : 'ค่าเช่า (เดือน)',
-      amount: Number(formatScaled2(bTotal)),
-      formattedAmount: formatMoneyDisplay(formatScaled2(bTotal)),
-      status: isPaid ? 'PAID' : 'UNPAID',
-      title: isPaid ? 'ชำระแล้ว' : 'รอชำระเงิน',
-    });
-  } else if (Number(roomCtx?.rentAmount || 0) > 0 && roomCtx?.billingSource !== 'NONE' && !roomCtx?.isFutureReservation) {
-    const rSatang = parseScaled2(roomCtx.rentAmount);
-    operationalSatang += rSatang;
-    const isTerm = roomCtx?.billingSource === 'PROVISIONAL_TERM' || roomCtx?.billingSource === 'TERM_CONTRACT';
-    components.push({
-      label: isTerm ? 'ค่าเช่า (เทอม)' : 'ค่าเช่า (เดือน)',
-      amount: Number(roomCtx.rentAmount),
-      formattedAmount: formatMoneyDisplay(formatScaled2(rSatang)),
-      status: 'PREVIEW',
-      title: 'ยังไม่ออกบิล (พรีวิว)',
-    });
-  }
-
-  const opStr = formatScaled2(operationalSatang);
   return {
-    operationalAmount: Number(opStr),
-    formattedAmount: formatMoneyDisplay(opStr),
+    operationalAmount: typeof amountDue === 'number' ? amountDue : parseFloat(String(amountDue).replace(/,/g, '')) || 0,
+    formattedAmount: formatMoneyDisplay(amountDue),
     components,
   };
 }
@@ -2719,7 +2584,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                     {/* Calculated Total & Financial Breakdown */}
                     <td className="p-4 text-right">
                       {(() => {
-                        const breakdown = getOwnerFinancialBreakdown(row, roomCtx, rateSnapshot, bills, selectedBillingCycleId);
+                        const breakdown = getOwnerFinancialBreakdown(roomCtx);
                         const amountDue = breakdown.formattedAmount;
                         const chargeComponents = breakdown.components;
                         const isExpanded = Boolean(expandedBreakdowns[row.roomId]);

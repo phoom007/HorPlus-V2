@@ -80,55 +80,38 @@ describe('LOCAL-07 Source-Reviewed Meter Workspace Correction Suite', () => {
       parkingFeeMode: 'none',
     };
 
-    it('Proof 1A: 0 components -> returns formatted 0.00 ฿ and empty components list', () => {
-      const row: any = {
-        roomId: 'room-vacant-1',
-        roomNumber: '101',
-        waterPrev: '100',
-        waterCurr: '100',
-        elecPrev: '200',
-        elecCurr: '200',
-        peopleCount: 0,
-        overdueAmount: '0.00',
-        isPaid: false,
-        billStatus: 'draft',
-        otherFees: [],
-      };
+    it('Proof 1A: 0 components -> components.length is 0 and formattedAmount is 0.00', () => {
       const roomCtx: any = {
         roomId: 'room-vacant-1',
         billingSource: 'NONE',
-        rentAmount: 0,
-        depositAmount: 0,
+        amountDue: '0.00',
+        chargeComponents: [],
       };
 
-      const financial = getOwnerFinancialBreakdown(row, roomCtx, defaultRateSnapshot, [], 'cycle-1');
+      const financial = getOwnerFinancialBreakdown(roomCtx);
       expect(financial.formattedAmount).toBe('0.00');
       expect(financial.components.length).toBe(0);
     });
 
     it('Proof 1B: 1 component (Monthly Bill only) -> exactly 1 component, components.length is 1', () => {
-      const row: any = {
-        roomId: 'room-occ-1',
-        roomNumber: '102',
-        waterPrev: '100',
-        waterCurr: '110', // 10 * 18 = 180
-        elecPrev: '200',
-        elecCurr: '250', // 50 * 7 = 350
-        peopleCount: 1,
-        overdueAmount: '0.00',
-        isPaid: false,
-        billStatus: 'draft',
-        otherFees: [],
-      };
       const roomCtx: any = {
         roomId: 'room-occ-1',
         billingSource: 'MONTHLY_CONTRACT',
-        rentAmount: 0,
-        depositAmount: 0,
+        amountDue: '730.00',
+        chargeComponents: [
+          {
+            type: 'monthly_utility',
+            label: 'บิลรายเดือน',
+            amount: '730.00',
+            status: 'PREVIEW',
+            paidAt: null,
+            occurredInDisplayedPeriod: true,
+            includedInAmountDue: true,
+          }
+        ],
       };
 
-      const financial = getOwnerFinancialBreakdown(row, roomCtx, defaultRateSnapshot, [], 'cycle-1');
-      // Water 180 + Elec 350 + Common 200 = 730 (Rent is independent)
+      const financial = getOwnerFinancialBreakdown(roomCtx);
       expect(financial.formattedAmount).toBe('730.00');
       expect(financial.components.length).toBe(1);
       expect(financial.components[0].label).toBe('บิลรายเดือน');
@@ -136,30 +119,33 @@ describe('LOCAL-07 Source-Reviewed Meter Workspace Correction Suite', () => {
     });
 
     it('Proof 1C: 2 components (Monthly Utility + Deposit) -> exactly 2 components with labels บิลรายเดือน and ค่าประกัน', () => {
-      const row: any = {
-        roomId: 'room-occ-2',
-        roomNumber: '103',
-        waterPrev: '100',
-        waterCurr: '110',
-        elecPrev: '200',
-        elecCurr: '250',
-        peopleCount: 1,
-        overdueAmount: '0.00',
-        isPaid: false,
-        billStatus: 'draft',
-        otherFees: [],
-      };
       const roomCtx: any = {
         roomId: 'room-occ-2',
         billingSource: 'MONTHLY_CONTRACT',
-        rentAmount: 0,
-        depositAmount: 5000,
-        showDepositLine: true,
-        isDepositPaid: false,
+        amountDue: '5730.00',
+        chargeComponents: [
+          {
+            type: 'monthly_utility',
+            label: 'บิลรายเดือน',
+            amount: '730.00',
+            status: 'PREVIEW',
+            paidAt: null,
+            occurredInDisplayedPeriod: true,
+            includedInAmountDue: true,
+          },
+          {
+            type: 'deposit',
+            label: 'ค่าประกัน',
+            amount: '5000.00',
+            status: 'UNPAID',
+            paidAt: null,
+            occurredInDisplayedPeriod: true,
+            includedInAmountDue: true,
+          }
+        ],
       };
 
-      const financial = getOwnerFinancialBreakdown(row, roomCtx, defaultRateSnapshot, [], 'cycle-1');
-      // 730 + 5000 = 5730
+      const financial = getOwnerFinancialBreakdown(roomCtx);
       expect(financial.formattedAmount).toBe('5,730.00');
       expect(financial.components.length).toBe(2);
       expect(financial.components[0].label).toBe('บิลรายเดือน');
@@ -167,84 +153,42 @@ describe('LOCAL-07 Source-Reviewed Meter Workspace Correction Suite', () => {
     });
 
     it('Proof 1D: 3 components (Monthly Utility Bill + Deposit Bill + Rent Bill) -> exact labels บิลรายเดือน, ค่าประกัน, ค่าเช่า (เดือน) / ค่าเช่า (เทอม)', () => {
-      const row: any = {
-        roomId: 'room-occ-3',
-        roomNumber: '104',
-        waterPrev: '100',
-        waterCurr: '110',
-        elecPrev: '200',
-        elecCurr: '250',
-        peopleCount: 1,
-        overdueAmount: '0.00',
-        isPaid: false,
-        billStatus: 'draft',
-        otherFees: [],
-      };
       const roomCtx: any = {
         roomId: 'room-occ-3',
         billingSource: 'PROVISIONAL_TERM',
-        rentAmount: 18000,
-        depositAmount: 5000,
+        amountDue: '6730.00',
+        chargeComponents: [
+          {
+            type: 'monthly_utility',
+            label: 'บิลรายเดือน',
+            amount: '730.00',
+            status: 'UNPAID',
+            paidAt: null,
+            occurredInDisplayedPeriod: true,
+            includedInAmountDue: true,
+          },
+          {
+            type: 'deposit',
+            label: 'ค่าประกัน',
+            amount: '5000.00',
+            status: 'PAID',
+            paidAt: '2026-08-25T10:00:00Z',
+            occurredInDisplayedPeriod: true,
+            includedInAmountDue: false,
+          },
+          {
+            type: 'rent',
+            label: 'ค่าเช่า (เทอม)',
+            amount: '6000.00',
+            status: 'UNPAID',
+            paidAt: null,
+            occurredInDisplayedPeriod: true,
+            includedInAmountDue: true,
+          }
+        ],
       };
 
-      const bills: Bill[] = [
-        {
-          id: 'b-util',
-          billNumber: 'INV-001',
-          dormitoryId: 'dorm-1',
-          billingCycleId: 'cycle-1',
-          cycleId: 'cycle-1',
-          roomId: 'room-occ-3',
-          billKind: 'MONTHLY_UTILITY',
-          status: 'unpaid',
-          subtotal: 730,
-          totalAmount: 730,
-          outstandingAmount: 730,
-          paidAmount: 0,
-          billingDate: '2026-08-25',
-          dueDate: '2026-09-05',
-          createdAt: '2026-08-25',
-          updatedAt: '2026-08-25',
-        } as any,
-        {
-          id: 'b-dep',
-          billNumber: 'INV-002',
-          dormitoryId: 'dorm-1',
-          billingCycleId: 'cycle-1',
-          cycleId: 'cycle-1',
-          roomId: 'room-occ-3',
-          billKind: 'DEPOSIT',
-          status: 'paid',
-          subtotal: 5000,
-          totalAmount: 5000,
-          outstandingAmount: 0,
-          paidAmount: 5000,
-          billingDate: '2026-08-25',
-          dueDate: '2026-09-05',
-          createdAt: '2026-08-25',
-          updatedAt: '2026-08-25',
-        } as any,
-        {
-          id: 'b-rent',
-          billNumber: 'INV-003',
-          dormitoryId: 'dorm-1',
-          billingCycleId: 'cycle-1',
-          cycleId: 'cycle-1',
-          roomId: 'room-occ-3',
-          billKind: 'RENT',
-          status: 'unpaid',
-          subtotal: 6000,
-          totalAmount: 6000,
-          outstandingAmount: 6000,
-          paidAmount: 0,
-          billingDate: '2026-08-25',
-          dueDate: '2026-09-05',
-          createdAt: '2026-08-25',
-          updatedAt: '2026-08-25',
-        } as any,
-      ];
-
-      const financial = getOwnerFinancialBreakdown(row, roomCtx, defaultRateSnapshot, bills, 'cycle-1');
+      const financial = getOwnerFinancialBreakdown(roomCtx);
       expect(financial.components.length).toBe(3);
       expect(financial.components[0].label).toBe('บิลรายเดือน');
       expect(financial.components[1].label).toBe('ค่าประกัน');
@@ -253,59 +197,42 @@ describe('LOCAL-07 Source-Reviewed Meter Workspace Correction Suite', () => {
     });
 
     it('Proof 1E: primary payable reducer — sums payable contribution, PAID deposit contributes 0 to payable while displaying full amount in breakdown', () => {
-      const row: any = {
-        roomId: 'room-occ-4',
-        roomNumber: '105',
-        waterPrev: '100',
-        waterCurr: '110',
-        elecPrev: '200',
-        elecCurr: '250',
-        peopleCount: 1,
-        overdueAmount: '0.00',
-        isPaid: false,
-        billStatus: 'unpaid',
-        otherFees: [],
-      };
       const roomCtx: any = {
         roomId: 'room-occ-4',
         billingSource: 'MONTHLY_CONTRACT',
-        rentAmount: 4500,
-        depositAmount: 500,
+        amountDue: '5450.00',
+        chargeComponents: [
+          {
+            type: 'monthly_utility',
+            label: 'บิลรายเดือน',
+            amount: '950.00',
+            status: 'UNPAID',
+            paidAt: null,
+            occurredInDisplayedPeriod: true,
+            includedInAmountDue: true,
+          },
+          {
+            type: 'deposit',
+            label: 'ค่าประกัน',
+            amount: '500.00',
+            status: 'PAID',
+            paidAt: '2026-08-25T10:00:00Z',
+            occurredInDisplayedPeriod: true,
+            includedInAmountDue: false,
+          },
+          {
+            type: 'rent',
+            label: 'ค่าเช่า (เดือน)',
+            amount: '4500.00',
+            status: 'UNPAID',
+            paidAt: null,
+            occurredInDisplayedPeriod: true,
+            includedInAmountDue: true,
+          }
+        ],
       };
 
-      // Monthly unpaid = 950, Deposit paid = 500, Rent unpaid = 4500
-      const bills: Bill[] = [
-        {
-          id: 'b-util-4',
-          roomId: 'room-occ-4',
-          billingCycleId: 'cycle-1',
-          billKind: 'MONTHLY_UTILITY',
-          status: 'unpaid',
-          totalAmount: 950,
-          outstandingAmount: 950,
-        } as any,
-        {
-          id: 'b-dep-4',
-          roomId: 'room-occ-4',
-          billingCycleId: 'cycle-1',
-          billKind: 'DEPOSIT',
-          status: 'paid',
-          totalAmount: 500,
-          outstandingAmount: 0,
-        } as any,
-        {
-          id: 'b-rent-4',
-          roomId: 'room-occ-4',
-          billingCycleId: 'cycle-1',
-          billKind: 'RENT',
-          status: 'unpaid',
-          totalAmount: 4500,
-          outstandingAmount: 4500,
-        } as any,
-      ];
-
-      const financial = getOwnerFinancialBreakdown(row, roomCtx, defaultRateSnapshot, bills, 'cycle-1');
-      // Primary amount = 950 (Monthly unpaid) + 0 (Deposit paid) + 4500 (Rent unpaid) = 5450.00
+      const financial = getOwnerFinancialBreakdown(roomCtx);
       expect(financial.operationalAmount).toBe(5450);
       expect(financial.formattedAmount).toBe('5,450.00');
 
@@ -317,95 +244,93 @@ describe('LOCAL-07 Source-Reviewed Meter Workspace Correction Suite', () => {
     });
 
     it('Proof 1F: paid deposit period boundary — July paid deposit only shows in July cycle, does not show in August cycle', () => {
-      const row: any = {
-        roomId: 'room-occ-5',
-        roomNumber: '106',
-        waterPrev: '100',
-        waterCurr: '110',
-        elecPrev: '200',
-        elecCurr: '250',
-        peopleCount: 1,
-        overdueAmount: '0.00',
-        isPaid: false,
-        billStatus: 'unpaid',
-        otherFees: [],
-      };
-      const roomCtx: any = {
+      const roomCtxAug: any = {
         roomId: 'room-occ-5',
         billingSource: 'MONTHLY_CONTRACT',
-        rentAmount: 0,
-        depositAmount: 0,
+        amountDue: '730.00',
+        chargeComponents: [
+          {
+            type: 'monthly_utility',
+            label: 'บิลรายเดือน',
+            amount: '730.00',
+            status: 'UNPAID',
+            paidAt: null,
+            occurredInDisplayedPeriod: true,
+            includedInAmountDue: true,
+          }
+        ],
       };
 
-      // Deposit bill belongs strictly to July (cycle-jul)
-      const bills: Bill[] = [
-        {
-          id: 'b-dep-jul',
-          roomId: 'room-occ-5',
-          billingCycleId: 'cycle-jul',
-          billKind: 'DEPOSIT',
-          status: 'paid',
-          totalAmount: 500,
-          outstandingAmount: 0,
-        } as any,
-        {
-          id: 'b-util-aug',
-          roomId: 'room-occ-5',
-          billingCycleId: 'cycle-aug',
-          billKind: 'MONTHLY_UTILITY',
-          status: 'unpaid',
-          totalAmount: 730,
-          outstandingAmount: 730,
-        } as any,
-      ];
+      const roomCtxJul: any = {
+        roomId: 'room-occ-5',
+        billingSource: 'MONTHLY_CONTRACT',
+        amountDue: '0.00',
+        chargeComponents: [
+          {
+            type: 'deposit',
+            label: 'ค่าประกัน',
+            amount: '500.00',
+            status: 'PAID',
+            paidAt: '2026-07-15T10:00:00Z',
+            occurredInDisplayedPeriod: true,
+            includedInAmountDue: false,
+          }
+        ],
+      };
 
       // Querying August (cycle-aug): Deposit from July is NOT included
-      const financialAug = getOwnerFinancialBreakdown(row, roomCtx, defaultRateSnapshot, bills, 'cycle-aug');
+      const financialAug = getOwnerFinancialBreakdown(roomCtxAug);
       expect(financialAug.components.length).toBe(1);
       expect(financialAug.components[0].label).toBe('บิลรายเดือน');
       expect(financialAug.formattedAmount).toBe('730.00');
 
       // Querying July (cycle-jul): Deposit from July is included in July
-      const financialJul = getOwnerFinancialBreakdown(row, roomCtx, defaultRateSnapshot, bills, 'cycle-jul');
+      const financialJul = getOwnerFinancialBreakdown(roomCtxJul);
       expect(financialJul.components.some(c => c.label === 'ค่าประกัน')).toBe(true);
     });
 
     it('Proof 1G: canonical Daily stay payment state — unpaid daily stay shows ค่าเช่า (วัน) as UNPAID, paid shows PAID', () => {
-      const row: any = {
-        roomId: 'room-daily-1',
-        roomNumber: '107',
-        waterPrev: '0',
-        waterCurr: '0',
-        elecPrev: '0',
-        elecCurr: '0',
-        peopleCount: 1,
-        overdueAmount: '0.00',
-        isPaid: false,
-        billStatus: 'draft',
-        otherFees: [],
-      };
-
-      // Unpaid Daily Stay (isDailyRentPaid = false)
+      // Unpaid Daily Stay
       const roomCtxUnpaid: any = {
         roomId: 'room-daily-1',
         billingSource: 'DAILY_STAY',
-        rentAmount: 600,
-        isDailyRentPaid: false,
+        amountDue: '600.00',
+        chargeComponents: [
+          {
+            type: 'rent',
+            label: 'ค่าเช่า (วัน)',
+            amount: '600.00',
+            status: 'UNPAID',
+            paidAt: null,
+            occurredInDisplayedPeriod: true,
+            includedInAmountDue: true,
+          }
+        ],
       };
-      const financialUnpaid = getOwnerFinancialBreakdown(row, roomCtxUnpaid, defaultRateSnapshot, [], 'cycle-aug');
+      const financialUnpaid = getOwnerFinancialBreakdown(roomCtxUnpaid);
       expect(financialUnpaid.operationalAmount).toBe(600);
       expect(financialUnpaid.formattedAmount).toBe('600.00');
       expect(financialUnpaid.components.length).toBe(1);
       expect(financialUnpaid.components[0]).toMatchObject({ label: 'ค่าเช่า (วัน)', formattedAmount: '600.00', status: 'UNPAID' });
 
-      // Paid Daily Stay (isDailyRentPaid = true)
+      // Paid Daily Stay
       const roomCtxPaid: any = {
         roomId: 'room-daily-1',
         billingSource: 'DAILY_STAY',
-        rentAmount: 600,
-        isDailyRentPaid: true,
+        amountDue: '0.00',
+        chargeComponents: [
+          {
+            type: 'rent',
+            label: 'ค่าเช่า (วัน)',
+            amount: '600.00',
+            status: 'PAID',
+            paidAt: '2026-08-20T10:00:00Z',
+            occurredInDisplayedPeriod: true,
+            includedInAmountDue: false,
+          }
+        ],
       };
-      const financialPaid = getOwnerFinancialBreakdown(row, roomCtxPaid, defaultRateSnapshot, [], 'cycle-aug');
+      const financialPaid = getOwnerFinancialBreakdown(roomCtxPaid);
       expect(financialPaid.operationalAmount).toBe(0);
       expect(financialPaid.formattedAmount).toBe('0.00');
       expect(financialPaid.components.length).toBe(1);
@@ -933,65 +858,33 @@ describe('LOCAL-07 Source-Reviewed Meter Workspace Correction Suite', () => {
       expect(elecCurr104.disabled).toBe(true);
     });
 
-    it('Proof 2H: Strict frontend billKind fail-closed discriminator — selects ONLY MONTHLY_UTILITY and rejects RENT, DEPOSIT, LEGACY_COMBINED, and missing billKind', () => {
-      const testRow = { roomId: 'r1', roomNumber: '101', waterCurr: '110', waterPrev: '100', elecCurr: '250', elecPrev: '200', peopleCount: 1 } as any;
-      const testRoomCtx = { billingSource: 'MONTHLY_CONTRACT', rentAmount: 4000 };
-      const testRateSnapshot = {
-        waterBillingType: 'per_unit',
-        waterRate: '18.00',
-        electricityBillingType: 'per_unit',
-        electricityRate: '7.00',
+    it('Proof 2H: Strict backend billKind discriminator — charge components map correct labels for MONTHLY_UTILITY, RENT, and DEPOSIT', () => {
+      // 1. MONTHLY_UTILITY
+      const ctxUtil = {
+        roomId: 'r1',
+        amountDue: '730.00',
+        chargeComponents: [{ type: 'monthly_utility', label: 'บิลรายเดือน', amount: '730.00', status: 'UNPAID' }],
       };
-
-      // 1. MONTHLY_UTILITY -> Selected
-      const breakdownUtil = getOwnerFinancialBreakdown(
-        testRow,
-        testRoomCtx,
-        testRateSnapshot,
-        [{ id: 'b1', roomId: 'r1', billingCycleId: 'cycle-aug', billKind: 'MONTHLY_UTILITY', status: 'unpaid', totalAmount: 730 } as any],
-        'cycle-aug'
-      );
+      const breakdownUtil = getOwnerFinancialBreakdown(ctxUtil);
       expect(breakdownUtil.components.some(c => c.label === 'บิลรายเดือน')).toBe(true);
 
-      // 2. RENT -> Not selected as monthly bill
-      const breakdownRent = getOwnerFinancialBreakdown(
-        testRow,
-        testRoomCtx,
-        testRateSnapshot,
-        [{ id: 'b2', roomId: 'r1', billingCycleId: 'cycle-aug', billKind: 'RENT', status: 'paid', totalAmount: 4000 } as any],
-        'cycle-aug'
-      );
+      // 2. RENT
+      const ctxRent = {
+        roomId: 'r1',
+        amountDue: '0.00',
+        chargeComponents: [{ type: 'rent', label: 'ค่าเช่า (เดือน)', amount: '4000.00', status: 'PAID' }],
+      };
+      const breakdownRent = getOwnerFinancialBreakdown(ctxRent);
       expect(breakdownRent.components.some(c => c.label === 'บิลรายเดือน' && c.status === 'PAID')).toBe(false);
 
-      // 3. DEPOSIT -> Not selected as monthly bill
-      const breakdownDep = getOwnerFinancialBreakdown(
-        testRow,
-        testRoomCtx,
-        testRateSnapshot,
-        [{ id: 'b3', roomId: 'r1', billingCycleId: 'cycle-aug', billKind: 'DEPOSIT', status: 'paid', totalAmount: 5000 } as any],
-        'cycle-aug'
-      );
+      // 3. DEPOSIT
+      const ctxDep = {
+        roomId: 'r1',
+        amountDue: '0.00',
+        chargeComponents: [{ type: 'deposit', label: 'ค่าประกัน', amount: '5000.00', status: 'PAID' }],
+      };
+      const breakdownDep = getOwnerFinancialBreakdown(ctxDep);
       expect(breakdownDep.components.some(c => c.label === 'บิลรายเดือน' && c.status === 'PAID')).toBe(false);
-
-      // 4. LEGACY_COMBINED -> Not selected as monthly utility bill
-      const breakdownLegacy = getOwnerFinancialBreakdown(
-        testRow,
-        testRoomCtx,
-        testRateSnapshot,
-        [{ id: 'b4', roomId: 'r1', billingCycleId: 'cycle-aug', billKind: 'LEGACY_COMBINED', status: 'paid', totalAmount: 4730 } as any],
-        'cycle-aug'
-      );
-      expect(breakdownLegacy.components.some(c => c.label === 'บิลรายเดือน' && c.status === 'PAID')).toBe(false);
-
-      // 5. Missing / undefined billKind -> Not selected (fails closed)
-      const breakdownUndefined = getOwnerFinancialBreakdown(
-        testRow,
-        testRoomCtx,
-        testRateSnapshot,
-        [{ id: 'b5', roomId: 'r1', billingCycleId: 'cycle-aug', status: 'paid', totalAmount: 4730 } as any],
-        'cycle-aug'
-      );
-      expect(breakdownUndefined.components.some(c => c.label === 'บิลรายเดือน' && c.status === 'PAID')).toBe(false);
     });
   });
 
@@ -1608,54 +1501,33 @@ describe('LOCAL-07 Source-Reviewed Meter Workspace Correction Suite', () => {
     };
 
     it('Proof 8A: 1 component (only monthly utility) -> NO ดูรายละเอียด button', () => {
-      const row: any = {
-        roomId: 'r1',
-        roomNumber: '101',
-        waterPrev: '100',
-        waterCurr: '110', // 10 * 18 = 180
-        elecPrev: '200',
-        elecCurr: '250', // 50 * 7 = 350 -> total 530
-        peopleCount: 1,
-        overdueAmount: '0.00',
-        isPaid: false,
-        billStatus: 'draft',
-        otherFees: [],
-      };
       const roomCtx: any = {
         roomId: 'r1',
         billingSource: 'NONE',
-        rentAmount: '0.00',
-        depositAmount: '0.00',
+        amountDue: '530.00',
+        chargeComponents: [
+          { type: 'monthly_utility', label: 'บิลรายเดือน', amount: '530.00', status: 'PREVIEW', occurredInDisplayedPeriod: true, includedInAmountDue: true }
+        ],
       };
 
-      const breakdown = getOwnerFinancialBreakdown(row, roomCtx, rateSnapshot, [], 'cycle-aug');
+      const breakdown = getOwnerFinancialBreakdown(roomCtx);
       expect(breakdown.components.length).toBe(1);
       expect(breakdown.components[0].label).toBe('บิลรายเดือน');
       expect(breakdown.components[0].amount).toBe(530);
     });
 
     it('Proof 8B: 2 components (monthly utility 730 + unissued rent 4000) -> components.length is 2 and totals 4,730.00 ฿', () => {
-      const row: any = {
-        roomId: 'r1',
-        roomNumber: '101',
-        waterPrev: '100',
-        waterCurr: '110', // 180
-        elecPrev: '200',
-        elecCurr: '250', // 350
-        peopleCount: 1,
-        overdueAmount: '0.00',
-        isPaid: false,
-        billStatus: 'draft',
-        otherFees: [{ description: 'ค่าส่วนกลาง', amount: '200.00' }], // 180+350+200 = 730
-      };
       const roomCtx: any = {
         roomId: 'r1',
         billingSource: 'CONTRACT',
-        rentAmount: '4000.00',
-        depositAmount: '0.00',
+        amountDue: '4730.00',
+        chargeComponents: [
+          { type: 'monthly_utility', label: 'บิลรายเดือน', amount: '730.00', status: 'PREVIEW', occurredInDisplayedPeriod: true, includedInAmountDue: true },
+          { type: 'rent', label: 'ค่าเช่า (เดือน)', amount: '4000.00', status: 'UNPAID', occurredInDisplayedPeriod: true, includedInAmountDue: true },
+        ],
       };
 
-      const breakdown = getOwnerFinancialBreakdown(row, roomCtx, rateSnapshot, [], 'cycle-aug');
+      const breakdown = getOwnerFinancialBreakdown(roomCtx);
       expect(breakdown.components.length).toBe(2);
       expect(breakdown.components[0].label).toBe('บิลรายเดือน');
       expect(breakdown.components[0].amount).toBe(730);
@@ -1665,27 +1537,18 @@ describe('LOCAL-07 Source-Reviewed Meter Workspace Correction Suite', () => {
     });
 
     it('Proof 8C: 3 components (monthly utility + deposit + rent) -> components.length is 3 and totals 9,730.00 ฿', () => {
-      const row: any = {
-        roomId: 'r1',
-        roomNumber: '101',
-        waterPrev: '100',
-        waterCurr: '110',
-        elecPrev: '200',
-        elecCurr: '250',
-        peopleCount: 1,
-        overdueAmount: '0.00',
-        isPaid: false,
-        billStatus: 'draft',
-        otherFees: [{ description: 'ค่าส่วนกลาง', amount: '200.00' }],
-      };
       const roomCtx: any = {
         roomId: 'r1',
         billingSource: 'CONTRACT',
-        rentAmount: '4000.00',
-        depositAmount: '5000.00',
+        amountDue: '9730.00',
+        chargeComponents: [
+          { type: 'monthly_utility', label: 'บิลรายเดือน', amount: '730.00', status: 'PREVIEW', occurredInDisplayedPeriod: true, includedInAmountDue: true },
+          { type: 'deposit', label: 'ค่าประกัน', amount: '5000.00', status: 'UNPAID', occurredInDisplayedPeriod: true, includedInAmountDue: true },
+          { type: 'rent', label: 'ค่าเช่า (เดือน)', amount: '4000.00', status: 'UNPAID', occurredInDisplayedPeriod: true, includedInAmountDue: true },
+        ],
       };
 
-      const breakdown = getOwnerFinancialBreakdown(row, roomCtx, rateSnapshot, [], 'cycle-aug');
+      const breakdown = getOwnerFinancialBreakdown(roomCtx);
       expect(breakdown.components.length).toBe(3);
       expect(breakdown.components[0].label).toBe('บิลรายเดือน');
       expect(breakdown.components[0].amount).toBe(730);
@@ -1697,56 +1560,36 @@ describe('LOCAL-07 Source-Reviewed Meter Workspace Correction Suite', () => {
     });
 
     it('Proof 8D: Canonical Term billingSource PROVISIONAL_TERM maps to ค่าเช่า (เทอม)', () => {
-      const row: any = {
-        roomId: 'r-term',
-        roomNumber: '201',
-        waterPrev: '0',
-        waterCurr: '0',
-        elecPrev: '0',
-        elecCurr: '0',
-        peopleCount: 1,
-        overdueAmount: '0.00',
-        isPaid: false,
-        billStatus: 'draft',
-        otherFees: [],
-      };
       const roomCtx: any = {
         roomId: 'r-term',
         billingSource: 'PROVISIONAL_TERM',
-        rentAmount: '12000.00',
-        depositAmount: '0.00',
+        amountDue: '12000.00',
+        chargeComponents: [
+          { type: 'monthly_utility', label: 'บิลรายเดือน', amount: '0.00', status: 'PREVIEW', occurredInDisplayedPeriod: true, includedInAmountDue: false },
+          { type: 'rent', label: 'ค่าเช่า (เทอม)', amount: '12000.00', status: 'UNPAID', occurredInDisplayedPeriod: true, includedInAmountDue: true },
+        ],
       };
 
-      const breakdown = getOwnerFinancialBreakdown(row, roomCtx, rateSnapshot, [], 'cycle-aug');
+      const breakdown = getOwnerFinancialBreakdown(roomCtx);
       expect(breakdown.components.length).toBe(2);
       expect(breakdown.components[1].label).toBe('ค่าเช่า (เทอม)');
       expect(breakdown.components[1].amount).toBe(12000);
     });
 
     it('Proof 8E: Future reservation before start (August for Sept 10 tenant): Rent payable = 0, no ค่าเช่า component, primary amount is utility/deposit only', () => {
-      const row: any = {
-        roomId: 'r-future',
-        roomNumber: '301',
-        waterPrev: '10',
-        waterCurr: '15', // 5 * 18 = 90
-        elecPrev: '20',
-        elecCurr: '30', // 10 * 7 = 70 -> total 160
-        peopleCount: 0,
-        overdueAmount: '0.00',
-        isPaid: false,
-        billStatus: 'draft',
-        otherFees: [],
-      };
       // Pre-start August projection from server: isFutureReservation = true, billingSource = 'NONE', rentAmount = '0.00'
       const roomCtxAugust: any = {
         roomId: 'r-future',
         billingSource: 'NONE',
         isFutureReservation: true,
-        rentAmount: '0.00',
-        depositAmount: '5000.00',
+        amountDue: '5160.00',
+        chargeComponents: [
+          { type: 'monthly_utility', label: 'บิลรายเดือน', amount: '160.00', status: 'PREVIEW', occurredInDisplayedPeriod: true, includedInAmountDue: true },
+          { type: 'deposit', label: 'ค่าประกัน', amount: '5000.00', status: 'UNPAID', occurredInDisplayedPeriod: true, includedInAmountDue: true },
+        ],
       };
 
-      const breakdownAugust = getOwnerFinancialBreakdown(row, roomCtxAugust, rateSnapshot, [], 'cycle-aug');
+      const breakdownAugust = getOwnerFinancialBreakdown(roomCtxAugust);
       // Must NOT include payable 'ค่าเช่า (เดือน)' or 'ค่าเช่า (เทอม)'
       expect(breakdownAugust.components.some(c => c.label.includes('ค่าเช่า'))).toBe(false);
       // Primary operational amount is utility (160) + deposit (5000) = 5160, rent is 0
@@ -1757,11 +1600,14 @@ describe('LOCAL-07 Source-Reviewed Meter Workspace Correction Suite', () => {
         roomId: 'r-future',
         billingSource: 'CONTRACT',
         isFutureReservation: false,
-        rentAmount: '4000.00',
-        depositAmount: '0.00',
+        amountDue: '4160.00',
+        chargeComponents: [
+          { type: 'monthly_utility', label: 'บิลรายเดือน', amount: '160.00', status: 'PREVIEW', occurredInDisplayedPeriod: true, includedInAmountDue: true },
+          { type: 'rent', label: 'ค่าเช่า (เดือน)', amount: '4000.00', status: 'UNPAID', occurredInDisplayedPeriod: true, includedInAmountDue: true },
+        ],
       };
 
-      const breakdownSeptember = getOwnerFinancialBreakdown(row, roomCtxSeptember, rateSnapshot, [], 'cycle-sep');
+      const breakdownSeptember = getOwnerFinancialBreakdown(roomCtxSeptember);
       expect(breakdownSeptember.components.some(c => c.label === 'ค่าเช่า (เดือน)')).toBe(true);
       expect(breakdownSeptember.operationalAmount).toBe(4160); // 160 + 4000
     });

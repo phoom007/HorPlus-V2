@@ -302,35 +302,25 @@ describe('LOCAL-07 Meter Workspace & Quick Add Comprehensive Frontend Suite', ()
   });
 
   describe('4. PO UAT Round 3 Operational Breakdown & Exact Copy Semantics', () => {
-    it('proves Owner Amount Due includes unissued preview (5,150.00 ฿) as PREVIEW before issue', async () => {
+    it('proves Owner Amount Due includes unissued preview (1,150.00 ฿) as PREVIEW before issue', async () => {
       const { getOwnerFinancialBreakdown } = await import('../pages/owner/meters');
-      const row = {
-        roomId: 'r-1',
-        roomNumber: '101',
-        waterCurr: '10',
-        waterPrev: '0',
-        elecCurr: '100',
-        elecPrev: '0',
-        peopleCount: '1',
-        overdueAmount: '0',
-        otherFees: [],
-        billStatus: 'draft',
-      };
       const roomCtx = {
         roomId: 'r-1',
         billingSource: 'NONE',
-        rentAmount: '0.00',
-        depositAmount: '0.00',
-        isDepositPaid: false,
+        amountDue: '1150.00',
+        chargeComponents: [
+          {
+            type: 'monthly_utility',
+            label: 'บิลรายเดือน',
+            amount: '1150.00',
+            status: 'PREVIEW',
+            paidAt: null,
+            occurredInDisplayedPeriod: true,
+            includedInAmountDue: true,
+          }
+        ],
       };
-      const rateSnapshot = {
-        waterBillingType: 'per_unit',
-        waterRate: '15.00',
-        electricityBillingType: 'per_unit',
-        electricityRate: '10.00',
-      };
-      // Utility Preview = 150 (water) + 1000 (elec) = 1150.00 (Rent is independent)
-      const breakdown = getOwnerFinancialBreakdown(row as any, roomCtx, rateSnapshot, [], 'cycle-1');
+      const breakdown = getOwnerFinancialBreakdown(roomCtx);
       expect(breakdown.operationalAmount).toBe(1150);
       expect(breakdown.formattedAmount).toBe('1,150.00');
       expect(breakdown.components.length).toBe(1);
@@ -341,41 +331,23 @@ describe('LOCAL-07 Meter Workspace & Quick Add Comprehensive Frontend Suite', ()
 
     it('proves Owner Amount Due remains same after issue and changes status to UNPAID', async () => {
       const { getOwnerFinancialBreakdown } = await import('../pages/owner/meters');
-      const row = {
-        roomId: 'r-1',
-        roomNumber: '101',
-        waterCurr: '10',
-        waterPrev: '0',
-        elecCurr: '100',
-        elecPrev: '0',
-        peopleCount: '1',
-        overdueAmount: '0',
-        otherFees: [],
-        billStatus: 'issued',
-      };
       const roomCtx = {
         roomId: 'r-1',
         billingSource: 'NONE',
-        rentAmount: '0.00',
+        amountDue: '1150.00',
+        chargeComponents: [
+          {
+            type: 'monthly_utility',
+            label: 'บิลรายเดือน',
+            amount: '1150.00',
+            status: 'UNPAID',
+            paidAt: null,
+            occurredInDisplayedPeriod: true,
+            includedInAmountDue: true,
+          }
+        ],
       };
-      const rateSnapshot = {
-        waterBillingType: 'per_unit',
-        waterRate: '15.00',
-        electricityBillingType: 'per_unit',
-        electricityRate: '10.00',
-      };
-      const bills = [
-        {
-          id: 'b-1',
-          roomId: 'r-1',
-          billingCycleId: 'cycle-1',
-          billKind: 'MONTHLY_UTILITY' as const,
-          totalAmount: '1150.00',
-          outstandingAmount: '1150.00',
-          status: 'ISSUED' as const,
-        }
-      ];
-      const breakdown = getOwnerFinancialBreakdown(row as any, roomCtx, rateSnapshot, bills as any, 'cycle-1');
+      const breakdown = getOwnerFinancialBreakdown(roomCtx);
       expect(breakdown.operationalAmount).toBe(1150);
       expect(breakdown.formattedAmount).toBe('1,150.00');
       expect(breakdown.components[0].label).toBe('บิลรายเดือน');
@@ -384,50 +356,32 @@ describe('LOCAL-07 Meter Workspace & Quick Add Comprehensive Frontend Suite', ()
 
     it('proves Owner Amount Due drops to 0.00 when Monthly bill is paid and status becomes PAID', async () => {
       const { getOwnerFinancialBreakdown } = await import('../pages/owner/meters');
-      const row = {
-        roomId: 'r-1',
-        roomNumber: '101',
-        waterCurr: '10',
-        waterPrev: '0',
-        elecCurr: '100',
-        elecPrev: '0',
-        peopleCount: '1',
-        overdueAmount: '0',
-        otherFees: [],
-        billStatus: 'paid',
-      };
       const roomCtx = {
         roomId: 'r-1',
         billingSource: 'PROVISIONAL_MONTHLY',
-        rentAmount: '4000.00',
+        amountDue: '0.00',
+        chargeComponents: [
+          {
+            type: 'monthly_utility',
+            label: 'บิลรายเดือน',
+            amount: '1150.00',
+            status: 'PAID',
+            paidAt: '2026-08-25T10:00:00Z',
+            occurredInDisplayedPeriod: true,
+            includedInAmountDue: false,
+          },
+          {
+            type: 'rent',
+            label: 'ค่าเช่า (เดือน)',
+            amount: '4000.00',
+            status: 'PAID',
+            paidAt: '2026-08-25T10:00:00Z',
+            occurredInDisplayedPeriod: true,
+            includedInAmountDue: false,
+          }
+        ],
       };
-      const rateSnapshot = {
-        waterBillingType: 'per_unit',
-        waterRate: '15.00',
-        electricityBillingType: 'per_unit',
-        electricityRate: '10.00',
-      };
-      const bills = [
-        {
-          id: 'b-1',
-          roomId: 'r-1',
-          billingCycleId: 'cycle-1',
-          billKind: 'MONTHLY_UTILITY' as const,
-          totalAmount: '1150.00',
-          outstandingAmount: '0.00',
-          status: 'PAID' as const,
-        },
-        {
-          id: 'b-2',
-          roomId: 'r-1',
-          billingCycleId: 'cycle-1',
-          billKind: 'RENT' as const,
-          totalAmount: '4000.00',
-          outstandingAmount: '0.00',
-          status: 'PAID' as const,
-        }
-      ];
-      const breakdown = getOwnerFinancialBreakdown(row as any, roomCtx, rateSnapshot, bills as any, 'cycle-1');
+      const breakdown = getOwnerFinancialBreakdown(roomCtx);
       expect(breakdown.operationalAmount).toBe(0);
       expect(breakdown.formattedAmount).toBe('0.00');
       expect(breakdown.components[0].status).toBe('PAID');
@@ -551,50 +505,17 @@ describe('LOCAL-07 Meter Workspace & Quick Add Comprehensive Frontend Suite', ()
       };
 
       const mockRoomCtx: any = {
+        roomId: 'r-101',
         billingSource: 'MONTHLY_CONTRACT',
-        depositAmount: '500.00',
-        isDepositPaid: false,
-        rentAmount: '4500.00',
-        waterRateSatang: 1800n,
-        elecRateSatang: 700n,
-        waterBillingType: 'PER_UNIT',
-        electricityBillingType: 'PER_UNIT',
+        amountDue: '4730.00',
+        chargeComponents: [
+          { type: 'monthly_utility', label: 'บิลรายเดือน', amount: '230.00', status: 'PREVIEW', occurredInDisplayedPeriod: true, includedInAmountDue: true },
+          { type: 'deposit', label: 'ค่าประกัน', amount: '500.00', status: 'PAID', occurredInDisplayedPeriod: true, includedInAmountDue: false },
+          { type: 'rent', label: 'ค่าเช่า (เดือน)', amount: '4500.00', status: 'UNPAID', occurredInDisplayedPeriod: true, includedInAmountDue: true },
+        ],
       };
 
-      const mockRateSnapshot: any = {
-        waterRateSatang: 1800n,
-        elecRateSatang: 700n,
-        waterBillingType: 'PER_UNIT',
-        electricityBillingType: 'PER_UNIT',
-      };
-
-      const rentBill: any = {
-        id: 'bill-rent-1',
-        roomId: 'r-101',
-        billingCycleId: 'cycle-1',
-        billKind: 'RENT',
-        totalAmount: '4500.00',
-        outstandingAmount: '4500.00',
-        status: 'unpaid',
-      };
-
-      const depositBill: any = {
-        id: 'bill-dep-1',
-        roomId: 'r-101',
-        billingCycleId: 'cycle-1',
-        billKind: 'DEPOSIT',
-        totalAmount: '500.00',
-        outstandingAmount: '0.00',
-        status: 'paid',
-      };
-
-      const breakdown = getOwnerFinancialBreakdown(
-        mockRow,
-        mockRoomCtx,
-        mockRateSnapshot,
-        [rentBill, depositBill],
-        'cycle-1'
-      );
+      const breakdown = getOwnerFinancialBreakdown(mockRoomCtx);
 
       // At most 3 top-level items
       expect(breakdown.components.length).toBeLessThanOrEqual(3);
@@ -610,11 +531,16 @@ describe('LOCAL-07 Meter Workspace & Quick Add Comprehensive Frontend Suite', ()
     });
 
     it('proves term contract produces exact label "ค่าเช่า (เทอม)"', () => {
-      const mockRow: any = { roomId: 'r-102', waterCurr: '', waterPrev: '', elecCurr: '', elecPrev: '', peopleCount: '1' };
-      const mockRoomCtx: any = { billingSource: 'PROVISIONAL_TERM', rentAmount: '15000.00' };
-      const rentBill: any = { id: 'b-t', roomId: 'r-102', billingCycleId: 'c-1', billKind: 'RENT', totalAmount: '15000.00', status: 'unpaid' };
+      const mockRoomCtx: any = {
+        roomId: 'r-102',
+        billingSource: 'PROVISIONAL_TERM',
+        amountDue: '15000.00',
+        chargeComponents: [
+          { type: 'rent', label: 'ค่าเช่า (เทอม)', amount: '15000.00', status: 'UNPAID', occurredInDisplayedPeriod: true, includedInAmountDue: true }
+        ],
+      };
 
-      const breakdown = getOwnerFinancialBreakdown(mockRow, mockRoomCtx, null, [rentBill], 'c-1');
+      const breakdown = getOwnerFinancialBreakdown(mockRoomCtx);
       const rentComp = breakdown.components.find(c => c.label.startsWith('ค่าเช่า'));
       expect(rentComp?.label).toBe('ค่าเช่า (เทอม)');
     });
