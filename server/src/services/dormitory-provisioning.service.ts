@@ -17,6 +17,7 @@ import { promoService } from './promo.service.js';
 import { referralService } from './referral.service.js';
 import { coinWalletService } from './coin-wallet.service.js';
 import { subscriptionIntentService } from './subscription-intent.service.js';
+import { normalizeUtilityBillingMode } from '../utils/billing-mode-normalizer.util.js';
 
 export interface CompleteOwnerOnboardingParams {
   userId: string;
@@ -692,9 +693,9 @@ export class DormitoryProvisioningService {
             dormitoryId: dormId,
             billingDay: legacyCompatBillingDay,
             dueDay: validatedDueDay,
-            waterBillingType: billing.waterBillingType || 'per_person',
+            waterBillingType: normalizeUtilityBillingMode(billing.waterBillingType || 'per_person'),
             waterRate: waterRateStr,
-            electricityBillingType: billing.electricityBillingType || 'per_unit',
+            electricityBillingType: normalizeUtilityBillingMode(billing.electricityBillingType || 'per_unit'),
             electricityRate: electricityRateStr,
             commonFee: commonFeeStr,
             commonFeeMode: billing.commonFeeMode || 'per_room',
@@ -711,9 +712,9 @@ export class DormitoryProvisioningService {
           update: {
             billingDay: legacyCompatBillingDay,
             dueDay: validatedDueDay,
-            waterBillingType: billing.waterBillingType || 'per_person',
+            waterBillingType: normalizeUtilityBillingMode(billing.waterBillingType || 'per_person'),
             waterRate: waterRateStr,
-            electricityBillingType: billing.electricityBillingType || 'per_unit',
+            electricityBillingType: normalizeUtilityBillingMode(billing.electricityBillingType || 'per_unit'),
             electricityRate: electricityRateStr,
             commonFee: commonFeeStr,
             commonFeeMode: billing.commonFeeMode || 'per_room',

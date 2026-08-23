@@ -17,6 +17,7 @@ import { ENTITLEMENT_ROOM_LIMITS } from './entitlement.service.js';
 import { subscriptionEntitlementService } from './subscription-entitlement.service.js';
 import { toDecimal, addDecimals, mulDecimals, divDecimals, formatDecimal, subDecimals, compareDecimals, isZeroDecimal } from '../utils/decimal-math.util.js';
 import { calculateInstallmentSchedule } from '../utils/installment-calculator.util.js';
+import { normalizeUtilityBillingMode } from '../utils/billing-mode-normalizer.util.js';
 import { getPrismaClient } from '../db/prisma.js';
 
 /**
@@ -215,8 +216,8 @@ export class BillingService {
     const internetFee = toDecimal(rateSnapshot.internetFee);
     const parkingFee = toDecimal((rateSnapshot as any).parkingFee || '0.00');
 
-    const waterMode = (rateSnapshot as any).waterBillingType || 'per_unit';
-    const elecMode = (rateSnapshot as any).electricityBillingType || 'per_unit';
+    const waterMode = normalizeUtilityBillingMode((rateSnapshot as any).waterBillingType || 'per_unit');
+    const elecMode = normalizeUtilityBillingMode((rateSnapshot as any).electricityBillingType || 'per_unit');
     const commonMode = (rateSnapshot as any).commonFeeMode || 'room';
     const internetMode = (rateSnapshot as any).internetFeeMode || 'room';
     const parkingMode = (rateSnapshot as any).parkingFeeMode || 'room';
@@ -383,29 +384,32 @@ export class BillingService {
           tx
         );
         if (!waterReading) {
-          const err = new Error('MISSING_WATER_METER_READING');
-          (err as any).statusCode = 400;
-          (err as any).code = 'MISSING_METER_READING';
-          (err as any).message = 'กรุณากรอกเลขมิเตอร์น้ำของงวดนี้ก่อนออกบิล';
-          throw err;
+          if (!isZeroDecimal(waterRate)) {
+            const err = new Error('MISSING_WATER_METER_READING');
+            (err as any).statusCode = 400;
+            (err as any).code = 'MISSING_METER_READING';
+            (err as any).message = 'กรุณากรอกเลขมิเตอร์น้ำของงวดนี้ก่อนออกบิล';
+            throw err;
+          }
+        } else {
+          const units = toDecimal(waterReading.usageUnits);
+          const amount = mulDecimals(units, waterRate);
+          items.push({
+            type: 'water',
+            description: `ค่าน้ำประปา (${waterReading.previousReading} - ${waterReading.currentReading})`,
+            quantity: formatDecimal(units),
+            unit: 'unit',
+            unitPrice: formatDecimal(waterRate),
+            amount: formatDecimal(amount),
+            metadata: {
+              previousReading: waterReading.previousReading,
+              currentReading: waterReading.currentReading,
+              usageUnits: waterReading.usageUnits,
+              mode: 'per_unit',
+            },
+          });
         }
-        const units = toDecimal(waterReading.usageUnits);
-        const amount = mulDecimals(units, waterRate);
-        items.push({
-          type: 'water',
-          description: `ค่าน้ำประปา (${waterReading.previousReading} - ${waterReading.currentReading})`,
-          quantity: formatDecimal(units),
-          unit: 'unit',
-          unitPrice: formatDecimal(waterRate),
-          amount: formatDecimal(amount),
-          metadata: {
-            previousReading: waterReading.previousReading,
-            currentReading: waterReading.currentReading,
-            usageUnits: waterReading.usageUnits,
-            mode: 'per_unit',
-          },
-        });
-      } else if (waterMode === 'per_person' || waterMode === 'person') {
+      } else if (waterMode === 'per_person') {
         const amount = mulDecimals(peopleCountDec, waterRate);
         items.push({
           type: 'water',
@@ -416,7 +420,7 @@ export class BillingService {
           amount: formatDecimal(amount),
           metadata: { mode: 'per_person', peopleCount },
         });
-      } else if (waterMode === 'fixed' || waterMode === 'per_room' || waterMode === 'room') {
+      } else if (waterMode === 'fixed') {
         if (!isZeroDecimal(waterRate)) {
           items.push({
             type: 'water',
@@ -440,28 +444,31 @@ export class BillingService {
           tx
         );
         if (!elecReading) {
-          const err = new Error('MISSING_ELECTRICITY_METER_READING');
-          (err as any).statusCode = 400;
-          (err as any).code = 'MISSING_METER_READING';
-          (err as any).message = 'กรุณากรอกเลขมิเตอร์ไฟฟ้าของงวดนี้ก่อนออกบิล';
-          throw err;
+          if (!isZeroDecimal(elecRate)) {
+            const err = new Error('MISSING_ELECTRICITY_METER_READING');
+            (err as any).statusCode = 400;
+            (err as any).code = 'MISSING_METER_READING';
+            (err as any).message = 'กรุณากรอกเลขมิเตอร์ไฟฟ้าของงวดนี้ก่อนออกบิล';
+            throw err;
+          }
+        } else {
+          const units = toDecimal(elecReading.usageUnits);
+          const amount = mulDecimals(units, elecRate);
+          items.push({
+            type: 'electricity',
+            description: `ค่าไฟฟ้า (${elecReading.previousReading} - ${elecReading.currentReading})`,
+            quantity: formatDecimal(units),
+            unit: 'unit',
+            unitPrice: formatDecimal(elecRate),
+            amount: formatDecimal(amount),
+            metadata: {
+              previousReading: elecReading.previousReading,
+              currentReading: elecReading.currentReading,
+              usageUnits: elecReading.usageUnits,
+              mode: 'per_unit',
+            },
+          });
         }
-        const units = toDecimal(elecReading.usageUnits);
-        const amount = mulDecimals(units, elecRate);
-        items.push({
-          type: 'electricity',
-          description: `ค่าไฟฟ้า (${elecReading.previousReading} - ${elecReading.currentReading})`,
-          quantity: formatDecimal(units),
-          unit: 'unit',
-          unitPrice: formatDecimal(elecRate),
-          amount: formatDecimal(amount),
-          metadata: {
-            previousReading: elecReading.previousReading,
-            currentReading: elecReading.currentReading,
-            usageUnits: elecReading.usageUnits,
-            mode: 'per_unit',
-          },
-        });
       } else if (elecMode === 'per_person') {
         const amount = mulDecimals(peopleCountDec, elecRate);
         items.push({

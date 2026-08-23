@@ -4951,9 +4951,9 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
       });
 
       expect(snapInDb).toBeDefined();
-      expect(snapInDb?.waterBillingType).toBe('person');
+      expect(snapInDb?.waterBillingType).toBe('per_person');
       expect(new Prisma.Decimal(snapInDb?.waterRate || 0).toFixed(2)).toBe('0.00');
-      expect(snapInDb?.electricityBillingType).toBe('unit');
+      expect(snapInDb?.electricityBillingType).toBe('per_unit');
       expect(new Prisma.Decimal(snapInDb?.electricityRate || 0).toFixed(2)).toBe('0.00');
       expect(snapInDb?.commonFeeMode).toBe('room');
       expect(new Prisma.Decimal(snapInDb?.commonFee || 0).toFixed(2)).toBe('0.00');

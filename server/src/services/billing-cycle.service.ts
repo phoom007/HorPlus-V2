@@ -13,6 +13,7 @@ import {
 } from '../db/repositories/billing-cycle.repository.js';
 import { AuditService } from './audit.service.js';
 import { currentCycleResolverService } from './current-cycle-resolver.js';
+import { normalizeUtilityBillingMode } from '../utils/billing-mode-normalizer.util.js';
 
 export interface CreateBillingCycleDto {
   cycleCode: string;
@@ -218,9 +219,9 @@ export class BillingCycleService {
         if (precedingCycle?.rateSnapshot) {
           const pSnap = precedingCycle.rateSnapshot;
           snapshotData = {
-            waterBillingType: pSnap.waterBillingType,
+            waterBillingType: normalizeUtilityBillingMode(pSnap.waterBillingType),
             waterRate: pSnap.waterRate,
-            electricityBillingType: pSnap.electricityBillingType,
+            electricityBillingType: normalizeUtilityBillingMode(pSnap.electricityBillingType),
             electricityRate: pSnap.electricityRate,
             commonFee: pSnap.commonFee,
             commonFeeMode: pSnap.commonFeeMode,
@@ -238,9 +239,9 @@ export class BillingCycleService {
           };
         } else {
           snapshotData = {
-            waterBillingType: settings.waterBillingType,
+            waterBillingType: normalizeUtilityBillingMode(settings.waterBillingType),
             waterRate: new Prisma.Decimal(settings.waterRate).toFixed(2),
-            electricityBillingType: settings.electricityBillingType,
+            electricityBillingType: normalizeUtilityBillingMode(settings.electricityBillingType),
             electricityRate: new Prisma.Decimal(settings.electricityRate).toFixed(2),
             commonFee: new Prisma.Decimal(settings.commonFee).toFixed(2),
             commonFeeMode: settings.commonFeeMode,
@@ -529,10 +530,10 @@ export class BillingCycleService {
       ? '0.00'
       : (data.parkingFee !== undefined ? cleanDec(data.parkingFee, 'parkingFee') : rateSnapshot.parkingFee);
 
-    const waterType = data.waterBillingType || rateSnapshot.waterBillingType;
+    const waterType = normalizeUtilityBillingMode(data.waterBillingType || rateSnapshot.waterBillingType);
     const waterRate = data.waterRate !== undefined ? cleanDec(data.waterRate, 'waterRate') : rateSnapshot.waterRate;
 
-    const electricityType = data.electricityBillingType || rateSnapshot.electricityBillingType;
+    const electricityType = normalizeUtilityBillingMode(data.electricityBillingType || rateSnapshot.electricityBillingType);
     const electricityRate = data.electricityRate !== undefined ? cleanDec(data.electricityRate, 'electricityRate') : rateSnapshot.electricityRate;
 
     const lateType = data.lateFeeType || rateSnapshot.lateFeeType;

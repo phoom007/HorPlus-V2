@@ -19,6 +19,7 @@ import { toDecimal, formatDecimal, compareDecimals, divDecimals, mulDecimals, su
 import { calculateInstallmentSchedule } from '../utils/installment-calculator.util.js';
 import { currentBusinessDateInBangkok, toBangkokDateString, normalizeBangkokDate, getBangkokStartOfDayUtc } from '../utils/calendar-date.util.js';
 import { calculateMeterUsageUnits, parseMeterIntegerReading } from '../utils/meter-billing-calculator.util.js';
+import { normalizeUtilityBillingMode } from '../utils/billing-mode-normalizer.util.js';
 import { resolveDailyTimestampsAndPricing } from './daily-stay.service.js';
 import {
   getContractPhysicalInterval,
@@ -209,32 +210,42 @@ export class MeterService {
     roomId: string,
     meterType: 'water' | 'electricity',
     tx?: any
-  ): Promise<string> {
+  ): Promise<string | null> {
+    const client = tx || getPrismaClient();
+
     // 1. Find prior billing cycle reading for this room and meter type
     const cycle = await this.billingCycleRepo.findById(billingCycleId, dormitoryId);
     if (cycle) {
       const cycles = await this.billingCycleRepo.findAll(dormitoryId, { sortDirection: 'desc', pageSize: 100 });
-      const priorCycles = cycles.items.filter((c) => c.periodStart < cycle.periodStart);
+      const currentStart = new Date(cycle.periodStart).getTime();
+      const priorCycles = cycles.items
+        .filter((c) => new Date(c.periodStart).getTime() < currentStart)
+        .sort((a, b) => new Date(b.periodStart).getTime() - new Date(a.periodStart).getTime());
+
       for (const priorCycle of priorCycles) {
         const priorReading = await this.meterRepo.findReadingByCycleRoomAndType(
           dormitoryId,
           priorCycle.id,
           roomId,
           meterType,
-          tx
+          client
         );
-        if (priorReading) {
-          const num = Number(priorReading.currentReading);
-          return isNaN(num) ? '0' : Math.round(num).toString();
+        if (priorReading && priorReading.currentReading !== null && priorReading.currentReading !== undefined && String(priorReading.currentReading).trim() !== '') {
+          const numVal = Math.round(Number(priorReading.currentReading));
+          if (!isNaN(numVal) && numVal >= 0 && numVal <= 99999) {
+            return String(numVal);
+          }
         }
       }
     }
 
-    // 2. Find active MeterDevice initial / current reading
-    const device = await this.meterRepo.findDeviceByRoomAndType(dormitoryId, roomId, meterType, tx);
-    if (device && device.initialReading !== undefined && device.initialReading !== null) {
-      const num = Number(device.initialReading);
-      return isNaN(num) ? '0' : Math.round(num).toString();
+    // 2. Find active MeterDevice initial reading
+    const device = await this.meterRepo.findDeviceByRoomAndType(dormitoryId, roomId, meterType, client);
+    if (device && device.initialReading !== undefined && device.initialReading !== null && String(device.initialReading).trim() !== '') {
+      const numVal = Math.round(Number(device.initialReading));
+      if (!isNaN(numVal) && numVal >= 0 && numVal <= 99999) {
+        return String(numVal);
+      }
     }
 
     // 3. Find Room initial meter value
@@ -243,21 +254,26 @@ export class MeterService {
       const roomObj = room as any;
       if (meterType === 'water') {
         const val = room.initialWaterReading ?? roomObj.initialWaterMeter;
-        if (val !== undefined && val !== null) {
-          const num = Number(val);
-          return isNaN(num) ? '0' : Math.round(num).toString();
+        if (val !== undefined && val !== null && String(val).trim() !== '') {
+          const numVal = Math.round(Number(val));
+          if (!isNaN(numVal) && numVal >= 0 && numVal <= 99999) {
+            return String(numVal);
+          }
         }
       }
       if (meterType === 'electricity') {
         const val = room.initialElectricityReading ?? roomObj.initialElectricMeter;
-        if (val !== undefined && val !== null) {
-          const num = Number(val);
-          return isNaN(num) ? '0' : Math.round(num).toString();
+        if (val !== undefined && val !== null && String(val).trim() !== '') {
+          const numVal = Math.round(Number(val));
+          if (!isNaN(numVal) && numVal >= 0 && numVal <= 99999) {
+            return String(numVal);
+          }
         }
       }
     }
 
-    return '0';
+    // 4. No authoritative baseline exists (NONE)
+    return null;
   }
 
   // --- Meter Readings ---
@@ -303,7 +319,7 @@ export class MeterService {
         }
 
         // Derive authoritative previous reading from server DB
-        const authPrev = await this.resolveAuthoritativePreviousReading(
+        const authDbPrev = await this.resolveAuthoritativePreviousReading(
           dormitoryId,
           data.billingCycleId,
           item.roomId,
@@ -311,6 +327,23 @@ export class MeterService {
           tx
         );
 
+        // If server has an authoritative baseline, use it (prevents client tampering)
+        // If server has NO authoritative baseline, accept user-entered baseline
+        const rawPrev = authDbPrev !== null
+          ? authDbPrev
+          : (item.previousReading !== undefined && item.previousReading !== null && String(item.previousReading).trim() !== '')
+            ? String(item.previousReading)
+            : null;
+
+        if (rawPrev === null) {
+          const typeThai = item.meterType === 'water' ? 'น้ำ' : 'ไฟฟ้า';
+          const err = new Error(`กรุณาระบุค่ามิเตอร์${typeThai}เดิมสำหรับห้องนี้`);
+          (err as any).statusCode = 400;
+          (err as any).code = 'MISSING_PREVIOUS_METER_READING';
+          throw err;
+        }
+
+        const authPrev = rawPrev;
         const prevVal = Number(authPrev);
         const currVal = Number(item.currentReading);
 
@@ -520,8 +553,8 @@ export class MeterService {
     if (!snapshot) {
       snapshot = await this.billingCycleRepo.findRateSnapshot(billingCycleId, dormitoryId);
     }
-    const waterMode = snapshot?.waterBillingType || 'per_unit';
-    const elecMode = snapshot?.electricityBillingType || 'per_unit';
+    const waterMode = normalizeUtilityBillingMode(snapshot?.waterBillingType || 'per_unit');
+    const elecMode = normalizeUtilityBillingMode(snapshot?.electricityBillingType || 'per_unit');
 
     let firstCycle = isFirstCycle;
     if (firstCycle === undefined) {
@@ -538,7 +571,7 @@ export class MeterService {
       (row.waterPrev !== undefined && row.waterPrev !== null && String(row.waterPrev).trim() !== '')
     ) {
       if (waterMode === 'per_unit') {
-        let authPrev = '0';
+        let authPrev: string | null = null;
         if (row.waterPrev !== undefined && row.waterPrev !== null && String(row.waterPrev).trim() !== '') {
           const parsed = parseMeterIntegerReading(row.waterPrev);
           if (!parsed.isValid) {
@@ -559,16 +592,21 @@ export class MeterService {
           if (existingReading && existingReading.previousReading !== undefined && existingReading.previousReading !== null) {
             authPrev = String(existingReading.previousReading).replace(/\.00$/, '');
           } else {
-            const raw = await this.resolveAuthoritativePreviousReading(
+            authPrev = await this.resolveAuthoritativePreviousReading(
               dormitoryId,
               billingCycleId,
               row.roomId,
               'water',
               tx
             );
-            const num = Number(raw);
-            authPrev = isNaN(num) ? '0' : Math.round(num).toString();
           }
+        }
+
+        if (authPrev === null) {
+          const err = new Error(`กรุณาระบุค่ามิเตอร์น้ำเดิมสำหรับห้องนี้`);
+          (err as any).statusCode = 400;
+          (err as any).code = 'MISSING_PREVIOUS_METER_READING';
+          throw err;
         }
 
         const existingReading = await this.meterRepo.findReadingByCycleRoomAndType(
@@ -668,7 +706,7 @@ export class MeterService {
       (row.elecPrev !== undefined && row.elecPrev !== null && String(row.elecPrev).trim() !== '')
     ) {
       if (elecMode === 'per_unit') {
-        let authPrev = '0';
+        let authPrev: string | null = null;
         if (row.elecPrev !== undefined && row.elecPrev !== null && String(row.elecPrev).trim() !== '') {
           const parsed = parseMeterIntegerReading(row.elecPrev);
           if (!parsed.isValid) {
@@ -689,16 +727,21 @@ export class MeterService {
           if (existingReading && existingReading.previousReading !== undefined && existingReading.previousReading !== null) {
             authPrev = String(existingReading.previousReading).replace(/\.00$/, '');
           } else {
-            const raw = await this.resolveAuthoritativePreviousReading(
+            authPrev = await this.resolveAuthoritativePreviousReading(
               dormitoryId,
               billingCycleId,
               row.roomId,
               'electricity',
               tx
             );
-            const num = Number(raw);
-            authPrev = isNaN(num) ? '0' : Math.round(num).toString();
           }
+        }
+
+        if (authPrev === null) {
+          const err = new Error(`กรุณาระบุค่ามิเตอร์ไฟฟ้าเดิมสำหรับห้องนี้`);
+          (err as any).statusCode = 400;
+          (err as any).code = 'MISSING_PREVIOUS_METER_READING';
+          throw err;
         }
 
         const existingReading = await this.meterRepo.findReadingByCycleRoomAndType(
@@ -1922,10 +1965,18 @@ export class MeterService {
       };
     });
 
+    const canonicalRateSnapshot = rateSnapshot
+      ? {
+          ...rateSnapshot,
+          waterBillingType: normalizeUtilityBillingMode(rateSnapshot.waterBillingType),
+          electricityBillingType: normalizeUtilityBillingMode(rateSnapshot.electricityBillingType),
+        }
+      : null;
+
     return {
       billingCycleId: cycle.id,
       cycleCode: cycle.cycleCode,
-      rateSnapshot,
+      rateSnapshot: canonicalRateSnapshot,
       rooms: roomContexts,
     };
   }

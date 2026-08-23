@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import { getPrismaClient } from '../db/prisma.js';
 import { AppError } from '../types/index.js';
 import { BLOCKING_CONTRACT_STATUSES } from './blocking-contract-policy.js';
+import { normalizeUtilityBillingMode } from '../utils/billing-mode-normalizer.util.js';
 
 export function valuesEquivalent(val1: any, val2: any): boolean {
   if (val1 === val2) return true;
@@ -220,14 +221,14 @@ export class DefaultsService {
         building.waterBillingType,
         billingSettings?.waterBillingType || 'per_unit',
         dormBillVer,
-        (v) => String(v)
+        (v) => normalizeUtilityBillingMode(v)
       ),
       electricityBillingType: resolveField(
         room.electricityBillingType,
         building.electricityBillingType,
         billingSettings?.electricityBillingType || 'per_unit',
         dormBillVer,
-        (v) => String(v)
+        (v) => normalizeUtilityBillingMode(v)
       ),
       rentBillingType: resolveField(
         room.rentBillingType,
@@ -1225,8 +1226,8 @@ export class DefaultsService {
     const elecRateRes = resolveBldField(building.electricityRate, billingSettings?.electricityRate || 0);
     const commonFeeRes = resolveBldField(building.commonFee, billingSettings?.commonFee || 0);
     const internetFeeRes = resolveBldField(building.internetFee, billingSettings?.internetFee || 0);
-    const waterBillingTypeRes = resolveBldField(building.waterBillingType, billingSettings?.waterBillingType || 'per_unit', (v) => String(v));
-    const elecBillingTypeRes = resolveBldField(building.electricityBillingType, billingSettings?.electricityBillingType || 'per_unit', (v) => String(v));
+    const waterBillingTypeRes = resolveBldField(building.waterBillingType, billingSettings?.waterBillingType || 'per_unit', (v) => normalizeUtilityBillingMode(v));
+    const elecBillingTypeRes = resolveBldField(building.electricityBillingType, billingSettings?.electricityBillingType || 'per_unit', (v) => normalizeUtilityBillingMode(v));
     const rentBillingTypeRes = resolveBldField(building.rentBillingType, billingSettings?.rentBillingType || 'monthly', (v) => String(v));
     const maxOccupantsRes = resolveBldField(building.maximumOccupants, propertyDefaults?.defaultMaxOccupants || 2, (v) => Number(v));
     const roomTypeRes = resolveBldField(building.roomType, propertyDefaults?.defaultRoomType || 'standard', (v) => String(v));

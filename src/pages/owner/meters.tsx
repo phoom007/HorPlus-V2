@@ -2032,6 +2032,23 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       return;
     }
 
+    // Missing baseline check for per_unit utilities
+    for (let rIdx = 0; rIdx < meterRows.length; rIdx++) {
+      const row = meterRows[rIdx];
+      if (isElecUnit && row.elecCurr !== '' && row.elecPrev === '') {
+        showToast(`กรุณาระบุเลขมิเตอร์ไฟเดิมสำหรับห้อง ${row.roomNumber}`, 'error');
+        const el = document.querySelector(`input[data-row="${rIdx}"][data-col="elecPrev"]`) as HTMLInputElement | null;
+        el?.focus();
+        return;
+      }
+      if (isWaterUnit && row.waterCurr !== '' && row.waterPrev === '') {
+        showToast(`กรุณาระบุเลขมิเตอร์น้ำเดิมสำหรับห้อง ${row.roomNumber}`, 'error');
+        const el = document.querySelector(`input[data-row="${rIdx}"][data-col="waterPrev"]`) as HTMLInputElement | null;
+        el?.focus();
+        return;
+      }
+    }
+
     // Lower reading check with rollover support
     let lowerReadingError = false;
     for (const row of meterRows) {
@@ -2301,6 +2318,12 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                 const isBillIssued = row.billStatus !== 'draft' && row.billStatus !== 'cancelled';
                 const isRowPaid = !isDailyContext && (row.isPaid || row.billStatus === 'paid');
 
+                const hasElecBaseline = row.elecPrev !== '' && row.elecPrev !== null && row.elecPrev !== undefined;
+                const isElecDirectEdit = isFirstCycle || !hasElecBaseline;
+
+                const hasWaterBaseline = row.waterPrev !== '' && row.waterPrev !== null && row.waterPrev !== undefined;
+                const isWaterDirectEdit = isFirstCycle || !hasWaterBaseline;
+
                 return (
                   <tr key={row.roomId} id={`room-row-${row.roomId}`} className="hover:bg-slate-50/50 transition-colors">
                     {/* Sticky Room Column (Show only room number like A101) */}
@@ -2311,7 +2334,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                     {/* Elec Prev Input */}
                     {isElecUnit && (
                       <td className="p-4 text-center">
-                        {isFirstCycle ? (
+                        {isElecDirectEdit ? (
                           <div
                             onClick={(e) => {
                               if (!isRowPaid) {
@@ -2327,6 +2350,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                               pattern="[0-9]*"
                               disabled={isRowPaid}
                               value={row.elecPrev}
+                              placeholder="0"
                               onChange={(e) => {
                                 handleMeterReadingChange(row.roomId, 'elecPrev', e.target.value);
                               }}
@@ -2437,7 +2461,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                     {/* Water Prev Input */}
                     {isWaterUnit && (
                       <td className="p-4 text-center">
-                        {isFirstCycle ? (
+                        {isWaterDirectEdit ? (
                           <div
                             onClick={(e) => {
                               if (!isRowPaid) {
@@ -2453,6 +2477,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                               pattern="[0-9]*"
                               disabled={isRowPaid}
                               value={row.waterPrev}
+                              placeholder="0"
                               onChange={(e) => {
                                 handleMeterReadingChange(row.roomId, 'waterPrev', e.target.value);
                               }}
