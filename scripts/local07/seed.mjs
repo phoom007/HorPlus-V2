@@ -853,6 +853,15 @@ export async function seedLocal07Data() {
     },
   });
 
+  // Dynamic Bangkok Reference Time for Active Daily Fixtures
+  const now = new Date();
+  console.log(`\n📅 Seed-time Reference Instant (Bangkok): ${now.toISOString()}`);
+
+  const checkIn106 = new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000);
+  const checkOut106 = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000);
+  const start106 = new Date(Date.UTC(checkIn106.getUTCFullYear(), checkIn106.getUTCMonth(), checkIn106.getUTCDate()));
+  const end106 = new Date(Date.UTC(checkOut106.getUTCFullYear(), checkOut106.getUTCMonth(), checkOut106.getUTCDate()));
+
   const dailyStay106 = await prisma.dailyStay.create({
     data: {
       dormitoryId: compDorm.id,
@@ -861,17 +870,17 @@ export async function seedLocal07Data() {
       requestSource: 'OWNER',
       applicantFullName: 'เอกชัย รายวันสิงหา',
       applicantPhone: '088-777-1111',
-      startDate: new Date('2026-08-20T00:00:00.000Z'),
-      endDate: new Date('2026-08-25T00:00:00.000Z'),
-      checkInAt: new Date('2026-08-20T14:00:00.000+07:00'),
-      checkOutAt: new Date('2026-08-26T00:00:00.000+07:00'),
+      startDate: start106,
+      endDate: end106,
+      checkInAt: checkIn106,
+      checkOutAt: checkOut106,
       inclusiveDayCount: 6,
       dailyRateAmount: 500.0,
       totalRentAmount: 3000.0,
       depositAmount: 500.0,
       depositDeclaredStatus: 'UNPAID',
       status: 'ACTIVE',
-      approvedAt: new Date('2026-08-20T14:00:00.000+07:00'),
+      approvedAt: checkIn106,
       approvedByUserId: COMP_DORM.owner.id,
     },
   });
@@ -1064,6 +1073,11 @@ export async function seedLocal07Data() {
     },
   });
 
+  const checkIn206 = new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000);
+  const checkOut206 = new Date(now.getTime() + 4 * 24 * 60 * 60 * 1000);
+  const start206 = new Date(Date.UTC(checkIn206.getUTCFullYear(), checkIn206.getUTCMonth(), checkIn206.getUTCDate()));
+  const end206 = new Date(Date.UTC(checkOut206.getUTCFullYear(), checkOut206.getUTCMonth(), checkOut206.getUTCDate()));
+
   const dailyStay206 = await prisma.dailyStay.create({
     data: {
       dormitoryId: compDorm.id,
@@ -1072,17 +1086,17 @@ export async function seedLocal07Data() {
       requestSource: 'OWNER',
       applicantFullName: 'กิตติศักดิ์ จ่ายครบรายวันสิงหา',
       applicantPhone: '088-777-5555',
-      startDate: new Date('2026-08-20T00:00:00.000Z'),
-      endDate: new Date('2026-08-26T00:00:00.000Z'),
-      checkInAt: new Date('2026-08-20T14:00:00.000+07:00'),
-      checkOutAt: new Date('2026-08-27T00:00:00.000+07:00'),
+      startDate: start206,
+      endDate: end206,
+      checkInAt: checkIn206,
+      checkOutAt: checkOut206,
       inclusiveDayCount: 7,
       dailyRateAmount: 550.0,
       totalRentAmount: 3850.0,
       depositAmount: 500.0,
       depositDeclaredStatus: 'PAID',
       status: 'ACTIVE',
-      approvedAt: new Date('2026-08-20T14:00:00.000+07:00'),
+      approvedAt: checkIn206,
       approvedByUserId: COMP_DORM.owner.id,
     },
   });
@@ -1362,6 +1376,17 @@ export async function seedLocal07Data() {
 
     bCount++;
   }
+
+  // Seed Room 101 July 2026 Snapshot with 1 person (Section 7: People-Count difference fixture; current household = 2)
+  await prisma.roomBillingCycleSnapshot.create({
+    data: {
+      dormitoryId: compDorm.id,
+      billingCycleId: cycleJuly.id,
+      roomId: createdRooms['101'].id,
+      peopleCount: 1,
+      source: 'HOUSEHOLD_SYNC',
+    },
+  });
 
   // August 2026 Multi-Component Bills for Deterministic Matrix Testing (0, 1, 2, 3 components)
   // 1 Component: Room 101 (MONTHLY_UTILITY) -> ฿5,468.00 unpaid

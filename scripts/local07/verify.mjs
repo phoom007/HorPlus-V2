@@ -358,9 +358,22 @@ export async function runVerification() {
       where: { roomId: room104Db.id, billingCycleId: cycleAugDb.id },
     });
     const waterR = augReadings.find(r => r.meterType === 'water');
-    const elecR = augReadings.find(r => r.meterType === 'electric');
+    const elecR = augReadings.find(r => r.meterType === 'electric' || r.meterType === 'electricity');
     assert(Number(waterR?.previousReading) === 138 && Number(waterR?.currentReading) === 138, 'Room 104 has populated water meter readings (138 -> 138) in August 2026');
     assert(Number(elecR?.previousReading) === 720 && Number(elecR?.currentReading) === 720, 'Room 104 has populated electric meter readings (720 -> 720) in August 2026');
+  }
+
+  // 10. Pull-Previous Workspace & People-Count Integration Verification
+  console.log('\n--- 10. Pull-Previous Workspace & People-Count Integration Verification ---');
+  if (cycleAugDb && room101Db) {
+    const pullData = await meterService.pullPreviousWorkspaceData(COMP_DORM.id, cycleAugDb.id);
+    const r101Pull = pullData.rooms.find(r => r.roomId === room101Db.id);
+
+    assert(pullData.hasPreviousCycle === true, 'Pull previous reports hasPreviousCycle = true');
+    assert(Number(r101Pull?.previousElectricityCurrentReading) === 560, 'Room 101 previousElectricityCurrentReading is 560.00 (pulled from July electric reading)', r101Pull?.previousElectricityCurrentReading);
+    assert(Number(r101Pull?.previousWaterCurrentReading) === 110, 'Room 101 previousWaterCurrentReading is 110.00 (pulled from July water reading)', r101Pull?.previousWaterCurrentReading);
+    assert(r101Pull?.previousCyclePeopleCount === 1, 'Room 101 previousCyclePeopleCount is 1 (from July snapshot)', r101Pull?.previousCyclePeopleCount);
+    assert(r101Pull?.currentHouseholdPeopleCount === 2, 'Room 101 currentHouseholdPeopleCount is 2 (current registered household occupants)', r101Pull?.currentHouseholdPeopleCount);
   }
 
   console.log('\n================================================================================');

@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import React from 'react';
-import { render, screen, fireEvent, cleanup } from '@testing-library/react';
+import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react';
 import { QuickAddTenantModal } from '../components/QuickAddTenantModal';
 import { formatBaht } from '../components/GlobalComponents';
 import { calculateInstallmentSchedule as calculateFrontendSchedule } from '../utils/installmentCalculator';
@@ -173,5 +173,41 @@ describe('LOCAL-07: Frontend Quick Add UI Authority & Installment Parity Proof',
         expect(beSum).toBe(totalExpectedSatang);
       }
     }
+  });
+
+  it('proves exactly ONE quick-add-error-box is rendered on validation error and its DOM position is after form fields and before footer buttons', async () => {
+    const { container } = render(
+      <QuickAddTenantModal
+        isOpen={true}
+        onClose={vi.fn()}
+        context={mockRegisteredRoom101Context}
+        onSuccess={vi.fn()}
+      />
+    );
+
+    const formElement = container.querySelector('form')!;
+    expect(formElement).not.toBeNull();
+
+    // Trigger form submit without entering required full name to trigger validation error
+    fireEvent.submit(formElement);
+
+    // 1. Assert exactly ONE error box exists in the entire DOM
+    await waitFor(() => {
+      const errorBoxes = container.querySelectorAll('[data-testid="quick-add-error-box"]');
+      expect(errorBoxes.length).toBe(1);
+    });
+    expect(screen.getByText('กรุณากรอกชื่อ-นามสกุล')).toBeDefined();
+
+    // 2. Assert DOM ordering: form input fields -> error box -> footer buttons
+    const submitBtn = screen.getByRole('button', { name: /ยืนยันเพิ่มผู้เช่า/ });
+    const formChildren = Array.from(formElement.children);
+    const errorBoxElement = container.querySelector('[data-testid="quick-add-error-box"]')!;
+    const footerElement = submitBtn.closest('div.pt-3')!;
+
+    const errorIndex = formChildren.indexOf(errorBoxElement);
+    const footerIndex = formChildren.indexOf(footerElement);
+
+    expect(errorIndex).toBeGreaterThan(0); // Appears after input field sections
+    expect(errorIndex).toBeLessThan(footerIndex); // Appears before footer action buttons
   });
 });

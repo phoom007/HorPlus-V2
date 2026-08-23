@@ -430,13 +430,6 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
 
         {/* Modal Form */}
         <form onSubmit={handleSubmit} className="p-5 overflow-y-auto space-y-4 flex-1">
-          {errorText && (
-            <div className="p-3 bg-rose-50 border border-rose-200 rounded-2xl text-rose-700 text-xs font-bold flex items-start gap-2">
-              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-              <span>{errorText}</span>
-            </div>
-          )}
-
           {/* Common Tenant Identity Fields */}
           <div className="space-y-3">
             <div>
