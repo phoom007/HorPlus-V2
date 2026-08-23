@@ -394,15 +394,43 @@ describe('LOCAL-07 Batch 01 — Browser/HTTP Boundary & Pull Previous Suite', ()
       expect(persisted).toBe(true);
     });
 
-    it('5. explicit zero counts resolved (0, "0", "0.00")', async () => {
-      const { computeHasPersistedBaseline, isResolvedBaseline } = await import('../pages/owner/meters');
+    it('5. strict validity rules for isResolvedBaseline (0..99999 integer and Postgres Decimal .00)', async () => {
+      const { isResolvedBaseline } = await import('../pages/owner/meters');
+
+      // Valid representations
       expect(isResolvedBaseline(0)).toBe(true);
       expect(isResolvedBaseline('0')).toBe(true);
       expect(isResolvedBaseline('0.00')).toBe(true);
+      expect(isResolvedBaseline(560)).toBe(true);
+      expect(isResolvedBaseline('560')).toBe(true);
+      expect(isResolvedBaseline('560.00')).toBe(true);
+      expect(isResolvedBaseline(99999)).toBe(true);
+      expect(isResolvedBaseline('99999')).toBe(true);
+      expect(isResolvedBaseline('99999.00')).toBe(true);
+
+      // Invalid representations
+      expect(isResolvedBaseline(12.7)).toBe(false);
+      expect(isResolvedBaseline('12.7')).toBe(false);
+      expect(isResolvedBaseline('12.70')).toBe(false);
+      expect(isResolvedBaseline('12.01')).toBe(false);
+      expect(isResolvedBaseline(-1)).toBe(false);
+      expect(isResolvedBaseline('-1')).toBe(false);
+      expect(isResolvedBaseline(100000)).toBe(false);
+      expect(isResolvedBaseline('100000')).toBe(false);
+      expect(isResolvedBaseline('100000.00')).toBe(false);
+      expect(isResolvedBaseline('abc')).toBe(false);
+      expect(isResolvedBaseline(Infinity)).toBe(false);
+      expect(isResolvedBaseline('Infinity')).toBe(false);
+      expect(isResolvedBaseline(NaN)).toBe(false);
+      expect(isResolvedBaseline('NaN')).toBe(false);
       expect(isResolvedBaseline(null)).toBe(false);
       expect(isResolvedBaseline(undefined)).toBe(false);
       expect(isResolvedBaseline('')).toBe(false);
+      expect(isResolvedBaseline('   ')).toBe(false);
+    });
 
+    it('5b. malformed baseline (e.g. 12.7) prevents full cycle baseline completion', async () => {
+      const { computeHasPersistedBaseline } = await import('../pages/owner/meters');
       const persisted = computeHasPersistedBaseline({
         isRateSnapshotReady: true,
         isMeterWorkspaceReady: true,
@@ -410,11 +438,11 @@ describe('LOCAL-07 Batch 01 — Browser/HTTP Boundary & Pull Previous Suite', ()
         isElecUnit: true,
         rooms: [{ id: 'r-101' }],
         serverReadings: [
-          { roomId: 'r-101', meterType: 'water', previousReading: 0 },
-          { roomId: 'r-101', meterType: 'electricity', previousReading: '0.00' },
+          { roomId: 'r-101', meterType: 'water', previousReading: '110.00' },
+          { roomId: 'r-101', meterType: 'electricity', previousReading: '12.7' }, // Invalid!
         ],
       });
-      expect(persisted).toBe(true);
+      expect(persisted).toBe(false);
     });
 
     it('6. fixed water + per_unit electric -> only per_unit electricity requirement', async () => {

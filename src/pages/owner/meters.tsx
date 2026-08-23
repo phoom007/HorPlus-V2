@@ -441,10 +441,28 @@ export function mapErrorMessageToThai(raw: any): string {
 
 export function isResolvedBaseline(val: any): boolean {
   if (val === null || val === undefined) return false;
+
+  if (typeof val === 'number') {
+    return Number.isInteger(val) && val >= 0 && val <= 99999;
+  }
+
   const str = String(val).trim();
   if (str === '') return false;
-  const num = Number(str);
-  return !isNaN(num) && num >= 0;
+
+  // Accept pure integer strings (1-5 digits: 0..99999)
+  if (/^\d{1,5}$/.test(str)) {
+    const num = parseInt(str, 10);
+    return !isNaN(num) && num >= 0 && num <= 99999;
+  }
+
+  // Accept Postgres Decimal representations with all-zero fractional part (e.g. "0.00", "560.00", "99999.00")
+  if (/^\d{1,5}\.0+$/.test(str)) {
+    const intPart = str.split('.')[0];
+    const num = parseInt(intPart, 10);
+    return !isNaN(num) && num >= 0 && num <= 99999;
+  }
+
+  return false;
 }
 
 export function computeHasPersistedBaseline(params: {
