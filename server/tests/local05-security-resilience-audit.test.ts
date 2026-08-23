@@ -78,6 +78,7 @@ describe.sequential('LOCAL-05: Local Security & Resilience Audit Suite', () => {
       'contract_status_histories',
       'contracts',
       'occupancies',
+      'payment_upload_intents',
       'tenant_vehicles',
       'tenant_emergency_contacts',
       'tenant_co_occupants',

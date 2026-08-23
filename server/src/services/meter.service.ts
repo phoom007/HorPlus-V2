@@ -1929,6 +1929,8 @@ export class MeterService {
         paidAt?: string | null;
         occurredInDisplayedPeriod: boolean;
         includedInAmountDue: boolean;
+        errorCode?: string;
+        errorMessage?: string;
       }> = [];
 
       let amountDueDec = toDecimal('0.00');
@@ -2034,20 +2036,50 @@ export class MeterService {
             });
 
             const previewTotalDec = toDecimal(utilityResult.monthlyUtilityTotal);
-            if (!isZeroDecimal(previewTotalDec)) {
+            const isZero = isZeroDecimal(previewTotalDec);
+            if (!isZero) {
               amountDueDec = addDecimals(amountDueDec, previewTotalDec);
-              chargeComponents.push({
-                type: 'monthly_utility',
-                label: 'บิลรายเดือน',
-                amount: formatDecimal(previewTotalDec),
-                status: 'PREVIEW',
-                paidAt: null,
-                occurredInDisplayedPeriod: true,
-                includedInAmountDue: true,
-              });
             }
-          } catch {
-            // Not ready for preview (e.g. required meter readings missing for per_unit mode or fail-closed validation)
+            chargeComponents.push({
+              type: 'monthly_utility',
+              label: 'บิลรายเดือน',
+              amount: formatDecimal(previewTotalDec),
+              status: 'PREVIEW',
+              paidAt: null,
+              occurredInDisplayedPeriod: true,
+              includedInAmountDue: !isZero,
+            });
+          } catch (err: any) {
+            let errorCode = 'INVALID_MONTHLY_UTILITY_CALCULATION';
+            let errorMessage = 'รูปแบบการคิดค่าบริการไม่ถูกต้อง';
+
+            if (err?.code === 'MISSING_WATER_METER_READING' || err?.message?.includes('MISSING_WATER_METER_READING') || err?.message?.includes('น้ำ')) {
+              errorCode = 'MISSING_WATER_METER_READING';
+              errorMessage = 'กรุณากรอกเลขมิเตอร์น้ำของงวดนี้ก่อนออกบิล';
+            } else if (err?.code === 'MISSING_ELECTRICITY_METER_READING' || err?.message?.includes('MISSING_ELECTRICITY_METER_READING') || err?.message?.includes('ไฟฟ้า')) {
+              errorCode = 'MISSING_ELECTRICITY_METER_READING';
+              errorMessage = 'กรุณากรอกเลขมิเตอร์ไฟฟ้าของงวดนี้ก่อนออกบิล';
+            } else if (err?.code === 'INVALID_BILLING_MODE' || err?.message?.includes('INVALID_BILLING_MODE')) {
+              errorCode = 'INVALID_BILLING_MODE';
+              errorMessage = 'ประเภทการคิดค่าบริการไม่ถูกต้อง';
+            } else if (err?.code === 'INVALID_METER_READING_LOWER' || err?.message?.includes('INVALID_METER_READING_LOWER') || err?.message?.includes('ต้องไม่น้อยกว่า')) {
+              errorCode = 'INVALID_METER_READING_LOWER';
+              errorMessage = 'เลขมิเตอร์ปัจจุบันต้องไม่น้อยกว่าเลขมิเตอร์ครั้งก่อน';
+            } else if (err?.code) {
+              errorCode = err.code;
+            }
+
+            chargeComponents.push({
+              type: 'monthly_utility',
+              label: 'บิลรายเดือน',
+              amount: '0.00',
+              status: 'INVALID',
+              paidAt: null,
+              occurredInDisplayedPeriod: true,
+              includedInAmountDue: false,
+              errorCode,
+              errorMessage,
+            });
           }
         }
       }

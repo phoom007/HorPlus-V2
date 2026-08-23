@@ -418,4 +418,70 @@ describe('LOCAL-07 Shared Canonical Monthly Utility Calculation Authority', () =
       });
     }).toThrow(/MISSING_WATER_METER_READING/);
   });
+
+  it('29. Section 12 Matrix: Valid zero utility (100->100, 500->500, fees 0) succeeds with 0.00 and is NOT INVALID', () => {
+    const res = calculateCanonicalMonthlyUtility({
+      rateSnapshot: {
+        waterBillingType: 'per_unit',
+        waterRate: '18.00',
+        electricityBillingType: 'per_unit',
+        electricityRate: '7.00',
+        commonFeeMode: 'per_room',
+        commonFee: '0.00',
+        internetFeeMode: 'none',
+        internetFee: '0.00',
+        parkingFeeMode: 'none',
+        parkingFee: '0.00',
+      },
+      waterReading: { previousReading: '100', currentReading: '100' },
+      electricReading: { previousReading: '500', currentReading: '500' },
+    });
+
+    expect(res.waterUsage).toBe('0.00');
+    expect(res.waterAmount).toBe('0.00');
+    expect(res.electricityUsage).toBe('0.00');
+    expect(res.electricityAmount).toBe('0.00');
+    expect(res.monthlyUtilityTotal).toBe('0.00');
+    expect(res.isValid).toBe(true);
+  });
+
+  it('30. Section 12 Matrix: Missing electric per_unit reading throws MISSING_ELECTRICITY_METER_READING', () => {
+    expect(() => {
+      calculateCanonicalMonthlyUtility({
+        rateSnapshot: {
+          waterBillingType: 'per_unit',
+          waterRate: '18.00',
+          electricityBillingType: 'per_unit',
+          electricityRate: '7.00',
+        },
+        waterReading: { previousReading: '100', currentReading: '110' },
+        electricReading: null,
+      });
+    }).toThrow(/MISSING_ELECTRICITY_METER_READING/);
+  });
+
+  it('31. Section 12 Matrix: Malformed meter readings (letters/symbols) fail closed', () => {
+    expect(() => {
+      calculateCanonicalMonthlyUtility({
+        rateSnapshot: baseRates,
+        waterReading: { previousReading: 'abc', currentReading: '100' },
+        electricReading: { previousReading: '500', currentReading: '550' },
+      });
+    }).toThrow();
+  });
+
+  it('32. Section 12 Matrix: Mixed fixed + missing per_unit fails closed for overall utility', () => {
+    expect(() => {
+      calculateCanonicalMonthlyUtility({
+        rateSnapshot: {
+          waterBillingType: 'fixed',
+          waterRate: '200.00',
+          electricityBillingType: 'per_unit',
+          electricityRate: '7.00',
+        },
+        waterReading: null,
+        electricReading: { previousReading: '', currentReading: '50' },
+      });
+    }).toThrow(/MISSING_ELECTRICITY_METER_READING/);
+  });
 });

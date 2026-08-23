@@ -310,7 +310,7 @@ export function getOwnerFinancialBreakdown(
     let title = 'รอชำระเงิน';
     if (status === 'PAID') title = 'ชำระแล้ว';
     else if (status === 'PREVIEW') title = 'ยังไม่ออกบิล (พรีวิว)';
-    else if (status === 'INVALID') title = 'รูปแบบการคิดค่าบริการไม่ถูกต้อง';
+    else if (status === 'INVALID') title = c.errorMessage || 'รูปแบบการคิดค่าบริการไม่ถูกต้อง';
 
     return {
       label: c.label || 'บิลรายเดือน',

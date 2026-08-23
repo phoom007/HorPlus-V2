@@ -376,20 +376,14 @@ describe('LOCAL-07 Final UAT Correction Test Suite', () => {
   });
 
   describe('6. No-Reading Monthly Utility Preview Eligibility & Issuance Parity', () => {
-    let dormId: string;
-    let cycleId: string;
-    let roomId: string;
-    let tenantId: string;
-    let contractId: string;
-
-    beforeAll(async () => {
+    it('proves room with ZERO meter readings receives valid 600.00 PREVIEW, and bill issuance replaces it with 600.00 UNPAID bill without duplicates', async () => {
       const dorm = await prisma.dormitory.create({
         data: {
           name: `No Reading Test Dorm ${Date.now()}`,
           code: `NRTD-${Date.now()}`,
         },
       });
-      dormId = dorm.id;
+      const dormId = dorm.id;
 
       await prisma.dormitoryBillingSettings.create({
         data: {
@@ -421,7 +415,7 @@ describe('LOCAL-07 Final UAT Correction Test Suite', () => {
         periodEnd: '2026-08-31',
         billingDate: '2026-08-25',
       });
-      cycleId = cycle.id;
+      const cycleId = cycle.id;
 
       const building = await prisma.building.create({
         data: {
@@ -442,7 +436,7 @@ describe('LOCAL-07 Final UAT Correction Test Suite', () => {
           monthlyRent: 4000,
         },
       });
-      roomId = room.id;
+      const roomId = room.id;
 
       const tenant = await prisma.tenant.create({
         data: {
@@ -455,7 +449,7 @@ describe('LOCAL-07 Final UAT Correction Test Suite', () => {
           status: 'active',
         },
       });
-      tenantId = tenant.id;
+      const tenantId = tenant.id;
 
       const contract = await prisma.contract.create({
         data: {
@@ -470,7 +464,6 @@ describe('LOCAL-07 Final UAT Correction Test Suite', () => {
           status: 'active',
         },
       });
-      contractId = contract.id;
 
       // Seed snapshot with 2 occupants -> water fixed (200) + elec per_person (150*2=300) + common (100) = 600.00
       await prisma.roomBillingCycleSnapshot.create({
@@ -482,25 +475,8 @@ describe('LOCAL-07 Final UAT Correction Test Suite', () => {
           version: 1,
         },
       });
-    });
 
-    afterAll(async () => {
-      await prisma.billItem.deleteMany({ where: { dormitoryId: dormId } }).catch(() => {});
-      await prisma.bill.deleteMany({ where: { dormitoryId: dormId } }).catch(() => {});
-      await prisma.roomBillingCycleSnapshot.deleteMany({ where: { dormitoryId: dormId } }).catch(() => {});
-      await prisma.contract.deleteMany({ where: { dormitoryId: dormId } }).catch(() => {});
-      await prisma.tenant.deleteMany({ where: { dormitoryId: dormId } }).catch(() => {});
-      await prisma.room.deleteMany({ where: { dormitoryId: dormId } }).catch(() => {});
-      await prisma.building.deleteMany({ where: { dormitoryId: dormId } }).catch(() => {});
-      await prisma.billingRateSnapshot.deleteMany({ where: { dormitoryId: dormId } }).catch(() => {});
-      await prisma.billingCycle.deleteMany({ where: { dormitoryId: dormId } }).catch(() => {});
-      await prisma.dormitoryBillingSettings.deleteMany({ where: { dormitoryId: dormId } }).catch(() => {});
-      await prisma.dormitory.deleteMany({ where: { id: dormId } }).catch(() => {});
-    });
-
-    it('proves room with ZERO meter readings receives valid 600.00 PREVIEW, and bill issuance replaces it with 600.00 UNPAID bill without duplicates', async () => {
       const { PrismaMeterRepository } = await import('../../db/repositories/meter.repository.js');
-      const { PrismaBillingCycleRepository } = await import('../../db/repositories/billing-cycle.repository.js');
       const { PrismaRoomRepository } = await import('../../db/repositories/room.repository.js');
       const { PrismaBillRepository } = await import('../../db/repositories/bill.repository.js');
       const { PrismaContractRepository } = await import('../../db/repositories/contract.repository.js');
@@ -566,6 +542,225 @@ describe('LOCAL-07 Final UAT Correction Test Suite', () => {
       expect(postRoom?.chargeComponents[0].status).toBe('UNPAID');
       expect(postRoom?.chargeComponents[0].amount).toBe('600.00');
       expect(postRoom?.chargeComponents[0].includedInAmountDue).toBe(true);
+
+      // Cleanup
+      await prisma.billItem.deleteMany({ where: { dormitoryId: dormId } }).catch(() => {});
+      await prisma.bill.deleteMany({ where: { dormitoryId: dormId } }).catch(() => {});
+      await prisma.roomBillingCycleSnapshot.deleteMany({ where: { dormitoryId: dormId } }).catch(() => {});
+      await prisma.contract.deleteMany({ where: { dormitoryId: dormId } }).catch(() => {});
+      await prisma.tenant.deleteMany({ where: { dormitoryId: dormId } }).catch(() => {});
+      await prisma.room.deleteMany({ where: { dormitoryId: dormId } }).catch(() => {});
+      await prisma.building.deleteMany({ where: { dormitoryId: dormId } }).catch(() => {});
+      await prisma.billingRateSnapshot.deleteMany({ where: { dormitoryId: dormId } }).catch(() => {});
+      await prisma.billingCycle.deleteMany({ where: { dormitoryId: dormId } }).catch(() => {});
+      await prisma.dormitoryBillingSettings.deleteMany({ where: { dormitoryId: dormId } }).catch(() => {});
+      await prisma.dormitory.deleteMany({ where: { id: dormId } }).catch(() => {});
+    });
+
+    it('CASE A: Valid Zero Monthly Utility produces status PREVIEW with 0.00 amount and is not marked INVALID', async () => {
+      const { PrismaMeterRepository } = await import('../../db/repositories/meter.repository.js');
+      const { PrismaBillingCycleRepository } = await import('../../db/repositories/billing-cycle.repository.js');
+      const { PrismaRoomRepository } = await import('../../db/repositories/room.repository.js');
+      const { PrismaBillRepository } = await import('../../db/repositories/bill.repository.js');
+      const { AuditService } = await import('../../services/audit.service.js');
+
+      // Create a dorm with per_unit water and 0 fees
+      const dormZero = await prisma.dormitory.create({
+        data: { name: `Zero Dorm ${Date.now()}`, code: `ZD-${Date.now()}` },
+      });
+      await prisma.dormitoryBillingSettings.create({
+        data: {
+          dormitoryId: dormZero.id,
+          billingDay: 25,
+          dueDay: 5,
+          waterBillingType: 'per_unit',
+          waterRate: 18,
+          electricityBillingType: 'per_unit',
+          electricityRate: 7,
+          commonFee: 0,
+          commonFeeMode: 'none',
+          internetFee: 0,
+          internetFeeMode: 'none',
+          parkingRate: 0,
+          parkingFeeMode: 'none',
+          lateFeeType: 'none',
+          lateFeeValue: 0,
+        },
+      });
+      const { BillingCycleService } = await import('../../services/billing-cycle.service.js');
+      const cycleService = new BillingCycleService(new PrismaBillingCycleRepository());
+      const { cycle: zCycle } = await cycleService.createBillingCycle(dormZero.id, {
+        cycleCode: '2026-08',
+        name: 'August 2026',
+        periodStart: '2026-08-01',
+        periodEnd: '2026-08-31',
+        billingDate: '2026-08-25',
+      });
+      const bldZ = await prisma.building.create({ data: { dormitoryId: dormZero.id, name: 'Bld Z' } });
+      const rZ = await prisma.room.create({
+        data: { dormitoryId: dormZero.id, buildingId: bldZ.id, roomNumber: 'Z101', normalizedRoomNumber: 'Z101', roomType: 'standard', floor: 1, status: 'occupied', monthlyRent: 0 },
+      });
+      const tZ = await prisma.tenant.create({
+        data: { dormitoryId: dormZero.id, tenantNumber: `TZ-${Date.now()}`, firstName: 'Zero', lastName: 'Tenant', displayName: 'Zero Tenant', phone: '0814444444', status: 'active' },
+      });
+      await prisma.contract.create({
+        data: { dormitoryId: dormZero.id, roomId: rZ.id, tenantId: tZ.id, contractNumber: `CTR-Z-${Date.now()}`, startDate: new Date('2026-01-01'), endDate: new Date('2026-12-31'), rentAmount: 0, depositAmount: 0, status: 'active' },
+      });
+      // Enter explicit 100->100 water and 500->500 electric
+      const waterDev = await prisma.meterDevice.create({
+        data: { dormitoryId: dormZero.id, roomId: rZ.id, type: 'water', meterNumber: `MN-W-${Date.now()}` },
+      });
+      const elecDev = await prisma.meterDevice.create({
+        data: { dormitoryId: dormZero.id, roomId: rZ.id, type: 'electricity', meterNumber: `MN-E-${Date.now()}` },
+      });
+      await prisma.meterReading.createMany({
+        data: [
+          { dormitoryId: dormZero.id, billingCycleId: zCycle.id, roomId: rZ.id, meterDeviceId: waterDev.id, meterType: 'water', previousReading: 100, currentReading: 100, usageUnits: 0, status: 'approved' },
+          { dormitoryId: dormZero.id, billingCycleId: zCycle.id, roomId: rZ.id, meterDeviceId: elecDev.id, meterType: 'electricity', previousReading: 500, currentReading: 500, usageUnits: 0, status: 'approved' },
+        ],
+      });
+
+      const meterService = new MeterService(
+        new PrismaMeterRepository(prisma),
+        new PrismaBillingCycleRepository(prisma),
+        new PrismaRoomRepository(prisma),
+        new PrismaBillRepository(prisma),
+        new AuditService()
+      );
+
+      const ctx = await meterService.getMeterBillingPreviewContext(dormZero.id, zCycle.id);
+      const room: any = ctx.rooms.find(r => r.roomId === rZ.id);
+
+      expect(room).toBeDefined();
+      expect(room.amountDue).toBe('0.00');
+      expect(room.chargeComponents).toHaveLength(1);
+      expect(room.chargeComponents[0].status).toBe('PREVIEW');
+      expect(room.chargeComponents[0].amount).toBe('0.00');
+      expect(room.chargeComponents[0].errorCode).toBeUndefined();
+
+      // Cleanup
+      await prisma.meterReading.deleteMany({ where: { dormitoryId: dormZero.id } });
+      await prisma.meterDevice.deleteMany({ where: { dormitoryId: dormZero.id } });
+      await prisma.contract.deleteMany({ where: { dormitoryId: dormZero.id } });
+      await prisma.tenant.deleteMany({ where: { dormitoryId: dormZero.id } });
+      await prisma.room.deleteMany({ where: { dormitoryId: dormZero.id } });
+      await prisma.building.deleteMany({ where: { dormitoryId: dormZero.id } });
+      await prisma.billingRateSnapshot.deleteMany({ where: { dormitoryId: dormZero.id } });
+      await prisma.billingCycle.deleteMany({ where: { dormitoryId: dormZero.id } });
+      await prisma.dormitoryBillingSettings.deleteMany({ where: { dormitoryId: dormZero.id } });
+      await prisma.dormitory.deleteMany({ where: { id: dormZero.id } });
+    });
+
+    it('CASE B & C: Missing per_unit baseline sets INVALID state and does not contaminate valid Rent amountDue', async () => {
+      const { PrismaMeterRepository } = await import('../../db/repositories/meter.repository.js');
+      const { PrismaBillingCycleRepository } = await import('../../db/repositories/billing-cycle.repository.js');
+      const { PrismaRoomRepository } = await import('../../db/repositories/room.repository.js');
+      const { PrismaBillRepository } = await import('../../db/repositories/bill.repository.js');
+      const { AuditService } = await import('../../services/audit.service.js');
+
+      // Create a dorm with per_unit water/elec and rent
+      const dormInvalid = await prisma.dormitory.create({
+        data: { name: `Invalid Dorm ${Date.now()}`, code: `ID-${Date.now()}` },
+      });
+      await prisma.dormitoryBillingSettings.create({
+        data: {
+          dormitoryId: dormInvalid.id,
+          billingDay: 25,
+          dueDay: 5,
+          waterBillingType: 'per_unit',
+          waterRate: 18,
+          electricityBillingType: 'per_unit',
+          electricityRate: 7,
+          commonFee: 200,
+          commonFeeMode: 'per_room',
+          internetFee: 0,
+          internetFeeMode: 'none',
+          parkingRate: 0,
+          parkingFeeMode: 'none',
+          lateFeeType: 'none',
+          lateFeeValue: 0,
+        },
+      });
+      const { BillingCycleService } = await import('../../services/billing-cycle.service.js');
+      const cycleService = new BillingCycleService(new PrismaBillingCycleRepository());
+      const { cycle: iCycle } = await cycleService.createBillingCycle(dormInvalid.id, {
+        cycleCode: '2026-08',
+        name: 'August 2026',
+        periodStart: '2026-08-01',
+        periodEnd: '2026-08-31',
+        billingDate: '2026-08-25',
+      });
+      const bldI = await prisma.building.create({ data: { dormitoryId: dormInvalid.id, name: 'Bld I' } });
+      const rI = await prisma.room.create({
+        data: { dormitoryId: dormInvalid.id, buildingId: bldI.id, roomNumber: 'I101', normalizedRoomNumber: 'I101', roomType: 'standard', floor: 1, status: 'occupied', monthlyRent: 4800 },
+      });
+      const tI = await prisma.tenant.create({
+        data: { dormitoryId: dormInvalid.id, tenantNumber: `TI-${Date.now()}`, firstName: 'Inv', lastName: 'Tenant', displayName: 'Inv Tenant', phone: '0815555555', status: 'active' },
+      });
+      const contractInv = await prisma.contract.create({
+        data: { dormitoryId: dormInvalid.id, roomId: rI.id, tenantId: tI.id, contractNumber: `CTR-I-${Date.now()}`, startDate: new Date('2026-01-01'), endDate: new Date('2026-12-31'), rentAmount: 4800, depositAmount: 0, status: 'active' },
+      });
+      // Generate unpaid RENT bill of 4800
+      await prisma.bill.create({
+        data: {
+          dormitoryId: dormInvalid.id,
+          roomId: rI.id,
+          billingCycleId: iCycle.id,
+          contractId: contractInv.id,
+          tenantId: tI.id,
+          billNumber: `BILL-RENT-${Date.now()}`,
+          billKind: 'RENT',
+          status: 'unpaid',
+          billingDate: new Date('2026-08-25'),
+          dueDate: new Date('2026-09-05'),
+          subtotal: 4800,
+          totalAmount: 4800,
+          outstandingAmount: 4800,
+          paidAmount: 0,
+        },
+      });
+
+      // No meter readings exist -> Monthly utility preview must fail closed with INVALID
+      const meterService = new MeterService(
+        new PrismaMeterRepository(prisma),
+        new PrismaBillingCycleRepository(prisma),
+        new PrismaRoomRepository(prisma),
+        new PrismaBillRepository(prisma),
+        new AuditService()
+      );
+
+      const ctx = await meterService.getMeterBillingPreviewContext(dormInvalid.id, iCycle.id);
+      const room: any = ctx.rooms.find(r => r.roomId === rI.id);
+
+      expect(room).toBeDefined();
+      // Primary amountDue MUST equal 4800 (Rent only), NOT contaminated or reset to 0
+      expect(room.amountDue).toBe('4800.00');
+      expect(room.chargeComponents).toHaveLength(2);
+
+      const rentComp = room.chargeComponents.find((c: any) => c.type === 'rent');
+      expect(rentComp).toBeDefined();
+      expect(rentComp.status).toBe('UNPAID');
+      expect(rentComp.amount).toBe('4800.00');
+      expect(rentComp.includedInAmountDue).toBe(true);
+
+      const utilComp = room.chargeComponents.find((c: any) => c.type === 'monthly_utility');
+      expect(utilComp).toBeDefined();
+      expect(utilComp.status).toBe('INVALID');
+      expect(utilComp.errorCode).toBe('MISSING_WATER_METER_READING');
+      expect(utilComp.errorMessage).toBe('กรุณากรอกเลขมิเตอร์น้ำของงวดนี้ก่อนออกบิล');
+      expect(utilComp.includedInAmountDue).toBe(false);
+
+      // Cleanup
+      await prisma.billItem.deleteMany({ where: { dormitoryId: dormInvalid.id } });
+      await prisma.bill.deleteMany({ where: { dormitoryId: dormInvalid.id } });
+      await prisma.contract.deleteMany({ where: { dormitoryId: dormInvalid.id } });
+      await prisma.tenant.deleteMany({ where: { dormitoryId: dormInvalid.id } });
+      await prisma.room.deleteMany({ where: { dormitoryId: dormInvalid.id } });
+      await prisma.building.deleteMany({ where: { dormitoryId: dormInvalid.id } });
+      await prisma.billingRateSnapshot.deleteMany({ where: { dormitoryId: dormInvalid.id } });
+      await prisma.billingCycle.deleteMany({ where: { dormitoryId: dormInvalid.id } });
+      await prisma.dormitoryBillingSettings.deleteMany({ where: { dormitoryId: dormInvalid.id } });
+      await prisma.dormitory.deleteMany({ where: { id: dormInvalid.id } });
     });
   });
 });

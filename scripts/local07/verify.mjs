@@ -326,12 +326,17 @@ export async function runVerification() {
   const room201Db = allRooms.find(r => r.roomNumber === '201');
   const room202Db = allRooms.find(r => r.roomNumber === '202');
 
-  if (cycleAugDb && room105Db && room101Db && room201Db && room202Db) {
+  if (cycleAugDb && room105Db && room101Db && room201Db && room202Db && room205Db) {
     const augPreview = await meterService.getMeterBillingPreviewContext(COMP_DORM.id, cycleAugDb.id);
 
-    // 0 Components: Room 105
+    // 0 Components: Room 205 (Vacant room)
+    const r205Aug = augPreview.rooms.find(r => r.roomId === room205Db.id);
+    assert(r205Aug?.chargeComponents?.length === 0, 'Room 205 (Vacant) has 0 charge components in August 2026');
+    assert(Number(r205Aug?.amountDue) === 0, 'Room 205 amountDue is 0.00 in August 2026');
+
+    // 1 Component (INVALID utility): Room 105 (Term room with missing per_unit readings)
     const r105Aug = augPreview.rooms.find(r => r.roomId === room105Db.id);
-    assert(r105Aug?.chargeComponents?.length === 0, 'Room 105 has 0 charge components in August 2026');
+    assert(r105Aug?.chargeComponents?.length === 1 && r105Aug?.chargeComponents[0]?.status === 'INVALID', 'Room 105 has 1 INVALID charge component in August 2026');
     assert(Number(r105Aug?.amountDue) === 0, 'Room 105 amountDue is 0.00 in August 2026');
 
     // 1 Component: Room 101
@@ -339,9 +344,9 @@ export async function runVerification() {
     assert(r101Aug?.chargeComponents?.length === 1, 'Room 101 has 1 charge component in August 2026', r101Aug?.chargeComponents?.length);
     assert(Number(r101Aug?.amountDue) === 5468, 'Room 101 amountDue is 5468.00 in August 2026');
 
-    // 2 Components: Room 201 (RENT + DEPOSIT)
+    // 3 Components (RENT + DEPOSIT + INVALID utility): Room 201
     const r201Aug = augPreview.rooms.find(r => r.roomId === room201Db.id);
-    assert(r201Aug?.chargeComponents?.length === 2, 'Room 201 has 2 charge components in August 2026', r201Aug?.chargeComponents?.length);
+    assert(r201Aug?.chargeComponents?.length === 3, 'Room 201 has 3 charge components in August 2026', r201Aug?.chargeComponents?.length);
     assert(Number(r201Aug?.amountDue) === 4800, 'Room 201 amountDue is 4800.00 in August 2026 (unpaid rent only)');
 
     // 3 Components: Room 202 (RENT + DEPOSIT + MONTHLY_UTILITY)
