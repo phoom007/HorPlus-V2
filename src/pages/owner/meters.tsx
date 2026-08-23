@@ -284,12 +284,34 @@ export interface TopLevelFinancialComponent {
   formattedAmount: string;
   status: 'PREVIEW' | 'UNPAID' | 'PAID' | 'INVALID';
   title: string;
+  errorMessage?: string;
 }
 
 export interface OwnerFinancialBreakdown {
   operationalAmount: number;
   formattedAmount: string;
   components: TopLevelFinancialComponent[];
+}
+
+/**
+ * Formats monetary amounts for component detail rows:
+ * - Whole-baht amounts use compact PO notation: e.g. 650.00 -> "650.-", 4800.00 -> "4,800.-"
+ * - Amounts with fractional satang preserve decimals: e.g. 650.50 -> "650.50"
+ */
+export function formatComponentDetailAmount(amountStr: string | number | null | undefined): string {
+  if (amountStr === null || amountStr === undefined || amountStr === '') return '0.-';
+  const num = typeof amountStr === 'number' ? amountStr : parseFloat(String(amountStr).replace(/,/g, ''));
+  if (isNaN(num)) return String(amountStr);
+
+  if (Number.isInteger(num)) {
+    return `${num.toLocaleString('en-US')}.-`;
+  }
+
+  const parts = Number(num.toFixed(2)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  if (parts.endsWith('.00')) {
+    return `${parts.slice(0, -3)}.-`;
+  }
+  return parts;
 }
 
 export function getOwnerFinancialBreakdown(
@@ -318,6 +340,7 @@ export function getOwnerFinancialBreakdown(
       formattedAmount: formatMoneyDisplay(rawAmt),
       status,
       title,
+      errorMessage: c.errorMessage,
     };
   });
 
@@ -728,12 +751,29 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     !isSaving
   );
 
+  // Durable Pull completion state: local session tracker + server-persisted baseline
+  const [pulledCycles, setPulledCycles] = useState<Record<string, boolean>>({});
+
+  const hasPersistedBaseline = Boolean(
+    meterWorkspaceQuery.data?.serverReadings &&
+    meterWorkspaceQuery.data.serverReadings.length > 0 &&
+    meterWorkspaceQuery.data.serverReadings.some(
+      (r: any) => r.previousReading !== null && r.previousReading !== undefined && String(r.previousReading).trim() !== ''
+    )
+  );
+
+  const isPullCompleted = Boolean(
+    (selectedBillingCycleId && pulledCycles[selectedBillingCycleId]) ||
+    hasPersistedBaseline
+  );
+
   const showPullButton = Boolean(
     isSelectedCycleAuthorityReady &&
     isFirstCycle === false &&
     previousCycleExists &&
     isMeterWorkspaceReady &&
-    isRateSnapshotReady
+    isRateSnapshotReady &&
+    !isPullCompleted
   );
 
   // Controlled input state for adding other fees per room
@@ -1004,6 +1044,9 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
 
       setMeterRows(updatedRows);
       pushHistory(updatedRows);
+      if (selectedBillingCycleId) {
+        setPulledCycles((prev) => ({ ...prev, [selectedBillingCycleId]: true }));
+      }
 
       if (Object.keys(newFlashing).length > 0) {
         setFlashingCells((prev) => ({ ...prev, ...newFlashing }));
@@ -2621,22 +2664,38 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                               </button>
                             )}
                             {isExpanded && chargeComponents.length > 0 && (
-                              <div className="mt-1.5 p-2 bg-slate-50 border border-slate-200 rounded-lg text-left shadow-sm min-w-[170px] space-y-1">
-                                {chargeComponents.map((c: any, cIdx: number) => (
-                                  <div key={cIdx} className="flex items-center justify-between gap-2 text-[10px]">
-                                    <span className="text-slate-600 truncate max-w-[110px]" title={c.label}>{c.label}</span>
-                                    <div className="flex items-center gap-1 shrink-0">
-                                      <span className="font-semibold text-slate-700">{formatMoneyDisplay(c.amount)} ฿</span>
-                                      {c.status === 'PAID' ? (
-                                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" title="ชำระแล้ว" />
-                                      ) : c.status === 'INVALID' ? (
-                                        <AlertCircle className="w-3.5 h-3.5 text-rose-500 shrink-0" title="ไม่ถูกต้อง" />
+                              <div className="mt-1 flex flex-col items-end gap-1 text-right">
+                                {chargeComponents.map((c: any, cIdx: number) => {
+                                  const isPaid = c.status === 'PAID';
+                                  const isInvalid = c.status === 'INVALID';
+                                  const isUnpaid = c.status === 'UNPAID';
+                                  const isPreview = c.status === 'PREVIEW' || (!isPaid && !isInvalid && !isUnpaid);
+
+                                  return (
+                                    <div
+                                      key={cIdx}
+                                      data-testid={`charge-component-row-${row.roomId}-${cIdx}`}
+                                      className="flex items-center justify-end gap-1.5 text-xs whitespace-nowrap"
+                                      title={isInvalid ? (c.errorMessage || 'ข้อมูลไม่ถูกต้อง') : undefined}
+                                    >
+                                      {isPaid ? (
+                                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                                      ) : isInvalid ? (
+                                        <AlertCircle className="w-3.5 h-3.5 text-rose-500 shrink-0" />
+                                      ) : isUnpaid ? (
+                                        <Clock className="w-3.5 h-3.5 text-amber-500 shrink-0" />
                                       ) : (
-                                        <Clock className="w-3.5 h-3.5 text-amber-500 shrink-0" title="ยังไม่ชำระ / รอดำเนินการ" />
+                                        <Clock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
                                       )}
+                                      <span className={isInvalid ? 'text-rose-600 font-medium' : isPreview ? 'text-slate-500' : isUnpaid ? 'text-amber-800' : 'text-slate-700 font-medium'}>
+                                        {c.label}
+                                      </span>
+                                      <span className={isInvalid ? 'text-rose-600 font-bold' : isPreview ? 'text-slate-500 font-semibold' : isUnpaid ? 'text-amber-900 font-bold' : 'text-slate-800 font-bold'}>
+                                        {formatComponentDetailAmount(c.amount)}
+                                      </span>
                                     </div>
-                                  </div>
-                                ))}
+                                  );
+                                })}
                               </div>
                             )}
                           </div>

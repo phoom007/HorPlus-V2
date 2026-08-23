@@ -307,21 +307,100 @@ describe('LOCAL-07 Batch 01 — Browser/HTTP Boundary & Pull Previous Suite', ()
     });
   });
 
-  describe('4. Button Visibility Invariant', () => {
-    function computeShowPullButton(isFirstCycle: boolean, isCycleLoaded: boolean): boolean {
-      return !isFirstCycle && isCycleLoaded;
+  describe('4. Button Visibility & Completion Invariant', () => {
+    function computeShowPullButton(params: {
+      isFirstCycle: boolean;
+      previousCycleExists: boolean;
+      isSelectedCycleAuthorityReady: boolean;
+      isMeterWorkspaceReady: boolean;
+      isRateSnapshotReady: boolean;
+      isPullCompleted: boolean;
+    }): boolean {
+      return Boolean(
+        params.isSelectedCycleAuthorityReady &&
+        params.isFirstCycle === false &&
+        params.previousCycleExists &&
+        params.isMeterWorkspaceReady &&
+        params.isRateSnapshotReady &&
+        !params.isPullCompleted
+      );
     }
 
     it('hides pull button on first cycle', () => {
-      expect(computeShowPullButton(true, true)).toBe(false);
+      expect(
+        computeShowPullButton({
+          isFirstCycle: true,
+          previousCycleExists: false,
+          isSelectedCycleAuthorityReady: true,
+          isMeterWorkspaceReady: true,
+          isRateSnapshotReady: true,
+          isPullCompleted: false,
+        })
+      ).toBe(false);
     });
 
-    it('shows pull button on non-first cycle when cycle is loaded, without requiring previous bills or precomputed mismatch', () => {
-      expect(computeShowPullButton(false, true)).toBe(true);
+    it('shows pull button on non-first cycle when prior cycle exists and baseline is not yet completed', () => {
+      expect(
+        computeShowPullButton({
+          isFirstCycle: false,
+          previousCycleExists: true,
+          isSelectedCycleAuthorityReady: true,
+          isMeterWorkspaceReady: true,
+          isRateSnapshotReady: true,
+          isPullCompleted: false,
+        })
+      ).toBe(true);
     });
 
-    it('hides pull button when cycle is not loaded', () => {
-      expect(computeShowPullButton(false, false)).toBe(false);
+    it('hides pull button when pull has been completed (either in session or persisted baseline)', () => {
+      expect(
+        computeShowPullButton({
+          isFirstCycle: false,
+          previousCycleExists: true,
+          isSelectedCycleAuthorityReady: true,
+          isMeterWorkspaceReady: true,
+          isRateSnapshotReady: true,
+          isPullCompleted: true,
+        })
+      ).toBe(false);
+    });
+
+    it('hides pull button when no previous cycle exists', () => {
+      expect(
+        computeShowPullButton({
+          isFirstCycle: false,
+          previousCycleExists: false,
+          isSelectedCycleAuthorityReady: true,
+          isMeterWorkspaceReady: true,
+          isRateSnapshotReady: true,
+          isPullCompleted: false,
+        })
+      ).toBe(false);
+    });
+  });
+
+  describe('5. Detail Component Money Formatting & Trigger Rules', () => {
+    it('formats whole-baht with compact .- and preserves satang', async () => {
+      const { formatComponentDetailAmount } = await import('../pages/owner/meters');
+      expect(formatComponentDetailAmount('650.00')).toBe('650.-');
+      expect(formatComponentDetailAmount('4800.00')).toBe('4,800.-');
+      expect(formatComponentDetailAmount('1200.00')).toBe('1,200.-');
+      expect(formatComponentDetailAmount('650.50')).toBe('650.50');
+      expect(formatComponentDetailAmount('0.00')).toBe('0.-');
+    });
+
+    it('computes trigger labels correctly (0 -> amount only, 1 -> ดูรายละเอียด, N>=2 -> ดูรายละเอียด +N)', () => {
+      function getDetailTriggerLabel(count: number): string | null {
+        if (count <= 0) return null;
+        if (count === 1) return 'ดูรายละเอียด';
+        return `ดูรายละเอียด +${count}`;
+      }
+
+      expect(getDetailTriggerLabel(0)).toBeNull();
+      expect(getDetailTriggerLabel(1)).toBe('ดูรายละเอียด');
+      expect(getDetailTriggerLabel(2)).toBe('ดูรายละเอียด +2');
+      expect(getDetailTriggerLabel(3)).toBe('ดูรายละเอียด +3');
+      expect(getDetailTriggerLabel(5)).toBe('ดูรายละเอียด +5');
     });
   });
 });

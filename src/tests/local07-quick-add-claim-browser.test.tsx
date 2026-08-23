@@ -2459,7 +2459,7 @@ describe('Daily Stay Meter Semantics, Financial Exclusion & Exact Deposit Copy',
     fireEvent.click(detailBtn);
 
     expect(screen.getByText('ค่าประกัน')).toBeDefined();
-    expect(screen.getByText('500.00 ฿')).toBeDefined();
+    expect(screen.getByText('500.-')).toBeDefined();
   });
 
   it('Proves C, D, E, F, G: Client calculator enforces strict DAILY_STAY financial exclusion while computing usage', () => {
