@@ -144,38 +144,65 @@ describe('LOCAL-07 Meter Workspace & Quick Add Comprehensive Frontend Suite', ()
     });
 
     it('preview calculation fails closed and does NOT assume per_unit on unknown mode or undefined rates', () => {
-      // 1. Unknown mode fails closed (0 charge, no per_unit assumption)
+      // 1. Unknown mode fails closed (INVALID status, not normal 0.00)
       const unknownPreview = calculateMeterRowPreview(
         { roomId: 'r-1', roomNumber: '101', billingSource: 'PROVISIONAL_MONTHLY', rentAmount: '3500.00' },
         { waterRate: '20.00', electricityRate: '8.00', waterBillingType: 'unknown_mode' as any, electricityBillingType: 'unknown_mode' as any },
         { waterPrev: '100', waterCurr: '110', elecPrev: '500', elecCurr: '550' }
       );
-      expect(unknownPreview.waterUsage).toBe('0.00');
-      expect(unknownPreview.waterAmount).toBe('0.00');
-      expect(unknownPreview.elecUsage).toBe('0.00');
-      expect(unknownPreview.elecAmount).toBe('0.00');
+      expect(unknownPreview.status).toBe('INVALID');
+      expect(unknownPreview.isValid).toBe(false);
+      expect(unknownPreview.isReady).toBe(true);
+      expect(unknownPreview.waterStatus).toBe('INVALID');
+      expect(unknownPreview.elecStatus).toBe('INVALID');
+      expect(unknownPreview.waterAmount).toBe('INVALID');
+      expect(unknownPreview.elecAmount).toBe('INVALID');
+      expect(unknownPreview.totalAmount).toBe('INVALID');
+      expect(unknownPreview.formattedTotal).toBe('รูปแบบคิดเงินไม่ถูกต้อง');
 
-      // 2. Undefined rates (not ready) returns 0 charge
+      // 2. Undefined rates (NOT_READY status)
       const notReadyPreview = calculateMeterRowPreview(
         { roomId: 'r-1', roomNumber: '101', billingSource: 'PROVISIONAL_MONTHLY', rentAmount: '3500.00' },
         undefined,
         { waterPrev: '100', waterCurr: '110', elecPrev: '500', elecCurr: '550' }
       );
+      expect(notReadyPreview.status).toBe('NOT_READY');
+      expect(notReadyPreview.isReady).toBe(false);
+      expect(notReadyPreview.isValid).toBe(false);
+      expect(notReadyPreview.waterStatus).toBe('NOT_READY');
+      expect(notReadyPreview.elecStatus).toBe('NOT_READY');
       expect(notReadyPreview.waterUsage).toBe('0.00');
       expect(notReadyPreview.waterAmount).toBe('0.00');
       expect(notReadyPreview.elecUsage).toBe('0.00');
       expect(notReadyPreview.elecAmount).toBe('0.00');
 
-      // 3. Canonical modes calculate correctly
+      // 3. Canonical modes calculate correctly (VALID status)
       const canonicalPreview = calculateMeterRowPreview(
         { roomId: 'r-1', roomNumber: '101', billingSource: 'PROVISIONAL_MONTHLY', rentAmount: '3500.00', snapshotPeopleCount: 2 },
         { waterRate: '50.00', electricityRate: '8.00', waterBillingType: 'per_person', electricityBillingType: 'per_unit' },
         { waterPrev: '100', waterCurr: '110', elecPrev: '500', elecCurr: '550' }
       );
+      expect(canonicalPreview.status).toBe('VALID');
+      expect(canonicalPreview.isValid).toBe(true);
+      expect(canonicalPreview.isReady).toBe(true);
+      expect(canonicalPreview.waterStatus).toBe('VALID');
+      expect(canonicalPreview.elecStatus).toBe('VALID');
       expect(canonicalPreview.waterUsage).toBe('2.00'); // 2 persons
       expect(canonicalPreview.waterAmount).toBe('100.00'); // 50 * 2 = 100
       expect(canonicalPreview.elecUsage).toBe('50.00'); // 550 - 500 = 50
       expect(canonicalPreview.elecAmount).toBe('400.00'); // 50 * 8 = 400
+
+      // 4. Legitimate VALID zero (e.g. 0 usage or 0 rate)
+      const validZeroPreview = calculateMeterRowPreview(
+        { roomId: 'r-1', roomNumber: '101', billingSource: 'PROVISIONAL_MONTHLY', rentAmount: '0.00', snapshotPeopleCount: 0 },
+        { waterRate: '18.00', electricityRate: '8.00', waterBillingType: 'per_unit', electricityBillingType: 'per_unit' },
+        { waterPrev: '100', waterCurr: '100', elecPrev: '500', elecCurr: '500' }
+      );
+      expect(validZeroPreview.status).toBe('VALID');
+      expect(validZeroPreview.isValid).toBe(true);
+      expect(validZeroPreview.waterAmount).toBe('0.00');
+      expect(validZeroPreview.elecAmount).toBe('0.00');
+      expect(validZeroPreview.totalAmount).toBe('0.00');
     });
   });
 

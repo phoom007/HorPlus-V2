@@ -59,7 +59,6 @@ export const MeterReadingItemSchema = z.object({
   meterDeviceId: z.string().optional(),
   previousReading: z.string().regex(/^\d{1,5}$/, 'ค่ามิเตอร์เดิมต้องเป็นตัวเลขจำนวนเต็ม 0 ถึง 99999').optional(),
   currentReading: z.string().regex(/^\d{1,5}$/, 'ค่ามิเตอร์ใหม่ต้องเป็นตัวเลขจำนวนเต็ม 0 ถึง 99999'),
-  previousReadingOverride: z.boolean().optional(),
   readAt: z.string().optional(),
   notes: z.string().optional(),
 });

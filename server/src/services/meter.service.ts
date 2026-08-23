@@ -59,7 +59,6 @@ export interface BulkMeterReadingItemDto {
   meterDeviceId?: string;
   previousReading?: string;
   currentReading: string;
-  previousReadingOverride?: boolean;
   readAt?: string;
   notes?: string;
 }
@@ -367,38 +366,26 @@ export class MeterService {
 
         let authPrev: string;
 
-        if (item.previousReadingOverride === true) {
-          // Explicit Owner-authorized manual override
+        // Normal path: enforce server authority and reject conflicting payload without silent discard
+        if (authDbPrev !== null) {
+          if (suppliedPrev !== null && Number(suppliedPrev) !== Number(authDbPrev)) {
+            const typeThai = item.meterType === 'water' ? 'น้ำ' : 'ไฟฟ้า';
+            const err = new Error(`PREVIOUS_READING_CONFLICT: ค่ามิเตอร์${typeThai}เดิมที่ส่งมา (${suppliedPrev}) ไม่ตรงกับฐานข้อมูล (${authDbPrev})`);
+            (err as any).statusCode = 400;
+            (err as any).code = 'PREVIOUS_READING_CONFLICT';
+            throw err;
+          }
+          authPrev = authDbPrev;
+        } else {
+          // Missing server baseline -> accept supplied previous reading
           if (suppliedPrev === null) {
             const typeThai = item.meterType === 'water' ? 'น้ำ' : 'ไฟฟ้า';
-            const err = new Error(`กรุณาระบุค่ามิเตอร์${typeThai}เดิมสำหรับการ override`);
+            const err = new Error(`กรุณาระบุค่ามิเตอร์${typeThai}เดิมสำหรับห้องนี้`);
             (err as any).statusCode = 400;
             (err as any).code = 'MISSING_PREVIOUS_METER_READING';
             throw err;
           }
           authPrev = suppliedPrev;
-        } else {
-          // Normal path: enforce server authority and reject conflicting payload without silent discard
-          if (authDbPrev !== null) {
-            if (suppliedPrev !== null && Number(suppliedPrev) !== Number(authDbPrev)) {
-              const typeThai = item.meterType === 'water' ? 'น้ำ' : 'ไฟฟ้า';
-              const err = new Error(`PREVIOUS_READING_CONFLICT: ค่ามิเตอร์${typeThai}เดิมที่ส่งมา (${suppliedPrev}) ไม่ตรงกับฐานข้อมูล (${authDbPrev}) และไม่ได้ระบุ previousReadingOverride`);
-              (err as any).statusCode = 400;
-              (err as any).code = 'PREVIOUS_READING_CONFLICT';
-              throw err;
-            }
-            authPrev = authDbPrev;
-          } else {
-            // Missing server baseline -> accept supplied previous reading
-            if (suppliedPrev === null) {
-              const typeThai = item.meterType === 'water' ? 'น้ำ' : 'ไฟฟ้า';
-              const err = new Error(`กรุณาระบุค่ามิเตอร์${typeThai}เดิมสำหรับห้องนี้`);
-              (err as any).statusCode = 400;
-              (err as any).code = 'MISSING_PREVIOUS_METER_READING';
-              throw err;
-            }
-            authPrev = suppliedPrev;
-          }
         }
         const prevVal = Number(authPrev);
         const currVal = Number(item.currentReading);

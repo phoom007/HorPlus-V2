@@ -282,7 +282,7 @@ export interface TopLevelFinancialComponent {
   label: string;
   amount: number;
   formattedAmount: string;
-  status: 'PREVIEW' | 'UNPAID' | 'PAID';
+  status: 'PREVIEW' | 'UNPAID' | 'PAID' | 'INVALID';
   title: string;
 }
 
@@ -349,7 +349,7 @@ export function getOwnerFinancialBreakdown(
     otherFees: row.otherFees || [],
   });
 
-  const previewSatang = parseScaled2(preview.totalAmount);
+  const previewSatang = preview.status === 'VALID' ? parseScaled2(preview.totalAmount) : 0n;
 
   const roomBills = (bills || []).filter(b => b.roomId === row.roomId && (b.billingCycleId === selectedBillingCycleId || b.cycleId === selectedBillingCycleId) && b.status !== 'cancelled' && (b.status as string) !== 'void');
   const monthlyBill = roomBills.find(b => b.billKind === 'MONTHLY_UTILITY');
@@ -374,17 +374,27 @@ export function getOwnerFinancialBreakdown(
       title: isPaid ? 'ชำระแล้ว' : 'รอชำระเงิน',
     });
   } else {
-    const amtStr = preview.totalAmount;
-    const pSatang = previewSatang;
-    operationalSatang += pSatang;
-    if (pSatang > 0n || roomCtx?.billingSource !== 'NONE') {
+    if (preview.status === 'INVALID') {
       components.push({
         label: 'บิลรายเดือน',
-        amount: Number(amtStr),
-        formattedAmount: formatMoneyDisplay(amtStr),
-        status: 'PREVIEW',
-        title: 'ยังไม่ออกบิล (พรีวิว)',
+        amount: 0,
+        formattedAmount: 'รูปแบบคิดเงินไม่ถูกต้อง',
+        status: 'INVALID',
+        title: 'รูปแบบการคิดค่าบริการไม่ถูกต้อง',
       });
+    } else {
+      const amtStr = preview.totalAmount;
+      const pSatang = previewSatang;
+      operationalSatang += pSatang;
+      if (pSatang > 0n || roomCtx?.billingSource !== 'NONE') {
+        components.push({
+          label: 'บิลรายเดือน',
+          amount: Number(amtStr),
+          formattedAmount: formatMoneyDisplay(amtStr),
+          status: 'PREVIEW',
+          title: 'ยังไม่ออกบิล (พรีวิว)',
+        });
+      }
     }
   }
 

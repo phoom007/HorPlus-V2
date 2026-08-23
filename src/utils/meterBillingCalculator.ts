@@ -51,12 +51,20 @@ export interface TransientRowDraft {
   otherFees?: Array<{ description: string; amount: number | string }>;
 }
 
+export type MeterCalculationStatus = 'VALID' | 'NOT_READY' | 'INVALID';
+
 export interface CalculatedMeterPreview {
+  status: MeterCalculationStatus;
+  isReady: boolean;
+  isValid: boolean;
+  errorMessage?: string;
   rentAmount: string;
   waterAmount: string;
   waterUsage: string;
+  waterStatus: MeterCalculationStatus;
   elecAmount: string;
   elecUsage: string;
+  elecStatus: MeterCalculationStatus;
   commonAmount: string;
   internetAmount: string;
   parkingAmount: string;
@@ -184,22 +192,27 @@ export function calculateMeterRowPreview(
   const rawElecCurr = draft.elecCurr !== undefined && draft.elecCurr !== null ? String(draft.elecCurr).trim() : '';
 
   // 1. Water Calculation
-  const waterMode = rates?.waterBillingType;
+  const rawWaterMode = rates?.waterBillingType;
   const waterRateSatang = parseSatang(rates?.waterRate);
   let waterUsageScaled = 0n;
   let waterAmountSatang = 0n;
+  let waterStatus: MeterCalculationStatus = 'VALID';
 
-  if (!rates || !waterMode) {
-    // Rates not loaded / not ready -> 0 calculation, no default assumption
+  if (!rates || !rawWaterMode) {
+    // Rates not loaded / not ready -> NOT_READY (no default assumption)
+    waterStatus = 'NOT_READY';
     waterUsageScaled = 0n;
     waterAmountSatang = 0n;
-  } else if (waterMode === 'per_person') {
+  } else if (rawWaterMode === 'per_person') {
+    waterStatus = 'VALID';
     waterAmountSatang = multiplyMoneyByQuantity(waterRateSatang, peopleCountStr);
     waterUsageScaled = parseScaled2(peopleCountStr);
-  } else if (waterMode === 'fixed') {
+  } else if (rawWaterMode === 'fixed') {
+    waterStatus = 'VALID';
     waterAmountSatang = waterRateSatang;
     waterUsageScaled = 100n; // 1.00 room
-  } else if (waterMode === 'per_unit') {
+  } else if (rawWaterMode === 'per_unit') {
+    waterStatus = 'VALID';
     // per_unit: calculate usage units with 4/5-digit rollover support
     if (rawWaterPrev !== '' && rawWaterCurr !== '') {
       const usageRes = calculateMeterUsageUnits(rawWaterPrev, rawWaterCurr);
@@ -218,28 +231,34 @@ export function calculateMeterRowPreview(
       }
     }
   } else {
-    // Unsupported/unknown present mode -> FAIL CLOSED (0 charge, never assume per_unit)
+    // Unsupported/unknown present mode -> INVALID (fail closed, never assume per_unit)
+    waterStatus = 'INVALID';
     waterUsageScaled = 0n;
     waterAmountSatang = 0n;
   }
 
   // 2. Electricity Calculation
-  const elecMode = rates?.electricityBillingType;
+  const rawElecMode = rates?.electricityBillingType;
   const elecRateSatang = parseSatang(rates?.electricityRate);
   let elecUsageScaled = 0n;
   let elecAmountSatang = 0n;
+  let elecStatus: MeterCalculationStatus = 'VALID';
 
-  if (!rates || !elecMode) {
-    // Rates not loaded / not ready -> 0 calculation, no default assumption
+  if (!rates || !rawElecMode) {
+    // Rates not loaded / not ready -> NOT_READY (no default assumption)
+    elecStatus = 'NOT_READY';
     elecUsageScaled = 0n;
     elecAmountSatang = 0n;
-  } else if (elecMode === 'per_person') {
+  } else if (rawElecMode === 'per_person') {
+    elecStatus = 'VALID';
     elecAmountSatang = multiplyMoneyByQuantity(elecRateSatang, peopleCountStr);
     elecUsageScaled = parseScaled2(peopleCountStr);
-  } else if (elecMode === 'fixed') {
+  } else if (rawElecMode === 'fixed') {
+    elecStatus = 'VALID';
     elecAmountSatang = elecRateSatang;
     elecUsageScaled = 100n; // 1.00 room
-  } else if (elecMode === 'per_unit') {
+  } else if (rawElecMode === 'per_unit') {
+    elecStatus = 'VALID';
     // per_unit: calculate usage units with 4/5-digit rollover support
     if (rawElecPrev !== '' && rawElecCurr !== '') {
       const usageRes = calculateMeterUsageUnits(rawElecPrev, rawElecCurr);
@@ -258,7 +277,8 @@ export function calculateMeterRowPreview(
       }
     }
   } else {
-    // Unsupported/unknown present mode -> FAIL CLOSED (0 charge, never assume per_unit)
+    // Unsupported/unknown present mode -> INVALID (fail closed, never assume per_unit)
+    elecStatus = 'INVALID';
     elecUsageScaled = 0n;
     elecAmountSatang = 0n;
   }
@@ -315,6 +335,23 @@ export function calculateMeterRowPreview(
   // 7. Overdue Amount Calculation
   const overdueSatang = parseSatang(draft.overdueAmount);
 
+  // Overall Status Derivation
+  let overallStatus: MeterCalculationStatus = 'VALID';
+  let isReady = true;
+  let isValid = true;
+  let errorMessage: string | undefined = undefined;
+
+  if (waterStatus === 'INVALID' || elecStatus === 'INVALID') {
+    overallStatus = 'INVALID';
+    isValid = false;
+    isReady = true;
+    errorMessage = 'รูปแบบการคิดค่าบริการไม่ถูกต้อง (Invalid billing mode)';
+  } else if (waterStatus === 'NOT_READY' || elecStatus === 'NOT_READY' || !rates) {
+    overallStatus = 'NOT_READY';
+    isReady = false;
+    isValid = false;
+  }
+
   // 8. Special Financial Rule for DAILY_STAY:
   // Meter readings for electricity/water are recorded for history/record purposes only,
   // but MUST NOT be added to the Daily amount due or total.
@@ -327,11 +364,17 @@ export function calculateMeterRowPreview(
     const totalStr = formatSatang(totalDailySatang);
 
     return {
+      status: overallStatus,
+      isReady,
+      isValid,
+      errorMessage,
       rentAmount: formatSatang(rentSatang),
       waterAmount: '0.00',
       waterUsage: formatScaled2(waterUsageScaled),
+      waterStatus,
       elecAmount: '0.00',
       elecUsage: formatScaled2(elecUsageScaled),
+      elecStatus,
       commonAmount: '0.00',
       internetAmount: '0.00',
       parkingAmount: '0.00',
@@ -355,18 +398,24 @@ export function calculateMeterRowPreview(
   const totalStr = formatSatang(totalSatang);
 
   return {
+    status: overallStatus,
+    isReady,
+    isValid,
+    errorMessage,
     rentAmount: formatSatang(rentSatang),
-    waterAmount: formatSatang(waterAmountSatang),
+    waterAmount: waterStatus === 'INVALID' ? 'INVALID' : formatSatang(waterAmountSatang),
     waterUsage: formatScaled2(waterUsageScaled),
-    elecAmount: formatSatang(elecAmountSatang),
+    waterStatus,
+    elecAmount: elecStatus === 'INVALID' ? 'INVALID' : formatSatang(elecAmountSatang),
     elecUsage: formatScaled2(elecUsageScaled),
+    elecStatus,
     commonAmount: formatSatang(commonAmountSatang),
     internetAmount: formatSatang(internetAmountSatang),
     parkingAmount: formatSatang(parkingAmountSatang),
     otherFeesAmount: formatSatang(otherFeesSatang),
     overdueAmount: formatSatang(overdueSatang),
-    totalAmount: totalStr,
-    formattedTotal: formatMoneyDisplay(totalStr),
+    totalAmount: overallStatus === 'INVALID' ? 'INVALID' : totalStr,
+    formattedTotal: overallStatus === 'INVALID' ? 'รูปแบบคิดเงินไม่ถูกต้อง' : formatMoneyDisplay(totalStr),
   };
 }
 

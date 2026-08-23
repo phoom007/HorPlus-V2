@@ -603,8 +603,8 @@ describe('Local-07 Central Billing Mode Normalization & Missing Meter Baseline A
       ).rejects.toThrow('PREVIOUS_READING_CONFLICT');
     });
 
-    it('submitBulkReadings accepts explicit previousReadingOverride: true and updates previousReading snapshot', async () => {
-      // In cycle 1, explicitly override previousReading to 1260 with currentReading: 1320.
+    it('submitBulkReadings accepts matching previousReading and omitted previousReading', async () => {
+      // 1. Omitted previousReading uses server authoritative 1250
       await meterService.submitBulkReadings(
         testDormId,
         {
@@ -613,20 +613,39 @@ describe('Local-07 Central Billing Mode Normalization & Missing Meter Baseline A
             {
               roomId,
               meterType: 'water',
-              previousReading: '1260',
               currentReading: '1320',
-              previousReadingOverride: true,
             },
           ],
         },
         testUserId
       );
 
-      const waterReading = await meterRepo.findReadingByCycleRoomAndType(testDormId, cycle1Id, roomId, 'water');
-      expect(waterReading).toBeDefined();
-      expect(Number(waterReading?.previousReading)).toBe(1260);
+      let waterReading = await meterRepo.findReadingByCycleRoomAndType(testDormId, cycle1Id, roomId, 'water');
+      expect(Number(waterReading?.previousReading)).toBe(1250);
       expect(Number(waterReading?.currentReading)).toBe(1320);
-      expect(waterReading?.usageUnits).toBe('60.00'); // 1320 - 1260 = 60
+      expect(waterReading?.usageUnits).toBe('70.00'); // 1320 - 1250 = 70
+
+      // 2. Matching previousReading '1250' succeeds
+      await meterService.submitBulkReadings(
+        testDormId,
+        {
+          billingCycleId: cycle1Id,
+          readings: [
+            {
+              roomId,
+              meterType: 'water',
+              previousReading: '1250',
+              currentReading: '1330',
+            },
+          ],
+        },
+        testUserId
+      );
+
+      waterReading = await meterRepo.findReadingByCycleRoomAndType(testDormId, cycle1Id, roomId, 'water');
+      expect(Number(waterReading?.previousReading)).toBe(1250);
+      expect(Number(waterReading?.currentReading)).toBe(1330);
+      expect(waterReading?.usageUnits).toBe('80.00'); // 1330 - 1250 = 80
     });
   });
 });
