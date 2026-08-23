@@ -86,6 +86,14 @@ export interface CanonicalMonthlyUtilityResult {
   errorMessage?: string;
 }
 
+function cleanReadingInput(val: string | number | null | undefined): string | number | null | undefined {
+  if (val === null || val === undefined) return val;
+  if (typeof val === 'string' && /^\d+\.0+$/.test(val.trim())) {
+    return val.trim().replace(/\.0+$/, '');
+  }
+  return val;
+}
+
 /**
  * Calculates canonical Monthly Utility charges, line items, and total.
  * Throws standard error for fatal domain violations (e.g. INVALID_BILLING_MODE, MISSING_METER_READING, INVALID_METER_READING_LOWER).
@@ -121,8 +129,8 @@ export function calculateCanonicalMonthlyUtility(
   const items: CanonicalMonthlyUtilityLineItem[] = [];
 
   if (waterMode === 'per_unit') {
-    const prevRaw = waterReading?.previousReading;
-    const currRaw = waterReading?.currentReading;
+    const prevRaw = cleanReadingInput(waterReading?.previousReading);
+    const currRaw = cleanReadingInput(waterReading?.currentReading);
     const hasPrev = prevRaw !== undefined && prevRaw !== null && String(prevRaw).trim() !== '';
     const hasCurr = currRaw !== undefined && currRaw !== null && String(currRaw).trim() !== '';
 
@@ -130,32 +138,21 @@ export function calculateCanonicalMonthlyUtility(
       if (!isZeroDecimal(waterRate)) {
         const err = new Error('MISSING_WATER_METER_READING: กรุณากรอกเลขมิเตอร์น้ำของงวดนี้ก่อนออกบิล');
         (err as any).statusCode = 400;
-        (err as any).code = 'MISSING_METER_READING';
+        (err as any).code = 'MISSING_WATER_METER_READING';
         throw err;
       }
     } else {
       const usageRes = calculateMeterUsageUnits(prevRaw, currRaw);
-      let unitsDec: any;
-      let isRollover = false;
-      let rolloverType: any = null;
-
-      if (usageRes.isValid) {
-        unitsDec = toDecimal(usageRes.usageUnits.toString());
-        isRollover = usageRes.isRollover;
-        rolloverType = usageRes.rolloverType;
-      } else {
-        const pNum = parseFloat(String(prevRaw).trim());
-        const cNum = parseFloat(String(currRaw).trim());
-        if (!isNaN(pNum) && !isNaN(cNum) && cNum >= pNum && pNum >= 0 && cNum <= 99999) {
-          unitsDec = subDecimals(toDecimal(String(currRaw).trim()), toDecimal(String(prevRaw).trim()));
-        } else {
-          const err = new Error(usageRes.errorMessage || 'ค่ามิเตอร์น้ำไม่ถูกต้อง');
-          (err as any).statusCode = 400;
-          (err as any).code = 'INVALID_METER_READING_LOWER';
-          throw err;
-        }
+      if (!usageRes.isValid) {
+        const err = new Error(usageRes.errorMessage || 'ค่ามิเตอร์น้ำไม่ถูกต้อง');
+        (err as any).statusCode = 400;
+        (err as any).code = usageRes.errorCode || 'INVALID_METER_READING';
+        throw err;
       }
 
+      const unitsDec = toDecimal(usageRes.usageUnits.toString());
+      const isRollover = usageRes.isRollover;
+      const rolloverType = usageRes.rolloverType;
       const amtDec = mulDecimals(unitsDec, waterRate);
       waterUsageStr = formatDecimal(unitsDec);
       waterAmountStr = formatDecimal(amtDec);
@@ -212,8 +209,8 @@ export function calculateCanonicalMonthlyUtility(
   let elecAmountStr = '0.00';
 
   if (elecMode === 'per_unit') {
-    const prevRaw = electricReading?.previousReading;
-    const currRaw = electricReading?.currentReading;
+    const prevRaw = cleanReadingInput(electricReading?.previousReading);
+    const currRaw = cleanReadingInput(electricReading?.currentReading);
     const hasPrev = prevRaw !== undefined && prevRaw !== null && String(prevRaw).trim() !== '';
     const hasCurr = currRaw !== undefined && currRaw !== null && String(currRaw).trim() !== '';
 
@@ -221,32 +218,21 @@ export function calculateCanonicalMonthlyUtility(
       if (!isZeroDecimal(elecRate)) {
         const err = new Error('MISSING_ELECTRICITY_METER_READING: กรุณากรอกเลขมิเตอร์ไฟฟ้าของงวดนี้ก่อนออกบิล');
         (err as any).statusCode = 400;
-        (err as any).code = 'MISSING_METER_READING';
+        (err as any).code = 'MISSING_ELECTRICITY_METER_READING';
         throw err;
       }
     } else {
       const usageRes = calculateMeterUsageUnits(prevRaw, currRaw);
-      let unitsDec: any;
-      let isRollover = false;
-      let rolloverType: any = null;
-
-      if (usageRes.isValid) {
-        unitsDec = toDecimal(usageRes.usageUnits.toString());
-        isRollover = usageRes.isRollover;
-        rolloverType = usageRes.rolloverType;
-      } else {
-        const pNum = parseFloat(String(prevRaw).trim());
-        const cNum = parseFloat(String(currRaw).trim());
-        if (!isNaN(pNum) && !isNaN(cNum) && cNum >= pNum && pNum >= 0 && cNum <= 99999) {
-          unitsDec = subDecimals(toDecimal(String(currRaw).trim()), toDecimal(String(prevRaw).trim()));
-        } else {
-          const err = new Error(usageRes.errorMessage || 'ค่ามิเตอร์ไฟฟ้าไม่ถูกต้อง');
-          (err as any).statusCode = 400;
-          (err as any).code = 'INVALID_METER_READING_LOWER';
-          throw err;
-        }
+      if (!usageRes.isValid) {
+        const err = new Error(usageRes.errorMessage || 'ค่ามิเตอร์ไฟฟ้าไม่ถูกต้อง');
+        (err as any).statusCode = 400;
+        (err as any).code = usageRes.errorCode || 'INVALID_METER_READING';
+        throw err;
       }
 
+      const unitsDec = toDecimal(usageRes.usageUnits.toString());
+      const isRollover = usageRes.isRollover;
+      const rolloverType = usageRes.rolloverType;
       const amtDec = mulDecimals(unitsDec, elecRate);
       elecUsageStr = formatDecimal(unitsDec);
       elecAmountStr = formatDecimal(amtDec);

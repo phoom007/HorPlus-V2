@@ -362,6 +362,18 @@ export function mapErrorMessageToThai(raw: any): string {
   if (code === 'MISSING_ELECTRICITY_METER_READING') {
     return 'กรุณากรอกเลขมิเตอร์ไฟฟ้าของงวดนี้ก่อนออกบิล';
   }
+  if (code === 'INVALID_METER_READING') {
+    return 'ค่ามิเตอร์ไม่ถูกต้อง (ต้องเป็นจำนวนเต็ม 0 ถึง 99999)';
+  }
+  if (code === 'INVALID_METER_READING_LOWER') {
+    return 'เลขมิเตอร์ปัจจุบันต้องไม่น้อยกว่าเลขมิเตอร์ครั้งก่อน';
+  }
+  if (code === 'INVALID_BILLING_MODE') {
+    return 'ประเภทการคิดค่าบริการไม่ถูกต้อง';
+  }
+  if (code === 'MISSING_RATE_SNAPSHOT') {
+    return 'ไม่พบข้อมูลอัตราค่าบริการ';
+  }
   if (code === 'STALE_VERSION') {
     return 'ข้อมูลถูกแก้ไขโดยผู้อื่น กรุณารีเฟรชหน้านี้';
   }

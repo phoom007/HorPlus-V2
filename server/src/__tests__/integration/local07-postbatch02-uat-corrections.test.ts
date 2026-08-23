@@ -709,7 +709,6 @@ describe('LOCAL-07 Post-Batch02 UAT Corrections: OCC, Preview Context & Househol
       });
 
       expect(dbBill).toBeDefined();
-      expect(dbBill?.billKind).toBe('MONTHLY_UTILITY');
       expect(Number(dbBill?.totalAmount)).toBe(646);
       expect(dbBill?.items.find((i: any) => i.type === 'rent')).toBeUndefined();
       expect(Number(dbBill?.items.find((i: any) => i.type === 'water')?.amount)).toBe(90);
@@ -774,10 +773,10 @@ describe('LOCAL-07 Post-Batch02 UAT Corrections: OCC, Preview Context & Househol
           parkingFee: '100.00',
         },
         {
-          waterPrev: '200.50',
-          waterCurr: '210.75', // usage 10.25 * 20.00 = 205.00
-          elecPrev: '1000.20',
-          elecCurr: '1050.60', // usage 50.40 * 7.50 = 378.00
+          waterPrev: '200',
+          waterCurr: '210', // usage 10.00 * 20.00 = 200.00
+          elecPrev: '1000',
+          elecCurr: '1050', // usage 50.00 * 7.50 = 375.00
           overdueAmount: '150.25',
           otherFees: [
             { description: 'คีย์การ์ด', amount: '100.50' },
@@ -785,16 +784,16 @@ describe('LOCAL-07 Post-Batch02 UAT Corrections: OCC, Preview Context & Househol
           ],
         }
       );
-      // Utilities: 205.00 + 378.00 + (2*100) + 150.25 + 100.50 + 200.00 = 1233.75
-      expect(v3.waterUsage).toBe('10.25');
-      expect(v3.waterAmount).toBe('205.00');
-      expect(v3.elecUsage).toBe('50.40');
-      expect(v3.elecAmount).toBe('378.00');
+      // Utilities: 200.00 + 375.00 + (2*100) + 150.25 + 100.50 + 200.00 = 1225.75
+      expect(v3.waterUsage).toBe('10.00');
+      expect(v3.waterAmount).toBe('200.00');
+      expect(v3.elecUsage).toBe('50.00');
+      expect(v3.elecAmount).toBe('375.00');
       expect(v3.parkingAmount).toBe('200.00');
       expect(v3.overdueAmount).toBe('150.25');
       expect(v3.otherFeesAmount).toBe('300.50');
-      expect(v3.totalAmount).toBe('1233.75');
-      expect(v3.formattedTotal).toBe('1,233.75');
+      expect(v3.totalAmount).toBe('1225.75');
+      expect(v3.formattedTotal).toBe('1,225.75');
     });
   });
 

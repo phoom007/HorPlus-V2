@@ -10,7 +10,7 @@
  * 5. RBAC Tech Remap & Finance Deprecation
  */
 
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import {
   parseMeterIntegerReading,
   calculateMeterUsageUnits,
@@ -761,6 +761,88 @@ describe('LOCAL-07 Final UAT Correction Test Suite', () => {
       await prisma.billingCycle.deleteMany({ where: { dormitoryId: dormInvalid.id } });
       await prisma.dormitoryBillingSettings.deleteMany({ where: { dormitoryId: dormInvalid.id } });
       await prisma.dormitory.deleteMany({ where: { id: dormInvalid.id } });
+    });
+
+    it('rethrows unexpected non-domain exceptions rather than converting to INVALID component', async () => {
+      const { PrismaMeterRepository } = await import('../../db/repositories/meter.repository.js');
+      const { PrismaBillingCycleRepository } = await import('../../db/repositories/billing-cycle.repository.js');
+      const { PrismaRoomRepository } = await import('../../db/repositories/room.repository.js');
+      const { PrismaBillRepository } = await import('../../db/repositories/bill.repository.js');
+      const { AuditService } = await import('../../services/audit.service.js');
+      const calcModule = await import('../../utils/monthly-utility-calculator.util.js');
+
+      const meterService = new MeterService(
+        new PrismaMeterRepository(prisma),
+        new PrismaBillingCycleRepository(prisma),
+        new PrismaRoomRepository(prisma),
+        new PrismaBillRepository(prisma),
+        new AuditService()
+      );
+
+      // Spy on calculateCanonicalMonthlyUtility to throw a generic unexpected TypeError
+      const spy = vi.spyOn(calcModule, 'calculateCanonicalMonthlyUtility').mockImplementationOnce(() => {
+        throw new TypeError('UNEXPECTED_SYSTEM_FAILURE: Memory pointer corrupted');
+      });
+
+      // Create minimal dorm
+      const dormErr = await prisma.dormitory.create({
+        data: { name: `Err Dorm ${Date.now()}`, code: `ED-${Date.now()}` },
+      });
+      await prisma.dormitoryBillingSettings.create({
+        data: {
+          dormitoryId: dormErr.id,
+          billingDay: 25,
+          dueDay: 5,
+          waterBillingType: 'fixed',
+          waterRate: 200,
+          electricityBillingType: 'fixed',
+          electricityRate: 400,
+          commonFee: 0,
+          commonFeeMode: 'none',
+          internetFee: 0,
+          internetFeeMode: 'none',
+          parkingRate: 0,
+          parkingFeeMode: 'none',
+          lateFeeType: 'none',
+          lateFeeValue: 0,
+        },
+      });
+      const { BillingCycleService } = await import('../../services/billing-cycle.service.js');
+      const cycleService = new BillingCycleService(new PrismaBillingCycleRepository());
+      const { cycle: eCycle } = await cycleService.createBillingCycle(dormErr.id, {
+        cycleCode: '2026-08',
+        name: 'August 2026',
+        periodStart: '2026-08-01',
+        periodEnd: '2026-08-31',
+        billingDate: '2026-08-25',
+      });
+      const bldE = await prisma.building.create({ data: { dormitoryId: dormErr.id, name: 'Bld E' } });
+      const rE = await prisma.room.create({
+        data: { dormitoryId: dormErr.id, buildingId: bldE.id, roomNumber: 'E101', normalizedRoomNumber: 'E101', roomType: 'standard', floor: 1, status: 'occupied', monthlyRent: 4000 },
+      });
+      const tE = await prisma.tenant.create({
+        data: { dormitoryId: dormErr.id, tenantNumber: `TE-${Date.now()}`, firstName: 'Err', lastName: 'Tenant', displayName: 'Err Tenant', phone: '0816666666', status: 'active' },
+      });
+      await prisma.contract.create({
+        data: { dormitoryId: dormErr.id, roomId: rE.id, tenantId: tE.id, contractNumber: `CTR-E-${Date.now()}`, startDate: new Date('2026-01-01'), endDate: new Date('2026-12-31'), rentAmount: 4000, depositAmount: 0, status: 'active' },
+      });
+
+      // Expect getMeterBillingPreviewContext to throw the unexpected exception
+      await expect(
+        meterService.getMeterBillingPreviewContext(dormErr.id, eCycle.id)
+      ).rejects.toThrow('UNEXPECTED_SYSTEM_FAILURE: Memory pointer corrupted');
+
+      spy.mockRestore();
+
+      // Cleanup
+      await prisma.contract.deleteMany({ where: { dormitoryId: dormErr.id } });
+      await prisma.tenant.deleteMany({ where: { dormitoryId: dormErr.id } });
+      await prisma.room.deleteMany({ where: { dormitoryId: dormErr.id } });
+      await prisma.building.deleteMany({ where: { dormitoryId: dormErr.id } });
+      await prisma.billingRateSnapshot.deleteMany({ where: { dormitoryId: dormErr.id } });
+      await prisma.billingCycle.deleteMany({ where: { dormitoryId: dormErr.id } });
+      await prisma.dormitoryBillingSettings.deleteMany({ where: { dormitoryId: dormErr.id } });
+      await prisma.dormitory.deleteMany({ where: { id: dormErr.id } });
     });
   });
 });

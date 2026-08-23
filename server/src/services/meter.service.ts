@@ -2050,36 +2050,50 @@ export class MeterService {
               includedInAmountDue: !isZero,
             });
           } catch (err: any) {
-            let errorCode = 'INVALID_MONTHLY_UTILITY_CALCULATION';
-            let errorMessage = 'รูปแบบการคิดค่าบริการไม่ถูกต้อง';
+            const domainCode = err?.code;
+            if (
+              domainCode === 'MISSING_WATER_METER_READING' ||
+              domainCode === 'MISSING_ELECTRICITY_METER_READING' ||
+              domainCode === 'MISSING_METER_READING' ||
+              domainCode === 'INVALID_BILLING_MODE' ||
+              domainCode === 'INVALID_METER_READING' ||
+              domainCode === 'INVALID_METER_READING_LOWER' ||
+              domainCode === 'MISSING_RATE_SNAPSHOT'
+            ) {
+              let errorCode = domainCode;
+              let errorMessage = 'รูปแบบการคิดค่าบริการไม่ถูกต้อง';
 
-            if (err?.code === 'MISSING_WATER_METER_READING' || err?.message?.includes('MISSING_WATER_METER_READING') || err?.message?.includes('น้ำ')) {
-              errorCode = 'MISSING_WATER_METER_READING';
-              errorMessage = 'กรุณากรอกเลขมิเตอร์น้ำของงวดนี้ก่อนออกบิล';
-            } else if (err?.code === 'MISSING_ELECTRICITY_METER_READING' || err?.message?.includes('MISSING_ELECTRICITY_METER_READING') || err?.message?.includes('ไฟฟ้า')) {
-              errorCode = 'MISSING_ELECTRICITY_METER_READING';
-              errorMessage = 'กรุณากรอกเลขมิเตอร์ไฟฟ้าของงวดนี้ก่อนออกบิล';
-            } else if (err?.code === 'INVALID_BILLING_MODE' || err?.message?.includes('INVALID_BILLING_MODE')) {
-              errorCode = 'INVALID_BILLING_MODE';
-              errorMessage = 'ประเภทการคิดค่าบริการไม่ถูกต้อง';
-            } else if (err?.code === 'INVALID_METER_READING_LOWER' || err?.message?.includes('INVALID_METER_READING_LOWER') || err?.message?.includes('ต้องไม่น้อยกว่า')) {
-              errorCode = 'INVALID_METER_READING_LOWER';
-              errorMessage = 'เลขมิเตอร์ปัจจุบันต้องไม่น้อยกว่าเลขมิเตอร์ครั้งก่อน';
-            } else if (err?.code) {
-              errorCode = err.code;
+              if (errorCode === 'MISSING_WATER_METER_READING') {
+                errorMessage = 'กรุณากรอกเลขมิเตอร์น้ำของงวดนี้ก่อนออกบิล';
+              } else if (errorCode === 'MISSING_ELECTRICITY_METER_READING') {
+                errorMessage = 'กรุณากรอกเลขมิเตอร์ไฟฟ้าของงวดนี้ก่อนออกบิล';
+              } else if (errorCode === 'MISSING_METER_READING') {
+                errorMessage = 'กรุณากรอกเลขมิเตอร์ของงวดนี้ก่อนออกบิล';
+              } else if (errorCode === 'INVALID_BILLING_MODE') {
+                errorMessage = 'ประเภทการคิดค่าบริการไม่ถูกต้อง';
+              } else if (errorCode === 'INVALID_METER_READING') {
+                errorMessage = 'ค่ามิเตอร์ไม่ถูกต้อง (ต้องเป็นจำนวนเต็ม 0 ถึง 99999)';
+              } else if (errorCode === 'INVALID_METER_READING_LOWER') {
+                errorMessage = 'เลขมิเตอร์ปัจจุบันต้องไม่น้อยกว่าเลขมิเตอร์ครั้งก่อน';
+              } else if (errorCode === 'MISSING_RATE_SNAPSHOT') {
+                errorMessage = 'ไม่พบข้อมูลอัตราค่าบริการ';
+              }
+
+              chargeComponents.push({
+                type: 'monthly_utility',
+                label: 'บิลรายเดือน',
+                amount: '0.00',
+                status: 'INVALID',
+                paidAt: null,
+                occurredInDisplayedPeriod: true,
+                includedInAmountDue: false,
+                errorCode,
+                errorMessage,
+              });
+            } else {
+              // Unexpected exception (e.g. database/runtime/programming failure) MUST escape / rethrow!
+              throw err;
             }
-
-            chargeComponents.push({
-              type: 'monthly_utility',
-              label: 'บิลรายเดือน',
-              amount: '0.00',
-              status: 'INVALID',
-              paidAt: null,
-              occurredInDisplayedPeriod: true,
-              includedInAmountDue: false,
-              errorCode,
-              errorMessage,
-            });
           }
         }
       }

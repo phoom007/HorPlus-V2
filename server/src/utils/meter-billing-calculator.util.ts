@@ -259,33 +259,42 @@ export interface MeterUsageResult {
   isRollover: boolean;
   rolloverType: '4_DIGIT' | '5_DIGIT' | null;
   usageUnits: number;
+  errorCode?: 'INVALID_METER_READING' | 'INVALID_METER_READING_LOWER';
   errorMessage?: string;
 }
 
 /**
  * Validates whether an input represents a non-negative integer between 0 and 99999 (maximum 5 digits).
- * Strictly rejects decimals, negatives, non-numeric strings, and numbers > 99999.
+ * Strictly rejects decimals (including .00), negatives, non-numeric strings, and numbers > 99999.
  */
-export function parseMeterIntegerReading(val: string | number | null | undefined): { isValid: boolean; value: number; errorMessage?: string } {
+export function parseMeterIntegerReading(val: string | number | null | undefined): { isValid: boolean; value: number; errorCode?: 'INVALID_METER_READING'; errorMessage?: string } {
   if (val === null || val === undefined || val === '') {
-    return { isValid: false, value: 0, errorMessage: 'กรุณาระบุค่ามิเตอร์' };
+    return { isValid: false, value: 0, errorCode: 'INVALID_METER_READING', errorMessage: 'กรุณาระบุค่ามิเตอร์' };
+  }
+
+  if (typeof val === 'object' && val !== null && ('toNumber' in val || 'd' in val)) {
+    const num = Number(val);
+    if (!Number.isInteger(num) || num < 0 || num > 99999) {
+      return { isValid: false, value: 0, errorCode: 'INVALID_METER_READING', errorMessage: 'ค่ามิเตอร์ต้องเป็นจำนวนเต็มระหว่าง 0 ถึง 99999 (สูงสุด 5 หลัก)' };
+    }
+    return { isValid: true, value: num };
   }
 
   if (typeof val === 'number') {
     if (!Number.isInteger(val) || val < 0 || val > 99999) {
-      return { isValid: false, value: 0, errorMessage: 'ค่ามิเตอร์ต้องเป็นจำนวนเต็มระหว่าง 0 ถึง 99999 (สูงสุด 5 หลัก)' };
+      return { isValid: false, value: 0, errorCode: 'INVALID_METER_READING', errorMessage: 'ค่ามิเตอร์ต้องเป็นจำนวนเต็มระหว่าง 0 ถึง 99999 (สูงสุด 5 หลัก)' };
     }
     return { isValid: true, value: val };
   }
 
   const str = String(val).trim();
   if (!/^\d{1,5}$/.test(str)) {
-    return { isValid: false, value: 0, errorMessage: 'ค่ามิเตอร์ต้องเป็นตัวเลขจำนวนเต็ม 0 ถึง 99999 (สูงสุด 5 หลัก)' };
+    return { isValid: false, value: 0, errorCode: 'INVALID_METER_READING', errorMessage: 'ค่ามิเตอร์ต้องเป็นตัวเลขจำนวนเต็ม 0 ถึง 99999 (สูงสุด 5 หลัก)' };
   }
 
   const parsed = parseInt(str, 10);
   if (isNaN(parsed) || parsed < 0 || parsed > 99999) {
-    return { isValid: false, value: 0, errorMessage: 'ค่ามิเตอร์ต้องเป็นจำนวนเต็มระหว่าง 0 ถึง 99999' };
+    return { isValid: false, value: 0, errorCode: 'INVALID_METER_READING', errorMessage: 'ค่ามิเตอร์ต้องเป็นจำนวนเต็มระหว่าง 0 ถึง 99999' };
   }
 
   return { isValid: true, value: parsed };
@@ -311,6 +320,7 @@ export function calculateMeterUsageUnits(
       isRollover: false,
       rolloverType: null,
       usageUnits: 0,
+      errorCode: 'INVALID_METER_READING',
       errorMessage: `ค่ามิเตอร์เดิมไม่ถูกต้อง: ${prevParsed.errorMessage}`,
     };
   }
@@ -322,6 +332,7 @@ export function calculateMeterUsageUnits(
       isRollover: false,
       rolloverType: null,
       usageUnits: 0,
+      errorCode: 'INVALID_METER_READING',
       errorMessage: `ค่ามิเตอร์ปัจจุบันไม่ถูกต้อง: ${currParsed.errorMessage}`,
     };
   }
@@ -365,6 +376,7 @@ export function calculateMeterUsageUnits(
     isRollover: false,
     rolloverType: null,
     usageUnits: 0,
+    errorCode: 'INVALID_METER_READING_LOWER',
     errorMessage: `ค่ามิเตอร์ปัจจุบัน (${curr}) ต้องไม่น้อยกว่าค่ามิเตอร์เดิม (${prev})`,
   };
 }

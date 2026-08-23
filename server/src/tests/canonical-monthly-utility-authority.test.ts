@@ -460,18 +460,87 @@ describe('LOCAL-07 Shared Canonical Monthly Utility Calculation Authority', () =
     }).toThrow(/MISSING_ELECTRICITY_METER_READING/);
   });
 
-  it('31. Section 12 Matrix: Malformed meter readings (letters/symbols) fail closed', () => {
-    expect(() => {
+  it('31. Section 12 Matrix: Malformed meter readings ("abc", "12.7", "-1", "100000") throw INVALID_METER_READING', () => {
+    // 31.1 non-numeric string
+    try {
       calculateCanonicalMonthlyUtility({
         rateSnapshot: baseRates,
         waterReading: { previousReading: 'abc', currentReading: '100' },
         electricReading: { previousReading: '500', currentReading: '550' },
       });
-    }).toThrow();
+      expect.unreachable('Should have thrown');
+    } catch (err: any) {
+      expect(err.code).toBe('INVALID_METER_READING');
+    }
+
+    // 31.2 decimal string where integer required
+    try {
+      calculateCanonicalMonthlyUtility({
+        rateSnapshot: baseRates,
+        waterReading: { previousReading: '12.7', currentReading: '100' },
+        electricReading: { previousReading: '500', currentReading: '550' },
+      });
+      expect.unreachable('Should have thrown');
+    } catch (err: any) {
+      expect(err.code).toBe('INVALID_METER_READING');
+    }
+
+    // 31.3 negative reading
+    try {
+      calculateCanonicalMonthlyUtility({
+        rateSnapshot: baseRates,
+        waterReading: { previousReading: '-1', currentReading: '100' },
+        electricReading: { previousReading: '500', currentReading: '550' },
+      });
+      expect.unreachable('Should have thrown');
+    } catch (err: any) {
+      expect(err.code).toBe('INVALID_METER_READING');
+    }
+
+    // 31.4 number > 99999
+    try {
+      calculateCanonicalMonthlyUtility({
+        rateSnapshot: baseRates,
+        waterReading: { previousReading: '100000', currentReading: '100' },
+        electricReading: { previousReading: '500', currentReading: '550' },
+      });
+      expect.unreachable('Should have thrown');
+    } catch (err: any) {
+      expect(err.code).toBe('INVALID_METER_READING');
+    }
   });
 
-  it('32. Section 12 Matrix: Mixed fixed + missing per_unit fails closed for overall utility', () => {
-    expect(() => {
+  it('32. Section 12 Matrix: Lower meter reading without rollover throws INVALID_METER_READING_LOWER', () => {
+    try {
+      calculateCanonicalMonthlyUtility({
+        rateSnapshot: baseRates,
+        waterReading: { previousReading: '500', currentReading: '400' },
+        electricReading: { previousReading: '500', currentReading: '550' },
+      });
+      expect.unreachable('Should have thrown');
+    } catch (err: any) {
+      expect(err.code).toBe('INVALID_METER_READING_LOWER');
+    }
+  });
+
+  it('33. Rollover readings remain valid: 99990 -> 20 (30 units) and 9990 -> 20 (30 units)', () => {
+    const res5 = calculateCanonicalMonthlyUtility({
+      rateSnapshot: baseRates,
+      waterReading: { previousReading: '99990', currentReading: '20' },
+      electricReading: { previousReading: '500', currentReading: '550' },
+    });
+    expect(res5.waterUsage).toBe('30.00');
+
+    const res4 = calculateCanonicalMonthlyUtility({
+      rateSnapshot: baseRates,
+      waterReading: { previousReading: '9990', currentReading: '20' },
+      electricReading: { previousReading: '500', currentReading: '550' },
+    });
+    expect(res4.waterUsage).toBe('30.00');
+  });
+
+  it('34. Section 12 Matrix: Mixed fixed + missing per_unit fails closed for overall utility', () => {
+    try {
       calculateCanonicalMonthlyUtility({
         rateSnapshot: {
           waterBillingType: 'fixed',
@@ -482,6 +551,9 @@ describe('LOCAL-07 Shared Canonical Monthly Utility Calculation Authority', () =
         waterReading: null,
         electricReading: { previousReading: '', currentReading: '50' },
       });
-    }).toThrow(/MISSING_ELECTRICITY_METER_READING/);
+      expect.unreachable('Should have thrown');
+    } catch (err: any) {
+      expect(err.code).toBe('MISSING_ELECTRICITY_METER_READING');
+    }
   });
 });
