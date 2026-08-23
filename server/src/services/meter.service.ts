@@ -19,6 +19,7 @@ import { toDecimal, formatDecimal, compareDecimals, divDecimals, mulDecimals, su
 import { calculateInstallmentSchedule } from '../utils/installment-calculator.util.js';
 import { currentBusinessDateInBangkok, toBangkokDateString, normalizeBangkokDate, getBangkokStartOfDayUtc } from '../utils/calendar-date.util.js';
 import { calculateMeterUsageUnits, parseMeterIntegerReading, calculateMeterRowPreview, TransientRowDraft, RoomPreviewContext } from '../utils/meter-billing-calculator.util.js';
+import { calculateCanonicalMonthlyUtility } from '../utils/monthly-utility-calculator.util.js';
 import { normalizeUtilityBillingMode } from '../utils/billing-mode-normalizer.util.js';
 import { resolveDailyTimestampsAndPricing } from './daily-stay.service.js';
 import {
@@ -2011,29 +2012,27 @@ export class MeterService {
         const elecReading = roomReadings.find((r) => r.meterType === 'electricity');
 
         if (!hasMonthlyUtilityBill && !isFutureReservation && roomReadings.length > 0) {
-          const draft: TransientRowDraft = {
-            waterPrev: waterReading?.previousReading != null ? waterReading.previousReading.toString() : undefined,
-            waterCurr: waterReading?.currentReading != null ? waterReading.currentReading.toString() : undefined,
-            elecPrev: elecReading?.previousReading != null ? elecReading.previousReading.toString() : undefined,
-            elecCurr: elecReading?.currentReading != null ? elecReading.currentReading.toString() : undefined,
-            peopleCount: snapshotPeopleCount ?? currentHouseholdPeopleCount ?? 0,
-            overdueAmount: snapshotManualOutstanding ?? '0.00',
-            otherFees: snapshotOtherFees ?? [],
-          };
-
-          const roomCtxLike: RoomPreviewContext = {
-            roomId: room.id,
-            roomNumber: room.roomNumber,
-            rentAmount: rentAmount || '0.00',
-            billingSource,
-            currentHouseholdPeopleCount,
-            snapshotPeopleCount,
-            parkingQuantity,
-          };
-
           try {
-            const preview = calculateMeterRowPreview(roomCtxLike, (canonicalRateSnapshot as any) ?? undefined, draft);
-            const previewTotalDec = toDecimal(preview.totalAmount);
+            const utilityResult = calculateCanonicalMonthlyUtility({
+              dormitoryId,
+              billingCycleId,
+              roomId: room.id,
+              rateSnapshot: canonicalRateSnapshot,
+              waterReading: waterReading ? {
+                previousReading: waterReading.previousReading != null ? waterReading.previousReading.toString() : undefined,
+                currentReading: waterReading.currentReading != null ? waterReading.currentReading.toString() : undefined,
+              } : null,
+              electricReading: elecReading ? {
+                previousReading: elecReading.previousReading != null ? elecReading.previousReading.toString() : undefined,
+                currentReading: elecReading.currentReading != null ? elecReading.currentReading.toString() : undefined,
+              } : null,
+              peopleCount: snapshotPeopleCount ?? currentHouseholdPeopleCount ?? 0,
+              parkingQuantity,
+              manualOutstanding: snapshotManualOutstanding ?? '0.00',
+              otherFees: snapshotOtherFees ?? [],
+            });
+
+            const previewTotalDec = toDecimal(utilityResult.monthlyUtilityTotal);
             if (!isZeroDecimal(previewTotalDec)) {
               amountDueDec = addDecimals(amountDueDec, previewTotalDec);
               chargeComponents.push({

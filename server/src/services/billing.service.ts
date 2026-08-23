@@ -18,6 +18,7 @@ import { subscriptionEntitlementService } from './subscription-entitlement.servi
 import { toDecimal, addDecimals, mulDecimals, divDecimals, formatDecimal, subDecimals, compareDecimals, isZeroDecimal } from '../utils/decimal-math.util.js';
 import { calculateInstallmentSchedule } from '../utils/installment-calculator.util.js';
 import { normalizeUtilityBillingMode } from '../utils/billing-mode-normalizer.util.js';
+import { calculateCanonicalMonthlyUtility } from '../utils/monthly-utility-calculator.util.js';
 import { getPrismaClient } from '../db/prisma.js';
 
 /**
@@ -370,252 +371,76 @@ export class BillingService {
       }
     }
 
+    let waterUsageStr = '0.00';
+    let waterItemAmount = '0.00';
+    let elecUsageStr = '0.00';
+    let elecItemAmount = '0.00';
+    let commonItemAmount = '0.00';
+    let internetItemAmount = '0.00';
+    let parkingItemAmount = '0.00';
+    let manualOutstandingStr = '0.00';
+    let otherFeesList: Array<{ description: string; amount: string }> = [];
+
     // Utility Charges: ONLY include when billKind is 'MONTHLY_UTILITY' or 'LEGACY_COMBINED'
     const shouldIncludeUtilities = billKind === 'MONTHLY_UTILITY' || billKind === 'LEGACY_COMBINED';
 
     if (shouldIncludeUtilities) {
-      // Water Fee
-      if (waterMode === 'per_unit') {
-        const waterReading = await this.meterRepo.findReadingByCycleRoomAndType(
-          dormitoryId,
-          billingCycleId,
-          roomId,
-          'water',
-          tx
-        );
-        if (!waterReading) {
-          if (!isZeroDecimal(waterRate)) {
-            const err = new Error('MISSING_WATER_METER_READING');
-            (err as any).statusCode = 400;
-            (err as any).code = 'MISSING_METER_READING';
-            (err as any).message = 'กรุณากรอกเลขมิเตอร์น้ำของงวดนี้ก่อนออกบิล';
-            throw err;
-          }
-        } else {
-          const units = toDecimal(waterReading.usageUnits);
-          const amount = mulDecimals(units, waterRate);
-          items.push({
-            type: 'water',
-            description: `ค่าน้ำประปา (${waterReading.previousReading} - ${waterReading.currentReading})`,
-            quantity: formatDecimal(units),
-            unit: 'unit',
-            unitPrice: formatDecimal(waterRate),
-            amount: formatDecimal(amount),
-            metadata: {
-              previousReading: waterReading.previousReading,
-              currentReading: waterReading.currentReading,
-              usageUnits: waterReading.usageUnits,
-              mode: 'per_unit',
-            },
-          });
-        }
-      } else if (waterMode === 'per_person') {
-        const amount = mulDecimals(peopleCountDec, waterRate);
-        items.push({
-          type: 'water',
-          description: `ค่าน้ำประปา (${peopleCount} คน)`,
-          quantity: formatDecimal(peopleCountDec),
-          unit: 'person',
-          unitPrice: formatDecimal(waterRate),
-          amount: formatDecimal(amount),
-          metadata: { mode: 'per_person', peopleCount },
-        });
-      } else if (waterMode === 'fixed') {
-        if (!isZeroDecimal(waterRate)) {
-          items.push({
-            type: 'water',
-            description: 'ค่าน้ำประปา (เหมาจ่าย)',
-            quantity: '1.00',
-            unit: 'room',
-            unitPrice: formatDecimal(waterRate),
-            amount: formatDecimal(waterRate),
-            metadata: { mode: 'fixed' },
-          });
-        }
+      const waterReading = await this.meterRepo.findReadingByCycleRoomAndType(
+        dormitoryId,
+        billingCycleId,
+        roomId,
+        'water',
+        tx
+      );
+
+      const elecReading = await this.meterRepo.findReadingByCycleRoomAndType(
+        dormitoryId,
+        billingCycleId,
+        roomId,
+        'electricity',
+        tx
+      );
+
+      let vehicleCount = 0;
+      const parkingMode = (rateSnapshot as any).parkingFeeMode || 'room';
+      if (parkingMode === 'vehicle' || parkingMode === 'per_vehicle') {
+        const vehicles = tenantId ? await this.tenantRepo.findVehicles(tenantId, dormitoryId) : [];
+        vehicleCount = vehicles.length;
       }
 
-      // Electricity Fee
-      if (elecMode === 'per_unit') {
-        const elecReading = await this.meterRepo.findReadingByCycleRoomAndType(
-          dormitoryId,
-          billingCycleId,
-          roomId,
-          'electricity',
-          tx
-        );
-        if (!elecReading) {
-          if (!isZeroDecimal(elecRate)) {
-            const err = new Error('MISSING_ELECTRICITY_METER_READING');
-            (err as any).statusCode = 400;
-            (err as any).code = 'MISSING_METER_READING';
-            (err as any).message = 'กรุณากรอกเลขมิเตอร์ไฟฟ้าของงวดนี้ก่อนออกบิล';
-            throw err;
-          }
-        } else {
-          const units = toDecimal(elecReading.usageUnits);
-          const amount = mulDecimals(units, elecRate);
-          items.push({
-            type: 'electricity',
-            description: `ค่าไฟฟ้า (${elecReading.previousReading} - ${elecReading.currentReading})`,
-            quantity: formatDecimal(units),
-            unit: 'unit',
-            unitPrice: formatDecimal(elecRate),
-            amount: formatDecimal(amount),
-            metadata: {
-              previousReading: elecReading.previousReading,
-              currentReading: elecReading.currentReading,
-              usageUnits: elecReading.usageUnits,
-              mode: 'per_unit',
-            },
-          });
-        }
-      } else if (elecMode === 'per_person') {
-        const amount = mulDecimals(peopleCountDec, elecRate);
-        items.push({
-          type: 'electricity',
-          description: `ค่าไฟฟ้า (${peopleCount} คน)`,
-          quantity: formatDecimal(peopleCountDec),
-          unit: 'person',
-          unitPrice: formatDecimal(elecRate),
-          amount: formatDecimal(amount),
-          metadata: { mode: 'per_person', peopleCount },
-        });
-      } else if (elecMode === 'fixed' || elecMode === 'per_room' || elecMode === 'room') {
-        if (!isZeroDecimal(elecRate)) {
-          items.push({
-            type: 'electricity',
-            description: 'ค่าไฟฟ้า (เหมาจ่าย)',
-            quantity: '1.00',
-            unit: 'room',
-            unitPrice: formatDecimal(elecRate),
-            amount: formatDecimal(elecRate),
-            metadata: { mode: 'fixed' },
-          });
-        }
-      }
-
-      // Common Fee
-      if (!isZeroDecimal(commonFee) && commonMode !== 'free' && commonMode !== 'none') {
-        const isPerPerson = commonMode === 'person' || commonMode === 'per_person';
-        const q = isPerPerson ? peopleCountDec : toDecimal('1.00');
-        const amt = isPerPerson ? mulDecimals(peopleCountDec, commonFee) : commonFee;
-        items.push({
-          type: 'common_fee',
-          description: isPerPerson ? `ค่าส่วนกลาง (${peopleCount} คน)` : 'ค่าส่วนกลาง',
-          quantity: formatDecimal(q),
-          unit: isPerPerson ? 'person' : 'room',
-          unitPrice: formatDecimal(commonFee),
-          amount: formatDecimal(amt),
-          metadata: { mode: commonMode, peopleCount: isPerPerson ? peopleCount : undefined },
-        });
-      }
-
-      // Internet Fee
-      if (!isZeroDecimal(internetFee) && internetMode !== 'free' && internetMode !== 'none') {
-        const isPerPerson = internetMode === 'person' || internetMode === 'per_person';
-        const q = isPerPerson ? peopleCountDec : toDecimal('1.00');
-        const amt = isPerPerson ? mulDecimals(peopleCountDec, internetFee) : internetFee;
-        items.push({
-          type: 'internet',
-          description: isPerPerson ? `ค่าอินเทอร์เน็ต (${peopleCount} คน)` : 'ค่าอินเทอร์เน็ต',
-          quantity: formatDecimal(q),
-          unit: isPerPerson ? 'person' : 'room',
-          unitPrice: formatDecimal(internetFee),
-          amount: formatDecimal(amt),
-          metadata: { mode: internetMode, peopleCount: isPerPerson ? peopleCount : undefined },
-        });
-      }
-
-      // Parking Fee
-      if (!isZeroDecimal(parkingFee) && parkingMode !== 'free' && parkingMode !== 'none') {
-        const isPerPerson = parkingMode === 'person' || parkingMode === 'per_person';
-        const isPerVehicle = parkingMode === 'vehicle' || parkingMode === 'per_vehicle';
-
-        let q = toDecimal('1.00');
-        let amt = parkingFee;
-        let unit = 'room';
-        let desc = 'ค่าที่จอดรถ';
-        let meta: any = undefined;
-
-        if (isPerPerson) {
-          q = peopleCountDec;
-          amt = mulDecimals(peopleCountDec, parkingFee);
-          unit = 'person';
-          desc = `ค่าที่จอดรถ (${peopleCount} คน)`;
-          meta = { mode: 'person', peopleCount };
-        } else if (isPerVehicle) {
-          const vehicles = await this.tenantRepo.findVehicles(tenantId, dormitoryId);
-          const vehicleCount = vehicles.length;
-          const vehicleCountDec = toDecimal(vehicleCount.toString());
-          q = vehicleCountDec;
-          amt = mulDecimals(vehicleCountDec, parkingFee);
-          unit = 'vehicle';
-          desc = `ค่าที่จอดรถ (${vehicleCount} คัน)`;
-          meta = { mode: 'vehicle', vehicleCount };
-        }
-
-        if (!isZeroDecimal(amt) || !isZeroDecimal(parkingFee)) {
-          items.push({
-            type: 'parking',
-            description: desc,
-            quantity: formatDecimal(q),
-            unit,
-            unitPrice: formatDecimal(parkingFee),
-            amount: formatDecimal(amt),
-            metadata: meta,
-          });
-        }
-      }
-    }
-
-    // Query RoomBillingCycleSnapshot for manual outstanding and other fees (transaction-visible)
-    const cycleSnapshot = await client.roomBillingCycleSnapshot.findUnique({
-      where: {
-        dormitory_billing_cycle_room_unique: {
-          dormitoryId,
-          billingCycleId,
-          roomId,
+      const cycleSnapshot = await client.roomBillingCycleSnapshot.findUnique({
+        where: {
+          dormitory_billing_cycle_room_unique: {
+            dormitoryId,
+            billingCycleId,
+            roomId,
+          },
         },
-      },
-    });
+      });
 
-    let manualOutstandingStr = '0.00';
-    let otherFeesList: Array<{ description: string; amount: string }> = [];
+      const utilityResult = calculateCanonicalMonthlyUtility({
+        dormitoryId,
+        billingCycleId,
+        roomId,
+        rateSnapshot,
+        waterReading,
+        electricReading: elecReading,
+        peopleCount,
+        parkingQuantity: vehicleCount,
+        manualOutstanding: cycleSnapshot?.manualOutstandingAmount ? cycleSnapshot.manualOutstandingAmount.toString() : undefined,
+        otherFees: (cycleSnapshot?.otherFees as any[]) || [],
+      });
 
-    if (cycleSnapshot) {
-      if (cycleSnapshot.manualOutstandingAmount) {
-        const outAmt = toDecimal(cycleSnapshot.manualOutstandingAmount.toString());
-        manualOutstandingStr = formatDecimal(outAmt);
-        if (!isZeroDecimal(outAmt)) {
-          items.push({
-            type: 'manual_outstanding',
-            description: 'ค้างชำระ',
-            quantity: '1.00',
-            unit: 'charge',
-            unitPrice: formatDecimal(outAmt),
-            amount: formatDecimal(outAmt),
-          });
-        }
-      }
-
-      if (cycleSnapshot.otherFees && Array.isArray(cycleSnapshot.otherFees)) {
-        for (const f of cycleSnapshot.otherFees as any[]) {
-          if (f && f.description && f.amount) {
-            const feeAmt = toDecimal(String(f.amount));
-            if (!isZeroDecimal(feeAmt)) {
-              items.push({
-                type: 'other_fee',
-                description: String(f.description).trim(),
-                quantity: '1.00',
-                unit: 'charge',
-                unitPrice: formatDecimal(feeAmt),
-                amount: formatDecimal(feeAmt),
-              });
-              otherFeesList.push({ description: String(f.description).trim(), amount: formatDecimal(feeAmt) });
-            }
-          }
-        }
-      }
+      items.push(...utilityResult.items);
+      waterUsageStr = utilityResult.waterUsage;
+      waterItemAmount = utilityResult.waterAmount;
+      elecUsageStr = utilityResult.electricityUsage;
+      elecItemAmount = utilityResult.electricityAmount;
+      commonItemAmount = utilityResult.commonFee;
+      internetItemAmount = utilityResult.internetFee;
+      parkingItemAmount = utilityResult.parkingFee;
+      manualOutstandingStr = utilityResult.manualOutstandingAmount;
+      otherFeesList = utilityResult.otherFees;
     }
 
     let subtotalDec = toDecimal('0.00');
@@ -624,17 +449,6 @@ export class BillingService {
     }
 
     const rentItemAmount = items.find((i) => i.type === 'rent')?.amount || '0.00';
-    const waterItem = items.find((i) => i.type === 'water');
-    const waterItemAmount = waterItem?.amount || '0.00';
-    const waterUsageStr = waterItem?.quantity || '0.00';
-
-    const elecItem = items.find((i) => i.type === 'electricity');
-    const elecItemAmount = elecItem?.amount || '0.00';
-    const elecUsageStr = elecItem?.quantity || '0.00';
-
-    const commonItemAmount = items.find((i) => i.type === 'common_fee')?.amount || '0.00';
-    const internetItemAmount = items.find((i) => i.type === 'internet')?.amount || '0.00';
-    const parkingItemAmount = items.find((i) => i.type === 'parking')?.amount || '0.00';
 
     return {
       contractId: contract ? contract.id : null,
