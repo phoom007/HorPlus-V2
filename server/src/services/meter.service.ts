@@ -1411,7 +1411,7 @@ export class MeterService {
     const allContracts = await prisma.contract.findMany({
       where: {
         dormitoryId,
-        status: { in: ['active', 'expiring_soon', 'pending_signature', 'waiting_extension', 'checking_out', 'ended'] },
+        status: { in: ['active', 'approved', 'expiring_soon', 'pending_signature', 'waiting_extension', 'checking_out', 'ended', 'terminated'] },
         deletedAt: null,
       },
       include: {
@@ -1800,14 +1800,45 @@ export class MeterService {
       const distinctDailyStayIds = new Set(roomDailyStaysInCycle.map((d) => d.id));
       const historicalDailyCount = distinctDailyStayIds.size;
 
+      const now = new Date();
+      let isDailyRentPaid = false;
+      let isDailyOverdue = false;
+      let isDailyActive = false;
       let isDailyUnpaid = false;
+      let isDailyFinancialTail = false;
       let unpaidDailyStay: typeof allDailyStays[0] | null = null;
+
+      if (billingSource === 'DAILY_STAY') {
+        const activeDailyStay = roomDailyStaysInCycle.find(d => {
+          const iv = getDailyStayPhysicalInterval(d);
+          return now.getTime() >= iv.start.getTime() && now.getTime() < iv.end.getTime();
+        }) || roomDailyStaysInCycle[0];
+
+        if (activeDailyStay) {
+          const rentItem = activeDailyStay.invoice?.items.find((i) => i.itemType === 'RENT' || i.itemType === 'DAILY_RENT');
+          const isPaid = rentItem
+            ? (rentItem.status === 'SETTLED' || rentItem.status === 'DECLARED_PAID')
+            : (activeDailyStay.status === 'COMPLETED' || activeDailyStay.invoice?.status === 'PAID');
+
+          const iv = getDailyStayPhysicalInterval(activeDailyStay);
+          const isOverdue = now.getTime() > iv.end.getTime();
+          isDailyRentPaid = isPaid;
+          isDailyOverdue = isOverdue && !isPaid;
+          isDailyActive = now.getTime() <= iv.end.getTime();
+          isDailyUnpaid = !isPaid;
+        }
+      }
+
       for (const d of roomDailyStaysInCycle) {
         const rentItem = d.invoice?.items.find((i) => i.itemType === 'RENT' || i.itemType === 'DAILY_RENT');
         const isRentPaid = rentItem
           ? (rentItem.status === 'SETTLED' || rentItem.status === 'DECLARED_PAID')
           : (d.status === 'COMPLETED' || d.invoice?.status === 'PAID');
         if (!isRentPaid) {
+          const iv = getDailyStayPhysicalInterval(d);
+          if (now.getTime() > iv.end.getTime()) {
+            isDailyOverdue = true;
+          }
           isDailyUnpaid = true;
           if (!unpaidDailyStay) unpaidDailyStay = d;
         }
@@ -1818,13 +1849,14 @@ export class MeterService {
         tenantId = unpaidDailyStay.tenantId || null;
         tenantName = unpaidDailyStay.applicantFullName || (unpaidDailyStay.tenant ? (unpaidDailyStay.tenant.displayName || `${unpaidDailyStay.tenant.firstName || ''} ${unpaidDailyStay.tenant.lastName || ''}`.trim()) : 'ผู้พักรายวัน');
         isLineLinked = Boolean(unpaidDailyStay.tenant?.linkedUserId);
+        isDailyFinancialTail = true;
       }
 
       // Calculate if room has any bookable interval in this cycle using canonical physical intervals
       const blockingIntervals: Array<{ start: Date; end: Date }> = [];
 
       // A. Contracts on this room
-      for (const c of allContracts.filter((c) => c.roomId === room.id && ['active', 'ACTIVE', 'approved', 'expiring_soon', 'pending_signature', 'waiting_extension', 'checking_out'].includes(c.status))) {
+      for (const c of allContracts.filter((c) => c.roomId === room.id && ['active', 'ACTIVE', 'approved', 'expiring_soon', 'pending_signature', 'waiting_extension', 'checking_out', 'ended', 'ENDED', 'terminated', 'TERMINATED'].includes(c.status))) {
         blockingIntervals.push(getContractPhysicalInterval(c));
       }
 
@@ -1883,6 +1915,10 @@ export class MeterService {
         hasBookableGap,
         historicalDailyCount,
         isDailyUnpaid,
+        isDailyRentPaid,
+        isDailyOverdue,
+        isDailyActive,
+        isDailyFinancialTail,
       };
     });
 

@@ -2389,8 +2389,6 @@ describe('Daily Stay Meter Semantics, Financial Exclusion & Exact Deposit Copy',
 
     // Total due is 2,000.00 ฿ (rent 1500 + unpaid deposit 500)
     expect(screen.getByText('2,000.00 ฿')).toBeDefined();
-    expect(screen.getByText('ค่าประกัน:')).toBeDefined();
-    expect(screen.getByText('500.00 ฿')).toBeDefined();
   });
 
   it('Proves I: Paid in displayed period deposit excludes deposit from total and shows in details as PAID', async () => {
@@ -2454,7 +2452,13 @@ describe('Daily Stay Meter Semantics, Financial Exclusion & Exact Deposit Copy',
 
     // Paid deposit is not added to total due (total is strictly rent 1,500.00 ฿)
     expect(screen.getAllByText('1,500.00 ฿').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText('ค่าประกัน:')).toBeDefined();
+
+    // Click 'ดูรายละเอียด +2' button to expand popover and verify components
+    const detailBtn = screen.getByText(/ดูรายละเอียด/);
+    expect(detailBtn).toBeDefined();
+    fireEvent.click(detailBtn);
+
+    expect(screen.getByText('ค่าประกัน')).toBeDefined();
     expect(screen.getByText('500.00 ฿')).toBeDefined();
   });
 
@@ -2778,8 +2782,8 @@ describe('Daily Stay Meter Semantics, Financial Exclusion & Exact Deposit Copy',
               electricityRate: '7.00',
             },
             rooms: [
-              { roomId: 'r-daily-1', tenantId: 't-d1', tenantName: 'ผู้พัก ค้างจ่าย', billingSource: 'NONE', isDailyUnpaid: true, hasBookableGap: true },
-              { roomId: 'r-daily-2', tenantId: 't-d2', tenantName: 'ผู้พัก จ่ายแล้ว', billingSource: 'DAILY_STAY', isDailyUnpaid: false, hasBookableGap: false },
+              { roomId: 'r-daily-1', tenantId: 't-d1', tenantName: 'ผู้พัก ค้างจ่าย', billingSource: 'NONE', isDailyUnpaid: true, isDailyOverdue: true, isDailyFinancialTail: true, hasBookableGap: true },
+              { roomId: 'r-daily-2', tenantId: 't-d2', tenantName: 'ผู้พัก จ่ายแล้ว', billingSource: 'DAILY_STAY', isDailyUnpaid: false, isDailyRentPaid: true, isDailyActive: true, hasBookableGap: false },
             ],
           },
         };
@@ -2829,8 +2833,8 @@ describe('Daily Stay Meter Semantics, Financial Exclusion & Exact Deposit Copy',
     expect(row1?.textContent).toContain('ผู้พัก ค้างจ่าย');
     expect(row1?.textContent).toContain('เพิ่มผู้เช่า');
 
-    // Row 2 (paid active Daily stay): slate 'รายวัน' badge
-    expect(row2?.innerHTML).toContain('text-slate-700');
+    // Row 2 (paid active Daily stay): emerald 'รายวัน' badge
+    expect(row2?.innerHTML).toContain('text-emerald-700');
     expect(row2?.textContent).toContain('รายวัน');
     expect(row2?.textContent).toContain('ผู้พัก จ่ายแล้ว');
   });

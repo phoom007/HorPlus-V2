@@ -269,6 +269,7 @@ export async function runVerification() {
   console.log('\n--- 7. Daily Stay Domain & Financial Tail Verification ---');
   const room106Db = allRooms.find(r => r.roomNumber === '106');
   const room205Db = allRooms.find(r => r.roomNumber === '205');
+  const room206Db = allRooms.find(r => r.roomNumber === '206');
   const roomB102Db = allRooms.find(r => r.roomNumber === 'B102');
 
   if (cycleAugDb && room106Db) {
@@ -276,12 +277,22 @@ export async function runVerification() {
     const r106Aug = augPreview.rooms.find(r => r.roomId === room106Db.id);
     assert(r106Aug?.billingSource === 'DAILY_STAY', 'Room 106 is ACTIVE Daily stay in August 2026');
     assert(r106Aug?.isDailyUnpaid === true, 'Room 106 has isDailyUnpaid = true in August 2026');
+    assert(r106Aug?.isDailyOverdue === false, 'Room 106 has isDailyOverdue = false in August 2026 (active before checkout)');
+  }
+
+  if (cycleAugDb && room206Db) {
+    const augPreview = await meterService.getMeterBillingPreviewContext(COMP_DORM.id, cycleAugDb.id);
+    const r206Aug = augPreview.rooms.find(r => r.roomId === room206Db.id);
+    assert(r206Aug?.billingSource === 'DAILY_STAY', 'Room 206 is ACTIVE Daily stay in August 2026');
+    assert(r206Aug?.isDailyRentPaid === true, 'Room 206 has isDailyRentPaid = true in August 2026 (active paid daily stay)');
+    assert(r206Aug?.isDailyOverdue === false, 'Room 206 has isDailyOverdue = false in August 2026');
   }
 
   if (cycleJulyDb && room205Db) {
     const julyPreview = await meterService.getMeterBillingPreviewContext(COMP_DORM.id, cycleJulyDb.id);
     const r205July = julyPreview.rooms.find(r => r.roomId === room205Db.id);
     assert(r205July?.isDailyUnpaid === true, 'Room 205 has isDailyUnpaid = true in July 2026 (checked-out unpaid tail)');
+    assert(r205July?.isDailyOverdue === true, 'Room 205 has isDailyOverdue = true in July 2026 (checked-out unpaid overdue tail)');
   }
 
   if (cycleAugDb && room205Db) {
@@ -309,8 +320,38 @@ export async function runVerification() {
     assert(r205Sept?.hasBookableGap === true, 'Room 205 has hasBookableGap = true in September 2026 (future reservation starts Sept 15)');
   }
 
-  // 8. Room 104 Complete Realistic Zero-Payable Meter Fixture Verification
-  console.log('\n--- 8. Realistic Zero-Payable Meter Fixture Verification ---');
+  // 8. Charge Component Matrix Verification (0, 1, 2, 3 components in August 2026)
+  console.log('\n--- 8. Charge Component Matrix Verification (0, 1, 2, 3 components) ---');
+  const room101Db = allRooms.find(r => r.roomNumber === '101');
+  const room201Db = allRooms.find(r => r.roomNumber === '201');
+  const room202Db = allRooms.find(r => r.roomNumber === '202');
+
+  if (cycleAugDb && room105Db && room101Db && room201Db && room202Db) {
+    const augPreview = await meterService.getMeterBillingPreviewContext(COMP_DORM.id, cycleAugDb.id);
+
+    // 0 Components: Room 105
+    const r105Aug = augPreview.rooms.find(r => r.roomId === room105Db.id);
+    assert(r105Aug?.chargeComponents?.length === 0, 'Room 105 has 0 charge components in August 2026');
+    assert(Number(r105Aug?.amountDue) === 0, 'Room 105 amountDue is 0.00 in August 2026');
+
+    // 1 Component: Room 101
+    const r101Aug = augPreview.rooms.find(r => r.roomId === room101Db.id);
+    assert(r101Aug?.chargeComponents?.length === 1, 'Room 101 has 1 charge component in August 2026', r101Aug?.chargeComponents?.length);
+    assert(Number(r101Aug?.amountDue) === 5468, 'Room 101 amountDue is 5468.00 in August 2026');
+
+    // 2 Components: Room 201 (RENT + DEPOSIT)
+    const r201Aug = augPreview.rooms.find(r => r.roomId === room201Db.id);
+    assert(r201Aug?.chargeComponents?.length === 2, 'Room 201 has 2 charge components in August 2026', r201Aug?.chargeComponents?.length);
+    assert(Number(r201Aug?.amountDue) === 4800, 'Room 201 amountDue is 4800.00 in August 2026 (unpaid rent only)');
+
+    // 3 Components: Room 202 (RENT + DEPOSIT + MONTHLY_UTILITY)
+    const r202Aug = augPreview.rooms.find(r => r.roomId === room202Db.id);
+    assert(r202Aug?.chargeComponents?.length === 3, 'Room 202 has 3 charge components in August 2026', r202Aug?.chargeComponents?.length);
+    assert(Number(r202Aug?.amountDue) === 6000, 'Room 202 amountDue is 6000.00 in August 2026 (unpaid rent + utility)');
+  }
+
+  // 9. Room 104 Complete Realistic Zero-Payable Meter Fixture Verification
+  console.log('\n--- 9. Realistic Zero-Payable Meter Fixture Verification ---');
   const room104Db = allRooms.find(r => r.roomNumber === '104');
   if (cycleAugDb && room104Db) {
     const augReadings = await prisma.meterReading.findMany({

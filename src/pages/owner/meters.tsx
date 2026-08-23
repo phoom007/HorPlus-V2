@@ -2664,20 +2664,36 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                       {(() => {
                         const amountDue = roomCtx ? roomCtx.amountDue : calculatedTotal.toFixed(2);
                         const chargeComponents = roomCtx?.chargeComponents || [];
+                        const isExpanded = Boolean(expandedBreakdowns[row.roomId]);
 
                         return (
-                          <div className="flex flex-col items-end gap-1">
-                            <span className="font-extrabold text-sm text-slate-900">
+                          <div className="flex flex-col items-end">
+                            <span className="font-extrabold text-sm text-indigo-600 whitespace-nowrap">
                               {formatMoneyDisplay(amountDue)} ฿
                             </span>
                             {chargeComponents.length > 0 && (
-                              <div className="flex flex-col items-end gap-0.5 mt-0.5">
-                                {chargeComponents.map((c: any, i: number) => (
-                                  <div key={i} className="flex items-center gap-1 text-[11px] text-slate-500">
-                                    <span>{c.label}:</span>
-                                    <span className={`font-bold ${c.status === 'PAID' ? 'text-emerald-600' : 'text-amber-600'}`}>
-                                      {c.amount} ฿
-                                    </span>
+                              <button
+                                type="button"
+                                onClick={() => setExpandedBreakdowns(prev => ({ ...prev, [row.roomId]: !prev[row.roomId] }))}
+                                className="text-[10px] text-slate-400 hover:text-indigo-600 font-medium cursor-pointer transition-colors mt-0.5 flex items-center gap-0.5"
+                              >
+                                <span>ดูรายละเอียด +{chargeComponents.length}</span>
+                                <ChevronDown className={`w-2.5 h-2.5 transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`} />
+                              </button>
+                            )}
+                            {isExpanded && chargeComponents.length > 0 && (
+                              <div className="mt-1.5 p-2 bg-slate-50 border border-slate-200 rounded-lg text-left shadow-sm min-w-[170px] space-y-1">
+                                {chargeComponents.map((c: any, cIdx: number) => (
+                                  <div key={cIdx} className="flex items-center justify-between gap-2 text-[10px]">
+                                    <span className="text-slate-600 truncate max-w-[110px]" title={c.label}>{c.label}</span>
+                                    <div className="flex items-center gap-1 shrink-0">
+                                      <span className="font-semibold text-slate-700">{formatMoneyDisplay(c.amount)} ฿</span>
+                                      {c.status === 'PAID' ? (
+                                        <span className="px-1 py-0.2 rounded text-[9px] font-bold bg-emerald-100 text-emerald-700">จ่ายแล้ว</span>
+                                      ) : (
+                                        <span className="px-1 py-0.2 rounded text-[9px] font-bold bg-amber-100 text-amber-700">ยังไม่จ่าย</span>
+                                      )}
+                                    </div>
                                   </div>
                                 ))}
                               </div>
@@ -2695,19 +2711,37 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                     }`}>
                       {(() => {
                         if (isDailyContext) {
-                          const isDailyUnpaid = roomCtx?.isDailyUnpaid;
-                          return (
-                            <div className="flex items-center justify-center min-w-[85px]">
-                              {isDailyUnpaid ? (
+                          const isDailyOverdue = Boolean(roomCtx?.isDailyOverdue || roomCtx?.isDailyFinancialTail);
+                          const isDailyRentPaid = Boolean(roomCtx?.isDailyRentPaid);
+
+                          if (isDailyOverdue) {
+                            return (
+                              <div className="flex items-center justify-center min-w-[85px]">
                                 <span className="inline-flex items-center px-2 py-1 bg-rose-50 text-rose-700 text-xs font-bold rounded-lg border border-rose-200">
                                   <AlertCircle className="w-3 h-3 text-rose-500 mr-1 shrink-0" />
                                   รายวัน
                                 </span>
-                              ) : (
-                                <span className="inline-flex items-center px-2 py-1 bg-slate-100 text-slate-700 text-xs font-bold rounded-lg border border-slate-200">
+                              </div>
+                            );
+                          }
+
+                          if (isDailyRentPaid) {
+                            return (
+                              <div className="flex items-center justify-center min-w-[85px]">
+                                <span className="inline-flex items-center px-2 py-1 bg-emerald-50 text-emerald-700 text-xs font-bold rounded-lg border border-emerald-200">
+                                  <CheckCircle className="w-3 h-3 text-emerald-600 mr-1 shrink-0" />
                                   รายวัน
                                 </span>
-                              )}
+                              </div>
+                            );
+                          }
+
+                          // Active & Unpaid (now <= effectiveCheckOutAt) -> Normal existing Daily style (NOT red)
+                          return (
+                            <div className="flex items-center justify-center min-w-[85px]">
+                              <span className="inline-flex items-center px-2 py-1 bg-slate-100 text-slate-700 text-xs font-bold rounded-lg border border-slate-200">
+                                รายวัน
+                              </span>
                             </div>
                           );
                         }

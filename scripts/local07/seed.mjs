@@ -1051,7 +1051,77 @@ export async function seedLocal07Data() {
     ],
   });
 
-  // 4. Future Reservation on Room 205 starting Sept 15 (leaving Aug and Sept 1–14 as bookable gaps)
+  // 4. Room 206: Active & Paid Daily Stay in August 2026 (checked in Aug 20, checkout Aug 26, rent and deposit paid)
+  const tenantDaily206 = await prisma.tenant.create({
+    data: {
+      dormitoryId: compDorm.id,
+      tenantNumber: 'TNT-D-206',
+      firstName: 'กิตติศักดิ์',
+      lastName: 'จ่ายครบรายวันสิงหา',
+      displayName: 'กิตติศักดิ์ จ่ายครบรายวันสิงหา',
+      phone: '088-777-5555',
+      status: 'active',
+    },
+  });
+
+  const dailyStay206 = await prisma.dailyStay.create({
+    data: {
+      dormitoryId: compDorm.id,
+      roomId: createdRooms['206'].id,
+      tenantId: tenantDaily206.id,
+      requestSource: 'OWNER',
+      applicantFullName: 'กิตติศักดิ์ จ่ายครบรายวันสิงหา',
+      applicantPhone: '088-777-5555',
+      startDate: new Date('2026-08-20T00:00:00.000Z'),
+      endDate: new Date('2026-08-26T00:00:00.000Z'),
+      checkInAt: new Date('2026-08-20T14:00:00.000+07:00'),
+      checkOutAt: new Date('2026-08-27T00:00:00.000+07:00'),
+      inclusiveDayCount: 7,
+      dailyRateAmount: 550.0,
+      totalRentAmount: 3850.0,
+      depositAmount: 500.0,
+      depositDeclaredStatus: 'PAID',
+      status: 'ACTIVE',
+      approvedAt: new Date('2026-08-20T14:00:00.000+07:00'),
+      approvedByUserId: COMP_DORM.owner.id,
+    },
+  });
+
+  const dailyInvoice206 = await prisma.dailyStayInvoice.create({
+    data: {
+      dormitoryId: compDorm.id,
+      dailyStayId: dailyStay206.id,
+      invoiceNumber: 'DINV-202608-002',
+      totalRentAmount: 3850.0,
+      depositAmount: 500.0,
+      totalAgreedAmount: 4350.0,
+      outstandingAmount: 0.0,
+      status: 'SETTLED',
+    },
+  });
+
+  await prisma.dailyStayInvoiceItem.createMany({
+    data: [
+      {
+        invoiceId: dailyInvoice206.id,
+        itemType: 'DAILY_RENT',
+        description: 'ค่าเช่าห้องพักรายวัน 7 คืน (ชำระแล้ว)',
+        amount: 3850.0,
+        status: 'SETTLED',
+        paidAt: new Date('2026-08-20T14:30:00.000+07:00'),
+      },
+      {
+        invoiceId: dailyInvoice206.id,
+        itemType: 'DEPOSIT',
+        description: 'เงินประกันห้องพักรายวัน (ชำระแล้ว)',
+        amount: 500.0,
+        status: 'SETTLED',
+        paidAt: new Date('2026-08-20T14:30:00.000+07:00'),
+      },
+    ],
+  });
+
+  // 5. Future Reservation on Room 205 starting Sept 15 (leaving Aug and Sept 1–14 as bookable gaps)
   const tenantResv205 = await prisma.tenant.create({
     data: {
       dormitoryId: compDorm.id,
@@ -1292,6 +1362,117 @@ export async function seedLocal07Data() {
 
     bCount++;
   }
+
+  // August 2026 Multi-Component Bills for Deterministic Matrix Testing (0, 1, 2, 3 components)
+  // 1 Component: Room 101 (MONTHLY_UTILITY) -> ฿5,468.00 unpaid
+  await prisma.bill.create({
+    data: {
+      dormitoryId: compDorm.id,
+      billingCycleId: cycleAug.id,
+      roomId: createdRooms['101'].id,
+      tenantId: createdTenants['101'].id,
+      billNumber: 'INV-202608-101',
+      billKind: 'MONTHLY_UTILITY',
+      billingDate: new Date('2026-08-25'),
+      dueDate: new Date('2026-09-05'),
+      subtotal: 5468.0,
+      totalAmount: 5468.0,
+      paidAmount: 0.0,
+      outstandingAmount: 5468.0,
+      status: 'unpaid',
+    },
+  });
+
+  // 2 Components: Room 201 (RENT unpaid ฿4,800 + DEPOSIT paid ฿4,800)
+  await prisma.bill.create({
+    data: {
+      dormitoryId: compDorm.id,
+      billingCycleId: cycleAug.id,
+      roomId: createdRooms['201'].id,
+      tenantId: createdTenants['201'].id,
+      billNumber: 'INV-202608-201-R',
+      billKind: 'RENT',
+      billingDate: new Date('2026-08-25'),
+      dueDate: new Date('2026-09-05'),
+      subtotal: 4800.0,
+      totalAmount: 4800.0,
+      paidAmount: 0.0,
+      outstandingAmount: 4800.0,
+      status: 'unpaid',
+    },
+  });
+  await prisma.bill.create({
+    data: {
+      dormitoryId: compDorm.id,
+      billingCycleId: cycleAug.id,
+      roomId: createdRooms['201'].id,
+      tenantId: createdTenants['201'].id,
+      billNumber: 'INV-202608-201-D',
+      billKind: 'DEPOSIT',
+      billingDate: new Date('2026-08-25'),
+      dueDate: new Date('2026-09-05'),
+      subtotal: 4800.0,
+      totalAmount: 4800.0,
+      paidAmount: 4800.0,
+      outstandingAmount: 0.0,
+      status: 'paid',
+      paidAt: new Date('2026-08-25T10:00:00Z'),
+    },
+  });
+
+  // 3 Components: Room 202 (RENT unpaid ฿4,800 + DEPOSIT paid ฿4,800 + MONTHLY_UTILITY unpaid ฿1,200)
+  await prisma.bill.create({
+    data: {
+      dormitoryId: compDorm.id,
+      billingCycleId: cycleAug.id,
+      roomId: createdRooms['202'].id,
+      tenantId: createdTenants['202'].id,
+      billNumber: 'INV-202608-202-R',
+      billKind: 'RENT',
+      billingDate: new Date('2026-08-25'),
+      dueDate: new Date('2026-09-05'),
+      subtotal: 4800.0,
+      totalAmount: 4800.0,
+      paidAmount: 0.0,
+      outstandingAmount: 4800.0,
+      status: 'unpaid',
+    },
+  });
+  await prisma.bill.create({
+    data: {
+      dormitoryId: compDorm.id,
+      billingCycleId: cycleAug.id,
+      roomId: createdRooms['202'].id,
+      tenantId: createdTenants['202'].id,
+      billNumber: 'INV-202608-202-D',
+      billKind: 'DEPOSIT',
+      billingDate: new Date('2026-08-25'),
+      dueDate: new Date('2026-09-05'),
+      subtotal: 4800.0,
+      totalAmount: 4800.0,
+      paidAmount: 4800.0,
+      outstandingAmount: 0.0,
+      status: 'paid',
+      paidAt: new Date('2026-08-25T10:00:00Z'),
+    },
+  });
+  await prisma.bill.create({
+    data: {
+      dormitoryId: compDorm.id,
+      billingCycleId: cycleAug.id,
+      roomId: createdRooms['202'].id,
+      tenantId: createdTenants['202'].id,
+      billNumber: 'INV-202608-202-U',
+      billKind: 'MONTHLY_UTILITY',
+      billingDate: new Date('2026-08-25'),
+      dueDate: new Date('2026-09-05'),
+      subtotal: 1200.0,
+      totalAmount: 1200.0,
+      paidAmount: 0.0,
+      outstandingAmount: 1200.0,
+      status: 'unpaid',
+    },
+  });
 
   // Seed sample Tenant Registration Request (Pending) with acceptance snapshot & signature
   const room102 = await prisma.room.findFirst({

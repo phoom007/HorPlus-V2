@@ -367,56 +367,48 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
     <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
       <div className="bg-white rounded-3xl shadow-2xl max-w-lg w-full overflow-hidden border border-slate-100 flex flex-col max-h-[90vh] animate-in fade-in zoom-in-95 duration-200">
         {/* Modal Header */}
-        <div className="p-5 bg-gradient-to-r from-indigo-900 to-indigo-800 text-white flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-white/10 flex items-center justify-center border border-white/20">
-              <Building2 className="w-5 h-5 text-indigo-200" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h3 className="font-extrabold text-base tracking-tight">เพิ่มผู้เช่าด่วน</h3>
-                <span className="px-2 py-0.5 rounded-lg bg-indigo-500/40 text-[11px] font-bold border border-indigo-300/30">
-                  ห้อง {context.roomNumber}
-                </span>
-              </div>
-              <p className="text-xs text-indigo-200 mt-0.5">
-                {context.building?.name || ''} {context.roomType ? `(${context.roomType})` : ''}
-              </p>
-            </div>
+        <div className="p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+          <div>
+            <h3 className="font-extrabold text-slate-900 text-base">
+              เพิ่มผู้เช่าด่วน
+            </h3>
+            <p className="text-xs text-slate-500 mt-0.5">
+              ห้อง <span className="font-bold text-indigo-600">{context.roomNumber}</span> — {context.building?.name || ''} {context.roomType ? `(${context.roomType})` : 'สร้างสัญญาชั่วคราว/รายวันใน 1 ขั้นตอน'}
+            </p>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="w-8 h-8 rounded-xl bg-white/10 hover:bg-white/20 flex items-center justify-center transition-colors cursor-pointer"
+            className="p-2 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-100 transition-colors cursor-pointer"
           >
-            <X className="w-4 h-4 text-white" />
+            <X className="w-5 h-5" />
           </button>
         </div>
 
-        {/* Tab Navigation */}
-        <div className="px-5 pt-3 bg-slate-50 border-b border-slate-200">
-          <div className="flex gap-2">
+        {/* 3-Type Rental Mode Tabs: TERM -> MONTHLY -> DAILY */}
+        <div className="p-4 bg-slate-50 border-b border-slate-100">
+          <div className="flex bg-slate-200/80 p-1 rounded-2xl gap-1">
             <button
               type="button"
               disabled={isTermTabDisabled}
               title={isTermTabDisabled ? 'ยังไม่ได้กำหนดค่าเช่ารายเทอมของห้องพัก' : undefined}
-              onClick={() => setActiveTab('TERM')}
-              className={`px-4 py-2 text-xs font-bold rounded-xl transition-all ${
-                activeTab === 'TERM'
-                  ? 'bg-white text-indigo-700 shadow-2xs border border-slate-200/80'
-                  : isTermTabDisabled
-                  ? 'text-slate-400 opacity-50 cursor-not-allowed'
+              onClick={() => !isTermTabDisabled && setActiveTab('TERM')}
+              className={`flex-1 py-2 text-xs font-extrabold rounded-xl transition-all ${
+                isTermTabDisabled
+                  ? 'opacity-40 cursor-not-allowed text-slate-400 bg-slate-100'
+                  : activeTab === 'TERM'
+                  ? 'bg-white text-indigo-600 shadow-xs'
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              รายเทอม (เหมาจ่าย)
+              รายเทอม
             </button>
             <button
               type="button"
               onClick={() => setActiveTab('MONTHLY')}
-              className={`px-4 py-2 text-xs font-bold rounded-xl transition-all ${
+              className={`flex-1 py-2 text-xs font-extrabold rounded-xl transition-all ${
                 activeTab === 'MONTHLY'
-                  ? 'bg-white text-indigo-700 shadow-2xs border border-slate-200/80'
+                  ? 'bg-white text-indigo-600 shadow-xs'
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
@@ -580,13 +572,9 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
                       <label className="block text-xs font-bold text-slate-700 mb-1">
                         วันที่สิ้นสุด
                       </label>
-                      <input
-                        type="date"
-                        disabled
-                        readOnly
-                        value={termEndDate}
-                        className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl bg-slate-100 text-slate-500 font-semibold cursor-not-allowed"
-                      />
+                      <div className="px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl text-slate-700 font-bold min-h-[34px] flex items-center">
+                        {termEndDate ? formatThaiDate(termEndDate) : '-'}
+                      </div>
                     </div>
                   </div>
 
@@ -685,13 +673,9 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
                   <label className="block text-xs font-bold text-slate-700 mb-1">
                     วันที่สิ้นสุด
                   </label>
-                  <input
-                    type="date"
-                    disabled
-                    readOnly
-                    value={monthlyEndDate}
-                    className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl bg-slate-100 text-slate-500 font-semibold cursor-not-allowed"
-                  />
+                  <div className="px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl text-slate-700 font-bold min-h-[34px] flex items-center">
+                    {monthlyEndDate ? formatThaiDate(monthlyEndDate) : '-'}
+                  </div>
                 </div>
               </div>
 
