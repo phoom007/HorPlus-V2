@@ -139,6 +139,8 @@ export function PaymentsOwnerView({
       queryClient.invalidateQueries({ queryKey: queryKeys.payments(dormitoryId) }),
       queryClient.invalidateQueries({ queryKey: queryKeys.bills(dormitoryId) }),
       queryClient.invalidateQueries({ queryKey: queryKeys.dailyInvoices(dormitoryId) }),
+      queryClient.invalidateQueries({ queryKey: ['meter', dormitoryId] }),
+      queryClient.invalidateQueries({ queryKey: ['owner', dormitoryId] }),
     ]);
   };
 
@@ -150,6 +152,41 @@ export function PaymentsOwnerView({
   const getCsrfToken = () => {
     const match = document.cookie.match(/(?:csrf-token|horplus_csrf)=([^;]+)/);
     return match ? decodeURIComponent(match[1]) : '';
+  };
+
+  // Settle Daily Stay Invoice Item (Rent / Deposit) - Canonical Option A
+  const handleSettleDailyItem = async (invoiceId: string, itemType: 'DAILY_RENT' | 'DEPOSIT', label: string) => {
+    const opKey = `daily-${itemType}-${invoiceId}`;
+    const idempKey = getIdempotencyKey(opKey);
+    setActionLoading(opKey);
+    setActionError(null);
+
+    try {
+      const res = await fetch(`/api/v1/daily-stays/invoices/${invoiceId}/settle-item`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-csrf-token': getCsrfToken(),
+          'x-idempotency-key': idempKey,
+          ...(dormitoryId ? { 'x-dormitory-id': dormitoryId } : {}),
+        },
+        body: JSON.stringify({ itemType }),
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error?.message || errData.error || `บันทึกรับชำระเงิน${label}ล้มเหลว (HTTP ${res.status})`);
+      }
+
+      clearIdempotencyKey(opKey);
+      showToast(`บันทึกรับชำระเงิน${label}รายวันสำเร็จ`);
+      await refetchPaymentsAndBills();
+      if (onUpdateBills) onUpdateBills();
+    } catch (err: any) {
+      setActionError(err.message || `เกิดข้อผิดพลาดในการบันทึกรับเงิน${label}`);
+    } finally {
+      setActionLoading(null);
+    }
   };
   // 1. Approve Payment (Server-confirmed only, stable idempotency key)
   const handleApprove = async (paymentId: string) => {
@@ -482,7 +519,7 @@ export function PaymentsOwnerView({
                   )}
                 </div>
 
-                {/* Daily Stay Invoices (Presentation Only - LOCAL-07 Batch 02) */}
+                {/* Daily Stay Invoices (Option A - Owner Payments Settlement) */}
                 {dailyInvoices.length > 0 && (
                   <div className="pt-6 border-t border-slate-200 space-y-4">
                     <div className="flex items-center justify-between">
@@ -494,54 +531,115 @@ export function PaymentsOwnerView({
                           ใบแจ้งหนี้ห้องพักรายวัน ({dailyInvoices.length})
                         </h3>
                       </div>
-                      <span className="text-xs text-slate-400 font-medium">แสดงยอดตามข้อตกลงและยอดค้างชำระ</span>
+                      <span className="text-xs text-slate-400 font-medium">บันทึกรับเงินสดค่าเช่าและเงินประกันรายวัน</span>
                     </div>
 
-                    <div className="space-y-3">
-                      {dailyInvoices.map((inv: any) => (
-                        <div
-                          key={inv.id}
-                          className="border border-amber-200/80 bg-amber-50/30 rounded-2xl p-5 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 hover:border-amber-300 transition-all"
-                        >
-                          <div className="space-y-1.5 flex-1">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <span className="font-black text-slate-900 text-base">
-                                ใบแจ้งหนี้: {inv.invoiceNumber}
-                              </span>
-                              <span className="px-2.5 py-0.5 rounded-full text-[11px] font-extrabold bg-amber-100 text-amber-800 border border-amber-200">
-                                รายวัน
-                              </span>
-                              <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold ${
-                                inv.depositDeclaredStatus === 'PAID'
-                                  ? 'bg-emerald-100 text-emerald-800'
-                                  : 'bg-slate-100 text-slate-700'
-                              }`}>
-                                มัดจำ: {inv.depositDeclaredStatus === 'PAID' ? 'จ่ายแล้ว (แจ้งไว้)' : 'ยังไม่จ่าย'}
-                              </span>
+                    <div className="space-y-4">
+                      {dailyInvoices.map((inv: any) => {
+                        const rentItem = inv.items?.find((i: any) => i.itemType === 'DAILY_RENT' || i.itemType === 'RENT');
+                        const depositItem = inv.items?.find((i: any) => i.itemType === 'DEPOSIT');
+
+                        const isRentSettled = rentItem ? (rentItem.status === 'SETTLED' || rentItem.status === 'DECLARED_PAID') : false;
+                        const isDepositSettled = depositItem ? (depositItem.status === 'SETTLED' || depositItem.status === 'DECLARED_PAID') : (inv.depositDeclaredStatus === 'PAID');
+
+                        const rentAmount = Number(rentItem?.amount ?? inv.totalRentAmount);
+                        const depositAmount = Number(depositItem?.amount ?? inv.depositAmount);
+
+                        const isRentLoading = actionLoading === `daily-DAILY_RENT-${inv.id}`;
+                        const isDepositLoading = actionLoading === `daily-DEPOSIT-${inv.id}`;
+
+                        return (
+                          <div
+                            key={inv.id}
+                            className="border border-amber-200/80 bg-amber-50/20 rounded-2xl p-5 space-y-4 hover:border-amber-300 transition-all"
+                          >
+                            {/* Invoice Header */}
+                            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-2 pb-3 border-b border-amber-100">
+                              <div className="space-y-1">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span className="font-black text-slate-900 text-base">
+                                    ใบแจ้งหนี้: {inv.invoiceNumber}
+                                  </span>
+                                  <span className="px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-amber-100 text-amber-800 border border-amber-200">
+                                    รายวัน
+                                  </span>
+                                  <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${
+                                    inv.status === 'PAID'
+                                      ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                                      : inv.status === 'PARTIALLY_PAID'
+                                      ? 'bg-blue-100 text-blue-800 border border-blue-200'
+                                      : 'bg-slate-100 text-slate-700 border border-slate-200'
+                                  }`}>
+                                    {inv.status === 'PAID' ? 'ชำระครบแล้ว' : inv.status === 'PARTIALLY_PAID' ? 'ชำระบางส่วน' : 'รอชำระ'}
+                                  </span>
+                                </div>
+                                <p className="text-xs font-bold text-slate-600">
+                                  ห้อง: <span className="text-indigo-600 font-extrabold">{inv.dailyStay?.room?.roomNumber || '-'}</span> • ผู้พัก: <span className="text-slate-800 font-extrabold">{inv.dailyStay?.tenant?.displayName || inv.dailyStay?.applicantFullName || '-'}</span>
+                                  {inv.dailyStay && (
+                                    <span className="text-slate-500 font-normal ml-2">
+                                      (วันที่ {inv.dailyStay.startDate?.slice(0, 10)} ถึง {inv.dailyStay.endDate?.slice(0, 10)} รวม {inv.dailyStay.inclusiveDayCount} วัน)
+                                    </span>
+                                  )}
+                                </p>
+                              </div>
+
+                              <div className="text-left md:text-right">
+                                <span className="text-[11px] font-bold text-slate-500 block">ยอดคงเหลือที่ต้องชำระ</span>
+                                <span className="text-lg font-black text-indigo-700">{formatBaht(Number(inv.outstandingAmount))}</span>
+                              </div>
                             </div>
 
-                            <p className="text-xs font-bold text-slate-600">
-                              ห้อง: <span className="text-indigo-600 font-extrabold">{inv.dailyStay?.room?.roomNumber || '-'}</span> • ผู้พัก: <span className="text-slate-800 font-extrabold">{inv.dailyStay?.tenant?.displayName || inv.dailyStay?.applicantFullName || '-'}</span>
-                              {inv.dailyStay && (
-                                <span className="text-slate-500 font-normal ml-2">
-                                  (วันที่ {inv.dailyStay.startDate?.slice(0, 10)} ถึง {inv.dailyStay.endDate?.slice(0, 10)} รวม {inv.dailyStay.inclusiveDayCount} วัน)
-                                </span>
-                              )}
-                            </p>
+                            {/* Decoupled Financial Components */}
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                              {/* 1. Daily Rent Component */}
+                              <div className="bg-white rounded-xl p-3.5 border border-slate-200 flex items-center justify-between gap-3 shadow-xs">
+                                <div>
+                                  <span className="text-xs font-bold text-slate-500 block">ค่าเช่ารายวัน (Daily Rent)</span>
+                                  <span className="text-sm font-black text-slate-900">{formatBaht(rentAmount)}</span>
+                                </div>
+                                <div>
+                                  {isRentSettled ? (
+                                    <span className="px-2.5 py-1 rounded-lg text-xs font-extrabold bg-emerald-50 text-emerald-700 border border-emerald-200 flex items-center gap-1">
+                                      <CheckCircle className="w-3.5 h-3.5 text-emerald-600 shrink-0" /> ชำระแล้ว
+                                    </span>
+                                  ) : (
+                                    <button
+                                      disabled={actionLoading !== null}
+                                      onClick={() => handleSettleDailyItem(inv.id, 'DAILY_RENT', 'ค่าเช่า')}
+                                      className="bg-indigo-600 hover:bg-indigo-700 text-white px-3.5 py-1.5 rounded-xl text-xs font-black shadow-xs transition-all active:scale-95 disabled:opacity-50"
+                                    >
+                                      {isRentLoading ? 'กำลังบันทึก...' : 'รับเงินสดค่าเช่า'}
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
 
-                            <div className="flex items-center gap-4 text-xs font-semibold text-slate-600 pt-1 flex-wrap">
-                              <span>ค่าเช่ารายวัน: <strong className="text-slate-800">{formatBaht(Number(inv.totalRentAmount))}</strong></span>
-                              <span>เงินประกัน/มัดจำ: <strong className="text-slate-800">{formatBaht(Number(inv.depositAmount))}</strong></span>
-                              <span>ยอดตามข้อตกลง: <strong className="text-amber-900">{formatBaht(Number(inv.totalAgreedAmount))}</strong></span>
+                              {/* 2. Deposit Component */}
+                              <div className="bg-white rounded-xl p-3.5 border border-slate-200 flex items-center justify-between gap-3 shadow-xs">
+                                <div>
+                                  <span className="text-xs font-bold text-slate-500 block">เงินประกัน/มัดจำ (Deposit)</span>
+                                  <span className="text-sm font-black text-slate-900">{formatBaht(depositAmount)}</span>
+                                </div>
+                                <div>
+                                  {isDepositSettled ? (
+                                    <span className="px-2.5 py-1 rounded-lg text-xs font-extrabold bg-emerald-50 text-emerald-700 border border-emerald-200 flex items-center gap-1">
+                                      <CheckCircle className="w-3.5 h-3.5 text-emerald-600 shrink-0" /> ชำระแล้ว
+                                    </span>
+                                  ) : (
+                                    <button
+                                      disabled={actionLoading !== null}
+                                      onClick={() => handleSettleDailyItem(inv.id, 'DEPOSIT', 'เงินประกัน')}
+                                      className="bg-amber-600 hover:bg-amber-700 text-white px-3.5 py-1.5 rounded-xl text-xs font-black shadow-xs transition-all active:scale-95 disabled:opacity-50"
+                                    >
+                                      {isDepositLoading ? 'กำลังบันทึก...' : 'รับเงินสดเงินประกัน'}
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
                             </div>
                           </div>
-
-                          <div className="text-right shrink-0">
-                            <span className="text-[11px] font-bold text-slate-500 block">ยอดคงเหลือที่ต้องชำระ</span>
-                            <span className="text-lg font-black text-indigo-700">{formatBaht(Number(inv.outstandingAmount))}</span>
-                          </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   </div>
                 )}
@@ -550,55 +648,105 @@ export function PaymentsOwnerView({
 
             {/* 3. Paid & Receipts Tab */}
             {activeTab === 'paid' && (
-              <div className="p-6">
-                <h3 className="font-extrabold text-slate-800 mb-4 text-base">ประวัติการรับชำระเงินที่อนุมัติแล้ว</h3>
-                {paidPayments.length === 0 ? (
-                  <div className="text-center py-16 text-slate-400">
-                    <p className="font-bold text-sm">ยังไม่มีรายการรับชำระเงินที่อนุมัติแล้ว</p>
-                  </div>
-                ) : (
-                  <div className="space-y-4">
-                    {paidPayments.map(p => (
-                      <div key={p.id} className="border border-slate-200 rounded-2xl p-5 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 hover:border-emerald-200 transition-all bg-emerald-50/20">
-                        <div className="space-y-1.5">
-                          <div className="flex items-center gap-2">
-                            <span className="font-black text-slate-900 text-base">บิลเลขที่: {p.bill?.billNumber || p.billId.substring(0, 8)}</span>
-                            <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-800">ชำระแล้ว</span>
-                            {p.receipt && (
-                              <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">
-                                {p.receipt.receiptNumber}
-                              </span>
-                            )}
+              <div className="p-6 space-y-6">
+                <div>
+                  <h3 className="font-extrabold text-slate-800 mb-4 text-base">ประวัติการรับชำระเงินที่อนุมัติแล้ว</h3>
+                  {paidPayments.length === 0 ? (
+                    <div className="text-center py-8 text-slate-400">
+                      <p className="font-bold text-sm">ยังไม่มีรายการรับชำระเงินรายเดือนที่อนุมัติแล้ว</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      {paidPayments.map(p => (
+                        <div key={p.id} className="border border-slate-200 rounded-2xl p-5 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 hover:border-emerald-200 transition-all bg-emerald-50/20">
+                          <div className="space-y-1.5">
+                            <div className="flex items-center gap-2">
+                              <span className="font-black text-slate-900 text-base">บิลเลขที่: {p.bill?.billNumber || p.billId.substring(0, 8)}</span>
+                              <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-800">ชำระแล้ว</span>
+                              {p.receipt && (
+                                <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                                  {p.receipt.receiptNumber}
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-xs font-bold text-slate-500">
+                              ห้อง: <span className="text-slate-700">{p.bill?.room?.roomNumber || 'N/A'}</span> • ผู้เช่า: <span className="text-slate-700">{p.bill?.tenant?.name || p.bill?.tenant?.displayName || 'ผู้เช่า'}</span>
+                            </p>
+                            <p className="text-xs font-bold text-slate-500">
+                              ยอดเงิน: <span className="text-emerald-700 font-black">{formatBaht(Number(p.amount))}</span> • ช่องทาง: {p.method === 'CASH' ? 'เงินสด' : 'โอนเงิน'}
+                            </p>
                           </div>
-                          <p className="text-xs font-bold text-slate-500">
-                            ห้อง: <span className="text-slate-700">{p.bill?.room?.roomNumber || 'N/A'}</span> • ผู้เช่า: <span className="text-slate-700">{p.bill?.tenant?.name || p.bill?.tenant?.displayName || 'ผู้เช่า'}</span>
-                          </p>
-                          <p className="text-xs font-bold text-slate-500">
-                            ยอดเงิน: <span className="text-emerald-700 font-black">{formatBaht(Number(p.amount))}</span> • ช่องทาง: {p.method === 'CASH' ? 'เงินสด' : 'โอนเงิน'}
-                          </p>
-                        </div>
 
-                        <div className="flex items-center gap-2.5 w-full md:w-auto">
-                          {p.receipt && (
-                            <a
-                              href={`/api/v1/receipts/${p.receipt.id}/html`}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="flex items-center gap-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 px-3.5 py-2 rounded-xl text-xs font-bold transition-all border border-indigo-200"
+                          <div className="flex items-center gap-2.5 w-full md:w-auto">
+                            {p.receipt && (
+                              <a
+                                href={`/api/v1/receipts/${p.receipt.id}/html`}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="flex items-center gap-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 px-3.5 py-2 rounded-xl text-xs font-bold transition-all border border-indigo-200"
+                              >
+                                <FileText className="w-4 h-4" /> ดูใบเสร็จ
+                              </a>
+                            )}
+                            <button
+                              disabled={actionLoading !== null}
+                              onClick={() => { setSelectedPayment(p); setReverseModalOpen(true); }}
+                              className="flex items-center gap-1 bg-slate-100 hover:bg-rose-50 hover:text-rose-700 text-slate-600 px-3.5 py-2 rounded-xl text-xs font-bold transition-all disabled:opacity-50"
                             >
-                              <FileText className="w-4 h-4" /> ดูใบเสร็จ
-                            </a>
-                          )}
-                          <button
-                            disabled={actionLoading !== null}
-                            onClick={() => { setSelectedPayment(p); setReverseModalOpen(true); }}
-                            className="flex items-center gap-1 bg-slate-100 hover:bg-rose-50 hover:text-rose-700 text-slate-600 px-3.5 py-2 rounded-xl text-xs font-bold transition-all disabled:opacity-50"
-                          >
-                            <RotateCcw className="w-3.5 h-3.5" /> ยกเลิก/ย้อนกลับ
-                          </button>
+                              <RotateCcw className="w-3.5 h-3.5" /> ยกเลิก/ย้อนกลับ
+                            </button>
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Settled Daily Stay Invoices */}
+                {dailyInvoices.filter((inv: any) => inv.status === 'PAID' || inv.items?.some((i: any) => i.status === 'SETTLED' || i.status === 'DECLARED_PAID')).length > 0 && (
+                  <div className="pt-6 border-t border-slate-200 space-y-4">
+                    <div className="flex items-center gap-2">
+                      <span className="px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                        รายวัน
+                      </span>
+                      <h3 className="font-extrabold text-slate-800 text-base">
+                        รายการห้องพักรายวันที่ชำระแล้ว ({dailyInvoices.filter((inv: any) => inv.status === 'PAID' || inv.items?.some((i: any) => i.status === 'SETTLED' || i.status === 'DECLARED_PAID')).length})
+                      </h3>
+                    </div>
+
+                    <div className="space-y-3">
+                      {dailyInvoices
+                        .filter((inv: any) => inv.status === 'PAID' || inv.items?.some((i: any) => i.status === 'SETTLED' || i.status === 'DECLARED_PAID'))
+                        .map((inv: any) => (
+                          <div
+                            key={inv.id}
+                            className="border border-emerald-200 rounded-2xl p-5 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-emerald-50/20"
+                          >
+                            <div className="space-y-1.5">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="font-black text-slate-900 text-base">
+                                  ใบแจ้งหนี้: {inv.invoiceNumber}
+                                </span>
+                                <span className="px-2.5 py-0.5 rounded-full text-[11px] font-extrabold bg-emerald-100 text-emerald-800">
+                                  {inv.status === 'PAID' ? 'ชำระครบแล้ว' : 'ชำระบางส่วน'}
+                                </span>
+                              </div>
+                              <p className="text-xs font-bold text-slate-600">
+                                ห้อง: <span className="text-indigo-600 font-extrabold">{inv.dailyStay?.room?.roomNumber || '-'}</span> • ผู้พัก: <span className="text-slate-800 font-extrabold">{inv.dailyStay?.tenant?.displayName || inv.dailyStay?.applicantFullName || '-'}</span>
+                              </p>
+                              <div className="flex items-center gap-3 text-xs font-semibold text-slate-600 pt-1 flex-wrap">
+                                <span>ค่าเช่า: <strong className="text-slate-800">{formatBaht(Number(inv.totalRentAmount))}</strong></span>
+                                <span>เงินประกัน: <strong className="text-slate-800">{formatBaht(Number(inv.depositAmount))}</strong></span>
+                                <span>ยอดรวมตามข้อตกลง: <strong className="text-emerald-800">{formatBaht(Number(inv.totalAgreedAmount))}</strong></span>
+                              </div>
+                            </div>
+                            <div className="text-right">
+                              <span className="text-[11px] font-bold text-slate-500 block">ยอดคงเหลือ</span>
+                              <span className="text-base font-black text-slate-700">{formatBaht(Number(inv.outstandingAmount))}</span>
+                            </div>
+                          </div>
+                        ))}
+                    </div>
                   </div>
                 )}
               </div>

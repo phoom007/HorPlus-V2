@@ -173,7 +173,21 @@ export class ProvisionalRentalTermService {
         where: {
           dormitoryId,
           roomId: data.roomId,
-          status: { in: ['active', 'ACTIVE', 'approved', 'expiring_soon', 'pending_signature', 'waiting_extension', 'checking_out'] },
+          status: {
+            in: [
+              'active',
+              'ACTIVE',
+              'approved',
+              'expiring_soon',
+              'pending_signature',
+              'waiting_extension',
+              'checking_out',
+              'ended',
+              'ENDED',
+              'terminated',
+              'TERMINATED',
+            ],
+          },
           deletedAt: null,
         },
       });

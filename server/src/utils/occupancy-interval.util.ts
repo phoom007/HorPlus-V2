@@ -57,8 +57,26 @@ export interface PhysicalInterval {
 export function getContractPhysicalInterval(contract: {
   startDate: Date | string;
   endDate?: Date | string | null;
+  status?: string | null;
+  terminatedAt?: Date | string | null;
+  terminationEffectiveDate?: Date | string | null;
 }): PhysicalInterval {
   const start = getBangkokStartOfDay(contract.startDate);
+
+  if (contract.status === 'terminated' || contract.status === 'TERMINATED') {
+    if (contract.terminationEffectiveDate) {
+      return {
+        start,
+        end: getBangkokExclusiveEndOfInclusiveDate(contract.terminationEffectiveDate),
+      };
+    } else if (contract.terminatedAt) {
+      return {
+        start,
+        end: new Date(contract.terminatedAt),
+      };
+    }
+  }
+
   const end = contract.endDate
     ? getBangkokExclusiveEndOfInclusiveDate(contract.endDate)
     : new Date(8640000000000000); // Open-ended contract

@@ -208,7 +208,19 @@ export class DailyStayService {
         dormitoryId,
         roomId,
         status: {
-          in: ['active', 'ACTIVE', 'approved', 'expiring_soon', 'pending_signature', 'waiting_extension', 'checking_out'],
+          in: [
+            'active',
+            'ACTIVE',
+            'approved',
+            'expiring_soon',
+            'pending_signature',
+            'waiting_extension',
+            'checking_out',
+            'ended',
+            'ENDED',
+            'terminated',
+            'TERMINATED',
+          ],
         },
         deletedAt: null,
       },
@@ -1266,19 +1278,37 @@ export class DailyStayService {
         where: { invoiceId: invoice.id },
       });
 
-      const hasUnsettled = updatedItems.some(
-        (it: any) => it.status !== 'SETTLED' && it.status !== 'DECLARED_PAID'
+      const totalAgreed = updatedItems.reduce(
+        (sum: number, it: any) => sum + Number(it.amount),
+        0
       );
 
-      const remainingOutstanding = updatedItems
-        .filter((it: any) => it.status !== 'SETTLED' && it.status !== 'DECLARED_PAID')
+      const totalPaid = updatedItems
+        .filter((it: any) => it.status === 'SETTLED' || it.status === 'DECLARED_PAID')
         .reduce((sum: number, it: any) => sum + Number(it.amount), 0);
+
+      const remainingOutstanding = Math.max(0, totalAgreed - totalPaid);
+
+      let newStatus = 'ISSUED';
+      if (remainingOutstanding === 0 && totalAgreed > 0) {
+        newStatus = 'PAID';
+      } else if (totalPaid > 0) {
+        newStatus = 'PARTIALLY_PAID';
+      } else {
+        newStatus = 'ISSUED';
+      }
+
+      const isDepositSettled = updatedItems.some(
+        (it: any) => it.itemType === 'DEPOSIT' && (it.status === 'SETTLED' || it.status === 'DECLARED_PAID')
+      );
 
       const updatedInvoice = await tx.dailyStayInvoice.update({
         where: { id: invoice.id },
         data: {
-          status: hasUnsettled ? 'PARTIALLY_PAID' : 'PAID',
+          totalAgreedAmount: toDecimal(totalAgreed.toFixed(2)),
           outstandingAmount: toDecimal(remainingOutstanding.toFixed(2)),
+          status: newStatus,
+          depositDeclaredStatus: isDepositSettled ? 'PAID' : invoice.depositDeclaredStatus,
         },
         include: {
           items: true,
@@ -1291,7 +1321,10 @@ export class DailyStayService {
         },
       });
 
-      return updatedInvoice;
+      return {
+        ...updatedInvoice,
+        totalPaidAmount: toDecimal(totalPaid.toFixed(2)),
+      };
     };
 
     if (txClient) {
