@@ -358,7 +358,7 @@ export async function runVerification() {
       where: { roomId: room104Db.id, billingCycleId: cycleAugDb.id },
     });
     const waterR = augReadings.find(r => r.meterType === 'water');
-    const elecR = augReadings.find(r => r.meterType === 'electric' || r.meterType === 'electricity');
+    const elecR = augReadings.find(r => r.meterType === 'electricity');
     assert(Number(waterR?.previousReading) === 138 && Number(waterR?.currentReading) === 138, 'Room 104 has populated water meter readings (138 -> 138) in August 2026');
     assert(Number(elecR?.previousReading) === 720 && Number(elecR?.currentReading) === 720, 'Room 104 has populated electric meter readings (720 -> 720) in August 2026');
   }

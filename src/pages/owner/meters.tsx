@@ -2295,6 +2295,8 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
 
                 const tenant = getTenantForRoomAndCycle(row.roomId, selectedCycle);
                 const roomCtx = previewContext?.rooms?.find((r: any) => r.roomId === row.roomId);
+                const effectiveTenantId = roomCtx ? roomCtx.tenantId : tenant?.id;
+                const effectiveTenantName = roomCtx ? roomCtx.tenantName : tenant?.name;
                 const isDailyContext = roomCtx?.billingSource === 'DAILY_STAY' || Boolean(roomCtx?.isDailyUnpaid);
                 const isBillIssued = row.billStatus !== 'draft' && row.billStatus !== 'cancelled';
                 const isRowPaid = !isDailyContext && (row.isPaid || row.billStatus === 'paid');
@@ -2746,6 +2748,15 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                           );
                         }
 
+                        // Historical Daily Stay (Checked-out & Paid): No active monthly contract/bill -> Non-operational status
+                        if ((roomCtx?.historicalDailyCount || 0) > 0 && !effectiveTenantId && row.billStatus === 'draft') {
+                          return (
+                            <div className="flex items-center justify-center min-w-[85px]">
+                              <span className="text-xs text-slate-400 font-bold">-</span>
+                            </div>
+                          );
+                        }
+
                         return (
                           <div className="flex flex-col items-center justify-center gap-1 min-w-[85px]">
                             <button
@@ -2779,9 +2790,9 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                             <span className={`text-[10px] font-extrabold leading-none ${
                               row.billStatus === 'paid'
                                 ? 'text-emerald-700'
-                                : row.billStatus === 'draft' || row.billStatus === 'cancelled'
-                                ? 'text-slate-500'
-                                : 'text-amber-700'
+                                : row.billStatus !== 'draft' && row.billStatus !== 'cancelled'
+                                ? 'text-amber-700'
+                                : 'text-slate-500'
                             }`}>
                               {row.billStatus === 'paid'
                                 ? 'ชำระแล้ว'
@@ -2852,7 +2863,17 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                                       (ยังไม่ได้เชื่อม LINE)
                                     </span>
                                   )}
+                                  {historicalDailyCount > 0 && (
+                                    <span className="text-xs font-bold text-slate-700">
+                                      ผู้เช่ารายวัน {historicalDailyCount} คน
+                                    </span>
+                                  )}
                                 </div>
+                              )}
+                              {!hasTenant && historicalDailyCount > 0 && (
+                                <span className="text-xs font-bold text-slate-700">
+                                  ผู้เช่ารายวัน {historicalDailyCount} คน
+                                </span>
                               )}
                               {hasBookableGap && (room || row.roomId) && (
                                 <button

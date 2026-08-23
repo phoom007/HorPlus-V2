@@ -1989,7 +1989,7 @@ export class MeterService {
         if (!readingMap[r.roomId]) readingMap[r.roomId] = {};
         if (r.meterType === 'water' && r.currentReading !== null && r.currentReading !== undefined) {
           readingMap[r.roomId].waterCurr = formatDecimal(toDecimal(r.currentReading.toString()));
-        } else if ((r.meterType === 'electricity' || r.meterType === 'electric') && r.currentReading !== null && r.currentReading !== undefined) {
+        } else if (r.meterType === 'electricity' && r.currentReading !== null && r.currentReading !== undefined) {
           readingMap[r.roomId].elecCurr = formatDecimal(toDecimal(r.currentReading.toString()));
         }
       }
