@@ -142,6 +142,41 @@ describe('LOCAL-07 Meter Workspace & Quick Add Comprehensive Frontend Suite', ()
       expect(preview.elecAmount).toBe('0.00');
       expect(preview.totalAmount).toBe('0.00');
     });
+
+    it('preview calculation fails closed and does NOT assume per_unit on unknown mode or undefined rates', () => {
+      // 1. Unknown mode fails closed (0 charge, no per_unit assumption)
+      const unknownPreview = calculateMeterRowPreview(
+        { roomId: 'r-1', roomNumber: '101', billingSource: 'PROVISIONAL_MONTHLY', rentAmount: '3500.00' },
+        { waterRate: '20.00', electricityRate: '8.00', waterBillingType: 'unknown_mode' as any, electricityBillingType: 'unknown_mode' as any },
+        { waterPrev: '100', waterCurr: '110', elecPrev: '500', elecCurr: '550' }
+      );
+      expect(unknownPreview.waterUsage).toBe('0.00');
+      expect(unknownPreview.waterAmount).toBe('0.00');
+      expect(unknownPreview.elecUsage).toBe('0.00');
+      expect(unknownPreview.elecAmount).toBe('0.00');
+
+      // 2. Undefined rates (not ready) returns 0 charge
+      const notReadyPreview = calculateMeterRowPreview(
+        { roomId: 'r-1', roomNumber: '101', billingSource: 'PROVISIONAL_MONTHLY', rentAmount: '3500.00' },
+        undefined,
+        { waterPrev: '100', waterCurr: '110', elecPrev: '500', elecCurr: '550' }
+      );
+      expect(notReadyPreview.waterUsage).toBe('0.00');
+      expect(notReadyPreview.waterAmount).toBe('0.00');
+      expect(notReadyPreview.elecUsage).toBe('0.00');
+      expect(notReadyPreview.elecAmount).toBe('0.00');
+
+      // 3. Canonical modes calculate correctly
+      const canonicalPreview = calculateMeterRowPreview(
+        { roomId: 'r-1', roomNumber: '101', billingSource: 'PROVISIONAL_MONTHLY', rentAmount: '3500.00', snapshotPeopleCount: 2 },
+        { waterRate: '50.00', electricityRate: '8.00', waterBillingType: 'per_person', electricityBillingType: 'per_unit' },
+        { waterPrev: '100', waterCurr: '110', elecPrev: '500', elecCurr: '550' }
+      );
+      expect(canonicalPreview.waterUsage).toBe('2.00'); // 2 persons
+      expect(canonicalPreview.waterAmount).toBe('100.00'); // 50 * 2 = 100
+      expect(canonicalPreview.elecUsage).toBe('50.00'); // 550 - 500 = 50
+      expect(canonicalPreview.elecAmount).toBe('400.00'); // 50 * 8 = 400
+    });
   });
 
   describe('2. Owner UI Financial Amount Due & Collapsible Detail Breakdown', () => {

@@ -580,5 +580,53 @@ describe('Local-07 Central Billing Mode Normalization & Missing Meter Baseline A
 
       await prisma.billingCycle.delete({ where: { id: testCycle.id } });
     });
+
+    it('submitBulkReadings rejects conflicting previousReading with PREVIOUS_READING_CONFLICT when override is false', async () => {
+      // In cycle 1, roomId water reading is currently 1250 -> 1310.
+      // Attempting to submit previousReading: 1200 without previousReadingOverride MUST reject.
+      await expect(
+        meterService.submitBulkReadings(
+          testDormId,
+          {
+            billingCycleId: cycle1Id,
+            readings: [
+              {
+                roomId,
+                meterType: 'water',
+                previousReading: '1200', // Conflicts with server authority 1250!
+                currentReading: '1320',
+              },
+            ],
+          },
+          testUserId
+        )
+      ).rejects.toThrow('PREVIOUS_READING_CONFLICT');
+    });
+
+    it('submitBulkReadings accepts explicit previousReadingOverride: true and updates previousReading snapshot', async () => {
+      // In cycle 1, explicitly override previousReading to 1260 with currentReading: 1320.
+      await meterService.submitBulkReadings(
+        testDormId,
+        {
+          billingCycleId: cycle1Id,
+          readings: [
+            {
+              roomId,
+              meterType: 'water',
+              previousReading: '1260',
+              currentReading: '1320',
+              previousReadingOverride: true,
+            },
+          ],
+        },
+        testUserId
+      );
+
+      const waterReading = await meterRepo.findReadingByCycleRoomAndType(testDormId, cycle1Id, roomId, 'water');
+      expect(waterReading).toBeDefined();
+      expect(Number(waterReading?.previousReading)).toBe(1260);
+      expect(Number(waterReading?.currentReading)).toBe(1320);
+      expect(waterReading?.usageUnits).toBe('60.00'); // 1320 - 1260 = 60
+    });
   });
 });

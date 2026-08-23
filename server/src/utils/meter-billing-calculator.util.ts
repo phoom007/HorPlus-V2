@@ -7,7 +7,7 @@
  * 2. Exact two-decimal canonical strings ("0.00", "3500.00", "4200.50").
  * 3. 100% Mathematical Parity with server BillingService.generateBillPreview & decimal-math.util.
  * 4. Meter usage preserves exact 2-decimal fractional units without integer rounding (e.g. 105.75 - 100.25 = 5.50). */
-import { safeNormalizeUtilityBillingMode } from './billing-mode-normalizer.util.js';
+import { normalizeUtilityBillingMode } from './billing-mode-normalizer.util.js';
 
 export interface RateSnapshotContext {
   waterBillingType?: 'per_unit' | 'per_person' | 'fixed' | 'per_room' | 'room' | 'person';
@@ -159,65 +159,77 @@ export function calculateMeterRowPreview(
   const rawElecCurr = draft.elecCurr !== undefined && draft.elecCurr !== null ? String(draft.elecCurr).trim() : '';
 
   // 1. Water Calculation
-  const waterMode = safeNormalizeUtilityBillingMode(rates?.waterBillingType, 'per_unit');
+  const rawWaterMode = rates?.waterBillingType;
   const waterRateSatang = parseSatang(rates?.waterRate);
   let waterUsageScaled = 0n;
   let waterAmountSatang = 0n;
 
-  if (waterMode === 'per_person') {
-    waterAmountSatang = multiplyMoneyByQuantity(waterRateSatang, peopleCountStr);
-    waterUsageScaled = parseScaled2(peopleCountStr);
-  } else if (waterMode === 'fixed') {
-    waterAmountSatang = waterRateSatang;
-    waterUsageScaled = 100n; // 1.00 room
+  if (!rates || rawWaterMode === null || rawWaterMode === undefined || String(rawWaterMode).trim() === '') {
+    // Missing/not-loaded rate data -> explicit not-ready/no-calculation behavior
+    waterUsageScaled = 0n;
+    waterAmountSatang = 0n;
   } else {
-    // per_unit: calculate usage units with 4/5-digit rollover support
-    if (rawWaterPrev !== '' && rawWaterCurr !== '') {
-      const usageRes = calculateMeterUsageUnits(rawWaterPrev, rawWaterCurr);
-      if (usageRes.isValid) {
-        waterUsageScaled = BigInt(usageRes.usageUnits) * 100n;
-      } else {
-        const prevScaled = parseScaled2(rawWaterPrev);
-        const currScaled = parseScaled2(rawWaterCurr);
-        if (currScaled >= prevScaled) {
-          waterUsageScaled = currScaled - prevScaled;
+    const waterMode = normalizeUtilityBillingMode(rawWaterMode);
+    if (waterMode === 'per_person') {
+      waterAmountSatang = multiplyMoneyByQuantity(waterRateSatang, peopleCountStr);
+      waterUsageScaled = parseScaled2(peopleCountStr);
+    } else if (waterMode === 'fixed') {
+      waterAmountSatang = waterRateSatang;
+      waterUsageScaled = 100n; // 1.00 room
+    } else if (waterMode === 'per_unit') {
+      if (rawWaterPrev !== '' && rawWaterCurr !== '') {
+        const usageRes = calculateMeterUsageUnits(rawWaterPrev, rawWaterCurr);
+        if (usageRes.isValid) {
+          waterUsageScaled = BigInt(usageRes.usageUnits) * 100n;
+        } else {
+          const prevScaled = parseScaled2(rawWaterPrev);
+          const currScaled = parseScaled2(rawWaterCurr);
+          if (currScaled >= prevScaled) {
+            waterUsageScaled = currScaled - prevScaled;
+          }
         }
-      }
-      if (waterUsageScaled > 0n) {
-        const usageStr = formatScaled2(waterUsageScaled);
-        waterAmountSatang = multiplyMoneyByQuantity(waterRateSatang, usageStr);
+        if (waterUsageScaled > 0n) {
+          const usageStr = formatScaled2(waterUsageScaled);
+          waterAmountSatang = multiplyMoneyByQuantity(waterRateSatang, usageStr);
+        }
       }
     }
   }
 
   // 2. Electricity Calculation
-  const elecMode = safeNormalizeUtilityBillingMode(rates?.electricityBillingType, 'per_unit');
+  const rawElecMode = rates?.electricityBillingType;
   const elecRateSatang = parseSatang(rates?.electricityRate);
   let elecUsageScaled = 0n;
   let elecAmountSatang = 0n;
 
-  if (elecMode === 'per_person') {
-    elecAmountSatang = multiplyMoneyByQuantity(elecRateSatang, peopleCountStr);
-    elecUsageScaled = parseScaled2(peopleCountStr);
-  } else if (elecMode === 'fixed') {
-    elecAmountSatang = elecRateSatang;
-    elecUsageScaled = 100n; // 1.00 room
+  if (!rates || rawElecMode === null || rawElecMode === undefined || String(rawElecMode).trim() === '') {
+    // Missing/not-loaded rate data -> explicit not-ready/no-calculation behavior
+    elecUsageScaled = 0n;
+    elecAmountSatang = 0n;
   } else {
-    // per_unit: calculate usage units with 4/5-digit rollover support
-    if (rawElecPrev !== '' && rawElecCurr !== '') {
-      const usageRes = calculateMeterUsageUnits(rawElecPrev, rawElecCurr);
-      if (usageRes.isValid) {
-        elecUsageScaled = BigInt(usageRes.usageUnits) * 100n;
-      } else {
-        const prevScaled = parseScaled2(rawElecPrev);
-        const currScaled = parseScaled2(rawElecCurr);
-        if (currScaled >= prevScaled) {
-          elecUsageScaled = currScaled - prevScaled;
+    const elecMode = normalizeUtilityBillingMode(rawElecMode);
+    if (elecMode === 'per_person') {
+      elecAmountSatang = multiplyMoneyByQuantity(elecRateSatang, peopleCountStr);
+      elecUsageScaled = parseScaled2(peopleCountStr);
+    } else if (elecMode === 'fixed') {
+      elecAmountSatang = elecRateSatang;
+      elecUsageScaled = 100n; // 1.00 room
+    } else if (elecMode === 'per_unit') {
+      if (rawElecPrev !== '' && rawElecCurr !== '') {
+        const usageRes = calculateMeterUsageUnits(rawElecPrev, rawElecCurr);
+        if (usageRes.isValid) {
+          elecUsageScaled = BigInt(usageRes.usageUnits) * 100n;
+        } else {
+          const prevScaled = parseScaled2(rawElecPrev);
+          const currScaled = parseScaled2(rawElecCurr);
+          if (currScaled >= prevScaled) {
+            elecUsageScaled = currScaled - prevScaled;
+          }
         }
-      }
-      if (elecUsageScaled > 0n) {
-        const usageStr = formatScaled2(elecUsageScaled);
-        elecAmountSatang = multiplyMoneyByQuantity(elecRateSatang, usageStr);
+        if (elecUsageScaled > 0n) {
+          const usageStr = formatScaled2(elecUsageScaled);
+          elecAmountSatang = multiplyMoneyByQuantity(elecRateSatang, usageStr);
+        }
       }
     }
   }

@@ -184,18 +184,22 @@ export function calculateMeterRowPreview(
   const rawElecCurr = draft.elecCurr !== undefined && draft.elecCurr !== null ? String(draft.elecCurr).trim() : '';
 
   // 1. Water Calculation
-  const waterMode = rates?.waterBillingType || 'per_unit';
+  const waterMode = rates?.waterBillingType;
   const waterRateSatang = parseSatang(rates?.waterRate);
   let waterUsageScaled = 0n;
   let waterAmountSatang = 0n;
 
-  if (waterMode === 'per_person' || waterMode === 'person') {
+  if (!rates || !waterMode) {
+    // Rates not loaded / not ready -> 0 calculation, no default assumption
+    waterUsageScaled = 0n;
+    waterAmountSatang = 0n;
+  } else if (waterMode === 'per_person') {
     waterAmountSatang = multiplyMoneyByQuantity(waterRateSatang, peopleCountStr);
     waterUsageScaled = parseScaled2(peopleCountStr);
-  } else if (waterMode === 'fixed' || waterMode === 'per_room' || waterMode === 'room') {
+  } else if (waterMode === 'fixed') {
     waterAmountSatang = waterRateSatang;
     waterUsageScaled = 100n; // 1.00 room
-  } else {
+  } else if (waterMode === 'per_unit') {
     // per_unit: calculate usage units with 4/5-digit rollover support
     if (rawWaterPrev !== '' && rawWaterCurr !== '') {
       const usageRes = calculateMeterUsageUnits(rawWaterPrev, rawWaterCurr);
@@ -213,21 +217,29 @@ export function calculateMeterRowPreview(
         waterAmountSatang = multiplyMoneyByQuantity(waterRateSatang, usageStr);
       }
     }
+  } else {
+    // Unsupported/unknown present mode -> FAIL CLOSED (0 charge, never assume per_unit)
+    waterUsageScaled = 0n;
+    waterAmountSatang = 0n;
   }
 
   // 2. Electricity Calculation
-  const elecMode = rates?.electricityBillingType || 'per_unit';
+  const elecMode = rates?.electricityBillingType;
   const elecRateSatang = parseSatang(rates?.electricityRate);
   let elecUsageScaled = 0n;
   let elecAmountSatang = 0n;
 
-  if (elecMode === 'per_person' || elecMode === 'person') {
+  if (!rates || !elecMode) {
+    // Rates not loaded / not ready -> 0 calculation, no default assumption
+    elecUsageScaled = 0n;
+    elecAmountSatang = 0n;
+  } else if (elecMode === 'per_person') {
     elecAmountSatang = multiplyMoneyByQuantity(elecRateSatang, peopleCountStr);
     elecUsageScaled = parseScaled2(peopleCountStr);
-  } else if (elecMode === 'fixed' || elecMode === 'per_room' || elecMode === 'room') {
+  } else if (elecMode === 'fixed') {
     elecAmountSatang = elecRateSatang;
     elecUsageScaled = 100n; // 1.00 room
-  } else {
+  } else if (elecMode === 'per_unit') {
     // per_unit: calculate usage units with 4/5-digit rollover support
     if (rawElecPrev !== '' && rawElecCurr !== '') {
       const usageRes = calculateMeterUsageUnits(rawElecPrev, rawElecCurr);
@@ -245,6 +257,10 @@ export function calculateMeterRowPreview(
         elecAmountSatang = multiplyMoneyByQuantity(elecRateSatang, usageStr);
       }
     }
+  } else {
+    // Unsupported/unknown present mode -> FAIL CLOSED (0 charge, never assume per_unit)
+    elecUsageScaled = 0n;
+    elecAmountSatang = 0n;
   }
 
   // 3. Common Fee Calculation

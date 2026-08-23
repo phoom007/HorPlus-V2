@@ -57,8 +57,9 @@ export interface BulkMeterReadingItemDto {
   roomId: string;
   meterType: 'water' | 'electricity';
   meterDeviceId?: string;
-  previousReading: string;
+  previousReading?: string;
   currentReading: string;
+  previousReadingOverride?: boolean;
   readAt?: string;
   notes?: string;
 }
@@ -360,23 +361,45 @@ export class MeterService {
           tx
         );
 
-        // If server has an authoritative baseline, use it (prevents client tampering)
-        // If server has NO authoritative baseline, accept user-entered baseline
-        const rawPrev = authDbPrev !== null
-          ? authDbPrev
-          : (item.previousReading !== undefined && item.previousReading !== null && String(item.previousReading).trim() !== '')
-            ? parseAuthoritativeMeterReading(item.previousReading, 'user-entered previous reading')
-            : null;
+        const suppliedPrev = (item.previousReading !== undefined && item.previousReading !== null && String(item.previousReading).trim() !== '')
+          ? parseAuthoritativeMeterReading(item.previousReading, 'user-entered previous reading')
+          : null;
 
-        if (rawPrev === null) {
-          const typeThai = item.meterType === 'water' ? 'น้ำ' : 'ไฟฟ้า';
-          const err = new Error(`กรุณาระบุค่ามิเตอร์${typeThai}เดิมสำหรับห้องนี้`);
-          (err as any).statusCode = 400;
-          (err as any).code = 'MISSING_PREVIOUS_METER_READING';
-          throw err;
+        let authPrev: string;
+
+        if (item.previousReadingOverride === true) {
+          // Explicit Owner-authorized manual override
+          if (suppliedPrev === null) {
+            const typeThai = item.meterType === 'water' ? 'น้ำ' : 'ไฟฟ้า';
+            const err = new Error(`กรุณาระบุค่ามิเตอร์${typeThai}เดิมสำหรับการ override`);
+            (err as any).statusCode = 400;
+            (err as any).code = 'MISSING_PREVIOUS_METER_READING';
+            throw err;
+          }
+          authPrev = suppliedPrev;
+        } else {
+          // Normal path: enforce server authority and reject conflicting payload without silent discard
+          if (authDbPrev !== null) {
+            if (suppliedPrev !== null && Number(suppliedPrev) !== Number(authDbPrev)) {
+              const typeThai = item.meterType === 'water' ? 'น้ำ' : 'ไฟฟ้า';
+              const err = new Error(`PREVIOUS_READING_CONFLICT: ค่ามิเตอร์${typeThai}เดิมที่ส่งมา (${suppliedPrev}) ไม่ตรงกับฐานข้อมูล (${authDbPrev}) และไม่ได้ระบุ previousReadingOverride`);
+              (err as any).statusCode = 400;
+              (err as any).code = 'PREVIOUS_READING_CONFLICT';
+              throw err;
+            }
+            authPrev = authDbPrev;
+          } else {
+            // Missing server baseline -> accept supplied previous reading
+            if (suppliedPrev === null) {
+              const typeThai = item.meterType === 'water' ? 'น้ำ' : 'ไฟฟ้า';
+              const err = new Error(`กรุณาระบุค่ามิเตอร์${typeThai}เดิมสำหรับห้องนี้`);
+              (err as any).statusCode = 400;
+              (err as any).code = 'MISSING_PREVIOUS_METER_READING';
+              throw err;
+            }
+            authPrev = suppliedPrev;
+          }
         }
-
-        const authPrev = rawPrev;
         const prevVal = Number(authPrev);
         const currVal = Number(item.currentReading);
 

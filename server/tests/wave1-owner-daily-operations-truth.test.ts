@@ -220,14 +220,28 @@ describe('Wave 1 — Owner Daily Operations Mandatory Acceptance Regressions Sui
       expect(waterReading?.previousReading).toBe('100.00');
       expect(waterReading?.usageUnits).toBe('20.00');
 
-      // Next, tamper client previousReading to 0 and submit current = 150
+      // Next, tamper client previousReading to 0 without override flag -> strictly rejects with PREVIOUS_READING_CONFLICT
+      await expect(
+        meterService.submitBulkReadings(dormAId, {
+          billingCycleId: cycleA1Id,
+          readings: [
+            {
+              roomId: roomA1Id,
+              meterType: 'water',
+              previousReading: '0', // TAMPERED BY CLIENT -> REJECTED
+              currentReading: '150',
+            },
+          ],
+        })
+      ).rejects.toThrow('PREVIOUS_READING_CONFLICT');
+
+      // Submitting currentReading without conflicting previousReading correctly derives authoritative 100.00
       await meterService.submitBulkReadings(dormAId, {
         billingCycleId: cycleA1Id,
         readings: [
           {
             roomId: roomA1Id,
             meterType: 'water',
-            previousReading: '0', // TAMPERED BY CLIENT
             currentReading: '150',
           },
         ],
