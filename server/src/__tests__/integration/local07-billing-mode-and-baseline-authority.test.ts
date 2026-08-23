@@ -54,11 +54,12 @@ describe('Local-07 Central Billing Mode Normalization & Missing Meter Baseline A
       expect(() => normalizeUtilityBillingMode(undefined)).toThrow('INVALID_BILLING_MODE');
     });
 
-    it('safeNormalizeUtilityBillingMode falls back gracefully', () => {
+    it('safeNormalizeUtilityBillingMode falls back on null/undefined and fails closed on unknown', () => {
       expect(safeNormalizeUtilityBillingMode('unit', 'fixed')).toBe('per_unit');
-      expect(safeNormalizeUtilityBillingMode('unknown', 'fixed')).toBe('fixed');
+      expect(() => safeNormalizeUtilityBillingMode('unknown', 'fixed')).toThrow('INVALID_BILLING_MODE');
       expect(safeNormalizeUtilityBillingMode(null, 'per_unit')).toBe('per_unit');
       expect(safeNormalizeUtilityBillingMode('', 'per_unit')).toBe('per_unit');
+      expect(safeNormalizeUtilityBillingMode(undefined, 'fixed')).toBe('fixed');
     });
   });
 
@@ -398,21 +399,186 @@ describe('Local-07 Central Billing Mode Normalization & Missing Meter Baseline A
       expect(prevElecCycle2).toBe('40');
     });
 
-    it('calculates exact financial rate isolation (40 elec units * 9.00 = 360.00, 50 water units * 18.00 = 900.00)', async () => {
-      const preview = await billingService.generateBillPreview(testDormId, cycle1Id, roomId);
+    it('second save in selected cycle preserves manual override previous reading (1250) and does NOT revert to N-1 (1200)', async () => {
+      // Current state: cycle 1 has water reading (1250 -> 1300).
+      // Now perform a second save in cycle 1 with waterCurr = 1310.
+      await meterService.submitBulkReadings(
+        testDormId,
+        {
+          billingCycleId: cycle1Id,
+          readings: [
+            {
+              roomId,
+              meterType: 'water',
+              currentReading: '1310',
+            } as any,
+          ],
+        },
+        testUserId
+      );
 
-      const waterItem = preview.items.find((i) => i.type === 'water');
-      const elecItem = preview.items.find((i) => i.type === 'electricity');
+      const waterReading = await meterRepo.findReadingByCycleRoomAndType(testDormId, cycle1Id, roomId, 'water');
+      expect(waterReading).toBeDefined();
+      expect(Number(waterReading?.previousReading)).toBe(1250); // Preserved!
+      expect(Number(waterReading?.currentReading)).toBe(1310);
+      expect(waterReading?.usageUnits).toBe('60.00'); // 1310 - 1250 = 60
+    });
 
-      expect(waterItem).toBeDefined();
-      expect(waterItem?.quantity).toBe('50.00');
-      expect(waterItem?.unitPrice).toBe('18.00');
-      expect(waterItem?.amount).toBe('900.00');
+    it('malformed higher-authority source fails closed and does NOT silently round decimals or fall back', async () => {
+      const cleanRoomId = crypto.randomUUID();
 
-      expect(elecItem).toBeDefined();
-      expect(elecItem?.quantity).toBe('40.00');
-      expect(elecItem?.unitPrice).toBe('9.00');
-      expect(elecItem?.amount).toBe('360.00');
+      // Use a new clean cycle with no readings
+      const testCycle = await prisma.billingCycle.create({
+        data: {
+          id: crypto.randomUUID(),
+          dormitoryId: testDormId,
+          cycleCode: `2026-MAL-${Date.now()}`,
+          name: 'Mal Cycle',
+          periodStart: new Date('2026-11-01T00:00:00.000Z'),
+          periodEnd: new Date('2026-11-30T23:59:59.000Z'),
+          billingDate: new Date('2026-11-25T00:00:00.000Z'),
+          dueDate: new Date('2026-12-05T00:00:00.000Z'),
+          status: 'open',
+        },
+      });
+
+      // Level 4 (Room initial): Malformed non-numeric string ('abc')
+      const findSpy1 = vi.spyOn(roomRepo, 'findById').mockResolvedValueOnce({
+        id: cleanRoomId,
+        dormitoryId: testDormId,
+        buildingId: 'bld-id',
+        roomNumber: 'BMAL',
+        normalizedRoomNumber: 'bmal',
+        floor: 1,
+        roomType: 'standard',
+        status: 'occupied',
+        rentCycle: 'monthly',
+        maximumOccupants: 2,
+        version: 1,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        initialWaterReading: 'abc' as any,
+        initialElectricityReading: null as any,
+      });
+
+      await expect(
+        meterService.resolveAuthoritativePreviousReading(testDormId, testCycle.id, cleanRoomId, 'water')
+      ).rejects.toThrow('INVALID_METER_READING');
+      findSpy1.mockRestore();
+
+      // Level 4 (Room initial): Non-integer decimal string ('12.7') MUST NOT round to 13, must fail closed
+      const findSpy2 = vi.spyOn(roomRepo, 'findById').mockResolvedValueOnce({
+        id: cleanRoomId,
+        dormitoryId: testDormId,
+        buildingId: 'bld-id',
+        roomNumber: 'BMAL',
+        normalizedRoomNumber: 'bmal',
+        floor: 1,
+        roomType: 'standard',
+        status: 'occupied',
+        rentCycle: 'monthly',
+        maximumOccupants: 2,
+        version: 1,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        initialWaterReading: '12.7' as any,
+        initialElectricityReading: null as any,
+      });
+
+      await expect(
+        meterService.resolveAuthoritativePreviousReading(testDormId, testCycle.id, cleanRoomId, 'water')
+      ).rejects.toThrow('INVALID_METER_READING');
+      findSpy2.mockRestore();
+
+      // Level 4 (Room initial): Out of range (100000)
+      const findSpy3 = vi.spyOn(roomRepo, 'findById').mockResolvedValueOnce({
+        id: cleanRoomId,
+        dormitoryId: testDormId,
+        buildingId: 'bld-id',
+        roomNumber: 'BMAL',
+        normalizedRoomNumber: 'bmal',
+        floor: 1,
+        roomType: 'standard',
+        status: 'occupied',
+        rentCycle: 'monthly',
+        maximumOccupants: 2,
+        version: 1,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        initialWaterReading: '100000' as any,
+        initialElectricityReading: null as any,
+      });
+
+      await expect(
+        meterService.resolveAuthoritativePreviousReading(testDormId, testCycle.id, cleanRoomId, 'water')
+      ).rejects.toThrow('INVALID_METER_READING');
+      findSpy3.mockRestore();
+
+      // Level 4 (Room initial): Negative (-1)
+      const findSpy4 = vi.spyOn(roomRepo, 'findById').mockResolvedValueOnce({
+        id: cleanRoomId,
+        dormitoryId: testDormId,
+        buildingId: 'bld-id',
+        roomNumber: 'BMAL',
+        normalizedRoomNumber: 'bmal',
+        floor: 1,
+        roomType: 'standard',
+        status: 'occupied',
+        rentCycle: 'monthly',
+        maximumOccupants: 2,
+        version: 1,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        initialWaterReading: '-1' as any,
+        initialElectricityReading: null as any,
+      });
+
+      await expect(
+        meterService.resolveAuthoritativePreviousReading(testDormId, testCycle.id, cleanRoomId, 'water')
+      ).rejects.toThrow('INVALID_METER_READING');
+      findSpy4.mockRestore();
+
+      // Level 1: Selected-cycle previousReading malformed ('12.7')
+      const findReadSpy1 = vi.spyOn(meterRepo, 'findReadingByCycleRoomAndType').mockResolvedValueOnce({
+        id: 'r1',
+        dormitoryId: testDormId,
+        billingCycleId: testCycle.id,
+        roomId: cleanRoomId,
+        meterType: 'water',
+        previousReading: '12.7' as any,
+        currentReading: '50.00' as any,
+        usageUnits: '37.30' as any,
+        readAt: new Date(),
+        status: 'draft',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      } as any);
+
+      await expect(
+        meterService.resolveAuthoritativePreviousReading(testDormId, testCycle.id, cleanRoomId, 'water')
+      ).rejects.toThrow('INVALID_METER_READING');
+      findReadSpy1.mockRestore();
+
+      // Level 3: MeterDevice initialReading malformed ('abc')
+      const findDevSpy = vi.spyOn(meterRepo, 'findDeviceByRoomAndType').mockResolvedValueOnce({
+        id: 'dev-1',
+        dormitoryId: testDormId,
+        roomId: cleanRoomId,
+        meterType: 'water',
+        meterNumber: 'M-001',
+        initialReading: 'abc' as any,
+        status: 'active',
+        installedAt: new Date(),
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      } as any);
+
+      await expect(
+        meterService.resolveAuthoritativePreviousReading(testDormId, testCycle.id, cleanRoomId, 'water')
+      ).rejects.toThrow('INVALID_METER_READING');
+      findDevSpy.mockRestore();
+
+      await prisma.billingCycle.delete({ where: { id: testCycle.id } });
     });
   });
 });

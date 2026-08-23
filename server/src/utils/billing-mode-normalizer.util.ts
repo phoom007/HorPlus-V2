@@ -48,9 +48,5 @@ export function safeNormalizeUtilityBillingMode(
   if (raw === null || raw === undefined || typeof raw !== 'string' || raw.trim() === '') {
     return fallback ?? null;
   }
-  try {
-    return normalizeUtilityBillingMode(raw);
-  } catch {
-    return fallback ?? null;
-  }
+  return normalizeUtilityBillingMode(raw);
 }

@@ -76,6 +76,39 @@ export interface SavedRoomSnapshotMeta {
   otherFees: Array<{ description: string; amount: string }>;
 }
 
+function parseAuthoritativeMeterReading(
+  raw: unknown,
+  sourceLabel: string
+): string | null {
+  if (raw === null || raw === undefined) {
+    return null;
+  }
+  const str = String(raw).trim();
+  if (str === '') {
+    return null;
+  }
+
+  // Strict integer format with optional .00 (PostgreSQL Decimal formatting e.g. '1250.00' or '0.00')
+  // Rejects non-zero fractional decimals like '12.7', '12.70', '100.5'
+  if (!/^\d+(\.0+)?$/.test(str)) {
+    const err = new Error(`INVALID_METER_READING: Persisted ${sourceLabel} '${str}' is not a valid meter integer`);
+    (err as any).statusCode = 400;
+    (err as any).code = 'INVALID_METER_READING';
+    throw err;
+  }
+
+  const intPart = str.split('.')[0];
+  const num = Number(intPart);
+  if (isNaN(num) || num < 0 || num > 99999) {
+    const err = new Error(`INVALID_METER_READING: Persisted ${sourceLabel} '${str}' is out of valid range (0..99999)`);
+    (err as any).statusCode = 400;
+    (err as any).code = 'INVALID_METER_READING';
+    throw err;
+  }
+
+  return String(num);
+}
+
 export class MeterService {
   constructor(
     private meterRepo: IMeterRepository = new PrismaMeterRepository(getPrismaClient()),
@@ -213,7 +246,19 @@ export class MeterService {
   ): Promise<string | null> {
     const client = tx || getPrismaClient();
 
-    // 1. Find prior billing cycle reading for this room and meter type
+    // 1. Selected-cycle persisted MeterReading.previousReading (Highest Authority)
+    const selectedReading = await this.meterRepo.findReadingByCycleRoomAndType(
+      dormitoryId,
+      billingCycleId,
+      roomId,
+      meterType,
+      client
+    );
+    if (selectedReading && selectedReading.previousReading !== null && selectedReading.previousReading !== undefined && String(selectedReading.previousReading).trim() !== '') {
+      return parseAuthoritativeMeterReading(selectedReading.previousReading, 'selected-cycle previous reading');
+    }
+
+    // 2. Most recent prior-cycle MeterReading.currentReading
     const cycle = await this.billingCycleRepo.findById(billingCycleId, dormitoryId);
     if (cycle) {
       const cycles = await this.billingCycleRepo.findAll(dormitoryId, { sortDirection: 'desc', pageSize: 100 });
@@ -231,48 +276,36 @@ export class MeterService {
           client
         );
         if (priorReading && priorReading.currentReading !== null && priorReading.currentReading !== undefined && String(priorReading.currentReading).trim() !== '') {
-          const numVal = Math.round(Number(priorReading.currentReading));
-          if (!isNaN(numVal) && numVal >= 0 && numVal <= 99999) {
-            return String(numVal);
-          }
+          return parseAuthoritativeMeterReading(priorReading.currentReading, 'prior-cycle current reading');
         }
       }
     }
 
-    // 2. Find active MeterDevice initial reading
+    // 3. Active MeterDevice initial reading
     const device = await this.meterRepo.findDeviceByRoomAndType(dormitoryId, roomId, meterType, client);
     if (device && device.initialReading !== undefined && device.initialReading !== null && String(device.initialReading).trim() !== '') {
-      const numVal = Math.round(Number(device.initialReading));
-      if (!isNaN(numVal) && numVal >= 0 && numVal <= 99999) {
-        return String(numVal);
-      }
+      return parseAuthoritativeMeterReading(device.initialReading, 'meter device initial reading');
     }
 
-    // 3. Find Room initial meter value
+    // 4. Room initial meter value
     const room = await this.roomRepo.findById(roomId, dormitoryId);
     if (room) {
       const roomObj = room as any;
       if (meterType === 'water') {
         const val = room.initialWaterReading ?? roomObj.initialWaterMeter;
         if (val !== undefined && val !== null && String(val).trim() !== '') {
-          const numVal = Math.round(Number(val));
-          if (!isNaN(numVal) && numVal >= 0 && numVal <= 99999) {
-            return String(numVal);
-          }
+          return parseAuthoritativeMeterReading(val, 'room initial reading');
         }
       }
       if (meterType === 'electricity') {
         const val = room.initialElectricityReading ?? roomObj.initialElectricMeter;
         if (val !== undefined && val !== null && String(val).trim() !== '') {
-          const numVal = Math.round(Number(val));
-          if (!isNaN(numVal) && numVal >= 0 && numVal <= 99999) {
-            return String(numVal);
-          }
+          return parseAuthoritativeMeterReading(val, 'room initial reading');
         }
       }
     }
 
-    // 4. No authoritative baseline exists (NONE)
+    // 5. No authoritative baseline exists (NONE)
     return null;
   }
 
@@ -332,7 +365,7 @@ export class MeterService {
         const rawPrev = authDbPrev !== null
           ? authDbPrev
           : (item.previousReading !== undefined && item.previousReading !== null && String(item.previousReading).trim() !== '')
-            ? String(item.previousReading)
+            ? parseAuthoritativeMeterReading(item.previousReading, 'user-entered previous reading')
             : null;
 
         if (rawPrev === null) {
