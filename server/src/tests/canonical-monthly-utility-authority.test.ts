@@ -243,4 +243,179 @@ describe('LOCAL-07 Shared Canonical Monthly Utility Calculation Authority', () =
     expect(previewRes.monthlyUtilityTotal).toBe('650.00');
     expect(previewRes.items).toHaveLength(5); // water (0.00), elec (0.00), common (200.00), internet (150.00), parking (300.00)
   });
+
+  it('20. Section 5 & 6: No-reading non-meter preview case (water fixed 200, elec per_person 150*2=300, common 100 -> total 600.00)', () => {
+    const res = calculateCanonicalMonthlyUtility({
+      rateSnapshot: {
+        waterBillingType: 'fixed',
+        waterRate: '200.00',
+        electricityBillingType: 'per_person',
+        electricityRate: '150.00',
+        commonFeeMode: 'per_room',
+        commonFee: '100.00',
+        internetFeeMode: 'none',
+        internetFee: '0.00',
+        parkingFeeMode: 'none',
+        parkingFee: '0.00',
+      },
+      waterReading: null,
+      electricReading: null,
+      peopleCount: 2,
+    });
+
+    expect(res.waterAmount).toBe('200.00');
+    expect(res.electricityAmount).toBe('300.00');
+    expect(res.commonFee).toBe('100.00');
+    expect(res.monthlyUtilityTotal).toBe('600.00');
+  });
+
+  it('21. Section 6: Both FIXED case with ZERO meter readings', () => {
+    const res = calculateCanonicalMonthlyUtility({
+      rateSnapshot: {
+        waterBillingType: 'fixed',
+        waterRate: '150.00',
+        electricityBillingType: 'fixed',
+        electricityRate: '350.00',
+        commonFeeMode: 'per_room',
+        commonFee: '50.00',
+      },
+      waterReading: null,
+      electricReading: null,
+    });
+
+    expect(res.waterAmount).toBe('150.00');
+    expect(res.electricityAmount).toBe('350.00');
+    expect(res.commonFee).toBe('50.00');
+    expect(res.monthlyUtilityTotal).toBe('550.00');
+  });
+
+  it('22. Section 7: Both PER_PERSON case with ZERO meter readings', () => {
+    const res = calculateCanonicalMonthlyUtility({
+      rateSnapshot: {
+        waterBillingType: 'per_person',
+        waterRate: '100.00',
+        electricityBillingType: 'per_person',
+        electricityRate: '200.00',
+        commonFeeMode: 'per_person',
+        commonFee: '50.00',
+      },
+      waterReading: null,
+      electricReading: null,
+      peopleCount: 3,
+    });
+
+    expect(res.waterAmount).toBe('300.00');
+    expect(res.electricityAmount).toBe('600.00');
+    expect(res.commonFee).toBe('150.00');
+    expect(res.monthlyUtilityTotal).toBe('1050.00');
+  });
+
+  it('23. Section 8: Common / Internet / Parking only without meter readings', () => {
+    const res = calculateCanonicalMonthlyUtility({
+      rateSnapshot: {
+        waterBillingType: 'fixed',
+        waterRate: '0.00',
+        electricityBillingType: 'fixed',
+        electricityRate: '0.00',
+        commonFeeMode: 'per_room',
+        commonFee: '200.00',
+        internetFeeMode: 'per_room',
+        internetFee: '150.00',
+        parkingFeeMode: 'per_room',
+        parkingFee: '300.00',
+      },
+      waterReading: null,
+      electricReading: null,
+    });
+
+    expect(res.waterAmount).toBe('0.00');
+    expect(res.electricityAmount).toBe('0.00');
+    expect(res.commonFee).toBe('200.00');
+    expect(res.internetFee).toBe('150.00');
+    expect(res.parkingFee).toBe('300.00');
+    expect(res.monthlyUtilityTotal).toBe('650.00');
+  });
+
+  it('24. Section 9: Mixed Mode: Water FIXED (no reading) + Electricity PER_UNIT (with valid reading)', () => {
+    const res = calculateCanonicalMonthlyUtility({
+      rateSnapshot: {
+        waterBillingType: 'fixed',
+        waterRate: '200.00',
+        electricityBillingType: 'per_unit',
+        electricityRate: '8.00',
+      },
+      waterReading: null,
+      electricReading: { previousReading: '100', currentReading: '150' },
+    });
+
+    expect(res.waterAmount).toBe('200.00');
+    expect(res.electricityUsage).toBe('50.00');
+    expect(res.electricityAmount).toBe('400.00'); // 50 * 8 = 400.00
+    expect(res.monthlyUtilityTotal).toBe('600.00');
+  });
+
+  it('25. Section 10: Mixed Mode Missing Baseline: Water FIXED + Electricity PER_UNIT (missing reading) throws fail-closed error', () => {
+    expect(() => {
+      calculateCanonicalMonthlyUtility({
+        rateSnapshot: {
+          waterBillingType: 'fixed',
+          waterRate: '200.00',
+          electricityBillingType: 'per_unit',
+          electricityRate: '8.00',
+        },
+        waterReading: null,
+        electricReading: null,
+      });
+    }).toThrow(/MISSING_ELECTRICITY_METER_READING/);
+  });
+
+  it('26. Section 11: Mode Transition per_unit -> per_person works without new meter readings', () => {
+    const res = calculateCanonicalMonthlyUtility({
+      rateSnapshot: {
+        waterBillingType: 'per_person',
+        waterRate: '120.00',
+        electricityBillingType: 'per_person',
+        electricityRate: '250.00',
+      },
+      waterReading: null,
+      electricReading: null,
+      peopleCount: 2,
+    });
+
+    expect(res.waterAmount).toBe('240.00');
+    expect(res.electricityAmount).toBe('500.00');
+    expect(res.monthlyUtilityTotal).toBe('740.00');
+  });
+
+  it('27. Section 11: Mode Transition per_unit -> fixed works without new meter readings', () => {
+    const res = calculateCanonicalMonthlyUtility({
+      rateSnapshot: {
+        waterBillingType: 'fixed',
+        waterRate: '200.00',
+        electricityBillingType: 'fixed',
+        electricityRate: '400.00',
+      },
+      waterReading: null,
+      electricReading: null,
+    });
+
+    expect(res.waterAmount).toBe('200.00');
+    expect(res.electricityAmount).toBe('400.00');
+    expect(res.monthlyUtilityTotal).toBe('600.00');
+  });
+
+  it('28. Section 11: Mode Transition per_person -> per_unit requires valid readings', () => {
+    expect(() => {
+      calculateCanonicalMonthlyUtility({
+        rateSnapshot: {
+          waterBillingType: 'per_unit',
+          waterRate: '20.00',
+          electricityBillingType: 'per_unit',
+          electricityRate: '8.00',
+        },
+        waterReading: null,
+        electricReading: null,
+      });
+    }).toThrow(/MISSING_WATER_METER_READING/);
+  });
 });

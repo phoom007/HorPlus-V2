@@ -2010,8 +2010,9 @@ export class MeterService {
         const roomReadings = readingsByRoomMap.get(room.id) || [];
         const waterReading = roomReadings.find((r) => r.meterType === 'water');
         const elecReading = roomReadings.find((r) => r.meterType === 'electricity');
+        const isMonthlyEligible = billingSource === 'CONTRACT' || billingSource === 'PROVISIONAL_MONTHLY' || billingSource === 'PROVISIONAL_TERM';
 
-        if (!hasMonthlyUtilityBill && !isFutureReservation && roomReadings.length > 0) {
+        if (!hasMonthlyUtilityBill && !isFutureReservation && isMonthlyEligible) {
           try {
             const utilityResult = calculateCanonicalMonthlyUtility({
               dormitoryId,
@@ -2046,15 +2047,7 @@ export class MeterService {
               });
             }
           } catch {
-            chargeComponents.push({
-              type: 'monthly_utility',
-              label: 'บิลรายเดือน',
-              amount: '0.00',
-              status: 'INVALID',
-              paidAt: null,
-              occurredInDisplayedPeriod: true,
-              includedInAmountDue: false,
-            });
+            // Not ready for preview (e.g. required meter readings missing for per_unit mode or fail-closed validation)
           }
         }
       }
