@@ -261,13 +261,33 @@ describe('Wave 1F - Real-Session 14-Domain Route Audit Matrix', () => {
     const cycle = await prisma.billingCycle.create({
       data: {
         dormitoryId: dormId,
-        cycleCode: `CYC-${timestamp}`,
+        cycleCode: '2026-08',
         name: 'August 2026',
         periodStart: new Date('2026-08-01'),
         periodEnd: new Date('2026-08-31'),
         billingDate: new Date('2026-08-25'),
         dueDate: new Date('2026-09-05'),
         status: 'published',
+        rateSnapshot: {
+          create: {
+            dormitoryId: dormId,
+            waterBillingType: 'unit',
+            waterRate: '0.00',
+            electricityBillingType: 'unit',
+            electricityRate: '0.00',
+            commonFee: '0.00',
+            commonFeeMode: 'room',
+            internetFee: '0.00',
+            internetFeeMode: 'room',
+            parkingFee: '0.00',
+            parkingFeeMode: 'room',
+            lateFeeType: 'none',
+            lateFeeValue: '0.00',
+            currency: 'THB',
+            source: 'TEMPLATE_DEFAULT',
+            version: 1,
+          },
+        },
       },
     });
     cycleId = cycle.id;

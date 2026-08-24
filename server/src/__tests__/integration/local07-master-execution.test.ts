@@ -4063,6 +4063,18 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
           type: 'apartment',
           status: 'active',
           createdAt: new Date('2026-08-01T00:00:00.000Z'),
+          billingSettings: {
+            create: {
+              billingDay: 25,
+              dueDay: 5,
+              waterBillingType: 'unit',
+              waterRate: '18.00',
+              electricityBillingType: 'unit',
+              electricityRate: '7.00',
+              commonFee: '200.00',
+              commonFeeMode: 'room',
+            },
+          },
         },
       });
       await prisma.dormitoryMember.createMany({

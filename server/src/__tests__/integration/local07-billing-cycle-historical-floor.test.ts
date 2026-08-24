@@ -418,4 +418,411 @@ describe('LOCAL-07 Billing Cycle Historical Floor & Progressive Selectability Te
     expect(threwErr.code).toBe('BILLING_CYCLE_HISTORY_INCOMPLETE');
     expect(threwErr.details.missingCycleCodes).toContain('2026-09');
   });
+
+  it('CASE H7: Missing opened upper month FAILS CLOSED with BILLING_CYCLE_HISTORY_INCOMPLETE', async () => {
+    const dormId = randomUUID();
+    await prisma.dormitory.create({
+      data: {
+        id: dormId,
+        name: 'Missing Opened Upper Dorm',
+        createdAt: new Date('2026-07-01T00:00:00.000Z'),
+        status: 'active',
+        billingSettings: {
+          create: {
+            billingDay: 25,
+            dueDay: 5,
+            waterBillingType: 'per_unit',
+            waterRate: '18.00',
+            electricityBillingType: 'per_unit',
+            electricityRate: '7.00',
+            commonFee: '200.00',
+            commonFeeMode: 'fixed_per_room',
+          },
+        },
+      },
+    });
+
+    const bldg = await prisma.building.create({
+      data: {
+        dormitoryId: dormId,
+        name: 'Building Upper',
+      },
+    });
+
+    const room = await prisma.room.create({
+      data: {
+        dormitoryId: dormId,
+        buildingId: bldg.id,
+        roomNumber: '101',
+        normalizedRoomNumber: '101',
+        roomType: 'standard',
+        monthlyRent: '4500.00',
+        status: 'occupied',
+      },
+    });
+    const tenant = await prisma.tenant.create({
+      data: {
+        dormitoryId: dormId,
+        tenantNumber: 'T-002',
+        displayName: 'Tenant Sept',
+        firstName: 'Tenant',
+        lastName: 'Sept',
+        phone: '0822222222',
+        status: 'active',
+      },
+    });
+
+    // Create 2026-07, 2026-08, 2026-09 (MISSING 2026-10)
+    for (const code of ['2026-07', '2026-08', '2026-09']) {
+      await prisma.billingCycle.create({
+        data: {
+          dormitoryId: dormId,
+          cycleCode: code,
+          name: code,
+          periodStart: new Date(`${code}-01T00:00:00.000Z`),
+          periodEnd: new Date(`${code}-28T00:00:00.000Z`),
+          billingDate: new Date(`${code}-25T00:00:00.000Z`),
+          dueDate: new Date(`${code}-28T00:00:00.000Z`),
+          status: 'draft',
+        },
+      });
+    }
+
+    // Advance operational cycle to September 2026 via issued bill in 2026-09
+    const sepCycle = await prisma.billingCycle.findFirst({ where: { dormitoryId: dormId, cycleCode: '2026-09' } });
+    await prisma.bill.create({
+      data: {
+        dormitoryId: dormId,
+        billingCycleId: sepCycle!.id,
+        roomId: room.id,
+        tenantId: tenant.id,
+        billNumber: 'INV-202609-101',
+        billKind: 'MONTHLY_UTILITY',
+        billingDate: new Date('2026-09-25'),
+        dueDate: new Date('2026-10-05'),
+        subtotal: 1000,
+        totalAmount: 1000,
+        paidAmount: 0,
+        outstandingAmount: 1000,
+        status: 'unpaid',
+      },
+    });
+
+    const op = await currentCycleResolverService.resolveOperationalBillingCycle(dormId);
+    expect(op.cycleCode).toBe('2026-09');
+
+    // Opened upper is 2026-10. Since 2026-10 is missing from DB, it must FAIL CLOSED with missingCycleCodes: ['2026-10']
+    let threwErr: any = null;
+    try {
+      await billingCycleService.getNavigationContext(dormId);
+    } catch (err: any) {
+      threwErr = err;
+    }
+
+    expect(threwErr).not.toBeNull();
+    expect(threwErr.code).toBe('BILLING_CYCLE_HISTORY_INCOMPLETE');
+    expect(threwErr.details.missingCycleCodes).toEqual(['2026-10']);
+  });
+
+  it('CASE H8: Infrastructure DB rows beyond opened upper bound are ignored and not selectable', async () => {
+    const dormId = randomUUID();
+    await prisma.dormitory.create({
+      data: {
+        id: dormId,
+        name: 'Infrastructure Beyond Upper Dorm',
+        createdAt: new Date('2026-07-01T00:00:00.000Z'),
+        status: 'active',
+        billingSettings: {
+          create: {
+            billingDay: 25,
+            dueDay: 5,
+            waterBillingType: 'per_unit',
+            waterRate: '18.00',
+            electricityBillingType: 'per_unit',
+            electricityRate: '7.00',
+            commonFee: '200.00',
+            commonFeeMode: 'fixed_per_room',
+          },
+        },
+      },
+    });
+
+    const bldg = await prisma.building.create({
+      data: {
+        dormitoryId: dormId,
+        name: 'Building Infra',
+      },
+    });
+    const room = await prisma.room.create({
+      data: {
+        dormitoryId: dormId,
+        buildingId: bldg.id,
+        roomNumber: '101',
+        normalizedRoomNumber: '101',
+        roomType: 'standard',
+        monthlyRent: '4500.00',
+        status: 'occupied',
+      },
+    });
+    const tenant = await prisma.tenant.create({
+      data: {
+        dormitoryId: dormId,
+        tenantNumber: 'T-003',
+        displayName: 'Tenant Infra',
+        firstName: 'Tenant',
+        lastName: 'Infra',
+        phone: '0833333333',
+        status: 'active',
+      },
+    });
+
+    // Create DB rows: 2026-07, 2026-08, 2026-09, 2026-10, 2026-11, 2026-12
+    for (const code of ['2026-07', '2026-08', '2026-09', '2026-10', '2026-11', '2026-12']) {
+      await prisma.billingCycle.create({
+        data: {
+          dormitoryId: dormId,
+          cycleCode: code,
+          name: code,
+          periodStart: new Date(`${code}-01T00:00:00.000Z`),
+          periodEnd: new Date(`${code}-28T00:00:00.000Z`),
+          billingDate: new Date(`${code}-25T00:00:00.000Z`),
+          dueDate: new Date(`${code}-28T00:00:00.000Z`),
+          status: 'draft',
+        },
+      });
+    }
+
+    // Set operational cycle to 2026-09 via issued bill
+    const sepCycle = await prisma.billingCycle.findFirst({ where: { dormitoryId: dormId, cycleCode: '2026-09' } });
+    await prisma.bill.create({
+      data: {
+        dormitoryId: dormId,
+        billingCycleId: sepCycle!.id,
+        roomId: room.id,
+        tenantId: tenant.id,
+        billNumber: 'INV-202609-102',
+        billKind: 'MONTHLY_UTILITY',
+        billingDate: new Date('2026-09-25'),
+        dueDate: new Date('2026-10-05'),
+        subtotal: 1000,
+        totalAmount: 1000,
+        paidAmount: 0,
+        outstandingAmount: 1000,
+        status: 'unpaid',
+      },
+    });
+
+    const op = await currentCycleResolverService.resolveOperationalBillingCycle(dormId);
+    expect(op.cycleCode).toBe('2026-09');
+
+    const nav = await billingCycleService.getNavigationContext(dormId);
+    expect(nav.historicalFloorCycleCode).toBe('2026-07');
+    expect(nav.openedUpperBoundCycleCode).toBe('2026-10');
+    expect(nav.selectableBillingCycles.map(c => c.cycleCode)).toEqual([
+      '2026-07',
+      '2026-08',
+      '2026-09',
+      '2026-10',
+    ]);
+    expect(nav.selectableBillingCycles.map(c => c.cycleCode)).not.toContain('2026-11');
+    expect(nav.selectableBillingCycles.map(c => c.cycleCode)).not.toContain('2026-12');
+  });
+
+  it('CASE H9: Missing month beyond opened upper bound (gap outside opened range) is ignored and PASSES', async () => {
+    const dormId = randomUUID();
+    await prisma.dormitory.create({
+      data: {
+        id: dormId,
+        name: 'Outside Gap Dorm',
+        createdAt: new Date('2026-07-01T00:00:00.000Z'),
+        status: 'active',
+        billingSettings: {
+          create: {
+            billingDay: 25,
+            dueDay: 5,
+            waterBillingType: 'per_unit',
+            waterRate: '18.00',
+            electricityBillingType: 'per_unit',
+            electricityRate: '7.00',
+            commonFee: '200.00',
+            commonFeeMode: 'fixed_per_room',
+          },
+        },
+      },
+    });
+
+    const bldg = await prisma.building.create({
+      data: {
+        dormitoryId: dormId,
+        name: 'Building OutsideGap',
+      },
+    });
+    const room = await prisma.room.create({
+      data: {
+        dormitoryId: dormId,
+        buildingId: bldg.id,
+        roomNumber: '101',
+        normalizedRoomNumber: '101',
+        roomType: 'standard',
+        monthlyRent: '4500.00',
+        status: 'occupied',
+      },
+    });
+    const tenant = await prisma.tenant.create({
+      data: {
+        dormitoryId: dormId,
+        tenantNumber: 'T-004',
+        displayName: 'Tenant OutsideGap',
+        firstName: 'Tenant',
+        lastName: 'OutsideGap',
+        phone: '0844444444',
+        status: 'active',
+      },
+    });
+
+    // Create DB rows: 2026-07, 2026-08, 2026-09, 2026-10, 2026-12 (2026-11 is missing!)
+    for (const code of ['2026-07', '2026-08', '2026-09', '2026-10', '2026-12']) {
+      await prisma.billingCycle.create({
+        data: {
+          dormitoryId: dormId,
+          cycleCode: code,
+          name: code,
+          periodStart: new Date(`${code}-01T00:00:00.000Z`),
+          periodEnd: new Date(`${code}-28T00:00:00.000Z`),
+          billingDate: new Date(`${code}-25T00:00:00.000Z`),
+          dueDate: new Date(`${code}-28T00:00:00.000Z`),
+          status: 'draft',
+        },
+      });
+    }
+
+    // Set operational cycle to 2026-09 via issued bill
+    const sepCycle = await prisma.billingCycle.findFirst({ where: { dormitoryId: dormId, cycleCode: '2026-09' } });
+    await prisma.bill.create({
+      data: {
+        dormitoryId: dormId,
+        billingCycleId: sepCycle!.id,
+        roomId: room.id,
+        tenantId: tenant.id,
+        billNumber: 'INV-202609-103',
+        billKind: 'MONTHLY_UTILITY',
+        billingDate: new Date('2026-09-25'),
+        dueDate: new Date('2026-10-05'),
+        subtotal: 1000,
+        totalAmount: 1000,
+        paidAmount: 0,
+        outstandingAmount: 1000,
+        status: 'unpaid',
+      },
+    });
+
+    const nav = await billingCycleService.getNavigationContext(dormId);
+    expect(nav.historicalFloorCycleCode).toBe('2026-07');
+    expect(nav.openedUpperBoundCycleCode).toBe('2026-10');
+    expect(nav.selectableBillingCycles.map(c => c.cycleCode)).toEqual([
+      '2026-07',
+      '2026-08',
+      '2026-09',
+      '2026-10',
+    ]);
+  });
+
+  it('CASE H10: Year boundary traversal from November 2026 across New Year to February 2027', async () => {
+    const dormId = randomUUID();
+    await prisma.dormitory.create({
+      data: {
+        id: dormId,
+        name: 'Year Boundary Dorm',
+        createdAt: new Date('2026-11-01T00:00:00.000Z'),
+        status: 'active',
+        billingSettings: {
+          create: {
+            billingDay: 25,
+            dueDay: 5,
+            waterBillingType: 'per_unit',
+            waterRate: '18.00',
+            electricityBillingType: 'per_unit',
+            electricityRate: '7.00',
+            commonFee: '200.00',
+            commonFeeMode: 'fixed_per_room',
+          },
+        },
+      },
+    });
+
+    // Create cycles: 2026-11, 2026-12, 2027-01, 2027-02
+    for (const code of ['2026-11', '2026-12', '2027-01', '2027-02']) {
+      await prisma.billingCycle.create({
+        data: {
+          dormitoryId: dormId,
+          cycleCode: code,
+          name: code,
+          periodStart: new Date(`${code}-01T00:00:00.000Z`),
+          periodEnd: new Date(`${code}-28T00:00:00.000Z`),
+          billingDate: new Date(`${code}-25T00:00:00.000Z`),
+          dueDate: new Date(`${code}-28T00:00:00.000Z`),
+          status: 'draft',
+        },
+      });
+    }
+
+    const bldg = await prisma.building.create({
+      data: {
+        dormitoryId: dormId,
+        name: 'Building YearBoundary',
+      },
+    });
+    const room = await prisma.room.create({
+      data: {
+        dormitoryId: dormId,
+        buildingId: bldg.id,
+        roomNumber: '101',
+        normalizedRoomNumber: '101',
+        roomType: 'standard',
+        monthlyRent: '4500.00',
+        status: 'occupied',
+      },
+    });
+    const tenant = await prisma.tenant.create({
+      data: {
+        dormitoryId: dormId,
+        tenantNumber: 'T-005',
+        displayName: 'Tenant YearBoundary',
+        firstName: 'Tenant',
+        lastName: 'YearBoundary',
+        phone: '0855555555',
+        status: 'active',
+      },
+    });
+
+    // Set operational cycle to 2027-01 via issued bill
+    const janCycle = await prisma.billingCycle.findFirst({ where: { dormitoryId: dormId, cycleCode: '2027-01' } });
+    await prisma.bill.create({
+      data: {
+        dormitoryId: dormId,
+        billingCycleId: janCycle!.id,
+        roomId: room.id,
+        tenantId: tenant.id,
+        billNumber: 'INV-202701-101',
+        billKind: 'MONTHLY_UTILITY',
+        billingDate: new Date('2027-01-25'),
+        dueDate: new Date('2027-02-05'),
+        subtotal: 1000,
+        totalAmount: 1000,
+        paidAmount: 0,
+        outstandingAmount: 1000,
+        status: 'unpaid',
+      },
+    });
+
+    const nav = await billingCycleService.getNavigationContext(dormId);
+    expect(nav.historicalFloorCycleCode).toBe('2026-11');
+    expect(nav.openedUpperBoundCycleCode).toBe('2027-02');
+    expect(nav.selectableBillingCycles.map(c => c.cycleCode)).toEqual([
+      '2026-11',
+      '2026-12',
+      '2027-01',
+      '2027-02',
+    ]);
+  });
 });

@@ -6,6 +6,7 @@
 
 import { PrismaClient, Prisma } from '@prisma/client';
 import { getPrismaClient } from '../db/prisma.js';
+import { AppError } from '../types/index.js';
 import {
   IBillingCycleRepository,
   BillingCycleEntity,
@@ -13,6 +14,10 @@ import {
   BillingCycleFilterQuery,
   SelectableBillingCycleRef,
 } from '../db/repositories/billing-cycle.repository.js';
+import {
+  IDormitoryRepository,
+  PrismaDormitoryRepository,
+} from '../db/repositories/dormitory.repository.js';
 import { AuditService } from './audit.service.js';
 import { currentCycleResolverService } from './current-cycle-resolver.js';
 import { normalizeUtilityBillingMode } from '../utils/billing-mode-normalizer.util.js';
@@ -109,14 +114,17 @@ const cleanDec = (val: any, fieldNameOrDflt = 'Monetary field'): string => {
 
 export class BillingCycleService {
   private billingCycleRepo: IBillingCycleRepository;
+  private dormitoryRepo: IDormitoryRepository;
   private auditService?: AuditService;
 
   constructor(
     billingCycleRepo: IBillingCycleRepository,
-    auditService?: AuditService
+    auditService?: AuditService,
+    dormitoryRepo?: IDormitoryRepository
   ) {
     this.billingCycleRepo = billingCycleRepo;
     this.auditService = auditService;
+    this.dormitoryRepo = dormitoryRepo || new PrismaDormitoryRepository(getPrismaClient());
   }
 
   public async createBillingCycle(
@@ -411,11 +419,7 @@ export class BillingCycleService {
     openedUpperBoundCycleCode: string;
     selectableBillingCycles: SelectableBillingCycleRef[];
   }> {
-    const prisma = getPrismaClient();
-    const dorm = await prisma.dormitory.findUnique({
-      where: { id: dormitoryId },
-      select: { createdAt: true },
-    });
+    const dorm = await this.dormitoryRepo.findById(dormitoryId);
 
     const operational = await currentCycleResolverService.resolveOperationalBillingCycle(dormitoryId);
     const opCode = operational.cycleCode || currentBusinessDateInBangkok().slice(0, 7);
@@ -424,34 +428,27 @@ export class BillingCycleService {
       ? toBangkokDateString(dorm.createdAt).slice(0, 7)
       : opCode;
 
-    // Query all records from historical floor onwards
+    const openedUpperBoundCycleCode = getAdjacentCycleCode(opCode, 1);
+
+    // Query exact canonical selectable domain: [historicalFloorCycleCode, openedUpperBoundCycleCode]
     const records = await this.billingCycleRepo.findCycleRefsInRange(
       dormitoryId,
       historicalFloorCycleCode,
-      '9999-12'
+      openedUpperBoundCycleCode
     );
 
     if (records.length === 0) {
       return {
         historicalFloorCycleCode,
-        openedUpperBoundCycleCode: opCode,
+        openedUpperBoundCycleCode,
         selectableBillingCycles: [],
       };
     }
 
-    const maxDbCode = records[records.length - 1].cycleCode;
-    const targetUpperBound = getAdjacentCycleCode(opCode, 1);
-    const openedUpperBoundCycleCode = targetUpperBound < maxDbCode ? targetUpperBound : maxDbCode;
-
-    // Filter records from floor up to openedUpperBoundCycleCode
-    const boundedRecords = records.filter(
-      (r) => r.cycleCode >= historicalFloorCycleCode && r.cycleCode <= openedUpperBoundCycleCode
-    );
-
-    // Build expected chronological sequence of cycleCodes from historicalFloorCycleCode to maxDbCode
+    // Build expected chronological sequence of cycleCodes from historicalFloorCycleCode to openedUpperBoundCycleCode
     const expectedCodes: string[] = [];
     let cur = historicalFloorCycleCode;
-    while (cur <= maxDbCode) {
+    while (cur <= openedUpperBoundCycleCode) {
       expectedCodes.push(cur);
       cur = getAdjacentCycleCode(cur, 1);
     }
@@ -461,19 +458,19 @@ export class BillingCycleService {
     const missingCodes = expectedCodes.filter((code) => !existingCodeSet.has(code));
 
     if (missingCodes.length > 0) {
-      const err: any = new Error(
-        `BILLING_CYCLE_HISTORY_INCOMPLETE: Billing cycle sequence has missing cycles: ${missingCodes.join(', ')}`
+      const err = new AppError(
+        `BILLING_CYCLE_HISTORY_INCOMPLETE: Billing cycle sequence has missing cycles: ${missingCodes.join(', ')}`,
+        500,
+        'BILLING_CYCLE_HISTORY_INCOMPLETE'
       );
-      err.statusCode = 500;
-      err.code = 'BILLING_CYCLE_HISTORY_INCOMPLETE';
-      err.details = { missingCycleCodes: missingCodes };
+      (err as any).details = { missingCycleCodes: missingCodes };
       throw err;
     }
 
     return {
       historicalFloorCycleCode,
       openedUpperBoundCycleCode,
-      selectableBillingCycles: boundedRecords,
+      selectableBillingCycles: records,
     };
   }
 
