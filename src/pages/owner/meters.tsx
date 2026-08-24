@@ -33,11 +33,14 @@ import {
   AlertCircle,
   Info,
   Clock,
-  Pencil
+  Pencil,
+  Table,
+  LayoutList
 } from 'lucide-react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { queryKeys, STALE_TIMES } from '../../lib/queryClient';
 import { meterDraftStore, deriveMeterDraftPatches } from '../../lib/meterDraftStore';
+import { OwnerMeterListCard } from '../../components/meters/OwnerMeterListCard';
 import { calculateMeterRowPreview, calculateMeterUsageUnits, RoomPreviewContext, parseScaled2, formatScaled2, formatMoneyDisplay } from '../../utils/meterBillingCalculator';
 import { isCycleInRollingThreeMonthWindow, toBangkokDateString, normalizeBangkokDate, formatShortThaiBuddhistDate } from '../../utils/calendarDate';
 import { Room, Building, QuickAddRoomContext, Bill, BillItem, Tenant, Contract, BillStatus, calculateRoomRentForCycle } from '../../types';
@@ -580,6 +583,15 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   }, []);
 
   const [searchQuery, setSearchQuery] = useState('');
+  const [viewMode, setViewMode] = useState<'table' | 'list'>(() => {
+    return getStored<'table' | 'list'>('owner_meter_view_mode', 'table');
+  });
+
+  const handleViewModeChange = (mode: 'table' | 'list') => {
+    setViewMode(mode);
+    setStored('owner_meter_view_mode', mode);
+  };
+
   const [meterRows, setMeterRows] = useState<MeterRowState[]>(() => initialBuilt?.rows || []);
   const [loadedCycle, setLoadedCycle] = useState<string>(() => (initialBuilt ? selectedBillingCycleId || '' : ''));
   const [saveSuccess, setSaveSuccess] = useState(false);
@@ -2257,26 +2269,60 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
               />
             </div>
 
-            {/* Scroll table helper buttons */}
-            <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl shrink-0">
+            {/* View Mode Toggle */}
+            <div className="flex items-center bg-slate-100 p-1 rounded-xl shrink-0 border border-slate-200/60" data-testid="meter-view-mode-toggle">
               <button
                 type="button"
-                onClick={() => scrollTable('left')}
-                className="p-1 hover:bg-white text-slate-600 rounded-lg transition-all cursor-pointer shadow-2xs"
-                title="เลื่อนไปซ้าย"
+                data-testid="view-mode-table-button"
+                onClick={() => handleViewModeChange('table')}
+                className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-bold rounded-lg transition-all cursor-pointer ${
+                  viewMode === 'table'
+                    ? 'bg-white text-indigo-600 shadow-2xs'
+                    : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/50'
+                }`}
+                title="มุมมองตาราง"
               >
-                <ChevronLeft className="w-4 h-4" />
+                <Table className="w-3.5 h-3.5" />
+                <span>ตาราง</span>
               </button>
-              <span className="text-[10px] font-black text-slate-500 px-1.5 select-none whitespace-nowrap">เลื่อนดูตาราง</span>
               <button
                 type="button"
-                onClick={() => scrollTable('right')}
-                className="p-1 hover:bg-white text-slate-600 rounded-lg transition-all cursor-pointer shadow-2xs"
-                title="เลื่อนไปขวา"
+                data-testid="view-mode-list-button"
+                onClick={() => handleViewModeChange('list')}
+                className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-bold rounded-lg transition-all cursor-pointer ${
+                  viewMode === 'list'
+                    ? 'bg-white text-indigo-600 shadow-2xs'
+                    : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/50'
+                }`}
+                title="มุมมองรายการ"
               >
-                <ChevronRight className="w-4 h-4" />
+                <LayoutList className="w-3.5 h-3.5" />
+                <span>รายการ</span>
               </button>
             </div>
+
+            {/* Scroll table helper buttons (shown in table mode) */}
+            {viewMode === 'table' && (
+              <div className="hidden sm:flex items-center gap-1 bg-slate-100 p-1 rounded-xl shrink-0">
+                <button
+                  type="button"
+                  onClick={() => scrollTable('left')}
+                  className="p-1 hover:bg-white text-slate-600 rounded-lg transition-all cursor-pointer shadow-2xs"
+                  title="เลื่อนไปซ้าย"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                </button>
+                <span className="text-[10px] font-black text-slate-500 px-1.5 select-none whitespace-nowrap">เลื่อนดูตาราง</span>
+                <button
+                  type="button"
+                  onClick={() => scrollTable('right')}
+                  className="p-1 hover:bg-white text-slate-600 rounded-lg transition-all cursor-pointer shadow-2xs"
+                  title="เลื่อนไปขวา"
+                >
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+              </div>
+            )}
           </div>
 
           {/* Action buttons */}
@@ -2326,8 +2372,9 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
           </div>
         </div>
 
-        <div className="overflow-x-auto relative" ref={tableContainerRef}>
-          <table onKeyDown={handleTableKeyDown} className="w-full text-left border-collapse text-xs min-w-[1050px]">
+        {viewMode === 'table' ? (
+          <div className="overflow-x-auto relative" ref={tableContainerRef}>
+            <table onKeyDown={handleTableKeyDown} className="w-full text-left border-collapse text-xs min-w-[1050px]">
             <thead className="bg-slate-50 text-slate-400 font-bold uppercase border-b border-gray-100">
               <tr className="whitespace-nowrap">
                 <th className="p-4 sticky left-0 bg-slate-50 z-20 min-w-[80px] shadow-[2px_0_5px_rgba(0,0,0,0.02)]">ห้อง</th>
@@ -3103,6 +3150,90 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
             </tbody>
           </table>
         </div>
+      ) : (
+        <div className="p-4 bg-slate-50/50">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4" data-testid="meter-list-container">
+            {filteredRows.map((row, idx) => (
+              <OwnerMeterListCard
+                key={row.roomId}
+                row={row}
+                idx={idx}
+                room={rooms.find(r => r.id === row.roomId)}
+                roomCtx={previewContext?.rooms?.find((r: any) => r.roomId === row.roomId)}
+                tenant={getTenantForRoomAndCycle(row.roomId, selectedCycle)}
+                contracts={contracts}
+                isRateSnapshotReady={isRateSnapshotReady}
+                isWaterUnit={isWaterUnit}
+                isElecUnit={isElecUnit}
+                isFirstCycle={isFirstCycle}
+                selectedCycleCode={selectedCycleCode}
+                selectedCycle={selectedCycle}
+                selectedBillingCycleId={selectedBillingCycleId}
+                billingCycles={billingCycles}
+                isSaving={isSaving}
+                isMutationReady={isMutationReady}
+                unlockedElecPrev={unlockedElecPrev}
+                unlockedWaterPrev={unlockedWaterPrev}
+                flashingCells={flashingCells}
+                newFeeInput={newFeeInputs[row.roomId]}
+                isExpandedBreakdown={Boolean(expandedBreakdowns[row.roomId])}
+                quickAddLoadingRoomId={quickAddLoadingRoomId}
+                onMeterReadingChange={handleMeterReadingChange}
+                onMeterReadingBlur={handleMeterReadingBlur}
+                onPaste={handlePaste}
+                onUnlockElecPrev={(roomId) => setUnlockedElecPrev(prev => ({ ...prev, [roomId]: true }))}
+                onCancelElecPrev={(roomId) => {
+                  const orig = (originalRowsRef.current || []).find((o) => o.roomId === roomId);
+                  handleMeterReadingChange(roomId, 'elecPrev', orig ? orig.elecPrev : row.elecPrev);
+                  setUnlockedElecPrev((prev) => ({ ...prev, [roomId]: false }));
+                }}
+                onUnlockWaterPrev={(roomId) => setUnlockedWaterPrev(prev => ({ ...prev, [roomId]: true }))}
+                onCancelWaterPrev={(roomId) => {
+                  const orig = (originalRowsRef.current || []).find((o) => o.roomId === roomId);
+                  handleMeterReadingChange(roomId, 'waterPrev', orig ? orig.waterPrev : row.waterPrev);
+                  setUnlockedWaterPrev((prev) => ({ ...prev, [roomId]: false }));
+                }}
+                onPeopleCountChange={handlePeopleCountChange}
+                onFeeDescriptionChange={handleFeeDescriptionChange}
+                onFeeAmountChange={handleFeeAmountChange}
+                onAddOtherFee={handleAddOtherFee}
+                onRemoveOtherFee={handleRemoveOtherFee}
+                onToggleStatusSwitch={handleToggleStatusSwitch}
+                onToggleBreakdown={(roomId) => setExpandedBreakdowns(prev => ({ ...prev, [roomId]: !prev[roomId] }))}
+                onSelectTenant={onSelectTenant}
+                onOpenQuickAdd={async (targetRoomId) => {
+                  try {
+                    setQuickAddLoadingRoomId(targetRoomId);
+                    const dormId = dormitoryId || localStorage.getItem('horplus_current_dormitory_id') || localStorage.getItem('selected_dormitory_id') || '';
+                    const res = await httpRequest<{ data: QuickAddRoomContext }>(
+                      'GET',
+                      `/api/v1/properties/rooms/${targetRoomId}/quick-add-context`,
+                      undefined,
+                      { headers: dormId ? { 'x-dormitory-id': dormId } : {} }
+                    );
+
+                    if (!res.data || !res.data.effective) {
+                      throw new Error('ไม่สามารถโหลดข้อมูลสิทธิ์และค่าเช่าห้องพักได้');
+                    }
+
+                    setSelectedQuickAddContext(res.data);
+                    setQuickAddModalOpen(true);
+                  } catch (err: any) {
+                    showToast(mapErrorMessageToThai(err.message || 'ไม่สามารถโหลดข้อมูลห้องพักได้ กรุณาลองใหม่อีกครั้ง'), 'error');
+                  } finally {
+                    setQuickAddLoadingRoomId(null);
+                  }
+                }}
+              />
+            ))}
+          </div>
+          {filteredRows.length === 0 && (
+            <div className="p-8 text-center text-gray-400 text-xs">
+              ไม่พบข้อมูลห้องพักพักอาศัยที่ต้องการ
+            </div>
+          )}
+        </div>
+      )}
 
         {/* Floating Save Button - ONLY shown when changes exist (isDirty is true), always visible without scrolling */}
         {isDirty && (
