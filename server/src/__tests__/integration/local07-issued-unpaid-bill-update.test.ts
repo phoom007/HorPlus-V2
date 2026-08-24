@@ -708,4 +708,51 @@ describe('LOCAL-07 Issued Unpaid Bill Update on Save Integration Proof', () => {
     expect(issueErr).not.toBeNull();
     expect(issueErr.code).toBe('MISSING_WATER_METER_READING');
   });
+
+  it('CASE A8: Seeded canonical split-bill invariants (MONTHLY_UTILITY no rent/deposit, delta=0 on unchanged save)', async () => {
+    // 1. Save complete meter readings
+    await meterService.saveBulkMeterWorkspace(
+      testDormId,
+      {
+        billingCycleId,
+        rows: [{ roomId, waterPrev: '110', waterCurr: '121', elecPrev: '560', elecCurr: '620' }],
+      },
+      testUserId,
+      billingService
+    );
+
+    // 2. Generate canonical MONTHLY_UTILITY bill
+    const genRes = await billingService.generateBill(
+      testDormId,
+      { billingCycleId, roomId, billKind: 'MONTHLY_UTILITY' },
+      testUserId
+    );
+    const bill = genRes.bill;
+    const billItems = genRes.items || await prisma.billItem.findMany({ where: { billId: bill.id } });
+
+    // Invariant 1 & 2: MONTHLY_UTILITY contains NO rent and NO deposit
+    expect(billItems.some((i: any) => i.type === 'rent')).toBe(false);
+    expect(billItems.some((i: any) => i.type === 'deposit')).toBe(false);
+
+    // Invariant 3 & 4: Bill items equal canonical utility components and total matches
+    // Water: (121-110)*18 = 198, Elec: (620-560)*7 = 420, Common: 200 -> Total = 818
+    expect(Number(bill.totalAmount)).toBe(818);
+    const itemSum = billItems.reduce((acc: number, i: any) => acc + Number(i.amount), 0);
+    expect(itemSum).toBe(818);
+
+    // Invariant 8: Unchanged save on issued room results in bill delta = 0.00
+    const unchangedSave = await meterService.saveBulkMeterWorkspace(
+      testDormId,
+      {
+        billingCycleId,
+        rows: [{ roomId, waterPrev: '110', waterCurr: '121', elecPrev: '560', elecCurr: '620' }],
+      },
+      testUserId,
+      billingService
+    );
+    expect(unchangedSave.savedCount).toBe(1);
+
+    const billAfter = await prisma.bill.findUnique({ where: { id: bill.id } });
+    expect(Number(billAfter!.totalAmount)).toBe(818);
+  });
 });

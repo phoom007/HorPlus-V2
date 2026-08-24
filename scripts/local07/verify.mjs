@@ -214,18 +214,37 @@ export async function runVerification() {
   assert(weeraContract?.endDate?.toISOString().startsWith('2026-08-01'), 'Room 204 Contract endDate is 2026-08-01', weeraContract?.endDate?.toISOString());
 
   const { MeterService } = require('../../server/dist/services/meter.service.js');
+  const { BillingService } = require('../../server/dist/services/billing.service.js');
   const { PrismaMeterRepository } = require('../../server/dist/db/repositories/meter.repository.js');
   const { PrismaBillingCycleRepository } = require('../../server/dist/db/repositories/billing-cycle.repository.js');
   const { PrismaRoomRepository } = require('../../server/dist/db/repositories/room.repository.js');
   const { PrismaBillRepository } = require('../../server/dist/db/repositories/bill.repository.js');
+  const { PrismaContractRepository } = require('../../server/dist/db/repositories/contract.repository.js');
+  const { PrismaTenantRepository } = require('../../server/dist/db/repositories/tenant.repository.js');
   const { AuditService } = require('../../server/dist/services/audit.service.js');
 
+  const meterRepo = new PrismaMeterRepository(prisma);
+  const cycleRepo = new PrismaBillingCycleRepository(prisma);
+  const roomRepo = new PrismaRoomRepository(prisma);
+  const billRepo = new PrismaBillRepository(prisma);
+  const contractRepo = new PrismaContractRepository(prisma);
+  const tenantRepo = new PrismaTenantRepository(prisma);
+
   const meterService = new MeterService(
-    new PrismaMeterRepository(prisma),
-    new PrismaBillingCycleRepository(prisma),
-    new PrismaRoomRepository(prisma),
-    new PrismaBillRepository(prisma),
+    meterRepo,
+    cycleRepo,
+    roomRepo,
+    billRepo,
     new AuditService()
+  );
+
+  const billingService = new BillingService(
+    billRepo,
+    cycleRepo,
+    meterRepo,
+    contractRepo,
+    roomRepo,
+    tenantRepo
   );
 
   const cycleJulyDb = compDormDb?.billingCycles.find(c => c.cycleCode === '2026-07');
@@ -342,7 +361,7 @@ export async function runVerification() {
     // 1 Component: Room 101
     const r101Aug = augPreview.rooms.find(r => r.roomId === room101Db.id);
     assert(r101Aug?.chargeComponents?.length === 1, 'Room 101 has 1 charge component in August 2026', r101Aug?.chargeComponents?.length);
-    assert(Number(r101Aug?.amountDue) === 5468, 'Room 101 amountDue is 5468.00 in August 2026');
+    assert(Number(r101Aug?.amountDue) === 1268, 'Room 101 amountDue is 1268.00 in August 2026');
 
     // 3 Components (RENT + DEPOSIT + INVALID utility): Room 201
     const r201Aug = augPreview.rooms.find(r => r.roomId === room201Db.id);
@@ -381,17 +400,18 @@ export async function runVerification() {
     assert(r101Pull?.currentHouseholdPeopleCount === 2, 'Room 101 currentHouseholdPeopleCount is 2 (current registered household occupants)', r101Pull?.currentHouseholdPeopleCount);
   }
 
-  // 11. Seeded Active Monthly Utility Bill Source Invariant Verification
+  // 11. Seeded Active Monthly Utility Bill Source & Split-Bill Structural Invariants
   console.log('\n--- 11. Seeded Active Monthly Utility Bill Source Invariant Verification ---');
-  const allActiveUtilityBills = await prisma.bill.findMany({
+  const allMonthlyUtilityBills = await prisma.bill.findMany({
     where: {
       dormitoryId: COMP_DORM.id,
       billKind: 'MONTHLY_UTILITY',
       status: { notIn: ['cancelled', 'void'] },
     },
+    include: { items: true },
   });
 
-  for (const bill of allActiveUtilityBills) {
+  for (const bill of allMonthlyUtilityBills) {
     const readings = await prisma.meterReading.findMany({
       where: {
         dormitoryId: COMP_DORM.id,
@@ -409,12 +429,78 @@ export async function runVerification() {
       elecR?.currentReading !== null && elecR?.currentReading !== undefined,
       `Bill ${bill.billNumber} (Room ${bill.roomId}) has valid current electric meter reading`
     );
+
+    // Split-Bill Invariant: MONTHLY_UTILITY must NOT contain RENT or DEPOSIT items
+    const hasRentItem = bill.items.some(i => i.type === 'rent');
+    const hasDepositItem = bill.items.some(i => i.type === 'deposit');
+    assert(!hasRentItem, `MONTHLY_UTILITY bill ${bill.billNumber} contains no RENT items`);
+    assert(!hasDepositItem, `MONTHLY_UTILITY bill ${bill.billNumber} contains no DEPOSIT items`);
+  }
+
+  // Split-bill Invariant: RENT / DEPOSIT bills must only contain rent/deposit items
+  const allBills = await prisma.bill.findMany({
+    where: { dormitoryId: COMP_DORM.id },
+    include: { items: true },
+  });
+  for (const bill of allBills) {
+    if (bill.billKind === 'RENT') {
+      const hasNonRent = bill.items.some(i => i.type !== 'rent');
+      assert(!hasNonRent, `RENT bill ${bill.billNumber} contains only rent items`);
+    } else if (bill.billKind === 'DEPOSIT') {
+      const hasNonDeposit = bill.items.some(i => i.type !== 'deposit');
+      assert(!hasNonDeposit, `DEPOSIT bill ${bill.billNumber} contains only deposit items`);
+    }
+
+    // Bill Item Sum Invariant: sum(items.amount) === bill.subtotal === bill.totalAmount
+    const itemSum = bill.items.reduce((acc, i) => acc + Number(i.amount), 0);
+    assert(
+      Math.abs(itemSum - Number(bill.totalAmount)) < 0.01,
+      `Bill ${bill.billNumber} item sum (${itemSum}) equals totalAmount (${bill.totalAmount})`
+    );
+    assert(
+      Math.abs(Number(bill.subtotal) - Number(bill.totalAmount)) < 0.01,
+      `Bill ${bill.billNumber} subtotal (${bill.subtotal}) equals totalAmount (${bill.totalAmount})`
+    );
   }
 
   // 12. Strict Issued-Bill & Baseline-Only Save Integrity Verification
   console.log('\n--- 12. Strict Issued-Bill & Baseline-Only Save Integrity Verification ---');
   if (cycleAugDb && room101Db) {
-    // 12a. Unissued room (e.g. Room 102 in August) saving baseline-only (blank current) succeeds
+    // 12a. Critical August Save Invariant: Unchanged save on Room 101 has delta = 0.00
+    const bill101Before = await prisma.bill.findFirst({
+      where: { dormitoryId: COMP_DORM.id, roomId: room101Db.id, billingCycleId: cycleAugDb.id, billNumber: 'INV-202608-101' },
+    });
+    const totalBefore = Number(bill101Before?.totalAmount);
+
+    const unchangedSaveRes = await meterService.saveBulkMeterWorkspace(
+      COMP_DORM.id,
+      {
+        billingCycleId: cycleAugDb.id,
+        rows: [
+          {
+            roomId: room101Db.id,
+            waterPrev: 110,
+            waterCurr: 121,
+            elecPrev: 560,
+            elecCurr: 620,
+          },
+        ],
+      },
+      'test-admin',
+      billingService
+    );
+    assert(unchangedSaveRes.savedCount === 1, 'Unchanged Room 101 meter save succeeds');
+
+    const bill101After = await prisma.bill.findFirst({
+      where: { dormitoryId: COMP_DORM.id, roomId: room101Db.id, billingCycleId: cycleAugDb.id, billNumber: 'INV-202608-101' },
+    });
+    const totalAfter = Number(bill101After?.totalAmount);
+    assert(
+      Math.abs(totalBefore - totalAfter) < 0.01,
+      `Critical August Save Invariant: Room 101 bill total remains unchanged (${totalBefore} -> ${totalAfter}, delta = 0.00)`
+    );
+
+    // 12b. Unissued room (e.g. Room 102 in August) saving baseline-only (blank current) succeeds
     const room102Db = allRooms.find(r => r.roomNumber === '102');
     if (room102Db) {
       const saveRes = await meterService.saveBulkMeterWorkspace(
@@ -431,7 +517,8 @@ export async function runVerification() {
             },
           ],
         },
-        'test-admin'
+        'test-admin',
+        billingService
       );
       assert(saveRes.savedCount === 1, 'Unissued room baseline-only save succeeds');
       const r102Water = await prisma.meterReading.findFirst({
@@ -440,7 +527,7 @@ export async function runVerification() {
       assert(r102Water?.previousReading !== null && r102Water?.currentReading === null, 'Unissued room persists baseline and null current');
     }
 
-    // 12b. Issued room (Room 101 with INV-202608-101) clearing current reading fails closed
+    // 12c. Issued room (Room 101 with INV-202608-101) clearing current reading fails closed
     let threwClosed = false;
     try {
       await meterService.saveBulkMeterWorkspace(
@@ -457,7 +544,8 @@ export async function runVerification() {
             },
           ],
         },
-        'test-admin'
+        'test-admin',
+        billingService
       );
     } catch (err) {
       if (err.code === 'CANNOT_CLEAR_METER_READING_FOR_ISSUED_BILL') {

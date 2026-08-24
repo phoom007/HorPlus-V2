@@ -1361,6 +1361,7 @@ export async function seedLocal07Data() {
         roomId: room.id,
         tenantId: tenant.id,
         billNumber,
+        billKind: 'LEGACY_COMBINED',
         billingDate: new Date('2026-07-25'),
         dueDate: new Date('2026-08-05'),
         subtotal,
@@ -1451,7 +1452,7 @@ export async function seedLocal07Data() {
   });
 
   // August 2026 Multi-Component Bills for Deterministic Matrix Testing (0, 1, 2, 3 components)
-  // 1 Component: Room 101 (MONTHLY_UTILITY) -> ฿5,468.00 unpaid
+  // 1 Component: Room 101 (MONTHLY_UTILITY) -> ฿1,268.00 unpaid
   const bill101Aug = await prisma.bill.create({
     data: {
       dormitoryId: compDorm.id,
@@ -1462,20 +1463,20 @@ export async function seedLocal07Data() {
       billKind: 'MONTHLY_UTILITY',
       billingDate: new Date('2026-08-25'),
       dueDate: new Date('2026-09-05'),
-      subtotal: 5468.0,
-      totalAmount: 5468.0,
+      subtotal: 1268.0,
+      totalAmount: 1268.0,
       paidAmount: 0.0,
-      outstandingAmount: 5468.0,
+      outstandingAmount: 1268.0,
       status: 'unpaid',
     },
   });
 
   const bill101AugItems = [
-    { type: 'rent', description: 'ค่าเช่าห้องพัก 101', quantity: 1, unitPrice: 4500, amount: 4500 },
     { type: 'water', description: 'ค่าน้ำประปา (11 หน่วย @ ฿18)', quantity: 11, unitPrice: 18, amount: 198 },
     { type: 'electric', description: 'ค่าไฟฟ้า (60 หน่วย @ ฿7)', quantity: 60, unitPrice: 7, amount: 420 },
     { type: 'common', description: 'ค่าส่วนกลาง', quantity: 1, unitPrice: 200, amount: 200 },
     { type: 'internet', description: 'ค่าบริการอินเทอร์เน็ตความเร็วสูง', quantity: 1, unitPrice: 150, amount: 150 },
+    { type: 'parking', description: 'ค่าที่จอดรถ', quantity: 1, unitPrice: 300, amount: 300 },
   ];
   for (const it of bill101AugItems) {
     await prisma.billItem.create({
