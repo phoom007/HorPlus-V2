@@ -1919,4 +1919,213 @@ describe('LOCAL-07 Source-Reviewed Meter Workspace Correction Suite', () => {
       });
     });
   });
+
+  // =========================================================================
+  // 11. Defect B: Reserved & Occupied Room Add-Tenant Button Visibility Tests
+  // =========================================================================
+  describe('Defect B: Add Tenant Button Visibility Governance', () => {
+    it('CASE B1: Empty eligible room shows + เพิ่มผู้เช่า', async () => {
+      const mockRooms: Room[] = [
+        { id: 'room-empty', roomNumber: '105', floor: 1, roomType: 'standard', monthlyRent: 4000, depositAmount: 4000, status: 'vacant' } as any,
+      ];
+
+      vi.spyOn(httpClient, 'httpRequest').mockImplementation(async (method: string, url: string) => {
+        if (url.includes('/meters/workspace/preview-context')) {
+          return {
+            success: true,
+            data: {
+              cycle: { id: 'cycle-aug', cycleCode: '2026-08', isCurrent: true },
+              rateSnapshot: { waterBillingType: 'per_unit', waterRate: '18.00', electricityBillingType: 'per_unit', electricityRate: '7.00' },
+              rooms: [
+                {
+                  roomId: 'room-empty',
+                  roomNumber: '105',
+                  billingSource: 'NONE',
+                  tenantId: null,
+                  tenantName: null,
+                  isFutureReservation: false,
+                  hasBookableGap: true,
+                  dailyCheckOutDate: null,
+                  totalPayable: 0,
+                  chargeComponents: [],
+                },
+              ],
+            },
+          } as any;
+        }
+        if (url.includes('/billing-cycles')) {
+          return {
+            success: true,
+            data: [{ id: 'cycle-aug', cycleCode: '2026-08', isCurrent: true }],
+            operationalCycleCode: '2026-08',
+            operationalBillingCycleId: 'cycle-aug',
+          } as any;
+        }
+        return { success: true, data: [] } as any;
+      });
+
+      const { container } = render(
+        <QueryClientProvider client={queryClient}>
+          <OwnerMeters
+            rooms={mockRooms}
+            buildings={[]}
+            dormitoryId="dorm-test"
+            bills={[]}
+            tenants={[]}
+            contracts={[]}
+            selectedCycle="2026-08"
+            selectedBillingCycleId="cycle-aug"
+            selectedCycleCode="2026-08"
+            onSaveBills={vi.fn()}
+            onSelectTenant={vi.fn()}
+          />
+        </QueryClientProvider>
+      );
+
+      await waitFor(() => {
+        const row = container.querySelector('#room-row-room-empty');
+        expect(row).toBeTruthy();
+        const tenantCell = row?.querySelector('td:nth-child(10)');
+        expect(tenantCell?.textContent).toContain('เพิ่มผู้เช่า');
+      });
+    });
+
+    it('CASE B2: Active tenant displayed -> + เพิ่มผู้เช่า is hidden', async () => {
+      const mockRooms: Room[] = [
+        { id: 'room-occ', roomNumber: '101', floor: 1, roomType: 'standard', monthlyRent: 4000, depositAmount: 4000, status: 'occupied' } as any,
+      ];
+
+      vi.spyOn(httpClient, 'httpRequest').mockImplementation(async (method: string, url: string) => {
+        if (url.includes('/meters/workspace/preview-context')) {
+          return {
+            success: true,
+            data: {
+              cycle: { id: 'cycle-aug', cycleCode: '2026-08', isCurrent: true },
+              rateSnapshot: { waterBillingType: 'per_unit', waterRate: '18.00', electricityBillingType: 'per_unit', electricityRate: '7.00' },
+              rooms: [
+                {
+                  roomId: 'room-occ',
+                  roomNumber: '101',
+                  billingSource: 'MONTHLY_CONTRACT',
+                  tenantId: 'tenant-101',
+                  tenantName: 'สมชาย ใจดี',
+                  isFutureReservation: false,
+                  hasBookableGap: true,
+                  dailyCheckOutDate: null,
+                  totalPayable: 5468,
+                  chargeComponents: [],
+                },
+              ],
+            },
+          } as any;
+        }
+        if (url.includes('/billing-cycles')) {
+          return {
+            success: true,
+            data: [{ id: 'cycle-aug', cycleCode: '2026-08', isCurrent: true }],
+            operationalCycleCode: '2026-08',
+            operationalBillingCycleId: 'cycle-aug',
+          } as any;
+        }
+        return { success: true, data: [] } as any;
+      });
+
+      const { container } = render(
+        <QueryClientProvider client={queryClient}>
+          <OwnerMeters
+            rooms={mockRooms}
+            buildings={[]}
+            dormitoryId="dorm-test"
+            bills={[]}
+            tenants={[]}
+            contracts={[]}
+            selectedCycle="2026-08"
+            selectedBillingCycleId="cycle-aug"
+            selectedCycleCode="2026-08"
+            onSaveBills={vi.fn()}
+            onSelectTenant={vi.fn()}
+          />
+        </QueryClientProvider>
+      );
+
+      await waitFor(() => {
+        const row = container.querySelector('#room-row-room-occ');
+        expect(row).toBeTruthy();
+        const tenantCell = row?.querySelector('td:nth-child(10)');
+        expect(tenantCell?.textContent).toContain('สมชาย ใจดี');
+        expect(tenantCell?.textContent).not.toContain('เพิ่มผู้เช่า');
+      });
+    });
+
+    it('CASE B4: Future reservation displayed -> Name + จองล่วงหน้า badge, + เพิ่มผู้เช่า is hidden', async () => {
+      const mockRooms: Room[] = [
+        { id: 'room-205', roomNumber: '205', floor: 2, roomType: 'standard', monthlyRent: 4800, depositAmount: 4800, status: 'vacant' } as any,
+      ];
+
+      vi.spyOn(httpClient, 'httpRequest').mockImplementation(async (method: string, url: string) => {
+        if (url.includes('/meters/workspace/preview-context')) {
+          return {
+            success: true,
+            data: {
+              cycle: { id: 'cycle-sep', cycleCode: '2026-09', isCurrent: false },
+              rateSnapshot: { waterBillingType: 'per_unit', waterRate: '18.00', electricityBillingType: 'per_unit', electricityRate: '7.00' },
+              rooms: [
+                {
+                  roomId: 'room-205',
+                  roomNumber: '205',
+                  billingSource: 'NONE',
+                  tenantId: 'tenant-manat',
+                  tenantName: 'มนัส จองล่วงหน้า',
+                  isFutureReservation: true,
+                  hasBookableGap: true,
+                  dailyCheckOutDate: null,
+                  totalPayable: 0,
+                  chargeComponents: [],
+                },
+              ],
+            },
+          } as any;
+        }
+        if (url.includes('/billing-cycles')) {
+          return {
+            success: true,
+            data: [
+              { id: 'cycle-aug', cycleCode: '2026-08', isCurrent: true },
+              { id: 'cycle-sep', cycleCode: '2026-09', isCurrent: false },
+            ],
+            operationalCycleCode: '2026-08',
+            operationalBillingCycleId: 'cycle-aug',
+          } as any;
+        }
+        return { success: true, data: [] } as any;
+      });
+
+      const { container } = render(
+        <QueryClientProvider client={queryClient}>
+          <OwnerMeters
+            rooms={mockRooms}
+            buildings={[]}
+            dormitoryId="dorm-test"
+            bills={[]}
+            tenants={[]}
+            contracts={[]}
+            selectedCycle="2026-09"
+            selectedBillingCycleId="cycle-sep"
+            selectedCycleCode="2026-09"
+            onSaveBills={vi.fn()}
+            onSelectTenant={vi.fn()}
+          />
+        </QueryClientProvider>
+      );
+
+      await waitFor(() => {
+        const row = container.querySelector('#room-row-room-205');
+        expect(row).toBeTruthy();
+        const tenantCell = row?.querySelector('td:nth-child(10)');
+        expect(tenantCell?.textContent).toContain('มนัส จองล่วงหน้า');
+        expect(tenantCell?.textContent).toContain('จองล่วงหน้า');
+        expect(tenantCell?.textContent).not.toContain('เพิ่มผู้เช่า');
+      });
+    });
+  });
 });

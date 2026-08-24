@@ -1265,6 +1265,68 @@ export async function seedLocal07Data() {
         },
       });
     }
+
+    // Seed realistic meter readings for Room 101 in August 2026 (issued UNPAID MONTHLY_UTILITY bill INV-202608-101)
+    if (mf.roomNum === '101') {
+      await prisma.meterReading.create({
+        data: {
+          dormitoryId: compDorm.id,
+          roomId: room.id,
+          meterDeviceId: waterDevice.id,
+          billingCycleId: cycleAug.id,
+          meterType: 'water',
+          previousReading: 110,
+          currentReading: 121,
+          usageUnits: 11,
+          readAt: new Date('2026-08-24'),
+        },
+      });
+
+      await prisma.meterReading.create({
+        data: {
+          dormitoryId: compDorm.id,
+          roomId: room.id,
+          meterDeviceId: elecDevice.id,
+          billingCycleId: cycleAug.id,
+          meterType: 'electricity',
+          previousReading: 560,
+          currentReading: 620,
+          usageUnits: 60,
+          readAt: new Date('2026-08-24'),
+        },
+      });
+    }
+
+    // Seed realistic meter readings for Room 202 in August 2026 (issued UNPAID MONTHLY_UTILITY bill INV-202608-202-U)
+    if (mf.roomNum === '202') {
+      await prisma.meterReading.create({
+        data: {
+          dormitoryId: compDorm.id,
+          roomId: room.id,
+          meterDeviceId: waterDevice.id,
+          billingCycleId: cycleAug.id,
+          meterType: 'water',
+          previousReading: 100,
+          currentReading: 105,
+          usageUnits: 5,
+          readAt: new Date('2026-08-24'),
+        },
+      });
+
+      await prisma.meterReading.create({
+        data: {
+          dormitoryId: compDorm.id,
+          roomId: room.id,
+          meterDeviceId: elecDevice.id,
+          billingCycleId: cycleAug.id,
+          meterType: 'electricity',
+          previousReading: 455,
+          currentReading: 585,
+          usageUnits: 130,
+          readAt: new Date('2026-08-24'),
+        },
+      });
+    }
   }
 
   // July 2026 Bills
@@ -1390,7 +1452,7 @@ export async function seedLocal07Data() {
 
   // August 2026 Multi-Component Bills for Deterministic Matrix Testing (0, 1, 2, 3 components)
   // 1 Component: Room 101 (MONTHLY_UTILITY) -> ฿5,468.00 unpaid
-  await prisma.bill.create({
+  const bill101Aug = await prisma.bill.create({
     data: {
       dormitoryId: compDorm.id,
       billingCycleId: cycleAug.id,
@@ -1408,8 +1470,29 @@ export async function seedLocal07Data() {
     },
   });
 
+  const bill101AugItems = [
+    { type: 'rent', description: 'ค่าเช่าห้องพัก 101', quantity: 1, unitPrice: 4500, amount: 4500 },
+    { type: 'water', description: 'ค่าน้ำประปา (11 หน่วย @ ฿18)', quantity: 11, unitPrice: 18, amount: 198 },
+    { type: 'electric', description: 'ค่าไฟฟ้า (60 หน่วย @ ฿7)', quantity: 60, unitPrice: 7, amount: 420 },
+    { type: 'common', description: 'ค่าส่วนกลาง', quantity: 1, unitPrice: 200, amount: 200 },
+    { type: 'internet', description: 'ค่าบริการอินเทอร์เน็ตความเร็วสูง', quantity: 1, unitPrice: 150, amount: 150 },
+  ];
+  for (const it of bill101AugItems) {
+    await prisma.billItem.create({
+      data: {
+        dormitoryId: compDorm.id,
+        billId: bill101Aug.id,
+        type: it.type,
+        description: it.description,
+        quantity: it.quantity,
+        unitPrice: it.unitPrice,
+        amount: it.amount,
+      },
+    });
+  }
+
   // 2 Components: Room 201 (RENT unpaid ฿4,800 + DEPOSIT paid ฿4,800)
-  await prisma.bill.create({
+  const bill201Rent = await prisma.bill.create({
     data: {
       dormitoryId: compDorm.id,
       billingCycleId: cycleAug.id,
@@ -1426,7 +1509,19 @@ export async function seedLocal07Data() {
       status: 'unpaid',
     },
   });
-  await prisma.bill.create({
+  await prisma.billItem.create({
+    data: {
+      dormitoryId: compDorm.id,
+      billId: bill201Rent.id,
+      type: 'rent',
+      description: 'ค่าเช่าห้องพัก 201',
+      quantity: 1,
+      unitPrice: 4800,
+      amount: 4800,
+    },
+  });
+
+  const bill201Dep = await prisma.bill.create({
     data: {
       dormitoryId: compDorm.id,
       billingCycleId: cycleAug.id,
@@ -1444,9 +1539,20 @@ export async function seedLocal07Data() {
       paidAt: new Date('2026-08-25T10:00:00Z'),
     },
   });
+  await prisma.billItem.create({
+    data: {
+      dormitoryId: compDorm.id,
+      billId: bill201Dep.id,
+      type: 'deposit',
+      description: 'เงินประกันสัญญาเช่า 201',
+      quantity: 1,
+      unitPrice: 4800,
+      amount: 4800,
+    },
+  });
 
   // 3 Components: Room 202 (RENT unpaid ฿4,800 + DEPOSIT paid ฿4,800 + MONTHLY_UTILITY unpaid ฿1,200)
-  await prisma.bill.create({
+  const bill202Rent = await prisma.bill.create({
     data: {
       dormitoryId: compDorm.id,
       billingCycleId: cycleAug.id,
@@ -1463,7 +1569,19 @@ export async function seedLocal07Data() {
       status: 'unpaid',
     },
   });
-  await prisma.bill.create({
+  await prisma.billItem.create({
+    data: {
+      dormitoryId: compDorm.id,
+      billId: bill202Rent.id,
+      type: 'rent',
+      description: 'ค่าเช่าห้องพัก 202',
+      quantity: 1,
+      unitPrice: 4800,
+      amount: 4800,
+    },
+  });
+
+  const bill202Dep = await prisma.bill.create({
     data: {
       dormitoryId: compDorm.id,
       billingCycleId: cycleAug.id,
@@ -1481,7 +1599,19 @@ export async function seedLocal07Data() {
       paidAt: new Date('2026-08-25T10:00:00Z'),
     },
   });
-  await prisma.bill.create({
+  await prisma.billItem.create({
+    data: {
+      dormitoryId: compDorm.id,
+      billId: bill202Dep.id,
+      type: 'deposit',
+      description: 'เงินประกันสัญญาเช่า 202',
+      quantity: 1,
+      unitPrice: 4800,
+      amount: 4800,
+    },
+  });
+
+  const bill202Util = await prisma.bill.create({
     data: {
       dormitoryId: compDorm.id,
       billingCycleId: cycleAug.id,
@@ -1498,6 +1628,25 @@ export async function seedLocal07Data() {
       status: 'unpaid',
     },
   });
+
+  const bill202UtilItems = [
+    { type: 'water', description: 'ค่าน้ำประปา (5 หน่วย @ ฿18)', quantity: 5, unitPrice: 18, amount: 90 },
+    { type: 'electric', description: 'ค่าไฟฟ้า (130 หน่วย @ ฿7)', quantity: 130, unitPrice: 7, amount: 910 },
+    { type: 'common', description: 'ค่าส่วนกลาง', quantity: 1, unitPrice: 200, amount: 200 },
+  ];
+  for (const it of bill202UtilItems) {
+    await prisma.billItem.create({
+      data: {
+        dormitoryId: compDorm.id,
+        billId: bill202Util.id,
+        type: it.type,
+        description: it.description,
+        quantity: it.quantity,
+        unitPrice: it.unitPrice,
+        amount: it.amount,
+      },
+    });
+  }
 
   // Seed sample Tenant Registration Request (Pending) with acceptance snapshot & signature
   const room102 = await prisma.room.findFirst({

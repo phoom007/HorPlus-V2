@@ -2743,9 +2743,9 @@ describe('Daily Stay Meter Semantics, Financial Exclusion & Exact Deposit Copy',
     const row3 = container.querySelector('#room-row-r-branch-3');
     const row4 = container.querySelector('#room-row-r-branch-4');
 
-    // Row 1 (B101): Has tenant AND '+ เพิ่มผู้เช่า'
+    // Row 1 (B101): Has tenant -> Tenant shown, NO '+ เพิ่มผู้เช่า'
     expect(row1?.textContent).toContain('ผู้เช่า มีแก๊ป');
-    expect(row1?.textContent).toContain('เพิ่มผู้เช่า');
+    expect(row1?.textContent).not.toContain('เพิ่มผู้เช่า');
 
     // Row 2 (B102): Has tenant ONLY, NO '+ เพิ่มผู้เช่า'
     expect(row2?.textContent).toContain('ผู้เช่า เต็มเดือน');
@@ -2827,11 +2827,11 @@ describe('Daily Stay Meter Semantics, Financial Exclusion & Exact Deposit Copy',
     const row1 = container.querySelector('#room-row-r-daily-1');
     const row2 = container.querySelector('#room-row-r-daily-2');
 
-    // Row 1 (unpaid Daily tail): red 'รายวัน' badge + tenant name + '+ เพิ่มผู้เช่า'
+    // Row 1 (unpaid Daily tail): red 'รายวัน' badge + tenant name (no + เพิ่มผู้เช่า since occupant displayed)
     expect(row1?.innerHTML).toContain('text-rose-700');
     expect(row1?.textContent).toContain('รายวัน');
     expect(row1?.textContent).toContain('ผู้พัก ค้างจ่าย');
-    expect(row1?.textContent).toContain('เพิ่มผู้เช่า');
+    expect(row1?.textContent).not.toContain('เพิ่มผู้เช่า');
 
     // Row 2 (paid active Daily stay): emerald 'รายวัน' badge
     expect(row2?.innerHTML).toContain('text-emerald-700');

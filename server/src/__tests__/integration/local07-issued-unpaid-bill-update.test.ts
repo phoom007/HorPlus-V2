@@ -571,4 +571,141 @@ describe('LOCAL-07 Issued Unpaid Bill Update on Save Integration Proof', () => {
     expect(depositCheck!.status).toBe('paid');
     expect(Number(depositCheck!.totalAmount)).toBe(5000);
   });
+
+  it('CASE A1: Unissued room + Pull Previous + blank current -> Save PASS, DB current=null', async () => {
+    // Room has NO active Monthly Utility bill
+    const saveRes = await meterService.saveBulkMeterWorkspace(
+      testDormId,
+      {
+        billingCycleId,
+        rows: [{ roomId, waterPrev: '110', waterCurr: null, elecPrev: '560', elecCurr: null }],
+      },
+      testUserId,
+      billingService
+    );
+    expect(saveRes.savedCount).toBe(1);
+
+    const waterR = await prisma.meterReading.findFirst({
+      where: { roomId, billingCycleId, meterType: 'water' },
+    });
+    expect(Number(waterR?.previousReading)).toBe(110);
+    expect(waterR?.currentReading).toBeNull();
+    expect(waterR?.usageUnits).toBeNull();
+
+    const elecR = await prisma.meterReading.findFirst({
+      where: { roomId, billingCycleId, meterType: 'electricity' },
+    });
+    expect(Number(elecR?.previousReading)).toBe(560);
+    expect(elecR?.currentReading).toBeNull();
+    expect(elecR?.usageUnits).toBeNull();
+  });
+
+  it('CASE A2: Unissued room + explicit current 0 -> Save PASS, DB current=0', async () => {
+    const saveRes = await meterService.saveBulkMeterWorkspace(
+      testDormId,
+      {
+        billingCycleId,
+        rows: [{ roomId, waterPrev: '0', waterCurr: '0', elecPrev: '0', elecCurr: '0' }],
+      },
+      testUserId,
+      billingService
+    );
+    expect(saveRes.savedCount).toBe(1);
+
+    const waterR = await prisma.meterReading.findFirst({
+      where: { roomId, billingCycleId, meterType: 'water' },
+    });
+    expect(Number(waterR?.previousReading)).toBe(0);
+    expect(Number(waterR?.currentReading)).toBe(0);
+    expect(Number(waterR?.usageUnits)).toBe(0);
+  });
+
+  it('CASE A3 & CASE A4: UNPAID bill with valid current vs cleared current (fails closed)', async () => {
+    // 1. Save valid readings & issue UNPAID bill
+    await meterService.saveBulkMeterWorkspace(
+      testDormId,
+      {
+        billingCycleId,
+        rows: [{ roomId, waterPrev: '100', waterCurr: '110', elecPrev: '200', elecCurr: '250' }],
+      },
+      testUserId,
+      billingService
+    );
+    const utilityRes = await billingService.generateBill(
+      testDormId,
+      { billingCycleId, roomId, billKind: 'MONTHLY_UTILITY' },
+      testUserId
+    );
+    expect(utilityRes.bill.status).toBe('unpaid');
+    const originalTotal = utilityRes.bill.totalAmount;
+
+    // 2. CASE A3: Update with valid complete current reading -> Save PASS, Bill sync PASS
+    const savePassRes = await meterService.saveBulkMeterWorkspace(
+      testDormId,
+      {
+        billingCycleId,
+        rows: [{ roomId, waterPrev: '100', waterCurr: '115', elecPrev: '200', elecCurr: '260' }],
+      },
+      testUserId,
+      billingService
+    );
+    expect(savePassRes.savedCount).toBe(1);
+
+    const syncedBill = await prisma.bill.findUnique({ where: { id: utilityRes.bill.id } });
+    // Water: (115-100)*18 = 270, Elec: (260-200)*7 = 420, Common: 200 -> Total = 890
+    expect(Number(syncedBill!.totalAmount)).toBe(890);
+
+    // 3. CASE A4: Clearing required current water reading -> MUST FAIL CLOSED
+    let errThrew: any = null;
+    try {
+      await meterService.saveBulkMeterWorkspace(
+        testDormId,
+        {
+          billingCycleId,
+          rows: [{ roomId, waterPrev: '100', waterCurr: null, elecPrev: '200', elecCurr: '260' }],
+        },
+        testUserId,
+        billingService
+      );
+    } catch (err: any) {
+      errThrew = err;
+    }
+    expect(errThrew).not.toBeNull();
+    expect(errThrew.code).toBe('CANNOT_CLEAR_METER_READING_FOR_ISSUED_BILL');
+
+    // Verify bill remains unchanged and meter data was not corrupted
+    const billAfterFail = await prisma.bill.findUnique({ where: { id: utilityRes.bill.id } });
+    expect(Number(billAfterFail!.totalAmount)).toBe(890);
+    const waterAfterFail = await prisma.meterReading.findFirst({
+      where: { roomId, billingCycleId, meterType: 'water' },
+    });
+    expect(Number(waterAfterFail?.currentReading)).toBe(115);
+  });
+
+  it('CASE A7: Actual bill issuance with missing required readings fails with issuance error', async () => {
+    // Save unissued baseline-only
+    await meterService.saveBulkMeterWorkspace(
+      testDormId,
+      {
+        billingCycleId,
+        rows: [{ roomId, waterPrev: '100', waterCurr: null, elecPrev: '200', elecCurr: null }],
+      },
+      testUserId,
+      billingService
+    );
+
+    // Attempting to issue bill directly must throw MISSING_WATER_METER_READING
+    let issueErr: any = null;
+    try {
+      await billingService.generateBill(
+        testDormId,
+        { billingCycleId, roomId, billKind: 'MONTHLY_UTILITY' },
+        testUserId
+      );
+    } catch (err: any) {
+      issueErr = err;
+    }
+    expect(issueErr).not.toBeNull();
+    expect(issueErr.code).toBe('MISSING_WATER_METER_READING');
+  });
 });

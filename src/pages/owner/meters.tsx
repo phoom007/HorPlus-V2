@@ -379,6 +379,9 @@ export function mapErrorMessageToThai(raw: any): string {
   if (code === 'BILLING_CYCLE_NOT_FOUND') {
     return 'ไม่พบข้อมูลรอบบิล';
   }
+  if (code === 'CANNOT_CLEAR_METER_READING_FOR_ISSUED_BILL') {
+    return 'ห้องนี้มีบิลที่ออกแล้ว หากต้องการล้างเลขมิเตอร์ปัจจุบัน กรุณายกเลิกบิลก่อน';
+  }
   if (code === 'MISSING_WATER_METER_READING' || code === 'MISSING_METER_READING') {
     return 'กรุณากรอกเลขมิเตอร์น้ำของงวดนี้ก่อนออกบิล';
   }
@@ -422,6 +425,9 @@ export function mapErrorMessageToThai(raw: any): string {
   }
   if (msg.includes('ROOM_LOCKED_PAID')) {
     return 'บิลนี้ชำระเงินแล้ว ไม่สามารถยกเลิกหรือแก้ไขได้';
+  }
+  if (msg.includes('CANNOT_CLEAR_METER_READING_FOR_ISSUED_BILL')) {
+    return 'ห้องนี้มีบิลที่ออกแล้ว หากต้องการล้างเลขมิเตอร์ปัจจุบัน กรุณายกเลิกบิลก่อน';
   }
   if (msg.includes('BILLING_CYCLE_NOT_FOUND')) {
     return 'ไม่พบข้อมูลรอบบิล';
@@ -2940,50 +2946,15 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                                   จองล่วงหน้า
                                 </span>
                               </div>
-                              {isEligibleAddTenantCycle && hasBookableGap && (room || row.roomId) && (
-                                <button
-                                  type="button"
-                                  disabled={quickAddLoadingRoomId === (room?.id || row.roomId)}
-                                  onClick={async () => {
-                                    const targetRoomId = room?.id || row.roomId;
-                                    try {
-                                      setQuickAddLoadingRoomId(targetRoomId);
-                                      const dormId = dormitoryId || localStorage.getItem('horplus_current_dormitory_id') || localStorage.getItem('selected_dormitory_id') || '';
-                                      const res = await httpRequest<{ data: QuickAddRoomContext }>(
-                                        'GET',
-                                        `/api/v1/properties/rooms/${targetRoomId}/quick-add-context`,
-                                        undefined,
-                                        { headers: dormId ? { 'x-dormitory-id': dormId } : {} }
-                                      );
-
-                                      if (!res.data || !res.data.effective) {
-                                        throw new Error('ไม่สามารถโหลดข้อมูลสิทธิ์และค่าเช่าห้องพักได้');
-                                      }
-
-                                      setSelectedQuickAddContext(res.data);
-                                      setQuickAddModalOpen(true);
-                                    } catch (err: any) {
-                                      showToast(mapErrorMessageToThai(err.message || 'ไม่สามารถโหลดข้อมูลห้องพักได้ กรุณาลองใหม่อีกครั้ง'), 'error');
-                                    } finally {
-                                      setQuickAddLoadingRoomId(null);
-                                    }
-                                  }}
-                                  className="inline-flex items-center gap-1 text-[11px] font-bold text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 px-2 py-1 rounded-lg border border-indigo-200 transition-all cursor-pointer shadow-2xs disabled:opacity-50 whitespace-nowrap shrink-0"
-                                >
-                                  {quickAddLoadingRoomId === (room?.id || row.roomId) ? (
-                                    <Loader2 className="w-3 h-3 animate-spin shrink-0" />
-                                  ) : (
-                                    <Plus className="w-3 h-3 shrink-0" />
-                                  )}
-                                  <span className="whitespace-nowrap">เพิ่มผู้เช่า</span>
-                                </button>
-                              )}
                             </div>
                           );
                         }
 
                         if (isEligibleAddTenantCycle) {
                           const hasTenant = Boolean(effectiveTenantId && effectiveTenantName);
+                          const hasDailyStay = Boolean(dailyCheckOutDate);
+                          const hasOccupantClaim = hasTenant || hasDailyStay;
+
                           return (
                             <div className="flex items-center gap-2">
                               {hasTenant && (
@@ -3018,7 +2989,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                                   {formatShortThaiBuddhistDate(dailyCheckOutDate)}
                                 </span>
                               )}
-                              {hasBookableGap && (room || row.roomId) && (
+                              {!hasOccupantClaim && hasBookableGap && (room || row.roomId) && (
                                 <button
                                   type="button"
                                   disabled={quickAddLoadingRoomId === (room?.id || row.roomId)}
@@ -3056,7 +3027,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                                   <span className="whitespace-nowrap">เพิ่มผู้เช่า</span>
                                 </button>
                               )}
-                              {!hasTenant && !hasBookableGap && (
+                              {!hasOccupantClaim && !hasBookableGap && (
                                 <span className="text-gray-400">ไม่มีข้อมูล</span>
                               )}
                             </div>

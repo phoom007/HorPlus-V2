@@ -1065,7 +1065,24 @@ export class MeterService {
       return;
     }
 
-    const preview = await billingService.generateBillPreview(dormitoryId, billingCycleId, roomId, tx, 'MONTHLY_UTILITY');
+    let preview: any;
+    try {
+      preview = await billingService.generateBillPreview(dormitoryId, billingCycleId, roomId, tx, 'MONTHLY_UTILITY');
+    } catch (err: any) {
+      if (
+        err.code === 'MISSING_WATER_METER_READING' ||
+        err.code === 'MISSING_ELECTRICITY_METER_READING' ||
+        err.code === 'MISSING_METER_READING'
+      ) {
+        const customErr = new Error('CANNOT_CLEAR_METER_READING_FOR_ISSUED_BILL');
+        (customErr as any).statusCode = 400;
+        (customErr as any).code = 'CANNOT_CLEAR_METER_READING_FOR_ISSUED_BILL';
+        (customErr as any).message = 'ห้องนี้มีบิลที่ออกแล้ว หากต้องการล้างเลขมิเตอร์ปัจจุบัน กรุณายกเลิกบิลก่อน';
+        throw customErr;
+      }
+      throw err;
+    }
+
     const prisma = tx || getPrismaClient();
 
     // 1. Delete old items and insert updated items
@@ -1163,6 +1180,11 @@ export class MeterService {
     const isFirstCycle = earliest ? earliest.id === data.billingCycleId : false;
 
     return this.meterRepo.withTransaction(async (tx) => {
+      let snapshot = rateSnapshot;
+      if (!snapshot) {
+        snapshot = await this.billingCycleRepo.findRateSnapshot(data.billingCycleId, dormitoryId);
+      }
+
       const entitlementSet = await subscriptionEntitlementService.resolveOperationalRoomEntitlementSet(
         dormitoryId,
         new Date(),
@@ -1198,6 +1220,54 @@ export class MeterService {
               (err as any).message = 'บิลนี้ชำระเงินแล้ว ไม่สามารถแก้ไขข้อมูลมิเตอร์ได้';
               throw err;
             }
+
+            // Strict Issued-Bill Integrity: Ensure required per_unit meter readings cannot be cleared/omitted
+            const waterMode = normalizeUtilityBillingMode(snapshot?.waterBillingType || 'per_unit');
+            const elecMode = normalizeUtilityBillingMode(snapshot?.electricityBillingType || 'per_unit');
+            const isWaterPerUnit = waterMode === 'per_unit' && !isZeroDecimal(snapshot?.waterRate ?? '0.00');
+            const isElecPerUnit = elecMode === 'per_unit' && !isZeroDecimal(snapshot?.electricityRate ?? '0.00');
+
+            if (isWaterPerUnit) {
+              const isClearingWater = row.waterCurr === null || (row.waterCurr !== undefined && String(row.waterCurr).trim() === '');
+              if (isClearingWater) {
+                const err = new Error('CANNOT_CLEAR_METER_READING_FOR_ISSUED_BILL');
+                (err as any).statusCode = 400;
+                (err as any).code = 'CANNOT_CLEAR_METER_READING_FOR_ISSUED_BILL';
+                (err as any).message = 'ห้องนี้มีบิลที่ออกแล้ว หากต้องการล้างเลขมิเตอร์ปัจจุบัน กรุณายกเลิกบิลก่อน';
+                throw err;
+              }
+              if (row.waterCurr === undefined) {
+                const existingW = await this.meterRepo.findReadingByCycleRoomAndType(dormitoryId, data.billingCycleId, row.roomId, 'water', tx);
+                if (existingW?.currentReading === null || existingW?.currentReading === undefined || String(existingW.currentReading).trim() === '') {
+                  const err = new Error('CANNOT_CLEAR_METER_READING_FOR_ISSUED_BILL');
+                  (err as any).statusCode = 400;
+                  (err as any).code = 'CANNOT_CLEAR_METER_READING_FOR_ISSUED_BILL';
+                  (err as any).message = 'ห้องนี้มีบิลที่ออกแล้ว หากต้องการล้างเลขมิเตอร์ปัจจุบัน กรุณายกเลิกบิลก่อน';
+                  throw err;
+                }
+              }
+            }
+
+            if (isElecPerUnit) {
+              const isClearingElec = row.elecCurr === null || (row.elecCurr !== undefined && String(row.elecCurr).trim() === '');
+              if (isClearingElec) {
+                const err = new Error('CANNOT_CLEAR_METER_READING_FOR_ISSUED_BILL');
+                (err as any).statusCode = 400;
+                (err as any).code = 'CANNOT_CLEAR_METER_READING_FOR_ISSUED_BILL';
+                (err as any).message = 'ห้องนี้มีบิลที่ออกแล้ว หากต้องการล้างเลขมิเตอร์ปัจจุบัน กรุณายกเลิกบิลก่อน';
+                throw err;
+              }
+              if (row.elecCurr === undefined) {
+                const existingE = await this.meterRepo.findReadingByCycleRoomAndType(dormitoryId, data.billingCycleId, row.roomId, 'electricity', tx);
+                if (existingE?.currentReading === null || existingE?.currentReading === undefined || String(existingE.currentReading).trim() === '') {
+                  const err = new Error('CANNOT_CLEAR_METER_READING_FOR_ISSUED_BILL');
+                  (err as any).statusCode = 400;
+                  (err as any).code = 'CANNOT_CLEAR_METER_READING_FOR_ISSUED_BILL';
+                  (err as any).message = 'ห้องนี้มีบิลที่ออกแล้ว หากต้องการล้างเลขมิเตอร์ปัจจุบัน กรุณายกเลิกบิลก่อน';
+                  throw err;
+                }
+              }
+            }
           }
         }
 
@@ -1207,7 +1277,7 @@ export class MeterService {
           row,
           userId,
           tx,
-          rateSnapshot,
+          snapshot,
           isFirstCycle
         );
         if (savedMeta) {
@@ -1548,7 +1618,7 @@ export class MeterService {
     const allProvisionalTerms = await prisma.provisionalRentalTerm.findMany({
       where: {
         dormitoryId,
-        status: { in: ['ACTIVE', 'ENDED', 'CONVERTED'] },
+        status: { in: ['ACTIVE', 'RESERVED', 'ENDED', 'CONVERTED'] },
         deletedAt: null,
       },
       include: {
@@ -1616,7 +1686,7 @@ export class MeterService {
 
     const futureProvisionalTerms = allProvisionalTerms.filter((p) => {
       const startStr = toBangkokDateString(p.startDate);
-      return startStr > cycleEndStr && p.status === 'ACTIVE';
+      return startStr > cycleEndStr && ['ACTIVE', 'RESERVED'].includes(p.status);
     });
 
     // Load snapshots for this cycle
@@ -1767,7 +1837,11 @@ export class MeterService {
         tenantId = prov.tenantId;
         tenantName = prov.tenant ? (prov.tenant.displayName || `${prov.tenant.firstName || ''} ${prov.tenant.lastName || ''}`.trim()) : null;
         isLineLinked = Boolean(prov.tenant?.linkedUserId);
-        if (prov.rentalType === 'MONTHLY') {
+        if (prov.status === 'RESERVED') {
+          isFutureReservation = true;
+          billingSource = 'NONE';
+          rentAmount = '0.00';
+        } else if (prov.rentalType === 'MONTHLY') {
           billingSource = 'PROVISIONAL_MONTHLY';
           rentAmount = formatDecimal(toDecimal(prov.unitRentAmount.toString()));
         } else {

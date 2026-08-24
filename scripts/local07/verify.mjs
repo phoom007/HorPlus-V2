@@ -381,6 +381,92 @@ export async function runVerification() {
     assert(r101Pull?.currentHouseholdPeopleCount === 2, 'Room 101 currentHouseholdPeopleCount is 2 (current registered household occupants)', r101Pull?.currentHouseholdPeopleCount);
   }
 
+  // 11. Seeded Active Monthly Utility Bill Source Invariant Verification
+  console.log('\n--- 11. Seeded Active Monthly Utility Bill Source Invariant Verification ---');
+  const allActiveUtilityBills = await prisma.bill.findMany({
+    where: {
+      dormitoryId: COMP_DORM.id,
+      billKind: 'MONTHLY_UTILITY',
+      status: { notIn: ['cancelled', 'void'] },
+    },
+  });
+
+  for (const bill of allActiveUtilityBills) {
+    const readings = await prisma.meterReading.findMany({
+      where: {
+        dormitoryId: COMP_DORM.id,
+        billingCycleId: bill.billingCycleId,
+        roomId: bill.roomId,
+      },
+    });
+    const waterR = readings.find(r => r.meterType === 'water');
+    const elecR = readings.find(r => r.meterType === 'electricity');
+    assert(
+      waterR?.currentReading !== null && waterR?.currentReading !== undefined,
+      `Bill ${bill.billNumber} (Room ${bill.roomId}) has valid current water meter reading`
+    );
+    assert(
+      elecR?.currentReading !== null && elecR?.currentReading !== undefined,
+      `Bill ${bill.billNumber} (Room ${bill.roomId}) has valid current electric meter reading`
+    );
+  }
+
+  // 12. Strict Issued-Bill & Baseline-Only Save Integrity Verification
+  console.log('\n--- 12. Strict Issued-Bill & Baseline-Only Save Integrity Verification ---');
+  if (cycleAugDb && room101Db) {
+    // 12a. Unissued room (e.g. Room 102 in August) saving baseline-only (blank current) succeeds
+    const room102Db = allRooms.find(r => r.roomNumber === '102');
+    if (room102Db) {
+      const saveRes = await meterService.saveBulkMeterWorkspace(
+        COMP_DORM.id,
+        {
+          billingCycleId: cycleAugDb.id,
+          rows: [
+            {
+              roomId: room102Db.id,
+              waterPrev: 110,
+              waterCurr: null,
+              elecPrev: 560,
+              elecCurr: null,
+            },
+          ],
+        },
+        'test-admin'
+      );
+      assert(saveRes.savedCount === 1, 'Unissued room baseline-only save succeeds');
+      const r102Water = await prisma.meterReading.findFirst({
+        where: { roomId: room102Db.id, billingCycleId: cycleAugDb.id, meterType: 'water' },
+      });
+      assert(r102Water?.previousReading !== null && r102Water?.currentReading === null, 'Unissued room persists baseline and null current');
+    }
+
+    // 12b. Issued room (Room 101 with INV-202608-101) clearing current reading fails closed
+    let threwClosed = false;
+    try {
+      await meterService.saveBulkMeterWorkspace(
+        COMP_DORM.id,
+        {
+          billingCycleId: cycleAugDb.id,
+          rows: [
+            {
+              roomId: room101Db.id,
+              waterPrev: 110,
+              waterCurr: null,
+              elecPrev: 560,
+              elecCurr: 620,
+            },
+          ],
+        },
+        'test-admin'
+      );
+    } catch (err) {
+      if (err.code === 'CANNOT_CLEAR_METER_READING_FOR_ISSUED_BILL') {
+        threwClosed = true;
+      }
+    }
+    assert(threwClosed === true, 'Clearing current meter reading on issued unpaid bill fails closed with CANNOT_CLEAR_METER_READING_FOR_ISSUED_BILL');
+  }
+
   console.log('\n================================================================================');
   if (failures === 0) {
     console.log('🎉 ALL LOCAL-07 SANDBOX INTEGRITY CHECKS PASSED PERFECTLY (0 FAILURES)');
