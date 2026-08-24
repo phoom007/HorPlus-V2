@@ -840,9 +840,12 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
         expect(screen.getByText('101')).toBeDefined();
       });
 
-      // Find the other fee inputs
-      const descInput = screen.getByPlaceholderText('ชื่อรายการ') as HTMLInputElement;
-      const amtInput = screen.getByPlaceholderText('บาท') as HTMLInputElement;
+      // Find the other fee button and open modal
+      const openModalBtn = screen.getByTestId('open-table-other-fees-room-101-uuid');
+      fireEvent.click(openModalBtn);
+
+      const descInput = screen.getByPlaceholderText('ชื่อรายการ (เช่น ค่ากุญแจ)') as HTMLInputElement;
+      const amtInput = screen.getByPlaceholderText('จำนวนเงิน') as HTMLInputElement;
 
       // Type into controlled inputs
       fireEvent.change(descInput, { target: { value: 'คีย์การ์ด' } });
@@ -852,15 +855,16 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
       fireEvent.change(amtInput, { target: { value: 'abc50.50.9' } });
       expect(amtInput.value).toBe('50.50');
 
-      // Click add other fee button (local draft)
-      const addFeeBtn = screen.getByTitle('เพิ่มรายการค่าใช้จ่าย');
+      // Click add other fee button (local modal draft)
+      const addFeeBtn = screen.getByTitle('เพิ่มรายการ');
       fireEvent.click(addFeeBtn);
 
-      // Verify fee appears in table and inputs are reset
+      // Confirm modal
+      fireEvent.click(screen.getByText('บันทึกรายการ'));
+
+      // Verify fee appears in table
       await waitFor(() => {
         expect(screen.getByText('คีย์การ์ด')).toBeDefined();
-        expect(descInput.value).toBe('');
-        expect(amtInput.value).toBe('');
       });
 
       // Click main Save button to persist
@@ -1017,21 +1021,23 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
         expect(screen.getByText('101')).toBeDefined();
       });
 
-      // Add an other fee
-      const descInput = screen.getByPlaceholderText('ชื่อรายการ') as HTMLInputElement;
-      const amtInput = screen.getByPlaceholderText('บาท') as HTMLInputElement;
+      // Add an other fee via modal
+      const openModalBtn = screen.getByTestId('open-table-other-fees-room-101-uuid');
+      fireEvent.click(openModalBtn);
+
+      const descInput = screen.getByPlaceholderText('ชื่อรายการ (เช่น ค่ากุญแจ)') as HTMLInputElement;
+      const amtInput = screen.getByPlaceholderText('จำนวนเงิน') as HTMLInputElement;
 
       fireEvent.change(descInput, { target: { value: 'คีย์การ์ด' } });
       fireEvent.change(amtInput, { target: { value: '50.50' } });
 
-      const addFeeBtn = screen.getByTitle('เพิ่มรายการค่าใช้จ่าย');
+      const addFeeBtn = screen.getByTitle('เพิ่มรายการ');
       fireEvent.click(addFeeBtn);
+      fireEvent.click(screen.getByText('บันทึกรายการ'));
 
-      // Verify fee added, inputs cleared, and global Save button is present
+      // Verify fee added and global Save button is present
       await waitFor(() => {
         expect(screen.getByText('คีย์การ์ด')).toBeDefined();
-        expect(descInput.value).toBe('');
-        expect(amtInput.value).toBe('');
         expect(screen.getByRole('button', { name: /บันทึกข้อมูล/ })).toBeDefined();
       });
 
@@ -1124,14 +1130,18 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
         expect(screen.getByRole('button', { name: /บันทึกข้อมูล/ })).toBeDefined();
       });
 
-      // 2. Add Other Fee immediately
-      const descInput = screen.getByPlaceholderText('ชื่อรายการ') as HTMLInputElement;
-      const amtInput = screen.getByPlaceholderText('บาท') as HTMLInputElement;
+      // 2. Add Other Fee immediately via modal
+      const openModalBtn = screen.getByTestId('open-table-other-fees-room-101-uuid');
+      fireEvent.click(openModalBtn);
+
+      const descInput = screen.getByPlaceholderText('ชื่อรายการ (เช่น ค่ากุญแจ)') as HTMLInputElement;
+      const amtInput = screen.getByPlaceholderText('จำนวนเงิน') as HTMLInputElement;
       fireEvent.change(descInput, { target: { value: 'คีย์การ์ด' } });
       fireEvent.change(amtInput, { target: { value: '50.50' } });
 
-      const addFeeBtn = screen.getByTitle('เพิ่มรายการค่าใช้จ่าย');
+      const addFeeBtn = screen.getByTitle('เพิ่มรายการ');
       fireEvent.click(addFeeBtn);
+      fireEvent.click(screen.getByText('บันทึกรายการ'));
 
       await waitFor(() => {
         expect(screen.getByText('คีย์การ์ด')).toBeDefined();
@@ -1224,9 +1234,12 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
         expect(screen.getByText('ค่าที่จอดรถพิเศษ')).toBeDefined();
       });
 
-      // Click remove Other Fee
+      // Click edit fee to open modal and remove fee
+      const editFeeBtn = screen.getByTestId('edit-table-other-fees-room-101-uuid');
+      fireEvent.click(editFeeBtn);
       const removeBtn = screen.getByTitle('ลบรายการ');
       fireEvent.click(removeBtn);
+      fireEvent.click(screen.getByText('บันทึกรายการ'));
 
       // Verify fee is removed in local view
       await waitFor(() => {
@@ -1396,17 +1409,21 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
         }
       });
 
-      // 3. User adds Fee C on top of remote state
-      const descInput = screen.getByPlaceholderText('ชื่อรายการ') as HTMLInputElement;
-      const amtInput = screen.getByPlaceholderText('บาท') as HTMLInputElement;
+      // 3. User adds Fee C on top of remote state via modal
+      const editFeeBtn = screen.getByTestId('edit-table-other-fees-room-101-uuid');
+      fireEvent.click(editFeeBtn);
+
+      const descInput = screen.getByPlaceholderText('ชื่อรายการ (เช่น ค่ากุญแจ)') as HTMLInputElement;
+      const amtInput = screen.getByPlaceholderText('จำนวนเงิน') as HTMLInputElement;
       fireEvent.change(descInput, { target: { value: 'Fee C' } });
       fireEvent.change(amtInput, { target: { value: '30.00' } });
 
-      const addFeeBtn = screen.getByTitle('เพิ่มรายการค่าใช้จ่าย');
+      const addFeeBtn = screen.getByTitle('เพิ่มรายการ');
       fireEvent.click(addFeeBtn);
+      fireEvent.click(screen.getByText('บันทึกรายการ'));
 
       await waitFor(() => {
-        expect(screen.getByText('Fee C')).toBeDefined();
+        expect(screen.getByText('+1 รายการ')).toBeDefined();
       });
 
       // Save workspace
@@ -1716,14 +1733,18 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
         expect(screen.getByText('101')).toBeDefined();
       });
 
-      // 1. Enter Fee A and click +
-      const descInput = screen.getByPlaceholderText('ชื่อรายการ') as HTMLInputElement;
-      const amtInput = screen.getByPlaceholderText('บาท') as HTMLInputElement;
+      // 1. Open modal and add Fee A
+      const openModalBtn = screen.getByTestId('open-table-other-fees-room-101-uuid');
+      fireEvent.click(openModalBtn);
+
+      const descInput = screen.getByPlaceholderText('ชื่อรายการ (เช่น ค่ากุญแจ)') as HTMLInputElement;
+      const amtInput = screen.getByPlaceholderText('จำนวนเงิน') as HTMLInputElement;
       fireEvent.change(descInput, { target: { value: 'Fee A' } });
       fireEvent.change(amtInput, { target: { value: '150.00' } });
 
-      const addFeeBtn = screen.getByTitle('เพิ่มรายการค่าใช้จ่าย');
+      const addFeeBtn = screen.getByTitle('เพิ่มรายการ');
       fireEvent.click(addFeeBtn);
+      fireEvent.click(screen.getByText('บันทึกรายการ'));
 
       // 2. User also edits waterCurr to 105
       const waterCurrInput = document.querySelector('input[data-col="waterCurr"]') as HTMLInputElement;
@@ -1821,9 +1842,12 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
         expect(screen.getByText('Fee A')).toBeDefined();
       });
 
-      // 1. Click remove Fee A
+      // 1. Click edit fee to open modal and remove Fee A
+      const openModalBtn = screen.getByTestId('edit-table-other-fees-room-101-uuid');
+      fireEvent.click(openModalBtn);
       const removeBtn = screen.getByTitle('ลบรายการ');
       fireEvent.click(removeBtn);
+      fireEvent.click(screen.getByText('บันทึกรายการ'));
 
       // 2. User types elecCurr = 205
       const elecCurrInput = document.querySelector('input[data-col="elecCurr"]') as HTMLInputElement;
@@ -1921,18 +1945,15 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
         expect(screen.getByText('Existing Fee 2')).toBeDefined();
       });
 
+      const editFeeBtn = screen.getByTestId('edit-table-other-fees-room-101-uuid');
+      fireEvent.click(editFeeBtn);
+
       const removeButtons = screen.getAllByTitle('ลบรายการ') as HTMLButtonElement[];
       expect(removeButtons).toHaveLength(2);
-      const addFeeBtn = screen.getByTitle('เพิ่มรายการค่าใช้จ่าย') as HTMLButtonElement;
-      const waterCurrInput = document.querySelector('input[data-col="waterCurr"]') as HTMLInputElement;
 
-      expect(removeButtons[0].disabled).toBe(false);
-      expect(removeButtons[1].disabled).toBe(false);
-      expect(addFeeBtn.disabled).toBe(false);
-      expect(waterCurrInput.disabled).toBe(false);
-
-      // Remove fee 1 locally
+      // Remove fee 1 locally in modal
       fireEvent.click(removeButtons[0]);
+      fireEvent.click(screen.getByText('บันทึกรายการ'));
 
       // Fee 1 removed from UI
       await waitFor(() => {

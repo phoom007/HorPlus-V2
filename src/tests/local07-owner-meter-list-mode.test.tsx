@@ -949,13 +949,20 @@ describe('HORPLUS LOCAL-07 — Owner Meter List Mode UX Suite (L1 - L28)', () =>
     });
 
     const card101 = screen.getByTestId('meter-list-card-room-101');
-    const descInput = within(card101).getByPlaceholderText('ชื่อรายการ');
-    const amtInput = within(card101).getByPlaceholderText('บาท');
-    const addBtn = within(card101).getByTitle('เพิ่มรายการค่าใช้จ่าย');
+    const openBtn = within(card101).getByTestId('open-other-fees-modal-room-101');
+    fireEvent.click(openBtn);
+
+    expect(screen.getByTestId('meter-other-fees-modal-backdrop')).toBeDefined();
+    const descInput = screen.getByPlaceholderText('ชื่อรายการ (เช่น ค่ากุญแจ)');
+    const amtInput = screen.getByPlaceholderText('จำนวนเงิน');
+    const addBtn = screen.getByTitle('เพิ่มรายการ');
 
     fireEvent.change(descInput, { target: { value: 'ค่าคีย์การ์ด' } });
     fireEvent.change(amtInput, { target: { value: '100' } });
     fireEvent.click(addBtn);
+
+    const saveModalBtn = screen.getByText('บันทึกรายการ');
+    fireEvent.click(saveModalBtn);
 
     expect(within(card101).getByText('ค่าคีย์การ์ด')).toBeDefined();
     expect(within(card101).getByText('100 ฿')).toBeDefined();

@@ -62,10 +62,9 @@ export interface OwnerMeterListCardProps {
   isMutationReady: boolean;
   unlockedElecPrev: { [roomId: string]: boolean };
   unlockedWaterPrev: { [roomId: string]: boolean };
-  flashingCells: { [key: string]: boolean };
-  newFeeInput?: { description: string; amount: string };
   isExpandedBreakdown: boolean;
   quickAddLoadingRoomId: string | null;
+  onOpenOtherFees: (roomId: string) => void;
   onMeterReadingChange: (roomId: string, field: 'waterPrev' | 'waterCurr' | 'elecPrev' | 'elecCurr', value: string) => void;
   onMeterReadingBlur: (roomId: string, field: 'waterPrev' | 'waterCurr' | 'elecPrev' | 'elecCurr') => void;
   onPaste: (roomId: string, field: 'waterPrev' | 'waterCurr' | 'elecPrev' | 'elecCurr' | 'peopleCount' | 'overdueAmount', e: React.ClipboardEvent<HTMLInputElement>) => void;
@@ -74,10 +73,6 @@ export interface OwnerMeterListCardProps {
   onUnlockWaterPrev: (roomId: string) => void;
   onCancelWaterPrev: (roomId: string) => void;
   onPeopleCountChange: (roomId: string, value: string) => void;
-  onFeeDescriptionChange: (roomId: string, description: string) => void;
-  onFeeAmountChange: (roomId: string, amount: string) => void;
-  onAddOtherFee: (roomId: string) => void;
-  onRemoveOtherFee: (roomId: string, feeIdx: number) => void;
   onToggleStatusSwitch: (row: MeterRowState) => void;
   onToggleBreakdown: (roomId: string) => void;
   onSelectTenant: (tenantId: string, roomId?: string) => void;
@@ -101,9 +96,9 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
   unlockedElecPrev,
   unlockedWaterPrev,
   flashingCells,
-  newFeeInput,
   isExpandedBreakdown,
   quickAddLoadingRoomId,
+  onOpenOtherFees,
   onMeterReadingChange,
   onMeterReadingBlur,
   onPaste,
@@ -112,10 +107,6 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
   onUnlockWaterPrev,
   onCancelWaterPrev,
   onPeopleCountChange,
-  onFeeDescriptionChange,
-  onFeeAmountChange,
-  onAddOtherFee,
-  onRemoveOtherFee,
   onToggleStatusSwitch,
   onToggleBreakdown,
   onSelectTenant,
@@ -623,78 +614,52 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
         />
       </div>
 
-      {/* 5. Other Fees Summary & Inline Add */}
+      {/* 5. Other Fees Summary & Edit Action */}
       <div className="flex flex-col gap-1.5 text-xs border-t border-gray-50 pt-1.5">
-        <div className="text-[11px] font-bold text-slate-500">ค่าใช้จ่ายอื่นๆ</div>
-
-        {/* Existing other fees */}
-        {(row.otherFees || []).map((fee, feeIdx) => (
-          <div
-            key={feeIdx}
-            className="flex items-center justify-between gap-1 bg-slate-50 border border-slate-100 rounded-lg px-2 py-0.5 text-[11px] text-slate-600 font-bold"
-          >
-            <span className="truncate max-w-[120px]" title={fee.description}>{fee.description}</span>
-            <div className="flex items-center gap-1.5 shrink-0">
-              <span className="text-indigo-600">
-                {Number(fee.amount).toLocaleString('th-TH', { minimumFractionDigits: Number.isInteger(Number(fee.amount)) ? 0 : 2 })} ฿
-              </span>
-              {!isRowPaid && (
-                <button
-                  type="button"
-                  onClick={() => onRemoveOtherFee(row.roomId, feeIdx)}
-                  className="p-0.5 text-rose-500 hover:text-rose-700 cursor-pointer"
-                  title="ลบรายการ"
-                >
-                  <X className="w-3 h-3" />
-                </button>
+        <div className="flex items-center justify-between">
+          <div className="text-[11px] font-bold text-slate-500">ค่าใช้จ่ายอื่นๆ</div>
+          {!isRowPaid && (
+            <button
+              type="button"
+              data-testid={`open-other-fees-modal-${row.roomId}`}
+              onClick={() => onOpenOtherFees(row.roomId)}
+              className="text-[11px] font-bold text-indigo-600 hover:text-indigo-800 hover:underline transition-all cursor-pointer flex items-center gap-1"
+            >
+              {(row.otherFees || []).length > 0 ? (
+                <>
+                  <Pencil className="w-3 h-3" />
+                  <span>แก้ไข</span>
+                </>
+              ) : (
+                <>
+                  <Plus className="w-3 h-3" />
+                  <span>เพิ่มค่าใช้จ่าย</span>
+                </>
               )}
-            </div>
-          </div>
-        ))}
-
-        {/* Inline Add Other Fee */}
-        <div className="flex items-center gap-1 mt-0.5">
-          <input
-            type="text"
-            placeholder="ชื่อรายการ"
-            disabled={isRowPaid}
-            value={newFeeInput?.description ?? ''}
-            onChange={(e) => onFeeDescriptionChange(row.roomId, e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !isRowPaid) {
-                onAddOtherFee(row.roomId);
-              }
-            }}
-            className="flex-1 min-w-0 px-2 py-1 text-[10px] border border-gray-200 rounded-lg bg-white text-slate-800 font-medium focus:outline-indigo-500 disabled:bg-slate-50 disabled:text-slate-400"
-          />
-          <input
-            type="text"
-            inputMode="decimal"
-            placeholder="บาท"
-            disabled={isRowPaid}
-            value={newFeeInput?.amount ?? ''}
-            onChange={(e) => onFeeAmountChange(row.roomId, e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !isRowPaid) {
-                onAddOtherFee(row.roomId);
-              }
-            }}
-            className="w-14 px-1.5 py-1 text-[10px] border border-gray-200 rounded-lg bg-white text-slate-800 text-center font-medium focus:outline-indigo-500 disabled:bg-slate-50 disabled:text-slate-400"
-          />
-          <button
-            type="button"
-            onClick={() => onAddOtherFee(row.roomId)}
-            disabled={isRowPaid}
-            className={`p-1 rounded-lg transition-all flex items-center justify-center shrink-0 border ${
-              isRowPaid
-                ? 'bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed opacity-50'
-                : 'bg-indigo-50 hover:bg-indigo-100 text-indigo-600 border-indigo-100/50 cursor-pointer'
-            }`}
-            title="เพิ่มรายการค่าใช้จ่าย"
-          >
-            <Plus className="w-3.5 h-3.5" />
-          </button>
+            </button>
+          )}
         </div>
+
+        {/* Existing other fees list */}
+        {(row.otherFees || []).length > 0 ? (
+          <div className="flex flex-col gap-1">
+            {(row.otherFees || []).map((fee, feeIdx) => (
+              <div
+                key={feeIdx}
+                className="flex items-center justify-between gap-1 bg-slate-50 border border-slate-100 rounded-lg px-2 py-0.5 text-[11px] text-slate-600 font-bold"
+              >
+                <span className="truncate max-w-[150px]" title={fee.description}>{fee.description}</span>
+                <span className="text-indigo-600 shrink-0">
+                  {Number(fee.amount).toLocaleString('th-TH', { minimumFractionDigits: Number.isInteger(Number(fee.amount)) ? 0 : 2 })} ฿
+                </span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="text-[11px] text-slate-400 font-medium py-0.5">
+            - ไม่มีรายการ -
+          </div>
+        )}
       </div>
 
       {/* 6. Payable / Total & Financial Breakdown */}

@@ -576,16 +576,9 @@ describe('LOCAL-07 Source-Reviewed Meter Workspace Correction Suite', () => {
       expect(screen.getByText('ค่าคีย์การ์ด')).toBeDefined();
       expect(screen.getByText('100 ฿')).toBeDefined();
 
-      // Delete button is omitted on paid row
-      expect(row104?.querySelector('button[title="ลบรายการ"]')).toBeNull();
-
-      // Add fee input/button disabled on paid row
-      const feeDescInput = row104?.querySelector('input[placeholder="ชื่อรายการ"]') as HTMLInputElement;
-      const feeAmtInput = row104?.querySelector('input[placeholder="บาท"]') as HTMLInputElement;
-      const addFeeBtn = row104?.querySelector('button[title="เพิ่มรายการค่าใช้จ่าย"]') as HTMLButtonElement;
-      expect(feeDescInput.disabled).toBe(true);
-      expect(feeAmtInput.disabled).toBe(true);
-      expect(addFeeBtn.disabled).toBe(true);
+      // On paid row, edit button / open button is omitted / not rendered
+      expect(row104?.querySelector('button[data-testid^="edit-table-other-fees-"]')).toBeNull();
+      expect(row104?.querySelector('button[data-testid^="open-table-other-fees-"]')).toBeNull();
     });
 
     it('Proof 2D: Tenant direct-open callback chain invokes onSelectTenant with tenantId and roomId', async () => {
@@ -634,14 +627,8 @@ describe('LOCAL-07 Source-Reviewed Meter Workspace Correction Suite', () => {
         expect(container.querySelector('#room-row-r1')).toBeTruthy();
       });
 
-      const row101 = container.querySelector('#room-row-r1');
-      expect(row101).toBeTruthy();
-
-      const tenantBtn = row101?.querySelector('td:last-child button') as HTMLButtonElement;
-      expect(tenantBtn).toBeTruthy();
+      const tenantBtn = screen.getByText('สมชาย ใจดี');
       fireEvent.click(tenantBtn);
-
-      // Verifies callback receives exact tenant ID ('t1') and room ID ('r1')
       expect(handleSelectTenant).toHaveBeenCalledWith('t1', 'r1');
     });
 
@@ -652,7 +639,14 @@ describe('LOCAL-07 Source-Reviewed Meter Workspace Correction Suite', () => {
             success: true,
             data: {
               cycle: { id: 'cycle-aug', cycleCode: '2026-08', isCurrent: true },
-              rooms: mockRooms.map(r => ({ roomId: r.id, roomNumber: r.roomNumber, billingSource: 'MONTHLY_CONTRACT', rentAmount: 4000 })),
+              rooms: mockRooms.map((r) => ({
+                roomId: r.id,
+                roomNumber: r.roomNumber,
+                tenantId: 't1',
+                tenantName: 'สมชาย ใจดี',
+                billingSource: 'MONTHLY_CONTRACT',
+                rentAmount: 4000,
+              })),
               rateSnapshot: { waterBillingType: 'per_unit', waterRate: '18.00', electricityBillingType: 'per_unit', electricityRate: '7.00' },
             },
           };
@@ -660,7 +654,7 @@ describe('LOCAL-07 Source-Reviewed Meter Workspace Correction Suite', () => {
         if (url.includes('/meters/workspace')) {
           return {
             success: true,
-            data: mockRooms.map(r => ({
+            data: mockRooms.map((r) => ({
               roomId: r.id,
               roomNumber: r.roomNumber,
               waterPrev: '100',
@@ -700,27 +694,32 @@ describe('LOCAL-07 Source-Reviewed Meter Workspace Correction Suite', () => {
         expect(container.querySelector('#room-row-r1')).toBeTruthy();
       });
 
-      const row101 = container.querySelector('#room-row-r1');
-      const descInput = row101?.querySelector('input[placeholder="ชื่อรายการ"]') as HTMLInputElement;
-      const amtInput = row101?.querySelector('input[placeholder="บาท"]') as HTMLInputElement;
-      const addFeeBtn = row101?.querySelector('button[title="เพิ่มรายการค่าใช้จ่าย"]') as HTMLButtonElement;
+      const openBtn = screen.getByTestId('open-table-other-fees-r1');
+      fireEvent.click(openBtn);
+
+      const descInput = screen.getByPlaceholderText('ชื่อรายการ (เช่น ค่ากุญแจ)') as HTMLInputElement;
+      const amtInput = screen.getByPlaceholderText('จำนวนเงิน') as HTMLInputElement;
+      const addFeeBtn = screen.getByTitle('เพิ่มรายการ') as HTMLButtonElement;
 
       // 1. Description only without amount -> remains draft (not added)
       fireEvent.change(descInput, { target: { value: 'ค่าบริการพิเศษ' } });
       fireEvent.change(amtInput, { target: { value: '' } });
       fireEvent.click(addFeeBtn);
-      expect(screen.queryByText('ค่าบริการพิเศษ')).toBeNull();
+      expect(screen.queryByTestId('modal-fee-item-0')).toBeNull();
 
       // 2. Amount only without description -> remains draft
       fireEvent.change(descInput, { target: { value: '' } });
       fireEvent.change(amtInput, { target: { value: '150.00' } });
       fireEvent.click(addFeeBtn);
-      expect(screen.queryByText('150 ฿')).toBeNull();
+      expect(screen.queryByTestId('modal-fee-item-0')).toBeNull();
 
       // 3. Valid normal amount -> successfully added to local state
       fireEvent.change(descInput, { target: { value: 'ค่าบริการพิเศษ' } });
       fireEvent.change(amtInput, { target: { value: '150.00' } });
       fireEvent.click(addFeeBtn);
+
+      expect(screen.getByTestId('modal-fee-item-0')).toBeDefined();
+      fireEvent.click(screen.getByText('บันทึกรายการ'));
 
       await waitFor(() => {
         expect(screen.getByText('ค่าบริการพิเศษ')).toBeDefined();

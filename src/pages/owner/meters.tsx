@@ -41,6 +41,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { queryKeys, STALE_TIMES } from '../../lib/queryClient';
 import { meterDraftStore, deriveMeterDraftPatches } from '../../lib/meterDraftStore';
 import { OwnerMeterListCard } from '../../components/meters/OwnerMeterListCard';
+import { MeterOtherFeesModal } from '../../components/meters/MeterOtherFeesModal';
 import { calculateMeterRowPreview, calculateMeterUsageUnits, RoomPreviewContext, parseScaled2, formatScaled2, formatMoneyDisplay } from '../../utils/meterBillingCalculator';
 import { isCycleInRollingThreeMonthWindow, toBangkokDateString, normalizeBangkokDate, formatShortThaiBuddhistDate } from '../../utils/calendarDate';
 import { Room, Building, QuickAddRoomContext, Bill, BillItem, Tenant, Contract, BillStatus, calculateRoomRentForCycle } from '../../types';
@@ -890,28 +891,34 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     !isPullCompleted
   );
 
-  // Controlled input state for adding other fees per room
-  const [newFeeInputs, setNewFeeInputs] = useState<Record<string, { description: string; amount: string }>>({});
+  // Active Room ID for Other Fees Modal Editor (shared between Table and List modes)
+  const [activeFeeModalRoomId, setActiveFeeModalRoomId] = useState<string | null>(null);
 
-  const handleFeeDescriptionChange = (roomId: string, desc: string) => {
-    setNewFeeInputs(prev => ({
-      ...prev,
-      [roomId]: {
-        description: desc,
-        amount: prev[roomId]?.amount ?? '',
-      }
-    }));
-  };
+  const handleSaveOtherFeesModal = (roomId: string, nextFees: Array<{ description: string; amount: string }>) => {
+    const currentRow = meterRowsRef.current.find(r => r.roomId === roomId) || meterRows.find(r => r.roomId === roomId);
+    if (!currentRow) return;
 
-  const handleFeeAmountChange = (roomId: string, rawAmt: string) => {
-    const sanitized = sanitizeMoneyTyping(rawAmt);
-    setNewFeeInputs(prev => ({
-      ...prev,
-      [roomId]: {
-        description: prev[roomId]?.description ?? '',
-        amount: sanitized,
-      }
-    }));
+    const prevFees = currentRow.otherFees || [];
+    const isSame = prevFees.length === nextFees.length && prevFees.every((pf, i) => {
+      const nf = nextFees[i];
+      return nf && pf.description === nf.description && String(pf.amount) === String(nf.amount);
+    });
+
+    if (isSame) {
+      setActiveFeeModalRoomId(null);
+      return;
+    }
+
+    const nextRows = meterRows.map(r => r.roomId === roomId ? { ...r, otherFees: nextFees } : r);
+    setMeterRows(nextRows);
+    pushHistory(nextRows);
+
+    if (currentDormId && selectedBillingCycleId && originalRowsRef.current) {
+      const patches = deriveMeterDraftPatches(nextRows, originalRowsRef.current);
+      meterDraftStore.setDraft(currentDormId, selectedBillingCycleId, patches);
+    }
+
+    setActiveFeeModalRoomId(null);
   };
 
   const sanitizeMeterReadingTyping = (val: string): string => {
@@ -947,62 +954,6 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       cleaned = `${intPart}.${fracPart}`;
     }
     return cleaned;
-  };
-
-  const handleAddOtherFee = (roomId: string) => {
-    const input = newFeeInputs[roomId];
-    const cleanDesc = (input?.description || '').trim();
-    const amtStr = (input?.amount || '').trim();
-
-    if (!cleanDesc) {
-      showToast('กรุณาระบุชื่อรายการค่าใช้จ่าย');
-      return;
-    }
-    if (!/^\d+(\.\d{1,2})?$/.test(amtStr) || amtStr === '0' || amtStr === '0.0' || amtStr === '0.00') {
-      showToast('กรุณาระบุจำนวนเงินเป็นตัวเลขที่มากกว่า 0');
-      return;
-    }
-
-    const currentRow = meterRowsRef.current.find(r => r.roomId === roomId) || meterRows.find(r => r.roomId === roomId);
-    if (!currentRow) return;
-
-    const prevFees = currentRow.otherFees || [];
-    const formattedAmt = String(amtStr);
-    const nextFees = [...prevFees, { description: cleanDesc, amount: formattedAmt }];
-
-    // 1. Update React meterRows state
-    setMeterRows(prev => prev.map(r => r.roomId === roomId ? { ...r, otherFees: nextFees } : r));
-
-    // 2. Clear input fields
-    setNewFeeInputs(prev => ({
-      ...prev,
-      [roomId]: { description: '', amount: '' },
-    }));
-
-    // 3. Update localStorage drafts
-    if (currentDormId && selectedBillingCycleId && originalRowsRef.current) {
-      const latestRows = meterRowsRef.current.map(r => r.roomId === roomId ? { ...r, otherFees: nextFees } : r);
-      const patches = deriveMeterDraftPatches(latestRows, originalRowsRef.current);
-      meterDraftStore.setDraft(currentDormId, selectedBillingCycleId, patches);
-    }
-  };
-
-  const handleRemoveOtherFee = (roomId: string, feeIdx: number) => {
-    const currentRow = meterRowsRef.current.find(r => r.roomId === roomId) || meterRows.find(r => r.roomId === roomId);
-    if (!currentRow) return;
-
-    const prevFees = currentRow.otherFees || [];
-    const nextFees = prevFees.filter((_, idx) => idx !== feeIdx);
-
-    // 1. Update React meterRows state
-    setMeterRows(prev => prev.map(r => r.roomId === roomId ? { ...r, otherFees: nextFees } : r));
-
-    // 2. Update localStorage drafts
-    if (currentDormId && selectedBillingCycleId && originalRowsRef.current) {
-      const latestRows = meterRowsRef.current.map(r => r.roomId === roomId ? { ...r, otherFees: nextFees } : r);
-      const patches = deriveMeterDraftPatches(latestRows, originalRowsRef.current);
-      meterDraftStore.setDraft(currentDormId, selectedBillingCycleId, patches);
-    }
   };
 
   const getCycleNewReadings = (roomId: string, cycleId: string): { waterCurr: number, elecCurr: number } => {
@@ -1751,6 +1702,10 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   // Global Key handler for Enter to save, Ctrl+Z for Undo, Ctrl+Shift+Z / Ctrl+Y for Redo
   useEffect(() => {
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      if (activeFeeModalRoomId || isQuickFillOpen || quickAddModalOpen || isLineModalOpen) {
+        return;
+      }
+
       const isCtrlOrMeta = e.ctrlKey || e.metaKey;
       const active = document.activeElement;
       const activeTagName = active ? active.tagName.toUpperCase() : '';
@@ -1789,7 +1744,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     return () => {
       window.removeEventListener('keydown', handleGlobalKeyDown);
     };
-  }, [isDirty, isSaving, meterRows, bills, selectedCycle]);
+  }, [isDirty, isSaving, meterRows, bills, selectedCycle, activeFeeModalRoomId, isQuickFillOpen, quickAddModalOpen, isLineModalOpen]);
 
   useEffect(() => {
     if (isLineModalOpen) {
@@ -2120,30 +2075,6 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     }
     if (lowerReadingError) {
       showToast('เลขอ่านมิเตอร์ใหม่ต้องไม่น้อยกว่าเลขอ่านครั้งก่อน', 'error');
-      return;
-    }
-
-    // Validate other fees fields
-    let validationFailed = false;
-    for (const row of meterRows) {
-      const descEl = document.getElementById(`fee-desc-${row.roomId}`) as HTMLInputElement | null;
-      const amtEl = document.getElementById(`fee-amt-${row.roomId}`) as HTMLInputElement | null;
-      if (descEl && amtEl) {
-        const desc = descEl.value.trim();
-        const amtVal = amtEl.value.trim();
-        if ((desc !== '' && amtVal === '') || (desc === '' && amtVal !== '')) {
-          alert(`กรุณากรอกข้อมูล "ชื่อรายการ" และ "จำนวนเงิน (บาท)" ของ "ค่าใช้จ่ายอื่นๆ" ให้ครบถ้วนสำหรับห้อง ${row.roomNumber}`);
-          if (desc === '') {
-            descEl.focus();
-          } else {
-            amtEl.focus();
-          }
-          validationFailed = true;
-          break;
-        }
-      }
-    }
-    if (validationFailed) {
       return;
     }
 
@@ -2716,70 +2647,47 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
 
                     {/* Custom Other Fees Column */}
                     <td className="p-4">
-                      <div className="flex flex-col gap-1.5 min-w-[150px]">
-                        {/* List of existing other fees */}
-                        {(row.otherFees || []).map((fee, feeIdx) => (
-                          <div key={feeIdx} className="flex items-center justify-between gap-1 bg-slate-50 border border-slate-100 rounded-lg px-2 py-0.5 text-[10px] text-slate-600 font-bold">
-                            <span className="truncate max-w-[80px]" title={fee.description}>{fee.description}</span>
-                            <div className="flex items-center gap-1 shrink-0">
-                              <span className="text-indigo-600">{formatOtherFeeAmountDisplay(fee.amount)}</span>
-                              {!isRowPaid && (
-                                <button
-                                  type="button"
-                                  onClick={() => handleRemoveOtherFee(row.roomId, feeIdx)}
-                                  className="p-0.5 text-rose-500 hover:text-rose-700 cursor-pointer"
-                                  title="ลบรายการ"
-                                >
-                                  <X className="w-3 h-3" />
-                                </button>
-                              )}
-                            </div>
+                      <div className="flex flex-col gap-1 min-w-[140px]">
+                        {(row.otherFees || []).length > 0 ? (
+                          <div className="flex flex-col gap-0.5">
+                            {(row.otherFees || []).slice(0, 2).map((fee, feeIdx) => (
+                              <div key={feeIdx} className="flex items-center justify-between gap-1 text-[10px] text-slate-600 font-bold bg-slate-50 border border-slate-100 rounded-md px-1.5 py-0.5">
+                                <span className="truncate max-w-[80px]" title={fee.description}>{fee.description}</span>
+                                <span className="text-indigo-600 shrink-0">{formatOtherFeeAmountDisplay(fee.amount)}</span>
+                              </div>
+                            ))}
+                            {(row.otherFees || []).length > 2 && (
+                              <span className="text-[10px] text-slate-400 font-semibold pl-0.5">
+                                +{(row.otherFees || []).length - 2} รายการ
+                              </span>
+                            )}
+                            {!isRowPaid && (
+                              <button
+                                type="button"
+                                data-testid={`edit-table-other-fees-${row.roomId}`}
+                                onClick={() => setActiveFeeModalRoomId(row.roomId)}
+                                className="text-[10px] text-indigo-600 hover:text-indigo-800 hover:underline font-bold mt-0.5 inline-flex items-center gap-1 cursor-pointer w-fit"
+                              >
+                                <Pencil className="w-2.5 h-2.5" />
+                                <span>แก้ไข</span>
+                              </button>
+                            )}
                           </div>
-                        ))}
-
-                        {/* Form to add a new other fee inline (visible even if PAID with disabled controls) */}
-                        <div className="flex items-center gap-1 mt-1">
-                          <input
-                            type="text"
-                            placeholder="ชื่อรายการ"
-                            disabled={isRowPaid}
-                            value={newFeeInputs[row.roomId]?.description ?? ''}
-                            onChange={(e) => handleFeeDescriptionChange(row.roomId, e.target.value)}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter' && !isRowPaid) {
-                                handleAddOtherFee(row.roomId);
-                              }
-                            }}
-                            className="w-16 px-1.5 py-1 text-[10px] border border-gray-200 rounded-lg bg-white text-slate-800 font-medium focus:outline-indigo-500 disabled:bg-slate-50 disabled:text-slate-400"
-                          />
-                          <input
-                            type="text"
-                            inputMode="decimal"
-                            placeholder="บาท"
-                            disabled={isRowPaid}
-                            value={newFeeInputs[row.roomId]?.amount ?? ''}
-                            onChange={(e) => handleFeeAmountChange(row.roomId, e.target.value)}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter' && !isRowPaid) {
-                                handleAddOtherFee(row.roomId);
-                              }
-                            }}
-                            className="w-12 px-1.5 py-1 text-[10px] border border-gray-200 rounded-lg bg-white text-slate-800 text-center font-medium focus:outline-indigo-500 disabled:bg-slate-50 disabled:text-slate-400"
-                          />
-                          <button
-                            type="button"
-                            onClick={() => handleAddOtherFee(row.roomId)}
-                            disabled={isRowPaid}
-                            className={`p-1 rounded-lg transition-all flex items-center justify-center shrink-0 border ${
-                              isRowPaid
-                                ? 'bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed opacity-50'
-                                : 'bg-indigo-50 hover:bg-indigo-100 text-indigo-600 border-indigo-100/50 cursor-pointer'
-                            }`}
-                            title="เพิ่มรายการค่าใช้จ่าย"
-                          >
-                            <Plus className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
+                        ) : (
+                          !isRowPaid ? (
+                            <button
+                              type="button"
+                              data-testid={`open-table-other-fees-${row.roomId}`}
+                              onClick={() => setActiveFeeModalRoomId(row.roomId)}
+                              className="text-xs text-indigo-600 hover:text-indigo-800 hover:underline font-bold transition-all cursor-pointer inline-flex items-center gap-1"
+                            >
+                              <Plus className="w-3 h-3" />
+                              <span>เพิ่มค่าใช้จ่าย</span>
+                            </button>
+                          ) : (
+                            <span className="text-xs text-slate-400 font-bold">-</span>
+                          )
+                        )}
                       </div>
                     </td>
 
@@ -3175,9 +3083,9 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                 unlockedElecPrev={unlockedElecPrev}
                 unlockedWaterPrev={unlockedWaterPrev}
                 flashingCells={flashingCells}
-                newFeeInput={newFeeInputs[row.roomId]}
                 isExpandedBreakdown={Boolean(expandedBreakdowns[row.roomId])}
                 quickAddLoadingRoomId={quickAddLoadingRoomId}
+                onOpenOtherFees={(targetRoomId) => setActiveFeeModalRoomId(targetRoomId)}
                 onMeterReadingChange={handleMeterReadingChange}
                 onMeterReadingBlur={handleMeterReadingBlur}
                 onPaste={handlePaste}
@@ -3194,10 +3102,6 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                   setUnlockedWaterPrev((prev) => ({ ...prev, [roomId]: false }));
                 }}
                 onPeopleCountChange={handlePeopleCountChange}
-                onFeeDescriptionChange={handleFeeDescriptionChange}
-                onFeeAmountChange={handleFeeAmountChange}
-                onAddOtherFee={handleAddOtherFee}
-                onRemoveOtherFee={handleRemoveOtherFee}
                 onToggleStatusSwitch={handleToggleStatusSwitch}
                 onToggleBreakdown={(roomId) => setExpandedBreakdowns(prev => ({ ...prev, [roomId]: !prev[roomId] }))}
                 onSelectTenant={onSelectTenant}
@@ -3463,6 +3367,24 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
           ]);
         }}
       />
+
+      {/* Shared Other Fees Modal Editor (Table and List modes) */}
+      {activeFeeModalRoomId && (() => {
+        const targetRow = meterRows.find(r => r.roomId === activeFeeModalRoomId);
+        if (!targetRow) return null;
+        const isRowPaid = targetRow.isPaid || targetRow.billStatus === 'paid';
+        return (
+          <MeterOtherFeesModal
+            isOpen={Boolean(activeFeeModalRoomId)}
+            roomId={targetRow.roomId}
+            roomNumber={targetRow.roomNumber}
+            initialFees={targetRow.otherFees || []}
+            isLocked={isRowPaid}
+            onClose={() => setActiveFeeModalRoomId(null)}
+            onSave={(nextFees) => handleSaveOtherFeesModal(targetRow.roomId, nextFees)}
+          />
+        );
+      })()}
     </div>
   );
 };
