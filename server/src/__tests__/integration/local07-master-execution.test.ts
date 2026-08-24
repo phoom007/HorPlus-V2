@@ -6355,6 +6355,279 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
         const newYearEdgeUtc = new Date('2026-12-31T17:30:00.000Z');
         expect(toBangkokDateString(newYearEdgeUtc).slice(0, 7)).toBe('2027-01');
       });
+
+      it('13. REAL GET /api/v1/billing-cycles guarantees missing op+1 (October) on September activation with no pre-seed false positive', async () => {
+        const ownerAuth = await createTestAuthSession(testUser1.id);
+        const isoDorm = await prisma.dormitory.create({
+          data: {
+            name: 'Isolated Guarantee Dormitory',
+            type: 'apartment',
+            status: 'active',
+            createdByUserId: testUser1.id,
+            billingSettings: {
+              create: {
+                dueDay: 5,
+                billingDay: 25,
+                waterBillingType: 'per_unit',
+                waterRate: '18.00',
+                electricityBillingType: 'per_unit',
+                electricityRate: '8.00',
+              },
+            },
+          },
+        });
+
+        const ownerRole = await prisma.role.create({
+          data: {
+            dormitoryId: isoDorm.id,
+            name: 'Owner',
+            code: 'owner',
+            permissions: { '*': ['*'] },
+            isSystem: true,
+          },
+        });
+
+        await prisma.dormitoryMember.create({
+          data: {
+            dormitoryId: isoDorm.id,
+            userId: testUser1.id,
+            roleId: ownerRole.id,
+            status: 'active',
+            membershipOrigin: 'GOOGLE_BOOTSTRAP',
+          },
+        });
+
+        const isoBuilding = await prisma.building.create({
+          data: {
+            dormitoryId: isoDorm.id,
+            name: 'Building Iso',
+            code: 'ISO',
+          },
+        });
+
+        const isoRoom = await prisma.room.create({
+          data: {
+            dormitoryId: isoDorm.id,
+            buildingId: isoBuilding.id,
+            roomNumber: '101',
+            normalizedRoomNumber: '101',
+            roomType: 'standard',
+            floor: 1,
+            monthlyRent: '4000.00',
+            status: 'occupied',
+          },
+        });
+
+        // Initialize exactly Jul, Aug, Sep cycles
+        await cycleService.createBillingCycle(isoDorm.id, {
+          cycleCode: '2026-07',
+          name: 'กรกฎาคม 2026',
+          periodStart: '2026-07-01',
+          periodEnd: '2026-07-31',
+          billingDate: '2026-07-25',
+          dueDate: '2026-08-05',
+        });
+        await cycleService.createBillingCycle(isoDorm.id, {
+          cycleCode: '2026-08',
+          name: 'สิงหาคม 2026',
+          periodStart: '2026-08-01',
+          periodEnd: '2026-08-31',
+          billingDate: '2026-08-25',
+          dueDate: '2026-09-05',
+        });
+        const sepCycle = await cycleService.createBillingCycle(isoDorm.id, {
+          cycleCode: '2026-09',
+          name: 'กันยายน 2026',
+          periodStart: '2026-09-01',
+          periodEnd: '2026-09-30',
+          billingDate: '2026-09-25',
+          dueDate: '2026-10-05',
+        });
+
+        // Strict PROOF of NO pre-seed false positive: October DOES NOT exist in DB
+        const preOct = await prisma.billingCycle.findFirst({
+          where: { dormitoryId: isoDorm.id, cycleCode: '2026-10' },
+        });
+        expect(preOct).toBeNull();
+
+        // Activate September via legitimate MONTHLY_UTILITY bill
+        const sepBill = await prisma.bill.create({
+          data: {
+            dormitoryId: isoDorm.id,
+            billingCycleId: sepCycle.cycle.id,
+            roomId: isoRoom.id,
+            billNumber: `BILL-ISO-SEP-${Date.now()}`,
+            billKind: 'MONTHLY_UTILITY',
+            billingDate: new Date('2026-09-25'),
+            dueDate: new Date('2026-10-05'),
+            subtotal: '4140.00',
+            totalAmount: '4140.00',
+            paidAmount: '0.00',
+            outstandingAmount: '4140.00',
+            status: 'unpaid',
+          },
+        });
+
+        // Call the REAL GET /api/v1/billing-cycles route (DO NOT call ensureRollingBillingCycles manually)
+        const getRes = await request(app)
+          .get('/api/v1/billing-cycles')
+          .set('Cookie', ownerAuth.cookies)
+          .set('x-dormitory-id', isoDorm.id);
+
+        expect(getRes.status).toBe(200);
+        expect(getRes.body.operationalCycleCode).toBe('2026-09');
+
+        const resCycleCodes = getRes.body.data.map((c: any) => c.cycleCode);
+        expect(resCycleCodes).toContain('2026-10');
+
+        // Verify in DB that October now truly exists with rate snapshot
+        const postOct = await prisma.billingCycle.findFirst({
+          where: { dormitoryId: isoDorm.id, cycleCode: '2026-10' },
+          include: { rateSnapshot: true },
+        });
+        expect(postOct).not.toBeNull();
+        expect(postOct?.rateSnapshot).not.toBeNull();
+
+        // Prove October creation ALONE does NOT activate October (still September)
+        const opAfterOctCreated = await currentCycleResolverService.resolveOperationalBillingCycle(isoDorm.id);
+        expect(opAfterOctCreated.cycleCode).toBe('2026-09');
+
+        // True October activation moves default to October and automatically creates November
+        const preNov = await prisma.billingCycle.findFirst({
+          where: { dormitoryId: isoDorm.id, cycleCode: '2026-11' },
+        });
+        expect(preNov).toBeNull();
+
+        const octBill = await prisma.bill.create({
+          data: {
+            dormitoryId: isoDorm.id,
+            billingCycleId: postOct!.id,
+            roomId: isoRoom.id,
+            billNumber: `BILL-ISO-OCT-${Date.now()}`,
+            billKind: 'MONTHLY_UTILITY',
+            billingDate: new Date('2026-10-25'),
+            dueDate: new Date('2026-11-05'),
+            subtotal: '4200.00',
+            totalAmount: '4200.00',
+            paidAmount: '0.00',
+            outstandingAmount: '4200.00',
+            status: 'unpaid',
+          },
+        });
+
+        const getResOct = await request(app)
+          .get('/api/v1/billing-cycles')
+          .set('Cookie', ownerAuth.cookies)
+          .set('x-dormitory-id', isoDorm.id);
+
+        expect(getResOct.status).toBe(200);
+        expect(getResOct.body.operationalCycleCode).toBe('2026-10');
+        const resCycleCodesOct = getResOct.body.data.map((c: any) => c.cycleCode);
+        expect(resCycleCodesOct).toContain('2026-11');
+
+        // Cleanup isolated entities
+        await prisma.bill.deleteMany({ where: { dormitoryId: isoDorm.id } });
+        await prisma.billingRateSnapshot.deleteMany({ where: { dormitoryId: isoDorm.id } });
+        await prisma.billingCycle.deleteMany({ where: { dormitoryId: isoDorm.id } });
+        await prisma.room.deleteMany({ where: { dormitoryId: isoDorm.id } });
+        await prisma.building.deleteMany({ where: { dormitoryId: isoDorm.id } });
+        await prisma.dormitoryBillingSettings.deleteMany({ where: { dormitoryId: isoDorm.id } });
+        await prisma.dormitoryMember.deleteMany({ where: { dormitoryId: isoDorm.id } });
+        await prisma.role.deleteMany({ where: { dormitoryId: isoDorm.id } });
+        await prisma.dormitory.delete({ where: { id: isoDorm.id } });
+      });
+
+      it('14. Cost optimization: complete operational window [op-1, op, op+1] skips redundant ensureRollingBillingCycles', async () => {
+        const ownerAuth = await createTestAuthSession(testUser1.id);
+        const isoDorm = await prisma.dormitory.create({
+          data: {
+            name: 'Cost Opt Dormitory',
+            type: 'apartment',
+            status: 'active',
+            createdByUserId: testUser1.id,
+            billingSettings: {
+              create: {
+                dueDay: 5,
+                billingDay: 25,
+                waterBillingType: 'per_unit',
+                waterRate: '18.00',
+                electricityBillingType: 'per_unit',
+                electricityRate: '8.00',
+              },
+            },
+          },
+        });
+
+        const ownerRole = await prisma.role.create({
+          data: {
+            dormitoryId: isoDorm.id,
+            name: 'Owner',
+            code: 'owner',
+            permissions: { '*': ['*'] },
+            isSystem: true,
+          },
+        });
+
+        await prisma.dormitoryMember.create({
+          data: {
+            dormitoryId: isoDorm.id,
+            userId: testUser1.id,
+            roleId: ownerRole.id,
+            status: 'active',
+            membershipOrigin: 'GOOGLE_BOOTSTRAP',
+          },
+        });
+
+        // Initialize complete operational window for August 2026: 2026-07, 2026-08, 2026-09
+        await cycleService.createBillingCycle(isoDorm.id, {
+          cycleCode: '2026-07',
+          name: 'กรกฎาคม 2026',
+          periodStart: '2026-07-01',
+          periodEnd: '2026-07-31',
+          billingDate: '2026-07-25',
+          dueDate: '2026-08-05',
+        });
+        await cycleService.createBillingCycle(isoDorm.id, {
+          cycleCode: '2026-08',
+          name: 'สิงหาคม 2026',
+          periodStart: '2026-08-01',
+          periodEnd: '2026-08-31',
+          billingDate: '2026-08-25',
+          dueDate: '2026-09-05',
+        });
+        await cycleService.createBillingCycle(isoDorm.id, {
+          cycleCode: '2026-09',
+          name: 'กันยายน 2026',
+          periodStart: '2026-09-01',
+          periodEnd: '2026-09-30',
+          billingDate: '2026-09-25',
+          dueDate: '2026-10-05',
+        });
+
+        // Count BillingCycles in DB before GET
+        const countBefore = await prisma.billingCycle.count({ where: { dormitoryId: isoDorm.id } });
+        expect(countBefore).toBe(3);
+
+        const res = await request(app)
+          .get('/api/v1/billing-cycles')
+          .set('Cookie', ownerAuth.cookies)
+          .set('x-dormitory-id', isoDorm.id);
+
+        expect(res.status).toBe(200);
+        expect(res.body.operationalCycleCode).toBe('2026-08');
+
+        // DB count remains exactly 3 — no redundant writes
+        const countAfter = await prisma.billingCycle.count({ where: { dormitoryId: isoDorm.id } });
+        expect(countAfter).toBe(3);
+
+        // Cleanup
+        await prisma.billingRateSnapshot.deleteMany({ where: { dormitoryId: isoDorm.id } });
+        await prisma.billingCycle.deleteMany({ where: { dormitoryId: isoDorm.id } });
+        await prisma.dormitoryBillingSettings.deleteMany({ where: { dormitoryId: isoDorm.id } });
+        await prisma.dormitoryMember.deleteMany({ where: { dormitoryId: isoDorm.id } });
+        await prisma.role.deleteMany({ where: { dormitoryId: isoDorm.id } });
+        await prisma.dormitory.delete({ where: { id: isoDorm.id } });
+      });
     });
   });
 });

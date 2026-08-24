@@ -15,6 +15,7 @@ import {
   CreateBillingCycleSchema,
   UpdateBillingCycleSchema,
 } from '../schemas/billing-meter.schemas.js';
+import { getAdjacentCycleCode } from '../utils/calendar-date.util.js';
 
 const decimalMoneyStringSchema = z
   .string({ required_error: 'Monetary amount must be a decimal string' })
@@ -126,7 +127,15 @@ export function createBillingCycleRouter(
         currentCycleResolverService.resolveOperationalBillingCycle(dormId),
       ]);
 
-      if (result.total === 0 || !operational.billingCycleId) {
+      const opCode = operational.cycleCode;
+      const requiredCodes = opCode
+        ? [getAdjacentCycleCode(opCode, -1), opCode, getAdjacentCycleCode(opCode, 1)]
+        : [];
+
+      const existingCodes = new Set(result.items.map((c) => c.cycleCode));
+      const hasMissingOperationalCode = requiredCodes.some((code) => !existingCodes.has(code));
+
+      if (result.total === 0 || !operational.billingCycleId || hasMissingOperationalCode) {
         await billingCycleService.ensureRollingBillingCycles(dormId);
         [result, operational] = await Promise.all([
           billingCycleService.getBillingCycles(dormId, query),

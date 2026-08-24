@@ -157,3 +157,24 @@ export function calculateInitialTrialEnd(trialStartedAt: Date): Date {
 export function calculateMaximumTrialEnd(trialStartedAt: Date): Date {
   return addCalendarMonthsClamped(trialStartedAt, 3);
 }
+
+/**
+ * Calculates adjacent cycle code (YYYY-MM) offset by a given number of months.
+ */
+export function getAdjacentCycleCode(code: string, offsetMonths: number): string {
+  if (!code || typeof code !== 'string') return '';
+  const match = /^(\d{4})-(\d{2})$/.exec(code);
+  if (!match) return code;
+  let y = parseInt(match[1], 10);
+  let m = parseInt(match[2], 10) + offsetMonths;
+  if (isNaN(y) || isNaN(m)) return code;
+  while (m > 12) {
+    m -= 12;
+    y += 1;
+  }
+  while (m < 1) {
+    m += 12;
+    y -= 1;
+  }
+  return `${y}-${String(m).padStart(2, '0')}`;
+}

@@ -1147,18 +1147,13 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       if (Object.keys(newFlashing).length > 0) {
         setFlashingCells((prev) => ({ ...prev, ...newFlashing }));
         setTimeout(() => {
-          if (typeof window === 'undefined') return;
-          try {
-            setFlashingCells((prev) => {
-              const next = { ...prev };
-              Object.keys(newFlashing).forEach((k) => {
-                delete next[k];
-              });
-              return next;
+          setFlashingCells((prev) => {
+            const next = { ...prev };
+            Object.keys(newFlashing).forEach((k) => {
+              delete next[k];
             });
-          } catch {
-            // Ignore teardown after test unmount
-          }
+            return next;
+          });
         }, 1500);
       }
 

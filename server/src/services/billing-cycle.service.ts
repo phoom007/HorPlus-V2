@@ -18,6 +18,7 @@ import { normalizeUtilityBillingMode } from '../utils/billing-mode-normalizer.ut
 import {
   currentBusinessDateInBangkok,
   toBangkokDateString,
+  getAdjacentCycleCode,
 } from '../utils/calendar-date.util.js';
 
 export interface CreateBillingCycleDto {
@@ -835,35 +836,20 @@ export class BillingCycleService {
     const operational = await currentCycleResolverService.resolveOperationalBillingCycle(dormitoryId);
     const opCode = operational.cycleCode || currentCalCode;
 
-    const getAdjacentCode = (code: string, offsetMonths: number): string => {
-      const parts = code.split('-');
-      let y = parseInt(parts[0], 10);
-      let m = parseInt(parts[1], 10) + offsetMonths;
-      while (m > 12) {
-        m -= 12;
-        y += 1;
-      }
-      while (m < 1) {
-        m += 12;
-        y -= 1;
-      }
-      return `${y}-${String(m).padStart(2, '0')}`;
-    };
-
     const targetCycles: string[] = [];
 
     // 1. Ensure 3-month rolling window around operational cycle (prev, curr, next)
-    const opPrev = getAdjacentCode(opCode, -1);
+    const opPrev = getAdjacentCycleCode(opCode, -1);
     const opCurr = opCode;
-    const opNext = getAdjacentCode(opCode, 1);
+    const opNext = getAdjacentCycleCode(opCode, 1);
     [opPrev, opCurr, opNext].forEach((c) => {
       if (!targetCycles.includes(c)) targetCycles.push(c);
     });
 
     // 2. Ensure 3-month rolling window around current calendar Bangkok month (prev, curr, next)
-    const calPrev = getAdjacentCode(currentCalCode, -1);
+    const calPrev = getAdjacentCycleCode(currentCalCode, -1);
     const calCurr = currentCalCode;
-    const calNext = getAdjacentCode(currentCalCode, 1);
+    const calNext = getAdjacentCycleCode(currentCalCode, 1);
     [calPrev, calCurr, calNext].forEach((c) => {
       if (!targetCycles.includes(c)) targetCycles.push(c);
     });
