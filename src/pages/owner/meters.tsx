@@ -921,6 +921,30 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     setActiveFeeModalRoomId(null);
   };
 
+  const handleOpenQuickAddTenant = async (targetRoomId: string) => {
+    try {
+      setQuickAddLoadingRoomId(targetRoomId);
+      const dormId = dormitoryId || localStorage.getItem('horplus_current_dormitory_id') || localStorage.getItem('selected_dormitory_id') || '';
+      const res = await httpRequest<{ data: QuickAddRoomContext }>(
+        'GET',
+        `/api/v1/properties/rooms/${targetRoomId}/quick-add-context`,
+        undefined,
+        { headers: dormId ? { 'x-dormitory-id': dormId } : {} }
+      );
+
+      if (!res.data || !res.data.effective) {
+        throw new Error('ไม่สามารถโหลดข้อมูลสิทธิ์และค่าเช่าห้องพักได้');
+      }
+
+      setSelectedQuickAddContext(res.data);
+      setQuickAddModalOpen(true);
+    } catch (err: any) {
+      showToast(mapErrorMessageToThai(err.message || 'ไม่สามารถโหลดข้อมูลห้องพักได้ กรุณาลองใหม่อีกครั้ง'), 'error');
+    } finally {
+      setQuickAddLoadingRoomId(null);
+    }
+  };
+
   const sanitizeMeterReadingTyping = (val: string): string => {
     if (!val) return '';
     // Integer only: digits 0-9, max 5 digits
@@ -2948,30 +2972,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                                 <button
                                   type="button"
                                   disabled={quickAddLoadingRoomId === (room?.id || row.roomId)}
-                                  onClick={async () => {
-                                    const targetRoomId = room?.id || row.roomId;
-                                    try {
-                                      setQuickAddLoadingRoomId(targetRoomId);
-                                      const dormId = dormitoryId || localStorage.getItem('horplus_current_dormitory_id') || localStorage.getItem('selected_dormitory_id') || '';
-                                      const res = await httpRequest<{ data: QuickAddRoomContext }>(
-                                        'GET',
-                                        `/api/v1/properties/rooms/${targetRoomId}/quick-add-context`,
-                                        undefined,
-                                        { headers: dormId ? { 'x-dormitory-id': dormId } : {} }
-                                      );
-
-                                      if (!res.data || !res.data.effective) {
-                                        throw new Error('ไม่สามารถโหลดข้อมูลสิทธิ์และค่าเช่าห้องพักได้');
-                                      }
-
-                                      setSelectedQuickAddContext(res.data);
-                                      setQuickAddModalOpen(true);
-                                    } catch (err: any) {
-                                      showToast(mapErrorMessageToThai(err.message || 'ไม่สามารถโหลดข้อมูลห้องพักได้ กรุณาลองใหม่อีกครั้ง'), 'error');
-                                    } finally {
-                                      setQuickAddLoadingRoomId(null);
-                                    }
-                                  }}
+                                  onClick={() => handleOpenQuickAddTenant(room?.id || row.roomId)}
                                   className="inline-flex items-center gap-1 text-[11px] font-bold text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 px-2 py-1 rounded-lg border border-indigo-200 transition-all cursor-pointer shadow-2xs disabled:opacity-50 whitespace-nowrap shrink-0"
                                 >
                                   {quickAddLoadingRoomId === (room?.id || row.roomId) ? (
@@ -3105,29 +3106,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                 onToggleStatusSwitch={handleToggleStatusSwitch}
                 onToggleBreakdown={(roomId) => setExpandedBreakdowns(prev => ({ ...prev, [roomId]: !prev[roomId] }))}
                 onSelectTenant={onSelectTenant}
-                onOpenQuickAdd={async (targetRoomId) => {
-                  try {
-                    setQuickAddLoadingRoomId(targetRoomId);
-                    const dormId = dormitoryId || localStorage.getItem('horplus_current_dormitory_id') || localStorage.getItem('selected_dormitory_id') || '';
-                    const res = await httpRequest<{ data: QuickAddRoomContext }>(
-                      'GET',
-                      `/api/v1/properties/rooms/${targetRoomId}/quick-add-context`,
-                      undefined,
-                      { headers: dormId ? { 'x-dormitory-id': dormId } : {} }
-                    );
-
-                    if (!res.data || !res.data.effective) {
-                      throw new Error('ไม่สามารถโหลดข้อมูลสิทธิ์และค่าเช่าห้องพักได้');
-                    }
-
-                    setSelectedQuickAddContext(res.data);
-                    setQuickAddModalOpen(true);
-                  } catch (err: any) {
-                    showToast(mapErrorMessageToThai(err.message || 'ไม่สามารถโหลดข้อมูลห้องพักได้ กรุณาลองใหม่อีกครั้ง'), 'error');
-                  } finally {
-                    setQuickAddLoadingRoomId(null);
-                  }
-                }}
+                onOpenQuickAdd={handleOpenQuickAddTenant}
               />
             ))}
           </div>
