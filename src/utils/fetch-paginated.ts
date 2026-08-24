@@ -16,6 +16,9 @@ export interface PaginatedFetchResult<T = any> {
   operationalBillingCycleId?: string;
   operationalCycleCode?: string;
   operationalCycle?: any;
+  historicalFloorCycleCode?: string;
+  openedUpperBoundCycleCode?: string;
+  selectableBillingCycles?: any[];
 }
 
 export async function fetchAllPaginated<T = any>(
@@ -38,6 +41,9 @@ export async function fetchAllPaginatedWithMeta<T = any>(
   let operationalBillingCycleId: string | undefined;
   let operationalCycleCode: string | undefined;
   let operationalCycle: any;
+  let historicalFloorCycleCode: string | undefined;
+  let openedUpperBoundCycleCode: string | undefined;
+  let selectableBillingCycles: any[] | undefined;
 
   while (true) {
     const separator = baseUrl.includes('?') ? '&' : '?';
@@ -54,6 +60,9 @@ export async function fetchAllPaginatedWithMeta<T = any>(
       operationalBillingCycleId = json.operationalBillingCycleId;
       operationalCycleCode = json.operationalCycleCode;
       operationalCycle = json.operationalCycle;
+      historicalFloorCycleCode = json.historicalFloorCycleCode;
+      openedUpperBoundCycleCode = json.openedUpperBoundCycleCode;
+      selectableBillingCycles = json.selectableBillingCycles;
     }
     const items = Array.isArray(json.data) ? json.data : [];
     allItems.push(...items);
@@ -82,5 +91,8 @@ export async function fetchAllPaginatedWithMeta<T = any>(
     operationalBillingCycleId,
     operationalCycleCode,
     operationalCycle,
+    historicalFloorCycleCode,
+    openedUpperBoundCycleCode,
+    selectableBillingCycles,
   };
 }

@@ -11,6 +11,7 @@ import {
   BillingCycleEntity,
   BillingRateSnapshotEntity,
   BillingCycleFilterQuery,
+  SelectableBillingCycleRef,
 } from '../db/repositories/billing-cycle.repository.js';
 import { AuditService } from './audit.service.js';
 import { currentCycleResolverService } from './current-cycle-resolver.js';
@@ -401,6 +402,79 @@ export class BillingCycleService {
       isFirstCycle: earliest ? earliest.id === item.id : false,
     }));
     return { items, total: res.total, firstBillingCycleId: earliest?.id || null };
+  }
+
+  public async getNavigationContext(
+    dormitoryId: string
+  ): Promise<{
+    historicalFloorCycleCode: string;
+    openedUpperBoundCycleCode: string;
+    selectableBillingCycles: SelectableBillingCycleRef[];
+  }> {
+    const prisma = getPrismaClient();
+    const dorm = await prisma.dormitory.findUnique({
+      where: { id: dormitoryId },
+      select: { createdAt: true },
+    });
+
+    const operational = await currentCycleResolverService.resolveOperationalBillingCycle(dormitoryId);
+    const opCode = operational.cycleCode || currentBusinessDateInBangkok().slice(0, 7);
+
+    const historicalFloorCycleCode = dorm?.createdAt
+      ? toBangkokDateString(dorm.createdAt).slice(0, 7)
+      : opCode;
+
+    // Query all records from historical floor onwards
+    const records = await this.billingCycleRepo.findCycleRefsInRange(
+      dormitoryId,
+      historicalFloorCycleCode,
+      '9999-12'
+    );
+
+    if (records.length === 0) {
+      return {
+        historicalFloorCycleCode,
+        openedUpperBoundCycleCode: opCode,
+        selectableBillingCycles: [],
+      };
+    }
+
+    const maxDbCode = records[records.length - 1].cycleCode;
+    const targetUpperBound = getAdjacentCycleCode(opCode, 1);
+    const openedUpperBoundCycleCode = targetUpperBound < maxDbCode ? targetUpperBound : maxDbCode;
+
+    // Filter records from floor up to openedUpperBoundCycleCode
+    const boundedRecords = records.filter(
+      (r) => r.cycleCode >= historicalFloorCycleCode && r.cycleCode <= openedUpperBoundCycleCode
+    );
+
+    // Build expected chronological sequence of cycleCodes from historicalFloorCycleCode to maxDbCode
+    const expectedCodes: string[] = [];
+    let cur = historicalFloorCycleCode;
+    while (cur <= maxDbCode) {
+      expectedCodes.push(cur);
+      cur = getAdjacentCycleCode(cur, 1);
+    }
+
+    // Fail closed if any cycle in the historical sequence is missing from DB
+    const existingCodeSet = new Set(records.map((r) => r.cycleCode));
+    const missingCodes = expectedCodes.filter((code) => !existingCodeSet.has(code));
+
+    if (missingCodes.length > 0) {
+      const err: any = new Error(
+        `BILLING_CYCLE_HISTORY_INCOMPLETE: Billing cycle sequence has missing cycles: ${missingCodes.join(', ')}`
+      );
+      err.statusCode = 500;
+      err.code = 'BILLING_CYCLE_HISTORY_INCOMPLETE';
+      err.details = { missingCycleCodes: missingCodes };
+      throw err;
+    }
+
+    return {
+      historicalFloorCycleCode,
+      openedUpperBoundCycleCode,
+      selectableBillingCycles: boundedRecords,
+    };
   }
 
   public async getBillingCycleById(

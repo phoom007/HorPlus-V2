@@ -312,6 +312,7 @@ export async function seedLocal07Data() {
       phone: COMP_DORM.phone,
       email: COMP_DORM.email,
       status: 'active',
+      createdAt: new Date('2026-07-01T00:00:00.000Z'),
       createdByUserId: compOwner.id,
     },
   });

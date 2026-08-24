@@ -527,32 +527,32 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
     return `${y}-${String(m).padStart(2, '0')}`;
   };
 
-  const operationalCode = billingCyclesQuery.data?.operationalCycleCode || selectedCycleCode || '';
-  const minOperationalCycleCode = operationalCode ? getAdjacentCycleCode(operationalCode, -1) : '';
-  const maxOperationalCycleCode = operationalCode ? getAdjacentCycleCode(operationalCode, 1) : '';
+  const historicalFloorCycleCode: string = billingCyclesQuery.data?.historicalFloorCycleCode || '';
+  const openedUpperBoundCycleCode: string = billingCyclesQuery.data?.openedUpperBoundCycleCode || '';
 
-  const operationalSelectableBillingCycles = React.useMemo(() => {
-    if (!minOperationalCycleCode || !maxOperationalCycleCode) return billingCycles;
-    return billingCycles.filter(
-      (c: any) => c.cycleCode >= minOperationalCycleCode && c.cycleCode <= maxOperationalCycleCode
-    );
-  }, [billingCycles, minOperationalCycleCode, maxOperationalCycleCode]);
+  const selectableBillingCycles: any[] = React.useMemo(() => {
+    if (billingCyclesQuery.data?.selectableBillingCycles && billingCyclesQuery.data.selectableBillingCycles.length > 0) {
+      return billingCyclesQuery.data.selectableBillingCycles;
+    }
+    // Chronological ascending fallback while server query resolves
+    return [...billingCycles].sort((a: any, b: any) => (a.cycleCode || '').localeCompare(b.cycleCode || ''));
+  }, [billingCyclesQuery.data?.selectableBillingCycles, billingCycles]);
 
   const handlePrevCycle = () => {
-    if (operationalSelectableBillingCycles.length === 0) return;
-    const idx = operationalSelectableBillingCycles.findIndex(c => c.id === selectedBillingCycleId || c.cycleCode === selectedCycleCode);
-    if (idx < operationalSelectableBillingCycles.length - 1) {
-      const prev = operationalSelectableBillingCycles[idx + 1];
+    if (selectableBillingCycles.length === 0) return;
+    const idx = selectableBillingCycles.findIndex(c => c.id === selectedBillingCycleId || c.cycleCode === selectedCycleCode);
+    if (idx > 0) {
+      const prev = selectableBillingCycles[idx - 1];
       setSelectedBillingCycleId(prev.id);
       setSelectedCycleCode(prev.cycleCode);
     }
   };
 
   const handleNextCycle = () => {
-    if (operationalSelectableBillingCycles.length === 0) return;
-    const idx = operationalSelectableBillingCycles.findIndex(c => c.id === selectedBillingCycleId || c.cycleCode === selectedCycleCode);
-    if (idx > 0) {
-      const next = operationalSelectableBillingCycles[idx - 1];
+    if (selectableBillingCycles.length === 0) return;
+    const idx = selectableBillingCycles.findIndex(c => c.id === selectedBillingCycleId || c.cycleCode === selectedCycleCode);
+    if (idx >= 0 && idx < selectableBillingCycles.length - 1) {
+      const next = selectableBillingCycles[idx + 1];
       setSelectedBillingCycleId(next.id);
       setSelectedCycleCode(next.cycleCode);
     }
@@ -1163,7 +1163,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
             onRefreshData={() => queryClient.invalidateQueries({ queryKey: queryKeys.owner(activeDormitoryId) })}
             selectedCycle={selectedCycle}
             onCycleChange={(c: string) => setSelectedCycleCode(c)}
-            availableCycles={billingCycles}
+            availableCycles={selectableBillingCycles}
             billingCycles={billingCycles}
           />
         );
@@ -1498,11 +1498,12 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
               <div className="flex items-center justify-between bg-slate-100/80 p-1 rounded-2xl border border-slate-200/50 w-full sm:w-auto sm:min-w-[260px] gap-1">
                 <button
                   onClick={handlePrevCycle}
-                  disabled={operationalSelectableBillingCycles.length === 0 || operationalSelectableBillingCycles.findIndex(c => c.id === selectedBillingCycleId || c.cycleCode === selectedCycleCode) >= operationalSelectableBillingCycles.length - 1}
+                  disabled={selectableBillingCycles.length === 0 || selectableBillingCycles.findIndex(c => c.id === selectedBillingCycleId || c.cycleCode === selectedCycleCode) <= 0}
                   className={`p-1.5 hover:bg-white text-slate-500 hover:text-slate-900 rounded-xl transition-all cursor-pointer ${
-                    operationalSelectableBillingCycles.length === 0 || operationalSelectableBillingCycles.findIndex(c => c.id === selectedBillingCycleId || c.cycleCode === selectedCycleCode) >= operationalSelectableBillingCycles.length - 1 ? 'opacity-25 cursor-not-allowed' : ''
+                    selectableBillingCycles.length === 0 || selectableBillingCycles.findIndex(c => c.id === selectedBillingCycleId || c.cycleCode === selectedCycleCode) <= 0 ? 'opacity-25 cursor-not-allowed' : ''
                   }`}
                   aria-label="ก่อนหน้า"
+                  data-testid="prev-cycle-button"
                 >
                   <ChevronLeft className="w-3.5 h-3.5" />
                 </button>
@@ -1523,11 +1524,12 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
 
                 <button
                   onClick={handleNextCycle}
-                  disabled={operationalSelectableBillingCycles.length === 0 || operationalSelectableBillingCycles.findIndex(c => c.id === selectedBillingCycleId || c.cycleCode === selectedCycleCode) <= 0}
+                  disabled={selectableBillingCycles.length === 0 || selectableBillingCycles.findIndex(c => c.id === selectedBillingCycleId || c.cycleCode === selectedCycleCode) >= selectableBillingCycles.length - 1}
                   className={`p-1.5 hover:bg-white text-slate-500 hover:text-slate-900 rounded-xl transition-all cursor-pointer ${
-                    operationalSelectableBillingCycles.length === 0 || operationalSelectableBillingCycles.findIndex(c => c.id === selectedBillingCycleId || c.cycleCode === selectedCycleCode) <= 0 ? 'opacity-25 cursor-not-allowed' : ''
+                    selectableBillingCycles.length === 0 || selectableBillingCycles.findIndex(c => c.id === selectedBillingCycleId || c.cycleCode === selectedCycleCode) >= selectableBillingCycles.length - 1 ? 'opacity-25 cursor-not-allowed' : ''
                   }`}
                   aria-label="ถัดไป"
+                  data-testid="next-cycle-button"
                 >
                   <ChevronRight className="w-3.5 h-3.5" />
                 </button>
@@ -1538,14 +1540,14 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
                 isOpen={isCycleModalOpen}
                 onClose={() => setIsCycleModalOpen(false)}
                 selectedCycleCode={selectedCycleCode}
-                availableCycles={operationalSelectableBillingCycles}
-                minCycle={minOperationalCycleCode}
-                maxCycle={maxOperationalCycleCode}
+                availableCycles={selectableBillingCycles}
+                minCycle={historicalFloorCycleCode}
+                maxCycle={openedUpperBoundCycleCode}
                 onSelectCycle={(code, cycle) => {
                   if (cycle?.id) {
                     setSelectedBillingCycleId(cycle.id);
                   } else {
-                    const match = operationalSelectableBillingCycles.find((c) => c.cycleCode === code);
+                    const match = selectableBillingCycles.find((c) => c.cycleCode === code);
                     if (match?.id) setSelectedBillingCycleId(match.id);
                   }
                   setSelectedCycleCode(code);

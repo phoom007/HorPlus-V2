@@ -106,11 +106,21 @@ export interface BillingCycleFilterQuery {
   sortDirection?: 'asc' | 'desc';
 }
 
+export interface SelectableBillingCycleRef {
+  id: string;
+  cycleCode: string;
+  name: string;
+  status: string;
+  periodStart: Date;
+  periodEnd: Date;
+}
+
 export interface IBillingCycleRepository {
   findById(id: string, dormitoryId?: string): Promise<BillingCycleEntity | null>;
   findByCode(dormitoryId: string, cycleCode: string): Promise<BillingCycleEntity | null>;
   findExistingCycleCodes(dormitoryId: string, cycleCodes: string[]): Promise<string[]>;
   findOverlapping(dormitoryId: string, periodStart: Date, periodEnd: Date, excludeId?: string): Promise<BillingCycleEntity[]>;
+  findCycleRefsInRange(dormitoryId: string, minCycleCode: string, maxCycleCode: string): Promise<SelectableBillingCycleRef[]>;
   findAll(dormitoryId: string, filter?: BillingCycleFilterQuery): Promise<{ items: BillingCycleEntity[]; total: number }>;
   create(dormitoryId: string, data: CreateBillingCycleData): Promise<BillingCycleEntity>;
   update(id: string, dormitoryId: string, data: Partial<BillingCycleEntity>, expectedVersion?: number): Promise<BillingCycleEntity | null>;
@@ -122,6 +132,32 @@ export interface IBillingCycleRepository {
 export class InMemoryBillingCycleRepository implements IBillingCycleRepository {
   private cycles: Map<string, BillingCycleEntity> = new Map();
   private snapshots: Map<string, BillingRateSnapshotEntity> = new Map();
+
+  public async findCycleRefsInRange(
+    dormitoryId: string,
+    minCycleCode: string,
+    maxCycleCode: string
+  ): Promise<SelectableBillingCycleRef[]> {
+    const list: SelectableBillingCycleRef[] = [];
+    for (const c of this.cycles.values()) {
+      if (
+        c.dormitoryId === dormitoryId &&
+        c.cycleCode >= minCycleCode &&
+        c.cycleCode <= maxCycleCode
+      ) {
+        list.push({
+          id: c.id,
+          cycleCode: c.cycleCode,
+          name: c.name,
+          status: c.status || 'draft',
+          periodStart: c.periodStart,
+          periodEnd: c.periodEnd,
+        });
+      }
+    }
+    list.sort((a, b) => a.cycleCode.localeCompare(b.cycleCode));
+    return list;
+  }
 
   public async findById(id: string, dormitoryId?: string): Promise<BillingCycleEntity | null> {
     const cycle = this.cycles.get(id);
@@ -424,6 +460,42 @@ export class PrismaBillingCycleRepository implements IBillingCycleRepository {
     if (excludeId) where.id = { not: excludeId };
     const items = await this.prisma.billingCycle.findMany({ where });
     return items.map((c: any) => this.mapCycleToEntity(c));
+  }
+
+  public async findCycleRefsInRange(
+    dormitoryId: string,
+    minCycleCode: string,
+    maxCycleCode: string
+  ): Promise<SelectableBillingCycleRef[]> {
+    const records = await this.prisma.billingCycle.findMany({
+      where: {
+        dormitoryId,
+        cycleCode: {
+          gte: minCycleCode,
+          lte: maxCycleCode,
+        },
+      },
+      select: {
+        id: true,
+        cycleCode: true,
+        name: true,
+        status: true,
+        periodStart: true,
+        periodEnd: true,
+      },
+      orderBy: {
+        cycleCode: 'asc',
+      },
+    });
+
+    return records.map((r: any) => ({
+      id: r.id,
+      cycleCode: r.cycleCode,
+      name: r.name,
+      status: r.status,
+      periodStart: r.periodStart,
+      periodEnd: r.periodEnd,
+    }));
   }
 
   public async findAll(

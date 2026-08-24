@@ -145,10 +145,15 @@ export function createBillingCycleRouter(
         ]);
       }
 
+      const navContext = await billingCycleService.getNavigationContext(dormId);
+
       res.json({
         data: result.items,
         pagination: { total: result.total, page: query.page, pageSize: query.pageSize },
         firstBillingCycleId: result.firstBillingCycleId,
+        historicalFloorCycleCode: navContext.historicalFloorCycleCode,
+        openedUpperBoundCycleCode: navContext.openedUpperBoundCycleCode,
+        selectableBillingCycles: navContext.selectableBillingCycles,
         operationalBillingCycleId: operational.billingCycleId,
         operationalCycleCode: operational.cycleCode,
         operationalCycle: operational,
