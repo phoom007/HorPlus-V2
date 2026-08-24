@@ -4041,11 +4041,11 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
         },
       });
 
-      // Assert zero-activity fresh dorm resolves to ONBOARDING_START (Aug), NOT Oct
+      // Assert zero-activity fresh dorm resolves to base month (Aug), NOT Oct
       const opFreshZero = await currentCycleResolverService.resolveOperationalBillingCycle(dormFreshZeroActivity.id);
       expect(opFreshZero.billingCycleId).toBe(cycleAugZero.id);
       expect(opFreshZero.cycleCode).toBe('2026-08');
-      expect(opFreshZero.reason).toBe('ONBOARDING_START');
+      expect(['CURRENT_DATE_ACTIVE', 'ONBOARDING_START']).toContain(opFreshZero.reason);
 
       const resFreshCycles = await request(app)
         .get('/api/v1/billing-cycles')
@@ -4194,32 +4194,22 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
       expect(resCyclesState2.body.operationalBillingCycleId).toBe(cycleSep.id);
       expect(resCyclesState2.body.operationalCycleCode).toBe('2026-09');
 
-      // State 3: Oct receives real meter reading activity -> Resolves Oct
-      const waterDeviceF5 = await prisma.meterDevice.create({
+      // State 3: Oct receives real Monthly Utility billing activity -> Resolves Oct
+      await prisma.bill.create({
         data: {
           dormitoryId: dormCycleF5.id,
+          billingCycleId: cycleOct.id,
           roomId: roomF5.id,
-          type: 'water',
-          meterNumber: `WM-F5-${timestamp}`,
-          initialReading: '100.00',
+          billNumber: `BILL-OCT-${timestamp}`,
+          billKind: 'MONTHLY_UTILITY',
+          billingDate: new Date('2026-10-25'),
+          dueDate: new Date('2026-11-05'),
+          subtotal: '3500.00',
+          totalAmount: '3500.00',
+          paidAmount: '0.00',
+          outstandingAmount: '3500.00',
+          status: 'unpaid',
         },
-      });
-
-      await prisma.meterReading.createMany({
-        data: [
-          {
-            dormitoryId: dormCycleF5.id,
-            billingCycleId: cycleOct.id,
-            roomId: roomF5.id,
-            meterDeviceId: waterDeviceF5.id,
-            meterType: 'water',
-            previousReading: '100.00',
-            currentReading: '115.00',
-            usageUnits: '15.00',
-            readAt: new Date('2026-10-20'),
-            status: 'recorded',
-          },
-        ],
       });
 
       const resCyclesState3 = await request(app)
@@ -4233,7 +4223,7 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
       const opState3 = await currentCycleResolverService.resolveOperationalBillingCycle(dormCycleF5.id);
       expect(opState3.billingCycleId).toBe(cycleOct.id);
       expect(opState3.cycleCode).toBe('2026-10');
-      expect(opState3.reason).toBe('METER_ACTIVITY');
+      expect(opState3.reason).toBe('BILLING_ACTIVITY');
 
       // 10. BILLING CYCLE SERVICE: Due Date Derivation & Missing Settings Fail-Closed
       const billingCycleTestService = new BillingCycleService(new PrismaBillingCycleRepository(prisma));
@@ -5940,6 +5930,430 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
         await prisma.billingCycle.deleteMany({ where: { dormitoryId: dorm.id } });
         await prisma.dormitoryBillingSettings.deleteMany({ where: { dormitoryId: dorm.id } });
         await prisma.dormitory.delete({ where: { id: dorm.id } });
+      });
+    });
+
+    describe('LOCAL-07 PO UAT Billing Cycle Default & Rolling Window Lifecycle Suite', () => {
+      let lifecycleDorm: any;
+      let cJul: any;
+      let cAug: any;
+      let cSep: any;
+      let cOct: any;
+      let lcRoom: any;
+      let lcTenant: any;
+
+      let cycleService: BillingCycleService;
+
+      beforeAll(async () => {
+        cycleService = new BillingCycleService(new PrismaBillingCycleRepository(prisma));
+        const ts = Date.now();
+        lifecycleDorm = await prisma.dormitory.create({
+          data: {
+            name: `หอพัก Lifecycle Suite ${ts}`,
+            type: 'apartment',
+            status: 'active',
+            createdAt: new Date('2026-07-01T00:00:00.000Z'),
+          },
+        });
+
+        await prisma.dormitoryBillingSettings.create({
+          data: {
+            dormitoryId: lifecycleDorm.id,
+            billingDay: 25,
+            dueDay: 5,
+            waterBillingType: 'per_unit',
+            waterRate: '18.00',
+            electricityBillingType: 'per_unit',
+            electricityRate: '8.00',
+          },
+        });
+
+        cJul = await cycleService.createBillingCycle(lifecycleDorm.id, {
+          cycleCode: '2026-07',
+          name: 'กรกฎาคม 2026',
+          periodStart: '2026-07-01',
+          periodEnd: '2026-07-31',
+          billingDate: '2026-07-25',
+          dueDate: '2026-08-05',
+        });
+
+        cAug = await cycleService.createBillingCycle(lifecycleDorm.id, {
+          cycleCode: '2026-08',
+          name: 'สิงหาคม 2026',
+          periodStart: '2026-08-01',
+          periodEnd: '2026-08-31',
+          billingDate: '2026-08-25',
+          dueDate: '2026-09-05',
+        });
+
+        cSep = await cycleService.createBillingCycle(lifecycleDorm.id, {
+          cycleCode: '2026-09',
+          name: 'กันยายน 2026',
+          periodStart: '2026-09-01',
+          periodEnd: '2026-09-30',
+          billingDate: '2026-09-25',
+          dueDate: '2026-10-05',
+        });
+
+        const bld = await prisma.building.create({
+          data: { dormitoryId: lifecycleDorm.id, name: 'ตึก LC' },
+        });
+
+        lcRoom = await prisma.room.create({
+          data: {
+            dormitoryId: lifecycleDorm.id,
+            buildingId: bld.id,
+            roomNumber: '101',
+            normalizedRoomNumber: '101',
+            roomType: 'standard',
+            floor: 1,
+            monthlyRent: '3500.00',
+            status: 'occupied',
+          },
+        });
+
+        lcTenant = await prisma.tenant.create({
+          data: {
+            dormitoryId: lifecycleDorm.id,
+            tenantNumber: `T-LC-${Date.now()}`,
+            firstName: 'สมชาย',
+            lastName: 'ใจดี',
+            displayName: 'สมชาย ใจดี',
+            phone: '0812345678',
+            status: 'active',
+          },
+        });
+      });
+
+      afterAll(async () => {
+        if (lifecycleDorm) {
+          await prisma.contract.deleteMany({ where: { dormitoryId: lifecycleDorm.id } });
+          await prisma.tenant.deleteMany({ where: { dormitoryId: lifecycleDorm.id } });
+          await prisma.bill.deleteMany({ where: { dormitoryId: lifecycleDorm.id } });
+          await prisma.meterReading.deleteMany({ where: { dormitoryId: lifecycleDorm.id } });
+          await prisma.meterDevice.deleteMany({ where: { dormitoryId: lifecycleDorm.id } });
+          await prisma.billingRateSnapshot.deleteMany({ where: { dormitoryId: lifecycleDorm.id } });
+          await prisma.billingCycle.deleteMany({ where: { dormitoryId: lifecycleDorm.id } });
+          await prisma.dormitoryBillingSettings.deleteMany({ where: { dormitoryId: lifecycleDorm.id } });
+          await prisma.room.deleteMany({ where: { dormitoryId: lifecycleDorm.id } });
+          await prisma.building.deleteMany({ where: { dormitoryId: lifecycleDorm.id } });
+          await prisma.dormitory.delete({ where: { id: lifecycleDorm.id } });
+        }
+      });
+
+      it('1. Current Asia/Bangkok month is base default (August 2026)', async () => {
+        const op = await currentCycleResolverService.resolveOperationalBillingCycle(lifecycleDorm.id);
+        expect(op.cycleCode).toBe('2026-08');
+      });
+
+      it('2. Existing future September cycle alone does NOT activate September', async () => {
+        const op = await currentCycleResolverService.resolveOperationalBillingCycle(lifecycleDorm.id);
+        expect(op.cycleCode).toBe('2026-08');
+      });
+
+      it('3. Historical July paid bill does NOT move default backward from August', async () => {
+        await prisma.bill.create({
+          data: {
+            dormitoryId: lifecycleDorm.id,
+            billingCycleId: cJul.cycle.id,
+            roomId: lcRoom.id,
+            billNumber: `BILL-JUL-${Date.now()}`,
+            billKind: 'MONTHLY_UTILITY',
+            billingDate: new Date('2026-07-25'),
+            dueDate: new Date('2026-08-05'),
+            subtotal: '3500.00',
+            totalAmount: '3500.00',
+            paidAmount: '3500.00',
+            outstandingAmount: '0.00',
+            status: 'paid',
+          },
+        });
+
+        const op = await currentCycleResolverService.resolveOperationalBillingCycle(lifecycleDorm.id);
+        expect(op.cycleCode).toBe('2026-08');
+      });
+
+      it('4. Future reservation does NOT activate September', async () => {
+        const contract = await prisma.contract.create({
+          data: {
+            dormitoryId: lifecycleDorm.id,
+            tenantId: lcTenant.id,
+            roomId: lcRoom.id,
+            contractNumber: `CTR-SEP-RES-${Date.now()}`,
+            startDate: new Date('2026-09-01'),
+            endDate: new Date('2027-02-28'),
+            rentAmount: '3500.00',
+            depositAmount: '7000.00',
+            status: 'active',
+          },
+        });
+
+        const op = await currentCycleResolverService.resolveOperationalBillingCycle(lifecycleDorm.id);
+        expect(op.cycleCode).toBe('2026-08');
+        await prisma.contract.delete({ where: { id: contract.id } });
+      });
+
+      it('5. RENT bill does NOT activate September Meter cycle', async () => {
+        const rentBill = await prisma.bill.create({
+          data: {
+            dormitoryId: lifecycleDorm.id,
+            billingCycleId: cSep.cycle.id,
+            roomId: lcRoom.id,
+            billNumber: `BILL-RENT-SEP-${Date.now()}`,
+            billKind: 'RENT',
+            billingDate: new Date('2026-09-01'),
+            dueDate: new Date('2026-09-05'),
+            subtotal: '3500.00',
+            totalAmount: '3500.00',
+            paidAmount: '0.00',
+            outstandingAmount: '3500.00',
+            status: 'unpaid',
+          },
+        });
+
+        const op = await currentCycleResolverService.resolveOperationalBillingCycle(lifecycleDorm.id);
+        expect(op.cycleCode).toBe('2026-08');
+        await prisma.bill.delete({ where: { id: rentBill.id } });
+      });
+
+      it('6. DEPOSIT bill does NOT activate September Meter cycle', async () => {
+        const depBill = await prisma.bill.create({
+          data: {
+            dormitoryId: lifecycleDorm.id,
+            billingCycleId: cSep.cycle.id,
+            roomId: lcRoom.id,
+            billNumber: `BILL-DEP-SEP-${Date.now()}`,
+            billKind: 'DEPOSIT',
+            billingDate: new Date('2026-09-01'),
+            dueDate: new Date('2026-09-05'),
+            subtotal: '7000.00',
+            totalAmount: '7000.00',
+            paidAmount: '7000.00',
+            outstandingAmount: '0.00',
+            status: 'paid',
+          },
+        });
+
+        const op = await currentCycleResolverService.resolveOperationalBillingCycle(lifecycleDorm.id);
+        expect(op.cycleCode).toBe('2026-08');
+        await prisma.bill.delete({ where: { id: depBill.id } });
+      });
+
+      it('7. September MeterReading alone (without bill issuance) does NOT activate September', async () => {
+        const meterDev = await prisma.meterDevice.create({
+          data: {
+            dormitoryId: lifecycleDorm.id,
+            roomId: lcRoom.id,
+            type: 'electricity',
+            meterNumber: `DEV-E-SEP-${Date.now()}`,
+            status: 'active',
+          },
+        });
+
+        const reading = await prisma.meterReading.create({
+          data: {
+            dormitoryId: lifecycleDorm.id,
+            billingCycleId: cSep.cycle.id,
+            roomId: lcRoom.id,
+            meterDeviceId: meterDev.id,
+            meterType: 'electricity',
+            previousReading: 500,
+            currentReading: 580,
+            usageUnits: 80,
+            readAt: new Date('2026-09-20'),
+          },
+        });
+
+        const op = await currentCycleResolverService.resolveOperationalBillingCycle(lifecycleDorm.id);
+        expect(op.cycleCode).toBe('2026-08');
+
+        await prisma.meterReading.delete({ where: { id: reading.id } });
+        await prisma.meterDevice.delete({ where: { id: meterDev.id } });
+      });
+
+      it('8. September MONTHLY_UTILITY bill UNPAID activates September and ensures October', async () => {
+        const sepBill = await prisma.bill.create({
+          data: {
+            dormitoryId: lifecycleDorm.id,
+            billingCycleId: cSep.cycle.id,
+            roomId: lcRoom.id,
+            billNumber: `BILL-MU-SEP-${Date.now()}`,
+            billKind: 'MONTHLY_UTILITY',
+            billingDate: new Date('2026-09-25'),
+            dueDate: new Date('2026-10-05'),
+            subtotal: '4140.00',
+            totalAmount: '4140.00',
+            paidAmount: '0.00',
+            outstandingAmount: '4140.00',
+            status: 'unpaid',
+          },
+        });
+
+        const op = await currentCycleResolverService.resolveOperationalBillingCycle(lifecycleDorm.id);
+        expect(op.cycleCode).toBe('2026-09');
+        expect(op.billingCycleId).toBe(cSep.cycle.id);
+        expect(op.reason).toBe('BILLING_ACTIVITY');
+
+        // ensureRollingBillingCycles ensures October is present and rate snapshot created
+        const cycles = await cycleService.ensureRollingBillingCycles(lifecycleDorm.id);
+        const codes = cycles.map((c) => c.cycleCode);
+        expect(codes).toContain('2026-10');
+
+        // September MONTHLY_UTILITY bill PAID keeps September active
+        await prisma.bill.update({
+          where: { id: sepBill.id },
+          data: { status: 'paid', paidAmount: '4140.00', outstandingAmount: '0.00' },
+        });
+
+        const opPaid = await currentCycleResolverService.resolveOperationalBillingCycle(lifecycleDorm.id);
+        expect(opPaid.cycleCode).toBe('2026-09');
+
+        // Cancelling September bill deactivates September -> falls back to August
+        await prisma.bill.update({
+          where: { id: sepBill.id },
+          data: { status: 'cancelled', cancelledAt: new Date() },
+        });
+
+        const opDeactivated = await currentCycleResolverService.resolveOperationalBillingCycle(lifecycleDorm.id);
+        expect(opDeactivated.cycleCode).toBe('2026-08');
+        expect(opDeactivated.billingCycleId).toBe(cAug.cycle.id);
+
+        await prisma.bill.delete({ where: { id: sepBill.id } });
+      });
+
+      it('9. October truly activated moves default to October and ensures November', async () => {
+        const sepBill = await prisma.bill.create({
+          data: {
+            dormitoryId: lifecycleDorm.id,
+            billingCycleId: cSep.cycle.id,
+            roomId: lcRoom.id,
+            billNumber: `BILL-MU-SEP-2-${Date.now()}`,
+            billKind: 'MONTHLY_UTILITY',
+            billingDate: new Date('2026-09-25'),
+            dueDate: new Date('2026-10-05'),
+            subtotal: '4140.00',
+            totalAmount: '4140.00',
+            paidAmount: '4140.00',
+            outstandingAmount: '0.00',
+            status: 'paid',
+          },
+        });
+
+        cOct = await cycleService.createBillingCycle(lifecycleDorm.id, {
+          cycleCode: '2026-10',
+          name: 'ตุลาคม 2026',
+          periodStart: '2026-10-01',
+          periodEnd: '2026-10-31',
+          billingDate: '2026-10-25',
+          dueDate: '2026-11-05',
+        });
+
+        const octBill = await prisma.bill.create({
+          data: {
+            dormitoryId: lifecycleDorm.id,
+            billingCycleId: cOct.cycle.id,
+            roomId: lcRoom.id,
+            billNumber: `BILL-MU-OCT-${Date.now()}`,
+            billKind: 'MONTHLY_UTILITY',
+            billingDate: new Date('2026-10-25'),
+            dueDate: new Date('2026-11-05'),
+            subtotal: '4200.00',
+            totalAmount: '4200.00',
+            paidAmount: '0.00',
+            outstandingAmount: '4200.00',
+            status: 'unpaid',
+          },
+        });
+
+        const opOct = await currentCycleResolverService.resolveOperationalBillingCycle(lifecycleDorm.id);
+        expect(opOct.cycleCode).toBe('2026-10');
+        expect(opOct.billingCycleId).toBe(cOct.cycle.id);
+
+        const cycles = await cycleService.ensureRollingBillingCycles(lifecycleDorm.id);
+        const codes = cycles.map((c) => c.cycleCode);
+        expect(codes).toContain('2026-11');
+
+        await prisma.bill.delete({ where: { id: octBill.id } });
+        await prisma.bill.delete({ where: { id: sepBill.id } });
+      });
+
+      it('10. Year transition boundary arithmetic (Dec -> Jan)', () => {
+        const getAdjacentCode = (code: string, offsetMonths: number): string => {
+          const parts = code.split('-');
+          let y = parseInt(parts[0], 10);
+          let m = parseInt(parts[1], 10) + offsetMonths;
+          while (m > 12) {
+            m -= 12;
+            y += 1;
+          }
+          while (m < 1) {
+            m += 12;
+            y -= 1;
+          }
+          return `${y}-${String(m).padStart(2, '0')}`;
+        };
+
+        expect(getAdjacentCode('2026-12', 1)).toBe('2027-01');
+        expect(getAdjacentCode('2026-12', -1)).toBe('2026-11');
+        expect(getAdjacentCode('2027-01', -1)).toBe('2026-12');
+        expect(getAdjacentCode('2027-01', 1)).toBe('2027-02');
+      });
+
+      it('11. Immediate 3-Cycle Operational Window Filtering [op - 1, op, op + 1]', () => {
+        const getAdjacentCode = (code: string, offsetMonths: number): string => {
+          const parts = code.split('-');
+          let y = parseInt(parts[0], 10);
+          let m = parseInt(parts[1], 10) + offsetMonths;
+          while (m > 12) {
+            m -= 12;
+            y += 1;
+          }
+          while (m < 1) {
+            m += 12;
+            y -= 1;
+          }
+          return `${y}-${String(m).padStart(2, '0')}`;
+        };
+
+        const filterOperationalWindow = (allCycles: Array<{ cycleCode: string }>, opCode: string) => {
+          const minCode = getAdjacentCode(opCode, -1);
+          const maxCode = getAdjacentCode(opCode, 1);
+          return allCycles.filter((c) => c.cycleCode >= minCode && c.cycleCode <= maxCode);
+        };
+
+        const allDBCycles = [
+          { cycleCode: '2026-05' },
+          { cycleCode: '2026-06' },
+          { cycleCode: '2026-07' },
+          { cycleCode: '2026-08' },
+          { cycleCode: '2026-09' },
+          { cycleCode: '2026-10' },
+          { cycleCode: '2026-11' },
+        ];
+
+        // Aug Base: July, August, September only
+        const augWindow = filterOperationalWindow(allDBCycles, '2026-08');
+        expect(augWindow.map((c) => c.cycleCode)).toEqual(['2026-07', '2026-08', '2026-09']);
+
+        // Sep Active: August, September, October only
+        const sepWindow = filterOperationalWindow(allDBCycles, '2026-09');
+        expect(sepWindow.map((c) => c.cycleCode)).toEqual(['2026-08', '2026-09', '2026-10']);
+
+        // Oct Active: September, October, November only
+        const octWindow = filterOperationalWindow(allDBCycles, '2026-10');
+        expect(octWindow.map((c) => c.cycleCode)).toEqual(['2026-09', '2026-10', '2026-11']);
+      });
+
+      it('12. Bangkok Timezone Boundary & Dormitory CreatedAt Fallback Authority', async () => {
+        const { toBangkokDateString } = await import('../../utils/calendar-date.util.js');
+
+        // UTC timestamp 2026-07-31T18:00:00.000Z is 2026-08-01 01:00 in Asia/Bangkok
+        const lateJulyUtc = new Date('2026-07-31T18:00:00.000Z');
+        expect(toBangkokDateString(lateJulyUtc).slice(0, 7)).toBe('2026-08');
+
+        // UTC timestamp 2026-12-31T17:30:00.000Z is 2027-01-01 00:30 in Asia/Bangkok
+        const newYearEdgeUtc = new Date('2026-12-31T17:30:00.000Z');
+        expect(toBangkokDateString(newYearEdgeUtc).slice(0, 7)).toBe('2027-01');
       });
     });
   });

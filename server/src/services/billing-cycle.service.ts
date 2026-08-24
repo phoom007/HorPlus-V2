@@ -5,6 +5,7 @@
  */
 
 import { PrismaClient, Prisma } from '@prisma/client';
+import { getPrismaClient } from '../db/prisma.js';
 import {
   IBillingCycleRepository,
   BillingCycleEntity,
@@ -14,6 +15,10 @@ import {
 import { AuditService } from './audit.service.js';
 import { currentCycleResolverService } from './current-cycle-resolver.js';
 import { normalizeUtilityBillingMode } from '../utils/billing-mode-normalizer.util.js';
+import {
+  currentBusinessDateInBangkok,
+  toBangkokDateString,
+} from '../utils/calendar-date.util.js';
 
 export interface CreateBillingCycleDto {
   cycleCode: string;
@@ -117,7 +122,7 @@ export class BillingCycleService {
     data: CreateBillingCycleDto,
     userId?: string
   ): Promise<{ cycle: BillingCycleEntity; rateSnapshot: BillingRateSnapshotEntity }> {
-    const prisma = (await import('../db/prisma.js')).getPrismaClient();
+    const prisma = getPrismaClient();
 
     // Invariant: EVERY new BillingCycle creation requires authoritative persisted DormitoryBillingSettings
     const settings = await prisma.dormitoryBillingSettings.findUnique({ where: { dormitoryId } });
@@ -240,17 +245,17 @@ export class BillingCycleService {
         } else {
           snapshotData = {
             waterBillingType: normalizeUtilityBillingMode(settings.waterBillingType),
-            waterRate: new Prisma.Decimal(settings.waterRate).toFixed(2),
+            waterRate: new Prisma.Decimal(settings.waterRate || '0.00').toFixed(2),
             electricityBillingType: normalizeUtilityBillingMode(settings.electricityBillingType),
-            electricityRate: new Prisma.Decimal(settings.electricityRate).toFixed(2),
-            commonFee: new Prisma.Decimal(settings.commonFee).toFixed(2),
-            commonFeeMode: settings.commonFeeMode,
-            internetFee: new Prisma.Decimal(settings.internetFee).toFixed(2),
-            internetFeeMode: settings.internetFeeMode,
-            parkingFee: new Prisma.Decimal(settings.parkingRate).toFixed(2),
-            parkingFeeMode: settings.parkingFeeMode,
-            lateFeeType: settings.lateFeeType,
-            lateFeeValue: new Prisma.Decimal(settings.lateFeeValue).toFixed(2),
+            electricityRate: new Prisma.Decimal(settings.electricityRate || '0.00').toFixed(2),
+            commonFee: new Prisma.Decimal(settings.commonFee || '0.00').toFixed(2),
+            commonFeeMode: settings.commonFeeMode || 'room',
+            internetFee: new Prisma.Decimal(settings.internetFee || '0.00').toFixed(2),
+            internetFeeMode: settings.internetFeeMode || 'room',
+            parkingFee: new Prisma.Decimal(settings.parkingRate || '0.00').toFixed(2),
+            parkingFeeMode: settings.parkingFeeMode || 'room',
+            lateFeeType: settings.lateFeeType || 'none',
+            lateFeeValue: new Prisma.Decimal(settings.lateFeeValue || '0.00').toFixed(2),
             currency: 'THB',
             source: 'TEMPLATE_DEFAULT',
             inheritedFromBillingCycleId: null,
@@ -354,7 +359,7 @@ export class BillingCycleService {
   }
 
   public async getFirstBillingCycle(dormitoryId: string): Promise<BillingCycleEntity | null> {
-    const prisma = (await import('../db/prisma.js')).getPrismaClient();
+    const prisma = getPrismaClient();
     const earliest = await prisma.billingCycle.findFirst({
       where: { dormitoryId },
       orderBy: { periodStart: 'asc' },
@@ -364,7 +369,7 @@ export class BillingCycleService {
   }
 
   public async isFirstBillingCycle(dormitoryId: string, cycleIdOrCode: string): Promise<boolean> {
-    const prisma = (await import('../db/prisma.js')).getPrismaClient();
+    const prisma = getPrismaClient();
     const earliest = await prisma.billingCycle.findFirst({
       where: { dormitoryId },
       orderBy: { periodStart: 'asc' },
@@ -378,7 +383,7 @@ export class BillingCycleService {
     filter: BillingCycleFilterQuery = {}
   ): Promise<{ items: (BillingCycleEntity & { isFirstCycle?: boolean })[]; total: number; firstBillingCycleId?: string | null }> {
     const res = await this.billingCycleRepo.findAll(dormitoryId, filter);
-    const prisma = (await import('../db/prisma.js')).getPrismaClient();
+    const prisma = getPrismaClient();
     const earliest = await prisma.billingCycle.findFirst({
       where: { dormitoryId },
       orderBy: { periodStart: 'asc' },
@@ -402,7 +407,7 @@ export class BillingCycleService {
       throw err;
     }
 
-    const prisma = (await import('../db/prisma.js')).getPrismaClient();
+    const prisma = getPrismaClient();
     const earliest = await prisma.billingCycle.findFirst({
       where: { dormitoryId },
       orderBy: { periodStart: 'asc' },
@@ -417,7 +422,7 @@ export class BillingCycleService {
     dormitoryId: string,
     cycleIdOrCode: string
   ): Promise<CycleRateSnapshotResult> {
-    const prisma = (await import('../db/prisma.js')).getPrismaClient();
+    const prisma = getPrismaClient();
 
     let cycle: BillingCycleEntity | null = null;
     if (isUuid(cycleIdOrCode)) {
@@ -512,7 +517,7 @@ export class BillingCycleService {
       throw err;
     }
 
-    const prisma = (await import('../db/prisma.js')).getPrismaClient();
+    const prisma = getPrismaClient();
 
     // Mode normalizations: 'free' / 'none' enforces fee = '0.00'
     const commonMode = data.commonFeeMode || rateSnapshot.commonFeeMode;
@@ -815,54 +820,75 @@ export class BillingCycleService {
   }
 
   public async ensureRollingBillingCycles(dormitoryId: string, userId?: string): Promise<BillingCycleEntity[]> {
-    const prisma = (await import('../db/prisma.js')).getPrismaClient();
+    const prisma = getPrismaClient();
     const dorm = await prisma.dormitory.findUnique({
       where: { id: dormitoryId },
       include: { billingSettings: true },
     });
 
-    if (!dorm) return [];
+    if (!dorm || !dorm.billingSettings) return [];
 
-    const now = new Date();
-    const startYear = dorm.createdAt.getFullYear();
-    const startMonth = dorm.createdAt.getMonth() + 1;
+    const todayBangkok = currentBusinessDateInBangkok();
+    const currentCalCode = todayBangkok.slice(0, 7); // 'YYYY-MM'
 
-    // Ensure cycles for onboarding month + next 2 future months (rolling window of 3 months)
-    const targetCycles: string[] = [];
-    for (let offset = 0; offset <= 2; offset++) {
-      let curM = startMonth + offset;
-      let curY = startYear;
-      while (curM > 12) {
-        curM -= 12;
-        curY += 1;
+    // Resolve operational billing cycle for dormitory
+    const operational = await currentCycleResolverService.resolveOperationalBillingCycle(dormitoryId);
+    const opCode = operational.cycleCode || currentCalCode;
+
+    const getAdjacentCode = (code: string, offsetMonths: number): string => {
+      const parts = code.split('-');
+      let y = parseInt(parts[0], 10);
+      let m = parseInt(parts[1], 10) + offsetMonths;
+      while (m > 12) {
+        m -= 12;
+        y += 1;
       }
-      targetCycles.push(`${curY}-${String(curM).padStart(2, '0')}`);
-    }
+      while (m < 1) {
+        m += 12;
+        y -= 1;
+      }
+      return `${y}-${String(m).padStart(2, '0')}`;
+    };
 
-    // Also include up to current calendar month + 1
-    const currentCalY = now.getFullYear();
-    const currentCalM = now.getMonth() + 1;
-    const nextCalM = currentCalM === 12 ? 1 : currentCalM + 1;
-    const nextCalY = currentCalM === 12 ? currentCalY + 1 : currentCalY;
-    const currentCalCode = `${currentCalY}-${String(currentCalM).padStart(2, '0')}`;
-    const nextCalCode = `${nextCalY}-${String(nextCalM).padStart(2, '0')}`;
+    const targetCycles: string[] = [];
 
-    if (!targetCycles.includes(currentCalCode)) targetCycles.push(currentCalCode);
-    if (!targetCycles.includes(nextCalCode)) targetCycles.push(nextCalCode);
+    // 1. Ensure 3-month rolling window around operational cycle (prev, curr, next)
+    const opPrev = getAdjacentCode(opCode, -1);
+    const opCurr = opCode;
+    const opNext = getAdjacentCode(opCode, 1);
+    [opPrev, opCurr, opNext].forEach((c) => {
+      if (!targetCycles.includes(c)) targetCycles.push(c);
+    });
+
+    // 2. Ensure 3-month rolling window around current calendar Bangkok month (prev, curr, next)
+    const calPrev = getAdjacentCode(currentCalCode, -1);
+    const calCurr = currentCalCode;
+    const calNext = getAdjacentCode(currentCalCode, 1);
+    [calPrev, calCurr, calNext].forEach((c) => {
+      if (!targetCycles.includes(c)) targetCycles.push(c);
+    });
+
+    // 3. Ensure onboarding start month
+    const startCode = toBangkokDateString(dorm.createdAt).slice(0, 7);
+    if (!targetCycles.includes(startCode)) targetCycles.push(startCode);
 
     for (const code of targetCycles) {
-      await this.createBillingCycle(
-        dormitoryId,
-        {
-          cycleCode: code,
-          name: code,
-          periodStart: '',
-          periodEnd: '',
-          billingDate: '',
-          dueDate: '',
-        },
-        userId
-      );
+      try {
+        await this.createBillingCycle(
+          dormitoryId,
+          {
+            cycleCode: code,
+            name: code,
+            periodStart: '',
+            periodEnd: '',
+            billingDate: '',
+            dueDate: '',
+          },
+          userId
+        );
+      } catch (err: any) {
+        // If cycle already exists, overlaps with custom cycle, or settings are missing, gracefully proceed
+      }
     }
 
     const res = await this.getBillingCycles(dormitoryId, { pageSize: 50 });

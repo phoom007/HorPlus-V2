@@ -1,22 +1,45 @@
 /**
  * Centralized Operational Billing Cycle Resolver (LOCAL-07 Master)
- * Priority:
- * 1. Latest cycle with entered/saved meter readings
- * 2. Latest cycle with active bills (issued, pending, paid, unpaid, overdue, partially_paid)
- * 3. Dormitory creation start month cycle (Onboarding start cycle)
- * 
- * Auto-created future draft cycles are untouched and must NOT become operational.
+ *
+ * Rules:
+ * 1. Base Default: CURRENT Asia/Bangkok business month (YYYY-MM).
+ * 2. Qualifying Future Activated Cycles:
+ *    A cycle is activated ONLY IF it contains at least one real persisted Monthly Utility bill that is
+ *    legitimate billing history/state:
+ *      - billKind IN ('MONTHLY_UTILITY', 'LEGACY_COMBINED')
+ *      - status IN ('issued', 'pending', 'unpaid', 'overdue', 'paid', 'partially_paid')
+ *      - cancelledAt IS NULL (and status NOT IN ('cancelled', 'draft', 'voided', 'withdrawn', 'superseded'))
+ *      - billingCycle.cycleCode >= current Bangkok business month (YYYY-MM)
+ *    If one or more such future activated cycles exist, resolve to the LATEST cycle (by cycleCode desc / periodStart desc).
+ * 3. If no future cycle has qualifying activation:
+ *    Resolve to the billing cycle matching current Asia/Bangkok business month.
+ * 4. Historical cycles (< current Bangkok business month):
+ *    Historical paid bills or activity do NOT move the default backward from current Bangkok month.
+ * 5. Fallback:
+ *    If current Bangkok month cycle does not exist, fallback to dormitory onboarding start cycle or earliest cycle.
+ *
+ * What MUST NOT activate a cycle:
+ * - Meter readings alone
+ * - Unsaved / draft state
+ * - RENT, DEPOSIT, DAILY bills
+ * - Future reservations, Contracts, Provisional terms
+ * - BillingCycle record existence alone
+ *
  * @license Apache-2.0
  */
 
 import { PrismaClient } from '@prisma/client';
 import { getPrismaClient } from '../db/prisma.js';
-import { currentBusinessDateInBangkok } from '../utils/calendar-date.util.js';
+import {
+  currentBusinessDateInBangkok,
+  toBangkokDateString,
+  getBangkokStartOfDayUtc,
+} from '../utils/calendar-date.util.js';
 
 export interface OperationalCycleResult {
   billingCycleId?: string;
   cycleCode: string;
-  reason: 'CURRENT_DATE_ACTIVE' | 'METER_ACTIVITY' | 'BILLING_ACTIVITY' | 'LATEST_USED' | 'ONBOARDING_START';
+  reason: 'CURRENT_DATE_ACTIVE' | 'BILLING_ACTIVITY' | 'ONBOARDING_START';
   cycle?: any;
 }
 
@@ -29,107 +52,100 @@ export class CurrentCycleResolverService {
 
   /**
    * Authoritatively resolve current operational cycle for a dormitory.
-   * Priority:
-   * 1. Active (non-closed) billing cycle matching current Asia/Bangkok business date (YYYY-MM or period range)
-   * 2. Latest cycle with entered/saved meter readings (ordered by billingCycle.periodStart desc)
-   * 3. Latest cycle with active bills (issued, pending, paid, unpaid, overdue, partially_paid)
-   * 4. Dormitory creation start month cycle (Onboarding start cycle)
    */
   async resolveOperationalBillingCycle(dormitoryId: string, txClient?: any): Promise<OperationalCycleResult> {
     const db = txClient || this.prisma;
 
-    // 1. Check for latest cycle with real meter readings
-    const readingWithCycle = await db.meterReading.findFirst({
-      where: {
-        dormitoryId,
-      },
-      include: { billingCycle: true },
-      orderBy: [
-        { billingCycle: { periodStart: 'desc' } },
-        { createdAt: 'desc' },
-      ],
-    });
-
-    if (readingWithCycle?.billingCycle?.cycleCode) {
-      return {
-        billingCycleId: readingWithCycle.billingCycle.id,
-        cycleCode: readingWithCycle.billingCycle.cycleCode,
-        reason: 'METER_ACTIVITY',
-        cycle: readingWithCycle.billingCycle,
-      };
-    }
-
-    // 2. Check for latest cycle with active bills (issued, pending, paid, unpaid, overdue, partially_paid)
-    const billWithCycle = await db.bill.findFirst({
-      where: {
-        dormitoryId,
-        status: { in: ['issued', 'pending', 'paid', 'overdue', 'partially_paid', 'unpaid'] },
-      },
-      include: { billingCycle: true },
-      orderBy: [
-        { billingCycle: { periodStart: 'desc' } },
-        { createdAt: 'desc' },
-      ],
-    });
-
-    if (billWithCycle?.billingCycle?.cycleCode) {
-      return {
-        billingCycleId: billWithCycle.billingCycle.id,
-        cycleCode: billWithCycle.billingCycle.cycleCode,
-        reason: 'BILLING_ACTIVITY',
-        cycle: billWithCycle.billingCycle,
-      };
-    }
-
-    // 3. Fallback to active cycle matching current Asia/Bangkok date or onboarding start cycle
-    // Note: Auto-created future draft rolling cycles with zero activity must NOT be chosen
-    const dorm = await db.dormitory.findUnique({
-      where: { id: dormitoryId },
-      select: { createdAt: true },
-    });
-
     const todayBangkok = currentBusinessDateInBangkok();
-    const currentYearMonth = todayBangkok.slice(0, 7); // 'YYYY-MM'
-    const todayDate = new Date(todayBangkok);
+    const currentYearMonth = todayBangkok.slice(0, 7); // 'YYYY-MM', e.g. '2026-08'
+    const todayBangkokStartUtc = getBangkokStartOfDayUtc(todayBangkok);
 
-    let startCycle = await db.billingCycle.findFirst({
+    // 1. Check for latest qualifying activated Monthly Utility cycle at or after current Bangkok month
+    const activeFutureBills = await db.bill.findMany({
       where: {
         dormitoryId,
-        status: { not: 'closed' },
+        billKind: { in: ['MONTHLY_UTILITY', 'LEGACY_COMBINED'] },
+        status: { in: ['issued', 'pending', 'paid', 'overdue', 'partially_paid', 'unpaid'] },
+        cancelledAt: null,
+        billingCycle: {
+          cycleCode: { gte: currentYearMonth },
+        },
+      },
+      include: { billingCycle: true },
+      orderBy: { createdAt: 'desc' },
+      take: 50,
+    });
+
+    if (activeFutureBills.length > 0) {
+      const sorted = [...activeFutureBills].sort((a: any, b: any) => {
+        const codeA = a.billingCycle?.cycleCode || '';
+        const codeB = b.billingCycle?.cycleCode || '';
+        if (codeA !== codeB) return codeB.localeCompare(codeA);
+        const startA = a.billingCycle?.periodStart ? new Date(a.billingCycle.periodStart).getTime() : 0;
+        const startB = b.billingCycle?.periodStart ? new Date(b.billingCycle.periodStart).getTime() : 0;
+        return startB - startA;
+      });
+
+      const topBill = sorted[0];
+      if (topBill?.billingCycle?.cycleCode) {
+        return {
+          billingCycleId: topBill.billingCycle.id,
+          cycleCode: topBill.billingCycle.cycleCode,
+          reason: 'BILLING_ACTIVITY',
+          cycle: topBill.billingCycle,
+        };
+      }
+    }
+
+    // 2. Base default: Cycle matching current Asia/Bangkok business month (YYYY-MM or active date range)
+    let currentCycle = await db.billingCycle.findFirst({
+      where: {
+        dormitoryId,
         OR: [
           { cycleCode: currentYearMonth },
           {
-            periodStart: { lte: todayDate },
-            periodEnd: { gte: todayDate },
+            periodStart: { lte: todayBangkokStartUtc },
+            periodEnd: { gte: todayBangkokStartUtc },
           },
         ],
       },
       orderBy: { periodStart: 'desc' },
     });
 
-    if (!startCycle) {
-      const created = dorm?.createdAt || new Date();
-      const startCode = `${created.getFullYear()}-${String(created.getMonth() + 1).padStart(2, '0')}`;
-      startCycle = await db.billingCycle.findFirst({
-        where: { dormitoryId, cycleCode: startCode },
-      });
+    if (currentCycle) {
+      return {
+        billingCycleId: currentCycle.id,
+        cycleCode: currentCycle.cycleCode,
+        reason: 'CURRENT_DATE_ACTIVE',
+        cycle: currentCycle,
+      };
     }
 
+    // 3. Fallback to onboarding start cycle or earliest cycle (normalized via Asia/Bangkok date utility)
+    const dorm = await db.dormitory.findUnique({
+      where: { id: dormitoryId },
+      select: { createdAt: true },
+    });
+
+    const createdDate = dorm?.createdAt || new Date();
+    const startCode = toBangkokDateString(createdDate).slice(0, 7);
+
+    let startCycle = await db.billingCycle.findFirst({
+      where: { dormitoryId, cycleCode: startCode },
+    });
+
     if (!startCycle) {
-      // Find the earliest existing cycle by periodStart as the true start cycle
       startCycle = await db.billingCycle.findFirst({
         where: { dormitoryId },
         orderBy: { periodStart: 'asc' },
       });
     }
 
-    const created = dorm?.createdAt || new Date();
-    const fallbackStartCode = `${created.getFullYear()}-${String(created.getMonth() + 1).padStart(2, '0')}`;
-    const resolvedCode = startCycle?.cycleCode || fallbackStartCode;
+    const fallbackCode = startCycle?.cycleCode || currentYearMonth;
 
     return {
       billingCycleId: startCycle?.id,
-      cycleCode: resolvedCode,
+      cycleCode: fallbackCode,
       reason: 'ONBOARDING_START',
       cycle: startCycle || undefined,
     };

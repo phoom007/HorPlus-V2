@@ -510,21 +510,49 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
     }
   }, [billingCyclesQuery.data, selectedBillingCycleId]);
 
+  const getAdjacentCycleCode = (code: string, offsetMonths: number): string => {
+    if (!code) return '';
+    const parts = code.split('-');
+    if (parts.length < 2) return code;
+    let y = parseInt(parts[0], 10);
+    let m = parseInt(parts[1], 10) + offsetMonths;
+    while (m > 12) {
+      m -= 12;
+      y += 1;
+    }
+    while (m < 1) {
+      m += 12;
+      y -= 1;
+    }
+    return `${y}-${String(m).padStart(2, '0')}`;
+  };
+
+  const operationalCode = billingCyclesQuery.data?.operationalCycleCode || selectedCycleCode || '';
+  const minOperationalCycleCode = operationalCode ? getAdjacentCycleCode(operationalCode, -1) : '';
+  const maxOperationalCycleCode = operationalCode ? getAdjacentCycleCode(operationalCode, 1) : '';
+
+  const operationalSelectableBillingCycles = React.useMemo(() => {
+    if (!minOperationalCycleCode || !maxOperationalCycleCode) return billingCycles;
+    return billingCycles.filter(
+      (c: any) => c.cycleCode >= minOperationalCycleCode && c.cycleCode <= maxOperationalCycleCode
+    );
+  }, [billingCycles, minOperationalCycleCode, maxOperationalCycleCode]);
+
   const handlePrevCycle = () => {
-    if (billingCycles.length === 0) return;
-    const idx = billingCycles.findIndex(c => c.id === selectedBillingCycleId || c.cycleCode === selectedCycleCode);
-    if (idx < billingCycles.length - 1) {
-      const prev = billingCycles[idx + 1];
+    if (operationalSelectableBillingCycles.length === 0) return;
+    const idx = operationalSelectableBillingCycles.findIndex(c => c.id === selectedBillingCycleId || c.cycleCode === selectedCycleCode);
+    if (idx < operationalSelectableBillingCycles.length - 1) {
+      const prev = operationalSelectableBillingCycles[idx + 1];
       setSelectedBillingCycleId(prev.id);
       setSelectedCycleCode(prev.cycleCode);
     }
   };
 
   const handleNextCycle = () => {
-    if (billingCycles.length === 0) return;
-    const idx = billingCycles.findIndex(c => c.id === selectedBillingCycleId || c.cycleCode === selectedCycleCode);
+    if (operationalSelectableBillingCycles.length === 0) return;
+    const idx = operationalSelectableBillingCycles.findIndex(c => c.id === selectedBillingCycleId || c.cycleCode === selectedCycleCode);
     if (idx > 0) {
-      const next = billingCycles[idx - 1];
+      const next = operationalSelectableBillingCycles[idx - 1];
       setSelectedBillingCycleId(next.id);
       setSelectedCycleCode(next.cycleCode);
     }
@@ -1470,9 +1498,9 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
               <div className="flex items-center justify-between bg-slate-100/80 p-1 rounded-2xl border border-slate-200/50 w-full sm:w-auto sm:min-w-[260px] gap-1">
                 <button
                   onClick={handlePrevCycle}
-                  disabled={billingCycles.length === 0 || billingCycles.findIndex(c => c.id === selectedBillingCycleId || c.cycleCode === selectedCycleCode) >= billingCycles.length - 1}
+                  disabled={operationalSelectableBillingCycles.length === 0 || operationalSelectableBillingCycles.findIndex(c => c.id === selectedBillingCycleId || c.cycleCode === selectedCycleCode) >= operationalSelectableBillingCycles.length - 1}
                   className={`p-1.5 hover:bg-white text-slate-500 hover:text-slate-900 rounded-xl transition-all cursor-pointer ${
-                    billingCycles.length === 0 || billingCycles.findIndex(c => c.id === selectedBillingCycleId || c.cycleCode === selectedCycleCode) >= billingCycles.length - 1 ? 'opacity-25 cursor-not-allowed' : ''
+                    operationalSelectableBillingCycles.length === 0 || operationalSelectableBillingCycles.findIndex(c => c.id === selectedBillingCycleId || c.cycleCode === selectedCycleCode) >= operationalSelectableBillingCycles.length - 1 ? 'opacity-25 cursor-not-allowed' : ''
                   }`}
                   aria-label="ก่อนหน้า"
                 >
@@ -1495,9 +1523,9 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
 
                 <button
                   onClick={handleNextCycle}
-                  disabled={billingCycles.length === 0 || billingCycles.findIndex(c => c.id === selectedBillingCycleId || c.cycleCode === selectedCycleCode) <= 0}
+                  disabled={operationalSelectableBillingCycles.length === 0 || operationalSelectableBillingCycles.findIndex(c => c.id === selectedBillingCycleId || c.cycleCode === selectedCycleCode) <= 0}
                   className={`p-1.5 hover:bg-white text-slate-500 hover:text-slate-900 rounded-xl transition-all cursor-pointer ${
-                    billingCycles.length === 0 || billingCycles.findIndex(c => c.id === selectedBillingCycleId || c.cycleCode === selectedCycleCode) <= 0 ? 'opacity-25 cursor-not-allowed' : ''
+                    operationalSelectableBillingCycles.length === 0 || operationalSelectableBillingCycles.findIndex(c => c.id === selectedBillingCycleId || c.cycleCode === selectedCycleCode) <= 0 ? 'opacity-25 cursor-not-allowed' : ''
                   }`}
                   aria-label="ถัดไป"
                 >
@@ -1510,12 +1538,14 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
                 isOpen={isCycleModalOpen}
                 onClose={() => setIsCycleModalOpen(false)}
                 selectedCycleCode={selectedCycleCode}
-                availableCycles={billingCycles}
+                availableCycles={operationalSelectableBillingCycles}
+                minCycle={minOperationalCycleCode}
+                maxCycle={maxOperationalCycleCode}
                 onSelectCycle={(code, cycle) => {
                   if (cycle?.id) {
                     setSelectedBillingCycleId(cycle.id);
                   } else {
-                    const match = billingCycles.find((c) => c.cycleCode === code);
+                    const match = operationalSelectableBillingCycles.find((c) => c.cycleCode === code);
                     if (match?.id) setSelectedBillingCycleId(match.id);
                   }
                   setSelectedCycleCode(code);

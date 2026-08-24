@@ -126,7 +126,7 @@ export function createBillingCycleRouter(
         currentCycleResolverService.resolveOperationalBillingCycle(dormId),
       ]);
 
-      if (result.total === 0) {
+      if (result.total === 0 || !operational.billingCycleId) {
         await billingCycleService.ensureRollingBillingCycles(dormId);
         [result, operational] = await Promise.all([
           billingCycleService.getBillingCycles(dormId, query),
