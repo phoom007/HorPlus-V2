@@ -379,6 +379,13 @@ export class BillingCycleService {
     return earliest.id === cycleIdOrCode || earliest.cycleCode === cycleIdOrCode;
   }
 
+  public async getExistingCycleCodes(
+    dormitoryId: string,
+    cycleCodes: string[]
+  ): Promise<string[]> {
+    return this.billingCycleRepo.findExistingCycleCodes(dormitoryId, cycleCodes);
+  }
+
   public async getBillingCycles(
     dormitoryId: string,
     filter: BillingCycleFilterQuery = {}

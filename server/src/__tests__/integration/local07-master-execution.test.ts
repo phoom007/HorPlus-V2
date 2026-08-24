@@ -14,7 +14,7 @@
  * @license Apache-2.0
  */
 
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { PrismaClient, Prisma } from '@prisma/client';
 import { getPrismaClient } from '../../db/prisma.js';
 import { coinWalletService } from '../../services/coin-wallet.service.js';
@@ -6537,11 +6537,11 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
         await prisma.dormitory.delete({ where: { id: isoDorm.id } });
       });
 
-      it('14. Cost optimization: complete operational window [op-1, op, op+1] skips redundant ensureRollingBillingCycles', async () => {
+      it('14. Pagination-safe operational window existence and cost optimization', async () => {
         const ownerAuth = await createTestAuthSession(testUser1.id);
         const isoDorm = await prisma.dormitory.create({
           data: {
-            name: 'Cost Opt Dormitory',
+            name: 'Pagination Cost Opt Dormitory',
             type: 'apartment',
             status: 'active',
             createdByUserId: testUser1.id,
@@ -6608,17 +6608,87 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
         const countBefore = await prisma.billingCycle.count({ where: { dormitoryId: isoDorm.id } });
         expect(countBefore).toBe(3);
 
-        const res = await request(app)
+        // Case A: default pagination (complete window) -> no ensure, 0 DB writes
+        const resA = await request(app)
           .get('/api/v1/billing-cycles')
           .set('Cookie', ownerAuth.cookies)
           .set('x-dormitory-id', isoDorm.id);
 
-        expect(res.status).toBe(200);
-        expect(res.body.operationalCycleCode).toBe('2026-08');
+        expect(resA.status).toBe(200);
+        expect(resA.body.operationalCycleCode).toBe('2026-08');
+        expect(resA.body.data.length).toBe(3);
+        expect(resA.body.pagination.total).toBe(3);
 
-        // DB count remains exactly 3 — no redundant writes
-        const countAfter = await prisma.billingCycle.count({ where: { dormitoryId: isoDorm.id } });
-        expect(countAfter).toBe(3);
+        // Case B: pageSize=2, page=1 -> response has 2 items, total is 3, operationalCycleCode is '2026-08', no false ensure
+        const resB = await request(app)
+          .get('/api/v1/billing-cycles?pageSize=2&page=1')
+          .set('Cookie', ownerAuth.cookies)
+          .set('x-dormitory-id', isoDorm.id);
+
+        expect(resB.status).toBe(200);
+        expect(resB.body.operationalCycleCode).toBe('2026-08');
+        expect(resB.body.data.length).toBe(2);
+        expect(resB.body.pagination.total).toBe(3);
+        expect(resB.body.pagination.pageSize).toBe(2);
+        expect(resB.body.pagination.page).toBe(1);
+
+        // Case C: page=2, pageSize=2 -> response has 1 item, total is 3, operationalCycleCode is '2026-08', no false ensure
+        const resC = await request(app)
+          .get('/api/v1/billing-cycles?pageSize=2&page=2')
+          .set('Cookie', ownerAuth.cookies)
+          .set('x-dormitory-id', isoDorm.id);
+
+        expect(resC.status).toBe(200);
+        expect(resC.body.operationalCycleCode).toBe('2026-08');
+        expect(resC.body.data.length).toBe(1);
+        expect(resC.body.pagination.total).toBe(3);
+        expect(resC.body.pagination.page).toBe(2);
+
+        // Case D: search for non-matching string -> response has 0 items, operationalCycleCode is '2026-08', no false ensure
+        const resD = await request(app)
+          .get('/api/v1/billing-cycles?search=NONEXISTENT_CYCLE')
+          .set('Cookie', ownerAuth.cookies)
+          .set('x-dormitory-id', isoDorm.id);
+
+        expect(resD.status).toBe(200);
+        expect(resD.body.operationalCycleCode).toBe('2026-08');
+        expect(resD.body.data.length).toBe(0);
+        expect(resD.body.pagination.total).toBe(0);
+
+        // Case E: status filter that matches nothing (e.g. status=completed) -> response 0 items, operationalCycleCode is '2026-08', no false ensure
+        const resE = await request(app)
+          .get('/api/v1/billing-cycles?status=completed')
+          .set('Cookie', ownerAuth.cookies)
+          .set('x-dormitory-id', isoDorm.id);
+
+        expect(resE.status).toBe(200);
+        expect(resE.body.operationalCycleCode).toBe('2026-08');
+        expect(resE.body.data.length).toBe(0);
+
+        // Verify DB count remains exactly 3 — no redundant writes across Cases A-E
+        const countMid = await prisma.billingCycle.count({ where: { dormitoryId: isoDorm.id } });
+        expect(countMid).toBe(3);
+
+        // Case F: genuine missing code (delete September 2026-09)
+        const cSepRow = await prisma.billingCycle.findFirst({ where: { dormitoryId: isoDorm.id, cycleCode: '2026-09' } });
+        if (cSepRow) {
+          await prisma.billingRateSnapshot.deleteMany({ where: { billingCycleId: cSepRow.id } });
+          await prisma.billingCycle.delete({ where: { id: cSepRow.id } });
+        }
+        expect(await prisma.billingCycle.count({ where: { dormitoryId: isoDorm.id } })).toBe(2);
+
+        // Now GET /api/v1/billing-cycles detects genuine absence of 2026-09 in DB -> triggers ensureRollingBillingCycles
+        const resF = await request(app)
+          .get('/api/v1/billing-cycles')
+          .set('Cookie', ownerAuth.cookies)
+          .set('x-dormitory-id', isoDorm.id);
+
+        expect(resF.status).toBe(200);
+        expect(resF.body.operationalCycleCode).toBe('2026-08');
+        expect(resF.body.data.some((c: any) => c.cycleCode === '2026-09')).toBe(true);
+
+        const countFinal = await prisma.billingCycle.count({ where: { dormitoryId: isoDorm.id } });
+        expect(countFinal).toBe(3);
 
         // Cleanup
         await prisma.billingRateSnapshot.deleteMany({ where: { dormitoryId: isoDorm.id } });

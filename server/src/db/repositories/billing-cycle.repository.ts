@@ -109,6 +109,7 @@ export interface BillingCycleFilterQuery {
 export interface IBillingCycleRepository {
   findById(id: string, dormitoryId?: string): Promise<BillingCycleEntity | null>;
   findByCode(dormitoryId: string, cycleCode: string): Promise<BillingCycleEntity | null>;
+  findExistingCycleCodes(dormitoryId: string, cycleCodes: string[]): Promise<string[]>;
   findOverlapping(dormitoryId: string, periodStart: Date, periodEnd: Date, excludeId?: string): Promise<BillingCycleEntity[]>;
   findAll(dormitoryId: string, filter?: BillingCycleFilterQuery): Promise<{ items: BillingCycleEntity[]; total: number }>;
   create(dormitoryId: string, data: CreateBillingCycleData): Promise<BillingCycleEntity>;
@@ -136,6 +137,18 @@ export class InMemoryBillingCycleRepository implements IBillingCycleRepository {
       }
     }
     return null;
+  }
+
+  public async findExistingCycleCodes(dormitoryId: string, cycleCodes: string[]): Promise<string[]> {
+    if (!cycleCodes || cycleCodes.length === 0) return [];
+    const codeSet = new Set(cycleCodes);
+    const found: string[] = [];
+    for (const c of this.cycles.values()) {
+      if (c.dormitoryId === dormitoryId && codeSet.has(c.cycleCode)) {
+        found.push(c.cycleCode);
+      }
+    }
+    return found;
   }
 
   public async findOverlapping(
@@ -383,6 +396,18 @@ export class PrismaBillingCycleRepository implements IBillingCycleRepository {
       },
     });
     return c ? this.mapCycleToEntity(c) : null;
+  }
+
+  public async findExistingCycleCodes(dormitoryId: string, cycleCodes: string[]): Promise<string[]> {
+    if (!cycleCodes || cycleCodes.length === 0) return [];
+    const items = await this.prisma.billingCycle.findMany({
+      where: {
+        dormitoryId,
+        cycleCode: { in: cycleCodes },
+      },
+      select: { cycleCode: true },
+    });
+    return items.map((c: any) => c.cycleCode);
   }
 
   public async findOverlapping(

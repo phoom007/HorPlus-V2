@@ -132,7 +132,9 @@ export function createBillingCycleRouter(
         ? [getAdjacentCycleCode(opCode, -1), opCode, getAdjacentCycleCode(opCode, 1)]
         : [];
 
-      const existingCodes = new Set(result.items.map((c) => c.cycleCode));
+      const existingCodes = requiredCodes.length > 0
+        ? new Set(await billingCycleService.getExistingCycleCodes(dormId, requiredCodes))
+        : new Set<string>();
       const hasMissingOperationalCode = requiredCodes.some((code) => !existingCodes.has(code));
 
       if (result.total === 0 || !operational.billingCycleId || hasMissingOperationalCode) {
