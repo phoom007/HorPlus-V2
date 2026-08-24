@@ -137,7 +137,7 @@ export function createBillingCycleRouter(
         : new Set<string>();
       const hasMissingOperationalCode = requiredCodes.some((code) => !existingCodes.has(code));
 
-      if (result.total === 0 || !operational.billingCycleId || hasMissingOperationalCode) {
+      if (!operational.billingCycleId || hasMissingOperationalCode) {
         await billingCycleService.ensureRollingBillingCycles(dormId);
         [result, operational] = await Promise.all([
           billingCycleService.getBillingCycles(dormId, query),

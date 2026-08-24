@@ -5946,6 +5946,7 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
 
       beforeAll(async () => {
         cycleService = new BillingCycleService(new PrismaBillingCycleRepository(prisma));
+        app = createApp({ customBillingCycleService: cycleService });
         const ts = Date.now();
         lifecycleDorm = await prisma.dormitory.create({
           data: {
@@ -6608,6 +6609,8 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
         const countBefore = await prisma.billingCycle.count({ where: { dormitoryId: isoDorm.id } });
         expect(countBefore).toBe(3);
 
+        const ensureSpy = vi.spyOn(cycleService, 'ensureRollingBillingCycles');
+
         // Case A: default pagination (complete window) -> no ensure, 0 DB writes
         const resA = await request(app)
           .get('/api/v1/billing-cycles')
@@ -6618,6 +6621,7 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
         expect(resA.body.operationalCycleCode).toBe('2026-08');
         expect(resA.body.data.length).toBe(3);
         expect(resA.body.pagination.total).toBe(3);
+        expect(ensureSpy).toHaveBeenCalledTimes(0);
 
         // Case B: pageSize=2, page=1 -> response has 2 items, total is 3, operationalCycleCode is '2026-08', no false ensure
         const resB = await request(app)
@@ -6631,6 +6635,7 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
         expect(resB.body.pagination.total).toBe(3);
         expect(resB.body.pagination.pageSize).toBe(2);
         expect(resB.body.pagination.page).toBe(1);
+        expect(ensureSpy).toHaveBeenCalledTimes(0);
 
         // Case C: page=2, pageSize=2 -> response has 1 item, total is 3, operationalCycleCode is '2026-08', no false ensure
         const resC = await request(app)
@@ -6643,6 +6648,7 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
         expect(resC.body.data.length).toBe(1);
         expect(resC.body.pagination.total).toBe(3);
         expect(resC.body.pagination.page).toBe(2);
+        expect(ensureSpy).toHaveBeenCalledTimes(0);
 
         // Case D: search for non-matching string -> response has 0 items, operationalCycleCode is '2026-08', no false ensure
         const resD = await request(app)
@@ -6654,6 +6660,7 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
         expect(resD.body.operationalCycleCode).toBe('2026-08');
         expect(resD.body.data.length).toBe(0);
         expect(resD.body.pagination.total).toBe(0);
+        expect(ensureSpy).toHaveBeenCalledTimes(0);
 
         // Case E: status filter that matches nothing (e.g. status=completed) -> response 0 items, operationalCycleCode is '2026-08', no false ensure
         const resE = await request(app)
@@ -6664,6 +6671,7 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
         expect(resE.status).toBe(200);
         expect(resE.body.operationalCycleCode).toBe('2026-08');
         expect(resE.body.data.length).toBe(0);
+        expect(ensureSpy).toHaveBeenCalledTimes(0);
 
         // Verify DB count remains exactly 3 — no redundant writes across Cases A-E
         const countMid = await prisma.billingCycle.count({ where: { dormitoryId: isoDorm.id } });
@@ -6677,7 +6685,7 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
         }
         expect(await prisma.billingCycle.count({ where: { dormitoryId: isoDorm.id } })).toBe(2);
 
-        // Now GET /api/v1/billing-cycles detects genuine absence of 2026-09 in DB -> triggers ensureRollingBillingCycles
+        // Now GET /api/v1/billing-cycles detects genuine absence of 2026-09 in DB -> triggers ensureRollingBillingCycles exactly once
         const resF = await request(app)
           .get('/api/v1/billing-cycles')
           .set('Cookie', ownerAuth.cookies)
@@ -6686,17 +6694,86 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
         expect(resF.status).toBe(200);
         expect(resF.body.operationalCycleCode).toBe('2026-08');
         expect(resF.body.data.some((c: any) => c.cycleCode === '2026-09')).toBe(true);
+        expect(ensureSpy).toHaveBeenCalledTimes(1);
 
         const countFinal = await prisma.billingCycle.count({ where: { dormitoryId: isoDorm.id } });
         expect(countFinal).toBe(3);
 
-        // Cleanup
+        ensureSpy.mockClear();
+
+        // Case G: Brand-new zero-cycle bootstrap dormitory
+        const zeroDorm = await prisma.dormitory.create({
+          data: {
+            name: 'Zero Cycle Bootstrap Dormitory',
+            type: 'apartment',
+            status: 'active',
+            createdByUserId: testUser1.id,
+            billingSettings: {
+              create: {
+                dueDay: 5,
+                billingDay: 25,
+                waterBillingType: 'per_unit',
+                waterRate: '18.00',
+                electricityBillingType: 'per_unit',
+                electricityRate: '8.00',
+              },
+            },
+          },
+        });
+
+        const zeroRole = await prisma.role.create({
+          data: {
+            dormitoryId: zeroDorm.id,
+            name: 'Owner',
+            code: 'owner',
+            permissions: { '*': ['*'] },
+            isSystem: true,
+          },
+        });
+
+        await prisma.dormitoryMember.create({
+          data: {
+            dormitoryId: zeroDorm.id,
+            userId: testUser1.id,
+            roleId: zeroRole.id,
+            status: 'active',
+            membershipOrigin: 'GOOGLE_BOOTSTRAP',
+          },
+        });
+
+        // Ensure 0 cycles exist in DB initially
+        expect(await prisma.billingCycle.count({ where: { dormitoryId: zeroDorm.id } })).toBe(0);
+
+        const resG = await request(app)
+          .get('/api/v1/billing-cycles')
+          .set('Cookie', ownerAuth.cookies)
+          .set('x-dormitory-id', zeroDorm.id);
+
+        expect(resG.status).toBe(200);
+        expect(resG.body.operationalCycleCode).toBe('2026-08');
+        expect(resG.body.data.length).toBe(3);
+        expect(resG.body.pagination.total).toBe(3);
+        expect(ensureSpy).toHaveBeenCalledTimes(1);
+
+        // Verify DB now has 3 rolling cycles created for zeroDorm
+        expect(await prisma.billingCycle.count({ where: { dormitoryId: zeroDorm.id } })).toBe(3);
+
+        ensureSpy.mockRestore();
+
+        // Cleanup isoDorm & zeroDorm
         await prisma.billingRateSnapshot.deleteMany({ where: { dormitoryId: isoDorm.id } });
         await prisma.billingCycle.deleteMany({ where: { dormitoryId: isoDorm.id } });
         await prisma.dormitoryBillingSettings.deleteMany({ where: { dormitoryId: isoDorm.id } });
         await prisma.dormitoryMember.deleteMany({ where: { dormitoryId: isoDorm.id } });
         await prisma.role.deleteMany({ where: { dormitoryId: isoDorm.id } });
         await prisma.dormitory.delete({ where: { id: isoDorm.id } });
+
+        await prisma.billingRateSnapshot.deleteMany({ where: { dormitoryId: zeroDorm.id } });
+        await prisma.billingCycle.deleteMany({ where: { dormitoryId: zeroDorm.id } });
+        await prisma.dormitoryBillingSettings.deleteMany({ where: { dormitoryId: zeroDorm.id } });
+        await prisma.dormitoryMember.deleteMany({ where: { dormitoryId: zeroDorm.id } });
+        await prisma.role.deleteMany({ where: { dormitoryId: zeroDorm.id } });
+        await prisma.dormitory.delete({ where: { id: zeroDorm.id } });
       });
     });
   });

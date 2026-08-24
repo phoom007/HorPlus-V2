@@ -57,6 +57,7 @@ import { auditService } from './services/audit.service.js';
 
 export interface CreateAppOptions {
   customAuthService?: AuthenticationService;
+  customBillingCycleService?: BillingCycleService;
   /** When true, use Prisma repositories even in test mode (for integration tests). */
   forcePrisma?: boolean;
 }
@@ -125,7 +126,7 @@ export function createApp(optionsOrAuth?: CreateAppOptions | AuthenticationServi
   const tenantService = new TenantService(tenantRepo, contractRepo, sensitiveFieldService, auditService);
   const contractService = new ContractService(contractRepo, roomRepo, tenantRepo, auditService);
   const occupancyService = new OccupancyService(roomRepo, buildingRepo, tenantRepo, contractRepo);
-  const billingCycleService = new BillingCycleService(billingCycleRepo, auditService);
+  const billingCycleService = options.customBillingCycleService || new BillingCycleService(billingCycleRepo, auditService);
   const meterService = new MeterService(meterRepo as any, billingCycleRepo, roomRepo, billRepo as any, auditService);
   const billingService = new BillingService(billRepo as any, billingCycleRepo, meterRepo as any, contractRepo, roomRepo, tenantRepo as any, auditService);
 
