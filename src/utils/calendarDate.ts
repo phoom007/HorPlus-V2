@@ -140,3 +140,21 @@ export function isCycleInRollingThreeMonthWindow(
   const windowCodes = getRollingThreeMonthWindow(referenceDate);
   return windowCodes.includes(cycleCode.trim());
 }
+
+/**
+ * Formats a Gregorian date (Date instance or YYYY-MM-DD string) into Thai Buddhist short date format "(DD/MM/YY)".
+ * Example: "2026-08-25" -> "(25/08/69)"
+ */
+export function formatShortThaiBuddhistDate(input?: Date | string | null): string {
+  if (!input) return '-';
+  try {
+    const bkkStr = normalizeBangkokDate(input);
+    const [yearStr, monthStr, dayStr] = bkkStr.split('-');
+    const beYear = parseInt(yearStr, 10) + 543;
+    const shortBeYear = String(beYear).slice(-2);
+    return `(${dayStr}/${monthStr}/${shortBeYear})`;
+  } catch {
+    return '-';
+  }
+}
+

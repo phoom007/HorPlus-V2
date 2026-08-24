@@ -39,6 +39,8 @@ export interface RoomPreviewContext {
   dailyDepositAmount?: string | number;
   showDailyDepositLine?: boolean;
   isDailyDepositPaidInDisplayedPeriod?: boolean;
+  dailyCheckOutDate?: string | null;
+  historicalDailyCount?: number;
 }
 
 export interface TransientRowDraft {

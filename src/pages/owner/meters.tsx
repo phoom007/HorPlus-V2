@@ -39,7 +39,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { queryKeys, STALE_TIMES } from '../../lib/queryClient';
 import { meterDraftStore, deriveMeterDraftPatches } from '../../lib/meterDraftStore';
 import { calculateMeterRowPreview, calculateMeterUsageUnits, RoomPreviewContext, parseScaled2, formatScaled2, formatMoneyDisplay } from '../../utils/meterBillingCalculator';
-import { isCycleInRollingThreeMonthWindow, toBangkokDateString, normalizeBangkokDate } from '../../utils/calendarDate';
+import { isCycleInRollingThreeMonthWindow, toBangkokDateString, normalizeBangkokDate, formatShortThaiBuddhistDate } from '../../utils/calendarDate';
 import { Room, Building, QuickAddRoomContext, Bill, BillItem, Tenant, Contract, BillStatus, calculateRoomRentForCycle } from '../../types';
 import { getDataProvider } from '../../data/dataProvider';
 import { httpRequest } from '../../data/httpClient';
@@ -2396,7 +2396,6 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                               pattern="[0-9]*"
                               disabled={isRowPaid}
                               value={row.elecPrev}
-                              placeholder="0"
                               onChange={(e) => {
                                 handleMeterReadingChange(row.roomId, 'elecPrev', e.target.value);
                               }}
@@ -2523,7 +2522,6 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                               pattern="[0-9]*"
                               disabled={isRowPaid}
                               value={row.waterPrev}
-                              placeholder="0"
                               onChange={(e) => {
                                 handleMeterReadingChange(row.roomId, 'waterPrev', e.target.value);
                               }}
@@ -2921,6 +2919,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                         const isEligibleAddTenantCycle = isCycleInRollingThreeMonthWindow(activeCycleCode);
                         const hasBookableGap = roomCtx?.hasBookableGap ?? true;
                         const historicalDailyCount = roomCtx?.historicalDailyCount || 0;
+                        const dailyCheckOutDate = roomCtx?.dailyCheckOutDate || null;
 
                         if (isFuture) {
                           return (
@@ -3007,16 +3006,16 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                                       (ยังไม่ได้เชื่อม LINE)
                                     </span>
                                   )}
-                                  {historicalDailyCount > 0 && (
+                                  {dailyCheckOutDate && (
                                     <span className="text-xs font-bold text-slate-700">
-                                      ผู้เช่ารายวัน {historicalDailyCount} คน
+                                      {formatShortThaiBuddhistDate(dailyCheckOutDate)}
                                     </span>
                                   )}
                                 </div>
                               )}
-                              {!hasTenant && historicalDailyCount > 0 && (
+                              {!hasTenant && dailyCheckOutDate && (
                                 <span className="text-xs font-bold text-slate-700">
-                                  ผู้เช่ารายวัน {historicalDailyCount} คน
+                                  {formatShortThaiBuddhistDate(dailyCheckOutDate)}
                                 </span>
                               )}
                               {hasBookableGap && (room || row.roomId) && (
@@ -3080,9 +3079,11 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                                 <span className="truncate max-w-[100px]">{effectiveTenantName}</span>
                                 <ArrowRight className="w-3 h-3 opacity-60 shrink-0" />
                               </button>
-                              <span className="text-xs font-bold text-slate-700">
-                                ผู้เช่ารายวัน {historicalDailyCount} คน
-                              </span>
+                              {dailyCheckOutDate && (
+                                <span className="text-xs font-bold text-slate-700">
+                                  {formatShortThaiBuddhistDate(dailyCheckOutDate)}
+                                </span>
+                              )}
                             </div>
                           );
                         }
@@ -3106,10 +3107,12 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                         }
 
                         if (hasDaily) {
-                          return (
+                          return dailyCheckOutDate ? (
                             <span className="text-xs font-bold text-slate-700">
-                              ผู้เช่ารายวัน {historicalDailyCount} คน
+                              {formatShortThaiBuddhistDate(dailyCheckOutDate)}
                             </span>
+                          ) : (
+                            <span className="text-gray-400">ไม่มีข้อมูล</span>
                           );
                         }
 

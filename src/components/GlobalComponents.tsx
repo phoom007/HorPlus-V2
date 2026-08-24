@@ -82,9 +82,9 @@ export const renderOptionalText = (val: any, fallback = '-'): string => {
 };
 
 export const formatMeterReadingDisplay = (val: string | number | null | undefined): string => {
-  if (val === null || val === undefined || val === '') return '0';
+  if (val === null || val === undefined || val === '') return '';
   const num = typeof val === 'number' ? val : parseFloat(String(val).replace(/,/g, ''));
-  if (isNaN(num)) return '0';
+  if (isNaN(num)) return '';
   if (Number.isInteger(num)) {
     return num.toString();
   }

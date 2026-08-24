@@ -20,8 +20,8 @@ describe('LOCAL-07 Owner Core Meter & Tenant Operational Correction Suite', () =
       expect(formatMeterReadingDisplay('1250.0')).toBe('1250');
       expect(formatMeterReadingDisplay(0)).toBe('0');
       expect(formatMeterReadingDisplay('0.00')).toBe('0');
-      expect(formatMeterReadingDisplay('')).toBe('0');
-      expect(formatMeterReadingDisplay(null)).toBe('0');
+      expect(formatMeterReadingDisplay('')).toBe('');
+      expect(formatMeterReadingDisplay(null)).toBe('');
     });
 
     it('preserves fractional decimal readings when non-zero decimals exist', () => {

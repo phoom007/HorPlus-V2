@@ -1840,7 +1840,7 @@ describe('LOCAL-07 Source-Reviewed Meter Workspace Correction Suite', () => {
       expect(checkOutAt.getTime() > checkInAt.getTime()).toBe(true);
     });
 
-    it('Proof 10D: Historical settled daily stay renders ผู้เช่ารายวัน N คน in Tenant cell and neutral dash in Status cell', async () => {
+    it('Proof 10D: Historical settled daily stay renders (DD/MM/YY) checkout date in Tenant cell and neutral dash in Status cell', async () => {
       const mockRooms: Room[] = [
         { id: 'room-b102', roomNumber: 'B102', floor: 1, roomType: 'standard', monthlyRent: 4000, depositAmount: 4000, status: 'vacant' } as any,
       ];
@@ -1858,6 +1858,7 @@ describe('LOCAL-07 Source-Reviewed Meter Workspace Correction Suite', () => {
                   roomNumber: 'B102',
                   billingSource: 'NONE',
                   historicalDailyCount: 1,
+                  dailyCheckOutDate: '2026-07-25',
                   isDailyUnpaid: false,
                   isDailyOverdue: false,
                   isDailyRentPaid: false,
@@ -1906,9 +1907,9 @@ describe('LOCAL-07 Source-Reviewed Meter Workspace Correction Suite', () => {
         const row = container.querySelector('#room-row-room-b102');
         expect(row).toBeTruthy();
 
-        // Tenant cell renders 'ผู้เช่ารายวัน 1 คน'
+        // Tenant cell renders '(25/07/69)'
         const tenantCell = row?.querySelector('td:nth-child(10)');
-        expect(tenantCell?.textContent).toContain('ผู้เช่ารายวัน 1 คน');
+        expect(tenantCell?.textContent).toContain('(25/07/69)');
 
         // Status cell renders '-' (no red daily tail, no green active daily badge, no 'ยังไม่ออกบิล' toggle)
         const statusCell = row?.querySelector('td:nth-child(9)');

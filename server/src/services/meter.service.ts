@@ -666,6 +666,7 @@ export class MeterService {
         );
 
         let currWaterInt: string | null = null;
+        let isWaterCurrExplicitlyProvided = false;
         if (row.waterCurr !== undefined && row.waterCurr !== null && String(row.waterCurr).trim() !== '') {
           const parsedCurr = parseMeterIntegerReading(row.waterCurr);
           if (!parsedCurr.isValid) {
@@ -675,11 +676,15 @@ export class MeterService {
             throw err;
           }
           currWaterInt = String(parsedCurr.value);
-        } else if (existingReading?.currentReading) {
+          isWaterCurrExplicitlyProvided = true;
+        } else if (row.waterCurr === null || (row.waterCurr !== undefined && String(row.waterCurr).trim() === '')) {
+          currWaterInt = null;
+          isWaterCurrExplicitlyProvided = true;
+        } else if (existingReading?.currentReading !== null && existingReading?.currentReading !== undefined) {
           currWaterInt = String(existingReading.currentReading).replace(/\.00$/, '');
         }
 
-        let usageUnits = '0.00';
+        let usageUnits: string | null = null;
         if (currWaterInt !== null && currWaterInt !== undefined && currWaterInt !== '') {
           const usageRes = calculateMeterUsageUnits(authPrev, currWaterInt);
           if (!usageRes.isValid) {
@@ -720,7 +725,9 @@ export class MeterService {
             dormitoryId,
             {
               previousReading: authPrev,
-              ...(currWaterInt !== null ? { currentReading: currWaterInt, usageUnits } : {}),
+              ...(isWaterCurrExplicitlyProvided
+                ? { currentReading: currWaterInt, usageUnits: usageUnits }
+                : (currWaterInt !== null ? { currentReading: currWaterInt, usageUnits: usageUnits } : {})),
               readAt: new Date(),
               readByUserId: userId,
             },
@@ -736,8 +743,8 @@ export class MeterService {
               meterDeviceId: device.id,
               meterType: 'water',
               previousReading: authPrev,
-              currentReading: currWaterInt || authPrev,
-              usageUnits,
+              currentReading: currWaterInt,
+              usageUnits: usageUnits,
               readAt: new Date(),
               readByUserId: userId,
               status: 'draft',
@@ -801,6 +808,7 @@ export class MeterService {
         );
 
         let currElecInt: string | null = null;
+        let isElecCurrExplicitlyProvided = false;
         if (row.elecCurr !== undefined && row.elecCurr !== null && String(row.elecCurr).trim() !== '') {
           const parsedCurr = parseMeterIntegerReading(row.elecCurr);
           if (!parsedCurr.isValid) {
@@ -810,11 +818,15 @@ export class MeterService {
             throw err;
           }
           currElecInt = String(parsedCurr.value);
-        } else if (existingReading?.currentReading) {
+          isElecCurrExplicitlyProvided = true;
+        } else if (row.elecCurr === null || (row.elecCurr !== undefined && String(row.elecCurr).trim() === '')) {
+          currElecInt = null;
+          isElecCurrExplicitlyProvided = true;
+        } else if (existingReading?.currentReading !== null && existingReading?.currentReading !== undefined) {
           currElecInt = String(existingReading.currentReading).replace(/\.00$/, '');
         }
 
-        let usageUnits = '0.00';
+        let usageUnits: string | null = null;
         if (currElecInt !== null && currElecInt !== undefined && currElecInt !== '') {
           const usageRes = calculateMeterUsageUnits(authPrev, currElecInt);
           if (!usageRes.isValid) {
@@ -855,7 +867,9 @@ export class MeterService {
             dormitoryId,
             {
               previousReading: authPrev,
-              ...(currElecInt !== null ? { currentReading: currElecInt, usageUnits } : {}),
+              ...(isElecCurrExplicitlyProvided
+                ? { currentReading: currElecInt, usageUnits: usageUnits }
+                : (currElecInt !== null ? { currentReading: currElecInt, usageUnits: usageUnits } : {})),
               readAt: new Date(),
               readByUserId: userId,
             },
@@ -871,8 +885,8 @@ export class MeterService {
               meterDeviceId: device.id,
               meterType: 'electricity',
               previousReading: authPrev,
-              currentReading: currElecInt || authPrev,
-              usageUnits,
+              currentReading: currElecInt,
+              usageUnits: usageUnits,
               readAt: new Date(),
               readByUserId: userId,
               status: 'draft',
@@ -1464,6 +1478,7 @@ export class MeterService {
       snapshotPeopleCount: number | null;
       currentHouseholdPeopleCount: number;
       historicalDailyCount: number;
+      dailyCheckOutDate?: string | null;
       isDailyUnpaid: boolean;
       hasBookableGap: boolean;
     }>;
@@ -1722,6 +1737,9 @@ export class MeterService {
       const contract = roomContractMap.get(room.id);
       const prov = roomProvisionalMap.get(room.id);
       const dailyStay = roomDailyStayMap.get(room.id);
+      const futureC = roomFutureContractMap.get(room.id);
+      const futureP = roomFutureProvisionalMap.get(room.id);
+      const futureD = roomFutureDailyMap.get(room.id);
 
       if (contract) {
         billingSource = 'CONTRACT';
@@ -1808,9 +1826,6 @@ export class MeterService {
             }
           } else {
             // Check future reservation
-            const futureC = roomFutureContractMap.get(room.id);
-            const futureP = roomFutureProvisionalMap.get(room.id);
-            const futureD = roomFutureDailyMap.get(room.id);
             if (futureC) {
               isFutureReservation = true;
               tenantId = futureC.tenantId;
@@ -1875,6 +1890,7 @@ export class MeterService {
       let isDailyFinancialTail = false;
       let unpaidDailyStay: typeof allDailyStays[0] | null = null;
 
+      let dailyCheckOutDate: string | null = null;
       if (billingSource === 'DAILY_STAY') {
         const activeDailyStay = roomDailyStaysInCycle.find(d => {
           const iv = getDailyStayPhysicalInterval(d);
@@ -1882,6 +1898,7 @@ export class MeterService {
         }) || roomDailyStaysInCycle[0];
 
         if (activeDailyStay) {
+          dailyCheckOutDate = toBangkokDateString(activeDailyStay.endDate);
           const rentItem = activeDailyStay.invoice?.items.find((i) => i.itemType === 'RENT' || i.itemType === 'DAILY_RENT');
           const isPaid = rentItem
             ? (rentItem.status === 'SETTLED' || rentItem.status === 'DECLARED_PAID')
@@ -1917,6 +1934,16 @@ export class MeterService {
         tenantName = unpaidDailyStay.applicantFullName || (unpaidDailyStay.tenant ? (unpaidDailyStay.tenant.displayName || `${unpaidDailyStay.tenant.firstName || ''} ${unpaidDailyStay.tenant.lastName || ''}`.trim()) : 'ผู้พักรายวัน');
         isLineLinked = Boolean(unpaidDailyStay.tenant?.linkedUserId);
         isDailyFinancialTail = true;
+      }
+
+      if (!dailyCheckOutDate) {
+        if (unpaidDailyStay) {
+          dailyCheckOutDate = toBangkokDateString(unpaidDailyStay.endDate);
+        } else if (futureD) {
+          dailyCheckOutDate = toBangkokDateString(futureD.endDate);
+        } else if (roomDailyStaysInCycle.length > 0) {
+          dailyCheckOutDate = toBangkokDateString(roomDailyStaysInCycle[0].endDate);
+        }
       }
 
       // Charge Components & Amount Due Breakdown
@@ -2119,17 +2146,14 @@ export class MeterService {
       }
 
       // D. Future reservations
-      const futureC = roomFutureContractMap.get(room.id);
       if (futureC && ['active', 'ACTIVE', 'approved', 'expiring_soon', 'pending_signature', 'waiting_extension'].includes(futureC.status)) {
         blockingIntervals.push(getContractPhysicalInterval(futureC));
       }
 
-      const futureP = roomFutureProvisionalMap.get(room.id);
       if (futureP && ['ACTIVE', 'active', 'RESERVED', 'reserved', 'CONVERTED', 'ENDED'].includes(futureP.status)) {
         blockingIntervals.push(getProvisionalTermPhysicalInterval(futureP));
       }
 
-      const futureD = roomFutureDailyMap.get(room.id);
       if (futureD && ['ACTIVE', 'active', 'RESERVED', 'reserved', 'CHECKED_OUT', 'checked_out', 'COMPLETED', 'completed'].includes(futureD.status)) {
         blockingIntervals.push(getDailyStayPhysicalInterval(futureD));
       }
@@ -2162,6 +2186,7 @@ export class MeterService {
         chargeComponents,
         hasBookableGap,
         historicalDailyCount,
+        dailyCheckOutDate,
         isDailyUnpaid,
         isDailyRentPaid,
         isDailyOverdue,
