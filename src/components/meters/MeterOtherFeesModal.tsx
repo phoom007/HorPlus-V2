@@ -14,12 +14,17 @@ import {
 } from 'lucide-react';
 export function sanitizeMoneyTyping(val: string): string {
   if (!val) return '';
-  let cleaned = val.replace(/[^0-9.]/g, '');
+  const trimmed = val.trim();
+  const isNegative = trimmed.startsWith('-');
+  let cleaned = trimmed.replace(/[^0-9.]/g, '');
   const firstDot = cleaned.indexOf('.');
   if (firstDot !== -1) {
     const intPart = cleaned.slice(0, firstDot);
     const fracPart = cleaned.slice(firstDot + 1).replace(/\./g, '').slice(0, 2);
     cleaned = `${intPart}.${fracPart}`;
+  }
+  if (isNegative) {
+    return cleaned ? `-${cleaned}` : '-';
   }
   return cleaned;
 }
@@ -121,9 +126,9 @@ export const MeterOtherFeesModal: React.FC<MeterOtherFeesModalProps> = ({
       return;
     }
 
-    // Backend constraint: /^\d+(\.\d{1,2})?$/
-    if (!/^\d+(\.\d{1,2})?$/.test(cleanAmt)) {
-      setErrorMessage('จำนวนเงินต้องเป็นตัวเลขทศนิยมไม่เกิน 2 ตำแหน่งและไม่ติดลบ');
+    // Backend constraint: /^-?\d+(\.\d{1,2})?$/
+    if (!/^-?\d+(\.\d{1,2})?$/.test(cleanAmt)) {
+      setErrorMessage('จำนวนเงินต้องเป็นตัวเลขทศนิยมไม่เกิน 2 ตำแหน่ง');
       amountInputRef.current?.focus();
       return;
     }
@@ -167,8 +172,8 @@ export const MeterOtherFeesModal: React.FC<MeterOtherFeesModalProps> = ({
     let finalItems = [...draftFees];
 
     if (cleanDesc && cleanAmt) {
-      if (!/^\d+(\.\d{1,2})?$/.test(cleanAmt)) {
-        setErrorMessage('จำนวนเงินต้องเป็นตัวเลขทศนิยมไม่เกิน 2 ตำแหน่งและไม่ติดลบ');
+      if (!/^-?\d+(\.\d{1,2})?$/.test(cleanAmt)) {
+        setErrorMessage('จำนวนเงินต้องเป็นตัวเลขทศนิยมไม่เกิน 2 ตำแหน่ง');
         amountInputRef.current?.focus();
         return;
       }
@@ -363,7 +368,7 @@ export const MeterOtherFeesModal: React.FC<MeterOtherFeesModalProps> = ({
                   }}
                   className="flex-1 min-w-0 px-3 py-2 text-xs border border-gray-200 rounded-xl bg-white text-slate-800 font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all placeholder:text-gray-300"
                 />
-                <div className="relative w-24 shrink-0">
+                <div className="w-28 shrink-0">
                   <input
                     ref={amountInputRef}
                     type="text"
@@ -381,11 +386,8 @@ export const MeterOtherFeesModal: React.FC<MeterOtherFeesModalProps> = ({
                         handleAddItem();
                       }
                     }}
-                    className="w-full px-3 py-2 pr-7 text-xs border border-gray-200 rounded-xl bg-white text-slate-800 font-bold text-right focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all placeholder:text-gray-300"
+                    className="w-full px-3 py-2 text-xs border border-gray-200 rounded-xl bg-white text-slate-800 font-bold text-center focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all placeholder:text-gray-300"
                   />
-                  <span className="absolute right-2.5 top-2 text-[10px] text-slate-400 font-bold pointer-events-none">
-                    ฿
-                  </span>
                 </div>
                 <button
                   type="button"

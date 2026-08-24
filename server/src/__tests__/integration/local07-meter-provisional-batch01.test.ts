@@ -728,7 +728,7 @@ describe('LOCAL-07 Batch 01 — Meter Core & Provisional Rental Terms Test Suite
     // Reject invalid strings
     expect(OtherFeeItemSchema.safeParse({ description: 'ค่าบริการ', amount: '10.505' }).success).toBe(false);
     expect(OtherFeeItemSchema.safeParse({ description: 'ค่าบริการ', amount: '1e3' }).success).toBe(false);
-    expect(OtherFeeItemSchema.safeParse({ description: 'ค่าบริการ', amount: '-10.00' }).success).toBe(false);
+    expect(OtherFeeItemSchema.safeParse({ description: 'ค่าบริการ', amount: '-10.00' }).success).toBe(true);
     expect(OtherFeeItemSchema.safeParse({ description: 'ค่าบริการ', amount: 'NaN' }).success).toBe(false);
     expect(OtherFeeItemSchema.safeParse({ description: 'ค่าบริการ', amount: 'Infinity' }).success).toBe(false);
 

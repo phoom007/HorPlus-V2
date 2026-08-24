@@ -967,4 +967,109 @@ describe('HORPLUS LOCAL-07 — Owner Meter List Mode UX Suite (L1 - L28)', () =>
     expect(within(card101).getByText('ค่าคีย์การ์ด')).toBeDefined();
     expect(within(card101).getByText('100 ฿')).toBeDefined();
   });
+  // =========================================================================
+  // L29: Negative Other Fees Support
+  // =========================================================================
+  it('L29. Other Fees modal accepts negative amount for discounts or deductions', async () => {
+    localStorage.setItem('owner_meter_view_mode', JSON.stringify('list'));
+    renderComponent();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('meter-list-card-room-101')).toBeDefined();
+    });
+
+    const card101 = screen.getByTestId('meter-list-card-room-101');
+    const openBtn = within(card101).getByTestId('open-other-fees-modal-room-101');
+    fireEvent.click(openBtn);
+
+    expect(screen.getByTestId('meter-other-fees-modal-backdrop')).toBeDefined();
+    const descInput = screen.getByPlaceholderText('ชื่อรายการ (เช่น ค่ากุญแจ)');
+    const amtInput = screen.getByPlaceholderText('จำนวนเงิน');
+    const addBtn = screen.getByTitle('เพิ่มรายการ');
+
+    fireEvent.change(descInput, { target: { value: 'ส่วนลดพิเศษ' } });
+    fireEvent.change(amtInput, { target: { value: '-150' } });
+    fireEvent.click(addBtn);
+
+    const saveModalBtn = screen.getByText('บันทึกรายการ');
+    fireEvent.click(saveModalBtn);
+
+    expect(within(card101).getByText('ส่วนลดพิเศษ')).toBeDefined();
+    expect(within(card101).getByText('-150 ฿')).toBeDefined();
+  });
+
+  // =========================================================================
+  // L30: Search by Tenant Name
+  // =========================================================================
+  it('L30. Search input matches tenant name and filters list cards', async () => {
+    localStorage.setItem('owner_meter_view_mode', JSON.stringify('list'));
+    renderComponent();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('meter-list-card-room-101')).toBeDefined();
+      expect(screen.getByTestId('meter-list-card-room-102')).toBeDefined();
+    });
+
+    const searchInput = screen.getByPlaceholderText('ค้นหาเลขห้อง...');
+    fireEvent.change(searchInput, { target: { value: 'สมชาย' } });
+
+    expect(screen.getByTestId('meter-list-card-room-101')).toBeDefined();
+    expect(screen.queryByTestId('meter-list-card-room-102')).toBeNull();
+  });
+
+  // =========================================================================
+  // L31: Status Border Dynamic Coloring
+  // =========================================================================
+  it('L31. Card border dynamically changes class according to room billing status', async () => {
+    localStorage.setItem('owner_meter_view_mode', JSON.stringify('list'));
+    const testBills: Bill[] = [
+      {
+        id: 'bill-102',
+        billNumber: 'INV-202608-102',
+        roomId: 'room-102',
+        tenantId: 'tenant-102',
+        cycleId: 'cycle-aug-2026',
+        billingCycleId: 'cycle-aug-2026',
+        dueDate: '2026-09-05',
+        totalAmount: 4800,
+        status: 'pending',
+        items: [],
+        createdAt: '2026-08-25',
+        updatedAt: '2026-08-25',
+      },
+    ];
+
+    renderComponent({ bills: testBills });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('meter-list-card-room-101')).toBeDefined();
+      expect(screen.getByTestId('meter-list-card-room-102')).toBeDefined();
+    });
+
+    // Room 101 is draft (unissued) -> border-slate-200
+    const card101 = screen.getByTestId('meter-list-card-room-101');
+    expect(card101.className).toContain('border-slate-200');
+
+    // Room 102 has an unpaid bill -> border-amber-400
+    const card102 = screen.getByTestId('meter-list-card-room-102');
+    expect(card102.className).toContain('border-amber-400');
+  });
+
+  // =========================================================================
+  // L32: Global Toggle All Details
+  // =========================================================================
+  it('L32. Global toggle in toolbar toggles detail breakdown expansion across cards', async () => {
+    localStorage.setItem('owner_meter_view_mode', JSON.stringify('list'));
+    renderComponent();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('meter-list-card-room-101')).toBeDefined();
+    });
+
+    const toggleAllBtn = screen.getByTitle('แสดงรายละเอียดทุกห้อง');
+    fireEvent.click(toggleAllBtn);
+
+    // After toggling, title flips to hide all
+    expect(screen.getByTitle('ซ่อนรายละเอียดทุกห้อง')).toBeDefined();
+  });
 });

@@ -29,6 +29,7 @@ import {
   FileText,
   Shield,
   ChevronDown,
+  ChevronUp,
   Circle,
   AlertCircle,
   Info,
@@ -223,9 +224,9 @@ export function buildRowsFromWorkspace(params: {
     const rowPeople = snap?.peopleCount !== undefined ? Math.max(0, snap.peopleCount) : tenantDefaultPeople;
 
     const existingMonthlyUtilityBill = (bills || []).find(b =>
-      (b.cycleId === selectedBillingCycleId || b.cycleId === selectedCycleCode || (b as any).billingCycleId === selectedBillingCycleId) &&
+      (b.cycleId === selectedBillingCycleId || b.cycleId === selectedCycleCode || (b as any).billingCycleId === selectedBillingCycleId || (b as any).cycleMonth === selectedCycleCode) &&
       (b.roomId === r.id || b.roomId === r.roomNumber) &&
-      b.billKind === 'MONTHLY_UTILITY' &&
+      (!b.billKind || b.billKind === 'MONTHLY_UTILITY') &&
       (b.status as string) !== 'cancelled' && (b.status as string) !== 'void'
     );
     const billStatus: BillStatus = existingMonthlyUtilityBill ? existingMonthlyUtilityBill.status : 'draft';
@@ -2160,9 +2161,15 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     });
   };
 
-  const filteredRows = meterRows.filter(row =>
-    (row?.roomNumber || '').toLowerCase().includes((searchQuery || '').toLowerCase())
-  );
+  const filteredRows = meterRows.filter(row => {
+    const query = (searchQuery || '').trim().toLowerCase();
+    if (!query) return true;
+    const roomMatch = (row?.roomNumber || '').toLowerCase().includes(query);
+    if (roomMatch) return true;
+    const roomCtx = previewContext?.rooms?.find((ctx: any) => ctx.roomId === row.roomId);
+    const tenantName = roomCtx?.tenantName || getTenantForRoomAndCycleHelper(row.roomId, selectedCycleCode || selectedCycle || '', contracts, rooms, tenants)?.name || '';
+    return tenantName.toLowerCase().includes(query);
+  });
 
   const eligibleUnissuedRows = meterRows.filter((r) => {
     const roomCtx = previewContext?.rooms?.find((ctx: any) => ctx.roomId === r.roomId);
@@ -2258,7 +2265,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
 
             {/* Scroll table helper buttons (shown in table mode) */}
             {viewMode === 'table' && (
-              <div className="hidden sm:flex items-center gap-1 bg-slate-100 p-1 rounded-xl shrink-0">
+              <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl shrink-0 border border-slate-200/60">
                 <button
                   type="button"
                   onClick={() => scrollTable('left')}
@@ -2277,6 +2284,34 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                   <ChevronRight className="w-4 h-4" />
                 </button>
               </div>
+            )}
+
+            {/* List Mode Global Toggle All Details */}
+            {viewMode === 'list' && (
+              <button
+                type="button"
+                onClick={() => {
+                  const allExpanded = meterRows.every(r => expandedBreakdowns[r.roomId]);
+                  const nextState = !allExpanded;
+                  const nextMap: { [roomId: string]: boolean } = {};
+                  meterRows.forEach(r => { nextMap[r.roomId] = nextState; });
+                  setExpandedBreakdowns(nextMap);
+                }}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-xl bg-slate-100 hover:bg-slate-200 text-indigo-700 transition-all cursor-pointer border border-slate-200/60 shadow-2xs shrink-0"
+                title={meterRows.every(r => expandedBreakdowns[r.roomId]) ? "ซ่อนรายละเอียดทุกห้อง" : "แสดงรายละเอียดทุกห้อง"}
+              >
+                {meterRows.every(r => expandedBreakdowns[r.roomId]) ? (
+                  <>
+                    <ChevronUp className="w-3.5 h-3.5" />
+                    <span>ซ่อนรายละเอียด</span>
+                  </>
+                ) : (
+                  <>
+                    <ChevronDown className="w-3.5 h-3.5" />
+                    <span>แสดงรายละเอียด</span>
+                  </>
+                )}
+              </button>
             )}
           </div>
 

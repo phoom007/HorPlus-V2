@@ -88,7 +88,7 @@ export const OtherFeeItemSchema = z.object({
     .max(100, 'ชื่อรายการต้องไม่เกิน 100 ตัวอักษร'),
   amount: z
     .string()
-    .regex(/^\d+(\.\d{1,2})?$/, 'จำนวนเงินต้องเป็นตัวเลขทศนิยมไม่เกิน 2 ตำแหน่งและไม่ติดลบ'),
+    .regex(/^-?\d+(\.\d{1,2})?$/, 'จำนวนเงินต้องเป็นตัวเลขทศนิยมไม่เกิน 2 ตำแหน่ง'),
 });
 
 export const SaveMeterWorkspaceRowSchema = z.object({

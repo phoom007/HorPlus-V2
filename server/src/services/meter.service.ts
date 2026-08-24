@@ -910,9 +910,7 @@ export class MeterService {
           if (item && item.description && typeof item.description === 'string' && item.description.trim()) {
             const desc = item.description.trim().slice(0, 100);
             const amt = toDecimal(String(item.amount));
-            if (compareDecimals(amt, '0.00') >= 0) {
-              cleanOtherFees.push({ description: desc, amount: formatDecimal(amt) });
-            }
+            cleanOtherFees.push({ description: desc, amount: formatDecimal(amt) });
           }
         }
       }

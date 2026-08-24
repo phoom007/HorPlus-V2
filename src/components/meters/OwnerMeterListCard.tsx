@@ -21,6 +21,7 @@ import {
   Wifi,
   Smartphone,
   Building2,
+  Car,
   CheckCircle,
   CheckCircle2,
   AlertCircle,
@@ -86,6 +87,33 @@ export interface OwnerMeterListCardProps {
   onOpenQuickAdd: (targetRoomId: string) => void;
 }
 
+export function getComponentItemIcon(label: string, type?: string) {
+  const l = (label || '').toLowerCase();
+  const t = (type || '').toLowerCase();
+  if (l.includes('น้ำ') || t.includes('water')) {
+    return <Droplets className="w-3.5 h-3.5 text-sky-500 shrink-0" />;
+  }
+  if (l.includes('ไฟ') || t.includes('elec') || t.includes('electric')) {
+    return <Zap className="w-3.5 h-3.5 text-amber-500 shrink-0" />;
+  }
+  if (l.includes('ส่วนกลาง') || t.includes('common')) {
+    return <Building2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />;
+  }
+  if (l.includes('อินเทอร์เน็ต') || l.includes('เน็ต') || l.includes('wifi') || t.includes('internet')) {
+    return <Wifi className="w-3.5 h-3.5 text-sky-600 shrink-0" />;
+  }
+  if (l.includes('จอดรถ') || t.includes('parking') || t.includes('car')) {
+    return <Car className="w-3.5 h-3.5 text-indigo-500 shrink-0" />;
+  }
+  if (l.includes('ปรับ') || l.includes('ล่าช้า') || t.includes('penalty') || t.includes('late')) {
+    return <Clock className="w-3.5 h-3.5 text-rose-500 shrink-0" />;
+  }
+  if (l.includes('เช่า') || t.includes('rent')) {
+    return <Building2 className="w-3.5 h-3.5 text-slate-500 shrink-0" />;
+  }
+  return <Tag className="w-3.5 h-3.5 text-indigo-500 shrink-0" />;
+}
+
 export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
   row,
   idx,
@@ -119,8 +147,6 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
   onSelectTenant,
   onOpenQuickAdd,
 }) => {
-  const [showDetails, setShowDetails] = useState<boolean>(true);
-
   // Usage calculations matching Table
   const waterUsageRes = (row.waterPrev !== '' && row.waterCurr !== '') ? calculateMeterUsageUnits(row.waterPrev, row.waterCurr) : { isValid: true, usageUnits: 0 };
   const elecUsageRes = (row.elecPrev !== '' && row.elecCurr !== '') ? calculateMeterUsageUnits(row.elecPrev, row.elecCurr) : { isValid: true, usageUnits: 0 };
@@ -130,6 +156,8 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
   const effectiveTenantId = roomCtx ? roomCtx.tenantId : tenant?.id;
   const effectiveTenantName = roomCtx ? roomCtx.tenantName : tenant?.name;
   const isDailyContext = roomCtx?.billingSource === 'DAILY_STAY' || Boolean(roomCtx?.isDailyUnpaid);
+  const isDailyOverdue = Boolean(roomCtx?.isDailyOverdue || roomCtx?.isDailyFinancialTail);
+  const isDailyRentPaid = Boolean(roomCtx?.isDailyRentPaid);
   const isRowPaid = !isDailyContext && (row.isPaid || row.billStatus === 'paid');
 
   const hasElecBaseline = row.elecPrev !== '' && row.elecPrev !== null && row.elecPrev !== undefined;
@@ -150,6 +178,32 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
   const hasBookableGap = roomCtx?.hasBookableGap ?? true;
   const historicalDailyCount = roomCtx?.historicalDailyCount || 0;
   const dailyCheckOutDate = roomCtx?.dailyCheckOutDate || null;
+
+  // Dynamic Card Border Color based on Status:
+  // - ยังไม่ออกบิล / ว่าง: สีเทา (border-slate-200)
+  // - รอชำระ: สีส้ม (border-amber-400)
+  // - จองล่วงหน้า: สีเหลือง (border-yellow-400)
+  // - เกินกำหนด / รายวันค้างชำระ: สีแดง (border-rose-400)
+  // - ชำระแล้ว: สีเขียว (border-emerald-400)
+  const cardBorderClass = (() => {
+    if (isDailyOverdue) {
+      return 'border-rose-400 hover:border-rose-500';
+    }
+    if (isFuture) {
+      return 'border-yellow-400 hover:border-yellow-500';
+    }
+    if (isRowPaid) {
+      return 'border-emerald-400 hover:border-emerald-500';
+    }
+    if (row.billStatus !== 'draft' && row.billStatus !== 'cancelled') {
+      return 'border-amber-400 hover:border-amber-500';
+    }
+    const hasUnpaidCharges = chargeComponents.some((c: any) => c.status === 'UNPAID');
+    if (hasUnpaidCharges) {
+      return 'border-amber-400 hover:border-amber-500';
+    }
+    return 'border-slate-200 hover:border-slate-300';
+  })();
 
   // Rate calculations
   const elecRate = Number(roomCtx?.rateSnapshot?.electricityRate ?? 7);
@@ -184,7 +238,7 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
     <div
       id={`room-row-${row.roomId}`}
       data-testid={`meter-list-card-${row.roomId}`}
-      className="bg-white border-2 border-amber-300/80 rounded-3xl p-5 shadow-xs flex flex-col justify-between gap-4 transition-all hover:shadow-md hover:border-amber-400"
+      className={`bg-white border-2 rounded-3xl p-5 shadow-xs flex flex-col justify-between gap-4 transition-all hover:shadow-md ${cardBorderClass}`}
     >
       {/* 1. Header: Room Number & Status Switch */}
       <div className="flex items-center justify-between gap-2">
@@ -195,9 +249,6 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
           {/* Status Badge */}
           {(() => {
             if (isDailyContext) {
-              const isDailyOverdue = Boolean(roomCtx?.isDailyOverdue || roomCtx?.isDailyFinancialTail);
-              const isDailyRentPaid = Boolean(roomCtx?.isDailyRentPaid);
-
               if (isDailyOverdue) {
                 return (
                   <span className="inline-flex items-center px-2.5 py-0.5 bg-rose-100 text-rose-800 text-xs font-bold rounded-md border border-rose-200">
@@ -297,7 +348,7 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
                     <ArrowRight className="w-3 h-3 opacity-60 shrink-0" />
                   </button>
                 ) : null}
-                <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
+                <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-bold bg-yellow-100 text-yellow-800 border border-yellow-300">
                   จองล่วงหน้า
                 </span>
               </div>
@@ -705,22 +756,14 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
         {(row.otherFees || []).length > 0 && (
           <div className="flex flex-col gap-1 pt-1 border-t border-slate-100">
             {(row.otherFees || []).map((fee, feeIdx) => {
-              const desc = fee.description.toLowerCase();
-              const isNet = desc.includes('เน็ต') || desc.includes('wifi') || desc.includes('internet');
-              const isCommon = desc.includes('ส่วนกลาง') || desc.includes('common');
+              const feeIcon = getComponentItemIcon(fee.description);
               return (
                 <div
                   key={feeIdx}
                   className="flex items-center justify-between gap-1 bg-white border border-slate-100 rounded-lg px-2.5 py-1 text-xs text-slate-700 font-bold shadow-2xs"
                 >
                   <div className="flex items-center gap-2 truncate">
-                    {isCommon ? (
-                      <Smartphone className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                    ) : isNet ? (
-                      <Wifi className="w-3.5 h-3.5 text-sky-600 shrink-0" />
-                    ) : (
-                      <Tag className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
-                    )}
+                    {feeIcon}
                     <span className="truncate max-w-[160px]" title={fee.description}>{fee.description}</span>
                   </div>
                   <span className="text-indigo-600 shrink-0 font-extrabold">
@@ -739,6 +782,7 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
               const isPaid = c.status === 'PAID';
               const isInvalid = c.status === 'INVALID';
               const isUnpaid = c.status === 'UNPAID';
+              const itemIcon = getComponentItemIcon(c.label, c.type);
 
               return (
                 <div
@@ -748,15 +792,7 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
                   title={isInvalid ? (c.errorMessage || 'ข้อมูลไม่ถูกต้อง') : undefined}
                 >
                   <div className="flex items-center gap-1.5 truncate">
-                    {isPaid ? (
-                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                    ) : isInvalid ? (
-                      <AlertCircle className="w-3.5 h-3.5 text-rose-500 shrink-0" />
-                    ) : isUnpaid ? (
-                      <Clock className="w-3.5 h-3.5 text-amber-500 shrink-0" />
-                    ) : (
-                      <Clock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                    )}
+                    {itemIcon}
                     <span
                       className={`truncate ${
                         isPaid
@@ -765,7 +801,7 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
                           ? 'text-rose-600 font-medium'
                           : isUnpaid
                           ? 'text-amber-700 font-medium'
-                          : 'text-slate-500 font-medium'
+                          : 'text-slate-600 font-medium'
                       }`}
                     >
                       {c.label}
@@ -779,7 +815,7 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
                         ? 'text-rose-600'
                         : isUnpaid
                         ? 'text-amber-800'
-                        : 'text-slate-600'
+                        : 'text-slate-700'
                     }`}
                   >
                     {formatComponentDetailAmount(c.amount)}
