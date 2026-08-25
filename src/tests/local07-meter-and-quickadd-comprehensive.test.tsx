@@ -140,7 +140,7 @@ describe('LOCAL-07 Meter Workspace & Quick Add Comprehensive Frontend Suite', ()
       expect(preview.elecUsage).toBe('0.00');
       expect(preview.waterAmount).toBe('0.00');
       expect(preview.elecAmount).toBe('0.00');
-      expect(preview.totalAmount).toBe('3500.00');
+      expect(preview.totalAmount).toBe('0.00');
     });
 
     it('preview calculation fails closed and does NOT assume per_unit on unknown mode or undefined rates', () => {

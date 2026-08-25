@@ -118,8 +118,7 @@ export function calculateCanonicalMonthlyUtility(
     throw err;
   }
 
-  const isZeroOccupants = rawPeopleCount === 0;
-  const peopleCount = Math.max(0, rawPeopleCount ?? 1);
+  const peopleCount = Math.max(0, rawPeopleCount ?? 0);
   const peopleCountDec = toDecimal(peopleCount.toString());
 
   // 1. Water Calculation
@@ -175,10 +174,10 @@ export function calculateCanonicalMonthlyUtility(
       });
     }
   } else if (waterMode === 'per_person') {
-    if (!isZeroOccupants) {
-      const amtDec = mulDecimals(peopleCountDec, waterRate);
-      waterUsageStr = formatDecimal(peopleCountDec);
-      waterAmountStr = formatDecimal(amtDec);
+    const amtDec = mulDecimals(peopleCountDec, waterRate);
+    waterUsageStr = formatDecimal(peopleCountDec);
+    waterAmountStr = formatDecimal(amtDec);
+    if (!isZeroDecimal(amtDec) || peopleCount > 0) {
       items.push({
         type: 'water',
         description: `ค่าน้ำ (${peopleCount} คน)`,
@@ -190,7 +189,7 @@ export function calculateCanonicalMonthlyUtility(
       });
     }
   } else if (waterMode === 'fixed') {
-    if (!isZeroOccupants && !isZeroDecimal(waterRate)) {
+    if (!isZeroDecimal(waterRate)) {
       waterUsageStr = '1.00';
       waterAmountStr = formatDecimal(waterRate);
       items.push({
@@ -257,10 +256,10 @@ export function calculateCanonicalMonthlyUtility(
       });
     }
   } else if (elecMode === 'per_person') {
-    if (!isZeroOccupants) {
-      const amtDec = mulDecimals(peopleCountDec, elecRate);
-      elecUsageStr = formatDecimal(peopleCountDec);
-      elecAmountStr = formatDecimal(amtDec);
+    const amtDec = mulDecimals(peopleCountDec, elecRate);
+    elecUsageStr = formatDecimal(peopleCountDec);
+    elecAmountStr = formatDecimal(amtDec);
+    if (!isZeroDecimal(amtDec) || peopleCount > 0) {
       items.push({
         type: 'electricity',
         description: `ค่าไฟฟ้า (${peopleCount} คน)`,
@@ -272,7 +271,7 @@ export function calculateCanonicalMonthlyUtility(
       });
     }
   } else if (elecMode === 'fixed') {
-    if (!isZeroOccupants && !isZeroDecimal(elecRate)) {
+    if (!isZeroDecimal(elecRate)) {
       elecUsageStr = '1.00';
       elecAmountStr = formatDecimal(elecRate);
       items.push({
@@ -292,20 +291,22 @@ export function calculateCanonicalMonthlyUtility(
   const commonFee = toDecimal(rateSnapshot.commonFee ?? '0.00');
   let commonFeeStr = '0.00';
 
-  if (!isZeroOccupants && !isZeroDecimal(commonFee) && rawCommonMode !== 'free' && rawCommonMode !== 'none') {
+  if (!isZeroDecimal(commonFee) && rawCommonMode !== 'free' && rawCommonMode !== 'none') {
     const isPerPerson = rawCommonMode === 'person' || rawCommonMode === 'per_person';
     const q = isPerPerson ? peopleCountDec : toDecimal('1.00');
     const amt = isPerPerson ? mulDecimals(peopleCountDec, commonFee) : commonFee;
     commonFeeStr = formatDecimal(amt);
-    items.push({
-      type: 'common_fee',
-      description: isPerPerson ? `ค่าส่วนกลาง (${peopleCount} คน)` : 'ค่าส่วนกลาง',
-      quantity: formatDecimal(q),
-      unit: isPerPerson ? 'person' : 'room',
-      unitPrice: formatDecimal(commonFee),
-      amount: commonFeeStr,
-      metadata: { mode: rawCommonMode, peopleCount: isPerPerson ? peopleCount : undefined },
-    });
+    if (!isZeroDecimal(amt) || !isPerPerson) {
+      items.push({
+        type: 'common_fee',
+        description: isPerPerson ? `ค่าส่วนกลาง (${peopleCount} คน)` : 'ค่าส่วนกลาง',
+        quantity: formatDecimal(q),
+        unit: isPerPerson ? 'person' : 'room',
+        unitPrice: formatDecimal(commonFee),
+        amount: commonFeeStr,
+        metadata: { mode: rawCommonMode, peopleCount: isPerPerson ? peopleCount : undefined },
+      });
+    }
   }
 
   // 4. Internet Fee Calculation
@@ -313,20 +314,22 @@ export function calculateCanonicalMonthlyUtility(
   const internetFee = toDecimal(rateSnapshot.internetFee ?? '0.00');
   let internetFeeStr = '0.00';
 
-  if (!isZeroOccupants && !isZeroDecimal(internetFee) && rawInternetMode !== 'free' && rawInternetMode !== 'none') {
+  if (!isZeroDecimal(internetFee) && rawInternetMode !== 'free' && rawInternetMode !== 'none') {
     const isPerPerson = rawInternetMode === 'person' || rawInternetMode === 'per_person';
     const q = isPerPerson ? peopleCountDec : toDecimal('1.00');
     const amt = isPerPerson ? mulDecimals(peopleCountDec, internetFee) : internetFee;
     internetFeeStr = formatDecimal(amt);
-    items.push({
-      type: 'internet',
-      description: isPerPerson ? `ค่าอินเทอร์เน็ต (${peopleCount} คน)` : 'ค่าอินเทอร์เน็ต',
-      quantity: formatDecimal(q),
-      unit: isPerPerson ? 'person' : 'room',
-      unitPrice: formatDecimal(internetFee),
-      amount: internetFeeStr,
-      metadata: { mode: rawInternetMode, peopleCount: isPerPerson ? peopleCount : undefined },
-    });
+    if (!isZeroDecimal(amt) || !isPerPerson) {
+      items.push({
+        type: 'internet',
+        description: isPerPerson ? `ค่าอินเทอร์เน็ต (${peopleCount} คน)` : 'ค่าอินเทอร์เน็ต',
+        quantity: formatDecimal(q),
+        unit: isPerPerson ? 'person' : 'room',
+        unitPrice: formatDecimal(internetFee),
+        amount: internetFeeStr,
+        metadata: { mode: rawInternetMode, peopleCount: isPerPerson ? peopleCount : undefined },
+      });
+    }
   }
 
   // 5. Parking Fee Calculation
@@ -334,7 +337,7 @@ export function calculateCanonicalMonthlyUtility(
   const parkingFee = toDecimal(rateSnapshot.parkingFee ?? '0.00');
   let parkingFeeStr = '0.00';
 
-  if (!isZeroOccupants && !isZeroDecimal(parkingFee) && rawParkingMode !== 'free' && rawParkingMode !== 'none') {
+  if (!isZeroDecimal(parkingFee) && rawParkingMode !== 'free' && rawParkingMode !== 'none') {
     const isPerPerson = rawParkingMode === 'person' || rawParkingMode === 'per_person';
     const isPerVehicle = rawParkingMode === 'vehicle' || rawParkingMode === 'per_vehicle';
 
@@ -359,7 +362,7 @@ export function calculateCanonicalMonthlyUtility(
       meta = { mode: 'vehicle', vehicleCount: formatDecimal(vQty) };
     }
 
-    if (!isZeroDecimal(amt) || !isZeroDecimal(parkingFee)) {
+    if (!isZeroDecimal(amt) || (!isPerPerson && !isPerVehicle)) {
       parkingFeeStr = formatDecimal(amt);
       items.push({
         type: 'parking',

@@ -557,54 +557,163 @@ describe('LOCAL-07 Shared Canonical Monthly Utility Calculation Authority', () =
     }
   });
 
-  it('35. Zero peopleCount (peopleCount = 0): omits fixed and per-person fees (water, elec, common, internet, parking)', () => {
+  // Decision B3 Semantics: Zero People Count (peopleCount = 0)
+  it('B3-1: peopleCount = 0 with commonFeeMode = per_room charges fixed common fee (100.00)', () => {
     const res = calculateCanonicalMonthlyUtility({
       rateSnapshot: {
-        waterBillingType: 'fixed',
-        waterRate: '150.00',
-        electricityBillingType: 'fixed',
-        electricityRate: '300.00',
+        ...baseRates,
         commonFeeMode: 'per_room',
         commonFee: '100.00',
-        internetFeeMode: 'per_room',
-        internetFee: '200.00',
+      },
+      peopleCount: 0,
+      waterReading: { previousReading: '0', currentReading: '0' },
+      electricReading: { previousReading: '0', currentReading: '0' },
+    });
+    expect(res.commonFee).toBe('100.00');
+  });
+
+  it('B3-2: peopleCount = 0 with commonFeeMode = per_person charges 0.00 common fee', () => {
+    const res = calculateCanonicalMonthlyUtility({
+      rateSnapshot: {
+        ...baseRates,
+        commonFeeMode: 'per_person',
+        commonFee: '100.00',
+      },
+      peopleCount: 0,
+      waterReading: { previousReading: '0', currentReading: '0' },
+      electricReading: { previousReading: '0', currentReading: '0' },
+    });
+    expect(res.commonFee).toBe('0.00');
+  });
+
+  it('B3-3: peopleCount = 0 with waterBillingType = fixed charges fixed water fee (150.00)', () => {
+    const res = calculateCanonicalMonthlyUtility({
+      rateSnapshot: {
+        ...baseRates,
+        waterBillingType: 'fixed',
+        waterRate: '150.00',
+      },
+      peopleCount: 0,
+      waterReading: null,
+      electricReading: { previousReading: '0', currentReading: '0' },
+    });
+    expect(res.waterAmount).toBe('150.00');
+  });
+
+  it('B3-4: peopleCount = 0 with waterBillingType = per_person charges 0.00 water fee', () => {
+    const res = calculateCanonicalMonthlyUtility({
+      rateSnapshot: {
+        ...baseRates,
+        waterBillingType: 'per_person',
+        waterRate: '150.00',
+      },
+      peopleCount: 0,
+      waterReading: null,
+      electricReading: { previousReading: '0', currentReading: '0' },
+    });
+    expect(res.waterAmount).toBe('0.00');
+  });
+
+  it('B3-5: peopleCount = 0 with waterBillingType = per_unit charges usage units (10 units * 18 = 180.00)', () => {
+    const res = calculateCanonicalMonthlyUtility({
+      rateSnapshot: {
+        ...baseRates,
+        waterBillingType: 'per_unit',
+        waterRate: '18.00',
+      },
+      peopleCount: 0,
+      waterReading: { previousReading: '100', currentReading: '110' },
+      electricReading: { previousReading: '0', currentReading: '0' },
+    });
+    expect(res.waterAmount).toBe('180.00');
+  });
+
+  it('B3-6: peopleCount = 0 with electricityBillingType = fixed charges fixed electric fee (300.00)', () => {
+    const res = calculateCanonicalMonthlyUtility({
+      rateSnapshot: {
+        ...baseRates,
+        electricityBillingType: 'fixed',
+        electricityRate: '300.00',
+      },
+      peopleCount: 0,
+      waterReading: { previousReading: '0', currentReading: '0' },
+      electricReading: null,
+    });
+    expect(res.electricityAmount).toBe('300.00');
+  });
+
+  it('B3-7: peopleCount = 0 with electricityBillingType = per_person charges 0.00 electric fee', () => {
+    const res = calculateCanonicalMonthlyUtility({
+      rateSnapshot: {
+        ...baseRates,
+        electricityBillingType: 'per_person',
+        electricityRate: '300.00',
+      },
+      peopleCount: 0,
+      waterReading: { previousReading: '0', currentReading: '0' },
+      electricReading: null,
+    });
+    expect(res.electricityAmount).toBe('0.00');
+  });
+
+  it('B3-8: peopleCount = 0 with electricityBillingType = per_unit charges usage units (60 units * 7 = 420.00)', () => {
+    const res = calculateCanonicalMonthlyUtility({
+      rateSnapshot: {
+        ...baseRates,
+        electricityBillingType: 'per_unit',
+        electricityRate: '7.00',
+      },
+      peopleCount: 0,
+      waterReading: { previousReading: '0', currentReading: '0' },
+      electricReading: { previousReading: '500', currentReading: '560' },
+    });
+    expect(res.electricityAmount).toBe('420.00');
+  });
+
+  it('B3-9: peopleCount = 0 with parkingFeeMode = per_room charges fixed parking fee (100.00)', () => {
+    const res = calculateCanonicalMonthlyUtility({
+      rateSnapshot: {
+        ...baseRates,
         parkingFeeMode: 'per_room',
         parkingFee: '100.00',
       },
       peopleCount: 0,
+      waterReading: { previousReading: '0', currentReading: '0' },
+      electricReading: { previousReading: '0', currentReading: '0' },
+    });
+    expect(res.parkingFee).toBe('100.00');
+  });
+
+  it('B3-10: peopleCount = 0 with parkingFeeMode = per_vehicle (2 vehicles @ 100), otherFees, and manualOutstanding applies all independent charges', () => {
+    const res = calculateCanonicalMonthlyUtility({
+      rateSnapshot: {
+        ...baseRates,
+        waterBillingType: 'per_person',
+        waterRate: '150.00',
+        electricityBillingType: 'per_person',
+        electricityRate: '300.00',
+        commonFeeMode: 'per_room',
+        commonFee: '200.00',
+        internetFeeMode: 'per_room',
+        internetFee: '150.00',
+        parkingFeeMode: 'per_vehicle',
+        parkingFee: '100.00',
+      },
+      peopleCount: 0,
+      parkingQuantity: '2.00',
+      otherFees: [{ description: 'คีย์การ์ด', amount: '100.00' }],
+      manualOutstanding: '50.00',
       waterReading: null,
       electricReading: null,
     });
 
-    expect(res.monthlyUtilityTotal).toBe('0.00');
-    expect(res.items).toHaveLength(0);
-  });
-
-  it('36. Zero peopleCount (peopleCount = 0) with per_unit meters: calculates meter usage units into totalAmount and ignores fixed/per-person fees', () => {
-    const res = calculateCanonicalMonthlyUtility({
-      rateSnapshot: {
-        waterBillingType: 'per_unit',
-        waterRate: '18.00',
-        electricityBillingType: 'per_unit',
-        electricityRate: '7.00',
-        commonFeeMode: 'per_room',
-        commonFee: '100.00',
-        internetFeeMode: 'per_room',
-        internetFee: '200.00',
-        parkingFeeMode: 'per_room',
-        parkingFee: '100.00',
-      },
-      peopleCount: 0,
-      waterReading: { previousReading: '100', currentReading: '110' }, // 10 units * 18 = 180.00
-      electricReading: { previousReading: '500', currentReading: '560' }, // 60 units * 7 = 420.00
-    });
-
-    expect(res.waterAmount).toBe('180.00');
-    expect(res.electricityAmount).toBe('420.00');
-    expect(res.commonFee).toBe('0.00');
-    expect(res.internetFee).toBe('0.00');
-    expect(res.parkingFee).toBe('0.00');
-    expect(res.monthlyUtilityTotal).toBe('600.00');
-    expect(res.items).toHaveLength(2);
+    expect(res.waterAmount).toBe('0.00');
+    expect(res.electricityAmount).toBe('0.00');
+    expect(res.commonFee).toBe('200.00');
+    expect(res.internetFee).toBe('150.00');
+    expect(res.parkingFee).toBe('200.00');
+    expect(res.manualOutstandingAmount).toBe('50.00');
+    expect(res.otherFees).toEqual([{ description: 'คีย์การ์ด', amount: '100.00' }]);
+    expect(res.monthlyUtilityTotal).toBe('700.00'); // 200 + 150 + 200 + 100 + 50 = 700.00
   });
 });

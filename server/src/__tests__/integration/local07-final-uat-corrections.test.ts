@@ -502,7 +502,7 @@ describe('LOCAL-07 Final UAT Correction Test Suite', () => {
       expect(preRoom).toBeDefined();
       expect(preRoom?.amountDue).toBe('600.00');
       expect(preRoom?.chargeComponents).toHaveLength(1);
-      expect(preRoom?.chargeComponents[0]).toEqual({
+      expect(preRoom?.chargeComponents[0]).toMatchObject({
         type: 'monthly_utility',
         label: 'บิลรายเดือน',
         amount: '600.00',
@@ -511,6 +511,7 @@ describe('LOCAL-07 Final UAT Correction Test Suite', () => {
         occurredInDisplayedPeriod: true,
         includedInAmountDue: true,
       });
+      expect(preRoom?.chargeComponents[0].lineItems).toBeDefined();
 
       // 2. Issue Monthly Utility Bill
       const billingService = new BillingService(

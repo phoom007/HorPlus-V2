@@ -164,9 +164,17 @@ describe('HORPLUS LOCAL-07 — Owner Meter List Mode UX Suite (L1 - L28)', () =>
                     roomId: 'room-101',
                     tenantId: 'tenant-101',
                     tenantName: 'นายสมชาย ใจดี',
-                    amountDue: '1268.00',
+                    amountDue: '200.00',
                     chargeComponents: [
-                      { type: 'monthly_utility', label: 'บิลรายเดือน (พรีวิว)', amount: '1268.00', status: 'PREVIEW' },
+                      {
+                        type: 'monthly_utility',
+                        label: 'บิลรายเดือน (พรีวิว)',
+                        amount: '200.00',
+                        status: 'PREVIEW',
+                        lineItems: [
+                          { type: 'common_fee', description: 'ค่าส่วนกลาง', amount: '200.00' },
+                        ],
+                      },
                     ],
                   },
                   {
@@ -308,7 +316,19 @@ describe('HORPLUS LOCAL-07 — Owner Meter List Mode UX Suite (L1 - L28)', () =>
         tenantName: 'นายสมชาย ใจดี',
         amountDue: '1268.00',
         chargeComponents: [
-          { type: 'monthly_utility', label: 'บิลรายเดือน (พรีวิว)', amount: '1268.00', status: 'PREVIEW' },
+          {
+            type: 'monthly_utility',
+            label: 'บิลรายเดือน (พรีวิว)',
+            amount: '1268.00',
+            status: 'PREVIEW',
+            lineItems: [
+              { type: 'water', description: 'ค่าน้ำ (110 - 110)', amount: '0.00' },
+              { type: 'electricity', description: 'ค่าไฟฟ้า (560 - 560)', amount: '0.00' },
+              { type: 'common_fee', description: 'ค่าส่วนกลาง', amount: '200.00' },
+              { type: 'internet', description: 'ค่าอินเทอร์เน็ต', amount: '150.00' },
+              { type: 'parking', description: 'ค่าจอดรถ', amount: '300.00' },
+            ],
+          },
         ],
       },
       {
@@ -707,17 +727,20 @@ describe('HORPLUS LOCAL-07 — Owner Meter List Mode UX Suite (L1 - L28)', () =>
     });
 
     // In Table
-    expect(screen.getByText('5,268.00 ฿')).toBeDefined();
-    expect(screen.getByText('4,800.00 ฿')).toBeDefined();
+    await waitFor(() => {
+      expect(screen.getByText(/1,268\.00\s*฿/)).toBeDefined();
+      expect(screen.getByText(/4,800\.00\s*฿/)).toBeDefined();
+    });
 
     // Switch to List
     fireEvent.click(screen.getByTestId('view-mode-list-button'));
 
-    const card101 = screen.getByTestId('meter-list-card-room-101');
-    const card102 = screen.getByTestId('meter-list-card-room-102');
-
-    expect(within(card101).getByText('5,268.00 ฿')).toBeDefined();
-    expect(within(card102).getByText('4,800.00 ฿')).toBeDefined();
+    await waitFor(() => {
+      const card101 = screen.getByTestId('meter-list-card-room-101');
+      const card102 = screen.getByTestId('meter-list-card-room-102');
+      expect(within(card101).getByText(/1,268\.00\s*฿/)).toBeDefined();
+      expect(within(card102).getByText(/4,800\.00\s*฿/)).toBeDefined();
+    });
   });
 
   it('L18. 0-component detail behavior', async () => {
@@ -729,24 +752,50 @@ describe('HORPLUS LOCAL-07 — Owner Meter List Mode UX Suite (L1 - L28)', () =>
     });
 
     const card103 = screen.getByTestId('meter-list-card-room-103');
-    expect(within(card103).getByText('0.00 ฿')).toBeDefined();
+    expect(within(card103).getByText(/0\.00\s*฿/)).toBeDefined();
     expect(within(card103).queryByText(/ดูรายละเอียด/)).toBeNull();
   });
 
   it('L19. 1-component detail behavior', async () => {
     localStorage.setItem('owner_meter_view_mode', JSON.stringify('list'));
-    renderComponent();
+    renderComponent({}, {
+      rooms: [
+        {
+          roomId: 'room-101',
+          tenantId: 'tenant-101',
+          tenantName: 'นายสมชาย ใจดี',
+          amountDue: '200.00',
+          chargeComponents: [
+            {
+              type: 'monthly_utility',
+              label: 'บิลรายเดือน (พรีวิว)',
+              amount: '200.00',
+              status: 'PREVIEW',
+              lineItems: [
+                { type: 'common_fee', description: 'ค่าส่วนกลาง', amount: '200.00' },
+              ],
+            },
+          ],
+        },
+      ],
+    });
 
     await waitFor(() => {
       expect(screen.getByTestId('meter-list-card-room-101')).toBeDefined();
     });
 
-    const card101 = screen.getByTestId('meter-list-card-room-101');
-    expect(within(card101).getByText('ดูรายละเอียด')).toBeDefined();
+    await waitFor(() => {
+      const card101 = screen.getByTestId('meter-list-card-room-101');
+      expect(within(card101).getByText('ดูรายละเอียด')).toBeDefined();
+    });
 
+    const card101 = screen.getByTestId('meter-list-card-room-101');
     fireEvent.click(within(card101).getByText('ดูรายละเอียด'));
-    expect(within(card101).getByText('ค่าส่วนกลาง')).toBeDefined();
-    expect(within(card101).getByText('200.-')).toBeDefined();
+
+    await waitFor(() => {
+      expect(within(card101).getByText('ค่าส่วนกลาง')).toBeDefined();
+      expect(within(card101).getByText('200.-')).toBeDefined();
+    });
   });
 
   it('L20. N-component +N behavior', async () => {
@@ -1119,9 +1168,19 @@ describe('HORPLUS LOCAL-07 — Owner Meter List Mode UX Suite (L1 - L28)', () =>
           roomId: 'room-101',
           tenantId: 'tenant-101',
           tenantName: 'นายสมชาย ใจดี',
-          amountDue: '1268.00',
+          amountDue: '650.00',
           chargeComponents: [
-            { type: 'monthly_utility', label: 'บิลรายเดือน (พรีวิว)', amount: '1268.00', status: 'PREVIEW' },
+            {
+              type: 'monthly_utility',
+              label: 'บิลรายเดือน (พรีวิว)',
+              amount: '650.00',
+              status: 'PREVIEW',
+              lineItems: [
+                { type: 'common_fee', description: 'ค่าส่วนกลาง', amount: '200.00' },
+                { type: 'internet', description: 'ค่าอินเทอร์เน็ต', amount: '150.00' },
+                { type: 'parking', description: 'ค่าจอดรถ', amount: '300.00' },
+              ],
+            },
           ],
         },
       ],
@@ -1292,7 +1351,7 @@ describe('HORPLUS LOCAL-07 — Owner Meter List Mode UX Suite (L1 - L28)', () =>
     expect(listExpiryEl.className).toContain('text-slate-800');
   });
 
-  it('L38. Live calculated total amount is displayed even when bill is in ยังไม่ออกบิล (Draft) status', async () => {
+  it('L38. Canonical server preview amount due is displayed in Table and List Mode when bill is in ยังไม่ออกบิล (Preview) status', async () => {
     const customRooms = [
       {
         roomId: 'room-101',
@@ -1300,8 +1359,18 @@ describe('HORPLUS LOCAL-07 — Owner Meter List Mode UX Suite (L1 - L28)', () =>
         tenantName: 'นายสมชาย ใจดี',
         billingSource: 'CONTRACT',
         rentAmount: '4000.00',
-        amountDue: '0.00', // Unissued/Draft before server generation
-        chargeComponents: [],
+        amountDue: '200.00',
+        chargeComponents: [
+          {
+            type: 'monthly_utility',
+            label: 'บิลรายเดือน',
+            amount: '200.00',
+            status: 'PREVIEW',
+            paidAt: null,
+            occurredInDisplayedPeriod: true,
+            includedInAmountDue: true,
+          },
+        ],
       },
     ];
     setupFetchMock(customRooms);
@@ -1311,11 +1380,11 @@ describe('HORPLUS LOCAL-07 — Owner Meter List Mode UX Suite (L1 - L28)', () =>
       expect(screen.getByTestId('meter-row-room-101')).toBeDefined();
     });
 
-    // Table Mode shows calculated amount due immediately (e.g. 200.00 ฿ from common fee live calculation)
+    // Table Mode shows canonical server amount due (200.00 ฿)
     const tableRow101 = screen.getByTestId('meter-row-room-101');
     expect(within(tableRow101).getByText(/200(\.00)? ฿/)).toBeDefined();
 
-    // List Mode shows calculated amount due immediately
+    // List Mode shows canonical server amount due (200.00 ฿)
     fireEvent.click(screen.getByTestId('view-mode-list-button'));
     await waitFor(() => {
       expect(screen.getByTestId('meter-list-card-room-101')).toBeDefined();

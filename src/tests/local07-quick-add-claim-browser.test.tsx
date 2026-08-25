@@ -2072,8 +2072,8 @@ describe('Production Client Fractional Calculator Direct Proof', () => {
     expect(preview.waterAmount).toBe('99.00');
     expect(preview.elecUsage).toBe('1.25');
     expect(preview.elecAmount).toBe('10.00');
-    expect(preview.totalAmount).toBe('3609.00');
-    expect(preview.formattedTotal).toBe('3,609.00');
+    expect(preview.totalAmount).toBe('109.00');
+    expect(preview.formattedTotal).toBe('109.00');
   });
 });
 
@@ -2556,7 +2556,7 @@ describe('Daily Stay Meter Semantics, Financial Exclusion & Exact Deposit Copy',
     });
     expect(monthlyPreview.waterAmount).toBe('180.00');
     expect(monthlyPreview.elecAmount).toBe('160.00');
-    expect(monthlyPreview.totalAmount).toBe('3840.00'); // 3500 (rent) + 180 + 160 = 3840.00 (Rent is separate authority)
+    expect(monthlyPreview.totalAmount).toBe('340.00'); // 180 + 160 = 340.00 (Rent is independent bill/authority)
   });
 
   it('Vertical Navigation: ArrowDown and ArrowUp skip paid rows (101 editable -> 102 paid -> 103 paid -> 104 editable)', async () => {

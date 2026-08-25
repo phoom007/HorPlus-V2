@@ -2049,6 +2049,16 @@ export class MeterService {
         includedInAmountDue: boolean;
         errorCode?: string;
         errorMessage?: string;
+        lineItems?: Array<{
+          id?: string;
+          type: string;
+          description: string;
+          quantity: string;
+          unit?: string | null;
+          unitPrice: string;
+          amount: string;
+          metadata?: any;
+        }>;
       }> = [];
 
       let amountDueDec = toDecimal('0.00');
@@ -2066,6 +2076,7 @@ export class MeterService {
               paidAt: dailyDepositPaidAt,
               occurredInDisplayedPeriod: true,
               includedInAmountDue: !isDepositPaid,
+              lineItems: [],
             });
             if (!isDepositPaid) {
               amountDueDec = addDecimals(amountDueDec, depAmt);
@@ -2083,6 +2094,7 @@ export class MeterService {
             paidAt: null,
             occurredInDisplayedPeriod: true,
             includedInAmountDue: !isDailyRentPaid,
+            lineItems: [],
           });
           if (!isDailyRentPaid) {
             amountDueDec = addDecimals(amountDueDec, rentAmt);
@@ -2140,6 +2152,17 @@ export class MeterService {
             amountDueDec = addDecimals(amountDueDec, billOutstanding);
           }
 
+          const lineItems = (bill.items || []).map((it: any) => ({
+            id: it.id,
+            type: (it.type || '').toString().toLowerCase(),
+            description: it.description,
+            quantity: it.quantity ? it.quantity.toString() : '1.00',
+            unit: it.unit || null,
+            unitPrice: it.unitPrice ? it.unitPrice.toString() : '0.00',
+            amount: it.amount ? it.amount.toString() : '0.00',
+            metadata: it.metadata,
+          }));
+
           chargeComponents.push({
             type: billType,
             label,
@@ -2148,6 +2171,7 @@ export class MeterService {
             paidAt: bill.paidAt ? bill.paidAt.toISOString() : null,
             occurredInDisplayedPeriod: true,
             includedInAmountDue: isUnpaid,
+            lineItems,
           });
         }
 
@@ -2183,6 +2207,17 @@ export class MeterService {
             if (!isZero) {
               amountDueDec = addDecimals(amountDueDec, previewTotalDec);
             }
+
+            const lineItems = (utilityResult.items || []).map((it: any) => ({
+              type: it.type,
+              description: it.description,
+              quantity: it.quantity,
+              unit: it.unit || null,
+              unitPrice: it.unitPrice,
+              amount: it.amount,
+              metadata: it.metadata,
+            }));
+
             chargeComponents.push({
               type: 'monthly_utility',
               label: 'บิลรายเดือน',
@@ -2191,6 +2226,7 @@ export class MeterService {
               paidAt: null,
               occurredInDisplayedPeriod: true,
               includedInAmountDue: !isZero,
+              lineItems,
             });
           } catch (err: any) {
             const domainCode = err?.code;
@@ -2232,6 +2268,7 @@ export class MeterService {
                 includedInAmountDue: false,
                 errorCode,
                 errorMessage,
+                lineItems: [],
               });
             } else {
               // Unexpected exception (e.g. database/runtime/programming failure) MUST escape / rethrow!

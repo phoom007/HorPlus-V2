@@ -285,6 +285,17 @@ export function buildRowsFromWorkspace(params: {
   return { rows, originalRows };
 }
 
+export interface CanonicalLineItem {
+  id?: string;
+  type: string;
+  description: string;
+  quantity: string;
+  unit?: string | null;
+  unitPrice: string;
+  amount: string;
+  metadata?: any;
+}
+
 export interface TopLevelFinancialComponent {
   type?: string;
   label: string;
@@ -293,6 +304,7 @@ export interface TopLevelFinancialComponent {
   status: 'PREVIEW' | 'UNPAID' | 'PAID' | 'INVALID';
   title: string;
   errorMessage?: string;
+  lineItems?: CanonicalLineItem[];
 }
 
 export interface OwnerFinancialBreakdown {
@@ -344,6 +356,7 @@ export function getOwnerFinancialBreakdown(
       status,
       title,
       errorMessage: c.errorMessage,
+      lineItems: c.lineItems || [],
     };
   });
 
@@ -2743,25 +2756,8 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                       {/* Calculated Total & Financial Breakdown */}
                       <td className="p-4 text-right">
                         {(() => {
-                          const isOccupiedOrActive = Boolean(
-                            roomCtx?.tenantId ||
-                            roomCtx?.billingSource === 'CONTRACT' ||
-                            roomCtx?.billingSource === 'PROVISIONAL_MONTHLY' ||
-                            roomCtx?.billingSource === 'PROVISIONAL_TERM' ||
-                            roomCtx?.billingSource === 'DAILY_STAY' ||
-                            roomCtx?.isDailyUnpaid ||
-                            roomCtx?.isFutureReservation
-                          );
                           const breakdown = getOwnerFinancialBreakdown(roomCtx);
-                          const livePreview = calculateMeterRowPreview(roomCtx, rateSnapshot, row);
-                          const hasRentInBreakdown = breakdown.components.some((c: any) => c.type === 'rent' || c.type === 'legacy_combined' || (c.label && (c.label.includes('ค่าเช่า') || c.label.includes('รวมค่าเช่า'))));
-                          const rentAmountNum = Number(roomCtx?.rentAmount ?? room?.monthlyRent ?? 0);
-                          const isDailyRentPaid = Boolean(roomCtx?.isDailyRentPaid);
-                          const amountDue = (breakdown.operationalAmount > 0)
-                            ? (hasRentInBreakdown || isDailyRentPaid || rentAmountNum === 0
-                              ? breakdown.formattedAmount
-                              : formatMoneyDisplay(breakdown.operationalAmount + rentAmountNum))
-                            : (isOccupiedOrActive && Number(livePreview.totalAmount) > 0 ? livePreview.formattedTotal : breakdown.formattedAmount);
+                          const amountDue = breakdown.formattedAmount;
                           const chargeComponents = breakdown.components;
                           const isExpanded = Boolean(expandedBreakdowns[row.roomId]);
 
@@ -2886,7 +2882,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                           }
 
                           const effectiveBillStatus: BillStatus = (roomCtx?.billStatus as BillStatus) || row.billStatus;
-                          const isEffectivePaid = effectiveBillStatus === 'paid' || Boolean(roomCtx?.isPaid) || row.isPaid;
+                          const isEffectivePaid = (effectiveBillStatus as string) === 'paid' || Boolean(roomCtx?.isPaid) || row.isPaid;
 
                           return (
                             <div className="flex flex-col items-center justify-center gap-1 min-w-[85px]">
@@ -2894,16 +2890,16 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                                 type="button"
                                 role="switch"
                                 aria-checked={effectiveBillStatus !== 'draft' && effectiveBillStatus !== 'cancelled'}
-                                disabled={isSaving || isEffectivePaid || effectiveBillStatus === 'paid' || !selectedBillingCycleId}
+                                disabled={isSaving || isEffectivePaid || (effectiveBillStatus as string) === 'paid' || !selectedBillingCycleId}
                                 onClick={() => handleToggleStatusSwitch(row)}
-                                className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none disabled:cursor-not-allowed disabled:opacity-60 ${effectiveBillStatus === 'paid'
+                                className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none disabled:cursor-not-allowed disabled:opacity-60 ${(effectiveBillStatus as string) === 'paid'
                                   ? 'bg-emerald-600'
                                   : effectiveBillStatus !== 'draft' && effectiveBillStatus !== 'cancelled'
                                     ? 'bg-amber-500'
                                     : 'bg-slate-300'
                                   }`}
                                 title={
-                                  effectiveBillStatus === 'paid'
+                                  (effectiveBillStatus as string) === 'paid'
                                     ? 'ชำระแล้ว (ล็อค)'
                                     : effectiveBillStatus !== 'draft' && effectiveBillStatus !== 'cancelled'
                                       ? 'คลิกเพื่อยกเลิกบิล'
@@ -2916,13 +2912,13 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                                     }`}
                                 />
                               </button>
-                              <span className={`text-[10px] font-extrabold leading-none ${effectiveBillStatus === 'paid'
+                              <span className={`text-[10px] font-extrabold leading-none ${(effectiveBillStatus as string) === 'paid'
                                 ? 'text-emerald-700'
                                 : effectiveBillStatus !== 'draft' && effectiveBillStatus !== 'cancelled'
                                   ? 'text-amber-700'
                                   : 'text-slate-500'
                                 }`}>
-                                {effectiveBillStatus === 'paid'
+                                {(effectiveBillStatus as string) === 'paid'
                                   ? 'ชำระแล้ว'
                                   : effectiveBillStatus === 'draft' || effectiveBillStatus === 'cancelled'
                                     ? 'ยังไม่ออกบิล'
@@ -2940,9 +2936,9 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                           const effectiveTenantName = roomCtx ? roomCtx.tenantName : tenant?.name;
                           const isFuture = Boolean(roomCtx?.isFutureReservation);
                           const isLineLinked = roomCtx ? roomCtx.isLineLinked : Boolean((tenant as any)?.linkedUserId);
-                          const peopleCountVal = Number(row.peopleCount ?? roomCtx?.currentHouseholdPeopleCount ?? roomCtx?.snapshotPeopleCount ?? 1);
+                          const peopleCountVal = Number(row.peopleCount ?? roomCtx?.currentHouseholdPeopleCount ?? roomCtx?.snapshotPeopleCount ?? 0);
                           const activeCycleCode = selectedCycleCode || selectedCycle || billingCycles?.find((c: any) => c.id === selectedBillingCycleId)?.cycleCode || '';
-                          const isEligibleAddTenantCycle = isCycleInRollingThreeMonthWindow(activeCycleCode, billingCycles);
+                          const isEligibleAddTenantCycle = isCycleInRollingThreeMonthWindow(activeCycleCode, billingCyclesData?.selectableBillingCycles || billingCycles);
                           const hasBookableGap = roomCtx?.hasBookableGap ?? true;
                           const historicalDailyCount = roomCtx?.historicalDailyCount || 0;
                           const dailyCheckOutDate = roomCtx?.dailyCheckOutDate || null;
@@ -3154,7 +3150,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                   selectedCycleCode={selectedCycleCode}
                   selectedCycle={selectedCycle}
                   selectedBillingCycleId={selectedBillingCycleId}
-                  billingCycles={billingCycles}
+                  billingCycles={billingCyclesData?.selectableBillingCycles || billingCycles}
                   isSaving={isSaving}
                   isMutationReady={isMutationReady}
                   unlockedElecPrev={unlockedElecPrev}

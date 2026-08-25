@@ -183,19 +183,12 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
   );
 
   const breakdown = getOwnerFinancialBreakdown(roomCtx);
-  const livePreview = calculateMeterRowPreview(roomCtx, rateSnapshot, row);
-  const hasRentInBreakdown = breakdown.components.some((c: any) => c.type === 'rent' || c.type === 'legacy_combined' || (c.label && (c.label.includes('ค่าเช่า') || c.label.includes('รวมค่าเช่า'))));
-  const rentAmountNum = Number(roomCtx?.rentAmount ?? room?.monthlyRent ?? 0);
-  const amountDue = (breakdown.operationalAmount > 0)
-    ? (hasRentInBreakdown || isDailyRentPaid || rentAmountNum === 0
-      ? breakdown.formattedAmount
-      : formatMoneyDisplay(breakdown.operationalAmount + rentAmountNum))
-    : (isOccupiedOrActive && Number(livePreview.totalAmount) > 0 ? livePreview.formattedTotal : breakdown.formattedAmount);
+  const amountDue = breakdown.formattedAmount;
   const chargeComponents = breakdown.components;
 
   const isFuture = Boolean(roomCtx?.isFutureReservation);
   const isLineLinked = roomCtx ? roomCtx.isLineLinked : Boolean((tenant as any)?.linkedUserId);
-  const peopleCountVal = Number(row.peopleCount ?? roomCtx?.currentHouseholdPeopleCount ?? roomCtx?.snapshotPeopleCount ?? 1);
+  const peopleCountVal = Number(row.peopleCount ?? roomCtx?.currentHouseholdPeopleCount ?? roomCtx?.snapshotPeopleCount ?? 0);
   const activeCycleCode = selectedCycleCode || selectedCycle || billingCycles?.find((c: any) => c.id === selectedBillingCycleId)?.cycleCode || '';
   const isEligibleAddTenantCycle = isCycleInRollingThreeMonthWindow(activeCycleCode, billingCycles);
   const hasBookableGap = roomCtx?.hasBookableGap ?? true;
@@ -212,27 +205,37 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
     return null;
   })();
 
-  // Rate calculations
-  const rates = rateSnapshot || roomCtx?.rateSnapshot;
-  const elecRate = Number(rates?.electricityRate ?? 7);
-  const waterRate = Number(rates?.waterRate ?? 18);
-  const waterBillingType = rates?.waterBillingType ?? 'per_unit';
+  // Rate calculations & Canonical Line Items
+  const monthlyComp = chargeComponents.find(
+    (c: any) => c.type === 'monthly_utility' || c.type === 'legacy_combined' || (c.label && c.label.includes('บิลรายเดือน'))
+  );
+  const backendLineItems = monthlyComp?.lineItems || [];
+
+  const elecItem = backendLineItems.find((it: any) => it.type === 'electricity' || (it.description && it.description.includes('ค่าไฟ')));
+  const waterItem = backendLineItems.find((it: any) => it.type === 'water' || (it.description && it.description.includes('ค่าน้ำ')));
 
   let elecCostText = '-';
-  if (elecUnits >= 0 && row.elecCurr !== '') {
-    const cost = elecUnits * elecRate;
-    elecCostText = `${Math.round(cost).toLocaleString('th-TH')} .-`;
+  if (elecItem && elecItem.amount !== undefined && elecItem.amount !== null) {
+    elecCostText = formatComponentDetailAmount(elecItem.amount);
+  } else if (elecUnits >= 0 && row.elecCurr !== '') {
+    const rates = rateSnapshot || roomCtx?.rateSnapshot;
+    const elecRate = Number(rates?.electricityRate ?? 0);
+    if (elecRate > 0) {
+      elecCostText = formatComponentDetailAmount(elecUnits * elecRate);
+    }
   }
 
   let waterCostText = '-';
-  if (waterUnits >= 0 && row.waterCurr !== '') {
-    let cost = 0;
-    if (waterBillingType === 'per_person') {
-      cost = peopleCountVal * waterRate;
-    } else {
-      cost = waterUnits * waterRate;
+  if (waterItem && waterItem.amount !== undefined && waterItem.amount !== null) {
+    waterCostText = formatComponentDetailAmount(waterItem.amount);
+  } else if (waterUnits >= 0 && row.waterCurr !== '') {
+    const rates = rateSnapshot || roomCtx?.rateSnapshot;
+    const waterRate = Number(rates?.waterRate ?? 0);
+    const waterBillingType = rates?.waterBillingType ?? 'per_unit';
+    if (waterRate > 0) {
+      const cost = waterBillingType === 'per_person' ? peopleCountVal * waterRate : waterUnits * waterRate;
+      waterCostText = formatComponentDetailAmount(cost);
     }
-    waterCostText = `${Math.round(cost).toLocaleString('th-TH')} .-`;
   }
 
   // Rent type & amount
@@ -270,7 +273,7 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
 
   const otherFeesCount = (row.otherFees || []).length;
 
-  // Decompose and itemize breakdown rows for List Mode (excluding rent which is already displayed on the top summary row)
+  // Decompose and itemize breakdown rows for List Mode (sourced directly from canonical backend lineItems)
   const listItemizedBreakdown = useMemo(() => {
     const items: Array<{
       id: string;
@@ -282,201 +285,68 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
       status?: string;
     }> = [];
 
-    const hasGenericMonthlyUtility = chargeComponents.some(
-      (c: any) => c.type === 'monthly_utility' || (c.label && c.label.includes('บิลรายเดือน'))
-    );
+    const utilityStatus = monthlyComp?.status || (isRowPaid || row.billStatus === 'paid' ? 'PAID' : (row.billStatus !== 'draft' && row.billStatus !== 'cancelled' ? 'UNPAID' : 'PREVIEW'));
 
-    const utilityStatus = isRowPaid || row.billStatus === 'paid' ? 'PAID' : (row.billStatus !== 'draft' && row.billStatus !== 'cancelled' ? 'UNPAID' : 'PREVIEW');
-
-    if (hasGenericMonthlyUtility && rates) {
-      // 1. 💧 ค่าน้ำ: กรณีคิดแบบเหมาจ่าย (บาท/ห้อง) หรือ คิดตามจำนวนคน (บาท/คน)
-      if (!isWaterUnit && rates.waterBillingType && rates.waterBillingType !== 'none' && peopleCountVal > 0) {
-        const wMode = rates.waterBillingType;
-        const wRate = Number(rates.waterRate || 0);
-        if (wMode === 'per_person' && wRate > 0) {
-          const amt = peopleCountVal * wRate;
-          items.push({
-            id: 'item-water',
-            label: `ค่าน้ำ (${peopleCountVal} คน)`,
-            amount: amt,
-            type: 'water',
-            icon: <Droplets className="w-3.5 h-3.5 text-sky-500 shrink-0" />,
-            status: utilityStatus,
-          });
-        } else if ((wMode === 'fixed' || wMode === 'per_room' || wMode === 'fixed_per_room') && wRate > 0) {
-          items.push({
-            id: 'item-water',
-            label: 'ค่าน้ำ (เหมาจ่าย)',
-            amount: wRate,
-            type: 'water',
-            icon: <Droplets className="w-3.5 h-3.5 text-sky-500 shrink-0" />,
-            status: utilityStatus,
-          });
+    if (backendLineItems.length > 0) {
+      for (const it of backendLineItems) {
+        const itemType = (it.type || '').toString().toLowerCase();
+        let itemIcon = getComponentItemIcon(it.description, it.type);
+        if (itemType === 'water') {
+          itemIcon = <Droplets className="w-3.5 h-3.5 text-sky-500 shrink-0" />;
+        } else if (itemType === 'electricity') {
+          itemIcon = <Zap className="w-3.5 h-3.5 text-amber-500 shrink-0" />;
+        } else if (itemType === 'common_fee' || itemType === 'common') {
+          itemIcon = <Building2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />;
+        } else if (itemType === 'internet') {
+          itemIcon = <Wifi className="w-3.5 h-3.5 text-indigo-500 shrink-0" />;
+        } else if (itemType === 'parking') {
+          itemIcon = <Car className="w-3.5 h-3.5 text-purple-500 shrink-0" />;
+        } else if (itemType === 'manual_outstanding' || itemType === 'outstanding') {
+          itemIcon = <Clock className="w-3.5 h-3.5 text-slate-500 shrink-0" />;
         }
-      }
 
-      // 2. ⚡ ค่าไฟฟ้า: กรณีคิดแบบเหมาจ่าย (บาท/ห้อง) หรือ คิดตามจำนวนคน (บาท/คน)
-      if (!isElecUnit && rates.electricityBillingType && rates.electricityBillingType !== 'none' && peopleCountVal > 0) {
-        const eMode = rates.electricityBillingType;
-        const eRate = Number(rates.electricityRate || 0);
-        if (eMode === 'per_person' && eRate > 0) {
-          const amt = peopleCountVal * eRate;
-          items.push({
-            id: 'item-elec',
-            label: `ค่าไฟฟ้า (${peopleCountVal} คน)`,
-            amount: amt,
-            type: 'electricity',
-            icon: <Zap className="w-3.5 h-3.5 text-amber-500 shrink-0" />,
-            status: utilityStatus,
-          });
-        } else if ((eMode === 'fixed' || eMode === 'per_room' || eMode === 'fixed_per_room') && eRate > 0) {
-          items.push({
-            id: 'item-elec',
-            label: 'ค่าไฟฟ้า (เหมาจ่าย)',
-            amount: eRate,
-            type: 'electricity',
-            icon: <Zap className="w-3.5 h-3.5 text-amber-500 shrink-0" />,
-            status: utilityStatus,
-          });
-        }
-      }
+        const isOutstanding = itemType === 'manual_outstanding' || itemType === 'late_fee';
 
-      // 3. 🏢 ค่าส่วนกลาง: แสดงไอคอนและยอดตามที่ตั้งค่า
-      if (rates.commonFeeMode && rates.commonFeeMode !== 'free' && rates.commonFeeMode !== 'none' && peopleCountVal > 0) {
-        const cMode = rates.commonFeeMode;
-        const cFee = Number(rates.commonFee || 0);
-        if (cFee > 0) {
-          const amt = (cMode === 'per_person' || cMode === 'person') ? peopleCountVal * cFee : cFee;
-          items.push({
-            id: 'item-common',
-            label: (cMode === 'per_person' || cMode === 'person') ? `ค่าส่วนกลาง (${peopleCountVal} คน)` : 'ค่าส่วนกลาง',
-            amount: amt,
-            type: 'common_fee',
-            icon: <Building2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />,
-            status: utilityStatus,
-          });
-        }
-      }
-
-      // 4. 📶 ค่าอินเทอร์เน็ต: แสดงไอคอน WiFi และยอดตามที่ตั้งค่า
-      if (rates.internetFeeMode && rates.internetFeeMode !== 'free' && rates.internetFeeMode !== 'none' && peopleCountVal > 0) {
-        const iMode = rates.internetFeeMode;
-        const iFee = Number(rates.internetFee || 0);
-        if (iFee > 0) {
-          const amt = (iMode === 'per_person' || iMode === 'person') ? peopleCountVal * iFee : iFee;
-          items.push({
-            id: 'item-internet',
-            label: (iMode === 'per_person' || iMode === 'person') ? `ค่าอินเทอร์เน็ต (${peopleCountVal} คน)` : 'ค่าอินเทอร์เน็ต',
-            amount: amt,
-            type: 'internet',
-            icon: <Wifi className="w-3.5 h-3.5 text-indigo-500 shrink-0" />,
-            status: utilityStatus,
-          });
-        }
-      }
-
-      // 5. 🚗 ค่าจอดรถ: แสดงไอคอนรถยนต์และยอดตามที่ตั้งค่า
-      if (rates.parkingFeeMode && rates.parkingFeeMode !== 'free' && rates.parkingFeeMode !== 'none' && peopleCountVal > 0) {
-        const pMode = rates.parkingFeeMode;
-        const pFee = Number(rates.parkingFee || 0);
-        if (pFee > 0) {
-          let amt = pFee;
-          let pLabel = 'ค่าจอดรถ';
-          if (pMode === 'per_person' || pMode === 'person') {
-            amt = peopleCountVal * pFee;
-            pLabel = `ค่าจอดรถ (${peopleCountVal} คน)`;
-          } else if (pMode === 'per_vehicle' || pMode === 'vehicle') {
-            const qty = Number(roomCtx?.parkingQuantity || 1);
-            amt = qty * pFee;
-            pLabel = `ค่าจอดรถ (${qty} คัน)`;
-          }
-          items.push({
-            id: 'item-parking',
-            label: pLabel,
-            amount: amt,
-            type: 'parking',
-            icon: <Car className="w-3.5 h-3.5 text-purple-500 shrink-0" />,
-            status: utilityStatus,
-          });
-        }
-      }
-
-      // 6. ⏰ ค่าปรับชำระล่าช้า (X วัน): แสดงไอคอนแจ้งเตือนและจำนวนเงิน
-      const overdueAmt = Number(row.overdueAmount || roomCtx?.manualOutstandingAmount || 0);
-      if (overdueAmt > 0) {
         items.push({
-          id: 'item-overdue',
-          label: 'ค่าปรับชำระล่าช้า',
-          amount: overdueAmt,
-          type: 'late_fee',
-          icon: <Clock className="w-3.5 h-3.5 text-rose-500 shrink-0" />,
-          status: 'OVERDUE',
+          id: it.id || `item-${itemType}-${it.description}`,
+          label: it.description || (itemType === 'manual_outstanding' ? 'ค้างชำระ' : itemType),
+          amount: it.amount,
+          type: itemType,
+          icon: itemIcon,
+          status: isOutstanding ? 'OVERDUE' : utilityStatus,
         });
       }
+    }
 
-      // 7. Non-monthly utility items from chargeComponents (e.g. deposit, custom fees) - omit rent since it is already displayed on top
-      for (const c of chargeComponents) {
+    // Include non-monthly utility components (or monthly utility when no lineItems are provided) - omit rent since it is displayed on top
+    for (const c of chargeComponents) {
+      if (
+        c.type !== 'rent' &&
+        (!c.label || !c.label.includes('ค่าเช่า'))
+      ) {
         if (
-          c.type !== 'monthly_utility' &&
-          c.type !== 'rent' &&
-          (!c.label || (!c.label.includes('บิลรายเดือน') && !c.label.includes('ค่าเช่า')))
+          (c.type === 'monthly_utility' || c.type === 'legacy_combined' || (c.label && c.label.includes('บิลรายเดือน'))) &&
+          backendLineItems.length > 0
         ) {
-          const compStatus = c.status || (isDailyContext && (c.type === 'deposit' || c.label?.includes('ค่าประกัน')) ? (roomCtx?.isDailyDepositPaidInDisplayedPeriod ? 'PAID' : (roomCtx?.showDailyDepositLine ? 'UNPAID' : (isRowPaid ? 'PAID' : 'PREVIEW'))) : (isRowPaid || row.billStatus === 'paid' ? 'PAID' : (row.billStatus !== 'draft' ? 'UNPAID' : 'PREVIEW')));
-          items.push({
-            id: `item-comp-${c.label}`,
-            label: c.label,
-            amount: c.amount,
-            type: c.type || 'other',
-            icon: getComponentItemIcon(c.label, c.type),
-            errorMessage: c.errorMessage,
-            status: compStatus,
-          });
+          // Already decomposed into backendLineItems above
+          continue;
         }
-      }
 
-      // Fallback: If 0 items were generated from rate settings, display the original non-rent charge components
-      if (items.length === 0 && chargeComponents.length > 0) {
-        for (const c of chargeComponents) {
-          if (
-            c.type !== 'rent' &&
-            (!c.label || !c.label.includes('ค่าเช่า'))
-          ) {
-            const compStatus = c.status || (isDailyContext && (c.type === 'deposit' || c.label?.includes('ค่าประกัน')) ? (roomCtx?.isDailyDepositPaidInDisplayedPeriod ? 'PAID' : (roomCtx?.showDailyDepositLine ? 'UNPAID' : (isRowPaid ? 'PAID' : 'PREVIEW'))) : (isRowPaid || row.billStatus === 'paid' ? 'PAID' : (row.billStatus !== 'draft' ? 'UNPAID' : 'PREVIEW')));
-            items.push({
-              id: `item-comp-${c.label}`,
-              label: c.label,
-              amount: c.amount,
-              type: c.type || 'other',
-              icon: getComponentItemIcon(c.label, c.type),
-              errorMessage: c.errorMessage,
-              status: compStatus,
-            });
-          }
-        }
-      }
-    } else {
-      // Direct pass-through for non-rent charge components
-      for (const c of chargeComponents) {
-        if (
-          c.type !== 'rent' &&
-          (!c.label || !c.label.includes('ค่าเช่า'))
-        ) {
-          const compStatus = c.status || (isDailyContext && (c.type === 'deposit' || c.label?.includes('ค่าประกัน')) ? (roomCtx?.isDailyDepositPaidInDisplayedPeriod ? 'PAID' : (roomCtx?.showDailyDepositLine ? 'UNPAID' : (isRowPaid ? 'PAID' : 'PREVIEW'))) : (isRowPaid || row.billStatus === 'paid' ? 'PAID' : (row.billStatus !== 'draft' ? 'UNPAID' : 'PREVIEW')));
-          items.push({
-            id: `item-comp-${c.label}`,
-            label: c.label,
-            amount: c.amount,
-            type: c.type || 'other',
-            icon: getComponentItemIcon(c.label, c.type),
-            errorMessage: c.errorMessage,
-            status: compStatus,
-          });
-        }
+        const compStatus = c.status || (isDailyContext && (c.type === 'deposit' || c.label?.includes('ค่าประกัน')) ? (roomCtx?.isDailyDepositPaidInDisplayedPeriod ? 'PAID' : (roomCtx?.showDailyDepositLine ? 'UNPAID' : (isRowPaid ? 'PAID' : 'PREVIEW'))) : (isRowPaid || row.billStatus === 'paid' ? 'PAID' : (row.billStatus !== 'draft' ? 'UNPAID' : 'PREVIEW')));
+        items.push({
+          id: `item-comp-${c.label}`,
+          label: c.label,
+          amount: c.amount,
+          type: c.type || 'other',
+          icon: getComponentItemIcon(c.label, c.type),
+          errorMessage: c.errorMessage,
+          status: compStatus,
+        });
       }
     }
 
     return items;
-  }, [chargeComponents, rates, isWaterUnit, isElecUnit, peopleCountVal, row.overdueAmount, roomCtx?.manualOutstandingAmount, roomCtx?.parkingQuantity, isRowPaid, row.billStatus, isDailyContext, roomCtx?.isDailyDepositPaidInDisplayedPeriod, roomCtx?.showDailyDepositLine]);
+  }, [chargeComponents, backendLineItems, monthlyComp, isRowPaid, row.billStatus, isDailyContext, roomCtx]);
 
   // Dynamic Card Border Color based on Status:
   // - ยังไม่ออกบิล / ว่าง: สีเทา (border-slate-200)
