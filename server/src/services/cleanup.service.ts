@@ -129,6 +129,14 @@ export class CleanupService {
         console.error('[CleanupService] Error during outbox reconciliation', err);
       }
 
+      // Phase 6: Canonical Overdue Late-Fee Reconciliation (L2 Scheduled Authority)
+      try {
+        const { lateFeeReconciliationService } = await import('./late-fee-reconciliation.service.js');
+        await lateFeeReconciliationService.reconcileOverdueBills(now);
+      } catch (err) {
+        console.error('[CleanupService] Error during overdue late-fee reconciliation', err);
+      }
+
       return { expiredMarked, orphansDeleted, consumedMetadataPurged };
     } catch (err) {
       console.error('[CleanupService] Unexpected error during cleanup execution', err);
@@ -138,9 +146,18 @@ export class CleanupService {
     }
   }
 
+  private intervalId: NodeJS.Timeout | null = null;
+
   startHourly() {
     this.runCleanup();
-    setInterval(() => this.runCleanup(), 60 * 60 * 1000);
+    this.intervalId = setInterval(() => this.runCleanup(), 60 * 60 * 1000);
+  }
+
+  stop() {
+    if (this.intervalId) {
+      clearInterval(this.intervalId);
+      this.intervalId = null;
+    }
   }
 }
 

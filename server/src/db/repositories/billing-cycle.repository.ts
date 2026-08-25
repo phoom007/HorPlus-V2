@@ -35,6 +35,7 @@ export interface BillingRateSnapshotEntity {
   parkingFeeMode: string;
   lateFeeType: string;
   lateFeeValue: string;
+  gracePeriodDays: number;
   currency: string;
   source: string; // TEMPLATE_DEFAULT, INHERITED, MANUAL_OVERRIDE
   inheritedFromBillingCycleId?: string | null;
@@ -71,6 +72,7 @@ export interface CreateRateSnapshotData {
   parkingFeeMode?: string;
   lateFeeType?: string;
   lateFeeValue?: string;
+  gracePeriodDays?: number;
   currency?: string;
   source?: string;
   inheritedFromBillingCycleId?: string | null;
@@ -91,6 +93,7 @@ export interface UpdateRateSnapshotData {
   parkingFeeMode?: string;
   lateFeeType?: string;
   lateFeeValue?: string;
+  gracePeriodDays?: number;
   currency?: string;
   source?: string;
   inheritedFromBillingCycleId?: string | null;
@@ -307,6 +310,7 @@ export class InMemoryBillingCycleRepository implements IBillingCycleRepository {
       parkingFeeMode: data.parkingFeeMode || 'none',
       lateFeeType: data.lateFeeType || 'none',
       lateFeeValue: data.lateFeeValue || '0.00',
+      gracePeriodDays: data.gracePeriodDays ?? 0,
       currency: data.currency || 'THB',
       source: data.source || 'TEMPLATE_DEFAULT',
       inheritedFromBillingCycleId: data.inheritedFromBillingCycleId || null,
@@ -406,6 +410,7 @@ export class PrismaBillingCycleRepository implements IBillingCycleRepository {
       parkingFeeMode: s.parkingFeeMode || 'none',
       lateFeeType: s.lateFeeType || 'none',
       lateFeeValue: fmt(s.lateFeeValue, '0.00'),
+      gracePeriodDays: s.gracePeriodDays ?? 0,
       currency: s.currency,
       source: s.source,
       inheritedFromBillingCycleId: s.inheritedFromBillingCycleId,
@@ -592,6 +597,7 @@ export class PrismaBillingCycleRepository implements IBillingCycleRepository {
         parkingFeeMode: data.parkingFeeMode!,
         lateFeeType: data.lateFeeType!,
         lateFeeValue: data.lateFeeValue!,
+        gracePeriodDays: data.gracePeriodDays ?? 0,
         currency: data.currency || 'THB',
         source: data.source!,
         inheritedFromBillingCycleId: data.inheritedFromBillingCycleId || null,
@@ -624,6 +630,7 @@ export class PrismaBillingCycleRepository implements IBillingCycleRepository {
     if (data.parkingFeeMode !== undefined) updateData.parkingFeeMode = data.parkingFeeMode;
     if (data.lateFeeType !== undefined) updateData.lateFeeType = data.lateFeeType;
     if (data.lateFeeValue !== undefined) updateData.lateFeeValue = data.lateFeeValue;
+    if (data.gracePeriodDays !== undefined) updateData.gracePeriodDays = data.gracePeriodDays;
     if (data.currency !== undefined) updateData.currency = data.currency;
     if (data.source !== undefined) updateData.source = data.source;
     if (data.inheritedFromBillingCycleId !== undefined) updateData.inheritedFromBillingCycleId = data.inheritedFromBillingCycleId;

@@ -137,6 +137,7 @@ export interface BillPreviewResult {
   internetFee: string;
   parkingFee?: string;
   manualOutstandingAmount?: string;
+  lateFeeAmount?: string;
   otherFees?: Array<{ description: string; amount: string }>;
   peopleCount: number;
   subtotal: string;
@@ -193,7 +194,8 @@ export class BillingService {
     billingCycleId: string,
     roomId: string,
     tx?: any,
-    billKind: string = 'LEGACY_COMBINED'
+    billKind: string = 'LEGACY_COMBINED',
+    asOfDate?: Date | string | null
   ): Promise<BillPreviewResult> {
     const cycle = await this.billingCycleRepo.findById(billingCycleId, dormitoryId);
     if (!cycle) {
@@ -430,7 +432,7 @@ export class BillingService {
         manualOutstanding: cycleSnapshot?.manualOutstandingAmount ? cycleSnapshot.manualOutstandingAmount.toString() : undefined,
         otherFees: (cycleSnapshot?.otherFees as any[]) || [],
         dueDate: cycle?.dueDate,
-        asOfDate: new Date(),
+        asOfDate: asOfDate || new Date(),
       });
 
       items.push(...utilityResult.items);
@@ -468,6 +470,7 @@ export class BillingService {
       internetFee: internetItemAmount,
       parkingFee: parkingItemAmount,
       manualOutstandingAmount: manualOutstandingStr,
+      lateFeeAmount: items.find((i) => i.type === 'late_fee')?.amount || '0.00',
       otherFees: otherFeesList,
       peopleCount,
       subtotal: formatDecimal(subtotalDec),

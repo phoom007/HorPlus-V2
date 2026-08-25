@@ -35,6 +35,7 @@ export interface CanonicalRateSnapshotInput {
   parkingFee?: string | number | null;
   lateFeeType?: string | null;
   lateFeeValue?: string | number | null;
+  gracePeriodDays?: number | null;
 }
 
 export interface CanonicalReadingInput {
@@ -59,7 +60,7 @@ export interface CanonicalMonthlyUtilityInput {
   gracePeriodDays?: number | null;
 }
 
-export function normalizeLateFeeMode(raw: unknown): 'none' | 'daily' | 'fixed' | 'percentage' {
+export function normalizeLateFeeMode(raw: unknown): 'none' | 'daily' | 'fixed' {
   if (raw === null || raw === undefined || typeof raw !== 'string') return 'none';
   const cleaned = raw.trim().toLowerCase().replace(/[-\s]/g, '_');
   switch (cleaned) {
@@ -75,7 +76,8 @@ export function normalizeLateFeeMode(raw: unknown): 'none' | 'daily' | 'fixed' |
       return 'fixed';
     case 'percentage':
     case 'percent':
-      return 'percentage';
+      // Unsupported / unapproved in this sprint: fail-closed to 'none' (0 penalty)
+      return 'none';
     default:
       return 'none';
   }
@@ -457,7 +459,7 @@ export function calculateCanonicalMonthlyUtility(
     const dueDt = new Date(`${dueBangkokStr}T00:00:00.000Z`);
     const asOfDt = new Date(`${asOfBangkokStr}T00:00:00.000Z`);
     const rawDiffDays = Math.floor((asOfDt.getTime() - dueDt.getTime()) / (1000 * 60 * 60 * 24));
-    const grace = Math.max(0, input.gracePeriodDays ?? 0);
+    const grace = Math.max(0, rateSnapshot?.gracePeriodDays ?? input.gracePeriodDays ?? 0);
     const overdueDays = rawDiffDays > grace ? rawDiffDays : 0;
 
     if (overdueDays > 0) {
