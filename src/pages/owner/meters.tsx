@@ -712,6 +712,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   const [lineToastSuccess, setLineToastSuccess] = useState<string | null>(null);
   const [isSendingLine, setIsSendingLine] = useState(false);
   const originalRowsRef = React.useRef<MeterRowState[]>(initialBuilt?.originalRows || []);
+  const originalRowsCycleIdRef = React.useRef<string>(initialBuilt ? selectedBillingCycleId || '' : '');
   const meterRowsRef = React.useRef<MeterRowState[]>(meterRows);
   useEffect(() => {
     meterRowsRef.current = meterRows;
@@ -1481,6 +1482,8 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       if (!selectedBillingCycleId) {
         setMeterRows([]);
         setLoadedCycle('');
+        originalRowsRef.current = [];
+        originalRowsCycleIdRef.current = '';
       }
       return;
     }
@@ -1497,8 +1500,8 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       currentDormId,
     });
 
-    // Merge any locally confirmed snapshotVersions in originalRowsRef to prevent stale background refetch overwrite
-    if (originalRowsRef.current && originalRowsRef.current.length > 0) {
+    // Merge any locally confirmed snapshotVersions in originalRowsRef ONLY if for the SAME cycle
+    if (originalRowsCycleIdRef.current === selectedBillingCycleId && originalRowsRef.current && originalRowsRef.current.length > 0) {
       built.originalRows = built.originalRows.map(serverOrig => {
         const localOrig = originalRowsRef.current.find(o => o.roomId === serverOrig.roomId);
         if (localOrig && (localOrig.snapshotVersion ?? 0) > (serverOrig.snapshotVersion ?? 0)) {
@@ -1513,6 +1516,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     }
 
     originalRowsRef.current = built.originalRows;
+    originalRowsCycleIdRef.current = selectedBillingCycleId;
     setMeterRows(built.rows);
     resetHistory(built.rows);
     setLoadedCycle(selectedBillingCycleId);
@@ -1520,11 +1524,20 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
 
   // Synchronize unsaved deltas to isolated in-memory draft store
   useEffect(() => {
-    if (meterRows && meterRows.length > 0 && meterWorkspaceQuery.isSuccess && currentDormId && selectedBillingCycleId && originalRowsRef.current) {
+    if (
+      meterRows &&
+      meterRows.length > 0 &&
+      meterWorkspaceQuery.isSuccess &&
+      currentDormId &&
+      selectedBillingCycleId &&
+      loadedCycle === selectedBillingCycleId &&
+      originalRowsCycleIdRef.current === selectedBillingCycleId &&
+      originalRowsRef.current
+    ) {
       const patches = deriveMeterDraftPatches(meterRows, originalRowsRef.current);
       meterDraftStore.setDraft(currentDormId, selectedBillingCycleId, patches);
     }
-  }, [meterRows, selectedBillingCycleId, meterWorkspaceQuery.isSuccess, currentDormId]);
+  }, [meterRows, selectedBillingCycleId, loadedCycle, meterWorkspaceQuery.isSuccess, currentDormId]);
 
   const handleMeterReadingChange = (
     roomId: string,
@@ -1708,6 +1721,9 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   };
 
   const checkIsDirty = () => {
+    if (loadedCycle !== selectedBillingCycleId || originalRowsCycleIdRef.current !== selectedBillingCycleId) {
+      return false;
+    }
     if (!originalRowsRef.current || originalRowsRef.current.length === 0) return false;
     if (meterRows.length !== originalRowsRef.current.length) return true;
     for (let i = 0; i < meterRows.length; i++) {
@@ -2141,6 +2157,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
         if (saveSuccessTimeoutRef.current) clearTimeout(saveSuccessTimeoutRef.current);
         saveSuccessTimeoutRef.current = setTimeout(() => setSaveSuccess(false), 3000);
         originalRowsRef.current = JSON.parse(JSON.stringify(meterRowsRef.current));
+        originalRowsCycleIdRef.current = selectedBillingCycleId;
         resetHistory(meterRowsRef.current);
         queryClient.invalidateQueries({ queryKey: queryKeys.meterWorkspace(currentDormId, selectedBillingCycleId) });
         queryClient.invalidateQueries({ queryKey: queryKeys.meterPreviewContext(currentDormId, selectedBillingCycleId) });
@@ -2836,7 +2853,16 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                         : ''
                         }`}>
                         {(() => {
-                          if (isDailyContext) {
+                          const isDailyContext = roomCtx?.billingSource === 'DAILY_STAY' || Boolean(roomCtx?.isDailyUnpaid) || Boolean(roomCtx?.isDailyFinancialTail);
+                          const hasHistoricalDaily = (roomCtx?.historicalDailyCount || 0) > 0;
+                          const hasMonthlyContractOrBill = Boolean(
+                            roomCtx?.billingSource === 'CONTRACT' ||
+                            roomCtx?.billingSource === 'PROVISIONAL_MONTHLY' ||
+                            roomCtx?.billingSource === 'PROVISIONAL_TERM' ||
+                            (row.billStatus !== 'draft' && row.billStatus !== 'cancelled')
+                          );
+
+                          if (isDailyContext || (hasHistoricalDaily && !hasMonthlyContractOrBill)) {
                             const isDailyOverdue = Boolean(roomCtx?.isDailyOverdue || roomCtx?.isDailyFinancialTail);
                             const isDailyRentPaid = Boolean(roomCtx?.isDailyRentPaid);
 
@@ -2862,21 +2888,12 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                               );
                             }
 
-                            // Active & Unpaid (now <= effectiveCheckOutAt) -> Normal existing Daily style (NOT red)
+                            // Active & Unpaid or Historical Checked-out -> Neutral gray Daily badge
                             return (
                               <div className="flex items-center justify-center min-w-[85px]">
-                                <span className="inline-flex items-center px-2 py-1 bg-slate-100 text-slate-700 text-xs font-bold rounded-lg border border-slate-200">
+                                <span className="inline-flex items-center px-2 py-1 bg-slate-100 text-slate-600 text-xs font-bold rounded-lg border border-slate-200">
                                   รายวัน
                                 </span>
-                              </div>
-                            );
-                          }
-
-                          // Historical Daily Stay (Checked-out & Paid): No active monthly contract/bill -> Non-operational status
-                          if ((roomCtx?.historicalDailyCount || 0) > 0 && !effectiveTenantId && row.billStatus === 'draft') {
-                            return (
-                              <div className="flex items-center justify-center min-w-[85px]">
-                                <span className="text-xs text-slate-400 font-bold">-</span>
                               </div>
                             );
                           }
@@ -2934,6 +2951,8 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                         {(() => {
                           const effectiveTenantId = roomCtx ? roomCtx.tenantId : tenant?.id;
                           const effectiveTenantName = roomCtx ? roomCtx.tenantName : tenant?.name;
+                          const dailyCheckOutDate = roomCtx?.dailyCheckOutDate || null;
+                          const effectiveDailyTenantName = roomCtx?.dailyTenantName || (dailyCheckOutDate ? (effectiveTenantName || 'ผู้พักรายวัน') : null);
                           const isFuture = Boolean(roomCtx?.isFutureReservation);
                           const isLineLinked = roomCtx ? roomCtx.isLineLinked : Boolean((tenant as any)?.linkedUserId);
                           const peopleCountVal = Number(row.peopleCount ?? roomCtx?.currentHouseholdPeopleCount ?? roomCtx?.snapshotPeopleCount ?? 0);
@@ -2941,7 +2960,6 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                           const isEligibleAddTenantCycle = isCycleInRollingThreeMonthWindow(activeCycleCode, billingCyclesData?.selectableBillingCycles || billingCycles);
                           const hasBookableGap = roomCtx?.hasBookableGap ?? true;
                           const historicalDailyCount = roomCtx?.historicalDailyCount || 0;
-                          const dailyCheckOutDate = roomCtx?.dailyCheckOutDate || null;
                           const checkInDate = roomCtx?.checkInDate || null;
                           const contractEndDate = roomCtx?.contractEndDate || (() => {
                             const activeContract = (contracts || []).find((c: any) => c.roomId === row.roomId && ['active', 'expiring_soon', 'pending_signature', 'waiting_extension', 'checking_out'].includes(c.status));
@@ -3021,9 +3039,14 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                                   </div>
                                 )}
                                 {!hasTenant && dailyCheckOutDate && (
-                                  <span className="text-xs font-bold text-slate-700">
-                                    ({formatShortThaiBuddhistDate(dailyCheckOutDate)})
-                                  </span>
+                                  <div className="flex flex-col items-start gap-0.5">
+                                    <span className="text-xs font-bold text-slate-800">
+                                      {effectiveDailyTenantName || 'ผู้พักรายวัน'}
+                                    </span>
+                                    <span className="text-xs font-bold text-slate-700">
+                                      ({formatShortThaiBuddhistDate(dailyCheckOutDate)})
+                                    </span>
+                                  </div>
                                 )}
                                 {!hasOccupantClaim && hasBookableGap && (room || row.roomId) && (
                                   <button
@@ -3105,12 +3128,17 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                           }
 
                           if (hasDaily) {
-                            return dailyCheckOutDate ? (
-                              <span className="text-xs font-bold text-slate-700">
-                                ({formatShortThaiBuddhistDate(dailyCheckOutDate)})
-                              </span>
-                            ) : (
-                              <span className="text-gray-400">ไม่มีข้อมูล</span>
+                            return (
+                              <div className="flex flex-col items-start gap-0.5">
+                                <span className="text-xs font-bold text-slate-800">
+                                  {effectiveDailyTenantName || 'ผู้พักรายวัน'}
+                                </span>
+                                {dailyCheckOutDate && (
+                                  <span className="text-xs font-bold text-slate-700">
+                                    ({formatShortThaiBuddhistDate(dailyCheckOutDate)})
+                                  </span>
+                                )}
+                              </div>
                             );
                           }
 

@@ -2017,14 +2017,26 @@ export class MeterService {
         }
       }
 
+      const primaryDailyStay = unpaidDailyStay || (roomDailyStaysInCycle.length > 0 ? roomDailyStaysInCycle[0] : null);
+      const dailyTenantName = primaryDailyStay
+        ? (primaryDailyStay.applicantFullName || (primaryDailyStay.tenant ? (primaryDailyStay.tenant.displayName || `${primaryDailyStay.tenant.firstName || ''} ${primaryDailyStay.tenant.lastName || ''}`.trim()) : 'ผู้พักรายวัน'))
+        : null;
+      const dailyTenantId = primaryDailyStay?.tenantId || null;
+
       // If checked out with unpaid daily rent tail in this cycle, retain Daily tenant identity in this cycle
       if (billingSource === 'NONE' && unpaidDailyStay) {
         tenantId = unpaidDailyStay.tenantId || null;
-        tenantName = unpaidDailyStay.applicantFullName || (unpaidDailyStay.tenant ? (unpaidDailyStay.tenant.displayName || `${unpaidDailyStay.tenant.firstName || ''} ${unpaidDailyStay.tenant.lastName || ''}`.trim()) : 'ผู้พักรายวัน');
+        tenantName = dailyTenantName || 'ผู้พักรายวัน';
         isLineLinked = Boolean(unpaidDailyStay.tenant?.linkedUserId);
         isDailyFinancialTail = true;
         rentAmount = formatDecimal(toDecimal(unpaidDailyStay.totalRentAmount.toString()));
         rentDescription = 'ค่าเช่ารายวัน';
+      } else if (billingSource === 'NONE' && roomDailyStaysInCycle.length > 0 && !tenantName) {
+        tenantName = dailyTenantName;
+        tenantId = dailyTenantId;
+        if (primaryDailyStay?.tenant?.linkedUserId) {
+          isLineLinked = true;
+        }
       }
 
       if (!dailyCheckOutDate) {
@@ -2348,6 +2360,8 @@ export class MeterService {
         hasBookableGap,
         historicalDailyCount,
         dailyCheckOutDate,
+        dailyTenantName,
+        dailyTenantId,
         checkInDate,
         contractEndDate,
         isDailyUnpaid,

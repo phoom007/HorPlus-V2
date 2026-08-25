@@ -160,6 +160,8 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
 
   const effectiveTenantId = roomCtx ? roomCtx.tenantId : tenant?.id;
   const effectiveTenantName = roomCtx ? roomCtx.tenantName : tenant?.name;
+  const dailyCheckOutDate = roomCtx?.dailyCheckOutDate || null;
+  const effectiveDailyTenantName = roomCtx?.dailyTenantName || (dailyCheckOutDate ? (effectiveTenantName || 'ผู้พักรายวัน') : null);
   const isDailyContext = roomCtx?.billingSource === 'DAILY_STAY' || Boolean(roomCtx?.isDailyUnpaid) || Boolean(roomCtx?.isDailyFinancialTail);
   const isDailyOverdue = Boolean(roomCtx?.isDailyOverdue || roomCtx?.isDailyFinancialTail);
   const isDailyRentPaid = Boolean(roomCtx?.isDailyRentPaid);
@@ -193,7 +195,6 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
   const isEligibleAddTenantCycle = isCycleInRollingThreeMonthWindow(activeCycleCode, billingCycles);
   const hasBookableGap = roomCtx?.hasBookableGap ?? true;
   const historicalDailyCount = roomCtx?.historicalDailyCount || 0;
-  const dailyCheckOutDate = roomCtx?.dailyCheckOutDate || null;
   const checkInDate = roomCtx?.checkInDate || null;
   const contractEndDate = roomCtx?.contractEndDate || (() => {
     const activeContract = (contracts || []).find((c: any) => c.roomId === row.roomId && ['active', 'expiring_soon', 'pending_signature', 'waiting_extension', 'checking_out'].includes(c.status));
@@ -390,11 +391,19 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
           </span>
           {/* Status Badge */}
           {(() => {
-            if (isDailyContext) {
+            const hasHistoricalDaily = (roomCtx?.historicalDailyCount || 0) > 0;
+            const hasMonthlyContractOrBill = Boolean(
+              roomCtx?.billingSource === 'CONTRACT' ||
+              roomCtx?.billingSource === 'PROVISIONAL_MONTHLY' ||
+              roomCtx?.billingSource === 'PROVISIONAL_TERM' ||
+              (row.billStatus !== 'draft' && row.billStatus !== 'cancelled')
+            );
+
+            if (isDailyContext || (hasHistoricalDaily && !hasMonthlyContractOrBill)) {
               if (isDailyOverdue) {
                 return (
                   <span className="inline-flex items-center px-2.5 py-0.5 bg-rose-100 text-rose-800 text-xs font-bold rounded-md border border-rose-200">
-                    <AlertCircle className="w-3 h-3 text-rose-500 mr-1 shrink-0" />
+                    <AlertCircle className="w-3 h-3 text-rose-600 mr-1 shrink-0" />
                     รายวัน
                   </span>
                 );
@@ -410,14 +419,10 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
               }
 
               return (
-                <span className="inline-flex items-center px-2.5 py-0.5 bg-amber-100 text-amber-800 text-xs font-bold rounded-md">
+                <span className="text-xs font-extrabold px-2.5 py-0.5 rounded-md bg-slate-100 text-slate-600 border border-slate-200">
                   รายวัน
                 </span>
               );
-            }
-
-            if ((roomCtx?.historicalDailyCount || 0) > 0 && !effectiveTenantId && row.billStatus === 'draft') {
-              return <span className="text-xs text-slate-400 font-bold">-</span>;
             }
 
             return (
@@ -546,9 +551,14 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
                   </div>
                 )}
                 {!hasTenant && dailyCheckOutDate && (
-                  <span className="text-xs font-bold text-slate-700">
-                    ({formatShortThaiBuddhistDate(dailyCheckOutDate)})
-                  </span>
+                  <div className="flex flex-col items-start gap-0.5">
+                    <span className="text-xs font-bold text-slate-800">
+                      {effectiveDailyTenantName || 'ผู้พักรายวัน'}
+                    </span>
+                    <span className="text-xs font-bold text-slate-700 shrink-0">
+                      ({formatShortThaiBuddhistDate(dailyCheckOutDate)})
+                    </span>
+                  </div>
                 )}
                 {!hasOccupantClaim && hasBookableGap && (room || row.roomId) && (
                   <button
@@ -633,11 +643,18 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
             );
           }
 
-          if (hasDaily && dailyCheckOutDate) {
+          if (hasDaily) {
             return (
-              <span className="text-xs font-bold text-slate-700">
-                ({formatShortThaiBuddhistDate(dailyCheckOutDate)})
-              </span>
+              <div className="flex flex-col items-start gap-0.5">
+                <span className="text-xs font-bold text-slate-800">
+                  {effectiveDailyTenantName || 'ผู้พักรายวัน'}
+                </span>
+                {dailyCheckOutDate && (
+                  <span className="text-xs font-bold text-slate-700 shrink-0">
+                    ({formatShortThaiBuddhistDate(dailyCheckOutDate)})
+                  </span>
+                )}
+              </div>
             );
           }
 

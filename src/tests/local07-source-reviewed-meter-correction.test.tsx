@@ -1910,9 +1910,10 @@ describe('LOCAL-07 Source-Reviewed Meter Workspace Correction Suite', () => {
         const tenantCell = row?.querySelector('td:nth-child(10)');
         expect(tenantCell?.textContent).toContain('(25/07/69)');
 
-        // Status cell renders '-' (no red daily tail, no green active daily badge, no 'ยังไม่ออกบิล' toggle)
+        // Status cell renders '[ รายวัน ]' with neutral gray badge (no red daily tail, no green active daily badge, no 'ยังไม่ออกบิล' toggle)
         const statusCell = row?.querySelector('td:nth-child(9)');
-        expect(statusCell?.textContent?.trim()).toBe('-');
+        expect(statusCell?.textContent?.trim()).toBe('รายวัน');
+        expect(statusCell?.querySelector('span')?.className).toContain('bg-slate-100');
         expect(statusCell?.textContent).not.toContain('ยังไม่ออกบิล');
         expect(statusCell?.querySelector('button[role="switch"]')).toBeNull();
       });
