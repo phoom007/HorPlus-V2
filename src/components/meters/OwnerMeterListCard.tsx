@@ -176,7 +176,7 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
   const isLineLinked = roomCtx ? roomCtx.isLineLinked : Boolean((tenant as any)?.linkedUserId);
   const peopleCountVal = Number(row.peopleCount ?? roomCtx?.currentHouseholdPeopleCount ?? roomCtx?.snapshotPeopleCount ?? 1);
   const activeCycleCode = selectedCycleCode || selectedCycle || billingCycles?.find((c: any) => c.id === selectedBillingCycleId)?.cycleCode || '';
-  const isEligibleAddTenantCycle = isCycleInRollingThreeMonthWindow(activeCycleCode);
+  const isEligibleAddTenantCycle = isCycleInRollingThreeMonthWindow(activeCycleCode, billingCycles);
   const hasBookableGap = roomCtx?.hasBookableGap ?? true;
   const historicalDailyCount = roomCtx?.historicalDailyCount || 0;
   const dailyCheckOutDate = roomCtx?.dailyCheckOutDate || null;
@@ -211,7 +211,7 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
 
   const otherFeesCount = (row.otherFees || []).length;
 
-  // Decompose and itemize breakdown rows for List Mode
+  // Decompose and itemize breakdown rows for List Mode (excluding rent which is already displayed on the top summary row)
   const listItemizedBreakdown = useMemo(() => {
     const items: Array<{
       id: string;
@@ -344,9 +344,13 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
         });
       }
 
-      // 7. Non-monthly utility items from chargeComponents (e.g. rent on unpaid bill, deposit, etc.)
+      // 7. Non-monthly utility items from chargeComponents (e.g. deposit, custom fees) - omit rent since it is already displayed on top
       for (const c of chargeComponents) {
-        if (c.type !== 'monthly_utility' && (!c.label || !c.label.includes('บิลรายเดือน'))) {
+        if (
+          c.type !== 'monthly_utility' &&
+          c.type !== 'rent' &&
+          (!c.label || (!c.label.includes('บิลรายเดือน') && !c.label.includes('ค่าเช่า')))
+        ) {
           items.push({
             id: `item-comp-${c.label}`,
             label: c.label,
@@ -358,9 +362,31 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
         }
       }
 
-      // Fallback: If 0 items were generated from rate settings, display the original charge components
+      // Fallback: If 0 items were generated from rate settings, display the original non-rent charge components
       if (items.length === 0 && chargeComponents.length > 0) {
         for (const c of chargeComponents) {
+          if (
+            c.type !== 'rent' &&
+            (!c.label || !c.label.includes('ค่าเช่า'))
+          ) {
+            items.push({
+              id: `item-comp-${c.label}`,
+              label: c.label,
+              amount: c.amount,
+              type: c.type || 'other',
+              icon: getComponentItemIcon(c.label, c.type),
+              errorMessage: c.errorMessage,
+            });
+          }
+        }
+      }
+    } else {
+      // Direct pass-through for non-rent charge components
+      for (const c of chargeComponents) {
+        if (
+          c.type !== 'rent' &&
+          (!c.label || !c.label.includes('ค่าเช่า'))
+        ) {
           items.push({
             id: `item-comp-${c.label}`,
             label: c.label,
@@ -370,18 +396,6 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
             errorMessage: c.errorMessage,
           });
         }
-      }
-    } else {
-      // Direct pass-through
-      for (const c of chargeComponents) {
-        items.push({
-          id: `item-comp-${c.label}`,
-          label: c.label,
-          amount: c.amount,
-          type: c.type || 'other',
-          icon: getComponentItemIcon(c.label, c.type),
-          errorMessage: c.errorMessage,
-        });
       }
     }
 

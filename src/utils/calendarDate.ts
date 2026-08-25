@@ -129,16 +129,38 @@ export function getRollingThreeMonthWindow(referenceDate: Date | string = new Da
 }
 
 /**
- * Determines whether the given cycle code (YYYY-MM) falls within the rolling 3-month window
- * { previousMonth, currentMonth, nextMonth } of the current business date in Asia/Bangkok.
+ * Determines whether the given cycle code falls within the eligible 3-month action window:
+ * - If an array of billingCycles is provided, evaluates against the top 3 newest selectable cycle codes.
+ * - Otherwise falls back to { prevMonth, currentMonth, nextMonth } of referenceDate in Asia/Bangkok.
  */
 export function isCycleInRollingThreeMonthWindow(
   cycleCode: string | undefined | null,
-  referenceDate: Date | string = new Date()
+  referenceDateOrCycles: Date | string | any[] = new Date()
 ): boolean {
   if (!cycleCode || typeof cycleCode !== 'string') return false;
-  const windowCodes = getRollingThreeMonthWindow(referenceDate);
-  return windowCodes.includes(cycleCode.trim());
+  const targetCode = cycleCode.trim();
+
+  if (Array.isArray(referenceDateOrCycles) && referenceDateOrCycles.length > 0) {
+    const sortedCodes = Array.from(
+      new Set(
+        referenceDateOrCycles
+          .map((c: any) => c?.cycleCode || (typeof c === 'string' ? c : ''))
+          .filter(Boolean)
+      )
+    ).sort((a, b) => b.localeCompare(a));
+
+    if (sortedCodes.length <= 3) {
+      return sortedCodes.includes(targetCode);
+    }
+    const latestThree = sortedCodes.slice(0, 3);
+    return latestThree.includes(targetCode);
+  }
+
+  const refDate = (referenceDateOrCycles instanceof Date || typeof referenceDateOrCycles === 'string')
+    ? referenceDateOrCycles
+    : new Date();
+  const windowCodes = getRollingThreeMonthWindow(refDate);
+  return windowCodes.includes(targetCode);
 }
 
 /**

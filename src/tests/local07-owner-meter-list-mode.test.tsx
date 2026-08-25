@@ -6,6 +6,7 @@ import { OwnerMeters } from '../pages/owner/meters';
 import { meterDraftStore } from '../lib/meterDraftStore';
 import { queryKeys } from '../lib/queryClient';
 import { Room, Bill, Tenant, Contract } from '../types';
+import { isCycleInRollingThreeMonthWindow } from '../utils/calendarDate';
 
 describe('HORPLUS LOCAL-07 — Owner Meter List Mode UX Suite (L1 - L28)', () => {
   let queryClient: QueryClient;
@@ -738,11 +739,10 @@ describe('HORPLUS LOCAL-07 — Owner Meter List Mode UX Suite (L1 - L28)', () =>
     });
 
     const card102 = screen.getByTestId('meter-list-card-room-102');
-    expect(within(card102).getByText('ดูรายละเอียด +3')).toBeDefined();
+    // Breakdown button shows "ดูรายละเอียด +2" for water and electricity (rent omitted)
+    expect(within(card102).getByText('ดูรายละเอียด +2')).toBeDefined();
 
-    fireEvent.click(within(card102).getByText('ดูรายละเอียด +3'));
-    expect(within(card102).getByText('ค่าเช่าห้องพัก')).toBeDefined();
-    expect(within(card102).getByText('4,000.-')).toBeDefined();
+    fireEvent.click(within(card102).getByText('ดูรายละเอียด +2'));
     expect(within(card102).getByText('ค่าน้ำประปา')).toBeDefined();
     expect(within(card102).getByText('300.-')).toBeDefined();
     expect(within(card102).getByText('ค่าไฟฟ้า')).toBeDefined();
@@ -1109,6 +1109,11 @@ describe('HORPLUS LOCAL-07 — Owner Meter List Mode UX Suite (L1 - L28)', () =>
     });
 
     await waitFor(() => {
+      expect(screen.getByTestId('view-mode-list-button')).toBeDefined();
+    });
+    fireEvent.click(screen.getByTestId('view-mode-list-button'));
+
+    await waitFor(() => {
       expect(screen.getByTestId('meter-list-card-room-101')).toBeDefined();
     });
 
@@ -1129,5 +1134,72 @@ describe('HORPLUS LOCAL-07 — Owner Meter List Mode UX Suite (L1 - L28)', () =>
     expect(commonFeeLabel.className).toContain('text-slate-800');
     const commonFeeAmt = within(card101).getByText('200.-');
     expect(commonFeeAmt.className).toContain('text-slate-900');
+  });
+
+  it('L34. List mode does not duplicate rent in expanded breakdown when displayed on top', async () => {
+    setupFetchMock(undefined, {
+      waterBillingType: 'per_unit',
+      waterRate: '18.00',
+      electricityBillingType: 'per_unit',
+      electricityRate: '7.00',
+    });
+
+    renderComponent({}, {
+      rooms: [
+        {
+          roomId: 'room-101',
+          tenantId: 'tenant-101',
+          tenantName: 'นายสมชาย ใจดี',
+          rentAmount: '3000.00',
+          amountDue: '3500.00',
+          chargeComponents: [
+            { type: 'deposit', label: 'ค่าประกัน', amount: '500.00', status: 'UNPAID' },
+            { type: 'rent', label: 'ค่าเช่า (วัน)', amount: '3000.00', status: 'UNPAID' },
+          ],
+        },
+      ],
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('view-mode-list-button')).toBeDefined();
+    });
+    fireEvent.click(screen.getByTestId('view-mode-list-button'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('meter-list-card-room-101')).toBeDefined();
+    });
+
+    const card101 = screen.getByTestId('meter-list-card-room-101');
+    // Top summary row displays rent
+    expect(within(card101).getByText('3,000 .-')).toBeDefined();
+
+    // Breakdown button should show "ดูรายละเอียด" (1 item: deposit, rent omitted)
+    const detailBtn = within(card101).getByText('ดูรายละเอียด');
+    fireEvent.click(detailBtn);
+
+    // Expanded breakdown contains deposit, but does not duplicate rent
+    expect(within(card101).getByText('ค่าประกัน')).toBeDefined();
+    expect(within(card101).getByText('500.-')).toBeDefined();
+    // Breakdown list rows should not have rent item
+    const chargeRows = card101.querySelectorAll('[data-testid^="charge-component-row-room-101"]');
+    expect(chargeRows.length).toBe(1);
+  });
+
+  it('L35. 3 latest selectable billing cycles rule: 7, 8, 9, 10 -> only 8, 9, 10 show + เพิ่มผู้เช่า for vacant rooms', async () => {
+    const selectableCycles = [
+      { id: 'c-10', cycleCode: '2026-10', name: 'ตุลาคม 2569' },
+      { id: 'c-09', cycleCode: '2026-09', name: 'กันยายน 2569' },
+      { id: 'c-08', cycleCode: '2026-08', name: 'สิงหาคม 2569' },
+      { id: 'c-07', cycleCode: '2026-07', name: 'กรกฎาคม 2569' },
+    ];
+
+    // Month 10: eligible
+    expect(isCycleInRollingThreeMonthWindow('2026-10', selectableCycles)).toBe(true);
+    // Month 9: eligible
+    expect(isCycleInRollingThreeMonthWindow('2026-09', selectableCycles)).toBe(true);
+    // Month 8: eligible
+    expect(isCycleInRollingThreeMonthWindow('2026-08', selectableCycles)).toBe(true);
+    // Month 7: older than top 3 latest -> NOT eligible
+    expect(isCycleInRollingThreeMonthWindow('2026-07', selectableCycles)).toBe(false);
   });
 });

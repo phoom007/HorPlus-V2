@@ -2916,7 +2916,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                           const isLineLinked = roomCtx ? roomCtx.isLineLinked : Boolean((tenant as any)?.linkedUserId);
                           const peopleCountVal = Number(row.peopleCount ?? roomCtx?.currentHouseholdPeopleCount ?? roomCtx?.snapshotPeopleCount ?? 1);
                           const activeCycleCode = selectedCycleCode || selectedCycle || billingCycles?.find((c: any) => c.id === selectedBillingCycleId)?.cycleCode || '';
-                          const isEligibleAddTenantCycle = isCycleInRollingThreeMonthWindow(activeCycleCode);
+                          const isEligibleAddTenantCycle = isCycleInRollingThreeMonthWindow(activeCycleCode, billingCycles);
                           const hasBookableGap = roomCtx?.hasBookableGap ?? true;
                           const historicalDailyCount = roomCtx?.historicalDailyCount || 0;
                           const dailyCheckOutDate = roomCtx?.dailyCheckOutDate || null;

@@ -1676,15 +1676,15 @@ export class MeterService {
       }
     }
 
-    // 4. Future contracts & provisional terms for vacant rooms
+    // 4. Future contracts & provisional terms starting strictly within this cycle
     const futureContracts = allContracts.filter((c) => {
       const startStr = toBangkokDateString(c.startDate);
-      return startStr > cycleEndStr && ['active', 'expiring_soon', 'pending_signature', 'waiting_extension'].includes(c.status);
+      return startStr >= cycleStartStr && startStr <= cycleEndStr && ['active', 'expiring_soon', 'pending_signature', 'waiting_extension'].includes(c.status);
     });
 
     const futureProvisionalTerms = allProvisionalTerms.filter((p) => {
       const startStr = toBangkokDateString(p.startDate);
-      return startStr > cycleEndStr && ['ACTIVE', 'RESERVED'].includes(p.status);
+      return startStr >= cycleStartStr && startStr <= cycleEndStr && ['ACTIVE', 'RESERVED'].includes(p.status);
     });
 
     // Load snapshots for this cycle

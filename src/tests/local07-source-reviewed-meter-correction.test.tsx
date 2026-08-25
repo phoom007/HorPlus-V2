@@ -1086,7 +1086,7 @@ describe('LOCAL-07 Source-Reviewed Meter Workspace Correction Suite', () => {
         { id: 'cycle-oct', cycleCode: '2026-10', name: 'ตุลาคม 2569' },
       ];
 
-      // 1. July (2026-07): vacant room shows "+ เพิ่มผู้เช่า"
+      // 1. October (2026-10): vacant room shows "+ เพิ่มผู้เช่า" (latest cycle)
       const { rerender } = render(
         <QueryClientProvider client={queryClient}>
           <OwnerMeters
@@ -1097,9 +1097,9 @@ describe('LOCAL-07 Source-Reviewed Meter Workspace Correction Suite', () => {
             tenants={[]}
             contracts={[]}
             billingCycles={testBillingCycles}
-            selectedCycle="2026-07"
-            selectedBillingCycleId="cycle-july"
-            selectedCycleCode="2026-07"
+            selectedCycle="2026-10"
+            selectedBillingCycleId="cycle-oct"
+            selectedCycleCode="2026-10"
             onSaveBills={vi.fn()}
             onSelectTenant={vi.fn()}
           />
@@ -1109,30 +1109,7 @@ describe('LOCAL-07 Source-Reviewed Meter Workspace Correction Suite', () => {
         expect(screen.getByText('เพิ่มผู้เช่า')).toBeTruthy();
       });
 
-      // 2. August (2026-08): vacant room shows "+ เพิ่มผู้เช่า"
-      rerender(
-        <QueryClientProvider client={queryClient}>
-          <OwnerMeters
-            rooms={[mockRooms[0]]}
-            buildings={[]}
-            dormitoryId="dorm-test"
-            bills={[]}
-            tenants={[]}
-            contracts={[]}
-            billingCycles={testBillingCycles}
-            selectedCycle="2026-08"
-            selectedBillingCycleId="cycle-aug"
-            selectedCycleCode="2026-08"
-            onSaveBills={vi.fn()}
-            onSelectTenant={vi.fn()}
-          />
-        </QueryClientProvider>
-      );
-      await waitFor(() => {
-        expect(screen.getByText('เพิ่มผู้เช่า')).toBeTruthy();
-      });
-
-      // 3. September (2026-09): vacant room shows "+ เพิ่มผู้เช่า"
+      // 2. September (2026-09): vacant room shows "+ เพิ่มผู้เช่า" (2nd latest cycle)
       rerender(
         <QueryClientProvider client={queryClient}>
           <OwnerMeters
@@ -1155,7 +1132,54 @@ describe('LOCAL-07 Source-Reviewed Meter Workspace Correction Suite', () => {
         expect(screen.getByText('เพิ่มผู้เช่า')).toBeTruthy();
       });
 
-      // 4. June (2026-06): vacant room shows "ไม่มีข้อมูล" (NO "+ เพิ่มผู้เช่า")
+      // 3. August (2026-08): vacant room shows "+ เพิ่มผู้เช่า" (3rd latest cycle)
+      rerender(
+        <QueryClientProvider client={queryClient}>
+          <OwnerMeters
+            rooms={[mockRooms[0]]}
+            buildings={[]}
+            dormitoryId="dorm-test"
+            bills={[]}
+            tenants={[]}
+            contracts={[]}
+            billingCycles={testBillingCycles}
+            selectedCycle="2026-08"
+            selectedBillingCycleId="cycle-aug"
+            selectedCycleCode="2026-08"
+            onSaveBills={vi.fn()}
+            onSelectTenant={vi.fn()}
+          />
+        </QueryClientProvider>
+      );
+      await waitFor(() => {
+        expect(screen.getByText('เพิ่มผู้เช่า')).toBeTruthy();
+      });
+
+      // 4. July (2026-07): vacant room shows "ไม่มีข้อมูล" (older cycle outside top 3 latest)
+      rerender(
+        <QueryClientProvider client={queryClient}>
+          <OwnerMeters
+            rooms={[mockRooms[0]]}
+            buildings={[]}
+            dormitoryId="dorm-test"
+            bills={[]}
+            tenants={[]}
+            contracts={[]}
+            billingCycles={testBillingCycles}
+            selectedCycle="2026-07"
+            selectedBillingCycleId="cycle-july"
+            selectedCycleCode="2026-07"
+            onSaveBills={vi.fn()}
+            onSelectTenant={vi.fn()}
+          />
+        </QueryClientProvider>
+      );
+      await waitFor(() => {
+        expect(screen.getAllByText('ไม่มีข้อมูล').length).toBeGreaterThanOrEqual(1);
+        expect(screen.queryByText('เพิ่มผู้เช่า')).toBeNull();
+      });
+
+      // 5. June (2026-06): vacant room shows "ไม่มีข้อมูล" (older cycle outside top 3 latest)
       rerender(
         <QueryClientProvider client={queryClient}>
           <OwnerMeters
@@ -1169,30 +1193,6 @@ describe('LOCAL-07 Source-Reviewed Meter Workspace Correction Suite', () => {
             selectedCycle="2026-06"
             selectedBillingCycleId="cycle-june"
             selectedCycleCode="2026-06"
-            onSaveBills={vi.fn()}
-            onSelectTenant={vi.fn()}
-          />
-        </QueryClientProvider>
-      );
-      await waitFor(() => {
-        expect(screen.getAllByText('ไม่มีข้อมูล').length).toBeGreaterThanOrEqual(1);
-        expect(screen.queryByText('เพิ่มผู้เช่า')).toBeNull();
-      });
-
-      // 5. October (2026-10): vacant room shows "ไม่มีข้อมูล" (NO "+ เพิ่มผู้เช่า")
-      rerender(
-        <QueryClientProvider client={queryClient}>
-          <OwnerMeters
-            rooms={[mockRooms[0]]}
-            buildings={[]}
-            dormitoryId="dorm-test"
-            bills={[]}
-            tenants={[]}
-            contracts={[]}
-            billingCycles={testBillingCycles}
-            selectedCycle="2026-10"
-            selectedBillingCycleId="cycle-oct"
-            selectedCycleCode="2026-10"
             onSaveBills={vi.fn()}
             onSelectTenant={vi.fn()}
           />

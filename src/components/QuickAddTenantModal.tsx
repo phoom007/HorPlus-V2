@@ -350,7 +350,7 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
           });
         }
 
-        onSuccess(`เพิ่มผู้เข้าพักรายวัน (${context.roomNumber}) เรียบร้อยแล้ว`);
+        onSuccess('เพิ่มผู้เช่า รายวัน เรียบร้อยแล้ว');
         onClose();
       }
     } catch (err: any) {

@@ -2099,6 +2099,7 @@ describe('Cycle Authority & Data-Ready Navigation Proofs', () => {
   ];
 
   const freshOwnerCycles = [
+    { id: 'cycle-july', cycleCode: '2026-07', status: 'draft', isCurrent: false, isFirstCycle: false },
     { id: 'cycle-aug', cycleCode: '2026-08', status: 'draft', isCurrent: true, isFirstCycle: true },
     { id: 'cycle-sep', cycleCode: '2026-09', status: 'draft', isCurrent: false, isFirstCycle: false },
     { id: 'cycle-oct', cycleCode: '2026-10', status: 'draft', isCurrent: false, isFirstCycle: false },
@@ -2162,7 +2163,7 @@ describe('Cycle Authority & Data-Ready Navigation Proofs', () => {
     expect(quickAddButtons.length).toBe(4);
   });
 
-  it('Fresh Owner September (Future Cycle): Hides Quick Add "+ เพิ่มผู้เช่า" and shows "ไม่มีข้อมูล" for vacant rooms', async () => {
+  it('Fresh Owner July (Historical Cycle): Hides Quick Add "+ เพิ่มผู้เช่า" and shows "ไม่มีข้อมูล" for vacant rooms', async () => {
     vi.spyOn(httpClient, 'httpRequest').mockImplementation(async (method, url) => {
       if (url.includes('/meters/workspace/preview-context')) {
         return {
@@ -2193,9 +2194,9 @@ describe('Cycle Authority & Data-Ready Navigation Proofs', () => {
         onSelectTenant={vi.fn()}
         onAddLog={vi.fn()}
         onNavigate={vi.fn()}
-        selectedBillingCycleId="cycle-oct"
-        selectedCycleCode="2026-10"
-        selectedCycle="2026-10"
+        selectedBillingCycleId="cycle-july"
+        selectedCycleCode="2026-07"
+        selectedCycle="2026-07"
         billingCycles={freshOwnerCycles}
       />
     );
@@ -2205,7 +2206,7 @@ describe('Cycle Authority & Data-Ready Navigation Proofs', () => {
       expect(screen.getByText('101')).toBeDefined();
     });
 
-    // 2. Quick Add "+ เพิ่มผู้เช่า" MUST NOT be rendered on October (outside rolling 3-month window)
+    // 2. Quick Add "+ เพิ่มผู้เช่า" MUST NOT be rendered on July (outside 3 latest selectable cycles)
     expect(screen.queryByText('เพิ่มผู้เช่า')).toBeNull();
 
     // 3. All 4 vacant rooms display "ไม่มีข้อมูล" in the tenant column
