@@ -79,7 +79,7 @@ export function getStored<T>(key: string, fallback: T): T {
 export function setStored<T>(key: string, val: T): void {
   try {
     localStorage.setItem(key, JSON.stringify(val));
-  } catch {}
+  } catch { }
 }
 
 export interface OwnerMetersProps {
@@ -244,8 +244,8 @@ export function buildRowsFromWorkspace(params: {
       overdueAmount: snap?.manualOutstandingAmount !== undefined && snap?.manualOutstandingAmount !== null && String(snap.manualOutstandingAmount).trim() !== '' && String(snap.manualOutstandingAmount) !== '0.00' && String(snap.manualOutstandingAmount) !== '0'
         ? String(snap.manualOutstandingAmount)
         : snap?.manualOutstandingAmount === '0' || snap?.manualOutstandingAmount === '0.00'
-        ? '0'
-        : '',
+          ? '0'
+          : '',
       isPaid,
       billStatus,
       editWaterPrev: false,
@@ -284,6 +284,7 @@ export function buildRowsFromWorkspace(params: {
 }
 
 export interface TopLevelFinancialComponent {
+  type?: string;
   label: string;
   amount: number;
   formattedAmount: string;
@@ -303,20 +304,12 @@ export interface OwnerFinancialBreakdown {
  * - Whole-baht amounts use compact PO notation: e.g. 650.00 -> "650.-", 4800.00 -> "4,800.-"
  * - Amounts with fractional satang preserve decimals: e.g. 650.50 -> "650.50"
  */
-export function formatComponentDetailAmount(amountStr: string | number | null | undefined): string {
-  if (amountStr === null || amountStr === undefined || amountStr === '') return '0.-';
-  const num = typeof amountStr === 'number' ? amountStr : parseFloat(String(amountStr).replace(/,/g, ''));
-  if (isNaN(num)) return String(amountStr);
-
+export function formatComponentDetailAmount(amt: number | string): string {
+  const num = typeof amt === 'number' ? amt : parseFloat(String(amt).replace(/,/g, '')) || 0;
   if (Number.isInteger(num)) {
-    return `${num.toLocaleString('en-US')}.-`;
+    return `${num.toLocaleString('th-TH')}.-`;
   }
-
-  const parts = Number(num.toFixed(2)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  if (parts.endsWith('.00')) {
-    return `${parts.slice(0, -3)}.-`;
-  }
-  return parts;
+  return num.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 export function getOwnerFinancialBreakdown(
@@ -340,6 +333,7 @@ export function getOwnerFinancialBreakdown(
     else if (status === 'INVALID') title = c.errorMessage || 'รูปแบบการคิดค่าบริการไม่ถูกต้อง';
 
     return {
+      type: c.type,
       label: c.label || 'บิลรายเดือน',
       amount: typeof rawAmt === 'number' ? rawAmt : parseFloat(String(rawAmt).replace(/,/g, '')) || 0,
       formattedAmount: formatMoneyDisplay(rawAmt),
@@ -363,9 +357,9 @@ export function mapErrorMessageToThai(raw: any): string {
   const rawCode =
     (typeof raw === 'object' && raw !== null
       ? raw.response?.data?.error?.code ??
-        raw.response?.data?.code ??
-        raw.error?.code ??
-        raw.code
+      raw.response?.data?.code ??
+      raw.error?.code ??
+      raw.code
       : undefined);
 
   const code = typeof rawCode === 'string' ? rawCode.trim() : '';
@@ -414,11 +408,11 @@ export function mapErrorMessageToThai(raw: any): string {
     typeof raw === 'string'
       ? raw
       : (typeof raw === 'object' && raw !== null
-          ? raw.response?.data?.error?.message ??
-            raw.response?.data?.message ??
-            raw.error?.message ??
-            raw.message
-          : '');
+        ? raw.response?.data?.error?.message ??
+        raw.response?.data?.message ??
+        raw.error?.message ??
+        raw.message
+        : '');
 
   const msg = typeof rawMessage === 'string' ? rawMessage.trim() : '';
 
@@ -670,18 +664,18 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
 
   const isFirstCycle = cycleAuthorityReady
     ? Boolean(
-        firstBillingCycleId && (
-          firstBillingCycleId === selectedBillingCycleId ||
-          billingCycles.find((c: any) => c.id === selectedBillingCycleId)?.isFirstCycle
-        )
+      firstBillingCycleId && (
+        firstBillingCycleId === selectedBillingCycleId ||
+        billingCycles.find((c: any) => c.id === selectedBillingCycleId)?.isFirstCycle
       )
+    )
     : false;
 
   const isCurrentOperationalCycle = cycleAuthorityReady
     ? Boolean(
-        (operationalBillingCycleId && operationalBillingCycleId === selectedBillingCycleId) ||
-        (operationalCycleCode && (selectedCycle === operationalCycleCode || selectedCycleCode === operationalCycleCode))
-      )
+      (operationalBillingCycleId && operationalBillingCycleId === selectedBillingCycleId) ||
+      (operationalCycleCode && (selectedCycle === operationalCycleCode || selectedCycleCode === operationalCycleCode))
+    )
     : false;
 
   const previousCycleExists = Boolean(
@@ -2189,19 +2183,17 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       {/* Floating Toast Notification (Mobile: Centered above bottom nav, White/Red/Green/Amber bg, Smooth Fade) */}
       {(saveSuccess || toastMessage) && (
         <div
-          className={`fixed bottom-20 left-1/2 -translate-x-1/2 sm:bottom-8 sm:right-8 sm:left-auto sm:translate-x-0 z-[9999] px-4.5 py-3 rounded-2xl shadow-2xl border flex items-center gap-2.5 text-xs font-bold transition-all duration-500 ease-in-out ${
-            toastType === 'error'
+          className={`fixed bottom-20 left-1/2 -translate-x-1/2 sm:bottom-8 sm:right-8 sm:left-auto sm:translate-x-0 z-[9999] px-4.5 py-3 rounded-2xl shadow-2xl border flex items-center gap-2.5 text-xs font-bold transition-all duration-500 ease-in-out ${toastType === 'error'
               ? 'bg-rose-50 border-rose-200 text-rose-800'
               : toastType === 'warning'
-              ? 'bg-amber-50 border-amber-200 text-amber-800'
-              : toastType === 'success'
-              ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
-              : 'bg-sky-50 border-sky-200 text-sky-800'
-          } ${
-            isToastFading
+                ? 'bg-amber-50 border-amber-200 text-amber-800'
+                : toastType === 'success'
+                  ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                  : 'bg-sky-50 border-sky-200 text-sky-800'
+            } ${isToastFading
               ? 'opacity-0 translate-y-3 pointer-events-none'
               : 'opacity-100 translate-y-0 animate-in fade-in slide-in-from-bottom-3 duration-300'
-          }`}
+            }`}
         >
           {toastType === 'error' ? (
             <AlertCircle className="w-4.5 h-4.5 text-rose-500 shrink-0" />
@@ -2237,11 +2229,10 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                 type="button"
                 data-testid="view-mode-table-button"
                 onClick={() => handleViewModeChange('table')}
-                className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-bold rounded-lg transition-all cursor-pointer ${
-                  viewMode === 'table'
+                className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-bold rounded-lg transition-all cursor-pointer ${viewMode === 'table'
                     ? 'bg-white text-indigo-600 shadow-2xs'
                     : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/50'
-                }`}
+                  }`}
                 title="มุมมองตาราง"
               >
                 <Table className="w-3.5 h-3.5" />
@@ -2251,11 +2242,10 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                 type="button"
                 data-testid="view-mode-list-button"
                 onClick={() => handleViewModeChange('list')}
-                className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-bold rounded-lg transition-all cursor-pointer ${
-                  viewMode === 'list'
+                className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-bold rounded-lg transition-all cursor-pointer ${viewMode === 'list'
                     ? 'bg-white text-indigo-600 shadow-2xs'
                     : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/50'
-                }`}
+                  }`}
                 title="มุมมองรายการ"
               >
                 <LayoutList className="w-3.5 h-3.5" />
@@ -2333,11 +2323,10 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                 type="button"
                 disabled={!isMutationReady || isSaving || !hasEligibleUnissuedBills}
                 onClick={handleIssueAllBills}
-                className={`w-full sm:w-auto px-3 sm:px-4 py-2 text-xs font-bold rounded-xl flex items-center justify-center gap-1.5 transition-all shadow-md whitespace-nowrap shrink-0 ${
-                  !hasEligibleUnissuedBills
+                className={`w-full sm:w-auto px-3 sm:px-4 py-2 text-xs font-bold rounded-xl flex items-center justify-center gap-1.5 transition-all shadow-md whitespace-nowrap shrink-0 ${!hasEligibleUnissuedBills
                     ? 'bg-gray-100 text-gray-400 border border-gray-200 cursor-not-allowed shadow-none'
                     : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-600/10 cursor-pointer'
-                }`}
+                  }`}
                 title={!hasEligibleUnissuedBills ? 'ออกบิลครบทุกห้องแล้ว' : 'ออกบิลทุกห้อง'}
               >
                 <FileText className="w-3.5 h-3.5" />
@@ -2365,793 +2354,785 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
         {viewMode === 'table' ? (
           <div className="overflow-x-auto relative" ref={tableContainerRef}>
             <table onKeyDown={handleTableKeyDown} className="w-full text-left border-collapse text-xs min-w-[1050px]">
-            <thead className="bg-slate-50 text-slate-400 font-bold uppercase border-b border-gray-100">
-              <tr className="whitespace-nowrap">
-                <th className="p-4 sticky left-0 bg-slate-50 z-20 min-w-[80px] shadow-[2px_0_5px_rgba(0,0,0,0.02)]">ห้อง</th>
-                {isElecUnit && <th className="p-4 text-center">มิเตอร์ไฟเดิม</th>}
-                {isElecUnit && <th className="p-4 text-center">มิเตอร์ไฟใหม่</th>}
-                {isWaterUnit && <th className="p-4 text-center">มิเตอร์น้ำเดิม</th>}
-                {isWaterUnit && <th className="p-4 text-center">มิเตอร์น้ำใหม่</th>}
-                <th className="p-4 text-center">จำนวนคน</th>
-                <th className="p-4">ค่าใช้จ่ายอื่นๆ</th>
-                <th className="p-4 text-right">ยอดที่ต้องชำระ</th>
-                <th id="status-column-header" className="p-4 text-center min-w-[105px]">
-                  สถานะ
-                </th>
-                <th className="p-4">ผู้เช่า</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100 font-semibold">
-              {filteredRows.map((row, idx) => {
-                const waterUsageRes = (row.waterPrev !== '' && row.waterCurr !== '') ? calculateMeterUsageUnits(row.waterPrev, row.waterCurr) : { isValid: true, usageUnits: 0 };
-                const elecUsageRes = (row.elecPrev !== '' && row.elecCurr !== '') ? calculateMeterUsageUnits(row.elecPrev, row.elecCurr) : { isValid: true, usageUnits: 0 };
-                const waterUnits = row.isReplaced ? Number(row.waterCurr) : (waterUsageRes.isValid ? waterUsageRes.usageUnits : -1);
-                const elecUnits = row.isReplaced ? Number(row.elecCurr) : (elecUsageRes.isValid ? elecUsageRes.usageUnits : -1);
+              <thead className="bg-slate-50 text-slate-400 font-bold uppercase border-b border-gray-100">
+                <tr className="whitespace-nowrap">
+                  <th className="p-4 sticky left-0 bg-slate-50 z-20 min-w-[80px] shadow-[2px_0_5px_rgba(0,0,0,0.02)]">ห้อง</th>
+                  {isElecUnit && <th className="p-4 text-center">มิเตอร์ไฟเดิม</th>}
+                  {isElecUnit && <th className="p-4 text-center">มิเตอร์ไฟใหม่</th>}
+                  {isWaterUnit && <th className="p-4 text-center">มิเตอร์น้ำเดิม</th>}
+                  {isWaterUnit && <th className="p-4 text-center">มิเตอร์น้ำใหม่</th>}
+                  <th className="p-4 text-center">จำนวนคน</th>
+                  <th className="p-4">ค่าใช้จ่ายอื่นๆ</th>
+                  <th className="p-4 text-right">ยอดที่ต้องชำระ</th>
+                  <th id="status-column-header" className="p-4 text-center min-w-[105px]">
+                    สถานะ
+                  </th>
+                  <th className="p-4">ผู้เช่า</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100 font-semibold">
+                {filteredRows.map((row, idx) => {
+                  const waterUsageRes = (row.waterPrev !== '' && row.waterCurr !== '') ? calculateMeterUsageUnits(row.waterPrev, row.waterCurr) : { isValid: true, usageUnits: 0 };
+                  const elecUsageRes = (row.elecPrev !== '' && row.elecCurr !== '') ? calculateMeterUsageUnits(row.elecPrev, row.elecCurr) : { isValid: true, usageUnits: 0 };
+                  const waterUnits = row.isReplaced ? Number(row.waterCurr) : (waterUsageRes.isValid ? waterUsageRes.usageUnits : -1);
+                  const elecUnits = row.isReplaced ? Number(row.elecCurr) : (elecUsageRes.isValid ? elecUsageRes.usageUnits : -1);
 
-                const waterCost = getWaterCost(row);
-                const elecCost = getElectricCost(row);
-                const commonCost = getCommonFeeCost(row);
-                const internetCost = getInternetCost(row);
-                const parkingCost = getParkingCost(row);
-                const room = rooms.find(r => r.id === row.roomId);
-                const roomRent = (room?.rentCycle === 'term') ? 0 : (room?.monthlyRent || 0);
-                const otherFeesTotal = (row.otherFees || []).reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
+                  const waterCost = getWaterCost(row);
+                  const elecCost = getElectricCost(row);
+                  const commonCost = getCommonFeeCost(row);
+                  const internetCost = getInternetCost(row);
+                  const parkingCost = getParkingCost(row);
+                  const room = rooms.find(r => r.id === row.roomId);
+                  const roomRent = (room?.rentCycle === 'term') ? 0 : (room?.monthlyRent || 0);
+                  const otherFeesTotal = (row.otherFees || []).reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
 
-                const calculatedTotal = roomRent + waterCost + elecCost + commonCost + internetCost + parkingCost + (Number(row.overdueAmount) || 0) + otherFeesTotal;
+                  const calculatedTotal = roomRent + waterCost + elecCost + commonCost + internetCost + parkingCost + (Number(row.overdueAmount) || 0) + otherFeesTotal;
 
-                const tenant = getTenantForRoomAndCycle(row.roomId, selectedCycle);
-                const roomCtx = previewContext?.rooms?.find((r: any) => r.roomId === row.roomId);
-                const effectiveTenantId = roomCtx ? roomCtx.tenantId : tenant?.id;
-                const effectiveTenantName = roomCtx ? roomCtx.tenantName : tenant?.name;
-                const isDailyContext = roomCtx?.billingSource === 'DAILY_STAY' || Boolean(roomCtx?.isDailyUnpaid);
-                const isBillIssued = row.billStatus !== 'draft' && row.billStatus !== 'cancelled';
-                const isRowPaid = !isDailyContext && (row.isPaid || row.billStatus === 'paid');
+                  const tenant = getTenantForRoomAndCycle(row.roomId, selectedCycle);
+                  const roomCtx = previewContext?.rooms?.find((r: any) => r.roomId === row.roomId);
+                  const effectiveTenantId = roomCtx ? roomCtx.tenantId : tenant?.id;
+                  const effectiveTenantName = roomCtx ? roomCtx.tenantName : tenant?.name;
+                  const isDailyContext = roomCtx?.billingSource === 'DAILY_STAY' || Boolean(roomCtx?.isDailyUnpaid);
+                  const isBillIssued = row.billStatus !== 'draft' && row.billStatus !== 'cancelled';
+                  const isRowPaid = !isDailyContext && (row.isPaid || row.billStatus === 'paid');
 
-                const hasElecBaseline = row.elecPrev !== '' && row.elecPrev !== null && row.elecPrev !== undefined;
-                const isElecDirectEdit = isFirstCycle || !hasElecBaseline;
+                  const hasElecBaseline = row.elecPrev !== '' && row.elecPrev !== null && row.elecPrev !== undefined;
+                  const isElecDirectEdit = isFirstCycle || !hasElecBaseline;
 
-                const hasWaterBaseline = row.waterPrev !== '' && row.waterPrev !== null && row.waterPrev !== undefined;
-                const isWaterDirectEdit = isFirstCycle || !hasWaterBaseline;
+                  const hasWaterBaseline = row.waterPrev !== '' && row.waterPrev !== null && row.waterPrev !== undefined;
+                  const isWaterDirectEdit = isFirstCycle || !hasWaterBaseline;
 
-                return (
-                  <tr key={row.roomId} id={`room-row-${row.roomId}`} className="hover:bg-slate-50/50 transition-colors">
-                    {/* Sticky Room Column (Show only room number like A101) */}
-                    <td className="p-4 sticky left-0 bg-white z-10 font-extrabold text-slate-800 text-sm shadow-[2px_0_5px_rgba(0,0,0,0.04)]">
-                      {row.roomNumber}
-                    </td>
-
-                    {/* Elec Prev Input */}
-                    {isElecUnit && (
-                      <td className="p-4 text-center">
-                        {isElecDirectEdit ? (
-                          <div
-                            onClick={(e) => {
-                              if (!isRowPaid) {
-                                const input = e.currentTarget.querySelector('input') as HTMLInputElement | null;
-                                input?.focus();
-                              }
-                            }}
-                            className={`flex items-center justify-center min-w-[80px] min-h-[32px] w-full ${!isRowPaid ? 'cursor-text' : 'cursor-default'}`}
-                          >
-                            <input
-                              type="text"
-                              inputMode="numeric"
-                              pattern="[0-9]*"
-                              disabled={isRowPaid}
-                              value={row.elecPrev}
-                              onChange={(e) => {
-                                handleMeterReadingChange(row.roomId, 'elecPrev', e.target.value);
-                              }}
-                              onBlur={() => handleMeterReadingBlur(row.roomId, 'elecPrev')}
-                              onPaste={(e) => handlePaste(row.roomId, 'elecPrev', e)}
-                              data-row={idx}
-                              data-col="elecPrev"
-                              className={`w-20 px-2 py-1 text-xs border rounded-lg bg-white text-slate-800 text-center font-bold focus:outline-indigo-500 transition-all duration-300 disabled:bg-slate-50 disabled:text-slate-500 disabled:border-transparent ${
-                                flashingCells[`${row.roomId}-elecPrev`]
-                                  ? 'animate-vibrant-flash shadow-md z-10'
-                                  : 'border-gray-200'
-                              }`}
-                            />
-                          </div>
-                        ) : isRowPaid ? (
-                          <div className="flex items-center justify-center min-w-[80px] min-h-[32px] w-full">
-                            <span className="text-xs font-bold text-slate-400">{formatMeterReadingDisplay(row.elecPrev)}</span>
-                          </div>
-                        ) : unlockedElecPrev[row.roomId] ? (
-                          <div className="flex items-center justify-center gap-1 min-w-[80px] min-h-[32px] w-full">
-                            <input
-                              type="text"
-                              inputMode="numeric"
-                              pattern="[0-9]*"
-                              autoFocus
-                              value={row.elecPrev}
-                              onChange={(e) => {
-                                handleMeterReadingChange(row.roomId, 'elecPrev', e.target.value);
-                              }}
-                              onBlur={() => handleMeterReadingBlur(row.roomId, 'elecPrev')}
-                              onPaste={(e) => handlePaste(row.roomId, 'elecPrev', e)}
-                              data-row={idx}
-                              data-col="elecPrev"
-                              className="w-16 px-2 py-1 text-xs border border-indigo-300 rounded-lg bg-white text-slate-800 text-center font-bold focus:outline-indigo-500"
-                            />
-                            <button
-                              type="button"
-                              data-testid={`cancel-elec-prev-${row.roomId}`}
-                              title="ยกเลิกการแก้ไข"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                const orig = (originalRowsRef.current || []).find((o) => o.roomId === row.roomId);
-                                handleMeterReadingChange(row.roomId, 'elecPrev', orig ? orig.elecPrev : row.elecPrev);
-                                setUnlockedElecPrev((prev) => ({ ...prev, [row.roomId]: false }));
-                              }}
-                              className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
-                            >
-                              <X className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-                        ) : (
-                          <div className="flex items-center justify-center gap-1.5 min-w-[80px] min-h-[32px] w-full group">
-                            <span className="text-xs font-bold text-slate-700">{formatMeterReadingDisplay(row.elecPrev)}</span>
-                            <button
-                              type="button"
-                              data-testid={`unlock-elec-prev-${row.roomId}`}
-                              title="แก้ไขเลขอ่านเดิม"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setUnlockedElecPrev((prev) => ({ ...prev, [row.roomId]: true }));
-                              }}
-                              className="p-1 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors cursor-pointer"
-                            >
-                              <Pencil className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-                        )}
+                  return (
+                    <tr key={row.roomId} id={`room-row-${row.roomId}`} className="hover:bg-slate-50/50 transition-colors">
+                      {/* Sticky Room Column (Show only room number like A101) */}
+                      <td className="p-4 sticky left-0 bg-white z-10 font-extrabold text-slate-800 text-sm shadow-[2px_0_5px_rgba(0,0,0,0.04)]">
+                        {row.roomNumber}
                       </td>
-                    )}
 
-                    {/* Elec Curr Input */}
-                    {isElecUnit && (
-                      <td className="p-4 text-center">
-                        <div
-                          onClick={(e) => {
-                            if (!isRowPaid) {
-                              const input = e.currentTarget.querySelector('input') as HTMLInputElement | null;
-                              input?.focus();
-                            }
-                          }}
-                          className={`flex items-center justify-center gap-1 min-h-[32px] w-full ${!isRowPaid ? 'cursor-text' : 'cursor-default'}`}
-                        >
-                          <input
-                            type="text"
-                            inputMode="numeric"
-                            pattern="[0-9]*"
-                            disabled={isRowPaid}
-                            value={row.elecCurr}
-                            onChange={(e) => {
-                              handleMeterReadingChange(row.roomId, 'elecCurr', e.target.value);
-                            }}
-                            onBlur={() => handleMeterReadingBlur(row.roomId, 'elecCurr')}
-                            onPaste={(e) => handlePaste(row.roomId, 'elecCurr', e)}
-                            data-row={idx}
-                            data-col="elecCurr"
-                            className={`w-20 px-2 py-1 text-xs border rounded-lg bg-white text-slate-800 text-center font-bold focus:outline-indigo-500 transition-all duration-300 disabled:bg-slate-50 disabled:text-slate-500 disabled:border-transparent ${
-                              flashingCells[`${row.roomId}-elecCurr`]
-                                ? 'animate-vibrant-flash shadow-md z-10'
-                                : elecUnits < 0
-                                ? 'border-rose-300 ring-2 ring-rose-100 bg-rose-50'
-                                : 'border-gray-200'
-                            }`}
-                          />
-                        </div>
-                      </td>
-                    )}
-
-                    {/* Water Prev Input */}
-                    {isWaterUnit && (
-                      <td className="p-4 text-center">
-                        {isWaterDirectEdit ? (
-                          <div
-                            onClick={(e) => {
-                              if (!isRowPaid) {
-                                const input = e.currentTarget.querySelector('input') as HTMLInputElement | null;
-                                input?.focus();
-                              }
-                            }}
-                            className={`flex items-center justify-center min-w-[80px] min-h-[32px] w-full ${!isRowPaid ? 'cursor-text' : 'cursor-default'}`}
-                          >
-                            <input
-                              type="text"
-                              inputMode="numeric"
-                              pattern="[0-9]*"
-                              disabled={isRowPaid}
-                              value={row.waterPrev}
-                              onChange={(e) => {
-                                handleMeterReadingChange(row.roomId, 'waterPrev', e.target.value);
-                              }}
-                              onBlur={() => handleMeterReadingBlur(row.roomId, 'waterPrev')}
-                              onPaste={(e) => handlePaste(row.roomId, 'waterPrev', e)}
-                              data-row={idx}
-                              data-col="waterPrev"
-                              className={`w-20 px-2 py-1 text-xs border rounded-lg bg-white text-slate-800 text-center font-bold focus:outline-indigo-500 transition-all duration-300 disabled:bg-slate-50 disabled:text-slate-500 disabled:border-transparent ${
-                                flashingCells[`${row.roomId}-waterPrev`]
-                                  ? 'animate-vibrant-flash shadow-md z-10'
-                                  : 'border-gray-200'
-                              }`}
-                            />
-                          </div>
-                        ) : isRowPaid ? (
-                          <div className="flex items-center justify-center min-w-[80px] min-h-[32px] w-full">
-                            <span className="text-xs font-bold text-slate-400">{formatMeterReadingDisplay(row.waterPrev)}</span>
-                          </div>
-                        ) : unlockedWaterPrev[row.roomId] ? (
-                          <div className="flex items-center justify-center gap-1 min-w-[80px] min-h-[32px] w-full">
-                            <input
-                              type="text"
-                              inputMode="numeric"
-                              pattern="[0-9]*"
-                              autoFocus
-                              value={row.waterPrev}
-                              onChange={(e) => {
-                                handleMeterReadingChange(row.roomId, 'waterPrev', e.target.value);
-                              }}
-                              onBlur={() => handleMeterReadingBlur(row.roomId, 'waterPrev')}
-                              onPaste={(e) => handlePaste(row.roomId, 'waterPrev', e)}
-                              data-row={idx}
-                              data-col="waterPrev"
-                              className="w-16 px-2 py-1 text-xs border border-indigo-300 rounded-lg bg-white text-slate-800 text-center font-bold focus:outline-indigo-500"
-                            />
-                            <button
-                              type="button"
-                              data-testid={`cancel-water-prev-${row.roomId}`}
-                              title="ยกเลิกการแก้ไข"
+                      {/* Elec Prev Input */}
+                      {isElecUnit && (
+                        <td className="p-4 text-center">
+                          {isElecDirectEdit ? (
+                            <div
                               onClick={(e) => {
-                                e.stopPropagation();
-                                const orig = (originalRowsRef.current || []).find((o) => o.roomId === row.roomId);
-                                handleMeterReadingChange(row.roomId, 'waterPrev', orig ? orig.waterPrev : row.waterPrev);
-                                setUnlockedWaterPrev((prev) => ({ ...prev, [row.roomId]: false }));
+                                if (!isRowPaid) {
+                                  const input = e.currentTarget.querySelector('input') as HTMLInputElement | null;
+                                  input?.focus();
+                                }
                               }}
-                              className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                              className={`flex items-center justify-center min-w-[80px] min-h-[32px] w-full ${!isRowPaid ? 'cursor-text' : 'cursor-default'}`}
                             >
-                              <X className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-                        ) : (
-                          <div className="flex items-center justify-center gap-1.5 min-w-[80px] min-h-[32px] w-full group">
-                            <span className="text-xs font-bold text-slate-700">{formatMeterReadingDisplay(row.waterPrev)}</span>
-                            <button
-                              type="button"
-                              data-testid={`unlock-water-prev-${row.roomId}`}
-                              title="แก้ไขเลขอ่านเดิม"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setUnlockedWaterPrev((prev) => ({ ...prev, [row.roomId]: true }));
-                              }}
-                              className="p-1 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors cursor-pointer"
-                            >
-                              <Pencil className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-                        )}
-                      </td>
-                    )}
-
-                    {/* Water Curr Input */}
-                    {isWaterUnit && (
-                      <td className="p-4 text-center">
-                        <div
-                          onClick={(e) => {
-                            if (!isRowPaid) {
-                              const input = e.currentTarget.querySelector('input') as HTMLInputElement | null;
-                              input?.focus();
-                            }
-                          }}
-                          className={`flex items-center justify-center gap-1 min-h-[32px] w-full ${!isRowPaid ? 'cursor-text' : 'cursor-default'}`}
-                        >
-                          <input
-                            type="text"
-                            inputMode="numeric"
-                            pattern="[0-9]*"
-                            disabled={isRowPaid}
-                            value={row.waterCurr}
-                            onChange={(e) => {
-                              handleMeterReadingChange(row.roomId, 'waterCurr', e.target.value);
-                            }}
-                            onBlur={() => handleMeterReadingBlur(row.roomId, 'waterCurr')}
-                            onPaste={(e) => handlePaste(row.roomId, 'waterCurr', e)}
-                            data-row={idx}
-                            data-col="waterCurr"
-                            className={`w-20 px-2 py-1 text-xs border rounded-lg bg-white text-slate-800 text-center font-bold focus:outline-indigo-500 transition-all duration-300 disabled:bg-slate-50 disabled:text-slate-500 disabled:border-transparent ${
-                              flashingCells[`${row.roomId}-waterCurr`]
-                                ? 'animate-vibrant-flash shadow-md z-10'
-                                : waterUnits < 0
-                                ? 'border-rose-300 ring-2 ring-rose-100 bg-rose-50'
-                                : 'border-gray-200'
-                            }`}
-                          />
-                        </div>
-                      </td>
-                    )}
-
-                    {/* People Count Input */}
-                    <td className="p-4 text-center">
-                      <div
-                        onClick={(e) => {
-                          if (!isRowPaid) {
-                            const input = e.currentTarget.querySelector('input') as HTMLInputElement | null;
-                            input?.focus();
-                          }
-                        }}
-                        className={`flex items-center justify-center min-h-[32px] w-full ${!isRowPaid ? 'cursor-text' : 'cursor-default'}`}
-                      >
-                        <input
-                          type="text"
-                          inputMode="numeric"
-                          pattern="[0-9]*"
-                          disabled={isRowPaid}
-                          value={row.peopleCount}
-                          onChange={(e) => {
-                            handlePeopleCountChange(row.roomId, e.target.value);
-                          }}
-                          onPaste={(e) => handlePaste(row.roomId, 'peopleCount', e)}
-                          data-row={idx}
-                          data-col="peopleCount"
-                          className={`w-14 px-2 py-1 text-xs border rounded-lg bg-white text-slate-800 text-center font-bold focus:outline-indigo-500 transition-all duration-300 disabled:bg-slate-50 disabled:text-slate-500 disabled:border-transparent ${
-                            flashingCells[`${row.roomId}-peopleCount`]
-                              ? 'animate-vibrant-flash shadow-md z-10'
-                              : 'border-gray-200'
-                          }`}
-                        />
-                      </div>
-                    </td>
-
-                    {/* Custom Other Fees Column */}
-                    <td className="p-4">
-                      <div className="flex flex-col gap-1 min-w-[140px]">
-                        {(row.otherFees || []).length > 0 ? (
-                          <div className="flex flex-col gap-0.5">
-                            {(row.otherFees || []).slice(0, 2).map((fee, feeIdx) => (
-                              <div key={feeIdx} className="flex items-center justify-between gap-1 text-[10px] text-slate-600 font-bold bg-slate-50 border border-slate-100 rounded-md px-1.5 py-0.5">
-                                <span className="truncate max-w-[80px]" title={fee.description}>{fee.description}</span>
-                                <span className="text-indigo-600 shrink-0">{formatOtherFeeAmountDisplay(fee.amount)}</span>
-                              </div>
-                            ))}
-                            {(row.otherFees || []).length > 2 && (
-                              <span className="text-[10px] text-slate-400 font-semibold pl-0.5">
-                                +{(row.otherFees || []).length - 2} รายการ
-                              </span>
-                            )}
-                            {!isRowPaid && (
-                              <button
-                                type="button"
-                                data-testid={`edit-table-other-fees-${row.roomId}`}
-                                onClick={() => setActiveFeeModalRoomId(row.roomId)}
-                                className="text-[10px] text-indigo-600 hover:text-indigo-800 hover:underline font-bold mt-0.5 inline-flex items-center gap-1 cursor-pointer w-fit"
-                              >
-                                <Pencil className="w-2.5 h-2.5" />
-                                <span>แก้ไข</span>
-                              </button>
-                            )}
-                          </div>
-                        ) : (
-                          !isRowPaid ? (
-                            <button
-                              type="button"
-                              data-testid={`open-table-other-fees-${row.roomId}`}
-                              onClick={() => setActiveFeeModalRoomId(row.roomId)}
-                              className="text-xs text-indigo-600 hover:text-indigo-800 hover:underline font-bold transition-all cursor-pointer inline-flex items-center gap-1"
-                            >
-                              <Plus className="w-3 h-3" />
-                              <span>เพิ่มค่าใช้จ่าย</span>
-                            </button>
-                          ) : (
-                            <span className="text-xs text-slate-400 font-bold">-</span>
-                          )
-                        )}
-                      </div>
-                    </td>
-
-                    {/* Calculated Total & Financial Breakdown */}
-                    <td className="p-4 text-right">
-                      {(() => {
-                        const breakdown = getOwnerFinancialBreakdown(roomCtx);
-                        const amountDue = breakdown.formattedAmount;
-                        const chargeComponents = breakdown.components;
-                        const isExpanded = Boolean(expandedBreakdowns[row.roomId]);
-
-                        return (
-                          <div className="flex flex-col items-end">
-                            <span className="font-extrabold text-sm text-indigo-600 whitespace-nowrap">
-                              {formatMoneyDisplay(amountDue)} ฿
-                            </span>
-                            {chargeComponents.length > 0 && (
-                              <button
-                                type="button"
-                                onClick={() => setExpandedBreakdowns(prev => ({ ...prev, [row.roomId]: !prev[row.roomId] }))}
-                                className="text-[10px] text-slate-400 hover:text-indigo-600 font-medium cursor-pointer transition-colors mt-0.5 whitespace-nowrap flex items-center gap-0.5"
-                              >
-                                <span>
-                                  {chargeComponents.length === 1
-                                    ? 'ดูรายละเอียด'
-                                    : `ดูรายละเอียด +${chargeComponents.length}`}
-                                </span>
-                                <ChevronDown className={`w-2.5 h-2.5 transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`} />
-                              </button>
-                            )}
-                            {isExpanded && chargeComponents.length > 0 && (
-                              <div className="mt-1 flex flex-col items-end gap-1 text-right">
-                                {chargeComponents.map((c: any, cIdx: number) => {
-                                  const isPaid = c.status === 'PAID';
-                                  const isInvalid = c.status === 'INVALID';
-                                  const isUnpaid = c.status === 'UNPAID';
-                                  const isPreview = c.status === 'PREVIEW' || (!isPaid && !isInvalid && !isUnpaid);
-
-                                  return (
-                                    <div
-                                      key={cIdx}
-                                      data-testid={`charge-component-row-${row.roomId}-${cIdx}`}
-                                      className="flex items-center justify-end gap-1.5 text-xs whitespace-nowrap"
-                                      title={isInvalid ? (c.errorMessage || 'ข้อมูลไม่ถูกต้อง') : undefined}
-                                    >
-                                      {isPaid ? (
-                                        <>
-                                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                                          <span className="text-emerald-700 font-medium">{c.label}</span>
-                                          <span className="text-emerald-800 font-bold">{formatComponentDetailAmount(c.amount)}</span>
-                                        </>
-                                      ) : isInvalid ? (
-                                        <>
-                                          <AlertCircle className="w-3.5 h-3.5 text-rose-500 shrink-0" />
-                                          <span className="text-rose-600 font-medium">{c.label}</span>
-                                          <span className="text-rose-600 font-bold">{formatComponentDetailAmount(c.amount)}</span>
-                                        </>
-                                      ) : isUnpaid ? (
-                                        <>
-                                          <Clock className="w-3.5 h-3.5 text-amber-500 shrink-0" />
-                                          <span className="text-amber-700 font-medium">{c.label}</span>
-                                          <span className="text-amber-800 font-bold">{formatComponentDetailAmount(c.amount)}</span>
-                                        </>
-                                      ) : (
-                                        <>
-                                          <Clock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                                          <span className="text-slate-500 font-medium">{c.label}</span>
-                                          <span className="text-slate-600 font-semibold">{formatComponentDetailAmount(c.amount)}</span>
-                                        </>
-                                      )}
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })()}
-                    </td>
-
-                    {/* Status Switch with real server authority */}
-                    <td className={`p-4 text-center transition-all duration-300 ${
-                      flashingCells[`${row.roomId}-status`]
-                        ? 'animate-vibrant-flash rounded-lg shadow-md z-10'
-                        : ''
-                    }`}>
-                      {(() => {
-                        if (isDailyContext) {
-                          const isDailyOverdue = Boolean(roomCtx?.isDailyOverdue || roomCtx?.isDailyFinancialTail);
-                          const isDailyRentPaid = Boolean(roomCtx?.isDailyRentPaid);
-
-                          if (isDailyOverdue) {
-                            return (
-                              <div className="flex items-center justify-center min-w-[85px]">
-                                <span className="inline-flex items-center px-2 py-1 bg-rose-50 text-rose-700 text-xs font-bold rounded-lg border border-rose-200">
-                                  <AlertCircle className="w-3 h-3 text-rose-500 mr-1 shrink-0" />
-                                  รายวัน
-                                </span>
-                              </div>
-                            );
-                          }
-
-                          if (isDailyRentPaid) {
-                            return (
-                              <div className="flex items-center justify-center min-w-[85px]">
-                                <span className="inline-flex items-center px-2 py-1 bg-emerald-50 text-emerald-700 text-xs font-bold rounded-lg border border-emerald-200">
-                                  <CheckCircle className="w-3 h-3 text-emerald-600 mr-1 shrink-0" />
-                                  รายวัน
-                                </span>
-                              </div>
-                            );
-                          }
-
-                          // Active & Unpaid (now <= effectiveCheckOutAt) -> Normal existing Daily style (NOT red)
-                          return (
-                            <div className="flex items-center justify-center min-w-[85px]">
-                              <span className="inline-flex items-center px-2 py-1 bg-slate-100 text-slate-700 text-xs font-bold rounded-lg border border-slate-200">
-                                รายวัน
-                              </span>
-                            </div>
-                          );
-                        }
-
-                        // Historical Daily Stay (Checked-out & Paid): No active monthly contract/bill -> Non-operational status
-                        if ((roomCtx?.historicalDailyCount || 0) > 0 && !effectiveTenantId && row.billStatus === 'draft') {
-                          return (
-                            <div className="flex items-center justify-center min-w-[85px]">
-                              <span className="text-xs text-slate-400 font-bold">-</span>
-                            </div>
-                          );
-                        }
-
-                        return (
-                          <div className="flex flex-col items-center justify-center gap-1 min-w-[85px]">
-                            <button
-                              type="button"
-                              role="switch"
-                              aria-checked={row.billStatus !== 'draft' && row.billStatus !== 'cancelled'}
-                              disabled={isSaving || row.isPaid || row.billStatus === 'paid' || !selectedBillingCycleId}
-                              onClick={() => handleToggleStatusSwitch(row)}
-                              className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none disabled:cursor-not-allowed disabled:opacity-60 ${
-                                row.billStatus === 'paid'
-                                  ? 'bg-emerald-600'
-                                  : row.billStatus !== 'draft' && row.billStatus !== 'cancelled'
-                                  ? 'bg-amber-500'
-                                  : 'bg-slate-300'
-                              }`}
-                              title={
-                                row.billStatus === 'paid'
-                                  ? 'ชำระแล้ว (ล็อค)'
-                                  : row.billStatus !== 'draft' && row.billStatus !== 'cancelled'
-                                  ? 'คลิกเพื่อยกเลิกบิล'
-                                  : 'คลิกเพื่อออกบิล'
-                              }
-                            >
-                              <span
-                                aria-hidden="true"
-                                className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out ${
-                                  row.billStatus !== 'draft' && row.billStatus !== 'cancelled' ? 'translate-x-4' : 'translate-x-0'
-                                }`}
+                              <input
+                                type="text"
+                                inputMode="numeric"
+                                pattern="[0-9]*"
+                                disabled={isRowPaid}
+                                value={row.elecPrev}
+                                onChange={(e) => {
+                                  handleMeterReadingChange(row.roomId, 'elecPrev', e.target.value);
+                                }}
+                                onBlur={() => handleMeterReadingBlur(row.roomId, 'elecPrev')}
+                                onPaste={(e) => handlePaste(row.roomId, 'elecPrev', e)}
+                                data-row={idx}
+                                data-col="elecPrev"
+                                className={`w-20 px-2 py-1 text-xs border rounded-lg bg-white text-slate-800 text-center font-bold focus:outline-indigo-500 transition-all duration-300 disabled:bg-slate-50 disabled:text-slate-500 disabled:border-transparent ${flashingCells[`${row.roomId}-elecPrev`]
+                                    ? 'animate-vibrant-flash shadow-md z-10'
+                                    : 'border-gray-200'
+                                  }`}
                               />
-                            </button>
-                            <span className={`text-[10px] font-extrabold leading-none ${
-                              row.billStatus === 'paid'
-                                ? 'text-emerald-700'
-                                : row.billStatus !== 'draft' && row.billStatus !== 'cancelled'
-                                ? 'text-amber-700'
-                                : 'text-slate-500'
-                            }`}>
-                              {row.billStatus === 'paid'
-                                ? 'ชำระแล้ว'
-                                : row.billStatus === 'draft' || row.billStatus === 'cancelled'
-                                ? 'ยังไม่ออกบิล'
-                                : 'รอชำระ'}
-                            </span>
-                          </div>
-                        );
-                      })()}
-                    </td>
-
-                    {/* Tenant Clickable Link */}
-                    <td className="p-4 whitespace-nowrap">
-                      {(() => {
-                        const effectiveTenantId = roomCtx ? roomCtx.tenantId : tenant?.id;
-                        const effectiveTenantName = roomCtx ? roomCtx.tenantName : tenant?.name;
-                        const isFuture = Boolean(roomCtx?.isFutureReservation);
-                        const isLineLinked = roomCtx ? roomCtx.isLineLinked : Boolean((tenant as any)?.linkedUserId);
-                        const peopleCountVal = Number(row.peopleCount ?? roomCtx?.currentHouseholdPeopleCount ?? roomCtx?.snapshotPeopleCount ?? 1);
-                        const activeCycleCode = selectedCycleCode || selectedCycle || billingCycles?.find((c: any) => c.id === selectedBillingCycleId)?.cycleCode || '';
-                        const isEligibleAddTenantCycle = isCycleInRollingThreeMonthWindow(activeCycleCode);
-                        const hasBookableGap = roomCtx?.hasBookableGap ?? true;
-                        const historicalDailyCount = roomCtx?.historicalDailyCount || 0;
-                        const dailyCheckOutDate = roomCtx?.dailyCheckOutDate || null;
-
-                        if (isFuture) {
-                          return (
-                            <div className="flex items-center gap-2">
-                              <div className="flex flex-col items-start gap-0.5">
-                                {effectiveTenantId && effectiveTenantName ? (
-                                  <button
-                                    type="button"
-                                    onClick={() => onSelectTenant(effectiveTenantId, row.roomId)}
-                                    className="inline-flex items-center gap-1.5 text-indigo-600 hover:text-indigo-800 hover:underline transition-all cursor-pointer font-bold whitespace-nowrap"
-                                  >
-                                    <User className="w-3.5 h-3.5 shrink-0" />
-                                    <span className="truncate max-w-[100px]">{effectiveTenantName}</span>
-                                    <ArrowRight className="w-3 h-3 opacity-60 shrink-0" />
-                                  </button>
-                                ) : null}
-                                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
-                                  จองล่วงหน้า
-                                </span>
-                              </div>
                             </div>
-                          );
-                        }
+                          ) : isRowPaid ? (
+                            <div className="flex items-center justify-center min-w-[80px] min-h-[32px] w-full">
+                              <span className="text-xs font-bold text-slate-400">{formatMeterReadingDisplay(row.elecPrev)}</span>
+                            </div>
+                          ) : unlockedElecPrev[row.roomId] ? (
+                            <div className="flex items-center justify-center gap-1 min-w-[80px] min-h-[32px] w-full">
+                              <input
+                                type="text"
+                                inputMode="numeric"
+                                pattern="[0-9]*"
+                                autoFocus
+                                value={row.elecPrev}
+                                onChange={(e) => {
+                                  handleMeterReadingChange(row.roomId, 'elecPrev', e.target.value);
+                                }}
+                                onBlur={() => handleMeterReadingBlur(row.roomId, 'elecPrev')}
+                                onPaste={(e) => handlePaste(row.roomId, 'elecPrev', e)}
+                                data-row={idx}
+                                data-col="elecPrev"
+                                className="w-16 px-2 py-1 text-xs border border-indigo-300 rounded-lg bg-white text-slate-800 text-center font-bold focus:outline-indigo-500"
+                              />
+                              <button
+                                type="button"
+                                data-testid={`cancel-elec-prev-${row.roomId}`}
+                                title="ยกเลิกการแก้ไข"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  const orig = (originalRowsRef.current || []).find((o) => o.roomId === row.roomId);
+                                  handleMeterReadingChange(row.roomId, 'elecPrev', orig ? orig.elecPrev : row.elecPrev);
+                                  setUnlockedElecPrev((prev) => ({ ...prev, [row.roomId]: false }));
+                                }}
+                                className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                              >
+                                <X className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="flex items-center justify-center gap-1.5 min-w-[80px] min-h-[32px] w-full group">
+                              <span className="text-xs font-bold text-slate-700">{formatMeterReadingDisplay(row.elecPrev)}</span>
+                              <button
+                                type="button"
+                                data-testid={`unlock-elec-prev-${row.roomId}`}
+                                title="แก้ไขเลขอ่านเดิม"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setUnlockedElecPrev((prev) => ({ ...prev, [row.roomId]: true }));
+                                }}
+                                className="p-1 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors cursor-pointer"
+                              >
+                                <Pencil className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          )}
+                        </td>
+                      )}
 
-                        if (isEligibleAddTenantCycle) {
-                          const hasTenant = Boolean(effectiveTenantId && effectiveTenantName);
-                          const hasDailyStay = Boolean(dailyCheckOutDate);
-                          const hasOccupantClaim = hasTenant || hasDailyStay;
+                      {/* Elec Curr Input */}
+                      {isElecUnit && (
+                        <td className="p-4 text-center">
+                          <div
+                            onClick={(e) => {
+                              if (!isRowPaid) {
+                                const input = e.currentTarget.querySelector('input') as HTMLInputElement | null;
+                                input?.focus();
+                              }
+                            }}
+                            className={`flex items-center justify-center gap-1 min-h-[32px] w-full ${!isRowPaid ? 'cursor-text' : 'cursor-default'}`}
+                          >
+                            <input
+                              type="text"
+                              inputMode="numeric"
+                              pattern="[0-9]*"
+                              disabled={isRowPaid}
+                              value={row.elecCurr}
+                              onChange={(e) => {
+                                handleMeterReadingChange(row.roomId, 'elecCurr', e.target.value);
+                              }}
+                              onBlur={() => handleMeterReadingBlur(row.roomId, 'elecCurr')}
+                              onPaste={(e) => handlePaste(row.roomId, 'elecCurr', e)}
+                              data-row={idx}
+                              data-col="elecCurr"
+                              className={`w-20 px-2 py-1 text-xs border rounded-lg bg-white text-slate-800 text-center font-bold focus:outline-indigo-500 transition-all duration-300 disabled:bg-slate-50 disabled:text-slate-500 disabled:border-transparent ${flashingCells[`${row.roomId}-elecCurr`]
+                                  ? 'animate-vibrant-flash shadow-md z-10'
+                                  : elecUnits < 0
+                                    ? 'border-rose-300 ring-2 ring-rose-100 bg-rose-50'
+                                    : 'border-gray-200'
+                                }`}
+                            />
+                          </div>
+                        </td>
+                      )}
 
-                          return (
-                            <div className="flex items-center gap-2">
-                              {hasTenant && (
-                                <div className="flex flex-col items-start gap-0.5">
-                                  <button
-                                    type="button"
-                                    onClick={() => onSelectTenant(effectiveTenantId, row.roomId)}
-                                    className="inline-flex items-center gap-1.5 text-indigo-600 hover:text-indigo-800 hover:underline transition-all cursor-pointer font-bold whitespace-nowrap"
-                                  >
-                                    {peopleCountVal > 1 ? (
-                                      <Users className="w-3.5 h-3.5 shrink-0" />
-                                    ) : (
-                                      <User className="w-3.5 h-3.5 shrink-0" />
-                                    )}
-                                    <span className="truncate max-w-[100px]">{effectiveTenantName}</span>
-                                    <ArrowRight className="w-3 h-3 opacity-60 shrink-0" />
-                                  </button>
-                                  {!isLineLinked && (
-                                    <span className="text-[10px] text-slate-400 font-normal leading-tight">
-                                      (ยังไม่ได้เชื่อม LINE)
-                                    </span>
-                                  )}
-                                  {dailyCheckOutDate && (
-                                    <span className="text-xs font-bold text-slate-700">
-                                      {formatShortThaiBuddhistDate(dailyCheckOutDate)}
-                                    </span>
-                                  )}
+                      {/* Water Prev Input */}
+                      {isWaterUnit && (
+                        <td className="p-4 text-center">
+                          {isWaterDirectEdit ? (
+                            <div
+                              onClick={(e) => {
+                                if (!isRowPaid) {
+                                  const input = e.currentTarget.querySelector('input') as HTMLInputElement | null;
+                                  input?.focus();
+                                }
+                              }}
+                              className={`flex items-center justify-center min-w-[80px] min-h-[32px] w-full ${!isRowPaid ? 'cursor-text' : 'cursor-default'}`}
+                            >
+                              <input
+                                type="text"
+                                inputMode="numeric"
+                                pattern="[0-9]*"
+                                disabled={isRowPaid}
+                                value={row.waterPrev}
+                                onChange={(e) => {
+                                  handleMeterReadingChange(row.roomId, 'waterPrev', e.target.value);
+                                }}
+                                onBlur={() => handleMeterReadingBlur(row.roomId, 'waterPrev')}
+                                onPaste={(e) => handlePaste(row.roomId, 'waterPrev', e)}
+                                data-row={idx}
+                                data-col="waterPrev"
+                                className={`w-20 px-2 py-1 text-xs border rounded-lg bg-white text-slate-800 text-center font-bold focus:outline-indigo-500 transition-all duration-300 disabled:bg-slate-50 disabled:text-slate-500 disabled:border-transparent ${flashingCells[`${row.roomId}-waterPrev`]
+                                    ? 'animate-vibrant-flash shadow-md z-10'
+                                    : 'border-gray-200'
+                                  }`}
+                              />
+                            </div>
+                          ) : isRowPaid ? (
+                            <div className="flex items-center justify-center min-w-[80px] min-h-[32px] w-full">
+                              <span className="text-xs font-bold text-slate-400">{formatMeterReadingDisplay(row.waterPrev)}</span>
+                            </div>
+                          ) : unlockedWaterPrev[row.roomId] ? (
+                            <div className="flex items-center justify-center gap-1 min-w-[80px] min-h-[32px] w-full">
+                              <input
+                                type="text"
+                                inputMode="numeric"
+                                pattern="[0-9]*"
+                                autoFocus
+                                value={row.waterPrev}
+                                onChange={(e) => {
+                                  handleMeterReadingChange(row.roomId, 'waterPrev', e.target.value);
+                                }}
+                                onBlur={() => handleMeterReadingBlur(row.roomId, 'waterPrev')}
+                                onPaste={(e) => handlePaste(row.roomId, 'waterPrev', e)}
+                                data-row={idx}
+                                data-col="waterPrev"
+                                className="w-16 px-2 py-1 text-xs border border-indigo-300 rounded-lg bg-white text-slate-800 text-center font-bold focus:outline-indigo-500"
+                              />
+                              <button
+                                type="button"
+                                data-testid={`cancel-water-prev-${row.roomId}`}
+                                title="ยกเลิกการแก้ไข"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  const orig = (originalRowsRef.current || []).find((o) => o.roomId === row.roomId);
+                                  handleMeterReadingChange(row.roomId, 'waterPrev', orig ? orig.waterPrev : row.waterPrev);
+                                  setUnlockedWaterPrev((prev) => ({ ...prev, [row.roomId]: false }));
+                                }}
+                                className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                              >
+                                <X className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="flex items-center justify-center gap-1.5 min-w-[80px] min-h-[32px] w-full group">
+                              <span className="text-xs font-bold text-slate-700">{formatMeterReadingDisplay(row.waterPrev)}</span>
+                              <button
+                                type="button"
+                                data-testid={`unlock-water-prev-${row.roomId}`}
+                                title="แก้ไขเลขอ่านเดิม"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setUnlockedWaterPrev((prev) => ({ ...prev, [row.roomId]: true }));
+                                }}
+                                className="p-1 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors cursor-pointer"
+                              >
+                                <Pencil className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          )}
+                        </td>
+                      )}
+
+                      {/* Water Curr Input */}
+                      {isWaterUnit && (
+                        <td className="p-4 text-center">
+                          <div
+                            onClick={(e) => {
+                              if (!isRowPaid) {
+                                const input = e.currentTarget.querySelector('input') as HTMLInputElement | null;
+                                input?.focus();
+                              }
+                            }}
+                            className={`flex items-center justify-center gap-1 min-h-[32px] w-full ${!isRowPaid ? 'cursor-text' : 'cursor-default'}`}
+                          >
+                            <input
+                              type="text"
+                              inputMode="numeric"
+                              pattern="[0-9]*"
+                              disabled={isRowPaid}
+                              value={row.waterCurr}
+                              onChange={(e) => {
+                                handleMeterReadingChange(row.roomId, 'waterCurr', e.target.value);
+                              }}
+                              onBlur={() => handleMeterReadingBlur(row.roomId, 'waterCurr')}
+                              onPaste={(e) => handlePaste(row.roomId, 'waterCurr', e)}
+                              data-row={idx}
+                              data-col="waterCurr"
+                              className={`w-20 px-2 py-1 text-xs border rounded-lg bg-white text-slate-800 text-center font-bold focus:outline-indigo-500 transition-all duration-300 disabled:bg-slate-50 disabled:text-slate-500 disabled:border-transparent ${flashingCells[`${row.roomId}-waterCurr`]
+                                  ? 'animate-vibrant-flash shadow-md z-10'
+                                  : waterUnits < 0
+                                    ? 'border-rose-300 ring-2 ring-rose-100 bg-rose-50'
+                                    : 'border-gray-200'
+                                }`}
+                            />
+                          </div>
+                        </td>
+                      )}
+
+                      {/* People Count Input */}
+                      <td className="p-4 text-center">
+                        <div
+                          onClick={(e) => {
+                            if (!isRowPaid) {
+                              const input = e.currentTarget.querySelector('input') as HTMLInputElement | null;
+                              input?.focus();
+                            }
+                          }}
+                          className={`flex items-center justify-center min-h-[32px] w-full ${!isRowPaid ? 'cursor-text' : 'cursor-default'}`}
+                        >
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            pattern="[0-9]*"
+                            disabled={isRowPaid}
+                            value={row.peopleCount}
+                            onChange={(e) => {
+                              handlePeopleCountChange(row.roomId, e.target.value);
+                            }}
+                            onPaste={(e) => handlePaste(row.roomId, 'peopleCount', e)}
+                            data-row={idx}
+                            data-col="peopleCount"
+                            className={`w-14 px-2 py-1 text-xs border rounded-lg bg-white text-slate-800 text-center font-bold focus:outline-indigo-500 transition-all duration-300 disabled:bg-slate-50 disabled:text-slate-500 disabled:border-transparent ${flashingCells[`${row.roomId}-peopleCount`]
+                                ? 'animate-vibrant-flash shadow-md z-10'
+                                : 'border-gray-200'
+                              }`}
+                          />
+                        </div>
+                      </td>
+
+                      {/* Custom Other Fees Column */}
+                      <td className="p-4">
+                        <div className="flex flex-col gap-1 min-w-[140px]">
+                          {(row.otherFees || []).length > 0 ? (
+                            <div className="flex flex-col gap-0.5">
+                              {(row.otherFees || []).slice(0, 2).map((fee, feeIdx) => (
+                                <div key={feeIdx} className="flex items-center justify-between gap-1 text-[10px] text-slate-600 font-bold bg-slate-50 border border-slate-100 rounded-md px-1.5 py-0.5">
+                                  <span className="truncate max-w-[80px]" title={fee.description}>{fee.description}</span>
+                                  <span className="text-indigo-600 shrink-0">{formatOtherFeeAmountDisplay(fee.amount)}</span>
                                 </div>
-                              )}
-                              {!hasTenant && dailyCheckOutDate && (
-                                <span className="text-xs font-bold text-slate-700">
-                                  {formatShortThaiBuddhistDate(dailyCheckOutDate)}
+                              ))}
+                              {(row.otherFees || []).length > 2 && (
+                                <span className="text-[10px] text-slate-400 font-semibold pl-0.5">
+                                  +{(row.otherFees || []).length - 2} รายการ
                                 </span>
                               )}
-                              {!hasOccupantClaim && hasBookableGap && (room || row.roomId) && (
+                              {!isRowPaid && (
                                 <button
                                   type="button"
-                                  disabled={quickAddLoadingRoomId === (room?.id || row.roomId)}
-                                  onClick={() => handleOpenQuickAddTenant(room?.id || row.roomId)}
-                                  className="inline-flex items-center gap-1 text-[11px] font-bold text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 px-2 py-1 rounded-lg border border-indigo-200 transition-all cursor-pointer shadow-2xs disabled:opacity-50 whitespace-nowrap shrink-0"
+                                  data-testid={`edit-table-other-fees-${row.roomId}`}
+                                  onClick={() => setActiveFeeModalRoomId(row.roomId)}
+                                  className="text-[10px] text-indigo-600 hover:text-indigo-800 hover:underline font-bold mt-0.5 inline-flex items-center gap-1 cursor-pointer w-fit"
                                 >
-                                  {quickAddLoadingRoomId === (room?.id || row.roomId) ? (
-                                    <Loader2 className="w-3 h-3 animate-spin shrink-0" />
-                                  ) : (
-                                    <Plus className="w-3 h-3 shrink-0" />
-                                  )}
-                                  <span className="whitespace-nowrap">เพิ่มผู้เช่า</span>
+                                  <Pencil className="w-2.5 h-2.5" />
+                                  <span>แก้ไข</span>
                                 </button>
                               )}
-                              {!hasOccupantClaim && !hasBookableGap && (
-                                <span className="text-gray-400">ไม่มีข้อมูล</span>
+                            </div>
+                          ) : (
+                            !isRowPaid ? (
+                              <button
+                                type="button"
+                                data-testid={`open-table-other-fees-${row.roomId}`}
+                                onClick={() => setActiveFeeModalRoomId(row.roomId)}
+                                className="text-xs text-indigo-600 hover:text-indigo-800 hover:underline font-bold transition-all cursor-pointer inline-flex items-center gap-1"
+                              >
+                                <Plus className="w-3 h-3" />
+                                <span>เพิ่มค่าใช้จ่าย</span>
+                              </button>
+                            ) : (
+                              <span className="text-xs text-slate-400 font-bold">-</span>
+                            )
+                          )}
+                        </div>
+                      </td>
+
+                      {/* Calculated Total & Financial Breakdown */}
+                      <td className="p-4 text-right">
+                        {(() => {
+                          const breakdown = getOwnerFinancialBreakdown(roomCtx);
+                          const amountDue = breakdown.formattedAmount;
+                          const chargeComponents = breakdown.components;
+                          const isExpanded = Boolean(expandedBreakdowns[row.roomId]);
+
+                          return (
+                            <div className="flex flex-col items-end">
+                              <span className="font-extrabold text-sm text-indigo-600 whitespace-nowrap">
+                                {formatMoneyDisplay(amountDue)} ฿
+                              </span>
+                              {chargeComponents.length > 0 && (
+                                <button
+                                  type="button"
+                                  onClick={() => setExpandedBreakdowns(prev => ({ ...prev, [row.roomId]: !prev[row.roomId] }))}
+                                  className="text-[10px] text-slate-400 hover:text-indigo-600 font-medium cursor-pointer transition-colors mt-0.5 whitespace-nowrap flex items-center gap-0.5"
+                                >
+                                  <span>
+                                    {chargeComponents.length === 1
+                                      ? 'ดูรายละเอียด'
+                                      : `ดูรายละเอียด +${chargeComponents.length}`}
+                                  </span>
+                                  <ChevronDown className={`w-2.5 h-2.5 transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`} />
+                                </button>
+                              )}
+                              {isExpanded && chargeComponents.length > 0 && (
+                                <div className="mt-1 flex flex-col items-end gap-1 text-right">
+                                  {chargeComponents.map((c: any, cIdx: number) => {
+                                    const isPaid = c.status === 'PAID';
+                                    const isInvalid = c.status === 'INVALID';
+                                    const isUnpaid = c.status === 'UNPAID';
+                                    const isPreview = c.status === 'PREVIEW' || (!isPaid && !isInvalid && !isUnpaid);
+
+                                    return (
+                                      <div
+                                        key={cIdx}
+                                        data-testid={`charge-component-row-${row.roomId}-${cIdx}`}
+                                        className="flex items-center justify-end gap-1.5 text-xs whitespace-nowrap"
+                                        title={isInvalid ? (c.errorMessage || 'ข้อมูลไม่ถูกต้อง') : undefined}
+                                      >
+                                        {isPaid ? (
+                                          <>
+                                            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                                            <span className="text-emerald-700 font-medium">{c.label}</span>
+                                            <span className="text-emerald-800 font-bold">{formatComponentDetailAmount(c.amount)}</span>
+                                          </>
+                                        ) : isInvalid ? (
+                                          <>
+                                            <AlertCircle className="w-3.5 h-3.5 text-rose-500 shrink-0" />
+                                            <span className="text-rose-600 font-medium">{c.label}</span>
+                                            <span className="text-rose-600 font-bold">{formatComponentDetailAmount(c.amount)}</span>
+                                          </>
+                                        ) : isUnpaid ? (
+                                          <>
+                                            <Clock className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                                            <span className="text-amber-700 font-medium">{c.label}</span>
+                                            <span className="text-amber-800 font-bold">{formatComponentDetailAmount(c.amount)}</span>
+                                          </>
+                                        ) : (
+                                          <>
+                                            <Clock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                                            <span className="text-slate-500 font-medium">{c.label}</span>
+                                            <span className="text-slate-600 font-semibold">{formatComponentDetailAmount(c.amount)}</span>
+                                          </>
+                                        )}
+                                      </div>
+                                    );
+                                  })}
+                                </div>
                               )}
                             </div>
                           );
-                        }
+                        })()}
+                      </td>
 
-                        // Historical cycles outside rolling action window
-                        const hasMonthly = Boolean(effectiveTenantId && effectiveTenantName);
-                        const hasDaily = historicalDailyCount > 0;
+                      {/* Status Switch with real server authority */}
+                      <td className={`p-4 text-center transition-all duration-300 ${flashingCells[`${row.roomId}-status`]
+                          ? 'animate-vibrant-flash rounded-lg shadow-md z-10'
+                          : ''
+                        }`}>
+                        {(() => {
+                          if (isDailyContext) {
+                            const isDailyOverdue = Boolean(roomCtx?.isDailyOverdue || roomCtx?.isDailyFinancialTail);
+                            const isDailyRentPaid = Boolean(roomCtx?.isDailyRentPaid);
 
-                        if (hasMonthly && hasDaily) {
+                            if (isDailyOverdue) {
+                              return (
+                                <div className="flex items-center justify-center min-w-[85px]">
+                                  <span className="inline-flex items-center px-2 py-1 bg-rose-50 text-rose-700 text-xs font-bold rounded-lg border border-rose-200">
+                                    <AlertCircle className="w-3 h-3 text-rose-500 mr-1 shrink-0" />
+                                    รายวัน
+                                  </span>
+                                </div>
+                              );
+                            }
+
+                            if (isDailyRentPaid) {
+                              return (
+                                <div className="flex items-center justify-center min-w-[85px]">
+                                  <span className="inline-flex items-center px-2 py-1 bg-emerald-50 text-emerald-700 text-xs font-bold rounded-lg border border-emerald-200">
+                                    <CheckCircle className="w-3 h-3 text-emerald-600 mr-1 shrink-0" />
+                                    รายวัน
+                                  </span>
+                                </div>
+                              );
+                            }
+
+                            // Active & Unpaid (now <= effectiveCheckOutAt) -> Normal existing Daily style (NOT red)
+                            return (
+                              <div className="flex items-center justify-center min-w-[85px]">
+                                <span className="inline-flex items-center px-2 py-1 bg-slate-100 text-slate-700 text-xs font-bold rounded-lg border border-slate-200">
+                                  รายวัน
+                                </span>
+                              </div>
+                            );
+                          }
+
+                          // Historical Daily Stay (Checked-out & Paid): No active monthly contract/bill -> Non-operational status
+                          if ((roomCtx?.historicalDailyCount || 0) > 0 && !effectiveTenantId && row.billStatus === 'draft') {
+                            return (
+                              <div className="flex items-center justify-center min-w-[85px]">
+                                <span className="text-xs text-slate-400 font-bold">-</span>
+                              </div>
+                            );
+                          }
+
                           return (
-                            <div className="flex flex-col items-start gap-1">
+                            <div className="flex flex-col items-center justify-center gap-1 min-w-[85px]">
+                              <button
+                                type="button"
+                                role="switch"
+                                aria-checked={row.billStatus !== 'draft' && row.billStatus !== 'cancelled'}
+                                disabled={isSaving || row.isPaid || row.billStatus === 'paid' || !selectedBillingCycleId}
+                                onClick={() => handleToggleStatusSwitch(row)}
+                                className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none disabled:cursor-not-allowed disabled:opacity-60 ${row.billStatus === 'paid'
+                                    ? 'bg-emerald-600'
+                                    : row.billStatus !== 'draft' && row.billStatus !== 'cancelled'
+                                      ? 'bg-amber-500'
+                                      : 'bg-slate-300'
+                                  }`}
+                                title={
+                                  row.billStatus === 'paid'
+                                    ? 'ชำระแล้ว (ล็อค)'
+                                    : row.billStatus !== 'draft' && row.billStatus !== 'cancelled'
+                                      ? 'คลิกเพื่อยกเลิกบิล'
+                                      : 'คลิกเพื่อออกบิล'
+                                }
+                              >
+                                <span
+                                  aria-hidden="true"
+                                  className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out ${row.billStatus !== 'draft' && row.billStatus !== 'cancelled' ? 'translate-x-4' : 'translate-x-0'
+                                    }`}
+                                />
+                              </button>
+                              <span className={`text-[10px] font-extrabold leading-none ${row.billStatus === 'paid'
+                                  ? 'text-emerald-700'
+                                  : row.billStatus !== 'draft' && row.billStatus !== 'cancelled'
+                                    ? 'text-amber-700'
+                                    : 'text-slate-500'
+                                }`}>
+                                {row.billStatus === 'paid'
+                                  ? 'ชำระแล้ว'
+                                  : row.billStatus === 'draft' || row.billStatus === 'cancelled'
+                                    ? 'ยังไม่ออกบิล'
+                                    : 'รอชำระ'}
+                              </span>
+                            </div>
+                          );
+                        })()}
+                      </td>
+
+                      {/* Tenant Clickable Link */}
+                      <td className="p-4 whitespace-nowrap">
+                        {(() => {
+                          const effectiveTenantId = roomCtx ? roomCtx.tenantId : tenant?.id;
+                          const effectiveTenantName = roomCtx ? roomCtx.tenantName : tenant?.name;
+                          const isFuture = Boolean(roomCtx?.isFutureReservation);
+                          const isLineLinked = roomCtx ? roomCtx.isLineLinked : Boolean((tenant as any)?.linkedUserId);
+                          const peopleCountVal = Number(row.peopleCount ?? roomCtx?.currentHouseholdPeopleCount ?? roomCtx?.snapshotPeopleCount ?? 1);
+                          const activeCycleCode = selectedCycleCode || selectedCycle || billingCycles?.find((c: any) => c.id === selectedBillingCycleId)?.cycleCode || '';
+                          const isEligibleAddTenantCycle = isCycleInRollingThreeMonthWindow(activeCycleCode);
+                          const hasBookableGap = roomCtx?.hasBookableGap ?? true;
+                          const historicalDailyCount = roomCtx?.historicalDailyCount || 0;
+                          const dailyCheckOutDate = roomCtx?.dailyCheckOutDate || null;
+
+                          if (isFuture) {
+                            return (
+                              <div className="flex items-center gap-2">
+                                <div className="flex flex-col items-start gap-0.5">
+                                  {effectiveTenantId && effectiveTenantName ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => onSelectTenant(effectiveTenantId, row.roomId)}
+                                      className="inline-flex items-center gap-1.5 text-indigo-600 hover:text-indigo-800 hover:underline transition-all cursor-pointer font-bold whitespace-nowrap"
+                                    >
+                                      <User className="w-3.5 h-3.5 shrink-0" />
+                                      <span className="truncate max-w-[100px]">{effectiveTenantName}</span>
+                                      <ArrowRight className="w-3 h-3 opacity-60 shrink-0" />
+                                    </button>
+                                  ) : null}
+                                  <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
+                                    จองล่วงหน้า
+                                  </span>
+                                </div>
+                              </div>
+                            );
+                          }
+
+                          if (isEligibleAddTenantCycle) {
+                            const hasTenant = Boolean(effectiveTenantId && effectiveTenantName);
+                            const hasDailyStay = Boolean(dailyCheckOutDate);
+                            const hasOccupantClaim = hasTenant || hasDailyStay;
+
+                            return (
+                              <div className="flex items-center gap-2">
+                                {hasTenant && (
+                                  <div className="flex flex-col items-start gap-0.5">
+                                    <button
+                                      type="button"
+                                      onClick={() => onSelectTenant(effectiveTenantId, row.roomId)}
+                                      className="inline-flex items-center gap-1.5 text-indigo-600 hover:text-indigo-800 hover:underline transition-all cursor-pointer font-bold whitespace-nowrap"
+                                    >
+                                      {peopleCountVal > 1 ? (
+                                        <Users className="w-3.5 h-3.5 shrink-0" />
+                                      ) : (
+                                        <User className="w-3.5 h-3.5 shrink-0" />
+                                      )}
+                                      <span className="truncate max-w-[100px]">{effectiveTenantName}</span>
+                                      <ArrowRight className="w-3 h-3 opacity-60 shrink-0" />
+                                    </button>
+                                    {!isLineLinked && (
+                                      <span className="text-[10px] text-slate-400 font-normal leading-tight">
+                                        (ยังไม่ได้เชื่อม LINE)
+                                      </span>
+                                    )}
+                                    {dailyCheckOutDate && (
+                                      <span className="text-xs font-bold text-slate-700">
+                                        {formatShortThaiBuddhistDate(dailyCheckOutDate)}
+                                      </span>
+                                    )}
+                                  </div>
+                                )}
+                                {!hasTenant && dailyCheckOutDate && (
+                                  <span className="text-xs font-bold text-slate-700">
+                                    {formatShortThaiBuddhistDate(dailyCheckOutDate)}
+                                  </span>
+                                )}
+                                {!hasOccupantClaim && hasBookableGap && (room || row.roomId) && (
+                                  <button
+                                    type="button"
+                                    disabled={quickAddLoadingRoomId === (room?.id || row.roomId)}
+                                    onClick={() => handleOpenQuickAddTenant(room?.id || row.roomId)}
+                                    className="inline-flex items-center gap-1 text-[11px] font-bold text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 px-2 py-1 rounded-lg border border-indigo-200 transition-all cursor-pointer shadow-2xs disabled:opacity-50 whitespace-nowrap shrink-0"
+                                  >
+                                    {quickAddLoadingRoomId === (room?.id || row.roomId) ? (
+                                      <Loader2 className="w-3 h-3 animate-spin shrink-0" />
+                                    ) : (
+                                      <Plus className="w-3 h-3 shrink-0" />
+                                    )}
+                                    <span className="whitespace-nowrap">เพิ่มผู้เช่า</span>
+                                  </button>
+                                )}
+                                {!hasOccupantClaim && !hasBookableGap && (
+                                  <span className="text-gray-400">ไม่มีข้อมูล</span>
+                                )}
+                              </div>
+                            );
+                          }
+
+                          // Historical cycles outside rolling action window
+                          const hasMonthly = Boolean(effectiveTenantId && effectiveTenantName);
+                          const hasDaily = historicalDailyCount > 0;
+
+                          if (hasMonthly && hasDaily) {
+                            return (
+                              <div className="flex flex-col items-start gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => onSelectTenant(effectiveTenantId, row.roomId)}
+                                  className="inline-flex items-center gap-1.5 text-indigo-600 hover:text-indigo-800 hover:underline transition-all cursor-pointer font-bold whitespace-nowrap"
+                                >
+                                  <User className="w-3.5 h-3.5 shrink-0" />
+                                  <span className="truncate max-w-[100px]">{effectiveTenantName}</span>
+                                  <ArrowRight className="w-3 h-3 opacity-60 shrink-0" />
+                                </button>
+                                {dailyCheckOutDate && (
+                                  <span className="text-xs font-bold text-slate-700">
+                                    {formatShortThaiBuddhistDate(dailyCheckOutDate)}
+                                  </span>
+                                )}
+                              </div>
+                            );
+                          }
+
+                          if (hasMonthly) {
+                            return (
                               <button
                                 type="button"
                                 onClick={() => onSelectTenant(effectiveTenantId, row.roomId)}
                                 className="inline-flex items-center gap-1.5 text-indigo-600 hover:text-indigo-800 hover:underline transition-all cursor-pointer font-bold whitespace-nowrap"
                               >
-                                <User className="w-3.5 h-3.5 shrink-0" />
+                                {peopleCountVal > 1 ? (
+                                  <Users className="w-3.5 h-3.5 shrink-0" />
+                                ) : (
+                                  <User className="w-3.5 h-3.5 shrink-0" />
+                                )}
                                 <span className="truncate max-w-[100px]">{effectiveTenantName}</span>
                                 <ArrowRight className="w-3 h-3 opacity-60 shrink-0" />
                               </button>
-                              {dailyCheckOutDate && (
-                                <span className="text-xs font-bold text-slate-700">
-                                  {formatShortThaiBuddhistDate(dailyCheckOutDate)}
-                                </span>
-                              )}
-                            </div>
-                          );
-                        }
+                            );
+                          }
 
-                        if (hasMonthly) {
-                          return (
-                            <button
-                              type="button"
-                              onClick={() => onSelectTenant(effectiveTenantId, row.roomId)}
-                              className="inline-flex items-center gap-1.5 text-indigo-600 hover:text-indigo-800 hover:underline transition-all cursor-pointer font-bold whitespace-nowrap"
-                            >
-                              {peopleCountVal > 1 ? (
-                                <Users className="w-3.5 h-3.5 shrink-0" />
-                              ) : (
-                                <User className="w-3.5 h-3.5 shrink-0" />
-                              )}
-                              <span className="truncate max-w-[100px]">{effectiveTenantName}</span>
-                              <ArrowRight className="w-3 h-3 opacity-60 shrink-0" />
-                            </button>
-                          );
-                        }
+                          if (hasDaily) {
+                            return dailyCheckOutDate ? (
+                              <span className="text-xs font-bold text-slate-700">
+                                {formatShortThaiBuddhistDate(dailyCheckOutDate)}
+                              </span>
+                            ) : (
+                              <span className="text-gray-400">ไม่มีข้อมูล</span>
+                            );
+                          }
 
-                        if (hasDaily) {
-                          return dailyCheckOutDate ? (
-                            <span className="text-xs font-bold text-slate-700">
-                              {formatShortThaiBuddhistDate(dailyCheckOutDate)}
-                            </span>
-                          ) : (
-                            <span className="text-gray-400">ไม่มีข้อมูล</span>
-                          );
-                        }
-
-                        return <span className="text-gray-400">ไม่มีข้อมูล</span>;
-                      })()}
+                          return <span className="text-gray-400">ไม่มีข้อมูล</span>;
+                        })()}
+                      </td>
+                    </tr>
+                  );
+                })}
+                {filteredRows.length === 0 && (
+                  <tr>
+                    <td colSpan={6 + (isElecUnit ? 2 : 0) + (isWaterUnit ? 2 : 0)} className="p-8 text-center text-gray-400">
+                      ไม่พบข้อมูลห้องพักพักอาศัยที่ต้องการ
                     </td>
                   </tr>
-                );
-              })}
-              {filteredRows.length === 0 && (
-                <tr>
-                  <td colSpan={6 + (isElecUnit ? 2 : 0) + (isWaterUnit ? 2 : 0)} className="p-8 text-center text-gray-400">
-                    ไม่พบข้อมูลห้องพักพักอาศัยที่ต้องการ
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      ) : (
-        <div className="p-4 bg-slate-50/50">
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4" data-testid="meter-list-container">
-            {filteredRows.map((row, idx) => (
-              <OwnerMeterListCard
-                key={row.roomId}
-                row={row}
-                idx={idx}
-                room={rooms.find(r => r.id === row.roomId)}
-                roomCtx={previewContext?.rooms?.find((r: any) => r.roomId === row.roomId)}
-                tenant={getTenantForRoomAndCycle(row.roomId, selectedCycle)}
-                contracts={contracts}
-                isRateSnapshotReady={isRateSnapshotReady}
-                isWaterUnit={isWaterUnit}
-                isElecUnit={isElecUnit}
-                isFirstCycle={isFirstCycle}
-                selectedCycleCode={selectedCycleCode}
-                selectedCycle={selectedCycle}
-                selectedBillingCycleId={selectedBillingCycleId}
-                billingCycles={billingCycles}
-                isSaving={isSaving}
-                isMutationReady={isMutationReady}
-                unlockedElecPrev={unlockedElecPrev}
-                unlockedWaterPrev={unlockedWaterPrev}
-                flashingCells={flashingCells}
-                isExpandedBreakdown={Boolean(expandedBreakdowns[row.roomId])}
-                quickAddLoadingRoomId={quickAddLoadingRoomId}
-                onOpenOtherFees={(targetRoomId) => setActiveFeeModalRoomId(targetRoomId)}
-                onMeterReadingChange={handleMeterReadingChange}
-                onMeterReadingBlur={handleMeterReadingBlur}
-                onPaste={handlePaste}
-                onUnlockElecPrev={(roomId) => setUnlockedElecPrev(prev => ({ ...prev, [roomId]: true }))}
-                onCancelElecPrev={(roomId) => {
-                  const orig = (originalRowsRef.current || []).find((o) => o.roomId === roomId);
-                  handleMeterReadingChange(roomId, 'elecPrev', orig ? orig.elecPrev : row.elecPrev);
-                  setUnlockedElecPrev((prev) => ({ ...prev, [roomId]: false }));
-                }}
-                onUnlockWaterPrev={(roomId) => setUnlockedWaterPrev(prev => ({ ...prev, [roomId]: true }))}
-                onCancelWaterPrev={(roomId) => {
-                  const orig = (originalRowsRef.current || []).find((o) => o.roomId === roomId);
-                  handleMeterReadingChange(roomId, 'waterPrev', orig ? orig.waterPrev : row.waterPrev);
-                  setUnlockedWaterPrev((prev) => ({ ...prev, [roomId]: false }));
-                }}
-                onPeopleCountChange={handlePeopleCountChange}
-                onToggleStatusSwitch={handleToggleStatusSwitch}
-                onToggleBreakdown={(roomId) => setExpandedBreakdowns(prev => ({ ...prev, [roomId]: !prev[roomId] }))}
-                onSelectTenant={onSelectTenant}
-                onOpenQuickAdd={handleOpenQuickAddTenant}
-              />
-            ))}
+                )}
+              </tbody>
+            </table>
           </div>
-          {filteredRows.length === 0 && (
-            <div className="p-8 text-center text-gray-400 text-xs">
-              ไม่พบข้อมูลห้องพักพักอาศัยที่ต้องการ
+        ) : (
+          <div className="p-4 bg-slate-50/50">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4" data-testid="meter-list-container">
+              {filteredRows.map((row, idx) => (
+                <OwnerMeterListCard
+                  key={row.roomId}
+                  row={row}
+                  idx={idx}
+                  room={rooms.find(r => r.id === row.roomId)}
+                  roomCtx={previewContext?.rooms?.find((r: any) => r.roomId === row.roomId)}
+                  rateSnapshot={rateSnapshot}
+                  tenant={getTenantForRoomAndCycle(row.roomId, selectedCycle)}
+                  contracts={contracts}
+                  isRateSnapshotReady={isRateSnapshotReady}
+                  isWaterUnit={isWaterUnit}
+                  isElecUnit={isElecUnit}
+                  isFirstCycle={isFirstCycle}
+                  selectedCycleCode={selectedCycleCode}
+                  selectedCycle={selectedCycle}
+                  selectedBillingCycleId={selectedBillingCycleId}
+                  billingCycles={billingCycles}
+                  isSaving={isSaving}
+                  isMutationReady={isMutationReady}
+                  unlockedElecPrev={unlockedElecPrev}
+                  unlockedWaterPrev={unlockedWaterPrev}
+                  flashingCells={flashingCells}
+                  isExpandedBreakdown={Boolean(expandedBreakdowns[row.roomId])}
+                  quickAddLoadingRoomId={quickAddLoadingRoomId}
+                  onOpenOtherFees={(targetRoomId) => setActiveFeeModalRoomId(targetRoomId)}
+                  onMeterReadingChange={handleMeterReadingChange}
+                  onMeterReadingBlur={handleMeterReadingBlur}
+                  onPaste={handlePaste}
+                  onUnlockElecPrev={(roomId) => setUnlockedElecPrev(prev => ({ ...prev, [roomId]: true }))}
+                  onCancelElecPrev={(roomId) => {
+                    const orig = (originalRowsRef.current || []).find((o) => o.roomId === roomId);
+                    handleMeterReadingChange(roomId, 'elecPrev', orig ? orig.elecPrev : row.elecPrev);
+                    setUnlockedElecPrev((prev) => ({ ...prev, [roomId]: false }));
+                  }}
+                  onUnlockWaterPrev={(roomId) => setUnlockedWaterPrev(prev => ({ ...prev, [roomId]: true }))}
+                  onCancelWaterPrev={(roomId) => {
+                    const orig = (originalRowsRef.current || []).find((o) => o.roomId === roomId);
+                    handleMeterReadingChange(roomId, 'waterPrev', orig ? orig.waterPrev : row.waterPrev);
+                    setUnlockedWaterPrev((prev) => ({ ...prev, [roomId]: false }));
+                  }}
+                  onPeopleCountChange={handlePeopleCountChange}
+                  onToggleStatusSwitch={handleToggleStatusSwitch}
+                  onToggleBreakdown={(roomId) => setExpandedBreakdowns(prev => ({ ...prev, [roomId]: !prev[roomId] }))}
+                  onSelectTenant={onSelectTenant}
+                  onOpenQuickAdd={handleOpenQuickAddTenant}
+                />
+              ))}
             </div>
-          )}
-        </div>
-      )}
+            {filteredRows.length === 0 && (
+              <div className="p-8 text-center text-gray-400 text-xs">
+                ไม่พบข้อมูลห้องพักพักอาศัยที่ต้องการ
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Floating Save Button - ONLY shown when changes exist (isDirty is true), always visible without scrolling */}
         {isDirty && (
@@ -3161,11 +3142,10 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                 type="button"
                 disabled={isSaving}
                 onClick={handleSaveMeters}
-                className={`relative w-full md:w-auto px-8 py-4 bg-gradient-to-r from-indigo-600 to-blue-600 text-white font-black text-xs md:text-sm rounded-2xl flex items-center justify-center gap-2.5 shadow-2xl transition-all select-none border border-indigo-400/40 ${
-                  isSaving
+                className={`relative w-full md:w-auto px-8 py-4 bg-gradient-to-r from-indigo-600 to-blue-600 text-white font-black text-xs md:text-sm rounded-2xl flex items-center justify-center gap-2.5 shadow-2xl transition-all select-none border border-indigo-400/40 ${isSaving
                     ? 'opacity-85 cursor-not-allowed'
                     : 'hover:from-indigo-550 hover:to-blue-550 hover:scale-[1.03] active:scale-95 cursor-pointer'
-                }`}
+                  }`}
               >
                 {isSaving ? (
                   <>

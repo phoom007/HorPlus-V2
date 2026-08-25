@@ -725,8 +725,8 @@ describe('HORPLUS LOCAL-07 — Owner Meter List Mode UX Suite (L1 - L28)', () =>
     expect(within(card101).getByText('ดูรายละเอียด')).toBeDefined();
 
     fireEvent.click(within(card101).getByText('ดูรายละเอียด'));
-    expect(within(card101).getByText('บิลรายเดือน (พรีวิว)')).toBeDefined();
-    expect(within(card101).getByText('1,268.-')).toBeDefined();
+    expect(within(card101).getByText('ค่าส่วนกลาง')).toBeDefined();
+    expect(within(card101).getByText('200.-')).toBeDefined();
   });
 
   it('L20. N-component +N behavior', async () => {
@@ -1071,5 +1071,63 @@ describe('HORPLUS LOCAL-07 — Owner Meter List Mode UX Suite (L1 - L28)', () =>
 
     // After toggling, title flips to hide all
     expect(screen.getByTitle('ซ่อนรายละเอียดทุกห้อง')).toBeDefined();
+  });
+  // =========================================================================
+  // L33: List Mode Itemized Charge Decomposition
+  // =========================================================================
+  it('L33. List mode decomposes generic monthly utility into itemized charge rows with black text and matching icons', async () => {
+    localStorage.setItem('owner_meter_view_mode', JSON.stringify('list'));
+    
+    // Custom rate snapshot with commonFee, internetFee, parkingFee
+    const customRates = {
+      waterBillingType: 'per_unit',
+      waterRate: '18.00',
+      electricityBillingType: 'per_unit',
+      electricityRate: '7.00',
+      commonFee: '200.00',
+      commonFeeMode: 'per_room',
+      internetFee: '150.00',
+      internetFeeMode: 'per_room',
+      parkingFee: '300.00',
+      parkingFeeMode: 'per_room',
+    };
+
+    setupFetchMock(undefined, customRates);
+    renderComponent({}, {
+      rateSnapshot: customRates,
+      rooms: [
+        {
+          roomId: 'room-101',
+          tenantId: 'tenant-101',
+          tenantName: 'นายสมชาย ใจดี',
+          amountDue: '1268.00',
+          chargeComponents: [
+            { type: 'monthly_utility', label: 'บิลรายเดือน (พรีวิว)', amount: '1268.00', status: 'PREVIEW' },
+          ],
+        },
+      ],
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('meter-list-card-room-101')).toBeDefined();
+    });
+
+    const card101 = screen.getByTestId('meter-list-card-room-101');
+    const detailBtn = within(card101).getByText('ดูรายละเอียด +3');
+    fireEvent.click(detailBtn);
+
+    // Should display individual configured fees instead of generic "บิลรายเดือน"
+    expect(within(card101).getByText('ค่าส่วนกลาง')).toBeDefined();
+    expect(within(card101).getByText('200.-')).toBeDefined();
+    expect(within(card101).getByText('ค่าอินเทอร์เน็ต')).toBeDefined();
+    expect(within(card101).getByText('150.-')).toBeDefined();
+    expect(within(card101).getByText('ค่าจอดรถ')).toBeDefined();
+    expect(within(card101).getByText('300.-')).toBeDefined();
+
+    // Verify text is in standard dark/black slate without colored status overrides
+    const commonFeeLabel = within(card101).getByText('ค่าส่วนกลาง');
+    expect(commonFeeLabel.className).toContain('text-slate-800');
+    const commonFeeAmt = within(card101).getByText('200.-');
+    expect(commonFeeAmt.className).toContain('text-slate-900');
   });
 });
