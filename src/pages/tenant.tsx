@@ -607,7 +607,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
   });
 
   // Active Unpaid Bill
-  const activeUnpaidBill = tenantBills.find(b => ['pending', 'overdue', 'rejected', 'issued', 'PENDING', 'OVERDUE', 'REJECTED', 'ISSUED'].includes(b.status));
+  const activeUnpaidBill = tenantBills.find(b => ['unpaid', 'pending', 'overdue', 'rejected', 'issued', 'UNPAID', 'PENDING', 'OVERDUE', 'REJECTED', 'ISSUED'].includes(b.status));
   const activeUnpaidAmount = activeUnpaidBill ? activeUnpaidBill.totalAmount : 0;
 
   useEffect(() => {
@@ -652,7 +652,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
   };
 
   // Helper for real notification badge count
-  const unreadBills = tenantBills.filter(b => b.status === 'pending' || b.status === 'overdue' || b.status === 'rejected');
+  const unreadBills = tenantBills.filter(b => ['unpaid', 'pending', 'overdue', 'rejected', 'UNPAID', 'PENDING', 'OVERDUE', 'REJECTED'].includes(b.status));
   const activeRepairs = tenantRepairs.filter(r => r.status === 'in_progress' || r.status === 'pending');
   const urgentAnnouncements = filteredAnnouncements.filter(a => a.isUrgent || a.isPinned);
   const unreadNoticesCount = notices.filter(n => !n.isRead).length;
