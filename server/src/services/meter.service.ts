@@ -2325,10 +2325,11 @@ export class MeterService {
 
       const hasBookableGap = hasBookableGapInCycle(cycleStart, cycleEndExclusive, blockingIntervals);
 
-      const primaryMonthlyBill = roomBills.find(b => {
-        const k = (b.billKind || '').toString().trim().toUpperCase();
-        return k === 'MONTHLY_UTILITY' || k === 'LEGACY_COMBINED' || k === 'RENT';
-      }) || roomBills[0];
+      const primaryMonthlyBill =
+        roomBills.find(b => (b.billKind || '').toString().trim().toUpperCase() === 'MONTHLY_UTILITY') ||
+        roomBills.find(b => (b.billKind || '').toString().trim().toUpperCase() === 'LEGACY_COMBINED') ||
+        roomBills.find(b => (b.billKind || '').toString().trim().toUpperCase() === 'RENT') ||
+        roomBills[0];
 
       const roomBillStatus = primaryMonthlyBill ? (primaryMonthlyBill.status.toLowerCase() as 'draft' | 'unpaid' | 'paid' | 'cancelled') : 'draft';
       const isRoomBillPaid = roomBillStatus === 'paid';

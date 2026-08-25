@@ -291,12 +291,28 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
     if (backendLineItems.length > 0) {
       for (const it of backendLineItems) {
         const itemType = (it.type || '').toString().toLowerCase();
+        const desc = (it.description || '').toString().toLowerCase();
+
+        // Exclude items that already have dedicated zones on the card:
+        // Zone A: Rent
+        if (itemType === 'rent' || itemType === 'monthly_rent' || itemType === 'term_rent' || desc.includes('ค่าเช่า')) {
+          continue;
+        }
+        // Zone B: Water
+        if (itemType === 'water' || desc.includes('ค่าน้ำ')) {
+          continue;
+        }
+        // Zone C: Electricity
+        if (itemType === 'electricity' || desc.includes('ค่าไฟ')) {
+          continue;
+        }
+        // Zone D: Custom Other Fees
+        if (itemType === 'other_fee' || itemType === 'other') {
+          continue;
+        }
+
         let itemIcon = getComponentItemIcon(it.description, it.type);
-        if (itemType === 'water') {
-          itemIcon = <Droplets className="w-3.5 h-3.5 text-sky-500 shrink-0" />;
-        } else if (itemType === 'electricity') {
-          itemIcon = <Zap className="w-3.5 h-3.5 text-amber-500 shrink-0" />;
-        } else if (itemType === 'common_fee' || itemType === 'common') {
+        if (itemType === 'common_fee' || itemType === 'common') {
           itemIcon = <Building2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />;
         } else if (itemType === 'internet') {
           itemIcon = <Wifi className="w-3.5 h-3.5 text-indigo-500 shrink-0" />;
