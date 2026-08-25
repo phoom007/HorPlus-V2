@@ -118,7 +118,8 @@ export function calculateCanonicalMonthlyUtility(
     throw err;
   }
 
-  const peopleCount = Math.max(0, rawPeopleCount ?? 0);
+  const isZeroOccupants = rawPeopleCount === 0;
+  const peopleCount = Math.max(0, rawPeopleCount ?? 1);
   const peopleCountDec = toDecimal(peopleCount.toString());
 
   // 1. Water Calculation
@@ -158,7 +159,7 @@ export function calculateCanonicalMonthlyUtility(
       waterAmountStr = formatDecimal(amtDec);
       items.push({
         type: 'water',
-        description: `ค่าน้ำประปา (${prevRaw} - ${currRaw})`,
+        description: `ค่าน้ำ (${prevRaw} - ${currRaw})`,
         quantity: waterUsageStr,
         unit: 'unit',
         unitPrice: formatDecimal(waterRate),
@@ -174,25 +175,27 @@ export function calculateCanonicalMonthlyUtility(
       });
     }
   } else if (waterMode === 'per_person') {
-    const amtDec = mulDecimals(peopleCountDec, waterRate);
-    waterUsageStr = formatDecimal(peopleCountDec);
-    waterAmountStr = formatDecimal(amtDec);
-    items.push({
-      type: 'water',
-      description: `ค่าน้ำประปา (${peopleCount} คน)`,
-      quantity: waterUsageStr,
-      unit: 'person',
-      unitPrice: formatDecimal(waterRate),
-      amount: waterAmountStr,
-      metadata: { mode: 'per_person', peopleCount },
-    });
+    if (!isZeroOccupants) {
+      const amtDec = mulDecimals(peopleCountDec, waterRate);
+      waterUsageStr = formatDecimal(peopleCountDec);
+      waterAmountStr = formatDecimal(amtDec);
+      items.push({
+        type: 'water',
+        description: `ค่าน้ำ (${peopleCount} คน)`,
+        quantity: waterUsageStr,
+        unit: 'person',
+        unitPrice: formatDecimal(waterRate),
+        amount: waterAmountStr,
+        metadata: { mode: 'per_person', peopleCount },
+      });
+    }
   } else if (waterMode === 'fixed') {
-    if (!isZeroDecimal(waterRate)) {
+    if (!isZeroOccupants && !isZeroDecimal(waterRate)) {
       waterUsageStr = '1.00';
       waterAmountStr = formatDecimal(waterRate);
       items.push({
         type: 'water',
-        description: 'ค่าน้ำประปา (เหมาจ่าย)',
+        description: 'ค่าน้ำ (เหมาจ่าย)',
         quantity: '1.00',
         unit: 'room',
         unitPrice: formatDecimal(waterRate),
@@ -254,20 +257,22 @@ export function calculateCanonicalMonthlyUtility(
       });
     }
   } else if (elecMode === 'per_person') {
-    const amtDec = mulDecimals(peopleCountDec, elecRate);
-    elecUsageStr = formatDecimal(peopleCountDec);
-    elecAmountStr = formatDecimal(amtDec);
-    items.push({
-      type: 'electricity',
-      description: `ค่าไฟฟ้า (${peopleCount} คน)`,
-      quantity: elecUsageStr,
-      unit: 'person',
-      unitPrice: formatDecimal(elecRate),
-      amount: elecAmountStr,
-      metadata: { mode: 'per_person', peopleCount },
-    });
+    if (!isZeroOccupants) {
+      const amtDec = mulDecimals(peopleCountDec, elecRate);
+      elecUsageStr = formatDecimal(peopleCountDec);
+      elecAmountStr = formatDecimal(amtDec);
+      items.push({
+        type: 'electricity',
+        description: `ค่าไฟฟ้า (${peopleCount} คน)`,
+        quantity: elecUsageStr,
+        unit: 'person',
+        unitPrice: formatDecimal(elecRate),
+        amount: elecAmountStr,
+        metadata: { mode: 'per_person', peopleCount },
+      });
+    }
   } else if (elecMode === 'fixed') {
-    if (!isZeroDecimal(elecRate)) {
+    if (!isZeroOccupants && !isZeroDecimal(elecRate)) {
       elecUsageStr = '1.00';
       elecAmountStr = formatDecimal(elecRate);
       items.push({
@@ -287,7 +292,7 @@ export function calculateCanonicalMonthlyUtility(
   const commonFee = toDecimal(rateSnapshot.commonFee ?? '0.00');
   let commonFeeStr = '0.00';
 
-  if (!isZeroDecimal(commonFee) && rawCommonMode !== 'free' && rawCommonMode !== 'none') {
+  if (!isZeroOccupants && !isZeroDecimal(commonFee) && rawCommonMode !== 'free' && rawCommonMode !== 'none') {
     const isPerPerson = rawCommonMode === 'person' || rawCommonMode === 'per_person';
     const q = isPerPerson ? peopleCountDec : toDecimal('1.00');
     const amt = isPerPerson ? mulDecimals(peopleCountDec, commonFee) : commonFee;
@@ -308,7 +313,7 @@ export function calculateCanonicalMonthlyUtility(
   const internetFee = toDecimal(rateSnapshot.internetFee ?? '0.00');
   let internetFeeStr = '0.00';
 
-  if (!isZeroDecimal(internetFee) && rawInternetMode !== 'free' && rawInternetMode !== 'none') {
+  if (!isZeroOccupants && !isZeroDecimal(internetFee) && rawInternetMode !== 'free' && rawInternetMode !== 'none') {
     const isPerPerson = rawInternetMode === 'person' || rawInternetMode === 'per_person';
     const q = isPerPerson ? peopleCountDec : toDecimal('1.00');
     const amt = isPerPerson ? mulDecimals(peopleCountDec, internetFee) : internetFee;
@@ -329,7 +334,7 @@ export function calculateCanonicalMonthlyUtility(
   const parkingFee = toDecimal(rateSnapshot.parkingFee ?? '0.00');
   let parkingFeeStr = '0.00';
 
-  if (!isZeroDecimal(parkingFee) && rawParkingMode !== 'free' && rawParkingMode !== 'none') {
+  if (!isZeroOccupants && !isZeroDecimal(parkingFee) && rawParkingMode !== 'free' && rawParkingMode !== 'none') {
     const isPerPerson = rawParkingMode === 'person' || rawParkingMode === 'per_person';
     const isPerVehicle = rawParkingMode === 'vehicle' || rawParkingMode === 'per_vehicle';
 

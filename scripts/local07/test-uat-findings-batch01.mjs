@@ -79,13 +79,13 @@ async function runBatch01Verification() {
           try {
             const data = await res.json();
             capturedProvDormIdA = data?.data?.provisionalDormitoryId || data?.provisionalDormitoryId;
-          } catch {}
+          } catch { }
         }
         if (res.url().includes('/subscription/quote')) {
           try {
             const data = await res.json();
             capturedQuoteIntentIdA = data?.data?.intentId;
-          } catch {}
+          } catch { }
         }
       }
     });
@@ -103,7 +103,7 @@ async function runBatch01Verification() {
     // Click profile avatar button and verify it does NOT navigate to settings
     const avatarBtns = page.locator('button[title*="ลงทะเบียน"]');
     if (await avatarBtns.count() > 0) {
-      await avatarBtns.first().click({ force: true }).catch(() => {});
+      await avatarBtns.first().click({ force: true }).catch(() => { });
       await page.waitForTimeout(300);
     }
     const staysOnRegisterUrl = page.url().includes('/owner/register');
@@ -141,7 +141,7 @@ async function runBatch01Verification() {
 
     // Step 3: Progressive decimal typing simulation on Water Rate & Electric Rate
     console.log('  Testing keystroke-by-keystroke decimal input for waterRate (0 -> 0. -> 0.5 -> 0.50):');
-    const waterRateInput = page.locator('label:has-text("ค่าน้ำประปา")').locator('xpath=../..').locator('input').first();
+    const waterRateInput = page.locator('label:has-text("ค่าน้ำ")').locator('xpath=../..').locator('input').first();
     await waterRateInput.click();
     await waterRateInput.fill('');
 
@@ -327,7 +327,7 @@ async function runBatch01Verification() {
     await page.locator('input[type="checkbox"]').first().check();
     await page.locator('button:has-text("Facebook")').first().click();
     await page.locator('button:has-text("ยอมรับเงื่อนไข")').click();
-    await page.waitForURL('**/owner/**', { timeout: 10000 }).catch(() => {});
+    await page.waitForURL('**/owner/**', { timeout: 10000 }).catch(() => { });
     await page.waitForTimeout(2000);
     console.log('  Dorm A Onboarding finalized successfully.');
 
@@ -341,7 +341,7 @@ async function runBatch01Verification() {
     const hasSubReferralCard = await page.locator('text="โปรแกรมแนะนำเพื่อน (Referral Program)"').isVisible();
     const hasSubReferralCode = await page.locator('text="รหัสคำเชิญของคุณ:"').isVisible();
     const referralCodeElem = page.locator('[data-testid="referral-code-badge"]').first();
-    await referralCodeElem.waitFor({ state: 'visible', timeout: 10000 }).catch(() => {});
+    await referralCodeElem.waitFor({ state: 'visible', timeout: 10000 }).catch(() => { });
     const referralCode = (await referralCodeElem.innerText()).trim();
 
     console.log(`  Subscription page referral program card visible: ${hasSubReferralCard ? '✅ YES' : '❌ NO'}`);
@@ -393,13 +393,13 @@ async function runBatch01Verification() {
           try {
             const data = await res.json();
             capturedProvDormIdB = data?.data?.provisionalDormitoryId || data?.provisionalDormitoryId;
-          } catch {}
+          } catch { }
         }
         if (url.includes('/subscription/quote')) {
           try {
             const data = await res.json();
             capturedQuoteIntentIdB = data?.data?.intentId;
-          } catch {}
+          } catch { }
         }
         if (page.url().includes('/owner/dormitories/new')) {
           if (url.includes('/properties/rooms') || url.includes('/tenants') || url.includes('/bills') || url.includes('/notifications')) {
@@ -422,7 +422,7 @@ async function runBatch01Verification() {
 
     const avatarBtnsB = page.locator('button[title*="ลงทะเบียน"]');
     if (await avatarBtnsB.count() > 0) {
-      await avatarBtnsB.first().click({ force: true }).catch(() => {});
+      await avatarBtnsB.first().click({ force: true }).catch(() => { });
       await page.waitForTimeout(300);
     }
     const staysOnAddDormUrl = page.url().includes('/owner/dormitories/new');
@@ -532,8 +532,8 @@ async function runBatch01Verification() {
     await page.locator('input[type="checkbox"]').first().check();
     await page.locator('button:has-text("Facebook")').first().click();
     await page.locator('button:has-text("ยอมรับเงื่อนไข")').click();
-    await page.waitForURL('**/owner/dashboard', { timeout: 15000 }).catch(() => {});
-    await page.waitForLoadState('networkidle').catch(() => {});
+    await page.waitForURL('**/owner/dashboard', { timeout: 15000 }).catch(() => { });
+    await page.waitForLoadState('networkidle').catch(() => { });
     await page.waitForTimeout(2000);
 
     // Verify operational menus are restored after finalization

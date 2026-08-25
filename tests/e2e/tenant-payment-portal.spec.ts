@@ -274,7 +274,7 @@ test.describe.serial('Tenant Web Payment & Receipt Portal E2E Suite', () => {
           items: {
             create: [
               { dormitoryId: ownerDormitoryId, type: 'RENT', description: 'ค่าเช่าห้องประจำเดือน', amount: 5000, quantity: 1 },
-              { dormitoryId: ownerDormitoryId, type: 'WATER', description: 'ค่าน้ำประปา', amount: 150, quantity: 1 },
+              { dormitoryId: ownerDormitoryId, type: 'WATER', description: 'ค่าน้ำ', amount: 150, quantity: 1 },
               { dormitoryId: ownerDormitoryId, type: 'ELECTRIC', description: 'ค่าไฟฟ้า', amount: 150, quantity: 1 },
             ],
           },
@@ -396,13 +396,13 @@ test.describe.serial('Tenant Web Payment & Receipt Portal E2E Suite', () => {
         await tx.building.deleteMany({ where: { dormitoryId: ownerDormitoryId } });
         await tx.dormitoryMember.deleteMany({ where: { dormitoryId: ownerDormitoryId } });
         await tx.dormitory.delete({ where: { id: ownerDormitoryId } });
-      }).catch(() => {});
+      }).catch(() => { });
     }
 
     const cleanupUsers = [ownerUserId, tenantAUserId, tenantBUserId, tenantCUserId, tenantDUserId].filter(Boolean);
     for (const uid of cleanupUsers) {
-      await prisma.session.deleteMany({ where: { userId: uid } }).catch(() => {});
-      await prisma.user.delete({ where: { id: uid } }).catch(() => {});
+      await prisma.session.deleteMany({ where: { userId: uid } }).catch(() => { });
+      await prisma.user.delete({ where: { id: uid } }).catch(() => { });
     }
   });
 

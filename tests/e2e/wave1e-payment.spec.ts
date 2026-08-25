@@ -434,7 +434,7 @@ test.describe('Wave 1E - Real Payment & Receipt Integration (Fully Unmocked)', (
         items: {
           create: [
             { id: crypto.randomUUID(), dormitoryId: dormId, description: 'ค่าเช่าห้อง', amount: 4500.0, unitPrice: 4500.0, quantity: 1.0, type: 'RENT' },
-            { id: crypto.randomUUID(), dormitoryId: dormId, description: 'ค่าน้ำประปา', amount: 150.0, unitPrice: 150.0, quantity: 1.0, type: 'WATER' },
+            { id: crypto.randomUUID(), dormitoryId: dormId, description: 'ค่าน้ำ', amount: 150.0, unitPrice: 150.0, quantity: 1.0, type: 'WATER' },
             { id: crypto.randomUUID(), dormitoryId: dormId, description: 'ค่าไฟฟ้า', amount: 200.0, unitPrice: 200.0, quantity: 1.0, type: 'ELECTRICITY' },
           ],
         },
@@ -551,7 +551,7 @@ test.describe('Wave 1E - Real Payment & Receipt Integration (Fully Unmocked)', (
     try {
       if (fs.existsSync(jpegFilePath)) fs.unlinkSync(jpegFilePath);
       if (fs.existsSync(pngFilePath)) fs.unlinkSync(pngFilePath);
-    } catch {}
+    } catch { }
 
     // Cleanup DB records
     try {
@@ -574,7 +574,7 @@ test.describe('Wave 1E - Real Payment & Receipt Integration (Fully Unmocked)', (
       await prisma.user.deleteMany({ where: { id: { in: userIds } } });
       await prisma.role.deleteMany({ where: { dormitoryId: { in: dormIds } } });
       await prisma.dormitory.deleteMany({ where: { id: { in: dormIds } } });
-    } catch {}
+    } catch { }
 
     await prisma.$disconnect();
   });
@@ -662,10 +662,10 @@ test.describe('Wave 1E - Real Payment & Receipt Integration (Fully Unmocked)', (
           JSON.stringify({
             sessionId: `sess_${userId}`,
             userType: r.toLowerCase(),
-            user: { 
-              id: userId, 
-              name: userName, 
-              roleId: `role-${r.toLowerCase()}`, 
+            user: {
+              id: userId,
+              name: userName,
+              roleId: `role-${r.toLowerCase()}`,
               dormitoryId: dId,
               memberships: [{ dormitoryId: dId, roleCode: r, status: 'active' }]
             },
@@ -835,7 +835,7 @@ test.describe('Wave 1E - Real Payment & Receipt Integration (Fully Unmocked)', (
     expect(payment!.method).toBe('BANK_TRANSFER');
     expect(payment!.amount.toNumber()).toBe(4850.0);
     expect(payment!.fileHash).toBe(expectedHash);
-    
+
     // Find the consumed intent manually
     const intent = await prisma.paymentUploadIntent.findFirst({
       where: { billId: billRecord1.id, status: 'CONSUMED' }
@@ -897,7 +897,7 @@ test.describe('Wave 1E - Real Payment & Receipt Integration (Fully Unmocked)', (
     // --- STEP 5: Verify Authoritative Receipt HTML view ---
     const cookies = await page.context().cookies();
     const sessionCookie = cookies.find(c => c.name === 'horplus_session')?.value;
-    
+
     const htmlResponse = await page.request.get(`/api/v1/receipts/${receipt.id}/html`, {
       headers: {
         Cookie: `horplus_session=${sessionCookie}`,
@@ -913,7 +913,7 @@ test.describe('Wave 1E - Real Payment & Receipt Integration (Fully Unmocked)', (
     // --- STEP 6: Verify Rejection and Resubmission on Bill 2 ---
     // First, submit a payment for Bill 2 via backend API directly to simulate an earlier submission
     const t1Session = await loginAs(page, tenantUser, 'TENANT');
-    
+
     // Simulate first submission
     const intentRes2 = await page.request.post('/api/v1/payments/slip/intent', {
       headers: {
@@ -1047,7 +1047,7 @@ test.describe('Wave 1E - Real Payment & Receipt Integration (Fully Unmocked)', (
     expect(bill2Payments.length).toBe(2);
     expect(bill2Payments[0].status).toBe('PENDING'); // The new attempt
     expect(bill2Payments[1].status).toBe('REJECTED'); // The rejected historical payment remains preserved
-    
+
     // Only one active review attempt exists
     const activeReviews = bill2Payments.filter(p => p.status === 'PENDING' || p.status === 'UNDER_REVIEW');
     expect(activeReviews.length).toBe(1);
@@ -1055,7 +1055,7 @@ test.describe('Wave 1E - Real Payment & Receipt Integration (Fully Unmocked)', (
     // --- STEP 7: Test Duplicate Evidence Prevention ---
     // 1. Request a real upload intent through /api/v1/payments/slip/intent
     const duplicateBuffer = firstSlipBytes;
-    
+
     const intentRes3 = await page.request.post('/api/v1/payments/slip/intent', {
       headers: {
         Cookie: `horplus_session=${t1Session.sessionCookie}`,

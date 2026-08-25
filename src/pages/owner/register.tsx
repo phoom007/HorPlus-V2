@@ -381,16 +381,16 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
         if (draft.formData) {
           const restoredBuildings = Array.isArray(draft.formData.buildings)
             ? draft.formData.buildings.map((b: any) => {
-                const rawPrefix = (typeof b.roomPrefix === 'string' ? b.roomPrefix : '').trim();
-                const pfx = rawPrefix.toUpperCase();
-                return {
-                  ...b,
-                  roomPrefix: pfx,
-                  name: (b.name && b.name.trim())
-                    ? (rawPrefix ? b.name.replace(new RegExp(`(อาคาร\\s*)${rawPrefix}`, 'i'), `$1${pfx}`) : b.name)
-                    : (pfx ? `อาคาร ${pfx}` : 'อาคาร '),
-                };
-              })
+              const rawPrefix = (typeof b.roomPrefix === 'string' ? b.roomPrefix : '').trim();
+              const pfx = rawPrefix.toUpperCase();
+              return {
+                ...b,
+                roomPrefix: pfx,
+                name: (b.name && b.name.trim())
+                  ? (rawPrefix ? b.name.replace(new RegExp(`(อาคาร\\s*)${rawPrefix}`, 'i'), `$1${pfx}`) : b.name)
+                  : (pfx ? `อาคาร ${pfx}` : 'อาคาร '),
+              };
+            })
             : undefined;
 
           setFormData(prev => ({
@@ -937,7 +937,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
     if (stepNum === 3) {
       // Check utilities rates
       if (isNaN(formData.utilities.waterRate) || formData.utilities.waterRate < 0) {
-        return { valid: false, error: 'กรุณากรอก "ค่าน้ำประปา" ให้ถูกต้อง (ต้องเป็นตัวเลข >= 0)' };
+        return { valid: false, error: 'กรุณากรอก "ค่าน้ำ" ให้ถูกต้อง (ต้องเป็นตัวเลข >= 0)' };
       }
       if (isNaN(formData.utilities.electricRate) || formData.utilities.electricRate < 0) {
         return { valid: false, error: 'กรุณากรอก "ค่าไฟฟ้า" ให้ถูกต้อง (ต้องเป็นตัวเลข >= 0)' };
@@ -1500,9 +1500,8 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
             return (
               <div
                 data-testid="step2-total-rooms-indicator"
-                className={`p-3.5 rounded-2xl border flex items-center justify-between flex-wrap gap-2 ${
-                  isOverLimit ? 'bg-rose-50 border-rose-200 text-rose-800' : 'bg-blue-50/70 border-blue-100 text-blue-900'
-                }`}
+                className={`p-3.5 rounded-2xl border flex items-center justify-between flex-wrap gap-2 ${isOverLimit ? 'bg-rose-50 border-rose-200 text-rose-800' : 'bg-blue-50/70 border-blue-100 text-blue-900'
+                  }`}
               >
                 <div className="flex items-center gap-2">
                   <Building2 className={`w-4 h-4 ${isOverLimit ? 'text-rose-600' : 'text-blue-600'}`} />
@@ -1952,7 +1951,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                 {/* Water */}
                 <div className="bg-white p-3.5 rounded-2xl border border-slate-200 space-y-2">
                   <label className="block font-black text-slate-800 flex items-center gap-1.5">
-                    <Droplet className="w-4 h-4 text-blue-500" /> ค่าน้ำประปา
+                    <Droplet className="w-4 h-4 text-blue-500" /> ค่าน้ำ
                   </label>
                   <div>
                     <span className="text-[10px] text-slate-400 font-bold block mb-1">อัตรา (บาท)</span>
@@ -2866,11 +2865,10 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                   </h4>
                   <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
                     <span className="text-[11px] sm:text-xs text-slate-500 font-bold">LINE ID:</span>
-                    <span className={`text-[11px] sm:text-xs font-black px-2 py-0.5 rounded-md ${
-                      formData.lineOA.isConnected
+                    <span className={`text-[11px] sm:text-xs font-black px-2 py-0.5 rounded-md ${formData.lineOA.isConnected
                         ? 'text-emerald-800 bg-emerald-100/90'
                         : 'text-slate-500 bg-slate-100'
-                    }`}>
+                      }`}>
                       {formData.lineOA.isConnected
                         ? (formData.lineOA.lineOaId || formData.lineOA.oaName || 'เชื่อมต่อแล้ว')
                         : 'ยังไม่ได้ตรวจสอบ'}
@@ -2880,14 +2878,12 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
               </div>
 
               <div className="flex items-center gap-2 shrink-0 self-start sm:self-auto">
-                <span className={`px-3 py-1 rounded-full text-xs font-black flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
-                  formData.lineOA.isConnected
+                <span className={`px-3 py-1 rounded-full text-xs font-black flex items-center gap-1.5 whitespace-nowrap shrink-0 ${formData.lineOA.isConnected
                     ? 'bg-emerald-100 text-emerald-700 border border-emerald-200'
                     : 'bg-slate-100 text-slate-600 border border-slate-200'
-                }`}>
-                  <span className={`w-2 h-2 rounded-full shrink-0 ${
-                    formData.lineOA.isConnected ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'
-                  }`} />
+                  }`}>
+                  <span className={`w-2 h-2 rounded-full shrink-0 ${formData.lineOA.isConnected ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'
+                    }`} />
                   {formData.lineOA.isConnected ? 'เชื่อมต่อสำเร็จ' : 'ยังไม่ได้ตรวจสอบ'}
                 </span>
               </div>

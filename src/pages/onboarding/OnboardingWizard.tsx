@@ -200,13 +200,12 @@ export const OnboardingWizard: React.FC = () => {
                     if (s.num < currentStep) navigate(`/onboarding/${s.key}`);
                   }}
                   disabled={s.num > currentStep}
-                  className={`h-2 rounded-full transition-all ${
-                    s.num === currentStep
+                  className={`h-2 rounded-full transition-all ${s.num === currentStep
                       ? 'bg-indigo-500'
                       : s.num < currentStep
-                      ? 'bg-emerald-500 cursor-pointer'
-                      : 'bg-slate-800'
-                  }`}
+                        ? 'bg-emerald-500 cursor-pointer'
+                        : 'bg-slate-800'
+                    }`}
                   title={`${s.num}. ${s.label}`}
                 />
               ))}
@@ -351,7 +350,7 @@ export const OnboardingWizard: React.FC = () => {
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 text-xs font-semibold">
               <div className="space-y-1.5">
-                <label className="text-slate-700 font-bold">อัตราค่าน้ำประปา (บาท/ยูนิต)</label>
+                <label className="text-slate-700 font-bold">อัตราค่าน้ำ (บาท/ยูนิต)</label>
                 <input
                   type="number"
                   value={draft.waterRate}
@@ -603,11 +602,10 @@ export const OnboardingWizard: React.FC = () => {
                 <div
                   key={p.id}
                   onClick={() => updateDraft({ selectedPlan: p.id })}
-                  className={`p-4 rounded-2xl border cursor-pointer transition-all ${
-                    draft.selectedPlan === p.id
+                  className={`p-4 rounded-2xl border cursor-pointer transition-all ${draft.selectedPlan === p.id
                       ? 'border-indigo-600 bg-indigo-50/70 ring-2 ring-indigo-500/20'
                       : 'border-slate-200 hover:border-slate-300 bg-slate-50/50'
-                  }`}
+                    }`}
                 >
                   <div className="flex items-center justify-between mb-1">
                     <h4 className="font-black text-slate-900">{p.name}</h4>

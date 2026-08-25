@@ -43,10 +43,12 @@ import {
 } from '../../components/GlobalComponents';
 import {
   calculateMeterUsageUnits,
+  calculateMeterRowPreview,
   formatMoneyDisplay,
 } from '../../utils/meterBillingCalculator';
 import {
   formatShortThaiBuddhistDate,
+  normalizeBangkokDate,
   isCycleInRollingThreeMonthWindow,
 } from '../../utils/calendarDate';
 
@@ -121,6 +123,7 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
   room,
   roomCtx,
   tenant,
+  contracts = [],
   rateSnapshot,
   isWaterUnit,
   isElecUnit,
@@ -157,10 +160,11 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
 
   const effectiveTenantId = roomCtx ? roomCtx.tenantId : tenant?.id;
   const effectiveTenantName = roomCtx ? roomCtx.tenantName : tenant?.name;
-  const isDailyContext = roomCtx?.billingSource === 'DAILY_STAY' || Boolean(roomCtx?.isDailyUnpaid);
+  const isDailyContext = roomCtx?.billingSource === 'DAILY_STAY' || Boolean(roomCtx?.isDailyUnpaid) || Boolean(roomCtx?.isDailyFinancialTail);
   const isDailyOverdue = Boolean(roomCtx?.isDailyOverdue || roomCtx?.isDailyFinancialTail);
   const isDailyRentPaid = Boolean(roomCtx?.isDailyRentPaid);
-  const isRowPaid = !isDailyContext && (row.isPaid || row.billStatus === 'paid');
+  const effectiveBillStatus = (roomCtx?.billStatus as string) || row.billStatus;
+  const isRowPaid = !isDailyContext && (row.isPaid || effectiveBillStatus === 'paid' || Boolean(roomCtx?.isPaid));
 
   const hasElecBaseline = row.elecPrev !== '' && row.elecPrev !== null && row.elecPrev !== undefined;
   const isElecDirectEdit = isFirstCycle || !hasElecBaseline;
@@ -168,8 +172,25 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
   const hasWaterBaseline = row.waterPrev !== '' && row.waterPrev !== null && row.waterPrev !== undefined;
   const isWaterDirectEdit = isFirstCycle || !hasWaterBaseline;
 
+  const isOccupiedOrActive = Boolean(
+    roomCtx?.tenantId ||
+    roomCtx?.billingSource === 'CONTRACT' ||
+    roomCtx?.billingSource === 'PROVISIONAL_MONTHLY' ||
+    roomCtx?.billingSource === 'PROVISIONAL_TERM' ||
+    roomCtx?.billingSource === 'DAILY_STAY' ||
+    roomCtx?.isDailyUnpaid ||
+    roomCtx?.isFutureReservation
+  );
+
   const breakdown = getOwnerFinancialBreakdown(roomCtx);
-  const amountDue = breakdown.formattedAmount;
+  const livePreview = calculateMeterRowPreview(roomCtx, rateSnapshot, row);
+  const hasRentInBreakdown = breakdown.components.some((c: any) => c.type === 'rent' || c.type === 'legacy_combined' || (c.label && (c.label.includes('ค่าเช่า') || c.label.includes('รวมค่าเช่า'))));
+  const rentAmountNum = Number(roomCtx?.rentAmount ?? room?.monthlyRent ?? 0);
+  const amountDue = (breakdown.operationalAmount > 0)
+    ? (hasRentInBreakdown || isDailyRentPaid || rentAmountNum === 0
+      ? breakdown.formattedAmount
+      : formatMoneyDisplay(breakdown.operationalAmount + rentAmountNum))
+    : (isOccupiedOrActive && Number(livePreview.totalAmount) > 0 ? livePreview.formattedTotal : breakdown.formattedAmount);
   const chargeComponents = breakdown.components;
 
   const isFuture = Boolean(roomCtx?.isFutureReservation);
@@ -180,6 +201,16 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
   const hasBookableGap = roomCtx?.hasBookableGap ?? true;
   const historicalDailyCount = roomCtx?.historicalDailyCount || 0;
   const dailyCheckOutDate = roomCtx?.dailyCheckOutDate || null;
+  const checkInDate = roomCtx?.checkInDate || null;
+  const contractEndDate = roomCtx?.contractEndDate || (() => {
+    const activeContract = (contracts || []).find((c: any) => c.roomId === row.roomId && ['active', 'expiring_soon', 'pending_signature', 'waiting_extension', 'checking_out'].includes(c.status));
+    if (!activeContract?.endDate) return null;
+    const endStr = normalizeBangkokDate(activeContract.endDate);
+    if (activeCycleCode && endStr.slice(0, 7) === activeCycleCode) {
+      return endStr;
+    }
+    return null;
+  })();
 
   // Rate calculations
   const rates = rateSnapshot || roomCtx?.rateSnapshot;
@@ -205,9 +236,37 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
   }
 
   // Rent type & amount
-  const rentalTypeLabel = roomCtx?.billingSource === 'DAILY_STAY' ? 'วัน' : roomCtx?.billingSource === 'TERM_CONTRACT' ? 'เทอม' : 'เดือน';
-  const rentAmountNum = Number(roomCtx?.rentAmount ?? room?.monthlyRent ?? 0);
-  const rentDisplay = rentAmountNum > 0 ? `${rentAmountNum.toLocaleString('th-TH')} .-` : '-';
+  const isDaily = isDailyContext || roomCtx?.billingSource === 'DAILY_STAY';
+  const isTerm = roomCtx?.billingSource === 'TERM_CONTRACT' || roomCtx?.billingSource === 'PROVISIONAL_TERM';
+  const rentalTypeLabel = isDaily ? 'วัน' : isTerm ? 'เทอม' : 'เดือน';
+
+  const rawRentAmt = Number(roomCtx?.rentAmount ?? row.rentAmount ?? 0);
+  const dailyRentAmtFromComp = isDaily ? Number(chargeComponents.find((c: any) => c.type === 'rent' || (c.label && c.label.includes('ค่าเช่า')))?.amount ?? 0) : 0;
+  const effectiveRentAmt = rawRentAmt > 0 ? rawRentAmt : dailyRentAmtFromComp;
+
+  const hasTenantOrActive = Boolean(
+    effectiveTenantId ||
+    isDailyContext ||
+    roomCtx?.billingSource === 'CONTRACT' ||
+    roomCtx?.billingSource === 'PROVISIONAL_MONTHLY' ||
+    roomCtx?.billingSource === 'PROVISIONAL_TERM' ||
+    roomCtx?.billingSource === 'DAILY_STAY'
+  );
+
+  const rentDisplay = (effectiveRentAmt > 0 || hasTenantOrActive)
+    ? (effectiveRentAmt > 0 ? `${effectiveRentAmt.toLocaleString('th-TH')} .-` : (hasTenantOrActive ? '0 .-' : '-'))
+    : '-';
+
+  // Rent status color
+  const rentComp = chargeComponents.find((c: any) => c.type === 'rent' || (c.label && c.label.includes('ค่าเช่า')));
+  const rentStatus = rentComp?.status || (isDailyRentPaid || isRowPaid ? 'PAID' : (row.billStatus !== 'draft' && row.billStatus !== 'cancelled' ? 'UNPAID' : 'PREVIEW'));
+
+  let rentColorClass = 'text-slate-600 font-semibold'; // PREVIEW / DRAFT / ยังไม่ออกบิล (เทา)
+  if (rentStatus === 'PAID') {
+    rentColorClass = 'text-emerald-700 font-bold'; // PAID / ชำระแล้ว (เขียว)
+  } else if (rentStatus === 'UNPAID') {
+    rentColorClass = 'text-amber-700 font-bold'; // UNPAID / รอชำระเงิน (ส้ม)
+  }
 
   const otherFeesCount = (row.otherFees || []).length;
 
@@ -220,39 +279,44 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
       type: string;
       icon: React.ReactNode;
       errorMessage?: string;
+      status?: string;
     }> = [];
 
     const hasGenericMonthlyUtility = chargeComponents.some(
       (c: any) => c.type === 'monthly_utility' || (c.label && c.label.includes('บิลรายเดือน'))
     );
 
+    const utilityStatus = isRowPaid || row.billStatus === 'paid' ? 'PAID' : (row.billStatus !== 'draft' && row.billStatus !== 'cancelled' ? 'UNPAID' : 'PREVIEW');
+
     if (hasGenericMonthlyUtility && rates) {
-      // 1. 💧 ค่าน้ำประปา: กรณีคิดแบบเหมาจ่าย (บาท/ห้อง) หรือ คิดตามจำนวนคน (บาท/คน)
-      if (!isWaterUnit && rates.waterBillingType && rates.waterBillingType !== 'none') {
+      // 1. 💧 ค่าน้ำ: กรณีคิดแบบเหมาจ่าย (บาท/ห้อง) หรือ คิดตามจำนวนคน (บาท/คน)
+      if (!isWaterUnit && rates.waterBillingType && rates.waterBillingType !== 'none' && peopleCountVal > 0) {
         const wMode = rates.waterBillingType;
         const wRate = Number(rates.waterRate || 0);
         if (wMode === 'per_person' && wRate > 0) {
           const amt = peopleCountVal * wRate;
           items.push({
             id: 'item-water',
-            label: `ค่าน้ำประปา (${peopleCountVal} คน)`,
+            label: `ค่าน้ำ (${peopleCountVal} คน)`,
             amount: amt,
             type: 'water',
             icon: <Droplets className="w-3.5 h-3.5 text-sky-500 shrink-0" />,
+            status: utilityStatus,
           });
         } else if ((wMode === 'fixed' || wMode === 'per_room' || wMode === 'fixed_per_room') && wRate > 0) {
           items.push({
             id: 'item-water',
-            label: 'ค่าน้ำประปา (เหมาจ่าย)',
+            label: 'ค่าน้ำ (เหมาจ่าย)',
             amount: wRate,
             type: 'water',
             icon: <Droplets className="w-3.5 h-3.5 text-sky-500 shrink-0" />,
+            status: utilityStatus,
           });
         }
       }
 
       // 2. ⚡ ค่าไฟฟ้า: กรณีคิดแบบเหมาจ่าย (บาท/ห้อง) หรือ คิดตามจำนวนคน (บาท/คน)
-      if (!isElecUnit && rates.electricityBillingType && rates.electricityBillingType !== 'none') {
+      if (!isElecUnit && rates.electricityBillingType && rates.electricityBillingType !== 'none' && peopleCountVal > 0) {
         const eMode = rates.electricityBillingType;
         const eRate = Number(rates.electricityRate || 0);
         if (eMode === 'per_person' && eRate > 0) {
@@ -263,6 +327,7 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
             amount: amt,
             type: 'electricity',
             icon: <Zap className="w-3.5 h-3.5 text-amber-500 shrink-0" />,
+            status: utilityStatus,
           });
         } else if ((eMode === 'fixed' || eMode === 'per_room' || eMode === 'fixed_per_room') && eRate > 0) {
           items.push({
@@ -271,12 +336,13 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
             amount: eRate,
             type: 'electricity',
             icon: <Zap className="w-3.5 h-3.5 text-amber-500 shrink-0" />,
+            status: utilityStatus,
           });
         }
       }
 
       // 3. 🏢 ค่าส่วนกลาง: แสดงไอคอนและยอดตามที่ตั้งค่า
-      if (rates.commonFeeMode && rates.commonFeeMode !== 'free' && rates.commonFeeMode !== 'none') {
+      if (rates.commonFeeMode && rates.commonFeeMode !== 'free' && rates.commonFeeMode !== 'none' && peopleCountVal > 0) {
         const cMode = rates.commonFeeMode;
         const cFee = Number(rates.commonFee || 0);
         if (cFee > 0) {
@@ -287,12 +353,13 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
             amount: amt,
             type: 'common_fee',
             icon: <Building2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />,
+            status: utilityStatus,
           });
         }
       }
 
       // 4. 📶 ค่าอินเทอร์เน็ต: แสดงไอคอน WiFi และยอดตามที่ตั้งค่า
-      if (rates.internetFeeMode && rates.internetFeeMode !== 'free' && rates.internetFeeMode !== 'none') {
+      if (rates.internetFeeMode && rates.internetFeeMode !== 'free' && rates.internetFeeMode !== 'none' && peopleCountVal > 0) {
         const iMode = rates.internetFeeMode;
         const iFee = Number(rates.internetFee || 0);
         if (iFee > 0) {
@@ -303,12 +370,13 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
             amount: amt,
             type: 'internet',
             icon: <Wifi className="w-3.5 h-3.5 text-indigo-500 shrink-0" />,
+            status: utilityStatus,
           });
         }
       }
 
       // 5. 🚗 ค่าจอดรถ: แสดงไอคอนรถยนต์และยอดตามที่ตั้งค่า
-      if (rates.parkingFeeMode && rates.parkingFeeMode !== 'free' && rates.parkingFeeMode !== 'none') {
+      if (rates.parkingFeeMode && rates.parkingFeeMode !== 'free' && rates.parkingFeeMode !== 'none' && peopleCountVal > 0) {
         const pMode = rates.parkingFeeMode;
         const pFee = Number(rates.parkingFee || 0);
         if (pFee > 0) {
@@ -328,6 +396,7 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
             amount: amt,
             type: 'parking',
             icon: <Car className="w-3.5 h-3.5 text-purple-500 shrink-0" />,
+            status: utilityStatus,
           });
         }
       }
@@ -341,6 +410,7 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
           amount: overdueAmt,
           type: 'late_fee',
           icon: <Clock className="w-3.5 h-3.5 text-rose-500 shrink-0" />,
+          status: 'OVERDUE',
         });
       }
 
@@ -351,6 +421,7 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
           c.type !== 'rent' &&
           (!c.label || (!c.label.includes('บิลรายเดือน') && !c.label.includes('ค่าเช่า')))
         ) {
+          const compStatus = c.status || (isDailyContext && (c.type === 'deposit' || c.label?.includes('ค่าประกัน')) ? (roomCtx?.isDailyDepositPaidInDisplayedPeriod ? 'PAID' : (roomCtx?.showDailyDepositLine ? 'UNPAID' : (isRowPaid ? 'PAID' : 'PREVIEW'))) : (isRowPaid || row.billStatus === 'paid' ? 'PAID' : (row.billStatus !== 'draft' ? 'UNPAID' : 'PREVIEW')));
           items.push({
             id: `item-comp-${c.label}`,
             label: c.label,
@@ -358,6 +429,7 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
             type: c.type || 'other',
             icon: getComponentItemIcon(c.label, c.type),
             errorMessage: c.errorMessage,
+            status: compStatus,
           });
         }
       }
@@ -369,6 +441,7 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
             c.type !== 'rent' &&
             (!c.label || !c.label.includes('ค่าเช่า'))
           ) {
+            const compStatus = c.status || (isDailyContext && (c.type === 'deposit' || c.label?.includes('ค่าประกัน')) ? (roomCtx?.isDailyDepositPaidInDisplayedPeriod ? 'PAID' : (roomCtx?.showDailyDepositLine ? 'UNPAID' : (isRowPaid ? 'PAID' : 'PREVIEW'))) : (isRowPaid || row.billStatus === 'paid' ? 'PAID' : (row.billStatus !== 'draft' ? 'UNPAID' : 'PREVIEW')));
             items.push({
               id: `item-comp-${c.label}`,
               label: c.label,
@@ -376,6 +449,7 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
               type: c.type || 'other',
               icon: getComponentItemIcon(c.label, c.type),
               errorMessage: c.errorMessage,
+              status: compStatus,
             });
           }
         }
@@ -387,6 +461,7 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
           c.type !== 'rent' &&
           (!c.label || !c.label.includes('ค่าเช่า'))
         ) {
+          const compStatus = c.status || (isDailyContext && (c.type === 'deposit' || c.label?.includes('ค่าประกัน')) ? (roomCtx?.isDailyDepositPaidInDisplayedPeriod ? 'PAID' : (roomCtx?.showDailyDepositLine ? 'UNPAID' : (isRowPaid ? 'PAID' : 'PREVIEW'))) : (isRowPaid || row.billStatus === 'paid' ? 'PAID' : (row.billStatus !== 'draft' ? 'UNPAID' : 'PREVIEW')));
           items.push({
             id: `item-comp-${c.label}`,
             label: c.label,
@@ -394,13 +469,14 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
             type: c.type || 'other',
             icon: getComponentItemIcon(c.label, c.type),
             errorMessage: c.errorMessage,
+            status: compStatus,
           });
         }
       }
     }
 
     return items;
-  }, [chargeComponents, rates, isWaterUnit, isElecUnit, peopleCountVal, row.overdueAmount, roomCtx?.manualOutstandingAmount, roomCtx?.parkingQuantity]);
+  }, [chargeComponents, rates, isWaterUnit, isElecUnit, peopleCountVal, row.overdueAmount, roomCtx?.manualOutstandingAmount, roomCtx?.parkingQuantity, isRowPaid, row.billStatus, isDailyContext, roomCtx?.isDailyDepositPaidInDisplayedPeriod, roomCtx?.showDailyDepositLine]);
 
   // Dynamic Card Border Color based on Status:
   // - ยังไม่ออกบิล / ว่าง: สีเทา (border-slate-200)
@@ -415,14 +491,16 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
     if (isFuture) {
       return 'border-yellow-400 hover:border-yellow-500';
     }
+    if (isDailyContext) {
+      if (isDailyRentPaid) {
+        return 'border-emerald-400 hover:border-emerald-500';
+      }
+      return 'border-amber-400 hover:border-amber-500';
+    }
     if (isRowPaid) {
       return 'border-emerald-400 hover:border-emerald-500';
     }
     if (row.billStatus !== 'draft' && row.billStatus !== 'cancelled') {
-      return 'border-amber-400 hover:border-amber-500';
-    }
-    const hasUnpaidCharges = chargeComponents.some((c: any) => c.status === 'UNPAID');
-    if (hasUnpaidCharges) {
       return 'border-amber-400 hover:border-amber-500';
     }
     return 'border-slate-200 hover:border-slate-300';
@@ -474,19 +552,18 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
 
             return (
               <span
-                className={`text-xs font-extrabold px-2.5 py-0.5 rounded-md ${
-                  row.billStatus === 'paid'
+                className={`text-xs font-extrabold px-2.5 py-0.5 rounded-md ${effectiveBillStatus === 'paid'
                     ? 'bg-emerald-100 text-emerald-800'
-                    : row.billStatus !== 'draft' && row.billStatus !== 'cancelled'
-                    ? 'bg-amber-100 text-amber-800'
-                    : 'bg-slate-100 text-slate-600'
-                }`}
+                    : effectiveBillStatus !== 'draft' && effectiveBillStatus !== 'cancelled'
+                      ? 'bg-amber-100 text-amber-800'
+                      : 'bg-slate-100 text-slate-600'
+                  }`}
               >
-                {row.billStatus === 'paid'
+                {effectiveBillStatus === 'paid'
                   ? 'ชำระแล้ว'
-                  : row.billStatus === 'draft' || row.billStatus === 'cancelled'
-                  ? 'ยังไม่ออกบิล'
-                  : 'รอชำระเงิน'}
+                  : effectiveBillStatus === 'draft' || effectiveBillStatus === 'cancelled'
+                    ? 'ยังไม่ออกบิล'
+                    : 'รอชำระเงิน'}
               </span>
             );
           })()}
@@ -497,29 +574,39 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
           <button
             type="button"
             role="switch"
-            aria-checked={row.billStatus !== 'draft' && row.billStatus !== 'cancelled'}
-            disabled={isSaving || row.isPaid || row.billStatus === 'paid' || !selectedBillingCycleId}
+            aria-checked={isDailyContext ? true : (effectiveBillStatus !== 'draft' && effectiveBillStatus !== 'cancelled')}
+            disabled={isSaving || isDailyContext || isRowPaid || effectiveBillStatus === 'paid' || !selectedBillingCycleId}
             onClick={() => onToggleStatusSwitch(row)}
-            className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none disabled:cursor-not-allowed disabled:opacity-60 ${
-              row.billStatus === 'paid'
-                ? 'bg-emerald-600'
-                : row.billStatus !== 'draft' && row.billStatus !== 'cancelled'
-                ? 'bg-amber-400'
-                : 'bg-slate-300'
-            }`}
+            className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none disabled:cursor-not-allowed disabled:opacity-60 ${isDailyContext
+                ? isDailyOverdue
+                  ? 'bg-rose-500'
+                  : isDailyRentPaid
+                    ? 'bg-emerald-600'
+                    : 'bg-amber-400'
+                : effectiveBillStatus === 'paid'
+                  ? 'bg-emerald-600'
+                  : effectiveBillStatus !== 'draft' && effectiveBillStatus !== 'cancelled'
+                    ? 'bg-amber-400'
+                    : 'bg-slate-300'
+              }`}
             title={
-              row.billStatus === 'paid'
-                ? 'ชำระแล้ว (ล็อค)'
-                : row.billStatus !== 'draft' && row.billStatus !== 'cancelled'
-                ? 'คลิกเพื่อยกเลิกบิล'
-                : 'คลิกเพื่อออกบิล'
+              isDailyContext
+                ? isDailyOverdue
+                  ? 'เกินกำหนดชำระ (รายวัน)'
+                  : isDailyRentPaid
+                    ? 'ชำระแล้ว (รายวัน)'
+                    : 'รอชำระเงิน (รายวัน)'
+                : effectiveBillStatus === 'paid'
+                  ? 'ชำระแล้ว (ล็อค)'
+                  : effectiveBillStatus !== 'draft' && effectiveBillStatus !== 'cancelled'
+                    ? 'คลิกเพื่อยกเลิกบิล'
+                    : 'คลิกเพื่อออกบิล'
             }
           >
             <span
               aria-hidden="true"
-              className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out ${
-                row.billStatus !== 'draft' && row.billStatus !== 'cancelled' ? 'translate-x-5' : 'translate-x-0'
-              }`}
+              className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out ${isDailyContext || (effectiveBillStatus !== 'draft' && effectiveBillStatus !== 'cancelled') ? 'translate-x-5' : 'translate-x-0'
+                }`}
             />
           </button>
         </div>
@@ -529,6 +616,9 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
       <div className="text-xs">
         {(() => {
           if (isFuture) {
+            const futureLabel = checkInDate
+              ? `จองล่วงหน้า ${formatShortThaiBuddhistDate(checkInDate)}`
+              : 'จองล่วงหน้า';
             return (
               <div className="flex items-center gap-2">
                 {effectiveTenantId && effectiveTenantName ? (
@@ -542,8 +632,8 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
                     <ArrowRight className="w-3 h-3 opacity-60 shrink-0" />
                   </button>
                 ) : null}
-                <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-bold bg-yellow-100 text-yellow-800 border border-yellow-300">
-                  จองล่วงหน้า
+                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
+                  {futureLabel}
                 </span>
               </div>
             );
@@ -557,33 +647,40 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
             return (
               <div className="flex items-center justify-between gap-2">
                 {hasTenant && (
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => onSelectTenant(effectiveTenantId, row.roomId)}
-                      className="inline-flex items-center gap-1.5 text-indigo-700 hover:text-indigo-900 transition-all cursor-pointer font-bold whitespace-nowrap text-sm"
-                    >
-                      <User className="w-4 h-4 text-indigo-500 shrink-0" />
-                      <span className="truncate max-w-[200px]">{effectiveTenantName}</span>
-                    </button>
+                  <div className="flex flex-col items-start gap-0.5">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <button
+                        type="button"
+                        onClick={() => onSelectTenant(effectiveTenantId, row.roomId)}
+                        className="inline-flex items-center gap-1.5 text-indigo-700 hover:text-indigo-900 transition-all cursor-pointer font-bold whitespace-nowrap text-sm"
+                      >
+                        <User className="w-4 h-4 text-indigo-500 shrink-0" />
+                        <span className="truncate max-w-[200px]">{effectiveTenantName}</span>
+                      </button>
+                      {dailyCheckOutDate && (
+                        <span className="text-xs font-bold text-slate-700 shrink-0">
+                          ({formatShortThaiBuddhistDate(dailyCheckOutDate)})
+                        </span>
+                      )}
+                    </div>
                     {!isLineLinked && (
                       <span className="text-[10px] text-slate-400 font-normal leading-tight">
                         (ยังไม่ได้เชื่อม LINE)
                       </span>
                     )}
-                    {dailyCheckOutDate && (
-                      <span className="text-xs font-bold text-slate-700">
-                        {formatShortThaiBuddhistDate(dailyCheckOutDate)}
+                    {contractEndDate && (
+                      <span className="text-xs font-bold text-slate-800">
+                        ({formatShortThaiBuddhistDate(contractEndDate)})
                       </span>
                     )}
                   </div>
                 )}
                 {!hasTenant && dailyCheckOutDate && (
                   <span className="text-xs font-bold text-slate-700">
-                    {formatShortThaiBuddhistDate(dailyCheckOutDate)}
+                    ({formatShortThaiBuddhistDate(dailyCheckOutDate)})
                   </span>
                 )}
-                {!hasOccupantClaim && hasBookableGap && (
+                {!hasOccupantClaim && hasBookableGap && (room || row.roomId) && (
                   <button
                     type="button"
                     disabled={quickAddLoadingRoomId === (room?.id || row.roomId)}
@@ -591,9 +688,9 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
                     className="inline-flex items-center gap-1 text-xs font-bold text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 px-2.5 py-1 rounded-xl border border-indigo-200 transition-all cursor-pointer shadow-2xs disabled:opacity-50 whitespace-nowrap shrink-0"
                   >
                     {quickAddLoadingRoomId === (room?.id || row.roomId) ? (
-                      <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
+                      <Loader2 className="w-3.5 h-3.5 animate-spin text-indigo-600 shrink-0" />
                     ) : (
-                      <Plus className="w-3.5 h-3.5 shrink-0" />
+                      <Plus className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
                     )}
                     <span>เพิ่มผู้เช่า</span>
                   </button>
@@ -611,18 +708,30 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
 
           if (hasMonthly && hasDaily) {
             return (
-              <div className="flex flex-col items-start gap-1">
-                <button
-                  type="button"
-                  onClick={() => onSelectTenant(effectiveTenantId, row.roomId)}
-                  className="inline-flex items-center gap-1.5 text-indigo-700 hover:text-indigo-900 transition-all cursor-pointer font-bold whitespace-nowrap"
-                >
-                  <User className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
-                  <span className="truncate max-w-[180px]">{effectiveTenantName}</span>
-                </button>
-                {dailyCheckOutDate && (
-                  <span className="text-xs font-bold text-slate-700">
-                    {formatShortThaiBuddhistDate(dailyCheckOutDate)}
+              <div className="flex flex-col items-start gap-0.5">
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={() => onSelectTenant(effectiveTenantId, row.roomId)}
+                    className="inline-flex items-center gap-1.5 text-indigo-700 hover:text-indigo-900 transition-all cursor-pointer font-bold whitespace-nowrap"
+                  >
+                    <User className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                    <span className="truncate max-w-[180px]">{effectiveTenantName}</span>
+                  </button>
+                  {dailyCheckOutDate && (
+                    <span className="text-xs font-bold text-slate-700 shrink-0">
+                      ({formatShortThaiBuddhistDate(dailyCheckOutDate)})
+                    </span>
+                  )}
+                </div>
+                {!isLineLinked && (
+                  <span className="text-[10px] text-slate-400 font-normal leading-tight">
+                    (ยังไม่ได้เชื่อม LINE)
+                  </span>
+                )}
+                {contractEndDate && (
+                  <span className="text-xs font-bold text-slate-800">
+                    ({formatShortThaiBuddhistDate(contractEndDate)})
                   </span>
                 )}
               </div>
@@ -631,21 +740,33 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
 
           if (hasMonthly) {
             return (
-              <button
-                type="button"
-                onClick={() => onSelectTenant(effectiveTenantId, row.roomId)}
-                className="inline-flex items-center gap-1.5 text-indigo-700 hover:text-indigo-900 transition-all cursor-pointer font-bold whitespace-nowrap text-sm"
-              >
-                <User className="w-4 h-4 text-indigo-500 shrink-0" />
-                <span className="truncate max-w-[200px]">{effectiveTenantName}</span>
-              </button>
+              <div className="flex flex-col items-start gap-0.5">
+                <button
+                  type="button"
+                  onClick={() => onSelectTenant(effectiveTenantId, row.roomId)}
+                  className="inline-flex items-center gap-1.5 text-indigo-700 hover:text-indigo-900 transition-all cursor-pointer font-bold whitespace-nowrap text-sm"
+                >
+                  <User className="w-4 h-4 text-indigo-500 shrink-0" />
+                  <span className="truncate max-w-[200px]">{effectiveTenantName}</span>
+                </button>
+                {!isLineLinked && (
+                  <span className="text-[10px] text-slate-400 font-normal leading-tight">
+                    (ยังไม่ได้เชื่อม LINE)
+                  </span>
+                )}
+                {contractEndDate && (
+                  <span className="text-xs font-bold text-slate-800">
+                    ({formatShortThaiBuddhistDate(contractEndDate)})
+                  </span>
+                )}
+              </div>
             );
           }
 
           if (hasDaily && dailyCheckOutDate) {
             return (
               <span className="text-xs font-bold text-slate-700">
-                {formatShortThaiBuddhistDate(dailyCheckOutDate)}
+                ({formatShortThaiBuddhistDate(dailyCheckOutDate)})
               </span>
             );
           }
@@ -654,7 +775,7 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
         })()}
       </div>
 
-      {/* 3. Utility Meter Boxes (⚡ ไฟฟ้า & 💧 น้ำประปา — 2 คอลัมน์) */}
+      {/* 3. Utility Meter Boxes (⚡ ไฟฟ้า & 💧 น้ำ — 2 คอลัมน์) */}
       {(isElecUnit || isWaterUnit) && (
         <div className={`grid ${isElecUnit && isWaterUnit ? 'grid-cols-2' : 'grid-cols-1'} gap-3`}>
           {/* Electricity Box (Amber / Yellow Theme) */}
@@ -682,9 +803,8 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
                     onPaste={(e) => onPaste(row.roomId, 'elecPrev', e)}
                     data-row={idx}
                     data-col="elecPrev"
-                    className={`w-16 px-1.5 py-0.5 text-xs border-2 border-amber-400 rounded-lg bg-white text-slate-900 text-center font-bold focus:outline-none transition-all duration-300 disabled:bg-slate-50 disabled:text-slate-500 disabled:border-transparent ${
-                      flashingCells[`${row.roomId}-elecPrev`] ? 'animate-vibrant-flash shadow-md z-10' : ''
-                    }`}
+                    className={`w-16 px-1.5 py-0.5 text-xs border-2 border-amber-400 rounded-lg bg-white text-slate-900 text-center font-bold focus:outline-none transition-all duration-300 disabled:bg-slate-50 disabled:text-slate-500 disabled:border-transparent ${flashingCells[`${row.roomId}-elecPrev`] ? 'animate-vibrant-flash shadow-md z-10' : ''
+                      }`}
                   />
                 ) : isRowPaid ? (
                   <div className="flex items-center gap-1">
@@ -747,13 +867,12 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
                 onPaste={(e) => onPaste(row.roomId, 'elecCurr', e)}
                 data-row={idx}
                 data-col="elecCurr"
-                className={`w-full py-1.5 px-3 text-lg font-black text-center text-slate-900 bg-white border-2 rounded-xl focus:outline-none transition-all duration-300 ${
-                  flashingCells[`${row.roomId}-elecCurr`]
+                className={`w-full py-1.5 px-3 text-lg font-black text-center text-slate-900 bg-white border-2 rounded-xl focus:outline-none transition-all duration-300 ${flashingCells[`${row.roomId}-elecCurr`]
                     ? 'animate-vibrant-flash shadow-md border-amber-500 z-10'
                     : elecUnits < 0
-                    ? 'border-rose-300 ring-2 ring-rose-100 bg-rose-50'
-                    : 'border-amber-300/90 focus:border-amber-500'
-                } disabled:bg-slate-50 disabled:text-slate-500 disabled:border-slate-200`}
+                      ? 'border-rose-300 ring-2 ring-rose-100 bg-rose-50'
+                      : 'border-amber-300/90 focus:border-amber-500'
+                  } disabled:bg-slate-50 disabled:text-slate-500 disabled:border-slate-200`}
               />
 
               {/* Footer: Units & Usage Amount */}
@@ -777,7 +896,7 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
                   <div className="w-5 h-5 rounded-full bg-sky-500 flex items-center justify-center text-white shrink-0">
                     <Droplets className="w-3 h-3 fill-white text-white" />
                   </div>
-                  <span className="text-xs font-black text-sky-950 tracking-tight">น้ำประปา</span>
+                  <span className="text-xs font-black text-sky-950 tracking-tight">น้ำ</span>
                 </div>
 
                 {/* Previous Reading */}
@@ -793,9 +912,8 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
                     onPaste={(e) => onPaste(row.roomId, 'waterPrev', e)}
                     data-row={idx}
                     data-col="waterPrev"
-                    className={`w-16 px-1.5 py-0.5 text-xs border-2 border-sky-400 rounded-lg bg-white text-slate-900 text-center font-bold focus:outline-none transition-all duration-300 disabled:bg-slate-50 disabled:text-slate-500 disabled:border-transparent ${
-                      flashingCells[`${row.roomId}-waterPrev`] ? 'animate-vibrant-flash shadow-md z-10' : ''
-                    }`}
+                    className={`w-16 px-1.5 py-0.5 text-xs border-2 border-sky-400 rounded-lg bg-white text-slate-900 text-center font-bold focus:outline-none transition-all duration-300 disabled:bg-slate-50 disabled:text-slate-500 disabled:border-transparent ${flashingCells[`${row.roomId}-waterPrev`] ? 'animate-vibrant-flash shadow-md z-10' : ''
+                      }`}
                   />
                 ) : isRowPaid ? (
                   <div className="flex items-center gap-1">
@@ -858,13 +976,12 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
                 onPaste={(e) => onPaste(row.roomId, 'waterCurr', e)}
                 data-row={idx}
                 data-col="waterCurr"
-                className={`w-full py-1.5 px-3 text-lg font-black text-center text-slate-900 bg-white border-2 rounded-xl focus:outline-none transition-all duration-300 ${
-                  flashingCells[`${row.roomId}-waterCurr`]
+                className={`w-full py-1.5 px-3 text-lg font-black text-center text-slate-900 bg-white border-2 rounded-xl focus:outline-none transition-all duration-300 ${flashingCells[`${row.roomId}-waterCurr`]
                     ? 'animate-vibrant-flash shadow-md border-sky-500 z-10'
                     : waterUnits < 0
-                    ? 'border-rose-300 ring-2 ring-rose-100 bg-rose-50'
-                    : 'border-sky-300/90 focus:border-sky-500'
-                } disabled:bg-slate-50 disabled:text-slate-500 disabled:border-slate-200`}
+                      ? 'border-rose-300 ring-2 ring-rose-100 bg-rose-50'
+                      : 'border-sky-300/90 focus:border-sky-500'
+                  } disabled:bg-slate-50 disabled:text-slate-500 disabled:border-slate-200`}
               />
 
               {/* Footer: Units & Usage Amount */}
@@ -934,13 +1051,12 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
               onPaste={(e) => onPaste(row.roomId, 'peopleCount', e)}
               data-row={idx}
               data-col="peopleCount"
-              className={`w-11 px-1.5 py-0.5 text-xs border rounded-lg bg-white text-slate-800 text-center font-bold focus:outline-indigo-500 transition-all ${
-                flashingCells[`${row.roomId}-peopleCount`] ? 'animate-vibrant-flash shadow-md border-indigo-400' : 'border-gray-200'
-              } disabled:bg-slate-50 disabled:text-slate-500`}
+              className={`w-11 px-1.5 py-0.5 text-xs border rounded-lg bg-white text-slate-800 text-center font-bold focus:outline-indigo-500 transition-all ${flashingCells[`${row.roomId}-peopleCount`] ? 'animate-vibrant-flash shadow-md border-indigo-400' : 'border-gray-200'
+                } disabled:bg-slate-50 disabled:text-slate-500`}
             />
             <span>คน</span>
           </div>
-          <div className="text-xs font-extrabold text-slate-800">
+          <div className={`text-xs font-extrabold ${rentColorClass}`}>
             <span>ค่าเช่า ({rentalTypeLabel}) </span>
             <span>{rentDisplay}</span>
           </div>
@@ -973,6 +1089,15 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
         {isExpandedBreakdown && listItemizedBreakdown.length > 0 && (
           <div className="mt-1 pt-1.5 border-t border-dashed border-gray-200 flex flex-col gap-1 animate-in fade-in duration-150">
             {listItemizedBreakdown.map((item, itemIdx) => {
+              let itemColorClass = 'text-slate-600 font-semibold'; // PREVIEW / DRAFT / เกินกำหนด (เทา)
+              if (item.type === 'late_fee') {
+                itemColorClass = 'text-rose-600 font-bold'; // ค่าปรับชำระล่าช้า (แดง)
+              } else if (item.status === 'PAID') {
+                itemColorClass = 'text-emerald-700 font-bold'; // ชำระแล้ว (เขียว)
+              } else if (item.status === 'UNPAID') {
+                itemColorClass = 'text-amber-700 font-bold'; // รอชำระเงิน (ส้ม)
+              }
+
               return (
                 <div
                   key={item.id || itemIdx}
@@ -986,7 +1111,7 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
                       {item.label}
                     </span>
                   </div>
-                  <span className="font-bold shrink-0 ml-2 text-slate-900">
+                  <span className={`shrink-0 ml-2 ${itemColorClass}`}>
                     {formatComponentDetailAmount(item.amount)}
                   </span>
                 </div>
@@ -996,9 +1121,9 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
         )}
       </div>
 
-      {/* 5. Bottom Total Row (ยอดรวมทั้งสิ้น) */}
+      {/* 5. Bottom Total Row (ยอดที่ต้องชำระ) */}
       <div className="flex items-center justify-between pt-1 border-t border-gray-100">
-        <span className="text-xs font-black text-slate-700">ยอดรวมทั้งสิ้น</span>
+        <span className="text-xs font-black text-slate-700">ยอดที่ต้องชำระ</span>
         <span className="text-xl font-black text-indigo-700 tracking-tight">
           {formatMoneyDisplay(amountDue)} ฿
         </span>

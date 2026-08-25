@@ -669,7 +669,7 @@ export async function ensureGoldenDormData() {
     await prisma.billItem.createMany({
       data: [
         { dormitoryId: dorm.id, billId: bill.id, type: 'RENT', description: 'ค่าเช่าห้องพัก', amount: tc.rent, quantity: 1, unitPrice: tc.rent, displayOrder: 1 },
-        { dormitoryId: dorm.id, billId: bill.id, type: 'WATER', description: 'ค่าน้ำประปา (12 หน่วย)', amount: waterAmt, quantity: 12, unitPrice: 18.0, displayOrder: 2 },
+        { dormitoryId: dorm.id, billId: bill.id, type: 'WATER', description: 'ค่าน้ำ (12 หน่วย)', amount: waterAmt, quantity: 12, unitPrice: 18.0, displayOrder: 2 },
         { dormitoryId: dorm.id, billId: bill.id, type: 'ELECTRICITY', description: 'ค่าไฟฟ้า (80 หน่วย)', amount: elecAmt, quantity: 80, unitPrice: 7.0, displayOrder: 3 },
         { dormitoryId: dorm.id, billId: bill.id, type: 'COMMON_FEE', description: 'ค่าส่วนกลาง', amount: commonAmt, quantity: 1, unitPrice: commonAmt, displayOrder: 4 },
       ],

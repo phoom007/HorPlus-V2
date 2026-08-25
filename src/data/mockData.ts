@@ -431,7 +431,7 @@ export const createInitialContracts = (): Contract[] => {
       // Overwrite specific dates for tenant-5 and tenant-22 to be exact and clean
       let startStr = startDate.toISOString().split('T')[0];
       let endStr = endDate.toISOString().split('T')[0];
-      
+
       if (tenant.id === 'tenant-5') {
         startStr = '2026-01-01';
         endStr = '2026-06-30';
@@ -450,7 +450,7 @@ export const createInitialContracts = (): Contract[] => {
         durationMonths: duration,
         rentAmount: room.monthlyRent,
         depositAmount: room.depositAmount,
-        
+
         terms: '1. ห้ามเลี้ยงสัตว์ส่งเสียงดัง (ยกเว้นสัตว์เลี้ยงที่ระบุใบคำขอ)\n2. ห้ามดัดแปลงห้องพัก\n3. จ่ายค่าเช่าภายในวันที่ 5 ของทุกเดือน หากเกินกำหนดมีค่าปรับวันละ 100 บาท',
         tenantSignature: 'MOCK_SIGNATURE_DATA',
         ownerSignature: 'MOCK_OWNER_SIGNATURE_DATA',
@@ -519,11 +519,11 @@ export const createInitialBills = (): Bill[] => {
       const [cy, cm] = cycle.split('-').map(Number);
       const [sy, sm] = contract.startDate.split('-').map(Number);
       const [ey, em] = contract.endDate.split('-').map(Number);
-      
+
       const cycleVal = cy * 12 + (cm - 1);
       const startVal = sy * 12 + (sm - 1);
       const endVal = ey * 12 + (em - 1);
-      
+
       if (cycleVal < startVal || cycleVal > endVal) {
         return; // Skip if contract was not active in this cycle!
       }
@@ -606,7 +606,7 @@ export const createInitialBills = (): Bill[] => {
       }
 
       const dueDate = `${cycle.split('-')[1] === '12' ? parsedYear + 1 : parsedYear}-${cycle.split('-')[1] === '12' ? '01' : String(parsedMonth + 1).padStart(2, '0')}-05`;
-      
+
       let slipImg: string | undefined = undefined;
       let rejReason: string | undefined = undefined;
 
@@ -854,7 +854,7 @@ export const initialAnnouncements: Announcement[] = [
     id: 'ann-2',
     title: 'กำหนดปิดปรับปรุงระบบไฟฟ้าประจำปี',
     summary: 'การไฟฟ้านครหลวงจะทำการงดจ่ายกระแสไฟฟ้าชั่วคราว เพื่อบำรุงรักษาระบบจำหน่ายไฟฟ้าให้มีประสิทธิภาพและปลอดภัยยิ่งขึ้น...',
-    content: 'การไฟฟ้านครหลวงจะทำการงดจ่ายกระแสไฟฟ้าชั่วคราว เพื่อบำรุงรักษาระบบจำหน่ายไฟฟ้าให้มีประสิทธิภาพและปลอดภัยยิ่งขึ้น ส่งผลกระทบต่อน้ำประปาและลิฟต์โดยสารในบางช่วงเวลา รบกวนสำรองน้ำไว้ใช้งานล่วงหน้าด้วยนะคะ',
+    content: 'การไฟฟ้านครหลวงจะทำการงดจ่ายกระแสไฟฟ้าชั่วคราว เพื่อบำรุงรักษาระบบจำหน่ายไฟฟ้าให้มีประสิทธิภาพและปลอดภัยยิ่งขึ้น ส่งผลกระทบต่อน้ำและลิฟต์โดยสารในบางช่วงเวลา รบกวนสำรองน้ำไว้ใช้งานล่วงหน้าด้วยนะคะ',
     type: 'electric_off',
     targetType: 'all',
     customTarget: 'ทุกอาคาร',
@@ -992,7 +992,7 @@ export const getRooms = (): Room[] => {
   const loaded = getStored<Room[]>('rooms', createInitialRooms());
   let modified = false;
   const migrated = loaded.map(room => {
-    const hasOldAmenities = room.amenities?.some(a => 
+    const hasOldAmenities = room.amenities?.some(a =>
       ['เครื่องปรับอากาศ', 'เตียงนอน 5 ฟุต', 'ตู้เสื้อผ้า', 'โต๊ะเครื่องแป้ง', 'เครื่องทำน้ำอุ่น', 'WIFI'].includes(a)
     );
     if (hasOldAmenities) {
@@ -1079,7 +1079,7 @@ export const seedDatabase = (force = false) => {
     saveUsers(initialUsers);
     saveAuditLogs(initialAuditLogs);
     saveNotifications([]);
-    
+
     // Add seed logs
     addAuditLog('user-owner', 'รีเซ็ตข้อมูลระบบ', 'เริ่มต้นระบบทดสอบและบันทึกข้อมูลตั้งต้น (Seeding) ใหม่ทั้งหมด', 'System', 'system-root');
   }
@@ -1090,7 +1090,7 @@ export const addAuditLog = (userId: string, action: string, details: string, ent
   const logs = getAuditLogs();
   const users = getUsers();
   const user = users.find(u => u.id === userId);
-  
+
   const newLog: AuditLog = {
     id: `al-${Date.now()}`,
     userId,
@@ -1102,7 +1102,7 @@ export const addAuditLog = (userId: string, action: string, details: string, ent
     entityId,
     createdAt: new Date().toISOString()
   };
-  
+
   logs.unshift(newLog);
   saveAuditLogs(logs.slice(0, 100)); // Keep last 100 entries
 };

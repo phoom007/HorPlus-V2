@@ -402,7 +402,7 @@ test.describe('HORPLUS LOCAL-06 — Master Local Product Acceptance Suite', () =
     await prisma.billItem.createMany({
       data: [
         { dormitoryId: dormId, billId: bill.id, description: 'ค่าเช่าห้องพัก', amount: '4500', type: 'RENT' },
-        { dormitoryId: dormId, billId: bill.id, description: 'ค่าน้ำประปา', amount: '200', type: 'WATER' },
+        { dormitoryId: dormId, billId: bill.id, description: 'ค่าน้ำ', amount: '200', type: 'WATER' },
         { dormitoryId: dormId, billId: bill.id, description: 'ค่าไฟฟ้า', amount: '400', type: 'ELECTRIC' },
       ],
     });

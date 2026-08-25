@@ -67,7 +67,7 @@ export class BillingOrchestrationService {
     private prisma: PrismaClient = getPrismaClient(),
     private outboxService: OutboxService = new OutboxService(),
     private auditService?: AuditService
-  ) {}
+  ) { }
 
   /**
    * Resolves the authoritative household peopleCount for a tenant
@@ -234,11 +234,11 @@ export class BillingOrchestrationService {
           // Resolve ACTIVE ProvisionalRentalTerm via shared canonical authority
           const activeProvisional = targetCycle
             ? await resolveProvisionalBillingSource({
-                dormitoryId,
-                roomId,
-                billingCycle: targetCycle,
-                tx: client,
-              })
+              dormitoryId,
+              roomId,
+              billingCycle: targetCycle,
+              tx: client,
+            })
             : null;
 
           if (activeProvisional) {
@@ -418,7 +418,7 @@ export class BillingOrchestrationService {
         updatedAmount = mulDecimals(peopleCountDec, unitPrice);
 
         if (item.type === 'water') {
-          updatedDesc = `ค่าน้ำประปา (${newPeopleCount} คน)`;
+          updatedDesc = `ค่าน้ำ (${newPeopleCount} คน)`;
         } else if (item.type === 'electricity') {
           updatedDesc = `ค่าไฟฟ้า (${newPeopleCount} คน)`;
         } else if (item.type === 'common_fee') {
@@ -650,8 +650,8 @@ export class BillingOrchestrationService {
         const billingNote = recalculation.recalculated
           ? 'ระบบอัปเดตยอดในบิลที่รอชำระแล้ว'
           : currentCycleBillPaid
-          ? 'งวดปัจจุบันชำระแล้ว ระบบจะใช้จำนวนใหม่ในงวดถัดไป'
-          : 'ระบบอัปเดตจำนวนคนในงวดปัจจุบันแล้ว';
+            ? 'งวดปัจจุบันชำระแล้ว ระบบจะใช้จำนวนใหม่ในงวดถัดไป'
+            : 'ระบบอัปเดตจำนวนคนในงวดปัจจุบันแล้ว';
 
         await this.outboxService.createOutboxEvent(tx, {
           dormitoryId,
@@ -677,8 +677,8 @@ export class BillingOrchestrationService {
         const billingNote = recalculation.recalculated
           ? 'ระบบอัปเดตยอดบิลรอชำระแล้ว'
           : currentCycleBillPaid
-          ? 'การเปลี่ยนแปลงจะมีผลในงวดถัดไป เนื่องจากงวดปัจจุบันชำระเงินแล้ว'
-          : '';
+            ? 'การเปลี่ยนแปลงจะมีผลในงวดถัดไป เนื่องจากงวดปัจจุบันชำระเงินแล้ว'
+            : '';
 
         await this.outboxService.createOutboxEvent(tx, {
           dormitoryId,
@@ -708,7 +708,7 @@ export class BillingOrchestrationService {
     });
 
     // Post-commit outbox dispatch
-    await this.outboxService.processPendingOutboxEvents().catch(() => {});
+    await this.outboxService.processPendingOutboxEvents().catch(() => { });
 
     if (this.auditService && actor.userId) {
       this.auditService.log({
@@ -892,8 +892,8 @@ export class BillingOrchestrationService {
         const billingNote = recalculation.recalculated
           ? 'ระบบอัปเดตยอดในบิลที่รอชำระแล้ว'
           : currentCycleBillPaid
-          ? 'งวดปัจจุบันชำระแล้ว ระบบจะใช้จำนวนใหม่ในงวดถัดไป'
-          : 'ระบบอัปเดตจำนวนคนในงวดปัจจุบันแล้ว';
+            ? 'งวดปัจจุบันชำระแล้ว ระบบจะใช้จำนวนใหม่ในงวดถัดไป'
+            : 'ระบบอัปเดตจำนวนคนในงวดปัจจุบันแล้ว';
 
         await this.outboxService.createOutboxEvent(tx, {
           dormitoryId,
@@ -918,8 +918,8 @@ export class BillingOrchestrationService {
         const billingNote = recalculation.recalculated
           ? 'ระบบอัปเดตยอดบิลรอชำระแล้ว'
           : currentCycleBillPaid
-          ? 'การเปลี่ยนแปลงจะมีผลในงวดถัดไป เนื่องจากงวดปัจจุบันชำระเงินแล้ว'
-          : '';
+            ? 'การเปลี่ยนแปลงจะมีผลในงวดถัดไป เนื่องจากงวดปัจจุบันชำระเงินแล้ว'
+            : '';
 
         await this.outboxService.createOutboxEvent(tx, {
           dormitoryId,
@@ -949,7 +949,7 @@ export class BillingOrchestrationService {
     });
 
     // Post-commit outbox dispatch
-    await this.outboxService.processPendingOutboxEvents().catch(() => {});
+    await this.outboxService.processPendingOutboxEvents().catch(() => { });
 
     if (this.auditService && actor.userId) {
       this.auditService.log({
@@ -1044,13 +1044,13 @@ export class BillingOrchestrationService {
         // Apply correction to the next billing cycle if it exists
         const nextCycle = targetCycle
           ? await tx.billingCycle.findFirst({
-              where: {
-                dormitoryId,
-                status: { notIn: ['completed'] },
-                periodStart: { gt: targetCycle.periodStart },
-              },
-              orderBy: { periodStart: 'asc' },
-            })
+            where: {
+              dormitoryId,
+              status: { notIn: ['completed'] },
+              periodStart: { gt: targetCycle.periodStart },
+            },
+            orderBy: { periodStart: 'asc' },
+          })
           : null;
 
         if (nextCycle) {
@@ -1188,8 +1188,8 @@ export class BillingOrchestrationService {
         const billingNote = recalculation.recalculated
           ? 'ระบบอัปเดตยอดรอชำระแล้ว'
           : recalculation.isPaidImmutable
-          ? 'การเปลี่ยนแปลงจะมีผลในงวดถัดไป เนื่องจากงวดปัจจุบันชำระแล้ว'
-          : '';
+            ? 'การเปลี่ยนแปลงจะมีผลในงวดถัดไป เนื่องจากงวดปัจจุบันชำระแล้ว'
+            : '';
 
         await this.outboxService.createOutboxEvent(tx, {
           dormitoryId,
@@ -1219,7 +1219,7 @@ export class BillingOrchestrationService {
     });
 
     // Post-commit outbox dispatch
-    await this.outboxService.processPendingOutboxEvents().catch(() => {});
+    await this.outboxService.processPendingOutboxEvents().catch(() => { });
 
     if (this.auditService && userId) {
       this.auditService.log({

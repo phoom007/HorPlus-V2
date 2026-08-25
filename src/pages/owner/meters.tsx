@@ -226,11 +226,13 @@ export function buildRowsFromWorkspace(params: {
     const existingMonthlyUtilityBill = (bills || []).find(b =>
       (b.cycleId === selectedBillingCycleId || b.cycleId === selectedCycleCode || (b as any).billingCycleId === selectedBillingCycleId || (b as any).cycleMonth === selectedCycleCode) &&
       (b.roomId === r.id || b.roomId === r.roomNumber) &&
-      (!b.billKind || b.billKind === 'MONTHLY_UTILITY') &&
+      (!b.billKind || b.billKind === 'MONTHLY_UTILITY' || b.billKind === 'LEGACY_COMBINED' || (b.billKind as string).toUpperCase() === 'MONTHLY_UTILITY' || (b.billKind as string).toUpperCase() === 'LEGACY_COMBINED') &&
       (b.status as string) !== 'cancelled' && (b.status as string) !== 'void'
     );
-    const billStatus: BillStatus = existingMonthlyUtilityBill ? existingMonthlyUtilityBill.status : 'draft';
-    const isPaid = billStatus === 'paid';
+    const previewRooms = workspaceData?.previewContext?.rooms || workspaceData?.rooms || [];
+    const roomCtx = previewRooms.find((ctx: any) => ctx.roomId === r.id);
+    const billStatus: BillStatus = (roomCtx?.billStatus as BillStatus) || (existingMonthlyUtilityBill ? existingMonthlyUtilityBill.status : 'draft');
+    const isPaid = billStatus === 'paid' || Boolean(roomCtx?.isPaid);
 
     return {
       roomId: r.id,
@@ -332,8 +334,10 @@ export function getOwnerFinancialBreakdown(
     else if (status === 'PREVIEW') title = 'ยังไม่ออกบิล (พรีวิว)';
     else if (status === 'INVALID') title = c.errorMessage || 'รูปแบบการคิดค่าบริการไม่ถูกต้อง';
 
+    const normalizedType = c.type || (c.label && c.label.includes('ค่าเช่า') ? 'rent' : c.label && c.label.includes('ค่าประกัน') ? 'deposit' : 'monthly_utility');
+
     return {
-      type: c.type,
+      type: normalizedType,
       label: c.label || 'บิลรายเดือน',
       amount: typeof rawAmt === 'number' ? rawAmt : parseFloat(String(rawAmt).replace(/,/g, '')) || 0,
       formattedAmount: formatMoneyDisplay(rawAmt),
@@ -1323,7 +1327,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   };
 
   // DEVELOPER NOTE / บันทึกผู้พัฒนา:
-  // สำหรับระบบ SaaS ในอนาคต หากหอพักตั้งค่ารูปแบบค่าน้ำประปา หรือค่าไฟฟ้า เป็น "ไม่ใช่ บาท/หน่วย"
+  // สำหรับระบบ SaaS ในอนาคต หากหอพักตั้งค่ารูปแบบค่าน้ำ หรือค่าไฟฟ้า เป็น "ไม่ใช่ บาท/หน่วย"
   // (เช่น เป็นรูปแบบ 'person' หรือ 'room' ซึ่งเป็นระบบเหมาจ่ายรายคนหรือรายห้อง)
   // ระบบจะไม่จำเป็นต้องใช้เลขอ่านมิเตอร์ ดังนั้นในตารางจะซ่อนช่องกรอกมิเตอร์เก่าและมิเตอร์ใหม่ไปโดยอัตโนมัติ
   // เพื่อความสะอาดของหน้าจอและความสอดคล้องตามการตั้งค่าบริการจริงของแต่ละหอพัก
@@ -2184,12 +2188,12 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       {(saveSuccess || toastMessage) && (
         <div
           className={`fixed bottom-20 left-1/2 -translate-x-1/2 sm:bottom-8 sm:right-8 sm:left-auto sm:translate-x-0 z-[9999] px-4.5 py-3 rounded-2xl shadow-2xl border flex items-center gap-2.5 text-xs font-bold transition-all duration-500 ease-in-out ${toastType === 'error'
-              ? 'bg-rose-50 border-rose-200 text-rose-800'
-              : toastType === 'warning'
-                ? 'bg-amber-50 border-amber-200 text-amber-800'
-                : toastType === 'success'
-                  ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
-                  : 'bg-sky-50 border-sky-200 text-sky-800'
+            ? 'bg-rose-50 border-rose-200 text-rose-800'
+            : toastType === 'warning'
+              ? 'bg-amber-50 border-amber-200 text-amber-800'
+              : toastType === 'success'
+                ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                : 'bg-sky-50 border-sky-200 text-sky-800'
             } ${isToastFading
               ? 'opacity-0 translate-y-3 pointer-events-none'
               : 'opacity-100 translate-y-0 animate-in fade-in slide-in-from-bottom-3 duration-300'
@@ -2210,99 +2214,101 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
 
       {/* Recording table with validations */}
       <div className="bg-white border border-gray-100 rounded-3xl overflow-hidden shadow-xs">
-        <div className="p-4 bg-slate-50/50 border-b border-gray-100 flex flex-col sm:flex-row gap-3 justify-between items-start sm:items-center">
-          <div className="flex items-center gap-3 w-full sm:w-auto">
-            <div className="relative max-w-xs w-full">
+        <div className="p-4 bg-slate-50/50 border-b border-gray-100 flex flex-col xl:flex-row gap-3 justify-between items-stretch xl:items-center">
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full sm:w-auto">
+            <div className="relative w-full sm:w-64 md:w-72 shrink-0">
               <Search className="absolute left-3 top-2.5 text-gray-400 w-4 h-4" />
               <input
                 type="text"
                 placeholder="ค้นหาเลขห้อง..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full pl-9 pr-4 py-1.5 text-xs border border-gray-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800"
+                className="w-full pl-9 pr-4 py-1.5 text-xs border border-gray-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 shadow-2xs"
               />
             </div>
 
-            {/* View Mode Toggle */}
-            <div className="flex items-center bg-slate-100 p-1 rounded-xl shrink-0 border border-slate-200/60" data-testid="meter-view-mode-toggle">
-              <button
-                type="button"
-                data-testid="view-mode-table-button"
-                onClick={() => handleViewModeChange('table')}
-                className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-bold rounded-lg transition-all cursor-pointer ${viewMode === 'table'
-                    ? 'bg-white text-indigo-600 shadow-2xs'
-                    : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/50'
-                  }`}
-                title="มุมมองตาราง"
-              >
-                <Table className="w-3.5 h-3.5" />
-                <span>ตาราง</span>
-              </button>
-              <button
-                type="button"
-                data-testid="view-mode-list-button"
-                onClick={() => handleViewModeChange('list')}
-                className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-bold rounded-lg transition-all cursor-pointer ${viewMode === 'list'
-                    ? 'bg-white text-indigo-600 shadow-2xs'
-                    : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/50'
-                  }`}
-                title="มุมมองรายการ"
-              >
-                <LayoutList className="w-3.5 h-3.5" />
-                <span>รายการ</span>
-              </button>
-            </div>
-
-            {/* Scroll table helper buttons (shown in table mode) */}
-            {viewMode === 'table' && (
-              <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl shrink-0 border border-slate-200/60">
+            {/* View Mode Toggle & Table Scroll / List Breakdown Helper */}
+            <div className="flex items-center justify-between sm:justify-start gap-2 w-full sm:w-auto">
+              <div className="flex items-center bg-slate-100 p-1 rounded-xl shrink-0 border border-slate-200/60" data-testid="meter-view-mode-toggle">
                 <button
                   type="button"
-                  onClick={() => scrollTable('left')}
-                  className="p-1 hover:bg-white text-slate-600 rounded-lg transition-all cursor-pointer shadow-2xs"
-                  title="เลื่อนไปซ้าย"
+                  data-testid="view-mode-table-button"
+                  onClick={() => handleViewModeChange('table')}
+                  className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-bold rounded-lg transition-all cursor-pointer ${viewMode === 'table'
+                    ? 'bg-white text-indigo-600 shadow-2xs'
+                    : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/50'
+                    }`}
+                  title="มุมมองตาราง"
                 >
-                  <ChevronLeft className="w-4 h-4" />
+                  <Table className="w-3.5 h-3.5" />
+                  <span>ตาราง</span>
                 </button>
-                <span className="text-[10px] font-black text-slate-500 px-1.5 select-none whitespace-nowrap">เลื่อนดูตาราง</span>
                 <button
                   type="button"
-                  onClick={() => scrollTable('right')}
-                  className="p-1 hover:bg-white text-slate-600 rounded-lg transition-all cursor-pointer shadow-2xs"
-                  title="เลื่อนไปขวา"
+                  data-testid="view-mode-list-button"
+                  onClick={() => handleViewModeChange('list')}
+                  className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-bold rounded-lg transition-all cursor-pointer ${viewMode === 'list'
+                    ? 'bg-white text-indigo-600 shadow-2xs'
+                    : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/50'
+                    }`}
+                  title="มุมมองรายการ"
                 >
-                  <ChevronRight className="w-4 h-4" />
+                  <LayoutList className="w-3.5 h-3.5" />
+                  <span>รายการ</span>
                 </button>
               </div>
-            )}
 
-            {/* List Mode Global Toggle All Details */}
-            {viewMode === 'list' && (
-              <button
-                type="button"
-                onClick={() => {
-                  const allExpanded = meterRows.every(r => expandedBreakdowns[r.roomId]);
-                  const nextState = !allExpanded;
-                  const nextMap: { [roomId: string]: boolean } = {};
-                  meterRows.forEach(r => { nextMap[r.roomId] = nextState; });
-                  setExpandedBreakdowns(nextMap);
-                }}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-xl bg-slate-100 hover:bg-slate-200 text-indigo-700 transition-all cursor-pointer border border-slate-200/60 shadow-2xs shrink-0"
-                title={meterRows.every(r => expandedBreakdowns[r.roomId]) ? "ซ่อนรายละเอียดทุกห้อง" : "แสดงรายละเอียดทุกห้อง"}
-              >
-                {meterRows.every(r => expandedBreakdowns[r.roomId]) ? (
-                  <>
-                    <ChevronUp className="w-3.5 h-3.5" />
-                    <span>ซ่อนรายละเอียด</span>
-                  </>
-                ) : (
-                  <>
-                    <ChevronDown className="w-3.5 h-3.5" />
-                    <span>แสดงรายละเอียด</span>
-                  </>
-                )}
-              </button>
-            )}
+              {/* Scroll table helper buttons (shown in table mode) */}
+              {viewMode === 'table' && (
+                <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl shrink-0 border border-slate-200/60">
+                  <button
+                    type="button"
+                    onClick={() => scrollTable('left')}
+                    className="p-1 hover:bg-white text-slate-600 rounded-lg transition-all cursor-pointer shadow-2xs"
+                    title="เลื่อนไปซ้าย"
+                  >
+                    <ChevronLeft className="w-4 h-4" />
+                  </button>
+                  <span className="text-[10px] font-black text-slate-500 px-1.5 select-none whitespace-nowrap">เลื่อนดูตาราง</span>
+                  <button
+                    type="button"
+                    onClick={() => scrollTable('right')}
+                    className="p-1 hover:bg-white text-slate-600 rounded-lg transition-all cursor-pointer shadow-2xs"
+                    title="เลื่อนไปขวา"
+                  >
+                    <ChevronRight className="w-4 h-4" />
+                  </button>
+                </div>
+              )}
+
+              {/* List Mode Global Toggle All Details */}
+              {viewMode === 'list' && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const allExpanded = meterRows.every(r => expandedBreakdowns[r.roomId]);
+                    const nextState = !allExpanded;
+                    const nextMap: { [roomId: string]: boolean } = {};
+                    meterRows.forEach(r => { nextMap[r.roomId] = nextState; });
+                    setExpandedBreakdowns(nextMap);
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-xl bg-slate-100 hover:bg-slate-200 text-indigo-700 transition-all cursor-pointer border border-slate-200/60 shadow-2xs shrink-0"
+                  title={meterRows.every(r => expandedBreakdowns[r.roomId]) ? "ซ่อนรายละเอียดทุกห้อง" : "แสดงรายละเอียดทุกห้อง"}
+                >
+                  {meterRows.every(r => expandedBreakdowns[r.roomId]) ? (
+                    <>
+                      <ChevronUp className="w-3.5 h-3.5" />
+                      <span>ซ่อนรายละเอียด</span>
+                    </>
+                  ) : (
+                    <>
+                      <ChevronDown className="w-3.5 h-3.5" />
+                      <span>แสดงรายละเอียด</span>
+                    </>
+                  )}
+                </button>
+              )}
+            </div>
           </div>
 
           {/* Action buttons */}
@@ -2324,8 +2330,8 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                 disabled={!isMutationReady || isSaving || !hasEligibleUnissuedBills}
                 onClick={handleIssueAllBills}
                 className={`w-full sm:w-auto px-3 sm:px-4 py-2 text-xs font-bold rounded-xl flex items-center justify-center gap-1.5 transition-all shadow-md whitespace-nowrap shrink-0 ${!hasEligibleUnissuedBills
-                    ? 'bg-gray-100 text-gray-400 border border-gray-200 cursor-not-allowed shadow-none'
-                    : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-600/10 cursor-pointer'
+                  ? 'bg-gray-100 text-gray-400 border border-gray-200 cursor-not-allowed shadow-none'
+                  : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-600/10 cursor-pointer'
                   }`}
                 title={!hasEligibleUnissuedBills ? 'ออกบิลครบทุกห้องแล้ว' : 'ออกบิลทุกห้อง'}
               >
@@ -2403,7 +2409,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                   const isWaterDirectEdit = isFirstCycle || !hasWaterBaseline;
 
                   return (
-                    <tr key={row.roomId} id={`room-row-${row.roomId}`} className="hover:bg-slate-50/50 transition-colors">
+                    <tr key={row.roomId} id={`room-row-${row.roomId}`} data-testid={`meter-row-${row.roomId}`} className="hover:bg-slate-50/50 transition-colors">
                       {/* Sticky Room Column (Show only room number like A101) */}
                       <td className="p-4 sticky left-0 bg-white z-10 font-extrabold text-slate-800 text-sm shadow-[2px_0_5px_rgba(0,0,0,0.04)]">
                         {row.roomNumber}
@@ -2436,8 +2442,8 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                                 data-row={idx}
                                 data-col="elecPrev"
                                 className={`w-20 px-2 py-1 text-xs border rounded-lg bg-white text-slate-800 text-center font-bold focus:outline-indigo-500 transition-all duration-300 disabled:bg-slate-50 disabled:text-slate-500 disabled:border-transparent ${flashingCells[`${row.roomId}-elecPrev`]
-                                    ? 'animate-vibrant-flash shadow-md z-10'
-                                    : 'border-gray-200'
+                                  ? 'animate-vibrant-flash shadow-md z-10'
+                                  : 'border-gray-200'
                                   }`}
                               />
                             </div>
@@ -2523,10 +2529,10 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                               data-row={idx}
                               data-col="elecCurr"
                               className={`w-20 px-2 py-1 text-xs border rounded-lg bg-white text-slate-800 text-center font-bold focus:outline-indigo-500 transition-all duration-300 disabled:bg-slate-50 disabled:text-slate-500 disabled:border-transparent ${flashingCells[`${row.roomId}-elecCurr`]
-                                  ? 'animate-vibrant-flash shadow-md z-10'
-                                  : elecUnits < 0
-                                    ? 'border-rose-300 ring-2 ring-rose-100 bg-rose-50'
-                                    : 'border-gray-200'
+                                ? 'animate-vibrant-flash shadow-md z-10'
+                                : elecUnits < 0
+                                  ? 'border-rose-300 ring-2 ring-rose-100 bg-rose-50'
+                                  : 'border-gray-200'
                                 }`}
                             />
                           </div>
@@ -2560,8 +2566,8 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                                 data-row={idx}
                                 data-col="waterPrev"
                                 className={`w-20 px-2 py-1 text-xs border rounded-lg bg-white text-slate-800 text-center font-bold focus:outline-indigo-500 transition-all duration-300 disabled:bg-slate-50 disabled:text-slate-500 disabled:border-transparent ${flashingCells[`${row.roomId}-waterPrev`]
-                                    ? 'animate-vibrant-flash shadow-md z-10'
-                                    : 'border-gray-200'
+                                  ? 'animate-vibrant-flash shadow-md z-10'
+                                  : 'border-gray-200'
                                   }`}
                               />
                             </div>
@@ -2647,10 +2653,10 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                               data-row={idx}
                               data-col="waterCurr"
                               className={`w-20 px-2 py-1 text-xs border rounded-lg bg-white text-slate-800 text-center font-bold focus:outline-indigo-500 transition-all duration-300 disabled:bg-slate-50 disabled:text-slate-500 disabled:border-transparent ${flashingCells[`${row.roomId}-waterCurr`]
-                                  ? 'animate-vibrant-flash shadow-md z-10'
-                                  : waterUnits < 0
-                                    ? 'border-rose-300 ring-2 ring-rose-100 bg-rose-50'
-                                    : 'border-gray-200'
+                                ? 'animate-vibrant-flash shadow-md z-10'
+                                : waterUnits < 0
+                                  ? 'border-rose-300 ring-2 ring-rose-100 bg-rose-50'
+                                  : 'border-gray-200'
                                 }`}
                             />
                           </div>
@@ -2681,8 +2687,8 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                             data-row={idx}
                             data-col="peopleCount"
                             className={`w-14 px-2 py-1 text-xs border rounded-lg bg-white text-slate-800 text-center font-bold focus:outline-indigo-500 transition-all duration-300 disabled:bg-slate-50 disabled:text-slate-500 disabled:border-transparent ${flashingCells[`${row.roomId}-peopleCount`]
-                                ? 'animate-vibrant-flash shadow-md z-10'
-                                : 'border-gray-200'
+                              ? 'animate-vibrant-flash shadow-md z-10'
+                              : 'border-gray-200'
                               }`}
                           />
                         </div>
@@ -2737,8 +2743,25 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                       {/* Calculated Total & Financial Breakdown */}
                       <td className="p-4 text-right">
                         {(() => {
+                          const isOccupiedOrActive = Boolean(
+                            roomCtx?.tenantId ||
+                            roomCtx?.billingSource === 'CONTRACT' ||
+                            roomCtx?.billingSource === 'PROVISIONAL_MONTHLY' ||
+                            roomCtx?.billingSource === 'PROVISIONAL_TERM' ||
+                            roomCtx?.billingSource === 'DAILY_STAY' ||
+                            roomCtx?.isDailyUnpaid ||
+                            roomCtx?.isFutureReservation
+                          );
                           const breakdown = getOwnerFinancialBreakdown(roomCtx);
-                          const amountDue = breakdown.formattedAmount;
+                          const livePreview = calculateMeterRowPreview(roomCtx, rateSnapshot, row);
+                          const hasRentInBreakdown = breakdown.components.some((c: any) => c.type === 'rent' || c.type === 'legacy_combined' || (c.label && (c.label.includes('ค่าเช่า') || c.label.includes('รวมค่าเช่า'))));
+                          const rentAmountNum = Number(roomCtx?.rentAmount ?? room?.monthlyRent ?? 0);
+                          const isDailyRentPaid = Boolean(roomCtx?.isDailyRentPaid);
+                          const amountDue = (breakdown.operationalAmount > 0)
+                            ? (hasRentInBreakdown || isDailyRentPaid || rentAmountNum === 0
+                              ? breakdown.formattedAmount
+                              : formatMoneyDisplay(breakdown.operationalAmount + rentAmountNum))
+                            : (isOccupiedOrActive && Number(livePreview.totalAmount) > 0 ? livePreview.formattedTotal : breakdown.formattedAmount);
                           const chargeComponents = breakdown.components;
                           const isExpanded = Boolean(expandedBreakdowns[row.roomId]);
 
@@ -2813,8 +2836,8 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
 
                       {/* Status Switch with real server authority */}
                       <td className={`p-4 text-center transition-all duration-300 ${flashingCells[`${row.roomId}-status`]
-                          ? 'animate-vibrant-flash rounded-lg shadow-md z-10'
-                          : ''
+                        ? 'animate-vibrant-flash rounded-lg shadow-md z-10'
+                        : ''
                         }`}>
                         {(() => {
                           if (isDailyContext) {
@@ -2862,43 +2885,46 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                             );
                           }
 
+                          const effectiveBillStatus: BillStatus = (roomCtx?.billStatus as BillStatus) || row.billStatus;
+                          const isEffectivePaid = effectiveBillStatus === 'paid' || Boolean(roomCtx?.isPaid) || row.isPaid;
+
                           return (
                             <div className="flex flex-col items-center justify-center gap-1 min-w-[85px]">
                               <button
                                 type="button"
                                 role="switch"
-                                aria-checked={row.billStatus !== 'draft' && row.billStatus !== 'cancelled'}
-                                disabled={isSaving || row.isPaid || row.billStatus === 'paid' || !selectedBillingCycleId}
+                                aria-checked={effectiveBillStatus !== 'draft' && effectiveBillStatus !== 'cancelled'}
+                                disabled={isSaving || isEffectivePaid || effectiveBillStatus === 'paid' || !selectedBillingCycleId}
                                 onClick={() => handleToggleStatusSwitch(row)}
-                                className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none disabled:cursor-not-allowed disabled:opacity-60 ${row.billStatus === 'paid'
-                                    ? 'bg-emerald-600'
-                                    : row.billStatus !== 'draft' && row.billStatus !== 'cancelled'
-                                      ? 'bg-amber-500'
-                                      : 'bg-slate-300'
+                                className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none disabled:cursor-not-allowed disabled:opacity-60 ${effectiveBillStatus === 'paid'
+                                  ? 'bg-emerald-600'
+                                  : effectiveBillStatus !== 'draft' && effectiveBillStatus !== 'cancelled'
+                                    ? 'bg-amber-500'
+                                    : 'bg-slate-300'
                                   }`}
                                 title={
-                                  row.billStatus === 'paid'
+                                  effectiveBillStatus === 'paid'
                                     ? 'ชำระแล้ว (ล็อค)'
-                                    : row.billStatus !== 'draft' && row.billStatus !== 'cancelled'
+                                    : effectiveBillStatus !== 'draft' && effectiveBillStatus !== 'cancelled'
                                       ? 'คลิกเพื่อยกเลิกบิล'
                                       : 'คลิกเพื่อออกบิล'
                                 }
                               >
                                 <span
                                   aria-hidden="true"
-                                  className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out ${row.billStatus !== 'draft' && row.billStatus !== 'cancelled' ? 'translate-x-4' : 'translate-x-0'
+                                  className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out ${effectiveBillStatus !== 'draft' && effectiveBillStatus !== 'cancelled' ? 'translate-x-4' : 'translate-x-0'
                                     }`}
                                 />
                               </button>
-                              <span className={`text-[10px] font-extrabold leading-none ${row.billStatus === 'paid'
-                                  ? 'text-emerald-700'
-                                  : row.billStatus !== 'draft' && row.billStatus !== 'cancelled'
-                                    ? 'text-amber-700'
-                                    : 'text-slate-500'
+                              <span className={`text-[10px] font-extrabold leading-none ${effectiveBillStatus === 'paid'
+                                ? 'text-emerald-700'
+                                : effectiveBillStatus !== 'draft' && effectiveBillStatus !== 'cancelled'
+                                  ? 'text-amber-700'
+                                  : 'text-slate-500'
                                 }`}>
-                                {row.billStatus === 'paid'
+                                {effectiveBillStatus === 'paid'
                                   ? 'ชำระแล้ว'
-                                  : row.billStatus === 'draft' || row.billStatus === 'cancelled'
+                                  : effectiveBillStatus === 'draft' || effectiveBillStatus === 'cancelled'
                                     ? 'ยังไม่ออกบิล'
                                     : 'รอชำระ'}
                               </span>
@@ -2920,8 +2946,21 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                           const hasBookableGap = roomCtx?.hasBookableGap ?? true;
                           const historicalDailyCount = roomCtx?.historicalDailyCount || 0;
                           const dailyCheckOutDate = roomCtx?.dailyCheckOutDate || null;
+                          const checkInDate = roomCtx?.checkInDate || null;
+                          const contractEndDate = roomCtx?.contractEndDate || (() => {
+                            const activeContract = (contracts || []).find((c: any) => c.roomId === row.roomId && ['active', 'expiring_soon', 'pending_signature', 'waiting_extension', 'checking_out'].includes(c.status));
+                            if (!activeContract?.endDate) return null;
+                            const endStr = normalizeBangkokDate(activeContract.endDate);
+                            if (activeCycleCode && endStr.slice(0, 7) === activeCycleCode) {
+                              return endStr;
+                            }
+                            return null;
+                          })();
 
                           if (isFuture) {
+                            const futureLabel = checkInDate
+                              ? `จองล่วงหน้า ${formatShortThaiBuddhistDate(checkInDate)}`
+                              : 'จองล่วงหน้า';
                             return (
                               <div className="flex items-center gap-2">
                                 <div className="flex flex-col items-start gap-0.5">
@@ -2937,7 +2976,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                                     </button>
                                   ) : null}
                                   <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
-                                    จองล่วงหน้า
+                                    {futureLabel}
                                   </span>
                                 </div>
                               </div>
@@ -2953,34 +2992,41 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                               <div className="flex items-center gap-2">
                                 {hasTenant && (
                                   <div className="flex flex-col items-start gap-0.5">
-                                    <button
-                                      type="button"
-                                      onClick={() => onSelectTenant(effectiveTenantId, row.roomId)}
-                                      className="inline-flex items-center gap-1.5 text-indigo-600 hover:text-indigo-800 hover:underline transition-all cursor-pointer font-bold whitespace-nowrap"
-                                    >
-                                      {peopleCountVal > 1 ? (
-                                        <Users className="w-3.5 h-3.5 shrink-0" />
-                                      ) : (
-                                        <User className="w-3.5 h-3.5 shrink-0" />
-                                      )}
-                                      <span className="truncate max-w-[100px]">{effectiveTenantName}</span>
-                                      <ArrowRight className="w-3 h-3 opacity-60 shrink-0" />
-                                    </button>
+                                    <div className="flex items-center gap-1.5">
+                                      <button
+                                        type="button"
+                                        onClick={() => onSelectTenant(effectiveTenantId, row.roomId)}
+                                        className="inline-flex items-center gap-1.5 text-indigo-600 hover:text-indigo-800 hover:underline transition-all cursor-pointer font-bold whitespace-nowrap"
+                                      >
+                                        {peopleCountVal > 1 ? (
+                                          <Users className="w-3.5 h-3.5 shrink-0" />
+                                        ) : (
+                                          <User className="w-3.5 h-3.5 shrink-0" />
+                                        )}
+                                        <span className="truncate max-w-[100px]">{effectiveTenantName}</span>
+                                        <ArrowRight className="w-3 h-3 opacity-60 shrink-0" />
+                                      </button>
+                                    </div>
                                     {!isLineLinked && (
                                       <span className="text-[10px] text-slate-400 font-normal leading-tight">
                                         (ยังไม่ได้เชื่อม LINE)
                                       </span>
                                     )}
+                                    {contractEndDate && (
+                                      <span className="text-xs font-bold text-slate-800">
+                                        ({formatShortThaiBuddhistDate(contractEndDate)})
+                                      </span>
+                                    )}
                                     {dailyCheckOutDate && (
                                       <span className="text-xs font-bold text-slate-700">
-                                        {formatShortThaiBuddhistDate(dailyCheckOutDate)}
+                                        ({formatShortThaiBuddhistDate(dailyCheckOutDate)})
                                       </span>
                                     )}
                                   </div>
                                 )}
                                 {!hasTenant && dailyCheckOutDate && (
                                   <span className="text-xs font-bold text-slate-700">
-                                    {formatShortThaiBuddhistDate(dailyCheckOutDate)}
+                                    ({formatShortThaiBuddhistDate(dailyCheckOutDate)})
                                   </span>
                                 )}
                                 {!hasOccupantClaim && hasBookableGap && (room || row.roomId) && (
@@ -3012,18 +3058,25 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                           if (hasMonthly && hasDaily) {
                             return (
                               <div className="flex flex-col items-start gap-1">
-                                <button
-                                  type="button"
-                                  onClick={() => onSelectTenant(effectiveTenantId, row.roomId)}
-                                  className="inline-flex items-center gap-1.5 text-indigo-600 hover:text-indigo-800 hover:underline transition-all cursor-pointer font-bold whitespace-nowrap"
-                                >
-                                  <User className="w-3.5 h-3.5 shrink-0" />
-                                  <span className="truncate max-w-[100px]">{effectiveTenantName}</span>
-                                  <ArrowRight className="w-3 h-3 opacity-60 shrink-0" />
-                                </button>
+                                <div className="flex items-center gap-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => onSelectTenant(effectiveTenantId, row.roomId)}
+                                    className="inline-flex items-center gap-1.5 text-indigo-600 hover:text-indigo-800 hover:underline transition-all cursor-pointer font-bold whitespace-nowrap"
+                                  >
+                                    <User className="w-3.5 h-3.5 shrink-0" />
+                                    <span className="truncate max-w-[100px]">{effectiveTenantName}</span>
+                                    <ArrowRight className="w-3 h-3 opacity-60 shrink-0" />
+                                  </button>
+                                  {contractEndDate && (
+                                    <span className="text-xs font-bold text-slate-800">
+                                      ({formatShortThaiBuddhistDate(contractEndDate)})
+                                    </span>
+                                  )}
+                                </div>
                                 {dailyCheckOutDate && (
                                   <span className="text-xs font-bold text-slate-700">
-                                    {formatShortThaiBuddhistDate(dailyCheckOutDate)}
+                                    ({formatShortThaiBuddhistDate(dailyCheckOutDate)})
                                   </span>
                                 )}
                               </div>
@@ -3032,26 +3085,33 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
 
                           if (hasMonthly) {
                             return (
-                              <button
-                                type="button"
-                                onClick={() => onSelectTenant(effectiveTenantId, row.roomId)}
-                                className="inline-flex items-center gap-1.5 text-indigo-600 hover:text-indigo-800 hover:underline transition-all cursor-pointer font-bold whitespace-nowrap"
-                              >
-                                {peopleCountVal > 1 ? (
-                                  <Users className="w-3.5 h-3.5 shrink-0" />
-                                ) : (
-                                  <User className="w-3.5 h-3.5 shrink-0" />
+                              <div className="flex items-center gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => onSelectTenant(effectiveTenantId, row.roomId)}
+                                  className="inline-flex items-center gap-1.5 text-indigo-600 hover:text-indigo-800 hover:underline transition-all cursor-pointer font-bold whitespace-nowrap"
+                                >
+                                  {peopleCountVal > 1 ? (
+                                    <Users className="w-3.5 h-3.5 shrink-0" />
+                                  ) : (
+                                    <User className="w-3.5 h-3.5 shrink-0" />
+                                  )}
+                                  <span className="truncate max-w-[100px]">{effectiveTenantName}</span>
+                                  <ArrowRight className="w-3 h-3 opacity-60 shrink-0" />
+                                </button>
+                                {contractEndDate && (
+                                  <span className="text-xs font-bold text-slate-800">
+                                    ({formatShortThaiBuddhistDate(contractEndDate)})
+                                  </span>
                                 )}
-                                <span className="truncate max-w-[100px]">{effectiveTenantName}</span>
-                                <ArrowRight className="w-3 h-3 opacity-60 shrink-0" />
-                              </button>
+                              </div>
                             );
                           }
 
                           if (hasDaily) {
                             return dailyCheckOutDate ? (
                               <span className="text-xs font-bold text-slate-700">
-                                {formatShortThaiBuddhistDate(dailyCheckOutDate)}
+                                ({formatShortThaiBuddhistDate(dailyCheckOutDate)})
                               </span>
                             ) : (
                               <span className="text-gray-400">ไม่มีข้อมูล</span>
@@ -3076,7 +3136,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
           </div>
         ) : (
           <div className="p-4 bg-slate-50/50">
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4" data-testid="meter-list-container">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3 gap-4" data-testid="meter-list-container">
               {filteredRows.map((row, idx) => (
                 <OwnerMeterListCard
                   key={row.roomId}
@@ -3143,8 +3203,8 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                 disabled={isSaving}
                 onClick={handleSaveMeters}
                 className={`relative w-full md:w-auto px-8 py-4 bg-gradient-to-r from-indigo-600 to-blue-600 text-white font-black text-xs md:text-sm rounded-2xl flex items-center justify-center gap-2.5 shadow-2xl transition-all select-none border border-indigo-400/40 ${isSaving
-                    ? 'opacity-85 cursor-not-allowed'
-                    : 'hover:from-indigo-550 hover:to-blue-550 hover:scale-[1.03] active:scale-95 cursor-pointer'
+                  ? 'opacity-85 cursor-not-allowed'
+                  : 'hover:from-indigo-550 hover:to-blue-550 hover:scale-[1.03] active:scale-95 cursor-pointer'
                   }`}
               >
                 {isSaving ? (

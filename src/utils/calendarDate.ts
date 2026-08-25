@@ -174,7 +174,7 @@ export function formatShortThaiBuddhistDate(input?: Date | string | null): strin
     const [yearStr, monthStr, dayStr] = bkkStr.split('-');
     const beYear = parseInt(yearStr, 10) + 543;
     const shortBeYear = String(beYear).slice(-2);
-    return `(${dayStr}/${monthStr}/${shortBeYear})`;
+    return `${dayStr}/${monthStr}/${shortBeYear}`;
   } catch {
     return '-';
   }

@@ -216,7 +216,9 @@ export function calculateMeterRowPreview(
         previousReading: draft.elecPrev,
         currentReading: draft.elecCurr,
       },
-      peopleCount: draft.peopleCount ?? roomCtx?.currentHouseholdPeopleCount ?? roomCtx?.snapshotPeopleCount ?? 0,
+      peopleCount: draft.peopleCount !== undefined
+        ? draft.peopleCount
+        : (roomCtx?.currentHouseholdPeopleCount ?? roomCtx?.snapshotPeopleCount ?? (roomCtx?.billingSource && roomCtx.billingSource !== 'NONE' ? 1 : undefined)),
       parkingQuantity: roomCtx?.parkingQuantity,
       manualOutstanding: draft.overdueAmount,
       otherFees: draft.otherFees,

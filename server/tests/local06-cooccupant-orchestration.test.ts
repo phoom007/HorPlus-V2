@@ -212,7 +212,7 @@ describe('LOCAL-06 — Co-Occupant / People-Count / Auto-Bill Recalculation & Ou
           dormitoryId: dormId,
           billId: bill.id,
           type: 'water',
-          description: 'ค่าน้ำประปา (1 คน)',
+          description: 'ค่าน้ำ (1 คน)',
           quantity: 1,
           unit: 'person',
           unitPrice: 100,
@@ -287,7 +287,7 @@ describe('LOCAL-06 — Co-Occupant / People-Count / Auto-Bill Recalculation & Ou
     expect(waterItem?.unit).toBe('person');
     expect(Number(waterItem?.quantity)).toBe(2);
     expect(Number(waterItem?.amount)).toBe(200);
-    expect(waterItem?.description).toBe('ค่าน้ำประปา (2 คน)');
+    expect(waterItem?.description).toBe('ค่าน้ำ (2 คน)');
 
     const commonItem = updatedItems.find((i) => i.type === 'common_fee');
     expect(commonItem?.unit).toBe('person');
@@ -373,7 +373,7 @@ describe('LOCAL-06 — Co-Occupant / People-Count / Auto-Bill Recalculation & Ou
           dormitoryId: dormId,
           billId: bill.id,
           type: 'water',
-          description: 'ค่าน้ำประปา (2 คน)',
+          description: 'ค่าน้ำ (2 คน)',
           quantity: 2,
           unit: 'person',
           unitPrice: 100,
@@ -581,7 +581,7 @@ describe('LOCAL-06 — Co-Occupant / People-Count / Auto-Bill Recalculation & Ou
           dormitoryId: dormId,
           billId: augBill.id,
           type: 'water',
-          description: 'ค่าน้ำประปา (1 คน)',
+          description: 'ค่าน้ำ (1 คน)',
           quantity: 1,
           unit: 'person',
           unitPrice: 100,
@@ -719,7 +719,7 @@ describe('LOCAL-06 — Co-Occupant / People-Count / Auto-Bill Recalculation & Ou
           dormitoryId: dormId,
           billId: bill.id,
           type: 'water',
-          description: 'ค่าน้ำประปา (1 คน)',
+          description: 'ค่าน้ำ (1 คน)',
           quantity: 1,
           unit: 'person',
           unitPrice: 100,
@@ -991,7 +991,7 @@ describe('LOCAL-06 — Co-Occupant / People-Count / Auto-Bill Recalculation & Ou
           dormitoryId: dormId,
           billId: currentUnpaidBill.id,
           type: 'water',
-          description: 'ค่าน้ำประปา (1 คน)',
+          description: 'ค่าน้ำ (1 คน)',
           quantity: 1,
           unit: 'person',
           unitPrice: 100,
@@ -1074,7 +1074,7 @@ describe('LOCAL-06 — Co-Occupant / People-Count / Auto-Bill Recalculation & Ou
           dormitoryId: dormId,
           billId: rollbackBill.id,
           type: 'water',
-          description: 'ค่าน้ำประปา (1 คน)',
+          description: 'ค่าน้ำ (1 คน)',
           quantity: 1,
           unit: 'person',
           unitPrice: 100,
@@ -1202,7 +1202,7 @@ describe('LOCAL-06 — Co-Occupant / People-Count / Auto-Bill Recalculation & Ou
           dormitoryId: dormId,
           billId: concBill.id,
           type: 'water',
-          description: 'ค่าน้ำประปา (1 คน)',
+          description: 'ค่าน้ำ (1 คน)',
           quantity: 1,
           unit: 'person',
           unitPrice: 100,
@@ -1448,7 +1448,7 @@ describe('LOCAL-06 — Co-Occupant / People-Count / Auto-Bill Recalculation & Ou
           dormitoryId: dormId,
           billId: bill.id,
           type: 'water',
-          description: 'ค่าน้ำประปา (1 คน)',
+          description: 'ค่าน้ำ (1 คน)',
           quantity: 1,
           unit: 'person',
           unitPrice: 100,
@@ -1536,7 +1536,7 @@ describe('LOCAL-06 — Co-Occupant / People-Count / Auto-Bill Recalculation & Ou
     const waterItem = billAfterAdd?.items.find((i) => i.type === 'water');
     expect(Number(waterItem?.quantity)).toBe(2);
     expect(Number(waterItem?.amount)).toBe(200);
-    expect(waterItem?.description).toBe('ค่าน้ำประปา (2 คน)');
+    expect(waterItem?.description).toBe('ค่าน้ำ (2 คน)');
 
     const elecItem = billAfterAdd?.items.find((i) => i.type === 'electricity');
     expect(Number(elecItem?.quantity)).toBe(2);

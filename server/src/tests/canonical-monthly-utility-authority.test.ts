@@ -556,4 +556,55 @@ describe('LOCAL-07 Shared Canonical Monthly Utility Calculation Authority', () =
       expect(err.code).toBe('MISSING_ELECTRICITY_METER_READING');
     }
   });
+
+  it('35. Zero peopleCount (peopleCount = 0): omits fixed and per-person fees (water, elec, common, internet, parking)', () => {
+    const res = calculateCanonicalMonthlyUtility({
+      rateSnapshot: {
+        waterBillingType: 'fixed',
+        waterRate: '150.00',
+        electricityBillingType: 'fixed',
+        electricityRate: '300.00',
+        commonFeeMode: 'per_room',
+        commonFee: '100.00',
+        internetFeeMode: 'per_room',
+        internetFee: '200.00',
+        parkingFeeMode: 'per_room',
+        parkingFee: '100.00',
+      },
+      peopleCount: 0,
+      waterReading: null,
+      electricReading: null,
+    });
+
+    expect(res.monthlyUtilityTotal).toBe('0.00');
+    expect(res.items).toHaveLength(0);
+  });
+
+  it('36. Zero peopleCount (peopleCount = 0) with per_unit meters: calculates meter usage units into totalAmount and ignores fixed/per-person fees', () => {
+    const res = calculateCanonicalMonthlyUtility({
+      rateSnapshot: {
+        waterBillingType: 'per_unit',
+        waterRate: '18.00',
+        electricityBillingType: 'per_unit',
+        electricityRate: '7.00',
+        commonFeeMode: 'per_room',
+        commonFee: '100.00',
+        internetFeeMode: 'per_room',
+        internetFee: '200.00',
+        parkingFeeMode: 'per_room',
+        parkingFee: '100.00',
+      },
+      peopleCount: 0,
+      waterReading: { previousReading: '100', currentReading: '110' }, // 10 units * 18 = 180.00
+      electricReading: { previousReading: '500', currentReading: '560' }, // 60 units * 7 = 420.00
+    });
+
+    expect(res.waterAmount).toBe('180.00');
+    expect(res.electricityAmount).toBe('420.00');
+    expect(res.commonFee).toBe('0.00');
+    expect(res.internetFee).toBe('0.00');
+    expect(res.parkingFee).toBe('0.00');
+    expect(res.monthlyUtilityTotal).toBe('600.00');
+    expect(res.items).toHaveLength(2);
+  });
 });

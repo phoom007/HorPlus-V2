@@ -41,6 +41,8 @@ export interface RoomPreviewContext {
   isDailyDepositPaidInDisplayedPeriod?: boolean;
   dailyCheckOutDate?: string | null;
   historicalDailyCount?: number;
+  checkInDate?: string | null;
+  contractEndDate?: string | null;
 }
 
 export interface TransientRowDraft {
@@ -185,7 +187,9 @@ export function calculateMeterRowPreview(
   draft: TransientRowDraft
 ): CalculatedMeterPreview {
   const rentSatang = parseSatang(roomCtx?.rentAmount);
-  const peopleCount = Math.max(0, draft.peopleCount ?? roomCtx?.currentHouseholdPeopleCount ?? roomCtx?.snapshotPeopleCount ?? 0);
+  const isZeroOccupants = draft.peopleCount === 0 || (draft.peopleCount === undefined && (roomCtx?.currentHouseholdPeopleCount === 0 || roomCtx?.snapshotPeopleCount === 0));
+  const defaultOccupants = (roomCtx?.billingSource && roomCtx.billingSource !== 'NONE') ? 1 : 0;
+  const peopleCount = Math.max(0, draft.peopleCount ?? roomCtx?.currentHouseholdPeopleCount ?? roomCtx?.snapshotPeopleCount ?? defaultOccupants);
   const peopleCountStr = peopleCount.toString();
 
   const rawWaterPrev = draft.waterPrev !== undefined && draft.waterPrev !== null ? String(draft.waterPrev).trim() : '';
@@ -208,12 +212,26 @@ export function calculateMeterRowPreview(
     waterAmountSatang = 0n;
   } else if (rawWaterMode === 'per_person') {
     waterStatus = 'VALID';
-    waterAmountSatang = multiplyMoneyByQuantity(waterRateSatang, peopleCountStr);
-    waterUsageScaled = parseScaled2(peopleCountStr);
+    if (isZeroOccupants) {
+      waterAmountSatang = 0n;
+      waterUsageScaled = 0n;
+    } else {
+      waterAmountSatang = multiplyMoneyByQuantity(waterRateSatang, peopleCountStr);
+      waterUsageScaled = parseScaled2(peopleCountStr);
+    }
   } else if (rawWaterMode === 'fixed') {
     waterStatus = 'VALID';
-    waterAmountSatang = waterRateSatang;
-    waterUsageScaled = 100n; // 1.00 room
+    if (isZeroOccupants) {
+      waterAmountSatang = 0n;
+      waterUsageScaled = 0n;
+    } else {
+      waterAmountSatang = waterRateSatang;
+      waterUsageScaled = 100n; // 1.00 room
+    }
+  } else if (rawWaterMode === 'free' || rawWaterMode === 'none') {
+    waterStatus = 'VALID';
+    waterAmountSatang = 0n;
+    waterUsageScaled = 0n;
   } else if (rawWaterMode === 'per_unit') {
     waterStatus = 'VALID';
     // per_unit: calculate usage units with 4/5-digit rollover support
@@ -254,12 +272,26 @@ export function calculateMeterRowPreview(
     elecAmountSatang = 0n;
   } else if (rawElecMode === 'per_person') {
     elecStatus = 'VALID';
-    elecAmountSatang = multiplyMoneyByQuantity(elecRateSatang, peopleCountStr);
-    elecUsageScaled = parseScaled2(peopleCountStr);
+    if (isZeroOccupants) {
+      elecAmountSatang = 0n;
+      elecUsageScaled = 0n;
+    } else {
+      elecAmountSatang = multiplyMoneyByQuantity(elecRateSatang, peopleCountStr);
+      elecUsageScaled = parseScaled2(peopleCountStr);
+    }
   } else if (rawElecMode === 'fixed') {
     elecStatus = 'VALID';
-    elecAmountSatang = elecRateSatang;
-    elecUsageScaled = 100n; // 1.00 room
+    if (isZeroOccupants) {
+      elecAmountSatang = 0n;
+      elecUsageScaled = 0n;
+    } else {
+      elecAmountSatang = elecRateSatang;
+      elecUsageScaled = 100n; // 1.00 room
+    }
+  } else if (rawElecMode === 'free' || rawElecMode === 'none') {
+    elecStatus = 'VALID';
+    elecAmountSatang = 0n;
+    elecUsageScaled = 0n;
   } else if (rawElecMode === 'per_unit') {
     elecStatus = 'VALID';
     // per_unit: calculate usage units with 4/5-digit rollover support
@@ -291,7 +323,7 @@ export function calculateMeterRowPreview(
   const commonFeeSatang = parseSatang(rates?.commonFee);
   let commonAmountSatang = 0n;
 
-  if (commonMode === 'free' || commonMode === 'none' || (peopleCount === 0 && roomCtx?.billingSource === 'NONE')) {
+  if (commonMode === 'free' || commonMode === 'none' || isZeroOccupants) {
     commonAmountSatang = 0n;
   } else if (commonMode === 'per_person' || commonMode === 'person') {
     commonAmountSatang = multiplyMoneyByQuantity(commonFeeSatang, peopleCountStr);
@@ -304,7 +336,7 @@ export function calculateMeterRowPreview(
   const internetFeeSatang = parseSatang(rates?.internetFee);
   let internetAmountSatang = 0n;
 
-  if (internetMode === 'free' || internetMode === 'none' || (peopleCount === 0 && roomCtx?.billingSource === 'NONE')) {
+  if (internetMode === 'free' || internetMode === 'none' || isZeroOccupants) {
     internetAmountSatang = 0n;
   } else if (internetMode === 'per_person' || internetMode === 'person') {
     internetAmountSatang = multiplyMoneyByQuantity(internetFeeSatang, peopleCountStr);
@@ -317,13 +349,13 @@ export function calculateMeterRowPreview(
   const parkingFeeSatang = parseSatang(rates?.parkingFee);
   let parkingAmountSatang = 0n;
 
-  if (parkingMode === 'free' || parkingMode === 'none' || (peopleCount === 0 && roomCtx?.billingSource === 'NONE')) {
+  if (parkingMode === 'free' || parkingMode === 'none' || isZeroOccupants) {
     parkingAmountSatang = 0n;
   } else if (parkingMode === 'per_person' || parkingMode === 'person') {
     parkingAmountSatang = multiplyMoneyByQuantity(parkingFeeSatang, peopleCountStr);
   } else if (parkingMode === 'per_vehicle' || parkingMode === 'vehicle') {
     const rawQty = roomCtx?.parkingQuantity;
-    const qty = rawQty === 'per_person' ? peopleCountStr : (rawQty ?? '0.00');
+    const qty = rawQty === 'per_person' ? peopleCountStr : (rawQty ?? '1.00');
     parkingAmountSatang = multiplyMoneyByQuantity(parkingFeeSatang, qty);
   } else {
     parkingAmountSatang = parkingFeeSatang;
@@ -388,8 +420,12 @@ export function calculateMeterRowPreview(
     };
   }
 
-  // 9. Standard Monthly Utility Total Amount (Monthly Utility never absorbs rent; rent is independent)
+  // 9. Standard Total Amount Due (includes Rent + Utilities + Common/Internet/Parking + Other Fees + Overdue)
+  const isMonthlyOrTerm = roomCtx?.billingSource === 'CONTRACT' || roomCtx?.billingSource === 'PROVISIONAL_MONTHLY' || roomCtx?.billingSource === 'PROVISIONAL_TERM';
+  const effectiveRentSatang = (isMonthlyOrTerm || roomCtx?.tenantId) ? rentSatang : 0n;
+
   const totalSatang =
+    effectiveRentSatang +
     waterAmountSatang +
     elecAmountSatang +
     commonAmountSatang +

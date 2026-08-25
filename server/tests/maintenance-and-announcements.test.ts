@@ -199,8 +199,8 @@ describe('Maintenance, Announcements & Notification Engine', () => {
     it('creates draft, previews recipients, and publishes announcement using LINE quota', async () => {
       const draft = await announcementService.createDraft({
         dormitoryId: dormId,
-        title: 'แจ้งปิดปรับปรุงระบบน้ำประปา',
-        content: 'จะมีการปิดน้ำประปาเพื่อซ่อมบำรุงในวันพรุ่งนี้เวลา 09:00 - 12:00 น.',
+        title: 'แจ้งปิดปรับปรุงระบบน้ำ',
+        content: 'จะมีการปิดน้ำเพื่อซ่อมบำรุงในวันพรุ่งนี้เวลา 09:00 - 12:00 น.',
         audiences: [{ targetType: 'all_tenants' }]
       });
 
@@ -229,5 +229,5 @@ describe('Maintenance, Announcements & Notification Engine', () => {
       const updatedList = await announcementService.getTenantAnnouncements(dormId, tenant.id);
       expect(updatedList[0].isRead).toBe(true);
     });
-});
+  });
 });

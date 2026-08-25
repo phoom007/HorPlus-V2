@@ -1376,7 +1376,7 @@ export async function seedLocal07Data() {
     // Bill Items
     const items = [
       { type: 'rent', description: `ค่าเช่าห้องพัก ${bf.roomNum}`, quantity: 1, unitPrice: bf.rent, amount: bf.rent },
-      { type: 'water', description: `ค่าน้ำประปา (${bf.wUnits} หน่วย @ ฿${bf.wRate})`, quantity: bf.wUnits, unitPrice: bf.wRate, amount: waterTotal },
+      { type: 'water', description: `ค่าน้ำ (${bf.wUnits} หน่วย @ ฿${bf.wRate})`, quantity: bf.wUnits, unitPrice: bf.wRate, amount: waterTotal },
       { type: 'electric', description: `ค่าไฟฟ้า (${bf.eUnits} หน่วย @ ฿${bf.eRate})`, quantity: bf.eUnits, unitPrice: bf.eRate, amount: elecTotal },
       { type: 'common', description: 'ค่าส่วนกลาง', quantity: 1, unitPrice: bf.common, amount: bf.common },
     ];
@@ -1473,7 +1473,7 @@ export async function seedLocal07Data() {
   });
 
   const bill101AugItems = [
-    { type: 'water', description: 'ค่าน้ำประปา (11 หน่วย @ ฿18)', quantity: 11, unitPrice: 18, amount: 198 },
+    { type: 'water', description: 'ค่าน้ำ (11 หน่วย @ ฿18)', quantity: 11, unitPrice: 18, amount: 198 },
     { type: 'electric', description: 'ค่าไฟฟ้า (60 หน่วย @ ฿7)', quantity: 60, unitPrice: 7, amount: 420 },
     { type: 'common', description: 'ค่าส่วนกลาง', quantity: 1, unitPrice: 200, amount: 200 },
     { type: 'internet', description: 'ค่าบริการอินเทอร์เน็ตความเร็วสูง', quantity: 1, unitPrice: 150, amount: 150 },
@@ -1632,7 +1632,7 @@ export async function seedLocal07Data() {
   });
 
   const bill202UtilItems = [
-    { type: 'water', description: 'ค่าน้ำประปา (5 หน่วย @ ฿18)', quantity: 5, unitPrice: 18, amount: 90 },
+    { type: 'water', description: 'ค่าน้ำ (5 หน่วย @ ฿18)', quantity: 5, unitPrice: 18, amount: 90 },
     { type: 'electric', description: 'ค่าไฟฟ้า (130 หน่วย @ ฿7)', quantity: 130, unitPrice: 7, amount: 910 },
     { type: 'common', description: 'ค่าส่วนกลาง', quantity: 1, unitPrice: 200, amount: 200 },
   ];

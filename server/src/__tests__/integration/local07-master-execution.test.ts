@@ -172,7 +172,7 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
           END $$;
         `);
       }
-    } catch {}
+    } catch { }
   });
 
   describe('1. First Google Account PRO Trial & Entitlements', () => {
@@ -931,9 +931,9 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
               await tx.dormitoryPropertyDefaults.deleteMany({ where: { dormitoryId: dId } });
               await tx.dormitoryBillingSettings.deleteMany({ where: { dormitoryId: dId } });
               await tx.dormitoryMember.deleteMany({ where: { dormitoryId: dId } });
-              await tx.dormitory.delete({ where: { id: dId } }).catch(() => {});
+              await tx.dormitory.delete({ where: { id: dId } }).catch(() => { });
             });
-          } catch {}
+          } catch { }
         }
         try {
           const userIds = users.map(u => u.id);
@@ -941,7 +941,7 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
             await prisma.$executeRaw`SELECT set_config('app.bypass_rls', 'on', true)`;
             await prisma.subscriptionPackageIntent.deleteMany({ where: { userId: { in: userIds } } });
           }
-        } catch {}
+        } catch { }
 
         for (const u of users) {
           try {
@@ -956,14 +956,14 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
               await tx.$executeRaw`DELETE FROM "sessions" WHERE "user_id" = ${u.id}::uuid`;
               await tx.$executeRaw`DELETE FROM "users" WHERE "id" = ${u.id}::uuid`;
             });
-          } catch {}
+          } catch { }
         }
 
         if (promo?.id) {
           await prisma.promoCode.update({
             where: { id: promo.id },
             data: { currentRedemptionsCount: 0 },
-          }).catch(() => {});
+          }).catch(() => { });
         }
       }
     });
@@ -3063,7 +3063,7 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
       await prisma.billItem.createMany({
         data: [
           { dormitoryId: dorm.id, billId: createdBill.id, type: 'rent', description: 'ค่าเช่า', amount: '5000.00', quantity: '1.00', unitPrice: '5000.00' },
-          { dormitoryId: dorm.id, billId: createdBill.id, type: 'water', description: 'ค่าน้ำประปา (3 คน)', amount: '300.00', quantity: '3.00', unitPrice: '100.00', unit: 'person', metadata: { mode: 'person', peopleCount: 3 } },
+          { dormitoryId: dorm.id, billId: createdBill.id, type: 'water', description: 'ค่าน้ำ (3 คน)', amount: '300.00', quantity: '3.00', unitPrice: '100.00', unit: 'person', metadata: { mode: 'person', peopleCount: 3 } },
           { dormitoryId: dorm.id, billId: createdBill.id, type: 'electricity', description: 'ค่าไฟฟ้า (100 หน่วย)', amount: '800.00', quantity: '100.00', unitPrice: '8.00', unit: 'unit' },
           { dormitoryId: dorm.id, billId: createdBill.id, type: 'common_fee', description: 'ค่าส่วนกลาง', amount: '200.00', quantity: '1.00', unitPrice: '200.00', unit: 'room' },
           { dormitoryId: dorm.id, billId: createdBill.id, type: 'internet', description: 'ค่าบริการอินเทอร์เน็ต (3 คน)', amount: '450.00', quantity: '3.00', unitPrice: '150.00', unit: 'person', metadata: { mode: 'person', peopleCount: 3 } },

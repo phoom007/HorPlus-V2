@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import React from 'react';
 import { render, screen, fireEvent, waitFor, cleanup, within } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -157,36 +158,43 @@ describe('HORPLUS LOCAL-07 — Owner Meter List Mode UX Suite (L1 - L28)', () =>
                 commonFee: '200.00',
                 commonFeeMode: 'per_room',
               },
-              rooms: customPreviewRooms || [
-                {
-                  roomId: 'room-101',
-                  tenantId: 'tenant-101',
-                  tenantName: 'นายสมชาย ใจดี',
-                  amountDue: '1268.00',
-                  chargeComponents: [
-                    { type: 'monthly_utility', label: 'บิลรายเดือน (พรีวิว)', amount: '1268.00', status: 'PREVIEW' },
-                  ],
-                },
-                {
-                  roomId: 'room-102',
-                  tenantId: 'tenant-102',
-                  tenantName: 'นางสาววิภา สุขใจ',
-                  amountDue: '4800.00',
-                  chargeComponents: [
-                    { type: 'rent', label: 'ค่าเช่าห้องพัก', amount: '4000.00', status: 'UNPAID' },
-                    { type: 'water', label: 'ค่าน้ำประปา', amount: '300.00', status: 'UNPAID' },
-                    { type: 'electricity', label: 'ค่าไฟฟ้า', amount: '500.00', status: 'UNPAID' },
-                  ],
-                },
-                {
-                  roomId: 'room-103',
-                  tenantId: null,
-                  tenantName: null,
-                  amountDue: '0.00',
-                  chargeComponents: [],
-                  hasBookableGap: true,
-                },
-              ],
+              rooms: (() => {
+                const defaultRooms = [
+                  {
+                    roomId: 'room-101',
+                    tenantId: 'tenant-101',
+                    tenantName: 'นายสมชาย ใจดี',
+                    amountDue: '1268.00',
+                    chargeComponents: [
+                      { type: 'monthly_utility', label: 'บิลรายเดือน (พรีวิว)', amount: '1268.00', status: 'PREVIEW' },
+                    ],
+                  },
+                  {
+                    roomId: 'room-102',
+                    tenantId: 'tenant-102',
+                    tenantName: 'นางสาววิภา สุขใจ',
+                    amountDue: '4800.00',
+                    chargeComponents: [
+                      { type: 'rent', label: 'ค่าเช่าห้องพัก', amount: '4000.00', status: 'UNPAID' },
+                      { type: 'water', label: 'ค่าน้ำ', amount: '300.00', status: 'UNPAID' },
+                      { type: 'electricity', label: 'ค่าไฟฟ้า', amount: '500.00', status: 'UNPAID' },
+                    ],
+                  },
+                  {
+                    roomId: 'room-103',
+                    tenantId: null,
+                    tenantName: null,
+                    amountDue: '0.00',
+                    chargeComponents: [],
+                    hasBookableGap: true,
+                  },
+                ];
+                if (!customPreviewRooms) return defaultRooms;
+                return defaultRooms.map(def => {
+                  const custom = customPreviewRooms.find((c: any) => c.roomId === def.roomId);
+                  return custom ? { ...def, ...custom } : def;
+                });
+              })(),
             },
           }),
           text: async () => JSON.stringify({ success: true }),
@@ -250,7 +258,7 @@ describe('HORPLUS LOCAL-07 — Owner Meter List Mode UX Suite (L1 - L28)', () =>
     cleanup();
     try {
       localStorage.clear();
-    } catch {}
+    } catch { }
     meterDraftStore.clearAllDrafts();
     queryClient = new QueryClient({
       defaultOptions: {
@@ -266,7 +274,7 @@ describe('HORPLUS LOCAL-07 — Owner Meter List Mode UX Suite (L1 - L28)', () =>
     cleanup();
     try {
       localStorage.clear();
-    } catch {}
+    } catch { }
     meterDraftStore.clearAllDrafts();
   });
 
@@ -284,45 +292,56 @@ describe('HORPLUS LOCAL-07 — Owner Meter List Mode UX Suite (L1 - L28)', () =>
       cyclePeopleRes: { success: true, data: [] },
     });
 
-    queryClient.setQueryData(queryKeys.meterPreviewContext(dormId, cycleId), customPreviewData || {
-      rateSnapshot: {
-        waterBillingType: 'per_unit',
-        waterRate: '18.00',
-        electricityBillingType: 'per_unit',
-        electricityRate: '7.00',
-        commonFee: '200.00',
-        commonFeeMode: 'per_room',
+    const defaultSnapshot = {
+      waterBillingType: 'per_unit',
+      waterRate: '18.00',
+      electricityBillingType: 'per_unit',
+      electricityRate: '7.00',
+      commonFee: '200.00',
+      commonFeeMode: 'per_room',
+    };
+
+    const defaultRooms = [
+      {
+        roomId: 'room-101',
+        tenantId: 'tenant-101',
+        tenantName: 'นายสมชาย ใจดี',
+        amountDue: '1268.00',
+        chargeComponents: [
+          { type: 'monthly_utility', label: 'บิลรายเดือน (พรีวิว)', amount: '1268.00', status: 'PREVIEW' },
+        ],
       },
-      rooms: [
-        {
-          roomId: 'room-101',
-          tenantId: 'tenant-101',
-          tenantName: 'นายสมชาย ใจดี',
-          amountDue: '1268.00',
-          chargeComponents: [
-            { type: 'monthly_utility', label: 'บิลรายเดือน (พรีวิว)', amount: '1268.00', status: 'PREVIEW' },
-          ],
-        },
-        {
-          roomId: 'room-102',
-          tenantId: 'tenant-102',
-          tenantName: 'นางสาววิภา สุขใจ',
-          amountDue: '4800.00',
-          chargeComponents: [
-            { type: 'rent', label: 'ค่าเช่าห้องพัก', amount: '4000.00', status: 'UNPAID' },
-            { type: 'water', label: 'ค่าน้ำประปา', amount: '300.00', status: 'UNPAID' },
-            { type: 'electricity', label: 'ค่าไฟฟ้า', amount: '500.00', status: 'UNPAID' },
-          ],
-        },
-        {
-          roomId: 'room-103',
-          tenantId: null,
-          tenantName: null,
-          amountDue: '0.00',
-          chargeComponents: [],
-          hasBookableGap: true,
-        },
-      ],
+      {
+        roomId: 'room-102',
+        tenantId: 'tenant-102',
+        tenantName: 'นางสาววิภา สุขใจ',
+        amountDue: '4800.00',
+        chargeComponents: [
+          { type: 'rent', label: 'ค่าเช่าห้องพัก', amount: '4000.00', status: 'UNPAID' },
+          { type: 'water', label: 'ค่าน้ำ', amount: '300.00', status: 'UNPAID' },
+          { type: 'electricity', label: 'ค่าไฟฟ้า', amount: '500.00', status: 'UNPAID' },
+        ],
+      },
+      {
+        roomId: 'room-103',
+        tenantId: null,
+        tenantName: null,
+        amountDue: '0.00',
+        chargeComponents: [],
+        hasBookableGap: true,
+      },
+    ];
+
+    const mergedRooms = customPreviewData?.rooms
+      ? defaultRooms.map(def => {
+        const custom = customPreviewData.rooms.find((c: any) => c.roomId === def.roomId);
+        return custom ? { ...def, ...custom } : def;
+      })
+      : defaultRooms;
+
+    queryClient.setQueryData(queryKeys.meterPreviewContext(dormId, cycleId), {
+      rateSnapshot: customPreviewData?.rateSnapshot || defaultSnapshot,
+      rooms: mergedRooms,
     });
 
     return render(
@@ -533,7 +552,7 @@ describe('HORPLUS LOCAL-07 — Owner Meter List Mode UX Suite (L1 - L28)', () =>
 
     const card101 = screen.getByTestId('meter-list-card-room-101');
     expect(within(card101).getByText('ไฟฟ้า')).toBeDefined();
-    expect(within(card101).getByText('น้ำประปา')).toBeDefined();
+    expect(within(card101).getByText('น้ำ')).toBeDefined();
   });
 
   it('L11. fixed water hides non-required water meter input', async () => {
@@ -564,7 +583,7 @@ describe('HORPLUS LOCAL-07 — Owner Meter List Mode UX Suite (L1 - L28)', () =>
 
     const card101 = screen.getByTestId('meter-list-card-room-101');
     expect(within(card101).getByText('ไฟฟ้า')).toBeDefined();
-    expect(within(card101).queryByText('น้ำประปา')).toBeNull();
+    expect(within(card101).queryByText('น้ำ')).toBeNull();
   });
 
   it('L12. per_person electricity hides non-required electricity meter input', async () => {
@@ -594,7 +613,7 @@ describe('HORPLUS LOCAL-07 — Owner Meter List Mode UX Suite (L1 - L28)', () =>
     });
 
     const card101 = screen.getByTestId('meter-list-card-room-101');
-    expect(within(card101).getByText('น้ำประปา')).toBeDefined();
+    expect(within(card101).getByText('น้ำ')).toBeDefined();
     expect(within(card101).queryByText('ไฟฟ้า')).toBeNull();
   });
 
@@ -688,7 +707,7 @@ describe('HORPLUS LOCAL-07 — Owner Meter List Mode UX Suite (L1 - L28)', () =>
     });
 
     // In Table
-    expect(screen.getByText('1,268.00 ฿')).toBeDefined();
+    expect(screen.getByText('5,268.00 ฿')).toBeDefined();
     expect(screen.getByText('4,800.00 ฿')).toBeDefined();
 
     // Switch to List
@@ -697,7 +716,7 @@ describe('HORPLUS LOCAL-07 — Owner Meter List Mode UX Suite (L1 - L28)', () =>
     const card101 = screen.getByTestId('meter-list-card-room-101');
     const card102 = screen.getByTestId('meter-list-card-room-102');
 
-    expect(within(card101).getByText('1,268.00 ฿')).toBeDefined();
+    expect(within(card101).getByText('5,268.00 ฿')).toBeDefined();
     expect(within(card102).getByText('4,800.00 ฿')).toBeDefined();
   });
 
@@ -743,7 +762,7 @@ describe('HORPLUS LOCAL-07 — Owner Meter List Mode UX Suite (L1 - L28)', () =>
     expect(within(card102).getByText('ดูรายละเอียด +2')).toBeDefined();
 
     fireEvent.click(within(card102).getByText('ดูรายละเอียด +2'));
-    expect(within(card102).getByText('ค่าน้ำประปา')).toBeDefined();
+    expect(within(card102).getByText('ค่าน้ำ')).toBeDefined();
     expect(within(card102).getByText('300.-')).toBeDefined();
     expect(within(card102).getByText('ค่าไฟฟ้า')).toBeDefined();
     expect(within(card102).getByText('500.-')).toBeDefined();
@@ -1077,7 +1096,7 @@ describe('HORPLUS LOCAL-07 — Owner Meter List Mode UX Suite (L1 - L28)', () =>
   // =========================================================================
   it('L33. List mode decomposes generic monthly utility into itemized charge rows with black text and matching icons', async () => {
     localStorage.setItem('owner_meter_view_mode', JSON.stringify('list'));
-    
+
     // Custom rate snapshot with commonFee, internetFee, parkingFee
     const customRates = {
       waterBillingType: 'per_unit',
@@ -1129,11 +1148,11 @@ describe('HORPLUS LOCAL-07 — Owner Meter List Mode UX Suite (L1 - L28)', () =>
     expect(within(card101).getByText('ค่าจอดรถ')).toBeDefined();
     expect(within(card101).getByText('300.-')).toBeDefined();
 
-    // Verify text is in standard dark/black slate without colored status overrides
+    // Verify text is formatted with preview/draft gray color
     const commonFeeLabel = within(card101).getByText('ค่าส่วนกลาง');
     expect(commonFeeLabel.className).toContain('text-slate-800');
     const commonFeeAmt = within(card101).getByText('200.-');
-    expect(commonFeeAmt.className).toContain('text-slate-900');
+    expect(commonFeeAmt.className).toContain('text-slate-600');
   });
 
   it('L34. List mode does not duplicate rent in expanded breakdown when displayed on top', async () => {
@@ -1201,5 +1220,107 @@ describe('HORPLUS LOCAL-07 — Owner Meter List Mode UX Suite (L1 - L28)', () =>
     expect(isCycleInRollingThreeMonthWindow('2026-08', selectableCycles)).toBe(true);
     // Month 7: older than top 3 latest -> NOT eligible
     expect(isCycleInRollingThreeMonthWindow('2026-07', selectableCycles)).toBe(false);
+  });
+
+  it('L36. Future reservation badge displays formatted Thai Buddhist check-in date: จองล่วงหน้า 26/08/69', async () => {
+    const customRooms = [
+      {
+        roomId: 'room-102',
+        tenantId: 'tenant-102',
+        tenantName: 'สมหญิง รักสงบ',
+        isFutureReservation: true,
+        checkInDate: '2026-08-26',
+        rentAmount: '0.00',
+        amountDue: '0.00',
+        chargeComponents: [],
+      },
+    ];
+    setupFetchMock(customRooms);
+    renderComponent({}, { rooms: customRooms });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('meter-row-room-102')).toBeDefined();
+    });
+
+    // In Table Mode
+    const tableRow102 = screen.getByTestId('meter-row-room-102');
+    expect(within(tableRow102).getByText('จองล่วงหน้า 26/08/69')).toBeDefined();
+
+    // In List Mode
+    fireEvent.click(screen.getByTestId('view-mode-list-button'));
+    await waitFor(() => {
+      expect(screen.getByTestId('meter-list-card-room-102')).toBeDefined();
+    });
+    const card102 = screen.getByTestId('meter-list-card-room-102');
+    expect(within(card102).getByText('จองล่วงหน้า 26/08/69')).toBeDefined();
+  });
+
+  it('L37. Expiring contract date (วัน/เดือน/ปี) in black text displays strictly in the final expiration cycle', async () => {
+    const customRooms = [
+      {
+        roomId: 'room-101',
+        tenantId: 'tenant-101',
+        tenantName: 'นายสมชาย ใจดี',
+        contractEndDate: '2026-08-30',
+        billingSource: 'CONTRACT',
+        rentAmount: '4000.00',
+        amountDue: '4000.00',
+        chargeComponents: [],
+      },
+    ];
+    setupFetchMock(customRooms);
+    renderComponent({}, { rooms: customRooms });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('meter-row-room-101')).toBeDefined();
+    });
+
+    // Table mode shows (30/08/69)
+    const tableRow101 = screen.getByTestId('meter-row-room-101');
+    const tableExpiryEl = within(tableRow101).getByText('(30/08/69)');
+    expect(tableExpiryEl).toBeDefined();
+    expect(tableExpiryEl.className).toContain('text-slate-800');
+
+    // List mode shows (30/08/69)
+    fireEvent.click(screen.getByTestId('view-mode-list-button'));
+    await waitFor(() => {
+      expect(screen.getByTestId('meter-list-card-room-101')).toBeDefined();
+    });
+    const card101 = screen.getByTestId('meter-list-card-room-101');
+    const listExpiryEl = within(card101).getByText('(30/08/69)');
+    expect(listExpiryEl).toBeDefined();
+    expect(listExpiryEl.className).toContain('text-slate-800');
+  });
+
+  it('L38. Live calculated total amount is displayed even when bill is in ยังไม่ออกบิล (Draft) status', async () => {
+    const customRooms = [
+      {
+        roomId: 'room-101',
+        tenantId: 'tenant-101',
+        tenantName: 'นายสมชาย ใจดี',
+        billingSource: 'CONTRACT',
+        rentAmount: '4000.00',
+        amountDue: '0.00', // Unissued/Draft before server generation
+        chargeComponents: [],
+      },
+    ];
+    setupFetchMock(customRooms);
+    renderComponent({}, { rooms: customRooms });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('meter-row-room-101')).toBeDefined();
+    });
+
+    // Table Mode shows calculated amount due immediately (e.g. 200.00 ฿ from common fee live calculation)
+    const tableRow101 = screen.getByTestId('meter-row-room-101');
+    expect(within(tableRow101).getByText(/200(\.00)? ฿/)).toBeDefined();
+
+    // List Mode shows calculated amount due immediately
+    fireEvent.click(screen.getByTestId('view-mode-list-button'));
+    await waitFor(() => {
+      expect(screen.getByTestId('meter-list-card-room-101')).toBeDefined();
+    });
+    const card101 = screen.getByTestId('meter-list-card-room-101');
+    expect(within(card101).getByText(/200(\.00)? ฿/)).toBeDefined();
   });
 });

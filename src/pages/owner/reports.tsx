@@ -55,16 +55,16 @@ const formatBaht = (val: number | string) => {
   return `฿ ${num.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 };
 
-const CountUp: React.FC<{ value: number; prefix?: string }> = ({ 
-  value, 
+const CountUp: React.FC<{ value: number; prefix?: string }> = ({
+  value,
   prefix = '฿ '
 }) => {
   return (
     <span>
       {prefix}
-      {value.toLocaleString('th-TH', { 
-        minimumFractionDigits: 2, 
-        maximumFractionDigits: 2 
+      {value.toLocaleString('th-TH', {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2
       })}
     </span>
   );
@@ -184,14 +184,14 @@ export const OwnerReports: React.FC<OwnerReportsProps> = ({
     const yearLabel = `${parseInt(selectedYear) + 543}`;
 
     let csv = `\uFEFFรายงานสรุปการเงินและสถิติหอพัก (${bName})\n`;
-    
+
     if (mode === 'monthly') {
       csv += `ประเภทรายงาน: ประจำเดือน ${monthLabel} (รอบ ${effectiveCycleCode})\n`;
       csv += `พิมพ์เมื่อวันที่: ${new Date().toLocaleString('th-TH')}\n\n`;
       csv += `ประเภทรายรับ,จำนวนเงิน (บาท)\n`;
       csv += `"ค่าเช่าห้องพัก",${exactFixedRentTotal}\n`;
       csv += `"ค่าไฟฟ้า",${exactElectricTotal}\n`;
-      csv += `"ค่าน้ำประปา",${exactWaterTotal}\n`;
+      csv += `"ค่าน้ำ",${exactWaterTotal}\n`;
       csv += `"ส่วนกลาง / เน็ต / ที่จอด",${exactCommonParkingTotal}\n`;
       csv += `"ค่าบริการอื่นๆ",${exactOtherServiceTotal}\n`;
       csv += `"ค่าปรับชำระเกินกำหนด",${exactFineTotal}\n`;
@@ -207,7 +207,7 @@ export const OwnerReports: React.FC<OwnerReportsProps> = ({
     } else {
       csv += `ประเภทรายงาน: ประจำปี ${yearLabel} (ปี ค.ศ. ${selectedYear})\n`;
       csv += `พิมพ์เมื่อวันที่: ${new Date().toLocaleString('th-TH')}\n\n`;
-      csv += `เดือน,ค่าเช่าห้อง (บาท),ค่าน้ำประปา (บาท),ค่าไฟฟ้า (บาท),อื่นๆ/ส่วนกลาง (บาท),รวมจัดเก็บ (บาท)\n`;
+      csv += `เดือน,ค่าเช่าห้อง (บาท),ค่าน้ำ (บาท),ค่าไฟฟ้า (บาท),อื่นๆ/ส่วนกลาง (บาท),รวมจัดเก็บ (บาท)\n`;
 
       monthlyRevenueHistory.forEach(r => {
         csv += `"${r.name}",${r.exactRent},${r.exactWater},${r.exactElec},${r.exactOther},${r.exactTotal}\n`;
@@ -233,7 +233,7 @@ export const OwnerReports: React.FC<OwnerReportsProps> = ({
 
   return (
     <div className="space-y-6">
-      
+
       {/* HEADER CARD: 'วิเคราะห์การเงินและสถิติหอพัก' */}
       <div className="bg-white p-6 rounded-3xl border border-slate-100/80 shadow-sm flex flex-col md:flex-row gap-4 justify-between items-start md:items-center relative">
         <div className="flex items-center gap-3.5">
@@ -250,7 +250,7 @@ export const OwnerReports: React.FC<OwnerReportsProps> = ({
 
         {/* Requirements 3 & 5: EXACTLY 2 Controls (1. Dropdown 'หอพักรวมทุกอาคาร', 2. Button 'ส่งออก CSV') */}
         <div className="flex items-center gap-3 w-full md:w-auto mt-2 md:mt-0 relative">
-          
+
           {/* 1. Dropdown: หอพักรวมทุกอาคาร */}
           <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 px-3.5 py-2 rounded-2xl text-xs font-bold text-slate-700 shadow-2xs">
             <BuildingIcon className="w-4 h-4 text-blue-600 shrink-0" />
@@ -328,10 +328,10 @@ export const OwnerReports: React.FC<OwnerReportsProps> = ({
 
       {/* SECTION: SUMMARY METRICS */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
-        
+
         {/* 1. ยอดรวมจัดเก็บทั้งหมด (Main Collection Card) - 2/3 width */}
         <div className="lg:col-span-2 bg-white p-6 rounded-3xl border border-slate-100 shadow-sm relative overflow-hidden transition-all duration-300 min-h-[360px] flex flex-col justify-between">
-          
+
           {/* Requirement 2: Overlay replacement inside card when clicking 'ชำระแล้ว' / 'ยังไม่ชำระ' */}
           <div className="space-y-4">
             <div className="absolute right-4 top-4 w-10 h-10 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center font-black text-lg">
@@ -346,7 +346,7 @@ export const OwnerReports: React.FC<OwnerReportsProps> = ({
                 </span>
               )}
             </div>
-            
+
             <div className="mt-1 flex flex-col sm:flex-row sm:items-baseline gap-2">
               <span className="text-2xl xs:text-3xl sm:text-4xl font-black text-blue-600 tracking-tight whitespace-nowrap">
                 {formatBaht(totalBilledThisMonth)}
@@ -364,7 +364,7 @@ export const OwnerReports: React.FC<OwnerReportsProps> = ({
             {/* สถานะรับชำระเงิน */}
             <div>
               <p className="text-xs font-bold text-slate-400 mb-3">สถานะการรับชำระเงินในรอบนี้</p>
-              
+
               <div className="grid grid-cols-2 gap-3 sm:gap-4">
                 <div className="space-y-1 rounded-2xl p-3 border shadow-2xs min-w-0 bg-white border-slate-100">
                   <div className="flex items-center gap-1.5 text-xs font-bold text-slate-500">
@@ -395,12 +395,12 @@ export const OwnerReports: React.FC<OwnerReportsProps> = ({
 
               {/* Combined Progress Bar */}
               <div className="mt-4 w-full h-3 bg-rose-100 rounded-full overflow-hidden flex">
-                <div 
-                  className="bg-blue-600 h-full" 
+                <div
+                  className="bg-blue-600 h-full"
                   style={{ width: `${paidPercent}%` }}
                 />
-                <div 
-                  className="bg-rose-500 h-full" 
+                <div
+                  className="bg-rose-500 h-full"
                   style={{ width: `${unpaidPercent}%` }}
                 />
               </div>
@@ -435,14 +435,14 @@ export const OwnerReports: React.FC<OwnerReportsProps> = ({
 
         {/* 2. Occupancy & Category Split Stacked */}
         <div className="lg:col-span-1 space-y-6">
-          
+
           {/* Occupancy Status Box */}
           <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm flex flex-col justify-between">
             <div>
               <h3 className="text-sm font-black text-slate-800 mb-1">สถานะการใช้งานห้องพัก</h3>
               <p className="text-[10px] text-slate-400 font-medium">สถิติจำนวนห้องพักจำแนกตามสถานะ</p>
             </div>
-            
+
             <div className="flex justify-center my-4">
               <div className="w-24 h-24 rounded-3xl bg-slate-50 flex flex-col items-center justify-center border border-slate-100 shadow-xs">
                 <span className="text-2xl font-black text-slate-800">{totalRooms}</span>
@@ -486,8 +486,8 @@ export const OwnerReports: React.FC<OwnerReportsProps> = ({
                 <h3 className="text-sm font-black text-slate-800">สัดส่วนค่าใช้จ่ายรายเดือน</h3>
                 <p className="text-[10px] text-slate-400 font-medium">ภาพรวมยอดจัดเก็บจำแนกตามประเภท</p>
               </div>
-              
-              <button 
+
+              <button
                 onClick={() => onNavigate?.('meters')}
                 className="text-[9px] bg-blue-50 hover:bg-blue-100 text-blue-600 px-2.5 py-1 rounded-full font-bold transition-colors border border-blue-100 cursor-pointer"
               >
@@ -528,12 +528,12 @@ export const OwnerReports: React.FC<OwnerReportsProps> = ({
                 </div>
               </div>
 
-              {/* 3. ค่าน้ำประปา */}
+              {/* 3. ค่าน้ำ */}
               <div className="space-y-1">
                 <div className="flex justify-between text-xs font-bold">
                   <div className="flex items-center gap-1.5 text-slate-700">
                     <Droplet className="w-3.5 h-3.5 text-sky-500 shrink-0" />
-                    <span>ค่าน้ำประปา</span>
+                    <span>ค่าน้ำ</span>
                   </div>
                   <span className="text-slate-800 font-black">
                     <CountUp value={waterTotal} /> <span className="text-slate-400 font-semibold">({waterPct}%)</span>
@@ -616,7 +616,7 @@ export const OwnerReports: React.FC<OwnerReportsProps> = ({
 
       {/* Main Graph Chart & Financial Ledger Table Grid */}
       <div className="space-y-6">
-        
+
         {/* Revenue Trends Chart (Full Width) */}
         <div className="bg-white p-5 sm:p-6 rounded-3xl border border-slate-100 shadow-sm space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
@@ -639,16 +639,16 @@ export const OwnerReports: React.FC<OwnerReportsProps> = ({
               <AreaChart data={revenueHistory} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
                 <defs>
                   <linearGradient id="colorTotal" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#2b64f6" stopOpacity={0.25}/>
-                    <stop offset="95%" stopColor="#2b64f6" stopOpacity={0}/>
+                    <stop offset="5%" stopColor="#2b64f6" stopOpacity={0.25} />
+                    <stop offset="95%" stopColor="#2b64f6" stopOpacity={0} />
                   </linearGradient>
                   <linearGradient id="colorRent" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#10b981" stopOpacity={0.2}/>
-                    <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
+                    <stop offset="5%" stopColor="#10b981" stopOpacity={0.2} />
+                    <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
                   </linearGradient>
                 </defs>
                 <XAxis dataKey="name" stroke="#94a3b8" tickLine={false} axisLine={false} />
-                <YAxis stroke="#94a3b8" tickFormatter={(val) => `${val/1000}k`} tickLine={false} axisLine={false} />
+                <YAxis stroke="#94a3b8" tickFormatter={(val) => `${val / 1000}k`} tickLine={false} axisLine={false} />
                 <Tooltip formatter={(value) => formatBaht(Number(value))} contentStyle={{ backgroundColor: '#fff', borderRadius: '16px', border: '1px solid #f1f5f9', fontWeight: 'bold' }} />
                 <Legend iconType="circle" />
                 <Area type="monotone" dataKey="total" name="รายรับรวมทุกประเภท" stroke="#2b64f6" fillOpacity={1} fill="url(#colorTotal)" strokeWidth={2.5} />
@@ -669,7 +669,7 @@ export const OwnerReports: React.FC<OwnerReportsProps> = ({
               บันทึกยอดสะสมจัดเก็บจำแนกประเภทบัญชีรายได้ครบถ้วน ประจำงวด {displayMonthTh} {displayYearTh}
             </p>
           </div>
-          
+
           <div className="overflow-x-auto text-[11px] font-bold leading-relaxed no-scrollbar">
             <table className="w-full border-collapse min-w-[550px]">
               <thead>
@@ -707,7 +707,7 @@ export const OwnerReports: React.FC<OwnerReportsProps> = ({
                 {/* 3. Water */}
                 <tr>
                   <td className="py-3 text-slate-700">
-                    <div className="font-extrabold text-slate-900">3. รายรับค่าน้ำประปา (Water Fee)</div>
+                    <div className="font-extrabold text-slate-900">3. รายรับค่าน้ำ (Water Fee)</div>
                     <div className="text-[10px] text-slate-400 font-medium">คิดตามยูนิตมิเตอร์ หรือแบบเหมาจ่าย</div>
                   </td>
                   <td className="py-3 text-right font-black text-slate-800">{formatBaht(waterTotal)}</td>

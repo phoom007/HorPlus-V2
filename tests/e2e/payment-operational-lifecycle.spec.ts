@@ -332,26 +332,26 @@ test.describe.serial('Payment & Receipt Operational Lifecycle E2E Suite', () => 
         await tx.building.deleteMany({ where: { dormitoryId: dId } });
         await tx.dormitoryMember.deleteMany({ where: { dormitoryId: dId } });
         await tx.dormitory.delete({ where: { id: dId } });
-      }).catch(() => {});
+      }).catch(() => { });
     };
 
     if (ownerDormitoryId) await cleanDorm(ownerDormitoryId);
     if (otherDormitoryId) await cleanDorm(otherDormitoryId);
 
     if (ownerUserId) {
-      await prisma.session.deleteMany({ where: { userId: ownerUserId } }).catch(() => {});
-      await prisma.paymentUploadIntent.deleteMany({ where: { authenticatedUserId: ownerUserId } }).catch(() => {});
-      await prisma.user.delete({ where: { id: ownerUserId } }).catch(() => {});
+      await prisma.session.deleteMany({ where: { userId: ownerUserId } }).catch(() => { });
+      await prisma.paymentUploadIntent.deleteMany({ where: { authenticatedUserId: ownerUserId } }).catch(() => { });
+      await prisma.user.delete({ where: { id: ownerUserId } }).catch(() => { });
     }
     if (tenantUserId) {
-      await prisma.session.deleteMany({ where: { userId: tenantUserId } }).catch(() => {});
-      await prisma.paymentUploadIntent.deleteMany({ where: { authenticatedUserId: tenantUserId } }).catch(() => {});
-      await prisma.user.delete({ where: { id: tenantUserId } }).catch(() => {});
+      await prisma.session.deleteMany({ where: { userId: tenantUserId } }).catch(() => { });
+      await prisma.paymentUploadIntent.deleteMany({ where: { authenticatedUserId: tenantUserId } }).catch(() => { });
+      await prisma.user.delete({ where: { id: tenantUserId } }).catch(() => { });
     }
     if (otherOwnerUserId) {
-      await prisma.session.deleteMany({ where: { userId: otherOwnerUserId } }).catch(() => {});
-      await prisma.paymentUploadIntent.deleteMany({ where: { authenticatedUserId: otherOwnerUserId } }).catch(() => {});
-      await prisma.user.delete({ where: { id: otherOwnerUserId } }).catch(() => {});
+      await prisma.session.deleteMany({ where: { userId: otherOwnerUserId } }).catch(() => { });
+      await prisma.paymentUploadIntent.deleteMany({ where: { authenticatedUserId: otherOwnerUserId } }).catch(() => { });
+      await prisma.user.delete({ where: { id: otherOwnerUserId } }).catch(() => { });
     }
   });
 
@@ -407,7 +407,7 @@ test.describe.serial('Payment & Receipt Operational Lifecycle E2E Suite', () => 
           items: {
             create: [
               { dormitoryId: ownerDormitoryId, type: 'RENT', description: 'ค่าเช่าห้องประจำเดือน', amount: 5000, quantity: 1 },
-              { dormitoryId: ownerDormitoryId, type: 'WATER', description: 'ค่าน้ำประปา', amount: 150, quantity: 1 },
+              { dormitoryId: ownerDormitoryId, type: 'WATER', description: 'ค่าน้ำ', amount: 150, quantity: 1 },
               { dormitoryId: ownerDormitoryId, type: 'ELECTRIC', description: 'ค่าไฟฟ้า', amount: 150, quantity: 1 },
             ],
           },

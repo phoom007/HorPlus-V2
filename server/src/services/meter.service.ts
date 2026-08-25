@@ -1796,6 +1796,8 @@ export class MeterService {
       let parkingQuantity = '1.00';
       let isLineLinked = false;
       let isFutureReservation = false;
+      let checkInDate: string | null = null;
+      let contractEndDate: string | null = null;
       let dailyDepositAmount = '0.00';
       let dailyDepositStatus: 'PAID' | 'UNPAID' | null = null;
       let dailyDepositPaidAt: string | null = null;
@@ -1814,6 +1816,11 @@ export class MeterService {
         tenantId = contract.tenantId;
         tenantName = contract.tenant ? (contract.tenant.displayName || `${contract.tenant.firstName || ''} ${contract.tenant.lastName || ''}`.trim()) : null;
         isLineLinked = Boolean(contract.tenant?.linkedUserId);
+
+        const endStr = toBangkokDateString(contract.endDate);
+        if (endStr >= cycleStartStr && endStr <= cycleEndStr) {
+          contractEndDate = endStr;
+        }
 
         const contractSnapshot = contract.snapshot as any;
         const installmentConfig = contractSnapshot?.installmentConfig;
@@ -1837,26 +1844,33 @@ export class MeterService {
         isLineLinked = Boolean(prov.tenant?.linkedUserId);
         if (prov.status === 'RESERVED') {
           isFutureReservation = true;
+          checkInDate = toBangkokDateString(prov.startDate);
           billingSource = 'NONE';
           rentAmount = '0.00';
-        } else if (prov.rentalType === 'MONTHLY') {
-          billingSource = 'PROVISIONAL_MONTHLY';
-          rentAmount = formatDecimal(toDecimal(prov.unitRentAmount.toString()));
         } else {
-          billingSource = 'PROVISIONAL_TERM';
-          const totalRent = Number(prov.totalRentAmount);
-          const installments = prov.termInstallmentCount || 1;
-          const termStart = new Date(prov.startDate);
-          const cycleStart = new Date(cycle.periodStart);
-          const cycleOffset = (cycleStart.getFullYear() - termStart.getFullYear()) * 12 + (cycleStart.getMonth() - termStart.getMonth());
-
-          if (cycleOffset >= 0 && cycleOffset < installments) {
-            const schedule = calculateInstallmentSchedule(totalRent, installments);
-            const currentInstallment = schedule[cycleOffset];
-            rentAmount = currentInstallment.formattedAmount;
-            rentDescription = `ค่าเช่าห้องพัก (งวดที่ ${cycleOffset + 1}/${installments})`;
+          const endStr = toBangkokDateString(prov.endDate);
+          if (endStr >= cycleStartStr && endStr <= cycleEndStr) {
+            contractEndDate = endStr;
+          }
+          if (prov.rentalType === 'MONTHLY') {
+            billingSource = 'PROVISIONAL_MONTHLY';
+            rentAmount = formatDecimal(toDecimal(prov.unitRentAmount.toString()));
           } else {
-            rentAmount = '0.00';
+            billingSource = 'PROVISIONAL_TERM';
+            const totalRent = Number(prov.totalRentAmount);
+            const installments = prov.termInstallmentCount || 1;
+            const termStart = new Date(prov.startDate);
+            const cycleStart = new Date(cycle.periodStart);
+            const cycleOffset = (cycleStart.getFullYear() - termStart.getFullYear()) * 12 + (cycleStart.getMonth() - termStart.getMonth());
+
+            if (cycleOffset >= 0 && cycleOffset < installments) {
+              const schedule = calculateInstallmentSchedule(totalRent, installments);
+              const currentInstallment = schedule[cycleOffset];
+              rentAmount = currentInstallment.formattedAmount;
+              rentDescription = `ค่าเช่าห้องพัก (งวดที่ ${cycleOffset + 1}/${installments})`;
+            } else {
+              rentAmount = '0.00';
+            }
           }
         }
       } else if (dailyStay) {
@@ -1900,16 +1914,19 @@ export class MeterService {
             // Check future reservation
             if (futureC) {
               isFutureReservation = true;
+              checkInDate = toBangkokDateString(futureC.startDate);
               tenantId = futureC.tenantId;
               tenantName = futureC.tenant ? (futureC.tenant.displayName || `${futureC.tenant.firstName || ''} ${futureC.tenant.lastName || ''}`.trim()) : null;
               isLineLinked = Boolean(futureC.tenant?.linkedUserId);
             } else if (futureP) {
               isFutureReservation = true;
+              checkInDate = toBangkokDateString(futureP.startDate);
               tenantId = futureP.tenantId;
               tenantName = futureP.tenant ? (futureP.tenant.displayName || `${futureP.tenant.firstName || ''} ${futureP.tenant.lastName || ''}`.trim()) : null;
               isLineLinked = Boolean(futureP.tenant?.linkedUserId);
             } else if (futureD) {
               isFutureReservation = true;
+              checkInDate = toBangkokDateString(futureD.startDate);
               tenantId = futureD.tenantId || null;
               tenantName = futureD.applicantFullName || (futureD.tenant ? (futureD.tenant.displayName || `${futureD.tenant.firstName || ''} ${futureD.tenant.lastName || ''}`.trim()) : 'ผู้พักรายวัน');
               isLineLinked = Boolean(futureD.tenant?.linkedUserId);
@@ -2006,6 +2023,8 @@ export class MeterService {
         tenantName = unpaidDailyStay.applicantFullName || (unpaidDailyStay.tenant ? (unpaidDailyStay.tenant.displayName || `${unpaidDailyStay.tenant.firstName || ''} ${unpaidDailyStay.tenant.lastName || ''}`.trim()) : 'ผู้พักรายวัน');
         isLineLinked = Boolean(unpaidDailyStay.tenant?.linkedUserId);
         isDailyFinancialTail = true;
+        rentAmount = formatDecimal(toDecimal(unpaidDailyStay.totalRentAmount.toString()));
+        rentDescription = 'ค่าเช่ารายวัน';
       }
 
       if (!dailyCheckOutDate) {
@@ -2034,7 +2053,7 @@ export class MeterService {
 
       let amountDueDec = toDecimal('0.00');
 
-      if (billingSource === 'DAILY_STAY') {
+      if (billingSource === 'DAILY_STAY' || (billingSource === 'NONE' && unpaidDailyStay)) {
         if (showDailyDepositLine) {
           const depAmt = toDecimal(dailyDepositAmount || '0.00');
           const isDepositPaid = Boolean(isDailyDepositPaidInDisplayedPeriod);
@@ -2071,23 +2090,48 @@ export class MeterService {
         }
       } else {
         let hasMonthlyUtilityBill = false;
+        let hasRentBill = false;
 
         for (const bill of roomBills) {
           const isPaid = bill.status === 'paid' || bill.status === 'PAID';
           const billTotal = toDecimal(bill.totalAmount.toString());
           const billOutstanding = toDecimal((bill.outstandingAmount ?? (isPaid ? '0.00' : bill.totalAmount)).toString());
-          const billKind = bill.billKind || 'MONTHLY_UTILITY';
+          const rawKind = (bill.billKind || '').toString().trim().toUpperCase();
 
-          if (billKind === 'MONTHLY_UTILITY' || billKind === 'LEGACY_COMBINED') {
-            hasMonthlyUtilityBill = true;
-          }
+          const hasRentItem = (bill.items || []).some((it: any) => {
+            const t = (it.itemType || it.type || '').toString().toUpperCase();
+            const d = (it.description || '').toString().toLowerCase();
+            return t === 'RENT' || t === 'MONTHLY_RENT' || t === 'TERM_RENT' || d.includes('ค่าเช่า');
+          });
+          const hasUtilityItem = (bill.items || []).some((it: any) => {
+            const t = (it.itemType || it.type || '').toString().toUpperCase();
+            const d = (it.description || '').toString().toLowerCase();
+            return t === 'WATER' || t === 'ELECTRICITY' || t === 'COMMON_FEE' || t === 'INTERNET' || t === 'PARKING' || d.includes('ค่าน้ำ') || d.includes('ค่าไฟ') || d.includes('ส่วนกลาง');
+          });
+          const hasDepositItem = (bill.items || []).some((it: any) => {
+            const t = (it.itemType || it.type || '').toString().toUpperCase();
+            const d = (it.description || '').toString().toLowerCase();
+            return t === 'DEPOSIT' || d.includes('ค่าประกัน');
+          });
 
+          let billType = 'monthly_utility';
           let label = 'บิลรายเดือน';
-          if (billKind === 'RENT') {
-            label = billingSource === 'PROVISIONAL_TERM' ? 'ค่าเช่า (เทอม)' : 'ค่าเช่า (เดือน)';
-          } else if (billKind === 'DEPOSIT') {
+
+          if (rawKind === 'RENT' || rawKind === 'MONTHLY_RENT' || rawKind === 'TERM_RENT' || rawKind === 'RENTAL' || (hasRentItem && !hasUtilityItem)) {
+            billType = 'rent';
+            hasRentBill = true;
+            label = billingSource === 'PROVISIONAL_TERM' || rawKind === 'TERM_RENT' ? 'ค่าเช่า (เทอม)' : 'ค่าเช่า (เดือน)';
+          } else if (rawKind === 'DEPOSIT' || rawKind === 'SECURITY_DEPOSIT' || (hasDepositItem && !hasRentItem && !hasUtilityItem)) {
+            billType = 'deposit';
             label = 'ค่าประกัน';
-          } else if (billKind === 'MONTHLY_UTILITY') {
+          } else if (rawKind === 'LEGACY_COMBINED' || rawKind === 'COMBINED' || (hasRentItem && hasUtilityItem)) {
+            billType = 'legacy_combined';
+            hasMonthlyUtilityBill = true;
+            hasRentBill = true;
+            label = 'บิลรายเดือน (รวมค่าเช่า)';
+          } else {
+            billType = 'monthly_utility';
+            hasMonthlyUtilityBill = true;
             label = 'บิลรายเดือน';
           }
 
@@ -2097,7 +2141,7 @@ export class MeterService {
           }
 
           chargeComponents.push({
-            type: billKind.toLowerCase(),
+            type: billType,
             label,
             amount: formatDecimal(billTotal),
             status: isPaid ? 'PAID' : 'UNPAID',
@@ -2232,6 +2276,14 @@ export class MeterService {
 
       const hasBookableGap = hasBookableGapInCycle(cycleStart, cycleEndExclusive, blockingIntervals);
 
+      const primaryMonthlyBill = roomBills.find(b => {
+        const k = (b.billKind || '').toString().trim().toUpperCase();
+        return k === 'MONTHLY_UTILITY' || k === 'LEGACY_COMBINED' || k === 'RENT';
+      }) || roomBills[0];
+
+      const roomBillStatus = primaryMonthlyBill ? (primaryMonthlyBill.status.toLowerCase() as 'draft' | 'unpaid' | 'paid' | 'cancelled') : 'draft';
+      const isRoomBillPaid = roomBillStatus === 'paid';
+
       return {
         roomId: room.id,
         roomNumber: room.roomNumber,
@@ -2259,11 +2311,15 @@ export class MeterService {
         hasBookableGap,
         historicalDailyCount,
         dailyCheckOutDate,
+        checkInDate,
+        contractEndDate,
         isDailyUnpaid,
         isDailyRentPaid,
         isDailyOverdue,
         isDailyActive,
         isDailyFinancialTail,
+        billStatus: roomBillStatus,
+        isPaid: isRoomBillPaid,
       };
     });
 

@@ -275,7 +275,7 @@ async function runBrowserUAT() {
       };
 
       return {
-        water: getControlByLabel('ค่าน้ำประปา'),
+        water: getControlByLabel('ค่าน้ำ'),
         electric: getControlByLabel('ค่าไฟฟ้า'),
         common: getControlByLabel('ค่าส่วนกลาง'),
         internet: getControlByLabel('ค่าอินเทอร์เน็ต'),
@@ -592,7 +592,7 @@ async function runBrowserUAT() {
       const has6 = text.includes('6 เดือน');
       const has12 = text.includes('12 เดือน');
       const has24 = text.includes('24 เดือน');
-      
+
       const p1 = text.includes('189') && text.includes('990');
       const p3 = text.includes('529') && (text.includes('2990') || text.includes('2,990'));
       const p6 = text.includes('999') && (text.includes('5990') || text.includes('5,990'));
@@ -640,7 +640,7 @@ async function runBrowserUAT() {
     const finalizeTriggerBtn = page.locator('button:has-text("ยืนยันสร้างหอพัก")').first();
     const isTriggerVis = await finalizeTriggerBtn.isVisible();
     console.log(`  Finalize trigger button visible: ${isTriggerVis}`);
-    
+
     let finalizedDormId = null;
     if (isTriggerVis) {
       await finalizeTriggerBtn.click();
@@ -662,7 +662,7 @@ async function runBrowserUAT() {
       // Click "ยอมรับเงื่อนไข"
       const completeBtn = page.locator('button:has-text("ยอมรับเงื่อนไข")').first();
       console.log(`  Accept terms button visible: ${await completeBtn.isVisible()}`);
-      
+
       const [response] = await Promise.all([
         page.waitForResponse((res) => (res.url().includes('/api/v1/onboarding/finalize') || res.url().includes('/onboarding/complete')) && res.request().method() === 'POST', { timeout: 15000 }),
         completeBtn.click(),
@@ -725,11 +725,11 @@ async function runBrowserUAT() {
     console.log(`  Persisted Dormitory ID: ${activeDorm?.id}`);
     console.log(`  Dormitory Phone: ${activeDorm?.phone === null ? '✅ null (Correct - Removed Step 1 Field)' : activeDorm?.phone}`);
     console.log(`  Dormitory Email: ${activeDorm?.email === null ? '✅ null (Correct - Removed Step 1 Field)' : activeDorm?.email}`);
-    
+
     const building1 = activeDorm?.buildings[0];
     console.log(`  Building maxTermRentInstallments: ${building1?.maxTermRentInstallments} (Expected: 2)`);
     console.log(`  Building depositAmount: ${building1?.depositAmount} (Expected: 5000)`);
-    
+
     const billing = activeDorm?.billingSettings;
     console.log(`  PromptPay Account Name: "${billing?.promptPayAccountName}"`);
     console.log(`  Bank Account Name: "${billing?.bankAccountName}"`);
@@ -890,7 +890,7 @@ async function runBrowserUAT() {
     // Tenant Registration Workflow & Acceptance Snapshot Verification
     // -------------------------------------------------------------------------
     console.log('\n--- TEST 9: Tenant Registration Readback & Acceptance Snapshot (Cross-Portal Proof) ---');
-    
+
     // Explicit cross-portal propagation of the SAME Owner-created dormitory ID
     const targetDorm = activeDorm;
     if (!targetDorm) {
