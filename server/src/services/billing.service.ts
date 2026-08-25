@@ -429,6 +429,8 @@ export class BillingService {
         parkingQuantity: vehicleCount,
         manualOutstanding: cycleSnapshot?.manualOutstandingAmount ? cycleSnapshot.manualOutstandingAmount.toString() : undefined,
         otherFees: (cycleSnapshot?.otherFees as any[]) || [],
+        dueDate: cycle?.dueDate,
+        asOfDate: new Date(),
       });
 
       items.push(...utilityResult.items);

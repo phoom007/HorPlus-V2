@@ -2212,6 +2212,8 @@ export class MeterService {
               parkingQuantity,
               manualOutstanding: snapshotManualOutstanding ?? '0.00',
               otherFees: snapshotOtherFees ?? [],
+              dueDate: cycle.dueDate,
+              asOfDate: new Date(),
             });
 
             const previewTotalDec = toDecimal(utilityResult.monthlyUtilityTotal);
@@ -2325,14 +2327,47 @@ export class MeterService {
 
       const hasBookableGap = hasBookableGapInCycle(cycleStart, cycleEndExclusive, blockingIntervals);
 
-      const primaryMonthlyBill =
+      // Resolve Monthly Utility Bill Status (controls issue/cancel toggle and meter reading edit lock)
+      const monthlyUtilityBill =
         roomBills.find(b => (b.billKind || '').toString().trim().toUpperCase() === 'MONTHLY_UTILITY') ||
-        roomBills.find(b => (b.billKind || '').toString().trim().toUpperCase() === 'LEGACY_COMBINED') ||
-        roomBills.find(b => (b.billKind || '').toString().trim().toUpperCase() === 'RENT') ||
-        roomBills[0];
+        roomBills.find(b => (b.billKind || '').toString().trim().toUpperCase() === 'LEGACY_COMBINED');
+      const monthlyUtilityBillStatus = monthlyUtilityBill
+        ? (monthlyUtilityBill.status.toLowerCase() as 'draft' | 'unpaid' | 'paid' | 'cancelled')
+        : 'draft';
+      const isMonthlyUtilityPaid = monthlyUtilityBillStatus === 'paid';
 
-      const roomBillStatus = primaryMonthlyBill ? (primaryMonthlyBill.status.toLowerCase() as 'draft' | 'unpaid' | 'paid' | 'cancelled') : 'draft';
-      const isRoomBillPaid = roomBillStatus === 'paid';
+      // S1 Decision: Derive Overall Room/Cycle Financial Status (drives visible text, badge & card border)
+      let overallFinancialStatus: 'paid' | 'unpaid' | 'draft' | 'invalid' = 'draft';
+      const isDailyCtx = billingSource === 'DAILY_STAY' || (billingSource === 'NONE' && unpaidDailyStay);
+
+      if (chargeComponents.some(c => c.status === 'INVALID')) {
+        overallFinancialStatus = 'invalid';
+      } else if (isDailyCtx) {
+        if (isDailyOverdue || isDailyUnpaid) {
+          overallFinancialStatus = 'unpaid';
+        } else if (isDailyRentPaid) {
+          overallFinancialStatus = 'paid';
+        } else {
+          overallFinancialStatus = 'draft';
+        }
+      } else {
+        const hasUnpaid = chargeComponents.some(c => c.status === 'UNPAID');
+        const hasPaid = chargeComponents.some(c => c.status === 'PAID');
+        const hasPreview = chargeComponents.some(c => c.status === 'PREVIEW');
+        const allPaid = chargeComponents.length > 0 && chargeComponents.every(c => c.status === 'PAID');
+
+        if (hasUnpaid || (!isZeroDecimal(amountDueDec) && (hasPaid || roomBills.length > 0))) {
+          overallFinancialStatus = 'unpaid';
+        } else if (allPaid) {
+          overallFinancialStatus = 'paid';
+        } else if (hasPreview) {
+          overallFinancialStatus = 'draft';
+        } else {
+          overallFinancialStatus = 'draft';
+        }
+      }
+
+      const isOverallPaid = overallFinancialStatus === 'paid';
 
       return {
         roomId: room.id,
@@ -2370,8 +2405,11 @@ export class MeterService {
         isDailyOverdue,
         isDailyActive,
         isDailyFinancialTail,
-        billStatus: roomBillStatus,
-        isPaid: isRoomBillPaid,
+        billStatus: overallFinancialStatus,
+        isPaid: isOverallPaid,
+        overallFinancialStatus,
+        monthlyUtilityBillStatus,
+        isMonthlyUtilityPaid,
       };
     });
 

@@ -165,8 +165,14 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
   const isDailyContext = roomCtx?.billingSource === 'DAILY_STAY' || Boolean(roomCtx?.isDailyUnpaid) || Boolean(roomCtx?.isDailyFinancialTail);
   const isDailyOverdue = Boolean(roomCtx?.isDailyOverdue || roomCtx?.isDailyFinancialTail);
   const isDailyRentPaid = Boolean(roomCtx?.isDailyRentPaid);
-  const effectiveBillStatus = (roomCtx?.billStatus as string) || row.billStatus;
-  const isRowPaid = !isDailyContext && (row.isPaid || effectiveBillStatus === 'paid' || Boolean(roomCtx?.isPaid));
+
+  // S1 Authority: overallFinancialStatus drives visible badge/text/border; monthlyUtilityBillStatus drives switch & meter reading lock
+  const overallFinancialStatus = (roomCtx?.overallFinancialStatus as string) || (roomCtx?.billStatus as string) || row.billStatus;
+  const monthlyUtilityBillStatus = (roomCtx?.monthlyUtilityBillStatus as string) || (row as any).monthlyUtilityBillStatus || row.billStatus;
+  const isMonthlyUtilityPaid = Boolean(roomCtx?.isMonthlyUtilityPaid || (row as any).isMonthlyUtilityPaid || monthlyUtilityBillStatus === 'paid');
+  const isOverallPaid = overallFinancialStatus === 'paid' || Boolean(roomCtx?.isPaid);
+  const isOverallUnpaid = overallFinancialStatus === 'unpaid';
+  const isRowPaid = !isDailyContext && isMonthlyUtilityPaid;
 
   const hasElecBaseline = row.elecPrev !== '' && row.elecPrev !== null && row.elecPrev !== undefined;
   const isElecDirectEdit = isFirstCycle || !hasElecBaseline;
@@ -384,10 +390,10 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
       }
       return 'border-amber-400 hover:border-amber-500';
     }
-    if (isRowPaid) {
+    if (isOverallPaid) {
       return 'border-emerald-400 hover:border-emerald-500';
     }
-    if (row.billStatus !== 'draft' && row.billStatus !== 'cancelled') {
+    if (isOverallUnpaid || (overallFinancialStatus !== 'draft' && overallFinancialStatus !== 'cancelled')) {
       return 'border-amber-400 hover:border-amber-500';
     }
     return 'border-slate-200 hover:border-slate-300';
@@ -443,16 +449,16 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
 
             return (
               <span
-                className={`text-xs font-extrabold px-2.5 py-0.5 rounded-md ${effectiveBillStatus === 'paid'
+                className={`text-xs font-extrabold px-2.5 py-0.5 rounded-md ${overallFinancialStatus === 'paid'
                     ? 'bg-emerald-100 text-emerald-800'
-                    : effectiveBillStatus !== 'draft' && effectiveBillStatus !== 'cancelled'
+                    : overallFinancialStatus !== 'draft' && overallFinancialStatus !== 'cancelled'
                       ? 'bg-amber-100 text-amber-800'
                       : 'bg-slate-100 text-slate-600'
                   }`}
               >
-                {effectiveBillStatus === 'paid'
+                {overallFinancialStatus === 'paid'
                   ? 'ชำระแล้ว'
-                  : effectiveBillStatus === 'draft' || effectiveBillStatus === 'cancelled'
+                  : overallFinancialStatus === 'draft' || overallFinancialStatus === 'cancelled'
                     ? 'ยังไม่ออกบิล'
                     : 'รอชำระเงิน'}
               </span>
@@ -465,8 +471,8 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
           <button
             type="button"
             role="switch"
-            aria-checked={isDailyContext ? true : (effectiveBillStatus !== 'draft' && effectiveBillStatus !== 'cancelled')}
-            disabled={isSaving || isDailyContext || isRowPaid || effectiveBillStatus === 'paid' || !selectedBillingCycleId}
+            aria-checked={isDailyContext ? true : (monthlyUtilityBillStatus !== 'draft' && monthlyUtilityBillStatus !== 'cancelled')}
+            disabled={isSaving || isDailyContext || isMonthlyUtilityPaid || !selectedBillingCycleId}
             onClick={() => onToggleStatusSwitch(row)}
             className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none disabled:cursor-not-allowed disabled:opacity-60 ${isDailyContext
                 ? isDailyOverdue
@@ -474,9 +480,9 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
                   : isDailyRentPaid
                     ? 'bg-emerald-600'
                     : 'bg-amber-400'
-                : effectiveBillStatus === 'paid'
+                : isMonthlyUtilityPaid
                   ? 'bg-emerald-600'
-                  : effectiveBillStatus !== 'draft' && effectiveBillStatus !== 'cancelled'
+                  : monthlyUtilityBillStatus !== 'draft' && monthlyUtilityBillStatus !== 'cancelled'
                     ? 'bg-amber-400'
                     : 'bg-slate-300'
               }`}
@@ -487,16 +493,16 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
                   : isDailyRentPaid
                     ? 'ชำระแล้ว (รายวัน)'
                     : 'รอชำระเงิน (รายวัน)'
-                : effectiveBillStatus === 'paid'
-                  ? 'ชำระแล้ว (ล็อค)'
-                  : effectiveBillStatus !== 'draft' && effectiveBillStatus !== 'cancelled'
+                : isMonthlyUtilityPaid
+                  ? 'บิลรายเดือนชำระแล้ว (ล็อค)'
+                  : monthlyUtilityBillStatus !== 'draft' && monthlyUtilityBillStatus !== 'cancelled'
                     ? 'คลิกเพื่อยกเลิกบิล'
                     : 'คลิกเพื่อออกบิล'
             }
           >
             <span
               aria-hidden="true"
-              className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out ${isDailyContext || (effectiveBillStatus !== 'draft' && effectiveBillStatus !== 'cancelled') ? 'translate-x-5' : 'translate-x-0'
+              className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out ${isDailyContext || (monthlyUtilityBillStatus !== 'draft' && monthlyUtilityBillStatus !== 'cancelled') ? 'translate-x-5' : 'translate-x-0'
                 }`}
             />
           </button>

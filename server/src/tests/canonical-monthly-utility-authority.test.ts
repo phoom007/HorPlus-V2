@@ -716,4 +716,119 @@ describe('LOCAL-07 Shared Canonical Monthly Utility Calculation Authority', () =
     expect(res.otherFees).toEqual([{ description: 'คีย์การ์ด', amount: '100.00' }]);
     expect(res.monthlyUtilityTotal).toBe('700.00'); // 200 + 150 + 200 + 100 + 50 = 700.00
   });
+
+  describe('LOCAL-07 Canonical Late Fee Authority (Decision 2)', () => {
+    it('LF-1: returns zero late fee when asOfDate is on or before dueDate', () => {
+      const res = calculateCanonicalMonthlyUtility({
+        rateSnapshot: {
+          ...baseRates,
+          lateFeeType: 'daily',
+          lateFeeValue: '50.00',
+        },
+        waterReading: { previousReading: '100', currentReading: '110' },
+        electricReading: { previousReading: '500', currentReading: '560' },
+        dueDate: '2026-08-05',
+        asOfDate: '2026-08-05',
+      });
+
+      expect(res.lateFeeAmount).toBe('0.00');
+      expect(res.items.some(i => i.type === 'late_fee')).toBe(false);
+      expect(res.monthlyUtilityTotal).toBe('1250.00');
+    });
+
+    it('LF-2: calculates daily late fee correctly when overdue by 3 days in Bangkok timezone', () => {
+      const res = calculateCanonicalMonthlyUtility({
+        rateSnapshot: {
+          ...baseRates,
+          lateFeeType: 'daily',
+          lateFeeValue: '50.00',
+        },
+        waterReading: { previousReading: '100', currentReading: '110' },
+        electricReading: { previousReading: '500', currentReading: '560' },
+        dueDate: '2026-08-05',
+        asOfDate: '2026-08-08',
+      });
+
+      expect(res.lateFeeAmount).toBe('150.00');
+      const lateItem = res.items.find(i => i.type === 'late_fee');
+      expect(lateItem).toBeDefined();
+      expect(lateItem?.amount).toBe('150.00');
+      expect(lateItem?.description).toBe('ค่าปรับล่าช้า (3 วัน)');
+      expect(lateItem?.quantity).toBe('3');
+      expect(lateItem?.unitPrice).toBe('50.00');
+      expect(res.monthlyUtilityTotal).toBe('1400.00'); // 1250.00 + 150.00
+    });
+
+    it('LF-3: calculates fixed late fee correctly when overdue', () => {
+      const res = calculateCanonicalMonthlyUtility({
+        rateSnapshot: {
+          ...baseRates,
+          lateFeeType: 'fixed',
+          lateFeeValue: '100.00',
+        },
+        waterReading: { previousReading: '100', currentReading: '110' },
+        electricReading: { previousReading: '500', currentReading: '560' },
+        dueDate: '2026-08-05',
+        asOfDate: '2026-08-10',
+      });
+
+      expect(res.lateFeeAmount).toBe('100.00');
+      const lateItem = res.items.find(i => i.type === 'late_fee');
+      expect(lateItem).toBeDefined();
+      expect(lateItem?.amount).toBe('100.00');
+      expect(lateItem?.description).toBe('ค่าปรับล่าช้า');
+      expect(res.monthlyUtilityTotal).toBe('1350.00'); // 1250.00 + 100.00
+    });
+
+    it('LF-4: returns zero late fee when lateFeeType is none', () => {
+      const res = calculateCanonicalMonthlyUtility({
+        rateSnapshot: {
+          ...baseRates,
+          lateFeeType: 'none',
+          lateFeeValue: '50.00',
+        },
+        waterReading: { previousReading: '100', currentReading: '110' },
+        electricReading: { previousReading: '500', currentReading: '560' },
+        dueDate: '2026-08-05',
+        asOfDate: '2026-08-15',
+      });
+
+      expect(res.lateFeeAmount).toBe('0.00');
+      expect(res.items.some(i => i.type === 'late_fee')).toBe(false);
+      expect(res.monthlyUtilityTotal).toBe('1250.00');
+    });
+
+    it('LF-5: respects gracePeriodDays before imposing penalty', () => {
+      // 3 days past due date with grace period 3 days -> 0 penalty
+      const withinGrace = calculateCanonicalMonthlyUtility({
+        rateSnapshot: {
+          ...baseRates,
+          lateFeeType: 'daily',
+          lateFeeValue: '50.00',
+        },
+        waterReading: { previousReading: '100', currentReading: '110' },
+        electricReading: { previousReading: '500', currentReading: '560' },
+        dueDate: '2026-08-05',
+        asOfDate: '2026-08-08',
+        gracePeriodDays: 3,
+      });
+      expect(withinGrace.lateFeeAmount).toBe('0.00');
+
+      // 4 days past due date with grace period 3 days -> 4 days overdue
+      const pastGrace = calculateCanonicalMonthlyUtility({
+        rateSnapshot: {
+          ...baseRates,
+          lateFeeType: 'daily',
+          lateFeeValue: '50.00',
+        },
+        waterReading: { previousReading: '100', currentReading: '110' },
+        electricReading: { previousReading: '500', currentReading: '560' },
+        dueDate: '2026-08-05',
+        asOfDate: '2026-08-09',
+        gracePeriodDays: 3,
+      });
+      expect(pastGrace.lateFeeAmount).toBe('200.00');
+      expect(pastGrace.items.find(i => i.type === 'late_fee')?.description).toBe('ค่าปรับล่าช้า (4 วัน)');
+    });
+  });
 });

@@ -20,6 +20,7 @@ import {
   isZeroDecimal,
 } from './decimal-math.util.js';
 import { calculateMeterUsageUnits, MeterUsageResult } from './meter-billing-calculator.util.js';
+import { toBangkokDateString } from './calendar-date.util.js';
 
 export interface CanonicalRateSnapshotInput {
   waterBillingType?: string | null;
@@ -32,6 +33,8 @@ export interface CanonicalRateSnapshotInput {
   internetFee?: string | number | null;
   parkingFeeMode?: string | null;
   parkingFee?: string | number | null;
+  lateFeeType?: string | null;
+  lateFeeValue?: string | number | null;
 }
 
 export interface CanonicalReadingInput {
@@ -51,6 +54,31 @@ export interface CanonicalMonthlyUtilityInput {
   parkingQuantity?: string | number | null;
   manualOutstanding?: string | number | null;
   otherFees?: Array<{ description: string; amount: string | number }> | null;
+  dueDate?: Date | string | null;
+  asOfDate?: Date | string | null;
+  gracePeriodDays?: number | null;
+}
+
+export function normalizeLateFeeMode(raw: unknown): 'none' | 'daily' | 'fixed' | 'percentage' {
+  if (raw === null || raw === undefined || typeof raw !== 'string') return 'none';
+  const cleaned = raw.trim().toLowerCase().replace(/[-\s]/g, '_');
+  switch (cleaned) {
+    case 'daily':
+    case 'per_day':
+    case 'per-day':
+    case 'daily_rate':
+      return 'daily';
+    case 'fixed':
+    case 'fixed_once':
+    case 'flat':
+    case 'once':
+      return 'fixed';
+    case 'percentage':
+    case 'percent':
+      return 'percentage';
+    default:
+      return 'none';
+  }
 }
 
 export interface CanonicalMonthlyUtilityLineItem {
@@ -76,6 +104,7 @@ export interface CanonicalMonthlyUtilityResult {
   internetFee: string;
   parkingFee: string;
   manualOutstandingAmount: string;
+  lateFeeAmount?: string;
   otherFees: Array<{ description: string; amount: string }>;
   peopleCount: number;
   subtotal: string;
@@ -416,7 +445,50 @@ export function calculateCanonicalMonthlyUtility(
     }
   }
 
-  // 8. Total Accumulation (Exact Satang / Decimal Addition)
+  // 8. Late Fee / Overdue Penalty Calculation
+  let lateFeeAmountStr = '0.00';
+  const rawLateType = rateSnapshot?.lateFeeType || 'none';
+  const lateFeeVal = toDecimal(rateSnapshot?.lateFeeValue ?? '0.00');
+  const lateMode = normalizeLateFeeMode(rawLateType);
+
+  if (lateMode !== 'none' && !isZeroDecimal(lateFeeVal) && input.dueDate) {
+    const dueBangkokStr = toBangkokDateString(input.dueDate);
+    const asOfBangkokStr = toBangkokDateString(input.asOfDate || new Date());
+    const dueDt = new Date(`${dueBangkokStr}T00:00:00.000Z`);
+    const asOfDt = new Date(`${asOfBangkokStr}T00:00:00.000Z`);
+    const rawDiffDays = Math.floor((asOfDt.getTime() - dueDt.getTime()) / (1000 * 60 * 60 * 24));
+    const grace = Math.max(0, input.gracePeriodDays ?? 0);
+    const overdueDays = rawDiffDays > grace ? rawDiffDays : 0;
+
+    if (overdueDays > 0) {
+      if (lateMode === 'daily') {
+        const amtDec = mulDecimals(overdueDays.toString(), lateFeeVal);
+        lateFeeAmountStr = formatDecimal(amtDec);
+        items.push({
+          type: 'late_fee',
+          description: `ค่าปรับล่าช้า (${overdueDays} วัน)`,
+          quantity: overdueDays.toString(),
+          unit: 'day',
+          unitPrice: formatDecimal(lateFeeVal),
+          amount: lateFeeAmountStr,
+          metadata: { mode: 'daily', overdueDays, rate: formatDecimal(lateFeeVal) },
+        });
+      } else if (lateMode === 'fixed') {
+        lateFeeAmountStr = formatDecimal(lateFeeVal);
+        items.push({
+          type: 'late_fee',
+          description: 'ค่าปรับล่าช้า',
+          quantity: '1.00',
+          unit: 'bill',
+          unitPrice: formatDecimal(lateFeeVal),
+          amount: lateFeeAmountStr,
+          metadata: { mode: 'fixed', overdueDays, rate: formatDecimal(lateFeeVal) },
+        });
+      }
+    }
+  }
+
+  // 9. Total Accumulation (Exact Satang / Decimal Addition)
   let subtotalDec = toDecimal('0.00');
   for (const item of items) {
     subtotalDec = addDecimals(subtotalDec, item.amount);
@@ -436,6 +508,7 @@ export function calculateCanonicalMonthlyUtility(
     internetFee: internetFeeStr,
     parkingFee: parkingFeeStr,
     manualOutstandingAmount: manualOutstandingStr,
+    lateFeeAmount: lateFeeAmountStr,
     otherFees: otherFeesList,
     peopleCount,
     subtotal: totalStr,

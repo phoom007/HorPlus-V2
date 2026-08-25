@@ -233,13 +233,13 @@ describe('Wave 1G — Owner Property UI Component & Integration Tests', () => {
         />
       );
 
-      const rentInput = screen.getByTestId('input-default-monthly-rent');
-      fireEvent.change(rentInput, { target: { value: '5000' } });
-      fireEvent.blur(rentInput);
+      const dueDayInput = screen.getByTestId('input-due-day');
+      fireEvent.change(dueDayInput, { target: { value: '10' } });
+      fireEvent.blur(dueDayInput);
 
       expect(updateDormitoryDefaults).toHaveBeenCalledWith({
-        property: {
-          changes: { defaultMonthlyRent: 5000 },
+        billing: {
+          changes: { dueDay: 10 },
           expectedVersion: 1,
         },
       });

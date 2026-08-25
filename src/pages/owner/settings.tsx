@@ -206,6 +206,7 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
   const [localInternetFee, setLocalInternetFee] = useState<string | number>('0.00');
   const [localParkingFee, setLocalParkingFee] = useState<string | number>('0.00');
   const [localLateFee, setLocalLateFee] = useState<string | number>('0.00');
+  const [localDueDay, setLocalDueDay] = useState<number>(5);
 
   const [waterBillingMode, setWaterBillingMode] = useState<string>('per_unit');
   const [electricBillingMode, setElectricBillingMode] = useState<string>('per_unit');
@@ -443,6 +444,7 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
             if (res.data.billing.internetFee !== undefined && !isUserTypingRef.current) setLocalInternetFee(Number(res.data.billing.internetFee));
             if (res.data.billing.parkingFee !== undefined && !isUserTypingRef.current) setLocalParkingFee(Number(res.data.billing.parkingFee));
             if (res.data.billing.lateFeeDaily !== undefined && !isUserTypingRef.current) setLocalLateFee(Number(res.data.billing.lateFeeDaily));
+            if (res.data.billing.dueDay !== undefined && !isUserTypingRef.current) setLocalDueDay(Number(res.data.billing.dueDay));
 
             if (res.data.billing.waterBillingMode || res.data.billing.waterBillingType) {
               setWaterBillingMode(res.data.billing.waterBillingMode || res.data.billing.waterBillingType);
@@ -632,18 +634,6 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
   const getDirtyChanges = () => {
     const prop: Record<string, number> = {};
     const bill: Record<string, number> = {};
-
-    const curRent = Number(propertyMonthlyRent);
-    const initRent = initialValues.propertyMonthlyRent ?? Number(dorm?.settings?.defaultMonthlyRent || 0);
-    if (!isNaN(curRent) && initialValues.propertyMonthlyRent !== undefined && curRent !== initRent) {
-      prop.defaultMonthlyRent = curRent;
-    }
-
-    const curDep = Number(propertyDepositAmount);
-    const initDep = initialValues.propertyDeposit ?? Number(dorm?.settings?.defaultDeposit || 0);
-    if (!isNaN(curDep) && initialValues.propertyDeposit !== undefined && curDep !== initDep) {
-      prop.defaultDeposit = curDep;
-    }
 
     const curWater = Number(localWaterUnitRate);
     const initWater = initialValues.waterRate ?? Number(dorm?.billingSettings?.waterRate || 0);
@@ -1610,43 +1600,31 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                 </div>
               )}
 
-              {/* Property Default Rent & Deposit Settings (Dormitory-level) */}
+              {/* Due Date Setting */}
               <div className="grid grid-cols-2 gap-4 text-xs pt-1">
                 <div className="space-y-1">
                   <label className="block font-semibold text-slate-700 flex items-center gap-1.5">
-                    <DollarSign className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
-                    ค่าเช่าเริ่มต้นหอพัก (บาท) *
+                    <Calendar className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                    วันครบกำหนดชำระของทุกเดือน (วันที่ 1 - 28) *
                   </label>
                   <input
                     type="number"
+                    min={1}
+                    max={28}
                     required
-                    value={propertyMonthlyRent}
+                    value={localDueDay}
                     onChange={(e) => {
-                      setPropertyMonthlyRent(Number(e.target.value));
+                      isUserTypingRef.current = true;
+                      setLocalDueDay(Number(e.target.value));
                       setSaveStatus('typing');
                     }}
-                    onBlur={(e) => handleSaveBackendDormitoryDefaults({ defaultMonthlyRent: Number(e.target.value) }, undefined)}
-                    className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-bold focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs"
-                    data-testid="input-default-monthly-rent"
-                  />
-                </div>
-
-                <div className="space-y-1">
-                  <label className="block font-semibold text-slate-700 flex items-center gap-1.5">
-                    <DollarSign className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                    เงินประกันเริ่มต้นหอพัก (บาท) *
-                  </label>
-                  <input
-                    type="number"
-                    required
-                    value={propertyDepositAmount}
-                    onChange={(e) => {
-                      setPropertyDepositAmount(Number(e.target.value));
-                      setSaveStatus('typing');
+                    onBlur={(e) => {
+                      const val = Math.max(1, Math.min(28, Number(e.target.value) || 5));
+                      setLocalDueDay(val);
+                      handleSaveBackendDormitoryDefaults(undefined, { dueDay: val });
                     }}
-                    onBlur={(e) => handleSaveBackendDormitoryDefaults({ defaultDeposit: Number(e.target.value) }, undefined)}
                     className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-bold focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs"
-                    data-testid="input-default-deposit"
+                    data-testid="input-due-day"
                   />
                 </div>
               </div>

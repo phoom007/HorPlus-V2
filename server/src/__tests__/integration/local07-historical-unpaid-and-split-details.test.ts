@@ -557,11 +557,14 @@ describe('LOCAL-07 — Historical UNPAID Recalculation & Financial Details Autho
     expect(rentComp?.amount).toBe('4500.00');
     expect(rentComp?.status).toBe('UNPAID');
 
-    expect(muComp?.amount).toBe('950.00');
-    expect(muComp?.status).toBe('PAID');
+    // Product Owner Decision 1 (S1) Authority:
+    // overallFinancialStatus / billStatus reflects overall cycle financial obligation (RENT is UNPAID -> overall status is unpaid)
+    expect(room?.billStatus).toBe('unpaid');
+    expect(room?.overallFinancialStatus).toBe('unpaid');
+    expect(room?.isPaid).toBe(false);
 
-    // Literal source authority: billStatus derives from MONTHLY_UTILITY bill (Option S2)
-    expect(room?.billStatus).toBe('paid');
-    expect(room?.isPaid).toBe(true);
+    // Monthly Utility toggle authority remains scoped to MONTHLY_UTILITY
+    expect(room?.monthlyUtilityBillStatus).toBe('paid');
+    expect(room?.isMonthlyUtilityPaid).toBe(true);
   });
 });

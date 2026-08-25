@@ -114,6 +114,9 @@ export interface MeterRowState {
   overdueAmount: number | string;
   isPaid: boolean;
   billStatus: BillStatus;
+  overallFinancialStatus?: string;
+  monthlyUtilityBillStatus?: string;
+  isMonthlyUtilityPaid?: boolean;
   editWaterPrev?: boolean;
   editElecPrev?: boolean;
   otherFees?: { description: string; amount: number | string }[];
@@ -231,8 +234,10 @@ export function buildRowsFromWorkspace(params: {
     );
     const previewRooms = workspaceData?.previewContext?.rooms || workspaceData?.rooms || [];
     const roomCtx = previewRooms.find((ctx: any) => ctx.roomId === r.id);
-    const billStatus: BillStatus = (roomCtx?.billStatus as BillStatus) || (existingMonthlyUtilityBill ? existingMonthlyUtilityBill.status : 'draft');
-    const isPaid = billStatus === 'paid' || Boolean(roomCtx?.isPaid);
+    const overallFinancialStatus = (roomCtx?.overallFinancialStatus as BillStatus) || (roomCtx?.billStatus as BillStatus) || (existingMonthlyUtilityBill ? existingMonthlyUtilityBill.status : 'draft');
+    const monthlyUtilityBillStatus = (roomCtx?.monthlyUtilityBillStatus as string) || (existingMonthlyUtilityBill ? existingMonthlyUtilityBill.status : 'draft');
+    const isMonthlyUtilityPaid = Boolean(roomCtx?.isMonthlyUtilityPaid || monthlyUtilityBillStatus === 'paid');
+    const isPaid = overallFinancialStatus === 'paid' || Boolean(roomCtx?.isPaid);
 
     return {
       roomId: r.id,
@@ -249,7 +254,10 @@ export function buildRowsFromWorkspace(params: {
           ? '0'
           : '',
       isPaid,
-      billStatus,
+      billStatus: overallFinancialStatus,
+      overallFinancialStatus,
+      monthlyUtilityBillStatus,
+      isMonthlyUtilityPaid,
       editWaterPrev: false,
       editElecPrev: false,
       otherFees: snap?.otherFees || [],
@@ -1938,11 +1946,14 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       showToast('ข้อมูลหรือสิทธิ์การคิดรอบบิลยังไม่พร้อมใช้งาน');
       return;
     }
-    if (row.isPaid || row.billStatus === 'paid') {
-      showToast('บิลนี้ชำระเงินแล้ว ไม่สามารถยกเลิกหรือแก้ไขได้');
+    const roomCtx = previewContext?.rooms?.find((r: any) => r.roomId === row.roomId);
+    const isMonthlyUtilityPaid = Boolean(roomCtx?.isMonthlyUtilityPaid || (row as any).isMonthlyUtilityPaid);
+    if (isMonthlyUtilityPaid) {
+      showToast('บิลค่าใช้จ่ายรายเดือนนี้ชำระเงินแล้ว ไม่สามารถยกเลิกหรือแก้ไขได้');
       return;
     }
-    const isCurrentlyIssued = row.billStatus !== 'draft' && row.billStatus !== 'cancelled';
+    const muStatus = (roomCtx?.monthlyUtilityBillStatus || (row as any).monthlyUtilityBillStatus || row.billStatus);
+    const isCurrentlyIssued = muStatus !== 'draft' && muStatus !== 'cancelled';
     const targetAction = isCurrentlyIssued ? 'cancel' : 'issue';
 
     let dirtyRowData: any = undefined;
@@ -2898,46 +2909,49 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                             );
                           }
 
-                          const effectiveBillStatus: BillStatus = (roomCtx?.billStatus as BillStatus) || row.billStatus;
-                          const isEffectivePaid = (effectiveBillStatus as string) === 'paid' || Boolean(roomCtx?.isPaid) || row.isPaid;
+                          const overallStatus = (roomCtx?.overallFinancialStatus as string) || (roomCtx?.billStatus as string) || row.billStatus;
+                          const muStatus = (roomCtx?.monthlyUtilityBillStatus as string) || (row as any).monthlyUtilityBillStatus || row.billStatus;
+                          const isMuPaid = Boolean(roomCtx?.isMonthlyUtilityPaid || (row as any).isMonthlyUtilityPaid || muStatus === 'paid');
+                          const isMuIssued = muStatus !== 'draft' && muStatus !== 'cancelled';
+                          const isOverallPaid = overallStatus === 'paid' || Boolean(roomCtx?.isPaid);
 
                           return (
                             <div className="flex flex-col items-center justify-center gap-1 min-w-[85px]">
                               <button
                                 type="button"
                                 role="switch"
-                                aria-checked={effectiveBillStatus !== 'draft' && effectiveBillStatus !== 'cancelled'}
-                                disabled={isSaving || isEffectivePaid || (effectiveBillStatus as string) === 'paid' || !selectedBillingCycleId}
+                                aria-checked={isMuIssued}
+                                disabled={isSaving || isMuPaid || !selectedBillingCycleId}
                                 onClick={() => handleToggleStatusSwitch(row)}
-                                className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none disabled:cursor-not-allowed disabled:opacity-60 ${(effectiveBillStatus as string) === 'paid'
+                                className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none disabled:cursor-not-allowed disabled:opacity-60 ${isMuPaid
                                   ? 'bg-emerald-600'
-                                  : effectiveBillStatus !== 'draft' && effectiveBillStatus !== 'cancelled'
+                                  : isMuIssued
                                     ? 'bg-amber-500'
                                     : 'bg-slate-300'
                                   }`}
                                 title={
-                                  (effectiveBillStatus as string) === 'paid'
+                                  isMuPaid
                                     ? 'ชำระแล้ว (ล็อค)'
-                                    : effectiveBillStatus !== 'draft' && effectiveBillStatus !== 'cancelled'
+                                    : isMuIssued
                                       ? 'คลิกเพื่อยกเลิกบิล'
                                       : 'คลิกเพื่อออกบิล'
                                 }
                               >
                                 <span
                                   aria-hidden="true"
-                                  className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out ${effectiveBillStatus !== 'draft' && effectiveBillStatus !== 'cancelled' ? 'translate-x-4' : 'translate-x-0'
+                                  className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out ${isMuIssued ? 'translate-x-4' : 'translate-x-0'
                                     }`}
                                 />
                               </button>
-                              <span className={`text-[10px] font-extrabold leading-none ${(effectiveBillStatus as string) === 'paid'
+                              <span className={`text-[10px] font-extrabold leading-none ${isOverallPaid
                                 ? 'text-emerald-700'
-                                : effectiveBillStatus !== 'draft' && effectiveBillStatus !== 'cancelled'
+                                : overallStatus !== 'draft' && overallStatus !== 'cancelled'
                                   ? 'text-amber-700'
                                   : 'text-slate-500'
                                 }`}>
-                                {(effectiveBillStatus as string) === 'paid'
+                                {isOverallPaid
                                   ? 'ชำระแล้ว'
-                                  : effectiveBillStatus === 'draft' || effectiveBillStatus === 'cancelled'
+                                  : overallStatus === 'draft' || overallStatus === 'cancelled'
                                     ? 'ยังไม่ออกบิล'
                                     : 'รอชำระ'}
                               </span>
