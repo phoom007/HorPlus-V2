@@ -114,14 +114,12 @@ export class LateFeeReconciliationService {
     const details: ReconciliationDetail[] = [];
 
     try {
-      // 1. Bounded candidate query: editable UNPAID Monthly Utility bills past dueDate
+      // 1. Bounded candidate query: editable UNPAID Monthly Utility bills past Bill.dueDate
       const whereClause: Prisma.BillWhereInput = {
         billKind: 'MONTHLY_UTILITY',
         status: 'unpaid',
-        billingCycle: {
-          dueDate: {
-            lt: referenceTime,
-          },
+        dueDate: {
+          lt: referenceTime,
         },
       };
 
@@ -309,11 +307,11 @@ export class LateFeeReconciliationService {
         return { status: 'skipped', reason: 'STATUS_NOT_UNPAID_OR_NOT_MONTHLY_UTILITY' };
       }
 
-      if (!bill.billingCycle || !bill.billingCycle.dueDate) {
-        return { status: 'skipped', reason: 'NO_DUE_DATE_ON_CYCLE' };
+      if (!bill.dueDate) {
+        return { status: 'skipped', reason: 'NO_DUE_DATE_ON_BILL' };
       }
 
-      const rateSnapshot = bill.billingCycle.rateSnapshot;
+      const rateSnapshot = bill.billingCycle?.rateSnapshot;
       if (!rateSnapshot) {
         return { status: 'skipped', reason: 'NO_RATE_SNAPSHOT' };
       }
@@ -331,14 +329,15 @@ export class LateFeeReconciliationService {
         return { status: 'noop', reason: 'LATE_FEE_MODE_NONE_OR_ZERO' };
       }
 
-      // 3. Generate canonical preview INSIDE the transaction using frozen cycle snapshot
+      // 3. Generate canonical preview INSIDE the transaction using frozen cycle snapshot and Bill.dueDate
       const preview = await this.billingService.generateBillPreview(
         dormitoryId,
         bill.billingCycleId,
         bill.roomId,
         tx,
         'MONTHLY_UTILITY',
-        referenceTime
+        referenceTime,
+        bill.dueDate
       );
 
       // 4. Semantic Financial Comparison (ignoring persistence-only DB IDs)
@@ -474,6 +473,63 @@ export class LateFeeReconciliationService {
     }
 
     return true;
+  }
+
+  private dailyTimerId: NodeJS.Timeout | null = null;
+
+  /**
+   * Calculates milliseconds until the next occurrence of 00:05:00 Asia/Bangkok (+07:00).
+   * Note: 00:05:00 Bangkok is 17:05:00 UTC.
+   */
+  public getNextBangkok0005DelayMs(now: Date = new Date()): number {
+    const targetUtcHour = 17;
+    const targetUtcMinute = 5;
+    const target = new Date(now.getTime());
+    target.setUTCHours(targetUtcHour, targetUtcMinute, 0, 0);
+
+    if (now.getTime() >= target.getTime()) {
+      target.setUTCDate(target.getUTCDate() + 1);
+    }
+    return target.getTime() - now.getTime();
+  }
+
+  /**
+   * Starts the canonical daily reconciliation scheduler at 00:05 Asia/Bangkok.
+   */
+  public startDailySchedule(): void {
+    if (this.dailyTimerId) return;
+
+    const scheduleNext = () => {
+      const delayMs = this.getNextBangkok0005DelayMs();
+      this.dailyTimerId = setTimeout(async () => {
+        try {
+          await this.reconcileOverdueBills(new Date());
+        } catch (err) {
+          logger.error({ err }, '[LateFeeReconciliationService] Error during scheduled daily reconciliation');
+        }
+        scheduleNext();
+      }, delayMs);
+    };
+
+    scheduleNext();
+  }
+
+  /**
+   * Executes startup catch-up reconciliation on server boot.
+   */
+  public async runStartupCatchUp(referenceTime: Date = new Date(), dormitoryId?: string): Promise<ReconciliationSummary> {
+    logger.info('[LateFeeReconciliationService] Running startup catch-up overdue reconciliation');
+    return this.reconcileOverdueBills(referenceTime, dormitoryId);
+  }
+
+  /**
+   * Stops the daily schedule timer.
+   */
+  public stop(): void {
+    if (this.dailyTimerId) {
+      clearTimeout(this.dailyTimerId);
+      this.dailyTimerId = null;
+    }
   }
 }
 

@@ -148,7 +148,7 @@ model DormitoryBillingSettings {
   internetFeeMode            String   @default("per_person") @map("internet_fee_mode") @db.VarChar(50)
   parkingRate                Decimal  @default(0.00) @map("parking_rate") @db.Decimal(12, 2)
   parkingFeeMode             String   @default("per_room") @map("parking_fee_mode") @db.VarChar(50)
-  gracePeriodDays            Int      @default(0) @map("grace_period_days")
+  gracePeriodDays            Int      @default(2) @map("grace_period_days")
   advanceRentMonths          Int      @default(1) @map("advance_rent_months")
   lateFeeType                String   @default("none") @map("late_fee_type") @db.VarChar(50)
   lateFeeValue               Decimal  @default(0.00) @map("late_fee_value") @db.Decimal(12, 2)
@@ -749,7 +749,7 @@ model BillingRateSnapshot {
   parkingFeeMode              String   @map("parking_fee_mode") @db.VarChar(50)
   lateFeeType                 String   @map("late_fee_type") @db.VarChar(50)
   lateFeeValue                Decimal  @map("late_fee_value") @db.Decimal(12, 2)
-  gracePeriodDays             Int      @default(0) @map("grace_period_days")
+  gracePeriodDays             Int      @default(2) @map("grace_period_days")
   currency                    String   @default("THB") @db.VarChar(10)
   source                      String   @map("source") @db.VarChar(50) // TEMPLATE_DEFAULT, INHERITED, MANUAL_OVERRIDE
   inheritedFromBillingCycleId String?  @map("inherited_from_billing_cycle_id") @db.Uuid

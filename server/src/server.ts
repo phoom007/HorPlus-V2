@@ -38,12 +38,15 @@ async function startServer() {
   const app = createApp();
   const server = http.createServer(app);
 
-  const host = process.env.HOST || '0.0.0.0';
-  // Start cleanup service
+  // Start background schedulers and startup catch-up
   cleanupService.startHourly();
+  cleanupService.startDailyLateFee();
+  cleanupService.runStartupCatchUp().catch((err) => {
+    logger.error({ err }, '[Server] Non-fatal error during late-fee startup catch-up');
+  });
 
-  server.listen(env.PORT, host, () => {
-    logger.info({ port: env.PORT, host, environment: env.NODE_ENV }, `HorPlus API server listening on ${host}:${env.PORT}`);
+  server.listen(env.PORT, () => {
+    logger.info({ port: env.PORT, environment: env.NODE_ENV }, `HorPlus API server listening on port ${env.PORT}`);
   });
 
   server.on('error', async (err: NodeJS.ErrnoException) => {

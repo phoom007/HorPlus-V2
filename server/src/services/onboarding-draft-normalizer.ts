@@ -4,6 +4,8 @@
  * @license Apache-2.0
  */
 
+import { LATE_FEE_GRACE_DAYS } from '../utils/monthly-utility-calculator.util.js';
+
 export const CURRENT_ONBOARDING_DRAFT_SCHEMA_VERSION = 2;
 
 function parseNum(val: any, fallback: number): number {
@@ -104,7 +106,7 @@ export function normalizeOnboardingDraftPayload(rawPayload: any): Record<string,
     securityDeposit: parseNum(rawDep.securityDeposit, 0),
     advanceRentMonths: parseNum(rawDep.advanceRentMonths, 1),
     dueDateDay: parseNum(rawDep.dueDateDay, 15),
-    gracePeriodDays: parseNum(rawDep.gracePeriodDays, 0),
+    gracePeriodDays: LATE_FEE_GRACE_DAYS,
     lateFeeType: (rawDep.lateFeeType ?? 'none').toString(),
     lateFeeAmount: parseNum(rawDep.lateFeeAmount, 0),
   };

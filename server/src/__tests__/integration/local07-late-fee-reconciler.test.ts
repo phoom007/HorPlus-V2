@@ -6,12 +6,13 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { PrismaClient, Prisma } from '@prisma/client';
 import { randomUUID } from 'crypto';
-import { LateFeeReconciliationService } from '../../services/late-fee-reconciliation.service.js';
-import { BillingService } from '../../services/billing.service.js';
+import { BillingService, resolveBillDueDate } from '../../services/billing.service.js';
 import { BillingCycleService } from '../../services/billing-cycle.service.js';
 import { cleanupService } from '../../services/cleanup.service.js';
 import { formatDecimal, toDecimal } from '../../utils/decimal-math.util.js';
-import { calculateCanonicalMonthlyUtility } from '../../utils/monthly-utility-calculator.util.js';
+import { calculateCanonicalMonthlyUtility, LATE_FEE_GRACE_DAYS } from '../../utils/monthly-utility-calculator.util.js';
+import { OnboardingBillingInputSchema } from '../../types/onboarding-validation.js';
+import { LateFeeReconciliationService, lateFeeReconciliationService } from '../../services/late-fee-reconciliation.service.js';
 
 import { PrismaBillingCycleRepository } from '../../db/repositories/billing-cycle.repository.js';
 
@@ -114,14 +115,14 @@ describe('HORPLUS LOCAL-07 — Late-Fee Overdue Reconciler & Snapshot Policy Aut
   });
 
   describe('PART A: BillingRateSnapshot Policy & Prospective Authority (SNP1 - SNP5)', () => {
-    it('SNP1–SNP3: createBillingCycle permanently freezes lateFeeType, lateFeeValue, and gracePeriodDays from current settings', async () => {
-      // Set settings: daily / 50.00 / grace 0
+    it('SNP1–SNP3: createBillingCycle permanently freezes lateFeeType, lateFeeValue, and fixed 2-day gracePeriodDays', async () => {
+      // Set settings: daily / 50.00
       await prisma.dormitoryBillingSettings.update({
         where: { dormitoryId: dormId },
         data: {
           lateFeeType: 'daily',
           lateFeeValue: new Prisma.Decimal('50.00'),
-          gracePeriodDays: 0,
+          gracePeriodDays: 2,
           dueDay: 5,
         },
       });
@@ -137,12 +138,12 @@ describe('HORPLUS LOCAL-07 — Late-Fee Overdue Reconciler & Snapshot Policy Aut
       testCycleId = res.cycle.id;
       expect(res.rateSnapshot.lateFeeType).toBe('daily');
       expect(res.rateSnapshot.lateFeeValue).toBe('50.00');
-      expect(res.rateSnapshot.gracePeriodDays).toBe(0);
+      expect(res.rateSnapshot.gracePeriodDays).toBe(2);
       expect(res.cycle.dueDate.toISOString().slice(0, 10)).toBe('2026-09-05');
     });
 
     it('SNP4–SNP5: Changing Dormitory Settings today does NOT alter snapshot or dueDate of existing cycle A, but applies to future cycle B', async () => {
-      // Change settings to fixed / 100.00 / grace 2 / dueDay 10
+      // Change settings to fixed / 100.00 / dueDay 10
       await prisma.dormitoryBillingSettings.update({
         where: { dormitoryId: dormId },
         data: {
@@ -153,13 +154,13 @@ describe('HORPLUS LOCAL-07 — Late-Fee Overdue Reconciler & Snapshot Policy Aut
         },
       });
 
-      // Existing cycle A snapshot in DB remains daily / 50.00 / 0
+      // Existing cycle A snapshot in DB remains daily / 50.00 / 2
       const snapA = await prisma.billingRateSnapshot.findUnique({
         where: { billingCycleId: testCycleId },
       });
       expect(snapA?.lateFeeType).toBe('daily');
       expect(snapA?.lateFeeValue.toString()).toBe('50');
-      expect(snapA?.gracePeriodDays).toBe(0);
+      expect(snapA?.gracePeriodDays).toBe(2);
 
       // Create future cycle B (2026-09)
       const resB = await billingCycleService.createBillingCycle(dormId, {
@@ -220,7 +221,7 @@ describe('HORPLUS LOCAL-07 — Late-Fee Overdue Reconciler & Snapshot Policy Aut
           parkingFeeMode: 'none',
           lateFeeType: 'daily',
           lateFeeValue: new Prisma.Decimal('50.00'),
-          gracePeriodDays: 0,
+          gracePeriodDays: 2,
           source: 'TEMPLATE_DEFAULT',
         },
       });
@@ -248,9 +249,9 @@ describe('HORPLUS LOCAL-07 — Late-Fee Overdue Reconciler & Snapshot Policy Aut
 
       await prisma.billItem.createMany({
         data: [
-          { billId, dormitoryId: dormId, type: 'water', description: 'ค่าน้ำประปา', quantity: new Prisma.Decimal('1.00'), unitPrice: new Prisma.Decimal('100.00'), amount: new Prisma.Decimal('100.00') },
-          { billId, dormitoryId: dormId, type: 'electric', description: 'ค่าไฟฟ้า', quantity: new Prisma.Decimal('1.00'), unitPrice: new Prisma.Decimal('200.00'), amount: new Prisma.Decimal('200.00') },
-          { billId, dormitoryId: dormId, type: 'common', description: 'ค่าส่วนกลาง', quantity: new Prisma.Decimal('1.00'), unitPrice: new Prisma.Decimal('500.00'), amount: new Prisma.Decimal('500.00') },
+          { billId, dormitoryId: dormId, type: 'water', description: 'ค่าน้ำ (เหมาจ่าย)', quantity: new Prisma.Decimal('1.00'), unitPrice: new Prisma.Decimal('100.00'), amount: new Prisma.Decimal('100.00') },
+          { billId, dormitoryId: dormId, type: 'electricity', description: 'ค่าไฟฟ้า (เหมาจ่าย)', quantity: new Prisma.Decimal('1.00'), unitPrice: new Prisma.Decimal('200.00'), amount: new Prisma.Decimal('200.00') },
+          { billId, dormitoryId: dormId, type: 'common_fee', description: 'ค่าส่วนกลาง', quantity: new Prisma.Decimal('1.00'), unitPrice: new Prisma.Decimal('500.00'), amount: new Prisma.Decimal('500.00') },
         ],
       });
     });
@@ -264,8 +265,24 @@ describe('HORPLUS LOCAL-07 — Late-Fee Overdue Reconciler & Snapshot Policy Aut
       expect(dbBill?.version).toBe(1);
     });
 
-    it('WRK3: First overdue day (2026-08-06 Bangkok), bill acquires 1 day late fee (+50 = 850.00)', async () => {
-      const summary = await reconciler.reconcileOverdueBills(new Date('2026-08-06T10:00:00.000Z'), dormId);
+    it('WRK3: Grace day 1 (2026-08-06 Bangkok) and Grace day 2 (2026-08-07 Bangkok) remain 0 penalty', async () => {
+      // Grace day 1 (Aug 6)
+      const summary6 = await reconciler.reconcileOverdueBills(new Date('2026-08-06T10:00:00.000Z'), dormId);
+      expect(summary6.changed).toBe(0);
+      let dbBill = await prisma.bill.findUnique({ where: { id: billId } });
+      expect(formatDecimal(dbBill?.totalAmount ?? '0')).toBe('800.00');
+      expect(dbBill?.version).toBe(1);
+
+      // Grace day 2 (Aug 7)
+      const summary7 = await reconciler.reconcileOverdueBills(new Date('2026-08-07T10:00:00.000Z'), dormId);
+      expect(summary7.changed).toBe(0);
+      dbBill = await prisma.bill.findUnique({ where: { id: billId } });
+      expect(formatDecimal(dbBill?.totalAmount ?? '0')).toBe('800.00');
+      expect(dbBill?.version).toBe(1);
+    });
+
+    it('WRK4: First chargeable overdue day (2026-08-08 Bangkok), bill acquires 1 day late fee (+50 = 850.00, NOT 150)', async () => {
+      const summary = await reconciler.reconcileOverdueBills(new Date('2026-08-08T10:00:00.000Z'), dormId);
       expect(summary.changed).toBe(1);
 
       const dbBill = await prisma.bill.findUnique({
@@ -282,22 +299,6 @@ describe('HORPLUS LOCAL-07 — Late-Fee Overdue Reconciler & Snapshot Policy Aut
       expect(formatDecimal(lateItem?.amount ?? '0')).toBe('50.00');
     });
 
-    it('WRK4: Multi-day overdue (2026-08-08 Bangkok), bill acquires 3 days late fee (+150 = 950.00)', async () => {
-      const summary = await reconciler.reconcileOverdueBills(new Date('2026-08-08T10:00:00.000Z'), dormId);
-      expect(summary.changed).toBe(1);
-
-      const dbBill = await prisma.bill.findUnique({
-        where: { id: billId },
-        include: { items: true },
-      });
-      expect(formatDecimal(dbBill?.totalAmount ?? '0')).toBe('950.00');
-      expect(dbBill?.version).toBe(2);
-
-      const lateItem = dbBill?.items.find((i) => i.type === 'late_fee');
-      expect(lateItem?.description).toBe('ค่าปรับล่าช้า (3 วัน)');
-      expect(formatDecimal(lateItem?.amount ?? '0')).toBe('150.00');
-    });
-
     it('WRK5: Same-day second run NO-OP (running at 11:00 after 10:00 on 2026-08-08 results in NO change and NO version bump)', async () => {
       // First run at 10:00
       await reconciler.reconcileOverdueBills(new Date('2026-08-08T10:00:00.000Z'), dormId);
@@ -311,12 +312,12 @@ describe('HORPLUS LOCAL-07 — Late-Fee Overdue Reconciler & Snapshot Policy Aut
         where: { id: billId },
         include: { items: true },
       });
-      expect(formatDecimal(dbBill?.totalAmount ?? '0')).toBe('950.00');
+      expect(formatDecimal(dbBill?.totalAmount ?? '0')).toBe('850.00');
       expect(dbBill?.version).toBe(2); // Still version 2, not bumped!
       expect(dbBill?.items.filter((i) => i.type === 'late_fee').length).toBe(1);
     });
 
-    it('WRK6: Next day (2026-08-09 Bangkok), updates same Bill ID to 4 days (+200 = 1000.00) and increments version exactly once', async () => {
+    it('WRK6: Next day (2026-08-09 Bangkok), updates same Bill ID to 2 chargeable days (+100 = 900.00) and increments version exactly once', async () => {
       // Reconcile on Aug 8
       await reconciler.reconcileOverdueBills(new Date('2026-08-08T10:00:00.000Z'), dormId);
 
@@ -328,15 +329,15 @@ describe('HORPLUS LOCAL-07 — Late-Fee Overdue Reconciler & Snapshot Policy Aut
         where: { id: billId },
         include: { items: true },
       });
-      expect(formatDecimal(dbBill?.totalAmount ?? '0')).toBe('1000.00');
+      expect(formatDecimal(dbBill?.totalAmount ?? '0')).toBe('900.00');
       expect(dbBill?.version).toBe(3);
 
       const lateItem = dbBill?.items.find((i) => i.type === 'late_fee');
-      expect(lateItem?.description).toBe('ค่าปรับล่าช้า (4 วัน)');
-      expect(formatDecimal(lateItem?.amount ?? '0')).toBe('200.00');
+      expect(lateItem?.description).toBe('ค่าปรับล่าช้า (2 วัน)');
+      expect(formatDecimal(lateItem?.amount ?? '0')).toBe('100.00');
     });
 
-    it('WRK7: Fixed mode charges fixed penalty once regardless of how many days pass', async () => {
+    it('WRK7: Fixed mode charges fixed penalty once starting on first chargeable day (2026-08-08) regardless of how many days pass', async () => {
       // Update cycle snapshot to fixed / 100.00
       await prisma.billingRateSnapshot.update({
         where: { billingCycleId: baseCycleId },
@@ -346,9 +347,14 @@ describe('HORPLUS LOCAL-07 — Late-Fee Overdue Reconciler & Snapshot Policy Aut
         },
       });
 
-      // Run on Aug 6 (+1 day) -> 800 + 100 = 900.00
-      await reconciler.reconcileOverdueBills(new Date('2026-08-06T10:00:00.000Z'), dormId);
-      let dbBill = await prisma.bill.findUnique({ where: { id: billId }, include: { items: true } });
+      // Run on Aug 7 (within grace) -> 0 fee, total 800.00
+      await reconciler.reconcileOverdueBills(new Date('2026-08-07T10:00:00.000Z'), dormId);
+      let dbBill = await prisma.bill.findUnique({ where: { id: billId } });
+      expect(formatDecimal(dbBill?.totalAmount ?? '0')).toBe('800.00');
+
+      // Run on Aug 8 (1st chargeable day) -> 800 + 100 = 900.00
+      await reconciler.reconcileOverdueBills(new Date('2026-08-08T10:00:00.000Z'), dormId);
+      dbBill = await prisma.bill.findUnique({ where: { id: billId }, include: { items: true } });
       expect(formatDecimal(dbBill?.totalAmount ?? '0')).toBe('900.00');
 
       // Run on Aug 15 (+10 days) -> remains 900.00 (NO accumulating duplicates)
@@ -356,9 +362,9 @@ describe('HORPLUS LOCAL-07 — Late-Fee Overdue Reconciler & Snapshot Policy Aut
       expect(summaryLate.changed).toBe(0);
       expect(summaryLate.noop).toBe(1);
 
-      dbBill = await prisma.bill.findUnique({ where: { id: billId }, include: { items: true } });
-      expect(formatDecimal(dbBill?.totalAmount ?? '0')).toBe('900.00');
-      expect(dbBill?.items.filter((i) => i.type === 'late_fee').length).toBe(1);
+      const billWithItems = await prisma.bill.findUnique({ where: { id: billId }, include: { items: true } });
+      expect(formatDecimal(billWithItems?.totalAmount ?? '0')).toBe('900.00');
+      expect(billWithItems?.items.filter((i) => i.type === 'late_fee').length).toBe(1);
     });
 
     it('WRK8: None mode is skipped / no-op (no late_fee item created)', async () => {
@@ -379,31 +385,49 @@ describe('HORPLUS LOCAL-07 — Late-Fee Overdue Reconciler & Snapshot Policy Aut
       expect(dbBill?.items.find((i) => i.type === 'late_fee')).toBeUndefined();
     });
 
-    it('WRK9: Grace period boundary (grace = 2: Aug 6 and Aug 7 free; Aug 8 penalized)', async () => {
-      await prisma.billingRateSnapshot.update({
-        where: { billingCycleId: baseCycleId },
+    it('WRK9: Fixed 2-day silent grace boundary matrix (Sep 4/5/6/7 free; Sep 8 = 50, Sep 9 = 100, Sep 10 = 150)', async () => {
+      // Create bill with dueDate = 2026-09-05
+      await prisma.bill.update({
+        where: { id: billId },
         data: {
-          lateFeeType: 'daily',
-          lateFeeValue: new Prisma.Decimal('50.00'),
-          gracePeriodDays: 2,
+          dueDate: new Date('2026-09-05T00:00:00.000Z'),
+          subtotal: new Prisma.Decimal('800.00'),
+          totalAmount: new Prisma.Decimal('800.00'),
+          outstandingAmount: new Prisma.Decimal('800.00'),
+          version: 1,
         },
       });
+      await prisma.billItem.deleteMany({ where: { billId, type: 'late_fee' } });
 
-      // Aug 6 (1 day past due, <= grace 2) -> No penalty
-      await reconciler.reconcileOverdueBills(new Date('2026-08-06T10:00:00.000Z'), dormId);
-      let dbBill = await prisma.bill.findUnique({ where: { id: billId } });
-      expect(formatDecimal(dbBill?.totalAmount ?? '0')).toBe('800.00');
+      // Sep 5 (due date) -> 0
+      await reconciler.reconcileOverdueBills(new Date('2026-09-05T10:00:00.000Z'), dormId);
+      let b = await prisma.bill.findUnique({ where: { id: billId } });
+      expect(formatDecimal(b?.totalAmount ?? '0')).toBe('800.00');
 
-      // Aug 7 (2 days past due, <= grace 2) -> No penalty
-      await reconciler.reconcileOverdueBills(new Date('2026-08-07T10:00:00.000Z'), dormId);
-      dbBill = await prisma.bill.findUnique({ where: { id: billId } });
-      expect(formatDecimal(dbBill?.totalAmount ?? '0')).toBe('800.00');
+      // Sep 6 (grace day 1) -> 0
+      await reconciler.reconcileOverdueBills(new Date('2026-09-06T10:00:00.000Z'), dormId);
+      b = await prisma.bill.findUnique({ where: { id: billId } });
+      expect(formatDecimal(b?.totalAmount ?? '0')).toBe('800.00');
 
-      // Aug 8 (3 days past due, > grace 2) -> Imposes 3 days penalty (+150 = 950.00)
-      const summary8 = await reconciler.reconcileOverdueBills(new Date('2026-08-08T10:00:00.000Z'), dormId);
-      expect(summary8.changed).toBe(1);
-      dbBill = await prisma.bill.findUnique({ where: { id: billId } });
-      expect(formatDecimal(dbBill?.totalAmount ?? '0')).toBe('950.00');
+      // Sep 7 (grace day 2) -> 0
+      await reconciler.reconcileOverdueBills(new Date('2026-09-07T10:00:00.000Z'), dormId);
+      b = await prisma.bill.findUnique({ where: { id: billId } });
+      expect(formatDecimal(b?.totalAmount ?? '0')).toBe('800.00');
+
+      // Sep 8 (1st chargeable day) -> 800 + 50 = 850.00
+      await reconciler.reconcileOverdueBills(new Date('2026-09-08T10:00:00.000Z'), dormId);
+      b = await prisma.bill.findUnique({ where: { id: billId } });
+      expect(formatDecimal(b?.totalAmount ?? '0')).toBe('850.00');
+
+      // Sep 9 (2nd chargeable day) -> 800 + 100 = 900.00
+      await reconciler.reconcileOverdueBills(new Date('2026-09-09T10:00:00.000Z'), dormId);
+      b = await prisma.bill.findUnique({ where: { id: billId } });
+      expect(formatDecimal(b?.totalAmount ?? '0')).toBe('900.00');
+
+      // Sep 10 (3rd chargeable day) -> 800 + 150 = 950.00
+      await reconciler.reconcileOverdueBills(new Date('2026-09-10T10:00:00.000Z'), dormId);
+      b = await prisma.bill.findUnique({ where: { id: billId } });
+      expect(formatDecimal(b?.totalAmount ?? '0')).toBe('950.00');
     });
 
     it('WRK10–WRK14: PAID, cancelled, void, RENT, and DEPOSIT bills are excluded and immutable', async () => {
@@ -521,12 +545,12 @@ describe('HORPLUS LOCAL-07 — Late-Fee Overdue Reconciler & Snapshot Policy Aut
 
       // Same Bill ID
       expect(dbBill?.id).toBe(billId);
-      // Total updated to 950.00
-      expect(formatDecimal(dbBill?.totalAmount ?? '0')).toBe('950.00');
+      // Total updated to 850.00 (800.00 subtotal + 50.00 late fee)
+      expect(formatDecimal(dbBill?.totalAmount ?? '0')).toBe('850.00');
       // Paid amount preserved at 300.00
       expect(formatDecimal(dbBill?.paidAmount ?? '0')).toBe('300.00');
-      // Outstanding amount = 950 - 300 = 650.00
-      expect(formatDecimal(dbBill?.outstandingAmount ?? '0')).toBe('650.00');
+      // Outstanding amount = 850 - 300 = 550.00
+      expect(formatDecimal(dbBill?.outstandingAmount ?? '0')).toBe('550.00');
       // Payment relation untouched
       expect(dbBill?.Payment.length).toBe(1);
       expect(dbBill?.Payment[0].id).toBe(payment.id);
@@ -586,19 +610,19 @@ describe('HORPLUS LOCAL-07 — Late-Fee Overdue Reconciler & Snapshot Policy Aut
         include: { items: true },
       });
 
-      expect(formatDecimal(dbBill?.totalAmount ?? '0')).toBe('950.00');
+      expect(formatDecimal(dbBill?.totalAmount ?? '0')).toBe('850.00');
       expect(dbBill?.items.filter((i) => i.type === 'late_fee').length).toBe(1);
     });
 
     it('WRK25–WRK26: CleanupService runs catch-up on startup and GET queries remain strictly read-only', async () => {
-      // Run cleanup service (runs Phase 6 overdue reconciler)
-      await cleanupService.runCleanup(new Date('2026-08-08T10:00:00.000Z'));
+      // Run startup catch-up
+      await cleanupService.runStartupCatchUp(new Date('2026-08-08T10:00:00.000Z'), dormId);
 
       const dbBill = await prisma.bill.findUnique({
         where: { id: billId },
         include: { items: true },
       });
-      expect(formatDecimal(dbBill?.totalAmount ?? '0')).toBe('950.00');
+      expect(formatDecimal(dbBill?.totalAmount ?? '0')).toBe('850.00');
       const versionBeforeGet = dbBill?.version;
 
       // Pure GET read (simulated findUnique)
@@ -722,7 +746,7 @@ describe('HORPLUS LOCAL-07 — Late-Fee Overdue Reconciler & Snapshot Policy Aut
     });
 
     it('WRK-BATCH-1 to WRK-BATCH-4: 450 overdue bills are ALL processed completely across 3 batches (200 + 200 + 50) without starvation', async () => {
-      // Run single reconciliation run on Aug 8 (+150 late fee -> total: 450.00)
+      // Run single reconciliation run on Aug 8 (+50 late fee -> total: 350.00)
       const summary = await reconciler.reconcileOverdueBills(
         new Date('2026-08-08T10:00:00.000Z'),
         batchDormId
@@ -735,11 +759,11 @@ describe('HORPLUS LOCAL-07 — Late-Fee Overdue Reconciler & Snapshot Policy Aut
       expect(summary.failed).toBe(0);
       expect(summary.skipped).toBe(0);
 
-      // Verify all 450 in DB are reconciled to 450.00
+      // Verify all 450 in DB are reconciled to 350.00
       const unreconciled = await prisma.bill.count({
         where: {
           dormitoryId: batchDormId,
-          totalAmount: { not: new Prisma.Decimal('450.00') },
+          totalAmount: { not: new Prisma.Decimal('350.00') },
         },
       });
       expect(unreconciled).toBe(0); // 0 remaining stale bills
@@ -759,7 +783,7 @@ describe('HORPLUS LOCAL-07 — Late-Fee Overdue Reconciler & Snapshot Policy Aut
     }, 120000);
 
     it('WRK-BATCH-6: Failure on bill #50 does not block later bills (e.g. bills 51..450)', async () => {
-      // Advance to Aug 9 (+200 late fee -> total: 500.00)
+      // Advance to Aug 9 (+100 late fee -> total: 400.00)
       // Delete contract for 50th bill to trigger error during preview generation
       const bill50 = await prisma.bill.findUnique({
         where: { id: billIds[49] },
@@ -775,7 +799,17 @@ describe('HORPLUS LOCAL-07 — Late-Fee Overdue Reconciler & Snapshot Policy Aut
 
       expect(summary.scanned).toBe(450);
       expect(summary.changed).toBe(449);
-      expect(summary.failed + summary.skipped).toBe(1);
+      expect(summary.failed).toBe(1);
+      expect(summary.noop).toBe(0);
+
+      // Bills 51..450 are reconciled to 400.00
+      const reconciledCount = await prisma.bill.count({
+        where: {
+          dormitoryId: batchDormId,
+          totalAmount: new Prisma.Decimal('400.00'),
+        },
+      });
+      expect(reconciledCount).toBe(449);
     }, 120000);
   });
 
@@ -889,7 +923,7 @@ describe('HORPLUS LOCAL-07 — Late-Fee Overdue Reconciler & Snapshot Policy Aut
 
       // Version incremented exactly once (1 -> 2)
       expect(finalBill?.version).toBe(2);
-      expect(formatDecimal(finalBill?.totalAmount ?? '0')).toBe('450.00');
+      expect(formatDecimal(finalBill?.totalAmount ?? '0')).toBe('350.00');
       // Exactly 1 late_fee item (no duplicate items)
       expect(finalBill?.items.filter((i) => i.type === 'late_fee').length).toBe(1);
     });
@@ -928,7 +962,7 @@ describe('HORPLUS LOCAL-07 — Late-Fee Overdue Reconciler & Snapshot Policy Aut
           lateFeeType: 'percentage',
           lateFeeValue: new Prisma.Decimal('10.00'),
           dueDay: 5,
-          gracePeriodDays: 0,
+          gracePeriodDays: 2,
         },
       });
 
@@ -1025,6 +1059,275 @@ describe('HORPLUS LOCAL-07 — Late-Fee Overdue Reconciler & Snapshot Policy Aut
       expect(unchangedBill?.version).toBe(1);
       expect(formatDecimal(unchangedBill?.totalAmount ?? '0')).toBe('300.00');
       expect(unchangedBill?.items.length).toBe(0);
+    });
+  });
+
+  describe('PART G: Fixed 2-Day Silent Grace Authority (GR2-1..9)', () => {
+    it('GR2-1: Global constant LATE_FEE_GRACE_DAYS is fixed to 2', () => {
+      expect(LATE_FEE_GRACE_DAYS).toBe(2);
+    });
+
+    it('GR2-2: Onboarding validation schema normalizes any gracePeriodDays input to 2', () => {
+      const parsed0 = OnboardingBillingInputSchema.parse({ gracePeriodDays: 0, dueDay: 5 });
+      expect(parsed0.gracePeriodDays).toBe(2);
+
+      const parsed5 = OnboardingBillingInputSchema.parse({ gracePeriodDays: 5, dueDay: 5 });
+      expect(parsed5.gracePeriodDays).toBe(2);
+
+      const parsedDefault = OnboardingBillingInputSchema.parse({ dueDay: 5 });
+      expect(parsedDefault.gracePeriodDays).toBe(2);
+    });
+
+    it('GR2-3 & GR2-4: Dormitory settings and cycle rate snapshot freeze gracePeriodDays as 2', async () => {
+      const testDorm = await prisma.dormitory.create({
+        data: { id: randomUUID(), name: 'Grace Authority Dorm', status: 'active' },
+      });
+
+      const settings = await prisma.dormitoryBillingSettings.create({
+        data: {
+          dormitoryId: testDorm.id,
+          dueDay: 5,
+          waterBillingType: 'fixed',
+          waterRate: new Prisma.Decimal('100.00'),
+          electricityBillingType: 'fixed',
+          electricityRate: new Prisma.Decimal('200.00'),
+          lateFeeType: 'daily',
+          lateFeeValue: new Prisma.Decimal('50.00'),
+        },
+      });
+      expect(settings.gracePeriodDays).toBe(2);
+
+      const res = await billingCycleService.createBillingCycle(testDorm.id, {
+        cycleCode: '2026-09-GRACE',
+        name: 'September Grace Cycle',
+        periodStart: '2026-09-01',
+        periodEnd: '2026-09-30',
+        billingDate: '2026-09-01',
+      });
+      expect(res.rateSnapshot.gracePeriodDays).toBe(2);
+    });
+
+    it('GR2-5 to GR2-8: Sep 5 due date produces exactly 0 on Sep 5..7, 50 on Sep 8, 100 on Sep 9', () => {
+      const baseArgs = {
+        rateSnapshot: {
+          waterBillingType: 'fixed',
+          waterRate: '100.00',
+          electricityBillingType: 'fixed',
+          electricityRate: '200.00',
+          lateFeeType: 'daily',
+          lateFeeValue: '50.00',
+        },
+        dueDate: '2026-09-05',
+      };
+
+      // Sep 5 (due date) -> 0
+      const sep5 = calculateCanonicalMonthlyUtility({ ...baseArgs, asOfDate: '2026-09-05' });
+      expect(sep5.lateFeeAmount).toBe('0.00');
+      expect(sep5.items.some(i => i.type === 'late_fee')).toBe(false);
+
+      // Sep 6 (grace day 1) -> 0
+      const sep6 = calculateCanonicalMonthlyUtility({ ...baseArgs, asOfDate: '2026-09-06' });
+      expect(sep6.lateFeeAmount).toBe('0.00');
+      expect(sep6.items.some(i => i.type === 'late_fee')).toBe(false);
+
+      // Sep 7 (grace day 2) -> 0
+      const sep7 = calculateCanonicalMonthlyUtility({ ...baseArgs, asOfDate: '2026-09-07' });
+      expect(sep7.lateFeeAmount).toBe('0.00');
+      expect(sep7.items.some(i => i.type === 'late_fee')).toBe(false);
+
+      // Sep 8 (1st chargeable day) -> 50.00 (NOT 150.00)
+      const sep8 = calculateCanonicalMonthlyUtility({ ...baseArgs, asOfDate: '2026-09-08' });
+      expect(sep8.lateFeeAmount).toBe('50.00');
+      expect(sep8.items.find(i => i.type === 'late_fee')?.description).toBe('ค่าปรับล่าช้า (1 วัน)');
+
+      // Sep 9 (2nd chargeable day) -> 100.00
+      const sep9 = calculateCanonicalMonthlyUtility({ ...baseArgs, asOfDate: '2026-09-09' });
+      expect(sep9.lateFeeAmount).toBe('100.00');
+      expect(sep9.items.find(i => i.type === 'late_fee')?.description).toBe('ค่าปรับล่าช้า (2 วัน)');
+    });
+
+    it('GR2-9: Fixed fee mode charges 100 once on Sep 8 and remains 100 on Sep 9..10', () => {
+      const baseFixed = {
+        rateSnapshot: {
+          waterBillingType: 'fixed',
+          waterRate: '100.00',
+          electricityBillingType: 'fixed',
+          electricityRate: '200.00',
+          lateFeeType: 'fixed',
+          lateFeeValue: '100.00',
+        },
+        dueDate: '2026-09-05',
+      };
+
+      const sep7 = calculateCanonicalMonthlyUtility({ ...baseFixed, asOfDate: '2026-09-07' });
+      expect(sep7.lateFeeAmount).toBe('0.00');
+
+      const sep8 = calculateCanonicalMonthlyUtility({ ...baseFixed, asOfDate: '2026-09-08' });
+      expect(sep8.lateFeeAmount).toBe('100.00');
+
+      const sep9 = calculateCanonicalMonthlyUtility({ ...baseFixed, asOfDate: '2026-09-09' });
+      expect(sep9.lateFeeAmount).toBe('100.00');
+
+      const sep15 = calculateCanonicalMonthlyUtility({ ...baseFixed, asOfDate: '2026-09-15' });
+      expect(sep15.lateFeeAmount).toBe('100.00');
+    });
+  });
+
+  describe('PART H: Authoritative Bill Due Date Rollover & Lifetime Freeze (BD1..9)', () => {
+    it('BD1–BD5: resolveBillDueDate rollover rules (Issue <= dueDay -> same month; Issue > dueDay -> next month)', () => {
+      // dueDay = 5
+      expect(resolveBillDueDate(new Date('2026-08-28T00:00:00.000Z'), 5).toISOString().slice(0, 10)).toBe('2026-09-05');
+      expect(resolveBillDueDate(new Date('2026-09-04T00:00:00.000Z'), 5).toISOString().slice(0, 10)).toBe('2026-09-05');
+      expect(resolveBillDueDate(new Date('2026-09-05T00:00:00.000Z'), 5).toISOString().slice(0, 10)).toBe('2026-09-05');
+      expect(resolveBillDueDate(new Date('2026-09-06T00:00:00.000Z'), 5).toISOString().slice(0, 10)).toBe('2026-10-05');
+      expect(resolveBillDueDate(new Date('2026-09-15T00:00:00.000Z'), 5).toISOString().slice(0, 10)).toBe('2026-10-05');
+    });
+
+    it('BD6: Late issuance on Sep 15 (dueDate Oct 5) has 0 late fee at issuance time', () => {
+      const res = calculateCanonicalMonthlyUtility({
+        rateSnapshot: {
+          waterBillingType: 'fixed',
+          waterRate: '100.00',
+          electricityBillingType: 'fixed',
+          electricityRate: '200.00',
+          lateFeeType: 'daily',
+          lateFeeValue: '50.00',
+        },
+        dueDate: '2026-10-05',
+        asOfDate: '2026-09-15',
+      });
+      expect(res.lateFeeAmount).toBe('0.00');
+      expect(res.items.some(i => i.type === 'late_fee')).toBe(false);
+    });
+
+    it('BD7: Unissued preview has NO late fee (dueDate is null in preview)', () => {
+      const preview = calculateCanonicalMonthlyUtility({
+        rateSnapshot: {
+          waterBillingType: 'fixed',
+          waterRate: '100.00',
+          electricityBillingType: 'fixed',
+          electricityRate: '200.00',
+          lateFeeType: 'daily',
+          lateFeeValue: '50.00',
+        },
+        dueDate: null,
+        asOfDate: '2026-09-15',
+      });
+      expect(preview.lateFeeAmount).toBe('0.00');
+      expect(preview.items.some(i => i.type === 'late_fee')).toBe(false);
+    });
+  });
+
+  describe('PART I: Tenant Contract Type & Bill Kind Exclusion Authority (TT1..6)', () => {
+    it('TT1 & TT2: MONTHLY and TERM tenants are eligible for late fee on MONTHLY_UTILITY', () => {
+      const res = calculateCanonicalMonthlyUtility({
+        rateSnapshot: {
+          waterBillingType: 'fixed',
+          waterRate: '100.00',
+          electricityBillingType: 'fixed',
+          electricityRate: '200.00',
+          lateFeeType: 'daily',
+          lateFeeValue: '50.00',
+        },
+        dueDate: '2026-09-05',
+        asOfDate: '2026-09-08',
+      });
+      expect(res.lateFeeAmount).toBe('50.00');
+    });
+
+    it('TT3–TT5: RENT and DEPOSIT bills never receive late fee', async () => {
+      const ttCycle = await prisma.billingCycle.create({
+        data: {
+          id: randomUUID(),
+          dormitoryId: dormId,
+          cycleCode: `TT-CYCLE-${Date.now()}`,
+          name: 'TT Cycle',
+          periodStart: new Date('2026-08-01T00:00:00.000Z'),
+          periodEnd: new Date('2026-08-31T00:00:00.000Z'),
+          billingDate: new Date('2026-08-01T00:00:00.000Z'),
+          dueDate: new Date('2026-08-05T00:00:00.000Z'),
+          status: 'draft',
+        },
+      });
+
+      const rentBill = await prisma.bill.create({
+        data: {
+          id: randomUUID(),
+          dormitoryId: dormId,
+          billingCycleId: ttCycle.id,
+          roomId: roomId,
+          billNumber: `RENT-${Date.now()}`,
+          billKind: 'RENT',
+          status: 'unpaid',
+          billingDate: new Date('2026-08-01T00:00:00.000Z'),
+          dueDate: new Date('2026-08-05T00:00:00.000Z'),
+          subtotal: new Prisma.Decimal('4000.00'),
+          totalAmount: new Prisma.Decimal('4000.00'),
+          outstandingAmount: new Prisma.Decimal('4000.00'),
+          version: 1,
+        },
+      });
+
+      const depBill = await prisma.bill.create({
+        data: {
+          id: randomUUID(),
+          dormitoryId: dormId,
+          billingCycleId: ttCycle.id,
+          roomId: roomId,
+          billNumber: `DEP-${Date.now()}`,
+          billKind: 'DEPOSIT',
+          status: 'unpaid',
+          billingDate: new Date('2026-08-01T00:00:00.000Z'),
+          dueDate: new Date('2026-08-05T00:00:00.000Z'),
+          subtotal: new Prisma.Decimal('5000.00'),
+          totalAmount: new Prisma.Decimal('5000.00'),
+          outstandingAmount: new Prisma.Decimal('5000.00'),
+          version: 1,
+        },
+      });
+
+      const summary = await reconciler.reconcileOverdueBills(new Date('2026-09-15T10:00:00.000Z'), dormId);
+
+      // RENT bill is not modified by reconciler
+      const dbRent = await prisma.bill.findUnique({
+        where: { id: rentBill.id },
+        include: { items: true },
+      });
+      expect(formatDecimal(dbRent?.totalAmount ?? '0')).toBe('4000.00');
+      expect(dbRent?.items.some(i => i.type === 'late_fee')).toBe(false);
+
+      // DEPOSIT bill is not modified by reconciler
+      const dbDep = await prisma.bill.findUnique({
+        where: { id: depBill.id },
+        include: { items: true },
+      });
+      expect(formatDecimal(dbDep?.totalAmount ?? '0')).toBe('5000.00');
+      expect(dbDep?.items.some(i => i.type === 'late_fee')).toBe(false);
+    });
+  });
+
+  describe('PART J: Daily 00:05 Scheduler & Startup Catch-Up (SCH1..5)', () => {
+    it('SCH1 & SCH2: getNextBangkok0005DelayMs calculates positive delay targeting 00:05 Bangkok (17:05 UTC)', () => {
+      const now = new Date('2026-08-26T10:00:00.000Z'); // 17:00 Bangkok
+      const delayMs = lateFeeReconciliationService.getNextBangkok0005DelayMs(now);
+      expect(delayMs).toBeGreaterThan(0);
+      expect(delayMs).toBeLessThanOrEqual(24 * 60 * 60 * 1000);
+    });
+
+    it('SCH3 & SCH5: runStartupCatchUp executes catch-up and repeated execution is safe NO-OP', async () => {
+      const res1 = await lateFeeReconciliationService.runStartupCatchUp(new Date('2026-08-08T10:00:00.000Z'), dormId);
+      expect(res1).toBeDefined();
+
+      const res2 = await lateFeeReconciliationService.runStartupCatchUp(new Date('2026-08-08T10:00:00.000Z'), dormId);
+      expect(res2.changed).toBe(0);
+    }, 60000);
+
+    it('SCH4: cleanupService.runCleanup does not throw and executes non-late-fee cleanup phases', async () => {
+      const res = await cleanupService.runCleanup();
+      expect(res).toBeDefined();
+      expect(res.expiredMarked).toBeDefined();
+      expect(res.orphansDeleted).toBeDefined();
+      expect(res.consumedMetadataPurged).toBeDefined();
     });
   });
 });

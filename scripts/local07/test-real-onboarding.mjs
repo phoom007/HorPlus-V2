@@ -169,7 +169,7 @@ export async function runRealOnboardingTestProof() {
         internetFeeMode: 'fixed',
         parkingRate: '500.00',
         parkingFeeMode: 'fixed',
-        gracePeriodDays: 3,
+        gracePeriodDays: 2,
         advanceRentMonths: 1,
         lateFeeType: 'fixed',
         lateFeeValue: '100.00',

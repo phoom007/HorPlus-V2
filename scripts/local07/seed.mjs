@@ -189,7 +189,7 @@ export async function seedLocal07Data() {
       internetFeeMode: 'fixed',
       parkingRate: String(FRESH_DORM.billing.parkingRate),
       parkingFeeMode: 'fixed',
-      gracePeriodDays: 3,
+      gracePeriodDays: 2,
       advanceRentMonths: 1,
       lateFeeType: 'none',
       lateFeeValue: '0.00',

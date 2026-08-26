@@ -297,7 +297,7 @@ describe('TASK-009 Checkpoint 1I — Authoritative Restored UX & LINE Config Tru
 
       const dbBilling = await prisma.dormitoryBillingSettings.findUnique({ where: { dormitoryId: dormId } });
       expect(dbBilling?.advanceRentMonths).toBe(0); // ZERO-VALUE FIDELITY ASSERTION
-      expect(dbBilling?.gracePeriodDays).toBe(3);
+      expect(dbBilling?.gracePeriodDays).toBe(2);
       expect(Number(dbBilling?.waterRate)).toBe(20);
       expect(Number(dbBilling?.electricityRate)).toBe(8);
       expect(Number(dbBilling?.commonFee)).toBe(300);

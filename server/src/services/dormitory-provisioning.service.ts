@@ -18,6 +18,7 @@ import { referralService } from './referral.service.js';
 import { coinWalletService } from './coin-wallet.service.js';
 import { subscriptionIntentService } from './subscription-intent.service.js';
 import { normalizeUtilityBillingMode } from '../utils/billing-mode-normalizer.util.js';
+import { LATE_FEE_GRACE_DAYS } from '../utils/monthly-utility-calculator.util.js';
 
 export interface CompleteOwnerOnboardingParams {
   userId: string;
@@ -674,7 +675,7 @@ export class DormitoryProvisioningService {
         const parkingRateStr = (billing.parkingRate !== undefined && billing.parkingRate !== null && billing.parkingRate !== '') ? String(billing.parkingRate) : '0.00';
         const lateFeeValueStr = (billing.lateFeeValue !== undefined && billing.lateFeeValue !== null && billing.lateFeeValue !== '') ? String(billing.lateFeeValue) : '0.00';
 
-        const gracePeriodDaysNum = (billing.gracePeriodDays !== undefined && billing.gracePeriodDays !== null) ? Number(billing.gracePeriodDays) : 0;
+        const gracePeriodDaysNum = LATE_FEE_GRACE_DAYS;
         const advanceRentMonthsNum = (billing.advanceRentMonths !== undefined && billing.advanceRentMonths !== null) ? Number(billing.advanceRentMonths) : 1;
 
         if (billing.dueDay === undefined || billing.dueDay === null || isNaN(Number(billing.dueDay)) || Number(billing.dueDay) < 1 || Number(billing.dueDay) > 28) {

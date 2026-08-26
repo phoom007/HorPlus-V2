@@ -1065,7 +1065,15 @@ export class MeterService {
 
     let preview: any;
     try {
-      preview = await billingService.generateBillPreview(dormitoryId, billingCycleId, roomId, tx, 'MONTHLY_UTILITY');
+      preview = await billingService.generateBillPreview(
+        dormitoryId,
+        billingCycleId,
+        roomId,
+        tx,
+        'MONTHLY_UTILITY',
+        new Date(),
+        activeBill.dueDate
+      );
     } catch (err: any) {
       if (
         err.code === 'MISSING_WATER_METER_READING' ||
@@ -2212,7 +2220,7 @@ export class MeterService {
               parkingQuantity,
               manualOutstanding: snapshotManualOutstanding ?? '0.00',
               otherFees: snapshotOtherFees ?? [],
-              dueDate: cycle.dueDate,
+              dueDate: null, // DECISION F5: Unissued preview has NO late fee
               asOfDate: new Date(),
             });
 

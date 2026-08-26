@@ -736,8 +736,8 @@ describe('LOCAL-07 Shared Canonical Monthly Utility Calculation Authority', () =
       expect(res.monthlyUtilityTotal).toBe('1250.00');
     });
 
-    it('LF-2: calculates daily late fee correctly when overdue by 3 days in Bangkok timezone', () => {
-      const res = calculateCanonicalMonthlyUtility({
+    it('LF-2: calculates daily late fee correctly after 2-day silent grace (Aug 8 is 1st chargeable day -> 50.00, Aug 10 is 3rd chargeable day -> 150.00)', () => {
+      const resAug8 = calculateCanonicalMonthlyUtility({
         rateSnapshot: {
           ...baseRates,
           lateFeeType: 'daily',
@@ -749,14 +749,35 @@ describe('LOCAL-07 Shared Canonical Monthly Utility Calculation Authority', () =
         asOfDate: '2026-08-08',
       });
 
-      expect(res.lateFeeAmount).toBe('150.00');
-      const lateItem = res.items.find(i => i.type === 'late_fee');
-      expect(lateItem).toBeDefined();
-      expect(lateItem?.amount).toBe('150.00');
-      expect(lateItem?.description).toBe('ค่าปรับล่าช้า (3 วัน)');
-      expect(lateItem?.quantity).toBe('3');
-      expect(lateItem?.unitPrice).toBe('50.00');
-      expect(res.monthlyUtilityTotal).toBe('1400.00'); // 1250.00 + 150.00
+      expect(resAug8.lateFeeAmount).toBe('50.00');
+      const lateItemAug8 = resAug8.items.find(i => i.type === 'late_fee');
+      expect(lateItemAug8).toBeDefined();
+      expect(lateItemAug8?.amount).toBe('50.00');
+      expect(lateItemAug8?.description).toBe('ค่าปรับล่าช้า (1 วัน)');
+      expect(lateItemAug8?.quantity).toBe('1');
+      expect(lateItemAug8?.unitPrice).toBe('50.00');
+      expect(resAug8.monthlyUtilityTotal).toBe('1300.00'); // 1250.00 + 50.00
+
+      const resAug10 = calculateCanonicalMonthlyUtility({
+        rateSnapshot: {
+          ...baseRates,
+          lateFeeType: 'daily',
+          lateFeeValue: '50.00',
+        },
+        waterReading: { previousReading: '100', currentReading: '110' },
+        electricReading: { previousReading: '500', currentReading: '560' },
+        dueDate: '2026-08-05',
+        asOfDate: '2026-08-10',
+      });
+
+      expect(resAug10.lateFeeAmount).toBe('150.00');
+      const lateItemAug10 = resAug10.items.find(i => i.type === 'late_fee');
+      expect(lateItemAug10).toBeDefined();
+      expect(lateItemAug10?.amount).toBe('150.00');
+      expect(lateItemAug10?.description).toBe('ค่าปรับล่าช้า (3 วัน)');
+      expect(lateItemAug10?.quantity).toBe('3');
+      expect(lateItemAug10?.unitPrice).toBe('50.00');
+      expect(resAug10.monthlyUtilityTotal).toBe('1400.00'); // 1250.00 + 150.00
     });
 
     it('LF-3: calculates fixed late fee correctly when overdue', () => {
@@ -798,37 +819,68 @@ describe('LOCAL-07 Shared Canonical Monthly Utility Calculation Authority', () =
       expect(res.monthlyUtilityTotal).toBe('1250.00');
     });
 
-    it('LF-5: respects gracePeriodDays before imposing penalty', () => {
-      // 3 days past due date with grace period 3 days -> 0 penalty
-      const withinGrace = calculateCanonicalMonthlyUtility({
-        rateSnapshot: {
-          ...baseRates,
-          lateFeeType: 'daily',
-          lateFeeValue: '50.00',
-        },
-        waterReading: { previousReading: '100', currentReading: '110' },
-        electricReading: { previousReading: '500', currentReading: '560' },
-        dueDate: '2026-08-05',
-        asOfDate: '2026-08-08',
-        gracePeriodDays: 3,
-      });
-      expect(withinGrace.lateFeeAmount).toBe('0.00');
+    it('LF-5: respects fixed 2-day silent grace before imposing penalty (chargeable days = days past due - 2)', () => {
+      // dueDate = 2026-09-05, rate = 50.00/day, fixed 2-day silent grace
+      const testCases = [
+        { asOf: '2026-09-04', expDays: 0, expFee: '0.00' },
+        { asOf: '2026-09-05', expDays: 0, expFee: '0.00' },
+        { asOf: '2026-09-06', expDays: 0, expFee: '0.00' }, // Grace day 1
+        { asOf: '2026-09-07', expDays: 0, expFee: '0.00' }, // Grace day 2
+        { asOf: '2026-09-08', expDays: 1, expFee: '50.00' }, // 1st chargeable day
+        { asOf: '2026-09-09', expDays: 2, expFee: '100.00' }, // 2nd chargeable day
+        { asOf: '2026-09-10', expDays: 3, expFee: '150.00' }, // 3rd chargeable day
+      ];
 
-      // 4 days past due date with grace period 3 days -> 4 days overdue
-      const pastGrace = calculateCanonicalMonthlyUtility({
-        rateSnapshot: {
-          ...baseRates,
-          lateFeeType: 'daily',
-          lateFeeValue: '50.00',
-        },
+      for (const tc of testCases) {
+        const res = calculateCanonicalMonthlyUtility({
+          rateSnapshot: {
+            ...baseRates,
+            lateFeeType: 'daily',
+            lateFeeValue: '50.00',
+          },
+          waterReading: { previousReading: '100', currentReading: '110' },
+          electricReading: { previousReading: '500', currentReading: '560' },
+          dueDate: '2026-09-05',
+          asOfDate: tc.asOf,
+        });
+
+        expect(res.lateFeeAmount).toBe(tc.expFee);
+        if (tc.expDays > 0) {
+          expect(res.items.find(i => i.type === 'late_fee')?.description).toBe(`ค่าปรับล่าช้า (${tc.expDays} วัน)`);
+        } else {
+          expect(res.items.some(i => i.type === 'late_fee')).toBe(false);
+        }
+      }
+    });
+
+    it('LF-6: fixed mode charges lateFeeValue once on first chargeable overdue day (Sep 8 for Sep 5 due)', () => {
+      const sep7 = calculateCanonicalMonthlyUtility({
+        rateSnapshot: { ...baseRates, lateFeeType: 'fixed', lateFeeValue: '100.00' },
         waterReading: { previousReading: '100', currentReading: '110' },
         electricReading: { previousReading: '500', currentReading: '560' },
-        dueDate: '2026-08-05',
-        asOfDate: '2026-08-09',
-        gracePeriodDays: 3,
+        dueDate: '2026-09-05',
+        asOfDate: '2026-09-07',
       });
-      expect(pastGrace.lateFeeAmount).toBe('200.00');
-      expect(pastGrace.items.find(i => i.type === 'late_fee')?.description).toBe('ค่าปรับล่าช้า (4 วัน)');
+      expect(sep7.lateFeeAmount).toBe('0.00');
+
+      const sep8 = calculateCanonicalMonthlyUtility({
+        rateSnapshot: { ...baseRates, lateFeeType: 'fixed', lateFeeValue: '100.00' },
+        waterReading: { previousReading: '100', currentReading: '110' },
+        electricReading: { previousReading: '500', currentReading: '560' },
+        dueDate: '2026-09-05',
+        asOfDate: '2026-09-08',
+      });
+      expect(sep8.lateFeeAmount).toBe('100.00');
+      expect(sep8.items.find(i => i.type === 'late_fee')?.description).toBe('ค่าปรับล่าช้า');
+
+      const sep9 = calculateCanonicalMonthlyUtility({
+        rateSnapshot: { ...baseRates, lateFeeType: 'fixed', lateFeeValue: '100.00' },
+        waterReading: { previousReading: '100', currentReading: '110' },
+        electricReading: { previousReading: '500', currentReading: '560' },
+        dueDate: '2026-09-05',
+        asOfDate: '2026-09-09',
+      });
+      expect(sep9.lateFeeAmount).toBe('100.00'); // Still 100 once
     });
   });
 });

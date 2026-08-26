@@ -195,7 +195,8 @@ export class BillingService {
     roomId: string,
     tx?: any,
     billKind: string = 'LEGACY_COMBINED',
-    asOfDate?: Date | string | null
+    asOfDate?: Date | string | null,
+    billDueDate?: Date | string | null
   ): Promise<BillPreviewResult> {
     const cycle = await this.billingCycleRepo.findById(billingCycleId, dormitoryId);
     if (!cycle) {
@@ -420,6 +421,24 @@ export class BillingService {
         },
       });
 
+      // DECISION F3 & F5: Late fee applies ONLY to issued bills using Bill.dueDate.
+      // If billDueDate is not explicitly passed, look up whether an issued bill exists for this room + cycle.
+      let effectiveDueDate: Date | string | null = billDueDate !== undefined ? billDueDate : null;
+      if (effectiveDueDate === null && tx) {
+        const existingIssuedBill = await tx.bill.findFirst({
+          where: {
+            dormitoryId,
+            billingCycleId,
+            roomId,
+            billKind: 'MONTHLY_UTILITY',
+          },
+          select: { dueDate: true },
+        });
+        if (existingIssuedBill) {
+          effectiveDueDate = existingIssuedBill.dueDate;
+        }
+      }
+
       const utilityResult = calculateCanonicalMonthlyUtility({
         dormitoryId,
         billingCycleId,
@@ -431,7 +450,7 @@ export class BillingService {
         parkingQuantity: vehicleCount,
         manualOutstanding: cycleSnapshot?.manualOutstandingAmount ? cycleSnapshot.manualOutstandingAmount.toString() : undefined,
         otherFees: (cycleSnapshot?.otherFees as any[]) || [],
-        dueDate: cycle?.dueDate,
+        dueDate: effectiveDueDate,
         asOfDate: asOfDate || new Date(),
       });
 
@@ -593,7 +612,15 @@ export class BillingService {
         return { bill: existingBill, items, created: false };
       }
 
-      const preview = await this.generateBillPreview(dormitoryId, data.billingCycleId, data.roomId, tx, billKind);
+      const preview = await this.generateBillPreview(
+        dormitoryId,
+        data.billingCycleId,
+        data.roomId,
+        tx,
+        billKind,
+        issuanceNow,
+        dueDate
+      );
       const rateSnapshot = await this.billingCycleRepo.findRateSnapshot(data.billingCycleId, dormitoryId);
 
       const billItems: CreateBillItemData[] = preview.items.map((i, idx) => ({

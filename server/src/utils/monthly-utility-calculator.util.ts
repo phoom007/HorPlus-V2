@@ -22,6 +22,31 @@ import {
 import { calculateMeterUsageUnits, MeterUsageResult } from './meter-billing-calculator.util.js';
 import { toBangkokDateString } from './calendar-date.util.js';
 
+export const LATE_FEE_GRACE_DAYS = 2;
+
+/**
+ * Calculates chargeable overdue days in Asia/Bangkok calendar days with fixed 2-day silent grace.
+ *
+ * Invariant Rules:
+ *   calendarDaysPastDue = differenceInCalendarDays(asOfDateBKK, dueDateBKK)
+ *   chargeableOverdueDays = max(0, calendarDaysPastDue - LATE_FEE_GRACE_DAYS)
+ *
+ * Example (dueDate = Sep 5):
+ *   Sep 5: 0 days
+ *   Sep 6: grace day 1 -> 0 days
+ *   Sep 7: grace day 2 -> 0 days
+ *   Sep 8: 1 chargeable day
+ *   Sep 9: 2 chargeable days
+ */
+export function calculateChargeableOverdueDays(dueDate: Date | string, asOfDate?: Date | string | null): number {
+  const dueBangkokStr = toBangkokDateString(dueDate);
+  const asOfBangkokStr = toBangkokDateString(asOfDate || new Date());
+  const dueDt = new Date(`${dueBangkokStr}T00:00:00.000Z`);
+  const asOfDt = new Date(`${asOfBangkokStr}T00:00:00.000Z`);
+  const calendarDaysPastDue = Math.floor((asOfDt.getTime() - dueDt.getTime()) / (1000 * 60 * 60 * 24));
+  return Math.max(0, calendarDaysPastDue - LATE_FEE_GRACE_DAYS);
+}
+
 export interface CanonicalRateSnapshotInput {
   waterBillingType?: string | null;
   waterRate?: string | number | null;
@@ -458,14 +483,9 @@ export function calculateCanonicalMonthlyUtility(
     throw err;
   }
 
+  // Late fees apply ONLY when an authoritative issued bill dueDate is provided
   if (lateMode !== 'none' && !isZeroDecimal(lateFeeVal) && input.dueDate) {
-    const dueBangkokStr = toBangkokDateString(input.dueDate);
-    const asOfBangkokStr = toBangkokDateString(input.asOfDate || new Date());
-    const dueDt = new Date(`${dueBangkokStr}T00:00:00.000Z`);
-    const asOfDt = new Date(`${asOfBangkokStr}T00:00:00.000Z`);
-    const rawDiffDays = Math.floor((asOfDt.getTime() - dueDt.getTime()) / (1000 * 60 * 60 * 24));
-    const grace = Math.max(0, rateSnapshot?.gracePeriodDays ?? input.gracePeriodDays ?? 0);
-    const overdueDays = rawDiffDays > grace ? rawDiffDays : 0;
+    const overdueDays = calculateChargeableOverdueDays(input.dueDate, input.asOfDate);
 
     if (overdueDays > 0) {
       if (lateMode === 'daily') {

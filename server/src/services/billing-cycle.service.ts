@@ -26,6 +26,7 @@ import {
   toBangkokDateString,
   getAdjacentCycleCode,
 } from '../utils/calendar-date.util.js';
+import { LATE_FEE_GRACE_DAYS } from '../utils/monthly-utility-calculator.util.js';
 
 export interface CreateBillingCycleDto {
   cycleCode: string;
@@ -246,7 +247,7 @@ export class BillingCycleService {
             parkingFeeMode: pSnap.parkingFeeMode,
             lateFeeType: settings.lateFeeType || 'none',
             lateFeeValue: new Prisma.Decimal(settings.lateFeeValue || '0.00').toFixed(2),
-            gracePeriodDays: settings.gracePeriodDays ?? 0,
+            gracePeriodDays: LATE_FEE_GRACE_DAYS,
             currency: pSnap.currency || 'THB',
             source: 'INHERITED',
             inheritedFromBillingCycleId: precedingCycle.id,
@@ -267,7 +268,7 @@ export class BillingCycleService {
             parkingFeeMode: settings.parkingFeeMode || 'room',
             lateFeeType: settings.lateFeeType || 'none',
             lateFeeValue: new Prisma.Decimal(settings.lateFeeValue || '0.00').toFixed(2),
-            gracePeriodDays: settings.gracePeriodDays ?? 0,
+            gracePeriodDays: LATE_FEE_GRACE_DAYS,
             currency: 'THB',
             source: 'TEMPLATE_DEFAULT',
             inheritedFromBillingCycleId: null,

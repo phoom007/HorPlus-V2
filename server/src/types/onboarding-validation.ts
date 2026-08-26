@@ -29,7 +29,7 @@ export const OnboardingBillingInputSchema = z.object({
   internetFeeMode: z.string().trim().optional().nullable().default('per_person'),
   parkingRate: z.string().regex(/^\d+(\.\d{1,2})?$/, 'ค่าจอดรถต้องเป็นตัวเลขจำนวนเงินที่ถูกต้อง').optional().nullable().default('0.00'),
   parkingFeeMode: z.string().trim().optional().nullable().default('per_room'),
-  gracePeriodDays: z.coerce.number().int().min(0).max(90).optional().nullable().default(0),
+  gracePeriodDays: z.coerce.number().int().min(0).max(90).optional().nullable().default(2).transform(() => 2),
   advanceRentMonths: z.coerce.number().int().min(0).max(12).optional().nullable().default(1),
   lateFeeType: z.enum(['fixed', 'per_day', 'percentage', 'none']).default('none'),
   lateFeeValue: z.string().regex(/^\d+(\.\d{1,2})?$/, 'ค่าปรับต้องเป็นตัวเลขจำนวนเงินที่ถูกต้อง').default('0.00'),

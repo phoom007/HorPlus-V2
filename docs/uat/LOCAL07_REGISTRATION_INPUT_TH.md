@@ -70,7 +70,7 @@
 |---|---|---|---|---|
 | **วันที่ตัดรอบบิลประจำเดือน** | `25` | `DormitoryBillingSettings.billingDay` | รอบบิลอัตโนมัติ | **ตั้งค่า** -> รอบการออกบิล |
 | **วันที่ครบกำหนดชำระ** | `5` | `DormitoryBillingSettings.dueDay` | วันที่ Due Date บนบิล | **ตั้งค่า** -> รอบการออกบิล |
-| **ระยะเวลาผ่อนผัน (วัน)** | `3` | `DormitoryBillingSettings.gracePeriodDays` | การคำนวณค่าปรับชำระช้า | **ตั้งค่า** -> รอบการออกบิล |
+| **ระยะเวลาผ่อนผัน (วัน)** | `2 (ระบบกำหนดคงที่ตาม Product Policy)` | `DormitoryBillingSettings.gracePeriodDays` | การคำนวณค่าปรับชำระช้า (ผ่อนผัน 2 วัน) | นโยบายระบบคงที่ (ไม่ต้องตั้งค่า) |
 | **รับชำระด้วยเงินสด** | `เปิดใช้งาน (Checked / True)` | `DormitoryBillingSettings.cashAccepted` | ตัวเลือกการชำระเงิน | **ตั้งค่า** -> ช่องทางการชำระเงิน |
 | **ประเภทพร้อมเพย์** | `เบอร์โทรศัพท์ (Mobile Phone)` | `DormitoryBillingSettings.promptPayType` | QR Code พร้อมเพย์บนใบแจ้งหนี้ | **ตั้งค่า** -> บัญชีรับเงิน |
 | **หมายเลขพร้อมเพย์** | `0891234567` | `promptPayValueEncrypted` (AES-256-GCM) | QR Code พร้อมเพย์บนใบแจ้งหนี้ | **ตั้งค่า** -> บัญชีรับเงิน |
