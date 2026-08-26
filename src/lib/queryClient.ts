@@ -48,6 +48,7 @@ export const queryKeys = {
   meterSnapshots: (dormId: string, cycleId: string) => ['meter', dormId, cycleId, 'snapshots'] as const,
   meterHouseholdCounts: (dormId: string, cycleId: string) => ['meter', dormId, cycleId, 'household-counts'] as const,
   meterPreviewContext: (dormId: string, cycleId: string) => ['meter', dormId, cycleId, 'preview-context'] as const,
+  lineOaConfig: (dormId: string) => ['owner', dormId, 'line-oa-config'] as const,
 };
 
 /**
@@ -63,6 +64,7 @@ export const STALE_TIMES = {
   PAYMENTS: 30_000,      // 30 seconds
   DAILY_INVOICES: 30_000,// 30 seconds
   MAINTENANCE: 60_000,   // 1 minute
+  LINE_OA: 60_000,       // 1 minute
   ANNOUNCEMENTS: 60_000, // 1 minute
   METER_WORKSPACE: 30_000, // 30 seconds
   PREVIEW_CONTEXT: 30_000, // 30 seconds

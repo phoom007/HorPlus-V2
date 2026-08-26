@@ -18,6 +18,7 @@ import { LineFriendService } from './line-friend.service.js';
 import { LinePlatformAdapter, MockLinePlatformAdapter } from './line-platform-adapter.js';
 import { createLinePlatformAdapter } from './line-adapter-factory.js';
 import { LineChannelTokenProvider, ILineChannelTokenProvider, FakeLineTokenProvider } from './line-channel-token-provider.js';
+import QRCode from 'qrcode';
 
 export interface PublicWebhookOriginStatus {
   origin: string | null;
@@ -140,6 +141,9 @@ export class LineOaService {
           botPictureUrl: null,
           botPremiumId: null,
           botChatMode: null,
+          effectiveLineId: null,
+          friendAddUrl: null,
+          qrSvg: null,
           accessTokenVerifiedAt: null,
           webhookVerifiedAt: null,
           webhookUrl: null,
@@ -170,6 +174,26 @@ export class LineOaService {
       const webhookActive = Boolean(config.webhookActive);
       const isReady = credentialsVerified && webhookEndpointSet && webhookTestSucceeded && webhookActive;
 
+      const rawPublicId = config.botPremiumId || config.lineOaId;
+      const effectiveLineId = rawPublicId ? (rawPublicId.startsWith('@') ? rawPublicId : `@${rawPublicId}`) : null;
+      let friendAddUrl: string | null = null;
+      let qrSvg: string | null = null;
+
+      if (isReady && effectiveLineId) {
+        const cleanId = effectiveLineId.replace(/^@/, '').trim();
+        friendAddUrl = `https://line.me/R/ti/p/@${encodeURIComponent(cleanId)}`;
+        try {
+          qrSvg = await QRCode.toString(friendAddUrl, {
+            type: 'svg',
+            margin: 1,
+            width: 256,
+            errorCorrectionLevel: 'M',
+          });
+        } catch {
+          qrSvg = null;
+        }
+      }
+
       return {
         connected: credentialsVerified,
         isReady,
@@ -188,6 +212,9 @@ export class LineOaService {
         botPictureUrl: config.botPictureUrl,
         botPremiumId: config.botPremiumId,
         botChatMode: config.botChatMode,
+        effectiveLineId,
+        friendAddUrl,
+        qrSvg,
         accessTokenVerifiedAt: config.accessTokenVerifiedAt,
         webhookVerifiedAt: config.webhookVerifiedAt,
         webhookEndpointSetAt: config.webhookEndpointSetAt,

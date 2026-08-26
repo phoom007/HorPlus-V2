@@ -1105,6 +1105,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
             onClearTargetScrollRoomId={() => setTargetScrollRoomId(undefined)}
             onAddLog={handleAddLog}
             onNavigate={(tab) => changeTab(tab)}
+            onNavigateToLineConfig={() => setShowDirectLineOaModal(true)}
             selectedCycle={selectedCycleCode}
             selectedBillingCycleId={selectedBillingCycleId || billingCycles.find(c => c.cycleCode === selectedCycleCode)?.id}
             selectedCycleCode={selectedCycleCode}

@@ -52,13 +52,38 @@ export interface StaffDataResponse {
 
 export interface LineOaConfigResponse {
   connected: boolean;
+  isReady: boolean;
+  credentialsVerified: boolean;
+  webhookEndpointSet: boolean;
+  webhookTestSucceeded: boolean;
+  webhookActive: boolean;
   hasChannelSecret: boolean;
   hasAccessToken: boolean;
+  isPublicWebhookConfigured?: boolean;
+  webhookOriginError?: string | null;
   lineOaId: string | null;
   channelId: string | null;
+  botUserId?: string | null;
+  botDisplayName?: string | null;
+  botPictureUrl?: string | null;
+  botPremiumId?: string | null;
+  botChatMode?: string | null;
+  effectiveLineId?: string | null;
+  friendAddUrl?: string | null;
+  qrSvg?: string | null;
   accessTokenVerifiedAt: string | null;
   webhookVerifiedAt: string | null;
+  webhookEndpointSetAt?: string | null;
+  webhookTestSucceededAt?: string | null;
   webhookUrl: string | null;
+  notifyRepairRequest?: boolean;
+  notifyRepairCompleted?: boolean;
+  notifyPaymentReceived?: boolean;
+  notifyTenantRegister?: boolean;
+  notifyTenantApproved?: boolean;
+  monthlyQuota?: number;
+  usedQuota?: number;
+  remainingQuota?: number;
 }
 
 export interface RedeemResult {

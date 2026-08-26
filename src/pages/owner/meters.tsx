@@ -95,6 +95,7 @@ export interface OwnerMetersProps {
   onClearTargetScrollRoomId?: () => void;
   onAddLog: (action: string, details: string, type: string, id: string) => void;
   onNavigate?: (tab: string) => void;
+  onNavigateToLineConfig?: () => void;
   selectedBillingCycleId: string;
   selectedCycleCode: string;
   selectedCycle?: string;
@@ -702,6 +703,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   onClearTargetScrollRoomId,
   onAddLog,
   onNavigate,
+  onNavigateToLineConfig,
   selectedBillingCycleId,
   selectedCycleCode,
   selectedCycle = selectedCycleCode,
@@ -3570,6 +3572,8 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
             queryClient.invalidateQueries({ queryKey: queryKeys.contracts(currentDormId), refetchType: 'active' }),
           ]);
         }}
+        onNavigateToLineConfig={onNavigateToLineConfig}
+        onNavigate={onNavigate}
       />
 
       {/* Shared Other Fees Modal Editor (Table and List modes) */}

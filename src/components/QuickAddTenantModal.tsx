@@ -6,32 +6,41 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { X, Calendar, User, Phone, DollarSign, Clock, Shield, CheckCircle, AlertCircle, Loader2, Image as ImageIcon, Trash2, Building2, GraduationCap, CalendarDays } from 'lucide-react';
+import { X, Calendar, User, Phone, DollarSign, Clock, Shield, CheckCircle, AlertCircle, Loader2, Image as ImageIcon, Trash2, Building2, GraduationCap, CalendarDays, MessageSquare, Check, Copy, ExternalLink, Settings, CheckCircle2 } from 'lucide-react';
 import { QuickAddRoomContext } from '../types';
 import { httpRequest } from '../data/httpClient';
 import { formatBaht, formatThaiDate, normalizeMoneyInput, OwnerDateInput } from './GlobalComponents';
 import { TimeWheelPicker } from './TimeWheelPicker';
 import { calculateInstallmentSchedule } from '../utils/installmentCalculator';
+import { Task009ApiAdapter, LineOaConfigResponse } from '../data/adapters/task009';
+import { useQuery } from '@tanstack/react-query';
+import { queryKeys } from '../lib/queryClient';
+import { resolveLineFriendAddUrl } from '../utils/lineOa.util';
 
 interface QuickAddTenantModalProps {
   isOpen: boolean;
   onClose: () => void;
   context: QuickAddRoomContext | null;
   onSuccess: (message: string) => void;
+  onNavigateToLineConfig?: () => void;
+  onNavigate?: (tab: string) => void;
 }
 
-type RentalTypeTab = 'TERM' | 'MONTHLY' | 'DAILY';
+export type QuickAddMode = 'TERM' | 'MONTHLY' | 'DAILY' | 'LINE';
 
 export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
   isOpen,
   onClose,
   context,
   onSuccess,
+  onNavigateToLineConfig,
+  onNavigate,
 }) => {
-  const [activeTab, setActiveTab] = useState<RentalTypeTab>('TERM');
+  const [activeTab, setActiveTab] = useState<QuickAddMode>('TERM');
   const [fullName, setFullName] = useState('');
   const [phone, setPhone] = useState('');
   const [startDate, setStartDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [copiedLineId, setCopiedLineId] = useState(false);
 
   // Identity Card Document upload (0 or 1 image, max 5 MB, JPEG/PNG/WebP only, no PDF)
   const [idCardFile, setIdCardFile] = useState<File | null>(null);
@@ -60,6 +69,60 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
 
   const [loading, setLoading] = useState(false);
   const [errorText, setErrorText] = useState<string | null>(null);
+
+  // LINE OA Config state scoped strictly by context.dormitoryId
+  const [lineConfig, setLineConfig] = useState<LineOaConfigResponse | null>(null);
+  const [isLineLoading, setIsLineLoading] = useState(false);
+  const [isLineError, setIsLineError] = useState(false);
+
+  const fetchLineOaConfig = async () => {
+    if (!context?.dormitoryId) return;
+    setIsLineLoading(true);
+    setIsLineError(false);
+    try {
+      const res = await Task009ApiAdapter.getLineOaConfig(context.dormitoryId);
+      if (res.success && res.data) {
+        setLineConfig(res.data);
+      } else {
+        setIsLineError(true);
+      }
+    } catch {
+      setIsLineError(true);
+    } finally {
+      setIsLineLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (isOpen && activeTab === 'LINE' && context?.dormitoryId) {
+      fetchLineOaConfig();
+    }
+  }, [isOpen, activeTab, context?.dormitoryId]);
+
+  const rawPublicId = lineConfig?.botPremiumId || lineConfig?.lineOaId;
+  const effectiveLineId = rawPublicId ? (rawPublicId.startsWith('@') ? rawPublicId : `@${rawPublicId}`) : null;
+  const isLineReady = Boolean(lineConfig?.isReady && effectiveLineId);
+  const friendAddUrl = lineConfig?.friendAddUrl || resolveLineFriendAddUrl(effectiveLineId);
+
+  const handleCopyLineId = async () => {
+    if (!effectiveLineId) return;
+    try {
+      await navigator.clipboard.writeText(effectiveLineId);
+      setCopiedLineId(true);
+      setTimeout(() => setCopiedLineId(false), 2000);
+    } catch {
+      // Fallback
+    }
+  };
+
+  const handleManageLineOa = () => {
+    onClose();
+    if (onNavigateToLineConfig) {
+      onNavigateToLineConfig();
+    } else if (onNavigate) {
+      onNavigate('settings');
+    }
+  };
 
   // Helper: add calendar months minus 1 day
   const calculateMonthEndDate = (start: string, months: number): string => {
@@ -372,9 +435,15 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
             <h3 className="font-extrabold text-slate-900 text-base">
               เพิ่มผู้เช่าด่วน
             </h3>
-            <p className="text-xs text-slate-500 mt-0.5">
-              ห้อง <span className="font-bold text-indigo-600">{context.roomNumber}</span> — {context.building?.name || ''} {context.roomType ? `(${context.roomType})` : 'สร้างสัญญาชั่วคราว/รายวันใน 1 ขั้นตอน'}
-            </p>
+            {activeTab === 'LINE' ? (
+              <p className="text-xs text-slate-500 mt-0.5">
+                ลงทะเบียนผู้เช่าผ่าน LINE Official Account ประจำหอพัก
+              </p>
+            ) : (
+              <p className="text-xs text-slate-500 mt-0.5">
+                ห้อง <span className="font-bold text-indigo-600">{context.roomNumber}</span> — {context.building?.name || ''} {context.roomType ? `(${context.roomType})` : 'สร้างสัญญาชั่วคราว/รายวันใน 1 ขั้นตอน'}
+              </p>
+            )}
           </div>
           <button
             type="button"
@@ -385,8 +454,9 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
           </button>
         </div>
 
-        {/* 3-Type Rental Mode Tabs: TERM -> MONTHLY -> DAILY */}
-        <div className="p-4 bg-slate-50 border-b border-slate-100">
+        {/* 4-Mode Tabs: Row 1 = TERM / MONTHLY / DAILY, Row 2 = LINE */}
+        <div className="p-4 bg-slate-50 border-b border-slate-100 space-y-2">
+          {/* Row 1: Traditional Rental Types (TERM / MONTHLY / DAILY) */}
           <div className="flex bg-slate-200/80 p-1 rounded-2xl gap-1">
             <button
               type="button"
@@ -429,10 +499,166 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
               <span>รายวัน</span>
             </button>
           </div>
+
+          {/* Row 2: Recommended LINE Onboarding */}
+          <button
+            type="button"
+            onClick={() => setActiveTab('LINE')}
+            className={`w-full py-2.5 px-3 text-xs font-extrabold rounded-xl transition-all flex items-center justify-center gap-2 border cursor-pointer ${
+              activeTab === 'LINE'
+                ? 'bg-[#06C755] text-white border-[#05B34C] shadow-xs'
+                : 'bg-white text-slate-700 hover:text-slate-900 border-slate-200 hover:border-slate-300'
+            }`}
+          >
+            <MessageSquare className={`w-4 h-4 ${activeTab === 'LINE' ? 'text-white fill-current' : 'text-[#06C755]'}`} />
+            <span>เพิ่มผู้เช่า LINE</span>
+            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${
+              activeTab === 'LINE' ? 'bg-white/20 text-white' : 'bg-emerald-50 text-emerald-700 border border-emerald-200/60'
+            }`}>
+              แนะนำ
+            </span>
+          </button>
         </div>
 
-        {/* Modal Form */}
-        <form onSubmit={handleSubmit} className="p-5 overflow-y-auto space-y-4 flex-1">
+        {activeTab === 'LINE' ? (
+          <div className="flex flex-col flex-1 overflow-y-auto">
+            {isLineLoading ? (
+              <div className="p-8 flex flex-col items-center justify-center space-y-3 min-h-[320px]">
+                <Loader2 className="w-8 h-8 animate-spin text-emerald-600" />
+                <p className="text-xs font-semibold text-slate-500">กำลังโหลดข้อมูล LINE OA...</p>
+              </div>
+            ) : isLineError ? (
+              <div className="p-6 text-center space-y-4 min-h-[320px] flex flex-col items-center justify-center">
+                <div className="w-12 h-12 rounded-2xl bg-rose-50 text-rose-600 flex items-center justify-center">
+                  <AlertCircle className="w-6 h-6" />
+                </div>
+                <p className="text-sm font-bold text-slate-800">ไม่สามารถโหลดข้อมูล LINE OA ได้</p>
+                <button
+                  type="button"
+                  onClick={() => fetchLineOaConfig()}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition-all cursor-pointer"
+                >
+                  ลองใหม่
+                </button>
+              </div>
+            ) : !isLineReady ? (
+              <div className="p-6 text-center space-y-4 min-h-[320px] flex flex-col items-center justify-center">
+                <div className="w-14 h-14 rounded-2xl bg-amber-50 text-amber-500 flex items-center justify-center mx-auto ring-8 ring-amber-50/50">
+                  <AlertCircle className="w-7 h-7 stroke-[2.2]" />
+                </div>
+                <div className="space-y-1.5 max-w-sm mx-auto">
+                  <h4 className="text-base font-extrabold text-slate-900">ยังไม่ได้เชื่อมต่อ LINE OA</h4>
+                  <p className="text-xs text-slate-500 font-medium leading-relaxed">
+                    กรุณาตั้งค่า LINE Official Account ของหอพักก่อนใช้งานการเพิ่มผู้เช่าผ่าน LINE
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleManageLineOa}
+                  className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-extrabold rounded-xl transition-all shadow-xs hover:shadow-md cursor-pointer flex items-center gap-2"
+                >
+                  <Settings className="w-4 h-4" />
+                  <span>จัดการ LINE Official Account (LINE OA)</span>
+                </button>
+              </div>
+            ) : (
+              <div className="p-5 space-y-5 flex-1">
+                {/* LINE OA Header Info */}
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-9 h-9 rounded-2xl bg-[#06C755] flex items-center justify-center text-white font-bold shadow-xs">
+                      <MessageSquare className="w-5 h-5 fill-current" />
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-extrabold text-slate-900">LINE Official Account</h4>
+                      <p className="text-xs text-slate-500 font-semibold">{lineConfig?.botDisplayName || 'หอพัก'}</p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* QR Area Box */}
+                <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-5 flex flex-col items-center justify-center space-y-3.5">
+                  {lineConfig?.qrSvg ? (
+                    <div
+                      dangerouslySetInnerHTML={{ __html: lineConfig.qrSvg }}
+                      className="w-48 h-48 bg-white p-2 rounded-2xl shadow-xs border border-slate-100 flex items-center justify-center [&>svg]:w-full [&>svg]:h-full"
+                      data-testid="line-oa-qr-svg-container"
+                    />
+                  ) : (
+                    <div className="w-48 h-48 bg-white p-2 rounded-2xl shadow-xs border border-slate-100 flex items-center justify-center text-xs text-slate-400">
+                      ไม่สามารถแสดง QR Code ได้
+                    </div>
+                  )}
+
+                  {/* LINE ID with Copy */}
+                  <div className="flex items-center gap-2 bg-white px-3.5 py-1.5 rounded-xl border border-slate-200 shadow-2xs">
+                    <span className="text-xs font-bold text-slate-500">LINE ID:</span>
+                    <span className="text-xs font-extrabold text-slate-900 font-mono" data-testid="line-oa-id-display">
+                      {effectiveLineId}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={handleCopyLineId}
+                      className="ml-1 p-1 hover:bg-slate-100 rounded-lg text-slate-600 transition-colors cursor-pointer flex items-center gap-1 text-[11px] font-bold"
+                      title="คัดลอก LINE ID"
+                    >
+                      {copiedLineId ? (
+                        <>
+                          <Check className="w-3.5 h-3.5 text-emerald-600" />
+                          <span className="text-emerald-600">คัดลอกแล้ว</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-3.5 h-3.5" />
+                          <span>คัดลอก</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+
+                  {/* Direct Friend Link */}
+                  {friendAddUrl && (
+                    <a
+                      href={friendAddUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="w-full max-w-xs py-2.5 bg-[#06C755] hover:bg-[#05B34C] text-white text-xs font-extrabold rounded-xl transition-all shadow-xs flex items-center justify-center gap-1.5 cursor-pointer"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" />
+                      <span>เพิ่มเพื่อนใน LINE</span>
+                    </a>
+                  )}
+                </div>
+
+                {/* Registration Steps */}
+                <div className="bg-emerald-50/60 border border-emerald-100/80 rounded-2xl p-4 space-y-2.5">
+                  <h5 className="text-xs font-extrabold text-emerald-900 flex items-center gap-1.5">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                    <span>ขั้นตอนการลงทะเบียนสำหรับผู้เช่า</span>
+                  </h5>
+                  <ol className="text-xs text-emerald-800/90 font-medium space-y-1.5 pl-5 list-decimal leading-relaxed">
+                    <li>สแกน QR Code หรือเพิ่มเพื่อนผ่าน LINE ID ที่แสดง</li>
+                    <li>กดปุ่ม &quot;ลงทะเบียนผู้เช่า&quot; ใน LINE</li>
+                    <li>กรอกข้อมูลให้ครบถ้วน พร้อมแนบเอกสารที่กำหนด</li>
+                    <li>รอเจ้าของหอพักตรวจสอบและอนุมัติ</li>
+                    <li>ลงทะเบียนสำเร็จ พร้อมใช้งาน</li>
+                  </ol>
+                </div>
+              </div>
+            )}
+            {/* Modal Bottom Action for LINE Tab */}
+            <div className="p-4 border-t border-slate-100 flex items-center justify-end bg-slate-50/50">
+              <button
+                type="button"
+                onClick={onClose}
+                className="px-5 py-2 text-xs font-bold text-slate-600 hover:bg-slate-200/80 rounded-xl transition-colors cursor-pointer"
+              >
+                ปิดหน้าต่าง
+              </button>
+            </div>
+          </div>
+        ) : (
+          <form onSubmit={handleSubmit} className="p-5 overflow-y-auto space-y-4 flex-1">
           {/* Common Tenant Identity Fields */}
           <div className="space-y-3">
             <div>
@@ -889,6 +1115,7 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
             </button>
           </div>
         </form>
+        )}
       </div>
     </div>
   );
