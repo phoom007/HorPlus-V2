@@ -244,32 +244,13 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
     }
   }
 
-  // Rent type & amount
+  // Canonical Rent Component Selection (PO Decisions P1-P6)
   const isDaily = isDailyContext || roomCtx?.billingSource === 'DAILY_STAY';
   const isTerm = roomCtx?.billingSource === 'TERM_CONTRACT' || roomCtx?.billingSource === 'PROVISIONAL_TERM';
   const rentalTypeLabel = isDaily ? 'วัน' : isTerm ? 'เทอม' : 'เดือน';
 
-  const rawRentAmt = Number(roomCtx?.rentAmount ?? row.rentAmount ?? 0);
-  const dailyRentAmtFromComp = isDaily ? Number(chargeComponents.find((c: any) => c.type === 'rent' || (c.label && c.label.includes('ค่าเช่า')))?.amount ?? 0) : 0;
-  const effectiveRentAmt = rawRentAmt > 0 ? rawRentAmt : dailyRentAmtFromComp;
-
-  const hasTenantOrActive = Boolean(
-    effectiveTenantId ||
-    isDailyContext ||
-    roomCtx?.billingSource === 'CONTRACT' ||
-    roomCtx?.billingSource === 'PROVISIONAL_MONTHLY' ||
-    roomCtx?.billingSource === 'PROVISIONAL_TERM' ||
-    roomCtx?.billingSource === 'DAILY_STAY'
-  );
-
-  const rentDisplay = (effectiveRentAmt > 0 || hasTenantOrActive)
-    ? (effectiveRentAmt > 0 ? `${effectiveRentAmt.toLocaleString('th-TH')} .-` : (hasTenantOrActive ? '0 .-' : '-'))
-    : '-';
-
-  // Rent status color
   const rentComp = chargeComponents.find((c: any) => c.type === 'rent' || (c.label && c.label.includes('ค่าเช่า')));
-  const rentStatus = rentComp?.status || (isDailyRentPaid || isRowPaid ? 'PAID' : (row.billStatus !== 'draft' && row.billStatus !== 'cancelled' ? 'UNPAID' : 'PREVIEW'));
-  const rentTone = resolveFinancialComponentTone(rentStatus);
+  const rentTone = rentComp ? resolveFinancialComponentTone(rentComp.status) : 'neutral';
 
   let rentColorClass = 'text-slate-600 font-semibold'; // PREVIEW / DRAFT / ยังไม่ออกบิล (เทา)
   if (rentTone === 'success') {
@@ -279,6 +260,10 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
   } else if (rentTone === 'danger') {
     rentColorClass = 'text-rose-600 font-bold';
   }
+
+  const rentDisplay = rentComp
+    ? `${Number(rentComp.amount).toLocaleString('th-TH')} .-`
+    : '';
 
   const otherFeesCount = (row.otherFees || []).length;
 
@@ -948,10 +933,12 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
             />
             <span>คน</span>
           </div>
-          <div className={`text-xs font-extrabold ${rentColorClass}`}>
-            <span>ค่าเช่า ({rentalTypeLabel}) </span>
-            <span>{rentDisplay}</span>
-          </div>
+          {rentComp && (
+            <div className={`text-xs font-extrabold ${rentColorClass}`}>
+              <span>{rentComp.label || `ค่าเช่า (${rentalTypeLabel})`} </span>
+              <span>{rentDisplay}</span>
+            </div>
+          )}
         </div>
 
         {/* Existing Other Fees List */}

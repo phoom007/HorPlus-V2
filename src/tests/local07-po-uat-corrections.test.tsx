@@ -3,7 +3,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import React from 'react';
-import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, cleanup, within } from '@testing-library/react';
 import { OwnerMeterListCard } from '../components/meters/OwnerMeterListCard';
 import { OwnerMeters, resolveOwnerMeterDisplayStatus, getOwnerFinancialBreakdown, resolveFinancialComponentTone } from '../pages/owner/meters';
 import { OwnerSettings } from '../pages/owner/settings';
@@ -1056,7 +1056,465 @@ describe('HORPLUS LOCAL-07 — PO UAT Targeted Correction Suite', () => {
         hasValidationError: false,
       });
     });
+  });
 
+  // =========================================================================
+  // PART G: CANONICAL RENT OBLIGATION AUTHORITY TESTS (RENT-A1–RENT-A7)
+  // =========================================================================
+  describe('PART G: Canonical Rent Obligation Authority Tests (RENT-A1–RENT-A7)', () => {
+    it('RENT-A1: room.monthlyRent = 4500, canonical components has MU only -> List Rent row is ABSENT', () => {
+      render(
+        <OwnerMeterListCard
+          row={{
+            roomId: 'room-101',
+            roomNumber: '101',
+            floor: 1,
+            rentAmount: 4500, // room reference price
+            waterPrev: '110',
+            waterCurr: '121',
+            elecPrev: '560',
+            elecCurr: '620',
+            isReplaced: false,
+            peopleCount: 2,
+            overdueAmount: '0.00',
+            isPaid: false,
+            billStatus: 'unpaid',
+            otherFees: [],
+          } as any}
+          idx={0}
+          roomCtx={{
+            roomId: 'room-101',
+            roomNumber: '101',
+            billingSource: 'CONTRACT',
+            rentAmount: '4500.00',
+            amountDue: '1268.00',
+            chargeComponents: [
+              { type: 'monthly_utility', label: 'บิลรายเดือน', amount: '1268.00', status: 'UNPAID' },
+            ],
+          } as any}
+          isWaterUnit={true}
+          isElecUnit={true}
+          isFirstCycle={false}
+          selectedCycleCode="2026-08"
+          selectedCycle="2026-08"
+          selectedBillingCycleId="cycle-2026-08"
+          isSaving={false}
+          unlockedElecPrev={{}}
+          unlockedWaterPrev={{}}
+          flashingCells={{}}
+          isExpandedBreakdown={false}
+          onOpenOtherFees={vi.fn()}
+          onMeterReadingChange={vi.fn()}
+          onMeterReadingBlur={vi.fn()}
+          onPaste={vi.fn()}
+          onUnlockElecPrev={vi.fn()}
+          onCancelElecPrev={vi.fn()}
+          onUnlockWaterPrev={vi.fn()}
+          onCancelWaterPrev={vi.fn()}
+          onPeopleCountChange={vi.fn()}
+          onToggleStatusSwitch={vi.fn()}
+          onToggleBreakdown={vi.fn()}
+          onSelectTenant={vi.fn()}
+        />
+      );
+
+      // Rent row MUST NOT exist merely because room has monthlyRent = 4500
+      expect(screen.queryByText(/ค่าเช่า/i)).toBeNull();
+      expect(screen.queryByText('4,500 .-')).toBeNull();
+      expect(screen.queryByText('4,500.-')).toBeNull();
+    });
+
+    it('RENT-A2: roomCtx.rentAmount = 4500, canonical components has MU only -> Rent row is ABSENT', () => {
+      render(
+        <OwnerMeterListCard
+          row={{
+            roomId: 'room-101',
+            roomNumber: '101',
+            floor: 1,
+            waterPrev: '110',
+            waterCurr: '121',
+            elecPrev: '560',
+            elecCurr: '620',
+            isReplaced: false,
+            peopleCount: 2,
+            overdueAmount: '0.00',
+            isPaid: false,
+            billStatus: 'unpaid',
+            otherFees: [],
+          } as any}
+          idx={0}
+          roomCtx={{
+            roomId: 'room-101',
+            roomNumber: '101',
+            billingSource: 'CONTRACT',
+            rentAmount: '4500.00',
+            amountDue: '1268.00',
+            chargeComponents: [
+              { type: 'monthly_utility', label: 'บิลรายเดือน', amount: '1268.00', status: 'UNPAID' },
+            ],
+          } as any}
+          isWaterUnit={true}
+          isElecUnit={true}
+          isFirstCycle={false}
+          selectedCycleCode="2026-08"
+          selectedCycle="2026-08"
+          selectedBillingCycleId="cycle-2026-08"
+          isSaving={false}
+          unlockedElecPrev={{}}
+          unlockedWaterPrev={{}}
+          flashingCells={{}}
+          isExpandedBreakdown={false}
+          onOpenOtherFees={vi.fn()}
+          onMeterReadingChange={vi.fn()}
+          onMeterReadingBlur={vi.fn()}
+          onPaste={vi.fn()}
+          onUnlockElecPrev={vi.fn()}
+          onCancelElecPrev={vi.fn()}
+          onUnlockWaterPrev={vi.fn()}
+          onCancelWaterPrev={vi.fn()}
+          onPeopleCountChange={vi.fn()}
+          onToggleStatusSwitch={vi.fn()}
+          onToggleBreakdown={vi.fn()}
+          onSelectTenant={vi.fn()}
+        />
+      );
+
+      expect(screen.queryByText(/ค่าเช่า/i)).toBeNull();
+      expect(screen.queryByText('4,500 .-')).toBeNull();
+    });
+
+    it('RENT-A3: overallFinancialStatus = unpaid, canonical Rent absent -> Rent row is ABSENT', () => {
+      render(
+        <OwnerMeterListCard
+          row={{
+            roomId: 'room-101',
+            roomNumber: '101',
+            floor: 1,
+            waterPrev: '110',
+            waterCurr: '121',
+            elecPrev: '560',
+            elecCurr: '620',
+            isReplaced: false,
+            peopleCount: 2,
+            overdueAmount: '0.00',
+            isPaid: false,
+            billStatus: 'unpaid',
+            otherFees: [],
+          } as any}
+          idx={0}
+          roomCtx={{
+            roomId: 'room-101',
+            roomNumber: '101',
+            billingSource: 'CONTRACT',
+            rentAmount: '4500.00',
+            overallFinancialStatus: 'unpaid',
+            amountDue: '1268.00',
+            chargeComponents: [
+              { type: 'monthly_utility', label: 'บิลรายเดือน', amount: '1268.00', status: 'UNPAID' },
+            ],
+          } as any}
+          isWaterUnit={true}
+          isElecUnit={true}
+          isFirstCycle={false}
+          selectedCycleCode="2026-08"
+          selectedCycle="2026-08"
+          selectedBillingCycleId="cycle-2026-08"
+          isSaving={false}
+          unlockedElecPrev={{}}
+          unlockedWaterPrev={{}}
+          flashingCells={{}}
+          isExpandedBreakdown={false}
+          onOpenOtherFees={vi.fn()}
+          onMeterReadingChange={vi.fn()}
+          onMeterReadingBlur={vi.fn()}
+          onPaste={vi.fn()}
+          onUnlockElecPrev={vi.fn()}
+          onCancelElecPrev={vi.fn()}
+          onUnlockWaterPrev={vi.fn()}
+          onCancelWaterPrev={vi.fn()}
+          onPeopleCountChange={vi.fn()}
+          onToggleStatusSwitch={vi.fn()}
+          onToggleBreakdown={vi.fn()}
+          onSelectTenant={vi.fn()}
+        />
+      );
+
+      // Does NOT fallback from overallFinancialStatus = unpaid to generate orange rent row
+      expect(screen.queryByText(/ค่าเช่า/i)).toBeNull();
+      expect(screen.queryByText('4,500 .-')).toBeNull();
+    });
+
+    it('RENT-A4: canonical RENT component 4500 UNPAID -> Rent row present, amount 4500, warning tone', () => {
+      const { container } = render(
+        <OwnerMeterListCard
+          row={{
+            roomId: 'room-101',
+            roomNumber: '101',
+            floor: 1,
+            waterPrev: '110',
+            waterCurr: '121',
+            elecPrev: '560',
+            elecCurr: '620',
+            isReplaced: false,
+            peopleCount: 2,
+            overdueAmount: '0.00',
+            isPaid: false,
+            billStatus: 'unpaid',
+            otherFees: [],
+          } as any}
+          idx={0}
+          roomCtx={{
+            roomId: 'room-101',
+            roomNumber: '101',
+            billingSource: 'CONTRACT',
+            rentAmount: '4500.00',
+            amountDue: '5768.00',
+            chargeComponents: [
+              { type: 'rent', label: 'ค่าเช่า (เดือน)', amount: '4500.00', status: 'UNPAID' },
+              { type: 'monthly_utility', label: 'บิลรายเดือน', amount: '1268.00', status: 'UNPAID' },
+            ],
+          } as any}
+          isWaterUnit={true}
+          isElecUnit={true}
+          isFirstCycle={false}
+          selectedCycleCode="2026-08"
+          selectedCycle="2026-08"
+          selectedBillingCycleId="cycle-2026-08"
+          isSaving={false}
+          unlockedElecPrev={{}}
+          unlockedWaterPrev={{}}
+          flashingCells={{}}
+          isExpandedBreakdown={false}
+          onOpenOtherFees={vi.fn()}
+          onMeterReadingChange={vi.fn()}
+          onMeterReadingBlur={vi.fn()}
+          onPaste={vi.fn()}
+          onUnlockElecPrev={vi.fn()}
+          onCancelElecPrev={vi.fn()}
+          onUnlockWaterPrev={vi.fn()}
+          onCancelWaterPrev={vi.fn()}
+          onPeopleCountChange={vi.fn()}
+          onToggleStatusSwitch={vi.fn()}
+          onToggleBreakdown={vi.fn()}
+          onSelectTenant={vi.fn()}
+        />
+      );
+
+      expect(screen.getByText(/ค่าเช่า \(เดือน\)/i)).toBeDefined();
+      expect(screen.getByText('4,500 .-')).toBeDefined();
+      const rentRow = container.querySelector('.text-amber-700');
+      expect(rentRow).not.toBeNull();
+    });
+
+    it('RENT-A5: canonical RENT component 4500 PAID -> Rent row present, success tone', () => {
+      const { container } = render(
+        <OwnerMeterListCard
+          row={{
+            roomId: 'room-101',
+            roomNumber: '101',
+            floor: 1,
+            waterPrev: '110',
+            waterCurr: '121',
+            elecPrev: '560',
+            elecCurr: '620',
+            isReplaced: false,
+            peopleCount: 2,
+            overdueAmount: '0.00',
+            isPaid: false,
+            billStatus: 'unpaid',
+            otherFees: [],
+          } as any}
+          idx={0}
+          roomCtx={{
+            roomId: 'room-101',
+            roomNumber: '101',
+            billingSource: 'CONTRACT',
+            rentAmount: '4500.00',
+            amountDue: '1268.00',
+            chargeComponents: [
+              { type: 'rent', label: 'ค่าเช่า (เดือน)', amount: '4500.00', status: 'PAID' },
+              { type: 'monthly_utility', label: 'บิลรายเดือน', amount: '1268.00', status: 'UNPAID' },
+            ],
+          } as any}
+          isWaterUnit={true}
+          isElecUnit={true}
+          isFirstCycle={false}
+          selectedCycleCode="2026-08"
+          selectedCycle="2026-08"
+          selectedBillingCycleId="cycle-2026-08"
+          isSaving={false}
+          unlockedElecPrev={{}}
+          unlockedWaterPrev={{}}
+          flashingCells={{}}
+          isExpandedBreakdown={false}
+          onOpenOtherFees={vi.fn()}
+          onMeterReadingChange={vi.fn()}
+          onMeterReadingBlur={vi.fn()}
+          onPaste={vi.fn()}
+          onUnlockElecPrev={vi.fn()}
+          onCancelElecPrev={vi.fn()}
+          onUnlockWaterPrev={vi.fn()}
+          onCancelWaterPrev={vi.fn()}
+          onPeopleCountChange={vi.fn()}
+          onToggleStatusSwitch={vi.fn()}
+          onToggleBreakdown={vi.fn()}
+          onSelectTenant={vi.fn()}
+        />
+      );
+
+      expect(screen.getByText(/ค่าเช่า \(เดือน\)/i)).toBeDefined();
+      expect(screen.getByText('4,500 .-')).toBeDefined();
+      const rentRow = container.querySelector('.text-emerald-700');
+      expect(rentRow).not.toBeNull();
+    });
+
+    it('RENT-A6: canonical RENT PREVIEW -> neutral tone', () => {
+      const { container } = render(
+        <OwnerMeterListCard
+          row={{
+            roomId: 'room-101',
+            roomNumber: '101',
+            floor: 1,
+            waterPrev: '110',
+            waterCurr: '121',
+            elecPrev: '560',
+            elecCurr: '620',
+            isReplaced: false,
+            peopleCount: 2,
+            overdueAmount: '0.00',
+            isPaid: false,
+            billStatus: 'draft',
+            otherFees: [],
+          } as any}
+          idx={0}
+          roomCtx={{
+            roomId: 'room-101',
+            roomNumber: '101',
+            billingSource: 'CONTRACT',
+            rentAmount: '4500.00',
+            amountDue: '5768.00',
+            chargeComponents: [
+              { type: 'rent', label: 'ค่าเช่า (เดือน)', amount: '4500.00', status: 'PREVIEW' },
+              { type: 'monthly_utility', label: 'บิลรายเดือน', amount: '1268.00', status: 'PREVIEW' },
+            ],
+          } as any}
+          isWaterUnit={true}
+          isElecUnit={true}
+          isFirstCycle={false}
+          selectedCycleCode="2026-08"
+          selectedCycle="2026-08"
+          selectedBillingCycleId="cycle-2026-08"
+          isSaving={false}
+          unlockedElecPrev={{}}
+          unlockedWaterPrev={{}}
+          flashingCells={{}}
+          isExpandedBreakdown={false}
+          onOpenOtherFees={vi.fn()}
+          onMeterReadingChange={vi.fn()}
+          onMeterReadingBlur={vi.fn()}
+          onPaste={vi.fn()}
+          onUnlockElecPrev={vi.fn()}
+          onCancelElecPrev={vi.fn()}
+          onUnlockWaterPrev={vi.fn()}
+          onCancelWaterPrev={vi.fn()}
+          onPeopleCountChange={vi.fn()}
+          onToggleStatusSwitch={vi.fn()}
+          onToggleBreakdown={vi.fn()}
+          onSelectTenant={vi.fn()}
+        />
+      );
+
+      expect(screen.getByText(/ค่าเช่า \(เดือน\)/i)).toBeDefined();
+      expect(screen.getByText('4,500 .-')).toBeDefined();
+      const rentRow = container.querySelector('.text-slate-600');
+      expect(rentRow).not.toBeNull();
+    });
+
+    it('RENT-A7 & ROOM101: Room 101 August 2026 UAT regression - Table/List parity without fabricated rent', async () => {
+      vi.spyOn(httpClient, 'httpRequest').mockImplementation(async (_method: string, url: string) => {
+        if (url.includes('/meters/workspace/preview-context')) {
+          return {
+            success: true,
+            data: {
+              rateSnapshot: { waterBillingType: 'per_unit', electricityBillingType: 'per_unit' },
+              rooms: [
+                {
+                  roomId: 'room-101',
+                  roomNumber: '101',
+                  billingSource: 'CONTRACT',
+                  rentAmount: '4500.00',
+                  amountDue: '1268.00',
+                  chargeComponents: [
+                    { type: 'monthly_utility', label: 'บิลรายเดือน', amount: '1268.00', status: 'UNPAID', occurredInDisplayedPeriod: true, includedInAmountDue: true },
+                  ],
+                },
+              ],
+            },
+          };
+        }
+        if (url.includes('/meters/workspace')) {
+          return {
+            success: true,
+            data: {
+              rooms: [{ roomId: 'room-101', roomNumber: '101', billingSource: 'CONTRACT', rentAmount: 4500 }],
+              readings: [],
+            },
+          };
+        }
+        return { success: true, data: [] };
+      });
+
+      render(
+        <QueryClientProvider client={queryClient}>
+          <OwnerMeters
+            rooms={[baseSampleRoom] as any}
+            buildings={[{ id: 'bldg-1', dormitoryId: 'dorm-1', name: 'อาคาร A', totalFloors: 1, roomsPerFloor: 1, createdAt: '2026-08-01' } as any]}
+            dormitoryId="dorm-1"
+            bills={[]}
+            tenants={[]}
+            contracts={[]}
+            selectedCycle="2026-08"
+            selectedCycleCode="2026-08"
+            selectedBillingCycleId="cycle-2026-08"
+            billingCycles={sampleCycle}
+            onSaveBills={vi.fn()}
+            onSelectTenant={vi.fn()}
+            onAddLog={vi.fn()}
+            onNavigate={vi.fn()}
+          />
+        </QueryClientProvider>
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText('101')).toBeDefined();
+      });
+
+      // Table View: Payable is 1,268.00 ฿
+      expect(screen.getByText('1,268.00 ฿')).toBeDefined();
+
+      // Open detail in Table: Only MU is shown, NO Rent
+      const detailBtn = screen.getByRole('button', { name: /ดูรายละเอียด/i });
+      fireEvent.click(detailBtn);
+
+      expect(screen.getByText('บิลรายเดือน')).toBeDefined();
+      expect(screen.getByText('1,268.-')).toBeDefined();
+      expect(screen.queryByText(/ค่าเช่า \(เดือน\)/i)).toBeNull();
+
+      // Switch to List View
+      const listBtn = screen.getByTestId('view-mode-list-button');
+      fireEvent.click(listBtn);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('meter-list-card-room-101')).toBeDefined();
+      });
+
+      const card101 = screen.getByTestId('meter-list-card-room-101');
+      // In List View: NO fabricated Rent row exists
+      expect(within(card101).queryByText(/ค่าเช่า/i)).toBeNull();
+      expect(within(card101).queryByText('4,500 .-')).toBeNull();
+      // List bottom payable is strictly 1,268.00 ฿
+      expect(within(card101).getByText('1,268.00 ฿')).toBeDefined();
+    });
   });
 });
 
