@@ -375,6 +375,129 @@ export function getOwnerFinancialBreakdown(
   };
 }
 
+export interface OwnerMeterDisplayStatus {
+  statusKey: 'UNISSUED' | 'UNPAID' | 'PAID' | 'DAILY_OVERDUE' | 'DAILY_PAID' | 'DAILY_UNPAID' | 'INVALID';
+  label: string;
+  tone: 'neutral' | 'warning' | 'success' | 'danger';
+  isDaily: boolean;
+  isMonthlyUtilityIssued: boolean;
+  isMonthlyUtilityPaid: boolean;
+  isOverallPaid: boolean;
+}
+
+/**
+ * Canonical Presentation Status Resolver for Owner Meter Workspace (Table & List).
+ * S1 Precedence:
+ * 1. Daily context -> DAILY_OVERDUE / DAILY_PAID / DAILY_UNPAID
+ * 2. Invalid component -> INVALID
+ * 3. Unissued Monthly Utility -> UNISSUED ("ยังไม่ออกบิล", neutral tone, toggle OFF)
+ * 4. Issued Monthly Utility -> S1 overallFinancialStatus (PAID "ชำระแล้ว" / UNPAID "รอชำระ")
+ */
+export function resolveOwnerMeterDisplayStatus(roomCtx?: any, row?: any): OwnerMeterDisplayStatus {
+  const isDailyContext = roomCtx?.billingSource === 'DAILY_STAY' || Boolean(roomCtx?.isDailyUnpaid) || Boolean(roomCtx?.isDailyFinancialTail);
+  const isDailyOverdue = Boolean(roomCtx?.isDailyOverdue || roomCtx?.isDailyFinancialTail);
+  const isDailyRentPaid = Boolean(roomCtx?.isDailyRentPaid);
+  const hasHistoricalDaily = (roomCtx?.historicalDailyCount || 0) > 0;
+  const hasMonthlyContractOrBill = Boolean(
+    roomCtx?.billingSource === 'CONTRACT' ||
+    roomCtx?.billingSource === 'PROVISIONAL_MONTHLY' ||
+    roomCtx?.billingSource === 'PROVISIONAL_TERM' ||
+    (row?.billStatus && row.billStatus !== 'draft' && row.billStatus !== 'cancelled')
+  );
+
+  const overallStatus = (roomCtx?.overallFinancialStatus as string) || (roomCtx?.billStatus as string) || row?.billStatus || 'draft';
+  const muStatus = (roomCtx?.monthlyUtilityBillStatus as string) || (row as any)?.monthlyUtilityBillStatus || row?.billStatus || 'draft';
+  const isMuPaid = Boolean(roomCtx?.isMonthlyUtilityPaid || (row as any)?.isMonthlyUtilityPaid || muStatus === 'paid');
+  const isMuIssued = muStatus !== 'draft' && muStatus !== 'cancelled';
+  const isOverallPaid = overallStatus === 'paid' || Boolean(roomCtx?.isPaid) || Boolean(row?.isPaid);
+
+  const hasInvalidComponent = (roomCtx?.chargeComponents || []).some((c: any) => c.status === 'INVALID');
+
+  // 1. Daily context
+  if (isDailyContext || (hasHistoricalDaily && !hasMonthlyContractOrBill)) {
+    if (isDailyOverdue) {
+      return {
+        statusKey: 'DAILY_OVERDUE',
+        label: 'รายวัน',
+        tone: 'danger',
+        isDaily: true,
+        isMonthlyUtilityIssued: false,
+        isMonthlyUtilityPaid: false,
+        isOverallPaid: false,
+      };
+    }
+    if (isDailyRentPaid) {
+      return {
+        statusKey: 'DAILY_PAID',
+        label: 'รายวัน',
+        tone: 'success',
+        isDaily: true,
+        isMonthlyUtilityIssued: false,
+        isMonthlyUtilityPaid: false,
+        isOverallPaid: true,
+      };
+    }
+    return {
+      statusKey: 'DAILY_UNPAID',
+      label: 'รายวัน',
+      tone: 'neutral',
+      isDaily: true,
+      isMonthlyUtilityIssued: false,
+      isMonthlyUtilityPaid: false,
+      isOverallPaid: false,
+    };
+  }
+
+  // 2. Invalid component error
+  if (hasInvalidComponent) {
+    return {
+      statusKey: 'INVALID',
+      label: 'ไม่ถูกต้อง',
+      tone: 'danger',
+      isDaily: false,
+      isMonthlyUtilityIssued: isMuIssued,
+      isMonthlyUtilityPaid: isMuPaid,
+      isOverallPaid: false,
+    };
+  }
+
+  // 3. PO Requirement A: If MONTHLY_UTILITY unissued -> ยังไม่ออกบิล (even if RENT exists)
+  if (!isMuIssued) {
+    return {
+      statusKey: 'UNISSUED',
+      label: 'ยังไม่ออกบิล',
+      tone: 'neutral',
+      isDaily: false,
+      isMonthlyUtilityIssued: false,
+      isMonthlyUtilityPaid: false,
+      isOverallPaid: false,
+    };
+  }
+
+  // 4. Issued: S1 overall financial status
+  if (isOverallPaid) {
+    return {
+      statusKey: 'PAID',
+      label: 'ชำระแล้ว',
+      tone: 'success',
+      isDaily: false,
+      isMonthlyUtilityIssued: true,
+      isMonthlyUtilityPaid: isMuPaid,
+      isOverallPaid: true,
+    };
+  }
+
+  return {
+    statusKey: 'UNPAID',
+    label: 'รอชำระ',
+    tone: 'warning',
+    isDaily: false,
+    isMonthlyUtilityIssued: true,
+    isMonthlyUtilityPaid: isMuPaid,
+    isOverallPaid: false,
+  };
+}
+
 export function mapErrorMessageToThai(raw: any): string {
   if (!raw) return 'เกิดข้อผิดพลาดในการดำเนินการ';
 
@@ -2864,56 +2987,48 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                         : ''
                         }`}>
                         {(() => {
-                          const isDailyContext = roomCtx?.billingSource === 'DAILY_STAY' || Boolean(roomCtx?.isDailyUnpaid) || Boolean(roomCtx?.isDailyFinancialTail);
-                          const hasHistoricalDaily = (roomCtx?.historicalDailyCount || 0) > 0;
-                          const hasMonthlyContractOrBill = Boolean(
-                            roomCtx?.billingSource === 'CONTRACT' ||
-                            roomCtx?.billingSource === 'PROVISIONAL_MONTHLY' ||
-                            roomCtx?.billingSource === 'PROVISIONAL_TERM' ||
-                            (row.billStatus !== 'draft' && row.billStatus !== 'cancelled')
-                          );
+                          const displayStatus = resolveOwnerMeterDisplayStatus(roomCtx, row);
 
-                          if (isDailyContext || (hasHistoricalDaily && !hasMonthlyContractOrBill)) {
-                            const isDailyOverdue = Boolean(roomCtx?.isDailyOverdue || roomCtx?.isDailyFinancialTail);
-                            const isDailyRentPaid = Boolean(roomCtx?.isDailyRentPaid);
-
-                            if (isDailyOverdue) {
+                          if (displayStatus.isDaily) {
+                            if (displayStatus.statusKey === 'DAILY_OVERDUE') {
                               return (
                                 <div className="flex items-center justify-center min-w-[85px]">
                                   <span className="inline-flex items-center px-2 py-1 bg-rose-50 text-rose-700 text-xs font-bold rounded-lg border border-rose-200">
                                     <AlertCircle className="w-3 h-3 text-rose-500 mr-1 shrink-0" />
-                                    รายวัน
+                                    {displayStatus.label}
                                   </span>
                                 </div>
                               );
                             }
-
-                            if (isDailyRentPaid) {
+                            if (displayStatus.statusKey === 'DAILY_PAID') {
                               return (
                                 <div className="flex items-center justify-center min-w-[85px]">
                                   <span className="inline-flex items-center px-2 py-1 bg-emerald-50 text-emerald-700 text-xs font-bold rounded-lg border border-emerald-200">
                                     <CheckCircle className="w-3 h-3 text-emerald-600 mr-1 shrink-0" />
-                                    รายวัน
+                                    {displayStatus.label}
                                   </span>
                                 </div>
                               );
                             }
-
-                            // Active & Unpaid or Historical Checked-out -> Neutral gray Daily badge
                             return (
                               <div className="flex items-center justify-center min-w-[85px]">
                                 <span className="inline-flex items-center px-2 py-1 bg-slate-100 text-slate-600 text-xs font-bold rounded-lg border border-slate-200">
-                                  รายวัน
+                                  {displayStatus.label}
                                 </span>
                               </div>
                             );
                           }
 
-                          const overallStatus = (roomCtx?.overallFinancialStatus as string) || (roomCtx?.billStatus as string) || row.billStatus;
-                          const muStatus = (roomCtx?.monthlyUtilityBillStatus as string) || (row as any).monthlyUtilityBillStatus || row.billStatus;
-                          const isMuPaid = Boolean(roomCtx?.isMonthlyUtilityPaid || (row as any).isMonthlyUtilityPaid || muStatus === 'paid');
-                          const isMuIssued = muStatus !== 'draft' && muStatus !== 'cancelled';
-                          const isOverallPaid = overallStatus === 'paid' || Boolean(roomCtx?.isPaid);
+                          const isMuIssued = displayStatus.isMonthlyUtilityIssued;
+                          const isMuPaid = displayStatus.isMonthlyUtilityPaid;
+
+                          const statusColorClass = displayStatus.tone === 'neutral'
+                            ? 'text-slate-500'
+                            : displayStatus.tone === 'success'
+                              ? 'text-emerald-700'
+                              : displayStatus.tone === 'warning'
+                                ? 'text-amber-700'
+                                : 'text-rose-600';
 
                           return (
                             <div className="flex flex-col items-center justify-center gap-1 min-w-[85px]">
@@ -2943,17 +3058,8 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                                     }`}
                                 />
                               </button>
-                              <span className={`text-[10px] font-extrabold leading-none ${!isMuIssued
-                                ? 'text-slate-500'
-                                : isOverallPaid
-                                  ? 'text-emerald-700'
-                                  : 'text-amber-700'
-                                }`}>
-                                {!isMuIssued
-                                  ? 'ยังไม่ออกบิล'
-                                  : isOverallPaid
-                                    ? 'ชำระแล้ว'
-                                    : 'รอชำระ'}
+                              <span className={`text-[10px] font-extrabold leading-none ${statusColorClass}`}>
+                                {displayStatus.label}
                               </span>
                             </div>
                           );

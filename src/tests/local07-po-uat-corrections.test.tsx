@@ -1,11 +1,11 @@
-﻿/**
+/**
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import React from 'react';
 import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
 import { OwnerMeterListCard } from '../components/meters/OwnerMeterListCard';
-import { OwnerMeters } from '../pages/owner/meters';
+import { OwnerMeters, resolveOwnerMeterDisplayStatus } from '../pages/owner/meters';
 import { OwnerSettings } from '../pages/owner/settings';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { meterDraftStore } from '../lib/meterDraftStore';
@@ -727,6 +727,173 @@ describe('HORPLUS LOCAL-07 — PO UAT Targeted Correction Suite', () => {
       expect(screen.queryByTestId('input-due-day')).toBeNull();
       expect(screen.queryByTestId('select-late-fee-type')).toBeNull();
       expect(screen.queryByTestId('input-late-fee')).toBeNull();
+    });
+  });
+
+  // =========================================================================
+  // PART E: SHARED RESOLVER DIRECT MATRIX TESTS (RES1–RES9)
+  // =========================================================================
+  describe('PART E: Shared Resolver Direct Matrix Tests (RES1–RES9)', () => {
+    it('RES1: MU unissued + no Rent -> statusKey UNISSUED, ยังไม่ออกบิล, neutral tone', () => {
+      const res = resolveOwnerMeterDisplayStatus({
+        monthlyUtilityBillStatus: 'draft',
+        overallFinancialStatus: 'draft',
+        isPaid: false,
+      });
+      expect(res).toEqual({
+        statusKey: 'UNISSUED',
+        label: 'ยังไม่ออกบิล',
+        tone: 'neutral',
+        isDaily: false,
+        isMonthlyUtilityIssued: false,
+        isMonthlyUtilityPaid: false,
+        isOverallPaid: false,
+      });
+    });
+
+    it('RES2: MU unissued + Rent unpaid -> statusKey UNISSUED, ยังไม่ออกบิล, neutral tone (MU precedence)', () => {
+      const res = resolveOwnerMeterDisplayStatus({
+        billingSource: 'CONTRACT',
+        monthlyUtilityBillStatus: 'draft',
+        overallFinancialStatus: 'unpaid',
+        isPaid: false,
+        isMonthlyUtilityPaid: false,
+      });
+      expect(res).toEqual({
+        statusKey: 'UNISSUED',
+        label: 'ยังไม่ออกบิล',
+        tone: 'neutral',
+        isDaily: false,
+        isMonthlyUtilityIssued: false,
+        isMonthlyUtilityPaid: false,
+        isOverallPaid: false,
+      });
+    });
+
+    it('RES3: MU unpaid -> statusKey UNPAID, รอชำระ, warning tone', () => {
+      const res = resolveOwnerMeterDisplayStatus({
+        billingSource: 'CONTRACT',
+        monthlyUtilityBillStatus: 'unpaid',
+        overallFinancialStatus: 'unpaid',
+        isPaid: false,
+        isMonthlyUtilityPaid: false,
+      });
+      expect(res).toEqual({
+        statusKey: 'UNPAID',
+        label: 'รอชำระ',
+        tone: 'warning',
+        isDaily: false,
+        isMonthlyUtilityIssued: true,
+        isMonthlyUtilityPaid: false,
+        isOverallPaid: false,
+      });
+    });
+
+    it('RES4: MU paid + Rent unpaid -> statusKey UNPAID, รอชำระ, warning tone, isMonthlyUtilityPaid true', () => {
+      const res = resolveOwnerMeterDisplayStatus({
+        billingSource: 'CONTRACT',
+        monthlyUtilityBillStatus: 'paid',
+        overallFinancialStatus: 'unpaid',
+        isPaid: false,
+        isMonthlyUtilityPaid: true,
+      });
+      expect(res).toEqual({
+        statusKey: 'UNPAID',
+        label: 'รอชำระ',
+        tone: 'warning',
+        isDaily: false,
+        isMonthlyUtilityIssued: true,
+        isMonthlyUtilityPaid: true,
+        isOverallPaid: false,
+      });
+    });
+
+    it('RES5: all paid -> statusKey PAID, ชำระแล้ว, success tone, isOverallPaid true', () => {
+      const res = resolveOwnerMeterDisplayStatus({
+        billingSource: 'CONTRACT',
+        monthlyUtilityBillStatus: 'paid',
+        overallFinancialStatus: 'paid',
+        isPaid: true,
+        isMonthlyUtilityPaid: true,
+      });
+      expect(res).toEqual({
+        statusKey: 'PAID',
+        label: 'ชำระแล้ว',
+        tone: 'success',
+        isDaily: false,
+        isMonthlyUtilityIssued: true,
+        isMonthlyUtilityPaid: true,
+        isOverallPaid: true,
+      });
+    });
+
+    it('RES6: Daily Overdue -> statusKey DAILY_OVERDUE, รายวัน, danger tone', () => {
+      const res = resolveOwnerMeterDisplayStatus({
+        billingSource: 'DAILY_STAY',
+        isDailyOverdue: true,
+        isDailyRentPaid: false,
+      });
+      expect(res).toEqual({
+        statusKey: 'DAILY_OVERDUE',
+        label: 'รายวัน',
+        tone: 'danger',
+        isDaily: true,
+        isMonthlyUtilityIssued: false,
+        isMonthlyUtilityPaid: false,
+        isOverallPaid: false,
+      });
+    });
+
+    it('RES7: Daily Paid -> statusKey DAILY_PAID, รายวัน, success tone', () => {
+      const res = resolveOwnerMeterDisplayStatus({
+        billingSource: 'DAILY_STAY',
+        isDailyOverdue: false,
+        isDailyRentPaid: true,
+      });
+      expect(res).toEqual({
+        statusKey: 'DAILY_PAID',
+        label: 'รายวัน',
+        tone: 'success',
+        isDaily: true,
+        isMonthlyUtilityIssued: false,
+        isMonthlyUtilityPaid: false,
+        isOverallPaid: true,
+      });
+    });
+
+    it('RES8: Daily Unpaid -> statusKey DAILY_UNPAID, รายวัน, neutral tone', () => {
+      const res = resolveOwnerMeterDisplayStatus({
+        billingSource: 'DAILY_STAY',
+        isDailyOverdue: false,
+        isDailyRentPaid: false,
+      });
+      expect(res).toEqual({
+        statusKey: 'DAILY_UNPAID',
+        label: 'รายวัน',
+        tone: 'neutral',
+        isDaily: true,
+        isMonthlyUtilityIssued: false,
+        isMonthlyUtilityPaid: false,
+        isOverallPaid: false,
+      });
+    });
+
+    it('RES9: INVALID component -> statusKey INVALID, ไม่ถูกต้อง, danger tone', () => {
+      const res = resolveOwnerMeterDisplayStatus({
+        billingSource: 'CONTRACT',
+        monthlyUtilityBillStatus: 'issued',
+        overallFinancialStatus: 'unpaid',
+        chargeComponents: [{ status: 'INVALID' }],
+      });
+      expect(res).toEqual({
+        statusKey: 'INVALID',
+        label: 'ไม่ถูกต้อง',
+        tone: 'danger',
+        isDaily: false,
+        isMonthlyUtilityIssued: true,
+        isMonthlyUtilityPaid: false,
+        isOverallPaid: false,
+      });
     });
   });
 });

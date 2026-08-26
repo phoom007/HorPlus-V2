@@ -2130,33 +2130,17 @@ export class MeterService {
           const billOutstanding = toDecimal((bill.outstandingAmount ?? (isPaid ? '0.00' : bill.totalAmount)).toString());
           const rawKind = (bill.billKind || '').toString().trim().toUpperCase();
 
-          const hasRentItem = (bill.items || []).some((it: any) => {
-            const t = (it.itemType || it.type || '').toString().toUpperCase();
-            const d = (it.description || '').toString().toLowerCase();
-            return t === 'RENT' || t === 'MONTHLY_RENT' || t === 'TERM_RENT' || d.includes('ค่าเช่า');
-          });
-          const hasUtilityItem = (bill.items || []).some((it: any) => {
-            const t = (it.itemType || it.type || '').toString().toUpperCase();
-            const d = (it.description || '').toString().toLowerCase();
-            return t === 'WATER' || t === 'ELECTRICITY' || t === 'COMMON_FEE' || t === 'INTERNET' || t === 'PARKING' || d.includes('ค่าน้ำ') || d.includes('ค่าไฟ') || d.includes('ส่วนกลาง');
-          });
-          const hasDepositItem = (bill.items || []).some((it: any) => {
-            const t = (it.itemType || it.type || '').toString().toUpperCase();
-            const d = (it.description || '').toString().toLowerCase();
-            return t === 'DEPOSIT' || d.includes('ค่าประกัน');
-          });
-
           let billType = 'monthly_utility';
           let label = 'บิลรายเดือน';
 
-          if (rawKind === 'RENT' || rawKind === 'MONTHLY_RENT' || rawKind === 'TERM_RENT' || rawKind === 'RENTAL' || (hasRentItem && !hasUtilityItem)) {
+          if (rawKind === 'RENT' || rawKind === 'MONTHLY_RENT' || rawKind === 'TERM_RENT' || rawKind === 'RENTAL') {
             billType = 'rent';
             hasRentBill = true;
             label = billingSource === 'PROVISIONAL_TERM' || rawKind === 'TERM_RENT' ? 'ค่าเช่า (เทอม)' : 'ค่าเช่า (เดือน)';
-          } else if (rawKind === 'DEPOSIT' || rawKind === 'SECURITY_DEPOSIT' || (hasDepositItem && !hasRentItem && !hasUtilityItem)) {
+          } else if (rawKind === 'DEPOSIT' || rawKind === 'SECURITY_DEPOSIT') {
             billType = 'deposit';
             label = 'ค่าประกัน';
-          } else if (rawKind === 'LEGACY_COMBINED' || rawKind === 'COMBINED' || (hasRentItem && hasUtilityItem)) {
+          } else if (rawKind === 'LEGACY_COMBINED') {
             billType = 'legacy_combined';
             hasMonthlyUtilityBill = true;
             hasRentBill = true;

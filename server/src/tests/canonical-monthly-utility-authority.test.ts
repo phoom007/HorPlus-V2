@@ -883,4 +883,94 @@ describe('LOCAL-07 Shared Canonical Monthly Utility Calculation Authority', () =
       expect(sep9.lateFeeAmount).toBe('100.00'); // Still 100 once
     });
   });
+
+  describe('Strict Genuine Legacy Bill Classification Suite (LEG1–LEG4)', () => {
+    function classifyBillComponent(bill: {
+      billKind?: string;
+      items?: Array<{ type?: string; itemType?: string; description?: string; amount?: string }>;
+      billingSource?: string;
+    }) {
+      const rawKind = (bill.billKind || '').toString().trim().toUpperCase();
+      const billingSource = bill.billingSource || 'CONTRACT';
+
+      let billType = 'monthly_utility';
+      let label = 'บิลรายเดือน';
+
+      if (rawKind === 'RENT' || rawKind === 'MONTHLY_RENT' || rawKind === 'TERM_RENT' || rawKind === 'RENTAL') {
+        billType = 'rent';
+        label = billingSource === 'PROVISIONAL_TERM' || rawKind === 'TERM_RENT' ? 'ค่าเช่า (เทอม)' : 'ค่าเช่า (เดือน)';
+      } else if (rawKind === 'DEPOSIT' || rawKind === 'SECURITY_DEPOSIT') {
+        billType = 'deposit';
+        label = 'ค่าประกัน';
+      } else if (rawKind === 'LEGACY_COMBINED') {
+        billType = 'legacy_combined';
+        label = 'บิลรายเดือน (รวมค่าเช่า)';
+      } else {
+        billType = 'monthly_utility';
+        label = 'บิลรายเดือน';
+      }
+
+      return { billType, label };
+    }
+
+    it('LEG1: billKind LEGACY_COMBINED -> legacy_combined with label "บิลรายเดือน (รวมค่าเช่า)"', () => {
+      const result = classifyBillComponent({
+        billKind: 'LEGACY_COMBINED',
+        items: [
+          { type: 'RENT', description: 'ค่าเช่าห้องพัก', amount: '4800.00' },
+          { type: 'WATER', description: 'ค่าน้ำประปา', amount: '180.00' },
+        ],
+      });
+
+      expect(result.billType).toBe('legacy_combined');
+      expect(result.label).toBe('บิลรายเดือน (รวมค่าเช่า)');
+    });
+
+    it('LEG2: modern RENT and MONTHLY_UTILITY -> separate components', () => {
+      const rentComp = classifyBillComponent({
+        billKind: 'RENT',
+        items: [{ type: 'RENT', description: 'ค่าเช่าห้องพัก', amount: '4800.00' }],
+      });
+      const utilityComp = classifyBillComponent({
+        billKind: 'MONTHLY_UTILITY',
+        items: [
+          { type: 'WATER', description: 'ค่าน้ำประปา', amount: '180.00' },
+          { type: 'ELECTRICITY', description: 'ค่าไฟฟ้า', amount: '420.00' },
+        ],
+      });
+
+      expect(rentComp.billType).toBe('rent');
+      expect(rentComp.label).toBe('ค่าเช่า (เดือน)');
+      expect(utilityComp.billType).toBe('monthly_utility');
+      expect(utilityComp.label).toBe('บิลรายเดือน');
+    });
+
+    it('LEG3: non-legacy bill containing both rent and utility items MUST NOT become legacy_combined', () => {
+      const nonLegacyMixedBill = classifyBillComponent({
+        billKind: 'MONTHLY_UTILITY',
+        items: [
+          { type: 'RENT', description: 'ค่าเช่าห้องพัก', amount: '4800.00' },
+          { type: 'WATER', description: 'ค่าน้ำประปา', amount: '180.00' },
+        ],
+      });
+
+      expect(nonLegacyMixedBill.billType).toBe('monthly_utility');
+      expect(nonLegacyMixedBill.label).toBe('บิลรายเดือน');
+      expect(nonLegacyMixedBill.label).not.toContain('รวมค่าเช่า');
+    });
+
+    it('LEG4: unapproved or unknown rawKind falls back to monthly_utility and NEVER combines without genuine LEGACY_COMBINED', () => {
+      const unknownKindBill = classifyBillComponent({
+        billKind: 'UNKNOWN_CUSTOM_KIND',
+        items: [
+          { type: 'RENT', description: 'ค่าเช่า', amount: '4800.00' },
+          { type: 'ELECTRICITY', description: 'ค่าไฟ', amount: '350.00' },
+        ],
+      });
+
+      expect(unknownKindBill.billType).toBe('monthly_utility');
+      expect(unknownKindBill.label).toBe('บิลรายเดือน');
+      expect(unknownKindBill.label).not.toContain('รวมค่าเช่า');
+    });
+  });
 });

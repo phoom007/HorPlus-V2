@@ -32,6 +32,7 @@ import {
   MeterRowState,
   formatComponentDetailAmount,
   getOwnerFinancialBreakdown,
+  resolveOwnerMeterDisplayStatus,
 } from '../../pages/owner/meters';
 import {
   Room,
@@ -162,17 +163,13 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
   const effectiveTenantName = roomCtx ? roomCtx.tenantName : tenant?.name;
   const dailyCheckOutDate = roomCtx?.dailyCheckOutDate || null;
   const effectiveDailyTenantName = roomCtx?.dailyTenantName || (dailyCheckOutDate ? (effectiveTenantName || 'ผู้พักรายวัน') : null);
-  const isDailyContext = roomCtx?.billingSource === 'DAILY_STAY' || Boolean(roomCtx?.isDailyUnpaid) || Boolean(roomCtx?.isDailyFinancialTail);
-  const isDailyOverdue = Boolean(roomCtx?.isDailyOverdue || roomCtx?.isDailyFinancialTail);
-  const isDailyRentPaid = Boolean(roomCtx?.isDailyRentPaid);
-
-  // S1 Authority: overallFinancialStatus drives visible badge/text/border; monthlyUtilityBillStatus drives switch & meter reading lock
-  const overallFinancialStatus = (roomCtx?.overallFinancialStatus as string) || (roomCtx?.billStatus as string) || row.billStatus;
-  const monthlyUtilityBillStatus = (roomCtx?.monthlyUtilityBillStatus as string) || (row as any).monthlyUtilityBillStatus || row.billStatus;
-  const isMonthlyUtilityIssued = monthlyUtilityBillStatus !== 'draft' && monthlyUtilityBillStatus !== 'cancelled';
-  const isMonthlyUtilityPaid = Boolean(roomCtx?.isMonthlyUtilityPaid || (row as any).isMonthlyUtilityPaid || monthlyUtilityBillStatus === 'paid');
-  const isOverallPaid = overallFinancialStatus === 'paid' || Boolean(roomCtx?.isPaid);
-  const isOverallUnpaid = overallFinancialStatus === 'unpaid';
+  const displayStatus = resolveOwnerMeterDisplayStatus(roomCtx, row);
+  const isDailyContext = displayStatus.isDaily;
+  const isDailyOverdue = displayStatus.statusKey === 'DAILY_OVERDUE';
+  const isDailyRentPaid = displayStatus.statusKey === 'DAILY_PAID';
+  const isMonthlyUtilityIssued = displayStatus.isMonthlyUtilityIssued;
+  const isMonthlyUtilityPaid = displayStatus.isMonthlyUtilityPaid;
+  const isOverallPaid = displayStatus.isOverallPaid;
   const isRowPaid = !isDailyContext && isMonthlyUtilityPaid;
 
   const hasElecBaseline = row.elecPrev !== '' && row.elecPrev !== null && row.elecPrev !== undefined;
@@ -379,20 +376,16 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
     if (isFuture) {
       return 'border-yellow-400 hover:border-yellow-500';
     }
-    if (isDailyContext) {
-      if (isDailyRentPaid) {
-        return 'border-emerald-400 hover:border-emerald-500';
-      }
-      return 'border-amber-400 hover:border-amber-500';
+    if (displayStatus.tone === 'danger') {
+      return 'border-rose-400 hover:border-rose-500';
     }
-    // PO Requirement A: If MONTHLY_UTILITY unissued -> ยังไม่ออกบิล (gray border)
-    if (!isMonthlyUtilityIssued) {
-      return 'border-slate-200 hover:border-slate-300';
-    }
-    if (isOverallPaid) {
+    if (displayStatus.tone === 'success') {
       return 'border-emerald-400 hover:border-emerald-500';
     }
-    return 'border-amber-400 hover:border-amber-500';
+    if (displayStatus.tone === 'warning') {
+      return 'border-amber-400 hover:border-amber-500';
+    }
+    return 'border-slate-200 hover:border-slate-300';
   })();
 
   return (
@@ -409,59 +402,44 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
           </span>
           {/* Status Badge */}
           {(() => {
-            const hasHistoricalDaily = (roomCtx?.historicalDailyCount || 0) > 0;
-            const hasMonthlyContractOrBill = Boolean(
-              roomCtx?.billingSource === 'CONTRACT' ||
-              roomCtx?.billingSource === 'PROVISIONAL_MONTHLY' ||
-              roomCtx?.billingSource === 'PROVISIONAL_TERM' ||
-              (row.billStatus !== 'draft' && row.billStatus !== 'cancelled')
-            );
-
-            if (isDailyContext || (hasHistoricalDaily && !hasMonthlyContractOrBill)) {
-              if (isDailyOverdue) {
+            if (displayStatus.isDaily) {
+              if (displayStatus.statusKey === 'DAILY_OVERDUE') {
                 return (
                   <span className="inline-flex items-center px-2.5 py-0.5 bg-rose-100 text-rose-800 text-xs font-bold rounded-md border border-rose-200">
                     <AlertCircle className="w-3 h-3 text-rose-600 mr-1 shrink-0" />
-                    รายวัน
+                    {displayStatus.label}
                   </span>
                 );
               }
 
-              if (isDailyRentPaid) {
+              if (displayStatus.statusKey === 'DAILY_PAID') {
                 return (
                   <span className="inline-flex items-center px-2.5 py-0.5 bg-emerald-100 text-emerald-800 text-xs font-bold rounded-md border border-emerald-200">
                     <CheckCircle className="w-3 h-3 text-emerald-600 mr-1 shrink-0" />
-                    รายวัน
+                    {displayStatus.label}
                   </span>
                 );
               }
 
               return (
                 <span className="text-xs font-extrabold px-2.5 py-0.5 rounded-md bg-slate-100 text-slate-600 border border-slate-200">
-                  รายวัน
+                  {displayStatus.label}
                 </span>
               );
             }
 
-            // PO Requirement A: Lifecycle-aware status resolution
-            // If MONTHLY_UTILITY unissued -> ยังไม่ออกบิล (even if RENT exists)
-            if (!isMonthlyUtilityIssued) {
-              return (
-                <span className="text-xs font-extrabold px-2.5 py-0.5 rounded-md bg-slate-100 text-slate-600">
-                  ยังไม่ออกบิล
-                </span>
-              );
-            }
-
-            // Issued: S1 overallFinancialStatus
             return (
               <span
-                className={`text-xs font-extrabold px-2.5 py-0.5 rounded-md ${isOverallPaid
+                className={`text-xs font-extrabold px-2.5 py-0.5 rounded-md ${displayStatus.tone === 'success'
                     ? 'bg-emerald-100 text-emerald-800'
-                    : 'bg-amber-100 text-amber-800'
+                    : displayStatus.tone === 'warning'
+                      ? 'bg-amber-100 text-amber-800'
+                      : displayStatus.tone === 'danger'
+                        ? 'bg-rose-100 text-rose-800'
+                        : 'bg-slate-100 text-slate-600'
                   }`}
               >
-                {isOverallPaid ? 'ชำระแล้ว' : 'รอชำระ'}
+                {displayStatus.label}
               </span>
             );
           })()}
@@ -472,10 +450,10 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
           <button
             type="button"
             role="switch"
-            aria-checked={isDailyContext ? true : (monthlyUtilityBillStatus !== 'draft' && monthlyUtilityBillStatus !== 'cancelled')}
-            disabled={isSaving || isDailyContext || isMonthlyUtilityPaid || !selectedBillingCycleId}
+            aria-checked={displayStatus.isDaily ? true : isMonthlyUtilityIssued}
+            disabled={isSaving || displayStatus.isDaily || isMonthlyUtilityPaid || !selectedBillingCycleId}
             onClick={() => onToggleStatusSwitch(row)}
-            className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none disabled:cursor-not-allowed disabled:opacity-60 ${isDailyContext
+            className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none disabled:cursor-not-allowed disabled:opacity-60 ${displayStatus.isDaily
                 ? isDailyOverdue
                   ? 'bg-rose-500'
                   : isDailyRentPaid
@@ -483,12 +461,12 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
                     : 'bg-amber-400'
                 : isMonthlyUtilityPaid
                   ? 'bg-emerald-600'
-                  : monthlyUtilityBillStatus !== 'draft' && monthlyUtilityBillStatus !== 'cancelled'
+                  : isMonthlyUtilityIssued
                     ? 'bg-amber-400'
                     : 'bg-slate-300'
               }`}
             title={
-              isDailyContext
+              displayStatus.isDaily
                 ? isDailyOverdue
                   ? 'เกินกำหนดชำระ (รายวัน)'
                   : isDailyRentPaid
@@ -496,14 +474,14 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
                     : 'รอชำระเงิน (รายวัน)'
                 : isMonthlyUtilityPaid
                   ? 'บิลรายเดือนชำระแล้ว (ล็อค)'
-                  : monthlyUtilityBillStatus !== 'draft' && monthlyUtilityBillStatus !== 'cancelled'
+                  : isMonthlyUtilityIssued
                     ? 'คลิกเพื่อยกเลิกบิล'
                     : 'คลิกเพื่อออกบิล'
             }
           >
             <span
               aria-hidden="true"
-              className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out ${isDailyContext || (monthlyUtilityBillStatus !== 'draft' && monthlyUtilityBillStatus !== 'cancelled') ? 'translate-x-5' : 'translate-x-0'
+              className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out ${displayStatus.isDaily || isMonthlyUtilityIssued ? 'translate-x-5' : 'translate-x-0'
                 }`}
             />
           </button>
