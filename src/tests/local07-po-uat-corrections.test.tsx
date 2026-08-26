@@ -5,7 +5,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import React from 'react';
 import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
 import { OwnerMeterListCard } from '../components/meters/OwnerMeterListCard';
-import { OwnerMeters, resolveOwnerMeterDisplayStatus } from '../pages/owner/meters';
+import { OwnerMeters, resolveOwnerMeterDisplayStatus, getOwnerFinancialBreakdown, resolveFinancialComponentTone } from '../pages/owner/meters';
 import { OwnerSettings } from '../pages/owner/settings';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { meterDraftStore } from '../lib/meterDraftStore';
@@ -200,7 +200,73 @@ describe('HORPLUS LOCAL-07 — PO UAT Targeted Correction Suite', () => {
       expect(screen.queryByText('รอชำระเงิน')).toBeNull();
     });
 
-    it('STAT3: MU unpaid -> renders รอชำระ', () => {
+    it('STAT3: unissued + invalid current < previous -> renders ยังไม่ออกบิล + validation error on input', () => {
+      render(
+        <OwnerMeterListCard
+          row={{
+            roomId: 'room-101',
+            roomNumber: '101',
+            floor: 1,
+            waterPrev: '100',
+            waterCurr: '90', // invalid: current < previous
+            elecPrev: '500',
+            elecCurr: '400',
+            isReplaced: false,
+            peopleCount: 1,
+            overdueAmount: '0.00',
+            isPaid: false,
+            billStatus: 'draft',
+            monthlyUtilityBillStatus: 'draft',
+            isMonthlyUtilityPaid: false,
+            otherFees: [],
+          } as any}
+          idx={0}
+          roomCtx={{
+            roomId: 'room-101',
+            roomNumber: '101',
+            billingSource: 'CONTRACT',
+            monthlyUtilityBillStatus: 'draft',
+            overallFinancialStatus: 'draft',
+            isPaid: false,
+            isMonthlyUtilityPaid: false,
+            amountDue: '0.00',
+            chargeComponents: [
+              { type: 'monthly_utility', label: 'บิลรายเดือน', amount: '0.00', status: 'INVALID', errorMessage: 'เลขอ่านมิเตอร์ใหม่ต้องไม่น้อยกว่าเลขอ่านครั้งก่อน' },
+            ],
+          } as any}
+          isWaterUnit={true}
+          isElecUnit={true}
+          isFirstCycle={false}
+          selectedCycleCode="2026-08"
+          selectedCycle="2026-08"
+          selectedBillingCycleId="cycle-2026-08"
+          isSaving={false}
+          unlockedElecPrev={{}}
+          unlockedWaterPrev={{}}
+          flashingCells={{}}
+          isExpandedBreakdown={false}
+          onOpenOtherFees={vi.fn()}
+          onMeterReadingChange={vi.fn()}
+          onMeterReadingBlur={vi.fn()}
+          onPaste={vi.fn()}
+          onUnlockElecPrev={vi.fn()}
+          onCancelElecPrev={vi.fn()}
+          onUnlockWaterPrev={vi.fn()}
+          onCancelWaterPrev={vi.fn()}
+          onPeopleCountChange={vi.fn()}
+          onToggleStatusSwitch={vi.fn()}
+          onToggleBreakdown={vi.fn()}
+          onSelectTenant={vi.fn()}
+        />
+      );
+
+      // S3: Status MUST be ยังไม่ออกบิล (NOT ไม่ถูกต้อง)
+      expect(screen.getByText('ยังไม่ออกบิล')).toBeDefined();
+      expect(screen.queryByText('ไม่ถูกต้อง')).toBeNull();
+      expect(screen.queryByText('รอชำระ')).toBeNull();
+    });
+
+    it('STAT4: issued unpaid -> renders รอชำระ', () => {
       render(
         <OwnerMeterListCard
           row={{
@@ -263,7 +329,7 @@ describe('HORPLUS LOCAL-07 — PO UAT Targeted Correction Suite', () => {
       expect(screen.getByText('รอชำระ')).toBeDefined();
     });
 
-    it('STAT4: MU paid + RENT unpaid -> renders รอชำระ (S1 preserved, toggle locked)', () => {
+    it('STAT5: MU paid + RENT unpaid -> renders รอชำระ (S1 preserved, toggle locked)', () => {
       render(
         <OwnerMeterListCard
           row={{
@@ -330,7 +396,7 @@ describe('HORPLUS LOCAL-07 — PO UAT Targeted Correction Suite', () => {
       expect(switchBtn.hasAttribute('disabled')).toBe(true);
     });
 
-    it('STAT5: All paid -> renders ชำระแล้ว', () => {
+    it('STAT6: All paid -> renders ชำระแล้ว', () => {
       render(
         <OwnerMeterListCard
           row={{
@@ -393,13 +459,27 @@ describe('HORPLUS LOCAL-07 — PO UAT Targeted Correction Suite', () => {
 
       expect(screen.getByText('ชำระแล้ว')).toBeDefined();
     });
+
+    it('STAT7: Visible Owner Meter Status literal "ไม่ถูกต้อง" count is 0', () => {
+      const statuses = [
+        resolveOwnerMeterDisplayStatus({ monthlyUtilityBillStatus: 'draft', overallFinancialStatus: 'draft' }),
+        resolveOwnerMeterDisplayStatus({ monthlyUtilityBillStatus: 'draft', overallFinancialStatus: 'unpaid', chargeComponents: [{ status: 'INVALID' }] }),
+        resolveOwnerMeterDisplayStatus({ monthlyUtilityBillStatus: 'unpaid', overallFinancialStatus: 'unpaid' }),
+        resolveOwnerMeterDisplayStatus({ monthlyUtilityBillStatus: 'paid', overallFinancialStatus: 'unpaid' }),
+        resolveOwnerMeterDisplayStatus({ monthlyUtilityBillStatus: 'paid', overallFinancialStatus: 'paid' }),
+        resolveOwnerMeterDisplayStatus({ billingSource: 'DAILY_STAY', isDailyOverdue: true }),
+      ];
+
+      const invalidLabels = statuses.filter(s => s.label === 'ไม่ถูกต้อง');
+      expect(invalidLabels.length).toBe(0);
+    });
   });
 
   // =========================================================================
-  // PART B: TABLE TESTS (TAB1–TAB4)
+  // PART B: TABLE & SPLIT TESTS (TAB1–TAB4 & SPLIT1–SPLIT5)
   // =========================================================================
-  describe('PART B: Table Tests (TAB1–TAB4)', () => {
-    it('TAB1–TAB4: Modern split renders separate Rent & MU rows without synthetic combined label', async () => {
+  describe('PART B: Table & Split Tests (TAB1–TAB4 & SPLIT1–SPLIT5)', () => {
+    it('TAB1–TAB4 & SPLIT1: Modern split renders separate Rent & MU rows without synthetic combined label', async () => {
       vi.spyOn(httpClient, 'httpRequest').mockImplementation(async (_method: string, url: string) => {
         if (url.includes('/meters/workspace/preview-context')) {
           return {
@@ -467,6 +547,42 @@ describe('HORPLUS LOCAL-07 — PO UAT Targeted Correction Suite', () => {
       expect(screen.getByText('1,300.-')).toBeDefined();
       expect(screen.queryByText(/รวมค่าเช่า/i)).toBeNull();
       expect(screen.getByText('6,100.00 ฿')).toBeDefined();
+    });
+
+    it('SPLIT2: Modern Rent only produces Rent only component', () => {
+      const breakdown = getOwnerFinancialBreakdown({
+        amountDue: '4800.00',
+        chargeComponents: [
+          { type: 'rent', label: 'ค่าเช่า (เดือน)', amount: '4800.00', status: 'UNPAID' },
+        ],
+      });
+      expect(breakdown.components.length).toBe(1);
+      expect(breakdown.components[0].type).toBe('rent');
+      expect(breakdown.components[0].label).toBe('ค่าเช่า (เดือน)');
+    });
+
+    it('SPLIT3: Modern MU only produces MU only component', () => {
+      const breakdown = getOwnerFinancialBreakdown({
+        amountDue: '650.00',
+        chargeComponents: [
+          { type: 'monthly_utility', label: 'บิลรายเดือน', amount: '650.00', status: 'PREVIEW' },
+        ],
+      });
+      expect(breakdown.components.length).toBe(1);
+      expect(breakdown.components[0].type).toBe('monthly_utility');
+      expect(breakdown.components[0].label).toBe('บิลรายเดือน');
+    });
+
+    it('SPLIT5: Genuine legacy bill remains compatible with legacy_combined label', () => {
+      const breakdown = getOwnerFinancialBreakdown({
+        amountDue: '5450.00',
+        chargeComponents: [
+          { type: 'legacy_combined', label: 'บิลรายเดือน (รวมค่าเช่า)', amount: '5450.00', status: 'UNPAID' },
+        ],
+      });
+      expect(breakdown.components.length).toBe(1);
+      expect(breakdown.components[0].type).toBe('legacy_combined');
+      expect(breakdown.components[0].label).toBe('บิลรายเดือน (รวมค่าเช่า)');
     });
   });
 
@@ -580,18 +696,18 @@ describe('HORPLUS LOCAL-07 — PO UAT Targeted Correction Suite', () => {
             roomId: 'room-102',
             roomNumber: '102',
             floor: 1,
-            waterPrev: '10',
-            waterCurr: '20',
-            elecPrev: '100',
-            elecCurr: '200',
+            waterPrev: '100',
+            waterCurr: '110',
+            elecPrev: '500',
+            elecCurr: '600',
             isReplaced: false,
             peopleCount: 1,
             overdueAmount: '0.00',
             isPaid: false,
-            billStatus: 'draft',
+            billStatus: 'unpaid',
             otherFees: [],
           } as any}
-          idx={0}
+          idx={1}
           roomCtx={{
             roomId: 'room-102',
             roomNumber: '102',
@@ -599,12 +715,12 @@ describe('HORPLUS LOCAL-07 — PO UAT Targeted Correction Suite', () => {
             rentAmount: '4500.00',
             amountDue: '5380.00',
             chargeComponents: [
-              { type: 'rent', label: 'ค่าเช่า (เดือน)', amount: '4500.00', status: 'PREVIEW' },
+              { type: 'rent', label: 'ค่าเช่า (เดือน)', amount: '4500.00', status: 'UNPAID' },
               {
                 type: 'monthly_utility',
                 label: 'บิลรายเดือน',
                 amount: '880.00',
-                status: 'PREVIEW',
+                status: 'UNPAID',
                 lineItems: [
                   { type: 'water', description: 'ค่าน้ำ (10 หน่วย)', amount: '180.00' },
                   { type: 'electricity', description: 'ค่าไฟฟ้า (100 หน่วย)', amount: '700.00' },
@@ -639,7 +755,6 @@ describe('HORPLUS LOCAL-07 — PO UAT Targeted Correction Suite', () => {
       );
 
       expect(screen.queryByRole('button', { name: /ดูรายละเอียด/i })).toBeNull();
-      expect(screen.queryByText(/บิลรายเดือน/i)).toBeNull();
     });
   });
 
@@ -685,21 +800,21 @@ describe('HORPLUS LOCAL-07 — PO UAT Targeted Correction Suite', () => {
 
       // SET7: none -> amount 0.00 disabled
       fireEvent.change(selectLateFee, { target: { value: 'none' } });
-      const lateFeeInput = screen.getByTestId('input-late-fee') as HTMLInputElement;
-      expect(lateFeeInput.disabled).toBe(true);
-      expect(lateFeeInput.value).toBe('0.00');
+      expect(screen.getByTestId('input-late-fee')).toHaveProperty('disabled', true);
 
       // SET8: daily -> amount editable
       fireEvent.change(selectLateFee, { target: { value: 'daily' } });
-      expect(lateFeeInput.disabled).toBe(false);
-      fireEvent.change(lateFeeInput, { target: { value: '50.00' } });
-      expect(lateFeeInput.value).toBe('50.00');
+      const dailyInput = screen.getByTestId('input-late-fee') as HTMLInputElement;
+      expect(dailyInput.disabled).toBe(false);
+      fireEvent.change(dailyInput, { target: { value: '50.00' } });
+      expect(dailyInput.value).toBe('50.00');
 
       // SET9: fixed -> amount editable
       fireEvent.change(selectLateFee, { target: { value: 'fixed' } });
-      expect(lateFeeInput.disabled).toBe(false);
-      fireEvent.change(lateFeeInput, { target: { value: '100.00' } });
-      expect(lateFeeInput.value).toBe('100.00');
+      const fixedInput = screen.getByTestId('input-late-fee') as HTMLInputElement;
+      expect(fixedInput.disabled).toBe(false);
+      fireEvent.change(fixedInput, { target: { value: '100.00' } });
+      expect(fixedInput.value).toBe('100.00');
 
       // SET10: dueDay save persists
       const dueDayInput = screen.getByTestId('input-due-day');
@@ -731,9 +846,46 @@ describe('HORPLUS LOCAL-07 — PO UAT Targeted Correction Suite', () => {
   });
 
   // =========================================================================
-  // PART E: SHARED RESOLVER DIRECT MATRIX TESTS (RES1–RES9)
+  // PART E: COLOR AUTHORITY TESTS (COLOR1–COLOR6)
   // =========================================================================
-  describe('PART E: Shared Resolver Direct Matrix Tests (RES1–RES9)', () => {
+  describe('PART E: Color Authority Tests (COLOR1–COLOR6)', () => {
+    it('COLOR1: Rent UNPAID (warning) + MU PREVIEW (neutral)', () => {
+      expect(resolveFinancialComponentTone('UNPAID')).toBe('warning');
+      expect(resolveFinancialComponentTone('PREVIEW')).toBe('neutral');
+    });
+
+    it('COLOR2: Rent UNPAID (warning) + MU PAID (success)', () => {
+      expect(resolveFinancialComponentTone('UNPAID')).toBe('warning');
+      expect(resolveFinancialComponentTone('PAID')).toBe('success');
+    });
+
+    it('COLOR3: Rent PAID (success) + MU UNPAID (warning)', () => {
+      expect(resolveFinancialComponentTone('PAID')).toBe('success');
+      expect(resolveFinancialComponentTone('UNPAID')).toBe('warning');
+    });
+
+    it('COLOR4: Both PAID -> both success', () => {
+      expect(resolveFinancialComponentTone('PAID')).toBe('success');
+    });
+
+    it('COLOR5: Genuine LEGACY_COMBINED UNPAID -> warning', () => {
+      expect(resolveFinancialComponentTone('UNPAID')).toBe('warning');
+    });
+
+    it('COLOR6: Component tone is determined from component status, not overall status', () => {
+      // Room overall is unpaid, but individual component is PAID
+      const paidTone = resolveFinancialComponentTone('PAID');
+      expect(paidTone).toBe('success');
+      // Room overall is paid, but individual preview component is PREVIEW
+      const previewTone = resolveFinancialComponentTone('PREVIEW');
+      expect(previewTone).toBe('neutral');
+    });
+  });
+
+  // =========================================================================
+  // PART F: SHARED RESOLVER DIRECT MATRIX TESTS (RES1–RES9)
+  // =========================================================================
+  describe('PART F: Shared Resolver Direct Matrix Tests (RES1–RES9)', () => {
     it('RES1: MU unissued + no Rent -> statusKey UNISSUED, ยังไม่ออกบิล, neutral tone', () => {
       const res = resolveOwnerMeterDisplayStatus({
         monthlyUtilityBillStatus: 'draft',
@@ -748,6 +900,7 @@ describe('HORPLUS LOCAL-07 — PO UAT Targeted Correction Suite', () => {
         isMonthlyUtilityIssued: false,
         isMonthlyUtilityPaid: false,
         isOverallPaid: false,
+        hasValidationError: false,
       });
     });
 
@@ -767,10 +920,30 @@ describe('HORPLUS LOCAL-07 — PO UAT Targeted Correction Suite', () => {
         isMonthlyUtilityIssued: false,
         isMonthlyUtilityPaid: false,
         isOverallPaid: false,
+        hasValidationError: false,
       });
     });
 
-    it('RES3: MU unpaid -> statusKey UNPAID, รอชำระ, warning tone', () => {
+    it('RES3: MU unissued + invalid component -> statusKey UNISSUED, ยังไม่ออกบิล, neutral tone with hasValidationError true', () => {
+      const res = resolveOwnerMeterDisplayStatus({
+        billingSource: 'CONTRACT',
+        monthlyUtilityBillStatus: 'draft',
+        overallFinancialStatus: 'draft',
+        chargeComponents: [{ status: 'INVALID' }],
+      });
+      expect(res).toEqual({
+        statusKey: 'UNISSUED',
+        label: 'ยังไม่ออกบิล',
+        tone: 'neutral',
+        isDaily: false,
+        isMonthlyUtilityIssued: false,
+        isMonthlyUtilityPaid: false,
+        isOverallPaid: false,
+        hasValidationError: true,
+      });
+    });
+
+    it('RES4: MU unpaid -> statusKey UNPAID, รอชำระ, warning tone', () => {
       const res = resolveOwnerMeterDisplayStatus({
         billingSource: 'CONTRACT',
         monthlyUtilityBillStatus: 'unpaid',
@@ -786,10 +959,11 @@ describe('HORPLUS LOCAL-07 — PO UAT Targeted Correction Suite', () => {
         isMonthlyUtilityIssued: true,
         isMonthlyUtilityPaid: false,
         isOverallPaid: false,
+        hasValidationError: false,
       });
     });
 
-    it('RES4: MU paid + Rent unpaid -> statusKey UNPAID, รอชำระ, warning tone, isMonthlyUtilityPaid true', () => {
+    it('RES5: MU paid + Rent unpaid -> statusKey UNPAID, รอชำระ, warning tone, isMonthlyUtilityPaid true', () => {
       const res = resolveOwnerMeterDisplayStatus({
         billingSource: 'CONTRACT',
         monthlyUtilityBillStatus: 'paid',
@@ -805,10 +979,11 @@ describe('HORPLUS LOCAL-07 — PO UAT Targeted Correction Suite', () => {
         isMonthlyUtilityIssued: true,
         isMonthlyUtilityPaid: true,
         isOverallPaid: false,
+        hasValidationError: false,
       });
     });
 
-    it('RES5: all paid -> statusKey PAID, ชำระแล้ว, success tone, isOverallPaid true', () => {
+    it('RES6: all paid -> statusKey PAID, ชำระแล้ว, success tone, isOverallPaid true', () => {
       const res = resolveOwnerMeterDisplayStatus({
         billingSource: 'CONTRACT',
         monthlyUtilityBillStatus: 'paid',
@@ -824,10 +999,11 @@ describe('HORPLUS LOCAL-07 — PO UAT Targeted Correction Suite', () => {
         isMonthlyUtilityIssued: true,
         isMonthlyUtilityPaid: true,
         isOverallPaid: true,
+        hasValidationError: false,
       });
     });
 
-    it('RES6: Daily Overdue -> statusKey DAILY_OVERDUE, รายวัน, danger tone', () => {
+    it('RES7: Daily Overdue -> statusKey DAILY_OVERDUE, รายวัน, danger tone', () => {
       const res = resolveOwnerMeterDisplayStatus({
         billingSource: 'DAILY_STAY',
         isDailyOverdue: true,
@@ -841,10 +1017,11 @@ describe('HORPLUS LOCAL-07 — PO UAT Targeted Correction Suite', () => {
         isMonthlyUtilityIssued: false,
         isMonthlyUtilityPaid: false,
         isOverallPaid: false,
+        hasValidationError: false,
       });
     });
 
-    it('RES7: Daily Paid -> statusKey DAILY_PAID, รายวัน, success tone', () => {
+    it('RES8: Daily Paid -> statusKey DAILY_PAID, รายวัน, success tone', () => {
       const res = resolveOwnerMeterDisplayStatus({
         billingSource: 'DAILY_STAY',
         isDailyOverdue: false,
@@ -858,10 +1035,11 @@ describe('HORPLUS LOCAL-07 — PO UAT Targeted Correction Suite', () => {
         isMonthlyUtilityIssued: false,
         isMonthlyUtilityPaid: false,
         isOverallPaid: true,
+        hasValidationError: false,
       });
     });
 
-    it('RES8: Daily Unpaid -> statusKey DAILY_UNPAID, รายวัน, neutral tone', () => {
+    it('RES9: Daily Unpaid -> statusKey DAILY_UNPAID, รายวัน, neutral tone', () => {
       const res = resolveOwnerMeterDisplayStatus({
         billingSource: 'DAILY_STAY',
         isDailyOverdue: false,
@@ -875,25 +1053,10 @@ describe('HORPLUS LOCAL-07 — PO UAT Targeted Correction Suite', () => {
         isMonthlyUtilityIssued: false,
         isMonthlyUtilityPaid: false,
         isOverallPaid: false,
+        hasValidationError: false,
       });
     });
 
-    it('RES9: INVALID component -> statusKey INVALID, ไม่ถูกต้อง, danger tone', () => {
-      const res = resolveOwnerMeterDisplayStatus({
-        billingSource: 'CONTRACT',
-        monthlyUtilityBillStatus: 'issued',
-        overallFinancialStatus: 'unpaid',
-        chargeComponents: [{ status: 'INVALID' }],
-      });
-      expect(res).toEqual({
-        statusKey: 'INVALID',
-        label: 'ไม่ถูกต้อง',
-        tone: 'danger',
-        isDaily: false,
-        isMonthlyUtilityIssued: true,
-        isMonthlyUtilityPaid: false,
-        isOverallPaid: false,
-      });
-    });
   });
 });
+

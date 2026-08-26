@@ -376,22 +376,32 @@ export function getOwnerFinancialBreakdown(
 }
 
 export interface OwnerMeterDisplayStatus {
-  statusKey: 'UNISSUED' | 'UNPAID' | 'PAID' | 'DAILY_OVERDUE' | 'DAILY_PAID' | 'DAILY_UNPAID' | 'INVALID';
+  statusKey: 'UNISSUED' | 'UNPAID' | 'PAID' | 'DAILY_OVERDUE' | 'DAILY_PAID' | 'DAILY_UNPAID';
   label: string;
   tone: 'neutral' | 'warning' | 'success' | 'danger';
   isDaily: boolean;
   isMonthlyUtilityIssued: boolean;
   isMonthlyUtilityPaid: boolean;
   isOverallPaid: boolean;
+  hasValidationError?: boolean;
+}
+
+export function resolveFinancialComponentTone(status?: string): 'neutral' | 'warning' | 'success' | 'danger' {
+  if (status === 'PAID') return 'success';
+  if (status === 'UNPAID') return 'warning';
+  if (status === 'INVALID') return 'danger';
+  return 'neutral';
 }
 
 /**
  * Canonical Presentation Status Resolver for Owner Meter Workspace (Table & List).
- * S1 Precedence:
- * 1. Daily context -> DAILY_OVERDUE / DAILY_PAID / DAILY_UNPAID
- * 2. Invalid component -> INVALID
- * 3. Unissued Monthly Utility -> UNISSUED ("ยังไม่ออกบิล", neutral tone, toggle OFF)
- * 4. Issued Monthly Utility -> S1 overallFinancialStatus (PAID "ชำระแล้ว" / UNPAID "รอชำระ")
+ * Product Owner Lifecycle Rules (Decisions P1-P4):
+ * "ไม่ถูกต้อง" is NOT a bill status.
+ *
+ * 1. Daily context -> DAILY_OVERDUE / DAILY_PAID / DAILY_UNPAID ("รายวัน")
+ * 2. Unissued Monthly Utility (!isMuIssued) -> UNISSUED ("ยังไม่ออกบิล", neutral tone, toggle OFF)
+ * 3. Issued Monthly Utility + overall paid -> PAID ("ชำระแล้ว", success tone)
+ * 4. Issued Monthly Utility + overall unpaid -> UNPAID ("รอชำระ", warning tone)
  */
 export function resolveOwnerMeterDisplayStatus(roomCtx?: any, row?: any): OwnerMeterDisplayStatus {
   const isDailyContext = roomCtx?.billingSource === 'DAILY_STAY' || Boolean(roomCtx?.isDailyUnpaid) || Boolean(roomCtx?.isDailyFinancialTail);
@@ -411,7 +421,10 @@ export function resolveOwnerMeterDisplayStatus(roomCtx?: any, row?: any): OwnerM
   const isMuIssued = muStatus !== 'draft' && muStatus !== 'cancelled';
   const isOverallPaid = overallStatus === 'paid' || Boolean(roomCtx?.isPaid) || Boolean(row?.isPaid);
 
-  const hasInvalidComponent = (roomCtx?.chargeComponents || []).some((c: any) => c.status === 'INVALID');
+  const hasValidationError = Boolean(
+    row?.meterValidationError ||
+    (roomCtx?.chargeComponents || []).some((c: any) => c.status === 'INVALID')
+  );
 
   // 1. Daily context
   if (isDailyContext || (hasHistoricalDaily && !hasMonthlyContractOrBill)) {
@@ -424,6 +437,7 @@ export function resolveOwnerMeterDisplayStatus(roomCtx?: any, row?: any): OwnerM
         isMonthlyUtilityIssued: false,
         isMonthlyUtilityPaid: false,
         isOverallPaid: false,
+        hasValidationError,
       };
     }
     if (isDailyRentPaid) {
@@ -435,6 +449,7 @@ export function resolveOwnerMeterDisplayStatus(roomCtx?: any, row?: any): OwnerM
         isMonthlyUtilityIssued: false,
         isMonthlyUtilityPaid: false,
         isOverallPaid: true,
+        hasValidationError,
       };
     }
     return {
@@ -445,23 +460,11 @@ export function resolveOwnerMeterDisplayStatus(roomCtx?: any, row?: any): OwnerM
       isMonthlyUtilityIssued: false,
       isMonthlyUtilityPaid: false,
       isOverallPaid: false,
+      hasValidationError,
     };
   }
 
-  // 2. Invalid component error
-  if (hasInvalidComponent) {
-    return {
-      statusKey: 'INVALID',
-      label: 'ไม่ถูกต้อง',
-      tone: 'danger',
-      isDaily: false,
-      isMonthlyUtilityIssued: isMuIssued,
-      isMonthlyUtilityPaid: isMuPaid,
-      isOverallPaid: false,
-    };
-  }
-
-  // 3. PO Requirement A: If MONTHLY_UTILITY unissued -> ยังไม่ออกบิล (even if RENT exists)
+  // 2. DECISION P2: If MONTHLY_UTILITY unissued -> ALWAYS "ยังไม่ออกบิล" (neutral tone, toggle OFF)
   if (!isMuIssued) {
     return {
       statusKey: 'UNISSUED',
@@ -471,10 +474,11 @@ export function resolveOwnerMeterDisplayStatus(roomCtx?: any, row?: any): OwnerM
       isMonthlyUtilityIssued: false,
       isMonthlyUtilityPaid: false,
       isOverallPaid: false,
+      hasValidationError,
     };
   }
 
-  // 4. Issued: S1 overall financial status
+  // 3. Issued: S1 overall financial status
   if (isOverallPaid) {
     return {
       statusKey: 'PAID',
@@ -484,6 +488,7 @@ export function resolveOwnerMeterDisplayStatus(roomCtx?: any, row?: any): OwnerM
       isMonthlyUtilityIssued: true,
       isMonthlyUtilityPaid: isMuPaid,
       isOverallPaid: true,
+      hasValidationError,
     };
   }
 
@@ -495,6 +500,7 @@ export function resolveOwnerMeterDisplayStatus(roomCtx?: any, row?: any): OwnerM
     isMonthlyUtilityIssued: true,
     isMonthlyUtilityPaid: isMuPaid,
     isOverallPaid: false,
+    hasValidationError,
   };
 }
 

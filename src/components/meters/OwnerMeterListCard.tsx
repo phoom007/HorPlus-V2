@@ -33,6 +33,7 @@ import {
   formatComponentDetailAmount,
   getOwnerFinancialBreakdown,
   resolveOwnerMeterDisplayStatus,
+  resolveFinancialComponentTone,
 } from '../../pages/owner/meters';
 import {
   Room,
@@ -268,12 +269,15 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
   // Rent status color
   const rentComp = chargeComponents.find((c: any) => c.type === 'rent' || (c.label && c.label.includes('ค่าเช่า')));
   const rentStatus = rentComp?.status || (isDailyRentPaid || isRowPaid ? 'PAID' : (row.billStatus !== 'draft' && row.billStatus !== 'cancelled' ? 'UNPAID' : 'PREVIEW'));
+  const rentTone = resolveFinancialComponentTone(rentStatus);
 
   let rentColorClass = 'text-slate-600 font-semibold'; // PREVIEW / DRAFT / ยังไม่ออกบิล (เทา)
-  if (rentStatus === 'PAID') {
+  if (rentTone === 'success') {
     rentColorClass = 'text-emerald-700 font-bold'; // PAID / ชำระแล้ว (เขียว)
-  } else if (rentStatus === 'UNPAID') {
+  } else if (rentTone === 'warning') {
     rentColorClass = 'text-amber-700 font-bold'; // UNPAID / รอชำระเงิน (ส้ม)
+  } else if (rentTone === 'danger') {
+    rentColorClass = 'text-rose-600 font-bold';
   }
 
   const otherFeesCount = (row.otherFees || []).length;
@@ -977,13 +981,21 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
         {isExpandedBreakdown && listItemizedBreakdown.length > 0 && (
           <div className="mt-1 pt-1.5 border-t border-dashed border-gray-200 flex flex-col gap-1 animate-in fade-in duration-150">
             {listItemizedBreakdown.map((item, itemIdx) => {
-              let itemColorClass = 'text-slate-600 font-semibold'; // PREVIEW / DRAFT / เกินกำหนด (เทา)
+              const itemTone = resolveFinancialComponentTone(item.status);
+              let itemAmountColorClass = 'text-slate-600 font-semibold'; // neutral (เทา)
+              let itemLabelColorClass = 'text-slate-800 font-medium';
               if (item.type === 'late_fee') {
-                itemColorClass = 'text-rose-600 font-bold'; // ค่าปรับชำระล่าช้า (แดง)
-              } else if (item.status === 'PAID') {
-                itemColorClass = 'text-emerald-700 font-bold'; // ชำระแล้ว (เขียว)
-              } else if (item.status === 'UNPAID') {
-                itemColorClass = 'text-amber-700 font-bold'; // รอชำระเงิน (ส้ม)
+                itemAmountColorClass = 'text-rose-600 font-bold';
+                itemLabelColorClass = 'text-rose-700 font-semibold';
+              } else if (item.status === 'PAID' || itemTone === 'success') {
+                itemAmountColorClass = 'text-emerald-800 font-bold';
+                itemLabelColorClass = 'text-emerald-700 font-medium';
+              } else if (item.status === 'UNPAID' || itemTone === 'warning') {
+                itemAmountColorClass = 'text-amber-800 font-bold';
+                itemLabelColorClass = 'text-amber-700 font-medium';
+              } else if (item.status === 'INVALID' || itemTone === 'danger') {
+                itemAmountColorClass = 'text-rose-600 font-bold';
+                itemLabelColorClass = 'text-rose-600 font-medium';
               }
 
               return (
@@ -995,11 +1007,11 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
                 >
                   <div className="flex items-center gap-1.5 truncate">
                     {item.icon}
-                    <span className="truncate text-slate-800 font-medium">
+                    <span className={`truncate ${itemLabelColorClass}`}>
                       {item.label}
                     </span>
                   </div>
-                  <span className={`shrink-0 ml-2 ${itemColorClass}`}>
+                  <span className={`shrink-0 ml-2 ${itemAmountColorClass}`}>
                     {formatComponentDetailAmount(item.amount)}
                   </span>
                 </div>
