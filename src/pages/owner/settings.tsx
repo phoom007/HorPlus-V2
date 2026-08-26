@@ -214,6 +214,15 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
   const [internetFeeMode, setInternetFeeMode] = useState<string>('per_room');
   const [parkingFeeMode, setParkingFeeMode] = useState<string>('per_room');
   const [lateFeeType, setLateFeeType] = useState<string>('none');
+  const [isLateFeeSectionExpanded, setIsLateFeeSectionExpanded] = useState<boolean>(false);
+
+  useEffect(() => {
+    return () => {
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+      }
+    };
+  }, []);
 
   // Propagation Preview & Conflict state
   const isPropagationPreviewOpeningRef = useRef(false);
@@ -353,7 +362,8 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
 
       isUserTypingRef.current = false;
       setSaveStatus('saved');
-      setTimeout(() => setSaveStatus('idle'), 2000);
+      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+      saveTimeoutRef.current = setTimeout(() => setSaveStatus('idle'), 2000);
       onAddLog('แก้ไขอัตราค่าบริการรอบบิล', `อัปเดตอัตราค่าบริการประจำเดือน ${selectedCycle} สำเร็จ`, 'SETTINGS', dormId);
 
       // Targeted cache invalidation to propagate updated rates to Meter workspace live
@@ -768,7 +778,8 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
       isUserTypingRef.current = false;
       await fetchDormitoryDefaults();
       setSaveStatus('saved');
-      setTimeout(() => setSaveStatus('idle'), 2000);
+      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+      saveTimeoutRef.current = setTimeout(() => setSaveStatus('idle'), 2000);
 
       const dormId = selectedDormId || dorm?.id;
       if (dormId) {
@@ -1600,34 +1611,6 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                 </div>
               )}
 
-              {/* Due Date Setting */}
-              <div className="grid grid-cols-2 gap-4 text-xs pt-1">
-                <div className="space-y-1">
-                  <label className="block font-semibold text-slate-700 flex items-center gap-1.5">
-                    <Calendar className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
-                    วันครบกำหนดชำระของทุกเดือน (วันที่ 1 - 28) *
-                  </label>
-                  <input
-                    type="number"
-                    min={1}
-                    max={28}
-                    required
-                    value={localDueDay}
-                    onChange={(e) => {
-                      isUserTypingRef.current = true;
-                      setLocalDueDay(Number(e.target.value));
-                      setSaveStatus('typing');
-                    }}
-                    onBlur={(e) => {
-                      const val = Math.max(1, Math.min(28, Number(e.target.value) || 5));
-                      setLocalDueDay(val);
-                      handleSaveBackendDormitoryDefaults(undefined, { dueDay: val });
-                    }}
-                    className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-bold focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs"
-                    data-testid="input-due-day"
-                  />
-                </div>
-              </div>
 
               {/* Water Settings */}
               <div className="grid grid-cols-2 gap-4 text-xs">
@@ -1856,50 +1839,119 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                 </div>
               </div>
 
-              {/* Late Fee Penalty Settings */}
-              <div className="grid grid-cols-2 gap-4 text-xs">
-                <div className="space-y-1">
-                  <label className="block font-semibold text-slate-700 flex items-center gap-1.5">
-                    <SlidersHorizontal className="w-3.5 h-3.5 text-rose-500" />
-                    ค่าปรับเมื่อเกินวันกำหนด (บาท) *
-                  </label>
-                  <input
-                    type="number"
-                    required
-                    disabled={isCycleLocked || lateFeeType === 'none'}
-                    value={lateFeeType === 'none' ? '0' : localLateFee}
-                    onChange={(e) => {
-                      isUserTypingRef.current = true;
-                      setLocalLateFee(e.target.value);
-                      setSaveStatus('typing');
-                    }}
-                    onBlur={(e) => handleSaveCycleRateSettings({ lateFeeValue: e.target.value })}
-                    placeholder={lateFeeType === 'none' ? 'ฟรี' : '0'}
-                    className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-bold focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs disabled:opacity-50 disabled:bg-slate-100"
-                    data-testid="input-late-fee"
-                  />
-                </div>
+              {/* Collapsible Payment & Overdue Penalty Settings Section */}
+              <div className="bg-slate-50 border border-slate-200 rounded-2xl overflow-hidden transition-all">
+                <button
+                  type="button"
+                  onClick={() => setIsLateFeeSectionExpanded(prev => !prev)}
+                  className="w-full px-4 py-3 flex items-center justify-between text-left hover:bg-slate-100/80 transition-colors cursor-pointer"
+                  data-testid="toggle-late-fee-section"
+                >
+                  <div className="flex items-center gap-2">
+                    <Calendar className="w-4 h-4 text-indigo-600 shrink-0" />
+                    <span className="text-xs font-black text-slate-800">
+                      กำหนดชำระและค่าปรับเกินกำหนด
+                    </span>
+                  </div>
+                  <ChevronDown className={`w-4 h-4 text-slate-400 transition-transform duration-200 ${isLateFeeSectionExpanded ? 'rotate-180' : ''}`} />
+                </button>
 
-                <div className="space-y-1">
-                  <label className="block font-semibold text-slate-700">รูปแบบค่าปรับเกินกำหนด</label>
-                  <select
-                    value={lateFeeType || 'none'}
-                    disabled={isCycleLocked}
-                    onChange={(e) => {
-                      const newType = toCanonicalMode(e.target.value, 'late');
-                      setLateFeeType(newType);
-                      if (newType === 'none') setLocalLateFee('0.00');
-                      handleSaveCycleRateSettings({ lateFeeType: newType, lateFeeValue: newType === 'none' ? '0.00' : localLateFee });
-                    }}
-                    className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-medium focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs disabled:opacity-50 disabled:bg-slate-100 cursor-pointer"
-                    data-testid="select-late-fee-type"
-                  >
-                    <option value="none">ไม่คิดค่าปรับ (ฟรี)</option>
-                    <option value="daily">บาท/วัน</option>
-                    <option value="fixed">คิดครั้งเดียว</option>
-                    <option value="percentage">ร้อยละ (%)</option>
-                  </select>
-                </div>
+                {isLateFeeSectionExpanded && (
+                  <div className="p-4 pt-2 border-t border-slate-200/60 space-y-3.5 animate-in fade-in duration-150">
+                    {/* 1. วันครบกำหนดชำระของทุกเดือน */}
+                    <div className="space-y-1 text-xs">
+                      <label className="block font-semibold text-slate-700 flex items-center gap-1.5">
+                        <Calendar className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                        วันครบกำหนดชำระของทุกเดือน (วันที่ 1 - 28) *
+                      </label>
+                      <input
+                        type="number"
+                        min={1}
+                        max={28}
+                        required
+                        value={localDueDay}
+                        onChange={(e) => {
+                          isUserTypingRef.current = true;
+                          setLocalDueDay(Number(e.target.value));
+                          setSaveStatus('typing');
+                        }}
+                        onBlur={(e) => {
+                          const val = Math.max(1, Math.min(28, Number(e.target.value) || 5));
+                          setLocalDueDay(val);
+                          handleSaveBackendDormitoryDefaults(undefined, { dueDay: val });
+                        }}
+                        className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-bold focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs"
+                        data-testid="input-due-day"
+                      />
+                    </div>
+
+                    {/* 2. รูปแบบค่าปรับเกินกำหนด */}
+                    <div className="space-y-1 text-xs">
+                      <label className="block font-semibold text-slate-700 flex items-center gap-1.5">
+                        <SlidersHorizontal className="w-3.5 h-3.5 text-rose-500 shrink-0" />
+                        รูปแบบค่าปรับเกินกำหนด
+                      </label>
+                      <select
+                        value={lateFeeType || 'none'}
+                        disabled={isCycleLocked}
+                        onChange={(e) => {
+                          const newType = toCanonicalMode(e.target.value, 'late');
+                          setLateFeeType(newType);
+                          if (newType === 'none') {
+                            setLocalLateFee('0.00');
+                          }
+                          handleSaveCycleRateSettings({
+                            lateFeeType: newType,
+                            lateFeeValue: newType === 'none' ? '0.00' : (localLateFee === '0' || localLateFee === '0.00' ? '50.00' : localLateFee),
+                          });
+                        }}
+                        className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-medium focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs disabled:opacity-50 disabled:bg-slate-100 cursor-pointer"
+                        data-testid="select-late-fee-type"
+                      >
+                        {lateFeeType === 'percentage' && (
+                          <option value="percentage" disabled hidden>
+                            ไม่รองรับ (ร้อยละ)
+                          </option>
+                        )}
+                        <option value="none">ไม่คิดค่าปรับ (ฟรี)</option>
+                        <option value="daily">บาท/วัน</option>
+                        <option value="fixed">คิดครั้งเดียว</option>
+                      </select>
+                      {lateFeeType === 'percentage' && (
+                        <p className="text-[11px] text-rose-600 font-medium mt-1">
+                          รูปแบบค่าปรับร้อยละไม่รองรับในระบบ กรุณาเลือกรูปแบบใหม่
+                        </p>
+                      )}
+                    </div>
+
+                    {/* 3. ค่าปรับเมื่อเกินวันกำหนด (บาท) */}
+                    <div className="space-y-1 text-xs">
+                      <label className="block font-semibold text-slate-700 flex items-center gap-1.5">
+                        <DollarSign className="w-3.5 h-3.5 text-rose-500 shrink-0" />
+                        ค่าปรับเมื่อเกินวันกำหนด (บาท) *
+                      </label>
+                      <input
+                        type="number"
+                        required
+                        disabled={isCycleLocked || lateFeeType === 'none'}
+                        value={lateFeeType === 'none' ? '0.00' : localLateFee}
+                        onChange={(e) => {
+                          isUserTypingRef.current = true;
+                          setLocalLateFee(e.target.value);
+                          setSaveStatus('typing');
+                        }}
+                        onBlur={(e) => {
+                          if (lateFeeType !== 'none') {
+                            handleSaveCycleRateSettings({ lateFeeValue: e.target.value });
+                          }
+                        }}
+                        placeholder={lateFeeType === 'none' ? 'ฟรี' : '0.00'}
+                        className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-bold focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs disabled:opacity-50 disabled:bg-slate-100"
+                        data-testid="input-late-fee"
+                      />
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Propagation Preview Action Button (Requirement 5) */}

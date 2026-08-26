@@ -233,6 +233,10 @@ describe('Wave 1G — Owner Property UI Component & Integration Tests', () => {
         />
       );
 
+      // Expand collapsible section
+      const toggleSection = screen.getByTestId('toggle-late-fee-section');
+      fireEvent.click(toggleSection);
+
       const dueDayInput = screen.getByTestId('input-due-day');
       fireEvent.change(dueDayInput, { target: { value: '10' } });
       fireEvent.blur(dueDayInput);

@@ -169,6 +169,7 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
   // S1 Authority: overallFinancialStatus drives visible badge/text/border; monthlyUtilityBillStatus drives switch & meter reading lock
   const overallFinancialStatus = (roomCtx?.overallFinancialStatus as string) || (roomCtx?.billStatus as string) || row.billStatus;
   const monthlyUtilityBillStatus = (roomCtx?.monthlyUtilityBillStatus as string) || (row as any).monthlyUtilityBillStatus || row.billStatus;
+  const isMonthlyUtilityIssued = monthlyUtilityBillStatus !== 'draft' && monthlyUtilityBillStatus !== 'cancelled';
   const isMonthlyUtilityPaid = Boolean(roomCtx?.isMonthlyUtilityPaid || (row as any).isMonthlyUtilityPaid || monthlyUtilityBillStatus === 'paid');
   const isOverallPaid = overallFinancialStatus === 'paid' || Boolean(roomCtx?.isPaid);
   const isOverallUnpaid = overallFinancialStatus === 'unpaid';
@@ -341,20 +342,14 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
       }
     }
 
-    // Include non-monthly utility components (or monthly utility when no lineItems are provided) - omit rent since it is displayed on top
+    // Include non-monthly utility components (e.g. deposit) - omit rent (Zone A), and omit generic monthly_utility/legacy_combined summary rows (PO Requirement C)
     for (const c of chargeComponents) {
       if (
         c.type !== 'rent' &&
-        (!c.label || !c.label.includes('ค่าเช่า'))
+        c.type !== 'monthly_utility' &&
+        c.type !== 'legacy_combined' &&
+        (!c.label || (!c.label.includes('ค่าเช่า') && !c.label.includes('บิลรายเดือน')))
       ) {
-        if (
-          (c.type === 'monthly_utility' || c.type === 'legacy_combined' || (c.label && c.label.includes('บิลรายเดือน'))) &&
-          backendLineItems.length > 0
-        ) {
-          // Already decomposed into backendLineItems above
-          continue;
-        }
-
         const compStatus = c.status || (isDailyContext && (c.type === 'deposit' || c.label?.includes('ค่าประกัน')) ? (roomCtx?.isDailyDepositPaidInDisplayedPeriod ? 'PAID' : (roomCtx?.showDailyDepositLine ? 'UNPAID' : (isRowPaid ? 'PAID' : 'PREVIEW'))) : (isRowPaid || row.billStatus === 'paid' ? 'PAID' : (row.billStatus !== 'draft' ? 'UNPAID' : 'PREVIEW')));
         items.push({
           id: `item-comp-${c.label}`,
@@ -369,7 +364,7 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
     }
 
     return items;
-  }, [chargeComponents, backendLineItems, monthlyComp, isRowPaid, row.billStatus, isDailyContext, roomCtx]);
+  }, [chargeComponents, backendLineItems, isRowPaid, isDailyContext, roomCtx]);
 
   // Dynamic Card Border Color based on Status:
   // - ยังไม่ออกบิล / ว่าง: สีเทา (border-slate-200)
@@ -390,13 +385,14 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
       }
       return 'border-amber-400 hover:border-amber-500';
     }
+    // PO Requirement A: If MONTHLY_UTILITY unissued -> ยังไม่ออกบิล (gray border)
+    if (!isMonthlyUtilityIssued) {
+      return 'border-slate-200 hover:border-slate-300';
+    }
     if (isOverallPaid) {
       return 'border-emerald-400 hover:border-emerald-500';
     }
-    if (isOverallUnpaid || (overallFinancialStatus !== 'draft' && overallFinancialStatus !== 'cancelled')) {
-      return 'border-amber-400 hover:border-amber-500';
-    }
-    return 'border-slate-200 hover:border-slate-300';
+    return 'border-amber-400 hover:border-amber-500';
   })();
 
   return (
@@ -447,20 +443,25 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
               );
             }
 
+            // PO Requirement A: Lifecycle-aware status resolution
+            // If MONTHLY_UTILITY unissued -> ยังไม่ออกบิล (even if RENT exists)
+            if (!isMonthlyUtilityIssued) {
+              return (
+                <span className="text-xs font-extrabold px-2.5 py-0.5 rounded-md bg-slate-100 text-slate-600">
+                  ยังไม่ออกบิล
+                </span>
+              );
+            }
+
+            // Issued: S1 overallFinancialStatus
             return (
               <span
-                className={`text-xs font-extrabold px-2.5 py-0.5 rounded-md ${overallFinancialStatus === 'paid'
+                className={`text-xs font-extrabold px-2.5 py-0.5 rounded-md ${isOverallPaid
                     ? 'bg-emerald-100 text-emerald-800'
-                    : overallFinancialStatus !== 'draft' && overallFinancialStatus !== 'cancelled'
-                      ? 'bg-amber-100 text-amber-800'
-                      : 'bg-slate-100 text-slate-600'
+                    : 'bg-amber-100 text-amber-800'
                   }`}
               >
-                {overallFinancialStatus === 'paid'
-                  ? 'ชำระแล้ว'
-                  : overallFinancialStatus === 'draft' || overallFinancialStatus === 'cancelled'
-                    ? 'ยังไม่ออกบิล'
-                    : 'รอชำระเงิน'}
+                {isOverallPaid ? 'ชำระแล้ว' : 'รอชำระ'}
               </span>
             );
           })()}

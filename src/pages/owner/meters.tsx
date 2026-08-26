@@ -2943,16 +2943,16 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                                     }`}
                                 />
                               </button>
-                              <span className={`text-[10px] font-extrabold leading-none ${isOverallPaid
-                                ? 'text-emerald-700'
-                                : overallStatus !== 'draft' && overallStatus !== 'cancelled'
-                                  ? 'text-amber-700'
-                                  : 'text-slate-500'
+                              <span className={`text-[10px] font-extrabold leading-none ${!isMuIssued
+                                ? 'text-slate-500'
+                                : isOverallPaid
+                                  ? 'text-emerald-700'
+                                  : 'text-amber-700'
                                 }`}>
-                                {isOverallPaid
-                                  ? 'ชำระแล้ว'
-                                  : overallStatus === 'draft' || overallStatus === 'cancelled'
-                                    ? 'ยังไม่ออกบิล'
+                                {!isMuIssued
+                                  ? 'ยังไม่ออกบิล'
+                                  : isOverallPaid
+                                    ? 'ชำระแล้ว'
                                     : 'รอชำระ'}
                               </span>
                             </div>
