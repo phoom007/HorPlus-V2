@@ -2249,6 +2249,7 @@ export class MeterService {
               domainCode === 'MISSING_ELECTRICITY_METER_READING' ||
               domainCode === 'MISSING_METER_READING' ||
               domainCode === 'INVALID_BILLING_MODE' ||
+              domainCode === 'INVALID_LATE_FEE_MODE' ||
               domainCode === 'INVALID_METER_READING' ||
               domainCode === 'INVALID_METER_READING_LOWER' ||
               domainCode === 'MISSING_RATE_SNAPSHOT'
@@ -2264,6 +2265,8 @@ export class MeterService {
                 errorMessage = 'กรุณากรอกเลขมิเตอร์ของงวดนี้ก่อนออกบิล';
               } else if (errorCode === 'INVALID_BILLING_MODE') {
                 errorMessage = 'ประเภทการคิดค่าบริการไม่ถูกต้อง';
+              } else if (errorCode === 'INVALID_LATE_FEE_MODE') {
+                errorMessage = 'รูปแบบการคิดค่าปรับล่าช้าไม่ถูกต้อง';
               } else if (errorCode === 'INVALID_METER_READING') {
                 errorMessage = 'ค่ามิเตอร์ไม่ถูกต้อง (ต้องเป็นจำนวนเต็ม 0 ถึง 99999)';
               } else if (errorCode === 'INVALID_METER_READING_LOWER') {

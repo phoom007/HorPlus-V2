@@ -11,6 +11,7 @@ import { BillingService } from '../../services/billing.service.js';
 import { BillingCycleService } from '../../services/billing-cycle.service.js';
 import { cleanupService } from '../../services/cleanup.service.js';
 import { formatDecimal, toDecimal } from '../../utils/decimal-math.util.js';
+import { calculateCanonicalMonthlyUtility } from '../../utils/monthly-utility-calculator.util.js';
 
 import { PrismaBillingCycleRepository } from '../../db/repositories/billing-cycle.repository.js';
 
@@ -603,6 +604,427 @@ describe('HORPLUS LOCAL-07 — Late-Fee Overdue Reconciler & Snapshot Policy Aut
       // Pure GET read (simulated findUnique)
       const readBill = await prisma.bill.findUnique({ where: { id: billId } });
       expect(readBill?.version).toBe(versionBeforeGet);
+    });
+  });
+
+  describe('PART A & H: Bounded Batch Continuation & Completeness (>200 bills)', () => {
+    let batchDormId: string;
+    let batchCycleId: string;
+    const billIds: string[] = [];
+
+    beforeAll(async () => {
+      const dorm = await prisma.dormitory.create({
+        data: {
+          id: randomUUID(),
+          name: `Batch Completeness Dorm ${Date.now()}`,
+          status: 'active',
+        },
+      });
+      batchDormId = dorm.id;
+
+      await prisma.dormitoryBillingSettings.create({
+        data: {
+          dormitoryId: batchDormId,
+          waterBillingType: 'fixed',
+          waterRate: new Prisma.Decimal('100.00'),
+          electricityBillingType: 'fixed',
+          electricityRate: new Prisma.Decimal('200.00'),
+          lateFeeType: 'daily',
+          lateFeeValue: new Prisma.Decimal('50.00'),
+          dueDay: 5,
+          gracePeriodDays: 0,
+        },
+      });
+
+      const res = await billingCycleService.createBillingCycle(batchDormId, {
+        cycleCode: '2026-08-BATCH',
+        name: 'August Batch Cycle',
+        periodStart: '2026-08-01',
+        periodEnd: '2026-08-31',
+        billingDate: '2026-08-01',
+      });
+      batchCycleId = res.cycle.id;
+
+      // Update cycle dueDate to 2026-08-05 for test referenceTime 2026-08-08
+      await prisma.billingCycle.update({
+        where: { id: batchCycleId },
+        data: { dueDate: new Date('2026-08-05T00:00:00.000Z') },
+      });
+
+      const bldg = await prisma.building.create({
+        data: { id: randomUUID(), dormitoryId: batchDormId, name: 'Batch Bldg' },
+      });
+
+      // Seed 450 rooms, tenants, contracts, bills
+      for (let i = 1; i <= 450; i++) {
+        const r = await prisma.room.create({
+          data: {
+            id: randomUUID(),
+            dormitoryId: batchDormId,
+            buildingId: bldg.id,
+            roomNumber: `B-${i.toString().padStart(3, '0')}`,
+            normalizedRoomNumber: `b${i}`,
+            floor: 1,
+            roomType: 'standard',
+            status: 'occupied',
+            monthlyRent: new Prisma.Decimal('4000.00'),
+          },
+        });
+
+        const t = await prisma.tenant.create({
+          data: {
+            id: randomUUID(),
+            dormitoryId: batchDormId,
+            firstName: `Tenant`,
+            lastName: `${i}`,
+            displayName: `Tenant ${i}`,
+            phone: `081${i.toString().padStart(7, '0')}`,
+            tenantNumber: `TNT-B-${i}`,
+            status: 'active',
+          },
+        });
+
+        await prisma.contract.create({
+          data: {
+            id: randomUUID(),
+            dormitoryId: batchDormId,
+            roomId: r.id,
+            tenantId: t.id,
+            contractNumber: `CTR-B-${i}`,
+            startDate: new Date('2026-01-01T00:00:00.000Z'),
+            endDate: new Date('2026-12-31T00:00:00.000Z'),
+            status: 'active',
+            rentAmount: new Prisma.Decimal('4000.00'),
+            depositAmount: new Prisma.Decimal('4000.00'),
+          },
+        });
+
+        const b = await prisma.bill.create({
+          data: {
+            id: randomUUID(),
+            dormitoryId: batchDormId,
+            billingCycleId: batchCycleId,
+            roomId: r.id,
+            billNumber: `INV-BATCH-${i}`,
+            billKind: 'MONTHLY_UTILITY',
+            status: 'unpaid',
+            billingDate: new Date('2026-08-01T00:00:00.000Z'),
+            dueDate: new Date('2026-08-05T00:00:00.000Z'),
+            subtotal: new Prisma.Decimal('300.00'),
+            totalAmount: new Prisma.Decimal('300.00'),
+            outstandingAmount: new Prisma.Decimal('300.00'),
+            version: 1,
+          },
+        });
+
+        billIds.push(b.id);
+      }
+    });
+
+    it('WRK-BATCH-1 to WRK-BATCH-4: 450 overdue bills are ALL processed completely across 3 batches (200 + 200 + 50) without starvation', async () => {
+      // Run single reconciliation run on Aug 8 (+150 late fee -> total: 450.00)
+      const summary = await reconciler.reconcileOverdueBills(
+        new Date('2026-08-08T10:00:00.000Z'),
+        batchDormId
+      );
+
+      // Scanned all 450
+      expect(summary.scanned).toBe(450);
+      expect(summary.changed).toBe(450);
+      expect(summary.noop).toBe(0);
+      expect(summary.failed).toBe(0);
+      expect(summary.skipped).toBe(0);
+
+      // Verify all 450 in DB are reconciled to 450.00
+      const unreconciled = await prisma.bill.count({
+        where: {
+          dormitoryId: batchDormId,
+          totalAmount: { not: new Prisma.Decimal('450.00') },
+        },
+      });
+      expect(unreconciled).toBe(0); // 0 remaining stale bills
+    }, 120000);
+
+    it('WRK-BATCH-5 & WRK-BATCH-7: When all 450 are already canonical, second run scans all and NO-OPs without infinite loop', async () => {
+      const summary = await reconciler.reconcileOverdueBills(
+        new Date('2026-08-08T10:00:00.000Z'),
+        batchDormId
+      );
+
+      expect(summary.scanned).toBe(450);
+      expect(summary.changed).toBe(0);
+      expect(summary.noop).toBe(450);
+      expect(summary.failed).toBe(0);
+      expect(summary.skipped).toBe(0);
+    }, 120000);
+
+    it('WRK-BATCH-6: Failure on bill #50 does not block later bills (e.g. bills 51..450)', async () => {
+      // Advance to Aug 9 (+200 late fee -> total: 500.00)
+      // Delete contract for 50th bill to trigger error during preview generation
+      const bill50 = await prisma.bill.findUnique({
+        where: { id: billIds[49] },
+      });
+      await prisma.contract.deleteMany({
+        where: { dormitoryId: batchDormId, roomId: bill50!.roomId },
+      });
+
+      const summary = await reconciler.reconcileOverdueBills(
+        new Date('2026-08-09T10:00:00.000Z'),
+        batchDormId
+      );
+
+      expect(summary.scanned).toBe(450);
+      expect(summary.changed).toBe(449);
+      expect(summary.failed + summary.skipped).toBe(1);
+    }, 120000);
+  });
+
+  describe('PART B: Multi-Instance DB Lock & Concurrency Proof', () => {
+    it('CONC1: Two concurrent reconciliation attempts on SAME stale bill execute with row-level serialization', async () => {
+      const lockDorm = await prisma.dormitory.create({
+        data: { id: randomUUID(), name: 'Lock Proof Dorm', status: 'active' },
+      });
+      await prisma.dormitoryBillingSettings.create({
+        data: {
+          dormitoryId: lockDorm.id,
+          waterBillingType: 'fixed',
+          waterRate: new Prisma.Decimal('100.00'),
+          electricityBillingType: 'fixed',
+          electricityRate: new Prisma.Decimal('200.00'),
+          lateFeeType: 'daily',
+          lateFeeValue: new Prisma.Decimal('50.00'),
+          dueDay: 5,
+          gracePeriodDays: 0,
+        },
+      });
+
+      const res = await billingCycleService.createBillingCycle(lockDorm.id, {
+        cycleCode: '2026-08-LOCK',
+        name: 'August Lock Cycle',
+        periodStart: '2026-08-01',
+        periodEnd: '2026-08-31',
+        billingDate: '2026-08-01',
+      });
+
+      await prisma.billingCycle.update({
+        where: { id: res.cycle.id },
+        data: { dueDate: new Date('2026-08-05T00:00:00.000Z') },
+      });
+
+      const bldg = await prisma.building.create({
+        data: { id: randomUUID(), dormitoryId: lockDorm.id, name: 'Lock Bldg' },
+      });
+      const room = await prisma.room.create({
+        data: {
+          id: randomUUID(),
+          dormitoryId: lockDorm.id,
+          buildingId: bldg.id,
+          roomNumber: 'L1',
+          normalizedRoomNumber: 'l1',
+          floor: 1,
+          roomType: 'standard',
+          status: 'occupied',
+          monthlyRent: new Prisma.Decimal('4000.00'),
+        },
+      });
+      const tenant = await prisma.tenant.create({
+        data: {
+          id: randomUUID(),
+          dormitoryId: lockDorm.id,
+          firstName: 'Lock',
+          lastName: 'Tenant',
+          displayName: 'Lock Tenant',
+          phone: '0899999999',
+          tenantNumber: `TNT-LOCK`,
+          status: 'active',
+        },
+      });
+      await prisma.contract.create({
+        data: {
+          id: randomUUID(),
+          dormitoryId: lockDorm.id,
+          roomId: room.id,
+          tenantId: tenant.id,
+          contractNumber: `CTR-LOCK`,
+          startDate: new Date('2026-01-01T00:00:00.000Z'),
+          endDate: new Date('2026-12-31T00:00:00.000Z'),
+          status: 'active',
+          rentAmount: new Prisma.Decimal('4000.00'),
+          depositAmount: new Prisma.Decimal('4000.00'),
+        },
+      });
+
+      const bill = await prisma.bill.create({
+        data: {
+          id: randomUUID(),
+          dormitoryId: lockDorm.id,
+          billingCycleId: res.cycle.id,
+          roomId: room.id,
+          billNumber: `INV-LOCK-1`,
+          billKind: 'MONTHLY_UTILITY',
+          status: 'unpaid',
+          billingDate: new Date('2026-08-01T00:00:00.000Z'),
+          dueDate: new Date('2026-08-05T00:00:00.000Z'),
+          subtotal: new Prisma.Decimal('300.00'),
+          totalAmount: new Prisma.Decimal('300.00'),
+          outstandingAmount: new Prisma.Decimal('300.00'),
+          version: 1,
+        },
+      });
+
+      // Run two concurrent reconciliations on the exact same bill
+      const [res1, res2] = await Promise.all([
+        (reconciler as any).reconcileSingleBillInTx(bill.id, lockDorm.id, new Date('2026-08-08T10:00:00.000Z')),
+        (reconciler as any).reconcileSingleBillInTx(bill.id, lockDorm.id, new Date('2026-08-08T10:00:00.000Z')),
+      ]);
+
+      // Exactly one must be 'changed', the other must be 'noop'
+      const statuses = [res1.status, res2.status].sort();
+      expect(statuses).toEqual(['changed', 'noop']);
+
+      const finalBill = await prisma.bill.findUnique({
+        where: { id: bill.id },
+        include: { items: true },
+      });
+
+      // Version incremented exactly once (1 -> 2)
+      expect(finalBill?.version).toBe(2);
+      expect(formatDecimal(finalBill?.totalAmount ?? '0')).toBe('450.00');
+      // Exactly 1 late_fee item (no duplicate items)
+      expect(finalBill?.items.filter((i) => i.type === 'late_fee').length).toBe(1);
+    });
+  });
+
+  describe('PART E: Unsupported Percentage Mode Fail-Closed Handling', () => {
+    it('PCT1: Calculator throws INVALID_LATE_FEE_MODE when encountering percentage mode', () => {
+      expect(() => {
+        calculateCanonicalMonthlyUtility({
+          dueDate: new Date('2026-08-05T00:00:00.000Z'),
+          asOfDate: new Date('2026-08-08T00:00:00.000Z'),
+          rateSnapshot: {
+            waterBillingType: 'fixed',
+            waterRate: '100.00',
+            electricityBillingType: 'fixed',
+            electricityRate: '200.00',
+            lateFeeType: 'percentage',
+            lateFeeValue: '10.00',
+            gracePeriodDays: 0,
+          },
+        });
+      }).toThrowError('INVALID_LATE_FEE_MODE');
+    });
+
+    it('PCT2 & PCT4: Worker encounters percentage snapshot -> skips bill with INVALID_LATE_FEE_MODE without 0-penalty mutation', async () => {
+      const pctDorm = await prisma.dormitory.create({
+        data: { id: randomUUID(), name: 'Percentage Dorm', status: 'active' },
+      });
+      await prisma.dormitoryBillingSettings.create({
+        data: {
+          dormitoryId: pctDorm.id,
+          waterBillingType: 'fixed',
+          waterRate: new Prisma.Decimal('100.00'),
+          electricityBillingType: 'fixed',
+          electricityRate: new Prisma.Decimal('200.00'),
+          lateFeeType: 'percentage',
+          lateFeeValue: new Prisma.Decimal('10.00'),
+          dueDay: 5,
+          gracePeriodDays: 0,
+        },
+      });
+
+      const res = await billingCycleService.createBillingCycle(pctDorm.id, {
+        cycleCode: '2026-08-PCT',
+        name: 'August Percentage Cycle',
+        periodStart: '2026-08-01',
+        periodEnd: '2026-08-31',
+        billingDate: '2026-08-01',
+      });
+
+      await prisma.billingCycle.update({
+        where: { id: res.cycle.id },
+        data: { dueDate: new Date('2026-08-05T00:00:00.000Z') },
+      });
+
+      const bldg = await prisma.building.create({
+        data: { id: randomUUID(), dormitoryId: pctDorm.id, name: 'Pct Bldg' },
+      });
+      const room = await prisma.room.create({
+        data: {
+          id: randomUUID(),
+          dormitoryId: pctDorm.id,
+          buildingId: bldg.id,
+          roomNumber: 'P1',
+          normalizedRoomNumber: 'p1',
+          floor: 1,
+          roomType: 'standard',
+          status: 'occupied',
+          monthlyRent: new Prisma.Decimal('4000.00'),
+        },
+      });
+      const tenant = await prisma.tenant.create({
+        data: {
+          id: randomUUID(),
+          dormitoryId: pctDorm.id,
+          firstName: 'Pct',
+          lastName: 'Tenant',
+          displayName: 'Pct Tenant',
+          phone: '0877777777',
+          tenantNumber: `TNT-PCT`,
+          status: 'active',
+        },
+      });
+      await prisma.contract.create({
+        data: {
+          id: randomUUID(),
+          dormitoryId: pctDorm.id,
+          roomId: room.id,
+          tenantId: tenant.id,
+          contractNumber: `CTR-PCT`,
+          startDate: new Date('2026-01-01T00:00:00.000Z'),
+          endDate: new Date('2026-12-31T00:00:00.000Z'),
+          status: 'active',
+          rentAmount: new Prisma.Decimal('4000.00'),
+          depositAmount: new Prisma.Decimal('4000.00'),
+        },
+      });
+
+      const bill = await prisma.bill.create({
+        data: {
+          id: randomUUID(),
+          dormitoryId: pctDorm.id,
+          billingCycleId: res.cycle.id,
+          roomId: room.id,
+          billNumber: `INV-PCT-1`,
+          billKind: 'MONTHLY_UTILITY',
+          status: 'unpaid',
+          billingDate: new Date('2026-08-01T00:00:00.000Z'),
+          dueDate: new Date('2026-08-05T00:00:00.000Z'),
+          subtotal: new Prisma.Decimal('300.00'),
+          totalAmount: new Prisma.Decimal('300.00'),
+          outstandingAmount: new Prisma.Decimal('300.00'),
+          version: 1,
+        },
+      });
+
+      const summary = await reconciler.reconcileOverdueBills(
+        new Date('2026-08-08T10:00:00.000Z'),
+        pctDorm.id
+      );
+
+      // Skipped with INVALID_LATE_FEE_MODE
+      expect(summary.scanned).toBe(1);
+      expect(summary.changed).toBe(0);
+      expect(summary.skipped).toBe(1);
+      expect(summary.details[0].reason).toBe('INVALID_LATE_FEE_MODE');
+
+      // Bill untouched (version 1, total 300.00, no zero-penalty items added)
+      const unchangedBill = await prisma.bill.findUnique({
+        where: { id: bill.id },
+        include: { items: true },
+      });
+      expect(unchangedBill?.version).toBe(1);
+      expect(formatDecimal(unchangedBill?.totalAmount ?? '0')).toBe('300.00');
+      expect(unchangedBill?.items.length).toBe(0);
     });
   });
 });

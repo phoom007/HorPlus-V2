@@ -129,78 +129,98 @@ export class LateFeeReconciliationService {
         whereClause.dormitoryId = dormitoryId;
       }
 
-      const candidateBills = await this.prisma.bill.findMany({
-        where: whereClause,
-        select: {
-          id: true,
-          dormitoryId: true,
-          roomId: true,
-          billingCycleId: true,
-        },
-        orderBy: [
-          { billingCycle: { dueDate: 'asc' } },
-          { id: 'asc' },
-        ],
-        take: 200,
-      });
+      let lastId: string | undefined = undefined;
+      let batchCount = 0;
+      const BATCH_SIZE = 200;
+      const MAX_BATCHES_PER_RUN = 50; // Bounds single run to at most 10,000 bills
 
-      scanned = candidateBills.length;
+      while (batchCount < MAX_BATCHES_PER_RUN) {
+        const candidateBills: Array<{
+          id: string;
+          dormitoryId: string;
+          roomId: string;
+          billingCycleId: string | null;
+        }> = await this.prisma.bill.findMany({
+          where: whereClause,
+          select: {
+            id: true,
+            dormitoryId: true,
+            roomId: true,
+            billingCycleId: true,
+          },
+          orderBy: { id: 'asc' },
+          take: BATCH_SIZE,
+          ...(lastId ? { skip: 1, cursor: { id: lastId } } : {}),
+        });
 
-      // 2. Sequential processing loop with per-bill transaction and error isolation
-      for (const candidate of candidateBills) {
-        try {
-          const result = await this.reconcileSingleBillInTx(
-            candidate.id,
-            candidate.dormitoryId,
-            referenceTime
-          );
+        if (candidateBills.length === 0) {
+          break;
+        }
 
-          if (result.status === 'changed') {
-            eligible++;
-            changed++;
+        batchCount++;
+        scanned += candidateBills.length;
+        lastId = candidateBills[candidateBills.length - 1].id;
+
+        // 2. Sequential processing loop with per-bill transaction and error isolation
+        for (const candidate of candidateBills) {
+          try {
+            const result = await this.reconcileSingleBillInTx(
+              candidate.id,
+              candidate.dormitoryId,
+              referenceTime
+            );
+
+            if (result.status === 'changed') {
+              eligible++;
+              changed++;
+              details.push({
+                billId: candidate.id,
+                dormitoryId: candidate.dormitoryId,
+                roomId: candidate.roomId,
+                status: 'changed',
+                oldTotal: result.oldTotal,
+                newTotal: result.newTotal,
+              });
+            } else if (result.status === 'noop') {
+              eligible++;
+              noop++;
+              details.push({
+                billId: candidate.id,
+                dormitoryId: candidate.dormitoryId,
+                roomId: candidate.roomId,
+                status: 'noop',
+                oldTotal: result.oldTotal,
+                newTotal: result.newTotal,
+                reason: result.reason,
+              });
+            } else {
+              skipped++;
+              details.push({
+                billId: candidate.id,
+                dormitoryId: candidate.dormitoryId,
+                roomId: candidate.roomId,
+                status: 'skipped',
+                reason: result.reason,
+              });
+            }
+          } catch (billErr: any) {
+            failed++;
+            logger.error(
+              { billId: candidate.id, dormitoryId: candidate.dormitoryId, err: billErr },
+              '[LateFeeReconciliationService] Failed to reconcile bill in transaction'
+            );
             details.push({
               billId: candidate.id,
               dormitoryId: candidate.dormitoryId,
               roomId: candidate.roomId,
-              status: 'changed',
-              oldTotal: result.oldTotal,
-              newTotal: result.newTotal,
-            });
-          } else if (result.status === 'noop') {
-            eligible++;
-            noop++;
-            details.push({
-              billId: candidate.id,
-              dormitoryId: candidate.dormitoryId,
-              roomId: candidate.roomId,
-              status: 'noop',
-              oldTotal: result.oldTotal,
-              newTotal: result.newTotal,
-              reason: result.reason,
-            });
-          } else {
-            skipped++;
-            details.push({
-              billId: candidate.id,
-              dormitoryId: candidate.dormitoryId,
-              roomId: candidate.roomId,
-              status: 'skipped',
-              reason: result.reason,
+              status: 'failed',
+              reason: billErr?.message || 'UNKNOWN_TRANSACTION_ERROR',
             });
           }
-        } catch (billErr: any) {
-          failed++;
-          logger.error(
-            { billId: candidate.id, dormitoryId: candidate.dormitoryId, err: billErr },
-            '[LateFeeReconciliationService] Failed to reconcile bill in transaction'
-          );
-          details.push({
-            billId: candidate.id,
-            dormitoryId: candidate.dormitoryId,
-            roomId: candidate.roomId,
-            status: 'failed',
-            reason: billErr?.message || 'UNKNOWN_TRANSACTION_ERROR',
-          });
+        }
+
+        if (candidateBills.length < BATCH_SIZE) {
+          break;
         }
       }
 
@@ -247,7 +267,8 @@ export class LateFeeReconciliationService {
 
   /**
    * Reconciles a single bill inside an atomic PostgreSQL transaction.
-   * Multi-instance safe: refetches the bill under transaction, re-verifies eligibility,
+   * Multi-instance safe: acquires exclusive row-level lock (FOR UPDATE),
+   * refetches the bill under lock, re-verifies eligibility,
    * generates canonical preview using cycle snapshot, performs semantic comparison,
    * and mutates only when financial truth changes.
    */
@@ -262,7 +283,10 @@ export class LateFeeReconciliationService {
     reason?: string;
   }> {
     return this.prisma.$transaction(async (tx) => {
-      // 1. Refetch bill inside transaction for locking / fresh state
+      // 1. Acquire exclusive PostgreSQL row-level lock BEFORE canonical preview calculation
+      await tx.$executeRaw`SELECT id FROM "bills" WHERE id = ${billId}::uuid FOR UPDATE`;
+
+      // 2. Refetch bill inside transaction for fresh locked state
       const bill = await tx.bill.findFirst({
         where: { id: billId, dormitoryId },
         include: {
@@ -280,7 +304,7 @@ export class LateFeeReconciliationService {
         return { status: 'skipped', reason: 'BILL_NOT_FOUND' };
       }
 
-      // 2. Strict eligibility validation inside lock
+      // 3. Strict eligibility validation inside lock
       if (bill.status !== 'unpaid' || bill.billKind !== 'MONTHLY_UTILITY') {
         return { status: 'skipped', reason: 'STATUS_NOT_UNPAID_OR_NOT_MONTHLY_UTILITY' };
       }
@@ -295,6 +319,14 @@ export class LateFeeReconciliationService {
       }
 
       const lateMode = normalizeLateFeeMode(rateSnapshot.lateFeeType);
+      if (lateMode === 'unsupported') {
+        logger.warn(
+          { billId: bill.id, lateFeeType: rateSnapshot.lateFeeType },
+          '[LateFeeReconciliationService] Unsupported late fee mode encountered - skipping mutation'
+        );
+        return { status: 'skipped', reason: 'INVALID_LATE_FEE_MODE' };
+      }
+
       if (lateMode === 'none' || isZeroDecimal(toDecimal(rateSnapshot.lateFeeValue))) {
         return { status: 'noop', reason: 'LATE_FEE_MODE_NONE_OR_ZERO' };
       }

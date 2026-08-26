@@ -60,9 +60,10 @@ export interface CanonicalMonthlyUtilityInput {
   gracePeriodDays?: number | null;
 }
 
-export function normalizeLateFeeMode(raw: unknown): 'none' | 'daily' | 'fixed' {
+export function normalizeLateFeeMode(raw: unknown): 'none' | 'daily' | 'fixed' | 'unsupported' {
   if (raw === null || raw === undefined || typeof raw !== 'string') return 'none';
   const cleaned = raw.trim().toLowerCase().replace(/[-\s]/g, '_');
+  if (!cleaned || cleaned === 'none' || cleaned === 'null' || cleaned === 'undefined') return 'none';
   switch (cleaned) {
     case 'daily':
     case 'per_day':
@@ -76,10 +77,8 @@ export function normalizeLateFeeMode(raw: unknown): 'none' | 'daily' | 'fixed' {
       return 'fixed';
     case 'percentage':
     case 'percent':
-      // Unsupported / unapproved in this sprint: fail-closed to 'none' (0 penalty)
-      return 'none';
     default:
-      return 'none';
+      return 'unsupported';
   }
 }
 
@@ -452,6 +451,12 @@ export function calculateCanonicalMonthlyUtility(
   const rawLateType = rateSnapshot?.lateFeeType || 'none';
   const lateFeeVal = toDecimal(rateSnapshot?.lateFeeValue ?? '0.00');
   const lateMode = normalizeLateFeeMode(rawLateType);
+
+  if (lateMode === 'unsupported') {
+    const err = new Error('INVALID_LATE_FEE_MODE');
+    (err as any).code = 'INVALID_LATE_FEE_MODE';
+    throw err;
+  }
 
   if (lateMode !== 'none' && !isZeroDecimal(lateFeeVal) && input.dueDate) {
     const dueBangkokStr = toBangkokDateString(input.dueDate);
