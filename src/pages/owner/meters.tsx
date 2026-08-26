@@ -354,7 +354,7 @@ export function getOwnerFinancialBreakdown(
     else if (status === 'PREVIEW') title = 'ยังไม่ออกบิล (พรีวิว)';
     else if (status === 'INVALID') title = c.errorMessage || 'รูปแบบการคิดค่าบริการไม่ถูกต้อง';
 
-    const normalizedType = c.type || (c.label && c.label.includes('ค่าเช่า') ? 'rent' : c.label && c.label.includes('ค่าประกัน') ? 'deposit' : 'monthly_utility');
+    const normalizedType = (c.type || 'monthly_utility').toLowerCase();
 
     return {
       type: normalizedType,

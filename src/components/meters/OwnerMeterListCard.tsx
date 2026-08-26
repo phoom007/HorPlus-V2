@@ -213,7 +213,7 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
 
   // Rate calculations & Canonical Line Items
   const monthlyComp = chargeComponents.find(
-    (c: any) => c.type === 'monthly_utility' || c.type === 'legacy_combined' || (c.label && c.label.includes('บิลรายเดือน'))
+    (c: any) => c.type === 'monthly_utility' || c.type === 'legacy_combined'
   );
   const backendLineItems = monthlyComp?.lineItems || [];
 
@@ -244,12 +244,12 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
     }
   }
 
-  // Canonical Rent Component Selection (PO Decisions P1-P6)
+  // Canonical Rent Component Selection (PO Strict Type Requirement)
   const isDaily = isDailyContext || roomCtx?.billingSource === 'DAILY_STAY';
   const isTerm = roomCtx?.billingSource === 'TERM_CONTRACT' || roomCtx?.billingSource === 'PROVISIONAL_TERM';
   const rentalTypeLabel = isDaily ? 'วัน' : isTerm ? 'เทอม' : 'เดือน';
 
-  const rentComp = chargeComponents.find((c: any) => c.type === 'rent' || (c.label && c.label.includes('ค่าเช่า')));
+  const rentComp = chargeComponents.find((c: any) => c.type === 'rent');
   const rentTone = rentComp ? resolveFinancialComponentTone(rentComp.status) : 'neutral';
 
   let rentColorClass = 'text-slate-600 font-semibold'; // PREVIEW / DRAFT / ยังไม่ออกบิล (เทา)
@@ -284,19 +284,18 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
     if (backendLineItems.length > 0) {
       for (const it of backendLineItems) {
         const itemType = (it.type || '').toString().toLowerCase();
-        const desc = (it.description || '').toString().toLowerCase();
 
         // Exclude items that already have dedicated zones on the card:
         // Zone A: Rent
-        if (itemType === 'rent' || itemType === 'monthly_rent' || itemType === 'term_rent' || desc.includes('ค่าเช่า')) {
+        if (itemType === 'rent' || itemType === 'monthly_rent' || itemType === 'term_rent') {
           continue;
         }
         // Zone B: Water
-        if (itemType === 'water' || desc.includes('ค่าน้ำ')) {
+        if (itemType === 'water' || (it.description && it.description.includes('ค่าน้ำ'))) {
           continue;
         }
         // Zone C: Electricity
-        if (itemType === 'electricity' || desc.includes('ค่าไฟ')) {
+        if (itemType === 'electricity' || (it.description && it.description.includes('ค่าไฟ'))) {
           continue;
         }
         // Zone D: Custom Other Fees
@@ -333,13 +332,12 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
       if (
         c.type !== 'rent' &&
         c.type !== 'monthly_utility' &&
-        c.type !== 'legacy_combined' &&
-        (!c.label || (!c.label.includes('ค่าเช่า') && !c.label.includes('บิลรายเดือน')))
+        c.type !== 'legacy_combined'
       ) {
-        const compStatus = c.status || (isDailyContext && (c.type === 'deposit' || c.label?.includes('ค่าประกัน')) ? (roomCtx?.isDailyDepositPaidInDisplayedPeriod ? 'PAID' : (roomCtx?.showDailyDepositLine ? 'UNPAID' : (isRowPaid ? 'PAID' : 'PREVIEW'))) : (isRowPaid || row.billStatus === 'paid' ? 'PAID' : (row.billStatus !== 'draft' ? 'UNPAID' : 'PREVIEW')));
+        const compStatus = c.status || (isDailyContext && c.type === 'deposit' ? (roomCtx?.isDailyDepositPaidInDisplayedPeriod ? 'PAID' : (roomCtx?.showDailyDepositLine ? 'UNPAID' : (isRowPaid ? 'PAID' : 'PREVIEW'))) : (isRowPaid || row.billStatus === 'paid' ? 'PAID' : (row.billStatus !== 'draft' ? 'UNPAID' : 'PREVIEW')));
         items.push({
-          id: `item-comp-${c.label}`,
-          label: c.label,
+          id: `item-comp-${c.label || c.type}`,
+          label: c.label || c.type,
           amount: c.amount,
           type: c.type || 'other',
           icon: getComponentItemIcon(c.label, c.type),

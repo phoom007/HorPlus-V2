@@ -1515,6 +1515,251 @@ describe('HORPLUS LOCAL-07 — PO UAT Targeted Correction Suite', () => {
       // List bottom payable is strictly 1,268.00 ฿
       expect(within(card101).getByText('1,268.00 ฿')).toBeDefined();
     });
+
+    it('R1: component type=monthly_utility with misleading label "ค่าเช่าอุปกรณ์" must NOT become RENT row', () => {
+      render(
+        <OwnerMeterListCard
+          row={{
+            roomId: 'room-101',
+            roomNumber: '101',
+            floor: 1,
+            waterPrev: '110',
+            waterCurr: '121',
+            elecPrev: '560',
+            elecCurr: '620',
+            isReplaced: false,
+            peopleCount: 2,
+            overdueAmount: '0.00',
+            isPaid: false,
+            billStatus: 'unpaid',
+            otherFees: [],
+          } as any}
+          idx={0}
+          roomCtx={{
+            roomId: 'room-101',
+            roomNumber: '101',
+            billingSource: 'CONTRACT',
+            amountDue: '100.00',
+            chargeComponents: [
+              { type: 'monthly_utility', label: 'ค่าเช่าอุปกรณ์', amount: '100.00', status: 'UNPAID' },
+            ],
+          } as any}
+          isWaterUnit={true}
+          isElecUnit={true}
+          isFirstCycle={false}
+          selectedCycleCode="2026-08"
+          selectedCycle="2026-08"
+          selectedBillingCycleId="cycle-2026-08"
+          isSaving={false}
+          unlockedElecPrev={{}}
+          unlockedWaterPrev={{}}
+          flashingCells={{}}
+          isExpandedBreakdown={false}
+          onOpenOtherFees={vi.fn()}
+          onMeterReadingChange={vi.fn()}
+          onMeterReadingBlur={vi.fn()}
+          onPaste={vi.fn()}
+          onUnlockElecPrev={vi.fn()}
+          onCancelElecPrev={vi.fn()}
+          onUnlockWaterPrev={vi.fn()}
+          onCancelWaterPrev={vi.fn()}
+          onPeopleCountChange={vi.fn()}
+          onToggleStatusSwitch={vi.fn()}
+          onToggleBreakdown={vi.fn()}
+          onSelectTenant={vi.fn()}
+        />
+      );
+
+      // Must NOT render Zone A Rent row (e.g. ค่าเช่า (เดือน) 100.-)
+      expect(screen.queryByText('ค่าเช่า (เดือน)')).toBeNull();
+      expect(screen.queryByText('100 .-')).toBeNull();
+    });
+
+    it('R2: component type=other_fee with label "ค่าเช่าเครื่องซักผ้า" must NOT become RENT row', () => {
+      const { rerender } = render(
+        <OwnerMeterListCard
+          row={{
+            roomId: 'room-101',
+            roomNumber: '101',
+            floor: 1,
+            waterPrev: '110',
+            waterCurr: '121',
+            elecPrev: '560',
+            elecCurr: '620',
+            isReplaced: false,
+            peopleCount: 2,
+            overdueAmount: '0.00',
+            isPaid: false,
+            billStatus: 'unpaid',
+            otherFees: [],
+          } as any}
+          idx={0}
+          roomCtx={{
+            roomId: 'room-101',
+            roomNumber: '101',
+            billingSource: 'CONTRACT',
+            amountDue: '300.00',
+            chargeComponents: [
+              { type: 'other_fee', label: 'ค่าเช่าเครื่องซักผ้า', amount: '300.00', status: 'UNPAID' },
+            ],
+          } as any}
+          isWaterUnit={true}
+          isElecUnit={true}
+          isFirstCycle={false}
+          selectedCycleCode="2026-08"
+          selectedCycle="2026-08"
+          selectedBillingCycleId="cycle-2026-08"
+          isSaving={false}
+          unlockedElecPrev={{}}
+          unlockedWaterPrev={{}}
+          flashingCells={{}}
+          isExpandedBreakdown={false}
+          onOpenOtherFees={vi.fn()}
+          onMeterReadingChange={vi.fn()}
+          onMeterReadingBlur={vi.fn()}
+          onPaste={vi.fn()}
+          onUnlockElecPrev={vi.fn()}
+          onCancelElecPrev={vi.fn()}
+          onUnlockWaterPrev={vi.fn()}
+          onCancelWaterPrev={vi.fn()}
+          onPeopleCountChange={vi.fn()}
+          onToggleStatusSwitch={vi.fn()}
+          onToggleBreakdown={vi.fn()}
+          onSelectTenant={vi.fn()}
+        />
+      );
+
+      // Must NOT render Zone A Rent row
+      expect(screen.queryByText('ค่าเช่า (เดือน)')).toBeNull();
+
+      // But when breakdown is expanded, it renders as an itemized other fee
+      rerender(
+        <OwnerMeterListCard
+          row={{
+            roomId: 'room-101',
+            roomNumber: '101',
+            floor: 1,
+            waterPrev: '110',
+            waterCurr: '121',
+            elecPrev: '560',
+            elecCurr: '620',
+            isReplaced: false,
+            peopleCount: 2,
+            overdueAmount: '0.00',
+            isPaid: false,
+            billStatus: 'unpaid',
+            otherFees: [],
+          } as any}
+          idx={0}
+          roomCtx={{
+            roomId: 'room-101',
+            roomNumber: '101',
+            billingSource: 'CONTRACT',
+            amountDue: '300.00',
+            chargeComponents: [
+              { type: 'other_fee', label: 'ค่าเช่าเครื่องซักผ้า', amount: '300.00', status: 'UNPAID' },
+            ],
+          } as any}
+          isWaterUnit={true}
+          isElecUnit={true}
+          isFirstCycle={false}
+          selectedCycleCode="2026-08"
+          selectedCycle="2026-08"
+          selectedBillingCycleId="cycle-2026-08"
+          isSaving={false}
+          unlockedElecPrev={{}}
+          unlockedWaterPrev={{}}
+          flashingCells={{}}
+          isExpandedBreakdown={true}
+          onOpenOtherFees={vi.fn()}
+          onMeterReadingChange={vi.fn()}
+          onMeterReadingBlur={vi.fn()}
+          onPaste={vi.fn()}
+          onUnlockElecPrev={vi.fn()}
+          onCancelElecPrev={vi.fn()}
+          onUnlockWaterPrev={vi.fn()}
+          onCancelWaterPrev={vi.fn()}
+          onPeopleCountChange={vi.fn()}
+          onToggleStatusSwitch={vi.fn()}
+          onToggleBreakdown={vi.fn()}
+          onSelectTenant={vi.fn()}
+        />
+      );
+
+      expect(screen.getByText('ค่าเช่าเครื่องซักผ้า')).toBeDefined();
+      expect(screen.getByText('300.-')).toBeDefined();
+    });
+
+    it('R3 & R5: Real canonical RENT + MU -> both components render independently with exact amounts and tones', () => {
+      render(
+        <OwnerMeterListCard
+          row={{
+            roomId: 'room-202',
+            roomNumber: '202',
+            floor: 2,
+            waterPrev: '100',
+            waterCurr: '110',
+            elecPrev: '500',
+            elecCurr: '600',
+            isReplaced: false,
+            peopleCount: 1,
+            overdueAmount: '0.00',
+            isPaid: false,
+            billStatus: 'unpaid',
+            otherFees: [],
+          } as any}
+          idx={0}
+          roomCtx={{
+            roomId: 'room-202',
+            roomNumber: '202',
+            billingSource: 'CONTRACT',
+            rentAmount: '4800.00',
+            amountDue: '6000.00',
+            chargeComponents: [
+              { type: 'rent', label: 'ค่าเช่า (เดือน)', amount: '4800.00', status: 'UNPAID' },
+              {
+                type: 'monthly_utility',
+                label: 'บิลรายเดือน',
+                amount: '1200.00',
+                status: 'UNPAID',
+                lineItems: [
+                  { type: 'water', description: 'ค่าน้ำ (10 หน่วย)', amount: '180.00', quantity: '10', unitPrice: '18' },
+                  { type: 'electricity', description: 'ค่าไฟฟ้า (100 หน่วย)', amount: '700.00', quantity: '100', unitPrice: '7' },
+                  { type: 'common_fee', description: 'ค่าส่วนกลาง', amount: '320.00', quantity: '1', unitPrice: '320' },
+                ],
+              },
+            ],
+          } as any}
+          isWaterUnit={true}
+          isElecUnit={true}
+          isFirstCycle={false}
+          selectedCycleCode="2026-08"
+          selectedCycle="2026-08"
+          selectedBillingCycleId="cycle-2026-08"
+          isSaving={false}
+          unlockedElecPrev={{}}
+          unlockedWaterPrev={{}}
+          flashingCells={{}}
+          isExpandedBreakdown={false}
+          onOpenOtherFees={vi.fn()}
+          onMeterReadingChange={vi.fn()}
+          onMeterReadingBlur={vi.fn()}
+          onPaste={vi.fn()}
+          onUnlockElecPrev={vi.fn()}
+          onCancelElecPrev={vi.fn()}
+          onUnlockWaterPrev={vi.fn()}
+          onCancelWaterPrev={vi.fn()}
+          onPeopleCountChange={vi.fn()}
+          onToggleStatusSwitch={vi.fn()}
+          onToggleBreakdown={vi.fn()}
+          onSelectTenant={vi.fn()}
+        />
+      );
+
+      // Rent row is present with canonical 4,800 .-
+      expect(screen.getByText(/ค่าเช่า \(เดือน\)/i)).toBeDefined();
+      expect(screen.getByText('4,800 .-')).toBeDefined();
+    });
   });
 });
 
