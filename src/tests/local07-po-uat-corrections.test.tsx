@@ -573,16 +573,22 @@ describe('HORPLUS LOCAL-07 — PO UAT Targeted Correction Suite', () => {
       expect(breakdown.components[0].label).toBe('บิลรายเดือน');
     });
 
-    it('SPLIT5: Genuine legacy bill remains compatible with legacy_combined label', () => {
+    it('SPLIT5 & P1: Historical legacy decomposed into separate Rent and MU components without combined label', () => {
       const breakdown = getOwnerFinancialBreakdown({
         amountDue: '5450.00',
         chargeComponents: [
-          { type: 'legacy_combined', label: 'บิลรายเดือน (รวมค่าเช่า)', amount: '5450.00', status: 'UNPAID' },
+          { type: 'rent', label: 'ค่าเช่า (เดือน)', amount: '4500.00', status: 'UNPAID' },
+          { type: 'monthly_utility', label: 'บิลรายเดือน', amount: '950.00', status: 'UNPAID' },
         ],
       });
-      expect(breakdown.components.length).toBe(1);
-      expect(breakdown.components[0].type).toBe('legacy_combined');
-      expect(breakdown.components[0].label).toBe('บิลรายเดือน (รวมค่าเช่า)');
+      expect(breakdown.components.length).toBe(2);
+      expect(breakdown.components[0].type).toBe('rent');
+      expect(breakdown.components[0].label).toBe('ค่าเช่า (เดือน)');
+      expect(breakdown.components[1].type).toBe('monthly_utility');
+      expect(breakdown.components[1].label).toBe('บิลรายเดือน');
+      for (const comp of breakdown.components) {
+        expect(comp.label).not.toContain('รวมค่าเช่า');
+      }
     });
   });
 
@@ -1759,6 +1765,82 @@ describe('HORPLUS LOCAL-07 — PO UAT Targeted Correction Suite', () => {
       // Rent row is present with canonical 4,800 .-
       expect(screen.getByText(/ค่าเช่า \(เดือน\)/i)).toBeDefined();
       expect(screen.getByText('4,800 .-')).toBeDefined();
+    });
+  });
+
+  // =========================================================================
+  // PART H: UNIFORM HISTORICAL FINANCIAL DECOMPOSITION & MULTI-CYCLE PARITY
+  // =========================================================================
+  describe('PART H: Uniform Historical Financial Decomposition (P1–P13 & DEC1–DEC7)', () => {
+    it('DEC2, P1 & P2: Historical July 2026 Room 101 Table View renders split Rent + MU without combined label', () => {
+      const breakdown = getOwnerFinancialBreakdown({
+        amountDue: '5450.00',
+        chargeComponents: [
+          { type: 'rent', label: 'ค่าเช่า (เดือน)', amount: '4500.00', status: 'PAID' },
+          { type: 'monthly_utility', label: 'บิลรายเดือน', amount: '950.00', status: 'PAID' },
+        ],
+      });
+
+      expect(breakdown.components).toHaveLength(2);
+      expect(breakdown.components[0].label).toBe('ค่าเช่า (เดือน)');
+      expect(breakdown.components[0].amount).toBe(4500);
+      expect(breakdown.components[0].status).toBe('PAID');
+      expect(breakdown.components[1].label).toBe('บิลรายเดือน');
+      expect(breakdown.components[1].amount).toBe(950);
+      expect(breakdown.components[1].status).toBe('PAID');
+
+      for (const comp of breakdown.components) {
+        expect(comp.label).not.toContain('รวมค่าเช่า');
+      }
+    });
+
+    it('P3 & TYPE2: Term Occupant separates Term Rent, Deposit, and Monthly Utility', () => {
+      const breakdown = getOwnerFinancialBreakdown({
+        amountDue: '15950.00',
+        chargeComponents: [
+          { type: 'rent', label: 'ค่าเช่า (เทอม)', amount: '12000.00', status: 'UNPAID' },
+          { type: 'deposit', label: 'ค่าประกัน', amount: '3000.00', status: 'UNPAID' },
+          { type: 'monthly_utility', label: 'บิลรายเดือน', amount: '950.00', status: 'UNPAID' },
+        ],
+      });
+
+      expect(breakdown.components).toHaveLength(3);
+      expect(breakdown.components[0].type).toBe('rent');
+      expect(breakdown.components[0].label).toBe('ค่าเช่า (เทอม)');
+      expect(breakdown.components[1].type).toBe('deposit');
+      expect(breakdown.components[1].label).toBe('ค่าประกัน');
+      expect(breakdown.components[2].type).toBe('monthly_utility');
+      expect(breakdown.components[2].label).toBe('บิลรายเดือน');
+    });
+
+    it('P4 & TYPE3: Daily Stay separates Daily Rent and Deposit without fabricating Monthly Utility', () => {
+      const breakdown = getOwnerFinancialBreakdown({
+        amountDue: '1350.00',
+        chargeComponents: [
+          { type: 'rent', label: 'ค่าเช่า (วัน)', amount: '400.00', status: 'UNPAID' },
+          { type: 'deposit', label: 'ค่าประกัน', amount: '950.00', status: 'UNPAID' },
+        ],
+      });
+
+      expect(breakdown.components).toHaveLength(2);
+      expect(breakdown.components[0].type).toBe('rent');
+      expect(breakdown.components[0].label).toBe('ค่าเช่า (วัน)');
+      expect(breakdown.components[1].type).toBe('deposit');
+      expect(breakdown.components[1].label).toBe('ค่าประกัน');
+      expect(breakdown.components.some((c) => c.type === 'monthly_utility')).toBe(false);
+    });
+
+    it('P12 & DEC3/DEC4: Mixed statuses preserve independent component tones (Rent PAID + MU UNPAID)', () => {
+      const breakdown = getOwnerFinancialBreakdown({
+        amountDue: '950.00',
+        chargeComponents: [
+          { type: 'rent', label: 'ค่าเช่า (เดือน)', amount: '4500.00', status: 'PAID' },
+          { type: 'monthly_utility', label: 'บิลรายเดือน', amount: '950.00', status: 'UNPAID' },
+        ],
+      });
+
+      expect(breakdown.components[0].status).toBe('PAID');
+      expect(breakdown.components[1].status).toBe('UNPAID');
     });
   });
 });

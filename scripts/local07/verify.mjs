@@ -372,6 +372,16 @@ export async function runVerification() {
     const r202Aug = augPreview.rooms.find(r => r.roomId === room202Db.id);
     assert(r202Aug?.chargeComponents?.length === 3, 'Room 202 has 3 charge components in August 2026', r202Aug?.chargeComponents?.length);
     assert(Number(r202Aug?.amountDue) === 6000, 'Room 202 amountDue is 6000.00 in August 2026 (unpaid rent + utility)');
+
+    // Multi-Cycle Parity: July 2026 Room 101 (Decomposed into Rent 4500 + MU 950, 0 combined labels)
+    if (cycleJulyDb) {
+      const julPreview = await meterService.getMeterBillingPreviewContext(COMP_DORM.id, cycleJulyDb.id);
+      const r101Jul = julPreview.rooms.find(r => r.roomId === room101Db.id);
+      assert(r101Jul?.chargeComponents?.length === 2, 'Room 101 has 2 decomposed charge components in July 2026 (Rent + MU)', r101Jul?.chargeComponents?.length);
+      assert(r101Jul?.chargeComponents[0]?.type === 'rent' && r101Jul?.chargeComponents[0]?.amount === '4500.00', 'Room 101 July Rent component is 4500.00');
+      assert(r101Jul?.chargeComponents[1]?.type === 'monthly_utility' && r101Jul?.chargeComponents[1]?.amount === '950.00', 'Room 101 July MU component is 950.00');
+      assert(!r101Jul?.chargeComponents?.some(c => c.type === 'legacy_combined' || (c.label && c.label.includes('รวมค่าเช่า'))), 'Room 101 July has no combined component');
+    }
   }
 
   // 9. Room 104 Complete Realistic Zero-Payable Meter Fixture Verification

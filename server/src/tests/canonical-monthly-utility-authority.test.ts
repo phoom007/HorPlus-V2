@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { calculateCanonicalMonthlyUtility, CanonicalMonthlyUtilityInput } from '../utils/monthly-utility-calculator.util.js';
 import { calculateMeterRowPreview, RateSnapshotContext, TransientRowDraft, RoomPreviewContext } from '../utils/meter-billing-calculator.util.js';
+import { MeterService } from '../services/meter.service.js';
 
 describe('LOCAL-07 Shared Canonical Monthly Utility Calculation Authority', () => {
   const baseRates: RateSnapshotContext = {
@@ -884,93 +885,158 @@ describe('LOCAL-07 Shared Canonical Monthly Utility Calculation Authority', () =
     });
   });
 
-  describe('Strict Genuine Legacy Bill Classification Suite (LEG1–LEG4)', () => {
-    function classifyBillComponent(bill: {
-      billKind?: string;
-      items?: Array<{ type?: string; itemType?: string; description?: string; amount?: string }>;
-      billingSource?: string;
-    }) {
-      const rawKind = (bill.billKind || '').toString().trim().toUpperCase();
-      const billingSource = bill.billingSource || 'CONTRACT';
+  describe('Owner Meter Financial Decomposition Authority (DEC1–DEC7 & TYPE1–TYPE5)', () => {
+    it('DEC1 & TYPE1/TYPE5: modern RENT and MONTHLY_UTILITY -> separate canonical components', () => {
+      const rentComponents = MeterService.decomposeBillToChargeComponents({
+        bill: {
+          billKind: 'RENT',
+          totalAmount: '4500.00',
+          status: 'unpaid',
+          items: [{ type: 'rent', description: 'ค่าเช่าห้องพัก', amount: '4500.00' }],
+        },
+      });
+      const utilityComponents = MeterService.decomposeBillToChargeComponents({
+        bill: {
+          billKind: 'MONTHLY_UTILITY',
+          totalAmount: '950.00',
+          status: 'unpaid',
+          items: [
+            { type: 'water', description: 'ค่าน้ำประปา', amount: '180.00' },
+            { type: 'electric', description: 'ค่าไฟฟ้า', amount: '570.00' },
+            { type: 'common', description: 'ค่าส่วนกลาง', amount: '200.00' },
+          ],
+        },
+      });
 
-      let billType = 'monthly_utility';
-      let label = 'บิลรายเดือน';
+      expect(rentComponents).toHaveLength(1);
+      expect(rentComponents[0].type).toBe('rent');
+      expect(rentComponents[0].label).toBe('ค่าเช่า (เดือน)');
+      expect(rentComponents[0].amount).toBe('4500.00');
 
-      if (rawKind === 'RENT' || rawKind === 'MONTHLY_RENT' || rawKind === 'TERM_RENT' || rawKind === 'RENTAL') {
-        billType = 'rent';
-        label = billingSource === 'PROVISIONAL_TERM' || rawKind === 'TERM_RENT' ? 'ค่าเช่า (เทอม)' : 'ค่าเช่า (เดือน)';
-      } else if (rawKind === 'DEPOSIT' || rawKind === 'SECURITY_DEPOSIT') {
-        billType = 'deposit';
-        label = 'ค่าประกัน';
-      } else if (rawKind === 'LEGACY_COMBINED') {
-        billType = 'legacy_combined';
-        label = 'บิลรายเดือน (รวมค่าเช่า)';
-      } else {
-        billType = 'monthly_utility';
-        label = 'บิลรายเดือน';
+      expect(utilityComponents).toHaveLength(1);
+      expect(utilityComponents[0].type).toBe('monthly_utility');
+      expect(utilityComponents[0].label).toBe('บิลรายเดือน');
+      expect(utilityComponents[0].amount).toBe('950.00');
+    });
+
+    it('DEC2 & P1: historical LEGACY_COMBINED decomposes into separate Rent and MU components without combined label', () => {
+      const components = MeterService.decomposeBillToChargeComponents({
+        bill: {
+          billNumber: 'INV-202607-001',
+          billKind: 'LEGACY_COMBINED',
+          totalAmount: '5450.00',
+          status: 'paid',
+          items: [
+            { id: '1', type: 'rent', description: 'ค่าเช่าห้องพัก 101', amount: '4500.00' },
+            { id: '2', type: 'water', description: 'ค่าน้ำ (10 หน่วย @ ฿18)', amount: '180.00' },
+            { id: '3', type: 'electric', description: 'ค่าไฟฟ้า (60 หน่วย @ ฿7)', amount: '420.00' },
+            { id: '4', type: 'common', description: 'ค่าส่วนกลาง', amount: '200.00' },
+            { id: '5', type: 'internet', description: 'ค่าบริการอินเทอร์เน็ตความเร็วสูง', amount: '150.00' },
+          ],
+        },
+      });
+
+      expect(components).toHaveLength(2);
+
+      // Component 1: Rent
+      expect(components[0].type).toBe('rent');
+      expect(components[0].label).toBe('ค่าเช่า (เดือน)');
+      expect(components[0].amount).toBe('4500.00');
+      expect(components[0].status).toBe('PAID');
+
+      // Component 2: Monthly Utility
+      expect(components[1].type).toBe('monthly_utility');
+      expect(components[1].label).toBe('บิลรายเดือน');
+      expect(components[1].amount).toBe('950.00');
+      expect(components[1].status).toBe('PAID');
+
+      // No combined label anywhere
+      for (const comp of components) {
+        expect(comp.label).not.toContain('รวมค่าเช่า');
+        expect(comp.type).not.toBe('legacy_combined');
       }
-
-      return { billType, label };
-    }
-
-    it('LEG1: billKind LEGACY_COMBINED -> legacy_combined with label "บิลรายเดือน (รวมค่าเช่า)"', () => {
-      const result = classifyBillComponent({
-        billKind: 'LEGACY_COMBINED',
-        items: [
-          { type: 'RENT', description: 'ค่าเช่าห้องพัก', amount: '4800.00' },
-          { type: 'WATER', description: 'ค่าน้ำประปา', amount: '180.00' },
-        ],
-      });
-
-      expect(result.billType).toBe('legacy_combined');
-      expect(result.label).toBe('บิลรายเดือน (รวมค่าเช่า)');
     });
 
-    it('LEG2: modern RENT and MONTHLY_UTILITY -> separate components', () => {
-      const rentComp = classifyBillComponent({
-        billKind: 'RENT',
-        items: [{ type: 'RENT', description: 'ค่าเช่าห้องพัก', amount: '4800.00' }],
-      });
-      const utilityComp = classifyBillComponent({
-        billKind: 'MONTHLY_UTILITY',
-        items: [
-          { type: 'WATER', description: 'ค่าน้ำประปา', amount: '180.00' },
-          { type: 'ELECTRICITY', description: 'ค่าไฟฟ้า', amount: '420.00' },
-        ],
+    it('DEC3: historical legacy bill PAID -> decomposed rows inherit PAID status', () => {
+      const components = MeterService.decomposeBillToChargeComponents({
+        bill: {
+          billKind: 'LEGACY_COMBINED',
+          totalAmount: '5450.00',
+          status: 'paid',
+          items: [
+            { id: '1', type: 'rent', description: 'ค่าเช่า', amount: '4500.00' },
+            { id: '2', type: 'water', description: 'ค่าน้ำ', amount: '950.00' },
+          ],
+        },
       });
 
-      expect(rentComp.billType).toBe('rent');
-      expect(rentComp.label).toBe('ค่าเช่า (เดือน)');
-      expect(utilityComp.billType).toBe('monthly_utility');
-      expect(utilityComp.label).toBe('บิลรายเดือน');
+      expect(components[0].status).toBe('PAID');
+      expect(components[1].status).toBe('PAID');
     });
 
-    it('LEG3: non-legacy bill containing both rent and utility items MUST NOT become legacy_combined', () => {
-      const nonLegacyMixedBill = classifyBillComponent({
-        billKind: 'MONTHLY_UTILITY',
-        items: [
-          { type: 'RENT', description: 'ค่าเช่าห้องพัก', amount: '4800.00' },
-          { type: 'WATER', description: 'ค่าน้ำประปา', amount: '180.00' },
-        ],
+    it('DEC4: historical legacy bill UNPAID -> decomposed rows inherit UNPAID status', () => {
+      const components = MeterService.decomposeBillToChargeComponents({
+        bill: {
+          billKind: 'LEGACY_COMBINED',
+          totalAmount: '5450.00',
+          status: 'unpaid',
+          items: [
+            { id: '1', type: 'rent', description: 'ค่าเช่า', amount: '4500.00' },
+            { id: '2', type: 'water', description: 'ค่าน้ำ', amount: '950.00' },
+          ],
+        },
       });
 
-      expect(nonLegacyMixedBill.billType).toBe('monthly_utility');
-      expect(nonLegacyMixedBill.label).toBe('บิลรายเดือน');
-      expect(nonLegacyMixedBill.label).not.toContain('รวมค่าเช่า');
+      expect(components[0].status).toBe('UNPAID');
+      expect(components[1].status).toBe('UNPAID');
     });
 
-    it('LEG4: unapproved or unknown rawKind falls back to monthly_utility and NEVER combines without genuine LEGACY_COMBINED', () => {
-      const unknownKindBill = classifyBillComponent({
-        billKind: 'UNKNOWN_CUSTOM_KIND',
-        items: [
-          { type: 'RENT', description: 'ค่าเช่า', amount: '4800.00' },
-          { type: 'ELECTRICITY', description: 'ค่าไฟ', amount: '350.00' },
-        ],
+    it('DEC5 & DEC6: legacy with broken item reconciliation fails closed with error', () => {
+      expect(() => {
+        MeterService.decomposeBillToChargeComponents({
+          bill: {
+            billNumber: 'INV-BAD',
+            billKind: 'LEGACY_COMBINED',
+            totalAmount: '6000.00',
+            status: 'unpaid',
+            items: [
+              { id: '1', type: 'rent', description: 'ค่าเช่า', amount: '4500.00' },
+              { id: '2', type: 'water', description: 'ค่าน้ำ', amount: '500.00' }, // Sum is 5000 != 6000
+            ],
+          },
+        });
+      }).toThrow(/HISTORICAL_FINANCIAL_DECOMPOSITION_RECONCILIATION_FAILED/);
+    });
+
+    it('TYPE2: term rent -> ค่าเช่า (เทอม)', () => {
+      const components = MeterService.decomposeBillToChargeComponents({
+        bill: {
+          billKind: 'TERM_RENT',
+          totalAmount: '12000.00',
+          status: 'unpaid',
+          items: [{ type: 'rent', description: 'ค่าเช่าเทอม', amount: '12000.00' }],
+        },
+        billingSource: 'PROVISIONAL_TERM',
       });
 
-      expect(unknownKindBill.billType).toBe('monthly_utility');
-      expect(unknownKindBill.label).toBe('บิลรายเดือน');
-      expect(unknownKindBill.label).not.toContain('รวมค่าเช่า');
+      expect(components[0].type).toBe('rent');
+      expect(components[0].label).toBe('ค่าเช่า (เทอม)');
+      expect(components[0].amount).toBe('12000.00');
+    });
+
+    it('TYPE3: deposit bill -> ค่าประกัน', () => {
+      const components = MeterService.decomposeBillToChargeComponents({
+        bill: {
+          billKind: 'DEPOSIT',
+          totalAmount: '3000.00',
+          status: 'paid',
+          items: [{ type: 'deposit', description: 'เงินประกัน', amount: '3000.00' }],
+        },
+      });
+
+      expect(components[0].type).toBe('deposit');
+      expect(components[0].label).toBe('ค่าประกัน');
+      expect(components[0].amount).toBe('3000.00');
     });
   });
 });
