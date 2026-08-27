@@ -799,22 +799,39 @@ export class LineOaService {
         const appOrigin = getPublicAppOrigin();
         const registrationUrl = `${appOrigin}/tenant/register?t=${action.rawToken}`;
         const flexMessage = buildTenantRegistrationFlexMessage(action.dormitoryName, registrationUrl);
-        const replySuccess = await this.lineAdapter.replyMessage(action.replyToken, [flexMessage], action.accessToken);
-        if (!replySuccess) {
-          throw new Error('LINE replyMessage returned false');
+        const deliveryResult = await this.lineAdapter.replyMessage(action.replyToken, [flexMessage], action.accessToken);
+
+        if (action.inviteId) {
+          await this.inviteService.updateDeliveryOutcome(action.inviteId, deliveryResult).catch(() => {});
+        }
+
+        if (deliveryResult.outcome === 'FAILED') {
+          console.warn('LINE follow reply delivery failed with explicit rejection:', {
+            httpStatus: deliveryResult.httpStatus,
+            errorCode: deliveryResult.errorCode,
+            requestId: deliveryResult.requestId,
+          });
+          if (action.receiptId && action.dormitoryId) {
+            await this.prisma.$transaction(async (tx) => {
+              await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${action.dormitoryId}, true)`;
+              await tx.lineWebhookEventReceipt.update({
+                where: { id: action.receiptId },
+                data: { status: 'failed' },
+              });
+            }).catch(() => {});
+          }
+        } else if (deliveryResult.outcome === 'UNKNOWN') {
+          console.warn('LINE follow reply delivery outcome is UNKNOWN (transport uncertainty):', {
+            transportErrorCode: deliveryResult.transportErrorCode,
+          });
+          // CRITICAL C1 INVARIANT: Do NOT mark receipt as failed and do NOT revoke invite!
         }
       } catch (err: any) {
-        console.warn('Failed to send LINE follow reply:', { errorCode: err.code || 'UNKNOWN', message: err.message });
+        console.warn('Unexpected error in LINE follow reply loop:', { message: err.message });
         if (action.inviteId) {
-          await this.inviteService.revokeInvite(action.inviteId).catch(() => {});
-        }
-        if (action.receiptId && action.dormitoryId) {
-          await this.prisma.$transaction(async (tx) => {
-            await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${action.dormitoryId}, true)`;
-            await tx.lineWebhookEventReceipt.update({
-              where: { id: action.receiptId },
-              data: { status: 'failed' },
-            });
+          await this.inviteService.updateDeliveryOutcome(action.inviteId, {
+            outcome: 'UNKNOWN',
+            transportErrorCode: err.code || err.name || 'UNEXPECTED_ERROR',
           }).catch(() => {});
         }
       }

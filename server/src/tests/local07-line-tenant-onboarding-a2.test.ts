@@ -604,74 +604,221 @@ describe('LOCAL-07 — Secure LINE Tenant Registration A2 Authority', () => {
         code: 'CROSS_DORM_IDENTITY_MISMATCH',
       });
     });
+
+    it('multi-token same-intent concurrency: concurrent submission of sibling invites under same intent allows exactly one winner', async () => {
+      // Create Intent
+      const intent = await inviteService.getOrCreateActiveIntent(testDormAId, testFriendAId);
+
+      // Create two active sibling invites
+      const inviteA = await inviteService.createInvite(testDormAId, testFriendAId, intent.id);
+      const inviteB = await inviteService.createInvite(testDormAId, testFriendAId, intent.id);
+
+      const makeReq = (token: string, phone: string) => ({
+        inviteToken: token,
+        requestedRoomId: testRoomA101Id,
+        firstName: 'กิตติพงษ์',
+        lastName: 'สุขใจ',
+        phone,
+        agreedTerms: true as const,
+        signatureBase64: createTestSignatureBase64(),
+        expectedPolicyVersion: 1,
+      });
+
+      let successCount = 0;
+      let failCount = 0;
+
+      const submitA = async () => {
+        try {
+          await tenantRegService.createRequest(testDormAId, makeReq(inviteA.rawToken, '0811112222'));
+          successCount++;
+        } catch {
+          failCount++;
+        }
+      };
+
+      const submitB = async () => {
+        try {
+          await tenantRegService.createRequest(testDormAId, makeReq(inviteB.rawToken, '0833334444'));
+          successCount++;
+        } catch {
+          failCount++;
+        }
+      };
+
+      // Submit both sibling tokens concurrently
+      await Promise.all([submitA(), submitB()]);
+
+      // Exactly ONE request created
+      expect(successCount).toBe(1);
+      expect(failCount).toBe(1);
+
+      // Sibling invite is now revoked
+      const siblingActive = await prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${testDormAId}, true)`;
+        return tx.tenantRegistrationInvite.findMany({
+          where: {
+            dormitoryId: testDormAId,
+            lineFriendId: testFriendAId,
+            consumedAt: null,
+            revokedAt: null,
+          },
+        });
+      });
+      expect(siblingActive).toHaveLength(0);
+    });
   });
 
-  describe('Post-Implementation Hardening Invariants: Lifecycle & Failure Resilience', () => {
-    it('same friend & purpose: issuing new invite revokes prior active invite to prevent proliferation', async () => {
-      const invite1 = await inviteService.createInvite(testDormAId, testFriendAId);
-
-      // Verify invite 1 is initially active
-      const res1 = await inviteService.resolveInvite(invite1.rawToken);
-      expect(res1.id).toBe(invite1.id);
-
-      // Friend triggers follow again (new invite created)
-      const invite2 = await inviteService.createInvite(testDormAId, testFriendAId);
-
-      // Invite 1 is now revoked
-      await expect(
-        inviteService.resolveInvite(invite1.rawToken)
-      ).rejects.toMatchObject({
-        code: 'TENANT_REGISTRATION_INVITE_REVOKED',
-      });
-
-      // Invite 2 is active
-      const res2 = await inviteService.resolveInvite(invite2.rawToken);
-      expect(res2.id).toBe(invite2.id);
-
-      // Exactly ONE active invite in DB for this friend
-      const activeInvites = await prisma.$transaction(async (tx) => {
-        await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${testDormAId}, true)`;
-        return tx.tenantRegistrationInvite.findMany({
-          where: {
-            dormitoryId: testDormAId,
-            lineFriendId: testFriendAId,
-            consumedAt: null,
-            revokedAt: null,
-            expiresAt: { gt: new Date() },
-          },
-        });
-      });
-      expect(activeInvites).toHaveLength(1);
-      expect(activeInvites[0].id).toBe(invite2.id);
-    });
-
-    it('reply failure revokes invite so zero orphan active invites remain in DB', async () => {
+  describe('C1 Architecture: Structured Delivery & Transport Uncertainty Tests', () => {
+    it('DELIVERY-200: explicit LINE 200 outcome is DELIVERED, invite remains active and usable', async () => {
       const invite = await inviteService.createInvite(testDormAId, testFriendAId);
 
-      // Simulate reply failure
-      await inviteService.revokeInvite(invite.id);
+      await inviteService.updateDeliveryOutcome(invite.id, {
+        outcome: 'DELIVERED',
+        httpStatus: 200,
+        requestId: 'req-line-200',
+      });
 
-      // Resolving the failed invite fails closed
-      await expect(
-        inviteService.resolveInvite(invite.rawToken)
-      ).rejects.toMatchObject({
+      const updated = await prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${testDormAId}, true)`;
+        return tx.tenantRegistrationInvite.findUnique({ where: { id: invite.id } });
+      });
+
+      expect(updated?.deliveryStatus).toBe('DELIVERED');
+      expect(updated?.deliveredAt).toBeTruthy();
+      expect(updated?.revokedAt).toBeNull();
+
+      // Usable
+      const context = await inviteService.resolveInvite(invite.rawToken);
+      expect(context.id).toBe(invite.id);
+    });
+
+    it('DELIVERY-400 / 401 / 429 / 500: explicit non-2xx outcome is FAILED and revokes that specific invite', async () => {
+      const statuses = [400, 401, 429, 500];
+
+      for (const status of statuses) {
+        const invite = await inviteService.createInvite(testDormAId, testFriendAId);
+
+        await inviteService.updateDeliveryOutcome(invite.id, {
+          outcome: 'FAILED',
+          httpStatus: status,
+          errorCode: `HTTP_${status}`,
+          requestId: `req-line-${status}`,
+        });
+
+        const updated = await prisma.$transaction(async (tx) => {
+          await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${testDormAId}, true)`;
+          return tx.tenantRegistrationInvite.findUnique({ where: { id: invite.id } });
+        });
+
+        expect(updated?.deliveryStatus).toBe('FAILED');
+        expect(updated?.failedAt).toBeTruthy();
+        expect(updated?.revokedAt).toBeTruthy();
+
+        // Resolving fails closed
+        await expect(inviteService.resolveInvite(invite.rawToken)).rejects.toMatchObject({
+          code: 'TENANT_REGISTRATION_INVITE_REVOKED',
+        });
+      }
+    });
+
+    it('TIMEOUT / ECONNRESET / DNS: network transport uncertainty outcome is UNKNOWN and preserves active invite', async () => {
+      const transportErrors = ['NETWORK_TIMEOUT', 'ECONNRESET', 'ENOTFOUND'];
+
+      for (const errCode of transportErrors) {
+        const invite = await inviteService.createInvite(testDormAId, testFriendAId);
+
+        await inviteService.updateDeliveryOutcome(invite.id, {
+          outcome: 'UNKNOWN',
+          transportErrorCode: errCode,
+        });
+
+        const updated = await prisma.$transaction(async (tx) => {
+          await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${testDormAId}, true)`;
+          return tx.tenantRegistrationInvite.findUnique({ where: { id: invite.id } });
+        });
+
+        expect(updated?.deliveryStatus).toBe('UNKNOWN');
+        expect(updated?.revokedAt).toBeNull(); // CRITICAL: Not revoked!
+
+        // Usable
+        const context = await inviteService.resolveInvite(invite.rawToken);
+        expect(context.id).toBe(invite.id);
+      }
+    });
+
+    it('CRITICAL PROOF: UNKNOWN link works E2E when tenant receives Flex Message despite transport timeout', async () => {
+      // Simulate follow event with timeout
+      mockAdapter.simulateReplyTimeout = true;
+
+      const invite = await inviteService.createInvite(testDormAId, testFriendAId);
+      const deliveryResult = await mockAdapter.replyMessage('mock-reply-token', [], 'mock-token');
+      expect(deliveryResult.outcome).toBe('UNKNOWN');
+
+      await inviteService.updateDeliveryOutcome(invite.id, deliveryResult);
+
+      // 1. GET invite context works
+      const context = await inviteService.resolveInvite(invite.rawToken);
+      expect(context.dormitoryName).toBe('หอพักเฟรชวิลล์ แอร์พอร์ต A');
+
+      // 2. Submit tenant registration works
+      const reqDto = {
+        inviteToken: invite.rawToken,
+        requestedRoomId: testRoomA101Id,
+        firstName: 'กิตติพงษ์',
+        lastName: 'สุขใจ',
+        phone: '0811112222',
+        note: 'ลงทะเบียนสำเร็จแม้ timeout',
+        agreedTerms: true as const,
+        signatureBase64: createTestSignatureBase64(),
+        expectedPolicyVersion: 1,
+      };
+
+      const request = await tenantRegService.createRequest(testDormAId, reqDto);
+      expect(request.id).toBeTruthy();
+      expect(request.status).toBe('pending_owner_approval');
+
+      // 3. Invite is consumed
+      const consumedInvite = await prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${testDormAId}, true)`;
+        return tx.tenantRegistrationInvite.findUnique({ where: { id: invite.id } });
+      });
+      expect(consumedInvite?.consumedAt).toBeTruthy();
+    });
+
+    it('Fresh follow rotation: creating fresh invite preserves older active invite until submission', async () => {
+      // Follow 1 -> Invite 1 (DELIVERED)
+      const invite1 = await inviteService.createInvite(testDormAId, testFriendAId);
+      await inviteService.updateDeliveryOutcome(invite1.id, { outcome: 'DELIVERED', httpStatus: 200 });
+
+      // Follow 2 -> Invite 2 (DELIVERED)
+      const invite2 = await inviteService.createInvite(testDormAId, testFriendAId);
+      await inviteService.updateDeliveryOutcome(invite2.id, { outcome: 'DELIVERED', httpStatus: 200 });
+
+      // Both invites remain active
+      expect((await inviteService.resolveInvite(invite1.rawToken)).id).toBe(invite1.id);
+      expect((await inviteService.resolveInvite(invite2.rawToken)).id).toBe(invite2.id);
+
+      // Submit Invite 2
+      await tenantRegService.createRequest(testDormAId, {
+        inviteToken: invite2.rawToken,
+        requestedRoomId: testRoomA101Id,
+        firstName: 'สมชาย',
+        lastName: 'ใจดี',
+        phone: '0899991111',
+        agreedTerms: true,
+        signatureBase64: createTestSignatureBase64(),
+        expectedPolicyVersion: 1,
+      });
+
+      // Invite 2 is consumed
+      await expect(inviteService.resolveInvite(invite2.rawToken)).rejects.toMatchObject({
+        code: 'TENANT_REGISTRATION_INVITE_USED',
+      });
+
+      // Sibling Invite 1 is now revoked
+      await expect(inviteService.resolveInvite(invite1.rawToken)).rejects.toMatchObject({
         code: 'TENANT_REGISTRATION_INVITE_REVOKED',
       });
-
-      // Zero active invites remain
-      const activeInvites = await prisma.$transaction(async (tx) => {
-        await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${testDormAId}, true)`;
-        return tx.tenantRegistrationInvite.findMany({
-          where: {
-            dormitoryId: testDormAId,
-            lineFriendId: testFriendAId,
-            consumedAt: null,
-            revokedAt: null,
-            expiresAt: { gt: new Date() },
-          },
-        });
-      });
-      expect(activeInvites).toHaveLength(0);
     });
 
     it('getPublicAppOrigin enforces HTTPS and fails closed on missing/localhost in production', () => {

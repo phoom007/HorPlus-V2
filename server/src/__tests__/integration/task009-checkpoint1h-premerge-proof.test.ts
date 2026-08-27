@@ -214,6 +214,7 @@ const POST_TASK009_APPROVED_TABLES = [
   'daily_stays',
   'provisional_rental_terms',
   'tenant_registration_invites',
+  'tenant_registration_intents',
 ];
 
 /**

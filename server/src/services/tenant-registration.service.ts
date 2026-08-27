@@ -744,6 +744,22 @@ export class TenantRegistrationService {
         },
       });
 
+      // 7. Mark TenantRegistrationIntent as COMPLETED if exists
+      if (req.lineFollowerId) {
+        await tx.tenantRegistrationIntent.updateMany({
+          where: {
+            dormitoryId,
+            lineFriendId: req.lineFollowerId,
+            purpose: 'TENANT_REGISTRATION',
+            status: { in: ['ACTIVE', 'SUBMITTED'] },
+          },
+          data: {
+            status: 'COMPLETED',
+            completedAt: new Date(),
+          },
+        });
+      }
+
       return {
         request: updatedReq,
         tenant,

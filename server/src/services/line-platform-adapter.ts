@@ -14,6 +14,23 @@ export type LinePushResult =
   | { outcome: 'DEFINITIVE_FAILURE'; errorCode: string; safeMessage: string }
   | { outcome: 'RETRYABLE_UNKNOWN'; errorCode: string; safeMessage: string };
 
+export type LineReplyDeliveryResult =
+  | {
+      outcome: 'DELIVERED';
+      httpStatus: number;
+      requestId?: string;
+    }
+  | {
+      outcome: 'FAILED';
+      httpStatus: number;
+      errorCode?: string;
+      requestId?: string;
+    }
+  | {
+      outcome: 'UNKNOWN';
+      transportErrorCode?: string;
+    };
+
 export interface LineBotInfo {
   userId: string;
   basicId: string;
@@ -50,7 +67,7 @@ export interface LinePlatformAdapter {
     replyToken: string,
     messages: any[],
     accessToken: string
-  ): Promise<boolean>;
+  ): Promise<LineReplyDeliveryResult>;
 
   setWebhookEndpoint(endpointUrl: string, accessToken: string): Promise<{ success: boolean }>;
   testWebhookEndpoint(endpointUrl: string, accessToken: string): Promise<LineWebhookTestResult>;
@@ -203,7 +220,7 @@ export class HttpLinePlatformAdapter implements LinePlatformAdapter {
     }
   }
 
-  async replyMessage(replyToken: string, messages: any[], accessToken: string): Promise<boolean> {
+  async replyMessage(replyToken: string, messages: any[], accessToken: string): Promise<LineReplyDeliveryResult> {
     try {
       const res = await fetch(`${this.baseUrl}/v2/bot/message/reply`, {
         method: 'POST',
@@ -216,10 +233,29 @@ export class HttpLinePlatformAdapter implements LinePlatformAdapter {
           messages,
         }),
       });
-      return res.ok;
+
+      const requestId = res.headers.get('x-line-request-id') || undefined;
+
+      if (res.ok) {
+        return {
+          outcome: 'DELIVERED',
+          httpStatus: res.status,
+          requestId,
+        };
+      }
+
+      return {
+        outcome: 'FAILED',
+        httpStatus: res.status,
+        errorCode: `HTTP_${res.status}`,
+        requestId,
+      };
     } catch (err: any) {
-      console.warn('LINE replyMessage: network error', { errorCode: err.code || 'UNKNOWN' });
-      return false;
+      console.warn('LINE replyMessage: network transport uncertainty', { errorCode: err.code || err.name || 'UNKNOWN' });
+      return {
+        outcome: 'UNKNOWN',
+        transportErrorCode: err.code || err.name || 'NETWORK_ERROR',
+      };
     }
   }
 
@@ -415,8 +451,30 @@ export class MockLinePlatformAdapter implements LinePlatformAdapter {
     };
   }
 
-  async replyMessage(replyToken: string, messages: any[], accessToken: string): Promise<boolean> {
+  public mockReplyResult?: LineReplyDeliveryResult;
+  public simulateReplyTimeout = false;
+  public simulateReplyExplicitFailStatus?: number;
+
+  async replyMessage(replyToken: string, messages: any[], accessToken: string): Promise<LineReplyDeliveryResult> {
     this.replyCalls.push({ replyToken, messages, accessToken });
-    return this.mockReplySuccess;
+    if (this.mockReplyResult) {
+      return this.mockReplyResult;
+    }
+    if (this.simulateReplyTimeout) {
+      return { outcome: 'UNKNOWN', transportErrorCode: 'NETWORK_TIMEOUT' };
+    }
+    if (this.simulateReplyExplicitFailStatus) {
+      return {
+        outcome: 'FAILED',
+        httpStatus: this.simulateReplyExplicitFailStatus,
+        errorCode: `HTTP_${this.simulateReplyExplicitFailStatus}`,
+        requestId: `req_mock_fail_${Date.now()}`,
+      };
+    }
+    return {
+      outcome: 'DELIVERED',
+      httpStatus: 200,
+      requestId: `req_mock_${Date.now()}`,
+    };
   }
 }
