@@ -547,5 +547,163 @@ describe('LOCAL-07 — Secure LINE Tenant Registration A2 Authority', () => {
       expect(successCount).toBe(1);
       expect(failCount).toBe(4);
     });
+
+    it('cross-dorm attack: rejecting approval if lineFollowerId belongs to different dormitory', async () => {
+      // Create a LINE Friend in Dorm B
+      const lineFriendB = await prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${testDormBId}, true)`;
+        return tx.dormitoryLineFriend.create({
+          data: {
+            dormitoryId: testDormBId,
+            lineUserIdHash: hashToken('U_dorm_b_attacker'),
+            lineUserIdEncrypted: encryptText('U_dorm_b_attacker'),
+            displayName: 'Attacker from Dorm B',
+            friendStatus: 'FOLLOWING',
+          },
+        });
+      });
+
+      // Create a forged request in Dorm A with lineFollowerId from Dorm B
+      const forgedRequest = await prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${testDormAId}, true)`;
+        return tx.tenantRegistrationRequest.create({
+          data: {
+            dormitoryId: testDormAId,
+            requestedRoomId: testRoomA101Id,
+            firstName: 'ปลอม',
+            lastName: 'แปลง',
+            phone: '0899998888',
+            tenantSignatureObjectKey: 'sig-test-forged',
+            tenantSignatureSha256: 'hash-forged',
+            acceptanceSnapshot: { agreedTerms: true },
+            acceptanceSnapshotSha256: 'snapshot-hash',
+            lineFollowerId: lineFriendB.id, // Injected from Dorm B!
+            status: 'pending_owner_approval',
+          },
+        });
+      });
+
+      const approvePayload = {
+        startDate: '2026-09-01',
+        endDate: '2027-08-31',
+        durationMonths: 12,
+        rentAmount: 4500,
+        depositAmount: 5000,
+        advancePaymentAmount: 4500,
+      };
+
+      // Approving request in Dorm A with Dorm B's lineFollowerId must FAIL CLOSED
+      await expect(
+        tenantRegService.approveRequest(
+          forgedRequest.id,
+          testDormAId,
+          approvePayload,
+          '00000000-0000-0000-0000-000000000001'
+        )
+      ).rejects.toMatchObject({
+        code: 'CROSS_DORM_IDENTITY_MISMATCH',
+      });
+    });
+  });
+
+  describe('Post-Implementation Hardening Invariants: Lifecycle & Failure Resilience', () => {
+    it('same friend & purpose: issuing new invite revokes prior active invite to prevent proliferation', async () => {
+      const invite1 = await inviteService.createInvite(testDormAId, testFriendAId);
+
+      // Verify invite 1 is initially active
+      const res1 = await inviteService.resolveInvite(invite1.rawToken);
+      expect(res1.id).toBe(invite1.id);
+
+      // Friend triggers follow again (new invite created)
+      const invite2 = await inviteService.createInvite(testDormAId, testFriendAId);
+
+      // Invite 1 is now revoked
+      await expect(
+        inviteService.resolveInvite(invite1.rawToken)
+      ).rejects.toMatchObject({
+        code: 'TENANT_REGISTRATION_INVITE_REVOKED',
+      });
+
+      // Invite 2 is active
+      const res2 = await inviteService.resolveInvite(invite2.rawToken);
+      expect(res2.id).toBe(invite2.id);
+
+      // Exactly ONE active invite in DB for this friend
+      const activeInvites = await prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${testDormAId}, true)`;
+        return tx.tenantRegistrationInvite.findMany({
+          where: {
+            dormitoryId: testDormAId,
+            lineFriendId: testFriendAId,
+            consumedAt: null,
+            revokedAt: null,
+            expiresAt: { gt: new Date() },
+          },
+        });
+      });
+      expect(activeInvites).toHaveLength(1);
+      expect(activeInvites[0].id).toBe(invite2.id);
+    });
+
+    it('reply failure revokes invite so zero orphan active invites remain in DB', async () => {
+      const invite = await inviteService.createInvite(testDormAId, testFriendAId);
+
+      // Simulate reply failure
+      await inviteService.revokeInvite(invite.id);
+
+      // Resolving the failed invite fails closed
+      await expect(
+        inviteService.resolveInvite(invite.rawToken)
+      ).rejects.toMatchObject({
+        code: 'TENANT_REGISTRATION_INVITE_REVOKED',
+      });
+
+      // Zero active invites remain
+      const activeInvites = await prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${testDormAId}, true)`;
+        return tx.tenantRegistrationInvite.findMany({
+          where: {
+            dormitoryId: testDormAId,
+            lineFriendId: testFriendAId,
+            consumedAt: null,
+            revokedAt: null,
+            expiresAt: { gt: new Date() },
+          },
+        });
+      });
+      expect(activeInvites).toHaveLength(0);
+    });
+
+    it('getPublicAppOrigin enforces HTTPS and fails closed on missing/localhost in production', () => {
+      const origEnv = process.env.NODE_ENV;
+      const origOrigin = process.env.PUBLIC_APP_ORIGIN;
+
+      try {
+        process.env.NODE_ENV = 'production';
+
+        // Missing
+        delete process.env.PUBLIC_APP_ORIGIN;
+        expect(() => getPublicAppOrigin()).toThrowError(/PUBLIC_APP_ORIGIN is not configured/);
+
+        // Localhost
+        process.env.PUBLIC_APP_ORIGIN = 'http://localhost:3000';
+        expect(() => getPublicAppOrigin()).toThrowError(/cannot be localhost/);
+
+        // Non-HTTPS
+        process.env.PUBLIC_APP_ORIGIN = 'http://dorm.horplus.com';
+        expect(() => getPublicAppOrigin()).toThrowError(/must use HTTPS/);
+
+        // Valid Production HTTPS
+        process.env.PUBLIC_APP_ORIGIN = 'https://dorm.horplus.com/';
+        expect(getPublicAppOrigin()).toBe('https://dorm.horplus.com');
+      } finally {
+        process.env.NODE_ENV = origEnv;
+        if (origOrigin !== undefined) {
+          process.env.PUBLIC_APP_ORIGIN = origOrigin;
+        } else {
+          delete process.env.PUBLIC_APP_ORIGIN;
+        }
+      }
+    });
   });
 });

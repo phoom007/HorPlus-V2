@@ -65,14 +65,27 @@ export function getPublicWebhookOrigin(): string {
 
 export function getPublicAppOrigin(): string {
   const isE2E = process.env.NODE_ENV === 'test' || process.env.HORPLUS_E2E === 'true';
-  const origin = (process.env.PUBLIC_APP_ORIGIN || process.env.PUBLIC_WEBHOOK_ORIGIN || (isE2E ? 'https://app.horplus.com' : '')).trim().replace(/\/+$/, '');
-  if (!origin) {
-    if (process.env.NODE_ENV === 'production') {
+  const isProd = process.env.NODE_ENV === 'production';
+
+  const rawOrigin = isProd
+    ? (process.env.PUBLIC_APP_ORIGIN || '')
+    : (process.env.PUBLIC_APP_ORIGIN || (isE2E ? 'https://app.horplus.com' : 'http://localhost:5173'));
+
+  const origin = rawOrigin.trim().replace(/\/+$/, '');
+
+  if (isProd) {
+    if (!origin) {
       throw new AppError('PUBLIC_APP_ORIGIN is not configured in production', 500, 'PUBLIC_APP_ORIGIN_NOT_CONFIGURED');
     }
-    return 'http://localhost:5173';
+    if (origin.startsWith('http://localhost') || origin.startsWith('http://127.0.0.1') || origin.startsWith('https://localhost') || origin.startsWith('https://127.0.0.1')) {
+      throw new AppError('PUBLIC_APP_ORIGIN cannot be localhost in production', 500, 'PUBLIC_APP_ORIGIN_LOCALHOST_REJECTED');
+    }
+    if (!origin.startsWith('https://')) {
+      throw new AppError('PUBLIC_APP_ORIGIN must use HTTPS in production', 500, 'PUBLIC_APP_ORIGIN_HTTPS_REQUIRED');
+    }
   }
-  return origin;
+
+  return origin || 'http://localhost:5173';
 }
 
 export function buildTenantRegistrationFlexMessage(dormitoryName: string, registrationUrl: string) {
@@ -638,7 +651,15 @@ export class LineOaService {
 
     const resolvedDormitoryId = configs[0].dormitory_id as string;
 
-    const replyActions: Array<{ replyToken: string; dormitoryName: string; rawToken: string; accessToken: string }> = [];
+    const replyActions: Array<{
+      replyToken: string;
+      dormitoryName: string;
+      rawToken: string;
+      accessToken: string;
+      inviteId?: string;
+      receiptId?: string;
+      dormitoryId?: string;
+    }> = [];
 
     const result = await this.prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${resolvedDormitoryId}, true)`;
@@ -738,6 +759,9 @@ export class LineOaService {
                   dormitoryName: dormName,
                   rawToken: invite.rawToken,
                   accessToken,
+                  inviteId: invite.id,
+                  receiptId: receipt.id,
+                  dormitoryId: resolvedDormitoryId,
                 });
               }
             } else if (event.type === 'unfollow') {
@@ -775,9 +799,24 @@ export class LineOaService {
         const appOrigin = getPublicAppOrigin();
         const registrationUrl = `${appOrigin}/tenant/register?t=${action.rawToken}`;
         const flexMessage = buildTenantRegistrationFlexMessage(action.dormitoryName, registrationUrl);
-        await this.lineAdapter.replyMessage(action.replyToken, [flexMessage], action.accessToken);
+        const replySuccess = await this.lineAdapter.replyMessage(action.replyToken, [flexMessage], action.accessToken);
+        if (!replySuccess) {
+          throw new Error('LINE replyMessage returned false');
+        }
       } catch (err: any) {
-        console.warn('Failed to send LINE follow reply:', { errorCode: err.code || 'UNKNOWN' });
+        console.warn('Failed to send LINE follow reply:', { errorCode: err.code || 'UNKNOWN', message: err.message });
+        if (action.inviteId) {
+          await this.inviteService.revokeInvite(action.inviteId).catch(() => {});
+        }
+        if (action.receiptId && action.dormitoryId) {
+          await this.prisma.$transaction(async (tx) => {
+            await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${action.dormitoryId}, true)`;
+            await tx.lineWebhookEventReceipt.update({
+              where: { id: action.receiptId },
+              data: { status: 'failed' },
+            });
+          }).catch(() => {});
+        }
       }
     }
 

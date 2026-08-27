@@ -47,15 +47,27 @@ export class TenantRegistrationInviteService {
     tokenHash: string;
     expiresAt: Date;
   }> {
-    if (!dormitoryId || !lineFriendId) {
-      throw new AppError('Missing required dormitory or LINE friend identity', 400, 'INVALID_INVITE_PARAMS');
-    }
+    const client = tx || this.prisma;
+
+    // Revoke any prior unconsumed active invite for same friend & purpose to prevent proliferation
+    await client.tenantRegistrationInvite.updateMany({
+      where: {
+        dormitoryId,
+        lineFriendId,
+        purpose: 'TENANT_REGISTRATION',
+        consumedAt: null,
+        revokedAt: null,
+        expiresAt: { gt: new Date() },
+      },
+      data: {
+        revokedAt: new Date(),
+      },
+    });
 
     const rawToken = crypto.randomBytes(32).toString('hex');
     const tokenHash = hashToken(rawToken);
     const expiresAt = new Date(Date.now() + TENANT_REGISTRATION_INVITE_TTL_MS);
 
-    const client = tx || this.prisma;
     const invite = await client.tenantRegistrationInvite.create({
       data: {
         dormitoryId,
@@ -74,6 +86,21 @@ export class TenantRegistrationInviteService {
       tokenHash,
       expiresAt: invite.expiresAt,
     };
+  }
+
+  /**
+   * Revokes an existing active invite by ID.
+   */
+  async revokeInvite(
+    inviteId: string,
+    tx?: Prisma.TransactionClient
+  ): Promise<void> {
+    if (!inviteId) return;
+    const client = tx || this.prisma;
+    await client.tenantRegistrationInvite.updateMany({
+      where: { id: inviteId, consumedAt: null, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
   }
 
   /**

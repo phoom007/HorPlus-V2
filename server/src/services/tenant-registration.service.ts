@@ -389,6 +389,8 @@ export class TenantRegistrationService {
 
     const prisma = getPrismaClient();
     const resTx = await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormitoryId}, true)`;
+
       // 1. Re-verify request status inside transaction
       const req = await tx.tenantRegistrationRequest.findFirst({
         where: { id, dormitoryId },
@@ -656,7 +658,16 @@ export class TenantRegistrationService {
         throw err;
       }
 
-      // 3. Create Tenant B
+      // 3. Verify LINE identity belongs to this dormitory (Defense-in-depth)
+      if (req.lineFollowerId) {
+        const lineFriend = await tx.dormitoryLineFriend.findFirst({
+          where: { id: req.lineFollowerId, dormitoryId },
+        });
+        if (!lineFriend) {
+          throw new AppError('LINE identity does not belong to this dormitory', 400, 'CROSS_DORM_IDENTITY_MISMATCH');
+        }
+      }
+
       const tenantNumber = await generateNextTenantNumber(dormitoryId, tx);
       const displayName = `${req.firstName} ${req.lastName}`.trim();
 
