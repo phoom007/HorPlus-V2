@@ -7,7 +7,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Building2, CheckCircle2, User, Phone, FileText, Send, AlertCircle, ArrowLeft, ShieldCheck, Heart, BedDouble } from 'lucide-react';
 import { getDataProvider } from '../../data/dataProvider';
 import { Room } from '../../types';
-import { submitTenantRegistrationRequest, getPublicDormitoryPolicy } from '../../data/adapters/api';
+import { submitTenantRegistrationRequest, getPublicDormitoryPolicy, getTenantRegistrationInviteContext } from '../../data/adapters/api';
 import { TenantDailyRequestModal } from '../../components/TenantDailyRequestModal';
 import { TenantClaimModal } from '../../components/TenantClaimModal';
 
@@ -41,6 +41,8 @@ export const TenantRegisterPage: React.FC = () => {
   const [note, setNote] = useState('');
   const [agreedTerms, setAgreedTerms] = useState(false);
   const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
+  const [inviteToken, setInviteToken] = useState<string | null>(null);
+  const [lineFriendDisplayName, setLineFriendDisplayName] = useState<string | null>(null);
 
   const [hasSigned, setHasSigned] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -49,18 +51,43 @@ export const TenantRegisterPage: React.FC = () => {
   const loadData = async () => {
     try {
       setLoading(true);
+      setErrorText(null);
       const urlParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
-      const urlDormId = urlParams?.get('dormitoryId') || undefined;
+      const tokenFromUrl = urlParams?.get('t') || urlParams?.get('token') || undefined;
 
-      const policyRes = await getPublicDormitoryPolicy(urlDormId);
-      if (policyRes.success && policyRes.data) {
-        setPolicyData(policyRes.data);
-      }
+      if (tokenFromUrl) {
+        setInviteToken(tokenFromUrl);
+        const inviteRes = await getTenantRegistrationInviteContext(tokenFromUrl);
+        if (inviteRes.success && inviteRes.data) {
+          setPolicyData(inviteRes.data.policy);
+          setLineFriendDisplayName(inviteRes.data.lineDisplayName || null);
+          if (inviteRes.data.rooms && inviteRes.data.rooms.length > 0) {
+            setRooms(inviteRes.data.rooms.map(r => ({
+              id: r.id,
+              roomNumber: r.roomNumber,
+              floor: r.floor,
+              monthlyRent: r.monthlyRent,
+              depositAmount: r.depositAmount,
+              status: r.status || 'AVAILABLE',
+              dormitoryId: inviteRes.data.dormitoryId,
+            } as any)));
+            setRequestedRoomNumber(inviteRes.data.rooms[0].roomNumber);
+          }
+        } else {
+          setErrorText(inviteRes.error?.message || 'ลิงก์ลงทะเบียนไม่ถูกต้องหรือหมดอายุแล้ว');
+        }
+      } else {
+        const urlDormId = urlParams?.get('dormitoryId') || undefined;
+        const policyRes = await getPublicDormitoryPolicy(urlDormId);
+        if (policyRes.success && policyRes.data) {
+          setPolicyData(policyRes.data);
+        }
 
-      // In public unauthenticated tenant registration, allow text input for room unless rooms are provided
-      setRooms([]);
-      if (!requestedRoomNumber) {
-        setRequestedRoomNumber('A101');
+        // In public unauthenticated tenant registration, allow text input for room unless rooms are provided
+        setRooms([]);
+        if (!requestedRoomNumber) {
+          setRequestedRoomNumber('A101');
+        }
       }
 
       // Check pre-link User session
@@ -168,7 +195,8 @@ export const TenantRegisterPage: React.FC = () => {
 
     try {
       const res = await submitTenantRegistrationRequest({
-        dormitoryId: policyData.dormitoryId,
+        dormitoryId: policyData.dormitoryId || undefined,
+        inviteToken: inviteToken || undefined,
         requestedRoomId: requestedRoomNumber,
         firstName: firstName.trim(),
         lastName: lastName.trim(),
@@ -238,6 +266,12 @@ export const TenantRegisterPage: React.FC = () => {
           <Building2 className="w-10 h-10 mx-auto mb-2 opacity-90" />
           <h1 className="text-xl font-black">{policyData.dormitoryName || 'ลงทะเบียนจองห้องพักผู้เช่า'}</h1>
           <p className="text-xs text-indigo-150 mt-1">HorPlus-V2 Tenant Registration Portal</p>
+          {lineFriendDisplayName && (
+            <div className="mt-3 inline-flex items-center gap-1.5 px-3 py-1 bg-[#06C755]/20 border border-[#06C755]/40 rounded-full text-xs font-semibold text-white">
+              <span className="w-2 h-2 rounded-full bg-[#06C755]"></span>
+              <span>เชื่อมต่อกับ LINE: {lineFriendDisplayName}</span>
+            </div>
+          )}
         </div>
 
         {/* Content */}

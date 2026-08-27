@@ -2,6 +2,8 @@ import { Router, Request, Response } from 'express';
 import { z } from 'zod';
 import { AuthenticationService } from '../services/auth.service.js';
 import { TenantRegistrationService } from '../services/tenant-registration.service.js';
+import { tenantRegistrationInviteService } from '../services/tenant-registration-invite.service.js';
+import { getPrismaClient } from '../db/prisma.js';
 import { createRequireSessionMiddleware } from '../middleware/require-session.js';
 import { requireDormitoryPermission, resolveDormitoryContextMiddleware } from '../middleware/permission.js';
 import { requireDormitoryWriteEntitlement } from '../middleware/entitlement.js';
@@ -86,9 +88,57 @@ export function createTenantRegistrationRouter(
     }
   });
 
+  // GET /api/v1/tenant-registrations/invite-context?t=<token>
+  router.get('/invite-context', async (req: Request, res: Response) => {
+    try {
+      const rawToken = (req.query.t || req.query.token) as string;
+      if (!rawToken || typeof rawToken !== 'string' || !rawToken.trim()) {
+        return res.status(400).json({
+          error: {
+            code: 'TENANT_REGISTRATION_INVITE_INVALID',
+            message: 'กรุณาระบุ token สำหรับการลงทะเบียน',
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+
+      const invite = await tenantRegistrationInviteService.resolveInvite(rawToken.trim());
+      const policy = await registrationService.getPublicDormitoryPolicy(invite.dormitoryId);
+      const prisma = getPrismaClient();
+      const rooms = await prisma.room.findMany({
+        where: { dormitoryId: invite.dormitoryId, deletedAt: null },
+        select: { id: true, roomNumber: true, floor: true, monthlyRent: true, depositAmount: true, status: true },
+        orderBy: { roomNumber: 'asc' },
+      });
+
+      res.json({
+        data: {
+          dormitoryId: invite.dormitoryId,
+          dormitoryName: invite.dormitoryName,
+          lineDisplayName: invite.lineDisplayName,
+          linePictureUrl: invite.linePictureUrl,
+          expiresAt: invite.expiresAt,
+          policy,
+          rooms: rooms.map(r => ({
+            id: r.id,
+            roomNumber: r.roomNumber,
+            floor: r.floor,
+            monthlyRent: Number(r.monthlyRent),
+            depositAmount: Number(r.depositAmount),
+            status: r.status,
+          })),
+        },
+      });
+    } catch (err) {
+      handleServiceError(res, err, req);
+    }
+  });
+
   // POST /api/v1/tenant-registrations
   const CreateTenantRegistrationSchema = z.object({
     dormitoryId: z.string().uuid().optional(),
+    inviteToken: z.string().optional(),
     requestedRoomId: z.string().min(1, 'กรุณาระบุห้องพักที่ต้องการสมัคร'),
     firstName: z.string().trim().min(1, 'กรุณาระบุชื่อจริง'),
     lastName: z.string().trim().min(1, 'กรุณาระบุนามสกุล'),
@@ -103,7 +153,6 @@ export function createTenantRegistrationRouter(
 
   router.post('/', async (req: Request, res: Response) => {
     try {
-      const dormId = getPublicDormitoryId(req);
       const parseResult = CreateTenantRegistrationSchema.safeParse(req.body);
       if (!parseResult.success) {
         const firstIssue = parseResult.error.issues[0];
@@ -130,8 +179,13 @@ export function createTenantRegistrationRouter(
       }
 
       const validData = parseResult.data;
+      let dormId = '';
+      if (!validData.inviteToken) {
+        dormId = getPublicDormitoryId(req);
+      }
       const newReq = await registrationService.createRequest(dormId, {
-        dormitoryId: dormId,
+        dormitoryId: dormId || undefined,
+        inviteToken: validData.inviteToken || undefined,
         requestedRoomId: validData.requestedRoomId,
         firstName: validData.firstName,
         lastName: validData.lastName,

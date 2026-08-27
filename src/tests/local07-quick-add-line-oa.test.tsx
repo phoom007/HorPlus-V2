@@ -231,7 +231,7 @@ describe('LOCAL-07 — Quick Add Tenant via LINE OA', () => {
         webhookVerifiedAt: '2026-08-01T00:00:00.000Z',
         webhookUrl: 'https://webhook.horplus.com/api/v1/line/webhook/key',
         effectiveLineId: '@premium_dorm',
-        friendAddUrl: 'https://line.me/R/ti/p/@premium_dorm',
+        friendAddUrl: 'https://line.me/R/ti/p/%40premium_dorm',
         qrSvg: '<svg data-testid="real-qr-svg"><rect width="200" height="200" /></svg>',
       },
     });
@@ -262,7 +262,7 @@ describe('LOCAL-07 — Quick Add Tenant via LINE OA', () => {
 
     // Friend add link
     const friendLink = screen.getByRole('link', { name: /เพิ่มเพื่อนใน LINE/i });
-    expect(friendLink.getAttribute('href')).toBe('https://line.me/R/ti/p/@premium_dorm');
+    expect(friendLink.getAttribute('href')).toBe('https://line.me/R/ti/p/%40premium_dorm');
     expect(friendLink.getAttribute('target')).toBe('_blank');
 
     // 5-step instructions
@@ -294,7 +294,7 @@ describe('LOCAL-07 — Quick Add Tenant via LINE OA', () => {
         webhookVerifiedAt: '2026-08-01T00:00:00.000Z',
         webhookUrl: 'https://webhook.horplus.com/api/v1/line/webhook/key',
         effectiveLineId: '@dorm_fresh_shared',
-        friendAddUrl: 'https://line.me/R/ti/p/@dorm_fresh_shared',
+        friendAddUrl: 'https://line.me/R/ti/p/%40dorm_fresh_shared',
         qrSvg: '<svg data-testid="shared-qr-svg"></svg>',
       },
     });
@@ -334,8 +334,8 @@ describe('LOCAL-07 — Quick Add Tenant via LINE OA', () => {
     const link202 = screen.getByRole('link', { name: /เพิ่มเพื่อนใน LINE/i }).getAttribute('href');
 
     // Identical friend add URL across rooms
-    expect(link101).toBe('https://line.me/R/ti/p/@dorm_fresh_shared');
-    expect(link202).toBe('https://line.me/R/ti/p/@dorm_fresh_shared');
+    expect(link101).toBe('https://line.me/R/ti/p/%40dorm_fresh_shared');
+    expect(link202).toBe('https://line.me/R/ti/p/%40dorm_fresh_shared');
     expect(mockGetConfig).toHaveBeenCalledWith('dorm-fresh-01');
   });
 
@@ -361,7 +361,7 @@ describe('LOCAL-07 — Quick Add Tenant via LINE OA', () => {
             webhookVerifiedAt: '2026-08-01T00:00:00.000Z',
             webhookUrl: 'https://webhook.horplus.com/api/v1/line/webhook/key2',
             effectiveLineId: '@comp_dorm_02',
-            friendAddUrl: 'https://line.me/R/ti/p/@comp_dorm_02',
+            friendAddUrl: 'https://line.me/R/ti/p/%40comp_dorm_02',
             qrSvg: '<svg data-testid="dorm-b-qr-svg"></svg>',
           },
         };
@@ -386,7 +386,7 @@ describe('LOCAL-07 — Quick Add Tenant via LINE OA', () => {
 
     expect(screen.getByText('หอพักคอมพรีเฮนซีฟ')).toBeTruthy();
     expect(screen.getByRole('link', { name: /เพิ่มเพื่อนใน LINE/i }).getAttribute('href')).toBe(
-      'https://line.me/R/ti/p/@comp_dorm_02'
+      'https://line.me/R/ti/p/%40comp_dorm_02'
     );
   });
 });

@@ -46,6 +46,12 @@ export interface LinePlatformAdapter {
     retryKey: string
   ): Promise<LinePushResult>;
 
+  replyMessage(
+    replyToken: string,
+    messages: any[],
+    accessToken: string
+  ): Promise<boolean>;
+
   setWebhookEndpoint(endpointUrl: string, accessToken: string): Promise<{ success: boolean }>;
   testWebhookEndpoint(endpointUrl: string, accessToken: string): Promise<LineWebhookTestResult>;
   getWebhookEndpoint(accessToken: string): Promise<LineWebhookEndpointInfo | null>;
@@ -197,6 +203,26 @@ export class HttpLinePlatformAdapter implements LinePlatformAdapter {
     }
   }
 
+  async replyMessage(replyToken: string, messages: any[], accessToken: string): Promise<boolean> {
+    try {
+      const res = await fetch(`${this.baseUrl}/v2/bot/message/reply`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({
+          replyToken,
+          messages,
+        }),
+      });
+      return res.ok;
+    } catch (err: any) {
+      console.warn('LINE replyMessage: network error', { errorCode: err.code || 'UNKNOWN' });
+      return false;
+    }
+  }
+
   async setWebhookEndpoint(endpointUrl: string, accessToken: string): Promise<{ success: boolean }> {
     try {
       const res = await fetch(`${this.baseUrl}/v2/bot/channel/webhook/endpoint`, {
@@ -277,10 +303,12 @@ export class HttpLinePlatformAdapter implements LinePlatformAdapter {
  */
 export class MockLinePlatformAdapter implements LinePlatformAdapter {
   public pushCalls: Array<{ toLineUserId: string; flexMessage: any; retryKey: string }> = [];
+  public replyCalls: Array<{ replyToken: string; messages: any[]; accessToken: string }> = [];
   public profileCalls: Array<{ lineUserId: string; accessToken: string }> = [];
   public verifyAccessTokenCalls: Array<{ accessToken: string }> = [];
 
   public mockPushResult?: LinePushResult;
+  public mockReplySuccess: boolean = true;
   public customBotInfo?: LineBotInfo;
   public simulate409WithAcceptedId = false;
   public simulate409WithoutAcceptedId = false;
@@ -385,5 +413,10 @@ export class MockLinePlatformAdapter implements LinePlatformAdapter {
       endpoint: this.storedWebhookEndpoint,
       active: this.storedWebhookActive,
     };
+  }
+
+  async replyMessage(replyToken: string, messages: any[], accessToken: string): Promise<boolean> {
+    this.replyCalls.push({ replyToken, messages, accessToken });
+    return this.mockReplySuccess;
   }
 }

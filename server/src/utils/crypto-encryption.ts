@@ -81,15 +81,19 @@ export function generateOpaqueWebhookKey(): { rawKey: string; keyHash: string; k
 }
 
 /**
+ * Compute HMAC-SHA256 signature for LINE webhooks
+ */
+export function createLineSignature(bodyBuffer: Buffer, channelSecret: string): string {
+  return crypto.createHmac('sha256', channelSecret).update(bodyBuffer).digest('base64');
+}
+
+/**
  * Constant-time HMAC-SHA256 signature verification for LINE webhooks
  */
 export function verifyLineSignature(bodyBuffer: Buffer, channelSecret: string, signatureHeader: string): boolean {
   if (!bodyBuffer || !channelSecret || !signatureHeader) return false;
   try {
-    const expectedSignature = crypto
-      .createHmac('sha256', channelSecret)
-      .update(bodyBuffer)
-      .digest('base64');
+    const expectedSignature = createLineSignature(bodyBuffer, channelSecret);
 
     const sigA = Buffer.from(signatureHeader, 'utf8');
     const sigB = Buffer.from(expectedSignature, 'utf8');

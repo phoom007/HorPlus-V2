@@ -18,6 +18,7 @@ import { LineFriendService } from './line-friend.service.js';
 import { LinePlatformAdapter, MockLinePlatformAdapter } from './line-platform-adapter.js';
 import { createLinePlatformAdapter } from './line-adapter-factory.js';
 import { LineChannelTokenProvider, ILineChannelTokenProvider, FakeLineTokenProvider } from './line-channel-token-provider.js';
+import { TenantRegistrationInviteService, tenantRegistrationInviteService } from './tenant-registration-invite.service.js';
 import QRCode from 'qrcode';
 
 export interface PublicWebhookOriginStatus {
@@ -62,13 +63,91 @@ export function getPublicWebhookOrigin(): string {
   return status.origin || '';
 }
 
+export function getPublicAppOrigin(): string {
+  const isE2E = process.env.NODE_ENV === 'test' || process.env.HORPLUS_E2E === 'true';
+  const origin = (process.env.PUBLIC_APP_ORIGIN || process.env.PUBLIC_WEBHOOK_ORIGIN || (isE2E ? 'https://app.horplus.com' : '')).trim().replace(/\/+$/, '');
+  if (!origin) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new AppError('PUBLIC_APP_ORIGIN is not configured in production', 500, 'PUBLIC_APP_ORIGIN_NOT_CONFIGURED');
+    }
+    return 'http://localhost:5173';
+  }
+  return origin;
+}
+
+export function buildTenantRegistrationFlexMessage(dormitoryName: string, registrationUrl: string) {
+  return {
+    type: 'flex',
+    altText: `ยินดีต้อนรับสู่ ${dormitoryName} - ลงทะเบียนผู้เช่า`,
+    contents: {
+      type: 'bubble',
+      header: {
+        type: 'box',
+        layout: 'vertical',
+        backgroundColor: '#06C755',
+        paddingAll: '20px',
+        contents: [
+          {
+            type: 'text',
+            text: 'ยินดีต้อนรับสู่',
+            color: '#FFFFFF',
+            size: 'xs',
+            weight: 'regular',
+          },
+          {
+            type: 'text',
+            text: dormitoryName,
+            color: '#FFFFFF',
+            size: 'lg',
+            weight: 'bold',
+            wrap: true,
+          },
+        ],
+      },
+      body: {
+        type: 'box',
+        layout: 'vertical',
+        spacing: 'md',
+        contents: [
+          {
+            type: 'text',
+            text: 'ลงทะเบียนข้อมูลผู้เช่าเพื่อส่งคำขอให้เจ้าของหอพักตรวจสอบ',
+            size: 'sm',
+            color: '#475569',
+            wrap: true,
+          },
+        ],
+      },
+      footer: {
+        type: 'box',
+        layout: 'vertical',
+        spacing: 'sm',
+        contents: [
+          {
+            type: 'button',
+            style: 'primary',
+            color: '#06C755',
+            action: {
+              type: 'uri',
+              label: 'ลงทะเบียนผู้เช่า',
+              uri: registrationUrl,
+            },
+          },
+        ],
+      },
+    },
+  };
+}
+
 export class LineOaService {
   private friendService: LineFriendService;
+  private inviteService: TenantRegistrationInviteService;
   private lineAdapter: LinePlatformAdapter;
   private tokenProvider: ILineChannelTokenProvider;
 
-  constructor(private prisma: PrismaClient, adapter?: LinePlatformAdapter, tokenProvider?: ILineChannelTokenProvider) {
+  constructor(private prisma: PrismaClient, adapter?: LinePlatformAdapter, tokenProvider?: ILineChannelTokenProvider, inviteService?: TenantRegistrationInviteService) {
     this.friendService = new LineFriendService(prisma);
+    this.inviteService = inviteService || new TenantRegistrationInviteService(prisma);
     if (adapter && tokenProvider) {
       this.lineAdapter = adapter;
       this.tokenProvider = tokenProvider;
@@ -181,7 +260,7 @@ export class LineOaService {
 
       if (isReady && effectiveLineId) {
         const cleanId = effectiveLineId.replace(/^@/, '').trim();
-        friendAddUrl = `https://line.me/R/ti/p/@${encodeURIComponent(cleanId)}`;
+        friendAddUrl = `https://line.me/R/ti/p/%40${encodeURIComponent(cleanId)}`;
         try {
           qrSvg = await QRCode.toString(friendAddUrl, {
             type: 'svg',
@@ -559,7 +638,9 @@ export class LineOaService {
 
     const resolvedDormitoryId = configs[0].dormitory_id as string;
 
-    return await this.prisma.$transaction(async (tx) => {
+    const replyActions: Array<{ replyToken: string; dormitoryName: string; rawToken: string; accessToken: string }> = [];
+
+    const result = await this.prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${resolvedDormitoryId}, true)`;
 
       const fullConfig = await tx.dormitoryLineConfig.findUnique({
@@ -635,9 +716,30 @@ export class LineOaService {
             const pictureUrl = profile?.pictureUrl || null;
 
             if (event.type === 'follow') {
-              await this.friendService.upsertFriendFromWebhook(
+              const friend = await this.friendService.upsertFriendFromWebhook(
                 resolvedDormitoryId, lineUserId, displayName, pictureUrl, 'FOLLOWING', tx
               );
+
+              const dorm = await tx.dormitory.findUnique({
+                where: { id: resolvedDormitoryId },
+                select: { name: true },
+              });
+              const dormName = dorm?.name || 'หอพัก';
+
+              const invite = await this.inviteService.createInvite(
+                resolvedDormitoryId,
+                friend.id,
+                tx
+              );
+
+              if (event.replyToken && accessToken) {
+                replyActions.push({
+                  replyToken: event.replyToken,
+                  dormitoryName: dormName,
+                  rawToken: invite.rawToken,
+                  accessToken,
+                });
+              }
             } else if (event.type === 'unfollow') {
               await this.friendService.upsertFriendFromWebhook(
                 resolvedDormitoryId, lineUserId, displayName, pictureUrl, 'UNFOLLOWED', tx
@@ -666,5 +768,19 @@ export class LineOaService {
 
       return { success: true, processedCount, deduplicatedCount };
     });
+
+    // Send replies outside database transaction
+    for (const action of replyActions) {
+      try {
+        const appOrigin = getPublicAppOrigin();
+        const registrationUrl = `${appOrigin}/tenant/register?t=${action.rawToken}`;
+        const flexMessage = buildTenantRegistrationFlexMessage(action.dormitoryName, registrationUrl);
+        await this.lineAdapter.replyMessage(action.replyToken, [flexMessage], action.accessToken);
+      } catch (err: any) {
+        console.warn('Failed to send LINE follow reply:', { errorCode: err.code || 'UNKNOWN' });
+      }
+    }
+
+    return result;
   }
 }

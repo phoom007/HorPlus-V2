@@ -337,6 +337,7 @@ export async function submitTenantRegistrationRequest(payload: {
   agreedTerms?: boolean;
   signatureBase64?: string;
   expectedPolicyVersion?: number;
+  inviteToken?: string;
 }): Promise<DataResult<any>> {
   try {
     const activeDormId = payload.dormitoryId || (typeof window !== 'undefined' ? localStorage.getItem('selected_dormitory_id') : undefined) || undefined;
@@ -346,6 +347,40 @@ export async function submitTenantRegistrationRequest(payload: {
       expectedPolicyVersion: typeof payload.expectedPolicyVersion === 'number' ? payload.expectedPolicyVersion : (Number(payload.expectedPolicyVersion) || 1),
     };
     const res = await httpRequest<any>('POST', '/tenant-registrations', bodyPayload);
+    const data = res?.data || res;
+    return { success: true, data };
+  } catch (err: any) {
+    return {
+      success: false,
+      error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message }
+    };
+  }
+}
+
+export async function getTenantRegistrationInviteContext(token: string): Promise<DataResult<{
+  dormitoryId: string;
+  dormitoryName: string;
+  lineDisplayName: string;
+  linePictureUrl?: string | null;
+  expiresAt: string;
+  policy: {
+    dormitoryId: string;
+    dormitoryName: string;
+    defaultTerms: string;
+    petPolicy: { allowed: string; allowedTypes?: string[] };
+    version: number;
+  };
+  rooms: Array<{
+    id: string;
+    roomNumber: string;
+    floor: number;
+    monthlyRent: number;
+    depositAmount: number;
+    status?: string;
+  }>;
+}>> {
+  try {
+    const res = await httpRequest<any>('GET', `/tenant-registrations/invite-context?t=${encodeURIComponent(token)}`);
     const data = res?.data || res;
     return { success: true, data };
   } catch (err: any) {

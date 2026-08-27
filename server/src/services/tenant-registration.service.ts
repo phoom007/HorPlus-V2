@@ -6,10 +6,12 @@ import { outboxService } from './outbox.service.js';
 import { SignatureStorageService } from './signature-storage.service.js';
 import { subscriptionEntitlementService } from './subscription-entitlement.service.js';
 import { generateNextTenantNumber } from './tenant-number.service.js';
+import { tenantRegistrationInviteService } from './tenant-registration-invite.service.js';
 import crypto from 'crypto';
 
 export interface CreateRegistrationDto {
-  dormitoryId: string;
+  dormitoryId?: string;
+  inviteToken?: string;
   requestedRoomId: string;
   firstName: string;
   lastName: string;
@@ -110,6 +112,22 @@ export class TenantRegistrationService {
     // 3. Authoritative DB Transaction with FOR UPDATE lock on policy defaults to prevent TOCTOU race
     try {
       return await prisma.$transaction(async (tx) => {
+        let targetDormitoryId = dormitoryId;
+        let lineFollowerId: string | null = null;
+
+        if (payload.inviteToken) {
+          const inviteResult = await tenantRegistrationInviteService.consumeInviteInTransaction(payload.inviteToken, tx);
+          if (targetDormitoryId && targetDormitoryId !== inviteResult.dormitoryId) {
+            throw new AppError('Dormitory mismatch with invite token', 400, 'DORMITORY_MISMATCH');
+          }
+          targetDormitoryId = inviteResult.dormitoryId;
+          lineFollowerId = inviteResult.lineFriendId;
+        }
+
+        if (!targetDormitoryId) {
+          throw new AppError('ไม่พบข้อมูลหอพัก', 400, 'DORMITORY_REQUIRED');
+        }
+
         // Lock property defaults row
         const defaultsRaw = await tx.$queryRaw<Array<{
           id: string;
@@ -120,7 +138,7 @@ export class TenantRegistrationService {
         }>>`
           SELECT id, dormitory_id, default_terms, pet_policy, version
           FROM dormitory_property_defaults
-          WHERE dormitory_id = ${dormitoryId}::uuid
+          WHERE dormitory_id = ${targetDormitoryId}::uuid
           FOR UPDATE
         `;
 
@@ -138,7 +156,7 @@ export class TenantRegistrationService {
 
         // Fetch Dormitory Info
         const dorm = await tx.dormitory.findUnique({
-          where: { id: dormitoryId },
+          where: { id: targetDormitoryId },
           select: { id: true, name: true },
         });
         if (!dorm) {
@@ -149,7 +167,7 @@ export class TenantRegistrationService {
         const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(payload.requestedRoomId);
         const room = await tx.room.findFirst({
           where: {
-            dormitoryId,
+            dormitoryId: targetDormitoryId,
             deletedAt: null,
             OR: isUuid
               ? [{ id: payload.requestedRoomId }]
@@ -170,7 +188,7 @@ export class TenantRegistrationService {
 
         const acceptanceSnapshot = {
           snapshotVersion: 1,
-          dormitoryId,
+          dormitoryId: targetDormitoryId,
           dormitoryName: dorm.name,
           requestedRoomId: room.id,
           requestedRoomNumber: room.roomNumber,
@@ -185,7 +203,8 @@ export class TenantRegistrationService {
 
         return tx.tenantRegistrationRequest.create({
           data: {
-            dormitoryId,
+            dormitoryId: targetDormitoryId,
+            lineFollowerId,
             requestedRoomId: room.id,
             firstName: payload.firstName.trim(),
             lastName: payload.lastName.trim(),
@@ -649,6 +668,7 @@ export class TenantRegistrationService {
           lastName: req.lastName,
           displayName,
           phone: req.phone,
+          lineFriendId: req.lineFollowerId || null,
           status: 'active',
         },
       });

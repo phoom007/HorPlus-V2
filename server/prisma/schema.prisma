@@ -129,6 +129,7 @@ model Dormitory {
   dailyStays                 DailyStay[]
   dailyStayInvoices          DailyStayInvoice[]
   combinedPaymentGroups      CombinedPaymentGroup[]
+  tenantRegistrationInvites  TenantRegistrationInvite[]
 
   @@map("dormitories")
 }
@@ -514,8 +515,11 @@ model Tenant {
   provisionalRentalTerms ProvisionalRentalTerm[]
   dailyStays             DailyStay[]
   combinedPaymentGroups  CombinedPaymentGroup[]
+  lineFriendId           String?                  @map("line_friend_id") @db.Uuid
+  lineFriend             DormitoryLineFriend?     @relation(fields: [lineFriendId], references: [id], onDelete: SetNull)
 
   @@unique([dormitoryId, tenantNumber], name: "dormitory_tenant_number_unique")
+  @@index([dormitoryId, lineFriendId])
   @@map("tenants")
 }
 
@@ -1415,11 +1419,33 @@ model DormitoryLineFriend {
   createdAt           DateTime  @default(now()) @map("created_at") @db.Timestamptz()
   updatedAt           DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
 
-  dormitory    Dormitory              @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
-  accessGrants DormitoryAccessGrant[]
+  dormitory                  Dormitory                  @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
+  accessGrants               DormitoryAccessGrant[]
+  tenants                    Tenant[]
+  tenantRegistrationInvites  TenantRegistrationInvite[]
 
   @@unique([dormitoryId, lineUserIdHash], name: "dormitory_line_friend_unique")
   @@map("dormitory_line_friends")
+}
+
+model TenantRegistrationInvite {
+  id           String    @id @default(uuid()) @db.Uuid
+  dormitoryId  String    @map("dormitory_id") @db.Uuid
+  lineFriendId String    @map("line_friend_id") @db.Uuid
+  tokenHash    String    @unique @map("token_hash") @db.VarChar(255)
+  purpose      String    @default("TENANT_REGISTRATION") @db.VarChar(50)
+  expiresAt    DateTime  @map("expires_at") @db.Timestamptz()
+  consumedAt   DateTime? @map("consumed_at") @db.Timestamptz()
+  revokedAt    DateTime? @map("revoked_at") @db.Timestamptz()
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt    DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
+
+  dormitory  Dormitory           @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
+  lineFriend DormitoryLineFriend @relation(fields: [lineFriendId], references: [id], onDelete: Cascade)
+
+  @@index([dormitoryId, lineFriendId, purpose])
+  @@index([dormitoryId, expiresAt])
+  @@map("tenant_registration_invites")
 }
 
 model DormitoryAccessGrant {
