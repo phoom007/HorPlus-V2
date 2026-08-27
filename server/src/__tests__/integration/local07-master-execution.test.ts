@@ -101,6 +101,22 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
     };
   }
 
+  async function ensureDormitoryOwnerRole(dormitoryId: string) {
+    const existing = await prisma.role.findFirst({
+      where: { dormitoryId, code: 'OWNER' },
+    });
+    if (existing) return existing;
+    return prisma.role.create({
+      data: {
+        dormitoryId,
+        code: 'OWNER',
+        name: 'เจ้าของหอพัก',
+        permissions: { '*': ['*'] },
+        isSystem: true,
+      },
+    });
+  }
+
   beforeAll(async () => {
     prisma = getPrismaClient();
     app = createApp();
@@ -1264,21 +1280,21 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
         },
       });
 
-      const ownerRole = await prisma.role.findFirst({ where: { code: 'OWNER' } });
-
       const dormA = await prisma.dormitory.create({
         data: {
           name: 'Dorm A ของ Owner',
           type: 'apartment',
           status: 'active',
           createdByUserId: owner.id,
-          members: {
-            create: {
-              userId: owner.id,
-              roleId: ownerRole!.id,
-              status: 'active',
-            },
-          },
+        },
+      });
+      const ownerRoleA = await ensureDormitoryOwnerRole(dormA.id);
+      await prisma.dormitoryMember.create({
+        data: {
+          dormitoryId: dormA.id,
+          userId: owner.id,
+          roleId: ownerRoleA.id,
+          status: 'active',
         },
       });
 
@@ -1288,13 +1304,15 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
           type: 'apartment',
           status: 'active',
           createdByUserId: owner.id,
-          members: {
-            create: {
-              userId: owner.id,
-              roleId: ownerRole!.id,
-              status: 'active',
-            },
-          },
+        },
+      });
+      const ownerRoleB = await ensureDormitoryOwnerRole(dormB.id);
+      await prisma.dormitoryMember.create({
+        data: {
+          dormitoryId: dormB.id,
+          userId: owner.id,
+          roleId: ownerRoleB.id,
+          status: 'active',
         },
       });
 
@@ -1771,8 +1789,6 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
 
     it('rejects onboarding finalization with mismatched dormitory intent (403 INTENT_DORMITORY_MISMATCH) and does not retarget intent', async () => {
       const timestamp = Date.now();
-      const ownerRole = await prisma.role.findFirst({ where: { code: 'OWNER' } });
-
       const owner = await prisma.user.create({
         data: {
           googleSubject: `g-cross-dorm-${timestamp}`,
@@ -1790,13 +1806,15 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
           type: 'apartment',
           status: 'active',
           createdByUserId: owner.id,
-          members: {
-            create: {
-              userId: owner.id,
-              roleId: ownerRole!.id,
-              status: 'active',
-            },
-          },
+        },
+      });
+      const ownerRoleA = await ensureDormitoryOwnerRole(dormA.id);
+      await prisma.dormitoryMember.create({
+        data: {
+          dormitoryId: dormA.id,
+          userId: owner.id,
+          roleId: ownerRoleA.id,
+          status: 'active',
         },
       });
 
@@ -2350,11 +2368,12 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
         },
       });
 
-      const ownerRole = await prisma.role.findFirst({ where: { code: 'OWNER' } });
+      const ownerRoleA = await ensureDormitoryOwnerRole(dormA.id);
+      const ownerRoleB = await ensureDormitoryOwnerRole(dormB.id);
       await prisma.dormitoryMember.createMany({
         data: [
-          { dormitoryId: dormA.id, userId: user.id, roleId: ownerRole!.id, status: 'active' },
-          { dormitoryId: dormB.id, userId: user.id, roleId: ownerRole!.id, status: 'active' },
+          { dormitoryId: dormA.id, userId: user.id, roleId: ownerRoleA.id, status: 'active' },
+          { dormitoryId: dormB.id, userId: user.id, roleId: ownerRoleB.id, status: 'active' },
         ],
       });
 
@@ -3378,13 +3397,13 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
         },
       });
 
-      const ownerRole = await prisma.role.findFirst({ where: { code: 'OWNER' } });
+      const ownerRole = await ensureDormitoryOwnerRole(dorm.id);
       await prisma.dormitoryMember.createMany({
         data: [
           {
             dormitoryId: dorm.id,
             userId: ownerUser.id,
-            roleId: ownerRole!.id,
+            roleId: ownerRole.id,
             status: 'active',
           },
         ],
@@ -3805,12 +3824,13 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
           status: 'active',
         },
       });
+      const ownerRole30 = await ensureDormitoryOwnerRole(dorm30.id);
       await prisma.dormitoryMember.createMany({
         data: [
           {
             dormitoryId: dorm30.id,
             userId: ownerUser.id,
-            roleId: ownerRole!.id,
+            roleId: ownerRole30.id,
             status: 'active',
           },
         ],
@@ -3993,12 +4013,13 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
           createdAt: new Date('2026-08-01T00:00:00.000Z'),
         },
       });
+      const ownerRoleZero = await ensureDormitoryOwnerRole(dormFreshZeroActivity.id);
       await prisma.dormitoryMember.createMany({
         data: [
           {
             dormitoryId: dormFreshZeroActivity.id,
             userId: ownerUser.id,
-            roleId: ownerRole!.id,
+            roleId: ownerRoleZero.id,
             status: 'active',
           },
         ],
@@ -4077,12 +4098,13 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
           },
         },
       });
+      const ownerRoleF5 = await ensureDormitoryOwnerRole(dormCycleF5.id);
       await prisma.dormitoryMember.createMany({
         data: [
           {
             dormitoryId: dormCycleF5.id,
             userId: ownerUser.id,
-            roleId: ownerRole!.id,
+            roleId: ownerRoleF5.id,
             status: 'active',
           },
         ],
