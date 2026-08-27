@@ -115,6 +115,7 @@ describe.sequential('LOCAL-05: Local Security & Resilience Audit Suite', () => {
       'audit_logs',
       'dormitories',
       'sessions',
+      'coin_ledger_entries',
       'users'
     ];
     for (const tbl of tablesToClean) {

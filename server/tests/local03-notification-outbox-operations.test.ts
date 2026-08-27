@@ -71,6 +71,7 @@ describe('LOCAL-03: Local Notification Outbox & Operations Polish', () => {
       'audit_logs',
       'dormitories',
       'sessions',
+      'coin_ledger_entries',
       'users'
     ];
     for (const tbl of tablesToClean) {
