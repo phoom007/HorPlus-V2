@@ -87,6 +87,7 @@ describe('LOCAL-02: Contract Settlement, Termination & Renewal Suite', () => {
       'audit_logs',
       'dormitories',
       'sessions',
+      'coin_ledger_entries',
       'users'
     ];
     for (const tbl of tablesToClean) {
