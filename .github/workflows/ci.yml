@@ -86,6 +86,14 @@ jobs:
           cd server
           npm run lint
 
+      - name: Apply Database Migrations
+        env:
+          DATABASE_URL: postgresql://horplus_test:horplus_test_password@localhost:5432/horplus_test?schema=public
+          DIRECT_URL: postgresql://horplus_test:horplus_test_password@localhost:5432/horplus_test?schema=public
+        run: |
+          cd server
+          npm run prisma:migrate:deploy
+
       - name: Run Backend Tests
         env:
           NODE_ENV: test
