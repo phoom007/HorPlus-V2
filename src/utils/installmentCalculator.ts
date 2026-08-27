@@ -1,7 +1,7 @@
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
- * 
+ *
  * Exact satang integer arithmetic for dividing term rent into installments.
  * The remainder satangs are absorbed by the final installment to ensure:
  * sum(installments) === exact term rent.

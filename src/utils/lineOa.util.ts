@@ -9,4 +9,3 @@ export function resolveLineFriendAddUrl(lineId?: string | null): string {
   if (!cleanId) return '';
   return `https://line.me/R/ti/p/%40${encodeURIComponent(cleanId)}`;
 }
-

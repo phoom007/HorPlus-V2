@@ -179,4 +179,3 @@ export function formatShortThaiBuddhistDate(input?: Date | string | null): strin
     return '-';
   }
 }
-

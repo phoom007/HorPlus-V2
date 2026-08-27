@@ -8,7 +8,7 @@ describe('calculateInstallmentSchedule (Frontend)', () => {
     expect(schedule[0]).toEqual({ installmentNo: 1, amount: 4000, amountSatang: 400000, formattedAmount: '4,000.00' });
     expect(schedule[1]).toEqual({ installmentNo: 2, amount: 4000, amountSatang: 400000, formattedAmount: '4,000.00' });
     expect(schedule[2]).toEqual({ installmentNo: 3, amount: 4000, amountSatang: 400000, formattedAmount: '4,000.00' });
-    
+
     const sumSatang = schedule.reduce((sum, item) => sum + item.amountSatang, 0);
     expect(sumSatang).toBe(1200000);
   });
