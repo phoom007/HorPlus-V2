@@ -169,15 +169,20 @@ describe('TimeWheelPicker & Daily Time Selection Suite', () => {
     fireEvent.submit(form);
 
     await waitFor(() => {
-      expect(httpSpy).toHaveBeenCalled();
-    });
+      const matchingPostCalls = httpSpy.mock.calls.filter(
+        ([method, url]) =>
+          method === 'POST' &&
+          typeof url === 'string' &&
+          url.includes('/api/v1/daily-stays/owner-quick-add')
+      );
+      expect(matchingPostCalls).toHaveLength(1);
 
-    const [method, url, payload] = httpSpy.mock.calls[0];
-    expect(method).toBe('POST');
-    expect(url).toBe('/api/v1/daily-stays/owner-quick-add');
-    expect(payload.fullName).toBe('สมชาย ใจดี');
-    expect(payload.checkInTime).toBe('15:47');
-    // Check-Out time was left empty, so it is undefined / omitted
-    expect(payload.checkOutTime).toBeUndefined();
+      const [, requestUrl, payload] = matchingPostCalls[0] as [string, string, Record<string, unknown>];
+      expect(requestUrl).toBe('/api/v1/daily-stays/owner-quick-add');
+      expect(payload.fullName).toBe('สมชาย ใจดี');
+      expect(payload.checkInTime).toBe('15:47');
+      // Check-Out time was left empty, so it is undefined / omitted
+      expect(payload.checkOutTime).toBeUndefined();
+    });
   });
 });
