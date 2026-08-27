@@ -73,6 +73,9 @@ jobs:
           npm ci
 
       - name: Validate Prisma Schema
+        env:
+          DATABASE_URL: postgresql://horplus_test:horplus_test_password@localhost:5432/horplus_test?schema=public
+          DIRECT_URL: postgresql://horplus_test:horplus_test_password@localhost:5432/horplus_test?schema=public
         run: |
           cd server
           npm run prisma:validate
@@ -88,6 +91,7 @@ jobs:
           NODE_ENV: test
           PORT: 3000
           DATABASE_URL: postgresql://horplus_test:horplus_test_password@localhost:5432/horplus_test?schema=public
+          DIRECT_URL: postgresql://horplus_test:horplus_test_password@localhost:5432/horplus_test?schema=public
           REDIS_URL: redis://localhost:6379
           LOG_LEVEL: fatal
           CORS_ORIGINS: http://localhost:5173
